@@ -13,6 +13,7 @@ import {
 } from "@/features/news";
 import { getWatchlistIds } from "@/features/watchlist";
 import { ApiError } from "@/lib/api/error";
+import { getCurrentSession, requireSession } from "@/lib/auth/guards";
 import { PositiveIdParamSchema } from "@/lib/validation/id";
 import type {
   ArticleBrief,
@@ -27,6 +28,14 @@ export async function generateMetadata({
   params,
 }: NewsPageProps): Promise<Metadata> {
   const { id } = await params;
+  // 未認証は cached fetch (記事タイトル) を踏ませず generic title で返し、title
+  // 経由の漏洩も塞ぐ。generateMetadata 内で redirect() は安定しないため、
+  // getCurrentSession で判定して early-return する (本体 section の requireSession
+  // と React.cache で DB hit を共有)。
+  const session = await getCurrentSession();
+  if (!session) {
+    return { title: "Vector" };
+  }
   // 本体側で notFound() に合流するため、metadata 側では title だけ返して終わる。
   // generateMetadata 内の notFound() は metadata 解決を未確定にしうるので避ける。
   const parsed = PositiveIdParamSchema.safeParse(id);
@@ -59,6 +68,10 @@ async function RelatedArticlesAsync({
   articlesPromise: Promise<ArticleBrief[]>;
   watchedIds: Set<number>;
 }) {
+  // 独立した Suspense 単位なので本 section にも gate が要る。必ず try の外に
+  // 置く (try 内だと redirect の NEXT_REDIRECT を下の catch が握り潰して
+  // silent fail になる)。
+  await requireSession();
   // Related articles are a progressive enhancement: failure must not break
   // the page, but we still log so embed/index regressions stay visible.
   let articles: ArticleBrief[] = [];
@@ -93,6 +106,10 @@ export default async function NewsPage({ params }: NewsPageProps) {
     notFound();
   }
   const articleId = parsed.data;
+
+  // DAL gate: malformed URL を未認証でも 404 で返す現状の防御順序を保つため、
+  // 404 判定の後・データ取得の前に置く。未認証はここで redirect。
+  await requireSession();
 
   // Fire all fetches in parallel. similar は Suspense'd child に forward。
   // article 単独で 404 判定したいので await は分割する (Promise.all だと

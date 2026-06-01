@@ -58,13 +58,13 @@ describe("createClientConfig customFetch", () => {
     const promise = configuredFetch()(
       "http://test.local/api/v1/articles",
     ).catch((caught: unknown) => caught);
-    await vi.advanceTimersByTimeAsync(10_000);
+    await vi.advanceTimersByTimeAsync(15_000);
     const err = await promise;
 
     expect(err).toBeInstanceOf(InternalFetchError);
     expect((err as InternalFetchError).kind).toBe("timeout");
     expect((err as InternalFetchError).message).toBe(
-      "Request timeout after 10000ms",
+      "Request timeout after 15000ms",
     );
   });
 });

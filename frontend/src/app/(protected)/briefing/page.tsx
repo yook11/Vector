@@ -8,6 +8,7 @@ import {
   BriefingRow,
   getBriefingListViewModel,
 } from "@/features/briefing";
+import { requireSession } from "@/lib/auth/guards";
 import { formatDate } from "@/lib/date";
 
 export const metadata: Metadata = {
@@ -15,6 +16,9 @@ export const metadata: Metadata = {
 };
 
 async function BriefingListContent() {
+  // DAL gate: layout の認可は PPR の別 prerender 単位を守らないため、データ
+  // 取得の前にここで認可して static shell 漏洩を塞ぐ。
+  await requireSession();
   // build-time prerender を opt out して runtime fill に倒す。`'use cache'`
   // ('hours') と on-demand revalidate の hybrid 戦略は runtime cache 前提。
   await connection();

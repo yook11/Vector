@@ -43,6 +43,10 @@ export default defineConfig({
         /login\.spec\.ts$/,
         /register\.spec\.ts$/,
         /source-admin\.spec\.ts$/,
+        // 認証境界 spec は専用 auth-boundary project 専属。user は testMatch を
+        // 持たず denylist 方式なので、除外しないと認証済み storageState で二重
+        // 実行され anon redirect 期待が壊れる。
+        /protected-anon\.spec\.ts$/,
         /.*\.setup\.ts$/,
       ],
     },
@@ -54,6 +58,14 @@ export default defineConfig({
       },
       dependencies: ["setup"],
       testMatch: /source-admin\.spec\.ts$/,
+    },
+    {
+      // 認証境界 spec は自前で context を組む (storageState なし)。positive
+      // control 用に user.json / admin.json が要るため setup に依存する。
+      name: "auth-boundary",
+      use: { ...devices["Desktop Chrome"] },
+      dependencies: ["setup"],
+      testMatch: /protected-anon\.spec\.ts$/,
     },
   ],
 });

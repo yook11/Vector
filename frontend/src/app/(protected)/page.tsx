@@ -11,6 +11,7 @@ import {
   parseArticleQuery,
 } from "@/features/news";
 import { getWatchlistIds } from "@/features/watchlist";
+import { requireSession } from "@/lib/auth/guards";
 import type { SearchParams } from "@/lib/types/route";
 import type { ArticleQuery } from "@/types";
 
@@ -23,6 +24,10 @@ interface DashboardPageProps {
 // 実 backend hit は 1 回に収束する。Suspense 境界を別にすることで lg/mobile
 // 両方が独立に streaming される。
 async function CategorySidebarSection(props: { activeCategory?: string }) {
+  // DAL gate: layout の requireSession は PPR の別 prerender 単位 (本 section)
+  // を守らないため、'use cache' データ取得の前にここで認可して static shell
+  // への漏洩を塞ぐ。getCurrentSession は React.cache 済で DB hit は 1 回に集約。
+  await requireSession();
   const { items } = await getCategories();
   // EOP 下では undefined 明示代入が違反になるため、props を spread して
   // optional の不在/存在をそのまま伝搬する。
@@ -30,11 +35,15 @@ async function CategorySidebarSection(props: { activeCategory?: string }) {
 }
 
 async function MobileSidebarTrigger(props: { activeCategory?: string }) {
+  await requireSession();
   const { items } = await getCategories();
   return <MobileSidebar categories={items} {...props} />;
 }
 
 async function NewsGridSection({ filters }: { filters: ArticleQuery }) {
+  // gate は Promise.all の前に直列で置く (並走させると未認証でも getArticles の
+  // cached fetch が走ってしまう)。
+  await requireSession();
   const [newsData, watchedIds] = await Promise.all([
     getArticles(filters),
     getWatchlistIds(),

@@ -10,6 +10,7 @@ import {
   HotEntityList,
   NewEntityList,
 } from "@/features/digest";
+import { requireSession } from "@/lib/auth/guards";
 import { formatDate } from "@/lib/date";
 
 export const metadata: Metadata = {
@@ -17,6 +18,9 @@ export const metadata: Metadata = {
 };
 
 async function WeeklyTrendsContent() {
+  // DAL gate: layout の認可は PPR の別 prerender 単位を守らないため、データ
+  // 取得の前にここで認可して static shell 漏洩を塞ぐ。
+  await requireSession();
   // build-time prerender を opt out して runtime fill に倒す。`'use cache'`
   // ('days') は runtime cache を共有するため backend hit は週 1 回程度に
   // 留まるが、build phase では backend 不要にすることで Fly.io 等の段階的

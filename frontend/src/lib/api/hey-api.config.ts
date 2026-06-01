@@ -9,7 +9,7 @@
  * baseUrl: openapi-fetch 経路と同じ origin のみ (`/api/v1` prefix は generated
  * の path key 側に含まれる)。
  *
- * customFetch: timeout 10s + AbortSignal merge。response 不在の失敗は
+ * customFetch: timeout 15s + AbortSignal merge。response 不在の失敗は
  * `InternalFetchError` に分類し、error interceptor 側で診断ログに載せる。
  */
 
@@ -19,7 +19,11 @@ import { InternalFetchError } from "@/lib/api/error";
 import { INTERNAL_API_URL } from "@/lib/api/internal-config";
 import type { CreateClientConfig } from "@/types/client.gen";
 
-const REQUEST_TIMEOUT_MS = 10_000;
+// cold start 吸収の暫定値。vector-core API process の autostop による cold start
+// (実測 ~11-12s) が frontend の fetch timeout と衝突して frontend_internal_api_failure
+// (kind:timeout) を出していたため延長した対症対応。根治は backend を warm 維持する
+// こと (min_machines_running=1 等) で、本値はそれまでの暫定。
+const REQUEST_TIMEOUT_MS = 15_000;
 
 const customFetch: typeof fetch = async (input, init) => {
   const timeoutController = new AbortController();

@@ -49,9 +49,8 @@ COPY --from=deps /app/node_modules ./node_modules
 COPY . .
 
 # public/ が無い場合に production stage の COPY が失敗しないよう空ディレクトリを作る
-RUN mkdir -p public
-
-RUN npm run build
+RUN mkdir -p public \
+ && npm run build
 
 # =====================================================================
 # Stage 3: development — 現行挙動 100% 維持 (next dev、compose の volume mount 前提)
@@ -77,6 +76,10 @@ COPY . .
 # better-sqlite3 が dependencies から外れ次第 (PR #7771)、--ignore-scripts は
 # 撤去予定。
 ARG BETTER_AUTH_CLI_VERSION=1.4.22
+# /opt/ba-cli は app の WORKDIR (/app、CMD `npm run dev` が依存) とは別の隔離
+# ディレクトリ。cd は単一 RUN 内に意図的にスコープしており、WORKDIR 化すると
+# 後続まで cwd が漏れて壊れる。DL3003 はこの設計のため意図的に抑止する。
+# hadolint ignore=DL3003
 RUN mkdir -p /opt/ba-cli \
  && cd /opt/ba-cli \
  && npm init -y >/dev/null \

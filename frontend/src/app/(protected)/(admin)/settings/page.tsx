@@ -3,12 +3,16 @@ import { Suspense } from "react";
 import { PageContainer } from "@/components/layout/PageContainer";
 import { Skeleton } from "@/components/ui/skeleton";
 import { getSources, SourceManager } from "@/features/sources";
+import { requireAdmin } from "@/lib/auth/guards";
 
 export const metadata: Metadata = {
   title: "Settings | Vector",
 };
 
 async function SourceManagerAsync() {
+  // DAL gate (admin): getSources は authed client で fail-closed だが、admin
+  // 境界をデータ取得の前に明示する。非 admin は requireAdmin が / へ redirect。
+  await requireAdmin();
   const sourcesData = await getSources();
   return <SourceManager initialSources={sourcesData.items} />;
 }

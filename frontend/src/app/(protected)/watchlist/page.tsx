@@ -14,6 +14,7 @@ import {
   parseArticleQuery,
 } from "@/features/news";
 import { getWatchlist } from "@/features/watchlist";
+import { requireSession } from "@/lib/auth/guards";
 import type { SearchParams } from "@/lib/types/route";
 
 export const metadata: Metadata = {
@@ -31,6 +32,9 @@ async function WatchlistContent({
   page: number;
   perPage?: number;
 }) {
+  // DAL gate (多重防御): getWatchlist は authed client で既に fail-closed だが、
+  // 401 を踏む前に login へ誘導し、将来 'use cache' 化された際の漏洩も防ぐ。
+  await requireSession();
   const data = await getWatchlist(page, perPage);
 
   if (data.items.length === 0) {
