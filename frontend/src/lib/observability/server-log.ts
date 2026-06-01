@@ -5,7 +5,9 @@ export type ServerLogLevel = "warn" | "error";
 export type ServerLogEvent =
   | "frontend_internal_api_failure"
   | "frontend_auth_session_slow"
-  | "frontend_auth_session_error";
+  | "frontend_auth_session_error"
+  | "frontend_rate_limit_missing_ip"
+  | "frontend_rate_limit_unknown_write";
 
 export interface ServerLogFields {
   method?: string | undefined;

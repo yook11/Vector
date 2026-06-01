@@ -33,6 +33,7 @@ export default defineConfig({
         "src/lib/proxy/csp.ts",
         "src/lib/proxy/callback-url.ts",
         "src/lib/proxy/identifier.ts",
+        "src/lib/proxy/rate-limit-plan.ts",
         "src/features/news/search-params.ts",
         "src/features/sources/api/source-cores.ts",
         "src/features/sources/schemas/source.ts",

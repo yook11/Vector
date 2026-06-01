@@ -6,6 +6,12 @@
 > Redis customStorage から DB (`storage:"database"`) へ変更した。Alternative D を
 > DB-storage で実現したもので、Redis 障害時の fail-open 穴を構造的に除去する。
 > 詳細は ADR-007 を参照。本 ADR が扱う proxy.ts の IP limiter は無変更 (Redis + fail-open のまま)。
+>
+> 補足 (2026-06): proxy.ts の IP limiter は [ADR-009](009_proxy_rate_limit_multitier.md) で
+> request-class × identity の multi-tier に再構成する。**本 ADR の §1 (識別子・上限) と
+> §4 (unknown bucket) は ADR-009 が supersede** する (§1 の session-only キーは IP backstop が
+> 無く偽造バイパス可能だった穴を two-tier-AND で塞ぎ直す)。§2 (cookieCache 無効) / §3 (storage
+> fail-open) は据え置き。
 
 ## Context
 

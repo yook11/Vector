@@ -58,7 +58,8 @@ export const auth = betterAuth({
     // production では Fly Edge が付与する fly-client-ip だけを
     // trusted source にする。
     // 欠如時は Better Auth 側の IP rate-limit は skip されるが、
-    // proxy.ts が unknown bucket で先に throttle する。
+    // proxy.ts 側でも IP 未解決は identity でなく経路異常として扱う
+    // (read/_rsc は fail-open、anon mutation のみ rl:uwrite:global で縛る / ADR-009)。
     // dev/test は Fly Edge を経由しないため x-forwarded-for fallback を許可する。
     ipAddress: {
       ipAddressHeaders: isProduction

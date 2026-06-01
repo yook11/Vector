@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buildIdentifier, extractClientIp } from "./identifier";
+import { extractClientIp } from "./identifier";
 
 // production は Fly-Client-IP のみ trusted、欠如時は fail-closed。
 // development は Fly-Client-IP → x-forwarded-for → x-real-ip の順に fallback。
@@ -85,53 +85,5 @@ describe("extractClientIp — development (Fly-Client-IP + fallback)", () => {
 
   it("returns null when all sources are whitespace-only in development", () => {
     expect(extractClientIp("   ", "   ", "   ", false)).toBeNull();
-  });
-});
-
-describe("buildIdentifier", () => {
-  it("returns ip kind keyed by Fly-Client-IP in production", () => {
-    expect(buildIdentifier("203.0.113.10", null, null, true)).toEqual({
-      kind: "ip",
-      key: "203.0.113.10",
-    });
-  });
-
-  it("falls back to 'unknown' bucket when Fly-Client-IP is missing in production", () => {
-    // production では spoofable header から個別 bucket を作らず "unknown" に寄せる。
-    expect(buildIdentifier(null, "1.2.3.4, 5.6.7.8", null, true)).toEqual({
-      kind: "ip",
-      key: "unknown",
-    });
-  });
-
-  it("returns ip kind keyed by the first XFF value in development", () => {
-    expect(buildIdentifier(null, "203.0.113.1, 10.0.0.1", null, false)).toEqual(
-      {
-        kind: "ip",
-        key: "203.0.113.1",
-      },
-    );
-  });
-
-  it("falls back to x-real-ip when Fly-Client-IP and XFF are absent in development", () => {
-    expect(buildIdentifier(null, null, "198.51.100.5", false)).toEqual({
-      kind: "ip",
-      key: "198.51.100.5",
-    });
-  });
-
-  it("falls back to 'unknown' bucket when no IP source is present in development", () => {
-    // IP source 全欠如の request は "unknown" bucket に集約して throttle 対象にする。
-    expect(buildIdentifier(null, null, null, false)).toEqual({
-      kind: "ip",
-      key: "unknown",
-    });
-  });
-
-  it("treats whitespace-only headers as missing and falls back to 'unknown' in development", () => {
-    expect(buildIdentifier("   ", "   ", "   ", false)).toEqual({
-      kind: "ip",
-      key: "unknown",
-    });
   });
 });

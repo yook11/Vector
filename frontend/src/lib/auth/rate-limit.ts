@@ -1,26 +1,43 @@
 /**
  * Application-level rate limit (Redis-backed sliding window log)。
  *
- * Better Auth 内蔵 rate limit は /api/auth/* router 専用のため、
- * proxy.ts から全 request に適用し、認証済 cookie を持つ request も先に bound する。
+ * Better Auth 内蔵 rate limit は /api/auth/* router 専用のため、proxy.ts から全 request
+ * に適用し、認証済 cookie を持つ request も先に bound する。
  *
- * Redis 不通時は fail-open し、warn は 60 秒ごとに出す。identifier は IP のみに
- * 統一し、認証状態に応じた緩和は後段に任せる。
+ * 本モジュールは実行層 (server-only)。request を tier に分類する純関数は
+ * `@/lib/proxy/rate-limit-plan` に分離してあり、ここでは plan を受けて Redis 上で
+ * 「全 tier を満たせば allow / 1 つでも超過で block」を atomic に判定する。
  *
- * 本モジュールの Redis client は proxy.ts の IP limiter 専用 (key prefix rl:ip:*)。
- * Better Auth のログイン limiter は DB-backed (storage:"database") に移行済みで
- * Redis を使わない (ADR-007)。
+ * key namespace は plan が決める: `rl:rsc:* / rl:sess:* / rl:ip:* / rl:uwrite:global`。
+ * Better Auth のログイン limiter は DB-backed (storage:"database") に移行済みで Redis を
+ * 使わない (ADR-007 / ADR-009)。
+ *
+ * Redis 不通時・tiers 空時は fail-open し、warn は 60 秒ごとに出す。
  */
 
 import "server-only";
+import { randomUUID } from "node:crypto";
 import { createClient, type RedisClientType } from "redis";
 
-import type { RequestIdentifier } from "@/lib/proxy/identifier";
+import {
+  logServerEvent,
+  type ServerLogEvent,
+} from "@/lib/observability/server-log";
+import type {
+  RateLimitLimits,
+  RateLimitPlan,
+  RateLimitSignal,
+} from "@/lib/proxy/rate-limit-plan";
 
 const WINDOW_SEC = 60;
 const WINDOW_MS = WINDOW_SEC * 1000;
-const DEFAULT_LIMIT = 60;
 const ERROR_LOG_INTERVAL_MS = 60_000;
+
+// tier ごとのデフォルト上限 (req/min)。ADR-009。
+const DEFAULT_RSC_LIMIT = 600;
+const DEFAULT_SESSION_LIMIT = 60;
+const DEFAULT_IP_LIMIT = 300;
+const DEFAULT_UNKNOWN_WRITE_LIMIT = 30;
 
 export type RateLimitDecision =
   | { allowed: true }
@@ -33,10 +50,21 @@ export function parseLimit(raw: string | undefined, fallback: number): number {
   return n;
 }
 
-export function calculateLimit(
+/**
+ * env から tier 別上限を組む。旧 `RATE_LIMIT_PER_MIN` は読まない (deprecate)。
+ */
+export function calculateLimits(
   env: Record<string, string | undefined> = process.env,
-): number {
-  return parseLimit(env.RATE_LIMIT_PER_MIN, DEFAULT_LIMIT);
+): RateLimitLimits {
+  return {
+    rsc: parseLimit(env.RATE_LIMIT_RSC_PER_MIN, DEFAULT_RSC_LIMIT),
+    session: parseLimit(env.RATE_LIMIT_SESSION_PER_MIN, DEFAULT_SESSION_LIMIT),
+    ip: parseLimit(env.RATE_LIMIT_IP_PER_MIN, DEFAULT_IP_LIMIT),
+    unknownWrite: parseLimit(
+      env.RATE_LIMIT_UNKNOWN_WRITE_PER_MIN,
+      DEFAULT_UNKNOWN_WRITE_LIMIT,
+    ),
+  };
 }
 
 // HMR / vitest module reset で client が複数生成されないよう
@@ -44,6 +72,7 @@ export function calculateLimit(
 const globalForRedis = globalThis as unknown as {
   __vectorRateLimitRedis?: RedisClientType;
   __vectorRateLimitErrorLastMs?: number;
+  __vectorRateLimitSignalLastMs?: Record<string, number>;
 };
 
 function logRedisError(context: string, err: unknown): void {
@@ -55,6 +84,27 @@ function logRedisError(context: string, err: unknown): void {
   }
   console.warn(`rate-limit: ${context}, failing open`, err);
   globalForRedis.__vectorRateLimitErrorLastMs = now;
+}
+
+const SIGNAL_EVENT: Record<RateLimitSignal, ServerLogEvent> = {
+  missing_ip: "frontend_rate_limit_missing_ip",
+  unknown_write: "frontend_rate_limit_unknown_write",
+};
+
+/**
+ * 観測信号を記録する。logRedisError と同型の per-signal 60 秒 throttle で、
+ * production の IP 未解決 (経路異常) をスパムにせず可視化する。
+ */
+export function recordRateLimitSignal(signal: RateLimitSignal): void {
+  const now = Date.now();
+  const store = globalForRedis.__vectorRateLimitSignalLastMs ?? {};
+  globalForRedis.__vectorRateLimitSignalLastMs = store;
+  const last = store[signal];
+  if (last !== undefined && now - last < ERROR_LOG_INTERVAL_MS) {
+    return;
+  }
+  store[signal] = now;
+  logServerEvent("warn", SIGNAL_EVENT[signal]);
 }
 
 /**
@@ -80,29 +130,55 @@ function getRateLimitRedisClient(): RedisClientType | null {
   return c;
 }
 
-// Sliding window log を ZSET で表現し、Lua script で 1 round trip atomic に判定する。
-// KEYS[1]=key, ARGV[1]=nowMs, ARGV[2]=windowMs, ARGV[3]=limit, ARGV[4]=ttlSec
+// 複数 tier の sliding window log を 1 round trip で atomic に判定する。
+// 不変条件: 全 tier を先に ZCARD し、1 つでも上限以上なら deny して
+// どの key にも ZADD しない / 全通過時のみ全 key に ZADD + EXPIRE。
+//
+// KEYS[1..N]     = tier key (plan.tiers 順)
+// ARGV[1]        = nowMs
+// ARGV[2]        = windowMs
+// ARGV[3]        = ttlSec
+// ARGV[4..3+N]   = 各 tier limit (KEYS 同順)
+// ARGV[4+N]      = uniqueId (member 重複回避用、JS 側で生成)
 // returns 1 if allowed, 0 if denied
-const SLIDING_WINDOW_SCRIPT = `
-local key = KEYS[1]
+const MULTI_SLIDING_WINDOW_SCRIPT = `
 local now = tonumber(ARGV[1])
 local window = tonumber(ARGV[2])
-local limit = tonumber(ARGV[3])
-local ttl = tonumber(ARGV[4])
+local ttl = tonumber(ARGV[3])
+local n = #KEYS
+local member = now .. ':' .. ARGV[4 + n]
 
-redis.call('ZREMRANGEBYSCORE', key, 0, now - window)
-local count = tonumber(redis.call('ZCARD', key))
-if count >= limit then
-  return 0
+-- phase 1: prune + ZCARD + 超過判定 (どれか1つでも超えたら ZADD せず deny)
+for i = 1, n do
+  local key = KEYS[i]
+  local limit = tonumber(ARGV[3 + i])
+  redis.call('ZREMRANGEBYSCORE', key, 0, now - window)
+  local count = tonumber(redis.call('ZCARD', key))
+  if count >= limit then
+    return 0
+  end
 end
-redis.call('ZADD', key, now, now .. ':' .. math.random())
-redis.call('EXPIRE', key, ttl)
+
+-- phase 2: 全 key に同一 member を ZADD + EXPIRE
+for i = 1, n do
+  local key = KEYS[i]
+  redis.call('ZADD', key, now, member)
+  redis.call('EXPIRE', key, ttl)
+end
 return 1
 `.trim();
 
+/**
+ * plan の全 tier を満たすか Redis 上で atomic に判定する。
+ *
+ * tiers 空 (構造的 fail-open) / client なし / eval throw はいずれも allow に倒す。
+ */
 export async function checkRateLimit(
-  identifier: RequestIdentifier,
+  plan: RateLimitPlan,
 ): Promise<RateLimitDecision> {
+  if (plan.tiers.length === 0) {
+    return { allowed: true };
+  }
   const c = getRateLimitRedisClient();
   if (!c) {
     return { allowed: true };
@@ -111,15 +187,14 @@ export async function checkRateLimit(
     if (!c.isOpen) {
       await c.connect();
     }
-    const limit = calculateLimit();
-    const key = `rl:${identifier.kind}:${identifier.key}`;
-    const result = (await c.eval(SLIDING_WINDOW_SCRIPT, {
-      keys: [key],
+    const result = (await c.eval(MULTI_SLIDING_WINDOW_SCRIPT, {
+      keys: plan.tiers.map((t) => t.key),
       arguments: [
         String(Date.now()),
         String(WINDOW_MS),
-        String(limit),
         String(WINDOW_SEC),
+        ...plan.tiers.map((t) => String(t.limit)),
+        randomUUID(),
       ],
     })) as number;
     return result === 1

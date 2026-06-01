@@ -1,16 +1,14 @@
 /**
- * リクエスト識別子抽出の純関数群。
+ * client IP 抽出の純関数。
  *
- * proxy.ts から渡された header 値と環境フラグだけで識別子を組み立てる。
- * identifier は cookie ではなく IP に統一し、認証状態ごとの緩和は後段に任せる。
+ * proxy.ts から渡された header 値と環境フラグだけで IP を解決する。tier への
+ * 写像 (rl:ip / rl:sess / rl:rsc / rl:uwrite) は rate-limit-plan.ts が担う。
  *
  * production は Fly.io edge proxy が上書きする Fly-Client-IP だけを信頼する。
- * 欠如時は fail-closed で null を返し、呼び出し側が "unknown" bucket に集約する。
+ * 欠如時は fail-closed で null を返し、呼び出し側が経路異常として扱う。
  * dev/test では Fly-Client-IP → x-forwarded-for 第一値 → x-real-ip の順に
  * fallback する。
  */
-
-export type RequestIdentifier = { kind: "ip"; key: string };
 
 /**
  * trusted / untrusted header 群と環境フラグから client IP を抽出する純関数。
@@ -43,14 +41,4 @@ export function extractClientIp(
     if (trimmed) return trimmed;
   }
   return null;
-}
-
-export function buildIdentifier(
-  flyClientIp: string | null,
-  forwardedFor: string | null,
-  realIp: string | null,
-  isProduction: boolean,
-): RequestIdentifier {
-  const ip = extractClientIp(flyClientIp, forwardedFor, realIp, isProduction);
-  return { kind: "ip", key: ip ?? "unknown" };
 }

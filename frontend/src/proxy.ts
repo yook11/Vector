@@ -1,14 +1,18 @@
 import { getSessionCookie } from "better-auth/cookies";
 import type { NextRequest } from "next/server";
 import { NextResponse } from "next/server";
-import { checkRateLimit } from "@/lib/auth/rate-limit";
+import {
+  calculateLimits,
+  checkRateLimit,
+  recordRateLimitSignal,
+} from "@/lib/auth/rate-limit";
 import { sanitizeCallbackUrl } from "@/lib/proxy/callback-url";
 import {
   buildCspDirectives,
   buildCspHeader,
   generateNonce,
 } from "@/lib/proxy/csp";
-import { buildIdentifier } from "@/lib/proxy/identifier";
+import { buildRateLimitPlan } from "@/lib/proxy/rate-limit-plan";
 
 // Next.js 16 の proxy は Node.js runtime 固定。`export const runtime` は使えない。
 
@@ -24,20 +28,33 @@ export async function proxy(request: NextRequest) {
   // Better Auth 内蔵 rate limit は /api/auth/* router 専用のため、
   // proxy 層で全 request に application-level rate limit をかける。
   //
-  // identifier は cookie ではなく IP に統一し、認証状態ごとの緩和は後段に任せる。
+  // request を class (rsc / read / mutation) × identity (session / IP) で分類し、
+  // 該当する全 tier を満たせば通す (ADR-009)。prefetch 由来の `_rsc` GET は寛容な
+  // ceiling を別財布で持ち、認証済 request は session sub-bucket + IP ceiling の
+  // two-tier-AND で偽造 cookie バイパスを塞ぐ。
   //
-  // production は Fly-Client-IP だけを trusted source とし、欠如時は
-  // "unknown" bucket に集約する。dev/test では XFF/X-Real-IP fallback を許可。
+  // production は Fly-Client-IP だけを trusted source とし、欠如 (経路異常) 時は
+  // read/`_rsc` を fail-open、anon mutation のみ共有 global bucket で最低限縛る。
+  // dev/test では XFF/X-Real-IP fallback を許可する。
   //
+  // session token は下段の認証チェックでも再利用するため、ここで一度だけ取得する。
   // CSP nonce 生成や session 検証より前に実行する。
-  // Redis 不通時は fail-open し、storage 障害がアプリ全体の停止に直結しないようにする。
-  const identifier = buildIdentifier(
-    request.headers.get("fly-client-ip"),
-    request.headers.get("x-forwarded-for"),
-    request.headers.get("x-real-ip"),
-    process.env.NODE_ENV === "production",
-  );
-  const decision = await checkRateLimit(identifier);
+  // Redis 不通・tiers 空時は fail-open し、storage 障害がアプリ全体の停止に直結しない。
+  const sessionToken = getSessionCookie(request);
+  const plan = buildRateLimitPlan({
+    method: request.method,
+    hasRsc: request.nextUrl.searchParams.has("_rsc"),
+    flyClientIp: request.headers.get("fly-client-ip"),
+    forwardedFor: request.headers.get("x-forwarded-for"),
+    realIp: request.headers.get("x-real-ip"),
+    sessionToken,
+    isProduction: process.env.NODE_ENV === "production",
+    limits: calculateLimits(),
+  });
+  if (plan.signal) {
+    recordRateLimitSignal(plan.signal);
+  }
+  const decision = await checkRateLimit(plan);
   if (!decision.allowed) {
     return new NextResponse("Too Many Requests", {
       status: 429,
@@ -69,9 +86,8 @@ export async function proxy(request: NextRequest) {
 
   // --- Better Auth 認証チェック ---
   // Cookie 名は Better Auth の getSessionCookie に任せ、proxy 側で
-  // dev/prod の cookie 名をハードコードしない。
+  // dev/prod の cookie 名をハードコードしない。token は rate-limit で取得済みを再利用。
   // /api/* は redirect せず、各 route handler の認証/認可レスポンスに任せる。
-  const sessionToken = getSessionCookie(request);
   if (!sessionToken && !isAuthPage && !isApiRoute && !isDesignLab) {
     const signInUrl = new URL("/auth/login", request.url);
     // Open redirect 対策: protocol-relative URL や絶対 URL を callbackUrl に入れない。

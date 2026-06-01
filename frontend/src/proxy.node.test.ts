@@ -33,6 +33,7 @@ import { proxy } from "./proxy";
 const g = globalThis as unknown as {
   __vectorRateLimitRedis?: unknown;
   __vectorRateLimitErrorLastMs?: number;
+  __vectorRateLimitSignalLastMs?: Record<string, number>;
 };
 
 let warnSpy: MockInstance<typeof console.warn>;
@@ -40,6 +41,7 @@ let warnSpy: MockInstance<typeof console.warn>;
 beforeEach(() => {
   delete g.__vectorRateLimitRedis;
   delete g.__vectorRateLimitErrorLastMs;
+  delete g.__vectorRateLimitSignalLastMs;
   mockEval.mockReset();
   mockConnect.mockReset();
   mockOn.mockReset();
@@ -63,10 +65,24 @@ function mockNextRequest(
   return new NextRequest(url, { method: init.method ?? "GET", headers });
 }
 
-describe("proxy — red-team C1 5 経路 bypass 防止 (構造的 regression)", () => {
-  it("(1) /api/auth/sign-in/email POST anon は matcher 対象内で rate-limit が走る", async () => {
-    // /api/auth/* も rate-limit を経由するが、
-    // handler には NextResponse.next() で透過する。
+/** warnSpy が捕捉した logServerEvent JSON のうち、最初に一致する event を返す。 */
+function findLoggedEvent(event: string): Record<string, unknown> | undefined {
+  for (const call of warnSpy.mock.calls) {
+    const raw = call[0];
+    if (typeof raw !== "string") continue;
+    try {
+      const parsed = JSON.parse(raw) as Record<string, unknown>;
+      if (parsed.event === event) return parsed;
+    } catch {
+      // logRedisError は JSON でない warn を出すので無視。
+    }
+  }
+  return undefined;
+}
+
+describe("proxy — rate-limit tier 結線 (ADR-009)", () => {
+  it("(1) anon POST /api/auth/sign-in/email (dev xff) は rl:ip:<ip> 300 で count される", () => {
+    // /api/auth/* も rate-limit を経由するが handler には透過する。
     mockIsOpenValue = true;
     mockEval.mockResolvedValue(1);
     const req = mockNextRequest(
@@ -76,27 +92,40 @@ describe("proxy — red-team C1 5 経路 bypass 防止 (構造的 regression)", 
         headers: { "x-forwarded-for": "1.2.3.4" },
       },
     );
-    await proxy(req);
-    expect(mockEval).toHaveBeenCalledTimes(1);
-    const args = mockEval.mock.calls[0]?.[1] as { keys: string[] };
-    expect(args.keys[0]).toBe("rl:ip:1.2.3.4");
+    return proxy(req).then(() => {
+      expect(mockEval).toHaveBeenCalledTimes(1);
+      const args = mockEval.mock.calls[0]?.[1] as {
+        keys: string[];
+        arguments: string[];
+      };
+      expect(args.keys).toEqual(["rl:ip:1.2.3.4"]);
+      expect(args.arguments[3]).toBe("300");
+    });
   });
 
-  it("(2) cookie/XFF/X-Real-IP すべて欠如の anon GET は 'unknown' bucket で rate-limit が走る", async () => {
-    // IP source 欠如時も "unknown" bucket で rate-limit を走らせる。
+  it("(2) cookie/XFF/X-Real-IP すべて欠如の anon GET (dev) は fail-open で eval を呼ばない", async () => {
+    // IP 未解決 & session 無の read は構造的 fail-open (tiers 空 → eval せず allow)。
     mockIsOpenValue = true;
     mockEval.mockResolvedValue(1);
-    const req = mockNextRequest("http://localhost:3000/");
+    const req = mockNextRequest("http://localhost:3000/news");
     await proxy(req);
-    expect(mockEval).toHaveBeenCalledTimes(1);
-    const args = mockEval.mock.calls[0]?.[1] as { keys: string[] };
-    expect(args.keys[0]).toBe("rl:ip:unknown");
+    expect(mockEval).not.toHaveBeenCalled();
   });
 
-  it("(3) 上限超過時は 429 with Retry-After を返す (bucket 飽和)", async () => {
+  it("(2b) 同条件を production で踏むと fail-open + missing_ip signal を出す", async () => {
+    vi.stubEnv("NODE_ENV", "production");
+    mockIsOpenValue = true;
+    mockEval.mockResolvedValue(1);
+    const req = mockNextRequest("http://localhost:3000/news");
+    await proxy(req);
+    expect(mockEval).not.toHaveBeenCalled();
+    expect(findLoggedEvent("frontend_rate_limit_missing_ip")).toBeDefined();
+  });
+
+  it("(3) 上限超過 (eval=0) は 429 + Retry-After を返す", async () => {
     mockIsOpenValue = true;
     mockEval.mockResolvedValue(0); // Lua script が denied を返す
-    const req = mockNextRequest("http://localhost:3000/", {
+    const req = mockNextRequest("http://localhost:3000/news", {
       headers: { "x-forwarded-for": "1.2.3.4" },
     });
     const res = await proxy(req);
@@ -104,28 +133,100 @@ describe("proxy — red-team C1 5 経路 bypass 防止 (構造的 regression)", 
     expect(res.headers.get("Retry-After")).toBe("60");
   });
 
-  it("(4) cookie present + XFF なしでも identifier は IP-based ('unknown' bucket、cookie 値で別 bucket にしない / F4 対策)", async () => {
-    // cookie 値は identifier に使わず、IP source 欠如時は "unknown" bucket になる。
+  it("(4) cookie present + IP 未解決 は rl:sess:<hash> 単独で count し、cookie 生値を key に入れない", async () => {
+    // IP 未解決時の session 単独 tier は ADR-009 で正 (cookie 値は hash 化)。
     mockIsOpenValue = true;
     mockEval.mockResolvedValue(1);
-    const req = mockNextRequest("http://localhost:3000/", {
+    const req = mockNextRequest("http://localhost:3000/news", {
       headers: { cookie: "better-auth.session_token=AAAA" },
     });
     await proxy(req);
     const args = mockEval.mock.calls[0]?.[1] as { keys: string[] };
-    expect(args.keys[0]).toBe("rl:ip:unknown");
+    expect(args.keys).toHaveLength(1);
+    expect(args.keys[0]).toMatch(/^rl:sess:[0-9a-f]{16}$/);
+    expect(args.keys[0]).not.toContain("AAAA");
   });
 
   it("(5) Redis 障害時は fail-open で透過し warn を 1 度出す", async () => {
-    // Redis 障害は warn を出しつつ fail-open する。
     mockIsOpenValue = true;
     mockEval.mockRejectedValue(new Error("redis down"));
-    const req = mockNextRequest("http://localhost:3000/", {
+    const req = mockNextRequest("http://localhost:3000/news", {
       headers: { "x-forwarded-for": "1.2.3.4" },
     });
     const res = await proxy(req);
     expect(res.status).not.toBe(429);
     expect(warnSpy).toHaveBeenCalledOnce();
+  });
+});
+
+describe("proxy — _rsc prefetch tier", () => {
+  it("_rsc GET (fly 解決) は rl:rsc:<ip> 600 の寛容 ceiling で count する", async () => {
+    mockIsOpenValue = true;
+    mockEval.mockResolvedValue(1);
+    const req = mockNextRequest("http://localhost:3000/news?_rsc=abc123", {
+      headers: { "fly-client-ip": "203.0.113.5" },
+    });
+    await proxy(req);
+    const args = mockEval.mock.calls[0]?.[1] as {
+      keys: string[];
+      arguments: string[];
+    };
+    expect(args.keys).toEqual(["rl:rsc:203.0.113.5"]);
+    expect(args.arguments[3]).toBe("600");
+  });
+
+  it("_rsc GET + 全 IP 欠如 (production) は fail-open (eval 呼ばない) + missing_ip signal", async () => {
+    vi.stubEnv("NODE_ENV", "production");
+    mockIsOpenValue = true;
+    mockEval.mockResolvedValue(1);
+    const req = mockNextRequest("http://localhost:3000/news?_rsc=abc123");
+    await proxy(req);
+    expect(mockEval).not.toHaveBeenCalled();
+    expect(findLoggedEvent("frontend_rate_limit_missing_ip")).toBeDefined();
+  });
+});
+
+describe("proxy — anon mutation 終端 (IP 未解決)", () => {
+  it("anon mutation + 全 IP 欠如 (production) は rl:uwrite:global 30 + unknown_write signal", async () => {
+    vi.stubEnv("NODE_ENV", "production");
+    mockIsOpenValue = true;
+    mockEval.mockResolvedValue(1);
+    const req = mockNextRequest("http://localhost:3000/api/some-mutation", {
+      method: "POST",
+    });
+    await proxy(req);
+    const args = mockEval.mock.calls[0]?.[1] as {
+      keys: string[];
+      arguments: string[];
+    };
+    expect(args.keys).toEqual(["rl:uwrite:global"]);
+    expect(args.arguments[3]).toBe("30");
+    expect(findLoggedEvent("frontend_rate_limit_unknown_write")).toBeDefined();
+  });
+});
+
+describe("proxy — identity 解決の dev/prod 分岐", () => {
+  it("dev は fly 欠如時に xff 第一値を rl:ip key に使う", async () => {
+    mockIsOpenValue = true;
+    mockEval.mockResolvedValue(1);
+    const req = mockNextRequest("http://localhost:3000/news", {
+      headers: { "x-forwarded-for": "1.2.3.4, 5.6.7.8" },
+    });
+    await proxy(req);
+    const args = mockEval.mock.calls[0]?.[1] as { keys: string[] };
+    expect(args.keys).toEqual(["rl:ip:1.2.3.4"]);
+  });
+
+  it("production は fly 欠如時に xff を信頼せず、anon read は fail-open する", async () => {
+    vi.stubEnv("NODE_ENV", "production");
+    mockIsOpenValue = true;
+    mockEval.mockResolvedValue(1);
+    const req = mockNextRequest("http://localhost:3000/news", {
+      headers: { "x-forwarded-for": "1.2.3.4" },
+    });
+    await proxy(req);
+    expect(mockEval).not.toHaveBeenCalled();
+    expect(findLoggedEvent("frontend_rate_limit_missing_ip")).toBeDefined();
   });
 });
 

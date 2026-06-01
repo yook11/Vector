@@ -1,6 +1,12 @@
 # ADR-007: Better Auth ログイン limiter を DB-backed 化 + redis-rl eviction policy 修正
 
 > 日付: 2026-05 / ステータス: Accepted
+>
+> 補足 (2026-06): proxy.ts の rate limiter は [ADR-009](009_proxy_rate_limit_multitier.md) で
+> request-class × identity の multi-tier に再構成した。redis-rl の key namespace は
+> `rl:ip:*` 単独から **`rl:ip:* / rl:sess:* / rl:rsc:* / rl:uwrite:global`** に拡張されたが、
+> 全キーが 60s TTL を持つ点は不変なので §2 の `volatile-ttl` eviction は引き続き正しい。
+> 本文中の「`rl:ip:*` 専用」は当時の単一 namespace を指す歴史的記述として残す。
 
 ## Context
 
