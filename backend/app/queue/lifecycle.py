@@ -40,6 +40,8 @@ def _register_worker_lifecycle(broker: RedisStreamBroker, label: str) -> None:
         # on_startup だけが発火するため、プロセスごとに正しい service_name で
         # 1 回ずつ呼ばれる。
         setup_logfire(f"vector-worker-{label}")
+        # resilience (pre_ping / recycle / pool_timeout) は create_app_engine の
+        # 既定で付与される (Neon scale-to-zero 対策)。ここは sizing 既定のまま。
         state.engine = create_app_engine(settings.database_url, echo=False)
         state.session_factory = async_sessionmaker(
             state.engine,

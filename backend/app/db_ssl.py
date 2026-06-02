@@ -33,6 +33,7 @@ from typing import Any
 import certifi
 from sqlalchemy.engine import make_url
 from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
+from sqlalchemy.pool import NullPool
 
 # libpq 互換の sslmode allowlist。allowlist 外 (typo) は ValueError で弾く。
 _VALID_SSLMODES = frozenset(
@@ -154,6 +155,15 @@ def create_app_engine(url: str, **engine_kwargs: Any) -> AsyncEngine:
             "of truth). Use `?sslmode=require` instead."
         )
     merged_connect_args = {**caller_connect_args, **ssl_connect_args}
+
+    # Neon scale-to-zero (autosuspend) で idle 接続が切られるため、全 engine に
+    # stale-connection resilience を既定付与する (呼び出し側が明示すれば override)。
+    engine_kwargs.setdefault("pool_pre_ping", True)  # checkout 時 liveness check
+    engine_kwargs.setdefault("pool_recycle", 3600)  # 古い接続の proactive 破棄
+    # pool_timeout は QueuePool 専用。NullPool 移行時は付与しない
+    # (neon-connection-routing.md の pooler 昇格手順)。
+    if engine_kwargs.get("poolclass") is not NullPool:
+        engine_kwargs.setdefault("pool_timeout", 5)  # pool 飽和を fail-fast
 
     return create_async_engine(
         clean_url, connect_args=merged_connect_args, **engine_kwargs

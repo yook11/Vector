@@ -222,3 +222,32 @@ class TestCreateAppEngine:
         )
         assert captured["connect_args"]["command_timeout"] == 30
         assert "ssl" in captured["connect_args"]
+
+
+class TestEngineResilienceDefaults:
+    """factory が全 engine に Neon scale-to-zero resilience を既定付与する不変条件。
+
+    呼び出し側が pool_* を渡さなくても、idle 接続の stale 化 (Neon autosuspend)
+    に耐える設定が付くことを保証する。worker engine はこの既定にのみ依存するため
+    (lifecycle.py が pool_* を渡さない)、ここが worker の保証点でもある。
+    """
+
+    def test_pre_ping_enabled_by_default(self) -> None:
+        # checkout 時の liveness check が既定で有効 (死んだ接続を掴まない)
+        engine = create_app_engine(f"{_NEON}?sslmode=require")
+        assert engine.sync_engine.pool._pre_ping is True
+
+    def test_recycle_finite_by_default(self) -> None:
+        # recycle が無効 (-1) でなく有限値。3600 は spec F-2 合意値
+        engine = create_app_engine(f"{_NEON}?sslmode=require")
+        assert engine.sync_engine.pool._recycle == 3600
+
+    def test_timeout_failfast_by_default(self) -> None:
+        # pool 飽和を 5s で fail-fast (SQLAlchemy 既定 30s でなく)。spec F-2 合意値
+        engine = create_app_engine(f"{_NEON}?sslmode=require")
+        assert engine.sync_engine.pool._timeout == 5
+
+    def test_caller_override_wins(self) -> None:
+        # 既定は setdefault なので呼び出し側の明示値が優先される
+        engine = create_app_engine(f"{_NEON}?sslmode=require", pool_recycle=60)
+        assert engine.sync_engine.pool._recycle == 60
