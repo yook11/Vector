@@ -20,8 +20,13 @@ primary_region = 'nrt'
 # fail_fast eventlistener が FATAL → container exit させ、Fly が restart loop で
 # 可視化する (fetch.conf 参照)。
 
+# fetch.conf は metadata + content の 2 program (各 --workers 1) を同居させ、各々が
+# 親 + worker child を持つ。worker child は untrusted HTML の fetch/parse でヒープが
+# 成長する (実測 122〜152MB と振れる)。512MB だと idle working set ~441MB で空き
+# ~18MB しか無く、大きいページの parse で OOM 余地がある。実測 +74% のヘッドルーム
+# を残し 768MB にする (RCE/SSRF 攻撃面を持つ worker のため安全側に倒す)。
 [[vm]]
-  memory = '512mb'
+  memory = '768mb'
   cpus = 1
   processes = ['worker-fetch']
 
