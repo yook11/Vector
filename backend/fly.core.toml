@@ -52,25 +52,31 @@ primary_region = 'nrt'
   path = "/api/v1/health"
   processes = ['api']
 
-# process 別 VM。全 process 1GB を避け、負荷に応じて分ける (実値は計測後に調整)。
-# AI 分析 (analysis+embedding+maintenance) は最もメモリを使うため 1GB。
+# process 別 VM。各 taskiq プロセスがアプリ全体を import するため ~100-200MB/proc
+# 消費する (OOM 実測 RSS)。worker/scheduler は 1 VM に複数プロセスを同居させるので、
+# 計測値に基づき暫定的に引き上げて OOM crash loop を止める。後続で supervisord の
+# `--workers 1` + 遅延 import (重い AI SDK を必要な worker でのみ import) により
+# footprint を削減し、本値は再び縮小する。
+# - worker-analysis: analysis+embedding+maintenance を同居 → 最大メモリ。
+# - worker-insights / scheduler: scheduler は 4 プロセス同居。
+# - api: HTTP 処理のみで OOM していないため据え置き (cold-start は別件)。
 [[vm]]
   memory = '512mb'
   cpus = 1
   processes = ['api']
 
 [[vm]]
-  memory = '1gb'
+  memory = '2gb'
   cpus = 1
   processes = ['worker-analysis']
 
 [[vm]]
-  memory = '512mb'
+  memory = '1gb'
   cpus = 1
   processes = ['worker-insights']
 
 [[vm]]
-  memory = '512mb'
+  memory = '1gb'
   cpus = 1
   processes = ['scheduler']
 
