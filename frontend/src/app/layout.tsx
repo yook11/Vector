@@ -1,4 +1,4 @@
-import type { Metadata } from "next";
+import type { Metadata, Viewport } from "next";
 import { Plus_Jakarta_Sans } from "next/font/google";
 import { Suspense } from "react";
 import { ClientGlobals } from "@/components/layout/ClientGlobals";
@@ -11,9 +11,33 @@ const plusJakartaSans = Plus_Jakarta_Sans({
   display: "swap",
 });
 
+// OG/Twitter 画像の絶対 URL 解決に metadataBase が要る。frontend の公開オリジンは
+// BETTER_AUTH_URL (fly.toml [env]) を使う。FRONTEND_URL は backend (vector-core) の
+// CORS 用 var で frontend env には届かないため使わない。未設定の dev は localhost。
 export const metadata: Metadata = {
-  title: "Vector",
+  metadataBase: new URL(process.env.BETTER_AUTH_URL ?? "http://localhost:3000"),
+  title: {
+    default: "Vector",
+    template: "%s | Vector",
+  },
   description: "Tech news aggregation & AI analysis dashboard",
+  applicationName: "Vector",
+  openGraph: {
+    title: "Vector",
+    description: "Tech news aggregation & AI analysis dashboard",
+    siteName: "Vector",
+    type: "website",
+  },
+  twitter: {
+    card: "summary_large_image",
+    title: "Vector",
+    description: "Tech news aggregation & AI analysis dashboard",
+  },
+};
+
+// PWA / モバイル UI のテーマ色 (アイコン背景に合わせる)。
+export const viewport: Viewport = {
+  themeColor: "#0FA89C",
 };
 
 // Header は `(protected)/layout.tsx` 側に配置している。auth page (login/register)
