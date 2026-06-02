@@ -20,6 +20,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import date
+from typing import TYPE_CHECKING
 
 import structlog
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
@@ -27,11 +28,16 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from app.audit.stages.briefing import BriefingAuditRepository
 from app.insights.briefing.application.notifier import BriefingNotifier
 from app.insights.briefing.domain.ready import ReadyForBriefing
-from app.insights.briefing.llm.deepseek import DeepSeekBriefingGenerator
 from app.insights.briefing.repository.articles import BriefingArticleRepository
 from app.insights.briefing.repository.briefings import BriefingRepository
 from app.models.category import Category
 from app.models.weekly_briefing import WeeklyBriefing
+
+if TYPE_CHECKING:
+    # 具象 generator は composition root (broker_briefing hook) が構築し DI で渡す。
+    # 型注釈専用 import に降格し、本 module 経由で openai SDK が import 時にロード
+    # されるのを防ぐ (app/queue/composition.py の遅延 SDK import 方針と対)。
+    from app.insights.briefing.llm.deepseek import DeepSeekBriefingGenerator
 
 logger = structlog.get_logger(__name__)
 

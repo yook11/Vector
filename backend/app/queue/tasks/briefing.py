@@ -40,7 +40,6 @@ from app.insights.briefing.application.notifier import FrontendRevalidateNotifie
 from app.insights.briefing.application.service import WeeklyBriefingService
 from app.insights.briefing.domain.ready import ReadyForBriefing
 from app.insights.briefing.domain.week import latest_completed_week_start, now_in_jst
-from app.insights.briefing.llm.deepseek import DeepSeekBriefingGenerator
 from app.insights.briefing.llm.errors import BriefingError
 from app.insights.briefing.repository.briefings import BriefingRepository
 from app.models.category import Category
@@ -272,8 +271,10 @@ async def generate_briefing_for_category(
         frontend_base_url=settings.internal_frontend_base_url,
         secret=settings.revalidate_bearer_secret.get_secret_value(),
     )
+    # generator は composition root が broker_briefing 起動時に state へ wire する
+    # (Pure DI / 遅延 SDK import: app/queue/composition.py)。
     service = WeeklyBriefingService(
-        session_factory, DeepSeekBriefingGenerator(), notifier
+        session_factory, ctx.state.briefing_generator, notifier
     )
     # 失敗は監査に焼いた上で raise する (taskiq の retry / failure tracking を維持)。
     # `is_last_attempt(ctx)` で extrinsic な give-up timing を判定し、retry 上限到達時

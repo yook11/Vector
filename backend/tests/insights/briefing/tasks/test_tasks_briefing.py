@@ -28,6 +28,9 @@ def _ctx_with_session_factory(
     session_ctx.__aexit__ = AsyncMock(return_value=None)
     factory = MagicMock(return_value=session_ctx)
     ctx.state.session_factory = factory
+    # generator は composition root が broker_briefing 起動時に state へ wire する。
+    # task はそれを読んで service に DI するため、ctx.state に明示的に置く。
+    ctx.state.briefing_generator = MagicMock()
     ctx.message.labels = {"retry_count": retry_count, "max_retries": max_retries}
     return ctx
 
@@ -246,10 +249,6 @@ class TestSubtask:
                 "app.queue.tasks.briefing.WeeklyBriefingService",
                 return_value=service,
             ),
-            patch(
-                "app.queue.tasks.briefing.DeepSeekBriefingGenerator",
-                return_value=MagicMock(),
-            ),
             patch("app.queue.tasks.briefing.BriefingAuditRepository") as audit_cls,
         ):
             audit_cls.return_value.append_generation_already_exists = AsyncMock()
@@ -291,11 +290,7 @@ class TestSubtask:
             patch(
                 "app.queue.tasks.briefing.WeeklyBriefingService",
                 return_value=service,
-            ),
-            patch(
-                "app.queue.tasks.briefing.DeepSeekBriefingGenerator",
-                return_value=MagicMock(),
-            ),
+            ) as service_cls,
         ):
             await briefing.generate_briefing_for_category(
                 BriefingTaskInput(week_start=date(2026, 4, 20), category_id=1),
@@ -303,6 +298,9 @@ class TestSubtask:
             )
 
         service.execute.assert_awaited_once_with(ready)
+        # composition root が broker_briefing 起動時に state へ wire した generator が
+        # そのまま service に DI される (Pure DI 経路の不変条件)。
+        assert service_cls.call_args.args[1] is ctx.state.briefing_generator
 
     @pytest.mark.asyncio
     async def test_propagates_service_exception(self) -> None:
@@ -324,10 +322,6 @@ class TestSubtask:
             patch(
                 "app.queue.tasks.briefing.WeeklyBriefingService",
                 return_value=service,
-            ),
-            patch(
-                "app.queue.tasks.briefing.DeepSeekBriefingGenerator",
-                return_value=MagicMock(),
             ),
             patch("app.queue.tasks.briefing.BriefingAuditRepository") as audit_cls,
             pytest.raises(RuntimeError, match="LLM down"),
@@ -371,10 +365,6 @@ class TestSubtaskFailureAudit:
             patch(
                 "app.queue.tasks.briefing.WeeklyBriefingService",
                 return_value=service,
-            ),
-            patch(
-                "app.queue.tasks.briefing.DeepSeekBriefingGenerator",
-                return_value=MagicMock(),
             ),
             patch("app.queue.tasks.briefing.BriefingAuditRepository") as audit_cls,
         ):

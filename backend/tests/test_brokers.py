@@ -44,3 +44,21 @@ async def test_wire_analysis_adapters_attaches_adapters_to_state() -> None:
 
     assert isinstance(state.curator, GeminiCurator)
     assert isinstance(state.assessor, DeepSeekAssessor)
+
+
+@pytest.mark.asyncio
+async def test_wire_briefing_adapter_attaches_generator_to_state() -> None:
+    """broker_briefing 起動時に briefing generator が state へ attach される。
+
+    briefing の AI provider 選択も composition root で hardcode する設計 (Pure DI) を
+    構造的に保証する (analysis / embedding と同じ集約点)。
+    """
+    from app.insights.briefing.llm.deepseek import DeepSeekBriefingGenerator
+    from app.queue.composition import _wire_briefing_adapter
+
+    state = TaskiqState()
+    with patch("app.insights.briefing.llm.deepseek.settings") as mock_settings:
+        mock_settings.deepseek_api_key = SecretStr("test-key")
+        await _wire_briefing_adapter(state)
+
+    assert isinstance(state.briefing_generator, DeepSeekBriefingGenerator)
