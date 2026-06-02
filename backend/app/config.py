@@ -1,3 +1,4 @@
+import re
 from pathlib import Path
 from typing import Literal, Self
 from urllib.parse import urlparse
@@ -46,6 +47,12 @@ _ALLOWED_INTERNAL_FRONTEND_HOST_SUFFIX = ".flycast"
 # 越しのため平文 (disable / allow / prefer / 未指定) を起動時に拒否する。
 # sslmode の解釈と allowlist は db_ssl.parse_sslmode に SSoT 化 (二重定義回避)。
 _PRODUCTION_REQUIRED_SSLMODES = frozenset({"require", "verify-ca", "verify-full"})
+
+# Logfire write token の形式 (pylf_v1_<region 2文字>_<英数字>)。region は us / eu に
+# 限らず将来増えうるため固定列挙せず 2 文字の構造でのみ縛り、別 token の取り違えと
+# 端末 paste 由来の制御文字 / 空白混入を起動時に弾く。
+# `\A...\Z` で末尾改行直前にマッチする `$` の罠を避け、文字列全体を厳格に縛る。
+_LOGFIRE_TOKEN_PATTERN = re.compile(r"\Apylf_v1_[a-z]{2}_[A-Za-z0-9]+\Z")
 
 
 def _internal_frontend_host(url: str) -> str | None:
@@ -196,6 +203,34 @@ class Settings(BaseSettings):
             "destination; expected localhost / 127.0.0.1 / frontend (compose) or a "
             "*.flycast host (Fly private network)"
         )
+
+    @field_validator("logfire_token")
+    @classmethod
+    def _validate_logfire_token(cls, v: SecretStr | None) -> SecretStr | None:
+        """Logfire write token の形式を起動時に検証する (fail-fast)。
+
+        token 未設定 (dev / CI / test) は no-op 送信のため許容する。設定済みなら、
+        端末 paste 由来の制御文字 / 空白混入や別 token の取り違えを起動時に弾く。
+        Logfire ingest は壊れた token を 400 / 401 で黙って蹴り続け observability が
+        サイレントに 0 になる (実際に ESC バイト混入で全 export が 400 になった) ため、
+        誤設定を起動時に可視化する。error message に token 値は載せない。
+        """
+        if v is None:
+            return v
+        raw = v.get_secret_value()
+        if raw != raw.strip() or any(ord(c) < 32 or ord(c) == 127 for c in raw):
+            raise ValueError(
+                "LOGFIRE_TOKEN contains whitespace or control characters; re-set the "
+                "secret as plain text without stray bytes (a terminal paste can inject "
+                "an ESC/newline byte)"
+            )
+        if not _LOGFIRE_TOKEN_PATTERN.match(raw):
+            raise ValueError(
+                "LOGFIRE_TOKEN does not match the expected Logfire write-token format "
+                "'pylf_v1_<region>_<token>'; copy a write token from the Logfire "
+                "dashboard (Settings -> Write tokens)"
+            )
+        return v
 
     @model_validator(mode="after")
     def _validate_internal_secrets(self) -> Self:
