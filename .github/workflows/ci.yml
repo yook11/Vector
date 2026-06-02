@@ -50,11 +50,13 @@ jobs:
       backend: ${{ steps.filter.outputs.backend }}
       frontend: ${{ steps.filter.outputs.frontend }}
       migrations: ${{ steps.filter.outputs.migrations }}
+      migration_files: ${{ steps.filter.outputs.migrations_files }}
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
       - uses: dorny/paths-filter@fbd0ab8f3e69293af611ebaee6363fc25e6d187d  # v4.0.1
         id: filter
         with:
+          list-files: json
           filters: |
             backend:
               - 'backend/**'
@@ -530,15 +532,132 @@ jobs:
           pre-commit run gitleaks --all-files --show-diff-on-failure
           pre-commit run hadolint-docker --all-files --show-diff-on-failure
 
+  migration-check:
+    name: Migration check
+    runs-on: ubuntu-latest
+    needs: changes
+    if: needs.changes.outputs.migrations == 'true'
+
+    services:
+      postgres:
+        image: pgvector/pgvector:0.8.2-pg18-bookworm
+        env:
+          POSTGRES_USER: vector
+          POSTGRES_PASSWORD: vector
+          POSTGRES_DB: vector
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U vector -d vector"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 5
+
+    env:
+      DATABASE_URL: postgresql+asyncpg://vector:vector@localhost:5432/vector
+      MIGRATION_DATABASE_URL: postgresql+asyncpg://vector:vector@localhost:5432/vector
+      BFF_JWT_SIGNING_SECRET: ci4444444444444444444444444444444444444444444444444444444444444444
+      REVALIDATE_BEARER_SECRET: ci5555555555555555555555555555555555555555555555555555555555555555
+      POSTGRES_AUTH_PASSWORD: ci2222222222222222222222222222222222222222222222222222222222222222
+      POSTGRES_APP_PASSWORD: ci3333333333333333333333333333333333333333333333333333333333333333
+      POSTGRES_COLLECT_PASSWORD: ci6666666666666666666666666666666666666666666666666666666666666666
+      FRONTEND_URL: http://localhost:3000
+      INTERNAL_FRONTEND_BASE_URL: http://frontend:3000
+
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
+
+      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405  # v6.2.0
+        with:
+          python-version: "3.13"
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b  # v8.1.0
+        with:
+          enable-cache: true
+          cache-dependency-glob: backend/uv.lock
+
+      - name: Install backend dependencies
+        run: uv sync --frozen
+        working-directory: backend
+
+      - name: Create auth schema and application roles
+        env:
+          PGPASSWORD: vector
+        run: |
+          psql -h localhost -U vector -d vector <<EOF
+          CREATE SCHEMA IF NOT EXISTS auth;
+          CREATE TABLE IF NOT EXISTS auth."user" (
+            id uuid PRIMARY KEY
+          );
+          DO \$\$
+          BEGIN
+            IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'vector_auth') THEN
+              CREATE ROLE vector_auth WITH LOGIN PASSWORD '${{ env.POSTGRES_AUTH_PASSWORD }}';
+            END IF;
+            IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'vector_app') THEN
+              CREATE ROLE vector_app  WITH LOGIN PASSWORD '${{ env.POSTGRES_APP_PASSWORD }}';
+            END IF;
+            IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'vector_collect') THEN
+              CREATE ROLE vector_collect WITH LOGIN PASSWORD '${{ env.POSTGRES_COLLECT_PASSWORD }}';
+            END IF;
+          END \$\$;
+          EOF
+
+      - name: Require single Alembic head
+        run: |
+          head_count="$(uv run alembic heads | sed '/^[[:space:]]*$/d' | wc -l | tr -d ' ')"
+          if [ "$head_count" != "1" ]; then
+            uv run alembic heads
+            echo "::error::Alembic must have exactly one head, got ${head_count}."
+            exit 1
+          fi
+        working-directory: backend
+
+      - name: Apply migrations to ephemeral PostgreSQL
+        env:
+          ALEMBIC_ALLOW_DESTRUCTIVE: yes-i-know
+        run: uv run alembic upgrade head
+        working-directory: backend
+
+      - name: Classify changed migration revisions
+        env:
+          MIGRATION_GATE_FILES_JSON: ${{ needs.changes.outputs.migration_files }}
+        run: |
+          set -o pipefail
+          {
+            echo "## Migration classification"
+            echo ""
+            echo "Changed migration files:"
+            echo ""
+            echo '```json'
+            printf '%s\n' "$MIGRATION_GATE_FILES_JSON"
+            echo '```'
+            echo ""
+            echo "Gate output:"
+            echo ""
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          uv run python scripts/migration_gate.py --files-json "$MIGRATION_GATE_FILES_JSON" \
+            | tee -a "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+        working-directory: backend
+
   # ---- CI gate (全必須チェックの集約) ----
   # deploy-production が個別テスト job で先走らないよう、全テスト job を 1 つに
   # 集約する単一ゲート。deploy は本 job の success だけを待てばよい。
-  # frontend-e2e-smoke は path 条件で skip されうるため success|skipped を許容し、
-  # それ以外 (backend-unit / backend-integration / frontend / pre-commit) は
-  # success 必須とする。
+  # frontend-e2e-smoke / migration-check は path 条件で skip されうるため
+  # success|skipped を許容し、それ以外 (backend-unit / backend-integration /
+  # frontend / pre-commit) は success 必須とする。
   ci-gate:
     name: CI gate
-    needs: [backend-unit, backend-integration, frontend, frontend-e2e-smoke, pre-commit]
+    needs:
+      - backend-unit
+      - backend-integration
+      - frontend
+      - frontend-e2e-smoke
+      - pre-commit
+      - migration-check
     # 一部 needs が skip (e2e) されても本 job 自体は評価したいので !cancelled()。
     # 失敗 needs があっても下の script で明示判定して exit 1 する。
     if: ${{ !cancelled() }}
@@ -562,7 +681,83 @@ jobs:
             success|skipped) echo "frontend-e2e-smoke = $e2e (ok)" ;;
             *) echo "::error::frontend-e2e-smoke = $e2e (success or skipped required)"; fail=1 ;;
           esac
+          migration_check="${{ needs.migration-check.result }}"
+          case "$migration_check" in
+            success|skipped) echo "migration-check = $migration_check (ok)" ;;
+            *) echo "::error::migration-check = $migration_check (success or skipped required)"; fail=1 ;;
+          esac
           exit $fail
+
+  migrate-production:
+    name: Migrate production
+    needs: [ci-gate, changes]
+    if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main'
+            && needs.ci-gate.result == 'success'
+            && needs.changes.outputs.migrations == 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    environment: production
+    permissions:
+      contents: read
+    env:
+      ENV: production
+      # production Environment secret。owner role / TLS sslmode 付き URL を登録する。
+      DATABASE_URL: ${{ secrets.MIGRATION_DATABASE_URL }}
+      MIGRATION_DATABASE_URL: ${{ secrets.MIGRATION_DATABASE_URL }}
+      BFF_JWT_SIGNING_SECRET: ci4444444444444444444444444444444444444444444444444444444444444444
+      REVALIDATE_BEARER_SECRET: ci5555555555555555555555555555555555555555555555555555555555555555
+      FRONTEND_URL: https://vector.example.invalid
+      INTERNAL_FRONTEND_BASE_URL: https://your-vector-frontend-app.internal.flycast
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
+
+      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405  # v6.2.0
+        with:
+          python-version: "3.13"
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b  # v8.1.0
+        with:
+          enable-cache: true
+          cache-dependency-glob: backend/uv.lock
+
+      - name: Install backend dependencies
+        run: uv sync --frozen
+        working-directory: backend
+
+      - name: Gate pending production migration range
+        run: |
+          set +e
+          uv run python scripts/migration_gate.py --pending | tee "${RUNNER_TEMP}/migration-gate.txt"
+          status="${PIPESTATUS[0]}"
+          {
+            echo "## Production migration gate"
+            echo ""
+            echo '```'
+            cat "${RUNNER_TEMP}/migration-gate.txt"
+            echo '```'
+            if [ "$status" != "0" ]; then
+              echo ""
+              echo "Contract or unknown pending migration detected. Apply it manually with the production owner URL, then rerun deploy."
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+          exit "$status"
+        working-directory: backend
+
+      - name: Apply production migrations
+        run: |
+          before="$(uv run alembic current || true)"
+          uv run alembic upgrade head
+          after="$(uv run alembic current || true)"
+          {
+            echo "## Production migration apply"
+            echo ""
+            echo "| field | value |"
+            echo "| --- | --- |"
+            echo "| before | \`${before//$'\n'/; }\` |"
+            echo "| after | \`${after//$'\n'/; }\` |"
+          } >> "$GITHUB_STEP_SUMMARY"
+        working-directory: backend
 
   # ---- 本番デプロイ (main merge → git SHA tag で build once → core/collect/frontend) ----
   # 業界標準の核: Build once / immutable artifact = git SHA / tested artifact を deploy。
@@ -570,12 +765,15 @@ jobs:
   # ci-gate の success だけを gate にするので個別テスト結果には依存しない。
   deploy-production:
     name: Deploy production (backend -> frontend)
-    needs: [ci-gate, changes]
+    needs: [ci-gate, changes, migrate-production]
     # main への push かつ ci-gate 成功、かつ backend/frontend のいずれかが変わったときのみ。
-    # ci-gate / changes は常に完走する (skip されない) ため result == 'success' で素直に gate できる。
-    if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main'
+    # migrate-production は migration 変更なしでは skip されるため、!cancelled() で
+    # skipped needs を評価対象にし、migration 変更時だけ success を要求する。
+    if: ${{ !cancelled()
+            && github.event_name == 'push' && github.ref == 'refs/heads/main'
             && needs.ci-gate.result == 'success'
-            && (needs.changes.outputs.backend == 'true' || needs.changes.outputs.frontend == 'true') }}
+            && (needs.changes.outputs.backend == 'true' || needs.changes.outputs.frontend == 'true')
+            && (needs.changes.outputs.migrations != 'true' || needs.migrate-production.result == 'success') }}
     runs-on: ubuntu-latest
     # Fly の health check 待ち等で release が stuck したとき、main は直列化されるため
     # 後続 deploy が無限に待たされる。45 分で打ち切り (前 run を手動 cancel 不要に)。
@@ -605,29 +803,8 @@ jobs:
             echo "| backend | ${{ needs.changes.outputs.backend }} |"
             echo "| frontend | ${{ needs.changes.outputs.frontend }} |"
             echo "| migrations | ${{ needs.changes.outputs.migrations }} |"
+            echo "| migrate-production | ${{ needs.migrate-production.result }} |"
           } >> "$GITHUB_STEP_SUMMARY"
-
-      # migration blocker: 本 slice は migration を手動運用するため、alembic versions が
-      # 変わった merge は自動 deploy を明示 fail で止める (gate 自動化は次タスク)。
-      # 赤くなるだけだと CI 故障と区別がつかないため、意図的 block であることを
-      # Step Summary に明記する。
-      - name: Block auto-deploy on migration changes (gate = next task)
-        if: ${{ needs.changes.outputs.migrations == 'true' }}
-        run: |
-          {
-            echo "## ⛔ Deployment intentionally blocked"
-            echo ""
-            echo "Deployment intentionally blocked because migration files changed."
-            echo "Run production migration manually before deploy."
-            echo ""
-            echo "- backend/alembic/versions changed in this merge"
-            echo "- Apply the migration manually (expand-only / owner URL), then deploy manually"
-            echo "- Migration gate automation is the next task"
-          } >> "$GITHUB_STEP_SUMMARY"
-          echo "::error::backend/alembic/versions changed — auto-deploy is intentionally blocked in this slice."
-          echo "Apply the migration manually (expand-only / owner URL), deploy manually, then continue."
-          echo "Migration gate automation is the next task."
-          exit 1
 
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
       - uses: superfly/flyctl-actions/setup-flyctl@ed8efb33836e8b2096c7fd3ba1c8afe303ebbff1  # v1.6
