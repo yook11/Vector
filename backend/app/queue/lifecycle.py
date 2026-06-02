@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import logfire
 import structlog
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 from taskiq import TaskiqEvents, TaskiqState
 from taskiq_redis import RedisStreamBroker
 
@@ -30,6 +30,45 @@ from app.queue.brokers import (
 
 logger = structlog.get_logger(__name__)
 
+# worker engine の pool sizing (label -> (pool_size, max_overflow))。
+# 均一既定 (5,5)=cap10。trend_discovery のみ日次 cron・fan-out なし・
+# 最大 1 connection のため縮小 (2,2)=cap4。
+# supervisord の --max-async-tasks は該当 worker の cap 以下に保つ
+# (通常パスの上限ガード、tests/test_brokers.py が pin する)。error-path で
+# 別 audit session を開く経路 (acquisition の変換棄却 / curation の
+# ready-build 失敗) があり飽和不可能の保証ではない。二重 audit 分は
+# max_overflow + pool_timeout fail-fast で吸収する。
+WORKER_POOL_SIZING: dict[str, tuple[int, int]] = {
+    "metadata": (5, 5),
+    "content": (5, 5),
+    "analysis": (5, 5),
+    "embedding": (5, 5),
+    "trend_discovery": (2, 2),
+    "briefing": (5, 5),
+    "maintenance": (5, 5),
+}
+# Neon autosuspend (既定 300s) の手前で接続を張り替え、pre_ping 依存を
+# 減らす (60s マージン)。create_app_engine の factory 既定 (3600) を worker
+# のみ override する (API は 3600 据え置き)。
+WORKER_POOL_RECYCLE_SECONDS = 240
+
+
+def build_worker_engine(label: str) -> AsyncEngine:
+    """``label`` の sizing で worker engine を作る (hook とテストの共用入口)。
+
+    resilience (pre_ping / pool_timeout) は ``create_app_engine`` の既定に任せ、
+    recycle のみ worker 値で override する。SSL も同 factory が接続文字列の
+    sslmode から導く。
+    """
+    pool_size, max_overflow = WORKER_POOL_SIZING[label]
+    return create_app_engine(
+        settings.database_url,
+        echo=False,
+        pool_size=pool_size,
+        max_overflow=max_overflow,
+        pool_recycle=WORKER_POOL_RECYCLE_SECONDS,
+    )
+
 
 def _register_worker_lifecycle(broker: RedisStreamBroker, label: str) -> None:
     @broker.on_event(TaskiqEvents.WORKER_STARTUP)
@@ -40,9 +79,10 @@ def _register_worker_lifecycle(broker: RedisStreamBroker, label: str) -> None:
         # on_startup だけが発火するため、プロセスごとに正しい service_name で
         # 1 回ずつ呼ばれる。
         setup_logfire(f"vector-worker-{label}")
-        # resilience (pre_ping / recycle / pool_timeout) は create_app_engine の
-        # 既定で付与される (Neon scale-to-zero 対策)。ここは sizing 既定のまま。
-        state.engine = create_app_engine(settings.database_url, echo=False)
+        # pool sizing は WORKER_POOL_SIZING (label 別)、recycle=240 で worker のみ
+        # override。resilience (pre_ping / pool_timeout) は create_app_engine の
+        # 既定 (Neon scale-to-zero 対策)。
+        state.engine = build_worker_engine(label)
         state.session_factory = async_sessionmaker(
             state.engine,
             class_=AsyncSession,
