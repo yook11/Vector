@@ -6,7 +6,7 @@ from datetime import UTC, datetime
 from typing import ClassVar
 
 import pytest
-from sqlalchemy import select
+from sqlalchemy import event, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.collection.article_acquisition import service as service_module
@@ -31,6 +31,7 @@ from app.collection.sources.article_completion_policy import (
     ArticleCompletionPolicy,
 )
 from app.collection.sources.base_article_source import BaseArticleSource
+from app.collection.sources.fetch_cadence import FetchCadence
 from app.collection.sources.source_name import SourceName
 from app.models.article import Article as ArticleORM
 from app.models.incomplete_article import IncompleteArticle as IncompleteArticleORM
@@ -94,6 +95,7 @@ class _StubSource(BaseArticleSource):
     endpoint_url: ClassVar[str] = "https://venturebeat.com/feed/"
     observed_origin: ClassVar[ObservedOrigin] = ObservedOrigin.feed
     completion_policy: ClassVar[ArticleCompletionPolicy] = DEFAULT_POLICY
+    fetch_cadence: ClassVar[FetchCadence] = FetchCadence.HIGH
 
     def __init__(self, items: list[FetchedArticle]) -> None:
         self._items = items
@@ -115,6 +117,7 @@ class _RaisingReadSource(BaseArticleSource):
     endpoint_url: ClassVar[str] = "https://venturebeat.com/feed/"
     observed_origin: ClassVar[ObservedOrigin] = ObservedOrigin.feed
     completion_policy: ClassVar[ArticleCompletionPolicy] = DEFAULT_POLICY
+    fetch_cadence: ClassVar[FetchCadence] = FetchCadence.HIGH
 
     def __init__(self, exc: ExternalFetchError | UnreadableResponseError) -> None:
         self._exc = exc
@@ -127,6 +130,25 @@ class _RaisingReadSource(BaseArticleSource):
 
     def map_entry(self, entry: FetchedArticle) -> FetchedArticle:
         return entry
+
+
+class _ReadOrderRecordingSource(_StubSource):
+    """``read`` 呼び出し時刻を共有 timeline に刻む ``_StubSource``。
+
+    pool の ``checkout`` イベントと突き合わせ、「fetch より前に DB を触らない」
+    順序不変条件を観測するための fake。``read`` は親と同じく注入列を返す。
+    """
+
+    def __init__(self, items: list[FetchedArticle], timeline: list[str]) -> None:
+        super().__init__(items)
+        self._timeline = timeline
+
+    async def read(
+        self,
+        tools: ReaderTools,
+    ) -> list[FetchedArticle]:
+        self._timeline.append("read")
+        return await super().read(tools)
 
 
 @pytest.fixture
@@ -655,3 +677,44 @@ async def test_known_url_observed_writes_no_succeeded(
     await svc.execute(vb_source.id)
 
     assert await _succeeded_events(db_session) == []  # pre-check skip は非記録
+
+
+@pytest.mark.asyncio
+async def test_no_db_checkout_before_source_read(
+    session_factory: async_sessionmaker[AsyncSession],
+    vb_source: NewsSource,
+) -> None:
+    """fetch (source.read) 完了より前に DB connection を checkout しない。
+
+    AsyncSession は遅延 checkout のため、``execute`` が外部 fetch を回す間は pool
+    から connection を握らない。この保証は「fetch より前に DB 操作が一つも無い」
+    順序に暗黙依存する。将来 fetch 前に DB read (例: 前回 cursor 読込) を挟むと
+    checkout が fetch より前に移動するため、本テストが回帰ガードとして落ちる。
+
+    観測は内部配線でなく実リソース境界の前後関係で行う: source.read の呼び出しと
+    pool ``checkout`` イベントを 1 本の timeline に時系列記録し、read が先だと
+    assert する。即時獲得 1 件を与え checkout を必ず 1 回起こして非空虚にする。
+    """
+    timeline: list[str] = []
+    # session_factory が bind する engine (conftest の engine_test) の pool を観測する。
+    sync_engine = session_factory.kw["bind"].sync_engine
+
+    def _on_checkout(_conn: object, _record: object, _proxy: object) -> None:
+        timeline.append("checkout")
+
+    event.listen(sync_engine, "checkout", _on_checkout)
+    try:
+        svc = ArticleAcquisitionService(
+            session_factory,
+            _ReadOrderRecordingSource(
+                [_ready_fetched("https://venturebeat.com/a/")], timeline
+            ),
+        )
+        await svc.execute(vb_source.id)
+    finally:
+        event.remove(sync_engine, "checkout", _on_checkout)
+
+    # 非空虚: save が走り connection を 1 回以上 checkout している。
+    assert "checkout" in timeline
+    # fetch (read) が最初の checkout より前に完了している。
+    assert timeline.index("read") < timeline.index("checkout")
