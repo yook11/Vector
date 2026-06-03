@@ -13,9 +13,7 @@ test.describe("Login flow (UI 経由)", () => {
     // + state 更新 + effect 発火が直列で、CI の next dev cold start 時に
     // default 5s を超えうる。timeout を伸ばして flake を構造的に消す。
     await expect(page).toHaveURL("/", { timeout: 15_000 });
-    await expect(
-      page.getByRole("heading", { name: "Dashboard" }),
-    ).toBeVisible();
+    await expect(page.getByRole("heading", { name: "ニュース" })).toBeVisible();
   });
 
   test("無効 credential で error 表示・URL 維持", async ({ page }) => {

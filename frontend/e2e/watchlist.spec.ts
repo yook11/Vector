@@ -1,11 +1,11 @@
 import { expect, test } from "@playwright/test";
 
 // user project: e2e/.auth/user.json で programmatic auth 済。
-// Dashboard 上で記事を watchlist に追加 → /watchlist で表示確認 → 削除して原状回復。
+// ニュース一覧で記事を watchlist に追加 → /watchlist で表示確認 → 削除して原状回復。
 // backend の seed 状態に依存する (記事が 1 件以上必要) ため、空状態では skip。
 test.describe("Watchlist add/remove flow", () => {
   // 前 run で fail し残った entry をクリーンアップしてから本テストに入る。
-  // /watchlist で全 Remove を順に click することで実現する (Dashboard 経由だと
+  // /watchlist で全 Remove を順に click することで実現する (ニュース一覧経由だと
   // aria-pressed=true のカードが上位に並ぶ等の page state を仮定できないため)。
   // 安全弁として最大反復回数を `MAX_CLEANUP_ITERATIONS` に制限する。万が一
   // Server Action が `toHaveCount(remaining - 1)` を満たさなくなる回帰が
@@ -36,9 +36,7 @@ test.describe("Watchlist add/remove flow", () => {
     page,
   }) => {
     await page.goto("/");
-    await expect(
-      page.getByRole("heading", { name: "Dashboard" }),
-    ).toBeVisible();
+    await expect(page.getByRole("heading", { name: "ニュース" })).toBeVisible();
 
     // 注: 通常の Playwright ベストプラクティスは locator-based assertion で
     // あり `elementHandle()` は legacy API。ただしこのケースでは click 後に
@@ -56,7 +54,7 @@ test.describe("Watchlist add/remove flow", () => {
       .count();
     test.skip(
       candidateCount === 0,
-      "Dashboard 上に未 watch 記事が無いため skip (seed 依存)",
+      "ニュース一覧上に未 watch 記事が無いため skip (seed 依存)",
     );
     const targetButton = await firstUnwatchedLocator.elementHandle();
     if (targetButton === null) {
@@ -93,15 +91,13 @@ test.describe("Watchlist add/remove flow", () => {
     // が起きないことが要件。1 秒間 (200ms x 5 回) `aria-pressed` を観測して
     // 一度も "true" 以外を返さないことを確認する。
     await page.goto("/");
-    await expect(
-      page.getByRole("heading", { name: "Dashboard" }),
-    ).toBeVisible();
+    await expect(page.getByRole("heading", { name: "ニュース" })).toBeVisible();
     const candidateCount = await page
       .locator('button[aria-pressed="false"]')
       .count();
     test.skip(
       candidateCount === 0,
-      "Dashboard 上に未 watch 記事が無いため skip (seed 依存)",
+      "ニュース一覧上に未 watch 記事が無いため skip (seed 依存)",
     );
     // `elementHandle()` を使う理由は前テストのコメントを参照。click 前後の
     // aria-pressed を同一 DOM ノードで観測するために stable な reference が必要。

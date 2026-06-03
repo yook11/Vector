@@ -12,11 +12,15 @@ import { removeFromWatchlist } from "../api/remove-from-watchlist";
 interface WatchlistButtonProps {
   articleId: number;
   isWatched: boolean;
+  className?: string;
+  iconClassName?: string;
 }
 
 export function WatchlistButton({
   articleId,
   isWatched,
+  className,
+  iconClassName,
 }: WatchlistButtonProps) {
   const [optimisticIsWatched, setOptimisticIsWatched] =
     useOptimistic(isWatched);
@@ -57,7 +61,7 @@ export function WatchlistButton({
     <Button
       variant="ghost"
       size="icon"
-      className="h-8 w-8"
+      className={cn("h-8 w-8", className)}
       onClick={handleToggle}
       disabled={pending}
       aria-label={label}
@@ -66,7 +70,11 @@ export function WatchlistButton({
     >
       <Bookmark
         aria-hidden="true"
-        className={cn("size-4", optimisticIsWatched && "fill-current")}
+        className={cn(
+          "size-4",
+          optimisticIsWatched && "fill-current",
+          iconClassName,
+        )}
       />
     </Button>
   );

@@ -12,18 +12,24 @@ import {
   SheetTitle,
   SheetTrigger,
 } from "@/components/ui/sheet";
+import { cn } from "@/lib/utils/cn";
 
 interface MobileNavProps {
   items: Array<{ href: string; label: string }>;
+  triggerClassName?: string;
 }
 
-export function MobileNav({ items }: MobileNavProps) {
+export function MobileNav({ items, triggerClassName }: MobileNavProps) {
   const [open, setOpen] = useState(false);
 
   return (
     <Sheet open={open} onOpenChange={setOpen}>
       <SheetTrigger asChild>
-        <Button variant="ghost" size="icon" className="sm:hidden h-8 w-8">
+        <Button
+          variant="ghost"
+          size="icon"
+          className={cn("h-8 w-8 sm:hidden", triggerClassName)}
+        >
           <Menu aria-hidden="true" className="size-4" />
           <span className="sr-only">メニュー</span>
         </Button>

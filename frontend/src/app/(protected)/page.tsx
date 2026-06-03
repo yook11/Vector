@@ -1,90 +1,26 @@
-import { Suspense } from "react";
-import { Skeleton } from "@/components/ui/skeleton";
+import { Sparkles } from "lucide-react";
+import { getProtectedNavItems } from "@/components/layout/nav-items";
+import { ThemeToggle } from "@/components/layout/ThemeToggle";
+import { UserMenu } from "@/features/auth";
 import {
-  CategorySidebar,
+  DashboardMasthead,
+  DashboardPaperArticleList,
+  formatPaperMastheadDate,
   getArticles,
   getCategories,
-  MobileSidebar,
-  NewsFilters,
-  NewsList,
-  NewsPagination,
+  getLatestArticleDate,
+  PaperNewsControls,
+  PaperNewsPagination,
+  PaperTexture,
   parseArticleQuery,
 } from "@/features/news";
 import { getWatchlistIds } from "@/features/watchlist";
 import { requireSession } from "@/lib/auth/guards";
+import { narrowRole } from "@/lib/auth/role";
 import type { SearchParams } from "@/lib/types/route";
-import type { ArticleQuery } from "@/types";
 
 interface DashboardPageProps {
   searchParams: Promise<SearchParams>;
-}
-
-// `getCategories` は `'use cache'` を持つため、CategorySidebarSection と
-// MobileSidebarTrigger の 2 箇所で await しても Next.js 16 の cache hit で
-// 実 backend hit は 1 回に収束する。Suspense 境界を別にすることで lg/mobile
-// 両方が独立に streaming される。
-async function CategorySidebarSection(props: { activeCategory?: string }) {
-  // DAL gate: layout の requireSession は PPR の別 prerender 単位 (本 section)
-  // を守らないため、'use cache' データ取得の前にここで認可して static shell
-  // への漏洩を塞ぐ。getCurrentSession は React.cache 済で DB hit は 1 回に集約。
-  await requireSession();
-  const { items } = await getCategories();
-  // EOP 下では undefined 明示代入が違反になるため、props を spread して
-  // optional の不在/存在をそのまま伝搬する。
-  return <CategorySidebar categories={items} {...props} />;
-}
-
-async function MobileSidebarTrigger(props: { activeCategory?: string }) {
-  await requireSession();
-  const { items } = await getCategories();
-  return <MobileSidebar categories={items} {...props} />;
-}
-
-async function NewsGridSection({ filters }: { filters: ArticleQuery }) {
-  // gate は Promise.all の前に直列で置く (並走させると未認証でも getArticles の
-  // cached fetch が走ってしまう)。
-  await requireSession();
-  const [newsData, watchedIds] = await Promise.all([
-    getArticles(filters),
-    getWatchlistIds(),
-  ]);
-  return (
-    <>
-      <NewsList items={newsData.items} watchedIds={watchedIds} />
-      <NewsPagination page={newsData.page} totalPages={newsData.totalPages} />
-    </>
-  );
-}
-
-function CategorySidebarSkeleton() {
-  return (
-    <div className="flex flex-col gap-1.5 p-6" aria-hidden="true">
-      <Skeleton className="h-4 w-24 mb-2" />
-      {[0, 1, 2, 3, 4, 5].map((i) => (
-        <Skeleton key={i} className="h-9 w-full rounded-xl" />
-      ))}
-    </div>
-  );
-}
-
-function NewsGridSkeleton() {
-  return (
-    <div
-      className="grid gap-x-8 gap-y-0 md:grid-cols-2 xl:grid-cols-3"
-      aria-hidden="true"
-    >
-      {[0, 1, 2, 3, 4, 5].map((i) => (
-        <div
-          key={i}
-          className="flex flex-col gap-3 py-6 border-b border-border"
-        >
-          <Skeleton className="h-4 w-20" />
-          <Skeleton className="h-5 w-full" />
-          <Skeleton className="h-4 w-3/4" />
-        </div>
-      ))}
-    </div>
-  );
 }
 
 export default async function DashboardPage({
@@ -92,50 +28,81 @@ export default async function DashboardPage({
 }: DashboardPageProps) {
   const raw = await searchParams;
   const { query: filters } = parseArticleQuery(raw);
+  // gate はデータ取得の前に直列で置く。未認証時に cached fetch が走るのを防ぐ。
+  const session = await requireSession();
+  const isAdmin = narrowRole(session.user.role) === "admin";
+  const navItems = getProtectedNavItems(isAdmin);
+  const [newsData, watchedIds, categoriesData] = await Promise.all([
+    getArticles(filters),
+    getWatchlistIds(),
+    getCategories(),
+  ]);
+  const displayDate = formatPaperMastheadDate(
+    getLatestArticleDate(newsData.items),
+  );
+
   // EOP 下で undefined を optional prop に明示代入できないため、
   // 条件付き spread で「未指定 or 値あり」を表現する。
   const categoryProps =
     filters.category !== undefined ? { activeCategory: filters.category } : {};
+  const summarizedCount = newsData.items.length;
 
   return (
-    <div className="flex h-full gap-0">
-      {/* Sidebar */}
-      <aside className="hidden lg:flex w-64 shrink-0 flex-col border-r border-border overflow-y-auto">
-        <Suspense fallback={<CategorySidebarSkeleton />}>
-          <CategorySidebarSection {...categoryProps} />
-        </Suspense>
-      </aside>
+    <div
+      className="min-h-dvh bg-[var(--vector-paper)] text-[var(--vector-ink)] [--vector-accent:#0fa89c] [--vector-accent-ink:#08756f] [--vector-ink:#221c16] [--vector-ink-muted:#938a7c] [--vector-ink-soft:#5c544a] [--vector-line:#e4dccc] [--vector-paper:#f7f3ec] [--vector-rule:#d5ccbc] dark:[--vector-accent:#2dd4bf] dark:[--vector-accent-ink:#67e8d8] dark:[--vector-ink:#f3eee4] dark:[--vector-ink-muted:#8a8173] dark:[--vector-ink-soft:#b7ae9f] dark:[--vector-line:#332c23] dark:[--vector-paper:#14110b] dark:[--vector-rule:#40382d]"
+      style={{ fontFamily: "var(--font-vector-sans)" }}
+    >
+      <div className="relative min-h-dvh w-full overflow-hidden">
+        <PaperTexture />
+        <DashboardMasthead
+          categories={categoriesData.items}
+          currentQuery={filters}
+          displayDate={displayDate}
+          navItems={navItems}
+          themeSlot={<ThemeToggle />}
+          userMenuSlot={
+            <UserMenu
+              compact
+              buttonClassName="rounded-none text-[var(--vector-ink-muted)] hover:bg-transparent hover:text-[var(--vector-accent)]"
+              emailClassName="text-[var(--vector-ink-muted)]"
+            />
+          }
+          {...categoryProps}
+        />
 
-      {/* Main content */}
-      <main className="flex-1 min-w-0 flex flex-col overflow-y-auto">
-        <div className="px-8 sm:px-12 py-6 sm:py-8 flex flex-col gap-8">
-          {/* Title row */}
-          <div className="flex items-center gap-3">
-            <Suspense fallback={null}>
-              <MobileSidebarTrigger {...categoryProps} />
-            </Suspense>
-            <h1 className="text-base font-medium text-foreground">Dashboard</h1>
+        <section className="relative z-10 mx-5 mb-7 flex flex-col gap-5 border-b border-[var(--vector-ink)] pb-6 sm:mx-8 sm:flex-row sm:items-end sm:justify-between lg:mx-10">
+          <div className="min-w-0">
+            <h1
+              className="text-[26px] font-black tracking-[0.06em] text-[var(--vector-ink)] sm:text-[34px]"
+              style={{ fontFamily: "var(--font-vector-maru)" }}
+            >
+              ニュース
+            </h1>
+            <p
+              className="mt-3 flex items-center gap-2 text-[13px] italic tracking-[0.04em] text-[var(--vector-ink-muted)]"
+              style={{ fontFamily: "var(--font-vector-display)" }}
+            >
+              <Sparkles
+                aria-hidden="true"
+                className="size-3.5 shrink-0 text-[var(--vector-accent)]"
+              />
+              AIが新着{summarizedCount}件を要約しました
+            </p>
           </div>
+          <PaperNewsControls />
+        </section>
 
-          {/* Controls row: Filters */}
-          <div className="flex flex-col sm:flex-row sm:items-center gap-3">
-            <Suspense>
-              <NewsFilters />
-            </Suspense>
-          </div>
-
-          {/* News grid */}
-          {/* URL searchParams を JSON 化して Suspense key に与えることで、
-              filters が変化したときに fallback (skeleton) を再表示する。
-              watchlist 側 (`(protected)/watchlist/page.tsx`) と統一した戦略。 */}
-          <Suspense
-            key={JSON.stringify({ filters })}
-            fallback={<NewsGridSkeleton />}
-          >
-            <NewsGridSection filters={filters} />
-          </Suspense>
-        </div>
-      </main>
+        <main className="relative z-10 px-5 pb-14 sm:px-8 lg:px-10">
+          <DashboardPaperArticleList
+            items={newsData.items}
+            watchedIds={watchedIds}
+          />
+          <PaperNewsPagination
+            page={newsData.page}
+            totalPages={newsData.totalPages}
+          />
+        </main>
+      </div>
     </div>
   );
 }

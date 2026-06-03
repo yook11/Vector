@@ -1,5 +1,12 @@
 import type { Metadata, Viewport } from "next";
-import { Plus_Jakarta_Sans } from "next/font/google";
+import {
+  Big_Shoulders,
+  Newsreader,
+  Plus_Jakarta_Sans,
+  Shippori_Mincho_B1,
+  Zen_Kaku_Gothic_New,
+  Zen_Maru_Gothic,
+} from "next/font/google";
 import { Suspense } from "react";
 import { ClientGlobals } from "@/components/layout/ClientGlobals";
 import { NonceThemeProvider } from "@/components/layout/NonceThemeProvider";
@@ -8,6 +15,42 @@ import "./globals.css";
 const plusJakartaSans = Plus_Jakarta_Sans({
   subsets: ["latin"],
   variable: "--font-sans",
+  display: "swap",
+});
+
+const vectorWordmark = Big_Shoulders({
+  subsets: ["latin"],
+  weight: ["500", "600", "700"],
+  variable: "--font-vector-wordmark",
+  display: "swap",
+});
+
+const vectorSerif = Shippori_Mincho_B1({
+  subsets: ["latin"],
+  weight: ["500", "700", "800"],
+  variable: "--font-vector-serif",
+  display: "swap",
+});
+
+const vectorSans = Zen_Kaku_Gothic_New({
+  subsets: ["latin"],
+  weight: ["400", "500", "700"],
+  variable: "--font-vector-sans",
+  display: "swap",
+});
+
+const vectorMaru = Zen_Maru_Gothic({
+  subsets: ["latin"],
+  weight: ["500", "700", "900"],
+  variable: "--font-vector-maru",
+  display: "swap",
+});
+
+const vectorDisplay = Newsreader({
+  subsets: ["latin"],
+  weight: ["400", "500", "600"],
+  style: ["normal", "italic"],
+  variable: "--font-vector-display",
   display: "swap",
 });
 
@@ -52,7 +95,7 @@ export default function RootLayout({
   return (
     <html lang="ja" suppressHydrationWarning>
       <body
-        className={`${plusJakartaSans.variable} font-sans bg-background text-foreground`}
+        className={`${plusJakartaSans.variable} ${vectorWordmark.variable} ${vectorSerif.variable} ${vectorSans.variable} ${vectorMaru.variable} ${vectorDisplay.variable} font-sans bg-background text-foreground`}
       >
         <Suspense>
           <NonceThemeProvider>

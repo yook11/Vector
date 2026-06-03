@@ -1,24 +1,16 @@
 import Link from "next/link";
 import { MobileNav } from "@/components/layout/MobileNav";
 import { NavLink } from "@/components/layout/NavLink";
+import { getProtectedNavItems } from "@/components/layout/nav-items";
 import { ThemeToggle } from "@/components/layout/ThemeToggle";
 import { UserMenu } from "@/features/auth";
 import { getCurrentSession } from "@/lib/auth/guards";
 import { narrowRole } from "@/lib/auth/role";
 
-const baseNavItems = [
-  { href: "/", label: "ニュース" },
-  { href: "/briefing", label: "Briefing" },
-  { href: "/weekly-trends", label: "ウィークリー" },
-  { href: "/watchlist", label: "ウォッチリスト" },
-];
-
-const adminNavItem = { href: "/settings", label: "Settings" };
-
 export async function Header() {
   const session = await getCurrentSession();
   const isAdmin = session !== null && narrowRole(session.user.role) === "admin";
-  const navItems = isAdmin ? [...baseNavItems, adminNavItem] : baseNavItems;
+  const navItems = getProtectedNavItems(isAdmin);
 
   return (
     <header className="fixed top-0 z-50 w-full bg-background/70 backdrop-blur-xl">
