@@ -167,18 +167,24 @@ def pytest_collection_modifyitems(
             item.add_marker(pytest.mark.unit)
 
 
-_test_db_initialized = False
+_test_schema_initialized = False
 
 
-async def _ensure_test_database_once() -> None:
-    """vector_test DB と pgvector / auth スキーマを確保する (idempotent, 初回のみ)。
+async def _ensure_test_schema_once() -> None:
+    """vector_test DB・pgvector / auth スキーマ・全テーブルを確保する (初回のみ)。
 
-    integration テスト初回起動時にだけ呼ばれる。unit テストのみの実行 (CI の
-    backend-unit job 等、postgres service 無しの環境) ではそもそも呼ばれないため、
-    DB 接続も発生しない。
+    integration テスト初回起動時にだけ呼ばれる。DB / extension / schema の確保に
+    加え、``Base.metadata`` の全テーブルを **session で 1 回だけ** 作成する。
+    drop_all → create_all の順にするのは、``down -v`` せず再実行した persistent な
+    local DB でも schema を fresh に揃えるための保険 (一回限りなのでコストは無視)。
+    各テストごとの状態リセットは setup_db の TRUNCATE が担うため、create_all は
+    session 中 1 度きりとなり per-test の DDL コストを排除する。
+
+    unit テストのみの実行 (CI の backend-unit job 等、postgres service 無しの環境)
+    ではそもそも呼ばれないため、DB 接続も発生しない。
     """
-    global _test_db_initialized
-    if _test_db_initialized:
+    global _test_schema_initialized
+    if _test_schema_initialized:
         return
     base_url = _ADMIN_DB_URL.rsplit("/", 1)[0] + "/postgres"
     engine = create_async_engine(
@@ -196,23 +202,49 @@ async def _ensure_test_database_once() -> None:
         await conn.execute(text("CREATE EXTENSION IF NOT EXISTS vector"))
         await conn.execute(text("CREATE SCHEMA IF NOT EXISTS auth"))
         await conn.commit()
-    _test_db_initialized = True
+    # auth スキーマ作成後にテーブルを 1 回だけ作る (auth."user" が auth schema に
+    # 属するため順序を保つ)。
+    async with engine_test.begin() as conn:
+        await conn.run_sync(Base.metadata.drop_all)
+        await conn.run_sync(Base.metadata.create_all)
+    _test_schema_initialized = True
+
+
+def _truncate_all_sql() -> str:
+    """全テーブルを 1 文で空にする TRUNCATE 文を組み立てる。
+
+    ``Base.metadata.sorted_tables`` を走査し、dialect の identifier preparer で
+    schema 修飾・予約語クォート (auth."user" 等) を安全に処理する。RESTART
+    IDENTITY で採番 PK の sequence を 1 に戻し (seed fixture が ``.id`` に依存)、
+    CASCADE は FK 参照に対する防御的指定。テーブル追加に自動追従するよう定数化
+    せず都度生成する。
+    """
+    preparer = engine_test.dialect.identifier_preparer
+    names = ", ".join(
+        preparer.format_table(table) for table in Base.metadata.sorted_tables
+    )
+    return f"TRUNCATE TABLE {names} RESTART IDENTITY CASCADE"
 
 
 @pytest.fixture(autouse=True)
 async def setup_db(request: pytest.FixtureRequest) -> AsyncGenerator[None]:
-    """integration テストのみ、各テスト前にテーブルを作成し終了後に破棄する。
+    """integration テストのみ、各テスト前に DB を空状態 + seed にリセットする。
+
+    schema (テーブル) は _ensure_test_schema_once が session で 1 回だけ作成する。
+    各テストの分離は create_all/drop_all ではなく TRUNCATE ... RESTART IDENTITY で
+    行い、per-test の DDL コスト (~99ms) を排除する。リセットを setup (テスト前)
+    に置くのは、前テストが異常終了でデータを残してもテスト順序に依らず必ず clean
+    を保証するため。
 
     unit テスト (pytest_collection_modifyitems で自動分類) は DB を触らないため
-    create_all/drop_all を毎回流すのは純粋な無駄。integration マーカーが付いた
-    テストにのみ DDL を流す。
+    何もしない。
     """
     if "integration" not in request.keywords:
         yield
         return
-    await _ensure_test_database_once()
+    await _ensure_test_schema_once()
     async with engine_test.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
+        await conn.execute(text(_truncate_all_sql()))
         # watchlist_entries.user_id の FK を満たすため auth.user を seed する
         await conn.execute(
             text(
@@ -222,8 +254,6 @@ async def setup_db(request: pytest.FixtureRequest) -> AsyncGenerator[None]:
             {"uid1": TEST_USER_ID, "uid2": TEST_ADMIN_ID},
         )
     yield
-    async with engine_test.begin() as conn:
-        await conn.run_sync(Base.metadata.drop_all)
 
 
 @pytest.fixture
