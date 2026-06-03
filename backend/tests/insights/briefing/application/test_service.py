@@ -6,6 +6,7 @@ from datetime import date, datetime
 from unittest.mock import AsyncMock, MagicMock
 from zoneinfo import ZoneInfo
 
+import httpx  # noqa: TID251 (テスト内 mock 構築のため、実通信なし)
 import pytest
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
@@ -14,7 +15,10 @@ from app.audit.stages.briefing import (
     OUTCOME_BRIEFING_GENERATION_COMPLETED,
     OUTCOME_BRIEFING_GENERATION_INPUT_EMPTY,
 )
-from app.insights.briefing.application.notifier import NullBriefingNotifier
+from app.insights.briefing.application.notifier import (
+    FrontendRevalidateNotifier,
+    NullBriefingNotifier,
+)
 from app.insights.briefing.application.service import WeeklyBriefingService
 from app.insights.briefing.domain.briefing import (
     BriefingStory,
@@ -188,16 +192,17 @@ class TestNotifierIntegration:
         notifier.notify.assert_not_awaited()
 
     @pytest.mark.asyncio
-    async def test_service_succeeds_even_if_notifier_raises(
+    async def test_service_persists_even_when_frontend_revalidate_http_error(
         self,
         db_session,
         ai_category: Category,
         seed_briefing_analysis,
+        monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        """Service は notifier の戻り値に依存しない (notify は副作用専用)。
+        """revalidate HTTP 失敗は briefing 生成成功を失敗扱いにしない。
 
-        notify は契約上 raise しない (warn 降格)。Service 側で再 try/except
-        は重ねない。実装責務は ``FrontendRevalidateNotifier`` に閉じ込める。
+        no-raise 契約は ``FrontendRevalidateNotifier`` が担う。Service 経由でも
+        保存成功後に通知を試み、HTTP error が warn 降格されることを固定する。
         """
         await seed_briefing_analysis(
             category_id=ai_category.id,
@@ -205,19 +210,59 @@ class TestNotifierIntegration:
         )
         await db_session.commit()
 
-        notifier = MagicMock()
-        # 仮に notifier 実装が誤って raise しても Service は伝播してしまう。
-        # 設計契約上 notify は raise しないため、ここでは raise する mock を
-        # 渡すことで「Service は notifier の挙動にデフェンシブではない (契約に依存)」
-        # ことを明示する。実装側 (FrontendRevalidateNotifier) で warn 降格を保証。
-        notifier.notify = AsyncMock(return_value=None)
-        service = WeeklyBriefingService(_factory_for(db_session), _llm_mock(), notifier)
+        captured: list[tuple[str, str, str, bytes]] = []
+
+        async def handler(request: httpx.Request) -> httpx.Response:
+            captured.append(
+                (
+                    request.method,
+                    str(request.url),
+                    request.headers["authorization"],
+                    request.read(),
+                )
+            )
+            return httpx.Response(500, json={"error": "boom"})
+
+        transport = httpx.MockTransport(handler)
+        original_init = httpx.AsyncClient.__init__
+
+        def patched_init(
+            self: httpx.AsyncClient, *args: object, **kwargs: object
+        ) -> None:
+            kwargs["transport"] = transport
+            original_init(self, *args, **kwargs)
+
+        monkeypatch.setattr(httpx.AsyncClient, "__init__", patched_init)
+
+        notifier = FrontendRevalidateNotifier(
+            frontend_base_url="http://frontend:3000",
+            secret="test-secret-32characters-long-xxxx",
+        )
+        llm = _llm_mock(headline="OK", overview="OVERVIEW")
+        service = WeeklyBriefingService(_factory_for(db_session), llm, notifier)
         ready = ReadyForBriefing(
             week_start=date(2026, 4, 20), category_id=ai_category.id
         )
 
         outcome = await service.execute(ready)
+
         assert outcome.persisted is True
+        assert captured == [
+            (
+                "POST",
+                "http://frontend:3000/api/internal/revalidate",
+                "Bearer test-secret-32characters-long-xxxx",
+                b'{"tags":["briefing:ai","briefing:list"]}',
+            )
+        ]
+
+        repo = BriefingRepository(db_session)
+        saved = await repo.find_by(
+            week_start=date(2026, 4, 20), category_id=ai_category.id
+        )
+        assert saved is not None
+        assert saved.headline == "OK"
+        assert saved.overview == "OVERVIEW"
 
 
 class TestAuditIntegration:
