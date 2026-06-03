@@ -59,8 +59,8 @@ primary_region = 'nrt'
 # - worker-analysis ~819MB: analysis(curation gemini + assessment deepseek)+embedding
 #   (gemini)+maintenance を同居。AI worker 2 本が SDK を持つため最大 → 1.5GB。
 # - worker-insights ~484MB: trend(SDK-free)+briefing(deepseek/openai)同居 → 768MB。
-# - scheduler ~667MB: scheduler 4 プロセスが registry を各々 full import (~140MB×4)。
-#   SDK-free でも 512MB は不可。4→1 プロセス統合は別タスク、現状は据え置き。
+# - scheduler ~200MB級: 4 cron scheduler を 1 プロセスに統合 (SDK-free, full import 1 回)。
+#   実装は app/queue/scheduler_entrypoint.py / supervisord/scheduler.conf。
 # - api: HTTP 処理のみで OOM していないため据え置き (cold-start は別件 P2)。
 # payload を処理する worker は実行時に成長するため、縮小側は実測 +60〜90% の
 # ヘッドルームを残す。deploy 後は RSS を監視し、超過すれば戻す。
@@ -80,7 +80,7 @@ primary_region = 'nrt'
   processes = ['worker-insights']
 
 [[vm]]
-  memory = '1gb'
+  memory = '512mb'
   cpus = 1
   processes = ['scheduler']
 

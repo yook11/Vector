@@ -16,7 +16,7 @@ import** で行う。`from app.queue.brokers import broker_X` 1 行で:
   - broker × 7 の生成
   - 各 broker への WORKER_STARTUP / CLIENT_STARTUP hook attach
   - analysis / embedding broker への AI adapter wiring attach
-  - 3 つの TaskiqScheduler の生成
+  - 4 つの TaskiqScheduler の生成
 が全て完了する。順序は循環 import を避けるため厳守。
 """
 

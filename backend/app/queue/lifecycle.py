@@ -114,14 +114,21 @@ def _register_scheduler_lifecycle(broker: RedisStreamBroker, label: str) -> None
 
     Scheduler 自身は DB を触らない (全 cron task は worker 側で実行され、
     state.engine も session_factory も WORKER_STARTUP でしか初期化されない) ため、
-    setup_logfire のみで充分 (engine 生成 / instrument_sqlalchemy は意図的に呼ば
-    ない)。enqueue 自体の telemetry は OpenTelemetryMiddleware.pre_send が
-    PRODUCER span として出す (scheduler process でも middleware は実行される)。
+    本 hook は startup/shutdown ログのみを担う (engine 生成 / instrument_sqlalchemy は
+    意図的に呼ばない)。
+
+    Logfire bootstrap は本 hook では呼ばない。統合後の scheduler は 1 プロセスで 4
+    broker の CLIENT_STARTUP が走るため、hook 内で ``setup_logfire`` を呼ぶと
+    ``logfire.instrument_httpx`` (global patch) が 4 回積み重なり「プロセスごとに 1 度」
+    契約 (test_logfire_setup) を破る。よって ``setup_logfire("vector-scheduler")`` は
+    entrypoint (``scheduler_entrypoint._main``) が process 先頭で 1 度だけ呼ぶ
+    (API が lifespan で 1 度呼ぶのと同パターン)。enqueue 自体の telemetry は
+    OpenTelemetryMiddleware.pre_send が PRODUCER span として出す (scheduler process
+    でも middleware は実行される)。
     """
 
     @broker.on_event(TaskiqEvents.CLIENT_STARTUP)
     async def on_scheduler_startup(state: TaskiqState) -> None:
-        setup_logfire(f"vector-scheduler-{label}")
         logger.info(f"{label}_scheduler_startup")
 
     @broker.on_event(TaskiqEvents.CLIENT_SHUTDOWN)

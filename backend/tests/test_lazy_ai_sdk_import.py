@@ -24,8 +24,9 @@ import pytest
 # taskiq は `module:object` の module 部 + 各 task module を import するため、ここでは
 # import 対象 module のみを列挙する (object 部は import に無関係)。
 _NON_AI_IMPORT_SURFACES = {
-    # scheduler.conf: taskiq scheduler app.queue.schedulers:<sched> app.queue.registry
-    "scheduler": "import app.queue.schedulers, app.queue.registry",
+    # scheduler.conf: python -m app.queue.scheduler_entrypoint (4 cron scheduler 統合)。
+    # entrypoint は schedulers + registry を import するため最広の import surface。
+    "scheduler": "import app.queue.scheduler_entrypoint",
     # fetch.conf: taskiq worker app.queue.brokers:broker_{metadata,content}
     #             app.queue.tasks.acquisition app.queue.tasks.completion
     "collect": (

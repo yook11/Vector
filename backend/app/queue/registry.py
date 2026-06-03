@@ -1,8 +1,9 @@
 """scheduler が cron 駆動 task を発見するための副作用 import 集約点。
 
-scheduler entrypoint (supervisord/scheduler.conf) は本 module を taskiq scheduler
-の引数として渡し、各 cron 駆動 task の `@broker.task(schedule=...)` を import 時に
-登録させる。worker entrypoint は task module を直接引数として渡すため本 module を
+scheduler entrypoint (``app.queue.scheduler_entrypoint``) は本 module を import し、
+各 cron 駆動 task の `@broker.task(schedule=...)` を import 時に登録させる
+(``broker.get_all_tasks()`` を満たし LabelScheduleSource が schedule label を回収できる
+状態にする)。worker entrypoint は task module を直接引数として渡すため本 module を
 通らない。
 """
 
