@@ -2,7 +2,7 @@
 
 import type { Client, Options as Options2, TDataShape } from './client';
 import { client } from './client.gen';
-import type { ActivateSourceData, ActivateSourceErrors, ActivateSourceResponses, AddToWatchlistData, AddToWatchlistErrors, AddToWatchlistResponses, CreateNewsSourceData, CreateNewsSourceErrors, CreateNewsSourceResponses, DeactivateSourceData, DeactivateSourceErrors, DeactivateSourceResponses, DeleteNewsSourceData, DeleteNewsSourceErrors, DeleteNewsSourceResponses, FetchNewsData, FetchNewsErrors, FetchNewsResponses, GetArticleData, GetArticleErrors, GetArticleResponses, GetLatestBriefingData, GetLatestBriefingErrors, GetLatestBriefingResponses, GetSimilarArticlesData, GetSimilarArticlesErrors, GetSimilarArticlesResponses, GetWeeklyTrendsData, GetWeeklyTrendsErrors, GetWeeklyTrendsResponses, HealthCheckData, HealthCheckErrors, HealthCheckResponses, ListArticlesData, ListArticlesErrors, ListArticlesInWatchlistData, ListArticlesInWatchlistErrors, ListArticlesInWatchlistResponses, ListArticlesResponses, ListBriefingsData, ListBriefingsErrors, ListBriefingsResponses, ListCategoriesData, ListCategoriesErrors, ListCategoriesResponses, ListNewsSourcesData, ListNewsSourcesErrors, ListNewsSourcesResponses, ListWatchlistIdsData, ListWatchlistIdsErrors, ListWatchlistIdsResponses, RemoveFromWatchlistData, RemoveFromWatchlistErrors, RemoveFromWatchlistResponses } from './types.gen';
+import type { ActivateSourceData, ActivateSourceErrors, ActivateSourceResponses, AddToWatchlistData, AddToWatchlistErrors, AddToWatchlistResponses, CreateNewsSourceData, CreateNewsSourceErrors, CreateNewsSourceResponses, DeactivateSourceData, DeactivateSourceErrors, DeactivateSourceResponses, DeleteNewsSourceData, DeleteNewsSourceErrors, DeleteNewsSourceResponses, FetchNewsData, FetchNewsErrors, FetchNewsResponses, GetArticleData, GetArticleErrors, GetArticleResponses, GetLatestBriefingData, GetLatestBriefingErrors, GetLatestBriefingResponses, GetPipelineHealthData, GetPipelineHealthErrors, GetPipelineHealthResponses, GetSimilarArticlesData, GetSimilarArticlesErrors, GetSimilarArticlesResponses, GetWeeklyTrendsData, GetWeeklyTrendsErrors, GetWeeklyTrendsResponses, HealthCheckData, HealthCheckErrors, HealthCheckResponses, ListArticlesData, ListArticlesErrors, ListArticlesInWatchlistData, ListArticlesInWatchlistErrors, ListArticlesInWatchlistResponses, ListArticlesResponses, ListBriefingsData, ListBriefingsErrors, ListBriefingsResponses, ListCategoriesData, ListCategoriesErrors, ListCategoriesResponses, ListNewsSourcesData, ListNewsSourcesErrors, ListNewsSourcesResponses, ListWatchlistIdsData, ListWatchlistIdsErrors, ListWatchlistIdsResponses, RemoveFromWatchlistData, RemoveFromWatchlistErrors, RemoveFromWatchlistResponses } from './types.gen';
 
 export type Options<TData extends TDataShape = TDataShape, ThrowOnError extends boolean = boolean, TResponse = unknown> = Options2<TData, ThrowOnError, TResponse> & {
     /**
@@ -163,6 +163,13 @@ export const fetchNews = <ThrowOnError extends boolean = false>(options?: Option
         ...options?.headers
     }
 });
+
+/**
+ * Get Pipeline Health
+ *
+ * パイプライン各 stage の健全性スナップショットを返す。
+ */
+export const getPipelineHealth = <ThrowOnError extends boolean = false>(options?: Options<GetPipelineHealthData, ThrowOnError>) => (options?.client ?? client).get<GetPipelineHealthResponses, GetPipelineHealthErrors, ThrowOnError>({ url: '/api/v1/admin/pipeline/health', ...options });
 
 /**
  * Health Check

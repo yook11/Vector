@@ -5,14 +5,14 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, Path
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.dependencies import get_session
-from app.repositories.news_source import NewsSourceRepository
-from app.schemas.news_source import (
+from app.admin.sources.repository import NewsSourceRepository
+from app.admin.sources.schemas import (
     NewsSourceCreate,
     NewsSourceDetail,
     NewsSourceDetailList,
 )
-from app.services.news_source import NewsSourceService
+from app.admin.sources.service import NewsSourceService
+from app.dependencies import get_session
 
 # news_sources.id は PostgreSQL INTEGER (int32) のため、上限を path level で
 # 明示して OverflowError 由来の 500 leak を構造的に閉塞する。下限 1 は

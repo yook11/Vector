@@ -6,9 +6,9 @@ from fastapi import APIRouter, Depends, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.admin.pipeline.schemas import FetchRequest, FetchResponse
 from app.dependencies import get_session
 from app.models.news_source import NewsSource
-from app.schemas.pipeline import FetchRequest, FetchResponse
 
 router = APIRouter(prefix="/pipeline", tags=["admin:pipeline"])
 

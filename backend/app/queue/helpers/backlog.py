@@ -9,8 +9,9 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime
+from typing import Any
 
-from sqlalchemy import func, select
+from sqlalchemy import Select, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.article import Article
@@ -40,12 +41,84 @@ class PipelineBacklog:
     ID 取得メソッド (``*_pending_*``) は LIMIT 付きで dispatch 対象を返す。
     COUNT メソッド (``count_*``) は LIMIT なしの真の総数を Logfire gauge
     観測用に返す (dispatch list の ``len()`` は LIMIT で saturate するため、
-    詰まりの可視化には COUNT 経路が必要)。kiq dispatch・予算消費の判断は
-    呼び出し側 (cron task) の責務。
+    詰まりの可視化には COUNT 経路が必要)。stats メソッド (``*_pending_*_stats``)
+    は同述語の ``(総数, 最古 created_at)`` を 1 クエリで返す (health endpoint 用)。
+    3 系統は stage ごとの ``_*_pending`` 述語ビルダを共有する。kiq dispatch・
+    予算消費の判断は呼び出し側 (cron task) の責務。
     """
 
     def __init__(self, session: AsyncSession) -> None:
         self._session = session
+
+    # --- pending 述語ビルダ (ids / count / stats が共有する SQL 本体の単一定義) ---
+    # 各 stage の FROM + JOIN + anti-join + 年齢窓だけを組み立て、SELECT 列は呼び出し側
+    # が渡す。``select_from`` を明示し ``func.min(Article.created_at)`` 系の FROM 推論
+    # ずれも固定する。``*_targets_pending`` (NewsSource 付き) / ``*_aged_out_*``
+    # (下限なし) は述語が分岐するため共有しない。
+
+    def _curation_pending(
+        self, stmt: Select[Any], *, created_before: datetime, created_after: datetime
+    ) -> Select[Any]:
+        return (
+            stmt.select_from(Article)
+            .outerjoin(ArticleCuration, ArticleCuration.article_id == Article.id)
+            .outerjoin(CurationNoise, CurationNoise.article_id == Article.id)
+            .where(
+                ArticleCuration.id.is_(None),
+                CurationNoise.id.is_(None),
+                Article.created_at < created_before,
+                Article.created_at >= created_after,
+            )
+        )
+
+    def _assessment_pending(
+        self, stmt: Select[Any], *, created_before: datetime, created_after: datetime
+    ) -> Select[Any]:
+        return (
+            stmt.select_from(ArticleCuration)
+            .join(Article, Article.id == ArticleCuration.article_id)
+            .outerjoin(
+                InScopeAssessment,
+                InScopeAssessment.curation_id == ArticleCuration.id,
+            )
+            .outerjoin(
+                OutOfScopeAssessment,
+                OutOfScopeAssessment.curation_id == ArticleCuration.id,
+            )
+            .outerjoin(
+                AssessmentBackfillExclusion,
+                AssessmentBackfillExclusion.curation_id == ArticleCuration.id,
+            )
+            .where(
+                InScopeAssessment.id.is_(None),
+                OutOfScopeAssessment.id.is_(None),
+                AssessmentBackfillExclusion.curation_id.is_(None),
+                Article.created_at < created_before,
+                Article.created_at >= created_after,
+            )
+        )
+
+    def _embedding_pending(
+        self, stmt: Select[Any], *, created_before: datetime, created_after: datetime
+    ) -> Select[Any]:
+        return (
+            stmt.select_from(InScopeAssessment)
+            .join(
+                ArticleCuration,
+                ArticleCuration.id == InScopeAssessment.curation_id,
+            )
+            .join(Article, Article.id == ArticleCuration.article_id)
+            .outerjoin(
+                EmbeddingBackfillExclusion,
+                EmbeddingBackfillExclusion.analysis_id == InScopeAssessment.id,
+            )
+            .where(
+                InScopeAssessment.embedding.is_(None),
+                EmbeddingBackfillExclusion.analysis_id.is_(None),
+                Article.created_at < created_before,
+                Article.created_at >= created_after,
+            )
+        )
 
     async def article_ids_pending_curation(
         self,
@@ -61,14 +134,10 @@ class PipelineBacklog:
         (``ReadyForCuration.try_advance_from`` の precondition と同一定義)。
         """
         stmt = (
-            select(Article.id)
-            .outerjoin(ArticleCuration, ArticleCuration.article_id == Article.id)
-            .outerjoin(CurationNoise, CurationNoise.article_id == Article.id)
-            .where(
-                ArticleCuration.id.is_(None),
-                CurationNoise.id.is_(None),
-                Article.created_at < created_before,
-                Article.created_at >= created_after,
+            self._curation_pending(
+                select(Article.id),
+                created_before=created_before,
+                created_after=created_after,
             )
             .order_by(Article.created_at.asc())
             .limit(limit)
@@ -108,19 +177,33 @@ class PipelineBacklog:
         created_after: datetime,
     ) -> int:
         """curation/noise 未処理 Article の真の総数 (LIMIT なし COUNT)。観測専用。"""
-        stmt = (
-            select(func.count(Article.id))
-            .outerjoin(ArticleCuration, ArticleCuration.article_id == Article.id)
-            .outerjoin(CurationNoise, CurationNoise.article_id == Article.id)
-            .where(
-                ArticleCuration.id.is_(None),
-                CurationNoise.id.is_(None),
-                Article.created_at < created_before,
-                Article.created_at >= created_after,
-            )
+        stmt = self._curation_pending(
+            select(func.count(Article.id)),
+            created_before=created_before,
+            created_after=created_after,
         )
         result = await self._session.execute(stmt)
         return int(result.scalar_one())
+
+    async def articles_pending_curation_stats(
+        self,
+        *,
+        created_before: datetime,
+        created_after: datetime,
+    ) -> tuple[int, datetime | None]:
+        """curation/noise 未処理 Article の ``(総数, 最古 created_at)`` (観測専用)。
+
+        ``count_articles_pending_curation`` と同一述語を 1 クエリで COUNT + MIN する
+        (health endpoint が count と最古を別クエリに分けないため)。最古 = dispatch 順
+        (``created_at`` asc) の先頭。対象なしは ``(0, None)``。
+        """
+        stmt = self._curation_pending(
+            select(func.count(Article.id), func.min(Article.created_at)),
+            created_before=created_before,
+            created_after=created_after,
+        )
+        row = (await self._session.execute(stmt)).one()
+        return int(row[0]), row[1]
 
     async def article_ids_aged_out_curation(
         self,
@@ -195,26 +278,10 @@ class PipelineBacklog:
     ) -> list[int]:
         """curation はあるが analysis / rejection が無い Curation ID を返す。"""
         stmt = (
-            select(ArticleCuration.id)
-            .join(Article, Article.id == ArticleCuration.article_id)
-            .outerjoin(
-                InScopeAssessment,
-                InScopeAssessment.curation_id == ArticleCuration.id,
-            )
-            .outerjoin(
-                OutOfScopeAssessment,
-                OutOfScopeAssessment.curation_id == ArticleCuration.id,
-            )
-            .outerjoin(
-                AssessmentBackfillExclusion,
-                AssessmentBackfillExclusion.curation_id == ArticleCuration.id,
-            )
-            .where(
-                InScopeAssessment.id.is_(None),
-                OutOfScopeAssessment.id.is_(None),
-                AssessmentBackfillExclusion.curation_id.is_(None),
-                Article.created_at < created_before,
-                Article.created_at >= created_after,
+            self._assessment_pending(
+                select(ArticleCuration.id),
+                created_before=created_before,
+                created_after=created_after,
             )
             .order_by(Article.created_at.asc())
             .limit(limit)
@@ -239,31 +306,32 @@ class PipelineBacklog:
         committed snapshot 上で一貫した値を返す (並行 INSERT/DELETE による
         僅かな乖離は観測値として許容)。
         """
-        stmt = (
-            select(func.count(ArticleCuration.id))
-            .join(Article, Article.id == ArticleCuration.article_id)
-            .outerjoin(
-                InScopeAssessment,
-                InScopeAssessment.curation_id == ArticleCuration.id,
-            )
-            .outerjoin(
-                OutOfScopeAssessment,
-                OutOfScopeAssessment.curation_id == ArticleCuration.id,
-            )
-            .outerjoin(
-                AssessmentBackfillExclusion,
-                AssessmentBackfillExclusion.curation_id == ArticleCuration.id,
-            )
-            .where(
-                InScopeAssessment.id.is_(None),
-                OutOfScopeAssessment.id.is_(None),
-                AssessmentBackfillExclusion.curation_id.is_(None),
-                Article.created_at < created_before,
-                Article.created_at >= created_after,
-            )
+        stmt = self._assessment_pending(
+            select(func.count(ArticleCuration.id)),
+            created_before=created_before,
+            created_after=created_after,
         )
         result = await self._session.execute(stmt)
         return int(result.scalar_one())
+
+    async def curations_pending_assessment_stats(
+        self,
+        *,
+        created_before: datetime,
+        created_after: datetime,
+    ) -> tuple[int, datetime | None]:
+        """assessment 未処理 curation の ``(総数, 最古 created_at)`` (観測専用)。
+
+        ``count_curations_pending_assessment`` と同一述語を 1 クエリで COUNT+MIN。
+        対象なしは ``(0, None)``。
+        """
+        stmt = self._assessment_pending(
+            select(func.count(ArticleCuration.id), func.min(Article.created_at)),
+            created_before=created_before,
+            created_after=created_after,
+        )
+        row = (await self._session.execute(stmt)).one()
+        return int(row[0]), row[1]
 
     async def curation_ids_aged_out_assessment(
         self,
@@ -312,21 +380,10 @@ class PipelineBacklog:
     ) -> list[int]:
         """analysis はあるが embedding が NULL な Analysis ID を返す (Stage 5 残)."""
         stmt = (
-            select(InScopeAssessment.id)
-            .join(
-                ArticleCuration,
-                ArticleCuration.id == InScopeAssessment.curation_id,
-            )
-            .join(Article, Article.id == ArticleCuration.article_id)
-            .outerjoin(
-                EmbeddingBackfillExclusion,
-                EmbeddingBackfillExclusion.analysis_id == InScopeAssessment.id,
-            )
-            .where(
-                InScopeAssessment.embedding.is_(None),
-                EmbeddingBackfillExclusion.analysis_id.is_(None),
-                Article.created_at < created_before,
-                Article.created_at >= created_after,
+            self._embedding_pending(
+                select(InScopeAssessment.id),
+                created_before=created_before,
+                created_after=created_after,
             )
             .order_by(Article.created_at.asc())
             .limit(limit)
@@ -373,26 +430,32 @@ class PipelineBacklog:
         created_after: datetime,
     ) -> int:
         """embedding NULL analysis の真の総数 (LIMIT なし COUNT)。観測専用。"""
-        stmt = (
-            select(func.count(InScopeAssessment.id))
-            .join(
-                ArticleCuration,
-                ArticleCuration.id == InScopeAssessment.curation_id,
-            )
-            .join(Article, Article.id == ArticleCuration.article_id)
-            .outerjoin(
-                EmbeddingBackfillExclusion,
-                EmbeddingBackfillExclusion.analysis_id == InScopeAssessment.id,
-            )
-            .where(
-                InScopeAssessment.embedding.is_(None),
-                EmbeddingBackfillExclusion.analysis_id.is_(None),
-                Article.created_at < created_before,
-                Article.created_at >= created_after,
-            )
+        stmt = self._embedding_pending(
+            select(func.count(InScopeAssessment.id)),
+            created_before=created_before,
+            created_after=created_after,
         )
         result = await self._session.execute(stmt)
         return int(result.scalar_one())
+
+    async def analyses_pending_embedding_stats(
+        self,
+        *,
+        created_before: datetime,
+        created_after: datetime,
+    ) -> tuple[int, datetime | None]:
+        """embedding NULL analysis の ``(総数, 最古 Article.created_at)`` (観測専用)。
+
+        ``count_analyses_pending_embedding`` と同一述語を 1 クエリで COUNT + MIN する。
+        対象なしは ``(0, None)``。
+        """
+        stmt = self._embedding_pending(
+            select(func.count(InScopeAssessment.id), func.min(Article.created_at)),
+            created_before=created_before,
+            created_after=created_after,
+        )
+        row = (await self._session.execute(stmt)).one()
+        return int(row[0]), row[1]
 
     async def analysis_ids_aged_out_embedding(
         self,

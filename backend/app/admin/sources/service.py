@@ -1,11 +1,11 @@
-from app.exceptions import NotFoundError
-from app.models.news_source import NewsSource
-from app.repositories.news_source import NewsSourceRepository
-from app.schemas.news_source import (
+from app.admin.sources.repository import NewsSourceRepository
+from app.admin.sources.schemas import (
     NewsSourceCreate,
     NewsSourceDetail,
     NewsSourceDetailList,
 )
+from app.exceptions import NotFoundError
+from app.models.news_source import NewsSource
 
 
 class NewsSourceService:

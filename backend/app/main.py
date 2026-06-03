@@ -10,6 +10,7 @@ from fastapi.routing import APIRoute
 from sqlalchemy import text
 from starlette.middleware.base import BaseHTTPMiddleware, RequestResponseEndpoint
 
+from app.admin.router import admin_router
 from app.config import settings
 from app.db import (
     API_POOL_MAX_OVERFLOW,
@@ -31,7 +32,6 @@ from app.insights.trend_discovery.router.weekly_trends import (
 from app.logfire_db_pool import log_pool_initialized, register_pool_metrics
 from app.logfire_setup import setup_logfire
 from app.routers import (
-    admin,
     articles,
     categories,
     watchlist,
@@ -185,7 +185,7 @@ app.include_router(categories.router)
 app.include_router(watchlist.router)
 app.include_router(weekly_trends_router)
 app.include_router(briefing_router)
-app.include_router(admin.admin_router)
+app.include_router(admin_router)
 
 
 @app.get("/api/v1/health")

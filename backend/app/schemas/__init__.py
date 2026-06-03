@@ -10,18 +10,12 @@ from app.schemas.category import (
 from app.schemas.embeds import (
     OriginalArticleEmbed,
 )
-from app.schemas.pipeline import (
-    FetchRequest,
-    FetchResponse,
-)
 
 __all__ = [
     "ArticleBrief",
     "ArticleDetail",
     "CategoryDetail",
     "CategoryDetailList",
-    "FetchRequest",
-    "FetchResponse",
     "OriginalArticleEmbed",
     "PaginatedArticleResponse",
 ]

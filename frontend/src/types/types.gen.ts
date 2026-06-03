@@ -356,6 +356,96 @@ export type PaginatedArticleResponse = {
 };
 
 /**
+ * PipelineHealthResponse
+ *
+ * GET /api/v1/admin/pipeline/health のレスポンス。
+ */
+export type PipelineHealthResponse = {
+    summary: PipelineHealthSummary;
+    /**
+     * Stages
+     */
+    stages: Array<PipelineStageHealth>;
+};
+
+/**
+ * PipelineHealthSummary
+ *
+ * 全 stage を横断した集計サマリ。
+ */
+export type PipelineHealthSummary = {
+    /**
+     * Failedeventcount24H
+     */
+    failedEventCount24h: number;
+    /**
+     * Backfilltargettotal
+     */
+    backfillTargetTotal: number;
+    /**
+     * Oldestbackfilltargetageseconds
+     */
+    oldestBackfillTargetAgeSeconds: number | null;
+    /**
+     * Completionqueuecount
+     */
+    completionQueueCount: number;
+    /**
+     * Oldestcompletionqueueageseconds
+     */
+    oldestCompletionQueueAgeSeconds: number | null;
+    /**
+     * Observedat
+     */
+    observedAt: string;
+    /**
+     * Eventwindowstart
+     */
+    eventWindowStart: string;
+};
+
+/**
+ * PipelineStageHealth
+ *
+ * 1 stage の健全性スナップショット。
+ *
+ * 全 audit stage を ``Stage`` enum の定義順で返す。queue は completion のみ、
+ * backfill は curation/assessment/embedding のみが値を持つ。意味を持たない軸は
+ * ``0`` / ``None`` を返す。
+ */
+export type PipelineStageHealth = {
+    stage: Stage;
+    /**
+     * Succeededeventcount24H
+     */
+    succeededEventCount24h: number;
+    /**
+     * Failedeventcount24H
+     */
+    failedEventCount24h: number;
+    /**
+     * Queuecount
+     */
+    queueCount: number;
+    /**
+     * Oldestqueueageseconds
+     */
+    oldestQueueAgeSeconds: number | null;
+    /**
+     * Backfilltargetcount
+     */
+    backfillTargetCount: number;
+    /**
+     * Oldestbackfilltargetageseconds
+     */
+    oldestBackfillTargetAgeSeconds: number | null;
+    /**
+     * Lastsucceededat
+     */
+    lastSucceededAt: string | null;
+};
+
+/**
  * ReadyBriefing
  *
  * briefing 生成済の状態。
@@ -469,6 +559,17 @@ export type SourceName = string;
  * SourceType
  */
 export type SourceType = 'rss' | 'api' | 'html';
+
+/**
+ * Stage
+ *
+ * パイプラインの 11 Stage。
+ *
+ * BRIEFING は週次 LLM ブリーフィング生成 (``app/insights/briefing/``)。
+ * TREND_DISCOVERY は rolling 7d の trend discovery run
+ * (``app/insights/trend_discovery/``)。
+ */
+export type Stage = 'dispatch' | 'acquisition' | 'completion' | 'curation' | 'assessment' | 'embedding' | 'backfill_curate' | 'backfill_assess' | 'backfill_embed' | 'briefing' | 'trend_discovery';
 
 /**
  * ValidationError
@@ -1335,6 +1436,41 @@ export type FetchNewsResponses = {
 };
 
 export type FetchNewsResponse = FetchNewsResponses[keyof FetchNewsResponses];
+
+export type GetPipelineHealthData = {
+    body?: never;
+    headers?: {
+        /**
+         * Authorization
+         */
+        authorization?: string | null;
+    };
+    path?: never;
+    query?: never;
+    url: '/api/v1/admin/pipeline/health';
+};
+
+export type GetPipelineHealthErrors = {
+    /**
+     * Bad request
+     */
+    400: unknown;
+    /**
+     * Validation Error
+     */
+    422: HttpValidationError;
+};
+
+export type GetPipelineHealthError = GetPipelineHealthErrors[keyof GetPipelineHealthErrors];
+
+export type GetPipelineHealthResponses = {
+    /**
+     * Successful Response
+     */
+    200: PipelineHealthResponse;
+};
+
+export type GetPipelineHealthResponse = GetPipelineHealthResponses[keyof GetPipelineHealthResponses];
 
 export type HealthCheckData = {
     body?: never;
