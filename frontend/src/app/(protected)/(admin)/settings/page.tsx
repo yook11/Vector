@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import { Suspense } from "react";
 import { PageContainer } from "@/components/layout/PageContainer";
 import { Skeleton } from "@/components/ui/skeleton";
+import { PipelineStatusLink } from "@/features/pipeline-status";
 import { getSources, SourceManager } from "@/features/sources";
 import { requireAdmin } from "@/lib/auth/guards";
 
@@ -44,6 +45,9 @@ export default function SettingsPage() {
         <p className="text-xs text-muted-foreground mt-2">
           Manage your news sources and application settings.
         </p>
+        <div className="mt-3">
+          <PipelineStatusLink />
+        </div>
       </div>
       <Suspense fallback={<SourceManagerSkeleton />}>
         <SourceManagerAsync />
