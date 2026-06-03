@@ -66,9 +66,7 @@ def _vector(value: float = 0.1) -> EmbeddingVector:
     return EmbeddingVector(root=tuple([value] * EMBEDDING_DIMENSION))
 
 
-# ---------------------------------------------------------------------------
 # Ready 構築用 DB 事実取得
-# ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
@@ -125,9 +123,7 @@ async def test_load_ready_build_facts_returns_none_when_missing(
     assert await repo.load_ready_build_facts(999_999) is None
 
 
-# ---------------------------------------------------------------------------
 # save (条件付き UPDATE + RETURNING → bool)
-# ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio

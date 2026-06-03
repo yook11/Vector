@@ -8,9 +8,7 @@ from pydantic import BaseModel, ConfigDict, ValidationError
 from app.models.value_objects.category import CategoryName, CategorySlug
 
 
-# ---------------------------------------------------------------------------
 # CategorySlug — Unit Tests
-# ---------------------------------------------------------------------------
 class TestCategorySlug:
     def test_valid_slug(self) -> None:
         slug = CategorySlug("ai_ml")
@@ -92,9 +90,7 @@ class TestCategorySlug:
         assert repr(CategorySlug("ai_ml")) == "CategorySlug('ai_ml')"
 
 
-# ---------------------------------------------------------------------------
 # CategoryName — Unit Tests
-# ---------------------------------------------------------------------------
 class TestCategoryName:
     def test_valid_japanese(self) -> None:
         name = CategoryName("AI・ML")
@@ -171,9 +167,7 @@ class TestCategoryName:
         assert repr(CategoryName("AI・ML")) == "CategoryName('AI・ML')"
 
 
-# ---------------------------------------------------------------------------
 # Pydantic Integration Tests
-# ---------------------------------------------------------------------------
 class TestPydanticIntegration:
     """値オブジェクトが Pydantic モデルのフィールドとして機能することを確認する。"""
 

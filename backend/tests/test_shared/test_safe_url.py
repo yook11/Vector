@@ -12,9 +12,7 @@ from app.shared.security.safe_url import (
 )
 
 
-# ---------------------------------------------------------------------------
 # SafeUrl — Unit Tests
-# ---------------------------------------------------------------------------
 class TestSafeUrl:
     def test_valid_https(self) -> None:
         url = SafeUrl("https://example.com/path")
@@ -101,9 +99,7 @@ class TestSafeUrl:
         assert repr(SafeUrl("https://example.com")) == "SafeUrl('https://example.com')"
 
 
-# ---------------------------------------------------------------------------
 # SafeUrl — SSRF Defense (IP リテラル拒否)
-# ---------------------------------------------------------------------------
 class TestSafeUrlBlocksPrivateIpLiterals:
     """ホストが private/loopback/link-local/... の IP リテラルなら拒否する。
 
@@ -147,9 +143,7 @@ class TestSafeUrlBlocksPrivateIpLiterals:
         SafeUrl("https://backend/")  # docker compose のサービス名は実フェッチ層で判定
 
 
-# ---------------------------------------------------------------------------
 # Pydantic Integration Tests
-# ---------------------------------------------------------------------------
 class TestPydanticIntegration:
     class SampleModel(BaseModel):
         url: SafeUrl
@@ -198,9 +192,7 @@ class TestPydanticIntegration:
         assert m.url.root == "https://example.com"
 
 
-# ---------------------------------------------------------------------------
 # SafeUrl — 失敗理由 (reason) の所有テスト
-# ---------------------------------------------------------------------------
 class TestSafeUrlValidateReason:
     """``SafeUrl`` 検証が失敗段を ``SafeUrlInvalidReason`` で分類することの所有テスト。
 

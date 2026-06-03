@@ -73,9 +73,7 @@ def _has_renderer(processors: list[Any], renderer_cls: type) -> bool:
     return any(isinstance(p, renderer_cls) for p in processors)
 
 
-# ---------------------------------------------------------------------------
 # token gate — 外部送信は token がある時しか起きない (Phase 1 安全弁の要)
-# ---------------------------------------------------------------------------
 
 
 def test_no_token_passes_none_and_if_token_present(
@@ -119,9 +117,7 @@ def test_token_set_passes_secret_value(
     assert kwargs["environment"] == "production"
 
 
-# ---------------------------------------------------------------------------
 # renderer gate — stdout の見た目は env 別
-# ---------------------------------------------------------------------------
 
 
 def test_production_uses_json_renderer_with_format_exc_info(
@@ -159,9 +155,7 @@ def test_development_uses_console_renderer_without_format_exc_info(
     assert structlog.processors.format_exc_info not in procs
 
 
-# ---------------------------------------------------------------------------
 # 順序の不変条件 — prod 例外の Logfire ネイティブ表示が壊れないこと
-# ---------------------------------------------------------------------------
 
 
 def test_structlog_processor_precedes_format_exc_info_in_production(
@@ -223,9 +217,7 @@ def test_structlog_processor_is_logfire_reexport() -> None:
     assert logfire.StructlogProcessor is LogfireProcessor
 
 
-# ---------------------------------------------------------------------------
 # httpx auto-instrument — PII off の構造的契約 (Phase 2)
-# ---------------------------------------------------------------------------
 
 
 def test_setup_logfire_calls_instrument_httpx_once(
@@ -269,9 +261,7 @@ def test_setup_logfire_passes_pii_off_kwargs_to_instrument_httpx(
     assert kwargs["capture_response_body"] is False
 
 
-# ---------------------------------------------------------------------------
 # 実チェーンの妥当性 — bootstrap 後の logger 呼出が例外を投げない
-# ---------------------------------------------------------------------------
 
 
 def test_logger_works_after_bootstrap_in_development(

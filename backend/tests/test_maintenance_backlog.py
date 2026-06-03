@@ -90,9 +90,7 @@ async def _make_in_scope_assessment(
     return assessment
 
 
-# ---------------------------------------------------------------------------
 # article_ids_pending_curation
-# ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
@@ -313,9 +311,7 @@ async def test_count_pending_curation_returns_true_count_without_limit(
     assert set(ids).issubset(pending_ids)
 
 
-# ---------------------------------------------------------------------------
 # article_ids_aged_out_curation (年齢削除対象 = 窓外の child-NULL)
-# ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
@@ -418,9 +414,7 @@ async def test_aged_out_curation_excludes_articles_with_noise(
     assert article.id not in ids
 
 
-# ---------------------------------------------------------------------------
 # curation_ids_pending_assessment (案 3 で返却列を ArticleCuration.id に変更)
-# ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
@@ -561,9 +555,7 @@ async def test_pending_assessment_excludes_backfill_excluded_curations(
     assert count == 0
 
 
-# ---------------------------------------------------------------------------
 # curation_ids_aged_out_assessment
-# ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
@@ -679,9 +671,7 @@ async def test_assessment_backfill_exclusion_reason_code_check(
     await db_session.rollback()
 
 
-# ---------------------------------------------------------------------------
 # analysis_ids_pending_embedding (Phase 2: Article ID → Analysis ID)
-# ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
@@ -914,9 +904,7 @@ async def test_count_pending_embedding_returns_true_count_without_limit(
     assert set(ids).issubset(pending_ids)
 
 
-# ---------------------------------------------------------------------------
 # analysis_ids_aged_out_embedding
-# ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio

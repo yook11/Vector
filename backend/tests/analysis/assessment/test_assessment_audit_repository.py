@@ -74,9 +74,7 @@ from app.models.pipeline_event import PipelineEvent
 _AI_MODEL = "gemini-2.5-pro"
 
 
-# ---------------------------------------------------------------------------
 # 補助 fixture: extraction を作る (article_id 逆引き経路を一貫性ある状態にする)
-# ---------------------------------------------------------------------------
 
 
 async def _make_article(
@@ -231,9 +229,7 @@ async def _fetch_by_outcome(
     return rows[0]
 
 
-# ---------------------------------------------------------------------------
 # 成功経路 — append_in_scope
-# ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
@@ -457,9 +453,7 @@ async def test_append_in_scope_truncates_raw_response(
     assert len(ev.payload["ai_raw_response"]) == 2048  # _AI_RAW_RESPONSE_LIMIT
 
 
-# ---------------------------------------------------------------------------
 # 成功経路 — append_out_of_scope
-# ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
@@ -514,9 +508,7 @@ async def test_append_out_of_scope_records_investor_take(
     assert ev.payload["category_slug"] is None
 
 
-# ---------------------------------------------------------------------------
 # 救済断念経路 — append_backfill_assessment_aged_out
-# ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
@@ -546,9 +538,7 @@ async def test_append_backfill_assessment_aged_out_records_rejected(
     assert ev.payload["curation_id"] == extraction.id
 
 
-# ---------------------------------------------------------------------------
 # 失敗経路 — append_failure (Layer 1 marker dispatch)
-# ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio

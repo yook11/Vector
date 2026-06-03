@@ -208,9 +208,7 @@ async def _claim_one(
     )
 
 
-# ---------------------------------------------------------------------------
 # load_ready_build_facts
-# ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
@@ -269,9 +267,7 @@ async def test_load_ready_build_facts_returns_open_status(
     assert target.status == "open"
 
 
-# ---------------------------------------------------------------------------
 # claim_ready_batch
-# ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
@@ -398,9 +394,7 @@ async def test_concurrent_claim_ready_batch_skips_locked(
     assert len(flat) == len(set(flat))
 
 
-# ---------------------------------------------------------------------------
 # sweep_expired_leases
-# ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
@@ -449,9 +443,7 @@ async def test_sweep_expired_leases_leaves_live_lease(
     assert (await _select_pending(db_session, pending_id)).status == "running"
 
 
-# ---------------------------------------------------------------------------
 # close_claimed / schedule_retry
-# ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio

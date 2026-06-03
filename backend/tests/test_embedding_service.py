@@ -38,9 +38,7 @@ from app.models.in_scope_assessment import InScopeAssessment
 from app.models.news_source import NewsSource
 from app.models.pipeline_event import PipelineEvent
 
-# ---------------------------------------------------------------------------
 # Helpers
-# ---------------------------------------------------------------------------
 
 
 def _mock_embedder(
@@ -151,9 +149,7 @@ async def _fetch_audit(db_session: AsyncSession, article_id: int) -> PipelineEve
     return rows[0]
 
 
-# ---------------------------------------------------------------------------
 # Happy path: 永続化 + 成功 audit + None 返却
-# ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
@@ -195,9 +191,7 @@ async def test_execute_persists_embedding_on_success(
     assert ev.payload["vector_dimension"] == EMBEDDING_DIMENSION
 
 
-# ---------------------------------------------------------------------------
 # 並行 update で先に書かれていた: save が False → log + None で短絡
-# ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
@@ -257,9 +251,7 @@ async def test_execute_shortcircuits_when_already_persisted(
     assert len(rows) == 0
 
 
-# ---------------------------------------------------------------------------
 # ACL boundary: AIProviderError → Layer 1 marker に詰め替え
-# ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
@@ -344,10 +336,8 @@ async def test_execute_wraps_recoverable_provider_errors(
     assert exc_info.value.__cause__ is provider_exc
 
 
-# ---------------------------------------------------------------------------
 # Layer 2-B: embedder 境界が raise した EmbeddingResponseInvalidError は
 #            Service で握らずそのまま伝播する
-# ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio

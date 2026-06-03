@@ -21,9 +21,7 @@ def _vec(value: float = 0.1) -> tuple[float, ...]:
     return tuple([value] * EMBEDDING_DIMENSION)
 
 
-# ---------------------------------------------------------------------------
 # EmbeddingVector — dimension
-# ---------------------------------------------------------------------------
 
 
 class TestEmbeddingVectorDimension:
@@ -44,9 +42,7 @@ class TestEmbeddingVectorDimension:
             EmbeddingVector(root=())
 
 
-# ---------------------------------------------------------------------------
 # EmbeddingVector — finite & sanity range
-# ---------------------------------------------------------------------------
 
 
 class TestEmbeddingVectorFinite:
@@ -90,9 +86,7 @@ class TestEmbeddingVectorSanityRange:
         EmbeddingVector(root=tuple(v))
 
 
-# ---------------------------------------------------------------------------
 # EmbeddingVector — coercion & immutability
-# ---------------------------------------------------------------------------
 
 
 class TestEmbeddingVectorCoercion:

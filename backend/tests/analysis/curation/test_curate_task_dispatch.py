@@ -94,9 +94,7 @@ def _patch_try_advance_from(ready: ReadyForCuration | None = None) -> object:
     )
 
 
-# ---------------------------------------------------------------------------
 # Drop 系 — Handler が False を返し、task は return (raise しない)
-# ---------------------------------------------------------------------------
 
 
 @pytest.mark.parametrize(
@@ -133,9 +131,7 @@ async def test_drop_article_delegates_to_handler(exc_cls: type[Exception]) -> No
     assert kwargs["last_attempt"] is False
 
 
-# ---------------------------------------------------------------------------
 # Keep 系 — Handler が False を返し、task は return
-# ---------------------------------------------------------------------------
 
 
 @pytest.mark.parametrize(
@@ -174,9 +170,7 @@ async def test_keep_article_delegates_to_handler(exc_cls: type[Exception]) -> No
     assert hold.await_args.kwargs["reason"] == "ai_error_configuration"
 
 
-# ---------------------------------------------------------------------------
 # Recoverable 経路 — Handler の reraise 戻り値で raise/return が決まる
-# ---------------------------------------------------------------------------
 
 
 @pytest.mark.parametrize(
@@ -274,9 +268,7 @@ async def test_rate_limit_class_delegates_to_handler(
     mock_handler_cls.return_value.handle.assert_awaited_once()
 
 
-# ---------------------------------------------------------------------------
 # catch-all — Stage 3 marker いずれにも該当しない例外も Handler に委譲
-# ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio

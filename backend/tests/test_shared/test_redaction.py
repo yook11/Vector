@@ -18,9 +18,7 @@ import pytest
 
 from app.shared.security.redaction import redact_secrets
 
-# ---------------------------------------------------------------------------
 # A. 網羅性テスト (must-redact)
-# ---------------------------------------------------------------------------
 
 
 def test_redacts_google_aiza_key() -> None:
@@ -133,9 +131,7 @@ def test_redacts_naked_jwt() -> None:
     assert "eyJ***" in redacted
 
 
-# ---------------------------------------------------------------------------
 # A-2: 位置・文脈による redact 確認
-# ---------------------------------------------------------------------------
 
 
 def test_redacts_at_string_start() -> None:
@@ -175,9 +171,7 @@ def test_redacts_inside_json_value() -> None:
     assert '"model": "gemini-2.0"' in redacted
 
 
-# ---------------------------------------------------------------------------
 # A-3: 複数 secret 同居
-# ---------------------------------------------------------------------------
 
 
 def test_redacts_multiple_secret_kinds_in_one_string() -> None:
@@ -202,9 +196,7 @@ def test_redacts_same_secret_multiple_times() -> None:
     assert redacted.count("AIza***") == 2
 
 
-# ---------------------------------------------------------------------------
 # A-4: anti-test (別 detector で literal 残存を negate)
-# ---------------------------------------------------------------------------
 
 
 _SECRET_DETECTORS = [
@@ -240,9 +232,7 @@ def test_no_secret_literal_remains_after_redact(sample: str) -> None:
         )
 
 
-# ---------------------------------------------------------------------------
 # B. 可読性テスト (must-preserve)
-# ---------------------------------------------------------------------------
 
 
 @pytest.mark.parametrize(
@@ -281,9 +271,7 @@ def test_normal_text_is_preserved_unchanged(sample: str) -> None:
     assert redact_secrets(sample) == sample
 
 
-# ---------------------------------------------------------------------------
 # C. 境界条件
-# ---------------------------------------------------------------------------
 
 
 def test_empty_string_returns_empty() -> None:

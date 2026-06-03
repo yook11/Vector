@@ -42,9 +42,7 @@ def _summary_from_stdout(captured: str) -> dict:
     raise AssertionError(f"no JSON line in stdout: {captured!r}")
 
 
-# ---------------------------------------------------------------------------
 # build_parser
-# ---------------------------------------------------------------------------
 
 
 class TestBuildParser:
@@ -75,9 +73,7 @@ class TestBuildParser:
         assert args.max_retries == 5
 
 
-# ---------------------------------------------------------------------------
 # run — Article + ArticleCuration を seed して selection を検証する
-# ---------------------------------------------------------------------------
 
 
 async def _seed_article_with_extraction(

@@ -11,9 +11,7 @@ import pytest
 
 from app.collection.domain.value_objects import PublishedAt
 
-# ---------------------------------------------------------------------------
 # PublishedAt — parse / invariant
-# ---------------------------------------------------------------------------
 
 
 class TestPublishedAtParse:

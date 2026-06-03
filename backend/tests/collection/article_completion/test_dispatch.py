@@ -50,9 +50,7 @@ from app.queue.tasks.completion import (
 )
 from app.shared.security.safe_url import SafeUrl
 
-# ---------------------------------------------------------------------------
 # Fixtures / helpers
-# ---------------------------------------------------------------------------
 
 
 def _ctx(session_factory: async_sessionmaker[AsyncSession]) -> MagicMock:
@@ -150,9 +148,7 @@ async def _select_pending(
     return row
 
 
-# ---------------------------------------------------------------------------
 # dispatch_html_fetch_jobs
-# ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
@@ -330,9 +326,7 @@ async def test_returns_zero_when_no_ready_pending(
     kiq_mock.assert_not_awaited()
 
 
-# ---------------------------------------------------------------------------
 # sweep_expired_leases
-# ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio

@@ -57,9 +57,7 @@ def _make_status_error(status_code: int, msg: str = "x") -> APIStatusError:
     return APIStatusError(msg, response=_make_response(status_code), body=None)
 
 
-# ---------------------------------------------------------------------------
 # Network 系 (OpenAI SDK + builtin)
-# ---------------------------------------------------------------------------
 
 
 def test_api_connection_error_translates_to_network() -> None:
@@ -90,9 +88,7 @@ def test_builtin_network_errors_translate_to_network(exc: Exception) -> None:
     assert isinstance(translated, AIProviderNetworkError)
 
 
-# ---------------------------------------------------------------------------
 # Configuration 系: Auth / Permission / NotFound
-# ---------------------------------------------------------------------------
 
 
 @pytest.mark.parametrize(
@@ -112,9 +108,7 @@ def test_configuration_errors_translation(exc_factory) -> None:
     assert isinstance(translated, AIProviderConfigurationError)
 
 
-# ---------------------------------------------------------------------------
 # Insufficient Balance: HTTP 402 (RateLimitError より先に評価される)
-# ---------------------------------------------------------------------------
 
 
 def test_status_402_translates_to_insufficient_balance() -> None:
@@ -124,9 +118,7 @@ def test_status_402_translates_to_insufficient_balance() -> None:
     assert isinstance(translated, AIProviderInsufficientBalanceError)
 
 
-# ---------------------------------------------------------------------------
 # RateLimited: HTTP 429 (DeepSeek concurrency/rate limit)
-# ---------------------------------------------------------------------------
 
 
 def test_rate_limit_error_translates_to_rate_limited() -> None:
@@ -136,9 +128,7 @@ def test_rate_limit_error_translates_to_rate_limited() -> None:
     assert isinstance(translated, AIProviderRateLimitedError)
 
 
-# ---------------------------------------------------------------------------
 # RequestInvalid: BadRequest / UnprocessableEntity
-# ---------------------------------------------------------------------------
 
 
 @pytest.mark.parametrize(
@@ -157,9 +147,7 @@ def test_request_invalid_errors_translation(exc_factory) -> None:
     assert isinstance(translated, AIProviderRequestInvalidError)
 
 
-# ---------------------------------------------------------------------------
 # ServiceUnavailable: 5xx
-# ---------------------------------------------------------------------------
 
 
 def test_internal_server_error_translates_to_service_unavailable() -> None:
@@ -178,9 +166,7 @@ def test_5xx_status_error_translates_to_service_unavailable(status_code: int) ->
     assert isinstance(translated, AIProviderServiceUnavailableError)
 
 
-# ---------------------------------------------------------------------------
 # Catch-all: マップ未知は exc をそのまま return (bare re-raise guard 規約)
-# ---------------------------------------------------------------------------
 
 
 def test_unmappable_returns_exc_unchanged() -> None:

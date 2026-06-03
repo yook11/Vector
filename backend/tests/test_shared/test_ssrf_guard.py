@@ -19,9 +19,7 @@ from app.shared.security.ssrf_guard import (
 )
 
 
-# ---------------------------------------------------------------------------
 # PublicIpAddress — Unit Tests
-# ---------------------------------------------------------------------------
 class TestPublicIpAddressAccepts:
     def test_accepts_ipv4_public(self) -> None:
         addr = PublicIpAddress("8.8.8.8")
@@ -128,9 +126,7 @@ class TestPublicIpAddressIdentity:
             addr._value = "1.1.1.1"  # type: ignore[misc]
 
 
-# ---------------------------------------------------------------------------
 # ensure_host_is_public — DNS Resolution Tests
-# ---------------------------------------------------------------------------
 def _patch_resolver(*addrs: str | Exception):
     """``_resolve_host`` を patch し、指定の戻り値/例外を返すようにする。"""
     if len(addrs) == 1 and isinstance(addrs[0], Exception):

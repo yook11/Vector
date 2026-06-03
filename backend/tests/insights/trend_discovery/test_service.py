@@ -59,9 +59,7 @@ def _jst(year: int, month: int, day: int, *, hour: int = 12) -> datetime:
     return datetime(year, month, day, hour, tzinfo=JST)
 
 
-# ---------------------------------------------------------------------------
 # execute — 新規生成
-# ---------------------------------------------------------------------------
 
 
 class TestExecute:
@@ -233,9 +231,7 @@ class TestExecute:
         assert "entity_24" not in names
 
 
-# ---------------------------------------------------------------------------
 # race-loss: save が CONFLICT → 読み戻しせず TrendDiscoveryConflict
-# ---------------------------------------------------------------------------
 
 
 class TestRaceLoss:
@@ -282,9 +278,7 @@ class TestRaceLoss:
         find_by_window_end.assert_not_awaited()
 
 
-# ---------------------------------------------------------------------------
 # Outcome 型の構造
-# ---------------------------------------------------------------------------
 
 
 class TestOutcomeTypes:

@@ -98,9 +98,7 @@ async def _fetch_assessment_events(
     return list(rows)
 
 
-# ---------------------------------------------------------------------------
 # Terminal 経路
-# ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
@@ -214,9 +212,7 @@ async def test_terminal_stage_blocked_returns_hold_reason_without_redis(
     assert events[0].payload["failure_kind"] == "terminal_stage_blocked"
 
 
-# ---------------------------------------------------------------------------
 # Recoverable 経路
-# ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
@@ -378,9 +374,7 @@ async def test_rate_limited_recoverable_last_attempt_does_not_set_hold(
     assert decision.stage_hold_reason is None
 
 
-# ---------------------------------------------------------------------------
 # catch-all 経路
-# ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
@@ -436,9 +430,7 @@ async def test_unexpected_last_attempt_writes_audit_and_returns_false(
     assert events[0].payload["failure_kind"] == "unknown"
 
 
-# ---------------------------------------------------------------------------
 # audit DB 落ち時の log fallback
-# ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio

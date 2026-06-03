@@ -17,9 +17,7 @@ from structlog.testing import capture_logs
 from app.exception_handlers import duplicate_handler, not_found_handler
 from app.exceptions import DuplicateError, NotFoundError
 
-# ---------------------------------------------------------------------------
 # A. 許可 form は passthrough (must-pass)
-# ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
@@ -46,9 +44,7 @@ async def test_duplicate_passthrough_for_allowed_form() -> None:
     assert b"Watchlist entry already exists" in response.body
 
 
-# ---------------------------------------------------------------------------
 # B. allowlist 違反は generic message に丸める (must-block)
-# ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
@@ -111,9 +107,7 @@ async def test_duplicate_blocks_disallowed_details(leaky_detail: str) -> None:
     assert len(warn_logs) == 1
 
 
-# ---------------------------------------------------------------------------
 # C. 許可 form では warn ログを焼かない (二重 redact / log noise なし)
-# ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio

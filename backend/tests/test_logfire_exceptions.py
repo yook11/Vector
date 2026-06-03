@@ -49,9 +49,7 @@ from app.analysis.embedding.errors import (
 )
 from app.logfire_exceptions import VectorDomainError
 
-# ---------------------------------------------------------------------------
 # VectorDomainError 基底の __str__ 契約
-# ---------------------------------------------------------------------------
 
 
 class _NoAttrs(VectorDomainError):
@@ -99,9 +97,7 @@ def test_str_uses_none_for_missing_attribute() -> None:
     assert str(_PartialAttrs()) == "_PartialAttrs(present='value', absent=None)"
 
 
-# ---------------------------------------------------------------------------
 # AIProviderError (10 class): SAFE_ATTRS=("CODE",) + accept-and-discard
-# ---------------------------------------------------------------------------
 
 _AI_PROVIDER_SUBCLASSES: tuple[tuple[type[AIProviderError], str], ...] = (
     (AIProviderInputRejectedError, "ai_error_input_rejected"),
@@ -160,9 +156,7 @@ def test_ai_provider_error_base_inherits_vector_domain_error() -> None:
     assert issubclass(AIProviderError, VectorDomainError)
 
 
-# ---------------------------------------------------------------------------
 # Curation Layer 1 marker (3 class): SAFE_ATTRS=("code",) + kwargs-only
-# ---------------------------------------------------------------------------
 
 _CURATION_LAYER1_MARKERS: tuple[type[CurationError], ...] = (
     CurationRecoverableError,
@@ -215,9 +209,7 @@ def test_curation_layer1_requires_code_kwarg(cls: type[CurationError]) -> None:
         cls()  # type: ignore[call-arg]
 
 
-# ---------------------------------------------------------------------------
 # Assessment / Embedding Layer 1 marker (6 class): kwargs-only, 同律
-# ---------------------------------------------------------------------------
 
 _OTHER_LAYER1_MARKERS: tuple[type[VectorDomainError], ...] = (
     AssessmentRecoverableError,
@@ -246,9 +238,7 @@ def test_assessment_embedding_layer1_rejects_positional_message(
         cls("legacy_message")  # type: ignore[call-arg]
 
 
-# ---------------------------------------------------------------------------
 # Layer 2-B subclasses (4 class): no-arg constructor + 固定 code
-# ---------------------------------------------------------------------------
 
 _LAYER2B_FIXED_CODE: tuple[tuple[type[VectorDomainError], str], ...] = (
     (CurationResponseInvalidError, "extraction_response_invalid"),
@@ -281,9 +271,7 @@ def test_layer2b_rejects_positional_message(
         cls("legacy_message")  # type: ignore[call-arg]
 
 
-# ---------------------------------------------------------------------------
 # PII 全文検索 oracle: 22 class 全件で sensitive 値が __str__ に乗らない
-# ---------------------------------------------------------------------------
 
 
 def _build_22_class_instances() -> list[VectorDomainError]:
@@ -374,9 +362,7 @@ def test_ai_provider_error_full_text_search_no_sensitive(
     assert sensitive not in dumped
 
 
-# ---------------------------------------------------------------------------
 # Hierarchy invariants (型階層の中心契約)
-# ---------------------------------------------------------------------------
 
 
 def test_stage_base_classes_inherit_vector_domain_error() -> None:
@@ -404,9 +390,7 @@ def test_layer2b_subclasses_inherit_from_layer1_marker() -> None:
     assert issubclass(EmbeddingResponseInvalidError, EmbeddingRecoverableError)
 
 
-# ---------------------------------------------------------------------------
 # Stage base class そのものは catch 対象にしない
-# ---------------------------------------------------------------------------
 
 
 def test_curation_error_is_not_layer1_marker() -> None:

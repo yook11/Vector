@@ -76,9 +76,7 @@ def _make_call() -> AssessmentCall[OutOfScope]:
     )
 
 
-# ---------------------------------------------------------------------------
 # Success path
-# ---------------------------------------------------------------------------
 
 
 class TestCallOnceSuccess:
@@ -92,9 +90,7 @@ class TestCallOnceSuccess:
         assert isinstance(result, AssessmentCall)
 
 
-# ---------------------------------------------------------------------------
 # Passthrough: AIProviderError / AssessmentError は translate を経由しない
-# ---------------------------------------------------------------------------
 
 
 class TestCallOncePassthrough:
@@ -170,9 +166,7 @@ class TestCallOncePassthrough:
         assert exc_info.value is original
 
 
-# ---------------------------------------------------------------------------
 # Translate path: マップ可能なら from exc 連鎖、未知ならそのまま素通し
-# ---------------------------------------------------------------------------
 
 
 class TestCallOnceTranslate:

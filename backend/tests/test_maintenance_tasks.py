@@ -56,9 +56,7 @@ def _target(
     )
 
 
-# ---------------------------------------------------------------------------
 # kill switch
-# ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
@@ -84,9 +82,7 @@ async def test_curations_disabled_returns_early() -> None:
     backlog_cls.assert_not_called()
 
 
-# ---------------------------------------------------------------------------
 # hold gate — terminal_keep の hold 中は run 全体を skip (circuit breaker 差替)
-# ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
@@ -120,9 +116,7 @@ async def test_curations_held_skips_entire_run() -> None:
     curate_task.kiq.assert_not_called()
 
 
-# ---------------------------------------------------------------------------
 # 空クエリ → 年齢削除は走るが dispatch なし
-# ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
@@ -162,9 +156,7 @@ async def test_curations_empty_does_not_dispatch() -> None:
     curate_task.kiq.assert_not_called()
 
 
-# ---------------------------------------------------------------------------
 # 日次予算枯渇 → kiq なし
-# ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
@@ -205,9 +197,7 @@ async def test_curations_budget_exhausted_skips_dispatch() -> None:
     curate_task.kiq.assert_not_called()
 
 
-# ---------------------------------------------------------------------------
 # dispatch — 対象 article_id を CurationTrigger で kiq
-# ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
@@ -303,9 +293,7 @@ async def test_curations_continues_when_one_kiq_fails() -> None:
     assert curate_task.kiq.await_count == 3
 
 
-# ---------------------------------------------------------------------------
 # 年齢削除 (実 DB) — 監査 INSERT → 物理削除、noise は残す
-# ---------------------------------------------------------------------------
 
 
 async def _make_article(
@@ -432,9 +420,7 @@ async def test_delete_aged_out_curations_deletes_old_child_null_and_audits(
     assert deleted == 1
 
 
-# ---------------------------------------------------------------------------
 # Stage 4/5 年齢除外 (実 DB) — 監査 INSERT → soft exclude、業務 row は保持
-# ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
@@ -629,9 +615,7 @@ async def test_exclude_aged_out_embeddings_skips_completed_race(
     assert excluded == 0
 
 
-# ---------------------------------------------------------------------------
 # assessments / embeddings の disabled パスも同様に early-return することの確認
-# ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio

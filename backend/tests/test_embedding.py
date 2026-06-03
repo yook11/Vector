@@ -39,9 +39,7 @@ def _ready(text: str = "hello") -> ReadyForEmbedding:
     return ReadyForEmbedding(analysis_id=1, text_for_embedding=text, article_id=1)
 
 
-# ---------------------------------------------------------------------------
 # BaseEmbedder._embed_once (StubEmbedder)
-# ---------------------------------------------------------------------------
 
 
 class _InvalidInputSDKError(Exception):
@@ -182,9 +180,7 @@ async def test_document_prefix_prepended_to_text() -> None:
     assert embedder._calls == ["P: doc"]
 
 
-# ---------------------------------------------------------------------------
 # abstract property enforcement
-# ---------------------------------------------------------------------------
 
 
 def test_base_embedder_rejects_subclass_without_required_properties() -> None:

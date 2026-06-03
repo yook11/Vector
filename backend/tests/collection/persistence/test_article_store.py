@@ -35,9 +35,7 @@ def _ready(
     )
 
 
-# ---------------------------------------------------------------------------
 # save
-# ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
@@ -92,9 +90,7 @@ async def test_save_does_not_commit(
     assert await db_session.get(ArticleORM, article_id) is None
 
 
-# ---------------------------------------------------------------------------
 # exists_by_source_url (PR 3 で ArticleSeenRepository から統合)
-# ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio

@@ -57,9 +57,7 @@ from app.models.pipeline_event import PipelineEvent
 _AI_MODEL = "gemini-2.5-flash-lite"
 
 
-# ---------------------------------------------------------------------------
 # Helpers (test_assessment_audit_repository.py と同じ pattern)
-# ---------------------------------------------------------------------------
 
 
 async def _make_article(
@@ -156,9 +154,7 @@ async def _fetch_assessment_events(
     return list((await db_session.execute(stmt)).scalars().all())
 
 
-# ---------------------------------------------------------------------------
 # 成功経路: 業務 INSERT と同 tx で audit 1 行
-# ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
@@ -234,9 +230,7 @@ async def test_out_of_scope_success_records_audit(
     assert persisted.summary == extraction.summary
 
 
-# ---------------------------------------------------------------------------
 # race lost: audit を焼かない (actor SSoT)
-# ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
@@ -282,9 +276,7 @@ async def test_race_lost_does_not_record_audit(
     assert len(events) == 0
 
 
-# ---------------------------------------------------------------------------
 # ACL boundary: AIProviderError → Stage 4 marker wrap
-# ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
@@ -335,9 +327,7 @@ async def test_provider_configuration_error_is_wrapped_to_stage_blocked_marker(
     assert excinfo.value.provider_error is provider_exc
 
 
-# ---------------------------------------------------------------------------
 # Layer 2-B: AI が未知の slug を返したら AssessmentCategoryMissingError
-# ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
@@ -388,9 +378,7 @@ async def test_unknown_category_does_not_record_audit_in_service(
     assert len(events) == 0
 
 
-# ---------------------------------------------------------------------------
 # 同 tx 性: 業務 INSERT が rollback されると audit も焼かれない
-# ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
@@ -436,9 +424,7 @@ async def test_audit_rolled_back_when_commit_fails(
     assert len(rows) == 0
 
 
-# ---------------------------------------------------------------------------
 # Race lost on out-of-scope path
-# ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio

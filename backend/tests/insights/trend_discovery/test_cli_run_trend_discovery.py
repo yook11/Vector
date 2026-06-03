@@ -32,9 +32,7 @@ from app.insights.trend_discovery.domain.ready import ReadyForTrendDiscovery
 JST = ZoneInfo("Asia/Tokyo")
 
 
-# ---------------------------------------------------------------------------
 # Fake service / session_factory
-# ---------------------------------------------------------------------------
 
 
 @dataclass
@@ -77,9 +75,7 @@ def _fake_session_factory() -> MagicMock:
     return MagicMock(return_value=session_ctx)
 
 
-# ---------------------------------------------------------------------------
 # build_parser
-# ---------------------------------------------------------------------------
 
 
 class TestBuildParser:
@@ -107,9 +103,7 @@ class TestBuildParser:
         assert excinfo.value.code == 2
 
 
-# ---------------------------------------------------------------------------
 # run() — dispatch & exit code
-# ---------------------------------------------------------------------------
 
 
 class TestRun:

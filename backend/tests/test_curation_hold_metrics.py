@@ -24,9 +24,7 @@ from redis.exceptions import ConnectionError as RedisConnectionError
 
 from app.queue.helpers.stage_hold import set_curation_hold
 
-# ---------------------------------------------------------------------------
 # ヘルパー
-# ---------------------------------------------------------------------------
 
 
 def _find_metric(metrics: list[dict[str, Any]], name: str) -> dict[str, Any] | None:
@@ -44,9 +42,7 @@ def _attributes_for(metric: dict[str, Any]) -> list[dict[str, Any]]:
     return [dp.get("attributes", {}) for dp in metric["data"]["data_points"]]
 
 
-# ---------------------------------------------------------------------------
 # hold_set counter
-# ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
@@ -95,9 +91,7 @@ async def test_set_curation_hold_does_not_record_failed_counter_on_success(
         assert _sum_value(failed) == 0
 
 
-# ---------------------------------------------------------------------------
 # hold_set_failed counter
-# ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
@@ -132,9 +126,7 @@ async def test_set_curation_hold_failure_does_not_record_success_counter(
         assert _sum_value(success) == 0
 
 
-# ---------------------------------------------------------------------------
 # PII 非含有 oracle
-# ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio

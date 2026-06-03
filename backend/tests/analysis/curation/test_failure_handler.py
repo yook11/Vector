@@ -190,9 +190,7 @@ async def test_input_rejected_writes_audit_then_deletes_article(
     assert ev.payload["failure_action"] == "drop_article"
 
 
-# ---------------------------------------------------------------------------
 # hold gate — terminal_keep は failure 観測時に curation hold を立てる
-# ---------------------------------------------------------------------------
 
 
 def _wrap(raw: BaseException) -> BaseException:

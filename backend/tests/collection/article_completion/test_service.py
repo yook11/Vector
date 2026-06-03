@@ -192,13 +192,11 @@ def _patch_fetch(monkeypatch: pytest.MonkeyPatch, mock: AsyncMock) -> None:
     )
 
 
-# ---------------------------------------------------------------------------
 # 成功 path
 #
 # precondition 未充足 (missing / open / sweep 済) で ``None`` を返す経路は Ready
 # 構築段の責務になったため、repository (``test_repository.py``) と task
 # (``test_scrape_html_body.py``) に移管した。service は厚い Ready だけ受け取る。
-# ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
@@ -320,9 +318,7 @@ async def test_success_persists_extracted_body_and_published_at(
     assert article.published_at == html_published_at
 
 
-# ---------------------------------------------------------------------------
 # Terminal disposition (ExternalFetchError terminal / ScrapeFailure / promotion)
-# ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
@@ -433,9 +429,7 @@ async def test_promotion_failure_closes_pending(
     assert pending.status == "closed"
 
 
-# ---------------------------------------------------------------------------
 # Retryable disposition → will_retry / exhausted
-# ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
@@ -575,9 +569,7 @@ async def test_temporary_retry_after_uses_server_delay(
     assert timedelta(seconds=100) < delta < timedelta(seconds=140)
 
 
-# ---------------------------------------------------------------------------
 # race-loss (永続化層 → pending delete、敗者 article は INSERT しない)
-# ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
@@ -681,9 +673,7 @@ async def test_superseded_attempt_returns_none_and_keeps_pending(
     assert remaining is not None
 
 
-# ---------------------------------------------------------------------------
 # persist 段 audit 配線 (route 1 / 6 / 7 = same-tx、route 9 = 別 session + re-raise)
-# ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio

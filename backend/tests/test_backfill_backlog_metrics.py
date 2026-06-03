@@ -16,9 +16,7 @@ from logfire.testing import CaptureLogfire
 from app.queue.helpers.backlog import BackfillTarget
 from app.queue.tasks import backfill
 
-# ---------------------------------------------------------------------------
 # ヘルパー
-# ---------------------------------------------------------------------------
 
 
 def _find_metric(metrics: list[dict[str, Any]], name: str) -> dict[str, Any] | None:
@@ -58,9 +56,7 @@ def _target(curation_id: int) -> BackfillTarget:
     )
 
 
-# ---------------------------------------------------------------------------
 # Test 1: LIMIT を超えた真値が gauge に出る
-# ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
@@ -113,9 +109,7 @@ async def test_gauge_records_true_count_not_capped_by_limit(
     )
 
 
-# ---------------------------------------------------------------------------
 # Test 2: 通常運転 (LIMIT 以下) で count と stage attribute が出る
-# ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
@@ -160,9 +154,7 @@ async def test_gauge_records_count_with_stage_attribute(
     )
 
 
-# ---------------------------------------------------------------------------
 # Test 3: empty backlog でも set される (baseline 契約)
-# ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
@@ -206,9 +198,7 @@ async def test_gauge_records_zero_when_empty_backlog(
     )
 
 
-# ---------------------------------------------------------------------------
 # Test 4: kill switch off で SELECT 自体走らない → gauge も更新されない
-# ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
@@ -248,9 +238,7 @@ async def test_gauge_not_recorded_when_kill_switch_disabled(
     )
 
 
-# ---------------------------------------------------------------------------
 # Test 5: PII 非含有契約
-# ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio

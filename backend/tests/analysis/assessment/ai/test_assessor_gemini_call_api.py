@@ -59,9 +59,7 @@ def _patch_assessor_call(assessor: GeminiAssessor, response: MagicMock) -> Async
     return mock_call
 
 
-# ---------------------------------------------------------------------------
 # Round trip: in-scope / out-of-scope
-# ---------------------------------------------------------------------------
 
 
 class TestGeminiCallApiSuccess:
@@ -123,9 +121,7 @@ class TestGeminiCallApiSuccess:
         assert config.response_schema.get("type") == "OBJECT"
 
 
-# ---------------------------------------------------------------------------
 # finish_reason 経路 (translate_error 経由ではなく _call_api 内で直接 raise)
-# ---------------------------------------------------------------------------
 
 
 class TestGeminiFinishReasonBlocked:
@@ -167,9 +163,7 @@ class TestGeminiFinishReasonBlocked:
         assert isinstance(call.result, InScope)
 
 
-# ---------------------------------------------------------------------------
 # 不正 payload 経路: AssessmentResponseInvalidError
-# ---------------------------------------------------------------------------
 
 
 class TestGeminiInvalidPayload:

@@ -23,9 +23,7 @@ from logfire.testing import CaptureLogfire
 
 from app.queue.tasks.backfill import _delete_aged_out_curations
 
-# ---------------------------------------------------------------------------
 # ヘルパー
-# ---------------------------------------------------------------------------
 
 
 def _find_metric(metrics: list[dict[str, Any]], name: str) -> dict[str, Any] | None:
@@ -40,9 +38,7 @@ def _attributes_for(metric: dict[str, Any]) -> list[dict[str, Any]]:
     return [dp.get("attributes", {}) for dp in metric["data"]["data_points"]]
 
 
-# ---------------------------------------------------------------------------
 # session_factory / repository stub
-# ---------------------------------------------------------------------------
 
 
 def _make_session_factory() -> Any:
@@ -94,9 +90,7 @@ async def _invoke_with_aged_ids(
     return capfire.get_collected_metrics()
 
 
-# ---------------------------------------------------------------------------
 # age_deleted counter
-# ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
@@ -124,9 +118,7 @@ async def test_age_deleted_attribute_is_stage_only(
     assert attrs_list == [{"stage": "curation"}]
 
 
-# ---------------------------------------------------------------------------
 # age_delete_batch_size histogram
-# ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
@@ -174,9 +166,7 @@ async def test_age_delete_batch_size_records_zero_baseline(
     assert total_count == 1
 
 
-# ---------------------------------------------------------------------------
 # PII 非含有 oracle
-# ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio

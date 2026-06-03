@@ -84,9 +84,7 @@ def _patch_ready_construction(ready: ReadyForEmbedding | None = None) -> object:
     )
 
 
-# ---------------------------------------------------------------------------
 # Terminal 系 — Handler が False を返し、task は return (raise しない)
-# ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
@@ -124,9 +122,7 @@ async def test_terminal_stage_blocked_delegates_to_handler() -> None:
     assert hold.await_args.kwargs["reason"] == "ai_error_configuration"
 
 
-# ---------------------------------------------------------------------------
 # Recoverable 系 — Handler の reraise 戻り値で raise/return が決まる
-# ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
@@ -208,9 +204,7 @@ async def test_response_invalid_dispatches_to_handler() -> None:
     )
 
 
-# ---------------------------------------------------------------------------
 # catch-all — Layer 1 marker いずれにも該当しない例外も Handler に委譲
-# ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio

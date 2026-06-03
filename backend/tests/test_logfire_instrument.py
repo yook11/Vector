@@ -28,9 +28,7 @@ from pydantic import BaseModel, Field
 
 from app.main import _drop_endpoint_args_on_success, _sanitize_validation_errors
 
-# ---------------------------------------------------------------------------
 # _sanitize_validation_errors — rejected input 除去の単体テスト
-# ---------------------------------------------------------------------------
 
 
 def test_sanitize_drops_input_ctx_url_keeps_type_loc_msg() -> None:
@@ -100,9 +98,7 @@ def test_sanitize_tolerates_partial_dict() -> None:
     assert out == [{"type": "missing", "loc": None, "msg": None}]
 
 
-# ---------------------------------------------------------------------------
 # _drop_endpoint_args_on_success — 成功 / 失敗の非対称契約
-# ---------------------------------------------------------------------------
 
 
 def _fake_request() -> Any:
@@ -154,9 +150,7 @@ def test_mapper_drops_values_and_input_on_validation_error() -> None:
     assert sensitive_input not in dumped
 
 
-# ---------------------------------------------------------------------------
 # capfire oracle — instrument_fastapi 経路で実 span に PII が乗らない
-# ---------------------------------------------------------------------------
 
 
 class _ItemsBody(BaseModel):

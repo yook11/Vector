@@ -91,9 +91,7 @@ def _patch_ready_construction(ready: ReadyForAssessment | None = None) -> object
     )
 
 
-# ---------------------------------------------------------------------------
 # Terminal 系 — Handler が False を返し、task は return (raise しない)
-# ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
@@ -159,9 +157,7 @@ async def test_category_missing_dispatches_to_handler() -> None:
     assert isinstance(handler_handle.await_args.kwargs["exc"], AssessmentTerminalError)
 
 
-# ---------------------------------------------------------------------------
 # Recoverable 系 — Handler の reraise 戻り値で raise/return が決まる
-# ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
@@ -249,9 +245,7 @@ async def test_response_invalid_dispatches_to_handler() -> None:
     )
 
 
-# ---------------------------------------------------------------------------
 # catch-all — Layer 1 marker いずれにも該当しない例外も Handler に委譲
-# ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio

@@ -156,9 +156,7 @@ class TestStage4MarkerHierarchy:
         assert AssessmentTerminalTargetRejectedError.FAILURE_ACTION is None
 
 
-# ---------------------------------------------------------------------------
 # Layer 2-B markers (PR2 で追加、Stage 4 工程由来 / provider_error=None 固定)
-# ---------------------------------------------------------------------------
 
 
 class TestAssessmentResponseInvalidError:

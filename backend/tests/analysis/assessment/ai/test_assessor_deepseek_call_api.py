@@ -66,9 +66,7 @@ def _patch_assessor_call(assessor: DeepSeekAssessor, response: MagicMock) -> Asy
     return mock_call
 
 
-# ---------------------------------------------------------------------------
 # Round trip: in-scope / out-of-scope
-# ---------------------------------------------------------------------------
 
 
 class TestDeepSeekCallApiSuccess:
@@ -113,9 +111,7 @@ class TestDeepSeekCallApiSuccess:
         assert call.model_name == DEEPSEEK_ASSESSMENT_SPEC.model
 
 
-# ---------------------------------------------------------------------------
 # tool_call 欠落 / wrong name → AssessmentResponseInvalidError (recoverable)
-# ---------------------------------------------------------------------------
 
 
 class TestDeepSeekToolCallStructure:
@@ -155,9 +151,7 @@ class TestDeepSeekToolCallStructure:
         assert exc_info.value.code == "assessment_response_invalid"
 
 
-# ---------------------------------------------------------------------------
 # arguments 不正 payload 経路
-# ---------------------------------------------------------------------------
 
 
 class TestDeepSeekInvalidArguments:

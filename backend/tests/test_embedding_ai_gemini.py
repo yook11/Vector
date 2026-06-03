@@ -52,9 +52,7 @@ def _ready(text: str = "hello") -> ReadyForEmbedding:
     return ReadyForEmbedding(analysis_id=1, text_for_embedding=text, article_id=1)
 
 
-# ---------------------------------------------------------------------------
 # A. Initialization
-# ---------------------------------------------------------------------------
 
 
 def test_init_raises_configuration_error_when_api_key_missing() -> None:
@@ -84,9 +82,7 @@ def test_property_contracts_return_spec_values() -> None:
     assert embedder.document_prefix == GEMINI_EMBEDDING_SPEC.document_prefix
 
 
-# ---------------------------------------------------------------------------
 # B. embed_document — RETRIEVAL_DOCUMENT 固定経路
-# ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
@@ -107,9 +103,7 @@ async def test_embed_document_uses_retrieval_document_task_type() -> None:
     assert mock_call.call_args.kwargs["contents"] == "hello"
 
 
-# ---------------------------------------------------------------------------
 # C. レスポンス検証 (response shape 違反は AIProviderRequestInvalidError)
-# ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
@@ -134,12 +128,10 @@ async def test_embed_document_raises_request_invalid_when_values_missing() -> No
         await embedder.embed_document(_ready())
 
 
-# ---------------------------------------------------------------------------
 # D. _translate_error は共通 translator に delegate (smoke のみ)
 #
 # 分類の網羅は tests/analysis/test_gemini_error_translator.py に集約。
 # ここでは delegation が経路として効いていることを最小ケースで確認する。
-# ---------------------------------------------------------------------------
 
 
 def _api_error(
@@ -169,9 +161,7 @@ def test_delegates_unknown_returns_exc_for_bare_reraise() -> None:
     assert result is runtime_err
 
 
-# ---------------------------------------------------------------------------
 # E. SDK 例外伝播経路 (embed_document → _translate_error)
-# ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio

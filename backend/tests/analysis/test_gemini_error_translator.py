@@ -52,9 +52,7 @@ def _api_error(
     return genai_errors.APIError(code, response_json)
 
 
-# ---------------------------------------------------------------------------
 # Network 系 (httpx + builtin)
-# ---------------------------------------------------------------------------
 
 
 @pytest.mark.parametrize(
@@ -73,9 +71,7 @@ def test_network_errors_translate_to_network_error(exc: Exception) -> None:
     assert translated.CODE == "ai_error_network"
 
 
-# ---------------------------------------------------------------------------
 # ServerError (5xx) → ServiceUnavailable
-# ---------------------------------------------------------------------------
 
 
 def test_server_error_translates_to_service_unavailable() -> None:
@@ -84,9 +80,7 @@ def test_server_error_translates_to_service_unavailable() -> None:
     assert translated.CODE == "ai_error_service_unavailable"
 
 
-# ---------------------------------------------------------------------------
 # Leaked API key → ConfigurationError (固定文言)
-# ---------------------------------------------------------------------------
 
 
 def test_leaked_key_message_is_fixed_string_not_sdk_echo() -> None:
@@ -110,9 +104,7 @@ def test_leaked_key_message_is_fixed_string_not_sdk_echo() -> None:
     assert "ai_error_configuration" in str(translated)
 
 
-# ---------------------------------------------------------------------------
 # 設定系 status / HTTP code → ConfigurationError
-# ---------------------------------------------------------------------------
 
 
 @pytest.mark.parametrize(
@@ -157,9 +149,7 @@ def test_failed_precondition_with_code_400_evaluates_status_first() -> None:
     assert isinstance(translated, AIProviderConfigurationError)
 
 
-# ---------------------------------------------------------------------------
 # INVALID_ARGUMENT / code=400 → 3-way 分岐
-# ---------------------------------------------------------------------------
 
 
 @pytest.mark.parametrize(
@@ -193,9 +183,7 @@ def test_code_400_without_status_3way_branch(message: str, expected: type) -> No
     assert isinstance(translated, expected)
 
 
-# ---------------------------------------------------------------------------
 # RESOURCE_EXHAUSTED / code=429 → 2-way 分岐 (usage limit vs rate)
-# ---------------------------------------------------------------------------
 
 
 @pytest.mark.parametrize(
@@ -224,9 +212,7 @@ def test_code_429_without_status_routes_to_rate_or_quota() -> None:
     assert isinstance(translate_gemini_error(rate_exc), AIProviderRateLimitedError)
 
 
-# ---------------------------------------------------------------------------
 # APIError 形状
-# ---------------------------------------------------------------------------
 
 
 def test_legacy_api_error_unauthenticated_classifies_as_configuration() -> None:
@@ -236,9 +222,7 @@ def test_legacy_api_error_unauthenticated_classifies_as_configuration() -> None:
     assert isinstance(translated, AIProviderConfigurationError)
 
 
-# ---------------------------------------------------------------------------
 # Unknown → return exc (identity 保持)
-# ---------------------------------------------------------------------------
 
 
 def test_unknown_exception_returns_same_instance() -> None:
@@ -253,9 +237,7 @@ def test_unknown_api_status_returns_same_instance() -> None:
     assert translate_gemini_error(exc) is exc
 
 
-# ---------------------------------------------------------------------------
 # is_context_length_error: status guard と pattern matching
-# ---------------------------------------------------------------------------
 
 
 _CONTEXT_LENGTH_MESSAGES = [

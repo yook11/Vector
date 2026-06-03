@@ -38,9 +38,7 @@ def _snapshot(
     )
 
 
-# ---------------------------------------------------------------------------
 # find_latest / find_by_window_end
-# ---------------------------------------------------------------------------
 
 
 class TestFindLatest:
@@ -83,9 +81,7 @@ class TestFindByWindowEnd:
         assert await repo.find_by_window_end(date(2026, 5, 3)) is None
 
 
-# ---------------------------------------------------------------------------
 # exists_for_window_end
-# ---------------------------------------------------------------------------
 
 
 class TestExistsForWindowEnd:
@@ -109,9 +105,7 @@ class TestExistsForWindowEnd:
         assert await repo.exists_for_window_end(date(2026, 5, 2)) is False
 
 
-# ---------------------------------------------------------------------------
 # save (force=False)
-# ---------------------------------------------------------------------------
 
 
 class TestSaveDefault:
@@ -157,9 +151,7 @@ class TestSaveDefault:
         assert existing.bundle["marker"] == "first"
 
 
-# ---------------------------------------------------------------------------
 # save (force=True) — UPSERT 経路
-# ---------------------------------------------------------------------------
 
 
 class TestSaveForce:
@@ -201,9 +193,7 @@ class TestSaveForce:
         assert existing.bundle["marker"] == "second"
 
 
-# ---------------------------------------------------------------------------
 # 並行 save 統合テスト (Phase 1-3 同型)
-# ---------------------------------------------------------------------------
 
 
 class TestConcurrentSave:

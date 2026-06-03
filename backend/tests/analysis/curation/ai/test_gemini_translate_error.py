@@ -35,9 +35,7 @@ def _curator() -> GeminiCurator:
     return GeminiCurator.__new__(GeminiCurator)
 
 
-# ---------------------------------------------------------------------------
 # Stage 3 specific: context-length → InputRejected
-# ---------------------------------------------------------------------------
 
 
 @pytest.mark.parametrize(
@@ -62,9 +60,7 @@ def test_deadline_exceeded_with_context_pattern_also_maps_to_input_rejected() ->
     assert isinstance(translated, AIProviderInputRejectedError)
 
 
-# ---------------------------------------------------------------------------
 # Stage 3 specific: ValidationError → CurationResponseInvalidError
-# ---------------------------------------------------------------------------
 
 
 def test_validation_error_maps_to_response_invalid() -> None:
@@ -82,9 +78,7 @@ def test_validation_error_maps_to_response_invalid() -> None:
         assert translated.code == "extraction_response_invalid"
 
 
-# ---------------------------------------------------------------------------
 # Smoke: translator delegation が経路として効いている (網羅は translator test 側)
-# ---------------------------------------------------------------------------
 
 
 def test_delegates_timeout_to_network_error() -> None:

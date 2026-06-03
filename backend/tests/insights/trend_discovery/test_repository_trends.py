@@ -44,9 +44,7 @@ PREV_START = WEEK_START - WEEK
 LOOKBACK_START = WEEK_START - WEEK * NEW_ENTITY_LOOKBACK_WEEKS
 
 
-# ---------------------------------------------------------------------------
 # get_trending_entities
-# ---------------------------------------------------------------------------
 
 
 class TestGetTrendingEntities:
@@ -390,9 +388,7 @@ class TestGetTrendingEntities:
         assert results == ()
 
 
-# ---------------------------------------------------------------------------
 # get_new_entities
-# ---------------------------------------------------------------------------
 
 
 class TestGetNewEntities:
@@ -561,9 +557,7 @@ class TestGetNewEntities:
         assert names == ["Loud", "Mid", "Quiet"]
 
 
-# ---------------------------------------------------------------------------
 # count_source_analyses
-# ---------------------------------------------------------------------------
 
 
 class TestCountSourceAnalyses:

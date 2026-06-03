@@ -20,9 +20,7 @@ import pytest
 from app.analysis.embedding.ai.spec import GEMINI_EMBEDDING_SPEC
 from app.analysis.rate_limit import AIModelRateLimitPolicy
 
-# ---------------------------------------------------------------------------
 # Gemini
-# ---------------------------------------------------------------------------
 
 
 def test_gemini_provider_is_gemini() -> None:
@@ -68,9 +66,7 @@ def test_gemini_spec_is_frozen() -> None:
         GEMINI_EMBEDDING_SPEC.provider = "openai"  # type: ignore[misc]
 
 
-# ---------------------------------------------------------------------------
 # 横断 invariant
-# ---------------------------------------------------------------------------
 
 
 def test_dimension_equals_output_dimensionality() -> None:

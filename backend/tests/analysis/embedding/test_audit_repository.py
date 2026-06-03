@@ -135,9 +135,7 @@ async def _fetch_by_outcome(
     return rows[0]
 
 
-# ---------------------------------------------------------------------------
 # 成功経路 — append_success
-# ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
@@ -264,9 +262,7 @@ async def test_append_success_does_not_commit(
     assert len(rows) == 0  # 未 commit のため永続化されていない
 
 
-# ---------------------------------------------------------------------------
 # 救済断念経路 — append_backfill_embedding_aged_out
-# ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
@@ -295,9 +291,7 @@ async def test_append_backfill_embedding_aged_out_records_rejected(
     assert ev.payload["analysis_id"] == 123
 
 
-# ---------------------------------------------------------------------------
 # 失敗経路 — append_failure (Layer 1 marker dispatch)
-# ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio

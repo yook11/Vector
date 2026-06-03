@@ -106,9 +106,7 @@ def test_html_preferred_policy_requires_html_completion_for_any_field() -> None:
     assert HTML_TITLE_POLICY.requires_html_completion()
 
 
-# ---------------------------------------------------------------------------
 # resolve 写像 (per-field source priority。spec §7 等価表の所有テスト)
-# ---------------------------------------------------------------------------
 
 
 def test_resolve_title_authority_diverges_by_policy() -> None:

@@ -132,9 +132,7 @@ async def _seed_extraction(
     return parent
 
 
-# ---------------------------------------------------------------------------
 # skip 経路
-# ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
@@ -181,9 +179,7 @@ async def test_invalid_input_is_skipped_not_failed(
     assert summary.failed_ids == ()
 
 
-# ---------------------------------------------------------------------------
 # 正常系
-# ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
@@ -244,9 +240,7 @@ async def test_dry_run_calls_curator_but_rolls_back(
         assert parent.translated_title == "旧タイトル"
 
 
-# ---------------------------------------------------------------------------
 # retry / failed
-# ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
@@ -358,9 +352,7 @@ async def test_summary_aggregates_per_article_independently(
     assert summary.failed_ids == (a_fail.id,)
 
 
-# ---------------------------------------------------------------------------
 # Noise skip 経路 (PR1-a 構造保証: CurationCall[Signal] のみ update 経路)
-# ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio

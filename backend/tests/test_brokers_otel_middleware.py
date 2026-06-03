@@ -31,9 +31,7 @@ from app.queue.brokers import (
     broker_trend_discovery,
 )
 
-# ---------------------------------------------------------------------------
 # middleware の identity / 順序 unit テスト
-# ---------------------------------------------------------------------------
 
 _BROKERS_WITH_SCHEDULER = (
     (broker_metadata, "metadata"),
@@ -103,11 +101,10 @@ def test_worker_lifecycle_registered_for_all_brokers() -> None:
         assert len(handlers) >= 1, f"{label}: missing WORKER_STARTUP handler"
 
 
-# ---------------------------------------------------------------------------
 # capfire oracle: Proxy provider 遅延束縛
-# ---------------------------------------------------------------------------
 # ``_PRE_CONFIGURE_BROKER`` は capfire fixture setup より前に構築する。
-# configure 後に既存 middleware の tracer が real provider に再束縛されることを検証する。
+# configure 後に既存 middleware の tracer が real provider に再束縛される
+# ことを検証する。
 
 _PRE_CONFIGURE_BROKER = InMemoryBroker().with_middlewares(OpenTelemetryMiddleware())
 
@@ -121,8 +118,7 @@ async def _delayed_binding_probe() -> str:
 async def test_otel_middleware_binds_lazily_to_logfire_provider(
     capfire: CaptureLogfire,
 ) -> None:
-    """configure 前に作った middleware が configure 後の exporter に span を流す。
-    """
+    """configure 前に作った middleware が configure 後の exporter に span を流す。"""
     await _PRE_CONFIGURE_BROKER.startup()
     try:
         task = await _delayed_binding_probe.kiq()
@@ -142,10 +138,8 @@ async def test_otel_middleware_binds_lazily_to_logfire_provider(
     )
 
 
-# ---------------------------------------------------------------------------
 # capfire oracle: kiq → execute フルパスで traceparent が message.labels 経由
 # で伝搬する (producer span / consumer span が同一 trace_id で親子接続)
-# ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
@@ -201,9 +195,7 @@ async def test_kiq_propagates_traceparent_via_labels(
     )
 
 
-# ---------------------------------------------------------------------------
 # capfire oracle: task args が span attribute に漏れない
-# ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio

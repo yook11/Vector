@@ -51,9 +51,7 @@ def captured_requests(
     return sink
 
 
-# ---------------------------------------------------------------------------
 # Transport ベースの SSRF 検証
-# ---------------------------------------------------------------------------
 class TestSsrfValidation:
     @pytest.mark.asyncio
     async def test_blocks_request_to_private_host(
@@ -123,9 +121,7 @@ class TestSsrfValidation:
         assert str(captured_requests[0].url) == "https://8.8.8.8/"
 
 
-# ---------------------------------------------------------------------------
 # DNS rebind 防御
-# ---------------------------------------------------------------------------
 class TestDnsRebindResistance:
     """validate と connect の間で DNS が切り替わっても
     TCP 接続は validate 済の最初の IP に pin される (TOCTOU 不成立)。"""
@@ -209,9 +205,7 @@ class TestDnsRebindResistance:
         assert captured_requests[0].headers["Host"] == "example.com:8443"
 
 
-# ---------------------------------------------------------------------------
 # follow_redirects の default 動作
-# ---------------------------------------------------------------------------
 class TestFollowRedirectsDefault:
     @pytest.mark.asyncio
     async def test_default_is_false(self) -> None:
@@ -224,9 +218,7 @@ class TestFollowRedirectsDefault:
             assert client.follow_redirects is True
 
 
-# ---------------------------------------------------------------------------
 # transport の構造的保証
-# ---------------------------------------------------------------------------
 class TestTransportStructure:
     @pytest.mark.asyncio
     async def test_uses_pinned_dns_transport(self) -> None:

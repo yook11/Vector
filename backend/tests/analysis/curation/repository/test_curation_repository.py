@@ -17,9 +17,7 @@ from app.models.article_curation import ArticleCuration
 from app.models.curation_noise import CurationNoise
 from app.models.news_source import NewsSource
 
-# ---------------------------------------------------------------------------
 # helpers
-# ---------------------------------------------------------------------------
 
 
 def _signal_call(
@@ -66,13 +64,9 @@ async def _make_article(
     return article
 
 
-# ===========================================================================
 # signal path
-# ===========================================================================
 
-# ---------------------------------------------------------------------------
 # signal_exists_for_article
-# ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
@@ -98,9 +92,7 @@ async def test_signal_exists_for_article_returns_true_after_save(
     assert await repo.signal_exists_for_article(article.id) is True
 
 
-# ---------------------------------------------------------------------------
 # save_signal → int | None
-# ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
@@ -142,9 +134,7 @@ async def test_save_signal_returns_none_on_duplicate_in_same_session(
     assert second is None
 
 
-# ---------------------------------------------------------------------------
 # update_signal_idempotent (re-extraction CLI 用)
-# ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
@@ -182,9 +172,7 @@ async def test_update_signal_idempotent_updates_parent_in_place(
     assert parent_after.summary == "新要約"
 
 
-# ---------------------------------------------------------------------------
 # 並行 save_signal 統合テスト
-# ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
@@ -224,13 +212,9 @@ async def test_concurrent_save_signal_returns_one_persisted_one_none(
     assert len(list(rows)) == 1
 
 
-# ===========================================================================
 # noise path
-# ===========================================================================
 
-# ---------------------------------------------------------------------------
 # save_noise → int | None
-# ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
@@ -273,9 +257,7 @@ async def test_save_noise_returns_none_on_unique_race_loss(
     assert second is None  # race 敗北は None で表現される
 
 
-# ===========================================================================
 # Ready 構築用 DB 事実取得
-# ===========================================================================
 
 
 @pytest.mark.asyncio
