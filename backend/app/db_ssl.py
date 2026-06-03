@@ -137,13 +137,38 @@ def clean_db_url(raw_url: str) -> str:
     return split_ssl_from_url(raw_url)[0]
 
 
-def create_app_engine(url: str, **engine_kwargs: Any) -> AsyncEngine:
-    """SSL を一元注入する唯一の engine 生成入口。
+DEFAULT_POOL_RECYCLE = 3600  # 古い接続を proactive 破棄 (Neon autosuspend 対策)
+DEFAULT_POOL_TIMEOUT = 5  # QueuePool 飽和時の fail-fast (SQLAlchemy 既定 30s でなく)
+
+
+def _merge_server_settings(
+    connect_args: dict[str, Any], application_name: str | None
+) -> dict[str, Any]:
+    """``application_name`` を asyncpg の ``server_settings`` に注入する。
+
+    asyncpg は ``application_name`` 専用 kwarg を持たないため
+    ``server_settings`` 経由で渡す。既存の ``server_settings`` は保持し、
+    ``application_name`` kwarg を優先する。
+    """
+    if application_name is None:
+        return connect_args
+    server_settings = {
+        **connect_args.get("server_settings", {}),
+        "application_name": application_name,  # PostgreSQL の上限は 63 バイト
+    }
+    return {**connect_args, "server_settings": server_settings}
+
+
+def create_app_engine(
+    url: str, *, application_name: str | None = None, **engine_kwargs: Any
+) -> AsyncEngine:
+    """SSL と application_name を一元注入する唯一の engine 生成入口。
 
     URL から ssl 系 param を剥がし、SSL 要時は verify-full の ``SSLContext`` を
     ``connect_args`` に注入して ``create_async_engine`` を呼ぶ。SSL の決定権を
     構造的に一元化するため、呼び出し側が ``connect_args["ssl"]`` を渡したら
     ``ValueError`` で fail-fast する (ssl 以外の connect_args はマージ保持)。
+    ``application_name`` は asyncpg の ``server_settings`` に焼く。
     """
     clean_url, ssl_connect_args = split_ssl_from_url(url)
 
@@ -155,15 +180,16 @@ def create_app_engine(url: str, **engine_kwargs: Any) -> AsyncEngine:
             "of truth). Use `?sslmode=require` instead."
         )
     merged_connect_args = {**caller_connect_args, **ssl_connect_args}
+    merged_connect_args = _merge_server_settings(merged_connect_args, application_name)
 
     # Neon scale-to-zero (autosuspend) で idle 接続が切られるため、全 engine に
     # stale-connection resilience を既定付与する (呼び出し側が明示すれば override)。
     engine_kwargs.setdefault("pool_pre_ping", True)  # checkout 時 liveness check
-    engine_kwargs.setdefault("pool_recycle", 3600)  # 古い接続の proactive 破棄
+    engine_kwargs.setdefault("pool_recycle", DEFAULT_POOL_RECYCLE)
     # pool_timeout は QueuePool 専用。NullPool 移行時は付与しない
     # (neon-connection-routing.md の pooler 昇格手順)。
     if engine_kwargs.get("poolclass") is not NullPool:
-        engine_kwargs.setdefault("pool_timeout", 5)  # pool 飽和を fail-fast
+        engine_kwargs.setdefault("pool_timeout", DEFAULT_POOL_TIMEOUT)
 
     return create_async_engine(
         clean_url, connect_args=merged_connect_args, **engine_kwargs

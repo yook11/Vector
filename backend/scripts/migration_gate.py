@@ -416,7 +416,7 @@ async def _current_db_heads() -> tuple[str, ...]:
     from app.db_ssl import create_app_engine
 
     url = settings.migration_database_url or settings.database_url
-    engine = create_app_engine(url)
+    engine = create_app_engine(url, application_name="vector-cli-migration-gate")
     try:
         async with engine.connect() as connection:
             return await connection.run_sync(_current_heads_from_sync_connection)

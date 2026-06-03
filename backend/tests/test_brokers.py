@@ -3,17 +3,21 @@
 import configparser
 import re
 from pathlib import Path
+from typing import Any
 from unittest.mock import patch
 
 import pytest
 from pydantic import SecretStr
+from sqlalchemy.ext.asyncio import create_async_engine as _real_create_async_engine
 from taskiq import TaskiqState
 
+import app.db_ssl as db_ssl
 from app.collection.sources.fetch_cadence import FetchCadence
 from app.queue.lifecycle import (
     WORKER_POOL_RECYCLE_SECONDS,
     WORKER_POOL_SIZING,
     build_worker_engine,
+    worker_service_name,
 )
 from app.queue.schedule import CADENCE_CRON
 
@@ -149,3 +153,21 @@ class TestWorkerPoolSizing:
         # worker は recycle=240 で factory 既定 (3600) を override (autosuspend 手前)
         pool = build_worker_engine("content").sync_engine.pool
         assert pool._recycle == WORKER_POOL_RECYCLE_SECONDS == 240
+
+
+class TestWorkerApplicationName:
+    """worker engine の application_name を検証する。"""
+
+    def test_application_name_matches_service_name(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        captured: dict[str, Any] = {}
+
+        def _spy(clean_url: str, **kw: Any) -> Any:
+            captured.update(kw)
+            return _real_create_async_engine(clean_url, **kw)
+
+        monkeypatch.setattr(db_ssl, "create_async_engine", _spy)
+        build_worker_engine("content")
+        server_settings = captured["connect_args"]["server_settings"]
+        assert server_settings["application_name"] == worker_service_name("content")

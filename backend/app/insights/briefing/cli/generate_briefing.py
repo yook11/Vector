@@ -159,7 +159,11 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     async def _bootstrap() -> int:
-        engine = create_app_engine(settings.database_url, echo=False)
+        engine = create_app_engine(
+            settings.database_url,
+            application_name="vector-cli-generate-briefing",
+            echo=False,
+        )
         try:
             session_factory = async_sessionmaker(
                 engine, class_=AsyncSession, expire_on_commit=False

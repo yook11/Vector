@@ -93,7 +93,7 @@ async def _seed() -> None:
     # auth schema への write は table owner (vector) role で接続する必要がある。
     # alembic env.py と同じ fallback (migration_database_url or database_url)。
     db_url = settings.migration_database_url or settings.database_url
-    engine = create_app_engine(db_url)
+    engine = create_app_engine(db_url, application_name="vector-cli-seed-e2e-users")
     now = datetime.datetime.now(datetime.UTC)
     try:
         async with engine.begin() as conn:

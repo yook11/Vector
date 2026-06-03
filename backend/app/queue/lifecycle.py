@@ -16,7 +16,8 @@ from taskiq import TaskiqEvents, TaskiqState
 from taskiq_redis import RedisStreamBroker
 
 from app.config import settings
-from app.db_ssl import create_app_engine
+from app.db_ssl import DEFAULT_POOL_TIMEOUT, create_app_engine
+from app.logfire_db_pool import log_pool_initialized, register_pool_metrics
 from app.logfire_setup import setup_logfire
 from app.queue.brokers import (
     broker_analysis,
@@ -53,6 +54,11 @@ WORKER_POOL_SIZING: dict[str, tuple[int, int]] = {
 WORKER_POOL_RECYCLE_SECONDS = 240
 
 
+def worker_service_name(label: str) -> str:
+    """worker プロセスの service 名 (= asyncpg application_name) を返す。"""
+    return f"vector-worker-{label}"
+
+
 def build_worker_engine(label: str) -> AsyncEngine:
     """``label`` の sizing で worker engine を作る (hook とテストの共用入口)。
 
@@ -63,6 +69,7 @@ def build_worker_engine(label: str) -> AsyncEngine:
     pool_size, max_overflow = WORKER_POOL_SIZING[label]
     return create_app_engine(
         settings.database_url,
+        application_name=worker_service_name(label),
         echo=False,
         pool_size=pool_size,
         max_overflow=max_overflow,
@@ -78,7 +85,8 @@ def _register_worker_lifecycle(broker: RedisStreamBroker, label: str) -> None:
         # Logfire 経路に乗るようにする。各 worker プロセスでは自分の broker の
         # on_startup だけが発火するため、プロセスごとに正しい service_name で
         # 1 回ずつ呼ばれる。
-        setup_logfire(f"vector-worker-{label}")
+        service_name = worker_service_name(label)
+        setup_logfire(service_name)
         # pool sizing は WORKER_POOL_SIZING (label 別)、recycle=240 で worker のみ
         # override。resilience (pre_ping / pool_timeout) は create_app_engine の
         # 既定 (Neon scale-to-zero 対策)。
@@ -92,6 +100,17 @@ def _register_worker_lifecycle(broker: RedisStreamBroker, label: str) -> None:
         # 各 worker プロセスは自分の broker の on_startup だけが発火するため、
         # プロセスごとに 1 engine が 1 度 instrument される (重複なし)。
         logfire.instrument_sqlalchemy(engine=state.engine)
+        pool_size, max_overflow = WORKER_POOL_SIZING[label]
+        log_pool_initialized(
+            service_name=service_name,
+            pool_size=pool_size,
+            max_overflow=max_overflow,
+            pool_recycle=WORKER_POOL_RECYCLE_SECONDS,
+            pool_timeout=DEFAULT_POOL_TIMEOUT,
+        )
+        register_pool_metrics(
+            state.engine, pool_size=pool_size, max_overflow=max_overflow
+        )
         logger.info(f"{label}_worker_startup")
 
     @broker.on_event(TaskiqEvents.WORKER_SHUTDOWN)

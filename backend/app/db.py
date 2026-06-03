@@ -2,15 +2,18 @@ from app.config import settings
 from app.db_ssl import create_app_engine
 from app.models.base import Base
 
-# FastAPI app 専用 engine。最大 20 connection に制限 (pool_size + max_overflow)。
-# resilience (pre_ping / recycle / 飽和時の timeout fail-fast) は
-# create_app_engine の既定で全 engine に付与される。ここは sizing のみ明示。
-# SSL (Neon verify-full) も同 factory が接続文字列の sslmode から導く。
+API_SERVICE_NAME = "vector-api"
+API_POOL_SIZE = 10
+API_POOL_MAX_OVERFLOW = 10
+
+# FastAPI app 専用 engine。最大同時接続は pool_size + max_overflow = 20。
+# SSL と resilience は create_app_engine の既定に任せる。
 engine = create_app_engine(
     settings.database_url,
+    application_name=API_SERVICE_NAME,
     echo=False,
-    pool_size=10,
-    max_overflow=10,
+    pool_size=API_POOL_SIZE,
+    max_overflow=API_POOL_MAX_OVERFLOW,
 )
 
 

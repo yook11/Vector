@@ -158,8 +158,16 @@ def pytest_collection_modifyitems(
     DB セッション・httpx Client・seed データなどの integration 用 fixture を
     要求するテストは integration、それ以外は unit として扱う。autouse の
     ensure_test_database / setup_db はパッケージ全体の前提なので無視する。
+
+    既に手動で unit / integration marker を付けたテストは尊重し、自動付与を
+    スキップする。integration fixture を介さず自前で実 DB へ接続する
+    test_db_application_name のようなテストが、fixture 不使用ゆえに unit と
+    誤分類され unit job (DB 無し) で接続失敗するのを防ぐ。marker のみを見る
+    get_closest_marker を使い、node 名 (file / class / func) との衝突を避ける。
     """
     for item in items:
+        if item.get_closest_marker("integration") or item.get_closest_marker("unit"):
+            continue
         fixtures = set(getattr(item, "fixturenames", ()))
         if fixtures & _INTEGRATION_FIXTURES:
             item.add_marker(pytest.mark.integration)

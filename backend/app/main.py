@@ -11,7 +11,13 @@ from sqlalchemy import text
 from starlette.middleware.base import BaseHTTPMiddleware, RequestResponseEndpoint
 
 from app.config import settings
-from app.db import engine
+from app.db import (
+    API_POOL_MAX_OVERFLOW,
+    API_POOL_SIZE,
+    API_SERVICE_NAME,
+    engine,
+)
+from app.db_ssl import DEFAULT_POOL_RECYCLE, DEFAULT_POOL_TIMEOUT
 from app.exception_handlers import (
     duplicate_handler,
     invalid_query_handler,
@@ -22,6 +28,7 @@ from app.insights.briefing.router.briefing import router as briefing_router
 from app.insights.trend_discovery.router.weekly_trends import (
     router as weekly_trends_router,
 )
+from app.logfire_db_pool import log_pool_initialized, register_pool_metrics
 from app.logfire_setup import setup_logfire
 from app.routers import (
     admin,
@@ -73,7 +80,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
     # token 未設定の dev/CI/test では完全 no-op (外部送信なし) で安全。
     # タスクワーカーは別の Docker サービス (worker/scheduler) で動作するため、
     # 各 worker プロセスは brokers.py の WORKER_STARTUP で同じ bootstrap を呼ぶ。
-    setup_logfire("vector-api")
+    setup_logfire(API_SERVICE_NAME)
     # FastAPI request / SQLAlchemy query の auto-instrument を bootstrap 直後に
     # 1 度だけ走らせる。setup_logfire 内の logfire.configure() が OTel provider
     # を立てたあとに hook する順序契約 (configure 前に呼ぶと patch は走るが span
@@ -94,6 +101,16 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
     # asyncpg instrumentor は意図的に入れない (ORM 層 + driver 層で二重 span
     # を出さないため)。
     logfire.instrument_sqlalchemy(engine=engine)
+    log_pool_initialized(
+        service_name=API_SERVICE_NAME,
+        pool_size=API_POOL_SIZE,
+        max_overflow=API_POOL_MAX_OVERFLOW,
+        pool_recycle=DEFAULT_POOL_RECYCLE,
+        pool_timeout=DEFAULT_POOL_TIMEOUT,
+    )
+    register_pool_metrics(
+        engine, pool_size=API_POOL_SIZE, max_overflow=API_POOL_MAX_OVERFLOW
+    )
     yield
     # 終了処理
     await engine.dispose()

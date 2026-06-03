@@ -64,7 +64,9 @@ def do_run_migrations(connection) -> None:  # type: ignore[no-untyped-def]
 
 async def run_migrations_online() -> None:
     """Run migrations in 'online' mode."""
-    connectable = create_app_engine(_migration_url())
+    connectable = create_app_engine(
+        _migration_url(), application_name="vector-migration"
+    )
     async with connectable.connect() as connection:
         await connection.run_sync(do_run_migrations)
     await connectable.dispose()

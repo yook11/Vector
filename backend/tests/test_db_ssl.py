@@ -223,6 +223,61 @@ class TestCreateAppEngine:
         assert captured["connect_args"]["command_timeout"] == 30
         assert "ssl" in captured["connect_args"]
 
+    def test_application_name_injected_into_server_settings(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        captured: dict[str, Any] = {}
+
+        def _spy(clean_url: str, **kw: Any) -> Any:
+            captured.update(kw)
+            return _real_create_async_engine(clean_url, **kw)
+
+        monkeypatch.setattr(db_ssl, "create_async_engine", _spy)
+        create_app_engine(
+            f"{_NEON}?sslmode=require", application_name="vector-worker-content"
+        )
+        server_settings = captured["connect_args"]["server_settings"]
+        assert server_settings["application_name"] == "vector-worker-content"
+        assert "ssl" in captured["connect_args"]
+
+    def test_no_application_name_leaves_server_settings_absent(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        captured: dict[str, Any] = {}
+
+        def _spy(clean_url: str, **kw: Any) -> Any:
+            captured.update(kw)
+            return _real_create_async_engine(clean_url, **kw)
+
+        monkeypatch.setattr(db_ssl, "create_async_engine", _spy)
+        create_app_engine(f"{_NEON}?sslmode=require")
+        assert "server_settings" not in captured["connect_args"]
+
+    def test_application_name_merges_with_caller_server_settings(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        captured: dict[str, Any] = {}
+
+        def _spy(clean_url: str, **kw: Any) -> Any:
+            captured.update(kw)
+            return _real_create_async_engine(clean_url, **kw)
+
+        monkeypatch.setattr(db_ssl, "create_async_engine", _spy)
+        create_app_engine(
+            f"{_NEON}?sslmode=require",
+            application_name="vector-worker-content",
+            connect_args={
+                "server_settings": {
+                    "timezone": "UTC",
+                    "application_name": "caller-should-lose",
+                }
+            },
+        )
+        assert captured["connect_args"]["server_settings"] == {
+            "timezone": "UTC",
+            "application_name": "vector-worker-content",
+        }
+
 
 class TestEngineResilienceDefaults:
     """factory が全 engine に Neon scale-to-zero resilience を既定付与する不変条件。
