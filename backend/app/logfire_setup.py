@@ -9,6 +9,8 @@ stdout の見た目は env 別 (dev=ConsoleRenderer / prod=JSONRenderer)。
 pipeline_events は監査 SSoT として残し、Logfire は追加の telemetry 層に徹する。
 token は ``app.config.settings`` 経由で渡す。httpx instrumentation は
 ``AsyncClient.send`` を global patch するため、本 bootstrap で一度だけ行う。
+system メトリクス (プロセス RSS / VM available) は OOM 予兆監視のため token 設定時
+のみ観測する (受け手の無い env で psutil コールバックを立てない)。
 """
 
 from __future__ import annotations
@@ -77,3 +79,17 @@ def setup_logfire(service_name: str) -> None:
         capture_request_body=False,
         capture_response_body=False,
     )
+    # token がある (= Logfire に実送信する) 時だけ system メトリクスを観測する。
+    # OOM 予兆監視に要る 2 つだけに絞り (base=None で basic の cpu/swap は出さない)、
+    # 受け手の無い dev/CI/test では 60s 周期の psutil コールバックスレッドを立てない。
+    # system.memory.utilization{available} = VM 逼迫判定 (Firecracker microVM なので
+    # /proc/meminfo が VM 実効値を返す)。process.memory.usage = どの worker が太ったか
+    # の犯人特定。
+    if token is not None:
+        logfire.instrument_system_metrics(
+            {
+                "system.memory.utilization": ["available"],
+                "process.memory.usage": None,
+            },
+            base=None,
+        )
