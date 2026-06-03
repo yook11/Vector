@@ -113,6 +113,7 @@ class TestListWatchlist:
         self,
         authed_client: AsyncClient,
         sample_article: InScopeAssessment,
+        sample_categories: list[Category],
     ) -> None:
         await authed_client.post(
             "/api/v1/me/watchlist",
@@ -128,6 +129,8 @@ class TestListWatchlist:
         assert item["translatedTitle"] == "テスト記事"
         assert item["summary"] == "テストの要約"
         assert item["source"]["name"] == "Test Tech Source"
+        # watchlist 経路も brief の eager load を共有し category を返す
+        assert item["category"]["slug"] == str(sample_categories[0].slug)
         # Pattern B: ArticleBrief から isWatched は削除済み
         assert "isWatched" not in item
 

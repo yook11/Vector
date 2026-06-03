@@ -9,7 +9,7 @@ from app.schemas.articles import (
     ArticleListParams,
     PaginatedArticleResponse,
 )
-from app.schemas.embeds import NewsSourceEmbed, OriginalArticleEmbed
+from app.schemas.embeds import CategoryEmbed, NewsSourceEmbed, OriginalArticleEmbed
 
 
 def build_brief(analysis: InScopeAssessment) -> ArticleBrief:
@@ -18,6 +18,10 @@ def build_brief(analysis: InScopeAssessment) -> ArticleBrief:
         id=analysis.id,
         translated_title=analysis.translated_title,
         summary=analysis.summary,
+        category=CategoryEmbed(
+            slug=analysis.category.slug,
+            name=analysis.category.name,
+        ),
         source=NewsSourceEmbed(
             name=a.news_source.name,
             attribution_label=a.news_source.attribution_label,

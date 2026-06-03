@@ -190,6 +190,24 @@ class TestListArticles:
         assert "summary" in item
         assert "publishedAt" in item
 
+    async def test_brief_includes_category(
+        self,
+        client: AsyncClient,
+        db_session: AsyncSession,
+        sample_source: NewsSource,
+        sample_categories: list[Category],
+    ) -> None:
+        """一覧カードは記事のカテゴリ (slug + name) を含む。"""
+        category = sample_categories[0]
+        article = await _create_article(db_session, sample_source)
+        await _create_analysis(db_session, article, category_id=category.id)
+        resp = await client.get("/api/v1/articles")
+        item = resp.json()["items"][0]
+        assert item["category"] == {
+            "slug": str(category.slug),
+            "name": str(category.name),
+        }
+
     async def test_response_does_not_contain_impact_level(
         self,
         client: AsyncClient,

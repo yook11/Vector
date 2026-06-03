@@ -20,6 +20,8 @@ def article_eager_options_brief() -> list:
             defer(Article.original_content, raiseload=True),
             selectinload(Article.news_source),
         ),
+        # category は InScopeAssessment ルート相対なので上の chain には入れない.
+        selectinload(InScopeAssessment.category),
     ]
 
 

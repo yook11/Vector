@@ -13,7 +13,7 @@ if TYPE_CHECKING:
 
 from app.models.value_objects.category import CategorySlug
 from app.schemas.base import PaginationParams, _CamelBase
-from app.schemas.embeds import NewsSourceEmbed, OriginalArticleEmbed
+from app.schemas.embeds import CategoryEmbed, NewsSourceEmbed, OriginalArticleEmbed
 
 # ---------------------------------------------------------------------------
 # Enums
@@ -65,6 +65,7 @@ class ArticleBrief(_CamelBase):
     id: int
     translated_title: str
     summary: str
+    category: CategoryEmbed
     source: NewsSourceEmbed
     published_at: datetime | None = None
 

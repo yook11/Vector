@@ -27,6 +27,7 @@ export type ArticleBrief = {
      * Summary
      */
     summary: string;
+    category: CategoryEmbed;
     source: NewsSourceEmbed;
     /**
      * Publishedat
@@ -123,6 +124,19 @@ export type CategoryDetailList = {
      * Items
      */
     items: Array<CategoryDetail>;
+};
+
+/**
+ * CategoryEmbed
+ *
+ * 記事に紐づくカテゴリの参照情報（カード表示・絞り込み用）。
+ *
+ * name は表示用、slug は絞り込みキー。id は持たない（表示と絞り込みに不要）。
+ * サイドバー用の集計付き CategoryDetail とは役割が異なる。
+ */
+export type CategoryEmbed = {
+    slug: CategorySlug;
+    name: CategoryName;
 };
 
 /**

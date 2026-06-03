@@ -28,6 +28,7 @@ from app.models.base import Base
 
 if TYPE_CHECKING:
     from app.models.article_curation import ArticleCuration
+    from app.models.category import Category
     from app.models.watchlist_entry import WatchlistEntry
 
 
@@ -72,8 +73,7 @@ class InScopeAssessment(Base):
         DateTime(timezone=True), server_default=func.now()
     )
     embedding: Mapped[list[float] | None] = mapped_column(HALFVEC(768))
-    # 第一級フィルタ軸。リレーションは YAGNI で持たない（必要時に
-    # selectinload を強制する形で別途追加する）。
+    # 第一級フィルタ軸。
     category_id: Mapped[int] = mapped_column(
         ForeignKey("categories.id", ondelete="RESTRICT"),
     )
@@ -88,3 +88,6 @@ class InScopeAssessment(Base):
     watchlist_entries: Mapped[list[WatchlistEntry]] = relationship(
         back_populates="in_scope_assessment"
     )
+    # category_id FK 経由の直 relationship（カード表示用）。逆向き
+    # Category.in_scope_assessments は持たない（逆引きは category_id filter で足りる）。
+    category: Mapped[Category] = relationship()

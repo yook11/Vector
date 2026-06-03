@@ -6,6 +6,7 @@
 """
 
 from app.collection.sources.source_name import SourceName
+from app.models.value_objects.category import CategoryName, CategorySlug
 from app.schemas.base import _CamelBase
 from app.shared.security.safe_url import SafeUrl
 
@@ -15,6 +16,17 @@ class NewsSourceEmbed(_CamelBase):
 
     name: SourceName
     attribution_label: str | None = None
+
+
+class CategoryEmbed(_CamelBase):
+    """記事に紐づくカテゴリの参照情報（カード表示・絞り込み用）。
+
+    name は表示用、slug は絞り込みキー。id は持たない（表示と絞り込みに不要）。
+    サイドバー用の集計付き CategoryDetail とは役割が異なる。
+    """
+
+    slug: CategorySlug
+    name: CategoryName
 
 
 class OriginalArticleEmbed(_CamelBase):
