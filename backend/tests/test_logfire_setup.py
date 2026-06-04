@@ -33,8 +33,8 @@ import structlog
 from logfire.integrations.structlog import LogfireProcessor
 from pydantic import SecretStr
 
-from app import logfire_setup as logfire_setup_module
-from app.logfire_setup import setup_logfire
+from app.logfire import setup as logfire_setup_module
+from app.logfire.setup import setup_logfire
 
 
 @pytest.fixture

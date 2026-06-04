@@ -18,7 +18,7 @@ from app.analysis.ai_provider_errors import (
 )
 from app.audit.domain.event import Stage
 from app.audit.failure_projection import FailureAction, Retryability
-from app.logfire_exceptions import VectorDomainError
+from app.logfire.exceptions import VectorDomainError
 
 # ---------------------------------------------------------------------------
 # Layer 1 marker (Stage 4 task 層の dispatch 軸)

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any, ClassVar
 
-from app.logfire_exceptions import VectorDomainError
+from app.logfire.exceptions import VectorDomainError
 
 
 class AIProviderError(VectorDomainError):

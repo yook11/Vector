@@ -20,9 +20,10 @@ Outcome 型 assertion を「signal 勝者 → ``int``、noise 勝者 → ``None`
 from __future__ import annotations
 
 from datetime import UTC, datetime
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from logfire.testing import CaptureLogfire
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
@@ -33,9 +34,11 @@ from app.analysis.curation.domain import Noise, Signal
 from app.analysis.curation.domain.ready import ReadyForCuration
 from app.analysis.curation.errors import CurationResponseInvalidError
 from app.analysis.curation.service import CurationService
+from app.logfire.article_stage import curation_stage_span
 from app.models.article import Article
 from app.models.news_source import NewsSource
 from app.models.pipeline_event import PipelineEvent
+from tests.logfire._span_helpers import stage_attrs
 
 
 def _signal_envelope(*, raw: str = '{"relevance":"signal"}') -> CurationCall[Signal]:
@@ -187,3 +190,64 @@ async def test_response_invalid_error_passes_through_without_service_audit(
     # Service は audit を焼かない (失敗経路は task 層末尾の inline audit 責務、PR4)
     events = await _fetch_curation_events(db_session, article.id)
     assert len(events) == 0
+
+
+# article_stage span: 実 Service が各分岐で result 語彙を焼く正本
+
+
+@pytest.mark.asyncio
+async def test_signal_sets_stage_result_signal(
+    db_session: AsyncSession,
+    session_factory: async_sessionmaker[AsyncSession],
+    sample_source: NewsSource,
+    capfire: CaptureLogfire,
+) -> None:
+    """signal 保存成功で active span に result=signal が焼かれる。"""
+    article = await _make_article(db_session, sample_source)
+    ready = await _ready(article)
+    svc = CurationService(session_factory)
+
+    with curation_stage_span(article_id=article.id):
+        await svc.execute(ready, _curator(return_envelope=_signal_envelope()))
+
+    assert stage_attrs(capfire)["result"] == "signal"
+
+
+@pytest.mark.asyncio
+async def test_noise_sets_stage_result_noise(
+    db_session: AsyncSession,
+    session_factory: async_sessionmaker[AsyncSession],
+    sample_source: NewsSource,
+    capfire: CaptureLogfire,
+) -> None:
+    """noise 保存成功で active span に result=noise が焼かれる。"""
+    article = await _make_article(db_session, sample_source)
+    ready = await _ready(article)
+    svc = CurationService(session_factory)
+
+    with curation_stage_span(article_id=article.id):
+        await svc.execute(ready, _curator(return_envelope=_noise_envelope()))
+
+    assert stage_attrs(capfire)["result"] == "noise"
+
+
+@pytest.mark.asyncio
+async def test_signal_race_loss_sets_stage_result_skipped(
+    db_session: AsyncSession,
+    session_factory: async_sessionmaker[AsyncSession],
+    sample_source: NewsSource,
+    capfire: CaptureLogfire,
+) -> None:
+    """signal の楽観ロック敗北 (save_signal=None) で result=skipped が焼かれる。"""
+    article = await _make_article(db_session, sample_source)
+    ready = await _ready(article)
+    svc = CurationService(session_factory)
+
+    with curation_stage_span(article_id=article.id):
+        with patch(
+            "app.analysis.curation.repository.CurationRepository.save_signal",
+            new=AsyncMock(return_value=None),
+        ):
+            await svc.execute(ready, _curator(return_envelope=_signal_envelope()))
+
+    assert stage_attrs(capfire)["result"] == "skipped"

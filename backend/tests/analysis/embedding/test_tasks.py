@@ -4,6 +4,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from logfire.testing import CaptureLogfire
 from structlog.testing import capture_logs
 
 from app.analysis.embedding.domain.ready import (
@@ -13,6 +14,7 @@ from app.analysis.embedding.domain.ready import (
 )
 from app.analysis.rate_limit import AIModelRateLimitPolicy
 from app.queue.messages.embedding import EmbeddingTrigger
+from tests.logfire._span_helpers import stage_attrs
 
 
 def _make_embedder_fake() -> MagicMock:
@@ -205,3 +207,101 @@ class TestGenerateEmbedding:
         assert skips[-1]["analysis_id"] == 1
         assert skips[-1]["article_id"] == 7
         assert skips[-1]["embedding_model"] == "gemini-embedding-001"
+
+
+class TestGenerateEmbeddingStageSpan:
+    """``article_stage`` span の embedding task 配線 (capfire oracle)。
+
+    終端ステージなので next_task 系 attribute は決して出ない。Service は mock する
+    ため succeeded の result は service テストが正本。ここでは task が設定する
+    skipped / rate_limited / failed、article_id late-binding、終端性を固定する。
+    """
+
+    @pytest.mark.asyncio
+    async def test_success_has_no_next_task_and_binds_article_id(
+        self, capfire: CaptureLogfire
+    ) -> None:
+        """成功経路は next_task 系を出さず (終端) article_id を late-bind する。"""
+        from app.queue.tasks.embedding import generate_embedding
+
+        mock_ctx = _make_ctx(embedder=_make_embedder_fake())
+        with (
+            _patch_ready_construction(_make_ready(analysis_id=1)),  # article_id=7
+            patch("app.queue.tasks.embedding.EmbeddingService") as mock_svc_cls,
+        ):
+            mock_svc_cls.return_value.execute = AsyncMock(return_value=None)
+            await generate_embedding(trigger=_make_trigger(analysis_id=1), ctx=mock_ctx)
+
+        attrs = stage_attrs(capfire)
+        assert attrs["article_id"] == 7
+        assert "next_task_enqueued" not in attrs
+        assert "next_task_name" not in attrs
+        # result は service (mock) の責務。task は success 経路で result を設定しない。
+        assert "result" not in attrs
+
+    @pytest.mark.asyncio
+    async def test_ready_build_blocked_sets_skipped(
+        self, capfire: CaptureLogfire
+    ) -> None:
+        """Ready build blocked 経路で task が skipped を焼く (article_id 無し)。"""
+        from app.queue.tasks.embedding import generate_embedding
+
+        mock_ctx = _make_ctx(embedder=_make_embedder_fake())
+        exc = EmbeddingReadyBuildBlockedError(
+            EmbeddingReadyBuildBlockedCode.ANALYSIS_MISSING
+        )
+        with (
+            _patch_ready_construction(exc),
+            patch("app.queue.tasks.embedding.EmbeddingAuditRepository") as mock_audit,
+            patch("app.queue.tasks.embedding.EmbeddingService"),
+        ):
+            mock_audit.return_value.append_ready_build_blocked = AsyncMock()
+            await generate_embedding(
+                trigger=_make_trigger(analysis_id=42), ctx=mock_ctx
+            )
+
+        attrs = stage_attrs(capfire)
+        assert attrs["result"] == "skipped"
+        assert "article_id" not in attrs
+
+    @pytest.mark.asyncio
+    async def test_ready_build_exception_sets_failed_via_backstop(
+        self, capfire: CaptureLogfire
+    ) -> None:
+        """Ready 構築例外 (task は result 不設定) → backstop が failed を焼く。"""
+        from app.queue.tasks.embedding import generate_embedding
+
+        mock_ctx = _make_ctx(embedder=_make_embedder_fake())
+        with (
+            patch(
+                "app.queue.tasks.embedding.ReadyForEmbedding.try_advance_from",
+                new=AsyncMock(side_effect=RuntimeError("boom")),
+            ),
+            patch(
+                "app.queue.tasks.embedding._append_ready_build_failed_audit",
+                new=AsyncMock(),
+            ),
+            patch("app.queue.tasks.embedding.EmbeddingService"),
+        ):
+            with pytest.raises(RuntimeError):
+                await generate_embedding(
+                    trigger=_make_trigger(analysis_id=42), ctx=mock_ctx
+                )
+
+        assert stage_attrs(capfire)["result"] == "failed"
+
+    @pytest.mark.asyncio
+    async def test_gate_skip_sets_rate_limited(self, capfire: CaptureLogfire) -> None:
+        """gate.acquire=False 経路で task が rate_limited を焼く。"""
+        from app.queue.tasks.embedding import generate_embedding
+
+        gate = _make_gate_fake(acquired=False)
+        mock_ctx = _make_ctx(embedder=_make_embedder_fake(), gate=gate)
+        with (
+            _patch_ready_construction(_make_ready(analysis_id=1)),
+            patch("app.queue.tasks.embedding.EmbeddingService"),
+            patch("app.queue.tasks.embedding.record_rate_limit_gate_skipped"),
+        ):
+            await generate_embedding(trigger=_make_trigger(analysis_id=1), ctx=mock_ctx)
+
+        assert stage_attrs(capfire)["result"] == "rate_limited"

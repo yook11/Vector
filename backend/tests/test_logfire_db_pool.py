@@ -1,4 +1,4 @@
-"""``app.logfire_db_pool`` の不変条件テスト。"""
+"""``app.logfire.db_pool`` の不変条件テスト。"""
 
 from __future__ import annotations
 
@@ -9,7 +9,7 @@ import pytest
 from opentelemetry.metrics import CallbackOptions
 from structlog.testing import capture_logs
 
-from app.logfire_db_pool import (
+from app.logfire.db_pool import (
     log_pool_initialized,
     pool_stats,
     register_pool_metrics,

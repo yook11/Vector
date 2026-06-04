@@ -29,8 +29,8 @@ from app.insights.briefing.router.briefing import router as briefing_router
 from app.insights.trend_discovery.router.weekly_trends import (
     router as weekly_trends_router,
 )
-from app.logfire_db_pool import log_pool_initialized, register_pool_metrics
-from app.logfire_setup import setup_logfire
+from app.logfire.db_pool import log_pool_initialized, register_pool_metrics
+from app.logfire.setup import setup_logfire
 from app.routers import (
     articles,
     categories,

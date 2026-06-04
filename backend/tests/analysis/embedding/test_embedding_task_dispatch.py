@@ -19,6 +19,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from logfire.testing import CaptureLogfire
 
 from app.analysis.embedding.domain.ready import ReadyForEmbedding
 from app.analysis.embedding.errors import (
@@ -29,6 +30,7 @@ from app.analysis.embedding.errors import (
 from app.analysis.failure_handling import FailureHandlingDecision
 from app.analysis.rate_limit import AIModelRateLimitPolicy
 from app.queue.messages.embedding import EmbeddingTrigger
+from tests.logfire._span_helpers import stage_attrs
 
 
 def _make_embedder_fake() -> MagicMock:
@@ -229,3 +231,35 @@ async def test_unexpected_exception_delegates_to_handler() -> None:
     handler_handle = mock_handler_cls.return_value.handle
     handler_handle.assert_awaited_once()
     assert isinstance(handler_handle.await_args.kwargs["exc"], ValueError)
+
+
+# article_stage span: service 例外経路は reraise 有無に関わらず result=failed
+
+
+@pytest.mark.parametrize("reraise", [True, False])
+@pytest.mark.asyncio
+async def test_service_exception_sets_failed_result(
+    capfire: CaptureLogfire, reraise: bool
+) -> None:
+    """service 例外は handler の reraise 値に関わらず span result=failed を焼く。"""
+    from app.queue.tasks.embedding import generate_embedding
+
+    ctx = _make_ctx()
+    exc = EmbeddingRecoverableError(code="ai_error_network")
+    with (
+        _patch_ready_construction(),
+        patch("app.queue.tasks.embedding.EmbeddingService") as mock_svc_cls,
+        patch("app.queue.tasks.embedding.EmbeddingFailureHandler") as mock_handler_cls,
+        patch("app.queue.tasks.embedding.set_embedding_hold", new=AsyncMock()),
+    ):
+        mock_svc_cls.return_value.execute = AsyncMock(side_effect=exc)
+        mock_handler_cls.return_value.handle = AsyncMock(
+            return_value=FailureHandlingDecision(reraise=reraise)
+        )
+        if reraise:
+            with pytest.raises(EmbeddingRecoverableError):
+                await generate_embedding(trigger=_trigger(), ctx=ctx)
+        else:
+            await generate_embedding(trigger=_trigger(), ctx=ctx)
+
+    assert stage_attrs(capfire)["result"] == "failed"

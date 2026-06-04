@@ -16,6 +16,7 @@ from app.analysis.embedding.repository import EmbeddingRepository
 from app.analysis.embedding.service import EmbeddingService
 from app.analysis.rate_limit import record_rate_limit_gate_skipped
 from app.audit.stages.embedding import EmbeddingAuditRepository
+from app.logfire.article_stage import embedding_stage_span
 from app.queue.brokers import broker_embedding
 from app.queue.helpers.stage_hold import set_embedding_hold
 from app.queue.messages.embedding import EmbeddingTrigger
@@ -39,63 +40,70 @@ async def generate_embedding(
     session_factory = ctx.state.session_factory
     embedder: BaseEmbedder = ctx.state.embedder
 
-    async with session_factory() as session:
-        try:
-            ready = await ReadyForEmbedding.try_advance_from(
-                analysis_id=trigger.analysis_id,
-                embedding_repo=EmbeddingRepository(session),
-            )
-        except EmbeddingReadyBuildBlockedError as exc:
-            await EmbeddingAuditRepository(session).append_ready_build_blocked(
-                analysis_id=trigger.analysis_id,
-                exc=exc,
-            )
-            await session.commit()
+    with embedding_stage_span(analysis_id=trigger.analysis_id) as stage:
+        async with session_factory() as session:
+            try:
+                ready = await ReadyForEmbedding.try_advance_from(
+                    analysis_id=trigger.analysis_id,
+                    embedding_repo=EmbeddingRepository(session),
+                )
+            except EmbeddingReadyBuildBlockedError as exc:
+                await EmbeddingAuditRepository(session).append_ready_build_blocked(
+                    analysis_id=trigger.analysis_id,
+                    exc=exc,
+                )
+                await session.commit()
+                logger.info(
+                    "generate_embedding_rejected",
+                    analysis_id=trigger.analysis_id,
+                    reason="ready_build_blocked",
+                    code=exc.code.value,
+                )
+                stage.set_result("skipped")
+                return
+            except Exception as exc:
+                await _append_ready_build_failed_audit(
+                    session_factory,
+                    analysis_id=trigger.analysis_id,
+                    exc=exc,
+                )
+                raise
+
+        # article_id は trigger に無く ready で判明する (late-binding)。
+        stage.set_article_id(ready.article_id)
+
+        # precondition 未充足の stale trigger で AI quota を消費しない。
+        gate = ctx.state.provider_rate_limit_gate
+        if not await gate.acquire(embedder.rate_limit_policy):
+            record_rate_limit_gate_skipped(stage="embedding", model=embedder.model_name)
             logger.info(
-                "generate_embedding_rejected",
-                analysis_id=trigger.analysis_id,
-                reason="ready_build_blocked",
-                code=exc.code.value,
+                "embedding_ai_rate_limit_gate_skipped",
+                analysis_id=ready.analysis_id,
+                article_id=ready.article_id,
+                embedding_model=embedder.model_name,
             )
+            stage.set_result("rate_limited")
             return
+
+        svc = EmbeddingService(session_factory)
+        handler = EmbeddingFailureHandler(session_factory)
+
+        try:
+            await svc.execute(ready, embedder)
         except Exception as exc:
-            await _append_ready_build_failed_audit(
-                session_factory,
-                analysis_id=trigger.analysis_id,
+            decision = await handler.handle(
+                ready=ready,
                 exc=exc,
+                last_attempt=is_last_attempt(ctx),
             )
-            raise
+            if decision.stage_hold_reason is not None:
+                await set_embedding_hold(get_redis(), reason=decision.stage_hold_reason)
+            stage.set_result("failed")
+            if decision.reraise:
+                raise
+            return
 
-    # precondition 未充足の stale trigger で AI quota を消費しない。
-    gate = ctx.state.provider_rate_limit_gate
-    if not await gate.acquire(embedder.rate_limit_policy):
-        record_rate_limit_gate_skipped(stage="embedding", model=embedder.model_name)
-        logger.info(
-            "embedding_ai_rate_limit_gate_skipped",
-            analysis_id=ready.analysis_id,
-            article_id=ready.article_id,
-            embedding_model=embedder.model_name,
-        )
-        return
-
-    svc = EmbeddingService(session_factory)
-    handler = EmbeddingFailureHandler(session_factory)
-
-    try:
-        await svc.execute(ready, embedder)
-    except Exception as exc:
-        decision = await handler.handle(
-            ready=ready,
-            exc=exc,
-            last_attempt=is_last_attempt(ctx),
-        )
-        if decision.stage_hold_reason is not None:
-            await set_embedding_hold(get_redis(), reason=decision.stage_hold_reason)
-        if decision.reraise:
-            raise
-        return
-
-    # Stage 5 はパイプライン終端、chain firing なし。
+        # Stage 5 はパイプライン終端、chain firing なし。
 
 
 async def _append_ready_build_failed_audit(

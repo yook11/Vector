@@ -22,6 +22,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from logfire.testing import CaptureLogfire
 
 from app.analysis.ai_provider_errors import (
     AIProviderConfigurationError,
@@ -39,6 +40,7 @@ from app.analysis.curation.errors import CurationResponseInvalidError
 from app.analysis.failure_handling import FailureHandlingDecision
 from app.analysis.rate_limit import AIModelRateLimitPolicy, RateLimitRule
 from app.queue.messages.curation import CurationTrigger
+from tests.logfire._span_helpers import stage_attrs
 
 
 def _make_provider_fake() -> MagicMock:
@@ -293,3 +295,39 @@ async def test_unexpected_exception_delegates_to_handler() -> None:
     handler_handle = mock_handler_cls.return_value.handle
     handler_handle.assert_awaited_once()
     assert isinstance(handler_handle.await_args.kwargs["exc"], ValueError)
+
+
+# article_stage span: service 例外経路は reraise 有無に関わらず result=failed
+
+
+@pytest.mark.parametrize("reraise", [True, False])
+@pytest.mark.asyncio
+async def test_service_exception_sets_failed_result(
+    capfire: CaptureLogfire, reraise: bool
+) -> None:
+    """service 例外は handler の reraise 値に関わらず span result=failed を焼く。
+
+    reraise=True は元例外を伝搬、False は return するが、いずれの分岐に入る前に
+    task が ``stage.set_result("failed")`` を呼ぶため span result は failed で確定する。
+    """
+    from app.queue.tasks.curation import curate_content
+
+    ctx = _make_ctx()
+    exc = AIProviderNetworkError("connection reset")
+    with (
+        _patch_try_advance_from(),
+        patch("app.queue.tasks.curation.CurationService") as mock_svc_cls,
+        patch("app.queue.tasks.curation.CurationFailureHandler") as mock_handler_cls,
+        patch("app.queue.tasks.curation.set_curation_hold", new=AsyncMock()),
+    ):
+        mock_svc_cls.return_value.execute = AsyncMock(side_effect=exc)
+        mock_handler_cls.return_value.handle = AsyncMock(
+            return_value=FailureHandlingDecision(reraise=reraise)
+        )
+        if reraise:
+            with pytest.raises(AIProviderNetworkError):
+                await curate_content(trigger=_trigger(), ctx=ctx)
+        else:
+            await curate_content(trigger=_trigger(), ctx=ctx)
+
+    assert stage_attrs(capfire)["result"] == "failed"

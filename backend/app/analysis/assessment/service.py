@@ -20,6 +20,7 @@ from app.analysis.assessment.domain.result import InScope, OutOfScope
 from app.analysis.assessment.errors import map_provider_to_assessment
 from app.analysis.assessment.repository import AssessmentRepository
 from app.audit.stages.assessment import AssessmentAuditRepository
+from app.logfire.article_stage import set_assessment_stage_result
 
 logger = structlog.get_logger(__name__)
 
@@ -86,6 +87,7 @@ class AssessmentService:
                             "assessment_in_scope_concurrent_write",
                             curation_id=curation_id,
                         )
+                        set_assessment_stage_result("skipped")
                         return None
                     # 業務 INSERT + audit を同一 tx で commit
                     await AssessmentAuditRepository(session).append_in_scope(
@@ -97,6 +99,7 @@ class AssessmentService:
                         "assessment_in_scope_completed",
                         curation_id=curation_id,
                     )
+                    set_assessment_stage_result("in_scope")
                     return assessment_id
 
                 case AssessmentCall(result=OutOfScope()):
@@ -110,6 +113,7 @@ class AssessmentService:
                             "assessment_out_of_scope_concurrent_write",
                             curation_id=curation_id,
                         )
+                        set_assessment_stage_result("skipped")
                         return None
                     # 業務 INSERT + audit を同一 tx で commit
                     await AssessmentAuditRepository(session).append_out_of_scope(
@@ -121,6 +125,7 @@ class AssessmentService:
                         "assessment_out_of_scope_completed",
                         curation_id=curation_id,
                     )
+                    set_assessment_stage_result("out_of_scope")
                     # Stage 5 chain なし
                     return None
 

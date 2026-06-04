@@ -11,7 +11,7 @@ from app.collection.article_acquisition.reader.read_errors import (
     UnreadableResponseError,
 )
 from app.collection.external_fetch_errors import ExternalFetchError
-from app.logfire_exceptions import VectorDomainError
+from app.logfire.exceptions import VectorDomainError
 
 
 class AcquisitionConversionDefect(StrEnum):

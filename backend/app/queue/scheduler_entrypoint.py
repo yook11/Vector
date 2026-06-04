@@ -22,7 +22,7 @@ from taskiq.abc.schedule_source import ScheduleSource
 from taskiq.cli.scheduler.run import SchedulerLoop
 
 import app.queue.registry  # noqa: F401  cron 登録の副作用 import (get_all_tasks を満たす)
-from app.logfire_setup import setup_logfire
+from app.logfire.setup import setup_logfire
 from app.queue.schedulers import (
     scheduler_briefing,
     scheduler_maintenance,

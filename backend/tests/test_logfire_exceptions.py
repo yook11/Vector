@@ -47,7 +47,7 @@ from app.analysis.embedding.errors import (
     EmbeddingTerminalStageBlockedError,
     EmbeddingTerminalTargetRejectedError,
 )
-from app.logfire_exceptions import VectorDomainError
+from app.logfire.exceptions import VectorDomainError
 
 # VectorDomainError 基底の __str__ 契約
 

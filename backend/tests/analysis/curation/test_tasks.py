@@ -4,6 +4,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from logfire.testing import CaptureLogfire
 from structlog.testing import capture_logs
 
 from app.analysis.ai_provider_errors import (
@@ -18,6 +19,7 @@ from app.analysis.curation.domain.ready import (
 from app.analysis.rate_limit import AIModelRateLimitPolicy, RateLimitRule
 from app.queue.messages.assessment import AssessmentTrigger
 from app.queue.messages.curation import CurationTrigger
+from tests.logfire._span_helpers import stage_attrs
 
 
 def _make_provider_fake() -> MagicMock:
@@ -326,3 +328,124 @@ class TestCurateContent:
         # red-team chain γ-2: business / audit 両方の secret が redact される
         assert "sk-live-BUSINESSSECRETabc" not in drop["business_error_message"]
         assert "sk-live-AUDITSECRETxyz" not in drop["audit_error_message"]
+
+
+class TestCurateContentStageSpan:
+    """``article_stage`` span の curation task 配線 (capfire oracle)。
+
+    Service は mock するため signal / noise の result は service テストが正本。
+    ここでは task が設定する skipped / rate_limited / failed と、kiq 成功後の
+    mark、success 経路で task が result を設定しないことを固定する。
+    """
+
+    @pytest.mark.asyncio
+    async def test_chain_marks_next_task_without_setting_result(
+        self, capfire: CaptureLogfire
+    ) -> None:
+        """signal 勝者 (kiq 成功) → next_task_enqueued=True + name。result は不設定。"""
+        from app.queue.tasks.curation import curate_content
+
+        mock_ctx = _make_ctx(curator=_make_provider_fake())
+        with (
+            _patch_try_advance_from(_fixed_ready()),
+            patch("app.queue.tasks.curation.CurationService") as mock_svc_cls,
+            patch("app.queue.tasks.curation.assess_content") as mock_assess,
+        ):
+            mock_svc_cls.return_value.execute = AsyncMock(return_value=42)
+            mock_assess.kiq = AsyncMock()
+            await curate_content(trigger=_trigger(), ctx=mock_ctx)
+
+        attrs = stage_attrs(capfire)
+        assert attrs["next_task_enqueued"] is True
+        assert attrs["next_task_name"] == "assess_content"
+        # result は service (mock) の責務。task は success 経路で result を設定しない。
+        assert "result" not in attrs
+
+    @pytest.mark.asyncio
+    async def test_none_result_does_not_mark_next_task(
+        self, capfire: CaptureLogfire
+    ) -> None:
+        """Service が None (noise / race) → mark せず enqueued は False のまま。"""
+        from app.queue.tasks.curation import curate_content
+
+        mock_ctx = _make_ctx(curator=_make_provider_fake())
+        with (
+            _patch_try_advance_from(_fixed_ready()),
+            patch("app.queue.tasks.curation.CurationService") as mock_svc_cls,
+            patch("app.queue.tasks.curation.assess_content") as mock_assess,
+        ):
+            mock_svc_cls.return_value.execute = AsyncMock(return_value=None)
+            mock_assess.kiq = AsyncMock()
+            await curate_content(trigger=_trigger(), ctx=mock_ctx)
+
+        attrs = stage_attrs(capfire)
+        assert attrs["next_task_enqueued"] is False
+        assert "next_task_name" not in attrs
+
+    @pytest.mark.asyncio
+    async def test_ready_build_blocked_sets_skipped(
+        self, capfire: CaptureLogfire
+    ) -> None:
+        """Ready build blocked 経路で task が result=skipped を焼く。"""
+        from app.queue.tasks.curation import curate_content
+
+        mock_ctx = _make_ctx(curator=_make_provider_fake())
+        exc = CurationReadyBuildBlockedError(
+            CurationReadyBuildBlockedCode.ARTICLE_MISSING
+        )
+        with (
+            _patch_try_advance_from(exc),
+            patch("app.queue.tasks.curation.CurationAuditRepository") as mock_audit,
+            patch("app.queue.tasks.curation.CurationService"),
+            patch("app.queue.tasks.curation.assess_content") as mock_assess,
+        ):
+            mock_audit.return_value.append_ready_build_blocked = AsyncMock()
+            mock_assess.kiq = AsyncMock()
+            await curate_content(trigger=_trigger(), ctx=mock_ctx)
+
+        assert stage_attrs(capfire)["result"] == "skipped"
+
+    @pytest.mark.asyncio
+    async def test_ready_build_exception_sets_failed_via_backstop(
+        self, capfire: CaptureLogfire
+    ) -> None:
+        """Ready 構築例外 (task は result 不設定) → backstop が failed を焼く。"""
+        from app.queue.tasks.curation import curate_content
+
+        mock_ctx = _make_ctx(curator=_make_provider_fake())
+        exc = RuntimeError("ready build exploded")
+        with (
+            patch.object(
+                ReadyForCuration,
+                "try_advance_from",
+                new=AsyncMock(side_effect=exc),
+            ),
+            patch(
+                "app.queue.tasks.curation._append_ready_build_failed_audit",
+                new=AsyncMock(),
+            ),
+            patch("app.queue.tasks.curation.CurationService"),
+            patch("app.queue.tasks.curation.assess_content") as mock_assess,
+        ):
+            mock_assess.kiq = AsyncMock()
+            with pytest.raises(RuntimeError):
+                await curate_content(trigger=_trigger(), ctx=mock_ctx)
+
+        assert stage_attrs(capfire)["result"] == "failed"
+
+    @pytest.mark.asyncio
+    async def test_gate_skip_sets_rate_limited(self, capfire: CaptureLogfire) -> None:
+        """gate.acquire=False 経路で task が result=rate_limited を焼く。"""
+        from app.queue.tasks.curation import curate_content
+
+        mock_ctx = _make_ctx(curator=_make_provider_fake(), gate_acquire=False)
+        with (
+            _patch_try_advance_from(_fixed_ready()),
+            patch("app.queue.tasks.curation.CurationService"),
+            patch("app.queue.tasks.curation.assess_content") as mock_assess,
+            patch("app.queue.tasks.curation.record_rate_limit_gate_skipped"),
+        ):
+            mock_assess.kiq = AsyncMock()
+            await curate_content(trigger=_trigger(), ctx=mock_ctx)
+
+        assert stage_attrs(capfire)["result"] == "rate_limited"

@@ -16,6 +16,7 @@ from app.analysis.embedding.domain.ready import ReadyForEmbedding
 from app.analysis.embedding.errors import to_embedding_error
 from app.analysis.embedding.repository import EmbeddingRepository
 from app.audit.stages.embedding import EmbeddingAuditRepository
+from app.logfire.article_stage import set_embedding_stage_result
 
 logger = structlog.get_logger(__name__)
 
@@ -58,6 +59,7 @@ class EmbeddingService:
                     "embedding_concurrent_write",
                     analysis_id=ready.analysis_id,
                 )
+                set_embedding_stage_result("skipped")
                 return
             # 業務 UPDATE + audit を同一 tx で commit
             await EmbeddingAuditRepository(session).append_success(
@@ -71,3 +73,4 @@ class EmbeddingService:
             analysis_id=ready.analysis_id,
             model=embedder.model_name,
         )
+        set_embedding_stage_result("succeeded")

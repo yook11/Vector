@@ -16,6 +16,7 @@ from app.analysis.assessment.repository import AssessmentRepository
 from app.analysis.assessment.service import AssessmentService
 from app.analysis.rate_limit import record_rate_limit_gate_skipped
 from app.audit.stages.assessment import AssessmentAuditRepository
+from app.logfire.article_stage import assessment_stage_span
 from app.queue.brokers import broker_analysis
 from app.queue.helpers.stage_hold import set_assessment_hold
 from app.queue.messages.assessment import AssessmentTrigger
@@ -41,64 +42,78 @@ async def assess_content(
     session_factory = ctx.state.session_factory
     assessor: BaseAssessor = ctx.state.assessor
 
-    async with session_factory() as session:
-        try:
-            ready = await ReadyForAssessment.try_advance_from(
-                curation_id=trigger.curation_id,
-                repo=AssessmentRepository(session),
+    with assessment_stage_span(curation_id=trigger.curation_id) as stage:
+        async with session_factory() as session:
+            try:
+                ready = await ReadyForAssessment.try_advance_from(
+                    curation_id=trigger.curation_id,
+                    repo=AssessmentRepository(session),
+                )
+            except AssessmentReadyBuildBlockedError as exc:
+                await AssessmentAuditRepository(session).append_ready_build_blocked(
+                    curation_id=trigger.curation_id,
+                    exc=exc,
+                )
+                await session.commit()
+                logger.info(
+                    "assess_content_rejected",
+                    curation_id=trigger.curation_id,
+                    reason="ready_build_blocked",
+                    code=exc.code.value,
+                )
+                stage.set_result("skipped")
+                return
+            except Exception as exc:
+                await _append_ready_build_failed_audit(
+                    session_factory,
+                    curation_id=trigger.curation_id,
+                    exc=exc,
+                )
+                raise
+
+        # article_id は trigger に無く ready で判明する (late-binding)。
+        stage.set_article_id(ready.article_id)
+
+        # precondition 未充足の stale trigger で AI quota を消費しない。
+        if not await ctx.state.provider_rate_limit_gate.acquire(
+            assessor.rate_limit_policy
+        ):
+            record_rate_limit_gate_skipped(
+                stage="assessment", model=assessor.model_name
             )
-        except AssessmentReadyBuildBlockedError as exc:
-            await AssessmentAuditRepository(session).append_ready_build_blocked(
-                curation_id=trigger.curation_id,
-                exc=exc,
-            )
-            await session.commit()
             logger.info(
-                "assess_content_rejected",
-                curation_id=trigger.curation_id,
-                reason="ready_build_blocked",
-                code=exc.code.value,
+                "assessment_ai_rate_limit_gate_skipped",
+                curation_id=ready.curation_id,
+                article_id=ready.article_id,
+                ai_model=assessor.model_name,
+                prompt_version=assessor.prompt_version,
             )
+            stage.set_result("rate_limited")
             return
+
+        svc = AssessmentService(session_factory)
+        handler = AssessmentFailureHandler(session_factory)
+
+        try:
+            result = await svc.execute(ready, assessor)
         except Exception as exc:
-            await _append_ready_build_failed_audit(
-                session_factory,
-                curation_id=trigger.curation_id,
+            decision = await handler.handle(
+                ready=ready,
                 exc=exc,
+                last_attempt=is_last_attempt(ctx),
             )
-            raise
+            if decision.stage_hold_reason is not None:
+                await set_assessment_hold(
+                    get_redis(), reason=decision.stage_hold_reason
+                )
+            stage.set_result("failed")
+            if decision.reraise:
+                raise
+            return
 
-    # precondition 未充足の stale trigger で AI quota を消費しない。
-    if not await ctx.state.provider_rate_limit_gate.acquire(assessor.rate_limit_policy):
-        record_rate_limit_gate_skipped(stage="assessment", model=assessor.model_name)
-        logger.info(
-            "assessment_ai_rate_limit_gate_skipped",
-            curation_id=ready.curation_id,
-            article_id=ready.article_id,
-            ai_model=assessor.model_name,
-            prompt_version=assessor.prompt_version,
-        )
-        return
-
-    svc = AssessmentService(session_factory)
-    handler = AssessmentFailureHandler(session_factory)
-
-    try:
-        result = await svc.execute(ready, assessor)
-    except Exception as exc:
-        decision = await handler.handle(
-            ready=ready,
-            exc=exc,
-            last_attempt=is_last_attempt(ctx),
-        )
-        if decision.stage_hold_reason is not None:
-            await set_assessment_hold(get_redis(), reason=decision.stage_hold_reason)
-        if decision.reraise:
-            raise
-        return
-
-    if result is not None:
-        await generate_embedding.kiq(EmbeddingTrigger(analysis_id=result))
+        if result is not None:
+            await generate_embedding.kiq(EmbeddingTrigger(analysis_id=result))
+            stage.mark_next_task_enqueued()
 
 
 async def _append_ready_build_failed_audit(

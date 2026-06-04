@@ -17,8 +17,8 @@ from taskiq_redis import RedisStreamBroker
 
 from app.config import settings
 from app.db_ssl import DEFAULT_POOL_TIMEOUT, create_app_engine
-from app.logfire_db_pool import log_pool_initialized, register_pool_metrics
-from app.logfire_setup import setup_logfire
+from app.logfire.db_pool import log_pool_initialized, register_pool_metrics
+from app.logfire.setup import setup_logfire
 from app.queue.brokers import (
     broker_analysis,
     broker_briefing,
