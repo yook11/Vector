@@ -57,7 +57,7 @@ jobs:
   # GHAS 契約 or repo public 化で Code scanning が enable されたら upload-sarif: true に戻す。
   osv-scan:
     name: OSV-Scanner (lockfile SCA)
-    uses: google/osv-scanner-action/.github/workflows/osv-scanner-reusable-pr.yml@c51854704019a247608d928f370c98740469d4b5  # v2.3.5
+    uses: google/osv-scanner-action/.github/workflows/osv-scanner-reusable-pr.yml@9a498708959aeaef5ef730655706c5a1df1edbc2  # v2.3.8
     with:
       # `-r ./` で再帰探索し backend/uv.lock + frontend/package-lock.json を拾う。
       scan-args: |-
