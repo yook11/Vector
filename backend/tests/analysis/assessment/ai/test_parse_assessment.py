@@ -16,7 +16,10 @@ from typing import Any
 
 import pytest
 
-from app.analysis.assessment.ai.parse import parse_assessment
+from app.analysis.assessment.ai.parse import (
+    AssessmentResponseDefect,
+    parse_assessment,
+)
 from app.analysis.assessment.domain.result import (
     Event,
     InScope,
@@ -96,74 +99,103 @@ class TestParseAssessmentOutOfScope:
 
 
 class TestParseAssessmentMissingKeys:
-    """key 欠落: 3 key (category/investor_take/events) いずれの欠落も Invalid。"""
+    """key 欠落: 欠けた key ごとに固有 defect code を焼く。"""
 
-    def test_missing_category_key_raises_invalid(self) -> None:
-        with pytest.raises(AssessmentResponseInvalidError):
+    def test_missing_category_key_raises_category_key_missing(self) -> None:
+        with pytest.raises(AssessmentResponseInvalidError) as exc_info:
             parse_assessment({"investor_take": "x", "events": []})
+        assert exc_info.value.code == AssessmentResponseDefect.CATEGORY_KEY_MISSING
 
-    def test_missing_investor_take_raises_invalid(self) -> None:
-        with pytest.raises(AssessmentResponseInvalidError):
+    def test_missing_investor_take_key_raises_investor_take_key_missing(self) -> None:
+        with pytest.raises(AssessmentResponseInvalidError) as exc_info:
             parse_assessment({"category": "ai", "events": []})
+        assert exc_info.value.code == AssessmentResponseDefect.INVESTOR_TAKE_KEY_MISSING
 
-    def test_missing_events_key_raises_invalid_in_scope(self) -> None:
-        with pytest.raises(AssessmentResponseInvalidError):
+    def test_missing_events_key_raises_events_key_missing_in_scope(self) -> None:
+        with pytest.raises(AssessmentResponseInvalidError) as exc_info:
             parse_assessment({"category": "ai", "investor_take": "x"})
+        assert exc_info.value.code == AssessmentResponseDefect.EVENTS_KEY_MISSING
 
-    def test_missing_events_key_raises_invalid_out_of_scope(self) -> None:
+    def test_missing_events_key_raises_events_key_missing_out_of_scope(self) -> None:
         # strict 化方針: OutOfScope でも events key は必須
-        with pytest.raises(AssessmentResponseInvalidError):
+        with pytest.raises(AssessmentResponseInvalidError) as exc_info:
             parse_assessment(
                 {
                     "category": "out_of_scope",
                     "investor_take": "x",
                 }
             )
+        assert exc_info.value.code == AssessmentResponseDefect.EVENTS_KEY_MISSING
 
 
 class TestParseAssessmentNonStrTypes:
-    """型不一致: ``isinstance(..., str)`` で reject される 6 型を網羅。"""
+    """型不一致: ``isinstance(..., str)`` で reject + field 別 wrong_type defect。"""
 
     @pytest.mark.parametrize("non_str_value", [123, 1.5, None, [], {}, True])
-    def test_non_str_category_raises_invalid(self, non_str_value: object) -> None:
-        with pytest.raises(AssessmentResponseInvalidError):
+    def test_non_str_category_raises_category_wrong_type(
+        self, non_str_value: object
+    ) -> None:
+        with pytest.raises(AssessmentResponseInvalidError) as exc_info:
             parse_assessment(_payload(category=non_str_value))
+        assert exc_info.value.code == AssessmentResponseDefect.CATEGORY_WRONG_TYPE
 
     @pytest.mark.parametrize("non_str_value", [123, 1.5, None, [], {}, True])
-    def test_non_str_investor_take_raises_invalid(self, non_str_value: object) -> None:
-        with pytest.raises(AssessmentResponseInvalidError):
+    def test_non_str_investor_take_raises_investor_take_wrong_type(
+        self, non_str_value: object
+    ) -> None:
+        with pytest.raises(AssessmentResponseInvalidError) as exc_info:
             parse_assessment(_payload(investor_take=non_str_value))
+        assert exc_info.value.code == AssessmentResponseDefect.INVESTOR_TAKE_WRONG_TYPE
 
 
 class TestParseAssessmentEventsType:
-    """events 型強制: list 以外は reject。"""
+    """events 型強制: list 以外は ``EVENTS_WRONG_TYPE``。"""
 
     @pytest.mark.parametrize("non_list_value", ["not a list", 123, 1.5, None, {}, True])
-    def test_non_list_events_raises_invalid_in_scope(
+    def test_non_list_events_raises_events_wrong_type_in_scope(
         self, non_list_value: object
     ) -> None:
-        with pytest.raises(AssessmentResponseInvalidError):
+        with pytest.raises(AssessmentResponseInvalidError) as exc_info:
             parse_assessment(_payload(category="ai", events=non_list_value))
+        assert exc_info.value.code == AssessmentResponseDefect.EVENTS_WRONG_TYPE
 
     @pytest.mark.parametrize("non_list_value", ["not a list", 123, 1.5, None, {}, True])
-    def test_non_list_events_raises_invalid_out_of_scope(
+    def test_non_list_events_raises_events_wrong_type_out_of_scope(
         self, non_list_value: object
     ) -> None:
-        with pytest.raises(AssessmentResponseInvalidError):
+        with pytest.raises(AssessmentResponseInvalidError) as exc_info:
             parse_assessment(_payload(category="out_of_scope", events=non_list_value))
+        assert exc_info.value.code == AssessmentResponseDefect.EVENTS_WRONG_TYPE
 
 
 class TestParseAssessmentValidationErrors:
-    """値レベルの validation 違反: enum 外値 / min_length。"""
+    """値レベルの validation 違反: enum 外値 / 最終構築の field 制約。"""
 
-    def test_invalid_category_value_raises_invalid(self) -> None:
-        with pytest.raises(AssessmentResponseInvalidError):
+    def test_invalid_category_value_raises_category_unknown_value(self) -> None:
+        with pytest.raises(AssessmentResponseInvalidError) as exc_info:
             parse_assessment(_payload(category="made_up_value"))
+        assert exc_info.value.code == AssessmentResponseDefect.CATEGORY_UNKNOWN_VALUE
 
-    def test_empty_investor_take_raises_invalid(self) -> None:
-        # InScope.investor_take は min_length=1
-        with pytest.raises(AssessmentResponseInvalidError):
+    def test_empty_investor_take_raises_investor_take_invalid(self) -> None:
+        # InScope.investor_take は min_length=1 / _not_empty → 最終構築で捕捉
+        with pytest.raises(AssessmentResponseInvalidError) as exc_info:
             parse_assessment(_payload(category="ai", investor_take=""))
+        assert exc_info.value.code == AssessmentResponseDefect.INVESTOR_TAKE_INVALID
+
+    def test_empty_investor_take_out_of_scope_raises_investor_take_invalid(
+        self,
+    ) -> None:
+        # OutOfScope.investor_take も min_length=1 (両 path 対称)
+        with pytest.raises(AssessmentResponseInvalidError) as exc_info:
+            parse_assessment(_payload(category="out_of_scope", investor_take=""))
+        assert exc_info.value.code == AssessmentResponseDefect.INVESTOR_TAKE_INVALID
+
+    def test_too_many_events_raises_events_too_many(self) -> None:
+        # events は max_length=10。要素自体は valid だが件数超過 → 最終構築で捕捉。
+        events = [{"description": f"event {i}", "mentions": []} for i in range(11)]
+        with pytest.raises(AssessmentResponseInvalidError) as exc_info:
+            parse_assessment(_payload(category="ai", events=events))
+        assert exc_info.value.code == AssessmentResponseDefect.EVENTS_TOO_MANY
 
 
 class TestParseAssessmentEvents:
@@ -223,18 +255,20 @@ class TestParseAssessmentEvents:
         assert isinstance(result, OutOfScope)
         assert result.events == []
 
-    def test_event_with_empty_description_raises_invalid(self) -> None:
-        with pytest.raises(AssessmentResponseInvalidError):
+    def test_event_with_empty_description_raises_event_invalid(self) -> None:
+        with pytest.raises(AssessmentResponseInvalidError) as exc_info:
             parse_assessment(
                 _payload(
                     category="ai",
                     events=[{"description": "", "mentions": []}],
                 )
             )
+        assert exc_info.value.code == AssessmentResponseDefect.EVENT_INVALID
 
-    def test_event_missing_description_raises_invalid(self) -> None:
-        with pytest.raises(AssessmentResponseInvalidError):
+    def test_event_missing_description_raises_event_invalid(self) -> None:
+        with pytest.raises(AssessmentResponseInvalidError) as exc_info:
             parse_assessment(_payload(category="ai", events=[{"mentions": []}]))
+        assert exc_info.value.code == AssessmentResponseDefect.EVENT_INVALID
 
     def test_event_missing_mentions_raises_invalid(self) -> None:
         # mentions は必須 key (default 適用は Pydantic 側だが、本 schema 経由
@@ -247,8 +281,8 @@ class TestParseAssessmentEvents:
         assert isinstance(result, InScope)
         assert result.events[0].mentions == []
 
-    def test_event_with_invalid_mention_type_raises_invalid(self) -> None:
-        with pytest.raises(AssessmentResponseInvalidError):
+    def test_event_with_invalid_mention_type_raises_event_invalid(self) -> None:
+        with pytest.raises(AssessmentResponseInvalidError) as exc_info:
             parse_assessment(
                 _payload(
                     category="ai",
@@ -260,29 +294,43 @@ class TestParseAssessmentEvents:
                     ],
                 )
             )
+        assert exc_info.value.code == AssessmentResponseDefect.EVENT_INVALID
 
-    def test_event_with_non_dict_element_raises_invalid(self) -> None:
-        with pytest.raises(AssessmentResponseInvalidError):
+    def test_event_with_non_dict_element_raises_event_invalid(self) -> None:
+        with pytest.raises(AssessmentResponseInvalidError) as exc_info:
             parse_assessment(_payload(category="ai", events=["not a dict"]))
+        assert exc_info.value.code == AssessmentResponseDefect.EVENT_INVALID
 
 
 class TestParseAssessmentErrorContract:
     """raise される ``AssessmentResponseInvalidError`` の attr / cause 連鎖。"""
 
-    def test_invalid_error_chains_original_exception(self) -> None:
-        # __cause__ が KeyError / ValueError (ValidationError は ValueError 派生)。
+    def test_unknown_category_chains_value_error(self) -> None:
+        # 値違反系は原例外を __cause__ に連鎖する (enum 外値は ValueError 由来)。
         with pytest.raises(AssessmentResponseInvalidError) as exc_info:
             parse_assessment(_payload(category="made_up_value"))
-        assert exc_info.value.__cause__ is not None
-        assert isinstance(exc_info.value.__cause__, (KeyError, ValueError))
+        assert isinstance(exc_info.value.__cause__, ValueError)
 
-    def test_invalid_error_carries_correct_code(self) -> None:
+    def test_missing_key_chains_key_error(self) -> None:
+        # key 欠落は KeyError を __cause__ に連鎖する。
+        with pytest.raises(AssessmentResponseInvalidError) as exc_info:
+            parse_assessment({"investor_take": "x", "events": []})
+        assert isinstance(exc_info.value.__cause__, KeyError)
+
+    def test_wrong_type_has_no_cause(self) -> None:
+        # 型違反は自前 isinstance 判定なので原例外 (cause) を持たない。
+        with pytest.raises(AssessmentResponseInvalidError) as exc_info:
+            parse_assessment(_payload(category=123))
+        assert exc_info.value.__cause__ is None
+
+    def test_empty_payload_carries_first_missing_key_code(self) -> None:
+        # 空 payload は最初に引く category key の欠落 defect を焼く。
         with pytest.raises(AssessmentResponseInvalidError) as exc_info:
             parse_assessment({})
-        assert exc_info.value.code == "assessment_response_invalid"
+        assert exc_info.value.code == AssessmentResponseDefect.CATEGORY_KEY_MISSING
 
     def test_invalid_error_provider_error_is_none(self) -> None:
-        # Layer 2-B (Stage 4 工程由来) なので provider_error は常に None
+        # parse 由来 (Stage 4 工程内) なので provider_error は常に None
         with pytest.raises(AssessmentResponseInvalidError) as exc_info:
             parse_assessment({})
         assert exc_info.value.provider_error is None

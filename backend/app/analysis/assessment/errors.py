@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from enum import StrEnum
 from typing import ClassVar
 
 from app.analysis.ai_provider_errors import (
@@ -102,13 +103,25 @@ class AssessmentTerminalTargetRejectedError(AssessmentTerminalError):
 
 
 class AssessmentResponseInvalidError(AssessmentRecoverableError):
-    """AI 応答が assessment schema に合致しない。"""
+    """AI 応答が assessment として使えない (Recoverable marker)。
 
-    def __init__(self) -> None:
-        super().__init__(
-            code="assessment_response_invalid",
-            provider_error=None,
-        )
+    marker は「AI 応答が assessment に使えない」という分類と recoverable 性だけを
+    担う。「なぜ失敗したか」は ``defect`` の値が運ぶ。``defect`` は失敗を検知した
+    場所 (``parse.py`` の ``AssessmentResponseDefect`` / 各 provider adapter の
+    ``*ResponseDefect``) が所有する ``StrEnum`` member で、その ``value`` がそのまま
+    audit の ``outcome_code`` になる (監査ステージは再分類しない)。
+
+    本 module は検知場所の enum を import せず ``StrEnum`` で受ける (依存方向を
+    検知場所 → marker に保ち、provider 追加で本 module を触らない)。型ガードにより
+    自由文字列 (= AI 生成値 = PII を載せうる) を ctor に通さず、監査に焼くのは
+    StrEnum member の value (種別ラベル) だけに限定する。
+    """
+
+    def __init__(self, defect: StrEnum) -> None:
+        if not isinstance(defect, StrEnum):
+            # PII 境界: 種別ラベル (StrEnum) 以外を code に昇格させない。
+            raise TypeError("defect must be a StrEnum member")
+        super().__init__(code=defect.value, provider_error=None)
 
 
 class AssessmentCategoryMissingError(AssessmentTerminalError):

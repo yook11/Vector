@@ -22,6 +22,7 @@ from app.analysis.ai_provider_errors import (
 )
 from app.analysis.assessment.ai.base import BaseAssessor
 from app.analysis.assessment.ai.envelope import AssessmentCall
+from app.analysis.assessment.ai.parse import AssessmentResponseDefect
 from app.analysis.assessment.domain.result import InScope, OutOfScope
 from app.analysis.assessment.errors import (
     AssessmentRecoverableError,
@@ -127,7 +128,9 @@ class TestCallOncePassthrough:
 
     @pytest.mark.asyncio
     async def test_assessment_response_invalid_passes_through_unchanged(self) -> None:
-        original = AssessmentResponseInvalidError()
+        original = AssessmentResponseInvalidError(
+            AssessmentResponseDefect.CATEGORY_KEY_MISSING
+        )
         cls = _StubAssessor()
         cls._call_api = AsyncMock(side_effect=original)  # type: ignore[method-assign]
         cls._translate_error = MagicMock(  # type: ignore[method-assign]

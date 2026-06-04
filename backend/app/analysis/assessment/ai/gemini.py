@@ -9,6 +9,7 @@ gen_config / response_schema / version / rate_limit_policy) は
 from __future__ import annotations
 
 import json
+from enum import StrEnum
 from typing import Final
 
 import structlog
@@ -39,6 +40,19 @@ logger = structlog.get_logger(__name__)
 # 知らせるシグナルなので、_translate_error 経由ではなく _call_api 内で
 # AIProviderOutputBlockedError に直接 raise する。
 _BLOCKED_FINISH_REASONS = frozenset({"SAFETY", "RECITATION"})
+
+
+class GeminiResponseDefect(StrEnum):
+    """Gemini adapter が検知する envelope 契約違反 (自己記述コード)。
+
+    spec は ``response_mime_type=application/json`` で JSON 出力を強制している。
+    それでも非 JSON / 非 object が返るのは provider が機構契約を破った状態で、
+    parse が扱う「内容の schema 違反」とは別レイヤ。検知場所である本 adapter が
+    語彙を所有し、value はそのまま audit の ``outcome_code`` に焼かれる。
+    """
+
+    NOT_JSON = "assessment_response_gemini_not_json"
+    NOT_OBJECT = "assessment_response_gemini_not_object"
 
 
 class GeminiAssessor(BaseAssessor):
@@ -106,10 +120,10 @@ class GeminiAssessor(BaseAssessor):
             payload = json.loads(text)
         except json.JSONDecodeError as exc:
             # raw AI 応答は例外 message に含めない。
-            raise AssessmentResponseInvalidError() from exc
+            raise AssessmentResponseInvalidError(GeminiResponseDefect.NOT_JSON) from exc
 
         if not isinstance(payload, dict):
-            raise AssessmentResponseInvalidError()
+            raise AssessmentResponseInvalidError(GeminiResponseDefect.NOT_OBJECT)
 
         # parse_assessment を先に通すことで strict 規約 (3 key 存在 + str 型強制)
         # を担保。通過後の payload["category"] は str 確定なので str() 暗黙 coerce

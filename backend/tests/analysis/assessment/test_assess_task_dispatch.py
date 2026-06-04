@@ -22,6 +22,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from app.analysis.assessment.ai.parse import AssessmentResponseDefect
 from app.analysis.assessment.domain.ready import ReadyForAssessment
 from app.analysis.assessment.errors import (
     AssessmentCategoryMissingError,
@@ -223,7 +224,7 @@ async def test_response_invalid_dispatches_to_handler() -> None:
     from app.queue.tasks.assessment import assess_content
 
     ctx = _make_ctx()
-    exc = AssessmentResponseInvalidError()
+    exc = AssessmentResponseInvalidError(AssessmentResponseDefect.CATEGORY_KEY_MISSING)
 
     with (
         _patch_ready_construction(),

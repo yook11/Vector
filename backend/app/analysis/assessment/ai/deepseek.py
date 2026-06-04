@@ -13,6 +13,7 @@ gen_config / response_schema / tool_name / base_url / version / rate_limit_polic
 from __future__ import annotations
 
 import json
+from enum import StrEnum
 from typing import Final
 
 import structlog
@@ -52,6 +53,22 @@ from app.analysis.rate_limit import AIModelRateLimitPolicy
 from app.config import settings
 
 logger = structlog.get_logger(__name__)
+
+
+class DeepSeekResponseDefect(StrEnum):
+    """DeepSeek adapter が検知する envelope 契約違反 (自己記述コード)。
+
+    spec は ``tool_choice`` で ``assess_article`` の呼び出しを強制している。
+    それでも tool_call が欠落 / tool 名が違う / arguments が非 JSON・非 object に
+    なるのは provider が機構契約を破った状態で、parse が扱う「内容の schema 違反」
+    とは別レイヤ。検知場所である本 adapter が語彙を所有し、value はそのまま audit
+    の ``outcome_code`` に焼かれる。
+    """
+
+    NO_TOOL_CALL = "assessment_response_deepseek_no_tool_call"
+    WRONG_TOOL_NAME = "assessment_response_deepseek_wrong_tool_name"
+    ARGUMENTS_NOT_JSON = "assessment_response_deepseek_arguments_not_json"
+    ARGUMENTS_NOT_DICT = "assessment_response_deepseek_arguments_not_dict"
 
 
 class DeepSeekAssessor(BaseAssessor):
@@ -123,20 +140,26 @@ class DeepSeekAssessor(BaseAssessor):
 
         choice = resp.choices[0]
         tool_calls = choice.message.tool_calls or []
-        if not tool_calls or tool_calls[0].function.name != tool_name:
-            # tool_call 構造欠落は AI 応答の schema 違反として扱い、
-            # terminal な request invalid にはしない。
-            raise AssessmentResponseInvalidError()
+        # tool_call 構造違反は AI 応答の schema 違反として扱い、terminal な request
+        # invalid にはしない。tool_call 欠落と tool 名相違を別 defect に分ける。
+        if not tool_calls:
+            raise AssessmentResponseInvalidError(DeepSeekResponseDefect.NO_TOOL_CALL)
+        if tool_calls[0].function.name != tool_name:
+            raise AssessmentResponseInvalidError(DeepSeekResponseDefect.WRONG_TOOL_NAME)
 
         raw_arguments = tool_calls[0].function.arguments or ""
         try:
             payload = json.loads(raw_arguments)
         except json.JSONDecodeError as exc:
             # raw AI 応答は例外 message に含めない。
-            raise AssessmentResponseInvalidError() from exc
+            raise AssessmentResponseInvalidError(
+                DeepSeekResponseDefect.ARGUMENTS_NOT_JSON
+            ) from exc
 
         if not isinstance(payload, dict):
-            raise AssessmentResponseInvalidError()
+            raise AssessmentResponseInvalidError(
+                DeepSeekResponseDefect.ARGUMENTS_NOT_DICT
+            )
 
         # parse_assessment を先に通すことで strict 規約 (3 key 存在 + str 型強制)
         # を担保。通過後の payload["category"] は str 確定なので str() 暗黙 coerce

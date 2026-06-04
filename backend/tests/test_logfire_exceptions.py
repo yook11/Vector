@@ -24,6 +24,7 @@ from app.analysis.ai_provider_errors import (
     AIProviderServiceUnavailableError,
     AIProviderUsageLimitExhaustedError,
 )
+from app.analysis.assessment.ai.parse import AssessmentResponseDefect
 from app.analysis.assessment.errors import (
     AssessmentCategoryMissingError,
     AssessmentError,
@@ -238,11 +239,11 @@ def test_assessment_embedding_layer1_rejects_positional_message(
         cls("legacy_message")  # type: ignore[call-arg]
 
 
-# Layer 2-B subclasses (4 class): no-arg constructor + 固定 code
-
+# 無引数 + 固定 code の marker (3 class): no-arg constructor + 固定 code。
+# ``AssessmentResponseInvalidError`` は defect を受ける marker に変わったため
+# 本群から外す (defect 版の契約は ``test_errors.py`` が所有)。
 _LAYER2B_FIXED_CODE: tuple[tuple[type[VectorDomainError], str], ...] = (
     (CurationResponseInvalidError, "extraction_response_invalid"),
-    (AssessmentResponseInvalidError, "assessment_response_invalid"),
     (AssessmentCategoryMissingError, "assessment_category_missing"),
     (EmbeddingResponseInvalidError, "embedding_response_invalid"),
 )
@@ -305,7 +306,8 @@ def _build_22_class_instances() -> list[VectorDomainError]:
         AssessmentTerminalTargetRejectedError(
             code="ai_error_input_rejected", provider_error=provider
         ),
-        AssessmentResponseInvalidError(),
+        # defect の value は種別ラベル (PII-free) なので PII oracle に載せて安全。
+        AssessmentResponseInvalidError(AssessmentResponseDefect.CATEGORY_KEY_MISSING),
         AssessmentCategoryMissingError(),
         # Embedding 3 (Layer 1) + 1 (Layer 2-B)
         EmbeddingRecoverableError(code="ai_error_network", provider_error=provider),

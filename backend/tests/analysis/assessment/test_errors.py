@@ -7,6 +7,8 @@ code。``message`` 引数経路は廃止 (PII 隔離契約)。
 
 from __future__ import annotations
 
+from enum import StrEnum
+
 import pytest
 
 from app.analysis.ai_provider_errors import (
@@ -159,8 +161,19 @@ class TestStage4MarkerHierarchy:
 # Layer 2-B markers (PR2 で追加、Stage 4 工程由来 / provider_error=None 固定)
 
 
+class _SampleDefect(StrEnum):
+    """型ガード契約を検証するためのローカル defect (検知場所の enum を模す)。"""
+
+    SOMETHING = "sample_something"
+
+
 class TestAssessmentResponseInvalidError:
-    """Layer 2-B marker: ``AssessmentResponseInvalidError`` (Recoverable 系)。"""
+    """marker ``AssessmentResponseInvalidError`` (Recoverable 系、defect 載せ替え)。
+
+    marker は検知場所の enum を import せず ``StrEnum`` で受ける。code は渡された
+    defect の value、型ガードで非 StrEnum を拒否する (PII 境界) ことを isolation で
+    確認する (parse / provider の具体 enum とは結合しない)。
+    """
 
     def test_is_recoverable_subclass(self) -> None:
         assert issubclass(AssessmentResponseInvalidError, AssessmentRecoverableError)
@@ -168,23 +181,23 @@ class TestAssessmentResponseInvalidError:
     def test_is_assessment_error_subclass(self) -> None:
         assert issubclass(AssessmentResponseInvalidError, AssessmentError)
 
-    def test_holds_fixed_code(self) -> None:
-        exc = AssessmentResponseInvalidError()
-        assert exc.code == "assessment_response_invalid"
+    def test_code_is_defect_value(self) -> None:
+        exc = AssessmentResponseInvalidError(_SampleDefect.SOMETHING)
+        assert exc.code == "sample_something"
 
     def test_provider_error_is_none(self) -> None:
-        exc = AssessmentResponseInvalidError()
+        exc = AssessmentResponseInvalidError(_SampleDefect.SOMETHING)
         assert exc.provider_error is None
 
     def test_str_renders_code_only(self) -> None:
-        exc = AssessmentResponseInvalidError()
-        # Phase 4: 旧 message 引数廃止、__str__ は code のみ
-        expected = "AssessmentResponseInvalidError(code='assessment_response_invalid')"
-        assert str(exc) == expected
+        exc = AssessmentResponseInvalidError(_SampleDefect.SOMETHING)
+        # __str__ は class name + SAFE_ATTRS=("code",) のみ (PII 非露出)
+        assert str(exc) == "AssessmentResponseInvalidError(code='sample_something')"
 
-    def test_positional_message_rejected(self) -> None:
+    def test_non_strenum_defect_rejected(self) -> None:
+        # 型ガード: 自由文字列 (= PII を載せうる) を ctor に通さない。
         with pytest.raises(TypeError):
-            AssessmentResponseInvalidError("schema mismatch")  # type: ignore[call-arg]
+            AssessmentResponseInvalidError("schema mismatch")  # type: ignore[arg-type]
 
 
 class TestAssessmentCategoryMissingError:

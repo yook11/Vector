@@ -23,7 +23,8 @@ from pydantic import SecretStr
 
 from app.analysis.ai_provider_errors import AIProviderOutputBlockedError
 from app.analysis.assessment.ai.envelope import AssessmentCall
-from app.analysis.assessment.ai.gemini import GeminiAssessor
+from app.analysis.assessment.ai.gemini import GeminiAssessor, GeminiResponseDefect
+from app.analysis.assessment.ai.parse import AssessmentResponseDefect
 from app.analysis.assessment.ai.spec import GEMINI_ASSESSMENT_SPEC
 from app.analysis.assessment.domain.result import InScope, InScopeCategory, OutOfScope
 from app.analysis.assessment.errors import AssessmentResponseInvalidError
@@ -168,21 +169,18 @@ class TestGeminiFinishReasonBlocked:
 
 class TestGeminiInvalidPayload:
     @pytest.mark.asyncio
-    async def test_invalid_json_raises_response_invalid(self) -> None:
-        """Phase 4: __str__ は code 固定値のみ。
-
-        marker class + code で identity を pin。
-        """
+    async def test_invalid_json_raises_gemini_not_json(self) -> None:
+        """非 JSON は adapter 所有 ``NOT_JSON`` defect で envelope 契約違反を焼く。"""
         assessor = GeminiAssessor()
         _patch_assessor_call(assessor, _stub_response("not json at all"))
 
         with pytest.raises(AssessmentResponseInvalidError) as exc_info:
             await assessor._call_api("prompt")
 
-        assert exc_info.value.code == "assessment_response_invalid"
+        assert exc_info.value.code == GeminiResponseDefect.NOT_JSON
 
     @pytest.mark.asyncio
-    async def test_non_object_payload_raises_response_invalid(self) -> None:
+    async def test_non_object_payload_raises_gemini_not_object(self) -> None:
         assessor = GeminiAssessor()
         # JSON array (list) は object ではないので reject
         _patch_assessor_call(assessor, _stub_response("[1, 2, 3]"))
@@ -190,23 +188,27 @@ class TestGeminiInvalidPayload:
         with pytest.raises(AssessmentResponseInvalidError) as exc_info:
             await assessor._call_api("prompt")
 
-        assert exc_info.value.code == "assessment_response_invalid"
+        assert exc_info.value.code == GeminiResponseDefect.NOT_OBJECT
 
     @pytest.mark.asyncio
-    async def test_missing_key_payload_raises_response_invalid(self) -> None:
-        """parse_assessment の key 欠落で AssessmentResponseInvalidError raise。"""
+    async def test_missing_key_payload_surfaces_parse_defect(self) -> None:
+        """parse の内容違反 (key 欠落) が adapter を素通りして焼かれる。"""
         assessor = GeminiAssessor()
         text = json.dumps({"category": "ai"})  # investor_take 欠落
         _patch_assessor_call(assessor, _stub_response(text))
 
-        with pytest.raises(AssessmentResponseInvalidError):
+        with pytest.raises(AssessmentResponseInvalidError) as exc_info:
             await assessor._call_api("prompt")
 
+        assert exc_info.value.code == AssessmentResponseDefect.INVESTOR_TAKE_KEY_MISSING
+
     @pytest.mark.asyncio
-    async def test_empty_text_raises_response_invalid(self) -> None:
-        """response.text が None / 空 → JSON parse 失敗 → invalid。"""
+    async def test_empty_text_raises_gemini_not_json(self) -> None:
+        """response.text が None / 空 → JSON parse 失敗 → ``NOT_JSON``。"""
         assessor = GeminiAssessor()
         _patch_assessor_call(assessor, _stub_response(""))
 
-        with pytest.raises(AssessmentResponseInvalidError):
+        with pytest.raises(AssessmentResponseInvalidError) as exc_info:
             await assessor._call_api("prompt")
+
+        assert exc_info.value.code == GeminiResponseDefect.NOT_JSON

@@ -13,6 +13,7 @@ provider 固有の SDK 例外翻訳は各 assessor 実装側 (``gemini.py`` / ``
 
 from __future__ import annotations
 
+from enum import StrEnum
 from typing import Any
 
 from pydantic import ValidationError
@@ -26,6 +27,54 @@ from app.analysis.assessment.domain.result import (
     ValidCategory,
 )
 from app.analysis.assessment.errors import AssessmentResponseInvalidError
+
+
+class AssessmentResponseDefect(StrEnum):
+    """parse が検知する「内容の schema 違反」種別 (自己記述コード、provider 非依存)。
+
+    value はそのまま audit の ``outcome_code`` に焼かれる (完成段
+    ``AnalyzableArticleDefect`` と同形)。失敗を検知した parse がその語彙を所有し、
+    ``AssessmentResponseInvalidError(defect)`` に載せて投げる。各 member は下の
+    raise 点と 1:1 対応し、写像漏れが原理的に起きない。
+
+    中身 (AI 生成値 = PII) は焼かず、どの field がどう違反したかの種別ラベルだけを
+    残す。provider envelope の違反 (非 JSON / tool_call 欠落等) は各 adapter が別の
+    enum で所有する (parse は payload dict を受け取った後の内容違反のみ扱う)。
+    """
+
+    # 3 key の欠落 (KeyError)
+    CATEGORY_KEY_MISSING = "assessment_response_category_key_missing"
+    INVESTOR_TAKE_KEY_MISSING = "assessment_response_investor_take_key_missing"
+    EVENTS_KEY_MISSING = "assessment_response_events_key_missing"
+    # 文字列 / list 型違反 (isinstance 先頭検証)
+    CATEGORY_WRONG_TYPE = "assessment_response_category_wrong_type"
+    INVESTOR_TAKE_WRONG_TYPE = "assessment_response_investor_take_wrong_type"
+    EVENTS_WRONG_TYPE = "assessment_response_events_wrong_type"
+    # 値違反 (category enum 外値 / event 要素検証 / 最終構築の制約違反)
+    CATEGORY_UNKNOWN_VALUE = "assessment_response_category_unknown_value"
+    EVENT_INVALID = "assessment_response_event_invalid"
+    INVESTOR_TAKE_INVALID = "assessment_response_investor_take_invalid"
+    EVENTS_TOO_MANY = "assessment_response_events_too_many"
+
+
+def _final_construction_defect(
+    exc: ValidationError,
+) -> AssessmentResponseDefect | None:
+    """最終構築 (``InScope`` / ``OutOfScope``) の ``ValidationError`` を分類する。
+
+    ``loc[0]`` が既知 field なら対応 defect を返す。未知 loc は写像漏れを誤ラベル
+    しないよう ``None`` を返し、呼び出し側が素の ``ValidationError`` を伝播させる。
+    再チェックでなく分類 (Field constraint が捕えた error を field 名で写像する)。
+    """
+    first_loc = exc.errors()[0]["loc"]
+    field = str(first_loc[0]) if first_loc else ""
+    if field == "investor_take":
+        # 最終構築でのみ起きる: 空 (min_length=1 / _not_empty) または長さ超過。
+        return AssessmentResponseDefect.INVESTOR_TAKE_INVALID
+    if field == "events":
+        # 最終構築でのみ起きる: 要素は valid だが件数が max_length=10 を超過。
+        return AssessmentResponseDefect.EVENTS_TOO_MANY
+    return None
 
 
 def parse_assessment(payload: dict[str, Any]) -> AssessmentResult:
@@ -52,23 +101,59 @@ def parse_assessment(payload: dict[str, Any]) -> AssessmentResult:
         ``events`` は InScope / OutOfScope どちらの経路でも domain に保持する
         (out-of-scope 記事の events も検証用途で残す、両 path 対称)。
     """
+    # key 取得: 各 key 欠落を個別 defect に分類する (どの key が欠けたか可視化)。
     try:
         category_raw = payload["category"]
+    except KeyError as exc:
+        raise AssessmentResponseInvalidError(
+            AssessmentResponseDefect.CATEGORY_KEY_MISSING
+        ) from exc
+    try:
         investor_take_raw = payload["investor_take"]
+    except KeyError as exc:
+        raise AssessmentResponseInvalidError(
+            AssessmentResponseDefect.INVESTOR_TAKE_KEY_MISSING
+        ) from exc
+    try:
         events_raw = payload["events"]
-        if not isinstance(category_raw, str):
-            raise ValueError(
-                f"'category' must be str, got {type(category_raw).__name__}"
-            )
-        if not isinstance(investor_take_raw, str):
-            raise ValueError(
-                f"'investor_take' must be str, got {type(investor_take_raw).__name__}"
-            )
-        if not isinstance(events_raw, list):
-            raise ValueError(f"'events' must be list, got {type(events_raw).__name__}")
+    except KeyError as exc:
+        raise AssessmentResponseInvalidError(
+            AssessmentResponseDefect.EVENTS_KEY_MISSING
+        ) from exc
 
+    # 型違反: isinstance 先頭検証。自前判定なので原例外 (cause) はない。
+    if not isinstance(category_raw, str):
+        raise AssessmentResponseInvalidError(
+            AssessmentResponseDefect.CATEGORY_WRONG_TYPE
+        )
+    if not isinstance(investor_take_raw, str):
+        raise AssessmentResponseInvalidError(
+            AssessmentResponseDefect.INVESTOR_TAKE_WRONG_TYPE
+        )
+    if not isinstance(events_raw, list):
+        raise AssessmentResponseInvalidError(AssessmentResponseDefect.EVENTS_WRONG_TYPE)
+
+    # events 要素の Pydantic 検証 (description 空 / mention type 外値 / 非 dict 等)。
+    try:
         events = [Event.model_validate(e) for e in events_raw]
+    except ValidationError as exc:
+        # ValidationError は payload 値を含みうるため、公開 message には載せない。
+        raise AssessmentResponseInvalidError(
+            AssessmentResponseDefect.EVENT_INVALID
+        ) from exc
+
+    # category enum 外値。
+    try:
         category = ValidCategory(category_raw)
+    except ValueError as exc:
+        raise AssessmentResponseInvalidError(
+            AssessmentResponseDefect.CATEGORY_UNKNOWN_VALUE
+        ) from exc
+
+    # 最終構築: InScope / OutOfScope の Field 制約 (investor_take 空/長さ,
+    # events 件数上限) 違反を field 名で分類する。未知 loc は誤ラベルせず素の
+    # ValidationError を伝播させる (task 層が unexpected_error に surface する)。
+    try:
         if category == ValidCategory.OUT_OF_SCOPE:
             return OutOfScope(
                 investor_take=investor_take_raw,
@@ -79,6 +164,8 @@ def parse_assessment(payload: dict[str, Any]) -> AssessmentResult:
             investor_take=investor_take_raw,
             events=events,
         )
-    except (KeyError, ValueError, ValidationError) as exc:
-        # ValidationError は payload 値を含みうるため、公開 message には載せない。
-        raise AssessmentResponseInvalidError() from exc
+    except ValidationError as exc:
+        defect = _final_construction_defect(exc)
+        if defect is None:
+            raise
+        raise AssessmentResponseInvalidError(defect) from exc

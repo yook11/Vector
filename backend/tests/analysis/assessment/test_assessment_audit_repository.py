@@ -14,8 +14,8 @@ audit row の shape SSoT が repository に集約されたことを検証する:
 - ``append_failure`` で **exc 型による 3 dispatch + Layer 2-B + catch-all** が動作:
   - ``AssessmentRecoverableError`` → ``retryability=retryable``
   - ``AssessmentTerminalStageBlockedError`` → ``retryability=non_retryable``
-  - ``AssessmentResponseInvalidError`` (Layer 2-B) → ``retryability=retryable`` /
-    ``outcome_code="assessment_response_invalid"``
+  - ``AssessmentResponseInvalidError`` (defect 載せ替え) → ``retryability=retryable`` /
+    ``outcome_code`` は defect の value (parse 由来 / provider envelope 由来とも具体値)
   - ``AssessmentCategoryMissingError`` (Layer 2-B) →
     ``retryability=non_retryable`` / ``outcome_code="assessment_category_missing"``
   - 想定外 ``RuntimeError`` → ``retryability=unknown`` /
@@ -41,7 +41,9 @@ from sqlalchemy.exc import (
 )
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from app.analysis.assessment.ai.deepseek import DeepSeekResponseDefect
 from app.analysis.assessment.ai.envelope import AssessmentCall
+from app.analysis.assessment.ai.parse import AssessmentResponseDefect
 from app.analysis.assessment.domain.ready import (
     AssessmentReadyBuildBlockedCode,
     AssessmentReadyBuildBlockedError,
@@ -618,18 +620,19 @@ async def test_append_failure_terminal_target_rejected(
 
 
 @pytest.mark.asyncio
-async def test_append_failure_layer_2b_response_invalid(
+async def test_append_failure_response_invalid_bakes_parse_defect_code(
     db_session: AsyncSession,
     session_factory: async_sessionmaker[AsyncSession],
     sample_source: NewsSource,
 ) -> None:
-    """Layer 2-B AssessmentResponseInvalidError は Recoverable 継承で retryable。
+    """parse 由来 defect は具体 ``outcome_code`` として焼かれ、retryable を維持。
 
-    ctor は message のみ、code は内部で hardcode (assessment_response_invalid)。
+    marker が ``code=defect.value`` を持つので監査ステージ無変更で具体コードが
+    流れる (内容の schema 違反でも recoverable 統一)。
     """
     article = await _make_article(db_session, sample_source)
     extraction = await _make_extraction(db_session, article)
-    exc = AssessmentResponseInvalidError()
+    exc = AssessmentResponseInvalidError(AssessmentResponseDefect.CATEGORY_KEY_MISSING)
 
     async with session_factory() as session:
         await AssessmentAuditRepository(session).append_failure(
@@ -639,7 +642,36 @@ async def test_append_failure_layer_2b_response_invalid(
         await session.commit()
 
     ev = await _fetch_one(db_session, article.id)
-    assert ev.outcome_code == "assessment_response_invalid"
+    assert ev.outcome_code == "assessment_response_category_key_missing"
+    assert ev.retryability == "retryable"
+    assert ev.payload["failure_kind"] == "recoverable"
+    assert ev.payload["failure_action"] is None
+
+
+@pytest.mark.asyncio
+async def test_append_failure_response_invalid_bakes_provider_envelope_code(
+    db_session: AsyncSession,
+    session_factory: async_sessionmaker[AsyncSession],
+    sample_source: NewsSource,
+) -> None:
+    """provider envelope 由来 defect も具体 ``outcome_code`` で焼かれ retryable 維持。
+
+    marker は 1 つなので provider 契約違反 (tool_call 欠落等) も recoverable で揃う
+    — 設定起因の故障は retryability でなく code (provider 名入り) で可視化する。
+    """
+    article = await _make_article(db_session, sample_source)
+    extraction = await _make_extraction(db_session, article)
+    exc = AssessmentResponseInvalidError(DeepSeekResponseDefect.NO_TOOL_CALL)
+
+    async with session_factory() as session:
+        await AssessmentAuditRepository(session).append_failure(
+            ready=_ready(extraction),
+            exc=exc,
+        )
+        await session.commit()
+
+    ev = await _fetch_one(db_session, article.id)
+    assert ev.outcome_code == "assessment_response_deepseek_no_tool_call"
     assert ev.retryability == "retryable"
     assert ev.payload["failure_kind"] == "recoverable"
     assert ev.payload["failure_action"] is None
