@@ -26,11 +26,9 @@ from app.analysis.ai_provider_errors import (
 )
 from app.analysis.assessment.ai.parse import AssessmentResponseDefect
 from app.analysis.assessment.errors import (
-    AssessmentCategoryMissingError,
     AssessmentError,
     AssessmentRecoverableError,
     AssessmentResponseInvalidError,
-    AssessmentTerminalError,
     AssessmentTerminalStageBlockedError,
     AssessmentTerminalTargetRejectedError,
 )
@@ -239,12 +237,12 @@ def test_assessment_embedding_layer1_rejects_positional_message(
         cls("legacy_message")  # type: ignore[call-arg]
 
 
-# 無引数 + 固定 code の marker (3 class): no-arg constructor + 固定 code。
-# ``AssessmentResponseInvalidError`` は defect を受ける marker に変わったため
-# 本群から外す (defect 版の契約は ``test_errors.py`` が所有)。
+# 無引数 + 固定 code の marker (2 class): no-arg constructor + 固定 code。
+# ``AssessmentResponseInvalidError`` は defect を受ける marker、
+# ``AssessmentCategoryMissingError`` は廃止 (enum↔DB 不整合は marker でなく
+# CategoryEnumDatabaseMismatchError = 想定外 扱い) のため本群から外す。
 _LAYER2B_FIXED_CODE: tuple[tuple[type[VectorDomainError], str], ...] = (
     (CurationResponseInvalidError, "extraction_response_invalid"),
-    (AssessmentCategoryMissingError, "assessment_category_missing"),
     (EmbeddingResponseInvalidError, "embedding_response_invalid"),
 )
 
@@ -272,11 +270,11 @@ def test_layer2b_rejects_positional_message(
         cls("legacy_message")  # type: ignore[call-arg]
 
 
-# PII 全文検索 oracle: 22 class 全件で sensitive 値が __str__ に乗らない
+# PII 全文検索 oracle: 21 class 全件で sensitive 値が __str__ に乗らない
 
 
-def _build_22_class_instances() -> list[VectorDomainError]:
-    """PII 安全性を確認する 22 class の代表 instance を 1 つずつ構築する。"""
+def _build_21_class_instances() -> list[VectorDomainError]:
+    """PII 安全性を確認する 21 class の代表 instance を 1 つずつ構築する。"""
     provider = AIProviderRateLimitedError()
     return [
         # AIProvider*Error 9 種 (引数なし)
@@ -298,7 +296,7 @@ def _build_22_class_instances() -> list[VectorDomainError]:
             code="ai_error_input_rejected", provider_error=provider
         ),
         CurationResponseInvalidError(),
-        # Assessment 3 (Layer 1) + 2 (Layer 2-B)
+        # Assessment 3 (Layer 1) + 1 (Layer 2-B)
         AssessmentRecoverableError(code="ai_error_network", provider_error=provider),
         AssessmentTerminalStageBlockedError(
             code="ai_error_configuration", provider_error=provider
@@ -308,7 +306,6 @@ def _build_22_class_instances() -> list[VectorDomainError]:
         ),
         # defect の value は種別ラベル (PII-free) なので PII oracle に載せて安全。
         AssessmentResponseInvalidError(AssessmentResponseDefect.CATEGORY_KEY_MISSING),
-        AssessmentCategoryMissingError(),
         # Embedding 3 (Layer 1) + 1 (Layer 2-B)
         EmbeddingRecoverableError(code="ai_error_network", provider_error=provider),
         EmbeddingTerminalStageBlockedError(
@@ -321,15 +318,15 @@ def _build_22_class_instances() -> list[VectorDomainError]:
     ]
 
 
-def test_22_class_str_never_contains_provider_error_repr_payload() -> None:
-    """22 class の ``str(exc)`` を JSON 全文化しても provider_error 由来の文字列
+def test_21_class_str_never_contains_provider_error_repr_payload() -> None:
+    """21 class の ``str(exc)`` を JSON 全文化しても provider_error 由来の文字列
     が 1 つも残らない。
 
     意図的に provider_error として ``AIProviderRateLimitedError`` instance を
     Layer 1 marker に紐付け、provider 側の class 名や CODE 値が外側 marker の
     ``__str__`` に **連鎖して出ない** ことを検証する。
     """
-    instances = _build_22_class_instances()
+    instances = _build_21_class_instances()
     rendered_all = json.dumps(
         [str(exc) for exc in instances],
         default=str,
@@ -375,20 +372,14 @@ def test_stage_base_classes_inherit_vector_domain_error() -> None:
 
 
 def test_layer2b_subclasses_inherit_from_layer1_marker() -> None:
-    """Layer 2-B 4 class は対応する Layer 1 marker を継承 (dispatch 軸を引き継ぐ)。
+    """Layer 2-B 3 class は対応する Layer 1 marker を継承 (dispatch 軸を引き継ぐ)。
 
     CurationResponseInvalid → Recoverable (cron 救済対象)、
     AssessmentResponseInvalid → Recoverable、
-    AssessmentCategoryMissing → terminal base (分類未解決、hold 対象外)、
     EmbeddingResponseInvalid → Recoverable。
     """
     assert issubclass(CurationResponseInvalidError, CurationRecoverableError)
     assert issubclass(AssessmentResponseInvalidError, AssessmentRecoverableError)
-    assert issubclass(AssessmentCategoryMissingError, AssessmentTerminalError)
-    assert not issubclass(
-        AssessmentCategoryMissingError,
-        AssessmentTerminalStageBlockedError,
-    )
     assert issubclass(EmbeddingResponseInvalidError, EmbeddingRecoverableError)
 
 

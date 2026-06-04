@@ -18,8 +18,11 @@ from app.analysis.assessment.domain.result import (
     MentionType,
     OutOfScope,
 )
-from app.analysis.assessment.errors import AssessmentCategoryMissingError
-from app.analysis.assessment.repository import AssessmentRepository
+from app.analysis.assessment.repository import (
+    AssessmentRepository,
+    CategoryEnumDatabaseMismatchError,
+    missing_category_slugs,
+)
 from app.models.article import Article
 from app.models.article_curation import ArticleCuration
 from app.models.category import Category
@@ -372,18 +375,19 @@ async def test_save_in_scope_raises_when_category_unknown(
     db_session: AsyncSession,
     sample_source: NewsSource,
 ) -> None:
-    """AI が catalog 未登録の slug を返したら fail-fast。
+    """AI が catalog 未登録の slug を返したら fail-fast (enum↔DB 不整合)。
 
     ``sample_categories`` fixture を使わない (catalog 未登録状態を作る)。
     """
     extraction = await _make_extraction(db_session, sample_source)
     repo = AssessmentRepository(db_session)
 
-    with pytest.raises(AssessmentCategoryMissingError):
+    with pytest.raises(CategoryEnumDatabaseMismatchError) as excinfo:
         await repo.save_in_scope(
             _in_scope_call(category=InScopeCategory.AI),
             ready=_ready(extraction),
         )
+    assert excinfo.value.missing == {"ai"}
 
 
 # Ready 構築用 DB 事実取得
@@ -473,3 +477,47 @@ async def test_load_ready_build_facts_marks_existing_out_of_scope_assessment(
     assert facts is not None
     assert facts.has_in_scope_assessment is False
     assert facts.has_out_of_scope_assessment is True
+
+
+# category catalog 整合チェック (enum↔DB)
+
+
+def test_missing_category_slugs_empty_when_all_present() -> None:
+    """全 InScopeCategory が DB slug 集合に在れば欠落なし (純粋関数、DB 不要)。"""
+    db_slugs = {category.value for category in InScopeCategory}
+    assert missing_category_slugs(db_slugs) == set()
+
+
+def test_missing_category_slugs_reports_absent_enum_members() -> None:
+    """DB 集合に無い enum slug だけが欠落として返る。"""
+    db_slugs = {category.value for category in InScopeCategory} - {"ai", "bio"}
+    assert missing_category_slugs(db_slugs) == {"ai", "bio"}
+
+
+@pytest.mark.asyncio
+async def test_assert_category_catalog_covers_enum_passes_when_all_seeded(
+    db_session: AsyncSession,
+) -> None:
+    """全 InScopeCategory が categories に在れば raise しない。"""
+    for category in InScopeCategory:
+        db_session.add(Category(slug=category.value, name=category.value))
+    await db_session.commit()
+
+    await AssessmentRepository(db_session).assert_category_catalog_covers_enum()
+
+
+@pytest.mark.asyncio
+async def test_assert_category_catalog_covers_enum_raises_on_missing(
+    db_session: AsyncSession,
+) -> None:
+    """enum の slug が 1 つでも DB に無ければ欠落 slug 付きで raise する。"""
+    for category in InScopeCategory:
+        if category is InScopeCategory.AI:
+            continue
+        db_session.add(Category(slug=category.value, name=category.value))
+    await db_session.commit()
+
+    repo = AssessmentRepository(db_session)
+    with pytest.raises(CategoryEnumDatabaseMismatchError) as excinfo:
+        await repo.assert_category_catalog_covers_enum()
+    assert excinfo.value.missing == {"ai"}

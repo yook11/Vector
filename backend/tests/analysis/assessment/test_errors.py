@@ -16,7 +16,6 @@ from app.analysis.ai_provider_errors import (
     AIProviderRateLimitedError,
 )
 from app.analysis.assessment.errors import (
-    AssessmentCategoryMissingError,
     AssessmentError,
     AssessmentRecoverableError,
     AssessmentResponseInvalidError,
@@ -200,52 +199,12 @@ class TestAssessmentResponseInvalidError:
             AssessmentResponseInvalidError("schema mismatch")  # type: ignore[arg-type]
 
 
-class TestAssessmentCategoryMissingError:
-    """Layer 2-B marker: ``AssessmentCategoryMissingError`` (non-hold terminal 系)。"""
-
-    def test_is_terminal_error_subclass(self) -> None:
-        assert issubclass(AssessmentCategoryMissingError, AssessmentTerminalError)
-
-    def test_is_not_stage_blocked_subclass(self) -> None:
-        assert not issubclass(
-            AssessmentCategoryMissingError, AssessmentTerminalStageBlockedError
-        )
-
-    def test_is_assessment_error_subclass(self) -> None:
-        assert issubclass(AssessmentCategoryMissingError, AssessmentError)
-
-    def test_holds_fixed_code(self) -> None:
-        exc = AssessmentCategoryMissingError()
-        assert exc.code == "assessment_category_missing"
-
-    def test_provider_error_is_none(self) -> None:
-        exc = AssessmentCategoryMissingError()
-        assert exc.provider_error is None
-
-    def test_failure_kind_is_classification_unresolved(self) -> None:
-        assert (
-            AssessmentCategoryMissingError.FAILURE_KIND
-            == "terminal_classification_unresolved"
-        )
-
-    def test_str_renders_code_only(self) -> None:
-        exc = AssessmentCategoryMissingError()
-        expected = "AssessmentCategoryMissingError(code='assessment_category_missing')"
-        assert str(exc) == expected
-
-    def test_positional_message_rejected(self) -> None:
-        # Phase 4: 具体 slug は SAFE_ATTRS 外で構造的に SaaS に流れない契約。
-        with pytest.raises(TypeError):
-            AssessmentCategoryMissingError("unknown slug")  # type: ignore[call-arg]
-
-
 class TestLayer2BMarkersDisjoint:
-    """Layer 2-B 2 marker は互いに独立 (Recoverable と Terminal の階層分離)。"""
+    """marker ``AssessmentResponseInvalidError`` は Recoverable 側で terminal ではない。
+
+    (旧 ``AssessmentCategoryMissingError`` は廃止: enum↔DB 不整合は marker でなく
+    ``CategoryEnumDatabaseMismatchError`` = 想定外 扱いに変更。)
+    """
 
     def test_response_invalid_not_terminal(self) -> None:
         assert not issubclass(AssessmentResponseInvalidError, AssessmentTerminalError)
-
-    def test_category_missing_not_recoverable(self) -> None:
-        assert not issubclass(
-            AssessmentCategoryMissingError, AssessmentRecoverableError
-        )

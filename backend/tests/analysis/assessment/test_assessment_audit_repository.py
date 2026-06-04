@@ -16,8 +16,6 @@ audit row の shape SSoT が repository に集約されたことを検証する:
   - ``AssessmentTerminalStageBlockedError`` → ``retryability=non_retryable``
   - ``AssessmentResponseInvalidError`` (defect 載せ替え) → ``retryability=retryable`` /
     ``outcome_code`` は defect の value (parse 由来 / provider envelope 由来とも具体値)
-  - ``AssessmentCategoryMissingError`` (Layer 2-B) →
-    ``retryability=non_retryable`` / ``outcome_code="assessment_category_missing"``
   - 想定外 ``RuntimeError`` → ``retryability=unknown`` /
     ``outcome_code="unexpected_error"``
 - ``error_chain`` が ``__cause__`` 経由で 2 段以上を記録
@@ -55,7 +53,6 @@ from app.analysis.assessment.domain.result import (
     OutOfScope,
 )
 from app.analysis.assessment.errors import (
-    AssessmentCategoryMissingError,
     AssessmentRecoverableError,
     AssessmentResponseInvalidError,
     AssessmentTerminalStageBlockedError,
@@ -674,31 +671,6 @@ async def test_append_failure_response_invalid_bakes_provider_envelope_code(
     assert ev.outcome_code == "assessment_response_deepseek_no_tool_call"
     assert ev.retryability == "retryable"
     assert ev.payload["failure_kind"] == "recoverable"
-    assert ev.payload["failure_action"] is None
-
-
-@pytest.mark.asyncio
-async def test_append_failure_layer_2b_category_missing(
-    db_session: AsyncSession,
-    session_factory: async_sessionmaker[AsyncSession],
-    sample_source: NewsSource,
-) -> None:
-    """Layer 2-B AssessmentCategoryMissingError は分類未解決として記録される。"""
-    article = await _make_article(db_session, sample_source)
-    extraction = await _make_extraction(db_session, article)
-    exc = AssessmentCategoryMissingError()
-
-    async with session_factory() as session:
-        await AssessmentAuditRepository(session).append_failure(
-            ready=_ready(extraction),
-            exc=exc,
-        )
-        await session.commit()
-
-    ev = await _fetch_one(db_session, article.id)
-    assert ev.outcome_code == "assessment_category_missing"
-    assert ev.retryability == "non_retryable"
-    assert ev.payload["failure_kind"] == "terminal_classification_unresolved"
     assert ev.payload["failure_action"] is None
 
 

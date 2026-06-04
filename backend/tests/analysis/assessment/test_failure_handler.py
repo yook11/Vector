@@ -26,7 +26,6 @@ from app.analysis.ai_provider_errors import (
 )
 from app.analysis.assessment.domain.ready import ReadyForAssessment
 from app.analysis.assessment.errors import (
-    AssessmentCategoryMissingError,
     AssessmentRecoverableError,
     AssessmentTerminalStageBlockedError,
     AssessmentTerminalTargetRejectedError,
@@ -156,34 +155,6 @@ async def test_terminal_target_rejected_writes_audit_without_hold(
     assert ev.outcome_code == "ai_error_input_rejected"
     assert ev.retryability == "non_retryable"
     assert ev.payload["failure_kind"] == "terminal_target_rejected"
-    assert ev.payload["failure_action"] is None
-
-
-@pytest.mark.asyncio
-async def test_category_missing_writes_audit_without_hold(
-    db_session: AsyncSession,
-    session_factory: async_sessionmaker[AsyncSession],
-    sample_source: NewsSource,
-) -> None:
-    """CategoryMissing は分類未解決として audit のみ焼き、hold は立てない。"""
-    article = await _make_article(db_session, sample_source)
-    extraction = await _make_extraction(db_session, article)
-    article_id = article.id
-    ready = _ready_from(extraction)
-    handler = AssessmentFailureHandler(session_factory)
-
-    exc = AssessmentCategoryMissingError()
-    decision = await handler.handle(ready=ready, exc=exc, last_attempt=False)
-
-    assert decision.reraise is False
-    assert decision.stage_hold_reason is None
-    await db_session.rollback()
-    events = await _fetch_assessment_events(db_session, article_id)
-    assert len(events) == 1
-    ev = events[0]
-    assert ev.outcome_code == "assessment_category_missing"
-    assert ev.retryability == "non_retryable"
-    assert ev.payload["failure_kind"] == "terminal_classification_unresolved"
     assert ev.payload["failure_action"] is None
 
 

@@ -7,7 +7,7 @@ PR6 で Service が以下を行うようになったことを固定する:
   ``AssessmentTerminalStageBlockedError``) に詰め替え、``__cause__`` に元
   ``AIProvider*Error`` を紐付ける (ACL boundary)。
 - ``_handle_in_scope`` で category 解決失敗 (``category_id is None``) のとき
-  ``AssessmentCategoryMissingError`` (Layer 2-B、hold 対象外 terminal) を raise する。
+  ``CategoryEnumDatabaseMismatchError`` (enum↔DB 不整合) を raise する。
 - 業務 INSERT (in-scope / out-of-scope) と同 session 同 tx で
   ``AssessmentAuditRepository.append_*`` を呼び、成功 audit を 1 行焼く。
 - race lost (``save()`` が None) の場合は audit を焼かず ``None`` を返す
@@ -40,10 +40,10 @@ from app.analysis.assessment.domain.result import (
     OutOfScope,
 )
 from app.analysis.assessment.errors import (
-    AssessmentCategoryMissingError,
     AssessmentRecoverableError,
     AssessmentTerminalStageBlockedError,
 )
+from app.analysis.assessment.repository import CategoryEnumDatabaseMismatchError
 from app.analysis.assessment.service import AssessmentService
 from app.logfire.article_stage import assessment_stage_span
 from app.models.article import Article
@@ -330,21 +330,21 @@ async def test_provider_configuration_error_is_wrapped_to_stage_blocked_marker(
     assert excinfo.value.provider_error is provider_exc
 
 
-# Layer 2-B: AI が未知の slug を返したら AssessmentCategoryMissingError
+# enum↔DB 不整合: catalog 未登録 slug → CategoryEnumDatabaseMismatchError
 
 
 @pytest.mark.asyncio
-async def test_unknown_category_raises_category_missing(
+async def test_unknown_category_raises_enum_db_mismatch(
     db_session: AsyncSession,
     session_factory: async_sessionmaker[AsyncSession],
     sample_source: NewsSource,
 ) -> None:
     """``in_scope.category.value`` が catalog 未登録 →
-    ``AssessmentCategoryMissingError`` raise。
+    ``CategoryEnumDatabaseMismatchError`` raise。
 
     ``sample_categories`` fixture を使わない (catalog 未登録状態を作る) ため、
     Repository.save 内部の ``_get_category_id_by_slug`` が必ず None を返し、
-    Repository が ``AssessmentCategoryMissingError`` を raise する。
+    Repository が ``CategoryEnumDatabaseMismatchError`` を raise する。
     """
     article = await _make_article(db_session, sample_source)
     extraction = await _make_extraction(db_session, article)
@@ -353,9 +353,9 @@ async def test_unknown_category_raises_category_missing(
     )
 
     svc = AssessmentService(session_factory)
-    with pytest.raises(AssessmentCategoryMissingError) as excinfo:
+    with pytest.raises(CategoryEnumDatabaseMismatchError) as excinfo:
         await svc.execute(_ready(extraction), assessor)
-    assert excinfo.value.code == "assessment_category_missing"
+    assert excinfo.value.missing == {"ai"}
 
 
 @pytest.mark.asyncio
@@ -364,7 +364,7 @@ async def test_unknown_category_does_not_record_audit_in_service(
     session_factory: async_sessionmaker[AsyncSession],
     sample_source: NewsSource,
 ) -> None:
-    """``AssessmentCategoryMissingError`` 経路では Service が audit を焼かない
+    """``CategoryEnumDatabaseMismatchError`` 経路でも Service が audit を焼かない
     (失敗 audit は Task 層末尾の inline audit ブロックが別 session で焼く責務)。
     """
     article = await _make_article(db_session, sample_source)
@@ -374,7 +374,7 @@ async def test_unknown_category_does_not_record_audit_in_service(
     )
 
     svc = AssessmentService(session_factory)
-    with pytest.raises(AssessmentCategoryMissingError):
+    with pytest.raises(CategoryEnumDatabaseMismatchError):
         await svc.execute(_ready(extraction), assessor)
 
     events = await _fetch_assessment_events(db_session, article.id)

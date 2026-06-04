@@ -124,18 +124,6 @@ class AssessmentResponseInvalidError(AssessmentRecoverableError):
         super().__init__(code=defect.value, provider_error=None)
 
 
-class AssessmentCategoryMissingError(AssessmentTerminalError):
-    """AI が catalog に存在しない category slug を返した。"""
-
-    FAILURE_KIND: ClassVar[str] = "terminal_classification_unresolved"
-
-    def __init__(self) -> None:
-        super().__init__(
-            code="assessment_category_missing",
-            provider_error=None,
-        )
-
-
 # ---------------------------------------------------------------------------
 # Layer 2-A ACL (provider 由来の詰め替え)
 # ---------------------------------------------------------------------------

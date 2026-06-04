@@ -25,12 +25,11 @@ import pytest
 from app.analysis.assessment.ai.parse import AssessmentResponseDefect
 from app.analysis.assessment.domain.ready import ReadyForAssessment
 from app.analysis.assessment.errors import (
-    AssessmentCategoryMissingError,
     AssessmentRecoverableError,
     AssessmentResponseInvalidError,
-    AssessmentTerminalError,
     AssessmentTerminalStageBlockedError,
 )
+from app.analysis.assessment.repository import CategoryEnumDatabaseMismatchError
 from app.analysis.failure_handling import FailureHandlingDecision
 from app.analysis.rate_limit import AIModelRateLimitPolicy, RateLimitRule
 from app.queue.messages.assessment import AssessmentTrigger
@@ -133,12 +132,13 @@ async def test_terminal_stage_blocked_delegates_to_handler() -> None:
 
 
 @pytest.mark.asyncio
-async def test_category_missing_dispatches_to_handler() -> None:
-    """``AssessmentCategoryMissingError`` も terminal として Handler 経由で扱われる。"""
+async def test_category_enum_db_mismatch_dispatches_to_handler() -> None:
+    """marker でない ``CategoryEnumDatabaseMismatchError`` も task の catch-all
+    (``except Exception``) で拾われ Handler に渡る (想定外 = case _: 経路)。"""
     from app.queue.tasks.assessment import assess_content
 
     ctx = _make_ctx()
-    exc = AssessmentCategoryMissingError()
+    exc = CategoryEnumDatabaseMismatchError({"ai"})
 
     with (
         _patch_ready_construction(),
@@ -155,7 +155,7 @@ async def test_category_missing_dispatches_to_handler() -> None:
 
     handler_handle = mock_handler_cls.return_value.handle
     handler_handle.assert_awaited_once()
-    assert isinstance(handler_handle.await_args.kwargs["exc"], AssessmentTerminalError)
+    assert handler_handle.await_args.kwargs["exc"] is exc
 
 
 # Recoverable 系 — Handler の reraise 戻り値で raise/return が決まる
