@@ -24,7 +24,7 @@ export function DashboardPaperArticleList({
   }
 
   return (
-    <div className="grid grid-cols-1 gap-x-12 gap-y-6 md:grid-cols-2">
+    <div className="grid grid-cols-1 gap-x-12 gap-y-[30px] md:grid-cols-2">
       {items.map((article) => (
         <PaperArticleCard
           key={article.id}

@@ -1,5 +1,6 @@
 import { render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
+import type { ProtectedNavItem } from "@/components/layout/nav-items";
 
 vi.mock("next/image", () => ({
   default: () => null,
@@ -10,10 +11,10 @@ vi.mock("@/components/layout/MobileNav", () => ({
 
 import { SlimMasthead } from "./SlimMasthead";
 
-const navItems = [
-  { href: "/", label: "ニュース" },
-  { href: "/briefing", label: "Briefing" },
-  { href: "/watchlist", label: "ウォッチリスト" },
+const navItems: ProtectedNavItem[] = [
+  { href: "/", label: "ニュース", icon: "news" },
+  { href: "/briefing", label: "Briefing", icon: "briefing" },
+  { href: "/watchlist", label: "ウォッチリスト", icon: "watchlist" },
 ];
 
 describe("SlimMasthead", () => {

@@ -12,6 +12,7 @@ import {
   getLatestArticleDate,
   PaperNewsControls,
   PaperNewsPagination,
+  PaperNewsResultSummary,
   PaperSurface,
   PaperTexture,
   parseArticleQuery,
@@ -70,7 +71,14 @@ export default async function DashboardPage({
           {...categoryProps}
         />
 
-        <section className="relative z-10 mx-5 mb-7 flex flex-wrap items-center justify-end gap-3 border-b border-[var(--vector-ink)] pb-3.5 sm:mx-8 lg:mx-10">
+        <section className="relative z-10 mx-5 mb-7 flex flex-wrap items-center justify-between gap-3 border-b border-[var(--vector-ink)] pb-3.5 sm:mx-8 lg:mx-10">
+          <Suspense key={sectionKey} fallback={<span className="h-5" />}>
+            <PaperNewsResultSummary
+              filters={filters}
+              categories={categoriesData.items}
+              {...categoryProps}
+            />
+          </Suspense>
           <PaperNewsControls />
         </section>
 

@@ -1,18 +1,47 @@
+import {
+  CalendarDays,
+  Eye,
+  FileText,
+  type LucideIcon,
+  Newspaper,
+  Settings,
+} from "lucide-react";
+
+// icon はキー文字列で持つ。LucideIcon (関数) を nav item に焼くと Server→Client
+// 境界 (MobileNav へ navItems を渡す箇所) でシリアライズ不能になるため、
+// コンポーネント解決は各 consumer の render 時に NAV_ICONS 経由で行う。
+export type NavIconKey =
+  | "news"
+  | "briefing"
+  | "weekly"
+  | "watchlist"
+  | "settings";
+
+export const NAV_ICONS: Record<NavIconKey, LucideIcon> = {
+  news: Newspaper,
+  briefing: FileText,
+  weekly: CalendarDays,
+  watchlist: Eye,
+  settings: Settings,
+};
+
 export type ProtectedNavItem = {
   href: string;
   label: string;
+  icon: NavIconKey;
 };
 
 const baseNavItems = [
-  { href: "/", label: "ニュース" },
-  { href: "/briefing", label: "Briefing" },
-  { href: "/weekly-trends", label: "ウィークリー" },
-  { href: "/watchlist", label: "ウォッチリスト" },
+  { href: "/", label: "ニュース", icon: "news" },
+  { href: "/briefing", label: "Briefing", icon: "briefing" },
+  { href: "/weekly-trends", label: "ウィークリー", icon: "weekly" },
+  { href: "/watchlist", label: "ウォッチリスト", icon: "watchlist" },
 ] satisfies ProtectedNavItem[];
 
 const adminNavItem = {
   href: "/settings",
   label: "Settings",
+  icon: "settings",
 } satisfies ProtectedNavItem;
 
 export function getProtectedNavItems(isAdmin: boolean): ProtectedNavItem[] {

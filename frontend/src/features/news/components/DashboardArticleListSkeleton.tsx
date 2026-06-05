@@ -15,25 +15,28 @@ export function DashboardArticleListSkeleton() {
       </span>
       <div
         aria-hidden="true"
-        className="grid grid-cols-1 gap-x-12 gap-y-6 md:grid-cols-2"
+        className="grid grid-cols-1 gap-x-12 gap-y-[30px] md:grid-cols-2"
       >
         {Array.from({ length: PLACEHOLDER_COUNT }).map((_, index) => (
           <div
             // biome-ignore lint/suspicious/noArrayIndexKey: static skeleton list
             key={index}
-            className="flex animate-pulse flex-col border-b border-[color-mix(in_oklab,var(--vector-ink)_13%,transparent)] pb-5"
+            className="flex animate-pulse flex-col border-b border-[color-mix(in_oklab,var(--vector-ink)_14%,transparent)] pb-6"
           >
             <div className={`mb-3.5 h-3 w-24 ${bar}`} />
-            <div className="space-y-2.5 border-b border-[color-mix(in_oklab,var(--vector-ink)_12%,transparent)] pb-3">
+            <div className="mb-3.5 space-y-2.5">
               <div className={`h-5 w-full ${bar}`} />
               <div className={`h-5 w-4/5 ${bar}`} />
             </div>
-            <div className="mt-3 space-y-2">
+            <div
+              className={`mb-[15px] h-[2.5px] w-[34px] rounded-[2px] ${bar}`}
+            />
+            <div className="mb-4 space-y-2">
               <div className={`h-3 w-full ${bar}`} />
               <div className={`h-3 w-full ${bar}`} />
               <div className={`h-3 w-3/5 ${bar}`} />
             </div>
-            <div className="mt-auto flex items-center justify-between gap-4 pt-4">
+            <div className="mt-auto flex items-center justify-between gap-4">
               <div className={`h-3 w-28 ${bar}`} />
               <div className={`h-3 w-16 ${bar}`} />
             </div>

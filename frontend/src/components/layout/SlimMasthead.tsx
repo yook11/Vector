@@ -2,7 +2,10 @@ import Image from "next/image";
 import Link from "next/link";
 import type { ReactNode } from "react";
 import { MobileNav } from "@/components/layout/MobileNav";
-import type { ProtectedNavItem } from "@/components/layout/nav-items";
+import {
+  NAV_ICONS,
+  type ProtectedNavItem,
+} from "@/components/layout/nav-items";
 
 interface SlimMastheadProps {
   navItems: ProtectedNavItem[];
@@ -51,6 +54,7 @@ export function SlimMasthead({
         >
           {navItems.map((item) => {
             const active = item.href === activeHref;
+            const Icon = NAV_ICONS[item.icon];
             return (
               <Link
                 key={item.href}
@@ -58,10 +62,18 @@ export function SlimMasthead({
                 aria-current={active ? "page" : undefined}
                 className={
                   active
-                    ? "border-b-2 border-[var(--vector-accent)] pb-0.5 text-[13px] font-bold tracking-[0.04em] text-[var(--vector-ink)]"
-                    : "border-b-2 border-transparent pb-0.5 text-[13px] font-medium tracking-[0.04em] text-[var(--vector-ink-soft)] transition-colors hover:text-[var(--vector-ink)]"
+                    ? "inline-flex items-center gap-1.5 border-b-2 border-[var(--vector-accent)] pb-0.5 text-[13px] font-bold tracking-[0.04em] text-[var(--vector-ink)]"
+                    : "inline-flex items-center gap-1.5 border-b-2 border-transparent pb-0.5 text-[13px] font-medium tracking-[0.04em] text-[var(--vector-ink-soft)] transition-colors hover:text-[var(--vector-ink)]"
                 }
               >
+                <Icon
+                  aria-hidden="true"
+                  className={
+                    active
+                      ? "size-3.5 text-[var(--vector-accent)]"
+                      : "size-3.5 text-[var(--vector-ink-muted)] opacity-70"
+                  }
+                />
                 {item.label}
               </Link>
             );

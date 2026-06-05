@@ -13,6 +13,7 @@ export { NewsList } from "./components/NewsList";
 export { NewsPagination } from "./components/NewsPagination";
 export { PaperNewsControls } from "./components/PaperNewsControls";
 export { PaperNewsPagination } from "./components/PaperNewsPagination";
+export { PaperNewsResultSummary } from "./components/PaperNewsResultSummary";
 export { PaperSurface } from "./components/PaperSurface";
 export { PaperTexture } from "./components/PaperTexture";
 export { PerPageSelect } from "./components/PerPageSelect";

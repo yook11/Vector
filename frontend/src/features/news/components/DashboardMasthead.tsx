@@ -1,9 +1,12 @@
 import Image from "next/image";
 import Link from "next/link";
-import type { ReactNode } from "react";
+import { Fragment, type ReactNode } from "react";
 import { MobileNav } from "@/components/layout/MobileNav";
 import { NavPendingDot } from "@/components/layout/NavPendingDot";
-import type { ProtectedNavItem } from "@/components/layout/nav-items";
+import {
+  NAV_ICONS,
+  type ProtectedNavItem,
+} from "@/components/layout/nav-items";
 import type { ArticleQuery } from "@/types";
 import type { CategoryDetail } from "@/types/types.gen";
 import { buildDashboardCategoryHref } from "./paper-hrefs";
@@ -31,6 +34,11 @@ export function DashboardMasthead({
     query: currentQuery,
   });
   const isAll = activeCategory === undefined;
+  // 凡例はバッジが1つも出ないとき (全カテゴリ recentCount 0/未設定) は説明対象が
+  // 無いので隠す。CategoryNavLink のバッジ表示条件と揃える。
+  const showCountLegend = categories.some(
+    (category) => (category.recentCount ?? 0) > 0,
+  );
 
   return (
     <header className="relative z-10 px-5 sm:px-8 lg:px-10">
@@ -38,24 +46,48 @@ export function DashboardMasthead({
         <div aria-hidden="true" />
         <nav
           aria-label="主要ページ"
-          className="hidden items-center justify-center gap-6 md:flex"
-          style={{ fontFamily: "var(--font-vector-maru)" }}
+          className="hidden items-center justify-center md:inline-flex"
         >
-          {navItems.map((item) => {
+          {navItems.map((item, index) => {
             const active = item.href === "/";
+            const Icon = NAV_ICONS[item.icon];
             return (
-              <Link
-                key={item.href}
-                href={item.href}
-                aria-current={active ? "page" : undefined}
-                className={
-                  active
-                    ? "text-[12px] font-bold tracking-[0.12em] text-[var(--vector-accent-ink)]"
-                    : "text-[12px] font-medium tracking-[0.12em] text-[var(--vector-ink-soft)] transition-colors hover:text-[var(--vector-ink)]"
-                }
-              >
-                {item.label}
-              </Link>
+              <Fragment key={item.href}>
+                {index > 0 && (
+                  <span
+                    aria-hidden="true"
+                    className="mx-[clamp(12px,1.8vw,20px)] h-[18px] w-px bg-[var(--vector-line)]"
+                  />
+                )}
+                <Link
+                  href={item.href}
+                  aria-current={active ? "page" : undefined}
+                  className={
+                    active
+                      ? "inline-flex items-center gap-2 border-b-2 border-[var(--vector-accent)] pt-0.5 pb-[5px]"
+                      : "inline-flex items-center gap-2 border-b-2 border-transparent pt-0.5 pb-[5px]"
+                  }
+                >
+                  <Icon
+                    aria-hidden="true"
+                    className={
+                      active
+                        ? "size-4 text-[var(--vector-accent)]"
+                        : "size-4 text-[var(--vector-ink-muted)] opacity-70"
+                    }
+                  />
+                  <span
+                    className={
+                      active
+                        ? "text-[15px] font-semibold tracking-[0.05em] text-[var(--vector-ink)]"
+                        : "text-[15px] font-medium tracking-[0.05em] text-[var(--vector-ink-soft)] transition-colors hover:text-[var(--vector-ink)]"
+                    }
+                    style={{ fontFamily: "var(--font-vector-display)" }}
+                  >
+                    {item.label}
+                  </span>
+                </Link>
+              </Fragment>
             );
           })}
         </nav>
@@ -109,7 +141,7 @@ export function DashboardMasthead({
         className="-mx-5 overflow-x-auto px-5 pb-5 [-ms-overflow-style:none] [scrollbar-width:none] sm:-mx-8 sm:px-8 lg:-mx-10 lg:px-10 [&::-webkit-scrollbar]:hidden"
       >
         <div
-          className="flex min-w-max items-center justify-center gap-4 md:min-w-0 md:flex-wrap"
+          className="flex min-w-max items-center justify-center gap-1.5 md:min-w-0 md:flex-wrap"
           style={{ fontFamily: "var(--font-vector-maru)" }}
         >
           <CategoryNavLink href={allHref} active={isAll} label="すべて" />
@@ -132,6 +164,7 @@ export function DashboardMasthead({
               />
             );
           })}
+          {showCountLegend && <CountLegend />}
         </div>
       </nav>
     </header>
@@ -154,27 +187,49 @@ function CategoryNavLink({
   const hasRecentCount = recentCount !== undefined && recentCount > 0;
 
   return (
-    <span className="inline-flex items-center gap-4">
-      <Link
-        href={href}
-        prefetch={false}
-        aria-current={active ? "page" : undefined}
-        className={
-          active
-            ? "inline-flex items-center whitespace-nowrap border-b-2 border-[var(--vector-accent)] pb-1 text-[12px] font-bold tracking-[0.1em] text-[var(--vector-accent-ink)]"
-            : "inline-flex items-center whitespace-nowrap border-b-2 border-transparent pb-1 text-[12px] font-medium tracking-[0.1em] text-[var(--vector-ink-soft)] transition-colors hover:text-[var(--vector-ink)]"
-        }
+    <Link
+      href={href}
+      prefetch={false}
+      aria-current={active ? "page" : undefined}
+      className={
+        active
+          ? "inline-flex items-center gap-2 whitespace-nowrap rounded-[9px] bg-[var(--vector-accent-tint)] px-[13px] py-2 text-[13px] font-bold tracking-[0.02em] text-[var(--vector-accent-ink)] shadow-[inset_0_-2px_0_var(--vector-accent)]"
+          : "inline-flex items-center gap-2 whitespace-nowrap rounded-[9px] px-[13px] py-2 text-[13px] font-medium tracking-[0.02em] text-[var(--vector-ink-soft)] transition-colors hover:text-[var(--vector-ink)]"
+      }
+    >
+      {label}
+      {hasRecentCount && (
+        <span
+          className={
+            active
+              ? "inline-flex h-[18px] min-w-[19px] items-center justify-center rounded-full bg-[var(--vector-accent)] px-1.5 text-[11px] font-bold leading-none text-[var(--vector-on-accent)]"
+              : "inline-flex h-[18px] min-w-[19px] items-center justify-center rounded-full bg-[var(--vector-accent-tint)] px-1.5 text-[11px] font-bold leading-none text-[var(--vector-accent-ink)]"
+          }
+          style={{ fontFamily: "var(--font-vector-sans)" }}
+        >
+          {recentCount}
+        </span>
+      )}
+      <NavPendingDot />
+    </Link>
+  );
+}
+
+/** カテゴリ件数バッジの対応を示すインライン凡例 (legendPos: inlineEnd)。 */
+function CountLegend() {
+  return (
+    <span className="ml-2 inline-flex shrink-0 items-center gap-2 rounded-full border border-[color-mix(in_oklab,var(--vector-accent)_35%,transparent)] bg-[var(--vector-accent-tint)] py-[5px] pr-[13px] pl-1.5">
+      <span
+        className="inline-flex h-[19px] min-w-[19px] items-center justify-center rounded-full bg-[var(--vector-accent)] px-[7px] text-[11px] font-bold tracking-[0.04em] text-[var(--vector-on-accent)]"
+        style={{ fontFamily: "var(--font-vector-sans)" }}
       >
-        {label}
-        {hasRecentCount && (
-          <span className="ml-1.5 text-[10px] tracking-normal text-[var(--vector-ink-muted)]">
-            +{recentCount}
-          </span>
-        )}
-        <NavPendingDot className="ml-1.5" />
-      </Link>
-      <span aria-hidden="true" className="text-[var(--vector-line)]">
-        ·
+        24H
+      </span>
+      <span
+        className="text-[11.5px] font-bold tracking-[0.06em] text-[var(--vector-accent-ink)]"
+        style={{ fontFamily: "var(--font-vector-maru)" }}
+      >
+        の新着件数
       </span>
     </span>
   );

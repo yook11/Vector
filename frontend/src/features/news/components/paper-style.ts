@@ -1,3 +1,4 @@
+import type { CSSProperties } from "react";
 import type { ArticleBrief } from "@/types/types.gen";
 
 // カテゴリは slug をキーにする。表示名は migration で変わりうるが slug は不変。
@@ -49,6 +50,15 @@ export function getCategoryKicker(slug: string): CategoryKicker {
     hue: meta.hue,
     hueDark: lightenHex(meta.hue, 0.28),
   };
+}
+
+/** kicker の hue を二色記号・短罫が参照する CSS 変数へ。SSR では dark を JS 分岐
+ *  できないため light/dark 両値を流し、消費側が dark: variant で切替える。 */
+export function kickerCssVars(kicker: CategoryKicker): CSSProperties {
+  return {
+    "--kc-hue": kicker.hue,
+    "--kc-hue-dark": kicker.hueDark,
+  } as CSSProperties;
 }
 
 export function getSourceBadge(sourceName: string): {

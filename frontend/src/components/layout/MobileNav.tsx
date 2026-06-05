@@ -3,6 +3,10 @@
 import { Menu } from "lucide-react";
 import { useState } from "react";
 import { NavLink } from "@/components/layout/NavLink";
+import {
+  NAV_ICONS,
+  type ProtectedNavItem,
+} from "@/components/layout/nav-items";
 import { Button } from "@/components/ui/button";
 import {
   Sheet,
@@ -15,7 +19,7 @@ import {
 import { cn } from "@/lib/utils/cn";
 
 interface MobileNavProps {
-  items: Array<{ href: string; label: string }>;
+  items: ProtectedNavItem[];
   triggerClassName?: string;
 }
 
@@ -47,16 +51,20 @@ export function MobileNav({ items, triggerClassName }: MobileNavProps) {
           </SheetDescription>
         </SheetHeader>
         <nav className="flex flex-col gap-1 mt-10">
-          {items.map((item) => (
-            <NavLink
-              key={item.href}
-              href={item.href}
-              onClick={() => setOpen(false)}
-              className="px-3 py-2.5 text-sm text-muted-foreground rounded-xl transition-colors duration-200 hover:text-foreground hover:bg-accent"
-            >
-              {item.label}
-            </NavLink>
-          ))}
+          {items.map((item) => {
+            const Icon = NAV_ICONS[item.icon];
+            return (
+              <NavLink
+                key={item.href}
+                href={item.href}
+                onClick={() => setOpen(false)}
+                className="flex items-center gap-2.5 px-3 py-2.5 text-sm text-muted-foreground rounded-xl transition-colors duration-200 hover:text-foreground hover:bg-accent"
+              >
+                <Icon aria-hidden="true" className="size-4" />
+                {item.label}
+              </NavLink>
+            );
+          })}
         </nav>
       </SheetContent>
     </Sheet>

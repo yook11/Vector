@@ -1,7 +1,7 @@
 import Link from "next/link";
 import { MobileNav } from "@/components/layout/MobileNav";
 import { NavLink } from "@/components/layout/NavLink";
-import { getProtectedNavItems } from "@/components/layout/nav-items";
+import { getProtectedNavItems, NAV_ICONS } from "@/components/layout/nav-items";
 import { ThemeToggle } from "@/components/layout/ThemeToggle";
 import { UserMenu } from "@/features/auth";
 import { getCurrentSession } from "@/lib/auth/guards";
@@ -25,15 +25,19 @@ export async function Header() {
         </div>
 
         <nav className="hidden sm:flex items-center gap-7">
-          {navItems.map((item) => (
-            <NavLink
-              key={item.href}
-              href={item.href}
-              className="text-xs text-foreground/60 transition-colors duration-300 hover:text-foreground"
-            >
-              {item.label}
-            </NavLink>
-          ))}
+          {navItems.map((item) => {
+            const Icon = NAV_ICONS[item.icon];
+            return (
+              <NavLink
+                key={item.href}
+                href={item.href}
+                className="inline-flex items-center gap-1.5 text-xs text-foreground/60 transition-colors duration-300 hover:text-foreground"
+              >
+                <Icon aria-hidden="true" className="size-3.5" />
+                {item.label}
+              </NavLink>
+            );
+          })}
         </nav>
 
         <div className="flex items-center justify-end gap-1">
