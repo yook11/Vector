@@ -19,8 +19,6 @@ export {
   formatPaperDate,
   formatPaperMastheadDate,
   getArticleSourceLabel,
-  getCategoryHue,
-  getCategoryMarkerRotation,
   getLatestArticleDate,
   getSourceBadge,
 } from "./components/paper-style";

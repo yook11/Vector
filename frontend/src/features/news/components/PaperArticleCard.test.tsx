@@ -33,6 +33,7 @@ describe("PaperArticleCard", () => {
     ).toHaveAttribute("href", "/news/101");
     expect(screen.getByText(article.summary)).toBeInTheDocument();
     expect(screen.getByText(article.category.name)).toBeInTheDocument();
+    expect(screen.getByText("SECURITY")).toBeInTheDocument();
     expect(screen.getByText("Hacker News")).toBeInTheDocument();
     expect(screen.getByText("2026年5月31日")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "保存" })).toBeInTheDocument();

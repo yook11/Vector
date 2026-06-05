@@ -4,8 +4,7 @@ import type { ArticleBrief } from "@/types/types.gen";
 import {
   formatPaperDate,
   getArticleSourceLabel,
-  getCategoryMarkerImage,
-  getCategoryMarkerRotation,
+  getCategoryKicker,
   getSourceBadge,
 } from "./paper-style";
 
@@ -14,34 +13,36 @@ interface PaperArticleCardProps {
   article: ArticleBrief;
 }
 
-type CategoryStyle = CSSProperties & {
-  backgroundImage: string;
-};
-
 export function PaperArticleCard({
   actionSlot,
   article,
 }: PaperArticleCardProps) {
   const sourceLabel = getArticleSourceLabel(article);
   const source = getSourceBadge(article.source.name);
-  const markerImage = getCategoryMarkerImage(article.category.name, article.id);
-  const categoryStyle: CategoryStyle = {
-    backgroundImage: `url("${markerImage}")`,
-  };
-  const markerRotation = getCategoryMarkerRotation(article.category.name);
+  const kicker = getCategoryKicker(article.category.slug);
+  const kickerVars = {
+    "--kc-hue": kicker.hue,
+    "--kc-hue-dark": kicker.hueDark,
+  } as CSSProperties;
 
   return (
-    <article className="relative flex min-h-56 flex-col border-b border-[color-mix(in_oklab,var(--vector-ink)_13%,transparent)] pb-5">
+    <article className="relative flex flex-col border-b border-[color-mix(in_oklab,var(--vector-ink)_13%,transparent)] pb-5">
       <div className="mb-3.5 flex items-center justify-between gap-3">
-        <span className="inline-block max-w-full">
+        <span className="inline-flex min-w-0 items-center gap-2.5">
           <span
-            className="inline-block max-w-full truncate bg-no-repeat px-[0.8em] pt-[0.42em] pb-[0.44em] text-[13px] font-black tracking-[0.06em] text-[var(--vector-ink)] [background-position:0_50%] [background-size:100%_2.5em] [text-shadow:0_0_3px_var(--vector-paper),0_0_1.5px_var(--vector-paper)]"
-            style={{
-              ...categoryStyle,
-              fontFamily: "var(--font-vector-maru)",
-              transform: `rotate(${markerRotation}deg)`,
-              transformOrigin: "left center",
-            }}
+            aria-hidden="true"
+            className="size-[11px] shrink-0 bg-[linear-gradient(135deg,var(--kc-hue)_0_50%,var(--vector-ink)_50%_100%)] dark:bg-[linear-gradient(135deg,var(--kc-hue-dark)_0_50%,var(--vector-ink)_50%_100%)]"
+            style={kickerVars}
+          />
+          <span
+            className="shrink-0 text-[12.5px] font-semibold tracking-[0.22em] text-[var(--vector-ink)]"
+            style={{ fontFamily: "var(--font-vector-display)" }}
+          >
+            {kicker.code}
+          </span>
+          <span
+            className="truncate text-[10px] font-medium tracking-[0.08em] text-[var(--vector-ink-muted)]"
+            style={{ fontFamily: "var(--font-vector-maru)" }}
             title={article.category.name}
           >
             {article.category.name}
@@ -52,7 +53,7 @@ export function PaperArticleCard({
 
       <Link href={`/news/${article.id}`} className="group block">
         <h2
-          className="line-clamp-3 text-[20px] font-bold leading-[1.42] tracking-[0.005em] text-[var(--vector-ink)] transition-colors group-hover:text-[var(--vector-accent-ink)]"
+          className="line-clamp-3 border-b border-[color-mix(in_oklab,var(--vector-ink)_12%,transparent)] pb-3 text-[20.5px] font-bold leading-[1.44] tracking-[0.005em] text-[var(--vector-ink)] transition-colors group-hover:text-[var(--vector-accent-ink)]"
           style={{ fontFamily: "var(--font-vector-serif)" }}
         >
           {article.translatedTitle}
@@ -60,8 +61,8 @@ export function PaperArticleCard({
       </Link>
 
       <p
-        className="mt-3 line-clamp-2 text-[12.5px] leading-[1.72] text-[var(--vector-ink-soft)]"
-        style={{ fontFamily: "var(--font-vector-sans)" }}
+        className="mt-3 line-clamp-3 text-[13.5px] font-medium leading-[1.86] text-[var(--vector-ink-soft)]"
+        style={{ fontFamily: "var(--font-vector-serif)" }}
       >
         {article.summary}
       </p>

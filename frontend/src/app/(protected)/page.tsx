@@ -1,4 +1,3 @@
-import { Sparkles } from "lucide-react";
 import { getProtectedNavItems } from "@/components/layout/nav-items";
 import { ThemeToggle } from "@/components/layout/ThemeToggle";
 import { UserMenu } from "@/features/auth";
@@ -45,7 +44,6 @@ export default async function DashboardPage({
   // 条件付き spread で「未指定 or 値あり」を表現する。
   const categoryProps =
     filters.category !== undefined ? { activeCategory: filters.category } : {};
-  const summarizedCount = newsData.items.length;
 
   return (
     <div
@@ -70,25 +68,7 @@ export default async function DashboardPage({
           {...categoryProps}
         />
 
-        <section className="relative z-10 mx-5 mb-7 flex flex-col gap-5 border-b border-[var(--vector-ink)] pb-6 sm:mx-8 sm:flex-row sm:items-end sm:justify-between lg:mx-10">
-          <div className="min-w-0">
-            <h1
-              className="text-[26px] font-black tracking-[0.06em] text-[var(--vector-ink)] sm:text-[34px]"
-              style={{ fontFamily: "var(--font-vector-maru)" }}
-            >
-              ニュース
-            </h1>
-            <p
-              className="mt-3 flex items-center gap-2 text-[13px] italic tracking-[0.04em] text-[var(--vector-ink-muted)]"
-              style={{ fontFamily: "var(--font-vector-display)" }}
-            >
-              <Sparkles
-                aria-hidden="true"
-                className="size-3.5 shrink-0 text-[var(--vector-accent)]"
-              />
-              AIが新着{summarizedCount}件を要約しました
-            </p>
-          </div>
+        <section className="relative z-10 mx-5 mb-7 flex flex-wrap items-center justify-end gap-3 border-b border-[var(--vector-ink)] pb-3.5 sm:mx-8 lg:mx-10">
           <PaperNewsControls />
         </section>
 
