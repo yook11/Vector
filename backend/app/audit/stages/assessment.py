@@ -200,6 +200,7 @@ class AssessmentAuditRepository:
         payload = AssessmentPayload(
             failure_kind=projection.failure_kind,
             failure_action=failure_action_value(projection),
+            failure_reason=projection.failure_reason,
             curation_id=ready.curation_id,
             error_message=redact_secrets(str(exc))[:_ERROR_MESSAGE_LIMIT] or None,
             error_chain=extract_error_chain(exc),

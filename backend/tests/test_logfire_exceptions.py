@@ -29,8 +29,7 @@ from app.analysis.assessment.errors import (
     AssessmentError,
     AssessmentRecoverableError,
     AssessmentResponseInvalidError,
-    AssessmentTerminalStageBlockedError,
-    AssessmentTerminalTargetRejectedError,
+    AssessmentTerminalError,
 )
 from app.analysis.curation.errors import (
     CurationError,
@@ -43,8 +42,7 @@ from app.analysis.embedding.errors import (
     EmbeddingError,
     EmbeddingRecoverableError,
     EmbeddingResponseInvalidError,
-    EmbeddingTerminalStageBlockedError,
-    EmbeddingTerminalTargetRejectedError,
+    EmbeddingTerminalError,
 )
 from app.analysis.gemini_error_translator import (
     GeminiContentRejectionReason,
@@ -274,15 +272,14 @@ def test_curation_layer1_requires_code_kwarg(cls: type[CurationError]) -> None:
         cls()  # type: ignore[call-arg]
 
 
-# Assessment / Embedding Layer 1 marker (6 class): kwargs-only, 同律
+# Assessment / Embedding Layer 1 marker (4 class): kwargs-only, 同律。
+# hold は marker 型でなく mode 由来になったため Terminal は 1 本に縮約済。
 
 _OTHER_LAYER1_MARKERS: tuple[type[VectorDomainError], ...] = (
     AssessmentRecoverableError,
-    AssessmentTerminalStageBlockedError,
-    AssessmentTerminalTargetRejectedError,
+    AssessmentTerminalError,
     EmbeddingRecoverableError,
-    EmbeddingTerminalStageBlockedError,
-    EmbeddingTerminalTargetRejectedError,
+    EmbeddingTerminalError,
 )
 
 
@@ -290,8 +287,12 @@ _OTHER_LAYER1_MARKERS: tuple[type[VectorDomainError], ...] = (
 def test_assessment_embedding_layer1_str_format(
     cls: type[VectorDomainError],
 ) -> None:
-    """Assessment / Embedding Layer 1 marker も同形式の ``__str__`` を持つ。"""
-    exc = cls(code="ai_error_network")  # type: ignore[call-arg]
+    """Assessment / Embedding Layer 1 marker も同形式の ``__str__`` を持つ。
+
+    ``failure_kind`` / ``failure_reason`` は instance 値だが SAFE_ATTRS 外なので
+    ``__str__`` は ``code`` のみ (PII / 詳細を span に載せない)。
+    """
+    exc = cls(code="ai_error_network", failure_kind="attempt_scoped")  # type: ignore[call-arg]
     assert str(exc) == f"{cls.__name__}(code='ai_error_network')"
 
 
@@ -336,11 +337,11 @@ def test_layer2b_rejects_positional_message(
         cls("legacy_message")  # type: ignore[call-arg]
 
 
-# PII 全文検索 oracle: 21 class 全件で sensitive 値が __str__ に乗らない
+# PII 全文検索 oracle: 全 marker 件で sensitive 値が __str__ に乗らない
 
 
-def _build_21_class_instances() -> list[VectorDomainError]:
-    """PII 安全性を確認する 21 class の代表 instance を 1 つずつ構築する。"""
+def _build_all_marker_instances() -> list[VectorDomainError]:
+    """PII 安全性を確認する全 marker class の代表 instance を 1 つずつ構築する。"""
     provider = AIProviderRateLimitedError()
     return [
         # AIProvider*Error 9 種 (content は reason 必須、state は引数なし)
@@ -362,37 +363,45 @@ def _build_21_class_instances() -> list[VectorDomainError]:
             code="ai_error_input_rejected", provider_error=provider
         ),
         CurationResponseInvalidError(),
-        # Assessment 3 (Layer 1) + 1 (Layer 2-B)
-        AssessmentRecoverableError(code="ai_error_network", provider_error=provider),
-        AssessmentTerminalStageBlockedError(
-            code="ai_error_configuration", provider_error=provider
+        # Assessment 2 (Layer 1) + 1 (Layer 2-B)。failure_reason も SAFE_ATTRS 外。
+        AssessmentRecoverableError(
+            code="ai_error_network",
+            failure_kind="attempt_scoped",
+            provider_error=provider,
         ),
-        AssessmentTerminalTargetRejectedError(
-            code="ai_error_input_rejected", provider_error=provider
+        AssessmentTerminalError(
+            code="ai_error_input_rejected",
+            failure_kind="target_rejected",
+            failure_reason="safety",
+            provider_error=provider,
         ),
         # defect の value は種別ラベル (PII-free) なので PII oracle に載せて安全。
         AssessmentResponseInvalidError(AssessmentResponseDefect.CATEGORY_KEY_MISSING),
-        # Embedding 3 (Layer 1) + 1 (Layer 2-B)
-        EmbeddingRecoverableError(code="ai_error_network", provider_error=provider),
-        EmbeddingTerminalStageBlockedError(
-            code="ai_error_configuration", provider_error=provider
+        # Embedding 2 (Layer 1) + 1 (Layer 2-B)
+        EmbeddingRecoverableError(
+            code="ai_error_network",
+            failure_kind="attempt_scoped",
+            provider_error=provider,
         ),
-        EmbeddingTerminalTargetRejectedError(
-            code="ai_error_input_rejected", provider_error=provider
+        EmbeddingTerminalError(
+            code="ai_error_input_rejected",
+            failure_kind="target_rejected",
+            failure_reason="safety",
+            provider_error=provider,
         ),
         EmbeddingResponseInvalidError(),
     ]
 
 
-def test_21_class_str_never_contains_provider_error_repr_payload() -> None:
-    """21 class の ``str(exc)`` を JSON 全文化しても provider_error 由来の文字列
+def test_all_marker_str_never_contains_provider_error_repr_payload() -> None:
+    """全 marker の ``str(exc)`` を JSON 全文化しても provider_error 由来の文字列
     が 1 つも残らない。
 
     意図的に provider_error として ``AIProviderRateLimitedError`` instance を
     Layer 1 marker に紐付け、provider 側の class 名や CODE 値が外側 marker の
     ``__str__`` に **連鎖して出ない** ことを検証する。
     """
-    instances = _build_21_class_instances()
+    instances = _build_all_marker_instances()
     rendered_all = json.dumps(
         [str(exc) for exc in instances],
         default=str,
@@ -402,6 +411,7 @@ def test_21_class_str_never_contains_provider_error_repr_payload() -> None:
     assessment_record = str(
         AssessmentRecoverableError(
             code="ai_error_network",
+            failure_kind="attempt_scoped",
             provider_error=AIProviderRateLimitedError(),
         )
     )

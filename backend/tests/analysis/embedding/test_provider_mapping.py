@@ -1,4 +1,9 @@
-"""Stage 5 ACL — ``to_embedding_error`` の dispatch / 網羅性テスト。"""
+"""Stage 5 ACL — ``to_embedding_error`` の翻訳契約テスト (Stage 4 と同形)。
+
+mapper は provider error を「retry 軸 (Recoverable / Terminal) + 原因軸
+(failure_kind = mode 値 / failure_reason = reason 値)」に翻訳する。leaf → marker /
+failure_kind の写像は plan の disposition 表 (spec) を golden として直書きする。
+"""
 
 from __future__ import annotations
 
@@ -18,299 +23,136 @@ from app.analysis.ai_provider_errors import (
     AIProviderUsageLimitExhaustedError,
 )
 from app.analysis.embedding.errors import (
-    EMBEDDING_RECOVERABLE_PROVIDER_ERRORS,
-    EMBEDDING_TERMINAL_STAGE_BLOCKED_PROVIDER_ERRORS,
-    EMBEDDING_TERMINAL_TARGET_REJECTED_PROVIDER_ERRORS,
+    EmbeddingError,
     EmbeddingRecoverableError,
-    EmbeddingTerminalStageBlockedError,
-    EmbeddingTerminalTargetRejectedError,
+    EmbeddingTerminalError,
     to_embedding_error,
 )
-from app.analysis.gemini_error_translator import GeminiContentRejectionReason
-
-
-def _instantiate(exc_type: type[AIProviderError]) -> AIProviderError:
-    """provider error を構築する。
-
-    content 系は ``reason`` 必須なので代表 reason を渡し、state 系は legacy
-    positional message を渡す (accept-and-discard 経路を維持する)。mapper は
-    reason を読まないため、reason の具体値は dispatch 判定に影響しない。
-    """
-    if issubclass(exc_type, AIProviderContentError):
-        return exc_type(reason=GeminiContentRejectionReason.SAFETY)
-    return exc_type("boom")
-
-
-# 期待 9 種の白リスト。Stage 4 test_provider_mapping.py と同形。
-_EXPECTED_PROVIDER_ERROR_TYPES: frozenset[type[AIProviderError]] = frozenset(
-    {
-        AIProviderConfigurationError,
-        AIProviderRequestInvalidError,
-        AIProviderInsufficientBalanceError,
-        AIProviderRateLimitedError,
-        AIProviderUsageLimitExhaustedError,
-        AIProviderServiceUnavailableError,
-        AIProviderNetworkError,
-        AIProviderInputRejectedError,
-        AIProviderOutputBlockedError,
-    }
+from app.analysis.gemini_error_translator import (
+    GeminiContentRejectionReason,
+    GeminiStateReason,
 )
 
+_CONTENT_REASON = GeminiContentRejectionReason.SAFETY
+_STATE_REASON = GeminiStateReason.TIMEOUT
 
-class TestTupleContents:
-    """tuple に登録されている class の固定値 / 網羅性 / 排他性。"""
+# leaf → (期待 marker, 期待 failure_kind)。plan の disposition 表 (spec) が出所。
+_LEAF_EXPECTATION: dict[type[AIProviderError], tuple[type[EmbeddingError], str]] = {
+    AIProviderNetworkError: (EmbeddingRecoverableError, "attempt_scoped"),
+    AIProviderServiceUnavailableError: (
+        EmbeddingRecoverableError,
+        "time_based_recovery",
+    ),
+    AIProviderRateLimitedError: (EmbeddingRecoverableError, "time_based_recovery"),
+    AIProviderUsageLimitExhaustedError: (
+        EmbeddingRecoverableError,
+        "condition_based_recovery",
+    ),
+    AIProviderConfigurationError: (EmbeddingTerminalError, "operator_action_required"),
+    AIProviderRequestInvalidError: (EmbeddingTerminalError, "operator_action_required"),
+    AIProviderInsufficientBalanceError: (
+        EmbeddingTerminalError,
+        "operator_action_required",
+    ),
+    AIProviderInputRejectedError: (EmbeddingTerminalError, "target_rejected"),
+    AIProviderOutputBlockedError: (EmbeddingTerminalError, "target_rejected"),
+}
+
+
+def _instantiate(
+    exc_type: type[AIProviderError], *, with_state_reason: bool = True
+) -> AIProviderError:
+    """provider error を構築する。content 系は reason 必須、state 系は任意。"""
+    if issubclass(exc_type, AIProviderContentError):
+        return exc_type(reason=_CONTENT_REASON)
+    if with_state_reason:
+        return exc_type(reason=_STATE_REASON)
+    return exc_type()
+
+
+class TestToEmbeddingError:
+    """全 provider leaf の翻訳契約 (golden 写像)。"""
+
+    @pytest.mark.parametrize("exc_type", list(_LEAF_EXPECTATION))
+    def test_maps_to_expected_marker_and_failure_kind(
+        self, exc_type: type[AIProviderError]
+    ) -> None:
+        expected_marker, expected_kind = _LEAF_EXPECTATION[exc_type]
+
+        result = to_embedding_error(_instantiate(exc_type))
+
+        assert isinstance(result, expected_marker)
+        assert result.failure_kind == expected_kind
+
+    @pytest.mark.parametrize("exc_type", list(_LEAF_EXPECTATION))
+    def test_preserves_provider_error_identity(
+        self, exc_type: type[AIProviderError]
+    ) -> None:
+        original = _instantiate(exc_type)
+
+        result = to_embedding_error(original)
+
+        assert result.provider_error is original  # type: ignore[union-attr]
+
+    @pytest.mark.parametrize("exc_type", list(_LEAF_EXPECTATION))
+    def test_propagates_code_from_provider_class_var(
+        self, exc_type: type[AIProviderError]
+    ) -> None:
+        result = to_embedding_error(_instantiate(exc_type))
+
+        assert result.code == exc_type.CODE  # type: ignore[union-attr]
+
+    @pytest.mark.parametrize("exc_type", list(_LEAF_EXPECTATION))
+    def test_carries_reason_value_as_failure_reason(
+        self, exc_type: type[AIProviderError]
+    ) -> None:
+        original = _instantiate(exc_type)
+        expected = original.reason.value  # type: ignore[attr-defined]
+
+        result = to_embedding_error(original)
+
+        assert result.failure_reason == expected  # type: ignore[union-attr]
 
     @pytest.mark.parametrize(
         "exc_type",
-        [
-            AIProviderNetworkError,
-            AIProviderServiceUnavailableError,
-            AIProviderRateLimitedError,
-            AIProviderUsageLimitExhaustedError,
-        ],
+        [t for t in _LEAF_EXPECTATION if not issubclass(t, AIProviderContentError)],
     )
-    def test_recoverable_tuple_contains_expected_types(
+    def test_state_without_reason_has_none_failure_reason(
         self, exc_type: type[AIProviderError]
     ) -> None:
-        assert exc_type in EMBEDDING_RECOVERABLE_PROVIDER_ERRORS
+        result = to_embedding_error(_instantiate(exc_type, with_state_reason=False))
 
-    @pytest.mark.parametrize(
-        "exc_type",
-        [
-            AIProviderConfigurationError,
-            AIProviderRequestInvalidError,
-            AIProviderInsufficientBalanceError,
-        ],
-    )
-    def test_terminal_stage_blocked_tuple_contains_expected_types(
-        self, exc_type: type[AIProviderError]
-    ) -> None:
-        assert exc_type in EMBEDDING_TERMINAL_STAGE_BLOCKED_PROVIDER_ERRORS
+        assert result.failure_reason is None  # type: ignore[union-attr]
 
-    @pytest.mark.parametrize(
-        "exc_type",
-        [
-            AIProviderInputRejectedError,
-            AIProviderOutputBlockedError,
-        ],
-    )
-    def test_terminal_target_rejected_tuple_contains_expected_types(
-        self, exc_type: type[AIProviderError]
-    ) -> None:
-        assert exc_type in EMBEDDING_TERMINAL_TARGET_REJECTED_PROVIDER_ERRORS
-
-    def test_three_tuples_cover_all_expected_provider_error_types(self) -> None:
-        # 網羅性: 期待 9 種すべてが 3 tuple のいずれかに登録されている。
-        union = (
-            frozenset(EMBEDDING_RECOVERABLE_PROVIDER_ERRORS)
-            | frozenset(EMBEDDING_TERMINAL_STAGE_BLOCKED_PROVIDER_ERRORS)
-            | frozenset(EMBEDDING_TERMINAL_TARGET_REJECTED_PROVIDER_ERRORS)
+    def test_golden_covers_all_provider_leaves(self) -> None:
+        expected = frozenset(
+            {
+                AIProviderConfigurationError,
+                AIProviderRequestInvalidError,
+                AIProviderInsufficientBalanceError,
+                AIProviderRateLimitedError,
+                AIProviderUsageLimitExhaustedError,
+                AIProviderServiceUnavailableError,
+                AIProviderNetworkError,
+                AIProviderInputRejectedError,
+                AIProviderOutputBlockedError,
+            }
         )
-        assert union == _EXPECTED_PROVIDER_ERROR_TYPES
-
-    def test_three_tuples_are_mutually_exclusive(self) -> None:
-        # 排他性: 同じ class が複数 tuple に登録されていない。
-        groups = [
-            frozenset(EMBEDDING_RECOVERABLE_PROVIDER_ERRORS),
-            frozenset(EMBEDDING_TERMINAL_STAGE_BLOCKED_PROVIDER_ERRORS),
-            frozenset(EMBEDDING_TERMINAL_TARGET_REJECTED_PROVIDER_ERRORS),
-        ]
-        for i, left in enumerate(groups):
-            for right in groups[i + 1 :]:
-                assert left & right == frozenset()
-
-    def test_recoverable_tuple_size(self) -> None:
-        assert len(EMBEDDING_RECOVERABLE_PROVIDER_ERRORS) == 4
-
-    def test_terminal_stage_blocked_tuple_size(self) -> None:
-        assert len(EMBEDDING_TERMINAL_STAGE_BLOCKED_PROVIDER_ERRORS) == 3
-
-    def test_terminal_target_rejected_tuple_size(self) -> None:
-        assert len(EMBEDDING_TERMINAL_TARGET_REJECTED_PROVIDER_ERRORS) == 2
+        assert frozenset(_LEAF_EXPECTATION) == expected
 
 
-class TestMapProviderToEmbeddingRecoverable:
-    """Recoverable 系 4 種が ``EmbeddingRecoverableError`` に詰め替えられる。"""
-
-    @pytest.mark.parametrize(
-        "exc_type",
-        [
-            AIProviderNetworkError,
-            AIProviderServiceUnavailableError,
-            AIProviderRateLimitedError,
-            AIProviderUsageLimitExhaustedError,
-        ],
-    )
-    def test_dispatches_to_recoverable_marker(
-        self, exc_type: type[AIProviderError]
-    ) -> None:
-        original = _instantiate(exc_type)
-
-        result = to_embedding_error(original)
-
-        assert isinstance(result, EmbeddingRecoverableError)
-
-    @pytest.mark.parametrize(
-        "exc_type",
-        [
-            AIProviderNetworkError,
-            AIProviderServiceUnavailableError,
-            AIProviderRateLimitedError,
-            AIProviderUsageLimitExhaustedError,
-        ],
-    )
-    def test_preserves_provider_error_identity(
-        self, exc_type: type[AIProviderError]
-    ) -> None:
-        original = _instantiate(exc_type)
-
-        result = to_embedding_error(original)
-
-        assert result.provider_error is original  # type: ignore[union-attr]
-
-    @pytest.mark.parametrize(
-        "exc_type",
-        [
-            AIProviderNetworkError,
-            AIProviderServiceUnavailableError,
-            AIProviderRateLimitedError,
-            AIProviderUsageLimitExhaustedError,
-        ],
-    )
-    def test_propagates_code_from_provider_class_var(
-        self, exc_type: type[AIProviderError]
-    ) -> None:
-        original = _instantiate(exc_type)
-
-        result = to_embedding_error(original)
-
-        assert result.code == exc_type.CODE  # type: ignore[union-attr]
-
-
-class TestMapProviderToEmbeddingTerminalStageBlocked:
-    """stage-wide terminal 系 3 種が StageBlocked marker に詰め替えられる。"""
-
-    @pytest.mark.parametrize(
-        "exc_type",
-        [
-            AIProviderConfigurationError,
-            AIProviderRequestInvalidError,
-            AIProviderInsufficientBalanceError,
-        ],
-    )
-    def test_dispatches_to_terminal_stage_blocked_marker(
-        self, exc_type: type[AIProviderError]
-    ) -> None:
-        original = _instantiate(exc_type)
-
-        result = to_embedding_error(original)
-
-        assert isinstance(result, EmbeddingTerminalStageBlockedError)
-
-    @pytest.mark.parametrize(
-        "exc_type",
-        [
-            AIProviderConfigurationError,
-            AIProviderRequestInvalidError,
-            AIProviderInsufficientBalanceError,
-        ],
-    )
-    def test_preserves_provider_error_identity(
-        self, exc_type: type[AIProviderError]
-    ) -> None:
-        original = _instantiate(exc_type)
-
-        result = to_embedding_error(original)
-
-        assert result.provider_error is original  # type: ignore[union-attr]
-
-    @pytest.mark.parametrize(
-        "exc_type",
-        [
-            AIProviderConfigurationError,
-            AIProviderRequestInvalidError,
-            AIProviderInsufficientBalanceError,
-        ],
-    )
-    def test_propagates_code_from_provider_class_var(
-        self, exc_type: type[AIProviderError]
-    ) -> None:
-        original = _instantiate(exc_type)
-
-        result = to_embedding_error(original)
-
-        assert result.code == exc_type.CODE  # type: ignore[union-attr]
-
-
-class TestMapProviderToEmbeddingTerminalTargetRejected:
-    """target-local terminal 系 2 種が TargetRejected marker に詰め替えられる。"""
-
-    @pytest.mark.parametrize(
-        "exc_type",
-        [
-            AIProviderInputRejectedError,
-            AIProviderOutputBlockedError,
-        ],
-    )
-    def test_dispatches_to_terminal_target_rejected_marker(
-        self, exc_type: type[AIProviderError]
-    ) -> None:
-        original = _instantiate(exc_type)
-
-        result = to_embedding_error(original)
-
-        assert isinstance(result, EmbeddingTerminalTargetRejectedError)
-
-    @pytest.mark.parametrize(
-        "exc_type",
-        [
-            AIProviderInputRejectedError,
-            AIProviderOutputBlockedError,
-        ],
-    )
-    def test_preserves_provider_error_identity(
-        self, exc_type: type[AIProviderError]
-    ) -> None:
-        original = _instantiate(exc_type)
-
-        result = to_embedding_error(original)
-
-        assert result.provider_error is original  # type: ignore[union-attr]
-
-    @pytest.mark.parametrize(
-        "exc_type",
-        [
-            AIProviderInputRejectedError,
-            AIProviderOutputBlockedError,
-        ],
-    )
-    def test_propagates_code_from_provider_class_var(
-        self, exc_type: type[AIProviderError]
-    ) -> None:
-        original = _instantiate(exc_type)
-
-        result = to_embedding_error(original)
-
-        assert result.code == exc_type.CODE  # type: ignore[union-attr]
-
-
-class TestMapProviderToEmbeddingUnregistered:
-    """tuple に未登録の ``AIProviderError`` subclass で fail-fast。"""
-
-    def test_unregistered_subclass_raises_type_error(self) -> None:
-        class _UnregisteredProviderError(AIProviderError):
-            """テスト内 ad-hoc subclass。tuple に登録されていない。"""
-
-            CODE = "ai_error_unregistered_for_test"
-
-        unregistered = _UnregisteredProviderError("brand-new failure mode")
-
-        with pytest.raises(TypeError, match="unmapped provider error"):
-            to_embedding_error(unregistered)
+class TestToEmbeddingErrorUnregistered:
+    """state でも content でもない ``AIProviderError`` で fail-fast。"""
 
     def test_bare_provider_error_base_raises_type_error(self) -> None:
-        # 基底 ``AIProviderError`` 自身も tuple に未登録なので TypeError。
         bare = AIProviderError("bare base")
 
         with pytest.raises(TypeError, match="unmapped provider error"):
             to_embedding_error(bare)
+
+    def test_direct_ai_provider_error_subclass_raises(self) -> None:
+        class _NeitherStateNorContent(AIProviderError):
+            CODE = "ai_error_neither_for_test"
+
+        with pytest.raises(TypeError, match="unmapped provider error"):
+            to_embedding_error(_NeitherStateNorContent())

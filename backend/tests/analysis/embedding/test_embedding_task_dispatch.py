@@ -25,7 +25,7 @@ from app.analysis.embedding.domain.ready import ReadyForEmbedding
 from app.analysis.embedding.errors import (
     EmbeddingRecoverableError,
     EmbeddingResponseInvalidError,
-    EmbeddingTerminalStageBlockedError,
+    EmbeddingTerminalError,
 )
 from app.analysis.failure_handling import FailureHandlingDecision
 from app.analysis.rate_limit import AIModelRateLimitPolicy
@@ -90,13 +90,15 @@ def _patch_ready_construction(ready: ReadyForEmbedding | None = None) -> object:
 
 
 @pytest.mark.asyncio
-async def test_terminal_stage_blocked_delegates_to_handler() -> None:
-    """``EmbeddingTerminalStageBlockedError`` は handler.handle に委譲され、
+async def test_terminal_delegates_to_handler() -> None:
+    """``EmbeddingTerminalError`` は handler.handle に委譲され、
     reraise=False で return する。"""
     from app.queue.tasks.embedding import generate_embedding
 
     ctx = _make_ctx()
-    exc = EmbeddingTerminalStageBlockedError(code="ai_error_configuration")
+    exc = EmbeddingTerminalError(
+        code="ai_error_configuration", failure_kind="operator_action_required"
+    )
 
     with (
         _patch_ready_construction(),
@@ -133,7 +135,9 @@ async def test_recoverable_reraise_true_raises() -> None:
     from app.queue.tasks.embedding import generate_embedding
 
     ctx = _make_ctx(retry_count=0, max_retries=2)  # retry 余地あり
-    exc = EmbeddingRecoverableError(code="ai_error_network")
+    exc = EmbeddingRecoverableError(
+        code="ai_error_network", failure_kind="attempt_scoped"
+    )
 
     with (
         _patch_ready_construction(),
@@ -161,7 +165,9 @@ async def test_recoverable_reraise_false_returns() -> None:
     from app.queue.tasks.embedding import generate_embedding
 
     ctx = _make_ctx(retry_count=2, max_retries=2)  # 最終試行
-    exc = EmbeddingRecoverableError(code="ai_error_network")
+    exc = EmbeddingRecoverableError(
+        code="ai_error_network", failure_kind="attempt_scoped"
+    )
 
     with (
         _patch_ready_construction(),
@@ -245,7 +251,9 @@ async def test_service_exception_sets_failed_result(
     from app.queue.tasks.embedding import generate_embedding
 
     ctx = _make_ctx()
-    exc = EmbeddingRecoverableError(code="ai_error_network")
+    exc = EmbeddingRecoverableError(
+        code="ai_error_network", failure_kind="attempt_scoped"
+    )
     with (
         _patch_ready_construction(),
         patch("app.queue.tasks.embedding.EmbeddingService") as mock_svc_cls,

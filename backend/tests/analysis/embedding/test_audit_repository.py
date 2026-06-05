@@ -5,11 +5,11 @@ audit row の shape SSoT が repository に集約されたことを検証する:
 - ``append_success`` で
   ``outcome_code="embedding_completed"`` + payload に
   ``embedding_model`` / ``vector_dimension`` が embedder から取得されている
-- ``append_failure`` で **exc 型による 2 dispatch + Layer 2-B + catch-all** が動作:
-  - ``EmbeddingRecoverableError`` → ``retryability=retryable``
-  - ``EmbeddingTerminalStageBlockedError`` → ``retryability=non_retryable``
+- ``append_failure`` で **retry 軸 (Recoverable / Terminal) + Layer 2-B + catch-all**:
+  - ``EmbeddingRecoverableError`` → ``retryability=retryable`` / failure_kind=mode 値
+  - ``EmbeddingTerminalError`` → ``retryability=non_retryable`` / failure_kind=mode 値
   - ``EmbeddingResponseInvalidError`` (Layer 2-B) → ``retryability=retryable`` /
-    ``outcome_code="embedding_response_invalid"``
+    ``outcome_code="embedding_response_invalid"`` / failure_kind="ai_response_invalid"
   - 想定外 ``RuntimeError`` → ``retryability=unknown`` /
     ``outcome_code="unexpected_error"``
 - ``error_chain`` が ``__cause__`` 経由で 2 段以上を記録 (Service の
@@ -33,6 +33,11 @@ from sqlalchemy.exc import (
 )
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from app.analysis.ai_provider_errors import (
+    AIProviderConfigurationError,
+    AIProviderInputRejectedError,
+    AIProviderNetworkError,
+)
 from app.analysis.embedding.ai.base import BaseEmbedder
 from app.analysis.embedding.domain.ready import (
     EmbeddingReadyBuildBlockedCode,
@@ -42,9 +47,9 @@ from app.analysis.embedding.domain.ready import (
 from app.analysis.embedding.errors import (
     EmbeddingRecoverableError,
     EmbeddingResponseInvalidError,
-    EmbeddingTerminalStageBlockedError,
-    EmbeddingTerminalTargetRejectedError,
+    to_embedding_error,
 )
+from app.analysis.gemini_error_translator import GeminiContentRejectionReason
 from app.audit.stages.embedding import EmbeddingAuditRepository
 from app.models.article import Article
 from app.models.article_curation import ArticleCuration
@@ -300,10 +305,10 @@ async def test_append_failure_recoverable_maps_to_retryable(
     session_factory: async_sessionmaker[AsyncSession],
     sample_source: NewsSource,
 ) -> None:
-    """EmbeddingRecoverableError → retryable / outcome_code=instance attr。"""
+    """EmbeddingRecoverableError → retryable / failure_kind=mode 値。"""
     article = await _make_article(db_session, sample_source)
     await _make_extraction(db_session, article)
-    exc = EmbeddingRecoverableError(code="ai_error_network")
+    exc = to_embedding_error(AIProviderNetworkError())
 
     async with session_factory() as session:
         await EmbeddingAuditRepository(session).append_failure(
@@ -316,20 +321,20 @@ async def test_append_failure_recoverable_maps_to_retryable(
     assert ev.event_type == "failed"
     assert ev.outcome_code == "ai_error_network"
     assert ev.retryability == "retryable"
-    assert ev.payload["failure_kind"] == "recoverable"
+    assert ev.payload["failure_kind"] == "attempt_scoped"
     assert ev.payload["failure_action"] is None
 
 
 @pytest.mark.asyncio
-async def test_append_failure_terminal_stage_blocked(
+async def test_append_failure_terminal_operator_action(
     db_session: AsyncSession,
     session_factory: async_sessionmaker[AsyncSession],
     sample_source: NewsSource,
 ) -> None:
-    """EmbeddingTerminalStageBlockedError → non_retryable / stage_blocked。"""
+    """OPERATOR_ACTION_REQUIRED → Terminal / non_retryable / mode 値 failure_kind。"""
     article = await _make_article(db_session, sample_source)
     await _make_extraction(db_session, article)
-    exc = EmbeddingTerminalStageBlockedError(code="ai_error_configuration")
+    exc = to_embedding_error(AIProviderConfigurationError())
 
     async with session_factory() as session:
         await EmbeddingAuditRepository(session).append_failure(
@@ -341,7 +346,7 @@ async def test_append_failure_terminal_stage_blocked(
     ev = await _fetch_one(db_session, article.id)
     assert ev.outcome_code == "ai_error_configuration"
     assert ev.retryability == "non_retryable"
-    assert ev.payload["failure_kind"] == "terminal_stage_blocked"
+    assert ev.payload["failure_kind"] == "operator_action_required"
     assert ev.payload["failure_action"] is None
 
 
@@ -351,10 +356,12 @@ async def test_append_failure_terminal_target_rejected(
     session_factory: async_sessionmaker[AsyncSession],
     sample_source: NewsSource,
 ) -> None:
-    """EmbeddingTerminalTargetRejectedError → non_retryable / target_rejected。"""
+    """TARGET_REJECTED → Terminal / non_retryable / failure_reason に reason 値。"""
     article = await _make_article(db_session, sample_source)
     await _make_extraction(db_session, article)
-    exc = EmbeddingTerminalTargetRejectedError(code="ai_error_input_rejected")
+    exc = to_embedding_error(
+        AIProviderInputRejectedError(reason=GeminiContentRejectionReason.SAFETY)
+    )
 
     async with session_factory() as session:
         await EmbeddingAuditRepository(session).append_failure(
@@ -366,7 +373,8 @@ async def test_append_failure_terminal_target_rejected(
     ev = await _fetch_one(db_session, article.id)
     assert ev.outcome_code == "ai_error_input_rejected"
     assert ev.retryability == "non_retryable"
-    assert ev.payload["failure_kind"] == "terminal_target_rejected"
+    assert ev.payload["failure_kind"] == "target_rejected"
+    assert ev.payload["failure_reason"] == "safety"
     assert ev.payload["failure_action"] is None
 
 
@@ -394,7 +402,8 @@ async def test_append_failure_layer_2b_response_invalid(
     ev = await _fetch_one(db_session, article.id)
     assert ev.outcome_code == "embedding_response_invalid"
     assert ev.retryability == "retryable"
-    assert ev.payload["failure_kind"] == "recoverable"
+    assert ev.payload["failure_kind"] == "ai_response_invalid"
+    assert ev.payload["failure_reason"] is None
     assert ev.payload["failure_action"] is None
 
 
@@ -505,8 +514,10 @@ async def test_append_failure_walks_error_chain_via_cause(
         try:
             raise RuntimeError("upstream provider error")
         except RuntimeError as inner:
-            # Phase 4: kwargs-only constructor。message 引数廃止 (PII 隔離契約)。
-            raise EmbeddingRecoverableError(code="ai_error_network") from inner
+            # kwargs-only constructor。原因軸 (failure_kind) も instance 値で持つ。
+            raise EmbeddingRecoverableError(
+                code="ai_error_network", failure_kind="attempt_scoped"
+            ) from inner
     except EmbeddingRecoverableError as exc:
         async with session_factory() as session:
             await EmbeddingAuditRepository(session).append_failure(

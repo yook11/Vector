@@ -14,19 +14,37 @@ import structlog
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from app.analysis.ai_provider_errors import AIProviderUsageLimitExhaustedError
+from app.analysis.ai_provider_errors import (
+    AIProviderContentError,
+    AIProviderStateError,
+)
 from app.analysis.assessment.domain.ready import ReadyForAssessment
 from app.analysis.assessment.errors import (
     AssessmentError,
     AssessmentRecoverableError,
     AssessmentTerminalError,
-    AssessmentTerminalStageBlockedError,
 )
 from app.analysis.failure_handling import FailureHandlingDecision
 from app.audit.stages.assessment import AssessmentAuditRepository
 from app.shared.security.redaction import redact_secrets
 
 logger = structlog.get_logger(__name__)
+
+
+def _hold_reason(
+    exc: AssessmentRecoverableError | AssessmentTerminalError,
+) -> str | None:
+    """provider error の回復クラスから stage hold reason を導出する。
+
+    どの回復クラスが hold を要するかは ``AIProviderFailureMode.is_stage_hold_mode``
+    が SSoT (marker 型には背負わせない)。hold reason には provider CODE
+    (= ``exc.code``) を使い過去 hold metric との連続性を保つ。provider 由来でない
+    失敗 (parse の ResponseInvalid 等) は hold しない。
+    """
+    provider_error = exc.provider_error
+    if not isinstance(provider_error, AIProviderStateError | AIProviderContentError):
+        return None
+    return exc.code if provider_error.FAILURE_MODE.is_stage_hold_mode else None
 
 
 class AssessmentFailureHandler:
@@ -54,39 +72,29 @@ class AssessmentFailureHandler:
             taskiq retry と stage hold の decision。
         """
         match exc:
-            case AssessmentTerminalStageBlockedError():
+            case AssessmentTerminalError():
+                hold_reason = _hold_reason(exc)
                 logger.warning(
-                    "assess_content_terminal_stage_blocked",
+                    "assess_content_terminal",
                     curation_id=ready.curation_id,
-                    code=getattr(exc, "code", None),
+                    code=exc.code,
+                    held=hold_reason is not None,
                 )
                 await self._audit_failure(ready, exc)
                 return FailureHandlingDecision(
                     reraise=False,
-                    stage_hold_reason=getattr(exc, "code", "unknown"),
+                    stage_hold_reason=hold_reason,
                 )
-            case AssessmentTerminalError():
-                logger.warning(
-                    "assess_content_terminal",
-                    curation_id=ready.curation_id,
-                    code=getattr(exc, "code", None),
-                )
-                await self._audit_failure(ready, exc)
-                return FailureHandlingDecision(reraise=False)
             case AssessmentRecoverableError():
                 recoverable = exc
                 await self._audit_failure(ready, recoverable)
                 if last_attempt:
-                    hold_reason = None
-                    if isinstance(
-                        recoverable.provider_error,
-                        AIProviderUsageLimitExhaustedError,
-                    ):
-                        hold_reason = recoverable.code
+                    hold_reason = _hold_reason(recoverable)
                     logger.warning(
                         "assess_content_recoverable_exhausted",
                         curation_id=ready.curation_id,
-                        code=getattr(recoverable, "code", None),
+                        code=recoverable.code,
+                        held=hold_reason is not None,
                     )
                     return FailureHandlingDecision(
                         reraise=False,

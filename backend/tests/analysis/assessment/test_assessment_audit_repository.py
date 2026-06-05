@@ -11,9 +11,9 @@ audit row の shape SSoT が repository に集約されたことを検証する:
   ``outcome_code="assessed_out_of_scope"`` + payload に
   ``investor_take`` が非 None
   (PR #447 対称化追従、in-scope 固有 field の ``category_slug`` のみ None)
-- ``append_failure`` で **exc 型による 3 dispatch + Layer 2-B + catch-all** が動作:
-  - ``AssessmentRecoverableError`` → ``retryability=retryable``
-  - ``AssessmentTerminalStageBlockedError`` → ``retryability=non_retryable``
+- ``append_failure`` で **retry 軸 (Recoverable / Terminal) + Layer 2-B + catch-all**:
+  - ``AssessmentRecoverableError`` → ``retryability=retryable`` / failure_kind=mode 値
+  - ``AssessmentTerminalError`` → ``retryability=non_retryable`` / failure_kind=mode 値
   - ``AssessmentResponseInvalidError`` (defect 載せ替え) → ``retryability=retryable`` /
     ``outcome_code`` は defect の value (parse 由来 / provider envelope 由来とも具体値)
   - 想定外 ``RuntimeError`` → ``retryability=unknown`` /
@@ -39,6 +39,11 @@ from sqlalchemy.exc import (
 )
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from app.analysis.ai_provider_errors import (
+    AIProviderConfigurationError,
+    AIProviderInputRejectedError,
+    AIProviderNetworkError,
+)
 from app.analysis.assessment.ai.deepseek import DeepSeekResponseDefect
 from app.analysis.assessment.ai.envelope import AssessmentCall
 from app.analysis.assessment.ai.parse import AssessmentResponseDefect
@@ -55,9 +60,9 @@ from app.analysis.assessment.domain.result import (
 from app.analysis.assessment.errors import (
     AssessmentRecoverableError,
     AssessmentResponseInvalidError,
-    AssessmentTerminalStageBlockedError,
-    AssessmentTerminalTargetRejectedError,
+    map_provider_to_assessment,
 )
+from app.analysis.gemini_error_translator import GeminiContentRejectionReason
 from app.audit.stages.assessment import AssessmentAuditRepository
 from app.models.article import Article
 from app.models.article_curation import ArticleCuration
@@ -546,10 +551,10 @@ async def test_append_failure_recoverable_maps_to_retryable(
     session_factory: async_sessionmaker[AsyncSession],
     sample_source: NewsSource,
 ) -> None:
-    """AssessmentRecoverableError → retryable / outcome_code=instance attr。"""
+    """AssessmentRecoverableError → retryable / failure_kind=mode 値。"""
     article = await _make_article(db_session, sample_source)
     extraction = await _make_extraction(db_session, article)
-    exc = AssessmentRecoverableError(code="ai_error_network")
+    exc = map_provider_to_assessment(AIProviderNetworkError())
 
     async with session_factory() as session:
         await AssessmentAuditRepository(session).append_failure(
@@ -562,20 +567,20 @@ async def test_append_failure_recoverable_maps_to_retryable(
     assert ev.event_type == "failed"
     assert ev.outcome_code == "ai_error_network"
     assert ev.retryability == "retryable"
-    assert ev.payload["failure_kind"] == "recoverable"
+    assert ev.payload["failure_kind"] == "attempt_scoped"
     assert ev.payload["failure_action"] is None
 
 
 @pytest.mark.asyncio
-async def test_append_failure_terminal_stage_blocked(
+async def test_append_failure_terminal_operator_action(
     db_session: AsyncSession,
     session_factory: async_sessionmaker[AsyncSession],
     sample_source: NewsSource,
 ) -> None:
-    """AssessmentTerminalStageBlockedError → non_retryable / stage_blocked。"""
+    """OPERATOR_ACTION_REQUIRED → Terminal / non_retryable / mode 値 failure_kind。"""
     article = await _make_article(db_session, sample_source)
     extraction = await _make_extraction(db_session, article)
-    exc = AssessmentTerminalStageBlockedError(code="ai_error_configuration")
+    exc = map_provider_to_assessment(AIProviderConfigurationError())
 
     async with session_factory() as session:
         await AssessmentAuditRepository(session).append_failure(
@@ -587,7 +592,7 @@ async def test_append_failure_terminal_stage_blocked(
     ev = await _fetch_one(db_session, article.id)
     assert ev.outcome_code == "ai_error_configuration"
     assert ev.retryability == "non_retryable"
-    assert ev.payload["failure_kind"] == "terminal_stage_blocked"
+    assert ev.payload["failure_kind"] == "operator_action_required"
     assert ev.payload["failure_action"] is None
 
 
@@ -597,10 +602,12 @@ async def test_append_failure_terminal_target_rejected(
     session_factory: async_sessionmaker[AsyncSession],
     sample_source: NewsSource,
 ) -> None:
-    """AssessmentTerminalTargetRejectedError → non_retryable / target_rejected。"""
+    """TARGET_REJECTED → Terminal / non_retryable / failure_reason に reason 値。"""
     article = await _make_article(db_session, sample_source)
     extraction = await _make_extraction(db_session, article)
-    exc = AssessmentTerminalTargetRejectedError(code="ai_error_input_rejected")
+    exc = map_provider_to_assessment(
+        AIProviderInputRejectedError(reason=GeminiContentRejectionReason.SAFETY)
+    )
 
     async with session_factory() as session:
         await AssessmentAuditRepository(session).append_failure(
@@ -612,7 +619,8 @@ async def test_append_failure_terminal_target_rejected(
     ev = await _fetch_one(db_session, article.id)
     assert ev.outcome_code == "ai_error_input_rejected"
     assert ev.retryability == "non_retryable"
-    assert ev.payload["failure_kind"] == "terminal_target_rejected"
+    assert ev.payload["failure_kind"] == "target_rejected"
+    assert ev.payload["failure_reason"] == "safety"
     assert ev.payload["failure_action"] is None
 
 
@@ -641,7 +649,8 @@ async def test_append_failure_response_invalid_bakes_parse_defect_code(
     ev = await _fetch_one(db_session, article.id)
     assert ev.outcome_code == "assessment_response_category_key_missing"
     assert ev.retryability == "retryable"
-    assert ev.payload["failure_kind"] == "recoverable"
+    assert ev.payload["failure_kind"] == "ai_response_invalid"
+    assert ev.payload["failure_reason"] is None
     assert ev.payload["failure_action"] is None
 
 
@@ -670,7 +679,7 @@ async def test_append_failure_response_invalid_bakes_provider_envelope_code(
     ev = await _fetch_one(db_session, article.id)
     assert ev.outcome_code == "assessment_response_deepseek_no_tool_call"
     assert ev.retryability == "retryable"
-    assert ev.payload["failure_kind"] == "recoverable"
+    assert ev.payload["failure_kind"] == "ai_response_invalid"
     assert ev.payload["failure_action"] is None
 
 
@@ -781,8 +790,10 @@ async def test_append_failure_walks_error_chain_via_cause(
         try:
             raise RuntimeError("upstream provider error")
         except RuntimeError as inner:
-            # Phase 4: kwargs-only constructor。message 引数廃止 (PII 隔離契約)。
-            raise AssessmentRecoverableError(code="ai_error_network") from inner
+            # kwargs-only constructor。原因軸 (failure_kind) も instance 値で持つ。
+            raise AssessmentRecoverableError(
+                code="ai_error_network", failure_kind="attempt_scoped"
+            ) from inner
     except AssessmentRecoverableError as exc:
         async with session_factory() as session:
             await AssessmentAuditRepository(session).append_failure(

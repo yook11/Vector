@@ -36,6 +36,9 @@ class FailureProjection:
     failure_action: FailureAction | None
     code: str
     stage: Stage | None = None
+    # 原因詳細 (failure_kind = ファミリー / code = 具体 CODE とは別軸)。
+    # marker が instance 値で持てば焼く。持たない marker (db / catch-all 等) は None。
+    failure_reason: str | None = None
 
 
 class FailurePayloadFields(TypedDict):
@@ -84,13 +87,19 @@ def project_failure(
 
 
 def project_marker_failure(exc: BaseException) -> FailureProjection | None:
-    """ClassVar を持つ自前 marker 例外を失敗属性へ投影する。"""
+    """自前 marker 例外を失敗属性へ投影する。
+
+    ``failure_kind`` は instance 値 (assessment / embedding の原因軸 = mode 値) を
+    優先し classvar ``FAILURE_KIND`` (curation / completion / briefing /
+    acquisition) に fallback する。``failure_reason`` は instance 値を持つ marker
+    だけが焼く。
+    """
     stage = getattr(exc, "STAGE", None)
-    failure_kind = getattr(exc, "FAILURE_KIND", None)
+    failure_kind = _failure_kind_of_marker(exc)
     retryability = getattr(exc, "RETRYABILITY", None)
     if not isinstance(stage, Stage):
         return None
-    if not isinstance(failure_kind, str):
+    if failure_kind is None:
         return None
     if not isinstance(retryability, Retryability):
         return None
@@ -109,6 +118,7 @@ def project_marker_failure(exc: BaseException) -> FailureProjection | None:
         failure_action=failure_action,
         code=code,
         stage=stage,
+        failure_reason=_failure_reason_of_marker(exc),
     )
 
 
@@ -165,4 +175,28 @@ def _code_of_marker(exc: BaseException) -> str | None:
     class_code = getattr(exc, "CODE", None)
     if isinstance(class_code, str) and class_code:
         return class_code
+    return None
+
+
+def _failure_kind_of_marker(exc: BaseException) -> str | None:
+    """instance ``failure_kind`` を優先し classvar ``FAILURE_KIND`` に fallback。
+
+    assessment / embedding は原因軸を instance 値 (mode 値) で持つ。curation /
+    completion / briefing / acquisition は従来どおり classvar を宣言する。
+    """
+    kind = getattr(exc, "failure_kind", None)
+    if isinstance(kind, str) and kind:
+        return kind
+
+    class_kind = getattr(exc, "FAILURE_KIND", None)
+    if isinstance(class_kind, str) and class_kind:
+        return class_kind
+    return None
+
+
+def _failure_reason_of_marker(exc: BaseException) -> str | None:
+    """marker が持つ原因詳細 (instance ``failure_reason``)。持たない marker は None。"""
+    reason = getattr(exc, "failure_reason", None)
+    if isinstance(reason, str) and reason:
+        return reason
     return None

@@ -27,7 +27,7 @@ from app.analysis.assessment.domain.ready import ReadyForAssessment
 from app.analysis.assessment.errors import (
     AssessmentRecoverableError,
     AssessmentResponseInvalidError,
-    AssessmentTerminalStageBlockedError,
+    AssessmentTerminalError,
 )
 from app.analysis.assessment.repository import CategoryEnumDatabaseMismatchError
 from app.analysis.failure_handling import FailureHandlingDecision
@@ -95,13 +95,15 @@ def _patch_ready_construction(ready: ReadyForAssessment | None = None) -> object
 
 
 @pytest.mark.asyncio
-async def test_terminal_stage_blocked_delegates_to_handler() -> None:
-    """``AssessmentTerminalStageBlockedError`` は handler.handle に委譲され、
+async def test_terminal_delegates_to_handler() -> None:
+    """``AssessmentTerminalError`` は handler.handle に委譲され、
     reraise=False で return する。"""
     from app.queue.tasks.assessment import assess_content
 
     ctx = _make_ctx()
-    exc = AssessmentTerminalStageBlockedError(code="ai_error_configuration")
+    exc = AssessmentTerminalError(
+        code="ai_error_configuration", failure_kind="operator_action_required"
+    )
 
     with (
         _patch_ready_construction(),
@@ -167,7 +169,9 @@ async def test_recoverable_reraise_true_raises() -> None:
     from app.queue.tasks.assessment import assess_content
 
     ctx = _make_ctx(retry_count=0, max_retries=2)  # retry 余地あり
-    exc = AssessmentRecoverableError(code="ai_error_network")
+    exc = AssessmentRecoverableError(
+        code="ai_error_network", failure_kind="attempt_scoped"
+    )
 
     with (
         _patch_ready_construction(),
@@ -197,7 +201,9 @@ async def test_recoverable_reraise_false_returns() -> None:
     from app.queue.tasks.assessment import assess_content
 
     ctx = _make_ctx(retry_count=2, max_retries=2)  # 最終試行
-    exc = AssessmentRecoverableError(code="ai_error_network")
+    exc = AssessmentRecoverableError(
+        code="ai_error_network", failure_kind="attempt_scoped"
+    )
 
     with (
         _patch_ready_construction(),

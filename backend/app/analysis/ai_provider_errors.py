@@ -62,6 +62,21 @@ class AIProviderFailureMode(StrEnum):
             AIProviderFailureMode.CONDITION_BASED_RECOVERY,
         )
 
+    @property
+    def is_stage_hold_mode(self) -> bool:
+        """この回復クラスが stage の退避 (hold) を要するか。
+
+        OPERATOR_ACTION_REQUIRED は運用者対応なしに回復せず、
+        CONDITION_BASED_RECOVERY は利用枠の回復を待つ必要があるため stage を
+        hold する。hold を「いつ」立てるか (即時か retry 枯渇時か) は consumer
+        (handler) が retry の余地と合わせて決める。本 property はどの回復クラスが
+        hold を要するかの SSoT。
+        """
+        return self in (
+            AIProviderFailureMode.OPERATOR_ACTION_REQUIRED,
+            AIProviderFailureMode.CONDITION_BASED_RECOVERY,
+        )
+
 
 class AIProviderError(VectorDomainError):
     """provider 由来エラーの共通祖先。Stage の処理方針は持たない。

@@ -78,6 +78,26 @@ def test_mode_retryable(mode: AIProviderFailureMode, expected_retryable: bool) -
     assert mode.retryable is expected_retryable
 
 
+@pytest.mark.parametrize(
+    "mode,expected_hold",
+    [
+        (AIProviderFailureMode.ATTEMPT_SCOPED, False),
+        (AIProviderFailureMode.TIME_BASED_RECOVERY, False),
+        (AIProviderFailureMode.CONDITION_BASED_RECOVERY, True),
+        (AIProviderFailureMode.OPERATOR_ACTION_REQUIRED, True),
+        (AIProviderFailureMode.TARGET_REJECTED, False),
+    ],
+)
+def test_mode_is_stage_hold_mode(
+    mode: AIProviderFailureMode, expected_hold: bool
+) -> None:
+    """is_stage_hold_mode は「stage の退避を要する回復クラスか」の SSoT。
+
+    運用者対応待ち (operator_action) と利用枠回復待ち (condition_based) が hold 対象。
+    """
+    assert mode.is_stage_hold_mode is expected_hold
+
+
 # -- 2 系統階層 --
 
 

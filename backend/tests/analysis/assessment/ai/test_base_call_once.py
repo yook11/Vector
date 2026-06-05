@@ -27,7 +27,7 @@ from app.analysis.assessment.domain.result import InScope, OutOfScope
 from app.analysis.assessment.errors import (
     AssessmentRecoverableError,
     AssessmentResponseInvalidError,
-    AssessmentTerminalStageBlockedError,
+    AssessmentTerminalError,
 )
 from app.analysis.rate_limit import AIModelRateLimitPolicy
 
@@ -144,7 +144,7 @@ class TestCallOncePassthrough:
 
     @pytest.mark.asyncio
     async def test_assessment_recoverable_base_passes_through(self) -> None:
-        original = AssessmentRecoverableError(code="z")
+        original = AssessmentRecoverableError(code="z", failure_kind="attempt_scoped")
         cls = _StubAssessor()
         cls._call_api = AsyncMock(side_effect=original)  # type: ignore[method-assign]
         cls._translate_error = MagicMock(  # type: ignore[method-assign]
@@ -156,15 +156,17 @@ class TestCallOncePassthrough:
         assert exc_info.value is original
 
     @pytest.mark.asyncio
-    async def test_assessment_terminal_stage_blocked_base_passes_through(self) -> None:
-        original = AssessmentTerminalStageBlockedError(code="z")
+    async def test_assessment_terminal_base_passes_through(self) -> None:
+        original = AssessmentTerminalError(
+            code="z", failure_kind="operator_action_required"
+        )
         cls = _StubAssessor()
         cls._call_api = AsyncMock(side_effect=original)  # type: ignore[method-assign]
         cls._translate_error = MagicMock(  # type: ignore[method-assign]
             side_effect=AssertionError("must not be called")
         )
 
-        with pytest.raises(AssessmentTerminalStageBlockedError) as exc_info:
+        with pytest.raises(AssessmentTerminalError) as exc_info:
             await cls._call_once("prompt")
         assert exc_info.value is original
 

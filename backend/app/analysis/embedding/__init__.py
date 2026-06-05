@@ -21,8 +21,6 @@ from app.analysis.embedding.errors import (
     EmbeddingRecoverableError,
     EmbeddingResponseInvalidError,
     EmbeddingTerminalError,
-    EmbeddingTerminalStageBlockedError,
-    EmbeddingTerminalTargetRejectedError,
 )
 from app.analysis.embedding.repository import EmbeddingRepository
 from app.analysis.embedding.service import EmbeddingService
@@ -37,7 +35,5 @@ __all__ = [
     "EmbeddingResponseInvalidError",
     "EmbeddingService",
     "EmbeddingTerminalError",
-    "EmbeddingTerminalStageBlockedError",
-    "EmbeddingTerminalTargetRejectedError",
     "EmbeddingVector",
 ]

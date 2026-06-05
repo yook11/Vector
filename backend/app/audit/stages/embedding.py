@@ -148,6 +148,7 @@ class EmbeddingAuditRepository:
         payload = EmbeddingPayload(
             failure_kind=projection.failure_kind,
             failure_action=failure_action_value(projection),
+            failure_reason=projection.failure_reason,
             analysis_id=ready.analysis_id,
             embedding_model=None,
             vector_dimension=None,

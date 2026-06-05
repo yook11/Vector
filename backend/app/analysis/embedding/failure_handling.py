@@ -15,19 +15,37 @@ import structlog
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from app.analysis.ai_provider_errors import AIProviderUsageLimitExhaustedError
+from app.analysis.ai_provider_errors import (
+    AIProviderContentError,
+    AIProviderStateError,
+)
 from app.analysis.embedding.domain.ready import ReadyForEmbedding
 from app.analysis.embedding.errors import (
     EmbeddingError,
     EmbeddingRecoverableError,
     EmbeddingTerminalError,
-    EmbeddingTerminalStageBlockedError,
 )
 from app.analysis.failure_handling import FailureHandlingDecision
 from app.audit.stages.embedding import EmbeddingAuditRepository
 from app.shared.security.redaction import redact_secrets
 
 logger = structlog.get_logger(__name__)
+
+
+def _hold_reason(
+    exc: EmbeddingRecoverableError | EmbeddingTerminalError,
+) -> str | None:
+    """provider error の回復クラスから stage hold reason を導出する (Stage 4 と同形)。
+
+    どの回復クラスが hold を要するかは ``AIProviderFailureMode.is_stage_hold_mode``
+    が SSoT。hold reason には provider CODE (= ``exc.code``) を使い過去 hold metric
+    との連続性を保つ。provider 由来でない失敗 (parse の ResponseInvalid 等) は hold
+    しない。
+    """
+    provider_error = exc.provider_error
+    if not isinstance(provider_error, AIProviderStateError | AIProviderContentError):
+        return None
+    return exc.code if provider_error.FAILURE_MODE.is_stage_hold_mode else None
 
 
 class EmbeddingFailureHandler:
@@ -55,39 +73,29 @@ class EmbeddingFailureHandler:
             taskiq retry と stage hold の decision。
         """
         match exc:
-            case EmbeddingTerminalStageBlockedError():
+            case EmbeddingTerminalError():
+                hold_reason = _hold_reason(exc)
                 logger.warning(
-                    "generate_embedding_terminal_stage_blocked",
+                    "generate_embedding_terminal",
                     analysis_id=ready.analysis_id,
-                    code=getattr(exc, "code", None),
+                    code=exc.code,
+                    held=hold_reason is not None,
                 )
                 await self._audit_failure(ready, exc)
                 return FailureHandlingDecision(
                     reraise=False,
-                    stage_hold_reason=getattr(exc, "code", "unknown"),
+                    stage_hold_reason=hold_reason,
                 )
-            case EmbeddingTerminalError():
-                logger.warning(
-                    "generate_embedding_terminal",
-                    analysis_id=ready.analysis_id,
-                    code=getattr(exc, "code", None),
-                )
-                await self._audit_failure(ready, exc)
-                return FailureHandlingDecision(reraise=False)
             case EmbeddingRecoverableError():
                 recoverable = exc
                 await self._audit_failure(ready, recoverable)
                 if last_attempt:
-                    hold_reason = None
-                    if isinstance(
-                        recoverable.provider_error,
-                        AIProviderUsageLimitExhaustedError,
-                    ):
-                        hold_reason = recoverable.code
+                    hold_reason = _hold_reason(recoverable)
                     logger.warning(
                         "generate_embedding_recoverable_exhausted",
                         analysis_id=ready.analysis_id,
-                        code=getattr(recoverable, "code", None),
+                        code=recoverable.code,
+                        held=hold_reason is not None,
                     )
                     return FailureHandlingDecision(
                         reraise=False,

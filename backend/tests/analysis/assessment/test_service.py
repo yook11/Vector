@@ -3,9 +3,8 @@
 PR6 で Service が以下を行うようになったことを固定する:
 
 - ``assessor.assess`` の ``AIProviderError`` を ``map_provider_to_assessment``
-  で Stage 4 marker (``AssessmentRecoverableError`` /
-  ``AssessmentTerminalStageBlockedError``) に詰め替え、``__cause__`` に元
-  ``AIProvider*Error`` を紐付ける (ACL boundary)。
+  で Stage 4 marker (``AssessmentRecoverableError`` / ``AssessmentTerminalError``)
+  に詰め替え、``__cause__`` に元 ``AIProvider*Error`` を紐付ける (ACL boundary)。
 - ``_handle_in_scope`` で category 解決失敗 (``category_id is None``) のとき
   ``CategoryEnumDatabaseMismatchError`` (enum↔DB 不整合) を raise する。
 - 業務 INSERT (in-scope / out-of-scope) と同 session 同 tx で
@@ -41,7 +40,7 @@ from app.analysis.assessment.domain.result import (
 )
 from app.analysis.assessment.errors import (
     AssessmentRecoverableError,
-    AssessmentTerminalStageBlockedError,
+    AssessmentTerminalError,
 )
 from app.analysis.assessment.repository import CategoryEnumDatabaseMismatchError
 from app.analysis.assessment.service import AssessmentService
@@ -309,10 +308,10 @@ async def test_provider_network_error_is_wrapped_to_recoverable_marker(
 
 
 @pytest.mark.asyncio
-async def test_provider_configuration_error_is_wrapped_to_stage_blocked_marker(
+async def test_provider_configuration_error_is_wrapped_to_terminal_marker(
     session_factory: async_sessionmaker[AsyncSession],
 ) -> None:
-    """``AIProviderConfigurationError`` → ``AssessmentTerminalStageBlockedError``。"""
+    """``AIProviderConfigurationError`` (OPERATOR_ACTION) は Terminal に詰め替わる。"""
     provider_exc = AIProviderConfigurationError("bad api key")
     assessor = _make_assessor(side_effect=provider_exc)
 
@@ -324,10 +323,11 @@ async def test_provider_configuration_error_is_wrapped_to_stage_blocked_marker(
     )
     svc = AssessmentService(session_factory)
 
-    with pytest.raises(AssessmentTerminalStageBlockedError) as excinfo:
+    with pytest.raises(AssessmentTerminalError) as excinfo:
         await svc.execute(ready, assessor)
     assert excinfo.value.__cause__ is provider_exc
     assert excinfo.value.provider_error is provider_exc
+    assert excinfo.value.failure_kind == "operator_action_required"
 
 
 # enum↔DB 不整合: catalog 未登録 slug → CategoryEnumDatabaseMismatchError

@@ -73,12 +73,50 @@ def test_project_failure_prefers_marker_projection() -> None:
     )
 
 
+def test_project_marker_failure_reads_instance_failure_kind_and_reason() -> None:
+    """assessment / embedding は原因軸を instance 値で持つ (classvar より優先)。"""
+    exc = AssessmentRecoverableError(
+        code="ai_error_rate_limited",
+        failure_kind="time_based_recovery",
+        failure_reason="rate_limited",
+    )
+
+    assert project_marker_failure(exc) == FailureProjection(
+        failure_kind="time_based_recovery",
+        retryability=Retryability.RETRYABLE,
+        failure_action=None,
+        code="ai_error_rate_limited",
+        stage=Stage.ASSESSMENT,
+        failure_reason="rate_limited",
+    )
+
+
+def test_project_marker_failure_classvar_marker_has_no_failure_reason() -> None:
+    """classvar 宣言 marker (curation 等) は failure_reason を持たない (None)。"""
+    projection = project_marker_failure(
+        CurationTerminalDropError(code="ai_error_output_blocked")
+    )
+
+    assert projection is not None
+    assert projection.failure_reason is None
+
+
 @pytest.mark.parametrize(
     ("exc", "expected_stage"),
     [
         (CurationRecoverableError(code="ai_error_network"), Stage.CURATION),
-        (AssessmentRecoverableError(code="ai_error_network"), Stage.ASSESSMENT),
-        (EmbeddingRecoverableError(code="ai_error_network"), Stage.EMBEDDING),
+        (
+            AssessmentRecoverableError(
+                code="ai_error_network", failure_kind="attempt_scoped"
+            ),
+            Stage.ASSESSMENT,
+        ),
+        (
+            EmbeddingRecoverableError(
+                code="ai_error_network", failure_kind="attempt_scoped"
+            ),
+            Stage.EMBEDDING,
+        ),
         (BriefingConfigurationError("missing key"), Stage.BRIEFING),
     ],
 )

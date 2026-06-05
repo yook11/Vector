@@ -5,16 +5,9 @@ from __future__ import annotations
 from typing import ClassVar
 
 from app.analysis.ai_provider_errors import (
-    AIProviderConfigurationError,
+    AIProviderContentError,
     AIProviderError,
-    AIProviderInputRejectedError,
-    AIProviderInsufficientBalanceError,
-    AIProviderNetworkError,
-    AIProviderOutputBlockedError,
-    AIProviderRateLimitedError,
-    AIProviderRequestInvalidError,
-    AIProviderServiceUnavailableError,
-    AIProviderUsageLimitExhaustedError,
+    AIProviderStateError,
 )
 from app.audit.domain.event import Stage
 from app.audit.failure_projection import FailureAction, Retryability
@@ -32,31 +25,45 @@ class EmbeddingError(VectorDomainError):
 
 
 class EmbeddingRecoverableError(EmbeddingError):
-    """再実行で回復しうる embedding 失敗。"""
+    """再実行で回復しうる embedding 失敗。
+
+    型が固定するのは retry 軸 (``RETRYABILITY``) だけ。原因軸 (``failure_kind`` =
+    回復クラス / ``failure_reason`` = 詳細) は instance 値で持ち、provider error の
+    ``FAILURE_MODE`` / ``reason`` から ``to_embedding_error`` が導出する。
+    ``failure_reason`` は forensic 用で ``SAFE_ATTRS`` に含めない。
+    """
 
     SAFE_ATTRS: ClassVar[tuple[str, ...]] = ("code",)
-    FAILURE_KIND: ClassVar[str] = "recoverable"
     RETRYABILITY: ClassVar[Retryability] = Retryability.RETRYABLE
     FAILURE_ACTION: ClassVar[FailureAction | None] = None
 
     code: str
+    failure_kind: str
+    failure_reason: str | None
     provider_error: AIProviderError | None
 
     def __init__(
         self,
         *,
         code: str,
+        failure_kind: str,
+        failure_reason: str | None = None,
         provider_error: AIProviderError | None = None,
     ) -> None:
         super().__init__()
         self.code = code
+        self.failure_kind = failure_kind
+        self.failure_reason = failure_reason
         self.provider_error = provider_error
 
 
 class EmbeddingTerminalError(EmbeddingError):
-    """再試行は無効で embedding を作らない Stage 5 失敗の共通基底。
+    """再試行は無効で embedding を作らない Stage 5 失敗。
 
-    leaf class は audit projection 用の ``FAILURE_KIND`` を必ず宣言する。
+    型が固定するのは retry 軸 (``RETRYABILITY`` = NON_RETRYABLE) だけ。stage 全体を
+    止めるか対象固有かは型では区別せず、handler が provider error の ``FAILURE_MODE``
+    から hold を導出する。原因軸 (``failure_kind`` / ``failure_reason``) は
+    ``EmbeddingRecoverableError`` と同形の instance 値。
     """
 
     SAFE_ATTRS: ClassVar[tuple[str, ...]] = ("code",)
@@ -64,36 +71,23 @@ class EmbeddingTerminalError(EmbeddingError):
     FAILURE_ACTION: ClassVar[FailureAction | None] = None
 
     code: str
+    failure_kind: str
+    failure_reason: str | None
     provider_error: AIProviderError | None
-
-    def __init_subclass__(cls, **kwargs: object) -> None:
-        super().__init_subclass__(**kwargs)
-        if "FAILURE_KIND" not in cls.__dict__:
-            raise TypeError(f"{cls.__qualname__} must declare FAILURE_KIND")
 
     def __init__(
         self,
         *,
         code: str,
+        failure_kind: str,
+        failure_reason: str | None = None,
         provider_error: AIProviderError | None = None,
     ) -> None:
-        if type(self) is EmbeddingTerminalError:
-            raise TypeError("EmbeddingTerminalError is abstract")
         super().__init__()
         self.code = code
+        self.failure_kind = failure_kind
+        self.failure_reason = failure_reason
         self.provider_error = provider_error
-
-
-class EmbeddingTerminalStageBlockedError(EmbeddingTerminalError):
-    """stage/provider 全体が停止している Stage 5 失敗。"""
-
-    FAILURE_KIND: ClassVar[str] = "terminal_stage_blocked"
-
-
-class EmbeddingTerminalTargetRejectedError(EmbeddingTerminalError):
-    """処理対象 assessment 固有の拒否により embedding を作らない失敗。"""
-
-    FAILURE_KIND: ClassVar[str] = "terminal_target_rejected"
 
 
 # ---------------------------------------------------------------------------
@@ -107,6 +101,7 @@ class EmbeddingResponseInvalidError(EmbeddingRecoverableError):
     def __init__(self) -> None:
         super().__init__(
             code="embedding_response_invalid",
+            failure_kind="ai_response_invalid",
             provider_error=None,
         )
 
@@ -115,70 +110,26 @@ class EmbeddingResponseInvalidError(EmbeddingRecoverableError):
 # Layer 2-A ACL (provider 由来の詰め替え)
 # ---------------------------------------------------------------------------
 #
-# ``EmbeddingService.execute()`` の boundary で ``to_embedding_error`` を
-# 呼ぶ。Stage 5 が「どの provider error を recoverable として扱うか / stage-wide
-# terminal と target-local terminal のどちらとして扱うか」を tuple 3 つに集約する
-# (Stage 4 ``map_provider_to_assessment`` と完全同形)。
+# ``EmbeddingService.execute()`` の boundary で ``to_embedding_error`` を呼ぶ。
+# retry 軸 (Recoverable / Terminal) は provider の回復クラス
+# (``FAILURE_MODE.retryable``) が一意に決め、原因軸 (failure_kind = mode 値 /
+# failure_reason = reason 値) は同じ provider error から導出する (Stage 4
+# ``map_provider_to_assessment`` と完全同形)。hold は marker 型ではなく handler が
+# mode から導出する。
 #
-# 新しい provider error class が追加されたら、下記の該当 tuple に 1 行追加する
-# だけで Stage 5 の解釈に組み込める (コード分岐の追加は不要)。未登録の
-# ``AIProviderError`` subclass で ``to_embedding_error`` を呼ぶと
-# ``TypeError`` で fail-fast する。
-
-
-EMBEDDING_RECOVERABLE_PROVIDER_ERRORS: tuple[type[AIProviderError], ...] = (
-    AIProviderNetworkError,
-    AIProviderServiceUnavailableError,
-    AIProviderRateLimitedError,
-    AIProviderUsageLimitExhaustedError,
-)
-"""``EmbeddingRecoverableError`` に詰め替えるべき provider error 一覧。
-
-将来の再実行で成功する可能性があるもの (transient / rate limit / usage limit)。
-新しい provider error 種別を追加したら必ず本 tuple または下記 terminal tuple
-のいずれかに 1 行加える運用ルール。
-"""
-
-
-EMBEDDING_TERMINAL_STAGE_BLOCKED_PROVIDER_ERRORS: tuple[type[AIProviderError], ...] = (
-    AIProviderConfigurationError,
-    AIProviderRequestInvalidError,
-    AIProviderInsufficientBalanceError,
-)
-"""``EmbeddingTerminalStageBlockedError`` に詰め替える provider error 一覧。
-
-どの assessment を投入しても同じ失敗になる stage/provider 全体の健全性問題。
-観測時に embedding hold を立てる対象。
-"""
-
-
-EMBEDDING_TERMINAL_TARGET_REJECTED_PROVIDER_ERRORS: tuple[
-    type[AIProviderError], ...
-] = (
-    AIProviderInputRejectedError,
-    AIProviderOutputBlockedError,
-)
-"""``EmbeddingTerminalTargetRejectedError`` に詰め替える provider error 一覧。
-
-対象 assessment 固有の content/safety 拒否。stage 全体は健全なため hold しない。
-"""
+# state でも content でもない裸の ``AIProviderError`` を渡すと ``TypeError`` で
+# fail-fast する。
 
 
 def to_embedding_error(exc: AIProviderError) -> EmbeddingError:
     """provider 例外を Stage 5 marker に詰め替える。"""
-    if isinstance(exc, EMBEDDING_RECOVERABLE_PROVIDER_ERRORS):
-        return EmbeddingRecoverableError(
-            code=exc.CODE,
-            provider_error=exc,
-        )
-    if isinstance(exc, EMBEDDING_TERMINAL_STAGE_BLOCKED_PROVIDER_ERRORS):
-        return EmbeddingTerminalStageBlockedError(
-            code=exc.CODE,
-            provider_error=exc,
-        )
-    if isinstance(exc, EMBEDDING_TERMINAL_TARGET_REJECTED_PROVIDER_ERRORS):
-        return EmbeddingTerminalTargetRejectedError(
-            code=exc.CODE,
-            provider_error=exc,
-        )
-    raise TypeError(f"unmapped provider error: {type(exc).__qualname__}")
+    if not isinstance(exc, AIProviderStateError | AIProviderContentError):
+        raise TypeError(f"unmapped provider error: {type(exc).__qualname__}")
+    mode = exc.FAILURE_MODE
+    marker = EmbeddingRecoverableError if mode.retryable else EmbeddingTerminalError
+    return marker(
+        code=exc.CODE,
+        failure_kind=mode.value,
+        failure_reason=exc.reason.value if exc.reason is not None else None,
+        provider_error=exc,
+    )

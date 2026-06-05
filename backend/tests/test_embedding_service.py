@@ -28,7 +28,7 @@ from app.analysis.embedding.domain.value_objects import (
 from app.analysis.embedding.errors import (
     EmbeddingRecoverableError,
     EmbeddingResponseInvalidError,
-    EmbeddingTerminalTargetRejectedError,
+    EmbeddingTerminalError,
 )
 from app.analysis.embedding.service import EmbeddingService
 from app.analysis.gemini_error_translator import GeminiContentRejectionReason
@@ -283,12 +283,15 @@ async def test_execute_wraps_target_rejected_provider_error(
     svc = EmbeddingService(session_factory)
     ready = _make_ready(analysis_id=analysis_id, article_id=article_id)
 
-    with pytest.raises(EmbeddingTerminalTargetRejectedError) as exc_info:
+    with pytest.raises(EmbeddingTerminalError) as exc_info:
         await svc.execute(ready, embedder)
 
     # provider_error attr に元 instance が identity 付きで保持される
     assert exc_info.value.provider_error is original
     assert exc_info.value.code == AIProviderInputRejectedError.CODE
+    # content 拒否は回復クラス TARGET_REJECTED → failure_kind / failure_reason
+    assert exc_info.value.failure_kind == "target_rejected"
+    assert exc_info.value.failure_reason == "input_blocked"
     # __cause__ に元 provider error が紐付く (audit error_chain 連鎖)
     assert exc_info.value.__cause__ is original
 

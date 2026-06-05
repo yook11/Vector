@@ -1,13 +1,19 @@
 """``AssessmentFailureHandler`` の integration test。
 
-assessment は内容起因 DELETE 経路を持たないため、検証する性質は:
+検証する性質:
 
-- Terminal / Recoverable / catch-all の各 marker で audit row が正しい
-  ``outcome_code`` / ``retryability`` / payload failure attrs で記録される
-- ``last_attempt`` flag で raise/return が分岐する (Recoverable / catch-all)
+- hold (stage 退避) は provider error の回復クラス (mode) から導出される:
+  OPERATOR_ACTION_REQUIRED は即時 hold、CONDITION_BASED_RECOVERY は retry
+  exhaustion (last_attempt) で hold、それ以外 (ATTEMPT_SCOPED / TIME_BASED /
+  TARGET_REJECTED) は hold しない。
+- ``last_attempt`` flag で raise/return が分岐する (Recoverable / catch-all)。
+- 失敗ごとに audit row が 1 行記録される (row の詳細 golden は
+  ``test_assessment_audit_repository.py`` が所有)。
 - audit Repository が raise しても task は落ちず ``assessment_failure_audit_dropped``
-  構造ログにフォールバックする (business / audit exception の secret prefix
-  が log field から除去される)
+  にフォールバックし、secret prefix が log field から redact される。
+
+marker は production と同じく ``map_provider_to_assessment`` で provider error から
+構築する (handler が読む ``provider_error`` mode 配線も込みで検証する)。
 """
 
 from __future__ import annotations
@@ -21,16 +27,18 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from structlog.testing import capture_logs
 
 from app.analysis.ai_provider_errors import (
+    AIProviderConfigurationError,
+    AIProviderError,
+    AIProviderInputRejectedError,
+    AIProviderNetworkError,
     AIProviderRateLimitedError,
+    AIProviderServiceUnavailableError,
     AIProviderUsageLimitExhaustedError,
 )
 from app.analysis.assessment.domain.ready import ReadyForAssessment
-from app.analysis.assessment.errors import (
-    AssessmentRecoverableError,
-    AssessmentTerminalStageBlockedError,
-    AssessmentTerminalTargetRejectedError,
-)
+from app.analysis.assessment.errors import map_provider_to_assessment
 from app.analysis.assessment.failure_handling import AssessmentFailureHandler
+from app.analysis.gemini_error_translator import GeminiContentRejectionReason
 from app.models.article import Article
 from app.models.article_curation import ArticleCuration
 from app.models.news_source import NewsSource
@@ -97,272 +105,157 @@ async def _fetch_assessment_events(
     return list(rows)
 
 
-# Terminal 経路
+def _input_rejected() -> AIProviderInputRejectedError:
+    return AIProviderInputRejectedError(reason=GeminiContentRejectionReason.SAFETY)
+
+
+# --- hold 導出 (mode 由来) ----------------------------------------------------
+#
+# provider error の回復クラスごとに (last_attempt, 期待 hold reason) を pin する。
+# OPERATOR_ACTION_REQUIRED = 即時 hold / CONDITION_BASED_RECOVERY = 枯渇時 hold /
+# それ以外 = hold なし。hold reason は provider CODE。
+_HOLD_CASES: list[tuple[AIProviderError, bool, str | None]] = [
+    (AIProviderConfigurationError(), False, "ai_error_configuration"),
+    (AIProviderConfigurationError(), True, "ai_error_configuration"),
+    (_input_rejected(), False, None),
+    (_input_rejected(), True, None),
+    (AIProviderUsageLimitExhaustedError(), False, None),
+    (AIProviderUsageLimitExhaustedError(), True, "ai_error_usage_limit_exhausted"),
+    (AIProviderNetworkError(), True, None),
+    (AIProviderRateLimitedError(), True, None),
+    (AIProviderServiceUnavailableError(), True, None),
+]
 
 
 @pytest.mark.asyncio
-async def test_terminal_stage_blocked_writes_audit_sets_hold_and_returns_false(
+@pytest.mark.parametrize("provider_exc,last_attempt,expected_hold", _HOLD_CASES)
+async def test_hold_reason_derived_from_provider_mode(
+    db_session: AsyncSession,
+    session_factory: async_sessionmaker[AsyncSession],
+    sample_source: NewsSource,
+    provider_exc: AIProviderError,
+    last_attempt: bool,
+    expected_hold: str | None,
+) -> None:
+    """stage hold は marker 型ではなく provider error の回復クラスから決まる。"""
+    article = await _make_article(db_session, sample_source)
+    extraction = await _make_extraction(db_session, article)
+    ready = _ready_from(extraction)
+    handler = AssessmentFailureHandler(session_factory)
+    exc = map_provider_to_assessment(provider_exc)
+
+    decision = await handler.handle(ready=ready, exc=exc, last_attempt=last_attempt)
+
+    assert decision.stage_hold_reason == expected_hold
+
+
+# --- retry decision (last_attempt 分岐) ---------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_recoverable_with_retry_budget_returns_true(
     db_session: AsyncSession,
     session_factory: async_sessionmaker[AsyncSession],
     sample_source: NewsSource,
 ) -> None:
-    """StageBlocked → non-retryable audit + assessment hold + ``reraise=False``。"""
+    """Recoverable + retry 余地あり → taskiq retry に委ねる (reraise=True)。"""
     article = await _make_article(db_session, sample_source)
     extraction = await _make_extraction(db_session, article)
-    # rollback 後の expired-attr lazy reload を避けるため事前に値を取り出す
+    ready = _ready_from(extraction)
+    handler = AssessmentFailureHandler(session_factory)
+
+    exc = map_provider_to_assessment(AIProviderNetworkError())
+    decision = await handler.handle(ready=ready, exc=exc, last_attempt=False)
+
+    assert decision.reraise is True
+    assert decision.stage_hold_reason is None
+
+
+@pytest.mark.asyncio
+async def test_recoverable_last_attempt_returns_false(
+    db_session: AsyncSession,
+    session_factory: async_sessionmaker[AsyncSession],
+    sample_source: NewsSource,
+) -> None:
+    """Recoverable + retry 上限到達 → reraise=False。"""
+    article = await _make_article(db_session, sample_source)
+    extraction = await _make_extraction(db_session, article)
+    ready = _ready_from(extraction)
+    handler = AssessmentFailureHandler(session_factory)
+
+    exc = map_provider_to_assessment(AIProviderNetworkError())
+    decision = await handler.handle(ready=ready, exc=exc, last_attempt=True)
+
+    assert decision.reraise is False
+
+
+@pytest.mark.asyncio
+async def test_terminal_returns_false_without_reraise(
+    db_session: AsyncSession,
+    session_factory: async_sessionmaker[AsyncSession],
+    sample_source: NewsSource,
+) -> None:
+    """Terminal は retry 余地に関わらず reraise=False。"""
+    article = await _make_article(db_session, sample_source)
+    extraction = await _make_extraction(db_session, article)
+    ready = _ready_from(extraction)
+    handler = AssessmentFailureHandler(session_factory)
+
+    exc = map_provider_to_assessment(AIProviderConfigurationError())
+    decision = await handler.handle(ready=ready, exc=exc, last_attempt=False)
+
+    assert decision.reraise is False
+
+
+# --- audit row が書かれる (詳細 golden は repository テストが所有) --------------
+
+
+@pytest.mark.asyncio
+async def test_terminal_writes_single_failure_audit_row(
+    db_session: AsyncSession,
+    session_factory: async_sessionmaker[AsyncSession],
+    sample_source: NewsSource,
+) -> None:
+    """Terminal で failure audit row が 1 行記録され原因軸が焼かれる。"""
+    article = await _make_article(db_session, sample_source)
+    extraction = await _make_extraction(db_session, article)
     article_id = article.id
     ready = _ready_from(extraction)
     handler = AssessmentFailureHandler(session_factory)
 
-    exc = AssessmentTerminalStageBlockedError(code="ai_error_configuration")
-    decision = await handler.handle(ready=ready, exc=exc, last_attempt=False)
+    exc = map_provider_to_assessment(_input_rejected())
+    await handler.handle(ready=ready, exc=exc, last_attempt=False)
 
-    assert decision.reraise is False
-    assert decision.stage_hold_reason == "ai_error_configuration"
     await db_session.rollback()
     events = await _fetch_assessment_events(db_session, article_id)
     assert len(events) == 1
     ev = events[0]
     assert ev.event_type == "failed"
-    assert ev.outcome_code == "ai_error_configuration"
-    assert ev.retryability == "non_retryable"
-    assert ev.payload["failure_kind"] == "terminal_stage_blocked"
-    assert ev.payload["failure_action"] is None
-
-
-@pytest.mark.asyncio
-async def test_terminal_target_rejected_writes_audit_without_hold(
-    db_session: AsyncSession,
-    session_factory: async_sessionmaker[AsyncSession],
-    sample_source: NewsSource,
-) -> None:
-    """TargetRejected は対象 curation 固有の失敗なので hold を立てない。"""
-    article = await _make_article(db_session, sample_source)
-    extraction = await _make_extraction(db_session, article)
-    article_id = article.id
-    ready = _ready_from(extraction)
-    handler = AssessmentFailureHandler(session_factory)
-
-    exc = AssessmentTerminalTargetRejectedError(code="ai_error_input_rejected")
-    decision = await handler.handle(ready=ready, exc=exc, last_attempt=False)
-
-    assert decision.reraise is False
-    assert decision.stage_hold_reason is None
-    await db_session.rollback()
-    events = await _fetch_assessment_events(db_session, article_id)
-    assert len(events) == 1
-    ev = events[0]
     assert ev.outcome_code == "ai_error_input_rejected"
     assert ev.retryability == "non_retryable"
-    assert ev.payload["failure_kind"] == "terminal_target_rejected"
-    assert ev.payload["failure_action"] is None
+    assert ev.payload["failure_kind"] == "target_rejected"
+    assert ev.payload["failure_reason"] == "safety"
+
+
+# --- catch-all 経路 -----------------------------------------------------------
 
 
 @pytest.mark.asyncio
-async def test_terminal_stage_blocked_returns_hold_reason_without_redis(
+async def test_unexpected_with_retry_budget_returns_true(
     db_session: AsyncSession,
     session_factory: async_sessionmaker[AsyncSession],
     sample_source: NewsSource,
 ) -> None:
-    """handler は Redis に触らず、hold reason だけを decision に乗せる。"""
+    """catch-all + retry 余地あり → unknown audit + reraise=True。"""
     article = await _make_article(db_session, sample_source)
     extraction = await _make_extraction(db_session, article)
     article_id = article.id
     ready = _ready_from(extraction)
     handler = AssessmentFailureHandler(session_factory)
 
-    exc = AssessmentTerminalStageBlockedError(code="ai_error_configuration")
-
-    decision = await handler.handle(ready=ready, exc=exc, last_attempt=False)
-
-    assert decision.reraise is False
-    assert decision.stage_hold_reason == "ai_error_configuration"
-    await db_session.rollback()
-    events = await _fetch_assessment_events(db_session, article_id)
-    assert len(events) == 1
-    assert events[0].payload["failure_kind"] == "terminal_stage_blocked"
-
-
-# Recoverable 経路
-
-
-@pytest.mark.asyncio
-async def test_recoverable_with_retry_budget_writes_audit_and_returns_true(
-    db_session: AsyncSession,
-    session_factory: async_sessionmaker[AsyncSession],
-    sample_source: NewsSource,
-) -> None:
-    """Recoverable + retry 余地あり → retryable audit + reraise=True。"""
-    article = await _make_article(db_session, sample_source)
-    extraction = await _make_extraction(db_session, article)
-    article_id = article.id
-    ready = _ready_from(extraction)
-    handler = AssessmentFailureHandler(session_factory)
-
-    exc = AssessmentRecoverableError(code="ai_error_network")
-    decision = await handler.handle(ready=ready, exc=exc, last_attempt=False)
-
-    assert decision.reraise is True
-    assert decision.stage_hold_reason is None
-    await db_session.rollback()
-    events = await _fetch_assessment_events(db_session, article_id)
-    assert len(events) == 1
-    ev = events[0]
-    assert ev.event_type == "failed"
-    assert ev.outcome_code == "ai_error_network"
-    assert ev.retryability == "retryable"
-    assert ev.payload["failure_kind"] == "recoverable"
-    assert ev.payload["failure_action"] is None
-
-
-@pytest.mark.asyncio
-async def test_recoverable_last_attempt_writes_audit_and_returns_false(
-    db_session: AsyncSession,
-    session_factory: async_sessionmaker[AsyncSession],
-    sample_source: NewsSource,
-) -> None:
-    """Recoverable + retry 上限到達 → audit + ``reraise=False``。"""
-    article = await _make_article(db_session, sample_source)
-    extraction = await _make_extraction(db_session, article)
-    article_id = article.id
-    ready = _ready_from(extraction)
-    handler = AssessmentFailureHandler(session_factory)
-
-    exc = AssessmentRecoverableError(code="ai_error_network")
-    decision = await handler.handle(ready=ready, exc=exc, last_attempt=True)
-
-    assert decision.reraise is False
-    assert decision.stage_hold_reason is None
-    await db_session.rollback()
-    events = await _fetch_assessment_events(db_session, article_id)
-    assert len(events) == 1
-    assert events[0].retryability == "retryable"
-    assert events[0].payload["failure_kind"] == "recoverable"
-
-
-@pytest.mark.asyncio
-async def test_usage_limit_recoverable_with_retry_budget_does_not_set_hold(
-    db_session: AsyncSession,
-    session_factory: async_sessionmaker[AsyncSession],
-    sample_source: NewsSource,
-) -> None:
-    """UsageLimitExhausted でも retry 余地があれば taskiq retry に任せる。"""
-    article = await _make_article(db_session, sample_source)
-    extraction = await _make_extraction(db_session, article)
-    ready = _ready_from(extraction)
-    handler = AssessmentFailureHandler(session_factory)
-    provider_exc = AIProviderUsageLimitExhaustedError()
-    exc = AssessmentRecoverableError(
-        code=provider_exc.CODE,
-        provider_error=provider_exc,
+    decision = await handler.handle(
+        ready=ready, exc=ValueError("surprise"), last_attempt=False
     )
-
-    decision = await handler.handle(ready=ready, exc=exc, last_attempt=False)
-
-    assert decision.reraise is True
-    assert decision.stage_hold_reason is None
-
-
-@pytest.mark.asyncio
-async def test_usage_limit_recoverable_sets_hold_on_last_attempt(
-    db_session: AsyncSession,
-    session_factory: async_sessionmaker[AsyncSession],
-    sample_source: NewsSource,
-) -> None:
-    """UsageLimitExhausted は recoverable のまま retry exhaustion で hold する。"""
-    article = await _make_article(db_session, sample_source)
-    extraction = await _make_extraction(db_session, article)
-    article_id = article.id
-    ready = _ready_from(extraction)
-    handler = AssessmentFailureHandler(session_factory)
-    provider_exc = AIProviderUsageLimitExhaustedError()
-    exc = AssessmentRecoverableError(
-        code=provider_exc.CODE,
-        provider_error=provider_exc,
-    )
-
-    decision = await handler.handle(ready=ready, exc=exc, last_attempt=True)
-
-    assert decision.reraise is False
-    assert decision.stage_hold_reason == provider_exc.CODE
-    await db_session.rollback()
-    events = await _fetch_assessment_events(db_session, article_id)
-    assert len(events) == 1
-    assert events[0].outcome_code == provider_exc.CODE
-    assert events[0].retryability == "retryable"
-    assert events[0].payload["failure_kind"] == "recoverable"
-
-
-@pytest.mark.asyncio
-async def test_usage_limit_hold_returns_reason_without_redis(
-    db_session: AsyncSession,
-    session_factory: async_sessionmaker[AsyncSession],
-    sample_source: NewsSource,
-) -> None:
-    """UsageLimitExhausted は retry exhaustion で hold reason を返す。"""
-    article = await _make_article(db_session, sample_source)
-    extraction = await _make_extraction(db_session, article)
-    article_id = article.id
-    ready = _ready_from(extraction)
-    handler = AssessmentFailureHandler(session_factory)
-    provider_exc = AIProviderUsageLimitExhaustedError()
-    exc = AssessmentRecoverableError(
-        code=provider_exc.CODE,
-        provider_error=provider_exc,
-    )
-
-    decision = await handler.handle(ready=ready, exc=exc, last_attempt=True)
-
-    assert decision.reraise is False
-    assert decision.stage_hold_reason == provider_exc.CODE
-    await db_session.rollback()
-    events = await _fetch_assessment_events(db_session, article_id)
-    assert len(events) == 1
-    assert events[0].outcome_code == provider_exc.CODE
-    assert events[0].payload["failure_kind"] == "recoverable"
-
-
-@pytest.mark.asyncio
-async def test_rate_limited_recoverable_last_attempt_does_not_set_hold(
-    db_session: AsyncSession,
-    session_factory: async_sessionmaker[AsyncSession],
-    sample_source: NewsSource,
-) -> None:
-    """RateLimited は短期 throttle として recoverable exhaustion でも hold しない。"""
-    article = await _make_article(db_session, sample_source)
-    extraction = await _make_extraction(db_session, article)
-    ready = _ready_from(extraction)
-    handler = AssessmentFailureHandler(session_factory)
-    provider_exc = AIProviderRateLimitedError()
-    exc = AssessmentRecoverableError(
-        code=provider_exc.CODE,
-        provider_error=provider_exc,
-    )
-
-    decision = await handler.handle(ready=ready, exc=exc, last_attempt=True)
-
-    assert decision.reraise is False
-    assert decision.stage_hold_reason is None
-
-
-# catch-all 経路
-
-
-@pytest.mark.asyncio
-async def test_unexpected_with_retry_budget_writes_audit_and_returns_true(
-    db_session: AsyncSession,
-    session_factory: async_sessionmaker[AsyncSession],
-    sample_source: NewsSource,
-) -> None:
-    """catch-all + retry 余地あり → unknown audit + ``reraise=True``。"""
-    article = await _make_article(db_session, sample_source)
-    extraction = await _make_extraction(db_session, article)
-    article_id = article.id
-    ready = _ready_from(extraction)
-    handler = AssessmentFailureHandler(session_factory)
-
-    exc = ValueError("surprise")
-    decision = await handler.handle(ready=ready, exc=exc, last_attempt=False)
 
     assert decision.reraise is True
     assert decision.stage_hold_reason is None
@@ -373,35 +266,29 @@ async def test_unexpected_with_retry_budget_writes_audit_and_returns_true(
     assert ev.outcome_code == "unexpected_error"
     assert ev.retryability == "unknown"
     assert ev.payload["failure_kind"] == "unknown"
-    assert ev.payload["failure_action"] is None
 
 
 @pytest.mark.asyncio
-async def test_unexpected_last_attempt_writes_audit_and_returns_false(
+async def test_unexpected_last_attempt_returns_false(
     db_session: AsyncSession,
     session_factory: async_sessionmaker[AsyncSession],
     sample_source: NewsSource,
 ) -> None:
-    """catch-all + retry 上限到達 → audit + ``reraise=False``。"""
+    """catch-all + retry 上限到達 → reraise=False。"""
     article = await _make_article(db_session, sample_source)
     extraction = await _make_extraction(db_session, article)
-    article_id = article.id
     ready = _ready_from(extraction)
     handler = AssessmentFailureHandler(session_factory)
 
-    exc = ValueError("surprise")
-    decision = await handler.handle(ready=ready, exc=exc, last_attempt=True)
+    decision = await handler.handle(
+        ready=ready, exc=ValueError("surprise"), last_attempt=True
+    )
 
     assert decision.reraise is False
     assert decision.stage_hold_reason is None
-    await db_session.rollback()
-    events = await _fetch_assessment_events(db_session, article_id)
-    assert len(events) == 1
-    assert events[0].retryability == "unknown"
-    assert events[0].payload["failure_kind"] == "unknown"
 
 
-# audit DB 落ち時の log fallback
+# --- audit DB 落ち時の log fallback -------------------------------------------
 
 
 @pytest.mark.asyncio
@@ -420,7 +307,7 @@ async def test_audit_failure_falls_back_to_log_with_secrets_redacted(
     handler = AssessmentFailureHandler(session_factory)
 
     # business 側の例外は __str__ が code 固定値のみ。
-    business_exc = AssessmentTerminalStageBlockedError(code="ai_error_configuration")
+    business_exc = map_provider_to_assessment(AIProviderConfigurationError())
 
     with (
         patch(
@@ -433,7 +320,7 @@ async def test_audit_failure_falls_back_to_log_with_secrets_redacted(
                 "audit db down Authorization: Bearer sk-live-AUDITSECRETxyz"
             )
         )
-        # handler は落ちずに完走 (StageBlocked → reraise=False)
+        # handler は落ちずに完走 (Terminal → reraise=False)
         decision = await handler.handle(
             ready=ready, exc=business_exc, last_attempt=False
         )
@@ -444,7 +331,7 @@ async def test_audit_failure_falls_back_to_log_with_secrets_redacted(
     assert drops, "fallback ログが emit されていない"
     drop = drops[-1]
     assert drop["curation_id"] == extraction.id
-    assert drop["business_error_class"].endswith(".AssessmentTerminalStageBlockedError")
+    assert drop["business_error_class"].endswith(".AssessmentTerminalError")
     assert drop["audit_error_class"].endswith(".RuntimeError")
     # business 側は code 固定値のみなので secret は入らない。
     assert "sk-live" not in drop["business_error_message"]

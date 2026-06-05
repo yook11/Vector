@@ -135,6 +135,9 @@ class AssessmentPayload(BasePipelineEventPayload):
     kind: Literal["assessment"] = "assessment"
     failure_kind: str | None = None
     failure_action: str | None = None
+    # 原因詳細 (provider error の reason 値)。failure_kind = 回復クラス /
+    # outcome_code = CODE とは別軸。provider 由来でない失敗は None。
+    failure_reason: str | None = None
 
     curation_id: int | None = None
 
@@ -158,6 +161,8 @@ class EmbeddingPayload(BasePipelineEventPayload):
     kind: Literal["embedding"] = "embedding"
     failure_kind: str | None = None
     failure_action: str | None = None
+    # 原因詳細 (provider error の reason 値)。provider 由来でない失敗は None。
+    failure_reason: str | None = None
     analysis_id: int | None = None
     embedding_model: str | None = None
     vector_dimension: int | None = None
