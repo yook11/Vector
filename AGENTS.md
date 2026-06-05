@@ -1,71 +1,61 @@
-# Vector — プロジェクト憲法
+# Vector — Agent Working Contract
 
 海外テックニュース収集・AI翻訳・投資分析ダッシュボード。
 
-## 技術スタック
+## Work Definition
 
-- Frontend: Next.js 16 (App Router, TypeScript, Tailwind CSS, shadcn/ui, Biome)
-- Backend: FastAPI (Python 3.13+, SQLModel, Pydantic v2)
-- Database: PostgreSQL 18 (Alembic マイグレーション)
-- AI: Gemini API (抽象化済み、差し替え可能)
-- インフラ: Docker Compose
+実装前に定義すること。
 
-## パッケージ管理
-- Backend: uv add でパッケージ追加（pip install は使わない）
-- Frontend: npm install でパッケージ追加
+1. Problem: 今回解く問題を簡潔に定義する。
+2. Evidence: 関連する仕様・schema・test・設定・既存実装を確認する。
+3. Invariants: 持続的に守るべき振る舞い・制約・境界条件を定義する。
+4. Non-goals: 今回やらないことを明確にする。
+5. Done: 達成すべき状態と、作業を停止できる条件を定義する。
 
-## ワークフロー
+## Scope Rules
 
-- 検証は `/review` スキルを実行すること
+- 既存実装は正解ではなく証拠候補として扱う。
+- 既存パターンを踏襲する前に、同じ責務・同じ境界・同じ失敗条件を扱っているか確認する。
+- 変更は Problem / Invariants / Done に対して必要十分な範囲に収める。
+- Done を満たしたら停止し、周辺改善は提案に留める。
+- 新しい抽象化・設定・fallback は、現在の Problem / Invariants / Done をより単純に満たす場合のみ追加する。
+- 重複排除だけを目的に抽象化しない。抽象化する場合は、同じ契約が複数箇所にあり、責務と境界が一致していることを確認する。
+- 将来の拡張性だけを理由に抽象化しない。
 
-## リサーチ義務
+## Source Of Truth
 
-ライブラリのAPIに確信が持てない場合、推測でコードを書かず `/research` スキルを使うこと。
-信頼できる情報源は各ディレクトリの `AGENTS.md` と `/research` スキルに定義済み。
+- API の SSoT は FastAPI の Pydantic schemas。
+- DB 変更は Alembic migration 経由のみ。
+- 環境変数は設定層経由で扱い、`.env` を読まない・表示しない・編集しない。
+- 認証・認可ロジックを簡略化、迂回、無効化しない。
 
-## 開発ルール
+## Research
 
-### 命名規約（レイヤー間の対応）
+- ライブラリやフレームワークの使用方法は、憶測で実装せず、`/research` スキルや最新の公式ドキュメントで確認する。
+- 設計や実装方針に迷った場合は、既存実装だけで判断せず、現在の Problem / Invariants / Done に近い一次情報・ベストプラクティスを調べる。
+- 外部情報は、現在の問題に必要な判断材料として使い、一般論や流行を理由に不要な抽象化・依存・構成変更を追加しない。
 
-| レイヤー | 規約 | 例 |
-|---|---|---|
-| DB (SQLModel) | snake_case | `news_article_id` |
-| API (JSON) | camelCase | `newsArticleId` |
-| TypeScript | camelCase | `newsArticleId` |
+## Comments
 
-### コメント言語
-- ドックストリング・説明コメント（`#`）は日本語
-- 機能的コメント（`# type: ignore`, `# noqa`, `# TODO:` 等）・実装識別子・エラー/ログメッセージは英語
+- コメント・ドックストリングは、コードだけでは読み取りにくい理由・制約・不変条件・外部仕様を補う場合のみ追加する。
+- コメントは原則1文で簡潔に書く。
+- 処理内容をなぞるだけのコメントは書かない。
+- コメントで実装を正当化しない。説明が長くなる場合は、設計の歪みを疑う。
+- 変更していないコードにコメントやドックストリングを追加しない。
 
-### APIスキーマ管理
-- **SSoT は FastAPI の Pydantic schemas** — 型生成は `/gen-types` スキルを使用
+## Verification
 
-### ブランチ戦略
-- `main` → プロダクション / `develop` → 開発統合 / `feature/*` → 機能開発
+- 実装変更後は `/check` スキルで検証する。
+- テストを通すために機能を削除・無効化しない。
+- 検証できなかった場合は、未実行の項目と理由を明記する。
 
-### 環境変数
-- `.env` に集約、コードでは `backend/app/config.py` 経由のみでアクセス
-- `.env.example` を参照し、直接 `os.environ` は使わないこと
+## Ask First
 
-## AIエージェント行動境界
+次は事前確認する。
 
-### Always do
-- 実装完了前に `ruff check` + `pytest` を実行、エラーは自己修正
-- 全関数に型ヒント付与
-- DB変更は Alembic マイグレーション経由のみ
-
-### Ask first
-- SQLModelモデル変更・DBスキーマ変更
-- 新規 uv add パッケージ追加
-- APIレスポンス形式の破壊的変更
-
-### Never do
-- `.env` の読取・表示・編集、秘匿値のハードコード
-- 古いAPIパターン使用（Pydantic v1, Pages Router, SQLAlchemy同期）
-- 認証ロジックのバイパス・簡略化
-- テスト通過のための機能削除・無効化
-- SSoT（Pydantic schemas）と矛盾するAPIレスポンスの実装
-
-## サブエージェントへの指示方針
-
-- 対象ディレクトリとその AGENTS.md を明示、必要な文脈は plan ファイルや指示で提供する
+- DB schema / SQLModel model の変更
+- 新規 dependency の追加
+- API response shape の破壊的変更
+- 認証・認可ロジックの変更
+- 複数レイヤーにまたがる再設計
+- 大きな構成変更、または既存境界の移動
