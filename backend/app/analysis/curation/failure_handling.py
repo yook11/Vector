@@ -15,7 +15,10 @@ import structlog
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from app.analysis.ai_provider_errors import AIProviderUsageLimitExhaustedError
+from app.analysis.ai_provider_errors import (
+    AIProviderContentError,
+    AIProviderStateError,
+)
 from app.analysis.curation.ai.base import BaseCurator
 from app.analysis.curation.domain.ready import ReadyForCuration
 from app.analysis.curation.errors import (
@@ -32,6 +35,22 @@ from app.shared.security.redaction import redact_secrets
 logger = structlog.get_logger(__name__)
 
 _DROP_FALLBACK_CODE = "ai_error_unknown_drop"
+
+
+def _hold_reason(
+    exc: CurationRecoverableError | CurationTerminalKeepError,
+) -> str | None:
+    """provider error の回復クラスから stage hold reason を導出する。
+
+    どの回復クラスが hold を要するかは ``AIProviderFailureMode.is_stage_hold_mode``
+    が SSoT (marker 型には背負わせない)。hold reason には provider CODE
+    (= ``exc.code``) を使い過去 hold metric との連続性を保つ。provider 由来でない
+    失敗 (parse の ResponseInvalid 等) は hold しない。
+    """
+    provider_error = exc.provider_error
+    if not isinstance(provider_error, AIProviderStateError | AIProviderContentError):
+        return None
+    return exc.code if provider_error.FAILURE_MODE.is_stage_hold_mode else None
 
 
 class CurationFailureHandler:
@@ -67,17 +86,12 @@ class CurationFailureHandler:
                 await self._audit_failure(ready, exc, curator)
                 return FailureHandlingDecision(
                     reraise=False,
-                    stage_hold_reason=getattr(exc, "code", "unknown"),
+                    stage_hold_reason=_hold_reason(exc),
                 )
             case CurationRecoverableError():
                 recoverable = exc
                 await self._audit_failure(ready, recoverable, curator)
-                hold_reason = None
-                if last_attempt and isinstance(
-                    recoverable.provider_error,
-                    AIProviderUsageLimitExhaustedError,
-                ):
-                    hold_reason = recoverable.code
+                hold_reason = _hold_reason(recoverable) if last_attempt else None
                 return FailureHandlingDecision(
                     reraise=not last_attempt,
                     stage_hold_reason=hold_reason,

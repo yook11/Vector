@@ -310,6 +310,31 @@ class TestPayloadFieldOwnership:
         assert "failure_kind" not in TrendDiscoveryPayload.model_fields
         assert "failure_action" not in TrendDiscoveryPayload.model_fields
 
+    def test_failure_reason_owned_by_cause_axis_payloads(self) -> None:
+        # 原因詳細 (provider reason 値) を焼くのは AI 分析 3 stage
+        # (curation / assessment / embedding) のみ。それ以外の stage は reason 軸を
+        # 持たないため failure_reason field を持たない。
+        cause_axis_payloads = (
+            CurationPayload,
+            AssessmentPayload,
+            EmbeddingPayload,
+        )
+        for payload_cls in cause_axis_payloads:
+            assert "failure_reason" in payload_cls.model_fields
+            # provider 由来でない失敗のため default は None。
+            assert payload_cls().failure_reason is None
+
+        payloads_without_failure_reason = (
+            BasePipelineEventPayload,
+            DispatchPayload,
+            AcquisitionPayload,
+            CompletionPayload,
+            BriefingPayload,
+            TrendDiscoveryPayload,
+        )
+        for payload_cls in payloads_without_failure_reason:
+            assert "failure_reason" not in payload_cls.model_fields
+
     def test_only_acquisition_payload_owns_read_failure_fields(self) -> None:
         read_fields = ("read_format", "read_field", "read_parser_position")
         for field in read_fields:

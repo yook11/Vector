@@ -1,7 +1,11 @@
-"""Stage 3 ACL — ``map_provider_to_curation`` の dispatch / 網羅性テスト。
+"""Stage 3 ACL — ``map_provider_to_curation`` の翻訳契約テスト。
 
-Stage 3 は article DELETE / Keep / Recoverable の 3 軸を持つため tuple も 3 つ。
-Stage 4 / Stage 5 (2 tuple) と構造は同じ。
+mapper は provider error を「retry / DROP 軸 (Recoverable / TerminalKeep /
+TerminalDrop) + 原因軸 (failure_kind = mode 値 / failure_reason = reason 値)」に
+翻訳する。Stage 4/5 と異なり 3-way なのは DROP (記事削除) を持つため
+(``TARGET_REJECTED`` → TerminalDrop)。leaf → marker / failure_kind の写像は plan の
+disposition 表 (spec) を golden として直書きする (provider 自身の ``FAILURE_MODE``
+golden は ``test_ai_provider_errors.py`` が所有)。
 """
 
 from __future__ import annotations
@@ -22,299 +26,150 @@ from app.analysis.ai_provider_errors import (
     AIProviderUsageLimitExhaustedError,
 )
 from app.analysis.curation.errors import (
-    CURATION_RECOVERABLE_PROVIDER_ERRORS,
-    CURATION_TERMINAL_DROP_PROVIDER_ERRORS,
-    CURATION_TERMINAL_KEEP_PROVIDER_ERRORS,
+    CurationError,
     CurationRecoverableError,
     CurationTerminalDropError,
     CurationTerminalKeepError,
     map_provider_to_curation,
 )
-from app.analysis.gemini_error_translator import GeminiContentRejectionReason
-
-
-def _instantiate(exc_type: type[AIProviderError]) -> AIProviderError:
-    """provider error を構築する。
-
-    content 系は ``reason`` 必須なので代表 reason を渡し、state 系は legacy
-    positional message を渡す (accept-and-discard 経路を維持する)。mapper は
-    reason を読まないため、reason の具体値は dispatch 判定に影響しない。
-    """
-    if issubclass(exc_type, AIProviderContentError):
-        return exc_type(reason=GeminiContentRejectionReason.SAFETY)
-    return exc_type("boom")
-
-
-# 期待 9 種の白リスト。本ファイルで直接 expected セットを書くことで、
-# ``AIProviderError.__subclasses__()`` を walking するテスト間副作用を避ける。
-# 9 種が増減したらこの値を更新してテストを通す運用。
-_EXPECTED_PROVIDER_ERROR_TYPES: frozenset[type[AIProviderError]] = frozenset(
-    {
-        AIProviderConfigurationError,
-        AIProviderRequestInvalidError,
-        AIProviderInsufficientBalanceError,
-        AIProviderRateLimitedError,
-        AIProviderUsageLimitExhaustedError,
-        AIProviderServiceUnavailableError,
-        AIProviderNetworkError,
-        AIProviderInputRejectedError,
-        AIProviderOutputBlockedError,
-    }
+from app.analysis.gemini_error_translator import (
+    GeminiContentRejectionReason,
+    GeminiStateReason,
 )
 
+# 代表 reason (mapper は値そのものを failure_reason に運ぶ。種別は不問)。
+_CONTENT_REASON = GeminiContentRejectionReason.SAFETY
+_STATE_REASON = GeminiStateReason.TIMEOUT
 
-class TestTupleContents:
-    """tuple に登録されている class の固定値 / 網羅性 / 排他性。"""
+# leaf → (期待 marker, 期待 failure_kind)。plan の disposition 表 (spec) が出所。
+# retryable な回復クラス → Recoverable / TARGET_REJECTED → TerminalDrop (記事削除) /
+# それ以外 (operator_action_required) → TerminalKeep。
+_LEAF_EXPECTATION: dict[type[AIProviderError], tuple[type[CurationError], str]] = {
+    AIProviderNetworkError: (CurationRecoverableError, "attempt_scoped"),
+    AIProviderServiceUnavailableError: (
+        CurationRecoverableError,
+        "time_based_recovery",
+    ),
+    AIProviderRateLimitedError: (CurationRecoverableError, "time_based_recovery"),
+    AIProviderUsageLimitExhaustedError: (
+        CurationRecoverableError,
+        "condition_based_recovery",
+    ),
+    AIProviderConfigurationError: (
+        CurationTerminalKeepError,
+        "operator_action_required",
+    ),
+    AIProviderRequestInvalidError: (
+        CurationTerminalKeepError,
+        "operator_action_required",
+    ),
+    AIProviderInsufficientBalanceError: (
+        CurationTerminalKeepError,
+        "operator_action_required",
+    ),
+    AIProviderInputRejectedError: (CurationTerminalDropError, "target_rejected"),
+    AIProviderOutputBlockedError: (CurationTerminalDropError, "target_rejected"),
+}
+
+
+def _instantiate(
+    exc_type: type[AIProviderError], *, with_state_reason: bool = True
+) -> AIProviderError:
+    """provider error を構築する。content 系は reason 必須、state 系は任意。"""
+    if issubclass(exc_type, AIProviderContentError):
+        return exc_type(reason=_CONTENT_REASON)
+    if with_state_reason:
+        return exc_type(reason=_STATE_REASON)
+    return exc_type()
+
+
+class TestMapProviderToCuration:
+    """全 provider leaf の翻訳契約 (golden 写像)。"""
+
+    @pytest.mark.parametrize("exc_type", list(_LEAF_EXPECTATION))
+    def test_maps_to_expected_marker_and_failure_kind(
+        self, exc_type: type[AIProviderError]
+    ) -> None:
+        expected_marker, expected_kind = _LEAF_EXPECTATION[exc_type]
+
+        result = map_provider_to_curation(_instantiate(exc_type))
+
+        assert isinstance(result, expected_marker)
+        assert result.failure_kind == expected_kind  # type: ignore[union-attr]
+
+    @pytest.mark.parametrize("exc_type", list(_LEAF_EXPECTATION))
+    def test_preserves_provider_error_identity(
+        self, exc_type: type[AIProviderError]
+    ) -> None:
+        original = _instantiate(exc_type)
+
+        result = map_provider_to_curation(original)
+
+        assert result.provider_error is original  # type: ignore[union-attr]
+
+    @pytest.mark.parametrize("exc_type", list(_LEAF_EXPECTATION))
+    def test_propagates_code_from_provider_class_var(
+        self, exc_type: type[AIProviderError]
+    ) -> None:
+        result = map_provider_to_curation(_instantiate(exc_type))
+
+        assert result.code == exc_type.CODE  # type: ignore[union-attr]
+
+    @pytest.mark.parametrize("exc_type", list(_LEAF_EXPECTATION))
+    def test_carries_reason_value_as_failure_reason(
+        self, exc_type: type[AIProviderError]
+    ) -> None:
+        original = _instantiate(exc_type)
+        expected = original.reason.value  # type: ignore[attr-defined]
+
+        result = map_provider_to_curation(original)
+
+        assert result.failure_reason == expected  # type: ignore[union-attr]
 
     @pytest.mark.parametrize(
         "exc_type",
-        [
-            AIProviderNetworkError,
-            AIProviderServiceUnavailableError,
-            AIProviderRateLimitedError,
-            AIProviderUsageLimitExhaustedError,
-        ],
+        [t for t in _LEAF_EXPECTATION if not issubclass(t, AIProviderContentError)],
     )
-    def test_recoverable_tuple_contains_expected_types(
+    def test_state_without_reason_has_none_failure_reason(
         self, exc_type: type[AIProviderError]
     ) -> None:
-        assert exc_type in CURATION_RECOVERABLE_PROVIDER_ERRORS
-
-    @pytest.mark.parametrize(
-        "exc_type",
-        [
-            AIProviderConfigurationError,
-            AIProviderRequestInvalidError,
-            AIProviderInsufficientBalanceError,
-        ],
-    )
-    def test_terminal_keep_tuple_contains_expected_types(
-        self, exc_type: type[AIProviderError]
-    ) -> None:
-        assert exc_type in CURATION_TERMINAL_KEEP_PROVIDER_ERRORS
-
-    @pytest.mark.parametrize(
-        "exc_type",
-        [
-            AIProviderInputRejectedError,
-            AIProviderOutputBlockedError,
-        ],
-    )
-    def test_terminal_drop_tuple_contains_expected_types(
-        self, exc_type: type[AIProviderError]
-    ) -> None:
-        assert exc_type in CURATION_TERMINAL_DROP_PROVIDER_ERRORS
-
-    def test_three_tuples_cover_all_expected_provider_error_types(self) -> None:
-        # 網羅性: 期待 9 種すべてが 3 tuple のいずれかに登録されている。
-        union = (
-            frozenset(CURATION_RECOVERABLE_PROVIDER_ERRORS)
-            | frozenset(CURATION_TERMINAL_KEEP_PROVIDER_ERRORS)
-            | frozenset(CURATION_TERMINAL_DROP_PROVIDER_ERRORS)
+        # state reason は任意。未指定なら failure_reason は焼かれない。
+        result = map_provider_to_curation(
+            _instantiate(exc_type, with_state_reason=False)
         )
-        assert union == _EXPECTED_PROVIDER_ERROR_TYPES
 
-    def test_three_tuples_are_mutually_exclusive(self) -> None:
-        # 排他性: 同じ class が複数 tuple に登録されていない。
-        recoverable = frozenset(CURATION_RECOVERABLE_PROVIDER_ERRORS)
-        terminal_keep = frozenset(CURATION_TERMINAL_KEEP_PROVIDER_ERRORS)
-        terminal_drop = frozenset(CURATION_TERMINAL_DROP_PROVIDER_ERRORS)
-        assert recoverable & terminal_keep == frozenset()
-        assert recoverable & terminal_drop == frozenset()
-        assert terminal_keep & terminal_drop == frozenset()
+        assert result.failure_reason is None  # type: ignore[union-attr]
 
-    def test_recoverable_tuple_size(self) -> None:
-        assert len(CURATION_RECOVERABLE_PROVIDER_ERRORS) == 4
-
-    def test_terminal_keep_tuple_size(self) -> None:
-        assert len(CURATION_TERMINAL_KEEP_PROVIDER_ERRORS) == 3
-
-    def test_terminal_drop_tuple_size(self) -> None:
-        assert len(CURATION_TERMINAL_DROP_PROVIDER_ERRORS) == 2
-
-
-class TestMapProviderToExtractionRecoverable:
-    """Recoverable 系 4 種が ``CurationRecoverableError`` に詰め替えられる。"""
-
-    @pytest.mark.parametrize(
-        "exc_type",
-        [
-            AIProviderNetworkError,
-            AIProviderServiceUnavailableError,
-            AIProviderRateLimitedError,
-            AIProviderUsageLimitExhaustedError,
-        ],
-    )
-    def test_dispatches_to_recoverable_marker(
-        self, exc_type: type[AIProviderError]
-    ) -> None:
-        original = _instantiate(exc_type)
-
-        result = map_provider_to_curation(original)
-
-        assert isinstance(result, CurationRecoverableError)
-
-    @pytest.mark.parametrize(
-        "exc_type",
-        [
-            AIProviderNetworkError,
-            AIProviderServiceUnavailableError,
-            AIProviderRateLimitedError,
-            AIProviderUsageLimitExhaustedError,
-        ],
-    )
-    def test_preserves_provider_error_identity(
-        self, exc_type: type[AIProviderError]
-    ) -> None:
-        original = _instantiate(exc_type)
-
-        result = map_provider_to_curation(original)
-
-        assert result.provider_error is original  # type: ignore[union-attr]
-
-    @pytest.mark.parametrize(
-        "exc_type",
-        [
-            AIProviderNetworkError,
-            AIProviderServiceUnavailableError,
-            AIProviderRateLimitedError,
-            AIProviderUsageLimitExhaustedError,
-        ],
-    )
-    def test_propagates_code_from_provider_class_var(
-        self, exc_type: type[AIProviderError]
-    ) -> None:
-        original = _instantiate(exc_type)
-
-        result = map_provider_to_curation(original)
-
-        assert result.code == exc_type.CODE  # type: ignore[union-attr]
+    def test_golden_covers_all_provider_leaves(self) -> None:
+        # 完備性: provider leaf を増やしたら golden 表も更新する運用 (9 種)。
+        expected = frozenset(
+            {
+                AIProviderConfigurationError,
+                AIProviderRequestInvalidError,
+                AIProviderInsufficientBalanceError,
+                AIProviderRateLimitedError,
+                AIProviderUsageLimitExhaustedError,
+                AIProviderServiceUnavailableError,
+                AIProviderNetworkError,
+                AIProviderInputRejectedError,
+                AIProviderOutputBlockedError,
+            }
+        )
+        assert frozenset(_LEAF_EXPECTATION) == expected
 
 
-class TestMapProviderToExtractionTerminalKeep:
-    """TerminalKeep 系 3 種が ``CurationTerminalKeepError`` に詰め替えられる。"""
-
-    @pytest.mark.parametrize(
-        "exc_type",
-        [
-            AIProviderConfigurationError,
-            AIProviderRequestInvalidError,
-            AIProviderInsufficientBalanceError,
-        ],
-    )
-    def test_dispatches_to_terminal_keep_marker(
-        self, exc_type: type[AIProviderError]
-    ) -> None:
-        original = _instantiate(exc_type)
-
-        result = map_provider_to_curation(original)
-
-        assert isinstance(result, CurationTerminalKeepError)
-
-    @pytest.mark.parametrize(
-        "exc_type",
-        [
-            AIProviderConfigurationError,
-            AIProviderRequestInvalidError,
-            AIProviderInsufficientBalanceError,
-        ],
-    )
-    def test_preserves_provider_error_identity(
-        self, exc_type: type[AIProviderError]
-    ) -> None:
-        original = _instantiate(exc_type)
-
-        result = map_provider_to_curation(original)
-
-        assert result.provider_error is original  # type: ignore[union-attr]
-
-    @pytest.mark.parametrize(
-        "exc_type",
-        [
-            AIProviderConfigurationError,
-            AIProviderRequestInvalidError,
-            AIProviderInsufficientBalanceError,
-        ],
-    )
-    def test_propagates_code_from_provider_class_var(
-        self, exc_type: type[AIProviderError]
-    ) -> None:
-        original = _instantiate(exc_type)
-
-        result = map_provider_to_curation(original)
-
-        assert result.code == exc_type.CODE  # type: ignore[union-attr]
-
-
-class TestMapProviderToExtractionTerminalDrop:
-    """TerminalDrop 系 2 種が ``CurationTerminalDropError`` に詰め替えられる。"""
-
-    @pytest.mark.parametrize(
-        "exc_type",
-        [
-            AIProviderInputRejectedError,
-            AIProviderOutputBlockedError,
-        ],
-    )
-    def test_dispatches_to_terminal_drop_marker(
-        self, exc_type: type[AIProviderError]
-    ) -> None:
-        original = _instantiate(exc_type)
-
-        result = map_provider_to_curation(original)
-
-        assert isinstance(result, CurationTerminalDropError)
-
-    @pytest.mark.parametrize(
-        "exc_type",
-        [
-            AIProviderInputRejectedError,
-            AIProviderOutputBlockedError,
-        ],
-    )
-    def test_preserves_provider_error_identity(
-        self, exc_type: type[AIProviderError]
-    ) -> None:
-        original = _instantiate(exc_type)
-
-        result = map_provider_to_curation(original)
-
-        assert result.provider_error is original  # type: ignore[union-attr]
-
-    @pytest.mark.parametrize(
-        "exc_type",
-        [
-            AIProviderInputRejectedError,
-            AIProviderOutputBlockedError,
-        ],
-    )
-    def test_propagates_code_from_provider_class_var(
-        self, exc_type: type[AIProviderError]
-    ) -> None:
-        original = _instantiate(exc_type)
-
-        result = map_provider_to_curation(original)
-
-        assert result.code == exc_type.CODE  # type: ignore[union-attr]
-
-
-class TestMapProviderToExtractionUnregistered:
-    """tuple に未登録の ``AIProviderError`` subclass で fail-fast。"""
-
-    def test_unregistered_subclass_raises_type_error(self) -> None:
-        class _UnregisteredProviderError(AIProviderError):
-            """テスト内 ad-hoc subclass。tuple に登録されていない。"""
-
-            CODE = "ai_error_unregistered_for_test"
-
-        unregistered = _UnregisteredProviderError("brand-new failure mode")
-
-        with pytest.raises(TypeError, match="unmapped provider error"):
-            map_provider_to_curation(unregistered)
+class TestMapProviderToCurationUnregistered:
+    """state でも content でもない ``AIProviderError`` で fail-fast。"""
 
     def test_bare_provider_error_base_raises_type_error(self) -> None:
-        # 基底 ``AIProviderError`` 自身も tuple に未登録なので TypeError。
         bare = AIProviderError("bare base")
 
         with pytest.raises(TypeError, match="unmapped provider error"):
             map_provider_to_curation(bare)
+
+    def test_direct_ai_provider_error_subclass_raises(self) -> None:
+        class _NeitherStateNorContent(AIProviderError):
+            CODE = "ai_error_neither_for_test"
+
+        with pytest.raises(TypeError, match="unmapped provider error"):
+            map_provider_to_curation(_NeitherStateNorContent())

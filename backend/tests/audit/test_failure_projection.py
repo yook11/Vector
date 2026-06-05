@@ -10,12 +10,14 @@ from sqlalchemy.exc import (
     OperationalError,
 )
 
+from app.analysis.ai_provider_errors import AIProviderOutputBlockedError
 from app.analysis.assessment.errors import AssessmentRecoverableError
 from app.analysis.curation.errors import (
     CurationRecoverableError,
-    CurationTerminalDropError,
+    map_provider_to_curation,
 )
 from app.analysis.embedding.errors import EmbeddingRecoverableError
+from app.analysis.gemini_error_translator import GeminiContentRejectionReason
 from app.audit.domain.event import Stage
 from app.audit.failure_projection import (
     FailureAction,
@@ -49,23 +51,32 @@ def _stmt_error(cls: type[Exception]) -> Exception:
     return cls("SELECT 1", {}, Exception("orig"))
 
 
-def test_project_marker_failure_reads_stage_marker_classvars() -> None:
-    exc = CurationTerminalDropError(code="ai_error_output_blocked")
+def test_project_marker_failure_reads_curation_instance_cause_axis() -> None:
+    """curation も原因軸を instance 値で持つ (mapper 経由で mode 値 + reason 値)。
+
+    retry / DROP 軸は marker classvar (NON_RETRYABLE / DROP_ARTICLE)、原因軸は
+    provider error の ``FAILURE_MODE`` / ``reason`` 由来の instance 値。
+    """
+    raw = AIProviderOutputBlockedError(reason=GeminiContentRejectionReason.SAFETY)
+    exc = map_provider_to_curation(raw)
 
     assert project_marker_failure(exc) == FailureProjection(
-        failure_kind="terminal_drop",
+        failure_kind="target_rejected",
         retryability=Retryability.NON_RETRYABLE,
         failure_action=FailureAction.DROP_ARTICLE,
         code="ai_error_output_blocked",
         stage=Stage.CURATION,
+        failure_reason="safety",
     )
 
 
 def test_project_failure_prefers_marker_projection() -> None:
-    exc = CurationRecoverableError(code="ai_error_network")
+    exc = CurationRecoverableError(
+        code="ai_error_network", failure_kind="attempt_scoped"
+    )
 
     assert project_failure(exc) == FailureProjection(
-        failure_kind="recoverable",
+        failure_kind="attempt_scoped",
         retryability=Retryability.RETRYABLE,
         failure_action=None,
         code="ai_error_network",
@@ -92,10 +103,11 @@ def test_project_marker_failure_reads_instance_failure_kind_and_reason() -> None
 
 
 def test_project_marker_failure_classvar_marker_has_no_failure_reason() -> None:
-    """classvar 宣言 marker (curation 等) は failure_reason を持たない (None)。"""
-    projection = project_marker_failure(
-        CurationTerminalDropError(code="ai_error_output_blocked")
-    )
+    """classvar 宣言 marker (briefing / completion / acquisition) は failure_reason
+    を持たない (None)。原因軸を instance 値で持つのは assessment / embedding /
+    curation のみで、classvar fallback 経路は reason を焼かない。
+    """
+    projection = project_marker_failure(BriefingConfigurationError("missing key"))
 
     assert projection is not None
     assert projection.failure_reason is None
@@ -104,7 +116,12 @@ def test_project_marker_failure_classvar_marker_has_no_failure_reason() -> None:
 @pytest.mark.parametrize(
     ("exc", "expected_stage"),
     [
-        (CurationRecoverableError(code="ai_error_network"), Stage.CURATION),
+        (
+            CurationRecoverableError(
+                code="ai_error_network", failure_kind="attempt_scoped"
+            ),
+            Stage.CURATION,
+        ),
         (
             AssessmentRecoverableError(
                 code="ai_error_network", failure_kind="attempt_scoped"
@@ -296,27 +313,27 @@ def test_completion_persist_crash_projection_returns_unknown_for_catch_all() -> 
 
 def test_failure_payload_fields_serializes_action_value() -> None:
     projection = FailureProjection(
-        failure_kind="terminal_drop",
+        failure_kind="target_rejected",
         retryability=Retryability.NON_RETRYABLE,
         failure_action=FailureAction.DROP_ARTICLE,
         code="ai_error_output_blocked",
     )
 
     assert failure_payload_fields(projection) == {
-        "failure_kind": "terminal_drop",
+        "failure_kind": "target_rejected",
         "failure_action": "drop_article",
     }
 
 
 def test_failure_payload_fields_keeps_missing_action_none() -> None:
     projection = FailureProjection(
-        failure_kind="recoverable",
+        failure_kind="attempt_scoped",
         retryability=Retryability.RETRYABLE,
         failure_action=None,
         code="ai_error_network",
     )
 
     assert failure_payload_fields(projection) == {
-        "failure_kind": "recoverable",
+        "failure_kind": "attempt_scoped",
         "failure_action": None,
     }

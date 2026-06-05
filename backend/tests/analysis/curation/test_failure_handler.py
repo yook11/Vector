@@ -127,8 +127,10 @@ async def test_output_blocked_writes_audit_then_deletes_article(
     assert ev.event_type == "failed"
     assert ev.outcome_code == "ai_error_output_blocked"
     assert ev.retryability == "non_retryable"
-    assert ev.payload["failure_kind"] == "terminal_drop"
+    assert ev.payload["failure_kind"] == "target_rejected"
     assert ev.payload["failure_action"] == "drop_article"
+    # 原因詳細は provider reason 値 (SAFETY) がそのまま焼かれる。
+    assert ev.payload["failure_reason"] == GeminiContentRejectionReason.SAFETY.value
     # SET NULL: article_id は NULL に
     assert ev.article_id is None
     # source_id は auto-resolve で埋まっている (DELETE 前に INSERT したため)
@@ -189,8 +191,13 @@ async def test_input_rejected_writes_audit_then_deletes_article(
     assert ev.event_type == "failed"
     assert ev.outcome_code == "ai_error_input_rejected"
     assert ev.retryability == "non_retryable"
-    assert ev.payload["failure_kind"] == "terminal_drop"
+    assert ev.payload["failure_kind"] == "target_rejected"
     assert ev.payload["failure_action"] == "drop_article"
+    # 原因詳細は provider reason 値 (CONTEXT_LENGTH) がそのまま焼かれる。
+    assert (
+        ev.payload["failure_reason"]
+        == GeminiContentRejectionReason.CONTEXT_LENGTH.value
+    )
 
 
 # hold gate — terminal_keep は failure 観測時に curation hold を立てる
@@ -243,8 +250,10 @@ async def test_terminal_keep_sets_curation_hold(
     )
     assert ev.outcome_code == "ai_error_configuration"
     assert ev.retryability == "non_retryable"
-    assert ev.payload["failure_kind"] == "terminal_keep"
+    assert ev.payload["failure_kind"] == "operator_action_required"
     assert ev.payload["failure_action"] is None
+    # state error に reason 未指定なら原因詳細は焼かれない。
+    assert ev.payload["failure_reason"] is None
     # audit repository が failure 経路でも original_content から値を焼く。
     assert ev.payload["input_content_length"] == expected_raw_length
     assert ev.payload["input_content_head"]  # non-empty
@@ -309,7 +318,8 @@ async def test_usage_limit_recoverable_sets_curation_hold_on_last_attempt(
     )
     assert ev.outcome_code == AIProviderUsageLimitExhaustedError.CODE
     assert ev.retryability == "retryable"
-    assert ev.payload["failure_kind"] == "recoverable"
+    assert ev.payload["failure_kind"] == "condition_based_recovery"
+    assert ev.payload["failure_reason"] is None
 
 
 @pytest.mark.asyncio

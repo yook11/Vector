@@ -126,6 +126,7 @@ class CurationAuditRepository:
         payload = CurationPayload(
             failure_kind=projection.failure_kind,
             failure_action=failure_action_value(projection),
+            failure_reason=projection.failure_reason,
             # DROP は記事 DELETE と同一 tx で焼かれ FK article_id が SET NULL に
             # 落ちるため、削除に耐える記事識別子を payload に控える。
             target_article_id=ready.article_id,
@@ -254,6 +255,7 @@ class CurationAuditRepository:
         payload = CurationPayload(
             failure_kind=projection.failure_kind,
             failure_action=failure_action_value(projection),
+            failure_reason=projection.failure_reason,
             **content,
             ai_model=curator.model_name,
             prompt_version=curator.prompt_version,

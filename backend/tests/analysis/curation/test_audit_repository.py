@@ -442,8 +442,10 @@ async def test_append_drop_article_records_failure_with_drop_category(
     assert ev.retryability == "non_retryable"
     assert ev.error_class is not None
     assert ev.error_class.endswith(".CurationTerminalDropError")
-    assert ev.payload["failure_kind"] == "terminal_drop"
+    assert ev.payload["failure_kind"] == "target_rejected"
     assert ev.payload["failure_action"] == "drop_article"
+    # 原因詳細は provider reason 値 (SAFETY) がそのまま焼かれる。
+    assert ev.payload["failure_reason"] == GeminiContentRejectionReason.SAFETY.value
     assert ev.payload["error_message"] is not None
     assert ev.payload["error_chain"]
     # __cause__ chain に元 provider error も保持される
@@ -551,6 +553,7 @@ def _wrap(raw: BaseException) -> BaseException:
         "expected_retryability",
         "expected_failure_kind",
         "expected_failure_action",
+        "expected_failure_reason",
     ),
     [
         (
@@ -561,28 +564,32 @@ def _wrap(raw: BaseException) -> BaseException:
             ),
             "ai_error_input_rejected",
             "non_retryable",
-            "terminal_drop",
+            "target_rejected",
             "drop_article",
+            GeminiContentRejectionReason.INPUT_BLOCKED.value,
         ),
         (
             lambda: _wrap(AIProviderConfigurationError()),
             "ai_error_configuration",
             "non_retryable",
-            "terminal_keep",
+            "operator_action_required",
+            None,
             None,
         ),
         (
             lambda: _wrap(AIProviderNetworkError()),
             "ai_error_network",
             "retryable",
-            "recoverable",
+            "attempt_scoped",
+            None,
             None,
         ),
         (
             lambda: CurationResponseInvalidError(),
             "extraction_response_invalid",
             "retryable",
-            "recoverable",
+            "ai_response_invalid",
+            None,
             None,
         ),
         (
@@ -590,6 +597,7 @@ def _wrap(raw: BaseException) -> BaseException:
             "unexpected_error",
             "unknown",
             "unknown",
+            None,
             None,
         ),
         # 外部 DB 例外は classify_db_error adapter で意味ラベルに分類される
@@ -600,12 +608,14 @@ def _wrap(raw: BaseException) -> BaseException:
             "retryable",
             "db_runtime",
             None,
+            None,
         ),
         (
             lambda: IntegrityError("INSERT", {}, Exception("unique violation")),
             "db_constraint_error",
             "non_retryable",
             "db_constraint",
+            None,
             None,
         ),
         (
@@ -614,12 +624,14 @@ def _wrap(raw: BaseException) -> BaseException:
             "non_retryable",
             "db_query_or_schema",
             None,
+            None,
         ),
         (
             lambda: InvalidRequestError("detached instance"),
             "db_unknown_error",
             "unknown",
             "db_unknown",
+            None,
             None,
         ),
     ],
@@ -633,6 +645,7 @@ async def test_append_failure_dispatches_failure_projection_from_exc(
     expected_retryability: str,
     expected_failure_kind: str,
     expected_failure_action: str | None,
+    expected_failure_reason: str | None,
 ) -> None:
     """append_failure は exc 型から failure projection を自動導出する。"""
     article = await _make_article(db_session, sample_source)
@@ -664,6 +677,7 @@ async def test_append_failure_dispatches_failure_projection_from_exc(
     assert ev.error_class.endswith(f".{type(exc).__name__}")
     assert ev.payload["failure_kind"] == expected_failure_kind
     assert ev.payload["failure_action"] == expected_failure_action
+    assert ev.payload["failure_reason"] == expected_failure_reason
     # repository が ready.original_content から input snapshot を計算する。
     assert ev.payload["input_content_length"] == expected_input["input_content_length"]
     assert ev.payload["input_content_head"] == expected_input["input_content_head"]

@@ -230,8 +230,12 @@ _CURATION_LAYER1_MARKERS: tuple[type[CurationError], ...] = (
 
 @pytest.mark.parametrize("cls", _CURATION_LAYER1_MARKERS)
 def test_curation_layer1_str_contains_only_code(cls: type[CurationError]) -> None:
-    """``CurationXxxError(code='...')`` の ``__str__`` は class name + code のみ。"""
-    exc = cls(code="ai_error_rate_limited")
+    """``CurationXxxError(code='...')`` の ``__str__`` は class name + code のみ。
+
+    ``failure_kind`` / ``failure_reason`` は instance 値だが SAFE_ATTRS 外なので
+    ``__str__`` は ``code`` のみ (PII / 詳細を span に載せない)。
+    """
+    exc = cls(code="ai_error_rate_limited", failure_kind="time_based_recovery")  # type: ignore[call-arg]
     assert str(exc) == f"{cls.__name__}(code='ai_error_rate_limited')"
 
 
@@ -245,7 +249,11 @@ def test_curation_layer1_holds_provider_error_in_attr(
     (CODE / __class__) は SAFE_ATTRS の対象外で SaaS には流れない。
     """
     provider = AIProviderRateLimitedError()
-    exc = cls(code="ai_error_rate_limited", provider_error=provider)
+    exc = cls(  # type: ignore[call-arg]
+        code="ai_error_rate_limited",
+        failure_kind="time_based_recovery",
+        provider_error=provider,
+    )
     assert exc.provider_error is provider  # identity 保持で audit 連鎖が辿れる
     # __str__ には provider 情報は出ない (SAFE_ATTRS にないため)
     assert "Provider" not in str(exc)
@@ -354,13 +362,23 @@ def _build_all_marker_instances() -> list[VectorDomainError]:
         AIProviderUsageLimitExhaustedError(),
         AIProviderServiceUnavailableError(),
         AIProviderNetworkError(),
-        # Curation 3 (Layer 1) + 1 (Layer 2-B)
-        CurationRecoverableError(code="ai_error_rate_limited", provider_error=provider),
+        # Curation 3 (Layer 1) + 1 (Layer 2-B)。failure_kind / failure_reason も
+        # SAFE_ATTRS 外 (instance 値)。
+        CurationRecoverableError(
+            code="ai_error_rate_limited",
+            failure_kind="time_based_recovery",
+            provider_error=provider,
+        ),
         CurationTerminalKeepError(
-            code="ai_error_configuration", provider_error=provider
+            code="ai_error_configuration",
+            failure_kind="operator_action_required",
+            provider_error=provider,
         ),
         CurationTerminalDropError(
-            code="ai_error_input_rejected", provider_error=provider
+            code="ai_error_input_rejected",
+            failure_kind="target_rejected",
+            failure_reason="safety",
+            provider_error=provider,
         ),
         CurationResponseInvalidError(),
         # Assessment 2 (Layer 1) + 1 (Layer 2-B)。failure_reason も SAFE_ATTRS 外。
