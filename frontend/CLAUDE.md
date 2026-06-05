@@ -57,14 +57,8 @@ backend ドメインに揃えた機能境界 (`auth` / `news` / `watchlist` / `d
 
 ## 検証
 
-タスク完了前に `/review` スキルを実行すること。手動で流す場合:
-
-```bash
-npx biome check src/
-npx tsc --noEmit
-npm test
-```
+実装変更後は `/check` スキルで、このディレクトリに該当する検証を実行する。
 
 ## テスト
 
-詳細は `src/test/CLAUDE.md` を参照。
+詳細は `src/test/` 配下の指示を参照。

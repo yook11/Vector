@@ -56,6 +56,6 @@
 
 ## 参照ドキュメント
 
-- `backend/CLAUDE.md` — バックエンド全体のルール
+- `backend/` 配下の指示 — バックエンド全体のルール
 - `backend/app/models/` + `backend/alembic/versions/` — テーブル定義 (SQLAlchemy 2.0 Declarative + Alembic migration が SSoT)
 - `backend/app/schemas/` — 期待するレスポンス形式 (Pydantic v2 が API SSoT、FastAPI が `/openapi.json` を自動生成)

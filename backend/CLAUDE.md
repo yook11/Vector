@@ -24,14 +24,6 @@ bounded context (ドメイン):
 5. **NEVER** SQLクエリを文字列結合で構築してはならない → SQLAlchemy のクエリビルダーを使うこと
 6. **NEVER** グローバルシングルトンで依存性を管理してはならない → FastAPI の DI (`Depends`) を使うこと
 
-## 検証コマンド
+## 検証
 
-```bash
-# タスク完了前に必ず実行
-uv run ruff check app/
-uv run ruff format --check app/
-uv run pytest tests/ -x -q
-
-# 特定ファイルのみテスト
-uv run pytest tests/test_<対象>.py -x -v
-```
+実装変更後は `/check` スキルで、このディレクトリに該当する検証を実行する。
