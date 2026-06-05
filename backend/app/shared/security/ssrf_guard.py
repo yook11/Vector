@@ -9,13 +9,9 @@
 「型が存在する = 検証済み」を構造的に保証する。``is_blocked_ip`` の
 ような直接判定関数は public API として公開しない (VO 構築が SSoT)。
 
-呼び出し側の例:
-    >>> try:
-    ...     await ensure_host_is_public(host)
-    ... except HostBlockedError as e:
-    ...     raise PermanentFetchError(str(e)) from e
-    ... except HostResolutionError as e:
-    ...     raise TemporaryFetchError(str(e)) from e
+政策例外 (``HostBlockedError`` / ``HostResolutionError``) の現役の翻訳先は
+``article_acquisition/tools/http_error_translation.py`` の
+``translate_fetch_exception`` が持つ。
 """
 
 from __future__ import annotations

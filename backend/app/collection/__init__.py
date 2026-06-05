@@ -7,6 +7,5 @@
 - ``sources/`` — 外部ソース固有の ``ArticleSource`` 群
 - ``staged.py`` — taskiq envelope
 - ``tasks.py`` — taskiq task 群
-- ``errors.py`` — ソース取得失敗の例外階層
 - ``url_canonicalize.py`` — URL 正規化純関数
 """
