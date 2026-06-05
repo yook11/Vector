@@ -1,10 +1,10 @@
 import Link from "next/link";
-import type { CSSProperties, ReactNode } from "react";
+import type { ReactNode } from "react";
 import type { ArticleBrief } from "@/types/types.gen";
+import { PaperKicker } from "./PaperKicker";
 import {
   formatPaperDate,
   getArticleSourceLabel,
-  getCategoryKicker,
   getSourceBadge,
 } from "./paper-style";
 
@@ -19,35 +19,14 @@ export function PaperArticleCard({
 }: PaperArticleCardProps) {
   const sourceLabel = getArticleSourceLabel(article);
   const source = getSourceBadge(article.source.name);
-  const kicker = getCategoryKicker(article.category.slug);
-  const kickerVars = {
-    "--kc-hue": kicker.hue,
-    "--kc-hue-dark": kicker.hueDark,
-  } as CSSProperties;
 
   return (
     <article className="relative flex flex-col border-b border-[color-mix(in_oklab,var(--vector-ink)_13%,transparent)] pb-5">
       <div className="mb-3.5 flex items-center justify-between gap-3">
-        <span className="inline-flex min-w-0 items-center gap-2.5">
-          <span
-            aria-hidden="true"
-            className="size-[11px] shrink-0 bg-[linear-gradient(135deg,var(--kc-hue)_0_50%,var(--vector-ink)_50%_100%)] dark:bg-[linear-gradient(135deg,var(--kc-hue-dark)_0_50%,var(--vector-ink)_50%_100%)]"
-            style={kickerVars}
-          />
-          <span
-            className="shrink-0 text-[12.5px] font-semibold tracking-[0.22em] text-[var(--vector-ink)]"
-            style={{ fontFamily: "var(--font-vector-display)" }}
-          >
-            {kicker.code}
-          </span>
-          <span
-            className="truncate text-[10px] font-medium tracking-[0.08em] text-[var(--vector-ink-muted)]"
-            style={{ fontFamily: "var(--font-vector-maru)" }}
-            title={article.category.name}
-          >
-            {article.category.name}
-          </span>
-        </span>
+        <PaperKicker
+          slug={article.category.slug}
+          name={article.category.name}
+        />
         {actionSlot && <div className="-mr-1 shrink-0">{actionSlot}</div>}
       </div>
 

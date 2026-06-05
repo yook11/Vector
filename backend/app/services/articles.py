@@ -38,6 +38,10 @@ def build_detail(analysis: InScopeAssessment) -> ArticleDetail:
         summary=analysis.summary,
         investor_take=analysis.investor_take,
         analyzed_at=analysis.analyzed_at,
+        category=CategoryEmbed(
+            slug=analysis.category.slug,
+            name=analysis.category.name,
+        ),
         source=NewsSourceEmbed(
             name=a.news_source.name,
             attribution_label=a.news_source.attribution_label,

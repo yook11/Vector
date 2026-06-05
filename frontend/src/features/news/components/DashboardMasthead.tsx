@@ -2,6 +2,7 @@ import Image from "next/image";
 import Link from "next/link";
 import type { ReactNode } from "react";
 import { MobileNav } from "@/components/layout/MobileNav";
+import { NavPendingDot } from "@/components/layout/NavPendingDot";
 import type { ProtectedNavItem } from "@/components/layout/nav-items";
 import type { ArticleQuery } from "@/types";
 import type { CategoryDetail } from "@/types/types.gen";
@@ -11,7 +12,7 @@ interface DashboardMastheadProps {
   activeCategory?: string;
   categories: CategoryDetail[];
   currentQuery: ArticleQuery;
-  displayDate: string;
+  dateSlot: ReactNode;
   navItems: ProtectedNavItem[];
   themeSlot: ReactNode;
   userMenuSlot: ReactNode;
@@ -21,7 +22,7 @@ export function DashboardMasthead({
   activeCategory,
   categories,
   currentQuery,
-  displayDate,
+  dateSlot,
   navItems,
   themeSlot,
   userMenuSlot,
@@ -60,12 +61,7 @@ export function DashboardMasthead({
         </nav>
 
         <div className="flex min-w-0 items-center justify-end gap-2 sm:gap-3">
-          <span
-            className="hidden shrink-0 text-[12.5px] italic tracking-[0.04em] text-[var(--vector-ink-muted)] sm:inline"
-            style={{ fontFamily: "var(--font-vector-display)" }}
-          >
-            {displayDate}
-          </span>
+          {dateSlot}
           <div className="hidden lg:block">{userMenuSlot}</div>
           {themeSlot}
           <div className="md:hidden">
@@ -87,9 +83,9 @@ export function DashboardMasthead({
           <Image
             src="/icon.svg"
             alt=""
-            width={44}
-            height={44}
-            className="size-9 rounded-[8px] sm:size-11"
+            width={64}
+            height={64}
+            className="size-12 sm:size-16"
           />
           <span
             className="inline-block pl-[0.12em] text-[56px] font-bold leading-none tracking-[0.12em] text-[var(--vector-ink)] [font-optical-sizing:auto] [font-stretch:condensed] [font-variation-settings:'opsz'_72] sm:text-[76px]"
@@ -161,11 +157,12 @@ function CategoryNavLink({
     <span className="inline-flex items-center gap-4">
       <Link
         href={href}
+        prefetch={false}
         aria-current={active ? "page" : undefined}
         className={
           active
-            ? "whitespace-nowrap border-b-2 border-[var(--vector-accent)] pb-1 text-[12px] font-bold tracking-[0.1em] text-[var(--vector-accent-ink)]"
-            : "whitespace-nowrap border-b-2 border-transparent pb-1 text-[12px] font-medium tracking-[0.1em] text-[var(--vector-ink-soft)] transition-colors hover:text-[var(--vector-ink)]"
+            ? "inline-flex items-center whitespace-nowrap border-b-2 border-[var(--vector-accent)] pb-1 text-[12px] font-bold tracking-[0.1em] text-[var(--vector-accent-ink)]"
+            : "inline-flex items-center whitespace-nowrap border-b-2 border-transparent pb-1 text-[12px] font-medium tracking-[0.1em] text-[var(--vector-ink-soft)] transition-colors hover:text-[var(--vector-ink)]"
         }
       >
         {label}
@@ -174,6 +171,7 @@ function CategoryNavLink({
             +{recentCount}
           </span>
         )}
+        <NavPendingDot className="ml-1.5" />
       </Link>
       <span aria-hidden="true" className="text-[var(--vector-line)]">
         ·

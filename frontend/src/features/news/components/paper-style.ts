@@ -85,6 +85,16 @@ export function formatPaperDate(dateStr: string | null | undefined): string {
   }).format(new Date(dateStr));
 }
 
+export function formatPaperTime(dateStr: string | null | undefined): string {
+  if (!dateStr) return "";
+  return new Intl.DateTimeFormat("ja-JP", {
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+    timeZone: "Asia/Tokyo",
+  }).format(new Date(dateStr));
+}
+
 export function formatPaperMastheadDate(date: Date): string {
   return new Intl.DateTimeFormat("ja-JP", {
     year: "numeric",

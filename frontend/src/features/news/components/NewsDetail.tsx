@@ -1,9 +1,11 @@
-import { Compass, ExternalLink, FileText } from "lucide-react";
+import { ArrowUpRight, ChevronLeft, Sparkles } from "lucide-react";
 import Link from "next/link";
 import { WatchlistButton } from "@/features/watchlist";
-import { formatDate } from "@/lib/date";
 import { sanitizeUrl } from "@/lib/utils/sanitize-url";
 import type { ArticleDetail as ArticleDetailData } from "@/types/types.gen";
+import { PaperByline } from "./PaperByline";
+import { PaperKicker } from "./PaperKicker";
+import { formatPaperDate, formatPaperTime } from "./paper-style";
 
 interface NewsDetailProps {
   article: ArticleDetailData;
@@ -22,108 +24,151 @@ export function NewsDetail({ article, isWatched }: NewsDetailProps) {
   // --- XSS: validate URL scheme (reject javascript: etc.) ---
   const safeUrl = sanitizeUrl(article.original.url);
   const summaryParagraphs = toParagraphs(article.summary);
-  const investorParagraphs = article.investorTake
+  const contextParagraphs = article.investorTake
     ? toParagraphs(article.investorTake)
     : [];
+  const sourceLabel = article.source.attributionLabel ?? article.source.name;
 
   return (
-    <article className="relative mx-auto max-w-2xl px-4 py-12 sm:py-16">
-      <div className="mb-10 flex items-start justify-end">
-        <WatchlistButton articleId={article.id} isWatched={isWatched} />
+    <article className="pt-7 pb-4">
+      <div className="mb-7">
+        <Link
+          href="/"
+          className="inline-flex items-center gap-1.5 text-[12.5px] tracking-[0.04em] text-[var(--vector-ink-muted)] transition-colors hover:text-[var(--vector-ink)]"
+          style={{ fontFamily: "var(--font-vector-maru)" }}
+        >
+          <ChevronLeft aria-hidden="true" className="size-3.5" />
+          ダッシュボードに戻る
+        </Link>
       </div>
 
-      {/* 見出し: text-balance + clamp() で文字数に応じて柔軟にスケール。
-          原題は italic + 左罫線で「翻訳タイトル → 原題」の階層を視覚化。 */}
-      <header className="mb-12 space-y-4">
-        <h1 className="text-balance text-[clamp(1.6rem,1.05rem+1.8vw,2.375rem)] font-medium leading-[1.2] tracking-tight text-foreground">
+      {/* 見出し帯: 全幅。翻訳タイトル → 原題 (deck) の階層を罫線と書体で示す。 */}
+      <header className="mb-9">
+        <div className="mb-4">
+          <PaperKicker
+            slug={article.category.slug}
+            name={article.category.name}
+          />
+        </div>
+        <h1
+          className="text-balance text-[clamp(30px,4vw,44px)] font-extrabold leading-[1.32] tracking-[0.01em] text-[var(--vector-ink)]"
+          style={{ fontFamily: "var(--font-vector-serif)" }}
+        >
           {article.translatedTitle}
         </h1>
-        <p className="text-pretty border-l-2 border-border/70 pl-3 text-[15px] italic leading-relaxed text-muted-foreground">
+        <p
+          className="mt-4 max-w-[46em] text-pretty border-l-2 border-[var(--vector-line)] pl-4 text-[16px] italic leading-[1.5] text-[var(--vector-ink-muted)]"
+          style={{ fontFamily: "var(--font-vector-display)" }}
+        >
           {article.original.title}
         </p>
+        <div className="mt-5 flex flex-wrap items-center justify-between gap-4 border-t-[3px] border-double border-[var(--vector-ink)] pt-4">
+          <PaperByline
+            sourceName={article.source.name}
+            sourceLabel={sourceLabel}
+            publishedAt={article.publishedAt}
+            withTime
+          />
+          <WatchlistButton
+            articleId={article.id}
+            isWatched={isWatched}
+            className="text-[var(--vector-ink-muted)] hover:bg-transparent hover:text-[var(--vector-accent)]"
+            iconClassName="size-[18px]"
+          />
+        </div>
       </header>
 
-      <div className="mb-16 flex flex-wrap items-center gap-x-3 gap-y-1 text-sm text-muted-foreground">
-        <span className="font-medium text-foreground">
-          {article.source.name}
-        </span>
-        <span aria-hidden="true">·</span>
-        <span>{formatDate(article.publishedAt, { withTime: true })}</span>
-      </div>
-
-      {/* AI Summary: 客観・地のまま。段落分割 + 行間広めで「文字のかたまり」感を解消。 */}
-      <section className="space-y-6">
-        <header className="space-y-1.5">
-          <div className="flex items-center gap-2">
-            <FileText
-              aria-hidden="true"
-              className="size-4 text-muted-foreground"
-            />
-            <h2 className="text-base font-semibold tracking-tight text-foreground">
-              記事の要約
-            </h2>
-          </div>
-          <p className="pl-6 text-xs text-muted-foreground">
-            AI が原文を翻訳・要約しています
-          </p>
-        </header>
-        <div className="space-y-5">
-          {summaryParagraphs.map((p, i) => (
-            <p
-              // biome-ignore lint/suspicious/noArrayIndexKey: 段落順序は AI 出力に従い安定
-              key={i}
-              className="text-pretty text-[15px] leading-[1.9] text-foreground/95"
-            >
-              {p}
-            </p>
-          ))}
-        </div>
-      </section>
-
-      {/* Investor Take: 主観・引用ブロック扱い (left border + 薄背景 + Compass icon) */}
-      {investorParagraphs.length > 0 && (
-        <aside className="relative mt-16 rounded-r-md border-l-2 border-primary bg-secondary/60 px-6 py-7 sm:px-8 sm:py-9">
-          <header className="mb-5 space-y-1.5">
-            <div className="flex items-center gap-2">
-              <Compass aria-hidden="true" className="size-4 text-primary" />
-              <h2 className="text-base font-semibold tracking-tight text-foreground">
-                Vector の見立て
-              </h2>
-            </div>
-            <p className="pl-6 text-xs text-muted-foreground">
-              投資・市場視点での編集解釈
-            </p>
-          </header>
-          <div className="space-y-4">
-            {investorParagraphs.map((p, i) => (
-              <p
-                // biome-ignore lint/suspicious/noArrayIndexKey: 段落順序は AI 出力に従い安定
-                key={i}
-                className="text-pretty text-[15px] leading-[1.9] text-foreground/95"
-              >
-                {p}
-              </p>
-            ))}
-          </div>
-        </aside>
-      )}
-
-      <footer className="mt-16 flex flex-col items-start gap-4 border-t border-border/60 pt-10">
-        {safeUrl !== null && (
-          <Link
-            href={safeUrl}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="inline-flex items-center gap-1.5 rounded-full border border-border px-5 py-2.5 text-sm font-medium text-foreground transition-colors hover:bg-accent"
+      {/* 本文カラム: measure 860px。読みやすさと右余白の活用を両立する。 */}
+      <div className="max-w-[860px]">
+        <div className="mb-5">
+          <span
+            className="inline-flex items-center gap-1.5 text-[13px] italic text-[var(--vector-accent-ink)]"
+            style={{ fontFamily: "var(--font-vector-display)" }}
           >
-            原文を読む
-            <ExternalLink aria-hidden="true" className="size-3.5" />
-          </Link>
+            <Sparkles
+              aria-hidden="true"
+              className="size-3.5 text-[var(--vector-accent)]"
+            />
+            AIが原文を翻訳・要約しています
+          </span>
+        </div>
+
+        {/* 先頭段落はリード (大きめ・字下げなし)、以降は字下げで段落を区切る。 */}
+        {summaryParagraphs.map((p, i) => (
+          <p
+            // biome-ignore lint/suspicious/noArrayIndexKey: 段落順序は AI 出力に従い安定
+            key={i}
+            className={
+              i === 0
+                ? "mb-[1.35em] text-pretty text-[17px] leading-[1.95] text-[var(--vector-ink)]"
+                : "mb-[1.35em] text-pretty text-[15.5px] leading-[2.0] text-[var(--vector-ink-soft)] [text-indent:1em]"
+            }
+            style={{ fontFamily: "var(--font-vector-serif)" }}
+          >
+            {p}
+          </p>
+        ))}
+
+        {/* 背景ノート: 投資助言ではなく中立的な編集部の背景整理として上下罫で示す。 */}
+        {contextParagraphs.length > 0 && (
+          <section className="my-9 py-6 [border-bottom:1px_solid_var(--vector-line)] [border-top:1px_solid_var(--vector-ink)]">
+            <div className="mb-3.5 flex flex-wrap items-baseline gap-3">
+              <span
+                className="text-[13px] font-semibold uppercase tracking-[0.26em] text-[var(--vector-accent-ink)]"
+                style={{ fontFamily: "var(--font-vector-display)" }}
+              >
+                CONTEXT
+              </span>
+              <span
+                className="text-[17px] font-bold text-[var(--vector-ink)]"
+                style={{ fontFamily: "var(--font-vector-serif)" }}
+              >
+                文脈
+              </span>
+              <span
+                className="text-[11px] tracking-[0.04em] text-[var(--vector-ink-muted)]"
+                style={{ fontFamily: "var(--font-vector-maru)" }}
+              >
+                編集部による背景整理
+              </span>
+            </div>
+            <div className="space-y-4">
+              {contextParagraphs.map((p, i) => (
+                <p
+                  // biome-ignore lint/suspicious/noArrayIndexKey: 段落順序は AI 出力に従い安定
+                  key={i}
+                  className="text-pretty text-[14.5px] leading-[2.0] text-[var(--vector-ink-soft)]"
+                  style={{ fontFamily: "var(--font-vector-serif)" }}
+                >
+                  {p}
+                </p>
+              ))}
+            </div>
+          </section>
         )}
-        <p className="text-xs text-muted-foreground">
-          Analyzed at {formatDate(article.analyzedAt, { withTime: true })}
-        </p>
-      </footer>
+
+        <div className="mt-9 flex flex-wrap items-center gap-4">
+          {safeUrl !== null && (
+            <Link
+              href={safeUrl}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="inline-flex items-center gap-2 rounded-full border border-[var(--vector-ink)] px-[18px] py-2.5 text-[13px] text-[var(--vector-ink)] transition-colors hover:bg-[color-mix(in_oklab,var(--vector-ink)_6%,transparent)]"
+              style={{ fontFamily: "var(--font-vector-maru)" }}
+            >
+              原文を読む
+              <ArrowUpRight aria-hidden="true" className="size-3.5" />
+            </Link>
+          )}
+          <span
+            className="text-[12.5px] italic text-[var(--vector-ink-muted)]"
+            style={{ fontFamily: "var(--font-vector-display)" }}
+          >
+            Analyzed at {formatPaperDate(article.analyzedAt)}{" "}
+            {formatPaperTime(article.analyzedAt)}
+          </span>
+        </div>
+      </div>
     </article>
   );
 }

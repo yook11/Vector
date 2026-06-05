@@ -1,29 +1,26 @@
-import { Skeleton } from "@/components/ui/skeleton";
+import {
+  DashboardArticleListSkeleton,
+  PaperSurface,
+  PaperTexture,
+} from "@/features/news";
 
 export default function DashboardLoading() {
   return (
-    <div className="flex h-full gap-0">
-      <aside className="hidden lg:flex w-64 shrink-0 flex-col border-r border-border p-6 gap-4">
-        <Skeleton className="h-5 w-24 mb-1" />
-        {Array.from({ length: 6 }).map((_, i) => (
-          // biome-ignore lint/suspicious/noArrayIndexKey: static skeleton list
-          <Skeleton key={i} className="h-9 w-full rounded-xl" />
-        ))}
-      </aside>
-      <main className="flex-1 min-w-0 px-8 sm:px-12 py-6 sm:py-8 flex flex-col gap-8 overflow-y-auto">
-        <Skeleton className="h-5 w-28" />
-        <div className="flex flex-wrap gap-3">
-          <Skeleton className="h-9 w-72 rounded-md" />
-          <Skeleton className="h-9 w-[130px] rounded-md" />
-          <Skeleton className="h-9 w-[120px] rounded-md" />
-        </div>
-        <div className="grid gap-8 md:grid-cols-2 xl:grid-cols-3">
-          {Array.from({ length: 6 }).map((_, i) => (
-            // biome-ignore lint/suspicious/noArrayIndexKey: static skeleton list
-            <Skeleton key={i} className="h-36 w-full rounded-xl" />
-          ))}
-        </div>
-      </main>
-    </div>
+    <PaperSurface>
+      <div className="relative min-h-dvh w-full overflow-hidden">
+        <PaperTexture />
+        <header className="relative z-10 px-5 sm:px-8 lg:px-10">
+          <div className="flex items-center justify-center gap-4 py-9 sm:gap-6">
+            <span className="h-px flex-1 bg-[color-mix(in_oklab,var(--vector-ink)_18%,transparent)]" />
+            <div className="h-12 w-48 animate-pulse rounded-sm bg-[color-mix(in_oklab,var(--vector-ink)_10%,transparent)] sm:h-16 sm:w-64" />
+            <span className="h-px flex-1 bg-[color-mix(in_oklab,var(--vector-ink)_18%,transparent)]" />
+          </div>
+          <div className="mb-7 border-t-[3px] border-double border-[var(--vector-ink)]" />
+        </header>
+        <main className="relative z-10 px-5 pb-14 sm:px-8 lg:px-10">
+          <DashboardArticleListSkeleton />
+        </main>
+      </div>
+    </PaperSurface>
   );
 }

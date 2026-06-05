@@ -78,6 +78,7 @@ class ArticleDetail(_CamelBase):
     summary: str
     investor_take: str
     analyzed_at: datetime
+    category: CategoryEmbed
     source: NewsSourceEmbed
     published_at: datetime | None = None
     original: OriginalArticleEmbed

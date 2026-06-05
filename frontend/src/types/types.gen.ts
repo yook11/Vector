@@ -61,6 +61,7 @@ export type ArticleDetail = {
      * Analyzedat
      */
     analyzedAt: string;
+    category: CategoryEmbed;
     source: NewsSourceEmbed;
     /**
      * Publishedat

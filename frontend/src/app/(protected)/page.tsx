@@ -1,7 +1,9 @@
+import { Suspense } from "react";
 import { getProtectedNavItems } from "@/components/layout/nav-items";
 import { ThemeToggle } from "@/components/layout/ThemeToggle";
 import { UserMenu } from "@/features/auth";
 import {
+  DashboardArticleListSkeleton,
   DashboardMasthead,
   DashboardPaperArticleList,
   formatPaperMastheadDate,
@@ -10,6 +12,7 @@ import {
   getLatestArticleDate,
   PaperNewsControls,
   PaperNewsPagination,
+  PaperSurface,
   PaperTexture,
   parseArticleQuery,
 } from "@/features/news";
@@ -17,6 +20,7 @@ import { getWatchlistIds } from "@/features/watchlist";
 import { requireSession } from "@/lib/auth/guards";
 import { narrowRole } from "@/lib/auth/role";
 import type { SearchParams } from "@/lib/types/route";
+import type { ArticleQuery } from "@/types";
 
 interface DashboardPageProps {
   searchParams: Promise<SearchParams>;
@@ -31,14 +35,11 @@ export default async function DashboardPage({
   const session = await requireSession();
   const isAdmin = narrowRole(session.user.role) === "admin";
   const navItems = getProtectedNavItems(isAdmin);
-  const [newsData, watchedIds, categoriesData] = await Promise.all([
-    getArticles(filters),
-    getWatchlistIds(),
-    getCategories(),
-  ]);
-  const displayDate = formatPaperMastheadDate(
-    getLatestArticleDate(newsData.items),
-  );
+  const categoriesData = await getCategories();
+
+  // 記事取得は子の Suspense へ閉じ込め、フィルタ変更のたびに key で再マウントして
+  // skeleton を出す。これにより切り替え中であることがコンテンツ領域で伝わる。
+  const sectionKey = `${filters.category ?? "all"}|${filters.sortOrder ?? "desc"}|${filters.perPage ?? ""}|${filters.page ?? 1}`;
 
   // EOP 下で undefined を optional prop に明示代入できないため、
   // 条件付き spread で「未指定 or 値あり」を表現する。
@@ -46,16 +47,17 @@ export default async function DashboardPage({
     filters.category !== undefined ? { activeCategory: filters.category } : {};
 
   return (
-    <div
-      className="min-h-dvh bg-[var(--vector-paper)] text-[var(--vector-ink)] [--vector-accent:#0fa89c] [--vector-accent-ink:#08756f] [--vector-ink:#221c16] [--vector-ink-muted:#938a7c] [--vector-ink-soft:#5c544a] [--vector-line:#e4dccc] [--vector-paper:#f7f3ec] [--vector-rule:#d5ccbc] dark:[--vector-accent:#2dd4bf] dark:[--vector-accent-ink:#67e8d8] dark:[--vector-ink:#f3eee4] dark:[--vector-ink-muted:#8a8173] dark:[--vector-ink-soft:#b7ae9f] dark:[--vector-line:#332c23] dark:[--vector-paper:#14110b] dark:[--vector-rule:#40382d]"
-      style={{ fontFamily: "var(--font-vector-sans)" }}
-    >
+    <PaperSurface>
       <div className="relative min-h-dvh w-full overflow-hidden">
         <PaperTexture />
         <DashboardMasthead
           categories={categoriesData.items}
           currentQuery={filters}
-          displayDate={displayDate}
+          dateSlot={
+            <Suspense fallback={null}>
+              <MastheadDate filters={filters} />
+            </Suspense>
+          }
           navItems={navItems}
           themeSlot={<ThemeToggle />}
           userMenuSlot={
@@ -73,16 +75,45 @@ export default async function DashboardPage({
         </section>
 
         <main className="relative z-10 px-5 pb-14 sm:px-8 lg:px-10">
-          <DashboardPaperArticleList
-            items={newsData.items}
-            watchedIds={watchedIds}
-          />
-          <PaperNewsPagination
-            page={newsData.page}
-            totalPages={newsData.totalPages}
-          />
+          <Suspense
+            key={sectionKey}
+            fallback={<DashboardArticleListSkeleton />}
+          >
+            <DashboardArticleSection filters={filters} />
+          </Suspense>
         </main>
       </div>
-    </div>
+    </PaperSurface>
+  );
+}
+
+async function MastheadDate({ filters }: { filters: ArticleQuery }) {
+  const data = await getArticles(filters);
+  return (
+    <span
+      className="hidden shrink-0 text-[12.5px] italic tracking-[0.04em] text-[var(--vector-ink-muted)] sm:inline"
+      style={{ fontFamily: "var(--font-vector-display)" }}
+    >
+      {formatPaperMastheadDate(getLatestArticleDate(data.items))}
+    </span>
+  );
+}
+
+async function DashboardArticleSection({ filters }: { filters: ArticleQuery }) {
+  const [newsData, watchedIds] = await Promise.all([
+    getArticles(filters),
+    getWatchlistIds(),
+  ]);
+  return (
+    <>
+      <DashboardPaperArticleList
+        items={newsData.items}
+        watchedIds={watchedIds}
+      />
+      <PaperNewsPagination
+        page={newsData.page}
+        totalPages={newsData.totalPages}
+      />
+    </>
   );
 }

@@ -1,19 +1,23 @@
 import type { Metadata } from "next";
-import Link from "next/link";
 import { notFound } from "next/navigation";
 import { Suspense } from "react";
-import { PageContainer } from "@/components/layout/PageContainer";
-import { Button } from "@/components/ui/button";
+import { getProtectedNavItems } from "@/components/layout/nav-items";
+import { SlimMasthead } from "@/components/layout/SlimMasthead";
+import { ThemeToggle } from "@/components/layout/ThemeToggle";
 import { Skeleton } from "@/components/ui/skeleton";
+import { UserMenu } from "@/features/auth";
 import {
   getArticleById,
   getSimilarArticles,
   NewsDetail,
+  PaperSurface,
+  PaperTexture,
   RelatedArticles,
 } from "@/features/news";
 import { getWatchlistIds } from "@/features/watchlist";
 import { ApiError } from "@/lib/api/error";
 import { getCurrentSession, requireSession } from "@/lib/auth/guards";
+import { narrowRole } from "@/lib/auth/role";
 import { PositiveIdParamSchema } from "@/lib/validation/id";
 import type {
   ArticleBrief,
@@ -85,11 +89,11 @@ async function RelatedArticlesAsync({
 
 function RelatedArticlesSkeleton() {
   return (
-    <section className="space-y-3" aria-hidden="true">
-      <Skeleton className="h-6 w-24" />
-      <div className="space-y-3">
-        {[0, 1, 2].map((i) => (
-          <Skeleton key={i} className="h-24" />
+    <section className="mt-14 space-y-4" aria-hidden="true">
+      <Skeleton className="h-7 w-28" />
+      <div className="grid grid-cols-1 gap-x-10 gap-y-8 md:grid-cols-2">
+        {[0, 1, 2, 3].map((i) => (
+          <Skeleton key={i} className="h-28" />
         ))}
       </div>
     </section>
@@ -108,8 +112,11 @@ export default async function NewsPage({ params }: NewsPageProps) {
   const articleId = parsed.data;
 
   // DAL gate: malformed URL を未認証でも 404 で返す現状の防御順序を保つため、
-  // 404 判定の後・データ取得の前に置く。未認証はここで redirect。
-  await requireSession();
+  // 404 判定の後・データ取得の前に置く。未認証はここで redirect。session は
+  // マストヘッドの nav 出し分けに使う。
+  const session = await requireSession();
+  const isAdmin = narrowRole(session.user.role) === "admin";
+  const navItems = getProtectedNavItems(isAdmin);
 
   // Fire all fetches in parallel. similar は Suspense'd child に forward。
   // article 単独で 404 判定したいので await は分割する (Promise.all だと
@@ -130,17 +137,34 @@ export default async function NewsPage({ params }: NewsPageProps) {
   const watchedIds = await watchedIdsPromise;
 
   return (
-    <PageContainer maxWidth="3xl">
-      <Button variant="ghost" size="sm" asChild className="text-xs">
-        <Link href="/">&larr; Back to Dashboard</Link>
-      </Button>
-      <NewsDetail article={article} isWatched={watchedIds.has(article.id)} />
-      <Suspense fallback={<RelatedArticlesSkeleton />}>
-        <RelatedArticlesAsync
-          articlesPromise={similarPromise}
-          watchedIds={watchedIds}
-        />
-      </Suspense>
-    </PageContainer>
+    <PaperSurface>
+      <SlimMasthead
+        navItems={navItems}
+        activeHref="/"
+        themeSlot={<ThemeToggle />}
+        userMenuSlot={
+          <UserMenu
+            compact
+            buttonClassName="rounded-none text-[var(--vector-ink-muted)] hover:bg-transparent hover:text-[var(--vector-accent)]"
+            emailClassName="text-[var(--vector-ink-muted)]"
+          />
+        }
+      />
+      <div className="relative">
+        <PaperTexture />
+        <main className="relative z-10 mx-auto max-w-[1180px] px-5 pb-20 sm:px-8 lg:px-10">
+          <NewsDetail
+            article={article}
+            isWatched={watchedIds.has(article.id)}
+          />
+          <Suspense fallback={<RelatedArticlesSkeleton />}>
+            <RelatedArticlesAsync
+              articlesPromise={similarPromise}
+              watchedIds={watchedIds}
+            />
+          </Suspense>
+        </main>
+      </div>
+    </PaperSurface>
   );
 }

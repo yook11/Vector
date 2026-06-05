@@ -34,6 +34,9 @@ def article_eager_options_detail() -> list:
             defer(Article.original_content, raiseload=True),
             selectinload(Article.news_source),
         ),
+        # detail も category を返す. async では未 load の relationship 参照が
+        # lazy load で MissingGreenlet を投げるため eager load 必須.
+        selectinload(InScopeAssessment.category),
     ]
 
 
