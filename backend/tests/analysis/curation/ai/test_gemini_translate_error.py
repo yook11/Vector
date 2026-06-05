@@ -22,6 +22,7 @@ from app.analysis.ai_provider_errors import (
 )
 from app.analysis.curation.ai.gemini import GeminiCurator
 from app.analysis.curation.errors import CurationResponseInvalidError
+from app.analysis.gemini_error_translator import GeminiContentRejectionReason
 
 
 def _api_error(status: str, message: str, code: int = 400) -> APIError:
@@ -51,6 +52,7 @@ def test_context_length_pattern_maps_to_input_rejected(message: str) -> None:
     translated = _curator()._translate_error(exc)
     assert isinstance(translated, AIProviderInputRejectedError)
     assert translated.CODE == "ai_error_input_rejected"
+    assert translated.reason is GeminiContentRejectionReason.CONTEXT_LENGTH
 
 
 def test_deadline_exceeded_with_context_pattern_also_maps_to_input_rejected() -> None:
@@ -58,6 +60,7 @@ def test_deadline_exceeded_with_context_pattern_also_maps_to_input_rejected() ->
     exc = _api_error("DEADLINE_EXCEEDED", "Input exceeds context length", code=504)
     translated = _curator()._translate_error(exc)
     assert isinstance(translated, AIProviderInputRejectedError)
+    assert translated.reason is GeminiContentRejectionReason.CONTEXT_LENGTH
 
 
 # Stage 3 specific: ValidationError → CurationResponseInvalidError

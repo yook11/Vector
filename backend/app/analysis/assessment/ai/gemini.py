@@ -30,7 +30,11 @@ from app.analysis.assessment.ai.spec import (
 )
 from app.analysis.assessment.domain.result import InScope, OutOfScope
 from app.analysis.assessment.errors import AssessmentResponseInvalidError
-from app.analysis.gemini_error_translator import translate_gemini_error
+from app.analysis.gemini_error_translator import (
+    GeminiStateReason,
+    output_blocked_reason,
+    translate_gemini_error,
+)
 from app.analysis.rate_limit import AIModelRateLimitPolicy
 from app.config import settings
 
@@ -64,7 +68,8 @@ class GeminiAssessor(BaseAssessor):
         api_key = settings.gemini_api_key.get_secret_value()
         if not api_key:
             # provider error detail に secret や provider message を含めない。
-            raise AIProviderConfigurationError()
+            # reason で「未設定」を他の configuration 原因と区別する。
+            raise AIProviderConfigurationError(reason=GeminiStateReason.NOT_CONFIGURED)
         self._client = genai.Client(api_key=api_key)
 
     # -- BaseAssessor property 契約 --
@@ -112,8 +117,14 @@ class GeminiAssessor(BaseAssessor):
         # _call_api 内で raise する (provider が「応答を抑制した」事実は SDK の
         # 例外ではなくレスポンス attribute として届く)。
         finish_reason_name = self._extract_finish_reason_name(response)
-        if finish_reason_name in _BLOCKED_FINISH_REASONS:
-            raise AIProviderOutputBlockedError()
+        if (
+            finish_reason_name is not None
+            and finish_reason_name in _BLOCKED_FINISH_REASONS
+        ):
+            # blocked-set 内なので finish_reason_name は写像に必ず存在する。
+            raise AIProviderOutputBlockedError(
+                reason=output_blocked_reason(finish_reason_name)
+            )
 
         text = response.text or ""
         try:

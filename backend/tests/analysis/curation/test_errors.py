@@ -10,6 +10,7 @@ from app.analysis.curation.errors import (
     CurationTerminalDropError,
     CurationTerminalKeepError,
 )
+from app.analysis.gemini_error_translator import GeminiContentRejectionReason
 from app.audit.domain.event import Stage
 from app.audit.failure_projection import FailureAction, Retryability
 
@@ -28,7 +29,9 @@ def test_marker_classvars_are_audit_projection_ssot() -> None:
 
 
 def test_terminal_drop_holds_code_and_provider_error() -> None:
-    original = AIProviderInputRejectedError("blocked")
+    original = AIProviderInputRejectedError(
+        reason=GeminiContentRejectionReason.INPUT_BLOCKED
+    )
     exc = CurationTerminalDropError(
         code="ai_error_input_rejected",
         provider_error=original,

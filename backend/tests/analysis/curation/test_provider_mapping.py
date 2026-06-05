@@ -10,6 +10,7 @@ import pytest
 
 from app.analysis.ai_provider_errors import (
     AIProviderConfigurationError,
+    AIProviderContentError,
     AIProviderError,
     AIProviderInputRejectedError,
     AIProviderInsufficientBalanceError,
@@ -29,6 +30,20 @@ from app.analysis.curation.errors import (
     CurationTerminalKeepError,
     map_provider_to_curation,
 )
+from app.analysis.gemini_error_translator import GeminiContentRejectionReason
+
+
+def _instantiate(exc_type: type[AIProviderError]) -> AIProviderError:
+    """provider error を構築する。
+
+    content 系は ``reason`` 必須なので代表 reason を渡し、state 系は legacy
+    positional message を渡す (accept-and-discard 経路を維持する)。mapper は
+    reason を読まないため、reason の具体値は dispatch 判定に影響しない。
+    """
+    if issubclass(exc_type, AIProviderContentError):
+        return exc_type(reason=GeminiContentRejectionReason.SAFETY)
+    return exc_type("boom")
+
 
 # 期待 9 種の白リスト。本ファイルで直接 expected セットを書くことで、
 # ``AIProviderError.__subclasses__()`` を walking するテスト間副作用を避ける。
@@ -133,7 +148,7 @@ class TestMapProviderToExtractionRecoverable:
     def test_dispatches_to_recoverable_marker(
         self, exc_type: type[AIProviderError]
     ) -> None:
-        original = exc_type("boom")
+        original = _instantiate(exc_type)
 
         result = map_provider_to_curation(original)
 
@@ -151,7 +166,7 @@ class TestMapProviderToExtractionRecoverable:
     def test_preserves_provider_error_identity(
         self, exc_type: type[AIProviderError]
     ) -> None:
-        original = exc_type("boom")
+        original = _instantiate(exc_type)
 
         result = map_provider_to_curation(original)
 
@@ -169,7 +184,7 @@ class TestMapProviderToExtractionRecoverable:
     def test_propagates_code_from_provider_class_var(
         self, exc_type: type[AIProviderError]
     ) -> None:
-        original = exc_type("boom")
+        original = _instantiate(exc_type)
 
         result = map_provider_to_curation(original)
 
@@ -190,7 +205,7 @@ class TestMapProviderToExtractionTerminalKeep:
     def test_dispatches_to_terminal_keep_marker(
         self, exc_type: type[AIProviderError]
     ) -> None:
-        original = exc_type("boom")
+        original = _instantiate(exc_type)
 
         result = map_provider_to_curation(original)
 
@@ -207,7 +222,7 @@ class TestMapProviderToExtractionTerminalKeep:
     def test_preserves_provider_error_identity(
         self, exc_type: type[AIProviderError]
     ) -> None:
-        original = exc_type("boom")
+        original = _instantiate(exc_type)
 
         result = map_provider_to_curation(original)
 
@@ -224,7 +239,7 @@ class TestMapProviderToExtractionTerminalKeep:
     def test_propagates_code_from_provider_class_var(
         self, exc_type: type[AIProviderError]
     ) -> None:
-        original = exc_type("boom")
+        original = _instantiate(exc_type)
 
         result = map_provider_to_curation(original)
 
@@ -244,7 +259,7 @@ class TestMapProviderToExtractionTerminalDrop:
     def test_dispatches_to_terminal_drop_marker(
         self, exc_type: type[AIProviderError]
     ) -> None:
-        original = exc_type("boom")
+        original = _instantiate(exc_type)
 
         result = map_provider_to_curation(original)
 
@@ -260,7 +275,7 @@ class TestMapProviderToExtractionTerminalDrop:
     def test_preserves_provider_error_identity(
         self, exc_type: type[AIProviderError]
     ) -> None:
-        original = exc_type("boom")
+        original = _instantiate(exc_type)
 
         result = map_provider_to_curation(original)
 
@@ -276,7 +291,7 @@ class TestMapProviderToExtractionTerminalDrop:
     def test_propagates_code_from_provider_class_var(
         self, exc_type: type[AIProviderError]
     ) -> None:
-        original = exc_type("boom")
+        original = _instantiate(exc_type)
 
         result = map_provider_to_curation(original)
 

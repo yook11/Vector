@@ -31,6 +31,7 @@ from app.analysis.embedding.errors import (
     EmbeddingTerminalTargetRejectedError,
 )
 from app.analysis.embedding.service import EmbeddingService
+from app.analysis.gemini_error_translator import GeminiContentRejectionReason
 from app.models.article import Article
 from app.models.article_curation import ArticleCuration
 from app.models.category import Category
@@ -275,7 +276,9 @@ async def test_execute_wraps_target_rejected_provider_error(
     analysis_id = analysis.id
     article_id = article.id
 
-    original = AIProviderInputRejectedError("input policy violation")
+    original = AIProviderInputRejectedError(
+        reason=GeminiContentRejectionReason.INPUT_BLOCKED
+    )
     embedder = _mock_embedder(raises=original)
     svc = EmbeddingService(session_factory)
     ready = _make_ready(analysis_id=analysis_id, article_id=article_id)

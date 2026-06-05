@@ -24,6 +24,8 @@ from app.analysis.ai_provider_errors import (
     AIProviderUsageLimitExhaustedError,
 )
 from app.analysis.gemini_error_translator import (
+    GeminiContentRejectionReason,
+    GeminiStateReason,
     is_context_length_error,
     translate_gemini_error,
 )
@@ -220,6 +222,119 @@ def test_legacy_api_error_unauthenticated_classifies_as_configuration() -> None:
     exc = _api_error(code=401, status="UNAUTHENTICATED", message="invalid key")
     translated = translate_gemini_error(exc)
     assert isinstance(translated, AIProviderConfigurationError)
+
+
+# 各分岐が原因詳細 reason を自己記述する (起きた箇所が reason を上げる)
+
+
+@pytest.mark.parametrize(
+    "exc,expected_cls,expected_reason",
+    [
+        (
+            httpx.TimeoutException("t"),
+            AIProviderNetworkError,
+            GeminiStateReason.TIMEOUT,
+        ),
+        (
+            httpx.ConnectError("c"),
+            AIProviderNetworkError,
+            GeminiStateReason.CONNECTION,
+        ),
+        (TimeoutError("t"), AIProviderNetworkError, GeminiStateReason.TIMEOUT),
+        (ConnectionError("c"), AIProviderNetworkError, GeminiStateReason.CONNECTION),
+        (OSError("dns"), AIProviderNetworkError, GeminiStateReason.CONNECTION),
+        (
+            _server_error(),
+            AIProviderServiceUnavailableError,
+            GeminiStateReason.SERVER_ERROR,
+        ),
+        (
+            _client_error(
+                code=400,
+                status="INVALID_ARGUMENT",
+                message=(
+                    "API key AIza... has been reported as leaked at "
+                    "https://github.com/foo"
+                ),
+            ),
+            AIProviderConfigurationError,
+            GeminiStateReason.LEAKED_API_KEY,
+        ),
+        (
+            _client_error(code=401, status="UNAUTHENTICATED"),
+            AIProviderConfigurationError,
+            GeminiStateReason.AUTH,
+        ),
+        (
+            _client_error(code=403, status="PERMISSION_DENIED"),
+            AIProviderConfigurationError,
+            GeminiStateReason.PERMISSION_DENIED,
+        ),
+        (
+            _client_error(code=404, status="NOT_FOUND"),
+            AIProviderConfigurationError,
+            GeminiStateReason.NOT_FOUND,
+        ),
+        (
+            _client_error(code=400, status="FAILED_PRECONDITION"),
+            AIProviderConfigurationError,
+            GeminiStateReason.FAILED_PRECONDITION,
+        ),
+        (
+            _client_error(
+                code=400, status="INVALID_ARGUMENT", message="API key not valid"
+            ),
+            AIProviderConfigurationError,
+            GeminiStateReason.AUTH,
+        ),
+        (
+            _client_error(
+                code=400, status="INVALID_ARGUMENT", message="permission denied"
+            ),
+            AIProviderConfigurationError,
+            GeminiStateReason.PERMISSION_DENIED,
+        ),
+        (
+            _client_error(
+                code=400,
+                status="INVALID_ARGUMENT",
+                message="request blocked by safety filter",
+            ),
+            AIProviderInputRejectedError,
+            GeminiContentRejectionReason.INPUT_BLOCKED,
+        ),
+        (
+            _client_error(
+                code=400, status="INVALID_ARGUMENT", message="malformed request"
+            ),
+            AIProviderRequestInvalidError,
+            GeminiStateReason.INVALID_ARGUMENT,
+        ),
+        (
+            _client_error(
+                code=429,
+                status="RESOURCE_EXHAUSTED",
+                message="daily quota exceeded",
+            ),
+            AIProviderUsageLimitExhaustedError,
+            GeminiStateReason.QUOTA_EXHAUSTED,
+        ),
+        (
+            _client_error(
+                code=429, status="RESOURCE_EXHAUSTED", message="rate limit reached"
+            ),
+            AIProviderRateLimitedError,
+            GeminiStateReason.RATE_LIMITED,
+        ),
+    ],
+)
+def test_translation_carries_reason(
+    exc: Exception, expected_cls: type, expected_reason: object
+) -> None:
+    """各分岐が CODE (class) に加え原因詳細 reason を自己記述する。"""
+    translated = translate_gemini_error(exc)
+    assert isinstance(translated, expected_cls)
+    assert translated.reason is expected_reason  # type: ignore[attr-defined]
 
 
 # Unknown → return exc (identity 保持)

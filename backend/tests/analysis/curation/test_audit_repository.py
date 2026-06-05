@@ -54,6 +54,7 @@ from app.analysis.curation.errors import (
     CurationResponseInvalidError,
     map_provider_to_curation,
 )
+from app.analysis.gemini_error_translator import GeminiContentRejectionReason
 from app.analysis.prompt_safety import sanitize_for_untrusted_block
 from app.audit.stages.curation import CurationAuditRepository
 from app.models.article import Article
@@ -418,7 +419,7 @@ async def test_append_drop_article_records_failure_with_drop_category(
     """
     article = await _make_article(db_session, sample_source)
     article_id = article.id
-    raw_exc = AIProviderOutputBlockedError()
+    raw_exc = AIProviderOutputBlockedError(reason=GeminiContentRejectionReason.SAFETY)
     try:
         raise map_provider_to_curation(raw_exc) from raw_exc
     except Exception as wrapped:  # noqa: BLE001
@@ -553,7 +554,11 @@ def _wrap(raw: BaseException) -> BaseException:
     ),
     [
         (
-            lambda: _wrap(AIProviderInputRejectedError()),
+            lambda: _wrap(
+                AIProviderInputRejectedError(
+                    reason=GeminiContentRejectionReason.INPUT_BLOCKED
+                )
+            ),
             "ai_error_input_rejected",
             "non_retryable",
             "terminal_drop",

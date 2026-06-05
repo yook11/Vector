@@ -34,7 +34,7 @@ from app.analysis.ai_provider_errors import (
     AIProviderRequestInvalidError,
     AIProviderServiceUnavailableError,
 )
-from app.analysis.assessment.ai.deepseek import DeepSeekAssessor
+from app.analysis.assessment.ai.deepseek import DeepSeekAssessor, DeepSeekStateReason
 from app.config import settings
 
 
@@ -164,6 +164,96 @@ def test_5xx_status_error_translates_to_service_unavailable(status_code: int) ->
     exc = _make_status_error(status_code, f"upstream {status_code}")
     translated = assessor._translate_error(exc)
     assert isinstance(translated, AIProviderServiceUnavailableError)
+
+
+# 各分岐が原因詳細 reason を自己記述する (起きた箇所が reason を上げる)
+
+
+@pytest.mark.parametrize(
+    "exc_factory,expected_cls,expected_reason",
+    [
+        (
+            lambda: APITimeoutError(request=_make_request()),
+            AIProviderNetworkError,
+            DeepSeekStateReason.TIMEOUT,
+        ),
+        (
+            lambda: APIConnectionError(request=_make_request()),
+            AIProviderNetworkError,
+            DeepSeekStateReason.CONNECTION,
+        ),
+        (
+            lambda: TimeoutError("t"),
+            AIProviderNetworkError,
+            DeepSeekStateReason.TIMEOUT,
+        ),
+        (
+            lambda: ConnectionError("c"),
+            AIProviderNetworkError,
+            DeepSeekStateReason.CONNECTION,
+        ),
+        (
+            lambda: OSError("dns"),
+            AIProviderNetworkError,
+            DeepSeekStateReason.CONNECTION,
+        ),
+        (
+            lambda: AuthenticationError("k", response=_make_response(401), body=None),
+            AIProviderConfigurationError,
+            DeepSeekStateReason.AUTH,
+        ),
+        (
+            lambda: PermissionDeniedError("d", response=_make_response(403), body=None),
+            AIProviderConfigurationError,
+            DeepSeekStateReason.PERMISSION_DENIED,
+        ),
+        (
+            lambda: NotFoundError("m", response=_make_response(404), body=None),
+            AIProviderConfigurationError,
+            DeepSeekStateReason.NOT_FOUND,
+        ),
+        (
+            lambda: _make_status_error(402, "Insufficient Balance"),
+            AIProviderInsufficientBalanceError,
+            DeepSeekStateReason.INSUFFICIENT_BALANCE,
+        ),
+        (
+            lambda: OpenAIRateLimitError("r", response=_make_response(429), body=None),
+            AIProviderRateLimitedError,
+            DeepSeekStateReason.RATE_LIMITED,
+        ),
+        (
+            lambda: BadRequestError("b", response=_make_response(400), body=None),
+            AIProviderRequestInvalidError,
+            DeepSeekStateReason.BAD_REQUEST,
+        ),
+        (
+            lambda: UnprocessableEntityError(
+                "u", response=_make_response(422), body=None
+            ),
+            AIProviderRequestInvalidError,
+            DeepSeekStateReason.UNPROCESSABLE,
+        ),
+        (
+            lambda: InternalServerError("s", response=_make_response(500), body=None),
+            AIProviderServiceUnavailableError,
+            DeepSeekStateReason.SERVER_ERROR,
+        ),
+        (
+            lambda: _make_status_error(503, "upstream"),
+            AIProviderServiceUnavailableError,
+            DeepSeekStateReason.SERVER_ERROR,
+        ),
+    ],
+)
+def test_translation_carries_reason(
+    exc_factory, expected_cls: type, expected_reason: object
+) -> None:
+    """各分岐が CODE (class) に加え DeepSeek 状態の reason を自己記述する。"""
+    assessor = DeepSeekAssessor()
+    translated = assessor._translate_error(exc_factory())
+    assert isinstance(translated, expected_cls)
+    assert translated.reason is expected_reason  # type: ignore[attr-defined]
 
 
 # Catch-all: マップ未知は exc をそのまま return (bare re-raise guard 規約)

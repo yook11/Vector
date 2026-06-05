@@ -28,6 +28,7 @@ from app.analysis.embedding.ai.gemini import GeminiEmbedder
 from app.analysis.embedding.ai.spec import GEMINI_EMBEDDING_SPEC
 from app.analysis.embedding.domain.ready import ReadyForEmbedding
 from app.analysis.embedding.domain.value_objects import EmbeddingVector
+from app.analysis.gemini_error_translator import GeminiStateReason
 
 
 def _make_embedder() -> GeminiEmbedder:
@@ -59,8 +60,10 @@ def test_init_raises_configuration_error_when_api_key_missing() -> None:
     """API key が空文字なら ``AIProviderConfigurationError`` で初期化失敗。"""
     with patch("app.analysis.embedding.ai.gemini.settings") as mock_settings:
         mock_settings.gemini_api_key.get_secret_value.return_value = ""
-        with pytest.raises(AIProviderConfigurationError):
+        with pytest.raises(AIProviderConfigurationError) as ei:
             GeminiEmbedder()
+    # 「未設定」を他の configuration 原因 (auth / not_found 等) と reason で区別する。
+    assert ei.value.reason is GeminiStateReason.NOT_CONFIGURED
 
 
 def test_spec_is_gemini_embedding_spec_singleton() -> None:
@@ -113,8 +116,10 @@ async def test_embed_document_raises_request_invalid_when_embeddings_empty() -> 
     response.embeddings = []
     embedder._client.aio.models.embed_content = AsyncMock(return_value=response)
 
-    with pytest.raises(AIProviderRequestInvalidError):
+    with pytest.raises(AIProviderRequestInvalidError) as ei:
         await embedder.embed_document(_ready())
+    # 「embeddings 空」と「values None」を reason で区別する。
+    assert ei.value.reason is GeminiStateReason.EMPTY_EMBEDDINGS
 
 
 @pytest.mark.asyncio
@@ -124,8 +129,9 @@ async def test_embed_document_raises_request_invalid_when_values_missing() -> No
     response.embeddings = [MagicMock(values=None)]
     embedder._client.aio.models.embed_content = AsyncMock(return_value=response)
 
-    with pytest.raises(AIProviderRequestInvalidError):
+    with pytest.raises(AIProviderRequestInvalidError) as ei:
         await embedder.embed_document(_ready())
+    assert ei.value.reason is GeminiStateReason.MISSING_VALUES
 
 
 # D. _translate_error は共通 translator に delegate (smoke のみ)

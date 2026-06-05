@@ -46,6 +46,10 @@ from app.analysis.embedding.errors import (
     EmbeddingTerminalStageBlockedError,
     EmbeddingTerminalTargetRejectedError,
 )
+from app.analysis.gemini_error_translator import (
+    GeminiContentRejectionReason,
+    GeminiStateReason,
+)
 from app.logfire.exceptions import VectorDomainError
 
 # VectorDomainError 基底の __str__ 契約
@@ -96,11 +100,11 @@ def test_str_uses_none_for_missing_attribute() -> None:
     assert str(_PartialAttrs()) == "_PartialAttrs(present='value', absent=None)"
 
 
-# AIProviderError (10 class): SAFE_ATTRS=("CODE",) + accept-and-discard
+# AIProvider*Error 2 系統:
+# - State (7 class): SAFE_ATTRS=("CODE",) + accept-and-discard + 任意 reason
+# - Content (2 class): SAFE_ATTRS=("CODE","reason") + 必須 reason (型ガード)
 
-_AI_PROVIDER_SUBCLASSES: tuple[tuple[type[AIProviderError], str], ...] = (
-    (AIProviderInputRejectedError, "ai_error_input_rejected"),
-    (AIProviderOutputBlockedError, "ai_error_output_blocked"),
+_AI_PROVIDER_STATE_SUBCLASSES: tuple[tuple[type[AIProviderError], str], ...] = (
     (AIProviderConfigurationError, "ai_error_configuration"),
     (AIProviderRequestInvalidError, "ai_error_request_invalid"),
     (AIProviderInsufficientBalanceError, "ai_error_insufficient_balance"),
@@ -110,18 +114,37 @@ _AI_PROVIDER_SUBCLASSES: tuple[tuple[type[AIProviderError], str], ...] = (
     (AIProviderNetworkError, "ai_error_network"),
 )
 
+_AI_PROVIDER_CONTENT_SUBCLASSES: tuple[tuple[type[AIProviderError], str], ...] = (
+    (AIProviderInputRejectedError, "ai_error_input_rejected"),
+    (AIProviderOutputBlockedError, "ai_error_output_blocked"),
+)
 
-@pytest.mark.parametrize("cls,expected_code", _AI_PROVIDER_SUBCLASSES)
-def test_ai_provider_error_str_contains_only_code(
+
+@pytest.mark.parametrize("cls,expected_code", _AI_PROVIDER_STATE_SUBCLASSES)
+def test_ai_provider_state_error_str_contains_only_code(
     cls: type[AIProviderError], expected_code: str
 ) -> None:
-    """各 AIProvider*Error の ``__str__`` は class name + CODE のみ。"""
+    """State error の ``__str__`` は class name + CODE のみ (reason は非公開)。"""
     exc = cls()
     assert str(exc) == f"{cls.__name__}(CODE={expected_code!r})"
 
 
-@pytest.mark.parametrize("cls,_code", _AI_PROVIDER_SUBCLASSES)
-def test_ai_provider_error_constructor_swallows_legacy_positional_message(
+@pytest.mark.parametrize("cls,_code", _AI_PROVIDER_STATE_SUBCLASSES)
+def test_ai_provider_state_error_reason_not_in_str(
+    cls: type[AIProviderError], _code: str
+) -> None:
+    """State の reason は forensics 用 instance 属性で ``__str__`` に乗らない。
+
+    reason を付与しても golden な ``(CODE=...)`` 形は変わらない (SAFE_ATTRS に
+    reason を入れない設計)。
+    """
+    exc = cls(reason=GeminiStateReason.TIMEOUT)  # type: ignore[call-arg]
+    assert "timeout" not in str(exc)
+    assert str(exc) == f"{cls.__name__}(CODE={_code!r})"
+
+
+@pytest.mark.parametrize("cls,_code", _AI_PROVIDER_STATE_SUBCLASSES)
+def test_ai_provider_state_error_constructor_swallows_legacy_positional_message(
     cls: type[AIProviderError], _code: str
 ) -> None:
     """legacy 互換: positional message を渡しても捨てて ``__str__`` には出ない。
@@ -136,8 +159,8 @@ def test_ai_provider_error_constructor_swallows_legacy_positional_message(
     assert cls.__name__ in rendered
 
 
-@pytest.mark.parametrize("cls,_code", _AI_PROVIDER_SUBCLASSES)
-def test_ai_provider_error_constructor_swallows_legacy_kwargs(
+@pytest.mark.parametrize("cls,_code", _AI_PROVIDER_STATE_SUBCLASSES)
+def test_ai_provider_state_error_constructor_swallows_legacy_kwargs(
     cls: type[AIProviderError], _code: str
 ) -> None:
     """legacy 互換: 未知 kwargs を渡しても落とさず ``__str__`` には出ない。
@@ -148,6 +171,49 @@ def test_ai_provider_error_constructor_swallows_legacy_kwargs(
     exc = cls(unrelated_attr=sensitive)
     rendered = str(exc)
     assert sensitive not in rendered
+
+
+@pytest.mark.parametrize("cls,expected_code", _AI_PROVIDER_CONTENT_SUBCLASSES)
+def test_ai_provider_content_error_str_contains_code_and_reason(
+    cls: type[AIProviderError], expected_code: str
+) -> None:
+    """Content error の ``__str__`` は CODE + reason (PII-free な種別ラベル)。"""
+    exc = cls(reason=GeminiContentRejectionReason.SAFETY)  # type: ignore[call-arg]
+    rendered = str(exc)
+    assert rendered == (
+        f"{cls.__name__}(CODE={expected_code!r}, "
+        f"reason={GeminiContentRejectionReason.SAFETY!r})"
+    )
+
+
+@pytest.mark.parametrize("cls,_code", _AI_PROVIDER_CONTENT_SUBCLASSES)
+def test_ai_provider_content_error_requires_reason_kwarg(
+    cls: type[AIProviderError], _code: str
+) -> None:
+    """Content error は reason 必須 (検知箇所が拒否理由を必ず上げる契約)。"""
+    with pytest.raises(TypeError):
+        cls()  # type: ignore[call-arg]
+
+
+@pytest.mark.parametrize("cls,_code", _AI_PROVIDER_CONTENT_SUBCLASSES)
+def test_ai_provider_content_error_rejects_positional_message(
+    cls: type[AIProviderError], _code: str
+) -> None:
+    """Content error は positional message を ``TypeError`` で拒否する (PII 境界)。"""
+    with pytest.raises(TypeError):
+        cls("sensitive_sdk_message")  # type: ignore[call-arg]
+
+
+@pytest.mark.parametrize("cls,_code", _AI_PROVIDER_CONTENT_SUBCLASSES)
+def test_ai_provider_content_error_rejects_non_strenum_reason(
+    cls: type[AIProviderError], _code: str
+) -> None:
+    """Content error は自由文字列 reason を ``TypeError`` で拒否する (PII 境界)。
+
+    AI 生成値を reason に通す regression を構造的に阻止する。
+    """
+    with pytest.raises(TypeError):
+        cls(reason="sensitive_free_text")  # type: ignore[call-arg]
 
 
 def test_ai_provider_error_base_inherits_vector_domain_error() -> None:
@@ -277,9 +343,9 @@ def _build_21_class_instances() -> list[VectorDomainError]:
     """PII 安全性を確認する 21 class の代表 instance を 1 つずつ構築する。"""
     provider = AIProviderRateLimitedError()
     return [
-        # AIProvider*Error 9 種 (引数なし)
-        AIProviderInputRejectedError(),
-        AIProviderOutputBlockedError(),
+        # AIProvider*Error 9 種 (content は reason 必須、state は引数なし)
+        AIProviderInputRejectedError(reason=GeminiContentRejectionReason.INPUT_BLOCKED),
+        AIProviderOutputBlockedError(reason=GeminiContentRejectionReason.SAFETY),
         AIProviderConfigurationError(),
         AIProviderRequestInvalidError(),
         AIProviderInsufficientBalanceError(),
@@ -345,12 +411,16 @@ def test_21_class_str_never_contains_provider_error_repr_payload() -> None:
     assert all(type(exc).__name__ in rendered_all for exc in instances)
 
 
-@pytest.mark.parametrize("cls,_code", _AI_PROVIDER_SUBCLASSES)
-def test_ai_provider_error_full_text_search_no_sensitive(
+@pytest.mark.parametrize("cls,_code", _AI_PROVIDER_STATE_SUBCLASSES)
+def test_ai_provider_state_error_full_text_search_no_sensitive(
     cls: type[AIProviderError], _code: str
 ) -> None:
-    """AIProvider*Error に SDK の sensitive message を渡しても全文検索でヒット
-    しない。"""
+    """State error に SDK の sensitive message を渡しても全文検索でヒットしない。
+
+    accept-and-discard 経路 (positional + 未知 kwargs) を通しても ``__str__`` /
+    ``args`` に PII が残らない。content error は positional を型レベルで拒否する
+    ため本 oracle の対象外 (拒否自体は別テストで検証)。
+    """
     sensitive = "sensitive_provider_response_zzzzzzzz"
     exc = cls(sensitive, extra=sensitive)
     dumped = json.dumps(

@@ -71,6 +71,27 @@ class DeepSeekResponseDefect(StrEnum):
     ARGUMENTS_NOT_DICT = "assessment_response_deepseek_arguments_not_dict"
 
 
+class DeepSeekStateReason(StrEnum):
+    """DeepSeek (OpenAI SDK) provider / 環境状態の具体理由 (PII-free な種別ラベル)。
+
+    ``_translate_error`` の各分岐 (SDK 例外種別 / HTTP status) と __init__ local
+    検知 (未設定) に対応する。値は audit の ``failure_reason`` に焼かれ、
+    ``outcome_code`` (= CODE) より細かい原因を残す。
+    """
+
+    TIMEOUT = "timeout"
+    CONNECTION = "connection"
+    AUTH = "auth"
+    PERMISSION_DENIED = "permission_denied"
+    NOT_FOUND = "not_found"
+    INSUFFICIENT_BALANCE = "insufficient_balance"
+    RATE_LIMITED = "rate_limited"
+    BAD_REQUEST = "bad_request"
+    UNPROCESSABLE = "unprocessable"
+    SERVER_ERROR = "server_error"
+    NOT_CONFIGURED = "not_configured"
+
+
 class DeepSeekAssessor(BaseAssessor):
     """BaseAssessor の DeepSeek-V4-Flash 実装。"""
 
@@ -80,7 +101,10 @@ class DeepSeekAssessor(BaseAssessor):
         api_key = settings.deepseek_api_key.get_secret_value()
         if not api_key:
             # provider error detail に secret や provider message を含めない。
-            raise AIProviderConfigurationError()
+            # reason で「未設定」を他の configuration 原因と区別する。
+            raise AIProviderConfigurationError(
+                reason=DeepSeekStateReason.NOT_CONFIGURED
+            )
         self._client = AsyncOpenAI(api_key=api_key, base_url=self.SPEC.base_url)
 
     # -- BaseAssessor property 契約 --
@@ -197,28 +221,50 @@ class DeepSeekAssessor(BaseAssessor):
         ``_call_once`` が bare re-raise する規約)。
         """
         # network 系。SDK 生 message は provider error detail に載せない。
-        if isinstance(exc, (APIConnectionError, APITimeoutError)):
-            return AIProviderNetworkError()
-        if isinstance(exc, (TimeoutError, ConnectionError, OSError)):
-            return AIProviderNetworkError()
+        # timeout / connection を reason で区別する (APITimeoutError は
+        # APIConnectionError の subclass なので先に評価する)。
+        if isinstance(exc, APITimeoutError):
+            return AIProviderNetworkError(reason=DeepSeekStateReason.TIMEOUT)
+        if isinstance(exc, APIConnectionError):
+            return AIProviderNetworkError(reason=DeepSeekStateReason.CONNECTION)
+        if isinstance(exc, TimeoutError):
+            return AIProviderNetworkError(reason=DeepSeekStateReason.TIMEOUT)
+        if isinstance(exc, (ConnectionError, OSError)):
+            return AIProviderNetworkError(reason=DeepSeekStateReason.CONNECTION)
 
-        if isinstance(exc, (AuthenticationError, PermissionDeniedError, NotFoundError)):
-            return AIProviderConfigurationError()
+        if isinstance(exc, AuthenticationError):
+            return AIProviderConfigurationError(reason=DeepSeekStateReason.AUTH)
+        if isinstance(exc, PermissionDeniedError):
+            return AIProviderConfigurationError(
+                reason=DeepSeekStateReason.PERMISSION_DENIED
+            )
+        if isinstance(exc, NotFoundError):
+            return AIProviderConfigurationError(reason=DeepSeekStateReason.NOT_FOUND)
 
         # HTTP 402 を OpenAIRateLimitError より先に評価 (DeepSeek 固有)
         if isinstance(exc, APIStatusError) and exc.status_code == 402:
-            return AIProviderInsufficientBalanceError()
+            return AIProviderInsufficientBalanceError(
+                reason=DeepSeekStateReason.INSUFFICIENT_BALANCE
+            )
 
         if isinstance(exc, OpenAIRateLimitError):
-            return AIProviderRateLimitedError()
+            return AIProviderRateLimitedError(reason=DeepSeekStateReason.RATE_LIMITED)
 
-        if isinstance(exc, (BadRequestError, UnprocessableEntityError)):
-            return AIProviderRequestInvalidError()
+        if isinstance(exc, BadRequestError):
+            return AIProviderRequestInvalidError(reason=DeepSeekStateReason.BAD_REQUEST)
+        if isinstance(exc, UnprocessableEntityError):
+            return AIProviderRequestInvalidError(
+                reason=DeepSeekStateReason.UNPROCESSABLE
+            )
 
         if isinstance(exc, InternalServerError):
-            return AIProviderServiceUnavailableError()
+            return AIProviderServiceUnavailableError(
+                reason=DeepSeekStateReason.SERVER_ERROR
+            )
 
         if isinstance(exc, APIStatusError) and 500 <= exc.status_code < 600:
-            return AIProviderServiceUnavailableError()
+            return AIProviderServiceUnavailableError(
+                reason=DeepSeekStateReason.SERVER_ERROR
+            )
 
         return exc  # bare re-raise (UNKNOWN)

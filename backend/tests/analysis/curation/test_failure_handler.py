@@ -36,6 +36,7 @@ from app.analysis.curation.ai.gemini_spec import GEMINI_CURATION_SPEC
 from app.analysis.curation.domain.ready import ReadyForCuration
 from app.analysis.curation.errors import map_provider_to_curation
 from app.analysis.curation.failure_handling import CurationFailureHandler
+from app.analysis.gemini_error_translator import GeminiContentRejectionReason
 from app.models.article import Article
 from app.models.news_source import NewsSource
 from app.models.pipeline_event import PipelineEvent
@@ -92,7 +93,7 @@ async def test_output_blocked_writes_audit_then_deletes_article(
     ready = _ready_from(article)
     handler = CurationFailureHandler(session_factory)
 
-    raw_exc = AIProviderOutputBlockedError("blocked by policy: SAFETY")
+    raw_exc = AIProviderOutputBlockedError(reason=GeminiContentRejectionReason.SAFETY)
     try:
         raise map_provider_to_curation(raw_exc) from raw_exc
     except Exception as wrapped:  # noqa: BLE001
@@ -156,7 +157,9 @@ async def test_input_rejected_writes_audit_then_deletes_article(
     ready = _ready_from(article)
     handler = CurationFailureHandler(session_factory)
 
-    raw_exc = AIProviderInputRejectedError("input exceeds context length")
+    raw_exc = AIProviderInputRejectedError(
+        reason=GeminiContentRejectionReason.CONTEXT_LENGTH
+    )
     try:
         raise map_provider_to_curation(raw_exc) from raw_exc
     except Exception as wrapped:  # noqa: BLE001

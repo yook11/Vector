@@ -38,6 +38,7 @@ from app.analysis.ai_provider_errors import (
 from app.analysis.curation.domain.ready import ReadyForCuration
 from app.analysis.curation.errors import CurationResponseInvalidError
 from app.analysis.failure_handling import FailureHandlingDecision
+from app.analysis.gemini_error_translator import GeminiContentRejectionReason
 from app.analysis.rate_limit import AIModelRateLimitPolicy, RateLimitRule
 from app.queue.messages.curation import CurationTrigger
 from tests.logfire._span_helpers import stage_attrs
@@ -112,7 +113,8 @@ async def test_drop_article_delegates_to_handler(exc_cls: type[Exception]) -> No
     from app.queue.tasks.curation import curate_content
 
     ctx = _make_ctx()
-    exc = exc_cls("boom")
+    # content 系は reason 必須。dispatch 判定に reason 値は無関係。
+    exc = exc_cls(reason=GeminiContentRejectionReason.SAFETY)
 
     with (
         _patch_try_advance_from(),

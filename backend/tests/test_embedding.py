@@ -22,6 +22,7 @@ from app.analysis.embedding.domain.value_objects import (
     EmbeddingVector,
 )
 from app.analysis.embedding.errors import EmbeddingResponseInvalidError
+from app.analysis.gemini_error_translator import GeminiContentRejectionReason
 from app.analysis.rate_limit import AIModelRateLimitPolicy
 
 _STUB_RATE_LIMIT_POLICY = AIModelRateLimitPolicy(
@@ -83,7 +84,9 @@ class StubEmbedder(BaseEmbedder):
 
     def _translate_error(self, exc: Exception) -> Exception:
         if isinstance(exc, _InvalidInputSDKError):
-            return AIProviderInputRejectedError()
+            return AIProviderInputRejectedError(
+                reason=GeminiContentRejectionReason.INPUT_BLOCKED
+            )
         # マップできない例外は exc をそのまま return (bare re-raise 規約)
         return exc
 

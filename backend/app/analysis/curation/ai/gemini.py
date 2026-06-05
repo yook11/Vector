@@ -31,7 +31,10 @@ from app.analysis.curation.ai.schema import GeminiCurationResponse
 from app.analysis.curation.domain import Noise, Signal
 from app.analysis.curation.errors import CurationResponseInvalidError
 from app.analysis.gemini_error_translator import (
+    GeminiContentRejectionReason,
+    GeminiStateReason,
     is_context_length_error,
+    output_blocked_reason,
     translate_gemini_error,
 )
 from app.analysis.rate_limit import AIModelRateLimitPolicy
@@ -82,7 +85,7 @@ class GeminiCurator(BaseCurator):
             # AIProviderConfigurationError.CODE (= "ai_error_configuration") + 起動
             # ログ ("GEMINI_API_KEY is not configured" を logger.error 等で別経路で
             # 残す) で行う。本 raise 時点では空 instance で十分。
-            raise AIProviderConfigurationError()
+            raise AIProviderConfigurationError(reason=GeminiStateReason.NOT_CONFIGURED)
         self._client = genai.Client(api_key=api_key)
 
     # -- BaseCurator property 契約 --
@@ -125,10 +128,17 @@ class GeminiCurator(BaseCurator):
         # (Stage 3 boundary で CurationTerminalDropError に詰め替えられ、記事
         # DELETE 対象になる)
         finish_reason = _detect_finish_reason(response)
-        if finish_reason in _POLICY_BLOCKED_FINISH_REASONS:
-            # Phase 4: finish_reason は audit 軸として CODE 経由で残す (現状
-            # ai_error_output_blocked)。SDK 由来の文字列は __str__ には出さない。
-            raise AIProviderOutputBlockedError()
+        if (
+            finish_reason is not None
+            and finish_reason in _POLICY_BLOCKED_FINISH_REASONS
+        ):
+            # finish_reason は audit 軸として CODE (ai_error_output_blocked) +
+            # reason (safety / recitation 等) で残す。SDK 由来の文字列は __str__ に
+            # 出さない (reason は PII-free な種別ラベル)。blocked-set 内なので
+            # finish_reason は写像に必ず存在する。
+            raise AIProviderOutputBlockedError(
+                reason=output_blocked_reason(finish_reason)
+            )
 
         parsed = response.parsed
         if not isinstance(parsed, GeminiCurationResponse):
@@ -175,6 +185,8 @@ class GeminiCurator(BaseCurator):
             # __cause__ 連鎖と structlog 経路で別途残せる。
             return CurationResponseInvalidError()
         if is_context_length_error(exc):
-            # Phase 4: 引数 message 廃止。CODE (= ai_error_input_rejected) で識別。
-            return AIProviderInputRejectedError()
+            # CODE (= ai_error_input_rejected) + reason (context_length) で識別。
+            return AIProviderInputRejectedError(
+                reason=GeminiContentRejectionReason.CONTEXT_LENGTH
+            )
         return translate_gemini_error(exc)

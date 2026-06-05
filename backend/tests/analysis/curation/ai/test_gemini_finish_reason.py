@@ -31,6 +31,7 @@ from app.analysis.curation.ai.gemini_spec import GEMINI_CURATION_SPEC
 from app.analysis.curation.ai.schema import GeminiCurationResponse
 from app.analysis.curation.domain import Signal
 from app.analysis.curation.errors import CurationResponseInvalidError
+from app.analysis.gemini_error_translator import GeminiContentRejectionReason
 
 
 def _make_response(
@@ -68,41 +69,44 @@ def _make_curator(
     return curator
 
 
-@pytest.mark.parametrize(
-    "blocked_reason",
-    [
-        FinishReason.SAFETY,
-        FinishReason.RECITATION,
-        FinishReason.BLOCKLIST,
-        FinishReason.PROHIBITED_CONTENT,
-        FinishReason.SPII,
-    ],
-)
+# finish_reason → content 拒否 reason の期待写像 (production の dict とは独立な
+# literal。両者が一致することで adapter の finish_reason→reason 配線を検証する)。
+_FINISH_REASON_TO_CONTENT_REASON: dict[FinishReason, GeminiContentRejectionReason] = {
+    FinishReason.SAFETY: GeminiContentRejectionReason.SAFETY,
+    FinishReason.RECITATION: GeminiContentRejectionReason.RECITATION,
+    FinishReason.BLOCKLIST: GeminiContentRejectionReason.BLOCKLIST,
+    FinishReason.PROHIBITED_CONTENT: GeminiContentRejectionReason.PROHIBITED_CONTENT,
+    FinishReason.SPII: GeminiContentRejectionReason.SPII,
+}
+
+
+@pytest.mark.parametrize("blocked_reason", list(_FINISH_REASON_TO_CONTENT_REASON))
 @pytest.mark.asyncio
 async def test_policy_block_finish_reason_raises_output_blocked(
     blocked_reason: FinishReason,
 ) -> None:
-    """policy block 系 finish_reason は Layer 2-A の OutputBlocked を raise する。
+    """policy block 系 finish_reason は OutputBlocked を raise し reason を運ぶ。
 
-    Phase 4: 旧 ``str(exc)`` 経由の finish_reason 文字列検査は廃止
-    (AIProvider*Error は SAFE_ATTRS=("CODE",) で SDK 値を載せない構造的契約)。
-    finish_reason 種別の確認は class 名と CODE 値で行う。
+    AIProvider*Error は SDK 生値を ``__str__`` に載せない (SAFE_ATTRS 契約) が、
+    どの policy block かは ``reason`` (PII-free な種別ラベル) で自己記述する。
     """
     response = _make_response(finish_reason=blocked_reason, text="some draft")
     curator = _make_curator(response)
     with pytest.raises(AIProviderOutputBlockedError) as ei:
         await curator._call_api("prompt")
     assert ei.value.CODE == "ai_error_output_blocked"
+    assert ei.value.reason is _FINISH_REASON_TO_CONTENT_REASON[blocked_reason]
 
 
 @pytest.mark.asyncio
 async def test_policy_block_with_no_text_still_raises_output_blocked() -> None:
-    """raw_response 空でも OutputBlocked は raise (class 名で識別)。"""
+    """raw_response 空でも OutputBlocked は raise (reason で種別を識別)。"""
     response = _make_response(finish_reason=FinishReason.SAFETY, text="")
     curator = _make_curator(response)
     with pytest.raises(AIProviderOutputBlockedError) as ei:
         await curator._call_api("prompt")
     assert ei.value.CODE == "ai_error_output_blocked"
+    assert ei.value.reason is GeminiContentRejectionReason.SAFETY
 
 
 @pytest.mark.asyncio

@@ -6,6 +6,7 @@ import pytest
 
 from app.analysis.ai_provider_errors import (
     AIProviderConfigurationError,
+    AIProviderContentError,
     AIProviderError,
     AIProviderInputRejectedError,
     AIProviderInsufficientBalanceError,
@@ -25,6 +26,20 @@ from app.analysis.embedding.errors import (
     EmbeddingTerminalTargetRejectedError,
     to_embedding_error,
 )
+from app.analysis.gemini_error_translator import GeminiContentRejectionReason
+
+
+def _instantiate(exc_type: type[AIProviderError]) -> AIProviderError:
+    """provider error を構築する。
+
+    content 系は ``reason`` 必須なので代表 reason を渡し、state 系は legacy
+    positional message を渡す (accept-and-discard 経路を維持する)。mapper は
+    reason を読まないため、reason の具体値は dispatch 判定に影響しない。
+    """
+    if issubclass(exc_type, AIProviderContentError):
+        return exc_type(reason=GeminiContentRejectionReason.SAFETY)
+    return exc_type("boom")
+
 
 # 期待 9 種の白リスト。Stage 4 test_provider_mapping.py と同形。
 _EXPECTED_PROVIDER_ERROR_TYPES: frozenset[type[AIProviderError]] = frozenset(
@@ -129,7 +144,7 @@ class TestMapProviderToEmbeddingRecoverable:
     def test_dispatches_to_recoverable_marker(
         self, exc_type: type[AIProviderError]
     ) -> None:
-        original = exc_type("boom")
+        original = _instantiate(exc_type)
 
         result = to_embedding_error(original)
 
@@ -147,7 +162,7 @@ class TestMapProviderToEmbeddingRecoverable:
     def test_preserves_provider_error_identity(
         self, exc_type: type[AIProviderError]
     ) -> None:
-        original = exc_type("boom")
+        original = _instantiate(exc_type)
 
         result = to_embedding_error(original)
 
@@ -165,7 +180,7 @@ class TestMapProviderToEmbeddingRecoverable:
     def test_propagates_code_from_provider_class_var(
         self, exc_type: type[AIProviderError]
     ) -> None:
-        original = exc_type("boom")
+        original = _instantiate(exc_type)
 
         result = to_embedding_error(original)
 
@@ -186,7 +201,7 @@ class TestMapProviderToEmbeddingTerminalStageBlocked:
     def test_dispatches_to_terminal_stage_blocked_marker(
         self, exc_type: type[AIProviderError]
     ) -> None:
-        original = exc_type("boom")
+        original = _instantiate(exc_type)
 
         result = to_embedding_error(original)
 
@@ -203,7 +218,7 @@ class TestMapProviderToEmbeddingTerminalStageBlocked:
     def test_preserves_provider_error_identity(
         self, exc_type: type[AIProviderError]
     ) -> None:
-        original = exc_type("boom")
+        original = _instantiate(exc_type)
 
         result = to_embedding_error(original)
 
@@ -220,7 +235,7 @@ class TestMapProviderToEmbeddingTerminalStageBlocked:
     def test_propagates_code_from_provider_class_var(
         self, exc_type: type[AIProviderError]
     ) -> None:
-        original = exc_type("boom")
+        original = _instantiate(exc_type)
 
         result = to_embedding_error(original)
 
@@ -240,7 +255,7 @@ class TestMapProviderToEmbeddingTerminalTargetRejected:
     def test_dispatches_to_terminal_target_rejected_marker(
         self, exc_type: type[AIProviderError]
     ) -> None:
-        original = exc_type("boom")
+        original = _instantiate(exc_type)
 
         result = to_embedding_error(original)
 
@@ -256,7 +271,7 @@ class TestMapProviderToEmbeddingTerminalTargetRejected:
     def test_preserves_provider_error_identity(
         self, exc_type: type[AIProviderError]
     ) -> None:
-        original = exc_type("boom")
+        original = _instantiate(exc_type)
 
         result = to_embedding_error(original)
 
@@ -272,7 +287,7 @@ class TestMapProviderToEmbeddingTerminalTargetRejected:
     def test_propagates_code_from_provider_class_var(
         self, exc_type: type[AIProviderError]
     ) -> None:
-        original = exc_type("boom")
+        original = _instantiate(exc_type)
 
         result = to_embedding_error(original)
 

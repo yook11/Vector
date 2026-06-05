@@ -32,7 +32,10 @@ from app.analysis.embedding.ai.spec import (
     GEMINI_EMBEDDING_SPEC,
     EmbeddingCallSpec,
 )
-from app.analysis.gemini_error_translator import translate_gemini_error
+from app.analysis.gemini_error_translator import (
+    GeminiStateReason,
+    translate_gemini_error,
+)
 from app.analysis.rate_limit import AIModelRateLimitPolicy
 from app.config import settings
 
@@ -48,7 +51,8 @@ class GeminiEmbedder(BaseEmbedder):
         api_key = settings.gemini_api_key.get_secret_value()
         if not api_key:
             # provider error detail に secret や provider message を含めない。
-            raise AIProviderConfigurationError()
+            # reason で「未設定」を他の configuration 原因と区別する。
+            raise AIProviderConfigurationError(reason=GeminiStateReason.NOT_CONFIGURED)
         self._client = genai.Client(api_key=api_key)
 
     @property
@@ -89,10 +93,13 @@ class GeminiEmbedder(BaseEmbedder):
         embeddings = response.embeddings
         if not embeddings:
             # SDK response 全文は PII を含みうるため、例外 message に載せない。
-            raise AIProviderRequestInvalidError()
+            # reason で「embeddings 空」と「values None」を区別する。
+            raise AIProviderRequestInvalidError(
+                reason=GeminiStateReason.EMPTY_EMBEDDINGS
+            )
         first = embeddings[0]
         if first.values is None:
-            raise AIProviderRequestInvalidError()
+            raise AIProviderRequestInvalidError(reason=GeminiStateReason.MISSING_VALUES)
         return list(first.values)
 
     def _translate_error(self, exc: Exception) -> Exception:

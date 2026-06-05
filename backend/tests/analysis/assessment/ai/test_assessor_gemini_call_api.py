@@ -28,6 +28,7 @@ from app.analysis.assessment.ai.parse import AssessmentResponseDefect
 from app.analysis.assessment.ai.spec import GEMINI_ASSESSMENT_SPEC
 from app.analysis.assessment.domain.result import InScope, InScopeCategory, OutOfScope
 from app.analysis.assessment.errors import AssessmentResponseInvalidError
+from app.analysis.gemini_error_translator import GeminiContentRejectionReason
 from app.config import settings
 
 
@@ -140,6 +141,7 @@ class TestGeminiFinishReasonBlocked:
             await assessor._call_api("prompt")
 
         assert exc_info.value.CODE == "ai_error_output_blocked"
+        assert exc_info.value.reason is GeminiContentRejectionReason.SAFETY
 
     @pytest.mark.asyncio
     async def test_finish_reason_recitation_raises_blocked(self) -> None:
@@ -152,6 +154,7 @@ class TestGeminiFinishReasonBlocked:
             await assessor._call_api("prompt")
 
         assert exc_info.value.CODE == "ai_error_output_blocked"
+        assert exc_info.value.reason is GeminiContentRejectionReason.RECITATION
 
     @pytest.mark.asyncio
     async def test_finish_reason_stop_does_not_raise(self) -> None:

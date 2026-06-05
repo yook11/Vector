@@ -45,6 +45,7 @@ from app.analysis.curation.cli.recuration_service import (
 )
 from app.analysis.curation.domain import Noise, Signal
 from app.analysis.curation.repository import CurationRepository
+from app.analysis.gemini_error_translator import GeminiContentRejectionReason
 from app.models.article import Article
 from app.models.article_curation import ArticleCuration
 from app.models.news_source import NewsSource
@@ -171,7 +172,11 @@ async def test_invalid_input_is_skipped_not_failed(
     )
     await _seed_extraction(db_session, article=article)
 
-    curator = _curator(side_effect=AIProviderInputRejectedError("too short"))
+    curator = _curator(
+        side_effect=AIProviderInputRejectedError(
+            reason=GeminiContentRejectionReason.INPUT_BLOCKED
+        )
+    )
     service = RecurationService(session_factory)
     summary = await service.execute((article.id,), curator, dry_run=False)
 
