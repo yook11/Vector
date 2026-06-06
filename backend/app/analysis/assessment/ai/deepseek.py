@@ -124,6 +124,7 @@ class DeepSeekAssessor(BaseAssessor):
                 }
             ],
             **self.SPEC.gen_config,
+            **self.SPEC.structured_output,
         )
 
         choice = resp.choices[0]

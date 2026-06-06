@@ -2,14 +2,17 @@
 golden table テスト。
 
 Prompt と Spec を分離した結果として ``provider`` / ``model`` / ``version`` /
-``gen_config`` / ``response_schema`` / ``system_instruction`` / ``rate_limit_policy``
-+ DeepSeek 固有 ``tool_name`` / ``base_url`` が module singleton として SSoT に
-置かれていることを検証する。
+``gen_config`` (tuning) / ``structured_output`` (機構) / ``response_schema`` /
+``system_instruction`` / ``rate_limit_policy`` + DeepSeek 固有 ``tool_name`` /
+``base_url`` が module singleton として SSoT に置かれていることを検証する。
 
-``version`` は ``compute_call_signature`` で算出される 8 文字 hash。具体値は
-prompt 本文変更のたびに自動で動くため、テストでは値そのものを pin せず format
-(hex8) + provider 間で別物であることのみ pin する。audit 連続性 cutover の
-意思表示は commit メッセージで行う (ADR §prompt_version の規律)。
+``version`` は ``compute_call_signature`` で算出される 8 文字 hash。値は実効 call
+config (gen_config + structured_output を含む) の deliberate な変更時のみ動くべきで、
+機構を gen_config↔structured_output で移すだけの純粋リファクタでは動いてはならない。
+そのため format (hex8) と provider 間別物性に加え、具体値を pin して意図しない回転を
+検出する (一般則「実装出力を期待値にしない」の例外: opaque だが不変であるべき値の
+characterization guard)。意図的 rotation 時は pin 値を更新し、audit 連続性 cutover の
+意思表示を commit メッセージで残す (ADR §prompt_version の規律)。
 """
 
 from __future__ import annotations
@@ -54,10 +57,25 @@ def test_gemini_gen_config_is_mapping_proxy_and_immutable() -> None:
         GEMINI_ASSESSMENT_SPEC.gen_config["temperature"] = 0.5  # type: ignore[index]
 
 
-def test_gemini_gen_config_has_required_fields() -> None:
+def test_gemini_gen_config_has_tuning_fields_only() -> None:
+    """gen_config は task 軸 tuning のみ。機構 (mime type) は structured_output へ。"""
     assert GEMINI_ASSESSMENT_SPEC.gen_config["temperature"] == 0.2
     assert GEMINI_ASSESSMENT_SPEC.gen_config["max_output_tokens"] == 1024
-    assert GEMINI_ASSESSMENT_SPEC.gen_config["response_mime_type"] == "application/json"
+    assert "response_mime_type" not in GEMINI_ASSESSMENT_SPEC.gen_config
+
+
+def test_gemini_structured_output_is_mapping_proxy_and_immutable() -> None:
+    assert isinstance(GEMINI_ASSESSMENT_SPEC.structured_output, MappingProxyType)
+    with pytest.raises(TypeError):
+        GEMINI_ASSESSMENT_SPEC.structured_output["response_mime_type"] = "x"  # type: ignore[index]
+
+
+def test_gemini_structured_output_forces_json_mime_type() -> None:
+    """Gemini の構造化出力強制機構は JSON mode。"""
+    assert (
+        GEMINI_ASSESSMENT_SPEC.structured_output["response_mime_type"]
+        == "application/json"
+    )
 
 
 def test_gemini_system_instruction_is_none() -> None:
@@ -104,15 +122,28 @@ def test_deepseek_gen_config_is_immutable() -> None:
         DEEPSEEK_ASSESSMENT_SPEC.gen_config["max_tokens"] = 99  # type: ignore[index]
 
 
-def test_deepseek_gen_config_includes_tool_choice_with_assess_article() -> None:
-    tool_choice = DEEPSEEK_ASSESSMENT_SPEC.gen_config["tool_choice"]
+def test_deepseek_gen_config_has_tuning_fields_only() -> None:
+    """gen_config は tuning のみ。機構は structured_output へ分離。"""
+    assert DEEPSEEK_ASSESSMENT_SPEC.gen_config["max_tokens"] == 512
+    assert "tool_choice" not in DEEPSEEK_ASSESSMENT_SPEC.gen_config
+    assert "extra_body" not in DEEPSEEK_ASSESSMENT_SPEC.gen_config
+
+
+def test_deepseek_structured_output_is_immutable() -> None:
+    assert isinstance(DEEPSEEK_ASSESSMENT_SPEC.structured_output, MappingProxyType)
+    with pytest.raises(TypeError):
+        DEEPSEEK_ASSESSMENT_SPEC.structured_output["tool_choice"] = {}  # type: ignore[index]
+
+
+def test_deepseek_structured_output_includes_tool_choice_with_assess_article() -> None:
+    tool_choice = DEEPSEEK_ASSESSMENT_SPEC.structured_output["tool_choice"]
     assert tool_choice["type"] == "function"
     assert tool_choice["function"]["name"] == "assess_article"
 
 
-def test_deepseek_gen_config_disables_thinking() -> None:
-    """DeepSeek Stage 4 は分類のみで reasoning trace 不要。"""
-    extra_body = DEEPSEEK_ASSESSMENT_SPEC.gen_config["extra_body"]
+def test_deepseek_structured_output_disables_thinking() -> None:
+    """DeepSeek Stage 4 は分類のみで reasoning trace 不要 (機構軸)。"""
+    extra_body = DEEPSEEK_ASSESSMENT_SPEC.structured_output["extra_body"]
     assert extra_body["thinking"]["type"] == "disabled"
 
 
@@ -143,7 +174,7 @@ def test_deepseek_spec_is_frozen() -> None:
 
 
 def test_deepseek_tool_choice_matches_tool_name() -> None:
-    """``gen_config["tool_choice"]["function"]["name"]`` と ``tool_name`` が
+    """``structured_output["tool_choice"]["function"]["name"]`` と ``tool_name`` が
     spec 内で一致する内部 invariant を固定する。
 
     ``MappingProxyType`` は shallow freeze のため、nested ``tool_choice`` dict は
@@ -151,10 +182,26 @@ def test_deepseek_tool_choice_matches_tool_name() -> None:
     test で関係を pin する。
     """
     spec = DEEPSEEK_ASSESSMENT_SPEC
-    assert spec.gen_config["tool_choice"]["function"]["name"] == spec.tool_name
+    assert spec.structured_output["tool_choice"]["function"]["name"] == spec.tool_name
 
 
 # 横断
+
+
+# pre-D3-refactor (機構を gen_config から structured_output へ分離する前) に捕捉した
+# version 値。機構の置き場所を移すだけの純粋リファクタでは hash は不変であるべきで、
+# この pin が回転を検出する。意図的な prompt / 機構 rotation 時はこの値を更新し、
+# commit メッセージで cutover を明示する (ADR §prompt_version の規律)。
+_GEMINI_PINNED_VERSION = "efe480ff"
+_DEEPSEEK_PINNED_VERSION = "0f0c086c"
+
+
+def test_gemini_version_is_pinned() -> None:
+    assert GEMINI_ASSESSMENT_SPEC.version == _GEMINI_PINNED_VERSION
+
+
+def test_deepseek_version_is_pinned() -> None:
+    assert DEEPSEEK_ASSESSMENT_SPEC.version == _DEEPSEEK_PINNED_VERSION
 
 
 def test_specs_have_distinct_versions() -> None:

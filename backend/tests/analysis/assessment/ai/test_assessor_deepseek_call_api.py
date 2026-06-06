@@ -114,6 +114,24 @@ class TestDeepSeekCallApiSuccess:
         assert call.raw_category == "out_of_scope"
         assert call.model_name == DEEPSEEK_ASSESSMENT_SPEC.model
 
+    @pytest.mark.asyncio
+    async def test_structured_output_mechanism_reaches_sdk(self) -> None:
+        """機構 (forced tool_choice + thinking 無効) を structured_output に分離後も
+        tuning (max_tokens) と共に create kwargs に届くこと。"""
+        assessor = DeepSeekAssessor()
+        args = json.dumps({"category": "ai", "investor_take": "x", "key_points": []})
+        mock_call = _patch_assessor_call(assessor, _stub_response(arguments=args))
+
+        await assessor._call_api("prompt")
+
+        kwargs = mock_call.await_args.kwargs
+        assert (
+            kwargs["tool_choice"]["function"]["name"]
+            == DEEPSEEK_ASSESSMENT_SPEC.tool_name
+        )
+        assert kwargs["extra_body"]["thinking"]["type"] == "disabled"
+        assert kwargs["max_tokens"] == 512
+
 
 # tool_call 欠落 / wrong name → AssessmentResponseInvalidError (recoverable)
 

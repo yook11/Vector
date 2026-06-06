@@ -122,6 +122,18 @@ class TestGeminiCallApiSuccess:
         assert isinstance(config.response_schema, dict)
         assert config.response_schema.get("type") == "OBJECT"
 
+    @pytest.mark.asyncio
+    async def test_structured_output_mechanism_reaches_sdk(self) -> None:
+        """機構 (JSON mode) を structured_output に分離後も config に届くこと。"""
+        assessor = GeminiAssessor()
+        text = json.dumps({"category": "ai", "investor_take": "x", "key_points": []})
+        mock_call = _patch_assessor_call(assessor, _stub_response(text))
+
+        await assessor._call_api("prompt")
+
+        config = mock_call.await_args.kwargs["config"]
+        assert config.response_mime_type == "application/json"
+
 
 # finish_reason 経路 (translate_error 経由ではなく _call_api 内で直接 raise)
 

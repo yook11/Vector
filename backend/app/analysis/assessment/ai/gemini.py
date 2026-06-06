@@ -109,6 +109,7 @@ class GeminiAssessor(BaseAssessor):
             contents=prompt,
             config=GenerateContentConfig(
                 **self.SPEC.gen_config,
+                **self.SPEC.structured_output,
                 response_schema=dict(self.SPEC.response_schema),
             ),
         )
