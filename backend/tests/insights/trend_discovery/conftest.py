@@ -2,11 +2,11 @@
 
 repository / Service テスト向けの ``seed_analysis`` ファクトリを提供する。
 seed_analysis は 1 件の ``InScopeAssessment`` を関連 ORM (Article /
-ArticleCuration) とともに作成し、``InScopeAssessment.events`` JSONB に
+ArticleCuration) とともに作成し、``InScopeAssessment.key_points`` JSONB に
 mention 列を焼き付ける。
 
 PR 2 で集計軸を ``article_extraction_entities`` から
-``in_scope_assessments.events`` JSONB の mention に切替したため、本 fixture も
+``in_scope_assessments.key_points`` JSONB の mention に切替したため、本 fixture も
 mention 軸に書き直されている。
 
 URL の重複制約を避けるため fixture 内のカウンタで一意な URL を採番する
@@ -37,11 +37,11 @@ def seed_analysis(db_session: AsyncSession, sample_source: NewsSource) -> SeedAn
     Args (キーワード引数):
         category_id: ``InScopeAssessment.category_id`` に設定する FK。
         analyzed_at: ``analyzed_at`` を明示指定 (server_default を上書き)。
-        mentions: ``[(surface, type), ...]`` の列。``events`` JSONB に
-            1 つの event としてまとめて焼き付ける (同一 assessment 内で同じ
-            mention が複数 event に現れても COUNT(DISTINCT a.id) で 1 件と
+        mentions: ``[(surface, type), ...]`` の列。``key_points`` JSONB に
+            1 つの key_point としてまとめて焼き付ける (同一 assessment 内で同じ
+            mention が複数 key_point に現れても COUNT(DISTINCT a.id) で 1 件と
             数えられる集計仕様を踏襲)。
-        events_null: ``True`` のとき ``events`` を NULL のまま残す
+        key_points_null: ``True`` のとき ``key_points`` を NULL のまま残す
             (PR 1 デプロイ前の旧行を再現する用途)。
 
     Returns:
@@ -55,7 +55,7 @@ def seed_analysis(db_session: AsyncSession, sample_source: NewsSource) -> SeedAn
         category_id: int,
         analyzed_at: datetime,
         mentions: Sequence[tuple[str, str]] = (),
-        events_null: bool = False,
+        key_points_null: bool = False,
     ) -> InScopeAssessment:
         n = next(seq)
         url = f"https://example.com/seed-{n}"
@@ -77,12 +77,12 @@ def seed_analysis(db_session: AsyncSession, sample_source: NewsSource) -> SeedAn
         db_session.add(extraction)
         await db_session.flush()
 
-        if events_null:
-            events: list[dict[str, object]] | None = None
+        if key_points_null:
+            key_points: list[dict[str, object]] | None = None
         elif mentions:
-            events = [
+            key_points = [
                 {
-                    "description": f"seed event {n}",
+                    "content": f"seed key point {n}",
                     "mentions": [
                         {"surface": surface, "type": type_}
                         for surface, type_ in mentions
@@ -90,7 +90,7 @@ def seed_analysis(db_session: AsyncSession, sample_source: NewsSource) -> SeedAn
                 }
             ]
         else:
-            events = []
+            key_points = []
 
         analysis = InScopeAssessment(
             curation_id=extraction.id,
@@ -99,7 +99,7 @@ def seed_analysis(db_session: AsyncSession, sample_source: NewsSource) -> SeedAn
             investor_take="investor take body",
             category_id=category_id,
             analyzed_at=analyzed_at,
-            events=events,
+            key_points=key_points,
         )
         db_session.add(analysis)
         await db_session.flush()

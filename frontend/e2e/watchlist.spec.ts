@@ -36,7 +36,9 @@ test.describe("Watchlist add/remove flow", () => {
     page,
   }) => {
     await page.goto("/");
-    await expect(page.getByRole("heading", { name: "ニュース" })).toBeVisible();
+    await expect(
+      page.getByRole("link", { name: "Vector ニュースへ" }),
+    ).toBeVisible();
 
     // 注: 通常の Playwright ベストプラクティスは locator-based assertion で
     // あり `elementHandle()` は legacy API。ただしこのケースでは click 後に
@@ -91,7 +93,9 @@ test.describe("Watchlist add/remove flow", () => {
     // が起きないことが要件。1 秒間 (200ms x 5 回) `aria-pressed` を観測して
     // 一度も "true" 以外を返さないことを確認する。
     await page.goto("/");
-    await expect(page.getByRole("heading", { name: "ニュース" })).toBeVisible();
+    await expect(
+      page.getByRole("link", { name: "Vector ニュースへ" }),
+    ).toBeVisible();
     const candidateCount = await page
       .locator('button[aria-pressed="false"]')
       .count();

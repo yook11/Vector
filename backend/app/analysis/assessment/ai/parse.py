@@ -20,9 +20,9 @@ from pydantic import ValidationError
 
 from app.analysis.assessment.domain.result import (
     AssessmentResult,
-    Event,
     InScope,
     InScopeCategory,
+    KeyPoint,
     OutOfScope,
     ValidCategory,
 )
@@ -45,16 +45,16 @@ class AssessmentResponseDefect(StrEnum):
     # 3 key の欠落 (KeyError)
     CATEGORY_KEY_MISSING = "assessment_response_category_key_missing"
     INVESTOR_TAKE_KEY_MISSING = "assessment_response_investor_take_key_missing"
-    EVENTS_KEY_MISSING = "assessment_response_events_key_missing"
+    KEY_POINTS_KEY_MISSING = "assessment_response_key_points_key_missing"
     # 文字列 / list 型違反 (isinstance 先頭検証)
     CATEGORY_WRONG_TYPE = "assessment_response_category_wrong_type"
     INVESTOR_TAKE_WRONG_TYPE = "assessment_response_investor_take_wrong_type"
-    EVENTS_WRONG_TYPE = "assessment_response_events_wrong_type"
-    # 値違反 (category enum 外値 / event 要素検証 / 最終構築の制約違反)
+    KEY_POINTS_WRONG_TYPE = "assessment_response_key_points_wrong_type"
+    # 値違反 (category enum 外値 / key_point 要素検証 / 最終構築の制約違反)
     CATEGORY_UNKNOWN_VALUE = "assessment_response_category_unknown_value"
-    EVENT_INVALID = "assessment_response_event_invalid"
+    KEY_POINT_INVALID = "assessment_response_key_point_invalid"
     INVESTOR_TAKE_INVALID = "assessment_response_investor_take_invalid"
-    EVENTS_TOO_MANY = "assessment_response_events_too_many"
+    KEY_POINTS_TOO_MANY = "assessment_response_key_points_too_many"
 
 
 def _final_construction_defect(
@@ -71,9 +71,9 @@ def _final_construction_defect(
     if field == "investor_take":
         # 最終構築でのみ起きる: 空 (min_length=1 / _not_empty) または長さ超過。
         return AssessmentResponseDefect.INVESTOR_TAKE_INVALID
-    if field == "events":
+    if field == "key_points":
         # 最終構築でのみ起きる: 要素は valid だが件数が max_length=10 を超過。
-        return AssessmentResponseDefect.EVENTS_TOO_MANY
+        return AssessmentResponseDefect.KEY_POINTS_TOO_MANY
     return None
 
 
@@ -85,7 +85,7 @@ def parse_assessment(payload: dict[str, Any]) -> AssessmentResult:
 
     Args:
         payload: AI SDK text response を ``json.loads`` した dict。
-            必須 key: ``category`` / ``investor_take`` / ``events``。
+            必須 key: ``category`` / ``investor_take`` / ``key_points``。
             ``OutOfScope`` 経路でも 3 key すべて存在 + 型一致である必要がある
             (AI には常に flat schema を要求しているため、key 欠落は AI 側の
             schema 違反 = 境界で可視化すべき故障)。
@@ -96,10 +96,10 @@ def parse_assessment(payload: dict[str, Any]) -> AssessmentResult:
 
     Strict 化方針:
         AI 応答 dict の 2 文字列値 (``category`` / ``investor_take``) を
-        ``isinstance(..., str)`` で、``events`` を ``isinstance(..., list)`` で
+        ``isinstance(..., str)`` で、``key_points`` を ``isinstance(..., list)`` で
         先頭検証する。``str(...)`` 暗黙 coerce は使わない (silent 通過を許さない)。
-        ``events`` は InScope / OutOfScope どちらの経路でも domain に保持する
-        (out-of-scope 記事の events も検証用途で残す、両 path 対称)。
+        ``key_points`` は InScope / OutOfScope どちらの経路でも domain に保持する
+        (out-of-scope 記事の key_points も検証用途で残す、両 path 対称)。
     """
     # key 取得: 各 key 欠落を個別 defect に分類する (どの key が欠けたか可視化)。
     try:
@@ -115,10 +115,10 @@ def parse_assessment(payload: dict[str, Any]) -> AssessmentResult:
             AssessmentResponseDefect.INVESTOR_TAKE_KEY_MISSING
         ) from exc
     try:
-        events_raw = payload["events"]
+        key_points_raw = payload["key_points"]
     except KeyError as exc:
         raise AssessmentResponseInvalidError(
-            AssessmentResponseDefect.EVENTS_KEY_MISSING
+            AssessmentResponseDefect.KEY_POINTS_KEY_MISSING
         ) from exc
 
     # 型違反: isinstance 先頭検証。自前判定なので原例外 (cause) はない。
@@ -130,16 +130,18 @@ def parse_assessment(payload: dict[str, Any]) -> AssessmentResult:
         raise AssessmentResponseInvalidError(
             AssessmentResponseDefect.INVESTOR_TAKE_WRONG_TYPE
         )
-    if not isinstance(events_raw, list):
-        raise AssessmentResponseInvalidError(AssessmentResponseDefect.EVENTS_WRONG_TYPE)
+    if not isinstance(key_points_raw, list):
+        raise AssessmentResponseInvalidError(
+            AssessmentResponseDefect.KEY_POINTS_WRONG_TYPE
+        )
 
-    # events 要素の Pydantic 検証 (description 空 / mention type 外値 / 非 dict 等)。
+    # key_point 要素の Pydantic 検証 (content 空 / mention type 外値 / 非 dict 等)。
     try:
-        events = [Event.model_validate(e) for e in events_raw]
+        key_points = [KeyPoint.model_validate(k) for k in key_points_raw]
     except ValidationError as exc:
         # ValidationError は payload 値を含みうるため、公開 message には載せない。
         raise AssessmentResponseInvalidError(
-            AssessmentResponseDefect.EVENT_INVALID
+            AssessmentResponseDefect.KEY_POINT_INVALID
         ) from exc
 
     # category enum 外値。
@@ -151,18 +153,18 @@ def parse_assessment(payload: dict[str, Any]) -> AssessmentResult:
         ) from exc
 
     # 最終構築: InScope / OutOfScope の Field 制約 (investor_take 空/長さ,
-    # events 件数上限) 違反を field 名で分類する。未知 loc は誤ラベルせず素の
+    # key_points 件数上限) 違反を field 名で分類する。未知 loc は誤ラベルせず素の
     # ValidationError を伝播させる (task 層が unexpected_error に surface する)。
     try:
         if category == ValidCategory.OUT_OF_SCOPE:
             return OutOfScope(
                 investor_take=investor_take_raw,
-                events=events,
+                key_points=key_points,
             )
         return InScope(
             category=InScopeCategory(category.value),
             investor_take=investor_take_raw,
-            events=events,
+            key_points=key_points,
         )
     except ValidationError as exc:
         defect = _final_construction_defect(exc)

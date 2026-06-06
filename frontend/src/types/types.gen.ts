@@ -58,6 +58,10 @@ export type ArticleDetail = {
      */
     investorTake: string;
     /**
+     * Keypoints
+     */
+    keyPoints?: Array<string>;
+    /**
      * Analyzedat
      */
     analyzedAt: string;
@@ -252,7 +256,7 @@ export type MentionName = string;
 /**
  * MentionType
  *
- * event に登場する固有名の役割 6 軸。
+ * key_point に登場する固有名の役割 6 軸。
  *
  * タグ単独で役割が読める命名を優先。company / academic / government の
  * 3 軸分割は「投資判断視点で役割が違うものを混ぜると集計信号が薄まる」

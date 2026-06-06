@@ -11,9 +11,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.analysis.assessment.ai.envelope import AssessmentCall
 from app.analysis.assessment.domain.ready import ReadyForAssessment
 from app.analysis.assessment.domain.result import (
-    Event,
     InScope,
     InScopeCategory,
+    KeyPoint,
     Mention,
     MentionType,
     OutOfScope,
@@ -76,13 +76,13 @@ def _ready(extraction: ArticleCuration) -> ReadyForAssessment:
 def _in_scope_call(
     *,
     category: InScopeCategory = InScopeCategory.AI,
-    events: list[Event] | None = None,
+    key_points: list[KeyPoint] | None = None,
 ) -> AssessmentCall[InScope]:
     return AssessmentCall(
         result=InScope(
             category=category,
             investor_take="bullish",
-            events=events or [],
+            key_points=key_points or [],
         ),
         raw_response='{"category":"ai"}',
         raw_category=category.value,
@@ -94,10 +94,10 @@ def _in_scope_call(
 def _out_of_scope_call(
     *,
     investor_take: str = "not relevant",
-    events: list[Event] | None = None,
+    key_points: list[KeyPoint] | None = None,
 ) -> AssessmentCall[OutOfScope]:
     return AssessmentCall(
-        result=OutOfScope(investor_take=investor_take, events=events or []),
+        result=OutOfScope(investor_take=investor_take, key_points=key_points or []),
         raw_response='{"category":"out_of_scope"}',
         raw_category="out_of_scope",
         prompt_version="testver1",
@@ -246,18 +246,18 @@ async def test_save_in_scope_returns_none_on_race_lost(
 
 
 @pytest.mark.asyncio
-async def test_save_in_scope_persists_events_jsonb(
+async def test_save_in_scope_persists_key_points_jsonb(
     db_session: AsyncSession,
     sample_source: NewsSource,
     sample_categories: list[Category],
 ) -> None:
-    """``save_in_scope`` で events が JSONB として保存される (dict のリスト)。"""
+    """``save_in_scope`` で key_points が JSONB として保存される (dict のリスト)。"""
     extraction = await _make_extraction(db_session, sample_source)
     repo = AssessmentRepository(db_session)
 
-    events = [
-        Event(
-            description="Anthropic launched Claude 5.",
+    key_points = [
+        KeyPoint(
+            content="Anthropic launched Claude 5.",
             mentions=[
                 Mention(surface="Anthropic", type=MentionType.COMPANY),
                 Mention(surface="Claude 5", type=MentionType.PRODUCT),
@@ -265,7 +265,7 @@ async def test_save_in_scope_persists_events_jsonb(
         )
     ]
     await repo.save_in_scope(
-        _in_scope_call(events=events),
+        _in_scope_call(key_points=key_points),
         ready=_ready(extraction),
     )
     await db_session.commit()
@@ -277,9 +277,9 @@ async def test_save_in_scope_persists_events_jsonb(
             )
         )
     ).scalar_one()
-    assert row.events == [
+    assert row.key_points == [
         {
-            "description": "Anthropic launched Claude 5.",
+            "content": "Anthropic launched Claude 5.",
             "mentions": [
                 {"surface": "Anthropic", "type": "company"},
                 {"surface": "Claude 5", "type": "product"},
@@ -289,16 +289,16 @@ async def test_save_in_scope_persists_events_jsonb(
 
 
 @pytest.mark.asyncio
-async def test_save_in_scope_persists_empty_events_as_empty_list(
+async def test_save_in_scope_persists_empty_key_points_as_empty_list(
     db_session: AsyncSession,
     sample_source: NewsSource,
     sample_categories: list[Category],
 ) -> None:
-    """events=[] は ``[]`` として保存される (NULL ではなく)。NULL は旧行のみ。"""
+    """key_points=[] は ``[]`` として保存される (NULL ではなく)。NULL は旧行のみ。"""
     extraction = await _make_extraction(db_session, sample_source)
     repo = AssessmentRepository(db_session)
 
-    await repo.save_in_scope(_in_scope_call(events=[]), ready=_ready(extraction))
+    await repo.save_in_scope(_in_scope_call(key_points=[]), ready=_ready(extraction))
     await db_session.commit()
 
     row = (
@@ -308,26 +308,26 @@ async def test_save_in_scope_persists_empty_events_as_empty_list(
             )
         )
     ).scalar_one()
-    assert row.events == []
+    assert row.key_points == []
 
 
 @pytest.mark.asyncio
-async def test_save_out_of_scope_persists_events_jsonb(
+async def test_save_out_of_scope_persists_key_points_jsonb(
     db_session: AsyncSession,
     sample_source: NewsSource,
 ) -> None:
-    """``save_out_of_scope`` でも events が JSONB として保存される (対称化)。"""
+    """``save_out_of_scope`` でも key_points が JSONB として保存される (対称化)。"""
     extraction = await _make_extraction(db_session, sample_source)
     repo = AssessmentRepository(db_session)
 
-    events = [
-        Event(
-            description="Off-topic event description.",
+    key_points = [
+        KeyPoint(
+            content="Off-topic key point content.",
             mentions=[Mention(surface="Someone", type=MentionType.PERSON)],
         )
     ]
     await repo.save_out_of_scope(
-        _out_of_scope_call(events=events),
+        _out_of_scope_call(key_points=key_points),
         ready=_ready(extraction),
     )
     await db_session.commit()
@@ -339,16 +339,16 @@ async def test_save_out_of_scope_persists_events_jsonb(
             )
         )
     ).scalar_one()
-    assert row.events == [
+    assert row.key_points == [
         {
-            "description": "Off-topic event description.",
+            "content": "Off-topic key point content.",
             "mentions": [{"surface": "Someone", "type": "person"}],
         }
     ]
 
 
 @pytest.mark.asyncio
-async def test_save_out_of_scope_persists_empty_events_as_empty_list(
+async def test_save_out_of_scope_persists_empty_key_points_as_empty_list(
     db_session: AsyncSession,
     sample_source: NewsSource,
 ) -> None:
@@ -356,7 +356,7 @@ async def test_save_out_of_scope_persists_empty_events_as_empty_list(
     repo = AssessmentRepository(db_session)
 
     await repo.save_out_of_scope(
-        _out_of_scope_call(events=[]), ready=_ready(extraction)
+        _out_of_scope_call(key_points=[]), ready=_ready(extraction)
     )
     await db_session.commit()
 
@@ -367,7 +367,7 @@ async def test_save_out_of_scope_persists_empty_events_as_empty_list(
             )
         )
     ).scalar_one()
-    assert row.events == []
+    assert row.key_points == []
 
 
 @pytest.mark.asyncio

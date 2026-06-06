@@ -77,9 +77,11 @@ class InScopeAssessment(Base):
     category_id: Mapped[int] = mapped_column(
         ForeignKey("categories.id", ondelete="RESTRICT"),
     )
-    # 記事内で起きた event と登場固有名のペア配列。NULL = 旧行、[] = AI が
-    # events を返さなかった行、values = AI 抽出済み行。
-    events: Mapped[list[dict[str, Any]] | None] = mapped_column(JSONB, nullable=True)
+    # 記事の重要な情報と登場固有名のペア配列。NULL = 旧行、[] = AI が
+    # key_points を返さなかった行、values = AI 抽出済み行。
+    key_points: Mapped[list[dict[str, Any]] | None] = mapped_column(
+        JSONB, nullable=True
+    )
 
     # リレーション
     curation: Mapped[ArticleCuration] = relationship(

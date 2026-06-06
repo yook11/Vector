@@ -72,7 +72,7 @@ class TestGeminiCallApiSuccess:
             {
                 "category": "ai",
                 "investor_take": "Significant traction.",
-                "events": [],
+                "key_points": [],
             }
         )
         _patch_assessor_call(assessor, _stub_response(text))
@@ -95,7 +95,7 @@ class TestGeminiCallApiSuccess:
             {
                 "category": "out_of_scope",
                 "investor_take": "Not relevant.",
-                "events": [],
+                "key_points": [],
             }
         )
         _patch_assessor_call(assessor, _stub_response(text))
@@ -110,7 +110,7 @@ class TestGeminiCallApiSuccess:
     @pytest.mark.asyncio
     async def test_uses_dict_response_schema(self) -> None:
         assessor = GeminiAssessor()
-        text = json.dumps({"category": "ai", "investor_take": "x", "events": []})
+        text = json.dumps({"category": "ai", "investor_take": "x", "key_points": []})
         mock_call = _patch_assessor_call(assessor, _stub_response(text))
 
         await assessor._call_api("prompt")
@@ -132,7 +132,7 @@ class TestGeminiFinishReasonBlocked:
         """Phase 4: 旧 ``str(exc)`` で finish_reason 検査は廃止。
         AIProvider*Error は SAFE_ATTRS=("CODE",) のみで識別する契約。"""
         assessor = GeminiAssessor()
-        text = json.dumps({"category": "ai", "investor_take": "x", "events": []})
+        text = json.dumps({"category": "ai", "investor_take": "x", "key_points": []})
         _patch_assessor_call(
             assessor, _stub_response(text, finish_reason_name="SAFETY")
         )
@@ -160,7 +160,7 @@ class TestGeminiFinishReasonBlocked:
     async def test_finish_reason_stop_does_not_raise(self) -> None:
         """正常終了の finish_reason (STOP 等) では raise せず parse に進む。"""
         assessor = GeminiAssessor()
-        text = json.dumps({"category": "ai", "investor_take": "x", "events": []})
+        text = json.dumps({"category": "ai", "investor_take": "x", "key_points": []})
         _patch_assessor_call(assessor, _stub_response(text, finish_reason_name="STOP"))
 
         call = await assessor._call_api("prompt")

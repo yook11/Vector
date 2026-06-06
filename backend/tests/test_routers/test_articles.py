@@ -40,6 +40,7 @@ async def _create_analysis(
     category_id: int,
     translated_title: str = "テスト記事",
     embedding: list[float] | None = None,
+    key_points: list[dict] | None = None,
 ) -> InScopeAssessment:
     """extraction + analysis を作成するヘルパー。"""
     extraction = ArticleCuration(
@@ -56,6 +57,7 @@ async def _create_analysis(
         investor_take="Test investor_take",
         embedding=embedding,
         category_id=category_id,
+        key_points=key_points,
     )
     session.add(analysis)
     await session.commit()
@@ -378,6 +380,80 @@ class TestGetArticle:
         assert data["investorTake"] == "Test investor_take"
         assert data["original"]["title"] == "Test Article"
         assert data["original"]["url"] == "https://example.com/article"
+
+    async def test_detail_exposes_key_point_contents(
+        self,
+        client: AsyncClient,
+        db_session: AsyncSession,
+        sample_source: NewsSource,
+        sample_categories: list[Category],
+    ) -> None:
+        """詳細は key_points の content だけを ``keyPoints`` に順序保持で出す。"""
+        article = await _create_article(db_session, sample_source)
+        analysis = await _create_analysis(
+            db_session,
+            article,
+            category_id=sample_categories[0].id,
+            key_points=[
+                {
+                    "content": "Anthropic が Claude 5 を公開した。",
+                    "mentions": [{"surface": "Anthropic", "type": "company"}],
+                },
+                {"content": "調達額は 10 億ドル。", "mentions": []},
+            ],
+        )
+
+        resp = await client.get(f"/api/v1/articles/{analysis.id}")
+        assert resp.status_code == 200
+        assert resp.json()["keyPoints"] == [
+            "Anthropic が Claude 5 を公開した。",
+            "調達額は 10 億ドル。",
+        ]
+
+    async def test_detail_does_not_expose_mentions(
+        self,
+        client: AsyncClient,
+        db_session: AsyncSession,
+        sample_source: NewsSource,
+        sample_categories: list[Category],
+    ) -> None:
+        """mentions は trends 内部利用で API 非公開 (surface が JSON 全体に出ない)。"""
+        article = await _create_article(db_session, sample_source)
+        analysis = await _create_analysis(
+            db_session,
+            article,
+            category_id=sample_categories[0].id,
+            key_points=[
+                {
+                    "content": "key point body",
+                    "mentions": [{"surface": "SecretEntity", "type": "company"}],
+                }
+            ],
+        )
+
+        resp = await client.get(f"/api/v1/articles/{analysis.id}")
+        assert resp.status_code == 200
+        assert "SecretEntity" not in resp.text
+
+    async def test_detail_null_key_points_returns_empty_list(
+        self,
+        client: AsyncClient,
+        db_session: AsyncSession,
+        sample_source: NewsSource,
+        sample_categories: list[Category],
+    ) -> None:
+        """旧行 (key_points IS NULL) は ``keyPoints: []`` で返る (常に存在)。"""
+        article = await _create_article(db_session, sample_source)
+        analysis = await _create_analysis(
+            db_session,
+            article,
+            category_id=sample_categories[0].id,
+            key_points=None,
+        )
+
+        resp = await client.get(f"/api/v1/articles/{analysis.id}")
+        assert resp.status_code == 200
+        assert resp.json()["keyPoints"] == []
 
     async def test_detail_includes_category(
         self,

@@ -7,6 +7,7 @@ from enum import StrEnum
 from typing import TYPE_CHECKING, Annotated
 
 from fastapi import Query
+from pydantic import Field
 
 if TYPE_CHECKING:
     from app.schemas.base import PaginationParams
@@ -77,6 +78,9 @@ class ArticleDetail(_CamelBase):
     translated_title: str
     summary: str
     investor_take: str
+    # 記事の重要な情報 (key_points[].content)。mentions は trends 内部利用のため
+    # API 非公開。旧行 (NULL) や key_point 無し行では空配列になる。
+    key_points: list[str] = Field(default_factory=list)
     analyzed_at: datetime
     category: CategoryEmbed
     source: NewsSourceEmbed

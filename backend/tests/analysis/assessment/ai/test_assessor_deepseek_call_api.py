@@ -81,7 +81,7 @@ class TestDeepSeekCallApiSuccess:
             {
                 "category": "ai",
                 "investor_take": "Significant traction.",
-                "events": [],
+                "key_points": [],
             }
         )
         _patch_assessor_call(assessor, _stub_response(arguments=args))
@@ -103,7 +103,7 @@ class TestDeepSeekCallApiSuccess:
             {
                 "category": "out_of_scope",
                 "investor_take": "Not relevant.",
-                "events": [],
+                "key_points": [],
             }
         )
         _patch_assessor_call(assessor, _stub_response(arguments=args))

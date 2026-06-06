@@ -11,7 +11,7 @@
 - カテゴリ filter
 - DISTINCT assessment.id (同一 assessment 内の重複 mention を 1 カウントに)
 - previous=0 / NOT EXISTS (新規 mention)
-- ``events IS NULL`` 行を集計対象外にする (PR 1 デプロイ前の旧行)
+- ``key_points IS NULL`` 行を集計対象外にする (PR 1 デプロイ前の旧行)
 """
 
 from __future__ import annotations
@@ -246,7 +246,7 @@ class TestGetTrendingEntities:
     ) -> None:
         """同一 assessment 内に同 mention が複数出ても 1 カウント。
 
-        events JSONB 内で同じ (surface, type) を持つ mention が複数登場しても、
+        key_points JSONB 内で同じ (surface, type) を持つ mention が複数登場しても、
         ``COUNT(DISTINCT a.id)`` により記事単位で 1 件と数えられる。
         """
         cat = sample_categories[0]
@@ -338,19 +338,19 @@ class TestGetTrendingEntities:
         assert results == ()
 
     @pytest.mark.asyncio
-    async def test_excludes_rows_with_null_events(
+    async def test_excludes_rows_with_null_key_points(
         self,
         db_session: AsyncSession,
         sample_categories: list[Category],
         seed_analysis: SeedAnalysis,
     ) -> None:
-        """``events IS NULL`` 行 (PR 1 デプロイ前の旧行) は集計対象外。"""
+        """``key_points IS NULL`` 行 (PR 1 デプロイ前の旧行) は集計対象外。"""
         cat = sample_categories[0]
         for i in range(10):
             await seed_analysis(
                 category_id=cat.id,
                 analyzed_at=_jst(2026, 4, 14, hour=i),
-                events_null=True,
+                key_points_null=True,
             )
 
         repo = TrendsRepository(db_session)
@@ -363,13 +363,13 @@ class TestGetTrendingEntities:
         assert results == ()
 
     @pytest.mark.asyncio
-    async def test_handles_empty_events_array(
+    async def test_handles_empty_key_points_array(
         self,
         db_session: AsyncSession,
         sample_categories: list[Category],
         seed_analysis: SeedAnalysis,
     ) -> None:
-        """``events = []`` 行は LATERAL で自然に 0 件、エラーにならない。"""
+        """``key_points = []`` 行は LATERAL で自然に 0 件、エラーにならない。"""
         cat = sample_categories[0]
         for i in range(10):
             await seed_analysis(

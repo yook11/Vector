@@ -17,7 +17,7 @@ Stage 4 が産出する業務結果 (「対象範囲内 / 対象範囲外」+ ta
 - ``ValidCategory`` — AI 境界に提示する全 slug 集合 (13 値、
   ``OUT_OF_SCOPE`` を含む domain taxonomy のフラット表現)
 
-AI 境界では引き続きフラット形式 (``{category, investor_take, events}``)
+AI 境界では引き続きフラット形式 (``{category, investor_take, key_points}``)
 を AI に要求する (構造化出力で discriminated union を要求すると AI 精度が
 落ちるため)。assessor 内部 (``ai/parse.py::parse_assessment``) が
 ``category`` 値を見て ``InScope`` / ``OutOfScope`` に振り分ける。
@@ -88,7 +88,7 @@ class InScopeCategory(StrEnum):
 
 
 class MentionType(StrEnum):
-    """event に登場する固有名の役割 6 軸。
+    """key_point に登場する固有名の役割 6 軸。
 
     タグ単独で役割が読める命名を優先。company / academic / government の
     3 軸分割は「投資判断視点で役割が違うものを混ぜると集計信号が薄まる」
@@ -104,7 +104,7 @@ class MentionType(StrEnum):
 
 
 class Mention(BaseModel):
-    """event に登場した固有名 1 件 (surface + type)。
+    """key_point に登場した固有名 1 件 (surface + type)。
 
     AI 境界として ``surface`` を NFKC + 空白整形のみ適用する
     (feedback_ai_extraction_casing: 抽出結果の casing は文脈情報のため
@@ -132,32 +132,32 @@ class Mention(BaseModel):
         return v
 
 
-class Event(BaseModel):
-    """記事内で起きた事象 1 件 + 登場した固有名のペア。
+class KeyPoint(BaseModel):
+    """記事の重要な情報 1 件 + 登場した固有名のペア。
 
-    ``description`` は「何が起きたか」を表す短文 (字数は AI に厳密指定せず、
-    上限のみ structural safety net として置く)。``mentions`` は event に登場した
-    固有名のみで、空配列も許容 (spec: 投資判断に直結する mention が無ければ
-    空でも可)。
+    ``content`` は「投資判断に資する重要な情報」を表す短文 (字数は AI に厳密
+    指定せず、上限のみ structural safety net として置く)。``mentions`` は
+    key_point に登場した固有名のみで、空配列も許容 (spec: 投資判断に直結する
+    mention が無ければ空でも可)。
     """
 
     model_config = ConfigDict(frozen=True)
 
-    description: str = Field(min_length=1, max_length=500)
+    content: str = Field(min_length=1, max_length=500)
     mentions: list[Mention] = Field(default_factory=list, max_length=20)
 
-    @field_validator("description", mode="before")
+    @field_validator("content", mode="before")
     @classmethod
     def _sanitize(cls, v: Any) -> Any:
         if isinstance(v, str):
             return normalize_text(v) or ""
         return v
 
-    @field_validator("description")
+    @field_validator("content")
     @classmethod
     def _not_empty(cls, v: str) -> str:
         if not v:
-            raise ValueError("description must be non-empty after sanitization")
+            raise ValueError("content must be non-empty after sanitization")
         return v
 
 
@@ -171,15 +171,16 @@ class InScope(BaseModel):
     feedback_bc_boundary_guarantees_downstream)。下流 (Repository / Entity) は
     再 sanitize しない。
 
-    ``events`` は記事内で起きた事象と登場固有名のペア配列で、``default_factory=list``
-    で空配列許容 (AI が events を返さない場合の互換性確保)。
+    ``key_points`` は記事の重要な情報と登場固有名のペア配列で、
+    ``default_factory=list`` で空配列許容 (AI が key_points を返さない場合の
+    互換性確保)。
     """
 
     model_config = ConfigDict(frozen=True)
 
     category: InScopeCategory
     investor_take: str = Field(min_length=1, max_length=2000)
-    events: list[Event] = Field(default_factory=list, max_length=10)
+    key_points: list[KeyPoint] = Field(default_factory=list, max_length=10)
 
     @field_validator("investor_take", mode="before")
     @classmethod
@@ -199,15 +200,15 @@ class InScope(BaseModel):
 class OutOfScope(BaseModel):
     """対象範囲外 (out-of-scope) — 投資判断に寄与しないと判定されたケース。
 
-    ``events`` は InScope と対称に保持する (out-of-scope と判定された記事でも
-    AI が「何が起きたか」を抽出した結果を検証目的で残す)。``default_factory=list``
+    ``key_points`` は InScope と対称に保持する (out-of-scope と判定された記事でも
+    AI が抽出した重要な情報を検証目的で残す)。``default_factory=list``
     で空配列許容。
     """
 
     model_config = ConfigDict(frozen=True)
 
     investor_take: str = Field(min_length=1, max_length=2000)
-    events: list[Event] = Field(default_factory=list, max_length=10)
+    key_points: list[KeyPoint] = Field(default_factory=list, max_length=10)
 
     @field_validator("investor_take", mode="before")
     @classmethod

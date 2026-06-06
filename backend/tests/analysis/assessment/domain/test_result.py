@@ -12,9 +12,9 @@ import pytest
 from pydantic import ValidationError
 
 from app.analysis.assessment.domain.result import (
-    Event,
     InScope,
     InScopeCategory,
+    KeyPoint,
     Mention,
     MentionType,
     OutOfScope,
@@ -224,108 +224,108 @@ class TestMentionSanitize:
             m.surface = "y"  # type: ignore[misc]
 
 
-class TestEventSanitize:
-    """Event.description の sanitize + Event.mentions のデフォルト/上限。"""
+class TestKeyPointSanitize:
+    """KeyPoint.content の sanitize + KeyPoint.mentions のデフォルト/上限。"""
 
-    def test_strips_html_tags_in_description(self) -> None:
-        e = Event(description="<b>X announced Y</b>")
-        assert e.description == "X announced Y"
+    def test_strips_html_tags_in_content(self) -> None:
+        k = KeyPoint(content="<b>X announced Y</b>")
+        assert k.content == "X announced Y"
 
-    def test_rejects_empty_description_after_sanitization(self) -> None:
+    def test_rejects_empty_content_after_sanitization(self) -> None:
         with pytest.raises(ValidationError):
-            Event(description="<i></i>")
+            KeyPoint(content="<i></i>")
 
-    def test_rejects_over_max_description_length(self) -> None:
+    def test_rejects_over_max_content_length(self) -> None:
         with pytest.raises(ValidationError):
-            Event(description="a" * 501)
+            KeyPoint(content="a" * 501)
 
-    def test_accepts_max_description_length_boundary(self) -> None:
-        e = Event(description="a" * 500)
-        assert len(e.description) == 500
+    def test_accepts_max_content_length_boundary(self) -> None:
+        k = KeyPoint(content="a" * 500)
+        assert len(k.content) == 500
 
     def test_mentions_defaults_to_empty_list(self) -> None:
-        e = Event(description="X happened")
-        assert e.mentions == []
+        k = KeyPoint(content="X happened")
+        assert k.mentions == []
 
     def test_accepts_multiple_mentions(self) -> None:
-        e = Event(
-            description="X announced Y",
+        k = KeyPoint(
+            content="X announced Y",
             mentions=[
                 Mention(surface="OpenAI", type=MentionType.COMPANY),
                 Mention(surface="GPT-5", type=MentionType.PRODUCT),
             ],
         )
-        assert len(e.mentions) == 2
+        assert len(k.mentions) == 2
 
     def test_rejects_over_max_mentions(self) -> None:
         too_many = [
             Mention(surface=f"company-{i}", type=MentionType.COMPANY) for i in range(21)
         ]
         with pytest.raises(ValidationError):
-            Event(description="X happened", mentions=too_many)
+            KeyPoint(content="X happened", mentions=too_many)
 
     def test_is_frozen(self) -> None:
-        e = Event(description="X happened")
+        k = KeyPoint(content="X happened")
         with pytest.raises(ValidationError):
-            e.description = "Y"  # type: ignore[misc]
+            k.content = "Y"  # type: ignore[misc]
 
 
-class TestInScopeEvents:
-    """InScope.events の追加フィールド (AI が events を返さない場合は空配列許容)。"""
+class TestInScopeKeyPoints:
+    """InScope.key_points の追加フィールド (key_points 未返却時は空配列許容)。"""
 
-    def test_events_defaults_to_empty_list(self) -> None:
-        # AI が events を返さないケースを許容
+    def test_key_points_defaults_to_empty_list(self) -> None:
+        # AI が key_points を返さないケースを許容
         in_scope = InScope(
             category=InScopeCategory.AI,
             investor_take="x",
         )
-        assert in_scope.events == []
+        assert in_scope.key_points == []
 
-    def test_accepts_events_list(self) -> None:
+    def test_accepts_key_points_list(self) -> None:
         in_scope = InScope(
             category=InScopeCategory.AI,
             investor_take="x",
-            events=[
-                Event(
-                    description="X announced Y",
+            key_points=[
+                KeyPoint(
+                    content="X announced Y",
                     mentions=[Mention(surface="X", type=MentionType.COMPANY)],
                 )
             ],
         )
-        assert len(in_scope.events) == 1
-        assert in_scope.events[0].description == "X announced Y"
+        assert len(in_scope.key_points) == 1
+        assert in_scope.key_points[0].content == "X announced Y"
 
-    def test_rejects_over_max_events(self) -> None:
-        too_many = [Event(description=f"event {i}") for i in range(11)]
+    def test_rejects_over_max_key_points(self) -> None:
+        too_many = [KeyPoint(content=f"key point {i}") for i in range(11)]
         with pytest.raises(ValidationError):
             InScope(
                 category=InScopeCategory.AI,
                 investor_take="x",
-                events=too_many,
+                key_points=too_many,
             )
 
 
-class TestOutOfScopeEvents:
-    """OutOfScope.events の追加フィールド (InScope と対称、空配列許容)。"""
+class TestOutOfScopeKeyPoints:
+    """OutOfScope.key_points の追加フィールド (InScope と対称、空配列許容)。"""
 
-    def test_events_defaults_to_empty_list(self) -> None:
+    def test_key_points_defaults_to_empty_list(self) -> None:
         out_of_scope = OutOfScope(investor_take="x")
-        assert out_of_scope.events == []
+        assert out_of_scope.key_points == []
 
-    def test_accepts_events_list(self) -> None:
+    def test_accepts_key_points_list(self) -> None:
         out_of_scope = OutOfScope(
             investor_take="x",
-            events=[
-                Event(
-                    description="Y happened",
+            key_points=[
+                KeyPoint(
+                    content="Y happened",
                     mentions=[Mention(surface="Z", type=MentionType.PRODUCT)],
                 )
             ],
         )
-        assert len(out_of_scope.events) == 1
-        assert out_of_scope.events[0].description == "Y happened"
+        assert len(out_of_scope.key_points) == 1
+        assert out_of_scope.key_points[0].content == "Y happened"
 
-    def test_rejects_over_max_events(self) -> None:
-        too_many = [Event(description=f"event {i}") for i in range(11)]
+    def test_rejects_over_max_key_points(self) -> None:
+        too_many = [KeyPoint(content=f"key point {i}") for i in range(11)]
         with pytest.raises(ValidationError):
-            OutOfScope(investor_take="x", events=too_many)
+            OutOfScope(investor_take="x", key_points=too_many)

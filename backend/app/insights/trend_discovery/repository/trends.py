@@ -1,12 +1,12 @@
 """週次トレンド集計の Repository。
 
 責務:
-- ``InScopeAssessment.events`` JSONB の ``events[].mentions[]`` を 2 段
+- ``InScopeAssessment.key_points`` JSONB の ``key_points[].mentions[]`` を 2 段
   ``jsonb_array_elements`` LATERAL で平坦化し、1 カテゴリ × 1 週分の hot mention /
   new mention を集計し、Trend Discovery BC の VO で返す。
 - 期間境界 ``[current_start, current_end)`` (半開区間) で絞り込む。
 - mention は ``COUNT(DISTINCT in_scope_assessments.id)`` で「同 assessment 内で
-  同 mention が複数 event に登場しても 1 件」と数える (記事単位の出現を数える)。
+  同 mention が複数 key_point に登場しても 1 件」と数える (記事単位の出現を数える)。
 - 名寄せは SQL 上の ``lower(m->>'surface')`` で行い、display 名は
   ``MIN(m->>'surface')`` を採用する (casing は AI 抽出の文脈情報なので
   DB にはそのまま保存される: feedback_ai_extraction_casing.md)。
@@ -184,7 +184,7 @@ class TrendsRepository:
         window_end: datetime,
         label: str,
     ):
-        """1 期間分の mention 集計 subquery (events JSONB 2 段 LATERAL 平坦化)。
+        """1 期間分の mention 集計 subquery (key_points JSONB 2 段 LATERAL 平坦化)。
 
         各 (lower(surface), type) に対して:
         - ``match_key``: ``lower(m->>'surface')`` (JOIN キー、casing 揺れ吸収)
@@ -194,10 +194,10 @@ class TrendsRepository:
 
         ``jsonb_typeof(...) = 'array'`` の CASE で SQL NULL / JSON null / 非配列値を
         すべて空配列にフォールバックさせる。LATERAL は WHERE より先に評価されるため
-        ``WHERE events IS NOT NULL`` では遮断できず、また SQLAlchemy ``JSONB`` の
+        ``WHERE key_points IS NOT NULL`` では遮断できず、また SQLAlchemy ``JSONB`` の
         既定 (``none_as_null=False``) では Python ``None`` が JSON null として
         書かれることがあり、``jsonb_array_elements`` がスカラーで落ちる。
-        ``events = []`` (空配列) は LATERAL が自然に 0 行返すため集計に影響しない。
+        ``key_points = []`` (空配列) は LATERAL が自然に 0 行返すため集計に影響しない。
 
         bindparam は ``unique=True`` で current / previous 両 subquery を outer query
         に入れた時に param 名が衝突しないようにする (SQLAlchemy が自動 suffix する)。
@@ -212,8 +212,8 @@ class TrendsRepository:
                   COUNT(DISTINCT a.id) AS cnt
                 FROM in_scope_assessments a
                 CROSS JOIN LATERAL jsonb_array_elements(
-                  CASE WHEN jsonb_typeof(a.events) = 'array'
-                       THEN a.events ELSE '[]'::jsonb END
+                  CASE WHEN jsonb_typeof(a.key_points) = 'array'
+                       THEN a.key_points ELSE '[]'::jsonb END
                 ) AS e
                 CROSS JOIN LATERAL jsonb_array_elements(
                   CASE WHEN jsonb_typeof(e->'mentions') = 'array'

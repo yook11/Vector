@@ -24,6 +24,7 @@ export function NewsDetail({ article, isWatched }: NewsDetailProps) {
   // --- XSS: validate URL scheme (reject javascript: etc.) ---
   const safeUrl = sanitizeUrl(article.original.url);
   const summaryParagraphs = toParagraphs(article.summary);
+  const keyPoints = article.keyPoints ?? [];
   const contextParagraphs = article.investorTake
     ? toParagraphs(article.investorTake)
     : [];
@@ -108,6 +109,48 @@ export function NewsDetail({ article, isWatched }: NewsDetailProps) {
             {p}
           </p>
         ))}
+
+        {/* 要点: 本文から抽出した事実核を箇条書きで示す (文脈の背景整理より先)。 */}
+        {keyPoints.length > 0 && (
+          <section className="my-9 py-6 [border-bottom:1px_solid_var(--vector-line)] [border-top:1px_solid_var(--vector-ink)]">
+            <div className="mb-3.5 flex flex-wrap items-baseline gap-3">
+              <span
+                className="text-[13px] font-semibold uppercase tracking-[0.26em] text-[var(--vector-accent-ink)]"
+                style={{ fontFamily: "var(--font-vector-display)" }}
+              >
+                KEY POINTS
+              </span>
+              <span
+                className="text-[17px] font-bold text-[var(--vector-ink)]"
+                style={{ fontFamily: "var(--font-vector-serif)" }}
+              >
+                要点
+              </span>
+              <span
+                className="text-[11px] tracking-[0.04em] text-[var(--vector-ink-muted)]"
+                style={{ fontFamily: "var(--font-vector-maru)" }}
+              >
+                記事から抽出した重要情報
+              </span>
+            </div>
+            <ul className="space-y-3">
+              {keyPoints.map((point, i) => (
+                <li
+                  // biome-ignore lint/suspicious/noArrayIndexKey: 要点順序は AI 出力に従い安定
+                  key={i}
+                  className="flex gap-3 text-pretty text-[15px] leading-[1.85] text-[var(--vector-ink-soft)]"
+                  style={{ fontFamily: "var(--font-vector-serif)" }}
+                >
+                  <span
+                    aria-hidden="true"
+                    className="mt-[0.7em] size-1.5 shrink-0 rounded-full bg-[var(--vector-accent)]"
+                  />
+                  <span>{point}</span>
+                </li>
+              ))}
+            </ul>
+          </section>
+        )}
 
         {/* 背景ノート: 投資助言ではなく中立的な編集部の背景整理として上下罫で示す。 */}
         {contextParagraphs.length > 0 && (

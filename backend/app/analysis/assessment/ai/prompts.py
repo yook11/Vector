@@ -47,19 +47,20 @@ ASSESSMENT_PROMPT = """\
 - robotics: ヒューマノイド・産業ロボ・サービスロボ
 
 
-# Step 2 — events を抽出する
-category 判定の根拠になった、投資判断に資する具体的な事象だけを events に入れる。
+# Step 2 — key_points を抽出する
+category 判定の根拠になった、投資判断に資する重要な情報だけを key_points に入れる。
 
-event は、記事内で実際に起きた発表・実行・決定・発見・公開・調達・
-買収・規制施行などを、「何が起きたか」が分かる短文で書く。
+key_point は、記事内で実際に起きた発表・実行・決定・発見・公開・調達・
+買収・規制施行や、投資判断を左右する事実・数値を、要点が分かる短文で書く。
 
-評論・予測・一般論、既知動向、category 判定に使っていない背景情報は events に入れない。
+評論・予測・一般論、既知動向、category 判定に使っていない背景情報は
+key_points に入れない。
 
-in-scope category または other を選ぶ場合、events には根拠となる事象を
-少なくとも 1 件入れる。根拠となる event がない場合は category=out_of_scope を
-選び、events=[] にする。
+in-scope category または other を選ぶ場合、key_points には根拠となる重要な情報を
+少なくとも 1 件入れる。根拠となる key_point がない場合は category=out_of_scope を
+選び、key_points=[] にする。
 
-mention は event に実際に登場する固有名だけを紐づける。
+mention は key_point に実際に登場する固有名だけを紐づける。
 type は company / government / academic / product / technology / person から選ぶ。
 
 type の意味:

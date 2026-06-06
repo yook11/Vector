@@ -12,6 +12,7 @@ const article: ArticleDetail = {
   id: 42,
   translatedTitle: "テラデータ、AI投資のため従業員の昇給を見送り",
   summary: "第一段落のリード文。\n\n第二段落の本文。",
+  keyPoints: ["要点その一の本文。", "要点その二の本文。"],
   investorTake: "背景整理の段落その一。\n\n背景整理の段落その二。",
   analyzedAt: "2026-06-05T04:00:00.000Z",
   category: { slug: "other", name: "市場・規制" },
@@ -40,6 +41,12 @@ describe("NewsDetail", () => {
     expect(screen.getByText("第一段落のリード文。")).toBeInTheDocument();
     expect(screen.getByText("第二段落の本文。")).toBeInTheDocument();
 
+    // 要点セクションは keyPoints の content を箇条書きで表示する
+    expect(screen.getByText("KEY POINTS")).toBeInTheDocument();
+    expect(screen.getByText("要点")).toBeInTheDocument();
+    expect(screen.getByText("要点その一の本文。")).toBeInTheDocument();
+    expect(screen.getByText("要点その二の本文。")).toBeInTheDocument();
+
     // 背景ノートは中立語彙の見出しで investorTake を表示する
     expect(screen.getByText("CONTEXT")).toBeInTheDocument();
     expect(screen.getByText("文脈")).toBeInTheDocument();
@@ -61,5 +68,12 @@ describe("NewsDetail", () => {
 
     expect(screen.queryByText("CONTEXT")).not.toBeInTheDocument();
     expect(screen.queryByText("文脈")).not.toBeInTheDocument();
+  });
+
+  it("omits the key points section when keyPoints is empty", () => {
+    render(<NewsDetail article={{ ...article, keyPoints: [] }} isWatched />);
+
+    expect(screen.queryByText("KEY POINTS")).not.toBeInTheDocument();
+    expect(screen.queryByText("要点")).not.toBeInTheDocument();
   });
 });

@@ -26,7 +26,7 @@ _MENTION_TYPE_VALUES = [m.value for m in MentionType]
 ASSESSMENT_TOOL_SCHEMA: dict[str, Any] = {
     "type": "object",
     "additionalProperties": False,
-    "required": ["category", "investor_take", "events"],
+    "required": ["category", "investor_take", "key_points"],
     "properties": {
         "category": {
             "type": "string",
@@ -40,25 +40,26 @@ ASSESSMENT_TOOL_SCHEMA: dict[str, Any] = {
             "type": "string",
             "description": "日本語の投資家向け論評(短文、空文字不可)",
         },
-        "events": {
+        "key_points": {
             "type": "array",
             "description": (
-                "記事内で起きた event と登場固有名のペア配列。"
-                "重要な event が無ければ空配列でも可"
+                "記事の重要な情報と登場固有名のペア配列。"
+                "重要な情報が無ければ空配列でも可"
             ),
             "items": {
                 "type": "object",
                 "additionalProperties": False,
-                "required": ["description", "mentions"],
+                "required": ["content", "mentions"],
                 "properties": {
-                    "description": {
+                    "content": {
                         "type": "string",
-                        "description": "何が起きたかを表す短文 (日本語)",
+                        "description": "投資判断に資する重要な情報 (日本語)",
                     },
                     "mentions": {
                         "type": "array",
                         "description": (
-                            "event に登場した固有名のみ (登場しない固有名は含めない)"
+                            "key_point に登場した固有名のみ "
+                            "(登場しない固有名は含めない)"
                         ),
                         "items": {
                             "type": "object",
@@ -91,7 +92,7 @@ ASSESSMENT_TOOL_SCHEMA: dict[str, Any] = {
 
 ASSESSMENT_GEMINI_SCHEMA: dict[str, Any] = {
     "type": "OBJECT",
-    "required": ["category", "investor_take", "events"],
+    "required": ["category", "investor_take", "key_points"],
     "properties": {
         "category": {
             "type": "STRING",
@@ -105,24 +106,25 @@ ASSESSMENT_GEMINI_SCHEMA: dict[str, Any] = {
             "type": "STRING",
             "description": "日本語の投資家向け論評(短文、空文字不可)",
         },
-        "events": {
+        "key_points": {
             "type": "ARRAY",
             "description": (
-                "記事内で起きた event と登場固有名のペア配列。"
-                "重要な event が無ければ空配列でも可"
+                "記事の重要な情報と登場固有名のペア配列。"
+                "重要な情報が無ければ空配列でも可"
             ),
             "items": {
                 "type": "OBJECT",
-                "required": ["description", "mentions"],
+                "required": ["content", "mentions"],
                 "properties": {
-                    "description": {
+                    "content": {
                         "type": "STRING",
-                        "description": "何が起きたかを表す短文 (日本語)",
+                        "description": "投資判断に資する重要な情報 (日本語)",
                     },
                     "mentions": {
                         "type": "ARRAY",
                         "description": (
-                            "event に登場した固有名のみ (登場しない固有名は含めない)"
+                            "key_point に登場した固有名のみ "
+                            "(登場しない固有名は含めない)"
                         ),
                         "items": {
                             "type": "OBJECT",

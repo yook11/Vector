@@ -56,11 +56,13 @@ class OutOfScopeAssessment(Base):
     translated_title: Mapped[str] = mapped_column(String(500))
     summary: Mapped[str] = mapped_column(Text())
     investor_take: Mapped[str] = mapped_column(Text())
-    # event-extraction PR 1 並列出力。InScopeAssessment と対称化
-    # (out-of-scope と判定された記事の events も検証用途で保持)。
-    # NULL = PR 1 デプロイ前の旧行、[] = AI が events を返さなかった新行、
-    # values = AI 抽出済み新行。
-    events: Mapped[list[dict[str, Any]] | None] = mapped_column(JSONB, nullable=True)
+    # key_points 抽出の並列出力。InScopeAssessment と対称化
+    # (out-of-scope と判定された記事の key_points も検証用途で保持)。
+    # NULL = 旧行、[] = AI が key_points を返さなかった行、
+    # values = AI 抽出済み行。
+    key_points: Mapped[list[dict[str, Any]] | None] = mapped_column(
+        JSONB, nullable=True
+    )
     rejected_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )
