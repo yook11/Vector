@@ -17,28 +17,9 @@ from enum import StrEnum
 from typing import Final
 
 import structlog
-from openai import (
-    APIConnectionError,
-    APIStatusError,
-    APITimeoutError,
-    AsyncOpenAI,
-    AuthenticationError,
-    BadRequestError,
-    InternalServerError,
-    NotFoundError,
-    PermissionDeniedError,
-    UnprocessableEntityError,
-)
-from openai import RateLimitError as OpenAIRateLimitError
+from openai import AsyncOpenAI
 
-from app.analysis.ai_provider_errors import (
-    AIProviderConfigurationError,
-    AIProviderInsufficientBalanceError,
-    AIProviderNetworkError,
-    AIProviderRateLimitedError,
-    AIProviderRequestInvalidError,
-    AIProviderServiceUnavailableError,
-)
+from app.analysis.ai_provider_errors import AIProviderConfigurationError
 from app.analysis.assessment.ai.base import BaseAssessor
 from app.analysis.assessment.ai.deepseek_prompt import DeepSeekAssessmentPrompt
 from app.analysis.assessment.ai.envelope import AssessmentCall
@@ -49,6 +30,10 @@ from app.analysis.assessment.ai.spec import (
 )
 from app.analysis.assessment.domain.result import InScope, OutOfScope
 from app.analysis.assessment.errors import AssessmentResponseInvalidError
+from app.analysis.deepseek_error_translator import (
+    DeepSeekStateReason,
+    translate_deepseek_error,
+)
 from app.analysis.rate_limit import AIModelRateLimitPolicy
 from app.config import settings
 
@@ -69,27 +54,6 @@ class DeepSeekResponseDefect(StrEnum):
     WRONG_TOOL_NAME = "assessment_response_deepseek_wrong_tool_name"
     ARGUMENTS_NOT_JSON = "assessment_response_deepseek_arguments_not_json"
     ARGUMENTS_NOT_DICT = "assessment_response_deepseek_arguments_not_dict"
-
-
-class DeepSeekStateReason(StrEnum):
-    """DeepSeek (OpenAI SDK) provider / 環境状態の具体理由 (PII-free な種別ラベル)。
-
-    ``_translate_error`` の各分岐 (SDK 例外種別 / HTTP status) と __init__ local
-    検知 (未設定) に対応する。値は audit の ``failure_reason`` に焼かれ、
-    ``outcome_code`` (= CODE) より細かい原因を残す。
-    """
-
-    TIMEOUT = "timeout"
-    CONNECTION = "connection"
-    AUTH = "auth"
-    PERMISSION_DENIED = "permission_denied"
-    NOT_FOUND = "not_found"
-    INSUFFICIENT_BALANCE = "insufficient_balance"
-    RATE_LIMITED = "rate_limited"
-    BAD_REQUEST = "bad_request"
-    UNPROCESSABLE = "unprocessable"
-    SERVER_ERROR = "server_error"
-    NOT_CONFIGURED = "not_configured"
 
 
 class DeepSeekAssessor(BaseAssessor):
@@ -211,60 +175,5 @@ class DeepSeekAssessor(BaseAssessor):
                 )
 
     def _translate_error(self, exc: Exception) -> Exception:
-        """OpenAI SDK 例外を ``AIProvider*Error`` 階層に翻訳する。
-
-        spec §DeepSeek SDK 翻訳テーブルに 1:1 対応。HTTP 402 (Insufficient
-        Balance) は専用 SDK 例外がないので ``APIStatusError.status_code`` で判定し、
-        ``OpenAIRateLimitError`` 等の専用サブクラスより先に評価する。
-
-        マップできなければ ``exc`` をそのまま return (caller である
-        ``_call_once`` が bare re-raise する規約)。
-        """
-        # network 系。SDK 生 message は provider error detail に載せない。
-        # timeout / connection を reason で区別する (APITimeoutError は
-        # APIConnectionError の subclass なので先に評価する)。
-        if isinstance(exc, APITimeoutError):
-            return AIProviderNetworkError(reason=DeepSeekStateReason.TIMEOUT)
-        if isinstance(exc, APIConnectionError):
-            return AIProviderNetworkError(reason=DeepSeekStateReason.CONNECTION)
-        if isinstance(exc, TimeoutError):
-            return AIProviderNetworkError(reason=DeepSeekStateReason.TIMEOUT)
-        if isinstance(exc, (ConnectionError, OSError)):
-            return AIProviderNetworkError(reason=DeepSeekStateReason.CONNECTION)
-
-        if isinstance(exc, AuthenticationError):
-            return AIProviderConfigurationError(reason=DeepSeekStateReason.AUTH)
-        if isinstance(exc, PermissionDeniedError):
-            return AIProviderConfigurationError(
-                reason=DeepSeekStateReason.PERMISSION_DENIED
-            )
-        if isinstance(exc, NotFoundError):
-            return AIProviderConfigurationError(reason=DeepSeekStateReason.NOT_FOUND)
-
-        # HTTP 402 を OpenAIRateLimitError より先に評価 (DeepSeek 固有)
-        if isinstance(exc, APIStatusError) and exc.status_code == 402:
-            return AIProviderInsufficientBalanceError(
-                reason=DeepSeekStateReason.INSUFFICIENT_BALANCE
-            )
-
-        if isinstance(exc, OpenAIRateLimitError):
-            return AIProviderRateLimitedError(reason=DeepSeekStateReason.RATE_LIMITED)
-
-        if isinstance(exc, BadRequestError):
-            return AIProviderRequestInvalidError(reason=DeepSeekStateReason.BAD_REQUEST)
-        if isinstance(exc, UnprocessableEntityError):
-            return AIProviderRequestInvalidError(
-                reason=DeepSeekStateReason.UNPROCESSABLE
-            )
-
-        if isinstance(exc, InternalServerError):
-            return AIProviderServiceUnavailableError(
-                reason=DeepSeekStateReason.SERVER_ERROR
-            )
-
-        if isinstance(exc, APIStatusError) and 500 <= exc.status_code < 600:
-            return AIProviderServiceUnavailableError(
-                reason=DeepSeekStateReason.SERVER_ERROR
-            )
-
-        return exc  # bare re-raise (UNKNOWN)
+        """SDK 例外翻訳は共通 translator に委譲する (Gemini adapter と対称)。"""
+        return translate_deepseek_error(exc)
