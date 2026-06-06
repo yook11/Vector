@@ -10,11 +10,10 @@ from structlog.testing import capture_logs
 from trafilatura.settings import Document as TrafilaturaDocument
 
 from app.collection.article_completion.scrape_failure import (
-    ContentQualityTooLow,
-    FetchFailed,
-    NotHtml,
-    ParseCrashed,
-    ParserGaveUp,
+    ScrapeContentQualityTooLow,
+    ScrapeNotHtml,
+    ScrapeParseCrashed,
+    ScrapeParserGaveUp,
 )
 from app.collection.article_completion.scraper import (
     ArticleScraper,
@@ -28,6 +27,7 @@ from app.collection.domain.article_limits import (
 )
 from app.collection.domain.value_objects import PublishedAt
 from app.collection.external_fetch_errors import (
+    ExternalFetchError,
     FetchAccessDeniedError,
     FetchNetworkError,
     FetchOriginServerError,
@@ -172,9 +172,9 @@ class TestArticleScraper:
         with _patch_client(client):
             result = await scraper.scrape(SafeUrl("https://example.com/paywall"))
 
-        assert isinstance(result, FetchFailed)
-        assert isinstance(result.error, FetchAccessDeniedError)
-        assert "403" in str(result.error)
+        assert isinstance(result, ExternalFetchError)
+        assert isinstance(result, FetchAccessDeniedError)
+        assert "403" in str(result)
 
     @pytest.mark.asyncio
     async def test_access_denied_401_returns_fetch_failed(self) -> None:
@@ -198,9 +198,9 @@ class TestArticleScraper:
         with _patch_client(client):
             result = await scraper.scrape(SafeUrl("https://example.com/paywall"))
 
-        assert isinstance(result, FetchFailed)
-        assert isinstance(result.error, FetchAccessDeniedError)
-        assert "401" in str(result.error)
+        assert isinstance(result, ExternalFetchError)
+        assert isinstance(result, FetchAccessDeniedError)
+        assert "401" in str(result)
 
     @pytest.mark.asyncio
     async def test_origin_server_error_500_returns_fetch_failed(self) -> None:
@@ -223,9 +223,9 @@ class TestArticleScraper:
         with _patch_client(client):
             result = await scraper.scrape(SafeUrl("https://example.com/error"))
 
-        assert isinstance(result, FetchFailed)
-        assert isinstance(result.error, FetchOriginServerError)
-        assert "500" in str(result.error)
+        assert isinstance(result, ExternalFetchError)
+        assert isinstance(result, FetchOriginServerError)
+        assert "500" in str(result)
 
     @pytest.mark.asyncio
     async def test_connect_timeout_returns_fetch_failed(self) -> None:
@@ -239,9 +239,9 @@ class TestArticleScraper:
         with _patch_client(client):
             result = await scraper.scrape(SafeUrl("https://example.com/slow"))
 
-        assert isinstance(result, FetchFailed)
-        assert isinstance(result.error, FetchTimeoutError)
-        assert "timed out" in str(result.error)
+        assert isinstance(result, ExternalFetchError)
+        assert isinstance(result, FetchTimeoutError)
+        assert "timed out" in str(result)
 
     @pytest.mark.asyncio
     async def test_returns_empty_result_for_non_html(self) -> None:
@@ -261,7 +261,7 @@ class TestArticleScraper:
         with _patch_client(client):
             result = await scraper.scrape(SafeUrl("https://example.com/doc.pdf"))
 
-        assert isinstance(result, NotHtml)
+        assert isinstance(result, ScrapeNotHtml)
         assert result.content_type == "application/pdf"
 
     @pytest.mark.asyncio
@@ -284,10 +284,11 @@ class TestArticleScraper:
         with _patch_client(client):
             result = await scraper.scrape(SafeUrl("https://example.com/short"))
 
-        # trafilatura が None を返す (ParserGaveUp) または品質ゲート未達
-        # (ContentQualityTooLow) のどちらか。decode/parse 例外は本テストでは想定しない。
-        assert isinstance(result, ParserGaveUp | ContentQualityTooLow)
-        if isinstance(result, ContentQualityTooLow):
+        # trafilatura が None を返す (ScrapeParserGaveUp) または品質ゲート未達
+        # (ScrapeContentQualityTooLow) のどちらか。
+        # decode/parse 例外は本テストでは想定しない。
+        assert isinstance(result, ScrapeParserGaveUp | ScrapeContentQualityTooLow)
+        if isinstance(result, ScrapeContentQualityTooLow):
             assert result.body_length < 50
 
     @pytest.mark.asyncio
@@ -306,9 +307,9 @@ class TestArticleScraper:
                 SafeUrl("https://example.com/private/article")
             )
 
-        assert isinstance(result, FetchFailed)
-        assert isinstance(result.error, FetchRobotsDisallowedError)
-        assert "robots" in str(result.error)
+        assert isinstance(result, ExternalFetchError)
+        assert isinstance(result, FetchRobotsDisallowedError)
+        assert "robots" in str(result)
 
     @pytest.mark.asyncio
     async def test_ssrf_private_ip_returns_fetch_failed(self) -> None:
@@ -322,9 +323,9 @@ class TestArticleScraper:
                 SafeUrl("https://internal-trick.example.com/")
             )
 
-        assert isinstance(result, FetchFailed)
-        assert isinstance(result.error, FetchSsrfBlockedError)
-        assert "non-public address" in str(result.error)
+        assert isinstance(result, ExternalFetchError)
+        assert isinstance(result, FetchSsrfBlockedError)
+        assert "non-public address" in str(result)
 
     @pytest.mark.asyncio
     async def test_ssrf_link_local_returns_fetch_failed(self) -> None:
@@ -338,9 +339,9 @@ class TestArticleScraper:
                 SafeUrl("https://metadata-attack.example.com/")
             )
 
-        assert isinstance(result, FetchFailed)
-        assert isinstance(result.error, FetchSsrfBlockedError)
-        assert "169.254.169.254" in str(result.error)
+        assert isinstance(result, ExternalFetchError)
+        assert isinstance(result, FetchSsrfBlockedError)
+        assert "169.254.169.254" in str(result)
 
     @pytest.mark.asyncio
     async def test_dns_failure_returns_fetch_failed(self) -> None:
@@ -352,9 +353,9 @@ class TestArticleScraper:
         ):
             result = await scraper.scrape(SafeUrl("https://nonexistent.invalid/"))
 
-        assert isinstance(result, FetchFailed)
-        assert isinstance(result.error, FetchNetworkError)
-        assert "DNS resolution failed" in str(result.error)
+        assert isinstance(result, ExternalFetchError)
+        assert isinstance(result, FetchNetworkError)
+        assert "DNS resolution failed" in str(result)
 
     @pytest.mark.asyncio
     async def test_3xx_redirect_returns_fetch_failed(self) -> None:
@@ -374,9 +375,9 @@ class TestArticleScraper:
         with _patch_client(client):
             result = await scraper.scrape(SafeUrl("https://example.com/article"))
 
-        assert isinstance(result, FetchFailed)
-        assert isinstance(result.error, FetchRedirectBlockedError)
-        assert "redirect not followed" in str(result.error)
+        assert isinstance(result, ExternalFetchError)
+        assert isinstance(result, FetchRedirectBlockedError)
+        assert "redirect not followed" in str(result)
 
     @pytest.mark.asyncio
     async def test_oversized_content_length_header_returns_fetch_failed(
@@ -402,9 +403,9 @@ class TestArticleScraper:
         with _patch_client(client):
             result = await scraper.scrape(SafeUrl("https://example.com/huge"))
 
-        assert isinstance(result, FetchFailed)
-        assert isinstance(result.error, FetchResponseTooLargeError)
-        assert "response too large" in str(result.error)
+        assert isinstance(result, ExternalFetchError)
+        assert isinstance(result, FetchResponseTooLargeError)
+        assert "response too large" in str(result)
 
     @pytest.mark.asyncio
     async def test_oversized_actual_body_returns_fetch_failed(self) -> None:
@@ -426,9 +427,9 @@ class TestArticleScraper:
         with _patch_client(client):
             result = await scraper.scrape(SafeUrl("https://example.com/huge2"))
 
-        assert isinstance(result, FetchFailed)
-        assert isinstance(result.error, FetchResponseTooLargeError)
-        assert "response too large" in str(result.error)
+        assert isinstance(result, ExternalFetchError)
+        assert isinstance(result, FetchResponseTooLargeError)
+        assert "response too large" in str(result)
 
     @pytest.mark.asyncio
     async def test_caches_robots_txt_across_calls(self) -> None:
@@ -499,8 +500,8 @@ class TestScrapedContentTryCreate:
     """ScrapedContent.try_create: 品質ゲート判定の所有テスト。
 
     閾値は ``article_limits`` SSoT を import して導出する (literal 直書きしない)。
-    成功時は ``ScrapedContent``、未達時は証拠付き ``ContentQualityTooLow`` を値で返す
-    契約を確かめる。
+    成功時は ``ScrapedContent``、未達時は証拠付き ``ScrapeContentQualityTooLow``
+    を値で返す契約を確かめる。
     """
 
     def test_valid_material_returns_scraped_content(self) -> None:
@@ -515,7 +516,7 @@ class TestScrapedContentTryCreate:
         outcome = ScrapedContent.try_create(
             raw_title="Title", stripped_body=body, raw_date=None
         )
-        assert isinstance(outcome, ContentQualityTooLow)
+        assert isinstance(outcome, ScrapeContentQualityTooLow)
         assert outcome.body_length == len(body)
 
     def test_short_body_keeps_title_present_true(self) -> None:
@@ -523,7 +524,7 @@ class TestScrapedContentTryCreate:
         outcome = ScrapedContent.try_create(
             raw_title="Title", stripped_body=body, raw_date=None
         )
-        assert isinstance(outcome, ContentQualityTooLow)
+        assert isinstance(outcome, ScrapeContentQualityTooLow)
         assert outcome.title_present is True
 
     def test_short_body_keeps_body_sample(self) -> None:
@@ -531,7 +532,7 @@ class TestScrapedContentTryCreate:
         outcome = ScrapedContent.try_create(
             raw_title="Title", stripped_body=body, raw_date=None
         )
-        assert isinstance(outcome, ContentQualityTooLow)
+        assert isinstance(outcome, ScrapeContentQualityTooLow)
         assert outcome.body_sample == body
 
     def test_empty_title_returns_quality_failure(self) -> None:
@@ -539,7 +540,7 @@ class TestScrapedContentTryCreate:
         outcome = ScrapedContent.try_create(
             raw_title="", stripped_body=body, raw_date=None
         )
-        assert isinstance(outcome, ContentQualityTooLow)
+        assert isinstance(outcome, ScrapeContentQualityTooLow)
         assert outcome.title_present is False
 
     def test_none_title_returns_quality_failure(self) -> None:
@@ -547,7 +548,7 @@ class TestScrapedContentTryCreate:
         outcome = ScrapedContent.try_create(
             raw_title=None, stripped_body=body, raw_date=None
         )
-        assert isinstance(outcome, ContentQualityTooLow)
+        assert isinstance(outcome, ScrapeContentQualityTooLow)
         assert outcome.title_present is False
 
     def test_title_present_but_body_at_least_min_drops_body_sample(self) -> None:
@@ -556,14 +557,14 @@ class TestScrapedContentTryCreate:
         outcome = ScrapedContent.try_create(
             raw_title=None, stripped_body=body, raw_date=None
         )
-        assert isinstance(outcome, ContentQualityTooLow)
+        assert isinstance(outcome, ScrapeContentQualityTooLow)
         assert outcome.body_sample is None
 
     def test_empty_body_drops_body_sample(self) -> None:
         outcome = ScrapedContent.try_create(
             raw_title="Title", stripped_body="", raw_date=None
         )
-        assert isinstance(outcome, ContentQualityTooLow)
+        assert isinstance(outcome, ScrapeContentQualityTooLow)
         assert outcome.body_sample is None
 
     def test_html_tags_stripped_from_title(self) -> None:
@@ -724,8 +725,8 @@ class TestDecodeHtmlResponse:
 
 
 class TestExtract:
-    """_extract_content_from_response: RawResponse → ScrapedContent | ContentFailure
-    (同期・例外を投げない層)。
+    """_extract_content_from_response: RawResponse →
+    ScrapedContent | ScrapeContentFailure (同期・例外を投げない層)。
 
     取得 (_fetch) と切り離し、RawResponse を直接与えて content extraction 契約だけを
     検証する。decode/parse の失敗を crash variant に畳む契約はここが正本。
@@ -740,12 +741,12 @@ class TestExtract:
             decoded_text="",
         )
         result = ArticleScraper()._extract_content_from_response(raw)
-        assert isinstance(result, NotHtml)
+        assert isinstance(result, ScrapeNotHtml)
         assert result.content_type == "application/pdf"
 
     def test_valid_html_returns_scraped_content(self) -> None:
         # trafilatura の deduplicate はモジュール跨ぎの cache を持つため、他テストと
-        # 本文が衝突すると discard され ParserGaveUp になる。固有本文で隔離する。
+        # 本文が衝突すると discard され ScrapeParserGaveUp になる。固有本文で隔離する。
         unique_html = (
             "<html><head><title>Extract Phase Unit Test</title></head>"
             "<body><article><h1>Isolated Extraction Sample</h1>"
@@ -768,7 +769,8 @@ class TestExtract:
         assert len(result.body) > 50
 
     def test_minimal_html_returns_quality_failure(self) -> None:
-        """品質ゲート未達は ParserGaveUp か ContentQualityTooLow のどちらか。"""
+        """品質ゲート未達は ScrapeParserGaveUp か
+        ScrapeContentQualityTooLow のどちらか。"""
         minimal_html = "<html><body><p>Short</p></body></html>"
         raw = RawResponse(
             url="https://example.com/short",
@@ -778,12 +780,12 @@ class TestExtract:
             decoded_text=minimal_html,
         )
         result = ArticleScraper()._extract_content_from_response(raw)
-        assert isinstance(result, ParserGaveUp | ContentQualityTooLow)
-        if isinstance(result, ContentQualityTooLow):
+        assert isinstance(result, ScrapeParserGaveUp | ScrapeContentQualityTooLow)
+        if isinstance(result, ScrapeContentQualityTooLow):
             assert result.body_length < 50
 
     def test_parse_crash_folds_into_parse_crashed(self) -> None:
-        """trafilatura 段の例外を漏らさず ``ParseCrashed`` に畳む。"""
+        """trafilatura 段の例外を漏らさず ``ScrapeParseCrashed`` に畳む。"""
         raw = RawResponse(
             url="https://example.com/article",
             content_type="text/html; charset=utf-8",
@@ -796,7 +798,7 @@ class TestExtract:
             side_effect=RuntimeError("parse boom"),
         ):
             result = ArticleScraper()._extract_content_from_response(raw)
-        assert isinstance(result, ParseCrashed)
+        assert isinstance(result, ScrapeParseCrashed)
         assert result.error_class == "RuntimeError"
 
     def test_mojibake_in_body_emits_warning_log(self) -> None:

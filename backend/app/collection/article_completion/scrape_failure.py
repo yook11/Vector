@@ -1,7 +1,7 @@
 """scrape concern の失敗 value union と Retry 軸分類。
 
-``ExternalFetchError`` は origin error のまま ``FetchFailed`` に保持する。
-content 失敗は ``ContentFailure`` value として返し、``ScrapeDecision`` が
+``ExternalFetchError`` は origin error のまま ``ScrapeFailure`` に保持する。
+content 失敗は自身の ``decision`` で ``Terminal`` を返し、``ScrapeDecision`` が
 closed / retry の後処理方針を表す。
 """
 
@@ -11,7 +11,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass, replace
 from datetime import datetime, timedelta
 from types import MappingProxyType
-from typing import ClassVar, Final, assert_never
+from typing import ClassVar, Final
 
 from app.collection.article_completion.retry_policy import (
     BLIP_POLICY,
@@ -37,85 +37,6 @@ from app.collection.external_fetch_errors import (
 _BODY_SAMPLE_MAX = 200
 _ERROR_MESSAGE_MAX = 500
 _CONTENT_TYPE_MAX = 200
-
-
-# ---------------------------------------------------------------------------
-# content 失敗 variant (取得できたが使える本文でなかった)
-# ---------------------------------------------------------------------------
-
-
-@dataclass(frozen=True)
-class NotHtml:
-    """Content-Type が ``text/html`` を含まない。"""
-
-    content_type: str
-    reason: ClassVar[str] = "not_html"
-
-    def __post_init__(self) -> None:
-        if len(self.content_type) > _CONTENT_TYPE_MAX:
-            object.__setattr__(
-                self, "content_type", self.content_type[:_CONTENT_TYPE_MAX]
-            )
-
-
-@dataclass(frozen=True)
-class ParserGaveUp:
-    """``trafilatura.bare_extraction`` が ``None`` を返した。"""
-
-    reason: ClassVar[str] = "parser_gave_up"
-
-
-@dataclass(frozen=True)
-class ParseCrashed:
-    """trafilatura parse が例外または想定外戻り値で失敗した。"""
-
-    error_class: str
-    error_message: str
-    reason: ClassVar[str] = "parse_crashed"
-
-    def __post_init__(self) -> None:
-        if len(self.error_message) > _ERROR_MESSAGE_MAX:
-            object.__setattr__(
-                self, "error_message", self.error_message[:_ERROR_MESSAGE_MAX]
-            )
-
-
-ParseFailure = NotHtml | ParserGaveUp | ParseCrashed
-"""RawResponse を HTML document として解釈できなかった失敗 union。"""
-
-
-@dataclass(frozen=True)
-class ContentQualityTooLow:
-    """品質ゲートを満たさなかった本文・タイトルの観測値。"""
-
-    body_length: int
-    title_present: bool
-    body_sample: str | None
-    reason: ClassVar[str] = "content_quality_too_low"
-
-    def __post_init__(self) -> None:
-        if self.body_sample is not None and len(self.body_sample) > _BODY_SAMPLE_MAX:
-            object.__setattr__(self, "body_sample", self.body_sample[:_BODY_SAMPLE_MAX])
-
-
-ContentFailure = ParseFailure | ContentQualityTooLow
-"""取得できたが使える本文でなかった content 失敗 union。"""
-
-
-# ---------------------------------------------------------------------------
-# transport 失敗 variant (接続できなかった)
-# ---------------------------------------------------------------------------
-
-
-@dataclass(frozen=True, slots=True)
-class FetchFailed:
-    """``ExternalFetchError`` を scrape 境界で値化した transport variant。"""
-
-    error: ExternalFetchError
-
-
-ScrapeFailure = FetchFailed | ContentFailure
-"""scrape 境界の全失敗を表す閉じ union。"""
 
 
 # ---------------------------------------------------------------------------
@@ -161,6 +82,103 @@ class Retryable:
 
 ScrapeDecision = Terminal | Retryable
 """scrape 失敗の Retry 軸での処理方針。"""
+
+
+# ---------------------------------------------------------------------------
+# content 失敗 variant (取得できたが使える本文でなかった)
+# ---------------------------------------------------------------------------
+#
+# content 失敗は scrape 段 native で、再取得しても同じ結果なので常に ``Terminal``。
+# その不変条件を ``decision`` として型自身に持たせる (外付け分類に委ねない)。
+
+
+@dataclass(frozen=True)
+class ScrapeNotHtml:
+    """Content-Type が ``text/html`` を含まない。"""
+
+    content_type: str
+    reason: ClassVar[str] = "not_html"
+
+    def __post_init__(self) -> None:
+        if len(self.content_type) > _CONTENT_TYPE_MAX:
+            object.__setattr__(
+                self, "content_type", self.content_type[:_CONTENT_TYPE_MAX]
+            )
+
+    @property
+    def decision(self) -> ScrapeDecision:
+        return Terminal(
+            reason_code=f"scrape_{self.reason}",
+            detail=f"content_type={self.content_type}",
+        )
+
+
+@dataclass(frozen=True)
+class ScrapeParserGaveUp:
+    """``trafilatura.bare_extraction`` が ``None`` を返した。"""
+
+    reason: ClassVar[str] = "parser_gave_up"
+
+    @property
+    def decision(self) -> ScrapeDecision:
+        return Terminal(reason_code=f"scrape_{self.reason}")
+
+
+@dataclass(frozen=True)
+class ScrapeParseCrashed:
+    """trafilatura parse が例外または想定外戻り値で失敗した。"""
+
+    error_class: str
+    error_message: str
+    reason: ClassVar[str] = "parse_crashed"
+
+    def __post_init__(self) -> None:
+        if len(self.error_message) > _ERROR_MESSAGE_MAX:
+            object.__setattr__(
+                self, "error_message", self.error_message[:_ERROR_MESSAGE_MAX]
+            )
+
+    @property
+    def decision(self) -> ScrapeDecision:
+        return Terminal(
+            reason_code=f"scrape_{self.reason}",
+            detail=f"{self.error_class}: {self.error_message}",
+        )
+
+
+@dataclass(frozen=True)
+class ScrapeContentQualityTooLow:
+    """品質ゲートを満たさなかった本文・タイトルの観測値。"""
+
+    body_length: int
+    title_present: bool
+    body_sample: str | None
+    reason: ClassVar[str] = "content_quality_too_low"
+
+    def __post_init__(self) -> None:
+        if self.body_sample is not None and len(self.body_sample) > _BODY_SAMPLE_MAX:
+            object.__setattr__(self, "body_sample", self.body_sample[:_BODY_SAMPLE_MAX])
+
+    @property
+    def decision(self) -> ScrapeDecision:
+        sample = f" sample={self.body_sample!r}" if self.body_sample else ""
+        return Terminal(
+            reason_code=f"scrape_{self.reason}",
+            detail=(
+                f"body_length={self.body_length} "
+                f"title_present={self.title_present}{sample}"
+            ),
+        )
+
+
+ScrapeContentFailure = (
+    ScrapeNotHtml | ScrapeParserGaveUp | ScrapeParseCrashed | ScrapeContentQualityTooLow
+)
+"""取得できたが使える本文でなかった content 失敗 union。"""
+
+
+ScrapeFailure = ExternalFetchError | ScrapeContentFailure
+"""scrape 境界の全失敗を表す閉じ union (transport は origin error のまま値化)。"""
 
 
 # ---------------------------------------------------------------------------
@@ -230,25 +248,14 @@ def classify_external_fetch_error(exc: ExternalFetchError) -> ScrapeDecision:
 
 
 def classify_scrape_failure(failure: ScrapeFailure) -> ScrapeDecision:
-    """scrape failure を ``Terminal | Retryable`` に分類する。"""
-    if isinstance(failure, FetchFailed):
-        err = failure.error
-        return replace(
-            classify_external_fetch_error(err),
-            detail=f"{type(err).__name__}: {err}",
-        )
+    """scrape failure を ``Terminal | Retryable`` に分類する。
 
-    detail: str | None
-    match failure:
-        case NotHtml(content_type=ct):
-            detail = f"content_type={ct}"
-        case ParserGaveUp():
-            detail = None
-        case ParseCrashed(error_class=ec, error_message=em):
-            detail = f"{ec}: {em}"
-        case ContentQualityTooLow(body_length=bl, title_present=tp, body_sample=bs):
-            sample = f" sample={bs!r}" if bs else ""
-            detail = f"body_length={bl} title_present={tp}{sample}"
-        case _ as unreachable:
-            assert_never(unreachable)
-    return Terminal(reason_code=f"scrape_{failure.reason}", detail=detail)
+    transport (origin error) は段固有の backoff policy へ写像し、content 失敗は
+    自身の ``decision`` (常に ``Terminal``) を返す。
+    """
+    if isinstance(failure, ExternalFetchError):
+        return replace(
+            classify_external_fetch_error(failure),
+            detail=f"{type(failure).__name__}: {failure}",
+        )
+    return failure.decision

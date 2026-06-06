@@ -37,13 +37,12 @@ from app.collection.article_completion.repository import (
     CompletionUrlConflict,
 )
 from app.collection.article_completion.scrape_failure import (
-    ContentQualityTooLow,
-    FetchFailed,
-    NotHtml,
-    ParseCrashed,
-    ParserGaveUp,
     Retryable,
+    ScrapeContentQualityTooLow,
     ScrapeFailure,
+    ScrapeNotHtml,
+    ScrapeParseCrashed,
+    ScrapeParserGaveUp,
     classify_external_fetch_error,
 )
 from app.collection.domain.analyzable_article import AnalyzableArticle
@@ -51,6 +50,7 @@ from app.collection.domain.canonical_article_url import (
     CanonicalArticleUrlInvalidError,
 )
 from app.collection.domain.observed_article import ObservedArticleInvalidError
+from app.collection.external_fetch_errors import ExternalFetchError
 from app.collection.sources.errors import SourceNotRegisteredError
 from app.shared.security.redaction import redact_secrets
 
@@ -154,8 +154,8 @@ class ArticleCompletionAuditRepository:
         """scrape outcome を failed / rejected として記録する。"""
         canonical_url = str(ready.source_url)
         match failure:
-            case FetchFailed(error=error):
-                projection = self._projection_of_fetch_failed(failure)
+            case ExternalFetchError() as error:
+                projection = self._projection_of_fetch_failed(error)
                 await self._events.append(
                     stage=Stage.COMPLETION,
                     event_type=EventType.FAILED,
@@ -174,7 +174,9 @@ class ArticleCompletionAuditRepository:
                     error_class=_fqn(error),
                     retryability=projection.retryability,
                 )
-            case ParseCrashed(error_class=error_class, error_message=error_message):
+            case ScrapeParseCrashed(
+                error_class=error_class, error_message=error_message
+            ):
                 projection = self._projection_of_parse_crashed()
                 await self._events.append(
                     stage=Stage.COMPLETION,
@@ -191,7 +193,7 @@ class ArticleCompletionAuditRepository:
                     error_class=error_class,
                     retryability=projection.retryability,
                 )
-            case NotHtml(content_type=content_type):
+            case ScrapeNotHtml(content_type=content_type):
                 await self._append_content_rejected(
                     ready=ready,
                     outcome_code=_SCRAPE_NOT_HTML,
@@ -201,7 +203,7 @@ class ArticleCompletionAuditRepository:
                         content_type=content_type,
                     ),
                 )
-            case ParserGaveUp():
+            case ScrapeParserGaveUp():
                 await self._append_content_rejected(
                     ready=ready,
                     outcome_code=_SCRAPE_PARSER_GAVE_UP,
@@ -210,7 +212,7 @@ class ArticleCompletionAuditRepository:
                         attempt_count=ready.attempt_count,
                     ),
                 )
-            case ContentQualityTooLow(
+            case ScrapeContentQualityTooLow(
                 body_length=body_length,
                 title_present=title_present,
                 body_sample=body_sample,
@@ -381,9 +383,9 @@ class ArticleCompletionAuditRepository:
         )
 
     @staticmethod
-    def _projection_of_fetch_failed(failure: FetchFailed) -> FailureProjection:
-        """``FetchFailed`` を Stage 2 の失敗属性へ投影する。"""
-        decision = classify_external_fetch_error(failure.error)
+    def _projection_of_fetch_failed(error: ExternalFetchError) -> FailureProjection:
+        """transport (origin) 失敗を Stage 2 の失敗属性へ投影する。"""
+        decision = classify_external_fetch_error(error)
         retryability = (
             Retryability.RETRYABLE
             if isinstance(decision, Retryable)
@@ -393,7 +395,7 @@ class ArticleCompletionAuditRepository:
             failure_kind="external_fetch",
             retryability=retryability,
             failure_action=None,
-            code=failure.error.CODE,
+            code=error.CODE,
         )
 
     @staticmethod

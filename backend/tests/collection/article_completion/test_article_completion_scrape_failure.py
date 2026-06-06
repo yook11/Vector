@@ -29,13 +29,12 @@ from app.collection.article_completion.retry_policy import (
 )
 from app.collection.article_completion.scrape_failure import (
     _RETRYABLE_FETCH_ERROR_TYPES_BY_POLICY,
-    ContentQualityTooLow,
-    FetchFailed,
-    NotHtml,
-    ParseCrashed,
-    ParserGaveUp,
     Retryable,
+    ScrapeContentQualityTooLow,
     ScrapeFailure,
+    ScrapeNotHtml,
+    ScrapeParseCrashed,
+    ScrapeParserGaveUp,
     Terminal,
     classify_external_fetch_error,
     classify_scrape_failure,
@@ -222,27 +221,29 @@ class TestFetchOriginServerErrorExplicitBranch:
     "failure,expected_reason_code,expected_detail",
     [
         (
-            NotHtml(content_type="application/pdf"),
+            ScrapeNotHtml(content_type="application/pdf"),
             "scrape_not_html",
             "content_type=application/pdf",
         ),
         (
-            ParserGaveUp(),
+            ScrapeParserGaveUp(),
             "scrape_parser_gave_up",
             None,
         ),
         (
-            ParseCrashed(error_class="ValueError", error_message="bad parse"),
+            ScrapeParseCrashed(error_class="ValueError", error_message="bad parse"),
             "scrape_parse_crashed",
             "ValueError: bad parse",
         ),
         (
-            ContentQualityTooLow(body_length=0, title_present=False, body_sample=None),
+            ScrapeContentQualityTooLow(
+                body_length=0, title_present=False, body_sample=None
+            ),
             "scrape_content_quality_too_low",
             "body_length=0 title_present=False",
         ),
         (
-            ContentQualityTooLow(
+            ScrapeContentQualityTooLow(
                 body_length=12, title_present=True, body_sample="too short"
             ),
             "scrape_content_quality_too_low",
@@ -260,14 +261,14 @@ def test_scrape_failure_maps_to_terminal_with_evidence_detail(
     assert result == Terminal(reason_code=expected_reason_code, detail=expected_detail)
 
 
-class TestFetchFailedDelegation:
-    """transport variant ``FetchFailed`` は ``classify_external_fetch_error`` に委譲し、
+class TestTransportErrorDelegation:
+    """transport (origin error) は ``classify_external_fetch_error`` に委譲し、
     保持する例外の class+message を ``detail`` に畳む (retryable がありうる)。"""
 
     def test_terminal_fetch_error_folds_into_terminal_with_detail(self) -> None:
         # 404 は terminal 集合。reason_code は exc.CODE 素通し、detail に class 名。
         err = FetchResourceNotFoundError(status_code=404, reason="not_found")
-        result = classify_scrape_failure(FetchFailed(error=err))
+        result = classify_scrape_failure(err)
         assert isinstance(result, Terminal)
         assert result.reason_code == err.CODE
         assert result.detail is not None
@@ -276,7 +277,7 @@ class TestFetchFailedDelegation:
     def test_retryable_fetch_error_folds_into_retryable_with_detail(self) -> None:
         # 502 は BLIP policy の retryable。content 失敗と違い terminal に落とさない。
         err = FetchGatewayError(status_code=502)
-        result = classify_scrape_failure(FetchFailed(error=err))
+        result = classify_scrape_failure(err)
         assert isinstance(result, Retryable)
         assert result.reason_code == err.CODE
         assert result.policy == BLIP_POLICY

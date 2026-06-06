@@ -2,12 +2,11 @@
 
 from app.collection.article_completion.completer import ArticleHtmlCompleter
 from app.collection.article_completion.scrape_failure import (
-    ContentQualityTooLow,
-    FetchFailed,
-    NotHtml,
-    ParseCrashed,
-    ParserGaveUp,
+    ScrapeContentQualityTooLow,
     ScrapeFailure,
+    ScrapeNotHtml,
+    ScrapeParseCrashed,
+    ScrapeParserGaveUp,
 )
 from app.collection.article_completion.scraper import (
     ArticleScraper,
@@ -19,9 +18,8 @@ __all__ = [
     "ArticleScraper",
     "ScrapedContent",
     "ScrapeFailure",
-    "FetchFailed",
-    "NotHtml",
-    "ParseCrashed",
-    "ParserGaveUp",
-    "ContentQualityTooLow",
+    "ScrapeNotHtml",
+    "ScrapeParseCrashed",
+    "ScrapeParserGaveUp",
+    "ScrapeContentQualityTooLow",
 ]

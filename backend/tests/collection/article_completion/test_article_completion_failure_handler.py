@@ -31,7 +31,7 @@ from app.collection.article_completion.failure_handling import (
 from app.collection.article_completion.ready import ReadyForArticleCompletion
 from app.collection.article_completion.repository import ArticleCompletionRepository
 from app.collection.article_completion.retry_policy import BLIP_POLICY
-from app.collection.article_completion.scrape_failure import FetchFailed, NotHtml
+from app.collection.article_completion.scrape_failure import ScrapeNotHtml
 from app.collection.domain.analyzable_article import (
     AnalyzableArticleDefect,
     QualityTooLow,
@@ -149,11 +149,13 @@ async def test_scrape_terminal_closes_pending(
     db_session: AsyncSession,
     tc_source: NewsSource,
 ) -> None:
-    """scrape 内容棄却 (NotHtml) → pending status='closed' / leased_until=None。"""
+    """scrape 内容棄却 (ScrapeNotHtml) → pending closed / leased_until=None。"""
     ready = await _make_ready(db_session, tc_source, "https://techcrunch.com/term")
     handler = ArticleCompletionFailureHandler(session_factory)
 
-    await handler.handle_scrape_failure(ready, NotHtml(content_type="application/pdf"))
+    await handler.handle_scrape_failure(
+        ready, ScrapeNotHtml(content_type="application/pdf")
+    )
 
     pending = await _reload_pending(db_session, ready.pending_id)
     assert pending.status == "closed"
@@ -170,7 +172,9 @@ async def test_scrape_terminal_content_rejection_audits_rejected(
     ready = await _make_ready(db_session, tc_source, "https://techcrunch.com/pdf")
     handler = ArticleCompletionFailureHandler(session_factory)
 
-    await handler.handle_scrape_failure(ready, NotHtml(content_type="application/pdf"))
+    await handler.handle_scrape_failure(
+        ready, ScrapeNotHtml(content_type="application/pdf")
+    )
 
     ev = await _fetch_event(db_session, tc_source.id)
     assert ev.event_type == "rejected"
@@ -196,9 +200,7 @@ async def test_scrape_retryable_non_exhausted_reopens_with_future_ready_at(
     ready = await _make_ready(db_session, tc_source, "https://techcrunch.com/blip")
     handler = ArticleCompletionFailureHandler(session_factory)
 
-    await handler.handle_scrape_failure(
-        ready, FetchFailed(error=FetchGatewayError(status_code=502))
-    )
+    await handler.handle_scrape_failure(ready, FetchGatewayError(status_code=502))
 
     pending = await _reload_pending(db_session, ready.pending_id)
     assert pending.status == "open"
@@ -219,7 +221,7 @@ async def test_scrape_retryable_non_exhausted_audits_failed_without_exhausted_fl
     err = FetchGatewayError(status_code=502)
     handler = ArticleCompletionFailureHandler(session_factory)
 
-    await handler.handle_scrape_failure(ready, FetchFailed(error=err))
+    await handler.handle_scrape_failure(ready, err)
 
     ev = await _fetch_event(db_session, tc_source.id)
     assert ev.event_type == "failed"
@@ -257,7 +259,7 @@ async def test_scrape_retryable_exhausted_closes_pending(
     handler = ArticleCompletionFailureHandler(session_factory)
 
     await handler.handle_scrape_failure(
-        exhausted_ready, FetchFailed(error=FetchGatewayError(status_code=502))
+        exhausted_ready, FetchGatewayError(status_code=502)
     )
 
     pending = await _reload_pending(db_session, ready.pending_id)
@@ -286,7 +288,7 @@ async def test_scrape_retryable_exhausted_audits_retry_exhausted_flag(
     handler = ArticleCompletionFailureHandler(session_factory)
 
     await handler.handle_scrape_failure(
-        exhausted_ready, FetchFailed(error=FetchGatewayError(status_code=502))
+        exhausted_ready, FetchGatewayError(status_code=502)
     )
 
     ev = await _fetch_event(db_session, tc_source.id)
@@ -313,12 +315,10 @@ async def test_scrape_retryable_uses_server_retry_after_seconds(
 
     await handler.handle_scrape_failure(
         ready,
-        FetchFailed(
-            error=FetchOriginServerError(
-                status_code=503,
-                reason="service_unavailable",
-                retry_after_seconds=120.0,
-            )
+        FetchOriginServerError(
+            status_code=503,
+            reason="service_unavailable",
+            retry_after_seconds=120.0,
         ),
     )
 
@@ -413,7 +413,9 @@ async def test_stale_attempt_records_skipped_without_state_change(
     await db_session.commit()
     handler = ArticleCompletionFailureHandler(session_factory)
 
-    await handler.handle_scrape_failure(ready, NotHtml(content_type="application/pdf"))
+    await handler.handle_scrape_failure(
+        ready, ScrapeNotHtml(content_type="application/pdf")
+    )
 
     ev = await _fetch_event(db_session, tc_source.id)
     assert ev.event_type == "skipped"

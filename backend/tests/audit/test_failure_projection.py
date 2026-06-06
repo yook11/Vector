@@ -36,9 +36,6 @@ from app.collection.article_acquisition.reader.read_errors import (
     UnreadableResponseError,
     UnreadableResponseReason,
 )
-from app.collection.article_completion.scrape_failure import (
-    FetchFailed,
-)
 from app.collection.external_fetch_errors import (
     FetchAccessDeniedError,
     FetchGatewayError,
@@ -258,10 +255,10 @@ def test_source_acquisition_marker_projection_reads_marker_attrs(
 
 def test_completion_fetch_failed_projection_uses_scrape_decision() -> None:
     retryable = ArticleCompletionAuditRepository._projection_of_fetch_failed(
-        FetchFailed(error=FetchGatewayError(status_code=502))
+        FetchGatewayError(status_code=502)
     )
     terminal = ArticleCompletionAuditRepository._projection_of_fetch_failed(
-        FetchFailed(error=FetchAccessDeniedError(status_code=403, reason="forbidden"))
+        FetchAccessDeniedError(status_code=403, reason="forbidden")
     )
 
     assert retryable == FailureProjection(

@@ -20,14 +20,12 @@ from app.collection.article_acquisition.tools.http_error_translation import (
     translate_fetch_exception,
 )
 from app.collection.article_completion.scrape_failure import (
-    ContentFailure,
-    ContentQualityTooLow,
-    FetchFailed,
-    NotHtml,
-    ParseCrashed,
-    ParseFailure,
-    ParserGaveUp,
+    ScrapeContentFailure,
+    ScrapeContentQualityTooLow,
     ScrapeFailure,
+    ScrapeNotHtml,
+    ScrapeParseCrashed,
+    ScrapeParserGaveUp,
 )
 from app.collection.domain.article_limits import (
     ARTICLE_BODY_MIN_LENGTH as _BODY_MIN_LENGTH,
@@ -129,7 +127,7 @@ class ScrapedContent:
         raw_title: str | None,
         stripped_body: str,
         raw_date: str | None,
-    ) -> ScrapedContent | ContentQualityTooLow:
+    ) -> ScrapedContent | ScrapeContentQualityTooLow:
         """素材が品質ゲートを満たせば ``ScrapedContent``、無理なら失敗値を返す。"""
         cleaned_title = _strip_html_tags(raw_title)
         title = cleaned_title[:_TITLE_MAX_LENGTH] if cleaned_title else None
@@ -140,7 +138,7 @@ class ScrapedContent:
             # paywall stub / 拒否ページ判別に使えるよう、本文がゼロでも閾値以上でも
             # ない (= title 欠落で落ちた) 場合は冒頭断片を残さない。
             body_sample = stripped_body if 0 < body_length < _BODY_MIN_LENGTH else None
-            return ContentQualityTooLow(
+            return ScrapeContentQualityTooLow(
                 body_length=body_length,
                 title_present=title is not None,
                 body_sample=body_sample,
@@ -188,13 +186,13 @@ class _RobotsGate:
 
 def _parse_raw_response_as_html_document(
     raw: RawResponse,
-) -> TrafilaturaDocument | ParseFailure:
+) -> TrafilaturaDocument | ScrapeNotHtml | ScrapeParserGaveUp | ScrapeParseCrashed:
     """RawResponse を HTML document として解釈し、失敗は値で返す。"""
     if "text/html" not in raw.content_type:
         logger.info("content_not_html", url=raw.url, content_type=raw.content_type)
-        return NotHtml(content_type=raw.content_type)
+        return ScrapeNotHtml(content_type=raw.content_type)
 
-    # decode 失敗は fallback に畳み、ParseCrashed は trafilatura parse 専用に保つ。
+    # decode 失敗は fallback に畳み、ScrapeParseCrashed は trafilatura 専用に保つ。
     html = _decode_html_response(raw)
 
     try:
@@ -215,17 +213,17 @@ def _parse_raw_response_as_html_document(
         )
         if result is None:
             logger.info("parser_gave_up", url=raw.url)
-            return ParserGaveUp()
-        # as_dict=False では Document が期待値。想定外型は ParseCrashed に畳む。
+            return ScrapeParserGaveUp()
+        # as_dict=False では Document が期待値。想定外型は ScrapeParseCrashed に畳む。
         if not isinstance(result, TrafilaturaDocument):
             message = (
                 f"bare_extraction returned unexpected type: {type(result).__name__}"
             )
             logger.warning("content_parse_error", url=raw.url, error=message)
-            return ParseCrashed(error_class="TypeError", error_message=message)
+            return ScrapeParseCrashed(error_class="TypeError", error_message=message)
     except Exception as e:
         logger.warning("content_parse_error", url=raw.url, error=str(e))
-        return ParseCrashed(error_class=type(e).__name__, error_message=str(e))
+        return ScrapeParseCrashed(error_class=type(e).__name__, error_message=str(e))
 
     return result
 
@@ -234,7 +232,7 @@ def _build_scraped_content_from_document(
     document: TrafilaturaDocument,
     *,
     url: str,
-) -> ScrapedContent | ContentQualityTooLow:
+) -> ScrapedContent | ScrapeContentQualityTooLow:
     """``TrafilaturaDocument`` を primitives に射影し品質ゲートに通す。"""
     text = document.text
     body_stripped = text.strip() if text else ""
@@ -256,7 +254,7 @@ def _build_scraped_content_from_document(
         stripped_body=body_stripped,
         raw_date=document.date,
     )
-    if isinstance(outcome, ContentQualityTooLow):
+    if isinstance(outcome, ScrapeContentQualityTooLow):
         logger.info(
             "content_quality_too_low",
             url=url,
@@ -277,7 +275,8 @@ class ArticleScraper:
         try:
             raw = await self._fetch(url)
         except ExternalFetchError as exc:
-            return FetchFailed(error=exc)
+            # origin error をそのまま値化 (scrape は never raise の二値)。
+            return exc
         return await asyncio.to_thread(self._extract_content_from_response, raw)
 
     async def _fetch(self, url: SafeUrl) -> RawResponse:
@@ -342,9 +341,9 @@ class ArticleScraper:
 
     def _extract_content_from_response(
         self, raw: RawResponse
-    ) -> ScrapedContent | ContentFailure:
+    ) -> ScrapedContent | ScrapeContentFailure:
         """RawResponse から ScrapedContent または content failure value を得る。"""
         parsed = _parse_raw_response_as_html_document(raw)
         if not isinstance(parsed, TrafilaturaDocument):
-            return parsed  # ParseFailure (NotHtml | ParserGaveUp | ParseCrashed)
+            return parsed  # ScrapeNotHtml | ScrapeParserGaveUp | ScrapeParseCrashed
         return _build_scraped_content_from_document(parsed, url=raw.url)

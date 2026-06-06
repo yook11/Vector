@@ -5,8 +5,8 @@ handler 経由で焼かれる経路 (scrape outcome / completion rejected / stal
 直接呼び、handler 経由では届きにくい契約を検証する:
 
 - ``append_persist_outcome`` の 3 outcome (成功 / superseded / url_conflict)
-- 2 軸原則: ``ParseCrashed`` = failed + error_class、``ContentQualityTooLow`` =
-  rejected + error_class None / 構造化列
+- 2 軸原則: ``ScrapeParseCrashed`` = failed + error_class、
+  ``ScrapeContentQualityTooLow`` = rejected + error_class None / 構造化列
 - ``append_persist_crashed`` (経路 9) の error_class / error_chain / redact
 - repository は ``session.commit()`` を呼ばない (caller tx 境界保持)
 """
@@ -39,9 +39,8 @@ from app.collection.article_completion.repository import (
     CompletionUrlConflict,
 )
 from app.collection.article_completion.scrape_failure import (
-    ContentQualityTooLow,
-    FetchFailed,
-    ParseCrashed,
+    ScrapeContentQualityTooLow,
+    ScrapeParseCrashed,
 )
 from app.collection.domain.analyzable_article import AnalyzableArticle
 from app.collection.domain.canonical_article_url import (
@@ -303,7 +302,7 @@ async def test_append_scrape_outcome_retryable_fetch_failed_projection(
     async with session_factory() as session:
         await ArticleCompletionAuditRepository(session).append_scrape_outcome(
             ready=ready,
-            failure=FetchFailed(error=FetchGatewayError(status_code=502)),
+            failure=FetchGatewayError(status_code=502),
         )
         await session.commit()
 
@@ -328,9 +327,7 @@ async def test_append_scrape_outcome_terminal_fetch_failed_projection(
     async with session_factory() as session:
         await ArticleCompletionAuditRepository(session).append_scrape_outcome(
             ready=ready,
-            failure=FetchFailed(
-                error=FetchAccessDeniedError(status_code=403, reason="forbidden")
-            ),
+            failure=FetchAccessDeniedError(status_code=403, reason="forbidden"),
         )
         await session.commit()
 
@@ -349,13 +346,13 @@ async def test_append_scrape_outcome_parse_crashed_is_failed_with_error_class(
     db_session: AsyncSession,
     tc_source: NewsSource,
 ) -> None:
-    """ParseCrashed は parser 例外を伴う技術故障 → failed + error_class 記録。"""
+    """ScrapeParseCrashed は parser 例外を伴う技術故障 → failed + error_class 記録。"""
     ready = await _make_ready(db_session, tc_source, _URL)
 
     async with session_factory() as session:
         await ArticleCompletionAuditRepository(session).append_scrape_outcome(
             ready=ready,
-            failure=ParseCrashed(error_class="LxmlError", error_message="boom"),
+            failure=ScrapeParseCrashed(error_class="LxmlError", error_message="boom"),
         )
         await session.commit()
 
@@ -376,13 +373,14 @@ async def test_append_scrape_outcome_content_quality_is_rejected_with_metric(
     db_session: AsyncSession,
     tc_source: NewsSource,
 ) -> None:
-    """ContentQualityTooLow は内容判定 → rejected + error_class None + 構造化列。"""
+    """ScrapeContentQualityTooLow は内容判定 →
+    rejected + error_class None + 構造化列。"""
     ready = await _make_ready(db_session, tc_source, _URL)
 
     async with session_factory() as session:
         await ArticleCompletionAuditRepository(session).append_scrape_outcome(
             ready=ready,
-            failure=ContentQualityTooLow(
+            failure=ScrapeContentQualityTooLow(
                 body_length=12, title_present=False, body_sample="too short"
             ),
         )
@@ -420,7 +418,7 @@ async def test_append_scrape_outcome_content_quality_sanitizes_body_head_on_inje
         async with session_factory() as session:
             await ArticleCompletionAuditRepository(session).append_scrape_outcome(
                 ready=ready,
-                failure=ContentQualityTooLow(
+                failure=ScrapeContentQualityTooLow(
                     body_length=5, title_present=False, body_sample=malicious
                 ),
             )
@@ -471,7 +469,7 @@ async def test_append_scrape_outcome_skips_injection_signal_when_event_append_fa
             with pytest.raises(RuntimeError, match="append boom"):
                 await repo.append_scrape_outcome(
                     ready=ready,
-                    failure=ContentQualityTooLow(
+                    failure=ScrapeContentQualityTooLow(
                         body_length=5, title_present=False, body_sample=malicious
                     ),
                 )
