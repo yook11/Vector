@@ -6,6 +6,12 @@ FastAPI + Python 3.13 + SQLAlchemy 2.0 async (Declarative / `mapped_column` + `M
 
 - SSoT は `app/schemas/` の Pydantic モデル → FastAPI が `/openapi.json` を自動生成 → フロントエンドの型は `npm run generate-types` で自動生成
 
+## Skills
+
+- schema 変更・Alembic migration: `/migration`
+- SQL / ORM query: `/database-queries`
+- Pydantic schema 変更後の型生成: `/gen-types`
+
 ## モジュール構成
 
 bounded context (ドメイン):
