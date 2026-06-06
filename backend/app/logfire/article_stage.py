@@ -18,7 +18,7 @@ context manager を素直に並べる。継承で共有しない。終端 embedd
 
 ステージ間で唯一共有するのは ``_current_stage_span`` ContextVar 1 個だけ。await 先の
 deep-stack service が signature を変えずに result を書くための土管で、ステージの特性は
-表さない (前例: ``app/audit/repository.py`` の ``_trace_id_var``)。taskiq の async path
+表さない。taskiq の async path
 は ``copy_context()`` を通らず同一 await チェーンを共有するため task が積んだ handle を
 service が見られる。task 間は ``asyncio.create_task`` が context をコピーするので漏れ
 ない。``finally`` での ``reset(token)`` は必須。

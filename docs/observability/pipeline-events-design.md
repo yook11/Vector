@@ -158,8 +158,12 @@ observability ──→ collection / analysis    (禁止)
 | `article_id` | int | NULL | — | FK articles(id) ON DELETE SET NULL |
 | `attempt` | smallint | NOT NULL | 1 | taskiq retry_count + 1 |
 | `error_class` | text | NULL | — | Python FQN（failed のみ）|
-| `trace_id` | text | NULL | — | Logfire trace ID（v1 は常に NULL、post-v1 で Repository 内で補完）|
+| `trace_id` | text | NULL | — | Logfire trace ID。execute span から Repository 内で補完 (cron tick の batch trace、span 外は NULL) |
 | `payload` | jsonb | NOT NULL | `'{}'` | Stage 別 Pydantic |
+
+`trace_id` は観測 B軸 (cron tick を根とする batch trace の Logfire ポインタ) 専用。記事単位の
+相関 (A軸) は `article_id` が担う。将来ドメインの lifecycle 相関を導入する場合は
+`correlation_id` / `pipeline_run_id` 系の列名にし、`trace` 語は使わない。
 
 ### Stage / EventType enum（CHECK 制約）
 
@@ -719,7 +723,7 @@ class PipelineEventRepository:
                 select(Article.news_source_id).where(Article.id == article_id)
             )
 
-        # trace_id 補完（v1: 常に None、post-v1: Logfire span 経由）
+        # trace_id 補完（OTel current span から読込）
         trace_id = self._get_current_trace_id()
 
         event = PipelineEvent(
@@ -735,9 +739,11 @@ class PipelineEventRepository:
         )
         self._session.add(event)
 
-    def _get_current_trace_id(self) -> str | None:
-        """v1 は常に None。post-v1 で Logfire 導入時に書き換える。"""
-        return None
+    @staticmethod
+    def _get_current_trace_id() -> str | None:
+        """現在 active な OTel span の trace_id を W3C 32-hex (小文字) で返す (span 外は None)。"""
+        span_context = trace.get_current_span().get_span_context()
+        return f"{span_context.trace_id:032x}" if span_context.is_valid else None
 ```
 
 ### 共通ルール

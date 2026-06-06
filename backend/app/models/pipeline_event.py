@@ -109,6 +109,9 @@ class PipelineEvent(Base):
         nullable=True,
     )
     error_class: Mapped[str | None] = mapped_column(String(160), nullable=True)
+    # trace_id は OTel/W3C trace の観測ポインタ (B軸)。非権威で、Logfire 保持を超えると
+    # dangle する。記事単位の相関は article_id (A軸)。将来ドメインの lifecycle 相関を
+    # 足すなら別列 correlation_id 系に置き、本列 (trace) とは別軸とする。
     trace_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
     payload: Mapped[dict[str, Any]] = mapped_column(
         JSONB,

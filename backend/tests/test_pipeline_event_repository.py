@@ -8,7 +8,11 @@
 
 from __future__ import annotations
 
+import re
+
+import logfire
 import pytest
+from logfire.testing import CaptureLogfire
 from sqlalchemy import select, text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -213,6 +217,60 @@ def test_pipeline_event_top_level_columns_match_current_contract() -> None:
     assert actual == expected
     assert {"category", "code", "attempt"}.isdisjoint(actual)
     assert {"failure_kind", "failure_action", "attempt_count"}.isdisjoint(actual)
+
+
+# trace_id 補完: taskiq の execute span 内の append は span の trace_id を焼き、
+# span 外の append は NULL になる。oracle は capfire の exported span (production の
+# get_current_span() 式を test 内で再走させない = tautology 回避)。
+
+
+@pytest.mark.asyncio
+async def test_append_inside_span_writes_otel_trace_id(
+    db_session: AsyncSession, capfire: CaptureLogfire
+) -> None:
+    """OTel span 内の append は span の trace_id を W3C 32-hex (小文字) で焼く。"""
+    repo = PipelineEventRepository(db_session)
+    with logfire.span("audit_test_root"):
+        await repo.append(
+            stage=Stage.DISPATCH,
+            event_type=EventType.SKIPPED,
+            outcome_code="no_active_sources",
+            payload=AcquisitionPayload(),
+        )
+        await db_session.commit()
+
+    # 独立 oracle: exporter が捕捉した span context の trace_id (int)。
+    spans = capfire.exporter.exported_spans_as_dict()
+    root = next((s for s in spans if s["name"] == "audit_test_root"), None)
+    assert root is not None, "span not exported"
+    expected_trace_id = root["context"]["trace_id"]
+
+    row = (await db_session.execute(select(PipelineEvent))).scalars().one()
+    assert row.trace_id is not None
+    # 形式は値と独立に pin (小文字 32-hex)。
+    assert re.fullmatch(r"[0-9a-f]{32}", row.trace_id)
+    # 値は production の整形式 (:032x) を複製せず、逆変換で照合する。
+    assert int(row.trace_id, 16) == expected_trace_id
+    assert int(row.trace_id, 16) != 0
+
+
+@pytest.mark.asyncio
+async def test_append_outside_span_writes_null_trace_id(
+    db_session: AsyncSession, capfire: CaptureLogfire
+) -> None:
+    """span 外 (非 taskiq entrypoint) の append は trace_id NULL・例外を投げない。"""
+    repo = PipelineEventRepository(db_session)
+    await repo.append(
+        stage=Stage.DISPATCH,
+        event_type=EventType.SKIPPED,
+        outcome_code="no_active_sources",
+        payload=AcquisitionPayload(),
+    )
+    await db_session.commit()
+
+    row = (await db_session.execute(select(PipelineEvent))).scalars().one()
+    assert row.trace_id is None
+    assert capfire.exporter.exported_spans_as_dict() == []
 
 
 @pytest.mark.asyncio

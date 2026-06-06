@@ -2,8 +2,7 @@
 
 from __future__ import annotations
 
-import contextvars
-
+from opentelemetry import trace
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -12,10 +11,6 @@ from app.audit.domain.payloads import BasePipelineEventPayload
 from app.audit.failure_projection import Retryability
 from app.models.article import Article
 from app.models.pipeline_event import PipelineEvent
-
-_trace_id_var: contextvars.ContextVar[str | None] = contextvars.ContextVar(
-    "pipeline_event_trace_id", default=None
-)
 
 
 class PipelineEventRepository:
@@ -62,4 +57,6 @@ class PipelineEventRepository:
 
     @staticmethod
     def _get_current_trace_id() -> str | None:
-        return _trace_id_var.get()
+        """OTel current span の trace_id を 32-hex 小文字で返す (span 外は None)。"""
+        span_context = trace.get_current_span().get_span_context()
+        return f"{span_context.trace_id:032x}" if span_context.is_valid else None

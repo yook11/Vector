@@ -18,6 +18,7 @@ import json
 import logfire
 import pytest
 from logfire.testing import CaptureLogfire
+from opentelemetry import trace
 from taskiq import InMemoryBroker, SimpleRetryMiddleware, TaskiqEvents
 from taskiq.middlewares.opentelemetry_middleware import OpenTelemetryMiddleware
 
@@ -193,6 +194,52 @@ async def test_kiq_propagates_traceparent_via_labels(
     assert consumer["parent"]["span_id"] == producer["context"]["span_id"], (
         "consumer parent is not the producer span"
     )
+
+
+# capfire oracle: execute span が task body 内で current として読める
+# (= PipelineEventRepository._get_current_trace_id の直読みが trace_id を拾える前提)
+
+
+@pytest.mark.asyncio
+async def test_execute_span_is_current_inside_task_body(
+    capfire: CaptureLogfire,
+) -> None:
+    """task body 内の ``get_current_span()`` が execute span そのものを返す。
+
+    既存 ``test_kiq_propagates_traceparent_via_labels`` は execute span が export
+    されることしか見ておらず、「body 内で current として読める」は pin していない。
+    Repository の trace_id 直読みはこの性質に依存するため直接押さえる。oracle は
+    capfire の execute span (body 内の値を test 側で再導出しない)。
+
+    trace_id だけでは producer / parent span (同一 trace) の取り違えを区別できない
+    ため span_id まで照合し、current が execute span 本体であることを確定させる。
+    """
+    broker = InMemoryBroker().with_middlewares(OpenTelemetryMiddleware())
+
+    @broker.task
+    async def _read_current_span_ids() -> tuple[int, int]:
+        span_context = trace.get_current_span().get_span_context()
+        return span_context.trace_id, span_context.span_id
+
+    await broker.startup()
+    try:
+        task = await _read_current_span_ids.kiq()
+        result = await task.wait_result()
+        read_trace_id, read_span_id = result.return_value
+    finally:
+        await broker.shutdown()
+
+    consumer_spans = [
+        s
+        for s in capfire.exporter.exported_spans_as_dict()
+        if s["name"].startswith("execute/")
+    ]
+    assert len(consumer_spans) >= 1, "execute span not exported"
+    execute_ctx = consumer_spans[0]["context"]
+
+    # span_id まで一致 = current は同一 trace の別 span ではなく execute span 本体。
+    assert read_trace_id == execute_ctx["trace_id"]
+    assert read_span_id == execute_ctx["span_id"]
 
 
 # capfire oracle: task args が span attribute に漏れない
