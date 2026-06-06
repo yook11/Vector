@@ -25,7 +25,8 @@ describe("getBriefingDetailViewModel", () => {
       category: { id: 1, slug: "ai", name: "AI" },
       headline: "今週の AI",
       overview: "今週の AI 業界の流れ",
-      stories: [],
+      keyArticles: [],
+      watchPoints: [],
       articles: [],
     };
     mocks.getBriefing.mockResolvedValue(ready);

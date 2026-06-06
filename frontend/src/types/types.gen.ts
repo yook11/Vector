@@ -500,9 +500,13 @@ export type ReadyBriefing = {
      */
     overview: string;
     /**
-     * Stories
+     * Keyarticles
      */
-    stories: Array<StoryOut>;
+    keyArticles: Array<KeyArticleOut>;
+    /**
+     * Watchpoints
+     */
+    watchPoints: Array<WatchPointOut>;
     /**
      * Articles
      */
@@ -648,7 +652,7 @@ export type WatchlistIds = {
 /**
  * _ArticleSummaryOut
  *
- * ``stories[].articleIds`` から参照される記事のサマリ。
+ * ``keyArticles[].articleId`` から参照される記事のサマリ。
  */
 export type ArticleSummaryOut = {
     /**
@@ -675,7 +679,7 @@ export type ArticleSummaryOut = {
  * 一覧行に同梱する「最新 briefing 参照」。
  *
  * 未生成カテゴリでは ``BriefingListItem.latest = None`` で表現する。
- * 詳細 (``ReadyBriefing``) と異なり overview / stories 等は持たず、
+ * 詳細 (``ReadyBriefing``) と異なり overview / keyArticles 等は持たず、
  * 一覧で表示する短い見出しのみ。
  */
 export type BriefingListLatest = {
@@ -742,6 +746,20 @@ export type EntityTrendOut = {
 };
 
 /**
+ * _KeyArticleOut
+ */
+export type KeyArticleOut = {
+    /**
+     * Articleid
+     */
+    articleId: number;
+    /**
+     * Significance
+     */
+    significance: string;
+};
+
+/**
  * _NewEntityOut
  */
 export type NewEntityOut = {
@@ -754,17 +772,13 @@ export type NewEntityOut = {
 };
 
 /**
- * _StoryOut
+ * _WatchPointOut
  */
-export type StoryOut = {
+export type WatchPointOut = {
     /**
-     * Takeaway
+     * Statement
      */
-    takeaway: string;
-    /**
-     * Articleids
-     */
-    articleIds: Array<number>;
+    statement: string;
 };
 
 export type ListArticlesData = {

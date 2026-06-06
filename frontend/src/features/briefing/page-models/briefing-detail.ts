@@ -6,8 +6,8 @@ import type { BriefingResponseParsed } from "../schemas/briefing";
  *
  * ADR-005: 詳細は `state` discriminator で ready/empty 分岐を持つため、
  * 切り替えは component 側で `vm.state === "ready"` narrowing する。
- * page-model 自体は identity transform に近いが、将来 stories の article
- * lookup 整形 (article_ids → 実 article 配列マージ) 等を入れる時に test
+ * page-model 自体は identity transform に近いが、将来 keyArticles の article
+ * lookup 整形 (articleId → 実 article 配列マージ) 等を入れる時に test
  * 経路が変わらない構造として確立する。
  */
 export type BriefingDetailViewModel = BriefingResponseParsed;

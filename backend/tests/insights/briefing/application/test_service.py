@@ -21,7 +21,8 @@ from app.insights.briefing.application.notifier import (
 )
 from app.insights.briefing.application.service import WeeklyBriefingService
 from app.insights.briefing.domain.briefing import (
-    BriefingStory,
+    KeyArticle,
+    WatchPoint,
     WeeklyBriefingContent,
 )
 from app.insights.briefing.domain.ready import ReadyForBriefing
@@ -48,7 +49,8 @@ def _llm_mock(
         return_value=WeeklyBriefingContent(
             headline=headline,
             overview=overview,
-            stories=[BriefingStory(takeaway="記事から読み取った内容", article_ids=[1])],
+            key_articles=[KeyArticle(article_id=1, significance="なぜ重要か")],
+            watch_points=[WatchPoint(statement="今後どこを見るべきか")],
         )
     )
     return llm

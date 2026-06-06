@@ -1,6 +1,6 @@
 """GET /api/v1/briefing/{categorySlug} ルーター。
 
-最新週の briefing を 1 リクエストで返す。``stories[].articleIds`` で参照される
+最新週の briefing を 1 リクエストで返す。``keyArticles[].articleId`` で参照される
 記事 (title_ja / source_name / url) も同じレスポンスに同梱し、frontend で
 N+1 fetch しないで済むようにする。
 """
@@ -25,7 +25,8 @@ from app.insights.briefing.schemas.briefing import (
     _ArticleSummaryOut,
     _BriefingListLatest,
     _CategoryOut,
-    _StoryOut,
+    _KeyArticleOut,
+    _WatchPointOut,
 )
 from app.models.article import Article
 from app.models.article_curation import ArticleCuration
@@ -146,10 +147,9 @@ async def get_latest_briefing(
     if briefing is None:
         return EmptyBriefing(category=_to_category(category))
 
-    stories = [_StoryOut.model_validate(s) for s in briefing.stories]
-    article_ids: list[int] = []
-    for s in stories:
-        article_ids.extend(s.article_ids)
+    key_articles = [_KeyArticleOut.model_validate(a) for a in briefing.key_articles]
+    watch_points = [_WatchPointOut.model_validate(w) for w in briefing.watch_points]
+    article_ids = [a.article_id for a in key_articles]
     articles = await _fetch_article_summaries(session, list(set(article_ids)))
 
     return ReadyBriefing(
@@ -160,6 +160,7 @@ async def get_latest_briefing(
         category=_to_category(category),
         headline=briefing.headline,
         overview=briefing.overview,
-        stories=stories,
+        key_articles=key_articles,
+        watch_points=watch_points,
         articles=articles,
     )

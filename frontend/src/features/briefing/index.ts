@@ -7,7 +7,8 @@ export { ArticleCard } from "./components/ArticleCard";
 export { BriefingDisclaimer } from "./components/BriefingDisclaimer";
 export { BriefingEmptyRow } from "./components/BriefingEmptyRow";
 export { BriefingRow } from "./components/BriefingRow";
-export { StoryBlock } from "./components/StoryBlock";
+export { KeyArticleBlock } from "./components/KeyArticleBlock";
+export { WatchPoints } from "./components/WatchPoints";
 export {
   type BriefingDetailViewModel,
   getBriefingDetailViewModel,

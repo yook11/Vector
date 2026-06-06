@@ -24,7 +24,8 @@ def _make(
         category_id=category_id,
         headline=headline,
         overview=overview,
-        stories=[{"takeaway": "t", "article_ids": [1]}],
+        key_articles=[{"article_id": 1, "significance": "なぜ重要か"}],
+        watch_points=[{"statement": "今後どこを見るべきか"}],
         model_name="test-model",
         input_article_count=1,
     )

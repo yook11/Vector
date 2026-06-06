@@ -4,7 +4,7 @@
 - カテゴリは存在する slug のみ受け付け、未生成は ``state="empty"`` で 200 を返す
   (snapshot router と同パターン、failure_visibility)
 - 不明な category slug は 404 (resource として存在しないため)
-- ``stories[].articleIds`` から参照される記事詳細を ``articles`` lookup table と
+- ``keyArticles[].articleId`` から参照される記事詳細を ``articles`` lookup table と
   して 1 リクエストでまとめて返す (frontend で N+1 fetch しないで済む)
 
 サイズ上限 (red-team F10 構造防御):
@@ -22,18 +22,19 @@ from typing import Annotated, Final, Literal
 from pydantic import Field
 
 from app.insights.briefing.domain.briefing import (
-    MAX_ARTICLE_IDS_PER_STORY,
     MAX_BRIEFING_HEADLINE_LEN,
     MAX_BRIEFING_OVERVIEW_LEN,
-    MAX_STORIES_PER_BRIEFING,
-    MAX_STORY_TAKEAWAY_LEN,
+    MAX_KEY_ARTICLE_SIGNIFICANCE_LEN,
+    MAX_KEY_ARTICLES_PER_BRIEFING,
+    MAX_WATCH_POINT_STATEMENT_LEN,
+    MAX_WATCH_POINTS_PER_BRIEFING,
 )
 from app.models.value_objects.category import CategoryName, CategorySlug
 from app.schemas.base import _CamelBase
 
-# response 固有の上限 (domain VO に対応物がない一覧系・参照記事系)。
-# stories 20 × article_ids 50 = 1000 件が理論上限だが ID 重複除去で実際は 200 程度。
-_MAX_REFERENCED_ARTICLES: Final[int] = 200
+# response 固有の上限 (domain VO に対応物がない参照記事系)。key_articles は
+# 記事 id を 1 件ずつ持つため、参照記事数の上限は key_articles 件数上限と一致する。
+_MAX_REFERENCED_ARTICLES: Final[int] = MAX_KEY_ARTICLES_PER_BRIEFING
 # 記事サマリ 1 件分の表示用文字列上限。NewsSource.name / 翻訳タイトル / URL が対象。
 _MAX_ARTICLE_TITLE_LEN: Final[int] = 500
 _MAX_SOURCE_NAME_LEN: Final[int] = 200
@@ -42,13 +43,17 @@ _MAX_URL_LEN: Final[int] = 2_000
 _MAX_BRIEFING_LIST_ITEMS: Final[int] = 20
 
 
-class _StoryOut(_CamelBase):
-    takeaway: str = Field(max_length=MAX_STORY_TAKEAWAY_LEN)
-    article_ids: list[int] = Field(max_length=MAX_ARTICLE_IDS_PER_STORY)
+class _KeyArticleOut(_CamelBase):
+    article_id: int
+    significance: str = Field(max_length=MAX_KEY_ARTICLE_SIGNIFICANCE_LEN)
+
+
+class _WatchPointOut(_CamelBase):
+    statement: str = Field(max_length=MAX_WATCH_POINT_STATEMENT_LEN)
 
 
 class _ArticleSummaryOut(_CamelBase):
-    """``stories[].articleIds`` から参照される記事のサマリ。"""
+    """``keyArticles[].articleId`` から参照される記事のサマリ。"""
 
     id: int
     title_ja: str = Field(max_length=_MAX_ARTICLE_TITLE_LEN)
@@ -73,7 +78,8 @@ class ReadyBriefing(_CamelBase):
     category: _CategoryOut
     headline: str = Field(max_length=MAX_BRIEFING_HEADLINE_LEN)
     overview: str = Field(max_length=MAX_BRIEFING_OVERVIEW_LEN)
-    stories: list[_StoryOut] = Field(max_length=MAX_STORIES_PER_BRIEFING)
+    key_articles: list[_KeyArticleOut] = Field(max_length=MAX_KEY_ARTICLES_PER_BRIEFING)
+    watch_points: list[_WatchPointOut] = Field(max_length=MAX_WATCH_POINTS_PER_BRIEFING)
     articles: list[_ArticleSummaryOut] = Field(max_length=_MAX_REFERENCED_ARTICLES)
 
 
@@ -94,7 +100,7 @@ class _BriefingListLatest(_CamelBase):
     """一覧行に同梱する「最新 briefing 参照」。
 
     未生成カテゴリでは ``BriefingListItem.latest = None`` で表現する。
-    詳細 (``ReadyBriefing``) と異なり overview / stories 等は持たず、
+    詳細 (``ReadyBriefing``) と異なり overview / keyArticles 等は持たず、
     一覧で表示する短い見出しのみ。
     """
 

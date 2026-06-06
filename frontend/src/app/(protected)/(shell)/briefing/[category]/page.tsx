@@ -9,7 +9,8 @@ import { Skeleton } from "@/components/ui/skeleton";
 import {
   BriefingDisclaimer,
   getBriefingDetailViewModel,
-  StoryBlock,
+  KeyArticleBlock,
+  WatchPoints,
 } from "@/features/briefing";
 import { ApiError } from "@/lib/api/error";
 import { getCurrentSession, requireSession } from "@/lib/auth/guards";
@@ -90,16 +91,25 @@ async function BriefingDetailContent({ slug }: { slug: string }) {
         {vm.overview}
       </article>
 
-      {vm.stories.length > 0 && (
+      {vm.watchPoints.length > 0 && (
+        <section className="flex flex-col gap-4 border-t border-border/60 pt-6">
+          <h2 className="text-xs font-medium uppercase tracking-wider text-muted-foreground">
+            今後の注目点
+          </h2>
+          <WatchPoints watchPoints={vm.watchPoints} />
+        </section>
+      )}
+
+      {vm.keyArticles.length > 0 && (
         <section className="flex flex-col gap-6 border-t border-border/60 pt-6">
           <h2 className="text-xs font-medium uppercase tracking-wider text-muted-foreground">
-            参考にした記事
+            特に重要な記事
           </h2>
           <div className="flex flex-col gap-8">
-            {vm.stories.map((story) => (
-              <StoryBlock
-                key={story.articleIds.join(",")}
-                story={story}
+            {vm.keyArticles.map((keyArticle) => (
+              <KeyArticleBlock
+                key={keyArticle.articleId}
+                keyArticle={keyArticle}
                 articlesById={articlesById}
               />
             ))}

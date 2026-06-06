@@ -8,7 +8,7 @@
  * - StripNull narrowing: backend が optional + nullable で表現するキーを frontend
  *   側で `null` を剥がして optional のみに揃える
  * - Pick narrowing: 大型 schema から component で必要な field のみ抽出
- * - alias rename: Pydantic 内部 schema 名 (`StoryOut` 等) を frontend public 名へ
+ * - alias rename: Pydantic 内部 schema 名 (`KeyArticleOut` 等) を frontend public 名へ
  * - discriminated union 再構築: `Annotated[Union, Field(discriminator)]` alias は
  *   openapi.json で oneOf に展開されるが Python alias 名は component schema 化
  *   されないため frontend 側で組み直す (`BriefingResponse` / `WeeklyTrendsResponse`)
@@ -27,9 +27,10 @@ import type {
   CategoryOut,
   CategoryTrendsOut,
   EntityTrendOut,
+  KeyArticleOut,
   ListArticlesData,
   NewEntityOut,
-  StoryOut,
+  WatchPointOut,
 } from "@/types/types.gen";
 
 // ---------------------------------------------------------------------------
@@ -51,7 +52,8 @@ export type CategoryBrief = Pick<CategoryDetail, "slug" | "name">;
 // Alias rename — Pydantic 内部 schema 名 → frontend public 名
 // ---------------------------------------------------------------------------
 
-export type BriefingStory = StoryOut;
+export type BriefingKeyArticle = KeyArticleOut;
+export type BriefingWatchPoint = WatchPointOut;
 export type BriefingArticleSummary = ArticleSummaryOut;
 export type BriefingCategory = CategoryOut;
 export type { BriefingListLatest };

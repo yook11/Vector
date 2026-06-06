@@ -39,9 +39,13 @@ const BriefingArticleSummarySchema = z.object({
   url: z.string(),
 });
 
-const BriefingStorySchema = z.object({
-  takeaway: z.string(),
-  articleIds: z.array(z.number()),
+const KeyArticleSchema = z.object({
+  articleId: z.number(),
+  significance: z.string(),
+});
+
+const WatchPointSchema = z.object({
+  statement: z.string(),
 });
 
 const ReadyBriefingSchema = z.object({
@@ -53,7 +57,8 @@ const ReadyBriefingSchema = z.object({
   category: CategorySchema,
   headline: z.string(),
   overview: z.string(),
-  stories: z.array(BriefingStorySchema),
+  keyArticles: z.array(KeyArticleSchema),
+  watchPoints: z.array(WatchPointSchema),
   articles: z.array(BriefingArticleSummarySchema),
 });
 

@@ -12,8 +12,10 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.insights.briefing.domain.briefing import (
-    MAX_STORIES_PER_BRIEFING,
-    MAX_STORY_TAKEAWAY_LEN,
+    MAX_KEY_ARTICLE_SIGNIFICANCE_LEN,
+    MAX_KEY_ARTICLES_PER_BRIEFING,
+    MAX_WATCH_POINT_STATEMENT_LEN,
+    MAX_WATCH_POINTS_PER_BRIEFING,
 )
 from app.models.article_curation import ArticleCuration
 from app.models.category import Category
@@ -91,12 +93,8 @@ class TestGetBriefing:
             category_id=ai_category.id,
             headline="今週のヘッドライン",
             overview="今週の流れの本文",
-            stories=[
-                {
-                    "takeaway": "記事から読み取った内容",
-                    "article_ids": [article_id],
-                }
-            ],
+            key_articles=[{"article_id": article_id, "significance": "なぜ重要か"}],
+            watch_points=[{"statement": "今後どこを見るべきか"}],
             model_name="deepseek-v4-pro",
             input_article_count=1,
         )
@@ -112,11 +110,11 @@ class TestGetBriefing:
         assert body["overview"] == "今週の流れの本文"
         assert body["modelName"] == "deepseek-v4-pro"
         assert body["inputArticleCount"] == 1
-        assert len(body["stories"]) == 1
-        assert body["stories"][0]["takeaway"] == "記事から読み取った内容"
-        assert body["stories"][0]["articleIds"] == [article_id]
-        assert "title" not in body["stories"][0]
-        assert "analysis" not in body["stories"][0]
+        assert len(body["keyArticles"]) == 1
+        assert body["keyArticles"][0]["articleId"] == article_id
+        assert body["keyArticles"][0]["significance"] == "なぜ重要か"
+        assert len(body["watchPoints"]) == 1
+        assert body["watchPoints"][0]["statement"] == "今後どこを見るべきか"
         assert len(body["articles"]) == 1
         assert body["articles"][0]["id"] == article_id
         assert body["articles"][0]["titleJa"] == "記事タイトル"
@@ -159,9 +157,8 @@ class TestListBriefings:
             category_id=ai_category.id,
             headline="今週のヘッドライン",
             overview="今週の流れの本文",
-            stories=[
-                {"takeaway": "T", "article_ids": [1]},
-            ],
+            key_articles=[{"article_id": 1, "significance": "なぜ重要か"}],
+            watch_points=[{"statement": "今後どこを見るべきか"}],
             model_name="deepseek-v4-pro",
             input_article_count=1,
         )
@@ -200,62 +197,122 @@ class TestBriefingResponseSizeGuard:
     """red-team F10: anon GET 経路で巨大 briefing JSONB が response として
     流れる経路を構造的に塞ぐ。
 
-    AUTH-N4 / AUTH-C1 経由で attacker が DB に巨大 stories / takeaway を
+    AUTH-N4 / AUTH-C1 経由で attacker が DB に巨大 key_articles / watch_points を
     直書きしたシナリオ。Field(max_length=...) が router の
-    `_StoryOut.model_validate` または `ReadyBriefing(...)` 構築時に発火し、
-    response に巨大 JSONB が含まれることを構造的に防ぐ。
+    `_KeyArticleOut`/`_WatchPointOut` の model_validate または `ReadyBriefing(...)`
+    構築時に発火し、response に巨大 JSONB が含まれることを構造的に防ぐ。
     """
 
+    def _persist(
+        self,
+        db_session: AsyncSession,
+        ai_category: Category,
+        *,
+        key_articles: list[dict],
+        watch_points: list[dict],
+    ) -> WeeklyBriefing:
+        return WeeklyBriefing(
+            week_start_date=date(2026, 4, 20),
+            category_id=ai_category.id,
+            headline="h",
+            overview="o",
+            key_articles=key_articles,
+            watch_points=watch_points,
+            model_name="deepseek-v4-pro",
+            input_article_count=1,
+        )
+
     @pytest.mark.asyncio
-    async def test_anon_get_rejects_oversized_stories(
+    async def test_oversize_key_articles_rejected_by_response_model(
         self,
         client: AsyncClient,
         db_session: AsyncSession,
         ai_category: Category,
     ) -> None:
-        """stories 数が上限超なら anon GET で ValidationError 伝播 (本番では 500)。"""
-        oversized_stories = [
-            {"takeaway": f"t{i}", "article_ids": [1]}
-            for i in range(MAX_STORIES_PER_BRIEFING + 1)
+        """key_articles 数が上限超なら anon GET で ValidationError 伝播 (本番 500)。"""
+        oversized = [
+            {"article_id": i, "significance": f"s{i}"}
+            for i in range(MAX_KEY_ARTICLES_PER_BRIEFING + 1)
         ]
-        briefing = WeeklyBriefing(
-            week_start_date=date(2026, 4, 20),
-            category_id=ai_category.id,
-            headline="h",
-            overview="o",
-            stories=oversized_stories,
-            model_name="deepseek-v4-pro",
-            input_article_count=1,
+        db_session.add(
+            self._persist(
+                db_session,
+                ai_category,
+                key_articles=oversized,
+                watch_points=[{"statement": "w"}],
+            )
         )
-        db_session.add(briefing)
         await db_session.commit()
 
         with pytest.raises(ValidationError):
             await client.get("/api/v1/briefing/ai")
 
     @pytest.mark.asyncio
-    async def test_anon_get_rejects_oversized_takeaway(
+    async def test_oversize_significance_rejected_by_response_model(
         self,
         client: AsyncClient,
         db_session: AsyncSession,
         ai_category: Category,
     ) -> None:
-        """1 story の takeaway が上限超なら anon GET で ValidationError 伝播。"""
-        briefing = WeeklyBriefing(
-            week_start_date=date(2026, 4, 20),
-            category_id=ai_category.id,
-            headline="h",
-            overview="o",
-            stories=[
-                {
-                    "takeaway": "x" * (MAX_STORY_TAKEAWAY_LEN + 1),
-                    "article_ids": [1],
-                }
-            ],
-            model_name="deepseek-v4-pro",
-            input_article_count=1,
+        """1 件の significance が上限超なら anon GET で ValidationError 伝播。"""
+        db_session.add(
+            self._persist(
+                db_session,
+                ai_category,
+                key_articles=[
+                    {
+                        "article_id": 1,
+                        "significance": "x" * (MAX_KEY_ARTICLE_SIGNIFICANCE_LEN + 1),
+                    }
+                ],
+                watch_points=[{"statement": "w"}],
+            )
         )
-        db_session.add(briefing)
+        await db_session.commit()
+
+        with pytest.raises(ValidationError):
+            await client.get("/api/v1/briefing/ai")
+
+    @pytest.mark.asyncio
+    async def test_oversize_watch_points_rejected_by_response_model(
+        self,
+        client: AsyncClient,
+        db_session: AsyncSession,
+        ai_category: Category,
+    ) -> None:
+        """watch_points 数が上限超なら anon GET で ValidationError 伝播。"""
+        oversized = [
+            {"statement": f"w{i}"} for i in range(MAX_WATCH_POINTS_PER_BRIEFING + 1)
+        ]
+        db_session.add(
+            self._persist(
+                db_session,
+                ai_category,
+                key_articles=[{"article_id": 1, "significance": "s"}],
+                watch_points=oversized,
+            )
+        )
+        await db_session.commit()
+
+        with pytest.raises(ValidationError):
+            await client.get("/api/v1/briefing/ai")
+
+    @pytest.mark.asyncio
+    async def test_oversize_statement_rejected_by_response_model(
+        self,
+        client: AsyncClient,
+        db_session: AsyncSession,
+        ai_category: Category,
+    ) -> None:
+        """1 件の statement が上限超なら anon GET で ValidationError 伝播。"""
+        db_session.add(
+            self._persist(
+                db_session,
+                ai_category,
+                key_articles=[{"article_id": 1, "significance": "s"}],
+                watch_points=[{"statement": "x" * (MAX_WATCH_POINT_STATEMENT_LEN + 1)}],
+            )
+        )
         await db_session.commit()
 
         with pytest.raises(ValidationError):

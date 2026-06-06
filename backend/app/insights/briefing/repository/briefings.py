@@ -106,7 +106,8 @@ class BriefingRepository:
             "category_id": briefing.category_id,
             "headline": briefing.headline,
             "overview": briefing.overview,
-            "stories": briefing.stories,
+            "key_articles": briefing.key_articles,
+            "watch_points": briefing.watch_points,
             "model_name": briefing.model_name,
             "input_article_count": briefing.input_article_count,
         }
@@ -119,7 +120,8 @@ class BriefingRepository:
                     set_={
                         "headline": briefing.headline,
                         "overview": briefing.overview,
-                        "stories": briefing.stories,
+                        "key_articles": briefing.key_articles,
+                        "watch_points": briefing.watch_points,
                         "model_name": briefing.model_name,
                         "input_article_count": briefing.input_article_count,
                         "generated_at": func.now(),

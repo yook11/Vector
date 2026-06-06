@@ -117,7 +117,8 @@ class WeeklyBriefingService:
                 category_id=ready.category_id,
                 headline=content.headline,
                 overview=content.overview,
-                stories=[s.model_dump() for s in content.stories],
+                key_articles=[a.model_dump() for a in content.key_articles],
+                watch_points=[w.model_dump() for w in content.watch_points],
                 model_name=self._llm.MODEL,
                 input_article_count=len(articles),
             )

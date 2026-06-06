@@ -16,12 +16,16 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import httpx
 import openai
 import pytest
+from openai.types.chat.chat_completion_message_function_tool_call import (
+    ChatCompletionMessageFunctionToolCall,
+    Function,
+)
 from pydantic import SecretStr
 
 from app.insights.briefing.domain.article import ArticleInput
 from app.insights.briefing.domain.briefing import (
-    MAX_STORIES_PER_BRIEFING,
-    MAX_STORY_TAKEAWAY_LEN,
+    MAX_KEY_ARTICLE_SIGNIFICANCE_LEN,
+    MAX_KEY_ARTICLES_PER_BRIEFING,
 )
 from app.insights.briefing.llm.errors import (
     BriefingLlmError,
@@ -30,10 +34,18 @@ from app.insights.briefing.llm.errors import (
 
 
 def _fake_completion_with_tool_call(arguments: dict) -> MagicMock:
-    """tool_calls[0].function.arguments を返す chat.completions レスポンス mock。"""
-    tool_call = MagicMock()
-    tool_call.function.name = "submit_weekly_briefing"
-    tool_call.function.arguments = json.dumps(arguments)
+    """tool_call.function.arguments を返す chat.completions レスポンス mock。
+
+    generate() は SDK union を ``ChatCompletionMessageFunctionToolCall`` へ
+    isinstance narrow するため、実体の function tool call を渡す。
+    """
+    tool_call = ChatCompletionMessageFunctionToolCall(
+        id="call_briefing",
+        type="function",
+        function=Function(
+            name="submit_weekly_briefing", arguments=json.dumps(arguments)
+        ),
+    )
     choice = MagicMock()
     choice.message.tool_calls = [tool_call]
     choice.finish_reason = "tool_calls"
@@ -50,9 +62,8 @@ async def test_disables_thinking_for_pro_model() -> None:
             {
                 "headline": "h",
                 "overview": "o",
-                "stories": [
-                    {"takeaway": "t", "article_ids": [1]},
-                ],
+                "key_articles": [{"article_id": 1, "significance": "なぜ重要か"}],
+                "watch_points": [{"statement": "今後どこを見るべきか"}],
             }
         )
     )
@@ -83,20 +94,29 @@ async def test_disables_thinking_for_pro_model() -> None:
     assert kwargs["tools"][0]["function"]["strict"] is True
     # 回帰防止: thinking モード明示無効化が抜けると Pro で 400 になる
     assert kwargs["extra_body"] == {"thinking": {"type": "disabled"}}
-    # overview が parse されている (新 schema)
+    # 新 schema が parse されている
     assert result.overview == "o"
-    assert result.stories[0].takeaway == "t"
+    assert result.key_articles[0].article_id == 1
+    assert result.key_articles[0].significance == "なぜ重要か"
+    assert result.watch_points[0].statement == "今後どこを見るべきか"
 
 
-def test_tool_schema_required_fields_are_overview_centric() -> None:
-    """tool schema 側でも overview/takeaway が要求されていることを保証する。"""
+def test_tool_schema_required_fields_match_new_output() -> None:
+    """tool schema 側でも新 4 field 構造が要求されていることを保証する。"""
     from app.insights.briefing.llm.deepseek import BRIEFING_TOOL_SCHEMA
 
-    assert BRIEFING_TOOL_SCHEMA["required"] == ["headline", "overview", "stories"]
-    story_schema = BRIEFING_TOOL_SCHEMA["properties"]["stories"]["items"]
-    assert story_schema["required"] == ["takeaway", "article_ids"]
-    assert "title" not in story_schema["properties"]
-    assert "analysis" not in story_schema["properties"]
+    assert BRIEFING_TOOL_SCHEMA["required"] == [
+        "headline",
+        "overview",
+        "key_articles",
+        "watch_points",
+    ]
+    key_article = BRIEFING_TOOL_SCHEMA["properties"]["key_articles"]["items"]
+    assert key_article["required"] == ["article_id", "significance"]
+    watch_point = BRIEFING_TOOL_SCHEMA["properties"]["watch_points"]["items"]
+    assert watch_point["required"] == ["statement"]
+    # 旧 stories 構造の名残が残っていないこと
+    assert "stories" not in BRIEFING_TOOL_SCHEMA["properties"]
 
 
 async def _generate_with_mocked_response(arguments: dict) -> None:
@@ -123,37 +143,39 @@ async def _generate_with_mocked_response(arguments: dict) -> None:
 
 
 @pytest.mark.asyncio
-async def test_generator_rejects_oversized_stories_from_llm() -> None:
-    """LLM が上限超の stories を返したら briefing marker に wrap する。
+async def test_generator_rejects_abnormal_key_article_count_from_llm() -> None:
+    """LLM が F10 異常検知ライン超の key_articles を返したら marker に wrap する。
 
     AUTH-N4/AUTH-C1 を持たない LLM 暴走 / prompt injection シナリオでも、
-    domain VO の Field(max_length=MAX_STORIES_PER_BRIEFING) で巨大 briefing
+    domain VO の Field(max_length=MAX_KEY_ARTICLES_PER_BRIEFING) で巨大 briefing
     が DB に入る前に reject される (red-team F10 二次防衛)。
     """
     oversized = {
         "headline": "h",
         "overview": "o",
-        "stories": [
-            {"takeaway": f"t{i}", "article_ids": [1]}
-            for i in range(MAX_STORIES_PER_BRIEFING + 1)
+        "key_articles": [
+            {"article_id": i, "significance": f"s{i}"}
+            for i in range(MAX_KEY_ARTICLES_PER_BRIEFING + 1)
         ],
+        "watch_points": [{"statement": "w"}],
     }
     with pytest.raises(BriefingResponseInvalidError):
         await _generate_with_mocked_response(oversized)
 
 
 @pytest.mark.asyncio
-async def test_generator_rejects_oversized_takeaway_from_llm() -> None:
-    """LLM が上限超の takeaway を返したら briefing marker に wrap する。"""
+async def test_generator_rejects_oversize_significance_from_llm() -> None:
+    """LLM が上限超の significance を返したら briefing marker に wrap する。"""
     oversized = {
         "headline": "h",
         "overview": "o",
-        "stories": [
+        "key_articles": [
             {
-                "takeaway": "x" * (MAX_STORY_TAKEAWAY_LEN + 1),
-                "article_ids": [1],
+                "article_id": 1,
+                "significance": "x" * (MAX_KEY_ARTICLE_SIGNIFICANCE_LEN + 1),
             }
         ],
+        "watch_points": [{"statement": "w"}],
     }
     with pytest.raises(BriefingResponseInvalidError):
         await _generate_with_mocked_response(oversized)
