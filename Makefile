@@ -10,7 +10,7 @@
 .DEFAULT_GOAL := help
 .PHONY: help \
         pipeline-up pipeline-down pipeline-restart pipeline-status pipeline-logs \
-        migrate-safe verify-env verify-config \
+        migrate-safe migrate-prod verify-env verify-config \
         test-integration test-integration-up test-integration-down \
         test-integration-guard test-integration-print-project
 
@@ -92,6 +92,17 @@ migrate-safe:  ## ORM/migration 変更を安全に反映
 	docker compose up -d --force-recreate $(WORKERS)
 	@sleep 10
 	@$(MAKE) --no-print-directory pipeline-status
+
+# 本番 Neon 用。docker を介さず host/CI から流し、owner URL (MIGRATION_DATABASE_URL)
+# は runtime secret に置かない方針のため実行時に渡す (dev は migrate-safe)。
+# 他の必須 Settings は .env から、DATABASE_URL は同 URL で満たす (接続は使わない)。
+migrate-prod:  ## 本番 Neon に migration 適用（MIGRATION_DATABASE_URL を実行時に渡す）
+	@test -n "$(MIGRATION_DATABASE_URL)" \
+	  || { echo "MIGRATION_DATABASE_URL is required (Neon owner role, append ?sslmode=require)"; exit 1; }
+	cd backend && \
+	  export DATABASE_URL="$(MIGRATION_DATABASE_URL)" MIGRATION_DATABASE_URL="$(MIGRATION_DATABASE_URL)" && \
+	  uv run alembic upgrade head && \
+	  uv run alembic current
 
 # -------------------------------------------
 # 設定検証
