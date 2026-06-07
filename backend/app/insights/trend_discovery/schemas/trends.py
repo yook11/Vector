@@ -24,7 +24,7 @@ from pydantic import Field
 from app.analysis.assessment.domain.result import MentionType
 from app.insights.trend_discovery.domain.mention_name import MentionName
 from app.insights.trend_discovery.domain.trend import (
-    CategoryRankings,
+    CategoryTrends,
     RankedMention,
     RelatedMention,
     TrendsBundle,
@@ -33,28 +33,28 @@ from app.models.value_objects.category import CategoryName, CategorySlug
 from app.schemas.base import _CamelBase
 
 
-class _RelatedMentionOut(_CamelBase):
+class _RelatedMention(_CamelBase):
     name: MentionName
     type: MentionType
     shared_article_count: int
 
 
-class _RankedMentionOut(_CamelBase):
+class _RankedMention(_CamelBase):
     name: MentionName
     type: MentionType
     appearance_count: int
     previous_appearance_count: int
     growth_rate: float
     key_points: list[str]
-    related_mentions: list[_RelatedMentionOut]
+    related_mentions: list[_RelatedMention]
 
 
-class _CategoryRankingsOut(_CamelBase):
+class _CategoryTrends(_CamelBase):
     category_id: int
     category_slug: CategorySlug
     category_name: CategoryName
-    most_mentioned: list[_RankedMentionOut]
-    fastest_growing: list[_RankedMentionOut]
+    most_mentioned: list[_RankedMention]
+    fastest_growing: list[_RankedMention]
 
 
 class Trends(_CamelBase):
@@ -65,7 +65,7 @@ class Trends(_CamelBase):
     window_end: date
     generated_at: datetime
     source_analysis_count: int
-    categories: list[_CategoryRankingsOut]
+    category_trends: list[_CategoryTrends]
 
 
 class EmptyTrends(_CamelBase):
@@ -95,22 +95,22 @@ def trends_from_snapshot(
         window_end=bundle.window_end,
         generated_at=generated_at,
         source_analysis_count=source_analysis_count,
-        categories=[_to_category(s) for s in bundle.sections],
+        category_trends=[_to_category_trends(c) for c in bundle.category_trends],
     )
 
 
-def _to_category(section: CategoryRankings) -> _CategoryRankingsOut:
-    return _CategoryRankingsOut(
-        category_id=section.category_id,
-        category_slug=section.category_slug,
-        category_name=section.category_name,
-        most_mentioned=[_to_mention(m) for m in section.most_mentioned],
-        fastest_growing=[_to_mention(m) for m in section.fastest_growing],
+def _to_category_trends(category_trends: CategoryTrends) -> _CategoryTrends:
+    return _CategoryTrends(
+        category_id=category_trends.category_id,
+        category_slug=category_trends.category_slug,
+        category_name=category_trends.category_name,
+        most_mentioned=[_to_mention(m) for m in category_trends.most_mentioned],
+        fastest_growing=[_to_mention(m) for m in category_trends.fastest_growing],
     )
 
 
-def _to_mention(m: RankedMention) -> _RankedMentionOut:
-    return _RankedMentionOut(
+def _to_mention(m: RankedMention) -> _RankedMention:
+    return _RankedMention(
         name=m.name,
         type=m.type,
         appearance_count=m.appearance_count,
@@ -121,8 +121,8 @@ def _to_mention(m: RankedMention) -> _RankedMentionOut:
     )
 
 
-def _to_related(r: RelatedMention) -> _RelatedMentionOut:
-    return _RelatedMentionOut(
+def _to_related(r: RelatedMention) -> _RelatedMention:
+    return _RelatedMention(
         name=r.name,
         type=r.type,
         shared_article_count=r.shared_article_count,

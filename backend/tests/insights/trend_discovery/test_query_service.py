@@ -18,7 +18,7 @@ from app.models.trends_snapshot import TrendsSnapshot
 
 
 def _snapshot(window_end: date, *, source_analysis_count: int = 10) -> TrendsSnapshot:
-    bundle = TrendsBundle(window_end=window_end, sections=())
+    bundle = TrendsBundle(window_end=window_end, category_trends=())
     return TrendsSnapshot(
         window_end=window_end,
         bundle=bundle.model_dump(mode="json"),

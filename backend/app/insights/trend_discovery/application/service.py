@@ -34,7 +34,7 @@ from app.insights.trend_discovery.domain.trend import (
     MIN_PREVIOUS,
     NEW_BURST_THRESHOLD,
     TOP_N_PER_RANKING,
-    CategoryRankings,
+    CategoryTrends,
     RankedMention,
     TrendsBundle,
 )
@@ -157,10 +157,10 @@ class TrendDiscoveryService:
             categories = await self._fetch_categories(session)
             previous_start = current_start - _WEEK
 
-            sections_list: list[CategoryRankings] = []
+            category_trends_list: list[CategoryTrends] = []
             for cat in categories:
-                sections_list.append(
-                    await self._build_section(
+                category_trends_list.append(
+                    await self._build_category_trends(
                         trends_repo,
                         category=cat,
                         current_start=current_start,
@@ -168,9 +168,11 @@ class TrendDiscoveryService:
                         previous_start=previous_start,
                     )
                 )
-            sections = tuple(sections_list)
-            completed_category_count = len(sections)
-            bundle = TrendsBundle(window_end=ready.window_end, sections=sections)
+            category_trends = tuple(category_trends_list)
+            completed_category_count = len(category_trends)
+            bundle = TrendsBundle(
+                window_end=ready.window_end, category_trends=category_trends
+            )
 
             snapshot = TrendsSnapshot(
                 window_end=ready.window_end,
@@ -209,14 +211,14 @@ class TrendDiscoveryService:
             )
 
     @staticmethod
-    async def _build_section(
+    async def _build_category_trends(
         trends_repo: TrendsRepository,
         *,
         category: Category,
         current_start: datetime,
         current_end: datetime,
         previous_start: datetime,
-    ) -> CategoryRankings:
+    ) -> CategoryTrends:
         """1 カテゴリ分の 2 ランキングを確定し、上位 mention に文脈を添えて束ねる。
 
         repository は floor 通過の全 mention を母集団として返す。出現回数は floor の
@@ -281,7 +283,7 @@ class TrendDiscoveryService:
         def _with_context(mention: RankedMention) -> RankedMention:
             return enriched[(mention.name.match_key, mention.type.value)]
 
-        return CategoryRankings(
+        return CategoryTrends(
             category_id=category.id,
             category_slug=category.slug,
             category_name=category.name,

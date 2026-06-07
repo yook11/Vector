@@ -1,9 +1,9 @@
-"""Trend Discovery 集約 (RankedMention / RelatedMention / CategoryRankings /
+"""Trend Discovery 集約 (RankedMention / RelatedMention / CategoryTrends /
 TrendsBundle) の不変条件と派生フィールドのテスト。
 
 責務:
 - VO 単体: 件数下限・文脈件数上限を構造的に強制する
-- 集約ルート (CategoryRankings / TrendsBundle): immutable な tuple で
+- 集約ルート (CategoryTrends / TrendsBundle): immutable な tuple で
   子リストを保持し、各ランキングを top N に構造的に制限し、永続化形 (model_dump)
   と一致する
 - hotness_score: ``(current - previous) / max(previous, SMOOTHING)`` で
@@ -26,7 +26,7 @@ from app.insights.trend_discovery.domain.trend import (
     MIN_SHARED_ARTICLES,
     SMOOTHING,
     TOP_N_PER_RANKING,
-    CategoryRankings,
+    CategoryTrends,
     RankedMention,
     RelatedMention,
     TrendsBundle,
@@ -197,14 +197,14 @@ class TestRelatedMention:
             related.shared_article_count = 99  # type: ignore[misc]
 
 
-class TestCategoryRankings:
+class TestCategoryTrends:
     def _make(
         self,
         *,
         most_mentioned: tuple[RankedMention, ...] = (),
         fastest_growing: tuple[RankedMention, ...] = (),
-    ) -> CategoryRankings:
-        return CategoryRankings(
+    ) -> CategoryTrends:
+        return CategoryTrends(
             category_id=1,
             category_slug=CategorySlug("ai_ml"),
             category_name=CategoryName("AI・ML"),
@@ -213,19 +213,21 @@ class TestCategoryRankings:
         )
 
     def test_constructs_with_empty_rankings(self) -> None:
-        section = self._make()
-        assert section.category_id == 1
-        assert section.category_slug.root == "ai_ml"
-        assert section.category_name.root == "AI・ML"
-        assert section.most_mentioned == ()
-        assert section.fastest_growing == ()
+        category_trends = self._make()
+        assert category_trends.category_id == 1
+        assert category_trends.category_slug.root == "ai_ml"
+        assert category_trends.category_name.root == "AI・ML"
+        assert category_trends.most_mentioned == ()
+        assert category_trends.fastest_growing == ()
 
     def test_constructs_with_populated_rankings(self) -> None:
         appearance = _mention("Appears")
         growth = _mention("Grows")
-        section = self._make(most_mentioned=(appearance,), fastest_growing=(growth,))
-        assert section.most_mentioned == (appearance,)
-        assert section.fastest_growing == (growth,)
+        category_trends = self._make(
+            most_mentioned=(appearance,), fastest_growing=(growth,)
+        )
+        assert category_trends.most_mentioned == (appearance,)
+        assert category_trends.fastest_growing == (growth,)
 
     def test_rejects_most_mentioned_over_top_n(self) -> None:
         """most_mentioned は TOP_N_PER_RANKING 件まで。"""
@@ -240,20 +242,20 @@ class TestCategoryRankings:
             self._make(fastest_growing=too_many)
 
     def test_immutable_aggregate(self) -> None:
-        section = self._make()
+        category_trends = self._make()
         with pytest.raises(ValidationError):
-            section.category_id = 99  # type: ignore[misc]
+            category_trends.category_id = 99  # type: ignore[misc]
 
     def test_rankings_are_tuples(self) -> None:
         """ランキングは tuple で永続化される (immutability を構造で保証)。"""
-        section = self._make()
-        assert isinstance(section.most_mentioned, tuple)
-        assert isinstance(section.fastest_growing, tuple)
+        category_trends = self._make()
+        assert isinstance(category_trends.most_mentioned, tuple)
+        assert isinstance(category_trends.fastest_growing, tuple)
 
 
 class TestTrendsBundle:
-    def _section(self, category_id: int = 1) -> CategoryRankings:
-        return CategoryRankings(
+    def _category_trends(self, category_id: int = 1) -> CategoryTrends:
+        return CategoryTrends(
             category_id=category_id,
             category_slug=CategorySlug("ai_ml"),
             category_name=CategoryName("AI・ML"),
@@ -261,18 +263,20 @@ class TestTrendsBundle:
             fastest_growing=(),
         )
 
-    def test_constructs_with_empty_sections(self) -> None:
-        bundle = TrendsBundle(window_end=date(2026, 5, 3), sections=())
+    def test_constructs_with_empty_category_trends(self) -> None:
+        bundle = TrendsBundle(window_end=date(2026, 5, 3), category_trends=())
         assert bundle.window_end == date(2026, 5, 3)
-        assert bundle.sections == ()
+        assert bundle.category_trends == ()
 
-    def test_constructs_with_multiple_sections(self) -> None:
-        sections = (self._section(1), self._section(2))
-        bundle = TrendsBundle(window_end=date(2026, 5, 3), sections=sections)
-        assert len(bundle.sections) == 2
+    def test_constructs_with_multiple_category_trends(self) -> None:
+        category_trends = (self._category_trends(1), self._category_trends(2))
+        bundle = TrendsBundle(
+            window_end=date(2026, 5, 3), category_trends=category_trends
+        )
+        assert len(bundle.category_trends) == 2
 
     def test_immutable_bundle(self) -> None:
-        bundle = TrendsBundle(window_end=date(2026, 5, 3), sections=())
+        bundle = TrendsBundle(window_end=date(2026, 5, 3), category_trends=())
         with pytest.raises(ValidationError):
             bundle.window_end = date(2026, 4, 27)  # type: ignore[misc]
 
@@ -290,14 +294,16 @@ class TestTrendsBundle:
                 ),
             }
         )
-        section = CategoryRankings(
+        category_trends = CategoryTrends(
             category_id=1,
             category_slug=CategorySlug("ai_ml"),
             category_name=CategoryName("AI・ML"),
             most_mentioned=(enriched,),
             fastest_growing=(enriched,),
         )
-        original = TrendsBundle(window_end=date(2026, 5, 3), sections=(section,))
+        original = TrendsBundle(
+            window_end=date(2026, 5, 3), category_trends=(category_trends,)
+        )
         dumped = original.model_dump(mode="json")
         restored = TrendsBundle.model_validate(dumped)
         assert restored == original

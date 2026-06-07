@@ -191,9 +191,9 @@ class TestExecute:
         repo = SnapshotRepository(db_session)
         snapshot = await repo.find_by_window_end(WINDOW_END)
         assert snapshot is not None
-        sections = snapshot.bundle["sections"]
-        assert len(sections) == len(sample_categories)
-        category_ids = {s["category_id"] for s in sections}
+        category_trends = snapshot.bundle["category_trends"]
+        assert len(category_trends) == len(sample_categories)
+        category_ids = {c["category_id"] for c in category_trends}
         assert category_ids == {c.id for c in sample_categories}
 
     @pytest.mark.asyncio
@@ -234,12 +234,12 @@ class TestExecute:
         repo = SnapshotRepository(db_session)
         snapshot = await repo.find_by_window_end(WINDOW_END)
         assert snapshot is not None
-        section = next(
-            s for s in snapshot.bundle["sections"] if s["category_id"] == cat.id
+        category_trends = next(
+            c for c in snapshot.bundle["category_trends"] if c["category_id"] == cat.id
         )
-        assert len(section["most_mentioned"]) == TOP_N_PER_RANKING
-        assert len(section["fastest_growing"]) == TOP_N_PER_RANKING
-        appearance_names = [m["name"] for m in section["most_mentioned"]]
+        assert len(category_trends["most_mentioned"]) == TOP_N_PER_RANKING
+        assert len(category_trends["fastest_growing"]) == TOP_N_PER_RANKING
+        appearance_names = [m["name"] for m in category_trends["most_mentioned"]]
         assert appearance_names[0] == "entity_00"  # 最多出現が先頭
         assert "entity_05" not in appearance_names  # 6 番目は上位 5 から漏れる
 
@@ -272,7 +272,7 @@ class TestExecute:
         await db_session.commit()
 
         repo = TrendsRepository(db_session)
-        section = await TrendDiscoveryService._build_section(
+        category_trends = await TrendDiscoveryService._build_category_trends(
             repo,
             category=cat,
             current_start=_jst(2026, 4, 13, hour=0),
@@ -280,8 +280,8 @@ class TestExecute:
             previous_start=_jst(2026, 4, 6, hour=0),
         )
 
-        appearance_names = {str(m.name) for m in section.most_mentioned}
-        growth_names = {str(m.name) for m in section.fastest_growing}
+        appearance_names = {str(m.name) for m in category_trends.most_mentioned}
+        growth_names = {str(m.name) for m in category_trends.fastest_growing}
         assert "Edge" in appearance_names
         assert "Edge" not in growth_names
 
@@ -306,7 +306,7 @@ class TestExecute:
         await db_session.commit()
 
         repo = TrendsRepository(db_session)
-        section = await TrendDiscoveryService._build_section(
+        category_trends = await TrendDiscoveryService._build_category_trends(
             repo,
             category=cat,
             current_start=_jst(2026, 4, 13, hour=0),
@@ -314,8 +314,12 @@ class TestExecute:
             previous_start=_jst(2026, 4, 6, hour=0),
         )
 
-        appearance = next(m for m in section.most_mentioned if str(m.name) == "NVIDIA")
-        growth = next(m for m in section.fastest_growing if str(m.name) == "NVIDIA")
+        appearance = next(
+            m for m in category_trends.most_mentioned if str(m.name) == "NVIDIA"
+        )
+        growth = next(
+            m for m in category_trends.fastest_growing if str(m.name) == "NVIDIA"
+        )
         # 同一インスタンス共有 (二重 enrich なし)。
         assert appearance is growth
         # 文脈が付いている (related に OpenAI、key_point は記事 dedup で 1 本)。

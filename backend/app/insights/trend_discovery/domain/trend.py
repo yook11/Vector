@@ -4,7 +4,7 @@
 - ``RankedMention``: floor 通過 mention 1 件分の集計結果 (件数 + 派生 hotness_score)
   に文脈 (key_points / related_mentions) を添えたもの
 - ``RelatedMention``: anchor mention と同一 key_point 内で一緒に語られた別の固有名
-- ``CategoryRankings`` (集約ルート): 1 カテゴリ × 1 集計窓分の 2 ランキング束
+- ``CategoryTrends`` (集約ルート): 1 カテゴリ × 1 集計窓分の 2 ランキング束
 - ``TrendsBundle`` (snapshot 永続形): 1 集計窓分の全カテゴリ集約
 
 責務:
@@ -127,7 +127,7 @@ class RankedMention(BaseModel):
         return _hotness(self.appearance_count, self.previous_appearance_count)
 
 
-class CategoryRankings(BaseModel):
+class CategoryTrends(BaseModel):
     """1 カテゴリ × 1 集計窓分の 2 ランキング束 (集約ルート)。
 
     ``most_mentioned``: 出現回数降順 top5 (floor のみ通過した全 mention が母集団)。
@@ -159,4 +159,6 @@ class TrendsBundle(BaseModel):
     model_config = ConfigDict(frozen=True)
 
     window_end: date
-    sections: tuple[CategoryRankings, ...] = Field(max_length=MAX_CATEGORIES_PER_BUNDLE)
+    category_trends: tuple[CategoryTrends, ...] = Field(
+        max_length=MAX_CATEGORIES_PER_BUNDLE
+    )

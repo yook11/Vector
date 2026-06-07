@@ -10,7 +10,7 @@ from __future__ import annotations
 from datetime import UTC, date, datetime
 
 from app.insights.trend_discovery.domain.trend import (
-    CategoryRankings,
+    CategoryTrends,
     RankedMention,
     RelatedMention,
     TrendsBundle,
@@ -41,14 +41,16 @@ class TestFromSnapshot:
                 RelatedMention(name="OpenAI", type="company", shared_article_count=4),
             ),
         )
-        section = CategoryRankings(
+        category_trends = CategoryTrends(
             category_id=1,
             category_slug="ai",
             category_name="AI",
             most_mentioned=(mention,),
             fastest_growing=(mention,),
         )
-        return TrendsBundle(window_end=date(2026, 5, 3), sections=(section,))
+        return TrendsBundle(
+            window_end=date(2026, 5, 3), category_trends=(category_trends,)
+        )
 
     def test_camel_case_keys(self) -> None:
         bundle = self._bundle()
@@ -64,12 +66,12 @@ class TestFromSnapshot:
         assert dumped["generatedAt"] is not None
         assert dumped["sourceAnalysisCount"] == 328
 
-        section = dumped["categories"][0]
-        assert section["categoryId"] == 1
-        assert section["categorySlug"] == "ai"
-        assert section["categoryName"] == "AI"
+        category_trends = dumped["categoryTrends"][0]
+        assert category_trends["categoryId"] == 1
+        assert category_trends["categorySlug"] == "ai"
+        assert category_trends["categoryName"] == "AI"
 
-        mention = section["mostMentioned"][0]
+        mention = category_trends["mostMentioned"][0]
         assert mention["name"] == "NVIDIA"
         assert mention["type"] == "company"
         assert mention["appearanceCount"] == 30
@@ -83,10 +85,10 @@ class TestFromSnapshot:
         assert related["sharedArticleCount"] == 4
 
         # 同一 mention が両ランキングに載るケースを camelCase 構造で固定する。
-        assert section["fastestGrowing"][0]["name"] == "NVIDIA"
+        assert category_trends["fastestGrowing"][0]["name"] == "NVIDIA"
 
     def test_window_start_is_window_end_minus_seven_days(self) -> None:
-        bundle = TrendsBundle(window_end=date(2026, 4, 30), sections=())
+        bundle = TrendsBundle(window_end=date(2026, 4, 30), category_trends=())
         resp = trends_from_snapshot(
             bundle=bundle,
             generated_at=datetime(2026, 4, 30, 0, 5, tzinfo=UTC),

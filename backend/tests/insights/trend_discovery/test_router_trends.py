@@ -23,32 +23,32 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.insights.trend_discovery.domain.trend import (
     MAX_CATEGORIES_PER_BUNDLE,
     TOP_N_PER_RANKING,
-    CategoryRankings,
+    CategoryTrends,
     RankedMention,
     TrendsBundle,
 )
 from app.models.trends_snapshot import TrendsSnapshot
 
 
-def _bundle_with_section(window_end: date) -> TrendsBundle:
+def _bundle_with_category_trends(window_end: date) -> TrendsBundle:
     mention = RankedMention(
         name="NVIDIA", type="company", appearance_count=30, previous_appearance_count=5
     )
-    section = CategoryRankings(
+    category_trends = CategoryTrends(
         category_id=1,
         category_slug="ai",
         category_name="AI",
         most_mentioned=(mention,),
         fastest_growing=(mention,),
     )
-    return TrendsBundle(window_end=window_end, sections=(section,))
+    return TrendsBundle(window_end=window_end, category_trends=(category_trends,))
 
 
 def _snapshot(window_end: date, *, bundle: dict | None = None) -> TrendsSnapshot:
     serialized = (
         bundle
         if bundle is not None
-        else _bundle_with_section(window_end).model_dump(mode="json")
+        else _bundle_with_category_trends(window_end).model_dump(mode="json")
     )
     return TrendsSnapshot(
         window_end=window_end,
@@ -82,12 +82,12 @@ class TestTrendsEndpoint:
         assert data["windowEnd"] == "2026-05-03"
         assert data["windowStart"] == "2026-04-26"
         assert data["sourceAnalysisCount"] == 42
-        assert len(data["categories"]) == 1
+        assert len(data["categoryTrends"]) == 1
 
-        section = data["categories"][0]
-        assert section["categorySlug"] == "ai"
-        assert section["mostMentioned"][0]["name"] == "NVIDIA"
-        assert section["fastestGrowing"][0]["name"] == "NVIDIA"
+        category_trends = data["categoryTrends"][0]
+        assert category_trends["categorySlug"] == "ai"
+        assert category_trends["mostMentioned"][0]["name"] == "NVIDIA"
+        assert category_trends["fastestGrowing"][0]["name"] == "NVIDIA"
 
     async def test_no_auth_required(
         self,
@@ -118,12 +118,12 @@ class TestTrendsEndpoint:
         with pytest.raises(ValidationError):
             await client.get("/api/v1/trends")
 
-    async def test_anon_get_rejects_oversized_ranking_in_section(
+    async def test_anon_get_rejects_oversized_ranking_in_category_trends(
         self,
         client: AsyncClient,
         db_session: AsyncSession,
     ) -> None:
-        """1 section 内の most_mentioned が上限超なら anon GET で 500 (DoS 遮断)。
+        """1 カテゴリ分の most_mentioned が上限超なら anon GET で 500 (DoS 遮断)。
 
         AUTH-N4 / AUTH-C1 経由で attacker が DB に巨大 JSONB を直書きしたシナリオ。
         domain VO の Field(max_length=TOP_N_PER_RANKING) が router の
@@ -143,7 +143,7 @@ class TestTrendsEndpoint:
         ]
         bundle = {
             "window_end": "2026-05-03",
-            "sections": [
+            "category_trends": [
                 {
                     "category_id": 1,
                     "category_slug": "ai",
@@ -159,13 +159,13 @@ class TestTrendsEndpoint:
         with pytest.raises(ValidationError):
             await client.get("/api/v1/trends")
 
-    async def test_anon_get_rejects_too_many_sections(
+    async def test_anon_get_rejects_too_many_category_trends(
         self,
         client: AsyncClient,
         db_session: AsyncSession,
     ) -> None:
-        """sections が上限超なら anon GET で 500 (DoS 遮断、F10 sections 軸)。"""
-        oversized_sections = [
+        """category_trends が上限超なら anon GET で 500 (DoS 遮断、F10 カテゴリ軸)。"""
+        oversized_category_trends = [
             {
                 "category_id": i + 1,
                 "category_slug": f"slug_{i:02d}",
@@ -175,7 +175,10 @@ class TestTrendsEndpoint:
             }
             for i in range(MAX_CATEGORIES_PER_BUNDLE + 1)
         ]
-        bundle = {"window_end": "2026-05-03", "sections": oversized_sections}
+        bundle = {
+            "window_end": "2026-05-03",
+            "category_trends": oversized_category_trends,
+        }
         db_session.add(_snapshot(date(2026, 5, 3), bundle=bundle))
         await db_session.commit()
 

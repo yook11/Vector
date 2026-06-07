@@ -32,7 +32,7 @@ def _snapshot(
         bundle={
             "window_end": window_end.isoformat(),
             "marker": marker,
-            "sections": [],
+            "category_trends": [],
         },
         source_analysis_count=source_analysis_count,
     )
