@@ -4,13 +4,16 @@ Stage 2 (完成段) の分類は ``test_article_completion_completion_failure.py
 所有する。本ファイルは scrape の Retry 軸分類のみを検証する。
 
 構造保証 (spec 完了条件): retryable=True の全 ``ExternalFetchError`` concrete
-subclass が stage2 の backoff policy (policy 別 Retryable ∪ ``FetchOriginServerError``
-明示分岐) を割当済みであること。新 retryable subclass を policy 表に登録し忘れると
-本テストが落ちる。terminal は origin error 自身の ``retryable`` 属性 (SSoT) から
-導出し、family の分割被覆 (retryable/terminal の CODE 集合) は
-``test_external_fetch_error_codes.py`` が所有する。
+subclass が stage2 の backoff schedule (schedule 別の固定割当 ∪ instance state で
+分岐する ``FetchOriginServerError`` / ``FetchRateLimitedError``) を割当済みである
+こと。新 retryable subclass を期待表に登録し忘れると本テストが落ちる。terminal は
+origin error 自身の ``retryable`` 属性 (SSoT) から導出し、family の分割被覆
+(retryable/terminal の CODE 集合) は ``test_external_fetch_error_codes.py`` が所有する。
 
-``_CONSTRUCT`` は ``test_external_fetch_error_codes.py`` の構築表と同形だが、
+期待表 ``_EXPECTED_SCHEDULE_BY_TYPE`` は production の写像 (``classify_*`` 内の
+``match``) を import せず spec から手書きする (tautology 回避)。schedule テンプレート
+(``BLIP`` 等) は比較対象として import するが、type→schedule の割当判断はテストが
+独立に持つ。``_CONSTRUCT`` は ``test_external_fetch_error_codes.py`` の構築表と同形だが
 解いている問題が違う (CODE 契約 vs decision 分割) ため共有しない。
 """
 
@@ -21,21 +24,22 @@ from datetime import UTC, datetime, timedelta
 import pytest
 
 from app.collection.article_completion.retry_policy import (
-    BLIP_POLICY,
-    OUTAGE_POLICY,
-    RETRY_AFTER_POLICY,
-    TIMEOUT_POLICY,
-    RetryPolicy,
+    BLIP,
+    OUTAGE,
+    TIMEOUT,
+    UNKNOWN,
+    FixedDelay,
+    RetrySchedule,
+    ScheduleDelay,
 )
 from app.collection.article_completion.scrape_failure import (
-    _RETRYABLE_FETCH_ERROR_TYPES_BY_POLICY,
-    Retryable,
     ScrapeContentQualityTooLow,
     ScrapeFailure,
     ScrapeNotHtml,
     ScrapeParseCrashed,
     ScrapeParserGaveUp,
-    Terminal,
+    ScrapeRetryable,
+    ScrapeTerminal,
     classify_external_fetch_error,
     classify_scrape_failure,
 )
@@ -101,44 +105,54 @@ def _build(cls: type[ExternalFetchError]) -> ExternalFetchError:
     return cls(**_CONSTRUCT[cls])  # type: ignore[arg-type]
 
 
+# retryable origin error → stage2 backoff schedule の期待写像 (spec から手書き)。
+# 固定割当グループ。instance state で分岐する 2 型は別途個別検証する。
+_EXPECTED_SCHEDULE_BY_TYPE: dict[type[ExternalFetchError], RetrySchedule] = {
+    FetchGatewayError: BLIP,
+    FetchNetworkError: BLIP,
+    FetchTimeoutError: TIMEOUT,
+    FetchRequestTimeoutError: UNKNOWN,
+    FetchRetryableStatusError: UNKNOWN,
+    FetchUnexpectedStatusError: UNKNOWN,
+}
+
+# ``Retry-After`` / reason を読むため schedule を instance state で選ぶ retryable。
+_STATE_DEPENDENT_RETRYABLE: set[type[ExternalFetchError]] = {
+    FetchOriginServerError,
+    FetchRateLimitedError,
+}
+
 # terminal は origin error 自身の ``retryable`` 属性 (SSoT) から導出する。
-# scrape_failure は専用 terminal タプルを持たず ``not exc.retryable`` で分岐する。
 _TERMINAL_SUBCLASSES: list[type[ExternalFetchError]] = sorted(
     (c for c in _concrete_subclasses(ExternalFetchError) if not c.retryable),
     key=lambda c: c.__name__,
 )
 
+_RETRYABLE_MAPPING_CASES: list[tuple[type[ExternalFetchError], RetrySchedule]] = sorted(
+    _EXPECTED_SCHEDULE_BY_TYPE.items(), key=lambda kv: kv[0].__name__
+)
+
 
 class TestPartitionStructuralGuarantee:
-    """retryable 属性 (SSoT) と stage2 の backoff policy 割当の整合を固定する。"""
+    """retryable 属性 (SSoT) と stage2 の backoff schedule 割当の整合を固定する。"""
 
     def test_construct_table_covers_all_subclasses(self) -> None:
         assert set(_CONSTRUCT) == _concrete_subclasses(ExternalFetchError)
 
     def test_classification_groups_are_pairwise_disjoint(self) -> None:
         terminal = set(_TERMINAL_SUBCLASSES)
-        retryable = {
-            t
-            for types in _RETRYABLE_FETCH_ERROR_TYPES_BY_POLICY.values()
-            for t in types
-        }
-        explicit = {FetchOriginServerError}
-        assert terminal.isdisjoint(retryable)
-        assert terminal.isdisjoint(explicit)
-        assert retryable.isdisjoint(explicit)
+        scheduled = set(_EXPECTED_SCHEDULE_BY_TYPE)
+        assert terminal.isdisjoint(scheduled)
+        assert terminal.isdisjoint(_STATE_DEPENDENT_RETRYABLE)
+        assert scheduled.isdisjoint(_STATE_DEPENDENT_RETRYABLE)
 
-    def test_every_retryable_subclass_has_a_backoff_policy(self) -> None:
+    def test_every_retryable_subclass_has_a_schedule(self) -> None:
         # 別不変条件 (family 分割被覆は test_external_fetch_error_codes が所有):
-        # retryable=True の全 origin error が backoff policy を割当済みであること。
-        # ``FetchOriginServerError`` は instance state で分岐するため明示加算する。
-        # 新 retryable subclass を policy 表に登録し忘れると等式が破れて落ちる。
-        policy_assigned = {
-            t
-            for types in _RETRYABLE_FETCH_ERROR_TYPES_BY_POLICY.values()
-            for t in types
-        }
+        # retryable=True の全 origin error が固定割当 ∪ state 分岐のどちらかに属す。
+        # 新 retryable subclass を期待表に登録し忘れると等式が破れて落ちる。
+        declared = set(_EXPECTED_SCHEDULE_BY_TYPE) | _STATE_DEPENDENT_RETRYABLE
         retryable = {c for c in _concrete_subclasses(ExternalFetchError) if c.retryable}
-        assert policy_assigned | {FetchOriginServerError} == retryable
+        assert declared == retryable
 
 
 @pytest.mark.parametrize(
@@ -149,62 +163,60 @@ class TestPartitionStructuralGuarantee:
 def test_terminal_fetch_error_maps_to_terminal_with_code(
     cls: type[ExternalFetchError],
 ) -> None:
-    """terminal (retryable=False) は ``Terminal(reason_code=cls.CODE)`` になる。"""
-    assert classify_external_fetch_error(_build(cls)) == Terminal(reason_code=cls.CODE)
+    """terminal (retryable=False) は ``ScrapeTerminal(reason_code=cls.CODE)`` になる。"""
+    assert classify_external_fetch_error(_build(cls)) == ScrapeTerminal(
+        reason_code=cls.CODE
+    )
 
 
 @pytest.mark.parametrize(
-    "policy,cls",
-    [
-        (policy, cls)
-        for policy, types in _RETRYABLE_FETCH_ERROR_TYPES_BY_POLICY.items()
-        for cls in types
-    ],
-    ids=[
-        f"{policy.code}-{cls.__name__}"
-        for policy, types in _RETRYABLE_FETCH_ERROR_TYPES_BY_POLICY.items()
-        for cls in types
-    ],
+    "cls,schedule",
+    _RETRYABLE_MAPPING_CASES,
+    ids=[c.__name__ for c, _ in _RETRYABLE_MAPPING_CASES],
 )
-def test_retryable_fetch_error_maps_to_its_policy(
-    policy: RetryPolicy,
+def test_retryable_fetch_error_maps_to_expected_schedule(
     cls: type[ExternalFetchError],
+    schedule: RetrySchedule,
 ) -> None:
-    """retryable グループは所属 policy 付き ``Retryable`` になる。"""
-    assert classify_external_fetch_error(_build(cls)) == Retryable(
-        reason_code=cls.CODE, policy=policy
+    """固定割当グループは期待 schedule の cap + delay を持つ ``ScrapeRetryable``。"""
+    assert classify_external_fetch_error(_build(cls)) == ScrapeRetryable(
+        reason_code=cls.CODE,
+        max_attempts=schedule.max_attempts,
+        next_delay=schedule.delay,
     )
 
 
 class TestFetchOriginServerErrorExplicitBranch:
-    """``FetchOriginServerError`` は instance state で分岐する明示ケース。"""
+    """``FetchOriginServerError`` は instance state で delay を選ぶ明示ケース。"""
 
-    def test_service_unavailable_with_retry_after_uses_retry_after_policy(
-        self,
-    ) -> None:
+    def test_service_unavailable_with_retry_after_uses_fixed_delay(self) -> None:
         exc = FetchOriginServerError(
             status_code=503,
             reason="service_unavailable",
             retry_after_seconds=120.0,
         )
-        assert classify_external_fetch_error(exc) == Retryable(
+        assert classify_external_fetch_error(exc) == ScrapeRetryable(
             reason_code="fetch_origin_server_error",
-            policy=RETRY_AFTER_POLICY,
-            retry_after_seconds=120.0,
+            max_attempts=OUTAGE.max_attempts,
+            next_delay=FixedDelay(120.0),
         )
 
-    def test_service_unavailable_without_retry_after_uses_outage_policy(self) -> None:
+    def test_service_unavailable_without_retry_after_uses_outage_schedule(self) -> None:
         exc = FetchOriginServerError(
             status_code=503, reason="service_unavailable", retry_after_seconds=None
         )
-        assert classify_external_fetch_error(exc) == Retryable(
-            reason_code="fetch_origin_server_error", policy=OUTAGE_POLICY
+        assert classify_external_fetch_error(exc) == ScrapeRetryable(
+            reason_code="fetch_origin_server_error",
+            max_attempts=OUTAGE.max_attempts,
+            next_delay=OUTAGE.delay,
         )
 
-    def test_internal_error_uses_outage_policy(self) -> None:
+    def test_internal_error_uses_outage_schedule(self) -> None:
         exc = FetchOriginServerError(status_code=500, reason="internal_error")
-        assert classify_external_fetch_error(exc) == Retryable(
-            reason_code="fetch_origin_server_error", policy=OUTAGE_POLICY
+        assert classify_external_fetch_error(exc) == ScrapeRetryable(
+            reason_code="fetch_origin_server_error",
+            max_attempts=OUTAGE.max_attempts,
+            next_delay=OUTAGE.delay,
         )
 
     def test_internal_error_ignores_retry_after_seconds(self) -> None:
@@ -212,8 +224,44 @@ class TestFetchOriginServerErrorExplicitBranch:
         exc = FetchOriginServerError(
             status_code=500, reason="internal_error", retry_after_seconds=30.0
         )
-        assert classify_external_fetch_error(exc) == Retryable(
-            reason_code="fetch_origin_server_error", policy=OUTAGE_POLICY
+        assert classify_external_fetch_error(exc) == ScrapeRetryable(
+            reason_code="fetch_origin_server_error",
+            max_attempts=OUTAGE.max_attempts,
+            next_delay=OUTAGE.delay,
+        )
+
+
+class TestFetchRateLimitedExplicitBranch:
+    """``FetchRateLimitedError`` (429) の ``Retry-After`` 尊重 (バグ修正の正本)。
+
+    旧実装は 429 を type 表で引き instance state を読めず ``Retry-After`` を黙って
+    捨てていた (503 のみ救済され非対称)。現実装は server 指示を ``FixedDelay`` で
+    尊重し、無ければ ``UNKNOWN`` schedule に倒す。cap は現状維持の ``UNKNOWN``。
+    """
+
+    def test_with_retry_after_uses_fixed_delay(self) -> None:
+        exc = FetchRateLimitedError(status_code=429, retry_after_seconds=90.0)
+        decision = classify_external_fetch_error(exc)
+        assert decision == ScrapeRetryable(
+            reason_code="fetch_rate_limited",
+            max_attempts=UNKNOWN.max_attempts,
+            next_delay=FixedDelay(90.0),
+        )
+
+    def test_with_retry_after_does_not_drop_server_hint(self) -> None:
+        # 回帰の核: server 指示が schedule に潰されないことを非空虚に踏む。
+        exc = FetchRateLimitedError(status_code=429, retry_after_seconds=90.0)
+        decision = classify_external_fetch_error(exc)
+        assert isinstance(decision, ScrapeRetryable)
+        assert decision.next_delay == FixedDelay(90.0)
+        assert decision.next_delay != UNKNOWN.delay
+
+    def test_without_retry_after_uses_unknown_schedule(self) -> None:
+        exc = FetchRateLimitedError(status_code=429, retry_after_seconds=None)
+        assert classify_external_fetch_error(exc) == ScrapeRetryable(
+            reason_code="fetch_rate_limited",
+            max_attempts=UNKNOWN.max_attempts,
+            next_delay=UNKNOWN.delay,
         )
 
 
@@ -258,7 +306,9 @@ def test_scrape_failure_maps_to_terminal_with_evidence_detail(
 ) -> None:
     """各 content variant が ``scrape_*`` terminal + 証拠 detail を持つ。"""
     result = classify_scrape_failure(failure)
-    assert result == Terminal(reason_code=expected_reason_code, detail=expected_detail)
+    assert result == ScrapeTerminal(
+        reason_code=expected_reason_code, detail=expected_detail
+    )
 
 
 class TestTransportErrorDelegation:
@@ -269,51 +319,78 @@ class TestTransportErrorDelegation:
         # 404 は terminal 集合。reason_code は exc.CODE 素通し、detail に class 名。
         err = FetchResourceNotFoundError(status_code=404, reason="not_found")
         result = classify_scrape_failure(err)
-        assert isinstance(result, Terminal)
+        assert isinstance(result, ScrapeTerminal)
         assert result.reason_code == err.CODE
         assert result.detail is not None
         assert result.detail.startswith("FetchResourceNotFoundError")
 
     def test_retryable_fetch_error_folds_into_retryable_with_detail(self) -> None:
-        # 502 は BLIP policy の retryable。content 失敗と違い terminal に落とさない。
+        # 502 は BLIP schedule の retryable。content 失敗と違い terminal に落とさない。
         err = FetchGatewayError(status_code=502)
         result = classify_scrape_failure(err)
-        assert isinstance(result, Retryable)
+        assert isinstance(result, ScrapeRetryable)
         assert result.reason_code == err.CODE
-        assert result.policy == BLIP_POLICY
+        assert result.max_attempts == BLIP.max_attempts
+        assert result.next_delay == BLIP.delay
         assert result.detail is not None
         assert result.detail.startswith("FetchGatewayError")
 
 
-class TestRetryableDecisionMethods:
-    """``Retryable`` が再投入の決定 (打ち切り / 次回 ready_at) を純粋に答える。
+class _SyntheticRetryable:
+    """match のどの case にも当たらない retryable をシミュレートする probe。
 
-    handler はこの答えを実行 (I/O) するだけで policy 内部を覗かない
-    (Feature Envy 解消)。本クラスは DB を介さない純粋契約のみを検証する。
+    ``case _`` (未登録 retryable の保守 fallback) が非空虚に効くことを確認する。
+    実 ``ExternalFetchError`` subclass にすると ``__subclasses__()`` registry を
+    プロセス越しに汚染し、他モジュールの totality assert
+    (``test_external_fetch_error_codes``) を壊すため、継承せず duck-typed にする。
+    """
+
+    retryable = True
+    CODE = "synthetic_retryable_test_only"
+
+
+def test_unregistered_retryable_falls_back_to_unknown() -> None:
+    """どの case にも当たらない retryable は ``_`` で ``UNKNOWN`` schedule に倒れる。"""
+    decision = classify_external_fetch_error(_SyntheticRetryable())  # type: ignore[arg-type]
+    assert decision == ScrapeRetryable(
+        reason_code="synthetic_retryable_test_only",
+        max_attempts=UNKNOWN.max_attempts,
+        next_delay=UNKNOWN.delay,
+    )
+
+
+class TestScrapeRetryableDecisionMethods:
+    """``ScrapeRetryable`` が再投入の決定 (打ち切り / 次回 ready_at) を純粋に答える。
+
+    handler はこの答えを実行 (I/O) するだけで内部を覗かない (Feature Envy 解消)。
+    本クラスは DB を介さない純粋契約のみを検証し、期待値はテスト所有の delay /
+    cap から導く (production テンプレートに依存しない)。
     """
 
     def test_is_exhausted_at_max_attempts_boundary(self) -> None:
         # 境界を非空虚に踏む: max ちょうどで打ち切り、直前は継続。
-        retryable = Retryable(reason_code="x", policy=TIMEOUT_POLICY)
-        assert retryable.is_exhausted(TIMEOUT_POLICY.max_attempts) is True
-        assert retryable.is_exhausted(TIMEOUT_POLICY.max_attempts - 1) is False
-
-    def test_next_ready_at_uses_policy_schedule_without_server_hint(self) -> None:
-        now = datetime(2026, 5, 25, tzinfo=UTC)
-        retryable = Retryable(reason_code="x", policy=TIMEOUT_POLICY)
-        # 1 回目失敗 → schedule[0] 分後。
-        expected = now + timedelta(minutes=TIMEOUT_POLICY.delay_minutes_schedule[0])
-        assert retryable.next_ready_at(now=now, attempt_count=1) == expected
-
-    def test_next_ready_at_prefers_server_retry_after(self) -> None:
-        now = datetime(2026, 5, 25, tzinfo=UTC)
-        # server 指示 120s=2 分が policy schedule[0]=5 分より優先される (非空虚)。
-        retryable = Retryable(
-            reason_code="x", policy=OUTAGE_POLICY, retry_after_seconds=120.0
+        retryable = ScrapeRetryable(
+            reason_code="x", max_attempts=3, next_delay=ScheduleDelay((1.0,))
         )
+        assert retryable.is_exhausted(3) is True
+        assert retryable.is_exhausted(2) is False
+
+    def test_next_ready_at_uses_schedule_delay(self) -> None:
+        now = datetime(2026, 5, 25, tzinfo=UTC)
+        retryable = ScrapeRetryable(
+            reason_code="x", max_attempts=5, next_delay=ScheduleDelay((3.0, 7.0))
+        )
+        # 1 回目失敗 → schedule[0]=3 分後。
         assert retryable.next_ready_at(now=now, attempt_count=1) == now + timedelta(
+            minutes=3
+        )
+
+    def test_next_ready_at_with_fixed_delay_ignores_attempt(self) -> None:
+        now = datetime(2026, 5, 25, tzinfo=UTC)
+        retryable = ScrapeRetryable(
+            reason_code="x", max_attempts=5, next_delay=FixedDelay(120.0)
+        )
+        # FixedDelay=120s=2 分。attempt が進んでも server 指示で固定 (非空虚)。
+        assert retryable.next_ready_at(now=now, attempt_count=9) == now + timedelta(
             minutes=2
         )
-
-    def test_policy_code_exposes_policy_identifier(self) -> None:
-        assert Retryable(reason_code="x", policy=OUTAGE_POLICY).policy_code == "outage"

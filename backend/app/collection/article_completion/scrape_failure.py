@@ -1,26 +1,24 @@
 """scrape concern の失敗 value union と Retry 軸分類。
 
 ``ExternalFetchError`` は origin error のまま ``ScrapeFailure`` に保持する。
-content 失敗は自身の ``decision`` で ``Terminal`` を返し、``ScrapeDecision`` が
+content 失敗は自身の ``decision`` で ``ScrapeTerminal`` を返し、``ScrapeDecision`` が
 closed / retry の後処理方針を表す。
 """
 
 from __future__ import annotations
 
-from collections.abc import Mapping
 from dataclasses import dataclass, replace
 from datetime import datetime, timedelta
-from types import MappingProxyType
-from typing import ClassVar, Final
+from typing import ClassVar
 
 from app.collection.article_completion.retry_policy import (
-    BLIP_POLICY,
-    OUTAGE_POLICY,
-    RETRY_AFTER_POLICY,
-    TIMEOUT_POLICY,
-    UNKNOWN_POLICY,
-    RetryPolicy,
-    effective_delay_minutes,
+    BLIP,
+    OUTAGE,
+    TIMEOUT,
+    UNKNOWN,
+    FixedDelay,
+    RetryDelay,
+    RetrySchedule,
 )
 from app.collection.external_fetch_errors import (
     ExternalFetchError,
@@ -45,7 +43,7 @@ _CONTENT_TYPE_MAX = 200
 
 
 @dataclass(frozen=True, slots=True)
-class Terminal:
+class ScrapeTerminal:
     """scrape retry を行わず pending を ``closed`` に閉じる失敗。"""
 
     reason_code: str
@@ -53,34 +51,24 @@ class Terminal:
 
 
 @dataclass(frozen=True, slots=True)
-class Retryable:
-    """DB 駆動 retry する失敗。"""
+class ScrapeRetryable:
+    """DB 駆動 retry する失敗。``next_delay`` は解決済みの単一遅延。"""
 
     reason_code: str
-    policy: RetryPolicy
-    retry_after_seconds: float | None = None
+    max_attempts: int
+    next_delay: RetryDelay
     detail: str | None = None
 
     def is_exhausted(self, attempt_count: int) -> bool:
-        """この試行番号で打ち切りか (``>= policy.max_attempts``)。"""
-        return attempt_count >= self.policy.max_attempts
+        """この試行番号で打ち切りか (``>= max_attempts``)。"""
+        return attempt_count >= self.max_attempts
 
     def next_ready_at(self, *, now: datetime, attempt_count: int) -> datetime:
         """次回 retry の ``ready_at`` を算出する純関数。"""
-        delay_minutes = effective_delay_minutes(
-            self.policy,
-            retry_after_seconds=self.retry_after_seconds,
-            attempt_count=attempt_count,
-        )
-        return now + timedelta(minutes=delay_minutes)
-
-    @property
-    def policy_code(self) -> str:
-        """log 用の policy 識別子 (handler が ``.policy`` を覗かずに済む)。"""
-        return self.policy.code
+        return now + timedelta(minutes=self.next_delay.minutes(attempt_count))
 
 
-ScrapeDecision = Terminal | Retryable
+ScrapeDecision = ScrapeTerminal | ScrapeRetryable
 """scrape 失敗の Retry 軸での処理方針。"""
 
 
@@ -88,8 +76,9 @@ ScrapeDecision = Terminal | Retryable
 # content 失敗 variant (取得できたが使える本文でなかった)
 # ---------------------------------------------------------------------------
 #
-# content 失敗は scrape 段 native で、再取得しても同じ結果なので常に ``Terminal``。
-# その不変条件を ``decision`` として型自身に持たせる (外付け分類に委ねない)。
+# content 失敗は scrape 段 native で、再取得しても同じ結果なので常に
+# ``ScrapeTerminal``。その不変条件を ``decision`` として型自身に持たせる
+# (外付け分類に委ねない)。
 
 
 @dataclass(frozen=True)
@@ -107,7 +96,7 @@ class ScrapeNotHtml:
 
     @property
     def decision(self) -> ScrapeDecision:
-        return Terminal(
+        return ScrapeTerminal(
             reason_code=f"scrape_{self.reason}",
             detail=f"content_type={self.content_type}",
         )
@@ -121,7 +110,7 @@ class ScrapeParserGaveUp:
 
     @property
     def decision(self) -> ScrapeDecision:
-        return Terminal(reason_code=f"scrape_{self.reason}")
+        return ScrapeTerminal(reason_code=f"scrape_{self.reason}")
 
 
 @dataclass(frozen=True)
@@ -140,7 +129,7 @@ class ScrapeParseCrashed:
 
     @property
     def decision(self) -> ScrapeDecision:
-        return Terminal(
+        return ScrapeTerminal(
             reason_code=f"scrape_{self.reason}",
             detail=f"{self.error_class}: {self.error_message}",
         )
@@ -162,7 +151,7 @@ class ScrapeContentQualityTooLow:
     @property
     def decision(self) -> ScrapeDecision:
         sample = f" sample={self.body_sample!r}" if self.body_sample else ""
-        return Terminal(
+        return ScrapeTerminal(
             reason_code=f"scrape_{self.reason}",
             detail=(
                 f"body_length={self.body_length} "
@@ -185,61 +174,59 @@ ScrapeFailure = ExternalFetchError | ScrapeContentFailure
 # ExternalFetchError の分類
 # ---------------------------------------------------------------------------
 
-# retry 可否は origin error 自身の ``retryable`` (失敗の性質、SSoT) が答える。
-# ここが持つのは段固有の handling = どの backoff policy で再投入するかという
-# scheduling のみ。``FetchOriginServerError`` は instance state (reason /
-# retry_after_seconds) を読むため表に入れず ``classify_external_fetch_error``
-# 内で明示分岐する。
-_RETRYABLE_FETCH_ERROR_TYPES_BY_POLICY: Final[
-    Mapping[RetryPolicy, tuple[type[ExternalFetchError], ...]]
-] = MappingProxyType(
-    {
-        BLIP_POLICY: (
-            FetchGatewayError,
-            FetchNetworkError,
-        ),
-        TIMEOUT_POLICY: (FetchTimeoutError,),
-        UNKNOWN_POLICY: (
-            FetchRateLimitedError,
-            FetchRequestTimeoutError,
-            FetchRetryableStatusError,
-            FetchUnexpectedStatusError,
-        ),
-    }
-)
 
-# retryable origin error の exact type → backoff policy 付き Retryable の lookup 表。
-_FETCH_RETRYABLE_DISPOSITION_BY_TYPE: dict[type[ExternalFetchError], Retryable] = {
-    t: Retryable(reason_code=t.CODE, policy=policy)
-    for policy, types in _RETRYABLE_FETCH_ERROR_TYPES_BY_POLICY.items()
-    for t in types
-}
+def _retryable(
+    exc: ExternalFetchError,
+    schedule: RetrySchedule,
+    *,
+    override: RetryDelay | None = None,
+) -> ScrapeRetryable:
+    """origin error を schedule テンプレートから ``ScrapeRetryable`` に組み立てる。
+
+    ``override`` は server 指示 (``Retry-After``) で schedule を差し替える場合に渡す。
+    """
+    return ScrapeRetryable(
+        reason_code=exc.CODE,
+        max_attempts=schedule.max_attempts,
+        next_delay=override if override is not None else schedule.delay,
+    )
 
 
 def classify_external_fetch_error(exc: ExternalFetchError) -> ScrapeDecision:
     """origin fetch error を completion scrape 用 decision に分類する。
 
-    retry 可否は origin の ``retryable`` (SSoT) に従う。retryable=False は段に依らず
-    ``Terminal``。retryable=True のうち ``FetchOriginServerError`` は ``reason`` /
-    ``retry_after_seconds`` を読むため明示分岐し、残りは段固有の backoff policy 表で
-    引く (未登録は保守的に ``UNKNOWN_POLICY``)。
+    retry 可否は origin の ``retryable`` (SSoT) に従い、retryable=False は段に依らず
+    ``ScrapeTerminal``。retryable=True は単一 ``match`` で backoff schedule に写像する。
+    instance state を読むケース (503 / 429 の ``Retry-After``) を先頭に置き、
+    server 指示があれば ``FixedDelay`` で schedule を上書きする。``_`` は冒頭で
+    terminal を弾いた後に残る未登録 retryable のための保守的 fallback。
     """
     if not exc.retryable:
-        return Terminal(reason_code=exc.CODE)
+        return ScrapeTerminal(reason_code=exc.CODE)
 
-    if isinstance(exc, FetchOriginServerError):
-        if exc.reason == "service_unavailable" and exc.retry_after_seconds is not None:
-            return Retryable(
-                reason_code=exc.CODE,
-                policy=RETRY_AFTER_POLICY,
-                retry_after_seconds=exc.retry_after_seconds,
-            )
-        return Retryable(reason_code=exc.CODE, policy=OUTAGE_POLICY)
-
-    decision = _FETCH_RETRYABLE_DISPOSITION_BY_TYPE.get(type(exc))
-    if decision is not None:
-        return decision
-    return Retryable(reason_code=exc.CODE, policy=UNKNOWN_POLICY)
+    match exc:
+        case FetchOriginServerError(
+            reason="service_unavailable", retry_after_seconds=float() as ra
+        ):
+            return _retryable(exc, OUTAGE, override=FixedDelay(ra))
+        case FetchOriginServerError():
+            return _retryable(exc, OUTAGE)
+        case FetchRateLimitedError(retry_after_seconds=float() as ra):
+            return _retryable(exc, UNKNOWN, override=FixedDelay(ra))
+        case FetchRateLimitedError():
+            return _retryable(exc, UNKNOWN)
+        case FetchGatewayError() | FetchNetworkError():
+            return _retryable(exc, BLIP)
+        case FetchTimeoutError():
+            return _retryable(exc, TIMEOUT)
+        case (
+            FetchRequestTimeoutError()
+            | FetchRetryableStatusError()
+            | FetchUnexpectedStatusError()
+        ):
+            return _retryable(exc, UNKNOWN)
+        case _:
+            return _retryable(exc, UNKNOWN)
 
 
 # ---------------------------------------------------------------------------
@@ -248,10 +235,10 @@ def classify_external_fetch_error(exc: ExternalFetchError) -> ScrapeDecision:
 
 
 def classify_scrape_failure(failure: ScrapeFailure) -> ScrapeDecision:
-    """scrape failure を ``Terminal | Retryable`` に分類する。
+    """scrape failure を ``ScrapeTerminal | ScrapeRetryable`` に分類する。
 
-    transport (origin error) は段固有の backoff policy へ写像し、content 失敗は
-    自身の ``decision`` (常に ``Terminal``) を返す。
+    transport (origin error) は段固有の backoff schedule へ写像し、content 失敗は
+    自身の ``decision`` (常に ``ScrapeTerminal``) を返す。
     """
     if isinstance(failure, ExternalFetchError):
         return replace(

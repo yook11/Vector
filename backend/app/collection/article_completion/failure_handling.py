@@ -12,9 +12,9 @@ from app.collection.article_completion.completion_failure import CompletionRejec
 from app.collection.article_completion.ready import ReadyForArticleCompletion
 from app.collection.article_completion.repository import ArticleCompletionRepository
 from app.collection.article_completion.scrape_failure import (
-    Retryable,
     ScrapeFailure,
-    Terminal,
+    ScrapeRetryable,
+    ScrapeTerminal,
     classify_scrape_failure,
 )
 
@@ -35,9 +35,9 @@ class ArticleCompletionFailureHandler:
         """scrape failure を Retry 軸で closed / retry に振り分ける。"""
         decision = classify_scrape_failure(failure)
         match decision:
-            case Terminal() as terminal:
+            case ScrapeTerminal() as terminal:
                 await self._handle_terminal(ready, failure=failure, terminal=terminal)
-            case Retryable() as retryable:
+            case ScrapeRetryable() as retryable:
                 await self._handle_temporary(
                     ready, failure=failure, disposition=retryable
                 )
@@ -113,20 +113,18 @@ class ArticleCompletionFailureHandler:
         ready: ReadyForArticleCompletion,
         *,
         failure: ScrapeFailure,
-        disposition: Retryable,
+        disposition: ScrapeRetryable,
     ) -> None:
-        """``Retryable`` を retry schedule または exhausted close に反映する。"""
+        """``ScrapeRetryable`` を retry schedule または exhausted close に反映する。"""
         canonical_url = ready.source_url
         exhausted = disposition.is_exhausted(ready.attempt_count)
         now = datetime.now(UTC)
+        next_at = disposition.next_ready_at(now=now, attempt_count=ready.attempt_count)
         async with self._session_factory() as session:
             repository = ArticleCompletionRepository(session)
             if exhausted:
                 updated = await repository.close_claimed(ready, now=now)
             else:
-                next_at = disposition.next_ready_at(
-                    now=now, attempt_count=ready.attempt_count
-                )
                 updated = await repository.schedule_retry(
                     ready, ready_at=next_at, now=now
                 )
@@ -156,9 +154,10 @@ class ArticleCompletionFailureHandler:
             source_id=ready.source_id,
             canonical_url=str(canonical_url),
             reason_code=disposition.reason_code,
-            policy_code=disposition.policy_code,
             exhausted=exhausted,
             attempt_count=ready.attempt_count,
+            max_attempts=disposition.max_attempts,
+            next_ready_at=None if exhausted else next_at.isoformat(),
             detail=disposition.detail,
         )
         return None
@@ -168,7 +167,7 @@ class ArticleCompletionFailureHandler:
         ready: ReadyForArticleCompletion,
         *,
         failure: ScrapeFailure,
-        terminal: Terminal,
+        terminal: ScrapeTerminal,
     ) -> None:
         """scrape 終端失敗を ``closed`` に閉じる。"""
         canonical_url = ready.source_url

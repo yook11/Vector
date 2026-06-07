@@ -30,7 +30,7 @@ from app.collection.article_completion.failure_handling import (
 )
 from app.collection.article_completion.ready import ReadyForArticleCompletion
 from app.collection.article_completion.repository import ArticleCompletionRepository
-from app.collection.article_completion.retry_policy import BLIP_POLICY
+from app.collection.article_completion.retry_policy import BLIP
 from app.collection.article_completion.scrape_failure import ScrapeNotHtml
 from app.collection.domain.analyzable_article import (
     AnalyzableArticleDefect,
@@ -194,7 +194,7 @@ async def test_scrape_retryable_non_exhausted_reopens_with_future_ready_at(
 ) -> None:
     """scrape ``Retryable`` (502→BLIP, attempt_count=1 < max) → open + 未来 ready_at。
 
-    BLIP_POLICY.schedule[0] = 0.5 分 = 30 秒。claim 直後 attempt_count=1 <
+    BLIP.delay.minutes(1) = 0.5 分 = 30 秒。claim 直後 attempt_count=1 <
     max_attempts(8) なので exhausted ではなく retry scheduling。
     """
     ready = await _make_ready(db_session, tc_source, "https://techcrunch.com/blip")
@@ -248,14 +248,14 @@ async def test_scrape_retryable_exhausted_closes_pending(
     await db_session.execute(
         update(IncompleteArticle)
         .where(IncompleteArticle.id == ready.pending_id)
-        .values(attempt_count=BLIP_POLICY.max_attempts)
+        .values(attempt_count=BLIP.max_attempts)
     )
     await db_session.commit()
     exhausted_ready = await ReadyForArticleCompletion.try_advance_from(
         pending_id=ready.pending_id,
         repo=ArticleCompletionRepository(db_session),
     )
-    assert exhausted_ready.attempt_count == BLIP_POLICY.max_attempts
+    assert exhausted_ready.attempt_count == BLIP.max_attempts
     handler = ArticleCompletionFailureHandler(session_factory)
 
     await handler.handle_scrape_failure(
@@ -278,7 +278,7 @@ async def test_scrape_retryable_exhausted_audits_retry_exhausted_flag(
     await db_session.execute(
         update(IncompleteArticle)
         .where(IncompleteArticle.id == ready.pending_id)
-        .values(attempt_count=BLIP_POLICY.max_attempts)
+        .values(attempt_count=BLIP.max_attempts)
     )
     await db_session.commit()
     exhausted_ready = await ReadyForArticleCompletion.try_advance_from(

@@ -37,12 +37,12 @@ from app.collection.article_completion.repository import (
     CompletionUrlConflict,
 )
 from app.collection.article_completion.scrape_failure import (
-    Retryable,
     ScrapeContentQualityTooLow,
     ScrapeFailure,
     ScrapeNotHtml,
     ScrapeParseCrashed,
     ScrapeParserGaveUp,
+    ScrapeRetryable,
     classify_external_fetch_error,
 )
 from app.collection.domain.analyzable_article import AnalyzableArticle
@@ -388,7 +388,7 @@ class ArticleCompletionAuditRepository:
         decision = classify_external_fetch_error(error)
         retryability = (
             Retryability.RETRYABLE
-            if isinstance(decision, Retryable)
+            if isinstance(decision, ScrapeRetryable)
             else Retryability.NON_RETRYABLE
         )
         return FailureProjection(

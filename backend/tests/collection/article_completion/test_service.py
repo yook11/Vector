@@ -12,8 +12,9 @@ race-loss は状態遷移と同一 tx、真の DB 例外 (経路 9) は別 sessi
 - 成功時に HTML から抽出した ``body`` / ``title`` / ``published_at`` がそのまま
   ``articles`` 行に保存される
 - race-loss 時に既存 article は残り、敗者側の pending は DELETE される
-- disposition (Terminal/Retryable) で pending 状態が決まる (Retryable の BLIP
-  系 1 回目失敗 = 0.5 分後 / Terminal = closed / RETRY_AFTER = server 指示秒)
+- disposition (ScrapeTerminal/ScrapeRetryable) で pending 状態が決まる
+  (ScrapeRetryable の BLIP 系 1 回目失敗 = 0.5 分後 / ScrapeTerminal = closed /
+  server Retry-After = 指示秒)
 """
 
 from __future__ import annotations
@@ -318,7 +319,7 @@ async def test_success_persists_extracted_body_and_published_at(
     assert article.published_at == html_published_at
 
 
-# Terminal disposition (ExternalFetchError terminal / ScrapeFailure / promotion)
+# ScrapeTerminal disposition (ExternalFetchError terminal / ScrapeFailure / promotion)
 
 
 @pytest.mark.asyncio
@@ -330,8 +331,8 @@ async def test_terminal_fetch_error_returns_none_and_closes_pending(
 ) -> None:
     """terminal な ``ExternalFetchError`` → ``None`` + pending closed。
 
-    404 (``FetchResourceNotFoundError``) は disposition で ``Terminal`` に分類され、
-    pending は再試行されず ``closed`` に閉じ、Article は作成されない。
+    404 (``FetchResourceNotFoundError``) は disposition で ``ScrapeTerminal`` に分類
+    され、pending は再試行されず ``closed`` に閉じ、Article は作成されない。
     """
     _, pending_id, ready = await _make_pending(
         db_session, tc_source, "https://techcrunch.com/dead"
@@ -427,7 +428,7 @@ async def test_promotion_failure_closes_pending(
     assert pending.status == "closed"
 
 
-# Retryable disposition → will_retry / exhausted
+# ScrapeRetryable disposition → will_retry / exhausted
 
 
 @pytest.mark.asyncio
@@ -439,8 +440,8 @@ async def test_temporary_blip_first_attempt_writes_will_retry(
 ) -> None:
     """BLIP 1 回目失敗 → ``None`` + pending re-open + 未来 ready_at (0.5 分後)。
 
-    502 (``FetchGatewayError``) は disposition で BLIP policy の ``Retryable``。
-    schedule[0] = 0.5 分なので next ready_at は約 30 秒後。
+    502 (``FetchGatewayError``) は disposition で BLIP schedule の ``ScrapeRetryable``。
+    delay schedule[0] = 0.5 分なので next ready_at は約 30 秒後。
     """
     _, pending_id, ready = await _make_pending(
         db_session, tc_source, "https://techcrunch.com/blip"
@@ -477,13 +478,13 @@ async def test_temporary_outage_exhausted_closes_pending(
 ) -> None:
     """attempt_count == max_attempts → ``None`` + pending status='closed'。
 
-    503 (Retry-After なし) は disposition で OUTAGE policy の ``Retryable``。
-    OUTAGE_POLICY.max_attempts = 12 に到達済なので exhausted で ``closed``。
+    503 (Retry-After なし) は disposition で OUTAGE schedule の ``ScrapeRetryable``。
+    OUTAGE.max_attempts = 12 に到達済なので exhausted で ``closed``。
     """
     _, pending_id, _ = await _make_pending(
         db_session, tc_source, "https://techcrunch.com/outage"
     )
-    # OUTAGE_POLICY.max_attempts = 12 を超過させる: attempt_count を 12 に強制セット
+    # OUTAGE.max_attempts = 12 を超過させる: attempt_count を 12 に強制セット
     await db_session.execute(
         update(IncompleteArticle)
         .where(IncompleteArticle.id == pending_id)
@@ -528,8 +529,8 @@ async def test_temporary_retry_after_uses_server_delay(
     """503 + Retry-After → ``None`` + pending re-open + server 指示秒の ready_at。
 
     ``FetchOriginServerError(service_unavailable, retry_after_seconds=120)`` は
-    disposition で RETRY_AFTER policy + override 秒の ``Retryable``。
-    ``effective_delay_minutes`` が 120 秒 → 2 分に換算して next ready_at にする。
+    disposition で OUTAGE schedule + server 指示の ``FixedDelay`` を持つ
+    ``ScrapeRetryable``。``FixedDelay`` が 120 秒 → 2 分に換算して next ready_at にする。
     """
     _, pending_id, ready = await _make_pending(
         db_session, tc_source, "https://techcrunch.com/retry-after"
