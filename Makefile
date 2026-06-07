@@ -97,10 +97,10 @@ migrate-safe:  ## ORM/migration 変更を安全に反映
 # は runtime secret に置かない方針のため実行時に渡す (dev は migrate-safe)。
 # 他の必須 Settings は .env から、DATABASE_URL は同 URL で満たす (接続は使わない)。
 migrate-prod:  ## 本番 Neon に migration 適用（MIGRATION_DATABASE_URL を実行時に渡す）
-	@test -n "$(MIGRATION_DATABASE_URL)" \
+	@test -n "$$MIGRATION_DATABASE_URL" \
 	  || { echo "MIGRATION_DATABASE_URL is required (Neon owner role, append ?sslmode=require)"; exit 1; }
 	cd backend && \
-	  export DATABASE_URL="$(MIGRATION_DATABASE_URL)" MIGRATION_DATABASE_URL="$(MIGRATION_DATABASE_URL)" && \
+	  export DATABASE_URL="$$MIGRATION_DATABASE_URL" MIGRATION_DATABASE_URL="$$MIGRATION_DATABASE_URL" && \
 	  uv run alembic upgrade head && \
 	  uv run alembic current
 
