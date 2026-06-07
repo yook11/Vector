@@ -1,8 +1,8 @@
 """scrape concern の失敗 value union と Retry 軸分類。
 
-``ExternalFetchError`` は origin error のまま ``ScrapeFailure`` に保持する。
-content 失敗は自身の ``decision`` で ``ScrapeTerminal`` を返し、``ScrapeDecision`` が
-closed / retry の後処理方針を表す。
+``ExternalFetchError`` は origin error のまま ``ScrapeFailure`` に保持する。content
+失敗は本文を取得できたが使えなかった観測値で、``classify_scrape_failure`` が両者を
+``ScrapeTerminal | ScrapeRetryable`` に写像する。
 """
 
 from __future__ import annotations
@@ -68,17 +68,12 @@ class ScrapeRetryable:
         return now + timedelta(minutes=self.next_delay.minutes(attempt_count))
 
 
-ScrapeDecision = ScrapeTerminal | ScrapeRetryable
-"""scrape 失敗の Retry 軸での処理方針。"""
-
-
 # ---------------------------------------------------------------------------
 # content 失敗 variant (取得できたが使える本文でなかった)
 # ---------------------------------------------------------------------------
 #
-# content 失敗は scrape 段 native で、再取得しても同じ結果なので常に
-# ``ScrapeTerminal``。その不変条件を ``decision`` として型自身に持たせる
-# (外付け分類に委ねない)。
+# ``reason`` は失敗種別タグ (純データ)。terminal への写像は
+# ``classify_scrape_failure`` が一手に担い、VO 自身は分類を持たない。
 
 
 @dataclass(frozen=True)
@@ -94,23 +89,12 @@ class ScrapeNotHtml:
                 self, "content_type", self.content_type[:_CONTENT_TYPE_MAX]
             )
 
-    @property
-    def decision(self) -> ScrapeDecision:
-        return ScrapeTerminal(
-            reason_code=f"scrape_{self.reason}",
-            detail=f"content_type={self.content_type}",
-        )
-
 
 @dataclass(frozen=True)
 class ScrapeParserGaveUp:
     """``trafilatura.bare_extraction`` が ``None`` を返した。"""
 
     reason: ClassVar[str] = "parser_gave_up"
-
-    @property
-    def decision(self) -> ScrapeDecision:
-        return ScrapeTerminal(reason_code=f"scrape_{self.reason}")
 
 
 @dataclass(frozen=True)
@@ -127,13 +111,6 @@ class ScrapeParseCrashed:
                 self, "error_message", self.error_message[:_ERROR_MESSAGE_MAX]
             )
 
-    @property
-    def decision(self) -> ScrapeDecision:
-        return ScrapeTerminal(
-            reason_code=f"scrape_{self.reason}",
-            detail=f"{self.error_class}: {self.error_message}",
-        )
-
 
 @dataclass(frozen=True)
 class ScrapeContentQualityTooLow:
@@ -147,17 +124,6 @@ class ScrapeContentQualityTooLow:
     def __post_init__(self) -> None:
         if self.body_sample is not None and len(self.body_sample) > _BODY_SAMPLE_MAX:
             object.__setattr__(self, "body_sample", self.body_sample[:_BODY_SAMPLE_MAX])
-
-    @property
-    def decision(self) -> ScrapeDecision:
-        sample = f" sample={self.body_sample!r}" if self.body_sample else ""
-        return ScrapeTerminal(
-            reason_code=f"scrape_{self.reason}",
-            detail=(
-                f"body_length={self.body_length} "
-                f"title_present={self.title_present}{sample}"
-            ),
-        )
 
 
 ScrapeContentFailure = (
@@ -192,7 +158,9 @@ def _retryable(
     )
 
 
-def classify_external_fetch_error(exc: ExternalFetchError) -> ScrapeDecision:
+def classify_external_fetch_error(
+    exc: ExternalFetchError,
+) -> ScrapeTerminal | ScrapeRetryable:
     """origin fetch error を completion scrape 用 decision に分類する。
 
     retry 可否は origin の ``retryable`` (SSoT) に従い、retryable=False は段に依らず
@@ -234,15 +202,34 @@ def classify_external_fetch_error(exc: ExternalFetchError) -> ScrapeDecision:
 # ---------------------------------------------------------------------------
 
 
-def classify_scrape_failure(failure: ScrapeFailure) -> ScrapeDecision:
+def classify_scrape_failure(
+    failure: ScrapeFailure,
+) -> ScrapeTerminal | ScrapeRetryable:
     """scrape failure を ``ScrapeTerminal | ScrapeRetryable`` に分類する。
 
-    transport (origin error) は段固有の backoff schedule へ写像し、content 失敗は
-    自身の ``decision`` (常に ``ScrapeTerminal``) を返す。
+    transport (origin error) は ``classify_external_fetch_error`` に委譲し、例外の
+    class+message を ``detail`` に畳む。content 失敗は常に ``ScrapeTerminal`` に閉じる。
+    ``case _`` は新 content variant の写像漏れを早期に露見させる totality guard。
     """
     if isinstance(failure, ExternalFetchError):
         return replace(
             classify_external_fetch_error(failure),
             detail=f"{type(failure).__name__}: {failure}",
         )
-    return failure.decision
+
+    match failure:
+        case ScrapeNotHtml():
+            detail = f"content_type={failure.content_type}"
+        case ScrapeParserGaveUp():
+            detail = None
+        case ScrapeParseCrashed():
+            detail = f"{failure.error_class}: {failure.error_message}"
+        case ScrapeContentQualityTooLow():
+            sample = f" sample={failure.body_sample!r}" if failure.body_sample else ""
+            detail = (
+                f"body_length={failure.body_length} "
+                f"title_present={failure.title_present}{sample}"
+            )
+        case _:
+            raise AssertionError(f"unmapped scrape content failure: {type(failure)!r}")
+    return ScrapeTerminal(reason_code=f"scrape_{failure.reason}", detail=detail)
