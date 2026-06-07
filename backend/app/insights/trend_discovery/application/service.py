@@ -29,27 +29,42 @@ import structlog
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from app.insights.trend_discovery.config import (
-    NEW_ENTITY_LOOKBACK_WEEKS,
-    WEEK_TZ,
-)
 from app.insights.trend_discovery.domain.ready import ReadyForTrendDiscovery
 from app.insights.trend_discovery.domain.trend import (
-    MAX_TRENDS_PER_CATEGORY,
-    WeeklyCategoryTrends,
-    WeeklyTrendsBundle,
+    MIN_PREVIOUS,
+    NEW_BURST_THRESHOLD,
+    TOP_N_PER_RANKING,
+    CategoryRankings,
+    RankedMention,
+    TrendsBundle,
 )
+from app.insights.trend_discovery.domain.window import WEEK_TZ
 from app.insights.trend_discovery.repository.snapshots import (
     SnapshotRepository,
     SnapshotSaveStatus,
 )
 from app.insights.trend_discovery.repository.trends import TrendsRepository
 from app.models.category import Category
-from app.models.weekly_trends_snapshot import WeeklyTrendsSnapshot
+from app.models.trends_snapshot import TrendsSnapshot
 
 logger = structlog.get_logger(__name__)
 
 _WEEK = timedelta(days=7)
+
+_MentionKey = tuple[str, str]
+
+
+def _is_hot(mention: RankedMention) -> bool:
+    """伸び率ランキングの母集団判定 (継続トレンド or 新規 burst)。
+
+    floor (appearance_count >= MIN_CURRENT) は repository が保証済み。ここでは
+    前週実績ありの継続トレンド (previous >= MIN_PREVIOUS) か、前週ゼロでも現週が
+    閾値を超えた新規 burst (current >= NEW_BURST_THRESHOLD) かのみを判定する。
+    """
+    return (
+        mention.previous_appearance_count >= MIN_PREVIOUS
+        or mention.appearance_count >= NEW_BURST_THRESHOLD
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -117,9 +132,7 @@ class TrendDiscoveryService:
 
         集計窓は rolling 7d:
         - ``current  = [window_end - 7d, window_end)``
-        - ``previous = [window_end - 14d, window_end - 7d)``
-        - ``lookback = [window_end - 7d - 4w, window_end - 7d)``
-          (現状窓の手前 4 週、new entity 初出判定用)
+        - ``previous = [window_end - 14d, window_end - 7d)`` (伸び率の前週比較用)
 
         race 敗北 (``force=False`` 経路で同時 INSERT 競合) は読み戻しせず
         ``TrendDiscoveryConflict`` を返す。
@@ -143,9 +156,8 @@ class TrendDiscoveryService:
 
             categories = await self._fetch_categories(session)
             previous_start = current_start - _WEEK
-            lookback_start = current_start - _WEEK * NEW_ENTITY_LOOKBACK_WEEKS
 
-            sections_list: list[WeeklyCategoryTrends] = []
+            sections_list: list[CategoryRankings] = []
             for cat in categories:
                 sections_list.append(
                     await self._build_section(
@@ -154,14 +166,13 @@ class TrendDiscoveryService:
                         current_start=current_start,
                         current_end=current_end,
                         previous_start=previous_start,
-                        lookback_start=lookback_start,
                     )
                 )
             sections = tuple(sections_list)
             completed_category_count = len(sections)
-            bundle = WeeklyTrendsBundle(window_end=ready.window_end, sections=sections)
+            bundle = TrendsBundle(window_end=ready.window_end, sections=sections)
 
-            snapshot = WeeklyTrendsSnapshot(
+            snapshot = TrendsSnapshot(
                 window_end=ready.window_end,
                 bundle=bundle.model_dump(mode="json"),
                 source_analysis_count=source_count,
@@ -205,31 +216,77 @@ class TrendDiscoveryService:
         current_start: datetime,
         current_end: datetime,
         previous_start: datetime,
-        lookback_start: datetime,
-    ) -> WeeklyCategoryTrends:
-        entities = await trends_repo.get_trending_entities(
+    ) -> CategoryRankings:
+        """1 カテゴリ分の 2 ランキングを確定し、上位 mention に文脈を添えて束ねる。
+
+        repository は floor 通過の全 mention を母集団として返す。出現回数は floor の
+        み・伸び率は hot ゲート通過のみを母集団に、それぞれ top N を確定する。両ラン
+        キングの和集合だけ key_point / related mention を取得し (1 カテゴリ 3 query)、
+        同一 mention が両方に載る場合は同じ enrich 済みインスタンスを共有する。
+        """
+        pool = await trends_repo.get_ranked_mentions(
             category_id=category.id,
             current_start=current_start,
             current_end=current_end,
             previous_start=previous_start,
         )
-        new_entities = await trends_repo.get_new_entities(
+        most_mentioned = tuple(
+            sorted(
+                pool,
+                key=lambda m: (
+                    -m.appearance_count,
+                    -m.hotness_score,
+                    m.name.match_key,
+                ),
+            )[:TOP_N_PER_RANKING]
+        )
+        fastest_growing = tuple(
+            sorted(
+                (m for m in pool if _is_hot(m)),
+                key=lambda m: (
+                    -m.hotness_score,
+                    -m.appearance_count,
+                    m.name.match_key,
+                ),
+            )[:TOP_N_PER_RANKING]
+        )
+
+        union: dict[_MentionKey, RankedMention] = {}
+        for mention in (*most_mentioned, *fastest_growing):
+            union.setdefault((mention.name.match_key, mention.type.value), mention)
+        mention_keys = list(union.keys())
+
+        key_points = await trends_repo.get_mention_key_points(
             category_id=category.id,
             current_start=current_start,
             current_end=current_end,
-            lookback_start=lookback_start,
+            mention_keys=mention_keys,
         )
-        # new entity の集計は閾値が緩く (current_count >= 1) 1 カテゴリで 1000+ 件に
-        # 膨らむため、各リストを上位 ``MAX_TRENDS_PER_CATEGORY`` 件で truncate して
-        # JSONB 肥大化と UI ノイズを構造的に抑える (hot 系は閾値で既に小さいが対称性
-        # のため同じ扱い)。同定数は WeeklyCategoryTrends の Field(max_length=...)
-        # でも参照され、生成側 truncate と VO 不変条件の SSoT になっている。
-        return WeeklyCategoryTrends(
+        related = await trends_repo.get_related_mentions(
+            category_id=category.id,
+            current_start=current_start,
+            current_end=current_end,
+            mention_keys=mention_keys,
+        )
+        enriched = {
+            key: mention.model_copy(
+                update={
+                    "key_points": key_points.get(key, ()),
+                    "related_mentions": related.get(key, ()),
+                }
+            )
+            for key, mention in union.items()
+        }
+
+        def _with_context(mention: RankedMention) -> RankedMention:
+            return enriched[(mention.name.match_key, mention.type.value)]
+
+        return CategoryRankings(
             category_id=category.id,
             category_slug=category.slug,
             category_name=category.name,
-            trending_entities=entities[:MAX_TRENDS_PER_CATEGORY],
-            new_entities=new_entities[:MAX_TRENDS_PER_CATEGORY],
+            most_mentioned=tuple(_with_context(m) for m in most_mentioned),
+            fastest_growing=tuple(_with_context(m) for m in fastest_growing),
         )
 
     @staticmethod

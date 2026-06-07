@@ -18,7 +18,7 @@ AIで翻訳・要約・インパクト分析を行う投資ダッシュボード
 - AI翻訳・要約・分析（**Gemini + DeepSeek** の multi-provider）
 - 類似記事推薦（pgvector）
 - ウォッチリスト（記事ブックマーク）
-- **Trend Discovery** (`weekly_trends_snapshots`) と **週次 LLM ブリーフィング**
+- **Trend Discovery** (`trends_snapshots`) と **週次 LLM ブリーフィング**
 - **Pipeline Events 監査基盤** — 全ステージの成功/失敗/AI raw response を SQL で再構成可能
 - キーワード・ニュースソース管理（管理者向け）
 - カテゴリ別のニュースフィルタリング
@@ -154,7 +154,7 @@ Redis (rate-limit, ephemeral) ◄── proxy.ts IP sliding window log (rl:ip:*)
 | カテゴリ | キーワードと記事を分類する統合カテゴリ | `Category` |
 | ニュースソース | ニュースの収集元メディア・サイト | `NewsSource` |
 | ウォッチリスト | ユーザーの記事ブックマーク | `WatchlistEntry` |
-| 週次トレンドスナップショット | 週次ダイジェスト用の集約結果 | `WeeklyTrendsSnapshot` |
+| トレンドスナップショット | ダイジェスト用の集約結果 (rolling 7d を日次再生成) | `TrendsSnapshot` |
 | 週次ブリーフィング | 週次 LLM 生成サマリー (カテゴリ別) | `WeeklyBriefing` |
 | パイプラインイベント | 全 stage 監査ログ (Discriminated Union payload) | `PipelineEvent` |
 

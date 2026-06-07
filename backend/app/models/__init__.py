@@ -13,9 +13,9 @@ from app.models.incomplete_article import IncompleteArticle
 from app.models.news_source import NewsSource, SourceType
 from app.models.out_of_scope_assessment import OutOfScopeAssessment
 from app.models.pipeline_event import PipelineEvent
+from app.models.trends_snapshot import TrendsSnapshot
 from app.models.watchlist_entry import WatchlistEntry
 from app.models.weekly_briefing import WeeklyBriefing
-from app.models.weekly_trends_snapshot import WeeklyTrendsSnapshot
 
 __all__ = [
     "Article",
@@ -31,7 +31,7 @@ __all__ = [
     "IncompleteArticle",
     "PipelineEvent",
     "SourceType",
+    "TrendsSnapshot",
     "WatchlistEntry",
     "WeeklyBriefing",
-    "WeeklyTrendsSnapshot",
 ]

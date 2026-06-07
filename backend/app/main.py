@@ -26,8 +26,8 @@ from app.exception_handlers import (
 )
 from app.exceptions import DuplicateError, InvalidQueryError, NotFoundError
 from app.insights.briefing.router.briefing import router as briefing_router
-from app.insights.trend_discovery.router.weekly_trends import (
-    router as weekly_trends_router,
+from app.insights.trend_discovery.router.trends import (
+    router as trends_router,
 )
 from app.logfire.db_pool import log_pool_initialized, register_pool_metrics
 from app.logfire.setup import setup_logfire
@@ -183,7 +183,7 @@ app.add_exception_handler(InvalidQueryError, invalid_query_handler)
 app.include_router(articles.router)
 app.include_router(categories.router)
 app.include_router(watchlist.router)
-app.include_router(weekly_trends_router)
+app.include_router(trends_router)
 app.include_router(briefing_router)
 app.include_router(admin_router)
 

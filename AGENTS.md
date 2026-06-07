@@ -49,6 +49,14 @@
 - テストを通すために機能を削除・無効化しない。
 - 検証できなかった場合は、未実行の項目と理由を明記する。
 
+## Failure Learning
+
+- Problem / Done と実際の作業にズレが見えた場合は、失敗から学ぶために `/failure-log` を使う。
+
+## Task Agents
+
+- テスト設計・単体テスト追加は、利用可能な場合 test-writer agent に分担する。
+
 ## Ask First
 
 次は事前確認する。

@@ -2,7 +2,8 @@
 
 Trend Discovery BC は rolling 7d daily で集計するため、半開区間
 ``[window_end - 7d, window_end)`` の上限となる JST 日付を返す。
-``WEEK_TZ = "Asia/Tokyo"`` で日付境界を切る。
+``WEEK_TZ = "Asia/Tokyo"`` で日付境界を切る。窓 TZ は window の責務に
+同居させるため、トレンドのドメイン定数として本モジュールで定義する。
 
 責務分離:
 - ``latest_window_end``: 純関数 (副作用なし、テスト容易)
@@ -13,9 +14,11 @@ Trend Discovery BC は rolling 7d daily で集計するため、半開区間
 from __future__ import annotations
 
 from datetime import date, datetime
+from typing import Final
 from zoneinfo import ZoneInfo
 
-from app.insights.trend_discovery.config import WEEK_TZ
+# rolling window の日付境界を切る基準タイムゾーン。
+WEEK_TZ: Final[str] = "Asia/Tokyo"
 
 
 def latest_window_end(now: datetime) -> date:

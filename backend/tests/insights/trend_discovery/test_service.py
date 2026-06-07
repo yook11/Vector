@@ -6,9 +6,12 @@
 - 集計対象記事 0 件: snapshot を保存せず SkippedNoTargetArticles を返す
 - execute(ready, force=True) 既存上書き: TrendDiscoveryCompleted を返し
   source_analysis_count を反映 (`generated_at` も更新)
-- bundle 内容: 全カテゴリ 1 セクションずつ含み、hot 判定の通った VO のみ詰まる
+- bundle 内容: 全カテゴリ 1 セクションずつ含み、出現回数 / 伸び率の 2 ランキングが
+  それぞれの母集団 (floor のみ / floor + hot ゲート) で確定する
 - source_analysis_count: window 内の analysis 件数 (全カテゴリ合算)
-- MAX_TRENDS_PER_CATEGORY で truncate
+- 各ランキングは TOP_N_PER_RANKING 件で truncate
+- 上位 mention に key_point / related mention の文脈が付き、両ランキングに載る
+  mention は同じ enrich 済みインスタンスを共有する
 - race 敗北 (force=False で同時 INSERT 競合): 読み戻しせず
   TrendDiscoveryConflict を返す
 
@@ -35,12 +38,13 @@ from app.insights.trend_discovery.application.service import (
     TrendDiscoveryService,
 )
 from app.insights.trend_discovery.domain.ready import ReadyForTrendDiscovery
-from app.insights.trend_discovery.domain.trend import MAX_TRENDS_PER_CATEGORY
+from app.insights.trend_discovery.domain.trend import TOP_N_PER_RANKING
 from app.insights.trend_discovery.repository.snapshots import (
     SnapshotRepository,
     SnapshotSaveResult,
     SnapshotSaveStatus,
 )
+from app.insights.trend_discovery.repository.trends import TrendsRepository
 from app.models.category import Category
 
 from .conftest import SeedAnalysis
@@ -193,25 +197,33 @@ class TestExecute:
         assert category_ids == {c.id for c in sample_categories}
 
     @pytest.mark.asyncio
-    async def test_caps_each_list_at_default_limit(
+    async def test_caps_each_ranking_at_top_n(
         self,
         db_session: AsyncSession,
         session_factory: async_sessionmaker[AsyncSession],
         sample_categories: list[Category],
         seed_analysis: SeedAnalysis,
     ) -> None:
-        """new_entities は ``MAX_TRENDS_PER_CATEGORY`` 件で truncate される。
+        """出現回数 / 伸び率の各ランキングは ``TOP_N_PER_RANKING`` 件で truncate。
 
-        new entity 集計は閾値が緩く (current_count >= 1)、現実データでは 1 カテゴリ
-        1000+ 件に膨らむ。snapshot 段階で上限を切ることで JSONB 肥大化と UI 描画の
-        ノイズを構造的に防ぐ。
+        floor 通過 mention は 1 カテゴリで多数に膨らむため、各ランキング上位 N 件で
+        切ることで JSONB 肥大化と UI ノイズを構造的に防ぐ。entity_00 が最多出現
+        (= 上位)、entity が小さいほど件数が多くなるよう仕込む。
         """
         cat = sample_categories[0]
-        for i in range(25):
-            for hour in range(25 - i):
+        # entity_i は current=(10 - i) 件・previous=2 件。previous>=2 で hot ゲートを
+        # 通すため両ランキングに 6 件が母集団入りし、上位 5 件で truncate される。
+        for i in range(6):
+            for hour in range(10 - i):
                 await seed_analysis(
                     category_id=cat.id,
-                    analyzed_at=_jst(2026, 4, 14 + (hour // 24), hour=hour % 24),
+                    analyzed_at=_jst(2026, 4, 14, hour=hour),
+                    mentions=[(f"entity_{i:02d}", "company")],
+                )
+            for hour in range(2):
+                await seed_analysis(
+                    category_id=cat.id,
+                    analyzed_at=_jst(2026, 4, 7, hour=hour),
                     mentions=[(f"entity_{i:02d}", "company")],
                 )
         await db_session.commit()
@@ -225,10 +237,90 @@ class TestExecute:
         section = next(
             s for s in snapshot.bundle["sections"] if s["category_id"] == cat.id
         )
-        assert len(section["new_entities"]) == MAX_TRENDS_PER_CATEGORY
-        names = [e["name"] for e in section["new_entities"]]
-        assert "entity_00" in names
-        assert "entity_24" not in names
+        assert len(section["most_mentioned"]) == TOP_N_PER_RANKING
+        assert len(section["fastest_growing"]) == TOP_N_PER_RANKING
+        appearance_names = [m["name"] for m in section["most_mentioned"]]
+        assert appearance_names[0] == "entity_00"  # 最多出現が先頭
+        assert "entity_05" not in appearance_names  # 6 番目は上位 5 から漏れる
+
+    @pytest.mark.asyncio
+    async def test_floor_passing_non_hot_appears_in_appearance_not_growth(
+        self,
+        db_session: AsyncSession,
+        sample_categories: list[Category],
+        seed_analysis: SeedAnalysis,
+    ) -> None:
+        """floor は超えるが hot ゲート外の高出現 mention は出現回数にだけ載る。
+
+        2 ランキングの母集団が異なる (出現回数=floor のみ / 伸び率=floor+hot) こと
+        の回帰。current>=5 だが previous<2 かつ current<burst の mention は
+        most_mentioned に出るが fastest_growing には出ない。
+        """
+        cat = sample_categories[0]
+        # current 7 / previous 1 → floor 通過・hot ゲート外。
+        for hour in range(7):
+            await seed_analysis(
+                category_id=cat.id,
+                analyzed_at=_jst(2026, 4, 14, hour=hour),
+                mentions=[("Edge", "technology")],
+            )
+        await seed_analysis(
+            category_id=cat.id,
+            analyzed_at=_jst(2026, 4, 7, hour=9),
+            mentions=[("Edge", "technology")],
+        )
+        await db_session.commit()
+
+        repo = TrendsRepository(db_session)
+        section = await TrendDiscoveryService._build_section(
+            repo,
+            category=cat,
+            current_start=_jst(2026, 4, 13, hour=0),
+            current_end=_jst(2026, 4, 20, hour=0),
+            previous_start=_jst(2026, 4, 6, hour=0),
+        )
+
+        appearance_names = {str(m.name) for m in section.most_mentioned}
+        growth_names = {str(m.name) for m in section.fastest_growing}
+        assert "Edge" in appearance_names
+        assert "Edge" not in growth_names
+
+    @pytest.mark.asyncio
+    async def test_enriches_shared_mention_once_across_rankings(
+        self,
+        db_session: AsyncSession,
+        sample_categories: list[Category],
+        seed_analysis: SeedAnalysis,
+    ) -> None:
+        """両ランキングに載る mention は同一 enrich 済みインスタンスを共有する。"""
+        cat = sample_categories[0]
+        # current 多数 / previous 0 → 出現回数・伸び率の両方で上位に来る burst。
+        for hour in range(12):
+            await seed_analysis(
+                category_id=cat.id,
+                analyzed_at=_jst(2026, 4, 14, hour=hour),
+                content=f"NVIDIA point {hour}",
+                mentions=[("NVIDIA", "company"), ("OpenAI", "company")],
+                embedding=[1.0, 0.0],  # 同一トピック → key_point は 1 本に畳まれる
+            )
+        await db_session.commit()
+
+        repo = TrendsRepository(db_session)
+        section = await TrendDiscoveryService._build_section(
+            repo,
+            category=cat,
+            current_start=_jst(2026, 4, 13, hour=0),
+            current_end=_jst(2026, 4, 20, hour=0),
+            previous_start=_jst(2026, 4, 6, hour=0),
+        )
+
+        appearance = next(m for m in section.most_mentioned if str(m.name) == "NVIDIA")
+        growth = next(m for m in section.fastest_growing if str(m.name) == "NVIDIA")
+        # 同一インスタンス共有 (二重 enrich なし)。
+        assert appearance is growth
+        # 文脈が付いている (related に OpenAI、key_point は記事 dedup で 1 本)。
+        assert len(appearance.key_points) == 1
+        assert {str(r.name) for r in appearance.related_mentions} == {"OpenAI"}
 
 
 # race-loss: save が CONFLICT → 読み戻しせず TrendDiscoveryConflict

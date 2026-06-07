@@ -1,4 +1,4 @@
-"""GET /api/v1/weekly-trends ルーター。
+"""GET /api/v1/trends ルーター。
 
 設計判断 (failure_visibility):
 - snapshot 不在は 200 + state="empty" の discriminated 構造で返す。
@@ -17,35 +17,33 @@ from fastapi import APIRouter, Depends
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.dependencies import get_optional_user, get_session
-from app.insights.trend_discovery.application.query import WeeklyTrendsQueryService
-from app.insights.trend_discovery.domain.trend import WeeklyTrendsBundle
-from app.insights.trend_discovery.schemas.weekly_trends import (
-    WeeklyTrendsResponse,
-    empty_weekly_trends,
-    weekly_trends_from_snapshot,
+from app.insights.trend_discovery.application.query import TrendsQueryService
+from app.insights.trend_discovery.domain.trend import TrendsBundle
+from app.insights.trend_discovery.schemas.trends import (
+    TrendsResponse,
+    empty_trends,
+    trends_from_snapshot,
 )
 
-router = APIRouter(prefix="/api/v1/weekly-trends", tags=["weekly-trends"])
+router = APIRouter(prefix="/api/v1/trends", tags=["trends"])
 
 
-def get_weekly_trends_query_service(
+def get_trends_query_service(
     session: Annotated[AsyncSession, Depends(get_session)],
-) -> WeeklyTrendsQueryService:
-    return WeeklyTrendsQueryService(session)
+) -> TrendsQueryService:
+    return TrendsQueryService(session)
 
 
 @router.get("", dependencies=[Depends(get_optional_user)])
-async def get_weekly_trends(
-    service: Annotated[
-        WeeklyTrendsQueryService, Depends(get_weekly_trends_query_service)
-    ],
-) -> WeeklyTrendsResponse:
-    """最新週の weekly trends snapshot を返す (なければ state="empty")。"""
+async def get_trends(
+    service: Annotated[TrendsQueryService, Depends(get_trends_query_service)],
+) -> TrendsResponse:
+    """最新窓の trends snapshot を返す (なければ state="empty")。"""
     snapshot = await service.find_latest()
     if snapshot is None:
-        return empty_weekly_trends()
-    bundle = WeeklyTrendsBundle.model_validate(snapshot.bundle)
-    return weekly_trends_from_snapshot(
+        return empty_trends()
+    bundle = TrendsBundle.model_validate(snapshot.bundle)
+    return trends_from_snapshot(
         bundle=bundle,
         generated_at=snapshot.generated_at,
         source_analysis_count=snapshot.source_analysis_count,

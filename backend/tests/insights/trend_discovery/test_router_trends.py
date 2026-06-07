@@ -1,9 +1,9 @@
-"""GET /api/v1/weekly-trends ルーターの E2E テスト。
+"""GET /api/v1/trends ルーターの E2E テスト。
 
 検証する観点:
 - snapshot 不在時は 200 + state="empty" のみ (failure_visibility 原則:
   500 にはせず空状態を discriminated union で表現する)
-- snapshot 在ると最新窓の bundle が state="ready" + camelCase で返る
+- snapshot 在ると最新窓の bundle が state="trends" + camelCase で返る
 - 複数 window_end がある場合は window_end DESC で 1 件目を返す
 - 認証は任意 (BFF プロキシヘッダなしでも 200)
 - bundle JSONB が破損していて Pydantic validate に失敗したらルーターは
@@ -22,37 +22,35 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.insights.trend_discovery.domain.trend import (
     MAX_CATEGORIES_PER_BUNDLE,
-    MAX_TRENDS_PER_CATEGORY,
-    EntityTrend,
-    NewEntity,
-    WeeklyCategoryTrends,
-    WeeklyTrendsBundle,
+    TOP_N_PER_RANKING,
+    CategoryRankings,
+    RankedMention,
+    TrendsBundle,
 )
-from app.models.weekly_trends_snapshot import WeeklyTrendsSnapshot
+from app.models.trends_snapshot import TrendsSnapshot
 
 
-def _bundle_with_section(window_end: date) -> WeeklyTrendsBundle:
-    section = WeeklyCategoryTrends(
+def _bundle_with_section(window_end: date) -> TrendsBundle:
+    mention = RankedMention(
+        name="NVIDIA", type="company", appearance_count=30, previous_appearance_count=5
+    )
+    section = CategoryRankings(
         category_id=1,
         category_slug="ai",
         category_name="AI",
-        trending_entities=(
-            EntityTrend(
-                name="NVIDIA", type="company", current_count=30, previous_count=5
-            ),
-        ),
-        new_entities=(NewEntity(name="Acme", type="company", current_count=3),),
+        most_mentioned=(mention,),
+        fastest_growing=(mention,),
     )
-    return WeeklyTrendsBundle(window_end=window_end, sections=(section,))
+    return TrendsBundle(window_end=window_end, sections=(section,))
 
 
-def _snapshot(window_end: date, *, bundle: dict | None = None) -> WeeklyTrendsSnapshot:
+def _snapshot(window_end: date, *, bundle: dict | None = None) -> TrendsSnapshot:
     serialized = (
         bundle
         if bundle is not None
         else _bundle_with_section(window_end).model_dump(mode="json")
     )
-    return WeeklyTrendsSnapshot(
+    return TrendsSnapshot(
         window_end=window_end,
         bundle=serialized,
         source_analysis_count=42,
@@ -60,11 +58,11 @@ def _snapshot(window_end: date, *, bundle: dict | None = None) -> WeeklyTrendsSn
 
 
 @pytest.mark.asyncio
-class TestWeeklyTrendsEndpoint:
+class TestTrendsEndpoint:
     async def test_empty_state_returns_200_with_state_empty(
         self, client: AsyncClient
     ) -> None:
-        resp = await client.get("/api/v1/weekly-trends")
+        resp = await client.get("/api/v1/trends")
         assert resp.status_code == 200
         assert resp.json() == {"state": "empty"}
 
@@ -77,10 +75,10 @@ class TestWeeklyTrendsEndpoint:
         db_session.add(_snapshot(date(2026, 5, 3)))
         await db_session.commit()
 
-        resp = await client.get("/api/v1/weekly-trends")
+        resp = await client.get("/api/v1/trends")
         assert resp.status_code == 200
         data = resp.json()
-        assert data["state"] == "ready"
+        assert data["state"] == "trends"
         assert data["windowEnd"] == "2026-05-03"
         assert data["windowStart"] == "2026-04-26"
         assert data["sourceAnalysisCount"] == 42
@@ -88,8 +86,8 @@ class TestWeeklyTrendsEndpoint:
 
         section = data["categories"][0]
         assert section["categorySlug"] == "ai"
-        assert section["trendingEntities"][0]["name"] == "NVIDIA"
-        assert section["newEntities"][0]["name"] == "Acme"
+        assert section["mostMentioned"][0]["name"] == "NVIDIA"
+        assert section["fastestGrowing"][0]["name"] == "NVIDIA"
 
     async def test_no_auth_required(
         self,
@@ -99,7 +97,7 @@ class TestWeeklyTrendsEndpoint:
         db_session.add(_snapshot(date(2026, 5, 3)))
         await db_session.commit()
 
-        resp = await client.get("/api/v1/weekly-trends")
+        resp = await client.get("/api/v1/trends")
         assert resp.status_code == 200
 
     async def test_corrupt_bundle_propagates_validation_error(
@@ -118,28 +116,30 @@ class TestWeeklyTrendsEndpoint:
         await db_session.commit()
 
         with pytest.raises(ValidationError):
-            await client.get("/api/v1/weekly-trends")
+            await client.get("/api/v1/trends")
 
-    async def test_anon_get_rejects_oversized_trends_in_section(
+    async def test_anon_get_rejects_oversized_ranking_in_section(
         self,
         client: AsyncClient,
         db_session: AsyncSession,
     ) -> None:
-        """1 section 内の trending_entities が上限超なら anon GET で 500 (DoS 遮断)。
+        """1 section 内の most_mentioned が上限超なら anon GET で 500 (DoS 遮断)。
 
         AUTH-N4 / AUTH-C1 経由で attacker が DB に巨大 JSONB を直書きしたシナリオ。
-        domain VO の Field(max_length=MAX_TRENDS_PER_CATEGORY) が router の
-        WeeklyTrendsBundle.model_validate(snapshot.bundle) で発火し、巨大 response
+        domain VO の Field(max_length=TOP_N_PER_RANKING) が router の
+        TrendsBundle.model_validate(snapshot.bundle) で発火し、巨大 response
         が anon に流れることを構造的に防ぐ (red-team F10)。
         """
-        oversized_entities = [
+        oversized_mentions = [
             {
                 "name": f"ent_{i:03d}",
                 "type": "company",
-                "current_count": 5,
-                "previous_count": 0,
+                "appearance_count": 5,
+                "previous_appearance_count": 0,
+                "key_points": [],
+                "related_mentions": [],
             }
-            for i in range(MAX_TRENDS_PER_CATEGORY + 1)
+            for i in range(TOP_N_PER_RANKING + 1)
         ]
         bundle = {
             "window_end": "2026-05-03",
@@ -148,8 +148,8 @@ class TestWeeklyTrendsEndpoint:
                     "category_id": 1,
                     "category_slug": "ai",
                     "category_name": "AI",
-                    "trending_entities": oversized_entities,
-                    "new_entities": [],
+                    "most_mentioned": oversized_mentions,
+                    "fastest_growing": [],
                 }
             ],
         }
@@ -157,7 +157,7 @@ class TestWeeklyTrendsEndpoint:
         await db_session.commit()
 
         with pytest.raises(ValidationError):
-            await client.get("/api/v1/weekly-trends")
+            await client.get("/api/v1/trends")
 
     async def test_anon_get_rejects_too_many_sections(
         self,
@@ -170,8 +170,8 @@ class TestWeeklyTrendsEndpoint:
                 "category_id": i + 1,
                 "category_slug": f"slug_{i:02d}",
                 "category_name": f"Cat {i}",
-                "trending_entities": [],
-                "new_entities": [],
+                "most_mentioned": [],
+                "fastest_growing": [],
             }
             for i in range(MAX_CATEGORIES_PER_BUNDLE + 1)
         ]
@@ -180,4 +180,4 @@ class TestWeeklyTrendsEndpoint:
         await db_session.commit()
 
         with pytest.raises(ValidationError):
-            await client.get("/api/v1/weekly-trends")
+            await client.get("/api/v1/trends")

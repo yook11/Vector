@@ -1,4 +1,4 @@
-"""WeeklyTrendsQueryService — 週次トレンド snapshot の Read 経路。
+"""TrendsQueryService — トレンド snapshot の Read 経路。
 
 責務:
 - 既存 snapshot の取り出し (``find_latest`` のみ。Phase 1A は最新週単一表示)
@@ -16,16 +16,16 @@ from __future__ import annotations
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.insights.trend_discovery.repository.snapshots import SnapshotRepository
-from app.models.weekly_trends_snapshot import WeeklyTrendsSnapshot
+from app.models.trends_snapshot import TrendsSnapshot
 
 
-class WeeklyTrendsQueryService:
-    """週次トレンド snapshot の Read ユースケースをまとめる薄い Service。"""
+class TrendsQueryService:
+    """トレンド snapshot の Read ユースケースをまとめる薄い Service。"""
 
     def __init__(self, session: AsyncSession) -> None:
         self._session = session
 
-    async def find_latest(self) -> WeeklyTrendsSnapshot | None:
+    async def find_latest(self) -> TrendsSnapshot | None:
         """最新 (window_end DESC) の snapshot を 1 件返す (なければ None)。"""
         repo = SnapshotRepository(self._session)
         return await repo.find_latest()

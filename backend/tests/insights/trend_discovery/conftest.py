@@ -29,6 +29,17 @@ from app.models.news_source import NewsSource
 
 SeedAnalysis = Callable[..., Awaitable[InScopeAssessment]]
 
+# InScopeAssessment.embedding は HALFVEC(768)。テストは近接 dedup を作り込みやすい
+# よう短いベクトルを渡し、ここで 768 次元へ 0 padding する。
+_EMBEDDING_DIM = 768
+
+
+def _pad_embedding(embedding: Sequence[float] | None) -> list[float] | None:
+    if embedding is None:
+        return None
+    vec = list(embedding)
+    return (vec + [0.0] * _EMBEDDING_DIM)[:_EMBEDDING_DIM]
+
 
 @pytest.fixture
 def seed_analysis(db_session: AsyncSession, sample_source: NewsSource) -> SeedAnalysis:
@@ -41,6 +52,13 @@ def seed_analysis(db_session: AsyncSession, sample_source: NewsSource) -> SeedAn
             1 つの key_point としてまとめて焼き付ける (同一 assessment 内で同じ
             mention が複数 key_point に現れても COUNT(DISTINCT a.id) で 1 件と
             数えられる集計仕様を踏襲)。
+        content: 単一 key_point seeding (``mentions`` 経由) の content を上書き。
+        key_points: ``[(content, [(surface, type), ...]), ...]`` で複数 key_point を
+            明示 seeding する (指定時は ``mentions`` / ``content`` より優先)。同一
+            assessment 内の別 key_point 共起や記事内 dedup の検証に使う。
+        embedding: ``InScopeAssessment.embedding`` に焼く float 列。768 次元未満は
+            0 padding する (近接 dedup 検証用に短いベクトルを渡せる)。None は
+            embedding 未設定 (旧行) を再現する。
         key_points_null: ``True`` のとき ``key_points`` を NULL のまま残す
             (PR 1 デプロイ前の旧行を再現する用途)。
 
@@ -55,6 +73,9 @@ def seed_analysis(db_session: AsyncSession, sample_source: NewsSource) -> SeedAn
         category_id: int,
         analyzed_at: datetime,
         mentions: Sequence[tuple[str, str]] = (),
+        content: str | None = None,
+        key_points: Sequence[tuple[str, Sequence[tuple[str, str]]]] | None = None,
+        embedding: Sequence[float] | None = None,
         key_points_null: bool = False,
     ) -> InScopeAssessment:
         n = next(seq)
@@ -77,12 +98,24 @@ def seed_analysis(db_session: AsyncSession, sample_source: NewsSource) -> SeedAn
         db_session.add(extraction)
         await db_session.flush()
 
+        key_points_json: list[dict[str, object]] | None
         if key_points_null:
-            key_points: list[dict[str, object]] | None = None
-        elif mentions:
-            key_points = [
+            key_points_json = None
+        elif key_points is not None:
+            key_points_json = [
                 {
-                    "content": f"seed key point {n}",
+                    "content": kp_content,
+                    "mentions": [
+                        {"surface": surface, "type": type_}
+                        for surface, type_ in kp_mentions
+                    ],
+                }
+                for kp_content, kp_mentions in key_points
+            ]
+        elif mentions:
+            key_points_json = [
+                {
+                    "content": content or f"seed key point {n}",
                     "mentions": [
                         {"surface": surface, "type": type_}
                         for surface, type_ in mentions
@@ -90,7 +123,7 @@ def seed_analysis(db_session: AsyncSession, sample_source: NewsSource) -> SeedAn
                 }
             ]
         else:
-            key_points = []
+            key_points_json = []
 
         analysis = InScopeAssessment(
             curation_id=extraction.id,
@@ -99,7 +132,8 @@ def seed_analysis(db_session: AsyncSession, sample_source: NewsSource) -> SeedAn
             investor_take="investor take body",
             category_id=category_id,
             analyzed_at=analyzed_at,
-            key_points=key_points,
+            key_points=key_points_json,
+            embedding=_pad_embedding(embedding),
         )
         db_session.add(analysis)
         await db_session.flush()

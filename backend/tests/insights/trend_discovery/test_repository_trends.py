@@ -1,16 +1,19 @@
 """TrendsRepository の集計 SQL 境界条件テスト。
 
 検証対象:
-- ``get_trending_entities``: hot 判定 (continued trend / new burst の両条件)
-- ``get_trending_topics``: 同条件、topic 単位
-- ``get_new_entities``: 過去 lookback 週に出現履歴なし AND 現週 >=1
-- ``count_source_analyses``: 現週の analysis 件数
+- ``get_ranked_mentions``: floor (current >= MIN_CURRENT) を通過した mention の
+  pool を current/previous 件数つきで返す (hot ゲート・並べ替えは service の責務
+  なのでここでは掛けない)。
+- ``get_mention_key_points``: 指定 mention の現週 key_point content を記事レベル
+  dedup して最大 2 本。
+- ``get_related_mentions``: 指定 mention と同一 key_point 内で共起した別 mention を
+  共起記事数 >= MIN_SHARED_ARTICLES で top3。
+- ``count_source_analyses``: 現週の analysis 件数。
 
 境界として:
 - 期間境界 (current_start ちょうど含む / current_end ちょうど除外)
 - カテゴリ filter
 - DISTINCT assessment.id (同一 assessment 内の重複 mention を 1 カウントに)
-- previous=0 / NOT EXISTS (新規 mention)
 - ``key_points IS NULL`` 行を集計対象外にする (PR 1 デプロイ前の旧行)
 """
 
@@ -22,7 +25,6 @@ from zoneinfo import ZoneInfo
 import pytest
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.insights.trend_discovery.config import NEW_ENTITY_LOOKBACK_WEEKS
 from app.insights.trend_discovery.repository.trends import TrendsRepository
 from app.models.category import Category
 
@@ -41,21 +43,20 @@ def _jst(year: int, month: int, day: int, *, hour: int = 12) -> datetime:
 WEEK_START = _jst(2026, 4, 13, hour=0)
 WEEK_END = WEEK_START + WEEK
 PREV_START = WEEK_START - WEEK
-LOOKBACK_START = WEEK_START - WEEK * NEW_ENTITY_LOOKBACK_WEEKS
 
 
-# get_trending_entities
+# get_ranked_mentions
 
 
-class TestGetTrendingEntities:
+class TestGetRankedMentions:
     @pytest.mark.asyncio
-    async def test_returns_continued_trend_entity(
+    async def test_returns_continued_trend_mention(
         self,
         db_session: AsyncSession,
         sample_categories: list[Category],
         seed_analysis: SeedAnalysis,
     ) -> None:
-        """current >= 5 AND previous >= 2 は hot として返る。"""
+        """current >= MIN_CURRENT は current/previous 件数つきで pool に入る。"""
         cat = sample_categories[0]
         for i in range(5):
             await seed_analysis(
@@ -71,7 +72,7 @@ class TestGetTrendingEntities:
             )
 
         repo = TrendsRepository(db_session)
-        results = await repo.get_trending_entities(
+        results = await repo.get_ranked_mentions(
             category_id=cat.id,
             current_start=WEEK_START,
             current_end=WEEK_END,
@@ -81,75 +82,22 @@ class TestGetTrendingEntities:
         trend = results[0]
         assert str(trend.name) == "NVIDIA"
         assert str(trend.type) == "company"
-        assert trend.current_count == 5
-        assert trend.previous_count == 2
+        assert trend.appearance_count == 5
+        assert trend.previous_appearance_count == 2
 
     @pytest.mark.asyncio
-    async def test_returns_new_burst_entity_without_previous(
+    async def test_includes_floor_passing_without_hot_gate(
         self,
         db_session: AsyncSession,
         sample_categories: list[Category],
         seed_analysis: SeedAnalysis,
     ) -> None:
-        """previous=0 でも current >= NEW_BURST_THRESHOLD なら hot。"""
-        cat = sample_categories[0]
-        for i in range(10):
-            await seed_analysis(
-                category_id=cat.id,
-                analyzed_at=_jst(2026, 4, 14, hour=i),
-                mentions=[("DeepSeek", "company")],
-            )
+        """current >= MIN_CURRENT なら previous<2 かつ current<burst でも pool に入る。
 
-        repo = TrendsRepository(db_session)
-        results = await repo.get_trending_entities(
-            category_id=cat.id,
-            current_start=WEEK_START,
-            current_end=WEEK_END,
-            previous_start=PREV_START,
-        )
-        assert len(results) == 1
-        assert results[0].current_count == 10
-        assert results[0].previous_count == 0
-
-    @pytest.mark.asyncio
-    async def test_excludes_below_min_current(
-        self,
-        db_session: AsyncSession,
-        sample_categories: list[Category],
-        seed_analysis: SeedAnalysis,
-    ) -> None:
-        """current < MIN_CURRENT (=5) は除外。"""
-        cat = sample_categories[0]
-        for i in range(4):
-            await seed_analysis(
-                category_id=cat.id,
-                analyzed_at=_jst(2026, 4, 14, hour=i),
-                mentions=[("NVIDIA", "company")],
-            )
-        for i in range(3):
-            await seed_analysis(
-                category_id=cat.id,
-                analyzed_at=_jst(2026, 4, 7, hour=i),
-                mentions=[("NVIDIA", "company")],
-            )
-
-        repo = TrendsRepository(db_session)
-        results = await repo.get_trending_entities(
-            category_id=cat.id,
-            current_start=WEEK_START,
-            current_end=WEEK_END,
-            previous_start=PREV_START,
-        )
-        assert results == ()
-
-    @pytest.mark.asyncio
-    async def test_excludes_low_previous_without_burst(
-        self,
-        db_session: AsyncSession,
-        sample_categories: list[Category],
-        seed_analysis: SeedAnalysis,
-    ) -> None:
-        """current >= 5 だが previous < 2 かつ current < 10 は除外。"""
+        旧 ``get_trending_entities`` は hot ゲート (previous>=2 OR current>=burst) を
+        SQL WHERE で掛けていた。pool は出現回数ランキングの母集団でもあるため hot
+        ゲートを外し、floor だけで残す (hot 判定は service の伸び率ランキング側)。
+        """
         cat = sample_categories[0]
         for i in range(7):
             await seed_analysis(
@@ -164,7 +112,35 @@ class TestGetTrendingEntities:
         )
 
         repo = TrendsRepository(db_session)
-        results = await repo.get_trending_entities(
+        results = await repo.get_ranked_mentions(
+            category_id=cat.id,
+            current_start=WEEK_START,
+            current_end=WEEK_END,
+            previous_start=PREV_START,
+        )
+        assert len(results) == 1
+        assert str(results[0].name) == "Edge"
+        assert results[0].appearance_count == 7
+        assert results[0].previous_appearance_count == 1
+
+    @pytest.mark.asyncio
+    async def test_excludes_below_min_current(
+        self,
+        db_session: AsyncSession,
+        sample_categories: list[Category],
+        seed_analysis: SeedAnalysis,
+    ) -> None:
+        """current < MIN_CURRENT (=5) は floor で除外。"""
+        cat = sample_categories[0]
+        for i in range(4):
+            await seed_analysis(
+                category_id=cat.id,
+                analyzed_at=_jst(2026, 4, 14, hour=i),
+                mentions=[("NVIDIA", "company")],
+            )
+
+        repo = TrendsRepository(db_session)
+        results = await repo.get_ranked_mentions(
             category_id=cat.id,
             current_start=WEEK_START,
             current_end=WEEK_END,
@@ -190,7 +166,7 @@ class TestGetTrendingEntities:
             )
 
         repo = TrendsRepository(db_session)
-        results = await repo.get_trending_entities(
+        results = await repo.get_ranked_mentions(
             category_id=target.id,
             current_start=WEEK_START,
             current_end=WEEK_END,
@@ -207,19 +183,16 @@ class TestGetTrendingEntities:
     ) -> None:
         """current_start は含み、current_end は含まない (半開区間)。"""
         cat = sample_categories[0]
-        # current_start ちょうど (含まれる)
         await seed_analysis(
             category_id=cat.id,
             analyzed_at=WEEK_START,
             mentions=[("Edge", "company")],
         )
-        # current_end ちょうど (含まれない)
         await seed_analysis(
             category_id=cat.id,
             analyzed_at=WEEK_END,
             mentions=[("Edge", "company")],
         )
-        # current 内 (含まれる) を 9 件追加して合計 10 件にする
         for i in range(9):
             await seed_analysis(
                 category_id=cat.id,
@@ -228,51 +201,42 @@ class TestGetTrendingEntities:
             )
 
         repo = TrendsRepository(db_session)
-        results = await repo.get_trending_entities(
+        results = await repo.get_ranked_mentions(
             category_id=cat.id,
             current_start=WEEK_START,
             current_end=WEEK_END,
             previous_start=PREV_START,
         )
         assert len(results) == 1
-        assert results[0].current_count == 10  # 11 件中 1 件は除外
+        assert (
+            results[0].appearance_count == 10
+        )  # 11 件中 current_end ちょうどの 1 件は除外
 
     @pytest.mark.asyncio
-    async def test_distinct_extraction_dedupes(
+    async def test_distinct_assessment_dedupes(
         self,
         db_session: AsyncSession,
         sample_categories: list[Category],
         seed_analysis: SeedAnalysis,
     ) -> None:
-        """同一 assessment 内に同 mention が複数出ても 1 カウント。
-
-        key_points JSONB 内で同じ (surface, type) を持つ mention が複数登場しても、
-        ``COUNT(DISTINCT a.id)`` により記事単位で 1 件と数えられる。
-        """
+        """同一 assessment 内に同 mention が複数出ても COUNT(DISTINCT a.id) で 1 件。"""
         cat = sample_categories[0]
-        # 5 件の独立 extraction で NVIDIA が登場
         for i in range(5):
             await seed_analysis(
                 category_id=cat.id,
                 analyzed_at=_jst(2026, 4, 14, hour=i),
                 mentions=[("NVIDIA", "company"), ("NVIDIA", "company")],  # 重複
             )
-        for i in range(2):
-            await seed_analysis(
-                category_id=cat.id,
-                analyzed_at=_jst(2026, 4, 7, hour=i),
-                mentions=[("NVIDIA", "company")],
-            )
 
         repo = TrendsRepository(db_session)
-        results = await repo.get_trending_entities(
+        results = await repo.get_ranked_mentions(
             category_id=cat.id,
             current_start=WEEK_START,
             current_end=WEEK_END,
             previous_start=PREV_START,
         )
         assert len(results) == 1
-        assert results[0].current_count == 5  # 重複でなく extraction 数
+        assert results[0].appearance_count == 5  # 重複でなく assessment 数
 
     @pytest.mark.asyncio
     async def test_groups_case_insensitively(
@@ -281,11 +245,10 @@ class TestGetTrendingEntities:
         sample_categories: list[Category],
         seed_analysis: SeedAnalysis,
     ) -> None:
-        """``NVIDIA`` と ``Nvidia`` は同一エンティティとして集約される (lower(name))。
+        """``NVIDIA`` と ``Nvidia`` は同一 mention として集約される (lower(name))。
 
-        display 名は GROUP の MIN(name) (Postgres の locale 依存) を 1 つ採用する。
-        どの casing が選ばれるかは実装の責務外で、casing が保持されること
-        (= lowercase 化されない) のみ検証する。
+        display 名は GROUP の MIN(name) を 1 つ採用する。どの casing が選ばれるかは
+        実装の責務外で、casing が保持されること (lowercase 化されない) のみ検証する。
         """
         cat = sample_categories[0]
         for i in range(3):
@@ -300,15 +263,9 @@ class TestGetTrendingEntities:
                 analyzed_at=_jst(2026, 4, 14, hour=10 + i),
                 mentions=[("Nvidia", "company")],
             )
-        for i in range(2):
-            await seed_analysis(
-                category_id=cat.id,
-                analyzed_at=_jst(2026, 4, 7, hour=i),
-                mentions=[("nvidia", "company")],
-            )
 
         repo = TrendsRepository(db_session)
-        results = await repo.get_trending_entities(
+        results = await repo.get_ranked_mentions(
             category_id=cat.id,
             current_start=WEEK_START,
             current_end=WEEK_END,
@@ -316,10 +273,9 @@ class TestGetTrendingEntities:
         )
         assert len(results) == 1
         trend = results[0]
-        assert trend.current_count == 5
-        assert trend.previous_count == 2
+        assert trend.appearance_count == 5
         assert str(trend.name).lower() == "nvidia"
-        assert str(trend.name) in {"NVIDIA", "Nvidia"}  # casing 保持 (lowercase でない)
+        assert str(trend.name) in {"NVIDIA", "Nvidia"}  # casing 保持
 
     @pytest.mark.asyncio
     async def test_returns_empty_when_no_data(
@@ -329,7 +285,7 @@ class TestGetTrendingEntities:
     ) -> None:
         cat = sample_categories[0]
         repo = TrendsRepository(db_session)
-        results = await repo.get_trending_entities(
+        results = await repo.get_ranked_mentions(
             category_id=cat.id,
             current_start=WEEK_START,
             current_end=WEEK_END,
@@ -354,7 +310,7 @@ class TestGetTrendingEntities:
             )
 
         repo = TrendsRepository(db_session)
-        results = await repo.get_trending_entities(
+        results = await repo.get_ranked_mentions(
             category_id=cat.id,
             current_start=WEEK_START,
             current_end=WEEK_END,
@@ -379,7 +335,7 @@ class TestGetTrendingEntities:
             )
 
         repo = TrendsRepository(db_session)
-        results = await repo.get_trending_entities(
+        results = await repo.get_ranked_mentions(
             category_id=cat.id,
             current_start=WEEK_START,
             current_end=WEEK_END,
@@ -388,173 +344,389 @@ class TestGetTrendingEntities:
         assert results == ()
 
 
-# get_new_entities
+# get_mention_key_points
+
+_NVIDIA_KEY = ("nvidia", "company")
 
 
-class TestGetNewEntities:
+class TestGetMentionKeyPoints:
     @pytest.mark.asyncio
-    async def test_returns_entity_absent_in_lookback(
+    async def test_returns_latest_first_max_two(
         self,
         db_session: AsyncSession,
         sample_categories: list[Category],
         seed_analysis: SeedAnalysis,
     ) -> None:
-        """過去 lookback 週に出現履歴なし AND 現週 >=1 は new entity。"""
+        """最新優先で最大 2 本の content を返す (互いに離れた embedding)。"""
         cat = sample_categories[0]
         await seed_analysis(
             category_id=cat.id,
-            analyzed_at=_jst(2026, 4, 14, hour=9),
-            mentions=[("DeepSeek-R1", "product")],
-        )
-
-        repo = TrendsRepository(db_session)
-        results = await repo.get_new_entities(
-            category_id=cat.id,
-            current_start=WEEK_START,
-            current_end=WEEK_END,
-            lookback_start=LOOKBACK_START,
-        )
-        assert len(results) == 1
-        new_ent = results[0]
-        assert str(new_ent.name) == "DeepSeek-R1"
-        assert str(new_ent.type) == "product"
-        assert new_ent.current_count == 1
-
-    @pytest.mark.asyncio
-    async def test_excludes_entity_with_lookback_history(
-        self,
-        db_session: AsyncSession,
-        sample_categories: list[Category],
-        seed_analysis: SeedAnalysis,
-    ) -> None:
-        """過去 lookback 週内に 1 件でも出現していれば new ではない。"""
-        cat = sample_categories[0]
-        await seed_analysis(
-            category_id=cat.id,
-            analyzed_at=_jst(2026, 4, 14, hour=9),
+            analyzed_at=_jst(2026, 4, 14, hour=1),
+            content="oldest",
             mentions=[("NVIDIA", "company")],
+            embedding=[1.0, 0.0, 0.0],
         )
-        # lookback 内 (= current の 2 週前)
         await seed_analysis(
             category_id=cat.id,
-            analyzed_at=_jst(2026, 3, 30, hour=9),
+            analyzed_at=_jst(2026, 4, 14, hour=2),
+            content="middle",
             mentions=[("NVIDIA", "company")],
+            embedding=[0.0, 1.0, 0.0],
+        )
+        await seed_analysis(
+            category_id=cat.id,
+            analyzed_at=_jst(2026, 4, 14, hour=3),
+            content="newest",
+            mentions=[("NVIDIA", "company")],
+            embedding=[0.0, 0.0, 1.0],
         )
 
         repo = TrendsRepository(db_session)
-        results = await repo.get_new_entities(
+        result = await repo.get_mention_key_points(
             category_id=cat.id,
             current_start=WEEK_START,
             current_end=WEEK_END,
-            lookback_start=LOOKBACK_START,
+            mention_keys=[_NVIDIA_KEY],
         )
-        assert results == ()
+        assert result[_NVIDIA_KEY] == ("newest", "middle")
 
     @pytest.mark.asyncio
-    async def test_includes_entity_outside_lookback_window(
+    async def test_collapses_near_duplicate_articles(
         self,
         db_session: AsyncSession,
         sample_categories: list[Category],
         seed_analysis: SeedAnalysis,
     ) -> None:
-        """lookback 期間より古い出現履歴は new 判定に影響しない。"""
+        """embedding が近接する別記事は同一トピックとして畳む。"""
         cat = sample_categories[0]
         await seed_analysis(
             category_id=cat.id,
-            analyzed_at=_jst(2026, 4, 14, hour=9),
-            mentions=[("OldStartup", "company")],
+            analyzed_at=_jst(2026, 4, 14, hour=3),
+            content="primary",
+            mentions=[("NVIDIA", "company")],
+            embedding=[1.0, 0.0],
         )
-        # lookback_start (= current_start - 4 週) より前 = 5 週前
         await seed_analysis(
             category_id=cat.id,
-            analyzed_at=WEEK_START - WEEK * 5,
-            mentions=[("OldStartup", "company")],
+            analyzed_at=_jst(2026, 4, 14, hour=2),
+            content="near-dup",
+            mentions=[("NVIDIA", "company")],
+            embedding=[1.0, 0.02],  # primary と cosine 距離 < 0.1
+        )
+        await seed_analysis(
+            category_id=cat.id,
+            analyzed_at=_jst(2026, 4, 14, hour=1),
+            content="distinct",
+            mentions=[("NVIDIA", "company")],
+            embedding=[0.0, 1.0],  # 直交 = 別トピック
         )
 
         repo = TrendsRepository(db_session)
-        results = await repo.get_new_entities(
+        result = await repo.get_mention_key_points(
             category_id=cat.id,
             current_start=WEEK_START,
             current_end=WEEK_END,
-            lookback_start=LOOKBACK_START,
+            mention_keys=[_NVIDIA_KEY],
         )
-        assert len(results) == 1
-        assert str(results[0].name) == "OldStartup"
+        assert result[_NVIDIA_KEY] == ("primary", "distinct")
 
     @pytest.mark.asyncio
-    async def test_filters_by_category_in_lookback(
+    async def test_same_assessment_yields_one_content(
         self,
         db_session: AsyncSession,
         sample_categories: list[Category],
         seed_analysis: SeedAnalysis,
     ) -> None:
-        """lookback の出現履歴は category 単位でしか参照しない。
+        """同一記事内で entity が複数 key_point に出ても content は 1 本まで。"""
+        cat = sample_categories[0]
+        await seed_analysis(
+            category_id=cat.id,
+            analyzed_at=_jst(2026, 4, 14, hour=1),
+            key_points=[
+                ("first key point", [("NVIDIA", "company")]),
+                ("second key point", [("NVIDIA", "company")]),
+            ],
+            embedding=[1.0, 0.0],
+        )
 
-        他カテゴリでは過去出現があっても、対象カテゴリの新規であれば new。
-        """
+        repo = TrendsRepository(db_session)
+        result = await repo.get_mention_key_points(
+            category_id=cat.id,
+            current_start=WEEK_START,
+            current_end=WEEK_END,
+            mention_keys=[_NVIDIA_KEY],
+        )
+        contents = result[_NVIDIA_KEY]
+        assert len(contents) == 1
+        assert contents[0] in {"first key point", "second key point"}
+
+    @pytest.mark.asyncio
+    async def test_null_embedding_treated_as_distinct(
+        self,
+        db_session: AsyncSession,
+        sample_categories: list[Category],
+        seed_analysis: SeedAnalysis,
+    ) -> None:
+        """embedding が NULL の旧行は近接判定をスキップし別記事として残る。"""
+        cat = sample_categories[0]
+        await seed_analysis(
+            category_id=cat.id,
+            analyzed_at=_jst(2026, 4, 14, hour=2),
+            content="legacy-a",
+            mentions=[("NVIDIA", "company")],
+            embedding=None,
+        )
+        await seed_analysis(
+            category_id=cat.id,
+            analyzed_at=_jst(2026, 4, 14, hour=1),
+            content="legacy-b",
+            mentions=[("NVIDIA", "company")],
+            embedding=None,
+        )
+
+        repo = TrendsRepository(db_session)
+        result = await repo.get_mention_key_points(
+            category_id=cat.id,
+            current_start=WEEK_START,
+            current_end=WEEK_END,
+            mention_keys=[_NVIDIA_KEY],
+        )
+        assert result[_NVIDIA_KEY] == ("legacy-a", "legacy-b")
+
+    @pytest.mark.asyncio
+    async def test_excludes_other_category(
+        self,
+        db_session: AsyncSession,
+        sample_categories: list[Category],
+        seed_analysis: SeedAnalysis,
+    ) -> None:
+        """別カテゴリの key_point は対象 mention でも返らない。"""
         target = sample_categories[0]
         other = sample_categories[1]
         await seed_analysis(
-            category_id=target.id,
-            analyzed_at=_jst(2026, 4, 14, hour=9),
-            mentions=[("CrossCat", "company")],
-        )
-        await seed_analysis(
             category_id=other.id,
-            analyzed_at=_jst(2026, 3, 30, hour=9),
-            mentions=[("CrossCat", "company")],
+            analyzed_at=_jst(2026, 4, 14, hour=1),
+            content="other-cat",
+            mentions=[("NVIDIA", "company")],
+            embedding=[1.0, 0.0],
         )
 
         repo = TrendsRepository(db_session)
-        results = await repo.get_new_entities(
+        result = await repo.get_mention_key_points(
             category_id=target.id,
             current_start=WEEK_START,
             current_end=WEEK_END,
-            lookback_start=LOOKBACK_START,
+            mention_keys=[_NVIDIA_KEY],
         )
-        assert len(results) == 1
+        assert result == {}
 
     @pytest.mark.asyncio
-    async def test_sorted_by_current_count_desc(
+    async def test_empty_mention_keys_skips_query(
         self,
         db_session: AsyncSession,
         sample_categories: list[Category],
         seed_analysis: SeedAnalysis,
     ) -> None:
-        """current_count 降順で返る (snapshot 上位 N 件 truncate の前提)。
-
-        snapshot 生成側で `[:MAX_TRENDS_PER_CATEGORY]` slice するため、最も登場件数の
-        多い entity が先頭に来ていないと意味のある truncate にならない。
-        """
+        """mention_keys が空ならクエリせず {} を返す。"""
         cat = sample_categories[0]
-        # 3 件登場の Loud, 1 件のみの Quiet, 2 件登場の Mid を仕込む
-        for hour in range(3):
-            await seed_analysis(
-                category_id=cat.id,
-                analyzed_at=_jst(2026, 4, 14, hour=hour),
-                mentions=[("Loud", "company")],
-            )
         await seed_analysis(
             category_id=cat.id,
-            analyzed_at=_jst(2026, 4, 15, hour=9),
-            mentions=[("Quiet", "company")],
+            analyzed_at=_jst(2026, 4, 14, hour=1),
+            mentions=[("NVIDIA", "company")],
+            embedding=[1.0, 0.0],
         )
-        for hour in range(2):
-            await seed_analysis(
-                category_id=cat.id,
-                analyzed_at=_jst(2026, 4, 16, hour=hour),
-                mentions=[("Mid", "company")],
-            )
 
         repo = TrendsRepository(db_session)
-        results = await repo.get_new_entities(
+        result = await repo.get_mention_key_points(
             category_id=cat.id,
             current_start=WEEK_START,
             current_end=WEEK_END,
-            lookback_start=LOOKBACK_START,
+            mention_keys=[],
         )
-        names = [str(r.name) for r in results]
-        assert names == ["Loud", "Mid", "Quiet"]
+        assert result == {}
+
+
+# get_related_mentions
+
+
+class TestGetRelatedMentions:
+    @pytest.mark.asyncio
+    async def test_returns_co_mention_above_min_shared(
+        self,
+        db_session: AsyncSession,
+        sample_categories: list[Category],
+        seed_analysis: SeedAnalysis,
+    ) -> None:
+        """同一 key_point で 2 記事以上共起した相手を共起記事数つきで返す。"""
+        cat = sample_categories[0]
+        for hour in range(2):
+            await seed_analysis(
+                category_id=cat.id,
+                analyzed_at=_jst(2026, 4, 14, hour=hour),
+                mentions=[("NVIDIA", "company"), ("OpenAI", "company")],
+            )
+
+        repo = TrendsRepository(db_session)
+        result = await repo.get_related_mentions(
+            category_id=cat.id,
+            current_start=WEEK_START,
+            current_end=WEEK_END,
+            mention_keys=[_NVIDIA_KEY],
+        )
+        related = result[_NVIDIA_KEY]
+        assert len(related) == 1
+        assert str(related[0].name) == "OpenAI"
+        assert related[0].shared_article_count == 2
+
+    @pytest.mark.asyncio
+    async def test_excludes_single_co_occurrence(
+        self,
+        db_session: AsyncSession,
+        sample_categories: list[Category],
+        seed_analysis: SeedAnalysis,
+    ) -> None:
+        """共起が 1 記事のみ (< MIN_SHARED_ARTICLES) は除外。"""
+        cat = sample_categories[0]
+        await seed_analysis(
+            category_id=cat.id,
+            analyzed_at=_jst(2026, 4, 14, hour=1),
+            mentions=[("NVIDIA", "company"), ("OpenAI", "company")],
+        )
+
+        repo = TrendsRepository(db_session)
+        result = await repo.get_related_mentions(
+            category_id=cat.id,
+            current_start=WEEK_START,
+            current_end=WEEK_END,
+            mention_keys=[_NVIDIA_KEY],
+        )
+        assert result == {}
+
+    @pytest.mark.asyncio
+    async def test_different_key_point_not_counted(
+        self,
+        db_session: AsyncSession,
+        sample_categories: list[Category],
+        seed_analysis: SeedAnalysis,
+    ) -> None:
+        """別 key_point に居る mention は共起としてカウントしない。"""
+        cat = sample_categories[0]
+        for hour in range(2):
+            await seed_analysis(
+                category_id=cat.id,
+                analyzed_at=_jst(2026, 4, 14, hour=hour),
+                key_points=[
+                    ("anchor kp", [("NVIDIA", "company")]),
+                    ("other kp", [("OpenAI", "company")]),
+                ],
+            )
+
+        repo = TrendsRepository(db_session)
+        result = await repo.get_related_mentions(
+            category_id=cat.id,
+            current_start=WEEK_START,
+            current_end=WEEK_END,
+            mention_keys=[_NVIDIA_KEY],
+        )
+        assert result == {}
+
+    @pytest.mark.asyncio
+    async def test_excludes_self_pair(
+        self,
+        db_session: AsyncSession,
+        sample_categories: list[Category],
+        seed_analysis: SeedAnalysis,
+    ) -> None:
+        """anchor 自身は共起相手に含めない (相手は OpenAI のみ)。"""
+        cat = sample_categories[0]
+        for hour in range(2):
+            await seed_analysis(
+                category_id=cat.id,
+                analyzed_at=_jst(2026, 4, 14, hour=hour),
+                mentions=[
+                    ("NVIDIA", "company"),
+                    ("NVIDIA", "company"),
+                    ("OpenAI", "company"),
+                ],
+            )
+
+        repo = TrendsRepository(db_session)
+        result = await repo.get_related_mentions(
+            category_id=cat.id,
+            current_start=WEEK_START,
+            current_end=WEEK_END,
+            mention_keys=[_NVIDIA_KEY],
+        )
+        names = {str(r.name) for r in result[_NVIDIA_KEY]}
+        assert names == {"OpenAI"}
+
+    @pytest.mark.asyncio
+    async def test_top_three_by_shared_count(
+        self,
+        db_session: AsyncSession,
+        sample_categories: list[Category],
+        seed_analysis: SeedAnalysis,
+    ) -> None:
+        """共起記事数降順 top3 (4 件目は落ち、同数は match_key 昇順)。"""
+        cat = sample_categories[0]
+        peers = [("OpenAI", 4), ("Google", 3), ("Meta", 2), ("Anthropic", 2)]
+        hour = 0
+        for peer, count in peers:
+            for _ in range(count):
+                await seed_analysis(
+                    category_id=cat.id,
+                    analyzed_at=_jst(2026, 4, 14, hour=hour),
+                    mentions=[("NVIDIA", "company"), (peer, "company")],
+                )
+                hour += 1
+
+        repo = TrendsRepository(db_session)
+        result = await repo.get_related_mentions(
+            category_id=cat.id,
+            current_start=WEEK_START,
+            current_end=WEEK_END,
+            mention_keys=[_NVIDIA_KEY],
+        )
+        related = result[_NVIDIA_KEY]
+        # OpenAI(4) > Google(3) > {Anthropic,Meta}(2) は match_key 昇順で Anthropic。
+        assert [(str(r.name), r.shared_article_count) for r in related] == [
+            ("OpenAI", 4),
+            ("Google", 3),
+            ("Anthropic", 2),
+        ]
+
+    @pytest.mark.asyncio
+    async def test_casing_representative_for_co_mention(
+        self,
+        db_session: AsyncSession,
+        sample_categories: list[Category],
+        seed_analysis: SeedAnalysis,
+    ) -> None:
+        """共起相手は lower で名寄せし、display は casing を保持した代表を採る。"""
+        cat = sample_categories[0]
+        await seed_analysis(
+            category_id=cat.id,
+            analyzed_at=_jst(2026, 4, 14, hour=1),
+            mentions=[("NVIDIA", "company"), ("OpenAI", "company")],
+        )
+        await seed_analysis(
+            category_id=cat.id,
+            analyzed_at=_jst(2026, 4, 14, hour=2),
+            mentions=[("NVIDIA", "company"), ("openai", "company")],
+        )
+
+        repo = TrendsRepository(db_session)
+        result = await repo.get_related_mentions(
+            category_id=cat.id,
+            current_start=WEEK_START,
+            current_end=WEEK_END,
+            mention_keys=[_NVIDIA_KEY],
+        )
+        related = result[_NVIDIA_KEY]
+        assert len(related) == 1
+        assert related[0].shared_article_count == 2
+        assert str(related[0].name).lower() == "openai"
+        assert str(related[0].name) in {"OpenAI", "openai"}  # casing 保持
 
 
 # count_source_analyses

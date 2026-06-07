@@ -1,9 +1,9 @@
-"""週次トレンド集計の Repository。
+"""トレンド集計の Repository。
 
 責務:
 - ``InScopeAssessment.key_points`` JSONB の ``key_points[].mentions[]`` を 2 段
-  ``jsonb_array_elements`` LATERAL で平坦化し、1 カテゴリ × 1 週分の hot mention /
-  new mention を集計し、Trend Discovery BC の VO で返す。
+  ``jsonb_array_elements`` LATERAL で平坦化し、1 カテゴリ × 1 週分の mention を
+  集計し、Trend Discovery BC の VO で返す。
 - 期間境界 ``[current_start, current_end)`` (半開区間) で絞り込む。
 - mention は ``COUNT(DISTINCT in_scope_assessments.id)`` で「同 assessment 内で
   同 mention が複数 key_point に登場しても 1 件」と数える (記事単位の出現を数える)。
@@ -13,10 +13,18 @@
 - ``type`` は Stage 4 AI 境界の ``MentionType`` (6 値 lower) を直接採用する
   (BC 境界が下流に正規化済値を保証する: feedback_bc_boundary_guarantees_downstream)。
 
-並び順は Python 側で hotness_score 降順に sort する (DB 依存を避ける)。
+公開クエリ:
+- ``get_ranked_mentions``: floor (``appearance_count >= MIN_CURRENT``) を通過した
+  mention を current/previous 件数つきで返す。ランキング確定 (出現回数 / 伸び率)
+  と hot ゲートは service が行うため、ここでは並べ替えも hot ゲートもしない。
+- ``get_mention_key_points``: 指定 mention 群について、現週 key_point の content を
+  記事レベル dedup して最大 ``MAX_KEY_POINTS_PER_MENTION`` 本返す。
+- ``get_related_mentions``: 指定 mention 群について、同一 key_point 内で一緒に
+  語られた別 mention を共起記事数つきで返す。
+- ``count_source_analyses``: 現週の analysis 件数 (snapshot メタ情報)。
 
 bindparam 衝突対策:
-``_entity_window_subquery`` は ``get_trending_entities`` で current_sub と
+``_entity_window_subquery`` は ``get_ranked_mentions`` で current_sub と
 previous_sub の 2 回呼ばれ、同じ outer query に組み込まれる。素朴な
 ``.bindparams(window_start=...)`` (kwarg 形式) は param 名が衝突して後者で
 上書きされるため、``sa.bindparam(..., unique=True)`` を使って SQLAlchemy が
@@ -25,19 +33,30 @@ previous_sub の 2 回呼ばれ、同じ outer query に組み込まれる。素
 
 from __future__ import annotations
 
+import math
+from collections.abc import Sequence
 from datetime import datetime
 
 import sqlalchemy as sa
-from sqlalchemy import and_, func, or_, select, text
+from pgvector.sqlalchemy import HALFVEC
+from sqlalchemy import Row, and_, func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.insights.trend_discovery.config import (
+from app.insights.trend_discovery.domain.trend import (
+    KEY_POINT_DEDUP_DISTANCE,
+    MAX_KEY_POINTS_PER_MENTION,
+    MAX_RELATED_MENTIONS,
     MIN_CURRENT,
-    MIN_PREVIOUS,
-    NEW_BURST_THRESHOLD,
+    MIN_SHARED_ARTICLES,
+    RankedMention,
+    RelatedMention,
 )
-from app.insights.trend_discovery.domain.trend import EntityTrend, NewEntity
 from app.models.in_scope_assessment import InScopeAssessment
+
+# embedding 次元 (InScopeAssessment.embedding は HALFVEC(768))。
+_EMBEDDING_DIM = 768
+
+MentionKey = tuple[str, str]
 
 
 class TrendsRepository:
@@ -46,19 +65,20 @@ class TrendsRepository:
     def __init__(self, session: AsyncSession) -> None:
         self._session = session
 
-    async def get_trending_entities(
+    async def get_ranked_mentions(
         self,
         *,
         category_id: int,
         current_start: datetime,
         current_end: datetime,
         previous_start: datetime,
-    ) -> tuple[EntityTrend, ...]:
-        """1 カテゴリ × 1 週分の hot mention を集計して返す。
+    ) -> tuple[RankedMention, ...]:
+        """floor (``appearance_count >= MIN_CURRENT``) を通過した mention を返す。
 
-        hot 判定: ``current >= MIN_CURRENT AND
-        (previous >= MIN_PREVIOUS OR current >= NEW_BURST_THRESHOLD)``
-        (continued trend / new burst の OR)。
+        出現回数ランキングと伸び率ランキングは母集団が異なる (出現回数は floor の
+        み・伸び率は floor + hot ゲート) ため、ここでは hot ゲートを掛けず floor の
+        全 mention を返し、ランキング確定と hot ゲートは service に委ねる。並べ替え
+        もしない (どちらの軸で並べるかは service の責務)。
         """
         current_sub = self._entity_window_subquery(
             category_id=category_id,
@@ -72,13 +92,13 @@ class TrendsRepository:
             window_end=current_start,
             label="previous",
         )
-        previous_count = func.coalesce(previous_sub.c.cnt, 0)
+        previous_appearance = func.coalesce(previous_sub.c.cnt, 0)
         stmt = (
             select(
                 current_sub.c.display_name,
                 current_sub.c.type,
-                current_sub.c.cnt.label("current_count"),
-                previous_count.label("previous_count"),
+                current_sub.c.cnt.label("appearance_count"),
+                previous_appearance.label("previous_appearance_count"),
             )
             .select_from(current_sub)
             .outerjoin(
@@ -88,83 +108,149 @@ class TrendsRepository:
                     previous_sub.c.type == current_sub.c.type,
                 ),
             )
-            .where(
-                current_sub.c.cnt >= MIN_CURRENT,
-                or_(
-                    previous_count >= MIN_PREVIOUS,
-                    current_sub.c.cnt >= NEW_BURST_THRESHOLD,
-                ),
-            )
+            .where(current_sub.c.cnt >= MIN_CURRENT)
         )
         rows = (await self._session.execute(stmt)).all()
-        trends = tuple(
-            EntityTrend(
+        return tuple(
+            RankedMention(
                 name=row.display_name,
                 type=row.type,
-                current_count=row.current_count,
-                previous_count=row.previous_count,
+                appearance_count=row.appearance_count,
+                previous_appearance_count=row.previous_appearance_count,
             )
             for row in rows
         )
-        return tuple(sorted(trends, key=lambda t: t.hotness_score, reverse=True))
 
-    async def get_new_entities(
+    async def get_mention_key_points(
         self,
         *,
         category_id: int,
         current_start: datetime,
         current_end: datetime,
-        lookback_start: datetime,
-    ) -> tuple[NewEntity, ...]:
-        """過去 lookback 期間に出現履歴のない初出 mention を返す。
+        mention_keys: Sequence[MentionKey],
+    ) -> dict[MentionKey, tuple[str, ...]]:
+        """指定 mention 群の現週 key_point content を記事レベル dedup して返す。
 
-        現週で 1 件以上出現していて、かつ ``[lookback_start, current_start)`` 区間に
-        同 (lower(surface), type) の出現が無い mention が new。lookback の参照は
-        category 単位 (他カテゴリの出現は new 判定に影響しない)。
+        各 mention について最新優先で走査し、同一記事 (assessment) からは 1 本まで、
+        さらに embedding が ``KEY_POINT_DEDUP_DISTANCE`` 未満に近い別記事も同一トピ
+        ックとして畳む。embedding が NULL の旧行は近接判定をスキップ (常に別記事扱
+        い) だが、assessment 単位の dedup は効くため 1 記事 1 本は保たれる。最大
+        ``MAX_KEY_POINTS_PER_MENTION`` 本。``mention_keys`` が空ならクエリしない。
         """
-        current_sub = self._entity_window_subquery(
-            category_id=category_id,
-            window_start=current_start,
-            window_end=current_end,
-            label="current_new",
-        )
-        lookback_sub = self._entity_window_subquery(
-            category_id=category_id,
-            window_start=lookback_start,
-            window_end=current_start,
-            label="lookback",
-        )
+        if not mention_keys:
+            return {}
         stmt = (
-            select(
-                current_sub.c.display_name,
-                current_sub.c.type,
-                current_sub.c.cnt.label("current_count"),
+            text(
+                """
+                SELECT
+                  lower(m->>'surface') AS match_key,
+                  m->>'type' AS type,
+                  a.id AS assessment_id,
+                  a.analyzed_at AS analyzed_at,
+                  a.embedding AS embedding,
+                  e->>'content' AS content
+                FROM in_scope_assessments a
+                CROSS JOIN LATERAL jsonb_array_elements(
+                  CASE WHEN jsonb_typeof(a.key_points) = 'array'
+                       THEN a.key_points ELSE '[]'::jsonb END
+                ) AS e
+                CROSS JOIN LATERAL jsonb_array_elements(
+                  CASE WHEN jsonb_typeof(e->'mentions') = 'array'
+                       THEN e->'mentions' ELSE '[]'::jsonb END
+                ) AS m
+                WHERE a.category_id = :category_id
+                  AND a.analyzed_at >= :current_start
+                  AND a.analyzed_at < :current_end
+                  AND (lower(m->>'surface'), m->>'type') IN :mention_keys
+                ORDER BY a.analyzed_at DESC, a.id DESC, e->>'content'
+                """
             )
-            .select_from(current_sub)
-            .outerjoin(
-                lookback_sub,
-                and_(
-                    lookback_sub.c.match_key == current_sub.c.match_key,
-                    lookback_sub.c.type == current_sub.c.type,
-                ),
+            .bindparams(
+                sa.bindparam("category_id", category_id),
+                sa.bindparam("current_start", current_start),
+                sa.bindparam("current_end", current_end),
+                sa.bindparam("mention_keys", value=list(mention_keys), expanding=True),
             )
-            .where(
-                current_sub.c.cnt >= 1,
-                lookback_sub.c.match_key.is_(None),
+            .columns(
+                match_key=sa.String,
+                type=sa.String,
+                assessment_id=sa.BigInteger,
+                analyzed_at=sa.DateTime(timezone=True),
+                embedding=HALFVEC(_EMBEDDING_DIM),
+                content=sa.String,
             )
         )
         rows = (await self._session.execute(stmt)).all()
-        new_entities = tuple(
-            NewEntity(
-                name=row.display_name,
-                type=row.type,
-                current_count=row.current_count,
+        return self._dedup_key_points(rows)
+
+    async def get_related_mentions(
+        self,
+        *,
+        category_id: int,
+        current_start: datetime,
+        current_end: datetime,
+        mention_keys: Sequence[MentionKey],
+    ) -> dict[MentionKey, tuple[RelatedMention, ...]]:
+        """指定 mention 群と同一 key_point 内で一緒に語られた別 mention を返す。
+
+        同一 key_point 内の mention を 2 回 LATERAL 展開し (m1=anchor / m2=相手)、
+        自己ペアを除き ``COUNT(DISTINCT a.id)`` (一緒に語られた記事数) で集計する。
+        ``shared_article_count >= MIN_SHARED_ARTICLES`` のみ残し、anchor ごとに件数
+        降順 top ``MAX_RELATED_MENTIONS``。``mention_keys`` が空ならクエリしない。
+        """
+        if not mention_keys:
+            return {}
+        stmt = (
+            text(
+                """
+                SELECT
+                  lower(m1->>'surface') AS anchor_key,
+                  m1->>'type' AS anchor_type,
+                  MIN(m2->>'surface') AS related_name,
+                  m2->>'type' AS related_type,
+                  COUNT(DISTINCT a.id) AS shared_article_count
+                FROM in_scope_assessments a
+                CROSS JOIN LATERAL jsonb_array_elements(
+                  CASE WHEN jsonb_typeof(a.key_points) = 'array'
+                       THEN a.key_points ELSE '[]'::jsonb END
+                ) AS e
+                CROSS JOIN LATERAL jsonb_array_elements(
+                  CASE WHEN jsonb_typeof(e->'mentions') = 'array'
+                       THEN e->'mentions' ELSE '[]'::jsonb END
+                ) AS m1
+                CROSS JOIN LATERAL jsonb_array_elements(
+                  CASE WHEN jsonb_typeof(e->'mentions') = 'array'
+                       THEN e->'mentions' ELSE '[]'::jsonb END
+                ) AS m2
+                WHERE a.category_id = :category_id
+                  AND a.analyzed_at >= :current_start
+                  AND a.analyzed_at < :current_end
+                  AND (lower(m1->>'surface'), m1->>'type') IN :mention_keys
+                  AND (lower(m2->>'surface'), m2->>'type')
+                      <> (lower(m1->>'surface'), m1->>'type')
+                GROUP BY
+                  lower(m1->>'surface'), m1->>'type',
+                  lower(m2->>'surface'), m2->>'type'
+                HAVING COUNT(DISTINCT a.id) >= :min_shared
+                """
             )
-            for row in rows
+            .bindparams(
+                sa.bindparam("category_id", category_id),
+                sa.bindparam("current_start", current_start),
+                sa.bindparam("current_end", current_end),
+                sa.bindparam("min_shared", MIN_SHARED_ARTICLES),
+                sa.bindparam("mention_keys", value=list(mention_keys), expanding=True),
+            )
+            .columns(
+                anchor_key=sa.String,
+                anchor_type=sa.String,
+                related_name=sa.String,
+                related_type=sa.String,
+                shared_article_count=sa.BigInteger,
+            )
         )
-        # snapshot 側の上位 N 件 truncate が意味を持つよう
-        # current_count 降順で確定する。
-        return tuple(sorted(new_entities, key=lambda e: e.current_count, reverse=True))
+        rows = (await self._session.execute(stmt)).all()
+        return self._group_related(rows)
 
     async def count_source_analyses(
         self, *, current_start: datetime, current_end: datetime
@@ -175,6 +261,63 @@ class TrendsRepository:
             InScopeAssessment.analyzed_at < current_end,
         )
         return (await self._session.execute(stmt)).scalar_one()
+
+    @staticmethod
+    def _dedup_key_points(
+        rows: Sequence[Row[tuple]],
+    ) -> dict[MentionKey, tuple[str, ...]]:
+        """recency 順の行を mention ごとに記事レベル dedup して content tuple 化。"""
+        grouped: dict[MentionKey, list[Row[tuple]]] = {}
+        for row in rows:
+            grouped.setdefault((row.match_key, row.type), []).append(row)
+
+        result: dict[MentionKey, tuple[str, ...]] = {}
+        for key, group in grouped.items():
+            contents: list[str] = []
+            seen_assessments: set[int] = set()
+            accepted_vectors: list[list[float]] = []
+            for row in group:
+                if len(contents) >= MAX_KEY_POINTS_PER_MENTION:
+                    break
+                if row.content is None or row.assessment_id in seen_assessments:
+                    continue
+                vector = _to_vector(row.embedding)
+                if vector is not None and any(
+                    _cosine_distance(vector, v) < KEY_POINT_DEDUP_DISTANCE
+                    for v in accepted_vectors
+                ):
+                    continue
+                contents.append(row.content)
+                seen_assessments.add(row.assessment_id)
+                if vector is not None:
+                    accepted_vectors.append(vector)
+            result[key] = tuple(contents)
+        return result
+
+    @staticmethod
+    def _group_related(
+        rows: Sequence[Row[tuple]],
+    ) -> dict[MentionKey, tuple[RelatedMention, ...]]:
+        """anchor ごとに共起記事数降順 top N の RelatedMention を組み立てる。"""
+        grouped: dict[MentionKey, list[RelatedMention]] = {}
+        for row in rows:
+            anchor = (row.anchor_key, row.anchor_type)
+            grouped.setdefault(anchor, []).append(
+                RelatedMention(
+                    name=row.related_name,
+                    type=row.related_type,
+                    shared_article_count=row.shared_article_count,
+                )
+            )
+        return {
+            anchor: tuple(
+                sorted(
+                    items,
+                    key=lambda r: (-r.shared_article_count, r.name.match_key),
+                )[:MAX_RELATED_MENTIONS]
+            )
+            for anchor, items in grouped.items()
+        }
 
     @staticmethod
     def _entity_window_subquery(
@@ -238,3 +381,23 @@ class TrendsRepository:
             )
             .subquery(label)
         )
+
+
+def _to_vector(embedding: object) -> list[float] | None:
+    """HALFVEC 列の読み出し結果を float list に正規化する (NULL は None)。"""
+    if embedding is None:
+        return None
+    to_list = getattr(embedding, "to_list", None)
+    if callable(to_list):
+        return to_list()
+    return list(embedding)  # type: ignore[call-overload]
+
+
+def _cosine_distance(a: list[float], b: list[float]) -> float:
+    """cosine 距離 (1 - cosine 類似度)。ゼロベクトルは最大距離扱い。"""
+    dot = sum(x * y for x, y in zip(a, b, strict=False))
+    norm_a = math.sqrt(sum(x * x for x in a))
+    norm_b = math.sqrt(sum(x * x for x in b))
+    if norm_a == 0.0 or norm_b == 0.0:
+        return 1.0
+    return 1.0 - dot / (norm_a * norm_b)

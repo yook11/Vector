@@ -9,28 +9,28 @@ from sqlalchemy.orm import Mapped, mapped_column
 
 from app.models.base import Base
 
-__all__ = ["WeeklyTrendsSnapshot"]
+__all__ = ["TrendsSnapshot"]
 
 
-class WeeklyTrendsSnapshot(Base):
+class TrendsSnapshot(Base):
     """rolling 7d window の集計結果を 1 行 1 JSONB として保持する snapshot。
 
     ``window_end`` は集計窓の上限 (半開区間 ``[window_end - 7d, window_end)``)
     で、JST 当日 0:00 の date。1 日 1 行で daily cron が INSERT する。
-    ``bundle`` は ``WeeklyTrendsBundle.model_dump(mode="json")`` 出力をそのまま
+    ``bundle`` は ``TrendsBundle.model_dump(mode="json")`` 出力をそのまま
     格納する。snapshot は 1 単位保存が責務であり、推移分析や横断クエリのために
     正規化テーブル群に分解しない (feedback_snapshot_responsibility.md)。
     """
 
-    __tablename__ = "weekly_trends_snapshots"
+    __tablename__ = "trends_snapshots"
     __table_args__ = (
         CheckConstraint(
             "source_analysis_count >= 0",
-            name="ck_weekly_trends_snapshots_count_non_negative",
+            name="ck_trends_snapshots_count_non_negative",
         ),
         # find_latest (ORDER BY window_end DESC LIMIT 1) を高速化する DESC index。
         Index(
-            "ix_weekly_trends_snapshots_window_end_desc",
+            "ix_trends_snapshots_window_end_desc",
             text("window_end DESC"),
         ),
     )

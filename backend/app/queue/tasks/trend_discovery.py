@@ -3,7 +3,7 @@
 スケジュール:
 - ``CRON_TREND_DISCOVERY`` (UTC) = JST 毎日 00:05 — 直近完了 7 日窓
   (``[今日0:00 - 7d, 今日0:00)`` JST) を集計し、
-  集計対象 analysis がある場合のみ ``weekly_trends_snapshots`` に 1 行 INSERT する
+  集計対象 analysis がある場合のみ ``trends_snapshots`` に 1 行 INSERT する
 
 責務分離:
 - 入口 task は cron 引数 (`force=False` 固定) から ``ReadyForTrendDiscovery`` を構築し

@@ -21,13 +21,13 @@ from app.insights.trend_discovery.repository.snapshots import (
     SnapshotSaveResult,
     SnapshotSaveStatus,
 )
-from app.models.weekly_trends_snapshot import WeeklyTrendsSnapshot
+from app.models.trends_snapshot import TrendsSnapshot
 
 
 def _snapshot(
     window_end: date, *, source_analysis_count: int = 10, marker: str = "v1"
-) -> WeeklyTrendsSnapshot:
-    return WeeklyTrendsSnapshot(
+) -> TrendsSnapshot:
+    return TrendsSnapshot(
         window_end=window_end,
         bundle={
             "window_end": window_end.isoformat(),

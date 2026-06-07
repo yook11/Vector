@@ -64,6 +64,9 @@ Thumbs.db
 # ===========================
 .claude/*
 !.claude/commands/
+!.claude/agents/
+.claude/agents/*
+!.claude/agents/test-writer.md
 skills-lock.json
 
 # ===========================
@@ -83,6 +86,7 @@ skills-lock.json
 # Personal notes
 # ===========================
 *.local.md
+agent-failures/
 
 # ===========================
 # Specs (議論用、ローカル保持)

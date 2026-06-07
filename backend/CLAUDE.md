@@ -10,6 +10,7 @@ FastAPI + Python 3.13 + SQLAlchemy 2.0 async (Declarative / `mapped_column` + `M
 
 - schema 変更・Alembic migration: `/migration`
 - SQL / ORM query: `/database-queries`
+- API contract・response shape: `/api-contract`
 - Pydantic schema 変更後の型生成: `/gen-types`
 
 ## モジュール構成

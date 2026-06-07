@@ -1,4 +1,4 @@
-"""WeeklyTrendsQueryService — find_latest が SnapshotRepository に委譲する。
+"""TrendsQueryService — find_latest が SnapshotRepository に委譲する。
 
 Read 経路の Service は薄いが、Router からの入口を 1 箇所に集約する責務を持つ
 (Phase 1A 確定設計の CQRS 風分離: Command = TrendDiscoveryService / Query =
@@ -12,16 +12,14 @@ from datetime import date
 import pytest
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.insights.trend_discovery.application.query import WeeklyTrendsQueryService
-from app.insights.trend_discovery.domain.trend import WeeklyTrendsBundle
-from app.models.weekly_trends_snapshot import WeeklyTrendsSnapshot
+from app.insights.trend_discovery.application.query import TrendsQueryService
+from app.insights.trend_discovery.domain.trend import TrendsBundle
+from app.models.trends_snapshot import TrendsSnapshot
 
 
-def _snapshot(
-    window_end: date, *, source_analysis_count: int = 10
-) -> WeeklyTrendsSnapshot:
-    bundle = WeeklyTrendsBundle(window_end=window_end, sections=())
-    return WeeklyTrendsSnapshot(
+def _snapshot(window_end: date, *, source_analysis_count: int = 10) -> TrendsSnapshot:
+    bundle = TrendsBundle(window_end=window_end, sections=())
+    return TrendsSnapshot(
         window_end=window_end,
         bundle=bundle.model_dump(mode="json"),
         source_analysis_count=source_analysis_count,
@@ -31,7 +29,7 @@ def _snapshot(
 @pytest.mark.asyncio
 class TestFindLatest:
     async def test_returns_none_when_empty(self, db_session: AsyncSession) -> None:
-        service = WeeklyTrendsQueryService(db_session)
+        service = TrendsQueryService(db_session)
         assert await service.find_latest() is None
 
     async def test_returns_latest_by_window_end_desc(
@@ -42,7 +40,7 @@ class TestFindLatest:
         db_session.add(_snapshot(date(2026, 5, 1)))
         await db_session.flush()
 
-        service = WeeklyTrendsQueryService(db_session)
+        service = TrendsQueryService(db_session)
         latest = await service.find_latest()
 
         assert latest is not None

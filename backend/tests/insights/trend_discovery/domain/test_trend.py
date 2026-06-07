@@ -1,10 +1,11 @@
-"""Trend Discovery 集約 (EntityTrend / NewEntity / WeeklyCategoryTrends /
-WeeklyTrendsBundle) の不変条件と派生フィールドのテスト。
+"""Trend Discovery 集約 (RankedMention / RelatedMention / CategoryRankings /
+TrendsBundle) の不変条件と派生フィールドのテスト。
 
 責務:
-- VO 単体: hot 判定の構成要素 (件数下限) を構造的に強制する
-- 集約ルート (WeeklyCategoryTrends / WeeklyTrendsBundle): immutable な tuple で
-  子リストを保持し、永続化形 (model_dump) と一致する
+- VO 単体: 件数下限・文脈件数上限を構造的に強制する
+- 集約ルート (CategoryRankings / TrendsBundle): immutable な tuple で
+  子リストを保持し、各ランキングを top N に構造的に制限し、永続化形 (model_dump)
+  と一致する
 - hotness_score: ``(current - previous) / max(previous, SMOOTHING)`` で
   smoothing を適用 (前週 0 でも除算回避、burst を過大評価しすぎない)
 """
@@ -17,241 +18,293 @@ import pytest
 from pydantic import ValidationError
 
 from app.analysis.assessment.domain.result import MentionType
-from app.insights.trend_discovery.config import (
-    MIN_CURRENT,
-    NEW_ENTITY_LOOKBACK_WEEKS,
-    SMOOTHING,
-)
 from app.insights.trend_discovery.domain.mention_name import MentionName
 from app.insights.trend_discovery.domain.trend import (
-    EntityTrend,
-    NewEntity,
-    WeeklyCategoryTrends,
-    WeeklyTrendsBundle,
+    MAX_KEY_POINTS_PER_MENTION,
+    MAX_RELATED_MENTIONS,
+    MIN_CURRENT,
+    MIN_SHARED_ARTICLES,
+    SMOOTHING,
+    TOP_N_PER_RANKING,
+    CategoryRankings,
+    RankedMention,
+    RelatedMention,
+    TrendsBundle,
 )
 from app.models.value_objects.category import CategoryName, CategorySlug
 
 
-def _entity(
+def _names(
     name: str = "NVIDIA", type_: str = "company"
 ) -> tuple[MentionName, MentionType]:
     return MentionName(name), MentionType(type_)
 
 
-class TestEntityTrend:
+def _mention(
+    name: str = "NVIDIA", *, current: int = 10, previous: int = 3
+) -> RankedMention:
+    n, t = _names(name)
+    return RankedMention(
+        name=n, type=t, appearance_count=current, previous_appearance_count=previous
+    )
+
+
+class TestRankedMention:
     def test_constructs_with_valid_counts(self) -> None:
-        name, type_ = _entity()
-        trend = EntityTrend(name=name, type=type_, current_count=10, previous_count=3)
+        name, type_ = _names()
+        trend = RankedMention(
+            name=name, type=type_, appearance_count=10, previous_appearance_count=3
+        )
         assert trend.name == name
         assert trend.type == type_
-        assert trend.current_count == 10
-        assert trend.previous_count == 3
+        assert trend.appearance_count == 10
+        assert trend.previous_appearance_count == 3
+
+    def test_context_defaults_empty(self) -> None:
+        """enrich 前の純集計段階では key_points / related_mentions は空。"""
+        trend = _mention()
+        assert trend.key_points == ()
+        assert trend.related_mentions == ()
 
     def test_rejects_current_below_min(self) -> None:
-        """current_count < MIN_CURRENT は構造的に reject。"""
-        name, type_ = _entity()
+        """appearance_count < MIN_CURRENT は構造的に reject。"""
+        name, type_ = _names()
         with pytest.raises(ValidationError):
-            EntityTrend(
+            RankedMention(
                 name=name,
                 type=type_,
-                current_count=MIN_CURRENT - 1,
-                previous_count=0,
+                appearance_count=MIN_CURRENT - 1,
+                previous_appearance_count=0,
             )
 
     def test_accepts_current_at_min(self) -> None:
-        name, type_ = _entity()
-        trend = EntityTrend(
-            name=name, type=type_, current_count=MIN_CURRENT, previous_count=0
+        name, type_ = _names()
+        trend = RankedMention(
+            name=name,
+            type=type_,
+            appearance_count=MIN_CURRENT,
+            previous_appearance_count=0,
         )
-        assert trend.current_count == MIN_CURRENT
+        assert trend.appearance_count == MIN_CURRENT
 
     def test_rejects_negative_previous(self) -> None:
-        name, type_ = _entity()
+        name, type_ = _names()
         with pytest.raises(ValidationError):
-            EntityTrend(name=name, type=type_, current_count=10, previous_count=-1)
+            RankedMention(
+                name=name, type=type_, appearance_count=10, previous_appearance_count=-1
+            )
 
     def test_accepts_previous_zero(self) -> None:
         """新規 burst (previous=0) は許容。hot 判定は集計側で行う。"""
-        name, type_ = _entity()
-        trend = EntityTrend(name=name, type=type_, current_count=20, previous_count=0)
-        assert trend.previous_count == 0
+        name, type_ = _names()
+        trend = RankedMention(
+            name=name, type=type_, appearance_count=20, previous_appearance_count=0
+        )
+        assert trend.previous_appearance_count == 0
+
+    def test_rejects_too_many_key_points(self) -> None:
+        """key_points は MAX_KEY_POINTS_PER_MENTION 本まで。"""
+        name, type_ = _names()
+        with pytest.raises(ValidationError):
+            RankedMention(
+                name=name,
+                type=type_,
+                appearance_count=10,
+                previous_appearance_count=3,
+                key_points=tuple(
+                    f"kp {i}" for i in range(MAX_KEY_POINTS_PER_MENTION + 1)
+                ),
+            )
+
+    def test_rejects_too_many_related_mentions(self) -> None:
+        """related_mentions は MAX_RELATED_MENTIONS 件まで。"""
+        name, type_ = _names()
+        related = tuple(
+            RelatedMention(
+                name=MentionName(f"peer {i}"),
+                type=MentionType.COMPANY,
+                shared_article_count=MIN_SHARED_ARTICLES,
+            )
+            for i in range(MAX_RELATED_MENTIONS + 1)
+        )
+        with pytest.raises(ValidationError):
+            RankedMention(
+                name=name,
+                type=type_,
+                appearance_count=10,
+                previous_appearance_count=3,
+                related_mentions=related,
+            )
 
     def test_immutable(self) -> None:
-        name, type_ = _entity()
-        trend = EntityTrend(name=name, type=type_, current_count=10, previous_count=3)
+        trend = _mention()
         with pytest.raises(ValidationError):
-            trend.current_count = 99  # type: ignore[misc]
+            trend.appearance_count = 99  # type: ignore[misc]
 
     def test_hotness_score_uses_smoothing_when_previous_is_zero(self) -> None:
-        """previous_count=0 のとき分母は SMOOTHING (除算回避)。"""
-        name, type_ = _entity()
-        trend = EntityTrend(name=name, type=type_, current_count=10, previous_count=0)
+        """previous_appearance_count=0 のとき分母は SMOOTHING (除算回避)。"""
+        name, type_ = _names()
+        trend = RankedMention(
+            name=name, type=type_, appearance_count=10, previous_appearance_count=0
+        )
         assert trend.hotness_score == pytest.approx((10 - 0) / SMOOTHING)
 
     def test_hotness_score_uses_previous_when_above_smoothing(self) -> None:
-        """previous_count > SMOOTHING なら分母は previous_count。"""
-        name, type_ = _entity()
-        trend = EntityTrend(name=name, type=type_, current_count=20, previous_count=5)
+        """previous_appearance_count > SMOOTHING なら分母は前週件数そのもの。"""
+        name, type_ = _names()
+        trend = RankedMention(
+            name=name, type=type_, appearance_count=20, previous_appearance_count=5
+        )
         assert trend.hotness_score == pytest.approx((20 - 5) / 5)
 
     def test_hotness_score_uses_smoothing_when_previous_below_smoothing(
         self,
     ) -> None:
-        """previous_count < SMOOTHING なら分母は SMOOTHING。"""
-        name, type_ = _entity()
+        """previous_appearance_count < SMOOTHING なら分母は SMOOTHING。"""
+        name, type_ = _names()
         # SMOOTHING = 2 を前提
-        trend = EntityTrend(name=name, type=type_, current_count=10, previous_count=1)
+        trend = RankedMention(
+            name=name, type=type_, appearance_count=10, previous_appearance_count=1
+        )
         assert trend.hotness_score == pytest.approx((10 - 1) / SMOOTHING)
 
 
-class TestNewEntity:
-    def test_constructs_with_count_at_least_one(self) -> None:
-        name, type_ = _entity("DeepSeek-R1", "product")
-        new = NewEntity(name=name, type=type_, current_count=1)
-        assert new.current_count == 1
+class TestRelatedMention:
+    def test_constructs_at_min_shared(self) -> None:
+        related = RelatedMention(
+            name=MentionName("OpenAI"),
+            type=MentionType.COMPANY,
+            shared_article_count=MIN_SHARED_ARTICLES,
+        )
+        assert related.shared_article_count == MIN_SHARED_ARTICLES
 
-    def test_rejects_zero_count(self) -> None:
-        """新規エンティティは少なくとも 1 件の登場が必要。
-
-        0 件なら NewEntity ではない。
-        """
-        name, type_ = _entity()
+    def test_rejects_below_min_shared(self) -> None:
+        """共起 1 記事 (< MIN_SHARED_ARTICLES) は noise として構造的に reject。"""
         with pytest.raises(ValidationError):
-            NewEntity(name=name, type=type_, current_count=0)
-
-    def test_rejects_negative_count(self) -> None:
-        name, type_ = _entity()
-        with pytest.raises(ValidationError):
-            NewEntity(name=name, type=type_, current_count=-1)
+            RelatedMention(
+                name=MentionName("OpenAI"),
+                type=MentionType.COMPANY,
+                shared_article_count=MIN_SHARED_ARTICLES - 1,
+            )
 
     def test_immutable(self) -> None:
-        name, type_ = _entity()
-        new = NewEntity(name=name, type=type_, current_count=3)
+        related = RelatedMention(
+            name=MentionName("OpenAI"),
+            type=MentionType.COMPANY,
+            shared_article_count=MIN_SHARED_ARTICLES,
+        )
         with pytest.raises(ValidationError):
-            new.current_count = 99  # type: ignore[misc]
+            related.shared_article_count = 99  # type: ignore[misc]
 
 
-class TestWeeklyCategoryTrends:
+class TestCategoryRankings:
     def _make(
         self,
         *,
-        entities: tuple[EntityTrend, ...] = (),
-        new_entities: tuple[NewEntity, ...] = (),
-    ) -> WeeklyCategoryTrends:
-        return WeeklyCategoryTrends(
+        most_mentioned: tuple[RankedMention, ...] = (),
+        fastest_growing: tuple[RankedMention, ...] = (),
+    ) -> CategoryRankings:
+        return CategoryRankings(
             category_id=1,
             category_slug=CategorySlug("ai_ml"),
             category_name=CategoryName("AI・ML"),
-            trending_entities=entities,
-            new_entities=new_entities,
+            most_mentioned=most_mentioned,
+            fastest_growing=fastest_growing,
         )
 
-    def test_constructs_with_empty_lists(self) -> None:
+    def test_constructs_with_empty_rankings(self) -> None:
         section = self._make()
         assert section.category_id == 1
         assert section.category_slug.root == "ai_ml"
         assert section.category_name.root == "AI・ML"
-        assert section.trending_entities == ()
-        assert section.new_entities == ()
+        assert section.most_mentioned == ()
+        assert section.fastest_growing == ()
 
-    def test_constructs_with_populated_lists(self) -> None:
-        name, type_ = _entity()
-        et = EntityTrend(name=name, type=type_, current_count=10, previous_count=3)
-        ne = NewEntity(name=name, type=type_, current_count=4)
-        section = self._make(entities=(et,), new_entities=(ne,))
-        assert section.trending_entities == (et,)
-        assert section.new_entities == (ne,)
+    def test_constructs_with_populated_rankings(self) -> None:
+        appearance = _mention("Appears")
+        growth = _mention("Grows")
+        section = self._make(most_mentioned=(appearance,), fastest_growing=(growth,))
+        assert section.most_mentioned == (appearance,)
+        assert section.fastest_growing == (growth,)
+
+    def test_rejects_most_mentioned_over_top_n(self) -> None:
+        """most_mentioned は TOP_N_PER_RANKING 件まで。"""
+        too_many = tuple(_mention(f"m{i}") for i in range(TOP_N_PER_RANKING + 1))
+        with pytest.raises(ValidationError):
+            self._make(most_mentioned=too_many)
+
+    def test_rejects_fastest_growing_over_top_n(self) -> None:
+        """fastest_growing は TOP_N_PER_RANKING 件まで。"""
+        too_many = tuple(_mention(f"m{i}") for i in range(TOP_N_PER_RANKING + 1))
+        with pytest.raises(ValidationError):
+            self._make(fastest_growing=too_many)
 
     def test_immutable_aggregate(self) -> None:
         section = self._make()
         with pytest.raises(ValidationError):
             section.category_id = 99  # type: ignore[misc]
 
-    def test_lists_are_tuples(self) -> None:
-        """リストは tuple で永続化される (collections の immutability を構造で保証)。"""
+    def test_rankings_are_tuples(self) -> None:
+        """ランキングは tuple で永続化される (immutability を構造で保証)。"""
         section = self._make()
-        assert isinstance(section.trending_entities, tuple)
-        assert isinstance(section.new_entities, tuple)
+        assert isinstance(section.most_mentioned, tuple)
+        assert isinstance(section.fastest_growing, tuple)
 
 
-class TestWeeklyTrendsBundle:
-    def _section(self, category_id: int = 1) -> WeeklyCategoryTrends:
-        return WeeklyCategoryTrends(
+class TestTrendsBundle:
+    def _section(self, category_id: int = 1) -> CategoryRankings:
+        return CategoryRankings(
             category_id=category_id,
             category_slug=CategorySlug("ai_ml"),
             category_name=CategoryName("AI・ML"),
-            trending_entities=(),
-            new_entities=(),
+            most_mentioned=(),
+            fastest_growing=(),
         )
 
     def test_constructs_with_empty_sections(self) -> None:
-        bundle = WeeklyTrendsBundle(window_end=date(2026, 5, 3), sections=())
+        bundle = TrendsBundle(window_end=date(2026, 5, 3), sections=())
         assert bundle.window_end == date(2026, 5, 3)
         assert bundle.sections == ()
 
     def test_constructs_with_multiple_sections(self) -> None:
         sections = (self._section(1), self._section(2))
-        bundle = WeeklyTrendsBundle(window_end=date(2026, 5, 3), sections=sections)
+        bundle = TrendsBundle(window_end=date(2026, 5, 3), sections=sections)
         assert len(bundle.sections) == 2
 
     def test_immutable_bundle(self) -> None:
-        bundle = WeeklyTrendsBundle(window_end=date(2026, 5, 3), sections=())
+        bundle = TrendsBundle(window_end=date(2026, 5, 3), sections=())
         with pytest.raises(ValidationError):
             bundle.window_end = date(2026, 4, 27)  # type: ignore[misc]
 
     def test_model_dump_round_trip(self) -> None:
         """model_dump(mode='json') → model_validate で同値に戻る (snapshot 永続化)。"""
-        name, type_ = _entity()
-        et = EntityTrend(name=name, type=type_, current_count=10, previous_count=3)
-        section = WeeklyCategoryTrends(
+        enriched = _mention("NVIDIA").model_copy(
+            update={
+                "key_points": ("AI chip demand surges",),
+                "related_mentions": (
+                    RelatedMention(
+                        name=MentionName("OpenAI"),
+                        type=MentionType.COMPANY,
+                        shared_article_count=3,
+                    ),
+                ),
+            }
+        )
+        section = CategoryRankings(
             category_id=1,
             category_slug=CategorySlug("ai_ml"),
             category_name=CategoryName("AI・ML"),
-            trending_entities=(et,),
-            new_entities=(),
+            most_mentioned=(enriched,),
+            fastest_growing=(enriched,),
         )
-        original = WeeklyTrendsBundle(window_end=date(2026, 5, 3), sections=(section,))
+        original = TrendsBundle(window_end=date(2026, 5, 3), sections=(section,))
         dumped = original.model_dump(mode="json")
-        restored = WeeklyTrendsBundle.model_validate(dumped)
+        restored = TrendsBundle.model_validate(dumped)
         assert restored == original
 
-    def test_legacy_snapshot_with_trending_topics_ignored(self) -> None:
-        """``trending_topics`` を含む過去 snapshot は ``extra="ignore"`` で吸収される。
 
-        PR 3 で ``TopicTrend`` を VO から削除した後も、weekly_trend_snapshots に
-        過去 PR 2 以前の bundle が ``trending_topics: [...]`` を含んで残っている
-        ケースがある。Pydantic v2 のデフォルト ``extra="ignore"`` で旧フィールドを
-        黙殺できることを invariant test で固定する (feedback_failure_visibility は
-        新フィールド導入時の話で、ここはむしろ過去 snapshot の前方互換性が責務)。
-        """
-        legacy_payload = {
-            "window_end": "2026-05-03",
-            "sections": [
-                {
-                    "category_id": 1,
-                    "category_slug": "ai_ml",
-                    "category_name": "AI・ML",
-                    "trending_entities": [],
-                    "trending_topics": [
-                        {
-                            "topic": "legacy topic",
-                            "current_count": 8,
-                            "previous_count": 2,
-                            "hotness_score": 3.0,
-                        }
-                    ],
-                    "new_entities": [],
-                }
-            ],
-        }
-        bundle = WeeklyTrendsBundle.model_validate(legacy_payload)
-        assert bundle.window_end == date(2026, 5, 3)
-        section = bundle.sections[0]
-        assert not hasattr(section, "trending_topics")
-
-
-class TestConfigConstants:
-    """trend_discovery/config.py の定数が想定値であることを確認する。"""
+class TestDomainConstants:
+    """集計しきい値が想定値であることを pin する (仕様値のドリフト検出)。"""
 
     def test_min_current_is_five(self) -> None:
         assert MIN_CURRENT == 5
@@ -259,5 +312,8 @@ class TestConfigConstants:
     def test_smoothing_is_two(self) -> None:
         assert SMOOTHING == 2
 
-    def test_lookback_is_four_weeks(self) -> None:
-        assert NEW_ENTITY_LOOKBACK_WEEKS == 4
+    def test_min_shared_articles_is_two(self) -> None:
+        assert MIN_SHARED_ARTICLES == 2
+
+    def test_top_n_per_ranking_is_five(self) -> None:
+        assert TOP_N_PER_RANKING == 5
