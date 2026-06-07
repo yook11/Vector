@@ -55,6 +55,7 @@
 
 ## Task Agents
 
+- frontend UI / component / page 実装は、利用可能な場合 frontend-ui-builder agent に分担する。
 - テスト設計・単体テスト追加は、利用可能な場合 test-writer agent に分担する。
 
 ## Ask First

@@ -66,6 +66,7 @@ Thumbs.db
 !.claude/commands/
 !.claude/agents/
 .claude/agents/*
+!.claude/agents/frontend-ui-builder.md
 !.claude/agents/test-writer.md
 skills-lock.json
 
