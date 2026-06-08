@@ -1,20 +1,22 @@
 import { Suspense } from "react";
 import { getProtectedNavItems } from "@/components/layout/nav-items";
 import { ThemeToggle } from "@/components/layout/ThemeToggle";
+import {
+  formatPaperMastheadDate,
+  PaperSurface,
+  PaperTexture,
+} from "@/components/paper";
 import { UserMenu } from "@/features/auth";
 import {
   DashboardArticleListSkeleton,
   DashboardMasthead,
   DashboardPaperArticleList,
-  formatPaperMastheadDate,
   getArticles,
   getCategories,
   getLatestArticleDate,
   PaperNewsControls,
   PaperNewsPagination,
   PaperNewsResultSummary,
-  PaperSurface,
-  PaperTexture,
   parseArticleQuery,
 } from "@/features/news";
 import { getWatchlistIds } from "@/features/watchlist";

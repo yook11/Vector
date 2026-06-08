@@ -62,8 +62,14 @@ BRIEFING_PROMPT = """\
 
 【出力】
 - headline: 今週を一言で表す見出し
-- overview: 今週何が起きたか。事実の流れ・背景・主要な動きを、複数の記事を \
-またぐ繋がりや派生関係も含めてストーリー仕立てで読みやすい文章にする。
+- summary: 今週の総括。headline の直後に置くリード文として、今週の要点を \
+数文で簡潔にまとめる。
+- chapters: 今週何が起きたかを語る本文。話題のまとまりごとに章に分け、\
+各章を見出し (heading) と本文 (body) で構成する。章の数は内容量に応じて決めてよい \
+(無理に増やさない・1 つにまとめない)。本文は、複数の記事をまたぐ繋がりや派生関係も \
+含めてストーリー仕立てで読みやすい文章にする。
+  - heading: その章の内容を端的に表す短い見出し (例: 「資金とインフラ」)
+  - body: その章の本文
 - key_articles: 今週中で特に重要な記事。最大 5 件、\
 重要度の高い順に並べる。同じ記事を複数回挙げないこと。
   - article_id: 入力に存在する記事の id
@@ -94,15 +100,38 @@ BRIEFING_PROMPT = """\
 BRIEFING_TOOL_SCHEMA: dict[str, Any] = {
     "type": "object",
     "additionalProperties": False,
-    "required": ["headline", "overview", "key_articles", "watch_points"],
+    "required": ["headline", "summary", "chapters", "key_articles", "watch_points"],
     "properties": {
         "headline": {
             "type": "string",
             "description": "今週を一言で表す見出し (一覧表示用、短く)",
         },
-        "overview": {
+        "summary": {
             "type": "string",
-            "description": ("今週何が起きたかを語る本文 (ストーリー仕立て、日本語)"),
+            "description": ("今週の総括リード (headline 直後の数文、日本語)"),
+        },
+        "chapters": {
+            "type": "array",
+            "description": (
+                "本文を話題ごとに章立て (見出し + 本文、章数は内容量に応じて、日本語)"
+            ),
+            "items": {
+                "type": "object",
+                "additionalProperties": False,
+                "required": ["heading", "body"],
+                "properties": {
+                    "heading": {
+                        "type": "string",
+                        "description": "章の内容を端的に表す短い見出し (日本語)",
+                    },
+                    "body": {
+                        "type": "string",
+                        "description": (
+                            "章の本文 (ストーリー仕立てで読みやすく、日本語)"
+                        ),
+                    },
+                },
+            },
         },
         "key_articles": {
             "type": "array",

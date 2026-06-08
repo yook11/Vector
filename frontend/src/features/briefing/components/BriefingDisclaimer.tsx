@@ -7,7 +7,10 @@
  */
 export function BriefingDisclaimer() {
   return (
-    <p className="text-[10px] text-muted-foreground border-t border-border/60 pt-4">
+    <p
+      className="max-w-[54em] text-[11px] leading-[1.8] text-[var(--vector-ink-muted)]"
+      style={{ fontFamily: "var(--font-vector-maru)" }}
+    >
       本ページの内容は AI が公開ニュースから自動生成した要約・解説であり、
       投資助言・推奨ではありません。投資判断は読者ご自身の責任で行ってください。
     </p>

@@ -25,6 +25,7 @@ from app.insights.briefing.schemas.briefing import (
     _ArticleSummaryOut,
     _BriefingListLatest,
     _CategoryOut,
+    _ChapterOut,
     _KeyArticleOut,
     _WatchPointOut,
 )
@@ -59,6 +60,7 @@ async def _fetch_article_summaries(
         select(
             Article.id,
             Article.source_url,
+            Article.published_at,
             InScopeAssessment.translated_title,
             NewsSource.name,
         )
@@ -77,6 +79,7 @@ async def _fetch_article_summaries(
             title_ja=row.translated_title,
             source_name=str(row.name),
             url=str(row.source_url),
+            published_at=row.published_at,
         )
         for row in rows
     ]
@@ -147,6 +150,7 @@ async def get_latest_briefing(
     if briefing is None:
         return EmptyBriefing(category=_to_category(category))
 
+    chapters = [_ChapterOut.model_validate(c) for c in briefing.chapters]
     key_articles = [_KeyArticleOut.model_validate(a) for a in briefing.key_articles]
     watch_points = [_WatchPointOut.model_validate(w) for w in briefing.watch_points]
     article_ids = [a.article_id for a in key_articles]
@@ -159,7 +163,8 @@ async def get_latest_briefing(
         input_article_count=briefing.input_article_count,
         category=_to_category(category),
         headline=briefing.headline,
-        overview=briefing.overview,
+        summary=briefing.summary,
+        chapters=chapters,
         key_articles=key_articles,
         watch_points=watch_points,
         articles=articles,

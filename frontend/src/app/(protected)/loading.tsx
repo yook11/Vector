@@ -1,8 +1,5 @@
-import {
-  DashboardArticleListSkeleton,
-  PaperSurface,
-  PaperTexture,
-} from "@/features/news";
+import { PaperSurface, PaperTexture } from "@/components/paper";
+import { DashboardArticleListSkeleton } from "@/features/news";
 
 export default function DashboardLoading() {
   return (

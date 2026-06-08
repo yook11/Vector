@@ -1,7 +1,8 @@
-"""WeeklyBriefingContent / KeyArticle / WatchPoint のスキーマ + 検証テスト。
+"""WeeklyBriefingContent / BriefingChapter / KeyArticle / WatchPoint の検証テスト。
 
 不変条件の正本 (一次防御):
-- key_articles / watch_points の件数・文字列長 (F10 構造防御)
+- summary / chapters / key_articles / watch_points の件数・文字列長 (F10 構造防御)
+- chapters は最低 1 章 (本文を章立てで構造化する)
 - key_articles[].article_id の重複拒否 (UI の React key 一意性)
 - key_articles[].article_id ⊆ input_ids (ハルシネーション検出、context 付き)
 """
@@ -12,10 +13,15 @@ import pytest
 from pydantic import ValidationError
 
 from app.insights.briefing.domain.briefing import (
+    MAX_BRIEFING_SUMMARY_LEN,
+    MAX_CHAPTER_BODY_LEN,
+    MAX_CHAPTER_HEADING_LEN,
+    MAX_CHAPTERS_PER_BRIEFING,
     MAX_KEY_ARTICLE_SIGNIFICANCE_LEN,
     MAX_KEY_ARTICLES_PER_BRIEFING,
     MAX_WATCH_POINT_STATEMENT_LEN,
     MAX_WATCH_POINTS_PER_BRIEFING,
+    BriefingChapter,
     KeyArticle,
     WatchPoint,
     WeeklyBriefingContent,
@@ -26,12 +32,23 @@ def _content(**overrides: object) -> dict[str, object]:
     """正常系の最小 payload。各テストで壊したい field だけ上書きする。"""
     base: dict[str, object] = {
         "headline": "今週は AI",
-        "overview": "overview narrative",
+        "summary": "今週の総括リード",
+        "chapters": [{"heading": "資金とインフラ", "body": "章本文"}],
         "key_articles": [{"article_id": 1, "significance": "なぜ重要か"}],
         "watch_points": [{"statement": "今後どこを見るべきか"}],
     }
     base.update(overrides)
     return base
+
+
+class TestBriefingChapter:
+    def test_heading_min_length_rejects_empty(self) -> None:
+        with pytest.raises(ValidationError):
+            BriefingChapter(heading="", body="章本文")
+
+    def test_body_min_length_rejects_empty(self) -> None:
+        with pytest.raises(ValidationError):
+            BriefingChapter(heading="見出し", body="")
 
 
 class TestKeyArticle:
@@ -49,13 +66,48 @@ class TestWatchPoint:
 class TestWeeklyBriefingContentNormalPath:
     def test_accepts_minimal_valid_content(self) -> None:
         content = WeeklyBriefingContent.model_validate(_content())
+        assert content.summary == "今週の総括リード"
+        assert content.chapters[0].heading == "資金とインフラ"
+        assert content.chapters[0].body == "章本文"
         assert content.key_articles[0].article_id == 1
         assert content.key_articles[0].significance == "なぜ重要か"
         assert content.watch_points[0].statement == "今後どこを見るべきか"
 
-    def test_overview_min_length_rejects_empty(self) -> None:
+    def test_summary_min_length_rejects_empty(self) -> None:
         with pytest.raises(ValidationError):
-            WeeklyBriefingContent.model_validate(_content(overview=""))
+            WeeklyBriefingContent.model_validate(_content(summary=""))
+
+    def test_rejects_oversize_summary(self) -> None:
+        with pytest.raises(ValidationError):
+            WeeklyBriefingContent.model_validate(
+                _content(summary="x" * (MAX_BRIEFING_SUMMARY_LEN + 1))
+            )
+
+
+class TestChaptersInvariants:
+    def test_rejects_empty_chapters(self) -> None:
+        """章は最低 1 つ必要 (本文を章立てで構造化する)。"""
+        with pytest.raises(ValidationError):
+            WeeklyBriefingContent.model_validate(_content(chapters=[]))
+
+    def test_rejects_more_than_max_chapters(self) -> None:
+        """章数の上限ガード超 (LLM 暴走疑い) を弾く。"""
+        too_many = [
+            {"heading": f"h{i}", "body": f"b{i}"}
+            for i in range(MAX_CHAPTERS_PER_BRIEFING + 1)
+        ]
+        with pytest.raises(ValidationError):
+            WeeklyBriefingContent.model_validate(_content(chapters=too_many))
+
+    def test_rejects_oversize_heading(self) -> None:
+        oversize = [{"heading": "x" * (MAX_CHAPTER_HEADING_LEN + 1), "body": "b"}]
+        with pytest.raises(ValidationError):
+            WeeklyBriefingContent.model_validate(_content(chapters=oversize))
+
+    def test_rejects_oversize_body(self) -> None:
+        oversize = [{"heading": "h", "body": "x" * (MAX_CHAPTER_BODY_LEN + 1)}]
+        with pytest.raises(ValidationError):
+            WeeklyBriefingContent.model_validate(_content(chapters=oversize))
 
 
 class TestKeyArticlesInvariants:

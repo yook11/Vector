@@ -17,13 +17,15 @@ def _make(
     category_id: int,
     *,
     headline: str = "h1",
-    overview: str = "overview narrative",
+    summary: str = "今週の総括",
+    chapters: list[dict] | None = None,
 ) -> WeeklyBriefing:
     return WeeklyBriefing(
         week_start_date=week,
         category_id=category_id,
         headline=headline,
-        overview=overview,
+        summary=summary,
+        chapters=chapters or [{"heading": "資金とインフラ", "body": "章本文"}],
         key_articles=[{"article_id": 1, "significance": "なぜ重要か"}],
         watch_points=[{"statement": "今後どこを見るべきか"}],
         model_name="test-model",
@@ -78,18 +80,25 @@ class TestSave:
     ) -> None:
         repo = BriefingRepository(db_session)
         await repo.save(
-            _make(date(2026, 4, 20), category.id, headline="v1", overview="o1")
+            _make(date(2026, 4, 20), category.id, headline="v1", summary="s1")
         )
         await db_session.commit()
 
         forced = await repo.save(
-            _make(date(2026, 4, 20), category.id, headline="v2", overview="o2"),
+            _make(
+                date(2026, 4, 20),
+                category.id,
+                headline="v2",
+                summary="s2",
+                chapters=[{"heading": "新章", "body": "新本文"}],
+            ),
             force=True,
         )
         await db_session.commit()
         assert forced is not None
         assert forced.headline == "v2"
-        assert forced.overview == "o2"
+        assert forced.summary == "s2"
+        assert forced.chapters == [{"heading": "新章", "body": "新本文"}]
 
 
 class TestExists:

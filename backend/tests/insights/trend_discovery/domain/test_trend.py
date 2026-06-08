@@ -20,6 +20,7 @@ from pydantic import ValidationError
 from app.analysis.assessment.domain.result import MentionType
 from app.insights.trend_discovery.domain.mention_name import MentionName
 from app.insights.trend_discovery.domain.trend import (
+    MAX_CATEGORIES_PER_BUNDLE,
     MAX_KEY_POINTS_PER_MENTION,
     MAX_RELATED_MENTIONS,
     MIN_CURRENT,
@@ -280,8 +281,20 @@ class TestTrendsBundle:
         with pytest.raises(ValidationError):
             bundle.window_end = date(2026, 4, 27)  # type: ignore[misc]
 
+    def test_rejects_too_many_category_trends(self) -> None:
+        """category_trends は MAX_CATEGORIES_PER_BUNDLE 件まで。"""
+        too_many = tuple(
+            self._category_trends(i) for i in range(MAX_CATEGORIES_PER_BUNDLE + 1)
+        )
+        with pytest.raises(ValidationError):
+            TrendsBundle(window_end=date(2026, 5, 3), category_trends=too_many)
+
     def test_model_dump_round_trip(self) -> None:
-        """model_dump(mode='json') → model_validate で同値に戻る (snapshot 永続化)。"""
+        """model_dump(mode='json') → model_validate で同値に戻る (VO round-trip)。
+
+        永続化される実体は TrendsBundle の dump ではなく Trends レスポンス payload
+        (camelCase) であることに注意。この round-trip はドメイン VO の不変条件検証。
+        """
         enriched = _mention("NVIDIA").model_copy(
             update={
                 "key_points": ("AI chip demand surges",),

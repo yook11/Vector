@@ -39,6 +39,7 @@ def seed_briefing_analysis(
         analyzed_at: datetime,
         translated_title: str | None = None,
         summary: str | None = None,
+        published_at: datetime | None = None,
     ) -> InScopeAssessment:
         n = next(seq)
         title = translated_title or f"briefing-seed-{n}"
@@ -50,6 +51,7 @@ def seed_briefing_analysis(
             source_url=url,
             original_title=title,
             original_content="x" * 60,
+            published_at=published_at,
         )
         db_session.add(article)
         await db_session.flush()

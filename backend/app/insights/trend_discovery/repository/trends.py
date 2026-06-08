@@ -36,6 +36,7 @@ from __future__ import annotations
 import math
 from collections.abc import Sequence
 from datetime import datetime
+from typing import cast
 
 import sqlalchemy as sa
 from pgvector.sqlalchemy import HALFVEC
@@ -389,7 +390,7 @@ def _to_vector(embedding: object) -> list[float] | None:
         return None
     to_list = getattr(embedding, "to_list", None)
     if callable(to_list):
-        return to_list()
+        return cast("list[float]", to_list())
     return list(embedding)  # type: ignore[call-overload]
 
 

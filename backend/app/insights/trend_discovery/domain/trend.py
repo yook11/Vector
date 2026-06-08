@@ -5,15 +5,15 @@
   に文脈 (key_points / related_mentions) を添えたもの
 - ``RelatedMention``: anchor mention と同一 key_point 内で一緒に語られた別の固有名
 - ``CategoryTrends`` (集約ルート): 1 カテゴリ × 1 集計窓分の 2 ランキング束
-- ``TrendsBundle`` (snapshot 永続形): 1 集計窓分の全カテゴリ集約
+- ``TrendsBundle`` (書込時の検証済み集約): 1 集計窓分の全カテゴリ集約
 
 責務:
 - 件数の下限/非負を Pydantic ``Field(ge=...)`` で構造的に強制
   (ランタイム if より構造で守る: feedback_structural_guarantee.md)
 - 集約は ``frozen=True`` + ``tuple[...]`` 子コレクションで深く immutable
-- ``TrendsBundle.model_dump(mode="json")`` 結果をそのまま JSONB に保存し、
-  ``model_validate`` で復元できる (snapshot は 1 単位保存:
-  feedback_snapshot_responsibility.md)
+- 検証 (上限・非負) はこの集約構築の 1 回だけ。永続化・配信は ``TrendsBundle`` の
+  dump ではなく、ここから組む ``Trends`` レスポンス payload を verbatim で扱う
+  (snapshot は 1 単位保存: feedback_snapshot_responsibility.md)
 
 集計しきい値はトレンドのドメイン知識として本モジュールに集約する
 (``config.py`` は廃止。窓 TZ のみ window 責務に同居させ ``domain/window.py`` に置く)。
@@ -147,10 +147,12 @@ class CategoryTrends(BaseModel):
 
 
 class TrendsBundle(BaseModel):
-    """1 集計窓分の全カテゴリトレンドをまとめた snapshot 永続形。
+    """1 集計窓分の全カテゴリトレンドをまとめた書込時の検証済み集約。
 
-    ``model_dump(mode="json")`` 出力をそのまま JSONB に保存する。
-    snapshot は 1 単位保存が責務 (feedback_snapshot_responsibility.md)。
+    上限・非負の不変条件をここで構造的に強制する (検証点はここ 1 箇所)。
+    永続化されるのはこの dump ではなく、ここから組み立てる ``Trends`` レスポンス
+    payload (camelCase) で、読取は verbatim 配信する
+    (snapshot は 1 単位保存: feedback_snapshot_responsibility.md)。
 
     ``window_end``: rolling 7d window の上限 (半開区間
     ``[window_end - 7d, window_end)`` の上端、JST 日付)。

@@ -1,23 +1,44 @@
-import type { BriefingArticleSummary, BriefingKeyArticle } from "@/types";
+import { PaperKicker } from "@/components/paper";
+import type { BriefingKeyArticle } from "@/types";
+import type { BriefingArticleSummaryParsed } from "../schemas/briefing";
 import { ArticleCard } from "./ArticleCard";
 
 interface KeyArticleBlockProps {
   keyArticle: BriefingKeyArticle;
-  articlesById: Map<number, BriefingArticleSummary>;
+  articlesById: Map<number, BriefingArticleSummaryParsed>;
+  /** 見出し用カテゴリ。briefing は単一カテゴリのため全カード共通。 */
+  category: { slug: string; name: string };
+  /** 0 始まりの並び順。表示は 01, 02, ... */
+  index: number;
 }
 
+/** 特に重要な記事 1 件の feature カード: 番号 + カテゴリ + 見出し + 出典 + なぜ重要か。 */
 export function KeyArticleBlock({
   keyArticle,
   articlesById,
+  category,
+  index,
 }: KeyArticleBlockProps) {
   const article = articlesById.get(keyArticle.articleId);
 
   return (
-    <section className="flex flex-col gap-3">
-      {article && <ArticleCard article={article} />}
-      <p className="text-sm leading-relaxed text-foreground/90 whitespace-pre-line">
-        {keyArticle.significance}
-      </p>
-    </section>
+    <article className="grid grid-cols-[clamp(34px,4vw,46px)_1fr] items-baseline gap-x-[clamp(16px,2.6vw,26px)] border-t border-[var(--vector-line)] pt-6">
+      <span
+        className="text-[clamp(26px,3vw,34px)] italic leading-none text-[var(--vector-ink-muted)]"
+        style={{ fontFamily: "var(--font-vector-display)" }}
+      >
+        {String(index + 1).padStart(2, "0")}
+      </span>
+      <div className="flex min-w-0 flex-col gap-3">
+        <PaperKicker slug={category.slug} name={category.name} />
+        {article && <ArticleCard article={article} />}
+        <p
+          className="text-pretty text-[14.5px] leading-[1.9] text-[var(--vector-ink-soft)]"
+          style={{ fontFamily: "var(--font-vector-serif)" }}
+        >
+          {keyArticle.significance}
+        </p>
+      </div>
+    </article>
   );
 }

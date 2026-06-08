@@ -44,6 +44,7 @@ from app.insights.trend_discovery.repository.snapshots import (
     SnapshotSaveStatus,
 )
 from app.insights.trend_discovery.repository.trends import TrendsRepository
+from app.insights.trend_discovery.schemas.trends import trends_from_snapshot
 from app.models.category import Category
 from app.models.trends_snapshot import TrendsSnapshot
 
@@ -174,10 +175,20 @@ class TrendDiscoveryService:
                 window_end=ready.window_end, category_trends=category_trends
             )
 
+            # snapshot は API レスポンスそのものを焼く。検証 (上限・非負) は上の
+            # TrendsBundle 構築の1回だけで、読取は verbatim に返す。generated_at は
+            # JSON と DB列の双方へ同値を入れるためアプリ側で1つ確定する。
+            generated_at = datetime.now(UTC)
+            response = trends_from_snapshot(
+                bundle=bundle,
+                generated_at=generated_at,
+                source_analysis_count=source_count,
+            )
             snapshot = TrendsSnapshot(
                 window_end=ready.window_end,
-                bundle=bundle.model_dump(mode="json"),
+                bundle=response.model_dump(mode="json", by_alias=True),
                 source_analysis_count=source_count,
+                generated_at=generated_at,
             )
             save_result = await snapshot_repo.save(snapshot, force=ready.force)
             await session.commit()

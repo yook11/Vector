@@ -5,6 +5,7 @@
 
 export { ArticleCard } from "./components/ArticleCard";
 export { BriefingDisclaimer } from "./components/BriefingDisclaimer";
+export { BriefingDocument } from "./components/BriefingDocument";
 export { BriefingEmptyRow } from "./components/BriefingEmptyRow";
 export { BriefingRow } from "./components/BriefingRow";
 export { KeyArticleBlock } from "./components/KeyArticleBlock";
@@ -17,3 +18,4 @@ export {
   type BriefingListViewModel,
   getBriefingListViewModel,
 } from "./page-models/briefing-list";
+export type { BriefingArticleSummaryParsed } from "./schemas/briefing";

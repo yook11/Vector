@@ -2,7 +2,7 @@
 
 import type { Client, Options as Options2, TDataShape } from './client';
 import { client } from './client.gen';
-import type { ActivateSourceData, ActivateSourceErrors, ActivateSourceResponses, AddToWatchlistData, AddToWatchlistErrors, AddToWatchlistResponses, CreateNewsSourceData, CreateNewsSourceErrors, CreateNewsSourceResponses, DeactivateSourceData, DeactivateSourceErrors, DeactivateSourceResponses, DeleteNewsSourceData, DeleteNewsSourceErrors, DeleteNewsSourceResponses, FetchNewsData, FetchNewsErrors, FetchNewsResponses, GetArticleData, GetArticleErrors, GetArticleResponses, GetLatestBriefingData, GetLatestBriefingErrors, GetLatestBriefingResponses, GetPipelineHealthData, GetPipelineHealthErrors, GetPipelineHealthResponses, GetSimilarArticlesData, GetSimilarArticlesErrors, GetSimilarArticlesResponses, GetWeeklyTrendsData, GetWeeklyTrendsErrors, GetWeeklyTrendsResponses, HealthCheckData, HealthCheckErrors, HealthCheckResponses, ListArticlesData, ListArticlesErrors, ListArticlesInWatchlistData, ListArticlesInWatchlistErrors, ListArticlesInWatchlistResponses, ListArticlesResponses, ListBriefingsData, ListBriefingsErrors, ListBriefingsResponses, ListCategoriesData, ListCategoriesErrors, ListCategoriesResponses, ListNewsSourcesData, ListNewsSourcesErrors, ListNewsSourcesResponses, ListWatchlistIdsData, ListWatchlistIdsErrors, ListWatchlistIdsResponses, RemoveFromWatchlistData, RemoveFromWatchlistErrors, RemoveFromWatchlistResponses } from './types.gen';
+import type { ActivateSourceData, ActivateSourceErrors, ActivateSourceResponses, AddToWatchlistData, AddToWatchlistErrors, AddToWatchlistResponses, CreateNewsSourceData, CreateNewsSourceErrors, CreateNewsSourceResponses, DeactivateSourceData, DeactivateSourceErrors, DeactivateSourceResponses, DeleteNewsSourceData, DeleteNewsSourceErrors, DeleteNewsSourceResponses, FetchNewsData, FetchNewsErrors, FetchNewsResponses, GetArticleData, GetArticleErrors, GetArticleResponses, GetLatestBriefingData, GetLatestBriefingErrors, GetLatestBriefingResponses, GetPipelineHealthData, GetPipelineHealthErrors, GetPipelineHealthResponses, GetSimilarArticlesData, GetSimilarArticlesErrors, GetSimilarArticlesResponses, GetTrendsData, GetTrendsErrors, GetTrendsResponses, HealthCheckData, HealthCheckErrors, HealthCheckResponses, ListArticlesData, ListArticlesErrors, ListArticlesInWatchlistData, ListArticlesInWatchlistErrors, ListArticlesInWatchlistResponses, ListArticlesResponses, ListBriefingsData, ListBriefingsErrors, ListBriefingsResponses, ListCategoriesData, ListCategoriesErrors, ListCategoriesResponses, ListNewsSourcesData, ListNewsSourcesErrors, ListNewsSourcesResponses, ListWatchlistIdsData, ListWatchlistIdsErrors, ListWatchlistIdsResponses, RemoveFromWatchlistData, RemoveFromWatchlistErrors, RemoveFromWatchlistResponses } from './types.gen';
 
 export type Options<TData extends TDataShape = TDataShape, ThrowOnError extends boolean = boolean, TResponse = unknown> = Options2<TData, ThrowOnError, TResponse> & {
     /**
@@ -82,11 +82,15 @@ export const addToWatchlist = <ThrowOnError extends boolean = false>(options: Op
 export const removeFromWatchlist = <ThrowOnError extends boolean = false>(options: Options<RemoveFromWatchlistData, ThrowOnError>) => (options.client ?? client).delete<RemoveFromWatchlistResponses, RemoveFromWatchlistErrors, ThrowOnError>({ url: '/api/v1/me/watchlist/{article_id}', ...options });
 
 /**
- * Get Weekly Trends
+ * Get Trends
  *
- * 最新週の weekly trends snapshot を返す (なければ state="empty")。
+ * 最新窓の trends snapshot を verbatim で返す (なければ state="empty")。
+ *
+ * ``response_model`` は OpenAPI/型生成のためだけに宣言する。``Response`` を直接
+ * 返すため FastAPI は実体の再検証・再シリアライズをしない (保存済み payload を
+ * そのまま配信する)。
  */
-export const getWeeklyTrends = <ThrowOnError extends boolean = false>(options?: Options<GetWeeklyTrendsData, ThrowOnError>) => (options?.client ?? client).get<GetWeeklyTrendsResponses, GetWeeklyTrendsErrors, ThrowOnError>({ url: '/api/v1/weekly-trends', ...options });
+export const getTrends = <ThrowOnError extends boolean = false>(options?: Options<GetTrendsData, ThrowOnError>) => (options?.client ?? client).get<GetTrendsResponses, GetTrendsErrors, ThrowOnError>({ url: '/api/v1/trends', ...options });
 
 /**
  * List Briefings

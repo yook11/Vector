@@ -1,5 +1,4 @@
 import type { CSSProperties } from "react";
-import type { ArticleBrief } from "@/types/types.gen";
 
 // カテゴリは slug をキーにする。表示名は migration で変わりうるが slug は不変。
 const CATEGORY_META: Record<string, { code: string; hue: string }> = {
@@ -81,10 +80,6 @@ export function getSourceBadge(sourceName: string): {
   return { color, short };
 }
 
-export function getArticleSourceLabel(article: ArticleBrief): string {
-  return article.source.attributionLabel ?? article.source.name;
-}
-
 export function formatPaperDate(dateStr: string | null | undefined): string {
   if (!dateStr) return "日付不明";
   return new Intl.DateTimeFormat("ja-JP", {
@@ -113,15 +108,4 @@ export function formatPaperMastheadDate(date: Date): string {
     weekday: "short",
     timeZone: "Asia/Tokyo",
   }).format(date);
-}
-
-export function getLatestArticleDate(items: ArticleBrief[]): Date {
-  const timestamps = items
-    .map((item) =>
-      item.publishedAt ? new Date(item.publishedAt).getTime() : Number.NaN,
-    )
-    .filter(Number.isFinite);
-
-  if (timestamps.length === 0) return new Date();
-  return new Date(Math.max(...timestamps));
 }

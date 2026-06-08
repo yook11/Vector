@@ -12,6 +12,8 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.insights.briefing.domain.briefing import (
+    MAX_CHAPTER_BODY_LEN,
+    MAX_CHAPTERS_PER_BRIEFING,
     MAX_KEY_ARTICLE_SIGNIFICANCE_LEN,
     MAX_KEY_ARTICLES_PER_BRIEFING,
     MAX_WATCH_POINT_STATEMENT_LEN,
@@ -75,10 +77,12 @@ class TestGetBriefing:
         ai_category: Category,
         seed_briefing_analysis,
     ) -> None:
+        published_at = datetime(2026, 4, 21, 9, 0, tzinfo=JST)
         analysis = await seed_briefing_analysis(
             category_id=ai_category.id,
             analyzed_at=datetime(2026, 4, 22, 12, 0, tzinfo=JST),
             translated_title="記事タイトル",
+            published_at=published_at,
         )
         # extraction relation を lazy load しないために article_id を SQL で取得
         result = await db_session.execute(
@@ -92,7 +96,8 @@ class TestGetBriefing:
             week_start_date=date(2026, 4, 20),
             category_id=ai_category.id,
             headline="今週のヘッドライン",
-            overview="今週の流れの本文",
+            summary="今週の総括リード",
+            chapters=[{"heading": "資金とインフラ", "body": "今週の流れの本文"}],
             key_articles=[{"article_id": article_id, "significance": "なぜ重要か"}],
             watch_points=[{"statement": "今後どこを見るべきか"}],
             model_name="deepseek-v4-pro",
@@ -107,7 +112,10 @@ class TestGetBriefing:
         assert body["state"] == "ready"
         assert body["category"]["slug"] == "ai"
         assert body["headline"] == "今週のヘッドライン"
-        assert body["overview"] == "今週の流れの本文"
+        assert body["summary"] == "今週の総括リード"
+        assert body["chapters"] == [
+            {"heading": "資金とインフラ", "body": "今週の流れの本文"}
+        ]
         assert body["modelName"] == "deepseek-v4-pro"
         assert body["inputArticleCount"] == 1
         assert len(body["keyArticles"]) == 1
@@ -118,6 +126,48 @@ class TestGetBriefing:
         assert len(body["articles"]) == 1
         assert body["articles"][0]["id"] == article_id
         assert body["articles"][0]["titleJa"] == "記事タイトル"
+        assert (
+            datetime.fromisoformat(body["articles"][0]["publishedAt"]) == published_at
+        )
+
+    @pytest.mark.asyncio
+    async def test_article_published_at_is_null_when_unset(
+        self,
+        client: AsyncClient,
+        db_session: AsyncSession,
+        ai_category: Category,
+        seed_briefing_analysis,
+    ) -> None:
+        """``Article.published_at`` 未設定の記事は ``publishedAt: null`` で返る。"""
+        analysis = await seed_briefing_analysis(
+            category_id=ai_category.id,
+            analyzed_at=datetime(2026, 4, 22, 12, 0, tzinfo=JST),
+        )
+        result = await db_session.execute(
+            select(ArticleCuration.article_id).where(
+                ArticleCuration.id == analysis.curation_id
+            )
+        )
+        article_id = result.scalar_one()
+
+        briefing = WeeklyBriefing(
+            week_start_date=date(2026, 4, 20),
+            category_id=ai_category.id,
+            headline="今週のヘッドライン",
+            summary="今週の総括リード",
+            chapters=[{"heading": "資金とインフラ", "body": "今週の流れの本文"}],
+            key_articles=[{"article_id": article_id, "significance": "なぜ重要か"}],
+            watch_points=[{"statement": "今後どこを見るべきか"}],
+            model_name="deepseek-v4-pro",
+            input_article_count=1,
+        )
+        db_session.add(briefing)
+        await db_session.commit()
+
+        resp = await client.get("/api/v1/briefing/ai")
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["articles"][0]["publishedAt"] is None
 
 
 class TestListBriefings:
@@ -156,7 +206,8 @@ class TestListBriefings:
             week_start_date=date(2026, 4, 20),
             category_id=ai_category.id,
             headline="今週のヘッドライン",
-            overview="今週の流れの本文",
+            summary="今週の総括リード",
+            chapters=[{"heading": "資金とインフラ", "body": "今週の流れの本文"}],
             key_articles=[{"article_id": 1, "significance": "なぜ重要か"}],
             watch_points=[{"statement": "今後どこを見るべきか"}],
             model_name="deepseek-v4-pro",
@@ -210,12 +261,14 @@ class TestBriefingResponseSizeGuard:
         *,
         key_articles: list[dict],
         watch_points: list[dict],
+        chapters: list[dict] | None = None,
     ) -> WeeklyBriefing:
         return WeeklyBriefing(
             week_start_date=date(2026, 4, 20),
             category_id=ai_category.id,
             headline="h",
-            overview="o",
+            summary="s",
+            chapters=chapters or [{"heading": "h", "body": "b"}],
             key_articles=key_articles,
             watch_points=watch_points,
             model_name="deepseek-v4-pro",
@@ -311,6 +364,54 @@ class TestBriefingResponseSizeGuard:
                 ai_category,
                 key_articles=[{"article_id": 1, "significance": "s"}],
                 watch_points=[{"statement": "x" * (MAX_WATCH_POINT_STATEMENT_LEN + 1)}],
+            )
+        )
+        await db_session.commit()
+
+        with pytest.raises(ValidationError):
+            await client.get("/api/v1/briefing/ai")
+
+    @pytest.mark.asyncio
+    async def test_oversize_chapters_rejected_by_response_model(
+        self,
+        client: AsyncClient,
+        db_session: AsyncSession,
+        ai_category: Category,
+    ) -> None:
+        """chapters 数が上限超なら anon GET で ValidationError 伝播 (本番 500)。"""
+        oversized = [
+            {"heading": f"h{i}", "body": f"b{i}"}
+            for i in range(MAX_CHAPTERS_PER_BRIEFING + 1)
+        ]
+        db_session.add(
+            self._persist(
+                db_session,
+                ai_category,
+                key_articles=[{"article_id": 1, "significance": "s"}],
+                watch_points=[{"statement": "w"}],
+                chapters=oversized,
+            )
+        )
+        await db_session.commit()
+
+        with pytest.raises(ValidationError):
+            await client.get("/api/v1/briefing/ai")
+
+    @pytest.mark.asyncio
+    async def test_oversize_chapter_body_rejected_by_response_model(
+        self,
+        client: AsyncClient,
+        db_session: AsyncSession,
+        ai_category: Category,
+    ) -> None:
+        """1 章の body が上限超なら anon GET で ValidationError 伝播。"""
+        db_session.add(
+            self._persist(
+                db_session,
+                ai_category,
+                key_articles=[{"article_id": 1, "significance": "s"}],
+                watch_points=[{"statement": "w"}],
+                chapters=[{"heading": "h", "body": "x" * (MAX_CHAPTER_BODY_LEN + 1)}],
             )
         )
         await db_session.commit()

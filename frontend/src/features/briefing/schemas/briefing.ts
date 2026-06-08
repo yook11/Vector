@@ -37,6 +37,13 @@ const BriefingArticleSummarySchema = z.object({
   titleJa: z.string(),
   sourceName: z.string(),
   url: z.string(),
+  // 元記事の公開日時 (Article.published_at)。未取得記事は null。
+  publishedAt: z.iso.datetime({ offset: true }).nullable(),
+});
+
+const ChapterSchema = z.object({
+  heading: z.string(),
+  body: z.string(),
 });
 
 const KeyArticleSchema = z.object({
@@ -56,7 +63,8 @@ const ReadyBriefingSchema = z.object({
   inputArticleCount: z.number(),
   category: CategorySchema,
   headline: z.string(),
-  overview: z.string(),
+  summary: z.string(),
+  chapters: z.array(ChapterSchema),
   keyArticles: z.array(KeyArticleSchema),
   watchPoints: z.array(WatchPointSchema),
   articles: z.array(BriefingArticleSummarySchema),
@@ -76,3 +84,6 @@ export type BriefingListResponseParsed = z.infer<
   typeof BriefingListResponseSchema
 >;
 export type BriefingResponseParsed = z.infer<typeof BriefingResponseSchema>;
+export type BriefingArticleSummaryParsed = z.infer<
+  typeof BriefingArticleSummarySchema
+>;

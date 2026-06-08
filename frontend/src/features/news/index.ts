@@ -2,6 +2,10 @@ export { getArticleById } from "./api/get-article-by-id";
 export { getArticles } from "./api/get-articles";
 export { getCategories } from "./api/get-categories";
 export { getSimilarArticles } from "./api/get-similar-articles";
+export {
+  getArticleSourceLabel,
+  getLatestArticleDate,
+} from "./components/article-paper";
 export { CategorySidebar } from "./components/CategorySidebar";
 export { DashboardArticleListSkeleton } from "./components/DashboardArticleListSkeleton";
 export { DashboardMasthead } from "./components/DashboardMasthead";
@@ -14,17 +18,8 @@ export { NewsPagination } from "./components/NewsPagination";
 export { PaperNewsControls } from "./components/PaperNewsControls";
 export { PaperNewsPagination } from "./components/PaperNewsPagination";
 export { PaperNewsResultSummary } from "./components/PaperNewsResultSummary";
-export { PaperSurface } from "./components/PaperSurface";
-export { PaperTexture } from "./components/PaperTexture";
 export { PerPageSelect } from "./components/PerPageSelect";
 export { buildDashboardCategoryHref } from "./components/paper-hrefs";
-export {
-  formatPaperDate,
-  formatPaperMastheadDate,
-  getArticleSourceLabel,
-  getLatestArticleDate,
-  getSourceBadge,
-} from "./components/paper-style";
 export { RelatedArticles } from "./components/RelatedArticles";
 export {
   DEFAULT_PER_PAGE,

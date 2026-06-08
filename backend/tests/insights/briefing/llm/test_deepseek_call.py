@@ -24,6 +24,7 @@ from pydantic import SecretStr
 
 from app.insights.briefing.domain.article import ArticleInput
 from app.insights.briefing.domain.briefing import (
+    MAX_CHAPTERS_PER_BRIEFING,
     MAX_KEY_ARTICLE_SIGNIFICANCE_LEN,
     MAX_KEY_ARTICLES_PER_BRIEFING,
 )
@@ -61,7 +62,8 @@ async def test_disables_thinking_for_pro_model() -> None:
         return_value=_fake_completion_with_tool_call(
             {
                 "headline": "h",
-                "overview": "o",
+                "summary": "s",
+                "chapters": [{"heading": "見出し", "body": "本文"}],
                 "key_articles": [{"article_id": 1, "significance": "なぜ重要か"}],
                 "watch_points": [{"statement": "今後どこを見るべきか"}],
             }
@@ -95,27 +97,33 @@ async def test_disables_thinking_for_pro_model() -> None:
     # 回帰防止: thinking モード明示無効化が抜けると Pro で 400 になる
     assert kwargs["extra_body"] == {"thinking": {"type": "disabled"}}
     # 新 schema が parse されている
-    assert result.overview == "o"
+    assert result.summary == "s"
+    assert result.chapters[0].heading == "見出し"
+    assert result.chapters[0].body == "本文"
     assert result.key_articles[0].article_id == 1
     assert result.key_articles[0].significance == "なぜ重要か"
     assert result.watch_points[0].statement == "今後どこを見るべきか"
 
 
 def test_tool_schema_required_fields_match_new_output() -> None:
-    """tool schema 側でも新 4 field 構造が要求されていることを保証する。"""
+    """tool schema 側でも新 5 field 構造が要求されていることを保証する。"""
     from app.insights.briefing.llm.deepseek import BRIEFING_TOOL_SCHEMA
 
     assert BRIEFING_TOOL_SCHEMA["required"] == [
         "headline",
-        "overview",
+        "summary",
+        "chapters",
         "key_articles",
         "watch_points",
     ]
+    chapter = BRIEFING_TOOL_SCHEMA["properties"]["chapters"]["items"]
+    assert chapter["required"] == ["heading", "body"]
     key_article = BRIEFING_TOOL_SCHEMA["properties"]["key_articles"]["items"]
     assert key_article["required"] == ["article_id", "significance"]
     watch_point = BRIEFING_TOOL_SCHEMA["properties"]["watch_points"]["items"]
     assert watch_point["required"] == ["statement"]
-    # 旧 stories 構造の名残が残っていないこと
+    # 旧 overview / stories 構造の名残が残っていないこと
+    assert "overview" not in BRIEFING_TOOL_SCHEMA["properties"]
     assert "stories" not in BRIEFING_TOOL_SCHEMA["properties"]
 
 
@@ -152,7 +160,8 @@ async def test_generator_rejects_abnormal_key_article_count_from_llm() -> None:
     """
     oversized = {
         "headline": "h",
-        "overview": "o",
+        "summary": "s",
+        "chapters": [{"heading": "見出し", "body": "本文"}],
         "key_articles": [
             {"article_id": i, "significance": f"s{i}"}
             for i in range(MAX_KEY_ARTICLES_PER_BRIEFING + 1)
@@ -164,11 +173,29 @@ async def test_generator_rejects_abnormal_key_article_count_from_llm() -> None:
 
 
 @pytest.mark.asyncio
+async def test_generator_rejects_abnormal_chapter_count_from_llm() -> None:
+    """LLM が上限ガード超の chapters を返したら briefing marker に wrap する。"""
+    oversized = {
+        "headline": "h",
+        "summary": "s",
+        "chapters": [
+            {"heading": f"h{i}", "body": f"b{i}"}
+            for i in range(MAX_CHAPTERS_PER_BRIEFING + 1)
+        ],
+        "key_articles": [{"article_id": 1, "significance": "s"}],
+        "watch_points": [{"statement": "w"}],
+    }
+    with pytest.raises(BriefingResponseInvalidError):
+        await _generate_with_mocked_response(oversized)
+
+
+@pytest.mark.asyncio
 async def test_generator_rejects_oversize_significance_from_llm() -> None:
     """LLM が上限超の significance を返したら briefing marker に wrap する。"""
     oversized = {
         "headline": "h",
-        "overview": "o",
+        "summary": "s",
+        "chapters": [{"heading": "見出し", "body": "本文"}],
         "key_articles": [
             {
                 "article_id": 1,

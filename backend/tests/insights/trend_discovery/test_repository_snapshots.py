@@ -11,7 +11,7 @@
 from __future__ import annotations
 
 import asyncio
-from datetime import date, timedelta
+from datetime import UTC, date, datetime, timedelta
 
 import pytest
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
@@ -23,9 +23,16 @@ from app.insights.trend_discovery.repository.snapshots import (
 )
 from app.models.trends_snapshot import TrendsSnapshot
 
+# generated_at は server_default を持たず呼び出し側が常に供給する (アプリが時計の源)。
+_GENERATED_AT = datetime(2026, 5, 3, tzinfo=UTC)
+
 
 def _snapshot(
-    window_end: date, *, source_analysis_count: int = 10, marker: str = "v1"
+    window_end: date,
+    *,
+    source_analysis_count: int = 10,
+    marker: str = "v1",
+    generated_at: datetime = _GENERATED_AT,
 ) -> TrendsSnapshot:
     return TrendsSnapshot(
         window_end=window_end,
@@ -35,6 +42,7 @@ def _snapshot(
             "category_trends": [],
         },
         source_analysis_count=source_analysis_count,
+        generated_at=generated_at,
     )
 
 
@@ -170,22 +178,34 @@ class TestSaveForce:
     @pytest.mark.asyncio
     async def test_overwrites_existing(self, db_session: AsyncSession) -> None:
         repo = SnapshotRepository(db_session)
+        first_generated_at = _GENERATED_AT
         first = await repo.save(
-            _snapshot(date(2026, 5, 3), source_analysis_count=10, marker="first")
+            _snapshot(
+                date(2026, 5, 3),
+                source_analysis_count=10,
+                marker="first",
+                generated_at=first_generated_at,
+            )
         )
         await db_session.commit()
         assert first.snapshot is not None
-        first_generated_at = first.snapshot.generated_at
 
+        second_generated_at = first_generated_at + timedelta(hours=1)
         second = await repo.save(
-            _snapshot(date(2026, 5, 3), source_analysis_count=99, marker="second"),
+            _snapshot(
+                date(2026, 5, 3),
+                source_analysis_count=99,
+                marker="second",
+                generated_at=second_generated_at,
+            ),
             force=True,
         )
         await db_session.commit()
         assert second.status == SnapshotSaveStatus.UPDATED
         assert second.snapshot is not None
-        # generated_at は force=True で func.now() による更新が入る
-        assert second.snapshot.generated_at >= first_generated_at
+        # force=True は呼び出し側が確定した generated_at で上書きする
+        assert second.snapshot.generated_at == second_generated_at
+        assert second.snapshot.generated_at != first_generated_at
 
         existing = await repo.find_by_window_end(date(2026, 5, 3))
         assert existing is not None

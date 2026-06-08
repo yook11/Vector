@@ -1,10 +1,10 @@
 import {
-  CalendarDays,
   Eye,
   FileText,
   type LucideIcon,
   Newspaper,
   Settings,
+  TrendingUp,
 } from "lucide-react";
 
 // icon はキー文字列で持つ。LucideIcon (関数) を nav item に焼くと Server→Client
@@ -13,14 +13,14 @@ import {
 export type NavIconKey =
   | "news"
   | "briefing"
-  | "weekly"
+  | "trend"
   | "watchlist"
   | "settings";
 
 export const NAV_ICONS: Record<NavIconKey, LucideIcon> = {
   news: Newspaper,
   briefing: FileText,
-  weekly: CalendarDays,
+  trend: TrendingUp,
   watchlist: Eye,
   settings: Settings,
 };
@@ -34,7 +34,7 @@ export type ProtectedNavItem = {
 const baseNavItems = [
   { href: "/", label: "ニュース", icon: "news" },
   { href: "/briefing", label: "Briefing", icon: "briefing" },
-  { href: "/weekly-trends", label: "ウィークリー", icon: "weekly" },
+  { href: "/trends", label: "トレンド", icon: "trend" },
   { href: "/watchlist", label: "ウォッチリスト", icon: "watchlist" },
 ] satisfies ProtectedNavItem[];
 

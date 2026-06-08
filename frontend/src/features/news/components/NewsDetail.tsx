@@ -1,11 +1,14 @@
 import { ArrowUpRight, ChevronLeft, Sparkles } from "lucide-react";
 import Link from "next/link";
+import {
+  formatPaperDate,
+  formatPaperTime,
+  PaperByline,
+  PaperKicker,
+} from "@/components/paper";
 import { WatchlistButton } from "@/features/watchlist";
 import { sanitizeUrl } from "@/lib/utils/sanitize-url";
 import type { ArticleDetail as ArticleDetailData } from "@/types/types.gen";
-import { PaperByline } from "./PaperByline";
-import { PaperKicker } from "./PaperKicker";
-import { formatPaperDate, formatPaperTime } from "./paper-style";
 
 interface NewsDetailProps {
   article: ArticleDetailData;

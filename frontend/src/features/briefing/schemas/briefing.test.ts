@@ -57,16 +57,36 @@ describe("BriefingResponseSchema", () => {
       inputArticleCount: 132,
       category: CATEGORY,
       headline: "今週の AI ハイライト",
-      overview: "今週は LLM 推論コスト削減と...",
+      summary: "今週の総括リード",
+      chapters: [
+        { heading: "資金とインフラ", body: "今週は LLM 推論コスト削減と..." },
+      ],
       keyArticles: [{ articleId: 1, significance: "なぜ重要か" }],
       watchPoints: [{ statement: "今後どこを見るべきか" }],
       articles: [
-        { id: 1, titleJa: "記事1", sourceName: "TechCrunch", url: "https://x" },
+        {
+          id: 1,
+          titleJa: "記事1",
+          sourceName: "TechCrunch",
+          url: "https://x",
+          publishedAt: "2026-04-19T09:00:00+09:00",
+        },
+        {
+          id: 2,
+          titleJa: "記事2",
+          sourceName: "Hacker News",
+          url: "https://y",
+          publishedAt: null,
+        },
       ],
     });
     expect(result.success).toBe(true);
     if (result.success && result.data.state === "ready") {
-      expect(result.data.overview).toBe("今週は LLM 推論コスト削減と...");
+      expect(result.data.summary).toBe("今週の総括リード");
+      expect(result.data.chapters[0]?.heading).toBe("資金とインフラ");
+      expect(result.data.chapters[0]?.body).toBe(
+        "今週は LLM 推論コスト削減と...",
+      );
       expect(result.data.keyArticles.length).toBe(1);
       expect(result.data.keyArticles[0]?.articleId).toBe(1);
       expect(result.data.keyArticles[0]?.significance).toBe("なぜ重要か");
@@ -74,6 +94,10 @@ describe("BriefingResponseSchema", () => {
         "今後どこを見るべきか",
       );
       expect(result.data.articles[0]?.titleJa).toBe("記事1");
+      expect(result.data.articles[0]?.publishedAt).toBe(
+        "2026-04-19T09:00:00+09:00",
+      );
+      expect(result.data.articles[1]?.publishedAt).toBeNull();
     }
   });
 
@@ -94,7 +118,7 @@ describe("BriefingResponseSchema", () => {
     expect(result.success).toBe(false);
   });
 
-  it("rejects ready missing required fields (e.g. overview)", () => {
+  it("rejects ready missing required fields (e.g. summary/chapters)", () => {
     const result = BriefingResponseSchema.safeParse({
       state: "ready",
       weekStart: "2026-04-20",

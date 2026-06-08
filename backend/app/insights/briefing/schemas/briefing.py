@@ -23,7 +23,10 @@ from pydantic import Field
 
 from app.insights.briefing.domain.briefing import (
     MAX_BRIEFING_HEADLINE_LEN,
-    MAX_BRIEFING_OVERVIEW_LEN,
+    MAX_BRIEFING_SUMMARY_LEN,
+    MAX_CHAPTER_BODY_LEN,
+    MAX_CHAPTER_HEADING_LEN,
+    MAX_CHAPTERS_PER_BRIEFING,
     MAX_KEY_ARTICLE_SIGNIFICANCE_LEN,
     MAX_KEY_ARTICLES_PER_BRIEFING,
     MAX_WATCH_POINT_STATEMENT_LEN,
@@ -43,6 +46,11 @@ _MAX_URL_LEN: Final[int] = 2_000
 _MAX_BRIEFING_LIST_ITEMS: Final[int] = 20
 
 
+class _ChapterOut(_CamelBase):
+    heading: str = Field(max_length=MAX_CHAPTER_HEADING_LEN)
+    body: str = Field(max_length=MAX_CHAPTER_BODY_LEN)
+
+
 class _KeyArticleOut(_CamelBase):
     article_id: int
     significance: str = Field(max_length=MAX_KEY_ARTICLE_SIGNIFICANCE_LEN)
@@ -59,6 +67,8 @@ class _ArticleSummaryOut(_CamelBase):
     title_ja: str = Field(max_length=_MAX_ARTICLE_TITLE_LEN)
     source_name: str = Field(max_length=_MAX_SOURCE_NAME_LEN)
     url: str = Field(max_length=_MAX_URL_LEN)
+    # 元記事の公開日時 (Article.published_at)。未取得の記事は null。
+    published_at: datetime | None = None
 
 
 class _CategoryOut(_CamelBase):
@@ -77,7 +87,8 @@ class ReadyBriefing(_CamelBase):
     input_article_count: int
     category: _CategoryOut
     headline: str = Field(max_length=MAX_BRIEFING_HEADLINE_LEN)
-    overview: str = Field(max_length=MAX_BRIEFING_OVERVIEW_LEN)
+    summary: str = Field(max_length=MAX_BRIEFING_SUMMARY_LEN)
+    chapters: list[_ChapterOut] = Field(max_length=MAX_CHAPTERS_PER_BRIEFING)
     key_articles: list[_KeyArticleOut] = Field(max_length=MAX_KEY_ARTICLES_PER_BRIEFING)
     watch_points: list[_WatchPointOut] = Field(max_length=MAX_WATCH_POINTS_PER_BRIEFING)
     articles: list[_ArticleSummaryOut] = Field(max_length=_MAX_REFERENCED_ARTICLES)
@@ -100,7 +111,7 @@ class _BriefingListLatest(_CamelBase):
     """一覧行に同梱する「最新 briefing 参照」。
 
     未生成カテゴリでは ``BriefingListItem.latest = None`` で表現する。
-    詳細 (``ReadyBriefing``) と異なり overview / keyArticles 等は持たず、
+    詳細 (``ReadyBriefing``) と異なり summary / chapters / keyArticles 等は持たず、
     一覧で表示する短い見出しのみ。
     """
 

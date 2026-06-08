@@ -17,7 +17,7 @@ from dataclasses import dataclass
 from datetime import date
 from enum import StrEnum
 
-from sqlalchemy import func, select
+from sqlalchemy import select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -79,9 +79,9 @@ class SnapshotRepository:
         Args:
             snapshot: 永続化する TrendsSnapshot (window_end / bundle /
                 source_analysis_count)
-            force: ``True`` のとき既存行を上書きし ``generated_at`` を現在時刻に
-                更新する (手動再生成経路)。``False`` (default) のときは新規 INSERT
-                のみで、衝突時は副作用なしに ``CONFLICT`` を返す。
+            force: ``True`` のとき既存行を上書きし ``generated_at`` を呼び出し側
+                確定値で更新する (手動再生成経路)。``False`` (default) のときは新規
+                INSERT のみで、衝突時は副作用なしに ``CONFLICT`` を返す。
 
         Returns:
             永続化成功時: 永続化後の ``TrendsSnapshot``
@@ -97,19 +97,17 @@ class SnapshotRepository:
                     window_end=snapshot.window_end,
                     bundle=snapshot.bundle,
                     source_analysis_count=snapshot.source_analysis_count,
+                    generated_at=snapshot.generated_at,
                 )
                 .on_conflict_do_update(
                     index_elements=["window_end"],
                     set_={
                         "bundle": snapshot.bundle,
                         "source_analysis_count": snapshot.source_analysis_count,
-                        "generated_at": func.now(),
+                        "generated_at": snapshot.generated_at,
                     },
                 )
-                .returning(
-                    TrendsSnapshot.window_end,
-                    TrendsSnapshot.generated_at,
-                )
+                .returning(TrendsSnapshot.window_end)
             )
         else:
             stmt = (
@@ -118,12 +116,10 @@ class SnapshotRepository:
                     window_end=snapshot.window_end,
                     bundle=snapshot.bundle,
                     source_analysis_count=snapshot.source_analysis_count,
+                    generated_at=snapshot.generated_at,
                 )
                 .on_conflict_do_nothing(index_elements=["window_end"])
-                .returning(
-                    TrendsSnapshot.window_end,
-                    TrendsSnapshot.generated_at,
-                )
+                .returning(TrendsSnapshot.window_end)
             )
         row = (await self._session.execute(stmt)).first()
         if row is None:
@@ -135,7 +131,7 @@ class SnapshotRepository:
             window_end=row.window_end,
             bundle=snapshot.bundle,
             source_analysis_count=snapshot.source_analysis_count,
-            generated_at=row.generated_at,
+            generated_at=snapshot.generated_at,
         )
         status = (
             SnapshotSaveStatus.UPDATED

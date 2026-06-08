@@ -24,7 +24,7 @@ import {
  *      /auth/login を含むことを確認 (proxy 層の一次関門)。
  *
  * grade:
- *   - strong (`/`, `/news/<id>`, `/briefing`, `/briefing/<slug>`, `/weekly-trends`):
+ *   - strong (`/`, `/news/<id>`, `/briefing`, `/briefing/<slug>`, `/trends`):
  *     publicClient + `'use cache'` を anon でも render するため、修正前後で
  *     RED→GREEN が flip する本丸。
  *   - guard (`/watchlist`, `/settings`): authed client 経由で anon は 401 と
@@ -39,7 +39,7 @@ const ADMIN_STATE = "e2e/.auth/admin.json";
 const STATIC_PROTECTED_PATHS = [
   "/",
   "/briefing",
-  "/weekly-trends",
+  "/trends",
   "/watchlist",
   "/settings",
 ] as const;
@@ -194,20 +194,20 @@ test.describe("protected route auth boundary (anon / fake-cookie)", () => {
     }
   });
 
-  test("`/weekly-trends` は未認証 payload にトレンドを漏らさない (strong)", async () => {
+  test("`/trends` は未認証 payload にトレンドを漏らさない (strong)", async () => {
     const user = await authedContext(USER_STATE);
     try {
-      const body = await (await user.get("/weekly-trends")).text();
+      const body = await (await user.get("/trends")).text();
       // gated content は data marker か empty marker のどちらかを必ず render する。
-      const dataMarker = "件の分析を集計";
-      const emptyMarker = "週次トレンドはまだ生成されていません";
+      const dataMarker = "件の記事から集計";
+      const emptyMarker = "トレンドはまだ生成されていません";
       const sentinel = body.includes(dataMarker)
         ? dataMarker
         : body.includes(emptyMarker)
           ? emptyMarker
           : null;
-      test.skip(!sentinel, "weekly-trends gated content が出ないため検証不能");
-      await expectNoLeak("/weekly-trends", [sentinel as string]);
+      test.skip(!sentinel, "trends gated content が出ないため検証不能");
+      await expectNoLeak("/trends", [sentinel as string]);
     } finally {
       await user.dispose();
     }

@@ -1,14 +1,14 @@
 import Link from "next/link";
 import type { ReactNode } from "react";
-import type { ArticleBrief } from "@/types/types.gen";
-import { PaperKicker } from "./PaperKicker";
 import {
   formatPaperDate,
-  getArticleSourceLabel,
   getCategoryKicker,
   getSourceBadge,
   kickerCssVars,
-} from "./paper-style";
+  PaperKicker,
+} from "@/components/paper";
+import type { ArticleBrief } from "@/types/types.gen";
+import { getArticleSourceLabel } from "./article-paper";
 
 interface PaperArticleCardProps {
   actionSlot?: ReactNode;

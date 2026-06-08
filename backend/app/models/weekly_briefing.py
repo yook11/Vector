@@ -1,9 +1,10 @@
 """カテゴリ単位の週次 LLM 解説 (briefing) の ORM モデル。
 
 DeepSeek-V4 Pro が生成した ``WeeklyBriefingContent`` を 1 行 1 ブリーフィングとして
-保持する。``key_articles`` (KeyArticle のリスト) と ``watch_points`` (WatchPoint の
-リスト) をそれぞれ JSONB に格納し、検索/監査属性 (``headline`` / ``model_name`` /
-``input_article_count``) のみカラム抽出する (feedback_briefing_design_lessons.md)。
+保持する。``chapters`` (BriefingChapter のリスト) / ``key_articles`` (KeyArticle の
+リスト) / ``watch_points`` (WatchPoint のリスト) をそれぞれ JSONB に格納し、
+検索/監査属性 (``headline`` / ``summary`` / ``model_name`` / ``input_article_count``)
+のみカラム抽出する (feedback_briefing_design_lessons.md)。
 """
 
 from __future__ import annotations
@@ -60,7 +61,8 @@ class WeeklyBriefing(Base):
         ForeignKey("categories.id"),
     )
     headline: Mapped[str] = mapped_column(Text())
-    overview: Mapped[str] = mapped_column(Text())
+    summary: Mapped[str] = mapped_column(Text())
+    chapters: Mapped[list[dict[str, Any]]] = mapped_column(JSONB)
     key_articles: Mapped[list[dict[str, Any]]] = mapped_column(JSONB)
     watch_points: Mapped[list[dict[str, Any]]] = mapped_column(JSONB)
     model_name: Mapped[str] = mapped_column(Text())

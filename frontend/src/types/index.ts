@@ -11,25 +11,26 @@
  * - alias rename: Pydantic 内部 schema 名 (`KeyArticleOut` 等) を frontend public 名へ
  * - discriminated union 再構築: `Annotated[Union, Field(discriminator)]` alias は
  *   openapi.json で oneOf に展開されるが Python alias 名は component schema 化
- *   されないため frontend 側で組み直す (`BriefingResponse` / `WeeklyTrendsResponse`)
+ *   されないため frontend 側で組み直す (`BriefingResponse` / `TrendsResponse`)
  *
  * 単純 re-export (ArticleBrief / ArticleDetail / NewsSourceDetail 等) は本ファイル
  * から撤廃済 (PR-H3)。利用側は `@/types/types.gen` から直接 import する。
  */
 import type {
   EmptyBriefing as _EmptyBriefing,
-  EmptyWeeklyTrends as _EmptyWeeklyTrends,
+  EmptyTrends as _EmptyTrends,
   ReadyBriefing as _ReadyBriefing,
-  ReadyWeeklyTrends as _ReadyWeeklyTrends,
+  Trends as _Trends,
   ArticleSummaryOut,
   BriefingListLatest,
   CategoryDetail,
   CategoryOut,
-  CategoryTrendsOut,
-  EntityTrendOut,
+  CategoryTrends,
   KeyArticleOut,
   ListArticlesData,
-  NewEntityOut,
+  MentionType,
+  RankedMention,
+  RelatedMention,
   WatchPointOut,
 } from "@/types/types.gen";
 
@@ -56,10 +57,13 @@ export type BriefingKeyArticle = KeyArticleOut;
 export type BriefingWatchPoint = WatchPointOut;
 export type BriefingArticleSummary = ArticleSummaryOut;
 export type BriefingCategory = CategoryOut;
-export type { BriefingListLatest };
-export type WeeklyCategoryTrends = CategoryTrendsOut;
-export type WeeklyEntityTrend = EntityTrendOut;
-export type WeeklyNewEntity = NewEntityOut;
+export type {
+  BriefingListLatest,
+  CategoryTrends,
+  MentionType,
+  RankedMention,
+  RelatedMention,
+};
 
 // ---------------------------------------------------------------------------
 // Discriminated union 再構築
@@ -79,6 +83,6 @@ export type ReadyBriefing = _ReadyBriefing & { state: "ready" };
 export type EmptyBriefing = _EmptyBriefing & { state: "empty" };
 export type BriefingResponse = ReadyBriefing | EmptyBriefing;
 
-export type ReadyWeeklyTrends = _ReadyWeeklyTrends & { state: "ready" };
-export type EmptyWeeklyTrends = _EmptyWeeklyTrends & { state: "empty" };
-export type WeeklyTrendsResponse = ReadyWeeklyTrends | EmptyWeeklyTrends;
+export type Trends = _Trends & { state: "trends" };
+export type EmptyTrends = _EmptyTrends & { state: "empty" };
+export type TrendsResponse = Trends | EmptyTrends;

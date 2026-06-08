@@ -184,11 +184,11 @@ export type EmptyBriefing = {
 };
 
 /**
- * EmptyWeeklyTrends
+ * EmptyTrends
  *
  * snapshot 未生成の状態 (窓情報フィールドは存在しない)。
  */
-export type EmptyWeeklyTrends = {
+export type EmptyTrends = {
     /**
      * State
      */
@@ -496,9 +496,13 @@ export type ReadyBriefing = {
      */
     headline: string;
     /**
-     * Overview
+     * Summary
      */
-    overview: string;
+    summary: string;
+    /**
+     * Chapters
+     */
+    chapters: Array<ChapterOut>;
     /**
      * Keyarticles
      */
@@ -511,38 +515,6 @@ export type ReadyBriefing = {
      * Articles
      */
     articles: Array<ArticleSummaryOut>;
-};
-
-/**
- * ReadyWeeklyTrends
- *
- * snapshot 生成済の状態。
- */
-export type ReadyWeeklyTrends = {
-    /**
-     * State
-     */
-    state?: 'ready';
-    /**
-     * Windowstart
-     */
-    windowStart: string;
-    /**
-     * Windowend
-     */
-    windowEnd: string;
-    /**
-     * Generatedat
-     */
-    generatedAt: string;
-    /**
-     * Sourceanalysiscount
-     */
-    sourceAnalysisCount: number;
-    /**
-     * Categories
-     */
-    categories: Array<CategoryTrendsOut>;
 };
 
 /**
@@ -593,6 +565,38 @@ export type SourceType = 'rss' | 'api' | 'html';
  * (``app/insights/trend_discovery/``)。
  */
 export type Stage = 'dispatch' | 'acquisition' | 'completion' | 'curation' | 'assessment' | 'embedding' | 'backfill_curate' | 'backfill_assess' | 'backfill_embed' | 'briefing' | 'trend_discovery';
+
+/**
+ * Trends
+ *
+ * snapshot 生成済の状態。
+ */
+export type Trends = {
+    /**
+     * State
+     */
+    state?: 'trends';
+    /**
+     * Windowstart
+     */
+    windowStart: string;
+    /**
+     * Windowend
+     */
+    windowEnd: string;
+    /**
+     * Generatedat
+     */
+    generatedAt: string;
+    /**
+     * Sourceanalysiscount
+     */
+    sourceAnalysisCount: number;
+    /**
+     * Categorytrends
+     */
+    categoryTrends: Array<CategoryTrends>;
+};
 
 /**
  * ValidationError
@@ -671,6 +675,10 @@ export type ArticleSummaryOut = {
      * Url
      */
     url: string;
+    /**
+     * Publishedat
+     */
+    publishedAt?: string | null;
 };
 
 /**
@@ -679,7 +687,7 @@ export type ArticleSummaryOut = {
  * 一覧行に同梱する「最新 briefing 参照」。
  *
  * 未生成カテゴリでは ``BriefingListItem.latest = None`` で表現する。
- * 詳細 (``ReadyBriefing``) と異なり overview / keyArticles 等は持たず、
+ * 詳細 (``ReadyBriefing``) と異なり summary / chapters / keyArticles 等は持たず、
  * 一覧で表示する短い見出しのみ。
  */
 export type BriefingListLatest = {
@@ -706,9 +714,9 @@ export type CategoryOut = {
 };
 
 /**
- * _CategoryTrendsOut
+ * _CategoryTrends
  */
-export type CategoryTrendsOut = {
+export type CategoryTrends = {
     /**
      * Categoryid
      */
@@ -716,33 +724,27 @@ export type CategoryTrendsOut = {
     categorySlug: CategorySlug;
     categoryName: CategoryName;
     /**
-     * Trendingentities
+     * Mostmentioned
      */
-    trendingEntities: Array<EntityTrendOut>;
+    mostMentioned: Array<RankedMention>;
     /**
-     * Newentities
+     * Fastestgrowing
      */
-    newEntities: Array<NewEntityOut>;
+    fastestGrowing: Array<RankedMention>;
 };
 
 /**
- * _EntityTrendOut
+ * _ChapterOut
  */
-export type EntityTrendOut = {
-    name: MentionName;
-    type: MentionType;
+export type ChapterOut = {
     /**
-     * Currentcount
+     * Heading
      */
-    currentCount: number;
+    heading: string;
     /**
-     * Previouscount
+     * Body
      */
-    previousCount: number;
-    /**
-     * Hotnessscore
-     */
-    hotnessScore: number;
+    body: string;
 };
 
 /**
@@ -760,15 +762,43 @@ export type KeyArticleOut = {
 };
 
 /**
- * _NewEntityOut
+ * _RankedMention
  */
-export type NewEntityOut = {
+export type RankedMention = {
     name: MentionName;
     type: MentionType;
     /**
-     * Currentcount
+     * Appearancecount
      */
-    currentCount: number;
+    appearanceCount: number;
+    /**
+     * Previousappearancecount
+     */
+    previousAppearanceCount: number;
+    /**
+     * Growthrate
+     */
+    growthRate: number;
+    /**
+     * Keypoints
+     */
+    keyPoints: Array<string>;
+    /**
+     * Relatedmentions
+     */
+    relatedMentions: Array<RelatedMention>;
+};
+
+/**
+ * _RelatedMention
+ */
+export type RelatedMention = {
+    name: MentionName;
+    type: MentionType;
+    /**
+     * Sharedarticlecount
+     */
+    sharedArticleCount: number;
 };
 
 /**
@@ -1104,7 +1134,7 @@ export type RemoveFromWatchlistResponses = {
 
 export type RemoveFromWatchlistResponse = RemoveFromWatchlistResponses[keyof RemoveFromWatchlistResponses];
 
-export type GetWeeklyTrendsData = {
+export type GetTrendsData = {
     body?: never;
     headers?: {
         /**
@@ -1114,10 +1144,10 @@ export type GetWeeklyTrendsData = {
     };
     path?: never;
     query?: never;
-    url: '/api/v1/weekly-trends';
+    url: '/api/v1/trends';
 };
 
-export type GetWeeklyTrendsErrors = {
+export type GetTrendsErrors = {
     /**
      * Bad request
      */
@@ -1128,22 +1158,22 @@ export type GetWeeklyTrendsErrors = {
     422: HttpValidationError;
 };
 
-export type GetWeeklyTrendsError = GetWeeklyTrendsErrors[keyof GetWeeklyTrendsErrors];
+export type GetTrendsError = GetTrendsErrors[keyof GetTrendsErrors];
 
-export type GetWeeklyTrendsResponses = {
+export type GetTrendsResponses = {
     /**
-     * Response Get Weekly Trends Api V1 Weekly Trends Get
+     * Response Get Trends Api V1 Trends Get
      *
      * Successful Response
      */
     200: ({
-        state: 'ready';
-    } & ReadyWeeklyTrends) | ({
+        state: 'trends';
+    } & Trends) | ({
         state: 'empty';
-    } & EmptyWeeklyTrends);
+    } & EmptyTrends);
 };
 
-export type GetWeeklyTrendsResponse = GetWeeklyTrendsResponses[keyof GetWeeklyTrendsResponses];
+export type GetTrendsResponse = GetTrendsResponses[keyof GetTrendsResponses];
 
 export type ListBriefingsData = {
     body?: never;

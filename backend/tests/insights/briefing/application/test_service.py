@@ -21,6 +21,7 @@ from app.insights.briefing.application.notifier import (
 )
 from app.insights.briefing.application.service import WeeklyBriefingService
 from app.insights.briefing.domain.briefing import (
+    BriefingChapter,
     KeyArticle,
     WatchPoint,
     WeeklyBriefingContent,
@@ -41,14 +42,18 @@ def _factory_for(db_session) -> async_sessionmaker:
 
 
 def _llm_mock(
-    headline: str = "今週のハイライト", overview: str = "今週の流れ"
+    headline: str = "今週のハイライト",
+    summary: str = "今週の総括",
+    chapter_heading: str = "資金とインフラ",
+    chapter_body: str = "今週の流れ",
 ) -> MagicMock:
     llm = MagicMock()
     llm.MODEL = "deepseek-v4-pro"
     llm.generate = AsyncMock(
         return_value=WeeklyBriefingContent(
             headline=headline,
-            overview=overview,
+            summary=summary,
+            chapters=[BriefingChapter(heading=chapter_heading, body=chapter_body)],
             key_articles=[KeyArticle(article_id=1, significance="なぜ重要か")],
             watch_points=[WatchPoint(statement="今後どこを見るべきか")],
         )
@@ -98,7 +103,7 @@ class TestExecute:
         )
         await db_session.commit()
 
-        llm = _llm_mock(headline="OK", overview="OVERVIEW")
+        llm = _llm_mock(headline="OK", summary="SUMMARY", chapter_body="BODY")
         service = WeeklyBriefingService(
             _factory_for(db_session), llm, NullBriefingNotifier()
         )
@@ -119,7 +124,8 @@ class TestExecute:
         )
         assert saved is not None
         assert saved.headline == "OK"
-        assert saved.overview == "OVERVIEW"
+        assert saved.summary == "SUMMARY"
+        assert saved.chapters == [{"heading": "資金とインフラ", "body": "BODY"}]
         assert saved.input_article_count == 1
         assert saved.model_name == "deepseek-v4-pro"
 
@@ -240,7 +246,7 @@ class TestNotifierIntegration:
             frontend_base_url="http://frontend:3000",
             secret="test-secret-32characters-long-xxxx",
         )
-        llm = _llm_mock(headline="OK", overview="OVERVIEW")
+        llm = _llm_mock(headline="OK", summary="SUMMARY")
         service = WeeklyBriefingService(_factory_for(db_session), llm, notifier)
         ready = ReadyForBriefing(
             week_start=date(2026, 4, 20), category_id=ai_category.id
@@ -264,7 +270,7 @@ class TestNotifierIntegration:
         )
         assert saved is not None
         assert saved.headline == "OK"
-        assert saved.overview == "OVERVIEW"
+        assert saved.summary == "SUMMARY"
 
 
 class TestAuditIntegration:

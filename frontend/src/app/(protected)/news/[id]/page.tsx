@@ -4,14 +4,13 @@ import { Suspense } from "react";
 import { getProtectedNavItems } from "@/components/layout/nav-items";
 import { SlimMasthead } from "@/components/layout/SlimMasthead";
 import { ThemeToggle } from "@/components/layout/ThemeToggle";
+import { PaperSurface, PaperTexture } from "@/components/paper";
 import { Skeleton } from "@/components/ui/skeleton";
 import { UserMenu } from "@/features/auth";
 import {
   getArticleById,
   getSimilarArticles,
   NewsDetail,
-  PaperSurface,
-  PaperTexture,
   RelatedArticles,
 } from "@/features/news";
 import { getWatchlistIds } from "@/features/watchlist";
