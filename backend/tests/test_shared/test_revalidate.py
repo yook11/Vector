@@ -8,9 +8,9 @@ from __future__ import annotations
 import httpx  # noqa: TID251 (テスト内 mock 構築のため、実通信なし)
 import pytest
 
-from app.insights.briefing.application.notifier import (
+from app.shared.revalidate import (
     FrontendRevalidateNotifier,
-    NullBriefingNotifier,
+    NullRevalidateNotifier,
 )
 
 
@@ -21,9 +21,21 @@ def _notifier() -> FrontendRevalidateNotifier:
     )
 
 
+def _patch_transport(
+    monkeypatch: pytest.MonkeyPatch, transport: httpx.MockTransport
+) -> None:
+    original_init = httpx.AsyncClient.__init__
+
+    def patched_init(self, *args, **kwargs):  # type: ignore[no-untyped-def]
+        kwargs["transport"] = transport
+        original_init(self, *args, **kwargs)
+
+    monkeypatch.setattr(httpx.AsyncClient, "__init__", patched_init)
+
+
 class TestNotify:
     @pytest.mark.asyncio
-    async def test_posts_correct_payload_on_success(
+    async def test_posts_given_tags_to_revalidate_endpoint(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         captured: dict = {}
@@ -34,27 +46,16 @@ class TestNotify:
             captured["body"] = request.read()
             return httpx.Response(200, json={"ok": True})
 
-        transport = httpx.MockTransport(handler)
+        _patch_transport(monkeypatch, httpx.MockTransport(handler))
 
-        original_init = httpx.AsyncClient.__init__
-
-        def patched_init(self, *args, **kwargs):  # type: ignore[no-untyped-def]
-            kwargs["transport"] = transport
-            original_init(self, *args, **kwargs)
-
-        monkeypatch.setattr(httpx.AsyncClient, "__init__", patched_init)
-
-        notifier = _notifier()
-        await notifier.notify(category_slug="ai")
+        await _notifier().notify(tags=["trends", "briefing:list"])
 
         assert captured["url"] == "http://frontend:3000/api/internal/revalidate"
         assert (
             captured["headers"]["authorization"]
             == "Bearer test-secret-32characters-long-xxxx"
         )
-        body = captured["body"].decode()
-        assert "briefing:ai" in body
-        assert "briefing:list" in body
+        assert captured["body"].decode() == '{"tags":["trends","briefing:list"]}'
 
     @pytest.mark.asyncio
     async def test_does_not_raise_on_http_error(
@@ -63,18 +64,10 @@ class TestNotify:
         async def handler(request: httpx.Request) -> httpx.Response:
             return httpx.Response(500, json={"error": "boom"})
 
-        transport = httpx.MockTransport(handler)
-        original_init = httpx.AsyncClient.__init__
+        _patch_transport(monkeypatch, httpx.MockTransport(handler))
 
-        def patched_init(self, *args, **kwargs):  # type: ignore[no-untyped-def]
-            kwargs["transport"] = transport
-            original_init(self, *args, **kwargs)
-
-        monkeypatch.setattr(httpx.AsyncClient, "__init__", patched_init)
-
-        notifier = _notifier()
         # 例外は出ない (warn 降格)
-        await notifier.notify(category_slug="ai")
+        await _notifier().notify(tags=["trends"])
 
     @pytest.mark.asyncio
     async def test_does_not_raise_on_network_error(
@@ -83,21 +76,13 @@ class TestNotify:
         async def handler(request: httpx.Request) -> httpx.Response:
             raise httpx.ConnectError("connection refused")
 
-        transport = httpx.MockTransport(handler)
-        original_init = httpx.AsyncClient.__init__
+        _patch_transport(monkeypatch, httpx.MockTransport(handler))
 
-        def patched_init(self, *args, **kwargs):  # type: ignore[no-untyped-def]
-            kwargs["transport"] = transport
-            original_init(self, *args, **kwargs)
-
-        monkeypatch.setattr(httpx.AsyncClient, "__init__", patched_init)
-
-        notifier = _notifier()
-        await notifier.notify(category_slug="ai")
+        await _notifier().notify(tags=["trends"])
 
 
 class TestNullNotifier:
     @pytest.mark.asyncio
     async def test_is_no_op(self) -> None:
         # 何もしないし raise もしない
-        await NullBriefingNotifier().notify(category_slug="ai")
+        await NullRevalidateNotifier().notify(tags=["trends"])

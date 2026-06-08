@@ -54,6 +54,11 @@ _WEEK = timedelta(days=7)
 
 _MentionKey = tuple[str, str]
 
+# 生成成功後に frontend へ revalidate を打つ cache tag。frontend の
+# lib/cache/tags.ts (cacheTags.trends) と一致させること。task / CLI 双方が
+# 同値を使うよう単一定義する (誤変更を防ぐため不変 tuple)。
+TRENDS_REVALIDATE_TAGS: tuple[str, ...] = ("trends",)
+
 
 def _is_hot(mention: RankedMention) -> bool:
     """伸び率ランキングの母集団判定 (継続トレンド or 新規 burst)。
@@ -175,8 +180,8 @@ class TrendDiscoveryService:
                 window_end=ready.window_end, category_trends=category_trends
             )
 
-            # snapshot は API レスポンスそのものを焼く。検証 (上限・非負) は上の
-            # TrendsBundle 構築の1回だけで、読取は verbatim に返す。generated_at は
+            # snapshot は API レスポンス (camelCase) をそのまま焼く。読取側は保存済
+            # bundle を Trends schema で再検証してから返す (router)。generated_at は
             # JSON と DB列の双方へ同値を入れるためアプリ側で1つ確定する。
             generated_at = datetime.now(UTC)
             response = trends_from_snapshot(

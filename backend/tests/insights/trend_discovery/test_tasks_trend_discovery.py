@@ -19,6 +19,7 @@ import pytest
 from app.audit.domain.event import EventType
 from app.audit.stages.trend_discovery import TrendDiscoveryOutcomeCode
 from app.insights.trend_discovery.application.service import (
+    TRENDS_REVALIDATE_TAGS,
     SkippedNoTargetArticles,
     TrendDiscoveryCompleted,
     TrendDiscoveryConflict,
@@ -75,6 +76,8 @@ class TestRun:
                 completed_category_count=3,
             )
         )
+        notifier = MagicMock()
+        notifier.notify = AsyncMock(return_value=None)
 
         with (
             patch(
@@ -91,6 +94,10 @@ class TestRun:
                 return_value=service,
             ) as service_cls,
             patch(
+                "app.queue.tasks.trend_discovery.FrontendRevalidateNotifier.from_settings",
+                return_value=notifier,
+            ),
+            patch(
                 "app.queue.tasks.trend_discovery.append_trend_discovery_run_event_best_effort",
                 new=AsyncMock(),
             ) as audit,
@@ -99,6 +106,8 @@ class TestRun:
 
         service_cls.assert_called_once_with(ctx.state.session_factory)
         service.execute.assert_awaited_once_with(ready)
+        # 生成成功で frontend revalidate を 1 回打つ。
+        notifier.notify.assert_awaited_once_with(tags=TRENDS_REVALIDATE_TAGS)
         audit.assert_awaited_once()
         assert audit.await_args.args == (ctx.state.session_factory,)
         assert audit.await_args.kwargs["event_type"] == EventType.SUCCEEDED
@@ -163,6 +172,8 @@ class TestRun:
         service.execute = AsyncMock(
             return_value=SkippedNoTargetArticles(window_end=target_window_end)
         )
+        notifier = MagicMock()
+        notifier.notify = AsyncMock(return_value=None)
 
         with (
             patch(
@@ -179,6 +190,10 @@ class TestRun:
                 return_value=service,
             ),
             patch(
+                "app.queue.tasks.trend_discovery.FrontendRevalidateNotifier.from_settings",
+                return_value=notifier,
+            ),
+            patch(
                 "app.queue.tasks.trend_discovery.append_trend_discovery_run_event_best_effort",
                 new=AsyncMock(),
             ) as audit,
@@ -186,6 +201,8 @@ class TestRun:
             await trend_discovery.run_trend_discovery(ctx=ctx)
 
         service.execute.assert_awaited_once_with(ready)
+        # 生成していないので revalidate は打たない。
+        notifier.notify.assert_not_awaited()
         audit.assert_awaited_once()
         assert audit.await_args.kwargs["event_type"] == EventType.SKIPPED
         assert (
@@ -212,6 +229,8 @@ class TestRun:
                 completed_category_count=3,
             )
         )
+        notifier = MagicMock()
+        notifier.notify = AsyncMock(return_value=None)
 
         with (
             patch(
@@ -228,6 +247,10 @@ class TestRun:
                 return_value=service,
             ),
             patch(
+                "app.queue.tasks.trend_discovery.FrontendRevalidateNotifier.from_settings",
+                return_value=notifier,
+            ),
+            patch(
                 "app.queue.tasks.trend_discovery.append_trend_discovery_run_event_best_effort",
                 new=AsyncMock(),
             ) as audit,
@@ -235,6 +258,8 @@ class TestRun:
             await trend_discovery.run_trend_discovery(ctx=ctx)
 
         service.execute.assert_awaited_once_with(ready)
+        # conflict (別 worker が先に保存) では revalidate を打たない。
+        notifier.notify.assert_not_awaited()
         audit.assert_awaited_once()
         assert audit.await_args.kwargs["event_type"] == EventType.SKIPPED
         assert (

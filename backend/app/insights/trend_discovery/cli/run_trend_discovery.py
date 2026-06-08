@@ -43,6 +43,7 @@ from app.audit.stages.trend_discovery import (
 from app.config import settings
 from app.db_ssl import create_app_engine
 from app.insights.trend_discovery.application.service import (
+    TRENDS_REVALIDATE_TAGS,
     SkippedNoTargetArticles,
     TrendDiscoveryCompleted,
     TrendDiscoveryConflict,
@@ -51,6 +52,7 @@ from app.insights.trend_discovery.application.service import (
 from app.insights.trend_discovery.domain.ready import ReadyForTrendDiscovery
 from app.insights.trend_discovery.domain.window import latest_window_end, now_in_jst
 from app.insights.trend_discovery.repository.snapshots import SnapshotRepository
+from app.shared.revalidate import FrontendRevalidateNotifier, RevalidateNotifier
 
 _WINDOW = timedelta(days=7)
 
@@ -84,8 +86,12 @@ async def run(
     args: argparse.Namespace,
     service: TrendDiscoveryService,
     session_factory: async_sessionmaker[AsyncSession],
+    notifier: RevalidateNotifier,
 ) -> int:
-    """Service / session_factory 注入を受けて 1 回分の生成を実行する (テスト境界)。"""
+    """1 回分の生成を実行する (テスト境界)。
+
+    Service / session_factory / notifier を引数注入で受ける。
+    """
     window_end = (
         args.window_end
         if args.window_end is not None
@@ -198,6 +204,9 @@ async def run(
         f"source_analysis_count={outcome.source_analysis_count} "
         f"completed_category_count={outcome.completed_category_count}"
     )
+    # CLI は復旧 / 手動運用経路。生成成功後に frontend のキャッシュを無効化して
+    # 即時反映させる (briefing CLI と異なり単一 tag の 1 POST なので Null にしない)。
+    await notifier.notify(tags=TRENDS_REVALIDATE_TAGS)
     return 0
 
 
@@ -224,7 +233,8 @@ def main(argv: Sequence[str] | None = None) -> int:
                 engine, class_=AsyncSession, expire_on_commit=False
             )
             service = TrendDiscoveryService(session_factory)
-            return await run(args, service, session_factory)
+            notifier = FrontendRevalidateNotifier.from_settings(settings)
+            return await run(args, service, session_factory, notifier)
         finally:
             await engine.dispose()
 

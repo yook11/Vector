@@ -18,7 +18,8 @@ class TrendsSnapshot(Base):
     ``window_end`` は集計窓の上限 (半開区間 ``[window_end - 7d, window_end)``)
     で、JST 当日 0:00 の date。1 日 1 行で daily cron が INSERT する。
     ``bundle`` は API レスポンス (``Trends``) の camelCase payload をそのまま
-    格納し、読取は verbatim 配信する (検証は生成時 1 回)。snapshot は 1 単位保存が
+    格納する。読取側 (router) は保存済み bundle を ``Trends`` schema で再検証して
+    から返す。snapshot は 1 単位保存が
     責務であり、推移分析や横断クエリのために正規化テーブル群に分解しない
     (feedback_snapshot_responsibility.md)。``generated_at`` は生成側がアプリで
     確定し payload と列の双方へ同値を入れる (DB の server_default は持たない)。

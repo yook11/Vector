@@ -26,7 +26,6 @@ import structlog
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.audit.stages.briefing import BriefingAuditRepository
-from app.insights.briefing.application.notifier import BriefingNotifier
 from app.insights.briefing.domain.ready import ReadyForBriefing
 from app.insights.briefing.repository.articles import BriefingArticleRepository
 from app.insights.briefing.repository.briefings import BriefingRepository
@@ -38,6 +37,7 @@ if TYPE_CHECKING:
     # 型注釈専用 import に降格し、本 module 経由で openai SDK が import 時にロード
     # されるのを防ぐ (app/queue/composition.py の遅延 SDK import 方針と対)。
     from app.insights.briefing.llm.deepseek import DeepSeekBriefingGenerator
+    from app.shared.revalidate import RevalidateNotifier
 
 logger = structlog.get_logger(__name__)
 
@@ -64,7 +64,7 @@ class WeeklyBriefingService:
         self,
         session_factory: async_sessionmaker[AsyncSession],
         llm_generator: DeepSeekBriefingGenerator,
-        notifier: BriefingNotifier,
+        notifier: RevalidateNotifier,
     ) -> None:
         self._session_factory = session_factory
         self._llm = llm_generator
@@ -162,9 +162,10 @@ class WeeklyBriefingService:
             article_count=len(articles),
             forced=ready.force,
         )
-        # 永続化成功後に frontend のキャッシュ無効化を通知する。
-        # notifier 内部で warn 降格するため例外は伝播しない。
-        await self._notifier.notify(category_slug=str(category.slug))
+        # 永続化成功後に frontend のキャッシュ無効化を通知する。tag は frontend の
+        # lib/cache/tags.ts と一致させる。notifier 内部で warn 降格するため
+        # 例外は伝播しない。
+        await self._notifier.notify(tags=[f"briefing:{category.slug}", "briefing:list"])
         return GeneratedBriefing(
             persisted=True,
             week_start=ready.week_start,

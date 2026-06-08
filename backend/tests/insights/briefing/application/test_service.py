@@ -15,10 +15,6 @@ from app.audit.stages.briefing import (
     OUTCOME_BRIEFING_GENERATION_COMPLETED,
     OUTCOME_BRIEFING_GENERATION_INPUT_EMPTY,
 )
-from app.insights.briefing.application.notifier import (
-    FrontendRevalidateNotifier,
-    NullBriefingNotifier,
-)
 from app.insights.briefing.application.service import WeeklyBriefingService
 from app.insights.briefing.domain.briefing import (
     BriefingChapter,
@@ -30,6 +26,10 @@ from app.insights.briefing.domain.ready import ReadyForBriefing
 from app.insights.briefing.repository.briefings import BriefingRepository
 from app.models.category import Category
 from app.models.pipeline_event import PipelineEvent
+from app.shared.revalidate import (
+    FrontendRevalidateNotifier,
+    NullRevalidateNotifier,
+)
 
 JST = ZoneInfo("Asia/Tokyo")
 
@@ -78,7 +78,7 @@ class TestExecute:
         """articles 0 件のとき LLM を呼ばず persisted=False を返す。"""
         llm = _llm_mock()
         service = WeeklyBriefingService(
-            _factory_for(db_session), llm, NullBriefingNotifier()
+            _factory_for(db_session), llm, NullRevalidateNotifier()
         )
         ready = ReadyForBriefing(
             week_start=date(2026, 4, 20), category_id=ai_category.id
@@ -105,7 +105,7 @@ class TestExecute:
 
         llm = _llm_mock(headline="OK", summary="SUMMARY", chapter_body="BODY")
         service = WeeklyBriefingService(
-            _factory_for(db_session), llm, NullBriefingNotifier()
+            _factory_for(db_session), llm, NullRevalidateNotifier()
         )
         ready = ReadyForBriefing(
             week_start=date(2026, 4, 20), category_id=ai_category.id
@@ -146,7 +146,7 @@ class TestExecute:
         llm.MODEL = "deepseek-v4-pro"
         llm.generate = AsyncMock(side_effect=RuntimeError("LLM failed"))
         service = WeeklyBriefingService(
-            _factory_for(db_session), llm, NullBriefingNotifier()
+            _factory_for(db_session), llm, NullRevalidateNotifier()
         )
         ready = ReadyForBriefing(
             week_start=date(2026, 4, 20), category_id=ai_category.id
@@ -180,7 +180,7 @@ class TestNotifierIntegration:
 
         await service.execute(ready)
 
-        notifier.notify.assert_awaited_once_with(category_slug="ai")
+        notifier.notify.assert_awaited_once_with(tags=["briefing:ai", "briefing:list"])
 
     @pytest.mark.asyncio
     async def test_does_not_call_notifier_when_no_articles(
@@ -296,7 +296,7 @@ class TestAuditIntegration:
         await db_session.commit()
 
         service = WeeklyBriefingService(
-            _factory_for(db_session), _llm_mock(), NullBriefingNotifier()
+            _factory_for(db_session), _llm_mock(), NullRevalidateNotifier()
         )
         ready = ReadyForBriefing(
             week_start=date(2026, 4, 20), category_id=ai_category.id
@@ -338,7 +338,7 @@ class TestAuditIntegration:
         retryability は NULL (retry 概念外、event_type で完結)。
         """
         service = WeeklyBriefingService(
-            _factory_for(db_session), _llm_mock(), NullBriefingNotifier()
+            _factory_for(db_session), _llm_mock(), NullRevalidateNotifier()
         )
         ready = ReadyForBriefing(
             week_start=date(2026, 4, 20), category_id=ai_category.id

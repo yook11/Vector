@@ -10,6 +10,7 @@ describe("cacheTags", () => {
       watchlistMe: "watchlist:me",
       sources: "sources",
       briefingList: "briefing:list",
+      trends: "trends",
     });
   });
 

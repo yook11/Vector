@@ -39,13 +39,13 @@ from sqlalchemy.ext.asyncio import (
 from app.audit.stages.briefing import BriefingAuditRepository
 from app.config import settings
 from app.db_ssl import create_app_engine
-from app.insights.briefing.application.notifier import NullBriefingNotifier
 from app.insights.briefing.application.service import WeeklyBriefingService
 from app.insights.briefing.domain.ready import ReadyForBriefing
 from app.insights.briefing.domain.week import latest_completed_week_start, now_in_jst
 from app.insights.briefing.llm.deepseek import DeepSeekBriefingGenerator
 from app.insights.briefing.repository.briefings import BriefingRepository
 from app.models.category import Category
+from app.shared.revalidate import NullRevalidateNotifier
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -173,7 +173,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             service = WeeklyBriefingService(
                 session_factory,
                 DeepSeekBriefingGenerator(),
-                NullBriefingNotifier(),
+                NullRevalidateNotifier(),
             )
             return await run(args, service, session_factory)
         finally:

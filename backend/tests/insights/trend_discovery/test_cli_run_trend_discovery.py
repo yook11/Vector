@@ -22,6 +22,7 @@ import pytest
 from app.audit.domain.event import EventType
 from app.audit.stages.trend_discovery import TrendDiscoveryOutcomeCode
 from app.insights.trend_discovery.application.service import (
+    TRENDS_REVALIDATE_TAGS,
     SkippedNoTargetArticles,
     TrendDiscoveryCompleted,
     TrendDiscoveryConflict,
@@ -30,6 +31,13 @@ from app.insights.trend_discovery.cli.run_trend_discovery import build_parser, r
 from app.insights.trend_discovery.domain.ready import ReadyForTrendDiscovery
 
 JST = ZoneInfo("Asia/Tokyo")
+
+
+def _notifier_mock() -> MagicMock:
+    """notify を AsyncMock 化した revalidate notifier の fake。"""
+    notifier = MagicMock()
+    notifier.notify = AsyncMock(return_value=None)
+    return notifier
 
 
 # Fake service / session_factory
@@ -138,7 +146,8 @@ class TestRun:
                 new=AsyncMock(),
             ) as audit,
         ):
-            rc = await run(args, service, _fake_session_factory())  # type: ignore[arg-type]
+            notifier = _notifier_mock()
+            rc = await run(args, service, _fake_session_factory(), notifier)  # type: ignore[arg-type]
 
         assert rc == 0
         # latest_window_end(2026-05-03 JST 00:05) = 2026-05-03
@@ -159,6 +168,7 @@ class TestRun:
         out = capsys.readouterr().out
         assert "completed" in out
         assert "2026-05-03" in out
+        notifier.notify.assert_awaited_once_with(tags=TRENDS_REVALIDATE_TAGS)
 
     @pytest.mark.asyncio
     async def test_with_window_end_passes_through(
@@ -187,13 +197,15 @@ class TestRun:
                 new=AsyncMock(),
             ),
         ):
-            rc = await run(args, service, _fake_session_factory())  # type: ignore[arg-type]
+            notifier = _notifier_mock()
+            rc = await run(args, service, _fake_session_factory(), notifier)  # type: ignore[arg-type]
 
         assert rc == 0
         assert advance.await_args is not None
         # 2026-04-30 は木曜 — 任意の曜日を受け入れる
         assert advance.await_args.kwargs["window_end"] == date(2026, 4, 30)
         assert service.calls.executed == [ready]
+        notifier.notify.assert_awaited_once_with(tags=TRENDS_REVALIDATE_TAGS)
 
     @pytest.mark.asyncio
     async def test_force_propagates_to_try_advance_from(self) -> None:
@@ -221,7 +233,8 @@ class TestRun:
                 new=AsyncMock(),
             ) as audit,
         ):
-            rc = await run(args, service, _fake_session_factory())  # type: ignore[arg-type]
+            notifier = _notifier_mock()
+            rc = await run(args, service, _fake_session_factory(), notifier)  # type: ignore[arg-type]
 
         assert rc == 0
         assert advance.await_args is not None
@@ -231,6 +244,7 @@ class TestRun:
             == TrendDiscoveryOutcomeCode.RUN_UPDATED
         )
         assert audit.await_args.kwargs["requested_update"] is True
+        notifier.notify.assert_awaited_once_with(tags=TRENDS_REVALIDATE_TAGS)
 
     @pytest.mark.asyncio
     async def test_skipped_existing_when_ready_is_none(
@@ -252,7 +266,8 @@ class TestRun:
                 new=AsyncMock(),
             ) as audit,
         ):
-            rc = await run(args, service, _fake_session_factory())  # type: ignore[arg-type]
+            notifier = _notifier_mock()
+            rc = await run(args, service, _fake_session_factory(), notifier)  # type: ignore[arg-type]
 
         assert rc == 0
         assert service.calls.executed == []
@@ -265,6 +280,7 @@ class TestRun:
         assert "skipped existing" in out
         assert "use --force" in out
         assert "2026-05-03" in out
+        notifier.notify.assert_not_awaited()
 
     @pytest.mark.asyncio
     async def test_skipped_no_target_articles(
@@ -289,7 +305,8 @@ class TestRun:
                 new=AsyncMock(),
             ) as audit,
         ):
-            rc = await run(args, service, _fake_session_factory())  # type: ignore[arg-type]
+            notifier = _notifier_mock()
+            rc = await run(args, service, _fake_session_factory(), notifier)  # type: ignore[arg-type]
 
         assert rc == 0
         assert service.calls.executed == [ready]
@@ -303,6 +320,7 @@ class TestRun:
         out = capsys.readouterr().out
         assert "skipped no target articles" in out
         assert "2026-05-03" in out
+        notifier.notify.assert_not_awaited()
 
     @pytest.mark.asyncio
     async def test_skipped_conflict(self, capsys: pytest.CaptureFixture[str]) -> None:
@@ -329,7 +347,8 @@ class TestRun:
                 new=AsyncMock(),
             ) as audit,
         ):
-            rc = await run(args, service, _fake_session_factory())  # type: ignore[arg-type]
+            notifier = _notifier_mock()
+            rc = await run(args, service, _fake_session_factory(), notifier)  # type: ignore[arg-type]
 
         assert rc == 0
         assert service.calls.executed == [ready]
@@ -343,6 +362,7 @@ class TestRun:
         out = capsys.readouterr().out
         assert "skipped conflict" in out
         assert "2026-05-03" in out
+        notifier.notify.assert_not_awaited()
 
     @pytest.mark.asyncio
     async def test_service_exception_is_audited_and_reraised(self) -> None:
@@ -367,7 +387,8 @@ class TestRun:
             ) as audit,
             pytest.raises(RuntimeError, match="aggregation failed"),
         ):
-            await run(args, service, _fake_session_factory())  # type: ignore[arg-type]
+            notifier = _notifier_mock()
+            await run(args, service, _fake_session_factory(), notifier)  # type: ignore[arg-type]
 
         assert audit.await_args.kwargs["event_type"] == EventType.FAILED
         assert (
@@ -375,6 +396,7 @@ class TestRun:
             == TrendDiscoveryOutcomeCode.RUN_FAILED
         )
         assert isinstance(audit.await_args.kwargs["exc"], RuntimeError)
+        notifier.notify.assert_not_awaited()
 
     @pytest.mark.asyncio
     async def test_ready_exception_is_audited_and_reraised(self) -> None:
@@ -395,7 +417,8 @@ class TestRun:
             ) as audit,
             pytest.raises(RuntimeError, match="ready failed"),
         ):
-            await run(args, service, _fake_session_factory())  # type: ignore[arg-type]
+            notifier = _notifier_mock()
+            await run(args, service, _fake_session_factory(), notifier)  # type: ignore[arg-type]
 
         assert service.calls.executed == []
         assert audit.await_args.kwargs["event_type"] == EventType.FAILED
@@ -404,3 +427,4 @@ class TestRun:
             == TrendDiscoveryOutcomeCode.RUN_FAILED
         )
         assert audit.await_args.kwargs["requested_update"] is True
+        notifier.notify.assert_not_awaited()

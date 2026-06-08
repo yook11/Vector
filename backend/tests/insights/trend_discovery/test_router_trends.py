@@ -3,7 +3,9 @@
 検証する観点:
 - snapshot 不在時は 200 + state="empty" のみ (failure_visibility 原則:
   500 にはせず空状態を discriminated union で表現する)
-- snapshot 在ると最新窓の bundle が verbatim (値等価) で返る
+- snapshot 在ると最新窓の bundle が現行 Trends schema で再検証され (round-trip で
+  値等価のまま) 返る
+- 旧 / 不完全 shape の bundle は ValidationError が伝播する (本番 500)
 - 複数 window_end がある場合は window_end DESC で 1 件目を返す
 - 認証は任意 (BFF プロキシヘッダなしでも 200)
 """
@@ -14,6 +16,7 @@ from datetime import UTC, date, datetime
 
 import pytest
 from httpx import AsyncClient
+from pydantic import ValidationError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.insights.trend_discovery.domain.trend import (
@@ -67,15 +70,15 @@ class TestTrendsEndpoint:
         assert resp.status_code == 200
         assert resp.json() == {"state": "empty"}
 
-    async def test_returns_snapshot_bundle_verbatim(
+    async def test_returns_validated_trends_round_trip(
         self,
         client: AsyncClient,
         db_session: AsyncSession,
     ) -> None:
-        """snapshot.bundle がそのまま (値等価で) レスポンスとして返る。
+        """現行 schema に適合する bundle は再検証を通り、値等価のまま返る。
 
-        model_validate や trends_from_snapshot の介在がないことの証明は
-        値等価であることで十分 (読取時の変換があれば値がズレる)。
+        読取時に ``Trends.model_validate`` を挟むが、生成時と同じ camelCase
+        payload なので round-trip で値はズレない。
         """
         snap = _snapshot(date(2026, 5, 3))
         db_session.add(snap)
@@ -84,6 +87,26 @@ class TestTrendsEndpoint:
         resp = await client.get("/api/v1/trends")
         assert resp.status_code == 200
         assert resp.json() == snap.bundle
+
+    async def test_malformed_bundle_propagates_validation_error(
+        self,
+        client: AsyncClient,
+        db_session: AsyncSession,
+    ) -> None:
+        """旧 / 不完全 shape の bundle は ValidationError が伝播する (本番 500)。
+
+        スキーマ進化を跨いだ旧行 (再設計前の sections 形など) を verbatim 配信
+        すると frontend が crash するため、読取時に弾く。
+        """
+        legacy = _snapshot(
+            date(2026, 5, 3),
+            bundle={"windowEnd": "2026-05-03", "sections": [{"title": "x"}]},
+        )
+        db_session.add(legacy)
+        await db_session.commit()
+
+        with pytest.raises(ValidationError):
+            await client.get("/api/v1/trends")
 
     async def test_returns_latest_by_window_end(
         self,

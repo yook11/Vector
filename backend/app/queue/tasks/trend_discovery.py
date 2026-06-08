@@ -29,7 +29,9 @@ from app.audit.stages.trend_discovery import (
     TrendDiscoveryOutcomeCode,
     append_trend_discovery_run_event_best_effort,
 )
+from app.config import settings
 from app.insights.trend_discovery.application.service import (
+    TRENDS_REVALIDATE_TAGS,
     SkippedNoTargetArticles,
     TrendDiscoveryCompleted,
     TrendDiscoveryConflict,
@@ -40,6 +42,7 @@ from app.insights.trend_discovery.domain.window import latest_window_end, now_in
 from app.insights.trend_discovery.repository.snapshots import SnapshotRepository
 from app.queue.brokers import broker_trend_discovery
 from app.queue.schedule import CRON_TREND_DISCOVERY
+from app.shared.revalidate import FrontendRevalidateNotifier
 
 logger = structlog.get_logger(__name__)
 
@@ -173,6 +176,11 @@ async def run_trend_discovery(ctx: Context = TaskiqDepends()) -> None:
         category_count=outcome.completed_category_count,
         updated=outcome.updated,
     )
+
+    # 生成成功 (新規 INSERT / force 上書きの両方) で frontend のキャッシュを無効化する。
+    # notifier 内部で warn 降格するため例外は伝播しない。
+    notifier = FrontendRevalidateNotifier.from_settings(settings)
+    await notifier.notify(tags=TRENDS_REVALIDATE_TAGS)
 
 
 def _window_start(window_end: date) -> date:

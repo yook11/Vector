@@ -36,7 +36,6 @@ from app.audit.stages.briefing import (
     BriefingAuditRepository,
 )
 from app.config import settings
-from app.insights.briefing.application.notifier import FrontendRevalidateNotifier
 from app.insights.briefing.application.service import WeeklyBriefingService
 from app.insights.briefing.domain.ready import ReadyForBriefing
 from app.insights.briefing.domain.week import latest_completed_week_start, now_in_jst
@@ -47,6 +46,7 @@ from app.queue.brokers import broker_briefing
 from app.queue.messages.briefing import BriefingTaskInput
 from app.queue.retry import is_last_attempt
 from app.queue.schedule import CRON_WEEKLY_BRIEFING
+from app.shared.revalidate import FrontendRevalidateNotifier
 
 logger = structlog.get_logger(__name__)
 
@@ -267,10 +267,7 @@ async def generate_briefing_for_category(
         )
         return
 
-    notifier = FrontendRevalidateNotifier(
-        frontend_base_url=settings.internal_frontend_base_url,
-        secret=settings.revalidate_bearer_secret.get_secret_value(),
-    )
+    notifier = FrontendRevalidateNotifier.from_settings(settings)
     # generator は composition root が broker_briefing 起動時に state へ wire する
     # (Pure DI / 遅延 SDK import: app/queue/composition.py)。
     service = WeeklyBriefingService(
