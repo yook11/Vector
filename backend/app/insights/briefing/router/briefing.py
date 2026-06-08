@@ -98,6 +98,7 @@ async def list_briefings(
     items は ``Category.id`` 昇順で 11 カテゴリ全部を返す。未生成カテゴリは
     ``latest=None`` で表現する (frontend で 1 行 ``灰色`` 表示)。
     """
+    current_week_start = latest_completed_week_start(now_in_jst())
     cats = (
         (await session.execute(select(Category).order_by(Category.id))).scalars().all()
     )
@@ -116,11 +117,21 @@ async def list_briefings(
                     latest=_BriefingListLatest(
                         week_start=b.week_start_date,
                         headline=b.headline,
+                        summary=b.summary,
+                        input_article_count=b.input_article_count,
                     ),
                 )
             )
+    # masthead「今週 N 件を解析」用。当該週に生成された briefing のみ数え、
+    # 生成が遅れた古い週の stale briefing は今週の解析量に含めない。
+    total_articles = sum(
+        b.input_article_count
+        for b in latest_by_cat.values()
+        if b.week_start_date == current_week_start
+    )
     return BriefingListResponse(
-        current_week_start=latest_completed_week_start(now_in_jst()),
+        current_week_start=current_week_start,
+        total_articles=total_articles,
         items=items,
     )
 

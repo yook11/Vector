@@ -111,12 +111,14 @@ class _BriefingListLatest(_CamelBase):
     """一覧行に同梱する「最新 briefing 参照」。
 
     未生成カテゴリでは ``BriefingListItem.latest = None`` で表現する。
-    詳細 (``ReadyBriefing``) と異なり summary / chapters / keyArticles 等は持たず、
-    一覧で表示する短い見出しのみ。
+    一覧バンド表示用に見出し / summary / 件数を同梱する。詳細
+    (``ReadyBriefing``) と異なり chapters / keyArticles / articles は持たない。
     """
 
     week_start: date
     headline: str = Field(max_length=MAX_BRIEFING_HEADLINE_LEN)
+    summary: str = Field(max_length=MAX_BRIEFING_SUMMARY_LEN)
+    input_article_count: int
 
 
 class BriefingListItem(_CamelBase):
@@ -130,8 +132,11 @@ class BriefingListResponse(_CamelBase):
     """``GET /api/v1/briefing`` のレスポンス。
 
     ``items`` は ``Category.id`` 昇順で 11 カテゴリ全部を返す。並び順は
-    backend で確定し、frontend での sort を不要にする。
+    backend で確定し、frontend での sort を不要にする。``total_articles`` は
+    ``current_week_start`` 週に生成された briefing の ``input_article_count``
+    合計 (masthead「今週 N 件を解析」用、古い週の stale briefing は含めない)。
     """
 
     current_week_start: date
+    total_articles: int
     items: list[BriefingListItem] = Field(max_length=_MAX_BRIEFING_LIST_ITEMS)

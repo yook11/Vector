@@ -90,13 +90,18 @@ export type BriefingListItem = {
  * ``GET /api/v1/briefing`` のレスポンス。
  *
  * ``items`` は ``Category.id`` 昇順で 11 カテゴリ全部を返す。並び順は
- * backend で確定し、frontend での sort を不要にする。
+ * backend で確定し、frontend での sort を不要にする。``total_articles`` は
+ * その週に解析した記事総数 (生成済カテゴリの ``input_article_count`` の合計)。
  */
 export type BriefingListResponse = {
     /**
      * Currentweekstart
      */
     currentWeekStart: string;
+    /**
+     * Totalarticles
+     */
+    totalArticles: number;
     /**
      * Items
      */
@@ -687,8 +692,8 @@ export type ArticleSummaryOut = {
  * 一覧行に同梱する「最新 briefing 参照」。
  *
  * 未生成カテゴリでは ``BriefingListItem.latest = None`` で表現する。
- * 詳細 (``ReadyBriefing``) と異なり summary / chapters / keyArticles 等は持たず、
- * 一覧で表示する短い見出しのみ。
+ * 一覧バンド表示用に見出し / summary / 件数を同梱する。詳細
+ * (``ReadyBriefing``) と異なり chapters / keyArticles / articles は持たない。
  */
 export type BriefingListLatest = {
     /**
@@ -699,6 +704,14 @@ export type BriefingListLatest = {
      * Headline
      */
     headline: string;
+    /**
+     * Summary
+     */
+    summary: string;
+    /**
+     * Inputarticlecount
+     */
+    inputArticleCount: number;
 };
 
 /**

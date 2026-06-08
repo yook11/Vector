@@ -20,6 +20,8 @@ const CategorySchema = z.object({
 const BriefingListLatestSchema = z.object({
   weekStart: z.iso.date(),
   headline: z.string(),
+  summary: z.string(),
+  inputArticleCount: z.number(),
 });
 
 const BriefingListItemSchema = z.object({
@@ -29,6 +31,7 @@ const BriefingListItemSchema = z.object({
 
 export const BriefingListResponseSchema = z.object({
   currentWeekStart: z.iso.date(),
+  totalArticles: z.number(),
   items: z.array(BriefingListItemSchema),
 });
 

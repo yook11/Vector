@@ -7,12 +7,15 @@ describe("BriefingListResponseSchema", () => {
   it("accepts items with both ready (latest object) and empty (latest=null)", () => {
     const result = BriefingListResponseSchema.safeParse({
       currentWeekStart: "2026-04-27",
+      totalArticles: 64,
       items: [
         {
           category: CATEGORY,
           latest: {
             weekStart: "2026-04-20",
             headline: "今週の AI ハイライト",
+            summary: "今週の総括リード",
+            inputArticleCount: 64,
           },
         },
         {
@@ -23,9 +26,12 @@ describe("BriefingListResponseSchema", () => {
     });
     expect(result.success).toBe(true);
     if (result.success) {
+      expect(result.data.totalArticles).toBe(64);
       expect(result.data.items[0]?.latest?.headline).toBe(
         "今週の AI ハイライト",
       );
+      expect(result.data.items[0]?.latest?.summary).toBe("今週の総括リード");
+      expect(result.data.items[0]?.latest?.inputArticleCount).toBe(64);
       expect(result.data.items[1]?.latest).toBeNull();
     }
   });
@@ -33,6 +39,7 @@ describe("BriefingListResponseSchema", () => {
   it("rejects when currentWeekStart is not an ISO date", () => {
     const result = BriefingListResponseSchema.safeParse({
       currentWeekStart: "2026-04-27T00:00:00Z",
+      totalArticles: 0,
       items: [],
     });
     expect(result.success).toBe(false);
@@ -41,6 +48,7 @@ describe("BriefingListResponseSchema", () => {
   it("rejects when latest is missing entirely (must be present as null or object)", () => {
     const result = BriefingListResponseSchema.safeParse({
       currentWeekStart: "2026-04-27",
+      totalArticles: 0,
       items: [{ category: CATEGORY }],
     });
     expect(result.success).toBe(false);
