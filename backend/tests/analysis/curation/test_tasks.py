@@ -42,7 +42,7 @@ def _make_provider_fake() -> MagicMock:
 def _make_ctx(
     *,
     curator: MagicMock | None = None,
-    retry_count: int = 0,
+    retries: int = 0,
     max_retries: int = 0,
     gate_acquire: bool = True,
 ) -> MagicMock:
@@ -55,8 +55,9 @@ def _make_ctx(
     )
     if curator is not None:
         ctx.state.curator = curator
+    # taskiq SimpleRetryMiddleware が書く label は "_retries" (0..max_retries-1)
     ctx.message.labels = {
-        "retry_count": retry_count,
+        "_retries": retries,
         "max_retries": max_retries,
     }
     return ctx
@@ -247,9 +248,8 @@ class TestCurateContent:
         from app.analysis.curation.errors import map_provider_to_curation
         from app.queue.tasks.curation import curate_content
 
-        mock_ctx = _make_ctx(
-            curator=_make_provider_fake(), retry_count=1, max_retries=1
-        )
+        # 最終試行: _retries=max_retries-1=1 (旧 max_retries=1 は非最終が存在しない)
+        mock_ctx = _make_ctx(curator=_make_provider_fake(), retries=1, max_retries=2)
         raw_exc = AIProviderRateLimitedError("429")
         try:
             raise map_provider_to_curation(raw_exc) from raw_exc
@@ -286,9 +286,7 @@ class TestCurateContent:
         from app.analysis.curation.errors import map_provider_to_curation
         from app.queue.tasks.curation import curate_content
 
-        mock_ctx = _make_ctx(
-            curator=_make_provider_fake(), retry_count=0, max_retries=1
-        )
+        mock_ctx = _make_ctx(curator=_make_provider_fake(), retries=0, max_retries=2)
         # Phase 4: AIProviderConfigurationError は accept-and-discard。message
         # 引数は __str__ に出ない (SAFE_ATTRS=("CODE",) 経路のみ) ため、business
         # 側の secret 混入経路は構造的に塞がれる。本テストでは audit 側の

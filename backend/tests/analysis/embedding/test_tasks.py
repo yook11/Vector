@@ -40,7 +40,7 @@ def _make_ctx(
     *,
     embedder: MagicMock | None = None,
     gate: MagicMock | None = None,
-    retry_count: int = 0,
+    retries: int = 0,
     max_retries: int = 0,
 ) -> MagicMock:
     ctx = MagicMock()
@@ -50,8 +50,9 @@ def _make_ctx(
     )
     if embedder is not None:
         ctx.state.embedder = embedder
+    # taskiq SimpleRetryMiddleware が書く label は "_retries" (0..max_retries-1)
     ctx.message.labels = {
-        "retry_count": retry_count,
+        "_retries": retries,
         "max_retries": max_retries,
     }
     return ctx

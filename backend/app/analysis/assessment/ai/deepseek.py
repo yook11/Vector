@@ -128,32 +128,52 @@ class DeepSeekAssessor(BaseAssessor):
         )
 
         choice = resp.choices[0]
-        tool_calls = choice.message.tool_calls or []
-        # tool_call 構造違反は AI 応答の schema 違反として扱い、terminal な request
-        # invalid にはしない。tool_call 欠落と tool 名相違を別 defect に分ける。
-        if not tool_calls:
-            raise AssessmentResponseInvalidError(DeepSeekResponseDefect.NO_TOOL_CALL)
-        if tool_calls[0].function.name != tool_name:
-            raise AssessmentResponseInvalidError(DeepSeekResponseDefect.WRONG_TOOL_NAME)
-
-        raw_arguments = tool_calls[0].function.arguments or ""
+        # truncation 観測信号 (raw arguments = PII は載せない)。finish_reason="length"
+        # + completion_tokens≈max_tokens なら出力切れで JSON が壊れたと切り分けられる。
+        finish_reason = choice.finish_reason
+        completion_tokens = resp.usage.completion_tokens if resp.usage else None
         try:
-            payload = json.loads(raw_arguments)
-        except json.JSONDecodeError as exc:
-            # raw AI 応答は例外 message に含めない。
-            raise AssessmentResponseInvalidError(
-                DeepSeekResponseDefect.ARGUMENTS_NOT_JSON
-            ) from exc
+            tool_calls = choice.message.tool_calls or []
+            # tool_call 構造違反は AI 応答の schema 違反として扱い、terminal な request
+            # invalid にはしない。tool_call 欠落と tool 名相違を別 defect に分ける。
+            if not tool_calls:
+                raise AssessmentResponseInvalidError(
+                    DeepSeekResponseDefect.NO_TOOL_CALL
+                )
+            if tool_calls[0].function.name != tool_name:
+                raise AssessmentResponseInvalidError(
+                    DeepSeekResponseDefect.WRONG_TOOL_NAME
+                )
 
-        if not isinstance(payload, dict):
-            raise AssessmentResponseInvalidError(
-                DeepSeekResponseDefect.ARGUMENTS_NOT_DICT
+            raw_arguments = tool_calls[0].function.arguments or ""
+            try:
+                payload = json.loads(raw_arguments)
+            except json.JSONDecodeError as exc:
+                # raw AI 応答は例外 message に含めない。
+                raise AssessmentResponseInvalidError(
+                    DeepSeekResponseDefect.ARGUMENTS_NOT_JSON
+                ) from exc
+
+            if not isinstance(payload, dict):
+                raise AssessmentResponseInvalidError(
+                    DeepSeekResponseDefect.ARGUMENTS_NOT_DICT
+                )
+
+            # parse_assessment を先に通すことで strict 規約 (3 key 存在 + str 型強制)
+            # を担保。通過後の payload["category"] は str 確定なので str() 暗黙 coerce
+            # を入れない (silent な None / int の文字列化を許さない)。
+            result = parse_assessment(payload)
+        except AssessmentResponseInvalidError as exc:
+            # 応答が使えない時に truncation 判定材料を残す (失敗の扱いは変えない)。
+            logger.warning(
+                "assessment_deepseek_response_defect",
+                code=exc.code,
+                finish_reason=finish_reason,
+                completion_tokens=completion_tokens,
+                max_tokens=self.SPEC.gen_config.get("max_tokens"),
             )
+            raise
 
-        # parse_assessment を先に通すことで strict 規約 (3 key 存在 + str 型強制)
-        # を担保。通過後の payload["category"] は str 確定なので str() 暗黙 coerce
-        # を入れない (silent な None / int の文字列化を許さない)。
-        result = parse_assessment(payload)
         raw_category = payload["category"]
         # match で result を narrow して container 単位の Generic 型を確定する
         # (``AssessmentCall[InScope]`` / ``AssessmentCall[OutOfScope]``)。

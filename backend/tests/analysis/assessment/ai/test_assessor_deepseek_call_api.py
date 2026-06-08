@@ -20,6 +20,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from pydantic import SecretStr
+from structlog.testing import capture_logs
 
 from app.analysis.assessment.ai.deepseek import (
     DeepSeekAssessor,
@@ -44,8 +45,14 @@ def _stub_response(
     tool_name: str = DEEPSEEK_ASSESSMENT_SPEC.tool_name,
     finish_reason: str = "tool_calls",
     no_tool_calls: bool = False,
+    completion_tokens: int | None = None,
 ) -> MagicMock:
-    """SDK Response の最小 stub (choices[0].message.tool_calls[0].function を持つ)。"""
+    """SDK Response の最小 stub (choices[0].message.tool_calls[0].function を持つ)。
+
+    completion_tokens を None のままにすると resp.usage は None になる。
+    truncation 観測ログの検証など completion_tokens を具体値で assert したい場合は
+    整数値を渡すこと。
+    """
     response = MagicMock()
     choice = MagicMock()
     choice.finish_reason = finish_reason
@@ -60,6 +67,13 @@ def _stub_response(
         choice.message.tool_calls = [tool_call]
 
     response.choices = [choice]
+
+    if completion_tokens is not None:
+        response.usage = MagicMock()
+        response.usage.completion_tokens = completion_tokens
+    else:
+        response.usage = None
+
     return response
 
 
@@ -227,3 +241,140 @@ class TestDeepSeekInvalidArguments:
             await assessor._call_api("prompt")
 
         assert exc_info.value.code == DeepSeekResponseDefect.ARGUMENTS_NOT_JSON
+
+
+# truncation 観測ログの不変条件
+
+
+def _stub_truncated_response(*, completion_tokens: int = 512) -> MagicMock:
+    """finish_reason="length" で JSON が切れた状況の stub。"""
+    return _stub_response(
+        arguments="not json at all",
+        finish_reason="length",
+        completion_tokens=completion_tokens,
+    )
+
+
+class TestDeepSeekTruncationObservabilityLog:
+    """defect 経路で truncation 観測ログが出る不変条件。
+
+    - ログが出ること / 各フィールドが stub した具体値であること
+    - 例外契約(re-raise)が変わっていないこと
+    - 正常系ではログが出ないこと
+    を 1 テスト = 1 アサーション原則に従い分割して pin する。
+    """
+
+    @pytest.mark.asyncio
+    async def test_defect_emits_warning_event(self) -> None:
+        """defect 経路で response_defect イベントが 1 件 emit される。"""
+        assessor = DeepSeekAssessor()
+        _patch_assessor_call(assessor, _stub_truncated_response())
+
+        with capture_logs() as logs:
+            with pytest.raises(AssessmentResponseInvalidError):
+                await assessor._call_api("prompt")
+
+        defect_logs = [
+            e for e in logs if e.get("event") == "assessment_deepseek_response_defect"
+        ]
+        assert len(defect_logs) == 1
+
+    @pytest.mark.asyncio
+    async def test_defect_log_carries_finish_reason(self) -> None:
+        """観測ログの finish_reason が stub した値 ``"length"`` であること。"""
+        assessor = DeepSeekAssessor()
+        _patch_assessor_call(assessor, _stub_truncated_response())
+
+        with capture_logs() as logs:
+            with pytest.raises(AssessmentResponseInvalidError):
+                await assessor._call_api("prompt")
+
+        log = next(
+            e for e in logs if e.get("event") == "assessment_deepseek_response_defect"
+        )
+        assert log["finish_reason"] == "length"
+
+    @pytest.mark.asyncio
+    async def test_defect_log_carries_completion_tokens(self) -> None:
+        """観測ログの completion_tokens が stub した具体値 512 であること。
+
+        MagicMock のままだと等価比較が通ってしまうため、stub で必ず整数値を設定する。
+        production が捕捉をやめたら assert が落ちる非空虚な検証。
+        """
+        assessor = DeepSeekAssessor()
+        _patch_assessor_call(assessor, _stub_truncated_response(completion_tokens=512))
+
+        with capture_logs() as logs:
+            with pytest.raises(AssessmentResponseInvalidError):
+                await assessor._call_api("prompt")
+
+        log = next(
+            e for e in logs if e.get("event") == "assessment_deepseek_response_defect"
+        )
+        assert log["completion_tokens"] == 512
+
+    @pytest.mark.asyncio
+    async def test_defect_log_carries_max_tokens_from_spec(self) -> None:
+        """観測ログの max_tokens が spec 由来の値であること。"""
+        assessor = DeepSeekAssessor()
+        _patch_assessor_call(assessor, _stub_truncated_response())
+
+        with capture_logs() as logs:
+            with pytest.raises(AssessmentResponseInvalidError):
+                await assessor._call_api("prompt")
+
+        log = next(
+            e for e in logs if e.get("event") == "assessment_deepseek_response_defect"
+        )
+        assert log["max_tokens"] == DEEPSEEK_ASSESSMENT_SPEC.gen_config["max_tokens"]
+
+    @pytest.mark.asyncio
+    async def test_defect_log_carries_code(self) -> None:
+        """観測ログの code が ``ARGUMENTS_NOT_JSON`` であること。"""
+        assessor = DeepSeekAssessor()
+        _patch_assessor_call(assessor, _stub_truncated_response())
+
+        with capture_logs() as logs:
+            with pytest.raises(AssessmentResponseInvalidError):
+                await assessor._call_api("prompt")
+
+        log = next(
+            e for e in logs if e.get("event") == "assessment_deepseek_response_defect"
+        )
+        assert log["code"] == DeepSeekResponseDefect.ARGUMENTS_NOT_JSON
+
+    @pytest.mark.asyncio
+    async def test_defect_reraises_assessment_response_invalid_error(self) -> None:
+        """ログ追加後も ARGUMENTS_NOT_JSON で re-raise されること。"""
+        assessor = DeepSeekAssessor()
+        _patch_assessor_call(assessor, _stub_truncated_response())
+
+        with capture_logs():
+            with pytest.raises(AssessmentResponseInvalidError) as exc_info:
+                await assessor._call_api("prompt")
+
+        assert exc_info.value.code == DeepSeekResponseDefect.ARGUMENTS_NOT_JSON
+
+    @pytest.mark.asyncio
+    async def test_success_does_not_emit_defect_log(self) -> None:
+        """正常系では ``assessment_deepseek_response_defect`` が emit されないこと。"""
+        assessor = DeepSeekAssessor()
+        args = json.dumps(
+            {"category": "ai", "investor_take": "Positive signal.", "key_points": []}
+        )
+        _patch_assessor_call(
+            assessor,
+            _stub_response(
+                arguments=args,
+                finish_reason="tool_calls",
+                completion_tokens=100,
+            ),
+        )
+
+        with capture_logs() as logs:
+            await assessor._call_api("prompt")
+
+        defect_logs = [
+            e for e in logs if e.get("event") == "assessment_deepseek_response_defect"
+        ]
+        assert defect_logs == []

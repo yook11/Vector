@@ -52,15 +52,16 @@ def _make_gate_fake() -> MagicMock:
     return gate
 
 
-def _make_ctx(retry_count: int = 0, max_retries: int = 2) -> MagicMock:
+def _make_ctx(retries: int = 0, max_retries: int = 2) -> MagicMock:
     ctx = MagicMock()
     ctx.state = SimpleNamespace(
         session_factory=MagicMock(),
         provider_rate_limit_gate=_make_gate_fake(),
     )
     ctx.state.embedder = _make_embedder_fake()
+    # taskiq SimpleRetryMiddleware が書く label は "_retries" (0..max_retries-1)
     ctx.message.labels = {
-        "retry_count": retry_count,
+        "_retries": retries,
         "max_retries": max_retries,
     }
     return ctx
@@ -134,7 +135,9 @@ async def test_recoverable_reraise_true_raises() -> None:
     """Handler が ``reraise=True`` を返したら task は元の exc を raise する。"""
     from app.queue.tasks.embedding import generate_embedding
 
-    ctx = _make_ctx(retry_count=0, max_retries=2)  # retry 余地あり
+    ctx = _make_ctx(
+        retries=0, max_retries=2
+    )  # retry 余地あり: _retries=0 < max_retries-1
     exc = EmbeddingRecoverableError(
         code="ai_error_network", failure_kind="attempt_scoped"
     )
@@ -164,7 +167,8 @@ async def test_recoverable_reraise_false_returns() -> None:
     """
     from app.queue.tasks.embedding import generate_embedding
 
-    ctx = _make_ctx(retry_count=2, max_retries=2)  # 最終試行
+    # 最終試行: _retries=max_retries-1=1 (旧 retry_count=2 は production が書かない値)
+    ctx = _make_ctx(retries=1, max_retries=2)
     exc = EmbeddingRecoverableError(
         code="ai_error_network", failure_kind="attempt_scoped"
     )

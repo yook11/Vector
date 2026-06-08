@@ -16,9 +16,7 @@ from app.queue.messages.briefing import BriefingTaskInput
 JST = ZoneInfo("Asia/Tokyo")
 
 
-def _ctx_with_session_factory(
-    *, retry_count: int = 0, max_retries: int = 2
-) -> MagicMock:
+def _ctx_with_session_factory(*, retries: int = 0, max_retries: int = 2) -> MagicMock:
     """``ctx.message.labels`` を持つ taskiq Context モック。"""
     ctx = MagicMock()
     session = MagicMock()
@@ -31,7 +29,8 @@ def _ctx_with_session_factory(
     # generator は composition root が broker_briefing 起動時に state へ wire する。
     # task はそれを読んで service に DI するため、ctx.state に明示的に置く。
     ctx.state.briefing_generator = MagicMock()
-    ctx.message.labels = {"retry_count": retry_count, "max_retries": max_retries}
+    # taskiq SimpleRetryMiddleware が書く label は "_retries" (0..max_retries-1)
+    ctx.message.labels = {"_retries": retries, "max_retries": max_retries}
     return ctx
 
 
@@ -340,15 +339,13 @@ class TestSubtaskFailureAudit:
     async def _run_with_exc(
         exc: BaseException,
         *,
-        retry_count: int,
+        retries: int,
         max_retries: int,
     ) -> tuple[MagicMock, MagicMock]:
         """指定 exc + retry 軸で subtask を 1 回流し、audit cls の mock を返す。"""
         from app.queue.tasks import briefing
 
-        ctx = _ctx_with_session_factory(
-            retry_count=retry_count, max_retries=max_retries
-        )
+        ctx = _ctx_with_session_factory(retries=retries, max_retries=max_retries)
         ready = ReadyForBriefing(
             week_start=date(2026, 4, 20), category_id=1, force=False
         )
@@ -379,7 +376,8 @@ class TestSubtaskFailureAudit:
     @pytest.mark.asyncio
     async def test_records_failure_then_reraises_middle_attempt(self) -> None:
         exc = BriefingConfigurationError("DEEPSEEK_API_KEY missing")
-        _, append_failure = await self._run_with_exc(exc, retry_count=1, max_retries=2)
+        # 非最終試行: _retries=0 < max_retries-1=1 → retry_exhausted=None
+        _, append_failure = await self._run_with_exc(exc, retries=0, max_retries=2)
 
         append_failure.assert_awaited_once()
         kwargs = append_failure.await_args.kwargs
@@ -390,7 +388,8 @@ class TestSubtaskFailureAudit:
     @pytest.mark.asyncio
     async def test_records_failure_with_retry_exhausted_on_last_attempt(self) -> None:
         exc = BriefingConfigurationError("DEEPSEEK_API_KEY missing")
-        _, append_failure = await self._run_with_exc(exc, retry_count=2, max_retries=2)
+        # 最終試行: _retries=max_retries-1=1
+        _, append_failure = await self._run_with_exc(exc, retries=1, max_retries=2)
 
         kwargs = append_failure.await_args.kwargs
         assert kwargs["retry_exhausted"] is True

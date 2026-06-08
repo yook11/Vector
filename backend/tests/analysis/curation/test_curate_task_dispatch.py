@@ -61,7 +61,7 @@ def _make_provider_fake() -> MagicMock:
     return fake
 
 
-def _make_ctx(retry_count: int = 0, max_retries: int = 1) -> MagicMock:
+def _make_ctx(retries: int = 0, max_retries: int = 2) -> MagicMock:
     ctx = MagicMock()
     gate = MagicMock()
     gate.acquire = AsyncMock(return_value=True)
@@ -70,8 +70,9 @@ def _make_ctx(retry_count: int = 0, max_retries: int = 1) -> MagicMock:
         provider_rate_limit_gate=gate,
     )
     ctx.state.curator = _make_provider_fake()
+    # taskiq SimpleRetryMiddleware が書く label は "_retries" (0..max_retries-1)
     ctx.message.labels = {
-        "retry_count": retry_count,
+        "_retries": retries,
         "max_retries": max_retries,
     }
     return ctx
@@ -195,7 +196,9 @@ async def test_retryable_reraise_true_raises(
     """Handler が ``reraise=True`` を返したら task は元の exc を raise する。"""
     from app.queue.tasks.curation import curate_content
 
-    ctx = _make_ctx(retry_count=0, max_retries=1)  # retry 余地あり
+    # retry 余地あり: max_retries=1 では非最終試行が存在しないため max_retries=2 を使う
+    # (_retries=0 < max_retries-1=1 で非最終)
+    ctx = _make_ctx(retries=0, max_retries=2)
 
     with (
         _patch_try_advance_from(),
@@ -217,7 +220,8 @@ async def test_retryable_reraise_false_returns() -> None:
     """Handler が ``reraise=False`` を返したら task は return する (raise しない)。"""
     from app.queue.tasks.curation import curate_content
 
-    ctx = _make_ctx(retry_count=1, max_retries=1)  # 最終試行
+    # 最終試行: _retries=max_retries-1=1 (旧 max_retries=1 では非最終が存在しない)
+    ctx = _make_ctx(retries=1, max_retries=2)
 
     with (
         _patch_try_advance_from(),
@@ -256,7 +260,7 @@ async def test_rate_limit_class_delegates_to_handler(
     """
     from app.queue.tasks.curation import curate_content
 
-    ctx = _make_ctx(retry_count=0, max_retries=1)
+    ctx = _make_ctx(retries=0, max_retries=2)
 
     with (
         _patch_try_advance_from(),

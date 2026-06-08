@@ -40,7 +40,7 @@ def _make_provider_fake() -> MagicMock:
 def _make_ctx(
     *,
     assessor: MagicMock | None = None,
-    retry_count: int = 0,
+    retries: int = 0,
     max_retries: int = 0,
     gate_acquire: bool = True,
 ) -> MagicMock:
@@ -53,8 +53,9 @@ def _make_ctx(
     )
     if assessor is not None:
         ctx.state.assessor = assessor
+    # taskiq SimpleRetryMiddleware が書く label は "_retries" (0..max_retries-1)
     ctx.message.labels = {
-        "retry_count": retry_count,
+        "_retries": retries,
         "max_retries": max_retries,
     }
     return ctx
@@ -244,7 +245,9 @@ class TestAssessContent:
         from app.queue.tasks.assessment import assess_content
 
         mock_ctx = _make_ctx(
-            assessor=_make_provider_fake(), retry_count=0, max_retries=2
+            assessor=_make_provider_fake(),
+            retries=0,
+            max_retries=2,  # retry 余地あり
         )
         trigger = _make_trigger()
 
@@ -269,9 +272,8 @@ class TestAssessContent:
         """Handler が ``reraise=False`` を返したら task は return する。"""
         from app.queue.tasks.assessment import assess_content
 
-        mock_ctx = _make_ctx(
-            assessor=_make_provider_fake(), retry_count=2, max_retries=2
-        )
+        # 最終試行: _retries=max_retries-1=1
+        mock_ctx = _make_ctx(assessor=_make_provider_fake(), retries=1, max_retries=2)
         trigger = _make_trigger()
 
         with (
