@@ -3,18 +3,14 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 import { connection } from "next/server";
 import { Suspense } from "react";
-import { getProtectedNavItems } from "@/components/layout/nav-items";
-import { SlimMasthead } from "@/components/layout/SlimMasthead";
-import { ThemeToggle } from "@/components/layout/ThemeToggle";
+import { ShellMasthead } from "@/components/layout/ShellMasthead";
 import { PaperSurface, PaperTexture } from "@/components/paper";
-import { UserMenu } from "@/features/auth";
 import {
   BriefingDocument,
   getBriefingDetailViewModel,
 } from "@/features/briefing";
 import { ApiError } from "@/lib/api/error";
 import { getCurrentSession, requireSession } from "@/lib/auth/guards";
-import { narrowRole } from "@/lib/auth/role";
 
 interface BriefingDetailPageProps {
   params: Promise<{ category: string }>;
@@ -128,26 +124,13 @@ export default async function BriefingDetailPage({
   params,
 }: BriefingDetailPageProps) {
   const { category } = await params;
-  // マストヘッドの nav 出し分けに session を使う。データ取得 gate は
-  // BriefingDetailContent 側 (Suspense 単位) でも別途行う。
-  const session = await requireSession();
-  const isAdmin = narrowRole(session.user.role) === "admin";
-  const navItems = getProtectedNavItems(isAdmin);
+  // DAL gate (多重防御): データ取得 gate は BriefingDetailContent 側 (Suspense
+  // 単位) でも別途行うが、静的シェル描画前にここでも認可する。
+  await requireSession();
 
   return (
     <PaperSurface>
-      <SlimMasthead
-        navItems={navItems}
-        activeHref="/briefing"
-        themeSlot={<ThemeToggle />}
-        userMenuSlot={
-          <UserMenu
-            compact
-            buttonClassName="rounded-none text-[var(--vector-ink-muted)] hover:bg-transparent hover:text-[var(--vector-accent)]"
-            emailClassName="text-[var(--vector-ink-muted)]"
-          />
-        }
-      />
+      <ShellMasthead activeHref="/briefing" />
       <div className="relative">
         <PaperTexture />
         <main className="relative z-10 mx-auto max-w-[1180px] px-5 pb-20 sm:px-8 lg:px-10">

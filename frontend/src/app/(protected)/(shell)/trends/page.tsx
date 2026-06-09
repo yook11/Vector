@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import { connection } from "next/server";
+import { ShellMasthead } from "@/components/layout/ShellMasthead";
 import { PaperSurface, PaperTexture } from "@/components/paper";
 import {
   getTrendsViewModel,
@@ -23,6 +24,7 @@ export default async function TrendsPage() {
   if (data.state === "empty") {
     return (
       <PaperSurface>
+        <ShellMasthead activeHref="/trends" />
         <div className="relative min-h-dvh w-full overflow-hidden">
           <PaperTexture />
           <TrendsEmptyState />
@@ -33,6 +35,7 @@ export default async function TrendsPage() {
 
   return (
     <PaperSurface>
+      <ShellMasthead activeHref="/trends" />
       <div className="relative min-h-dvh w-full overflow-hidden">
         <PaperTexture />
         <TrendsView data={data} />

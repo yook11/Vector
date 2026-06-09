@@ -1,12 +1,9 @@
 import type { Metadata } from "next";
 import { notFound } from "next/navigation";
 import { Suspense } from "react";
-import { getProtectedNavItems } from "@/components/layout/nav-items";
-import { SlimMasthead } from "@/components/layout/SlimMasthead";
-import { ThemeToggle } from "@/components/layout/ThemeToggle";
+import { ShellMasthead } from "@/components/layout/ShellMasthead";
 import { PaperSurface, PaperTexture } from "@/components/paper";
 import { Skeleton } from "@/components/ui/skeleton";
-import { UserMenu } from "@/features/auth";
 import {
   getArticleById,
   getSimilarArticles,
@@ -16,7 +13,6 @@ import {
 import { getWatchlistIds } from "@/features/watchlist";
 import { ApiError } from "@/lib/api/error";
 import { getCurrentSession, requireSession } from "@/lib/auth/guards";
-import { narrowRole } from "@/lib/auth/role";
 import { PositiveIdParamSchema } from "@/lib/validation/id";
 import type {
   ArticleBrief,
@@ -111,11 +107,8 @@ export default async function NewsPage({ params }: NewsPageProps) {
   const articleId = parsed.data;
 
   // DAL gate: malformed URL を未認証でも 404 で返す現状の防御順序を保つため、
-  // 404 判定の後・データ取得の前に置く。未認証はここで redirect。session は
-  // マストヘッドの nav 出し分けに使う。
-  const session = await requireSession();
-  const isAdmin = narrowRole(session.user.role) === "admin";
-  const navItems = getProtectedNavItems(isAdmin);
+  // 404 判定の後・データ取得の前に置く。未認証はここで redirect。
+  await requireSession();
 
   // Fire all fetches in parallel. similar は Suspense'd child に forward。
   // article 単独で 404 判定したいので await は分割する (Promise.all だと
@@ -137,18 +130,7 @@ export default async function NewsPage({ params }: NewsPageProps) {
 
   return (
     <PaperSurface>
-      <SlimMasthead
-        navItems={navItems}
-        activeHref="/"
-        themeSlot={<ThemeToggle />}
-        userMenuSlot={
-          <UserMenu
-            compact
-            buttonClassName="rounded-none text-[var(--vector-ink-muted)] hover:bg-transparent hover:text-[var(--vector-accent)]"
-            emailClassName="text-[var(--vector-ink-muted)]"
-          />
-        }
-      />
+      <ShellMasthead activeHref="/" />
       <div className="relative">
         <PaperTexture />
         <main className="relative z-10 mx-auto max-w-[1180px] px-5 pb-20 sm:px-8 lg:px-10">

@@ -70,7 +70,7 @@ test.describe("Watchlist add/remove flow", () => {
 
     await page.goto("/watchlist");
     await expect(
-      page.getByRole("heading", { name: "Watchlist" }),
+      page.getByRole("heading", { name: "ウォッチリスト" }),
     ).toBeVisible();
     // 追加した記事が表示されている (空 state ではない)
     await expect(page.getByText("No saved articles")).toHaveCount(0);

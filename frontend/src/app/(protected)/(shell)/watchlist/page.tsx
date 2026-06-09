@@ -2,13 +2,14 @@ import type { Metadata } from "next";
 import Link from "next/link";
 import { Suspense } from "react";
 import { EmptyState } from "@/components/feedback/EmptyState";
-import { PageContainer } from "@/components/layout/PageContainer";
-import { Skeleton } from "@/components/ui/skeleton";
+import { ShellMasthead } from "@/components/layout/ShellMasthead";
+import { PaperSurface, PaperTexture } from "@/components/paper";
 import {
+  DashboardArticleListSkeleton,
+  DashboardPaperArticleList,
   DEFAULT_PER_PAGE,
   isPerPageOption,
-  NewsList,
-  NewsPagination,
+  PaperNewsPagination,
   type PerPageOption,
   PerPageSelect,
   parseArticleQuery,
@@ -40,14 +41,13 @@ async function WatchlistContent({
   if (data.items.length === 0) {
     return (
       <EmptyState
-        title="No saved articles"
+        title="ウォッチした記事がありません"
         description={
           <>
-            Bookmark articles from the{" "}
             <Link href="/" className="underline">
-              dashboard
+              ダッシュボード
             </Link>{" "}
-            to see them here.
+            で記事をブックマークすると、ここに表示されます。
           </>
         }
       />
@@ -60,29 +60,9 @@ async function WatchlistContent({
 
   return (
     <>
-      <NewsList items={data.items} watchedIds={watchedIds} />
-      <NewsPagination page={data.page} totalPages={data.totalPages} />
+      <DashboardPaperArticleList items={data.items} watchedIds={watchedIds} />
+      <PaperNewsPagination page={data.page} totalPages={data.totalPages} />
     </>
-  );
-}
-
-function WatchlistSkeleton() {
-  return (
-    <div
-      className="grid gap-x-8 gap-y-0 md:grid-cols-2 xl:grid-cols-3"
-      aria-hidden="true"
-    >
-      {[0, 1, 2, 3, 4, 5].map((i) => (
-        <div
-          key={i}
-          className="flex flex-col gap-3 py-6 border-b border-border"
-        >
-          <Skeleton className="h-4 w-20" />
-          <Skeleton className="h-5 w-full" />
-          <Skeleton className="h-4 w-3/4" />
-        </div>
-      ))}
-    </div>
   );
 }
 
@@ -101,23 +81,42 @@ export default async function WatchlistPage({
       : DEFAULT_PER_PAGE;
 
   return (
-    <PageContainer>
-      <div className="flex items-center justify-between gap-4">
-        <h1 className="text-base font-medium">Watchlist</h1>
-        <Suspense fallback={null}>
-          <PerPageSelect current={perPageSelectValue} />
-        </Suspense>
+    <PaperSurface>
+      <ShellMasthead activeHref="/watchlist" />
+      <div className="relative min-h-dvh w-full overflow-hidden">
+        <PaperTexture />
+        <main className="relative z-10 mx-auto max-w-[1180px] px-[clamp(18px,4vw,40px)] pt-[30px] pb-[80px]">
+          <header className="mb-7 flex flex-wrap items-end justify-between gap-4 border-b-[3px] border-double border-[var(--vector-ink)] pb-4">
+            <div>
+              <p
+                className="text-[14px] font-semibold uppercase tracking-[0.3em] text-[var(--vector-accent-ink)]"
+                style={{ fontFamily: "var(--font-vector-display)" }}
+              >
+                WATCHLIST
+              </p>
+              <h1
+                className="mt-1.5 text-[clamp(28px,3.6vw,40px)] font-extrabold tracking-[0.01em] text-[var(--vector-ink)]"
+                style={{ fontFamily: "var(--font-vector-serif)" }}
+              >
+                ウォッチリスト
+              </h1>
+            </div>
+            <Suspense fallback={null}>
+              <PerPageSelect current={perPageSelectValue} />
+            </Suspense>
+          </header>
+          {/* URL searchParams を JSON 化して Suspense key に与えることで、
+              searchParams が変化したときに fallback (skeleton) を再表示する。
+              dashboard 側 (`(protected)/page.tsx`) と統一した戦略。今後
+              searchParams が増えた際に key 候補の追加漏れを防ぐ。 */}
+          <Suspense
+            key={JSON.stringify({ page, perPage })}
+            fallback={<DashboardArticleListSkeleton />}
+          >
+            <WatchlistContent page={page} perPage={perPage} />
+          </Suspense>
+        </main>
       </div>
-      {/* URL searchParams を JSON 化して Suspense key に与えることで、
-          searchParams が変化したときに fallback (skeleton) を再表示する。
-          dashboard 側 (`(protected)/page.tsx`) と統一した戦略。今後
-          searchParams が増えた際に key 候補の追加漏れを防ぐ。 */}
-      <Suspense
-        key={JSON.stringify({ page, perPage })}
-        fallback={<WatchlistSkeleton />}
-      >
-        <WatchlistContent page={page} perPage={perPage} />
-      </Suspense>
-    </PageContainer>
+    </PaperSurface>
   );
 }

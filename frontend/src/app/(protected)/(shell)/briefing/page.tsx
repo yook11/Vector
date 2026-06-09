@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import { connection } from "next/server";
+import { ShellMasthead } from "@/components/layout/ShellMasthead";
 import { PaperSurface, PaperTexture } from "@/components/paper";
 import {
   BriefingIndexView,
@@ -15,6 +16,7 @@ export default async function BriefingListPage() {
   const data = await getBriefingListViewModel();
   return (
     <PaperSurface>
+      <ShellMasthead activeHref="/briefing" />
       <div className="relative min-h-dvh w-full overflow-hidden">
         <PaperTexture />
         <BriefingIndexView data={data} />
