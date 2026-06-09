@@ -77,14 +77,19 @@
                     "group": [
                       "@/features/news",
                       "@/features/news/**",
+                      "@/features/watchlist/**",
                       "@/features/sources",
                       "@/features/sources/**",
                       "@/features/auth",
                       "@/features/auth/**",
-                      "@/features/digest",
-                      "@/features/digest/**"
+                      "@/features/trends",
+                      "@/features/trends/**",
+                      "@/features/briefing",
+                      "@/features/briefing/**",
+                      "@/features/pipeline-status",
+                      "@/features/pipeline-status/**"
                     ],
-                    "message": "features/news 内では自 feature を deep path / Public API 経由で import せず相対 import を使うこと。他 features 直接参照も禁止 (features/watchlist のみ Public API '@/features/watchlist' 経由で compose 可)。"
+                    "message": "features/news 内は自 feature を相対 import で参照すること。他 feature への import は禁止 (Public API・deep とも)。例外として features/watchlist のみ Public API '@/features/watchlist' 経由の compose を許可 (NewsList→WatchlistButton、一方向のみ)。"
                   }
                 ]
               }
@@ -112,10 +117,14 @@
                       "@/features/sources/**",
                       "@/features/auth",
                       "@/features/auth/**",
-                      "@/features/digest",
-                      "@/features/digest/**"
+                      "@/features/trends",
+                      "@/features/trends/**",
+                      "@/features/briefing",
+                      "@/features/briefing/**",
+                      "@/features/pipeline-status",
+                      "@/features/pipeline-status/**"
                     ],
-                    "message": "features/watchlist 内では自 feature を deep path / Public API 経由で import せず相対 import を使うこと。他 features は Public API '@/features/<name>' のみ。"
+                    "message": "features/watchlist 内は自 feature を相対 import で参照すること。他 feature への import (Public API・deep とも) は禁止 (機能境界の構造的強制)。"
                   }
                 ]
               }
@@ -143,10 +152,14 @@
                       "@/features/watchlist/**",
                       "@/features/auth",
                       "@/features/auth/**",
-                      "@/features/digest",
-                      "@/features/digest/**"
+                      "@/features/trends",
+                      "@/features/trends/**",
+                      "@/features/briefing",
+                      "@/features/briefing/**",
+                      "@/features/pipeline-status",
+                      "@/features/pipeline-status/**"
                     ],
-                    "message": "features/sources 内では自 feature を deep path / Public API 経由で import せず相対 import を使うこと。他 features は Public API '@/features/<name>' のみ。"
+                    "message": "features/sources 内は自 feature を相対 import で参照すること。他 feature への import (Public API・deep とも) は禁止 (機能境界の構造的強制)。"
                   }
                 ]
               }
@@ -174,10 +187,14 @@
                       "@/features/watchlist/**",
                       "@/features/sources",
                       "@/features/sources/**",
-                      "@/features/digest",
-                      "@/features/digest/**"
+                      "@/features/trends",
+                      "@/features/trends/**",
+                      "@/features/briefing",
+                      "@/features/briefing/**",
+                      "@/features/pipeline-status",
+                      "@/features/pipeline-status/**"
                     ],
-                    "message": "features/auth 内では自 feature を deep path / Public API 経由で import せず相対 import を使うこと。他 features は Public API '@/features/<name>' のみ。"
+                    "message": "features/auth 内は自 feature を相対 import で参照すること。他 feature への import (Public API・deep とも) は禁止 (機能境界の構造的強制)。"
                   }
                 ]
               }
@@ -187,7 +204,7 @@
       }
     },
     {
-      "includes": ["src/features/digest/**"],
+      "includes": ["src/features/trends/**"],
       "linter": {
         "rules": {
           "style": {
@@ -197,8 +214,8 @@
                 "patterns": [
                   {
                     "group": [
-                      "@/features/digest",
-                      "@/features/digest/**",
+                      "@/features/trends",
+                      "@/features/trends/**",
                       "@/features/news",
                       "@/features/news/**",
                       "@/features/watchlist",
@@ -206,9 +223,83 @@
                       "@/features/sources",
                       "@/features/sources/**",
                       "@/features/auth",
-                      "@/features/auth/**"
+                      "@/features/auth/**",
+                      "@/features/briefing",
+                      "@/features/briefing/**",
+                      "@/features/pipeline-status",
+                      "@/features/pipeline-status/**"
                     ],
-                    "message": "features/digest 内では自 feature を deep path / Public API 経由で import せず相対 import を使うこと。他 features は Public API '@/features/<name>' のみ。"
+                    "message": "features/trends 内は自 feature を相対 import で参照すること。他 feature への import (Public API・deep とも) は禁止 (機能境界の構造的強制)。"
+                  }
+                ]
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "includes": ["src/features/briefing/**"],
+      "linter": {
+        "rules": {
+          "style": {
+            "noRestrictedImports": {
+              "level": "error",
+              "options": {
+                "patterns": [
+                  {
+                    "group": [
+                      "@/features/briefing",
+                      "@/features/briefing/**",
+                      "@/features/news",
+                      "@/features/news/**",
+                      "@/features/watchlist",
+                      "@/features/watchlist/**",
+                      "@/features/sources",
+                      "@/features/sources/**",
+                      "@/features/auth",
+                      "@/features/auth/**",
+                      "@/features/trends",
+                      "@/features/trends/**",
+                      "@/features/pipeline-status",
+                      "@/features/pipeline-status/**"
+                    ],
+                    "message": "features/briefing 内は自 feature を相対 import で参照すること。他 feature への import (Public API・deep とも) は禁止 (機能境界の構造的強制)。"
+                  }
+                ]
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "includes": ["src/features/pipeline-status/**"],
+      "linter": {
+        "rules": {
+          "style": {
+            "noRestrictedImports": {
+              "level": "error",
+              "options": {
+                "patterns": [
+                  {
+                    "group": [
+                      "@/features/pipeline-status",
+                      "@/features/pipeline-status/**",
+                      "@/features/news",
+                      "@/features/news/**",
+                      "@/features/watchlist",
+                      "@/features/watchlist/**",
+                      "@/features/sources",
+                      "@/features/sources/**",
+                      "@/features/auth",
+                      "@/features/auth/**",
+                      "@/features/trends",
+                      "@/features/trends/**",
+                      "@/features/briefing",
+                      "@/features/briefing/**"
+                    ],
+                    "message": "features/pipeline-status 内は自 feature を相対 import で参照すること。他 feature への import (Public API・deep とも) は禁止 (機能境界の構造的強制)。"
                   }
                 ]
               }

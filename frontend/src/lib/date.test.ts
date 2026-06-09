@@ -32,6 +32,13 @@ describe("formatDate", () => {
       const result = formatDate("2024-03-15T10:30:00Z");
       expect(result).not.toMatch(/:\d{2}/);
     });
+
+    it("renders the JST calendar day regardless of host timezone", () => {
+      // 22:00Z は JST (UTC+9) では翌日 07:00。UTC コンテナでも 16 日になること。
+      const result = formatDate("2024-03-15T22:00:00Z");
+      expect(result).toMatch(/16/);
+      expect(result).not.toMatch(/15/);
+    });
   });
 
   describe("withTime: true", () => {

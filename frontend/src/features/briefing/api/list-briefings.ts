@@ -1,11 +1,11 @@
 import { cacheLife, cacheTag } from "next/cache";
-import {
-  type BriefingListResponseParsed,
-  BriefingListResponseSchema,
-} from "@/features/briefing/schemas/briefing";
 import { publicClient } from "@/lib/api/hey-api-interceptors";
 import { cacheTags } from "@/lib/cache/tags";
 import { listBriefings as listBriefingsSdk } from "@/types/sdk.gen";
+import {
+  type BriefingListResponseParsed,
+  BriefingListResponseSchema,
+} from "../schemas/briefing";
 
 /**
  * 全カテゴリの最新 briefing 一覧を取得 (anonymous でも閲覧可能)。

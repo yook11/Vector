@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { MentionType } from "@/types";
-import { getCategoryDisplay, MENTION_TYPE_META } from "./display";
+import { MENTION_TYPE_META } from "./display";
 
 describe("MENTION_TYPE_META", () => {
   const ALL_TYPES: MentionType[] = [
@@ -25,25 +25,5 @@ describe("MENTION_TYPE_META", () => {
     expect(MENTION_TYPE_META.person.label).toBe("人物");
     expect(MENTION_TYPE_META.academic.label).toBe("研究");
     expect(MENTION_TYPE_META.government.label).toBe("政府");
-  });
-});
-
-describe("getCategoryDisplay", () => {
-  it('ai → code="A.I."', () => {
-    expect(getCategoryDisplay("ai").code).toBe("A.I.");
-  });
-
-  it('computing → code="COMPUTE"', () => {
-    expect(getCategoryDisplay("computing").code).toBe("COMPUTE");
-  });
-
-  it('semiconductor → code="SEMICON"', () => {
-    expect(getCategoryDisplay("semiconductor").code).toBe("SEMICON");
-  });
-
-  it("未知 slug は toUpperCase の code と fallback color を返す", () => {
-    const result = getCategoryDisplay("mobility");
-    expect(result.code).toBe("MOBILITY");
-    expect(result.color).toBe("#B0852A");
   });
 });

@@ -12,6 +12,7 @@ import re
 import unicodedata
 
 _TAG_RE = re.compile(r"<[^>]+>")
+_WHITESPACE_RUN = re.compile(r"\s+")
 
 
 def normalize_text(text: str) -> str:
@@ -31,3 +32,15 @@ def normalize_text(text: str) -> str:
         ch for ch in cleaned if unicodedata.category(ch) != "Cc" or ch in "\t\n"
     )
     return cleaned.strip()
+
+
+def normalize_mention_surface(text: str) -> str:
+    """mention surface 専用の正規化 (``normalize_text`` + 連続空白の畳み込み)。
+
+    surface は trend 集計で ``lower(collapse(surface))`` の名寄せキーになるため、
+    読取側 (SQL / ``MentionName`` VO) が連続空白・タブ・改行を単一空白へ畳むのに
+    合わせて書込側でも畳む。語境界の単一空白は名寄せに必要なため残す
+    (``Open AI`` と ``OpenAI`` は別物)。``normalize_text`` 本体は改行を保持する
+    必要のある summary / investor_take に使うため触らない。
+    """
+    return _WHITESPACE_RUN.sub(" ", normalize_text(text)).strip()

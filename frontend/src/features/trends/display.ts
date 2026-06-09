@@ -15,24 +15,3 @@ export const MENTION_TYPE_META: Record<
   academic: { label: "研究", color: "#3F84C0" },
   government: { label: "政府", color: "#5B6AB0" },
 };
-
-// ---------------------------------------------------------------------------
-// カテゴリ表示辞書
-// ---------------------------------------------------------------------------
-
-interface CategoryDisplay {
-  code: string;
-  color: string;
-}
-
-const CATEGORY_DISPLAY: Record<string, CategoryDisplay> = {
-  ai: { code: "A.I.", color: "#0E9E97" },
-  computing: { code: "COMPUTE", color: "#7A5BA8" },
-  semiconductor: { code: "SEMICON", color: "#C04D6E" },
-};
-
-export function getCategoryDisplay(slug: string): CategoryDisplay {
-  return (
-    CATEGORY_DISPLAY[slug] ?? { code: slug.toUpperCase(), color: "#B0852A" }
-  );
-}

@@ -7,9 +7,11 @@
 - 期間境界 ``[current_start, current_end)`` (半開区間) で絞り込む。
 - mention は ``COUNT(DISTINCT in_scope_assessments.id)`` で「同 assessment 内で
   同 mention が複数 key_point に登場しても 1 件」と数える (記事単位の出現を数える)。
-- 名寄せは SQL 上の ``lower(m->>'surface')`` で行い、display 名は
-  ``MIN(m->>'surface')`` を採用する (casing は AI 抽出の文脈情報なので
-  DB にはそのまま保存される: feedback_ai_extraction_casing.md)。
+- 名寄せは SQL 上の ``_match_key_expr`` (連続空白 collapse + trim + lower) で
+  行い、display 名は ``MIN(m->>'surface')`` を採用する (casing は AI 抽出の文脈
+  情報なので DB にはそのまま保存される: feedback_ai_extraction_casing.md)。
+  名寄せキーは書込側 ``normalize_mention_surface`` / ``MentionName.match_key`` と
+  同一規則に揃え、表記揺れによる集計の取りこぼし・count 分裂を防ぐ。
 - ``type`` は Stage 4 AI 境界の ``MentionType`` (6 値 lower) を直接採用する
   (BC 境界が下流に正規化済値を保証する: feedback_bc_boundary_guarantees_downstream)。
 
@@ -39,10 +41,13 @@ from datetime import datetime
 from typing import cast
 
 import sqlalchemy as sa
+import structlog
 from pgvector.sqlalchemy import HALFVEC
+from pydantic import ValidationError
 from sqlalchemy import Row, and_, func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.analysis.assessment.domain.result import MentionType
 from app.insights.trend_discovery.domain.trend import (
     KEY_POINT_DEDUP_DISTANCE,
     MAX_KEY_POINTS_PER_MENTION,
@@ -54,10 +59,55 @@ from app.insights.trend_discovery.domain.trend import (
 )
 from app.models.in_scope_assessment import InScopeAssessment
 
+logger = structlog.get_logger(__name__)
+
 # embedding 次元 (InScopeAssessment.embedding は HALFVEC(768))。
 _EMBEDDING_DIM = 768
 
 MentionKey = tuple[str, str]
+
+# MentionType の既知値集合 (skip 警告の type_known 判定用)。
+_VALID_MENTION_TYPES = frozenset(t.value for t in MentionType)
+
+
+def _invalid_mention_log_fields(
+    error: ValidationError, *, surface: object, type_: object
+) -> dict[str, object]:
+    """不正 mention skip 時の警告に焼く低 cardinality field (生値は出さない)。
+
+    legacy/drift 行は type も任意文字列になりうるため、生の surface / type は出さず
+    失敗 field 名・各長さ・type の既知判定のみを出す (PII / 高 cardinality を避ける)。
+    """
+    surface_str = surface if isinstance(surface, str) else ""
+    type_str = type_ if isinstance(type_, str) else ""
+    return {
+        "error_fields": sorted({str(e["loc"][0]) for e in error.errors() if e["loc"]}),
+        "type_known": type_str in _VALID_MENTION_TYPES,
+        "type_len": len(type_str),
+        "surface_len": len(surface_str),
+    }
+
+
+# ``_match_key_expr`` が SQL へ補間できる JSONB alias の許可リスト。SQL fragment へ
+# 補間される唯一の動的部分なので、外部入力でなく固定リテラルだけを通すゲートにする。
+_ALLOWED_MENTION_ALIASES = frozenset({"m", "m1", "m2"})
+
+
+def _match_key_expr(alias: str) -> str:
+    """mention surface の名寄せキー SQL 式を返す (連続空白 collapse + trim + lower)。
+
+    読取側の名寄せキーを 1 式に集約し、書込側 ``normalize_mention_surface`` と
+    ``MentionName.match_key`` (collapse→strip→lower) に演算順を揃える。NFKC は
+    書込側で確定済みのため SQL では行わない。``alias`` は呼び出し側の固定リテラル
+    のみだが、SQL fragment へ補間される唯一の動的部分なので許可リストで拒否する
+    (``-O`` で剥がれる assert ではなく raise で injection 経路を構造的に封じる)。
+    """
+    if alias not in _ALLOWED_MENTION_ALIASES:
+        msg = f"alias must be one of {sorted(_ALLOWED_MENTION_ALIASES)}, got {alias!r}"
+        raise ValueError(msg)
+    return (
+        f"lower(btrim(regexp_replace({alias}->>'surface', '[[:space:]]+', ' ', 'g')))"
+    )
 
 
 class TrendsRepository:
@@ -80,6 +130,9 @@ class TrendsRepository:
         み・伸び率は floor + hot ゲート) ため、ここでは hot ゲートを掛けず floor の
         全 mention を返し、ランキング確定と hot ゲートは service に委ねる。並べ替え
         もしない (どちらの軸で並べるかは service の責務)。
+
+        不正な display 名 / type の legacy・drift 行は当該 1 件のみ skip し、window
+        全体を落とさない (故障は warning で可視化する)。
         """
         current_sub = self._entity_window_subquery(
             category_id=category_id,
@@ -112,15 +165,26 @@ class TrendsRepository:
             .where(current_sub.c.cnt >= MIN_CURRENT)
         )
         rows = (await self._session.execute(stmt)).all()
-        return tuple(
-            RankedMention(
-                name=row.display_name,
-                type=row.type,
-                appearance_count=row.appearance_count,
-                previous_appearance_count=row.previous_appearance_count,
-            )
-            for row in rows
-        )
+        ranked: list[RankedMention] = []
+        for row in rows:
+            try:
+                ranked.append(
+                    RankedMention(
+                        name=row.display_name,
+                        type=row.type,
+                        appearance_count=row.appearance_count,
+                        previous_appearance_count=row.previous_appearance_count,
+                    )
+                )
+            except ValidationError as exc:
+                logger.warning(
+                    "trend_ranked_mention_skipped_invalid",
+                    category_id=category_id,
+                    **_invalid_mention_log_fields(
+                        exc, surface=row.display_name, type_=row.type
+                    ),
+                )
+        return tuple(ranked)
 
     async def get_mention_key_points(
         self,
@@ -141,10 +205,12 @@ class TrendsRepository:
         if not mention_keys:
             return {}
         stmt = (
+            # 固定リテラル補間 + bindparams のため injection 経路なし。
+            # nosemgrep
             text(
-                """
+                f"""
                 SELECT
-                  lower(m->>'surface') AS match_key,
+                  {_match_key_expr("m")} AS match_key,
                   m->>'type' AS type,
                   a.id AS assessment_id,
                   a.analyzed_at AS analyzed_at,
@@ -162,9 +228,9 @@ class TrendsRepository:
                 WHERE a.category_id = :category_id
                   AND a.analyzed_at >= :current_start
                   AND a.analyzed_at < :current_end
-                  AND (lower(m->>'surface'), m->>'type') IN :mention_keys
+                  AND ({_match_key_expr("m")}, m->>'type') IN :mention_keys
                 ORDER BY a.analyzed_at DESC, a.id DESC, e->>'content'
-                """
+                """  # noqa: S608 — 補間部は _match_key_expr の固定リテラルのみ
             )
             .bindparams(
                 sa.bindparam("category_id", category_id),
@@ -202,10 +268,12 @@ class TrendsRepository:
         if not mention_keys:
             return {}
         stmt = (
+            # 固定リテラル補間 + bindparams のため injection 経路なし。
+            # nosemgrep
             text(
-                """
+                f"""
                 SELECT
-                  lower(m1->>'surface') AS anchor_key,
+                  {_match_key_expr("m1")} AS anchor_key,
                   m1->>'type' AS anchor_type,
                   MIN(m2->>'surface') AS related_name,
                   m2->>'type' AS related_type,
@@ -226,14 +294,14 @@ class TrendsRepository:
                 WHERE a.category_id = :category_id
                   AND a.analyzed_at >= :current_start
                   AND a.analyzed_at < :current_end
-                  AND (lower(m1->>'surface'), m1->>'type') IN :mention_keys
-                  AND (lower(m2->>'surface'), m2->>'type')
-                      <> (lower(m1->>'surface'), m1->>'type')
+                  AND ({_match_key_expr("m1")}, m1->>'type') IN :mention_keys
+                  AND ({_match_key_expr("m2")}, m2->>'type')
+                      <> ({_match_key_expr("m1")}, m1->>'type')
                 GROUP BY
-                  lower(m1->>'surface'), m1->>'type',
-                  lower(m2->>'surface'), m2->>'type'
+                  {_match_key_expr("m1")}, m1->>'type',
+                  {_match_key_expr("m2")}, m2->>'type'
                 HAVING COUNT(DISTINCT a.id) >= :min_shared
-                """
+                """  # noqa: S608 — 補間部は _match_key_expr の固定リテラルのみ
             )
             .bindparams(
                 sa.bindparam("category_id", category_id),
@@ -251,7 +319,7 @@ class TrendsRepository:
             )
         )
         rows = (await self._session.execute(stmt)).all()
-        return self._group_related(rows)
+        return self._group_related(rows, category_id=category_id)
 
     async def count_source_analyses(
         self, *, current_start: datetime, current_end: datetime
@@ -298,18 +366,34 @@ class TrendsRepository:
     @staticmethod
     def _group_related(
         rows: Sequence[Row[tuple]],
+        *,
+        category_id: int,
     ) -> dict[MentionKey, tuple[RelatedMention, ...]]:
-        """anchor ごとに共起記事数降順 top N の RelatedMention を組み立てる。"""
+        """anchor ごとに共起記事数降順 top N の RelatedMention を組み立てる。
+
+        不正な共起相手 (enum 外 type / 空・超長 surface 等の legacy・drift 行) は当該
+        1 件のみ skip し window 全体を落とさない (anchor 側は requested key なので
+        常に正常)。
+        """
         grouped: dict[MentionKey, list[RelatedMention]] = {}
         for row in rows:
             anchor = (row.anchor_key, row.anchor_type)
-            grouped.setdefault(anchor, []).append(
-                RelatedMention(
+            try:
+                related = RelatedMention(
                     name=row.related_name,
                     type=row.related_type,
                     shared_article_count=row.shared_article_count,
                 )
-            )
+            except ValidationError as exc:
+                logger.warning(
+                    "trend_related_mention_skipped_invalid",
+                    category_id=category_id,
+                    **_invalid_mention_log_fields(
+                        exc, surface=row.related_name, type_=row.related_type
+                    ),
+                )
+                continue
+            grouped.setdefault(anchor, []).append(related)
         return {
             anchor: tuple(
                 sorted(
@@ -330,8 +414,9 @@ class TrendsRepository:
     ):
         """1 期間分の mention 集計 subquery (key_points JSONB 2 段 LATERAL 平坦化)。
 
-        各 (lower(surface), type) に対して:
-        - ``match_key``: ``lower(m->>'surface')`` (JOIN キー、casing 揺れ吸収)
+        各 (match_key, type) に対して:
+        - ``match_key``: ``_match_key_expr("m")`` (JOIN キー、空白 collapse +
+          casing 揺れ吸収)
         - ``type``: ``m->>'type'`` (Stage 4 AI 境界の MentionType 6 値 lower を直接採用)
         - ``display_name``: ``MIN(m->>'surface')`` (display 用の casing 保持代表)
         - ``cnt``: ``COUNT(DISTINCT a.id)`` (同 assessment 内重複排除)
@@ -347,10 +432,12 @@ class TrendsRepository:
         に入れた時に param 名が衝突しないようにする (SQLAlchemy が自動 suffix する)。
         """
         return (
+            # 固定リテラル補間 + bindparams のため injection 経路なし。
+            # nosemgrep
             text(
-                """
+                f"""
                 SELECT
-                  lower(m->>'surface') AS match_key,
+                  {_match_key_expr("m")} AS match_key,
                   m->>'type' AS type,
                   MIN(m->>'surface') AS display_name,
                   COUNT(DISTINCT a.id) AS cnt
@@ -366,8 +453,8 @@ class TrendsRepository:
                 WHERE a.category_id = :category_id
                   AND a.analyzed_at >= :window_start
                   AND a.analyzed_at < :window_end
-                GROUP BY lower(m->>'surface'), m->>'type'
-                """
+                GROUP BY {_match_key_expr("m")}, m->>'type'
+                """  # noqa: S608 — 補間部は _match_key_expr の固定リテラルのみ
             )
             .bindparams(
                 sa.bindparam("category_id", category_id, unique=True),

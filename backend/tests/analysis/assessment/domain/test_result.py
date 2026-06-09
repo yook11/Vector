@@ -224,6 +224,33 @@ class TestMentionSanitize:
             m.surface = "y"  # type: ignore[misc]
 
 
+class TestMentionSurfaceWhitespaceCollapse:
+    """Mention.surface は名寄せキーとして使うため連続空白・タブ・改行を畳む。
+
+    surface は trend 集計で ``lower(collapse(surface))`` の join キーになる。
+    読取 (SQL / MentionName VO) が連続空白を畳む一方で書込が畳まないと、内部に
+    余分な空白を持つ surface だけ enrich が外れて keyPoints/relatedMentions が
+    silent に空になる。書込時に畳むことで読取規則と一致させる (#3-B)。
+    """
+
+    def test_collapses_double_space(self) -> None:
+        m = Mention(surface="Open  AI", type=MentionType.COMPANY)
+        assert m.surface == "Open AI"
+
+    def test_collapses_tab(self) -> None:
+        m = Mention(surface="Open\tAI", type=MentionType.COMPANY)
+        assert m.surface == "Open AI"
+
+    def test_collapses_newline(self) -> None:
+        m = Mention(surface="Open\nAI", type=MentionType.COMPANY)
+        assert m.surface == "Open AI"
+
+    def test_preserves_single_internal_space(self) -> None:
+        # 語境界の単一空白は名寄せに必要な情報なので潰さない (Open AI ≠ OpenAI)
+        m = Mention(surface="Open AI", type=MentionType.COMPANY)
+        assert m.surface == "Open AI"
+
+
 class TestKeyPointSanitize:
     """KeyPoint.content の sanitize + KeyPoint.mentions のデフォルト/上限。"""
 

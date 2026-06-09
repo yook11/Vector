@@ -19,13 +19,21 @@
 
 from __future__ import annotations
 
+import json
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
 import pytest
+from sqlalchemy import bindparam, text
 from sqlalchemy.ext.asyncio import AsyncSession
+from structlog.testing import capture_logs
 
-from app.insights.trend_discovery.repository.trends import TrendsRepository
+from app.insights.trend_discovery.domain.mention_name import MentionName
+from app.insights.trend_discovery.domain.trend import MIN_CURRENT
+from app.insights.trend_discovery.repository.trends import (
+    TrendsRepository,
+    _match_key_expr,
+)
 from app.models.category import Category
 
 from .conftest import SeedAnalysis
@@ -771,3 +779,382 @@ class TestCountSourceAnalyses:
             current_start=WEEK_START, current_end=WEEK_END
         )
         assert count == 0
+
+
+# #3-A 名寄せキーの空白正規化 (読取 SQL を書込側 collapse に揃える)
+
+# 名寄せキーの spec 上の正規形 ("Open  AI" / "Open\tAI" 等は collapse して同一)。
+_OPEN_AI_KEY = ("open ai", "company")
+
+
+class TestWhitespaceNameKeyNormalization:
+    """surface が内部に連続空白・タブ・改行を持つ legacy 行でも、読取 SQL が
+
+    書込側 (normalize_mention_surface / MentionName) と同じ collapse 規則で名寄せ
+    することを固定する。これが外れると enrich の IN フィルタが外れ keyPoints /
+    relatedMentions が silent に空になり、appearance_count も表記揺れで分裂する。
+    """
+
+    @pytest.mark.parametrize("surface", ["Open  AI", "Open\tAI", "Open\nAI"])
+    @pytest.mark.asyncio
+    async def test_key_points_populate_for_internal_whitespace_surface(
+        self,
+        db_session: AsyncSession,
+        sample_categories: list[Category],
+        seed_analysis: SeedAnalysis,
+        surface: str,
+    ) -> None:
+        """内部空白入り surface でも collapse 後キーで key_point を引ける。"""
+        cat = sample_categories[0]
+        await seed_analysis(
+            category_id=cat.id,
+            analyzed_at=_jst(2026, 4, 14, hour=1),
+            key_points=[("kp body", [(surface, "company")])],
+        )
+        repo = TrendsRepository(db_session)
+        result = await repo.get_mention_key_points(
+            category_id=cat.id,
+            current_start=WEEK_START,
+            current_end=WEEK_END,
+            mention_keys=[_OPEN_AI_KEY],
+        )
+        assert result.get(_OPEN_AI_KEY) == ("kp body",)
+
+    @pytest.mark.asyncio
+    async def test_related_populates_for_internal_whitespace_anchor(
+        self,
+        db_session: AsyncSession,
+        sample_categories: list[Category],
+        seed_analysis: SeedAnalysis,
+    ) -> None:
+        """anchor surface が内部空白を持っても collapse 後キーで共起を引ける。"""
+        cat = sample_categories[0]
+        for hour in range(2):
+            await seed_analysis(
+                category_id=cat.id,
+                analyzed_at=_jst(2026, 4, 14, hour=hour),
+                mentions=[("Open  AI", "company"), ("NVIDIA", "company")],
+            )
+        repo = TrendsRepository(db_session)
+        result = await repo.get_related_mentions(
+            category_id=cat.id,
+            current_start=WEEK_START,
+            current_end=WEEK_END,
+            mention_keys=[_OPEN_AI_KEY],
+        )
+        related = result.get(_OPEN_AI_KEY, ())
+        assert len(related) == 1
+        assert str(related[0].name) == "NVIDIA"
+        assert related[0].shared_article_count == 2
+
+    @pytest.mark.asyncio
+    async def test_ranked_count_not_split_by_whitespace_variants(
+        self,
+        db_session: AsyncSession,
+        sample_categories: list[Category],
+        seed_analysis: SeedAnalysis,
+    ) -> None:
+        """同一エンティティの表記揺れは 1 group に merge し count を分裂させない。"""
+        cat = sample_categories[0]
+        # double-space と single-space を分けて seed。合算が floor (MIN_CURRENT) に
+        # 達するため、merge されなければ各群とも floor 未満で pool から落ちる。
+        double_n = 3
+        single_n = MIN_CURRENT - double_n
+        for hour in range(double_n):
+            await seed_analysis(
+                category_id=cat.id,
+                analyzed_at=_jst(2026, 4, 14, hour=hour),
+                mentions=[("Open  AI", "company")],
+            )
+        for hour in range(double_n, double_n + single_n):
+            await seed_analysis(
+                category_id=cat.id,
+                analyzed_at=_jst(2026, 4, 14, hour=hour),
+                mentions=[("Open AI", "company")],
+            )
+        repo = TrendsRepository(db_session)
+        results = await repo.get_ranked_mentions(
+            category_id=cat.id,
+            current_start=WEEK_START,
+            current_end=WEEK_END,
+            previous_start=PREV_START,
+        )
+        assert len(results) == 1
+        assert str(results[0].name) == "Open AI"
+        assert results[0].appearance_count == double_n + single_n
+
+    @pytest.mark.asyncio
+    async def test_whitespace_variants_excluded_as_self_pair(
+        self,
+        db_session: AsyncSession,
+        sample_categories: list[Category],
+        seed_analysis: SeedAnalysis,
+    ) -> None:
+        """表記揺れの同一エンティティは collapse 後キーが一致し自己ペア除外される。"""
+        cat = sample_categories[0]
+        for hour in range(2):
+            await seed_analysis(
+                category_id=cat.id,
+                analyzed_at=_jst(2026, 4, 14, hour=hour),
+                mentions=[("Open AI", "company"), ("Open  AI", "company")],
+            )
+        repo = TrendsRepository(db_session)
+        result = await repo.get_related_mentions(
+            category_id=cat.id,
+            current_start=WEEK_START,
+            current_end=WEEK_END,
+            mention_keys=[_OPEN_AI_KEY],
+        )
+        # 両表記は同一名寄せキー → 自己ペア → related に自分自身が出ない。
+        assert _OPEN_AI_KEY not in result
+
+
+class TestMatchKeyExprGuard:
+    """``_match_key_expr`` は固定 alias のみ許可し未知 alias を raise で拒否する。
+
+    SQL fragment へ補間される唯一の動的部分なので、injection 経路を構造的に封じる
+    (assert ではなく raise で ``-O`` 実行時も剥がれないことを固定)。
+    """
+
+    @pytest.mark.parametrize("alias", ["m", "m1", "m2"])
+    def test_allows_fixed_aliases(self, alias: str) -> None:
+        assert f"{alias}->>'surface'" in _match_key_expr(alias)
+
+    @pytest.mark.parametrize("alias", ["x", "m3", "m; DROP TABLE t", ""])
+    def test_rejects_unknown_alias(self, alias: str) -> None:
+        with pytest.raises(ValueError, match="alias must be one of"):
+            _match_key_expr(alias)
+
+
+class TestMatchKeyParity:
+    """SQL 名寄せ式 ``_match_key_expr`` と Python ``MentionName.match_key`` の一致。
+
+    契約: DB に保存されうる surface (= ``normalize_text`` 出力。NFKC 済 + 内部空白は
+    ASCII space/tab/newline のみで ``\\r\\f\\v``・全角を含まない) について
+    ``_match_key_expr(surface) == MentionName(surface).match_key``。読取 SQL と書込側
+    VO が同一の名寄せキーを生むことを 2 実装の突合で保証する (片方の再実装ではない)。
+
+    casing は両式とも lower 化で畳むため、parity は Postgres ``lower()`` と Python
+    ``str.lower()`` が一致する文字に限って成立する。ASCII と一般的なアクセント付き
+    Latin (``CAFÉ`` → ``café``、``Société`` → ``société``) は両 engine 一致する。
+    Turkish dotted-İ (U+0130) や Greek 語末 sigma は両 engine の lower が分岐する
+    既知境界で契約外 (該当 mention は enrich が silent に空になりうる)。実データの
+    エンティティ名は ASCII / Latin が支配的なため、この境界は許容する。
+    """
+
+    @pytest.mark.parametrize(
+        "surface",
+        [
+            "OpenAI",
+            "Open AI",
+            "Open  AI",
+            "Open\tAI",
+            "Open\nAI",
+            "  padded  ",
+            "NVIDIA Corp",
+            "GPT-5",
+            "Mixed   \t\n  spaces",
+            "UPPER CASE",
+            "ALL  CAPS\tCO",
+            # アクセント付き Latin は PG lower と str.lower が一致し契約内。
+            "CAFÉ",
+            "Société",
+        ],
+    )
+    @pytest.mark.asyncio
+    async def test_sql_expr_matches_mention_name_match_key(
+        self,
+        db_session: AsyncSession,
+        surface: str,
+    ) -> None:
+        expected = MentionName(surface).match_key
+        # production の SQL 式そのものを literal surface 1 件に適用して評価する
+        # (式を再実装せず、_match_key_expr の出力を直接埋め込む)。raw text() では
+        # bind の型推論が効かないため CAST で jsonb を明示する。固定リテラル式のみ補間
+        # し値は bindparams で渡すため injection 経路はない (S608/text 誤検知)。
+        # nosemgrep
+        stmt = text(
+            f"SELECT {_match_key_expr('m')} AS k "  # noqa: S608 — 固定リテラル式のみ補間
+            "FROM (SELECT CAST(:payload AS jsonb) AS m) AS sub"
+        ).bindparams(bindparam("payload", json.dumps({"surface": surface})))
+        actual = (await db_session.execute(stmt)).scalar_one()
+        assert actual == expected
+
+
+# #8 不正 mention データで window 全体を落とさない (related + ranking 両方を防御)
+
+
+class TestInvalidMentionDataDoesNotCrashWindow:
+    """enum 外 type / 空 surface の legacy・drift 行が混ざっても、当該 1 件のみ skip し
+
+    ranking / related の組み立てが ValidationError を呼び出し元へ伝播させない
+    (伝播すると 1 カテゴリの不正行で全カテゴリ snapshot 生成が落ちる)。
+    """
+
+    @pytest.mark.asyncio
+    async def test_ranked_skips_invalid_type_keeps_valid(
+        self,
+        db_session: AsyncSession,
+        sample_categories: list[Category],
+        seed_analysis: SeedAnalysis,
+    ) -> None:
+        """enum 外 type の mention は pool から除外し、正常 mention は残す。"""
+        cat = sample_categories[0]
+        for hour in range(MIN_CURRENT):
+            await seed_analysis(
+                category_id=cat.id,
+                analyzed_at=_jst(2026, 4, 14, hour=hour),
+                mentions=[("NVIDIA", "company")],
+            )
+        for hour in range(MIN_CURRENT):
+            await seed_analysis(
+                category_id=cat.id,
+                analyzed_at=_jst(2026, 4, 15, hour=hour),
+                mentions=[("BadCo", "startup")],  # enum 外 type (drift 行)
+            )
+        repo = TrendsRepository(db_session)
+        results = await repo.get_ranked_mentions(
+            category_id=cat.id,
+            current_start=WEEK_START,
+            current_end=WEEK_END,
+            previous_start=PREV_START,
+        )
+        assert {str(r.name) for r in results} == {"NVIDIA"}
+
+    @pytest.mark.asyncio
+    async def test_ranked_skips_empty_surface_keeps_valid(
+        self,
+        db_session: AsyncSession,
+        sample_categories: list[Category],
+        seed_analysis: SeedAnalysis,
+    ) -> None:
+        """空 surface (MentionName 検証で落ちる legacy 行) は pool から除外する。"""
+        cat = sample_categories[0]
+        for hour in range(MIN_CURRENT):
+            await seed_analysis(
+                category_id=cat.id,
+                analyzed_at=_jst(2026, 4, 14, hour=hour),
+                mentions=[("NVIDIA", "company")],
+            )
+        for hour in range(MIN_CURRENT):
+            await seed_analysis(
+                category_id=cat.id,
+                analyzed_at=_jst(2026, 4, 15, hour=hour),
+                mentions=[("", "company")],  # 空 surface (legacy 行)
+            )
+        repo = TrendsRepository(db_session)
+        results = await repo.get_ranked_mentions(
+            category_id=cat.id,
+            current_start=WEEK_START,
+            current_end=WEEK_END,
+            previous_start=PREV_START,
+        )
+        assert {str(r.name) for r in results} == {"NVIDIA"}
+
+    @pytest.mark.asyncio
+    async def test_related_skips_invalid_co_mention_keeps_valid(
+        self,
+        db_session: AsyncSession,
+        sample_categories: list[Category],
+        seed_analysis: SeedAnalysis,
+    ) -> None:
+        """enum 外 type の共起相手は related から除外し、正常な相手は残す。"""
+        cat = sample_categories[0]
+        for hour in range(2):
+            await seed_analysis(
+                category_id=cat.id,
+                analyzed_at=_jst(2026, 4, 14, hour=hour),
+                mentions=[
+                    ("NVIDIA", "company"),
+                    ("OpenAI", "company"),
+                    ("BadCo", "startup"),  # enum 外 type の共起相手
+                ],
+            )
+        repo = TrendsRepository(db_session)
+        result = await repo.get_related_mentions(
+            category_id=cat.id,
+            current_start=WEEK_START,
+            current_end=WEEK_END,
+            mention_keys=[_NVIDIA_KEY],
+        )
+        related = result.get(_NVIDIA_KEY, ())
+        assert {str(r.name) for r in related} == {"OpenAI"}
+
+    @pytest.mark.asyncio
+    async def test_ranked_skip_emits_low_cardinality_warning(
+        self,
+        db_session: AsyncSession,
+        sample_categories: list[Category],
+        seed_analysis: SeedAnalysis,
+    ) -> None:
+        """ranking の skip は failure-visibility の warning を出す (生値は焼かない)。
+
+        skip を silent に握り潰さないことが #8 の眼目なので、warning の発火・低
+        cardinality field (category_id / type_known / error_fields) を所有テストとして
+        固定する。生 surface / type (PII・高 cardinality) は焼かないことも合わせて縛る。
+        """
+        cat = sample_categories[0]
+        for hour in range(MIN_CURRENT):
+            await seed_analysis(
+                category_id=cat.id,
+                analyzed_at=_jst(2026, 4, 15, hour=hour),
+                mentions=[("BadCo", "startup")],  # enum 外 type (drift 行)
+            )
+        repo = TrendsRepository(db_session)
+        with capture_logs() as logs:
+            await repo.get_ranked_mentions(
+                category_id=cat.id,
+                current_start=WEEK_START,
+                current_end=WEEK_END,
+                previous_start=PREV_START,
+            )
+        skips = [
+            e for e in logs if e["event"] == "trend_ranked_mention_skipped_invalid"
+        ]
+        assert len(skips) == 1
+        event = skips[0]
+        assert event["log_level"] == "warning"
+        assert event["category_id"] == cat.id
+        assert event["type_known"] is False  # "startup" は MentionType 外
+        assert "type" in event["error_fields"]
+        # 生値 (PII / 高 cardinality) を log に焼かない
+        assert "BadCo" not in event.values()
+        assert "startup" not in event.values()
+
+    @pytest.mark.asyncio
+    async def test_related_skip_emits_low_cardinality_warning(
+        self,
+        db_session: AsyncSession,
+        sample_categories: list[Category],
+        seed_analysis: SeedAnalysis,
+    ) -> None:
+        """related の skip も同じ failure-visibility の warning を出す。"""
+        cat = sample_categories[0]
+        for hour in range(2):
+            await seed_analysis(
+                category_id=cat.id,
+                analyzed_at=_jst(2026, 4, 14, hour=hour),
+                mentions=[
+                    ("NVIDIA", "company"),
+                    ("OpenAI", "company"),
+                    ("BadCo", "startup"),  # enum 外 type の共起相手
+                ],
+            )
+        repo = TrendsRepository(db_session)
+        with capture_logs() as logs:
+            await repo.get_related_mentions(
+                category_id=cat.id,
+                current_start=WEEK_START,
+                current_end=WEEK_END,
+                mention_keys=[_NVIDIA_KEY],
+            )
+        skips = [
+            e for e in logs if e["event"] == "trend_related_mention_skipped_invalid"
+        ]
+        assert len(skips) == 1
+        event = skips[0]
+        assert event["log_level"] == "warning"
+        assert event["category_id"] == cat.id
+        assert event["type_known"] is False
+        assert "BadCo" not in event.values()
+        assert "startup" not in event.values()

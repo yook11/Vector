@@ -30,7 +30,7 @@ from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
-from app.shared.text import normalize_text
+from app.shared.text import normalize_mention_surface, normalize_text
 
 
 class ValidCategory(StrEnum):
@@ -121,7 +121,7 @@ class Mention(BaseModel):
     @classmethod
     def _sanitize(cls, v: Any) -> Any:
         if isinstance(v, str):
-            return normalize_text(v) or ""
+            return normalize_mention_surface(v) or ""
         return v
 
     @field_validator("surface")

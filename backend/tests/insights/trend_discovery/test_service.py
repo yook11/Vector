@@ -39,7 +39,7 @@ from app.insights.trend_discovery.application.service import (
     TrendDiscoveryService,
 )
 from app.insights.trend_discovery.domain.ready import ReadyForTrendDiscovery
-from app.insights.trend_discovery.domain.trend import TOP_N_PER_RANKING
+from app.insights.trend_discovery.domain.trend import MIN_CURRENT, TOP_N_PER_RANKING
 from app.insights.trend_discovery.repository.snapshots import (
     SnapshotRepository,
     SnapshotSaveResult,
@@ -197,6 +197,49 @@ class TestExecute:
         assert len(category_trends) == len(sample_categories)
         category_ids = {c["categoryId"] for c in category_trends}
         assert category_ids == {c.id for c in sample_categories}
+
+    @pytest.mark.asyncio
+    async def test_generates_snapshot_when_category_has_invalid_mentions(
+        self,
+        db_session: AsyncSession,
+        session_factory: async_sessionmaker[AsyncSession],
+        sample_categories: list[Category],
+        seed_analysis: SeedAnalysis,
+    ) -> None:
+        """不正 mention (enum 外 type) が 1 カテゴリに混ざっても execute は落ちず、
+
+        正常 mention は残り不正行のみ skip される (1 行で全カテゴリ snapshot 生成を
+        巻き込まない: #8)。
+        """
+        cat = sample_categories[0]
+        for hour in range(MIN_CURRENT):
+            await seed_analysis(
+                category_id=cat.id,
+                analyzed_at=_jst(2026, 4, 14, hour=hour),
+                mentions=[("NVIDIA", "company")],
+            )
+        for hour in range(MIN_CURRENT):
+            await seed_analysis(
+                category_id=cat.id,
+                analyzed_at=_jst(2026, 4, 15, hour=hour),
+                mentions=[("BadCo", "startup")],  # enum 外 type (drift 行)
+            )
+        await db_session.commit()
+
+        service = TrendDiscoveryService(session_factory)
+        result = await service.execute(_ready())
+
+        assert isinstance(result, TrendDiscoveryCompleted)
+        assert result.completed_category_count == len(sample_categories)
+
+        repo = SnapshotRepository(db_session)
+        snapshot = await repo.find_by_window_end(WINDOW_END)
+        assert snapshot is not None
+        section = next(
+            c for c in snapshot.bundle["categoryTrends"] if c["categoryId"] == cat.id
+        )
+        names = {m["name"] for m in section["mostMentioned"]}
+        assert names == {"NVIDIA"}
 
     @pytest.mark.asyncio
     async def test_caps_each_ranking_at_top_n(

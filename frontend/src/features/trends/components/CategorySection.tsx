@@ -1,5 +1,5 @@
+import { getCategoryKicker } from "@/components/paper";
 import type { CategoryTrends } from "@/types";
-import { getCategoryDisplay } from "../display";
 import { RankingColumn } from "./RankingColumn";
 
 interface CategorySectionProps {
@@ -8,7 +8,7 @@ interface CategorySectionProps {
 
 /** カテゴリ1節(見出し+2カラムgrid)。 */
 export function CategorySection({ category }: CategorySectionProps) {
-  const display = getCategoryDisplay(category.categorySlug);
+  const kicker = getCategoryKicker(category.categorySlug);
 
   return (
     <section aria-label={category.categoryName}>
@@ -19,7 +19,7 @@ export function CategorySection({ category }: CategorySectionProps) {
           aria-hidden="true"
           className="shrink-0 size-4 rounded-[2px]"
           style={{
-            background: `linear-gradient(135deg, ${display.color} 50%, var(--vector-ink) 50%)`,
+            background: `linear-gradient(135deg, ${kicker.hue} 50%, var(--vector-ink) 50%)`,
           }}
         />
         <h2
@@ -32,7 +32,7 @@ export function CategorySection({ category }: CategorySectionProps) {
           className="text-[11px] font-semibold tracking-[0.22em] text-[var(--vector-ink-muted)] italic"
           style={{ fontFamily: "var(--font-vector-display)" }}
         >
-          {display.code}
+          {kicker.code}
         </span>
         {/* 伸ばし罫線 */}
         <div
