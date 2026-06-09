@@ -2,7 +2,7 @@
 
 import type { Client, Options as Options2, TDataShape } from './client';
 import { client } from './client.gen';
-import type { ActivateSourceData, ActivateSourceErrors, ActivateSourceResponses, AddToWatchlistData, AddToWatchlistErrors, AddToWatchlistResponses, CreateNewsSourceData, CreateNewsSourceErrors, CreateNewsSourceResponses, DeactivateSourceData, DeactivateSourceErrors, DeactivateSourceResponses, DeleteNewsSourceData, DeleteNewsSourceErrors, DeleteNewsSourceResponses, FetchNewsData, FetchNewsErrors, FetchNewsResponses, GetArticleData, GetArticleErrors, GetArticleResponses, GetLatestBriefingData, GetLatestBriefingErrors, GetLatestBriefingResponses, GetPipelineHealthData, GetPipelineHealthErrors, GetPipelineHealthResponses, GetSimilarArticlesData, GetSimilarArticlesErrors, GetSimilarArticlesResponses, GetTrendsData, GetTrendsErrors, GetTrendsResponses, HealthCheckData, HealthCheckErrors, HealthCheckResponses, ListArticlesData, ListArticlesErrors, ListArticlesInWatchlistData, ListArticlesInWatchlistErrors, ListArticlesInWatchlistResponses, ListArticlesResponses, ListBriefingsData, ListBriefingsErrors, ListBriefingsResponses, ListCategoriesData, ListCategoriesErrors, ListCategoriesResponses, ListNewsSourcesData, ListNewsSourcesErrors, ListNewsSourcesResponses, ListWatchlistIdsData, ListWatchlistIdsErrors, ListWatchlistIdsResponses, RemoveFromWatchlistData, RemoveFromWatchlistErrors, RemoveFromWatchlistResponses } from './types.gen';
+import type { ActivateSourceData, ActivateSourceErrors, ActivateSourceResponses, AddToWatchlistData, AddToWatchlistErrors, AddToWatchlistResponses, CreateNewsSourceData, CreateNewsSourceErrors, CreateNewsSourceResponses, DeactivateSourceData, DeactivateSourceErrors, DeactivateSourceResponses, DeleteNewsSourceData, DeleteNewsSourceErrors, DeleteNewsSourceResponses, FetchNewsData, FetchNewsErrors, FetchNewsResponses, GetArticleData, GetArticleErrors, GetArticleResponses, GetLatestBriefingData, GetLatestBriefingErrors, GetLatestBriefingResponses, GetPipelineHealthData, GetPipelineHealthErrors, GetPipelineHealthResponses, GetSimilarArticlesData, GetSimilarArticlesErrors, GetSimilarArticlesResponses, GetSourceHealthData, GetSourceHealthErrors, GetSourceHealthResponses, GetTrendsData, GetTrendsErrors, GetTrendsResponses, HealthCheckData, HealthCheckErrors, HealthCheckResponses, ListArticlesData, ListArticlesErrors, ListArticlesInWatchlistData, ListArticlesInWatchlistErrors, ListArticlesInWatchlistResponses, ListArticlesResponses, ListBriefingsData, ListBriefingsErrors, ListBriefingsResponses, ListCategoriesData, ListCategoriesErrors, ListCategoriesResponses, ListNewsSourcesData, ListNewsSourcesErrors, ListNewsSourcesResponses, ListWatchlistIdsData, ListWatchlistIdsErrors, ListWatchlistIdsResponses, RemoveFromWatchlistData, RemoveFromWatchlistErrors, RemoveFromWatchlistResponses } from './types.gen';
 
 export type Options<TData extends TDataShape = TDataShape, ThrowOnError extends boolean = boolean, TResponse = unknown> = Options2<TData, ThrowOnError, TResponse> & {
     /**
@@ -84,11 +84,10 @@ export const removeFromWatchlist = <ThrowOnError extends boolean = false>(option
 /**
  * Get Trends
  *
- * 最新窓の trends snapshot を verbatim で返す (なければ state="empty")。
+ * 最新窓の trends snapshot を返す (なければ state="empty")。
  *
- * ``response_model`` は OpenAPI/型生成のためだけに宣言する。``Response`` を直接
- * 返すため FastAPI は実体の再検証・再シリアライズをしない (保存済み payload を
- * そのまま配信する)。
+ * 保存済み bundle を ``Trends`` schema で再検証する。現行 contract に合わない
+ * (旧 shape 等) 場合は ``ValidationError`` が伝播し FastAPI が 500 を返す。
  */
 export const getTrends = <ThrowOnError extends boolean = false>(options?: Options<GetTrendsData, ThrowOnError>) => (options?.client ?? client).get<GetTrendsResponses, GetTrendsErrors, ThrowOnError>({ url: '/api/v1/trends', ...options });
 
@@ -150,6 +149,13 @@ export const activateSource = <ThrowOnError extends boolean = false>(options: Op
  * ニュースソースを無効化する。
  */
 export const deactivateSource = <ThrowOnError extends boolean = false>(options: Options<DeactivateSourceData, ThrowOnError>) => (options.client ?? client).patch<DeactivateSourceResponses, DeactivateSourceErrors, ThrowOnError>({ url: '/api/v1/admin/sources/{source_id}/deactivate', ...options });
+
+/**
+ * Get Source Health
+ *
+ * 全ニュースソースの取得・分析可能化 health を返す。
+ */
+export const getSourceHealth = <ThrowOnError extends boolean = false>(options?: Options<GetSourceHealthData, ThrowOnError>) => (options?.client ?? client).get<GetSourceHealthResponses, GetSourceHealthErrors, ThrowOnError>({ url: '/api/v1/admin/sources/health', ...options });
 
 /**
  * Fetch News

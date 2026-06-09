@@ -91,7 +91,8 @@ export type BriefingListItem = {
  *
  * ``items`` は ``Category.id`` 昇順で 11 カテゴリ全部を返す。並び順は
  * backend で確定し、frontend での sort を不要にする。``total_articles`` は
- * その週に解析した記事総数 (生成済カテゴリの ``input_article_count`` の合計)。
+ * ``current_week_start`` 週に生成された briefing の ``input_article_count``
+ * 合計 (masthead「今週 N 件を解析」用、古い週の stale briefing は含めない)。
  */
 export type BriefingListResponse = {
     /**
@@ -198,6 +199,22 @@ export type EmptyTrends = {
      * State
      */
     state?: 'empty';
+};
+
+/**
+ * FailureReason
+ *
+ * 選択窓内の outcome code 別失敗・棄却件数。
+ */
+export type FailureReason = {
+    /**
+     * Outcomecode
+     */
+    outcomeCode: string;
+    /**
+     * Count
+     */
+    count: number;
 };
 
 /**
@@ -543,6 +560,75 @@ export type SafeUrl = string;
 export type SortOrder = 'asc' | 'desc';
 
 /**
+ * SourceHealthItem
+ *
+ * 1 ニュースソースの health スナップショット。
+ *
+ * name / type / active は source を識別する基本情報であり、analyzable rate
+ * 以降の窓依存指標とは別軸。incomplete count と last succeeded at は表示窓に
+ * 依存しない現在値。free-text error / URL / payload 詳細は持たない。
+ */
+export type SourceHealthItem = {
+    /**
+     * Sourceid
+     */
+    sourceId: number;
+    /**
+     * Sourcename
+     */
+    sourceName: string;
+    sourceType: SourceType;
+    /**
+     * Isactive
+     */
+    isActive: boolean;
+    /**
+     * Analyzablerate
+     */
+    analyzableRate: number | null;
+    /**
+     * Analyzablecount
+     */
+    analyzableCount: number;
+    /**
+     * Processedarticlecount
+     */
+    processedArticleCount: number;
+    /**
+     * Incompletecount
+     */
+    incompleteCount: number;
+    /**
+     * Failurereasons
+     */
+    failureReasons: Array<FailureReason>;
+    /**
+     * Lastsucceededat
+     */
+    lastSucceededAt: string | null;
+};
+
+/**
+ * SourceHealthResponse
+ *
+ * GET /api/v1/admin/sources/health のレスポンス。
+ */
+export type SourceHealthResponse = {
+    /**
+     * Windowhours
+     */
+    windowHours: number;
+    /**
+     * Observedat
+     */
+    observedAt: string;
+    /**
+     * Items
+     */
+    items: Array<SourceHealthItem>;
+};
+
+/**
  * SourceName
  *
  * ニュースソースの表示名。
@@ -657,6 +743,15 @@ export type WatchlistIds = {
      */
     ids: Array<number>;
 };
+
+/**
+ * WindowHours
+ *
+ * 表示窓 (時間)。query string を coerce して許可値外を 422 で弾く。
+ *
+ * ``Literal[int]`` は query 文字列を int に coerce せず全値が落ちるため IntEnum。
+ */
+export type WindowHours = 24 | 48 | 72 | 168;
 
 /**
  * _ArticleSummaryOut
@@ -1474,6 +1569,43 @@ export type DeactivateSourceResponses = {
 };
 
 export type DeactivateSourceResponse = DeactivateSourceResponses[keyof DeactivateSourceResponses];
+
+export type GetSourceHealthData = {
+    body?: never;
+    headers?: {
+        /**
+         * Authorization
+         */
+        authorization?: string | null;
+    };
+    path?: never;
+    query?: {
+        windowHours?: WindowHours;
+    };
+    url: '/api/v1/admin/sources/health';
+};
+
+export type GetSourceHealthErrors = {
+    /**
+     * Bad request
+     */
+    400: unknown;
+    /**
+     * Validation Error
+     */
+    422: HttpValidationError;
+};
+
+export type GetSourceHealthError = GetSourceHealthErrors[keyof GetSourceHealthErrors];
+
+export type GetSourceHealthResponses = {
+    /**
+     * Successful Response
+     */
+    200: SourceHealthResponse;
+};
+
+export type GetSourceHealthResponse = GetSourceHealthResponses[keyof GetSourceHealthResponses];
 
 export type FetchNewsData = {
     /**
