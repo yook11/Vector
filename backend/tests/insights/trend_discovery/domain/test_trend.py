@@ -24,13 +24,18 @@ from app.insights.trend_discovery.domain.trend import (
     MAX_KEY_POINTS_PER_MENTION,
     MAX_RELATED_MENTIONS,
     MIN_CURRENT,
+    MIN_PREVIOUS,
     MIN_SHARED_ARTICLES,
+    NEW_BURST_THRESHOLD,
     SMOOTHING,
     TOP_N_PER_RANKING,
     CategoryTrends,
     RankedMention,
     RelatedMention,
     TrendsBundle,
+    is_hot,
+    select_fastest_growing,
+    select_most_mentioned,
 )
 from app.models.value_objects.category import CategoryName, CategorySlug
 
@@ -336,3 +341,112 @@ class TestDomainConstants:
 
     def test_top_n_per_ranking_is_five(self) -> None:
         assert TOP_N_PER_RANKING == 5
+
+
+class TestIsHot:
+    """is_hot の hot/non-hot 境界条件。
+
+    floor (appearance_count >= MIN_CURRENT) は RankedMention の Field 制約で
+    構造的に保証済みなので、ここでは継続トレンドと新規 burst の閾値境界だけを確認する。
+    """
+
+    def test_previous_at_min_previous_is_hot(self) -> None:
+        """previous == MIN_PREVIOUS(2) の継続トレンドは hot。"""
+        m = _mention(current=MIN_CURRENT, previous=MIN_PREVIOUS)
+        assert is_hot(m) is True
+
+    def test_previous_below_min_previous_without_burst_is_not_hot(self) -> None:
+        """previous=1, current=9 は継続トレンド条件 (previous >= 2) も
+        burst 条件 (current >= NEW_BURST_THRESHOLD=10) も満たさないので non-hot。"""
+        m = _mention(current=9, previous=1)
+        assert is_hot(m) is False
+
+    def test_zero_previous_at_burst_threshold_is_hot(self) -> None:
+        """previous=0 かつ current == NEW_BURST_THRESHOLD(10) は burst として hot。"""
+        m = _mention(current=NEW_BURST_THRESHOLD, previous=0)
+        assert is_hot(m) is True
+
+    def test_zero_previous_below_burst_threshold_is_not_hot(self) -> None:
+        """previous=0 かつ current < NEW_BURST_THRESHOLD(10) は non-hot。"""
+        # current=9 は MIN_CURRENT(5) >= を満たすが burst 閾値には届かない
+        m = _mention(current=NEW_BURST_THRESHOLD - 1, previous=0)
+        assert is_hot(m) is False
+
+
+class TestSelectMostMentioned:
+    """select_most_mentioned の順序と truncate の不変条件。"""
+
+    def test_tie_break_by_hotness_score_when_appearance_count_equal(self) -> None:
+        """appearance_count 同値のとき hotness_score 降順で tie-break される。"""
+        # hotness_score = (current - previous) / max(previous, SMOOTHING=2)
+        # high: (10 - 0) / 2 = 5.0  low: (10 - 8) / 8 = 0.25
+        high_hotness = _mention("High", current=10, previous=0)
+        low_hotness = _mention("Low", current=10, previous=8)
+        result = select_most_mentioned([low_hotness, high_hotness])
+        assert result[0] == high_hotness
+        assert result[1] == low_hotness
+
+    def test_tie_break_by_match_key_when_appearance_count_and_hotness_equal(
+        self,
+    ) -> None:
+        """appearance_count と hotness_score が同値のとき name.match_key 昇順。"""
+        # current / previous が同じなら hotness_score も同値
+        m_z = _mention("Zebra", current=10, previous=5)
+        m_a = _mention("Apple", current=10, previous=5)
+        result = select_most_mentioned([m_z, m_a])
+        # match_key = lower, "apple" < "zebra"
+        assert result[0] == m_a
+        assert result[1] == m_z
+
+    def test_truncates_to_top_n(self) -> None:
+        """TOP_N_PER_RANKING + 1 件の pool は TOP_N_PER_RANKING 件に truncate。"""
+        pool = [
+            _mention(f"m{i}", current=MIN_CURRENT + i)
+            for i in range(TOP_N_PER_RANKING + 1)
+        ]
+        result = select_most_mentioned(pool)
+        assert len(result) == TOP_N_PER_RANKING
+
+    def test_empty_pool_returns_empty_tuple(self) -> None:
+        """空 pool は空 tuple を返す。"""
+        assert select_most_mentioned([]) == ()
+
+
+class TestSelectFastestGrowing:
+    """select_fastest_growing の hot フィルタ・順序・truncate の不変条件。"""
+
+    def test_tie_break_chain_hotness_then_appearance_then_match_key(self) -> None:
+        """hotness_score 同値 → appearance_count 降順 → match_key 昇順の tie-break。"""
+        # 全て previous=0 かつ current=10 → hotness_score = 10/2 = 5.0 で同値
+        # appearance_count = current なので同値 → match_key で決まる
+        m_z = _mention("Zebra", current=NEW_BURST_THRESHOLD, previous=0)
+        m_a = _mention("Apple", current=NEW_BURST_THRESHOLD, previous=0)
+        result = select_fastest_growing([m_z, m_a])
+        assert result[0] == m_a
+        assert result[1] == m_z
+
+    def test_tie_break_appearance_count_when_hotness_equal(self) -> None:
+        """hotness_score 同値のとき appearance_count 降順が優先される。"""
+        # hotness = (current - prev) / max(prev, 2)
+        # high_count: (20 - 4) / 4 = 4.0  low_count: (10 - 2) / 2 = 4.0 → 同値
+        # appearance_count は high_count=20 > low_count=10
+        high_count = _mention("AAA", current=20, previous=4)
+        low_count = _mention("ZZZ", current=10, previous=2)
+        result = select_fastest_growing([low_count, high_count])
+        assert result[0] == high_count
+        assert result[1] == low_count
+
+    def test_non_hot_mention_excluded_regardless_of_appearance_count(self) -> None:
+        """non-hot (previous=1, current=9) は appearance_count が高くても除外される。"""
+        # previous=1 < MIN_PREVIOUS=2, current=9 < NEW_BURST_THRESHOLD=10 → non-hot
+        non_hot = _mention("NonHot", current=9, previous=1)
+        hot = _mention("Hot", current=NEW_BURST_THRESHOLD, previous=0)
+        result = select_fastest_growing([non_hot, hot])
+        assert non_hot not in result
+        assert hot in result
+
+    def test_all_non_hot_returns_empty_tuple(self) -> None:
+        """全員 non-hot のとき空 tuple を返す。"""
+        # previous=1, current=9 → non-hot (上の test と同じ条件)
+        pool = [_mention(f"m{i}", current=9, previous=1) for i in range(3)]
+        assert select_fastest_growing(pool) == ()

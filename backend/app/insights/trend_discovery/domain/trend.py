@@ -6,6 +6,8 @@
 - ``RelatedMention``: anchor mention と同一 key_point 内で一緒に語られた別の固有名
 - ``CategoryTrends`` (集約ルート): 1 カテゴリ × 1 集計窓分の 2 ランキング束
 - ``TrendsBundle`` (書込時の検証済み集約): 1 集計窓分の全カテゴリ集約
+- ``select_most_mentioned`` / ``select_fastest_growing`` / ``is_hot``: 2 ランキング
+  の選定ポリシー (しきい値定数と同じモジュールに置き SSoT を 1 箇所にする)
 
 責務:
 - 件数の下限/非負を Pydantic ``Field(ge=...)`` で構造的に強制
@@ -27,6 +29,7 @@ hotness_score (API では growthRate として晒す):
 
 from __future__ import annotations
 
+from collections.abc import Iterable
 from datetime import date
 from typing import Final
 
@@ -69,9 +72,47 @@ KEY_POINT_DEDUP_DISTANCE: Final[float] = 0.1
 # 起こらない (生成側 SQL の集計対象 article 数自体が桁違いに少ない)。
 _MAX_COUNT: Final[int] = 10_000
 
+# mention の同一性キー (MentionName.match_key, MentionType.value)。
+# repository の戻り dict / service の union / 文脈選定で共通に使う。
+MentionKey = tuple[str, str]
+
 
 def _hotness(current: int, previous: int) -> float:
     return (current - previous) / max(previous, SMOOTHING)
+
+
+def is_hot(mention: RankedMention) -> bool:
+    """伸び率ランキングの母集団判定 (継続トレンド or 新規 burst)。
+
+    floor (appearance_count >= MIN_CURRENT) は ``RankedMention`` の Field 制約が
+    構造的に保証済み。前週実績ありの継続トレンド (previous >= MIN_PREVIOUS) か、
+    前週ゼロでも現週が閾値を超えた新規 burst (current >= NEW_BURST_THRESHOLD) か
+    のみを判定する。
+    """
+    return (
+        mention.previous_appearance_count >= MIN_PREVIOUS
+        or mention.appearance_count >= NEW_BURST_THRESHOLD
+    )
+
+
+def select_most_mentioned(pool: Iterable[RankedMention]) -> tuple[RankedMention, ...]:
+    """出現回数ランキング top N を確定する (母集団は floor 通過の全 mention)。"""
+    return tuple(
+        sorted(
+            pool,
+            key=lambda m: (-m.appearance_count, -m.hotness_score, m.name.match_key),
+        )[:TOP_N_PER_RANKING]
+    )
+
+
+def select_fastest_growing(pool: Iterable[RankedMention]) -> tuple[RankedMention, ...]:
+    """伸び率ランキング top N を確定する (母集団は ``is_hot`` 通過 mention のみ)。"""
+    return tuple(
+        sorted(
+            (m for m in pool if is_hot(m)),
+            key=lambda m: (-m.hotness_score, -m.appearance_count, m.name.match_key),
+        )[:TOP_N_PER_RANKING]
+    )
 
 
 class RelatedMention(BaseModel):

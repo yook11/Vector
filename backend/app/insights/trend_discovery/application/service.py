@@ -31,12 +31,12 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.insights.trend_discovery.domain.ready import ReadyForTrendDiscovery
 from app.insights.trend_discovery.domain.trend import (
-    MIN_PREVIOUS,
-    NEW_BURST_THRESHOLD,
-    TOP_N_PER_RANKING,
     CategoryTrends,
+    MentionKey,
     RankedMention,
     TrendsBundle,
+    select_fastest_growing,
+    select_most_mentioned,
 )
 from app.insights.trend_discovery.domain.window import WEEK_TZ
 from app.insights.trend_discovery.repository.snapshots import (
@@ -52,25 +52,10 @@ logger = structlog.get_logger(__name__)
 
 _WEEK = timedelta(days=7)
 
-_MentionKey = tuple[str, str]
-
 # 生成成功後に frontend へ revalidate を打つ cache tag。frontend の
 # lib/cache/tags.ts (cacheTags.trends) と一致させること。task / CLI 双方が
 # 同値を使うよう単一定義する (誤変更を防ぐため不変 tuple)。
 TRENDS_REVALIDATE_TAGS: tuple[str, ...] = ("trends",)
-
-
-def _is_hot(mention: RankedMention) -> bool:
-    """伸び率ランキングの母集団判定 (継続トレンド or 新規 burst)。
-
-    floor (appearance_count >= MIN_CURRENT) は repository が保証済み。ここでは
-    前週実績ありの継続トレンド (previous >= MIN_PREVIOUS) か、前週ゼロでも現週が
-    閾値を超えた新規 burst (current >= NEW_BURST_THRESHOLD) かのみを判定する。
-    """
-    return (
-        mention.previous_appearance_count >= MIN_PREVIOUS
-        or mention.appearance_count >= NEW_BURST_THRESHOLD
-    )
 
 
 # ---------------------------------------------------------------------------
@@ -237,9 +222,9 @@ class TrendDiscoveryService:
     ) -> CategoryTrends:
         """1 カテゴリ分の 2 ランキングを確定し、上位 mention に文脈を添えて束ねる。
 
-        repository は floor 通過の全 mention を母集団として返す。出現回数は floor の
-        み・伸び率は hot ゲート通過のみを母集団に、それぞれ top N を確定する。両ラン
-        キングの和集合だけ key_point / related mention を取得し (1 カテゴリ 3 query)、
+        repository は floor 通過の全 mention を母集団として返し、2 ランキングの確定
+        (母集団の違い・hot ゲート含む) は domain の選定関数に委ねる。両ランキング
+        の和集合だけ key_point / related mention を取得し (1 カテゴリ 3 query)、
         同一 mention が両方に載る場合は同じ enrich 済みインスタンスを共有する。
         """
         pool = await trends_repo.get_ranked_mentions(
@@ -248,28 +233,10 @@ class TrendDiscoveryService:
             current_end=current_end,
             previous_start=previous_start,
         )
-        most_mentioned = tuple(
-            sorted(
-                pool,
-                key=lambda m: (
-                    -m.appearance_count,
-                    -m.hotness_score,
-                    m.name.match_key,
-                ),
-            )[:TOP_N_PER_RANKING]
-        )
-        fastest_growing = tuple(
-            sorted(
-                (m for m in pool if _is_hot(m)),
-                key=lambda m: (
-                    -m.hotness_score,
-                    -m.appearance_count,
-                    m.name.match_key,
-                ),
-            )[:TOP_N_PER_RANKING]
-        )
+        most_mentioned = select_most_mentioned(pool)
+        fastest_growing = select_fastest_growing(pool)
 
-        union: dict[_MentionKey, RankedMention] = {}
+        union: dict[MentionKey, RankedMention] = {}
         for mention in (*most_mentioned, *fastest_growing):
             union.setdefault((mention.name.match_key, mention.type.value), mention)
         mention_keys = list(union.keys())
