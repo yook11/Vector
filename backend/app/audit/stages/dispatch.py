@@ -23,11 +23,10 @@ _RAW_SOURCE_NAME_LIMIT = 200
 class DispatchOutcomeCode(StrEnum):
     """Stage.DISPATCH の outcome code。"""
 
-    SOURCE_DISPATCHED = "source_dispatched"
     SOURCE_ENQUEUE_FAILED = "source_enqueue_failed"
     SOURCE_NOT_REGISTERED = "source_not_registered"
     SOURCE_NAME_INVALID = "source_name_invalid"
-    DISPATCH_RUN_NO_TARGETS = "dispatch_run_no_targets"
+    DISPATCH_RUN_COMPLETED = "dispatch_run_completed"
     DISPATCH_RUN_FAILED = "dispatch_run_failed"
 
 
@@ -67,26 +66,32 @@ class DispatchAuditRepository:
             retryability=retryability,
         )
 
+    async def append_run_completed(self, *, cadence: DispatchCadence) -> None:
+        """1 件以上 dispatch した run の成功 heartbeat を焼く (件数なし)。
+
+        per-source occurrence は metric (``vector.dispatch.outcome``) に移設したため、
+        本行は admin Pipeline Health の ``last_succeeded_at[dispatch]`` を維持する
+        liveness 用の最小 succeeded 行のみを担う。
+        """
+        await self._events.append(
+            stage=Stage.DISPATCH,
+            event_type=EventType.SUCCEEDED,
+            outcome_code=DispatchOutcomeCode.DISPATCH_RUN_COMPLETED.value,
+            payload=DispatchPayload(cadence=cadence),
+        )
+
     async def append_run_event(
         self,
         *,
         event_type: EventType,
         outcome_code: DispatchOutcomeCode,
         cadence: DispatchCadence,
-        selected_count: int | None = None,
-        dispatched_count: int | None = None,
-        rejected_count: int | None = None,
-        failed_count: int | None = None,
         exc: BaseException | None = None,
         retryability: Retryability | None = None,
     ) -> None:
-        """run 単位の dispatch 結果を記録する。"""
+        """run 単位の失敗を記録する (成功 / 件数 summary は焼かない)。"""
         payload = DispatchPayload(
             cadence=cadence,
-            selected_count=selected_count,
-            dispatched_count=dispatched_count,
-            rejected_count=rejected_count,
-            failed_count=failed_count,
             error_message=_error_message(exc),
             error_chain=extract_error_chain(exc) if exc is not None else None,
         )

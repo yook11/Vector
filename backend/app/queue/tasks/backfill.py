@@ -135,7 +135,7 @@ _aged_out_counter = logfire.metric_counter(
 
 
 def _new_backfill_run_id() -> str:
-    """1 backfill run 内の item / summary 監査を束ねる ID を返す。"""
+    """1 backfill run 内の item / skip / failed 監査を束ねる ID を返す。"""
     return str(uuid4())
 
 
@@ -187,15 +187,10 @@ async def _append_backfill_run_event(
     run_id: str,
     event_type: EventType,
     outcome_code: BackfillOutcomeCode,
-    selected_count: int | None = None,
-    granted_count: int | None = None,
-    enqueued_count: int | None = None,
-    failed_count: int | None = None,
-    limit: int | None = None,
     daily_max: int | None = None,
     exc: BaseException | None = None,
 ) -> None:
-    """run 単位監査を best-effort で焼く。"""
+    """run 単位の skip 制御 / 失敗監査を best-effort で焼く。"""
     try:
         async with session_factory() as session:
             await BackfillAuditRepository(session).append_run_event(
@@ -204,11 +199,6 @@ async def _append_backfill_run_event(
                 outcome_code=outcome_code,
                 backfill_stage=backfill_stage,
                 run_id=run_id,
-                selected_count=selected_count,
-                granted_count=granted_count,
-                enqueued_count=enqueued_count,
-                failed_count=failed_count,
-                limit=limit,
                 daily_max=daily_max,
                 exc=exc,
             )
@@ -456,8 +446,6 @@ async def backfill_curations(ctx: Context = TaskiqDepends()) -> None:
             run_id=run_id,
             event_type=EventType.SKIPPED,
             outcome_code=BackfillOutcomeCode.RUN_KILL_SWITCH_DISABLED,
-            limit=CURATIONS_LIMIT,
-            daily_max=CURATIONS_DAILY_MAX,
         )
         logger.info("backfill_curations_disabled")
         return
@@ -473,8 +461,6 @@ async def backfill_curations(ctx: Context = TaskiqDepends()) -> None:
                 run_id=run_id,
                 event_type=EventType.SKIPPED,
                 outcome_code=BackfillOutcomeCode.RUN_HELD_BY_STAGE_HOLD,
-                limit=CURATIONS_LIMIT,
-                daily_max=CURATIONS_DAILY_MAX,
             )
             logger.warning("backfill_curations_held")
             return
@@ -509,12 +495,6 @@ async def backfill_curations(ctx: Context = TaskiqDepends()) -> None:
                 run_id=run_id,
                 event_type=EventType.SKIPPED,
                 outcome_code=BackfillOutcomeCode.RUN_NO_TARGETS,
-                selected_count=0,
-                granted_count=0,
-                enqueued_count=0,
-                failed_count=0,
-                limit=CURATIONS_LIMIT,
-                daily_max=CURATIONS_DAILY_MAX,
             )
             logger.info("backfill_curations_empty")
             return
@@ -530,11 +510,6 @@ async def backfill_curations(ctx: Context = TaskiqDepends()) -> None:
                 run_id=run_id,
                 event_type=EventType.SKIPPED,
                 outcome_code=BackfillOutcomeCode.RUN_DAILY_BUDGET_EXHAUSTED,
-                selected_count=found,
-                granted_count=0,
-                enqueued_count=0,
-                failed_count=0,
-                limit=CURATIONS_LIMIT,
                 daily_max=CURATIONS_DAILY_MAX,
             )
             logger.warning("backfill_curations_daily_budget_exhausted", found=found)
@@ -577,20 +552,6 @@ async def backfill_curations(ctx: Context = TaskiqDepends()) -> None:
                 outcome_code=BackfillOutcomeCode.ITEM_ENQUEUED,
             )
 
-        await _append_backfill_run_event(
-            session_factory,
-            stage=Stage.BACKFILL_CURATE,
-            backfill_stage="curate",
-            run_id=run_id,
-            event_type=EventType.SUCCEEDED,
-            outcome_code=BackfillOutcomeCode.RUN_COMPLETED,
-            selected_count=found,
-            granted_count=granted,
-            enqueued_count=enqueued,
-            failed_count=failed,
-            limit=CURATIONS_LIMIT,
-            daily_max=CURATIONS_DAILY_MAX,
-        )
         _record_dispatched("curation", enqueued)
     except Exception as exc:
         await _append_backfill_run_event(
@@ -600,8 +561,6 @@ async def backfill_curations(ctx: Context = TaskiqDepends()) -> None:
             run_id=run_id,
             event_type=EventType.FAILED,
             outcome_code=BackfillOutcomeCode.RUN_FAILED,
-            limit=CURATIONS_LIMIT,
-            daily_max=CURATIONS_DAILY_MAX,
             exc=exc,
         )
         raise
@@ -645,8 +604,6 @@ async def backfill_assessments(ctx: Context = TaskiqDepends()) -> None:
             run_id=run_id,
             event_type=EventType.SKIPPED,
             outcome_code=BackfillOutcomeCode.RUN_KILL_SWITCH_DISABLED,
-            limit=ASSESSMENTS_LIMIT,
-            daily_max=ASSESSMENTS_DAILY_MAX,
         )
         logger.info("backfill_assessments_disabled")
         return
@@ -662,8 +619,6 @@ async def backfill_assessments(ctx: Context = TaskiqDepends()) -> None:
                 run_id=run_id,
                 event_type=EventType.SKIPPED,
                 outcome_code=BackfillOutcomeCode.RUN_HELD_BY_STAGE_HOLD,
-                limit=ASSESSMENTS_LIMIT,
-                daily_max=ASSESSMENTS_DAILY_MAX,
             )
             logger.warning("backfill_assessments_held")
             return
@@ -700,12 +655,6 @@ async def backfill_assessments(ctx: Context = TaskiqDepends()) -> None:
                 run_id=run_id,
                 event_type=EventType.SKIPPED,
                 outcome_code=BackfillOutcomeCode.RUN_NO_TARGETS,
-                selected_count=0,
-                granted_count=0,
-                enqueued_count=0,
-                failed_count=0,
-                limit=ASSESSMENTS_LIMIT,
-                daily_max=ASSESSMENTS_DAILY_MAX,
             )
             logger.info("backfill_assessments_empty")
             return
@@ -721,11 +670,6 @@ async def backfill_assessments(ctx: Context = TaskiqDepends()) -> None:
                 run_id=run_id,
                 event_type=EventType.SKIPPED,
                 outcome_code=BackfillOutcomeCode.RUN_DAILY_BUDGET_EXHAUSTED,
-                selected_count=found,
-                granted_count=0,
-                enqueued_count=0,
-                failed_count=0,
-                limit=ASSESSMENTS_LIMIT,
                 daily_max=ASSESSMENTS_DAILY_MAX,
             )
             logger.warning("backfill_assessments_daily_budget_exhausted", found=found)
@@ -771,20 +715,6 @@ async def backfill_assessments(ctx: Context = TaskiqDepends()) -> None:
                 outcome_code=BackfillOutcomeCode.ITEM_ENQUEUED,
             )
 
-        await _append_backfill_run_event(
-            session_factory,
-            stage=Stage.BACKFILL_ASSESS,
-            backfill_stage="assess",
-            run_id=run_id,
-            event_type=EventType.SUCCEEDED,
-            outcome_code=BackfillOutcomeCode.RUN_COMPLETED,
-            selected_count=found,
-            granted_count=granted,
-            enqueued_count=enqueued,
-            failed_count=failed,
-            limit=ASSESSMENTS_LIMIT,
-            daily_max=ASSESSMENTS_DAILY_MAX,
-        )
         _record_dispatched("assessment", enqueued)
     except Exception as exc:
         await _append_backfill_run_event(
@@ -794,8 +724,6 @@ async def backfill_assessments(ctx: Context = TaskiqDepends()) -> None:
             run_id=run_id,
             event_type=EventType.FAILED,
             outcome_code=BackfillOutcomeCode.RUN_FAILED,
-            limit=ASSESSMENTS_LIMIT,
-            daily_max=ASSESSMENTS_DAILY_MAX,
             exc=exc,
         )
         raise
@@ -836,8 +764,6 @@ async def backfill_embeddings(ctx: Context = TaskiqDepends()) -> None:
             run_id=run_id,
             event_type=EventType.SKIPPED,
             outcome_code=BackfillOutcomeCode.RUN_KILL_SWITCH_DISABLED,
-            limit=EMBEDDINGS_LIMIT,
-            daily_max=EMBEDDINGS_DAILY_MAX,
         )
         logger.info("backfill_embeddings_disabled")
         return
@@ -853,8 +779,6 @@ async def backfill_embeddings(ctx: Context = TaskiqDepends()) -> None:
                 run_id=run_id,
                 event_type=EventType.SKIPPED,
                 outcome_code=BackfillOutcomeCode.RUN_HELD_BY_STAGE_HOLD,
-                limit=EMBEDDINGS_LIMIT,
-                daily_max=EMBEDDINGS_DAILY_MAX,
             )
             logger.warning("backfill_embeddings_held")
             return
@@ -889,12 +813,6 @@ async def backfill_embeddings(ctx: Context = TaskiqDepends()) -> None:
                 run_id=run_id,
                 event_type=EventType.SKIPPED,
                 outcome_code=BackfillOutcomeCode.RUN_NO_TARGETS,
-                selected_count=0,
-                granted_count=0,
-                enqueued_count=0,
-                failed_count=0,
-                limit=EMBEDDINGS_LIMIT,
-                daily_max=EMBEDDINGS_DAILY_MAX,
             )
             logger.info("backfill_embeddings_empty")
             return
@@ -910,11 +828,6 @@ async def backfill_embeddings(ctx: Context = TaskiqDepends()) -> None:
                 run_id=run_id,
                 event_type=EventType.SKIPPED,
                 outcome_code=BackfillOutcomeCode.RUN_DAILY_BUDGET_EXHAUSTED,
-                selected_count=found,
-                granted_count=0,
-                enqueued_count=0,
-                failed_count=0,
-                limit=EMBEDDINGS_LIMIT,
                 daily_max=EMBEDDINGS_DAILY_MAX,
             )
             logger.warning("backfill_embeddings_daily_budget_exhausted", found=found)
@@ -960,20 +873,6 @@ async def backfill_embeddings(ctx: Context = TaskiqDepends()) -> None:
                 outcome_code=BackfillOutcomeCode.ITEM_ENQUEUED,
             )
 
-        await _append_backfill_run_event(
-            session_factory,
-            stage=Stage.BACKFILL_EMBED,
-            backfill_stage="embed",
-            run_id=run_id,
-            event_type=EventType.SUCCEEDED,
-            outcome_code=BackfillOutcomeCode.RUN_COMPLETED,
-            selected_count=found,
-            granted_count=granted,
-            enqueued_count=enqueued,
-            failed_count=failed,
-            limit=EMBEDDINGS_LIMIT,
-            daily_max=EMBEDDINGS_DAILY_MAX,
-        )
         _record_dispatched("embedding", enqueued)
     except Exception as exc:
         await _append_backfill_run_event(
@@ -983,8 +882,6 @@ async def backfill_embeddings(ctx: Context = TaskiqDepends()) -> None:
             run_id=run_id,
             event_type=EventType.FAILED,
             outcome_code=BackfillOutcomeCode.RUN_FAILED,
-            limit=EMBEDDINGS_LIMIT,
-            daily_max=EMBEDDINGS_DAILY_MAX,
             exc=exc,
         )
         raise

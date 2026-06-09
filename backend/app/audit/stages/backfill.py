@@ -29,7 +29,6 @@ class BackfillOutcomeCode(StrEnum):
     RUN_KILL_SWITCH_DISABLED = "backfill_run_kill_switch_disabled"
     RUN_HELD_BY_STAGE_HOLD = "backfill_run_held_by_stage_hold"
     RUN_DAILY_BUDGET_EXHAUSTED = "backfill_run_daily_budget_exhausted"
-    RUN_COMPLETED = "backfill_run_completed"
     RUN_FAILED = "backfill_run_failed"
 
 
@@ -82,24 +81,14 @@ class BackfillAuditRepository:
         outcome_code: BackfillOutcomeCode,
         backfill_stage: BackfillStage,
         run_id: str,
-        selected_count: int | None = None,
-        granted_count: int | None = None,
-        enqueued_count: int | None = None,
-        failed_count: int | None = None,
-        limit: int | None = None,
         daily_max: int | None = None,
         exc: BaseException | None = None,
         retryability: Retryability | None = None,
     ) -> None:
-        """run 単位の backfill 結果を記録する。"""
+        """run 単位の skip 制御 / 失敗を記録する (成功 summary は焼かない)。"""
         payload = BackfillPayload(
             backfill_stage=backfill_stage,
             run_id=run_id,
-            selected_count=selected_count,
-            granted_count=granted_count,
-            enqueued_count=enqueued_count,
-            failed_count=failed_count,
-            limit=limit,
             daily_max=daily_max,
             error_message=_error_message(exc),
             error_chain=extract_error_chain(exc) if exc is not None else None,

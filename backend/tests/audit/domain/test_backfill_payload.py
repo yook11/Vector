@@ -29,18 +29,13 @@ def test_backfill_stage_is_required() -> None:
 
 
 def test_full_backfill_payload_roundtrip() -> None:
-    """run / item fields を含む JSONB dump → validate が同値で戻る。"""
+    """item 識別 + daily_max + error fields の JSONB dump → validate が同値で戻る。"""
     original = BackfillPayload(
         backfill_stage="assess",
         run_id="run-1",
         target_kind="curation",
         target_id=42,
         source_name="VentureBeat",
-        selected_count=10,
-        granted_count=5,
-        enqueued_count=4,
-        failed_count=1,
-        limit=50,
         daily_max=600,
         error_message="queue down",
         error_chain=["builtins.RuntimeError"],

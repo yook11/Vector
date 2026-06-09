@@ -65,10 +65,10 @@ async def test_append_item_event_records_target_snapshot(
 
 
 @pytest.mark.asyncio
-async def test_append_run_event_records_counts_and_error(
+async def test_append_run_failed_records_error_without_counts(
     db_session: AsyncSession,
 ) -> None:
-    """run failed は count snapshot と例外情報を保存する。"""
+    """run failed は例外情報を保存し、throughput count は焼かない (保証2)。"""
     repo = BackfillAuditRepository(db_session)
     exc = RuntimeError("select failed")
 
@@ -78,12 +78,6 @@ async def test_append_run_event_records_counts_and_error(
         outcome_code=BackfillOutcomeCode.RUN_FAILED,
         backfill_stage="embed",
         run_id="run-2",
-        selected_count=50,
-        granted_count=10,
-        enqueued_count=9,
-        failed_count=1,
-        limit=50,
-        daily_max=1500,
         exc=exc,
     )
     await db_session.commit()
@@ -96,11 +90,36 @@ async def test_append_run_event_records_counts_and_error(
     assert row.payload["kind"] == "backfill"
     assert row.payload["backfill_stage"] == "embed"
     assert row.payload["run_id"] == "run-2"
-    assert row.payload["selected_count"] == 50
-    assert row.payload["granted_count"] == 10
-    assert row.payload["enqueued_count"] == 9
-    assert row.payload["failed_count"] == 1
-    assert row.payload["limit"] == 50
-    assert row.payload["daily_max"] == 1500
     assert row.payload["error_message"] == "select failed"
     assert row.payload["error_chain"] == ["builtins.RuntimeError"]
+    for removed in (
+        "selected_count",
+        "granted_count",
+        "enqueued_count",
+        "failed_count",
+        "limit",
+    ):
+        assert removed not in row.payload
+
+
+@pytest.mark.asyncio
+async def test_append_run_budget_exhausted_records_daily_max(
+    db_session: AsyncSession,
+) -> None:
+    """daily budget 枯渇は停止閾値 daily_max のみ保存する (保証2)。"""
+    repo = BackfillAuditRepository(db_session)
+
+    await repo.append_run_event(
+        stage=Stage.BACKFILL_EMBED,
+        event_type=EventType.SKIPPED,
+        outcome_code=BackfillOutcomeCode.RUN_DAILY_BUDGET_EXHAUSTED,
+        backfill_stage="embed",
+        run_id="run-3",
+        daily_max=1500,
+    )
+    await db_session.commit()
+
+    row = (await db_session.execute(select(PipelineEvent))).scalars().one()
+    assert row.outcome_code == "backfill_run_daily_budget_exhausted"
+    assert row.payload["daily_max"] == 1500
+    assert "limit" not in row.payload

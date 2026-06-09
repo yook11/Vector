@@ -126,6 +126,8 @@ async def test_kill_switch_disabled_is_audited(case: _TaskCase) -> None:
     held.assert_not_called()
     backlog_cls.assert_not_called()
     assert _run_outcomes(run_audit) == [BackfillOutcomeCode.RUN_KILL_SWITCH_DISABLED]
+    # daily_max は budget exhausted 専用 (停止閾値)。他 skip では焼かない。
+    assert "daily_max" not in run_audit.await_args.kwargs
 
 
 @pytest.mark.asyncio
@@ -145,6 +147,7 @@ async def test_stage_hold_is_audited(case: _TaskCase) -> None:
     ageout.assert_not_called()
     backlog_cls.assert_not_called()
     assert _run_outcomes(run_audit) == [BackfillOutcomeCode.RUN_HELD_BY_STAGE_HOLD]
+    assert "daily_max" not in run_audit.await_args.kwargs
 
 
 @pytest.mark.asyncio
@@ -168,7 +171,7 @@ async def test_no_targets_is_audited(case: _TaskCase) -> None:
 
     budget.assert_not_called()
     assert _run_outcomes(run_audit) == [BackfillOutcomeCode.RUN_NO_TARGETS]
-    assert run_audit.await_args.kwargs["selected_count"] == 0
+    assert "daily_max" not in run_audit.await_args.kwargs
 
 
 @pytest.mark.asyncio
@@ -197,16 +200,16 @@ async def test_budget_exhausted_is_audited(case: _TaskCase) -> None:
 
     queue_task.kiq.assert_not_called()
     assert _run_outcomes(run_audit) == [BackfillOutcomeCode.RUN_DAILY_BUDGET_EXHAUSTED]
-    assert run_audit.await_args.kwargs["selected_count"] == len(targets)
-    assert run_audit.await_args.kwargs["granted_count"] == 0
+    # 停止閾値 daily_max は budget exhausted event でのみ KEEP。
+    assert run_audit.await_args.kwargs["daily_max"] == case.daily_max
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("case", CASES, ids=[case.name for case in CASES])
-async def test_enqueue_success_items_and_completed_run_are_audited(
+async def test_enqueue_success_items_are_audited_and_no_run_summary(
     case: _TaskCase,
 ) -> None:
-    """enqueue 成功 item と completed summary が監査される。"""
+    """成功 item は監査され、run summary は焼かれない (保証1)。"""
     targets = [_target(1), _target(2)]
     backlog = MagicMock()
     setattr(backlog, case.target_method, AsyncMock(return_value=targets))
@@ -235,9 +238,8 @@ async def test_enqueue_success_items_and_completed_run_are_audited(
         BackfillOutcomeCode.ITEM_ENQUEUED,
         BackfillOutcomeCode.ITEM_ENQUEUED,
     ]
-    assert _run_outcomes(run_audit) == [BackfillOutcomeCode.RUN_COMPLETED]
-    assert run_audit.await_args.kwargs["enqueued_count"] == len(targets)
-    assert run_audit.await_args.kwargs["failed_count"] == 0
+    # 成功 run では run event が一切焼かれない (occurrence は metric へ移設)。
+    run_audit.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -277,9 +279,15 @@ async def test_enqueue_failure_is_audited_and_later_items_continue(
         BackfillOutcomeCode.ITEM_ENQUEUE_FAILED,
         BackfillOutcomeCode.ITEM_ENQUEUED,
     ]
-    assert _run_outcomes(run_audit) == [BackfillOutcomeCode.RUN_COMPLETED]
-    assert run_audit.await_args.kwargs["enqueued_count"] == 2
-    assert run_audit.await_args.kwargs["failed_count"] == 1
+    # item enqueue failed の forensic (exc) は残る (保証2)。
+    failed_call = next(
+        call
+        for call in item_audit.await_args_list
+        if call.kwargs["outcome_code"] == BackfillOutcomeCode.ITEM_ENQUEUE_FAILED
+    )
+    assert failed_call.kwargs["exc"] is not None
+    # 成功 run では run summary を焼かない。
+    run_audit.assert_not_awaited()
 
 
 @pytest.mark.asyncio

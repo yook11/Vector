@@ -23,10 +23,6 @@ class DispatchPayload(BasePipelineEventPayload):
 
     kind: Literal["dispatch"] = "dispatch"
     cadence: Literal["high", "medium", "low", "all"] | None = None
-    dispatched_count: int | None = None
-    selected_count: int | None = None
-    rejected_count: int | None = None
-    failed_count: int | None = None
     raw_source_name: str | None = None
     skip_reason: Literal["no_active_sources"] | None = None
 
@@ -39,11 +35,7 @@ class BackfillPayload(BasePipelineEventPayload):
     run_id: str | None = None
     target_kind: Literal["article", "curation", "analysis"] | None = None
     target_id: int | None = None
-    selected_count: int | None = None
-    granted_count: int | None = None
-    enqueued_count: int | None = None
-    failed_count: int | None = None
-    limit: int | None = None
+    # daily_max は budget exhausted event 専用の「停止の閾値」(B 級 config snapshot)。
     daily_max: int | None = None
 
 
