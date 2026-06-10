@@ -26,7 +26,11 @@ from fastapi.testclient import TestClient
 from logfire.testing import CaptureLogfire
 from pydantic import BaseModel, Field
 
-from app.main import _drop_endpoint_args_on_success, _sanitize_validation_errors
+from app.main import (
+    _LOGFIRE_EXCLUDED_URLS,
+    _drop_endpoint_args_on_success,
+    _sanitize_validation_errors,
+)
 
 # _sanitize_validation_errors — rejected input 除去の単体テスト
 
@@ -190,6 +194,46 @@ def test_validation_error_span_drops_rejected_input(capfire: CaptureLogfire) -> 
     assert sensitive not in dumped, (
         f"rejected input leaked into Logfire span: {dumped!r}"
     )
+
+
+def test_excluded_urls_suppresses_health_span_but_not_items_span(
+    capfire: CaptureLogfire,
+) -> None:
+    """excluded_urls に指定した URL パターンのリクエストは span を生成しない。
+
+    excluded_urls はリクエスト URL 全体への正規表現 search で除外されるため、
+    ``/api/v1/health$`` は ``/api/v1/health`` にだけマッチし他 route を除外しない。
+    対照 route (``/api/v1/items``) が span を生成することで、除外が機能している
+    ことの非空虚性を担保する。
+    """
+    app = FastAPI()
+
+    @app.get("/api/v1/health")
+    def health() -> dict:
+        return {"status": "ok"}
+
+    @app.get("/api/v1/items")
+    def list_items() -> dict:
+        return {"items": []}
+
+    logfire.instrument_fastapi(
+        app,
+        request_attributes_mapper=_drop_endpoint_args_on_success,
+        excluded_urls=_LOGFIRE_EXCLUDED_URLS,
+        capture_headers=False,
+        record_send_receive=False,
+        extra_spans=False,
+    )
+
+    client = TestClient(app)
+    assert client.get("/api/v1/health").status_code == 200
+    assert client.get("/api/v1/items").status_code == 200
+
+    dumped = json.dumps(capfire.exporter.exported_spans_as_dict(), default=str)
+    # 対照: /api/v1/items は span として捕捉されている (除外機能の非空虚性確認)。
+    assert "/api/v1/items" in dumped
+    # 本命: /api/v1/health は excluded_urls によって span から除外されている。
+    assert "/api/v1/health" not in dumped
 
 
 @pytest.fixture(autouse=True)

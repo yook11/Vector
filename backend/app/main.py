@@ -74,6 +74,11 @@ def _drop_endpoint_args_on_success(
     return None
 
 
+# Fly health probe (fly.core.toml, 15s 間隔) を span 化しない。
+# リクエスト URL 全体への正規表現 search で除外される。
+_LOGFIRE_EXCLUDED_URLS = "/api/v1/health$"
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
     # 起動時: 可観測性 (Logfire + structlog 集約) を初期化する。
@@ -92,6 +97,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
     logfire.instrument_fastapi(
         app,
         request_attributes_mapper=_drop_endpoint_args_on_success,
+        excluded_urls=_LOGFIRE_EXCLUDED_URLS,
         capture_headers=False,
         record_send_receive=False,
         extra_spans=False,

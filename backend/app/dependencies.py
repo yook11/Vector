@@ -8,6 +8,7 @@ import jwt
 import redis.asyncio as aioredis
 from fastapi import Depends, Header, HTTPException, status
 from jwt.exceptions import InvalidTokenError
+from opentelemetry import trace
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
@@ -121,6 +122,10 @@ async def get_current_user(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Not authenticated",
         )
+    # instrument_fastapi の request span (extra_spans=False のため current span)
+    # に user を紐付ける。enduser.id (OTel semconv) には内部 UUID のみ載せる
+    # (email 等の PII 不可)。span が無い文脈では no-op。
+    trace.get_current_span().set_attribute("enduser.id", str(user.id))
     return user
 
 
