@@ -130,7 +130,7 @@ export type BriefingDetail = {
  */
 export type BriefingListItem = {
     category: CategoryEmbed;
-    latest: BriefingListLatest | null;
+    latest: BriefingSummary | null;
 };
 
 /**
@@ -156,6 +156,34 @@ export type BriefingListResponse = {
      * Items
      */
     items: Array<BriefingListItem>;
+};
+
+/**
+ * BriefingSummary
+ *
+ * 一覧行に同梱する briefing 要約 (``BriefingListItem.latest``)。
+ *
+ * 未生成カテゴリでは ``BriefingListItem.latest = None`` で表現する。
+ * 一覧バンド表示用に見出し / summary / 件数を同梱する。詳細
+ * (``BriefingDetail``) と異なり chapters / keyArticles は持たない。
+ */
+export type BriefingSummary = {
+    /**
+     * Weekstart
+     */
+    weekStart: string;
+    /**
+     * Headline
+     */
+    headline: string;
+    /**
+     * Summary
+     */
+    summary: string;
+    /**
+     * Inputarticlecount
+     */
+    inputArticleCount: number;
 };
 
 /**
@@ -806,34 +834,6 @@ export type BriefingKeyArticle = {
      */
     significance: string;
     article: BriefingArticleEmbed;
-};
-
-/**
- * _BriefingListLatest
- *
- * 一覧行に同梱する「最新 briefing 参照」。
- *
- * 未生成カテゴリでは ``BriefingListItem.latest = None`` で表現する。
- * 一覧バンド表示用に見出し / summary / 件数を同梱する。詳細
- * (``BriefingDetail``) と異なり chapters / keyArticles は持たない。
- */
-export type BriefingListLatest = {
-    /**
-     * Weekstart
-     */
-    weekStart: string;
-    /**
-     * Headline
-     */
-    headline: string;
-    /**
-     * Summary
-     */
-    summary: string;
-    /**
-     * Inputarticlecount
-     */
-    inputArticleCount: number;
 };
 
 /**

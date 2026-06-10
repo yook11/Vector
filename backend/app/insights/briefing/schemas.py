@@ -111,8 +111,8 @@ BriefingResponse = Annotated[
 ]
 
 
-class _BriefingListLatest(_CamelBase):
-    """一覧行に同梱する「最新 briefing 参照」。
+class BriefingSummary(_CamelBase):
+    """一覧行に同梱する briefing 要約 (``BriefingListItem.latest``)。
 
     未生成カテゴリでは ``BriefingListItem.latest = None`` で表現する。
     一覧バンド表示用に見出し / summary / 件数を同梱する。詳細
@@ -129,7 +129,7 @@ class BriefingListItem(_CamelBase):
     """一覧 1 行: カテゴリ + 最新 briefing 参照 (未生成は None)。"""
 
     category: CategoryEmbed
-    latest: _BriefingListLatest | None
+    latest: BriefingSummary | None
 
 
 class BriefingListResponse(_CamelBase):

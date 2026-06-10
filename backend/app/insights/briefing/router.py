@@ -23,11 +23,11 @@ from app.insights.briefing.schemas import (
     BriefingListItem,
     BriefingListResponse,
     BriefingResponse,
+    BriefingSummary,
     EmptyBriefing,
     _BriefingArticleEmbed,
     _BriefingChapter,
     _BriefingKeyArticle,
-    _BriefingListLatest,
 )
 from app.models.article import Article
 from app.models.article_curation import ArticleCuration
@@ -178,7 +178,7 @@ async def list_briefings(
             items.append(
                 BriefingListItem(
                     category=_to_category(cat),
-                    latest=_BriefingListLatest(
+                    latest=BriefingSummary(
                         week_start=b.week_start_date,
                         headline=b.headline,
                         summary=b.summary,

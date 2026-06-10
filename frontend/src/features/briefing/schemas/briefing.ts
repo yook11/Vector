@@ -16,7 +16,7 @@ const CategorySchema = z.object({
   name: z.string().min(1),
 });
 
-const BriefingListLatestSchema = z.object({
+const BriefingSummarySchema = z.object({
   weekStart: z.iso.date(),
   headline: z.string(),
   summary: z.string(),
@@ -25,7 +25,7 @@ const BriefingListLatestSchema = z.object({
 
 const BriefingListItemSchema = z.object({
   category: CategorySchema,
-  latest: BriefingListLatestSchema.nullable(),
+  latest: BriefingSummarySchema.nullable(),
 });
 
 export const BriefingListResponseSchema = z.object({
