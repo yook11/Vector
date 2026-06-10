@@ -27,8 +27,10 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.audit.stages.briefing import BriefingAuditRepository
 from app.insights.briefing.domain.ready import ReadyForBriefing
-from app.insights.briefing.repository.articles import BriefingArticleRepository
-from app.insights.briefing.repository.briefings import BriefingRepository
+from app.insights.briefing.repository import (
+    BriefingArticleRepository,
+    BriefingRepository,
+)
 from app.models.category import Category
 from app.models.weekly_briefing import WeeklyBriefing
 
@@ -36,7 +38,7 @@ if TYPE_CHECKING:
     # 具象 generator は composition root (broker_briefing hook) が構築し DI で渡す。
     # 型注釈専用 import に降格し、本 module 経由で openai SDK が import 時にロード
     # されるのを防ぐ (app/queue/composition.py の遅延 SDK import 方針と対)。
-    from app.insights.briefing.llm.deepseek import DeepSeekBriefingGenerator
+    from app.insights.briefing.llm import DeepSeekBriefingGenerator
     from app.shared.revalidate import RevalidateNotifier
 
 logger = structlog.get_logger(__name__)

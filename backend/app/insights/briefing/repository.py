@@ -1,25 +1,74 @@
-"""WeeklyBriefing の永続化 Repository。
+"""briefing 入力 article の読取と WeeklyBriefing の永続化 Repository。
 
-責務:
-- ``exists``: cheap な exists 判定 (ReadyForBriefing.try_advance_from の
-  precondition)
-- ``find_latest_by_category``: API endpoint (latest) の主クエリ
-- ``find_by``: race 読戻し / 既存確認用 (week_start, category_id) PK lookup
-- ``save``: ``force=False`` で新規 INSERT のみ (race 敗北は ``None``)、
-  ``force=True`` で既存上書き (UPSERT)
-
+読取側の週境界は JST (``WEEK_TZ``) 月曜 00:00 起点の date で受け、DB の
+TIMESTAMPTZ (UTC) とは tz-aware datetime に変換して比較する。
 commit は呼び出し側 (Service) の責務。
 """
 
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, datetime, time, timedelta
+from zoneinfo import ZoneInfo
 
 from sqlalchemy import func, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.insights.briefing.domain.article import ArticleInput
+from app.insights.trend_discovery.domain.window import WEEK_TZ
+from app.models.article_curation import ArticleCuration
+from app.models.in_scope_assessment import InScopeAssessment
 from app.models.weekly_briefing import WeeklyBriefing
+
+# --- BriefingArticleRepository — briefing 入力 article の読取 ---
+
+
+class BriefingArticleRepository:
+    """Briefing 入力用の article 取得をカプセル化する。"""
+
+    def __init__(self, session: AsyncSession) -> None:
+        self._session = session
+
+    async def fetch(self, *, week_start: date, category_id: int) -> list[ArticleInput]:
+        """指定週 × カテゴリの analysis 済 article を取得する。
+
+        Returns:
+            ``article_id`` 昇順で安定ソートした ``ArticleInput`` のリスト。
+            該当なしの場合は空リスト。
+        """
+        tz = ZoneInfo(WEEK_TZ)
+        week_start_jst = datetime.combine(week_start, time(0, 0), tzinfo=tz)
+        week_end_jst = week_start_jst + timedelta(days=7)
+
+        stmt = (
+            select(
+                ArticleCuration.article_id,
+                InScopeAssessment.translated_title,
+                InScopeAssessment.summary,
+            )
+            .join(
+                ArticleCuration,
+                InScopeAssessment.curation_id == ArticleCuration.id,
+            )
+            .where(
+                InScopeAssessment.category_id == category_id,
+                InScopeAssessment.analyzed_at >= week_start_jst,
+                InScopeAssessment.analyzed_at < week_end_jst,
+            )
+            .order_by(ArticleCuration.article_id)
+        )
+        rows = (await self._session.execute(stmt)).all()
+        return [
+            ArticleInput(
+                id=row.article_id,
+                title_ja=row.translated_title,
+                summary_ja=row.summary,
+            )
+            for row in rows
+        ]
+
+
+# --- BriefingRepository — WeeklyBriefing の永続化 ---
 
 
 class BriefingRepository:
@@ -91,15 +140,10 @@ class BriefingRepository:
     ) -> WeeklyBriefing | None:
         """briefing を ``weekly_briefings`` に永続化する。
 
-        Args:
-            briefing: 永続化対象 (id は自動採番なので未設定で渡す)
-            force: ``True`` のとき既存行を上書きし ``generated_at`` /
-                ``updated_at`` を ``NOW()`` に更新する。``False`` (default) は
-                新規 INSERT のみで、衝突時は副作用なしに ``None`` を返す。
-
-        Returns:
-            永続化成功時: 永続化後の ``WeeklyBriefing``
-            race 敗北時 (force=False かつ既存あり): ``None``
+        id は自動採番なので未設定で渡す。``force=False`` (default) は新規
+        INSERT のみで、race 敗北 (既存あり) は
+        副作用なしに ``None`` を返す。``force=True`` は既存行を上書きし
+        ``generated_at`` / ``updated_at`` を ``NOW()`` に更新する。
         """
         values = {
             "week_start_date": briefing.week_start_date,

@@ -23,7 +23,7 @@ from app.audit.stages.briefing import (
     BriefingAuditRepository,
 )
 from app.insights.briefing.domain.ready import ReadyForBriefing
-from app.insights.briefing.llm.errors import (
+from app.insights.briefing.errors import (
     BriefingConfigurationError,
     BriefingLlmError,
     BriefingResponseInvalidError,

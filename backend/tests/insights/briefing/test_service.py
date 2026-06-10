@@ -15,7 +15,6 @@ from app.audit.stages.briefing import (
     OUTCOME_BRIEFING_GENERATION_COMPLETED,
     OUTCOME_BRIEFING_GENERATION_INPUT_EMPTY,
 )
-from app.insights.briefing.application.service import WeeklyBriefingService
 from app.insights.briefing.domain.briefing import (
     BriefingChapter,
     KeyArticle,
@@ -23,7 +22,8 @@ from app.insights.briefing.domain.briefing import (
     WeeklyBriefingContent,
 )
 from app.insights.briefing.domain.ready import ReadyForBriefing
-from app.insights.briefing.repository.briefings import BriefingRepository
+from app.insights.briefing.repository import BriefingRepository
+from app.insights.briefing.service import WeeklyBriefingService
 from app.models.category import Category
 from app.models.pipeline_event import PipelineEvent
 from app.shared.revalidate import (

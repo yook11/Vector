@@ -28,7 +28,7 @@ from app.insights.briefing.domain.briefing import (
     MAX_KEY_ARTICLE_SIGNIFICANCE_LEN,
     MAX_KEY_ARTICLES_PER_BRIEFING,
 )
-from app.insights.briefing.llm.errors import (
+from app.insights.briefing.errors import (
     BriefingLlmError,
     BriefingResponseInvalidError,
 )
@@ -74,13 +74,11 @@ async def test_disables_thinking_for_pro_model() -> None:
     fake_client.chat.completions.create = create
 
     with (
-        patch("app.insights.briefing.llm.deepseek.settings") as mock_settings,
-        patch(
-            "app.insights.briefing.llm.deepseek.AsyncOpenAI", return_value=fake_client
-        ),
+        patch("app.insights.briefing.llm.settings") as mock_settings,
+        patch("app.insights.briefing.llm.AsyncOpenAI", return_value=fake_client),
     ):
         mock_settings.deepseek_api_key = SecretStr("test-key")
-        from app.insights.briefing.llm.deepseek import DeepSeekBriefingGenerator
+        from app.insights.briefing.llm import DeepSeekBriefingGenerator
 
         gen = DeepSeekBriefingGenerator()
         result = await gen.generate(
@@ -107,7 +105,7 @@ async def test_disables_thinking_for_pro_model() -> None:
 
 def test_tool_schema_required_fields_match_new_output() -> None:
     """tool schema 側でも新 5 field 構造が要求されていることを保証する。"""
-    from app.insights.briefing.llm.deepseek import BRIEFING_TOOL_SCHEMA
+    from app.insights.briefing.llm import BRIEFING_TOOL_SCHEMA
 
     assert BRIEFING_TOOL_SCHEMA["required"] == [
         "headline",
@@ -134,13 +132,11 @@ async def _generate_with_mocked_response(arguments: dict) -> None:
     fake_client.chat.completions.create = create
 
     with (
-        patch("app.insights.briefing.llm.deepseek.settings") as mock_settings,
-        patch(
-            "app.insights.briefing.llm.deepseek.AsyncOpenAI", return_value=fake_client
-        ),
+        patch("app.insights.briefing.llm.settings") as mock_settings,
+        patch("app.insights.briefing.llm.AsyncOpenAI", return_value=fake_client),
     ):
         mock_settings.deepseek_api_key = SecretStr("test-key")
-        from app.insights.briefing.llm.deepseek import DeepSeekBriefingGenerator
+        from app.insights.briefing.llm import DeepSeekBriefingGenerator
 
         gen = DeepSeekBriefingGenerator()
         await gen.generate(
@@ -218,13 +214,11 @@ async def test_generator_wraps_openai_api_error() -> None:
     fake_client.chat.completions.create = create
 
     with (
-        patch("app.insights.briefing.llm.deepseek.settings") as mock_settings,
-        patch(
-            "app.insights.briefing.llm.deepseek.AsyncOpenAI", return_value=fake_client
-        ),
+        patch("app.insights.briefing.llm.settings") as mock_settings,
+        patch("app.insights.briefing.llm.AsyncOpenAI", return_value=fake_client),
     ):
         mock_settings.deepseek_api_key = SecretStr("test-key")
-        from app.insights.briefing.llm.deepseek import DeepSeekBriefingGenerator
+        from app.insights.briefing.llm import DeepSeekBriefingGenerator
 
         gen = DeepSeekBriefingGenerator()
         with pytest.raises(BriefingLlmError) as raised:

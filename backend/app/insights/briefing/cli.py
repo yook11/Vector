@@ -3,14 +3,14 @@
 使い方::
 
     # 直近完了週 × 全カテゴリを順次生成 (= cron 相当を CLI 1 プロセスで実行)
-    uv run python -m app.insights.briefing.cli.generate_briefing
+    uv run python -m app.insights.briefing.cli
 
     # 指定週 × 単一カテゴリを生成
-    uv run python -m app.insights.briefing.cli.generate_briefing \\
+    uv run python -m app.insights.briefing.cli \\
         --week=2026-04-20 --category=ai
 
     # 既存 briefing を上書き再生成
-    uv run python -m app.insights.briefing.cli.generate_briefing \\
+    uv run python -m app.insights.briefing.cli \\
         --week=2026-04-20 --category=ai --force
 
 CLI は dispatcher と異なり 1 プロセスで Service.execute を順次回す
@@ -39,11 +39,11 @@ from sqlalchemy.ext.asyncio import (
 from app.audit.stages.briefing import BriefingAuditRepository
 from app.config import settings
 from app.db_ssl import create_app_engine
-from app.insights.briefing.application.service import WeeklyBriefingService
 from app.insights.briefing.domain.ready import ReadyForBriefing
 from app.insights.briefing.domain.week import latest_completed_week_start, now_in_jst
-from app.insights.briefing.llm.deepseek import DeepSeekBriefingGenerator
-from app.insights.briefing.repository.briefings import BriefingRepository
+from app.insights.briefing.llm import DeepSeekBriefingGenerator
+from app.insights.briefing.repository import BriefingRepository
+from app.insights.briefing.service import WeeklyBriefingService
 from app.models.category import Category
 from app.shared.revalidate import NullRevalidateNotifier
 

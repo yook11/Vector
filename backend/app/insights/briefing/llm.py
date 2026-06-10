@@ -30,7 +30,7 @@ from app.analysis.prompt_safety import sanitize_for_untrusted_block
 from app.config import settings
 from app.insights.briefing.domain.article import ArticleInput
 from app.insights.briefing.domain.briefing import WeeklyBriefingContent
-from app.insights.briefing.llm.errors import (
+from app.insights.briefing.errors import (
     BriefingConfigurationError,
     BriefingLlmError,
     BriefingResponseInvalidError,

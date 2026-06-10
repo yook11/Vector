@@ -8,7 +8,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from app.insights.briefing.cli.generate_briefing import build_parser, run
+from app.insights.briefing.cli import build_parser, run
 from app.insights.briefing.domain.ready import ReadyForBriefing
 
 
@@ -64,9 +64,7 @@ class TestRun:
                 "try_advance_from",
                 new=AsyncMock(return_value=None),
             ),
-            patch(
-                "app.insights.briefing.cli.generate_briefing.BriefingAuditRepository"
-            ) as audit_cls,
+            patch("app.insights.briefing.cli.BriefingAuditRepository") as audit_cls,
         ):
             audit_cls.return_value.append_generation_already_exists = AsyncMock()
             exit_code = await run(args, service, session_factory)

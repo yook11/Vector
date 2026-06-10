@@ -19,7 +19,7 @@ from app.audit.failure_projection import (
 )
 from app.audit.repository import PipelineEventRepository
 from app.insights.briefing.domain.ready import ReadyForBriefing
-from app.insights.briefing.llm.errors import BriefingError
+from app.insights.briefing.errors import BriefingError
 from app.models.category import Category
 from app.shared.security.redaction import redact_secrets
 

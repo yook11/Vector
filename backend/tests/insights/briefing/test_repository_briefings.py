@@ -7,7 +7,7 @@ from datetime import date
 import pytest
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.insights.briefing.repository.briefings import BriefingRepository
+from app.insights.briefing.repository import BriefingRepository
 from app.models.category import Category
 from app.models.weekly_briefing import WeeklyBriefing
 

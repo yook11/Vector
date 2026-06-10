@@ -40,7 +40,7 @@ from app.collection.external_fetch_errors import (
     FetchAccessDeniedError,
     FetchGatewayError,
 )
-from app.insights.briefing.llm.errors import BriefingConfigurationError
+from app.insights.briefing.errors import BriefingConfigurationError
 
 
 def _stmt_error(cls: type[Exception]) -> Exception:

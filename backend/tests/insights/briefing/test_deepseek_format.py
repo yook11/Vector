@@ -7,7 +7,7 @@
 from __future__ import annotations
 
 from app.insights.briefing.domain.article import ArticleInput
-from app.insights.briefing.llm.deepseek import DeepSeekBriefingGenerator
+from app.insights.briefing.llm import DeepSeekBriefingGenerator
 
 
 class TestFormatArticles:

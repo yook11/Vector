@@ -15,8 +15,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.dependencies import get_session, require_bff_request
 from app.insights.briefing.domain.week import latest_completed_week_start, now_in_jst
-from app.insights.briefing.repository.briefings import BriefingRepository
-from app.insights.briefing.schemas.briefing import (
+from app.insights.briefing.repository import BriefingRepository
+from app.insights.briefing.schemas import (
     BriefingListItem,
     BriefingListResponse,
     BriefingResponse,

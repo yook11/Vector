@@ -36,11 +36,11 @@ from app.audit.stages.briefing import (
     BriefingAuditRepository,
 )
 from app.config import settings
-from app.insights.briefing.application.service import WeeklyBriefingService
 from app.insights.briefing.domain.ready import ReadyForBriefing
 from app.insights.briefing.domain.week import latest_completed_week_start, now_in_jst
-from app.insights.briefing.llm.errors import BriefingError
-from app.insights.briefing.repository.briefings import BriefingRepository
+from app.insights.briefing.errors import BriefingError
+from app.insights.briefing.repository import BriefingRepository
+from app.insights.briefing.service import WeeklyBriefingService
 from app.models.category import Category
 from app.queue.brokers import broker_briefing
 from app.queue.messages.briefing import BriefingTaskInput

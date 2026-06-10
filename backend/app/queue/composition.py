@@ -68,7 +68,7 @@ async def _wire_embedding_adapters(state: TaskiqState) -> None:
 async def _wire_briefing_adapter(state: TaskiqState) -> None:
     """週次 briefing の LLM generator を worker 起動時に構築する。"""
     # 具象 SDK の import を hook 本体に遅延 (module docstring 参照)。
-    from app.insights.briefing.llm.deepseek import DeepSeekBriefingGenerator
+    from app.insights.briefing.llm import DeepSeekBriefingGenerator
 
     state.briefing_generator = DeepSeekBriefingGenerator()
     logger.info(

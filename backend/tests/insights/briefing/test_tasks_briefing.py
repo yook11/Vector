@@ -8,9 +8,9 @@ from zoneinfo import ZoneInfo
 
 import pytest
 
-from app.insights.briefing.application.service import GeneratedBriefing
 from app.insights.briefing.domain.ready import ReadyForBriefing
-from app.insights.briefing.llm.errors import BriefingConfigurationError
+from app.insights.briefing.errors import BriefingConfigurationError
+from app.insights.briefing.service import GeneratedBriefing
 from app.queue.messages.briefing import BriefingTaskInput
 
 JST = ZoneInfo("Asia/Tokyo")

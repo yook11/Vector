@@ -25,7 +25,7 @@ from app.exception_handlers import (
     not_found_handler,
 )
 from app.exceptions import DuplicateError, InvalidQueryError, NotFoundError
-from app.insights.briefing.router.briefing import router as briefing_router
+from app.insights.briefing.router import router as briefing_router
 from app.insights.trend_discovery.router import (
     router as trends_router,
 )

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from app.audit.domain.event import Stage
 from app.audit.failure_projection import Retryability
-from app.insights.briefing.llm.errors import (
+from app.insights.briefing.errors import (
     BriefingConfigurationError,
     BriefingError,
     BriefingLlmError,

@@ -8,7 +8,7 @@ from zoneinfo import ZoneInfo
 import pytest
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.insights.briefing.repository.articles import BriefingArticleRepository
+from app.insights.briefing.repository import BriefingArticleRepository
 from app.models.category import Category
 
 JST = ZoneInfo("Asia/Tokyo")
