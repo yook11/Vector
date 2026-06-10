@@ -6,6 +6,7 @@ import structlog
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from app.audit.error_fields import exception_fqn
 from app.audit.stages.acquisition import SourceAcquisitionAuditRepository
 from app.collection.article_acquisition.errors import AcquisitionError
 from app.collection.article_acquisition.fetched_article_converter import (
@@ -66,13 +67,9 @@ class ArticleAcquisitionFailureHandler:
                 source_id=source_id,
                 business_outcome_code=rej.outcome_code,
                 business_error_class=(
-                    f"{type(rej.cause).__module__}.{type(rej.cause).__qualname__}"
-                    if rej.cause is not None
-                    else None
+                    exception_fqn(rej.cause) if rej.cause is not None else None
                 ),
-                audit_error_class=(
-                    f"{type(audit_exc).__module__}.{type(audit_exc).__qualname__}"
-                ),
+                audit_error_class=(exception_fqn(audit_exc)),
                 audit_error_message=redact_secrets(str(audit_exc))[:500],
             )
 
@@ -95,13 +92,9 @@ class ArticleAcquisitionFailureHandler:
             logger.exception(
                 "source_acquisition_failure_audit_dropped",
                 source_id=source_id,
-                business_error_class=(
-                    f"{type(exc).__module__}.{type(exc).__qualname__}"
-                ),
+                business_error_class=(exception_fqn(exc)),
                 business_error_message=redact_secrets(str(exc))[:500],
-                audit_error_class=(
-                    f"{type(audit_exc).__module__}.{type(audit_exc).__qualname__}"
-                ),
+                audit_error_class=(exception_fqn(audit_exc)),
                 audit_error_message=redact_secrets(str(audit_exc))[:500],
             )
 
@@ -126,12 +119,8 @@ class ArticleAcquisitionFailureHandler:
             logger.exception(
                 "source_acquisition_failure_audit_dropped",
                 source_id=source_id,
-                business_error_class=(
-                    f"{type(exc).__module__}.{type(exc).__qualname__}"
-                ),
+                business_error_class=(exception_fqn(exc)),
                 business_error_message=redact_secrets(str(exc))[:500],
-                audit_error_class=(
-                    f"{type(audit_exc).__module__}.{type(audit_exc).__qualname__}"
-                ),
+                audit_error_class=(exception_fqn(audit_exc)),
                 audit_error_message=redact_secrets(str(audit_exc))[:500],
             )

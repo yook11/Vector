@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import date
+from enum import StrEnum
 
 from sqlalchemy import select
 from sqlalchemy.exc import SQLAlchemyError
@@ -11,6 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.audit.domain.event import EventType, Stage
 from app.audit.domain.payloads import BriefingPayload
 from app.audit.error_chain import extract_error_chain
+from app.audit.error_fields import error_message_of, exception_fqn
 from app.audit.failure_projection import (
     FailureProjection,
     failure_action_value,
@@ -21,19 +23,20 @@ from app.audit.repository import PipelineEventRepository
 from app.insights.briefing.domain.ready import ReadyForBriefing
 from app.insights.briefing.errors import BriefingError
 from app.models.category import Category
-from app.shared.security.redaction import redact_secrets
 
-_ERROR_MESSAGE_LIMIT = 2000
 
-OUTCOME_BRIEFING_GENERATION_COMPLETED = "briefing_generation_completed"
-OUTCOME_BRIEFING_GENERATION_INPUT_EMPTY = "briefing_generation_input_empty"
-OUTCOME_BRIEFING_GENERATION_ALREADY_EXISTS = "briefing_generation_already_exists"
-OUTCOME_BRIEFING_DISPATCH_COMPLETED = "briefing_dispatch_completed"
-OUTCOME_BRIEFING_CATEGORY_ENQUEUED = "briefing_category_enqueued"
-OUTCOME_BRIEFING_CATEGORY_ENQUEUE_FAILED = "briefing_category_enqueue_failed"
-OUTCOME_BRIEFING_DISPATCH_CATEGORY_MASTER_LOAD_FAILED = (
-    "briefing_dispatch_category_master_load_failed"
-)
+class BriefingOutcomeCode(StrEnum):
+    """Stage.BRIEFING の outcome code。"""
+
+    GENERATION_COMPLETED = "briefing_generation_completed"
+    GENERATION_INPUT_EMPTY = "briefing_generation_input_empty"
+    GENERATION_ALREADY_EXISTS = "briefing_generation_already_exists"
+    DISPATCH_COMPLETED = "briefing_dispatch_completed"
+    CATEGORY_ENQUEUED = "briefing_category_enqueued"
+    CATEGORY_ENQUEUE_FAILED = "briefing_category_enqueue_failed"
+    DISPATCH_CATEGORY_MASTER_LOAD_FAILED = (
+        "briefing_dispatch_category_master_load_failed"
+    )
 
 
 class BriefingAuditRepository:
@@ -64,7 +67,7 @@ class BriefingAuditRepository:
         await self._events.append(
             stage=Stage.BRIEFING,
             event_type=EventType.SUCCEEDED,
-            outcome_code=OUTCOME_BRIEFING_GENERATION_COMPLETED,
+            outcome_code=BriefingOutcomeCode.GENERATION_COMPLETED.value,
             payload=payload,
         )
 
@@ -84,7 +87,7 @@ class BriefingAuditRepository:
         await self._events.append(
             stage=Stage.BRIEFING,
             event_type=EventType.REJECTED,
-            outcome_code=OUTCOME_BRIEFING_GENERATION_INPUT_EMPTY,
+            outcome_code=BriefingOutcomeCode.GENERATION_INPUT_EMPTY.value,
             payload=payload,
         )
 
@@ -104,7 +107,7 @@ class BriefingAuditRepository:
         await self._events.append(
             stage=Stage.BRIEFING,
             event_type=EventType.SKIPPED,
-            outcome_code=OUTCOME_BRIEFING_GENERATION_ALREADY_EXISTS,
+            outcome_code=BriefingOutcomeCode.GENERATION_ALREADY_EXISTS.value,
             payload=payload,
         )
 
@@ -167,7 +170,7 @@ class BriefingAuditRepository:
             category_slug=category_slug,
             ai_model=ai_model,
             retry_exhausted=retry_exhausted,
-            error_message=redact_secrets(str(exc))[:_ERROR_MESSAGE_LIMIT] or None,
+            error_message=error_message_of(exc),
             error_chain=extract_error_chain(exc),
         )
         await self._events.append(
@@ -175,7 +178,7 @@ class BriefingAuditRepository:
             event_type=EventType.FAILED,
             outcome_code=projection.code,
             payload=payload,
-            error_class=_fqn(exc),
+            error_class=exception_fqn(exc),
             retryability=projection.retryability,
         )
 
@@ -199,7 +202,7 @@ class BriefingAuditRepository:
         await self._events.append(
             stage=Stage.BRIEFING,
             event_type=EventType.SUCCEEDED,
-            outcome_code=OUTCOME_BRIEFING_DISPATCH_COMPLETED,
+            outcome_code=BriefingOutcomeCode.DISPATCH_COMPLETED.value,
             payload=payload,
         )
 
@@ -219,7 +222,7 @@ class BriefingAuditRepository:
         await self._events.append(
             stage=Stage.BRIEFING,
             event_type=EventType.SUCCEEDED,
-            outcome_code=OUTCOME_BRIEFING_CATEGORY_ENQUEUED,
+            outcome_code=BriefingOutcomeCode.CATEGORY_ENQUEUED.value,
             payload=payload,
         )
 
@@ -234,7 +237,7 @@ class BriefingAuditRepository:
         category_slug = await self._resolve_category_slug(category_id)
         projection = _fixed_projection(
             exc,
-            code=OUTCOME_BRIEFING_CATEGORY_ENQUEUE_FAILED,
+            code=BriefingOutcomeCode.CATEGORY_ENQUEUE_FAILED.value,
         )
         payload = BriefingPayload(
             failure_kind=projection.failure_kind,
@@ -242,15 +245,15 @@ class BriefingAuditRepository:
             week_start=week_start.isoformat(),
             category_id=category_id,
             category_slug=category_slug,
-            error_message=redact_secrets(str(exc))[:_ERROR_MESSAGE_LIMIT] or None,
+            error_message=error_message_of(exc),
             error_chain=extract_error_chain(exc),
         )
         await self._events.append(
             stage=Stage.BRIEFING,
             event_type=EventType.FAILED,
-            outcome_code=OUTCOME_BRIEFING_CATEGORY_ENQUEUE_FAILED,
+            outcome_code=BriefingOutcomeCode.CATEGORY_ENQUEUE_FAILED.value,
             payload=payload,
-            error_class=_fqn(exc),
+            error_class=exception_fqn(exc),
             retryability=projection.retryability,
         )
 
@@ -263,22 +266,22 @@ class BriefingAuditRepository:
         """dispatcher がカテゴリマスタを読めなかったことを記録する。"""
         projection = _fixed_projection(
             exc,
-            code=OUTCOME_BRIEFING_DISPATCH_CATEGORY_MASTER_LOAD_FAILED,
+            code=BriefingOutcomeCode.DISPATCH_CATEGORY_MASTER_LOAD_FAILED.value,
         )
         payload = BriefingPayload(
             failure_kind=projection.failure_kind,
             failure_action=failure_action_value(projection),
             week_start=week_start.isoformat(),
             retry_exhausted=True,
-            error_message=redact_secrets(str(exc))[:_ERROR_MESSAGE_LIMIT] or None,
+            error_message=error_message_of(exc),
             error_chain=extract_error_chain(exc),
         )
         await self._events.append(
             stage=Stage.BRIEFING,
             event_type=EventType.FAILED,
-            outcome_code=OUTCOME_BRIEFING_DISPATCH_CATEGORY_MASTER_LOAD_FAILED,
+            outcome_code=BriefingOutcomeCode.DISPATCH_CATEGORY_MASTER_LOAD_FAILED.value,
             payload=payload,
-            error_class=_fqn(exc),
+            error_class=exception_fqn(exc),
             retryability=projection.retryability,
         )
 
@@ -307,7 +310,3 @@ def _fixed_projection(exc: BaseException, *, code: str) -> FailureProjection:
         code=code,
         stage=Stage.BRIEFING,
     )
-
-
-def _fqn(exc: BaseException) -> str:
-    return f"{type(exc).__module__}.{type(exc).__qualname__}"

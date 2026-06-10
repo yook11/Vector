@@ -10,13 +10,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.audit.domain.event import EventType, Stage
 from app.audit.domain.payloads import DispatchPayload
 from app.audit.error_chain import extract_error_chain
+from app.audit.error_fields import error_message_of, exception_fqn
 from app.audit.failure_projection import Retryability
 from app.audit.repository import PipelineEventRepository
 from app.shared.security.redaction import redact_secrets
 
 DispatchCadence = Literal["high", "medium", "low", "all"]
 
-_ERROR_MESSAGE_LIMIT = 2000
 _RAW_SOURCE_NAME_LIMIT = 200
 
 
@@ -53,7 +53,7 @@ class DispatchAuditRepository:
             source_name=source_name,
             cadence=cadence,
             raw_source_name=_limited(raw_source_name, _RAW_SOURCE_NAME_LIMIT),
-            error_message=_error_message(exc),
+            error_message=error_message_of(exc),
             error_chain=extract_error_chain(exc) if exc is not None else None,
         )
         await self._events.append(
@@ -62,7 +62,7 @@ class DispatchAuditRepository:
             outcome_code=outcome_code.value,
             payload=payload,
             source_id=source_id,
-            error_class=_fqn(exc) if exc is not None else None,
+            error_class=exception_fqn(exc) if exc is not None else None,
             retryability=retryability,
         )
 
@@ -92,7 +92,7 @@ class DispatchAuditRepository:
         """run 単位の失敗を記録する (成功 / 件数 summary は焼かない)。"""
         payload = DispatchPayload(
             cadence=cadence,
-            error_message=_error_message(exc),
+            error_message=error_message_of(exc),
             error_chain=extract_error_chain(exc) if exc is not None else None,
         )
         await self._events.append(
@@ -100,22 +100,12 @@ class DispatchAuditRepository:
             event_type=event_type,
             outcome_code=outcome_code.value,
             payload=payload,
-            error_class=_fqn(exc) if exc is not None else None,
+            error_class=exception_fqn(exc) if exc is not None else None,
             retryability=retryability,
         )
-
-
-def _error_message(exc: BaseException | None) -> str | None:
-    if exc is None:
-        return None
-    return redact_secrets(str(exc))[:_ERROR_MESSAGE_LIMIT] or None
 
 
 def _limited(value: str | None, limit: int) -> str | None:
     if value is None:
         return None
     return redact_secrets(value)[:limit] or None
-
-
-def _fqn(exc: BaseException) -> str:
-    return f"{type(exc).__module__}.{type(exc).__qualname__}"

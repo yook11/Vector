@@ -478,9 +478,7 @@ async def test_append_backfill_curation_aged_out_records_rejected_with_aged_code
     payload.kind=curation。content 拒否の drop (stage=curation / failed /
     outcome_code=ai_error_*) とは全軸が異なる。
     """
-    from app.audit.stages.curation import (
-        BACKFILL_CURATION_AGED_OUT_CODE,
-    )
+    from app.audit.stages.curation import CurationOutcomeCode
 
     article = await _make_article(db_session, sample_source)
     async with session_factory() as session:
@@ -492,7 +490,7 @@ async def test_append_backfill_curation_aged_out_records_rejected_with_aged_code
     ev = await _fetch_one(db_session, article.id)
     assert ev.stage == "backfill_curate"
     assert ev.event_type == "rejected"
-    assert ev.outcome_code == BACKFILL_CURATION_AGED_OUT_CODE
+    assert ev.outcome_code == CurationOutcomeCode.BACKFILL_CURATION_AGED_OUT.value
     assert ev.retryability is None
     # payload は curation variant (article_id 経由で top-level source_id を補填)
     assert ev.payload["kind"] == "curation"
@@ -512,7 +510,7 @@ async def test_append_backfill_curation_aged_out_keeps_article_identity_after_de
     に落ち article 軸 index から外れるため、記事識別子は削除に耐える payload
     snapshot (``target_article_id``) で残さねば「どの記事か」が失われる。
     """
-    from app.audit.stages.curation import BACKFILL_CURATION_AGED_OUT_CODE
+    from app.audit.stages.curation import CurationOutcomeCode
 
     article = await _make_article(db_session, sample_source)
     article_id = article.id
@@ -525,7 +523,9 @@ async def test_append_backfill_curation_aged_out_keeps_article_identity_after_de
         await ArticleRepository(session).delete_by_id(article_id)
         await session.commit()
 
-    ev = await _fetch_by_outcome(db_session, BACKFILL_CURATION_AGED_OUT_CODE)
+    ev = await _fetch_by_outcome(
+        db_session, CurationOutcomeCode.BACKFILL_CURATION_AGED_OUT.value
+    )
     # FK 列は記事削除で NULL に落ちる
     assert ev.article_id is None
     # source_id は DELETE 前の逆引きで残る (source は削除されない)

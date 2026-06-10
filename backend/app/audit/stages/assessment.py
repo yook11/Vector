@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from enum import StrEnum
+
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -15,6 +17,7 @@ from app.analysis.assessment.errors import AssessmentError
 from app.audit.domain.event import EventType, Stage
 from app.audit.domain.payloads import AssessmentPayload
 from app.audit.error_chain import extract_error_chain
+from app.audit.error_fields import error_message_of, exception_fqn
 from app.audit.failure_projection import (
     FailureProjection,
     Retryability,
@@ -25,14 +28,16 @@ from app.audit.failure_projection import (
 from app.audit.ready_build import project_ready_build_failure
 from app.audit.repository import PipelineEventRepository
 from app.models.backfill_exclusion import BackfillExclusionReason
-from app.shared.security.redaction import redact_secrets
 
 _INPUT_TEXT_LIMIT = 4096
 _AI_RAW_RESPONSE_LIMIT = 2048
-_ERROR_MESSAGE_LIMIT = 2000
 
-_IN_SCOPE_OUTCOME_CODE = "assessed_in_scope"
-_OUT_OF_SCOPE_OUTCOME_CODE = "assessed_out_of_scope"
+
+class AssessmentOutcomeCode(StrEnum):
+    """Stage.ASSESSMENT の outcome code (stage ファイル内定義分のみ)。"""
+
+    IN_SCOPE = "assessed_in_scope"
+    OUT_OF_SCOPE = "assessed_out_of_scope"
 
 
 def _limited_str(value: object, limit: int) -> str | None:
@@ -73,7 +78,7 @@ class AssessmentAuditRepository:
         await self._events.append(
             stage=Stage.ASSESSMENT,
             event_type=EventType.SUCCEEDED,
-            outcome_code=_IN_SCOPE_OUTCOME_CODE,
+            outcome_code=AssessmentOutcomeCode.IN_SCOPE.value,
             payload=payload,
             article_id=ready.article_id,
         )
@@ -100,7 +105,7 @@ class AssessmentAuditRepository:
         await self._events.append(
             stage=Stage.ASSESSMENT,
             event_type=EventType.SUCCEEDED,
-            outcome_code=_OUT_OF_SCOPE_OUTCOME_CODE,
+            outcome_code=AssessmentOutcomeCode.OUT_OF_SCOPE.value,
             payload=payload,
             article_id=ready.article_id,
         )
@@ -153,7 +158,7 @@ class AssessmentAuditRepository:
         payload = AssessmentPayload(
             failure_kind=projection.failure_kind,
             curation_id=curation_id,
-            error_message=redact_secrets(str(exc))[:_ERROR_MESSAGE_LIMIT] or None,
+            error_message=error_message_of(exc),
             error_chain=extract_error_chain(exc),
         )
         await self._events.append(
@@ -161,7 +166,7 @@ class AssessmentAuditRepository:
             event_type=EventType.FAILED,
             outcome_code=projection.outcome_code,
             payload=payload,
-            error_class=_fqn(exc),
+            error_class=exception_fqn(exc),
             retryability=Retryability.UNKNOWN,
         )
 
@@ -202,7 +207,7 @@ class AssessmentAuditRepository:
             failure_action=failure_action_value(projection),
             failure_reason=projection.failure_reason,
             curation_id=ready.curation_id,
-            error_message=redact_secrets(str(exc))[:_ERROR_MESSAGE_LIMIT] or None,
+            error_message=error_message_of(exc),
             error_chain=extract_error_chain(exc),
             ai_raw_response=_limited_str(
                 getattr(exc, "raw_response", None), _AI_RAW_RESPONSE_LIMIT
@@ -214,7 +219,7 @@ class AssessmentAuditRepository:
             outcome_code=projection.code,
             payload=payload,
             article_id=ready.article_id,
-            error_class=_fqn(exc),
+            error_class=exception_fqn(exc),
             retryability=projection.retryability,
         )
 
@@ -224,7 +229,3 @@ class AssessmentAuditRepository:
     def _projection_of(exc: BaseException) -> FailureProjection:
         """Stage 4 失敗を class attr / adapter から projection する。"""
         return project_failure(exc)
-
-
-def _fqn(exc: BaseException) -> str:
-    return f"{type(exc).__module__}.{type(exc).__qualname__}"

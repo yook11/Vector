@@ -22,6 +22,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from taskiq import Context, TaskiqDepends
 
 from app.audit.domain.event import EventType
+from app.audit.error_fields import exception_fqn
 from app.audit.stages.completion import ArticleCompletionAuditRepository
 from app.collection.article_completion.ready import (
     ArticleCompletionReadyBuildError,
@@ -169,7 +170,7 @@ async def _append_ready_build_error_audit(
                 logger.warning(
                     "completion_ready_build_context_load_failed",
                     pending_id=pending_id,
-                    context_error_class=_fqn(context_exc),
+                    context_error_class=exception_fqn(context_exc),
                 )
 
             await ArticleCompletionAuditRepository(
@@ -184,10 +185,6 @@ async def _append_ready_build_error_audit(
         logger.exception(
             "completion_ready_build_error_audit_dropped",
             pending_id=pending_id,
-            business_error_class=_fqn(exc),
-            audit_error_class=_fqn(audit_exc),
+            business_error_class=exception_fqn(exc),
+            audit_error_class=exception_fqn(audit_exc),
         )
-
-
-def _fqn(exc: BaseException) -> str:
-    return f"{type(exc).__module__}.{type(exc).__qualname__}"

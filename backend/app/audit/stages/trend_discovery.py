@@ -12,15 +12,13 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from app.audit.domain.event import EventType, Stage
 from app.audit.domain.payloads import TrendDiscoveryPayload
 from app.audit.error_chain import extract_error_chain
+from app.audit.error_fields import error_message_of, exception_fqn
 from app.audit.failure_projection import Retryability
 from app.audit.repository import PipelineEventRepository
-from app.shared.security.redaction import redact_secrets
 
 TrendDiscoveryTrigger = Literal["cron", "cli"]
 
 logger = structlog.get_logger(__name__)
-
-_ERROR_MESSAGE_LIMIT = 2000
 
 
 class TrendDiscoveryOutcomeCode(StrEnum):
@@ -62,7 +60,7 @@ class TrendDiscoveryAuditRepository:
             requested_update=requested_update,
             source_analysis_count=source_analysis_count,
             completed_category_count=completed_category_count,
-            error_message=_error_message(exc),
+            error_message=error_message_of(exc),
             error_chain=extract_error_chain(exc) if exc is not None else None,
         )
         resolved_retryability = retryability
@@ -73,7 +71,7 @@ class TrendDiscoveryAuditRepository:
             event_type=event_type,
             outcome_code=outcome_code.value,
             payload=payload,
-            error_class=_fqn(exc) if exc is not None else None,
+            error_class=exception_fqn(exc) if exc is not None else None,
             retryability=resolved_retryability,
         )
 
@@ -112,15 +110,5 @@ async def append_trend_discovery_run_event_best_effort(
             outcome_code=outcome_code.value,
             trigger=trigger,
             window_end=window_end.isoformat(),
-            audit_error_class=_fqn(audit_exc),
+            audit_error_class=exception_fqn(audit_exc),
         )
-
-
-def _error_message(exc: BaseException | None) -> str | None:
-    if exc is None:
-        return None
-    return redact_secrets(str(exc))[:_ERROR_MESSAGE_LIMIT] or None
-
-
-def _fqn(exc: BaseException) -> str:
-    return f"{type(exc).__module__}.{type(exc).__qualname__}"

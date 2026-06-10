@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from enum import StrEnum
+
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -14,6 +16,7 @@ from app.analysis.embedding.errors import EmbeddingError
 from app.audit.domain.event import EventType, Stage
 from app.audit.domain.payloads import EmbeddingPayload
 from app.audit.error_chain import extract_error_chain
+from app.audit.error_fields import error_message_of, exception_fqn
 from app.audit.failure_projection import (
     FailureProjection,
     Retryability,
@@ -24,11 +27,12 @@ from app.audit.failure_projection import (
 from app.audit.ready_build import project_ready_build_failure
 from app.audit.repository import PipelineEventRepository
 from app.models.backfill_exclusion import BackfillExclusionReason
-from app.shared.security.redaction import redact_secrets
 
-_ERROR_MESSAGE_LIMIT = 2000
 
-_SUCCESS_OUTCOME_CODE = "embedding_completed"
+class EmbeddingOutcomeCode(StrEnum):
+    """Stage.EMBEDDING の outcome code (stage ファイル内定義分のみ)。"""
+
+    COMPLETED = "embedding_completed"
 
 
 class EmbeddingAuditRepository:
@@ -55,7 +59,7 @@ class EmbeddingAuditRepository:
         await self._events.append(
             stage=Stage.EMBEDDING,
             event_type=EventType.SUCCEEDED,
-            outcome_code=_SUCCESS_OUTCOME_CODE,
+            outcome_code=EmbeddingOutcomeCode.COMPLETED.value,
             payload=payload,
             article_id=ready.article_id,
         )
@@ -101,7 +105,7 @@ class EmbeddingAuditRepository:
         payload = EmbeddingPayload(
             failure_kind=projection.failure_kind,
             analysis_id=analysis_id,
-            error_message=redact_secrets(str(exc))[:_ERROR_MESSAGE_LIMIT] or None,
+            error_message=error_message_of(exc),
             error_chain=extract_error_chain(exc),
         )
         await self._events.append(
@@ -109,7 +113,7 @@ class EmbeddingAuditRepository:
             event_type=EventType.FAILED,
             outcome_code=projection.outcome_code,
             payload=payload,
-            error_class=_fqn(exc),
+            error_class=exception_fqn(exc),
             retryability=Retryability.UNKNOWN,
         )
 
@@ -152,7 +156,7 @@ class EmbeddingAuditRepository:
             analysis_id=ready.analysis_id,
             embedding_model=None,
             vector_dimension=None,
-            error_message=redact_secrets(str(exc))[:_ERROR_MESSAGE_LIMIT] or None,
+            error_message=error_message_of(exc),
             error_chain=extract_error_chain(exc),
         )
         await self._events.append(
@@ -161,7 +165,7 @@ class EmbeddingAuditRepository:
             outcome_code=projection.code,
             payload=payload,
             article_id=ready.article_id,
-            error_class=_fqn(exc),
+            error_class=exception_fqn(exc),
             retryability=projection.retryability,
         )
 
@@ -171,7 +175,3 @@ class EmbeddingAuditRepository:
     def _projection_of(exc: BaseException) -> FailureProjection:
         """Stage 5 失敗を class attr / adapter から projection する。"""
         return project_failure(exc)
-
-
-def _fqn(exc: BaseException) -> str:
-    return f"{type(exc).__module__}.{type(exc).__qualname__}"

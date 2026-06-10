@@ -7,6 +7,7 @@ from datetime import UTC, datetime
 import structlog
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from app.audit.error_fields import exception_fqn
 from app.audit.stages.completion import ArticleCompletionAuditRepository
 from app.collection.article_completion.completion_failure import CompletionRejection
 from app.collection.article_completion.ready import ReadyForArticleCompletion
@@ -100,12 +101,8 @@ class ArticleCompletionFailureHandler:
                 pending_id=ready.pending_id,
                 source_id=ready.source_id,
                 canonical_url=str(ready.source_url),
-                business_error_class=(
-                    f"{type(exc).__module__}.{type(exc).__qualname__}"
-                ),
-                audit_error_class=(
-                    f"{type(audit_exc).__module__}.{type(audit_exc).__qualname__}"
-                ),
+                business_error_class=(exception_fqn(exc)),
+                audit_error_class=(exception_fqn(audit_exc)),
             )
 
     async def _handle_temporary(

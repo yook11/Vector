@@ -15,6 +15,7 @@ from app.analysis.assessment.failure_handling import AssessmentFailureHandler
 from app.analysis.assessment.repository import AssessmentRepository
 from app.analysis.assessment.service import AssessmentService
 from app.analysis.rate_limit import record_rate_limit_gate_skipped
+from app.audit.error_fields import exception_fqn
 from app.audit.stages.assessment import AssessmentAuditRepository
 from app.logfire.article_stage import assessment_stage_span
 from app.queue.brokers import broker_analysis
@@ -134,10 +135,6 @@ async def _append_ready_build_failed_audit(
         logger.exception(
             "assessment_ready_build_failed_audit_dropped",
             curation_id=curation_id,
-            business_error_class=_fqn(exc),
-            audit_error_class=_fqn(audit_exc),
+            business_error_class=exception_fqn(exc),
+            audit_error_class=exception_fqn(audit_exc),
         )
-
-
-def _fqn(exc: BaseException) -> str:
-    return f"{type(exc).__module__}.{type(exc).__qualname__}"

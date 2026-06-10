@@ -25,6 +25,7 @@ from app.analysis.assessment.errors import (
     AssessmentTerminalError,
 )
 from app.analysis.failure_handling import FailureHandlingDecision
+from app.audit.error_fields import exception_fqn
 from app.audit.stages.assessment import AssessmentAuditRepository
 from app.shared.security.redaction import redact_secrets
 
@@ -135,13 +136,9 @@ class AssessmentFailureHandler:
             logger.exception(
                 "assessment_failure_audit_dropped",
                 curation_id=ready.curation_id,
-                business_error_class=(
-                    f"{type(exc).__module__}.{type(exc).__qualname__}"
-                ),
+                business_error_class=(exception_fqn(exc)),
                 business_error_message=redact_secrets(str(exc))[:500],
-                audit_error_class=(
-                    f"{type(audit_exc).__module__}.{type(audit_exc).__qualname__}"
-                ),
+                audit_error_class=(exception_fqn(audit_exc)),
                 audit_error_message=redact_secrets(str(audit_exc))[:500],
             )
 
@@ -161,12 +158,8 @@ class AssessmentFailureHandler:
             logger.exception(
                 "assessment_failure_audit_dropped",
                 curation_id=ready.curation_id,
-                business_error_class=(
-                    f"{type(exc).__module__}.{type(exc).__qualname__}"
-                ),
+                business_error_class=(exception_fqn(exc)),
                 business_error_message=redact_secrets(str(exc))[:500],
-                audit_error_class=(
-                    f"{type(audit_exc).__module__}.{type(audit_exc).__qualname__}"
-                ),
+                audit_error_class=(exception_fqn(audit_exc)),
                 audit_error_message=redact_secrets(str(audit_exc))[:500],
             )

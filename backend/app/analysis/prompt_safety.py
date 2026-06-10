@@ -28,6 +28,7 @@
 from __future__ import annotations
 
 import re
+from typing import NamedTuple
 
 # boundary tag は IGNORECASE + 内部空白許容で全バリアントを 1 regex で捕捉する。
 _BOUNDARY_CLOSE = re.compile(r"<\s*/\s*untrusted_input\s*>", re.IGNORECASE)
@@ -77,3 +78,19 @@ def sanitize_for_untrusted_block(text: str) -> str:
     text = _ATX_HEADER.sub(rf"\1{_ZWSP} ", text)
     text = _FULLWIDTH_BRACKET_HEADER.sub(rf"【\1{_ZWSP}】", text)
     return text
+
+
+class UntrustedTextScreening(NamedTuple):
+    sanitized: str
+    injection_detected: bool
+
+
+def screen_untrusted_text(text: str) -> UntrustedTextScreening:
+    """検知と無害化を同一の入力窓で行う (LLM 露出窓 = 検知窓 = 保存窓の固定)。
+
+    truncate や空ガードは呼出側責務 (窓の決定は consumer が持つ)。
+    """
+    return UntrustedTextScreening(
+        sanitized=sanitize_for_untrusted_block(text),
+        injection_detected=contains_injection_boundary(text),
+    )

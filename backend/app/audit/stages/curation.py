@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+from enum import StrEnum
 from typing import TYPE_CHECKING, TypedDict
 
 import structlog
@@ -10,13 +11,11 @@ from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.analysis.curation.ai.gemini_prompt import GeminiCurationPrompt
-from app.analysis.prompt_safety import (
-    contains_injection_boundary,
-    sanitize_for_untrusted_block,
-)
+from app.analysis.prompt_safety import screen_untrusted_text
 from app.audit.domain.event import EventType, Stage
 from app.audit.domain.payloads import CurationPayload
 from app.audit.error_chain import extract_error_chain
+from app.audit.error_fields import error_message_of, exception_fqn
 from app.audit.failure_projection import (
     FailureProjection,
     Retryability,
@@ -27,7 +26,6 @@ from app.audit.failure_projection import (
 from app.audit.injection_signal import record_injection_boundary_detected
 from app.audit.ready_build import project_ready_build_failure
 from app.audit.repository import PipelineEventRepository
-from app.shared.security.redaction import redact_secrets
 
 if TYPE_CHECKING:
     from app.analysis.curation.ai.base import BaseCurator
@@ -42,11 +40,14 @@ if TYPE_CHECKING:
 logger = structlog.get_logger(__name__)
 
 _AI_RAW_RESPONSE_LIMIT = 2048
-_ERROR_MESSAGE_LIMIT = 2000
 _INPUT_CONTENT_HEAD_LIMIT = 2048
 _INPUT_CONTENT_HASH_PREFIX_LEN = 16
 
-BACKFILL_CURATION_AGED_OUT_CODE = "backfill_curation_aged_out"
+
+class CurationOutcomeCode(StrEnum):
+    """Stage.CURATION の outcome code (stage ファイル内定義分のみ)。"""
+
+    BACKFILL_CURATION_AGED_OUT = "backfill_curation_aged_out"
 
 
 class CurationAuditRepository:
@@ -133,7 +134,7 @@ class CurationAuditRepository:
             **content,
             ai_model=curator.model_name,
             prompt_version=curator.prompt_version,
-            error_message=redact_secrets(str(exc))[:_ERROR_MESSAGE_LIMIT] or None,
+            error_message=error_message_of(exc),
             error_chain=extract_error_chain(exc),
         )
         await self._events.append(
@@ -142,7 +143,7 @@ class CurationAuditRepository:
             outcome_code=projection.code,
             payload=payload,
             article_id=ready.article_id,
-            error_class=_fqn(exc),
+            error_class=exception_fqn(exc),
             retryability=projection.retryability,
         )
         if content["injection_markers_present"]:
@@ -160,7 +161,7 @@ class CurationAuditRepository:
         await self._events.append(
             stage=Stage.BACKFILL_CURATE,
             event_type=EventType.REJECTED,
-            outcome_code=BACKFILL_CURATION_AGED_OUT_CODE,
+            outcome_code=CurationOutcomeCode.BACKFILL_CURATION_AGED_OUT.value,
             payload=CurationPayload(target_article_id=article_id),
             article_id=article_id,
         )
@@ -198,7 +199,7 @@ class CurationAuditRepository:
         payload = CurationPayload(
             failure_kind=projection.failure_kind,
             target_article_id=target_article_id,
-            error_message=redact_secrets(str(exc))[:_ERROR_MESSAGE_LIMIT] or None,
+            error_message=error_message_of(exc),
             error_chain=extract_error_chain(exc),
         )
         await self._events.append(
@@ -206,7 +207,7 @@ class CurationAuditRepository:
             event_type=EventType.FAILED,
             outcome_code=projection.outcome_code,
             payload=payload,
-            error_class=_fqn(exc),
+            error_class=exception_fqn(exc),
             retryability=Retryability.UNKNOWN,
         )
 
@@ -259,7 +260,7 @@ class CurationAuditRepository:
             **content,
             ai_model=curator.model_name,
             prompt_version=curator.prompt_version,
-            error_message=redact_secrets(str(exc))[:_ERROR_MESSAGE_LIMIT] or None,
+            error_message=error_message_of(exc),
             error_chain=extract_error_chain(exc),
         )
         await self._events.append(
@@ -268,7 +269,7 @@ class CurationAuditRepository:
             outcome_code=projection.code,
             payload=payload,
             article_id=ready.article_id,
-            error_class=_fqn(exc),
+            error_class=exception_fqn(exc),
             retryability=projection.retryability,
         )
         if content["injection_markers_present"]:
@@ -298,10 +299,6 @@ class CurationAuditRepository:
         return project_failure(exc, fallback_code=fallback_code)
 
 
-def _fqn(exc: BaseException) -> str:
-    return f"{type(exc).__module__}.{type(exc).__qualname__}"
-
-
 class _InputContentFields(TypedDict):
     """curation audit payload の input content snapshot + injection 検知フラグ。"""
 
@@ -320,13 +317,12 @@ def _input_content_fields(original_content: str) -> _InputContentFields:
     避ける)。検知は境界タグ限定の高信号、無害化は sanitize による別軸。
     """
     truncated = original_content[: GeminiCurationPrompt.CONTENT_MAX_LENGTH]
-    injected = contains_injection_boundary(truncated)
-    sanitized = sanitize_for_untrusted_block(truncated)
+    screening = screen_untrusted_text(truncated)
     return {
         "input_content_length": len(original_content),
-        "input_content_head": sanitized[:_INPUT_CONTENT_HEAD_LIMIT],
-        "input_content_hash": hashlib.sha256(sanitized.encode("utf-8")).hexdigest()[
-            :_INPUT_CONTENT_HASH_PREFIX_LEN
-        ],
-        "injection_markers_present": injected or None,
+        "input_content_head": screening.sanitized[:_INPUT_CONTENT_HEAD_LIMIT],
+        "input_content_hash": hashlib.sha256(
+            screening.sanitized.encode("utf-8")
+        ).hexdigest()[:_INPUT_CONTENT_HASH_PREFIX_LEN],
+        "injection_markers_present": screening.injection_detected or None,
     }

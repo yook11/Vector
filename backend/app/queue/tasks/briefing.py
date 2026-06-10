@@ -27,13 +27,10 @@ from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from taskiq import Context, TaskiqDepends
 
+from app.audit.error_fields import exception_fqn
 from app.audit.stages.briefing import (
-    OUTCOME_BRIEFING_CATEGORY_ENQUEUE_FAILED,
-    OUTCOME_BRIEFING_CATEGORY_ENQUEUED,
-    OUTCOME_BRIEFING_DISPATCH_CATEGORY_MASTER_LOAD_FAILED,
-    OUTCOME_BRIEFING_DISPATCH_COMPLETED,
-    OUTCOME_BRIEFING_GENERATION_ALREADY_EXISTS,
     BriefingAuditRepository,
+    BriefingOutcomeCode,
 )
 from app.config import settings
 from app.insights.briefing.domain.ready import ReadyForBriefing
@@ -95,7 +92,7 @@ async def dispatch_weekly_briefings(ctx: Context = TaskiqDepends()) -> None:
                 "briefing_category_enqueue_failed",
                 week_start=week_start.isoformat(),
                 category_id=category.id,
-                error_class=_fqn(exc),
+                error_class=exception_fqn(exc),
                 error_message=str(exc) or None,
             )
             continue
@@ -152,9 +149,9 @@ async def _append_dispatch_completed_audit(
     except Exception as exc:
         logger.info(
             "briefing_dispatch_audit_dropped",
-            outcome_code=OUTCOME_BRIEFING_DISPATCH_COMPLETED,
+            outcome_code=BriefingOutcomeCode.DISPATCH_COMPLETED.value,
             week_start=week_start.isoformat(),
-            error_class=_fqn(exc),
+            error_class=exception_fqn(exc),
             error_message=str(exc) or None,
         )
 
@@ -175,10 +172,10 @@ async def _append_category_enqueued_audit(
     except Exception as exc:
         logger.info(
             "briefing_dispatch_audit_dropped",
-            outcome_code=OUTCOME_BRIEFING_CATEGORY_ENQUEUED,
+            outcome_code=BriefingOutcomeCode.CATEGORY_ENQUEUED.value,
             week_start=week_start.isoformat(),
             category_id=category_id,
-            error_class=_fqn(exc),
+            error_class=exception_fqn(exc),
             error_message=str(exc) or None,
         )
 
@@ -201,10 +198,10 @@ async def _append_category_enqueue_failed_audit(
     except Exception as audit_exc:
         logger.info(
             "briefing_dispatch_audit_dropped",
-            outcome_code=OUTCOME_BRIEFING_CATEGORY_ENQUEUE_FAILED,
+            outcome_code=BriefingOutcomeCode.CATEGORY_ENQUEUE_FAILED.value,
             week_start=week_start.isoformat(),
             category_id=category_id,
-            error_class=_fqn(audit_exc),
+            error_class=exception_fqn(audit_exc),
             error_message=str(audit_exc) or None,
         )
 
@@ -227,9 +224,9 @@ async def _append_dispatch_category_master_load_failed_audit(
     except Exception as audit_exc:
         logger.info(
             "briefing_dispatch_audit_dropped",
-            outcome_code=OUTCOME_BRIEFING_DISPATCH_CATEGORY_MASTER_LOAD_FAILED,
+            outcome_code=BriefingOutcomeCode.DISPATCH_CATEGORY_MASTER_LOAD_FAILED.value,
             week_start=week_start.isoformat(),
-            error_class=_fqn(audit_exc),
+            error_class=exception_fqn(audit_exc),
             error_message=str(audit_exc) or None,
         )
 
@@ -332,13 +329,9 @@ async def _append_generation_already_exists_audit(
     except Exception as exc:
         logger.info(
             "briefing_generation_audit_dropped",
-            outcome_code=OUTCOME_BRIEFING_GENERATION_ALREADY_EXISTS,
+            outcome_code=BriefingOutcomeCode.GENERATION_ALREADY_EXISTS.value,
             week_start=week_start.isoformat(),
             category_id=category_id,
-            error_class=_fqn(exc),
+            error_class=exception_fqn(exc),
             error_message=str(exc) or None,
         )
-
-
-def _fqn(exc: BaseException) -> str:
-    return f"{type(exc).__module__}.{type(exc).__qualname__}"

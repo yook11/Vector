@@ -21,6 +21,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from taskiq import Context, TaskiqDepends
 
 from app.audit.domain.event import EventType, Stage
+from app.audit.error_fields import exception_fqn
 from app.audit.stages.backfill import (
     BackfillAuditRepository,
     BackfillOutcomeCode,
@@ -175,7 +176,7 @@ async def _append_backfill_item_event(
             outcome_code=outcome_code.value,
             target_kind=target_kind,
             target_id=target.target_id,
-            audit_error_class=_exception_fqn(audit_exc),
+            audit_error_class=exception_fqn(audit_exc),
         )
 
 
@@ -209,12 +210,8 @@ async def _append_backfill_run_event(
             stage=stage.value,
             backfill_stage=backfill_stage,
             outcome_code=outcome_code.value,
-            audit_error_class=_exception_fqn(audit_exc),
+            audit_error_class=exception_fqn(audit_exc),
         )
-
-
-def _exception_fqn(exc: BaseException) -> str:
-    return f"{type(exc).__module__}.{type(exc).__qualname__}"
 
 
 def _record_hold_state(stage: str, *, held: bool) -> None:

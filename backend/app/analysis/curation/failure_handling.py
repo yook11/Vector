@@ -28,6 +28,7 @@ from app.analysis.curation.errors import (
     CurationTerminalKeepError,
 )
 from app.analysis.failure_handling import FailureHandlingDecision
+from app.audit.error_fields import exception_fqn
 from app.audit.stages.curation import CurationAuditRepository
 from app.repositories.articles import ArticleRepository
 from app.shared.security.redaction import redact_secrets
@@ -133,7 +134,7 @@ class CurationFailureHandler:
             article_id=ready.article_id,
             code=code,
             deleted_rows=deleted,
-            error_class=f"{type(exc).__module__}.{type(exc).__qualname__}",
+            error_class=exception_fqn(exc),
         )
 
     async def _audit_failure(
@@ -159,13 +160,9 @@ class CurationFailureHandler:
             logger.exception(
                 "curation_failure_audit_dropped",
                 article_id=ready.article_id,
-                business_error_class=(
-                    f"{type(exc).__module__}.{type(exc).__qualname__}"
-                ),
+                business_error_class=(exception_fqn(exc)),
                 business_error_message=redact_secrets(str(exc))[:500],
-                audit_error_class=(
-                    f"{type(audit_exc).__module__}.{type(audit_exc).__qualname__}"
-                ),
+                audit_error_class=(exception_fqn(audit_exc)),
                 audit_error_message=redact_secrets(str(audit_exc))[:500],
             )
 
@@ -188,12 +185,8 @@ class CurationFailureHandler:
             logger.exception(
                 "curation_failure_audit_dropped",
                 article_id=ready.article_id,
-                business_error_class=(
-                    f"{type(exc).__module__}.{type(exc).__qualname__}"
-                ),
+                business_error_class=(exception_fqn(exc)),
                 business_error_message=redact_secrets(str(exc))[:500],
-                audit_error_class=(
-                    f"{type(audit_exc).__module__}.{type(audit_exc).__qualname__}"
-                ),
+                audit_error_class=(exception_fqn(audit_exc)),
                 audit_error_message=redact_secrets(str(audit_exc))[:500],
             )

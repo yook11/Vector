@@ -6,6 +6,8 @@
 
 from __future__ import annotations
 
+from app.audit.error_fields import exception_fqn
+
 _MAX_CHAIN_DEPTH = 8
 
 
@@ -22,6 +24,6 @@ def extract_error_chain(exc: BaseException) -> list[str]:
         if id(cur) in seen:
             break
         seen.add(id(cur))
-        chain.append(f"{type(cur).__module__}.{type(cur).__qualname__}")
+        chain.append(exception_fqn(cur))
         cur = cur.__cause__ or cur.__context__
     return chain

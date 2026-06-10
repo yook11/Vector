@@ -21,6 +21,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from taskiq import Context, TaskiqDepends
 
 from app.audit.domain.event import EventType
+from app.audit.error_fields import exception_fqn
 from app.audit.stages.dispatch import (
     DispatchAuditRepository,
     DispatchCadence,
@@ -266,9 +267,7 @@ async def _append_dispatch_source_event(
             outcome_code=outcome_code.value,
             source_id=source_id,
             source_name=source_name,
-            audit_error_class=(
-                f"{type(audit_exc).__module__}.{type(audit_exc).__qualname__}"
-            ),
+            audit_error_class=(exception_fqn(audit_exc)),
         )
 
 
@@ -286,9 +285,7 @@ async def _append_dispatch_run_completed(
         logger.exception(
             "dispatch_run_audit_dropped",
             outcome_code=DispatchOutcomeCode.DISPATCH_RUN_COMPLETED.value,
-            audit_error_class=(
-                f"{type(audit_exc).__module__}.{type(audit_exc).__qualname__}"
-            ),
+            audit_error_class=(exception_fqn(audit_exc)),
         )
 
 
@@ -314,9 +311,7 @@ async def _append_dispatch_run_event(
         logger.exception(
             "dispatch_run_audit_dropped",
             outcome_code=outcome_code.value,
-            audit_error_class=(
-                f"{type(audit_exc).__module__}.{type(audit_exc).__qualname__}"
-            ),
+            audit_error_class=(exception_fqn(audit_exc)),
         )
 
 

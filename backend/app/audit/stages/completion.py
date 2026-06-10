@@ -3,19 +3,22 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from enum import StrEnum
 from typing import assert_never
 
 import structlog
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.analysis.prompt_safety import (
-    contains_injection_boundary,
-    sanitize_for_untrusted_block,
-)
+from app.analysis.prompt_safety import screen_untrusted_text
 from app.audit.domain.event import EventType, Stage
 from app.audit.domain.payloads import CompletionPayload
 from app.audit.error_chain import extract_error_chain
+from app.audit.error_fields import (
+    error_message_of,
+    exception_fqn,
+    redacted_audit_message,
+)
 from app.audit.failure_projection import (
     FailureProjection,
     Retryability,
@@ -52,40 +55,33 @@ from app.collection.domain.canonical_article_url import (
 from app.collection.domain.observed_article import ObservedArticleInvalidError
 from app.collection.external_fetch_errors import ExternalFetchError
 from app.collection.sources.errors import SourceNotRegisteredError
-from app.shared.security.redaction import redact_secrets
 
 logger = structlog.get_logger(__name__)
 
-_ERROR_MESSAGE_LIMIT = 2000
 
-_ARTICLE_COMPLETED = "article_completed"
-_PERSIST_SUPERSEDED = "persist_superseded"
-_PERSIST_URL_CONFLICT = "persist_url_conflict"
-_PERSIST_CRASHED = "persist_crashed"
-_SCRAPE_PARSE_CRASHED = "scrape_parse_crashed"
-_SCRAPE_NOT_HTML = "scrape_not_html"
-_SCRAPE_PARSER_GAVE_UP = "scrape_parser_gave_up"
-_SCRAPE_CONTENT_QUALITY_TOO_LOW = "scrape_content_quality_too_low"
-_STALE_ATTEMPT = "stale_attempt"
+class CompletionOutcomeCode(StrEnum):
+    """Stage.COMPLETION の outcome code (stage ファイル内定義分のみ)。"""
 
-_READY_BUILD_FAILED_URL_INVALID = "completion_ready_build_failed_url_invalid"
-_READY_BUILD_FAILED_OBSERVED_ARTICLE_INVALID = (
-    "completion_ready_build_failed_observed_article_invalid"
-)
-_READY_BUILD_FAILED_SOURCE_NOT_REGISTERED = (
-    "completion_ready_build_failed_source_not_registered"
-)
-_READY_BUILD_FAILED_DB_ERROR = "completion_ready_build_failed_db_error"
-_READY_BUILD_FAILED_UNEXPECTED_ERROR = "completion_ready_build_failed_unexpected_error"
-
-
-def _fqn(exc: BaseException) -> str:
-    return f"{type(exc).__module__}.{type(exc).__qualname__}"
-
-
-def _redacted(message: str) -> str | None:
-    """secret を mask し上限で切り詰める。"""
-    return redact_secrets(message)[:_ERROR_MESSAGE_LIMIT] or None
+    ARTICLE_COMPLETED = "article_completed"
+    PERSIST_SUPERSEDED = "persist_superseded"
+    PERSIST_URL_CONFLICT = "persist_url_conflict"
+    PERSIST_CRASHED = "persist_crashed"
+    SCRAPE_PARSE_CRASHED = "scrape_parse_crashed"
+    SCRAPE_NOT_HTML = "scrape_not_html"
+    SCRAPE_PARSER_GAVE_UP = "scrape_parser_gave_up"
+    SCRAPE_CONTENT_QUALITY_TOO_LOW = "scrape_content_quality_too_low"
+    STALE_ATTEMPT = "stale_attempt"
+    READY_BUILD_FAILED_URL_INVALID = "completion_ready_build_failed_url_invalid"
+    READY_BUILD_FAILED_OBSERVED_ARTICLE_INVALID = (
+        "completion_ready_build_failed_observed_article_invalid"
+    )
+    READY_BUILD_FAILED_SOURCE_NOT_REGISTERED = (
+        "completion_ready_build_failed_source_not_registered"
+    )
+    READY_BUILD_FAILED_DB_ERROR = "completion_ready_build_failed_db_error"
+    READY_BUILD_FAILED_UNEXPECTED_ERROR = (
+        "completion_ready_build_failed_unexpected_error"
+    )
 
 
 class ArticleCompletionAuditRepository:
@@ -109,7 +105,7 @@ class ArticleCompletionAuditRepository:
                 await self._events.append(
                     stage=Stage.COMPLETION,
                     event_type=EventType.SUCCEEDED,
-                    outcome_code=_ARTICLE_COMPLETED,
+                    outcome_code=CompletionOutcomeCode.ARTICLE_COMPLETED.value,
                     payload=CompletionPayload(
                         canonical_url=canonical_url,
                         attempt_count=ready.attempt_count,
@@ -120,23 +116,23 @@ class ArticleCompletionAuditRepository:
                 )
             case CompletionSuperseded():
                 await self._append_race_loss(
-                    ready=ready, outcome_code=_PERSIST_SUPERSEDED
+                    ready=ready, outcome_code=CompletionOutcomeCode.PERSIST_SUPERSEDED
                 )
             case CompletionUrlConflict():
                 await self._append_race_loss(
-                    ready=ready, outcome_code=_PERSIST_URL_CONFLICT
+                    ready=ready, outcome_code=CompletionOutcomeCode.PERSIST_URL_CONFLICT
                 )
             case _ as unreachable:
                 assert_never(unreachable)
 
     async def _append_race_loss(
-        self, *, ready: ReadyForArticleCompletion, outcome_code: str
+        self, *, ready: ReadyForArticleCompletion, outcome_code: CompletionOutcomeCode
     ) -> None:
         """persist race-loss を skipped として記録する。"""
         await self._events.append(
             stage=Stage.COMPLETION,
             event_type=EventType.SKIPPED,
-            outcome_code=outcome_code,
+            outcome_code=outcome_code.value,
             payload=CompletionPayload(
                 canonical_url=str(ready.source_url),
                 attempt_count=ready.attempt_count,
@@ -166,12 +162,12 @@ class ArticleCompletionAuditRepository:
                         canonical_url=canonical_url,
                         attempt_count=ready.attempt_count,
                         http_status=getattr(error, "status_code", None),
-                        error_message=_redacted(str(error)),
+                        error_message=error_message_of(error),
                         error_chain=extract_error_chain(error),
                         retry_exhausted=True if retry_exhausted else None,
                     ),
                     source_id=ready.source_id,
-                    error_class=_fqn(error),
+                    error_class=exception_fqn(error),
                     retryability=projection.retryability,
                 )
             case ScrapeParseCrashed(
@@ -187,7 +183,7 @@ class ArticleCompletionAuditRepository:
                         failure_action=failure_action_value(projection),
                         canonical_url=canonical_url,
                         attempt_count=ready.attempt_count,
-                        error_message=_redacted(error_message),
+                        error_message=redacted_audit_message(error_message),
                     ),
                     source_id=ready.source_id,
                     error_class=error_class,
@@ -196,7 +192,7 @@ class ArticleCompletionAuditRepository:
             case ScrapeNotHtml(content_type=content_type):
                 await self._append_content_rejected(
                     ready=ready,
-                    outcome_code=_SCRAPE_NOT_HTML,
+                    outcome_code=CompletionOutcomeCode.SCRAPE_NOT_HTML,
                     payload=CompletionPayload(
                         canonical_url=canonical_url,
                         attempt_count=ready.attempt_count,
@@ -206,7 +202,7 @@ class ArticleCompletionAuditRepository:
             case ScrapeParserGaveUp():
                 await self._append_content_rejected(
                     ready=ready,
-                    outcome_code=_SCRAPE_PARSER_GAVE_UP,
+                    outcome_code=CompletionOutcomeCode.SCRAPE_PARSER_GAVE_UP,
                     payload=CompletionPayload(
                         canonical_url=canonical_url,
                         attempt_count=ready.attempt_count,
@@ -217,12 +213,12 @@ class ArticleCompletionAuditRepository:
                 title_present=title_present,
                 body_sample=body_sample,
             ):
-                injected = bool(body_sample) and contains_injection_boundary(
-                    body_sample
-                )
+                # 空 sample は body_head=None を保つため screening に流さない。
+                screening = screen_untrusted_text(body_sample) if body_sample else None
+                injected = screening is not None and screening.injection_detected
                 await self._append_content_rejected(
                     ready=ready,
-                    outcome_code=_SCRAPE_CONTENT_QUALITY_TOO_LOW,
+                    outcome_code=CompletionOutcomeCode.SCRAPE_CONTENT_QUALITY_TOO_LOW,
                     payload=CompletionPayload(
                         canonical_url=canonical_url,
                         attempt_count=ready.attempt_count,
@@ -232,9 +228,7 @@ class ArticleCompletionAuditRepository:
                         # 焼く (監査 payload を将来 LLM 再投入しても injection を
                         # 持ち込まないため)。
                         body_head=(
-                            sanitize_for_untrusted_block(body_sample)
-                            if body_sample
-                            else None
+                            screening.sanitized if screening is not None else None
                         ),
                         injection_markers_present=injected or None,
                     ),
@@ -258,14 +252,14 @@ class ArticleCompletionAuditRepository:
         self,
         *,
         ready: ReadyForArticleCompletion,
-        outcome_code: str,
+        outcome_code: CompletionOutcomeCode,
         payload: CompletionPayload,
     ) -> None:
         """scrape の内容棄却を rejected として記録する。"""
         await self._events.append(
             stage=Stage.COMPLETION,
             event_type=EventType.REJECTED,
-            outcome_code=outcome_code,
+            outcome_code=outcome_code.value,
             payload=payload,
             source_id=ready.source_id,
         )
@@ -304,7 +298,7 @@ class ArticleCompletionAuditRepository:
         await self._events.append(
             stage=Stage.COMPLETION,
             event_type=EventType.SKIPPED,
-            outcome_code=_STALE_ATTEMPT,
+            outcome_code=CompletionOutcomeCode.STALE_ATTEMPT.value,
             payload=CompletionPayload(
                 canonical_url=str(ready.source_url),
                 attempt_count=ready.attempt_count,
@@ -333,7 +327,7 @@ class ArticleCompletionAuditRepository:
             canonical_url=facts.source_url if facts is not None else None,
             attempt_count=facts.attempt_count if facts is not None else None,
             error_message=(
-                _redacted(str(exc))
+                error_message_of(exc)
                 if projection.event_type is EventType.FAILED
                 else None
             ),
@@ -351,7 +345,9 @@ class ArticleCompletionAuditRepository:
             payload=payload,
             source_id=facts.source_id if facts is not None else None,
             error_class=(
-                _fqn(exc) if projection.event_type is EventType.FAILED else None
+                exception_fqn(exc)
+                if projection.event_type is EventType.FAILED
+                else None
             ),
             retryability=(
                 Retryability.UNKNOWN
@@ -374,11 +370,11 @@ class ArticleCompletionAuditRepository:
                 failure_action=failure_action_value(projection),
                 canonical_url=str(ready.source_url),
                 attempt_count=ready.attempt_count,
-                error_message=_redacted(str(exc)),
+                error_message=error_message_of(exc),
                 error_chain=extract_error_chain(exc),
             ),
             source_id=ready.source_id,
-            error_class=_fqn(exc),
+            error_class=exception_fqn(exc),
             retryability=projection.retryability,
         )
 
@@ -402,10 +398,10 @@ class ArticleCompletionAuditRepository:
     def _projection_of_parse_crashed() -> FailureProjection:
         """parser crash を Stage 2 内部故障として投影する。"""
         return FailureProjection(
-            failure_kind=_SCRAPE_PARSE_CRASHED,
+            failure_kind=CompletionOutcomeCode.SCRAPE_PARSE_CRASHED.value,
             retryability=Retryability.NON_RETRYABLE,
             failure_action=None,
-            code=_SCRAPE_PARSE_CRASHED,
+            code=CompletionOutcomeCode.SCRAPE_PARSE_CRASHED.value,
         )
 
     @staticmethod
@@ -417,13 +413,13 @@ class ArticleCompletionAuditRepository:
                 failure_kind=db_projection.failure_kind,
                 retryability=db_projection.retryability,
                 failure_action=None,
-                code=_PERSIST_CRASHED,
+                code=CompletionOutcomeCode.PERSIST_CRASHED.value,
             )
         return FailureProjection(
-            failure_kind=_PERSIST_CRASHED,
+            failure_kind=CompletionOutcomeCode.PERSIST_CRASHED.value,
             retryability=Retryability.UNKNOWN,
             failure_action=None,
-            code=_PERSIST_CRASHED,
+            code=CompletionOutcomeCode.PERSIST_CRASHED.value,
         )
 
 
@@ -447,30 +443,30 @@ def _project_ready_build_error(exc: Exception) -> _ReadyBuildErrorProjection:
         return _ReadyBuildErrorProjection(
             event_type=EventType.FAILED,
             failure_kind="url_invalid",
-            code=_READY_BUILD_FAILED_URL_INVALID,
+            code=CompletionOutcomeCode.READY_BUILD_FAILED_URL_INVALID.value,
             reason_code=exc.reason,
         )
     if isinstance(exc, ObservedArticleInvalidError):
         return _ReadyBuildErrorProjection(
             event_type=EventType.FAILED,
             failure_kind="observed_article_invalid",
-            code=_READY_BUILD_FAILED_OBSERVED_ARTICLE_INVALID,
+            code=CompletionOutcomeCode.READY_BUILD_FAILED_OBSERVED_ARTICLE_INVALID.value,
             reason_code=exc.reason,
         )
     if isinstance(exc, SourceNotRegisteredError):
         return _ReadyBuildErrorProjection(
             event_type=EventType.FAILED,
             failure_kind="source_not_registered",
-            code=_READY_BUILD_FAILED_SOURCE_NOT_REGISTERED,
+            code=CompletionOutcomeCode.READY_BUILD_FAILED_SOURCE_NOT_REGISTERED.value,
         )
     if isinstance(exc, SQLAlchemyError):
         return _ReadyBuildErrorProjection(
             event_type=EventType.FAILED,
             failure_kind="db_error",
-            code=_READY_BUILD_FAILED_DB_ERROR,
+            code=CompletionOutcomeCode.READY_BUILD_FAILED_DB_ERROR.value,
         )
     return _ReadyBuildErrorProjection(
         event_type=EventType.FAILED,
         failure_kind="unexpected_error",
-        code=_READY_BUILD_FAILED_UNEXPECTED_ERROR,
+        code=CompletionOutcomeCode.READY_BUILD_FAILED_UNEXPECTED_ERROR.value,
     )

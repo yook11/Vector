@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from enum import StrEnum
 from typing import TypedDict
 
 from sqlalchemy.exc import SQLAlchemyError
@@ -10,6 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.audit.domain.event import EventType, Stage
 from app.audit.domain.payloads import AcquisitionPayload
 from app.audit.error_chain import extract_error_chain
+from app.audit.error_fields import exception_fqn, redacted_audit_message
 from app.audit.failure_projection import (
     FailureProjection,
     failure_action_value,
@@ -27,10 +29,12 @@ from app.collection.article_acquisition.reader.read_errors import (
 from app.collection.external_fetch_errors import ExternalFetchError
 from app.shared.security.redaction import redact_secrets
 
-_ERROR_MESSAGE_LIMIT = 2000
 
-_ARTICLE_CREATED = "article_created"
-_INCOMPLETE_ARTICLE_CREATED = "incomplete_article_created"
+class AcquisitionOutcomeCode(StrEnum):
+    """Stage.ACQUISITION の outcome code (stage ファイル内定義分のみ)。"""
+
+    ARTICLE_CREATED = "article_created"
+    INCOMPLETE_ARTICLE_CREATED = "incomplete_article_created"
 
 
 class SourceAcquisitionAuditRepository:
@@ -55,7 +59,7 @@ class SourceAcquisitionAuditRepository:
         await self._events.append(
             stage=Stage.ACQUISITION,
             event_type=EventType.SUCCEEDED,
-            outcome_code=_ARTICLE_CREATED,
+            outcome_code=AcquisitionOutcomeCode.ARTICLE_CREATED.value,
             payload=payload,
             article_id=article_id,
             source_id=source_id,
@@ -76,7 +80,7 @@ class SourceAcquisitionAuditRepository:
         await self._events.append(
             stage=Stage.ACQUISITION,
             event_type=EventType.SUCCEEDED,
-            outcome_code=_INCOMPLETE_ARTICLE_CREATED,
+            outcome_code=AcquisitionOutcomeCode.INCOMPLETE_ARTICLE_CREATED.value,
             payload=payload,
             article_id=None,
             source_id=source_id,
@@ -126,8 +130,7 @@ class SourceAcquisitionAuditRepository:
             failure_kind=projection.failure_kind,
             failure_action=failure_action_value(projection),
             source_name=source_name,
-            error_message=redact_secrets(_error_message(exc))[:_ERROR_MESSAGE_LIMIT]
-            or None,
+            error_message=redacted_audit_message(_error_message(exc)),
             error_chain=extract_error_chain(exc),
             **_origin_payload_fields(exc),
         )
@@ -137,7 +140,7 @@ class SourceAcquisitionAuditRepository:
             outcome_code=projection.code,
             payload=payload,
             source_id=source_id,
-            error_class=_fqn(exc),
+            error_class=exception_fqn(exc),
             retryability=projection.retryability,
         )
 
@@ -170,7 +173,7 @@ class SourceAcquisitionAuditRepository:
             outcome_code=rejection.outcome_code,
             payload=payload,
             source_id=source_id,
-            error_class=_fqn(cause) if cause is not None else None,
+            error_class=exception_fqn(cause) if cause is not None else None,
         )
 
 
@@ -239,7 +242,3 @@ def _error_message(exc: BaseException) -> str:
     if isinstance(origin, ExternalFetchError | UnreadableResponseError):
         return origin._default_message()  # noqa: SLF001 (PII-free 既定の意図的利用)
     return str(exc)
-
-
-def _fqn(exc: BaseException) -> str:
-    return f"{type(exc).__module__}.{type(exc).__qualname__}"

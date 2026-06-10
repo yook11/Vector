@@ -15,6 +15,7 @@ from app.analysis.embedding.failure_handling import EmbeddingFailureHandler
 from app.analysis.embedding.repository import EmbeddingRepository
 from app.analysis.embedding.service import EmbeddingService
 from app.analysis.rate_limit import record_rate_limit_gate_skipped
+from app.audit.error_fields import exception_fqn
 from app.audit.stages.embedding import EmbeddingAuditRepository
 from app.logfire.article_stage import embedding_stage_span
 from app.queue.brokers import broker_embedding
@@ -124,10 +125,6 @@ async def _append_ready_build_failed_audit(
         logger.exception(
             "embedding_ready_build_failed_audit_dropped",
             analysis_id=analysis_id,
-            business_error_class=_fqn(exc),
-            audit_error_class=_fqn(audit_exc),
+            business_error_class=exception_fqn(exc),
+            audit_error_class=exception_fqn(audit_exc),
         )
-
-
-def _fqn(exc: BaseException) -> str:
-    return f"{type(exc).__module__}.{type(exc).__qualname__}"

@@ -13,14 +13,8 @@ from sqlalchemy.exc import (
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.audit.stages.briefing import (
-    OUTCOME_BRIEFING_CATEGORY_ENQUEUE_FAILED,
-    OUTCOME_BRIEFING_CATEGORY_ENQUEUED,
-    OUTCOME_BRIEFING_DISPATCH_CATEGORY_MASTER_LOAD_FAILED,
-    OUTCOME_BRIEFING_DISPATCH_COMPLETED,
-    OUTCOME_BRIEFING_GENERATION_ALREADY_EXISTS,
-    OUTCOME_BRIEFING_GENERATION_COMPLETED,
-    OUTCOME_BRIEFING_GENERATION_INPUT_EMPTY,
     BriefingAuditRepository,
+    BriefingOutcomeCode,
 )
 from app.insights.briefing.domain.ready import ReadyForBriefing
 from app.insights.briefing.errors import (
@@ -69,7 +63,7 @@ async def test_append_generation_completed_records_succeeded_row(
     ev = await _fetch_one(db_session)
     assert ev.stage == "briefing"
     assert ev.event_type == "succeeded"
-    assert ev.outcome_code == OUTCOME_BRIEFING_GENERATION_COMPLETED
+    assert ev.outcome_code == BriefingOutcomeCode.GENERATION_COMPLETED.value
     assert ev.retryability is None
     assert ev.payload["kind"] == "briefing"
     assert ev.payload["week_start"] == "2026-04-20"
@@ -95,7 +89,7 @@ async def test_append_generation_input_empty_records_rejected_row(
     ev = await _fetch_one(db_session)
     assert ev.stage == "briefing"
     assert ev.event_type == "rejected"
-    assert ev.outcome_code == OUTCOME_BRIEFING_GENERATION_INPUT_EMPTY
+    assert ev.outcome_code == BriefingOutcomeCode.GENERATION_INPUT_EMPTY.value
     assert ev.retryability is None
     assert ev.payload["article_count"] == 0
     assert ev.payload["category_slug"] == "ai"
@@ -118,7 +112,7 @@ async def test_append_generation_already_exists_records_skipped_row(
     ev = await _fetch_one(db_session)
     assert ev.stage == "briefing"
     assert ev.event_type == "skipped"
-    assert ev.outcome_code == OUTCOME_BRIEFING_GENERATION_ALREADY_EXISTS
+    assert ev.outcome_code == BriefingOutcomeCode.GENERATION_ALREADY_EXISTS.value
     assert ev.retryability is None
     assert ev.payload["week_start"] == "2026-04-20"
     assert ev.payload["category_id"] == ai_category.id
@@ -314,7 +308,7 @@ async def test_append_dispatch_completed_records_counts(
     ev = await _fetch_one(db_session)
     assert ev.stage == "briefing"
     assert ev.event_type == "succeeded"
-    assert ev.outcome_code == OUTCOME_BRIEFING_DISPATCH_COMPLETED
+    assert ev.outcome_code == BriefingOutcomeCode.DISPATCH_COMPLETED.value
     assert ev.retryability is None
     assert ev.payload["week_start"] == "2026-04-20"
     assert ev.payload["selected_category_count"] == 3
@@ -341,7 +335,7 @@ async def test_append_category_enqueued_records_category_row(
     ev = await _fetch_one(db_session)
     assert ev.stage == "briefing"
     assert ev.event_type == "succeeded"
-    assert ev.outcome_code == OUTCOME_BRIEFING_CATEGORY_ENQUEUED
+    assert ev.outcome_code == BriefingOutcomeCode.CATEGORY_ENQUEUED.value
     assert ev.retryability is None
     assert ev.payload["week_start"] == "2026-04-20"
     assert ev.payload["category_id"] == ai_category.id
@@ -367,7 +361,7 @@ async def test_append_category_enqueue_failed_records_error_fields(
     ev = await _fetch_one(db_session)
     assert ev.stage == "briefing"
     assert ev.event_type == "failed"
-    assert ev.outcome_code == OUTCOME_BRIEFING_CATEGORY_ENQUEUE_FAILED
+    assert ev.outcome_code == BriefingOutcomeCode.CATEGORY_ENQUEUE_FAILED.value
     assert ev.retryability == "unknown"
     assert ev.error_class == "builtins.RuntimeError"
     assert ev.payload["failure_kind"] == "unknown"
@@ -396,7 +390,10 @@ async def test_append_dispatch_category_master_load_failed_marks_retry_exhausted
     ev = await _fetch_one(db_session)
     assert ev.stage == "briefing"
     assert ev.event_type == "failed"
-    assert ev.outcome_code == OUTCOME_BRIEFING_DISPATCH_CATEGORY_MASTER_LOAD_FAILED
+    assert (
+        ev.outcome_code
+        == BriefingOutcomeCode.DISPATCH_CATEGORY_MASTER_LOAD_FAILED.value
+    )
     assert ev.payload["retry_exhausted"] is True
     assert ev.payload["week_start"] == "2026-04-20"
     assert ev.retryability == "unknown"

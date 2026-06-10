@@ -11,10 +11,7 @@ import pytest
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from app.audit.stages.briefing import (
-    OUTCOME_BRIEFING_GENERATION_COMPLETED,
-    OUTCOME_BRIEFING_GENERATION_INPUT_EMPTY,
-)
+from app.audit.stages.briefing import BriefingOutcomeCode
 from app.insights.briefing.domain.briefing import (
     BriefingChapter,
     KeyArticle,
@@ -23,7 +20,11 @@ from app.insights.briefing.domain.briefing import (
 )
 from app.insights.briefing.domain.ready import ReadyForBriefing
 from app.insights.briefing.repository import BriefingRepository
-from app.insights.briefing.service import BriefingConflict, GeneratedBriefing, WeeklyBriefingService
+from app.insights.briefing.service import (
+    BriefingConflict,
+    GeneratedBriefing,
+    WeeklyBriefingService,
+)
 from app.models.category import Category
 from app.models.pipeline_event import PipelineEvent
 from app.models.weekly_briefing import WeeklyBriefing
@@ -144,7 +145,8 @@ class TestExecute:
         seed_briefing_analysis で 1 件の article を用意し、先に WeeklyBriefing
         行を INSERT (= 他 worker の勝利を模擬) してから force=False の execute を
         呼ぶ。save() が on_conflict_do_nothing で None を返すため BriefingConflict
-        になる。article_count は articles 取得数と一致し、勝者行の headline は変わらない。
+        になる。article_count は articles 取得数と一致し、勝者行の headline は
+        変わらない。
         """
         await seed_briefing_analysis(
             category_id=ai_category.id,
@@ -413,7 +415,7 @@ class TestAuditIntegration:
                 await db_session.execute(
                     select(PipelineEvent).where(
                         PipelineEvent.outcome_code
-                        == OUTCOME_BRIEFING_GENERATION_COMPLETED
+                        == BriefingOutcomeCode.GENERATION_COMPLETED.value
                     )
                 )
             )
@@ -439,7 +441,7 @@ class TestAuditIntegration:
     ) -> None:
         """race 敗北時は SUCCEEDED audit を焼かない。
 
-        SUCCEEDED (OUTCOME_BRIEFING_GENERATION_COMPLETED) は勝者だけが書く設計。
+        SUCCEEDED (BriefingOutcomeCode.GENERATION_COMPLETED) は勝者だけが書く設計。
         敗者は save() が None を返した後に audit append をスキップするため、
         DB 上の SUCCEEDED 行は 0 件でなければならない。
         """
@@ -476,7 +478,7 @@ class TestAuditIntegration:
                 await db_session.execute(
                     select(PipelineEvent).where(
                         PipelineEvent.outcome_code
-                        == OUTCOME_BRIEFING_GENERATION_COMPLETED
+                        == BriefingOutcomeCode.GENERATION_COMPLETED.value
                     )
                 )
             )
@@ -510,7 +512,7 @@ class TestAuditIntegration:
                 await db_session.execute(
                     select(PipelineEvent).where(
                         PipelineEvent.outcome_code
-                        == OUTCOME_BRIEFING_GENERATION_INPUT_EMPTY
+                        == BriefingOutcomeCode.GENERATION_INPUT_EMPTY.value
                     )
                 )
             )
