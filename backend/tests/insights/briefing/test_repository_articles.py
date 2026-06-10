@@ -51,9 +51,67 @@ class TestFetch:
         repo = BriefingArticleRepository(db_session)
         result = await repo.fetch(week_start=date(2026, 4, 20), category_id=ai.id)
         assert len(result) == 2
-        # 順序は article_id 昇順
+        # 順序は InScopeAssessment.id 昇順 (公開 /news id 空間)
         assert result[0].title_ja == "記事A"
         assert result[1].title_ja == "記事B"
+
+    @pytest.mark.asyncio
+    async def test_fetch_id_is_assessment_id_not_article_id(
+        self,
+        db_session: AsyncSession,
+        categories: dict[str, Category],
+        sample_source,
+        seed_briefing_analysis,
+    ) -> None:
+        """ArticleInput.id は公開 /news id 空間 (InScopeAssessment.id)。
+
+        decoy: Article だけを先に 1 件 INSERT して Article.id と
+        InScopeAssessment.id のシーケンスをずらし、両 id が一致しない状態で
+        fetch を呼んで ArticleInput.id == analysis.id であることを保証する。
+        """
+        from app.models.article import Article
+
+        # decoy article (assessment なし) を先に INSERT してシーケンスをずらす
+        db_session.add(
+            Article(
+                source_id=sample_source.id,
+                source_url="https://example.com/decoy",
+                original_title="decoy",
+                original_content="x" * 60,
+            )
+        )
+        await db_session.flush()
+
+        ai = categories["ai"]
+        analysis = await seed_briefing_analysis(
+            category_id=ai.id,
+            analyzed_at=datetime(2026, 4, 22, 12, 0, tzinfo=JST),
+            translated_title="記事Z",
+        )
+        await db_session.commit()
+
+        # decoy が効いていることの前提 assert: 両 id がずれていなければ判別力が無い
+        from sqlalchemy import select
+        from app.models.article_curation import ArticleCuration
+
+        article_id = (
+            await db_session.execute(
+                select(ArticleCuration.article_id).where(
+                    ArticleCuration.id == analysis.curation_id
+                )
+            )
+        ).scalar_one()
+        assert analysis.id != article_id, (
+            "decoy が効いていない: Article.id と InScopeAssessment.id が一致して"
+            "いるためテストが id 空間を判別できない"
+        )
+
+        repo = BriefingArticleRepository(db_session)
+        result = await repo.fetch(week_start=date(2026, 4, 20), category_id=ai.id)
+        assert len(result) == 1
+        # 公開 /news id 空間 (InScopeAssessment.id) であって Article.id ではない
+        assert result[0].id == analysis.id
+        assert result[0].id != article_id
 
     @pytest.mark.asyncio
     async def test_excludes_other_categories(

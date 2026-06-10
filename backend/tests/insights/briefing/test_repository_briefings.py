@@ -70,6 +70,9 @@ class TestSave:
         """save が WeeklyBriefingContent の全フィールドを ORM 行へ写像する。
 
         VO→行の写像は repository 内部の責務 (service が手組みしない)。
+        key_articles の永続形は {assessment_id, significance} (新形)。
+        domain 語彙 article_id (LLM 契約) は repository 境界で assessment_id へ
+        改名し、値は公開 /news id 空間 (InScopeAssessment.id) のまま保持する。
         """
         content = _content(headline="mapped", summary="マップ確認")
         repo = BriefingRepository(db_session)
@@ -79,7 +82,12 @@ class TestSave:
         assert saved.headline == content.headline
         assert saved.summary == content.summary
         assert saved.chapters == [c.model_dump() for c in content.chapters]
-        assert saved.key_articles == [a.model_dump() for a in content.key_articles]
+        # key_articles は repository が domain 語彙 article_id を assessment_id へ
+        # 写像して永続化する (旧形 {article_id} とはキー名で判別できる)。
+        assert saved.key_articles == [
+            {"assessment_id": a.article_id, "significance": a.significance}
+            for a in content.key_articles
+        ]
         assert saved.watch_points == [w.model_dump() for w in content.watch_points]
         assert saved.model_name == _SAVE_KWARGS["model_name"]
         assert saved.input_article_count == _SAVE_KWARGS["input_article_count"]

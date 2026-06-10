@@ -154,10 +154,11 @@ class TestGetBriefing:
         article_id = await _article_id_of(db_session, analysis)
         # decoy が効いていることの前提 assert (一致していたら下の判別が空虚になる)
         assert analysis.id != article_id
+        # 新形 seed: assessment_id キー (公開 /news id 空間) で永続化
         db_session.add(
             _briefing(
                 ai_category.id,
-                key_articles=[{"article_id": article_id, "significance": "なぜ重要か"}],
+                key_articles=[{"assessment_id": analysis.id, "significance": "なぜ重要か"}],
             )
         )
         await db_session.commit()
@@ -197,6 +198,60 @@ class TestGetBriefing:
         assert "articles" not in body
 
     @pytest.mark.asyncio
+    async def test_legacy_article_id_seed_embeds_as_assessment_id(
+        self,
+        bff_client: AsyncClient,
+        db_session: AsyncSession,
+        ai_category: Category,
+        sample_source: NewsSource,
+        seed_briefing_analysis,
+    ) -> None:
+        """旧形 seed ({article_id} キー) の legacy 経路で embed.id が公開 id になる。
+
+        Phase B migration (旧形行の remap) 適用前は _fetch_article_embeds (Article.id
+        空間 → InScopeAssessment.id 変換) 経路が機能する。decoy で Article.id と
+        InScopeAssessment.id をずらし、旧形でも embed.id = analysis.id (公開 /news
+        id 空間) になることを固定する。旧形が article_id 空間をそのまま embed.id に
+        使うなら analysis.id != article_id の assert が fail する。
+        """
+        db_session.add(
+            Article(
+                source_id=sample_source.id,
+                source_url="https://example.com/decoy-legacy",
+                original_title="decoy-legacy",
+                original_content="x" * 60,
+            )
+        )
+        await db_session.flush()
+
+        analysis = await seed_briefing_analysis(
+            category_id=ai_category.id,
+            analyzed_at=datetime(2026, 4, 22, 12, 0, tzinfo=JST),
+            translated_title="レガシー記事",
+        )
+        article_id = await _article_id_of(db_session, analysis)
+        # decoy が効いていることの前提 assert
+        assert analysis.id != article_id
+        # 旧形 seed: article_id キー (Article.id 空間) で永続化
+        db_session.add(
+            _briefing(
+                ai_category.id,
+                key_articles=[{"article_id": article_id, "significance": "旧形の理由"}],
+            )
+        )
+        await db_session.commit()
+
+        resp = await bff_client.get("/api/v1/briefing/ai")
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["state"] == "briefing"
+        assert len(body["keyArticles"]) == 1
+        article = body["keyArticles"][0]["article"]
+        # 旧形経路でも embed の id は公開 /news id 空間 (analysis.id)
+        assert article["id"] == analysis.id
+        assert article["id"] != article_id
+
+    @pytest.mark.asyncio
     async def test_article_published_at_is_null_when_unset(
         self,
         bff_client: AsyncClient,
@@ -209,11 +264,10 @@ class TestGetBriefing:
             category_id=ai_category.id,
             analyzed_at=datetime(2026, 4, 22, 12, 0, tzinfo=JST),
         )
-        article_id = await _article_id_of(db_session, analysis)
         db_session.add(
             _briefing(
                 ai_category.id,
-                key_articles=[{"article_id": article_id, "significance": "なぜ重要か"}],
+                key_articles=[{"assessment_id": analysis.id, "significance": "なぜ重要か"}],
             )
         )
         await db_session.commit()
@@ -244,12 +298,12 @@ class TestGetBriefing:
                 analyzed_at=datetime(2026, 4, 22, 12, 0, tzinfo=JST),
                 translated_title=title,
             )
-            article_id = await _article_id_of(db_session, analysis)
-            seeded.append((analysis, article_id, title))
+            seeded.append((analysis, title))
 
+        # 新形 seed: assessment_id キー (公開 /news id 空間)、作成逆順で並べる
         key_articles = [
-            {"article_id": article_id, "significance": f"{title}の理由"}
-            for _, article_id, title in reversed(seeded)
+            {"assessment_id": analysis.id, "significance": f"{title}の理由"}
+            for analysis, title in reversed(seeded)
         ]
         db_session.add(_briefing(ai_category.id, key_articles=key_articles))
         await db_session.commit()
@@ -267,7 +321,7 @@ class TestGetBriefing:
         ]
         expected = [
             (f"{title}の理由", analysis.id, title)
-            for analysis, _, title in reversed(seeded)
+            for analysis, title in reversed(seeded)
         ]
         assert got == expected
 
@@ -294,11 +348,10 @@ class TestGetBriefing:
                 {"content": "新チップを公開", "mentions": []},
             ],
         )
-        article_id = await _article_id_of(db_session, analysis)
         db_session.add(
             _briefing(
                 ai_category.id,
-                key_articles=[{"article_id": article_id, "significance": "なぜ重要か"}],
+                key_articles=[{"assessment_id": analysis.id, "significance": "なぜ重要か"}],
             )
         )
         await db_session.commit()
@@ -324,11 +377,10 @@ class TestGetBriefing:
             category_id=ai_category.id,
             analyzed_at=datetime(2026, 4, 22, 12, 0, tzinfo=JST),
         )
-        article_id = await _article_id_of(db_session, analysis)
         db_session.add(
             _briefing(
                 ai_category.id,
-                key_articles=[{"article_id": article_id, "significance": "なぜ重要か"}],
+                key_articles=[{"assessment_id": analysis.id, "significance": "なぜ重要か"}],
             )
         )
         await db_session.commit()
@@ -350,11 +402,10 @@ class TestGetBriefing:
             category_id=ai_category.id,
             analyzed_at=datetime(2026, 4, 22, 12, 0, tzinfo=JST),
         )
-        article_id = await _article_id_of(db_session, analysis)
         db_session.add(
             _briefing(
                 ai_category.id,
-                key_articles=[{"article_id": article_id, "significance": "なぜ重要か"}],
+                key_articles=[{"assessment_id": analysis.id, "significance": "なぜ重要か"}],
             )
         )
         await db_session.commit()
@@ -375,11 +426,13 @@ class TestGetBriefing:
 
         article non-nullable 不変条件の所有テスト。生成時 validator + 削除経路の
         不在で通常は起こりえず、起きたら failure_visibility 方針で loud に出す。
+        新形 assessment_id キーで存在しない id を指定し、embed 欠落 → ValidationError
+        を確認する。
         """
         db_session.add(
             _briefing(
                 ai_category.id,
-                key_articles=[{"article_id": 999_999, "significance": "なぜ重要か"}],
+                key_articles=[{"assessment_id": 999_999, "significance": "なぜ重要か"}],
             )
         )
         await db_session.commit()
@@ -429,7 +482,7 @@ class TestListBriefings:
             headline="今週のヘッドライン",
             summary="今週の総括リード",
             chapters=[{"heading": "資金とインフラ", "body": "今週の流れの本文"}],
-            key_articles=[{"article_id": 1, "significance": "なぜ重要か"}],
+            key_articles=[{"assessment_id": 1, "significance": "なぜ重要か"}],
             watch_points=[{"statement": "今後どこを見るべきか"}],
             model_name="deepseek-v4-pro",
             input_article_count=1,
@@ -479,7 +532,7 @@ class TestListBriefings:
                     headline="h",
                     summary="s",
                     chapters=[{"heading": "h", "body": "b"}],
-                    key_articles=[{"article_id": 1, "significance": "s"}],
+                    key_articles=[{"assessment_id": 1, "significance": "s"}],
                     watch_points=[{"statement": "w"}],
                     model_name="deepseek-v4-pro",
                     input_article_count=count,
@@ -567,7 +620,7 @@ class TestBriefingResponseSizeGuard:
         変わるため、too_long の assert が fail-fast 順序の所有 assert になる。
         """
         oversized = [
-            {"article_id": i + 1, "significance": f"s{i}"}
+            {"assessment_id": i + 1, "significance": f"s{i}"}
             for i in range(MAX_KEY_ARTICLES_PER_BRIEFING + 1)
         ]
         db_session.add(self._persist(ai_category, key_articles=oversized))
@@ -590,13 +643,12 @@ class TestBriefingResponseSizeGuard:
             category_id=ai_category.id,
             analyzed_at=datetime(2026, 4, 22, 12, 0, tzinfo=JST),
         )
-        article_id = await _article_id_of(db_session, analysis)
         db_session.add(
             self._persist(
                 ai_category,
                 key_articles=[
                     {
-                        "article_id": article_id,
+                        "assessment_id": analysis.id,
                         "significance": "x" * (MAX_KEY_ARTICLE_SIGNIFICANCE_LEN + 1),
                     }
                 ],
@@ -625,11 +677,10 @@ class TestBriefingResponseSizeGuard:
             analyzed_at=datetime(2026, 4, 22, 12, 0, tzinfo=JST),
             key_points=[{"content": "x" * 501, "mentions": []}],
         )
-        article_id = await _article_id_of(db_session, analysis)
         db_session.add(
             self._persist(
                 ai_category,
-                key_articles=[{"article_id": article_id, "significance": "s"}],
+                key_articles=[{"assessment_id": analysis.id, "significance": "s"}],
             )
         )
         await db_session.commit()
@@ -655,11 +706,10 @@ class TestBriefingResponseSizeGuard:
             analyzed_at=datetime(2026, 4, 22, 12, 0, tzinfo=JST),
             key_points=[{"content": f"p{i}", "mentions": []} for i in range(11)],
         )
-        article_id = await _article_id_of(db_session, analysis)
         db_session.add(
             self._persist(
                 ai_category,
-                key_articles=[{"article_id": article_id, "significance": "s"}],
+                key_articles=[{"assessment_id": analysis.id, "significance": "s"}],
             )
         )
         await db_session.commit()

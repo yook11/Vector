@@ -17,7 +17,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.insights.briefing.domain.article import ArticleInput
 from app.insights.briefing.domain.briefing import WeeklyBriefingContent
 from app.insights.trend_discovery.domain.window import WEEK_TZ
-from app.models.article_curation import ArticleCuration
 from app.models.in_scope_assessment import InScopeAssessment
 from app.models.weekly_briefing import WeeklyBriefing
 
@@ -33,8 +32,11 @@ class BriefingArticleRepository:
     async def fetch(self, *, week_start: date, category_id: int) -> list[ArticleInput]:
         """指定週 × カテゴリの analysis 済 article を取得する。
 
+        ``ArticleInput.id`` は公開 /news id 空間 (``InScopeAssessment.id``)。
+        LLM 入出力・JSONB 永続化・response embed が同一 id 空間で揃う。
+
         Returns:
-            ``article_id`` 昇順で安定ソートした ``ArticleInput`` のリスト。
+            id 昇順で安定ソートした ``ArticleInput`` のリスト。
             該当なしの場合は空リスト。
         """
         tz = ZoneInfo(WEEK_TZ)
@@ -43,25 +45,21 @@ class BriefingArticleRepository:
 
         stmt = (
             select(
-                ArticleCuration.article_id,
+                InScopeAssessment.id,
                 InScopeAssessment.translated_title,
                 InScopeAssessment.summary,
-            )
-            .join(
-                ArticleCuration,
-                InScopeAssessment.curation_id == ArticleCuration.id,
             )
             .where(
                 InScopeAssessment.category_id == category_id,
                 InScopeAssessment.analyzed_at >= week_start_jst,
                 InScopeAssessment.analyzed_at < week_end_jst,
             )
-            .order_by(ArticleCuration.article_id)
+            .order_by(InScopeAssessment.id)
         )
         rows = (await self._session.execute(stmt)).all()
         return [
             ArticleInput(
-                id=row.article_id,
+                id=row.id,
                 title_ja=row.translated_title,
                 summary_ja=row.summary,
             )
@@ -157,7 +155,13 @@ class BriefingRepository:
             "headline": content.headline,
             "summary": content.summary,
             "chapters": [c.model_dump() for c in content.chapters],
-            "key_articles": [a.model_dump() for a in content.key_articles],
+            # domain 語彙 article_id (LLM 契約) → 永続キー assessment_id の改名境界。
+            # 値は公開 /news id 空間 (InScopeAssessment.id)。旧形 {article_id} 行
+            # (Article.id 空間) とはキー名で構造的に判別する (parallel change)。
+            "key_articles": [
+                {"assessment_id": a.article_id, "significance": a.significance}
+                for a in content.key_articles
+            ],
             "watch_points": [w.model_dump() for w in content.watch_points],
             "model_name": model_name,
             "input_article_count": input_article_count,
