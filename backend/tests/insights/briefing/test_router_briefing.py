@@ -198,60 +198,6 @@ class TestGetBriefing:
         assert "articles" not in body
 
     @pytest.mark.asyncio
-    async def test_legacy_article_id_seed_embeds_as_assessment_id(
-        self,
-        bff_client: AsyncClient,
-        db_session: AsyncSession,
-        ai_category: Category,
-        sample_source: NewsSource,
-        seed_briefing_analysis,
-    ) -> None:
-        """旧形 seed ({article_id} キー) の legacy 経路で embed.id が公開 id になる。
-
-        Phase B migration (旧形行の remap) 適用前は _fetch_article_embeds (Article.id
-        空間 → InScopeAssessment.id 変換) 経路が機能する。decoy で Article.id と
-        InScopeAssessment.id をずらし、旧形でも embed.id = analysis.id (公開 /news
-        id 空間) になることを固定する。旧形が article_id 空間をそのまま embed.id に
-        使うなら analysis.id != article_id の assert が fail する。
-        """
-        db_session.add(
-            Article(
-                source_id=sample_source.id,
-                source_url="https://example.com/decoy-legacy",
-                original_title="decoy-legacy",
-                original_content="x" * 60,
-            )
-        )
-        await db_session.flush()
-
-        analysis = await seed_briefing_analysis(
-            category_id=ai_category.id,
-            analyzed_at=datetime(2026, 4, 22, 12, 0, tzinfo=JST),
-            translated_title="レガシー記事",
-        )
-        article_id = await _article_id_of(db_session, analysis)
-        # decoy が効いていることの前提 assert
-        assert analysis.id != article_id
-        # 旧形 seed: article_id キー (Article.id 空間) で永続化
-        db_session.add(
-            _briefing(
-                ai_category.id,
-                key_articles=[{"article_id": article_id, "significance": "旧形の理由"}],
-            )
-        )
-        await db_session.commit()
-
-        resp = await bff_client.get("/api/v1/briefing/ai")
-        assert resp.status_code == 200
-        body = resp.json()
-        assert body["state"] == "briefing"
-        assert len(body["keyArticles"]) == 1
-        article = body["keyArticles"][0]["article"]
-        # 旧形経路でも embed の id は公開 /news id 空間 (analysis.id)
-        assert article["id"] == analysis.id
-        assert article["id"] != article_id
-
-    @pytest.mark.asyncio
     async def test_article_published_at_is_null_when_unset(
         self,
         bff_client: AsyncClient,

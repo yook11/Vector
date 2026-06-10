@@ -62,7 +62,7 @@ async def _fetch_category(session: AsyncSession, slug: str) -> Category:
 async def _fetch_article_embeds_by_assessment_id(
     session: AsyncSession, assessment_ids: set[int]
 ) -> dict[int, _BriefingArticleEmbed]:
-    """新形 key_articles (``assessment_id`` キー) の embed を返す。
+    """key_articles (``assessment_id`` キー) が参照する記事の embed を返す。
 
     JSONB の assessment_id は公開 /news id 空間 (``InScopeAssessment.id``)
     そのものなので、dict キー = embed の公開 ``id`` で橋渡しが無い。
@@ -88,54 +88,6 @@ async def _fetch_article_embeds_by_assessment_id(
     return {
         row.id: _BriefingArticleEmbed(
             id=row.id,
-            translated_title=row.translated_title,
-            source=NewsSourceEmbed(
-                name=row.name,
-                attribution_label=row.attribution_label,
-            ),
-            url=str(row.source_url),
-            published_at=row.published_at,
-            key_points=extract_key_point_contents(row.key_points),
-        )
-        for row in rows
-    }
-
-
-async def _fetch_article_embeds(
-    session: AsyncSession, article_ids: set[int]
-) -> dict[int, _BriefingArticleEmbed]:
-    """旧形 key_articles (``article_id`` キー = Article.id 空間) の embed を返す。
-
-    JSONB の article_id は ``Article.id`` だが、embed の公開 ``id`` は
-    ``/news/{id}`` と同じ id 空間 (``InScopeAssessment.id``) なので別々に持つ。
-    旧形行を remap する Phase B migration 適用後に削除する (parallel change)。
-    """
-    if not article_ids:
-        return {}
-    # 公開 URL は ``Article.source_url`` (PR-E 以降は canonicalize 済み SSoT)。
-    stmt = (
-        select(
-            Article.id,
-            Article.source_url,
-            Article.published_at,
-            InScopeAssessment.id.label("assessment_id"),
-            InScopeAssessment.translated_title,
-            InScopeAssessment.key_points,
-            NewsSource.name,
-            NewsSource.attribution_label,
-        )
-        .join(ArticleCuration, ArticleCuration.article_id == Article.id)
-        .join(
-            InScopeAssessment,
-            InScopeAssessment.curation_id == ArticleCuration.id,
-        )
-        .join(NewsSource, NewsSource.id == Article.source_id)
-        .where(Article.id.in_(article_ids))
-    )
-    rows = (await session.execute(stmt)).all()
-    return {
-        row.id: _BriefingArticleEmbed(
-            id=row.assessment_id,
             translated_title=row.translated_title,
             source=NewsSourceEmbed(
                 name=row.name,
@@ -227,16 +179,8 @@ async def get_latest_briefing(
 
     chapters = [_BriefingChapter.model_validate(c) for c in briefing.chapters]
     _KEY_ARTICLES_COUNT_GUARD.validate_python(briefing.key_articles)
-    # 新形 {assessment_id} (公開 id 空間) / 旧形 {article_id} (Article.id 空間) を
-    # キー有無で判別する。両空間は値が重なり得るため値からは推測しない。
-    # 1 行は単一 writer 書込で行内混在は無いが、要素単位で全域に処理する。
     embeds = await _fetch_article_embeds_by_assessment_id(
-        session,
-        {a["assessment_id"] for a in briefing.key_articles if "assessment_id" in a},
-    )
-    legacy_embeds = await _fetch_article_embeds(
-        session,
-        {a["article_id"] for a in briefing.key_articles if "article_id" in a},
+        session, {a["assessment_id"] for a in briefing.key_articles}
     )
     # article non-nullable は生成時 validator (article_id ⊆ assessed input_ids) と
     # 記事削除経路の不在が保証する (assessed 記事の retention 削除導入時は要見直し)。
@@ -245,11 +189,9 @@ async def get_latest_briefing(
     key_articles = [
         _BriefingKeyArticle(
             significance=a["significance"],
-            article=(
-                embeds.get(a["assessment_id"])
-                if "assessment_id" in a
-                else legacy_embeds.get(a["article_id"])
-            ),  # pyright: ignore[reportArgumentType]
+            article=embeds.get(  # pyright: ignore[reportArgumentType]
+                a["assessment_id"]
+            ),
         )
         for a in briefing.key_articles
     ]
