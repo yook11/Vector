@@ -12,7 +12,7 @@ function makeCard(
   overrides: Partial<ReadyBriefingCard> = {},
 ): ReadyBriefingCard {
   return {
-    category: { id: 1, slug: "ai", name: "AI" },
+    category: { slug: "ai", name: "AI" },
     weekStart: "2026-06-02",
     headline: "AI 技術の最前線",
     // summary は「週」を含まないようにする (stale-week ラベルのテストが誤検知しないため)
@@ -56,7 +56,7 @@ describe("BriefingBandCard — コンテンツ表示", () => {
     render(
       <BriefingBandCard
         card={makeCard({
-          category: { id: 3, slug: "security", name: "セキュリティ" },
+          category: { slug: "security", name: "セキュリティ" },
         })}
         currentWeekStart="2026-06-02"
       />,
@@ -69,7 +69,7 @@ describe("BriefingBandCard — コンテンツ表示", () => {
     const expectedCode = getCategoryKicker("ai").code;
     render(
       <BriefingBandCard
-        card={makeCard({ category: { id: 1, slug: "ai", name: "AI" } })}
+        card={makeCard({ category: { slug: "ai", name: "AI" } })}
         currentWeekStart="2026-06-02"
       />,
     );
@@ -82,7 +82,7 @@ describe("BriefingBandCard — コンテンツ表示", () => {
     render(
       <BriefingBandCard
         card={makeCard({
-          category: { id: 10, slug: "security", name: "セキュリティ" },
+          category: { slug: "security", name: "セキュリティ" },
         })}
         currentWeekStart="2026-06-02"
       />,
@@ -96,7 +96,7 @@ describe("BriefingBandCard — リンク", () => {
     render(
       <BriefingBandCard
         card={makeCard({
-          category: { id: 1, slug: "computing", name: "コンピューティング" },
+          category: { slug: "computing", name: "コンピューティング" },
         })}
         currentWeekStart="2026-06-02"
       />,

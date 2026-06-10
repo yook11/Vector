@@ -26,7 +26,7 @@ AI 境界では引き続きフラット形式 (``{category, investor_take, key_p
 from __future__ import annotations
 
 from enum import StrEnum
-from typing import Any
+from typing import Any, Final
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
@@ -132,6 +132,12 @@ class Mention(BaseModel):
         return v
 
 
+# KeyPoint の構造上限。briefing の出口契約 (insights/briefing/schemas.py) が
+# F10 ガードとして同値を import する (二箇所のドリフトを構造的に防ぐ)。
+MAX_KEY_POINT_CONTENT_LEN: Final[int] = 500
+MAX_KEY_POINTS_PER_ASSESSMENT: Final[int] = 10
+
+
 class KeyPoint(BaseModel):
     """記事の重要な情報 1 件 + 登場した固有名のペア。
 
@@ -143,7 +149,7 @@ class KeyPoint(BaseModel):
 
     model_config = ConfigDict(frozen=True)
 
-    content: str = Field(min_length=1, max_length=500)
+    content: str = Field(min_length=1, max_length=MAX_KEY_POINT_CONTENT_LEN)
     mentions: list[Mention] = Field(default_factory=list, max_length=20)
 
     @field_validator("content", mode="before")
@@ -180,7 +186,9 @@ class InScope(BaseModel):
 
     category: InScopeCategory
     investor_take: str = Field(min_length=1, max_length=2000)
-    key_points: list[KeyPoint] = Field(default_factory=list, max_length=10)
+    key_points: list[KeyPoint] = Field(
+        default_factory=list, max_length=MAX_KEY_POINTS_PER_ASSESSMENT
+    )
 
     @field_validator("investor_take", mode="before")
     @classmethod
@@ -208,7 +216,9 @@ class OutOfScope(BaseModel):
     model_config = ConfigDict(frozen=True)
 
     investor_take: str = Field(min_length=1, max_length=2000)
-    key_points: list[KeyPoint] = Field(default_factory=list, max_length=10)
+    key_points: list[KeyPoint] = Field(
+        default_factory=list, max_length=MAX_KEY_POINTS_PER_ASSESSMENT
+    )
 
     @field_validator("investor_take", mode="before")
     @classmethod

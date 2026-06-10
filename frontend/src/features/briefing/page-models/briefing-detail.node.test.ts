@@ -15,30 +15,29 @@ beforeEach(() => {
 });
 
 describe("getBriefingDetailViewModel", () => {
-  it("ready 状態を透過する", async () => {
-    const ready = {
-      state: "ready" as const,
+  it("briefing 状態を透過する", async () => {
+    const detail = {
+      state: "briefing" as const,
       weekStart: "2026-04-20",
       generatedAt: "2026-04-27T00:05:00+09:00",
       modelName: "deepseek-v4-pro",
       inputArticleCount: 132,
-      category: { id: 1, slug: "ai", name: "AI" },
+      category: { slug: "ai", name: "AI" },
       headline: "今週の AI",
       summary: "今週の総括リード",
       chapters: [{ heading: "資金とインフラ", body: "今週の AI 業界の流れ" }],
       keyArticles: [],
       watchPoints: [],
-      articles: [],
     };
-    mocks.getBriefing.mockResolvedValue(ready);
+    mocks.getBriefing.mockResolvedValue(detail);
     const result = await getBriefingDetailViewModel("ai");
-    expect(result).toEqual(ready);
+    expect(result).toEqual(detail);
   });
 
   it("empty 状態を透過する", async () => {
     const empty = {
       state: "empty" as const,
-      category: { id: 1, slug: "ai", name: "AI" },
+      category: { slug: "ai", name: "AI" },
     };
     mocks.getBriefing.mockResolvedValue(empty);
     const result = await getBriefingDetailViewModel("ai");
@@ -48,7 +47,7 @@ describe("getBriefingDetailViewModel", () => {
   it("slug を api 関数に渡す", async () => {
     mocks.getBriefing.mockResolvedValue({
       state: "empty",
-      category: { id: 1, slug: "robotics", name: "ロボティクス" },
+      category: { slug: "robotics", name: "ロボティクス" },
     });
     await getBriefingDetailViewModel("robotics");
     expect(mocks.getBriefing).toHaveBeenCalledWith("robotics");

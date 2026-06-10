@@ -38,7 +38,7 @@ class BriefingLlmError(BriefingError):
         self.provider_error = provider_error
 
 
-class BriefingResponseInvalidError(BriefingError):
+class BriefingLlmResponseInvalidError(BriefingError):
     """LLM 応答が briefing schema / article id 制約に合致しない。"""
 
     CODE: ClassVar[str] = "briefing_generation_llm_response_contract_invalid"

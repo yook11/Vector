@@ -1,15 +1,12 @@
 import { ChevronLeft, Sparkles } from "lucide-react";
 import Link from "next/link";
 import { formatPaperDate, formatPaperTime } from "@/components/paper";
-import type {
-  BriefingArticleSummaryParsed,
-  BriefingResponseParsed,
-} from "../schemas/briefing";
+import type { BriefingResponseParsed } from "../schemas/briefing";
 import { BriefingDisclaimer } from "./BriefingDisclaimer";
 import { KeyArticleBlock } from "./KeyArticleBlock";
 import { WatchPoints } from "./WatchPoints";
 
-type ReadyBriefing = Extract<BriefingResponseParsed, { state: "ready" }>;
+type BriefingDetail = Extract<BriefingResponseParsed, { state: "briefing" }>;
 
 /** week_start (ISO date) から 7 日窓の終端 (start + 6 日) を ISO で返す。 */
 function weekEndIso(weekStartIso: string): string {
@@ -47,11 +44,7 @@ function SectionHeading({
 }
 
 /** 週次 briefing を雑誌風の紙面読み物として描画する (news 詳細の paper idiom を踏襲)。 */
-export function BriefingDocument({ briefing }: { briefing: ReadyBriefing }) {
-  const articlesById = new Map<number, BriefingArticleSummaryParsed>(
-    briefing.articles.map((a) => [a.id, a]),
-  );
-
+export function BriefingDocument({ briefing }: { briefing: BriefingDetail }) {
   return (
     <article className="pt-7 pb-4">
       <div className="mb-8">
@@ -163,9 +156,8 @@ export function BriefingDocument({ briefing }: { briefing: ReadyBriefing }) {
           <div className="mx-auto flex max-w-[860px] flex-col">
             {briefing.keyArticles.map((keyArticle, i) => (
               <KeyArticleBlock
-                key={keyArticle.articleId}
+                key={keyArticle.article.id}
                 keyArticle={keyArticle}
-                articlesById={articlesById}
                 category={briefing.category}
                 index={i}
               />

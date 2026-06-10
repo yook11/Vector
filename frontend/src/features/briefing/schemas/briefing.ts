@@ -6,13 +6,12 @@
  *
  * 一覧 (`BriefingListResponse`) は nullable nested (`latest: T | None`) で
  * 「ある/ない」を表現。詳細 (`BriefingResponse`) は state field discriminator
- * で `ready` / `empty` を分岐 (差分フィールド多数のため discriminated union 採用)。
+ * で `briefing` / `empty` を分岐 (差分フィールド多数のため discriminated union 採用)。
  */
 
 import { z } from "zod";
 
 const CategorySchema = z.object({
-  id: z.number(),
   slug: z.string().min(1),
   name: z.string().min(1),
 });
@@ -35,13 +34,20 @@ export const BriefingListResponseSchema = z.object({
   items: z.array(BriefingListItemSchema),
 });
 
-const BriefingArticleSummarySchema = z.object({
+const NewsSourceEmbedSchema = z.object({
+  name: z.string(),
+  attributionLabel: z.string().nullable(),
+});
+
+const BriefingArticleEmbedSchema = z.object({
+  // /news/{id} 記事詳細の公開 id (ArticleBrief.id と同じ id 空間)
   id: z.number(),
-  titleJa: z.string(),
-  sourceName: z.string(),
+  translatedTitle: z.string(),
+  source: NewsSourceEmbedSchema,
   url: z.string(),
   // 元記事の公開日時 (Article.published_at)。未取得記事は null。
   publishedAt: z.iso.datetime({ offset: true }).nullable(),
+  keyPoints: z.array(z.string()),
 });
 
 const ChapterSchema = z.object({
@@ -50,16 +56,12 @@ const ChapterSchema = z.object({
 });
 
 const KeyArticleSchema = z.object({
-  articleId: z.number(),
   significance: z.string(),
+  article: BriefingArticleEmbedSchema,
 });
 
-const WatchPointSchema = z.object({
-  statement: z.string(),
-});
-
-const ReadyBriefingSchema = z.object({
-  state: z.literal("ready"),
+const BriefingDetailSchema = z.object({
+  state: z.literal("briefing"),
   weekStart: z.iso.date(),
   generatedAt: z.iso.datetime({ offset: true }),
   modelName: z.string(),
@@ -69,8 +71,7 @@ const ReadyBriefingSchema = z.object({
   summary: z.string(),
   chapters: z.array(ChapterSchema),
   keyArticles: z.array(KeyArticleSchema),
-  watchPoints: z.array(WatchPointSchema),
-  articles: z.array(BriefingArticleSummarySchema),
+  watchPoints: z.array(z.string()),
 });
 
 const EmptyBriefingSchema = z.object({
@@ -79,7 +80,7 @@ const EmptyBriefingSchema = z.object({
 });
 
 export const BriefingResponseSchema = z.discriminatedUnion("state", [
-  ReadyBriefingSchema,
+  BriefingDetailSchema,
   EmptyBriefingSchema,
 ]);
 
@@ -87,6 +88,7 @@ export type BriefingListResponseParsed = z.infer<
   typeof BriefingListResponseSchema
 >;
 export type BriefingResponseParsed = z.infer<typeof BriefingResponseSchema>;
-export type BriefingArticleSummaryParsed = z.infer<
-  typeof BriefingArticleSummarySchema
+export type BriefingKeyArticleParsed = z.infer<typeof KeyArticleSchema>;
+export type BriefingArticleEmbedParsed = z.infer<
+  typeof BriefingArticleEmbedSchema
 >;

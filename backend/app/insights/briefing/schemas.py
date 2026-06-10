@@ -2,15 +2,16 @@
 
 設計判断:
 - カテゴリは存在する slug のみ受け付け、未生成は ``state="empty"`` で 200 を返す
-  (snapshot router と同パターン、failure_visibility)
+  (trends router と同パターン、failure_visibility)
 - 不明な category slug は 404 (resource として存在しないため)
-- ``keyArticles[].articleId`` から参照される記事詳細を ``articles`` lookup table と
-  して 1 リクエストでまとめて返す (frontend で N+1 fetch しないで済む)
+- ``keyArticles[]`` は編集判断 (significance) と参照記事 (``article``) を
+  自己完結 nested で返す (frontend に lookup join を強いない)
 
 サイズ上限 (red-team F10 構造防御):
-    各 str / list の max_length は anon GET 経路で巨大 JSONB が response として
-    流れる経路を FastAPI ``response_model`` serialize 時に reject する
-    (``ResponseValidationError`` → 500、failure_visibility 方針)。
+    各 str / list の max_length は ``require_bff_request`` 保護下の共有 read で
+    巨大 JSONB が response として流れる経路を FastAPI ``response_model``
+    serialize 時に reject する (``ResponseValidationError`` → 500、
+    failure_visibility 方針)。
     domain 側の ``WeeklyBriefingContent`` と同値で持ち、二箇所で同じ振る舞いを保証する。
 """
 
@@ -21,6 +22,10 @@ from typing import Annotated, Final, Literal
 
 from pydantic import Field
 
+from app.analysis.assessment.domain.result import (
+    MAX_KEY_POINT_CONTENT_LEN,
+    MAX_KEY_POINTS_PER_ASSESSMENT,
+)
 from app.insights.briefing.domain.briefing import (
     MAX_BRIEFING_HEADLINE_LEN,
     MAX_BRIEFING_SUMMARY_LEN,
@@ -32,77 +37,76 @@ from app.insights.briefing.domain.briefing import (
     MAX_WATCH_POINT_STATEMENT_LEN,
     MAX_WATCH_POINTS_PER_BRIEFING,
 )
-from app.models.value_objects.category import CategoryName, CategorySlug
 from app.schemas.base import _CamelBase
+from app.schemas.embeds import CategoryEmbed, NewsSourceEmbed
 
-# response 固有の上限 (domain VO に対応物がない参照記事系)。key_articles は
-# 記事 id を 1 件ずつ持つため、参照記事数の上限は key_articles 件数上限と一致する。
-_MAX_REFERENCED_ARTICLES: Final[int] = MAX_KEY_ARTICLES_PER_BRIEFING
-# 記事サマリ 1 件分の表示用文字列上限。NewsSource.name / 翻訳タイトル / URL が対象。
+# 記事 embed 1 件分の表示用文字列上限。翻訳タイトル / URL が対象。
 _MAX_ARTICLE_TITLE_LEN: Final[int] = 500
-_MAX_SOURCE_NAME_LEN: Final[int] = 200
 _MAX_URL_LEN: Final[int] = 2_000
 # カテゴリ数 (現在 11、将来余裕で 20)。
 _MAX_BRIEFING_LIST_ITEMS: Final[int] = 20
 
 
-class _ChapterOut(_CamelBase):
+class _BriefingChapter(_CamelBase):
     heading: str = Field(max_length=MAX_CHAPTER_HEADING_LEN)
     body: str = Field(max_length=MAX_CHAPTER_BODY_LEN)
 
 
-class _KeyArticleOut(_CamelBase):
-    article_id: int
-    significance: str = Field(max_length=MAX_KEY_ARTICLE_SIGNIFICANCE_LEN)
+class _BriefingArticleEmbed(_CamelBase):
+    """``keyArticles[].article`` に埋め込む参照記事 (読み出し時 join)。
 
-
-class _WatchPointOut(_CamelBase):
-    statement: str = Field(max_length=MAX_WATCH_POINT_STATEMENT_LEN)
-
-
-class _ArticleSummaryOut(_CamelBase):
-    """``keyArticles[].articleId`` から参照される記事のサマリ。"""
+    記事側の現在の事実を運ぶ。``id`` は ``/news/{id}`` 記事詳細の公開 id
+    (``ArticleBrief.id`` と同じ id 空間)。
+    """
 
     id: int
-    title_ja: str = Field(max_length=_MAX_ARTICLE_TITLE_LEN)
-    source_name: str = Field(max_length=_MAX_SOURCE_NAME_LEN)
+    translated_title: str = Field(max_length=_MAX_ARTICLE_TITLE_LEN)
+    source: NewsSourceEmbed
     url: str = Field(max_length=_MAX_URL_LEN)
     # 元記事の公開日時 (Article.published_at)。未取得の記事は null。
     published_at: datetime | None = None
+    # 上限は assessment 側入口契約 (domain/result.py) の定数を共有 (F10 ガード)。
+    key_points: list[Annotated[str, Field(max_length=MAX_KEY_POINT_CONTENT_LEN)]] = (
+        Field(max_length=MAX_KEY_POINTS_PER_ASSESSMENT)
+    )
 
 
-class _CategoryOut(_CamelBase):
-    id: int
-    slug: CategorySlug
-    name: CategoryName
+class _BriefingKeyArticle(_CamelBase):
+    """briefing の編集判断 (生成時固定) + 参照記事 (読み出し時 join) の自己完結ペア。"""
+
+    significance: str = Field(max_length=MAX_KEY_ARTICLE_SIGNIFICANCE_LEN)
+    article: _BriefingArticleEmbed
 
 
-class ReadyBriefing(_CamelBase):
+class BriefingDetail(_CamelBase):
     """briefing 生成済の状態。"""
 
-    state: Literal["ready"] = "ready"
+    state: Literal["briefing"] = "briefing"
     week_start: date
     generated_at: datetime
     model_name: str
     input_article_count: int
-    category: _CategoryOut
+    category: CategoryEmbed
     headline: str = Field(max_length=MAX_BRIEFING_HEADLINE_LEN)
     summary: str = Field(max_length=MAX_BRIEFING_SUMMARY_LEN)
-    chapters: list[_ChapterOut] = Field(max_length=MAX_CHAPTERS_PER_BRIEFING)
-    key_articles: list[_KeyArticleOut] = Field(max_length=MAX_KEY_ARTICLES_PER_BRIEFING)
-    watch_points: list[_WatchPointOut] = Field(max_length=MAX_WATCH_POINTS_PER_BRIEFING)
-    articles: list[_ArticleSummaryOut] = Field(max_length=_MAX_REFERENCED_ARTICLES)
+    chapters: list[_BriefingChapter] = Field(max_length=MAX_CHAPTERS_PER_BRIEFING)
+    key_articles: list[_BriefingKeyArticle] = Field(
+        max_length=MAX_KEY_ARTICLES_PER_BRIEFING
+    )
+    watch_points: list[
+        Annotated[str, Field(max_length=MAX_WATCH_POINT_STATEMENT_LEN)]
+    ] = Field(max_length=MAX_WATCH_POINTS_PER_BRIEFING)
 
 
 class EmptyBriefing(_CamelBase):
     """指定カテゴリに briefing 未生成の状態。"""
 
     state: Literal["empty"] = "empty"
-    category: _CategoryOut
+    category: CategoryEmbed
 
 
 BriefingResponse = Annotated[
-    ReadyBriefing | EmptyBriefing,
+    BriefingDetail | EmptyBriefing,
     Field(discriminator="state"),
 ]
 
@@ -112,7 +116,7 @@ class _BriefingListLatest(_CamelBase):
 
     未生成カテゴリでは ``BriefingListItem.latest = None`` で表現する。
     一覧バンド表示用に見出し / summary / 件数を同梱する。詳細
-    (``ReadyBriefing``) と異なり chapters / keyArticles / articles は持たない。
+    (``BriefingDetail``) と異なり chapters / keyArticles は持たない。
     """
 
     week_start: date
@@ -124,7 +128,7 @@ class _BriefingListLatest(_CamelBase):
 class BriefingListItem(_CamelBase):
     """一覧 1 行: カテゴリ + 最新 briefing 参照 (未生成は None)。"""
 
-    category: _CategoryOut
+    category: CategoryEmbed
     latest: _BriefingListLatest | None
 
 

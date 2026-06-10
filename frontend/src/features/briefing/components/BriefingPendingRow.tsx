@@ -28,7 +28,7 @@ export function BriefingPendingRow({ pending }: BriefingPendingRowProps) {
       <div className="flex flex-wrap gap-x-3 gap-y-2.5">
         {pending.map((cat) => (
           <span
-            key={cat.id}
+            key={cat.slug}
             className="inline-flex items-center gap-[9px] rounded-full border border-dashed border-[var(--vector-line)] bg-[var(--vector-surface-2)] px-[15px] py-[7px]"
           >
             <span

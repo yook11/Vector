@@ -26,7 +26,7 @@ from app.insights.briefing.domain.ready import ReadyForBriefing
 from app.insights.briefing.errors import (
     BriefingConfigurationError,
     BriefingLlmError,
-    BriefingResponseInvalidError,
+    BriefingLlmResponseInvalidError,
 )
 from app.models.category import Category
 from app.models.pipeline_event import PipelineEvent
@@ -143,7 +143,7 @@ async def test_append_generation_already_exists_records_skipped_row(
             None,
         ),
         (
-            lambda: BriefingResponseInvalidError(),
+            lambda: BriefingLlmResponseInvalidError(),
             "briefing_generation_llm_response_contract_invalid",
             "non_retryable",
             "response_invalid",

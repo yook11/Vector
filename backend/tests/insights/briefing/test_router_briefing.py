@@ -23,8 +23,11 @@ from app.insights.briefing.domain.week import (
     latest_completed_week_start,
     now_in_jst,
 )
+from app.models.article import Article
 from app.models.article_curation import ArticleCuration
 from app.models.category import Category
+from app.models.in_scope_assessment import InScopeAssessment
+from app.models.news_source import NewsSource
 from app.models.weekly_briefing import WeeklyBriefing
 
 JST = ZoneInfo("Asia/Tokyo")
@@ -37,6 +40,41 @@ async def ai_category(db_session: AsyncSession) -> Category:
     await db_session.commit()
     await db_session.refresh(cat)
     return cat
+
+
+async def _article_id_of(db_session: AsyncSession, analysis: InScopeAssessment) -> int:
+    """analysis から JSONB key_articles が参照する Article.id を SQL で引く。"""
+    result = await db_session.execute(
+        select(ArticleCuration.article_id).where(
+            ArticleCuration.id == analysis.curation_id
+        )
+    )
+    return result.scalar_one()
+
+
+def _briefing(
+    category_id: int,
+    *,
+    key_articles: list[dict],
+    watch_points: list[dict] | None = None,
+    chapters: list[dict] | None = None,
+) -> WeeklyBriefing:
+    # デフォルトは is None 判定で適用する (空リスト指定を silent に差し替えない)。
+    return WeeklyBriefing(
+        week_start_date=date(2026, 4, 20),
+        category_id=category_id,
+        headline="今週のヘッドライン",
+        summary="今週の総括リード",
+        chapters=chapters
+        if chapters is not None
+        else [{"heading": "資金とインフラ", "body": "今週の流れの本文"}],
+        key_articles=key_articles,
+        watch_points=watch_points
+        if watch_points is not None
+        else [{"statement": "今後どこを見るべきか"}],
+        model_name="deepseek-v4-pro",
+        input_article_count=1,
+    )
 
 
 class TestGetBriefing:
@@ -80,15 +118,32 @@ class TestGetBriefing:
         body = resp.json()
         assert body["state"] == "empty"
         assert body["category"]["slug"] == "ai"
+        # category は共有 CategoryEmbed (slug + name のみ、id は契約から撤去済)
+        assert "id" not in body["category"]
 
     @pytest.mark.asyncio
-    async def test_returns_ready_with_articles(
+    async def test_returns_briefing_with_embedded_article(
         self,
         bff_client: AsyncClient,
         db_session: AsyncSession,
         ai_category: Category,
+        sample_source: NewsSource,
         seed_briefing_analysis,
     ) -> None:
+        # decoy: assessment を持たない Article を先に 1 件入れて Article.id と
+        # InScopeAssessment.id のシーケンスを意図的にずらす。テスト DB は毎回
+        # RESTART IDENTITY で両 id が一致してしまい、ずらさないと下の
+        # 「embed.id = 公開 id 空間」assert が判別力を持たない。
+        db_session.add(
+            Article(
+                source_id=sample_source.id,
+                source_url="https://example.com/decoy",
+                original_title="decoy",
+                original_content="x" * 60,
+            )
+        )
+        await db_session.flush()
+
         published_at = datetime(2026, 4, 21, 9, 0, tzinfo=JST)
         analysis = await seed_briefing_analysis(
             category_id=ai_category.id,
@@ -96,33 +151,23 @@ class TestGetBriefing:
             translated_title="記事タイトル",
             published_at=published_at,
         )
-        # extraction relation を lazy load しないために article_id を SQL で取得
-        result = await db_session.execute(
-            select(ArticleCuration.article_id).where(
-                ArticleCuration.id == analysis.curation_id
+        article_id = await _article_id_of(db_session, analysis)
+        # decoy が効いていることの前提 assert (一致していたら下の判別が空虚になる)
+        assert analysis.id != article_id
+        db_session.add(
+            _briefing(
+                ai_category.id,
+                key_articles=[{"article_id": article_id, "significance": "なぜ重要か"}],
             )
         )
-        article_id = result.scalar_one()
-
-        briefing = WeeklyBriefing(
-            week_start_date=date(2026, 4, 20),
-            category_id=ai_category.id,
-            headline="今週のヘッドライン",
-            summary="今週の総括リード",
-            chapters=[{"heading": "資金とインフラ", "body": "今週の流れの本文"}],
-            key_articles=[{"article_id": article_id, "significance": "なぜ重要か"}],
-            watch_points=[{"statement": "今後どこを見るべきか"}],
-            model_name="deepseek-v4-pro",
-            input_article_count=1,
-        )
-        db_session.add(briefing)
         await db_session.commit()
 
         resp = await bff_client.get("/api/v1/briefing/ai")
         assert resp.status_code == 200
         body = resp.json()
-        assert body["state"] == "ready"
+        assert body["state"] == "briefing"
         assert body["category"]["slug"] == "ai"
+        assert "id" not in body["category"]
         assert body["headline"] == "今週のヘッドライン"
         assert body["summary"] == "今週の総括リード"
         assert body["chapters"] == [
@@ -130,17 +175,26 @@ class TestGetBriefing:
         ]
         assert body["modelName"] == "deepseek-v4-pro"
         assert body["inputArticleCount"] == 1
+        # watchPoints は wrapper のない list[str]
+        assert body["watchPoints"] == ["今後どこを見るべきか"]
+        # keyArticles は編集判断 + 参照記事の自己完結 nested
         assert len(body["keyArticles"]) == 1
-        assert body["keyArticles"][0]["articleId"] == article_id
-        assert body["keyArticles"][0]["significance"] == "なぜ重要か"
-        assert len(body["watchPoints"]) == 1
-        assert body["watchPoints"][0]["statement"] == "今後どこを見るべきか"
-        assert len(body["articles"]) == 1
-        assert body["articles"][0]["id"] == article_id
-        assert body["articles"][0]["titleJa"] == "記事タイトル"
-        assert (
-            datetime.fromisoformat(body["articles"][0]["publishedAt"]) == published_at
-        )
+        key_article = body["keyArticles"][0]
+        assert key_article["significance"] == "なぜ重要か"
+        assert "articleId" not in key_article
+        article = key_article["article"]
+        # embed の id は /news/{id} の公開記事 id (= analysis.id、Article.id では
+        # ない)。decoy seed で両 id 空間がずれているため取り違えを判別できる。
+        assert article["id"] == analysis.id
+        assert article["id"] != article_id
+        assert article["translatedTitle"] == "記事タイトル"
+        assert article["url"].startswith("https://example.com/")
+        assert article["source"]["name"] == "Test Tech Source"
+        assert datetime.fromisoformat(article["publishedAt"]) == published_at
+        # key_points 未抽出 (NULL) の記事は空配列に畳む
+        assert article["keyPoints"] == []
+        # 旧 articles[] lookup は契約から撤去済
+        assert "articles" not in body
 
     @pytest.mark.asyncio
     async def test_article_published_at_is_null_when_unset(
@@ -155,31 +209,184 @@ class TestGetBriefing:
             category_id=ai_category.id,
             analyzed_at=datetime(2026, 4, 22, 12, 0, tzinfo=JST),
         )
-        result = await db_session.execute(
-            select(ArticleCuration.article_id).where(
-                ArticleCuration.id == analysis.curation_id
+        article_id = await _article_id_of(db_session, analysis)
+        db_session.add(
+            _briefing(
+                ai_category.id,
+                key_articles=[{"article_id": article_id, "significance": "なぜ重要か"}],
             )
         )
-        article_id = result.scalar_one()
-
-        briefing = WeeklyBriefing(
-            week_start_date=date(2026, 4, 20),
-            category_id=ai_category.id,
-            headline="今週のヘッドライン",
-            summary="今週の総括リード",
-            chapters=[{"heading": "資金とインフラ", "body": "今週の流れの本文"}],
-            key_articles=[{"article_id": article_id, "significance": "なぜ重要か"}],
-            watch_points=[{"statement": "今後どこを見るべきか"}],
-            model_name="deepseek-v4-pro",
-            input_article_count=1,
-        )
-        db_session.add(briefing)
         await db_session.commit()
 
         resp = await bff_client.get("/api/v1/briefing/ai")
         assert resp.status_code == 200
         body = resp.json()
-        assert body["articles"][0]["publishedAt"] is None
+        assert body["keyArticles"][0]["article"]["publishedAt"] is None
+
+    @pytest.mark.asyncio
+    async def test_multiple_key_articles_pair_and_preserve_order(
+        self,
+        bff_client: AsyncClient,
+        db_session: AsyncSession,
+        ai_category: Category,
+        seed_briefing_analysis,
+    ) -> None:
+        """各 significance が対応する記事と組になり、JSONB 記載順で返る。
+
+        nested 化で生まれたペアリング不変条件の所有テスト。entries を作成順の
+        逆順で JSONB に並べ、応答が embeds 側の順序ではなく JSONB 順を保つ
+        ことも同時に判別する。
+        """
+        seeded = []
+        for title in ["一本目", "二本目", "三本目"]:
+            analysis = await seed_briefing_analysis(
+                category_id=ai_category.id,
+                analyzed_at=datetime(2026, 4, 22, 12, 0, tzinfo=JST),
+                translated_title=title,
+            )
+            article_id = await _article_id_of(db_session, analysis)
+            seeded.append((analysis, article_id, title))
+
+        key_articles = [
+            {"article_id": article_id, "significance": f"{title}の理由"}
+            for _, article_id, title in reversed(seeded)
+        ]
+        db_session.add(_briefing(ai_category.id, key_articles=key_articles))
+        await db_session.commit()
+
+        resp = await bff_client.get("/api/v1/briefing/ai")
+        assert resp.status_code == 200
+        body = resp.json()
+        got = [
+            (
+                ka["significance"],
+                ka["article"]["id"],
+                ka["article"]["translatedTitle"],
+            )
+            for ka in body["keyArticles"]
+        ]
+        expected = [
+            (f"{title}の理由", analysis.id, title)
+            for analysis, _, title in reversed(seeded)
+        ]
+        assert got == expected
+
+    @pytest.mark.asyncio
+    async def test_key_points_project_content_only(
+        self,
+        bff_client: AsyncClient,
+        db_session: AsyncSession,
+        ai_category: Category,
+        seed_briefing_analysis,
+    ) -> None:
+        """assessment の key_points JSONB から content のみ順序保持で投影する。
+
+        mentions (trends 内部利用) は API 非公開のため response に漏らさない。
+        """
+        analysis = await seed_briefing_analysis(
+            category_id=ai_category.id,
+            analyzed_at=datetime(2026, 4, 22, 12, 0, tzinfo=JST),
+            key_points=[
+                {
+                    "content": "資金調達を発表",
+                    "mentions": [{"surface": "X", "type": "company"}],
+                },
+                {"content": "新チップを公開", "mentions": []},
+            ],
+        )
+        article_id = await _article_id_of(db_session, analysis)
+        db_session.add(
+            _briefing(
+                ai_category.id,
+                key_articles=[{"article_id": article_id, "significance": "なぜ重要か"}],
+            )
+        )
+        await db_session.commit()
+
+        resp = await bff_client.get("/api/v1/briefing/ai")
+        assert resp.status_code == 200
+        key_points = resp.json()["keyArticles"][0]["article"]["keyPoints"]
+        assert key_points == ["資金調達を発表", "新チップを公開"]
+
+    @pytest.mark.asyncio
+    async def test_attribution_label_is_passed_through(
+        self,
+        bff_client: AsyncClient,
+        db_session: AsyncSession,
+        ai_category: Category,
+        sample_source: NewsSource,
+        seed_briefing_analysis,
+    ) -> None:
+        """source に attribution_label があれば embed にそのまま載る。"""
+        sample_source.attribution_label = "Tech Source 提供"
+        db_session.add(sample_source)
+        analysis = await seed_briefing_analysis(
+            category_id=ai_category.id,
+            analyzed_at=datetime(2026, 4, 22, 12, 0, tzinfo=JST),
+        )
+        article_id = await _article_id_of(db_session, analysis)
+        db_session.add(
+            _briefing(
+                ai_category.id,
+                key_articles=[{"article_id": article_id, "significance": "なぜ重要か"}],
+            )
+        )
+        await db_session.commit()
+
+        resp = await bff_client.get("/api/v1/briefing/ai")
+        assert resp.status_code == 200
+        source = resp.json()["keyArticles"][0]["article"]["source"]
+        assert source["attributionLabel"] == "Tech Source 提供"
+
+    @pytest.mark.asyncio
+    async def test_attribution_label_is_null_when_unset(
+        self,
+        bff_client: AsyncClient,
+        db_session: AsyncSession,
+        ai_category: Category,
+        seed_briefing_analysis,
+    ) -> None:
+        analysis = await seed_briefing_analysis(
+            category_id=ai_category.id,
+            analyzed_at=datetime(2026, 4, 22, 12, 0, tzinfo=JST),
+        )
+        article_id = await _article_id_of(db_session, analysis)
+        db_session.add(
+            _briefing(
+                ai_category.id,
+                key_articles=[{"article_id": article_id, "significance": "なぜ重要か"}],
+            )
+        )
+        await db_session.commit()
+
+        resp = await bff_client.get("/api/v1/briefing/ai")
+        assert resp.status_code == 200
+        source = resp.json()["keyArticles"][0]["article"]["source"]
+        assert source["attributionLabel"] is None
+
+    @pytest.mark.asyncio
+    async def test_missing_article_raises_validation_error(
+        self,
+        bff_client: AsyncClient,
+        db_session: AsyncSession,
+        ai_category: Category,
+    ) -> None:
+        """参照記事の欠落は silent fallback せず ValidationError 伝播 (本番 500)。
+
+        article non-nullable 不変条件の所有テスト。生成時 validator + 削除経路の
+        不在で通常は起こりえず、起きたら failure_visibility 方針で loud に出す。
+        """
+        db_session.add(
+            _briefing(
+                ai_category.id,
+                key_articles=[{"article_id": 999_999, "significance": "なぜ重要か"}],
+            )
+        )
+        await db_session.commit()
+
+        with pytest.raises(ValidationError) as exc_info:
+            await bff_client.get("/api/v1/briefing/ai")
+        assert any(e["loc"] == ("article",) for e in exc_info.value.errors())
 
 
 class TestListBriefings:
@@ -210,7 +417,7 @@ class TestListBriefings:
         assert body["totalArticles"] == 0
 
     @pytest.mark.asyncio
-    async def test_includes_headline_for_ready_item(
+    async def test_includes_headline_for_generated_item(
         self,
         bff_client: AsyncClient,
         db_session: AsyncSession,
@@ -293,7 +500,8 @@ class TestListBriefings:
         db_session: AsyncSession,
         ai_category: Category,
     ) -> None:
-        # ai は最初に登録されているので id が小さい想定
+        """並びは Category.id 昇順 (= 登録順)。契約に id は無いので slug 列で見る。"""
+        # ai (先に登録 = id 小) → bio の順で返る想定
         b_cat = Category(slug="bio", name="バイオ")
         db_session.add(b_cat)
         await db_session.commit()
@@ -301,65 +509,73 @@ class TestListBriefings:
 
         resp = await bff_client.get("/api/v1/briefing")
         body = resp.json()
-        ids = [item["category"]["id"] for item in body["items"]]
-        assert ids == sorted(ids)
+        slugs = [item["category"]["slug"] for item in body["items"]]
+        assert slugs == ["ai", "bio"]
 
 
 class TestBriefingResponseSizeGuard:
-    """red-team F10: anon GET 経路で巨大 briefing JSONB が response として
+    """red-team F10: 共有 read 経路で巨大 briefing JSONB が response として
     流れる経路を構造的に塞ぐ。
 
     AUTH-N4 / AUTH-C1 経由で attacker が DB に巨大 key_articles / watch_points を
-    直書きしたシナリオ。Field(max_length=...) が router の
-    `_KeyArticleOut`/`_WatchPointOut` の model_validate または `ReadyBriefing(...)`
-    構築時に発火し、response に巨大 JSONB が含まれることを構造的に防ぐ。
+    直書きしたシナリオ。key_articles の件数は router の count guard が embed
+    fetch 前に弾き、それ以外は Field(max_length=...) が `_BriefingKeyArticle` /
+    `_BriefingArticleEmbed` / `BriefingDetail(...)` 構築時に発火して、response に
+    巨大 JSONB が含まれることを構造的に防ぐ。
+
+    per-item ガード (significance 等) は embed 組立中に発火するため、該当ケースは
+    実記事を seed し、ValidationError の errors() type を assert して
+    「missing article で落ちた偽の緑」を排除する。
     """
 
     def _persist(
         self,
-        db_session: AsyncSession,
         ai_category: Category,
         *,
-        key_articles: list[dict],
-        watch_points: list[dict],
+        key_articles: list[dict] | None = None,
+        watch_points: list[dict] | None = None,
         chapters: list[dict] | None = None,
     ) -> WeeklyBriefing:
+        # デフォルトは is None 判定で適用する (空リスト指定を silent に差し替えない)。
         return WeeklyBriefing(
             week_start_date=date(2026, 4, 20),
             category_id=ai_category.id,
             headline="h",
             summary="s",
-            chapters=chapters or [{"heading": "h", "body": "b"}],
-            key_articles=key_articles,
-            watch_points=watch_points,
+            chapters=chapters
+            if chapters is not None
+            else [{"heading": "h", "body": "b"}],
+            key_articles=key_articles if key_articles is not None else [],
+            watch_points=watch_points
+            if watch_points is not None
+            else [{"statement": "w"}],
             model_name="deepseek-v4-pro",
             input_article_count=1,
         )
 
     @pytest.mark.asyncio
-    async def test_oversize_key_articles_rejected_by_response_model(
+    async def test_oversize_key_articles_rejected_before_embed_fetch(
         self,
         bff_client: AsyncClient,
         db_session: AsyncSession,
         ai_category: Category,
     ) -> None:
-        """key_articles 数が上限超なら anon GET で ValidationError 伝播 (本番 500)。"""
+        """key_articles 数が上限超なら embed fetch より先に too_long で落ちる。
+
+        実記事を一切 seed しないのが判別の要: 件数ガードが fetch / 組立より
+        後に動く実装なら missing-article (loc=article) の ValidationError に
+        変わるため、too_long の assert が fail-fast 順序の所有 assert になる。
+        """
         oversized = [
-            {"article_id": i, "significance": f"s{i}"}
+            {"article_id": i + 1, "significance": f"s{i}"}
             for i in range(MAX_KEY_ARTICLES_PER_BRIEFING + 1)
         ]
-        db_session.add(
-            self._persist(
-                db_session,
-                ai_category,
-                key_articles=oversized,
-                watch_points=[{"statement": "w"}],
-            )
-        )
+        db_session.add(self._persist(ai_category, key_articles=oversized))
         await db_session.commit()
 
-        with pytest.raises(ValidationError):
+        with pytest.raises(ValidationError) as exc_info:
             await bff_client.get("/api/v1/briefing/ai")
+        assert any(e["type"] == "too_long" for e in exc_info.value.errors())
 
     @pytest.mark.asyncio
     async def test_oversize_significance_rejected_by_response_model(
@@ -367,25 +583,90 @@ class TestBriefingResponseSizeGuard:
         bff_client: AsyncClient,
         db_session: AsyncSession,
         ai_category: Category,
+        seed_briefing_analysis,
     ) -> None:
-        """1 件の significance が上限超なら anon GET で ValidationError 伝播。"""
+        """1 件の significance が上限超なら共有 read で ValidationError 伝播。"""
+        analysis = await seed_briefing_analysis(
+            category_id=ai_category.id,
+            analyzed_at=datetime(2026, 4, 22, 12, 0, tzinfo=JST),
+        )
+        article_id = await _article_id_of(db_session, analysis)
         db_session.add(
             self._persist(
-                db_session,
                 ai_category,
                 key_articles=[
                     {
-                        "article_id": 1,
+                        "article_id": article_id,
                         "significance": "x" * (MAX_KEY_ARTICLE_SIGNIFICANCE_LEN + 1),
                     }
                 ],
-                watch_points=[{"statement": "w"}],
             )
         )
         await db_session.commit()
 
-        with pytest.raises(ValidationError):
+        with pytest.raises(ValidationError) as exc_info:
             await bff_client.get("/api/v1/briefing/ai")
+        assert any(e["type"] == "string_too_long" for e in exc_info.value.errors())
+
+    @pytest.mark.asyncio
+    async def test_oversize_key_point_content_rejected_by_response_model(
+        self,
+        bff_client: AsyncClient,
+        db_session: AsyncSession,
+        ai_category: Category,
+        seed_briefing_analysis,
+    ) -> None:
+        """keyPoint 1 件が上限超なら embed 構築時に ValidationError 伝播。
+
+        上限 500 は assessment 側入口契約 (domain/result.py) と同値の F10 ガード。
+        """
+        analysis = await seed_briefing_analysis(
+            category_id=ai_category.id,
+            analyzed_at=datetime(2026, 4, 22, 12, 0, tzinfo=JST),
+            key_points=[{"content": "x" * 501, "mentions": []}],
+        )
+        article_id = await _article_id_of(db_session, analysis)
+        db_session.add(
+            self._persist(
+                ai_category,
+                key_articles=[{"article_id": article_id, "significance": "s"}],
+            )
+        )
+        await db_session.commit()
+
+        with pytest.raises(ValidationError) as exc_info:
+            await bff_client.get("/api/v1/briefing/ai")
+        assert any(e["type"] == "string_too_long" for e in exc_info.value.errors())
+
+    @pytest.mark.asyncio
+    async def test_oversize_key_points_count_rejected_by_response_model(
+        self,
+        bff_client: AsyncClient,
+        db_session: AsyncSession,
+        ai_category: Category,
+        seed_briefing_analysis,
+    ) -> None:
+        """keyPoints 件数が上限超なら embed 構築時に ValidationError 伝播。
+
+        上限 10 件は assessment 側入口契約 (domain/result.py) と同値の F10 ガード。
+        """
+        analysis = await seed_briefing_analysis(
+            category_id=ai_category.id,
+            analyzed_at=datetime(2026, 4, 22, 12, 0, tzinfo=JST),
+            key_points=[{"content": f"p{i}", "mentions": []} for i in range(11)],
+        )
+        article_id = await _article_id_of(db_session, analysis)
+        db_session.add(
+            self._persist(
+                ai_category,
+                key_articles=[{"article_id": article_id, "significance": "s"}],
+            )
+        )
+        await db_session.commit()
+
+        with pytest.raises(ValidationError) as exc_info:
+            await bff_client.get("/api/v1/briefing/ai")
+        assert any(e["type"] == "too_long" for e in exc_info.value.errors())
 
     @pytest.mark.asyncio
     async def test_oversize_watch_points_rejected_by_response_model(
@@ -394,22 +675,16 @@ class TestBriefingResponseSizeGuard:
         db_session: AsyncSession,
         ai_category: Category,
     ) -> None:
-        """watch_points 数が上限超なら anon GET で ValidationError 伝播。"""
+        """watch_points 数が上限超なら共有 read で ValidationError 伝播。"""
         oversized = [
             {"statement": f"w{i}"} for i in range(MAX_WATCH_POINTS_PER_BRIEFING + 1)
         ]
-        db_session.add(
-            self._persist(
-                db_session,
-                ai_category,
-                key_articles=[{"article_id": 1, "significance": "s"}],
-                watch_points=oversized,
-            )
-        )
+        db_session.add(self._persist(ai_category, watch_points=oversized))
         await db_session.commit()
 
-        with pytest.raises(ValidationError):
+        with pytest.raises(ValidationError) as exc_info:
             await bff_client.get("/api/v1/briefing/ai")
+        assert any(e["type"] == "too_long" for e in exc_info.value.errors())
 
     @pytest.mark.asyncio
     async def test_oversize_statement_rejected_by_response_model(
@@ -418,19 +693,18 @@ class TestBriefingResponseSizeGuard:
         db_session: AsyncSession,
         ai_category: Category,
     ) -> None:
-        """1 件の statement が上限超なら anon GET で ValidationError 伝播。"""
+        """1 件の statement が上限超なら共有 read で ValidationError 伝播。"""
         db_session.add(
             self._persist(
-                db_session,
                 ai_category,
-                key_articles=[{"article_id": 1, "significance": "s"}],
                 watch_points=[{"statement": "x" * (MAX_WATCH_POINT_STATEMENT_LEN + 1)}],
             )
         )
         await db_session.commit()
 
-        with pytest.raises(ValidationError):
+        with pytest.raises(ValidationError) as exc_info:
             await bff_client.get("/api/v1/briefing/ai")
+        assert any(e["type"] == "string_too_long" for e in exc_info.value.errors())
 
     @pytest.mark.asyncio
     async def test_oversize_chapters_rejected_by_response_model(
@@ -439,24 +713,17 @@ class TestBriefingResponseSizeGuard:
         db_session: AsyncSession,
         ai_category: Category,
     ) -> None:
-        """chapters 数が上限超なら anon GET で ValidationError 伝播 (本番 500)。"""
+        """chapters 数が上限超なら共有 read で ValidationError 伝播 (本番 500)。"""
         oversized = [
             {"heading": f"h{i}", "body": f"b{i}"}
             for i in range(MAX_CHAPTERS_PER_BRIEFING + 1)
         ]
-        db_session.add(
-            self._persist(
-                db_session,
-                ai_category,
-                key_articles=[{"article_id": 1, "significance": "s"}],
-                watch_points=[{"statement": "w"}],
-                chapters=oversized,
-            )
-        )
+        db_session.add(self._persist(ai_category, chapters=oversized))
         await db_session.commit()
 
-        with pytest.raises(ValidationError):
+        with pytest.raises(ValidationError) as exc_info:
             await bff_client.get("/api/v1/briefing/ai")
+        assert any(e["type"] == "too_long" for e in exc_info.value.errors())
 
     @pytest.mark.asyncio
     async def test_oversize_chapter_body_rejected_by_response_model(
@@ -465,17 +732,15 @@ class TestBriefingResponseSizeGuard:
         db_session: AsyncSession,
         ai_category: Category,
     ) -> None:
-        """1 章の body が上限超なら anon GET で ValidationError 伝播。"""
+        """1 章の body が上限超なら共有 read で ValidationError 伝播。"""
         db_session.add(
             self._persist(
-                db_session,
                 ai_category,
-                key_articles=[{"article_id": 1, "significance": "s"}],
-                watch_points=[{"statement": "w"}],
                 chapters=[{"heading": "h", "body": "x" * (MAX_CHAPTER_BODY_LEN + 1)}],
             )
         )
         await db_session.commit()
 
-        with pytest.raises(ValidationError):
+        with pytest.raises(ValidationError) as exc_info:
             await bff_client.get("/api/v1/briefing/ai")
+        assert any(e["type"] == "string_too_long" for e in exc_info.value.errors())

@@ -75,12 +75,61 @@ export type ArticleDetail = {
 };
 
 /**
+ * BriefingDetail
+ *
+ * briefing 生成済の状態。
+ */
+export type BriefingDetail = {
+    /**
+     * State
+     */
+    state?: 'briefing';
+    /**
+     * Weekstart
+     */
+    weekStart: string;
+    /**
+     * Generatedat
+     */
+    generatedAt: string;
+    /**
+     * Modelname
+     */
+    modelName: string;
+    /**
+     * Inputarticlecount
+     */
+    inputArticleCount: number;
+    category: CategoryEmbed;
+    /**
+     * Headline
+     */
+    headline: string;
+    /**
+     * Summary
+     */
+    summary: string;
+    /**
+     * Chapters
+     */
+    chapters: Array<BriefingChapter>;
+    /**
+     * Keyarticles
+     */
+    keyArticles: Array<BriefingKeyArticle>;
+    /**
+     * Watchpoints
+     */
+    watchPoints: Array<string>;
+};
+
+/**
  * BriefingListItem
  *
  * 一覧 1 行: カテゴリ + 最新 briefing 参照 (未生成は None)。
  */
 export type BriefingListItem = {
-    category: CategoryOut;
+    category: CategoryEmbed;
     latest: BriefingListLatest | null;
 };
 
@@ -186,7 +235,7 @@ export type EmptyBriefing = {
      * State
      */
     state?: 'empty';
-    category: CategoryOut;
+    category: CategoryEmbed;
 };
 
 /**
@@ -487,59 +536,6 @@ export type PipelineStageHealth = {
 };
 
 /**
- * ReadyBriefing
- *
- * briefing 生成済の状態。
- */
-export type ReadyBriefing = {
-    /**
-     * State
-     */
-    state?: 'ready';
-    /**
-     * Weekstart
-     */
-    weekStart: string;
-    /**
-     * Generatedat
-     */
-    generatedAt: string;
-    /**
-     * Modelname
-     */
-    modelName: string;
-    /**
-     * Inputarticlecount
-     */
-    inputArticleCount: number;
-    category: CategoryOut;
-    /**
-     * Headline
-     */
-    headline: string;
-    /**
-     * Summary
-     */
-    summary: string;
-    /**
-     * Chapters
-     */
-    chapters: Array<ChapterOut>;
-    /**
-     * Keyarticles
-     */
-    keyArticles: Array<KeyArticleOut>;
-    /**
-     * Watchpoints
-     */
-    watchPoints: Array<WatchPointOut>;
-    /**
-     * Articles
-     */
-    articles: Array<ArticleSummaryOut>;
-};
-
-/**
  * SafeUrl
  *
  * Pydantic によって検証された HTTP/HTTPS URL。
@@ -754,23 +750,23 @@ export type WatchlistIds = {
 export type WindowHours = 24 | 48 | 72 | 168;
 
 /**
- * _ArticleSummaryOut
+ * _BriefingArticleEmbed
  *
- * ``keyArticles[].articleId`` から参照される記事のサマリ。
+ * ``keyArticles[].article`` に埋め込む参照記事 (読み出し時 join)。
+ *
+ * 記事側の現在の事実を運ぶ。``id`` は ``/news/{id}`` 記事詳細の公開 id
+ * (``ArticleBrief.id`` と同じ id 空間)。
  */
-export type ArticleSummaryOut = {
+export type BriefingArticleEmbed = {
     /**
      * Id
      */
     id: number;
     /**
-     * Titleja
+     * Translatedtitle
      */
-    titleJa: string;
-    /**
-     * Sourcename
-     */
-    sourceName: string;
+    translatedTitle: string;
+    source: NewsSourceEmbed;
     /**
      * Url
      */
@@ -779,6 +775,37 @@ export type ArticleSummaryOut = {
      * Publishedat
      */
     publishedAt?: string | null;
+    /**
+     * Keypoints
+     */
+    keyPoints: Array<string>;
+};
+
+/**
+ * _BriefingChapter
+ */
+export type BriefingChapter = {
+    /**
+     * Heading
+     */
+    heading: string;
+    /**
+     * Body
+     */
+    body: string;
+};
+
+/**
+ * _BriefingKeyArticle
+ *
+ * briefing の編集判断 (生成時固定) + 参照記事 (読み出し時 join) の自己完結ペア。
+ */
+export type BriefingKeyArticle = {
+    /**
+     * Significance
+     */
+    significance: string;
+    article: BriefingArticleEmbed;
 };
 
 /**
@@ -788,7 +815,7 @@ export type ArticleSummaryOut = {
  *
  * 未生成カテゴリでは ``BriefingListItem.latest = None`` で表現する。
  * 一覧バンド表示用に見出し / summary / 件数を同梱する。詳細
- * (``ReadyBriefing``) と異なり chapters / keyArticles / articles は持たない。
+ * (``BriefingDetail``) と異なり chapters / keyArticles は持たない。
  */
 export type BriefingListLatest = {
     /**
@@ -810,18 +837,6 @@ export type BriefingListLatest = {
 };
 
 /**
- * _CategoryOut
- */
-export type CategoryOut = {
-    /**
-     * Id
-     */
-    id: number;
-    slug: CategorySlug;
-    name: CategoryName;
-};
-
-/**
  * _CategoryTrends
  */
 export type CategoryTrends = {
@@ -839,34 +854,6 @@ export type CategoryTrends = {
      * Fastestgrowing
      */
     fastestGrowing: Array<RankedMention>;
-};
-
-/**
- * _ChapterOut
- */
-export type ChapterOut = {
-    /**
-     * Heading
-     */
-    heading: string;
-    /**
-     * Body
-     */
-    body: string;
-};
-
-/**
- * _KeyArticleOut
- */
-export type KeyArticleOut = {
-    /**
-     * Articleid
-     */
-    articleId: number;
-    /**
-     * Significance
-     */
-    significance: string;
 };
 
 /**
@@ -907,16 +894,6 @@ export type RelatedMention = {
      * Sharedarticlecount
      */
     sharedArticleCount: number;
-};
-
-/**
- * _WatchPointOut
- */
-export type WatchPointOut = {
-    /**
-     * Statement
-     */
-    statement: string;
 };
 
 export type ListArticlesData = {
@@ -1378,8 +1355,8 @@ export type GetLatestBriefingResponses = {
      * Successful Response
      */
     200: ({
-        state: 'ready';
-    } & ReadyBriefing) | ({
+        state: 'briefing';
+    } & BriefingDetail) | ({
         state: 'empty';
     } & EmptyBriefing);
 };

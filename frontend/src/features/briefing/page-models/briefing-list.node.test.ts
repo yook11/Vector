@@ -45,7 +45,7 @@ describe("getBriefingListViewModel — ready / pending split", () => {
       totalArticles: 55,
       items: [
         {
-          category: { id: 1, slug: "ai", name: "AI" },
+          category: { slug: "ai", name: "AI" },
           latest: makeLatest({
             weekStart: "2026-06-02",
             headline: "AI の最前線",
@@ -54,7 +54,7 @@ describe("getBriefingListViewModel — ready / pending split", () => {
           }),
         },
         {
-          category: { id: 2, slug: "robotics", name: "ロボティクス" },
+          category: { slug: "robotics", name: "ロボティクス" },
           latest: null,
         },
       ],
@@ -65,18 +65,16 @@ describe("getBriefingListViewModel — ready / pending split", () => {
     // ready に latest ありアイテムが入る
     expect(result.ready).toHaveLength(1);
     const readyCard = result.ready[0]!;
-    expect(readyCard.category).toEqual({ id: 1, slug: "ai", name: "AI" });
+    expect(readyCard.category).toEqual({ slug: "ai", name: "AI" });
     expect(readyCard.weekStart).toBe("2026-06-02");
     expect(readyCard.headline).toBe("AI の最前線");
     expect(readyCard.summary).toBe("今週のAI動向まとめ");
     expect(readyCard.inputArticleCount).toBe(12);
 
-    // pending に latest なしアイテムが入る (id / name のみ)
+    // pending に latest なしアイテムが入る (slug / name のみ)
     expect(result.pending).toHaveLength(1);
     const pendingCat = result.pending[0]!;
-    expect(pendingCat).toEqual({ id: 2, name: "ロボティクス" });
-    // pending に slug は含まれない
-    expect(Object.keys(pendingCat)).not.toContain("slug");
+    expect(pendingCat).toEqual({ slug: "robotics", name: "ロボティクス" });
   });
 
   it("全アイテムが ready のとき pending は空", async () => {
@@ -84,9 +82,9 @@ describe("getBriefingListViewModel — ready / pending split", () => {
       currentWeekStart: "2026-06-02",
       totalArticles: 20,
       items: [
-        { category: { id: 1, slug: "ai", name: "AI" }, latest: makeLatest() },
+        { category: { slug: "ai", name: "AI" }, latest: makeLatest() },
         {
-          category: { id: 2, slug: "bio", name: "バイオ" },
+          category: { slug: "bio", name: "バイオ" },
           latest: makeLatest({ headline: "バイオ速報" }),
         },
       ],
@@ -104,11 +102,11 @@ describe("getBriefingListViewModel — ready / pending split", () => {
       totalArticles: 0,
       items: [
         {
-          category: { id: 1, slug: "ai", name: "AI" },
+          category: { slug: "ai", name: "AI" },
           latest: null,
         },
         {
-          category: { id: 2, slug: "bio", name: "バイオ" },
+          category: { slug: "bio", name: "バイオ" },
           latest: null,
         },
       ],
@@ -122,22 +120,22 @@ describe("getBriefingListViewModel — ready / pending split", () => {
 });
 
 describe("getBriefingListViewModel — ready の順序保持", () => {
-  it("backend の item 順がそのまま ready の順になる (アルファベット順でない id 順)", async () => {
-    // id が 3 → 1 → 2 の非昇順で返ってきたとき、frontend は並び替えない
+  it("backend の item 順がそのまま ready の順になる (アルファベット順に並び替えない)", async () => {
+    // 非アルファベット順で返ってきたとき、frontend は並び替えない
     mocks.listBriefings.mockResolvedValue({
       currentWeekStart: "2026-06-02",
       totalArticles: 30,
       items: [
         {
-          category: { id: 3, slug: "space", name: "スペース" },
+          category: { slug: "space", name: "スペース" },
           latest: makeLatest({ headline: "宇宙ニュース" }),
         },
         {
-          category: { id: 1, slug: "ai", name: "AI" },
+          category: { slug: "ai", name: "AI" },
           latest: makeLatest({ headline: "AI 動向" }),
         },
         {
-          category: { id: 2, slug: "bio", name: "バイオ" },
+          category: { slug: "bio", name: "バイオ" },
           latest: makeLatest({ headline: "バイオ速報" }),
         },
       ],
@@ -146,9 +144,11 @@ describe("getBriefingListViewModel — ready の順序保持", () => {
     const result = await getBriefingListViewModel();
 
     expect(result.ready).toHaveLength(3);
-    expect(result.ready[0]!.category.id).toBe(3);
-    expect(result.ready[1]!.category.id).toBe(1);
-    expect(result.ready[2]!.category.id).toBe(2);
+    expect(result.ready.map((c) => c.category.slug)).toEqual([
+      "space",
+      "ai",
+      "bio",
+    ]);
     // headline でも確認 (二重チェック)
     expect(result.ready[0]!.headline).toBe("宇宙ニュース");
     expect(result.ready[1]!.headline).toBe("AI 動向");

@@ -30,7 +30,7 @@ from app.insights.briefing.domain.briefing import (
 )
 from app.insights.briefing.errors import (
     BriefingLlmError,
-    BriefingResponseInvalidError,
+    BriefingLlmResponseInvalidError,
 )
 
 
@@ -164,7 +164,7 @@ async def test_generator_rejects_abnormal_key_article_count_from_llm() -> None:
         ],
         "watch_points": [{"statement": "w"}],
     }
-    with pytest.raises(BriefingResponseInvalidError):
+    with pytest.raises(BriefingLlmResponseInvalidError):
         await _generate_with_mocked_response(oversized)
 
 
@@ -181,7 +181,7 @@ async def test_generator_rejects_abnormal_chapter_count_from_llm() -> None:
         "key_articles": [{"article_id": 1, "significance": "s"}],
         "watch_points": [{"statement": "w"}],
     }
-    with pytest.raises(BriefingResponseInvalidError):
+    with pytest.raises(BriefingLlmResponseInvalidError):
         await _generate_with_mocked_response(oversized)
 
 
@@ -200,7 +200,7 @@ async def test_generator_rejects_oversize_significance_from_llm() -> None:
         ],
         "watch_points": [{"statement": "w"}],
     }
-    with pytest.raises(BriefingResponseInvalidError):
+    with pytest.raises(BriefingLlmResponseInvalidError):
         await _generate_with_mocked_response(oversized)
 
 

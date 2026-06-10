@@ -15,7 +15,7 @@ function makeReadyCard(
   overrides: Partial<ReadyBriefingCard> = {},
 ): ReadyBriefingCard {
   return {
-    category: { id: 1, slug: "ai", name: "AI" },
+    category: { slug: "ai", name: "AI" },
     weekStart: "2026-06-02",
     headline: "AI の最前線",
     summary: "今週のAI動向",
@@ -45,15 +45,15 @@ describe("BriefingIndexView — ready カード描画", () => {
   it("ready が N 件のとき N 個の headline と /briefing/<slug> リンクが描画される", () => {
     const cards: ReadyBriefingCard[] = [
       makeReadyCard({
-        category: { id: 1, slug: "ai", name: "AI" },
+        category: { slug: "ai", name: "AI" },
         headline: "AI 動向レポート",
       }),
       makeReadyCard({
-        category: { id: 2, slug: "bio", name: "バイオ" },
+        category: { slug: "bio", name: "バイオ" },
         headline: "バイオ最新情報",
       }),
       makeReadyCard({
-        category: { id: 3, slug: "space", name: "スペース" },
+        category: { slug: "space", name: "スペース" },
         headline: "宇宙開発ニュース",
       }),
     ];
@@ -77,8 +77,8 @@ describe("BriefingIndexView — ready カード描画", () => {
 
   it("ready が空のとき BriefingBandCard は 1 つも描画されない", () => {
     const pending: PendingCategory[] = [
-      { id: 1, name: "AI" },
-      { id: 2, name: "バイオ" },
+      { slug: "ai", name: "AI" },
+      { slug: "bio", name: "バイオ" },
     ];
     render(<BriefingIndexView data={makeViewModel({ ready: [], pending })} />);
 
@@ -91,8 +91,8 @@ describe("BriefingIndexView — ready カード描画", () => {
 describe("BriefingIndexView — pending セクション", () => {
   it("pending があるとき「準備中」チップが表示される", () => {
     const pending: PendingCategory[] = [
-      { id: 1, name: "スペース" },
-      { id: 2, name: "エネルギー" },
+      { slug: "space", name: "スペース" },
+      { slug: "energy", name: "エネルギー" },
     ];
     render(<BriefingIndexView data={makeViewModel({ pending })} />);
 
@@ -116,9 +116,9 @@ describe("BriefingIndexView — pending セクション", () => {
 describe("BriefingIndexView — 全カテゴリ pending 状態 (ready 空)", () => {
   it("ready 空 + pending あり のとき masthead と pending セクションが表示される", () => {
     const pending: PendingCategory[] = [
-      { id: 1, name: "AI" },
-      { id: 2, name: "バイオ" },
-      { id: 3, name: "スペース" },
+      { slug: "ai", name: "AI" },
+      { slug: "bio", name: "バイオ" },
+      { slug: "space", name: "スペース" },
     ];
     render(
       <BriefingIndexView

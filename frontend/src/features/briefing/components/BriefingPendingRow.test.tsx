@@ -13,7 +13,7 @@ describe("BriefingPendingRow — 空リスト", () => {
 
 describe("BriefingPendingRow — チップ表示", () => {
   it("pending 1 件のとき name と「近日」ラベルが表示される", () => {
-    const pending: PendingCategory[] = [{ id: 1, name: "スペース" }];
+    const pending: PendingCategory[] = [{ slug: "space", name: "スペース" }];
     render(<BriefingPendingRow pending={pending} />);
     expect(screen.getByText("スペース")).toBeInTheDocument();
     expect(screen.getByText("近日")).toBeInTheDocument();
@@ -22,9 +22,9 @@ describe("BriefingPendingRow — チップ表示", () => {
 
   it("pending N 件のときチップが N 個表示される", () => {
     const pending: PendingCategory[] = [
-      { id: 1, name: "スペース" },
-      { id: 2, name: "バイオ" },
-      { id: 3, name: "エネルギー" },
+      { slug: "space", name: "スペース" },
+      { slug: "bio", name: "バイオ" },
+      { slug: "energy", name: "エネルギー" },
     ];
     render(<BriefingPendingRow pending={pending} />);
 
@@ -40,8 +40,8 @@ describe("BriefingPendingRow — チップ表示", () => {
 
   it("pending 2 件のとき「準備中」セクション見出しが 1 つ出る", () => {
     const pending: PendingCategory[] = [
-      { id: 1, name: "スペース" },
-      { id: 2, name: "バイオ" },
+      { slug: "space", name: "スペース" },
+      { slug: "bio", name: "バイオ" },
     ];
     render(<BriefingPendingRow pending={pending} />);
     // 見出しは 1 箇所のみ

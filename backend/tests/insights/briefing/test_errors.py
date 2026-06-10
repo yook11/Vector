@@ -8,7 +8,7 @@ from app.insights.briefing.errors import (
     BriefingConfigurationError,
     BriefingError,
     BriefingLlmError,
-    BriefingResponseInvalidError,
+    BriefingLlmResponseInvalidError,
 )
 
 
@@ -36,7 +36,7 @@ def test_briefing_llm_provider_call_failed_classvars_are_ssot() -> None:
 
 
 def test_briefing_llm_response_contract_invalid_classvars_are_ssot() -> None:
-    exc = BriefingResponseInvalidError()
+    exc = BriefingLlmResponseInvalidError()
 
     assert exc.STAGE is Stage.BRIEFING
     assert exc.CODE == "briefing_generation_llm_response_contract_invalid"

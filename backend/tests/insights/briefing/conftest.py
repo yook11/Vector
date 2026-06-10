@@ -10,6 +10,7 @@ from __future__ import annotations
 from collections.abc import Awaitable, Callable
 from datetime import datetime
 from itertools import count
+from typing import Any
 
 import pytest
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -40,6 +41,7 @@ def seed_briefing_analysis(
         translated_title: str | None = None,
         summary: str | None = None,
         published_at: datetime | None = None,
+        key_points: list[dict[str, Any]] | None = None,
     ) -> InScopeAssessment:
         n = next(seq)
         title = translated_title or f"briefing-seed-{n}"
@@ -71,6 +73,7 @@ def seed_briefing_analysis(
             investor_take="investor take",
             category_id=category_id,
             analyzed_at=analyzed_at,
+            key_points=key_points,
         )
         db_session.add(analysis)
         await db_session.flush()

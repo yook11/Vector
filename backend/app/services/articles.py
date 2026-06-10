@@ -32,11 +32,12 @@ def build_brief(analysis: InScopeAssessment) -> ArticleBrief:
     )
 
 
-def _extract_key_point_contents(key_points: list[dict[str, Any]] | None) -> list[str]:
+def extract_key_point_contents(key_points: list[dict[str, Any]] | None) -> list[str]:
     """JSONB key_points から表示用の content 文字列だけを取り出す。
 
     mentions は API 非公開 (trends 内部利用) のため落とす。NULL/空、content 欠落・
     非 str・空文字の要素は除外して常に ``list[str]`` を返す。
+    briefing の keyArticles embed も同一契約の projection としてここを共有する。
     """
     if not key_points:
         return []
@@ -54,7 +55,7 @@ def build_detail(analysis: InScopeAssessment) -> ArticleDetail:
         translated_title=analysis.translated_title,
         summary=analysis.summary,
         investor_take=analysis.investor_take,
-        key_points=_extract_key_point_contents(analysis.key_points),
+        key_points=extract_key_point_contents(analysis.key_points),
         analyzed_at=analysis.analyzed_at,
         category=CategoryEmbed(
             slug=analysis.category.slug,

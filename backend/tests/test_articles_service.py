@@ -1,4 +1,4 @@
-"""ArticleService の純関数テスト — ``_extract_key_point_contents`` の防御分岐。
+"""ArticleService の純関数テスト — ``extract_key_point_contents`` の防御分岐。
 
 JSONB key_points は本番に旧形 (NULL) や AI 由来の不定形が混じりうるため、
 content だけを安全に取り出す純関数の境界を固定する。API 契約 (keyPoints の
@@ -7,16 +7,16 @@ content だけを安全に取り出す純関数の境界を固定する。API �
 
 from __future__ import annotations
 
-from app.services.articles import _extract_key_point_contents
+from app.services.articles import extract_key_point_contents
 
 
 def test_none_returns_empty_list() -> None:
     # 旧行 (key_points IS NULL) は空配列に畳む。
-    assert _extract_key_point_contents(None) == []
+    assert extract_key_point_contents(None) == []
 
 
 def test_empty_list_returns_empty_list() -> None:
-    assert _extract_key_point_contents([]) == []
+    assert extract_key_point_contents([]) == []
 
 
 def test_extracts_content_in_order() -> None:
@@ -24,7 +24,7 @@ def test_extracts_content_in_order() -> None:
         {"content": "first", "mentions": []},
         {"content": "second", "mentions": [{"surface": "X", "type": "company"}]},
     ]
-    assert _extract_key_point_contents(key_points) == ["first", "second"]
+    assert extract_key_point_contents(key_points) == ["first", "second"]
 
 
 def test_drops_mentions() -> None:
@@ -32,23 +32,23 @@ def test_drops_mentions() -> None:
     key_points = [
         {"content": "body", "mentions": [{"surface": "X", "type": "company"}]}
     ]
-    assert _extract_key_point_contents(key_points) == ["body"]
+    assert extract_key_point_contents(key_points) == ["body"]
 
 
 def test_skips_element_missing_content() -> None:
-    assert _extract_key_point_contents([{"mentions": []}]) == []
+    assert extract_key_point_contents([{"mentions": []}]) == []
 
 
 def test_skips_non_str_content() -> None:
-    assert _extract_key_point_contents([{"content": 123, "mentions": []}]) == []
+    assert extract_key_point_contents([{"content": 123, "mentions": []}]) == []
 
 
 def test_skips_empty_string_content() -> None:
-    assert _extract_key_point_contents([{"content": "", "mentions": []}]) == []
+    assert extract_key_point_contents([{"content": "", "mentions": []}]) == []
 
 
 def test_skips_non_dict_element() -> None:
-    assert _extract_key_point_contents(["not a dict"]) == []  # type: ignore[list-item]
+    assert extract_key_point_contents(["not a dict"]) == []  # type: ignore[list-item]
 
 
 def test_mixes_valid_and_invalid_elements() -> None:
@@ -58,4 +58,4 @@ def test_mixes_valid_and_invalid_elements() -> None:
         {"mentions": []},
         {"content": "also keep", "mentions": []},
     ]
-    assert _extract_key_point_contents(key_points) == ["keep", "also keep"]
+    assert extract_key_point_contents(key_points) == ["keep", "also keep"]

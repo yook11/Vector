@@ -23,7 +23,7 @@ export function BriefingIndexView({ data }: BriefingIndexViewProps) {
       <div className="mt-2 flex flex-col gap-[16px]">
         {data.ready.map((card) => (
           <BriefingBandCard
-            key={card.category.id}
+            key={card.category.slug}
             card={card}
             currentWeekStart={data.weekStart}
           />

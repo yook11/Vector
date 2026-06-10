@@ -17,4 +17,3 @@ export {
   type BriefingListViewModel,
   getBriefingListViewModel,
 } from "./page-models/briefing-list";
-export type { BriefingArticleSummaryParsed } from "./schemas/briefing";

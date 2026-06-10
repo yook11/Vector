@@ -1,10 +1,19 @@
 import { describe, expect, it } from "vitest";
 import { BriefingListResponseSchema, BriefingResponseSchema } from "./briefing";
 
-const CATEGORY = { id: 1, slug: "ai", name: "AI" };
+const CATEGORY = { slug: "ai", name: "AI" };
+
+const ARTICLE_EMBED = {
+  id: 1,
+  translatedTitle: "記事1",
+  source: { name: "TechCrunch", attributionLabel: null },
+  url: "https://x",
+  publishedAt: "2026-04-19T09:00:00+09:00",
+  keyPoints: ["要点A", "要点B"],
+};
 
 describe("BriefingListResponseSchema", () => {
-  it("accepts items with both ready (latest object) and empty (latest=null)", () => {
+  it("accepts items with both generated (latest object) and empty (latest=null)", () => {
     const result = BriefingListResponseSchema.safeParse({
       currentWeekStart: "2026-04-27",
       totalArticles: 64,
@@ -19,7 +28,7 @@ describe("BriefingListResponseSchema", () => {
           },
         },
         {
-          category: { id: 2, slug: "robotics", name: "ロボティクス" },
+          category: { slug: "robotics", name: "ロボティクス" },
           latest: null,
         },
       ],
@@ -56,9 +65,9 @@ describe("BriefingListResponseSchema", () => {
 });
 
 describe("BriefingResponseSchema", () => {
-  it("narrows to ready when state='ready' and required fields present", () => {
+  it("narrows to detail when state='briefing' and required fields present", () => {
     const result = BriefingResponseSchema.safeParse({
-      state: "ready",
+      state: "briefing",
       weekStart: "2026-04-20",
       generatedAt: "2026-04-27T00:05:00+09:00",
       modelName: "deepseek-v4-pro",
@@ -69,43 +78,47 @@ describe("BriefingResponseSchema", () => {
       chapters: [
         { heading: "資金とインフラ", body: "今週は LLM 推論コスト削減と..." },
       ],
-      keyArticles: [{ articleId: 1, significance: "なぜ重要か" }],
-      watchPoints: [{ statement: "今後どこを見るべきか" }],
-      articles: [
+      keyArticles: [
+        { significance: "なぜ重要か", article: ARTICLE_EMBED },
         {
-          id: 1,
-          titleJa: "記事1",
-          sourceName: "TechCrunch",
-          url: "https://x",
-          publishedAt: "2026-04-19T09:00:00+09:00",
-        },
-        {
-          id: 2,
-          titleJa: "記事2",
-          sourceName: "Hacker News",
-          url: "https://y",
-          publishedAt: null,
+          significance: "二件目の理由",
+          article: {
+            ...ARTICLE_EMBED,
+            id: 2,
+            translatedTitle: "記事2",
+            source: { name: "Hacker News", attributionLabel: "HN 提供" },
+            url: "https://y",
+            publishedAt: null,
+            keyPoints: [],
+          },
         },
       ],
+      watchPoints: ["今後どこを見るべきか"],
     });
     expect(result.success).toBe(true);
-    if (result.success && result.data.state === "ready") {
+    if (result.success && result.data.state === "briefing") {
       expect(result.data.summary).toBe("今週の総括リード");
       expect(result.data.chapters[0]?.heading).toBe("資金とインフラ");
       expect(result.data.chapters[0]?.body).toBe(
         "今週は LLM 推論コスト削減と...",
       );
-      expect(result.data.keyArticles.length).toBe(1);
-      expect(result.data.keyArticles[0]?.articleId).toBe(1);
+      expect(result.data.keyArticles.length).toBe(2);
       expect(result.data.keyArticles[0]?.significance).toBe("なぜ重要か");
-      expect(result.data.watchPoints[0]?.statement).toBe(
-        "今後どこを見るべきか",
+      // keyArticle は記事 embed を自己完結で持つ (articles[] lookup は廃止)
+      expect(result.data.keyArticles[0]?.article.id).toBe(1);
+      expect(result.data.keyArticles[0]?.article.translatedTitle).toBe("記事1");
+      expect(result.data.keyArticles[0]?.article.source.name).toBe(
+        "TechCrunch",
       );
-      expect(result.data.articles[0]?.titleJa).toBe("記事1");
-      expect(result.data.articles[0]?.publishedAt).toBe(
-        "2026-04-19T09:00:00+09:00",
+      expect(result.data.keyArticles[0]?.article.keyPoints).toEqual([
+        "要点A",
+        "要点B",
+      ]);
+      expect(result.data.keyArticles[1]?.article.publishedAt).toBeNull();
+      expect(result.data.keyArticles[1]?.article.source.attributionLabel).toBe(
+        "HN 提供",
       );
-      expect(result.data.articles[1]?.publishedAt).toBeNull();
+      expect(result.data.watchPoints).toEqual(["今後どこを見るべきか"]);
     }
   });
 
@@ -120,15 +133,32 @@ describe("BriefingResponseSchema", () => {
 
   it("rejects unknown state value", () => {
     const result = BriefingResponseSchema.safeParse({
-      state: "loading",
+      state: "ready",
       category: CATEGORY,
     });
     expect(result.success).toBe(false);
   });
 
-  it("rejects ready missing required fields (e.g. summary/chapters)", () => {
+  it("rejects keyArticle whose article embed is missing", () => {
     const result = BriefingResponseSchema.safeParse({
-      state: "ready",
+      state: "briefing",
+      weekStart: "2026-04-20",
+      generatedAt: "2026-04-27T00:05:00+09:00",
+      modelName: "deepseek-v4-pro",
+      inputArticleCount: 1,
+      category: CATEGORY,
+      headline: "h",
+      summary: "s",
+      chapters: [{ heading: "h", body: "b" }],
+      keyArticles: [{ significance: "なぜ重要か" }],
+      watchPoints: [],
+    });
+    expect(result.success).toBe(false);
+  });
+
+  it("rejects detail missing required fields (e.g. summary/chapters)", () => {
+    const result = BriefingResponseSchema.safeParse({
+      state: "briefing",
       weekStart: "2026-04-20",
       generatedAt: "2026-04-27T00:05:00+09:00",
       modelName: "deepseek-v4-pro",
@@ -137,7 +167,6 @@ describe("BriefingResponseSchema", () => {
       headline: "h",
       keyArticles: [],
       watchPoints: [],
-      articles: [],
     });
     expect(result.success).toBe(false);
   });

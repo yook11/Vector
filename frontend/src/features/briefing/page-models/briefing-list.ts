@@ -14,7 +14,6 @@ import { listBriefings } from "../api/list-briefings";
  */
 
 export interface BriefingCardCategory {
-  id: number;
   slug: string;
   name: string;
 }
@@ -28,7 +27,7 @@ export interface ReadyBriefingCard {
 }
 
 export interface PendingCategory {
-  id: number;
+  slug: string;
   name: string;
 }
 
@@ -54,7 +53,7 @@ export async function getBriefingListViewModel(): Promise<BriefingListViewModel>
   const pending: PendingCategory[] = [];
   for (const item of data.items) {
     if (item.latest === null) {
-      pending.push({ id: item.category.id, name: item.category.name });
+      pending.push({ slug: item.category.slug, name: item.category.name });
     } else {
       ready.push({
         category: item.category,

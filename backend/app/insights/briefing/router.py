@@ -1,7 +1,7 @@
 """GET /api/v1/briefing/{categorySlug} ルーター。
 
-最新週の briefing を 1 リクエストで返す。``keyArticles[].articleId`` で参照される
-記事 (title_ja / source_name / url) も同じレスポンスに同梱し、frontend で
+最新週の briefing を 1 リクエストで返す。``keyArticles[].article`` に参照記事
+(translatedTitle / source / url / keyPoints) を埋め込み、frontend で
 N+1 fetch しないで済むようにする。
 """
 
@@ -10,24 +10,24 @@ from __future__ import annotations
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Path, status
+from pydantic import Field, TypeAdapter
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.dependencies import get_session, require_bff_request
+from app.insights.briefing.domain.briefing import MAX_KEY_ARTICLES_PER_BRIEFING
 from app.insights.briefing.domain.week import latest_completed_week_start, now_in_jst
 from app.insights.briefing.repository import BriefingRepository
 from app.insights.briefing.schemas import (
+    BriefingDetail,
     BriefingListItem,
     BriefingListResponse,
     BriefingResponse,
     EmptyBriefing,
-    ReadyBriefing,
-    _ArticleSummaryOut,
+    _BriefingArticleEmbed,
+    _BriefingChapter,
+    _BriefingKeyArticle,
     _BriefingListLatest,
-    _CategoryOut,
-    _ChapterOut,
-    _KeyArticleOut,
-    _WatchPointOut,
 )
 from app.models.article import Article
 from app.models.article_curation import ArticleCuration
@@ -35,8 +35,17 @@ from app.models.category import Category
 from app.models.in_scope_assessment import InScopeAssessment
 from app.models.news_source import NewsSource
 from app.models.weekly_briefing import WeeklyBriefing
+from app.schemas.embeds import CategoryEmbed, NewsSourceEmbed
+from app.services.articles import extract_key_point_contents
 
 router = APIRouter(prefix="/api/v1/briefing", tags=["briefing"])
+
+# F10: 攻撃者が DB に直書きした巨大 key_articles で embed fetch / 組立が
+# ガード発火より先に増幅しないよう、件数だけ先に検証する
+# (上限・エラー形 = too_long ValidationError は BriefingDetail 側ガードと同一)。
+_KEY_ARTICLES_COUNT_GUARD: TypeAdapter[list[object]] = TypeAdapter(
+    Annotated[list[object], Field(max_length=MAX_KEY_ARTICLES_PER_BRIEFING)]
+)
 
 
 async def _fetch_category(session: AsyncSession, slug: str) -> Category:
@@ -50,19 +59,27 @@ async def _fetch_category(session: AsyncSession, slug: str) -> Category:
     return cat
 
 
-async def _fetch_article_summaries(
-    session: AsyncSession, article_ids: list[int]
-) -> list[_ArticleSummaryOut]:
+async def _fetch_article_embeds(
+    session: AsyncSession, article_ids: set[int]
+) -> dict[int, _BriefingArticleEmbed]:
+    """key_articles が参照する記事の embed を ``Article.id`` キーで返す。
+
+    JSONB の article_id は ``Article.id`` だが、embed の公開 ``id`` は
+    ``/news/{id}`` と同じ id 空間 (``InScopeAssessment.id``) なので別々に持つ。
+    """
     if not article_ids:
-        return []
+        return {}
     # 公開 URL は ``Article.source_url`` (PR-E 以降は canonicalize 済み SSoT)。
     stmt = (
         select(
             Article.id,
             Article.source_url,
             Article.published_at,
+            InScopeAssessment.id.label("assessment_id"),
             InScopeAssessment.translated_title,
+            InScopeAssessment.key_points,
             NewsSource.name,
+            NewsSource.attribution_label,
         )
         .join(ArticleCuration, ArticleCuration.article_id == Article.id)
         .join(
@@ -73,20 +90,24 @@ async def _fetch_article_summaries(
         .where(Article.id.in_(article_ids))
     )
     rows = (await session.execute(stmt)).all()
-    return [
-        _ArticleSummaryOut(
-            id=row.id,
-            title_ja=row.translated_title,
-            source_name=str(row.name),
+    return {
+        row.id: _BriefingArticleEmbed(
+            id=row.assessment_id,
+            translated_title=row.translated_title,
+            source=NewsSourceEmbed(
+                name=row.name,
+                attribution_label=row.attribution_label,
+            ),
             url=str(row.source_url),
             published_at=row.published_at,
+            key_points=extract_key_point_contents(row.key_points),
         )
         for row in rows
-    ]
+    }
 
 
-def _to_category(category: Category) -> _CategoryOut:
-    return _CategoryOut(id=category.id, slug=category.slug, name=category.name)
+def _to_category(category: Category) -> CategoryEmbed:
+    return CategoryEmbed(slug=category.slug, name=category.name)
 
 
 @router.get("", dependencies=[Depends(require_bff_request)])
@@ -161,13 +182,25 @@ async def get_latest_briefing(
     if briefing is None:
         return EmptyBriefing(category=_to_category(category))
 
-    chapters = [_ChapterOut.model_validate(c) for c in briefing.chapters]
-    key_articles = [_KeyArticleOut.model_validate(a) for a in briefing.key_articles]
-    watch_points = [_WatchPointOut.model_validate(w) for w in briefing.watch_points]
-    article_ids = [a.article_id for a in key_articles]
-    articles = await _fetch_article_summaries(session, list(set(article_ids)))
+    chapters = [_BriefingChapter.model_validate(c) for c in briefing.chapters]
+    _KEY_ARTICLES_COUNT_GUARD.validate_python(briefing.key_articles)
+    embeds = await _fetch_article_embeds(
+        session, {a["article_id"] for a in briefing.key_articles}
+    )
+    # article non-nullable は生成時 validator (article_id ⊆ assessed input_ids) と
+    # 記事削除経路の不在が保証する (assessed 記事の retention 削除導入時は要見直し)。
+    # embeds.get の None 欠落は non-nullable field の ValidationError → 500 で
+    # loud に出す (failure_visibility)。
+    key_articles = [
+        _BriefingKeyArticle(
+            significance=a["significance"],
+            article=embeds.get(a["article_id"]),  # pyright: ignore[reportArgumentType]
+        )
+        for a in briefing.key_articles
+    ]
+    watch_points = [w["statement"] for w in briefing.watch_points]
 
-    return ReadyBriefing(
+    return BriefingDetail(
         week_start=briefing.week_start_date,
         generated_at=briefing.generated_at,
         model_name=briefing.model_name,
@@ -178,5 +211,4 @@ async def get_latest_briefing(
         chapters=chapters,
         key_articles=key_articles,
         watch_points=watch_points,
-        articles=articles,
     )
