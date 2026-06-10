@@ -47,8 +47,8 @@ export const getArticle = <ThrowOnError extends boolean = false>(options: Option
  *
  * 全カテゴリをネストされたキーワードと記事件数付きで一覧取得する。
  *
- * 認証は任意 (BFF プロキシヘッダがあれば検証、無ければ匿名扱い)。
- * レスポンスはユーザー非依存だが、認可境界の一貫性のため検証だけ通す。
+ * レスポンスはユーザー非依存。BFF 経由証明を必須とし backend 直叩きを閉じるが、
+ * ログイン検証 (login gate) は BFF/Next.js が担うため user は要求しない。
  */
 export const listCategories = <ThrowOnError extends boolean = false>(options?: Options<ListCategoriesData, ThrowOnError>) => (options?.client ?? client).get<ListCategoriesResponses, ListCategoriesErrors, ThrowOnError>({ url: '/api/v1/categories', ...options });
 

@@ -41,9 +41,17 @@ async def ai_category(db_session: AsyncSession) -> Category:
 
 class TestGetBriefing:
     @pytest.mark.asyncio
-    async def test_returns_404_for_unknown_category(self, client: AsyncClient) -> None:
-        resp = await client.get("/api/v1/briefing/nonexistent")
+    async def test_returns_404_for_unknown_category(
+        self, bff_client: AsyncClient
+    ) -> None:
+        resp = await bff_client.get("/api/v1/briefing/nonexistent")
         assert resp.status_code == 404
+
+    @pytest.mark.asyncio
+    async def test_requires_bff_proof(self, client: AsyncClient) -> None:
+        """BFF 経由証明の無い直叩きは 401 (有効 slug でも dependency が弾く)。"""
+        resp = await client.get("/api/v1/briefing/ai")
+        assert resp.status_code == 401
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize(
@@ -57,17 +65,17 @@ class TestGetBriefing:
         ],
     )
     async def test_returns_422_for_invalid_slug_pattern(
-        self, client: AsyncClient, bad_slug: str
+        self, bff_client: AsyncClient, bad_slug: str
     ) -> None:
         """Path pattern 違反は 404 (DB 検索) ではなく 422 (schema reject) で弾く。"""
-        resp = await client.get(f"/api/v1/briefing/{bad_slug}")
+        resp = await bff_client.get(f"/api/v1/briefing/{bad_slug}")
         assert resp.status_code == 422
 
     @pytest.mark.asyncio
     async def test_returns_empty_when_no_briefing(
-        self, client: AsyncClient, ai_category: Category
+        self, bff_client: AsyncClient, ai_category: Category
     ) -> None:
-        resp = await client.get("/api/v1/briefing/ai")
+        resp = await bff_client.get("/api/v1/briefing/ai")
         assert resp.status_code == 200
         body = resp.json()
         assert body["state"] == "empty"
@@ -76,7 +84,7 @@ class TestGetBriefing:
     @pytest.mark.asyncio
     async def test_returns_ready_with_articles(
         self,
-        client: AsyncClient,
+        bff_client: AsyncClient,
         db_session: AsyncSession,
         ai_category: Category,
         seed_briefing_analysis,
@@ -110,7 +118,7 @@ class TestGetBriefing:
         db_session.add(briefing)
         await db_session.commit()
 
-        resp = await client.get("/api/v1/briefing/ai")
+        resp = await bff_client.get("/api/v1/briefing/ai")
         assert resp.status_code == 200
         body = resp.json()
         assert body["state"] == "ready"
@@ -137,7 +145,7 @@ class TestGetBriefing:
     @pytest.mark.asyncio
     async def test_article_published_at_is_null_when_unset(
         self,
-        client: AsyncClient,
+        bff_client: AsyncClient,
         db_session: AsyncSession,
         ai_category: Category,
         seed_briefing_analysis,
@@ -168,7 +176,7 @@ class TestGetBriefing:
         db_session.add(briefing)
         await db_session.commit()
 
-        resp = await client.get("/api/v1/briefing/ai")
+        resp = await bff_client.get("/api/v1/briefing/ai")
         assert resp.status_code == 200
         body = resp.json()
         assert body["articles"][0]["publishedAt"] is None
@@ -178,7 +186,7 @@ class TestListBriefings:
     @pytest.mark.asyncio
     async def test_returns_all_categories_with_latest_field(
         self,
-        client: AsyncClient,
+        bff_client: AsyncClient,
         db_session: AsyncSession,
         ai_category: Category,
     ) -> None:
@@ -189,7 +197,7 @@ class TestListBriefings:
         await db_session.commit()
         await db_session.refresh(other)
 
-        resp = await client.get("/api/v1/briefing")
+        resp = await bff_client.get("/api/v1/briefing")
         assert resp.status_code == 200
         body = resp.json()
         assert "currentWeekStart" in body
@@ -204,7 +212,7 @@ class TestListBriefings:
     @pytest.mark.asyncio
     async def test_includes_headline_for_ready_item(
         self,
-        client: AsyncClient,
+        bff_client: AsyncClient,
         db_session: AsyncSession,
         ai_category: Category,
     ) -> None:
@@ -222,7 +230,7 @@ class TestListBriefings:
         db_session.add(briefing)
         await db_session.commit()
 
-        resp = await client.get("/api/v1/briefing")
+        resp = await bff_client.get("/api/v1/briefing")
         assert resp.status_code == 200
         body = resp.json()
         ai_item = next(i for i in body["items"] if i["category"]["slug"] == "ai")
@@ -237,7 +245,7 @@ class TestListBriefings:
     @pytest.mark.asyncio
     async def test_total_articles_counts_only_current_week(
         self,
-        client: AsyncClient,
+        bff_client: AsyncClient,
         db_session: AsyncSession,
         ai_category: Category,
     ) -> None:
@@ -272,7 +280,7 @@ class TestListBriefings:
             )
         await db_session.commit()
 
-        resp = await client.get("/api/v1/briefing")
+        resp = await bff_client.get("/api/v1/briefing")
         assert resp.status_code == 200
         body = resp.json()
         # 今週分の 7 のみ。古い週の 40 は「今週の解析量」に含めない
@@ -281,7 +289,7 @@ class TestListBriefings:
     @pytest.mark.asyncio
     async def test_orders_items_by_category_id(
         self,
-        client: AsyncClient,
+        bff_client: AsyncClient,
         db_session: AsyncSession,
         ai_category: Category,
     ) -> None:
@@ -291,7 +299,7 @@ class TestListBriefings:
         await db_session.commit()
         await db_session.refresh(b_cat)
 
-        resp = await client.get("/api/v1/briefing")
+        resp = await bff_client.get("/api/v1/briefing")
         body = resp.json()
         ids = [item["category"]["id"] for item in body["items"]]
         assert ids == sorted(ids)
@@ -331,7 +339,7 @@ class TestBriefingResponseSizeGuard:
     @pytest.mark.asyncio
     async def test_oversize_key_articles_rejected_by_response_model(
         self,
-        client: AsyncClient,
+        bff_client: AsyncClient,
         db_session: AsyncSession,
         ai_category: Category,
     ) -> None:
@@ -351,12 +359,12 @@ class TestBriefingResponseSizeGuard:
         await db_session.commit()
 
         with pytest.raises(ValidationError):
-            await client.get("/api/v1/briefing/ai")
+            await bff_client.get("/api/v1/briefing/ai")
 
     @pytest.mark.asyncio
     async def test_oversize_significance_rejected_by_response_model(
         self,
-        client: AsyncClient,
+        bff_client: AsyncClient,
         db_session: AsyncSession,
         ai_category: Category,
     ) -> None:
@@ -377,12 +385,12 @@ class TestBriefingResponseSizeGuard:
         await db_session.commit()
 
         with pytest.raises(ValidationError):
-            await client.get("/api/v1/briefing/ai")
+            await bff_client.get("/api/v1/briefing/ai")
 
     @pytest.mark.asyncio
     async def test_oversize_watch_points_rejected_by_response_model(
         self,
-        client: AsyncClient,
+        bff_client: AsyncClient,
         db_session: AsyncSession,
         ai_category: Category,
     ) -> None:
@@ -401,12 +409,12 @@ class TestBriefingResponseSizeGuard:
         await db_session.commit()
 
         with pytest.raises(ValidationError):
-            await client.get("/api/v1/briefing/ai")
+            await bff_client.get("/api/v1/briefing/ai")
 
     @pytest.mark.asyncio
     async def test_oversize_statement_rejected_by_response_model(
         self,
-        client: AsyncClient,
+        bff_client: AsyncClient,
         db_session: AsyncSession,
         ai_category: Category,
     ) -> None:
@@ -422,12 +430,12 @@ class TestBriefingResponseSizeGuard:
         await db_session.commit()
 
         with pytest.raises(ValidationError):
-            await client.get("/api/v1/briefing/ai")
+            await bff_client.get("/api/v1/briefing/ai")
 
     @pytest.mark.asyncio
     async def test_oversize_chapters_rejected_by_response_model(
         self,
-        client: AsyncClient,
+        bff_client: AsyncClient,
         db_session: AsyncSession,
         ai_category: Category,
     ) -> None:
@@ -448,12 +456,12 @@ class TestBriefingResponseSizeGuard:
         await db_session.commit()
 
         with pytest.raises(ValidationError):
-            await client.get("/api/v1/briefing/ai")
+            await bff_client.get("/api/v1/briefing/ai")
 
     @pytest.mark.asyncio
     async def test_oversize_chapter_body_rejected_by_response_model(
         self,
-        client: AsyncClient,
+        bff_client: AsyncClient,
         db_session: AsyncSession,
         ai_category: Category,
     ) -> None:
@@ -470,4 +478,4 @@ class TestBriefingResponseSizeGuard:
         await db_session.commit()
 
         with pytest.raises(ValidationError):
-            await client.get("/api/v1/briefing/ai")
+            await bff_client.get("/api/v1/briefing/ai")

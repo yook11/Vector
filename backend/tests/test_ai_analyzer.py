@@ -275,6 +275,7 @@ async def test_curator_sanitizes_untrusted_input_boundary() -> None:
     assert prompt.count("</untrusted_input>") == 1
     assert prompt.count("[/untrusted_input]") == 2
 
+
 # --- F. CurationService orchestration tests ---
 
 
@@ -574,7 +575,7 @@ async def test_assessment_persists_rejection_when_out_of_scope(
 
 
 async def test_news_endpoint_includes_analysis(
-    client,
+    bff_client,
     db_session: AsyncSession,
     sample_categories: list[Category],
     sample_source: NewsSource,
@@ -598,7 +599,7 @@ async def test_news_endpoint_includes_analysis(
     await db_session.commit()
     await db_session.refresh(analysis)
 
-    response = await client.get(f"/api/v1/articles/{analysis.id}")
+    response = await bff_client.get(f"/api/v1/articles/{analysis.id}")
 
     assert response.status_code == 200
     data = response.json()

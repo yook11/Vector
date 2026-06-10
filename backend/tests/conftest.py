@@ -129,10 +129,36 @@ def _auth_headers(user_id: str, role: str = "user") -> dict[str, str]:
     return {"Authorization": f"Bearer {make_internal_jwt(user_id, role)}"}
 
 
+def make_bff_jwt() -> str:
+    """user-less な BFF 経由証明 JWT を発行する (sub/role 無し)。
+
+    本番 frontend の ``buildBffRequestHeaders`` と対称で、iss/aud/exp/iat のみ
+    署名する。require_bff_request は通すが get_current_user / get_admin_user は
+    sub/role 欠落で 401 になる、という非対称をテストするための fixture。
+    """
+    now = int(time.time())
+    return jwt.encode(
+        {
+            "iss": "vector-bff",
+            "aud": "vector-backend",
+            "iat": now,
+            "exp": now + _JWT_TTL_SECONDS,
+        },
+        INTERNAL_SECRET,
+        algorithm=_JWT_ALGORITHM,
+    )
+
+
+def _bff_headers() -> dict[str, str]:
+    """user-less BFF 経由証明ヘッダを組み立てる。"""
+    return {"Authorization": f"Bearer {make_bff_jwt()}"}
+
+
 _INTEGRATION_FIXTURES = frozenset(
     {
         "db_session",
         "client",
+        "bff_client",
         "authed_client",
         "admin_client",
         "session_factory",
@@ -354,6 +380,38 @@ async def admin_client(
         transport=ASGITransport(app=app),
         base_url="http://test",
         headers=_auth_headers(TEST_ADMIN_ID, role="admin"),
+    ) as c:
+        yield c
+    app.dependency_overrides.clear()
+
+
+@pytest.fixture
+def bff_headers() -> dict[str, str]:
+    """user-less BFF 経由証明ヘッダーを返す (sub/role 無し)。"""
+    return _bff_headers()
+
+
+@pytest.fixture
+async def bff_client(
+    db_session: AsyncSession,
+) -> AsyncGenerator[AsyncClient]:
+    """user-less BFF 経由証明ヘッダーを付与済みの httpx AsyncClient を提供する。
+
+    require_bff_request を満たす共有 read endpoint 用。user 非依存なので sub/role
+    を持たず、watchlist / admin など get_current_user 系では 401 になる。
+    """
+
+    async def override_session() -> AsyncGenerator[AsyncSession]:
+        if db_session.in_transaction():
+            await db_session.commit()
+        async with db_session.begin():
+            yield db_session
+
+    app.dependency_overrides[get_session] = override_session
+    async with AsyncClient(
+        transport=ASGITransport(app=app),
+        base_url="http://test",
+        headers=_bff_headers(),
     ) as c:
         yield c
     app.dependency_overrides.clear()

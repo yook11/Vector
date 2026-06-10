@@ -11,6 +11,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
   buildAuth: vi.fn(async () => ({ Authorization: "Bearer test-token" })),
+  buildBff: vi.fn(async () => ({ Authorization: "Bearer bff-token" })),
   getSession: vi.fn(),
   logServerEvent: vi.fn(),
 }));
@@ -20,6 +21,7 @@ vi.mock("server-only", () => ({}));
 vi.mock("@/lib/api/internal-config", () => ({
   INTERNAL_API_URL: "http://test.local/api/v1",
   buildInternalAuthHeaders: mocks.buildAuth,
+  buildBffRequestHeaders: mocks.buildBff,
 }));
 
 vi.mock("@/lib/auth/guards", () => ({
@@ -287,9 +289,25 @@ describe("hey-api error interceptor — ApiError 正規化", () => {
   });
 });
 
-describe("publicClient — auth interceptor を持たない", () => {
-  it("request interceptor は登録されていない (anon endpoint で getCurrentSession() を踏まない)", () => {
-    expect(publicClient.interceptors.request.fns).toHaveLength(0);
+describe("publicClient — BFF 経由証明を付ける (session は読まない)", () => {
+  it("request interceptor が user-less BFF JWT を注入する", async () => {
+    const fn = publicClient.interceptors.request.fns[0];
+    if (!fn) throw new Error("request interceptor not registered");
+
+    const headers = new Headers();
+    await fn({ headers } as never);
+
+    expect(mocks.buildBff).toHaveBeenCalledTimes(1);
+    expect(headers.get("Authorization")).toBe("Bearer bff-token");
+  });
+
+  it("getCurrentSession() を踏まない (cookies/headers 読取なし)", async () => {
+    const fn = publicClient.interceptors.request.fns[0];
+    if (!fn) throw new Error("request interceptor not registered");
+
+    await fn({ headers: new Headers() } as never);
+
+    expect(mocks.getSession).not.toHaveBeenCalled();
   });
 
   it("error interceptor は登録され ApiError を throw する", async () => {

@@ -160,6 +160,16 @@ class TestListWatchlist:
         resp = await client.get("/api/v1/me/watchlist")
         assert resp.status_code == 401
 
+    async def test_bff_proof_without_user_rejected(
+        self, bff_client: AsyncClient
+    ) -> None:
+        """BFF 経由証明だけ (sub/role 無し) では user endpoint は 401。
+
+        共有 read は通るが watchlist は user identity を要求する非対称を固定する。
+        """
+        resp = await bff_client.get("/api/v1/me/watchlist")
+        assert resp.status_code == 401
+
 
 @pytest.mark.asyncio
 class TestAddToWatchlist:

@@ -8,7 +8,7 @@ import {
 } from "../schemas/briefing";
 
 /**
- * 全カテゴリの最新 briefing 一覧を取得 (anonymous でも閲覧可能)。
+ * 全カテゴリの最新 briefing 一覧を取得 (response は user 非依存)。
  *
  * Hybrid 戦略:
  * - (a) `cacheLife("hours")` ISR backstop で最大 1 時間で必ず更新

@@ -122,3 +122,24 @@ export async function buildInternalAuthHeaders(
     .sign(INTERNAL_JWT_SIGNING_KEY);
   return { Authorization: `Bearer ${token}` };
 }
+
+/**
+ * user-less な BFF 経由証明 JWT を発行する (sub/role 無し)。
+ *
+ * 「正規 BFF から来た」ことだけを証明し、ログイン済みかは表現しない。session を
+ * 取らず署名鍵と時刻だけで作るため cookies()/headers() を踏まず、`"use cache"`
+ * 内の anon read からも安全に付与できる。backend の require_bff_request が
+ * 同じ secret/iss/aud で検証する。
+ */
+export async function buildBffRequestHeaders(): Promise<
+  Record<string, string>
+> {
+  const token = await new SignJWT({})
+    .setProtectedHeader({ alg: INTERNAL_JWT_ALGORITHM })
+    .setIssuer(INTERNAL_JWT_ISSUER)
+    .setAudience(INTERNAL_JWT_AUDIENCE)
+    .setIssuedAt()
+    .setExpirationTime(INTERNAL_JWT_TTL)
+    .sign(INTERNAL_JWT_SIGNING_KEY);
+  return { Authorization: `Bearer ${token}` };
+}

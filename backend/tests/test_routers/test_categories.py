@@ -15,18 +15,18 @@ from app.models.news_source import NewsSource
 
 @pytest.mark.asyncio
 class TestListCategories:
-    async def test_empty_list(self, client: AsyncClient) -> None:
-        resp = await client.get("/api/v1/categories")
+    async def test_empty_list(self, bff_client: AsyncClient) -> None:
+        resp = await bff_client.get("/api/v1/categories")
         assert resp.status_code == 200
         data = resp.json()
         assert data["items"] == []
 
     async def test_returns_all_categories(
         self,
-        client: AsyncClient,
+        bff_client: AsyncClient,
         sample_categories: list[Category],
     ) -> None:
-        resp = await client.get("/api/v1/categories")
+        resp = await bff_client.get("/api/v1/categories")
         assert resp.status_code == 200
         data = resp.json()
         assert len(data["items"]) == 3
@@ -38,10 +38,10 @@ class TestListCategories:
 
     async def test_name_from_direct_column(
         self,
-        client: AsyncClient,
+        bff_client: AsyncClient,
         sample_categories: list[Category],
     ) -> None:
-        resp = await client.get("/api/v1/categories")
+        resp = await bff_client.get("/api/v1/categories")
         items = resp.json()["items"]
         name_map = {item["slug"]: item["name"] for item in items}
         assert name_map["ai"] == "AI"
@@ -49,25 +49,25 @@ class TestListCategories:
 
     async def test_ordered_by_slug(
         self,
-        client: AsyncClient,
+        bff_client: AsyncClient,
         sample_categories: list[Category],
     ) -> None:
-        resp = await client.get("/api/v1/categories")
+        resp = await bff_client.get("/api/v1/categories")
         items = resp.json()["items"]
         slugs = [item["slug"] for item in items]
         assert slugs == sorted(slugs)
 
-    async def test_no_auth_required(self, client: AsyncClient) -> None:
-        """カテゴリエンドポイントは認証を要求しない。"""
+    async def test_requires_bff_proof(self, client: AsyncClient) -> None:
+        """BFF 経由証明の無い直叩きは 401 (login 検証ではなく BFF 経由証明)。"""
         resp = await client.get("/api/v1/categories")
-        assert resp.status_code == 200
+        assert resp.status_code == 401
 
     async def test_response_shape(
         self,
-        client: AsyncClient,
+        bff_client: AsyncClient,
         sample_categories: list[Category],
     ) -> None:
-        resp = await client.get("/api/v1/categories")
+        resp = await bff_client.get("/api/v1/categories")
         item = resp.json()["items"][0]
         assert "id" not in item
         assert "slug" in item
@@ -75,7 +75,7 @@ class TestListCategories:
 
     async def test_recent_count_includes_recent_analysis(
         self,
-        client: AsyncClient,
+        bff_client: AsyncClient,
         db_session: AsyncSession,
         sample_categories: list[Category],
         sample_source: NewsSource,
@@ -107,14 +107,14 @@ class TestListCategories:
         db_session.add(analysis)
         await db_session.commit()
 
-        resp = await client.get("/api/v1/categories")
+        resp = await bff_client.get("/api/v1/categories")
         items = resp.json()["items"]
         ai_cat = next(i for i in items if i["slug"] == "ai")
         assert ai_cat["recentCount"] == 1
 
     async def test_recent_count_excludes_old_analysis(
         self,
-        client: AsyncClient,
+        bff_client: AsyncClient,
         db_session: AsyncSession,
         sample_categories: list[Category],
         sample_source: NewsSource,
@@ -147,7 +147,7 @@ class TestListCategories:
         db_session.add(analysis)
         await db_session.commit()
 
-        resp = await client.get("/api/v1/categories")
+        resp = await bff_client.get("/api/v1/categories")
         items = resp.json()["items"]
         ai_cat = next(i for i in items if i["slug"] == "ai")
         assert ai_cat["recentCount"] == 0

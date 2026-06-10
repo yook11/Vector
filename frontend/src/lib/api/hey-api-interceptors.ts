@@ -9,9 +9,10 @@
  * 2 つの client を export する:
  * - `client` (default singleton, types/client.gen.ts 由来): auth + error interceptor
  *   付き。auth-required endpoint (sources / watchlist) で per-call client なしに使う
- * - `publicClient` (本ファイルで生成): error interceptor のみ。auth interceptor を
- *   持たないので `getCurrentSession()` (cookies/headers 読取) を踏まない →
- *   `"use cache"` 内 anon endpoint で `{ client: publicClient }` を per-call 渡す
+ * - `publicClient` (本ファイルで生成): user session は読まないが BFF 経由証明
+ *   (user-less JWT) を付ける。`getCurrentSession()` (cookies/headers 読取) を
+ *   踏まないので `"use cache"` 内 user 非依存 endpoint で `{ client: publicClient }`
+ *   を per-call 渡せる。backend の require_bff_request が検証する
  *
  * 設計判断:
  * - error interceptor は戻り値ではなく **`throw` で escape** させる。
@@ -28,7 +29,10 @@ import {
   normalizeErrorDetail,
 } from "@/lib/api/error";
 import { createClientConfig } from "@/lib/api/hey-api.config";
-import { buildInternalAuthHeaders } from "@/lib/api/internal-config";
+import {
+  buildBffRequestHeaders,
+  buildInternalAuthHeaders,
+} from "@/lib/api/internal-config";
 import { getCurrentSession } from "@/lib/auth/guards";
 import { logServerEvent } from "@/lib/observability/server-log";
 import { createClient, createConfig } from "@/types/client";
@@ -103,9 +107,9 @@ if (client.interceptors.request.fns.length === 0) {
 }
 
 /**
- * anon endpoint 専用 client。auth interceptor を持たないため `"use cache"` 内
- * (cookies/headers 読取禁止) でも安全に使える。SDK 関数 call で
- * `{ client: publicClient }` を per-call 渡す。
+ * user 非依存 endpoint 用 client。session を読まず BFF 経由証明 (user-less JWT)
+ * だけを付けるため `"use cache"` 内 (cookies/headers 読取禁止) でも安全に使える。
+ * SDK 関数 call で `{ client: publicClient }` を per-call 渡す。
  *
  * `createClientConfig(createConfig<ClientOptions>())` で defaults + baseUrl +
  * customFetch を一括適用。singleton 側と同じ runtime config を持つ。
@@ -113,6 +117,13 @@ if (client.interceptors.request.fns.length === 0) {
 export const publicClient = createClient(
   createClientConfig(createConfig<ClientOptions>()),
 );
-if (publicClient.interceptors.error.fns.length === 0) {
+if (publicClient.interceptors.request.fns.length === 0) {
+  publicClient.interceptors.request.use(async (options) => {
+    const headers = await buildBffRequestHeaders();
+    for (const [k, v] of Object.entries(headers)) {
+      options.headers.set(k, v);
+    }
+  });
+
   publicClient.interceptors.error.use(errorInterceptor);
 }

@@ -8,8 +8,8 @@
   ``feedback_failure_visibility.md``)
 - snapshot 不在は 200 + state="empty" の discriminated 構造で返す。
   「まだ生成されていない」は故障ではないため、ステータスコードでは表現しない
-- 認証は任意 (BFF プロキシヘッダがあれば検証、無ければ匿名扱い)。
-  レスポンスはユーザー非依存だが、認可境界の一貫性のため検証だけ通す
+- レスポンスはユーザー非依存。BFF 経由証明を必須とし backend 直叩きを閉じるが、
+  ログイン検証 (login gate) は BFF/Next.js が担うため user は要求しない
 """
 
 from __future__ import annotations
@@ -19,7 +19,7 @@ from typing import Annotated
 from fastapi import APIRouter, Depends
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.dependencies import get_optional_user, get_session
+from app.dependencies import get_session, require_bff_request
 from app.insights.trend_discovery.application.query import TrendsQueryService
 from app.insights.trend_discovery.schemas.trends import (
     Trends,
@@ -39,7 +39,7 @@ def get_trends_query_service(
 @router.get(
     "",
     response_model=TrendsResponse,
-    dependencies=[Depends(get_optional_user)],
+    dependencies=[Depends(require_bff_request)],
 )
 async def get_trends(
     service: Annotated[TrendsQueryService, Depends(get_trends_query_service)],

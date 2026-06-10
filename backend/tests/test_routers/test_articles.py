@@ -67,8 +67,13 @@ async def _create_analysis(
 
 @pytest.mark.asyncio
 class TestListArticles:
-    async def test_empty_list(self, client: AsyncClient) -> None:
+    async def test_requires_bff_proof(self, client: AsyncClient) -> None:
+        """BFF 経由証明の無い直叩きは 401 (login 検証ではなく BFF 経由証明)。"""
         resp = await client.get("/api/v1/articles")
+        assert resp.status_code == 401
+
+    async def test_empty_list(self, bff_client: AsyncClient) -> None:
+        resp = await bff_client.get("/api/v1/articles")
         assert resp.status_code == 200
         data = resp.json()
         assert data["items"] == []
@@ -78,7 +83,7 @@ class TestListArticles:
 
     async def test_returns_analyzed_articles(
         self,
-        client: AsyncClient,
+        bff_client: AsyncClient,
         db_session: AsyncSession,
         sample_source: NewsSource,
         sample_categories: list[Category],
@@ -95,7 +100,7 @@ class TestListArticles:
         # 未分析の記事は除外されるはず
         await _create_article(db_session, sample_source, url="https://example.com/3")
 
-        resp = await client.get("/api/v1/articles")
+        resp = await bff_client.get("/api/v1/articles")
         assert resp.status_code == 200
         data = resp.json()
         assert data["total"] == 2
@@ -103,7 +108,7 @@ class TestListArticles:
 
     async def test_pagination(
         self,
-        client: AsyncClient,
+        bff_client: AsyncClient,
         db_session: AsyncSession,
         sample_source: NewsSource,
         sample_categories: list[Category],
@@ -115,7 +120,7 @@ class TestListArticles:
             )
             await _create_analysis(db_session, article, category_id=cat_id)
 
-        resp = await client.get("/api/v1/articles?page=1&perPage=2")
+        resp = await bff_client.get("/api/v1/articles?page=1&perPage=2")
         data = resp.json()
         assert data["total"] == 5
         assert len(data["items"]) == 2
@@ -133,14 +138,14 @@ class TestListArticles:
         ],
     )
     async def test_invalid_pagination_returns_422(
-        self, client: AsyncClient, query: str
+        self, bff_client: AsyncClient, query: str
     ) -> None:
-        resp = await client.get(f"/api/v1/articles?{query}")
+        resp = await bff_client.get(f"/api/v1/articles?{query}")
         assert resp.status_code == 422
 
     async def test_sort_by_published_at_desc(
         self,
-        client: AsyncClient,
+        bff_client: AsyncClient,
         db_session: AsyncSession,
         sample_source: NewsSource,
         sample_categories: list[Category],
@@ -168,14 +173,14 @@ class TestListArticles:
             db_session, newer, category_id=cat_id, translated_title="新しい記事"
         )
 
-        resp = await client.get("/api/v1/articles?sortOrder=desc")
+        resp = await bff_client.get("/api/v1/articles?sortOrder=desc")
         items = resp.json()["items"]
         assert items[0]["translatedTitle"] == "新しい記事"
         assert items[1]["translatedTitle"] == "古い記事"
 
     async def test_camel_case_response(
         self,
-        client: AsyncClient,
+        bff_client: AsyncClient,
         db_session: AsyncSession,
         sample_source: NewsSource,
         sample_categories: list[Category],
@@ -183,7 +188,7 @@ class TestListArticles:
         cat_id = sample_categories[0].id
         a = await _create_article(db_session, sample_source)
         await _create_analysis(db_session, a, category_id=cat_id)
-        resp = await client.get("/api/v1/articles")
+        resp = await bff_client.get("/api/v1/articles")
         data = resp.json()
         assert "totalPages" in data
         assert "perPage" in data
@@ -194,7 +199,7 @@ class TestListArticles:
 
     async def test_brief_includes_category(
         self,
-        client: AsyncClient,
+        bff_client: AsyncClient,
         db_session: AsyncSession,
         sample_source: NewsSource,
         sample_categories: list[Category],
@@ -203,7 +208,7 @@ class TestListArticles:
         category = sample_categories[0]
         article = await _create_article(db_session, sample_source)
         await _create_analysis(db_session, article, category_id=category.id)
-        resp = await client.get("/api/v1/articles")
+        resp = await bff_client.get("/api/v1/articles")
         item = resp.json()["items"][0]
         assert item["category"] == {
             "slug": str(category.slug),
@@ -212,7 +217,7 @@ class TestListArticles:
 
     async def test_response_does_not_contain_impact_level(
         self,
-        client: AsyncClient,
+        bff_client: AsyncClient,
         db_session: AsyncSession,
         sample_source: NewsSource,
         sample_categories: list[Category],
@@ -221,13 +226,13 @@ class TestListArticles:
         cat_id = sample_categories[0].id
         article = await _create_article(db_session, sample_source)
         await _create_analysis(db_session, article, category_id=cat_id)
-        resp = await client.get("/api/v1/articles")
+        resp = await bff_client.get("/api/v1/articles")
         item = resp.json()["items"][0]
         assert "impactLevel" not in item
 
     async def test_legacy_impact_level_query_is_ignored(
         self,
-        client: AsyncClient,
+        bff_client: AsyncClient,
         db_session: AsyncSession,
         sample_source: NewsSource,
         sample_categories: list[Category],
@@ -236,13 +241,13 @@ class TestListArticles:
         cat_id = sample_categories[0].id
         article = await _create_article(db_session, sample_source)
         await _create_analysis(db_session, article, category_id=cat_id)
-        resp = await client.get("/api/v1/articles?impactLevel=high")
+        resp = await bff_client.get("/api/v1/articles?impactLevel=high")
         assert resp.status_code == 200
         assert resp.json()["total"] == 1
 
     async def test_date_sort_tiebreaker_uses_id_desc(
         self,
-        client: AsyncClient,
+        bff_client: AsyncClient,
         db_session: AsyncSession,
         sample_source: NewsSource,
         sample_categories: list[Category],
@@ -271,14 +276,16 @@ class TestListArticles:
             db_session, a2, category_id=cat_id, translated_title="後の記事"
         )
 
-        resp = await client.get("/api/v1/articles")
+        resp = await bff_client.get("/api/v1/articles")
         items = resp.json()["items"]
         assert items[0]["translatedTitle"] == "後の記事"
         assert items[1]["translatedTitle"] == "先の記事"
 
-    async def test_invalid_category_slug_returns_422(self, client: AsyncClient) -> None:
+    async def test_invalid_category_slug_returns_422(
+        self, bff_client: AsyncClient
+    ) -> None:
         """CategorySlug VO は slug パターンに合わない値を拒否する。"""
-        resp = await client.get("/api/v1/articles?category=INVALID-slug")
+        resp = await bff_client.get("/api/v1/articles?category=INVALID-slug")
         assert resp.status_code == 422
         detail = resp.json()["detail"]
         assert isinstance(detail, list)
@@ -286,17 +293,17 @@ class TestListArticles:
         assert "Category slug" in detail[0]["msg"]
 
     async def test_invalid_category_message_does_not_leak_vo_name(
-        self, client: AsyncClient
+        self, bff_client: AsyncClient
     ) -> None:
         """422 エラーメッセージに内部 VO クラス名 (CategorySlug) を含めない。"""
-        resp = await client.get("/api/v1/articles?category=INVALID-slug")
+        resp = await bff_client.get("/api/v1/articles?category=INVALID-slug")
         assert resp.status_code == 422
         detail = resp.json()["detail"]
         assert "CategorySlug" not in detail[0]["msg"]
 
     async def test_filter_by_category(
         self,
-        client: AsyncClient,
+        bff_client: AsyncClient,
         db_session: AsyncSession,
         sample_source: NewsSource,
         sample_categories: list[Category],
@@ -321,7 +328,7 @@ class TestListArticles:
             translated_title="量子記事",
         )
 
-        resp = await client.get("/api/v1/articles?category=ai")
+        resp = await bff_client.get("/api/v1/articles?category=ai")
         assert resp.status_code == 200
         data = resp.json()
         assert data["total"] == 1
@@ -332,7 +339,7 @@ class TestListArticles:
 class TestGetArticle:
     async def test_get_existing(
         self,
-        client: AsyncClient,
+        bff_client: AsyncClient,
         db_session: AsyncSession,
         sample_source: NewsSource,
         sample_categories: list[Category],
@@ -341,7 +348,7 @@ class TestGetArticle:
         analysis = await _create_analysis(
             db_session, article, category_id=sample_categories[0].id
         )
-        resp = await client.get(f"/api/v1/articles/{analysis.id}")
+        resp = await bff_client.get(f"/api/v1/articles/{analysis.id}")
         assert resp.status_code == 200
         data = resp.json()
         assert data["translatedTitle"] == "テスト記事"
@@ -349,22 +356,22 @@ class TestGetArticle:
 
     async def test_get_nonexistent_returns_404(
         self,
-        client: AsyncClient,
+        bff_client: AsyncClient,
     ) -> None:
-        resp = await client.get("/api/v1/articles/99999")
+        resp = await bff_client.get("/api/v1/articles/99999")
         assert resp.status_code == 404
 
     async def test_get_with_overflowing_id_returns_422(
         self,
-        client: AsyncClient,
+        bff_client: AsyncClient,
     ) -> None:
         """INTEGER (int4) 上限超過 ID は asyncpg overflow 前に 422 で弾く。"""
-        resp = await client.get("/api/v1/articles/3951638051660537759")
+        resp = await bff_client.get("/api/v1/articles/3951638051660537759")
         assert resp.status_code == 422
 
     async def test_get_with_analysis(
         self,
-        client: AsyncClient,
+        bff_client: AsyncClient,
         db_session: AsyncSession,
         sample_source: NewsSource,
         sample_categories: list[Category],
@@ -374,7 +381,7 @@ class TestGetArticle:
             db_session, article, category_id=sample_categories[0].id
         )
 
-        resp = await client.get(f"/api/v1/articles/{analysis.id}")
+        resp = await bff_client.get(f"/api/v1/articles/{analysis.id}")
         data = resp.json()
         assert data["translatedTitle"] == "テスト記事"
         assert data["investorTake"] == "Test investor_take"
@@ -383,7 +390,7 @@ class TestGetArticle:
 
     async def test_detail_exposes_key_point_contents(
         self,
-        client: AsyncClient,
+        bff_client: AsyncClient,
         db_session: AsyncSession,
         sample_source: NewsSource,
         sample_categories: list[Category],
@@ -403,7 +410,7 @@ class TestGetArticle:
             ],
         )
 
-        resp = await client.get(f"/api/v1/articles/{analysis.id}")
+        resp = await bff_client.get(f"/api/v1/articles/{analysis.id}")
         assert resp.status_code == 200
         assert resp.json()["keyPoints"] == [
             "Anthropic が Claude 5 を公開した。",
@@ -412,7 +419,7 @@ class TestGetArticle:
 
     async def test_detail_does_not_expose_mentions(
         self,
-        client: AsyncClient,
+        bff_client: AsyncClient,
         db_session: AsyncSession,
         sample_source: NewsSource,
         sample_categories: list[Category],
@@ -431,13 +438,13 @@ class TestGetArticle:
             ],
         )
 
-        resp = await client.get(f"/api/v1/articles/{analysis.id}")
+        resp = await bff_client.get(f"/api/v1/articles/{analysis.id}")
         assert resp.status_code == 200
         assert "SecretEntity" not in resp.text
 
     async def test_detail_null_key_points_returns_empty_list(
         self,
-        client: AsyncClient,
+        bff_client: AsyncClient,
         db_session: AsyncSession,
         sample_source: NewsSource,
         sample_categories: list[Category],
@@ -451,13 +458,13 @@ class TestGetArticle:
             key_points=None,
         )
 
-        resp = await client.get(f"/api/v1/articles/{analysis.id}")
+        resp = await bff_client.get(f"/api/v1/articles/{analysis.id}")
         assert resp.status_code == 200
         assert resp.json()["keyPoints"] == []
 
     async def test_detail_includes_category(
         self,
-        client: AsyncClient,
+        bff_client: AsyncClient,
         db_session: AsyncSession,
         sample_source: NewsSource,
         sample_categories: list[Category],
@@ -473,7 +480,7 @@ class TestGetArticle:
         # クエリの eager load 経由でしか取得できない状態にする。未 eager load だと
         # async の lazy load が MissingGreenlet を投げ 500 になるのを検出する。
         db_session.expunge_all()
-        resp = await client.get(f"/api/v1/articles/{analysis_id}")
+        resp = await bff_client.get(f"/api/v1/articles/{analysis_id}")
         assert resp.status_code == 200
         assert resp.json()["category"] == {
             "slug": expected_slug,
@@ -500,20 +507,22 @@ EMBEDDING_FAR = _make_embedding(-1.0)
 
 @pytest.mark.asyncio
 class TestSimilarArticles:
-    async def test_nonexistent_article_returns_404(self, client: AsyncClient) -> None:
-        resp = await client.get("/api/v1/articles/99999/similar")
+    async def test_nonexistent_article_returns_404(
+        self, bff_client: AsyncClient
+    ) -> None:
+        resp = await bff_client.get("/api/v1/articles/99999/similar")
         assert resp.status_code == 404
 
     async def test_similar_with_overflowing_id_returns_422(
-        self, client: AsyncClient
+        self, bff_client: AsyncClient
     ) -> None:
         """INTEGER 上限超過 ID は exists_analyzed で overflow 前に 422 で弾く。"""
-        resp = await client.get("/api/v1/articles/3951638051660537759/similar")
+        resp = await bff_client.get("/api/v1/articles/3951638051660537759/similar")
         assert resp.status_code == 422
 
     async def test_article_without_embedding_returns_empty_list(
         self,
-        client: AsyncClient,
+        bff_client: AsyncClient,
         db_session: AsyncSession,
         sample_source: NewsSource,
         sample_categories: list[Category],
@@ -523,13 +532,13 @@ class TestSimilarArticles:
             db_session, article, category_id=sample_categories[0].id
         )
 
-        resp = await client.get(f"/api/v1/articles/{analysis.id}/similar")
+        resp = await bff_client.get(f"/api/v1/articles/{analysis.id}/similar")
         assert resp.status_code == 200
         assert resp.json() == []
 
     async def test_returns_similar_articles_ordered_by_distance(
         self,
-        client: AsyncClient,
+        bff_client: AsyncClient,
         db_session: AsyncSession,
         sample_source: NewsSource,
         sample_categories: list[Category],
@@ -564,7 +573,7 @@ class TestSimilarArticles:
             embedding=EMBEDDING_FAR,
         )
 
-        resp = await client.get(f"/api/v1/articles/{source_analysis.id}/similar")
+        resp = await bff_client.get(f"/api/v1/articles/{source_analysis.id}/similar")
         assert resp.status_code == 200
         items = resp.json()
         assert len(items) == 2
@@ -573,7 +582,7 @@ class TestSimilarArticles:
 
     async def test_excludes_source_article(
         self,
-        client: AsyncClient,
+        bff_client: AsyncClient,
         db_session: AsyncSession,
         sample_source: NewsSource,
         sample_categories: list[Category],
@@ -593,7 +602,7 @@ class TestSimilarArticles:
             db_session, a2, category_id=cat_id, embedding=EMBEDDING_A
         )
 
-        resp = await client.get(f"/api/v1/articles/{a1_analysis.id}/similar")
+        resp = await bff_client.get(f"/api/v1/articles/{a1_analysis.id}/similar")
         items = resp.json()
         returned_ids = [item["id"] for item in items]
         assert a1_analysis.id not in returned_ids
@@ -601,7 +610,7 @@ class TestSimilarArticles:
 
     async def test_respects_limit_parameter(
         self,
-        client: AsyncClient,
+        bff_client: AsyncClient,
         db_session: AsyncSession,
         sample_source: NewsSource,
         sample_categories: list[Category],
@@ -622,7 +631,7 @@ class TestSimilarArticles:
                 db_session, art, category_id=cat_id, embedding=EMBEDDING_B
             )
 
-        resp = await client.get(
+        resp = await bff_client.get(
             f"/api/v1/articles/{source_analysis.id}/similar", params={"limit": 2}
         )
         assert resp.status_code == 200

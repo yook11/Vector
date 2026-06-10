@@ -13,7 +13,7 @@ from fastapi import APIRouter, Depends, HTTPException, Path, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.dependencies import get_optional_user, get_session
+from app.dependencies import get_session, require_bff_request
 from app.insights.briefing.domain.week import latest_completed_week_start, now_in_jst
 from app.insights.briefing.repository.briefings import BriefingRepository
 from app.insights.briefing.schemas.briefing import (
@@ -89,7 +89,7 @@ def _to_category(category: Category) -> _CategoryOut:
     return _CategoryOut(id=category.id, slug=category.slug, name=category.name)
 
 
-@router.get("", dependencies=[Depends(get_optional_user)])
+@router.get("", dependencies=[Depends(require_bff_request)])
 async def list_briefings(
     session: Annotated[AsyncSession, Depends(get_session)],
 ) -> BriefingListResponse:
@@ -138,7 +138,7 @@ async def list_briefings(
 
 @router.get(
     "/{category_slug}",
-    dependencies=[Depends(get_optional_user)],
+    dependencies=[Depends(require_bff_request)],
     responses={404: {"description": "category not found"}},
 )
 async def get_latest_briefing(

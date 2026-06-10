@@ -67,8 +67,10 @@ def _decode_internal_jwt(authorization: str | None) -> dict[str, object] | None:
     token = authorization.removeprefix("Bearer ").strip()
     if not token:
         return None
-    # PyJWT は exp などを既定では必須にしないため、decode 層で claim の
-    # 存在と iss / aud をまとめて検証する。
+    # PyJWT は exp などを既定では必須にしないため、decode 層で BFF 文脈の
+    # claim (exp/iat/iss/aud) の存在をまとめて要求する。sub/role はここでは
+    # 要求せず、user 依存の dependency が _user_from_claims で強制する
+    # (user-less な BFF 経由証明トークンも decode 可能にするため)。
     try:
         return jwt.decode(
             token,
@@ -77,7 +79,7 @@ def _decode_internal_jwt(authorization: str | None) -> dict[str, object] | None:
             audience=_JWT_AUDIENCE,
             issuer=_JWT_ISSUER,
             options={
-                "require": ["exp", "iat", "sub", "role"],
+                "require": ["exp", "iat", "iss", "aud"],
                 "verify_signature": True,
                 "verify_exp": True,
                 "verify_aud": True,
@@ -134,6 +136,23 @@ async def get_admin_user(
     return current_user
 
 
+async def require_bff_request(
+    authorization: Annotated[str | None, Header()] = None,
+) -> None:
+    """BFF が署名した内部 JWT (sig/iss/aud/exp/iat) を検証する guard。
+
+    これは「認証」ではなく BFF 経由証明であり、「正規 BFF から来た」ことだけを
+    保証する。ログイン済みかは保証しない (sub/role は要求しない)。user 非依存の
+    共有 read endpoint が backend 直叩きを閉じるために使う。login ゲートは
+    BFF/Next.js の route guard、user/admin の検証は get_current_user /
+    get_admin_user が担う。"""
+    if _decode_internal_jwt(authorization) is None:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Not authenticated",
+        )
+
+
 def get_redis_client() -> aioredis.Redis:
     """共有 Redis クライアントを返す FastAPI 依存関数。
 
@@ -143,19 +162,3 @@ def get_redis_client() -> aioredis.Redis:
     この Depends に依存する。
     """
     return _get_redis_singleton()
-
-
-async def get_optional_user(
-    authorization: Annotated[str | None, Header()] = None,
-) -> CurrentUser | None:
-    """認証済みなら CurrentUser を返し、そうでなければ None を返す。
-
-    JWT が無い・署名不正・期限切れ・claim 不正のいずれも一律 None。
-    認証必須エンドポイントとは異なり、未認証アクセスを許容する場面で使う。
-    """
-    if authorization is None:
-        return None
-    payload = _decode_internal_jwt(authorization)
-    if payload is None:
-        return None
-    return _user_from_claims(payload)

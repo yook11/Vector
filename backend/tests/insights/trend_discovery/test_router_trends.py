@@ -64,15 +64,15 @@ def _snapshot(window_end: date, *, bundle: dict | None = None) -> TrendsSnapshot
 @pytest.mark.asyncio
 class TestTrendsEndpoint:
     async def test_empty_state_returns_200_with_state_empty(
-        self, client: AsyncClient
+        self, bff_client: AsyncClient
     ) -> None:
-        resp = await client.get("/api/v1/trends")
+        resp = await bff_client.get("/api/v1/trends")
         assert resp.status_code == 200
         assert resp.json() == {"state": "empty"}
 
     async def test_returns_validated_trends_round_trip(
         self,
-        client: AsyncClient,
+        bff_client: AsyncClient,
         db_session: AsyncSession,
     ) -> None:
         """現行 schema に適合する bundle は再検証を通り、値等価のまま返る。
@@ -84,13 +84,13 @@ class TestTrendsEndpoint:
         db_session.add(snap)
         await db_session.commit()
 
-        resp = await client.get("/api/v1/trends")
+        resp = await bff_client.get("/api/v1/trends")
         assert resp.status_code == 200
         assert resp.json() == snap.bundle
 
     async def test_malformed_bundle_propagates_validation_error(
         self,
-        client: AsyncClient,
+        bff_client: AsyncClient,
         db_session: AsyncSession,
     ) -> None:
         """旧 / 不完全 shape の bundle は ValidationError が伝播する (本番 500)。
@@ -106,11 +106,11 @@ class TestTrendsEndpoint:
         await db_session.commit()
 
         with pytest.raises(ValidationError):
-            await client.get("/api/v1/trends")
+            await bff_client.get("/api/v1/trends")
 
     async def test_returns_latest_by_window_end(
         self,
-        client: AsyncClient,
+        bff_client: AsyncClient,
         db_session: AsyncSession,
     ) -> None:
         """複数 snapshot がある場合は window_end DESC で最新 1 件を返す。"""
@@ -118,19 +118,13 @@ class TestTrendsEndpoint:
         db_session.add(_snapshot(date(2026, 5, 3)))
         await db_session.commit()
 
-        resp = await client.get("/api/v1/trends")
+        resp = await bff_client.get("/api/v1/trends")
         assert resp.status_code == 200
         data = resp.json()
         assert data["state"] == "trends"
         assert data["windowEnd"] == "2026-05-03"
 
-    async def test_no_auth_required(
-        self,
-        client: AsyncClient,
-        db_session: AsyncSession,
-    ) -> None:
-        db_session.add(_snapshot(date(2026, 5, 3)))
-        await db_session.commit()
-
+    async def test_requires_bff_proof(self, client: AsyncClient) -> None:
+        """BFF 経由証明の無い直叩きは 401 (login 検証ではなく BFF 経由証明)。"""
         resp = await client.get("/api/v1/trends")
-        assert resp.status_code == 200
+        assert resp.status_code == 401

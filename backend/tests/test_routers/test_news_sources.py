@@ -176,3 +176,14 @@ async def test_missing_auth_headers(
     """Authorization ヘッダーが無い場合は 401 (BFF JWT 未提示)。"""
     response = await client.get("/api/v1/admin/sources")
     assert response.status_code == 401
+
+
+async def test_bff_proof_without_user_rejected(
+    bff_client: AsyncClient,
+) -> None:
+    """BFF 経由証明だけ (sub/role 無し) では admin endpoint は 401。
+
+    get_admin_user は get_current_user を経由するため、user 不在の時点で 401。
+    """
+    response = await bff_client.get("/api/v1/admin/sources")
+    assert response.status_code == 401

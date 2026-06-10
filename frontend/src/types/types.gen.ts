@@ -921,6 +921,12 @@ export type WatchPointOut = {
 
 export type ListArticlesData = {
     body?: never;
+    headers?: {
+        /**
+         * Authorization
+         */
+        authorization?: string | null;
+    };
     path?: never;
     query?: {
         /**
@@ -966,6 +972,12 @@ export type ListArticlesResponse = ListArticlesResponses[keyof ListArticlesRespo
 
 export type GetSimilarArticlesData = {
     body?: never;
+    headers?: {
+        /**
+         * Authorization
+         */
+        authorization?: string | null;
+    };
     path: {
         /**
          * Article Id
@@ -1011,6 +1023,12 @@ export type GetSimilarArticlesResponse = GetSimilarArticlesResponses[keyof GetSi
 
 export type GetArticleData = {
     body?: never;
+    headers?: {
+        /**
+         * Authorization
+         */
+        authorization?: string | null;
+    };
     path: {
         /**
          * Article Id
