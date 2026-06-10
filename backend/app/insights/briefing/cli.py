@@ -43,7 +43,7 @@ from app.insights.briefing.domain.ready import ReadyForBriefing
 from app.insights.briefing.domain.week import latest_completed_week_start, now_in_jst
 from app.insights.briefing.llm import DeepSeekBriefingGenerator
 from app.insights.briefing.repository import BriefingRepository
-from app.insights.briefing.service import WeeklyBriefingService
+from app.insights.briefing.service import BriefingConflict, WeeklyBriefingService
 from app.models.category import Category
 from app.shared.revalidate import NullRevalidateNotifier
 
@@ -141,7 +141,12 @@ async def run(
             continue
 
         outcome = await service.execute(ready)
-        if outcome.persisted:
+        if isinstance(outcome, BriefingConflict):
+            print(
+                f"skipped conflict: week={week_start.isoformat()} "
+                f"category={category.slug} (another worker saved first)"
+            )
+        elif outcome.persisted:
             print(
                 f"generated: week={outcome.week_start.isoformat()} "
                 f"category={category.slug} article_count={outcome.article_count}"

@@ -7,30 +7,37 @@ from datetime import date
 import pytest
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.insights.briefing.domain.briefing import (
+    BriefingChapter,
+    KeyArticle,
+    WatchPoint,
+    WeeklyBriefingContent,
+)
 from app.insights.briefing.repository import BriefingRepository
 from app.models.category import Category
-from app.models.weekly_briefing import WeeklyBriefing
 
 
-def _make(
-    week: date,
-    category_id: int,
+def _content(
     *,
     headline: str = "h1",
     summary: str = "今週の総括",
-    chapters: list[dict] | None = None,
-) -> WeeklyBriefing:
-    return WeeklyBriefing(
-        week_start_date=week,
-        category_id=category_id,
+    chapters: list[BriefingChapter] | None = None,
+) -> WeeklyBriefingContent:
+    """テスト用の最小 WeeklyBriefingContent を組み立てる。"""
+    return WeeklyBriefingContent(
         headline=headline,
         summary=summary,
-        chapters=chapters or [{"heading": "資金とインフラ", "body": "章本文"}],
-        key_articles=[{"article_id": 1, "significance": "なぜ重要か"}],
-        watch_points=[{"statement": "今後どこを見るべきか"}],
-        model_name="test-model",
-        input_article_count=1,
+        chapters=chapters or [BriefingChapter(heading="資金とインフラ", body="章本文")],
+        key_articles=[KeyArticle(article_id=1, significance="なぜ重要か")],
+        watch_points=[WatchPoint(statement="今後どこを見るべきか")],
     )
+
+
+_SAVE_KWARGS: dict = dict(
+    week_start=date(2026, 4, 20),
+    model_name="test-model",
+    input_article_count=1,
+)
 
 
 @pytest.fixture
@@ -48,26 +55,53 @@ class TestSave:
         self, db_session: AsyncSession, category: Category
     ) -> None:
         repo = BriefingRepository(db_session)
-        saved = await repo.save(_make(date(2026, 4, 20), category.id))
+        saved = await repo.save(
+            _content(), category_id=category.id, **_SAVE_KWARGS
+        )
         await db_session.commit()
         assert saved is not None
         assert saved.headline == "h1"
         assert saved.id > 0
 
     @pytest.mark.asyncio
+    async def test_vo_fields_persisted_to_orm_row(
+        self, db_session: AsyncSession, category: Category
+    ) -> None:
+        """save が WeeklyBriefingContent の全フィールドを ORM 行へ写像する。
+
+        VO→行の写像は repository 内部の責務 (service が手組みしない)。
+        """
+        content = _content(headline="mapped", summary="マップ確認")
+        repo = BriefingRepository(db_session)
+        saved = await repo.save(content, category_id=category.id, **_SAVE_KWARGS)
+        await db_session.commit()
+        assert saved is not None
+        assert saved.headline == content.headline
+        assert saved.summary == content.summary
+        assert saved.chapters == [c.model_dump() for c in content.chapters]
+        assert saved.key_articles == [a.model_dump() for a in content.key_articles]
+        assert saved.watch_points == [w.model_dump() for w in content.watch_points]
+        assert saved.model_name == _SAVE_KWARGS["model_name"]
+        assert saved.input_article_count == _SAVE_KWARGS["input_article_count"]
+
+    @pytest.mark.asyncio
     async def test_returns_none_on_conflict_without_force(
         self, db_session: AsyncSession, category: Category
     ) -> None:
         repo = BriefingRepository(db_session)
-        first = await repo.save(_make(date(2026, 4, 20), category.id, headline="v1"))
+        first = await repo.save(
+            _content(headline="v1"), category_id=category.id, **_SAVE_KWARGS
+        )
         await db_session.commit()
         assert first is not None
 
-        second = await repo.save(_make(date(2026, 4, 20), category.id, headline="v2"))
+        second = await repo.save(
+            _content(headline="v2"), category_id=category.id, **_SAVE_KWARGS
+        )
         await db_session.commit()
         assert second is None
 
-        # 既存行は v1 のまま
+        # 既存行は v1 のまま (副作用なし)
         existing = await repo.find_by(
             week_start=date(2026, 4, 20), category_id=category.id
         )
@@ -80,18 +114,15 @@ class TestSave:
     ) -> None:
         repo = BriefingRepository(db_session)
         await repo.save(
-            _make(date(2026, 4, 20), category.id, headline="v1", summary="s1")
+            _content(headline="v1", summary="s1"), category_id=category.id, **_SAVE_KWARGS
         )
         await db_session.commit()
 
+        new_chapters = [BriefingChapter(heading="新章", body="新本文")]
         forced = await repo.save(
-            _make(
-                date(2026, 4, 20),
-                category.id,
-                headline="v2",
-                summary="s2",
-                chapters=[{"heading": "新章", "body": "新本文"}],
-            ),
+            _content(headline="v2", summary="s2", chapters=new_chapters),
+            category_id=category.id,
+            **_SAVE_KWARGS,
             force=True,
         )
         await db_session.commit()
@@ -99,6 +130,32 @@ class TestSave:
         assert forced.headline == "v2"
         assert forced.summary == "s2"
         assert forced.chapters == [{"heading": "新章", "body": "新本文"}]
+
+    @pytest.mark.asyncio
+    async def test_force_updates_generated_at_and_updated_at(
+        self, db_session: AsyncSession, category: Category
+    ) -> None:
+        """force=True の upsert は generated_at / updated_at を NOW() に更新する。"""
+        repo = BriefingRepository(db_session)
+        first = await repo.save(
+            _content(headline="v1"), category_id=category.id, **_SAVE_KWARGS
+        )
+        await db_session.commit()
+        assert first is not None
+        original_generated_at = first.generated_at
+        original_updated_at = first.updated_at
+
+        forced = await repo.save(
+            _content(headline="v2"),
+            category_id=category.id,
+            **_SAVE_KWARGS,
+            force=True,
+        )
+        await db_session.commit()
+        assert forced is not None
+        # force upsert は generated_at / updated_at を更新する
+        assert forced.generated_at >= original_generated_at
+        assert forced.updated_at >= original_updated_at
 
 
 class TestExists:
@@ -117,7 +174,7 @@ class TestExists:
         self, db_session: AsyncSession, category: Category
     ) -> None:
         repo = BriefingRepository(db_session)
-        await repo.save(_make(date(2026, 4, 20), category.id))
+        await repo.save(_content(), category_id=category.id, **_SAVE_KWARGS)
         await db_session.commit()
         assert (
             await repo.exists(week_start=date(2026, 4, 20), category_id=category.id)
@@ -131,8 +188,20 @@ class TestFindLatestByCategory:
         self, db_session: AsyncSession, category: Category
     ) -> None:
         repo = BriefingRepository(db_session)
-        await repo.save(_make(date(2026, 4, 13), category.id, headline="old"))
-        await repo.save(_make(date(2026, 4, 20), category.id, headline="latest"))
+        await repo.save(
+            _content(headline="old"),
+            category_id=category.id,
+            week_start=date(2026, 4, 13),
+            model_name="test-model",
+            input_article_count=1,
+        )
+        await repo.save(
+            _content(headline="latest"),
+            category_id=category.id,
+            week_start=date(2026, 4, 20),
+            model_name="test-model",
+            input_article_count=1,
+        )
         await db_session.commit()
 
         latest = await repo.find_latest_by_category(category_id=category.id)
@@ -168,10 +237,28 @@ class TestFindLatestForEachCategory:
 
         repo = BriefingRepository(db_session)
         # ai: 古い + 新しい
-        await repo.save(_make(date(2026, 4, 13), category.id, headline="ai-old"))
-        await repo.save(_make(date(2026, 4, 20), category.id, headline="ai-latest"))
+        await repo.save(
+            _content(headline="ai-old"),
+            category_id=category.id,
+            week_start=date(2026, 4, 13),
+            model_name="test-model",
+            input_article_count=1,
+        )
+        await repo.save(
+            _content(headline="ai-latest"),
+            category_id=category.id,
+            week_start=date(2026, 4, 20),
+            model_name="test-model",
+            input_article_count=1,
+        )
         # robotics: 1 行のみ
-        await repo.save(_make(date(2026, 4, 13), other.id, headline="robotics-only"))
+        await repo.save(
+            _content(headline="robotics-only"),
+            category_id=other.id,
+            week_start=date(2026, 4, 13),
+            model_name="test-model",
+            input_article_count=1,
+        )
         await db_session.commit()
 
         result = await repo.find_latest_for_each_category()
@@ -192,7 +279,7 @@ class TestFindLatestForEachCategory:
         await db_session.refresh(other)
 
         repo = BriefingRepository(db_session)
-        await repo.save(_make(date(2026, 4, 20), category.id))
+        await repo.save(_content(), category_id=category.id, **_SAVE_KWARGS)
         await db_session.commit()
 
         result = await repo.find_latest_for_each_category()

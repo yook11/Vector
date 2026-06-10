@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from typing import ClassVar
 
 from app.audit.domain.event import Stage
@@ -39,12 +40,21 @@ class BriefingLlmError(BriefingError):
 
 
 class BriefingLlmResponseInvalidError(BriefingError):
-    """LLM 応答が briefing schema / article id 制約に合致しない。"""
+    """LLM 応答が briefing schema / article id 制約に合致しない。
+
+    ``violations`` は「どの field のどの制約が壊れたか」(loc + 制約種別) の列挙。
+    str(exc) に焼き込まれ、audit の error_message からそのまま原因が読める。
+    LLM 出力の値そのものは含めない (untrusted 内容を audit / log へ流さない)。
+    """
 
     CODE: ClassVar[str] = "briefing_generation_llm_response_contract_invalid"
     FAILURE_KIND: ClassVar[str] = "response_invalid"
     RETRYABILITY: ClassVar[Retryability] = Retryability.NON_RETRYABLE
     FAILURE_ACTION: ClassVar[FailureAction | None] = None
 
-    def __init__(self) -> None:
-        super().__init__(self.CODE)
+    violations: tuple[str, ...]
+
+    def __init__(self, *, violations: Sequence[str] = ()) -> None:
+        self.violations = tuple(violations)
+        detail = "; ".join(self.violations)
+        super().__init__(f"{self.CODE}: {detail}" if detail else self.CODE)

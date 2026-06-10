@@ -196,3 +196,104 @@ class TestArticleIdSubsetCheck:
         )
         with pytest.raises(ValidationError, match="999"):
             WeeklyBriefingContent.model_validate(data, context={"input_ids": {1, 2, 3}})
+
+
+def _valid_payload(
+    *,
+    headline: str = "今週のまとめ",
+    article_id: int = 10,
+) -> str:
+    """from_llm_payload テスト用の最小 JSON 文字列。"""
+    import json
+
+    return json.dumps(
+        {
+            "headline": headline,
+            "summary": "今週の総括",
+            "chapters": [{"heading": "見出し", "body": "本文"}],
+            "key_articles": [{"article_id": article_id, "significance": "重要な理由"}],
+            "watch_points": [{"statement": "観察すべき論点"}],
+        }
+    )
+
+
+class TestFromLlmPayload:
+    """WeeklyBriefingContent.from_llm_payload の不変条件。"""
+
+    def test_valid_json_with_matching_input_ids_returns_vo(self) -> None:
+        """正常 JSON + input_ids ⊇ key_articles で VO が返る。"""
+        content = WeeklyBriefingContent.from_llm_payload(
+            _valid_payload(article_id=10), input_ids={10, 20}
+        )
+        assert content.key_articles[0].article_id == 10
+        assert content.headline == "今週のまとめ"
+
+    def test_input_ids_outside_key_articles_raises_validation_error(self) -> None:
+        """key_articles の article_id が input_ids 外のとき ValidationError。
+
+        from_llm_payload を通ると context が必ず渡されるため、
+        捏造 article_id は必ず弾かれる (context 渡し忘れスキップが起きない)。
+        """
+        with pytest.raises(ValidationError, match="999"):
+            WeeklyBriefingContent.from_llm_payload(
+                _valid_payload(article_id=999), input_ids={1, 2}
+            )
+
+    def test_context_is_always_passed_so_hallucination_check_cannot_be_skipped(
+        self,
+    ) -> None:
+        """from_llm_payload を通れば input_ids 検証が必ず実行される。
+
+        context を渡さない model_validate では捏造 id がスルーされるが
+        (test_skips_subset_check_without_context で確認)、from_llm_payload
+        経由では input_ids が必須引数のため同じスキップが構造的に起きない。
+        """
+        # id=42 を input_ids に含めなければ ValidationError になることを確認
+        with pytest.raises(ValidationError):
+            WeeklyBriefingContent.from_llm_payload(
+                _valid_payload(article_id=42), input_ids={1}
+            )
+        # id=42 を含めれば通ることで「from_llm_payload が検証を実行している」を保証
+        result = WeeklyBriefingContent.from_llm_payload(
+            _valid_payload(article_id=42), input_ids={42}
+        )
+        assert result.key_articles[0].article_id == 42
+
+    def test_invalid_json_raises_validation_error(self) -> None:
+        """不正 JSON は ValidationError。"""
+        with pytest.raises(ValidationError):
+            WeeklyBriefingContent.from_llm_payload(
+                "not-json", input_ids={1}
+            )
+
+    def test_missing_required_field_raises_validation_error(self) -> None:
+        """必須フィールド欠落は ValidationError。"""
+        import json
+
+        payload = json.dumps(
+            {
+                # headline を意図的に欠落
+                "summary": "今週の総括",
+                "chapters": [{"heading": "見出し", "body": "本文"}],
+                "key_articles": [{"article_id": 1, "significance": "s"}],
+                "watch_points": [{"statement": "w"}],
+            }
+        )
+        with pytest.raises(ValidationError):
+            WeeklyBriefingContent.from_llm_payload(payload, input_ids={1})
+
+    def test_empty_key_articles_raises_validation_error(self) -> None:
+        """key_articles が空リストは min_length=1 で ValidationError。"""
+        import json
+
+        payload = json.dumps(
+            {
+                "headline": "h",
+                "summary": "s",
+                "chapters": [{"heading": "見出し", "body": "本文"}],
+                "key_articles": [],
+                "watch_points": [{"statement": "w"}],
+            }
+        )
+        with pytest.raises(ValidationError):
+            WeeklyBriefingContent.from_llm_payload(payload, input_ids=set())

@@ -40,7 +40,7 @@ from app.insights.briefing.domain.ready import ReadyForBriefing
 from app.insights.briefing.domain.week import latest_completed_week_start, now_in_jst
 from app.insights.briefing.errors import BriefingError
 from app.insights.briefing.repository import BriefingRepository
-from app.insights.briefing.service import WeeklyBriefingService
+from app.insights.briefing.service import BriefingConflict, WeeklyBriefingService
 from app.models.category import Category
 from app.queue.brokers import broker_briefing
 from app.queue.messages.briefing import BriefingTaskInput
@@ -298,6 +298,15 @@ async def generate_briefing_for_category(
                 )
             await session.commit()
         raise
+    if isinstance(outcome, BriefingConflict):
+        # race 敗北は業務正常 (勝者が SUCCEEDED audit / revalidate を担う)。
+        logger.info(
+            "briefing_subtask_conflict",
+            week_start=outcome.week_start.isoformat(),
+            category_id=outcome.category_id,
+            article_count=outcome.article_count,
+        )
+        return
     logger.info(
         "briefing_subtask_completed",
         week_start=outcome.week_start.isoformat(),

@@ -5,13 +5,14 @@ OpenAI SDK の AsyncOpenAI を ``base_url=https://api.deepseek.com/beta`` で
 Function Calling + ``strict: true`` + inline flat schema で構造化出力を強制。
 
 ハルシネーション検証:
-- ``WeeklyBriefingContent.model_validate`` の context に ``input_ids`` を渡し、
+- ``WeeklyBriefingContent.from_llm_payload`` (input_ids 必須の factory) で
   LLM が捏造した article id を含む応答を構造的に弾く
   (``app/insights/briefing/domain/briefing.py``)。
 
 例外:
 - OpenAI SDK 例外は ``BriefingLlmError`` に wrap して stage marker として伝播
 - 応答 schema 不一致は ``BriefingLlmResponseInvalidError`` に wrap
+  (violations に loc + 制約種別を value-free で焼き込む)
 - API key 未設定は ``BriefingConfigurationError`` で fail-fast
 """
 
@@ -40,6 +41,21 @@ logger = structlog.get_logger(__name__)
 
 _BASE_URL: Final = "https://api.deepseek.com/beta"
 _TOOL_NAME: Final = "submit_weekly_briefing"
+
+
+def _contract_violations(exc: ValidationError) -> list[str]:
+    """ValidationError を「loc: 制約種別」の value-free な列挙へ写像する。
+
+    LLM 出力の値そのものは含めない (untrusted 内容を audit / log へ流さない)。
+    自前 model_validator 由来の value_error は msg を残す (重複 id /
+    input_ids 外 id の整数列挙のみで構築されており value-free)。
+    """
+    violations: list[str] = []
+    for err in exc.errors(include_url=False, include_input=False):
+        loc = ".".join(str(part) for part in err["loc"]) or "<root>"
+        detail = err["msg"] if err["type"] == "value_error" else err["type"]
+        violations.append(f"{loc}: {detail}")
+    return violations
 
 
 BRIEFING_PROMPT = """\
@@ -259,12 +275,13 @@ class DeepSeekBriefingGenerator:
             )
         input_ids = {a.id for a in articles}
         try:
-            return WeeklyBriefingContent.model_validate_json(
-                tool_call.function.arguments,
-                context={"input_ids": input_ids},
+            return WeeklyBriefingContent.from_llm_payload(
+                tool_call.function.arguments, input_ids=input_ids
             )
         except ValidationError as exc:
-            raise BriefingLlmResponseInvalidError() from exc
+            raise BriefingLlmResponseInvalidError(
+                violations=_contract_violations(exc)
+            ) from exc
 
     @staticmethod
     def _format_articles(articles: list[ArticleInput]) -> str:

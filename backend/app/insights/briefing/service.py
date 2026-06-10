@@ -14,6 +14,8 @@ Pattern A' での Stage:
 - 例外は捕まえずに伝播させる (taskiq の retry / failure tracking に委ねる:
   `feedback_failure_visibility.md`)
 - 「articles 0 件」は業務正常状態として ``Outcome.skipped()`` で表現する
+- race 敗北 (force=False で同時 INSERT 競合) は読み戻さず ``BriefingConflict``
+  を返す (trend_discovery と同型)
 """
 
 from __future__ import annotations
@@ -32,7 +34,6 @@ from app.insights.briefing.repository import (
     BriefingRepository,
 )
 from app.models.category import Category
-from app.models.weekly_briefing import WeeklyBriefing
 
 if TYPE_CHECKING:
     # 具象 generator は composition root (broker_briefing hook) が構築し DI で渡す。
@@ -46,7 +47,7 @@ logger = structlog.get_logger(__name__)
 
 @dataclass(frozen=True, slots=True)
 class GeneratedBriefing:
-    """``WeeklyBriefingService.execute`` の戻り値。
+    """briefing を生成・保存した (または articles 0 件で生成スキップした) outcome。
 
     ``persisted=False`` は「articles 0 件で生成スキップ」の正常分岐を表す。
     既存 briefing あり + force=False の skip は ``Ready.try_advance_from`` で
@@ -57,6 +58,18 @@ class GeneratedBriefing:
     week_start: date
     category_id: int
     article_count: int
+
+
+@dataclass(frozen=True, slots=True)
+class BriefingConflict:
+    """同時実行により別 worker が先に保存したため、自 worker は保存しなかった。"""
+
+    week_start: date
+    category_id: int
+    article_count: int
+
+
+BriefingOutcome = GeneratedBriefing | BriefingConflict
 
 
 class WeeklyBriefingService:
@@ -72,7 +85,7 @@ class WeeklyBriefingService:
         self._llm = llm_generator
         self._notifier = notifier
 
-    async def execute(self, ready: ReadyForBriefing) -> GeneratedBriefing:
+    async def execute(self, ready: ReadyForBriefing) -> BriefingOutcome:
         # --- read tx: articles + category 取得 ---
         async with self._session_factory() as session:
             articles = await BriefingArticleRepository(session).fetch(
@@ -114,18 +127,14 @@ class WeeklyBriefingService:
         # --- write tx: UPSERT ---
         async with self._session_factory() as session:
             briefing_repo = BriefingRepository(session)
-            briefing = WeeklyBriefing(
-                week_start_date=ready.week_start,
+            saved = await briefing_repo.save(
+                content,
+                week_start=ready.week_start,
                 category_id=ready.category_id,
-                headline=content.headline,
-                summary=content.summary,
-                chapters=[c.model_dump() for c in content.chapters],
-                key_articles=[a.model_dump() for a in content.key_articles],
-                watch_points=[w.model_dump() for w in content.watch_points],
                 model_name=self._llm.MODEL,
                 input_article_count=len(articles),
+                force=ready.force,
             )
-            saved = await briefing_repo.save(briefing, force=ready.force)
             # audit は INSERT 勝者だけが焼く (saved is None = race 敗北は沈黙、
             # 勝者プロセスが SUCCEEDED を 1 行付ける構造で完成行の重複を防ぐ)。
             # 同 tx atomic で「briefing 行はあるが SUCCEEDED 無し」の偽ギャップ
@@ -137,24 +146,20 @@ class WeeklyBriefingService:
                     ai_model=self._llm.MODEL,
                 )
             await session.commit()
-            if saved is None:
-                # race 敗北 (force=False で他 worker が先行 INSERT): 勝者を読戻す。
-                # race-loss modernization は本 PR スコープ外 (Phase B で
-                # briefing + snapshot まとめて readback / RuntimeError 撤去)。
-                logger.info(
-                    "briefing_concurrent_write",
-                    week_start=ready.week_start.isoformat(),
-                    category_id=ready.category_id,
-                )
-                saved = await briefing_repo.find_by(
-                    week_start=ready.week_start, category_id=ready.category_id
-                )
-                if saved is None:
-                    raise RuntimeError(
-                        "briefing_race_winner_missing: "
-                        f"week_start={ready.week_start.isoformat()} "
-                        f"category_id={ready.category_id}"
-                    )
+
+        if saved is None:
+            # race 敗北 (force=False で他 worker が先行 INSERT): 読み戻さず
+            # Conflict を返す。revalidate 通知は勝者側が行う。
+            logger.info(
+                "briefing_concurrent_write",
+                week_start=ready.week_start.isoformat(),
+                category_id=ready.category_id,
+            )
+            return BriefingConflict(
+                week_start=ready.week_start,
+                category_id=ready.category_id,
+                article_count=len(articles),
+            )
 
         logger.info(
             "briefing_generated",

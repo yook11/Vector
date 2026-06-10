@@ -15,6 +15,7 @@ from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.insights.briefing.domain.article import ArticleInput
+from app.insights.briefing.domain.briefing import WeeklyBriefingContent
 from app.insights.trend_discovery.domain.window import WEEK_TZ
 from app.models.article_curation import ArticleCuration
 from app.models.in_scope_assessment import InScopeAssessment
@@ -125,7 +126,7 @@ class BriefingRepository:
     async def find_by(
         self, *, week_start: date, category_id: int
     ) -> WeeklyBriefing | None:
-        """指定 (week, category) の briefing を取得する (race 読戻し用)。"""
+        """指定 (week, category) の briefing を取得する。"""
         stmt = select(WeeklyBriefing).where(
             WeeklyBriefing.week_start_date == week_start,
             WeeklyBriefing.category_id == category_id,
@@ -134,27 +135,32 @@ class BriefingRepository:
 
     async def save(
         self,
-        briefing: WeeklyBriefing,
+        content: WeeklyBriefingContent,
         *,
+        week_start: date,
+        category_id: int,
+        model_name: str,
+        input_article_count: int,
         force: bool = False,
     ) -> WeeklyBriefing | None:
-        """briefing を ``weekly_briefings`` に永続化する。
+        """検証済み briefing 内容を ``weekly_briefings`` に永続化する。
 
-        id は自動採番なので未設定で渡す。``force=False`` (default) は新規
-        INSERT のみで、race 敗北 (既存あり) は
+        入口を ``WeeklyBriefingContent`` に限定し「domain 検証を通った内容だけが
+        保存される」を型で保証する。VO → 行への写像は本 method の責務。
+        ``force=False`` (default) は新規 INSERT のみで、race 敗北 (既存あり) は
         副作用なしに ``None`` を返す。``force=True`` は既存行を上書きし
         ``generated_at`` / ``updated_at`` を ``NOW()`` に更新する。
         """
         values = {
-            "week_start_date": briefing.week_start_date,
-            "category_id": briefing.category_id,
-            "headline": briefing.headline,
-            "summary": briefing.summary,
-            "chapters": briefing.chapters,
-            "key_articles": briefing.key_articles,
-            "watch_points": briefing.watch_points,
-            "model_name": briefing.model_name,
-            "input_article_count": briefing.input_article_count,
+            "week_start_date": week_start,
+            "category_id": category_id,
+            "headline": content.headline,
+            "summary": content.summary,
+            "chapters": [c.model_dump() for c in content.chapters],
+            "key_articles": [a.model_dump() for a in content.key_articles],
+            "watch_points": [w.model_dump() for w in content.watch_points],
+            "model_name": model_name,
+            "input_article_count": input_article_count,
         }
         if force:
             stmt = (
@@ -163,13 +169,13 @@ class BriefingRepository:
                 .on_conflict_do_update(
                     constraint="uq_weekly_briefing",
                     set_={
-                        "headline": briefing.headline,
-                        "summary": briefing.summary,
-                        "chapters": briefing.chapters,
-                        "key_articles": briefing.key_articles,
-                        "watch_points": briefing.watch_points,
-                        "model_name": briefing.model_name,
-                        "input_article_count": briefing.input_article_count,
+                        "headline": values["headline"],
+                        "summary": values["summary"],
+                        "chapters": values["chapters"],
+                        "key_articles": values["key_articles"],
+                        "watch_points": values["watch_points"],
+                        "model_name": model_name,
+                        "input_article_count": input_article_count,
                         "generated_at": func.now(),
                         "updated_at": func.now(),
                     },

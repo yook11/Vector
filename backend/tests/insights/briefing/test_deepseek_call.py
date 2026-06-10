@@ -153,6 +153,8 @@ async def test_generator_rejects_abnormal_key_article_count_from_llm() -> None:
     AUTH-N4/AUTH-C1 を持たない LLM 暴走 / prompt injection シナリオでも、
     domain VO の Field(max_length=MAX_KEY_ARTICLES_PER_BRIEFING) で巨大 briefing
     が DB に入る前に reject される (red-team F10 二次防衛)。
+    violations に "key_articles" を含む自己記述化メッセージが焼かれることで
+    どの field が上限超だったかが audit から直接読める。
     """
     oversized = {
         "headline": "h",
@@ -164,8 +166,15 @@ async def test_generator_rejects_abnormal_key_article_count_from_llm() -> None:
         ],
         "watch_points": [{"statement": "w"}],
     }
-    with pytest.raises(BriefingLlmResponseInvalidError):
+    with pytest.raises(BriefingLlmResponseInvalidError) as raised:
         await _generate_with_mocked_response(oversized)
+
+    exc = raised.value
+    # violations に "key_articles" フィールドの制約種別が入っている
+    assert any("key_articles" in v for v in exc.violations)
+    # str(exc) も CODE + violations 形式になっている
+    assert exc.CODE in str(exc)
+    assert any("key_articles" in v for v in str(exc).split(exc.CODE + ": ", 1)[-1].split("; "))
 
 
 @pytest.mark.asyncio
@@ -187,7 +196,13 @@ async def test_generator_rejects_abnormal_chapter_count_from_llm() -> None:
 
 @pytest.mark.asyncio
 async def test_generator_rejects_oversize_significance_from_llm() -> None:
-    """LLM が上限超の significance を返したら briefing marker に wrap する。"""
+    """LLM が上限超の significance を返したら briefing marker に wrap する。
+
+    violations は「loc: 制約種別」の value-free な形式で焼かれる。
+    超過した significance 文字列本文 (untrusted content) は violations に
+    含まれず、audit / log へ LLM 出力が素通りしないことを保証する。
+    """
+    oversized_significance = "x" * (MAX_KEY_ARTICLE_SIGNIFICANCE_LEN + 1)
     oversized = {
         "headline": "h",
         "summary": "s",
@@ -195,13 +210,19 @@ async def test_generator_rejects_oversize_significance_from_llm() -> None:
         "key_articles": [
             {
                 "article_id": 1,
-                "significance": "x" * (MAX_KEY_ARTICLE_SIGNIFICANCE_LEN + 1),
+                "significance": oversized_significance,
             }
         ],
         "watch_points": [{"statement": "w"}],
     }
-    with pytest.raises(BriefingLlmResponseInvalidError):
+    with pytest.raises(BriefingLlmResponseInvalidError) as raised:
         await _generate_with_mocked_response(oversized)
+
+    exc = raised.value
+    # violations に significance フィールドの制約種別が入っている
+    assert any("significance" in v for v in exc.violations)
+    # LLM 出力の本文値 (超過文字列) は violations に含まれない (value-free 保証)
+    assert not any(oversized_significance in v for v in exc.violations)
 
 
 @pytest.mark.asyncio
