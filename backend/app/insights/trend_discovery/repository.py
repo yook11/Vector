@@ -1,46 +1,17 @@
-"""トレンド集計の Repository。
+"""トレンド集計と TrendsSnapshot 永続化の Repository。
 
-責務:
-- ``InScopeAssessment.key_points`` JSONB の ``key_points[].mentions[]`` を 2 段
-  ``jsonb_array_elements`` LATERAL で平坦化し、1 カテゴリ × 1 週分の mention を
-  集計し、Trend Discovery BC の VO で返す。
-- 期間境界 ``[current_start, current_end)`` (半開区間) で絞り込む。
-- mention は ``COUNT(DISTINCT in_scope_assessments.id)`` で「同 assessment 内で
-  同 mention が複数 key_point に登場しても 1 件」と数える (記事単位の出現を数える)。
-- 名寄せは SQL 上の ``_match_key_expr`` (連続空白 collapse + trim + lower) で
-  行い、display 名は ``MIN(m->>'surface')`` を採用する (casing は AI 抽出の文脈
-  情報なので DB にはそのまま保存される: feedback_ai_extraction_casing.md)。
-  名寄せキーは書込側 ``normalize_mention_surface`` / ``MentionName.match_key`` と
-  同一規則に揃え、表記揺れによる集計の取りこぼし・count 分裂を防ぐ。
-- ``type`` は Stage 4 AI 境界の ``MentionType`` (6 値 lower) を直接採用する
-  (BC 境界が下流に正規化済値を保証する: feedback_bc_boundary_guarantees_downstream)。
-
-公開クエリ:
-- ``get_ranked_mentions``: floor (``appearance_count >= MIN_CURRENT``) を通過した
-  mention を current/previous 件数つきで返す。ランキング確定 (出現回数 / 伸び率)
-  と hot ゲートは domain の選定関数に委ねるため、並べ替えも hot ゲートもしない。
-- ``get_mention_key_points``: 指定 mention 群について、現週 key_point の content を
-  記事レベル dedup して最大 ``MAX_KEY_POINTS_PER_MENTION`` 本返す。
-- ``get_related_mentions``: 指定 mention 群について、同一 key_point 内で一緒に
-  語られた別 mention を共起記事数つきで返す。
-- ``count_source_analyses``: 現週の analysis 件数 (snapshot メタ情報)。
-
-dedup / top N の選定ポリシーは ``domain.mention_context`` の純関数へ委譲し、本
-モジュールは SQL 実行と Row 詰め替え (不正 legacy・drift 行の skip + warning) まで
-を持つ。
-
-bindparam 衝突対策:
-``_entity_window_subquery`` は ``get_ranked_mentions`` で current_sub と
-previous_sub の 2 回呼ばれ、同じ outer query に組み込まれる。素朴な
-``.bindparams(window_start=...)`` (kwarg 形式) は param 名が衝突して後者で
-上書きされるため、``sa.bindparam(..., unique=True)`` を使って SQLAlchemy が
-自動で suffix を付ける形にしている。
+読取側は ``in_scope_assessments.key_points`` JSONB の ``key_points[].mentions[]``
+を 2 段 LATERAL で平坦化して集計し、Trend Discovery BC の VO で返す。dedup /
+top N の選定ポリシーは ``domain.mention_context`` の純関数へ委譲し、本モジュール
+は SQL 実行と Row 詰め替え (不正 legacy・drift 行の skip + warning) までを持つ。
 """
 
 from __future__ import annotations
 
 from collections.abc import Sequence
-from datetime import datetime
+from dataclasses import dataclass
+from datetime import date, datetime
+from enum import StrEnum
 from typing import cast
 
 import sqlalchemy as sa
@@ -48,6 +19,7 @@ import structlog
 from pgvector.sqlalchemy import HALFVEC
 from pydantic import ValidationError
 from sqlalchemy import and_, func, select, text
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.analysis.assessment.domain.result import MentionType
@@ -64,6 +36,7 @@ from app.insights.trend_discovery.domain.trend import (
     RelatedMention,
 )
 from app.models.in_scope_assessment import InScopeAssessment
+from app.models.trends_snapshot import TrendsSnapshot
 
 logger = structlog.get_logger(__name__)
 
@@ -77,11 +50,8 @@ _VALID_MENTION_TYPES = frozenset(t.value for t in MentionType)
 def _invalid_mention_log_fields(
     error: ValidationError, *, surface: object, type_: object
 ) -> dict[str, object]:
-    """不正 mention skip 時の警告に焼く低 cardinality field (生値は出さない)。
-
-    legacy/drift 行は type も任意文字列になりうるため、生の surface / type は出さず
-    失敗 field 名・各長さ・type の既知判定のみを出す (PII / 高 cardinality を避ける)。
-    """
+    """不正 mention skip 警告用の低 cardinality field (PII / 高 cardinality 回避の
+    ため生の surface / type は出さず、失敗 field 名・長さ・type 既知判定のみ)。"""
     surface_str = surface if isinstance(surface, str) else ""
     type_str = type_ if isinstance(type_, str) else ""
     return {
@@ -92,19 +62,18 @@ def _invalid_mention_log_fields(
     }
 
 
-# ``_match_key_expr`` が SQL へ補間できる JSONB alias の許可リスト。SQL fragment へ
-# 補間される唯一の動的部分なので、外部入力でなく固定リテラルだけを通すゲートにする。
+# ``_match_key_expr`` が SQL へ補間できる alias の許可リスト (補間される唯一の
+# 動的部分を固定リテラルに限定する injection ゲート)。
 _ALLOWED_MENTION_ALIASES = frozenset({"m", "m1", "m2"})
 
 
 def _match_key_expr(alias: str) -> str:
     """mention surface の名寄せキー SQL 式を返す (連続空白 collapse + trim + lower)。
 
-    読取側の名寄せキーを 1 式に集約し、書込側 ``normalize_mention_surface`` と
-    ``MentionName.match_key`` (collapse→strip→lower) に演算順を揃える。NFKC は
-    書込側で確定済みのため SQL では行わない。``alias`` は呼び出し側の固定リテラル
-    のみだが、SQL fragment へ補間される唯一の動的部分なので許可リストで拒否する
-    (``-O`` で剥がれる assert ではなく raise で injection 経路を構造的に封じる)。
+    書込側 ``normalize_mention_surface`` / ``MentionName.match_key`` と同一規則に
+    揃える (NFKC は書込側で確定済み)。``alias`` は SQL fragment へ補間される唯一の
+    動的部分なので、許可リスト外は raise で拒否する (``-O`` で剥がれる assert に
+    しない)。
     """
     if alias not in _ALLOWED_MENTION_ALIASES:
         msg = f"alias must be one of {sorted(_ALLOWED_MENTION_ALIASES)}, got {alias!r}"
@@ -112,6 +81,11 @@ def _match_key_expr(alias: str) -> str:
     return (
         f"lower(btrim(regexp_replace({alias}->>'surface', '[[:space:]]+', ' ', 'g')))"
     )
+
+
+# ---------------------------------------------------------------------------
+# TrendsRepository — トレンド集計の読取
+# ---------------------------------------------------------------------------
 
 
 class TrendsRepository:
@@ -128,16 +102,12 @@ class TrendsRepository:
         current_end: datetime,
         previous_start: datetime,
     ) -> tuple[RankedMention, ...]:
-        """floor (``appearance_count >= MIN_CURRENT``) を通過した mention を返す。
+        """floor (``appearance_count >= MIN_CURRENT``) を通過した全 mention を返す。
 
-        出現回数ランキングと伸び率ランキングは母集団が異なる (出現回数は floor の
-        み・伸び率は floor + hot ゲート) ため、ここでは hot ゲートを掛けず floor の
-        全 mention を返し、ランキング確定と hot ゲートは domain の選定関数
-        (``select_most_mentioned`` / ``select_fastest_growing``) に委ねる。並べ替え
-        もしない (どちらの軸で並べるかは選定関数の責務)。
-
-        不正な display 名 / type の legacy・drift 行は当該 1 件のみ skip し、window
-        全体を落とさない (故障は warning で可視化する)。
+        2 ランキングは母集団が異なるため、hot ゲートも並べ替えもここでは行わず
+        domain の選定関数 (``select_most_mentioned`` / ``select_fastest_growing``)
+        に委ねる。不正な legacy・drift 行は当該 1 件のみ skip + warning し、
+        window 全体を落とさない。
         """
         current_sub = self._entity_window_subquery(
             category_id=category_id,
@@ -277,12 +247,10 @@ class TrendsRepository:
         """指定 mention 群と同一 key_point 内で一緒に語られた別 mention を返す。
 
         同一 key_point 内の mention を 2 回 LATERAL 展開し (m1=anchor / m2=相手)、
-        自己ペアを除き ``COUNT(DISTINCT a.id)`` (一緒に語られた記事数) で集計する。
-        ``shared_article_count >= MIN_SHARED_ARTICLES`` のみ残し、anchor ごとの
-        件数降順 top N 選定は ``select_related_mentions`` に委譲する。不正な共起
-        相手 (legacy・drift 行) は当該 1 件のみ skip し window 全体を落とさない
-        (anchor 側は requested key なので常に正常)。``mention_keys`` が空なら
-        クエリしない。
+        ``COUNT(DISTINCT a.id)`` (一緒に語られた記事数) で集計する。anchor ごとの
+        top N 選定は ``select_related_mentions`` に委譲する。不正な共起相手は当該
+        1 件のみ skip + warning し window 全体を落とさない (anchor 側は requested
+        key 由来で常に正常)。``mention_keys`` が空ならクエリしない。
         """
         if not mention_keys:
             return {}
@@ -378,22 +346,16 @@ class TrendsRepository:
     ):
         """1 期間分の mention 集計 subquery (key_points JSONB 2 段 LATERAL 平坦化)。
 
-        各 (match_key, type) に対して:
-        - ``match_key``: ``_match_key_expr("m")`` (JOIN キー、空白 collapse +
-          casing 揺れ吸収)
-        - ``type``: ``m->>'type'`` (Stage 4 AI 境界の MentionType 6 値 lower を直接採用)
-        - ``display_name``: ``MIN(m->>'surface')`` (display 用の casing 保持代表)
-        - ``cnt``: ``COUNT(DISTINCT a.id)`` (同 assessment 内重複排除)
+        (match_key, type) ごとに ``COUNT(DISTINCT a.id)`` で記事単位の出現数を数え
+        (同 assessment 内の重複 mention は 1 件)、display 名は ``MIN(m->>'surface')``
+        (casing 保持の代表値) を採用する。
 
-        ``jsonb_typeof(...) = 'array'`` の CASE で SQL NULL / JSON null / 非配列値を
-        すべて空配列にフォールバックさせる。LATERAL は WHERE より先に評価されるため
-        ``WHERE key_points IS NOT NULL`` では遮断できず、また SQLAlchemy ``JSONB`` の
-        既定 (``none_as_null=False``) では Python ``None`` が JSON null として
-        書かれることがあり、``jsonb_array_elements`` がスカラーで落ちる。
-        ``key_points = []`` (空配列) は LATERAL が自然に 0 行返すため集計に影響しない。
-
-        bindparam は ``unique=True`` で current / previous 両 subquery を outer query
-        に入れた時に param 名が衝突しないようにする (SQLAlchemy が自動 suffix する)。
+        ``jsonb_typeof(...) = 'array'`` の CASE は SQL NULL / JSON null / 非配列値の
+        空配列フォールバック。LATERAL は WHERE より先に評価されるため ``IS NOT
+        NULL`` では遮断できず、``none_as_null=False`` の既定では Python ``None``
+        が JSON null として書かれうる。bindparam の ``unique=True`` は current /
+        previous 両 subquery を同一 outer query に組むときの param 名衝突回避
+        (SQLAlchemy が自動 suffix)。
         """
         return (
             # 固定リテラル補間 + bindparams のため injection 経路なし。
@@ -443,3 +405,119 @@ def _to_vector(embedding: object) -> list[float] | None:
     if callable(to_list):
         return cast("list[float]", to_list())
     return list(embedding)  # type: ignore[call-overload]
+
+
+# ---------------------------------------------------------------------------
+# SnapshotRepository — TrendsSnapshot の永続化
+# ---------------------------------------------------------------------------
+
+
+class SnapshotSaveStatus(StrEnum):
+    """``SnapshotRepository.save`` の永続化結果。"""
+
+    INSERTED = "inserted"
+    UPDATED = "updated"
+    CONFLICT = "conflict"
+
+
+@dataclass(frozen=True, slots=True)
+class SnapshotSaveResult:
+    """snapshot save の結果。"""
+
+    status: SnapshotSaveStatus
+    snapshot: TrendsSnapshot | None
+
+
+class SnapshotRepository:
+    """``trends_snapshots`` への CRUD をカプセル化する。
+
+    snapshot は 1 集計窓分の bundle を 1 行 1 JSONB として保存する 1 単位保存が
+    責務 (feedback_snapshot_responsibility.md)。
+    """
+
+    def __init__(self, session: AsyncSession) -> None:
+        self._session = session
+
+    async def find_latest(self) -> TrendsSnapshot | None:
+        """最新 (window_end DESC) の snapshot を 1 件返す (なければ None)。"""
+        stmt = (
+            select(TrendsSnapshot).order_by(TrendsSnapshot.window_end.desc()).limit(1)
+        )
+        return (await self._session.execute(stmt)).scalar_one_or_none()
+
+    async def find_by_window_end(self, window_end: date) -> TrendsSnapshot | None:
+        """指定 ``window_end`` の snapshot を取得する (PK lookup)。"""
+        return await self._session.get(TrendsSnapshot, window_end)
+
+    async def exists_for_window_end(self, window_end: date) -> bool:
+        """`try_advance_from` 用 cheap exists 判定 (window_end 単位)。"""
+        stmt = (
+            select(TrendsSnapshot.window_end)
+            .where(TrendsSnapshot.window_end == window_end)
+            .limit(1)
+        )
+        return (await self._session.execute(stmt)).first() is not None
+
+    async def save(
+        self,
+        snapshot: TrendsSnapshot,
+        *,
+        force: bool = False,
+    ) -> SnapshotSaveResult:
+        """snapshot を ``trends_snapshots`` に永続化する (commit は呼び出し側の責務)。
+
+        ``force=False`` (default) は新規 INSERT のみで、衝突時は副作用なしに
+        ``CONFLICT`` (``snapshot=None``) を返す。``force=True`` は既存行を上書きし、
+        ``generated_at`` も呼び出し側確定値で更新する (手動再生成経路)。
+        """
+        existed = False
+        if force:
+            existed = await self.exists_for_window_end(snapshot.window_end)
+            stmt = (
+                pg_insert(TrendsSnapshot)
+                .values(
+                    window_end=snapshot.window_end,
+                    bundle=snapshot.bundle,
+                    source_analysis_count=snapshot.source_analysis_count,
+                    generated_at=snapshot.generated_at,
+                )
+                .on_conflict_do_update(
+                    index_elements=["window_end"],
+                    set_={
+                        "bundle": snapshot.bundle,
+                        "source_analysis_count": snapshot.source_analysis_count,
+                        "generated_at": snapshot.generated_at,
+                    },
+                )
+                .returning(TrendsSnapshot.window_end)
+            )
+        else:
+            stmt = (
+                pg_insert(TrendsSnapshot)
+                .values(
+                    window_end=snapshot.window_end,
+                    bundle=snapshot.bundle,
+                    source_analysis_count=snapshot.source_analysis_count,
+                    generated_at=snapshot.generated_at,
+                )
+                .on_conflict_do_nothing(index_elements=["window_end"])
+                .returning(TrendsSnapshot.window_end)
+            )
+        row = (await self._session.execute(stmt)).first()
+        if row is None:
+            return SnapshotSaveResult(
+                status=SnapshotSaveStatus.CONFLICT,
+                snapshot=None,
+            )
+        saved = TrendsSnapshot(
+            window_end=row.window_end,
+            bundle=snapshot.bundle,
+            source_analysis_count=snapshot.source_analysis_count,
+            generated_at=snapshot.generated_at,
+        )
+        status = (
+            SnapshotSaveStatus.UPDATED
+            if force and existed
+            else SnapshotSaveStatus.INSERTED
+        )
+        return SnapshotSaveResult(status=status, snapshot=saved)

@@ -3,14 +3,14 @@
 使い方::
 
     # 当日 (JST 0:00 上限) の rolling 7d window を実行 (= cron 相当)
-    uv run python -m app.insights.trend_discovery.cli.run_trend_discovery
+    uv run python -m app.insights.trend_discovery.cli
 
     # 指定 window_end (任意の JST 日付) を実行
-    uv run python -m app.insights.trend_discovery.cli.run_trend_discovery \
+    uv run python -m app.insights.trend_discovery.cli \
         --window-end=2026-05-01
 
     # 既存 snapshot を上書きで再実行
-    uv run python -m app.insights.trend_discovery.cli.run_trend_discovery \
+    uv run python -m app.insights.trend_discovery.cli \
         --window-end=2026-05-01 --force
 
 CLI は FastAPI DI とは独立した自前の ``async_sessionmaker`` を組み立てて
@@ -42,16 +42,16 @@ from app.audit.stages.trend_discovery import (
 )
 from app.config import settings
 from app.db_ssl import create_app_engine
-from app.insights.trend_discovery.application.service import (
+from app.insights.trend_discovery.domain.ready import ReadyForTrendDiscovery
+from app.insights.trend_discovery.domain.window import latest_window_end, now_in_jst
+from app.insights.trend_discovery.repository import SnapshotRepository
+from app.insights.trend_discovery.service import (
     TRENDS_REVALIDATE_TAGS,
     SkippedNoTargetArticles,
     TrendDiscoveryCompleted,
     TrendDiscoveryConflict,
     TrendDiscoveryService,
 )
-from app.insights.trend_discovery.domain.ready import ReadyForTrendDiscovery
-from app.insights.trend_discovery.domain.window import latest_window_end, now_in_jst
-from app.insights.trend_discovery.repository.snapshots import SnapshotRepository
 from app.shared.revalidate import FrontendRevalidateNotifier, RevalidateNotifier
 
 _WINDOW = timedelta(days=7)
@@ -217,7 +217,7 @@ def _window_start(window_end: date) -> date:
 def main(argv: Sequence[str] | None = None) -> int:
     """CLI エントリーポイント。
 
-    ``-m app.insights.trend_discovery.cli.run_trend_discovery`` から呼ばれる。
+    ``-m app.insights.trend_discovery.cli`` から呼ばれる。
     """
     parser = build_parser()
     args = parser.parse_args(argv)

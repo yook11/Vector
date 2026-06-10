@@ -39,12 +39,12 @@ from app.insights.trend_discovery.domain.trend import (
     select_most_mentioned,
 )
 from app.insights.trend_discovery.domain.window import WEEK_TZ
-from app.insights.trend_discovery.repository.snapshots import (
+from app.insights.trend_discovery.repository import (
     SnapshotRepository,
     SnapshotSaveStatus,
+    TrendsRepository,
 )
-from app.insights.trend_discovery.repository.trends import TrendsRepository
-from app.insights.trend_discovery.schemas.trends import trends_from_snapshot
+from app.insights.trend_discovery.schemas import trends_from_snapshot
 from app.models.category import Category
 from app.models.trends_snapshot import TrendsSnapshot
 

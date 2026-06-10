@@ -30,16 +30,16 @@ from app.audit.stages.trend_discovery import (
     append_trend_discovery_run_event_best_effort,
 )
 from app.config import settings
-from app.insights.trend_discovery.application.service import (
+from app.insights.trend_discovery.domain.ready import ReadyForTrendDiscovery
+from app.insights.trend_discovery.domain.window import latest_window_end, now_in_jst
+from app.insights.trend_discovery.repository import SnapshotRepository
+from app.insights.trend_discovery.service import (
     TRENDS_REVALIDATE_TAGS,
     SkippedNoTargetArticles,
     TrendDiscoveryCompleted,
     TrendDiscoveryConflict,
     TrendDiscoveryService,
 )
-from app.insights.trend_discovery.domain.ready import ReadyForTrendDiscovery
-from app.insights.trend_discovery.domain.window import latest_window_end, now_in_jst
-from app.insights.trend_discovery.repository.snapshots import SnapshotRepository
 from app.queue.brokers import broker_trend_discovery
 from app.queue.schedule import CRON_TREND_DISCOVERY
 from app.shared.revalidate import FrontendRevalidateNotifier

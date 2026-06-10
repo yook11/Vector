@@ -21,14 +21,14 @@ import pytest
 
 from app.audit.domain.event import EventType
 from app.audit.stages.trend_discovery import TrendDiscoveryOutcomeCode
-from app.insights.trend_discovery.application.service import (
+from app.insights.trend_discovery.cli import build_parser, run
+from app.insights.trend_discovery.domain.ready import ReadyForTrendDiscovery
+from app.insights.trend_discovery.service import (
     TRENDS_REVALIDATE_TAGS,
     SkippedNoTargetArticles,
     TrendDiscoveryCompleted,
     TrendDiscoveryConflict,
 )
-from app.insights.trend_discovery.cli.run_trend_discovery import build_parser, run
-from app.insights.trend_discovery.domain.ready import ReadyForTrendDiscovery
 
 JST = ZoneInfo("Asia/Tokyo")
 
@@ -132,7 +132,7 @@ class TestRun:
 
         with (
             patch(
-                "app.insights.trend_discovery.cli.run_trend_discovery.now_in_jst",
+                "app.insights.trend_discovery.cli.now_in_jst",
                 return_value=datetime(2026, 5, 3, 0, 5, tzinfo=JST),
             ),
             patch.object(
@@ -141,7 +141,7 @@ class TestRun:
                 new=AsyncMock(return_value=ready),
             ) as advance,
             patch(
-                "app.insights.trend_discovery.cli.run_trend_discovery."
+                "app.insights.trend_discovery.cli."
                 "append_trend_discovery_run_event_best_effort",
                 new=AsyncMock(),
             ) as audit,
@@ -192,7 +192,7 @@ class TestRun:
                 new=AsyncMock(return_value=ready),
             ) as advance,
             patch(
-                "app.insights.trend_discovery.cli.run_trend_discovery."
+                "app.insights.trend_discovery.cli."
                 "append_trend_discovery_run_event_best_effort",
                 new=AsyncMock(),
             ),
@@ -228,7 +228,7 @@ class TestRun:
                 new=AsyncMock(return_value=ready),
             ) as advance,
             patch(
-                "app.insights.trend_discovery.cli.run_trend_discovery."
+                "app.insights.trend_discovery.cli."
                 "append_trend_discovery_run_event_best_effort",
                 new=AsyncMock(),
             ) as audit,
@@ -261,7 +261,7 @@ class TestRun:
                 new=AsyncMock(return_value=None),
             ),
             patch(
-                "app.insights.trend_discovery.cli.run_trend_discovery."
+                "app.insights.trend_discovery.cli."
                 "append_trend_discovery_run_event_best_effort",
                 new=AsyncMock(),
             ) as audit,
@@ -300,7 +300,7 @@ class TestRun:
                 new=AsyncMock(return_value=ready),
             ),
             patch(
-                "app.insights.trend_discovery.cli.run_trend_discovery."
+                "app.insights.trend_discovery.cli."
                 "append_trend_discovery_run_event_best_effort",
                 new=AsyncMock(),
             ) as audit,
@@ -342,7 +342,7 @@ class TestRun:
                 new=AsyncMock(return_value=ready),
             ),
             patch(
-                "app.insights.trend_discovery.cli.run_trend_discovery."
+                "app.insights.trend_discovery.cli."
                 "append_trend_discovery_run_event_best_effort",
                 new=AsyncMock(),
             ) as audit,
@@ -381,7 +381,7 @@ class TestRun:
                 new=AsyncMock(return_value=ready),
             ),
             patch(
-                "app.insights.trend_discovery.cli.run_trend_discovery."
+                "app.insights.trend_discovery.cli."
                 "append_trend_discovery_run_event_best_effort",
                 new=AsyncMock(),
             ) as audit,
@@ -411,7 +411,7 @@ class TestRun:
                 new=AsyncMock(side_effect=RuntimeError("ready failed")),
             ),
             patch(
-                "app.insights.trend_discovery.cli.run_trend_discovery."
+                "app.insights.trend_discovery.cli."
                 "append_trend_discovery_run_event_best_effort",
                 new=AsyncMock(),
             ) as audit,

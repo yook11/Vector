@@ -1,7 +1,7 @@
 """Trend Discovery BC — rolling 7d trend discovery と weekly trends read model。
 
-公開 API は各サブモジュール (``config``, ``domain``, ``repository``,
-``application``, ``tasks``, ``cli``) から直接 import する。
+公開 API は各モジュール (``domain``, ``repository``, ``service``, ``query``,
+``schemas``, ``router``, ``cli``) から直接 import する。
 
 本 ``__init__.py`` を重い re-export ハブにすると、
 ``app.insights.trend_discovery.domain.*`` をサブパッケージ経由で読むだけで

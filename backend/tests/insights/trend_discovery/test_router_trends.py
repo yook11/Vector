@@ -24,7 +24,7 @@ from app.insights.trend_discovery.domain.trend import (
     RankedMention,
     TrendsBundle,
 )
-from app.insights.trend_discovery.schemas.trends import trends_from_snapshot
+from app.insights.trend_discovery.schemas import trends_from_snapshot
 from app.models.trends_snapshot import TrendsSnapshot
 
 

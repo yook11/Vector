@@ -16,7 +16,7 @@ from datetime import UTC, date, datetime, timedelta
 import pytest
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from app.insights.trend_discovery.repository.snapshots import (
+from app.insights.trend_discovery.repository import (
     SnapshotRepository,
     SnapshotSaveResult,
     SnapshotSaveStatus,

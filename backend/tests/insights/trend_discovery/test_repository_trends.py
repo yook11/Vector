@@ -30,7 +30,7 @@ from structlog.testing import capture_logs
 
 from app.insights.trend_discovery.domain.mention_name import MentionName
 from app.insights.trend_discovery.domain.trend import MIN_CURRENT
-from app.insights.trend_discovery.repository.trends import (
+from app.insights.trend_discovery.repository import (
     TrendsRepository,
     _match_key_expr,
 )

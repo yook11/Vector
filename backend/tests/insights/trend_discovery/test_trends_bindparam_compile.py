@@ -21,7 +21,7 @@ from zoneinfo import ZoneInfo
 from sqlalchemy import select
 from sqlalchemy.dialects import postgresql
 
-from app.insights.trend_discovery.repository.trends import TrendsRepository
+from app.insights.trend_discovery.repository import TrendsRepository
 
 JST = ZoneInfo("Asia/Tokyo")
 

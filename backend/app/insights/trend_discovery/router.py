@@ -20,8 +20,8 @@ from fastapi import APIRouter, Depends
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.dependencies import get_session, require_bff_request
-from app.insights.trend_discovery.application.query import TrendsQueryService
-from app.insights.trend_discovery.schemas.trends import (
+from app.insights.trend_discovery.query import TrendsQueryService
+from app.insights.trend_discovery.schemas import (
     Trends,
     TrendsResponse,
     empty_trends,

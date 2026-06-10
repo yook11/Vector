@@ -15,7 +15,7 @@ from app.insights.trend_discovery.domain.trend import (
     RelatedMention,
     TrendsBundle,
 )
-from app.insights.trend_discovery.schemas.trends import (
+from app.insights.trend_discovery.schemas import (
     empty_trends,
     trends_from_snapshot,
 )

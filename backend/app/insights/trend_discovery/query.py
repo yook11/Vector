@@ -15,7 +15,7 @@ from __future__ import annotations
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.insights.trend_discovery.repository.snapshots import SnapshotRepository
+from app.insights.trend_discovery.repository import SnapshotRepository
 from app.models.trends_snapshot import TrendsSnapshot
 
 

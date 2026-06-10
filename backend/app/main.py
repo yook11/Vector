@@ -26,7 +26,7 @@ from app.exception_handlers import (
 )
 from app.exceptions import DuplicateError, InvalidQueryError, NotFoundError
 from app.insights.briefing.router.briefing import router as briefing_router
-from app.insights.trend_discovery.router.trends import (
+from app.insights.trend_discovery.router import (
     router as trends_router,
 )
 from app.logfire.db_pool import log_pool_initialized, register_pool_metrics

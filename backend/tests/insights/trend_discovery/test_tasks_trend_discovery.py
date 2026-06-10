@@ -18,13 +18,13 @@ import pytest
 
 from app.audit.domain.event import EventType
 from app.audit.stages.trend_discovery import TrendDiscoveryOutcomeCode
-from app.insights.trend_discovery.application.service import (
+from app.insights.trend_discovery.domain.ready import ReadyForTrendDiscovery
+from app.insights.trend_discovery.service import (
     TRENDS_REVALIDATE_TAGS,
     SkippedNoTargetArticles,
     TrendDiscoveryCompleted,
     TrendDiscoveryConflict,
 )
-from app.insights.trend_discovery.domain.ready import ReadyForTrendDiscovery
 
 JST = ZoneInfo("Asia/Tokyo")
 

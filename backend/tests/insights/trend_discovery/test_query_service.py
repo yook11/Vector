@@ -12,9 +12,9 @@ from datetime import UTC, date, datetime
 import pytest
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.insights.trend_discovery.application.query import TrendsQueryService
 from app.insights.trend_discovery.domain.trend import TrendsBundle
-from app.insights.trend_discovery.schemas.trends import trends_from_snapshot
+from app.insights.trend_discovery.query import TrendsQueryService
+from app.insights.trend_discovery.schemas import trends_from_snapshot
 from app.models.trends_snapshot import TrendsSnapshot
 
 

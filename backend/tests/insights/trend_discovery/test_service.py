@@ -32,21 +32,21 @@ import pytest
 from pydantic import TypeAdapter
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from app.insights.trend_discovery.application.service import (
+from app.insights.trend_discovery.domain.ready import ReadyForTrendDiscovery
+from app.insights.trend_discovery.domain.trend import MIN_CURRENT, TOP_N_PER_RANKING
+from app.insights.trend_discovery.repository import (
+    SnapshotRepository,
+    SnapshotSaveResult,
+    SnapshotSaveStatus,
+    TrendsRepository,
+)
+from app.insights.trend_discovery.schemas import TrendsResponse
+from app.insights.trend_discovery.service import (
     SkippedNoTargetArticles,
     TrendDiscoveryCompleted,
     TrendDiscoveryConflict,
     TrendDiscoveryService,
 )
-from app.insights.trend_discovery.domain.ready import ReadyForTrendDiscovery
-from app.insights.trend_discovery.domain.trend import MIN_CURRENT, TOP_N_PER_RANKING
-from app.insights.trend_discovery.repository.snapshots import (
-    SnapshotRepository,
-    SnapshotSaveResult,
-    SnapshotSaveStatus,
-)
-from app.insights.trend_discovery.repository.trends import TrendsRepository
-from app.insights.trend_discovery.schemas.trends import TrendsResponse
 from app.models.category import Category
 
 from .conftest import SeedAnalysis
