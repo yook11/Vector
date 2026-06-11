@@ -40,9 +40,6 @@ def _notifier_mock() -> MagicMock:
     return notifier
 
 
-# Fake service / session_factory
-
-
 @dataclass
 class _FakeCalls:
     executed: list[ReadyForTrendDiscovery] = field(default_factory=list)
@@ -81,9 +78,6 @@ def _fake_session_factory() -> MagicMock:
     session_ctx.__aenter__ = AsyncMock(return_value=session)
     session_ctx.__aexit__ = AsyncMock(return_value=None)
     return MagicMock(return_value=session_ctx)
-
-
-# build_parser
 
 
 class TestBuildParser:

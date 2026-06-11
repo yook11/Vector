@@ -44,9 +44,6 @@ def _isolate_env(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
     monkeypatch.setenv("REVALIDATE_BEARER_SECRET", _VALID_REVALIDATE_SECRET)
 
 
-# --- 必須 URL settings の fail-fast -----------------------------------------
-
-
 def test_settings_construct_with_all_required_env() -> None:
     """全 required env が valid なら Settings 構築が成功する (baseline)。"""
     s = Settings()
@@ -111,9 +108,6 @@ def test_settings_no_longer_has_backend_url_field() -> None:
     assert not hasattr(s, "backend_url")
 
 
-# --- 内部 secret の強度検査 / 同一値拒否 ------------------------------------
-
-
 def test_strong_new_secrets_are_accepted() -> None:
     """64 文字 hex (openssl rand -hex 32 の出力長) の新 secret は両方 OK。"""
     s = Settings()
@@ -163,8 +157,6 @@ def test_reject_when_secrets_equal() -> None:
         )
 
 
-# --- internal_frontend_base_url の宛先 allowlist -----------------------------
-#
 # notifier (FrontendRevalidateNotifier) は SSRF guard をバイパスして
 # REVALIDATE_BEARER_SECRET を Bearer 送信するため、宛先が攻撃者制御に向くと
 # secret 持ち出し経路になる。
@@ -233,8 +225,6 @@ def test_internal_frontend_base_url_accepts_flycast_in_production() -> None:
     assert s.internal_frontend_base_url == _VALID_FLYCAST_URL
 
 
-# --- production DB URL の SSL 強制 (_require_ssl_in_production) ----------------
-#
 # Neon は public internet 越しの接続のため、production では DB 接続文字列に TLS
 # sslmode (require / verify-ca / verify-full) を要求する。dev は docker 同一
 # network の平文で良いので何も強制しない。
@@ -288,12 +278,10 @@ def test_development_allows_database_url_without_sslmode(
 ) -> None:
     """development では sslmode 無し DATABASE_URL でも起動できる (docker 平文)。"""
     monkeypatch.setenv("DATABASE_URL", _NEON_DB_URL_NO_SSL)
-    s = Settings()  # env は default の development
+    s = Settings()
     assert s.database_url == _NEON_DB_URL_NO_SSL
 
 
-# --- application role password の任意設定 (権限境界テスト用 settings 経由読取) -----
-#
 # postgres_collect_password は本番 runtime では単体 password としては読まず、
 # test_db_user_isolation の guard 統合テストが os.environ 直読みを避けて settings
 # 経由で vector_collect 接続を張るためだけに存在する。未設定なら None で guard が

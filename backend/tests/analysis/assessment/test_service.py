@@ -59,9 +59,6 @@ from tests.logfire._span_helpers import stage_attrs
 _AI_MODEL = "gemini-2.5-flash-lite"
 
 
-# Helpers (test_assessment_audit_repository.py と同じ pattern)
-
-
 async def _make_article(
     db_session: AsyncSession,
     sample_source: NewsSource,
@@ -156,9 +153,6 @@ async def _fetch_assessment_events(
     return list((await db_session.execute(stmt)).scalars().all())
 
 
-# 成功経路: 業務 INSERT と同 tx で audit 1 行
-
-
 @pytest.mark.asyncio
 async def test_in_scope_success_records_audit(
     db_session: AsyncSession,
@@ -232,9 +226,6 @@ async def test_out_of_scope_success_records_audit(
     assert persisted.summary == extraction.summary
 
 
-# race lost: audit を焼かない (actor SSoT)
-
-
 @pytest.mark.asyncio
 async def test_race_lost_does_not_record_audit(
     db_session: AsyncSession,
@@ -273,12 +264,8 @@ async def test_race_lost_does_not_record_audit(
         result = await svc.execute(_ready(extraction), assessor)
 
     assert result is None
-    # race lost 経路では audit 行はゼロ (actor SSoT を assert)
     events = await _fetch_assessment_events(db_session, article.id)
     assert len(events) == 0
-
-
-# ACL boundary: AIProviderError → Stage 4 marker wrap
 
 
 @pytest.mark.asyncio
@@ -330,9 +317,6 @@ async def test_provider_configuration_error_is_wrapped_to_terminal_marker(
     assert excinfo.value.failure_kind == "operator_action_required"
 
 
-# enum↔DB 不整合: catalog 未登録 slug → CategoryEnumDatabaseMismatchError
-
-
 @pytest.mark.asyncio
 async def test_unknown_category_raises_enum_db_mismatch(
     db_session: AsyncSession,
@@ -381,9 +365,6 @@ async def test_unknown_category_does_not_record_audit_in_service(
     assert len(events) == 0
 
 
-# 同 tx 性: 業務 INSERT が rollback されると audit も焼かれない
-
-
 @pytest.mark.asyncio
 async def test_audit_rolled_back_when_commit_fails(
     db_session: AsyncSession,
@@ -427,9 +408,6 @@ async def test_audit_rolled_back_when_commit_fails(
     assert len(rows) == 0
 
 
-# Race lost on out-of-scope path
-
-
 @pytest.mark.asyncio
 async def test_out_of_scope_race_lost_does_not_record_audit(
     db_session: AsyncSession,
@@ -460,9 +438,6 @@ async def test_out_of_scope_race_lost_does_not_record_audit(
     assert result is None
     events = await _fetch_assessment_events(db_session, article.id)
     assert len(events) == 0
-
-
-# article_stage span: 実 Service が各分岐で result 語彙を焼く正本
 
 
 @pytest.mark.asyncio

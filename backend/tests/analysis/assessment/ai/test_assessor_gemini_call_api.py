@@ -61,9 +61,6 @@ def _patch_assessor_call(assessor: GeminiAssessor, response: MagicMock) -> Async
     return mock_call
 
 
-# Round trip: in-scope / out-of-scope
-
-
 class TestGeminiCallApiSuccess:
     @pytest.mark.asyncio
     async def test_in_scope_round_trip(self) -> None:

@@ -24,8 +24,6 @@ from redis.exceptions import ConnectionError as RedisConnectionError
 
 from app.queue.helpers.stage_hold import set_curation_hold
 
-# ヘルパー
-
 
 def _find_metric(metrics: list[dict[str, Any]], name: str) -> dict[str, Any] | None:
     """metric dump から指定 name の metric を取り出す。"""
@@ -40,9 +38,6 @@ def _sum_value(metric: dict[str, Any]) -> int:
 def _attributes_for(metric: dict[str, Any]) -> list[dict[str, Any]]:
     """metric の全 data_points の attribute dict を集める。"""
     return [dp.get("attributes", {}) for dp in metric["data"]["data_points"]]
-
-
-# hold_set counter
 
 
 @pytest.mark.asyncio
@@ -89,9 +84,6 @@ async def test_set_curation_hold_does_not_record_failed_counter_on_success(
     # 未 record の場合 metric 自体が dump に出ないか、出ても 0
     if failed is not None:
         assert _sum_value(failed) == 0
-
-
-# hold_set_failed counter
 
 
 @pytest.mark.asyncio

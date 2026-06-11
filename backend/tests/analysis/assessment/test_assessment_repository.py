@@ -105,9 +105,6 @@ def _out_of_scope_call(
     )
 
 
-# save_out_of_scope
-
-
 @pytest.mark.asyncio
 async def test_save_out_of_scope_persists_snapshot_fields(
     db_session: AsyncSession,
@@ -179,9 +176,6 @@ async def test_save_out_of_scope_returns_none_on_race_lost(
     assert row.translated_title == "勝者タイトル"
     assert row.summary == "勝者要約"
     assert row.investor_take == "winner take"
-
-
-# save_in_scope
 
 
 @pytest.mark.asyncio
@@ -388,9 +382,6 @@ async def test_save_in_scope_raises_when_category_unknown(
             ready=_ready(extraction),
         )
     assert excinfo.value.missing == {"ai"}
-
-
-# Ready 構築用 DB 事実取得
 
 
 @pytest.mark.asyncio

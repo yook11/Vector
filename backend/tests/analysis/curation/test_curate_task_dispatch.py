@@ -303,9 +303,6 @@ async def test_unexpected_exception_delegates_to_handler() -> None:
     assert isinstance(handler_handle.await_args.kwargs["exc"], ValueError)
 
 
-# article_stage span: service 例外経路は reraise 有無に関わらず result=failed
-
-
 @pytest.mark.parametrize("reraise", [True, False])
 @pytest.mark.asyncio
 async def test_service_exception_sets_failed_result(

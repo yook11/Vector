@@ -21,12 +21,9 @@ from app.db_ssl import (
     split_ssl_from_url,
 )
 
-# verify-full で繋ぐ Neon 風 URL (実接続はしない)。
 _NEON = "postgresql+asyncpg://vector_app:strongpass@ep-x.ap-southeast-1.aws.neon.tech/neondb"
-# sslmode を持たない dev (docker) 風 URL。
 _DEV = "postgresql+asyncpg://vector_app:strongpass@db:5432/vector"
 
-# split_ssl_from_url が URL から剥がす ssl 系 param (production 由来の表面)。
 _STRIPPED_PARAMS = (
     "sslmode",
     "channel_binding",
@@ -42,7 +39,6 @@ class TestSplitSslFromUrl:
     """接続文字列 → (clean_url, connect_args) 分解の不変条件。"""
 
     def test_sslmode_require_enables_ssl_and_strips_param(self) -> None:
-        # sslmode=require → connect_args に ssl、clean_url から sslmode 消失
         clean_url, connect_args = split_ssl_from_url(f"{_NEON}?sslmode=require")
         assert "ssl" in connect_args
         assert "sslmode" not in make_url(clean_url).query
@@ -55,17 +51,14 @@ class TestSplitSslFromUrl:
         assert "channel_binding" not in make_url(clean_url).query
 
     def test_no_sslmode_disables_ssl(self) -> None:
-        # sslmode 無し (dev / docker) は SSL 無効 = connect_args 空
         _, connect_args = split_ssl_from_url(_DEV)
         assert connect_args == {}
 
     def test_sslmode_disable_disables_ssl(self) -> None:
-        # sslmode=disable は明示的に SSL を無効化する
         _, connect_args = split_ssl_from_url(f"{_DEV}?sslmode=disable")
         assert connect_args == {}
 
     def test_non_ssl_query_is_preserved(self) -> None:
-        # ssl 系以外の query (中立 param) は clean_url に保持する
         clean_url, _ = split_ssl_from_url(f"{_DEV}?foo=bar")
         assert make_url(clean_url).query.get("foo") == "bar"
 
@@ -78,7 +71,6 @@ class TestSplitSslFromUrl:
         assert ctx.verify_mode == ssl.CERT_REQUIRED
 
     def test_scheme_is_preserved(self) -> None:
-        # postgresql+asyncpg:// prefix を壊さない (dialect+driver 維持)
         clean_url, _ = split_ssl_from_url(f"{_NEON}?sslmode=require")
         assert clean_url.startswith("postgresql+asyncpg://")
 
@@ -94,13 +86,11 @@ class TestSplitSslFromUrl:
         ],
     )
     def test_ssl_family_params_are_stripped(self, param_kv: str) -> None:
-        # sslmode と併記された各 ssl 系 param が入力に在り、出力で消えること
-        # (非空虚: 入力に在ることも assert)。
         key = param_kv.split("=", 1)[0]
         raw = f"{_NEON}?sslmode=require&{param_kv}"
-        assert key in make_url(raw).query  # 入力に在る
+        assert key in make_url(raw).query
         clean_url, _ = split_ssl_from_url(raw)
-        assert key not in make_url(clean_url).query  # 出力で消える
+        assert key not in make_url(clean_url).query
 
     @pytest.mark.parametrize(
         "bad_url",
@@ -117,7 +107,6 @@ class TestSplitSslFromUrl:
             split_ssl_from_url(bad_url)
 
     def test_sslmode_typo_raises(self) -> None:
-        # [P1] allowlist 外 (typo) は ValueError で見逃さない
         with pytest.raises(ValueError, match="invalid sslmode"):
             split_ssl_from_url(f"{_NEON}?sslmode=requrie")
 
@@ -139,7 +128,6 @@ class TestSplitSslFromUrl:
         assert connect_args2 == {}
 
     def test_credentials_are_preserved(self) -> None:
-        # user / password / host / port / dbname が clean_url に保持される
         raw = "postgresql+asyncpg://u:p@h:6543/dbn?sslmode=require"
         clean_url, _ = split_ssl_from_url(raw)
         url = make_url(clean_url)
@@ -174,12 +162,10 @@ class TestParseSslmode:
         assert parse_sslmode(f"{_NEON}?SSLMODE=REQUIRE") == "require"
 
     def test_duplicate_same_key_raises(self) -> None:
-        # 同一 key の複数指定 (require & disable) は曖昧なので「高々 1 回」違反
         with pytest.raises(ValueError, match="at most once"):
             parse_sslmode(f"{_NEON}?sslmode=require&sslmode=disable")
 
     def test_mixed_case_duplicate_raises(self) -> None:
-        # 大小違いの重複 (sslmode & SSLMODE) も「高々 1 回」違反として弾く
         with pytest.raises(ValueError, match="at most once"):
             parse_sslmode(f"{_NEON}?sslmode=require&SSLMODE=disable")
 
@@ -188,13 +174,11 @@ class TestCreateAppEngine:
     """SSL 一元注入 factory (engine 構築のみ、実接続なし)。"""
 
     def test_engine_url_has_no_ssl_params(self) -> None:
-        # sslmode=require から作った engine の url に ssl 系 param が残らない
         engine = create_app_engine(f"{_NEON}?sslmode=require")
         query = engine.url.query
         assert all(p not in query for p in _STRIPPED_PARAMS)
 
     def test_engine_kwargs_propagate(self) -> None:
-        # **kw (echo 等) が engine に伝播する
         engine = create_app_engine(f"{_NEON}?sslmode=require", echo=True)
         assert engine.sync_engine.echo is True
 
@@ -207,9 +191,6 @@ class TestCreateAppEngine:
     def test_non_ssl_connect_args_are_merged(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        # 呼び出し側の非 ssl connect_args (例 command_timeout) は SSL 注入後も
-        # 保持される。external sink (create_async_engine) に渡る dict を捕捉して
-        # 注入された ssl と caller の key が共存することを検証する。
         captured: dict[str, Any] = {}
 
         def _spy(clean_url: str, **kw: Any) -> Any:
@@ -288,7 +269,6 @@ class TestEngineResilienceDefaults:
     """
 
     def test_pre_ping_enabled_by_default(self) -> None:
-        # checkout 時の liveness check が既定で有効 (死んだ接続を掴まない)
         engine = create_app_engine(f"{_NEON}?sslmode=require")
         assert engine.sync_engine.pool._pre_ping is True
 
@@ -303,6 +283,5 @@ class TestEngineResilienceDefaults:
         assert engine.sync_engine.pool._timeout == 5
 
     def test_caller_override_wins(self) -> None:
-        # 既定は setdefault なので呼び出し側の明示値が優先される
         engine = create_app_engine(f"{_NEON}?sslmode=require", pool_recycle=60)
         assert engine.sync_engine.pool._recycle == 60

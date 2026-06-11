@@ -131,9 +131,6 @@ class TestStage3MarkerHierarchy:
         assert CurationTerminalDropError.FAILURE_ACTION is FailureAction.DROP_ARTICLE
 
 
-# Layer 2-B marker (Stage 3 工程由来 / provider_error=None 固定)
-
-
 class TestCurationResponseInvalidError:
     """marker ``CurationResponseInvalidError`` (Recoverable 系、no-arg ctor)。
 

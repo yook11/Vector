@@ -131,9 +131,6 @@ class TestStage4MarkerHierarchy:
         assert AssessmentTerminalError.FAILURE_ACTION is None
 
 
-# Layer 2-B marker (Stage 4 工程由来 / provider_error=None 固定)
-
-
 class _SampleDefect(StrEnum):
     """型ガード契約を検証するためのローカル defect (検知場所の enum を模す)。"""
 

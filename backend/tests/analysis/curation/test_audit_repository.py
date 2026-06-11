@@ -189,9 +189,6 @@ async def _fetch_by_outcome(
     return rows[0]
 
 
-# 成功経路 — append_signal / append_noise
-
-
 @pytest.mark.asyncio
 async def test_append_ready_build_blocked_records_missing_article_rejected(
     db_session: AsyncSession,
@@ -403,9 +400,6 @@ async def test_append_noise_records_curated_noise(
     assert ev.payload["raw_relevance"] == "noise"
 
 
-# DROP 経路 — append_drop_article
-
-
 @pytest.mark.asyncio
 async def test_append_drop_article_records_failure_with_drop_category(
     db_session: AsyncSession,
@@ -461,9 +455,6 @@ async def test_append_drop_article_records_failure_with_drop_category(
     # (Gemini ClassVar hardcode を消した)
     assert ev.payload["ai_model"] == "test-extract-model"
     assert ev.payload["prompt_version"] == "test-extract-prompt-v1"
-
-
-# 救済断念経路 — append_backfill_curation_aged_out
 
 
 @pytest.mark.asyncio
@@ -532,9 +523,6 @@ async def test_append_backfill_curation_aged_out_keeps_article_identity_after_de
     assert ev.source_id == sample_source.id
     # 記事識別子は削除に耐える payload snapshot で残る
     assert ev.payload["target_article_id"] == article_id
-
-
-# 失敗経路 — append_failure (4 marker dispatch)
 
 
 def _wrap(raw: BaseException) -> BaseException:
@@ -688,9 +676,6 @@ async def test_append_failure_dispatches_failure_projection_from_exc(
     assert ev.payload["prompt_version"] == "test-extract-prompt-v1"
 
 
-# tx 境界 — repository は commit しない
-
-
 @pytest.mark.asyncio
 async def test_repository_does_not_commit(
     db_session: AsyncSession,
@@ -717,10 +702,7 @@ async def test_repository_does_not_commit(
         .scalars()
         .all()
     )
-    assert len(rows) == 0  # 未 commit のため永続化されていない
-
-
-# 観測信号 — 永続化後 emit (metric +1 と pipeline_events 行の同時成立)
+    assert len(rows) == 0
 
 
 @pytest.mark.asyncio

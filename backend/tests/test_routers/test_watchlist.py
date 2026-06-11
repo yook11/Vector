@@ -97,9 +97,6 @@ async def second_article(
     return analysis
 
 
-# --- Watchlist ---
-
-
 @pytest.mark.asyncio
 class TestListWatchlist:
     async def test_empty_list(self, authed_client: AsyncClient) -> None:
@@ -234,9 +231,6 @@ class TestRemoveFromWatchlist:
         assert resp.status_code == 404
 
 
-# --- Watchlist IDs (Pattern B) ---
-
-
 @pytest.mark.asyncio
 class TestListWatchlistIds:
     async def test_empty_returns_empty_ids(self, authed_client: AsyncClient) -> None:
@@ -267,9 +261,6 @@ class TestListWatchlistIds:
     async def test_unauthenticated_returns_401(self, client: AsyncClient) -> None:
         resp = await client.get("/api/v1/me/watchlist/ids")
         assert resp.status_code == 401
-
-
-# --- Articles レスポンスから isWatched が消えていることの保証 ---
 
 
 @pytest.mark.asyncio

@@ -42,9 +42,6 @@ def _ctx_with_session_factory() -> MagicMock:
     return ctx
 
 
-# schedule ラベル
-
-
 class TestSchedule:
     def test_cron_matches_jst_daily_midnight(self) -> None:
         """UTC 毎日 15:05 = JST 毎日 00:05 の cron 文字列が登録されている。"""
@@ -53,9 +50,6 @@ class TestSchedule:
         schedule = trend_discovery.run_trend_discovery.labels.get("schedule")
         assert isinstance(schedule, list)
         assert any(entry.get("cron") == "5 15 * * *" for entry in schedule)
-
-
-# 本体 dispatch
 
 
 class TestRun:

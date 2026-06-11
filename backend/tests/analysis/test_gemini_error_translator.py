@@ -214,9 +214,6 @@ def test_code_429_without_status_routes_to_rate_or_quota() -> None:
     assert isinstance(translate_gemini_error(rate_exc), AIProviderRateLimitedError)
 
 
-# APIError 形状
-
-
 def test_legacy_api_error_unauthenticated_classifies_as_configuration() -> None:
     """``APIError`` 直接でも分類が成立する。"""
     exc = _api_error(code=401, status="UNAUTHENTICATED", message="invalid key")

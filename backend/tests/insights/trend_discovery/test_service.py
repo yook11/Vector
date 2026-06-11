@@ -715,9 +715,6 @@ class TestRaceLoss:
         find_by_window_end.assert_not_awaited()
 
 
-# Outcome 型の構造
-
-
 class TestOutcomeTypes:
     def test_completed_is_frozen(self) -> None:
         outcome = TrendDiscoveryCompleted(

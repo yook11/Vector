@@ -18,8 +18,6 @@ import pytest
 
 from app.shared.security.redaction import redact_secrets
 
-# A. 網羅性テスト (must-redact)
-
 
 def test_redacts_google_aiza_key() -> None:
     text = "Error from AIzaSyA1B2C3D4E5F6G7H8I9J0K1L2M3N4O5P6Q not authorized"
@@ -84,7 +82,7 @@ def test_redacts_authorization_basic() -> None:
     text = "Authorization: Basic dXNlcjpwYXNzd29yZHRoYXRpc2xvbmc="
     redacted = redact_secrets(text)
     assert "dXNlcjpwYXNzd29y" not in redacted
-    assert "Authorization" in redacted  # label は保持
+    assert "Authorization" in redacted
     assert "***" in redacted
 
 
@@ -131,9 +129,6 @@ def test_redacts_naked_jwt() -> None:
     assert "eyJ***" in redacted
 
 
-# A-2: 位置・文脈による redact 確認
-
-
 def test_redacts_at_string_start() -> None:
     text = "AIzaSyA1B2C3D4E5F6G7H8I9J0K1L2M3N4O5P6Q is the leaked key"
     redacted = redact_secrets(text)
@@ -171,9 +166,6 @@ def test_redacts_inside_json_value() -> None:
     assert '"model": "gemini-2.0"' in redacted
 
 
-# A-3: 複数 secret 同居
-
-
 def test_redacts_multiple_secret_kinds_in_one_string() -> None:
     text = (
         "creds: AIzaSyA1B2C3D4E5F6G7H8I9J0K1L2M3N4O5P6Q "
@@ -194,9 +186,6 @@ def test_redacts_same_secret_multiple_times() -> None:
     redacted = redact_secrets(text)
     assert "AIzaSyA1B2C3" not in redacted
     assert redacted.count("AIza***") == 2
-
-
-# A-4: anti-test (別 detector で literal 残存を negate)
 
 
 _SECRET_DETECTORS = [
@@ -230,9 +219,6 @@ def test_no_secret_literal_remains_after_redact(sample: str) -> None:
             f"secret literal remained: input={sample!r} output={redacted!r} "
             f"detector={detector.pattern!r}"
         )
-
-
-# B. 可読性テスト (must-preserve)
 
 
 @pytest.mark.parametrize(
@@ -271,9 +257,6 @@ def test_normal_text_is_preserved_unchanged(sample: str) -> None:
     assert redact_secrets(sample) == sample
 
 
-# C. 境界条件
-
-
 def test_empty_string_returns_empty() -> None:
     assert redact_secrets("") == ""
 
@@ -282,7 +265,7 @@ def test_long_string_does_not_explode() -> None:
     """1MB 級の入力で catastrophic backtracking しないこと。"""
     payload = "Connection error " * 50_000  # ~900KB
     redacted = redact_secrets(payload)
-    assert redacted == payload  # 過剰 redact なし
+    assert redacted == payload
 
 
 def test_non_ascii_preserved() -> None:

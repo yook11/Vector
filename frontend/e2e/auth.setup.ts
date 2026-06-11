@@ -4,10 +4,7 @@ import { ADMIN_USER, USER } from "./fixtures/users";
 const userFile = "e2e/.auth/user.json";
 const adminFile = "e2e/.auth/admin.json";
 
-// programmatic login: Better Auth `/api/auth/sign-in/email` に直接 POST して
-// session cookie を取得し、storageState として永続化する。UI 経由の login spec
-// (login.spec.ts) はあえて storageState なしで残し、login flow 自体の regression
-// 検知を維持する。
+// setup project は programmatic login、login.spec.ts は UI login regression を担当する。
 setup("authenticate user", async ({ request }) => {
   const res = await request.post("/api/auth/sign-in/email", {
     data: { email: USER.email, password: USER.password },

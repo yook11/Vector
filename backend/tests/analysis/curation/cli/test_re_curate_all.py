@@ -42,9 +42,6 @@ def _summary_from_stdout(captured: str) -> dict:
     raise AssertionError(f"no JSON line in stdout: {captured!r}")
 
 
-# build_parser
-
-
 class TestBuildParser:
     def test_defaults(self) -> None:
         args = build_parser().parse_args([])

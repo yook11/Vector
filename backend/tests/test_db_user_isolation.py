@@ -166,8 +166,6 @@ class TestVectorCollectIsolation:
     する (read と cross-boundary の負側は実クエリの権限拒否で振る舞い検証する)。
     """
 
-    # --- 正: 読み取り (実 SELECT で schema USAGE + table SELECT を通しで確認) ---
-
     async def test_can_select_news_sources(self, collect_conn) -> None:
         """vector_collect は news_sources を SELECT できる (dispatch が読む)。"""
         rows = await collect_conn.fetch("SELECT id FROM public.news_sources LIMIT 1")
@@ -184,8 +182,6 @@ class TestVectorCollectIsolation:
             "SELECT id FROM public.incomplete_articles LIMIT 1"
         )
         assert isinstance(rows, list)
-
-    # --- 正: 書き込み権限 (副作用ゼロの catalog 関数で grant を確認) ---
 
     async def test_has_full_dml_on_incomplete_articles(self, collect_conn) -> None:
         """incomplete_articles は SELECT/INSERT/UPDATE/DELETE すべて持つ
@@ -251,8 +247,6 @@ class TestVectorCollectIsolation:
             "pg_get_serial_sequence('public.pipeline_events', 'id'), 'USAGE')"
         )
         assert granted is True
-
-    # --- 負: 分離 (4 table 外 / 別 schema は権限拒否で振る舞い確認) ---
 
     async def test_cannot_select_analysis_table(self, collect_conn) -> None:
         """analysis BC の article_curations は SELECT で権限拒否される

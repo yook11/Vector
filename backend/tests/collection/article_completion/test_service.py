@@ -194,7 +194,6 @@ def _patch_fetch(monkeypatch: pytest.MonkeyPatch, mock: AsyncMock) -> None:
 
 
 # 成功 path
-#
 # precondition 未充足 (missing / open / sweep 済) で ``None`` を返す経路は Ready
 # 構築段の責務になったため、repository (``test_repository.py``) と task
 # (``test_scrape_html_body.py``) に移管した。service は厚い Ready だけ受け取る。

@@ -38,8 +38,6 @@ from app.models.news_source import NewsSource
 from app.models.out_of_scope_assessment import OutOfScopeAssessment
 from app.models.pipeline_event import PipelineEvent
 
-# --- Helpers ---
-
 
 def _make_extraction_result(
     title_ja: str = "量子コンピューティングの新たなブレイクスルー",
@@ -138,9 +136,6 @@ async def _create_article_with_extraction(
     return article, extraction
 
 
-# --- A2. abstract method enforcement tests ---
-
-
 def test_base_curator_rejects_subclass_without_abstract_properties() -> None:
     """BaseCurator は必須 property を持たない subclass を instance 化時に拒否する。"""
 
@@ -173,9 +168,6 @@ def test_base_assessor_rejects_subclass_without_property_contract() -> None:
         BadAssessor()  # type: ignore[abstract]
 
 
-# --- B. CurationResult domain tests ---
-
-
 def test_signal_sanitizes_html_in_title_and_summary() -> None:
     resp = Signal(title_ja="<b>タイトル</b>", summary_ja="<p>要約</p>")
     assert resp.title_ja == "タイトル"
@@ -198,9 +190,6 @@ def test_gemini_extraction_response_has_relevance_field() -> None:
     """
     resp = GeminiCurationResponse(relevance="signal", title_ja="t", summary_ja="s")
     assert resp.relevance == "signal"
-
-
-# --- C. Classification schema tests ---
 
 
 def test_classified_valid() -> None:
@@ -229,9 +218,6 @@ def test_out_of_scope_valid() -> None:
 def test_out_of_scope_rejects_empty_investor_take() -> None:
     with pytest.raises(ValidationError):
         OutOfScope(investor_take="")
-
-
-# --- D. BaseCurator._call_once tests ---
 
 
 async def test_curator_call_once_succeeds() -> None:
@@ -274,9 +260,6 @@ async def test_curator_sanitizes_untrusted_input_boundary() -> None:
     # 境界マーカの 1 つだけが残り、入力由来の閉じタグは中立化されている
     assert prompt.count("</untrusted_input>") == 1
     assert prompt.count("[/untrusted_input]") == 2
-
-
-# --- F. CurationService orchestration tests ---
 
 
 async def test_extraction_creates_extraction(
@@ -456,9 +439,6 @@ async def test_extraction_routes_noise_to_extraction_noises_table(
     ).scalar_one_or_none() is None
 
 
-# --- G. AssessmentService orchestration tests ---
-
-
 async def test_assessment_persists_category(
     db_session: AsyncSession,
     session_factory,
@@ -569,9 +549,6 @@ async def test_assessment_persists_rejection_when_out_of_scope(
         )
     ).scalar_one_or_none()
     assert analysis is None
-
-
-# --- H. Integration test (API response) ---
 
 
 async def test_news_endpoint_includes_analysis(

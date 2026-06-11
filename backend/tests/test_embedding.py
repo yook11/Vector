@@ -40,9 +40,6 @@ def _ready(text: str = "hello") -> ReadyForEmbedding:
     return ReadyForEmbedding(analysis_id=1, text_for_embedding=text, article_id=1)
 
 
-# BaseEmbedder._embed_once (StubEmbedder)
-
-
 class _InvalidInputSDKError(Exception):
     """プロバイダ SDK のクライアントエラーを模す (AIProviderError 階層外)。"""
 
@@ -181,9 +178,6 @@ async def test_document_prefix_prepended_to_text() -> None:
     embedder = PrefixedStubEmbedder()
     await embedder.embed_document(_ready("doc"))
     assert embedder._calls == ["P: doc"]
-
-
-# abstract property enforcement
 
 
 def test_base_embedder_rejects_subclass_without_required_properties() -> None:

@@ -54,9 +54,6 @@ _CONTENT_LEAVES: tuple[type[AIProviderContentError], ...] = (
 )
 
 
-# -- 回復クラス enum --
-
-
 def test_failure_mode_has_five_members() -> None:
     """回復クラスは 5 種 (attempt_scoped / time_based / condition_based /
     operator_action / target_rejected)。"""
@@ -98,9 +95,6 @@ def test_mode_is_stage_hold_mode(
     assert mode.is_stage_hold_mode is expected_hold
 
 
-# -- 2 系統階層 --
-
-
 @pytest.mark.parametrize("cls", list(_STATE_LEAF_MODE))
 def test_state_leaf_is_state_error_not_content(
     cls: type[AIProviderStateError],
@@ -119,9 +113,6 @@ def test_content_leaf_is_content_error_not_state(
     assert issubclass(cls, AIProviderContentError)
     assert issubclass(cls, AIProviderError)
     assert not issubclass(cls, AIProviderStateError)
-
-
-# -- 回復クラスの leaf への割当 --
 
 
 @pytest.mark.parametrize("cls,mode", list(_STATE_LEAF_MODE.items()))

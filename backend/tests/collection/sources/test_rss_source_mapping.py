@@ -52,9 +52,6 @@ def make_rss_entry(**overrides: object) -> RssEntry:
     return RssEntry(**(base | overrides))
 
 
-# --- 正の写像: 宣言通り写すか ---------------------------------------------
-
-
 def test_techcrunch_maps_body_to_none_even_when_feed_carries_content() -> None:
     """TC は content_encoded / summary が在っても body を採らない。"""
     entry = make_rss_entry(
@@ -93,9 +90,6 @@ def test_venturebeat_strips_html_tags_and_decodes_entities_in_body() -> None:
     )
     body = VentureBeatSource.map_entry(entry).body
     assert body == "Hello & world"
-
-
-# --- 負の不変条件: 写像は裁かない ------------------------------------------
 
 
 def test_venturebeat_returns_none_body_when_both_sources_empty() -> None:
@@ -158,9 +152,6 @@ def test_mapping_passes_published_value_through_unchanged(source: type) -> None:
     assert result.published_at == _PUBLISHED
 
 
-# --- url provenance: link 由来であって guid 由来でない ----------------------
-
-
 @pytest.mark.parametrize("source", _SOURCES)
 def test_url_comes_from_link_not_guid(source: type) -> None:
     """URL 形の guid と衝突させても url は link を出所とする。"""
@@ -171,9 +162,6 @@ def test_url_comes_from_link_not_guid(source: type) -> None:
     result = source.map_entry(entry)
     assert result.url == "https://example.com/real-article"
     assert result.url != entry.guid
-
-
-# --- The Register: source 固有 URL 変換 + drop 除去 -------------------------
 
 
 def test_the_register_expands_redirector_link_to_real_host() -> None:
@@ -209,9 +197,6 @@ def test_the_register_does_not_drop_empty_link() -> None:
     assert result.url == ""
 
 
-# --- ESA Djangoplicity (Hubble/Webb 共通): module-level 写像 seam ----------
-
-
 def test_esa_djangoplicity_passes_empty_title_through() -> None:
     """空 title でも drop / raise せず空 str のまま素通す。
 
@@ -236,9 +221,6 @@ def test_esa_djangoplicity_maps_body_to_none_regardless_of_feed_body() -> None:
         content_encoded="<p>" + "x" * 500 + "</p>", summary="<p>" + "y" * 500 + "</p>"
     )
     assert esa_to_fetched_article(entry).body is None
-
-
-# --- 構造: pure / total ----------------------------------------------------
 
 
 @pytest.mark.parametrize("source", _SOURCES)

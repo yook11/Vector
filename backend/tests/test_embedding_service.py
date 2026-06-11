@@ -39,8 +39,6 @@ from app.models.in_scope_assessment import InScopeAssessment
 from app.models.news_source import NewsSource
 from app.models.pipeline_event import PipelineEvent
 
-# Helpers
-
 
 def _mock_embedder(
     *,
@@ -150,9 +148,6 @@ async def _fetch_audit(db_session: AsyncSession, article_id: int) -> PipelineEve
     return rows[0]
 
 
-# Happy path: 永続化 + 成功 audit + None 返却
-
-
 @pytest.mark.asyncio
 async def test_execute_persists_embedding_on_success(
     db_session: AsyncSession,
@@ -252,9 +247,6 @@ async def test_execute_shortcircuits_when_already_persisted(
     assert len(rows) == 0
 
 
-# ACL boundary: AIProviderError → Layer 1 marker に詰め替え
-
-
 @pytest.mark.asyncio
 async def test_execute_wraps_target_rejected_provider_error(
     db_session: AsyncSession,
@@ -298,7 +290,7 @@ async def test_execute_wraps_target_rejected_provider_error(
     db_session.expire_all()
     refetched = await db_session.get(InScopeAssessment, analysis_id)
     assert refetched is not None
-    assert refetched.embedding is None  # 永続化されていない
+    assert refetched.embedding is None
 
 
 @pytest.mark.asyncio
@@ -382,4 +374,4 @@ async def test_execute_propagates_response_invalid_from_embedder(
     db_session.expire_all()
     refetched = await db_session.get(InScopeAssessment, analysis_id)
     assert refetched is not None
-    assert refetched.embedding is None  # 永続化されていない
+    assert refetched.embedding is None

@@ -77,9 +77,6 @@ def _make_call() -> AssessmentCall[OutOfScope]:
     )
 
 
-# Success path
-
-
 class TestCallOnceSuccess:
     """正常系: ``_call_api`` の戻り値を素通しで返す。"""
 
@@ -89,9 +86,6 @@ class TestCallOnceSuccess:
         cls._call_api = AsyncMock(return_value=_make_call())  # type: ignore[method-assign]
         result = await cls._call_once("prompt")
         assert isinstance(result, AssessmentCall)
-
-
-# Passthrough: AIProviderError / AssessmentError は translate を経由しない
 
 
 class TestCallOncePassthrough:
@@ -110,7 +104,7 @@ class TestCallOncePassthrough:
             await cls._call_once("prompt")
 
         assert exc_info.value is original
-        assert exc_info.value.__cause__ is None  # ラップしない
+        assert exc_info.value.__cause__ is None
 
     @pytest.mark.asyncio
     async def test_ai_provider_configuration_passes_through_unchanged(self) -> None:
@@ -169,9 +163,6 @@ class TestCallOncePassthrough:
         with pytest.raises(AssessmentTerminalError) as exc_info:
             await cls._call_once("prompt")
         assert exc_info.value is original
-
-
-# Translate path: マップ可能なら from exc 連鎖、未知ならそのまま素通し
 
 
 class TestCallOnceTranslate:

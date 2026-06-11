@@ -50,11 +50,9 @@ from app.analysis.gemini_error_translator import (
 )
 from app.logfire.exceptions import VectorDomainError
 
-# VectorDomainError 基底の __str__ 契約
-
 
 class _NoAttrs(VectorDomainError):
-    """SAFE_ATTRS = () の subclass。"""
+    pass
 
 
 class _WithAttrs(VectorDomainError):
@@ -72,21 +70,13 @@ def test_str_returns_class_name_only_when_safe_attrs_empty() -> None:
 
 
 def test_str_formats_safe_attrs_with_repr() -> None:
-    """SAFE_ATTRS あり case は ``class(attr=value, ...)`` 固定形式。
-
-    repr 経由で値を出すので、str 値は quote 付きで現れる。これにより
-    ``code='abc'`` 形式で audit context が dashboard 上 1 文字列として読める。
-    """
+    """SAFE_ATTRS あり case は ``class(attr=value, ...)`` 固定形式。"""
     out = str(_WithAttrs(alpha="hello", beta=42))
     assert out == "_WithAttrs(alpha='hello', beta=42)"
 
 
 def test_str_uses_none_for_missing_attribute() -> None:
-    """SAFE_ATTRS の一部が instance に無い場合は ``None`` で埋める (防御的)。
-
-    将来 subclass が SAFE_ATTRS を増やしたが setter を忘れた場合でも、``__str__``
-    で AttributeError を起こさず ``key=None`` で運用継続できる。
-    """
+    """SAFE_ATTRS の一部が instance に無い場合は ``None`` で埋める。"""
 
     class _PartialAttrs(VectorDomainError):
         SAFE_ATTRS: ClassVar[tuple[str, ...]] = ("present", "absent")
@@ -97,10 +87,6 @@ def test_str_uses_none_for_missing_attribute() -> None:
 
     assert str(_PartialAttrs()) == "_PartialAttrs(present='value', absent=None)"
 
-
-# AIProvider*Error 2 系統:
-# - State (7 class): SAFE_ATTRS=("CODE",) + accept-and-discard + 任意 reason
-# - Content (2 class): SAFE_ATTRS=("CODE","reason") + 必須 reason (型ガード)
 
 _AI_PROVIDER_STATE_SUBCLASSES: tuple[tuple[type[AIProviderError], str], ...] = (
     (AIProviderConfigurationError, "ai_error_configuration"),
@@ -131,11 +117,7 @@ def test_ai_provider_state_error_str_contains_only_code(
 def test_ai_provider_state_error_reason_not_in_str(
     cls: type[AIProviderError], _code: str
 ) -> None:
-    """State の reason は forensics 用 instance 属性で ``__str__`` に乗らない。
-
-    reason を付与しても golden な ``(CODE=...)`` 形は変わらない (SAFE_ATTRS に
-    reason を入れない設計)。
-    """
+    """State の reason は forensics 用 instance 属性で ``__str__`` に乗らない。"""
     exc = cls(reason=GeminiStateReason.TIMEOUT)  # type: ignore[call-arg]
     assert "timeout" not in str(exc)
     assert str(exc) == f"{cls.__name__}(CODE={_code!r})"
@@ -145,11 +127,7 @@ def test_ai_provider_state_error_reason_not_in_str(
 def test_ai_provider_state_error_constructor_swallows_legacy_positional_message(
     cls: type[AIProviderError], _code: str
 ) -> None:
-    """legacy 互換: positional message を渡しても捨てて ``__str__`` には出ない。
-
-    PII 含有が想定される SDK 生 message を渡してもクラスは構築でき、かつ
-    ``__str__`` 経路 (Logfire span attribute) には漏れない。
-    """
+    """legacy positional message は ``__str__`` に漏れない。"""
     sensitive = "sensitive_sdk_message_xxxxxxxxxxxxxxxxxx"
     exc = cls(sensitive)
     rendered = str(exc)
@@ -161,10 +139,7 @@ def test_ai_provider_state_error_constructor_swallows_legacy_positional_message(
 def test_ai_provider_state_error_constructor_swallows_legacy_kwargs(
     cls: type[AIProviderError], _code: str
 ) -> None:
-    """legacy 互換: 未知 kwargs を渡しても落とさず ``__str__`` には出ない。
-
-    SDK 翻訳側から kwargs が渡っても ``__str__`` に乗らない。
-    """
+    """legacy kwargs は ``__str__`` に漏れない。"""
     sensitive = "sensitive_kwarg_value_yyyyyyyyyyyyyyyyy"
     exc = cls(unrelated_attr=sensitive)
     rendered = str(exc)
@@ -206,10 +181,7 @@ def test_ai_provider_content_error_rejects_positional_message(
 def test_ai_provider_content_error_rejects_non_strenum_reason(
     cls: type[AIProviderError], _code: str
 ) -> None:
-    """Content error は自由文字列 reason を ``TypeError`` で拒否する (PII 境界)。
-
-    AI 生成値を reason に通す regression を構造的に阻止する。
-    """
+    """Content error は自由文字列 reason を ``TypeError`` で拒否する (PII 境界)。"""
     with pytest.raises(TypeError):
         cls(reason="sensitive_free_text")  # type: ignore[call-arg]
 
@@ -218,8 +190,6 @@ def test_ai_provider_error_base_inherits_vector_domain_error() -> None:
     """``AIProviderError`` は ``VectorDomainError`` 継承 (型階層上の中心契約)。"""
     assert issubclass(AIProviderError, VectorDomainError)
 
-
-# Curation Layer 1 marker (3 class): SAFE_ATTRS=("code",) + kwargs-only
 
 _CURATION_LAYER1_MARKERS: tuple[type[CurationError], ...] = (
     CurationRecoverableError,
@@ -230,11 +200,7 @@ _CURATION_LAYER1_MARKERS: tuple[type[CurationError], ...] = (
 
 @pytest.mark.parametrize("cls", _CURATION_LAYER1_MARKERS)
 def test_curation_layer1_str_contains_only_code(cls: type[CurationError]) -> None:
-    """``CurationXxxError(code='...')`` の ``__str__`` は class name + code のみ。
-
-    ``failure_kind`` / ``failure_reason`` は instance 値だが SAFE_ATTRS 外なので
-    ``__str__`` は ``code`` のみ (PII / 詳細を span に載せない)。
-    """
+    """Curation Layer 1 marker の ``__str__`` は class name + code のみ。"""
     exc = cls(code="ai_error_rate_limited", failure_kind="time_based_recovery")  # type: ignore[call-arg]
     assert str(exc) == f"{cls.__name__}(code='ai_error_rate_limited')"
 
@@ -243,19 +209,14 @@ def test_curation_layer1_str_contains_only_code(cls: type[CurationError]) -> Non
 def test_curation_layer1_holds_provider_error_in_attr(
     cls: type[CurationError],
 ) -> None:
-    """``provider_error`` は instance attr のみで識別 (forensics)、``__str__`` 不在。
-
-    Logfire span に乗るのは class name + code のみ。``provider_error`` の中身
-    (CODE / __class__) は SAFE_ATTRS の対象外で SaaS には流れない。
-    """
+    """``provider_error`` は forensics 用 attr で、``__str__`` には出ない。"""
     provider = AIProviderRateLimitedError()
     exc = cls(  # type: ignore[call-arg]
         code="ai_error_rate_limited",
         failure_kind="time_based_recovery",
         provider_error=provider,
     )
-    assert exc.provider_error is provider  # identity 保持で audit 連鎖が辿れる
-    # __str__ には provider 情報は出ない (SAFE_ATTRS にないため)
+    assert exc.provider_error is provider
     assert "Provider" not in str(exc)
     assert "provider_error" not in str(exc)
 
@@ -264,11 +225,7 @@ def test_curation_layer1_holds_provider_error_in_attr(
 def test_curation_layer1_rejects_positional_message(
     cls: type[CurationError],
 ) -> None:
-    """positional message 引数は ``TypeError`` (kwargs-only 強制で regression 検知)。
-
-    将来 ``raise CurationXxxError(str(provider_response))`` の混入 (PII 含有) を
-    型レベルで阻止する。
-    """
+    """Curation Layer 1 marker は positional message を拒否する (PII 境界)。"""
     with pytest.raises(TypeError):
         cls("legacy_message")  # type: ignore[call-arg]
 
@@ -279,9 +236,6 @@ def test_curation_layer1_requires_code_kwarg(cls: type[CurationError]) -> None:
     with pytest.raises(TypeError):
         cls()  # type: ignore[call-arg]
 
-
-# Assessment / Embedding Layer 1 marker (4 class): kwargs-only, 同律。
-# hold は marker 型でなく mode 由来になったため Terminal は 1 本に縮約済。
 
 _OTHER_LAYER1_MARKERS: tuple[type[VectorDomainError], ...] = (
     AssessmentRecoverableError,
@@ -295,11 +249,7 @@ _OTHER_LAYER1_MARKERS: tuple[type[VectorDomainError], ...] = (
 def test_assessment_embedding_layer1_str_format(
     cls: type[VectorDomainError],
 ) -> None:
-    """Assessment / Embedding Layer 1 marker も同形式の ``__str__`` を持つ。
-
-    ``failure_kind`` / ``failure_reason`` は instance 値だが SAFE_ATTRS 外なので
-    ``__str__`` は ``code`` のみ (PII / 詳細を span に載せない)。
-    """
+    """Assessment / Embedding Layer 1 marker の ``__str__`` も code のみ。"""
     exc = cls(code="ai_error_network", failure_kind="attempt_scoped")  # type: ignore[call-arg]
     assert str(exc) == f"{cls.__name__}(code='ai_error_network')"
 
@@ -312,10 +262,6 @@ def test_assessment_embedding_layer1_rejects_positional_message(
         cls("legacy_message")  # type: ignore[call-arg]
 
 
-# 無引数 + 固定 code の marker (2 class): no-arg constructor + 固定 code。
-# ``AssessmentResponseInvalidError`` は defect を受ける marker、
-# ``AssessmentCategoryMissingError`` は廃止 (enum↔DB 不整合は marker でなく
-# CategoryEnumDatabaseMismatchError = 想定外 扱い) のため本群から外す。
 _LAYER2B_FIXED_CODE: tuple[tuple[type[VectorDomainError], str], ...] = (
     (CurationResponseInvalidError, "extraction_response_invalid"),
     (EmbeddingResponseInvalidError, "embedding_response_invalid"),
@@ -336,23 +282,15 @@ def test_layer2b_no_arg_constructor_sets_fixed_code(
 def test_layer2b_rejects_positional_message(
     cls: type[VectorDomainError], _code: str
 ) -> None:
-    """Layer 2-B も positional message 引数を ``TypeError`` で拒否する。
-
-    ``CurationResponseInvalidError("payload dump")`` 形で PII を constructor に
-    入れる regression を構造的に阻止する。
-    """
+    """Layer 2-B marker は positional message を拒否する (PII 境界)。"""
     with pytest.raises(TypeError):
         cls("legacy_message")  # type: ignore[call-arg]
-
-
-# PII 全文検索 oracle: 全 marker 件で sensitive 値が __str__ に乗らない
 
 
 def _build_all_marker_instances() -> list[VectorDomainError]:
     """PII 安全性を確認する全 marker class の代表 instance を 1 つずつ構築する。"""
     provider = AIProviderRateLimitedError()
     return [
-        # AIProvider*Error 9 種 (content は reason 必須、state は引数なし)
         AIProviderInputRejectedError(reason=GeminiContentRejectionReason.INPUT_BLOCKED),
         AIProviderOutputBlockedError(reason=GeminiContentRejectionReason.SAFETY),
         AIProviderConfigurationError(),
@@ -362,8 +300,6 @@ def _build_all_marker_instances() -> list[VectorDomainError]:
         AIProviderUsageLimitExhaustedError(),
         AIProviderServiceUnavailableError(),
         AIProviderNetworkError(),
-        # Curation 3 (Layer 1) + 1 (Layer 2-B)。failure_kind / failure_reason も
-        # SAFE_ATTRS 外 (instance 値)。
         CurationRecoverableError(
             code="ai_error_rate_limited",
             failure_kind="time_based_recovery",
@@ -381,7 +317,6 @@ def _build_all_marker_instances() -> list[VectorDomainError]:
             provider_error=provider,
         ),
         CurationResponseInvalidError(),
-        # Assessment 2 (Layer 1) + 1 (Layer 2-B)。failure_reason も SAFE_ATTRS 外。
         AssessmentRecoverableError(
             code="ai_error_network",
             failure_kind="attempt_scoped",
@@ -393,9 +328,7 @@ def _build_all_marker_instances() -> list[VectorDomainError]:
             failure_reason="safety",
             provider_error=provider,
         ),
-        # defect の value は種別ラベル (PII-free) なので PII oracle に載せて安全。
         AssessmentResponseInvalidError(AssessmentResponseDefect.CATEGORY_KEY_MISSING),
-        # Embedding 2 (Layer 1) + 1 (Layer 2-B)
         EmbeddingRecoverableError(
             code="ai_error_network",
             failure_kind="attempt_scoped",
@@ -412,20 +345,13 @@ def _build_all_marker_instances() -> list[VectorDomainError]:
 
 
 def test_all_marker_str_never_contains_provider_error_repr_payload() -> None:
-    """全 marker の ``str(exc)`` を JSON 全文化しても provider_error 由来の文字列
-    が 1 つも残らない。
-
-    意図的に provider_error として ``AIProviderRateLimitedError`` instance を
-    Layer 1 marker に紐付け、provider 側の class 名や CODE 値が外側 marker の
-    ``__str__`` に **連鎖して出ない** ことを検証する。
-    """
+    """全 marker の ``str(exc)`` に provider_error 由来の文字列が残らない。"""
     instances = _build_all_marker_instances()
     rendered_all = json.dumps(
         [str(exc) for exc in instances],
         default=str,
         ensure_ascii=False,
     )
-    # provider_error は SAFE_ATTRS の対象外なので、外側 marker から派生情報を出さない。
     assessment_record = str(
         AssessmentRecoverableError(
             code="ai_error_network",
@@ -435,7 +361,6 @@ def test_all_marker_str_never_contains_provider_error_repr_payload() -> None:
     )
     assert "rate_limited" not in assessment_record
     assert "AIProviderRateLimitedError" not in assessment_record
-    # 全 instance について基本的な class name は出ている (空虚回避)
     assert all(type(exc).__name__ in rendered_all for exc in instances)
 
 
@@ -443,12 +368,7 @@ def test_all_marker_str_never_contains_provider_error_repr_payload() -> None:
 def test_ai_provider_state_error_full_text_search_no_sensitive(
     cls: type[AIProviderError], _code: str
 ) -> None:
-    """State error に SDK の sensitive message を渡しても全文検索でヒットしない。
-
-    accept-and-discard 経路 (positional + 未知 kwargs) を通しても ``__str__`` /
-    ``args`` に PII が残らない。content error は positional を型レベルで拒否する
-    ため本 oracle の対象外 (拒否自体は別テストで検証)。
-    """
+    """State error に SDK の sensitive message を渡しても全文検索でヒットしない。"""
     sensitive = "sensitive_provider_response_zzzzzzzz"
     exc = cls(sensitive, extra=sensitive)
     dumped = json.dumps(
@@ -459,9 +379,6 @@ def test_ai_provider_state_error_full_text_search_no_sensitive(
     assert sensitive not in dumped
 
 
-# Hierarchy invariants (型階層の中心契約)
-
-
 def test_stage_base_classes_inherit_vector_domain_error() -> None:
     """各 Stage の base class が ``VectorDomainError`` の subclass であること。"""
     assert issubclass(CurationError, VectorDomainError)
@@ -470,26 +387,14 @@ def test_stage_base_classes_inherit_vector_domain_error() -> None:
 
 
 def test_layer2b_subclasses_inherit_from_layer1_marker() -> None:
-    """Layer 2-B 3 class は対応する Layer 1 marker を継承 (dispatch 軸を引き継ぐ)。
-
-    CurationResponseInvalid → Recoverable (cron 救済対象)、
-    AssessmentResponseInvalid → Recoverable、
-    EmbeddingResponseInvalid → Recoverable。
-    """
+    """Layer 2-B class は対応する Layer 1 marker を継承する。"""
     assert issubclass(CurationResponseInvalidError, CurationRecoverableError)
     assert issubclass(AssessmentResponseInvalidError, AssessmentRecoverableError)
     assert issubclass(EmbeddingResponseInvalidError, EmbeddingRecoverableError)
 
 
-# Stage base class そのものは catch 対象にしない
-
-
 def test_curation_error_is_not_layer1_marker() -> None:
-    """``CurationError`` 自体は Layer 1 marker (3 種) の subclass ではない。
-
-    task 層 dispatch 軸として CurationError を使わない契約 (catch 対象は 3 marker
-    のみ)。逆 isinstance 関係も含めて型階層が独立であることを構造的に表明。
-    """
+    """``CurationError`` 自体は Layer 1 marker の subclass ではない。"""
     sample: Any = CurationError()
     assert not isinstance(sample, CurationRecoverableError)
     assert not isinstance(sample, CurationTerminalKeepError)

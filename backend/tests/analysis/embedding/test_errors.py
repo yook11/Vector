@@ -125,9 +125,6 @@ class TestStage5MarkerHierarchy:
         assert EmbeddingTerminalError.FAILURE_ACTION is None
 
 
-# Layer 2-B marker (Stage 5 工程由来 / provider_error=None 固定)
-
-
 class TestEmbeddingResponseInvalidError:
     """Layer 2-B marker: ``EmbeddingResponseInvalidError`` (Recoverable 系)。"""
 

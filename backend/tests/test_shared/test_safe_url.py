@@ -12,7 +12,6 @@ from app.shared.security.safe_url import (
 )
 
 
-# SafeUrl — Unit Tests
 class TestSafeUrl:
     def test_valid_https(self) -> None:
         url = SafeUrl("https://example.com/path")
@@ -143,7 +142,6 @@ class TestSafeUrlBlocksPrivateIpLiterals:
         SafeUrl("https://backend/")  # docker compose のサービス名は実フェッチ層で判定
 
 
-# Pydantic Integration Tests
 class TestPydanticIntegration:
     class SampleModel(BaseModel):
         url: SafeUrl

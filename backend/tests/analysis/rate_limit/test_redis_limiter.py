@@ -22,7 +22,7 @@ async def test_acquire_succeeds_when_under_limit() -> None:
     limiter = SlidingWindowLimiter(
         redis=mock_redis, key="test:rpm", max_requests=10, window_seconds=60
     )
-    await limiter.acquire()  # 例外を送出しないこと
+    await limiter.acquire()
 
 
 @pytest.mark.asyncio
@@ -76,7 +76,7 @@ async def test_lua_script_receives_correct_args() -> None:
     call_kwargs = script.call_args
     assert call_kwargs.kwargs["keys"] == ["ratelimit:model:rpm"]
     args = call_kwargs.kwargs["args"]
-    assert args[0] == 500  # max_requests であること
-    assert args[1] == 60  # window_seconds であること
-    assert args[2] == "abc123"  # member であること
-    assert args[3] == 120  # ttl = 60 + 60 であること
+    assert args[0] == 500
+    assert args[1] == 60
+    assert args[2] == "abc123"
+    assert args[3] == 120

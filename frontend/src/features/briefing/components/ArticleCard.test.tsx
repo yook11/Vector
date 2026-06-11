@@ -3,10 +3,6 @@ import { describe, expect, it } from "vitest";
 import type { BriefingArticleEmbedParsed } from "../schemas/briefing";
 import { ArticleCard } from "./ArticleCard";
 
-// ---------------------------------------------------------------------------
-// Fixture
-// ---------------------------------------------------------------------------
-
 function makeArticle(
   overrides: Partial<BriefingArticleEmbedParsed> = {},
 ): BriefingArticleEmbedParsed {
@@ -20,10 +16,6 @@ function makeArticle(
     ...overrides,
   };
 }
-
-// ---------------------------------------------------------------------------
-// タイトルリンク
-// ---------------------------------------------------------------------------
 
 describe("ArticleCard — タイトルリンク", () => {
   it("タイトルが /news/{id} への内部リンクである", () => {
@@ -40,10 +32,6 @@ describe("ArticleCard — タイトルリンク", () => {
     expect(screen.getByText("AI が医療診断を革新する")).toBeInTheDocument();
   });
 });
-
-// ---------------------------------------------------------------------------
-// 外部原文ボタン
-// ---------------------------------------------------------------------------
 
 describe("ArticleCard — 外部原文ボタン", () => {
   it("article.url を href に持つ外部リンクがある", () => {
@@ -62,10 +50,6 @@ describe("ArticleCard — 外部原文ボタン", () => {
     expect(link).toHaveAttribute("target", "_blank");
   });
 });
-
-// ---------------------------------------------------------------------------
-// 出典表示 (attributionLabel fallback)
-// ---------------------------------------------------------------------------
 
 describe("ArticleCard — 出典表示", () => {
   it("attributionLabel が非 null のときその文字列が表示される", () => {
@@ -91,10 +75,6 @@ describe("ArticleCard — 出典表示", () => {
     expect(screen.getByText("Wired")).toBeInTheDocument();
   });
 });
-
-// ---------------------------------------------------------------------------
-// keyPoints
-// ---------------------------------------------------------------------------
 
 describe("ArticleCard — keyPoints", () => {
   it("keyPoints が全件描画される", () => {

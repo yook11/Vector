@@ -20,8 +20,6 @@ import pytest
 from app.analysis.embedding.ai.spec import GEMINI_EMBEDDING_SPEC
 from app.analysis.rate_limit import AIModelRateLimitPolicy
 
-# Gemini
-
 
 def test_gemini_provider_is_gemini() -> None:
     assert GEMINI_EMBEDDING_SPEC.provider == "gemini"

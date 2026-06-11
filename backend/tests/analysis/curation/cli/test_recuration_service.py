@@ -184,9 +184,6 @@ async def test_invalid_input_is_skipped_not_failed(
     assert summary.failed_ids == ()
 
 
-# 正常系
-
-
 @pytest.mark.asyncio
 async def test_success_updates_parent_in_place_keeps_id(
     db_session: AsyncSession,

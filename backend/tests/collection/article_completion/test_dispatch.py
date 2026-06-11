@@ -50,8 +50,6 @@ from app.queue.tasks.completion import (
 )
 from app.shared.security.safe_url import SafeUrl
 
-# Fixtures / helpers
-
 
 def _ctx(session_factory: async_sessionmaker[AsyncSession]) -> MagicMock:
     """taskiq Context の最小 mock。task は session_factory のみ参照する。"""
@@ -146,9 +144,6 @@ async def _select_pending(
     ).scalar_one()
     await db_session.refresh(row)
     return row
-
-
-# dispatch_html_fetch_jobs
 
 
 @pytest.mark.asyncio
@@ -324,9 +319,6 @@ async def test_returns_zero_when_no_ready_pending(
 
     assert result == {"dispatched_count": 0}
     kiq_mock.assert_not_awaited()
-
-
-# sweep_expired_leases
 
 
 @pytest.mark.asyncio

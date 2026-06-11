@@ -84,9 +84,6 @@ def _patch_ready_construction(
     )
 
 
-# generate_embedding
-
-
 class TestGenerateEmbedding:
     @pytest.mark.asyncio
     async def test_task_completes_on_service_success(self) -> None:

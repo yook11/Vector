@@ -61,9 +61,6 @@ class TestStructure:
         assert ready.window_end == any_date
 
 
-# try_advance_from
-
-
 class TestTryAdvanceFrom:
     @pytest.mark.asyncio
     async def test_returns_ready_when_snapshot_absent(self) -> None:

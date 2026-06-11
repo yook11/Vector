@@ -16,8 +16,6 @@ from logfire.testing import CaptureLogfire
 from app.queue.helpers.backlog import BackfillTarget
 from app.queue.tasks import backfill
 
-# ヘルパー
-
 
 def _find_metric(metrics: list[dict[str, Any]], name: str) -> dict[str, Any] | None:
     return next((m for m in metrics if m["name"] == name), None)
@@ -54,9 +52,6 @@ def _target(curation_id: int) -> BackfillTarget:
         article_id=curation_id + 1000,
         source_name="VentureBeat",
     )
-
-
-# Test 1: LIMIT を超えた真値が gauge に出る
 
 
 @pytest.mark.asyncio
@@ -109,9 +104,6 @@ async def test_gauge_records_true_count_not_capped_by_limit(
     )
 
 
-# Test 2: 通常運転 (LIMIT 以下) で count と stage attribute が出る
-
-
 @pytest.mark.asyncio
 async def test_gauge_records_count_with_stage_attribute(
     capfire: CaptureLogfire,
@@ -152,9 +144,6 @@ async def test_gauge_records_count_with_stage_attribute(
         dp["value"] == 3 and dp.get("attributes") == {"stage": "assessment"}
         for dp in points
     )
-
-
-# Test 3: empty backlog でも set される (baseline 契約)
 
 
 @pytest.mark.asyncio
@@ -198,9 +187,6 @@ async def test_gauge_records_zero_when_empty_backlog(
     )
 
 
-# Test 4: kill switch off で SELECT 自体走らない → gauge も更新されない
-
-
 @pytest.mark.asyncio
 async def test_gauge_not_recorded_when_kill_switch_disabled(
     capfire: CaptureLogfire,
@@ -236,9 +222,6 @@ async def test_gauge_not_recorded_when_kill_switch_disabled(
     assert backlog_metric is None, (
         f"kill switch off で gauge が記録された (期待: 不在): {backlog_metric}"
     )
-
-
-# Test 5: PII 非含有契約
 
 
 @pytest.mark.asyncio

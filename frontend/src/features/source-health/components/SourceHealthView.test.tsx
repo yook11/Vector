@@ -76,7 +76,7 @@ describe("SourceHealthView", () => {
   it("全 items を backend の配列順 (inactive も) そのまま行表示する", () => {
     render(<SourceHealthView data={sample} />);
     const rows = screen.getAllByRole("row");
-    expect(rows).toHaveLength(1 + sample.items.length); // header + 2
+    expect(rows).toHaveLength(1 + sample.items.length);
     expect(cellAt(rowAt(1), 0)).toHaveTextContent("Alpha");
     expect(cellAt(rowAt(2), 0)).toHaveTextContent("Bravo");
   });
@@ -156,6 +156,6 @@ describe("SourceHealthView", () => {
     render(<SourceHealthView data={empty} />);
     expect(screen.getByText("No sources.")).toBeInTheDocument();
     // header のみ (data 行なし)。
-    expect(screen.getAllByRole("row")).toHaveLength(2); // header + empty-state row
+    expect(screen.getAllByRole("row")).toHaveLength(2);
   });
 });

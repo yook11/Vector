@@ -4,10 +4,6 @@ import { formatPaperDate, getCategoryKicker } from "@/components/paper";
 import type { ReadyBriefingCard } from "../page-models/briefing-list";
 import { BriefingBandCard } from "./BriefingBandCard";
 
-// ---------------------------------------------------------------------------
-// Fixture helpers
-// ---------------------------------------------------------------------------
-
 function makeCard(
   overrides: Partial<ReadyBriefingCard> = {},
 ): ReadyBriefingCard {
@@ -21,10 +17,6 @@ function makeCard(
     ...overrides,
   };
 }
-
-// ---------------------------------------------------------------------------
-// Tests
-// ---------------------------------------------------------------------------
 
 describe("BriefingBandCard — コンテンツ表示", () => {
   it("headline と summary が表示される", () => {

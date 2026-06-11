@@ -84,9 +84,6 @@ def _patch_assessor_call(assessor: DeepSeekAssessor, response: MagicMock) -> Asy
     return mock_call
 
 
-# Round trip: in-scope / out-of-scope
-
-
 class TestDeepSeekCallApiSuccess:
     @pytest.mark.asyncio
     async def test_in_scope_round_trip(self) -> None:

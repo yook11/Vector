@@ -1,37 +1,11 @@
 """バックエンドテスト共通のフィクスチャ。"""
 
 # ruff: noqa: E402
-# 下記 ``os.environ.setdefault`` ブロックを app.* import より前に置く必要があるため、
-# E402 (module-level import not at top of file) はファイル全体で抑止する。
+# E402 は app.* import 前に collect 用 dummy env を入れるため、ファイル単位で抑止する。
 
-# --- 起動時 dummy env 補完 (collect 段階の ImportError 回避) ---
-# config.py は本番 fail-fast を維持するため required field に default を持たない
-# (PR #405-407 / red-team S-AUTH-4 + S-SECRET-1 防御)。一方 ``settings = Settings()``
-# は module load 時に走るため、.env も env も無い sandbox / agent 環境では
-# conftest の ``from app.config import settings`` 行で ValidationError → pytest
-# が collection 段階で全テストを諦める。
-#
-# 解決策: ``.env`` がプロジェクトルートに無い場合のみ、app.* の import より前
-# (このブロック) で ``os.environ.setdefault`` で非機密 dummy 値を補う。
-#
-# 重要: 無条件に ``setdefault`` すると、``.env`` がある環境でも先に dummy が
-# os.environ に焼き付き、pydantic-settings の優先順位 (env vars > .env) で
-# ``.env`` の値が無視される。``.env`` 不在検知で gate しない限り、
-# ``DATABASE_URL=postgresql+asyncpg://...@unreachable.invalid`` が実 DB 接続
-# を奪い、integration テストが ``socket.gaierror`` で全件 ERROR になる。
-#
-# 設計制約:
-# - ``.env`` の探索パスは ``app/config.py`` の ``_ENV_FILE`` と完全一致させる
-#   (``Path(__file__).resolve().parent.parent.parent / ".env"``)。worktree でも
-#   symlink などで ``.env`` を見えるようにすれば実 settings が走る。
-# - BFF_JWT_SIGNING_SECRET / REVALIDATE_BEARER_SECRET は 32 chars 以上 +
-#   ``_KNOWN_WEAK_INTERNAL_SECRETS`` ("secret" / "change-me*" 等) に該当せず、
-#   互いに別値であること (Phase A.3 で 2 secret を必須化 / 同一値拒否)。
-# - DATABASE_URL は ``_KNOWN_WEAK_DATABASE_URL_PATTERNS`` (vector_app:vector_app /
-#   <set-strong-password) を含まないこと。
-# - DATABASE_URL の host は意図的に到達不能 (`.invalid` は RFC 2606 予約 TLD)。
-#   実 DB が要るテストは ``db_session`` 等の fixture で別経路で接続するため、
-#   ここの dummy が偶発的に手元 Postgres へ接続してデータを汚染する事故を防ぐ。
+# .env 不在の sandbox でも collection が通るよう、app.* import 前に非機密 dummy を補う。
+# .env がある環境では pydantic-settings の優先順位を壊さないよう補完しない。
+# DATABASE_URL は .invalid に向け、integration fixture 外で実 DB へ誤接続しない。
 import os
 from pathlib import Path
 
@@ -42,8 +16,7 @@ if not _REPO_ROOT_ENV.exists():
         "DATABASE_URL",
         "postgresql+asyncpg://test:test@unreachable.invalid:5432/none",
     )
-    # BFF_JWT_SIGNING_SECRET / REVALIDATE_BEARER_SECRET は必須なので bootstrap でも
-    # 両方設定する。2 値は同一値拒否を避けるため別値にする。
+    # Settings の必須 secret 検証を満たすため、bootstrap 値も十分長く相互に別値にする。
     os.environ.setdefault(
         "BFF_JWT_SIGNING_SECRET",
         "test-only-collect-bootstrap-bff-xxxxxxxxxxxx",
@@ -82,19 +55,11 @@ from app.models import (  # noqa: F401
 )
 from app.models.base import Base
 
-# テスト用 DB は admin (migration role) で接続する: vector_test の create / drop、
-# auth schema 作成、Base.metadata.create_all、seed user 投入は table owner
-# の権限が必要なため、application role (vector_app) では実行できない。
-# 権限境界の振る舞いは tests/test_db_user_isolation.py で別途 application role
-# 接続を作って assert する。
+# テスト DB 初期化は table owner 権限が必要なため migration role で接続する。
+# application role の権限境界は tests/test_db_user_isolation.py が所有する。
 _ADMIN_DB_URL = settings.migration_database_url or settings.database_url
 TEST_DATABASE_URL = _ADMIN_DB_URL.rsplit("/", 1)[0] + "/vector_test"
 engine_test = create_async_engine(TEST_DATABASE_URL, echo=False, poolclass=NullPool)
-
-# --- BFF JWT auth helpers ---
-# BFF (Next.js) は Better Auth セッションから user_id/role を取り出して
-# HS256 JWT に署名し、backend に Authorization: Bearer で渡す。本ヘルパは
-# テストで同じ secret を使って疑似 BFF として JWT を発行する。
 
 TEST_USER_ID = "00000000-0000-4000-a000-000000000001"
 TEST_ADMIN_ID = "00000000-0000-4000-a000-000000000002"
@@ -179,18 +144,7 @@ _INTEGRATION_FIXTURES = frozenset(
 def pytest_collection_modifyitems(
     config: pytest.Config, items: list[pytest.Item]
 ) -> None:
-    """fixture 依存から unit / integration マーカーを自動付与する。
-
-    DB セッション・httpx Client・seed データなどの integration 用 fixture を
-    要求するテストは integration、それ以外は unit として扱う。autouse の
-    ensure_test_database / setup_db はパッケージ全体の前提なので無視する。
-
-    既に手動で unit / integration marker を付けたテストは尊重し、自動付与を
-    スキップする。integration fixture を介さず自前で実 DB へ接続する
-    test_db_application_name のようなテストが、fixture 不使用ゆえに unit と
-    誤分類され unit job (DB 無し) で接続失敗するのを防ぐ。marker のみを見る
-    get_closest_marker を使い、node 名 (file / class / func) との衝突を避ける。
-    """
+    """fixture 依存から unit / integration マーカーを自動付与する。"""
     for item in items:
         if item.get_closest_marker("integration") or item.get_closest_marker("unit"):
             continue
@@ -205,18 +159,7 @@ _test_schema_initialized = False
 
 
 async def _ensure_test_schema_once() -> None:
-    """vector_test DB・pgvector / auth スキーマ・全テーブルを確保する (初回のみ)。
-
-    integration テスト初回起動時にだけ呼ばれる。DB / extension / schema の確保に
-    加え、``Base.metadata`` の全テーブルを **session で 1 回だけ** 作成する。
-    drop_all → create_all の順にするのは、``down -v`` せず再実行した persistent な
-    local DB でも schema を fresh に揃えるための保険 (一回限りなのでコストは無視)。
-    各テストごとの状態リセットは setup_db の TRUNCATE が担うため、create_all は
-    session 中 1 度きりとなり per-test の DDL コストを排除する。
-
-    unit テストのみの実行 (CI の backend-unit job 等、postgres service 無しの環境)
-    ではそもそも呼ばれないため、DB 接続も発生しない。
-    """
+    """integration 初回だけ vector_test DB・extension・schema・全テーブルを確保する。"""
     global _test_schema_initialized
     if _test_schema_initialized:
         return
@@ -245,14 +188,7 @@ async def _ensure_test_schema_once() -> None:
 
 
 def _truncate_all_sql() -> str:
-    """全テーブルを 1 文で空にする TRUNCATE 文を組み立てる。
-
-    ``Base.metadata.sorted_tables`` を走査し、dialect の identifier preparer で
-    schema 修飾・予約語クォート (auth."user" 等) を安全に処理する。RESTART
-    IDENTITY で採番 PK の sequence を 1 に戻し (seed fixture が ``.id`` に依存)、
-    CASCADE は FK 参照に対する防御的指定。テーブル追加に自動追従するよう定数化
-    せず都度生成する。
-    """
+    """全テーブルを 1 文で空にする TRUNCATE 文を metadata から組み立てる。"""
     preparer = engine_test.dialect.identifier_preparer
     names = ", ".join(
         preparer.format_table(table) for table in Base.metadata.sorted_tables
@@ -262,17 +198,7 @@ def _truncate_all_sql() -> str:
 
 @pytest.fixture(autouse=True)
 async def setup_db(request: pytest.FixtureRequest) -> AsyncGenerator[None]:
-    """integration テストのみ、各テスト前に DB を空状態 + seed にリセットする。
-
-    schema (テーブル) は _ensure_test_schema_once が session で 1 回だけ作成する。
-    各テストの分離は create_all/drop_all ではなく TRUNCATE ... RESTART IDENTITY で
-    行い、per-test の DDL コスト (~99ms) を排除する。リセットを setup (テスト前)
-    に置くのは、前テストが異常終了でデータを残してもテスト順序に依らず必ず clean
-    を保証するため。
-
-    unit テスト (pytest_collection_modifyitems で自動分類) は DB を触らないため
-    何もしない。
-    """
+    """integration テストだけ、各テスト前に DB を空状態 + seed にリセットする。"""
     if "integration" not in request.keywords:
         yield
         return
@@ -312,9 +238,7 @@ async def client(db_session: AsyncSession) -> AsyncGenerator[AsyncClient]:
     """DI でセッションを差し替えた httpx AsyncClient を提供する。"""
 
     async def override_session() -> AsyncGenerator[AsyncSession]:
-        # db_session には autobegin されたトランザクションが残ることがある
-        # (seed の refresh など)。本番の get_session と同様に新しい
-        # トランザクションを開始するため、ここで一度 commit しておく。
+        # 本番の get_session と同様に新しいトランザクションを開始する。
         if db_session.in_transaction():
             await db_session.commit()
         async with db_session.begin():
@@ -342,9 +266,7 @@ async def authed_client(
     """BFF プロキシ認証ヘッダーを付与済みの httpx AsyncClient を提供する。"""
 
     async def override_session() -> AsyncGenerator[AsyncSession]:
-        # db_session には autobegin されたトランザクションが残ることがある
-        # (seed の refresh など)。本番の get_session と同様に新しい
-        # トランザクションを開始するため、ここで一度 commit しておく。
+        # 本番の get_session と同様に新しいトランザクションを開始する。
         if db_session.in_transaction():
             await db_session.commit()
         async with db_session.begin():
@@ -367,9 +289,7 @@ async def admin_client(
     """管理者用 BFF プロキシ認証ヘッダーを付与済みの httpx AsyncClient を提供する。"""
 
     async def override_session() -> AsyncGenerator[AsyncSession]:
-        # db_session には autobegin されたトランザクションが残ることがある
-        # (seed の refresh など)。本番の get_session と同様に新しい
-        # トランザクションを開始するため、ここで一度 commit しておく。
+        # 本番の get_session と同様に新しいトランザクションを開始する。
         if db_session.in_transaction():
             await db_session.commit()
         async with db_session.begin():

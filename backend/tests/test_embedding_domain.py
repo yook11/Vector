@@ -21,9 +21,6 @@ def _vec(value: float = 0.1) -> tuple[float, ...]:
     return tuple([value] * EMBEDDING_DIMENSION)
 
 
-# EmbeddingVector — dimension
-
-
 class TestEmbeddingVectorDimension:
     def test_accepts_exactly_768_dimensions(self) -> None:
         vec = EmbeddingVector(root=_vec())
@@ -40,9 +37,6 @@ class TestEmbeddingVectorDimension:
     def test_rejects_empty_vector(self) -> None:
         with pytest.raises(ValidationError):
             EmbeddingVector(root=())
-
-
-# EmbeddingVector — finite & sanity range
 
 
 class TestEmbeddingVectorFinite:
@@ -84,9 +78,6 @@ class TestEmbeddingVectorSanityRange:
         v[0] = -0.99
         v[1] = 0.99
         EmbeddingVector(root=tuple(v))
-
-
-# EmbeddingVector — coercion & immutability
 
 
 class TestEmbeddingVectorCoercion:

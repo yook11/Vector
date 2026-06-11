@@ -46,9 +46,6 @@ def _snapshot(
     )
 
 
-# find_latest / find_by_window_end
-
-
 class TestFindLatest:
     @pytest.mark.asyncio
     async def test_returns_none_when_empty(self, db_session: AsyncSession) -> None:
@@ -87,9 +84,6 @@ class TestFindByWindowEnd:
     async def test_returns_none_when_missing(self, db_session: AsyncSession) -> None:
         repo = SnapshotRepository(db_session)
         assert await repo.find_by_window_end(date(2026, 5, 3)) is None
-
-
-# exists_for_window_end
 
 
 class TestExistsForWindowEnd:

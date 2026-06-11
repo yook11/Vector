@@ -192,9 +192,6 @@ async def test_response_invalid_error_passes_through_without_service_audit(
     assert len(events) == 0
 
 
-# article_stage span: 実 Service が各分岐で result 語彙を焼く正本
-
-
 @pytest.mark.asyncio
 async def test_signal_sets_stage_result_signal(
     db_session: AsyncSession,

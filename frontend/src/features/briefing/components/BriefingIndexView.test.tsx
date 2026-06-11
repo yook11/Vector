@@ -7,10 +7,6 @@ import type {
 } from "../page-models/briefing-list";
 import { BriefingIndexView } from "./BriefingIndexView";
 
-// ---------------------------------------------------------------------------
-// Fixture helpers
-// ---------------------------------------------------------------------------
-
 function makeReadyCard(
   overrides: Partial<ReadyBriefingCard> = {},
 ): ReadyBriefingCard {
@@ -36,10 +32,6 @@ function makeViewModel(
     ...overrides,
   };
 }
-
-// ---------------------------------------------------------------------------
-// Tests
-// ---------------------------------------------------------------------------
 
 describe("BriefingIndexView — ready カード描画", () => {
   it("ready が N 件のとき N 個の headline と /briefing/<slug> リンクが描画される", () => {

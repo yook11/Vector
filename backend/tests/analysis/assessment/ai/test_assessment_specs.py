@@ -36,9 +36,6 @@ from app.analysis.rate_limit import AIModelRateLimitPolicy, RateLimitRule
 _HEX8 = re.compile(r"^[0-9a-f]{8}$")
 
 
-# Gemini
-
-
 def test_gemini_provider_is_gemini() -> None:
     assert GEMINI_ASSESSMENT_SPEC.provider == "gemini"
 
@@ -99,9 +96,6 @@ def test_gemini_rate_limit_policy_equals_provider_model_rules() -> None:
 def test_gemini_spec_is_frozen() -> None:
     with pytest.raises(FrozenInstanceError):
         GEMINI_ASSESSMENT_SPEC.provider = "openai"  # type: ignore[misc]
-
-
-# DeepSeek
 
 
 def test_deepseek_provider_is_deepseek() -> None:
@@ -183,9 +177,6 @@ def test_deepseek_tool_choice_matches_tool_name() -> None:
     """
     spec = DEEPSEEK_ASSESSMENT_SPEC
     assert spec.structured_output["tool_choice"]["function"]["name"] == spec.tool_name
-
-
-# 横断
 
 
 # pre-D3-refactor (機構を gen_config から structured_output へ分離する前) に捕捉した

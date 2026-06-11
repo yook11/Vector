@@ -8,10 +8,6 @@ import type {
   Trends,
 } from "@/types";
 
-// ---------------------------------------------------------------------------
-// Factory helpers
-// ---------------------------------------------------------------------------
-
 function makeRelated(
   name: string,
   overrides: Partial<RelatedMention> = {},
@@ -68,15 +64,7 @@ function makeTrends(overrides: Partial<Trends> = {}): Trends {
   };
 }
 
-// ---------------------------------------------------------------------------
-// import is done after factory definitions (no hoisted mock needed here)
-// ---------------------------------------------------------------------------
-
 import { TrendsView } from "./TrendsView";
-
-// ---------------------------------------------------------------------------
-// Tests
-// ---------------------------------------------------------------------------
 
 describe("TrendsView — マストヘッド", () => {
   it("sourceAnalysisCount が表示される", () => {

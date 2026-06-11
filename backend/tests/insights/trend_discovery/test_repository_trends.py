@@ -53,9 +53,6 @@ WEEK_END = WEEK_START + WEEK
 PREV_START = WEEK_START - WEEK
 
 
-# get_ranked_mentions
-
-
 class TestGetRankedMentions:
     @pytest.mark.asyncio
     async def test_returns_continued_trend_mention(
@@ -352,8 +349,6 @@ class TestGetRankedMentions:
         assert results == ()
 
 
-# get_mention_key_points
-
 _NVIDIA_KEY = ("nvidia", "company")
 
 
@@ -554,9 +549,6 @@ class TestGetMentionKeyPoints:
         assert result == {}
 
 
-# get_related_mentions
-
-
 class TestGetRelatedMentions:
     @pytest.mark.asyncio
     async def test_returns_co_mention_above_min_shared(
@@ -735,9 +727,6 @@ class TestGetRelatedMentions:
         assert related[0].shared_article_count == 2
         assert str(related[0].name).lower() == "openai"
         assert str(related[0].name) in {"OpenAI", "openai"}  # casing 保持
-
-
-# count_source_analyses
 
 
 class TestCountSourceAnalyses:

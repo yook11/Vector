@@ -64,11 +64,6 @@ async def _make_article(
     return article
 
 
-# signal path
-
-# signal_exists_for_article
-
-
 @pytest.mark.asyncio
 async def test_signal_exists_for_article_returns_false_when_no_extraction(
     db_session: AsyncSession, sample_source: NewsSource
@@ -212,8 +207,6 @@ async def test_concurrent_save_signal_returns_one_persisted_one_none(
     assert len(list(rows)) == 1
 
 
-# noise path
-
 # save_noise → int | None
 
 
@@ -255,9 +248,6 @@ async def test_save_noise_returns_none_on_unique_race_loss(
     )
     await db_session.commit()
     assert second is None  # race 敗北は None で表現される
-
-
-# Ready 構築用 DB 事実取得
 
 
 @pytest.mark.asyncio

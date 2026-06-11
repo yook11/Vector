@@ -88,9 +88,6 @@ def _patch_ready_construction(
     )
 
 
-# assess_content
-
-
 class TestAssessContent:
     @pytest.mark.asyncio
     async def test_ready_build_blocked_audits_and_does_not_call_service(self) -> None:

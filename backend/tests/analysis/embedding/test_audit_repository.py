@@ -140,9 +140,6 @@ async def _fetch_by_outcome(
     return rows[0]
 
 
-# 成功経路 — append_success
-
-
 @pytest.mark.asyncio
 async def test_append_ready_build_blocked_records_missing_analysis_rejected(
     db_session: AsyncSession,
@@ -235,7 +232,7 @@ async def test_append_success_uses_article_id_from_ready(
         await session.commit()
 
     ev = await _fetch_one(db_session, article.id)
-    assert ev.article_id == article.id  # ready.article_id を直接利用
+    assert ev.article_id == article.id
 
 
 @pytest.mark.asyncio
@@ -264,10 +261,7 @@ async def test_append_success_does_not_commit(
         .scalars()
         .all()
     )
-    assert len(rows) == 0  # 未 commit のため永続化されていない
-
-
-# 救済断念経路 — append_backfill_embedding_aged_out
+    assert len(rows) == 0
 
 
 @pytest.mark.asyncio
@@ -294,9 +288,6 @@ async def test_append_backfill_embedding_aged_out_records_rejected(
     assert ev.retryability is None
     assert ev.payload["kind"] == "embedding"
     assert ev.payload["analysis_id"] == 123
-
-
-# 失敗経路 — append_failure (Layer 1 marker dispatch)
 
 
 @pytest.mark.asyncio

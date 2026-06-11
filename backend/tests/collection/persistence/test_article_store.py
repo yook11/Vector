@@ -35,9 +35,6 @@ def _ready(
     )
 
 
-# save
-
-
 @pytest.mark.asyncio
 async def test_save_persists_ready_article(
     db_session: AsyncSession, sample_source: NewsSource

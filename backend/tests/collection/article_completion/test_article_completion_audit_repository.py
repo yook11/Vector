@@ -236,7 +236,7 @@ async def test_append_persist_outcome_success(
     assert ev.retryability is None
     assert ev.payload["canonical_url"] == _URL
     assert ev.payload["attempt_count"] == ready.attempt_count
-    assert ev.payload["body_length"] == len(advanced.body)  # 入力由来
+    assert ev.payload["body_length"] == len(advanced.body)
     assert ev.payload["body_head"] is None  # 成功は焼かない (articles 重複)
     assert ev.payload["scraper_class"] is None  # 定数列は書かない
 

@@ -19,7 +19,6 @@ from app.shared.security.ssrf_guard import (
 )
 
 
-# PublicIpAddress — Unit Tests
 class TestPublicIpAddressAccepts:
     def test_accepts_ipv4_public(self) -> None:
         addr = PublicIpAddress("8.8.8.8")

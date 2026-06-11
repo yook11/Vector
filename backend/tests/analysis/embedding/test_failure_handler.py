@@ -90,7 +90,6 @@ def _input_rejected() -> AIProviderInputRejectedError:
     return AIProviderInputRejectedError(reason=GeminiContentRejectionReason.SAFETY)
 
 
-# --- hold 導出 (mode 由来) ----------------------------------------------------
 _HOLD_CASES: list[tuple[AIProviderError, bool, str | None]] = [
     (AIProviderConfigurationError(), False, "ai_error_configuration"),
     (AIProviderConfigurationError(), True, "ai_error_configuration"),
@@ -123,9 +122,6 @@ async def test_hold_reason_derived_from_provider_mode(
     decision = await handler.handle(ready=ready, exc=exc, last_attempt=last_attempt)
 
     assert decision.stage_hold_reason == expected_hold
-
-
-# --- retry decision (last_attempt 分岐) ---------------------------------------
 
 
 @pytest.mark.asyncio
@@ -180,9 +176,6 @@ async def test_terminal_returns_false_without_reraise(
     assert decision.reraise is False
 
 
-# --- audit row が書かれる (詳細 golden は repository テストが所有) --------------
-
-
 @pytest.mark.asyncio
 async def test_terminal_writes_single_failure_audit_row(
     db_session: AsyncSession,
@@ -207,9 +200,6 @@ async def test_terminal_writes_single_failure_audit_row(
     assert ev.retryability == "non_retryable"
     assert ev.payload["failure_kind"] == "target_rejected"
     assert ev.payload["failure_reason"] == "safety"
-
-
-# --- catch-all 経路 -----------------------------------------------------------
 
 
 @pytest.mark.asyncio
@@ -256,9 +246,6 @@ async def test_unexpected_last_attempt_returns_false(
 
     assert decision.reraise is False
     assert decision.stage_hold_reason is None
-
-
-# --- audit DB 落ち時の log fallback -------------------------------------------
 
 
 @pytest.mark.asyncio

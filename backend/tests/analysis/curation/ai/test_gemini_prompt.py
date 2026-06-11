@@ -21,7 +21,7 @@ def test_render_neutralizes_boundary_close_tag_in_content() -> None:
     )
     assert "[/untrusted_input]" in rendered
     # 元タグそのものは render の TEMPLATE 内 (静的部分) にしか現れない
-    assert rendered.count("</untrusted_input>") == 1  # TEMPLATE の閉じタグのみ
+    assert rendered.count("</untrusted_input>") == 1
 
 
 def test_render_neutralizes_atx_header_in_content() -> None:

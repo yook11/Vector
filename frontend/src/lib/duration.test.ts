@@ -7,7 +7,7 @@ describe("formatAgeSeconds", () => {
   });
 
   it("時間と分を 'Nh Nm' で表示する", () => {
-    expect(formatAgeSeconds(4320)).toBe("1h 12m"); // 72 min
+    expect(formatAgeSeconds(4320)).toBe("1h 12m");
   });
 
   it("分が 0 の時間は 'Nh' のみにする", () => {
@@ -15,7 +15,7 @@ describe("formatAgeSeconds", () => {
   });
 
   it("1時間未満は 'Nm' で表示する", () => {
-    expect(formatAgeSeconds(720)).toBe("12m"); // 12 min
+    expect(formatAgeSeconds(720)).toBe("12m");
   });
 
   it("1分未満は '0m' に切り捨てる", () => {
@@ -27,6 +27,6 @@ describe("formatAgeSeconds", () => {
   });
 
   it("24時間を超えても日単位にせず時間で積む", () => {
-    expect(formatAgeSeconds(90000)).toBe("25h"); // 1500 min = 25h
+    expect(formatAgeSeconds(90000)).toBe("25h");
   });
 });

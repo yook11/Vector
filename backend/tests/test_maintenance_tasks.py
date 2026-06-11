@@ -82,9 +82,6 @@ async def test_curations_disabled_returns_early() -> None:
     backlog_cls.assert_not_called()
 
 
-# hold gate — terminal_keep の hold 中は run 全体を skip (circuit breaker 差替)
-
-
 @pytest.mark.asyncio
 async def test_curations_held_skips_entire_run() -> None:
     """hold 中は年齢削除も backlog 参照も dispatch も行わず即 return。"""

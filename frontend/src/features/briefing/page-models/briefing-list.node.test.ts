@@ -14,10 +14,6 @@ beforeEach(() => {
   vi.clearAllMocks();
 });
 
-// ---------------------------------------------------------------------------
-// Fixture helpers
-// ---------------------------------------------------------------------------
-
 function makeLatest(
   overrides: {
     weekStart?: string;
@@ -33,10 +29,6 @@ function makeLatest(
     inputArticleCount: overrides.inputArticleCount ?? 10,
   };
 }
-
-// ---------------------------------------------------------------------------
-// Tests
-// ---------------------------------------------------------------------------
 
 describe("getBriefingListViewModel — ready / pending split", () => {
   it("latest があるアイテムは ready に入り、latest===null は pending に入る", async () => {
@@ -175,7 +167,7 @@ describe("getBriefingListViewModel — weekEnd 導出", () => {
     const expectedStr = expected.toISOString().slice(0, 10);
 
     expect(result.weekEnd).toBe(expectedStr);
-    expect(result.weekEnd).toBe("2026-06-01"); // 月跨ぎ確認
+    expect(result.weekEnd).toBe("2026-06-01");
   });
 
   it("weekEnd は weekStart + 6 日 (年跨ぎ: 2025-12-29 → 2026-01-04)", async () => {
@@ -193,7 +185,7 @@ describe("getBriefingListViewModel — weekEnd 導出", () => {
     const expectedStr = expected.toISOString().slice(0, 10);
 
     expect(result.weekEnd).toBe(expectedStr);
-    expect(result.weekEnd).toBe("2026-01-04"); // 年跨ぎ確認
+    expect(result.weekEnd).toBe("2026-01-04");
   });
 
   it("weekStart は currentWeekStart をそのまま返す", async () => {

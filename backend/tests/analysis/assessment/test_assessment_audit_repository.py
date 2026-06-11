@@ -78,9 +78,6 @@ from app.models.pipeline_event import PipelineEvent
 _AI_MODEL = "gemini-2.5-pro"
 
 
-# 補助 fixture: extraction を作る (article_id 逆引き経路を一貫性ある状態にする)
-
-
 async def _make_article(
     db_session: AsyncSession,
     sample_source: NewsSource,
@@ -231,9 +228,6 @@ async def _fetch_by_outcome(
     )
     assert len(rows) == 1
     return rows[0]
-
-
-# 成功経路 — append_in_scope
 
 
 @pytest.mark.asyncio
@@ -397,7 +391,7 @@ async def test_append_in_scope_uses_article_id_from_ready(
         await session.commit()
 
     ev = await _fetch_one(db_session, article.id)
-    assert ev.article_id == article.id  # ready.article_id を直接利用
+    assert ev.article_id == article.id
 
 
 @pytest.mark.asyncio
@@ -428,7 +422,7 @@ async def test_append_in_scope_does_not_commit(
         .scalars()
         .all()
     )
-    assert len(rows) == 0  # 未 commit のため永続化されていない
+    assert len(rows) == 0
 
 
 @pytest.mark.asyncio
@@ -455,9 +449,6 @@ async def test_append_in_scope_truncates_raw_response(
     ev = await _fetch_one(db_session, article.id)
     assert ev.payload["ai_raw_response"] is not None
     assert len(ev.payload["ai_raw_response"]) == 2048  # _AI_RAW_RESPONSE_LIMIT
-
-
-# 成功経路 — append_out_of_scope
 
 
 @pytest.mark.asyncio
@@ -507,12 +498,9 @@ async def test_append_out_of_scope_records_investor_take(
         await session.commit()
 
     ev = await _fetch_one(db_session, article.id)
-    assert ev.payload["investor_take"] == out_of_scope.investor_take  # 非 None
+    assert ev.payload["investor_take"] == out_of_scope.investor_take
     # in-scope 固有 field のみ None
     assert ev.payload["category_slug"] is None
-
-
-# 救済断念経路 — append_backfill_assessment_aged_out
 
 
 @pytest.mark.asyncio
@@ -540,9 +528,6 @@ async def test_append_backfill_assessment_aged_out_records_rejected(
     assert ev.payload["kind"] == "assessment"
     assert ev.source_id == sample_source.id
     assert ev.payload["curation_id"] == extraction.id
-
-
-# 失敗経路 — append_failure (Layer 1 marker dispatch)
 
 
 @pytest.mark.asyncio
