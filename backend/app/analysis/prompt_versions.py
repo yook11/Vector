@@ -6,7 +6,7 @@ ADR (`docs/observability/pipeline-events-design.md`) §prompt_version の規律 
 5 要素 = ``prompt_template`` / ``model`` / ``gen_config`` /
 ``response_schema`` / ``system_instruction``。SHA-256 で hash し prefix 8 文字を採る。
 
-呼出は **Prompt class の class body** 内で 1 回だけ走る (`VERSION` ClassVar 代入)。
+呼出は **Spec module の module-level** で 1 回だけ走る (`Final` 定数代入)。
 runtime で再計算しないので、`@cache` 不要、外部代入不要。
 
 git short SHA 注入は採らない: プロンプト未変更の commit でも値が変わるノイズが

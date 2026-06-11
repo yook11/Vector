@@ -29,7 +29,7 @@ class DeepSeekAssessmentPrompt:
 
     @classmethod
     def render(cls, *, title_ja: str, summary_ja: str) -> str:
-        """sanitize 済み Stage 1 出力を ``<untrusted_input>`` に埋めて返す。
+        """sanitize 済み Stage 3 (curation) 出力を ``<untrusted_input>`` に埋めて返す。
 
         ``summary_ja`` は ``MAX_SUMMARY_CHARS`` で切り詰めてから sanitize する。
         """

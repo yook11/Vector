@@ -1,7 +1,7 @@
 """AI model rate limit policy — provider/model 単位の呼び出し制約。
 
 Gemini 公式は rate limit を project × model で適用するため、アプリ側のキー
-名前空間も provider × model で揃える。stage (extract/assess/embed) が同一
+名前空間も provider × model で揃える。stage (curate/assess/embed) が同一
 モデルを共有する場合でも 1 つのカウンタを共有することで、provider 実 quota
 と整合した予算管理になる。
 """

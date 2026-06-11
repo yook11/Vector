@@ -18,7 +18,7 @@ logger = structlog.get_logger(__name__)
 class BaseAssessor(abc.ABC):
     """Stage 4 — Assessment のテンプレートメソッド基底。
 
-    Stage 3 (Extraction) の構造化出力に対して判断を下す。原文は読まない。
+    Stage 3 (Curation) の構造化出力に対して判断を下す。原文は読まない。
     判定結果は ``AssessmentCall`` envelope (``result`` + 監査用 raw 情報) で返す。
 
     SDK 例外は ``_translate_error`` で ``AIProvider*Error`` (Stage 中立の
@@ -69,7 +69,7 @@ class BaseAssessor(abc.ABC):
         title_ja: str,
         summary_ja: str,
     ) -> AssessmentCall[InScope] | AssessmentCall[OutOfScope]:
-        """Stage 3 (Extraction) の出力を判定し ``AssessmentCall`` envelope を返す。
+        """Stage 3 (Curation) の出力を判定し ``AssessmentCall`` envelope を返す。
 
         Args:
             title_ja: 日本語翻訳タイトル。

@@ -178,7 +178,8 @@ class AIProviderOutputBlockedError(AIProviderContentError):
 
 
 # ---------------------------------------------------------------------------
-# State 起因: 運用側修正が必要 (記事は健全、Stage 3 では KEEP_ARTICLE 行き)。
+# State 起因: 運用側修正が必要 (記事は健全、Stage 3 (curation) では keep marker
+# ``CurationTerminalKeepError`` 行き)。
 # 回復クラス = OPERATOR_ACTION_REQUIRED。
 # ---------------------------------------------------------------------------
 

@@ -4,7 +4,7 @@ Layer 1 marker (``AssessmentTerminalError`` / ``AssessmentRecoverableError`` /
 catch-all) を audit / inline retry decision に対応づける唯一の場所。Task 層は
 taskiq retry / stage hold の decision だけを解釈する。
 
-Stage 4 は内容起因 DELETE 経路を持たない (extraction を保持して assessment を
+Stage 4 は内容起因 DELETE 経路を持たない (curation を保持して assessment を
 skip する設計) ため、Stage 3 と Handler は共有しない。
 """
 

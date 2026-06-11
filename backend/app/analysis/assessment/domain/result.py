@@ -5,7 +5,7 @@ Stage 4 が産出する業務結果 (「対象範囲内 / 対象範囲外」+ ta
 要求する taxonomy に従って返すだけで、これらの型自体は domain 都合で
 定義される。
 
-公開型は **「結果型 1 つ + 構成型 3 つ」**:
+公開型は **「結果型 1 つ + 構成型 4 つ」**:
 
 - ``AssessmentResult = InScope | OutOfScope`` — Stage 4 判定結果 union。
   Service / Repository は ``match`` / ``isinstance`` で型ディスパッチする
@@ -16,6 +16,10 @@ Stage 4 が産出する業務結果 (「対象範囲内 / 対象範囲外」+ ta
   ``OUT_OF_SCOPE`` 排除)
 - ``ValidCategory`` — AI 境界に提示する全 slug 集合 (13 値、
   ``OUT_OF_SCOPE`` を含む domain taxonomy のフラット表現)
+
+このほか key_point 構造として ``Mention`` / ``KeyPoint`` / ``MentionType`` と上限定数
+``MAX_KEY_POINT_CONTENT_LEN`` / ``MAX_KEY_POINTS_PER_ASSESSMENT`` を公開し、
+briefing / trend_discovery と cross-BC で共有する。
 
 AI 境界では引き続きフラット形式 (``{category, investor_take, key_points}``)
 を AI に要求する (構造化出力で discriminated union を要求すると AI 精度が

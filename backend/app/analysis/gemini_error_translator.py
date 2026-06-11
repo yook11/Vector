@@ -1,6 +1,6 @@
 """Gemini SDK 例外を AIProvider*Error に分類する共通 translator。
 
-analysis pipeline 内 (Stage 3 extraction / Stage 4 assessment / Stage 5 embedding) で、
+analysis pipeline 内 (Stage 3 curation / Stage 4 assessment / Stage 5 embedding) で、
 同じ Gemini 障害が Stage 違いで別の AIProvider*Error に分類されないようにする。
 
 責任の境界:
@@ -138,7 +138,7 @@ _CONTEXT_LENGTH_PATTERNS: tuple[str, ...] = (
 def is_context_length_error(exc: Exception) -> bool:
     """``exc`` が「入力長超過」を示す Gemini SDK 例外かどうか。
 
-    Stage 3 GeminiExtractor が ``INVALID_ARGUMENT`` / ``DEADLINE_EXCEEDED`` のうち
+    Stage 3 GeminiCurator が ``INVALID_ARGUMENT`` / ``DEADLINE_EXCEEDED`` のうち
     入力長超過だけを ``AIProviderInputRejectedError`` に振り分けるために使う。
     status guard を入れることで、無関係 status の APIError の message に偶然
     pattern が含まれた場合の誤分類を防ぐ。

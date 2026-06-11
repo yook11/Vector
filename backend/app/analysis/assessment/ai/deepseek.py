@@ -90,7 +90,7 @@ class DeepSeekAssessor(BaseAssessor):
         title_ja: str,
         summary_ja: str,
     ) -> AssessmentCall[InScope] | AssessmentCall[OutOfScope]:
-        """Stage 3 (Extraction) の出力を判定する。原文は読まない。"""
+        """Stage 3 (Curation) の出力を判定する。原文は読まない。"""
         prompt = DeepSeekAssessmentPrompt.render(
             title_ja=title_ja, summary_ja=summary_ja
         )

@@ -1,6 +1,6 @@
 """provider 単位の rate limit acquire を 1 メソッドに閉じる gate。
 
-extraction / assessment / embedding 3 stage 共通の rate limit facade。
+curation / assessment / embedding 3 stage 共通の rate limit facade。
 Task / Service が limiter / quota 例外を直接知る代わりに、gate に policy を
 渡して acquired/skipped の bool だけ受け取る形に圧縮する。
 """

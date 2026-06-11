@@ -55,8 +55,8 @@ class AssessmentService:
                 (Task 層が ``EmbeddingTrigger`` に詰めて kiq に流すキー)
             out-of-scope 成功時: ``None`` (Stage 5 chain なし)
             楽観ロック敗北時: ``None`` (Task 層は下流 chain を起動しない、
-                勝者が crash 等で chain に失敗した case の救済は reconcile cron
-                経路に委ねる)
+                勝者が crash 等で chain に失敗した case の救済は backfill
+                (Stage.BACKFILL_ASSESS) 経路に委ねる)
 
         Raises:
             ``AssessmentRecoverableError`` / ``AssessmentTerminalError``

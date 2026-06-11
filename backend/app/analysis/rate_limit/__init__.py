@@ -3,7 +3,7 @@
 公開 API:
 
 - ``AIModelRateLimitPolicy``: AI call spec 側が provider/model ごとの制約を表す policy
-- ``ProviderRateLimitGate``: extraction/assessment/embedding 3 stage 共通の非保持 facade
+- ``ProviderRateLimitGate``: curation/assessment/embedding 3 stage 共通の非保持 facade
 - ``record_rate_limit_gate_skipped``: gate skip を Logfire metric counter に記録する
 """
 

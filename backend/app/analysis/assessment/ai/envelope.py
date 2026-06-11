@@ -36,7 +36,7 @@ class AssessmentCall[T: AssessmentResult]:
         raw_category: AI が出力した category slug 値 (詰め替え前、``out_of_scope``
             含む)。enum 化しない (raw は監査用、enum 化すると「妥当な値しか入らない」
             誤解を生む)。
-        prompt_version: 呼び出し元 Prompt class の VERSION (8 文字 hash)。
+        prompt_version: 呼び出し元 Spec の ``version`` (8 文字 hash)。
         model_name: ``BaseAssessor.model_name`` property の値。Repository / Audit
             が ``call.model_name`` で参照する (caller が ``ai_model`` を別引数で
             引き回さない、`feedback_bc_boundary_guarantees_downstream`)。

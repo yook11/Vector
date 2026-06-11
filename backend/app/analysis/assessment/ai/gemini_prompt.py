@@ -24,7 +24,8 @@ class GeminiAssessmentPrompt:
 
     @classmethod
     def render(cls, *, title_ja: str, summary_ja: str) -> str:
-        """sanitize 済み Stage 1 出力を ``<untrusted_input>`` に埋めて返す。"""
+        """sanitize 済み Stage 3 (curation) 出力を ``<untrusted_input>`` に
+        埋めて返す。"""
         return cls.TEMPLATE.format(
             title_ja=sanitize_for_untrusted_block(title_ja),
             summary_ja=sanitize_for_untrusted_block(summary_ja),

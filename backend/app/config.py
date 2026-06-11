@@ -103,7 +103,7 @@ class Settings(BaseSettings):
     postgres_collect_password: SecretStr | None = None
 
     # AI
-    # Stage 3 (extraction) と Stage 4 (assessment) のアダプター選択は env では
+    # Stage 3 (curation) と Stage 4 (assessment) のアダプター選択は env では
     # なく brokers.py の composition root (_wire_analysis_adapters) で hardcode する。
     # 切替はコード変更 + worker restart で行うため、ここに provider 名は持たない。
     gemini_api_key: SecretStr = SecretStr("")
