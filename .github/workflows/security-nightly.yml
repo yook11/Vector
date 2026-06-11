@@ -28,7 +28,7 @@ jobs:
     name: Trivy fs scan (lockfiles)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6.0.3
 
       # aquasecurity/trivy-action は 2026-03 に supply chain 攻撃で 76/77 tags
       # が force-push 改ざん。tag pin (`@v0.35.0`) では再発時に取り込まれる
@@ -64,7 +64,7 @@ jobs:
     name: Trivy config scan (Dockerfile + compose)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6.0.3
 
       - name: Trivy config scan
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25  # v0.35.0 = trivy v0.69.3 (2026-03-04 commit, pre-incident clean)
