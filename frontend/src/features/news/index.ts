@@ -13,7 +13,6 @@ export { DashboardPaperArticleList } from "./components/DashboardPaperArticleLis
 export { MobileSidebar } from "./components/MobileSidebar";
 export { NewsDetail } from "./components/NewsDetail";
 export { NewsFilters } from "./components/NewsFilters";
-export { NewsList } from "./components/NewsList";
 export { NewsPagination } from "./components/NewsPagination";
 export { PaperNewsControls } from "./components/PaperNewsControls";
 export { PaperNewsPagination } from "./components/PaperNewsPagination";

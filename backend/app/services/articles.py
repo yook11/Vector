@@ -13,13 +13,38 @@ from app.schemas.articles import (
 )
 from app.schemas.embeds import CategoryEmbed, NewsSourceEmbed, OriginalArticleEmbed
 
+_KEY_POINT_MAX = 3
+_KEY_POINT_LEN = 250
+_SUMMARY_PREVIEW_LEN = 300
+
+
+def _truncate(text: str, limit: int) -> str:
+    """超過時のみ末尾を省略記号で詰め、全長を limit 以内に収める防御ガード。"""
+    if len(text) <= limit:
+        return text
+    return text[: limit - 1] + "…"
+
 
 def build_brief(analysis: InScopeAssessment) -> ArticleBrief:
+    """一覧カード用 brief を構築する。
+
+    key_points 非空 ⟺ summary_preview is None の相互排他をここで構造的に
+    保証する (無言カードを作らない)。判定は extract 後の表示可能 content
+    基準で、全要素 invalid な JSONB も空としてフォールバックする。
+    """
     a = analysis.curation.article
+    key_points = [
+        _truncate(content, _KEY_POINT_LEN)
+        for content in extract_key_point_contents(analysis.key_points)[:_KEY_POINT_MAX]
+    ]
+    summary_preview = (
+        None if key_points else _truncate(analysis.summary, _SUMMARY_PREVIEW_LEN)
+    )
     return ArticleBrief(
         id=analysis.id,
         translated_title=analysis.translated_title,
-        summary=analysis.summary,
+        key_points=key_points,
+        summary_preview=summary_preview,
         category=CategoryEmbed(
             slug=analysis.category.slug,
             name=analysis.category.name,

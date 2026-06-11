@@ -65,7 +65,11 @@ class ArticleBrief(_CamelBase):
 
     id: int
     translated_title: str
-    summary: str
+    # 一覧カードの主表示。content のみ最大3件・各250字以内 (build_brief が保証)。
+    key_points: list[str] = Field(default_factory=list)
+    # key_points が空のときだけ summary を300字以内で返すフォールバック。
+    # default 無し = required・nullable で、null でもキーを省略しない。
+    summary_preview: str | None
     category: CategoryEmbed
     source: NewsSourceEmbed
     published_at: datetime | None = None

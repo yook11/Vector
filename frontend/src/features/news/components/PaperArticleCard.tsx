@@ -22,6 +22,7 @@ export function PaperArticleCard({
   const sourceLabel = getArticleSourceLabel(article);
   const source = getSourceBadge(article.source.name);
   const kicker = getCategoryKicker(article.category.slug);
+  const keyPoints = article.keyPoints ?? [];
 
   return (
     <article className="relative flex flex-col border-b border-[color-mix(in_oklab,var(--vector-ink)_14%,transparent)] pb-6">
@@ -48,12 +49,35 @@ export function PaperArticleCard({
         style={kickerCssVars(kicker)}
       />
 
-      <p
-        className="mb-4 line-clamp-3 text-[13.5px] font-medium leading-[1.86] text-[var(--vector-ink-soft)]"
-        style={{ fontFamily: "var(--font-vector-serif)" }}
-      >
-        {article.summary}
-      </p>
+      {keyPoints.length > 0 ? (
+        <ul
+          aria-label="要点"
+          className="mb-4 space-y-1 text-[13.5px] font-medium leading-[1.86] text-[var(--vector-ink-soft)]"
+          style={{ fontFamily: "var(--font-vector-serif)" }}
+        >
+          {keyPoints.map((point, i) => (
+            <li
+              // biome-ignore lint/suspicious/noArrayIndexKey: 要点順序は AI 出力に従い安定
+              key={i}
+              className="flex gap-2"
+            >
+              <span
+                aria-hidden="true"
+                className="mt-[0.55em] size-[5px] shrink-0 rounded-full bg-[color-mix(in_oklab,var(--vector-ink)_28%,transparent)]"
+              />
+              {point}
+            </li>
+          ))}
+        </ul>
+      ) : (
+        // summaryPreview は keyPoints 空時のみ非 null を build_brief が保証 (DB CHECK summary != '')。
+        <p
+          className="mb-4 line-clamp-3 text-[13.5px] font-medium leading-[1.86] text-[var(--vector-ink-soft)]"
+          style={{ fontFamily: "var(--font-vector-serif)" }}
+        >
+          {article.summaryPreview}
+        </p>
+      )}
 
       <div className="mt-auto flex items-center justify-between gap-4">
         <span className="inline-flex min-w-0 items-center gap-2">

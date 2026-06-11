@@ -24,9 +24,13 @@ export type ArticleBrief = {
      */
     translatedTitle: string;
     /**
-     * Summary
+     * Keypoints
      */
-    summary: string;
+    keyPoints?: Array<string>;
+    /**
+     * Summarypreview
+     */
+    summaryPreview: string | null;
     category: CategoryEmbed;
     source: NewsSourceEmbed;
     /**

@@ -124,7 +124,11 @@ class TestListWatchlist:
         item = data["items"][0]
         assert item["id"] == sample_article.id
         assert item["translatedTitle"] == "テスト記事"
-        assert item["summary"] == "テストの要約"
+        # ArticleBrief 契約: summary 全文は返さず keyPoints / summaryPreview を返す。
+        # fixture は key_points 未指定 (空) のため summaryPreview にフォールバック。
+        assert "summary" not in item
+        assert item["keyPoints"] == []
+        assert item["summaryPreview"] == "テストの要約"
         assert item["source"]["name"] == "Test Tech Source"
         # watchlist 経路も brief の eager load を共有し category を返す
         assert item["category"]["slug"] == str(sample_categories[0].slug)

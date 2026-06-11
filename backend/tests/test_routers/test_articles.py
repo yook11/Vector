@@ -194,7 +194,8 @@ class TestListArticles:
         assert "perPage" in data
         item = data["items"][0]
         assert "translatedTitle" in item
-        assert "summary" in item
+        assert "keyPoints" in item
+        assert "summaryPreview" in item
         assert "publishedAt" in item
 
     async def test_brief_includes_category(
@@ -333,6 +334,50 @@ class TestListArticles:
         data = resp.json()
         assert data["total"] == 1
         assert data["items"][0]["translatedTitle"] == "AI 記事"
+
+    async def test_brief_has_summary_preview_key_always_present(
+        self,
+        bff_client: AsyncClient,
+        db_session: AsyncSession,
+        sample_source: NewsSource,
+        sample_categories: list[Category],
+    ) -> None:
+        """HTTP response: summaryPreview キーは key_points が非空でも
+        常に存在する(null で省略されない)。"""
+        article = await _create_article(db_session, sample_source)
+        await _create_analysis(
+            db_session,
+            article,
+            category_id=sample_categories[0].id,
+            key_points=[{"content": "AIが台頭した。", "mentions": []}],
+        )
+        resp = await bff_client.get("/api/v1/articles")
+        assert resp.status_code == 200
+        item = resp.json()["items"][0]
+        assert "summaryPreview" in item
+        assert item["summaryPreview"] is None
+
+    async def test_brief_does_not_expose_summary_full_text(
+        self,
+        bff_client: AsyncClient,
+        db_session: AsyncSession,
+        sample_source: NewsSource,
+        sample_categories: list[Category],
+    ) -> None:
+        """HTTP response: 一覧カードに summary(全文)フィールドが含まれない。"""
+        article = await _create_article(db_session, sample_source)
+        await _create_analysis(
+            db_session,
+            article,
+            category_id=sample_categories[0].id,
+        )
+        resp = await bff_client.get("/api/v1/articles")
+        assert resp.status_code == 200
+        item = resp.json()["items"][0]
+        assert "summary" not in item
+        assert "keyPoints" in item
+        # key_points 空(default fixture)のとき summaryPreview は summary に fallback。
+        assert item["summaryPreview"] == "テストの要約"
 
 
 @pytest.mark.asyncio
@@ -636,3 +681,37 @@ class TestSimilarArticles:
         )
         assert resp.status_code == 200
         assert len(resp.json()) == 2
+
+    async def test_similar_carries_new_brief_contract(
+        self,
+        bff_client: AsyncClient,
+        db_session: AsyncSession,
+        sample_source: NewsSource,
+        sample_categories: list[Category],
+    ) -> None:
+        # 類似記事も build_brief を共有する。素の配列 envelope が新 brief 契約
+        # (keyPoints 搭載 / summary 全文不在 / 相互排他) を載せることを確認する。
+        cat_id = sample_categories[0].id
+        source = await _create_article(
+            db_session, sample_source, url="https://example.com/src-brief"
+        )
+        source_analysis = await _create_analysis(
+            db_session, source, category_id=cat_id, embedding=EMBEDDING_A
+        )
+        similar = await _create_article(
+            db_session, sample_source, url="https://example.com/similar-brief"
+        )
+        await _create_analysis(
+            db_session,
+            similar,
+            category_id=cat_id,
+            embedding=EMBEDDING_B,
+            key_points=[{"content": "AIが台頭した。", "mentions": []}],
+        )
+
+        resp = await bff_client.get(f"/api/v1/articles/{source_analysis.id}/similar")
+        assert resp.status_code == 200
+        item = resp.json()[0]
+        assert item["keyPoints"] == ["AIが台頭した。"]
+        assert item["summaryPreview"] is None
+        assert "summary" not in item
