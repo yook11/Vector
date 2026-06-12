@@ -282,6 +282,50 @@ class TestListArticles:
         assert items[0]["translatedTitle"] == "後の記事"
         assert items[1]["translatedTitle"] == "先の記事"
 
+    @pytest.mark.parametrize("sort_order", ["desc", "asc"])
+    async def test_null_published_at_sorts_last(
+        self,
+        bff_client: AsyncClient,
+        db_session: AsyncSession,
+        sample_source: NewsSource,
+        sample_categories: list[Category],
+        sort_order: str,
+    ) -> None:
+        """published_at null (日付不明) の記事は並び方向に依らず末尾に来る。
+
+        PostgreSQL の DESC 既定 (NULLS FIRST) のままだと日付不明記事が
+        新着の先頭を占有するため NULLS LAST を明示する。除外はしない
+        (日付フィルタを持たない一覧契約の維持)。
+        """
+        cat_id = sample_categories[0].id
+        dated = await _create_article(
+            db_session,
+            sample_source,
+            title="Dated",
+            url="https://example.com/dated",
+            published_at=datetime(2025, 1, 1, tzinfo=UTC),
+        )
+        await _create_analysis(
+            db_session, dated, category_id=cat_id, translated_title="日付あり"
+        )
+        undated = await _create_article(
+            db_session,
+            sample_source,
+            title="Undated",
+            url="https://example.com/undated",
+        )
+        # ヘルパーは published_at 未指定を now に倒すため null は後から剥がす。
+        undated.published_at = None
+        db_session.add(undated)
+        await db_session.commit()
+        await _create_analysis(
+            db_session, undated, category_id=cat_id, translated_title="日付不明"
+        )
+
+        resp = await bff_client.get(f"/api/v1/articles?sortOrder={sort_order}")
+        items = resp.json()["items"]
+        assert [i["translatedTitle"] for i in items] == ["日付あり", "日付不明"]
+
     async def test_invalid_category_slug_returns_422(
         self, bff_client: AsyncClient
     ) -> None:

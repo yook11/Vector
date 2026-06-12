@@ -67,11 +67,12 @@ class ArticleRepository:
         count_stmt = select(func.count()).select_from(stmt.subquery())
         total = (await self.session.execute(count_stmt)).scalar_one()
 
-        # ソート
+        # ソート。日付不明 (published_at null) は方向に依らず末尾へ
+        # (PostgreSQL の DESC 既定は NULLS FIRST で新着の先頭を占有するため)。
         order = (
-            Article.published_at.desc()
+            Article.published_at.desc().nulls_last()
             if query.sort_order == SortOrder.DESC
-            else Article.published_at.asc()
+            else Article.published_at.asc().nulls_last()
         )
         stmt = stmt.order_by(order, InScopeAssessment.id.desc())
 
