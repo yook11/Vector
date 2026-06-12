@@ -120,7 +120,7 @@ export type BriefingDetail = {
     /**
      * Keyarticles
      */
-    keyArticles: Array<BriefingDetailKeyArticle>;
+    keyArticles: Array<BriefingKeyArticle>;
     /**
      * Watchpoints
      */
@@ -169,10 +169,7 @@ export type BriefingListResponse = {
  *
  * 未生成カテゴリでは ``BriefingListItem.latest = None`` で表現する。
  * 一覧バンド表示用に見出し / summary / 件数を同梱する。詳細
- * (``BriefingDetail``) と異なり chapters は持たず、keyArticles の article は
- * 一覧カード契約 ``ArticleBrief`` (詳細は ``_BriefingArticleEmbed``)。
- * keyArticles / watchPoints は required (デフォルト無し) で、service の
- * 詰め忘れを構築時エラーで即死させる。
+ * (``BriefingDetail``) と異なり chapters / keyArticles は持たない。
  */
 export type BriefingSummary = {
     /**
@@ -191,14 +188,6 @@ export type BriefingSummary = {
      * Inputarticlecount
      */
     inputArticleCount: number;
-    /**
-     * Keyarticles
-     */
-    keyArticles: Array<BriefingSummaryKeyArticle>;
-    /**
-     * Watchpoints
-     */
-    watchPoints: Array<string>;
 };
 
 /**
@@ -839,36 +828,16 @@ export type BriefingChapter = {
 };
 
 /**
- * _BriefingDetailKeyArticle
+ * _BriefingKeyArticle
  *
  * briefing の編集判断 (生成時固定) + 参照記事 (読み出し時 join) の自己完結ペア。
- *
- * 詳細レスポンス (``BriefingDetail``) 所属。対称ペアの
- * ``_BriefingSummaryKeyArticle`` (一覧所属) とは article payload が異なる
- * (詳細 embed vs 一覧カード契約 ``ArticleBrief``)。
  */
-export type BriefingDetailKeyArticle = {
+export type BriefingKeyArticle = {
     /**
      * Significance
      */
     significance: string;
     article: BriefingArticleEmbed;
-};
-
-/**
- * _BriefingSummaryKeyArticle
- *
- * 一覧 (``BriefingSummary``) 所属の keyArticles 1 件。
- *
- * article は一覧カード契約 ``ArticleBrief`` そのもの (PaperArticleCard で
- * そのまま描画する前提)。significance / 件数の上限定数は詳細側と共有する。
- */
-export type BriefingSummaryKeyArticle = {
-    /**
-     * Significance
-     */
-    significance: string;
-    article: ArticleBrief;
 };
 
 /**

@@ -37,7 +37,6 @@ from app.insights.briefing.domain.briefing import (
     MAX_WATCH_POINT_STATEMENT_LEN,
     MAX_WATCH_POINTS_PER_BRIEFING,
 )
-from app.schemas.articles import ArticleBrief
 from app.schemas.base import _CamelBase
 from app.schemas.embeds import CategoryEmbed, NewsSourceEmbed
 
@@ -46,9 +45,6 @@ _MAX_ARTICLE_TITLE_LEN: Final[int] = 500
 _MAX_URL_LEN: Final[int] = 2_000
 # カテゴリ数 (現在 11、将来余裕で 20)。
 _MAX_BRIEFING_LIST_ITEMS: Final[int] = 20
-
-# watchPoints の 1 要素。詳細 / 一覧で per-item ガードを共有する (F10)。
-_WatchPointStatement = Annotated[str, Field(max_length=MAX_WATCH_POINT_STATEMENT_LEN)]
 
 
 class _BriefingChapter(_CamelBase):
@@ -75,27 +71,11 @@ class _BriefingArticleEmbed(_CamelBase):
     )
 
 
-class _BriefingDetailKeyArticle(_CamelBase):
-    """briefing の編集判断 (生成時固定) + 参照記事 (読み出し時 join) の自己完結ペア。
-
-    詳細レスポンス (``BriefingDetail``) 所属。対称ペアの
-    ``_BriefingSummaryKeyArticle`` (一覧所属) とは article payload が異なる
-    (詳細 embed vs 一覧カード契約 ``ArticleBrief``)。
-    """
+class _BriefingKeyArticle(_CamelBase):
+    """briefing の編集判断 (生成時固定) + 参照記事 (読み出し時 join) の自己完結ペア。"""
 
     significance: str = Field(max_length=MAX_KEY_ARTICLE_SIGNIFICANCE_LEN)
     article: _BriefingArticleEmbed
-
-
-class _BriefingSummaryKeyArticle(_CamelBase):
-    """一覧 (``BriefingSummary``) 所属の keyArticles 1 件。
-
-    article は一覧カード契約 ``ArticleBrief`` そのもの (PaperArticleCard で
-    そのまま描画する前提)。significance / 件数の上限定数は詳細側と共有する。
-    """
-
-    significance: str = Field(max_length=MAX_KEY_ARTICLE_SIGNIFICANCE_LEN)
-    article: ArticleBrief
 
 
 class BriefingDetail(_CamelBase):
@@ -110,12 +90,12 @@ class BriefingDetail(_CamelBase):
     headline: str = Field(max_length=MAX_BRIEFING_HEADLINE_LEN)
     summary: str = Field(max_length=MAX_BRIEFING_SUMMARY_LEN)
     chapters: list[_BriefingChapter] = Field(max_length=MAX_CHAPTERS_PER_BRIEFING)
-    key_articles: list[_BriefingDetailKeyArticle] = Field(
+    key_articles: list[_BriefingKeyArticle] = Field(
         max_length=MAX_KEY_ARTICLES_PER_BRIEFING
     )
-    watch_points: list[_WatchPointStatement] = Field(
-        max_length=MAX_WATCH_POINTS_PER_BRIEFING
-    )
+    watch_points: list[
+        Annotated[str, Field(max_length=MAX_WATCH_POINT_STATEMENT_LEN)]
+    ] = Field(max_length=MAX_WATCH_POINTS_PER_BRIEFING)
 
 
 class EmptyBriefing(_CamelBase):
@@ -136,22 +116,13 @@ class BriefingSummary(_CamelBase):
 
     未生成カテゴリでは ``BriefingListItem.latest = None`` で表現する。
     一覧バンド表示用に見出し / summary / 件数を同梱する。詳細
-    (``BriefingDetail``) と異なり chapters は持たず、keyArticles の article は
-    一覧カード契約 ``ArticleBrief`` (詳細は ``_BriefingArticleEmbed``)。
-    keyArticles / watchPoints は required (デフォルト無し) で、service の
-    詰め忘れを構築時エラーで即死させる。
+    (``BriefingDetail``) と異なり chapters / keyArticles は持たない。
     """
 
     week_start: date
     headline: str = Field(max_length=MAX_BRIEFING_HEADLINE_LEN)
     summary: str = Field(max_length=MAX_BRIEFING_SUMMARY_LEN)
     input_article_count: int
-    key_articles: list[_BriefingSummaryKeyArticle] = Field(
-        max_length=MAX_KEY_ARTICLES_PER_BRIEFING
-    )
-    watch_points: list[_WatchPointStatement] = Field(
-        max_length=MAX_WATCH_POINTS_PER_BRIEFING
-    )
 
 
 class BriefingListItem(_CamelBase):

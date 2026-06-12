@@ -45,50 +45,6 @@ describe("BriefingListResponseSchema", () => {
     }
   });
 
-  it("accepts fields the schema does not know yet (backend 先行デプロイの安全条件)", () => {
-    // 契約1 (keyArticles / watchPoints) を backend が先行追加しても、
-    // zod 側が .strict() でない限り未知 field は無視されて parse が通る。
-    // keyArticles[].article は契約1の実形 (ArticleBrief = 一覧カード契約) で再現する。
-    const result = BriefingListResponseSchema.safeParse({
-      currentWeekStart: "2026-04-27",
-      totalArticles: 1,
-      futureTopLevelField: true,
-      items: [
-        {
-          category: { ...CATEGORY, futureCategoryField: "x" },
-          latest: {
-            weekStart: "2026-04-20",
-            headline: "今週の AI ハイライト",
-            summary: "今週の総括リード",
-            inputArticleCount: 1,
-            keyArticles: [
-              {
-                significance: "なぜ重要か",
-                article: {
-                  id: 1,
-                  translatedTitle: "記事1",
-                  keyPoints: ["要点A", "要点B"],
-                  summaryPreview: null,
-                  category: CATEGORY,
-                  source: { name: "TechCrunch", attributionLabel: null },
-                  publishedAt: "2026-04-19T09:00:00+09:00",
-                },
-              },
-            ],
-            watchPoints: ["今後どこを見るべきか"],
-          },
-          futureItemField: 1,
-        },
-      ],
-    });
-    expect(result.success).toBe(true);
-    if (result.success) {
-      expect(result.data.items[0]?.latest?.headline).toBe(
-        "今週の AI ハイライト",
-      );
-    }
-  });
-
   it("rejects when currentWeekStart is not an ISO date", () => {
     const result = BriefingListResponseSchema.safeParse({
       currentWeekStart: "2026-04-27T00:00:00Z",
