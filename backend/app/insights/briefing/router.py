@@ -27,7 +27,8 @@ from app.insights.briefing.schemas import (
     EmptyBriefing,
     _BriefingArticleEmbed,
     _BriefingChapter,
-    _BriefingKeyArticle,
+    _BriefingDetailKeyArticle,
+    _BriefingSummaryKeyArticle,
 )
 from app.models.article import Article
 from app.models.article_curation import ArticleCuration
@@ -35,8 +36,10 @@ from app.models.category import Category
 from app.models.in_scope_assessment import InScopeAssessment
 from app.models.news_source import NewsSource
 from app.models.weekly_briefing import WeeklyBriefing
+from app.repositories.articles import article_eager_options_brief
+from app.schemas.articles import ArticleBrief
 from app.schemas.embeds import CategoryEmbed, NewsSourceEmbed
-from app.services.articles import extract_key_point_contents
+from app.services.articles import build_brief, extract_key_point_contents
 
 router = APIRouter(prefix="/api/v1/briefing", tags=["briefing"])
 
@@ -101,6 +104,27 @@ async def _fetch_article_embeds_by_assessment_id(
     }
 
 
+async def _fetch_article_briefs_by_assessment_id(
+    session: AsyncSession, assessment_ids: set[int]
+) -> dict[int, ArticleBrief]:
+    """key_articles が参照する記事を一覧カード契約 ``ArticleBrief`` で返す。
+
+    一覧 (``BriefingSummary.key_articles``) 用。詳細 embed と違い、共有
+    ``build_brief`` (articles 一覧 / similar / watchlist と同じ整形) を通す。
+    """
+    if not assessment_ids:
+        return {}
+    stmt = (
+        select(InScopeAssessment)
+        .join(InScopeAssessment.curation)
+        .join(ArticleCuration.article)
+        .options(*article_eager_options_brief())
+        .where(InScopeAssessment.id.in_(assessment_ids))
+    )
+    result = await session.execute(stmt)
+    return {a.id: build_brief(a) for a in result.unique().scalars()}
+
+
 def _to_category(category: Category) -> CategoryEmbed:
     return CategoryEmbed(slug=category.slug, name=category.name)
 
@@ -121,6 +145,15 @@ async def list_briefings(
     repo = BriefingRepository(session)
     latest_by_cat = await repo.find_latest_for_each_category()
 
+    # 全カテゴリの assessment_id を set マージしてバッチ 1 回で fetch する
+    # (クエリ数がカテゴリ数に比例しない)。件数 guard は fetch 前に fail-fast。
+    for b in latest_by_cat.values():
+        _KEY_ARTICLES_COUNT_GUARD.validate_python(b.key_articles)
+    briefs = await _fetch_article_briefs_by_assessment_id(
+        session,
+        {a["assessment_id"] for b in latest_by_cat.values() for a in b.key_articles},
+    )
+
     items: list[BriefingListItem] = []
     for cat in cats:
         b = latest_by_cat.get(cat.id)
@@ -135,6 +168,19 @@ async def list_briefings(
                         headline=b.headline,
                         summary=b.summary,
                         input_article_count=b.input_article_count,
+                        # briefs.get の None 欠落は non-nullable field の
+                        # ValidationError → 500 で loud に出す (failure_visibility、
+                        # 詳細経路と同じ保証に乗る)。
+                        key_articles=[
+                            _BriefingSummaryKeyArticle(
+                                significance=a["significance"],
+                                article=briefs.get(  # pyright: ignore[reportArgumentType]
+                                    a["assessment_id"]
+                                ),
+                            )
+                            for a in b.key_articles
+                        ],
+                        watch_points=[w["statement"] for w in b.watch_points],
                     ),
                 )
             )
@@ -187,7 +233,7 @@ async def get_latest_briefing(
     # embeds.get の None 欠落は non-nullable field の ValidationError → 500 で
     # loud に出す (failure_visibility)。
     key_articles = [
-        _BriefingKeyArticle(
+        _BriefingDetailKeyArticle(
             significance=a["significance"],
             article=embeds.get(  # pyright: ignore[reportArgumentType]
                 a["assessment_id"]
