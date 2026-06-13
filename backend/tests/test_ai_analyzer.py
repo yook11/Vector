@@ -29,7 +29,7 @@ from app.analysis.curation.ai.schema import GeminiCurationResponse
 from app.analysis.curation.domain import CurationResult, Noise, Signal
 from app.analysis.curation.domain.ready import ReadyForCuration
 from app.analysis.curation.service import CurationService
-from app.models.article import Article
+from app.models.analyzable_article_record import AnalyzableArticleRecord
 from app.models.article_curation import ArticleCuration
 from app.models.category import Category
 from app.models.curation_noise import CurationNoise
@@ -112,12 +112,12 @@ async def _create_article_with_extraction(
     source: NewsSource,
     *,
     url: str,
-    title: str = "Test Article",
+    title: str = "Test AnalyzableArticleRecord",
     translated_title: str = "テスト記事",
     summary: str = "要約テスト",
-) -> tuple[Article, ArticleCuration]:
+) -> tuple[AnalyzableArticleRecord, ArticleCuration]:
     """Stage 1 完了済みの記事（article + extraction）を作成するヘルパー。"""
-    article = Article(
+    article = AnalyzableArticleRecord(
         source_id=source.id,
         source_url=url,
         original_title=title,
@@ -127,7 +127,7 @@ async def _create_article_with_extraction(
     db_session.add(article)
     await db_session.flush()
     extraction = ArticleCuration(
-        article_id=article.id,
+        analyzable_article_id=article.id,
         translated_title=translated_title,
         summary=summary,
     )
@@ -268,7 +268,7 @@ async def test_extraction_creates_extraction(
     sample_source: NewsSource,
 ) -> None:
     url = "https://example.com/quantum"
-    article = Article(
+    article = AnalyzableArticleRecord(
         source_id=sample_source.id,
         source_url=url,
         original_title="Quantum Breakthrough",
@@ -305,7 +305,7 @@ async def test_extraction_creates_extraction(
     persisted = (
         await db_session.execute(
             select(ArticleCuration).where(
-                ArticleCuration.article_id == article_id,
+                ArticleCuration.analyzable_article_id == article_id,
             )
         )
     ).scalar_one()
@@ -353,7 +353,9 @@ async def test_extraction_race_loser_returns_none_and_skips_audit(
     # 既存 row は上書きされていない (UPDATE ではなく ON CONFLICT DO NOTHING)
     persisted = (
         await db_session.execute(
-            select(ArticleCuration).where(ArticleCuration.article_id == article_id)
+            select(ArticleCuration).where(
+                ArticleCuration.analyzable_article_id == article_id
+            )
         )
     ).scalar_one()
     assert persisted.id == existing_id
@@ -386,7 +388,7 @@ async def test_extraction_routes_noise_to_extraction_noises_table(
     保証する (chain は task 層で確認、ここは Service の振り分けが正しいかを見る)。
     """
     url = "https://example.com/noise"
-    article = Article(
+    article = AnalyzableArticleRecord(
         source_id=sample_source.id,
         source_url=url,
         original_title="Celebrity Gossip",
@@ -424,7 +426,7 @@ async def test_extraction_routes_noise_to_extraction_noises_table(
     persisted = (
         await db_session.execute(
             select(CurationNoise).where(
-                CurationNoise.article_id == article_id,
+                CurationNoise.analyzable_article_id == article_id,
             )
         )
     ).scalar_one()
@@ -433,7 +435,7 @@ async def test_extraction_routes_noise_to_extraction_noises_table(
     assert (
         await db_session.execute(
             select(ArticleCuration).where(
-                ArticleCuration.article_id == article_id,
+                ArticleCuration.analyzable_article_id == article_id,
             )
         )
     ).scalar_one_or_none() is None
@@ -477,7 +479,7 @@ async def test_assessment_persists_category(
         curation_id=curation_id,
         translated_title=extraction.translated_title,
         summary=extraction.summary,
-        article_id=extraction.article_id,
+        article_id=extraction.analyzable_article_id,
     )
     svc = AssessmentService(session_factory)
     result = await svc.execute(ready, mock_assessor)
@@ -561,7 +563,7 @@ async def test_news_endpoint_includes_analysis(
         db_session,
         sample_source,
         url="https://example.com/integration-test",
-        title="Test Article",
+        title="Test AnalyzableArticleRecord",
         translated_title="テスト記事",
         summary="テスト要約",
     )

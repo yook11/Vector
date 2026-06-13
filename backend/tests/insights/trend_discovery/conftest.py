@@ -1,7 +1,7 @@
 """Trend Discovery BC テスト固有のフィクスチャ。
 
 repository / Service テスト向けの ``seed_analysis`` ファクトリを提供する。
-seed_analysis は 1 件の ``InScopeAssessment`` を関連 ORM (Article /
+seed_analysis は 1 件の ``InScopeAssessment`` を関連 ORM (AnalyzableArticleRecord /
 ArticleCuration) とともに作成し、``InScopeAssessment.key_points`` JSONB に
 mention 列を焼き付ける。
 
@@ -22,7 +22,7 @@ from itertools import count
 import pytest
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models.article import Article
+from app.models.analyzable_article_record import AnalyzableArticleRecord
 from app.models.article_curation import ArticleCuration
 from app.models.in_scope_assessment import InScopeAssessment
 from app.models.news_source import NewsSource
@@ -81,7 +81,7 @@ def seed_analysis(db_session: AsyncSession, sample_source: NewsSource) -> SeedAn
         n = next(seq)
         url = f"https://example.com/seed-{n}"
 
-        article = Article(
+        article = AnalyzableArticleRecord(
             source_id=sample_source.id,
             source_url=url,
             original_title=f"seed-{n}",
@@ -91,7 +91,7 @@ def seed_analysis(db_session: AsyncSession, sample_source: NewsSource) -> SeedAn
         await db_session.flush()
 
         extraction = ArticleCuration(
-            article_id=article.id,
+            analyzable_article_id=article.id,
             translated_title=f"seed-{n}",
             summary="summary body",
         )

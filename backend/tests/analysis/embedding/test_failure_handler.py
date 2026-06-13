@@ -37,7 +37,7 @@ from app.analysis.embedding.domain.ready import ReadyForEmbedding
 from app.analysis.embedding.errors import to_embedding_error
 from app.analysis.embedding.failure_handling import EmbeddingFailureHandler
 from app.analysis.gemini_error_translator import GeminiContentRejectionReason
-from app.models.article import Article
+from app.models.analyzable_article_record import AnalyzableArticleRecord
 from app.models.news_source import NewsSource
 from app.models.pipeline_event import PipelineEvent
 
@@ -47,8 +47,8 @@ async def _make_article(
     sample_source: NewsSource,
     *,
     url: str = "https://e.com/a",
-) -> Article:
-    article = Article(
+) -> AnalyzableArticleRecord:
+    article = AnalyzableArticleRecord(
         source_id=sample_source.id,
         source_url=url,  # type: ignore[arg-type]
         original_title="t",

@@ -18,7 +18,7 @@ from app.admin.pipeline_health.schemas import (
 )
 from app.admin.pipeline_health.service import PipelineHealthService
 from app.audit.domain.event import EventType, Stage
-from app.models.article import Article
+from app.models.analyzable_article_record import AnalyzableArticleRecord
 from app.models.article_curation import ArticleCuration
 from app.models.incomplete_article import IncompleteArticle
 from app.models.news_source import NewsSource
@@ -48,8 +48,10 @@ def _event(stage: Stage, event_type: EventType, occurred_at: datetime) -> Pipeli
     )
 
 
-def _article(source: NewsSource, *, created_at: datetime, url: str) -> Article:
-    return Article(
+def _article(
+    source: NewsSource, *, created_at: datetime, url: str
+) -> AnalyzableArticleRecord:
+    return AnalyzableArticleRecord(
         source_id=source.id,
         source_url=url,
         original_title="t",
@@ -228,7 +230,7 @@ async def test_backfill_targets_use_backfill_window(
     obs = _OBSERVED_AT
     db_session.add_all(
         [
-            # 窓内 (curation 子なし Article)。
+            # 窓内 (curation 子なし AnalyzableArticleRecord)。
             _article(
                 sample_source,
                 created_at=obs - timedelta(days=1),
@@ -351,7 +353,7 @@ async def test_summary_oldest_backfill_is_oldest_across_stages(
     # curation を付けると curation 対象から外れ、assessment backfill 対象になる。
     db_session.add(
         ArticleCuration(
-            article_id=assessment_article.id,
+            analyzable_article_id=assessment_article.id,
             translated_title="tt",
             summary="ss",
         )

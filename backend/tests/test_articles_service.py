@@ -38,7 +38,7 @@ def _make_analysis(
         news_source=source,
         published_at=None,
     )
-    curation = SimpleNamespace(article=article)
+    curation = SimpleNamespace(analyzable_article=article)
     category = SimpleNamespace(slug="ai", name="AI")
     return SimpleNamespace(
         id=1,

@@ -29,7 +29,7 @@ from app.insights.briefing.schemas import (
     _BriefingChapter,
     _BriefingKeyArticle,
 )
-from app.models.article import Article
+from app.models.analyzable_article_record import AnalyzableArticleRecord
 from app.models.article_curation import ArticleCuration
 from app.models.category import Category
 from app.models.in_scope_assessment import InScopeAssessment
@@ -74,14 +74,17 @@ async def _fetch_article_embeds_by_assessment_id(
             InScopeAssessment.id,
             InScopeAssessment.translated_title,
             InScopeAssessment.key_points,
-            Article.source_url,
-            Article.published_at,
+            AnalyzableArticleRecord.source_url,
+            AnalyzableArticleRecord.published_at,
             NewsSource.name,
             NewsSource.attribution_label,
         )
         .join(ArticleCuration, ArticleCuration.id == InScopeAssessment.curation_id)
-        .join(Article, Article.id == ArticleCuration.article_id)
-        .join(NewsSource, NewsSource.id == Article.source_id)
+        .join(
+            AnalyzableArticleRecord,
+            AnalyzableArticleRecord.id == ArticleCuration.analyzable_article_id,
+        )
+        .join(NewsSource, NewsSource.id == AnalyzableArticleRecord.source_id)
         .where(InScopeAssessment.id.in_(assessment_ids))
     )
     rows = (await session.execute(stmt)).all()

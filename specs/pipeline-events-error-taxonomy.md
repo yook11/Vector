@@ -706,7 +706,7 @@ class <Stage>Service:
                 original_content=original_content,
                 code=code, exc=exc,
             )
-            deleted = await ArticleRepository(session).delete_by_id(article_id)
+            deleted = await AnalyzableArticleRepository(session).delete_by_id(article_id)
             await session.commit()
 ```
 
@@ -978,7 +978,7 @@ NonRetryableDropArticle にする案があったが、再改訂で **`NonRetryab
 **実装は別 PR** で扱う。本 spec の範囲外:
 
 - 新規 cron `cleanup_stale_articles` (TTL 経過記事の物理削除)
-- `articles` の `last_pipeline_event` ベースの判定基準
+- `analyzable_articles` の `last_pipeline_event` ベースの判定基準
 - TTL 閾値の環境変数化
 
 本 spec では「retry 上限到達分は記事保持 + 後段 cron が掃除」という前提だけ示す。

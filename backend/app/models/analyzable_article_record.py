@@ -25,22 +25,22 @@ if TYPE_CHECKING:
     from app.models.news_source import NewsSource
 
 
-class Article(Base):
-    """分析対象の記事。行が存在する = 分析可能。"""
+class AnalyzableArticleRecord(Base):
+    """分析工程に進める元記事の永続化 record。"""
 
-    __tablename__ = "articles"
+    __tablename__ = "analyzable_articles"
     __table_args__ = (
-        UniqueConstraint("source_url", name="uq_articles_source_url"),
+        UniqueConstraint("source_url", name="uq_analyzable_articles_source_url"),
         CheckConstraint(
             "original_title != ''",
-            name="ck_articles_title_not_empty",
+            name="ck_analyzable_articles_title_not_empty",
         ),
         CheckConstraint(
             "source_url ~ '^https?://.+'",
-            name="ck_articles_source_url_scheme",
+            name="ck_analyzable_articles_source_url_scheme",
         ),
-        Index("idx_articles_published", "published_at"),
-        Index("ix_articles_source_id", "source_id"),
+        Index("idx_analyzable_articles_published", "published_at"),
+        Index("ix_analyzable_articles_source_id", "source_id"),
     )
 
     id: Mapped[int] = mapped_column(primary_key=True)
@@ -58,17 +58,17 @@ class Article(Base):
     # source_id FK 経由の直 relationship。
     news_source: Mapped[NewsSource] = relationship()
     curation: Mapped[ArticleCuration | None] = relationship(
-        back_populates="article", uselist=False
+        back_populates="analyzable_article", uselist=False
     )
     curation_noise: Mapped[CurationNoise | None] = relationship(
-        back_populates="article", uselist=False
+        back_populates="analyzable_article", uselist=False
     )
 
     @property
     def original_url(self) -> SafeUrl:
         """API レスポンス用の便利プロパティ。
 
-        ``articles.source_url`` は Stage 1 で正規化済の URL (NOT NULL、
+        ``analyzable_articles.source_url`` は Stage 1 で正規化済の URL (NOT NULL、
         SafeUrl 型)。新経路 / 旧経路を問わず常に値があるため、
         relationship を経由せず直接返す。
         """

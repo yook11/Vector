@@ -12,7 +12,7 @@ from app.analysis.embedding.domain.value_objects import (
     EmbeddingVector,
 )
 from app.analysis.embedding.repository import EmbeddingRepository
-from app.models.article import Article
+from app.models.analyzable_article_record import AnalyzableArticleRecord
 from app.models.article_curation import ArticleCuration
 from app.models.category import Category
 from app.models.in_scope_assessment import InScopeAssessment
@@ -28,7 +28,7 @@ async def _build_analysis(
     embedding: list[float] | None = None,
 ) -> InScopeAssessment:
     """Stage 2 完了済みの分析行を 1 件作成する。"""
-    article = Article(
+    article = AnalyzableArticleRecord(
         source_id=source.id,
         source_url=url,
         original_title="seed",
@@ -38,7 +38,7 @@ async def _build_analysis(
     db_session.add(article)
     await db_session.flush()
     extraction = ArticleCuration(
-        article_id=article.id,
+        analyzable_article_id=article.id,
         translated_title="抽出タイトル",
         summary="抽出要約",
     )
@@ -85,7 +85,7 @@ async def test_load_ready_build_facts_returns_values_when_unembedded(
     facts = await repo.load_ready_build_facts(analysis.id)
 
     assert facts is not None
-    assert facts.article_id == curation.article_id
+    assert facts.article_id == curation.analyzable_article_id
     assert facts.has_embedding is False
     assert facts.translated_title == "分析タイトル"
     assert facts.summary == "分析要約"

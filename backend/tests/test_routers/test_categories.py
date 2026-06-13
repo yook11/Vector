@@ -6,7 +6,7 @@ import pytest
 from httpx import AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models.article import Article
+from app.models.analyzable_article_record import AnalyzableArticleRecord
 from app.models.article_curation import ArticleCuration
 from app.models.category import Category
 from app.models.in_scope_assessment import InScopeAssessment
@@ -82,16 +82,16 @@ class TestListCategories:
     ) -> None:
         """直近 24 時間に分類された記事は recentCount に含まれる。"""
         url = "https://example.com/tf"
-        article = Article(
+        article = AnalyzableArticleRecord(
             source_id=sample_source.id,
             source_url=url,
-            original_title="TF Article",
+            original_title="TF AnalyzableArticleRecord",
             original_content="TF content.",
         )
         db_session.add(article)
         await db_session.flush()
         extraction = ArticleCuration(
-            article_id=article.id,
+            analyzable_article_id=article.id,
             translated_title="TF記事",
             summary="要約",
         )
@@ -121,16 +121,16 @@ class TestListCategories:
     ) -> None:
         """24 時間より前に分類された記事は recentCount に含まれない。"""
         url = "https://example.com/tf-old"
-        article = Article(
+        article = AnalyzableArticleRecord(
             source_id=sample_source.id,
             source_url=url,
-            original_title="TF Article Old",
+            original_title="TF AnalyzableArticleRecord Old",
             original_content="TF content.",
         )
         db_session.add(article)
         await db_session.flush()
         extraction = ArticleCuration(
-            article_id=article.id,
+            analyzable_article_id=article.id,
             translated_title="TF記事",
             summary="要約",
         )

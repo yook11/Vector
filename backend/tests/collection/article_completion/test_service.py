@@ -1,6 +1,6 @@
 """``ArticleCompletionService`` の不変条件テスト (PR-E 仕様: ``pending.url`` SSoT)。
 
-検証する不変条件 (DB 状態 = ``articles`` / ``incomplete_articles`` の遷移で
+検証する不変条件 (DB 状態 = ``analyzable_articles`` / ``incomplete_articles`` の遷移で
 振る舞いを assert する。persist 段では ``pipeline_events`` 監査も観測点 — 成功 /
 race-loss は状態遷移と同一 tx、真の DB 例外 (経路 9) は別 session で焼かれ再 raise):
 
@@ -10,7 +10,7 @@ race-loss は状態遷移と同一 tx、真の DB 例外 (経路 9) は別 sessi
   (成功: DELETE / 永続失敗: closed / 一時失敗 (will retry): open + 未来 ready_at /
   一時失敗 (exhausted): closed)
 - 成功時に HTML から抽出した ``body`` / ``title`` / ``published_at`` がそのまま
-  ``articles`` 行に保存される
+  ``analyzable_articles`` 行に保存される
 - race-loss 時に既存 article は残り、敗者側の pending は DELETE される
 - disposition (ScrapeTerminal/ScrapeRetryable) で pending 状態が決まる
   (ScrapeRetryable の BLIP 系 1 回目失敗 = 0.5 分後 / ScrapeTerminal = closed /
@@ -54,7 +54,7 @@ from app.collection.sources.article_completion_policy import (
 )
 from app.collection.sources.base_article_source import BaseArticleSource
 from app.collection.sources.source_name import SourceName
-from app.models.article import Article as ArticleORM
+from app.models.analyzable_article_record import AnalyzableArticleRecord
 from app.models.incomplete_article import IncompleteArticle
 from app.models.news_source import NewsSource, SourceType
 from app.models.pipeline_event import PipelineEvent
@@ -206,7 +206,7 @@ async def test_success_returns_article_id_and_persists_article(
     tc_source: NewsSource,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """ScrapedContent + 永続化成功 → ``int`` (article_id) 返却 + Article 1 件作成。"""
+    """ScrapedContent + 永続化成功で ``article_id`` を返す。"""
     canonical_url, _, ready = await _make_pending(
         db_session, tc_source, "https://techcrunch.com/article-1"
     )
@@ -225,10 +225,12 @@ async def test_success_returns_article_id_and_persists_article(
     article_id = await svc.execute(ready)
 
     assert isinstance(article_id, int)
-    articles = (await db_session.execute(select(ArticleORM))).scalars().all()
-    assert len(articles) == 1
-    assert articles[0].id == article_id
-    assert str(articles[0].source_url) == str(canonical_url)
+    analyzable_articles = (
+        (await db_session.execute(select(AnalyzableArticleRecord))).scalars().all()
+    )
+    assert len(analyzable_articles) == 1
+    assert analyzable_articles[0].id == article_id
+    assert str(analyzable_articles[0].source_url) == str(canonical_url)
 
 
 @pytest.mark.asyncio
@@ -238,7 +240,7 @@ async def test_success_deletes_pending_in_same_tx(
     tc_source: NewsSource,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """成功時に ``incomplete_articles`` 行は DELETE (articles INSERT と同 tx)。"""
+    """成功時に pending 行は DELETE される。"""
     _, pending_id, ready = await _make_pending(
         db_session, tc_source, "https://techcrunch.com/article-2"
     )
@@ -271,10 +273,10 @@ async def test_success_persists_extracted_body_and_published_at(
     tc_source: NewsSource,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """成功時 HTML から抽出した body/title/published_at が articles 行に保存される。
+    """成功時 HTML から抽出した metadata が保存される。
 
     ``complete_with_html`` が HTML メタデータを ``AnalyzableArticle`` に取り込み、
-    ``ArticleStore.save`` がそれを passport 型のまま articles 行に流す不変条件。
+    ``AnalyzableArticleRepository.save`` が passport 型のまま永続化する不変条件。
     """
     body = "x" * 250
     html_published_at = datetime(2026, 5, 1, 9, 30, 0, tzinfo=UTC)
@@ -311,7 +313,11 @@ async def test_success_persists_extracted_body_and_published_at(
 
     assert isinstance(article_id, int)
     article = (
-        await db_session.execute(select(ArticleORM).where(ArticleORM.id == article_id))
+        await db_session.execute(
+            select(AnalyzableArticleRecord).where(
+                AnalyzableArticleRecord.id == article_id
+            )
+        )
     ).scalar_one()
     assert article.original_content == body
     assert article.original_title == "HTML Title"
@@ -331,7 +337,7 @@ async def test_terminal_fetch_error_returns_none_and_closes_pending(
     """terminal な ``ExternalFetchError`` → ``None`` + pending closed。
 
     404 (``FetchResourceNotFoundError``) は disposition で ``ScrapeTerminal`` に分類
-    され、pending は再試行されず ``closed`` に閉じ、Article は作成されない。
+    され、pending は再試行されず ``closed`` に閉じ、record は作成されない。
     """
     _, pending_id, ready = await _make_pending(
         db_session, tc_source, "https://techcrunch.com/dead"
@@ -347,8 +353,10 @@ async def test_terminal_fetch_error_returns_none_and_closes_pending(
     outcome = await svc.execute(ready)
 
     assert outcome is None
-    articles = (await db_session.execute(select(ArticleORM))).scalars().all()
-    assert articles == []
+    analyzable_articles = (
+        (await db_session.execute(select(AnalyzableArticleRecord))).scalars().all()
+    )
+    assert analyzable_articles == []
     pending = (
         await db_session.execute(
             select(IncompleteArticle).where(IncompleteArticle.id == pending_id)
@@ -417,8 +425,10 @@ async def test_promotion_failure_closes_pending(
     outcome = await svc.execute(ready)
 
     assert outcome is None
-    articles = (await db_session.execute(select(ArticleORM))).scalars().all()
-    assert articles == []
+    analyzable_articles = (
+        (await db_session.execute(select(AnalyzableArticleRecord))).scalars().all()
+    )
+    assert analyzable_articles == []
     pending = (
         await db_session.execute(
             select(IncompleteArticle).where(IncompleteArticle.id == pending_id)
@@ -529,7 +539,7 @@ async def test_temporary_retry_after_uses_server_delay(
 
     ``FetchOriginServerError(service_unavailable, retry_after_seconds=120)`` は
     disposition で OUTAGE schedule + server 指示の ``FixedDelay`` を持つ
-    ``ScrapeRetryable``。``FixedDelay`` が 120 秒 → 2 分に換算して next ready_at にする。
+    ``ScrapeRetryable``。120 秒 → 2 分に換算して next ready_at にする。
     """
     _, pending_id, ready = await _make_pending(
         db_session, tc_source, "https://techcrunch.com/retry-after"
@@ -575,13 +585,13 @@ async def test_race_lost_returns_none_and_deletes_pending(
 ) -> None:
     """別 worker が article を先に作った → ``None`` + pending DELETE + 既存 article 残置.
 
-    pre-condition: 同 ``source_url`` の Article を直接 INSERT (race の "勝者")。
+    pre-condition: 同 ``source_url`` の AnalyzableArticleRecord を直接 INSERT (race の "勝者")。
     """  # noqa: E501
     canonical_url, pending_id, ready = await _make_pending(
         db_session, tc_source, "https://techcrunch.com/race"
     )
-    # winner 役の Article を先に INSERT (同一 canonical source_url)
-    existing = ArticleORM(
+    # winner 役の AnalyzableArticleRecord を先に INSERT (同一 canonical source_url)
+    existing = AnalyzableArticleRecord(
         original_title="Existing",
         original_content="y" * 100,
         published_at=datetime(2026, 4, 30, tzinfo=UTC),
@@ -606,9 +616,11 @@ async def test_race_lost_returns_none_and_deletes_pending(
     outcome = await svc.execute(ready)
 
     assert outcome is None
-    # articles は 1 件のまま (敗者は INSERT しない)
-    articles = (await db_session.execute(select(ArticleORM))).scalars().all()
-    assert len(articles) == 1
+    # analyzable_articles は 1 件のまま (敗者は INSERT しない)
+    analyzable_articles = (
+        (await db_session.execute(select(AnalyzableArticleRecord))).scalars().all()
+    )
+    assert len(analyzable_articles) == 1
     # pending は DELETE
     remaining = (
         await db_session.execute(
@@ -657,7 +669,9 @@ async def test_superseded_attempt_returns_none_and_keeps_pending(
 
     assert outcome is None
     # 失効 worker は INSERT しない
-    assert (await db_session.execute(select(ArticleORM))).scalars().all() == []
+    assert (
+        await db_session.execute(select(AnalyzableArticleRecord))
+    ).scalars().all() == []
     # DELETE は attempt 不一致で 0 行 → pending は残る (UrlConflict との差分)
     remaining = (
         await db_session.execute(
@@ -715,7 +729,7 @@ async def test_url_conflict_writes_persist_url_conflict_audit(
         db_session, tc_source, "https://techcrunch.com/audit-conflict"
     )
     db_session.add(
-        ArticleORM(
+        AnalyzableArticleRecord(
             original_title="Existing",
             original_content="y" * 100,
             published_at=datetime(2026, 4, 30, tzinfo=UTC),

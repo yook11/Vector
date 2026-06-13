@@ -59,7 +59,9 @@ from app.collection.external_fetch_errors import (
     FetchAccessDeniedError,
     FetchGatewayError,
 )
-from app.collection.persistence.article_store import ArticleStore
+from app.collection.persistence.analyzable_article_repository import (
+    AnalyzableArticleRepository,
+)
 from app.collection.sources.errors import SourceNotRegisteredError
 from app.collection.sources.source_name import SourceName
 from app.models.news_source import NewsSource, SourceType
@@ -217,7 +219,7 @@ async def test_append_persist_outcome_success(
     """成功 → succeeded / article_completed / body_length。body_head は焼かない。"""
     ready = await _make_ready(db_session, tc_source, _URL)
     advanced = _analyzable(tc_source, _URL)
-    article_id = await ArticleStore(db_session).save(advanced)
+    article_id = await AnalyzableArticleRepository(db_session).save(advanced)
     await db_session.commit()
     assert article_id is not None
 
@@ -237,7 +239,7 @@ async def test_append_persist_outcome_success(
     assert ev.payload["canonical_url"] == _URL
     assert ev.payload["attempt_count"] == ready.attempt_count
     assert ev.payload["body_length"] == len(advanced.body)
-    assert ev.payload["body_head"] is None  # 成功は焼かない (articles 重複)
+    assert ev.payload["body_head"] is None  # 成功は焼かない (analyzable_articles 重複)
     assert ev.payload["scraper_class"] is None  # 定数列は書かない
 
 

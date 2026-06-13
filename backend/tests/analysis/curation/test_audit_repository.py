@@ -57,10 +57,12 @@ from app.analysis.curation.errors import (
 from app.analysis.gemini_error_translator import GeminiContentRejectionReason
 from app.analysis.prompt_safety import sanitize_for_untrusted_block
 from app.audit.stages.curation import CurationAuditRepository
-from app.models.article import Article
+from app.collection.persistence.analyzable_article_repository import (
+    AnalyzableArticleRepository,
+)
+from app.models.analyzable_article_record import AnalyzableArticleRecord
 from app.models.news_source import NewsSource
 from app.models.pipeline_event import PipelineEvent
-from app.repositories.articles import ArticleRepository
 
 _INJECTION_METRIC = "vector.audit.injection_boundary_detected"
 
@@ -124,8 +126,8 @@ def _noise_envelope() -> CurationCall[Noise]:
 
 async def _make_article(
     db_session: AsyncSession, sample_source: NewsSource, *, content: str = "body x" * 30
-) -> Article:
-    article = Article(
+) -> AnalyzableArticleRecord:
+    article = AnalyzableArticleRecord(
         source_id=sample_source.id,
         source_url="https://e.com/a",  # type: ignore[arg-type]
         original_title="t",
@@ -138,7 +140,7 @@ async def _make_article(
     return article
 
 
-def _ready(article: Article) -> ReadyForCuration:
+def _ready(article: AnalyzableArticleRecord) -> ReadyForCuration:
     return ReadyForCuration(
         article_id=article.id,
         original_title=article.original_title,
@@ -511,7 +513,7 @@ async def test_append_backfill_curation_aged_out_keeps_article_identity_after_de
         await CurationAuditRepository(session).append_backfill_curation_aged_out(
             article_id=article_id
         )
-        await ArticleRepository(session).delete_by_id(article_id)
+        await AnalyzableArticleRepository(session).delete_by_id(article_id)
         await session.commit()
 
     ev = await _fetch_by_outcome(

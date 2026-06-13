@@ -22,7 +22,7 @@ class EmbeddingRepository:
     ) -> EmbeddingReadyBuildFacts | None:
         stmt = (
             select(
-                ArticleCuration.article_id,
+                ArticleCuration.analyzable_article_id,
                 InScopeAssessment.embedding.is_not(None),
                 InScopeAssessment.translated_title,
                 InScopeAssessment.summary,

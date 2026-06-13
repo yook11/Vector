@@ -65,15 +65,14 @@ class TestFetch:
     ) -> None:
         """ArticleInput.id は公開 /news id 空間 (InScopeAssessment.id)。
 
-        decoy: Article だけを先に 1 件 INSERT して Article.id と
-        InScopeAssessment.id のシーケンスをずらし、両 id が一致しない状態で
-        fetch を呼んで ArticleInput.id == analysis.id であることを保証する。
+        decoy record を先に 1 件 INSERT して source article id と
+        InScopeAssessment.id をずらし、ArticleInput.id == analysis.id を保証する。
         """
-        from app.models.article import Article
+        from app.models.analyzable_article_record import AnalyzableArticleRecord
 
         # decoy article (assessment なし) を先に INSERT してシーケンスをずらす
         db_session.add(
-            Article(
+            AnalyzableArticleRecord(
                 source_id=sample_source.id,
                 source_url="https://example.com/decoy",
                 original_title="decoy",
@@ -92,24 +91,25 @@ class TestFetch:
 
         # decoy が効いていることの前提 assert: 両 id がずれていなければ判別力が無い
         from sqlalchemy import select
+
         from app.models.article_curation import ArticleCuration
 
         article_id = (
             await db_session.execute(
-                select(ArticleCuration.article_id).where(
+                select(ArticleCuration.analyzable_article_id).where(
                     ArticleCuration.id == analysis.curation_id
                 )
             )
         ).scalar_one()
         assert analysis.id != article_id, (
-            "decoy が効いていない: Article.id と InScopeAssessment.id が一致して"
+            "decoy が効いていない: source article id と assessment id が一致して"
             "いるためテストが id 空間を判別できない"
         )
 
         repo = BriefingArticleRepository(db_session)
         result = await repo.fetch(week_start=date(2026, 4, 20), category_id=ai.id)
         assert len(result) == 1
-        # 公開 /news id 空間 (InScopeAssessment.id) であって Article.id ではない
+        # 公開 /news id 空間 (InScopeAssessment.id) であって source article id ではない
         assert result[0].id == analysis.id
         assert result[0].id != article_id
 

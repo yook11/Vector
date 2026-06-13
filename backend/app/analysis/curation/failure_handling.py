@@ -30,7 +30,9 @@ from app.analysis.curation.errors import (
 from app.analysis.failure_handling import FailureHandlingDecision
 from app.audit.error_fields import exception_fqn
 from app.audit.stages.curation import CurationAuditRepository
-from app.repositories.articles import ArticleRepository
+from app.collection.persistence.analyzable_article_repository import (
+    AnalyzableArticleRepository,
+)
 from app.shared.security.redaction import redact_secrets
 
 logger = structlog.get_logger(__name__)
@@ -126,7 +128,9 @@ class CurationFailureHandler:
                 exc=exc,
                 curator=curator,
             )
-            deleted = await ArticleRepository(session).delete_by_id(ready.article_id)
+            deleted = await AnalyzableArticleRepository(session).delete_by_id(
+                ready.article_id
+            )
             await session.commit()
 
         logger.warning(

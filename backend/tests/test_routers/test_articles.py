@@ -6,7 +6,7 @@ import pytest
 from httpx import AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models.article import Article
+from app.models.analyzable_article_record import AnalyzableArticleRecord
 from app.models.article_curation import ArticleCuration
 from app.models.category import Category
 from app.models.in_scope_assessment import InScopeAssessment
@@ -16,12 +16,12 @@ from app.models.news_source import NewsSource
 async def _create_article(
     session: AsyncSession,
     source: NewsSource,
-    title: str = "Test Article",
+    title: str = "Test AnalyzableArticleRecord",
     url: str = "https://example.com/article",
     published_at: datetime | None = None,
-) -> Article:
-    """Article を作成するヘルパー。"""
-    article = Article(
+) -> AnalyzableArticleRecord:
+    """AnalyzableArticleRecord を作成するヘルパー。"""
+    article = AnalyzableArticleRecord(
         source_id=source.id,
         source_url=url,
         original_title=title,
@@ -36,7 +36,7 @@ async def _create_article(
 
 async def _create_analysis(
     session: AsyncSession,
-    article: Article,
+    article: AnalyzableArticleRecord,
     category_id: int,
     translated_title: str = "テスト記事",
     embedding: list[float] | None = None,
@@ -44,7 +44,7 @@ async def _create_analysis(
 ) -> InScopeAssessment:
     """extraction + analysis を作成するヘルパー。"""
     extraction = ArticleCuration(
-        article_id=article.id,
+        analyzable_article_id=article.id,
         translated_title=translated_title,
         summary="テストの要約",
     )
@@ -441,7 +441,7 @@ class TestGetArticle:
         assert resp.status_code == 200
         data = resp.json()
         assert data["translatedTitle"] == "テスト記事"
-        assert data["original"]["title"] == "Test Article"
+        assert data["original"]["title"] == "Test AnalyzableArticleRecord"
 
     async def test_get_nonexistent_returns_404(
         self,
@@ -474,7 +474,7 @@ class TestGetArticle:
         data = resp.json()
         assert data["translatedTitle"] == "テスト記事"
         assert data["investorTake"] == "Test investor_take"
-        assert data["original"]["title"] == "Test Article"
+        assert data["original"]["title"] == "Test AnalyzableArticleRecord"
         assert data["original"]["url"] == "https://example.com/article"
 
     async def test_detail_exposes_key_point_contents(

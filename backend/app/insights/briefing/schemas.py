@@ -63,7 +63,7 @@ class _BriefingArticleEmbed(_CamelBase):
     translated_title: str = Field(max_length=_MAX_ARTICLE_TITLE_LEN)
     source: NewsSourceEmbed
     url: str = Field(max_length=_MAX_URL_LEN)
-    # 元記事の公開日時 (Article.published_at)。未取得の記事は null。
+    # 元記事の公開日時 (AnalyzableArticleRecord.published_at)。未取得の記事は null。
     published_at: datetime | None = None
     # 上限は assessment 側入口契約 (domain/result.py) の定数を共有 (F10 ガード)。
     key_points: list[Annotated[str, Field(max_length=MAX_KEY_POINT_CONTENT_LEN)]] = (

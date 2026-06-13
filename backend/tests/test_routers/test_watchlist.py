@@ -6,7 +6,7 @@ import pytest
 from httpx import AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models.article import Article
+from app.models.analyzable_article_record import AnalyzableArticleRecord
 from app.models.article_curation import ArticleCuration
 from app.models.category import Category
 from app.models.in_scope_assessment import InScopeAssessment
@@ -24,8 +24,8 @@ async def _build_article_with_analysis(
     summary: str,
     investor_take: str,
     published_at: datetime,
-) -> tuple[Article, InScopeAssessment]:
-    article = Article(
+) -> tuple[AnalyzableArticleRecord, InScopeAssessment]:
+    article = AnalyzableArticleRecord(
         source_id=source.id,
         source_url=url,
         original_title=title,
@@ -35,7 +35,7 @@ async def _build_article_with_analysis(
     db_session.add(article)
     await db_session.flush()
     extraction = ArticleCuration(
-        article_id=article.id,
+        analyzable_article_id=article.id,
         translated_title=translated_title,
         summary=summary,
     )
@@ -67,7 +67,7 @@ async def sample_article(
         sample_source,
         sample_categories[0].id,
         url="https://example.com/test",
-        title="Test Article",
+        title="Test AnalyzableArticleRecord",
         translated_title="テスト記事",
         summary="テストの要約",
         investor_take="Test investor_take",
@@ -88,7 +88,7 @@ async def second_article(
         sample_source,
         sample_categories[0].id,
         url="https://example.com/second",
-        title="Second Article",
+        title="Second AnalyzableArticleRecord",
         translated_title="2番目の記事",
         summary="2番目の要約",
         investor_take="Second investor_take",

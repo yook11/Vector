@@ -12,7 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from app.analysis.curation.ai.envelope import CurationCall
 from app.analysis.curation.domain import Noise, Signal
 from app.analysis.curation.repository import CurationRepository
-from app.models.article import Article
+from app.models.analyzable_article_record import AnalyzableArticleRecord
 from app.models.article_curation import ArticleCuration
 from app.models.curation_noise import CurationNoise
 from app.models.news_source import NewsSource
@@ -50,8 +50,8 @@ def _noise_call(
 
 async def _make_article(
     db_session: AsyncSession, sample_source: NewsSource, url: str
-) -> Article:
-    article = Article(
+) -> AnalyzableArticleRecord:
+    article = AnalyzableArticleRecord(
         source_id=sample_source.id,
         source_url=url,
         original_title="Title",
@@ -198,7 +198,9 @@ async def test_concurrent_save_signal_returns_one_persisted_one_none(
     rows = (
         (
             await db_session.execute(
-                select(ArticleCuration).where(ArticleCuration.article_id == article.id)
+                select(ArticleCuration).where(
+                    ArticleCuration.analyzable_article_id == article.id
+                )
             )
         )
         .scalars()

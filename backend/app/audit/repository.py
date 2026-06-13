@@ -9,7 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.audit.domain.event import EventType, Stage
 from app.audit.domain.payloads import BasePipelineEventPayload
 from app.audit.failure_projection import Retryability
-from app.models.article import Article
+from app.models.analyzable_article_record import AnalyzableArticleRecord
 from app.models.pipeline_event import PipelineEvent
 
 
@@ -39,7 +39,9 @@ class PipelineEventRepository:
         # source_id 自動補完: article_id だけ与えられた場合に逆引き
         if source_id is None and article_id is not None:
             source_id = await self._session.scalar(
-                select(Article.source_id).where(Article.id == article_id)
+                select(AnalyzableArticleRecord.source_id).where(
+                    AnalyzableArticleRecord.id == article_id
+                )
             )
 
         event = PipelineEvent(

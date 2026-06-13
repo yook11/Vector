@@ -13,13 +13,15 @@ from app.collection.article_completion.ready import (
     ReadyForArticleCompletion,
 )
 from app.collection.domain.analyzable_article import AnalyzableArticle
-from app.collection.persistence.article_store import ArticleStore
+from app.collection.persistence.analyzable_article_repository import (
+    AnalyzableArticleRepository,
+)
 from app.models.incomplete_article import IncompleteArticle as IncompleteArticleORM
 
 
 @dataclass(frozen=True, slots=True)
 class CompletionSucceeded:
-    """正規所有者として ``articles`` に INSERT 成功。"""
+    """正規所有者として ``analyzable_articles`` に INSERT 成功。"""
 
     article_id: int
 
@@ -196,7 +198,7 @@ class ArticleCompletionRepository:
         if not await self._delete_claimed(ready):
             return CompletionSuperseded()
 
-        article_id = await ArticleStore(self._session).save(advanced)
+        article_id = await AnalyzableArticleRepository(self._session).save(advanced)
         if article_id is None:
             return CompletionUrlConflict()
         return CompletionSucceeded(article_id=article_id)

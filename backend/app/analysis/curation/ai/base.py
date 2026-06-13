@@ -64,11 +64,11 @@ class BaseCurator(abc.ABC):
     ) -> CurationCall[Signal] | CurationCall[Noise]:
         """記事を読み、relevance 判定 + 翻訳要約を行って構造化データを返す。
 
-        Article の存在が content の品質を保証する(50 文字以上)。
+        AnalyzableArticleRecord の存在が content の品質を保証する(50 文字以上)。
 
         Args:
-            title: 英語記事タイトル(Article.original_title)。
-            content: 記事本文全文(Article.original_content)。
+            title: 英語記事タイトル(AnalyzableArticleRecord.original_title)。
+            content: 記事本文全文(AnalyzableArticleRecord.original_content)。
 
         Returns:
             ``result`` (``Signal`` | ``Noise``) に加え ``raw_response`` /

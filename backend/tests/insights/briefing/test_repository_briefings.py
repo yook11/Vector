@@ -55,9 +55,7 @@ class TestSave:
         self, db_session: AsyncSession, category: Category
     ) -> None:
         repo = BriefingRepository(db_session)
-        saved = await repo.save(
-            _content(), category_id=category.id, **_SAVE_KWARGS
-        )
+        saved = await repo.save(_content(), category_id=category.id, **_SAVE_KWARGS)
         await db_session.commit()
         assert saved is not None
         assert saved.headline == "h1"
@@ -122,7 +120,9 @@ class TestSave:
     ) -> None:
         repo = BriefingRepository(db_session)
         await repo.save(
-            _content(headline="v1", summary="s1"), category_id=category.id, **_SAVE_KWARGS
+            _content(headline="v1", summary="s1"),
+            category_id=category.id,
+            **_SAVE_KWARGS,
         )
         await db_session.commit()
 

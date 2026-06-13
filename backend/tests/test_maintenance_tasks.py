@@ -12,7 +12,7 @@ import pytest
 from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from app.models.article import Article
+from app.models.analyzable_article_record import AnalyzableArticleRecord
 from app.models.article_curation import ArticleCuration
 from app.models.backfill_exclusion import (
     AssessmentBackfillExclusion,
@@ -299,9 +299,9 @@ async def _make_article(
     *,
     url: str,
     created_at: datetime,
-) -> Article:
-    """指定 created_at の Article を作成 (server_default を後追い UPDATE で上書き)。"""
-    article = Article(
+) -> AnalyzableArticleRecord:
+    """指定 created_at の article record を作成する。"""
+    article = AnalyzableArticleRecord(
         source_id=source.id,
         source_url=url,  # type: ignore[arg-type]
         original_title="title",
@@ -311,7 +311,7 @@ async def _make_article(
     await db_session.commit()
     await db_session.refresh(article)
     await db_session.execute(
-        text("UPDATE articles SET created_at = :ts WHERE id = :id"),
+        text("UPDATE analyzable_articles SET created_at = :ts WHERE id = :id"),
         {"ts": created_at, "id": article.id},
     )
     await db_session.commit()
@@ -320,11 +320,11 @@ async def _make_article(
 
 async def _make_curation(
     db_session: AsyncSession,
-    article: Article,
+    article: AnalyzableArticleRecord,
 ) -> ArticleCuration:
     """テスト用 curation を作成する。"""
     curation = ArticleCuration(
-        article_id=article.id,
+        analyzable_article_id=article.id,
         translated_title="tt",
         summary="ss",
     )
@@ -380,7 +380,9 @@ async def test_delete_aged_out_curations_deletes_old_child_null_and_audits(
         created_at=now - timedelta(days=10),
     )
     db_session.add(
-        CurationNoise(article_id=kept.id, title_ja="ノイズ", summary_ja="ノイズ要約")
+        CurationNoise(
+            analyzable_article_id=kept.id, title_ja="ノイズ", summary_ja="ノイズ要約"
+        )
     )
     await db_session.commit()
     aged_id, kept_id = aged.id, kept.id
@@ -393,9 +395,9 @@ async def test_delete_aged_out_curations_deletes_old_child_null_and_audits(
     # 明示破棄して DB の最新状態を読む (rollback だけだと cached 値を返し得る)。
     db_session.expire_all()
     # child-NULL の古い記事は物理削除される
-    assert await db_session.get(Article, aged_id) is None
+    assert await db_session.get(AnalyzableArticleRecord, aged_id) is None
     # noise (= 正常完了) を持つ記事は古くても残る (data-loss 防止)
-    assert await db_session.get(Article, kept_id) is not None
+    assert await db_session.get(AnalyzableArticleRecord, kept_id) is not None
 
     # 削除には監査が 1 行残る (article_id は FK SET NULL で NULL)
     events = list(
@@ -446,7 +448,7 @@ async def test_exclude_aged_out_assessments_keeps_article_and_audits(
     )
 
     db_session.expire_all()
-    assert await db_session.get(Article, article_id) is not None
+    assert await db_session.get(AnalyzableArticleRecord, article_id) is not None
     assert await db_session.get(ArticleCuration, curation_id) is not None
 
     exclusion = await db_session.get(AssessmentBackfillExclusion, curation_id)

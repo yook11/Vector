@@ -28,7 +28,7 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 from app.models.base import Base
 
 if TYPE_CHECKING:
-    from app.models.article import Article
+    from app.models.analyzable_article_record import AnalyzableArticleRecord
     from app.models.in_scope_assessment import InScopeAssessment
     from app.models.out_of_scope_assessment import OutOfScopeAssessment
 
@@ -36,7 +36,10 @@ if TYPE_CHECKING:
 class ArticleCuration(Base):
     __tablename__ = "article_curations"
     __table_args__ = (
-        UniqueConstraint("article_id", name="uq_article_curations_article_id"),
+        UniqueConstraint(
+            "analyzable_article_id",
+            name="uq_article_curations_analyzable_article_id",
+        ),
         CheckConstraint(
             "translated_title != ''",
             name="ck_article_curations_translated_title_not_empty",
@@ -48,8 +51,8 @@ class ArticleCuration(Base):
     )
 
     id: Mapped[int] = mapped_column(primary_key=True)
-    article_id: Mapped[int] = mapped_column(
-        ForeignKey("articles.id", ondelete="CASCADE"),
+    analyzable_article_id: Mapped[int] = mapped_column(
+        ForeignKey("analyzable_articles.id", ondelete="CASCADE"),
     )
     translated_title: Mapped[str] = mapped_column(String(500))
     summary: Mapped[str] = mapped_column(Text())
@@ -58,7 +61,9 @@ class ArticleCuration(Base):
     )
 
     # リレーション
-    article: Mapped[Article] = relationship(back_populates="curation")
+    analyzable_article: Mapped[AnalyzableArticleRecord] = relationship(
+        back_populates="curation"
+    )
     in_scope_assessment: Mapped[InScopeAssessment | None] = relationship(
         back_populates="curation", uselist=False
     )

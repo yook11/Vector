@@ -244,7 +244,9 @@ async def _delete_aged_out_curations(
     budget は消費しない。
     """
     from app.audit.stages.curation import CurationAuditRepository
-    from app.repositories.articles import ArticleRepository
+    from app.collection.persistence.analyzable_article_repository import (
+        AnalyzableArticleRepository,
+    )
 
     async with session_factory() as session:
         backlog = PipelineBacklog(session)
@@ -259,7 +261,7 @@ async def _delete_aged_out_curations(
             await CurationAuditRepository(session).append_backfill_curation_aged_out(
                 article_id=article_id
             )
-            await ArticleRepository(session).delete_by_id(article_id)
+            await AnalyzableArticleRepository(session).delete_by_id(article_id)
             await session.commit()
         deleted += 1
 
@@ -294,7 +296,7 @@ async def _exclude_aged_out_assessments(
     for curation_id in ids:
         async with session_factory() as session:
             stmt = (
-                select(ArticleCuration.article_id)
+                select(ArticleCuration.analyzable_article_id)
                 .outerjoin(
                     InScopeAssessment,
                     InScopeAssessment.curation_id == ArticleCuration.id,
@@ -362,7 +364,7 @@ async def _exclude_aged_out_embeddings(
     for analysis_id in ids:
         async with session_factory() as session:
             stmt = (
-                select(ArticleCuration.article_id)
+                select(ArticleCuration.analyzable_article_id)
                 .select_from(InScopeAssessment)
                 .join(
                     ArticleCuration,

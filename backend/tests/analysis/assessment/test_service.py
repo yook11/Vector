@@ -45,7 +45,7 @@ from app.analysis.assessment.errors import (
 from app.analysis.assessment.repository import CategoryEnumDatabaseMismatchError
 from app.analysis.assessment.service import AssessmentService
 from app.logfire.article_stage import assessment_stage_span
-from app.models.article import Article
+from app.models.analyzable_article_record import AnalyzableArticleRecord
 from app.models.article_curation import ArticleCuration
 from app.models.category import Category
 from app.models.in_scope_assessment import InScopeAssessment as InScopeAssessmentORM
@@ -64,8 +64,8 @@ async def _make_article(
     sample_source: NewsSource,
     *,
     url: str = "https://e.com/a",
-) -> Article:
-    article = Article(
+) -> AnalyzableArticleRecord:
+    article = AnalyzableArticleRecord(
         source_id=sample_source.id,
         source_url=url,  # type: ignore[arg-type]
         original_title="Original",
@@ -79,10 +79,10 @@ async def _make_article(
 
 
 async def _make_extraction(
-    db_session: AsyncSession, article: Article
+    db_session: AsyncSession, article: AnalyzableArticleRecord
 ) -> ArticleCuration:
     extraction = ArticleCuration(
-        article_id=article.id,
+        analyzable_article_id=article.id,
         translated_title="title",
         summary="summary text",
     )
@@ -97,7 +97,7 @@ def _ready(extraction: ArticleCuration) -> ReadyForAssessment:
         curation_id=extraction.id,
         translated_title=extraction.translated_title,
         summary=extraction.summary,
-        article_id=extraction.article_id,
+        article_id=extraction.analyzable_article_id,
     )
 
 

@@ -68,7 +68,7 @@ SELECT
     ae.article_id,
     ns.name
 FROM article_extractions ae
-JOIN articles a ON a.id = ae.article_id
+JOIN analyzable_articles a ON a.id = ae.article_id
 LEFT JOIN news_sources ns ON ns.id = a.source_id
 LEFT JOIN in_scope_assessments isa ON isa.extraction_id = ae.id
 LEFT JOIN out_of_scope_assessments oosa ON oosa.extraction_id = ae.id
@@ -132,7 +132,7 @@ AI quota / Redis rate limit を消費するのを防ぐ (Stage 5 と同方針)�
 | Ready 構築タイミング | 上流 Stage 3 task / maintenance | 下流 Stage 4 task (処理開始時) |
 | Repository method | `exists_in_scope` + `exists_out_of_scope` (2 query) | `try_load_for_assessment` (1-query atomic) |
 | AuditRepository | `_article_id_for` + `_resolve_source_name` (DB 逆引き) | Ready から直接読む |
-| maintenance backlog | `article_ids_pending_assessment` (Article.id) | `extraction_ids_pending_assessment` (ArticleExtraction.id) |
+| maintenance backlog | `article_ids_pending_assessment` (AnalyzableArticleRecord.id) | `extraction_ids_pending_assessment` (ArticleExtraction.id) |
 | maintenance task | `try_advance_from` + kiq(ready) | kiq(trigger) のみ |
 
 ## Rolling deploy 互換性

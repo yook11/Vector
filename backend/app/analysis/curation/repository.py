@@ -9,7 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.analysis.curation.ai.envelope import CurationCall
 from app.analysis.curation.domain import Noise, Signal
 from app.analysis.curation.domain.ready import CurationReadyBuildFacts
-from app.models.article import Article
+from app.models.analyzable_article_record import AnalyzableArticleRecord
 from app.models.article_curation import ArticleCuration
 from app.models.curation_noise import CurationNoise
 
@@ -29,16 +29,22 @@ class CurationRepository:
     ) -> CurationReadyBuildFacts | None:
         stmt = (
             select(
-                Article.id,
-                Article.original_title,
-                Article.original_content,
+                AnalyzableArticleRecord.id,
+                AnalyzableArticleRecord.original_title,
+                AnalyzableArticleRecord.original_content,
                 ArticleCuration.id.is_not(None),
                 CurationNoise.id.is_not(None),
             )
-            .select_from(Article)
-            .outerjoin(ArticleCuration, ArticleCuration.article_id == Article.id)
-            .outerjoin(CurationNoise, CurationNoise.article_id == Article.id)
-            .where(Article.id == article_id)
+            .select_from(AnalyzableArticleRecord)
+            .outerjoin(
+                ArticleCuration,
+                ArticleCuration.analyzable_article_id == AnalyzableArticleRecord.id,
+            )
+            .outerjoin(
+                CurationNoise,
+                CurationNoise.analyzable_article_id == AnalyzableArticleRecord.id,
+            )
+            .where(AnalyzableArticleRecord.id == article_id)
             .limit(1)
         )
         row = (await self._session.execute(stmt)).first()
@@ -67,7 +73,7 @@ class CurationRepository:
         """signal curation が既に存在するかを返す。"""
         stmt = (
             select(ArticleCuration.id)
-            .where(ArticleCuration.article_id == article_id)
+            .where(ArticleCuration.analyzable_article_id == article_id)
             .limit(1)
         )
         return (await self._session.execute(stmt)).first() is not None
@@ -83,11 +89,11 @@ class CurationRepository:
         stmt = (
             pg_insert(ArticleCuration)
             .values(
-                article_id=article_id,
+                analyzable_article_id=article_id,
                 translated_title=signal.title_ja,
                 summary=signal.summary_ja,
             )
-            .on_conflict_do_nothing(index_elements=["article_id"])
+            .on_conflict_do_nothing(index_elements=["analyzable_article_id"])
             .returning(ArticleCuration.id)
         )
         return (await self._session.execute(stmt)).scalar()
@@ -124,7 +130,7 @@ class CurationRepository:
         signal = call.result
         update_stmt = (
             update(ArticleCuration)
-            .where(ArticleCuration.article_id == article_id)
+            .where(ArticleCuration.analyzable_article_id == article_id)
             .values(
                 translated_title=signal.title_ja,
                 summary=signal.summary_ja,
@@ -152,7 +158,7 @@ class CurationRepository:
         stmt = (
             pg_insert(CurationNoise)
             .values(
-                article_id=article_id,
+                analyzable_article_id=article_id,
                 title_ja=noise.title_ja,
                 summary_ja=noise.summary_ja,
             )

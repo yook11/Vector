@@ -23,7 +23,7 @@ from app.analysis.assessment.repository import (
     CategoryEnumDatabaseMismatchError,
     missing_category_slugs,
 )
-from app.models.article import Article
+from app.models.analyzable_article_record import AnalyzableArticleRecord
 from app.models.article_curation import ArticleCuration
 from app.models.category import Category
 from app.models.in_scope_assessment import (
@@ -43,7 +43,7 @@ async def _make_extraction(
     *,
     url: str = "https://e.com/repo-test",
 ) -> ArticleCuration:
-    article = Article(
+    article = AnalyzableArticleRecord(
         source_id=sample_source.id,
         source_url=url,  # type: ignore[arg-type]
         original_title="Original",
@@ -54,7 +54,7 @@ async def _make_extraction(
     await db_session.commit()
     await db_session.refresh(article)
     extraction = ArticleCuration(
-        article_id=article.id,
+        analyzable_article_id=article.id,
         translated_title="抽出タイトル",
         summary="抽出要約",
     )
@@ -69,7 +69,7 @@ def _ready(extraction: ArticleCuration) -> ReadyForAssessment:
         curation_id=extraction.id,
         translated_title=extraction.translated_title,
         summary=extraction.summary,
-        article_id=extraction.article_id,
+        article_id=extraction.analyzable_article_id,
     )
 
 
@@ -159,7 +159,7 @@ async def test_save_out_of_scope_returns_none_on_race_lost(
             curation_id=extraction.id,
             translated_title="敗者タイトル",
             summary="敗者要約",
-            article_id=extraction.article_id,
+            article_id=extraction.analyzable_article_id,
         ),
     )
     await db_session.commit()
@@ -396,7 +396,7 @@ async def test_load_ready_build_facts_returns_values_for_unprocessed_curation(
 
     assert facts is not None
     assert facts.curation_id == extraction.id
-    assert facts.article_id == extraction.article_id
+    assert facts.article_id == extraction.analyzable_article_id
     assert facts.translated_title == extraction.translated_title
     assert facts.summary == extraction.summary
     assert facts.has_in_scope_assessment is False

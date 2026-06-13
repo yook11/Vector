@@ -101,7 +101,7 @@ class ExtractionNoise(Base):
 
     id: Mapped[int] = mapped_column(primary_key=True)
     article_id: Mapped[int] = mapped_column(
-        ForeignKey("articles.id", ondelete="CASCADE"),
+        ForeignKey("analyzable_articles.id", ondelete="CASCADE"),
     )
     title_ja: Mapped[str] = mapped_column(String(500))
     summary_ja: Mapped[str] = mapped_column(Text())
@@ -138,16 +138,16 @@ class ExtractionNoiseEntity(Base):
     noise: Mapped[ExtractionNoise] = relationship(back_populates="entities")
 ```
 
-### 既存 `Article` モデル
+### 既存 `AnalyzableArticleRecord` モデル
 
 ```python
-class Article(Base):
+class AnalyzableArticleRecord(Base):
     ...
     extraction: Mapped[ArticleExtraction | None] = relationship(...)
     extraction_noise: Mapped[ExtractionNoise | None] = relationship(...)  # 追加
 ```
 
-### Article × {Extraction | Noise} の排他 (確定: DB トリガー)
+### AnalyzableArticleRecord × {Extraction | Noise} の排他 (確定: DB トリガー)
 
 既存 `d5e6f7a8b9ca_add_exclusion_triggers.py` (Stage 2 `article_analyses` ↔ `article_rejections` 排他) と完全同型のパターンで実装する。アプリ層に依存しない構造的保証 (`feedback_structural_guarantee.md`)。
 

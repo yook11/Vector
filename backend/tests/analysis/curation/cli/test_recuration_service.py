@@ -2,8 +2,8 @@
 
 検証する観点:
 
-- 新規 article_id (Article 不在) → ``skipped_ids``
-- ArticleCuration 不在 (Article のみ) → ``skipped_ids``
+- 新規 article_id (AnalyzableArticleRecord 不在) → ``skipped_ids``
+- ArticleCuration 不在 (AnalyzableArticleRecord のみ) → ``skipped_ids``
 - 正常: 既存 extraction が UPDATE され、子 entity が差し替わる → ``success_ids``
 - dry_run=True: extractor は呼ばれるが DB は変更されない (rollback)
 - ``CurationTerminalDropError`` (ACL 詰め替え後の
@@ -46,7 +46,7 @@ from app.analysis.curation.cli.recuration_service import (
 from app.analysis.curation.domain import Noise, Signal
 from app.analysis.curation.repository import CurationRepository
 from app.analysis.gemini_error_translator import GeminiContentRejectionReason
-from app.models.article import Article
+from app.models.analyzable_article_record import AnalyzableArticleRecord
 from app.models.article_curation import ArticleCuration
 from app.models.news_source import NewsSource
 
@@ -98,8 +98,8 @@ def _curator(
 
 async def _make_article(
     db_session: AsyncSession, sample_source: NewsSource, url: str
-) -> Article:
-    article = Article(
+) -> AnalyzableArticleRecord:
+    article = AnalyzableArticleRecord(
         source_id=sample_source.id,
         source_url=url,
         original_title="Original Title",
@@ -115,9 +115,9 @@ async def _make_article(
 async def _seed_extraction(
     db_session: AsyncSession,
     *,
-    article: Article,
+    article: AnalyzableArticleRecord,
 ) -> ArticleCuration:
-    """Article + 既存 ArticleCuration を作る。"""
+    """AnalyzableArticleRecord + 既存 ArticleCuration を作る。"""
     repo = CurationRepository(db_session)
     saved = await repo.save_signal(
         _signal_call(title_ja="旧タイトル", summary_ja="旧要約"),
@@ -127,7 +127,9 @@ async def _seed_extraction(
     assert saved is not None
     parent = (
         await db_session.execute(
-            select(ArticleCuration).where(ArticleCuration.article_id == article.id)
+            select(ArticleCuration).where(
+                ArticleCuration.analyzable_article_id == article.id
+            )
         )
     ).scalar_one()
     return parent
@@ -207,7 +209,9 @@ async def test_success_updates_parent_in_place_keeps_id(
     async with session_factory() as fresh:
         parent_after = (
             await fresh.execute(
-                select(ArticleCuration).where(ArticleCuration.article_id == article.id)
+                select(ArticleCuration).where(
+                    ArticleCuration.analyzable_article_id == article.id
+                )
             )
         ).scalar_one()
         assert parent_after.id == parent_id_before
@@ -235,7 +239,9 @@ async def test_dry_run_calls_curator_but_rolls_back(
     async with session_factory() as fresh:
         parent = (
             await fresh.execute(
-                select(ArticleCuration).where(ArticleCuration.article_id == article.id)
+                select(ArticleCuration).where(
+                    ArticleCuration.analyzable_article_id == article.id
+                )
             )
         ).scalar_one()
         # UPDATE が roll back されたので旧タイトルのまま
@@ -388,7 +394,9 @@ async def test_skips_when_re_extraction_returns_noise_and_keeps_signal_extractio
     async with session_factory() as fresh:
         parent_after = (
             await fresh.execute(
-                select(ArticleCuration).where(ArticleCuration.article_id == article.id)
+                select(ArticleCuration).where(
+                    ArticleCuration.analyzable_article_id == article.id
+                )
             )
         ).scalar_one()
         assert parent_after.id == parent_id_before

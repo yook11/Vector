@@ -54,7 +54,7 @@ from app.analysis.curation.cli.recuration_service import (
 )
 from app.config import settings
 from app.db_ssl import create_app_engine
-from app.models.article import Article
+from app.models.analyzable_article_record import AnalyzableArticleRecord
 from app.models.article_curation import ArticleCuration
 
 
@@ -115,14 +115,17 @@ async def _select_article_ids(
 ) -> tuple[int, ...]:
     """既存 ``ArticleCuration`` を持つ article_id を昇順で取得する。"""
     stmt = (
-        select(Article.id)
-        .join(ArticleCuration, ArticleCuration.article_id == Article.id)
-        .order_by(Article.id)
+        select(AnalyzableArticleRecord.id)
+        .join(
+            ArticleCuration,
+            ArticleCuration.analyzable_article_id == AnalyzableArticleRecord.id,
+        )
+        .order_by(AnalyzableArticleRecord.id)
     )
     if id_from is not None:
-        stmt = stmt.where(Article.id >= id_from)
+        stmt = stmt.where(AnalyzableArticleRecord.id >= id_from)
     if id_to is not None:
-        stmt = stmt.where(Article.id <= id_to)
+        stmt = stmt.where(AnalyzableArticleRecord.id <= id_to)
     if limit is not None:
         stmt = stmt.limit(limit)
     rows = (await session.execute(stmt)).scalars().all()

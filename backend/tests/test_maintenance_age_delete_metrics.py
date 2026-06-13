@@ -73,7 +73,7 @@ async def _invoke_with_aged_ids(
             return_value=audit_repo,
         ),
         patch(
-            "app.repositories.articles.ArticleRepository",
+            "app.collection.persistence.analyzable_article_repository.AnalyzableArticleRepository",
             return_value=article_repo,
         ),
     ):

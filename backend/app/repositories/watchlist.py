@@ -26,7 +26,7 @@ class WatchlistRepository:
         base = (
             select(InScopeAssessment)
             .join(InScopeAssessment.curation)
-            .join(ArticleCuration.article)
+            .join(ArticleCuration.analyzable_article)
             .join(
                 WatchlistEntry,
                 WatchlistEntry.article_analysis_id == InScopeAssessment.id,

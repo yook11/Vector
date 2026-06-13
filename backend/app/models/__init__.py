@@ -1,4 +1,4 @@
-from app.models.article import Article
+from app.models.analyzable_article_record import AnalyzableArticleRecord
 from app.models.article_curation import ArticleCuration
 from app.models.auth_ref import auth_user_ref  # noqa: F401
 from app.models.backfill_exclusion import (
@@ -18,7 +18,7 @@ from app.models.watchlist_entry import WatchlistEntry
 from app.models.weekly_briefing import WeeklyBriefing
 
 __all__ = [
-    "Article",
+    "AnalyzableArticleRecord",
     "ArticleCuration",
     "AssessmentBackfillExclusion",
     "BackfillExclusionReason",

@@ -60,7 +60,9 @@ def test_briefing_llm_response_invalid_with_violations_appends_detail() -> None:
     assert str(exc) == expected
 
 
-def test_briefing_llm_response_invalid_multiple_violations_are_semicolon_joined() -> None:
+def test_briefing_llm_response_invalid_multiple_violations_are_semicolon_joined() -> (
+    None
+):
     """複数 violations はセミコロン + スペースで結合されて str(exc) に現れる。"""
     exc = BriefingLlmResponseInvalidError(
         violations=("key_articles.0: value_error", "summary: string_too_long")

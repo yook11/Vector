@@ -32,7 +32,7 @@ from app.analysis.embedding.errors import (
 )
 from app.analysis.embedding.service import EmbeddingService
 from app.analysis.gemini_error_translator import GeminiContentRejectionReason
-from app.models.article import Article
+from app.models.analyzable_article_record import AnalyzableArticleRecord
 from app.models.article_curation import ArticleCuration
 from app.models.category import Category
 from app.models.in_scope_assessment import InScopeAssessment
@@ -68,9 +68,9 @@ async def _build_article(
     source: NewsSource,
     *,
     url: str,
-    title: str = "Article",
-) -> Article:
-    article = Article(
+    title: str = "AnalyzableArticleRecord",
+) -> AnalyzableArticleRecord:
+    article = AnalyzableArticleRecord(
         source_id=source.id,
         source_url=url,
         original_title=title,
@@ -84,13 +84,13 @@ async def _build_article(
 
 async def _build_extraction(
     db_session: AsyncSession,
-    article: Article,
+    article: AnalyzableArticleRecord,
     *,
     translated_title: str = "テスト抽出タイトル",
     summary: str = "テスト抽出要約",
 ) -> ArticleCuration:
     extraction = ArticleCuration(
-        article_id=article.id,
+        analyzable_article_id=article.id,
         translated_title=translated_title,
         summary=summary,
     )

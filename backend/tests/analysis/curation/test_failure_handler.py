@@ -3,7 +3,7 @@
 検証する性質 (Drop 経路):
 - 1 tx 内で audit INSERT → article DELETE が両方完了する
 - 順序: audit が先 (source_id 自動補完が article 健在時に確定)
-- DELETE 後、``articles`` から該当 row が消える
+- DELETE 後、``analyzable_articles`` から該当 row が消える
 - ``pipeline_events.article_id`` は ``ondelete=SET NULL`` のため audit 行は残る
   ただし新規 INSERT 時点では ``article_id`` が埋まっている (DELETE 前)
 - ``source_id`` が auto-resolve される (article DELETE 後でも source 追跡可能)
@@ -37,7 +37,7 @@ from app.analysis.curation.domain.ready import ReadyForCuration
 from app.analysis.curation.errors import map_provider_to_curation
 from app.analysis.curation.failure_handling import CurationFailureHandler
 from app.analysis.gemini_error_translator import GeminiContentRejectionReason
-from app.models.article import Article
+from app.models.analyzable_article_record import AnalyzableArticleRecord
 from app.models.news_source import NewsSource
 from app.models.pipeline_event import PipelineEvent
 
@@ -56,8 +56,8 @@ async def _make_article(
     *,
     url: str = "https://e.com/a",
     content: str = "body content " * 30,
-) -> Article:
-    article = Article(
+) -> AnalyzableArticleRecord:
+    article = AnalyzableArticleRecord(
         source_id=sample_source.id,
         source_url=url,  # type: ignore[arg-type]
         original_title="t",
@@ -70,7 +70,7 @@ async def _make_article(
     return article
 
 
-def _ready_from(article: Article) -> ReadyForCuration:
+def _ready_from(article: AnalyzableArticleRecord) -> ReadyForCuration:
     return ReadyForCuration(
         article_id=article.id,
         original_title=article.original_title,
@@ -110,7 +110,7 @@ async def test_output_blocked_writes_audit_then_deletes_article(
 
     # commit が走った別 tx の DB 状態を確認するため fresh session で検証
     await db_session.rollback()
-    article_row = await db_session.get(Article, article_id)
+    article_row = await db_session.get(AnalyzableArticleRecord, article_id)
     assert article_row is None  # DELETE 済
 
     events = list(
@@ -176,7 +176,7 @@ async def test_input_rejected_writes_audit_then_deletes_article(
     assert decision.reraise is False
     assert decision.stage_hold_reason is None
     await db_session.rollback()
-    assert (await db_session.get(Article, article_id)) is None
+    assert (await db_session.get(AnalyzableArticleRecord, article_id)) is None
     events = list(
         (
             await db_session.execute(

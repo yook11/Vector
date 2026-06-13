@@ -35,7 +35,7 @@ from app.analysis.curation.domain.ready import ReadyForCuration
 from app.analysis.curation.errors import CurationResponseInvalidError
 from app.analysis.curation.service import CurationService
 from app.logfire.article_stage import curation_stage_span
-from app.models.article import Article
+from app.models.analyzable_article_record import AnalyzableArticleRecord
 from app.models.news_source import NewsSource
 from app.models.pipeline_event import PipelineEvent
 from tests.logfire._span_helpers import stage_attrs
@@ -79,8 +79,8 @@ def _curator(
 
 async def _make_article(
     db_session: AsyncSession, sample_source: NewsSource, url: str = "https://e.com/a"
-) -> Article:
-    article = Article(
+) -> AnalyzableArticleRecord:
+    article = AnalyzableArticleRecord(
         source_id=sample_source.id,
         source_url=url,  # type: ignore[arg-type]
         original_title="Original Title",
@@ -93,7 +93,7 @@ async def _make_article(
     return article
 
 
-async def _ready(article: Article) -> ReadyForCuration:
+async def _ready(article: AnalyzableArticleRecord) -> ReadyForCuration:
     return ReadyForCuration(
         article_id=article.id,
         original_title=article.original_title,

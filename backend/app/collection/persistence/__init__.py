@@ -2,5 +2,6 @@
 
 domain 型を物理テーブルに橋渡しする。
 
-- ``article_store`` — ``ArticleStore`` (``articles`` 書込 + 重複判定)。
+- ``analyzable_article_repository`` — ``AnalyzableArticleRepository``
+  (``analyzable_articles`` 書込 + 重複判定)。
 """

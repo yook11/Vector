@@ -309,7 +309,7 @@ GROUP BY 1, 2;
 
 ### 設計判断 (2026-05-07 確定)
 
-**処理不可能と判定された article は `articles` から DELETE する**。
+**処理不可能と判定された article は `analyzable_articles` から DELETE する**。
 
 哲学:
 - 状態は「処理可能 / 不可能」の二値しか存在しない
@@ -324,11 +324,11 @@ extraction の成功状態は **row の存在 (presence) で表現**:
 - 成功 → `article_extractions` row が INSERT される
 - 失敗 → row が無い (article 側に何もマークされない)
 
-DELETE 方式はこの presence semantic を articles レベルに拡張:
+DELETE 方式はこの presence semantic を analyzable_articles レベルに拡張:
 
-- 成功 → `articles` row 残る + `article_extractions` row INSERT
-- 処理可能な一時失敗 → `articles` row 残る + `article_extractions` row なし → cron 再試行
-- 処理不可能 → **`articles` row 削除** = 永遠に対象外
+- 成功 → `analyzable_articles` row 残る + `article_extractions` row INSERT
+- 処理可能な一時失敗 → `analyzable_articles` row 残る + `article_extractions` row なし → cron 再試行
+- 処理不可能 → **`analyzable_articles` row 削除** = 永遠に対象外
 
 ### 実装の前提条件 (確認済)
 
@@ -369,7 +369,7 @@ DELETE 方式はこの presence semantic を articles レベルに拡張:
 ```sql
 -- 救済対象 = articles 存在 かつ extraction 未完
 SELECT a.id
-FROM articles a
+FROM analyzable_articles a
 LEFT JOIN article_extractions ae ON a.id = ae.article_id
 WHERE ae.id IS NULL
   AND a.created_at > NOW() - INTERVAL '7 days';  -- 古すぎる pending は対象外 (任意)
@@ -435,7 +435,7 @@ scope:
 3. 古い記事 DELETE cron 新設 (`delete_old_unprocessed_extractions`)
    - 7 日経過した未処理 articles を DELETE (日次)
 4. cron 起動の dispatch event 焼付
-5. 救済対象判定 SQL (極めて単純 — `articles` 存在 + `article_extractions` 不在
+5. 救済対象判定 SQL (極めて単純 — `analyzable_articles` 存在 + `article_extractions` 不在
    + age 7 日以内)
 
 成果: 失敗の自動救済 + 古い記事の自動 DELETE、運用不要。
@@ -608,10 +608,10 @@ from typing import Any
 
 from app.analysis.extraction.extractor.gemini_prompt import GeminiExtractionPrompt
 from app.analysis.prompt_safety import sanitize_for_untrusted_block
-from app.models.article import Article
+from app.models.analyzable_article_record import AnalyzableArticleRecord
 
 
-def base_extraction_payload_fields(article: Article) -> dict[str, Any]:
+def base_extraction_payload_fields(article: AnalyzableArticleRecord) -> dict[str, Any]:
     """Service / tasks.py 両経路で共有する基底 field 群。
 
     記事と Prompt class から「状態に依存せず取れる」7 field を返す。
@@ -905,7 +905,7 @@ tasks.py except 節
 ExtractionService.mark_article_unprocessable(article_id, *, outcome_code, exc)
   ↓ (1 tx 内で実行)
   1. INSERT pipeline_events (article_id=X, outcome_code=...)
-  2. DELETE FROM articles WHERE id=X
+  2. DELETE FROM analyzable_articles WHERE id=X
   3. commit
   ↓ (commit 完了)
   → CASCADE で article_extractions / extraction_noises / article_analysis 削除
@@ -1071,15 +1071,15 @@ if article is None:
 
 ```sql
 -- 救済 cron 対象 (新鮮な記事のみ)
-SELECT a.id FROM articles a
+SELECT a.id FROM analyzable_articles a
 LEFT JOIN article_extractions ae ON a.id = ae.article_id
 WHERE ae.id IS NULL
   AND a.created_at > NOW() - INTERVAL '7 days';
 
 -- DELETE cron (日次、古い未処理を削除)
-DELETE FROM articles
+DELETE FROM analyzable_articles
 WHERE id IN (
-  SELECT a.id FROM articles a
+  SELECT a.id FROM analyzable_articles a
   LEFT JOIN article_extractions ae ON a.id = ae.article_id
   WHERE ae.id IS NULL AND a.created_at < NOW() - INTERVAL '7 days'
 );

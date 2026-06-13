@@ -39,7 +39,7 @@ from app.analysis.assessment.domain.ready import ReadyForAssessment
 from app.analysis.assessment.errors import map_provider_to_assessment
 from app.analysis.assessment.failure_handling import AssessmentFailureHandler
 from app.analysis.gemini_error_translator import GeminiContentRejectionReason
-from app.models.article import Article
+from app.models.analyzable_article_record import AnalyzableArticleRecord
 from app.models.article_curation import ArticleCuration
 from app.models.news_source import NewsSource
 from app.models.pipeline_event import PipelineEvent
@@ -50,8 +50,8 @@ async def _make_article(
     sample_source: NewsSource,
     *,
     url: str = "https://e.com/a",
-) -> Article:
-    article = Article(
+) -> AnalyzableArticleRecord:
+    article = AnalyzableArticleRecord(
         source_id=sample_source.id,
         source_url=url,  # type: ignore[arg-type]
         original_title="t",
@@ -66,10 +66,10 @@ async def _make_article(
 
 async def _make_extraction(
     db_session: AsyncSession,
-    article: Article,
+    article: AnalyzableArticleRecord,
 ) -> ArticleCuration:
     extraction = ArticleCuration(
-        article_id=article.id,
+        analyzable_article_id=article.id,
         translated_title="title",
         summary="summary text",
     )
@@ -84,7 +84,7 @@ def _ready_from(extraction: ArticleCuration) -> ReadyForAssessment:
         curation_id=extraction.id,
         translated_title=extraction.translated_title,
         summary=extraction.summary,
-        article_id=extraction.article_id,
+        article_id=extraction.analyzable_article_id,
     )
 
 

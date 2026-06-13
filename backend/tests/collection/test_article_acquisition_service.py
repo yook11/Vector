@@ -33,7 +33,7 @@ from app.collection.sources.article_completion_policy import (
 from app.collection.sources.base_article_source import BaseArticleSource
 from app.collection.sources.fetch_cadence import FetchCadence
 from app.collection.sources.source_name import SourceName
-from app.models.article import Article as ArticleORM
+from app.models.analyzable_article_record import AnalyzableArticleRecord
 from app.models.incomplete_article import IncompleteArticle as IncompleteArticleORM
 from app.models.news_source import NewsSource, SourceType
 from app.models.pipeline_event import PipelineEvent
@@ -172,7 +172,7 @@ async def test_pattern_r_inserts_canonicalized_article(
     db_session: AsyncSession,
     vb_source: NewsSource,
 ) -> None:
-    """即時獲得経路は articles を 1 件作り、source_url が canonicalize 済み値で入る。"""
+    """即時獲得経路は analyzable_articles を 1 件作る。"""
     svc = ArticleAcquisitionService(
         session_factory,
         _StubSource([_ready_fetched("https://venturebeat.com/a/")]),
@@ -183,7 +183,9 @@ async def test_pattern_r_inserts_canonicalized_article(
     assert len(article_ids) == 1
     assert isinstance(article_ids[0], int)
 
-    articles = (await db_session.execute(select(ArticleORM))).scalars().all()
+    articles = (
+        (await db_session.execute(select(AnalyzableArticleRecord))).scalars().all()
+    )
     pendings = (await db_session.execute(select(IncompleteArticleORM))).scalars().all()
     assert len(articles) == 1
     # canonicalize で trailing slash 削除済
@@ -207,7 +209,9 @@ async def test_pattern_h_inserts_pending_with_canonicalized_url(
 
     assert article_ids == []  # 補完待ち経路は cron poller 駆動
 
-    articles = (await db_session.execute(select(ArticleORM))).scalars().all()
+    articles = (
+        (await db_session.execute(select(AnalyzableArticleRecord))).scalars().all()
+    )
     pendings = (await db_session.execute(select(IncompleteArticleORM))).scalars().all()
     assert articles == []
     assert len(pendings) == 1
@@ -222,12 +226,12 @@ async def test_pattern_h_skips_when_article_already_exists(
     db_session: AsyncSession,
     vb_source: NewsSource,
 ) -> None:
-    """補完待ち経路 pre-check: articles に同 URL がある場合は pending を作らず skip。
+    """補完待ち経路 pre-check: analyzable_articles に同 URL がある場合は skip。
 
     feed 再露出時の HTML fetch 反復を抑える実用的 idempotency の検証。
     """
     canonical = CanonicalArticleUrl("https://techcrunch.com/known")
-    existing = ArticleORM(
+    existing = AnalyzableArticleRecord(
         original_title="Already there",
         original_content="x" * 100,
         published_at=datetime(2026, 4, 1, tzinfo=UTC),
@@ -260,7 +264,9 @@ async def test_empty_yield_does_not_persist(
     article_ids = await svc.execute(vb_source.id)
 
     assert article_ids == []
-    articles = (await db_session.execute(select(ArticleORM))).scalars().all()
+    articles = (
+        (await db_session.execute(select(AnalyzableArticleRecord))).scalars().all()
+    )
     pendings = (await db_session.execute(select(IncompleteArticleORM))).scalars().all()
     assert articles == []
     assert pendings == []
@@ -272,7 +278,7 @@ async def test_duplicate_url_yielded_twice_persists_once(
     db_session: AsyncSession,
     vb_source: NewsSource,
 ) -> None:
-    """同 URL の重複 yield は ``articles.source_url UNIQUE`` で 1 件に絞られる。
+    """同 URL の重複 yield は ``analyzable_articles.source_url UNIQUE`` で絞る。
 
     2 度目は ON CONFLICT DO NOTHING で ``known_url`` skip となる。
     """
@@ -289,7 +295,9 @@ async def test_duplicate_url_yielded_twice_persists_once(
     article_ids = await svc.execute(vb_source.id)
 
     assert len(article_ids) == 1
-    articles = (await db_session.execute(select(ArticleORM))).scalars().all()
+    articles = (
+        (await db_session.execute(select(AnalyzableArticleRecord))).scalars().all()
+    )
     assert len(articles) == 1
 
 
@@ -301,8 +309,8 @@ async def test_canonicalization_dedupes_tracking_query(
 ) -> None:
     """canonicalize_url が tracking parameter / trailing slash を吸収する。
 
-    異なる原始 URL でも canonicalize 後が同じなら ``articles.source_url UNIQUE``
-    で 2 度目は弾かれ ``known_url`` skip。
+    異なる原始 URL でも canonicalize 後が同じなら
+    ``analyzable_articles.source_url UNIQUE`` で 2 度目は弾かれ ``known_url`` skip。
     """
     svc = ArticleAcquisitionService(
         session_factory,
@@ -317,7 +325,9 @@ async def test_canonicalization_dedupes_tracking_query(
     article_ids = await svc.execute(vb_source.id)
 
     assert len(article_ids) == 1
-    articles = (await db_session.execute(select(ArticleORM))).scalars().all()
+    articles = (
+        (await db_session.execute(select(AnalyzableArticleRecord))).scalars().all()
+    )
     assert len(articles) == 1
 
 
@@ -341,7 +351,9 @@ async def test_mixed_ready_pending_route_independently(
     article_ids = await svc.execute(vb_source.id)
 
     assert len(article_ids) == 1
-    articles = (await db_session.execute(select(ArticleORM))).scalars().all()
+    articles = (
+        (await db_session.execute(select(AnalyzableArticleRecord))).scalars().all()
+    )
     pendings = (await db_session.execute(select(IncompleteArticleORM))).scalars().all()
     assert len(articles) == 1  # R only
     assert len(pendings) == 1  # H only
@@ -372,7 +384,9 @@ async def test_conversion_rejection_audited_without_stopping_source(
     article_ids = await svc.execute(vb_source.id)
 
     assert len(article_ids) == 1  # 棄却を挟んでも R は永続化
-    articles = (await db_session.execute(select(ArticleORM))).scalars().all()
+    articles = (
+        (await db_session.execute(select(AnalyzableArticleRecord))).scalars().all()
+    )
     pendings = (await db_session.execute(select(IncompleteArticleORM))).scalars().all()
     assert len(articles) == 1
     assert len(pendings) == 1  # 棄却後の H も止まらず投入
@@ -660,7 +674,7 @@ async def test_known_url_observed_writes_no_succeeded(
     """既知 URL を補完待ち経路で受けると pre-check skip され SUCCEEDED を焼かない。"""
     canonical = CanonicalArticleUrl("https://techcrunch.com/known")
     db_session.add(
-        ArticleORM(
+        AnalyzableArticleRecord(
             original_title="Already there",
             original_content="x" * 100,
             published_at=datetime(2026, 4, 1, tzinfo=UTC),

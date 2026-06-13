@@ -6,7 +6,7 @@
 - 実 fixture から少なくとも 1 件は永続化 passport を yield する
 - yield された passport の型は ``allowed_types`` 集合に属する
 - ``must_include_types`` の各型を最低 1 件含む (主経路の挙動を固定)
-- yield された passport は永続化不変条件 (Stage 2 を通せば articles に
+- yield された passport は永続化不変条件 (Stage 2 を通せば analyzable_articles に
   永続化できる) を満たす
 
 取得 machinery は ``fetch_articles`` engine が ``XxxSource.read`` を駆動する形に

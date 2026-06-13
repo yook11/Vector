@@ -262,9 +262,7 @@ class TestFromLlmPayload:
     def test_invalid_json_raises_validation_error(self) -> None:
         """不正 JSON は ValidationError。"""
         with pytest.raises(ValidationError):
-            WeeklyBriefingContent.from_llm_payload(
-                "not-json", input_ids={1}
-            )
+            WeeklyBriefingContent.from_llm_payload("not-json", input_ids={1})
 
     def test_missing_required_field_raises_validation_error(self) -> None:
         """必須フィールド欠落は ValidationError。"""

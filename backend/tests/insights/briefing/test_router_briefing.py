@@ -23,7 +23,7 @@ from app.insights.briefing.domain.week import (
     latest_completed_week_start,
     now_in_jst,
 )
-from app.models.article import Article
+from app.models.analyzable_article_record import AnalyzableArticleRecord
 from app.models.article_curation import ArticleCuration
 from app.models.category import Category
 from app.models.in_scope_assessment import InScopeAssessment
@@ -43,9 +43,9 @@ async def ai_category(db_session: AsyncSession) -> Category:
 
 
 async def _article_id_of(db_session: AsyncSession, analysis: InScopeAssessment) -> int:
-    """analysis から JSONB key_articles が参照する Article.id を SQL で引く。"""
+    """analysis から JSONB key_articles が参照する source article id を引く。"""
     result = await db_session.execute(
-        select(ArticleCuration.article_id).where(
+        select(ArticleCuration.analyzable_article_id).where(
             ArticleCuration.id == analysis.curation_id
         )
     )
@@ -130,12 +130,12 @@ class TestGetBriefing:
         sample_source: NewsSource,
         seed_briefing_analysis,
     ) -> None:
-        # decoy: assessment を持たない Article を先に 1 件入れて Article.id と
-        # InScopeAssessment.id のシーケンスを意図的にずらす。テスト DB は毎回
+        # decoy: assessment を持たない source article を先に 1 件入れて
+        # source article id と InScopeAssessment.id を意図的にずらす。テスト DB は毎回
         # RESTART IDENTITY で両 id が一致してしまい、ずらさないと下の
         # 「embed.id = 公開 id 空間」assert が判別力を持たない。
         db_session.add(
-            Article(
+            AnalyzableArticleRecord(
                 source_id=sample_source.id,
                 source_url="https://example.com/decoy",
                 original_title="decoy",
@@ -158,7 +158,9 @@ class TestGetBriefing:
         db_session.add(
             _briefing(
                 ai_category.id,
-                key_articles=[{"assessment_id": analysis.id, "significance": "なぜ重要か"}],
+                key_articles=[
+                    {"assessment_id": analysis.id, "significance": "なぜ重要か"}
+                ],
             )
         )
         await db_session.commit()
@@ -184,8 +186,8 @@ class TestGetBriefing:
         assert key_article["significance"] == "なぜ重要か"
         assert "articleId" not in key_article
         article = key_article["article"]
-        # embed の id は /news/{id} の公開記事 id (= analysis.id、Article.id では
-        # ない)。decoy seed で両 id 空間がずれているため取り違えを判別できる。
+        # embed の id は /news/{id} の公開記事 id (= analysis.id)。
+        # decoy seed で両 id 空間がずれているため取り違えを判別できる。
         assert article["id"] == analysis.id
         assert article["id"] != article_id
         assert article["translatedTitle"] == "記事タイトル"
@@ -205,7 +207,7 @@ class TestGetBriefing:
         ai_category: Category,
         seed_briefing_analysis,
     ) -> None:
-        """``Article.published_at`` 未設定の記事は ``publishedAt: null`` で返る。"""
+        """published_at 未設定の記事は ``publishedAt: null`` で返る。"""
         analysis = await seed_briefing_analysis(
             category_id=ai_category.id,
             analyzed_at=datetime(2026, 4, 22, 12, 0, tzinfo=JST),
@@ -213,7 +215,9 @@ class TestGetBriefing:
         db_session.add(
             _briefing(
                 ai_category.id,
-                key_articles=[{"assessment_id": analysis.id, "significance": "なぜ重要か"}],
+                key_articles=[
+                    {"assessment_id": analysis.id, "significance": "なぜ重要か"}
+                ],
             )
         )
         await db_session.commit()
@@ -297,7 +301,9 @@ class TestGetBriefing:
         db_session.add(
             _briefing(
                 ai_category.id,
-                key_articles=[{"assessment_id": analysis.id, "significance": "なぜ重要か"}],
+                key_articles=[
+                    {"assessment_id": analysis.id, "significance": "なぜ重要か"}
+                ],
             )
         )
         await db_session.commit()
@@ -326,7 +332,9 @@ class TestGetBriefing:
         db_session.add(
             _briefing(
                 ai_category.id,
-                key_articles=[{"assessment_id": analysis.id, "significance": "なぜ重要か"}],
+                key_articles=[
+                    {"assessment_id": analysis.id, "significance": "なぜ重要か"}
+                ],
             )
         )
         await db_session.commit()
@@ -351,7 +359,9 @@ class TestGetBriefing:
         db_session.add(
             _briefing(
                 ai_category.id,
-                key_articles=[{"assessment_id": analysis.id, "significance": "なぜ重要か"}],
+                key_articles=[
+                    {"assessment_id": analysis.id, "significance": "なぜ重要か"}
+                ],
             )
         )
         await db_session.commit()

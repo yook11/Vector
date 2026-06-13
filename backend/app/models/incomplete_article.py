@@ -1,7 +1,8 @@
 """``incomplete_articles`` テーブル — 本文未取得の未完成記事 (Pattern H 専用)。
 
 PR2.5-A 新設。Stage 1 で entry が ``Failed`` (RSS で本文不足等) と判定された場合、
-この行が作られ、Stage 2 の HTML 取得で本文を補って ``articles`` へ完成させる。
+この行が作られ、Stage 2 の HTML 取得で本文を補って
+``analyzable_articles`` へ完成させる。
 それまでは「未完成記事」としてこの作業テーブルに滞留する。
 lease 方式 (status=open/running/closed + ready_at + leased_until +
 attempt_count) で多 worker 安全な claim と sweeper による lease 救出を行う。
@@ -53,7 +54,7 @@ class IncompleteArticle(Base):
 
     lease 期限切れの ``running`` 行は別 cron の sweeper が ``open`` に戻す。
 
-    ``url`` の UNIQUE が articles と pending の cross-table dedup の物理保証
+    ``url`` の UNIQUE が analyzable_articles と pending の cross-table dedup の物理保証
     (caller は canonicalize 済み URL を渡すこと)。
     """
 

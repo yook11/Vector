@@ -26,7 +26,7 @@ from app.analysis.curation.cli.recuration_service import (
 )
 from app.analysis.curation.domain import Signal
 from app.analysis.curation.repository import CurationRepository
-from app.models.article import Article
+from app.models.analyzable_article_record import AnalyzableArticleRecord
 from app.models.news_source import NewsSource
 from tests.analysis.curation.cli.test_recuration_service import (
     _curator as make_curator,  # 再利用 (BaseCurator mock)
@@ -70,7 +70,7 @@ class TestBuildParser:
         assert args.max_retries == 5
 
 
-# run — Article + ArticleCuration を seed して selection を検証する
+# run — AnalyzableArticleRecord + ArticleCuration を seed して selection を検証する
 
 
 async def _seed_article_with_extraction(
@@ -78,8 +78,8 @@ async def _seed_article_with_extraction(
     sample_source: NewsSource,
     *,
     url: str,
-) -> Article:
-    article = Article(
+) -> AnalyzableArticleRecord:
+    article = AnalyzableArticleRecord(
         source_id=sample_source.id,
         source_url=url,
         original_title="Original",
@@ -107,8 +107,8 @@ async def _seed_article_with_extraction(
 
 async def _seed_article_without_extraction(
     db_session: AsyncSession, sample_source: NewsSource, *, url: str
-) -> Article:
-    article = Article(
+) -> AnalyzableArticleRecord:
+    article = AnalyzableArticleRecord(
         source_id=sample_source.id,
         source_url=url,
         original_title="Original",

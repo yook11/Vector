@@ -26,7 +26,7 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 from app.models.base import Base
 
 if TYPE_CHECKING:
-    from app.models.article import Article
+    from app.models.analyzable_article_record import AnalyzableArticleRecord
 
 __all__ = ["CurationNoise"]
 
@@ -36,7 +36,10 @@ class CurationNoise(Base):
 
     __tablename__ = "curation_noises"
     __table_args__ = (
-        UniqueConstraint("article_id", name="uq_curation_noises_article_id"),
+        UniqueConstraint(
+            "analyzable_article_id",
+            name="uq_curation_noises_analyzable_article_id",
+        ),
         CheckConstraint(
             "title_ja <> ''",
             name="ck_curation_noises_title_ja_not_empty",
@@ -48,9 +51,9 @@ class CurationNoise(Base):
     )
 
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
-    article_id: Mapped[int] = mapped_column(
+    analyzable_article_id: Mapped[int] = mapped_column(
         BigInteger,
-        ForeignKey("articles.id", ondelete="CASCADE"),
+        ForeignKey("analyzable_articles.id", ondelete="CASCADE"),
     )
     title_ja: Mapped[str] = mapped_column(String(500))
     summary_ja: Mapped[str] = mapped_column(Text())
@@ -58,4 +61,6 @@ class CurationNoise(Base):
         DateTime(timezone=True), server_default=func.now()
     )
 
-    article: Mapped[Article] = relationship(back_populates="curation_noise")
+    analyzable_article: Mapped[AnalyzableArticleRecord] = relationship(
+        back_populates="curation_noise"
+    )

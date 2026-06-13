@@ -32,7 +32,7 @@ def build_brief(analysis: InScopeAssessment) -> ArticleBrief:
     保証する (無言カードを作らない)。判定は extract 後の表示可能 content
     基準で、全要素 invalid な JSONB も空としてフォールバックする。
     """
-    a = analysis.curation.article
+    a = analysis.curation.analyzable_article
     key_points = [
         _truncate(content, _KEY_POINT_LEN)
         for content in extract_key_point_contents(analysis.key_points)[:_KEY_POINT_MAX]
@@ -74,7 +74,7 @@ def extract_key_point_contents(key_points: list[dict[str, Any]] | None) -> list[
 
 
 def build_detail(analysis: InScopeAssessment) -> ArticleDetail:
-    a = analysis.curation.article
+    a = analysis.curation.analyzable_article
     return ArticleDetail(
         id=analysis.id,
         translated_title=analysis.translated_title,

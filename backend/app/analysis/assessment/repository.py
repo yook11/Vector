@@ -65,7 +65,7 @@ class AssessmentRepository:
         stmt = (
             select(
                 ArticleCuration.id,
-                ArticleCuration.article_id,
+                ArticleCuration.analyzable_article_id,
                 ArticleCuration.translated_title,
                 ArticleCuration.summary,
                 InScopeAssessment.id.is_not(None),

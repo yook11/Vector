@@ -8,15 +8,17 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.audit.domain.event import EventType, Stage
 from app.audit.stages.backfill import BackfillAuditRepository, BackfillOutcomeCode
-from app.models.article import Article
+from app.models.analyzable_article_record import AnalyzableArticleRecord
 from app.models.news_source import NewsSource
 from app.models.pipeline_event import PipelineEvent
 
 
 @pytest.fixture
-async def article_row(db_session: AsyncSession, sample_source: NewsSource) -> Article:
+async def article_row(
+    db_session: AsyncSession, sample_source: NewsSource
+) -> AnalyzableArticleRecord:
     """backfill item audit 用 article を作成する。"""
-    article = Article(
+    article = AnalyzableArticleRecord(
         source_id=sample_source.id,
         source_url="https://example.com/backfill-audit",  # type: ignore[arg-type]
         original_title="title",
@@ -31,7 +33,7 @@ async def article_row(db_session: AsyncSession, sample_source: NewsSource) -> Ar
 @pytest.mark.asyncio
 async def test_append_item_event_records_target_snapshot(
     db_session: AsyncSession,
-    article_row: Article,
+    article_row: AnalyzableArticleRecord,
     sample_source: NewsSource,
 ) -> None:
     """item enqueue 成功は target と article/source を保存する。"""

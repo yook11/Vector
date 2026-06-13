@@ -1,4 +1,4 @@
-"""back-fill 対象 Article ID のクエリ (Repository)。
+"""back-fill 対象 AnalyzableArticleRecord ID のクエリ (Repository)。
 
 メインフローで諦め return された結果として下流子テーブルが NULL になっている
 記事を、年齢ウィンドウの範囲で発見する。SQL は SQLAlchemy 2.0 スタイルで
@@ -14,7 +14,7 @@ from typing import Any
 from sqlalchemy import Select, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models.article import Article
+from app.models.analyzable_article_record import AnalyzableArticleRecord
 from app.models.article_curation import ArticleCuration
 from app.models.backfill_exclusion import (
     AssessmentBackfillExclusion,
@@ -52,22 +52,29 @@ class PipelineBacklog:
 
     # --- pending 述語ビルダ (ids / count / stats が共有する SQL 本体の単一定義) ---
     # 各 stage の FROM + JOIN + anti-join + 年齢窓だけを組み立て、SELECT 列は呼び出し側
-    # が渡す。``select_from`` を明示し ``func.min(Article.created_at)`` 系の FROM 推論
-    # ずれも固定する。``*_targets_pending`` (NewsSource 付き) / ``*_aged_out_*``
+    # が渡す。``select_from`` を明示し ``func.min(AnalyzableArticleRecord.created_at)``
+    # 系の FROM 推論ずれも固定する。``*_targets_pending`` (NewsSource 付き) /
+    # ``*_aged_out_*``
     # (下限なし) は述語が分岐するため共有しない。
 
     def _curation_pending(
         self, stmt: Select[Any], *, created_before: datetime, created_after: datetime
     ) -> Select[Any]:
         return (
-            stmt.select_from(Article)
-            .outerjoin(ArticleCuration, ArticleCuration.article_id == Article.id)
-            .outerjoin(CurationNoise, CurationNoise.article_id == Article.id)
+            stmt.select_from(AnalyzableArticleRecord)
+            .outerjoin(
+                ArticleCuration,
+                ArticleCuration.analyzable_article_id == AnalyzableArticleRecord.id,
+            )
+            .outerjoin(
+                CurationNoise,
+                CurationNoise.analyzable_article_id == AnalyzableArticleRecord.id,
+            )
             .where(
                 ArticleCuration.id.is_(None),
                 CurationNoise.id.is_(None),
-                Article.created_at < created_before,
-                Article.created_at >= created_after,
+                AnalyzableArticleRecord.created_at < created_before,
+                AnalyzableArticleRecord.created_at >= created_after,
             )
         )
 
@@ -76,7 +83,10 @@ class PipelineBacklog:
     ) -> Select[Any]:
         return (
             stmt.select_from(ArticleCuration)
-            .join(Article, Article.id == ArticleCuration.article_id)
+            .join(
+                AnalyzableArticleRecord,
+                AnalyzableArticleRecord.id == ArticleCuration.analyzable_article_id,
+            )
             .outerjoin(
                 InScopeAssessment,
                 InScopeAssessment.curation_id == ArticleCuration.id,
@@ -93,8 +103,8 @@ class PipelineBacklog:
                 InScopeAssessment.id.is_(None),
                 OutOfScopeAssessment.id.is_(None),
                 AssessmentBackfillExclusion.curation_id.is_(None),
-                Article.created_at < created_before,
-                Article.created_at >= created_after,
+                AnalyzableArticleRecord.created_at < created_before,
+                AnalyzableArticleRecord.created_at >= created_after,
             )
         )
 
@@ -107,7 +117,10 @@ class PipelineBacklog:
                 ArticleCuration,
                 ArticleCuration.id == InScopeAssessment.curation_id,
             )
-            .join(Article, Article.id == ArticleCuration.article_id)
+            .join(
+                AnalyzableArticleRecord,
+                AnalyzableArticleRecord.id == ArticleCuration.analyzable_article_id,
+            )
             .outerjoin(
                 EmbeddingBackfillExclusion,
                 EmbeddingBackfillExclusion.analysis_id == InScopeAssessment.id,
@@ -115,8 +128,8 @@ class PipelineBacklog:
             .where(
                 InScopeAssessment.embedding.is_(None),
                 EmbeddingBackfillExclusion.analysis_id.is_(None),
-                Article.created_at < created_before,
-                Article.created_at >= created_after,
+                AnalyzableArticleRecord.created_at < created_before,
+                AnalyzableArticleRecord.created_at >= created_after,
             )
         )
 
@@ -127,7 +140,7 @@ class PipelineBacklog:
         created_after: datetime,
         limit: int,
     ) -> list[int]:
-        """curation/noise いずれの子も無い未処理 Article ID を返す (Stage 2a 残)。
+        """curation/noise いずれの子も無い未処理 article record ID を返す。
 
         ``curation_noises`` (noise 判定済み = 正常完了) も anti-join する。
         signal/noise は排他で、どちらかが在れば curation は完了している
@@ -135,11 +148,11 @@ class PipelineBacklog:
         """
         stmt = (
             self._curation_pending(
-                select(Article.id),
+                select(AnalyzableArticleRecord.id),
                 created_before=created_before,
                 created_after=created_after,
             )
-            .order_by(Article.created_at.asc())
+            .order_by(AnalyzableArticleRecord.created_at.asc())
             .limit(limit)
         )
         result = await self._session.execute(stmt)
@@ -154,17 +167,25 @@ class PipelineBacklog:
     ) -> list[BackfillTarget]:
         """Stage 3 backfill の enqueue / audit 対象を返す。"""
         stmt = (
-            select(Article.id, Article.id, NewsSource.name)
-            .outerjoin(NewsSource, NewsSource.id == Article.source_id)
-            .outerjoin(ArticleCuration, ArticleCuration.article_id == Article.id)
-            .outerjoin(CurationNoise, CurationNoise.article_id == Article.id)
+            select(
+                AnalyzableArticleRecord.id, AnalyzableArticleRecord.id, NewsSource.name
+            )
+            .outerjoin(NewsSource, NewsSource.id == AnalyzableArticleRecord.source_id)
+            .outerjoin(
+                ArticleCuration,
+                ArticleCuration.analyzable_article_id == AnalyzableArticleRecord.id,
+            )
+            .outerjoin(
+                CurationNoise,
+                CurationNoise.analyzable_article_id == AnalyzableArticleRecord.id,
+            )
             .where(
                 ArticleCuration.id.is_(None),
                 CurationNoise.id.is_(None),
-                Article.created_at < created_before,
-                Article.created_at >= created_after,
+                AnalyzableArticleRecord.created_at < created_before,
+                AnalyzableArticleRecord.created_at >= created_after,
             )
-            .order_by(Article.created_at.asc())
+            .order_by(AnalyzableArticleRecord.created_at.asc())
             .limit(limit)
         )
         rows = (await self._session.execute(stmt)).tuples().all()
@@ -176,9 +197,9 @@ class PipelineBacklog:
         created_before: datetime,
         created_after: datetime,
     ) -> int:
-        """curation/noise 未処理 Article の真の総数 (LIMIT なし COUNT)。観測専用。"""
+        """curation/noise 未処理 article record の真の総数を返す。"""
         stmt = self._curation_pending(
-            select(func.count(Article.id)),
+            select(func.count(AnalyzableArticleRecord.id)),
             created_before=created_before,
             created_after=created_after,
         )
@@ -191,14 +212,17 @@ class PipelineBacklog:
         created_before: datetime,
         created_after: datetime,
     ) -> tuple[int, datetime | None]:
-        """curation/noise 未処理 Article の ``(総数, 最古 created_at)`` (観測専用)。
+        """curation/noise 未処理 article record の stats を返す。
 
         ``count_articles_pending_curation`` と同一述語を 1 クエリで COUNT + MIN する
         (health endpoint が count と最古を別クエリに分けないため)。最古 = dispatch 順
         (``created_at`` asc) の先頭。対象なしは ``(0, None)``。
         """
         stmt = self._curation_pending(
-            select(func.count(Article.id), func.min(Article.created_at)),
+            select(
+                func.count(AnalyzableArticleRecord.id),
+                func.min(AnalyzableArticleRecord.created_at),
+            ),
             created_before=created_before,
             created_after=created_after,
         )
@@ -211,22 +235,28 @@ class PipelineBacklog:
         created_before: datetime,
         limit: int,
     ) -> list[int]:
-        """``created_before`` より古い child-NULL Article ID を返す (救済断念対象)。
+        """``created_before`` より古い child-NULL article record ID を返す。
 
         curation/noise いずれの子も無く物理削除する対象。下限 (年齢ウィンドウの
         ``created_after``) を持たず、``article_ids_pending_curation`` の通常再投入窓
         (``[after, before)``) とは disjoint な「窓から落ちた古い記事」を拾う。
         """
         stmt = (
-            select(Article.id)
-            .outerjoin(ArticleCuration, ArticleCuration.article_id == Article.id)
-            .outerjoin(CurationNoise, CurationNoise.article_id == Article.id)
+            select(AnalyzableArticleRecord.id)
+            .outerjoin(
+                ArticleCuration,
+                ArticleCuration.analyzable_article_id == AnalyzableArticleRecord.id,
+            )
+            .outerjoin(
+                CurationNoise,
+                CurationNoise.analyzable_article_id == AnalyzableArticleRecord.id,
+            )
             .where(
                 ArticleCuration.id.is_(None),
                 CurationNoise.id.is_(None),
-                Article.created_at < created_before,
+                AnalyzableArticleRecord.created_at < created_before,
             )
-            .order_by(Article.created_at.asc())
+            .order_by(AnalyzableArticleRecord.created_at.asc())
             .limit(limit)
         )
         result = await self._session.execute(stmt)
@@ -241,9 +271,16 @@ class PipelineBacklog:
     ) -> list[BackfillTarget]:
         """Stage 4 backfill の enqueue / audit 対象を返す。"""
         stmt = (
-            select(ArticleCuration.id, ArticleCuration.article_id, NewsSource.name)
-            .join(Article, Article.id == ArticleCuration.article_id)
-            .outerjoin(NewsSource, NewsSource.id == Article.source_id)
+            select(
+                ArticleCuration.id,
+                ArticleCuration.analyzable_article_id,
+                NewsSource.name,
+            )
+            .join(
+                AnalyzableArticleRecord,
+                AnalyzableArticleRecord.id == ArticleCuration.analyzable_article_id,
+            )
+            .outerjoin(NewsSource, NewsSource.id == AnalyzableArticleRecord.source_id)
             .outerjoin(
                 InScopeAssessment,
                 InScopeAssessment.curation_id == ArticleCuration.id,
@@ -260,10 +297,10 @@ class PipelineBacklog:
                 InScopeAssessment.id.is_(None),
                 OutOfScopeAssessment.id.is_(None),
                 AssessmentBackfillExclusion.curation_id.is_(None),
-                Article.created_at < created_before,
-                Article.created_at >= created_after,
+                AnalyzableArticleRecord.created_at < created_before,
+                AnalyzableArticleRecord.created_at >= created_after,
             )
-            .order_by(Article.created_at.asc())
+            .order_by(AnalyzableArticleRecord.created_at.asc())
             .limit(limit)
         )
         rows = (await self._session.execute(stmt)).tuples().all()
@@ -283,7 +320,7 @@ class PipelineBacklog:
                 created_before=created_before,
                 created_after=created_after,
             )
-            .order_by(Article.created_at.asc())
+            .order_by(AnalyzableArticleRecord.created_at.asc())
             .limit(limit)
         )
         result = await self._session.execute(stmt)
@@ -326,7 +363,10 @@ class PipelineBacklog:
         対象なしは ``(0, None)``。
         """
         stmt = self._assessment_pending(
-            select(func.count(ArticleCuration.id), func.min(Article.created_at)),
+            select(
+                func.count(ArticleCuration.id),
+                func.min(AnalyzableArticleRecord.created_at),
+            ),
             created_before=created_before,
             created_after=created_after,
         )
@@ -346,7 +386,10 @@ class PipelineBacklog:
         """
         stmt = (
             select(ArticleCuration.id)
-            .join(Article, Article.id == ArticleCuration.article_id)
+            .join(
+                AnalyzableArticleRecord,
+                AnalyzableArticleRecord.id == ArticleCuration.analyzable_article_id,
+            )
             .outerjoin(
                 InScopeAssessment,
                 InScopeAssessment.curation_id == ArticleCuration.id,
@@ -363,9 +406,9 @@ class PipelineBacklog:
                 InScopeAssessment.id.is_(None),
                 OutOfScopeAssessment.id.is_(None),
                 AssessmentBackfillExclusion.curation_id.is_(None),
-                Article.created_at < created_before,
+                AnalyzableArticleRecord.created_at < created_before,
             )
-            .order_by(Article.created_at.asc())
+            .order_by(AnalyzableArticleRecord.created_at.asc())
             .limit(limit)
         )
         result = await self._session.execute(stmt)
@@ -385,7 +428,7 @@ class PipelineBacklog:
                 created_before=created_before,
                 created_after=created_after,
             )
-            .order_by(Article.created_at.asc())
+            .order_by(AnalyzableArticleRecord.created_at.asc())
             .limit(limit)
         )
         result = await self._session.execute(stmt)
@@ -400,13 +443,20 @@ class PipelineBacklog:
     ) -> list[BackfillTarget]:
         """Stage 5 backfill の enqueue / audit 対象を返す。"""
         stmt = (
-            select(InScopeAssessment.id, ArticleCuration.article_id, NewsSource.name)
+            select(
+                InScopeAssessment.id,
+                ArticleCuration.analyzable_article_id,
+                NewsSource.name,
+            )
             .join(
                 ArticleCuration,
                 ArticleCuration.id == InScopeAssessment.curation_id,
             )
-            .join(Article, Article.id == ArticleCuration.article_id)
-            .outerjoin(NewsSource, NewsSource.id == Article.source_id)
+            .join(
+                AnalyzableArticleRecord,
+                AnalyzableArticleRecord.id == ArticleCuration.analyzable_article_id,
+            )
+            .outerjoin(NewsSource, NewsSource.id == AnalyzableArticleRecord.source_id)
             .outerjoin(
                 EmbeddingBackfillExclusion,
                 EmbeddingBackfillExclusion.analysis_id == InScopeAssessment.id,
@@ -414,10 +464,10 @@ class PipelineBacklog:
             .where(
                 InScopeAssessment.embedding.is_(None),
                 EmbeddingBackfillExclusion.analysis_id.is_(None),
-                Article.created_at < created_before,
-                Article.created_at >= created_after,
+                AnalyzableArticleRecord.created_at < created_before,
+                AnalyzableArticleRecord.created_at >= created_after,
             )
-            .order_by(Article.created_at.asc())
+            .order_by(AnalyzableArticleRecord.created_at.asc())
             .limit(limit)
         )
         rows = (await self._session.execute(stmt)).tuples().all()
@@ -444,13 +494,16 @@ class PipelineBacklog:
         created_before: datetime,
         created_after: datetime,
     ) -> tuple[int, datetime | None]:
-        """embedding NULL analysis の ``(総数, 最古 Article.created_at)`` (観測専用)。
+        """embedding NULL analysis の stats を返す。
 
         ``count_analyses_pending_embedding`` と同一述語を 1 クエリで COUNT + MIN する。
         対象なしは ``(0, None)``。
         """
         stmt = self._embedding_pending(
-            select(func.count(InScopeAssessment.id), func.min(Article.created_at)),
+            select(
+                func.count(InScopeAssessment.id),
+                func.min(AnalyzableArticleRecord.created_at),
+            ),
             created_before=created_before,
             created_after=created_after,
         )
@@ -470,7 +523,10 @@ class PipelineBacklog:
                 ArticleCuration,
                 ArticleCuration.id == InScopeAssessment.curation_id,
             )
-            .join(Article, Article.id == ArticleCuration.article_id)
+            .join(
+                AnalyzableArticleRecord,
+                AnalyzableArticleRecord.id == ArticleCuration.analyzable_article_id,
+            )
             .outerjoin(
                 EmbeddingBackfillExclusion,
                 EmbeddingBackfillExclusion.analysis_id == InScopeAssessment.id,
@@ -478,9 +534,9 @@ class PipelineBacklog:
             .where(
                 InScopeAssessment.embedding.is_(None),
                 EmbeddingBackfillExclusion.analysis_id.is_(None),
-                Article.created_at < created_before,
+                AnalyzableArticleRecord.created_at < created_before,
             )
-            .order_by(Article.created_at.asc())
+            .order_by(AnalyzableArticleRecord.created_at.asc())
             .limit(limit)
         )
         result = await self._session.execute(stmt)

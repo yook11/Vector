@@ -161,9 +161,8 @@ class TestVectorCollectIsolation:
     """vector_collect (collect worker 専用) が acquisition+completion の触る 4 table
     だけに最小権限で閉じ込められていることを構造的に保証する。
 
-    collect は articles / pipeline_events を DELETE できず、実 INSERT の cleanup が
-    できないため、正の write 権限は副作用ゼロの has_*_privilege catalog 関数で検証
-    する (read と cross-boundary の負側は実クエリの権限拒否で振る舞い検証する)。
+    collect は analyzable_articles / pipeline_events を DELETE できない。
+    正の write 権限は副作用ゼロの has_*_privilege catalog 関数で検証する。
     """
 
     async def test_can_select_news_sources(self, collect_conn) -> None:
@@ -172,8 +171,10 @@ class TestVectorCollectIsolation:
         assert isinstance(rows, list)
 
     async def test_can_select_articles(self, collect_conn) -> None:
-        """vector_collect は articles を SELECT できる (dedup / 監査逆引き)。"""
-        rows = await collect_conn.fetch("SELECT id FROM public.articles LIMIT 1")
+        """vector_collect は analyzable_articles を SELECT できる。"""
+        rows = await collect_conn.fetch(
+            "SELECT id FROM public.analyzable_articles LIMIT 1"
+        )
         assert isinstance(rows, list)
 
     async def test_can_select_incomplete_articles(self, collect_conn) -> None:
@@ -195,18 +196,17 @@ class TestVectorCollectIsolation:
         assert granted is True
 
     async def test_can_insert_articles(self, collect_conn) -> None:
-        """articles は INSERT を持つ (両 stage が新規記事を INSERT する)。"""
+        """analyzable_articles は INSERT を持つ (両 stage が新規記事を INSERT する)。"""
         granted = await collect_conn.fetchval(
-            "SELECT has_table_privilege('public.articles', 'INSERT')"
+            "SELECT has_table_privilege('public.analyzable_articles', 'INSERT')"
         )
         assert granted is True
 
     async def test_cannot_update_or_delete_articles(self, collect_conn) -> None:
-        """articles は INSERT 専用で UPDATE/DELETE は持たない (記事本文の事後改竄や
-        消去を collect 侵害から構造的に閉塞する)。"""
+        """analyzable_articles は UPDATE/DELETE を持たない。"""
         denied = await collect_conn.fetchval(
-            "SELECT has_table_privilege('public.articles', 'UPDATE') "
-            "OR has_table_privilege('public.articles', 'DELETE')"
+            "SELECT has_table_privilege('public.analyzable_articles', 'UPDATE') "
+            "OR has_table_privilege('public.analyzable_articles', 'DELETE')"
         )
         assert denied is False
 
@@ -242,7 +242,7 @@ class TestVectorCollectIsolation:
             "SELECT has_sequence_privilege("
             "pg_get_serial_sequence('public.incomplete_articles', 'id'), 'USAGE') "
             "AND has_sequence_privilege("
-            "pg_get_serial_sequence('public.articles', 'id'), 'USAGE') "
+            "pg_get_serial_sequence('public.analyzable_articles', 'id'), 'USAGE') "
             "AND has_sequence_privilege("
             "pg_get_serial_sequence('public.pipeline_events', 'id'), 'USAGE')"
         )

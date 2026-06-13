@@ -362,7 +362,7 @@ async def mark_article_unprocessable(
             code=code, exc=exc,
         )
         # 2) article DELETE (CASCADE で関連 row、SET NULL で audit.article_id)
-        deleted = await ArticleRepository(session).delete_by_id(article_id)
+        deleted = await AnalyzableArticleRepository(session).delete_by_id(article_id)
         await session.commit()
 ```
 

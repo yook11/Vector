@@ -174,7 +174,9 @@ async def test_generator_rejects_abnormal_key_article_count_from_llm() -> None:
     assert any("key_articles" in v for v in exc.violations)
     # str(exc) も CODE + violations 形式になっている
     assert exc.CODE in str(exc)
-    assert any("key_articles" in v for v in str(exc).split(exc.CODE + ": ", 1)[-1].split("; "))
+    assert any(
+        "key_articles" in v for v in str(exc).split(exc.CODE + ": ", 1)[-1].split("; ")
+    )
 
 
 @pytest.mark.asyncio

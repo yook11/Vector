@@ -1,4 +1,4 @@
-"""RecurationService — 既存 Article に対する Stage 3 再 curation CLI helper。
+"""RecurationService — 既存 article record の Stage 3 再 curation CLI helper。
 
 既存 ``ArticleCuration`` を現在の curation 仕様で再生成する保守 CLI 用サービス。
 
@@ -17,8 +17,9 @@
 
 設計メモ:
 
-- ``Article`` は既存 ``ReadyForCuration`` を経由しない (再 curation 対象は既に
-  ``ArticleCuration`` を持つので Pattern A' の precondition「未生成」と矛盾する)。
+- ``AnalyzableArticleRecord`` は既存 ``ReadyForCuration`` を経由しない。
+  再 curation 対象は既に ``ArticleCuration`` を持つので Pattern A' の
+  precondition「未生成」と矛盾する。
   本サービスは fetch を内部で行い、無い article_id は ``skipped`` に集約する。
 - curator は呼び出し側で構築する。
 """
@@ -44,7 +45,7 @@ from app.analysis.curation.errors import (
     map_provider_to_curation,
 )
 from app.analysis.curation.repository import CurationRepository
-from app.models.article import Article
+from app.models.analyzable_article_record import AnalyzableArticleRecord
 
 logger = structlog.get_logger(__name__)
 
@@ -60,7 +61,7 @@ class RecurationSummary:
       候補) に成功
     - ``failed_ids``: ``CurationTerminalKeepError`` (Configuration / Balance 等)
       で即失敗、または ``CurationRecoverableError`` が ``max_retries`` 回再現
-    - ``skipped_ids``: Article 不在 / 既存 ArticleCuration 不在 /
+    - ``skipped_ids``: AnalyzableArticleRecord 不在 / 既存 ArticleCuration 不在 /
       ``CurationTerminalDropError`` (input rejected / output blocked)
     - ``dry_run``: ``True`` の場合は永続化していない (rollback 済み)
     """
@@ -72,7 +73,7 @@ class RecurationSummary:
 
 
 class RecurationService:
-    """既存 Article に対する Stage 3 再 curation CLI の処理本体。
+    """既存 AnalyzableArticleRecord に対する Stage 3 再 curation CLI の処理本体。
 
     1 article ごとに 1 transaction を張り、`update_signal_idempotent` で
     parent ``ArticleCuration`` を UPDATE のみで差し替える。
@@ -271,6 +272,10 @@ class RecurationService:
         raise last_exc
 
     @staticmethod
-    async def _fetch_article(session: AsyncSession, article_id: int) -> Article | None:
-        stmt = select(Article).where(Article.id == article_id)
+    async def _fetch_article(
+        session: AsyncSession, article_id: int
+    ) -> AnalyzableArticleRecord | None:
+        stmt = select(AnalyzableArticleRecord).where(
+            AnalyzableArticleRecord.id == article_id
+        )
         return (await session.execute(stmt)).scalar_one_or_none()

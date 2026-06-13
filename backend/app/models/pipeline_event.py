@@ -105,7 +105,7 @@ class PipelineEvent(Base):
     )
     article_id: Mapped[int | None] = mapped_column(
         Integer,
-        ForeignKey("articles.id", ondelete="SET NULL"),
+        ForeignKey("analyzable_articles.id", ondelete="SET NULL"),
         nullable=True,
     )
     error_class: Mapped[str | None] = mapped_column(String(160), nullable=True)

@@ -29,7 +29,9 @@ from app.collection.article_acquisition.tools.reader_tools import ReaderTools
 from app.collection.domain.analyzable_article import AnalyzableArticle
 from app.collection.domain.observed_article import ObservedArticle
 from app.collection.external_fetch_errors import ExternalFetchError
-from app.collection.persistence.article_store import ArticleStore
+from app.collection.persistence.analyzable_article_repository import (
+    AnalyzableArticleRepository,
+)
 from app.collection.sources.article_source import ArticleSource
 
 logger = structlog.get_logger(__name__)
@@ -51,7 +53,7 @@ class ArticleAcquisitionService:
 
     async def execute(self, source_id: int) -> list[int]:
         async with self._session_factory() as session:
-            article_store = ArticleStore(session)
+            article_repo = AnalyzableArticleRepository(session)
             incomplete_repo = IncompleteArticleRepository(session)
             audit = SourceAcquisitionAuditRepository(session)
             source_name = str(self._source.name)
@@ -71,7 +73,7 @@ class ArticleAcquisitionService:
                         )
                     match outcome:
                         case AnalyzableArticle() as ready:
-                            article_id = await article_store.save(ready)
+                            article_id = await article_repo.save(ready)
                             if article_id is None:
                                 continue
                             persisted_ids.append(article_id)
@@ -82,7 +84,7 @@ class ArticleAcquisitionService:
                                 canonical_url=str(ready.source_url),
                             )
                         case ObservedArticle() as observed:
-                            if await article_store.exists_by_source_url(
+                            if await article_repo.exists_by_source_url(
                                 observed.source_url
                             ):
                                 continue

@@ -24,7 +24,7 @@ from app.audit.domain.payloads import (
 )
 from app.audit.failure_projection import Retryability
 from app.audit.repository import PipelineEventRepository
-from app.models.article import Article as ArticleORM
+from app.models.analyzable_article_record import AnalyzableArticleRecord
 from app.models.news_source import NewsSource, SourceType
 from app.models.pipeline_event import PipelineEvent
 
@@ -45,9 +45,11 @@ async def source_row(db_session: AsyncSession) -> NewsSource:
 
 
 @pytest.fixture
-async def article_row(db_session: AsyncSession, source_row: NewsSource) -> ArticleORM:
+async def article_row(
+    db_session: AsyncSession, source_row: NewsSource
+) -> AnalyzableArticleRecord:
     url = "https://venturebeat.com/a/"
-    article = ArticleORM(
+    article = AnalyzableArticleRecord(
         source_id=source_row.id,
         source_url=url,  # type: ignore[arg-type]
         original_title="t",
@@ -108,9 +110,9 @@ async def test_append_inserts_row_with_payload_roundtrip(
 
 @pytest.mark.asyncio
 async def test_source_id_auto_filled_from_article_id(
-    db_session: AsyncSession, article_row: ArticleORM
+    db_session: AsyncSession, article_row: AnalyzableArticleRecord
 ) -> None:
-    """article_id だけ与えると Article.source_id を逆引きして埋める。"""
+    """article_id だけ与えると AnalyzableArticleRecord.source_id を逆引きして埋める。"""
     repo = PipelineEventRepository(db_session)
     payload = EmbeddingPayload(embedding_model="gemini-embedding-001")
 
@@ -130,7 +132,7 @@ async def test_source_id_auto_filled_from_article_id(
 
 @pytest.mark.asyncio
 async def test_append_persists_retryability(
-    db_session: AsyncSession, article_row: ArticleORM
+    db_session: AsyncSession, article_row: AnalyzableArticleRecord
 ) -> None:
     repo = PipelineEventRepository(db_session)
     payload = EmbeddingPayload(embedding_model="gemini-embedding-001")

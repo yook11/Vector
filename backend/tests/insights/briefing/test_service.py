@@ -134,7 +134,9 @@ class TestExecute:
         assert saved.model_name == "deepseek-v4-pro"
         # key_articles の永続形は {assessment_id, significance} (新形)。
         # _llm_mock は KeyArticle(article_id=1) を返すので assessment_id=1 で永続化。
-        assert saved.key_articles == [{"assessment_id": 1, "significance": "なぜ重要か"}]
+        assert saved.key_articles == [
+            {"assessment_id": 1, "significance": "なぜ重要か"}
+        ]
 
     @pytest.mark.asyncio
     async def test_race_loser_returns_conflict_and_does_not_overwrite_winner(

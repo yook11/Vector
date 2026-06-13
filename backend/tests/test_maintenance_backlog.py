@@ -7,7 +7,7 @@ from sqlalchemy import text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models.article import Article
+from app.models.analyzable_article_record import AnalyzableArticleRecord
 from app.models.article_curation import ArticleCuration
 from app.models.backfill_exclusion import (
     AssessmentBackfillExclusion,
@@ -28,9 +28,9 @@ async def _make_article(
     *,
     url: str,
     created_at: datetime,
-) -> Article:
-    """指定 created_at の Article を作成 (server_default を後追い UPDATE で上書き)。"""
-    article = Article(
+) -> AnalyzableArticleRecord:
+    """指定 created_at の article record を作成する。"""
+    article = AnalyzableArticleRecord(
         source_id=source.id,
         source_url=url,
         original_title="title",
@@ -41,7 +41,7 @@ async def _make_article(
     await db_session.refresh(article)
 
     await db_session.execute(
-        text("UPDATE articles SET created_at = :ts WHERE id = :id"),
+        text("UPDATE analyzable_articles SET created_at = :ts WHERE id = :id"),
         {"ts": created_at, "id": article.id},
     )
     await db_session.commit()
@@ -51,14 +51,14 @@ async def _make_article(
 
 async def _make_curation(
     db_session: AsyncSession,
-    article: Article,
+    article: AnalyzableArticleRecord,
     *,
     translated_title: str = "tt",
     summary: str = "ss",
 ) -> ArticleCuration:
     """テスト用 curation を作成する。"""
     curation = ArticleCuration(
-        article_id=article.id,
+        analyzable_article_id=article.id,
         translated_title=translated_title,
         summary=summary,
     )
@@ -98,7 +98,7 @@ async def test_pending_curation_returns_articles_without_curation(
     db_session: AsyncSession,
     sample_source: NewsSource,
 ) -> None:
-    """curation 子が無い Article が境界内なら返る。"""
+    """curation 子が無い AnalyzableArticleRecord が境界内なら返る。"""
     now = datetime(2026, 4, 26, 12, 0, 0, tzinfo=UTC)
     article = await _make_article(
         db_session,
@@ -195,7 +195,7 @@ async def test_pending_curation_excludes_articles_with_curation(
     db_session: AsyncSession,
     sample_source: NewsSource,
 ) -> None:
-    """curation 子がある Article は対象外。"""
+    """curation 子がある AnalyzableArticleRecord は対象外。"""
     now = datetime(2026, 4, 26, 12, 0, 0, tzinfo=UTC)
     article = await _make_article(
         db_session,
@@ -205,7 +205,7 @@ async def test_pending_curation_excludes_articles_with_curation(
     )
     db_session.add(
         ArticleCuration(
-            article_id=article.id,
+            analyzable_article_id=article.id,
             translated_title="tt",
             summary="ss",
         )
@@ -226,7 +226,7 @@ async def test_pending_curation_excludes_noise_articles(
     db_session: AsyncSession,
     sample_source: NewsSource,
 ) -> None:
-    """noise 判定済み (= curation 正常完了) の Article は再投入対象に入らない。
+    """noise 判定済みの article record は再投入対象に入らない。
 
     signal/noise は排他なので noise 行が在れば curation は完了している。
     旧クエリは ArticleCuration だけ見て noise を child-NULL 扱いしていた
@@ -241,7 +241,7 @@ async def test_pending_curation_excludes_noise_articles(
     )
     db_session.add(
         CurationNoise(
-            article_id=article.id,
+            analyzable_article_id=article.id,
             title_ja="ノイズタイトル",
             summary_ja="ノイズ要約",
         )
@@ -288,7 +288,7 @@ async def test_count_pending_curation_returns_true_count_without_limit(
     )
     db_session.add(
         CurationNoise(
-            article_id=noise_article.id,
+            analyzable_article_id=noise_article.id,
             title_ja="ノイズタイトル",
             summary_ja="ノイズ要約",
         )
@@ -319,7 +319,7 @@ async def test_aged_out_curation_returns_old_child_null_articles(
     db_session: AsyncSession,
     sample_source: NewsSource,
 ) -> None:
-    """created_before より古い child-NULL Article が返る。"""
+    """created_before より古い child-NULL AnalyzableArticleRecord が返る。"""
     now = datetime(2026, 4, 26, 12, 0, 0, tzinfo=UTC)
     article = await _make_article(
         db_session,
@@ -372,7 +372,9 @@ async def test_aged_out_curation_excludes_articles_with_curation(
         created_at=now - timedelta(days=10),
     )
     db_session.add(
-        ArticleCuration(article_id=article.id, translated_title="tt", summary="ss")
+        ArticleCuration(
+            analyzable_article_id=article.id, translated_title="tt", summary="ss"
+        )
     )
     await db_session.commit()
 
@@ -399,7 +401,7 @@ async def test_aged_out_curation_excludes_articles_with_noise(
     )
     db_session.add(
         CurationNoise(
-            article_id=article.id,
+            analyzable_article_id=article.id,
             title_ja="ノイズタイトル",
             summary_ja="ノイズ要約",
         )
@@ -431,7 +433,7 @@ async def test_pending_assessment_returns_curations_without_analysis_or_rejectio
         created_at=now - timedelta(hours=1),
     )
     curation = ArticleCuration(
-        article_id=article.id,
+        analyzable_article_id=article.id,
         translated_title="tt",
         summary="ss",
     )
@@ -492,7 +494,7 @@ async def test_pending_assessment_excludes_curations_with_analysis(
         created_at=now - timedelta(hours=1),
     )
     curation = ArticleCuration(
-        article_id=article.id,
+        analyzable_article_id=article.id,
         translated_title="tt",
         summary="ss",
     )
@@ -671,7 +673,7 @@ async def test_assessment_backfill_exclusion_reason_code_check(
     await db_session.rollback()
 
 
-# analysis_ids_pending_embedding (Phase 2: Article ID → Analysis ID)
+# analysis_ids_pending_embedding (Phase 2: AnalyzableArticleRecord ID → Analysis ID)
 
 
 @pytest.mark.asyncio
@@ -689,7 +691,7 @@ async def test_pending_embedding_returns_analysis_with_null_embedding(
         created_at=now - timedelta(hours=1),
     )
     curation = ArticleCuration(
-        article_id=article.id,
+        analyzable_article_id=article.id,
         translated_title="tt",
         summary="ss",
     )
@@ -767,7 +769,7 @@ async def test_pending_embedding_excludes_already_embedded(
         created_at=now - timedelta(hours=1),
     )
     curation = ArticleCuration(
-        article_id=article.id,
+        analyzable_article_id=article.id,
         translated_title="tt",
         summary="ss",
     )

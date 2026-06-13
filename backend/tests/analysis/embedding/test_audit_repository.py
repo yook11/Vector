@@ -51,7 +51,7 @@ from app.analysis.embedding.errors import (
 )
 from app.analysis.gemini_error_translator import GeminiContentRejectionReason
 from app.audit.stages.embedding import EmbeddingAuditRepository
-from app.models.article import Article
+from app.models.analyzable_article_record import AnalyzableArticleRecord
 from app.models.article_curation import ArticleCuration
 from app.models.backfill_exclusion import BackfillExclusionReason
 from app.models.news_source import NewsSource
@@ -73,8 +73,8 @@ async def _make_article(
     sample_source: NewsSource,
     *,
     url: str = "https://e.com/a",
-) -> Article:
-    article = Article(
+) -> AnalyzableArticleRecord:
+    article = AnalyzableArticleRecord(
         source_id=sample_source.id,
         source_url=url,  # type: ignore[arg-type]
         original_title="t",
@@ -89,10 +89,10 @@ async def _make_article(
 
 async def _make_extraction(
     db_session: AsyncSession,
-    article: Article,
+    article: AnalyzableArticleRecord,
 ) -> ArticleCuration:
     extraction = ArticleCuration(
-        article_id=article.id,
+        analyzable_article_id=article.id,
         translated_title="title",
         summary="summary",
     )
@@ -102,7 +102,7 @@ async def _make_extraction(
     return extraction
 
 
-def _ready(article: Article) -> ReadyForEmbedding:
+def _ready(article: AnalyzableArticleRecord) -> ReadyForEmbedding:
     return ReadyForEmbedding(
         analysis_id=1,
         text_for_embedding="title\nsummary",

@@ -157,7 +157,7 @@ class BriefingRepository:
             "chapters": [c.model_dump() for c in content.chapters],
             # domain 語彙 article_id (LLM 契約) → 永続キー assessment_id の改名境界。
             # 値は公開 /news id 空間 (InScopeAssessment.id)。旧形 {article_id} 行
-            # (Article.id 空間) とはキー名で構造的に判別する (parallel change)。
+            # (AnalyzableArticleRecord.id 空間) とはキー名で構造的に判別する。
             "key_articles": [
                 {"assessment_id": a.article_id, "significance": a.significance}
                 for a in content.key_articles

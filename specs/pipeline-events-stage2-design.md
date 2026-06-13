@@ -136,10 +136,10 @@ PR #369 (commit a43da74) で merge 済。
 3 テーブル構成で責務を分離する:
 
 - `article_urls` = URL の identity 台帳 (一意性 SSoT、不変)
-- `articles` = 完成結果 (Pattern R 直行 / Pattern H 救済後の昇格、両方ここに着地)
+- `analyzable_articles` = 完成結果 (Pattern R 直行 / Pattern H 救済後の昇格、両方ここに着地)
 - `pending_html_articles` = HTML 取得待ちの作業領域 (Pattern H 専用)
 
-articles と pending_html_articles はそれぞれ `article_urls.id` を UNIQUE FK として参照。
+analyzable_articles と pending_html_articles はそれぞれ `article_urls.id` を UNIQUE FK として参照。
 **DB の UNIQUE 制約だけで cross-table dedup が物理的に保証される** (advisory lock 等のランタイム規律に頼らない)。
 
 `discovered_articles` は退役する。識別子としての URL 一意性は `article_urls` が、
@@ -366,7 +366,7 @@ CREATE TABLE article_urls (
 ALTER TABLE articles
   ADD COLUMN article_url_id BIGINT NULL UNIQUE REFERENCES article_urls(id) ON DELETE RESTRICT;
 -- データ移行後 NOT NULL 化
--- (既存 articles.url は移行期間中は併存、最終的に DROP)
+-- (既存 analyzable_articles.source_url は移行期間中は併存、最終的に DROP)
 
 -- 新設 (HTML 取得待ちの作業領域)
 CREATE TABLE pending_html_articles (
@@ -413,7 +413,7 @@ CREATE INDEX ix_pending_html_articles_expired_lease
 
 設計上の保証:
 - `article_urls.normalized_url` UNIQUE で URL の一意性が **DB 物理的に** 担保される
-- `articles.article_url_id` UNIQUE + `pending_html_articles.article_url_id` UNIQUE により、**1 candidate に対し articles/pending それぞれ最大 1 行**
+- `analyzable_articles.article_url_id` UNIQUE + `pending_html_articles.article_url_id` UNIQUE により、**1 candidate に対し analyzable_articles/pending それぞれ最大 1 行**
 - 「URL が articles と pending の両方に存在する」状態は schema 的に発生不能 (それぞれが article_urls.id を UNIQUE 参照、Stage 1 の INSERT 順序で常に articles or pending のどちらか一方しか作られない)
 - advisory lock 等のランタイム規律は不要
 
@@ -608,7 +608,7 @@ async def execute(self, pending_id: int) -> ContentFetchOutcome | None:
 ### 機械的に確定する変更 (ι.A / ι.B / ι.C)
 
 - `ContentFetchPayload.discovered_article_id` → `article_url_id`
-- `articles.discovered_article_id` → `articles.article_url_id` (FK 切替)
+- `analyzable_articles.discovered_article_id` → `analyzable_articles.article_url_id` (FK 切替)
 - `ArticleRepository.find_by_discovered_article_id` → `find_by_article_url_id`
 
 これらは検索置換に近い。
@@ -638,7 +638,7 @@ semantic:
 |---|---|---|
 | 1 | cron poller の `UPDATE...RETURNING + FOR UPDATE SKIP LOCKED` | pending claim 段階で skip |
 | 2 | message に `pending_id` のみ + worker 開始時の `status='running'` 確認 | claim 整合性違反は静かに exit |
-| 3 | `articles.article_url_id UNIQUE` + `pending_html_articles.article_url_id UNIQUE` | last-resort: IntegrityError として観測 |
+| 3 | `analyzable_articles.article_url_id UNIQUE` + `pending_html_articles.article_url_id UNIQUE` | last-resort: IntegrityError として観測 |
 
 これは悲観的 claim + lease + idempotency constraint であり、楽観的ロックではない。
 
@@ -818,7 +818,7 @@ def retry_policy_for(exc: Exception) -> RetryPolicy:
 | ι.3 | 競合発生時の挙動 | **新 Outcome variant `ConflictLost` を追加**。articles INSERT を try/except IntegrityError で囲み、existing 検出で `ConflictLost` + audit `outcome_code='conflict_lost'` (SKIPPED)、なしで `TerminallyDropped('article_persist_anomaly')`。旧設計の「既存読み戻し → ContentFetched(既存) で chain」は不採用 (winner が chain 済) | **決定** |
 | ι.4 | retry/exhausted 判定の責務 + dispatch 機構 | **Service に集約**: retry policy 適用 / DB 状態更新 / audit を Service が完結。**Service は kiq 一切しない** (extract_content.kiq も schedule_by_time も task の責務)。**dual-dispatch 撤去**: cron poller (1 分間隔) のみで再投入、broker schedule_by_time は不採用。`taskiq max_retries=0 + retry_on_error=False` で taskiq retry 機構を完全に殺す。policy table は `app/collection/extraction/retry_policy.py` に分離 | **決定** |
 | ι.A | payload field rename | `discovered_article_id` → `article_url_id` (PR2.5-B 内、機械的) | **決定** |
-| ι.B | 永続化 FK 切替 | `articles.discovered_article_id` → `articles.article_url_id` (PR2.5-B 内、機械的) | **決定** |
+| ι.B | 永続化 FK 切替 | `analyzable_articles.discovered_article_id` → `analyzable_articles.article_url_id` (PR2.5-B 内、機械的) | **決定** |
 | ι.C | race-lost lookup 切替 | `find_by_discovered_article_id` → `find_by_article_url_id` (PR2.5-B 内、機械的) | **決定** |
 | κ | Stage 1 audit | `SourceFetchPayload` を **経路非依存の `completion_*` 命名** で再定義。count fields は `int = 0` で常時 populate (invariant `entry_count == sum(...)` 検証可)。kind versioning なし、TRUNCATE pipeline_events で clean slate | **決定** |
 
@@ -830,9 +830,9 @@ def retry_policy_for(exc: Exception) -> RetryPolicy:
 
 | PR | 内容 | rollback 性 |
 |---|---|---|
-| **PR2.5-A** (基盤) | alembic で `article_urls` / `pending_html_articles` 新設 + `articles.article_url_id` (nullable) 追加。ORM 定義 + Pydantic schema (`StagedArticleAttributes`) + URL 正規化 utility + tests。**既存 articles に対し article_url_id をバックフィル** (同 migration 内で実施)。behavior 変更ゼロ | 完全可逆 (テーブル追加のみ) |
+| **PR2.5-A** (基盤) | alembic で `article_urls` / `pending_html_articles` 新設 + `analyzable_articles.article_url_id` (nullable) 追加。ORM 定義 + Pydantic schema (`StagedArticleAttributes`) + URL 正規化 utility + tests。**既存 analyzable_articles に対し article_url_id をバックフィル** (同 migration 内で実施)。behavior 変更ゼロ | 完全可逆 (テーブル追加のみ) |
 | **PR2.5-B** (cutover、単一コヒーレント PR) | Fetcher の戻り値を `Ready / Failed / None` に変更、IngestionService が articles 直 INSERT or pending_html_articles INSERT へ振り分け、ContentFetchService が pending_html_articles 駆動に書き換え、extract_html_body の入力を `pending_html_article_id` に変更、cron poller (`dispatch_html_fetch_jobs`) + sweeper 投入、PR2 audit を `article_url_id` 参照に追従改修。**discovered_articles への書込は完全停止**、kiq 直駆動 path 撤去 | 不可逆 (運用切替) |
-| **PR2.5-C** (legacy 撤去) | `DROP TABLE discovered_articles` + `StagedArticle` ORM 撤去 + `articles.article_url_id` を `NOT NULL` 昇格 + `articles.url` 列を削除 (article_urls 経由に統一) | 不可逆 (DROP) |
+| **PR2.5-C** (legacy 撤去) | `DROP TABLE discovered_articles` + `StagedArticle` ORM 撤去 + `analyzable_articles.article_url_id` を `NOT NULL` 昇格 + `analyzable_articles.source_url` 列を削除 (article_urls 経由に統一) | 不可逆 (DROP) |
 | **PR2.5-D** (retry 強化、必要なら) | per-error policy table の調整、`retry_policy.py` 拡充。dispatch 機構変更は含まない (cron only で確定) | 独立 |
 
 ### PR2.5-B の cutover 戦略
