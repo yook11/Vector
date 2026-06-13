@@ -89,7 +89,7 @@ def _incomplete(
         source_id=source.id,
         source_name=source.name,
         status=status,
-        staged_attributes={},
+        observed_article={},
         created_at=created_at,
         ready_at=ready_at,
         leased_until=leased_until,

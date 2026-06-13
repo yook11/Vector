@@ -1,9 +1,9 @@
 """``ObservedArticle`` — 外部ソースから取得できた記事事実の値オブジェクト。
 
 取れた事実だけを持つ (要否 / 優先は ``ArticleCompletionPolicy`` が決める)。
-``incomplete_articles.staged_attributes`` (JSONB) に焼かれ、cron poller で
-再 hydrate される (``to_staged_attributes`` で永続化、
-``from_staged_attributes`` で復元)。
+``incomplete_articles.observed_article`` (JSONB) に焼かれ、cron poller で
+再 hydrate される (``model_dump(mode="json", by_alias=True)`` で永続化、
+``try_build`` で復元)。
 
 - identity ``source_name`` / ``source_url`` は表層列が authoritative
   (``incomplete_articles.source_name`` NOT NULL + composite FK /
@@ -30,7 +30,7 @@ from app.collection.sources.source_name import SourceName
 class ObservedArticleInvalidReason(StrEnum):
     """ObservedArticle 復元失敗の field 単位分類 (PII-free、値だけで読める)。"""
 
-    STAGED_ATTRIBUTES_NOT_OBJECT = "staged_attributes_not_object"
+    OBSERVED_ARTICLE_NOT_OBJECT = "observed_article_not_object"
     SOURCE_NAME_MISSING = "source_name_missing"
     SOURCE_NAME_INVALID = "source_name_invalid"
     SOURCE_URL_INVALID = "source_url_invalid"
@@ -147,30 +147,25 @@ class ObservedArticle(BaseModel):
             ),
         )
 
-    def to_staged_attributes(self) -> dict[str, Any]:
-        """``staged_attributes`` (JSONB) へ焼く永続化形式に変換する。
-
-        identity (``source_name`` / ``source_url``) は ``exclude=True`` のため
-        含まれない (表層列が authoritative)。``from_staged_attributes`` の逆写像。
-        """
-        return self.model_dump(mode="json", by_alias=True)
-
     @classmethod
-    def from_staged_attributes(
+    def try_build(
         cls,
-        staged_attributes: Mapping[str, Any],
         *,
+        observed_article: Mapping[str, Any],
         source_name: SourceName,
         source_url: CanonicalArticleUrl,
     ) -> Self:
-        """JSONB 永続化形式をほどき、検証済み identity を差し戻して復元する。"""
-        if not isinstance(staged_attributes, Mapping):
+        """永続化 payload と authoritative identity から構築する。
+
+        復元不能な場合は ``ObservedArticleInvalidError`` を投げる。
+        """
+        if not isinstance(observed_article, Mapping):
             raise ObservedArticleInvalidError(
-                reason=ObservedArticleInvalidReason.STAGED_ATTRIBUTES_NOT_OBJECT
+                reason=ObservedArticleInvalidReason.OBSERVED_ARTICLE_NOT_OBJECT
             )
         # identity は JSONB 非永続なので検証済み VO を差し戻す。
         observed_input = {
-            **staged_attributes,
+            **observed_article,
             "source_name": str(source_name),
             "source_url": source_url,
         }

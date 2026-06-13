@@ -5,7 +5,7 @@
 1. identity (``source_name`` / ``source_url``) は ``Field(exclude=True)`` で
    JSONB に焼かれない (二重管理排除。表層列 ``source_name`` / ``url`` が唯一の
    authoritative)。in-memory では必須。
-2. round-trip 恒等: ``to_staged_attributes`` → identity 注入 →
+2. round-trip 恒等: ``model_dump`` → identity 注入 →
    ``model_validate`` で同値復元 (Stage1 enqueue → Stage2 hydrate)。
 3. strict 性: identity (sourceName) 欠落 raw は ``ValidationError``
    (Optional identity を持たない = ACL が必ず注入する契約)。
@@ -44,11 +44,11 @@ def _observed() -> ObservedArticle:
     )
 
 
-def test_to_staged_attributes_omits_identity() -> None:
-    """``to_staged_attributes`` は identity (``source_name`` / ``source_url``) を
+def test_model_dump_omits_identity() -> None:
+    """``model_dump`` は identity (``source_name`` / ``source_url``) を
     ``exclude=True`` で焼かず、content (title/body/publishedAt) だけを永続化する。
     """
-    dumped = _observed().to_staged_attributes()
+    dumped = _observed().model_dump(mode="json", by_alias=True)
     assert "source_url" not in dumped
     assert "sourceUrl" not in dumped
     assert "source_name" not in dumped
@@ -64,7 +64,7 @@ def test_round_trip_identity_with_acl_injected_identity() -> None:
     raw に注入する責務を負う。本 test は wire 契約をその責務込みで pin する。
     """
     original = _observed()
-    raw = original.to_staged_attributes()
+    raw = original.model_dump(mode="json", by_alias=True)
     raw["sourceName"] = "TechCrunch"  # repository が source_name 列から注入
     raw["source_url"] = _URL  # repository が url 列から注入
     restored = ObservedArticle.model_validate(raw)
@@ -73,13 +73,13 @@ def test_round_trip_identity_with_acl_injected_identity() -> None:
     assert restored.published_at.origin is ObservedOrigin.sitemap
 
 
-def test_from_staged_attributes_restores_authoritative_identity() -> None:
+def test_try_build_restores_authoritative_identity() -> None:
     """JSONB 退避値に表層 identity を戻して ObservedArticle に復元する。"""
     original = _observed()
-    staged = original.to_staged_attributes()
+    observed_article = original.model_dump(mode="json", by_alias=True)
 
-    restored = ObservedArticle.from_staged_attributes(
-        staged,
+    restored = ObservedArticle.try_build(
+        observed_article=observed_article,
         source_name=SourceName("TechCrunch"),
         source_url=CanonicalArticleUrl(_URL),
     )
@@ -87,11 +87,11 @@ def test_from_staged_attributes_restores_authoritative_identity() -> None:
     assert restored == original
 
 
-def test_from_staged_attributes_raises_domain_error_for_invalid_shape() -> None:
-    """復元不能な staged_attributes は ObservedArticle 側の例外で表す。"""
+def test_try_build_raises_domain_error_for_invalid_shape() -> None:
+    """復元不能な observed_article は ObservedArticle 側の例外で表す。"""
     with pytest.raises(ObservedArticleInvalidError) as exc_info:
-        ObservedArticle.from_staged_attributes(
-            {"title": {"value": "x", "origin": "invalid"}},
+        ObservedArticle.try_build(
+            observed_article={"title": {"value": "x", "origin": "invalid"}},
             source_name=SourceName("TechCrunch"),
             source_url=CanonicalArticleUrl(_URL),
         )
@@ -176,23 +176,25 @@ class TestObservedArticleInvalidReason:
     ) -> None:
         assert _classify_observed_article_error(self._error_for(raw)) is expected_reason
 
-    def test_non_object_staged_attributes(self) -> None:
+    def test_non_object_observed_article(self) -> None:
         with pytest.raises(ObservedArticleInvalidError) as exc_info:
-            ObservedArticle.from_staged_attributes(
-                None,  # type: ignore[arg-type]
+            ObservedArticle.try_build(
+                observed_article=None,  # type: ignore[arg-type]
                 source_name=SourceName("TechCrunch"),
                 source_url=CanonicalArticleUrl(_URL),
             )
         assert (
             exc_info.value.reason
-            is ObservedArticleInvalidReason.STAGED_ATTRIBUTES_NOT_OBJECT
+            is ObservedArticleInvalidReason.OBSERVED_ARTICLE_NOT_OBJECT
         )
 
     def test_error_message_is_pii_free(self) -> None:
         # input 値 (origin 文字列等) は str(exc) に出ず reason タグのみ
         with pytest.raises(ObservedArticleInvalidError) as exc_info:
-            ObservedArticle.from_staged_attributes(
-                {"title": {"value": "x", "origin": "secret-internal-marker"}},
+            ObservedArticle.try_build(
+                observed_article={
+                    "title": {"value": "x", "origin": "secret-internal-marker"}
+                },
                 source_name=SourceName("TechCrunch"),
                 source_url=CanonicalArticleUrl(_URL),
             )

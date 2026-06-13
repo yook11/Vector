@@ -156,7 +156,7 @@ def _ready_build_facts(
         source_id=source.id,
         source_name=SourceName(str(source.name)),
         status=status,
-        staged_attributes={},
+        observed_article={},
         source_url=url,
         attempt_count=attempt_count,
     )

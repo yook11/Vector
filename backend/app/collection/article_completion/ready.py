@@ -30,7 +30,7 @@ class ArticleCompletionReadyBuildFacts:
     source_id: int
     source_name: SourceName
     status: str
-    staged_attributes: dict[str, Any]
+    observed_article: dict[str, Any]
     source_url: str
     attempt_count: int
 
@@ -104,8 +104,8 @@ class ReadyForArticleCompletion:
         # (Stage.COMPLETION) は呼び出し側の監査が焼く。
         source_url = CanonicalArticleUrl.from_raw(facts.source_url)
 
-        observed = ObservedArticle.from_staged_attributes(
-            facts.staged_attributes,
+        observed = ObservedArticle.try_build(
+            observed_article=facts.observed_article,
             source_name=facts.source_name,
             source_url=source_url,
         )

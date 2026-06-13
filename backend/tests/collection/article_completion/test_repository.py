@@ -114,10 +114,10 @@ def _attrs(source_name: SourceName) -> dict:
     ``source_name`` を渡しても JSONB には焼かれない。
     """
     return _observed(
-        url="https://example.com/p/staged",
+        url="https://example.com/p/observed_payload",
         source_name=source_name,
         title="Pending Title",
-    ).to_staged_attributes()
+    ).model_dump(mode="json", by_alias=True)
 
 
 async def _enqueue(
@@ -152,14 +152,16 @@ async def _make_running(
     ready_at: datetime,
     leased_until: datetime,
     attempt_count: int = 1,
-    staged: dict | None = None,
+    observed_payload: dict | None = None,
 ) -> int:
     pending = IncompleteArticleORM(
         url=SafeUrl(url),
         source_id=source_id,
         source_name=source_name,
         status="running",
-        staged_attributes=staged if staged is not None else _attrs(source_name),
+        observed_article=(
+            observed_payload if observed_payload is not None else _attrs(source_name)
+        ),
         ready_at=ready_at,
         leased_until=leased_until,
         attempt_count=attempt_count,
@@ -232,7 +234,7 @@ async def test_load_ready_build_facts_returns_claimed_target(
     assert target.source_id == sample_source.id
     assert target.status == "running"
     assert target.attempt_count == 1
-    assert target.staged_attributes["title"]["value"] == "Find Me"
+    assert target.observed_article["title"]["value"] == "Find Me"
     assert target.source_url == str(url)
 
 

@@ -76,9 +76,9 @@ def _observed(
 
 def _attrs(
     source_name: SourceName,
-    url: str = "https://example.com/disp/staged",
+    url: str = "https://example.com/disp/observed_payload",
 ) -> dict:
-    return _observed(source_name, url).to_staged_attributes()
+    return _observed(source_name, url).model_dump(mode="json", by_alias=True)
 
 
 async def _make_pending(
@@ -122,7 +122,7 @@ async def _make_pending(
         source_id=source.id,
         source_name=source.name,
         status=status,
-        staged_attributes=_attrs(source.name, url),
+        observed_article=_attrs(source.name, url),
         ready_at=ready_at,
         leased_until=leased_until,
         attempt_count=attempt_count,

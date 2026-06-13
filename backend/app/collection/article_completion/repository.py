@@ -55,7 +55,7 @@ class ArticleCompletionRepository:
                 IncompleteArticleORM.source_id,
                 IncompleteArticleORM.source_name,
                 IncompleteArticleORM.status,
-                IncompleteArticleORM.staged_attributes,
+                IncompleteArticleORM.observed_article,
                 IncompleteArticleORM.url,
                 IncompleteArticleORM.attempt_count,
             )
@@ -70,7 +70,7 @@ class ArticleCompletionRepository:
             source_id,
             source_name,
             status,
-            staged_attributes,
+            observed_article,
             source_url,
             attempt_count,
         ) = row
@@ -79,7 +79,7 @@ class ArticleCompletionRepository:
             source_id=source_id,
             source_name=source_name,
             status=status,
-            staged_attributes=dict(staged_attributes or {}),
+            observed_article=dict(observed_article or {}),
             source_url=str(source_url),
             attempt_count=attempt_count,
         )

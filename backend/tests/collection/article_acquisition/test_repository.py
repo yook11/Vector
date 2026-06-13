@@ -105,7 +105,7 @@ async def test_enqueue_writes_identity_in_columns_not_jsonb(
     row = (
         await db_session.execute(
             text(
-                "SELECT url, source_name, staged_attributes "
+                "SELECT url, source_name, observed_article "
                 "FROM incomplete_articles WHERE id = :id"
             ),
             {"id": pending_id},
@@ -116,12 +116,14 @@ async def test_enqueue_writes_identity_in_columns_not_jsonb(
     assert row.url == str(url)
     assert row.source_name == str(sample_source.name)
     # #6: JSONB に identity 系キーが含まれない (snapshot 純化)
-    staged = row.staged_attributes
-    if isinstance(staged, str):
-        staged = json.loads(staged)
-    assert "sourceName" not in staged, f"JSONB に sourceName が残っている: {staged}"
-    assert "sourceUrl" not in staged
-    assert "source_url" not in staged
+    observed_payload = row.observed_article
+    if isinstance(observed_payload, str):
+        observed_payload = json.loads(observed_payload)
+    assert "sourceName" not in observed_payload, (
+        f"JSONB に sourceName が残っている: {observed_payload}"
+    )
+    assert "sourceUrl" not in observed_payload
+    assert "source_url" not in observed_payload
 
 
 @pytest.mark.asyncio

@@ -33,7 +33,7 @@ from app.collection.sources.source_name import SourceName
 from app.shared.security.safe_url import SafeUrlInvalidReason
 
 
-def _staged_attributes(
+def _observed_article(
     *,
     source_name: SourceName = SourceName("TechCrunch"),
     source_url: str = "https://example.com/a",
@@ -48,7 +48,7 @@ def _staged_attributes(
             origin=ObservedOrigin.feed,
         ),
     )
-    return observed.to_staged_attributes()
+    return observed.model_dump(mode="json", by_alias=True)
 
 
 def _facts(
@@ -57,7 +57,7 @@ def _facts(
     source_name: SourceName = SourceName("TechCrunch"),
     status: str = "running",
     source_url: str = "https://example.com/a",
-    staged_attributes: dict | None = None,
+    observed_article: dict | None = None,
     attempt_count: int = 1,
 ) -> ArticleCompletionReadyBuildFacts:
     return ArticleCompletionReadyBuildFacts(
@@ -65,10 +65,10 @@ def _facts(
         source_id=7,
         source_name=source_name,
         status=status,
-        staged_attributes=(
-            staged_attributes
-            if staged_attributes is not None
-            else _staged_attributes(source_name=source_name, source_url=source_url)
+        observed_article=(
+            observed_article
+            if observed_article is not None
+            else _observed_article(source_name=source_name, source_url=source_url)
         ),
         source_url=source_url,
         attempt_count=attempt_count,
@@ -137,7 +137,7 @@ async def test_raises_skipped_error_when_pending_not_running() -> None:
 
 @pytest.mark.asyncio
 async def test_raises_failed_when_observed_article_invalid() -> None:
-    facts = _facts(staged_attributes={"title": {"value": "Title", "origin": "bad"}})
+    facts = _facts(observed_article={"title": {"value": "Title", "origin": "bad"}})
 
     with pytest.raises(ObservedArticleInvalidError):
         await ReadyForArticleCompletion.try_advance_from(
@@ -159,7 +159,7 @@ async def test_raises_failed_when_source_not_registered() -> None:
 
 @pytest.mark.asyncio
 async def test_raises_failed_when_url_invalid() -> None:
-    facts = _facts(source_url="ftp://example.com/a", staged_attributes={})
+    facts = _facts(source_url="ftp://example.com/a", observed_article={})
 
     with pytest.raises(CanonicalArticleUrlInvalidError) as exc_info:
         await ReadyForArticleCompletion.try_advance_from(

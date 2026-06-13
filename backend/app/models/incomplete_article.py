@@ -126,7 +126,7 @@ class IncompleteArticle(Base):
     # → 3c NOT NULL + composite FK) で進めるが、ORM 最終形は NOT NULL。
     source_name: Mapped[SourceName] = mapped_column(SourceNameType, nullable=False)
     status: Mapped[str] = mapped_column(String(20))
-    staged_attributes: Mapped[dict[str, Any]] = mapped_column(JSONB)
+    observed_article: Mapped[dict[str, Any]] = mapped_column(JSONB)
     ready_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )

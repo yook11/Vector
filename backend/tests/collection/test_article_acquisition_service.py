@@ -611,7 +611,7 @@ async def test_immediate_acquisition_writes_article_created_succeeded(
 
 
 @pytest.mark.asyncio
-async def test_incomplete_staging_writes_incomplete_article_created_succeeded(
+async def test_incomplete_observed_article_writes_incomplete_article_created_succeeded(
     session_factory: async_sessionmaker[AsyncSession],
     db_session: AsyncSession,
     vb_source: NewsSource,

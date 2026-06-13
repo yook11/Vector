@@ -57,7 +57,7 @@ async def test_source_id_only_update_fails_with_composite_fk_violation(
         text(
             """
             INSERT INTO incomplete_articles
-                (url, source_id, source_name, status, staged_attributes,
+                (url, source_id, source_name, status, observed_article,
                  ready_at, attempt_count)
             VALUES (:url, :sid, :sname, 'open', '{}'::jsonb, NOW(), 0)
             """
