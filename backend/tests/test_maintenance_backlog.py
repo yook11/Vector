@@ -8,6 +8,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.analyzable_article_record import AnalyzableArticleRecord
+from app.models.analyzed_article_record import AnalyzedArticleRecord
 from app.models.article_curation import ArticleCuration
 from app.models.backfill_exclusion import (
     AssessmentBackfillExclusion,
@@ -16,9 +17,8 @@ from app.models.backfill_exclusion import (
 )
 from app.models.category import Category
 from app.models.curation_noise import CurationNoise
-from app.models.in_scope_assessment import InScopeAssessment
 from app.models.news_source import NewsSource
-from app.models.out_of_scope_assessment import OutOfScopeAssessment
+from app.models.out_of_scope_article_record import OutOfScopeArticleRecord
 from app.queue.helpers.backlog import PipelineBacklog
 
 
@@ -68,15 +68,15 @@ async def _make_curation(
     return curation
 
 
-async def _make_in_scope_assessment(
+async def _make_analyzed_article(
     db_session: AsyncSession,
     curation: ArticleCuration,
     category: Category,
     *,
     embedding: list[float] | None = None,
-) -> InScopeAssessment:
+) -> AnalyzedArticleRecord:
     """テスト用 in-scope assessment を作成する。"""
-    assessment = InScopeAssessment(
+    assessment = AnalyzedArticleRecord(
         curation_id=curation.id,
         translated_title=curation.translated_title,
         summary=curation.summary,
@@ -502,7 +502,7 @@ async def test_pending_assessment_excludes_curations_with_analysis(
     await db_session.commit()
     await db_session.refresh(curation)
     db_session.add(
-        InScopeAssessment(
+        AnalyzedArticleRecord(
             curation_id=curation.id,
             translated_title="tt",
             summary="ss",
@@ -606,7 +606,7 @@ async def test_aged_out_assessment_excludes_recent_completed_and_excluded(
         created_at=now - timedelta(days=10),
     )
     done = await _make_curation(db_session, done_article)
-    await _make_in_scope_assessment(db_session, done, sample_categories[0])
+    await _make_analyzed_article(db_session, done, sample_categories[0])
 
     rejected_article = await _make_article(
         db_session,
@@ -616,7 +616,7 @@ async def test_aged_out_assessment_excludes_recent_completed_and_excluded(
     )
     rejected = await _make_curation(db_session, rejected_article)
     db_session.add(
-        OutOfScopeAssessment(
+        OutOfScopeArticleRecord(
             curation_id=rejected.id,
             translated_title=rejected.translated_title,
             summary=rejected.summary,
@@ -698,7 +698,7 @@ async def test_pending_embedding_returns_analysis_with_null_embedding(
     db_session.add(curation)
     await db_session.commit()
     await db_session.refresh(curation)
-    analysis = InScopeAssessment(
+    analysis = AnalyzedArticleRecord(
         curation_id=curation.id,
         translated_title="tt",
         summary="ss",
@@ -734,7 +734,7 @@ async def test_pending_embedding_targets_include_audit_snapshot(
         created_at=now - timedelta(hours=1),
     )
     curation = await _make_curation(db_session, article)
-    analysis = await _make_in_scope_assessment(
+    analysis = await _make_analyzed_article(
         db_session,
         curation,
         sample_categories[0],
@@ -776,7 +776,7 @@ async def test_pending_embedding_excludes_already_embedded(
     db_session.add(curation)
     await db_session.commit()
     await db_session.refresh(curation)
-    analysis = InScopeAssessment(
+    analysis = AnalyzedArticleRecord(
         curation_id=curation.id,
         translated_title="tt",
         summary="ss",
@@ -812,7 +812,7 @@ async def test_pending_embedding_excludes_backfill_excluded_analysis(
         created_at=now - timedelta(hours=1),
     )
     curation = await _make_curation(db_session, article)
-    analysis = await _make_in_scope_assessment(
+    analysis = await _make_analyzed_article(
         db_session,
         curation,
         sample_categories[0],
@@ -842,7 +842,7 @@ async def test_count_pending_embedding_returns_true_count_without_limit(
 ) -> None:
     """embedding backlog COUNT は ID 取得と同じ条件で LIMIT に saturate しない。"""
     now = datetime(2026, 4, 26, 12, 0, 0, tzinfo=UTC)
-    pending: list[InScopeAssessment] = []
+    pending: list[AnalyzedArticleRecord] = []
     for index in range(3):
         article = await _make_article(
             db_session,
@@ -851,7 +851,7 @@ async def test_count_pending_embedding_returns_true_count_without_limit(
             created_at=now - timedelta(hours=1, minutes=index),
         )
         pending.append(
-            await _make_in_scope_assessment(
+            await _make_analyzed_article(
                 db_session,
                 await _make_curation(db_session, article),
                 sample_categories[0],
@@ -864,7 +864,7 @@ async def test_count_pending_embedding_returns_true_count_without_limit(
         url="https://e.com/embedding-count-done",
         created_at=now - timedelta(hours=1),
     )
-    await _make_in_scope_assessment(
+    await _make_analyzed_article(
         db_session,
         await _make_curation(db_session, embedded_article),
         sample_categories[0],
@@ -877,7 +877,7 @@ async def test_count_pending_embedding_returns_true_count_without_limit(
         url="https://e.com/embedding-count-excluded",
         created_at=now - timedelta(hours=1),
     )
-    excluded = await _make_in_scope_assessment(
+    excluded = await _make_analyzed_article(
         db_session,
         await _make_curation(db_session, excluded_article),
         sample_categories[0],
@@ -924,7 +924,7 @@ async def test_aged_out_embedding_returns_old_null_embedding_analysis(
         created_at=now - timedelta(days=10),
     )
     curation = await _make_curation(db_session, article)
-    analysis = await _make_in_scope_assessment(
+    analysis = await _make_analyzed_article(
         db_session,
         curation,
         sample_categories[0],
@@ -952,7 +952,7 @@ async def test_aged_out_embedding_excludes_recent_embedded_and_excluded(
         url="https://e.com/embedding-recent",
         created_at=now - timedelta(days=1),
     )
-    recent = await _make_in_scope_assessment(
+    recent = await _make_analyzed_article(
         db_session,
         await _make_curation(db_session, recent_article),
         sample_categories[0],
@@ -964,7 +964,7 @@ async def test_aged_out_embedding_excludes_recent_embedded_and_excluded(
         url="https://e.com/embedding-done-old",
         created_at=now - timedelta(days=10),
     )
-    embedded = await _make_in_scope_assessment(
+    embedded = await _make_analyzed_article(
         db_session,
         await _make_curation(db_session, embedded_article),
         sample_categories[0],
@@ -977,7 +977,7 @@ async def test_aged_out_embedding_excludes_recent_embedded_and_excluded(
         url="https://e.com/embedding-excluded-old",
         created_at=now - timedelta(days=10),
     )
-    excluded = await _make_in_scope_assessment(
+    excluded = await _make_analyzed_article(
         db_session,
         await _make_curation(db_session, excluded_article),
         sample_categories[0],
@@ -1015,7 +1015,7 @@ async def test_embedding_backfill_exclusion_reason_code_check(
         created_at=now - timedelta(days=10),
     )
     curation = await _make_curation(db_session, article)
-    analysis = await _make_in_scope_assessment(
+    analysis = await _make_analyzed_article(
         db_session,
         curation,
         sample_categories[0],

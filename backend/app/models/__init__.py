@@ -1,4 +1,5 @@
 from app.models.analyzable_article_record import AnalyzableArticleRecord
+from app.models.analyzed_article_record import AnalyzedArticleRecord
 from app.models.article_curation import ArticleCuration
 from app.models.auth_ref import auth_user_ref  # noqa: F401
 from app.models.backfill_exclusion import (
@@ -8,10 +9,9 @@ from app.models.backfill_exclusion import (
 )
 from app.models.category import Category
 from app.models.curation_noise import CurationNoise
-from app.models.in_scope_assessment import InScopeAssessment
 from app.models.incomplete_article import IncompleteArticle
 from app.models.news_source import NewsSource, SourceType
-from app.models.out_of_scope_assessment import OutOfScopeAssessment
+from app.models.out_of_scope_article_record import OutOfScopeArticleRecord
 from app.models.pipeline_event import PipelineEvent
 from app.models.trends_snapshot import TrendsSnapshot
 from app.models.watchlist_entry import WatchlistEntry
@@ -25,9 +25,9 @@ __all__ = [
     "Category",
     "CurationNoise",
     "EmbeddingBackfillExclusion",
-    "InScopeAssessment",
+    "AnalyzedArticleRecord",
     "NewsSource",
-    "OutOfScopeAssessment",
+    "OutOfScopeArticleRecord",
     "IncompleteArticle",
     "PipelineEvent",
     "SourceType",

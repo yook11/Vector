@@ -113,7 +113,7 @@ class CurationRepository:
         Phase 1B α-1 の re-curation CLI 専用。再現性を持たせるため:
 
         - 親 ``ArticleCuration`` は **UPDATE のみ** (DELETE しない)。これにより
-          ``in_scope_assessments`` / ``out_of_scope_assessments`` /
+          ``analyzed_articles`` / ``out_of_scope_articles`` /
           ``article_embeddings`` / ``watchlist_entries`` への CASCADE 連鎖を
           構造的に回避する
           (parent DELETE するとユーザの watchlist が消失するため)。

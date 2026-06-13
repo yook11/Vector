@@ -1,6 +1,6 @@
 """Stage 4 (Assessment) で out-of-scope と判定された curation の記録 (ORM)。
 
-in_scope_assessments とは同一 curation に対して排他（DB トリガーで強制）。
+analyzed_articles とは同一 curation に対して排他（DB トリガーで強制）。
 """
 
 from __future__ import annotations
@@ -26,26 +26,26 @@ if TYPE_CHECKING:
     from app.models.article_curation import ArticleCuration
 
 
-__all__ = ["OutOfScopeAssessment"]
+__all__ = ["OutOfScopeArticleRecord"]
 
 
-class OutOfScopeAssessment(Base):
+class OutOfScopeArticleRecord(Base):
     """Stage 4 で out-of-scope と判定された curation の記録 (ORM)。"""
 
-    __tablename__ = "out_of_scope_assessments"
+    __tablename__ = "out_of_scope_articles"
     __table_args__ = (
-        UniqueConstraint("curation_id", name="uq_out_of_scope_assessments_curation_id"),
+        UniqueConstraint("curation_id", name="uq_out_of_scope_articles_curation_id"),
         CheckConstraint(
             "translated_title != ''",
-            name="ck_out_of_scope_assessments_translated_title_not_empty",
+            name="ck_out_of_scope_articles_translated_title_not_empty",
         ),
         CheckConstraint(
             "summary != ''",
-            name="ck_out_of_scope_assessments_summary_not_empty",
+            name="ck_out_of_scope_articles_summary_not_empty",
         ),
         CheckConstraint(
             "investor_take != ''",
-            name="ck_out_of_scope_assessments_investor_take_not_empty",
+            name="ck_out_of_scope_articles_investor_take_not_empty",
         ),
     )
 
@@ -56,7 +56,7 @@ class OutOfScopeAssessment(Base):
     translated_title: Mapped[str] = mapped_column(String(500))
     summary: Mapped[str] = mapped_column(Text())
     investor_take: Mapped[str] = mapped_column(Text())
-    # key_points 抽出の並列出力。InScopeAssessment と対称化
+    # key_points 抽出の並列出力。AnalyzedArticleRecord と対称化
     # (out-of-scope と判定された記事の key_points も検証用途で保持)。
     # NULL = 旧行、[] = AI が key_points を返さなかった行、
     # values = AI 抽出済み行。
@@ -69,5 +69,5 @@ class OutOfScopeAssessment(Base):
 
     # リレーション
     curation: Mapped[ArticleCuration] = relationship(
-        back_populates="out_of_scope_assessment"
+        back_populates="out_of_scope_article"
     )

@@ -1,6 +1,6 @@
 """トレンド集計と TrendsSnapshot 永続化の Repository。
 
-読取側は ``in_scope_assessments.key_points`` JSONB の ``key_points[].mentions[]``
+読取側は ``analyzed_articles.key_points`` JSONB の ``key_points[].mentions[]``
 を 2 段 LATERAL で平坦化して集計し、Trend Discovery BC の VO で返す。dedup /
 top N の選定ポリシーは ``domain.mention_context`` の純関数へ委譲し、本モジュール
 は SQL 実行と Row 詰め替え (不正 legacy・drift 行の skip + warning) までを持つ。
@@ -35,12 +35,12 @@ from app.insights.trend_discovery.domain.trend import (
     RankedMention,
     RelatedMention,
 )
-from app.models.in_scope_assessment import InScopeAssessment
+from app.models.analyzed_article_record import AnalyzedArticleRecord
 from app.models.trends_snapshot import TrendsSnapshot
 
 logger = structlog.get_logger(__name__)
 
-# embedding 次元 (InScopeAssessment.embedding は HALFVEC(768))。
+# embedding 次元 (AnalyzedArticleRecord.embedding は HALFVEC(768))。
 _EMBEDDING_DIM = 768
 
 # MentionType の既知値集合 (skip 警告の type_known 判定用)。
@@ -189,7 +189,7 @@ class TrendsRepository:
                   a.analyzed_at AS analyzed_at,
                   a.embedding AS embedding,
                   e->>'content' AS content
-                FROM in_scope_assessments a
+                FROM analyzed_articles a
                 CROSS JOIN LATERAL jsonb_array_elements(
                   CASE WHEN jsonb_typeof(a.key_points) = 'array'
                        THEN a.key_points ELSE '[]'::jsonb END
@@ -265,7 +265,7 @@ class TrendsRepository:
                   MIN(m2->>'surface') AS related_name,
                   m2->>'type' AS related_type,
                   COUNT(DISTINCT a.id) AS shared_article_count
-                FROM in_scope_assessments a
+                FROM analyzed_articles a
                 CROSS JOIN LATERAL jsonb_array_elements(
                   CASE WHEN jsonb_typeof(a.key_points) = 'array'
                        THEN a.key_points ELSE '[]'::jsonb END
@@ -330,9 +330,9 @@ class TrendsRepository:
         self, *, current_start: datetime, current_end: datetime
     ) -> int:
         """指定 window 内の analysis 件数を全カテゴリ合算で返す (snapshot メタ情報)。"""
-        stmt = select(func.count(InScopeAssessment.id)).where(
-            InScopeAssessment.analyzed_at >= current_start,
-            InScopeAssessment.analyzed_at < current_end,
+        stmt = select(func.count(AnalyzedArticleRecord.id)).where(
+            AnalyzedArticleRecord.analyzed_at >= current_start,
+            AnalyzedArticleRecord.analyzed_at < current_end,
         )
         return (await self._session.execute(stmt)).scalar_one()
 
@@ -367,7 +367,7 @@ class TrendsRepository:
                   m->>'type' AS type,
                   MIN(m->>'surface') AS display_name,
                   COUNT(DISTINCT a.id) AS cnt
-                FROM in_scope_assessments a
+                FROM analyzed_articles a
                 CROSS JOIN LATERAL jsonb_array_elements(
                   CASE WHEN jsonb_typeof(a.key_points) = 'array'
                        THEN a.key_points ELSE '[]'::jsonb END

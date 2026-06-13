@@ -22,16 +22,16 @@ def _facts(
     article_id: int = 7,
     title: str = "量子コンピューティングの新たなブレイクスルー",
     summary: str = "MIT が新手法を発表。量子エラー訂正の分野で大きな進展。",
-    has_in_scope_assessment: bool = False,
-    has_out_of_scope_assessment: bool = False,
+    has_analyzed_article: bool = False,
+    has_out_of_scope_article: bool = False,
 ) -> AssessmentReadyBuildFacts:
     return AssessmentReadyBuildFacts(
         curation_id=curation_id,
         article_id=article_id,
         translated_title=title,
         summary=summary,
-        has_in_scope_assessment=has_in_scope_assessment,
-        has_out_of_scope_assessment=has_out_of_scope_assessment,
+        has_analyzed_article=has_analyzed_article,
+        has_out_of_scope_article=has_out_of_scope_article,
     )
 
 
@@ -82,7 +82,7 @@ class TestTryAdvanceFrom:
 
     @pytest.mark.asyncio
     async def test_raises_blocked_when_in_scope_exists(self) -> None:
-        repo = _repo_mock(facts=_facts(has_in_scope_assessment=True, article_id=7))
+        repo = _repo_mock(facts=_facts(has_analyzed_article=True, article_id=7))
 
         with pytest.raises(AssessmentReadyBuildBlockedError) as exc_info:
             await ReadyForAssessment.try_advance_from(curation_id=42, repo=repo)
@@ -94,7 +94,7 @@ class TestTryAdvanceFrom:
 
     @pytest.mark.asyncio
     async def test_raises_blocked_when_out_of_scope_exists(self) -> None:
-        repo = _repo_mock(facts=_facts(has_out_of_scope_assessment=True, article_id=7))
+        repo = _repo_mock(facts=_facts(has_out_of_scope_article=True, article_id=7))
 
         with pytest.raises(AssessmentReadyBuildBlockedError) as exc_info:
             await ReadyForAssessment.try_advance_from(curation_id=42, repo=repo)

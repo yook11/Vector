@@ -17,10 +17,10 @@ from app.analysis.assessment.domain.result import (
     InScopeCategory,
     OutOfScope,
 )
+from app.models.analyzed_article_record import AnalyzedArticleRecord
 from app.models.article_curation import ArticleCuration
 from app.models.category import Category
-from app.models.in_scope_assessment import InScopeAssessment
-from app.models.out_of_scope_assessment import OutOfScopeAssessment
+from app.models.out_of_scope_article_record import OutOfScopeArticleRecord
 
 logger = structlog.get_logger(__name__)
 
@@ -68,17 +68,17 @@ class AssessmentRepository:
                 ArticleCuration.analyzable_article_id,
                 ArticleCuration.translated_title,
                 ArticleCuration.summary,
-                InScopeAssessment.id.is_not(None),
-                OutOfScopeAssessment.id.is_not(None),
+                AnalyzedArticleRecord.id.is_not(None),
+                OutOfScopeArticleRecord.id.is_not(None),
             )
             .select_from(ArticleCuration)
             .outerjoin(
-                InScopeAssessment,
-                InScopeAssessment.curation_id == ArticleCuration.id,
+                AnalyzedArticleRecord,
+                AnalyzedArticleRecord.curation_id == ArticleCuration.id,
             )
             .outerjoin(
-                OutOfScopeAssessment,
-                OutOfScopeAssessment.curation_id == ArticleCuration.id,
+                OutOfScopeArticleRecord,
+                OutOfScopeArticleRecord.curation_id == ArticleCuration.id,
             )
             .where(ArticleCuration.id == curation_id)
             .limit(1)
@@ -91,16 +91,16 @@ class AssessmentRepository:
             article_id,
             translated_title,
             summary,
-            has_in_scope_assessment,
-            has_out_of_scope_assessment,
+            has_analyzed_article,
+            has_out_of_scope_article,
         ) = row
         return AssessmentReadyBuildFacts(
             curation_id=loaded_curation_id,
             article_id=article_id,
             translated_title=translated_title,
             summary=summary,
-            has_in_scope_assessment=has_in_scope_assessment,
-            has_out_of_scope_assessment=has_out_of_scope_assessment,
+            has_analyzed_article=has_analyzed_article,
+            has_out_of_scope_article=has_out_of_scope_article,
         )
 
     # --- save 経路 ------------------------------------------------------------
@@ -126,7 +126,7 @@ class AssessmentRepository:
             raise CategoryEnumDatabaseMismatchError({in_scope.category.value})
 
         stmt = (
-            pg_insert(InScopeAssessment)
+            pg_insert(AnalyzedArticleRecord)
             .values(
                 curation_id=ready.curation_id,
                 translated_title=ready.translated_title,
@@ -136,7 +136,7 @@ class AssessmentRepository:
                 key_points=[k.model_dump() for k in in_scope.key_points],
             )
             .on_conflict_do_nothing(index_elements=["curation_id"])
-            .returning(InScopeAssessment.id)
+            .returning(AnalyzedArticleRecord.id)
         )
         row = (await self._session.execute(stmt)).first()
         if row is None:
@@ -152,7 +152,7 @@ class AssessmentRepository:
         """out-of-scope assessment を保存し、既存行に負けた場合は ``None`` を返す。"""
         out_of_scope = call.result
         stmt = (
-            pg_insert(OutOfScopeAssessment)
+            pg_insert(OutOfScopeArticleRecord)
             .values(
                 curation_id=ready.curation_id,
                 translated_title=ready.translated_title,
@@ -161,7 +161,7 @@ class AssessmentRepository:
                 key_points=[k.model_dump() for k in out_of_scope.key_points],
             )
             .on_conflict_do_nothing(index_elements=["curation_id"])
-            .returning(OutOfScopeAssessment.id)
+            .returning(OutOfScopeArticleRecord.id)
         )
         row = (await self._session.execute(stmt)).first()
         if row is None:

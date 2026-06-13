@@ -17,7 +17,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.insights.briefing.domain.article import ArticleInput
 from app.insights.briefing.domain.briefing import WeeklyBriefingContent
 from app.insights.trend_discovery.domain.window import WEEK_TZ
-from app.models.in_scope_assessment import InScopeAssessment
+from app.models.analyzed_article_record import AnalyzedArticleRecord
 from app.models.weekly_briefing import WeeklyBriefing
 
 # --- BriefingArticleRepository — briefing 入力 article の読取 ---
@@ -32,7 +32,7 @@ class BriefingArticleRepository:
     async def fetch(self, *, week_start: date, category_id: int) -> list[ArticleInput]:
         """指定週 × カテゴリの analysis 済 article を取得する。
 
-        ``ArticleInput.id`` は公開 /news id 空間 (``InScopeAssessment.id``)。
+        ``ArticleInput.id`` は公開 /news id 空間 (``AnalyzedArticleRecord.id``)。
         LLM 入出力・JSONB 永続化・response embed が同一 id 空間で揃う。
 
         Returns:
@@ -45,16 +45,16 @@ class BriefingArticleRepository:
 
         stmt = (
             select(
-                InScopeAssessment.id,
-                InScopeAssessment.translated_title,
-                InScopeAssessment.summary,
+                AnalyzedArticleRecord.id,
+                AnalyzedArticleRecord.translated_title,
+                AnalyzedArticleRecord.summary,
             )
             .where(
-                InScopeAssessment.category_id == category_id,
-                InScopeAssessment.analyzed_at >= week_start_jst,
-                InScopeAssessment.analyzed_at < week_end_jst,
+                AnalyzedArticleRecord.category_id == category_id,
+                AnalyzedArticleRecord.analyzed_at >= week_start_jst,
+                AnalyzedArticleRecord.analyzed_at < week_end_jst,
             )
-            .order_by(InScopeAssessment.id)
+            .order_by(AnalyzedArticleRecord.id)
         )
         rows = (await self._session.execute(stmt)).all()
         return [
@@ -156,7 +156,7 @@ class BriefingRepository:
             "summary": content.summary,
             "chapters": [c.model_dump() for c in content.chapters],
             # domain 語彙 article_id (LLM 契約) → 永続キー assessment_id の改名境界。
-            # 値は公開 /news id 空間 (InScopeAssessment.id)。旧形 {article_id} 行
+            # 値は公開 /news id 空間 (AnalyzedArticleRecord.id)。旧形 {article_id} 行
             # (AnalyzableArticleRecord.id 空間) とはキー名で構造的に判別する。
             "key_articles": [
                 {"assessment_id": a.article_id, "significance": a.significance}

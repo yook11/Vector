@@ -24,14 +24,14 @@ from app.analysis.assessment.repository import (
     missing_category_slugs,
 )
 from app.models.analyzable_article_record import AnalyzableArticleRecord
+from app.models.analyzed_article_record import (
+    AnalyzedArticleRecord as AnalyzedArticleRecordORM,
+)
 from app.models.article_curation import ArticleCuration
 from app.models.category import Category
-from app.models.in_scope_assessment import (
-    InScopeAssessment as InScopeAssessmentORM,
-)
 from app.models.news_source import NewsSource
-from app.models.out_of_scope_assessment import (
-    OutOfScopeAssessment as OutOfScopeAssessmentORM,
+from app.models.out_of_scope_article_record import (
+    OutOfScopeArticleRecord as OutOfScopeArticleRecordORM,
 )
 
 _AI_MODEL = "gemini-2.5-flash-lite"
@@ -124,8 +124,8 @@ async def test_save_out_of_scope_persists_snapshot_fields(
 
     row = (
         await db_session.execute(
-            select(OutOfScopeAssessmentORM).where(
-                OutOfScopeAssessmentORM.curation_id == extraction.id
+            select(OutOfScopeArticleRecordORM).where(
+                OutOfScopeArticleRecordORM.curation_id == extraction.id
             )
         )
     ).scalar_one()
@@ -143,7 +143,7 @@ async def test_save_out_of_scope_returns_none_on_race_lost(
     """既存 row 存在時 ``save_out_of_scope`` は ``None`` を返し、勝者 row は残る。"""
     extraction = await _make_extraction(db_session, sample_source)
     # 勝者を先に焼く
-    winner = OutOfScopeAssessmentORM(
+    winner = OutOfScopeArticleRecordORM(
         curation_id=extraction.id,
         translated_title="勝者タイトル",
         summary="勝者要約",
@@ -168,8 +168,8 @@ async def test_save_out_of_scope_returns_none_on_race_lost(
     # 勝者 row は影響を受けない
     row = (
         await db_session.execute(
-            select(OutOfScopeAssessmentORM).where(
-                OutOfScopeAssessmentORM.curation_id == extraction.id
+            select(OutOfScopeArticleRecordORM).where(
+                OutOfScopeArticleRecordORM.curation_id == extraction.id
             )
         )
     ).scalar_one()
@@ -199,8 +199,8 @@ async def test_save_in_scope_persists_snapshot_fields(
 
     row = (
         await db_session.execute(
-            select(InScopeAssessmentORM).where(
-                InScopeAssessmentORM.curation_id == extraction.id
+            select(AnalyzedArticleRecordORM).where(
+                AnalyzedArticleRecordORM.curation_id == extraction.id
             )
         )
     ).scalar_one()
@@ -219,7 +219,7 @@ async def test_save_in_scope_returns_none_on_race_lost(
     """既存 row 存在時 ``save_in_scope`` は ``None`` を返し、勝者 row は残る。"""
     extraction = await _make_extraction(db_session, sample_source)
     ai_cat = next(c for c in sample_categories if str(c.slug) == "ai")
-    winner = InScopeAssessmentORM(
+    winner = AnalyzedArticleRecordORM(
         curation_id=extraction.id,
         translated_title="勝者タイトル",
         summary="勝者要約",
@@ -266,8 +266,8 @@ async def test_save_in_scope_persists_key_points_jsonb(
 
     row = (
         await db_session.execute(
-            select(InScopeAssessmentORM).where(
-                InScopeAssessmentORM.curation_id == extraction.id
+            select(AnalyzedArticleRecordORM).where(
+                AnalyzedArticleRecordORM.curation_id == extraction.id
             )
         )
     ).scalar_one()
@@ -297,8 +297,8 @@ async def test_save_in_scope_persists_empty_key_points_as_empty_list(
 
     row = (
         await db_session.execute(
-            select(InScopeAssessmentORM).where(
-                InScopeAssessmentORM.curation_id == extraction.id
+            select(AnalyzedArticleRecordORM).where(
+                AnalyzedArticleRecordORM.curation_id == extraction.id
             )
         )
     ).scalar_one()
@@ -328,8 +328,8 @@ async def test_save_out_of_scope_persists_key_points_jsonb(
 
     row = (
         await db_session.execute(
-            select(OutOfScopeAssessmentORM).where(
-                OutOfScopeAssessmentORM.curation_id == extraction.id
+            select(OutOfScopeArticleRecordORM).where(
+                OutOfScopeArticleRecordORM.curation_id == extraction.id
             )
         )
     ).scalar_one()
@@ -356,8 +356,8 @@ async def test_save_out_of_scope_persists_empty_key_points_as_empty_list(
 
     row = (
         await db_session.execute(
-            select(OutOfScopeAssessmentORM).where(
-                OutOfScopeAssessmentORM.curation_id == extraction.id
+            select(OutOfScopeArticleRecordORM).where(
+                OutOfScopeArticleRecordORM.curation_id == extraction.id
             )
         )
     ).scalar_one()
@@ -399,8 +399,8 @@ async def test_load_ready_build_facts_returns_values_for_unprocessed_curation(
     assert facts.article_id == extraction.analyzable_article_id
     assert facts.translated_title == extraction.translated_title
     assert facts.summary == extraction.summary
-    assert facts.has_in_scope_assessment is False
-    assert facts.has_out_of_scope_assessment is False
+    assert facts.has_analyzed_article is False
+    assert facts.has_out_of_scope_article is False
 
 
 @pytest.mark.asyncio
@@ -412,7 +412,7 @@ async def test_load_ready_build_facts_returns_none_when_missing(
 
 
 @pytest.mark.asyncio
-async def test_load_ready_build_facts_marks_existing_in_scope_assessment(
+async def test_load_ready_build_facts_marks_existing_analyzed_article(
     db_session: AsyncSession,
     sample_source: NewsSource,
     sample_categories: list[Category],
@@ -424,7 +424,7 @@ async def test_load_ready_build_facts_marks_existing_in_scope_assessment(
     )
     ai_cat = next(c for c in sample_categories if str(c.slug) == "ai")
     db_session.add(
-        InScopeAssessmentORM(
+        AnalyzedArticleRecordORM(
             curation_id=extraction.id,
             translated_title="t",
             summary="s",
@@ -438,12 +438,12 @@ async def test_load_ready_build_facts_marks_existing_in_scope_assessment(
     facts = await repo.load_ready_build_facts(extraction.id)
 
     assert facts is not None
-    assert facts.has_in_scope_assessment is True
-    assert facts.has_out_of_scope_assessment is False
+    assert facts.has_analyzed_article is True
+    assert facts.has_out_of_scope_article is False
 
 
 @pytest.mark.asyncio
-async def test_load_ready_build_facts_marks_existing_out_of_scope_assessment(
+async def test_load_ready_build_facts_marks_existing_out_of_scope_article(
     db_session: AsyncSession,
     sample_source: NewsSource,
 ) -> None:
@@ -453,7 +453,7 @@ async def test_load_ready_build_facts_marks_existing_out_of_scope_assessment(
         url="https://example.com/assessment-facts-out",
     )
     db_session.add(
-        OutOfScopeAssessmentORM(
+        OutOfScopeArticleRecordORM(
             curation_id=extraction.id,
             translated_title="t",
             summary="s",
@@ -466,8 +466,8 @@ async def test_load_ready_build_facts_marks_existing_out_of_scope_assessment(
     facts = await repo.load_ready_build_facts(extraction.id)
 
     assert facts is not None
-    assert facts.has_in_scope_assessment is False
-    assert facts.has_out_of_scope_assessment is True
+    assert facts.has_analyzed_article is False
+    assert facts.has_out_of_scope_article is True
 
 
 # category catalog 整合チェック (enum↔DB)

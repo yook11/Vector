@@ -46,12 +46,14 @@ from app.analysis.assessment.repository import CategoryEnumDatabaseMismatchError
 from app.analysis.assessment.service import AssessmentService
 from app.logfire.article_stage import assessment_stage_span
 from app.models.analyzable_article_record import AnalyzableArticleRecord
+from app.models.analyzed_article_record import (
+    AnalyzedArticleRecord as AnalyzedArticleRecordORM,
+)
 from app.models.article_curation import ArticleCuration
 from app.models.category import Category
-from app.models.in_scope_assessment import InScopeAssessment as InScopeAssessmentORM
 from app.models.news_source import NewsSource
-from app.models.out_of_scope_assessment import (
-    OutOfScopeAssessment as OutOfScopeAssessmentORM,
+from app.models.out_of_scope_article_record import (
+    OutOfScopeArticleRecord as OutOfScopeArticleRecordORM,
 )
 from app.models.pipeline_event import PipelineEvent
 from tests.logfire._span_helpers import stage_attrs
@@ -214,11 +216,11 @@ async def test_out_of_scope_success_records_audit(
     assert payload.get("investor_take") == "not relevant"
     # in-scope 固有 field のみ None (category_slug)
     assert payload.get("category_slug") is None
-    # 本体 DB (out_of_scope_assessments) に Stage 3 由来 snapshot が永続化されている
+    # 本体 DB (out_of_scope_articles) に Stage 3 由来 snapshot が永続化されている
     persisted = (
         await db_session.execute(
-            select(OutOfScopeAssessmentORM).where(
-                OutOfScopeAssessmentORM.curation_id == extraction.id
+            select(OutOfScopeArticleRecordORM).where(
+                OutOfScopeArticleRecordORM.curation_id == extraction.id
             )
         )
     ).scalar_one()
@@ -241,7 +243,7 @@ async def test_race_lost_does_not_record_audit(
     article = await _make_article(db_session, sample_source)
     extraction = await _make_extraction(db_session, article)
     # 勝者 row を先に焼いておく (本 test は敗者経路)
-    winner = InScopeAssessmentORM(
+    winner = AnalyzedArticleRecordORM(
         curation_id=extraction.id,
         translated_title="title",
         summary="summary text",
@@ -391,14 +393,14 @@ async def test_audit_rolled_back_when_commit_fails(
         with pytest.raises(RuntimeError, match="commit failed"):
             await svc.execute(_ready(extraction), assessor)
 
-    # audit も業務 in_scope_assessments も両方ゼロ (同 tx で rollback)
+    # audit も業務 analyzed_articles も両方ゼロ (同 tx で rollback)
     events = await _fetch_assessment_events(db_session, article.id)
     assert len(events) == 0
     rows = (
         (
             await db_session.execute(
-                select(InScopeAssessmentORM).where(
-                    InScopeAssessmentORM.curation_id == extraction.id
+                select(AnalyzedArticleRecordORM).where(
+                    AnalyzedArticleRecordORM.curation_id == extraction.id
                 )
             )
         )
@@ -418,7 +420,7 @@ async def test_out_of_scope_race_lost_does_not_record_audit(
     article = await _make_article(db_session, sample_source)
     extraction = await _make_extraction(db_session, article)
     # 勝者を先に焼く
-    winner = OutOfScopeAssessmentORM(
+    winner = OutOfScopeArticleRecordORM(
         curation_id=extraction.id,
         translated_title="title",
         summary="summary text",

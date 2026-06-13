@@ -3,7 +3,7 @@
 from typing import Any
 
 from app.exceptions import NotFoundError
-from app.models.in_scope_assessment import InScopeAssessment
+from app.models.analyzed_article_record import AnalyzedArticleRecord
 from app.repositories.articles import ArticleRepository
 from app.schemas.articles import (
     ArticleBrief,
@@ -25,7 +25,7 @@ def _truncate(text: str, limit: int) -> str:
     return text[: limit - 1] + "…"
 
 
-def build_brief(analysis: InScopeAssessment) -> ArticleBrief:
+def build_brief(analysis: AnalyzedArticleRecord) -> ArticleBrief:
     """一覧カード用 brief を構築する。
 
     key_points 非空 ⟺ summary_preview is None の相互排他をここで構造的に
@@ -73,7 +73,7 @@ def extract_key_point_contents(key_points: list[dict[str, Any]] | None) -> list[
     ]
 
 
-def build_detail(analysis: InScopeAssessment) -> ArticleDetail:
+def build_detail(analysis: AnalyzedArticleRecord) -> ArticleDetail:
     a = analysis.curation.analyzable_article
     return ArticleDetail(
         id=analysis.id,

@@ -1,12 +1,12 @@
 """Trend Discovery BC テスト固有のフィクスチャ。
 
 repository / Service テスト向けの ``seed_analysis`` ファクトリを提供する。
-seed_analysis は 1 件の ``InScopeAssessment`` を関連 ORM (AnalyzableArticleRecord /
-ArticleCuration) とともに作成し、``InScopeAssessment.key_points`` JSONB に
+seed_analysis は 1 件の ``AnalyzedArticleRecord`` を関連 ORM (AnalyzableArticleRecord /
+ArticleCuration) とともに作成し、``AnalyzedArticleRecord.key_points`` JSONB に
 mention 列を焼き付ける。
 
 PR 2 で集計軸を ``article_extraction_entities`` から
-``in_scope_assessments.key_points`` JSONB の mention に切替したため、本 fixture も
+``analyzed_articles.key_points`` JSONB の mention に切替したため、本 fixture も
 mention 軸に書き直されている。
 
 URL の重複制約を避けるため fixture 内のカウンタで一意な URL を採番する
@@ -23,13 +23,13 @@ import pytest
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.analyzable_article_record import AnalyzableArticleRecord
+from app.models.analyzed_article_record import AnalyzedArticleRecord
 from app.models.article_curation import ArticleCuration
-from app.models.in_scope_assessment import InScopeAssessment
 from app.models.news_source import NewsSource
 
-SeedAnalysis = Callable[..., Awaitable[InScopeAssessment]]
+SeedAnalysis = Callable[..., Awaitable[AnalyzedArticleRecord]]
 
-# InScopeAssessment.embedding は HALFVEC(768)。テストは近接 dedup を作り込みやすい
+# AnalyzedArticleRecord.embedding は HALFVEC(768)。テストは近接 dedup を作り込みやすい
 # よう短いベクトルを渡し、ここで 768 次元へ 0 padding する。
 _EMBEDDING_DIM = 768
 
@@ -43,10 +43,10 @@ def _pad_embedding(embedding: Sequence[float] | None) -> list[float] | None:
 
 @pytest.fixture
 def seed_analysis(db_session: AsyncSession, sample_source: NewsSource) -> SeedAnalysis:
-    """1 件の ``InScopeAssessment`` を関連 ORM ごと seed するファクトリ。
+    """1 件の ``AnalyzedArticleRecord`` を関連 ORM ごと seed するファクトリ。
 
     Args (キーワード引数):
-        category_id: ``InScopeAssessment.category_id`` に設定する FK。
+        category_id: ``AnalyzedArticleRecord.category_id`` に設定する FK。
         analyzed_at: ``analyzed_at`` を明示指定 (server_default を上書き)。
         mentions: ``[(surface, type), ...]`` の列。``key_points`` JSONB に
             1 つの key_point としてまとめて焼き付ける (同一 assessment 内で同じ
@@ -56,14 +56,14 @@ def seed_analysis(db_session: AsyncSession, sample_source: NewsSource) -> SeedAn
         key_points: ``[(content, [(surface, type), ...]), ...]`` で複数 key_point を
             明示 seeding する (指定時は ``mentions`` / ``content`` より優先)。同一
             assessment 内の別 key_point 共起や記事内 dedup の検証に使う。
-        embedding: ``InScopeAssessment.embedding`` に焼く float 列。768 次元未満は
+        embedding: ``AnalyzedArticleRecord.embedding`` に焼く float 列。768 次元未満は
             0 padding する (近接 dedup 検証用に短いベクトルを渡せる)。None は
             embedding 未設定 (旧行) を再現する。
         key_points_null: ``True`` のとき ``key_points`` を NULL のまま残す
             (PR 1 デプロイ前の旧行を再現する用途)。
 
     Returns:
-        永続化済みの ``InScopeAssessment``。flush のみで commit はしない
+        永続化済みの ``AnalyzedArticleRecord``。flush のみで commit はしない
         (呼び出し側のトランザクション境界に従う)。
     """
     seq = count()
@@ -77,7 +77,7 @@ def seed_analysis(db_session: AsyncSession, sample_source: NewsSource) -> SeedAn
         key_points: Sequence[tuple[str, Sequence[tuple[str, str]]]] | None = None,
         embedding: Sequence[float] | None = None,
         key_points_null: bool = False,
-    ) -> InScopeAssessment:
+    ) -> AnalyzedArticleRecord:
         n = next(seq)
         url = f"https://example.com/seed-{n}"
 
@@ -125,7 +125,7 @@ def seed_analysis(db_session: AsyncSession, sample_source: NewsSource) -> SeedAn
         else:
             key_points_json = []
 
-        analysis = InScopeAssessment(
+        analysis = AnalyzedArticleRecord(
             curation_id=extraction.id,
             translated_title=f"seed-{n}",
             summary="summary body",

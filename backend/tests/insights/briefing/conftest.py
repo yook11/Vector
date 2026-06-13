@@ -16,11 +16,11 @@ import pytest
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.analyzable_article_record import AnalyzableArticleRecord
+from app.models.analyzed_article_record import AnalyzedArticleRecord
 from app.models.article_curation import ArticleCuration
-from app.models.in_scope_assessment import InScopeAssessment
 from app.models.news_source import NewsSource
 
-SeedBriefingAnalysis = Callable[..., Awaitable[InScopeAssessment]]
+SeedBriefingAnalysis = Callable[..., Awaitable[AnalyzedArticleRecord]]
 
 
 @pytest.fixture
@@ -42,7 +42,7 @@ def seed_briefing_analysis(
         summary: str | None = None,
         published_at: datetime | None = None,
         key_points: list[dict[str, Any]] | None = None,
-    ) -> InScopeAssessment:
+    ) -> AnalyzedArticleRecord:
         n = next(seq)
         title = translated_title or f"briefing-seed-{n}"
         body = summary or f"briefing summary {n}"
@@ -66,7 +66,7 @@ def seed_briefing_analysis(
         db_session.add(extraction)
         await db_session.flush()
 
-        analysis = InScopeAssessment(
+        analysis = AnalyzedArticleRecord(
             curation_id=extraction.id,
             translated_title=title,
             summary=body,

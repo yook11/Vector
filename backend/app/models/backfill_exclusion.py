@@ -63,7 +63,7 @@ class EmbeddingBackfillExclusion(Base):
     )
 
     analysis_id: Mapped[int] = mapped_column(
-        ForeignKey("in_scope_assessments.id", ondelete="CASCADE"),
+        ForeignKey("analyzed_articles.id", ondelete="CASCADE"),
         primary_key=True,
     )
     reason_code: Mapped[str] = mapped_column(String(60), nullable=False)

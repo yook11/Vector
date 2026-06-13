@@ -33,8 +33,8 @@ class AssessmentReadyBuildFacts:
     article_id: int
     translated_title: str
     summary: str
-    has_in_scope_assessment: bool
-    has_out_of_scope_assessment: bool
+    has_analyzed_article: bool
+    has_out_of_scope_article: bool
 
 
 class AssessmentReadyBuildBlockedError(Exception):
@@ -86,13 +86,13 @@ class ReadyForAssessment(BaseModel):
                 AssessmentReadyBuildBlockedCode.CURATION_MISSING
             )
 
-        if facts.has_in_scope_assessment:
+        if facts.has_analyzed_article:
             raise AssessmentReadyBuildBlockedError(
                 AssessmentReadyBuildBlockedCode.ALREADY_IN_SCOPE,
                 article_id=facts.article_id,
             )
 
-        if facts.has_out_of_scope_assessment:
+        if facts.has_out_of_scope_article:
             raise AssessmentReadyBuildBlockedError(
                 AssessmentReadyBuildBlockedCode.ALREADY_OUT_OF_SCOPE,
                 article_id=facts.article_id,

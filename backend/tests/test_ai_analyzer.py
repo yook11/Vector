@@ -30,12 +30,12 @@ from app.analysis.curation.domain import CurationResult, Noise, Signal
 from app.analysis.curation.domain.ready import ReadyForCuration
 from app.analysis.curation.service import CurationService
 from app.models.analyzable_article_record import AnalyzableArticleRecord
+from app.models.analyzed_article_record import AnalyzedArticleRecord
 from app.models.article_curation import ArticleCuration
 from app.models.category import Category
 from app.models.curation_noise import CurationNoise
-from app.models.in_scope_assessment import InScopeAssessment
 from app.models.news_source import NewsSource
-from app.models.out_of_scope_assessment import OutOfScopeAssessment
+from app.models.out_of_scope_article_record import OutOfScopeArticleRecord
 from app.models.pipeline_event import PipelineEvent
 
 
@@ -489,8 +489,8 @@ async def test_assessment_persists_category(
     db_session.expire_all()
     analysis = (
         await db_session.execute(
-            select(InScopeAssessment).where(
-                InScopeAssessment.curation_id == curation_id
+            select(AnalyzedArticleRecord).where(
+                AnalyzedArticleRecord.curation_id == curation_id
             )
         )
     ).scalar_one()
@@ -537,16 +537,16 @@ async def test_assessment_persists_rejection_when_out_of_scope(
     db_session.expire_all()
     rejection = (
         await db_session.execute(
-            select(OutOfScopeAssessment).where(
-                OutOfScopeAssessment.curation_id == curation_id
+            select(OutOfScopeArticleRecord).where(
+                OutOfScopeArticleRecord.curation_id == curation_id
             )
         )
     ).scalar_one()
     assert rejection.investor_take == "先端技術の話題ではない"
     analysis = (
         await db_session.execute(
-            select(InScopeAssessment).where(
-                InScopeAssessment.curation_id == curation_id
+            select(AnalyzedArticleRecord).where(
+                AnalyzedArticleRecord.curation_id == curation_id
             )
         )
     ).scalar_one_or_none()
@@ -567,7 +567,7 @@ async def test_news_endpoint_includes_analysis(
         translated_title="テスト記事",
         summary="テスト要約",
     )
-    analysis = InScopeAssessment(
+    analysis = AnalyzedArticleRecord(
         curation_id=extraction.id,
         translated_title="テスト記事",
         summary="テスト要約",

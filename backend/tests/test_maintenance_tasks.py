@@ -13,6 +13,7 @@ from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.models.analyzable_article_record import AnalyzableArticleRecord
+from app.models.analyzed_article_record import AnalyzedArticleRecord
 from app.models.article_curation import ArticleCuration
 from app.models.backfill_exclusion import (
     AssessmentBackfillExclusion,
@@ -21,7 +22,6 @@ from app.models.backfill_exclusion import (
 )
 from app.models.category import Category
 from app.models.curation_noise import CurationNoise
-from app.models.in_scope_assessment import InScopeAssessment
 from app.models.news_source import NewsSource
 from app.models.pipeline_event import PipelineEvent
 from app.queue.helpers.backlog import BackfillTarget
@@ -334,15 +334,15 @@ async def _make_curation(
     return curation
 
 
-async def _make_in_scope_assessment(
+async def _make_analyzed_article(
     db_session: AsyncSession,
     curation: ArticleCuration,
     category: Category,
     *,
     embedding: list[float] | None = None,
-) -> InScopeAssessment:
+) -> AnalyzedArticleRecord:
     """テスト用 in-scope assessment を作成する。"""
-    assessment = InScopeAssessment(
+    assessment = AnalyzedArticleRecord(
         curation_id=curation.id,
         translated_title=curation.translated_title,
         summary=curation.summary,
@@ -494,7 +494,7 @@ async def test_exclude_aged_out_assessments_skips_completed_race(
         created_at=now - timedelta(days=10),
     )
     curation = await _make_curation(db_session, article)
-    await _make_in_scope_assessment(db_session, curation, sample_categories[0])
+    await _make_analyzed_article(db_session, curation, sample_categories[0])
 
     excluded = await tasks._exclude_aged_out_assessments(
         session_factory, created_before=now - timedelta(days=7)
@@ -532,7 +532,7 @@ async def test_exclude_aged_out_embeddings_keeps_assessment_and_audits(
         created_at=now - timedelta(days=10),
     )
     curation = await _make_curation(db_session, article)
-    analysis = await _make_in_scope_assessment(
+    analysis = await _make_analyzed_article(
         db_session,
         curation,
         sample_categories[0],
@@ -545,7 +545,7 @@ async def test_exclude_aged_out_embeddings_keeps_assessment_and_audits(
     )
 
     db_session.expire_all()
-    assert await db_session.get(InScopeAssessment, analysis_id) is not None
+    assert await db_session.get(AnalyzedArticleRecord, analysis_id) is not None
 
     exclusion = await db_session.get(EmbeddingBackfillExclusion, analysis_id)
     assert exclusion is not None
@@ -589,7 +589,7 @@ async def test_exclude_aged_out_embeddings_skips_completed_race(
         created_at=now - timedelta(days=10),
     )
     curation = await _make_curation(db_session, article)
-    analysis = await _make_in_scope_assessment(
+    analysis = await _make_analyzed_article(
         db_session,
         curation,
         sample_categories[0],

@@ -65,13 +65,15 @@ from app.analysis.assessment.errors import (
 from app.analysis.gemini_error_translator import GeminiContentRejectionReason
 from app.audit.stages.assessment import AssessmentAuditRepository
 from app.models.analyzable_article_record import AnalyzableArticleRecord
+from app.models.analyzed_article_record import (
+    AnalyzedArticleRecord as AnalyzedArticleRecordORM,
+)
 from app.models.article_curation import ArticleCuration
 from app.models.backfill_exclusion import BackfillExclusionReason
 from app.models.category import Category
-from app.models.in_scope_assessment import InScopeAssessment as InScopeAssessmentORM
 from app.models.news_source import NewsSource
-from app.models.out_of_scope_assessment import (
-    OutOfScopeAssessment as OutOfScopeAssessmentORM,
+from app.models.out_of_scope_article_record import (
+    OutOfScopeArticleRecord as OutOfScopeArticleRecordORM,
 )
 from app.models.pipeline_event import PipelineEvent
 
@@ -164,13 +166,13 @@ async def _persist_in_scope(
     db_session: AsyncSession,
     extraction: ArticleCuration,
     category: Category,
-) -> InScopeAssessmentORM:
-    """テスト用に in_scope_assessments 行を 1 件焼いて ORM を返す。
+) -> AnalyzedArticleRecordORM:
+    """テスト用に analyzed_articles 行を 1 件焼いて ORM を返す。
 
     audit は witness で ID ミラーを持たないが、article_id 経由の 1-hop join
     で audit row を引くための業務 row を焼くために使う。
     """
-    orm = InScopeAssessmentORM(
+    orm = AnalyzedArticleRecordORM(
         curation_id=extraction.id,
         translated_title="title",
         summary="summary text",
@@ -186,9 +188,9 @@ async def _persist_in_scope(
 async def _persist_out_of_scope(
     db_session: AsyncSession,
     extraction: ArticleCuration,
-) -> OutOfScopeAssessmentORM:
-    """テスト用に out_of_scope_assessments 行を 1 件焼いて ORM を返す。"""
-    orm = OutOfScopeAssessmentORM(
+) -> OutOfScopeArticleRecordORM:
+    """テスト用に out_of_scope_articles 行を 1 件焼いて ORM を返す。"""
+    orm = OutOfScopeArticleRecordORM(
         curation_id=extraction.id,
         translated_title=extraction.translated_title,
         summary=extraction.summary,
@@ -483,7 +485,7 @@ async def test_append_out_of_scope_records_investor_take(
 ) -> None:
     """PR #447 対称化追従: out-of-scope payload は ``investor_take`` を持つ。
 
-    本体 DB (``out_of_scope_assessments.investor_take``) と audit payload の
+    本体 DB (``out_of_scope_articles.investor_take``) と audit payload の
     情報量を一致させる。in-scope 固有 field (``category_slug``) のみ None。
     """
     article = await _make_article(db_session, sample_source)

@@ -32,33 +32,39 @@ if TYPE_CHECKING:
     from app.models.watchlist_entry import WatchlistEntry
 
 
-__all__ = ["InScopeAssessment"]
+__all__ = ["AnalyzedArticleRecord"]
 
 
-class InScopeAssessment(Base):
+class AnalyzedArticleRecord(Base):
     """Stage 4 で in-scope と判定された curation の評価結果 (ORM)。"""
 
-    __tablename__ = "in_scope_assessments"
+    __tablename__ = "analyzed_articles"
     __table_args__ = (
-        UniqueConstraint("curation_id", name="uq_in_scope_assessments_curation_id"),
+        UniqueConstraint("curation_id", name="uq_analyzed_articles_curation_id"),
         CheckConstraint(
             "translated_title != ''",
-            name="ck_in_scope_assessments_translated_title_not_empty",
+            name="ck_analyzed_articles_translated_title_not_empty",
         ),
         CheckConstraint(
             "summary != ''",
-            name="ck_in_scope_assessments_summary_not_empty",
+            name="ck_analyzed_articles_summary_not_empty",
         ),
         CheckConstraint(
             "investor_take != ''",
-            name="ck_in_scope_assessments_investor_take_not_empty",
+            name="ck_analyzed_articles_investor_take_not_empty",
         ),
         # サイドバーの直近 24 時間集計クエリ向けの複合インデックス。
-        # 単独 ix_in_scope_assessments_category_id は作らない（複合の左端でカバー）。
+        # 単独 ix_analyzed_articles_category_id は作らない（複合の左端でカバー）。
         Index(
-            "ix_in_scope_assessments_category_id_analyzed_at",
+            "ix_analyzed_articles_category_id_analyzed_at",
             "category_id",
             "analyzed_at",
+        ),
+        Index(
+            "idx_analyzed_articles_embedding",
+            "embedding",
+            postgresql_using="hnsw",
+            postgresql_ops={"embedding": "halfvec_cosine_ops"},
         ),
     )
 
@@ -84,12 +90,10 @@ class InScopeAssessment(Base):
     )
 
     # リレーション
-    curation: Mapped[ArticleCuration] = relationship(
-        back_populates="in_scope_assessment"
-    )
+    curation: Mapped[ArticleCuration] = relationship(back_populates="analyzed_article")
     watchlist_entries: Mapped[list[WatchlistEntry]] = relationship(
-        back_populates="in_scope_assessment"
+        back_populates="analyzed_article"
     )
     # category_id FK 経由の直 relationship（カード表示用）。逆向き
-    # Category.in_scope_assessments は持たない（逆引きは category_id filter で足りる）。
+    # Category.analyzed_articles は持たない（逆引きは category_id filter で足りる）。
     category: Mapped[Category] = relationship()

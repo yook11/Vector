@@ -7,8 +7,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.analysis.embedding.domain.ready import EmbeddingReadyBuildFacts
 from app.analysis.embedding.domain.value_objects import EmbeddingVector
+from app.models.analyzed_article_record import AnalyzedArticleRecord
 from app.models.article_curation import ArticleCuration
-from app.models.in_scope_assessment import InScopeAssessment
 
 
 class EmbeddingRepository:
@@ -23,16 +23,16 @@ class EmbeddingRepository:
         stmt = (
             select(
                 ArticleCuration.analyzable_article_id,
-                InScopeAssessment.embedding.is_not(None),
-                InScopeAssessment.translated_title,
-                InScopeAssessment.summary,
+                AnalyzedArticleRecord.embedding.is_not(None),
+                AnalyzedArticleRecord.translated_title,
+                AnalyzedArticleRecord.summary,
             )
-            .select_from(InScopeAssessment)
+            .select_from(AnalyzedArticleRecord)
             .join(
                 ArticleCuration,
-                ArticleCuration.id == InScopeAssessment.curation_id,
+                ArticleCuration.id == AnalyzedArticleRecord.curation_id,
             )
-            .where(InScopeAssessment.id == analysis_id)
+            .where(AnalyzedArticleRecord.id == analysis_id)
             .limit(1)
         )
         row = (await self._session.execute(stmt)).first()
@@ -54,13 +54,13 @@ class EmbeddingRepository:
     ) -> bool:
         """未 embedded の analysis にだけ vector を保存する。"""
         stmt = (
-            update(InScopeAssessment)
+            update(AnalyzedArticleRecord)
             .where(
-                InScopeAssessment.id == analysis_id,
-                InScopeAssessment.embedding.is_(None),
+                AnalyzedArticleRecord.id == analysis_id,
+                AnalyzedArticleRecord.embedding.is_(None),
             )
             .values(embedding=vector.to_list())
-            .returning(InScopeAssessment.id)
+            .returning(AnalyzedArticleRecord.id)
         )
         row = (await self._session.execute(stmt)).first()
         return row is not None

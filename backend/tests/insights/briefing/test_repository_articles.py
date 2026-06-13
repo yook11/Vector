@@ -51,7 +51,7 @@ class TestFetch:
         repo = BriefingArticleRepository(db_session)
         result = await repo.fetch(week_start=date(2026, 4, 20), category_id=ai.id)
         assert len(result) == 2
-        # 順序は InScopeAssessment.id 昇順 (公開 /news id 空間)
+        # 順序は AnalyzedArticleRecord.id 昇順 (公開 /news id 空間)
         assert result[0].title_ja == "記事A"
         assert result[1].title_ja == "記事B"
 
@@ -63,10 +63,10 @@ class TestFetch:
         sample_source,
         seed_briefing_analysis,
     ) -> None:
-        """ArticleInput.id は公開 /news id 空間 (InScopeAssessment.id)。
+        """ArticleInput.id は公開 /news id 空間 (AnalyzedArticleRecord.id)。
 
         decoy record を先に 1 件 INSERT して source article id と
-        InScopeAssessment.id をずらし、ArticleInput.id == analysis.id を保証する。
+        AnalyzedArticleRecord.id をずらし、ArticleInput.id == analysis.id を保証する。
         """
         from app.models.analyzable_article_record import AnalyzableArticleRecord
 
@@ -109,7 +109,8 @@ class TestFetch:
         repo = BriefingArticleRepository(db_session)
         result = await repo.fetch(week_start=date(2026, 4, 20), category_id=ai.id)
         assert len(result) == 1
-        # 公開 /news id 空間 (InScopeAssessment.id) であって source article id ではない
+        # 公開 /news id 空間 (AnalyzedArticleRecord.id) であって
+        # source article id ではない
         assert result[0].id == analysis.id
         assert result[0].id != article_id
 

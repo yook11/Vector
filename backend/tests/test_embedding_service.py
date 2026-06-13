@@ -33,9 +33,9 @@ from app.analysis.embedding.errors import (
 from app.analysis.embedding.service import EmbeddingService
 from app.analysis.gemini_error_translator import GeminiContentRejectionReason
 from app.models.analyzable_article_record import AnalyzableArticleRecord
+from app.models.analyzed_article_record import AnalyzedArticleRecord
 from app.models.article_curation import ArticleCuration
 from app.models.category import Category
-from app.models.in_scope_assessment import InScopeAssessment
 from app.models.news_source import NewsSource
 from app.models.pipeline_event import PipelineEvent
 
@@ -107,8 +107,8 @@ async def _build_analysis(
     translated_title: str = "分析タイトル",
     summary: str = "分析要約",
     embedding: list[float] | None = None,
-) -> InScopeAssessment:
-    analysis = InScopeAssessment(
+) -> AnalyzedArticleRecord:
+    analysis = AnalyzedArticleRecord(
         curation_id=extraction.id,
         translated_title=translated_title,
         summary=summary,
@@ -174,7 +174,7 @@ async def test_execute_persists_embedding_on_success(
     embedder.embed_document.assert_called_once_with(ready)
 
     db_session.expire_all()
-    refetched = await db_session.get(InScopeAssessment, analysis_id)
+    refetched = await db_session.get(AnalyzedArticleRecord, analysis_id)
     assert refetched is not None
     assert refetched.embedding is not None
 
@@ -228,7 +228,7 @@ async def test_execute_shortcircuits_when_already_persisted(
     assert result is None
     # 先行する write の値のまま、後続の save で上書きされていない
     db_session.expire_all()
-    refetched = await db_session.get(InScopeAssessment, analysis_id)
+    refetched = await db_session.get(AnalyzedArticleRecord, analysis_id)
     assert refetched is not None
     raw = refetched.embedding
     values = raw.to_list() if hasattr(raw, "to_list") else list(raw)
@@ -288,7 +288,7 @@ async def test_execute_wraps_target_rejected_provider_error(
     assert exc_info.value.__cause__ is original
 
     db_session.expire_all()
-    refetched = await db_session.get(InScopeAssessment, analysis_id)
+    refetched = await db_session.get(AnalyzedArticleRecord, analysis_id)
     assert refetched is not None
     assert refetched.embedding is None
 
@@ -372,6 +372,6 @@ async def test_execute_propagates_response_invalid_from_embedder(
     assert exc_info.value.provider_error is None
 
     db_session.expire_all()
-    refetched = await db_session.get(InScopeAssessment, analysis_id)
+    refetched = await db_session.get(AnalyzedArticleRecord, analysis_id)
     assert refetched is not None
     assert refetched.embedding is None

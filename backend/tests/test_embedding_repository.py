@@ -13,9 +13,9 @@ from app.analysis.embedding.domain.value_objects import (
 )
 from app.analysis.embedding.repository import EmbeddingRepository
 from app.models.analyzable_article_record import AnalyzableArticleRecord
+from app.models.analyzed_article_record import AnalyzedArticleRecord
 from app.models.article_curation import ArticleCuration
 from app.models.category import Category
-from app.models.in_scope_assessment import InScopeAssessment
 from app.models.news_source import NewsSource
 
 
@@ -26,7 +26,7 @@ async def _build_analysis(
     *,
     url: str,
     embedding: list[float] | None = None,
-) -> InScopeAssessment:
+) -> AnalyzedArticleRecord:
     """Stage 2 完了済みの分析行を 1 件作成する。"""
     article = AnalyzableArticleRecord(
         source_id=source.id,
@@ -44,7 +44,7 @@ async def _build_analysis(
     )
     db_session.add(extraction)
     await db_session.flush()
-    analysis = InScopeAssessment(
+    analysis = AnalyzedArticleRecord(
         curation_id=extraction.id,
         translated_title="分析タイトル",
         summary="分析要約",
@@ -146,7 +146,7 @@ async def test_save_writes_embedding_and_returns_true(
 
     assert saved is True
     db_session.expire_all()
-    refetched = await db_session.get(InScopeAssessment, analysis_id)
+    refetched = await db_session.get(AnalyzedArticleRecord, analysis_id)
     assert refetched is not None
     assert refetched.embedding is not None
 
@@ -175,7 +175,7 @@ async def test_save_returns_false_on_concurrent_write(
 
     assert saved is False
     db_session.expire_all()
-    refetched = await db_session.get(InScopeAssessment, analysis_id)
+    refetched = await db_session.get(AnalyzedArticleRecord, analysis_id)
     assert refetched is not None
     # 既存の embedding を上書きしないこと
     assert refetched.embedding is not None

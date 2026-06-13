@@ -51,7 +51,7 @@ class AssessmentService:
         勝者だけが audit と commit を行う。
 
         Returns:
-            in-scope 成功時: 永続化された ``in_scope_assessments`` 行の id
+            in-scope 成功時: 永続化された ``analyzed_articles`` 行の id
                 (Task 層が ``EmbeddingTrigger`` に詰めて kiq に流すキー)
             out-of-scope 成功時: ``None`` (Stage 5 chain なし)
             楽観ロック敗北時: ``None`` (Task 層は下流 chain を起動しない、

@@ -70,7 +70,7 @@ class TestSave:
         VO→行の写像は repository 内部の責務 (service が手組みしない)。
         key_articles の永続形は {assessment_id, significance} (新形)。
         domain 語彙 article_id (LLM 契約) は repository 境界で assessment_id へ
-        改名し、値は公開 /news id 空間 (InScopeAssessment.id) のまま保持する。
+        改名し、値は公開 /news id 空間 (AnalyzedArticleRecord.id) のまま保持する。
         """
         content = _content(headline="mapped", summary="マップ確認")
         repo = BriefingRepository(db_session)

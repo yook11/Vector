@@ -30,9 +30,9 @@ from app.insights.briefing.schemas import (
     _BriefingKeyArticle,
 )
 from app.models.analyzable_article_record import AnalyzableArticleRecord
+from app.models.analyzed_article_record import AnalyzedArticleRecord
 from app.models.article_curation import ArticleCuration
 from app.models.category import Category
-from app.models.in_scope_assessment import InScopeAssessment
 from app.models.news_source import NewsSource
 from app.models.weekly_briefing import WeeklyBriefing
 from app.schemas.embeds import CategoryEmbed, NewsSourceEmbed
@@ -64,28 +64,28 @@ async def _fetch_article_embeds_by_assessment_id(
 ) -> dict[int, _BriefingArticleEmbed]:
     """key_articles (``assessment_id`` キー) が参照する記事の embed を返す。
 
-    JSONB の assessment_id は公開 /news id 空間 (``InScopeAssessment.id``)
+    JSONB の assessment_id は公開 /news id 空間 (``AnalyzedArticleRecord.id``)
     そのものなので、dict キー = embed の公開 ``id`` で橋渡しが無い。
     """
     if not assessment_ids:
         return {}
     stmt = (
         select(
-            InScopeAssessment.id,
-            InScopeAssessment.translated_title,
-            InScopeAssessment.key_points,
+            AnalyzedArticleRecord.id,
+            AnalyzedArticleRecord.translated_title,
+            AnalyzedArticleRecord.key_points,
             AnalyzableArticleRecord.source_url,
             AnalyzableArticleRecord.published_at,
             NewsSource.name,
             NewsSource.attribution_label,
         )
-        .join(ArticleCuration, ArticleCuration.id == InScopeAssessment.curation_id)
+        .join(ArticleCuration, ArticleCuration.id == AnalyzedArticleRecord.curation_id)
         .join(
             AnalyzableArticleRecord,
             AnalyzableArticleRecord.id == ArticleCuration.analyzable_article_id,
         )
         .join(NewsSource, NewsSource.id == AnalyzableArticleRecord.source_id)
-        .where(InScopeAssessment.id.in_(assessment_ids))
+        .where(AnalyzedArticleRecord.id.in_(assessment_ids))
     )
     rows = (await session.execute(stmt)).all()
     return {

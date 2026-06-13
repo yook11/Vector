@@ -7,9 +7,9 @@ from httpx import AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.analyzable_article_record import AnalyzableArticleRecord
+from app.models.analyzed_article_record import AnalyzedArticleRecord
 from app.models.article_curation import ArticleCuration
 from app.models.category import Category
-from app.models.in_scope_assessment import InScopeAssessment
 from app.models.news_source import NewsSource
 
 
@@ -97,7 +97,7 @@ class TestListCategories:
         )
         db_session.add(extraction)
         await db_session.flush()
-        analysis = InScopeAssessment(
+        analysis = AnalyzedArticleRecord(
             curation_id=extraction.id,
             translated_title="TF記事",
             summary="要約",
@@ -136,7 +136,7 @@ class TestListCategories:
         )
         db_session.add(extraction)
         await db_session.flush()
-        analysis = InScopeAssessment(
+        analysis = AnalyzedArticleRecord(
             curation_id=extraction.id,
             translated_title="TF記事",
             summary="要約",

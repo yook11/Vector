@@ -29,14 +29,14 @@ from app.audit.stages.backfill import (
     BackfillTargetKind,
 )
 from app.config import settings
+from app.models.analyzed_article_record import AnalyzedArticleRecord
 from app.models.article_curation import ArticleCuration
 from app.models.backfill_exclusion import (
     AssessmentBackfillExclusion,
     BackfillExclusionReason,
     EmbeddingBackfillExclusion,
 )
-from app.models.in_scope_assessment import InScopeAssessment
-from app.models.out_of_scope_assessment import OutOfScopeAssessment
+from app.models.out_of_scope_article_record import OutOfScopeArticleRecord
 from app.queue.brokers import broker_maintenance
 from app.queue.helpers.backlog import BackfillTarget, PipelineBacklog
 from app.queue.helpers.budget import consume_daily_budget
@@ -298,12 +298,12 @@ async def _exclude_aged_out_assessments(
             stmt = (
                 select(ArticleCuration.analyzable_article_id)
                 .outerjoin(
-                    InScopeAssessment,
-                    InScopeAssessment.curation_id == ArticleCuration.id,
+                    AnalyzedArticleRecord,
+                    AnalyzedArticleRecord.curation_id == ArticleCuration.id,
                 )
                 .outerjoin(
-                    OutOfScopeAssessment,
-                    OutOfScopeAssessment.curation_id == ArticleCuration.id,
+                    OutOfScopeArticleRecord,
+                    OutOfScopeArticleRecord.curation_id == ArticleCuration.id,
                 )
                 .outerjoin(
                     AssessmentBackfillExclusion,
@@ -311,8 +311,8 @@ async def _exclude_aged_out_assessments(
                 )
                 .where(
                     ArticleCuration.id == curation_id,
-                    InScopeAssessment.id.is_(None),
-                    OutOfScopeAssessment.id.is_(None),
+                    AnalyzedArticleRecord.id.is_(None),
+                    OutOfScopeArticleRecord.id.is_(None),
                     AssessmentBackfillExclusion.curation_id.is_(None),
                 )
                 .limit(1)
@@ -365,18 +365,18 @@ async def _exclude_aged_out_embeddings(
         async with session_factory() as session:
             stmt = (
                 select(ArticleCuration.analyzable_article_id)
-                .select_from(InScopeAssessment)
+                .select_from(AnalyzedArticleRecord)
                 .join(
                     ArticleCuration,
-                    ArticleCuration.id == InScopeAssessment.curation_id,
+                    ArticleCuration.id == AnalyzedArticleRecord.curation_id,
                 )
                 .outerjoin(
                     EmbeddingBackfillExclusion,
-                    EmbeddingBackfillExclusion.analysis_id == InScopeAssessment.id,
+                    EmbeddingBackfillExclusion.analysis_id == AnalyzedArticleRecord.id,
                 )
                 .where(
-                    InScopeAssessment.id == analysis_id,
-                    InScopeAssessment.embedding.is_(None),
+                    AnalyzedArticleRecord.id == analysis_id,
+                    AnalyzedArticleRecord.embedding.is_(None),
                     EmbeddingBackfillExclusion.analysis_id.is_(None),
                 )
                 .limit(1)

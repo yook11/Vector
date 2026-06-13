@@ -71,7 +71,7 @@ class KeyArticle(BaseModel):
     """その週で特に重要な記事 1 件 = 記事 id + なぜ重要か (significance)。
 
     ``article_id`` は LLM 入出力語彙で、値は公開 /news id 空間
-    (``InScopeAssessment.id``)。永続化時は repository が ``assessment_id``
+    (``AnalyzedArticleRecord.id``)。永続化時は repository が ``assessment_id``
     キーへ写像する。
     """
 

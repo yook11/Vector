@@ -11,7 +11,7 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 from app.models.base import Base
 
 if TYPE_CHECKING:
-    from app.models.in_scope_assessment import InScopeAssessment
+    from app.models.analyzed_article_record import AnalyzedArticleRecord
 
 
 class WatchlistEntry(Base):
@@ -23,7 +23,7 @@ class WatchlistEntry(Base):
         primary_key=True,
     )
     article_analysis_id: Mapped[int] = mapped_column(
-        ForeignKey("in_scope_assessments.id", ondelete="CASCADE"),
+        ForeignKey("analyzed_articles.id", ondelete="CASCADE"),
         primary_key=True,
     )
     created_at: Mapped[datetime] = mapped_column(
@@ -31,9 +31,7 @@ class WatchlistEntry(Base):
     )
 
     # リレーション
-    # 属性名 / カラム名 (article_analysis_id) は据え置きで確定。
-    # ユーザ視点で「ウォッチした分析記事」を表す概念名として保持する判断
-    # (PR3.5-d.2 調査記録、specs/stage4-assessment-rename.md 参照)。
-    in_scope_assessment: Mapped[InScopeAssessment] = relationship(
+    # PR1 では column rename を避け、PR2 で analyzed_article_id に寄せる。
+    analyzed_article: Mapped[AnalyzedArticleRecord] = relationship(
         back_populates="watchlist_entries"
     )

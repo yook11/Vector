@@ -14,7 +14,7 @@ from pydantic import BaseModel, ConfigDict, Field
 class ArticleInput(BaseModel):
     """LLM への記事入力 1 件。
 
-    ``id`` は公開 /news id 空間 (``InScopeAssessment.id``)。LLM が返す
+    ``id`` は公開 /news id 空間 (``AnalyzedArticleRecord.id``)。LLM が返す
     ``key_articles[].article_id`` もこの空間になる。
     """
 

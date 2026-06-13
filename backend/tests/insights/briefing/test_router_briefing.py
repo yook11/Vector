@@ -24,9 +24,9 @@ from app.insights.briefing.domain.week import (
     now_in_jst,
 )
 from app.models.analyzable_article_record import AnalyzableArticleRecord
+from app.models.analyzed_article_record import AnalyzedArticleRecord
 from app.models.article_curation import ArticleCuration
 from app.models.category import Category
-from app.models.in_scope_assessment import InScopeAssessment
 from app.models.news_source import NewsSource
 from app.models.weekly_briefing import WeeklyBriefing
 
@@ -42,7 +42,9 @@ async def ai_category(db_session: AsyncSession) -> Category:
     return cat
 
 
-async def _article_id_of(db_session: AsyncSession, analysis: InScopeAssessment) -> int:
+async def _article_id_of(
+    db_session: AsyncSession, analysis: AnalyzedArticleRecord
+) -> int:
     """analysis から JSONB key_articles が参照する source article id を引く。"""
     result = await db_session.execute(
         select(ArticleCuration.analyzable_article_id).where(
@@ -131,8 +133,8 @@ class TestGetBriefing:
         seed_briefing_analysis,
     ) -> None:
         # decoy: assessment を持たない source article を先に 1 件入れて
-        # source article id と InScopeAssessment.id を意図的にずらす。テスト DB は毎回
-        # RESTART IDENTITY で両 id が一致してしまい、ずらさないと下の
+        # source article id と AnalyzedArticleRecord.id を意図的にずらす。
+        # テスト DB は毎回 RESTART IDENTITY で両 id が一致してしまい、ずらさないと下の
         # 「embed.id = 公開 id 空間」assert が判別力を持たない。
         db_session.add(
             AnalyzableArticleRecord(

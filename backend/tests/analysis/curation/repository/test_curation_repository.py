@@ -138,8 +138,8 @@ async def test_update_signal_idempotent_updates_parent_in_place(
 ) -> None:
     """parent ``ArticleCuration`` は同じ id のまま値だけ差し替わる。
 
-    parent を DELETE しないことで ``in_scope_assessments`` /
-    ``out_of_scope_assessments`` / ``article_embeddings`` / ``watchlist_entries``
+    parent を DELETE しないことで ``analyzed_articles`` /
+    ``out_of_scope_articles`` / ``article_embeddings`` / ``watchlist_entries``
     への CASCADE 連鎖が起きないことを構造的に保証する。
     """
     article = await _make_article(

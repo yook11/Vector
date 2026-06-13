@@ -3,8 +3,8 @@ from datetime import UTC, datetime, timedelta
 from sqlalchemy import Row, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.models.analyzed_article_record import AnalyzedArticleRecord
 from app.models.category import Category
-from app.models.in_scope_assessment import InScopeAssessment
 
 SIDEBAR_RECENT_WINDOW = timedelta(hours=24)
 
@@ -29,17 +29,17 @@ class CategoryRepository:
 
         (category_id, recent_count) の行を返す.
         24 時間以内の分類がないカテゴリは結果に含まれない（呼び出し側で 0 を補完する）.
-        複合インデックス ix_in_scope_assessments_category_id_analyzed_at が
+        複合インデックス ix_analyzed_articles_category_id_analyzed_at が
         左端 + range で効く.
         """
         cutoff = datetime.now(UTC) - SIDEBAR_RECENT_WINDOW
         stmt = (
             select(
-                InScopeAssessment.category_id,
-                func.count(InScopeAssessment.id).label("recent_count"),
+                AnalyzedArticleRecord.category_id,
+                func.count(AnalyzedArticleRecord.id).label("recent_count"),
             )
-            .where(InScopeAssessment.analyzed_at > cutoff)
-            .group_by(InScopeAssessment.category_id)
+            .where(AnalyzedArticleRecord.analyzed_at > cutoff)
+            .group_by(AnalyzedArticleRecord.category_id)
         )
         result = await self.session.execute(stmt)
         return list(result.all())
