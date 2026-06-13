@@ -13,7 +13,7 @@ from pydantic import BaseModel, ConfigDict, Field
 class EmbeddingTrigger(BaseModel):
     """Stage 5 起動 trigger — kiq message 用の軽量 ID キャリア。
 
-    precondition は保証せず ``analysis_id`` のみを運ぶ。下流 Stage 5 Task が
+    precondition は保証せず ``analyzed_article_id`` のみを運ぶ。下流 Stage 5 Task が
     ``ReadyForEmbedding.try_advance_from`` を呼んで処理開始時に最新の DB 状態から
     Ready を構築する (案 3 = 厚い Ready + 下流 Stage 自身が処理開始時に構築)。
 
@@ -25,4 +25,4 @@ class EmbeddingTrigger(BaseModel):
 
     model_config = ConfigDict(frozen=True)
 
-    analysis_id: int = Field(gt=0)
+    analyzed_article_id: int = Field(gt=0)

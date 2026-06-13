@@ -123,12 +123,12 @@ async def _build_analysis(
 
 def _make_ready(
     *,
-    analysis_id: int,
+    analyzed_article_id: int,
     article_id: int,
     text: str = "分析タイトル\n分析要約",
 ) -> ReadyForEmbedding:
     return ReadyForEmbedding(
-        analysis_id=analysis_id,
+        analyzed_article_id=analyzed_article_id,
         text_for_embedding=text,
         article_id=article_id,
     )
@@ -162,19 +162,19 @@ async def test_execute_persists_embedding_on_success(
     extraction = await _build_extraction(db_session, article)
     analysis = await _build_analysis(db_session, extraction, sample_categories[0].id)
     await db_session.commit()
-    analysis_id = analysis.id
+    analyzed_article_id = analysis.id
     article_id = article.id
 
     embedder = _mock_embedder()
     svc = EmbeddingService(session_factory)
-    ready = _make_ready(analysis_id=analysis_id, article_id=article_id)
+    ready = _make_ready(analyzed_article_id=analyzed_article_id, article_id=article_id)
     result = await svc.execute(ready, embedder)
 
     assert result is None
     embedder.embed_document.assert_called_once_with(ready)
 
     db_session.expire_all()
-    refetched = await db_session.get(AnalyzedArticleRecord, analysis_id)
+    refetched = await db_session.get(AnalyzedArticleRecord, analyzed_article_id)
     assert refetched is not None
     assert refetched.embedding is not None
 
@@ -213,7 +213,7 @@ async def test_execute_shortcircuits_when_already_persisted(
         embedding=preexisting_vector,
     )
     await db_session.commit()
-    analysis_id = analysis.id
+    analyzed_article_id = analysis.id
     article_id = article.id
 
     embedder = _mock_embedder(
@@ -222,13 +222,13 @@ async def test_execute_shortcircuits_when_already_persisted(
     svc = EmbeddingService(session_factory)
     # Ready 構築時には未 embedded だったが、その直後に他ワーカーが先に書き込んだ
     # 並行状況を再現するため Ready を直接構築して execute に渡す。
-    ready = _make_ready(analysis_id=analysis_id, article_id=article_id)
+    ready = _make_ready(analyzed_article_id=analyzed_article_id, article_id=article_id)
     result = await svc.execute(ready, embedder)
 
     assert result is None
     # 先行する write の値のまま、後続の save で上書きされていない
     db_session.expire_all()
-    refetched = await db_session.get(AnalyzedArticleRecord, analysis_id)
+    refetched = await db_session.get(AnalyzedArticleRecord, analyzed_article_id)
     assert refetched is not None
     raw = refetched.embedding
     values = raw.to_list() if hasattr(raw, "to_list") else list(raw)
@@ -265,7 +265,7 @@ async def test_execute_wraps_target_rejected_provider_error(
     extraction = await _build_extraction(db_session, article)
     analysis = await _build_analysis(db_session, extraction, sample_categories[0].id)
     await db_session.commit()
-    analysis_id = analysis.id
+    analyzed_article_id = analysis.id
     article_id = article.id
 
     original = AIProviderInputRejectedError(
@@ -273,7 +273,7 @@ async def test_execute_wraps_target_rejected_provider_error(
     )
     embedder = _mock_embedder(raises=original)
     svc = EmbeddingService(session_factory)
-    ready = _make_ready(analysis_id=analysis_id, article_id=article_id)
+    ready = _make_ready(analyzed_article_id=analyzed_article_id, article_id=article_id)
 
     with pytest.raises(EmbeddingTerminalError) as exc_info:
         await svc.execute(ready, embedder)
@@ -288,7 +288,7 @@ async def test_execute_wraps_target_rejected_provider_error(
     assert exc_info.value.__cause__ is original
 
     db_session.expire_all()
-    refetched = await db_session.get(AnalyzedArticleRecord, analysis_id)
+    refetched = await db_session.get(AnalyzedArticleRecord, analyzed_article_id)
     assert refetched is not None
     assert refetched.embedding is None
 
@@ -320,12 +320,12 @@ async def test_execute_wraps_recoverable_provider_errors(
     extraction = await _build_extraction(db_session, article)
     analysis = await _build_analysis(db_session, extraction, sample_categories[0].id)
     await db_session.commit()
-    analysis_id = analysis.id
+    analyzed_article_id = analysis.id
     article_id = article.id
 
     embedder = _mock_embedder(raises=provider_exc)
     svc = EmbeddingService(session_factory)
-    ready = _make_ready(analysis_id=analysis_id, article_id=article_id)
+    ready = _make_ready(analyzed_article_id=analyzed_article_id, article_id=article_id)
 
     with pytest.raises(EmbeddingRecoverableError) as exc_info:
         await svc.execute(ready, embedder)
@@ -355,14 +355,14 @@ async def test_execute_propagates_response_invalid_from_embedder(
     extraction = await _build_extraction(db_session, article)
     analysis = await _build_analysis(db_session, extraction, sample_categories[0].id)
     await db_session.commit()
-    analysis_id = analysis.id
+    analyzed_article_id = analysis.id
     article_id = article.id
 
     # embedder 境界が VO 構造違反を Layer 2-B に詰め替えた状態を直接 mock
     response_invalid = EmbeddingResponseInvalidError()
     embedder = _mock_embedder(raises=response_invalid)
     svc = EmbeddingService(session_factory)
-    ready = _make_ready(analysis_id=analysis_id, article_id=article_id)
+    ready = _make_ready(analyzed_article_id=analyzed_article_id, article_id=article_id)
 
     with pytest.raises(EmbeddingResponseInvalidError) as exc_info:
         await svc.execute(ready, embedder)
@@ -372,6 +372,6 @@ async def test_execute_propagates_response_invalid_from_embedder(
     assert exc_info.value.provider_error is None
 
     db_session.expire_all()
-    refetched = await db_session.get(AnalyzedArticleRecord, analysis_id)
+    refetched = await db_session.get(AnalyzedArticleRecord, analyzed_article_id)
     assert refetched is not None
     assert refetched.embedding is None

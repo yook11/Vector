@@ -123,11 +123,12 @@ class PipelineBacklog:
             )
             .outerjoin(
                 EmbeddingBackfillExclusion,
-                EmbeddingBackfillExclusion.analysis_id == AnalyzedArticleRecord.id,
+                EmbeddingBackfillExclusion.analyzed_article_id
+                == AnalyzedArticleRecord.id,
             )
             .where(
                 AnalyzedArticleRecord.embedding.is_(None),
-                EmbeddingBackfillExclusion.analysis_id.is_(None),
+                EmbeddingBackfillExclusion.analyzed_article_id.is_(None),
                 AnalyzableArticleRecord.created_at < created_before,
                 AnalyzableArticleRecord.created_at >= created_after,
             )
@@ -414,14 +415,14 @@ class PipelineBacklog:
         result = await self._session.execute(stmt)
         return list(result.scalars().all())
 
-    async def analysis_ids_pending_embedding(
+    async def analyzed_article_ids_pending_embedding(
         self,
         *,
         created_before: datetime,
         created_after: datetime,
         limit: int,
     ) -> list[int]:
-        """analysis はあるが embedding が NULL な Analysis ID を返す (Stage 5 残)."""
+        """embedding が NULL な AnalyzedArticleRecord ID を返す (Stage 5 残)."""
         stmt = (
             self._embedding_pending(
                 select(AnalyzedArticleRecord.id),
@@ -459,11 +460,12 @@ class PipelineBacklog:
             .outerjoin(NewsSource, NewsSource.id == AnalyzableArticleRecord.source_id)
             .outerjoin(
                 EmbeddingBackfillExclusion,
-                EmbeddingBackfillExclusion.analysis_id == AnalyzedArticleRecord.id,
+                EmbeddingBackfillExclusion.analyzed_article_id
+                == AnalyzedArticleRecord.id,
             )
             .where(
                 AnalyzedArticleRecord.embedding.is_(None),
-                EmbeddingBackfillExclusion.analysis_id.is_(None),
+                EmbeddingBackfillExclusion.analyzed_article_id.is_(None),
                 AnalyzableArticleRecord.created_at < created_before,
                 AnalyzableArticleRecord.created_at >= created_after,
             )
@@ -473,13 +475,13 @@ class PipelineBacklog:
         rows = (await self._session.execute(stmt)).tuples().all()
         return [_target_from_row(row) for row in rows]
 
-    async def count_analyses_pending_embedding(
+    async def count_analyzed_articles_pending_embedding(
         self,
         *,
         created_before: datetime,
         created_after: datetime,
     ) -> int:
-        """embedding NULL analysis の真の総数 (LIMIT なし COUNT)。観測専用。"""
+        """embedding NULL analyzed article の真の総数 (LIMIT なし COUNT)。"""
         stmt = self._embedding_pending(
             select(func.count(AnalyzedArticleRecord.id)),
             created_before=created_before,
@@ -488,15 +490,16 @@ class PipelineBacklog:
         result = await self._session.execute(stmt)
         return int(result.scalar_one())
 
-    async def analyses_pending_embedding_stats(
+    async def analyzed_articles_pending_embedding_stats(
         self,
         *,
         created_before: datetime,
         created_after: datetime,
     ) -> tuple[int, datetime | None]:
-        """embedding NULL analysis の stats を返す。
+        """embedding NULL analyzed article の stats を返す。
 
-        ``count_analyses_pending_embedding`` と同一述語を 1 クエリで COUNT + MIN する。
+        ``count_analyzed_articles_pending_embedding`` と同一述語を 1 クエリで
+        COUNT + MIN する。
         対象なしは ``(0, None)``。
         """
         stmt = self._embedding_pending(
@@ -510,13 +513,13 @@ class PipelineBacklog:
         row = (await self._session.execute(stmt)).one()
         return int(row[0]), row[1]
 
-    async def analysis_ids_aged_out_embedding(
+    async def analyzed_article_ids_aged_out_embedding(
         self,
         *,
         created_before: datetime,
         limit: int,
     ) -> list[int]:
-        """通常窓から落ちた embedding NULL Analysis ID を返す。"""
+        """通常窓から落ちた embedding NULL AnalyzedArticleRecord ID を返す。"""
         stmt = (
             select(AnalyzedArticleRecord.id)
             .join(
@@ -529,11 +532,12 @@ class PipelineBacklog:
             )
             .outerjoin(
                 EmbeddingBackfillExclusion,
-                EmbeddingBackfillExclusion.analysis_id == AnalyzedArticleRecord.id,
+                EmbeddingBackfillExclusion.analyzed_article_id
+                == AnalyzedArticleRecord.id,
             )
             .where(
                 AnalyzedArticleRecord.embedding.is_(None),
-                EmbeddingBackfillExclusion.analysis_id.is_(None),
+                EmbeddingBackfillExclusion.analyzed_article_id.is_(None),
                 AnalyzableArticleRecord.created_at < created_before,
             )
             .order_by(AnalyzableArticleRecord.created_at.asc())

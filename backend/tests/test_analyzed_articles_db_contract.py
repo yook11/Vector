@@ -1,9 +1,9 @@
 """Stage 4 article persistence DB naming contract.
 
-This file intentionally fixes the PR1 database boundary:
+This file intentionally fixes the PR2 database boundary:
 ``analyzed_articles`` / ``out_of_scope_articles`` are the durable table names,
-while PR2-only internal key cleanup keeps existing column names such as
-``article_analysis_id`` and ``analysis_id`` for now.
+and foreign keys into ``analyzed_articles.id`` use the explicit
+``analyzed_article_id`` column/attribute name.
 """
 
 from __future__ import annotations
@@ -91,16 +91,30 @@ def test_out_of_scope_articles_table_contract() -> None:
     }.issubset(_constraint_names("out_of_scope_articles"))
 
 
-def test_pr1_fk_targets_reference_analyzed_articles_without_pr2_column_rename() -> None:
-    assert "article_analysis_id" in WatchlistEntry.__table__.c
-    assert "analyzed_article_id" not in WatchlistEntry.__table__.c
-    assert _fk_targets("watchlist_entries", "article_analysis_id") == {
+def test_analyzed_article_fk_columns_use_explicit_id_name() -> None:
+    watchlist_columns = set(WatchlistEntry.__table__.c.keys())
+    watchlist_attrs = set(WatchlistEntry.__mapper__.attrs.keys())
+
+    assert "analyzed_article_id" in watchlist_columns
+    assert "analyzed_article_id" in watchlist_attrs
+    assert "analysis_id" not in watchlist_columns
+    assert "analysis_id" not in watchlist_attrs
+    assert "article_analysis_id" not in watchlist_columns
+    assert "assessment_id" not in watchlist_columns
+    assert _fk_targets("watchlist_entries", "analyzed_article_id") == {
         "analyzed_articles.id"
     }
 
-    assert "analysis_id" in EmbeddingBackfillExclusion.__table__.c
-    assert "analyzed_article_id" not in EmbeddingBackfillExclusion.__table__.c
-    assert _fk_targets("embedding_backfill_exclusions", "analysis_id") == {
+    exclusion_columns = set(EmbeddingBackfillExclusion.__table__.c.keys())
+    exclusion_attrs = set(EmbeddingBackfillExclusion.__mapper__.attrs.keys())
+
+    assert "analyzed_article_id" in exclusion_columns
+    assert "analyzed_article_id" in exclusion_attrs
+    assert "analysis_id" not in exclusion_columns
+    assert "analysis_id" not in exclusion_attrs
+    assert "article_analysis_id" not in exclusion_columns
+    assert "assessment_id" not in exclusion_columns
+    assert _fk_targets("embedding_backfill_exclusions", "analyzed_article_id") == {
         "analyzed_articles.id"
     }
 

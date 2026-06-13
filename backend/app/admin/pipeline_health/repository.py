@@ -76,7 +76,9 @@ class PipelineHealthRepository:
             Stage.ASSESSMENT: await self._backlog.curations_pending_assessment_stats(
                 created_before=created_before, created_after=created_after
             ),
-            Stage.EMBEDDING: await self._backlog.analyses_pending_embedding_stats(
-                created_before=created_before, created_after=created_after
+            Stage.EMBEDDING: (
+                await self._backlog.analyzed_articles_pending_embedding_stats(
+                    created_before=created_before, created_after=created_after
+                )
             ),
         }

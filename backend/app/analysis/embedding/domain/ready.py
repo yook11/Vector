@@ -20,7 +20,7 @@ __all__ = [
 class EmbeddingReadyBuildBlockedCode(StrEnum):
     """Stage 5 Ready 構築 blocked の監査 outcome_code。"""
 
-    ANALYSIS_MISSING = "embedding_ready_build_blocked_analysis_missing"
+    ANALYZED_ARTICLE_MISSING = "embedding_ready_build_blocked_analyzed_article_missing"
     ALREADY_EMBEDDED = "embedding_ready_build_blocked_already_embedded"
 
 
@@ -49,7 +49,7 @@ class EmbeddingPreconditionProtocol(Protocol):
     """
 
     async def load_ready_build_facts(
-        self, analysis_id: int
+        self, analyzed_article_id: int
     ) -> EmbeddingReadyBuildFacts | None: ...
 
 
@@ -58,21 +58,21 @@ class ReadyForEmbedding(BaseModel):
 
     model_config = ConfigDict(frozen=True)
 
-    analysis_id: int = Field(gt=0)
+    analyzed_article_id: int = Field(gt=0)
     text_for_embedding: str = Field(min_length=1)
     article_id: int = Field(gt=0)
 
     @classmethod
     async def try_advance_from(
         cls,
-        analysis_id: int,
+        analyzed_article_id: int,
         embedding_repo: EmbeddingPreconditionProtocol,
     ) -> ReadyForEmbedding:
         """DB 事実から Ready を構築し、対象外なら blocked 例外を投げる。"""
-        facts = await embedding_repo.load_ready_build_facts(analysis_id)
+        facts = await embedding_repo.load_ready_build_facts(analyzed_article_id)
         if facts is None:
             raise EmbeddingReadyBuildBlockedError(
-                EmbeddingReadyBuildBlockedCode.ANALYSIS_MISSING
+                EmbeddingReadyBuildBlockedCode.ANALYZED_ARTICLE_MISSING
             )
 
         if facts.has_embedding:
@@ -81,7 +81,7 @@ class ReadyForEmbedding(BaseModel):
             )
 
         return cls(
-            analysis_id=analysis_id,
+            analyzed_article_id=analyzed_article_id,
             text_for_embedding=f"{facts.translated_title}\n{facts.summary}",
             article_id=facts.article_id,
         )

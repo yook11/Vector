@@ -16,7 +16,9 @@ from tests.fakes.stub_embedder import StubEmbedder
 
 
 def _ready(text: str) -> ReadyForEmbedding:
-    return ReadyForEmbedding(analysis_id=1, text_for_embedding=text, article_id=1)
+    return ReadyForEmbedding(
+        analyzed_article_id=1, text_for_embedding=text, article_id=1
+    )
 
 
 @pytest.mark.asyncio

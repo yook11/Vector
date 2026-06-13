@@ -152,7 +152,7 @@ class TestAssessContent:
 
     @pytest.mark.asyncio
     async def test_in_scope_chains_embedding_with_trigger(self) -> None:
-        """in-scope 成功 (assessment_id 返却) → EmbeddingTrigger で chain。
+        """in-scope 成功 (analyzed_article_id 返却) → EmbeddingTrigger で chain。
 
         assessment task は embedding 用 Ready を構築せず、ID だけを運ぶ
         EmbeddingTrigger を kiq に enqueue する。
@@ -176,7 +176,9 @@ class TestAssessContent:
         # 構築された Ready が Service に渡されていること
         call_args = mock_svc_cls.return_value.execute.call_args
         assert call_args[0][0] is ready
-        mock_embed.kiq.assert_awaited_once_with(EmbeddingTrigger(analysis_id=100))
+        mock_embed.kiq.assert_awaited_once_with(
+            EmbeddingTrigger(analyzed_article_id=100)
+        )
 
     @pytest.mark.asyncio
     async def test_none_result_does_not_chain(self) -> None:

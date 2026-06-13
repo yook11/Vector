@@ -350,18 +350,18 @@ async def _exclude_aged_out_embeddings(
     *,
     created_before: datetime,
 ) -> int:
-    """通常窓から落ちた embedding NULL analysis を backfill 対象外にする。"""
+    """通常窓から落ちた embedding NULL analyzed article を対象外にする。"""
     from app.audit.stages.embedding import EmbeddingAuditRepository
 
     async with session_factory() as session:
         backlog = PipelineBacklog(session)
-        ids = await backlog.analysis_ids_aged_out_embedding(
+        ids = await backlog.analyzed_article_ids_aged_out_embedding(
             created_before=created_before,
             limit=EMBEDDINGS_LIMIT,
         )
 
     excluded = 0
-    for analysis_id in ids:
+    for analyzed_article_id in ids:
         async with session_factory() as session:
             stmt = (
                 select(ArticleCuration.analyzable_article_id)
@@ -372,12 +372,13 @@ async def _exclude_aged_out_embeddings(
                 )
                 .outerjoin(
                     EmbeddingBackfillExclusion,
-                    EmbeddingBackfillExclusion.analysis_id == AnalyzedArticleRecord.id,
+                    EmbeddingBackfillExclusion.analyzed_article_id
+                    == AnalyzedArticleRecord.id,
                 )
                 .where(
-                    AnalyzedArticleRecord.id == analysis_id,
+                    AnalyzedArticleRecord.id == analyzed_article_id,
                     AnalyzedArticleRecord.embedding.is_(None),
-                    EmbeddingBackfillExclusion.analysis_id.is_(None),
+                    EmbeddingBackfillExclusion.analyzed_article_id.is_(None),
                 )
                 .limit(1)
             )
@@ -387,7 +388,7 @@ async def _exclude_aged_out_embeddings(
 
             session.add(
                 EmbeddingBackfillExclusion(
-                    analysis_id=analysis_id,
+                    analyzed_article_id=analyzed_article_id,
                     reason_code=BackfillExclusionReason.EMBEDDING_AGED_OUT.value,
                 )
             )
@@ -395,7 +396,7 @@ async def _exclude_aged_out_embeddings(
                 await EmbeddingAuditRepository(
                     session
                 ).append_backfill_embedding_aged_out(
-                    analysis_id=analysis_id,
+                    analyzed_article_id=analyzed_article_id,
                     article_id=article_id,
                 )
                 await session.commit()
@@ -791,7 +792,7 @@ async def backfill_embeddings(ctx: Context = TaskiqDepends()) -> None:
 
         async with session_factory() as session:
             backlog = PipelineBacklog(session)
-            backlog_count = await backlog.count_analyses_pending_embedding(
+            backlog_count = await backlog.count_analyzed_articles_pending_embedding(
                 created_before=before,
                 created_after=after,
             )
@@ -838,7 +839,7 @@ async def backfill_embeddings(ctx: Context = TaskiqDepends()) -> None:
         for target in targets[:granted]:
             try:
                 await generate_embedding.kiq(
-                    EmbeddingTrigger(analysis_id=target.target_id),
+                    EmbeddingTrigger(analyzed_article_id=target.target_id),
                 )
             except Exception as exc:  # noqa: BLE001
                 failed += 1
@@ -847,7 +848,7 @@ async def backfill_embeddings(ctx: Context = TaskiqDepends()) -> None:
                     stage=Stage.BACKFILL_EMBED,
                     backfill_stage="embed",
                     run_id=run_id,
-                    target_kind="analysis",
+                    target_kind="analyzed_article",
                     target=target,
                     event_type=EventType.FAILED,
                     outcome_code=BackfillOutcomeCode.ITEM_ENQUEUE_FAILED,
@@ -855,7 +856,7 @@ async def backfill_embeddings(ctx: Context = TaskiqDepends()) -> None:
                 )
                 logger.warning(
                     "backfill_embeddings_kiq_failed",
-                    analysis_id=target.target_id,
+                    analyzed_article_id=target.target_id,
                     error=str(exc),
                 )
                 continue
@@ -866,7 +867,7 @@ async def backfill_embeddings(ctx: Context = TaskiqDepends()) -> None:
                 stage=Stage.BACKFILL_EMBED,
                 backfill_stage="embed",
                 run_id=run_id,
-                target_kind="analysis",
+                target_kind="analyzed_article",
                 target=target,
                 event_type=EventType.SUCCEEDED,
                 outcome_code=BackfillOutcomeCode.ITEM_ENQUEUED,

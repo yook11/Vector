@@ -58,13 +58,13 @@ def _make_ctx(
     return ctx
 
 
-def _make_trigger(analysis_id: int = 1) -> EmbeddingTrigger:
-    return EmbeddingTrigger(analysis_id=analysis_id)
+def _make_trigger(analyzed_article_id: int = 1) -> EmbeddingTrigger:
+    return EmbeddingTrigger(analyzed_article_id=analyzed_article_id)
 
 
-def _make_ready(analysis_id: int = 1, article_id: int = 7) -> ReadyForEmbedding:
+def _make_ready(analyzed_article_id: int = 1, article_id: int = 7) -> ReadyForEmbedding:
     return ReadyForEmbedding(
-        analysis_id=analysis_id,
+        analyzed_article_id=analyzed_article_id,
         text_for_embedding="分析タイトル\n分析要約",
         article_id=article_id,
     )
@@ -91,8 +91,8 @@ class TestGenerateEmbedding:
         from app.queue.tasks.embedding import generate_embedding
 
         mock_ctx = _make_ctx(embedder=_make_embedder_fake())
-        trigger = _make_trigger(analysis_id=1)
-        ready = _make_ready(analysis_id=1)
+        trigger = _make_trigger(analyzed_article_id=1)
+        ready = _make_ready(analyzed_article_id=1)
 
         with (
             _patch_ready_construction(ready),
@@ -120,9 +120,9 @@ class TestGenerateEmbedding:
 
         gate = _make_gate_fake()
         mock_ctx = _make_ctx(embedder=_make_embedder_fake(), gate=gate)
-        trigger = _make_trigger(analysis_id=42)
+        trigger = _make_trigger(analyzed_article_id=42)
         exc = EmbeddingReadyBuildBlockedError(
-            EmbeddingReadyBuildBlockedCode.ANALYSIS_MISSING
+            EmbeddingReadyBuildBlockedCode.ANALYZED_ARTICLE_MISSING
         )
 
         with (
@@ -134,7 +134,7 @@ class TestGenerateEmbedding:
             await generate_embedding(trigger=trigger, ctx=mock_ctx)
 
         mock_audit.return_value.append_ready_build_blocked.assert_awaited_once_with(
-            analysis_id=42,
+            analyzed_article_id=42,
             exc=exc,
         )
         # rate limit acquire は試みず、Service も呼ばない
@@ -148,7 +148,7 @@ class TestGenerateEmbedding:
 
         gate = _make_gate_fake()
         mock_ctx = _make_ctx(embedder=_make_embedder_fake(), gate=gate)
-        trigger = _make_trigger(analysis_id=42)
+        trigger = _make_trigger(analyzed_article_id=42)
         exc = RuntimeError("ready build exploded")
 
         with (
@@ -167,7 +167,7 @@ class TestGenerateEmbedding:
 
         audit_failed.assert_awaited_once_with(
             mock_ctx.state.session_factory,
-            analysis_id=42,
+            analyzed_article_id=42,
             exc=exc,
         )
         gate.acquire.assert_not_called()
@@ -180,8 +180,8 @@ class TestGenerateEmbedding:
 
         gate = _make_gate_fake(acquired=False)
         mock_ctx = _make_ctx(embedder=_make_embedder_fake(), gate=gate)
-        trigger = _make_trigger(analysis_id=1)
-        ready = _make_ready(analysis_id=1)
+        trigger = _make_trigger(analyzed_article_id=1)
+        ready = _make_ready(analyzed_article_id=1)
 
         with (
             _patch_ready_construction(ready),
@@ -202,7 +202,7 @@ class TestGenerateEmbedding:
             e for e in cap if e.get("event") == "embedding_ai_rate_limit_gate_skipped"
         ]
         assert skips, "gate skip log が emit されていない"
-        assert skips[-1]["analysis_id"] == 1
+        assert skips[-1]["analyzed_article_id"] == 1
         assert skips[-1]["article_id"] == 7
         assert skips[-1]["embedding_model"] == "gemini-embedding-001"
 
@@ -224,11 +224,15 @@ class TestGenerateEmbeddingStageSpan:
 
         mock_ctx = _make_ctx(embedder=_make_embedder_fake())
         with (
-            _patch_ready_construction(_make_ready(analysis_id=1)),  # article_id=7
+            _patch_ready_construction(
+                _make_ready(analyzed_article_id=1)
+            ),  # article_id=7
             patch("app.queue.tasks.embedding.EmbeddingService") as mock_svc_cls,
         ):
             mock_svc_cls.return_value.execute = AsyncMock(return_value=None)
-            await generate_embedding(trigger=_make_trigger(analysis_id=1), ctx=mock_ctx)
+            await generate_embedding(
+                trigger=_make_trigger(analyzed_article_id=1), ctx=mock_ctx
+            )
 
         attrs = stage_attrs(capfire)
         assert attrs["article_id"] == 7
@@ -246,7 +250,7 @@ class TestGenerateEmbeddingStageSpan:
 
         mock_ctx = _make_ctx(embedder=_make_embedder_fake())
         exc = EmbeddingReadyBuildBlockedError(
-            EmbeddingReadyBuildBlockedCode.ANALYSIS_MISSING
+            EmbeddingReadyBuildBlockedCode.ANALYZED_ARTICLE_MISSING
         )
         with (
             _patch_ready_construction(exc),
@@ -255,7 +259,7 @@ class TestGenerateEmbeddingStageSpan:
         ):
             mock_audit.return_value.append_ready_build_blocked = AsyncMock()
             await generate_embedding(
-                trigger=_make_trigger(analysis_id=42), ctx=mock_ctx
+                trigger=_make_trigger(analyzed_article_id=42), ctx=mock_ctx
             )
 
         attrs = stage_attrs(capfire)
@@ -283,7 +287,7 @@ class TestGenerateEmbeddingStageSpan:
         ):
             with pytest.raises(RuntimeError):
                 await generate_embedding(
-                    trigger=_make_trigger(analysis_id=42), ctx=mock_ctx
+                    trigger=_make_trigger(analyzed_article_id=42), ctx=mock_ctx
                 )
 
         assert stage_attrs(capfire)["result"] == "failed"
@@ -296,10 +300,12 @@ class TestGenerateEmbeddingStageSpan:
         gate = _make_gate_fake(acquired=False)
         mock_ctx = _make_ctx(embedder=_make_embedder_fake(), gate=gate)
         with (
-            _patch_ready_construction(_make_ready(analysis_id=1)),
+            _patch_ready_construction(_make_ready(analyzed_article_id=1)),
             patch("app.queue.tasks.embedding.EmbeddingService"),
             patch("app.queue.tasks.embedding.record_rate_limit_gate_skipped"),
         ):
-            await generate_embedding(trigger=_make_trigger(analysis_id=1), ctx=mock_ctx)
+            await generate_embedding(
+                trigger=_make_trigger(analyzed_article_id=1), ctx=mock_ctx
+            )
 
         assert stage_attrs(capfire)["result"] == "rate_limited"

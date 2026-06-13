@@ -17,8 +17,8 @@ class TestFormatArticles:
             ArticleInput(id=20, title_ja="タイトルB", summary_ja="要約B"),
         ]
         result = DeepSeekBriefingGenerator._format_articles(articles)
-        assert "[10]\nタイトル: タイトルA\n要約: 要約A" in result
-        assert "[20]\nタイトル: タイトルB\n要約: 要約B" in result
+        assert "analyzed_article_id: 10\nタイトル: タイトルA\n要約: 要約A" in result
+        assert "analyzed_article_id: 20\nタイトル: タイトルB\n要約: 要約B" in result
         assert result.count("\n\n") == 1  # 区切りは 2 件で 1 つ
 
     def test_sanitizes_untrusted_block_close(self) -> None:

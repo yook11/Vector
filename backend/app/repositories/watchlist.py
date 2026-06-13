@@ -29,7 +29,7 @@ class WatchlistRepository:
             .join(ArticleCuration.analyzable_article)
             .join(
                 WatchlistEntry,
-                WatchlistEntry.article_analysis_id == AnalyzedArticleRecord.id,
+                WatchlistEntry.analyzed_article_id == AnalyzedArticleRecord.id,
             )
             .where(WatchlistEntry.user_id == user_id)
         )
@@ -49,9 +49,9 @@ class WatchlistRepository:
         return analyses, total
 
     async def list_ids(self, user_id: UUID) -> list[int]:
-        """ユーザーがウォッチ中の article_analysis_id を新しい順に返す."""
+        """ユーザーがウォッチ中の analyzed_article_id を新しい順に返す."""
         stmt = (
-            select(WatchlistEntry.article_analysis_id)
+            select(WatchlistEntry.analyzed_article_id)
             .where(WatchlistEntry.user_id == user_id)
             .order_by(WatchlistEntry.created_at.desc())
         )
@@ -63,7 +63,7 @@ class WatchlistRepository:
         stmt = select(
             exists().where(
                 WatchlistEntry.user_id == user_id,
-                WatchlistEntry.article_analysis_id == article_id,
+                WatchlistEntry.analyzed_article_id == article_id,
             )
         )
         result = await self.session.execute(stmt)
@@ -71,7 +71,7 @@ class WatchlistRepository:
 
     async def watch(self, user_id: UUID, article_id: int) -> None:
         """ユーザーのウォッチリストに記事を追加する."""
-        entry = WatchlistEntry(user_id=user_id, article_analysis_id=article_id)
+        entry = WatchlistEntry(user_id=user_id, analyzed_article_id=article_id)
         self.session.add(entry)
 
     async def unwatch(self, user_id: UUID, article_id: int) -> None:
@@ -81,6 +81,6 @@ class WatchlistRepository:
         """
         stmt = delete(WatchlistEntry).where(
             WatchlistEntry.user_id == user_id,
-            WatchlistEntry.article_analysis_id == article_id,
+            WatchlistEntry.analyzed_article_id == article_id,
         )
         await self.session.execute(stmt)

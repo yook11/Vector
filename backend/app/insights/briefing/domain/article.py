@@ -1,6 +1,6 @@
 """LLM 入力用の記事 VO。
 
-Stage 1 抽出済の (article_id, title_ja, summary_ja) のみを LLM に渡す。
+Stage 1 抽出済の (analyzed_article_id, title_ja, summary_ja) のみを LLM に渡す。
 原文 / category / topic / entity_list 等は briefing prompt の品質に貢献せず、
 コストとプロンプトインジェクション面での攻撃面を増やすだけなので渡さない
 (`project_phase1b_briefing_design.md`)。
@@ -15,7 +15,7 @@ class ArticleInput(BaseModel):
     """LLM への記事入力 1 件。
 
     ``id`` は公開 /news id 空間 (``AnalyzedArticleRecord.id``)。LLM が返す
-    ``key_articles[].article_id`` もこの空間になる。
+    ``key_articles[].analyzed_article_id`` もこの空間になる。
     """
 
     model_config = ConfigDict(frozen=True)

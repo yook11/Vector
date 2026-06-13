@@ -37,7 +37,9 @@ def _v(value: float = 0.1) -> list[float]:
 
 def _ready(text: str = "hello") -> ReadyForEmbedding:
     """テスト用 ReadyForEmbedding を生成する。"""
-    return ReadyForEmbedding(analysis_id=1, text_for_embedding=text, article_id=1)
+    return ReadyForEmbedding(
+        analyzed_article_id=1, text_for_embedding=text, article_id=1
+    )
 
 
 class _InvalidInputSDKError(Exception):

@@ -47,26 +47,29 @@ class TestTryAdvanceFrom:
         repo = _repo_mock()
 
         ready = await ReadyForEmbedding.try_advance_from(
-            analysis_id=100, embedding_repo=repo
+            analyzed_article_id=100, embedding_repo=repo
         )
 
         assert ready == ReadyForEmbedding(
-            analysis_id=100,
+            analyzed_article_id=100,
             text_for_embedding="分析タイトル\n分析要約",
             article_id=42,
         )
         repo.load_ready_build_facts.assert_awaited_once_with(100)
 
     @pytest.mark.asyncio
-    async def test_raises_blocked_when_analysis_missing(self) -> None:
+    async def test_raises_blocked_when_analyzed_article_missing(self) -> None:
         repo = _repo_mock(missing=True)
 
         with pytest.raises(EmbeddingReadyBuildBlockedError) as exc_info:
             await ReadyForEmbedding.try_advance_from(
-                analysis_id=100, embedding_repo=repo
+                analyzed_article_id=100, embedding_repo=repo
             )
 
-        assert exc_info.value.code is EmbeddingReadyBuildBlockedCode.ANALYSIS_MISSING
+        assert (
+            exc_info.value.code
+            is EmbeddingReadyBuildBlockedCode.ANALYZED_ARTICLE_MISSING
+        )
         repo.load_ready_build_facts.assert_awaited_once_with(100)
 
     @pytest.mark.asyncio
@@ -75,45 +78,72 @@ class TestTryAdvanceFrom:
 
         with pytest.raises(EmbeddingReadyBuildBlockedError) as exc_info:
             await ReadyForEmbedding.try_advance_from(
-                analysis_id=100, embedding_repo=repo
+                analyzed_article_id=100, embedding_repo=repo
             )
 
         assert exc_info.value.code is EmbeddingReadyBuildBlockedCode.ALREADY_EMBEDDED
         repo.load_ready_build_facts.assert_awaited_once_with(100)
 
+    @pytest.mark.asyncio
+    async def test_rejects_legacy_analysis_id_keyword(self) -> None:
+        repo = _repo_mock()
+
+        with pytest.raises(TypeError):
+            await ReadyForEmbedding.try_advance_from(
+                analysis_id=100, embedding_repo=repo
+            )
+
 
 class TestReadyForEmbeddingFieldConstraints:
-    def test_rejects_non_positive_analysis_id(self) -> None:
+    def test_rejects_non_positive_analyzed_article_id(self) -> None:
         with pytest.raises(ValidationError):
-            ReadyForEmbedding(analysis_id=0, text_for_embedding="t", article_id=1)
+            ReadyForEmbedding(
+                analyzed_article_id=0, text_for_embedding="t", article_id=1
+            )
         with pytest.raises(ValidationError):
-            ReadyForEmbedding(analysis_id=-1, text_for_embedding="t", article_id=1)
+            ReadyForEmbedding(
+                analyzed_article_id=-1, text_for_embedding="t", article_id=1
+            )
 
     def test_rejects_empty_text(self) -> None:
         with pytest.raises(ValidationError):
-            ReadyForEmbedding(analysis_id=1, text_for_embedding="", article_id=1)
+            ReadyForEmbedding(
+                analyzed_article_id=1, text_for_embedding="", article_id=1
+            )
 
     def test_rejects_non_positive_article_id(self) -> None:
         with pytest.raises(ValidationError):
-            ReadyForEmbedding(analysis_id=1, text_for_embedding="t", article_id=0)
+            ReadyForEmbedding(
+                analyzed_article_id=1, text_for_embedding="t", article_id=0
+            )
         with pytest.raises(ValidationError):
-            ReadyForEmbedding(analysis_id=1, text_for_embedding="t", article_id=-1)
+            ReadyForEmbedding(
+                analyzed_article_id=1, text_for_embedding="t", article_id=-1
+            )
+
+    def test_rejects_legacy_analysis_id_alias(self) -> None:
+        with pytest.raises(ValidationError):
+            ReadyForEmbedding(analysis_id=1, text_for_embedding="t", article_id=1)
 
     def test_is_frozen(self) -> None:
         ready = ReadyForEmbedding(
-            analysis_id=1, text_for_embedding="t\ns", article_id=1
+            analyzed_article_id=1, text_for_embedding="t\ns", article_id=1
         )
         with pytest.raises(ValidationError):
-            ready.analysis_id = 999  # type: ignore[misc]
+            ready.analyzed_article_id = 999  # type: ignore[misc]
 
 
 class TestEmbeddingTrigger:
-    def test_carries_analysis_id_only(self) -> None:
-        trigger = EmbeddingTrigger(analysis_id=42)
-        assert trigger.analysis_id == 42
+    def test_carries_analyzed_article_id_only(self) -> None:
+        trigger = EmbeddingTrigger(analyzed_article_id=42)
+        assert trigger.model_dump() == {"analyzed_article_id": 42}
 
-    def test_rejects_non_positive_analysis_id(self) -> None:
+    def test_rejects_legacy_analysis_id_alias(self) -> None:
         with pytest.raises(ValidationError):
-            EmbeddingTrigger(analysis_id=0)
+            EmbeddingTrigger(analysis_id=42)
+
+    def test_rejects_non_positive_analyzed_article_id(self) -> None:
         with pytest.raises(ValidationError):
-            EmbeddingTrigger(analysis_id=-1)
+            EmbeddingTrigger(analyzed_article_id=0)
+        with pytest.raises(ValidationError):
+            EmbeddingTrigger(analyzed_article_id=-1)

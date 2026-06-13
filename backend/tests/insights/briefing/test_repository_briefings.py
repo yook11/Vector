@@ -28,7 +28,7 @@ def _content(
         headline=headline,
         summary=summary,
         chapters=chapters or [BriefingChapter(heading="資金とインフラ", body="章本文")],
-        key_articles=[KeyArticle(article_id=1, significance="なぜ重要か")],
+        key_articles=[KeyArticle(analyzed_article_id=1, significance="なぜ重要か")],
         watch_points=[WatchPoint(statement="今後どこを見るべきか")],
     )
 
@@ -68,9 +68,9 @@ class TestSave:
         """save が WeeklyBriefingContent の全フィールドを ORM 行へ写像する。
 
         VO→行の写像は repository 内部の責務 (service が手組みしない)。
-        key_articles の永続形は {assessment_id, significance} (新形)。
-        domain 語彙 article_id (LLM 契約) は repository 境界で assessment_id へ
-        改名し、値は公開 /news id 空間 (AnalyzedArticleRecord.id) のまま保持する。
+        key_articles の永続形は {analyzed_article_id, significance}。
+        domain/LLM 語彙 analyzed_article_id を repository 境界でも保持し、
+        値は公開 /news id 空間 (AnalyzedArticleRecord.id) のまま保持する。
         """
         content = _content(headline="mapped", summary="マップ確認")
         repo = BriefingRepository(db_session)
@@ -80,10 +80,13 @@ class TestSave:
         assert saved.headline == content.headline
         assert saved.summary == content.summary
         assert saved.chapters == [c.model_dump() for c in content.chapters]
-        # key_articles は repository が domain 語彙 article_id を assessment_id へ
-        # 写像して永続化する (旧形 {article_id} とはキー名で判別できる)。
+        # key_articles は repository が domain 語彙 analyzed_article_id を
+        # そのまま永続化する (旧形 {analyzed_article_id} とはキー名で判別できる)。
         assert saved.key_articles == [
-            {"assessment_id": a.article_id, "significance": a.significance}
+            {
+                "analyzed_article_id": a.analyzed_article_id,
+                "significance": a.significance,
+            }
             for a in content.key_articles
         ]
         assert saved.watch_points == [w.model_dump() for w in content.watch_points]

@@ -538,16 +538,16 @@ async def test_exclude_aged_out_embeddings_keeps_assessment_and_audits(
         sample_categories[0],
     )
     article_id = article.id
-    analysis_id = analysis.id
+    analyzed_article_id = analysis.id
 
     excluded = await tasks._exclude_aged_out_embeddings(
         session_factory, created_before=now - timedelta(days=7)
     )
 
     db_session.expire_all()
-    assert await db_session.get(AnalyzedArticleRecord, analysis_id) is not None
+    assert await db_session.get(AnalyzedArticleRecord, analyzed_article_id) is not None
 
-    exclusion = await db_session.get(EmbeddingBackfillExclusion, analysis_id)
+    exclusion = await db_session.get(EmbeddingBackfillExclusion, analyzed_article_id)
     assert exclusion is not None
     assert exclusion.reason_code == BackfillExclusionReason.EMBEDDING_AGED_OUT.value
 
@@ -567,7 +567,7 @@ async def test_exclude_aged_out_embeddings_keeps_assessment_and_audits(
     assert ev.retryability is None
     assert ev.article_id == article_id
     assert ev.payload["kind"] == "embedding"
-    assert ev.payload["analysis_id"] == analysis_id
+    assert ev.payload["analyzed_article_id"] == analyzed_article_id
     assert excluded == 1
 
 

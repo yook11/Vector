@@ -155,11 +155,11 @@ class BriefingRepository:
             "headline": content.headline,
             "summary": content.summary,
             "chapters": [c.model_dump() for c in content.chapters],
-            # domain 語彙 article_id (LLM 契約) → 永続キー assessment_id の改名境界。
-            # 値は公開 /news id 空間 (AnalyzedArticleRecord.id)。旧形 {article_id} 行
-            # (AnalyzableArticleRecord.id 空間) とはキー名で構造的に判別する。
             "key_articles": [
-                {"assessment_id": a.article_id, "significance": a.significance}
+                {
+                    "analyzed_article_id": a.analyzed_article_id,
+                    "significance": a.significance,
+                }
                 for a in content.key_articles
             ],
             "watch_points": [w.model_dump() for w in content.watch_points],

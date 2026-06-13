@@ -61,9 +61,11 @@ async def _make_article(
     return article
 
 
-def _ready_for(article_id: int, *, analysis_id: int = 1234) -> ReadyForEmbedding:
+def _ready_for(
+    article_id: int, *, analyzed_article_id: int = 1234
+) -> ReadyForEmbedding:
     return ReadyForEmbedding(
-        analysis_id=analysis_id,
+        analyzed_article_id=analyzed_article_id,
         text_for_embedding="分析タイトル\n分析要約",
         article_id=article_id,
     )
@@ -286,7 +288,7 @@ async def test_audit_failure_falls_back_to_log_with_secrets_redacted(
     drops = [e for e in cap if e.get("event") == "embedding_failure_audit_dropped"]
     assert drops, "fallback ログが emit されていない"
     drop = drops[-1]
-    assert drop["analysis_id"] == ready.analysis_id
+    assert drop["analyzed_article_id"] == ready.analyzed_article_id
     assert drop["business_error_class"].endswith(".EmbeddingTerminalError")
     assert drop["audit_error_class"].endswith(".RuntimeError")
     # business 側は code 固定値のみなので secret は入らない。

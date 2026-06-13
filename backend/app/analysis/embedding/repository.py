@@ -18,7 +18,7 @@ class EmbeddingRepository:
         self._session = session
 
     async def load_ready_build_facts(
-        self, analysis_id: int
+        self, analyzed_article_id: int
     ) -> EmbeddingReadyBuildFacts | None:
         stmt = (
             select(
@@ -32,7 +32,7 @@ class EmbeddingRepository:
                 ArticleCuration,
                 ArticleCuration.id == AnalyzedArticleRecord.curation_id,
             )
-            .where(AnalyzedArticleRecord.id == analysis_id)
+            .where(AnalyzedArticleRecord.id == analyzed_article_id)
             .limit(1)
         )
         row = (await self._session.execute(stmt)).first()
@@ -50,13 +50,13 @@ class EmbeddingRepository:
         self,
         vector: EmbeddingVector,
         *,
-        analysis_id: int,
+        analyzed_article_id: int,
     ) -> bool:
-        """未 embedded の analysis にだけ vector を保存する。"""
+        """未 embedded の analyzed article にだけ vector を保存する。"""
         stmt = (
             update(AnalyzedArticleRecord)
             .where(
-                AnalyzedArticleRecord.id == analysis_id,
+                AnalyzedArticleRecord.id == analyzed_article_id,
                 AnalyzedArticleRecord.embedding.is_(None),
             )
             .values(embedding=vector.to_list())

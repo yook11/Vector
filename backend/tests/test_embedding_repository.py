@@ -135,18 +135,18 @@ async def test_save_writes_embedding_and_returns_true(
         sample_categories[0].id,
         url="https://example.com/save",
     )
-    analysis_id = analysis.id
+    analyzed_article_id = analysis.id
 
     repo = EmbeddingRepository(db_session)
     saved = await repo.save(
         _vector(0.3),
-        analysis_id=analysis_id,
+        analyzed_article_id=analyzed_article_id,
     )
     await db_session.commit()
 
     assert saved is True
     db_session.expire_all()
-    refetched = await db_session.get(AnalyzedArticleRecord, analysis_id)
+    refetched = await db_session.get(AnalyzedArticleRecord, analyzed_article_id)
     assert refetched is not None
     assert refetched.embedding is not None
 
@@ -165,17 +165,17 @@ async def test_save_returns_false_on_concurrent_write(
         url="https://example.com/already-saved",
         embedding=_zero_vector(),
     )
-    analysis_id = analysis.id
+    analyzed_article_id = analysis.id
 
     repo = EmbeddingRepository(db_session)
     saved = await repo.save(
         _vector(0.7),
-        analysis_id=analysis_id,
+        analyzed_article_id=analyzed_article_id,
     )
 
     assert saved is False
     db_session.expire_all()
-    refetched = await db_session.get(AnalyzedArticleRecord, analysis_id)
+    refetched = await db_session.get(AnalyzedArticleRecord, analyzed_article_id)
     assert refetched is not None
     # 既存の embedding を上書きしないこと
     assert refetched.embedding is not None
@@ -185,12 +185,12 @@ async def test_save_returns_false_on_concurrent_write(
 
 
 @pytest.mark.asyncio
-async def test_save_returns_false_for_unknown_analysis_id(
+async def test_save_returns_false_for_unknown_analyzed_article_id(
     db_session: AsyncSession,
 ) -> None:
     repo = EmbeddingRepository(db_session)
     saved = await repo.save(
         _vector(),
-        analysis_id=999_999,
+        analyzed_article_id=999_999,
     )
     assert saved is False

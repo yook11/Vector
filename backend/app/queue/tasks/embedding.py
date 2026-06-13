@@ -37,26 +37,26 @@ async def generate_embedding(
     trigger: EmbeddingTrigger,
     ctx: Context = TaskiqDepends(),
 ) -> None:
-    """単一 analysis に対してベクトル埋め込みを生成する。"""
+    """単一 analyzed article に対してベクトル埋め込みを生成する。"""
     session_factory = ctx.state.session_factory
     embedder: BaseEmbedder = ctx.state.embedder
 
-    with embedding_stage_span(analysis_id=trigger.analysis_id) as stage:
+    with embedding_stage_span(analyzed_article_id=trigger.analyzed_article_id) as stage:
         async with session_factory() as session:
             try:
                 ready = await ReadyForEmbedding.try_advance_from(
-                    analysis_id=trigger.analysis_id,
+                    analyzed_article_id=trigger.analyzed_article_id,
                     embedding_repo=EmbeddingRepository(session),
                 )
             except EmbeddingReadyBuildBlockedError as exc:
                 await EmbeddingAuditRepository(session).append_ready_build_blocked(
-                    analysis_id=trigger.analysis_id,
+                    analyzed_article_id=trigger.analyzed_article_id,
                     exc=exc,
                 )
                 await session.commit()
                 logger.info(
                     "generate_embedding_rejected",
-                    analysis_id=trigger.analysis_id,
+                    analyzed_article_id=trigger.analyzed_article_id,
                     reason="ready_build_blocked",
                     code=exc.code.value,
                 )
@@ -65,7 +65,7 @@ async def generate_embedding(
             except Exception as exc:
                 await _append_ready_build_failed_audit(
                     session_factory,
-                    analysis_id=trigger.analysis_id,
+                    analyzed_article_id=trigger.analyzed_article_id,
                     exc=exc,
                 )
                 raise
@@ -79,7 +79,7 @@ async def generate_embedding(
             record_rate_limit_gate_skipped(stage="embedding", model=embedder.model_name)
             logger.info(
                 "embedding_ai_rate_limit_gate_skipped",
-                analysis_id=ready.analysis_id,
+                analyzed_article_id=ready.analyzed_article_id,
                 article_id=ready.article_id,
                 embedding_model=embedder.model_name,
             )
@@ -110,21 +110,21 @@ async def generate_embedding(
 async def _append_ready_build_failed_audit(
     session_factory: async_sessionmaker[AsyncSession],
     *,
-    analysis_id: int,
+    analyzed_article_id: int,
     exc: Exception,
 ) -> None:
     """Ready 構築例外を best-effort で監査し、失敗時は構造ログへ退避する。"""
     try:
         async with session_factory() as audit_session:
             await EmbeddingAuditRepository(audit_session).append_ready_build_failed(
-                analysis_id=analysis_id,
+                analyzed_article_id=analyzed_article_id,
                 exc=exc,
             )
             await audit_session.commit()
     except Exception as audit_exc:
         logger.exception(
             "embedding_ready_build_failed_audit_dropped",
-            analysis_id=analysis_id,
+            analyzed_article_id=analyzed_article_id,
             business_error_class=exception_fqn(exc),
             audit_error_class=exception_fqn(audit_exc),
         )

@@ -156,12 +156,12 @@ class TestGetBriefing:
         article_id = await _article_id_of(db_session, analysis)
         # decoy が効いていることの前提 assert (一致していたら下の判別が空虚になる)
         assert analysis.id != article_id
-        # 新形 seed: assessment_id キー (公開 /news id 空間) で永続化
+        # 新形 seed: analyzed_article_id キー (公開 /news id 空間) で永続化
         db_session.add(
             _briefing(
                 ai_category.id,
                 key_articles=[
-                    {"assessment_id": analysis.id, "significance": "なぜ重要か"}
+                    {"analyzed_article_id": analysis.id, "significance": "なぜ重要か"}
                 ],
             )
         )
@@ -218,7 +218,7 @@ class TestGetBriefing:
             _briefing(
                 ai_category.id,
                 key_articles=[
-                    {"assessment_id": analysis.id, "significance": "なぜ重要か"}
+                    {"analyzed_article_id": analysis.id, "significance": "なぜ重要か"}
                 ],
             )
         )
@@ -252,9 +252,9 @@ class TestGetBriefing:
             )
             seeded.append((analysis, title))
 
-        # 新形 seed: assessment_id キー (公開 /news id 空間)、作成逆順で並べる
+        # 新形 seed: analyzed_article_id キー (公開 /news id 空間)、作成逆順で並べる
         key_articles = [
-            {"assessment_id": analysis.id, "significance": f"{title}の理由"}
+            {"analyzed_article_id": analysis.id, "significance": f"{title}の理由"}
             for analysis, title in reversed(seeded)
         ]
         db_session.add(_briefing(ai_category.id, key_articles=key_articles))
@@ -304,7 +304,7 @@ class TestGetBriefing:
             _briefing(
                 ai_category.id,
                 key_articles=[
-                    {"assessment_id": analysis.id, "significance": "なぜ重要か"}
+                    {"analyzed_article_id": analysis.id, "significance": "なぜ重要か"}
                 ],
             )
         )
@@ -335,7 +335,7 @@ class TestGetBriefing:
             _briefing(
                 ai_category.id,
                 key_articles=[
-                    {"assessment_id": analysis.id, "significance": "なぜ重要か"}
+                    {"analyzed_article_id": analysis.id, "significance": "なぜ重要か"}
                 ],
             )
         )
@@ -362,7 +362,7 @@ class TestGetBriefing:
             _briefing(
                 ai_category.id,
                 key_articles=[
-                    {"assessment_id": analysis.id, "significance": "なぜ重要か"}
+                    {"analyzed_article_id": analysis.id, "significance": "なぜ重要か"}
                 ],
             )
         )
@@ -384,13 +384,15 @@ class TestGetBriefing:
 
         article non-nullable 不変条件の所有テスト。生成時 validator + 削除経路の
         不在で通常は起こりえず、起きたら failure_visibility 方針で loud に出す。
-        新形 assessment_id キーで存在しない id を指定し、embed 欠落 → ValidationError
-        を確認する。
+        新形 analyzed_article_id キーで存在しない id を指定し、
+        embed 欠落 → ValidationError を確認する。
         """
         db_session.add(
             _briefing(
                 ai_category.id,
-                key_articles=[{"assessment_id": 999_999, "significance": "なぜ重要か"}],
+                key_articles=[
+                    {"analyzed_article_id": 999_999, "significance": "なぜ重要か"}
+                ],
             )
         )
         await db_session.commit()
@@ -440,7 +442,7 @@ class TestListBriefings:
             headline="今週のヘッドライン",
             summary="今週の総括リード",
             chapters=[{"heading": "資金とインフラ", "body": "今週の流れの本文"}],
-            key_articles=[{"assessment_id": 1, "significance": "なぜ重要か"}],
+            key_articles=[{"analyzed_article_id": 1, "significance": "なぜ重要か"}],
             watch_points=[{"statement": "今後どこを見るべきか"}],
             model_name="deepseek-v4-pro",
             input_article_count=1,
@@ -490,7 +492,7 @@ class TestListBriefings:
                     headline="h",
                     summary="s",
                     chapters=[{"heading": "h", "body": "b"}],
-                    key_articles=[{"assessment_id": 1, "significance": "s"}],
+                    key_articles=[{"analyzed_article_id": 1, "significance": "s"}],
                     watch_points=[{"statement": "w"}],
                     model_name="deepseek-v4-pro",
                     input_article_count=count,
@@ -578,7 +580,7 @@ class TestBriefingResponseSizeGuard:
         変わるため、too_long の assert が fail-fast 順序の所有 assert になる。
         """
         oversized = [
-            {"assessment_id": i + 1, "significance": f"s{i}"}
+            {"analyzed_article_id": i + 1, "significance": f"s{i}"}
             for i in range(MAX_KEY_ARTICLES_PER_BRIEFING + 1)
         ]
         db_session.add(self._persist(ai_category, key_articles=oversized))
@@ -606,7 +608,7 @@ class TestBriefingResponseSizeGuard:
                 ai_category,
                 key_articles=[
                     {
-                        "assessment_id": analysis.id,
+                        "analyzed_article_id": analysis.id,
                         "significance": "x" * (MAX_KEY_ARTICLE_SIGNIFICANCE_LEN + 1),
                     }
                 ],
@@ -638,7 +640,9 @@ class TestBriefingResponseSizeGuard:
         db_session.add(
             self._persist(
                 ai_category,
-                key_articles=[{"assessment_id": analysis.id, "significance": "s"}],
+                key_articles=[
+                    {"analyzed_article_id": analysis.id, "significance": "s"}
+                ],
             )
         )
         await db_session.commit()
@@ -667,7 +671,9 @@ class TestBriefingResponseSizeGuard:
         db_session.add(
             self._persist(
                 ai_category,
-                key_articles=[{"assessment_id": analysis.id, "significance": "s"}],
+                key_articles=[
+                    {"analyzed_article_id": analysis.id, "significance": "s"}
+                ],
             )
         )
         await db_session.commit()

@@ -23,7 +23,7 @@ from app.insights.trend_discovery.domain.trend import (
 class KeyPointCandidate(NamedTuple):
     """key_point content の採択候補 1 行分 (repository が Row から詰め替える)。"""
 
-    assessment_id: int
+    analyzed_article_id: int
     embedding: list[float] | None
     content: str | None
 
@@ -38,7 +38,7 @@ def select_key_points(
     grouping とこの順序の保証は呼び出し側 = repository の責務 (SQL の ORDER BY
     が決めた順序を保持したまま束ねる必要があるため)。順序が崩れても例外は
     出ず、無言で古い key_point を採択するので、供給側の順序を崩さないこと。
-    同一 assessment からは 1 本まで (content が None の行は採択にも assessment
+    同一 analyzed article からは 1 本まで (content が None の行は採択にも ID
     消費にも数えない)。採択済み全 content との cosine 距離が
     ``KEY_POINT_DEDUP_DISTANCE`` 未満なら同一トピックとして畳む (embedding が
     None の候補は近接判定をスキップし、採択済ベクトル集合にも入らない)。入力に
@@ -47,12 +47,15 @@ def select_key_points(
     result: dict[MentionKey, tuple[str, ...]] = {}
     for key, candidates in candidates_by_mention.items():
         contents: list[str] = []
-        seen_assessments: set[int] = set()
+        seen_analyzed_articles: set[int] = set()
         accepted_vectors: list[list[float]] = []
         for candidate in candidates:
             if len(contents) >= MAX_KEY_POINTS_PER_MENTION:
                 break
-            if candidate.content is None or candidate.assessment_id in seen_assessments:
+            if (
+                candidate.content is None
+                or candidate.analyzed_article_id in seen_analyzed_articles
+            ):
                 continue
             vector = candidate.embedding
             if vector is not None and any(
@@ -61,7 +64,7 @@ def select_key_points(
             ):
                 continue
             contents.append(candidate.content)
-            seen_assessments.add(candidate.assessment_id)
+            seen_analyzed_articles.add(candidate.analyzed_article_id)
             if vector is not None:
                 accepted_vectors.append(vector)
         result[key] = tuple(contents)

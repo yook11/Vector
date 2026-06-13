@@ -52,7 +52,7 @@ class AssessmentBackfillExclusion(Base):
 
 
 class EmbeddingBackfillExclusion(Base):
-    """Stage 5 embedding の通常 backfill から除外した analysis。"""
+    """Stage 5 embedding の通常 backfill から除外した analyzed article。"""
 
     __tablename__ = "embedding_backfill_exclusions"
     __table_args__ = (
@@ -62,7 +62,7 @@ class EmbeddingBackfillExclusion(Base):
         ),
     )
 
-    analysis_id: Mapped[int] = mapped_column(
+    analyzed_article_id: Mapped[int] = mapped_column(
         ForeignKey("analyzed_articles.id", ondelete="CASCADE"),
         primary_key=True,
     )

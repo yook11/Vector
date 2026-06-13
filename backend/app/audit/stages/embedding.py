@@ -52,7 +52,7 @@ class EmbeddingAuditRepository:
     ) -> None:
         """embedding 成功を記録する。"""
         payload = EmbeddingPayload(
-            analysis_id=ready.analysis_id,
+            analyzed_article_id=ready.analyzed_article_id,
             embedding_model=embedder.model_name,
             vector_dimension=embedder.dimension,
         )
@@ -69,22 +69,22 @@ class EmbeddingAuditRepository:
     async def append_backfill_embedding_aged_out(
         self,
         *,
-        analysis_id: int,
+        analyzed_article_id: int,
         article_id: int,
     ) -> None:
-        """古い embedding NULL analysis を backfill が対象外にした事実を記録する。"""
+        """古い embedding NULL analyzed article を対象外にした事実を記録する。"""
         await self._events.append(
             stage=Stage.BACKFILL_EMBED,
             event_type=EventType.REJECTED,
             outcome_code=BackfillExclusionReason.EMBEDDING_AGED_OUT.value,
-            payload=EmbeddingPayload(analysis_id=analysis_id),
+            payload=EmbeddingPayload(analyzed_article_id=analyzed_article_id),
             article_id=article_id,
         )
 
     # --- Ready 構築 blocked / failed ---------------------------------------
 
     async def append_ready_build_blocked(
-        self, *, analysis_id: int, exc: EmbeddingReadyBuildBlockedError
+        self, *, analyzed_article_id: int, exc: EmbeddingReadyBuildBlockedError
     ) -> None:
         """Ready 構築が domain precondition により進めなかった事実を記録する。
 
@@ -94,17 +94,17 @@ class EmbeddingAuditRepository:
             stage=Stage.EMBEDDING,
             event_type=EventType.REJECTED,
             outcome_code=exc.code.value,
-            payload=EmbeddingPayload(analysis_id=analysis_id),
+            payload=EmbeddingPayload(analyzed_article_id=analyzed_article_id),
         )
 
     async def append_ready_build_failed(
-        self, *, analysis_id: int, exc: Exception
+        self, *, analyzed_article_id: int, exc: Exception
     ) -> None:
         """Ready 構築中に blocked 以外の例外が出た事実を failed として記録する。"""
         projection = project_ready_build_failure(stage_prefix="embedding", exc=exc)
         payload = EmbeddingPayload(
             failure_kind=projection.failure_kind,
-            analysis_id=analysis_id,
+            analyzed_article_id=analyzed_article_id,
             error_message=error_message_of(exc),
             error_chain=extract_error_chain(exc),
         )
@@ -153,7 +153,7 @@ class EmbeddingAuditRepository:
             failure_kind=projection.failure_kind,
             failure_action=failure_action_value(projection),
             failure_reason=projection.failure_reason,
-            analysis_id=ready.analysis_id,
+            analyzed_article_id=ready.analyzed_article_id,
             embedding_model=None,
             vector_dimension=None,
             error_message=error_message_of(exc),

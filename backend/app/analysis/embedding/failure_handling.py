@@ -78,7 +78,7 @@ class EmbeddingFailureHandler:
                 hold_reason = _hold_reason(exc)
                 logger.warning(
                     "generate_embedding_terminal",
-                    analysis_id=ready.analysis_id,
+                    analyzed_article_id=ready.analyzed_article_id,
                     code=exc.code,
                     held=hold_reason is not None,
                 )
@@ -94,7 +94,7 @@ class EmbeddingFailureHandler:
                     hold_reason = _hold_reason(recoverable)
                     logger.warning(
                         "generate_embedding_recoverable_exhausted",
-                        analysis_id=ready.analysis_id,
+                        analyzed_article_id=ready.analyzed_article_id,
                         code=recoverable.code,
                         held=hold_reason is not None,
                     )
@@ -111,7 +111,7 @@ class EmbeddingFailureHandler:
                 if last_attempt:
                     logger.exception(
                         "generate_embedding_unexpected_exhausted",
-                        analysis_id=ready.analysis_id,
+                        analyzed_article_id=ready.analyzed_article_id,
                     )
                     return FailureHandlingDecision(reraise=False)
                 return FailureHandlingDecision(reraise=True)
@@ -136,7 +136,7 @@ class EmbeddingFailureHandler:
         except Exception as audit_exc:
             logger.exception(
                 "embedding_failure_audit_dropped",
-                analysis_id=ready.analysis_id,
+                analyzed_article_id=ready.analyzed_article_id,
                 business_error_class=(exception_fqn(exc)),
                 business_error_message=redact_secrets(str(exc))[:500],
                 audit_error_class=(exception_fqn(audit_exc)),
@@ -158,7 +158,7 @@ class EmbeddingFailureHandler:
         except Exception as audit_exc:
             logger.exception(
                 "embedding_failure_audit_dropped",
-                analysis_id=ready.analysis_id,
+                analyzed_article_id=ready.analyzed_article_id,
                 business_error_class=(exception_fqn(exc)),
                 business_error_message=redact_secrets(str(exc))[:500],
                 audit_error_class=(exception_fqn(audit_exc)),

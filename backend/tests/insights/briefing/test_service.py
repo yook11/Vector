@@ -56,7 +56,7 @@ def _llm_mock(
             headline=headline,
             summary=summary,
             chapters=[BriefingChapter(heading=chapter_heading, body=chapter_body)],
-            key_articles=[KeyArticle(article_id=1, significance="なぜ重要か")],
+            key_articles=[KeyArticle(analyzed_article_id=1, significance="なぜ重要か")],
             watch_points=[WatchPoint(statement="今後どこを見るべきか")],
         )
     )
@@ -132,10 +132,10 @@ class TestExecute:
         assert saved.chapters == [{"heading": "資金とインフラ", "body": "BODY"}]
         assert saved.input_article_count == 1
         assert saved.model_name == "deepseek-v4-pro"
-        # key_articles の永続形は {assessment_id, significance} (新形)。
-        # _llm_mock は KeyArticle(article_id=1) を返すので assessment_id=1 で永続化。
+        # key_articles の永続形は {analyzed_article_id, significance} (新形)。
+        # _llm_mock の KeyArticle ID がそのまま永続化される。
         assert saved.key_articles == [
-            {"assessment_id": 1, "significance": "なぜ重要か"}
+            {"analyzed_article_id": 1, "significance": "なぜ重要か"}
         ]
 
     @pytest.mark.asyncio

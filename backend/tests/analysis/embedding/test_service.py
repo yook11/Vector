@@ -33,7 +33,7 @@ def _make_embedder() -> MagicMock:
 
 def _ready() -> ReadyForEmbedding:
     return ReadyForEmbedding(
-        analysis_id=1,
+        analyzed_article_id=1,
         text_for_embedding="分析タイトル\n分析要約",
         article_id=7,
     )
@@ -46,7 +46,7 @@ async def test_save_success_sets_stage_result_succeeded(
 ) -> None:
     """save 成功 (saved=True) で active span に result=succeeded が焼かれる。"""
     svc = EmbeddingService(session_factory)
-    with embedding_stage_span(analysis_id=1):
+    with embedding_stage_span(analyzed_article_id=1):
         with (
             patch(
                 "app.analysis.embedding.repository.EmbeddingRepository.save",
@@ -69,7 +69,7 @@ async def test_race_loss_sets_stage_result_skipped(
 ) -> None:
     """楽観ロック敗北 (save=False) で active span に result=skipped が焼かれる。"""
     svc = EmbeddingService(session_factory)
-    with embedding_stage_span(analysis_id=1):
+    with embedding_stage_span(analyzed_article_id=1):
         with patch(
             "app.analysis.embedding.repository.EmbeddingRepository.save",
             new=AsyncMock(return_value=False),

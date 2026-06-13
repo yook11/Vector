@@ -185,7 +185,7 @@ class TrendsRepository:
                 SELECT
                   {_match_key_expr("m")} AS match_key,
                   m->>'type' AS type,
-                  a.id AS assessment_id,
+                  a.id AS analyzed_article_id,
                   a.analyzed_at AS analyzed_at,
                   a.embedding AS embedding,
                   e->>'content' AS content
@@ -216,7 +216,7 @@ class TrendsRepository:
             .columns(
                 match_key=sa.String,
                 type=sa.String,
-                assessment_id=sa.BigInteger,
+                analyzed_article_id=sa.BigInteger,
                 analyzed_at=sa.DateTime(timezone=True),
                 embedding=HALFVEC(_EMBEDDING_DIM),
                 content=sa.String,
@@ -229,7 +229,7 @@ class TrendsRepository:
         for row in rows:
             candidates.setdefault((row.match_key, row.type), []).append(
                 KeyPointCandidate(
-                    assessment_id=row.assessment_id,
+                    analyzed_article_id=row.analyzed_article_id,
                     embedding=_to_vector(row.embedding),
                     content=row.content,
                 )

@@ -3,8 +3,8 @@
 不変条件の正本 (一次防御):
 - summary / chapters / key_articles / watch_points の件数・文字列長 (F10 構造防御)
 - chapters は最低 1 章 (本文を章立てで構造化する)
-- key_articles[].article_id の重複拒否 (UI の React key 一意性)
-- key_articles[].article_id ⊆ input_ids (ハルシネーション検出、context 付き)
+- key_articles[].analyzed_article_id の重複拒否 (UI の React key 一意性)
+- key_articles[].analyzed_article_id ⊆ input_ids (ハルシネーション検出、context 付き)
 """
 
 from __future__ import annotations
@@ -34,7 +34,7 @@ def _content(**overrides: object) -> dict[str, object]:
         "headline": "今週は AI",
         "summary": "今週の総括リード",
         "chapters": [{"heading": "資金とインフラ", "body": "章本文"}],
-        "key_articles": [{"article_id": 1, "significance": "なぜ重要か"}],
+        "key_articles": [{"analyzed_article_id": 1, "significance": "なぜ重要か"}],
         "watch_points": [{"statement": "今後どこを見るべきか"}],
     }
     base.update(overrides)
@@ -54,7 +54,7 @@ class TestBriefingChapter:
 class TestKeyArticle:
     def test_significance_min_length_rejects_empty(self) -> None:
         with pytest.raises(ValidationError):
-            KeyArticle(article_id=1, significance="")
+            KeyArticle(analyzed_article_id=1, significance="")
 
 
 class TestWatchPoint:
@@ -69,7 +69,7 @@ class TestWeeklyBriefingContentNormalPath:
         assert content.summary == "今週の総括リード"
         assert content.chapters[0].heading == "資金とインフラ"
         assert content.chapters[0].body == "章本文"
-        assert content.key_articles[0].article_id == 1
+        assert content.key_articles[0].analyzed_article_id == 1
         assert content.key_articles[0].significance == "なぜ重要か"
         assert content.watch_points[0].statement == "今後どこを見るべきか"
 
@@ -122,17 +122,17 @@ class TestKeyArticlesInvariants:
         ``MAX_KEY_ARTICLES_PER_BRIEFING`` 超を境界とする。
         """
         too_many = [
-            {"article_id": i, "significance": f"s{i}"}
+            {"analyzed_article_id": i, "significance": f"s{i}"}
             for i in range(MAX_KEY_ARTICLES_PER_BRIEFING + 1)
         ]
         with pytest.raises(ValidationError):
             WeeklyBriefingContent.model_validate(_content(key_articles=too_many))
 
     def test_rejects_duplicate_key_article_ids(self) -> None:
-        """同一 article_id の重複は件数と独立に常時拒否する。"""
+        """同一 analyzed_article_id の重複は件数と独立に常時拒否する。"""
         dup = [
-            {"article_id": 7, "significance": "a"},
-            {"article_id": 7, "significance": "b"},
+            {"analyzed_article_id": 7, "significance": "a"},
+            {"analyzed_article_id": 7, "significance": "b"},
         ]
         with pytest.raises(ValidationError, match="duplicate"):
             WeeklyBriefingContent.model_validate(_content(key_articles=dup))
@@ -140,7 +140,7 @@ class TestKeyArticlesInvariants:
     def test_rejects_oversize_significance(self) -> None:
         oversize = [
             {
-                "article_id": 1,
+                "analyzed_article_id": 1,
                 "significance": "x" * (MAX_KEY_ARTICLE_SIGNIFICANCE_LEN + 1),
             }
         ]
@@ -166,42 +166,48 @@ class TestWatchPointsInvariants:
             WeeklyBriefingContent.model_validate(_content(watch_points=oversize))
 
 
-class TestArticleIdSubsetCheck:
+class TestAnalyzedArticleIdSubsetCheck:
     def test_skips_subset_check_without_context(self) -> None:
         """context 未指定のときは subset 検証をスキップする (テスト/CLI 経路許容)。"""
         content = WeeklyBriefingContent.model_validate(
-            _content(key_articles=[{"article_id": 42, "significance": "s"}])
+            _content(key_articles=[{"analyzed_article_id": 42, "significance": "s"}])
         )
-        assert content.key_articles[0].article_id == 42
+        assert content.key_articles[0].analyzed_article_id == 42
 
     def test_subset_check_passes_when_all_ids_in_input(self) -> None:
         data = _content(
             key_articles=[
-                {"article_id": 1, "significance": "a"},
-                {"article_id": 2, "significance": "b"},
+                {"analyzed_article_id": 1, "significance": "a"},
+                {"analyzed_article_id": 2, "significance": "b"},
             ]
         )
         result = WeeklyBriefingContent.model_validate(
             data, context={"input_ids": {1, 2, 3}}
         )
-        assert [ka.article_id for ka in result.key_articles] == [1, 2]
+        assert [ka.analyzed_article_id for ka in result.key_articles] == [1, 2]
 
-    def test_rejects_key_article_id_not_in_input_ids(self) -> None:
-        """LLM が捏造した article_id を構造的に弾く。"""
+    def test_rejects_key_analyzed_article_id_not_in_input_ids(self) -> None:
+        """LLM が捏造した analyzed_article_id を構造的に弾く。"""
         data = _content(
             key_articles=[
-                {"article_id": 1, "significance": "a"},
-                {"article_id": 999, "significance": "b"},
+                {"analyzed_article_id": 1, "significance": "a"},
+                {"analyzed_article_id": 999, "significance": "b"},
             ]
         )
         with pytest.raises(ValidationError, match="999"):
             WeeklyBriefingContent.model_validate(data, context={"input_ids": {1, 2, 3}})
 
+    def test_rejects_legacy_article_id_alias(self) -> None:
+        data = _content(key_articles=[{"article_id": 1, "significance": "a"}])
+
+        with pytest.raises(ValidationError):
+            WeeklyBriefingContent.model_validate(data, context={"input_ids": {1}})
+
 
 def _valid_payload(
     *,
     headline: str = "今週のまとめ",
-    article_id: int = 10,
+    analyzed_article_id: int = 10,
 ) -> str:
     """from_llm_payload テスト用の最小 JSON 文字列。"""
     import json
@@ -211,7 +217,12 @@ def _valid_payload(
             "headline": headline,
             "summary": "今週の総括",
             "chapters": [{"heading": "見出し", "body": "本文"}],
-            "key_articles": [{"article_id": article_id, "significance": "重要な理由"}],
+            "key_articles": [
+                {
+                    "analyzed_article_id": analyzed_article_id,
+                    "significance": "重要な理由",
+                }
+            ],
             "watch_points": [{"statement": "観察すべき論点"}],
         }
     )
@@ -223,20 +234,20 @@ class TestFromLlmPayload:
     def test_valid_json_with_matching_input_ids_returns_vo(self) -> None:
         """正常 JSON + input_ids ⊇ key_articles で VO が返る。"""
         content = WeeklyBriefingContent.from_llm_payload(
-            _valid_payload(article_id=10), input_ids={10, 20}
+            _valid_payload(analyzed_article_id=10), input_ids={10, 20}
         )
-        assert content.key_articles[0].article_id == 10
+        assert content.key_articles[0].analyzed_article_id == 10
         assert content.headline == "今週のまとめ"
 
     def test_input_ids_outside_key_articles_raises_validation_error(self) -> None:
-        """key_articles の article_id が input_ids 外のとき ValidationError。
+        """key_articles の analyzed_article_id が input_ids 外のとき ValidationError。
 
         from_llm_payload を通ると context が必ず渡されるため、
-        捏造 article_id は必ず弾かれる (context 渡し忘れスキップが起きない)。
+        捏造 analyzed_article_id は必ず弾かれる (context 渡し忘れスキップが起きない)。
         """
         with pytest.raises(ValidationError, match="999"):
             WeeklyBriefingContent.from_llm_payload(
-                _valid_payload(article_id=999), input_ids={1, 2}
+                _valid_payload(analyzed_article_id=999), input_ids={1, 2}
             )
 
     def test_context_is_always_passed_so_hallucination_check_cannot_be_skipped(
@@ -251,13 +262,13 @@ class TestFromLlmPayload:
         # id=42 を input_ids に含めなければ ValidationError になることを確認
         with pytest.raises(ValidationError):
             WeeklyBriefingContent.from_llm_payload(
-                _valid_payload(article_id=42), input_ids={1}
+                _valid_payload(analyzed_article_id=42), input_ids={1}
             )
         # id=42 を含めれば通ることで「from_llm_payload が検証を実行している」を保証
         result = WeeklyBriefingContent.from_llm_payload(
-            _valid_payload(article_id=42), input_ids={42}
+            _valid_payload(analyzed_article_id=42), input_ids={42}
         )
-        assert result.key_articles[0].article_id == 42
+        assert result.key_articles[0].analyzed_article_id == 42
 
     def test_invalid_json_raises_validation_error(self) -> None:
         """不正 JSON は ValidationError。"""
@@ -273,7 +284,7 @@ class TestFromLlmPayload:
                 # headline を意図的に欠落
                 "summary": "今週の総括",
                 "chapters": [{"heading": "見出し", "body": "本文"}],
-                "key_articles": [{"article_id": 1, "significance": "s"}],
+                "key_articles": [{"analyzed_article_id": 1, "significance": "s"}],
                 "watch_points": [{"statement": "w"}],
             }
         )

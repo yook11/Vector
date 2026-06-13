@@ -15,7 +15,7 @@ from app.audit.failure_projection import Retryability
 from app.audit.repository import PipelineEventRepository
 
 BackfillStage = Literal["curate", "assess", "embed"]
-BackfillTargetKind = Literal["article", "curation", "analysis"]
+BackfillTargetKind = Literal["article", "curation", "analyzed_article"]
 
 
 class BackfillOutcomeCode(StrEnum):

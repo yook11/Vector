@@ -51,13 +51,13 @@ class EmbeddingService:
         async with self._session_factory() as session:
             saved = await EmbeddingRepository(session).save(
                 vector,
-                analysis_id=ready.analysis_id,
+                analyzed_article_id=ready.analyzed_article_id,
             )
             if not saved:
                 # 楽観的ロック敗北時は、勝者だけが audit / commit する。
                 logger.info(
                     "embedding_concurrent_write",
-                    analysis_id=ready.analysis_id,
+                    analyzed_article_id=ready.analyzed_article_id,
                 )
                 set_embedding_stage_result("skipped")
                 return
@@ -70,7 +70,7 @@ class EmbeddingService:
 
         logger.info(
             "embedding_completed",
-            analysis_id=ready.analysis_id,
+            analyzed_article_id=ready.analyzed_article_id,
             model=embedder.model_name,
         )
         set_embedding_stage_result("succeeded")

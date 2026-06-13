@@ -50,6 +50,7 @@ from app.analysis.embedding.errors import (
     to_embedding_error,
 )
 from app.analysis.gemini_error_translator import GeminiContentRejectionReason
+from app.audit.domain.payloads import EmbeddingPayload
 from app.audit.stages.embedding import EmbeddingAuditRepository
 from app.models.analyzable_article_record import AnalyzableArticleRecord
 from app.models.article_curation import ArticleCuration
@@ -104,7 +105,7 @@ async def _make_extraction(
 
 def _ready(article: AnalyzableArticleRecord) -> ReadyForEmbedding:
     return ReadyForEmbedding(
-        analysis_id=1,
+        analyzed_article_id=1,
         text_for_embedding="title\nsummary",
         article_id=article.id,
     )
@@ -140,28 +141,42 @@ async def _fetch_by_outcome(
     return rows[0]
 
 
+def test_embedding_payload_uses_analyzed_article_id_key() -> None:
+    payload = EmbeddingPayload(
+        analyzed_article_id=123,
+        embedding_model="cl-nagoya/ruri-v3-310m",
+        vector_dimension=768,
+    ).model_dump(exclude_none=True)
+
+    assert payload["analyzed_article_id"] == 123
+    assert "analysis_id" not in payload
+
+
 @pytest.mark.asyncio
 async def test_append_ready_build_blocked_records_missing_analysis_rejected(
     db_session: AsyncSession,
     session_factory: async_sessionmaker[AsyncSession],
 ) -> None:
-    """Ready build blocked は rejected として analysis_id を payload に残す。"""
+    """Ready build blocked は rejected として analyzed_article_id を payload に残す。"""
     async with session_factory() as session:
         await EmbeddingAuditRepository(session).append_ready_build_blocked(
-            analysis_id=999,
+            analyzed_article_id=999,
             exc=EmbeddingReadyBuildBlockedError(
-                EmbeddingReadyBuildBlockedCode.ANALYSIS_MISSING
+                EmbeddingReadyBuildBlockedCode.ANALYZED_ARTICLE_MISSING
             ),
         )
         await session.commit()
 
     ev = await _fetch_by_outcome(
-        db_session, EmbeddingReadyBuildBlockedCode.ANALYSIS_MISSING.value
+        db_session, EmbeddingReadyBuildBlockedCode.ANALYZED_ARTICLE_MISSING.value
     )
     assert ev.event_type == "rejected"
-    assert ev.outcome_code == EmbeddingReadyBuildBlockedCode.ANALYSIS_MISSING.value
+    assert (
+        ev.outcome_code == EmbeddingReadyBuildBlockedCode.ANALYZED_ARTICLE_MISSING.value
+    )
     assert ev.article_id is None
-    assert ev.payload["analysis_id"] == 999
+    assert ev.payload["analyzed_article_id"] == 999
+    assert "analysis_id" not in ev.payload
 
 
 @pytest.mark.asyncio
@@ -173,7 +188,7 @@ async def test_append_ready_build_failed_records_unknown_failure(
     exc = RuntimeError("ready build exploded")
     async with session_factory() as session:
         await EmbeddingAuditRepository(session).append_ready_build_failed(
-            analysis_id=123,
+            analyzed_article_id=123,
             exc=exc,
         )
         await session.commit()
@@ -185,7 +200,8 @@ async def test_append_ready_build_failed_records_unknown_failure(
     assert ev.retryability == "unknown"
     assert ev.error_class == "builtins.RuntimeError"
     assert ev.payload["failure_kind"] == "unexpected_error"
-    assert ev.payload["analysis_id"] == 123
+    assert ev.payload["analyzed_article_id"] == 123
+    assert "analysis_id" not in ev.payload
 
 
 @pytest.mark.asyncio
@@ -209,7 +225,8 @@ async def test_append_success_records_with_code(
     assert ev.event_type == "succeeded"
     assert ev.outcome_code == "embedding_completed"
     assert ev.retryability is None
-    assert ev.payload["analysis_id"] == 1
+    assert ev.payload["analyzed_article_id"] == 1
+    assert "analysis_id" not in ev.payload
     assert ev.payload["embedding_model"] == "cl-nagoya/ruri-v3-310m"
     assert ev.payload["vector_dimension"] == 768
 
@@ -220,7 +237,7 @@ async def test_append_success_uses_article_id_from_ready(
     session_factory: async_sessionmaker[AsyncSession],
     sample_source: NewsSource,
 ) -> None:
-    """pipeline_events.article_id が Ready 由来 (案 3: Ready 構築時に取得済)。"""
+    """pipeline_events.article_id は Ready 構築時に取得済みの値を使う。"""
     article = await _make_article(db_session, sample_source)
     await _make_extraction(db_session, article)
 
@@ -276,7 +293,7 @@ async def test_append_backfill_embedding_aged_out_records_rejected(
 
     async with session_factory() as session:
         await EmbeddingAuditRepository(session).append_backfill_embedding_aged_out(
-            analysis_id=123,
+            analyzed_article_id=123,
             article_id=article.id,
         )
         await session.commit()
@@ -287,7 +304,8 @@ async def test_append_backfill_embedding_aged_out_records_rejected(
     assert ev.outcome_code == BackfillExclusionReason.EMBEDDING_AGED_OUT.value
     assert ev.retryability is None
     assert ev.payload["kind"] == "embedding"
-    assert ev.payload["analysis_id"] == 123
+    assert ev.payload["analyzed_article_id"] == 123
+    assert "analysis_id" not in ev.payload
 
 
 @pytest.mark.asyncio

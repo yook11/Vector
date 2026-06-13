@@ -44,11 +44,11 @@ class TestSelectKeyPoints:
     """select_key_points の採択ポリシーの不変条件。"""
 
     def test_content_none_skips_without_consuming_assessment_budget(self) -> None:
-        """content=None の候補は assessment_id を消費せず、同 assessment の
+        """content=None の候補は analyzed_article_id を消費せず、同 assessment の
         次候補が採択される。"""
         candidates = [
-            KeyPointCandidate(assessment_id=1, embedding=None, content=None),
-            KeyPointCandidate(assessment_id=1, embedding=None, content="valid"),
+            KeyPointCandidate(analyzed_article_id=1, embedding=None, content=None),
+            KeyPointCandidate(analyzed_article_id=1, embedding=None, content="valid"),
         ]
         result = select_key_points({_KEY: candidates})
         assert result[_KEY] == ("valid",)
@@ -63,10 +63,14 @@ class TestSelectKeyPoints:
         # C = [0, 1, 0.001] は B にほぼ同一 (距離 << 0.1 → 畳まれる)
         vec_c_near_b = [0.0, 1.0, 0.001]
         candidates = [
-            KeyPointCandidate(assessment_id=1, embedding=_VEC_X, content="point_a"),
-            KeyPointCandidate(assessment_id=2, embedding=_VEC_Y, content="point_b"),
             KeyPointCandidate(
-                assessment_id=3, embedding=vec_c_near_b, content="point_c"
+                analyzed_article_id=1, embedding=_VEC_X, content="point_a"
+            ),
+            KeyPointCandidate(
+                analyzed_article_id=2, embedding=_VEC_Y, content="point_b"
+            ),
+            KeyPointCandidate(
+                analyzed_article_id=3, embedding=vec_c_near_b, content="point_c"
             ),
         ]
         result = select_key_points({_KEY: candidates})
@@ -80,9 +84,9 @@ class TestSelectKeyPoints:
         # [1,0,0] と [1, 0.001, 0] は距離が 0.1 より十分小さい
         vec_almost_same = [1.0, 0.001, 0.0]
         candidates = [
-            KeyPointCandidate(assessment_id=1, embedding=_VEC_X, content="first"),
+            KeyPointCandidate(analyzed_article_id=1, embedding=_VEC_X, content="first"),
             KeyPointCandidate(
-                assessment_id=2, embedding=vec_almost_same, content="dup"
+                analyzed_article_id=2, embedding=vec_almost_same, content="dup"
             ),
         ]
         result = select_key_points({_KEY: candidates})
@@ -92,8 +96,10 @@ class TestSelectKeyPoints:
         """コサイン距離が KEY_POINT_DEDUP_DISTANCE より明確に大きいペアは両方採択。"""
         # 直交ベクトルの距離 = 1.0 >> KEY_POINT_DEDUP_DISTANCE(0.1)
         candidates = [
-            KeyPointCandidate(assessment_id=1, embedding=_VEC_X, content="first"),
-            KeyPointCandidate(assessment_id=2, embedding=_VEC_Y, content="second"),
+            KeyPointCandidate(analyzed_article_id=1, embedding=_VEC_X, content="first"),
+            KeyPointCandidate(
+                analyzed_article_id=2, embedding=_VEC_Y, content="second"
+            ),
         ]
         result = select_key_points({_KEY: candidates})
         assert "first" in result[_KEY]
@@ -103,8 +109,8 @@ class TestSelectKeyPoints:
         """ゼロベクトル同士は距離 1.0 扱いとなり、dedup の対象にならない。"""
         zero = [0.0, 0.0, 0.0]
         candidates = [
-            KeyPointCandidate(assessment_id=1, embedding=zero, content="first"),
-            KeyPointCandidate(assessment_id=2, embedding=zero, content="second"),
+            KeyPointCandidate(analyzed_article_id=1, embedding=zero, content="first"),
+            KeyPointCandidate(analyzed_article_id=2, embedding=zero, content="second"),
         ]
         result = select_key_points({_KEY: candidates})
         assert "first" in result[_KEY]
@@ -116,8 +122,10 @@ class TestSelectKeyPoints:
         # embedding=None の候補が採択されても accepted_vectors が空のまま →
         # 後続の [1,0,0] は比較対象なしで採択される
         candidates = [
-            KeyPointCandidate(assessment_id=1, embedding=None, content="no_vec"),
-            KeyPointCandidate(assessment_id=2, embedding=_VEC_X, content="with_vec"),
+            KeyPointCandidate(analyzed_article_id=1, embedding=None, content="no_vec"),
+            KeyPointCandidate(
+                analyzed_article_id=2, embedding=_VEC_X, content="with_vec"
+            ),
         ]
         result = select_key_points({_KEY: candidates})
         assert "no_vec" in result[_KEY]
@@ -126,8 +134,8 @@ class TestSelectKeyPoints:
     def test_all_content_none_produces_empty_tuple_for_key(self) -> None:
         """全候補 content=None のとき、そのキーは空 tuple で結果に現れる。"""
         candidates = [
-            KeyPointCandidate(assessment_id=1, embedding=None, content=None),
-            KeyPointCandidate(assessment_id=2, embedding=None, content=None),
+            KeyPointCandidate(analyzed_article_id=1, embedding=None, content=None),
+            KeyPointCandidate(analyzed_article_id=2, embedding=None, content=None),
         ]
         result = select_key_points({_KEY: candidates})
         assert _KEY in result
@@ -138,11 +146,13 @@ class TestSelectKeyPoints:
         assert select_key_points({}) == {}
 
     def test_second_candidate_from_same_assessment_skipped(self) -> None:
-        """同一 assessment_id の 2 本目は skip される。"""
+        """同一 analyzed_article_id の 2 本目は skip される。"""
         candidates = [
-            KeyPointCandidate(assessment_id=1, embedding=_VEC_X, content="first"),
-            # 同 assessment_id, 別 content, 遠いベクトル → skip
-            KeyPointCandidate(assessment_id=1, embedding=_VEC_Y, content="second"),
+            KeyPointCandidate(analyzed_article_id=1, embedding=_VEC_X, content="first"),
+            # 同 analyzed_article_id, 別 content, 遠いベクトル → skip
+            KeyPointCandidate(
+                analyzed_article_id=1, embedding=_VEC_Y, content="second"
+            ),
         ]
         result = select_key_points({_KEY: candidates})
         assert result[_KEY] == ("first",)

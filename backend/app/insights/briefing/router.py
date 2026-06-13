@@ -59,15 +59,15 @@ async def _fetch_category(session: AsyncSession, slug: str) -> Category:
     return cat
 
 
-async def _fetch_article_embeds_by_assessment_id(
-    session: AsyncSession, assessment_ids: set[int]
+async def _fetch_article_embeds_by_analyzed_article_id(
+    session: AsyncSession, analyzed_article_ids: set[int]
 ) -> dict[int, _BriefingArticleEmbed]:
-    """key_articles (``assessment_id`` キー) が参照する記事の embed を返す。
+    """key_articles (``analyzed_article_id`` キー) が参照する記事の embed を返す。
 
-    JSONB の assessment_id は公開 /news id 空間 (``AnalyzedArticleRecord.id``)
+    JSONB の analyzed_article_id は公開 /news id 空間 (``AnalyzedArticleRecord.id``)
     そのものなので、dict キー = embed の公開 ``id`` で橋渡しが無い。
     """
-    if not assessment_ids:
+    if not analyzed_article_ids:
         return {}
     stmt = (
         select(
@@ -85,7 +85,7 @@ async def _fetch_article_embeds_by_assessment_id(
             AnalyzableArticleRecord.id == ArticleCuration.analyzable_article_id,
         )
         .join(NewsSource, NewsSource.id == AnalyzableArticleRecord.source_id)
-        .where(AnalyzedArticleRecord.id.in_(assessment_ids))
+        .where(AnalyzedArticleRecord.id.in_(analyzed_article_ids))
     )
     rows = (await session.execute(stmt)).all()
     return {
@@ -182,10 +182,10 @@ async def get_latest_briefing(
 
     chapters = [_BriefingChapter.model_validate(c) for c in briefing.chapters]
     _KEY_ARTICLES_COUNT_GUARD.validate_python(briefing.key_articles)
-    embeds = await _fetch_article_embeds_by_assessment_id(
-        session, {a["assessment_id"] for a in briefing.key_articles}
+    embeds = await _fetch_article_embeds_by_analyzed_article_id(
+        session, {a["analyzed_article_id"] for a in briefing.key_articles}
     )
-    # article non-nullable は生成時 validator (article_id ⊆ assessed input_ids) と
+    # article non-nullable は生成時 validator (analyzed_article_id ⊆ input_ids) と
     # 記事削除経路の不在が保証する (assessed 記事の retention 削除導入時は要見直し)。
     # embeds.get の None 欠落は non-nullable field の ValidationError → 500 で
     # loud に出す (failure_visibility)。
@@ -193,7 +193,7 @@ async def get_latest_briefing(
         _BriefingKeyArticle(
             significance=a["significance"],
             article=embeds.get(  # pyright: ignore[reportArgumentType]
-                a["assessment_id"]
+                a["analyzed_article_id"]
             ),
         )
         for a in briefing.key_articles

@@ -564,12 +564,12 @@ class TestGetArticle:
         expected_name = str(category.name)
         article = await _create_article(db_session, sample_source)
         analysis = await _create_analysis(db_session, article, category_id=category.id)
-        analysis_id = analysis.id
+        analyzed_article_id = analysis.id
         # identity map をクリアし、本番の per-request session と同様に category を
         # クエリの eager load 経由でしか取得できない状態にする。未 eager load だと
         # async の lazy load が MissingGreenlet を投げ 500 になるのを検出する。
         db_session.expunge_all()
-        resp = await bff_client.get(f"/api/v1/articles/{analysis_id}")
+        resp = await bff_client.get(f"/api/v1/articles/{analyzed_article_id}")
         assert resp.status_code == 200
         assert resp.json()["category"] == {
             "slug": expected_slug,

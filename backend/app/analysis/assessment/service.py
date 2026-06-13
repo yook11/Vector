@@ -78,11 +78,11 @@ class AssessmentService:
             match call:
                 case AssessmentCall(result=InScope()):
                     # `call` は ``AssessmentCall[InScope]`` に narrow される
-                    assessment_id = await AssessmentRepository(session).save_in_scope(
-                        call, ready=ready
-                    )
+                    analyzed_article_id = await AssessmentRepository(
+                        session
+                    ).save_in_scope(call, ready=ready)
                     # 楽観的ロック敗北時は、勝者だけが audit / commit する。
-                    if assessment_id is None:
+                    if analyzed_article_id is None:
                         logger.info(
                             "assessment_in_scope_concurrent_write",
                             curation_id=curation_id,
@@ -100,15 +100,15 @@ class AssessmentService:
                         curation_id=curation_id,
                     )
                     set_assessment_stage_result("in_scope")
-                    return assessment_id
+                    return analyzed_article_id
 
                 case AssessmentCall(result=OutOfScope()):
                     # `call` は ``AssessmentCall[OutOfScope]`` に narrow される
-                    assessment_id = await AssessmentRepository(
+                    analyzed_article_id = await AssessmentRepository(
                         session
                     ).save_out_of_scope(call, ready=ready)
                     # 楽観的ロック敗北時は、勝者だけが audit / commit する。
-                    if assessment_id is None:
+                    if analyzed_article_id is None:
                         logger.info(
                             "assessment_out_of_scope_concurrent_write",
                             curation_id=curation_id,

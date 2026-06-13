@@ -64,7 +64,9 @@ async def test_disables_thinking_for_pro_model() -> None:
                 "headline": "h",
                 "summary": "s",
                 "chapters": [{"heading": "見出し", "body": "本文"}],
-                "key_articles": [{"article_id": 1, "significance": "なぜ重要か"}],
+                "key_articles": [
+                    {"analyzed_article_id": 1, "significance": "なぜ重要か"}
+                ],
                 "watch_points": [{"statement": "今後どこを見るべきか"}],
             }
         )
@@ -98,7 +100,7 @@ async def test_disables_thinking_for_pro_model() -> None:
     assert result.summary == "s"
     assert result.chapters[0].heading == "見出し"
     assert result.chapters[0].body == "本文"
-    assert result.key_articles[0].article_id == 1
+    assert result.key_articles[0].analyzed_article_id == 1
     assert result.key_articles[0].significance == "なぜ重要か"
     assert result.watch_points[0].statement == "今後どこを見るべきか"
 
@@ -117,7 +119,7 @@ def test_tool_schema_required_fields_match_new_output() -> None:
     chapter = BRIEFING_TOOL_SCHEMA["properties"]["chapters"]["items"]
     assert chapter["required"] == ["heading", "body"]
     key_article = BRIEFING_TOOL_SCHEMA["properties"]["key_articles"]["items"]
-    assert key_article["required"] == ["article_id", "significance"]
+    assert key_article["required"] == ["analyzed_article_id", "significance"]
     watch_point = BRIEFING_TOOL_SCHEMA["properties"]["watch_points"]["items"]
     assert watch_point["required"] == ["statement"]
     # 旧 overview / stories 構造の名残が残っていないこと
@@ -161,7 +163,7 @@ async def test_generator_rejects_abnormal_key_article_count_from_llm() -> None:
         "summary": "s",
         "chapters": [{"heading": "見出し", "body": "本文"}],
         "key_articles": [
-            {"article_id": i, "significance": f"s{i}"}
+            {"analyzed_article_id": i, "significance": f"s{i}"}
             for i in range(MAX_KEY_ARTICLES_PER_BRIEFING + 1)
         ],
         "watch_points": [{"statement": "w"}],
@@ -189,7 +191,7 @@ async def test_generator_rejects_abnormal_chapter_count_from_llm() -> None:
             {"heading": f"h{i}", "body": f"b{i}"}
             for i in range(MAX_CHAPTERS_PER_BRIEFING + 1)
         ],
-        "key_articles": [{"article_id": 1, "significance": "s"}],
+        "key_articles": [{"analyzed_article_id": 1, "significance": "s"}],
         "watch_points": [{"statement": "w"}],
     }
     with pytest.raises(BriefingLlmResponseInvalidError):
@@ -211,7 +213,7 @@ async def test_generator_rejects_oversize_significance_from_llm() -> None:
         "chapters": [{"heading": "見出し", "body": "本文"}],
         "key_articles": [
             {
-                "article_id": 1,
+                "analyzed_article_id": 1,
                 "significance": oversized_significance,
             }
         ],

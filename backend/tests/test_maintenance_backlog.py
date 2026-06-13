@@ -673,7 +673,7 @@ async def test_assessment_backfill_exclusion_reason_code_check(
     await db_session.rollback()
 
 
-# analysis_ids_pending_embedding (Phase 2: AnalyzableArticleRecord ID → Analysis ID)
+# analyzed_article_ids_pending_embedding
 
 
 @pytest.mark.asyncio
@@ -711,7 +711,7 @@ async def test_pending_embedding_returns_analysis_with_null_embedding(
     await db_session.refresh(analysis)
 
     backlog = PipelineBacklog(db_session)
-    ids = await backlog.analysis_ids_pending_embedding(
+    ids = await backlog.analyzed_article_ids_pending_embedding(
         created_before=now - timedelta(minutes=30),
         created_after=now - timedelta(days=7),
         limit=10,
@@ -725,7 +725,7 @@ async def test_pending_embedding_targets_include_audit_snapshot(
     sample_source: NewsSource,
     sample_categories: list[Category],
 ) -> None:
-    """embedding backfill target は analysis_id / article_id / source_name を含む。"""
+    """embedding backfill target は analyzed_article_id と audit snapshot を含む。"""
     now = datetime(2026, 4, 26, 12, 0, 0, tzinfo=UTC)
     article = await _make_article(
         db_session,
@@ -789,7 +789,7 @@ async def test_pending_embedding_excludes_already_embedded(
     await db_session.refresh(analysis)
 
     backlog = PipelineBacklog(db_session)
-    ids = await backlog.analysis_ids_pending_embedding(
+    ids = await backlog.analyzed_article_ids_pending_embedding(
         created_before=now - timedelta(minutes=30),
         created_after=now - timedelta(days=7),
         limit=10,
@@ -819,14 +819,14 @@ async def test_pending_embedding_excludes_backfill_excluded_analysis(
     )
     db_session.add(
         EmbeddingBackfillExclusion(
-            analysis_id=analysis.id,
+            analyzed_article_id=analysis.id,
             reason_code=BackfillExclusionReason.EMBEDDING_AGED_OUT.value,
         )
     )
     await db_session.commit()
 
     backlog = PipelineBacklog(db_session)
-    ids = await backlog.analysis_ids_pending_embedding(
+    ids = await backlog.analyzed_article_ids_pending_embedding(
         created_before=now - timedelta(minutes=30),
         created_after=now - timedelta(days=7),
         limit=10,
@@ -884,18 +884,18 @@ async def test_count_pending_embedding_returns_true_count_without_limit(
     )
     db_session.add(
         EmbeddingBackfillExclusion(
-            analysis_id=excluded.id,
+            analyzed_article_id=excluded.id,
             reason_code=BackfillExclusionReason.EMBEDDING_AGED_OUT.value,
         )
     )
     await db_session.commit()
 
     backlog = PipelineBacklog(db_session)
-    count = await backlog.count_analyses_pending_embedding(
+    count = await backlog.count_analyzed_articles_pending_embedding(
         created_before=now - timedelta(minutes=30),
         created_after=now - timedelta(days=7),
     )
-    ids = await backlog.analysis_ids_pending_embedding(
+    ids = await backlog.analyzed_article_ids_pending_embedding(
         created_before=now - timedelta(minutes=30),
         created_after=now - timedelta(days=7),
         limit=2,
@@ -906,7 +906,7 @@ async def test_count_pending_embedding_returns_true_count_without_limit(
     assert set(ids).issubset(pending_ids)
 
 
-# analysis_ids_aged_out_embedding
+# analyzed_article_ids_aged_out_embedding
 
 
 @pytest.mark.asyncio
@@ -931,7 +931,7 @@ async def test_aged_out_embedding_returns_old_null_embedding_analysis(
     )
 
     backlog = PipelineBacklog(db_session)
-    ids = await backlog.analysis_ids_aged_out_embedding(
+    ids = await backlog.analyzed_article_ids_aged_out_embedding(
         created_before=now - timedelta(days=7),
         limit=10,
     )
@@ -984,14 +984,14 @@ async def test_aged_out_embedding_excludes_recent_embedded_and_excluded(
     )
     db_session.add(
         EmbeddingBackfillExclusion(
-            analysis_id=excluded.id,
+            analyzed_article_id=excluded.id,
             reason_code=BackfillExclusionReason.EMBEDDING_AGED_OUT.value,
         )
     )
     await db_session.commit()
 
     backlog = PipelineBacklog(db_session)
-    ids = await backlog.analysis_ids_aged_out_embedding(
+    ids = await backlog.analyzed_article_ids_aged_out_embedding(
         created_before=now - timedelta(days=7),
         limit=10,
     )
@@ -1021,7 +1021,9 @@ async def test_embedding_backfill_exclusion_reason_code_check(
         sample_categories[0],
     )
     db_session.add(
-        EmbeddingBackfillExclusion(analysis_id=analysis.id, reason_code="bad_reason")
+        EmbeddingBackfillExclusion(
+            analyzed_article_id=analysis.id, reason_code="bad_reason"
+        )
     )
 
     with pytest.raises(IntegrityError):

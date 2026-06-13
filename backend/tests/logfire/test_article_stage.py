@@ -36,7 +36,7 @@ _ALLOWED_DOMAIN_KEYS = {
     "result",
     "article_id",
     "curation_id",
-    "analysis_id",
+    "analyzed_article_id",
     "next_task_enqueued",
     "next_task_name",
 }
@@ -77,16 +77,23 @@ def test_assessment_open_attributes(capfire: CaptureLogfire) -> None:
 
 
 def test_embedding_open_attributes(capfire: CaptureLogfire) -> None:
-    """embedding open で stage / task_name / analysis_id。next_task 系は一切無い。"""
-    with embedding_stage_span(analysis_id=13):
+    """embedding open では analyzed_article_id を持ち、next_task 系は無い。"""
+    with embedding_stage_span(analyzed_article_id=13):
         pass
     attrs = stage_attrs(capfire)
     assert attrs["stage"] == "embedding"
     assert attrs["task_name"] == "generate_embedding"
-    assert attrs["analysis_id"] == 13
+    assert attrs["analyzed_article_id"] == 13
+    assert "analysis_id" not in attrs
     assert "next_task_enqueued" not in attrs
     assert "next_task_name" not in attrs
     assert "article_id" not in attrs
+
+
+def test_embedding_stage_span_rejects_legacy_analysis_id_keyword() -> None:
+    with pytest.raises(TypeError):
+        with embedding_stage_span(analysis_id=13):
+            pass
 
 
 # 不変条件 2: set_result が各語彙を反映 (handle 経由 = task が使う API)
@@ -138,7 +145,7 @@ def test_embedding_set_result_reflects(
     capfire: CaptureLogfire, result: EmbeddingResult
 ) -> None:
     """embedding handle.set_result が span に result を反映する。"""
-    with embedding_stage_span(analysis_id=1) as stage:
+    with embedding_stage_span(analyzed_article_id=1) as stage:
         stage.set_result(result)
     assert stage_attrs(capfire)["result"] == result
 
@@ -168,7 +175,7 @@ def test_embedding_module_function_sets_result_inside_span(
     capfire: CaptureLogfire,
 ) -> None:
     """``set_embedding_stage_result`` が現在の embedding span に result を焼く。"""
-    with embedding_stage_span(analysis_id=1):
+    with embedding_stage_span(analyzed_article_id=1):
         set_embedding_stage_result("succeeded")
     assert stage_attrs(capfire)["result"] == "succeeded"
 
@@ -185,7 +192,7 @@ def test_assessment_set_article_id_late_binds(capfire: CaptureLogfire) -> None:
 
 def test_embedding_set_article_id_late_binds(capfire: CaptureLogfire) -> None:
     """embedding は open 後に set_article_id で article_id を後付けできる。"""
-    with embedding_stage_span(analysis_id=13) as stage:
+    with embedding_stage_span(analyzed_article_id=13) as stage:
         stage.set_article_id(99)
     assert stage_attrs(capfire)["article_id"] == 99
 
@@ -322,7 +329,7 @@ def test_no_unexpected_attributes_assessment(capfire: CaptureLogfire) -> None:
 
 def test_no_unexpected_attributes_embedding(capfire: CaptureLogfire) -> None:
     """embedding span のドメイン attribute は許可キー集合の部分集合に収まる。"""
-    with embedding_stage_span(analysis_id=1) as stage:
+    with embedding_stage_span(analyzed_article_id=1) as stage:
         stage.set_article_id(2)
         stage.set_result("succeeded")
     keys = domain_attr_keys(stage_attrs(capfire))

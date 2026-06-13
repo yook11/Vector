@@ -69,7 +69,7 @@ CASES = [
         hold_patch="app.queue.tasks.backfill.is_embedding_held",
         ageout_patch="app.queue.tasks.backfill._exclude_aged_out_embeddings",
         queue_task_patch="app.queue.tasks.backfill.generate_embedding",
-        count_method="count_analyses_pending_embedding",
+        count_method="count_analyzed_articles_pending_embedding",
         target_method="embedding_targets_pending",
     ),
 ]

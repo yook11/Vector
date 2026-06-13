@@ -8,7 +8,7 @@ Logfire 上で直接クエリできるようにする。
 
 span attribute には本文・prompt・AI response・URL query・認証情報は載せない。
 低 cardinality の語彙 (stage / result / task_name) と内部 DB ID
-(article_id / curation_id / analysis_id) のみを載せる。
+(article_id / curation_id / analyzed_article_id) のみを載せる。
 
 設計方針: ステージは 3 つ (増えても 5 程度) で、特性 (result 語彙・次工程の有無・
 article_id がいつ判明するか) がそれぞれ違う。共通基底に押し込めると各ステージの記録
@@ -164,7 +164,7 @@ def assessment_stage_span(*, curation_id: int) -> Iterator[AssessmentStageSpan]:
 
 
 @contextmanager
-def embedding_stage_span(*, analysis_id: int) -> Iterator[EmbeddingStageSpan]:
+def embedding_stage_span(*, analyzed_article_id: int) -> Iterator[EmbeddingStageSpan]:
     """embedding task の ``article_stage`` span を開く context manager。
 
     終端ステージなので next_task 系 attribute は一切載せない。article_id は ready
@@ -174,7 +174,7 @@ def embedding_stage_span(*, analysis_id: int) -> Iterator[EmbeddingStageSpan]:
         _SPAN_NAME,
         stage="embedding",
         task_name="generate_embedding",
-        analysis_id=analysis_id,
+        analyzed_article_id=analyzed_article_id,
     ) as span:
         recorder = EmbeddingStageSpan(span)
         token = _current_stage_span.set(recorder)

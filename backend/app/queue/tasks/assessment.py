@@ -113,7 +113,7 @@ async def assess_content(
             return
 
         if result is not None:
-            await generate_embedding.kiq(EmbeddingTrigger(analysis_id=result))
+            await generate_embedding.kiq(EmbeddingTrigger(analyzed_article_id=result))
             stage.mark_next_task_enqueued()
 
 

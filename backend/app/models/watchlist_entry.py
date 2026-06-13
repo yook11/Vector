@@ -22,7 +22,7 @@ class WatchlistEntry(Base):
         ForeignKey("auth.user.id", ondelete="CASCADE"),
         primary_key=True,
     )
-    article_analysis_id: Mapped[int] = mapped_column(
+    analyzed_article_id: Mapped[int] = mapped_column(
         ForeignKey("analyzed_articles.id", ondelete="CASCADE"),
         primary_key=True,
     )
@@ -30,8 +30,6 @@ class WatchlistEntry(Base):
         DateTime(timezone=True), server_default=func.now()
     )
 
-    # リレーション
-    # PR1 では column rename を避け、PR2 で analyzed_article_id に寄せる。
     analyzed_article: Mapped[AnalyzedArticleRecord] = relationship(
         back_populates="watchlist_entries"
     )

@@ -68,12 +68,12 @@ def _make_ctx(retries: int = 0, max_retries: int = 2) -> MagicMock:
 
 
 def _trigger() -> EmbeddingTrigger:
-    return EmbeddingTrigger(analysis_id=1)
+    return EmbeddingTrigger(analyzed_article_id=1)
 
 
 def _fixed_ready() -> ReadyForEmbedding:
     return ReadyForEmbedding(
-        analysis_id=1,
+        analyzed_article_id=1,
         text_for_embedding="分析タイトル\n分析要約",
         article_id=7,
     )

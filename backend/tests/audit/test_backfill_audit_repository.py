@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import pytest
+from pydantic import ValidationError
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.audit.domain.event import EventType, Stage
+from app.audit.domain.payloads import BackfillPayload
 from app.audit.stages.backfill import BackfillAuditRepository, BackfillOutcomeCode
 from app.models.analyzable_article_record import AnalyzableArticleRecord
 from app.models.news_source import NewsSource
@@ -64,6 +66,42 @@ async def test_append_item_event_records_target_snapshot(
     assert row.payload["target_kind"] == "curation"
     assert row.payload["target_id"] == 123
     assert row.payload["source_name"] == str(sample_source.name)
+
+
+@pytest.mark.asyncio
+async def test_append_embed_item_event_records_analyzed_article_target_kind(
+    db_session: AsyncSession,
+    article_row: AnalyzableArticleRecord,
+    sample_source: NewsSource,
+) -> None:
+    repo = BackfillAuditRepository(db_session)
+
+    await repo.append_item_event(
+        stage=Stage.BACKFILL_EMBED,
+        event_type=EventType.SUCCEEDED,
+        outcome_code=BackfillOutcomeCode.ITEM_ENQUEUED,
+        backfill_stage="embed",
+        run_id="run-embed",
+        target_kind="analyzed_article",
+        target_id=456,
+        article_id=article_row.id,
+        source_name=str(sample_source.name),
+    )
+    await db_session.commit()
+
+    row = (await db_session.execute(select(PipelineEvent))).scalars().one()
+    assert row.stage == "backfill_embed"
+    assert row.payload["target_kind"] == "analyzed_article"
+    assert row.payload["target_id"] == 456
+
+
+def test_backfill_payload_rejects_legacy_analysis_target_kind() -> None:
+    with pytest.raises(ValidationError):
+        BackfillPayload(
+            backfill_stage="embed",
+            target_kind="analysis",
+            target_id=456,
+        )
 
 
 @pytest.mark.asyncio
