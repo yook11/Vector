@@ -30,7 +30,7 @@ class CurationReadyBuildBlockedCode(StrEnum):
 class CurationReadyBuildFacts:
     """Stage 3 Ready 構築に必要な DB 射影。"""
 
-    article_id: int
+    analyzable_article_id: int
     original_title: str
     original_content: str
     has_signal_curation: bool
@@ -44,14 +44,14 @@ class CurationReadyBuildBlockedError(Exception):
         self,
         code: CurationReadyBuildBlockedCode,
         *,
-        article_id: int | None = None,
+        analyzable_article_id: int | None = None,
         content_length: int | None = None,
         max_content_length: int | None = None,
     ) -> None:
         self.code = code
-        # 対象記事が現存する blocked のみ article_id を持つ (audit が source_id を
-        # 補填する根拠)。ARTICLE_MISSING は記事不在で None。
-        self.article_id = article_id
+        # 対象記事が現存する blocked のみ analyzable_article_id を持つ (audit が
+        # source_id を補填する根拠)。ARTICLE_MISSING は記事不在で None。
+        self.analyzable_article_id = analyzable_article_id
         self.content_length = content_length
         self.max_content_length = max_content_length
         super().__init__(code.value)
@@ -64,7 +64,7 @@ class CurationPreconditionProtocol(Protocol):
     """
 
     async def load_ready_build_facts(
-        self, article_id: int
+        self, analyzable_article_id: int
     ) -> CurationReadyBuildFacts | None: ...
 
 
@@ -75,7 +75,7 @@ class ReadyForCuration(BaseModel):
 
     MAX_CONTENT_LENGTH: ClassVar[int] = 200_000
 
-    article_id: int = Field(gt=0)
+    analyzable_article_id: int = Field(gt=0)
     original_title: str = Field(min_length=1)
     original_content: str = Field(min_length=1, max_length=MAX_CONTENT_LENGTH)
 
@@ -83,11 +83,11 @@ class ReadyForCuration(BaseModel):
     async def try_advance_from(
         cls,
         *,
-        article_id: int,
+        analyzable_article_id: int,
         repo: CurationPreconditionProtocol,
     ) -> ReadyForCuration:
         """DB 事実から Ready を構築し、対象外なら blocked 例外を投げる。"""
-        facts = await repo.load_ready_build_facts(article_id)
+        facts = await repo.load_ready_build_facts(analyzable_article_id)
         if facts is None:
             raise CurationReadyBuildBlockedError(
                 CurationReadyBuildBlockedCode.ARTICLE_MISSING
@@ -96,26 +96,26 @@ class ReadyForCuration(BaseModel):
         if facts.has_signal_curation:
             raise CurationReadyBuildBlockedError(
                 CurationReadyBuildBlockedCode.ALREADY_CURATED,
-                article_id=facts.article_id,
+                analyzable_article_id=facts.analyzable_article_id,
             )
 
         if facts.has_noise_curation:
             raise CurationReadyBuildBlockedError(
                 CurationReadyBuildBlockedCode.ALREADY_REJECTED_AS_NOISE,
-                article_id=facts.article_id,
+                analyzable_article_id=facts.analyzable_article_id,
             )
 
         content_length = len(facts.original_content)
         if content_length > cls.MAX_CONTENT_LENGTH:
             raise CurationReadyBuildBlockedError(
                 CurationReadyBuildBlockedCode.CONTENT_TOO_LARGE,
-                article_id=facts.article_id,
+                analyzable_article_id=facts.analyzable_article_id,
                 content_length=content_length,
                 max_content_length=cls.MAX_CONTENT_LENGTH,
             )
 
         return cls(
-            article_id=facts.article_id,
+            analyzable_article_id=facts.analyzable_article_id,
             original_title=facts.original_title,
             original_content=facts.original_content,
         )

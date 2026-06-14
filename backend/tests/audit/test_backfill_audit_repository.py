@@ -49,7 +49,7 @@ async def test_append_item_event_records_target_snapshot(
         run_id="run-1",
         target_kind="curation",
         target_id=123,
-        article_id=article_row.id,
+        analyzable_article_id=article_row.id,
         source_name=str(sample_source.name),
     )
     await db_session.commit()
@@ -84,7 +84,7 @@ async def test_append_embed_item_event_records_analyzed_article_target_kind(
         run_id="run-embed",
         target_kind="analyzed_article",
         target_id=456,
-        article_id=article_row.id,
+        analyzable_article_id=article_row.id,
         source_name=str(sample_source.name),
     )
     await db_session.commit()

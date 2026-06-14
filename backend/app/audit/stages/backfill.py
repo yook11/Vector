@@ -46,7 +46,7 @@ class BackfillAuditRepository:
         run_id: str,
         target_kind: BackfillTargetKind,
         target_id: int,
-        article_id: int | None,
+        analyzable_article_id: int | None,
         source_name: str | None,
         exc: BaseException | None = None,
         retryability: Retryability | None = None,
@@ -66,7 +66,7 @@ class BackfillAuditRepository:
             event_type=event_type,
             outcome_code=outcome_code.value,
             payload=payload,
-            article_id=article_id,
+            article_id=analyzable_article_id,
             error_class=exception_fqn(exc) if exc is not None else None,
             retryability=retryability,
         )

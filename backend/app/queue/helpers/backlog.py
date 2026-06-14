@@ -31,7 +31,7 @@ class BackfillTarget:
     """backfill が enqueue と監査に使う対象 snapshot。"""
 
     target_id: int
-    article_id: int
+    analyzable_article_id: int
     source_name: str | None
 
 
@@ -134,7 +134,7 @@ class PipelineBacklog:
             )
         )
 
-    async def article_ids_pending_curation(
+    async def analyzable_article_ids_pending_curation(
         self,
         *,
         created_before: datetime,
@@ -230,7 +230,7 @@ class PipelineBacklog:
         row = (await self._session.execute(stmt)).one()
         return int(row[0]), row[1]
 
-    async def article_ids_aged_out_curation(
+    async def analyzable_article_ids_aged_out_curation(
         self,
         *,
         created_before: datetime,
@@ -239,8 +239,9 @@ class PipelineBacklog:
         """``created_before`` より古い child-NULL article record ID を返す。
 
         curation/noise いずれの子も無く物理削除する対象。下限 (年齢ウィンドウの
-        ``created_after``) を持たず、``article_ids_pending_curation`` の通常再投入窓
-        (``[after, before)``) とは disjoint な「窓から落ちた古い記事」を拾う。
+        ``created_after``) を持たず、``analyzable_article_ids_pending_curation`` の
+        通常再投入窓 (``[after, before)``) とは disjoint な
+        「窓から落ちた古い記事」を拾う。
         """
         stmt = (
             select(AnalyzableArticleRecord.id)
@@ -548,9 +549,9 @@ class PipelineBacklog:
 
 
 def _target_from_row(row: tuple[int, int, object | None]) -> BackfillTarget:
-    target_id, article_id, source_name = row
+    target_id, analyzable_article_id, source_name = row
     return BackfillTarget(
         target_id=target_id,
-        article_id=article_id,
+        analyzable_article_id=analyzable_article_id,
         source_name=str(source_name) if source_name is not None else None,
     )

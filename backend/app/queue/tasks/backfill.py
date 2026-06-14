@@ -163,7 +163,7 @@ async def _append_backfill_item_event(
                 run_id=run_id,
                 target_kind=target_kind,
                 target_id=target.target_id,
-                article_id=target.article_id,
+                analyzable_article_id=target.analyzable_article_id,
                 source_name=target.source_name,
                 exc=exc,
             )
@@ -250,18 +250,20 @@ async def _delete_aged_out_curations(
 
     async with session_factory() as session:
         backlog = PipelineBacklog(session)
-        ids = await backlog.article_ids_aged_out_curation(
+        ids = await backlog.analyzable_article_ids_aged_out_curation(
             created_before=created_before,
             limit=CURATIONS_DELETE_LIMIT,
         )
 
     deleted = 0
-    for article_id in ids:
+    for analyzable_article_id in ids:
         async with session_factory() as session:
             await CurationAuditRepository(session).append_backfill_curation_aged_out(
-                article_id=article_id
+                analyzable_article_id=analyzable_article_id
             )
-            await AnalyzableArticleRepository(session).delete_by_id(article_id)
+            await AnalyzableArticleRepository(session).delete_by_id(
+                analyzable_article_id
+            )
             await session.commit()
         deleted += 1
 
@@ -317,8 +319,8 @@ async def _exclude_aged_out_assessments(
                 )
                 .limit(1)
             )
-            article_id = await session.scalar(stmt)
-            if article_id is None:
+            analyzable_article_id = await session.scalar(stmt)
+            if analyzable_article_id is None:
                 continue
 
             session.add(
@@ -332,7 +334,7 @@ async def _exclude_aged_out_assessments(
                     session
                 ).append_backfill_assessment_aged_out(
                     curation_id=curation_id,
-                    article_id=article_id,
+                    analyzable_article_id=analyzable_article_id,
                 )
                 await session.commit()
             except IntegrityError:
@@ -382,8 +384,8 @@ async def _exclude_aged_out_embeddings(
                 )
                 .limit(1)
             )
-            article_id = await session.scalar(stmt)
-            if article_id is None:
+            analyzable_article_id = await session.scalar(stmt)
+            if analyzable_article_id is None:
                 continue
 
             session.add(
@@ -397,7 +399,7 @@ async def _exclude_aged_out_embeddings(
                     session
                 ).append_backfill_embedding_aged_out(
                     analyzed_article_id=analyzed_article_id,
-                    article_id=article_id,
+                    analyzable_article_id=analyzable_article_id,
                 )
                 await session.commit()
             except IntegrityError:
@@ -519,7 +521,9 @@ async def backfill_curations(ctx: Context = TaskiqDepends()) -> None:
         failed = 0
         for target in targets[:granted]:
             try:
-                await curate_content.kiq(CurationTrigger(article_id=target.target_id))
+                await curate_content.kiq(
+                    CurationTrigger(analyzable_article_id=target.target_id)
+                )
             except Exception as exc:  # noqa: BLE001
                 failed += 1
                 await _append_backfill_item_event(
@@ -535,7 +539,7 @@ async def backfill_curations(ctx: Context = TaskiqDepends()) -> None:
                 )
                 logger.warning(
                     "backfill_curations_kiq_failed",
-                    article_id=target.target_id,
+                    analyzable_article_id=target.target_id,
                     error=str(exc),
                 )
                 continue

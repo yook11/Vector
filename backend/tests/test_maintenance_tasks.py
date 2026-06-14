@@ -45,13 +45,15 @@ def _stub_session_cm(ctx: MagicMock) -> None:
 def _target(
     target_id: int,
     *,
-    article_id: int | None = None,
+    analyzable_article_id: int | None = None,
     source_name: str | None = "VentureBeat",
 ) -> BackfillTarget:
     """backfill enqueue 対象の test double を返す。"""
     return BackfillTarget(
         target_id=target_id,
-        article_id=article_id if article_id is not None else target_id,
+        analyzable_article_id=analyzable_article_id
+        if analyzable_article_id is not None
+        else target_id,
         source_name=source_name,
     )
 
@@ -243,9 +245,9 @@ async def test_curations_dispatches_triggers_for_each_article_id() -> None:
     assert curate_task.kiq.await_count == 3
     dispatched = [call.args[0] for call in curate_task.kiq.await_args_list]
     assert dispatched == [
-        CurationTrigger(article_id=10),
-        CurationTrigger(article_id=20),
-        CurationTrigger(article_id=30),
+        CurationTrigger(analyzable_article_id=10),
+        CurationTrigger(analyzable_article_id=20),
+        CurationTrigger(analyzable_article_id=30),
     ]
 
 

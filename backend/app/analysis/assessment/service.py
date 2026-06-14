@@ -104,11 +104,11 @@ class AssessmentService:
 
                 case AssessmentCall(result=OutOfScope()):
                     # `call` は ``AssessmentCall[OutOfScope]`` に narrow される
-                    analyzed_article_id = await AssessmentRepository(
+                    out_of_scope_article_id = await AssessmentRepository(
                         session
                     ).save_out_of_scope(call, ready=ready)
                     # 楽観的ロック敗北時は、勝者だけが audit / commit する。
-                    if analyzed_article_id is None:
+                    if out_of_scope_article_id is None:
                         logger.info(
                             "assessment_out_of_scope_concurrent_write",
                             curation_id=curation_id,

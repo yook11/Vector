@@ -79,13 +79,13 @@ def _make_ctx(retries: int = 0, max_retries: int = 2) -> MagicMock:
 
 
 def _trigger() -> CurationTrigger:
-    return CurationTrigger(article_id=42)
+    return CurationTrigger(analyzable_article_id=42)
 
 
 def _fixed_ready() -> ReadyForCuration:
     """task 冒頭の Ready 自構築が返す固定 Ready (Repository を mock するため)。"""
     return ReadyForCuration(
-        article_id=42, original_title="t", original_content="content body"
+        analyzable_article_id=42, original_title="t", original_content="content body"
     )
 
 

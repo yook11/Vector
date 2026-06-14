@@ -129,13 +129,13 @@ class CurationFailureHandler:
                 curator=curator,
             )
             deleted = await AnalyzableArticleRepository(session).delete_by_id(
-                ready.article_id
+                ready.analyzable_article_id
             )
             await session.commit()
 
         logger.warning(
             "curation_article_unprocessable",
-            article_id=ready.article_id,
+            analyzable_article_id=ready.analyzable_article_id,
             code=code,
             deleted_rows=deleted,
             error_class=exception_fqn(exc),
@@ -163,7 +163,7 @@ class CurationFailureHandler:
         except Exception as audit_exc:
             logger.exception(
                 "curation_failure_audit_dropped",
-                article_id=ready.article_id,
+                analyzable_article_id=ready.analyzable_article_id,
                 business_error_class=(exception_fqn(exc)),
                 business_error_message=redact_secrets(str(exc))[:500],
                 audit_error_class=(exception_fqn(audit_exc)),
@@ -188,7 +188,7 @@ class CurationFailureHandler:
         except Exception as audit_exc:
             logger.exception(
                 "curation_failure_audit_dropped",
-                article_id=ready.article_id,
+                analyzable_article_id=ready.analyzable_article_id,
                 business_error_class=(exception_fqn(exc)),
                 business_error_message=redact_secrets(str(exc))[:500],
                 audit_error_class=(exception_fqn(audit_exc)),

@@ -30,7 +30,7 @@ class AssessmentReadyBuildFacts:
     """Stage 4 Ready 構築に必要な DB 射影。"""
 
     curation_id: int
-    article_id: int
+    analyzable_article_id: int
     translated_title: str
     summary: str
     has_analyzed_article: bool
@@ -44,10 +44,10 @@ class AssessmentReadyBuildBlockedError(Exception):
         self,
         code: AssessmentReadyBuildBlockedCode,
         *,
-        article_id: int | None = None,
+        analyzable_article_id: int | None = None,
     ) -> None:
         self.code = code
-        self.article_id = article_id
+        self.analyzable_article_id = analyzable_article_id
         super().__init__(code.value)
 
 
@@ -70,7 +70,7 @@ class ReadyForAssessment(BaseModel):
     curation_id: int = Field(gt=0)
     translated_title: str = Field(min_length=1)
     summary: str = Field(min_length=1)
-    article_id: int = Field(gt=0)
+    analyzable_article_id: int = Field(gt=0)
 
     @classmethod
     async def try_advance_from(
@@ -89,18 +89,18 @@ class ReadyForAssessment(BaseModel):
         if facts.has_analyzed_article:
             raise AssessmentReadyBuildBlockedError(
                 AssessmentReadyBuildBlockedCode.ALREADY_IN_SCOPE,
-                article_id=facts.article_id,
+                analyzable_article_id=facts.analyzable_article_id,
             )
 
         if facts.has_out_of_scope_article:
             raise AssessmentReadyBuildBlockedError(
                 AssessmentReadyBuildBlockedCode.ALREADY_OUT_OF_SCOPE,
-                article_id=facts.article_id,
+                analyzable_article_id=facts.analyzable_article_id,
             )
 
         return cls(
             curation_id=facts.curation_id,
             translated_title=facts.translated_title,
             summary=facts.summary,
-            article_id=facts.article_id,
+            analyzable_article_id=facts.analyzable_article_id,
         )

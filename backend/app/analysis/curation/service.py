@@ -81,13 +81,13 @@ class CurationService:
             match envelope:
                 case CurationCall(result=Signal()):
                     curation_id = await CurationRepository(session).save_signal(
-                        envelope, article_id=ready.article_id
+                        envelope, analyzable_article_id=ready.analyzable_article_id
                     )
                     if curation_id is None:
                         # race lost — 勝者 task が audit を焼く
                         logger.info(
                             "curate_race_loss_signal",
-                            article_id=ready.article_id,
+                            analyzable_article_id=ready.analyzable_article_id,
                         )
                         set_curation_stage_result("skipped")
                         return None
@@ -99,7 +99,7 @@ class CurationService:
                     await session.commit()
                     logger.info(
                         "curation_completed",
-                        article_id=ready.article_id,
+                        analyzable_article_id=ready.analyzable_article_id,
                         curation_id=curation_id,
                     )
                     set_curation_stage_result("signal")
@@ -107,13 +107,13 @@ class CurationService:
 
                 case CurationCall(result=Noise()):
                     noise_id = await CurationRepository(session).save_noise(
-                        envelope, article_id=ready.article_id
+                        envelope, analyzable_article_id=ready.analyzable_article_id
                     )
                     if noise_id is None:
                         # race lost — 勝者 task が audit を焼く
                         logger.info(
                             "curate_race_loss_noise",
-                            article_id=ready.article_id,
+                            analyzable_article_id=ready.analyzable_article_id,
                         )
                         set_curation_stage_result("skipped")
                         return None
@@ -125,7 +125,7 @@ class CurationService:
                     await session.commit()
                     logger.info(
                         "curate_persisted_noise",
-                        article_id=ready.article_id,
+                        analyzable_article_id=ready.analyzable_article_id,
                         noise_id=noise_id,
                     )
                     set_curation_stage_result("noise")

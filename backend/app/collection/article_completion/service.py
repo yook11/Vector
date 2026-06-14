@@ -46,7 +46,8 @@ class ArticleCompletionService:
         self._failure_handler = ArticleCompletionFailureHandler(session_factory)
 
     async def execute(self, ready: ReadyForArticleCompletion) -> int | None:
-        """Ready 1 件を補完し、成功時は ``article_id``、失敗時は ``None`` を返す。
+        """Ready 1 件を補完し、成功時は ``analyzable_article_id``、失敗時は ``None``
+        を返す。
 
         scrape / complete の失敗は handler が状態遷移と audit を完了させる。
         persist の DB 例外は別 tx で audit したうえで再 raise する。
@@ -104,14 +105,14 @@ class ArticleCompletionService:
                     canonical_url=str(ready.source_url),
                 )
                 return None
-            case CompletionSucceeded(article_id=article_id):
+            case CompletionSucceeded(analyzable_article_id=analyzable_article_id):
                 logger.info(
                     "article_completion_succeeded",
                     pending_id=ready.pending_id,
                     source_id=ready.source_id,
-                    article_id=article_id,
+                    analyzable_article_id=analyzable_article_id,
                     canonical_url=str(ready.source_url),
                 )
-                return article_id
+                return analyzable_article_id
             case unreachable:
                 assert_never(unreachable)

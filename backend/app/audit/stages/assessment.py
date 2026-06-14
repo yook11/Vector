@@ -80,7 +80,7 @@ class AssessmentAuditRepository:
             event_type=EventType.SUCCEEDED,
             outcome_code=AssessmentOutcomeCode.IN_SCOPE.value,
             payload=payload,
-            article_id=ready.article_id,
+            article_id=ready.analyzable_article_id,
         )
 
     async def append_out_of_scope(
@@ -107,7 +107,7 @@ class AssessmentAuditRepository:
             event_type=EventType.SUCCEEDED,
             outcome_code=AssessmentOutcomeCode.OUT_OF_SCOPE.value,
             payload=payload,
-            article_id=ready.article_id,
+            article_id=ready.analyzable_article_id,
         )
 
     # --- 救済断念経路 (backfill exclusion と同一 tx) ----------------------
@@ -116,7 +116,7 @@ class AssessmentAuditRepository:
         self,
         *,
         curation_id: int,
-        article_id: int,
+        analyzable_article_id: int,
     ) -> None:
         """古い未 assessment curation を backfill が対象外にした事実を記録する。"""
         await self._events.append(
@@ -126,7 +126,7 @@ class AssessmentAuditRepository:
             payload=AssessmentPayload(
                 curation_id=curation_id,
             ),
-            article_id=article_id,
+            article_id=analyzable_article_id,
         )
 
     # --- Ready 構築 blocked / failed ---------------------------------------
@@ -147,7 +147,7 @@ class AssessmentAuditRepository:
             payload=AssessmentPayload(
                 curation_id=curation_id,
             ),
-            article_id=exc.article_id,
+            article_id=exc.analyzable_article_id,
         )
 
     async def append_ready_build_failed(
@@ -218,7 +218,7 @@ class AssessmentAuditRepository:
             event_type=EventType.FAILED,
             outcome_code=projection.code,
             payload=payload,
-            article_id=ready.article_id,
+            article_id=ready.analyzable_article_id,
             error_class=exception_fqn(exc),
             retryability=projection.retryability,
         )

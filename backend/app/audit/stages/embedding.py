@@ -61,7 +61,7 @@ class EmbeddingAuditRepository:
             event_type=EventType.SUCCEEDED,
             outcome_code=EmbeddingOutcomeCode.COMPLETED.value,
             payload=payload,
-            article_id=ready.article_id,
+            article_id=ready.analyzable_article_id,
         )
 
     # --- 救済断念経路 (backfill exclusion と同一 tx) ----------------------
@@ -70,7 +70,7 @@ class EmbeddingAuditRepository:
         self,
         *,
         analyzed_article_id: int,
-        article_id: int,
+        analyzable_article_id: int,
     ) -> None:
         """古い embedding NULL analyzed article を対象外にした事実を記録する。"""
         await self._events.append(
@@ -78,7 +78,7 @@ class EmbeddingAuditRepository:
             event_type=EventType.REJECTED,
             outcome_code=BackfillExclusionReason.EMBEDDING_AGED_OUT.value,
             payload=EmbeddingPayload(analyzed_article_id=analyzed_article_id),
-            article_id=article_id,
+            article_id=analyzable_article_id,
         )
 
     # --- Ready 構築 blocked / failed ---------------------------------------
@@ -164,7 +164,7 @@ class EmbeddingAuditRepository:
             event_type=EventType.FAILED,
             outcome_code=projection.code,
             payload=payload,
-            article_id=ready.article_id,
+            article_id=ready.analyzable_article_id,
             error_class=exception_fqn(exc),
             retryability=projection.retryability,
         )

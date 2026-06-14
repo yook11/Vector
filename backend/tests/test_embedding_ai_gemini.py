@@ -51,7 +51,7 @@ def _make_embed_response(vectors: list[list[float]]) -> MagicMock:
 
 def _ready(text: str = "hello") -> ReadyForEmbedding:
     return ReadyForEmbedding(
-        analyzed_article_id=1, text_for_embedding=text, article_id=1
+        analyzed_article_id=1, text_for_embedding=text, analyzable_article_id=1
     )
 
 

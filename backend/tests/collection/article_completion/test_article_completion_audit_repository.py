@@ -226,7 +226,7 @@ async def test_append_persist_outcome_success(
     async with session_factory() as session:
         await ArticleCompletionAuditRepository(session).append_persist_outcome(
             ready=ready,
-            outcome=CompletionSucceeded(article_id=article_id),
+            outcome=CompletionSucceeded(analyzable_article_id=article_id),
             advanced=advanced,
         )
         await session.commit()

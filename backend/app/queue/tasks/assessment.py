@@ -72,8 +72,8 @@ async def assess_content(
                 )
                 raise
 
-        # article_id は trigger に無く ready で判明する (late-binding)。
-        stage.set_article_id(ready.article_id)
+        # analyzable_article_id は trigger に無く ready で判明する (late-binding)。
+        stage.set_article_id(ready.analyzable_article_id)
 
         # precondition 未充足の stale trigger で AI quota を消費しない。
         if not await ctx.state.provider_rate_limit_gate.acquire(
@@ -85,7 +85,7 @@ async def assess_content(
             logger.info(
                 "assessment_ai_rate_limit_gate_skipped",
                 curation_id=ready.curation_id,
-                article_id=ready.article_id,
+                analyzable_article_id=ready.analyzable_article_id,
                 ai_model=assessor.model_name,
                 prompt_version=assessor.prompt_version,
             )

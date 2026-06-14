@@ -73,14 +73,14 @@ class ArticleAcquisitionService:
                         )
                     match outcome:
                         case AnalyzableArticle() as ready:
-                            article_id = await article_repo.save(ready)
-                            if article_id is None:
+                            analyzable_article_id = await article_repo.save(ready)
+                            if analyzable_article_id is None:
                                 continue
-                            persisted_ids.append(article_id)
+                            persisted_ids.append(analyzable_article_id)
                             await audit.append_article_created(
                                 source_id=source_id,
                                 source_name=source_name,
-                                article_id=article_id,
+                                analyzable_article_id=analyzable_article_id,
                                 canonical_url=str(ready.source_url),
                             )
                         case ObservedArticle() as observed:

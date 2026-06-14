@@ -25,7 +25,7 @@ class CurationRepository:
     # ------------------------------------------------------------------
 
     async def load_ready_build_facts(
-        self, article_id: int
+        self, analyzable_article_id: int
     ) -> CurationReadyBuildFacts | None:
         stmt = (
             select(
@@ -44,21 +44,21 @@ class CurationRepository:
                 CurationNoise,
                 CurationNoise.analyzable_article_id == AnalyzableArticleRecord.id,
             )
-            .where(AnalyzableArticleRecord.id == article_id)
+            .where(AnalyzableArticleRecord.id == analyzable_article_id)
             .limit(1)
         )
         row = (await self._session.execute(stmt)).first()
         if row is None:
             return None
         (
-            loaded_article_id,
+            loaded_analyzable_article_id,
             original_title,
             original_content,
             has_signal_curation,
             has_noise_curation,
         ) = row
         return CurationReadyBuildFacts(
-            article_id=loaded_article_id,
+            analyzable_article_id=loaded_analyzable_article_id,
             original_title=original_title,
             original_content=original_content,
             has_signal_curation=has_signal_curation,
@@ -69,11 +69,11 @@ class CurationRepository:
     # signal path
     # ------------------------------------------------------------------
 
-    async def signal_exists_for_article(self, article_id: int) -> bool:
+    async def signal_exists_for_article(self, analyzable_article_id: int) -> bool:
         """signal curation が既に存在するかを返す。"""
         stmt = (
             select(ArticleCuration.id)
-            .where(ArticleCuration.analyzable_article_id == article_id)
+            .where(ArticleCuration.analyzable_article_id == analyzable_article_id)
             .limit(1)
         )
         return (await self._session.execute(stmt)).first() is not None
@@ -82,14 +82,14 @@ class CurationRepository:
         self,
         call: CurationCall[Signal],
         *,
-        article_id: int,
+        analyzable_article_id: int,
     ) -> int | None:
         """signal を保存し、既存行に負けた場合は ``None`` を返す。"""
         signal = call.result
         stmt = (
             pg_insert(ArticleCuration)
             .values(
-                analyzable_article_id=article_id,
+                analyzable_article_id=analyzable_article_id,
                 translated_title=signal.title_ja,
                 summary=signal.summary_ja,
             )
@@ -102,7 +102,7 @@ class CurationRepository:
         self,
         call: CurationCall[Signal],
         *,
-        article_id: int,
+        analyzable_article_id: int,
     ) -> int:
         """既存の Extraction を新しい ``CurationCall[Signal]`` で上書きする (CLI 用)。
 
@@ -120,7 +120,7 @@ class CurationRepository:
         - ``extracted_at`` は ``func.now()`` で再採番する (再抽出した時刻として
           扱い、後段の運用で「いつ抽出された」を取り違えない)。
 
-        対象 article_id に対する curation が存在しない前提 (CLI 側で事前に
+        対象 analyzable_article_id に対する curation が存在しない前提 (CLI 側で事前に
         ``signal_exists_for_article`` で絞り込む)。存在しない場合は
         ``NoResultFound``。
 
@@ -130,7 +130,7 @@ class CurationRepository:
         signal = call.result
         update_stmt = (
             update(ArticleCuration)
-            .where(ArticleCuration.analyzable_article_id == article_id)
+            .where(ArticleCuration.analyzable_article_id == analyzable_article_id)
             .values(
                 translated_title=signal.title_ja,
                 summary=signal.summary_ja,
@@ -151,14 +151,14 @@ class CurationRepository:
         self,
         call: CurationCall[Noise],
         *,
-        article_id: int,
+        analyzable_article_id: int,
     ) -> int | None:
         """noise を保存し、既存行に負けた場合は ``None`` を返す。"""
         noise = call.result
         stmt = (
             pg_insert(CurationNoise)
             .values(
-                analyzable_article_id=article_id,
+                analyzable_article_id=analyzable_article_id,
                 title_ja=noise.title_ja,
                 summary_ja=noise.summary_ja,
             )

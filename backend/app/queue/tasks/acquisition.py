@@ -436,9 +436,11 @@ async def acquire_source(
         return {"source_id": source_id, "status": "error", "reason": str(exc)}
 
     article_created_count = len(persisted_ids)
-    # 永続化済 article_id を Trigger に詰めて enqueue。
-    for article_id in persisted_ids:
-        await curate_content.kiq(CurationTrigger(article_id=article_id))
+    # 永続化済 analyzable_article_id を Trigger に詰めて enqueue。
+    for analyzable_article_id in persisted_ids:
+        await curate_content.kiq(
+            CurationTrigger(analyzable_article_id=analyzable_article_id)
+        )
     # 本文未取得分は `incomplete_articles` の DB 駆動。`dispatch_html_fetch_jobs`
     # cron poller が `scrape_html_body` に投入するため、ここでは直接 kiq しない。
     payload = {

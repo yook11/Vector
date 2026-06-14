@@ -105,8 +105,9 @@ async def scrape_html_body(
 
     taskiq retry を持たず cron poller (``dispatch_html_fetch_jobs``) のみで
     再投入する。task は ``ReadyForArticleCompletion.try_advance_from`` で Ready を
-    構築し (対象外なら skipped audit + ``None``)、Service に渡す。article_id が返れば
-    ``curate_content`` に enqueue、``None`` は何もしない (DB 状態 + audit は
+    構築し (対象外なら skipped audit + ``None``)、Service に渡す。
+    analyzable_article_id が返れば ``curate_content`` に enqueue、``None`` は何もしない
+    (DB 状態 + audit は
     Service / failure handler 内で完結済)。
     """
     session_factory = ctx.state.session_factory
@@ -139,14 +140,18 @@ async def scrape_html_body(
             )
             raise
 
-    article_id = await ArticleCompletionService(session_factory).execute(ready)
+    analyzable_article_id = await ArticleCompletionService(session_factory).execute(
+        ready
+    )
 
-    if article_id is None:
+    if analyzable_article_id is None:
         return None
-    await curate_content.kiq(CurationTrigger(article_id=article_id))
+    await curate_content.kiq(
+        CurationTrigger(analyzable_article_id=analyzable_article_id)
+    )
     return {
         "pending_id": pending_id,
-        "article_id": article_id,
+        "analyzable_article_id": analyzable_article_id,
         "status": "success",
     }
 

@@ -43,22 +43,22 @@ async def curate_content(
     session_factory = ctx.state.session_factory
     curator: BaseCurator = ctx.state.curator
 
-    with curation_stage_span(article_id=trigger.article_id) as stage:
+    with curation_stage_span(article_id=trigger.analyzable_article_id) as stage:
         async with session_factory() as session:
             try:
                 ready = await ReadyForCuration.try_advance_from(
-                    article_id=trigger.article_id,
+                    analyzable_article_id=trigger.analyzable_article_id,
                     repo=CurationRepository(session),
                 )
             except CurationReadyBuildBlockedError as exc:
                 await CurationAuditRepository(session).append_ready_build_blocked(
-                    target_article_id=trigger.article_id,
+                    target_article_id=trigger.analyzable_article_id,
                     exc=exc,
                 )
                 await session.commit()
                 logger.info(
                     "curate_content_rejected",
-                    article_id=trigger.article_id,
+                    analyzable_article_id=trigger.analyzable_article_id,
                     reason="ready_build_blocked",
                     code=exc.code.value,
                 )
@@ -67,7 +67,7 @@ async def curate_content(
             except Exception as exc:
                 await _append_ready_build_failed_audit(
                     session_factory,
-                    article_id=trigger.article_id,
+                    analyzable_article_id=trigger.analyzable_article_id,
                     exc=exc,
                 )
                 raise
@@ -79,7 +79,7 @@ async def curate_content(
             record_rate_limit_gate_skipped(stage="curation", model=curator.model_name)
             logger.info(
                 "curation_ai_rate_limit_gate_skipped",
-                article_id=ready.article_id,
+                analyzable_article_id=ready.analyzable_article_id,
                 ai_model=curator.model_name,
                 prompt_version=curator.prompt_version,
             )
@@ -113,21 +113,21 @@ async def curate_content(
 async def _append_ready_build_failed_audit(
     session_factory: async_sessionmaker[AsyncSession],
     *,
-    article_id: int,
+    analyzable_article_id: int,
     exc: Exception,
 ) -> None:
     """Ready 構築例外を best-effort で監査し、失敗時は構造ログへ退避する。"""
     try:
         async with session_factory() as audit_session:
             await CurationAuditRepository(audit_session).append_ready_build_failed(
-                target_article_id=article_id,
+                target_article_id=analyzable_article_id,
                 exc=exc,
             )
             await audit_session.commit()
     except Exception as audit_exc:
         logger.exception(
             "curation_ready_build_failed_audit_dropped",
-            article_id=article_id,
+            analyzable_article_id=analyzable_article_id,
             business_error_class=exception_fqn(exc),
             audit_error_class=exception_fqn(audit_exc),
         )

@@ -121,7 +121,7 @@ async def _seed_extraction(
     repo = CurationRepository(db_session)
     saved = await repo.save_signal(
         _signal_call(title_ja="旧タイトル", summary_ja="旧要約"),
-        article_id=article.id,
+        analyzable_article_id=article.id,
     )
     await db_session.commit()
     assert saved is not None

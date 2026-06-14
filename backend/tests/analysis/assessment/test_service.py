@@ -99,7 +99,7 @@ def _ready(extraction: ArticleCuration) -> ReadyForAssessment:
         curation_id=extraction.id,
         translated_title=extraction.translated_title,
         summary=extraction.summary,
-        article_id=extraction.analyzable_article_id,
+        analyzable_article_id=extraction.analyzable_article_id,
     )
 
 
@@ -286,7 +286,7 @@ async def test_provider_network_error_is_wrapped_to_recoverable_marker(
         curation_id=1,
         translated_title="t",
         summary="s",
-        article_id=1,
+        analyzable_article_id=1,
     )
     svc = AssessmentService(session_factory)
 
@@ -308,7 +308,7 @@ async def test_provider_configuration_error_is_wrapped_to_terminal_marker(
         curation_id=1,
         translated_title="t",
         summary="s",
-        article_id=1,
+        analyzable_article_id=1,
     )
     svc = AssessmentService(session_factory)
 

@@ -70,7 +70,7 @@ def _make_ready(curation_id: int = 2) -> ReadyForAssessment:
         curation_id=curation_id,
         translated_title="title",
         summary="summary",
-        article_id=7,
+        analyzable_article_id=7,
     )
 
 
@@ -230,7 +230,7 @@ class TestAssessContent:
             e for e in cap if e.get("event") == "assessment_ai_rate_limit_gate_skipped"
         ]
         assert skips, "gate skip log が emit されていない"
-        assert skips[-1]["article_id"] == 7
+        assert skips[-1]["analyzable_article_id"] == 7
         assert skips[-1]["ai_model"] == "test-model"
 
     @pytest.mark.asyncio

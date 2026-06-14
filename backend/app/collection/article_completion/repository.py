@@ -23,7 +23,7 @@ from app.models.incomplete_article import IncompleteArticle as IncompleteArticle
 class CompletionSucceeded:
     """正規所有者として ``analyzable_articles`` に INSERT 成功。"""
 
-    article_id: int
+    analyzable_article_id: int
 
 
 @dataclass(frozen=True, slots=True)
@@ -198,10 +198,12 @@ class ArticleCompletionRepository:
         if not await self._delete_claimed(ready):
             return CompletionSuperseded()
 
-        article_id = await AnalyzableArticleRepository(self._session).save(advanced)
-        if article_id is None:
+        analyzable_article_id = await AnalyzableArticleRepository(self._session).save(
+            advanced
+        )
+        if analyzable_article_id is None:
             return CompletionUrlConflict()
-        return CompletionSucceeded(article_id=article_id)
+        return CompletionSucceeded(analyzable_article_id=analyzable_article_id)
 
     async def _delete_claimed(self, ready: ReadyForArticleCompletion) -> bool:
         stmt = (

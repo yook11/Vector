@@ -84,7 +84,7 @@ def _ready_from(extraction: ArticleCuration) -> ReadyForAssessment:
         curation_id=extraction.id,
         translated_title=extraction.translated_title,
         summary=extraction.summary,
-        article_id=extraction.analyzable_article_id,
+        analyzable_article_id=extraction.analyzable_article_id,
     )
 
 

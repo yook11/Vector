@@ -90,7 +90,7 @@ async def _make_analyzed_article(
     return assessment
 
 
-# article_ids_pending_curation
+# analyzable_article_ids_pending_curation
 
 
 @pytest.mark.asyncio
@@ -108,7 +108,7 @@ async def test_pending_curation_returns_articles_without_curation(
     )
 
     backlog = PipelineBacklog(db_session)
-    ids = await backlog.article_ids_pending_curation(
+    ids = await backlog.analyzable_article_ids_pending_curation(
         created_before=now - timedelta(minutes=30),
         created_after=now - timedelta(days=7),
         limit=10,
@@ -121,7 +121,7 @@ async def test_pending_curation_targets_include_audit_snapshot(
     db_session: AsyncSession,
     sample_source: NewsSource,
 ) -> None:
-    """curation backfill target は article_id / source_name を含む。"""
+    """curation backfill target は analyzable_article_id / source_name を含む。"""
     now = datetime(2026, 4, 26, 12, 0, 0, tzinfo=UTC)
     article = await _make_article(
         db_session,
@@ -138,7 +138,7 @@ async def test_pending_curation_targets_include_audit_snapshot(
     )
     assert any(
         target.target_id == article.id
-        and target.article_id == article.id
+        and target.analyzable_article_id == article.id
         and target.source_name == str(sample_source.name)
         for target in targets
     )
@@ -159,7 +159,7 @@ async def test_pending_curation_excludes_too_recent(
     )
 
     backlog = PipelineBacklog(db_session)
-    ids = await backlog.article_ids_pending_curation(
+    ids = await backlog.analyzable_article_ids_pending_curation(
         created_before=now - timedelta(minutes=30),
         created_after=now - timedelta(days=7),
         limit=10,
@@ -182,7 +182,7 @@ async def test_pending_curation_excludes_too_old(
     )
 
     backlog = PipelineBacklog(db_session)
-    ids = await backlog.article_ids_pending_curation(
+    ids = await backlog.analyzable_article_ids_pending_curation(
         created_before=now - timedelta(minutes=30),
         created_after=now - timedelta(days=7),
         limit=10,
@@ -213,7 +213,7 @@ async def test_pending_curation_excludes_articles_with_curation(
     await db_session.commit()
 
     backlog = PipelineBacklog(db_session)
-    ids = await backlog.article_ids_pending_curation(
+    ids = await backlog.analyzable_article_ids_pending_curation(
         created_before=now - timedelta(minutes=30),
         created_after=now - timedelta(days=7),
         limit=10,
@@ -249,7 +249,7 @@ async def test_pending_curation_excludes_noise_articles(
     await db_session.commit()
 
     backlog = PipelineBacklog(db_session)
-    ids = await backlog.article_ids_pending_curation(
+    ids = await backlog.analyzable_article_ids_pending_curation(
         created_before=now - timedelta(minutes=30),
         created_after=now - timedelta(days=7),
         limit=10,
@@ -300,7 +300,7 @@ async def test_count_pending_curation_returns_true_count_without_limit(
         created_before=now - timedelta(minutes=30),
         created_after=now - timedelta(days=7),
     )
-    ids = await backlog.article_ids_pending_curation(
+    ids = await backlog.analyzable_article_ids_pending_curation(
         created_before=now - timedelta(minutes=30),
         created_after=now - timedelta(days=7),
         limit=2,
@@ -311,7 +311,7 @@ async def test_count_pending_curation_returns_true_count_without_limit(
     assert set(ids).issubset(pending_ids)
 
 
-# article_ids_aged_out_curation (年齢削除対象 = 窓外の child-NULL)
+# analyzable_article_ids_aged_out_curation (年齢削除対象 = 窓外の child-NULL)
 
 
 @pytest.mark.asyncio
@@ -329,7 +329,7 @@ async def test_aged_out_curation_returns_old_child_null_articles(
     )
 
     backlog = PipelineBacklog(db_session)
-    ids = await backlog.article_ids_aged_out_curation(
+    ids = await backlog.analyzable_article_ids_aged_out_curation(
         created_before=now - timedelta(days=7),
         limit=10,
     )
@@ -351,7 +351,7 @@ async def test_aged_out_curation_excludes_recent_articles(
     )
 
     backlog = PipelineBacklog(db_session)
-    ids = await backlog.article_ids_aged_out_curation(
+    ids = await backlog.analyzable_article_ids_aged_out_curation(
         created_before=now - timedelta(days=7),
         limit=10,
     )
@@ -379,7 +379,7 @@ async def test_aged_out_curation_excludes_articles_with_curation(
     await db_session.commit()
 
     backlog = PipelineBacklog(db_session)
-    ids = await backlog.article_ids_aged_out_curation(
+    ids = await backlog.analyzable_article_ids_aged_out_curation(
         created_before=now - timedelta(days=7),
         limit=10,
     )
@@ -409,7 +409,7 @@ async def test_aged_out_curation_excludes_articles_with_noise(
     await db_session.commit()
 
     backlog = PipelineBacklog(db_session)
-    ids = await backlog.article_ids_aged_out_curation(
+    ids = await backlog.analyzable_article_ids_aged_out_curation(
         created_before=now - timedelta(days=7),
         limit=10,
     )
@@ -455,7 +455,7 @@ async def test_pending_assessment_targets_include_audit_snapshot(
     db_session: AsyncSession,
     sample_source: NewsSource,
 ) -> None:
-    """assessment backfill target は curation_id / article_id / source_name を含む。"""
+    """assessment backfill target は curation_id / analyzable_article_id / source_name を含む。"""
     now = datetime(2026, 4, 26, 12, 0, 0, tzinfo=UTC)
     article = await _make_article(
         db_session,
@@ -473,7 +473,7 @@ async def test_pending_assessment_targets_include_audit_snapshot(
     )
     assert any(
         target.target_id == curation.id
-        and target.article_id == article.id
+        and target.analyzable_article_id == article.id
         and target.source_name == str(sample_source.name)
         for target in targets
     )
@@ -748,7 +748,7 @@ async def test_pending_embedding_targets_include_audit_snapshot(
     )
     assert any(
         target.target_id == analysis.id
-        and target.article_id == article.id
+        and target.analyzable_article_id == article.id
         and target.source_name == str(sample_source.name)
         for target in targets
     )

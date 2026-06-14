@@ -35,7 +35,7 @@ def _ready() -> ReadyForEmbedding:
     return ReadyForEmbedding(
         analyzed_article_id=1,
         text_for_embedding="分析タイトル\n分析要約",
-        article_id=7,
+        analyzable_article_id=7,
     )
 
 

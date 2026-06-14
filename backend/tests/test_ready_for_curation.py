@@ -18,14 +18,14 @@ from app.queue.messages.curation import CurationTrigger
 
 def _facts(
     *,
-    article_id: int = 42,
+    analyzable_article_id: int = 42,
     title: str = "Quantum Breakthrough",
     content: str = "Article body",
     has_signal_curation: bool = False,
     has_noise_curation: bool = False,
 ) -> CurationReadyBuildFacts:
     return CurationReadyBuildFacts(
-        article_id=article_id,
+        analyzable_article_id=analyzable_article_id,
         original_title=title,
         original_content=content,
         has_signal_curation=has_signal_curation,
@@ -48,13 +48,15 @@ def _repo_mock(
 class TestTryAdvanceFrom:
     @pytest.mark.asyncio
     async def test_builds_ready_from_repository_facts(self) -> None:
-        facts = _facts(article_id=42, content="Article body" * 10)
+        facts = _facts(analyzable_article_id=42, content="Article body" * 10)
         repo = _repo_mock(facts=facts)
 
-        ready = await ReadyForCuration.try_advance_from(article_id=42, repo=repo)
+        ready = await ReadyForCuration.try_advance_from(
+            analyzable_article_id=42, repo=repo
+        )
 
         assert ready == ReadyForCuration(
-            article_id=42,
+            analyzable_article_id=42,
             original_title=facts.original_title,
             original_content=facts.original_content,
         )
@@ -65,11 +67,11 @@ class TestTryAdvanceFrom:
         repo = _repo_mock(missing=True)
 
         with pytest.raises(CurationReadyBuildBlockedError) as exc_info:
-            await ReadyForCuration.try_advance_from(article_id=99, repo=repo)
+            await ReadyForCuration.try_advance_from(analyzable_article_id=99, repo=repo)
 
         assert exc_info.value.code is CurationReadyBuildBlockedCode.ARTICLE_MISSING
-        # 記事不在 → article_id は運べない (audit の source_id も空になる)
-        assert exc_info.value.article_id is None
+        # 記事不在 → analyzable_article_id は運べない (audit の source_id も空になる)
+        assert exc_info.value.analyzable_article_id is None
         repo.load_ready_build_facts.assert_awaited_once_with(99)
 
     @pytest.mark.asyncio
@@ -77,11 +79,11 @@ class TestTryAdvanceFrom:
         repo = _repo_mock(facts=_facts(has_signal_curation=True))
 
         with pytest.raises(CurationReadyBuildBlockedError) as exc_info:
-            await ReadyForCuration.try_advance_from(article_id=42, repo=repo)
+            await ReadyForCuration.try_advance_from(analyzable_article_id=42, repo=repo)
 
         assert exc_info.value.code is CurationReadyBuildBlockedCode.ALREADY_CURATED
-        # facts.article_id が例外経由で監査まで運ばれる (source_id 補填の根拠)
-        assert exc_info.value.article_id == 42
+        # analyzable_article_id が例外経由で監査まで運ばれる (source_id 補填の根拠)
+        assert exc_info.value.analyzable_article_id == 42
         repo.load_ready_build_facts.assert_awaited_once_with(42)
 
     @pytest.mark.asyncio
@@ -89,14 +91,14 @@ class TestTryAdvanceFrom:
         repo = _repo_mock(facts=_facts(has_noise_curation=True))
 
         with pytest.raises(CurationReadyBuildBlockedError) as exc_info:
-            await ReadyForCuration.try_advance_from(article_id=42, repo=repo)
+            await ReadyForCuration.try_advance_from(analyzable_article_id=42, repo=repo)
 
         assert (
             exc_info.value.code
             is CurationReadyBuildBlockedCode.ALREADY_REJECTED_AS_NOISE
         )
-        # facts.article_id が例外経由で監査まで運ばれる (source_id 補填の根拠)
-        assert exc_info.value.article_id == 42
+        # analyzable_article_id が例外経由で監査まで運ばれる (source_id 補填の根拠)
+        assert exc_info.value.analyzable_article_id == 42
         repo.load_ready_build_facts.assert_awaited_once_with(42)
 
     @pytest.mark.asyncio
@@ -105,11 +107,11 @@ class TestTryAdvanceFrom:
         repo = _repo_mock(facts=_facts(content=oversized))
 
         with pytest.raises(CurationReadyBuildBlockedError) as exc_info:
-            await ReadyForCuration.try_advance_from(article_id=42, repo=repo)
+            await ReadyForCuration.try_advance_from(analyzable_article_id=42, repo=repo)
 
         assert exc_info.value.code is CurationReadyBuildBlockedCode.CONTENT_TOO_LARGE
-        # facts.article_id が例外経由で監査まで運ばれる (source_id 補填の根拠)
-        assert exc_info.value.article_id == 42
+        # analyzable_article_id が例外経由で監査まで運ばれる (source_id 補填の根拠)
+        assert exc_info.value.analyzable_article_id == 42
         assert exc_info.value.content_length == len(oversized)
         assert exc_info.value.max_content_length == ReadyForCuration.MAX_CONTENT_LENGTH
 
@@ -117,38 +119,50 @@ class TestTryAdvanceFrom:
 class TestReadyForCurationFieldConstraints:
     def test_rejects_empty_original_title(self) -> None:
         with pytest.raises(ValidationError):
-            ReadyForCuration(article_id=1, original_title="", original_content="x")
+            ReadyForCuration(
+                analyzable_article_id=1, original_title="", original_content="x"
+            )
 
     def test_rejects_empty_original_content(self) -> None:
         with pytest.raises(ValidationError):
-            ReadyForCuration(article_id=1, original_title="t", original_content="")
+            ReadyForCuration(
+                analyzable_article_id=1, original_title="t", original_content=""
+            )
 
     def test_rejects_oversized_original_content(self) -> None:
         oversized = "x" * (ReadyForCuration.MAX_CONTENT_LENGTH + 1)
         with pytest.raises(ValidationError):
             ReadyForCuration(
-                article_id=1, original_title="t", original_content=oversized
+                analyzable_article_id=1,
+                original_title="t",
+                original_content=oversized,
             )
 
     def test_rejects_non_positive_article_id(self) -> None:
         with pytest.raises(ValidationError):
-            ReadyForCuration(article_id=0, original_title="t", original_content="x")
+            ReadyForCuration(
+                analyzable_article_id=0, original_title="t", original_content="x"
+            )
         with pytest.raises(ValidationError):
-            ReadyForCuration(article_id=-1, original_title="t", original_content="x")
+            ReadyForCuration(
+                analyzable_article_id=-1, original_title="t", original_content="x"
+            )
 
     def test_is_frozen(self) -> None:
-        ready = ReadyForCuration(article_id=1, original_title="t", original_content="x")
+        ready = ReadyForCuration(
+            analyzable_article_id=1, original_title="t", original_content="x"
+        )
         with pytest.raises(ValidationError):
-            ready.article_id = 999  # type: ignore[misc]
+            ready.analyzable_article_id = 999  # type: ignore[misc]
 
 
 class TestCurationTrigger:
     def test_carries_article_id_only(self) -> None:
-        trigger = CurationTrigger(article_id=42)
-        assert trigger.article_id == 42
+        trigger = CurationTrigger(analyzable_article_id=42)
+        assert trigger.analyzable_article_id == 42
 
     def test_rejects_non_positive_article_id(self) -> None:
         with pytest.raises(ValidationError):
-            CurationTrigger(article_id=0)
+            CurationTrigger(analyzable_article_id=0)
         with pytest.raises(ValidationError):
-            CurationTrigger(article_id=-1)
+            CurationTrigger(analyzable_article_id=-1)

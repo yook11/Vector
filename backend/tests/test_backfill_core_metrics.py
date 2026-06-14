@@ -84,7 +84,7 @@ def _target(target_id: int) -> BackfillTarget:
     """backfill enqueue 対象の test double を返す。"""
     return BackfillTarget(
         target_id=target_id,
-        article_id=target_id + 1000,
+        analyzable_article_id=target_id + 1000,
         source_name="VentureBeat",
     )
 

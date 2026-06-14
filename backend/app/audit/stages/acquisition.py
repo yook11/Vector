@@ -49,7 +49,7 @@ class SourceAcquisitionAuditRepository:
         *,
         source_id: int | None,
         source_name: str | None,
-        article_id: int,
+        analyzable_article_id: int,
         canonical_url: str,
     ) -> None:
         """即時獲得成功を記録する。"""
@@ -61,7 +61,7 @@ class SourceAcquisitionAuditRepository:
             event_type=EventType.SUCCEEDED,
             outcome_code=AcquisitionOutcomeCode.ARTICLE_CREATED.value,
             payload=payload,
-            article_id=article_id,
+            article_id=analyzable_article_id,
             source_id=source_id,
             error_class=None,
         )

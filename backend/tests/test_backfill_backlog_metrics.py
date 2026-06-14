@@ -49,7 +49,7 @@ def _target(curation_id: int) -> BackfillTarget:
     """assessment backfill target の test double を返す。"""
     return BackfillTarget(
         target_id=curation_id,
-        article_id=curation_id + 1000,
+        analyzable_article_id=curation_id + 1000,
         source_name="VentureBeat",
     )
 

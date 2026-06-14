@@ -124,13 +124,13 @@ async def _build_analysis(
 def _make_ready(
     *,
     analyzed_article_id: int,
-    article_id: int,
+    analyzable_article_id: int,
     text: str = "分析タイトル\n分析要約",
 ) -> ReadyForEmbedding:
     return ReadyForEmbedding(
         analyzed_article_id=analyzed_article_id,
         text_for_embedding=text,
-        article_id=article_id,
+        analyzable_article_id=analyzable_article_id,
     )
 
 
@@ -167,7 +167,9 @@ async def test_execute_persists_embedding_on_success(
 
     embedder = _mock_embedder()
     svc = EmbeddingService(session_factory)
-    ready = _make_ready(analyzed_article_id=analyzed_article_id, article_id=article_id)
+    ready = _make_ready(
+        analyzed_article_id=analyzed_article_id, analyzable_article_id=article_id
+    )
     result = await svc.execute(ready, embedder)
 
     assert result is None
@@ -222,7 +224,9 @@ async def test_execute_shortcircuits_when_already_persisted(
     svc = EmbeddingService(session_factory)
     # Ready 構築時には未 embedded だったが、その直後に他ワーカーが先に書き込んだ
     # 並行状況を再現するため Ready を直接構築して execute に渡す。
-    ready = _make_ready(analyzed_article_id=analyzed_article_id, article_id=article_id)
+    ready = _make_ready(
+        analyzed_article_id=analyzed_article_id, analyzable_article_id=article_id
+    )
     result = await svc.execute(ready, embedder)
 
     assert result is None
@@ -273,7 +277,9 @@ async def test_execute_wraps_target_rejected_provider_error(
     )
     embedder = _mock_embedder(raises=original)
     svc = EmbeddingService(session_factory)
-    ready = _make_ready(analyzed_article_id=analyzed_article_id, article_id=article_id)
+    ready = _make_ready(
+        analyzed_article_id=analyzed_article_id, analyzable_article_id=article_id
+    )
 
     with pytest.raises(EmbeddingTerminalError) as exc_info:
         await svc.execute(ready, embedder)
@@ -325,7 +331,9 @@ async def test_execute_wraps_recoverable_provider_errors(
 
     embedder = _mock_embedder(raises=provider_exc)
     svc = EmbeddingService(session_factory)
-    ready = _make_ready(analyzed_article_id=analyzed_article_id, article_id=article_id)
+    ready = _make_ready(
+        analyzed_article_id=analyzed_article_id, analyzable_article_id=article_id
+    )
 
     with pytest.raises(EmbeddingRecoverableError) as exc_info:
         await svc.execute(ready, embedder)
@@ -362,7 +370,9 @@ async def test_execute_propagates_response_invalid_from_embedder(
     response_invalid = EmbeddingResponseInvalidError()
     embedder = _mock_embedder(raises=response_invalid)
     svc = EmbeddingService(session_factory)
-    ready = _make_ready(analyzed_article_id=analyzed_article_id, article_id=article_id)
+    ready = _make_ready(
+        analyzed_article_id=analyzed_article_id, analyzable_article_id=article_id
+    )
 
     with pytest.raises(EmbeddingResponseInvalidError) as exc_info:
         await svc.execute(ready, embedder)

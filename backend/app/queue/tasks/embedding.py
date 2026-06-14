@@ -70,8 +70,8 @@ async def generate_embedding(
                 )
                 raise
 
-        # article_id は trigger に無く ready で判明する (late-binding)。
-        stage.set_article_id(ready.article_id)
+        # analyzable_article_id は trigger に無く ready で判明する (late-binding)。
+        stage.set_article_id(ready.analyzable_article_id)
 
         # precondition 未充足の stale trigger で AI quota を消費しない。
         gate = ctx.state.provider_rate_limit_gate
@@ -80,7 +80,7 @@ async def generate_embedding(
             logger.info(
                 "embedding_ai_rate_limit_gate_skipped",
                 analyzed_article_id=ready.analyzed_article_id,
-                article_id=ready.article_id,
+                analyzable_article_id=ready.analyzable_article_id,
                 embedding_model=embedder.model_name,
             )
             stage.set_result("rate_limited")

@@ -57,7 +57,7 @@ async def _invoke_with_aged_ids(
 ) -> list[dict[str, Any]]:
     """``_delete_aged_out_curations`` を ``article_ids`` 固定で呼んで metric を回収。"""
     backlog = MagicMock()
-    backlog.article_ids_aged_out_curation = AsyncMock(return_value=aged_ids)
+    backlog.analyzable_article_ids_aged_out_curation = AsyncMock(return_value=aged_ids)
     audit_repo = MagicMock()
     audit_repo.append_backfill_curation_aged_out = AsyncMock()
     article_repo = MagicMock()

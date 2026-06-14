@@ -10,7 +10,7 @@
 - 1 件単位の retry (exponential backoff, 上限 ``max_retries``)
 - ``dry_run=True`` (CLI default) は AI 呼び出しまで実行し commit せず rollback
   (新 prompt の挙動を本番投入前に確認するための「擬似実行」)
-- 進捗ログ ``re_curate_progress`` (article_id, entity_count, elapsed_ms) は
+- 進捗ログ ``re_curate_progress`` (analyzable_article_id, entity_count, elapsed_ms) は
   本文 / 翻訳テキストを含めない (再 curation ログを長期保存しても秘匿性が増えないように)
 - 集約結果 ``RecurationSummary`` で success / failed / skipped を tuple として返却
   (CLI 側で exit code を決定する)
@@ -20,7 +20,8 @@
 - ``AnalyzableArticleRecord`` は既存 ``ReadyForCuration`` を経由しない。
   再 curation 対象は既に ``ArticleCuration`` を持つので Pattern A' の
   precondition「未生成」と矛盾する。
-  本サービスは fetch を内部で行い、無い article_id は ``skipped`` に集約する。
+  本サービスは fetch を内部で行い、無い analyzable_article_id は ``skipped`` に
+  集約する。
 - curator は呼び出し側で構築する。
 """
 
@@ -90,12 +91,12 @@ class RecurationService:
 
     async def execute(
         self,
-        article_ids: tuple[int, ...],
+        analyzable_article_ids: tuple[int, ...],
         curator: BaseCurator,
         *,
         dry_run: bool,
     ) -> RecurationSummary:
-        """指定 article_id 群を 1 件ずつ再 curation する。
+        """指定 analyzable_article_id 群を 1 件ずつ再 curation する。
 
         - 順次実行 (Gemini RPM=100 / RPD クォータを使い切らないため、CLI 側で
           ``--limit`` と組み合わせて batch 制御する)
@@ -107,18 +108,18 @@ class RecurationService:
         failed: list[int] = []
         skipped: list[int] = []
 
-        for article_id in article_ids:
+        for analyzable_article_id in analyzable_article_ids:
             outcome = await self._run_one(
-                article_id=article_id,
+                analyzable_article_id=analyzable_article_id,
                 curator=curator,
                 dry_run=dry_run,
             )
             if outcome == "success":
-                success.append(article_id)
+                success.append(analyzable_article_id)
             elif outcome == "failed":
-                failed.append(article_id)
+                failed.append(analyzable_article_id)
             else:
-                skipped.append(article_id)
+                skipped.append(analyzable_article_id)
 
         return RecurationSummary(
             success_ids=tuple(success),
@@ -130,22 +131,26 @@ class RecurationService:
     async def _run_one(
         self,
         *,
-        article_id: int,
+        analyzable_article_id: int,
         curator: BaseCurator,
         dry_run: bool,
     ) -> str:
         """1 article を再 curation する。"success" / "failed" / "skipped" を返す。"""
         async with self._session_factory() as session:
-            article = await self._fetch_article(session, article_id)
+            article = await self._fetch_article(session, analyzable_article_id)
             if article is None:
-                logger.warning("re_curate_skip_no_article", article_id=article_id)
+                logger.warning(
+                    "re_curate_skip_no_article",
+                    analyzable_article_id=analyzable_article_id,
+                )
                 return "skipped"
             if not await CurationRepository(session).signal_exists_for_article(
-                article_id
+                analyzable_article_id
             ):
                 # 再 curation は既存 curation の差し替えのみを扱う。
                 logger.warning(
-                    "re_curate_skip_no_existing_curation", article_id=article_id
+                    "re_curate_skip_no_existing_curation",
+                    analyzable_article_id=analyzable_article_id,
                 )
                 return "skipped"
 
@@ -155,12 +160,17 @@ class RecurationService:
         # curator 呼び出しは session 外 (slow IO 中の DB 接続専有を避ける)
         try:
             envelope = await self._curate_with_retry(
-                curator, title=title, content=content, article_id=article_id
+                curator,
+                title=title,
+                content=content,
+                analyzable_article_id=analyzable_article_id,
             )
         except CurationTerminalDropError:
             # AI から見て扱えない記事 (input rejected / output blocked)。
             # 通常 pipeline でも記事 DELETE 対象のカテゴリなので skipped 扱い。
-            logger.warning("re_curate_drop_article", article_id=article_id)
+            logger.warning(
+                "re_curate_drop_article", analyzable_article_id=analyzable_article_id
+            )
             return "skipped"
         except CurationTerminalKeepError as exc:
             # Configuration / RequestInvalid / Balance 等。retry しても解消しない
@@ -168,7 +178,7 @@ class RecurationService:
             # audit + return する)。
             logger.error(
                 "re_curate_failed_permanent",
-                article_id=article_id,
+                analyzable_article_id=analyzable_article_id,
                 error=type(exc).__name__,
             )
             return "failed"
@@ -176,7 +186,7 @@ class RecurationService:
             # max_retries 回 retry しても再現した recoverable エラー。
             logger.error(
                 "re_curate_failed_after_retry",
-                article_id=article_id,
+                analyzable_article_id=analyzable_article_id,
                 error=type(exc).__name__,
             )
             return "failed"
@@ -188,7 +198,7 @@ class RecurationService:
                 async with self._session_factory() as session:
                     repo = CurationRepository(session)
                     curation_id = await repo.update_signal_idempotent(
-                        envelope, article_id=article_id
+                        envelope, analyzable_article_id=analyzable_article_id
                     )
                     if dry_run:
                         await session.rollback()
@@ -198,7 +208,7 @@ class RecurationService:
                 elapsed_ms = int((perf_counter() - started) * 1000)
                 logger.info(
                     "re_curate_progress",
-                    article_id=article_id,
+                    analyzable_article_id=analyzable_article_id,
                     curation_id=curation_id,
                     elapsed_ms=elapsed_ms,
                     dry_run=dry_run,
@@ -208,13 +218,14 @@ class RecurationService:
                 # 既存の signal 抽出に対し再 curation で Noise が返った場合は触らない。
                 logger.warning(
                     "re_curate_skipped_noise",
-                    article_id=article_id,
+                    analyzable_article_id=analyzable_article_id,
                 )
                 return "skipped"
             case _:
                 # 到達不能 (curator は Signal | Noise の union を返す契約)
                 raise RuntimeError(
-                    f"re_curate_unreachable_envelope_variant: article_id={article_id}"
+                    "re_curate_unreachable_envelope_variant: "
+                    f"analyzable_article_id={analyzable_article_id}"
                 )
 
     async def _curate_once_mapped(
@@ -240,7 +251,7 @@ class RecurationService:
         *,
         title: str,
         content: str,
-        article_id: int,
+        analyzable_article_id: int,
     ) -> CurationCall[Signal] | CurationCall[Noise]:
         """exponential backoff で curator を最大 ``max_retries`` 回呼び出す。
 
@@ -261,7 +272,7 @@ class RecurationService:
                 last_exc = exc
                 logger.warning(
                     "re_curate_retry",
-                    article_id=article_id,
+                    analyzable_article_id=analyzable_article_id,
                     attempt=attempt,
                     error=type(exc).__name__,
                 )
@@ -273,9 +284,9 @@ class RecurationService:
 
     @staticmethod
     async def _fetch_article(
-        session: AsyncSession, article_id: int
+        session: AsyncSession, analyzable_article_id: int
     ) -> AnalyzableArticleRecord | None:
         stmt = select(AnalyzableArticleRecord).where(
-            AnalyzableArticleRecord.id == article_id
+            AnalyzableArticleRecord.id == analyzable_article_id
         )
         return (await session.execute(stmt)).scalar_one_or_none()

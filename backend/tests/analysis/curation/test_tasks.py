@@ -63,13 +63,13 @@ def _make_ctx(
     return ctx
 
 
-def _trigger(article_id: int = 1) -> CurationTrigger:
-    return CurationTrigger(article_id=article_id)
+def _trigger(analyzable_article_id: int = 1) -> CurationTrigger:
+    return CurationTrigger(analyzable_article_id=analyzable_article_id)
 
 
-def _fixed_ready(article_id: int = 1) -> ReadyForCuration:
+def _fixed_ready(analyzable_article_id: int = 1) -> ReadyForCuration:
     return ReadyForCuration(
-        article_id=article_id,
+        analyzable_article_id=analyzable_article_id,
         original_title="Title",
         original_content="content",
     )
@@ -200,7 +200,7 @@ class TestCurateContent:
 
         audit_failed.assert_awaited_once_with(
             mock_ctx.state.session_factory,
-            article_id=1,
+            analyzable_article_id=1,
             exc=exc,
         )
         mock_svc_cls.assert_not_called()
@@ -320,7 +320,7 @@ class TestCurateContent:
         drops = [e for e in cap if e.get("event") == "curation_failure_audit_dropped"]
         assert drops, "fallback ログが emit されていない"
         drop = drops[-1]
-        assert drop["article_id"] == 1
+        assert drop["analyzable_article_id"] == 1
         assert drop["business_error_class"].endswith(".CurationTerminalKeepError")
         assert drop["audit_error_class"].endswith(".RuntimeError")
         # red-team chain γ-2: business / audit 両方の secret が redact される

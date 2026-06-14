@@ -99,7 +99,7 @@ async def _seed_article_with_extraction(
             prompt_version="testver1",
             model_name="test-model",
         ),
-        article_id=article.id,
+        analyzable_article_id=article.id,
     )
     await db_session.commit()
     return article
@@ -230,7 +230,7 @@ async def test_run_returns_3_when_any_failed(
 ) -> None:
     """failed_ids 1 件以上で exit code 3。"""
 
-    async def _fake_execute(self, article_ids, curator, *, dry_run):  # noqa: ARG001
+    async def _fake_execute(self, analyzable_article_ids, curator, *, dry_run):  # noqa: ARG001
         return RecurationSummary(
             success_ids=(),
             failed_ids=(42,),
@@ -245,7 +245,7 @@ async def test_run_returns_3_when_any_failed(
         return (42,)
 
     monkeypatch.setattr(
-        "app.analysis.curation.cli.re_curate_all._select_article_ids",
+        "app.analysis.curation.cli.re_curate_all._select_analyzable_article_ids",
         _fake_select,
     )
 

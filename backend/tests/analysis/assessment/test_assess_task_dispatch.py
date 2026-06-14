@@ -80,7 +80,7 @@ def _fixed_ready() -> ReadyForAssessment:
         curation_id=2,
         translated_title="title",
         summary="summary",
-        article_id=7,
+        analyzable_article_id=7,
     )
 
 

@@ -28,7 +28,7 @@ class EmbeddingReadyBuildBlockedCode(StrEnum):
 class EmbeddingReadyBuildFacts:
     """Stage 5 Ready 構築に必要な DB 射影。"""
 
-    article_id: int
+    analyzable_article_id: int
     has_embedding: bool
     translated_title: str
     summary: str
@@ -60,7 +60,7 @@ class ReadyForEmbedding(BaseModel):
 
     analyzed_article_id: int = Field(gt=0)
     text_for_embedding: str = Field(min_length=1)
-    article_id: int = Field(gt=0)
+    analyzable_article_id: int = Field(gt=0)
 
     @classmethod
     async def try_advance_from(
@@ -83,5 +83,5 @@ class ReadyForEmbedding(BaseModel):
         return cls(
             analyzed_article_id=analyzed_article_id,
             text_for_embedding=f"{facts.translated_title}\n{facts.summary}",
-            article_id=facts.article_id,
+            analyzable_article_id=facts.analyzable_article_id,
         )

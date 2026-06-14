@@ -125,7 +125,7 @@ def _ready(
         curation_id=extraction.id,
         translated_title=extraction.translated_title,
         summary=summary if summary is not None else extraction.summary,
-        article_id=extraction.analyzable_article_id,
+        analyzable_article_id=extraction.analyzable_article_id,
     )
 
 
@@ -273,7 +273,7 @@ async def test_append_ready_build_blocked_records_source_id_for_already_assessed
             curation_id=extraction.id,
             exc=AssessmentReadyBuildBlockedError(
                 AssessmentReadyBuildBlockedCode.ALREADY_IN_SCOPE,
-                article_id=article.id,
+                analyzable_article_id=article.id,
             ),
         )
         await session.commit()
@@ -518,7 +518,7 @@ async def test_append_backfill_assessment_aged_out_records_rejected(
     async with session_factory() as session:
         await AssessmentAuditRepository(session).append_backfill_assessment_aged_out(
             curation_id=extraction.id,
-            article_id=article.id,
+            analyzable_article_id=article.id,
         )
         await session.commit()
 

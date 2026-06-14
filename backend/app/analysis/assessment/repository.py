@@ -88,7 +88,7 @@ class AssessmentRepository:
             return None
         (
             loaded_curation_id,
-            article_id,
+            analyzable_article_id,
             translated_title,
             summary,
             has_analyzed_article,
@@ -96,7 +96,7 @@ class AssessmentRepository:
         ) = row
         return AssessmentReadyBuildFacts(
             curation_id=loaded_curation_id,
-            article_id=article_id,
+            analyzable_article_id=analyzable_article_id,
             translated_title=translated_title,
             summary=summary,
             has_analyzed_article=has_analyzed_article,

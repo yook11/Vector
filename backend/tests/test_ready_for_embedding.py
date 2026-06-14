@@ -19,10 +19,10 @@ from app.queue.messages.embedding import EmbeddingTrigger
 def _facts(
     *,
     has_embedding: bool = False,
-    article_id: int = 42,
+    analyzable_article_id: int = 42,
 ) -> EmbeddingReadyBuildFacts:
     return EmbeddingReadyBuildFacts(
-        article_id=article_id,
+        analyzable_article_id=analyzable_article_id,
         has_embedding=has_embedding,
         translated_title="分析タイトル",
         summary="分析要約",
@@ -53,7 +53,7 @@ class TestTryAdvanceFrom:
         assert ready == ReadyForEmbedding(
             analyzed_article_id=100,
             text_for_embedding="分析タイトル\n分析要約",
-            article_id=42,
+            analyzable_article_id=42,
         )
         repo.load_ready_build_facts.assert_awaited_once_with(100)
 
@@ -98,36 +98,38 @@ class TestReadyForEmbeddingFieldConstraints:
     def test_rejects_non_positive_analyzed_article_id(self) -> None:
         with pytest.raises(ValidationError):
             ReadyForEmbedding(
-                analyzed_article_id=0, text_for_embedding="t", article_id=1
+                analyzed_article_id=0, text_for_embedding="t", analyzable_article_id=1
             )
         with pytest.raises(ValidationError):
             ReadyForEmbedding(
-                analyzed_article_id=-1, text_for_embedding="t", article_id=1
+                analyzed_article_id=-1, text_for_embedding="t", analyzable_article_id=1
             )
 
     def test_rejects_empty_text(self) -> None:
         with pytest.raises(ValidationError):
             ReadyForEmbedding(
-                analyzed_article_id=1, text_for_embedding="", article_id=1
+                analyzed_article_id=1, text_for_embedding="", analyzable_article_id=1
             )
 
-    def test_rejects_non_positive_article_id(self) -> None:
+    def test_rejects_non_positive_analyzable_article_id(self) -> None:
         with pytest.raises(ValidationError):
             ReadyForEmbedding(
-                analyzed_article_id=1, text_for_embedding="t", article_id=0
+                analyzed_article_id=1, text_for_embedding="t", analyzable_article_id=0
             )
         with pytest.raises(ValidationError):
             ReadyForEmbedding(
-                analyzed_article_id=1, text_for_embedding="t", article_id=-1
+                analyzed_article_id=1, text_for_embedding="t", analyzable_article_id=-1
             )
 
     def test_rejects_legacy_analysis_id_alias(self) -> None:
         with pytest.raises(ValidationError):
-            ReadyForEmbedding(analysis_id=1, text_for_embedding="t", article_id=1)
+            ReadyForEmbedding(
+                analysis_id=1, text_for_embedding="t", analyzable_article_id=1
+            )
 
     def test_is_frozen(self) -> None:
         ready = ReadyForEmbedding(
-            analyzed_article_id=1, text_for_embedding="t\ns", article_id=1
+            analyzed_article_id=1, text_for_embedding="t\ns", analyzable_article_id=1
         )
         with pytest.raises(ValidationError):
             ready.analyzed_article_id = 999  # type: ignore[misc]

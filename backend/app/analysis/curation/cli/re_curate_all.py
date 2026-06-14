@@ -87,14 +87,14 @@ def build_parser() -> argparse.ArgumentParser:
         type=int,
         default=None,
         metavar="M",
-        help="article_id >= M に絞る (CLI 中断後の再開用)",
+        help="analyzable_article_id >= M に絞る (CLI 中断後の再開用)",
     )
     parser.add_argument(
         "--id-to",
         type=int,
         default=None,
         metavar="N",
-        help="article_id <= N に絞る (--id-from と組み合わせて範囲指定)",
+        help="analyzable_article_id <= N に絞る (--id-from と組み合わせて範囲指定)",
     )
     parser.add_argument(
         "--max-retries",
@@ -106,14 +106,14 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-async def _select_article_ids(
+async def _select_analyzable_article_ids(
     session: AsyncSession,
     *,
     id_from: int | None,
     id_to: int | None,
     limit: int | None,
 ) -> tuple[int, ...]:
-    """既存 ``ArticleCuration`` を持つ article_id を昇順で取得する。"""
+    """既存 ``ArticleCuration`` を持つ analyzable_article_id を昇順で取得する。"""
     stmt = (
         select(AnalyzableArticleRecord.id)
         .join(
@@ -147,14 +147,14 @@ async def run(
         effective_limit = args.limit if args.limit is not None else 3
 
     async with session_factory() as session:
-        article_ids = await _select_article_ids(
+        analyzable_article_ids = await _select_analyzable_article_ids(
             session,
             id_from=args.id_from,
             id_to=args.id_to,
             limit=effective_limit,
         )
 
-    if not article_ids:
+    if not analyzable_article_ids:
         print(
             json.dumps(
                 {
@@ -171,7 +171,7 @@ async def run(
         return 0
 
     summary: RecurationSummary = await service.execute(
-        article_ids,
+        analyzable_article_ids,
         curator,
         dry_run=not args.execute,
     )

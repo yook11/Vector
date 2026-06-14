@@ -72,7 +72,7 @@ async def _make_article(
 
 def _ready_from(article: AnalyzableArticleRecord) -> ReadyForCuration:
     return ReadyForCuration(
-        article_id=article.id,
+        analyzable_article_id=article.id,
         original_title=article.original_title,
         original_content=article.original_content,
     )

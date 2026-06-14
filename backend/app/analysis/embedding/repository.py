@@ -38,9 +38,9 @@ class EmbeddingRepository:
         row = (await self._session.execute(stmt)).first()
         if row is None:
             return None
-        article_id, has_embedding, translated_title, summary = row
+        analyzable_article_id, has_embedding, translated_title, summary = row
         return EmbeddingReadyBuildFacts(
-            article_id=article_id,
+            analyzable_article_id=analyzable_article_id,
             has_embedding=has_embedding,
             translated_title=translated_title,
             summary=summary,

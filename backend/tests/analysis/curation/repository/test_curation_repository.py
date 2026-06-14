@@ -81,7 +81,9 @@ async def test_signal_exists_for_article_returns_true_after_save(
         db_session, sample_source, "https://example.com/exists"
     )
     repo = CurationRepository(db_session)
-    curation_id = await repo.save_signal(_signal_call(), article_id=article.id)
+    curation_id = await repo.save_signal(
+        _signal_call(), analyzable_article_id=article.id
+    )
     await db_session.commit()
     assert curation_id is not None
     assert await repo.signal_exists_for_article(article.id) is True
@@ -98,7 +100,7 @@ async def test_save_signal_returns_persisted_id(
     repo = CurationRepository(db_session)
     curation_id = await repo.save_signal(
         _signal_call(title_ja="保存後", summary_ja="要約"),
-        article_id=article.id,
+        analyzable_article_id=article.id,
     )
     await db_session.commit()
 
@@ -121,11 +123,11 @@ async def test_save_signal_returns_none_on_duplicate_in_same_session(
     """同一 article_id への 2 度目の save_signal は None を返す (race 敗北の代理)。"""
     article = await _make_article(db_session, sample_source, "https://example.com/dup")
     repo = CurationRepository(db_session)
-    first = await repo.save_signal(_signal_call(), article_id=article.id)
+    first = await repo.save_signal(_signal_call(), analyzable_article_id=article.id)
     await db_session.commit()
     assert first is not None
 
-    second = await repo.save_signal(_signal_call(), article_id=article.id)
+    second = await repo.save_signal(_signal_call(), analyzable_article_id=article.id)
     assert second is None
 
 
@@ -146,14 +148,14 @@ async def test_update_signal_idempotent_updates_parent_in_place(
         db_session, sample_source, "https://example.com/update-idempotent"
     )
     repo = CurationRepository(db_session)
-    first = await repo.save_signal(_signal_call(), article_id=article.id)
+    first = await repo.save_signal(_signal_call(), analyzable_article_id=article.id)
     await db_session.commit()
     assert first is not None
     parent_id = first
 
     updated_id = await repo.update_signal_idempotent(
         _signal_call(title_ja="新タイトル", summary_ja="新要約"),
-        article_id=article.id,
+        analyzable_article_id=article.id,
     )
     await db_session.commit()
 
@@ -182,7 +184,9 @@ async def test_concurrent_save_signal_returns_one_persisted_one_none(
     async def _save_in_new_session() -> int | None:
         async with session_factory() as session:
             repo = CurationRepository(session)
-            saved = await repo.save_signal(_signal_call(), article_id=article.id)
+            saved = await repo.save_signal(
+                _signal_call(), analyzable_article_id=article.id
+            )
             await session.commit()
             return saved
 
@@ -219,7 +223,7 @@ async def test_save_noise_returns_persisted_id(
     """noise 記録が title_ja / summary_ja とともに永続化される。"""
     article = await _make_article(db_session, sample_source, "https://example.com/n2")
     repo = CurationRepository(db_session)
-    noise_id = await repo.save_noise(_noise_call(), article_id=article.id)
+    noise_id = await repo.save_noise(_noise_call(), analyzable_article_id=article.id)
     await db_session.commit()
 
     assert noise_id is not None
@@ -240,13 +244,13 @@ async def test_save_noise_returns_none_on_unique_race_loss(
     article = await _make_article(db_session, sample_source, "https://example.com/n4")
     repo = CurationRepository(db_session)
 
-    first = await repo.save_noise(_noise_call(), article_id=article.id)
+    first = await repo.save_noise(_noise_call(), analyzable_article_id=article.id)
     await db_session.commit()
     assert first is not None
 
     second = await repo.save_noise(
         _noise_call(title_ja="別タイトル"),
-        article_id=article.id,
+        analyzable_article_id=article.id,
     )
     await db_session.commit()
     assert second is None  # race 敗北は None で表現される
@@ -264,7 +268,7 @@ async def test_load_ready_build_facts_returns_values_for_unprocessed_article(
     facts = await repo.load_ready_build_facts(article.id)
 
     assert facts is not None
-    assert facts.article_id == article.id
+    assert facts.analyzable_article_id == article.id
     assert facts.original_title == article.original_title
     assert facts.original_content == article.original_content
     assert facts.has_signal_curation is False
@@ -276,7 +280,7 @@ async def test_load_ready_build_facts_returns_none_when_missing(
     db_session: AsyncSession,
 ) -> None:
     repo = CurationRepository(db_session)
-    assert await repo.load_ready_build_facts(article_id=999_999_999) is None
+    assert await repo.load_ready_build_facts(analyzable_article_id=999_999_999) is None
 
 
 @pytest.mark.asyncio
@@ -287,7 +291,7 @@ async def test_load_ready_build_facts_marks_existing_signal(
         db_session, sample_source, "https://example.com/load-signal"
     )
     repo = CurationRepository(db_session)
-    await repo.save_signal(_signal_call(), article_id=article.id)
+    await repo.save_signal(_signal_call(), analyzable_article_id=article.id)
     await db_session.commit()
 
     facts = await repo.load_ready_build_facts(article.id)
@@ -305,7 +309,7 @@ async def test_load_ready_build_facts_marks_existing_noise(
         db_session, sample_source, "https://example.com/load-noise"
     )
     repo = CurationRepository(db_session)
-    await repo.save_noise(_noise_call(), article_id=article.id)
+    await repo.save_noise(_noise_call(), analyzable_article_id=article.id)
     await db_session.commit()
 
     facts = await repo.load_ready_build_facts(article.id)

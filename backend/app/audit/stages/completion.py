@@ -101,7 +101,7 @@ class ArticleCompletionAuditRepository:
         """persist outcome を記録する。"""
         canonical_url = str(ready.source_url)
         match outcome:
-            case CompletionSucceeded(article_id=article_id):
+            case CompletionSucceeded(analyzable_article_id=analyzable_article_id):
                 await self._events.append(
                     stage=Stage.COMPLETION,
                     event_type=EventType.SUCCEEDED,
@@ -112,7 +112,7 @@ class ArticleCompletionAuditRepository:
                         body_length=len(advanced.body),
                     ),
                     source_id=ready.source_id,
-                    article_id=article_id,
+                    article_id=analyzable_article_id,
                 )
             case CompletionSuperseded():
                 await self._append_race_loss(

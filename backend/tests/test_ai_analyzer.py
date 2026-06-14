@@ -290,7 +290,7 @@ async def test_extraction_creates_extraction(
 
     article_id = article.id
     ready = ReadyForCuration(
-        article_id=article_id,
+        analyzable_article_id=article_id,
         original_title=article.original_title,
         original_content=article.original_content,
     )
@@ -339,7 +339,7 @@ async def test_extraction_race_loser_returns_none_and_skips_audit(
     article_id = article.id
     existing_id = existing.id
     ready = ReadyForCuration(
-        article_id=article_id,
+        analyzable_article_id=article_id,
         original_title=article.original_title,
         original_content=article.original_content,
     )
@@ -411,7 +411,7 @@ async def test_extraction_routes_noise_to_extraction_noises_table(
 
     article_id = article.id
     ready = ReadyForCuration(
-        article_id=article_id,
+        analyzable_article_id=article_id,
         original_title=article.original_title,
         original_content=article.original_content,
     )
@@ -479,7 +479,7 @@ async def test_assessment_persists_category(
         curation_id=curation_id,
         translated_title=extraction.translated_title,
         summary=extraction.summary,
-        article_id=extraction.analyzable_article_id,
+        analyzable_article_id=extraction.analyzable_article_id,
     )
     svc = AssessmentService(session_factory)
     result = await svc.execute(ready, mock_assessor)
@@ -524,7 +524,7 @@ async def test_assessment_persists_rejection_when_out_of_scope(
 
     curation_id = extraction.id
     ready = ReadyForAssessment(
-        article_id=article.id,
+        analyzable_article_id=article.id,
         curation_id=curation_id,
         translated_title=extraction.translated_title,
         summary=extraction.summary,

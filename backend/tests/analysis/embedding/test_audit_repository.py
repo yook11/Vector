@@ -107,7 +107,7 @@ def _ready(article: AnalyzableArticleRecord) -> ReadyForEmbedding:
     return ReadyForEmbedding(
         analyzed_article_id=1,
         text_for_embedding="title\nsummary",
-        article_id=article.id,
+        analyzable_article_id=article.id,
     )
 
 
@@ -294,7 +294,7 @@ async def test_append_backfill_embedding_aged_out_records_rejected(
     async with session_factory() as session:
         await EmbeddingAuditRepository(session).append_backfill_embedding_aged_out(
             analyzed_article_id=123,
-            article_id=article.id,
+            analyzable_article_id=article.id,
         )
         await session.commit()
 

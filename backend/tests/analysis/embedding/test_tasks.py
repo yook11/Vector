@@ -62,11 +62,13 @@ def _make_trigger(analyzed_article_id: int = 1) -> EmbeddingTrigger:
     return EmbeddingTrigger(analyzed_article_id=analyzed_article_id)
 
 
-def _make_ready(analyzed_article_id: int = 1, article_id: int = 7) -> ReadyForEmbedding:
+def _make_ready(
+    analyzed_article_id: int = 1, analyzable_article_id: int = 7
+) -> ReadyForEmbedding:
     return ReadyForEmbedding(
         analyzed_article_id=analyzed_article_id,
         text_for_embedding="分析タイトル\n分析要約",
-        article_id=article_id,
+        analyzable_article_id=analyzable_article_id,
     )
 
 
@@ -203,7 +205,7 @@ class TestGenerateEmbedding:
         ]
         assert skips, "gate skip log が emit されていない"
         assert skips[-1]["analyzed_article_id"] == 1
-        assert skips[-1]["article_id"] == 7
+        assert skips[-1]["analyzable_article_id"] == 7
         assert skips[-1]["embedding_model"] == "gemini-embedding-001"
 
 

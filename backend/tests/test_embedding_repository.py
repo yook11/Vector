@@ -85,7 +85,7 @@ async def test_load_ready_build_facts_returns_values_when_unembedded(
     facts = await repo.load_ready_build_facts(analysis.id)
 
     assert facts is not None
-    assert facts.article_id == curation.analyzable_article_id
+    assert facts.analyzable_article_id == curation.analyzable_article_id
     assert facts.has_embedding is False
     assert facts.translated_title == "分析タイトル"
     assert facts.summary == "分析要約"

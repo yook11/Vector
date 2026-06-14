@@ -80,10 +80,12 @@ class CurationAuditRepository:
             event_type=EventType.SUCCEEDED,
             outcome_code=code,
             payload=payload,
-            article_id=ready.article_id,
+            article_id=ready.analyzable_article_id,
         )
         if content["injection_markers_present"]:
-            self._record_injection_detected(article_id=ready.article_id)
+            self._record_injection_detected(
+                analyzable_article_id=ready.analyzable_article_id
+            )
 
     async def append_noise(
         self,
@@ -106,10 +108,12 @@ class CurationAuditRepository:
             event_type=EventType.SUCCEEDED,
             outcome_code=code,
             payload=payload,
-            article_id=ready.article_id,
+            article_id=ready.analyzable_article_id,
         )
         if content["injection_markers_present"]:
-            self._record_injection_detected(article_id=ready.article_id)
+            self._record_injection_detected(
+                analyzable_article_id=ready.analyzable_article_id
+            )
 
     # --- DROP 経路 (article DELETE と同一 tx) -----------------------------
 
@@ -130,7 +134,7 @@ class CurationAuditRepository:
             failure_reason=projection.failure_reason,
             # DROP は記事 DELETE と同一 tx で焼かれ FK article_id が SET NULL に
             # 落ちるため、削除に耐える記事識別子を payload に控える。
-            target_article_id=ready.article_id,
+            target_article_id=ready.analyzable_article_id,
             **content,
             ai_model=curator.model_name,
             prompt_version=curator.prompt_version,
@@ -142,16 +146,20 @@ class CurationAuditRepository:
             event_type=EventType.FAILED,
             outcome_code=projection.code,
             payload=payload,
-            article_id=ready.article_id,
+            article_id=ready.analyzable_article_id,
             error_class=exception_fqn(exc),
             retryability=projection.retryability,
         )
         if content["injection_markers_present"]:
-            self._record_injection_detected(article_id=ready.article_id)
+            self._record_injection_detected(
+                analyzable_article_id=ready.analyzable_article_id
+            )
 
     # --- 救済断念経路 (年齢削除と同一 tx) ---------------------------------
 
-    async def append_backfill_curation_aged_out(self, *, article_id: int) -> None:
+    async def append_backfill_curation_aged_out(
+        self, *, analyzable_article_id: int
+    ) -> None:
         """古い未処理記事を backfill が諦めた事実を記録する。
 
         記事 DELETE と同一 tx で焼かれ FK article_id が SET NULL に落ちるため、
@@ -162,8 +170,8 @@ class CurationAuditRepository:
             stage=Stage.BACKFILL_CURATE,
             event_type=EventType.REJECTED,
             outcome_code=CurationOutcomeCode.BACKFILL_CURATION_AGED_OUT.value,
-            payload=CurationPayload(target_article_id=article_id),
-            article_id=article_id,
+            payload=CurationPayload(target_article_id=analyzable_article_id),
+            article_id=analyzable_article_id,
         )
 
     # --- Ready 構築 blocked / failed ---------------------------------------
@@ -188,7 +196,7 @@ class CurationAuditRepository:
             # 記事が現存する blocked (ALREADY_* / CONTENT_TOO_LARGE) のみ
             # article_id を運び source_id を補填する。ARTICLE_MISSING は対象
             # 記事が無く FK 不能なため None (sought id は payload.target_article_id)。
-            article_id=exc.article_id,
+            article_id=exc.analyzable_article_id,
         )
 
     async def append_ready_build_failed(
@@ -268,16 +276,18 @@ class CurationAuditRepository:
             event_type=EventType.FAILED,
             outcome_code=projection.code,
             payload=payload,
-            article_id=ready.article_id,
+            article_id=ready.analyzable_article_id,
             error_class=exception_fqn(exc),
             retryability=projection.retryability,
         )
         if content["injection_markers_present"]:
-            self._record_injection_detected(article_id=ready.article_id)
+            self._record_injection_detected(
+                analyzable_article_id=ready.analyzable_article_id
+            )
 
     # --- internal helpers -------------------------------------------------
 
-    def _record_injection_detected(self, *, article_id: int | None) -> None:
+    def _record_injection_detected(self, *, analyzable_article_id: int | None) -> None:
         """injection 検知信号 (metric + log) を emit する。
 
         監査行の永続化 (``_events.append``) 成功後に呼ぶ。payload 構築や append が
@@ -288,7 +298,7 @@ class CurationAuditRepository:
         logger.warning(
             "audit_injection_boundary_detected",
             stage="curation",
-            article_id=article_id,
+            analyzable_article_id=analyzable_article_id,
         )
 
     @staticmethod
