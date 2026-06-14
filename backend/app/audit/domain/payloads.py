@@ -159,7 +159,7 @@ class EmbeddingPayload(BasePipelineEventPayload):
     # 原因詳細 (provider error の reason 値)。provider 由来でない失敗は None。
     failure_reason: str | None = None
     analyzed_article_id: int | None = None
-    embedding_model: str | None = None
+    ai_model: str | None = None
     vector_dimension: int | None = None
 
 

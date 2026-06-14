@@ -53,7 +53,7 @@ class EmbeddingAuditRepository:
         """embedding 成功を記録する。"""
         payload = EmbeddingPayload(
             analyzed_article_id=ready.analyzed_article_id,
-            embedding_model=embedder.model_name,
+            ai_model=embedder.model_name,
             vector_dimension=embedder.dimension,
         )
         await self._events.append(
@@ -154,7 +154,7 @@ class EmbeddingAuditRepository:
             failure_action=failure_action_value(projection),
             failure_reason=projection.failure_reason,
             analyzed_article_id=ready.analyzed_article_id,
-            embedding_model=None,
+            ai_model=None,
             vector_dimension=None,
             error_message=error_message_of(exc),
             error_chain=extract_error_chain(exc),

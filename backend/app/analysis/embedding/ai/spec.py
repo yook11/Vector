@@ -13,6 +13,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Final
 
+from app.analysis.embedding.domain.value_objects import EMBEDDING_DIMENSION
 from app.analysis.rate_limit import AIModelRateLimitPolicy
 
 
@@ -45,13 +46,12 @@ class EmbeddingCallSpec:
 
 _GEMINI_PROVIDER: Final[str] = "gemini"
 _GEMINI_MODEL: Final[str] = "gemini-embedding-001"
-_GEMINI_DIMENSION: Final[int] = 768
 
 GEMINI_EMBEDDING_SPEC: Final[EmbeddingCallSpec] = EmbeddingCallSpec(
     provider=_GEMINI_PROVIDER,
     model=_GEMINI_MODEL,
-    dimension=_GEMINI_DIMENSION,
-    output_dimensionality=_GEMINI_DIMENSION,
+    dimension=EMBEDDING_DIMENSION,
+    output_dimensionality=EMBEDDING_DIMENSION,
     task_type="RETRIEVAL_DOCUMENT",
     document_prefix="",
     rate_limit_policy=AIModelRateLimitPolicy(

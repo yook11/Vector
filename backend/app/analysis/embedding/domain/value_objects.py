@@ -1,6 +1,6 @@
 """Embedding BC の値オブジェクト。
 
-``EmbeddingVector`` は Stage 3 の埋め込みベクトルを表す不変の VO。
+``EmbeddingVector`` は Stage 5 document embedding の埋め込みベクトルを表す不変の VO。
 HALFVEC(768) カラムへの永続化前に次元・有限性・サニティ範囲を構造的に強制する。
 
 ``EMBEDDING_DIMENSION`` は VO/DB/embedder 間で共有する次元数の SSoT。
@@ -14,10 +14,11 @@ from typing import Any
 from pydantic import ConfigDict, RootModel, field_validator
 
 EMBEDDING_DIMENSION = 768
-"""埋め込みベクトルの次元数 (SSoT)。
+"""Stage 5 document embedding の次元数 (SSoT)。
 
-DB カラム ``HALFVEC(768)`` と embedder 実装の ``DIMENSION`` ClassVar が
-この値と一致することを前提とする。
+DB カラム ``HALFVEC(768)`` / ``GEMINI_EMBEDDING_SPEC.dimension`` /
+``output_dimensionality`` がこの値と一致することを test で保証する。
+Search BC の query embedding は別 BC であり本定数を共有しない。
 """
 
 _VECTOR_SANITY_BOUND = 1e4

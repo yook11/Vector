@@ -114,7 +114,7 @@ async def test_source_id_auto_filled_from_article_id(
 ) -> None:
     """article_id だけ与えると AnalyzableArticleRecord.source_id を逆引きして埋める。"""
     repo = PipelineEventRepository(db_session)
-    payload = EmbeddingPayload(embedding_model="gemini-embedding-001")
+    payload = EmbeddingPayload(ai_model="gemini-embedding-001")
 
     await repo.append(
         stage=Stage.EMBEDDING,
@@ -135,7 +135,7 @@ async def test_append_persists_retryability(
     db_session: AsyncSession, article_row: AnalyzableArticleRecord
 ) -> None:
     repo = PipelineEventRepository(db_session)
-    payload = EmbeddingPayload(embedding_model="gemini-embedding-001")
+    payload = EmbeddingPayload(ai_model="gemini-embedding-001")
 
     await repo.append(
         stage=Stage.EMBEDDING,

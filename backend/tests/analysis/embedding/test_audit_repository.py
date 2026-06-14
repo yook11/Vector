@@ -4,7 +4,7 @@ audit row の shape SSoT が repository に集約されたことを検証する:
 
 - ``append_success`` で
   ``outcome_code="embedding_completed"`` + payload に
-  ``embedding_model`` / ``vector_dimension`` が embedder から取得されている
+  ``ai_model`` / ``vector_dimension`` が embedder から取得されている
 - ``append_failure`` で **retry 軸 (Recoverable / Terminal) + Layer 2-B + catch-all**:
   - ``EmbeddingRecoverableError`` → ``retryability=retryable`` / failure_kind=mode 値
   - ``EmbeddingTerminalError`` → ``retryability=non_retryable`` / failure_kind=mode 値
@@ -144,12 +144,20 @@ async def _fetch_by_outcome(
 def test_embedding_payload_uses_analyzed_article_id_key() -> None:
     payload = EmbeddingPayload(
         analyzed_article_id=123,
-        embedding_model="cl-nagoya/ruri-v3-310m",
+        ai_model="cl-nagoya/ruri-v3-310m",
         vector_dimension=768,
     ).model_dump(exclude_none=True)
 
     assert payload["analyzed_article_id"] == 123
     assert "analysis_id" not in payload
+
+
+def test_embedding_payload_uses_ai_model_key_not_embedding_model() -> None:
+    """Stage 5 audit payload の AI model 識別子は他 stage と同じ ``ai_model``。"""
+    payload = EmbeddingPayload(ai_model="cl-nagoya/ruri-v3-310m").model_dump()
+
+    assert payload["ai_model"] == "cl-nagoya/ruri-v3-310m"
+    assert "embedding_model" not in payload
 
 
 @pytest.mark.asyncio
@@ -214,10 +222,11 @@ async def test_append_success_records_with_code(
     article = await _make_article(db_session, sample_source)
     await _make_extraction(db_session, article)
 
+    embedder = _embedder_fake()
     async with session_factory() as session:
         await EmbeddingAuditRepository(session).append_success(
             ready=_ready(article),
-            embedder=_embedder_fake(),
+            embedder=embedder,
         )
         await session.commit()
 
@@ -227,8 +236,8 @@ async def test_append_success_records_with_code(
     assert ev.retryability is None
     assert ev.payload["analyzed_article_id"] == 1
     assert "analysis_id" not in ev.payload
-    assert ev.payload["embedding_model"] == "cl-nagoya/ruri-v3-310m"
-    assert ev.payload["vector_dimension"] == 768
+    assert ev.payload["ai_model"] == embedder.model_name
+    assert ev.payload["vector_dimension"] == embedder.dimension
 
 
 @pytest.mark.asyncio

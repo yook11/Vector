@@ -16,9 +16,12 @@ from __future__ import annotations
 from dataclasses import FrozenInstanceError
 
 import pytest
+from pgvector.sqlalchemy import HALFVEC
 
 from app.analysis.embedding.ai.spec import GEMINI_EMBEDDING_SPEC
+from app.analysis.embedding.domain.value_objects import EMBEDDING_DIMENSION
 from app.analysis.rate_limit import AIModelRateLimitPolicy
+from app.models.analyzed_article_record import AnalyzedArticleRecord
 
 
 def test_gemini_provider_is_gemini() -> None:
@@ -29,14 +32,14 @@ def test_gemini_model_is_embedding_001() -> None:
     assert GEMINI_EMBEDDING_SPEC.model == "gemini-embedding-001"
 
 
-def test_gemini_dimension_is_768() -> None:
-    """DB ``HALFVEC(768)`` 列 + ``EmbeddingVector`` VO の契約値。"""
-    assert GEMINI_EMBEDDING_SPEC.dimension == 768
+def test_gemini_dimension_equals_embedding_dimension() -> None:
+    """DB ``HALFVEC`` 列 + ``EmbeddingVector`` VO の契約値 = SSoT。"""
+    assert GEMINI_EMBEDDING_SPEC.dimension == EMBEDDING_DIMENSION
 
 
-def test_gemini_output_dimensionality_is_768() -> None:
-    """SDK ``EmbedContentConfig`` へ渡す API config 値。"""
-    assert GEMINI_EMBEDDING_SPEC.output_dimensionality == 768
+def test_gemini_output_dimensionality_equals_embedding_dimension() -> None:
+    """SDK ``EmbedContentConfig`` へ渡す API config 値 = SSoT。"""
+    assert GEMINI_EMBEDDING_SPEC.output_dimensionality == EMBEDDING_DIMENSION
 
 
 def test_gemini_task_type_is_retrieval_document() -> None:
@@ -75,3 +78,14 @@ def test_dimension_equals_output_dimensionality() -> None:
     """
     spec = GEMINI_EMBEDDING_SPEC
     assert spec.dimension == spec.output_dimensionality
+
+
+def test_orm_embedding_column_dim_equals_embedding_dimension() -> None:
+    """ORM ``HALFVEC`` literal と SSoT の一致を保証し、永続化契約の鎖を閉じる。
+
+    ``app.models`` は ``embedding.domain`` に依存しないため次元は literal のままだが、
+    本テストが ``EMBEDDING_DIMENSION`` との乖離を構造的に検出する。
+    """
+    column_type = AnalyzedArticleRecord.__table__.c.embedding.type
+    assert isinstance(column_type, HALFVEC)
+    assert column_type.dim == EMBEDDING_DIMENSION

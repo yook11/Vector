@@ -185,7 +185,7 @@ async def test_execute_persists_embedding_on_success(
     assert ev.event_type == "succeeded"
     assert ev.outcome_code == "embedding_completed"
     assert ev.retryability is None
-    assert ev.payload["embedding_model"] == "cl-nagoya/ruri-v3-310m"
+    assert ev.payload["ai_model"] == "cl-nagoya/ruri-v3-310m"
     assert ev.payload["vector_dimension"] == EMBEDDING_DIMENSION
 
 
