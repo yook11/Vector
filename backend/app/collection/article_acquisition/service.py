@@ -21,6 +21,10 @@ from app.collection.article_acquisition.fetched_article_converter import (
     unexpected_rejection,
 )
 from app.collection.article_acquisition.fetcher import fetch_articles
+from app.collection.article_acquisition.metrics import (
+    AcquisitionEntryOutcome,
+    record_acquisition_outcome,
+)
 from app.collection.article_acquisition.reader.read_errors import (
     UnreadableResponseError,
 )
@@ -58,6 +62,7 @@ class ArticleAcquisitionService:
             audit = SourceAcquisitionAuditRepository(session)
             source_name = str(self._source.name)
             persisted_ids: list[int] = []
+            observed_count = 0
             tools = self._tools_factory()
 
             try:
@@ -95,12 +100,15 @@ class ArticleAcquisitionService:
                             )
                             if incomplete_id is None:
                                 continue
+                            observed_count += 1
                             await audit.append_incomplete_article_created(
                                 source_id=source_id,
                                 source_name=source_name,
                                 canonical_url=str(observed.source_url),
                             )
                         case AcquisitionConversionRejection() as rej:
+                            # rejected の監査+metric は handler が所有する (別 tx commit
+                            # 成功時のみ計上し main commit とは独立)。
                             await self._failure_handler.handle_conversion_rejected(
                                 source_id, rej
                             )
@@ -108,6 +116,16 @@ class ArticleAcquisitionService:
                 raise map_origin_to_acquisition(exc) from exc
 
             await session.commit()
+
+        # analyzable/observed の監査は本 session と同一 tx。commit 成功後にだけ計上し
+        # 監査行と件数を揃える (dedup skip は continue で非計数、run 失敗時は rollback
+        # され未 emit)。rejected は別 tx 監査のため handler が計上する。
+        record_acquisition_outcome(
+            AcquisitionEntryOutcome.ANALYZABLE, count=len(persisted_ids)
+        )
+        record_acquisition_outcome(
+            AcquisitionEntryOutcome.OBSERVED, count=observed_count
+        )
 
         logger.info(
             "acquire_source_completed",

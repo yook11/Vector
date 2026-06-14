@@ -30,6 +30,10 @@ from app.audit.stages.dispatch import (
 from app.collection.article_acquisition.failure_handling import (
     ArticleAcquisitionFailureHandler,
 )
+from app.collection.article_acquisition.metrics import (
+    AcquisitionRunResult,
+    record_acquisition_run,
+)
 from app.collection.sources.dispatch import SourceDispatchService
 from app.collection.sources.fetch_cadence import FetchCadence
 from app.queue.brokers import broker_content, broker_metadata
@@ -426,6 +430,7 @@ async def acquire_source(
     try:
         persisted_ids = await svc.execute(source_id)
     except Exception as exc:
+        record_acquisition_run(AcquisitionRunResult.FAILED)
         reraise = await handler.handle_source_failure(
             source_id=source_id,
             source_name=arg.name,
@@ -434,6 +439,8 @@ async def acquire_source(
         if reraise:
             raise
         return {"source_id": source_id, "status": "error", "reason": str(exc)}
+
+    record_acquisition_run(AcquisitionRunResult.SUCCEEDED)
 
     article_created_count = len(persisted_ids)
     # 永続化済 analyzable_article_id を Trigger に詰めて enqueue。

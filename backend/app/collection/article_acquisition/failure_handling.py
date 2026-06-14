@@ -12,6 +12,10 @@ from app.collection.article_acquisition.errors import AcquisitionError
 from app.collection.article_acquisition.fetched_article_converter import (
     AcquisitionConversionRejection,
 )
+from app.collection.article_acquisition.metrics import (
+    AcquisitionEntryOutcome,
+    record_acquisition_outcome,
+)
 from app.shared.security.redaction import redact_secrets
 
 logger = structlog.get_logger(__name__)
@@ -51,7 +55,13 @@ class ArticleAcquisitionFailureHandler:
         source_id: int,
         rej: AcquisitionConversionRejection,
     ) -> None:
-        """entry 単位の変換棄却を別 session で best-effort 監査する。"""
+        """entry 単位の変換棄却を別 session で best-effort 監査し metric も出す。
+
+        rejected の永続化境界はこの別 tx commit なので、監査行・redacted log・
+        ``vector.acquisition.outcome{rejected}`` の 3 面をここで完結させる。metric は
+        commit 成功時にだけ +1 し、監査行と件数を構造的に揃える (監査を best-effort で
+        握りつぶした場合は計上せず redacted log に退避する)。
+        """
         try:
             async with self._session_factory() as audit_session:
                 await SourceAcquisitionAuditRepository(
@@ -72,6 +82,9 @@ class ArticleAcquisitionFailureHandler:
                 audit_error_class=(exception_fqn(audit_exc)),
                 audit_error_message=redact_secrets(str(audit_exc))[:500],
             )
+            return
+        # metric add を try の外に置き、counter 失敗を監査 drop と混同しない。
+        record_acquisition_outcome(AcquisitionEntryOutcome.REJECTED, count=1)
 
     async def _audit_failure(
         self,
