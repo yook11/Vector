@@ -122,8 +122,7 @@ export function DashboardMasthead({
           <span
             className="inline-block pl-[0.12em] text-[56px] font-bold leading-none tracking-[0.12em] text-[var(--vector-ink)] [font-optical-sizing:auto] [font-stretch:condensed] [font-variation-settings:'opsz'_72] sm:text-[76px]"
             style={{
-              fontFamily:
-                "var(--font-vector-wordmark), 'Big Shoulders Display', sans-serif",
+              fontFamily: "var(--font-vector-wordmark), sans-serif",
               transform: "scaleX(0.92)",
               transformOrigin: "center",
             }}

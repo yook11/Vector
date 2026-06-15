@@ -39,8 +39,7 @@ export function SlimMasthead({
           <span
             className="pl-[0.14em] text-[27px] font-bold leading-none tracking-[0.14em] text-[var(--vector-ink)]"
             style={{
-              fontFamily:
-                "var(--font-vector-wordmark), 'Big Shoulders Display', sans-serif",
+              fontFamily: "var(--font-vector-wordmark), sans-serif",
             }}
           >
             VECTOR
