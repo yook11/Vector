@@ -98,7 +98,7 @@ async def test_builds_ready_from_repository_facts() -> None:
     assert ready.source_id == 7
     assert ready.attempt_count == 1
     assert ready.source_url == CanonicalArticleUrl("https://example.com/a")
-    assert ready.profile is HTML_TITLE_POLICY
+    assert ready.completion_policy is HTML_TITLE_POLICY
     assert ready.observed.source_name == source_name
     assert ready.observed.title is not None
     assert ready.observed.title.value == "Title"

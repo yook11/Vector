@@ -24,7 +24,6 @@ class TestAcquisitionPayloadFailureSnapshot:
 
     def test_defaults_are_none(self) -> None:
         payload = AcquisitionPayload()
-        assert payload.fetcher_class is None
         assert payload.http_status is None
         assert payload.final_url is None
         assert payload.response_size is None
@@ -35,14 +34,12 @@ class TestAcquisitionPayloadFailureSnapshot:
 
     def test_http_snapshot_fields_can_be_set(self) -> None:
         payload = AcquisitionPayload(
-            fetcher_class="VentureBeatFetcher",
             http_status=403,
             final_url="https://venturebeat.com/feed/",
             response_size=1024,
             content_type="text/html",
             body_head="Forbidden",
         )
-        assert payload.fetcher_class == "VentureBeatFetcher"
         assert payload.http_status == 403
         assert payload.final_url == "https://venturebeat.com/feed/"
         assert payload.response_size == 1024
@@ -215,7 +212,6 @@ class TestPayloadJsonSerialization:
 
     def test_acquisition_roundtrip(self) -> None:
         original = AcquisitionPayload(
-            fetcher_class="VBFetcher",
             http_status=403,
             final_url="https://venturebeat.com/feed/",
             response_size=1024,

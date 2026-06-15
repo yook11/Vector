@@ -45,7 +45,6 @@ class AcquisitionPayload(BasePipelineEventPayload):
     kind: Literal["acquisition"] = "acquisition"
     failure_kind: str | None = None
     failure_action: str | None = None
-    fetcher_class: str | None = None
 
     # acquisition / completion をまたぐ canonical URL key。
     canonical_url: str | None = None

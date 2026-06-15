@@ -18,7 +18,7 @@ from app.collection.sources.article_completion_policy import ArticleCompletionPo
 
 def complete_with_html(
     observed: ObservedArticle,
-    profile: ArticleCompletionPolicy,
+    completion_policy: ArticleCompletionPolicy,
     html: ScrapedContent,
     *,
     source_id: int,
@@ -29,7 +29,7 @@ def complete_with_html(
     obs_body = observed.body.value if observed.body is not None else None
     obs_pub = observed.published_at.value if observed.published_at is not None else None
 
-    resolved = profile.resolve(
+    resolved = completion_policy.resolve(
         observed_title=obs_title,
         html_title=html.title,
         observed_body=obs_body,
@@ -59,7 +59,7 @@ class ArticleHtmlCompleter:
         """``ready`` の観測値と ``scraped`` を merge し完成 or 構築拒否を返す。"""
         return complete_with_html(
             ready.observed,
-            ready.profile,
+            ready.completion_policy,
             scraped,
             source_id=ready.source_id,
             source_url=ready.source_url,

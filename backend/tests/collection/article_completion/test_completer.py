@@ -60,7 +60,7 @@ def _ready(
                 else None
             ),
         ),
-        profile=DEFAULT_POLICY,
+        completion_policy=DEFAULT_POLICY,
         source_url=_URL,
     )
 

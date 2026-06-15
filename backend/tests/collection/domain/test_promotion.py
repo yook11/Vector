@@ -76,9 +76,9 @@ def _html(
     return ScrapedContent(title=title, body=body, published_at=published)
 
 
-def _promote(observed, profile, html, *, source_id=1):
+def _promote(observed, completion_policy, html, *, source_id=1):
     return complete_with_html(
-        observed, profile, html, source_id=source_id, source_url=_URL
+        observed, completion_policy, html, source_id=source_id, source_url=_URL
     )
 
 

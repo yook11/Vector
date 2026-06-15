@@ -15,7 +15,7 @@ from app.collection.article_acquisition.errors import (
 from app.collection.external_fetch_errors import FetchSsrfBlockedError
 from app.models.news_source import NewsSource, SourceType
 from app.models.pipeline_event import PipelineEvent
-from app.queue.messages.collection import AcquireSourceArg
+from app.queue.messages.collection import AcquireSourceTaskInput
 from app.queue.tasks import acquisition as collection_tasks
 
 
@@ -89,7 +89,7 @@ async def test_acquisition_error_records_origin_code_and_returns(
     ctx = _ctx(session_factory)
 
     result = await collection_tasks.acquire_source(
-        AcquireSourceArg(id=vb_source.id, name=str(vb_source.name)),
+        AcquireSourceTaskInput(id=vb_source.id, name=str(vb_source.name)),
         ctx=ctx,  # type: ignore[arg-type]
     )
 
@@ -119,7 +119,7 @@ async def test_unexpected_error_records_then_reraises(
 
     with pytest.raises(RuntimeError, match="boom"):
         await collection_tasks.acquire_source(
-            AcquireSourceArg(id=vb_source.id, name=str(vb_source.name)),
+            AcquireSourceTaskInput(id=vb_source.id, name=str(vb_source.name)),
             ctx=ctx,  # type: ignore[arg-type]
         )
 

@@ -76,7 +76,7 @@ def _fixed_ready(incomplete_article_id: int = 42) -> ReadyForArticleCompletion:
                 origin=ObservedOrigin.feed,
             ),
         ),
-        profile=DEFAULT_POLICY,
+        completion_policy=DEFAULT_POLICY,
         source_url=url,
     )
 

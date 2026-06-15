@@ -37,7 +37,7 @@ from app.collection.article_acquisition.metrics import (
 from app.collection.sources.dispatch import SourceDispatchService
 from app.collection.sources.fetch_cadence import FetchCadence
 from app.queue.brokers import broker_content, broker_metadata
-from app.queue.messages.collection import AcquireSourceArg
+from app.queue.messages.collection import AcquireSourceTaskInput
 from app.queue.messages.curation import CurationTrigger
 from app.queue.schedule import CADENCE_CRON
 from app.queue.tasks.curation import curate_content
@@ -124,7 +124,7 @@ async def _dispatch(
     """``SourceDispatchService`` で対象を決め、各 source に acquire を kiq する。
 
     Service は「何を dispatch するか」と source 単位 rejection を返し、本関数
-    (task orchestration) が target を ``AcquireSourceArg`` に変換して ``.kiq()``
+    (task orchestration) が target を ``AcquireSourceTaskInput`` に変換して ``.kiq()``
     を呼ぶ。
     """
     cadence_value = _dispatch_cadence(cadence)
@@ -180,7 +180,7 @@ async def _dispatch(
     failed_count = 0
     for t in selection.targets:
         try:
-            await acquire_source.kiq(AcquireSourceArg(id=t.id, name=str(t.name)))
+            await acquire_source.kiq(AcquireSourceTaskInput(id=t.id, name=str(t.name)))
         except Exception as exc:  # noqa: BLE001
             failed_count += 1
             await _append_dispatch_source_event(
@@ -401,7 +401,7 @@ async def dispatch_sources(
     retry_on_error=False,
 )
 async def acquire_source(
-    arg: AcquireSourceArg,
+    arg: AcquireSourceTaskInput,
     ctx: Context = TaskiqDepends(),
 ) -> dict:
     """ソースを取り込む。

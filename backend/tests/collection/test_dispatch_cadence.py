@@ -115,7 +115,7 @@ def captured_kiq(monkeypatch: pytest.MonkeyPatch) -> AsyncMock:
 
 
 def _kiqed_names(kiq: AsyncMock) -> list[str]:
-    """kiq に渡された ``AcquireSourceArg`` の name 一覧 (呼び出し順)。"""
+    """kiq に渡された ``AcquireSourceTaskInput`` の name 一覧 (呼び出し順)。"""
     return [call.args[0].name for call in kiq.call_args_list]
 
 

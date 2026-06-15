@@ -16,7 +16,7 @@ from logfire.testing import CaptureLogfire
 
 from app.logfire.article_stage import (
     AssessmentResult,
-    CurationResult,
+    CurationStageResult,
     EmbeddingResult,
     EmbeddingStageSpan,
     assessment_stage_span,
@@ -98,7 +98,7 @@ def test_embedding_stage_span_rejects_legacy_analysis_id_keyword() -> None:
 
 # 不変条件 2: set_result が各語彙を反映 (handle 経由 = task が使う API)
 
-_CURATION_RESULTS: list[CurationResult] = [
+_CURATION_RESULTS: list[CurationStageResult] = [
     "signal",
     "noise",
     "rate_limited",
@@ -122,7 +122,7 @@ _EMBEDDING_RESULTS: list[EmbeddingResult] = [
 
 @pytest.mark.parametrize("result", _CURATION_RESULTS)
 def test_curation_set_result_reflects(
-    capfire: CaptureLogfire, result: CurationResult
+    capfire: CaptureLogfire, result: CurationStageResult
 ) -> None:
     """curation handle.set_result が span に result を反映する。"""
     with curation_stage_span(article_id=1) as stage:

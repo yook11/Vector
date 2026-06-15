@@ -7,7 +7,7 @@ from httpx import AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.news_source import NewsSource, SourceType
-from app.queue.messages.collection import AcquireSourceArg
+from app.queue.messages.collection import AcquireSourceTaskInput
 
 
 @pytest.mark.asyncio
@@ -34,7 +34,7 @@ class TestFetchNews:
     async def test_fetch_with_source_ids(
         self, admin_client: AsyncClient, db_session: AsyncSession
     ) -> None:
-        """source_ids 指定時は AcquireSourceArg envelope を kiq する。"""
+        """source_ids 指定時は AcquireSourceTaskInput envelope を kiq する。"""
         sources = [
             NewsSource(
                 name="VentureBeat",
@@ -74,7 +74,7 @@ class TestFetchNews:
         assert mock_task.kiq.call_count == 2
         for call in mock_task.kiq.call_args_list:
             (arg,) = call.args
-            assert isinstance(arg, AcquireSourceArg)
+            assert isinstance(arg, AcquireSourceTaskInput)
             assert arg.id in source_ids
             assert arg.name in {"VentureBeat", "TechCrunch"}
 

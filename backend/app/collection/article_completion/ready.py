@@ -89,7 +89,7 @@ class ReadyForArticleCompletion:
     source_id: int
     attempt_count: int
     observed: ObservedArticle
-    profile: ArticleCompletionPolicy
+    completion_policy: ArticleCompletionPolicy
     source_url: CanonicalArticleUrl
 
     @classmethod
@@ -117,13 +117,13 @@ class ReadyForArticleCompletion:
             source_name=facts.source_name,
             source_url=source_url,
         )
-        profile = completion_policy_for(observed.source_name)
+        completion_policy = completion_policy_for(observed.source_name)
 
         return cls(
             incomplete_article_id=facts.incomplete_article_id,
             source_id=facts.source_id,
             attempt_count=facts.attempt_count,
             observed=observed,
-            profile=profile,
+            completion_policy=completion_policy,
             source_url=source_url,
         )

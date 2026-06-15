@@ -73,7 +73,6 @@ async def test_append_inserts_row_with_payload_roundtrip(
     """
     repo = PipelineEventRepository(db_session)
     payload = AcquisitionPayload(
-        fetcher_class="VentureBeatFetcher",
         http_status=403,
         final_url="https://venturebeat.com/feed/",
         response_size=1024,
@@ -100,7 +99,6 @@ async def test_append_inserts_row_with_payload_roundtrip(
     assert row.outcome_code == "permanent_fetch_error"
     assert row.source_id == source_row.id
     assert row.payload["kind"] == "acquisition"
-    assert row.payload["fetcher_class"] == "VentureBeatFetcher"
     assert row.payload["http_status"] == 403
     assert row.payload["final_url"] == "https://venturebeat.com/feed/"
     assert row.payload["error_message"] == "upstream returned 403"

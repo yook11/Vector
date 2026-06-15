@@ -35,7 +35,7 @@ from app.collection.sources.base_article_source import BaseArticleSource
 from app.collection.sources.fetch_cadence import FetchCadence
 from app.collection.sources.source_name import SourceName
 from app.models.news_source import NewsSource, SourceType
-from app.queue.messages.collection import AcquireSourceArg
+from app.queue.messages.collection import AcquireSourceTaskInput
 from app.queue.tasks import acquisition as collection_tasks
 
 _PUBLISHED = datetime(2026, 4, 30, tzinfo=UTC)
@@ -400,7 +400,7 @@ async def test_run_succeeded_emits_succeeded_sum1(
     ctx = _ctx(session_factory)
 
     await collection_tasks.acquire_source(
-        AcquireSourceArg(id=vb_source.id, name="VentureBeat"),
+        AcquireSourceTaskInput(id=vb_source.id, name="VentureBeat"),
         ctx=ctx,  # type: ignore[arg-type]
     )
 
@@ -429,7 +429,7 @@ async def test_run_failed_emits_failed_sum1(
     ctx = _ctx(session_factory)
 
     result = await collection_tasks.acquire_source(
-        AcquireSourceArg(id=vb_source.id, name="VentureBeat"),
+        AcquireSourceTaskInput(id=vb_source.id, name="VentureBeat"),
         ctx=ctx,  # type: ignore[arg-type]
     )
 

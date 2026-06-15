@@ -39,7 +39,7 @@ class SourceDispatchRejectionCode(StrEnum):
 class SourceDispatchTarget:
     """dispatch 対象の source 1 件分の VO。
 
-    queue task が本 VO を受け取り、kiq message DTO (``AcquireSourceArg``) に
+    queue task が本 VO を受け取り、kiq message DTO (``AcquireSourceTaskInput``) に
     変換して ``.kiq()`` を呼ぶ。Service は kiq に触れない (queue 依存を持たない)。
     """
 

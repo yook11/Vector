@@ -10,7 +10,7 @@ from __future__ import annotations
 from pydantic import BaseModel, ConfigDict
 
 
-class AcquireSourceArg(BaseModel):
+class AcquireSourceTaskInput(BaseModel):
     """``acquire_source`` task の kiq 引数 envelope。
 
     ``id``: ``news_sources.id`` (Article の FK で使う)。

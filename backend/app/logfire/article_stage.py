@@ -35,7 +35,7 @@ import logfire
 from logfire import LogfireSpan
 
 # stage 別の result 語彙。値だけで「記事がどう抜けたか」が読めるよう自己記述的にする。
-CurationResult = Literal["signal", "noise", "rate_limited", "skipped", "failed"]
+CurationStageResult = Literal["signal", "noise", "rate_limited", "skipped", "failed"]
 AssessmentResult = Literal[
     "in_scope", "out_of_scope", "rate_limited", "skipped", "failed"
 ]
@@ -43,8 +43,9 @@ EmbeddingResult = Literal["succeeded", "rate_limited", "skipped", "failed"]
 
 _SPAN_NAME = "article_stage"
 
-# dashboard 可視化対象 (signal/noise/failed)。span は CurationResult の5値を保つが、
-# counter はこの3値だけを送る (rate_limited/skipped は emit しない仕様境界)。
+# dashboard 可視化対象 (signal/noise/failed)。span は
+# CurationStageResult の5値を保つが、counter はこの3値だけを送る
+# (rate_limited/skipped は emit しない仕様境界)。
 CountedCurationResult = Literal["signal", "noise", "failed"]
 
 _curation_outcome_counter = logfire.metric_counter(
@@ -66,7 +67,7 @@ class CurationStageSpan:
         self._span = span
         self._result_set = False
 
-    def set_result(self, result: CurationResult) -> None:
+    def set_result(self, result: CurationStageResult) -> None:
         """result を一度だけ焼く (no-override)。確定時に counter も同一点で更新する。"""
         if self._result_set:
             return
@@ -205,7 +206,7 @@ def embedding_stage_span(*, analyzed_article_id: int) -> Iterator[EmbeddingStage
             _current_stage_span.reset(token)
 
 
-def set_curation_stage_result(result: CurationResult) -> None:
+def set_curation_stage_result(result: CurationStageResult) -> None:
     """現在の span が curation の時だけ result を焼く。それ以外は no-op。
 
     span 文脈外 (CLI / service 単体テスト) でも、別ステージ span の最中の誤呼び出し
