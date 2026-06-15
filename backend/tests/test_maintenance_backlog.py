@@ -242,8 +242,8 @@ async def test_pending_curation_excludes_noise_articles(
     db_session.add(
         CurationNoise(
             analyzable_article_id=article.id,
-            title_ja="ノイズタイトル",
-            summary_ja="ノイズ要約",
+            translated_title="ノイズタイトル",
+            summary="ノイズ要約",
         )
     )
     await db_session.commit()
@@ -289,8 +289,8 @@ async def test_count_pending_curation_returns_true_count_without_limit(
     db_session.add(
         CurationNoise(
             analyzable_article_id=noise_article.id,
-            title_ja="ノイズタイトル",
-            summary_ja="ノイズ要約",
+            translated_title="ノイズタイトル",
+            summary="ノイズ要約",
         )
     )
     await db_session.commit()
@@ -402,8 +402,8 @@ async def test_aged_out_curation_excludes_articles_with_noise(
     db_session.add(
         CurationNoise(
             analyzable_article_id=article.id,
-            title_ja="ノイズタイトル",
-            summary_ja="ノイズ要約",
+            translated_title="ノイズタイトル",
+            summary="ノイズ要約",
         )
     )
     await db_session.commit()
@@ -455,7 +455,8 @@ async def test_pending_assessment_targets_include_audit_snapshot(
     db_session: AsyncSession,
     sample_source: NewsSource,
 ) -> None:
-    """assessment backfill target は curation_id / analyzable_article_id / source_name を含む。"""
+    """assessment backfill target は curation_id / analyzable_article_id /
+    source_name を含む。"""
     now = datetime(2026, 4, 26, 12, 0, 0, tzinfo=UTC)
     article = await _make_article(
         db_session,

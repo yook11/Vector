@@ -90,12 +90,12 @@ async def _make_ready(
     claim 後 ``status='running'`` / ``attempt_count=1``。返す Ready は
     Task 層が ``try_advance_from`` で構築するのと同じ厚い precondition 型。
     """
-    pending_id = await IncompleteArticleRepository(db_session).save(
+    incomplete_article_id = await IncompleteArticleRepository(db_session).save(
         _observed(source, url),
         source_id=source.id,
         ready_at=datetime.now(UTC) - timedelta(seconds=1),
     )
-    assert pending_id is not None
+    assert incomplete_article_id is not None
     await db_session.commit()
     now = datetime.now(UTC)
     repository = ArticleCompletionRepository(db_session)
@@ -105,21 +105,23 @@ async def _make_ready(
         leased_until=now + timedelta(minutes=5),
     )
     await db_session.commit()
-    assert pending_id in ids
+    assert incomplete_article_id in ids
     return await ReadyForArticleCompletion.try_advance_from(
-        pending_id=pending_id,
+        incomplete_article_id=incomplete_article_id,
         repo=repository,
     )
 
 
 async def _reload_pending(
-    db_session: AsyncSession, pending_id: int
+    db_session: AsyncSession, incomplete_article_id: int
 ) -> IncompleteArticle:
     """handler の別 session commit を見るため fresh tx で pending を読み直す。"""
     await db_session.rollback()
     return (
         await db_session.execute(
-            select(IncompleteArticle).where(IncompleteArticle.id == pending_id)
+            select(IncompleteArticle).where(
+                IncompleteArticle.id == incomplete_article_id
+            )
         )
     ).scalar_one()
 
@@ -157,7 +159,7 @@ async def test_scrape_terminal_closes_pending(
         ready, ScrapeNotHtml(content_type="application/pdf")
     )
 
-    pending = await _reload_pending(db_session, ready.pending_id)
+    pending = await _reload_pending(db_session, ready.incomplete_article_id)
     assert pending.status == "closed"
     assert pending.leased_until is None
 
@@ -202,7 +204,7 @@ async def test_scrape_retryable_non_exhausted_reopens_with_future_ready_at(
 
     await handler.handle_scrape_failure(ready, FetchGatewayError(status_code=502))
 
-    pending = await _reload_pending(db_session, ready.pending_id)
+    pending = await _reload_pending(db_session, ready.incomplete_article_id)
     assert pending.status == "open"
     assert pending.leased_until is None
     assert pending.ready_at is not None
@@ -247,12 +249,12 @@ async def test_scrape_retryable_exhausted_closes_pending(
     ready = await _make_ready(db_session, tc_source, "https://techcrunch.com/exhaust")
     await db_session.execute(
         update(IncompleteArticle)
-        .where(IncompleteArticle.id == ready.pending_id)
+        .where(IncompleteArticle.id == ready.incomplete_article_id)
         .values(attempt_count=BLIP.max_attempts)
     )
     await db_session.commit()
     exhausted_ready = await ReadyForArticleCompletion.try_advance_from(
-        pending_id=ready.pending_id,
+        incomplete_article_id=ready.incomplete_article_id,
         repo=ArticleCompletionRepository(db_session),
     )
     assert exhausted_ready.attempt_count == BLIP.max_attempts
@@ -262,7 +264,7 @@ async def test_scrape_retryable_exhausted_closes_pending(
         exhausted_ready, FetchGatewayError(status_code=502)
     )
 
-    pending = await _reload_pending(db_session, ready.pending_id)
+    pending = await _reload_pending(db_session, ready.incomplete_article_id)
     assert pending.status == "closed"
     assert pending.leased_until is None
 
@@ -277,12 +279,12 @@ async def test_scrape_retryable_exhausted_audits_retry_exhausted_flag(
     ready = await _make_ready(db_session, tc_source, "https://techcrunch.com/giveup")
     await db_session.execute(
         update(IncompleteArticle)
-        .where(IncompleteArticle.id == ready.pending_id)
+        .where(IncompleteArticle.id == ready.incomplete_article_id)
         .values(attempt_count=BLIP.max_attempts)
     )
     await db_session.commit()
     exhausted_ready = await ReadyForArticleCompletion.try_advance_from(
-        pending_id=ready.pending_id,
+        incomplete_article_id=ready.incomplete_article_id,
         repo=ArticleCompletionRepository(db_session),
     )
     handler = ArticleCompletionFailureHandler(session_factory)
@@ -322,7 +324,7 @@ async def test_scrape_retryable_uses_server_retry_after_seconds(
         ),
     )
 
-    pending = await _reload_pending(db_session, ready.pending_id)
+    pending = await _reload_pending(db_session, ready.incomplete_article_id)
     assert pending.status == "open"
     assert pending.ready_at is not None
     delta = pending.ready_at - datetime.now(UTC)
@@ -350,7 +352,7 @@ async def test_completion_rejected_closes_pending(
         ),
     )
 
-    pending = await _reload_pending(db_session, ready.pending_id)
+    pending = await _reload_pending(db_session, ready.incomplete_article_id)
     assert pending.status == "closed"
     assert pending.leased_until is None
 
@@ -407,7 +409,7 @@ async def test_stale_attempt_records_skipped_without_state_change(
     # 別 worker が再 claim して attempt を進めた状況 (ready.attempt_count=1 は失効)。
     await db_session.execute(
         update(IncompleteArticle)
-        .where(IncompleteArticle.id == ready.pending_id)
+        .where(IncompleteArticle.id == ready.incomplete_article_id)
         .values(attempt_count=ready.attempt_count + 1)
     )
     await db_session.commit()
@@ -422,5 +424,5 @@ async def test_stale_attempt_records_skipped_without_state_change(
     assert ev.outcome_code == "stale_attempt"
     assert ev.retryability is None
     assert ev.payload["attempt_count"] == ready.attempt_count
-    pending = await _reload_pending(db_session, ready.pending_id)
+    pending = await _reload_pending(db_session, ready.incomplete_article_id)
     assert pending.status == "running"  # void な attempt は状態を変えない

@@ -1,4 +1,4 @@
-"""補完を実行できる pending 行を Domain 側で構築する。"""
+"""補完を実行できる incomplete article 行を Domain 側で構築する。"""
 
 from __future__ import annotations
 
@@ -16,8 +16,8 @@ __all__ = [
     "ArticleCompletionPreconditionProtocol",
     "ArticleCompletionReadyBuildError",
     "ArticleCompletionReadyBuildFacts",
-    "ArticleCompletionReadyBuildPendingMissingError",
-    "ArticleCompletionReadyBuildPendingNotRunningError",
+    "ArticleCompletionReadyBuildIncompleteArticleMissingError",
+    "ArticleCompletionReadyBuildIncompleteArticleNotRunningError",
     "ReadyForArticleCompletion",
 ]
 
@@ -26,7 +26,7 @@ __all__ = [
 class ArticleCompletionReadyBuildFacts:
     """Stage 2 Ready 構築に必要な DB 射影。"""
 
-    pending_id: int
+    incomplete_article_id: int
     source_id: int
     source_name: SourceName
     status: str
@@ -47,37 +47,45 @@ class ArticleCompletionReadyBuildError(Exception):
         super().__init__(self.MESSAGE)
 
 
-class ArticleCompletionReadyBuildPendingMissingError(ArticleCompletionReadyBuildError):
-    """pending_id に対応する pending 行が存在しなかった。"""
-
-    CODE: ClassVar[str] = "completion_ready_build_blocked_pending_missing"
-    EVENT_TYPE: ClassVar[EventType] = EventType.SKIPPED
-    MESSAGE: ClassVar[str] = "pending row is missing for completion ready build"
-
-
-class ArticleCompletionReadyBuildPendingNotRunningError(
+class ArticleCompletionReadyBuildIncompleteArticleMissingError(
     ArticleCompletionReadyBuildError
 ):
-    """pending 行は存在するが completion 実行対象の running ではなかった。"""
+    """incomplete_article_id に対応する incomplete article 行が存在しなかった。"""
 
-    CODE: ClassVar[str] = "completion_ready_build_blocked_pending_not_running"
+    CODE: ClassVar[str] = "completion_ready_build_blocked_incomplete_article_missing"
     EVENT_TYPE: ClassVar[EventType] = EventType.SKIPPED
-    MESSAGE: ClassVar[str] = "pending row is not running for completion ready build"
+    MESSAGE: ClassVar[str] = (
+        "incomplete article row is missing for completion ready build"
+    )
+
+
+class ArticleCompletionReadyBuildIncompleteArticleNotRunningError(
+    ArticleCompletionReadyBuildError
+):
+    """incomplete article 行は存在するが completion 実行対象の running ではなかった。"""
+
+    CODE: ClassVar[str] = (
+        "completion_ready_build_blocked_incomplete_article_not_running"
+    )
+    EVENT_TYPE: ClassVar[EventType] = EventType.SKIPPED
+    MESSAGE: ClassVar[str] = (
+        "incomplete article row is not running for completion ready build"
+    )
 
 
 class ArticleCompletionPreconditionProtocol(Protocol):
     """Ready 構築に必要な DB 事実だけを読む repository contract。"""
 
     async def load_ready_build_facts(
-        self, pending_id: int
+        self, incomplete_article_id: int
     ) -> ArticleCompletionReadyBuildFacts | None: ...
 
 
 @dataclass(frozen=True, slots=True)
 class ReadyForArticleCompletion:
-    """``status='running'`` の pending 行から作る補完入力。"""
+    """``status='running'`` の incomplete article 行から作る補完入力。"""
 
-    pending_id: int
+    incomplete_article_id: int
     source_id: int
     attempt_count: int
     observed: ObservedArticle
@@ -88,16 +96,16 @@ class ReadyForArticleCompletion:
     async def try_advance_from(
         cls,
         *,
-        pending_id: int,
+        incomplete_article_id: int,
         repo: ArticleCompletionPreconditionProtocol,
     ) -> ReadyForArticleCompletion:
         """DB 事実から Ready を構築し、構築不能なら typed error を投げる。"""
-        facts = await repo.load_ready_build_facts(pending_id)
+        facts = await repo.load_ready_build_facts(incomplete_article_id)
         if facts is None:
-            raise ArticleCompletionReadyBuildPendingMissingError()
+            raise ArticleCompletionReadyBuildIncompleteArticleMissingError()
 
         if facts.status != "running":
-            raise ArticleCompletionReadyBuildPendingNotRunningError()
+            raise ArticleCompletionReadyBuildIncompleteArticleNotRunningError()
 
         # CanonicalArticleUrlInvalidError / ObservedArticleInvalidError は
         # VO 層が reason 付きで投げる。ready は翻訳せずそのまま伝播し、where
@@ -112,7 +120,7 @@ class ReadyForArticleCompletion:
         profile = completion_policy_for(observed.source_name)
 
         return cls(
-            pending_id=facts.pending_id,
+            incomplete_article_id=facts.incomplete_article_id,
             source_id=facts.source_id,
             attempt_count=facts.attempt_count,
             observed=observed,

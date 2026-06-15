@@ -41,12 +41,12 @@ class CurationNoise(Base):
             name="uq_curation_noises_analyzable_article_id",
         ),
         CheckConstraint(
-            "title_ja <> ''",
-            name="ck_curation_noises_title_ja_not_empty",
+            "translated_title <> ''",
+            name="ck_curation_noises_translated_title_not_empty",
         ),
         CheckConstraint(
-            "summary_ja <> ''",
-            name="ck_curation_noises_summary_ja_not_empty",
+            "summary <> ''",
+            name="ck_curation_noises_summary_not_empty",
         ),
     )
 
@@ -55,8 +55,8 @@ class CurationNoise(Base):
         BigInteger,
         ForeignKey("analyzable_articles.id", ondelete="CASCADE"),
     )
-    title_ja: Mapped[str] = mapped_column(String(500))
-    summary_ja: Mapped[str] = mapped_column(Text())
+    translated_title: Mapped[str] = mapped_column(String(500))
+    summary: Mapped[str] = mapped_column(Text())
     rejected_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )

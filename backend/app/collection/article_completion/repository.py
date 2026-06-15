@@ -1,4 +1,4 @@
-"""completion の pending 読み出し・状態遷移・永続化境界。"""
+"""completion の incomplete article 読み出し・状態遷移・永続化境界。"""
 
 from __future__ import annotations
 
@@ -46,9 +46,9 @@ class ArticleCompletionRepository:
         self._session = session
 
     async def load_ready_build_facts(
-        self, pending_id: int
+        self, incomplete_article_id: int
     ) -> ArticleCompletionReadyBuildFacts | None:
-        """Ready 構築に必要な pending 行の DB 事実を取得する。"""
+        """Ready 構築に必要な incomplete article 行の DB 事実を取得する。"""
         stmt = (
             select(
                 IncompleteArticleORM.id,
@@ -59,7 +59,7 @@ class ArticleCompletionRepository:
                 IncompleteArticleORM.url,
                 IncompleteArticleORM.attempt_count,
             )
-            .where(IncompleteArticleORM.id == pending_id)
+            .where(IncompleteArticleORM.id == incomplete_article_id)
             .limit(1)
         )
         row = (await self._session.execute(stmt)).first()
@@ -75,7 +75,7 @@ class ArticleCompletionRepository:
             attempt_count,
         ) = row
         return ArticleCompletionReadyBuildFacts(
-            pending_id=row_id,
+            incomplete_article_id=row_id,
             source_id=source_id,
             source_name=source_name,
             status=status,
@@ -124,7 +124,11 @@ class ArticleCompletionRepository:
             .returning(IncompleteArticleORM.id)
         )
         updated_ids = set((await self._session.execute(update_stmt)).scalars().all())
-        return [pending_id for pending_id in ids if pending_id in updated_ids]
+        return [
+            incomplete_article_id
+            for incomplete_article_id in ids
+            if incomplete_article_id in updated_ids
+        ]
 
     async def sweep_expired_leases(self, *, now: datetime) -> int:
         """期限切れ lease の ``running`` 行を ``open`` に戻す。"""
@@ -155,7 +159,7 @@ class ArticleCompletionRepository:
         stmt = (
             update(IncompleteArticleORM)
             .where(
-                IncompleteArticleORM.id == ready.pending_id,
+                IncompleteArticleORM.id == ready.incomplete_article_id,
                 IncompleteArticleORM.status == "running",
                 IncompleteArticleORM.attempt_count == ready.attempt_count,
             )
@@ -175,7 +179,7 @@ class ArticleCompletionRepository:
         stmt = (
             update(IncompleteArticleORM)
             .where(
-                IncompleteArticleORM.id == ready.pending_id,
+                IncompleteArticleORM.id == ready.incomplete_article_id,
                 IncompleteArticleORM.status == "running",
                 IncompleteArticleORM.attempt_count == ready.attempt_count,
             )
@@ -209,7 +213,7 @@ class ArticleCompletionRepository:
         stmt = (
             delete(IncompleteArticleORM)
             .where(
-                IncompleteArticleORM.id == ready.pending_id,
+                IncompleteArticleORM.id == ready.incomplete_article_id,
                 IncompleteArticleORM.status == "running",
                 IncompleteArticleORM.attempt_count == ready.attempt_count,
             )

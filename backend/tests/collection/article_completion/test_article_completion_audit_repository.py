@@ -28,8 +28,8 @@ from app.audit.stages.completion import ArticleCompletionAuditRepository
 from app.collection.article_acquisition.repository import IncompleteArticleRepository
 from app.collection.article_completion.ready import (
     ArticleCompletionReadyBuildFacts,
-    ArticleCompletionReadyBuildPendingMissingError,
-    ArticleCompletionReadyBuildPendingNotRunningError,
+    ArticleCompletionReadyBuildIncompleteArticleMissingError,
+    ArticleCompletionReadyBuildIncompleteArticleNotRunningError,
     ReadyForArticleCompletion,
 )
 from app.collection.article_completion.repository import (
@@ -124,12 +124,12 @@ async def _make_ready(
     db_session: AsyncSession, source: NewsSource, url: str
 ) -> ReadyForArticleCompletion:
     """claim 済 Ready (status='running' / attempt_count=1) を返す。"""
-    pending_id = await IncompleteArticleRepository(db_session).save(
+    incomplete_article_id = await IncompleteArticleRepository(db_session).save(
         _observed(source, url),
         source_id=source.id,
         ready_at=datetime.now(UTC) - timedelta(seconds=1),
     )
-    assert pending_id is not None
+    assert incomplete_article_id is not None
     await db_session.commit()
     now = datetime.now(UTC)
     repository = ArticleCompletionRepository(db_session)
@@ -138,7 +138,7 @@ async def _make_ready(
     )
     await db_session.commit()
     return await ReadyForArticleCompletion.try_advance_from(
-        pending_id=pending_id,
+        incomplete_article_id=incomplete_article_id,
         repo=repository,
     )
 
@@ -146,13 +146,13 @@ async def _make_ready(
 def _ready_build_facts(
     source: NewsSource,
     *,
-    pending_id: int = 42,
+    incomplete_article_id: int = 42,
     status: str = "running",
     url: str = "https://techcrunch.com/bad",
     attempt_count: int = 1,
 ) -> ArticleCompletionReadyBuildFacts:
     return ArticleCompletionReadyBuildFacts(
-        pending_id=pending_id,
+        incomplete_article_id=incomplete_article_id,
         source_id=source.id,
         source_name=SourceName(str(source.name)),
         status=status,
@@ -551,41 +551,41 @@ async def test_append_persist_crashed_db_error_uses_db_projection(
 
 
 @pytest.mark.asyncio
-async def test_append_ready_build_error_records_pending_missing_skipped(
+async def test_append_ready_build_error_records_incomplete_article_missing_skipped(
     session_factory: async_sessionmaker[AsyncSession],
     db_session: AsyncSession,
 ) -> None:
-    exc = ArticleCompletionReadyBuildPendingMissingError()
+    exc = ArticleCompletionReadyBuildIncompleteArticleMissingError()
 
     async with session_factory() as session:
         await ArticleCompletionAuditRepository(session).append_ready_build_error(
-            pending_id=999,
+            incomplete_article_id=999,
             exc=exc,
         )
         await session.commit()
 
     ev = await _fetch_by_outcome(
-        db_session, "completion_ready_build_blocked_pending_missing"
+        db_session, "completion_ready_build_blocked_incomplete_article_missing"
     )
     assert ev.event_type == "skipped"
     assert ev.source_id is None
     assert ev.retryability is None
     assert ev.error_class is None
-    assert ev.payload["pending_id"] == 999
-    assert ev.payload["pending_status"] is None
+    assert ev.payload["incomplete_article_id"] == 999
+    assert ev.payload["incomplete_article_status"] is None
     assert ev.payload["failure_kind"] is None
 
 
 @pytest.mark.asyncio
-async def test_append_ready_build_error_records_pending_not_running_skipped(
+async def test_append_ready_build_error_records_incomplete_article_not_running_skipped(
     session_factory: async_sessionmaker[AsyncSession],
     db_session: AsyncSession,
     tc_source: NewsSource,
 ) -> None:
-    exc = ArticleCompletionReadyBuildPendingNotRunningError()
+    exc = ArticleCompletionReadyBuildIncompleteArticleNotRunningError()
     facts = _ready_build_facts(
         tc_source,
-        pending_id=100,
+        incomplete_article_id=100,
         status="open",
         url="https://techcrunch.com/open",
         attempt_count=0,
@@ -593,7 +593,7 @@ async def test_append_ready_build_error_records_pending_not_running_skipped(
 
     async with session_factory() as session:
         await ArticleCompletionAuditRepository(session).append_ready_build_error(
-            pending_id=100,
+            incomplete_article_id=100,
             exc=exc,
             facts=facts,
         )
@@ -601,11 +601,14 @@ async def test_append_ready_build_error_records_pending_not_running_skipped(
 
     ev = await _fetch_one(db_session, tc_source.id)
     assert ev.event_type == "skipped"
-    assert ev.outcome_code == "completion_ready_build_blocked_pending_not_running"
+    assert (
+        ev.outcome_code
+        == "completion_ready_build_blocked_incomplete_article_not_running"
+    )
     assert ev.retryability is None
     assert ev.error_class is None
-    assert ev.payload["pending_id"] == 100
-    assert ev.payload["pending_status"] == "open"
+    assert ev.payload["incomplete_article_id"] == 100
+    assert ev.payload["incomplete_article_status"] == "open"
     assert ev.payload["source_name"] == "TechCrunch"
     assert ev.payload["canonical_url"] == "https://techcrunch.com/open"
     assert ev.payload["attempt_count"] == 0
@@ -655,7 +658,7 @@ async def test_append_ready_build_error_uses_domain_error_code(
 
     async with session_factory() as session:
         await ArticleCompletionAuditRepository(session).append_ready_build_error(
-            pending_id=42,
+            incomplete_article_id=42,
             exc=exc,
             facts=facts,
         )
@@ -667,8 +670,8 @@ async def test_append_ready_build_error_uses_domain_error_code(
     assert ev.error_class is not None
     assert ev.payload["failure_kind"] == failure_kind
     assert ev.payload["reason_code"] == reason_code
-    assert ev.payload["pending_id"] == 42
-    assert ev.payload["pending_status"] == "running"
+    assert ev.payload["incomplete_article_id"] == 42
+    assert ev.payload["incomplete_article_status"] == "running"
     assert ev.payload["source_name"] == "TechCrunch"
     assert ev.payload["attempt_count"] == 1
 
@@ -682,7 +685,7 @@ async def test_append_ready_build_error_records_db_error(
 
     async with session_factory() as session:
         await ArticleCompletionAuditRepository(session).append_ready_build_error(
-            pending_id=42,
+            incomplete_article_id=42,
             exc=exc,
         )
         await session.commit()
@@ -691,7 +694,7 @@ async def test_append_ready_build_error_records_db_error(
     assert ev.event_type == "failed"
     assert ev.retryability == "unknown"
     assert ev.payload["failure_kind"] == "db_error"
-    assert ev.payload["pending_id"] == 42
+    assert ev.payload["incomplete_article_id"] == 42
 
 
 @pytest.mark.asyncio
@@ -703,7 +706,7 @@ async def test_append_ready_build_error_records_unexpected_error(
 
     async with session_factory() as session:
         await ArticleCompletionAuditRepository(session).append_ready_build_error(
-            pending_id=42,
+            incomplete_article_id=42,
             exc=exc,
         )
         await session.commit()
@@ -714,7 +717,7 @@ async def test_append_ready_build_error_records_unexpected_error(
     assert ev.event_type == "failed"
     assert ev.retryability == "unknown"
     assert ev.payload["failure_kind"] == "unexpected_error"
-    assert ev.payload["pending_id"] == 42
+    assert ev.payload["incomplete_article_id"] == 42
 
 
 @pytest.mark.asyncio

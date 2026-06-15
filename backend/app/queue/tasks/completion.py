@@ -54,17 +54,19 @@ async def dispatch_html_fetch_jobs(ctx: Context = TaskiqDepends()) -> dict:
     session_factory = ctx.state.session_factory
     now = datetime.now(UTC)
     async with session_factory() as session:
-        pending_ids = await ArticleCompletionRepository(session).claim_ready_batch(
+        incomplete_article_ids = await ArticleCompletionRepository(
+            session
+        ).claim_ready_batch(
             limit=_DISPATCH_BATCH_LIMIT,
             now=now,
             leased_until=now + timedelta(minutes=_LEASE_MINUTES),
         )
         await session.commit()
 
-    for pending_id in pending_ids:
-        await scrape_html_body.kiq(pending_id)
+    for incomplete_article_id in incomplete_article_ids:
+        await scrape_html_body.kiq(incomplete_article_id)
 
-    result = {"dispatched_count": len(pending_ids)}
+    result = {"dispatched_count": len(incomplete_article_ids)}
     logger.info("dispatch_html_fetch_jobs_completed", **result)
     return result
 
@@ -98,7 +100,7 @@ async def sweep_expired_leases(ctx: Context = TaskiqDepends()) -> dict:
     retry_on_error=False,
 )
 async def scrape_html_body(
-    pending_id: int,
+    incomplete_article_id: int,
     ctx: Context = TaskiqDepends(),
 ) -> dict | None:
     """HTML 取得 + 本文抽出 + Article 永続化を Service に委譲。
@@ -114,20 +116,20 @@ async def scrape_html_body(
     async with session_factory() as session:
         try:
             ready = await ReadyForArticleCompletion.try_advance_from(
-                pending_id=pending_id,
+                incomplete_article_id=incomplete_article_id,
                 repo=ArticleCompletionRepository(session),
             )
         except ArticleCompletionReadyBuildError as exc:
             await _append_ready_build_error_audit(
                 session_factory,
-                pending_id=pending_id,
+                incomplete_article_id=incomplete_article_id,
                 exc=exc,
             )
             if exc.EVENT_TYPE == EventType.FAILED:
                 raise
             logger.info(
                 "scrape_html_body_skipped",
-                pending_id=pending_id,
+                incomplete_article_id=incomplete_article_id,
                 reason="ready_build_error",
                 outcome_code=exc.CODE,
             )
@@ -135,7 +137,7 @@ async def scrape_html_body(
         except Exception as exc:
             await _append_ready_build_error_audit(
                 session_factory,
-                pending_id=pending_id,
+                incomplete_article_id=incomplete_article_id,
                 exc=exc,
             )
             raise
@@ -150,7 +152,7 @@ async def scrape_html_body(
         CurationTrigger(analyzable_article_id=analyzable_article_id)
     )
     return {
-        "pending_id": pending_id,
+        "incomplete_article_id": incomplete_article_id,
         "analyzable_article_id": analyzable_article_id,
         "status": "success",
     }
@@ -159,7 +161,7 @@ async def scrape_html_body(
 async def _append_ready_build_error_audit(
     session_factory: async_sessionmaker[AsyncSession],
     *,
-    pending_id: int,
+    incomplete_article_id: int,
     exc: Exception,
 ) -> None:
     """Ready 構築例外を best-effort で監査し、失敗時は構造ログへ退避する。"""
@@ -169,19 +171,19 @@ async def _append_ready_build_error_audit(
             try:
                 facts = await ArticleCompletionRepository(
                     audit_session
-                ).load_ready_build_facts(pending_id)
+                ).load_ready_build_facts(incomplete_article_id)
             except Exception as context_exc:
                 await audit_session.rollback()
                 logger.warning(
                     "completion_ready_build_context_load_failed",
-                    pending_id=pending_id,
+                    incomplete_article_id=incomplete_article_id,
                     context_error_class=exception_fqn(context_exc),
                 )
 
             await ArticleCompletionAuditRepository(
                 audit_session
             ).append_ready_build_error(
-                pending_id=pending_id,
+                incomplete_article_id=incomplete_article_id,
                 exc=exc,
                 facts=facts,
             )
@@ -189,7 +191,7 @@ async def _append_ready_build_error_audit(
     except Exception as audit_exc:
         logger.exception(
             "completion_ready_build_error_audit_dropped",
-            pending_id=pending_id,
+            incomplete_article_id=incomplete_article_id,
             business_error_class=exception_fqn(exc),
             audit_error_class=exception_fqn(audit_exc),
         )

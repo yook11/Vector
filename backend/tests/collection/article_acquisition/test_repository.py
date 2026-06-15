@@ -43,17 +43,17 @@ def _observed(
 
 
 @pytest.mark.asyncio
-async def test_enqueue_returns_pending_id(
+async def test_enqueue_returns_incomplete_article_id(
     db_session: AsyncSession, sample_source: NewsSource
 ) -> None:
     enqueue = IncompleteArticleRepository(db_session)
-    pending_id = await enqueue.save(
+    incomplete_article_id = await enqueue.save(
         _observed(url="https://example.com/p/save", source_name=sample_source.name),
         source_id=sample_source.id,
         ready_at=datetime.now(UTC),
     )
-    assert isinstance(pending_id, int)
-    assert pending_id > 0
+    assert isinstance(incomplete_article_id, int)
+    assert incomplete_article_id > 0
 
 
 @pytest.mark.asyncio
@@ -94,13 +94,13 @@ async def test_enqueue_writes_identity_in_columns_not_jsonb(
     """
     url = CanonicalArticleUrl("https://example.com/p/url-only")
     enqueue = IncompleteArticleRepository(db_session)
-    pending_id = await enqueue.save(
+    incomplete_article_id = await enqueue.save(
         _observed(url=str(url), source_name=sample_source.name),
         source_id=sample_source.id,
         ready_at=datetime.now(UTC),
     )
     await db_session.commit()
-    assert pending_id is not None
+    assert incomplete_article_id is not None
 
     row = (
         await db_session.execute(
@@ -108,7 +108,7 @@ async def test_enqueue_writes_identity_in_columns_not_jsonb(
                 "SELECT url, source_name, observed_article "
                 "FROM incomplete_articles WHERE id = :id"
             ),
-            {"id": pending_id},
+            {"id": incomplete_article_id},
         )
     ).first()
     assert row is not None
@@ -139,13 +139,13 @@ async def test_enqueue_row_consistent_with_news_sources_join(
     """
     url = "https://example.com/p/join-check"
     enqueue = IncompleteArticleRepository(db_session)
-    pending_id = await enqueue.save(
+    incomplete_article_id = await enqueue.save(
         _observed(url=url, source_name=sample_source.name),
         source_id=sample_source.id,
         ready_at=datetime.now(UTC),
     )
     await db_session.commit()
-    assert pending_id is not None
+    assert incomplete_article_id is not None
 
     join_row = (
         await db_session.execute(
@@ -155,7 +155,7 @@ async def test_enqueue_row_consistent_with_news_sources_join(
                 "  ON ns.id = p.source_id AND ns.name = p.source_name "
                 "WHERE p.id = :id"
             ),
-            {"id": pending_id},
+            {"id": incomplete_article_id},
         )
     ).first()
     assert join_row is not None, (

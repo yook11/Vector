@@ -159,8 +159,8 @@ class CurationRepository:
             pg_insert(CurationNoise)
             .values(
                 analyzable_article_id=analyzable_article_id,
-                title_ja=noise.title_ja,
-                summary_ja=noise.summary_ja,
+                translated_title=noise.title_ja,
+                summary=noise.summary_ja,
             )
             .on_conflict_do_nothing()
             .returning(CurationNoise.id)

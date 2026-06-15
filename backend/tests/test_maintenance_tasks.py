@@ -383,7 +383,9 @@ async def test_delete_aged_out_curations_deletes_old_child_null_and_audits(
     )
     db_session.add(
         CurationNoise(
-            analyzable_article_id=kept.id, title_ja="ノイズ", summary_ja="ノイズ要約"
+            analyzable_article_id=kept.id,
+            translated_title="ノイズ",
+            summary="ノイズ要約",
         )
     )
     await db_session.commit()

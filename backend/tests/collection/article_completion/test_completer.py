@@ -47,7 +47,7 @@ def _ready(
     ),
 ) -> ReadyForArticleCompletion:
     return ReadyForArticleCompletion(
-        pending_id=1,
+        incomplete_article_id=1,
         source_id=1,
         attempt_count=1,
         observed=ObservedArticle(

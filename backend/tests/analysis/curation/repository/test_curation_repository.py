@@ -220,7 +220,7 @@ async def test_concurrent_save_signal_returns_one_persisted_one_none(
 async def test_save_noise_returns_persisted_id(
     db_session: AsyncSession, sample_source: NewsSource
 ) -> None:
-    """noise 記録が title_ja / summary_ja とともに永続化される。"""
+    """noise 記録が translated_title / summary とともに永続化される。"""
     article = await _make_article(db_session, sample_source, "https://example.com/n2")
     repo = CurationRepository(db_session)
     noise_id = await repo.save_noise(_noise_call(), analyzable_article_id=article.id)
@@ -232,8 +232,8 @@ async def test_save_noise_returns_persisted_id(
             select(CurationNoise).where(CurationNoise.id == noise_id)
         )
     ).scalar_one()
-    assert persisted.title_ja == "ノイズタイトル"
-    assert persisted.summary_ja == "ノイズ要約"
+    assert persisted.translated_title == "ノイズタイトル"
+    assert persisted.summary == "ノイズ要約"
 
 
 @pytest.mark.asyncio

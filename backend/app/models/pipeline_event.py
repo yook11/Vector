@@ -96,7 +96,7 @@ class PipelineEvent(Base):
     )
     stage: Mapped[str] = mapped_column(String(40), nullable=False)
     event_type: Mapped[str] = mapped_column(String(20), nullable=False)
-    outcome_code: Mapped[str] = mapped_column(String(60), nullable=False)
+    outcome_code: Mapped[str] = mapped_column(String(80), nullable=False)
     retryability: Mapped[str | None] = mapped_column(String(20), nullable=True)
     source_id: Mapped[int | None] = mapped_column(
         Integer,

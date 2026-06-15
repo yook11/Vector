@@ -8,7 +8,7 @@
   - claim された pending は ``status='running'`` + ``leased_until`` が将来 +
     ``attempt_count++`` に遷移する (副作用の不変条件を 1 ケースに圧縮)
   - ``_DISPATCH_BATCH_LIMIT`` を超える件数があっても LIMIT 件のみ dispatch
-  - ``scrape_html_body.kiq`` が claim 済 pending_id 列で正確に呼ばれる
+  - ``scrape_html_body.kiq`` が claim 済 incomplete_article_id 列で正確に呼ばれる
   - 候補ゼロでも空 tick (dispatched_count=0) として正常終了
 
 - ``sweep_expired_leases``:
@@ -101,20 +101,20 @@ async def _make_pending(
     # status='open' は enqueue で作る (CHECK 整合・JSONB serialization 込)
     if status == "open":
         enqueue = IncompleteArticleRepository(db_session)
-        pending_id = await enqueue.save(
+        incomplete_article_id = await enqueue.save(
             _observed(source.name, url),
             source_id=source.id,
             ready_at=ready_at or datetime.now(UTC),
         )
-        assert pending_id is not None
+        assert incomplete_article_id is not None
         if attempt_count != 0:
             await db_session.execute(
                 update(IncompleteArticleORM)
-                .where(IncompleteArticleORM.id == pending_id)
+                .where(IncompleteArticleORM.id == incomplete_article_id)
                 .values(attempt_count=attempt_count)
             )
         await db_session.commit()
-        return pending_id
+        return incomplete_article_id
 
     # status='running' / 'closed' は ORM 直接組み立て (CHECK 制約整合)
     pending = IncompleteArticleORM(
@@ -134,12 +134,14 @@ async def _make_pending(
 
 
 async def _select_pending(
-    db_session: AsyncSession, pending_id: int
+    db_session: AsyncSession, incomplete_article_id: int
 ) -> IncompleteArticleORM:
     """pending を id で再 SELECT (post-condition 確認用)。"""
     row = (
         await db_session.execute(
-            select(IncompleteArticleORM).where(IncompleteArticleORM.id == pending_id)
+            select(IncompleteArticleORM).where(
+                IncompleteArticleORM.id == incomplete_article_id
+            )
         )
     ).scalar_one()
     await db_session.refresh(row)
@@ -227,7 +229,7 @@ async def test_increments_attempt_count_and_sets_lease(
 ) -> None:
     """claim 後 ``attempt_count++`` + ``leased_until ≈ NOW + lease_minutes`` に遷移。"""
     past = datetime.now(UTC) - timedelta(seconds=1)
-    pending_id = await _make_pending(
+    incomplete_article_id = await _make_pending(
         db_session,
         sample_source,
         url="https://example.com/disp/attempt",
@@ -242,7 +244,7 @@ async def test_increments_attempt_count_and_sets_lease(
     await dispatch_html_fetch_jobs(ctx=_ctx(session_factory))
     after = datetime.now(UTC)
 
-    row = await _select_pending(db_session, pending_id)
+    row = await _select_pending(db_session, incomplete_article_id)
     assert row.attempt_count == 3
     assert row.leased_until is not None
     expected_min = (

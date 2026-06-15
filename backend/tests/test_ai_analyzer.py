@@ -430,7 +430,7 @@ async def test_extraction_routes_noise_to_extraction_noises_table(
             )
         )
     ).scalar_one()
-    assert persisted.title_ja == "芸能ニュース"
+    assert persisted.translated_title == "芸能ニュース"
     # article_extractions には入っていない (排他)
     assert (
         await db_session.execute(

@@ -91,7 +91,7 @@ class ArticleCompletionService:
             case CompletionSuperseded():
                 logger.info(
                     "article_completion_stale_attempt_ignored",
-                    pending_id=ready.pending_id,
+                    incomplete_article_id=ready.incomplete_article_id,
                     source_id=ready.source_id,
                     attempt_count=ready.attempt_count,
                     canonical_url=str(ready.source_url),
@@ -100,7 +100,7 @@ class ArticleCompletionService:
             case CompletionUrlConflict():
                 logger.info(
                     "article_completion_conflict_lost",
-                    pending_id=ready.pending_id,
+                    incomplete_article_id=ready.incomplete_article_id,
                     source_id=ready.source_id,
                     canonical_url=str(ready.source_url),
                 )
@@ -108,7 +108,7 @@ class ArticleCompletionService:
             case CompletionSucceeded(analyzable_article_id=analyzable_article_id):
                 logger.info(
                     "article_completion_succeeded",
-                    pending_id=ready.pending_id,
+                    incomplete_article_id=ready.incomplete_article_id,
                     source_id=ready.source_id,
                     analyzable_article_id=analyzable_article_id,
                     canonical_url=str(ready.source_url),

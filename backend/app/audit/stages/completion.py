@@ -309,7 +309,7 @@ class ArticleCompletionAuditRepository:
     async def append_ready_build_error(
         self,
         *,
-        pending_id: int,
+        incomplete_article_id: int,
         exc: Exception,
         facts: ArticleCompletionReadyBuildFacts | None = None,
     ) -> None:
@@ -321,8 +321,8 @@ class ArticleCompletionAuditRepository:
                 if projection.event_type is EventType.FAILED
                 else None
             ),
-            pending_id=pending_id,
-            pending_status=facts.status if facts is not None else None,
+            incomplete_article_id=incomplete_article_id,
+            incomplete_article_status=facts.status if facts is not None else None,
             source_name=str(facts.source_name) if facts is not None else None,
             canonical_url=facts.source_url if facts is not None else None,
             attempt_count=facts.attempt_count if facts is not None else None,

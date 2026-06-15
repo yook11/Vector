@@ -10,8 +10,8 @@ import pytest
 from app.audit.domain.event import EventType
 from app.collection.article_completion.ready import (
     ArticleCompletionReadyBuildFacts,
-    ArticleCompletionReadyBuildPendingMissingError,
-    ArticleCompletionReadyBuildPendingNotRunningError,
+    ArticleCompletionReadyBuildIncompleteArticleMissingError,
+    ArticleCompletionReadyBuildIncompleteArticleNotRunningError,
     ReadyForArticleCompletion,
 )
 from app.collection.domain.canonical_article_url import (
@@ -53,7 +53,7 @@ def _observed_article(
 
 def _facts(
     *,
-    pending_id: int = 42,
+    incomplete_article_id: int = 42,
     source_name: SourceName = SourceName("TechCrunch"),
     status: str = "running",
     source_url: str = "https://example.com/a",
@@ -61,7 +61,7 @@ def _facts(
     attempt_count: int = 1,
 ) -> ArticleCompletionReadyBuildFacts:
     return ArticleCompletionReadyBuildFacts(
-        pending_id=pending_id,
+        incomplete_article_id=incomplete_article_id,
         source_id=7,
         source_name=source_name,
         status=status,
@@ -90,11 +90,11 @@ async def test_builds_ready_from_repository_facts() -> None:
     repo = _repo_mock(facts)
 
     ready = await ReadyForArticleCompletion.try_advance_from(
-        pending_id=42,
+        incomplete_article_id=42,
         repo=repo,
     )
 
-    assert ready.pending_id == 42
+    assert ready.incomplete_article_id == 42
     assert ready.source_id == 7
     assert ready.attempt_count == 1
     assert ready.source_url == CanonicalArticleUrl("https://example.com/a")
@@ -106,33 +106,43 @@ async def test_builds_ready_from_repository_facts() -> None:
 
 
 @pytest.mark.asyncio
-async def test_raises_skipped_error_when_pending_missing() -> None:
+async def test_raises_skipped_error_when_incomplete_article_missing() -> None:
     repo = _repo_mock(None)
 
-    with pytest.raises(ArticleCompletionReadyBuildPendingMissingError) as exc_info:
+    with pytest.raises(
+        ArticleCompletionReadyBuildIncompleteArticleMissingError
+    ) as exc_info:
         await ReadyForArticleCompletion.try_advance_from(
-            pending_id=999,
+            incomplete_article_id=999,
             repo=repo,
         )
 
     assert exc_info.value.EVENT_TYPE is EventType.SKIPPED
-    assert exc_info.value.CODE == "completion_ready_build_blocked_pending_missing"
+    assert (
+        exc_info.value.CODE
+        == "completion_ready_build_blocked_incomplete_article_missing"
+    )
     repo.load_ready_build_facts.assert_awaited_once_with(999)
 
 
 @pytest.mark.asyncio
-async def test_raises_skipped_error_when_pending_not_running() -> None:
+async def test_raises_skipped_error_when_incomplete_article_not_running() -> None:
     facts = _facts(status="open")
     repo = _repo_mock(facts)
 
-    with pytest.raises(ArticleCompletionReadyBuildPendingNotRunningError) as exc_info:
+    with pytest.raises(
+        ArticleCompletionReadyBuildIncompleteArticleNotRunningError
+    ) as exc_info:
         await ReadyForArticleCompletion.try_advance_from(
-            pending_id=42,
+            incomplete_article_id=42,
             repo=repo,
         )
 
     assert exc_info.value.EVENT_TYPE is EventType.SKIPPED
-    assert exc_info.value.CODE == "completion_ready_build_blocked_pending_not_running"
+    assert (
+        exc_info.value.CODE
+        == "completion_ready_build_blocked_incomplete_article_not_running"
+    )
 
 
 @pytest.mark.asyncio
@@ -141,7 +151,7 @@ async def test_raises_failed_when_observed_article_invalid() -> None:
 
     with pytest.raises(ObservedArticleInvalidError):
         await ReadyForArticleCompletion.try_advance_from(
-            pending_id=42,
+            incomplete_article_id=42,
             repo=_repo_mock(facts),
         )
 
@@ -152,7 +162,7 @@ async def test_raises_failed_when_source_not_registered() -> None:
 
     with pytest.raises(SourceNotRegisteredError):
         await ReadyForArticleCompletion.try_advance_from(
-            pending_id=42,
+            incomplete_article_id=42,
             repo=_repo_mock(facts),
         )
 
@@ -163,7 +173,7 @@ async def test_raises_failed_when_url_invalid() -> None:
 
     with pytest.raises(CanonicalArticleUrlInvalidError) as exc_info:
         await ReadyForArticleCompletion.try_advance_from(
-            pending_id=42,
+            incomplete_article_id=42,
             repo=_repo_mock(facts),
         )
 

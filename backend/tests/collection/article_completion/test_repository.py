@@ -130,17 +130,17 @@ async def _enqueue(
     ready_at: datetime,
 ) -> int:
     """Stage 1 投入で ``status='open'`` の pending を 1 件作る。"""
-    pending_id = await IncompleteArticleRepository(db_session).save(
+    incomplete_article_id = await IncompleteArticleRepository(db_session).save(
         _observed(url=url, source_name=source_name, title=title),
         source_id=source_id,
         ready_at=ready_at,
     )
-    if pending_id is None:
+    if incomplete_article_id is None:
         # ``UNIQUE(url)`` 違反 = test の setup precondition 違反 (fixture が
         # 壊れている / 同一 URL の重複)。test assertion と弁別するため raise。
         msg = f"setup precondition violated: enqueue returned None for url={url}"
         raise RuntimeError(msg)
-    return pending_id
+    return incomplete_article_id
 
 
 async def _make_running(
@@ -173,11 +173,13 @@ async def _make_running(
 
 
 async def _select_pending(
-    db_session: AsyncSession, pending_id: int
+    db_session: AsyncSession, incomplete_article_id: int
 ) -> IncompleteArticleORM:
     row = (
         await db_session.execute(
-            select(IncompleteArticleORM).where(IncompleteArticleORM.id == pending_id)
+            select(IncompleteArticleORM).where(
+                IncompleteArticleORM.id == incomplete_article_id
+            )
         )
     ).scalar_one()
     await db_session.refresh(row)
@@ -186,7 +188,7 @@ async def _select_pending(
 
 async def _claim_one(
     db_session: AsyncSession,
-    pending_id: int,
+    incomplete_article_id: int,
     *,
     now: datetime | None = None,
 ) -> ReadyForArticleCompletion:
@@ -198,14 +200,14 @@ async def _claim_one(
         leased_until=claim_now + timedelta(minutes=5),
     )
     await db_session.commit()
-    if pending_id not in ids:
+    if incomplete_article_id not in ids:
         msg = (
             f"setup precondition violated: claim_ready_batch did not pick "
-            f"pending_id={pending_id} (picked={ids})"
+            f"incomplete_article_id={incomplete_article_id} (picked={ids})"
         )
         raise RuntimeError(msg)
     return await ReadyForArticleCompletion.try_advance_from(
-        pending_id=pending_id,
+        incomplete_article_id=incomplete_article_id,
         repo=repository,
     )
 
@@ -216,7 +218,7 @@ async def test_load_ready_build_facts_returns_claimed_target(
 ) -> None:
     """pending 行の Ready 構築 facts を status ごと返す。"""
     url = CanonicalArticleUrl("https://example.com/p/find")
-    pending_id = await _enqueue(
+    incomplete_article_id = await _enqueue(
         db_session,
         source_id=sample_source.id,
         source_name=sample_source.name,
@@ -226,11 +228,11 @@ async def test_load_ready_build_facts_returns_claimed_target(
     )
     await db_session.commit()
 
-    await _claim_one(db_session, pending_id)
-    target = await _repo(db_session).load_ready_build_facts(pending_id)
+    await _claim_one(db_session, incomplete_article_id)
+    target = await _repo(db_session).load_ready_build_facts(incomplete_article_id)
 
     assert target is not None
-    assert target.pending_id == pending_id
+    assert target.incomplete_article_id == incomplete_article_id
     assert target.source_id == sample_source.id
     assert target.status == "running"
     assert target.attempt_count == 1
@@ -252,7 +254,7 @@ async def test_load_ready_build_facts_returns_open_status(
 ) -> None:
     repository = _repo(db_session)
 
-    pending_id = await _enqueue(
+    incomplete_article_id = await _enqueue(
         db_session,
         source_id=sample_source.id,
         source_name=sample_source.name,
@@ -261,7 +263,7 @@ async def test_load_ready_build_facts_returns_open_status(
     )
     await db_session.commit()
 
-    target = await repository.load_ready_build_facts(pending_id)
+    target = await repository.load_ready_build_facts(incomplete_article_id)
     assert target is not None
     assert target.status == "open"
 
@@ -305,7 +307,7 @@ async def test_claim_ready_batch_advances_state_atomically(
     """claim で running 化 + leased_until 設定 + attempt_count++ が一括適用される."""
     now = datetime.now(UTC)
     leased_until = now + timedelta(minutes=5)
-    pending_id = await _enqueue(
+    incomplete_article_id = await _enqueue(
         db_session,
         source_id=sample_source.id,
         source_name=sample_source.name,
@@ -321,8 +323,8 @@ async def test_claim_ready_batch_advances_state_atomically(
     )
     await db_session.commit()
 
-    assert ids == [pending_id]
-    row = await _select_pending(db_session, pending_id)
+    assert ids == [incomplete_article_id]
+    row = await _select_pending(db_session, incomplete_article_id)
     assert row.status == "running"
     assert row.leased_until == leased_until
     assert row.attempt_count == 1
@@ -396,7 +398,7 @@ async def test_sweep_expired_leases_reopens_dead_lease(
 ) -> None:
     """死んだ lease (running + leased_until <= now) は ``open`` に戻される。"""
     now = datetime.now(UTC)
-    pending_id = await _make_running(
+    incomplete_article_id = await _make_running(
         db_session,
         source_id=sample_source.id,
         source_name=sample_source.name,
@@ -409,7 +411,7 @@ async def test_sweep_expired_leases_reopens_dead_lease(
     await db_session.commit()
 
     assert swept == 1
-    row = await _select_pending(db_session, pending_id)
+    row = await _select_pending(db_session, incomplete_article_id)
     assert row.status == "open"
     assert row.ready_at == now
     assert row.leased_until is None
@@ -421,7 +423,7 @@ async def test_sweep_expired_leases_leaves_live_lease(
 ) -> None:
     """生きている lease (leased_until > now) は触らない。"""
     now = datetime.now(UTC)
-    pending_id = await _make_running(
+    incomplete_article_id = await _make_running(
         db_session,
         source_id=sample_source.id,
         source_name=sample_source.name,
@@ -433,14 +435,16 @@ async def test_sweep_expired_leases_leaves_live_lease(
     swept = await _repo(db_session).sweep_expired_leases(now=now)
 
     assert swept == 0
-    assert (await _select_pending(db_session, pending_id)).status == "running"
+    assert (
+        await _select_pending(db_session, incomplete_article_id)
+    ).status == "running"
 
 
 @pytest.mark.asyncio
 async def test_close_claimed_closes_pending(
     db_session: AsyncSession, sample_source: NewsSource
 ) -> None:
-    pending_id = await _enqueue(
+    incomplete_article_id = await _enqueue(
         db_session,
         source_id=sample_source.id,
         source_name=sample_source.name,
@@ -448,14 +452,14 @@ async def test_close_claimed_closes_pending(
         ready_at=datetime.now(UTC) - timedelta(seconds=1),
     )
     await db_session.commit()
-    target = await _claim_one(db_session, pending_id)
+    target = await _claim_one(db_session, incomplete_article_id)
     now = datetime.now(UTC)
 
     updated = await _repo(db_session).close_claimed(target, now=now)
     await db_session.commit()
 
     assert updated is True
-    row = await _select_pending(db_session, pending_id)
+    row = await _select_pending(db_session, incomplete_article_id)
     assert row.status == "closed"
     assert row.leased_until is None
 
@@ -465,7 +469,7 @@ async def test_schedule_retry_reopens_with_future_ready_at(
     db_session: AsyncSession, sample_source: NewsSource
 ) -> None:
     """一時失敗で ``open`` + 未来 ``ready_at`` + ``leased_until=NULL`` に戻る。"""
-    pending_id = await _enqueue(
+    incomplete_article_id = await _enqueue(
         db_session,
         source_id=sample_source.id,
         source_name=sample_source.name,
@@ -473,7 +477,7 @@ async def test_schedule_retry_reopens_with_future_ready_at(
         ready_at=datetime.now(UTC) - timedelta(seconds=1),
     )
     await db_session.commit()
-    target = await _claim_one(db_session, pending_id)
+    target = await _claim_one(db_session, incomplete_article_id)
     now = datetime.now(UTC)
     next_at = now + timedelta(minutes=15)
 
@@ -481,7 +485,7 @@ async def test_schedule_retry_reopens_with_future_ready_at(
     await db_session.commit()
 
     assert updated is True
-    row = await _select_pending(db_session, pending_id)
+    row = await _select_pending(db_session, incomplete_article_id)
     assert row.status == "open"
     assert row.leased_until is None
     assert row.ready_at == next_at
@@ -492,7 +496,7 @@ async def test_state_transitions_ignore_stale_attempt(
     db_session: AsyncSession, sample_source: NewsSource
 ) -> None:
     """attempt_count が変わった古い worker は現在の claim を閉じられない。"""
-    pending_id = await _enqueue(
+    incomplete_article_id = await _enqueue(
         db_session,
         source_id=sample_source.id,
         source_name=sample_source.name,
@@ -500,10 +504,10 @@ async def test_state_transitions_ignore_stale_attempt(
         ready_at=datetime.now(UTC) - timedelta(seconds=1),
     )
     await db_session.commit()
-    target = await _claim_one(db_session, pending_id)
+    target = await _claim_one(db_session, incomplete_article_id)
     await db_session.execute(
         update(IncompleteArticleORM)
-        .where(IncompleteArticleORM.id == pending_id)
+        .where(IncompleteArticleORM.id == incomplete_article_id)
         .values(attempt_count=target.attempt_count + 1)
     )
     await db_session.commit()
@@ -512,6 +516,6 @@ async def test_state_transitions_ignore_stale_attempt(
     await db_session.commit()
 
     assert updated is False
-    row = await _select_pending(db_session, pending_id)
+    row = await _select_pending(db_session, incomplete_article_id)
     assert row.status == "running"
     assert row.attempt_count == target.attempt_count + 1

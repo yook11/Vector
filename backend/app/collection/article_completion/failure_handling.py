@@ -65,7 +65,7 @@ class ArticleCompletionFailureHandler:
         if not updated:
             logger.info(
                 "article_completion_stale_attempt_ignored",
-                pending_id=ready.pending_id,
+                incomplete_article_id=ready.incomplete_article_id,
                 source_id=ready.source_id,
                 canonical_url=str(canonical_url),
                 attempt_count=ready.attempt_count,
@@ -75,7 +75,7 @@ class ArticleCompletionFailureHandler:
 
         logger.warning(
             "article_completion_rejected",
-            pending_id=ready.pending_id,
+            incomplete_article_id=ready.incomplete_article_id,
             source_id=ready.source_id,
             canonical_url=str(canonical_url),
             reason_code=rejection.reason_code,
@@ -98,7 +98,7 @@ class ArticleCompletionFailureHandler:
         except Exception as audit_exc:
             logger.exception(
                 "article_completion_persist_audit_dropped",
-                pending_id=ready.pending_id,
+                incomplete_article_id=ready.incomplete_article_id,
                 source_id=ready.source_id,
                 canonical_url=str(ready.source_url),
                 business_error_class=(exception_fqn(exc)),
@@ -137,7 +137,7 @@ class ArticleCompletionFailureHandler:
         if not updated:
             logger.info(
                 "article_completion_stale_attempt_ignored",
-                pending_id=ready.pending_id,
+                incomplete_article_id=ready.incomplete_article_id,
                 source_id=ready.source_id,
                 canonical_url=str(canonical_url),
                 attempt_count=ready.attempt_count,
@@ -147,7 +147,7 @@ class ArticleCompletionFailureHandler:
 
         logger.warning(
             "article_completion_temporary",
-            pending_id=ready.pending_id,
+            incomplete_article_id=ready.incomplete_article_id,
             source_id=ready.source_id,
             canonical_url=str(canonical_url),
             reason_code=disposition.reason_code,
@@ -183,7 +183,7 @@ class ArticleCompletionFailureHandler:
         if not updated:
             logger.info(
                 "article_completion_stale_attempt_ignored",
-                pending_id=ready.pending_id,
+                incomplete_article_id=ready.incomplete_article_id,
                 source_id=ready.source_id,
                 canonical_url=str(canonical_url),
                 attempt_count=ready.attempt_count,
@@ -193,7 +193,7 @@ class ArticleCompletionFailureHandler:
 
         logger.warning(
             "article_completion_scrape_failed",
-            pending_id=ready.pending_id,
+            incomplete_article_id=ready.incomplete_article_id,
             source_id=ready.source_id,
             canonical_url=str(canonical_url),
             reason_code=terminal.reason_code,

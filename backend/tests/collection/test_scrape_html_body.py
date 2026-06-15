@@ -30,7 +30,7 @@ import pytest
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.collection.article_completion.ready import (
-    ArticleCompletionReadyBuildPendingMissingError,
+    ArticleCompletionReadyBuildIncompleteArticleMissingError,
     ReadyForArticleCompletion,
 )
 from app.collection.domain.canonical_article_url import CanonicalArticleUrl
@@ -60,11 +60,11 @@ def _ctx(session_factory: async_sessionmaker[AsyncSession]) -> MagicMock:
     return ctx
 
 
-def _fixed_ready(pending_id: int = 42) -> ReadyForArticleCompletion:
+def _fixed_ready(incomplete_article_id: int = 42) -> ReadyForArticleCompletion:
     """task 冒頭の Ready 自構築が返す固定 Ready。"""
     url = CanonicalArticleUrl("https://example.com/a")
     return ReadyForArticleCompletion(
-        pending_id=pending_id,
+        incomplete_article_id=incomplete_article_id,
         source_id=1,
         attempt_count=1,
         observed=ObservedArticle(
@@ -101,7 +101,7 @@ async def test_ready_build_skipped_error_audits_and_does_not_call_service(
     session_factory: async_sessionmaker[AsyncSession],
 ) -> None:
     """Ready build skipped error → audit + return、Service / chain 不発火。"""
-    exc = ArticleCompletionReadyBuildPendingMissingError()
+    exc = ArticleCompletionReadyBuildIncompleteArticleMissingError()
     with (
         _patch_try_advance_from(exc),
         patch("app.queue.tasks.completion.ArticleCompletionAuditRepository") as audit,
@@ -109,11 +109,13 @@ async def test_ready_build_skipped_error_audits_and_does_not_call_service(
         patch(_CURATE_CONTENT_KIQ) as mock_kiq,
     ):
         audit.return_value.append_ready_build_error = AsyncMock()
-        result = await scrape_html_body(pending_id=999, ctx=_ctx(session_factory))
+        result = await scrape_html_body(
+            incomplete_article_id=999, ctx=_ctx(session_factory)
+        )
 
     assert result is None
     audit.return_value.append_ready_build_error.assert_awaited_once_with(
-        pending_id=999,
+        incomplete_article_id=999,
         exc=exc,
         facts=None,
     )
@@ -138,11 +140,11 @@ async def test_ready_build_failed_error_audits_and_reraises(
         patch(_CURATE_CONTENT_KIQ) as mock_kiq,
     ):
         with pytest.raises(SourceNotRegisteredError):
-            await scrape_html_body(pending_id=999, ctx=_ctx(session_factory))
+            await scrape_html_body(incomplete_article_id=999, ctx=_ctx(session_factory))
 
     audit_error.assert_awaited_once_with(
         session_factory,
-        pending_id=999,
+        incomplete_article_id=999,
         exc=exc,
     )
     mock_svc_cls.assert_not_called()
@@ -166,11 +168,11 @@ async def test_ready_build_unexpected_exception_audits_and_reraises(
         patch(_CURATE_CONTENT_KIQ) as mock_kiq,
     ):
         with pytest.raises(RuntimeError):
-            await scrape_html_body(pending_id=999, ctx=_ctx(session_factory))
+            await scrape_html_body(incomplete_article_id=999, ctx=_ctx(session_factory))
 
     audit_error.assert_awaited_once_with(
         session_factory,
-        pending_id=999,
+        incomplete_article_id=999,
         exc=exc,
     )
     mock_svc_cls.assert_not_called()
@@ -187,11 +189,13 @@ async def test_chains_curate_content_with_trigger_when_article_id_returned(
     monkeypatch.setattr(_SERVICE_EXECUTE, AsyncMock(return_value=123))
     monkeypatch.setattr(_CURATE_CONTENT_KIQ, curate_content_kiq)
 
-    with _patch_try_advance_from(_fixed_ready(pending_id=42)):
-        result = await scrape_html_body(pending_id=42, ctx=_ctx(session_factory))
+    with _patch_try_advance_from(_fixed_ready(incomplete_article_id=42)):
+        result = await scrape_html_body(
+            incomplete_article_id=42, ctx=_ctx(session_factory)
+        )
 
     assert result == {
-        "pending_id": 42,
+        "incomplete_article_id": 42,
         "analyzable_article_id": 123,
         "status": "success",
     }
@@ -210,8 +214,10 @@ async def test_returns_none_when_service_returns_none(
     monkeypatch.setattr(_SERVICE_EXECUTE, AsyncMock(return_value=None))
     monkeypatch.setattr(_CURATE_CONTENT_KIQ, curate_content_kiq)
 
-    with _patch_try_advance_from(_fixed_ready(pending_id=123)):
-        result = await scrape_html_body(pending_id=123, ctx=_ctx(session_factory))
+    with _patch_try_advance_from(_fixed_ready(incomplete_article_id=123)):
+        result = await scrape_html_body(
+            incomplete_article_id=123, ctx=_ctx(session_factory)
+        )
 
     assert result is None
     curate_content_kiq.assert_not_awaited()

@@ -134,7 +134,7 @@ def _observed(
 
 async def _load_ready(
     db_session: AsyncSession,
-    pending_id: int,
+    incomplete_article_id: int,
 ) -> ReadyForArticleCompletion:
     """Task 層と同じく ``try_advance_from`` で厚い Ready を構築する。
 
@@ -144,7 +144,7 @@ async def _load_ready(
     ``monkeypatch.setitem`` で SOURCES エントリを上書きしてから呼ぶ。
     """
     ready = await ReadyForArticleCompletion.try_advance_from(
-        pending_id=pending_id,
+        incomplete_article_id=incomplete_article_id,
         repo=ArticleCompletionRepository(db_session),
     )
     return ready
@@ -160,17 +160,17 @@ async def _make_pending(
     """``incomplete_articles`` 行を 1 件作って claim 状態にし Ready を構築する。
 
     Returns:
-        (canonical_url, pending_id, ready) — pending は claim 済
+        (canonical_url, incomplete_article_id, ready) — pending は claim 済
         (status='running', attempt_count=1)。``ready`` は Task 層が
         ``try_advance_from`` で構築するのと同じ厚い Ready。
     """
     canonical_url = CanonicalArticleUrl(url)
-    pending_id = await IncompleteArticleRepository(db_session).save(
+    incomplete_article_id = await IncompleteArticleRepository(db_session).save(
         observed or _observed(source, url),
         source_id=source.id,
         ready_at=datetime.now(UTC) - timedelta(seconds=1),
     )
-    assert pending_id is not None
+    assert incomplete_article_id is not None
     await db_session.commit()
     # claim して running 状態に遷移 (cron poller の代わり)
     now = datetime.now(UTC)
@@ -180,9 +180,9 @@ async def _make_pending(
         leased_until=now + timedelta(minutes=5),
     )
     await db_session.commit()
-    assert pending_id in ids
-    ready = await _load_ready(db_session, pending_id)
-    return canonical_url, pending_id, ready
+    assert incomplete_article_id in ids
+    ready = await _load_ready(db_session, incomplete_article_id)
+    return canonical_url, incomplete_article_id, ready
 
 
 def _patch_fetch(monkeypatch: pytest.MonkeyPatch, mock: AsyncMock) -> None:
@@ -241,7 +241,7 @@ async def test_success_deletes_pending_in_same_tx(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """成功時に pending 行は DELETE される。"""
-    _, pending_id, ready = await _make_pending(
+    _, incomplete_article_id, ready = await _make_pending(
         db_session, tc_source, "https://techcrunch.com/article-2"
     )
     _patch_fetch(
@@ -260,7 +260,9 @@ async def test_success_deletes_pending_in_same_tx(
 
     remaining = (
         await db_session.execute(
-            select(IncompleteArticle).where(IncompleteArticle.id == pending_id)
+            select(IncompleteArticle).where(
+                IncompleteArticle.id == incomplete_article_id
+            )
         )
     ).scalar_one_or_none()
     assert remaining is None
@@ -339,7 +341,7 @@ async def test_terminal_fetch_error_returns_none_and_closes_pending(
     404 (``FetchResourceNotFoundError``) は disposition で ``ScrapeTerminal`` に分類
     され、pending は再試行されず ``closed`` に閉じ、record は作成されない。
     """
-    _, pending_id, ready = await _make_pending(
+    _, incomplete_article_id, ready = await _make_pending(
         db_session, tc_source, "https://techcrunch.com/dead"
     )
     _patch_fetch(
@@ -359,7 +361,9 @@ async def test_terminal_fetch_error_returns_none_and_closes_pending(
     assert analyzable_articles == []
     pending = (
         await db_session.execute(
-            select(IncompleteArticle).where(IncompleteArticle.id == pending_id)
+            select(IncompleteArticle).where(
+                IncompleteArticle.id == incomplete_article_id
+            )
         )
     ).scalar_one()
     assert pending.status == "closed"
@@ -374,7 +378,7 @@ async def test_scrape_failure_closes_pending(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """``ScrapeFailure`` → ``None`` + pending status='closed'。"""
-    _, pending_id, ready = await _make_pending(
+    _, incomplete_article_id, ready = await _make_pending(
         db_session, tc_source, "https://techcrunch.com/empty"
     )
     _patch_fetch(
@@ -388,7 +392,9 @@ async def test_scrape_failure_closes_pending(
     assert outcome is None
     pending = (
         await db_session.execute(
-            select(IncompleteArticle).where(IncompleteArticle.id == pending_id)
+            select(IncompleteArticle).where(
+                IncompleteArticle.id == incomplete_article_id
+            )
         )
     ).scalar_one()
     assert pending.status == "closed"
@@ -406,7 +412,7 @@ async def test_promotion_failure_closes_pending(
     body はあるが published_at が両方 None で promotion failure を発生させる。
     """
     url = "https://techcrunch.com/short"
-    _, pending_id, ready = await _make_pending(
+    _, incomplete_article_id, ready = await _make_pending(
         db_session,
         tc_source,
         url,
@@ -431,7 +437,9 @@ async def test_promotion_failure_closes_pending(
     assert analyzable_articles == []
     pending = (
         await db_session.execute(
-            select(IncompleteArticle).where(IncompleteArticle.id == pending_id)
+            select(IncompleteArticle).where(
+                IncompleteArticle.id == incomplete_article_id
+            )
         )
     ).scalar_one()
     assert pending.status == "closed"
@@ -452,7 +460,7 @@ async def test_temporary_blip_first_attempt_writes_will_retry(
     502 (``FetchGatewayError``) は disposition で BLIP schedule の ``ScrapeRetryable``。
     delay schedule[0] = 0.5 分なので next ready_at は約 30 秒後。
     """
-    _, pending_id, ready = await _make_pending(
+    _, incomplete_article_id, ready = await _make_pending(
         db_session, tc_source, "https://techcrunch.com/blip"
     )
     _patch_fetch(
@@ -467,7 +475,9 @@ async def test_temporary_blip_first_attempt_writes_will_retry(
 
     pending = (
         await db_session.execute(
-            select(IncompleteArticle).where(IncompleteArticle.id == pending_id)
+            select(IncompleteArticle).where(
+                IncompleteArticle.id == incomplete_article_id
+            )
         )
     ).scalar_one()
     assert pending.status == "open"
@@ -490,18 +500,18 @@ async def test_temporary_outage_exhausted_closes_pending(
     503 (Retry-After なし) は disposition で OUTAGE schedule の ``ScrapeRetryable``。
     OUTAGE.max_attempts = 12 に到達済なので exhausted で ``closed``。
     """
-    _, pending_id, _ = await _make_pending(
+    _, incomplete_article_id, _ = await _make_pending(
         db_session, tc_source, "https://techcrunch.com/outage"
     )
     # OUTAGE.max_attempts = 12 を超過させる: attempt_count を 12 に強制セット
     await db_session.execute(
         update(IncompleteArticle)
-        .where(IncompleteArticle.id == pending_id)
+        .where(IncompleteArticle.id == incomplete_article_id)
         .values(attempt_count=12)
     )
     await db_session.commit()
     # attempt_count 更新後の状態で Ready を再構築 (exhausted 判定の SSoT)
-    ready = await _load_ready(db_session, pending_id)
+    ready = await _load_ready(db_session, incomplete_article_id)
     assert ready.attempt_count == 12
     _patch_fetch(
         monkeypatch,
@@ -521,7 +531,9 @@ async def test_temporary_outage_exhausted_closes_pending(
 
     pending = (
         await db_session.execute(
-            select(IncompleteArticle).where(IncompleteArticle.id == pending_id)
+            select(IncompleteArticle).where(
+                IncompleteArticle.id == incomplete_article_id
+            )
         )
     ).scalar_one()
     assert pending.status == "closed"
@@ -541,7 +553,7 @@ async def test_temporary_retry_after_uses_server_delay(
     disposition で OUTAGE schedule + server 指示の ``FixedDelay`` を持つ
     ``ScrapeRetryable``。120 秒 → 2 分に換算して next ready_at にする。
     """
-    _, pending_id, ready = await _make_pending(
+    _, incomplete_article_id, ready = await _make_pending(
         db_session, tc_source, "https://techcrunch.com/retry-after"
     )
     _patch_fetch(
@@ -562,7 +574,9 @@ async def test_temporary_retry_after_uses_server_delay(
 
     pending = (
         await db_session.execute(
-            select(IncompleteArticle).where(IncompleteArticle.id == pending_id)
+            select(IncompleteArticle).where(
+                IncompleteArticle.id == incomplete_article_id
+            )
         )
     ).scalar_one()
     assert pending.status == "open"
@@ -587,7 +601,7 @@ async def test_race_lost_returns_none_and_deletes_pending(
 
     pre-condition: 同 ``source_url`` の AnalyzableArticleRecord を直接 INSERT (race の "勝者")。
     """  # noqa: E501
-    canonical_url, pending_id, ready = await _make_pending(
+    canonical_url, incomplete_article_id, ready = await _make_pending(
         db_session, tc_source, "https://techcrunch.com/race"
     )
     # winner 役の AnalyzableArticleRecord を先に INSERT (同一 canonical source_url)
@@ -624,7 +638,9 @@ async def test_race_lost_returns_none_and_deletes_pending(
     # pending は DELETE
     remaining = (
         await db_session.execute(
-            select(IncompleteArticle).where(IncompleteArticle.id == pending_id)
+            select(IncompleteArticle).where(
+                IncompleteArticle.id == incomplete_article_id
+            )
         )
     ).scalar_one_or_none()
     assert remaining is None
@@ -639,18 +655,18 @@ async def test_superseded_attempt_returns_none_and_keeps_pending(
 ) -> None:
     """別 worker が再 claim し attempt_count がズレた → ``None`` + article 0 件 + pending 残置.
 
-    fence DELETE は ``pending_id`` + ``attempt_count`` で gate される。別 worker が
+    fence DELETE は ``incomplete_article_id`` + ``attempt_count`` で gate される。別 worker が
     再 claim して DB の世代が ready の握る値と食い違うと DELETE は 0 行になり、
     article INSERT は実行されず pending 行も残る (UrlConflict が pending を DELETE
     するのと対になる差分)。
     """  # noqa: E501
-    _, pending_id, ready = await _make_pending(
+    _, incomplete_article_id, ready = await _make_pending(
         db_session, tc_source, "https://techcrunch.com/stale"
     )
     # 別 worker の再 claim を模す: DB の attempt_count を ready が握る値からズラす
     await db_session.execute(
         update(IncompleteArticle)
-        .where(IncompleteArticle.id == pending_id)
+        .where(IncompleteArticle.id == incomplete_article_id)
         .values(attempt_count=ready.attempt_count + 1)
     )
     await db_session.commit()
@@ -675,7 +691,9 @@ async def test_superseded_attempt_returns_none_and_keeps_pending(
     # DELETE は attempt 不一致で 0 行 → pending は残る (UrlConflict との差分)
     remaining = (
         await db_session.execute(
-            select(IncompleteArticle).where(IncompleteArticle.id == pending_id)
+            select(IncompleteArticle).where(
+                IncompleteArticle.id == incomplete_article_id
+            )
         )
     ).scalar_one_or_none()
     assert remaining is not None
@@ -768,12 +786,12 @@ async def test_superseded_writes_persist_superseded_audit(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """attempt 失効で DELETE 0 行 → ``skipped`` / ``persist_superseded`` audit。"""
-    _, pending_id, ready = await _make_pending(
+    _, incomplete_article_id, ready = await _make_pending(
         db_session, tc_source, "https://techcrunch.com/audit-superseded"
     )
     await db_session.execute(
         update(IncompleteArticle)
-        .where(IncompleteArticle.id == pending_id)
+        .where(IncompleteArticle.id == incomplete_article_id)
         .values(attempt_count=ready.attempt_count + 1)
     )
     await db_session.commit()
@@ -810,7 +828,7 @@ async def test_persist_db_exception_writes_persist_crashed_and_reraises(
     同一 tx audit (経路 1/6/7) は rollback に巻き込まれるため、本経路だけは別 session
     で焼かれ痕跡が残る。pending は running のまま (lease 失効 → sweep で self-heal)。
     """
-    _, pending_id, ready = await _make_pending(
+    _, incomplete_article_id, ready = await _make_pending(
         db_session, tc_source, "https://techcrunch.com/audit-crash"
     )
     _patch_fetch(
@@ -849,7 +867,9 @@ async def test_persist_db_exception_writes_persist_crashed_and_reraises(
     # 状態は触られず running のまま (self-heal は lease 失効に委ねる)
     pending = (
         await db_session.execute(
-            select(IncompleteArticle).where(IncompleteArticle.id == pending_id)
+            select(IncompleteArticle).where(
+                IncompleteArticle.id == incomplete_article_id
+            )
         )
     ).scalar_one()
     assert pending.status == "running"

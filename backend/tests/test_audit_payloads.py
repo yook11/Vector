@@ -156,12 +156,16 @@ class TestCompletionPayloadAuditKeys:
 
     def test_ready_build_fields_can_be_set(self) -> None:
         payload = CompletionPayload(
-            pending_id=42,
-            pending_status="open",
+            incomplete_article_id=42,
+            incomplete_article_status="open",
         )
         dumped = payload.model_dump(mode="json")
-        assert dumped["pending_id"] == 42
-        assert dumped["pending_status"] == "open"
+        assert dumped["incomplete_article_id"] == 42
+        assert dumped["incomplete_article_status"] == "open"
+        # 旧 pending_* 語彙は current schema から外す
+        # (historical payload は reader 側で読む)。
+        assert "pending_id" not in dumped
+        assert "pending_status" not in dumped
 
     def test_failure_attribute_fields_can_be_set(self) -> None:
         payload = CompletionPayload(
