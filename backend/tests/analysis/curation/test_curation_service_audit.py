@@ -38,7 +38,10 @@ from app.logfire.article_stage import curation_stage_span
 from app.models.analyzable_article_record import AnalyzableArticleRecord
 from app.models.news_source import NewsSource
 from app.models.pipeline_event import PipelineEvent
+from tests.logfire._metric_helpers import collected_metrics, sum_counter_for_result
 from tests.logfire._span_helpers import stage_attrs
+
+_PROCESSING_OUTCOME_METRIC = "vector.curation.processing_outcome"
 
 
 def _signal_envelope(*, raw: str = '{"relevance":"signal"}') -> CurationCall[Signal]:
@@ -248,3 +251,67 @@ async def test_signal_race_loss_sets_stage_result_skipped(
             await svc.execute(ready, _curator(return_envelope=_signal_envelope()))
 
     assert stage_attrs(capfire)["result"] == "skipped"
+
+
+# processing_outcome emit — commit 後に signal/noise、race loss は emit しない
+
+
+@pytest.mark.asyncio
+async def test_signal_emits_processing_outcome_signal(
+    db_session: AsyncSession,
+    session_factory: async_sessionmaker[AsyncSession],
+    sample_source: NewsSource,
+    capfire: CaptureLogfire,
+) -> None:
+    """signal 保存 + commit 後に processing_outcome{result=signal} が +1 される。"""
+    article = await _make_article(db_session, sample_source)
+    ready = await _ready(article)
+    svc = CurationService(session_factory)
+
+    await svc.execute(ready, _curator(return_envelope=_signal_envelope()))
+
+    metrics = collected_metrics(capfire)
+    assert sum_counter_for_result(metrics, _PROCESSING_OUTCOME_METRIC, "signal") == 1
+    assert sum_counter_for_result(metrics, _PROCESSING_OUTCOME_METRIC, "noise") == 0
+
+
+@pytest.mark.asyncio
+async def test_noise_emits_processing_outcome_noise(
+    db_session: AsyncSession,
+    session_factory: async_sessionmaker[AsyncSession],
+    sample_source: NewsSource,
+    capfire: CaptureLogfire,
+) -> None:
+    """noise 保存 + commit 後に processing_outcome{result=noise} が +1 される。"""
+    article = await _make_article(db_session, sample_source)
+    ready = await _ready(article)
+    svc = CurationService(session_factory)
+
+    await svc.execute(ready, _curator(return_envelope=_noise_envelope()))
+
+    metrics = collected_metrics(capfire)
+    assert sum_counter_for_result(metrics, _PROCESSING_OUTCOME_METRIC, "noise") == 1
+    assert sum_counter_for_result(metrics, _PROCESSING_OUTCOME_METRIC, "signal") == 0
+
+
+@pytest.mark.asyncio
+async def test_race_loss_does_not_emit_processing_outcome(
+    db_session: AsyncSession,
+    session_factory: async_sessionmaker[AsyncSession],
+    sample_source: NewsSource,
+    capfire: CaptureLogfire,
+) -> None:
+    """楽観ロック敗北 (commit 未到達) では processing_outcome を emit しない。"""
+    article = await _make_article(db_session, sample_source)
+    ready = await _ready(article)
+    svc = CurationService(session_factory)
+
+    with patch(
+        "app.analysis.curation.repository.CurationRepository.save_signal",
+        new=AsyncMock(return_value=None),
+    ):
+        await svc.execute(ready, _curator(return_envelope=_signal_envelope()))
+
+    metrics = collected_metrics(capfire)
+    for result in ("signal", "noise", "rejected", "failed", "infra_error"):
+        assert sum_counter_for_result(metrics, _PROCESSING_OUTCOME_METRIC, result) == 0

@@ -23,6 +23,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from logfire.testing import CaptureLogfire
+from sqlalchemy.exc import OperationalError
 
 from app.analysis.ai_provider_errors import (
     AIProviderConfigurationError,
@@ -35,13 +36,20 @@ from app.analysis.ai_provider_errors import (
     AIProviderServiceUnavailableError,
     AIProviderUsageLimitExhaustedError,
 )
-from app.analysis.curation.domain.ready import ReadyForCuration
+from app.analysis.curation.domain.ready import (
+    CurationReadyBuildBlockedCode,
+    CurationReadyBuildBlockedError,
+    ReadyForCuration,
+)
 from app.analysis.curation.errors import CurationResponseInvalidError
 from app.analysis.failure_handling import FailureHandlingDecision
 from app.analysis.gemini_error_translator import GeminiContentRejectionReason
 from app.analysis.rate_limit import AIModelRateLimitPolicy, RateLimitRule
 from app.queue.messages.curation import CurationTrigger
+from tests.logfire._metric_helpers import collected_metrics, sum_counter_for_result
 from tests.logfire._span_helpers import stage_attrs
+
+_PROCESSING_OUTCOME_METRIC = "vector.curation.processing_outcome"
 
 
 def _make_provider_fake() -> MagicMock:
@@ -334,3 +342,104 @@ async def test_service_exception_sets_failed_result(
             await curate_content(trigger=_trigger(), ctx=ctx)
 
     assert stage_attrs(capfire)["result"] == "failed"
+
+
+# processing_outcome emit — ready-build blocked / failed / rate limit gate 経路
+
+
+@pytest.mark.parametrize(
+    ("code", "expected_rejected"),
+    [
+        (CurationReadyBuildBlockedCode.CONTENT_TOO_LARGE, 1),
+        (CurationReadyBuildBlockedCode.ALREADY_CURATED, 0),
+        (CurationReadyBuildBlockedCode.ALREADY_REJECTED_AS_NOISE, 0),
+        (CurationReadyBuildBlockedCode.ARTICLE_MISSING, 0),
+    ],
+)
+@pytest.mark.asyncio
+async def test_ready_build_blocked_emits_rejected_only_for_content_too_large(
+    capfire: CaptureLogfire,
+    code: CurationReadyBuildBlockedCode,
+    expected_rejected: int,
+) -> None:
+    """内容を読んで拒否した CONTENT_TOO_LARGE だけ rejected を emit する。
+
+    冪等 skip (ALREADY_*) と stale (ARTICLE_MISSING) は処理成功率の分母に入れない。
+    """
+    from app.queue.tasks.curation import curate_content
+
+    ctx = _make_ctx()
+    # blocked except 経路は session.commit() を await するため AsyncMock を差す。
+    session = ctx.state.session_factory.return_value.__aenter__.return_value
+    session.commit = AsyncMock()
+    blocked = CurationReadyBuildBlockedError(code, analyzable_article_id=42)
+    with (
+        patch.object(
+            ReadyForCuration, "try_advance_from", new=AsyncMock(side_effect=blocked)
+        ),
+        patch("app.queue.tasks.curation.CurationAuditRepository") as mock_audit_cls,
+    ):
+        mock_audit_cls.return_value.append_ready_build_blocked = AsyncMock()
+        await curate_content(trigger=_trigger(), ctx=ctx)
+
+    metrics = collected_metrics(capfire)
+    assert (
+        sum_counter_for_result(metrics, _PROCESSING_OUTCOME_METRIC, "rejected")
+        == expected_rejected
+    )
+
+
+@pytest.mark.parametrize(
+    ("exc", "expected_result"),
+    [
+        (OperationalError("SELECT 1", {}, Exception("db down")), "infra_error"),
+        (ValueError("boom"), "failed"),
+    ],
+)
+@pytest.mark.asyncio
+async def test_ready_build_failed_emits_classified_outcome(
+    capfire: CaptureLogfire, exc: Exception, expected_result: str
+) -> None:
+    """ready-build の blocked 以外の例外は projection 分類で emit し再送出する。
+
+    DB 障害は infra_error (成功率の分母外)、その他は failed。例外は task を貫通する。
+    """
+    from app.queue.tasks.curation import curate_content
+
+    ctx = _make_ctx()
+    session = ctx.state.session_factory.return_value.__aenter__.return_value
+    session.commit = AsyncMock()
+    with (
+        patch.object(
+            ReadyForCuration, "try_advance_from", new=AsyncMock(side_effect=exc)
+        ),
+        patch("app.queue.tasks.curation.CurationAuditRepository") as mock_audit_cls,
+    ):
+        mock_audit_cls.return_value.append_ready_build_failed = AsyncMock()
+        with pytest.raises(type(exc)):
+            await curate_content(trigger=_trigger(), ctx=ctx)
+
+    metrics = collected_metrics(capfire)
+    assert (
+        sum_counter_for_result(metrics, _PROCESSING_OUTCOME_METRIC, expected_result)
+        == 1
+    )
+    other = "failed" if expected_result == "infra_error" else "infra_error"
+    assert sum_counter_for_result(metrics, _PROCESSING_OUTCOME_METRIC, other) == 0
+
+
+@pytest.mark.asyncio
+async def test_rate_limit_gate_skip_does_not_emit_processing_outcome(
+    capfire: CaptureLogfire,
+) -> None:
+    """rate limit gate skip では processing_outcome を emit しない (capacity 制御)。"""
+    from app.queue.tasks.curation import curate_content
+
+    ctx = _make_ctx()
+    ctx.state.provider_rate_limit_gate.acquire = AsyncMock(return_value=False)
+    with _patch_try_advance_from():
+        await curate_content(trigger=_trigger(), ctx=ctx)
+
+    metrics = collected_metrics(capfire)
+    for result in ("signal", "noise", "rejected", "failed", "infra_error"):
+        assert sum_counter_for_result(metrics, _PROCESSING_OUTCOME_METRIC, result) == 0

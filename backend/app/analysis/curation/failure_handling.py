@@ -27,6 +27,7 @@ from app.analysis.curation.errors import (
     CurationTerminalDropError,
     CurationTerminalKeepError,
 )
+from app.analysis.curation.metrics import record_curation_processing_outcome
 from app.analysis.failure_handling import FailureHandlingDecision
 from app.audit.error_fields import exception_fqn
 from app.audit.stages.curation import CurationAuditRepository
@@ -78,14 +79,22 @@ class CurationFailureHandler:
     ) -> FailureHandlingDecision:
         """marker dispatch を実行する。
 
+        失敗分類を確定する境界として ``processing_outcome`` も emit する。
+        SQLAlchemyError は infra_error (成功率の分母外)、それ以外は failed。
+        recoverable は retry 有無に依らず試行単位で failed を数える。
+
         Returns:
             taskiq retry と stage hold の decision。
         """
+        # 分類は match 時点で確定する。audit / drop の DB 失敗で metric を取りこぼさない
+        # よう、副作用 (audit INSERT / 記事 DELETE) より先に emit する。
         match exc:
             case CurationTerminalDropError():
+                record_curation_processing_outcome("failed")
                 await self._drop_article(ready, exc, curator)
                 return FailureHandlingDecision(reraise=False)
             case CurationTerminalKeepError():
+                record_curation_processing_outcome("failed")
                 await self._audit_failure(ready, exc, curator)
                 return FailureHandlingDecision(
                     reraise=False,
@@ -93,6 +102,7 @@ class CurationFailureHandler:
                 )
             case CurationRecoverableError():
                 recoverable = exc
+                record_curation_processing_outcome("failed")
                 await self._audit_failure(ready, recoverable, curator)
                 hold_reason = _hold_reason(recoverable) if last_attempt else None
                 return FailureHandlingDecision(
@@ -100,9 +110,11 @@ class CurationFailureHandler:
                     stage_hold_reason=hold_reason,
                 )
             case SQLAlchemyError():
+                record_curation_processing_outcome("infra_error")
                 await self._audit_failure(ready, exc, curator)
                 return FailureHandlingDecision(reraise=False)
             case _:
+                record_curation_processing_outcome("failed")
                 await self._audit_unexpected_failure(ready, exc, curator)
                 return FailureHandlingDecision(reraise=False)
 

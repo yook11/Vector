@@ -25,6 +25,7 @@ from app.analysis.curation.ai.envelope import CurationCall
 from app.analysis.curation.domain import Noise, Signal
 from app.analysis.curation.domain.ready import ReadyForCuration
 from app.analysis.curation.errors import map_provider_to_curation
+from app.analysis.curation.metrics import record_curation_processing_outcome
 from app.analysis.curation.repository import CurationRepository
 from app.audit.stages.curation import CurationAuditRepository
 from app.logfire.article_stage import set_curation_stage_result
@@ -103,6 +104,7 @@ class CurationService:
                         curation_id=curation_id,
                     )
                     set_curation_stage_result("signal")
+                    record_curation_processing_outcome("signal")
                     return curation_id
 
                 case CurationCall(result=Noise()):
@@ -129,6 +131,7 @@ class CurationService:
                         noise_id=noise_id,
                     )
                     set_curation_stage_result("noise")
+                    record_curation_processing_outcome("noise")
                     # noise 勝者でも Stage 4 chain しないため None を返す
                     return None
 

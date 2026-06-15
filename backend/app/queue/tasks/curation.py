@@ -8,14 +8,17 @@ from taskiq import Context, TaskiqDepends
 
 from app.analysis.curation.ai.base import BaseCurator
 from app.analysis.curation.domain.ready import (
+    CurationReadyBuildBlockedCode,
     CurationReadyBuildBlockedError,
     ReadyForCuration,
 )
 from app.analysis.curation.failure_handling import CurationFailureHandler
+from app.analysis.curation.metrics import record_curation_processing_outcome
 from app.analysis.curation.repository import CurationRepository
 from app.analysis.curation.service import CurationService
 from app.analysis.rate_limit import record_rate_limit_gate_skipped
 from app.audit.error_fields import exception_fqn
+from app.audit.ready_build import project_ready_build_failure
 from app.audit.stages.curation import CurationAuditRepository
 from app.logfire.article_stage import curation_stage_span
 from app.queue.brokers import broker_analysis
@@ -62,6 +65,10 @@ async def curate_content(
                     reason="ready_build_blocked",
                     code=exc.code.value,
                 )
+                # 内容を読んで拒否した CONTENT_TOO_LARGE だけ処理結果に数える
+                # (ALREADY_* / ARTICLE_MISSING は冪等 skip / stale で分母外)。
+                if exc.code is CurationReadyBuildBlockedCode.CONTENT_TOO_LARGE:
+                    record_curation_processing_outcome("rejected")
                 stage.set_result("skipped")
                 return
             except Exception as exc:
@@ -69,6 +76,14 @@ async def curate_content(
                     session_factory,
                     analyzable_article_id=trigger.analyzable_article_id,
                     exc=exc,
+                )
+                # audit は best-effort。drop されても分類 emit は止めない。DB 障害だけ
+                # infra_error として分母外に逃がし、contract/想定外は failed に倒す。
+                projection = project_ready_build_failure(
+                    stage_prefix="curation", exc=exc
+                )
+                record_curation_processing_outcome(
+                    "infra_error" if projection.failure_kind == "db_error" else "failed"
                 )
                 raise
 

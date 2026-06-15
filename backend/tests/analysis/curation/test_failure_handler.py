@@ -17,10 +17,12 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from logfire.testing import CaptureLogfire
 from sqlalchemy import select
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.analysis.ai_provider_errors import (
@@ -37,9 +39,15 @@ from app.analysis.curation.domain.ready import ReadyForCuration
 from app.analysis.curation.errors import map_provider_to_curation
 from app.analysis.curation.failure_handling import CurationFailureHandler
 from app.analysis.gemini_error_translator import GeminiContentRejectionReason
+from app.collection.persistence.analyzable_article_repository import (
+    AnalyzableArticleRepository,
+)
 from app.models.analyzable_article_record import AnalyzableArticleRecord
 from app.models.news_source import NewsSource
 from app.models.pipeline_event import PipelineEvent
+from tests.logfire._metric_helpers import collected_metrics, sum_counter_for_result
+
+_PROCESSING_OUTCOME_METRIC = "vector.curation.processing_outcome"
 
 
 def _curator_mock() -> MagicMock:
@@ -363,3 +371,91 @@ async def test_rate_limited_recoverable_last_attempt_does_not_set_curation_hold(
 
     assert decision.reraise is False
     assert decision.stage_hold_reason is None
+
+
+# processing_outcome emit — 失敗分類を確定する境界として handler が直接出す
+
+
+@pytest.mark.parametrize(
+    ("make_exc", "expected"),
+    [
+        (
+            lambda: _wrap(
+                AIProviderOutputBlockedError(reason=GeminiContentRejectionReason.SAFETY)
+            ),
+            "failed",
+        ),
+        (lambda: _wrap(AIProviderConfigurationError("api key missing")), "failed"),
+        (lambda: _wrap(AIProviderNetworkError("conn reset")), "failed"),
+        (lambda: ValueError("surprise"), "failed"),
+        (lambda: SQLAlchemyError("db down"), "infra_error"),
+    ],
+    ids=["drop", "keep", "recoverable", "catch_all", "sqlalchemy"],
+)
+@pytest.mark.asyncio
+async def test_handle_emits_processing_outcome(
+    db_session: AsyncSession,
+    session_factory: async_sessionmaker[AsyncSession],
+    sample_source: NewsSource,
+    capfire: CaptureLogfire,
+    make_exc,
+    expected: str,
+) -> None:
+    """marker/SQLAlchemy/catch-all を failed/infra_error に分類して emit する。
+
+    SQLAlchemyError だけが infra_error (成功率の分母外)。それ以外は failed。
+    """
+    article = await _make_article(db_session, sample_source)
+    ready = _ready_from(article)
+    handler = CurationFailureHandler(session_factory)
+
+    await handler.handle(
+        ready=ready,
+        exc=make_exc(),
+        curator=_curator_mock(),
+        last_attempt=False,
+    )
+
+    metrics = collected_metrics(capfire)
+    assert sum_counter_for_result(metrics, _PROCESSING_OUTCOME_METRIC, expected) == 1
+    # 各 arm は割り当て外の result を一切 emit しない (vocabulary 排他)。
+    for result in ("signal", "noise", "rejected", "failed", "infra_error"):
+        if result == expected:
+            continue
+        assert sum_counter_for_result(metrics, _PROCESSING_OUTCOME_METRIC, result) == 0
+
+
+@pytest.mark.asyncio
+async def test_drop_arm_emits_failed_even_when_drop_tx_fails(
+    db_session: AsyncSession,
+    session_factory: async_sessionmaker[AsyncSession],
+    sample_source: NewsSource,
+    capfire: CaptureLogfire,
+) -> None:
+    """drop tx (audit+DELETE) が DB 失敗で落ちても failed は計上される。
+
+    分類は match 時点で確定するため emit は副作用より先。drop tx が落ちると
+    handle() は SQLAlchemyError を伝搬するが、failed の計上は取りこぼさない。
+    """
+    article = await _make_article(db_session, sample_source)
+    ready = _ready_from(article)
+    handler = CurationFailureHandler(session_factory)
+    exc = _wrap(
+        AIProviderOutputBlockedError(reason=GeminiContentRejectionReason.SAFETY)
+    )
+
+    with patch.object(
+        AnalyzableArticleRepository,
+        "delete_by_id",
+        new=AsyncMock(side_effect=SQLAlchemyError("delete failed")),
+    ):
+        with pytest.raises(SQLAlchemyError):
+            await handler.handle(
+                ready=ready,
+                exc=exc,
+                curator=_curator_mock(),
+                last_attempt=False,
+            )
+
+    metrics = collected_metrics(capfire)
+    assert sum_counter_for_result(metrics, _PROCESSING_OUTCOME_METRIC, "failed") == 1
