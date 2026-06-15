@@ -43,6 +43,21 @@ EmbeddingResult = Literal["succeeded", "rate_limited", "skipped", "failed"]
 
 _SPAN_NAME = "article_stage"
 
+# dashboard 可視化対象 (signal/noise/failed)。span は CurationResult の5値を保つが、
+# counter はこの3値だけを送る (rate_limited/skipped は emit しない仕様境界)。
+CountedCurationResult = Literal["signal", "noise", "failed"]
+
+_curation_outcome_counter = logfire.metric_counter(
+    "vector.curation.outcome",
+    unit="1",
+    description="curation 分類試行の結末件数 (signal/noise/failed 別)",
+)
+
+
+def record_curation_outcome(result: CountedCurationResult) -> None:
+    """curation 試行の結末を counter に 1 件記録する。"""
+    _curation_outcome_counter.add(1, attributes={"result": result})
+
 
 class CurationStageSpan:
     """curation task の記録口。article_id は open 時に確定、次工程は assess_content。"""
@@ -52,11 +67,14 @@ class CurationStageSpan:
         self._result_set = False
 
     def set_result(self, result: CurationResult) -> None:
-        """result を一度だけ焼く (no-override)。"""
+        """result を一度だけ焼く (no-override)。確定時に counter も同一点で更新する。"""
         if self._result_set:
             return
         self._span.set_attribute("result", result)
         self._result_set = True
+        # 可視化対象の3値だけ counter に送る (rate_limited/skipped は emit しない)。
+        if result in ("signal", "noise", "failed"):
+            record_curation_outcome(result)
 
     def mark_next_task_enqueued(self) -> None:
         """assess_content の kiq 成功直後に呼ぶ。enqueued フラグと次 task 名を焼く。"""
