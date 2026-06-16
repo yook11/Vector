@@ -21,9 +21,15 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from logfire.testing import CaptureLogfire
+from sqlalchemy.exc import OperationalError
 
 from app.analysis.assessment.ai.parse import AssessmentResponseDefect
-from app.analysis.assessment.domain.ready import ReadyForAssessment
+from app.analysis.assessment.domain.ready import (
+    AssessmentReadyBuildBlockedCode,
+    AssessmentReadyBuildBlockedError,
+    ReadyForAssessment,
+)
 from app.analysis.assessment.errors import (
     AssessmentRecoverableError,
     AssessmentResponseInvalidError,
@@ -33,6 +39,9 @@ from app.analysis.assessment.repository import CategoryEnumDatabaseMismatchError
 from app.analysis.failure_handling import FailureHandlingDecision
 from app.analysis.rate_limit import AIModelRateLimitPolicy, RateLimitRule
 from app.queue.messages.assessment import AssessmentTrigger
+from tests.logfire._metric_helpers import collected_metrics, sum_counter_for_result
+
+_PROCESSING_OUTCOME_METRIC = "vector.assessment.processing_outcome"
 
 
 def _make_provider_fake() -> MagicMock:
@@ -283,3 +292,97 @@ async def test_unexpected_exception_delegates_to_handler() -> None:
     handler_handle = mock_handler_cls.return_value.handle
     handler_handle.assert_awaited_once()
     assert isinstance(handler_handle.await_args.kwargs["exc"], ValueError)
+
+
+# processing_outcome emit — ready-build failed / blocked / rate limit gate 経路
+
+
+@pytest.mark.parametrize(
+    ("exc", "expected_result"),
+    [
+        (OperationalError("SELECT 1", {}, Exception("db down")), "infra_error"),
+        (ValueError("boom"), "failed"),
+    ],
+)
+@pytest.mark.asyncio
+async def test_ready_build_failed_emits_classified_outcome(
+    capfire: CaptureLogfire, exc: Exception, expected_result: str
+) -> None:
+    """ready-build の blocked 以外の例外は projection 分類で emit し再送出する。
+
+    DB 障害は infra_error (成功率の分母外)、その他は failed。例外は task を貫通する。
+    """
+    from app.queue.tasks.assessment import assess_content
+
+    ctx = _make_ctx()
+    session = ctx.state.session_factory.return_value.__aenter__.return_value
+    session.commit = AsyncMock()
+    with (
+        patch(
+            "app.queue.tasks.assessment.ReadyForAssessment.try_advance_from",
+            new=AsyncMock(side_effect=exc),
+        ),
+        patch("app.queue.tasks.assessment.AssessmentAuditRepository") as mock_audit_cls,
+    ):
+        mock_audit_cls.return_value.append_ready_build_failed = AsyncMock()
+        with pytest.raises(type(exc)):
+            await assess_content(trigger=_trigger(), ctx=ctx)
+
+    metrics = collected_metrics(capfire)
+    assert (
+        sum_counter_for_result(metrics, _PROCESSING_OUTCOME_METRIC, expected_result)
+        == 1
+    )
+    other = "failed" if expected_result == "infra_error" else "infra_error"
+    assert sum_counter_for_result(metrics, _PROCESSING_OUTCOME_METRIC, other) == 0
+
+
+@pytest.mark.parametrize(
+    "code",
+    [
+        AssessmentReadyBuildBlockedCode.CURATION_MISSING,
+        AssessmentReadyBuildBlockedCode.ALREADY_IN_SCOPE,
+        AssessmentReadyBuildBlockedCode.ALREADY_OUT_OF_SCOPE,
+    ],
+)
+@pytest.mark.asyncio
+async def test_ready_build_blocked_emits_nothing(
+    capfire: CaptureLogfire, code: AssessmentReadyBuildBlockedCode
+) -> None:
+    """ready-build blocked は全コード stale/冪等で emit しない (rejected 無し)。"""
+    from app.queue.tasks.assessment import assess_content
+
+    ctx = _make_ctx()
+    session = ctx.state.session_factory.return_value.__aenter__.return_value
+    session.commit = AsyncMock()
+    blocked = AssessmentReadyBuildBlockedError(code, analyzable_article_id=7)
+    with (
+        patch(
+            "app.queue.tasks.assessment.ReadyForAssessment.try_advance_from",
+            new=AsyncMock(side_effect=blocked),
+        ),
+        patch("app.queue.tasks.assessment.AssessmentAuditRepository") as mock_audit_cls,
+    ):
+        mock_audit_cls.return_value.append_ready_build_blocked = AsyncMock()
+        await assess_content(trigger=_trigger(), ctx=ctx)
+
+    metrics = collected_metrics(capfire)
+    for result in ("in_scope", "out_of_scope", "failed", "infra_error"):
+        assert sum_counter_for_result(metrics, _PROCESSING_OUTCOME_METRIC, result) == 0
+
+
+@pytest.mark.asyncio
+async def test_rate_limit_gate_skip_does_not_emit_processing_outcome(
+    capfire: CaptureLogfire,
+) -> None:
+    """rate limit gate skip では processing_outcome を emit しない (capacity 制御)。"""
+    from app.queue.tasks.assessment import assess_content
+
+    ctx = _make_ctx()
+    ctx.state.provider_rate_limit_gate.acquire = AsyncMock(return_value=False)
+    with _patch_ready_construction():
+        await assess_content(trigger=_trigger(), ctx=ctx)
+
+    metrics = collected_metrics(capfire)
+    for result in ("in_scope", "out_of_scope", "failed", "infra_error"):
+        assert sum_counter_for_result(metrics, _PROCESSING_OUTCOME_METRIC, result) == 0

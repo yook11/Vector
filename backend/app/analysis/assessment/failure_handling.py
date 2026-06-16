@@ -24,6 +24,7 @@ from app.analysis.assessment.errors import (
     AssessmentRecoverableError,
     AssessmentTerminalError,
 )
+from app.analysis.assessment.metrics import record_assessment_processing_outcome
 from app.analysis.failure_handling import FailureHandlingDecision
 from app.audit.error_fields import exception_fqn
 from app.audit.stages.assessment import AssessmentAuditRepository
@@ -69,11 +70,16 @@ class AssessmentFailureHandler:
     ) -> FailureHandlingDecision:
         """marker dispatch を実行する。
 
+        失敗分類を確定する境界として ``processing_outcome`` も emit する。分類は match
+        時点で確定するため、audit などの副作用より先に emit し、audit drop でも取りこぼ
+        さない。SQLAlchemyError は infra_error (成功率の分母外)、それ以外は failed。
+
         Returns:
             taskiq retry と stage hold の decision。
         """
         match exc:
             case AssessmentTerminalError():
+                record_assessment_processing_outcome("failed")
                 hold_reason = _hold_reason(exc)
                 logger.warning(
                     "assess_content_terminal",
@@ -87,6 +93,7 @@ class AssessmentFailureHandler:
                     stage_hold_reason=hold_reason,
                 )
             case AssessmentRecoverableError():
+                record_assessment_processing_outcome("failed")
                 recoverable = exc
                 await self._audit_failure(ready, recoverable)
                 if last_attempt:
@@ -103,9 +110,11 @@ class AssessmentFailureHandler:
                     )
                 return FailureHandlingDecision(reraise=True)
             case SQLAlchemyError():
+                record_assessment_processing_outcome("infra_error")
                 await self._audit_failure(ready, exc)
                 return FailureHandlingDecision(reraise=not last_attempt)
             case _:
+                record_assessment_processing_outcome("failed")
                 await self._audit_unexpected_failure(ready, exc)
                 if last_attempt:
                     logger.exception(

@@ -56,9 +56,11 @@ from app.models.out_of_scope_article_record import (
     OutOfScopeArticleRecord as OutOfScopeArticleRecordORM,
 )
 from app.models.pipeline_event import PipelineEvent
+from tests.logfire._metric_helpers import collected_metrics, sum_counter_for_result
 from tests.logfire._span_helpers import stage_attrs
 
 _AI_MODEL = "gemini-2.5-flash-lite"
+_PROCESSING_OUTCOME_METRIC = "vector.assessment.processing_outcome"
 
 
 async def _make_article(
@@ -503,3 +505,76 @@ async def test_race_loss_sets_stage_result_skipped(
             await svc.execute(_ready(extraction), assessor)
 
     assert stage_attrs(capfire)["result"] == "skipped"
+
+
+# processing_outcome emit — commit 後に in_scope/out_of_scope、race loss は emit しない
+
+
+@pytest.mark.asyncio
+async def test_in_scope_emits_processing_outcome_in_scope(
+    db_session: AsyncSession,
+    session_factory: async_sessionmaker[AsyncSession],
+    sample_source: NewsSource,
+    sample_categories: list[Category],
+    capfire: CaptureLogfire,
+) -> None:
+    """in_scope 保存 + commit 後に processing_outcome{result=in_scope} が +1。"""
+    article = await _make_article(db_session, sample_source)
+    extraction = await _make_extraction(db_session, article)
+    assessor = _make_assessor(return_envelope=_in_scope_call(InScopeCategory.AI))
+
+    svc = AssessmentService(session_factory)
+    await svc.execute(_ready(extraction), assessor)
+
+    metrics = collected_metrics(capfire)
+    assert sum_counter_for_result(metrics, _PROCESSING_OUTCOME_METRIC, "in_scope") == 1
+    assert (
+        sum_counter_for_result(metrics, _PROCESSING_OUTCOME_METRIC, "out_of_scope") == 0
+    )
+
+
+@pytest.mark.asyncio
+async def test_out_of_scope_emits_processing_outcome_out_of_scope(
+    db_session: AsyncSession,
+    session_factory: async_sessionmaker[AsyncSession],
+    sample_source: NewsSource,
+    capfire: CaptureLogfire,
+) -> None:
+    """out_of_scope 保存 + commit 後に out_of_scope が +1 される。"""
+    article = await _make_article(db_session, sample_source)
+    extraction = await _make_extraction(db_session, article)
+    assessor = _make_assessor(return_envelope=_out_of_scope_call())
+
+    svc = AssessmentService(session_factory)
+    await svc.execute(_ready(extraction), assessor)
+
+    metrics = collected_metrics(capfire)
+    assert (
+        sum_counter_for_result(metrics, _PROCESSING_OUTCOME_METRIC, "out_of_scope") == 1
+    )
+    assert sum_counter_for_result(metrics, _PROCESSING_OUTCOME_METRIC, "in_scope") == 0
+
+
+@pytest.mark.asyncio
+async def test_race_loss_does_not_emit_processing_outcome(
+    db_session: AsyncSession,
+    session_factory: async_sessionmaker[AsyncSession],
+    sample_source: NewsSource,
+    sample_categories: list[Category],
+    capfire: CaptureLogfire,
+) -> None:
+    """楽観ロック敗北 (commit 未到達) では processing_outcome を emit しない。"""
+    article = await _make_article(db_session, sample_source)
+    extraction = await _make_extraction(db_session, article)
+    assessor = _make_assessor(return_envelope=_in_scope_call(InScopeCategory.AI))
+
+    svc = AssessmentService(session_factory)
+    with patch(
+        "app.analysis.assessment.repository.AssessmentRepository.save_in_scope",
+        new=AsyncMock(return_value=None),
+    ):
+        await svc.execute(_ready(extraction), assessor)
+
+    metrics = collected_metrics(capfire)
+    for result in ("in_scope", "out_of_scope", "failed", "infra_error"):
+        assert sum_counter_for_result(metrics, _PROCESSING_OUTCOME_METRIC, result) == 0

@@ -18,6 +18,7 @@ from app.analysis.assessment.ai.envelope import AssessmentCall
 from app.analysis.assessment.domain.ready import ReadyForAssessment
 from app.analysis.assessment.domain.result import InScope, OutOfScope
 from app.analysis.assessment.errors import map_provider_to_assessment
+from app.analysis.assessment.metrics import record_assessment_processing_outcome
 from app.analysis.assessment.repository import AssessmentRepository
 from app.audit.stages.assessment import AssessmentAuditRepository
 from app.logfire.article_stage import set_assessment_stage_result
@@ -100,6 +101,7 @@ class AssessmentService:
                         curation_id=curation_id,
                     )
                     set_assessment_stage_result("in_scope")
+                    record_assessment_processing_outcome("in_scope")
                     return analyzed_article_id
 
                 case AssessmentCall(result=OutOfScope()):
@@ -126,6 +128,7 @@ class AssessmentService:
                         curation_id=curation_id,
                     )
                     set_assessment_stage_result("out_of_scope")
+                    record_assessment_processing_outcome("out_of_scope")
                     # Stage 5 chain なし
                     return None
 

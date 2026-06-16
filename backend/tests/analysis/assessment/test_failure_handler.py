@@ -22,7 +22,9 @@ from datetime import UTC, datetime
 from unittest.mock import AsyncMock, patch
 
 import pytest
+from logfire.testing import CaptureLogfire
 from sqlalchemy import select
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from structlog.testing import capture_logs
 
@@ -43,6 +45,9 @@ from app.models.analyzable_article_record import AnalyzableArticleRecord
 from app.models.article_curation import ArticleCuration
 from app.models.news_source import NewsSource
 from app.models.pipeline_event import PipelineEvent
+from tests.logfire._metric_helpers import collected_metrics, sum_counter_for_result
+
+_PROCESSING_OUTCOME_METRIC = "vector.assessment.processing_outcome"
 
 
 async def _make_article(
@@ -323,3 +328,78 @@ async def test_audit_failure_falls_back_to_log_with_secrets_redacted(
     assert "sk-live" not in drop["business_error_message"]
     # audit 側 (任意 RuntimeError) は redact_secrets で secret が落ちる。
     assert "sk-live-AUDITSECRETxyz" not in drop["audit_error_message"]
+
+
+# processing_outcome emit — 失敗分類を確定する境界として handler が直接出す
+
+
+@pytest.mark.parametrize(
+    ("make_exc", "expected"),
+    [
+        (lambda: map_provider_to_assessment(AIProviderConfigurationError()), "failed"),
+        (lambda: map_provider_to_assessment(AIProviderNetworkError()), "failed"),
+        (lambda: ValueError("surprise"), "failed"),
+        (lambda: SQLAlchemyError("db down"), "infra_error"),
+    ],
+    ids=["terminal", "recoverable", "catch_all", "sqlalchemy"],
+)
+@pytest.mark.asyncio
+async def test_handle_emits_processing_outcome(
+    db_session: AsyncSession,
+    session_factory: async_sessionmaker[AsyncSession],
+    sample_source: NewsSource,
+    capfire: CaptureLogfire,
+    make_exc,
+    expected: str,
+) -> None:
+    """marker/SQLAlchemy/catch-all を failed/infra_error に分類して emit する。
+
+    SQLAlchemyError だけが infra_error (成功率の分母外)。それ以外は failed。
+    """
+    article = await _make_article(db_session, sample_source)
+    extraction = await _make_extraction(db_session, article)
+    ready = _ready_from(extraction)
+    handler = AssessmentFailureHandler(session_factory)
+
+    await handler.handle(ready=ready, exc=make_exc(), last_attempt=False)
+
+    metrics = collected_metrics(capfire)
+    assert sum_counter_for_result(metrics, _PROCESSING_OUTCOME_METRIC, expected) == 1
+    # 各 arm は割り当て外の result を一切 emit しない (vocabulary 排他)。
+    for result in ("in_scope", "out_of_scope", "failed", "infra_error"):
+        if result == expected:
+            continue
+        assert sum_counter_for_result(metrics, _PROCESSING_OUTCOME_METRIC, result) == 0
+
+
+@pytest.mark.asyncio
+async def test_failed_emitted_before_audit_side_effect(
+    db_session: AsyncSession,
+    session_factory: async_sessionmaker[AsyncSession],
+    sample_source: NewsSource,
+    capfire: CaptureLogfire,
+) -> None:
+    """分類 emit は audit 副作用より先。audit が伝搬しても failed は計上済み。
+
+    本番の ``_audit_failure`` は例外を握るが、ここでは伝搬させることで「emit が
+    副作用より前」を反証可能にする。emit を audit の後ろに移すと failed が 0 になり
+    本テストは落ちる (emit-after 退行のガード)。
+    """
+    article = await _make_article(db_session, sample_source)
+    extraction = await _make_extraction(db_session, article)
+    ready = _ready_from(extraction)
+    handler = AssessmentFailureHandler(session_factory)
+    exc = map_provider_to_assessment(
+        AIProviderConfigurationError()
+    )  # Terminal -> failed
+
+    with patch.object(
+        AssessmentFailureHandler,
+        "_audit_failure",
+        new=AsyncMock(side_effect=RuntimeError("audit blew up")),
+    ):
+        with pytest.raises(RuntimeError, match="audit blew up"):
+            await handler.handle(ready=ready, exc=exc, last_attempt=False)
+
+    metrics = collected_metrics(capfire)
+    assert sum_counter_for_result(metrics, _PROCESSING_OUTCOME_METRIC, "failed") == 1

@@ -12,10 +12,12 @@ from app.analysis.assessment.domain.ready import (
     ReadyForAssessment,
 )
 from app.analysis.assessment.failure_handling import AssessmentFailureHandler
+from app.analysis.assessment.metrics import record_assessment_processing_outcome
 from app.analysis.assessment.repository import AssessmentRepository
 from app.analysis.assessment.service import AssessmentService
 from app.analysis.rate_limit import record_rate_limit_gate_skipped
 from app.audit.error_fields import exception_fqn
+from app.audit.ready_build import project_ready_build_failure
 from app.audit.stages.assessment import AssessmentAuditRepository
 from app.logfire.article_stage import assessment_stage_span
 from app.queue.brokers import broker_analysis
@@ -69,6 +71,14 @@ async def assess_content(
                     session_factory,
                     curation_id=trigger.curation_id,
                     exc=exc,
+                )
+                # audit は best-effort。drop されても分類 emit は止めない。DB 障害だけ
+                # infra_error として分母外に逃がし、contract/想定外は failed に倒す。
+                projection = project_ready_build_failure(
+                    stage_prefix="assessment", exc=exc
+                )
+                record_assessment_processing_outcome(
+                    "infra_error" if projection.failure_kind == "db_error" else "failed"
                 )
                 raise
 
