@@ -19,12 +19,14 @@ from app.analysis.ai_provider_errors import (
     AIProviderContentError,
     AIProviderStateError,
 )
+from app.analysis.ai_provider_outcome import is_infra_provider_error
 from app.analysis.embedding.domain.ready import ReadyForEmbedding
 from app.analysis.embedding.errors import (
     EmbeddingError,
     EmbeddingRecoverableError,
     EmbeddingTerminalError,
 )
+from app.analysis.embedding.metrics import record_embedding_processing_outcome
 from app.analysis.failure_handling import FailureHandlingDecision
 from app.audit.error_fields import exception_fqn
 from app.audit.stages.embedding import EmbeddingAuditRepository
@@ -70,11 +72,22 @@ class EmbeddingFailureHandler:
     ) -> FailureHandlingDecision:
         """marker dispatch を実行する。
 
+        失敗分類を確定する境界として ``processing_outcome`` も emit する。分類は match
+        時点で確定するため、audit などの副作用より先に emit し、audit drop でも取りこぼ
+        さない。provider error 由来の infra/failed 振り分けは ``exc.provider_error`` を
+        stage 中立な ``is_infra_provider_error`` に通す (marker 型では決めない)。
+        ``SQLAlchemyError`` は infra_error、想定外は failed。
+
         Returns:
             taskiq retry と stage hold の decision。
         """
         match exc:
             case EmbeddingTerminalError():
+                record_embedding_processing_outcome(
+                    "infra_error"
+                    if is_infra_provider_error(exc.provider_error)
+                    else "failed"
+                )
                 hold_reason = _hold_reason(exc)
                 logger.warning(
                     "generate_embedding_terminal",
@@ -89,6 +102,11 @@ class EmbeddingFailureHandler:
                 )
             case EmbeddingRecoverableError():
                 recoverable = exc
+                record_embedding_processing_outcome(
+                    "infra_error"
+                    if is_infra_provider_error(recoverable.provider_error)
+                    else "failed"
+                )
                 await self._audit_failure(ready, recoverable)
                 if last_attempt:
                     hold_reason = _hold_reason(recoverable)
@@ -104,9 +122,11 @@ class EmbeddingFailureHandler:
                     )
                 return FailureHandlingDecision(reraise=True)
             case SQLAlchemyError():
+                record_embedding_processing_outcome("infra_error")
                 await self._audit_failure(ready, exc)
                 return FailureHandlingDecision(reraise=not last_attempt)
             case _:
+                record_embedding_processing_outcome("failed")
                 await self._audit_unexpected_failure(ready, exc)
                 if last_attempt:
                     logger.exception(

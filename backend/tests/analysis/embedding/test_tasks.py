@@ -5,6 +5,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from logfire.testing import CaptureLogfire
+from pydantic import ValidationError
+from sqlalchemy.exc import SQLAlchemyError
 from structlog.testing import capture_logs
 
 from app.analysis.embedding.domain.ready import (
@@ -14,7 +16,20 @@ from app.analysis.embedding.domain.ready import (
 )
 from app.analysis.rate_limit import AIModelRateLimitPolicy
 from app.queue.messages.embedding import EmbeddingTrigger
+from tests.logfire._metric_helpers import collected_metrics, sum_counter_for_result
 from tests.logfire._span_helpers import stage_attrs
+
+_METRIC = "vector.embedding.processing_outcome"
+_ALL_RESULTS = ("succeeded", "failed", "infra_error")
+
+
+def _validation_error() -> ValidationError:
+    """ready 構築由来の本物の ValidationError を捕捉して返す。"""
+    try:
+        ReadyForEmbedding(analyzed_article_id=1)  # type: ignore[call-arg]
+    except ValidationError as exc:
+        return exc
+    raise AssertionError("ReadyForEmbedding が ValidationError を出さなかった")
 
 
 def _make_embedder_fake() -> MagicMock:
@@ -311,3 +326,141 @@ class TestGenerateEmbeddingStageSpan:
             )
 
         assert stage_attrs(capfire)["result"] == "rate_limited"
+
+
+class TestGenerateEmbeddingProcessingOutcome:
+    """ready-build 境界の ``processing_outcome`` 分類 (audit drop 非依存)。"""
+
+    @pytest.mark.asyncio
+    async def test_ready_build_db_error_emits_infra_error(
+        self, capfire: CaptureLogfire
+    ) -> None:
+        """ready-build の SQLAlchemyError は infra_error を emit して raise する。"""
+        from app.queue.tasks.embedding import generate_embedding
+
+        mock_ctx = _make_ctx(embedder=_make_embedder_fake())
+        with (
+            patch(
+                "app.queue.tasks.embedding.ReadyForEmbedding.try_advance_from",
+                new=AsyncMock(side_effect=SQLAlchemyError("db down")),
+            ),
+            patch(
+                "app.queue.tasks.embedding._append_ready_build_failed_audit",
+                new=AsyncMock(),
+            ),
+            patch("app.queue.tasks.embedding.EmbeddingService"),
+        ):
+            with pytest.raises(SQLAlchemyError):
+                await generate_embedding(
+                    trigger=_make_trigger(analyzed_article_id=1), ctx=mock_ctx
+                )
+
+        metrics = collected_metrics(capfire)
+        assert sum_counter_for_result(metrics, _METRIC, "infra_error") == 1
+        for other in ("succeeded", "failed"):
+            assert sum_counter_for_result(metrics, _METRIC, other) == 0
+
+    @pytest.mark.asyncio
+    async def test_ready_build_validation_error_emits_failed(
+        self, capfire: CaptureLogfire
+    ) -> None:
+        """ready-build の ValidationError は failed (分母に算入) を emit して raise。"""
+        from app.queue.tasks.embedding import generate_embedding
+
+        mock_ctx = _make_ctx(embedder=_make_embedder_fake())
+        with (
+            patch(
+                "app.queue.tasks.embedding.ReadyForEmbedding.try_advance_from",
+                new=AsyncMock(side_effect=_validation_error()),
+            ),
+            patch(
+                "app.queue.tasks.embedding._append_ready_build_failed_audit",
+                new=AsyncMock(),
+            ),
+            patch("app.queue.tasks.embedding.EmbeddingService"),
+        ):
+            with pytest.raises(ValidationError):
+                await generate_embedding(
+                    trigger=_make_trigger(analyzed_article_id=1), ctx=mock_ctx
+                )
+
+        metrics = collected_metrics(capfire)
+        assert sum_counter_for_result(metrics, _METRIC, "failed") == 1
+        for other in ("succeeded", "infra_error"):
+            assert sum_counter_for_result(metrics, _METRIC, other) == 0
+
+    @pytest.mark.asyncio
+    async def test_ready_build_unexpected_error_emits_failed(
+        self, capfire: CaptureLogfire
+    ) -> None:
+        """ready-build の想定外例外は failed を emit して raise (分母から隠さない)。"""
+        from app.queue.tasks.embedding import generate_embedding
+
+        mock_ctx = _make_ctx(embedder=_make_embedder_fake())
+        with (
+            patch(
+                "app.queue.tasks.embedding.ReadyForEmbedding.try_advance_from",
+                new=AsyncMock(side_effect=RuntimeError("boom")),
+            ),
+            patch(
+                "app.queue.tasks.embedding._append_ready_build_failed_audit",
+                new=AsyncMock(),
+            ),
+            patch("app.queue.tasks.embedding.EmbeddingService"),
+        ):
+            with pytest.raises(RuntimeError):
+                await generate_embedding(
+                    trigger=_make_trigger(analyzed_article_id=1), ctx=mock_ctx
+                )
+
+        metrics = collected_metrics(capfire)
+        assert sum_counter_for_result(metrics, _METRIC, "failed") == 1
+        for other in ("succeeded", "infra_error"):
+            assert sum_counter_for_result(metrics, _METRIC, other) == 0
+
+    @pytest.mark.asyncio
+    async def test_gate_skip_does_not_emit_processing_outcome(
+        self, capfire: CaptureLogfire
+    ) -> None:
+        """gate skip (capacity 制御) は処理試行に入らず counter を汚さない。"""
+        from app.queue.tasks.embedding import generate_embedding
+
+        gate = _make_gate_fake(acquired=False)
+        mock_ctx = _make_ctx(embedder=_make_embedder_fake(), gate=gate)
+        with (
+            _patch_ready_construction(_make_ready(analyzed_article_id=1)),
+            patch("app.queue.tasks.embedding.EmbeddingService"),
+            patch("app.queue.tasks.embedding.record_rate_limit_gate_skipped"),
+        ):
+            await generate_embedding(
+                trigger=_make_trigger(analyzed_article_id=1), ctx=mock_ctx
+            )
+
+        metrics = collected_metrics(capfire)
+        for result in _ALL_RESULTS:
+            assert sum_counter_for_result(metrics, _METRIC, result) == 0
+
+    @pytest.mark.asyncio
+    async def test_ready_build_blocked_does_not_emit_processing_outcome(
+        self, capfire: CaptureLogfire
+    ) -> None:
+        """ready-build blocked (stale/冪等) は counter を汚さない。"""
+        from app.queue.tasks.embedding import generate_embedding
+
+        mock_ctx = _make_ctx(embedder=_make_embedder_fake())
+        exc = EmbeddingReadyBuildBlockedError(
+            EmbeddingReadyBuildBlockedCode.ALREADY_EMBEDDED
+        )
+        with (
+            _patch_ready_construction(exc),
+            patch("app.queue.tasks.embedding.EmbeddingAuditRepository") as mock_audit,
+            patch("app.queue.tasks.embedding.EmbeddingService"),
+        ):
+            mock_audit.return_value.append_ready_build_blocked = AsyncMock()
+            await generate_embedding(
+                trigger=_make_trigger(analyzed_article_id=42), ctx=mock_ctx
+            )
+
+        metrics = collected_metrics(capfire)
+        for result in _ALL_RESULTS:
+            assert sum_counter_for_result(metrics, _METRIC, result) == 0

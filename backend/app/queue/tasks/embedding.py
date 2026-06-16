@@ -12,10 +12,12 @@ from app.analysis.embedding.domain.ready import (
     ReadyForEmbedding,
 )
 from app.analysis.embedding.failure_handling import EmbeddingFailureHandler
+from app.analysis.embedding.metrics import record_embedding_processing_outcome
 from app.analysis.embedding.repository import EmbeddingRepository
 from app.analysis.embedding.service import EmbeddingService
 from app.analysis.rate_limit import record_rate_limit_gate_skipped
 from app.audit.error_fields import exception_fqn
+from app.audit.ready_build import project_ready_build_failure
 from app.audit.stages.embedding import EmbeddingAuditRepository
 from app.logfire.article_stage import embedding_stage_span
 from app.queue.brokers import broker_embedding
@@ -67,6 +69,14 @@ async def generate_embedding(
                     session_factory,
                     analyzed_article_id=trigger.analyzed_article_id,
                     exc=exc,
+                )
+                # audit は best-effort。drop されても分類 emit は止めない。DB 障害だけ
+                # infra_error として分母外に逃がし、contract/想定外は failed に倒す。
+                projection = project_ready_build_failure(
+                    stage_prefix="embedding", exc=exc
+                )
+                record_embedding_processing_outcome(
+                    "infra_error" if projection.failure_kind == "db_error" else "failed"
                 )
                 raise
 

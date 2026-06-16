@@ -17,10 +17,12 @@ marker は production と同じく ``to_embedding_error`` で provider error か
 from __future__ import annotations
 
 from datetime import UTC, datetime
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from logfire.testing import CaptureLogfire
 from sqlalchemy import select
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from structlog.testing import capture_logs
 
@@ -34,12 +36,19 @@ from app.analysis.ai_provider_errors import (
     AIProviderUsageLimitExhaustedError,
 )
 from app.analysis.embedding.domain.ready import ReadyForEmbedding
-from app.analysis.embedding.errors import to_embedding_error
+from app.analysis.embedding.errors import (
+    EmbeddingResponseInvalidError,
+    to_embedding_error,
+)
 from app.analysis.embedding.failure_handling import EmbeddingFailureHandler
 from app.analysis.gemini_error_translator import GeminiContentRejectionReason
 from app.models.analyzable_article_record import AnalyzableArticleRecord
 from app.models.news_source import NewsSource
 from app.models.pipeline_event import PipelineEvent
+from tests.logfire._metric_helpers import collected_metrics, sum_counter_for_result
+
+_METRIC = "vector.embedding.processing_outcome"
+_ALL_RESULTS = ("succeeded", "failed", "infra_error")
 
 
 async def _make_article(
@@ -295,3 +304,100 @@ async def test_audit_failure_falls_back_to_log_with_secrets_redacted(
     assert "sk-live" not in drop["business_error_message"]
     # audit 側 (任意 RuntimeError) は redact_secrets で secret が落ちる。
     assert "sk-live-AUDITSECRETxyz" not in drop["audit_error_message"]
+
+
+# ---------------------------------------------------------------------------
+# processing_outcome metric: handler が述語の結果を正しい境界で emit する
+# ---------------------------------------------------------------------------
+#
+# provider marker -> bucket の全 truth table は ``test_ai_provider_outcome.py``
+# が正本。ここでは handler が各 arm で述語の結果を正しく emit に転送し、3 値が排他
+# であることを代表 marker で固定する。assessment との差 (Recoverable/Terminal arm が
+# 一律 failed ではなく provider_error の infra/failed を割る) は Network -> infra_error
+# と InputRejected -> failed の対で落ちる。
+
+
+def _mock_session_factory() -> MagicMock:
+    """`async with factory() as s: await s.commit()` を DB 無しで満たす factory。
+
+    metric emit は audit / DB に到達する前に確定するため、これらのテストは実 DB を要さず
+    純 unit で metric 契約を固定する。
+    """
+    session = MagicMock()
+    session.commit = AsyncMock()
+    cm = MagicMock()
+    cm.__aenter__ = AsyncMock(return_value=session)
+    cm.__aexit__ = AsyncMock(return_value=False)
+    return MagicMock(return_value=cm)
+
+
+def _build_outcome_cases() -> list[tuple[BaseException, str]]:
+    """各 (handler に渡す exc, 期待 processing_outcome result)。"""
+    return [
+        # Recoverable + infra: assessment なら failed だが embedding は infra_error。
+        (to_embedding_error(AIProviderNetworkError()), "infra_error"),
+        # Terminal + infra (Configuration は OPERATOR_ACTION_REQUIRED)。
+        (to_embedding_error(AIProviderConfigurationError()), "infra_error"),
+        # Terminal + content reject (provider_error は ContentError)。
+        (to_embedding_error(_input_rejected()), "failed"),
+        # Recoverable + provider_error=None (stage 工程由来)。
+        (EmbeddingResponseInvalidError(), "failed"),
+        # SQLAlchemyError arm。
+        (SQLAlchemyError("db down"), "infra_error"),
+        # catch-all (marker いずれにも該当しない)。
+        (ValueError("surprise"), "failed"),
+    ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("exc,expected", _build_outcome_cases())
+async def test_handler_emits_classified_processing_outcome(
+    capfire: CaptureLogfire,
+    exc: BaseException,
+    expected: str,
+) -> None:
+    """handler は各 arm で分類どおりの result を 1 件だけ emit する (3 値排他)。
+
+    audit 副作用をハンドラ上で no-op に差し替え、metric が audit / DB に依らないことを
+    純 unit で固定する (emit は audit より先)。
+    """
+    ready = _ready_for(article_id=1)
+    handler = EmbeddingFailureHandler(MagicMock())
+
+    with (
+        patch.object(handler, "_audit_failure", new=AsyncMock()),
+        patch.object(handler, "_audit_unexpected_failure", new=AsyncMock()),
+    ):
+        await handler.handle(ready=ready, exc=exc, last_attempt=True)
+
+    metrics = collected_metrics(capfire)
+    assert sum_counter_for_result(metrics, _METRIC, expected) == 1
+    for other in (r for r in _ALL_RESULTS if r != expected):
+        assert sum_counter_for_result(metrics, _METRIC, other) == 0
+
+
+@pytest.mark.asyncio
+async def test_processing_outcome_emitted_even_when_audit_drops(
+    capfire: CaptureLogfire,
+) -> None:
+    """audit drop しても infra_error は emit される (副作用より先に emit するため)。
+
+    実 audit repository を raise させ、``_audit_failure`` の swallow 経路を DB 無しで
+    通す。metric は audit より先に確定するため emit は残る。
+    """
+    ready = _ready_for(article_id=1)
+    handler = EmbeddingFailureHandler(_mock_session_factory())
+    exc = to_embedding_error(AIProviderNetworkError())
+
+    with patch(
+        "app.analysis.embedding.failure_handling.EmbeddingAuditRepository"
+    ) as mock_audit_cls:
+        mock_audit_cls.return_value.append_failure = AsyncMock(
+            side_effect=RuntimeError("audit db down")
+        )
+        await handler.handle(ready=ready, exc=exc, last_attempt=True)
+
+    metrics = collected_metrics(capfire)
+    assert sum_counter_for_result(metrics, _METRIC, "infra_error") == 1
+    for other in ("succeeded", "failed"):
+        assert sum_counter_for_result(metrics, _METRIC, other) == 0
