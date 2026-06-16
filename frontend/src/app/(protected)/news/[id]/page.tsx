@@ -130,7 +130,7 @@ export default async function NewsPage({ params }: NewsPageProps) {
 
   return (
     <PaperSurface>
-      <ShellMasthead activeHref="/" />
+      <ShellMasthead />
       <div className="relative">
         <PaperTexture />
         <main className="relative z-10 mx-auto max-w-[1180px] px-5 pb-20 sm:px-8 lg:px-10">

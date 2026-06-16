@@ -1,8 +1,6 @@
 import type { Metadata } from "next";
 import { connection } from "next/server";
 import { Suspense } from "react";
-import { ShellMasthead } from "@/components/layout/ShellMasthead";
-import { PaperSurface, PaperTexture } from "@/components/paper";
 import { Skeleton } from "@/components/ui/skeleton";
 import {
   BriefingIndexView,
@@ -66,14 +64,8 @@ function BriefingListSkeleton() {
 
 export default function BriefingListPage() {
   return (
-    <PaperSurface>
-      <ShellMasthead activeHref="/briefing" />
-      <div className="relative min-h-dvh w-full overflow-hidden">
-        <PaperTexture />
-        <Suspense fallback={<BriefingListSkeleton />}>
-          <BriefingListContent />
-        </Suspense>
-      </div>
-    </PaperSurface>
+    <Suspense fallback={<BriefingListSkeleton />}>
+      <BriefingListContent />
+    </Suspense>
   );
 }

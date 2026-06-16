@@ -1,23 +1,20 @@
 import Image from "next/image";
 import Link from "next/link";
 import type { ReactNode } from "react";
-import { MobileNav } from "@/components/layout/MobileNav";
-import {
-  NAV_ICONS,
-  type ProtectedNavItem,
-} from "@/components/layout/nav-items";
 
 interface SlimMastheadProps {
-  navItems: ProtectedNavItem[];
-  activeHref: string;
+  navSlot: ReactNode;
+  mobileNavSlot: ReactNode;
   themeSlot: ReactNode;
   userMenuSlot: ReactNode;
 }
 
-/** 詳細ページ用のスリムな紙面トップバー (sticky)。--vector-* トークン配下で使う。 */
+/** 認証済み画面のスリムな紙面トップバー (sticky) の枠。session 非依存の static
+ *  な器で、nav / user menu などの dynamic 部分は slot で受ける。--vector-* トー
+ *  クン配下で使う。 */
 export function SlimMasthead({
-  navItems,
-  activeHref,
+  navSlot,
+  mobileNavSlot,
   themeSlot,
   userMenuSlot,
 }: SlimMastheadProps) {
@@ -46,48 +43,12 @@ export function SlimMasthead({
           </span>
         </Link>
 
-        <nav
-          aria-label="主要ページ"
-          className="hidden flex-1 items-center justify-center gap-6 md:flex"
-          style={{ fontFamily: "var(--font-vector-maru)" }}
-        >
-          {navItems.map((item) => {
-            const active = item.href === activeHref;
-            const Icon = NAV_ICONS[item.icon];
-            return (
-              <Link
-                key={item.href}
-                href={item.href}
-                aria-current={active ? "page" : undefined}
-                className={
-                  active
-                    ? "inline-flex items-center gap-1.5 border-b-2 border-[var(--vector-accent)] pb-0.5 text-[13px] font-bold tracking-[0.04em] text-[var(--vector-ink)]"
-                    : "inline-flex items-center gap-1.5 border-b-2 border-transparent pb-0.5 text-[13px] font-medium tracking-[0.04em] text-[var(--vector-ink-soft)] transition-colors hover:text-[var(--vector-ink)]"
-                }
-              >
-                <Icon
-                  aria-hidden="true"
-                  className={
-                    active
-                      ? "size-3.5 text-[var(--vector-accent)]"
-                      : "size-3.5 text-[var(--vector-ink-muted)] opacity-70"
-                  }
-                />
-                {item.label}
-              </Link>
-            );
-          })}
-        </nav>
+        {navSlot}
 
         <div className="flex flex-1 items-center justify-end gap-2 sm:gap-3 md:flex-none">
           <div className="hidden lg:block">{userMenuSlot}</div>
           {themeSlot}
-          <div className="md:hidden">
-            <MobileNav
-              items={navItems}
-              triggerClassName="sm:inline-flex md:hidden"
-            />
-          </div>
+          <div className="md:hidden">{mobileNavSlot}</div>
         </div>
       </div>
     </header>

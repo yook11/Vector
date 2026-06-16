@@ -82,7 +82,7 @@ export default async function WatchlistPage({
 
   return (
     <PaperSurface>
-      <ShellMasthead activeHref="/watchlist" />
+      <ShellMasthead />
       <div className="relative min-h-dvh w-full overflow-hidden">
         <PaperTexture />
         <main className="relative z-10 mx-auto max-w-[1180px] px-[clamp(18px,4vw,40px)] pt-[30px] pb-[80px]">

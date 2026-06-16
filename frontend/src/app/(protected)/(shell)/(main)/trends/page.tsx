@@ -1,8 +1,6 @@
 import type { Metadata } from "next";
 import { connection } from "next/server";
 import { Suspense } from "react";
-import { ShellMasthead } from "@/components/layout/ShellMasthead";
-import { PaperSurface, PaperTexture } from "@/components/paper";
 import { Skeleton } from "@/components/ui/skeleton";
 import {
   getTrendsViewModel,
@@ -76,14 +74,8 @@ function TrendsContentSkeleton() {
 
 export default function TrendsPage() {
   return (
-    <PaperSurface>
-      <ShellMasthead activeHref="/trends" />
-      <div className="relative min-h-dvh w-full overflow-hidden">
-        <PaperTexture />
-        <Suspense fallback={<TrendsContentSkeleton />}>
-          <TrendsContent />
-        </Suspense>
-      </div>
-    </PaperSurface>
+    <Suspense fallback={<TrendsContentSkeleton />}>
+      <TrendsContent />
+    </Suspense>
   );
 }
