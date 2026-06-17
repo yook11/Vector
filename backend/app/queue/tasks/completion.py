@@ -22,7 +22,7 @@ from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from taskiq import Context, TaskiqDepends
 
-from app.audit.domain.event import EventType
+from app.audit.domain.event import EventType, Stage
 from app.audit.error_fields import exception_fqn
 from app.audit.stages.completion import ArticleCompletionAuditRepository
 from app.collection.article_completion.metrics import (
@@ -34,6 +34,7 @@ from app.collection.article_completion.ready import (
 )
 from app.collection.article_completion.repository import ArticleCompletionRepository
 from app.collection.article_completion.service import ArticleCompletionService
+from app.logfire.stage_span import pipeline_stage_span
 from app.queue.brokers import broker_content, broker_metadata
 from app.queue.messages.curation import CurationTrigger
 from app.queue.schedule import CRON_HTML_FETCH
@@ -116,56 +117,59 @@ async def scrape_html_body(
     (DB 状態 + audit は
     Service / failure handler 内で完結済)。
     """
-    session_factory = ctx.state.session_factory
-    async with session_factory() as session:
-        try:
-            ready = await ReadyForArticleCompletion.try_advance_from(
-                incomplete_article_id=incomplete_article_id,
-                repo=ArticleCompletionRepository(session),
-            )
-        except ArticleCompletionReadyBuildError as exc:
-            await _append_ready_build_error_audit(
-                session_factory,
-                incomplete_article_id=incomplete_article_id,
-                exc=exc,
-            )
-            if exc.EVENT_TYPE == EventType.FAILED:
-                # blocked (SKIPPED) は stale/冪等で計上しない。FAILED のみ failed。
-                record_completion_processing_outcome("failed")
+    with pipeline_stage_span(
+        Stage.COMPLETION, op="scrape_html_body", article_id=incomplete_article_id
+    ):
+        session_factory = ctx.state.session_factory
+        async with session_factory() as session:
+            try:
+                ready = await ReadyForArticleCompletion.try_advance_from(
+                    incomplete_article_id=incomplete_article_id,
+                    repo=ArticleCompletionRepository(session),
+                )
+            except ArticleCompletionReadyBuildError as exc:
+                await _append_ready_build_error_audit(
+                    session_factory,
+                    incomplete_article_id=incomplete_article_id,
+                    exc=exc,
+                )
+                if exc.EVENT_TYPE == EventType.FAILED:
+                    # blocked (SKIPPED) は stale/冪等で計上しない。FAILED のみ failed。
+                    record_completion_processing_outcome("failed")
+                    raise
+                logger.info(
+                    "scrape_html_body_skipped",
+                    incomplete_article_id=incomplete_article_id,
+                    reason="ready_build_error",
+                    outcome_code=exc.CODE,
+                )
+                return None
+            except Exception as exc:
+                await _append_ready_build_error_audit(
+                    session_factory,
+                    incomplete_article_id=incomplete_article_id,
+                    exc=exc,
+                )
+                # ready-build の DB 障害は infra、VO error 等は failed。
+                record_completion_processing_outcome(
+                    "infra_error" if isinstance(exc, SQLAlchemyError) else "failed"
+                )
                 raise
-            logger.info(
-                "scrape_html_body_skipped",
-                incomplete_article_id=incomplete_article_id,
-                reason="ready_build_error",
-                outcome_code=exc.CODE,
-            )
+
+        analyzable_article_id = await ArticleCompletionService(session_factory).execute(
+            ready
+        )
+
+        if analyzable_article_id is None:
             return None
-        except Exception as exc:
-            await _append_ready_build_error_audit(
-                session_factory,
-                incomplete_article_id=incomplete_article_id,
-                exc=exc,
-            )
-            # ready-build の DB 障害は infra、VO error 等は failed。
-            record_completion_processing_outcome(
-                "infra_error" if isinstance(exc, SQLAlchemyError) else "failed"
-            )
-            raise
-
-    analyzable_article_id = await ArticleCompletionService(session_factory).execute(
-        ready
-    )
-
-    if analyzable_article_id is None:
-        return None
-    await curate_content.kiq(
-        CurationTrigger(analyzable_article_id=analyzable_article_id)
-    )
-    return {
-        "incomplete_article_id": incomplete_article_id,
-        "analyzable_article_id": analyzable_article_id,
-        "status": "success",
-    }
+        await curate_content.kiq(
+            CurationTrigger(analyzable_article_id=analyzable_article_id)
+        )
+        return {
+            "incomplete_article_id": incomplete_article_id,
+            "analyzable_article_id": analyzable_article_id,
+            "status": "success",
+        }
 
 
 async def _append_ready_build_error_audit(

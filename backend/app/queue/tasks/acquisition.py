@@ -20,7 +20,7 @@ import structlog
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from taskiq import Context, TaskiqDepends
 
-from app.audit.domain.event import EventType
+from app.audit.domain.event import EventType, Stage
 from app.audit.error_fields import exception_fqn
 from app.audit.stages.dispatch import (
     DispatchAuditRepository,
@@ -36,6 +36,7 @@ from app.collection.article_acquisition.metrics import (
 )
 from app.collection.sources.dispatch import SourceDispatchService
 from app.collection.sources.fetch_cadence import FetchCadence
+from app.logfire.stage_span import pipeline_stage_span
 from app.queue.brokers import broker_content, broker_metadata
 from app.queue.messages.collection import AcquireSourceTaskInput
 from app.queue.messages.curation import CurationTrigger
@@ -414,47 +415,51 @@ async def acquire_source(
     例外は ``ArticleAcquisitionFailureHandler`` に委譲する。次の cron tick で再 dispatch
     される。
     """
-    # 重い import は task body 内 (scheduler 起動を軽く保つ)。
-    from app.collection.article_acquisition.service import ArticleAcquisitionService
-    from app.collection.article_acquisition.strategy import SOURCES
-    from app.collection.sources.source_name import SourceName
-
     source_id = arg.id
-    logger.info("acquire_source_started", source_id=source_id, source_name=arg.name)
-    session_factory = ctx.state.session_factory
+    with pipeline_stage_span(
+        Stage.ACQUISITION, op="acquire_source", source_id=source_id
+    ):
+        # 重い import は task body 内 (scheduler 起動を軽く保つ)。span 内に置き
+        # import 時失敗も acquisition stage 軸に乗せる (他工程と計装位置を揃える)。
+        from app.collection.article_acquisition.service import ArticleAcquisitionService
+        from app.collection.article_acquisition.strategy import SOURCES
+        from app.collection.sources.source_name import SourceName
 
-    source = SOURCES[SourceName(arg.name)]
-    svc = ArticleAcquisitionService(session_factory, source)
+        logger.info("acquire_source_started", source_id=source_id, source_name=arg.name)
+        session_factory = ctx.state.session_factory
 
-    handler = ArticleAcquisitionFailureHandler(session_factory)
-    try:
-        persisted_ids = await svc.execute(source_id)
-    except Exception as exc:
-        record_acquisition_run(AcquisitionRunResult.FAILED)
-        reraise = await handler.handle_source_failure(
-            source_id=source_id,
-            source_name=arg.name,
-            exc=exc,
-        )
-        if reraise:
-            raise
-        return {"source_id": source_id, "status": "error", "reason": str(exc)}
+        source = SOURCES[SourceName(arg.name)]
+        svc = ArticleAcquisitionService(session_factory, source)
 
-    record_acquisition_run(AcquisitionRunResult.SUCCEEDED)
+        handler = ArticleAcquisitionFailureHandler(session_factory)
+        try:
+            persisted_ids = await svc.execute(source_id)
+        except Exception as exc:
+            record_acquisition_run(AcquisitionRunResult.FAILED)
+            reraise = await handler.handle_source_failure(
+                source_id=source_id,
+                source_name=arg.name,
+                exc=exc,
+            )
+            if reraise:
+                raise
+            return {"source_id": source_id, "status": "error", "reason": str(exc)}
 
-    article_created_count = len(persisted_ids)
-    # 永続化済 analyzable_article_id を Trigger に詰めて enqueue。
-    for analyzable_article_id in persisted_ids:
-        await curate_content.kiq(
-            CurationTrigger(analyzable_article_id=analyzable_article_id)
-        )
-    # 本文未取得分は `incomplete_articles` の DB 駆動。`dispatch_html_fetch_jobs`
-    # cron poller が `scrape_html_body` に投入するため、ここでは直接 kiq しない。
-    payload = {
-        "source_id": source_id,
-        "source_name": arg.name,
-        "status": "success",
-        "article_created_count": article_created_count,
-    }
-    logger.info("acquire_source_completed", **payload)
-    return payload
+        record_acquisition_run(AcquisitionRunResult.SUCCEEDED)
+
+        article_created_count = len(persisted_ids)
+        # 永続化済 analyzable_article_id を Trigger に詰めて enqueue。
+        for analyzable_article_id in persisted_ids:
+            await curate_content.kiq(
+                CurationTrigger(analyzable_article_id=analyzable_article_id)
+            )
+        # 本文未取得分は `incomplete_articles` の DB 駆動。`dispatch_html_fetch_jobs`
+        # cron poller が `scrape_html_body` に投入するため、ここでは直接 kiq しない。
+        payload = {
+            "source_id": source_id,
+            "source_name": arg.name,
+            "status": "success",
+            "article_created_count": article_created_count,
+        }
+        logger.info("acquire_source_completed", **payload)
+        return payload

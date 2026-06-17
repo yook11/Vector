@@ -1,4 +1,4 @@
-"""briefing tasks (dispatcher + per-category subtask) のテスト。"""
+"""briefing tasks のテスト。pipeline_stage span 配線含む。"""
 
 from __future__ import annotations
 
@@ -7,11 +7,14 @@ from unittest.mock import AsyncMock, MagicMock, patch
 from zoneinfo import ZoneInfo
 
 import pytest
+from logfire.testing import CaptureLogfire
 
+from app.audit.domain.event import Stage
 from app.insights.briefing.domain.ready import ReadyForBriefing
 from app.insights.briefing.errors import BriefingConfigurationError
 from app.insights.briefing.service import GeneratedBriefing
 from app.queue.messages.briefing import BriefingTaskInput
+from tests.logfire._span_helpers import pipeline_stage_attrs
 
 JST = ZoneInfo("Asia/Tokyo")
 
@@ -393,3 +396,46 @@ class TestSubtaskFailureAudit:
 
         kwargs = append_failure.await_args.kwargs
         assert kwargs["retry_exhausted"] is True
+
+
+class TestGenerateBriefingForCategoryStageSpan:
+    """``generate_briefing_for_category`` の pipeline_stage span 配線テスト。"""
+
+    @pytest.mark.asyncio
+    async def test_span_stage_and_op(self, capfire: CaptureLogfire) -> None:
+        """正常系: stage=briefing / op=generate_briefing_for_category が開く。"""
+        from app.queue.tasks import briefing
+
+        ctx = _ctx_with_session_factory()
+        ready = ReadyForBriefing(
+            week_start=date(2026, 4, 20), category_id=1, force=False
+        )
+        service = MagicMock()
+        service.execute = AsyncMock(
+            return_value=GeneratedBriefing(
+                persisted=True,
+                week_start=date(2026, 4, 20),
+                category_id=1,
+                article_count=5,
+            )
+        )
+
+        with (
+            patch.object(
+                ReadyForBriefing,
+                "try_advance_from",
+                new=AsyncMock(return_value=ready),
+            ),
+            patch(
+                "app.queue.tasks.briefing.WeeklyBriefingService",
+                return_value=service,
+            ),
+        ):
+            await briefing.generate_briefing_for_category(
+                BriefingTaskInput(week_start=date(2026, 4, 20), category_id=1),
+                ctx=ctx,
+            )
+
+        attrs = pipeline_stage_attrs(capfire)
+        assert attrs["stage"] == Stage.BRIEFING.value  # == "briefing"
+        assert attrs["op"] == "generate_briefing_for_category"

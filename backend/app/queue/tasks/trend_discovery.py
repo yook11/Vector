@@ -24,7 +24,7 @@ from datetime import date, timedelta
 import structlog
 from taskiq import Context, TaskiqDepends
 
-from app.audit.domain.event import EventType
+from app.audit.domain.event import EventType, Stage
 from app.audit.stages.trend_discovery import (
     TrendDiscoveryOutcomeCode,
     append_trend_discovery_run_event_best_effort,
@@ -40,6 +40,7 @@ from app.insights.trend_discovery.service import (
     TrendDiscoveryConflict,
     TrendDiscoveryService,
 )
+from app.logfire.stage_span import pipeline_stage_span
 from app.queue.brokers import broker_trend_discovery
 from app.queue.schedule import CRON_TREND_DISCOVERY
 from app.shared.revalidate import FrontendRevalidateNotifier
@@ -58,68 +59,110 @@ _WINDOW = timedelta(days=7)
 )
 async def run_trend_discovery(ctx: Context = TaskiqDepends()) -> None:
     """rolling 7d window (JST 当日 0:00 を上限) の trend discovery を実行する。"""
-    session_factory = ctx.state.session_factory
-    window_end = latest_window_end(now_in_jst())
-    window_start = _window_start(window_end)
+    with pipeline_stage_span(Stage.TREND_DISCOVERY, op="run_trend_discovery"):
+        session_factory = ctx.state.session_factory
+        window_end = latest_window_end(now_in_jst())
+        window_start = _window_start(window_end)
 
-    try:
-        async with session_factory() as session:
-            snapshot_repo = SnapshotRepository(session)
-            ready = await ReadyForTrendDiscovery.try_advance_from(
+        try:
+            async with session_factory() as session:
+                snapshot_repo = SnapshotRepository(session)
+                ready = await ReadyForTrendDiscovery.try_advance_from(
+                    window_end=window_end,
+                    force=False,
+                    snapshot_repo=snapshot_repo,
+                )
+        except Exception as exc:
+            await append_trend_discovery_run_event_best_effort(
+                session_factory,
+                event_type=EventType.FAILED,
+                outcome_code=TrendDiscoveryOutcomeCode.RUN_FAILED,
+                window_start=window_start,
                 window_end=window_end,
-                force=False,
-                snapshot_repo=snapshot_repo,
+                trigger="cron",
+                requested_update=False,
+                exc=exc,
             )
-    except Exception as exc:
-        await append_trend_discovery_run_event_best_effort(
-            session_factory,
-            event_type=EventType.FAILED,
-            outcome_code=TrendDiscoveryOutcomeCode.RUN_FAILED,
-            window_start=window_start,
-            window_end=window_end,
-            trigger="cron",
-            requested_update=False,
-            exc=exc,
-        )
-        raise
+            raise
 
-    if ready is None:
-        await append_trend_discovery_run_event_best_effort(
-            session_factory,
-            event_type=EventType.SKIPPED,
-            outcome_code=TrendDiscoveryOutcomeCode.RUN_ALREADY_EXISTS,
-            window_start=window_start,
-            window_end=window_end,
-            trigger="cron",
-            requested_update=False,
-        )
-        logger.info(
-            "trend_discovery_task_skipped_already_exists",
-            window_end=window_end.isoformat(),
-        )
-        return
+        if ready is None:
+            await append_trend_discovery_run_event_best_effort(
+                session_factory,
+                event_type=EventType.SKIPPED,
+                outcome_code=TrendDiscoveryOutcomeCode.RUN_ALREADY_EXISTS,
+                window_start=window_start,
+                window_end=window_end,
+                trigger="cron",
+                requested_update=False,
+            )
+            logger.info(
+                "trend_discovery_task_skipped_already_exists",
+                window_end=window_end.isoformat(),
+            )
+            return
 
-    service = TrendDiscoveryService(session_factory)
-    try:
-        outcome = await service.execute(ready)
-    except Exception as exc:
-        await append_trend_discovery_run_event_best_effort(
-            session_factory,
-            event_type=EventType.FAILED,
-            outcome_code=TrendDiscoveryOutcomeCode.RUN_FAILED,
-            window_start=window_start,
-            window_end=window_end,
-            trigger="cron",
-            requested_update=False,
-            exc=exc,
-        )
-        raise
+        service = TrendDiscoveryService(session_factory)
+        try:
+            outcome = await service.execute(ready)
+        except Exception as exc:
+            await append_trend_discovery_run_event_best_effort(
+                session_factory,
+                event_type=EventType.FAILED,
+                outcome_code=TrendDiscoveryOutcomeCode.RUN_FAILED,
+                window_start=window_start,
+                window_end=window_end,
+                trigger="cron",
+                requested_update=False,
+                exc=exc,
+            )
+            raise
 
-    if isinstance(outcome, SkippedNoTargetArticles):
+        if isinstance(outcome, SkippedNoTargetArticles):
+            await append_trend_discovery_run_event_best_effort(
+                session_factory,
+                event_type=EventType.SKIPPED,
+                outcome_code=TrendDiscoveryOutcomeCode.RUN_NO_TARGET_ARTICLES,
+                window_start=window_start,
+                window_end=outcome.window_end,
+                trigger="cron",
+                requested_update=False,
+                source_analysis_count=outcome.source_analysis_count,
+                completed_category_count=outcome.completed_category_count,
+            )
+            logger.info(
+                "trend_discovery_task_skipped_no_target_articles",
+                window_end=outcome.window_end.isoformat(),
+            )
+            return
+        if isinstance(outcome, TrendDiscoveryConflict):
+            await append_trend_discovery_run_event_best_effort(
+                session_factory,
+                event_type=EventType.SKIPPED,
+                outcome_code=TrendDiscoveryOutcomeCode.RUN_CONFLICT,
+                window_start=window_start,
+                window_end=outcome.window_end,
+                trigger="cron",
+                requested_update=False,
+                source_analysis_count=outcome.source_analysis_count,
+                completed_category_count=outcome.completed_category_count,
+            )
+            logger.info(
+                "trend_discovery_task_conflict",
+                window_end=outcome.window_end.isoformat(),
+                source_analysis_count=outcome.source_analysis_count,
+                category_count=outcome.completed_category_count,
+            )
+            return
+
+        outcome_code = (
+            TrendDiscoveryOutcomeCode.RUN_UPDATED
+            if isinstance(outcome, TrendDiscoveryCompleted) and outcome.updated
+            else TrendDiscoveryOutcomeCode.RUN_COMPLETED
+        )
         await append_trend_discovery_run_event_best_effort(
             session_factory,
-            event_type=EventType.SKIPPED,
-            outcome_code=TrendDiscoveryOutcomeCode.RUN_NO_TARGET_ARTICLES,
+            event_type=EventType.SUCCEEDED,
+            outcome_code=outcome_code,
             window_start=window_start,
             window_end=outcome.window_end,
             trigger="cron",
@@ -127,60 +170,19 @@ async def run_trend_discovery(ctx: Context = TaskiqDepends()) -> None:
             source_analysis_count=outcome.source_analysis_count,
             completed_category_count=outcome.completed_category_count,
         )
+
         logger.info(
-            "trend_discovery_task_skipped_no_target_articles",
-            window_end=outcome.window_end.isoformat(),
-        )
-        return
-    if isinstance(outcome, TrendDiscoveryConflict):
-        await append_trend_discovery_run_event_best_effort(
-            session_factory,
-            event_type=EventType.SKIPPED,
-            outcome_code=TrendDiscoveryOutcomeCode.RUN_CONFLICT,
-            window_start=window_start,
-            window_end=outcome.window_end,
-            trigger="cron",
-            requested_update=False,
-            source_analysis_count=outcome.source_analysis_count,
-            completed_category_count=outcome.completed_category_count,
-        )
-        logger.info(
-            "trend_discovery_task_conflict",
+            "trend_discovery_task_completed",
             window_end=outcome.window_end.isoformat(),
             source_analysis_count=outcome.source_analysis_count,
             category_count=outcome.completed_category_count,
+            updated=outcome.updated,
         )
-        return
 
-    outcome_code = (
-        TrendDiscoveryOutcomeCode.RUN_UPDATED
-        if isinstance(outcome, TrendDiscoveryCompleted) and outcome.updated
-        else TrendDiscoveryOutcomeCode.RUN_COMPLETED
-    )
-    await append_trend_discovery_run_event_best_effort(
-        session_factory,
-        event_type=EventType.SUCCEEDED,
-        outcome_code=outcome_code,
-        window_start=window_start,
-        window_end=outcome.window_end,
-        trigger="cron",
-        requested_update=False,
-        source_analysis_count=outcome.source_analysis_count,
-        completed_category_count=outcome.completed_category_count,
-    )
-
-    logger.info(
-        "trend_discovery_task_completed",
-        window_end=outcome.window_end.isoformat(),
-        source_analysis_count=outcome.source_analysis_count,
-        category_count=outcome.completed_category_count,
-        updated=outcome.updated,
-    )
-
-    # 生成成功 (新規 INSERT / force 上書きの両方) で frontend のキャッシュを無効化する。
-    # notifier 内部で warn 降格するため例外は伝播しない。
-    notifier = FrontendRevalidateNotifier.from_settings(settings)
-    await notifier.notify(tags=TRENDS_REVALIDATE_TAGS)
+        # 生成成功 (INSERT / force 上書き) で frontend キャッシュを無効化する。
+        # notifier 内部で warn 降格するため例外は伝播しない。
+        notifier = FrontendRevalidateNotifier.from_settings(settings)
+        await notifier.notify(tags=TRENDS_REVALIDATE_TAGS)
 
 
 def _window_start(window_end: date) -> date:

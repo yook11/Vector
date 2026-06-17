@@ -1,4 +1,4 @@
-"""backfill run / enqueue audit の task orchestration tests。"""
+"""backfill run / enqueue audit の task orchestration tests。pipeline_stage span 配線テスト含む。"""  # noqa: E501
 
 from __future__ import annotations
 
@@ -9,11 +9,13 @@ from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from logfire.testing import CaptureLogfire
 
 from app.audit.domain.event import Stage
 from app.audit.stages.backfill import BackfillOutcomeCode
 from app.queue.helpers.backlog import BackfillTarget
 from app.queue.tasks import backfill as tasks
+from tests.logfire._span_helpers import pipeline_stage_attrs
 
 
 @dataclass(frozen=True, slots=True)
@@ -315,3 +317,110 @@ async def test_selection_failure_is_audited_and_reraised(case: _TaskCase) -> Non
 
     assert _run_outcomes(run_audit) == [BackfillOutcomeCode.RUN_FAILED]
     assert run_audit.await_args.kwargs["exc"] is not None
+
+
+# ---------------------------------------------------------------------------
+# pipeline_stage span 配線テスト
+# ---------------------------------------------------------------------------
+
+
+def _backfill_ctx_with_targets(
+    case: _TaskCase,
+    targets: list[BackfillTarget],
+) -> tuple[SimpleNamespace, MagicMock, MagicMock]:
+    """backfill span テスト共通 setup。(ctx, backlog, queue_task) を返す。"""
+    ctx = _ctx()
+    backlog = MagicMock()
+    setattr(backlog, case.target_method, AsyncMock(return_value=targets))
+    setattr(backlog, case.count_method, AsyncMock(return_value=len(targets)))
+    queue_task = SimpleNamespace(kiq=AsyncMock())
+    return ctx, backlog, queue_task
+
+
+class TestBackfillStageSpan:
+    """backfill 3 task が pipeline_stage span を正しく開く配線テスト。
+
+    kill switch 有効 + hold なし + targets 1 件 + budget あり の正常系を流し、
+    pipeline_stage span がちょうど 1 件開くことを確認する。
+    """
+
+    @pytest.mark.asyncio
+    async def test_backfill_curations_span_stage_and_op(
+        self, capfire: CaptureLogfire
+    ) -> None:
+        """stage=backfill_curate / op=backfill_curations が span に開く。"""
+        case = next(c for c in CASES if c.name == "curate")
+        ctx, backlog, queue_task = _backfill_ctx_with_targets(case, [_target(1)])
+
+        with (
+            patch.object(tasks.settings, case.enabled_attr, True),
+            patch(case.hold_patch, AsyncMock(return_value=False)),
+            patch(case.ageout_patch, AsyncMock(return_value=0)),
+            patch("app.queue.tasks.backfill.PipelineBacklog", return_value=backlog),
+            patch(
+                "app.queue.tasks.backfill.consume_daily_budget",
+                AsyncMock(return_value=1),
+            ),
+            patch(case.queue_task_patch, queue_task),
+            patch("app.queue.tasks.backfill._append_backfill_item_event", AsyncMock()),
+            patch("app.queue.tasks.backfill._append_backfill_run_event", AsyncMock()),
+        ):
+            await tasks.backfill_curations(ctx=ctx)
+
+        attrs = pipeline_stage_attrs(capfire)
+        assert attrs["stage"] == Stage.BACKFILL_CURATE.value  # == "backfill_curate"
+        assert attrs["op"] == "backfill_curations"
+
+    @pytest.mark.asyncio
+    async def test_backfill_assessments_span_stage_and_op(
+        self, capfire: CaptureLogfire
+    ) -> None:
+        """stage=backfill_assess / op=backfill_assessments が span に開く。"""
+        case = next(c for c in CASES if c.name == "assess")
+        ctx, backlog, queue_task = _backfill_ctx_with_targets(case, [_target(1)])
+
+        with (
+            patch.object(tasks.settings, case.enabled_attr, True),
+            patch(case.hold_patch, AsyncMock(return_value=False)),
+            patch(case.ageout_patch, AsyncMock(return_value=0)),
+            patch("app.queue.tasks.backfill.PipelineBacklog", return_value=backlog),
+            patch(
+                "app.queue.tasks.backfill.consume_daily_budget",
+                AsyncMock(return_value=1),
+            ),
+            patch(case.queue_task_patch, queue_task),
+            patch("app.queue.tasks.backfill._append_backfill_item_event", AsyncMock()),
+            patch("app.queue.tasks.backfill._append_backfill_run_event", AsyncMock()),
+        ):
+            await tasks.backfill_assessments(ctx=ctx)
+
+        attrs = pipeline_stage_attrs(capfire)
+        assert attrs["stage"] == Stage.BACKFILL_ASSESS.value  # == "backfill_assess"
+        assert attrs["op"] == "backfill_assessments"
+
+    @pytest.mark.asyncio
+    async def test_backfill_embeddings_span_stage_and_op(
+        self, capfire: CaptureLogfire
+    ) -> None:
+        """stage=backfill_embed / op=backfill_embeddings が span に開く。"""
+        case = next(c for c in CASES if c.name == "embed")
+        ctx, backlog, queue_task = _backfill_ctx_with_targets(case, [_target(1)])
+
+        with (
+            patch.object(tasks.settings, case.enabled_attr, True),
+            patch(case.hold_patch, AsyncMock(return_value=False)),
+            patch(case.ageout_patch, AsyncMock(return_value=0)),
+            patch("app.queue.tasks.backfill.PipelineBacklog", return_value=backlog),
+            patch(
+                "app.queue.tasks.backfill.consume_daily_budget",
+                AsyncMock(return_value=1),
+            ),
+            patch(case.queue_task_patch, queue_task),
+            patch("app.queue.tasks.backfill._append_backfill_item_event", AsyncMock()),
+            patch("app.queue.tasks.backfill._append_backfill_run_event", AsyncMock()),
+        ):
+            await tasks.backfill_embeddings(ctx=ctx)
+
+        attrs = pipeline_stage_attrs(capfire)
+        assert attrs["stage"] == Stage.BACKFILL_EMBED.value  # == "backfill_embed"
+        assert attrs["op"] == "backfill_embeddings"

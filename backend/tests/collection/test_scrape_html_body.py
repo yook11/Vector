@@ -1,4 +1,4 @@
-"""``scrape_html_body`` task の振る舞い不変条件テスト (案 3: 厚い Ready 自構築)。
+"""``scrape_html_body`` task の振る舞い不変条件テスト + pipeline_stage span 配線テスト。
 
 task は処理開始時に ``ReadyForArticleCompletion.try_advance_from`` で厚い Ready を
 自構築し、Ready を ``ArticleCompletionService.execute(ready)`` に渡す薄ラッパー。
@@ -31,6 +31,7 @@ from logfire.testing import CaptureLogfire
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from app.audit.domain.event import Stage
 from app.collection.article_completion.ready import (
     ArticleCompletionReadyBuildIncompleteArticleMissingError,
     ReadyForArticleCompletion,
@@ -48,6 +49,7 @@ from app.collection.sources.source_name import SourceName
 from app.queue.messages.curation import CurationTrigger
 from app.queue.tasks.completion import scrape_html_body
 from tests.logfire._metric_helpers import collected_metrics, sum_counter_for_result
+from tests.logfire._span_helpers import pipeline_stage_attrs
 
 _SERVICE_EXECUTE = (
     "app.collection.article_completion.service.ArticleCompletionService.execute"
@@ -299,3 +301,37 @@ async def test_ready_build_db_error_emits_infra_error(
     assert sum_counter_for_result(metrics, _METRIC, "infra_error") == 1
     for other in ("succeeded", "failed"):
         assert sum_counter_for_result(metrics, _METRIC, other) == 0
+
+
+class TestScrapeHtmlBodyStageSpan:
+    """``scrape_html_body`` task が pipeline_stage span を正しく開く配線テスト。"""
+
+    @pytest.mark.asyncio
+    async def test_span_stage_op_and_article_id(
+        self,
+        capfire: CaptureLogfire,
+    ) -> None:
+        """正常系: stage=completion / op=scrape_html_body / article_id が開く。"""
+        target_article_id = 42
+        # session_factory は実 DB に繋がるため MagicMock で代替する。
+        mock_session_factory = MagicMock()
+
+        with (
+            _patch_try_advance_from(
+                _fixed_ready(incomplete_article_id=target_article_id)
+            ),
+            patch(
+                _SERVICE_CLS,
+                return_value=MagicMock(execute=AsyncMock(return_value=None)),
+            ),
+            patch(_CURATE_CONTENT_KIQ, new=AsyncMock()),
+        ):
+            await scrape_html_body(
+                incomplete_article_id=target_article_id,
+                ctx=_ctx(mock_session_factory),
+            )
+
+        attrs = pipeline_stage_attrs(capfire)
+        assert attrs["stage"] == Stage.COMPLETION.value  # == "completion"
+        assert attrs["op"] == "scrape_html_body"
+        assert attrs["article_id"] == target_article_id

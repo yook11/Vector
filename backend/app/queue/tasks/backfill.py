@@ -29,6 +29,7 @@ from app.audit.stages.backfill import (
     BackfillTargetKind,
 )
 from app.config import settings
+from app.logfire.stage_span import pipeline_stage_span
 from app.models.analyzed_article_record import AnalyzedArticleRecord
 from app.models.article_curation import ArticleCuration
 from app.models.backfill_exclusion import (
@@ -438,94 +439,114 @@ async def backfill_curations(ctx: Context = TaskiqDepends()) -> None:
        kiq する。precondition 判定 / Ready 構築は下流 Stage 3 task に委ねる
        (Ready build blocked audit で観測可能)。
     """
-    session_factory = ctx.state.session_factory
-    run_id = _new_backfill_run_id()
-    if not settings.backfill_curations_enabled:
-        await _append_backfill_run_event(
-            session_factory,
-            stage=Stage.BACKFILL_CURATE,
-            backfill_stage="curate",
-            run_id=run_id,
-            event_type=EventType.SKIPPED,
-            outcome_code=BackfillOutcomeCode.RUN_KILL_SWITCH_DISABLED,
-        )
-        logger.info("backfill_curations_disabled")
-        return
-
-    try:
-        curation_held = await is_curation_held(get_redis())
-        _record_hold_state("curation", held=curation_held)
-        if curation_held:
+    with pipeline_stage_span(Stage.BACKFILL_CURATE, op="backfill_curations"):
+        session_factory = ctx.state.session_factory
+        run_id = _new_backfill_run_id()
+        if not settings.backfill_curations_enabled:
             await _append_backfill_run_event(
                 session_factory,
                 stage=Stage.BACKFILL_CURATE,
                 backfill_stage="curate",
                 run_id=run_id,
                 event_type=EventType.SKIPPED,
-                outcome_code=BackfillOutcomeCode.RUN_HELD_BY_STAGE_HOLD,
+                outcome_code=BackfillOutcomeCode.RUN_KILL_SWITCH_DISABLED,
             )
-            logger.warning("backfill_curations_held")
+            logger.info("backfill_curations_disabled")
             return
 
-        before, after = BackfillWindow().boundaries_at(utc_now())
-
-        aged_out_count = await _delete_aged_out_curations(
-            session_factory, created_before=after
-        )
-        _record_aged_out("curation", action="deleted", count=aged_out_count)
-
-        async with session_factory() as session:
-            backlog = PipelineBacklog(session)
-            backlog_count = await backlog.count_articles_pending_curation(
-                created_before=before,
-                created_after=after,
-            )
-            targets = await backlog.curation_targets_pending(
-                created_before=before,
-                created_after=after,
-                limit=CURATIONS_LIMIT,
-            )
-
-        _backlog_gauge.set(backlog_count, attributes={"stage": "curation"})
-
-        found = len(targets)
-        if found == 0:
-            await _append_backfill_run_event(
-                session_factory,
-                stage=Stage.BACKFILL_CURATE,
-                backfill_stage="curate",
-                run_id=run_id,
-                event_type=EventType.SKIPPED,
-                outcome_code=BackfillOutcomeCode.RUN_NO_TARGETS,
-            )
-            logger.info("backfill_curations_empty")
-            return
-
-        granted = await consume_daily_budget(
-            get_redis(), "curate", found, CURATIONS_DAILY_MAX
-        )
-        if granted == 0:
-            await _append_backfill_run_event(
-                session_factory,
-                stage=Stage.BACKFILL_CURATE,
-                backfill_stage="curate",
-                run_id=run_id,
-                event_type=EventType.SKIPPED,
-                outcome_code=BackfillOutcomeCode.RUN_DAILY_BUDGET_EXHAUSTED,
-                daily_max=CURATIONS_DAILY_MAX,
-            )
-            logger.warning("backfill_curations_daily_budget_exhausted", found=found)
-            return
-
-        enqueued = 0
-        failed = 0
-        for target in targets[:granted]:
-            try:
-                await curate_content.kiq(
-                    CurationTrigger(analyzable_article_id=target.target_id)
+        try:
+            curation_held = await is_curation_held(get_redis())
+            _record_hold_state("curation", held=curation_held)
+            if curation_held:
+                await _append_backfill_run_event(
+                    session_factory,
+                    stage=Stage.BACKFILL_CURATE,
+                    backfill_stage="curate",
+                    run_id=run_id,
+                    event_type=EventType.SKIPPED,
+                    outcome_code=BackfillOutcomeCode.RUN_HELD_BY_STAGE_HOLD,
                 )
-            except Exception as exc:  # noqa: BLE001
-                failed += 1
+                logger.warning("backfill_curations_held")
+                return
+
+            before, after = BackfillWindow().boundaries_at(utc_now())
+
+            aged_out_count = await _delete_aged_out_curations(
+                session_factory, created_before=after
+            )
+            _record_aged_out("curation", action="deleted", count=aged_out_count)
+
+            async with session_factory() as session:
+                backlog = PipelineBacklog(session)
+                backlog_count = await backlog.count_articles_pending_curation(
+                    created_before=before,
+                    created_after=after,
+                )
+                targets = await backlog.curation_targets_pending(
+                    created_before=before,
+                    created_after=after,
+                    limit=CURATIONS_LIMIT,
+                )
+
+            _backlog_gauge.set(backlog_count, attributes={"stage": "curation"})
+
+            found = len(targets)
+            if found == 0:
+                await _append_backfill_run_event(
+                    session_factory,
+                    stage=Stage.BACKFILL_CURATE,
+                    backfill_stage="curate",
+                    run_id=run_id,
+                    event_type=EventType.SKIPPED,
+                    outcome_code=BackfillOutcomeCode.RUN_NO_TARGETS,
+                )
+                logger.info("backfill_curations_empty")
+                return
+
+            granted = await consume_daily_budget(
+                get_redis(), "curate", found, CURATIONS_DAILY_MAX
+            )
+            if granted == 0:
+                await _append_backfill_run_event(
+                    session_factory,
+                    stage=Stage.BACKFILL_CURATE,
+                    backfill_stage="curate",
+                    run_id=run_id,
+                    event_type=EventType.SKIPPED,
+                    outcome_code=BackfillOutcomeCode.RUN_DAILY_BUDGET_EXHAUSTED,
+                    daily_max=CURATIONS_DAILY_MAX,
+                )
+                logger.warning("backfill_curations_daily_budget_exhausted", found=found)
+                return
+
+            enqueued = 0
+            failed = 0
+            for target in targets[:granted]:
+                try:
+                    await curate_content.kiq(
+                        CurationTrigger(analyzable_article_id=target.target_id)
+                    )
+                except Exception as exc:  # noqa: BLE001
+                    failed += 1
+                    await _append_backfill_item_event(
+                        session_factory,
+                        stage=Stage.BACKFILL_CURATE,
+                        backfill_stage="curate",
+                        run_id=run_id,
+                        target_kind="article",
+                        target=target,
+                        event_type=EventType.FAILED,
+                        outcome_code=BackfillOutcomeCode.ITEM_ENQUEUE_FAILED,
+                        exc=exc,
+                    )
+                    logger.warning(
+                        "backfill_curations_kiq_failed",
+                        analyzable_article_id=target.target_id,
+                        error=str(exc),
+                    )
+                    continue
+
+                enqueued += 1
                 await _append_backfill_item_event(
                     session_factory,
                     stage=Stage.BACKFILL_CURATE,
@@ -533,50 +554,31 @@ async def backfill_curations(ctx: Context = TaskiqDepends()) -> None:
                     run_id=run_id,
                     target_kind="article",
                     target=target,
-                    event_type=EventType.FAILED,
-                    outcome_code=BackfillOutcomeCode.ITEM_ENQUEUE_FAILED,
-                    exc=exc,
+                    event_type=EventType.SUCCEEDED,
+                    outcome_code=BackfillOutcomeCode.ITEM_ENQUEUED,
                 )
-                logger.warning(
-                    "backfill_curations_kiq_failed",
-                    analyzable_article_id=target.target_id,
-                    error=str(exc),
-                )
-                continue
 
-            enqueued += 1
-            await _append_backfill_item_event(
+            _record_dispatched("curation", enqueued)
+        except Exception as exc:
+            await _append_backfill_run_event(
                 session_factory,
                 stage=Stage.BACKFILL_CURATE,
                 backfill_stage="curate",
                 run_id=run_id,
-                target_kind="article",
-                target=target,
-                event_type=EventType.SUCCEEDED,
-                outcome_code=BackfillOutcomeCode.ITEM_ENQUEUED,
+                event_type=EventType.FAILED,
+                outcome_code=BackfillOutcomeCode.RUN_FAILED,
+                exc=exc,
             )
+            raise
 
-        _record_dispatched("curation", enqueued)
-    except Exception as exc:
-        await _append_backfill_run_event(
-            session_factory,
-            stage=Stage.BACKFILL_CURATE,
-            backfill_stage="curate",
-            run_id=run_id,
-            event_type=EventType.FAILED,
-            outcome_code=BackfillOutcomeCode.RUN_FAILED,
-            exc=exc,
+        # article 既消滅 / 既処理 / 本文 oversized は、下流 Stage 3 task の
+        # Ready build blocked audit で観測する
+        logger.info(
+            "backfill_curations_completed",
+            found=found,
+            granted=granted,
+            requeued=enqueued,
         )
-        raise
-
-    # article 既消滅 / 既処理 / 本文 oversized は、下流 Stage 3 task の
-    # Ready build blocked audit で観測する
-    logger.info(
-        "backfill_curations_completed",
-        found=found,
-        granted=granted,
-        requeued=enqueued,
-    )
 
 
 # ---------------------------------------------------------------------------
@@ -598,97 +600,119 @@ async def backfill_assessments(ctx: Context = TaskiqDepends()) -> None:
     maintenance は投入対象を見つけ、precondition 検証と Ready 構築は下流 task に
     委ねる。通常窓から落ちた未 assessment curation は削除せず exclusion を作る。
     """
-    session_factory = ctx.state.session_factory
-    run_id = _new_backfill_run_id()
-    if not settings.backfill_assessments_enabled:
-        await _append_backfill_run_event(
-            session_factory,
-            stage=Stage.BACKFILL_ASSESS,
-            backfill_stage="assess",
-            run_id=run_id,
-            event_type=EventType.SKIPPED,
-            outcome_code=BackfillOutcomeCode.RUN_KILL_SWITCH_DISABLED,
-        )
-        logger.info("backfill_assessments_disabled")
-        return
-
-    try:
-        assessment_held = await is_assessment_held(get_redis())
-        _record_hold_state("assessment", held=assessment_held)
-        if assessment_held:
+    with pipeline_stage_span(Stage.BACKFILL_ASSESS, op="backfill_assessments"):
+        session_factory = ctx.state.session_factory
+        run_id = _new_backfill_run_id()
+        if not settings.backfill_assessments_enabled:
             await _append_backfill_run_event(
                 session_factory,
                 stage=Stage.BACKFILL_ASSESS,
                 backfill_stage="assess",
                 run_id=run_id,
                 event_type=EventType.SKIPPED,
-                outcome_code=BackfillOutcomeCode.RUN_HELD_BY_STAGE_HOLD,
+                outcome_code=BackfillOutcomeCode.RUN_KILL_SWITCH_DISABLED,
             )
-            logger.warning("backfill_assessments_held")
+            logger.info("backfill_assessments_disabled")
             return
 
-        before, after = BackfillWindow().boundaries_at(utc_now())
-
-        aged_out_count = await _exclude_aged_out_assessments(
-            session_factory, created_before=after
-        )
-        _record_aged_out("assessment", action="excluded", count=aged_out_count)
-
-        async with session_factory() as session:
-            backlog = PipelineBacklog(session)
-            # 観測 (COUNT) → dispatch (target 取得) の順で同一 session 内に並べ、
-            # read committed snapshot 上で一貫値を返す。
-            backlog_count = await backlog.count_curations_pending_assessment(
-                created_before=before,
-                created_after=after,
-            )
-            targets = await backlog.assessment_targets_pending(
-                created_before=before,
-                created_after=after,
-                limit=ASSESSMENTS_LIMIT,
-            )
-
-        _backlog_gauge.set(backlog_count, attributes={"stage": "assessment"})
-
-        found = len(targets)
-        if found == 0:
-            await _append_backfill_run_event(
-                session_factory,
-                stage=Stage.BACKFILL_ASSESS,
-                backfill_stage="assess",
-                run_id=run_id,
-                event_type=EventType.SKIPPED,
-                outcome_code=BackfillOutcomeCode.RUN_NO_TARGETS,
-            )
-            logger.info("backfill_assessments_empty")
-            return
-
-        granted = await consume_daily_budget(
-            get_redis(), "assess", found, ASSESSMENTS_DAILY_MAX
-        )
-        if granted == 0:
-            await _append_backfill_run_event(
-                session_factory,
-                stage=Stage.BACKFILL_ASSESS,
-                backfill_stage="assess",
-                run_id=run_id,
-                event_type=EventType.SKIPPED,
-                outcome_code=BackfillOutcomeCode.RUN_DAILY_BUDGET_EXHAUSTED,
-                daily_max=ASSESSMENTS_DAILY_MAX,
-            )
-            logger.warning("backfill_assessments_daily_budget_exhausted", found=found)
-            return
-
-        # ID のみ enqueue し、precondition 検証は Stage 4 task に委ねる。
-        enqueued = 0
-        failed = 0
-        for target in targets[:granted]:
-            try:
-                await assess_content.kiq(
-                    AssessmentTrigger(curation_id=target.target_id),
+        try:
+            assessment_held = await is_assessment_held(get_redis())
+            _record_hold_state("assessment", held=assessment_held)
+            if assessment_held:
+                await _append_backfill_run_event(
+                    session_factory,
+                    stage=Stage.BACKFILL_ASSESS,
+                    backfill_stage="assess",
+                    run_id=run_id,
+                    event_type=EventType.SKIPPED,
+                    outcome_code=BackfillOutcomeCode.RUN_HELD_BY_STAGE_HOLD,
                 )
-            except Exception as exc:  # noqa: BLE001
-                failed += 1
+                logger.warning("backfill_assessments_held")
+                return
+
+            before, after = BackfillWindow().boundaries_at(utc_now())
+
+            aged_out_count = await _exclude_aged_out_assessments(
+                session_factory, created_before=after
+            )
+            _record_aged_out("assessment", action="excluded", count=aged_out_count)
+
+            async with session_factory() as session:
+                backlog = PipelineBacklog(session)
+                # 観測 (COUNT) → dispatch (target 取得) の順で同一 session 内に並べ、
+                # read committed snapshot 上で一貫値を返す。
+                backlog_count = await backlog.count_curations_pending_assessment(
+                    created_before=before,
+                    created_after=after,
+                )
+                targets = await backlog.assessment_targets_pending(
+                    created_before=before,
+                    created_after=after,
+                    limit=ASSESSMENTS_LIMIT,
+                )
+
+            _backlog_gauge.set(backlog_count, attributes={"stage": "assessment"})
+
+            found = len(targets)
+            if found == 0:
+                await _append_backfill_run_event(
+                    session_factory,
+                    stage=Stage.BACKFILL_ASSESS,
+                    backfill_stage="assess",
+                    run_id=run_id,
+                    event_type=EventType.SKIPPED,
+                    outcome_code=BackfillOutcomeCode.RUN_NO_TARGETS,
+                )
+                logger.info("backfill_assessments_empty")
+                return
+
+            granted = await consume_daily_budget(
+                get_redis(), "assess", found, ASSESSMENTS_DAILY_MAX
+            )
+            if granted == 0:
+                await _append_backfill_run_event(
+                    session_factory,
+                    stage=Stage.BACKFILL_ASSESS,
+                    backfill_stage="assess",
+                    run_id=run_id,
+                    event_type=EventType.SKIPPED,
+                    outcome_code=BackfillOutcomeCode.RUN_DAILY_BUDGET_EXHAUSTED,
+                    daily_max=ASSESSMENTS_DAILY_MAX,
+                )
+                logger.warning(
+                    "backfill_assessments_daily_budget_exhausted", found=found
+                )
+                return
+
+            # ID のみ enqueue し、precondition 検証は Stage 4 task に委ねる。
+            enqueued = 0
+            failed = 0
+            for target in targets[:granted]:
+                try:
+                    await assess_content.kiq(
+                        AssessmentTrigger(curation_id=target.target_id),
+                    )
+                except Exception as exc:  # noqa: BLE001
+                    failed += 1
+                    await _append_backfill_item_event(
+                        session_factory,
+                        stage=Stage.BACKFILL_ASSESS,
+                        backfill_stage="assess",
+                        run_id=run_id,
+                        target_kind="curation",
+                        target=target,
+                        event_type=EventType.FAILED,
+                        outcome_code=BackfillOutcomeCode.ITEM_ENQUEUE_FAILED,
+                        exc=exc,
+                    )
+                    logger.warning(
+                        "backfill_assessments_kiq_failed",
+                        curation_id=target.target_id,
+                        error=str(exc),
+                    )
+                    continue
+
+                enqueued += 1
                 await _append_backfill_item_event(
                     session_factory,
                     stage=Stage.BACKFILL_ASSESS,
@@ -696,48 +720,29 @@ async def backfill_assessments(ctx: Context = TaskiqDepends()) -> None:
                     run_id=run_id,
                     target_kind="curation",
                     target=target,
-                    event_type=EventType.FAILED,
-                    outcome_code=BackfillOutcomeCode.ITEM_ENQUEUE_FAILED,
-                    exc=exc,
+                    event_type=EventType.SUCCEEDED,
+                    outcome_code=BackfillOutcomeCode.ITEM_ENQUEUED,
                 )
-                logger.warning(
-                    "backfill_assessments_kiq_failed",
-                    curation_id=target.target_id,
-                    error=str(exc),
-                )
-                continue
 
-            enqueued += 1
-            await _append_backfill_item_event(
+            _record_dispatched("assessment", enqueued)
+        except Exception as exc:
+            await _append_backfill_run_event(
                 session_factory,
                 stage=Stage.BACKFILL_ASSESS,
                 backfill_stage="assess",
                 run_id=run_id,
-                target_kind="curation",
-                target=target,
-                event_type=EventType.SUCCEEDED,
-                outcome_code=BackfillOutcomeCode.ITEM_ENQUEUED,
+                event_type=EventType.FAILED,
+                outcome_code=BackfillOutcomeCode.RUN_FAILED,
+                exc=exc,
             )
+            raise
 
-        _record_dispatched("assessment", enqueued)
-    except Exception as exc:
-        await _append_backfill_run_event(
-            session_factory,
-            stage=Stage.BACKFILL_ASSESS,
-            backfill_stage="assess",
-            run_id=run_id,
-            event_type=EventType.FAILED,
-            outcome_code=BackfillOutcomeCode.RUN_FAILED,
-            exc=exc,
+        logger.info(
+            "backfill_assessments_completed",
+            found=found,
+            granted=granted,
+            requeued=enqueued,
         )
-        raise
-
-    logger.info(
-        "backfill_assessments_completed",
-        found=found,
-        granted=granted,
-        requeued=enqueued,
-    )
 
 
 # ---------------------------------------------------------------------------
@@ -758,95 +763,117 @@ async def backfill_embeddings(ctx: Context = TaskiqDepends()) -> None:
     maintenance は投入対象を見つけ、precondition 検証と Ready 構築は下流 task に
     委ねる。既に処理済みの stale trigger は Stage 5 task 側で観測する。
     """
-    session_factory = ctx.state.session_factory
-    run_id = _new_backfill_run_id()
-    if not settings.backfill_embeddings_enabled:
-        await _append_backfill_run_event(
-            session_factory,
-            stage=Stage.BACKFILL_EMBED,
-            backfill_stage="embed",
-            run_id=run_id,
-            event_type=EventType.SKIPPED,
-            outcome_code=BackfillOutcomeCode.RUN_KILL_SWITCH_DISABLED,
-        )
-        logger.info("backfill_embeddings_disabled")
-        return
-
-    try:
-        embedding_held = await is_embedding_held(get_redis())
-        _record_hold_state("embedding", held=embedding_held)
-        if embedding_held:
+    with pipeline_stage_span(Stage.BACKFILL_EMBED, op="backfill_embeddings"):
+        session_factory = ctx.state.session_factory
+        run_id = _new_backfill_run_id()
+        if not settings.backfill_embeddings_enabled:
             await _append_backfill_run_event(
                 session_factory,
                 stage=Stage.BACKFILL_EMBED,
                 backfill_stage="embed",
                 run_id=run_id,
                 event_type=EventType.SKIPPED,
-                outcome_code=BackfillOutcomeCode.RUN_HELD_BY_STAGE_HOLD,
+                outcome_code=BackfillOutcomeCode.RUN_KILL_SWITCH_DISABLED,
             )
-            logger.warning("backfill_embeddings_held")
+            logger.info("backfill_embeddings_disabled")
             return
 
-        before, after = BackfillWindow().boundaries_at(utc_now())
-
-        aged_out_count = await _exclude_aged_out_embeddings(
-            session_factory, created_before=after
-        )
-        _record_aged_out("embedding", action="excluded", count=aged_out_count)
-
-        async with session_factory() as session:
-            backlog = PipelineBacklog(session)
-            backlog_count = await backlog.count_analyzed_articles_pending_embedding(
-                created_before=before,
-                created_after=after,
-            )
-            targets = await backlog.embedding_targets_pending(
-                created_before=before,
-                created_after=after,
-                limit=EMBEDDINGS_LIMIT,
-            )
-
-        _backlog_gauge.set(backlog_count, attributes={"stage": "embedding"})
-
-        found = len(targets)
-        if found == 0:
-            await _append_backfill_run_event(
-                session_factory,
-                stage=Stage.BACKFILL_EMBED,
-                backfill_stage="embed",
-                run_id=run_id,
-                event_type=EventType.SKIPPED,
-                outcome_code=BackfillOutcomeCode.RUN_NO_TARGETS,
-            )
-            logger.info("backfill_embeddings_empty")
-            return
-
-        granted = await consume_daily_budget(
-            get_redis(), "embed", found, EMBEDDINGS_DAILY_MAX
-        )
-        if granted == 0:
-            await _append_backfill_run_event(
-                session_factory,
-                stage=Stage.BACKFILL_EMBED,
-                backfill_stage="embed",
-                run_id=run_id,
-                event_type=EventType.SKIPPED,
-                outcome_code=BackfillOutcomeCode.RUN_DAILY_BUDGET_EXHAUSTED,
-                daily_max=EMBEDDINGS_DAILY_MAX,
-            )
-            logger.warning("backfill_embeddings_daily_budget_exhausted", found=found)
-            return
-
-        # ID のみ enqueue し、precondition 検証は Stage 5 task に委ねる。
-        enqueued = 0
-        failed = 0
-        for target in targets[:granted]:
-            try:
-                await generate_embedding.kiq(
-                    EmbeddingTrigger(analyzed_article_id=target.target_id),
+        try:
+            embedding_held = await is_embedding_held(get_redis())
+            _record_hold_state("embedding", held=embedding_held)
+            if embedding_held:
+                await _append_backfill_run_event(
+                    session_factory,
+                    stage=Stage.BACKFILL_EMBED,
+                    backfill_stage="embed",
+                    run_id=run_id,
+                    event_type=EventType.SKIPPED,
+                    outcome_code=BackfillOutcomeCode.RUN_HELD_BY_STAGE_HOLD,
                 )
-            except Exception as exc:  # noqa: BLE001
-                failed += 1
+                logger.warning("backfill_embeddings_held")
+                return
+
+            before, after = BackfillWindow().boundaries_at(utc_now())
+
+            aged_out_count = await _exclude_aged_out_embeddings(
+                session_factory, created_before=after
+            )
+            _record_aged_out("embedding", action="excluded", count=aged_out_count)
+
+            async with session_factory() as session:
+                backlog = PipelineBacklog(session)
+                backlog_count = await backlog.count_analyzed_articles_pending_embedding(
+                    created_before=before,
+                    created_after=after,
+                )
+                targets = await backlog.embedding_targets_pending(
+                    created_before=before,
+                    created_after=after,
+                    limit=EMBEDDINGS_LIMIT,
+                )
+
+            _backlog_gauge.set(backlog_count, attributes={"stage": "embedding"})
+
+            found = len(targets)
+            if found == 0:
+                await _append_backfill_run_event(
+                    session_factory,
+                    stage=Stage.BACKFILL_EMBED,
+                    backfill_stage="embed",
+                    run_id=run_id,
+                    event_type=EventType.SKIPPED,
+                    outcome_code=BackfillOutcomeCode.RUN_NO_TARGETS,
+                )
+                logger.info("backfill_embeddings_empty")
+                return
+
+            granted = await consume_daily_budget(
+                get_redis(), "embed", found, EMBEDDINGS_DAILY_MAX
+            )
+            if granted == 0:
+                await _append_backfill_run_event(
+                    session_factory,
+                    stage=Stage.BACKFILL_EMBED,
+                    backfill_stage="embed",
+                    run_id=run_id,
+                    event_type=EventType.SKIPPED,
+                    outcome_code=BackfillOutcomeCode.RUN_DAILY_BUDGET_EXHAUSTED,
+                    daily_max=EMBEDDINGS_DAILY_MAX,
+                )
+                logger.warning(
+                    "backfill_embeddings_daily_budget_exhausted", found=found
+                )
+                return
+
+            # ID のみ enqueue し、precondition 検証は Stage 5 task に委ねる。
+            enqueued = 0
+            failed = 0
+            for target in targets[:granted]:
+                try:
+                    await generate_embedding.kiq(
+                        EmbeddingTrigger(analyzed_article_id=target.target_id),
+                    )
+                except Exception as exc:  # noqa: BLE001
+                    failed += 1
+                    await _append_backfill_item_event(
+                        session_factory,
+                        stage=Stage.BACKFILL_EMBED,
+                        backfill_stage="embed",
+                        run_id=run_id,
+                        target_kind="analyzed_article",
+                        target=target,
+                        event_type=EventType.FAILED,
+                        outcome_code=BackfillOutcomeCode.ITEM_ENQUEUE_FAILED,
+                        exc=exc,
+                    )
+                    logger.warning(
+                        "backfill_embeddings_kiq_failed",
+                        analyzed_article_id=target.target_id,
+                        error=str(exc),
+                    )
+                    continue
+
+                enqueued += 1
                 await _append_backfill_item_event(
                     session_factory,
                     stage=Stage.BACKFILL_EMBED,
@@ -854,45 +881,26 @@ async def backfill_embeddings(ctx: Context = TaskiqDepends()) -> None:
                     run_id=run_id,
                     target_kind="analyzed_article",
                     target=target,
-                    event_type=EventType.FAILED,
-                    outcome_code=BackfillOutcomeCode.ITEM_ENQUEUE_FAILED,
-                    exc=exc,
+                    event_type=EventType.SUCCEEDED,
+                    outcome_code=BackfillOutcomeCode.ITEM_ENQUEUED,
                 )
-                logger.warning(
-                    "backfill_embeddings_kiq_failed",
-                    analyzed_article_id=target.target_id,
-                    error=str(exc),
-                )
-                continue
 
-            enqueued += 1
-            await _append_backfill_item_event(
+            _record_dispatched("embedding", enqueued)
+        except Exception as exc:
+            await _append_backfill_run_event(
                 session_factory,
                 stage=Stage.BACKFILL_EMBED,
                 backfill_stage="embed",
                 run_id=run_id,
-                target_kind="analyzed_article",
-                target=target,
-                event_type=EventType.SUCCEEDED,
-                outcome_code=BackfillOutcomeCode.ITEM_ENQUEUED,
+                event_type=EventType.FAILED,
+                outcome_code=BackfillOutcomeCode.RUN_FAILED,
+                exc=exc,
             )
+            raise
 
-        _record_dispatched("embedding", enqueued)
-    except Exception as exc:
-        await _append_backfill_run_event(
-            session_factory,
-            stage=Stage.BACKFILL_EMBED,
-            backfill_stage="embed",
-            run_id=run_id,
-            event_type=EventType.FAILED,
-            outcome_code=BackfillOutcomeCode.RUN_FAILED,
-            exc=exc,
+        logger.info(
+            "backfill_embeddings_completed",
+            found=found,
+            granted=granted,
+            requeued=enqueued,
         )
-        raise
-
-    logger.info(
-        "backfill_embeddings_completed",
-        found=found,
-        granted=granted,
-        requeued=enqueued,
-    )

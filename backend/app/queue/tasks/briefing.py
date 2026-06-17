@@ -27,6 +27,7 @@ from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from taskiq import Context, TaskiqDepends
 
+from app.audit.domain.event import Stage
 from app.audit.error_fields import exception_fqn
 from app.audit.stages.briefing import (
     BriefingAuditRepository,
@@ -38,6 +39,7 @@ from app.insights.briefing.domain.week import latest_completed_week_start, now_i
 from app.insights.briefing.errors import BriefingError
 from app.insights.briefing.repository import BriefingRepository
 from app.insights.briefing.service import BriefingConflict, WeeklyBriefingService
+from app.logfire.stage_span import pipeline_stage_span
 from app.models.category import Category
 from app.queue.brokers import broker_briefing
 from app.queue.messages.briefing import BriefingTaskInput
@@ -242,75 +244,76 @@ async def generate_briefing_for_category(
     ctx: Context = TaskiqDepends(),
 ) -> None:
     """1 カテゴリ × 1 週の briefing を生成する。失敗は監査して raise する。"""
-    session_factory: async_sessionmaker[AsyncSession] = ctx.state.session_factory
-    async with session_factory() as session:
-        repo = BriefingRepository(session)
-        ready = await ReadyForBriefing.try_advance_from(
-            week_start=input_.week_start,
-            category_id=input_.category_id,
-            force=False,
-            briefing_repo=repo,
-        )
-    if ready is None:
-        logger.info(
-            "briefing_subtask_skipped_existing",
-            week_start=input_.week_start.isoformat(),
-            category_id=input_.category_id,
-        )
-        await _append_generation_already_exists_audit(
-            session_factory,
-            week_start=input_.week_start,
-            category_id=input_.category_id,
-        )
-        return
-
-    notifier = FrontendRevalidateNotifier.from_settings(settings)
-    # generator は composition root が broker_briefing 起動時に state へ wire する
-    # (Pure DI / 遅延 SDK import: app/queue/composition.py)。
-    service = WeeklyBriefingService(
-        session_factory, ctx.state.briefing_generator, notifier
-    )
-    # 失敗は監査に焼いた上で raise する (taskiq の retry / failure tracking を維持)。
-    # `is_last_attempt(ctx)` で extrinsic な give-up timing を判定し、retry 上限到達時
-    # のみ payload.retry_exhausted=True を焼く。
-    try:
-        outcome = await service.execute(ready)
-    except Exception as exc:
+    with pipeline_stage_span(Stage.BRIEFING, op="generate_briefing_for_category"):
+        session_factory: async_sessionmaker[AsyncSession] = ctx.state.session_factory
         async with session_factory() as session:
-            repo = BriefingAuditRepository(session)
-            retry_exhausted = True if is_last_attempt(ctx) else None
-            if isinstance(exc, (BriefingError, SQLAlchemyError)):
-                await repo.append_failure(
-                    ready=ready,
-                    exc=exc,
-                    retry_exhausted=retry_exhausted,
-                    ai_model=service._llm.MODEL,
-                )
-            else:
-                await repo.append_unexpected_failure(
-                    ready=ready,
-                    exc=exc,
-                    retry_exhausted=retry_exhausted,
-                    ai_model=service._llm.MODEL,
-                )
-            await session.commit()
-        raise
-    if isinstance(outcome, BriefingConflict):
-        # race 敗北は業務正常 (勝者が SUCCEEDED audit / revalidate を担う)。
+            repo = BriefingRepository(session)
+            ready = await ReadyForBriefing.try_advance_from(
+                week_start=input_.week_start,
+                category_id=input_.category_id,
+                force=False,
+                briefing_repo=repo,
+            )
+        if ready is None:
+            logger.info(
+                "briefing_subtask_skipped_existing",
+                week_start=input_.week_start.isoformat(),
+                category_id=input_.category_id,
+            )
+            await _append_generation_already_exists_audit(
+                session_factory,
+                week_start=input_.week_start,
+                category_id=input_.category_id,
+            )
+            return
+
+        notifier = FrontendRevalidateNotifier.from_settings(settings)
+        # generator は composition root が broker_briefing 起動時に state へ wire する
+        # (Pure DI / 遅延 SDK import: app/queue/composition.py)。
+        service = WeeklyBriefingService(
+            session_factory, ctx.state.briefing_generator, notifier
+        )
+        # 失敗は監査に焼いてから raise し、taskiq の retry/failure tracking を維持。
+        # is_last_attempt(ctx) で give-up timing を判定し、retry 上限到達時のみ
+        # payload.retry_exhausted=True を焼く。
+        try:
+            outcome = await service.execute(ready)
+        except Exception as exc:
+            async with session_factory() as session:
+                repo = BriefingAuditRepository(session)
+                retry_exhausted = True if is_last_attempt(ctx) else None
+                if isinstance(exc, (BriefingError, SQLAlchemyError)):
+                    await repo.append_failure(
+                        ready=ready,
+                        exc=exc,
+                        retry_exhausted=retry_exhausted,
+                        ai_model=service._llm.MODEL,
+                    )
+                else:
+                    await repo.append_unexpected_failure(
+                        ready=ready,
+                        exc=exc,
+                        retry_exhausted=retry_exhausted,
+                        ai_model=service._llm.MODEL,
+                    )
+                await session.commit()
+            raise
+        if isinstance(outcome, BriefingConflict):
+            # race 敗北は業務正常 (勝者が SUCCEEDED audit / revalidate を担う)。
+            logger.info(
+                "briefing_subtask_conflict",
+                week_start=outcome.week_start.isoformat(),
+                category_id=outcome.category_id,
+                article_count=outcome.article_count,
+            )
+            return
         logger.info(
-            "briefing_subtask_conflict",
+            "briefing_subtask_completed",
             week_start=outcome.week_start.isoformat(),
             category_id=outcome.category_id,
             article_count=outcome.article_count,
+            persisted=outcome.persisted,
         )
-        return
-    logger.info(
-        "briefing_subtask_completed",
-        week_start=outcome.week_start.isoformat(),
-        category_id=outcome.category_id,
-        article_count=outcome.article_count,
-        persisted=outcome.persisted,
-    )
 
 
 async def _append_generation_already_exists_audit(

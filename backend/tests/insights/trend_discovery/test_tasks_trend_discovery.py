@@ -1,4 +1,4 @@
-"""run_trend_discovery タスクのテスト。
+"""run_trend_discovery タスクのテスト + pipeline_stage span 配線テスト。
 
 検証する観点:
 - ``schedule`` ラベルに JST 毎日 00:05 相当の cron (= UTC 毎日 15:05) が登録される
@@ -15,8 +15,9 @@ from unittest.mock import AsyncMock, MagicMock, patch
 from zoneinfo import ZoneInfo
 
 import pytest
+from logfire.testing import CaptureLogfire
 
-from app.audit.domain.event import EventType
+from app.audit.domain.event import EventType, Stage
 from app.audit.stages.trend_discovery import TrendDiscoveryOutcomeCode
 from app.insights.trend_discovery.domain.ready import ReadyForTrendDiscovery
 from app.insights.trend_discovery.service import (
@@ -25,6 +26,7 @@ from app.insights.trend_discovery.service import (
     TrendDiscoveryCompleted,
     TrendDiscoveryConflict,
 )
+from tests.logfire._span_helpers import pipeline_stage_attrs
 
 JST = ZoneInfo("Asia/Tokyo")
 
@@ -342,3 +344,56 @@ class TestRun:
             audit.await_args.kwargs["outcome_code"]
             == TrendDiscoveryOutcomeCode.RUN_FAILED
         )
+
+
+class TestRunTrendDiscoveryStageSpan:
+    """``run_trend_discovery`` task が pipeline_stage span を正しく開く配線テスト。"""
+
+    @pytest.mark.asyncio
+    async def test_span_stage_and_op(self, capfire: CaptureLogfire) -> None:
+        """正常系: stage=trend_discovery / op=run_trend_discovery が span に開く。"""
+        from app.queue.tasks import trend_discovery
+
+        ctx = _ctx_with_session_factory()
+        target_window_end = date(2026, 5, 3)
+        ready = ReadyForTrendDiscovery(window_end=target_window_end, force=False)
+
+        service = MagicMock()
+        service.execute = AsyncMock(
+            return_value=TrendDiscoveryCompleted(
+                window_end=target_window_end,
+                source_analysis_count=10,
+                completed_category_count=2,
+            )
+        )
+        notifier = MagicMock()
+        notifier.notify = AsyncMock(return_value=None)
+
+        with (
+            patch(
+                "app.queue.tasks.trend_discovery.now_in_jst",
+                return_value=datetime(2026, 5, 3, 0, 5, tzinfo=JST),
+            ),
+            patch.object(
+                ReadyForTrendDiscovery,
+                "try_advance_from",
+                new=AsyncMock(return_value=ready),
+            ),
+            patch(
+                "app.queue.tasks.trend_discovery.TrendDiscoveryService",
+                return_value=service,
+            ),
+            patch(
+                "app.queue.tasks.trend_discovery.FrontendRevalidateNotifier.from_settings",
+                return_value=notifier,
+            ),
+            patch(
+                "app.queue.tasks.trend_discovery.append_trend_discovery_run_event_best_effort",
+                new=AsyncMock(),
+            ),
+        ):
+            await trend_discovery.run_trend_discovery(ctx=ctx)
+
+        attrs = pipeline_stage_attrs(capfire)
+        assert attrs["stage"] == Stage.TREND_DISCOVERY.value  # == "trend_discovery"
+        assert attrs["op"] == "run_trend_discovery"
