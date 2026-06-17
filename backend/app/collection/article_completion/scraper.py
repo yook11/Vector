@@ -16,9 +16,6 @@ import structlog
 import trafilatura
 from trafilatura.settings import Document as TrafilaturaDocument
 
-from app.collection.article_acquisition.tools.http_error_translation import (
-    translate_fetch_exception,
-)
 from app.collection.article_completion.scrape_failure import (
     ScrapeContentFailure,
     ScrapeContentQualityTooLow,
@@ -34,9 +31,11 @@ from app.collection.domain.article_limits import (
     ARTICLE_TITLE_MAX_LENGTH as _TITLE_MAX_LENGTH,
 )
 from app.collection.domain.value_objects import PublishedAt
+from app.collection.external_fetch_error_mapping import (
+    external_fetch_error_from_exception,
+)
 from app.collection.external_fetch_errors import (
     ExternalFetchError,
-    FetchRedirectBlockedError,
     FetchResponseTooLargeError,
     FetchRobotsDisallowedError,
 )
@@ -290,24 +289,15 @@ class ArticleScraper:
             try:
                 if await self._robots_gate.is_fetch_allowed(client, url_str):
                     response = await client.get(url_str, timeout=HTTP_TIMEOUT)
-                    # 3xx は raise_for_status で拾われないため明示的に弾く。
-                    # follow_redirects=False が Location 経由 SSRF を遮断する。
-                    if 300 <= response.status_code < 400:
-                        logger.info(
-                            "redirect_not_followed",
-                            url=url_str,
-                            status=response.status_code,
-                            location=response.headers.get("location", "")[:200],
-                        )
-                        raise FetchRedirectBlockedError(
-                            f"redirect not followed: HTTP "
-                            f"{response.status_code}: {url_str}"
-                        )
+                    # follow_redirects=False により 3xx は raise_for_status が
+                    # HTTPStatusError として raise し、変換が redirect blocked に倒す。
                     response.raise_for_status()
                 else:
                     raise FetchRobotsDisallowedError(f"robots.txt blocked: {url_str}")
             except (httpx.HTTPError, HostBlockedError, HostResolutionError) as e:
-                raise translate_fetch_exception(e, source_name=url_str) from e
+                raise external_fetch_error_from_exception(
+                    e, target_label=url_str
+                ) from e
 
             # Content-Length 自己申告 + 実バイト数の二段でサイズ上限を守る。
             content_length_header = response.headers.get("content-length")

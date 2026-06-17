@@ -41,10 +41,11 @@ from app.collection.external_fetch_errors import (
     FetchRobotsUnavailableError,
     FetchSsrfBlockedError,
     FetchTimeoutError,
-    FetchUnexpectedStatusError,
+    FetchUnexpectedClientStatusError,
+    FetchUnexpectedServerStatusError,
 )
 
-_EXPECTED_CODE_COUNT = 18
+_EXPECTED_CODE_COUNT = 19
 
 # 各 concrete subclass を「message 空」で構築するための必須 kwargs 表。
 # 新 subclass を追加して本表に登録し忘れると ``test_construction_table_covers_
@@ -58,7 +59,8 @@ _CONSTRUCTION: dict[type[ExternalFetchError], dict[str, object]] = {
     FetchGatewayError: {"status_code": 502},
     FetchRequestTimeoutError: {},
     FetchRetryableStatusError: {"status_code": 425},
-    FetchUnexpectedStatusError: {"status_code": 418},
+    FetchUnexpectedClientStatusError: {"status_code": 400},
+    FetchUnexpectedServerStatusError: {"status_code": 500},
     FetchTimeoutError: {},
     FetchNetworkError: {},
     FetchSsrfBlockedError: {},
@@ -131,7 +133,7 @@ def test_explicit_message_takes_precedence(
 
 
 # ``retryable`` SSoT 契約 (CODE 文字列で pin する spec)。再実行で結果が変わりうる
-# CODE (8) と、再実行しても同じ結果になる CODE (10) で family 18 を過不足なく分割
+# CODE (8) と、再実行しても同じ結果になる CODE (11) で family 19 を過不足なく分割
 # する。class ではなく CODE 集合で固定する: CODE は outcome_code に焼かれる外部契約で
 # class rename に不変、分類 drift でのみ落ちる自己記述的 oracle。
 _RETRYABLE_CODES = frozenset(
@@ -143,7 +145,7 @@ _RETRYABLE_CODES = frozenset(
         "fetch_request_timeout",
         "fetch_rate_limited",
         "fetch_retryable_status",
-        "fetch_unexpected_status",
+        "fetch_unexpected_server_status",
     }
 )
 _TERMINAL_CODES = frozenset(
@@ -158,6 +160,7 @@ _TERMINAL_CODES = frozenset(
         "fetch_redirect_loop",
         "fetch_response_too_large",
         "fetch_content_type_mismatch",
+        "fetch_unexpected_client_status",
     }
 )
 

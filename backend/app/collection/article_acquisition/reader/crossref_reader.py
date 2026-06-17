@@ -15,8 +15,8 @@ from app.collection.article_acquisition.reader.read_errors import (
     UnreadableResponseError,
     UnreadableResponseReason,
 )
-from app.collection.article_acquisition.tools.http_error_translation import (
-    translate_fetch_exception,
+from app.collection.external_fetch_error_mapping import (
+    external_fetch_error_from_exception,
 )
 from app.shared.security.safe_http import make_safe_async_client
 from app.shared.security.ssrf_guard import HostBlockedError, HostResolutionError
@@ -177,7 +177,9 @@ class CrossrefReader:
                 HostBlockedError,
                 HostResolutionError,
             ) as e:
-                raise translate_fetch_exception(e, source_name=source_name) from e
+                raise external_fetch_error_from_exception(
+                    e, target_label=source_name
+                ) from e
 
             if not response.content.strip():
                 raise UnreadableResponseError(

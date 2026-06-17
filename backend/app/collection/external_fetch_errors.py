@@ -247,18 +247,39 @@ class FetchRetryableStatusError(ExternalFetchError):
         return f"{self.CODE}: HTTP {self.status_code} ({self.reason})"
 
 
-class FetchUnexpectedStatusError(ExternalFetchError):
-    """明示分類していない HTTP status による取得失敗。
+class FetchUnexpectedClientStatusError(ExternalFetchError):
+    """明示分類しない 4xx、および 2xx/3xx/5xx いずれでもない分類不能 status。
 
-    新しい status 判定を追加するまでの保守的な escape hatch。
+    1xx や範囲外 (600/700 等) も再実行で結果が変わらない terminal としてここへ倒す。
+    distinct な扱いを要する status が出るまでの保守的な escape hatch。
     """
 
-    CODE: ClassVar[str] = "fetch_unexpected_status"
+    CODE: ClassVar[str] = "fetch_unexpected_client_status"
+    retryable: ClassVar[bool] = False
+
+    def __init__(self, message: str = "", *, status_code: int) -> None:
+        super().__init__(message)
+        self.status_code = status_code
+
+    def _default_message(self) -> str:
+        return f"{self.CODE}: HTTP {self.status_code}"
+
+
+class FetchUnexpectedServerStatusError(ExternalFetchError):
+    """明示分類しない 5xx による取得失敗。
+
+    server 起因の一時障害として retry 前提で扱う escape hatch。
+    """
+
+    CODE: ClassVar[str] = "fetch_unexpected_server_status"
     retryable: ClassVar[bool] = True
 
     def __init__(self, message: str = "", *, status_code: int) -> None:
         super().__init__(message)
         self.status_code = status_code
+
+    def _default_message(self) -> str:
+        return f"{self.CODE}: HTTP {self.status_code}"
 
 
 # ---------------------------------------------------------------------------
@@ -329,10 +350,21 @@ class FetchRedirectBlockedError(ExternalFetchError):
     """redirect を追従しない policy により取得を止めた。
 
     Location 経由の SSRF や意図しない外部遷移を避けるための拒否を表す。
+    ``status_code`` は 3xx の観測値を残すための origin metadata。Location header は
+    token を含みうるため保持しない。
     """
 
     CODE: ClassVar[str] = "fetch_redirect_blocked"
     retryable: ClassVar[bool] = False
+
+    def __init__(self, message: str = "", *, status_code: int | None = None) -> None:
+        super().__init__(message)
+        self.status_code = status_code
+
+    def _default_message(self) -> str:
+        if self.status_code is not None:
+            return f"{self.CODE}: HTTP {self.status_code}"
+        return self.CODE
 
 
 class FetchRedirectLoopError(ExternalFetchError):

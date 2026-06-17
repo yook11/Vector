@@ -10,8 +10,8 @@
 ような直接判定関数は public API として公開しない (VO 構築が SSoT)。
 
 政策例外 (``HostBlockedError`` / ``HostResolutionError``) の現役の翻訳先は
-``article_acquisition/tools/http_error_translation.py`` の
-``translate_fetch_exception`` が持つ。
+``collection/external_fetch_error_mapping.py`` の
+``external_fetch_error_from_exception`` が持つ。
 """
 
 from __future__ import annotations

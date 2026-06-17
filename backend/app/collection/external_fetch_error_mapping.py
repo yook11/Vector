@@ -14,12 +14,14 @@ from app.collection.external_fetch_errors import (
     FetchNetworkError,
     FetchOriginServerError,
     FetchRateLimitedError,
+    FetchRedirectBlockedError,
     FetchRequestTimeoutError,
     FetchResourceNotFoundError,
     FetchRetryableStatusError,
     FetchSsrfBlockedError,
     FetchTimeoutError,
-    FetchUnexpectedStatusError,
+    FetchUnexpectedClientStatusError,
+    FetchUnexpectedServerStatusError,
 )
 from app.shared.security.ssrf_guard import HostBlockedError, HostResolutionError
 
@@ -39,13 +41,15 @@ def _retry_after_seconds(headers: Mapping[str, str]) -> float | None:
     return value if value >= 0 else None
 
 
-def classify_fetch_status(
+def external_fetch_error_from_http_status(
     status_code: int,
     headers: Mapping[str, str],
 ) -> ExternalFetchError:
     """HTTP status + headers を ``ExternalFetchError`` に写像する純関数。
 
-    表外 status は ``FetchUnexpectedStatusError`` へ倒す。
+    明示表に無い status は ``status_code // 100`` で割って倒す: 3xx は redirect
+    blocked、5xx は retryable な server status、それ以外 (4xx + 1xx + 範囲外) は
+    分類不能 client status として terminal に倒す。
     """
     if status_code in (401, 403):
         return FetchAccessDeniedError(
@@ -78,30 +82,37 @@ def classify_fetch_status(
         return FetchRequestTimeoutError(status_code=status_code)
     if status_code == 425:
         return FetchRetryableStatusError(status_code=status_code, reason="too_early")
-    return FetchUnexpectedStatusError(status_code=status_code)
+
+    status_class = status_code // 100
+    if status_class == 3:
+        return FetchRedirectBlockedError(status_code=status_code)  # Location は読まない
+    if status_class == 5:
+        return FetchUnexpectedServerStatusError(status_code=status_code)
+    # 4xx + 1xx + 範囲外 (600/700 等)。分類不能 status を terminal に倒す。
+    return FetchUnexpectedClientStatusError(status_code=status_code)
 
 
-def translate_fetch_exception(
+def external_fetch_error_from_exception(
     exc: Exception,
     *,
-    source_name: str,
+    target_label: str,
 ) -> ExternalFetchError:
     """httpx / SSRF guard 例外を ``ExternalFetchError`` に翻訳する。
 
     未知の例外型は保守的に ``FetchNetworkError`` へ倒す。
     """
     if isinstance(exc, httpx.HTTPStatusError):
-        return classify_fetch_status(
+        return external_fetch_error_from_http_status(
             exc.response.status_code,
             exc.response.headers,
         )
     # TimeoutException は RequestError の subclass なので先に判定する。
     if isinstance(exc, httpx.TimeoutException):
-        return FetchTimeoutError(f"timeout: {source_name}: {exc}")
+        return FetchTimeoutError(f"timeout: {target_label}: {exc}")
     if isinstance(exc, httpx.RequestError):
-        return FetchNetworkError(f"request error: {source_name}: {exc}")
+        return FetchNetworkError(f"request error: {target_label}: {exc}")
     if isinstance(exc, HostBlockedError):
         return FetchSsrfBlockedError(str(exc))
     if isinstance(exc, HostResolutionError):
         return FetchNetworkError(str(exc))
-    return FetchNetworkError(f"unexpected fetch error: {source_name}: {exc}")
+    return FetchNetworkError(f"unexpected fetch error: {target_label}: {exc}")

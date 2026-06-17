@@ -377,7 +377,10 @@ class TestArticleScraper:
 
         assert isinstance(result, ExternalFetchError)
         assert isinstance(result, FetchRedirectBlockedError)
-        assert "redirect not followed" in str(result)
+        assert result.status_code == 302
+        # Location (token を含みうる) を message に載せない。
+        assert "169.254.169.254" not in str(result)
+        assert str(result) == "fetch_redirect_blocked: HTTP 302"
 
     @pytest.mark.asyncio
     async def test_oversized_content_length_header_returns_fetch_failed(

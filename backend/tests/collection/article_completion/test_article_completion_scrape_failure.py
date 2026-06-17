@@ -64,7 +64,8 @@ from app.collection.external_fetch_errors import (
     FetchRobotsUnavailableError,
     FetchSsrfBlockedError,
     FetchTimeoutError,
-    FetchUnexpectedStatusError,
+    FetchUnexpectedClientStatusError,
+    FetchUnexpectedServerStatusError,
 )
 
 # 各 concrete subclass を最小 kwargs で構築する表。新 subclass を追加して
@@ -78,7 +79,8 @@ _CONSTRUCT: dict[type[ExternalFetchError], dict[str, object]] = {
     FetchGatewayError: {"status_code": 502},
     FetchRequestTimeoutError: {},
     FetchRetryableStatusError: {"status_code": 425},
-    FetchUnexpectedStatusError: {"status_code": 418},
+    FetchUnexpectedClientStatusError: {"status_code": 400},
+    FetchUnexpectedServerStatusError: {"status_code": 500},
     FetchTimeoutError: {},
     FetchNetworkError: {},
     FetchSsrfBlockedError: {},
@@ -115,7 +117,7 @@ _EXPECTED_SCHEDULE_BY_TYPE: dict[type[ExternalFetchError], RetrySchedule] = {
     FetchTimeoutError: TIMEOUT,
     FetchRequestTimeoutError: UNKNOWN,
     FetchRetryableStatusError: UNKNOWN,
-    FetchUnexpectedStatusError: UNKNOWN,
+    FetchUnexpectedServerStatusError: UNKNOWN,
 }
 
 # ``Retry-After`` / reason を読むため schedule を instance state で選ぶ retryable。

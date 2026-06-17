@@ -29,7 +29,7 @@ from app.collection.external_fetch_errors import (
     FetchRequestTimeoutError,
     FetchRetryableStatusError,
     FetchTimeoutError,
-    FetchUnexpectedStatusError,
+    FetchUnexpectedServerStatusError,
 )
 
 _BODY_SAMPLE_MAX = 200
@@ -190,7 +190,7 @@ def classify_external_fetch_error(
         case (
             FetchRequestTimeoutError()
             | FetchRetryableStatusError()
-            | FetchUnexpectedStatusError()
+            | FetchUnexpectedServerStatusError()
         ):
             return _retryable(exc, UNKNOWN)
         case _:
