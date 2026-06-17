@@ -5,11 +5,16 @@ from __future__ import annotations
 from datetime import UTC, datetime
 
 import structlog
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.audit.error_fields import exception_fqn
 from app.audit.stages.completion import ArticleCompletionAuditRepository
 from app.collection.article_completion.completion_failure import CompletionRejection
+from app.collection.article_completion.metrics import (
+    record_completion_processing_outcome,
+)
+from app.collection.article_completion.outcome import is_infra_scrape_failure
 from app.collection.article_completion.ready import ReadyForArticleCompletion
 from app.collection.article_completion.repository import ArticleCompletionRepository
 from app.collection.article_completion.scrape_failure import (
@@ -73,6 +78,8 @@ class ArticleCompletionFailureHandler:
             )
             return None
 
+        # ドメイン棄却は恒久失敗。状態遷移を commit できた claim にのみ計上する。
+        record_completion_processing_outcome("failed")
         logger.warning(
             "article_completion_rejected",
             incomplete_article_id=ready.incomplete_article_id,
@@ -89,6 +96,10 @@ class ArticleCompletionFailureHandler:
         exc: BaseException,
     ) -> None:
         """persist の DB 例外を別 session で best-effort 監査する。"""
+        # best-effort audit の前に計上し、audit drop が emit を抑止しないようにする。
+        record_completion_processing_outcome(
+            "infra_error" if isinstance(exc, SQLAlchemyError) else "failed"
+        )
         try:
             async with self._session_factory() as audit_session:
                 await ArticleCompletionAuditRepository(
@@ -145,6 +156,12 @@ class ArticleCompletionFailureHandler:
             )
             return None
 
+        # health 軸は scheduling 軸 (terminal/retryable) と別。retry / exhausted に
+        # 関わらず failure の性質で分類する (現状 retryable は infra に一致するが
+        # ハードコードしない)。
+        record_completion_processing_outcome(
+            "infra_error" if is_infra_scrape_failure(failure) else "failed"
+        )
         logger.warning(
             "article_completion_temporary",
             incomplete_article_id=ready.incomplete_article_id,
@@ -191,6 +208,11 @@ class ArticleCompletionFailureHandler:
             )
             return None
 
+        # health 軸は scheduling 軸 (terminal/retryable) と別。terminal でも failure
+        # の性質で分類する (現状 terminal は failed に一致するがハードコードしない)。
+        record_completion_processing_outcome(
+            "infra_error" if is_infra_scrape_failure(failure) else "failed"
+        )
         logger.warning(
             "article_completion_scrape_failed",
             incomplete_article_id=ready.incomplete_article_id,

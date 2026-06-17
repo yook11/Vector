@@ -20,7 +20,9 @@ from __future__ import annotations
 from datetime import UTC, datetime, timedelta
 
 import pytest
+from logfire.testing import CaptureLogfire
 from sqlalchemy import select, update
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.collection.article_acquisition.repository import IncompleteArticleRepository
@@ -51,6 +53,10 @@ from app.collection.sources.source_name import SourceName
 from app.models.incomplete_article import IncompleteArticle
 from app.models.news_source import NewsSource, SourceType
 from app.models.pipeline_event import PipelineEvent
+from tests.logfire._metric_helpers import collected_metrics, sum_counter_for_result
+
+_METRIC = "vector.completion.processing_outcome"
+_ALL_RESULTS = ("succeeded", "failed", "infra_error")
 
 
 @pytest.fixture
@@ -426,3 +432,210 @@ async def test_stale_attempt_records_skipped_without_state_change(
     assert ev.payload["attempt_count"] == ready.attempt_count
     pending = await _reload_pending(db_session, ready.incomplete_article_id)
     assert pending.status == "running"  # void な attempt は状態を変えない
+
+
+# processing_outcome metric (vector.completion.processing_outcome)
+
+
+def _assert_only(metrics: list, result: str) -> None:
+    """``result`` だけが +1 で他値は 0 (3 値排他)。"""
+    assert sum_counter_for_result(metrics, _METRIC, result) == 1
+    for other in (r for r in _ALL_RESULTS if r != result):
+        assert sum_counter_for_result(metrics, _METRIC, other) == 0
+
+
+@pytest.mark.asyncio
+async def test_scrape_retryable_emits_infra_error(
+    session_factory: async_sessionmaker[AsyncSession],
+    db_session: AsyncSession,
+    tc_source: NewsSource,
+    capfire: CaptureLogfire,
+) -> None:
+    """一時的 transport (502→retryable) の retry → infra_error。"""
+    ready = await _make_ready(db_session, tc_source, "https://techcrunch.com/m-retry")
+    handler = ArticleCompletionFailureHandler(session_factory)
+
+    await handler.handle_scrape_failure(ready, FetchGatewayError(status_code=502))
+
+    _assert_only(collected_metrics(capfire), "infra_error")
+
+
+@pytest.mark.asyncio
+async def test_scrape_retryable_exhausted_still_emits_infra_error(
+    session_factory: async_sessionmaker[AsyncSession],
+    db_session: AsyncSession,
+    tc_source: NewsSource,
+    capfire: CaptureLogfire,
+) -> None:
+    """retry 上限到達でも性質は一時的 → infra_error (諦めた=failed にしない)。"""
+    ready = await _make_ready(db_session, tc_source, "https://techcrunch.com/m-exhaust")
+    await db_session.execute(
+        update(IncompleteArticle)
+        .where(IncompleteArticle.id == ready.incomplete_article_id)
+        .values(attempt_count=BLIP.max_attempts)
+    )
+    await db_session.commit()
+    exhausted_ready = await ReadyForArticleCompletion.try_advance_from(
+        incomplete_article_id=ready.incomplete_article_id,
+        repo=ArticleCompletionRepository(db_session),
+    )
+    handler = ArticleCompletionFailureHandler(session_factory)
+
+    await handler.handle_scrape_failure(
+        exhausted_ready, FetchGatewayError(status_code=502)
+    )
+
+    _assert_only(collected_metrics(capfire), "infra_error")
+
+
+@pytest.mark.asyncio
+async def test_scrape_terminal_content_emits_failed(
+    session_factory: async_sessionmaker[AsyncSession],
+    db_session: AsyncSession,
+    tc_source: NewsSource,
+    capfire: CaptureLogfire,
+) -> None:
+    """恒久的 content 失敗 (ScrapeNotHtml) → failed。"""
+    ready = await _make_ready(db_session, tc_source, "https://techcrunch.com/m-term")
+    handler = ArticleCompletionFailureHandler(session_factory)
+
+    await handler.handle_scrape_failure(
+        ready, ScrapeNotHtml(content_type="application/pdf")
+    )
+
+    _assert_only(collected_metrics(capfire), "failed")
+
+
+@pytest.mark.asyncio
+async def test_completion_rejected_emits_failed(
+    session_factory: async_sessionmaker[AsyncSession],
+    db_session: AsyncSession,
+    tc_source: NewsSource,
+    capfire: CaptureLogfire,
+) -> None:
+    """ドメイン棄却 (CompletionRejection) → failed。"""
+    ready = await _make_ready(db_session, tc_source, "https://techcrunch.com/m-reject")
+    handler = ArticleCompletionFailureHandler(session_factory)
+
+    await handler.handle_completion_rejected(
+        ready,
+        CompletionRejection.from_quality_too_low(
+            QualityTooLow(defects=(AnalyzableArticleDefect.BODY_TOO_SHORT,))
+        ),
+    )
+
+    _assert_only(collected_metrics(capfire), "failed")
+
+
+@pytest.mark.asyncio
+async def test_persist_crashed_sqlalchemy_emits_infra_error(
+    session_factory: async_sessionmaker[AsyncSession],
+    db_session: AsyncSession,
+    tc_source: NewsSource,
+    capfire: CaptureLogfire,
+) -> None:
+    """persist の SQLAlchemyError → infra_error (我々の DB 障害)。"""
+    ready = await _make_ready(db_session, tc_source, "https://techcrunch.com/m-crash")
+    handler = ArticleCompletionFailureHandler(session_factory)
+
+    await handler.handle_persist_crashed(ready, SQLAlchemyError("db lost"))
+
+    _assert_only(collected_metrics(capfire), "infra_error")
+
+
+@pytest.mark.asyncio
+async def test_persist_crashed_non_db_emits_failed(
+    session_factory: async_sessionmaker[AsyncSession],
+    db_session: AsyncSession,
+    tc_source: NewsSource,
+    capfire: CaptureLogfire,
+) -> None:
+    """persist の非 DB 例外 (想定外) → failed (コードバグを分母外に隠さない)。"""
+    ready = await _make_ready(db_session, tc_source, "https://techcrunch.com/m-bug")
+    handler = ArticleCompletionFailureHandler(session_factory)
+
+    await handler.handle_persist_crashed(ready, RuntimeError("logic bug"))
+
+    _assert_only(collected_metrics(capfire), "failed")
+
+
+@pytest.mark.asyncio
+async def test_stale_attempt_does_not_emit_processing_outcome(
+    session_factory: async_sessionmaker[AsyncSession],
+    db_session: AsyncSession,
+    tc_source: NewsSource,
+    capfire: CaptureLogfire,
+) -> None:
+    """claim 喪失 (updated=False) は別 worker が結末を担うため emit しない。"""
+    ready = await _make_ready(db_session, tc_source, "https://techcrunch.com/m-stale")
+    await db_session.execute(
+        update(IncompleteArticle)
+        .where(IncompleteArticle.id == ready.incomplete_article_id)
+        .values(attempt_count=ready.attempt_count + 1)
+    )
+    await db_session.commit()
+    handler = ArticleCompletionFailureHandler(session_factory)
+
+    await handler.handle_scrape_failure(
+        ready, ScrapeNotHtml(content_type="application/pdf")
+    )
+
+    metrics = collected_metrics(capfire)
+    for result in _ALL_RESULTS:
+        assert sum_counter_for_result(metrics, _METRIC, result) == 0
+
+
+@pytest.mark.asyncio
+async def test_atomic_tx_commit_failure_does_not_emit_and_propagates(
+    session_factory: async_sessionmaker[AsyncSession],
+    db_session: AsyncSession,
+    tc_source: NewsSource,
+    monkeypatch: pytest.MonkeyPatch,
+    capfire: CaptureLogfire,
+) -> None:
+    """状態遷移 tx 内の DB 障害は emit 前に task へ貫通する (§5.4)。"""
+    ready = await _make_ready(db_session, tc_source, "https://techcrunch.com/m-txfail")
+
+    async def _raise(self: object, ready: object, *, now: object) -> bool:  # noqa: ARG001
+        raise SQLAlchemyError("close_claimed failed")
+
+    monkeypatch.setattr(ArticleCompletionRepository, "close_claimed", _raise)
+    handler = ArticleCompletionFailureHandler(session_factory)
+
+    with pytest.raises(SQLAlchemyError):
+        await handler.handle_scrape_failure(
+            ready, ScrapeNotHtml(content_type="application/pdf")
+        )
+
+    metrics = collected_metrics(capfire)
+    for result in _ALL_RESULTS:
+        assert sum_counter_for_result(metrics, _METRIC, result) == 0
+
+
+@pytest.mark.asyncio
+async def test_persist_crashed_emits_even_when_audit_drops(
+    session_factory: async_sessionmaker[AsyncSession],
+    db_session: AsyncSession,
+    tc_source: NewsSource,
+    monkeypatch: pytest.MonkeyPatch,
+    capfire: CaptureLogfire,
+) -> None:
+    """best-effort audit が drop しても infra_error は emit される (emit 先行)。"""
+    ready = await _make_ready(
+        db_session, tc_source, "https://techcrunch.com/m-auditdrop"
+    )
+
+    async def _raise(self: object, *, ready: object, exc: object) -> None:  # noqa: ARG001
+        raise SQLAlchemyError("audit write failed")
+
+    monkeypatch.setattr(
+        "app.audit.stages.completion."
+        "ArticleCompletionAuditRepository.append_persist_crashed",
+        _raise,
+    )
+    handler = ArticleCompletionFailureHandler(session_factory)
+
+    # audit drop は handle_persist_crashed 内で握られ再 raise しない。
+    await handler.handle_persist_crashed(ready, SQLAlchemyError("persist boom"))
+
+    _assert_only(collected_metrics(capfire), "infra_error")

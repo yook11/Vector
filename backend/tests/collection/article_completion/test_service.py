@@ -24,7 +24,9 @@ from datetime import UTC, datetime, timedelta
 from unittest.mock import AsyncMock
 
 import pytest
+from logfire.testing import CaptureLogfire
 from sqlalchemy import select, update
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.collection.article_acquisition.fetched_article import FetchedArticle
@@ -58,6 +60,10 @@ from app.models.analyzable_article_record import AnalyzableArticleRecord
 from app.models.incomplete_article import IncompleteArticle
 from app.models.news_source import NewsSource, SourceType
 from app.models.pipeline_event import PipelineEvent
+from tests.logfire._metric_helpers import collected_metrics, sum_counter_for_result
+
+_METRIC = "vector.completion.processing_outcome"
+_ALL_RESULTS = ("succeeded", "failed", "infra_error")
 
 
 async def _completion_events(db_session: AsyncSession) -> list[PipelineEvent]:
@@ -873,3 +879,158 @@ async def test_persist_db_exception_writes_persist_crashed_and_reraises(
         )
     ).scalar_one()
     assert pending.status == "running"
+
+
+# processing_outcome metric (vector.completion.processing_outcome)
+
+
+@pytest.mark.asyncio
+async def test_success_emits_processing_outcome_succeeded(
+    session_factory: async_sessionmaker[AsyncSession],
+    db_session: AsyncSession,
+    tc_source: NewsSource,
+    monkeypatch: pytest.MonkeyPatch,
+    capfire: CaptureLogfire,
+) -> None:
+    """保存 + audit commit 後に processing_outcome{result=succeeded} が +1。"""
+    _, _, ready = await _make_pending(
+        db_session, tc_source, "https://techcrunch.com/metric-ok"
+    )
+    _patch_fetch(
+        monkeypatch,
+        AsyncMock(
+            return_value=ScrapedContent(
+                title="HTML Title",
+                body="x" * 200,
+                published_at=PublishedAt(value=datetime(2026, 5, 1, tzinfo=UTC)),
+            )
+        ),
+    )
+
+    await ArticleCompletionService(session_factory).execute(ready)
+
+    metrics = collected_metrics(capfire)
+    assert sum_counter_for_result(metrics, _METRIC, "succeeded") == 1
+    for other in ("failed", "infra_error"):
+        assert sum_counter_for_result(metrics, _METRIC, other) == 0
+
+
+@pytest.mark.asyncio
+async def test_superseded_does_not_emit_processing_outcome(
+    session_factory: async_sessionmaker[AsyncSession],
+    db_session: AsyncSession,
+    tc_source: NewsSource,
+    monkeypatch: pytest.MonkeyPatch,
+    capfire: CaptureLogfire,
+) -> None:
+    """claim 喪失 (attempt 失効) の persist superseded は counter を汚さない。"""
+    _, incomplete_article_id, ready = await _make_pending(
+        db_session, tc_source, "https://techcrunch.com/metric-superseded"
+    )
+    await db_session.execute(
+        update(IncompleteArticle)
+        .where(IncompleteArticle.id == incomplete_article_id)
+        .values(attempt_count=ready.attempt_count + 1)
+    )
+    await db_session.commit()
+    _patch_fetch(
+        monkeypatch,
+        AsyncMock(
+            return_value=ScrapedContent(
+                title="HTML Title",
+                body="x" * 200,
+                published_at=PublishedAt(value=datetime(2026, 5, 1, tzinfo=UTC)),
+            )
+        ),
+    )
+
+    await ArticleCompletionService(session_factory).execute(ready)
+
+    metrics = collected_metrics(capfire)
+    for result in _ALL_RESULTS:
+        assert sum_counter_for_result(metrics, _METRIC, result) == 0
+
+
+@pytest.mark.asyncio
+async def test_url_conflict_does_not_emit_processing_outcome(
+    session_factory: async_sessionmaker[AsyncSession],
+    db_session: AsyncSession,
+    tc_source: NewsSource,
+    monkeypatch: pytest.MonkeyPatch,
+    capfire: CaptureLogfire,
+) -> None:
+    """同一 URL 衝突 (CompletionUrlConflict) は dedup の揺れで counter を汚さない。"""
+    canonical_url, _, ready = await _make_pending(
+        db_session, tc_source, "https://techcrunch.com/metric-conflict"
+    )
+    db_session.add(
+        AnalyzableArticleRecord(
+            original_title="Existing",
+            original_content="y" * 100,
+            published_at=datetime(2026, 4, 30, tzinfo=UTC),
+            source_id=tc_source.id,
+            source_url=canonical_url,
+        )
+    )
+    await db_session.commit()
+    _patch_fetch(
+        monkeypatch,
+        AsyncMock(
+            return_value=ScrapedContent(
+                title="HTML Title",
+                body="z" * 200,
+                published_at=PublishedAt(value=datetime(2026, 5, 1, tzinfo=UTC)),
+            )
+        ),
+    )
+
+    await ArticleCompletionService(session_factory).execute(ready)
+
+    metrics = collected_metrics(capfire)
+    for result in _ALL_RESULTS:
+        assert sum_counter_for_result(metrics, _METRIC, result) == 0
+
+
+@pytest.mark.asyncio
+async def test_persist_db_crash_emits_infra_error_not_succeeded(
+    session_factory: async_sessionmaker[AsyncSession],
+    db_session: AsyncSession,
+    tc_source: NewsSource,
+    monkeypatch: pytest.MonkeyPatch,
+    capfire: CaptureLogfire,
+) -> None:
+    """persist の DB 例外 → infra_error、succeeded は emit しない。
+
+    succeeded emit が persist commit 境界の後ろにある不変条件の回帰ガード。
+    handle_persist_crashed が SQLAlchemyError を infra に分類する。
+    """
+    _, _, ready = await _make_pending(
+        db_session, tc_source, "https://techcrunch.com/metric-crash"
+    )
+    _patch_fetch(
+        monkeypatch,
+        AsyncMock(
+            return_value=ScrapedContent(
+                title="HTML Title",
+                body="x" * 200,
+                published_at=PublishedAt(value=datetime(2026, 5, 1, tzinfo=UTC)),
+            )
+        ),
+    )
+
+    async def _boom(self: object, ready: object, advanced: object) -> None:  # noqa: ARG001
+        raise SQLAlchemyError("db connection lost mid-INSERT")
+
+    monkeypatch.setattr(
+        "app.collection.article_completion.service."
+        "ArticleCompletionRepository.persist_completed",
+        _boom,
+    )
+
+    with pytest.raises(SQLAlchemyError):
+        await ArticleCompletionService(session_factory).execute(ready)
+
+    metrics = collected_metrics(capfire)
+    assert sum_counter_for_result(metrics, _METRIC, "infra_error") == 1
+    for other in ("succeeded", "failed"):
+        assert sum_counter_for_result(metrics, _METRIC, other) == 0

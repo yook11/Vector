@@ -27,6 +27,8 @@ from datetime import UTC, datetime
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from logfire.testing import CaptureLogfire
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.collection.article_completion.ready import (
@@ -45,12 +47,16 @@ from app.collection.sources.errors import SourceNotRegisteredError
 from app.collection.sources.source_name import SourceName
 from app.queue.messages.curation import CurationTrigger
 from app.queue.tasks.completion import scrape_html_body
+from tests.logfire._metric_helpers import collected_metrics, sum_counter_for_result
 
 _SERVICE_EXECUTE = (
     "app.collection.article_completion.service.ArticleCompletionService.execute"
 )
 _SERVICE_CLS = "app.queue.tasks.completion.ArticleCompletionService"
 _CURATE_CONTENT_KIQ = "app.queue.tasks.completion.curate_content.kiq"
+
+_METRIC = "vector.completion.processing_outcome"
+_ALL_RESULTS = ("succeeded", "failed", "infra_error")
 
 
 def _ctx(session_factory: async_sessionmaker[AsyncSession]) -> MagicMock:
@@ -221,3 +227,75 @@ async def test_returns_none_when_service_returns_none(
 
     assert result is None
     curate_content_kiq.assert_not_awaited()
+
+
+# processing_outcome metric (ready-build 段の emit)
+
+
+@pytest.mark.asyncio
+async def test_ready_build_skipped_does_not_emit_processing_outcome(
+    session_factory: async_sessionmaker[AsyncSession],
+    capfire: CaptureLogfire,
+) -> None:
+    """blocked (SKIPPED) は stale/冪等で counter を汚さない。"""
+    exc = ArticleCompletionReadyBuildIncompleteArticleMissingError()
+    with (
+        _patch_try_advance_from(exc),
+        patch("app.queue.tasks.completion.ArticleCompletionAuditRepository") as audit,
+        patch(_SERVICE_CLS),
+        patch(_CURATE_CONTENT_KIQ),
+    ):
+        audit.return_value.append_ready_build_error = AsyncMock()
+        await scrape_html_body(incomplete_article_id=999, ctx=_ctx(session_factory))
+
+    metrics = collected_metrics(capfire)
+    for result in _ALL_RESULTS:
+        assert sum_counter_for_result(metrics, _METRIC, result) == 0
+
+
+@pytest.mark.asyncio
+async def test_ready_build_vo_error_emits_failed(
+    session_factory: async_sessionmaker[AsyncSession],
+    capfire: CaptureLogfire,
+) -> None:
+    """ready-build の VO error (恒久的、DB 以外) → failed + re-raise。"""
+    with (
+        _patch_try_advance_from(SourceNotRegisteredError()),
+        patch(
+            "app.queue.tasks.completion._append_ready_build_error_audit",
+            new=AsyncMock(),
+        ),
+        patch(_SERVICE_CLS),
+        patch(_CURATE_CONTENT_KIQ),
+    ):
+        with pytest.raises(SourceNotRegisteredError):
+            await scrape_html_body(incomplete_article_id=999, ctx=_ctx(session_factory))
+
+    metrics = collected_metrics(capfire)
+    assert sum_counter_for_result(metrics, _METRIC, "failed") == 1
+    for other in ("succeeded", "infra_error"):
+        assert sum_counter_for_result(metrics, _METRIC, other) == 0
+
+
+@pytest.mark.asyncio
+async def test_ready_build_db_error_emits_infra_error(
+    session_factory: async_sessionmaker[AsyncSession],
+    capfire: CaptureLogfire,
+) -> None:
+    """ready-build の DB 障害 (SQLAlchemyError) → infra_error + re-raise。"""
+    with (
+        _patch_try_advance_from(SQLAlchemyError("facts load failed")),
+        patch(
+            "app.queue.tasks.completion._append_ready_build_error_audit",
+            new=AsyncMock(),
+        ),
+        patch(_SERVICE_CLS),
+        patch(_CURATE_CONTENT_KIQ),
+    ):
+        with pytest.raises(SQLAlchemyError):
+            await scrape_html_body(incomplete_article_id=999, ctx=_ctx(session_factory))
+
+    metrics = collected_metrics(capfire)
+    assert sum_counter_for_result(metrics, _METRIC, "infra_error") == 1
+    for other in ("succeeded", "failed"):
+        assert sum_counter_for_result(metrics, _METRIC, other) == 0

@@ -18,12 +18,16 @@ from __future__ import annotations
 from datetime import UTC, datetime, timedelta
 
 import structlog
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from taskiq import Context, TaskiqDepends
 
 from app.audit.domain.event import EventType
 from app.audit.error_fields import exception_fqn
 from app.audit.stages.completion import ArticleCompletionAuditRepository
+from app.collection.article_completion.metrics import (
+    record_completion_processing_outcome,
+)
 from app.collection.article_completion.ready import (
     ArticleCompletionReadyBuildError,
     ReadyForArticleCompletion,
@@ -126,6 +130,8 @@ async def scrape_html_body(
                 exc=exc,
             )
             if exc.EVENT_TYPE == EventType.FAILED:
+                # blocked (SKIPPED) は stale/冪等で計上しない。FAILED のみ failed。
+                record_completion_processing_outcome("failed")
                 raise
             logger.info(
                 "scrape_html_body_skipped",
@@ -139,6 +145,10 @@ async def scrape_html_body(
                 session_factory,
                 incomplete_article_id=incomplete_article_id,
                 exc=exc,
+            )
+            # ready-build の DB 障害は infra、VO error 等は failed。
+            record_completion_processing_outcome(
+                "infra_error" if isinstance(exc, SQLAlchemyError) else "failed"
             )
             raise
 

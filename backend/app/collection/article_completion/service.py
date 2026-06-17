@@ -16,6 +16,9 @@ from app.collection.article_completion.completion_failure import (
 from app.collection.article_completion.failure_handling import (
     ArticleCompletionFailureHandler,
 )
+from app.collection.article_completion.metrics import (
+    record_completion_processing_outcome,
+)
 from app.collection.article_completion.ready import ReadyForArticleCompletion
 from app.collection.article_completion.repository import (
     ArticleCompletionRepository,
@@ -106,6 +109,8 @@ class ArticleCompletionService:
                 )
                 return None
             case CompletionSucceeded(analyzable_article_id=analyzable_article_id):
+                # 業務行 + 成功 audit を commit できた境界で成功を計上する。
+                record_completion_processing_outcome("succeeded")
                 logger.info(
                     "article_completion_succeeded",
                     incomplete_article_id=ready.incomplete_article_id,
