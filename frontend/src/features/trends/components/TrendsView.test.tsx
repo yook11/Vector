@@ -127,7 +127,7 @@ describe("TrendsView — カテゴリ", () => {
 });
 
 describe("TrendsView — 2ランキングラベル", () => {
-  it("よく言及・伸びている ラベルが各カテゴリに出る", () => {
+  it("言及数上位・急上昇ワード ラベルが各カテゴリに出る", () => {
     render(
       <TrendsView
         data={makeTrends({
@@ -135,8 +135,8 @@ describe("TrendsView — 2ランキングラベル", () => {
         })}
       />,
     );
-    expect(screen.getByText("よく言及")).toBeInTheDocument();
-    expect(screen.getByText("伸びている")).toBeInTheDocument();
+    expect(screen.getByText("言及数上位")).toBeInTheDocument();
+    expect(screen.getByText("急上昇ワード")).toBeInTheDocument();
   });
 
   it("mostMentioned の並び順がそのまま行順に反映される(1..N)", () => {
@@ -162,7 +162,7 @@ describe("TrendsView — 2ランキングラベル", () => {
     const buttons = within(section).getAllByRole("button", {
       expanded: false,
     });
-    // "よく言及" 列の buttons は最初の 3 個
+    // "言及数上位" 列の buttons は最初の 3 個
     const rankButtons = buttons.slice(0, 3);
     expect(rankButtons[0]).toHaveTextContent("Alpha");
     expect(rankButtons[1]).toHaveTextContent("Beta");

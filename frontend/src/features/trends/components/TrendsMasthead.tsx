@@ -22,7 +22,7 @@ export function TrendsMasthead({ data }: TrendsMastheadProps) {
         className="text-[clamp(30px,4.4vw,46px)] font-bold leading-[1.2] tracking-[0.01em] text-[var(--vector-ink)]"
         style={{ fontFamily: "var(--font-vector-serif)" }}
       >
-        語られた名前、伸びた名前
+        注目ワードと急上昇ワード
       </h1>
 
       {/* サブ */}
@@ -30,7 +30,7 @@ export function TrendsMasthead({ data }: TrendsMastheadProps) {
         className="mt-3 max-w-[42em] text-[15px] leading-[1.7] text-[var(--vector-ink-soft)]"
         style={{ fontFamily: "var(--font-vector-serif)" }}
       >
-        この1週間の言及を、出現回数と勢いの2軸で。
+        この1週間のニュースで多く言及された企業・製品・組織と、前週比で注目度が高まったワードをカテゴリ別に表示します。
       </p>
 
       {/* メタ行 */}

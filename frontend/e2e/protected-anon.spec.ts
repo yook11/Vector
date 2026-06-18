@@ -166,7 +166,7 @@ test.describe("protected route auth boundary (anon / fake-cookie)", () => {
     try {
       const body = await (await user.get("/trends")).text();
       const dataMarker = "件の記事から集計";
-      const emptyMarker = "トレンドはまだ生成されていません";
+      const emptyMarker = "該当するワードはありません";
       const sentinel = body.includes(dataMarker)
         ? dataMarker
         : body.includes(emptyMarker)

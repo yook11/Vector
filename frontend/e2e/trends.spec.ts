@@ -4,8 +4,8 @@ test("トレンドページの heading + 構造が描画される", async ({ pag
   await page.goto("/trends");
   await expect(page.getByRole("heading", { name: "トレンド" })).toBeVisible();
 
-  const emptyMessage = page.getByText("トレンドはまだ生成されていません");
-  const rankingHeading = page.getByText("よく言及").first();
+  const emptyMessage = page.getByText("該当するワードはありません");
+  const rankingHeading = page.getByText("言及数上位").first();
 
   await expect(async () => {
     const empty = await emptyMessage.count();

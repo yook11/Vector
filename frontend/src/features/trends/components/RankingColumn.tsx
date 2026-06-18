@@ -14,12 +14,12 @@ const COLUMN_META: Record<
 > = {
   count: {
     en: "Most mentioned",
-    ja: "よく言及",
+    ja: "言及数上位",
     note: "出現回数順",
   },
   growth: {
     en: "Fastest growing",
-    ja: "伸びている",
+    ja: "急上昇ワード",
     note: "伸び率順",
   },
 };
@@ -60,7 +60,7 @@ export function RankingColumn({ mode, mentions }: RankingColumnProps) {
           className="py-4 text-[12.5px] italic text-[var(--vector-ink-muted)]"
           style={{ fontFamily: "var(--font-vector-display)" }}
         >
-          該当する固有名はありません
+          該当するワードはありません
         </p>
       ) : (
         <ul>
