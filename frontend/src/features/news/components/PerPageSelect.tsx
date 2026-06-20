@@ -15,11 +15,12 @@ interface PerPageSelectProps {
 }
 
 export function PerPageSelect({ current }: PerPageSelectProps) {
-  const updateSearchParams = useUpdateSearchParams();
+  const { updateSearchParams, isPending } = useUpdateSearchParams();
 
   return (
     <Select
       value={current}
+      disabled={isPending}
       onValueChange={(v) => updateSearchParams({ perPage: v, page: undefined })}
     >
       <SelectTrigger

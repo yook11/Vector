@@ -26,7 +26,7 @@ export function NavPendingDot({ className }: NavPendingDotProps) {
         className,
       )}
     >
-      <Loader2Icon className="size-3 animate-spin" />
+      <Loader2Icon className={cn("size-3", pending && "animate-spin")} />
     </span>
   );
 }

@@ -21,11 +21,12 @@ interface SourceHealthWindowSelectProps {
 export function SourceHealthWindowSelect({
   current,
 }: SourceHealthWindowSelectProps) {
-  const updateSearchParams = useUpdateSearchParams();
+  const { updateSearchParams, isPending } = useUpdateSearchParams();
 
   return (
     <Select
       value={current}
+      disabled={isPending}
       onValueChange={(value) => updateSearchParams({ window: value })}
     >
       <SelectTrigger

@@ -9,7 +9,7 @@ interface NewsPaginationProps {
 }
 
 export function NewsPagination({ page, totalPages }: NewsPaginationProps) {
-  const updateSearchParams = useUpdateSearchParams();
+  const { updateSearchParams } = useUpdateSearchParams();
 
   if (totalPages <= 1) return null;
 

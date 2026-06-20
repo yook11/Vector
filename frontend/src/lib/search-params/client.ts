@@ -9,7 +9,7 @@
 "use client";
 
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
-import { useCallback } from "react";
+import { useCallback, useTransition } from "react";
 
 export type ParamUpdates = Record<string, string | undefined>;
 
@@ -31,23 +31,32 @@ function applyUpdates(
 /**
  * 現在の URL search params に updates を適用し、現在のパスを保ったまま
  * `router.push` するフック。`undefined` / 空文字は delete として扱う。
+ *
+ * push を `useTransition` で包み `isPending` を公開することで、呼び出し側が
+ * 遷移中の disabled / 連打ガード / 押下フィードバックを構築できる。戻り値は
+ * 誤 destructure を避けるため object (将来 replace 等を足す余地も残す)。
  */
 export function useUpdateSearchParams() {
   const router = useRouter();
   const pathname = usePathname();
   const searchParams = useSearchParams();
+  const [isPending, startTransition] = useTransition();
 
-  return useCallback(
+  const updateSearchParams = useCallback(
     (updates: ParamUpdates) => {
       const next = applyUpdates(
         new URLSearchParams(searchParams?.toString() ?? ""),
         updates,
       );
       const qs = next.toString();
-      router.push(qs ? `${pathname}?${qs}` : pathname);
+      startTransition(() => {
+        router.push(qs ? `${pathname}?${qs}` : pathname);
+      });
     },
     [router, pathname, searchParams],
   );
+
+  return { updateSearchParams, isPending };
 }
 
 /**

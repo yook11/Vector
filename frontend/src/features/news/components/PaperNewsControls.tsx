@@ -17,7 +17,7 @@ import {
 
 export function PaperNewsControls() {
   const searchParams = useSearchParams() ?? new URLSearchParams();
-  const updateSearchParams = useUpdateSearchParams();
+  const { updateSearchParams, isPending } = useUpdateSearchParams();
   const rawSortOrder = searchParams.get("sortOrder");
   const sortOrderValue = rawSortOrder === "asc" ? "asc" : "desc";
   const rawPerPage = searchParams.get("perPage");
@@ -35,6 +35,7 @@ export function PaperNewsControls() {
         </span>
         <Select
           value={sortOrderValue}
+          disabled={isPending}
           onValueChange={(value) =>
             updateSearchParams({
               sortOrder: value === "desc" ? undefined : value,
@@ -61,6 +62,7 @@ export function PaperNewsControls() {
         </span>
         <Select
           value={perPageValue}
+          disabled={isPending}
           onValueChange={(value) =>
             updateSearchParams({
               perPage: value === DEFAULT_PER_PAGE ? undefined : value,

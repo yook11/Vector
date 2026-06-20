@@ -15,7 +15,7 @@ import { PerPageSelect } from "./PerPageSelect";
 export function NewsFilters() {
   // <Suspense> 配下なので非 null。空フォールバックで型を確定。
   const searchParams = useSearchParams() ?? new URLSearchParams();
-  const updateSearchParams = useUpdateSearchParams();
+  const { updateSearchParams, isPending } = useUpdateSearchParams();
   const rawSortOrder = searchParams.get("sortOrder");
   const sortOrderValue = rawSortOrder === "asc" ? "asc" : "default";
   const rawPerPage = searchParams.get("perPage");
@@ -26,6 +26,7 @@ export function NewsFilters() {
     <div className="flex flex-wrap items-center gap-2.5">
       <Select
         value={sortOrderValue}
+        disabled={isPending}
         onValueChange={(v) =>
           updateSearchParams({
             sortOrder: v === "default" ? undefined : v,

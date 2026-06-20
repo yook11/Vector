@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { MobileNav } from "@/components/layout/MobileNav";
 import { NavLink } from "@/components/layout/NavLink";
+import { NavPendingDot } from "@/components/layout/NavPendingDot";
 import { getProtectedNavItems, NAV_ICONS } from "@/components/layout/nav-items";
 import { ThemeToggle } from "@/components/layout/ThemeToggle";
 import { UserMenu } from "@/features/auth";
@@ -35,6 +36,7 @@ export async function Header() {
               >
                 <Icon aria-hidden="true" className="size-3.5" />
                 {item.label}
+                <NavPendingDot />
               </NavLink>
             );
           })}

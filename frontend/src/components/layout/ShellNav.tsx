@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
+import { NavPendingDot } from "@/components/layout/NavPendingDot";
 import { NAV_ICONS } from "@/components/layout/nav-items";
 import { useProtectedNavItems } from "@/components/layout/useProtectedNavItems";
 
@@ -46,6 +47,7 @@ export function ShellNav() {
               }
             />
             {item.label}
+            <NavPendingDot />
           </Link>
         );
       })}
