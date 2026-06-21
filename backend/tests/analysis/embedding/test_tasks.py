@@ -9,11 +9,13 @@ from pydantic import ValidationError
 from sqlalchemy.exc import SQLAlchemyError
 from structlog.testing import capture_logs
 
+from app.analysis.ai_provider_errors import AIProviderUsageLimitExhaustedError
 from app.analysis.embedding.domain.ready import (
     EmbeddingReadyBuildBlockedCode,
     EmbeddingReadyBuildBlockedError,
     ReadyForEmbedding,
 )
+from app.analysis.failure_handling import FailureHandlingDecision
 from app.analysis.rate_limit import AIModelRateLimitPolicy
 from app.queue.messages.embedding import EmbeddingTrigger
 from tests.logfire._metric_helpers import collected_metrics, sum_counter_for_result
@@ -326,6 +328,57 @@ class TestGenerateEmbeddingStageSpan:
             )
 
         assert stage_attrs(capfire)["result"] == "rate_limited"
+
+    @pytest.mark.asyncio
+    async def test_terminal_sets_failure_attrs_without_drop_article(
+        self, capfire: CaptureLogfire
+    ) -> None:
+        """Service が terminal marker を raise したとき span に failure 属性が焼かれる。
+
+        期待値の根拠:
+        - AIProviderUsageLimitExhaustedError: CODE="ai_error_usage_limit_exhausted",
+          FAILURE_MODE=CONDITION_BASED_RECOVERY (ai_provider_errors.py)
+        - to_embedding_error: CONDITION_BASED_RECOVERY.retryable=True
+          (ai_provider_errors.py) → EmbeddingRecoverableError,
+          failure_kind="condition_based_recovery", code=exc.CODE (embedding/errors.py)
+        - EmbeddingRecoverableError: RETRYABILITY=RETRYABLE, FAILURE_ACTION=None
+          → failure_action は span に載らない (failure_attrs.py: None なら set しない)
+        """
+        from app.analysis.embedding.errors import to_embedding_error
+        from app.queue.tasks.embedding import generate_embedding
+
+        mock_ctx = _make_ctx(embedder=_make_embedder_fake())
+        raw = AIProviderUsageLimitExhaustedError()
+        marker = to_embedding_error(raw)
+
+        with (
+            _patch_ready_construction(_make_ready(analyzed_article_id=1)),
+            patch("app.queue.tasks.embedding.EmbeddingService") as mock_svc_cls,
+            patch(
+                "app.queue.tasks.embedding.EmbeddingFailureHandler"
+            ) as mock_handler_cls,
+        ):
+            mock_svc_cls.return_value.execute = AsyncMock(side_effect=marker)
+            mock_handler_cls.return_value.handle = AsyncMock(
+                return_value=FailureHandlingDecision(reraise=False)
+            )
+            await generate_embedding(
+                trigger=_make_trigger(analyzed_article_id=1), ctx=mock_ctx
+            )
+
+        attrs = stage_attrs(capfire)
+        assert attrs["result"] == "failed"
+        # failure_kind: CONDITION_BASED_RECOVERY.value (embedding/errors.py)
+        assert attrs["failure_kind"] == "condition_based_recovery"
+        # code: AIProviderUsageLimitExhaustedError.CODE (ai_provider_errors.py)
+        assert attrs["code"] == "ai_error_usage_limit_exhausted"
+        # retryability: EmbeddingRecoverableError.RETRYABILITY (embedding/errors.py)
+        # CONDITION_BASED_RECOVERY.retryable=True → EmbeddingRecoverableError
+        assert attrs["retryability"] == "retryable"
+        # error_class: exception_fqn of the marker instance (EmbeddingRecoverableError)
+        assert attrs["error_class"].endswith(".EmbeddingRecoverableError")
+        # failure_action: FAILURE_ACTION=None → attribute not set (failure_attrs.py)
+        assert "failure_action" not in attrs
 
 
 class TestGenerateEmbeddingProcessingOutcome:

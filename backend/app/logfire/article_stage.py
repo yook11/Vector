@@ -8,7 +8,9 @@ Logfire 上で直接クエリできるようにする。
 
 span attribute には本文・prompt・AI response・URL query・認証情報は載せない。
 低 cardinality の語彙 (stage / result / task_name) と内部 DB ID
-(article_id / curation_id / analyzed_article_id) のみを載せる。
+(article_id / curation_id / analyzed_article_id)、失敗時は failure projection 由来の
+分類属性 (failure_kind / code / retryability / error_class /
+failure_action) のみを載せる。
 
 設計方針: ステージは 3 つ (増えても 5 程度) で、特性 (result 語彙・次工程の有無・
 article_id がいつ判明するか) がそれぞれ違う。共通基底に押し込めると各ステージの記録
@@ -34,6 +36,8 @@ from typing import Literal
 import logfire
 from logfire import LogfireSpan
 
+from app.logfire.failure_attrs import annotate_span_failure
+
 # stage 別の result 語彙。値だけで「記事がどう抜けたか」が読めるよう自己記述的にする。
 CurationStageResult = Literal["signal", "noise", "rate_limited", "skipped", "failed"]
 AssessmentResult = Literal[
@@ -50,6 +54,7 @@ class CurationStageSpan:
     def __init__(self, span: LogfireSpan) -> None:
         self._span = span
         self._result_set = False
+        self._failure_set = False
 
     def set_result(self, result: CurationStageResult) -> None:
         """result を一度だけ焼く (no-override)。"""
@@ -57,6 +62,13 @@ class CurationStageSpan:
             return
         self._span.set_attribute("result", result)
         self._result_set = True
+
+    def record_failure(self, exc: Exception) -> None:
+        """失敗分類属性を一度だけ焼く (no-override)。元の業務例外を最優先で残す。"""
+        if self._failure_set:
+            return
+        annotate_span_failure(self._span, exc)
+        self._failure_set = True
 
     def mark_next_task_enqueued(self) -> None:
         """assess_content の kiq 成功直後に呼ぶ。enqueued フラグと次 task 名を焼く。"""
@@ -70,6 +82,7 @@ class AssessmentStageSpan:
     def __init__(self, span: LogfireSpan) -> None:
         self._span = span
         self._result_set = False
+        self._failure_set = False
 
     def set_result(self, result: AssessmentResult) -> None:
         """result を一度だけ焼く (no-override)。"""
@@ -77,6 +90,13 @@ class AssessmentStageSpan:
             return
         self._span.set_attribute("result", result)
         self._result_set = True
+
+    def record_failure(self, exc: Exception) -> None:
+        """失敗分類属性を一度だけ焼く (no-override)。元の業務例外を最優先で残す。"""
+        if self._failure_set:
+            return
+        annotate_span_failure(self._span, exc)
+        self._failure_set = True
 
     def set_article_id(self, article_id: int) -> None:
         """trigger に無く ready で判明する article_id を後付けする。"""
@@ -94,6 +114,7 @@ class EmbeddingStageSpan:
     def __init__(self, span: LogfireSpan) -> None:
         self._span = span
         self._result_set = False
+        self._failure_set = False
 
     def set_result(self, result: EmbeddingResult) -> None:
         """result を一度だけ焼く (no-override)。"""
@@ -101,6 +122,13 @@ class EmbeddingStageSpan:
             return
         self._span.set_attribute("result", result)
         self._result_set = True
+
+    def record_failure(self, exc: Exception) -> None:
+        """失敗分類属性を一度だけ焼く (no-override)。元の業務例外を最優先で残す。"""
+        if self._failure_set:
+            return
+        annotate_span_failure(self._span, exc)
+        self._failure_set = True
 
     def set_article_id(self, article_id: int) -> None:
         """trigger に無く ready で判明する article_id を後付けする。"""
@@ -131,8 +159,10 @@ def curation_stage_span(*, article_id: int) -> Iterator[CurationStageSpan]:
         token = _current_stage_span.set(recorder)
         try:
             yield recorder
-        except BaseException:
+        except BaseException as exc:
             recorder.set_result("failed")
+            if isinstance(exc, Exception):
+                recorder.record_failure(exc)
             raise
         finally:
             _current_stage_span.reset(token)
@@ -156,8 +186,10 @@ def assessment_stage_span(*, curation_id: int) -> Iterator[AssessmentStageSpan]:
         token = _current_stage_span.set(recorder)
         try:
             yield recorder
-        except BaseException:
+        except BaseException as exc:
             recorder.set_result("failed")
+            if isinstance(exc, Exception):
+                recorder.record_failure(exc)
             raise
         finally:
             _current_stage_span.reset(token)
@@ -180,8 +212,10 @@ def embedding_stage_span(*, analyzed_article_id: int) -> Iterator[EmbeddingStage
         token = _current_stage_span.set(recorder)
         try:
             yield recorder
-        except BaseException:
+        except BaseException as exc:
             recorder.set_result("failed")
+            if isinstance(exc, Exception):
+                recorder.record_failure(exc)
             raise
         finally:
             _current_stage_span.reset(token)

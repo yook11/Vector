@@ -9,6 +9,7 @@ from structlog.testing import capture_logs
 
 from app.analysis.ai_provider_errors import (
     AIProviderConfigurationError,
+    AIProviderOutputBlockedError,
     AIProviderRateLimitedError,
 )
 from app.analysis.curation.domain.ready import (
@@ -16,6 +17,8 @@ from app.analysis.curation.domain.ready import (
     CurationReadyBuildBlockedError,
     ReadyForCuration,
 )
+from app.analysis.failure_handling import FailureHandlingDecision
+from app.analysis.gemini_error_translator import GeminiContentRejectionReason
 from app.analysis.rate_limit import AIModelRateLimitPolicy, RateLimitRule
 from app.queue.messages.assessment import AssessmentTrigger
 from app.queue.messages.curation import CurationTrigger
@@ -447,3 +450,56 @@ class TestCurateContentStageSpan:
             await curate_content(trigger=_trigger(), ctx=mock_ctx)
 
         assert stage_attrs(capfire)["result"] == "rate_limited"
+
+    @pytest.mark.asyncio
+    async def test_terminal_drop_sets_failure_attrs_with_drop_article(
+        self, capfire: CaptureLogfire
+    ) -> None:
+        """Service が terminal-drop marker を raise → span に failure 属性が乗る。
+
+        期待値の根拠:
+        - AIProviderOutputBlockedError: CODE="ai_error_output_blocked",
+          FAILURE_MODE=TARGET_REJECTED (AIProviderContentError 固定)
+          → app/analysis/ai_provider_errors.py
+        - map_provider_to_curation: TARGET_REJECTED → CurationTerminalDropError,
+          failure_kind=mode.value="target_rejected", code=exc.CODE
+          → app/analysis/curation/errors.py
+        - CurationTerminalDropError: RETRYABILITY=NON_RETRYABLE,
+          FAILURE_ACTION=DROP_ARTICLE → app/analysis/curation/errors.py
+        - annotate_span_failure: failure_action は not None の場合だけ焼く
+          → app/logfire/failure_attrs.py
+        """
+        from app.analysis.curation.errors import map_provider_to_curation
+        from app.queue.tasks.curation import curate_content
+
+        mock_ctx = _make_ctx(curator=_make_provider_fake())
+        raw = AIProviderOutputBlockedError(reason=GeminiContentRejectionReason.SAFETY)
+        marker = map_provider_to_curation(raw)
+
+        with (
+            _patch_try_advance_from(_fixed_ready()),
+            patch("app.queue.tasks.curation.CurationService") as mock_svc_cls,
+            patch(
+                "app.queue.tasks.curation.CurationFailureHandler"
+            ) as mock_handler_cls,
+            patch("app.queue.tasks.curation.assess_content") as mock_assess,
+        ):
+            mock_svc_cls.return_value.execute = AsyncMock(side_effect=marker)
+            mock_handler_cls.return_value.handle = AsyncMock(
+                return_value=FailureHandlingDecision(reraise=False)
+            )
+            mock_assess.kiq = AsyncMock()
+            await curate_content(trigger=_trigger(), ctx=mock_ctx)
+
+        attrs = stage_attrs(capfire)
+        assert attrs["result"] == "failed"
+        # failure_kind: TARGET_REJECTED.value (curation/errors.py)
+        assert attrs["failure_kind"] == "target_rejected"
+        # code: AIProviderOutputBlockedError.CODE (ai_provider_errors.py)
+        assert attrs["code"] == "ai_error_output_blocked"
+        # retryability: CurationTerminalDropError.RETRYABILITY (curation/errors.py)
+        assert attrs["retryability"] == "non_retryable"
+        # error_class: exception_fqn of the marker instance (CurationTerminalDropError)
+        assert attrs["error_class"].endswith(".CurationTerminalDropError")
+        # failure_action: DROP_ARTICLE → "drop_article" (curation/errors.py)
+        assert attrs["failure_action"] == "drop_article"

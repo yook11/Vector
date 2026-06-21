@@ -11,6 +11,8 @@ capfire は内部で ``logfire.configure(send_to_logfire=False, ...)`` を呼ぶ
 
 from __future__ import annotations
 
+import asyncio
+
 import pytest
 from logfire.testing import CaptureLogfire
 
@@ -28,7 +30,8 @@ from app.logfire.article_stage import (
 )
 from tests.logfire._span_helpers import domain_attr_keys, stage_attrs
 
-# helper の signature だけで載りうるドメイン attribute の全集合。
+# helper の signature と失敗記録 (record_failure / backstop) で載りうる
+# ドメイン attribute の全集合。
 # PII 防御: これ以外のキー (本文 / URL / prompt など) が span に乗らないことの oracle。
 _ALLOWED_DOMAIN_KEYS = {
     "stage",
@@ -39,6 +42,11 @@ _ALLOWED_DOMAIN_KEYS = {
     "analyzed_article_id",
     "next_task_enqueued",
     "next_task_name",
+    "failure_kind",
+    "code",
+    "retryability",
+    "error_class",
+    "failure_action",
 }
 
 
@@ -280,6 +288,57 @@ def test_exception_after_result_does_not_override(capfire: CaptureLogfire) -> No
     assert stage_attrs(capfire)["result"] == "signal"
 
 
+# 不変条件 7b: record_failure / backstop が failure projection 由来の分類属性を焼く
+
+
+def test_record_failure_copies_projection_attributes(capfire: CaptureLogfire) -> None:
+    """record_failure は project_failure の値 + error_class を span に焼く。"""
+    with curation_stage_span(article_id=1) as stage:
+        stage.set_result("failed")
+        stage.record_failure(ValueError("boom"))
+    attrs = stage_attrs(capfire)
+    assert attrs["failure_kind"] == "unknown"
+    assert attrs["code"] == "unexpected_error"
+    assert attrs["retryability"] == "unknown"
+    assert attrs["error_class"] == "builtins.ValueError"
+    # drop_article でない catch-all は failure_action を載せない (条件付き属性)。
+    assert "failure_action" not in attrs
+
+
+def test_record_failure_is_no_override(capfire: CaptureLogfire) -> None:
+    """record_failure は一度だけ焼く。二次例外で呼ばれても元の分類を上書きしない。"""
+    with curation_stage_span(article_id=1) as stage:
+        stage.record_failure(ValueError("original business error"))
+        stage.record_failure(RuntimeError("secondary audit/hold error"))
+    assert stage_attrs(capfire)["error_class"] == "builtins.ValueError"
+
+
+def test_backstop_records_failure_attributes_on_propagating_exception(
+    capfire: CaptureLogfire,
+) -> None:
+    """明示 record 無しで貫通した Exception は backstop が分類属性を焼く。"""
+    with pytest.raises(ValueError, match="boom"):
+        with curation_stage_span(article_id=1):
+            raise ValueError("boom")
+    attrs = stage_attrs(capfire)
+    assert attrs["result"] == "failed"
+    assert attrs["failure_kind"] == "unknown"
+    assert attrs["error_class"] == "builtins.ValueError"
+
+
+def test_cancellation_sets_failed_but_no_failure_attributes(
+    capfire: CaptureLogfire,
+) -> None:
+    """CancelledError は result=failed (既存挙動) だが失敗分類属性は載せない。"""
+    with pytest.raises(asyncio.CancelledError):
+        with curation_stage_span(article_id=1):
+            raise asyncio.CancelledError
+    attrs = stage_attrs(capfire)
+    assert attrs["result"] == "failed"
+    assert "failure_kind" not in attrs
+    assert "error_class" not in attrs
+
+
 # 不変条件 8: span 文脈外で module 関数は no-op (例外を投げない / span を作らない)
 
 
@@ -332,5 +391,18 @@ def test_no_unexpected_attributes_embedding(capfire: CaptureLogfire) -> None:
     with embedding_stage_span(analyzed_article_id=1) as stage:
         stage.set_article_id(2)
         stage.set_result("succeeded")
+    keys = domain_attr_keys(stage_attrs(capfire))
+    assert keys <= _ALLOWED_DOMAIN_KEYS, f"unexpected attribute keys: {keys}"
+
+
+def test_no_unexpected_attributes_on_failure_path(capfire: CaptureLogfire) -> None:
+    """貫通例外で失敗分類属性を焼いても、span 属性は許可キー集合内 (属性チャネルのみ)。
+
+    検証範囲は span の **属性チャネル** のみ。例外 message / stacktrace は別の OTel
+    exception event チャネルに入り (本テストの対象外・未 redact)、属性へは昇格しない。
+    """
+    with pytest.raises(ValueError):
+        with curation_stage_span(article_id=1):
+            raise ValueError("token=sk-secret https://internal/secret?q=1")
     keys = domain_attr_keys(stage_attrs(capfire))
     assert keys <= _ALLOWED_DOMAIN_KEYS, f"unexpected attribute keys: {keys}"

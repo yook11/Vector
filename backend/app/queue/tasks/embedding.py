@@ -102,6 +102,9 @@ async def generate_embedding(
         try:
             await svc.execute(ready, embedder)
         except Exception as exc:
+            # handler / hold が二次例外で落ちても元の業務例外を span に残す
+            # (no-override で最初の業務例外を保持)。
+            stage.record_failure(exc)
             decision = await handler.handle(
                 ready=ready,
                 exc=exc,

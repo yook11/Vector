@@ -7,7 +7,11 @@ import pytest
 from logfire.testing import CaptureLogfire
 from structlog.testing import capture_logs
 
-from app.analysis.ai_provider_errors import AIProviderRateLimitedError
+from app.analysis.ai_provider_errors import (
+    AIProviderConfigurationError,
+    AIProviderNetworkError,
+    AIProviderRateLimitedError,
+)
 from app.analysis.assessment.domain.ready import (
     AssessmentReadyBuildBlockedCode,
     AssessmentReadyBuildBlockedError,
@@ -17,7 +21,7 @@ from app.analysis.failure_handling import FailureHandlingDecision
 from app.analysis.rate_limit import AIModelRateLimitPolicy, RateLimitRule
 from app.queue.messages.assessment import AssessmentTrigger
 from app.queue.messages.embedding import EmbeddingTrigger
-from tests.logfire._span_helpers import stage_attrs
+from tests.logfire._span_helpers import one_article_stage_span, stage_attrs
 
 
 def _make_provider_fake() -> MagicMock:
@@ -409,6 +413,149 @@ class TestAssessContentStageSpan:
             await assess_content(trigger=_make_trigger(), ctx=mock_ctx)
 
         assert stage_attrs(capfire)["result"] == "rate_limited"
+
+    @pytest.mark.asyncio
+    async def test_terminal_sets_failure_attrs_without_drop_article(
+        self, capfire: CaptureLogfire
+    ) -> None:
+        """Service が terminal marker を raise したとき span に failure 属性が焼かれる。
+
+        期待値の根拠:
+        - AIProviderConfigurationError: CODE="ai_error_configuration",
+          FAILURE_MODE=OPERATOR_ACTION_REQUIRED (ai_provider_errors.py)
+        - map_provider_to_assessment: not retryable → AssessmentTerminalError,
+          failure_kind=mode.value="operator_action_required", code=exc.CODE
+          (assessment/errors.py)
+        - AssessmentTerminalError: RETRYABILITY=NON_RETRYABLE, FAILURE_ACTION=None
+          → failure_action は span に載らない (failure_attrs.py: None なら set しない)
+        """
+        from app.analysis.assessment.errors import map_provider_to_assessment
+        from app.queue.tasks.assessment import assess_content
+
+        mock_ctx = _make_ctx(assessor=_make_provider_fake())
+        raw = AIProviderConfigurationError()
+        marker = map_provider_to_assessment(raw)
+
+        with (
+            _patch_ready_construction(_make_ready()),
+            patch("app.queue.tasks.assessment.AssessmentService") as mock_svc_cls,
+            patch(
+                "app.queue.tasks.assessment.AssessmentFailureHandler"
+            ) as mock_handler_cls,
+        ):
+            mock_svc_cls.return_value.execute = AsyncMock(side_effect=marker)
+            mock_handler_cls.return_value.handle = AsyncMock(
+                return_value=FailureHandlingDecision(reraise=False)
+            )
+            await assess_content(trigger=_make_trigger(), ctx=mock_ctx)
+
+        attrs = stage_attrs(capfire)
+        assert attrs["result"] == "failed"
+        # failure_kind: OPERATOR_ACTION_REQUIRED.value (assessment/errors.py)
+        assert attrs["failure_kind"] == "operator_action_required"
+        # code: AIProviderConfigurationError.CODE (ai_provider_errors.py)
+        assert attrs["code"] == "ai_error_configuration"
+        # retryability: AssessmentTerminalError.RETRYABILITY (assessment/errors.py)
+        assert attrs["retryability"] == "non_retryable"
+        # error_class: exception_fqn of the marker instance (AssessmentTerminalError)
+        assert attrs["error_class"].endswith(".AssessmentTerminalError")
+        # failure_action: FAILURE_ACTION=None → attribute not set (failure_attrs.py)
+        assert "failure_action" not in attrs
+
+    @pytest.mark.asyncio
+    async def test_recoverable_reraise_sets_failure_attrs_and_exception_event(
+        self, capfire: CaptureLogfire
+    ) -> None:
+        """Service が recoverable marker を raise し reraise=True のとき、span に
+        failure 属性と OTel exception event が両方残る (二層記録の統合確認)。
+
+        期待値の根拠:
+        - AIProviderNetworkError: CODE="ai_error_network",
+          FAILURE_MODE=ATTEMPT_SCOPED (ai_provider_errors.py)
+        - map_provider_to_assessment: retryable → AssessmentRecoverableError,
+          failure_kind="attempt_scoped", code="ai_error_network" (assessment/errors.py)
+        - AssessmentRecoverableError: RETRYABILITY=RETRYABLE (assessment/errors.py)
+        - backstop: reraise=True → task raises → backstop catches → record_failure
+          (no-override = no-op) + OTel exception event by logfire.span backstop
+        """
+        from app.analysis.assessment.errors import map_provider_to_assessment
+        from app.queue.tasks.assessment import assess_content
+        from tests.logfire._span_helpers import exception_event
+
+        mock_ctx = _make_ctx(assessor=_make_provider_fake())
+        raw = AIProviderNetworkError()
+        marker = map_provider_to_assessment(raw)
+
+        with (
+            _patch_ready_construction(_make_ready()),
+            patch("app.queue.tasks.assessment.AssessmentService") as mock_svc_cls,
+            patch(
+                "app.queue.tasks.assessment.AssessmentFailureHandler"
+            ) as mock_handler_cls,
+        ):
+            mock_svc_cls.return_value.execute = AsyncMock(side_effect=marker)
+            mock_handler_cls.return_value.handle = AsyncMock(
+                return_value=FailureHandlingDecision(reraise=True)
+            )
+            with pytest.raises(type(marker)):
+                await assess_content(trigger=_make_trigger(), ctx=mock_ctx)
+
+        attrs = stage_attrs(capfire)
+        # failure_kind: ATTEMPT_SCOPED.value (assessment/errors.py)
+        assert attrs["failure_kind"] == "attempt_scoped"
+        # code: AIProviderNetworkError.CODE (ai_provider_errors.py)
+        assert attrs["code"] == "ai_error_network"
+        # retryability: AssessmentRecoverableError.RETRYABILITY (assessment/errors.py)
+        assert attrs["retryability"] == "retryable"
+        # error_class は early record_failure が焼いたもの (AssessmentRecoverableError)
+        assert attrs["error_class"].endswith(".AssessmentRecoverableError")
+        # OTel exception event: logfire records the propagating exception on the span
+        evt = exception_event(one_article_stage_span(capfire))
+        assert evt is not None, "OTel exception event が span に記録されていない"
+        # exception event の type も同じ marker class であること
+        assert evt["attributes"]["exception.type"].endswith(
+            ".AssessmentRecoverableError"
+        )
+
+    @pytest.mark.asyncio
+    async def test_no_override_preserves_original_failure_class(
+        self, capfire: CaptureLogfire
+    ) -> None:
+        """stage.record_failure の no-override: handler が二次例外を発生させても
+        span の error_class / failure_kind は最初の業務例外 (recoverable) のまま。
+
+        handler.handle が RuntimeError を raise → task の except から伝播 →
+        backstop の record_failure(RuntimeError) は _failure_set=True のため no-op。
+        span 属性は元の marker クラスで固定される (failure_attrs.py)。
+        """
+        from app.analysis.assessment.errors import map_provider_to_assessment
+        from app.queue.tasks.assessment import assess_content
+
+        mock_ctx = _make_ctx(assessor=_make_provider_fake())
+        raw = AIProviderNetworkError()
+        original_marker = map_provider_to_assessment(raw)  # AssessmentRecoverableError
+
+        with (
+            _patch_ready_construction(_make_ready()),
+            patch("app.queue.tasks.assessment.AssessmentService") as mock_svc_cls,
+            patch(
+                "app.queue.tasks.assessment.AssessmentFailureHandler"
+            ) as mock_handler_cls,
+        ):
+            mock_svc_cls.return_value.execute = AsyncMock(side_effect=original_marker)
+            # handler 自体が二次例外を raise → no-override の検証対象
+            mock_handler_cls.return_value.handle = AsyncMock(
+                side_effect=RuntimeError("secondary audit/hold down")
+            )
+            with pytest.raises(RuntimeError):
+                await assess_content(trigger=_make_trigger(), ctx=mock_ctx)
+
+        attrs = stage_attrs(capfire)
+        # error_class は最初の業務例外 (AssessmentRecoverableError) のまま
+        # RuntimeError で上書きされていないことを確認 (no-override 保証)
+        assert attrs["error_class"].endswith(".AssessmentRecoverableError")
+        # failure_kind も元の marker のまま (attempt_scoped, ai_provider_errors.py)
+        assert attrs["failure_kind"] == "attempt_scoped"
 
     @pytest.mark.parametrize("reraise", [True, False])
     @pytest.mark.asyncio

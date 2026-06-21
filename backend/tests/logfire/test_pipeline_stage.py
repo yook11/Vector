@@ -11,10 +11,14 @@ capfire は内部で ``logfire.configure(send_to_logfire=False, ...)`` を呼ぶ
 
 from __future__ import annotations
 
+import asyncio
+
 import pytest
 from logfire.testing import CaptureLogfire
 
 from app.audit.domain.event import Stage
+from app.collection.article_acquisition.errors import AcquisitionReadError
+from app.collection.external_fetch_errors import FetchSsrfBlockedError
 from app.logfire.stage_span import pipeline_stage_span
 from tests.logfire._span_helpers import (
     domain_attr_keys,
@@ -29,10 +33,19 @@ _SPAN_NAME = "pipeline_stage"
 # error=17 / fatal=21。貫通例外で span は error へ自動昇格する (doc I5)。
 _LEVEL_ERROR = 17
 
-# helper の signature だけで載りうるドメイン attribute の全集合。
+# helper の signature と失敗 backstop で載りうるドメイン attribute の全集合。
 # PII 防御: これ以外のキー (本文 / URL / prompt など) が span に乗らないことの oracle。
-# PR2 で failure_kind / code / error_class / retryability を追加する。
-_ALLOWED_DOMAIN_KEYS = {"stage", "op", "source_id", "article_id"}
+_ALLOWED_DOMAIN_KEYS = {
+    "stage",
+    "op",
+    "source_id",
+    "article_id",
+    "failure_kind",
+    "code",
+    "retryability",
+    "error_class",
+    "failure_action",
+}
 
 
 # 不変条件 1: span_name は固定。識別子は attribute へ分離する。
@@ -132,6 +145,57 @@ def test_exception_escalates_level_to_error(capfire: CaptureLogfire) -> None:
     assert span["attributes"]["logfire.level_num"] == _LEVEL_ERROR
 
 
+# 不変条件 7b: 貫通例外は failure projection 由来の失敗分類属性を span に焼く
+
+
+def test_generic_exception_records_unknown_failure_attributes(
+    capfire: CaptureLogfire,
+) -> None:
+    """分類不能な貫通例外は catch-all projection の値が span に載る。"""
+    with pytest.raises(ValueError, match="boom"):
+        with pipeline_stage_span(Stage.ACQUISITION, op="acquire_source", source_id=1):
+            raise ValueError("boom")
+    attrs = pipeline_stage_attrs(capfire)
+    assert attrs["failure_kind"] == "unknown"
+    assert attrs["code"] == "unexpected_error"
+    assert attrs["retryability"] == "unknown"
+    assert attrs["error_class"] == "builtins.ValueError"
+    # drop_article でないため failure_action は載らない (条件付き属性)。
+    assert "failure_action" not in attrs
+
+
+def test_marker_exception_records_classified_failure_attributes(
+    capfire: CaptureLogfire,
+) -> None:
+    """marker 例外は project_failure の分類値 (unknown でない) が span に載る。"""
+    exc = AcquisitionReadError(origin=FetchSsrfBlockedError("ssrf blocked: 10.0.0.1"))
+    with pytest.raises(AcquisitionReadError):
+        with pipeline_stage_span(Stage.ACQUISITION, op="acquire_source", source_id=1):
+            raise exc
+    attrs = pipeline_stage_attrs(capfire)
+    assert attrs["failure_kind"] == "external_fetch"
+    assert attrs["code"] == "fetch_ssrf_blocked"
+    assert attrs["retryability"] == "non_retryable"
+    assert attrs["error_class"].endswith(".AcquisitionReadError")
+
+
+# 不変条件 7c: 協調キャンセルは失敗ではない (失敗分類属性を載せない)
+
+
+def test_cancellation_does_not_record_failure_attributes(
+    capfire: CaptureLogfire,
+) -> None:
+    """CancelledError は ``except Exception`` を素通りし失敗分類属性を載せない。"""
+    with pytest.raises(asyncio.CancelledError):
+        with pipeline_stage_span(Stage.ACQUISITION, op="acquire_source", source_id=1):
+            raise asyncio.CancelledError
+    attrs = pipeline_stage_attrs(capfire)
+    assert "failure_kind" not in attrs
+    assert "code" not in attrs
+    assert "error_class" not in attrs
+    assert "retryability" not in attrs
+
+
 # 不変条件 8: PII — ドメイン attribute は許可キーのみ (本文 / URL / prompt は乗らない)
 
 
@@ -141,5 +205,19 @@ def test_no_unexpected_attributes(capfire: CaptureLogfire) -> None:
         Stage.COMPLETION, op="scrape_html_body", source_id=1, article_id=2
     ):
         pass
+    keys = domain_attr_keys(pipeline_stage_attrs(capfire))
+    assert keys <= _ALLOWED_DOMAIN_KEYS, f"unexpected attribute keys: {keys}"
+
+
+def test_no_unexpected_attributes_on_failure_path(capfire: CaptureLogfire) -> None:
+    """失敗 backstop は許可キー以外を span 属性に焼かない (属性チャネルのみの oracle)。
+
+    検証範囲は span の **属性チャネル** のみ。例外 message / stacktrace は別の OTel
+    exception event チャネルに入り (本テストの対象外・未 redact)、属性へは昇格しない。
+    機微文字列を含む例外でも、属性キーが許可集合内に留まることだけを固定する。
+    """
+    with pytest.raises(ValueError):
+        with pipeline_stage_span(Stage.ACQUISITION, op="acquire_source", source_id=1):
+            raise ValueError("token=sk-secret https://internal/secret?q=1")
     keys = domain_attr_keys(pipeline_stage_attrs(capfire))
     assert keys <= _ALLOWED_DOMAIN_KEYS, f"unexpected attribute keys: {keys}"

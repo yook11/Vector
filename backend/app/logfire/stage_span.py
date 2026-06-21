@@ -8,7 +8,9 @@ taskiq ``OpenTelemetryMiddleware`` の ``execute/<task_name>`` span の子とし
 span attribute には本文・URL・prompt・AI response・認証情報を載せない。低 cardinality
 の語彙 (stage / op) と内部 DB ID (source_id / article_id) のみを載せる。span 内を
 貫通した例外は ``logfire.span`` が OTel exception event として自動記録し level を error
-に上げる。失敗種別 (failure_kind / code / error_class) の複写は後続 PR で足す。
+に上げる。加えて backstop で failure projection 由来の失敗分類属性 (failure_kind /
+code / retryability / error_class) も焼く。協調キャンセル (CancelledError 等) は
+``except Exception`` で失敗軸から除外する。
 """
 
 from __future__ import annotations
@@ -20,6 +22,7 @@ import logfire
 from logfire import LogfireSpan
 
 from app.audit.domain.event import Stage
+from app.logfire.failure_attrs import annotate_span_failure
 
 # 低 cardinality 固定の span_name。stage / op / 識別子は attribute へ分離する。
 _SPAN_NAME = "pipeline_stage"
@@ -44,4 +47,8 @@ def pipeline_stage_span(
     if article_id is not None:
         attrs["article_id"] = article_id
     with logfire.span(_SPAN_NAME, **attrs) as span:
-        yield span
+        try:
+            yield span
+        except Exception as exc:
+            annotate_span_failure(span, exc)
+            raise
