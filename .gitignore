@@ -88,7 +88,7 @@ skills-lock.json
 # ===========================
 *.local.md
 agent-failures/
-# 個人開発メモ (ddd-adoption の一次資料)。ローカル保持し公開しない。
+# 個人開発メモ (design-journey の一次資料)。ローカル保持し公開しない。
 docs/dev-notes/
 
 # ===========================

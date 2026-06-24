@@ -6,7 +6,7 @@
 
 - Vector では、AI を単なるコード生成ツールとしてではなく、開発プロセスの参加者として使っている。
 - この文書で書きたいのは、「AI に丸投げしていない」という弁明ではない。
-- AI に丸投げしているのか、設計判断にどう向き合っているのかは、主に [docs/ddd-adoption/](ddd-adoption/README.md) 側のドキュメントが語っている。
+- AI に丸投げしているのか、設計判断にどう向き合っているのかは、主に [docs/design-journey/](design-journey/README.md) 側のドキュメントが語っている。
 - ここでは、AI をどのように開発に生かしているのかを書く。
 - 特に、仕様書駆動開発、テスト駆動開発への取り組み、検証ハーネス、作業監視の仕組みに焦点を当てる。
 - 人間が毎回うまく指示するのではなく、AI が継続的に働ける環境をリポジトリ側に持たせようとしている。
@@ -94,7 +94,7 @@
 
 - 「AI に丸投げしていない」ことの弁明を主題にしない。
 - DDD 採用や撤回の詳細には踏み込まない。
-- 設計判断の正しさそのものは、[docs/adr/](adr/README.md) や [docs/ddd-adoption/](ddd-adoption/README.md) に任せる。
+- 設計判断の正しさそのものは、[docs/adr/](adr/README.md) や [docs/design-journey/](design-journey/README.md) に任せる。
 - AI 活用の一般論を書かない。
 - 生産性が何倍になった、という検証しにくい話にしない。
 - 使っているツール一覧の自慢にしない。
@@ -122,5 +122,5 @@
 - [specs/](../specs/): 実装前に書く仕様。
 - [backend/tests/AGENTS.md](../backend/tests/AGENTS.md): テスト設計の原則。
 - [docs/adr/](adr/README.md): 設計判断の記録。
-- [docs/ddd-adoption/](ddd-adoption/README.md): 設計判断にたどり着き、撤回するまでの過程。
+- [docs/design-journey/](design-journey/README.md): 設計判断にたどり着き、撤回するまでの過程。
 - [docs/testing/backend-test-quality-remediation.md](testing/backend-test-quality-remediation.md): テスト品質の監査。
