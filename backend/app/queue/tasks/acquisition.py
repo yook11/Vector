@@ -418,7 +418,7 @@ async def acquire_source(
     source_id = arg.id
     with pipeline_stage_span(
         Stage.ACQUISITION, op="acquire_source", source_id=source_id
-    ):
+    ) as stage:
         # 重い import は task body 内 (scheduler 起動を軽く保つ)。span 内に置き
         # import 時失敗も acquisition stage 軸に乗せる (他工程と計装位置を揃える)。
         from app.collection.article_acquisition.service import ArticleAcquisitionService
@@ -435,6 +435,8 @@ async def acquire_source(
         try:
             persisted_ids = await svc.execute(source_id)
         except Exception as exc:
+            # 元の fetch/read 失敗を span に残す (handler/監査の二次例外より前)。
+            stage.record_failure(exc)
             record_acquisition_run(AcquisitionRunResult.FAILED)
             reraise = await handler.handle_source_failure(
                 source_id=source_id,

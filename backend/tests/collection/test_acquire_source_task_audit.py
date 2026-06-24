@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterator
+from contextlib import contextmanager
 from types import SimpleNamespace
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -20,7 +22,11 @@ from app.models.news_source import NewsSource, SourceType
 from app.models.pipeline_event import PipelineEvent
 from app.queue.messages.collection import AcquireSourceTaskInput
 from app.queue.tasks import acquisition as collection_tasks
-from tests.logfire._span_helpers import pipeline_stage_attrs
+from tests.logfire._span_helpers import (
+    exception_event,
+    one_span_named,
+    pipeline_stage_attrs,
+)
 
 
 @pytest.fixture
@@ -64,6 +70,47 @@ def _patch_service_to_raise(monkeypatch: pytest.MonkeyPatch, exc: Exception) -> 
         "app.collection.article_acquisition.service.ArticleAcquisitionService",
         cls,
     )
+
+
+def _span_ctx() -> MagicMock:
+    """capfire span テスト用の taskiq Context mock (MagicMock 版)。"""
+    ctx = MagicMock()
+    ctx.state.session_factory = MagicMock()
+    ctx.message.labels = {}
+    return ctx
+
+
+@contextmanager
+def _acquire_failure_patches(
+    *, service_exc: Exception, handle_source_failure: AsyncMock
+) -> Iterator[None]:
+    """acquire_source の失敗経路を capfire で回す patch 群 (実 DB / 実 net 回避)。
+
+    service は ``service_exc`` を raise、reraise 判定 / 二次例外は引数で注入。
+    """
+    fake_sources = MagicMock()
+    fake_sources.__getitem__ = MagicMock(return_value=MagicMock())
+    with (
+        patch(
+            "app.collection.article_acquisition.service.ArticleAcquisitionService",
+            return_value=MagicMock(execute=AsyncMock(side_effect=service_exc)),
+        ),
+        patch("app.collection.article_acquisition.strategy.SOURCES", fake_sources),
+        patch(
+            "app.collection.sources.source_name.SourceName",
+            return_value=MagicMock(),
+        ),
+        patch("app.queue.tasks.acquisition.record_acquisition_run"),
+        patch(
+            "app.queue.tasks.acquisition.ArticleAcquisitionFailureHandler",
+            return_value=MagicMock(handle_source_failure=handle_source_failure),
+        ),
+        patch(
+            "app.queue.tasks.acquisition.curate_content",
+            new=MagicMock(kiq=AsyncMock()),
+        ),
+    ):
+        yield
 
 
 async def _failed_event(db_session: AsyncSession) -> PipelineEvent:
@@ -166,6 +213,85 @@ class TestAcquireSourceStageSpan:
         assert attrs["stage"] == Stage.ACQUISITION.value  # == "acquisition"
         assert attrs["op"] == "acquire_source"
         assert attrs["source_id"] == target_source_id
+
+    @pytest.mark.asyncio
+    async def test_swallowed_failure_records_classification_on_span(
+        self, capfire: CaptureLogfire
+    ) -> None:
+        """握り潰し (reraise=False): error dict を返しつつ span に分類属性が乗る。"""
+        marker = AcquisitionReadError(
+            origin=FetchSsrfBlockedError("ssrf blocked: 10.0.0.1")
+        )
+        with _acquire_failure_patches(
+            service_exc=marker,
+            handle_source_failure=AsyncMock(return_value=False),
+        ):
+            result = await collection_tasks.acquire_source(
+                AcquireSourceTaskInput(id=7, name="FakeSource"),
+                ctx=_span_ctx(),  # type: ignore[arg-type]
+            )
+
+        # 制御は従来どおり: failed job にせず error dict を返す。
+        assert result["status"] == "error"
+        attrs = pipeline_stage_attrs(capfire)
+        assert attrs["failure_kind"] == "external_fetch"
+        assert attrs["code"] == "fetch_ssrf_blocked"
+        assert attrs["retryability"] == "non_retryable"
+        assert attrs["error_class"].endswith(".AcquisitionReadError")
+
+    @pytest.mark.asyncio
+    async def test_reraised_failure_keeps_classification_on_span(
+        self, capfire: CaptureLogfire
+    ) -> None:
+        """貫通 (reraise=True): task は再送出し、span は分類属性を持つ。
+
+        この経路の明示 record_failure は backstop と同一 exc を二重記録するため、本
+        テストは「再送出 + 分類が乗る + no-override で壊れない」観測契約を固定する。
+        明示記録の欠落自体は握り潰し / 二次例外テストが捕捉する。
+        """
+        marker = AcquisitionReadError(
+            origin=FetchSsrfBlockedError("ssrf blocked: 10.0.0.1")
+        )
+        with _acquire_failure_patches(
+            service_exc=marker,
+            handle_source_failure=AsyncMock(return_value=True),
+        ):
+            with pytest.raises(AcquisitionReadError):
+                await collection_tasks.acquire_source(
+                    AcquireSourceTaskInput(id=7, name="FakeSource"),
+                    ctx=_span_ctx(),  # type: ignore[arg-type]
+                )
+
+        attrs = pipeline_stage_attrs(capfire)
+        assert attrs["failure_kind"] == "external_fetch"
+        assert attrs["error_class"].endswith(".AcquisitionReadError")
+
+    @pytest.mark.asyncio
+    async def test_secondary_handler_error_keeps_original_classification(
+        self, capfire: CaptureLogfire
+    ) -> None:
+        """handler が二次例外で落ちても、span は最初の fetch 失敗の分類を保持する。"""
+        marker = AcquisitionReadError(
+            origin=FetchSsrfBlockedError("ssrf blocked: 10.0.0.1")
+        )
+        with _acquire_failure_patches(
+            service_exc=marker,
+            handle_source_failure=AsyncMock(side_effect=RuntimeError("audit down")),
+        ):
+            with pytest.raises(RuntimeError, match="audit down"):
+                await collection_tasks.acquire_source(
+                    AcquireSourceTaskInput(id=7, name="FakeSource"),
+                    ctx=_span_ctx(),  # type: ignore[arg-type]
+                )
+
+        # span 属性は最初の業務例外で固定 (no-override)。一方 OTel exception event は
+        # 実際に貫通した二次例外 (RuntimeError) を記録する — 意図した二軸の使い分け。
+        attrs = pipeline_stage_attrs(capfire)
+        assert attrs["failure_kind"] == "external_fetch"
+        assert attrs["error_class"].endswith(".AcquisitionReadError")
+        event = exception_event(one_span_named(capfire, "pipeline_stage"))
+        assert event is not None
+        assert event["attributes"]["exception.type"].endswith("RuntimeError")
 
 
 @pytest.mark.asyncio

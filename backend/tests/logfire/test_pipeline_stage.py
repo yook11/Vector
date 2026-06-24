@@ -196,6 +196,60 @@ def test_cancellation_does_not_record_failure_attributes(
     assert "retryability" not in attrs
 
 
+# 不変条件 7d: 明示 record_failure (握り潰し経路) と no-override
+
+
+def test_record_failure_via_recorder_sets_classified_attributes(
+    capfire: CaptureLogfire,
+) -> None:
+    """握り潰し経路: raise せず ``record_failure`` を呼ぶと分類属性が span に載る。"""
+    exc = AcquisitionReadError(origin=FetchSsrfBlockedError("ssrf blocked: 10.0.0.1"))
+    with pipeline_stage_span(
+        Stage.ACQUISITION, op="acquire_source", source_id=1
+    ) as stage:
+        stage.record_failure(exc)
+    attrs = pipeline_stage_attrs(capfire)
+    assert attrs["failure_kind"] == "external_fetch"
+    assert attrs["code"] == "fetch_ssrf_blocked"
+    assert attrs["retryability"] == "non_retryable"
+    assert attrs["error_class"].endswith(".AcquisitionReadError")
+
+
+def test_record_failure_is_no_override(capfire: CaptureLogfire) -> None:
+    """record_failure は一度だけ焼く。二度目の例外では元の分類を上書きしない。"""
+    first = AcquisitionReadError(origin=FetchSsrfBlockedError("ssrf blocked: 10.0.0.1"))
+    with pipeline_stage_span(
+        Stage.ACQUISITION, op="acquire_source", source_id=1
+    ) as stage:
+        stage.record_failure(first)
+        stage.record_failure(ValueError("secondary"))
+    attrs = pipeline_stage_attrs(capfire)
+    assert attrs["failure_kind"] == "external_fetch"
+    assert attrs["error_class"].endswith(".AcquisitionReadError")
+
+
+def test_explicit_record_then_propagating_secondary_keeps_original(
+    capfire: CaptureLogfire,
+) -> None:
+    """明示記録後に別例外が貫通しても、backstop は元の分類を上書きしない。
+
+    acquire_source の二次例外 (handler/監査 DB ダウン) を模す: 先に業務例外を記録し、
+    後から別例外が span を貫通しても span の error_class は最初の業務例外のまま。
+    """
+    business = AcquisitionReadError(
+        origin=FetchSsrfBlockedError("ssrf blocked: 10.0.0.1")
+    )
+    with pytest.raises(RuntimeError, match="audit down"):
+        with pipeline_stage_span(
+            Stage.ACQUISITION, op="acquire_source", source_id=1
+        ) as stage:
+            stage.record_failure(business)
+            raise RuntimeError("audit down")
+    attrs = pipeline_stage_attrs(capfire)
+    assert attrs["failure_kind"] == "external_fetch"
+    assert attrs["error_class"].endswith(".AcquisitionReadError")
+
+
 # 不変条件 8: PII — ドメイン attribute は許可キーのみ (本文 / URL / prompt は乗らない)
 
 
