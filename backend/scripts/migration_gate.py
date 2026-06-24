@@ -30,6 +30,7 @@ _DESTRUCTIVE_SQL_RE = re.compile(
     re.IGNORECASE,
 )
 _ALLOWLISTED_SQL_RE = re.compile(r"^\s*(SET|COMMENT)\b", re.IGNORECASE)
+_MULTI_STATEMENT_SQL_RE = re.compile(r";\s*\S")
 _DROP_OP_PREFIX = "drop_"
 _BLOCKED_CONSTRAINT_OPS = frozenset(
     {
@@ -251,11 +252,17 @@ def _classify_op_execute(call: ast.Call) -> list[str]:
     sql = _literal_sql(call.args[0])
     if sql is None:
         return ["op.execute SQL is dynamic and manual-only"]
-    if _ALLOWLISTED_SQL_RE.search(sql):
+    if _is_allowlisted_sql(sql):
         return []
     if _DESTRUCTIVE_SQL_RE.search(sql):
         return ["op.execute contains destructive or data-changing SQL"]
     return ["op.execute raw SQL is not allowlisted for auto migration"]
+
+
+def _is_allowlisted_sql(sql: str) -> bool:
+    return bool(_ALLOWLISTED_SQL_RE.search(sql)) and not _MULTI_STATEMENT_SQL_RE.search(
+        sql
+    )
 
 
 def _literal_sql(node: ast.AST) -> str | None:

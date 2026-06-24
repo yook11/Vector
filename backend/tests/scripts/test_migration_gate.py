@@ -160,6 +160,87 @@ def upgrade() -> None:
     assert result.auto_allowed is True
 
 
+def test_expand_set_then_drop_multi_statement_sql_is_blocked(
+    tmp_path: Path,
+) -> None:
+    path = _revision(
+        tmp_path,
+        """
+MIGRATION_KIND = "expand"
+
+def upgrade() -> None:
+    op.execute("SET lock_timeout = '5s'; DROP TABLE articles;")
+""",
+    )
+
+    result = classify(path)
+
+    assert result.auto_allowed is False
+    assert result.mislabelled_expand is True
+    assert any("destructive" in reason for reason in result.reasons)
+
+
+def test_expand_comment_then_drop_multi_statement_sql_is_blocked(
+    tmp_path: Path,
+) -> None:
+    path = _revision(
+        tmp_path,
+        """
+MIGRATION_KIND = "expand"
+
+def upgrade() -> None:
+    op.execute("COMMENT ON TABLE articles IS 'ok'; DROP TABLE articles;")
+""",
+    )
+
+    result = classify(path)
+
+    assert result.auto_allowed is False
+    assert result.mislabelled_expand is True
+    assert any("destructive" in reason for reason in result.reasons)
+
+
+def test_expand_set_with_trailing_semicolon_is_allowed(tmp_path: Path) -> None:
+    # 末尾セミコロンのみの単文は複文とみなされず allowlist を通る。
+    # 本番 migration は op.execute("SET lock_timeout = '5s';") を多用するため
+    # _MULTI_STATEMENT_SQL_RE を r";" に変えると正当な migration が block される。
+    path = _revision(
+        tmp_path,
+        """
+MIGRATION_KIND = "expand"
+
+def upgrade() -> None:
+    op.execute("SET lock_timeout = '5s';")
+""",
+    )
+
+    result = classify(path)
+
+    assert result.auto_allowed is True
+
+
+def test_expand_non_destructive_multi_statement_sql_is_blocked(
+    tmp_path: Path,
+) -> None:
+    # 破壊系キーワードが無くても複文であれば allowlist から外れて block される。
+    # reasons に "destructive" が含まれないことで、複文判定が destructive 検出と
+    # 独立に gate を効かせている不変条件を pin する。
+    path = _revision(
+        tmp_path,
+        """
+MIGRATION_KIND = "expand"
+
+def upgrade() -> None:
+    op.execute("SET search_path TO public; SET lock_timeout = '5s'")
+""",
+    )
+
+    result = classify(path)
+
+    assert result.auto_allowed is False
+    assert not any("destructive" in reason for reason in result.reasons)
+
+
 def test_expand_set_not_null_is_blocked(tmp_path: Path) -> None:
     path = _revision(
         tmp_path,
