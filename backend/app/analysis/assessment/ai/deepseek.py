@@ -116,7 +116,7 @@ class DeepSeekAssessor(BaseAssessor):
                         "name": tool_name,
                         "strict": True,
                         "description": (
-                            "記事を Vector の 11 カテゴリのいずれか、"
+                            "記事を Vector の 12 カテゴリのいずれか、"
                             "または out_of_scope に分類する"
                         ),
                         "parameters": dict(self.SPEC.response_schema),
