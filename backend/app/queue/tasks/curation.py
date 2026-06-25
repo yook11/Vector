@@ -17,7 +17,9 @@ from app.analysis.curation.metrics import record_curation_processing_outcome
 from app.analysis.curation.repository import CurationRepository
 from app.analysis.curation.service import CurationService
 from app.analysis.rate_limit import record_rate_limit_gate_skipped
+from app.audit.domain.event import Stage
 from app.audit.error_fields import exception_fqn
+from app.audit.metrics import record_audit_dropped
 from app.audit.ready_build import project_ready_build_failure
 from app.audit.stages.curation import CurationAuditRepository
 from app.logfire.article_stage import curation_stage_span
@@ -149,3 +151,4 @@ async def _append_ready_build_failed_audit(
             business_error_class=exception_fqn(exc),
             audit_error_class=exception_fqn(audit_exc),
         )
+        record_audit_dropped(Stage.CURATION)

@@ -22,6 +22,7 @@ from taskiq import Context, TaskiqDepends
 
 from app.audit.domain.event import EventType, Stage
 from app.audit.error_fields import exception_fqn
+from app.audit.metrics import record_audit_dropped
 from app.audit.stages.dispatch import (
     DispatchAuditRepository,
     DispatchCadence,
@@ -274,6 +275,7 @@ async def _append_dispatch_source_event(
             source_name=source_name,
             audit_error_class=(exception_fqn(audit_exc)),
         )
+        record_audit_dropped(Stage.DISPATCH)
 
 
 async def _append_dispatch_run_completed(
@@ -292,6 +294,7 @@ async def _append_dispatch_run_completed(
             outcome_code=DispatchOutcomeCode.DISPATCH_RUN_COMPLETED.value,
             audit_error_class=(exception_fqn(audit_exc)),
         )
+        record_audit_dropped(Stage.DISPATCH)
 
 
 async def _append_dispatch_run_event(
@@ -318,6 +321,7 @@ async def _append_dispatch_run_event(
             outcome_code=outcome_code.value,
             audit_error_class=(exception_fqn(audit_exc)),
         )
+        record_audit_dropped(Stage.DISPATCH)
 
 
 async def _append_dispatch_run_failed(

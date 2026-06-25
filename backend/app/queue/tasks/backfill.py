@@ -22,6 +22,7 @@ from taskiq import Context, TaskiqDepends
 
 from app.audit.domain.event import EventType, Stage
 from app.audit.error_fields import exception_fqn
+from app.audit.metrics import record_audit_dropped
 from app.audit.stages.backfill import (
     BackfillAuditRepository,
     BackfillOutcomeCode,
@@ -179,6 +180,7 @@ async def _append_backfill_item_event(
             target_id=target.target_id,
             audit_error_class=exception_fqn(audit_exc),
         )
+        record_audit_dropped(stage)
 
 
 async def _append_backfill_run_event(
@@ -213,6 +215,7 @@ async def _append_backfill_run_event(
             outcome_code=outcome_code.value,
             audit_error_class=exception_fqn(audit_exc),
         )
+        record_audit_dropped(stage)
 
 
 def _record_hold_state(stage: str, *, held: bool) -> None:

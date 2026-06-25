@@ -24,6 +24,7 @@ from taskiq import Context, TaskiqDepends
 
 from app.audit.domain.event import EventType, Stage
 from app.audit.error_fields import exception_fqn
+from app.audit.metrics import record_audit_dropped
 from app.audit.stages.completion import ArticleCompletionAuditRepository
 from app.collection.article_completion.metrics import (
     record_completion_processing_outcome,
@@ -209,3 +210,4 @@ async def _append_ready_build_error_audit(
             business_error_class=exception_fqn(exc),
             audit_error_class=exception_fqn(audit_exc),
         )
+        record_audit_dropped(Stage.COMPLETION)

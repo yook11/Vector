@@ -14,6 +14,7 @@ from app.audit.domain.payloads import TrendDiscoveryPayload
 from app.audit.error_chain import extract_error_chain
 from app.audit.error_fields import error_message_of, exception_fqn
 from app.audit.failure_projection import Retryability
+from app.audit.metrics import record_audit_dropped
 from app.audit.repository import PipelineEventRepository
 
 TrendDiscoveryTrigger = Literal["cron", "cli"]
@@ -112,3 +113,4 @@ async def append_trend_discovery_run_event_best_effort(
             window_end=window_end.isoformat(),
             audit_error_class=exception_fqn(audit_exc),
         )
+        record_audit_dropped(Stage.TREND_DISCOVERY)

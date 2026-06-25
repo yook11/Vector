@@ -6,7 +6,9 @@ import structlog
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from app.audit.domain.event import Stage
 from app.audit.error_fields import exception_fqn
+from app.audit.metrics import record_audit_dropped
 from app.audit.stages.acquisition import SourceAcquisitionAuditRepository
 from app.collection.article_acquisition.errors import AcquisitionError
 from app.collection.article_acquisition.fetched_article_converter import (
@@ -82,6 +84,7 @@ class ArticleAcquisitionFailureHandler:
                 audit_error_class=(exception_fqn(audit_exc)),
                 audit_error_message=redact_secrets(str(audit_exc))[:500],
             )
+            record_audit_dropped(Stage.ACQUISITION)
             return
         # metric add を try の外に置き、counter 失敗を監査 drop と混同しない。
         record_acquisition_outcome(AcquisitionEntryOutcome.REJECTED, count=1)
@@ -110,6 +113,7 @@ class ArticleAcquisitionFailureHandler:
                 audit_error_class=(exception_fqn(audit_exc)),
                 audit_error_message=redact_secrets(str(audit_exc))[:500],
             )
+            record_audit_dropped(Stage.ACQUISITION)
 
     async def _audit_unexpected_failure(
         self,
@@ -137,3 +141,4 @@ class ArticleAcquisitionFailureHandler:
                 audit_error_class=(exception_fqn(audit_exc)),
                 audit_error_message=redact_secrets(str(audit_exc))[:500],
             )
+            record_audit_dropped(Stage.ACQUISITION)
