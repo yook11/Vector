@@ -54,6 +54,11 @@ def patched_configures(
     mock_structlog_configure = MagicMock()
     mock_instrument_httpx = MagicMock()
     mock_instrument_system_metrics = MagicMock()
+    # configure を mock すると実 provider が立たないため、その下流を触る
+    # install_exception_redaction も no-op 化する (実呼出は fail-fast する設計)。
+    monkeypatch.setattr(
+        logfire_setup_module, "install_exception_redaction", MagicMock()
+    )
     monkeypatch.setattr(
         logfire_setup_module.logfire, "configure", mock_logfire_configure
     )
@@ -274,6 +279,54 @@ def test_setup_logfire_passes_pii_off_kwargs_to_instrument_httpx(
     assert kwargs["capture_response_body"] is False
 
 
+# 例外 redaction — export 前に生 str(exc) を落とす (PII 封じ込め)
+
+
+def test_setup_logfire_installs_exception_redaction(
+    monkeypatch: pytest.MonkeyPatch,
+    patched_configures: tuple[MagicMock, MagicMock, MagicMock, MagicMock],
+) -> None:
+    """``setup_logfire`` は configure 後に ``install_exception_redaction`` を呼ぶ。
+
+    例外貫通で span に乗る生 str(exc) を export 前に redact する経路を pin する。
+    無効化されると任意 PII が Logfire span に残る。
+    """
+    monkeypatch.setattr(logfire_setup_module.settings, "logfire_token", None)
+    monkeypatch.setattr(logfire_setup_module.settings, "env", "development")
+    mock_install = MagicMock()
+    monkeypatch.setattr(
+        logfire_setup_module, "install_exception_redaction", mock_install
+    )
+
+    setup_logfire("vector-api")
+
+    assert mock_install.call_count == 1
+
+
+def test_install_exception_redaction_runs_after_configure(
+    monkeypatch: pytest.MonkeyPatch,
+    patched_configures: tuple[MagicMock, MagicMock, MagicMock, MagicMock],
+) -> None:
+    """``install_exception_redaction`` は ``logfire.configure`` の **後** に呼ばれる。
+
+    redactor は provider が立った後でないと設置できないため、順序が構造的契約。
+    """
+    mock_configure, _, _, _ = patched_configures
+    monkeypatch.setattr(logfire_setup_module.settings, "logfire_token", None)
+    monkeypatch.setattr(logfire_setup_module.settings, "env", "development")
+    order: list[str] = []
+    mock_configure.side_effect = lambda *a, **k: order.append("configure")
+    monkeypatch.setattr(
+        logfire_setup_module,
+        "install_exception_redaction",
+        MagicMock(side_effect=lambda: order.append("install")),
+    )
+
+    setup_logfire("vector-api")
+
+    assert order == ["configure", "install"]
+
+
 # system メトリクス — OOM 予兆監視の収集対象 (Phase 1) / token gate
 
 
@@ -339,6 +392,10 @@ def test_logger_works_after_bootstrap_in_development(
     """
     # 外部送信ゼロを保証するため logfire.configure は no-op に。
     monkeypatch.setattr(logfire_setup_module.logfire, "configure", MagicMock())
+    # configure が no-op のため実 provider が無い。redactor 設置も no-op に。
+    monkeypatch.setattr(
+        logfire_setup_module, "install_exception_redaction", MagicMock()
+    )
     # AsyncClient.send への global patch も他テスト並走で副作用にならないよう no-op に。
     monkeypatch.setattr(logfire_setup_module.logfire, "instrument_httpx", MagicMock())
     # token=None なので gate により未呼出だが、実収集器の起動を防御的に no-op 化する。

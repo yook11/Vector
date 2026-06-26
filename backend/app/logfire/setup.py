@@ -19,6 +19,7 @@ import logfire
 import structlog
 
 from app.config import settings
+from app.logfire.redaction import install_exception_redaction
 
 
 def setup_logfire(service_name: str) -> None:
@@ -39,6 +40,10 @@ def setup_logfire(service_name: str) -> None:
         # stdout 表示は structlog renderer に一本化 (二重出力回避)。
         console=False,
     )
+    # 例外貫通で span に乗る生 str(exc) (message/stacktrace/status.description) は
+    # logfire scrubber が SAFE_KEYS で素通しするため、export 前に redact する
+    # (任意 PII 封じ込め。機構は redaction.py 参照)。configure 後に呼ぶ。
+    install_exception_redaction()
     is_prod = settings.env == "production"
     # 共通 processors: contextvar 統合 / level / stack info / ISO timestamp。
     shared: list[structlog.types.Processor] = [
