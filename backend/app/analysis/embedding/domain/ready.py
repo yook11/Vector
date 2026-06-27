@@ -4,9 +4,11 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import StrEnum
-from typing import Protocol
+from typing import Any, Protocol
 
 from pydantic import BaseModel, ConfigDict, Field
+
+from app.shared.text import normalize_mention_surface
 
 __all__ = [
     "EmbeddingPreconditionProtocol",
@@ -15,6 +17,8 @@ __all__ = [
     "EmbeddingReadyBuildFacts",
     "ReadyForEmbedding",
 ]
+
+_MAX_MENTIONS_FOR_EMBEDDING = 30
 
 
 class EmbeddingReadyBuildBlockedCode(StrEnum):
@@ -30,8 +34,8 @@ class EmbeddingReadyBuildFacts:
 
     analyzable_article_id: int
     has_embedding: bool
-    translated_title: str
     summary: str
+    key_points: Any
 
 
 class EmbeddingReadyBuildBlockedError(Exception):
@@ -82,6 +86,71 @@ class ReadyForEmbedding(BaseModel):
 
         return cls(
             analyzed_article_id=analyzed_article_id,
-            text_for_embedding=f"{facts.translated_title}\n{facts.summary}",
+            text_for_embedding=_render_embedding_text(
+                summary=facts.summary,
+                key_points=facts.key_points,
+            ),
             analyzable_article_id=facts.analyzable_article_id,
         )
+
+
+def _render_embedding_text(*, summary: str, key_points: Any) -> str:
+    sections = [summary]
+    contents = _extract_key_point_contents(key_points)
+    if contents:
+        sections.append("\n".join(contents))
+
+    mentions = _extract_mention_surfaces(key_points)
+    if mentions:
+        sections.append(", ".join(mentions))
+
+    return "\n\n".join(sections)
+
+
+def _extract_key_point_contents(key_points: Any) -> list[str]:
+    if not isinstance(key_points, list):
+        return []
+    contents: list[str] = []
+    for key_point in key_points:
+        if not isinstance(key_point, dict):
+            continue
+        content = key_point.get("content")
+        if not isinstance(content, str):
+            continue
+        content = content.strip()
+        if content:
+            contents.append(content)
+    return contents
+
+
+def _extract_mention_surfaces(key_points: Any) -> list[str]:
+    if not isinstance(key_points, list):
+        return []
+    mentions: list[str] = []
+    seen: set[str] = set()
+    for key_point in key_points:
+        if not isinstance(key_point, dict):
+            continue
+        content = key_point.get("content")
+        if not isinstance(content, str) or not content.strip():
+            continue
+        raw_mentions = key_point.get("mentions")
+        if not isinstance(raw_mentions, list):
+            continue
+        for mention in raw_mentions:
+            if not isinstance(mention, dict):
+                continue
+            surface = mention.get("surface")
+            if not isinstance(surface, str):
+                continue
+            normalized = normalize_mention_surface(surface)
+            if not normalized:
+                continue
+            key = normalized.lower()
+            if key in seen:
+                continue
+            seen.add(key)
+            mentions.append(normalized)
+            if len(mentions) >= _MAX_MENTIONS_FOR_EMBEDDING:
+                return mentions
+    return mentions

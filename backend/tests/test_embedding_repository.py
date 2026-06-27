@@ -26,6 +26,7 @@ async def _build_analysis(
     *,
     url: str,
     embedding: list[float] | None = None,
+    key_points: list[dict[str, object]] | None = None,
 ) -> AnalyzedArticleRecord:
     """Stage 2 完了済みの分析行を 1 件作成する。"""
     article = AnalyzableArticleRecord(
@@ -51,6 +52,7 @@ async def _build_analysis(
         investor_take="投資家視点",
         category_id=category_id,
         embedding=embedding,
+        key_points=key_points,
     )
     db_session.add(analysis)
     await db_session.commit()
@@ -77,6 +79,12 @@ async def test_load_ready_build_facts_returns_values_when_unembedded(
         sample_source,
         sample_categories[0].id,
         url="https://example.com/load-ready-facts",
+        key_points=[
+            {
+                "content": "NVIDIAが新GPUを発表。",
+                "mentions": [{"surface": "NVIDIA", "type": "company"}],
+            }
+        ],
     )
     repo = EmbeddingRepository(db_session)
     curation = await db_session.get(ArticleCuration, analysis.curation_id)
@@ -87,8 +95,13 @@ async def test_load_ready_build_facts_returns_values_when_unembedded(
     assert facts is not None
     assert facts.analyzable_article_id == curation.analyzable_article_id
     assert facts.has_embedding is False
-    assert facts.translated_title == "分析タイトル"
     assert facts.summary == "分析要約"
+    assert facts.key_points == [
+        {
+            "content": "NVIDIAが新GPUを発表。",
+            "mentions": [{"surface": "NVIDIA", "type": "company"}],
+        }
+    ]
 
 
 @pytest.mark.asyncio

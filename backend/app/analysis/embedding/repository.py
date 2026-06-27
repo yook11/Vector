@@ -24,8 +24,8 @@ class EmbeddingRepository:
             select(
                 ArticleCuration.analyzable_article_id,
                 AnalyzedArticleRecord.embedding.is_not(None),
-                AnalyzedArticleRecord.translated_title,
                 AnalyzedArticleRecord.summary,
+                AnalyzedArticleRecord.key_points,
             )
             .select_from(AnalyzedArticleRecord)
             .join(
@@ -38,12 +38,12 @@ class EmbeddingRepository:
         row = (await self._session.execute(stmt)).first()
         if row is None:
             return None
-        analyzable_article_id, has_embedding, translated_title, summary = row
+        analyzable_article_id, has_embedding, summary, key_points = row
         return EmbeddingReadyBuildFacts(
             analyzable_article_id=analyzable_article_id,
             has_embedding=has_embedding,
-            translated_title=translated_title,
             summary=summary,
+            key_points=key_points,
         )
 
     async def save(
