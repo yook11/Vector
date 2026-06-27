@@ -20,6 +20,7 @@ from app.analysis.curation.domain.ready import (
 from app.analysis.failure_handling import FailureHandlingDecision
 from app.analysis.gemini_error_translator import GeminiContentRejectionReason
 from app.analysis.rate_limit import AIModelRateLimitPolicy, RateLimitRule
+from app.audit.domain.event import Stage
 from app.queue.messages.assessment import AssessmentTrigger
 from app.queue.messages.curation import CurationTrigger
 from tests.logfire._span_helpers import stage_attrs
@@ -231,7 +232,9 @@ class TestCurateContent:
 
         mock_svc_cls.assert_not_called()
         mock_assess.kiq.assert_not_called()
-        mock_record.assert_called_once_with(stage="curation", model="test-model")
+        mock_record.assert_called_once()
+        assert mock_record.call_args.kwargs["stage"] is Stage.CURATION
+        assert mock_record.call_args.kwargs["model"] == "test-model"
         skips = [
             e for e in cap if e.get("event") == "curation_ai_rate_limit_gate_skipped"
         ]

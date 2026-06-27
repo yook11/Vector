@@ -10,7 +10,6 @@ from app.analysis.ai_provider_errors import (
     AIProviderFailureMode,
     AIProviderStateError,
 )
-from app.audit.domain.event import Stage
 from app.audit.failure_projection import FailureAction, Retryability
 from app.logfire.exceptions import VectorDomainError
 
@@ -21,8 +20,6 @@ from app.logfire.exceptions import VectorDomainError
 
 class CurationError(VectorDomainError):
     """Stage 3 全例外の共通基底。直接の catch 対象にはしない。"""
-
-    STAGE: ClassVar[Stage] = Stage.CURATION
 
 
 class CurationRecoverableError(CurationError):

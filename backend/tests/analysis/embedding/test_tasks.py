@@ -17,6 +17,7 @@ from app.analysis.embedding.domain.ready import (
 )
 from app.analysis.failure_handling import FailureHandlingDecision
 from app.analysis.rate_limit import AIModelRateLimitPolicy
+from app.audit.domain.event import Stage
 from app.queue.messages.embedding import EmbeddingTrigger
 from tests.logfire._metric_helpers import collected_metrics, sum_counter_for_result
 from tests.logfire._span_helpers import stage_attrs
@@ -214,9 +215,9 @@ class TestGenerateEmbedding:
 
         gate.acquire.assert_awaited_once()
         mock_svc_cls.assert_not_called()
-        mock_record.assert_called_once_with(
-            stage="embedding", model="gemini-embedding-001"
-        )
+        mock_record.assert_called_once()
+        assert mock_record.call_args.kwargs["stage"] is Stage.EMBEDDING
+        assert mock_record.call_args.kwargs["model"] == "gemini-embedding-001"
         skips = [
             e for e in cap if e.get("event") == "embedding_ai_rate_limit_gate_skipped"
         ]

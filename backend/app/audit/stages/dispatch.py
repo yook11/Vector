@@ -3,12 +3,12 @@
 from __future__ import annotations
 
 from enum import StrEnum
-from typing import Literal
+from typing import ClassVar, Literal
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.audit.domain.event import EventType, Stage
-from app.audit.domain.payloads import DispatchPayload
+from app.audit.domain.payloads import BasePipelineEventPayload, DispatchPayload
 from app.audit.error_chain import extract_error_chain
 from app.audit.error_fields import error_message_of, exception_fqn
 from app.audit.failure_projection import Retryability
@@ -33,6 +33,8 @@ class DispatchOutcomeCode(StrEnum):
 class DispatchAuditRepository:
     """Dispatch 専用の payload / outcome_code を決める。"""
 
+    STAGE: ClassVar[Stage] = Stage.DISPATCH
+
     def __init__(self, session: AsyncSession) -> None:
         self._events = PipelineEventRepository(session)
 
@@ -56,8 +58,7 @@ class DispatchAuditRepository:
             error_message=error_message_of(exc),
             error_chain=extract_error_chain(exc) if exc is not None else None,
         )
-        await self._events.append(
-            stage=Stage.DISPATCH,
+        await self._append_event(
             event_type=event_type,
             outcome_code=outcome_code.value,
             payload=payload,
@@ -73,8 +74,7 @@ class DispatchAuditRepository:
         本行は admin Pipeline Health の ``last_succeeded_at[dispatch]`` を維持する
         liveness 用の最小 succeeded 行のみを担う。
         """
-        await self._events.append(
-            stage=Stage.DISPATCH,
+        await self._append_event(
             event_type=EventType.SUCCEEDED,
             outcome_code=DispatchOutcomeCode.DISPATCH_RUN_COMPLETED.value,
             payload=DispatchPayload(cadence=cadence),
@@ -95,12 +95,33 @@ class DispatchAuditRepository:
             error_message=error_message_of(exc),
             error_chain=extract_error_chain(exc) if exc is not None else None,
         )
-        await self._events.append(
-            stage=Stage.DISPATCH,
+        await self._append_event(
             event_type=event_type,
             outcome_code=outcome_code.value,
             payload=payload,
             error_class=exception_fqn(exc) if exc is not None else None,
+            retryability=retryability,
+        )
+
+    async def _append_event(
+        self,
+        *,
+        event_type: EventType,
+        outcome_code: str,
+        payload: BasePipelineEventPayload,
+        article_id: int | None = None,
+        source_id: int | None = None,
+        error_class: str | None = None,
+        retryability: Retryability | None = None,
+    ) -> None:
+        await self._events.append(
+            stage=self.STAGE,
+            event_type=event_type,
+            outcome_code=outcome_code,
+            payload=payload,
+            article_id=article_id,
+            source_id=source_id,
+            error_class=error_class,
             retryability=retryability,
         )
 

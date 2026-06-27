@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import StrEnum
-from typing import assert_never
+from typing import ClassVar, assert_never
 
 import structlog
 from sqlalchemy.exc import SQLAlchemyError
@@ -12,7 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.analysis.prompt_safety import screen_untrusted_text
 from app.audit.domain.event import EventType, Stage
-from app.audit.domain.payloads import CompletionPayload
+from app.audit.domain.payloads import BasePipelineEventPayload, CompletionPayload
 from app.audit.error_chain import extract_error_chain
 from app.audit.error_fields import (
     error_message_of,
@@ -87,6 +87,8 @@ class CompletionOutcomeCode(StrEnum):
 class ArticleCompletionAuditRepository:
     """Stage 2 専用の payload / outcome_code / failure projection を決める。"""
 
+    STAGE: ClassVar[Stage] = Stage.COMPLETION
+
     def __init__(self, session: AsyncSession) -> None:
         self._session = session
         self._events = PipelineEventRepository(session)
@@ -102,8 +104,7 @@ class ArticleCompletionAuditRepository:
         canonical_url = str(ready.source_url)
         match outcome:
             case CompletionSucceeded(analyzable_article_id=analyzable_article_id):
-                await self._events.append(
-                    stage=Stage.COMPLETION,
+                await self._append_event(
                     event_type=EventType.SUCCEEDED,
                     outcome_code=CompletionOutcomeCode.ARTICLE_COMPLETED.value,
                     payload=CompletionPayload(
@@ -129,8 +130,7 @@ class ArticleCompletionAuditRepository:
         self, *, ready: ReadyForArticleCompletion, outcome_code: CompletionOutcomeCode
     ) -> None:
         """persist race-loss を skipped として記録する。"""
-        await self._events.append(
-            stage=Stage.COMPLETION,
+        await self._append_event(
             event_type=EventType.SKIPPED,
             outcome_code=outcome_code.value,
             payload=CompletionPayload(
@@ -152,8 +152,7 @@ class ArticleCompletionAuditRepository:
         match failure:
             case ExternalFetchError() as error:
                 projection = self._projection_of_fetch_failed(error)
-                await self._events.append(
-                    stage=Stage.COMPLETION,
+                await self._append_event(
                     event_type=EventType.FAILED,
                     outcome_code=projection.code,
                     payload=CompletionPayload(
@@ -174,8 +173,7 @@ class ArticleCompletionAuditRepository:
                 error_class=error_class, error_message=error_message
             ):
                 projection = self._projection_of_parse_crashed()
-                await self._events.append(
-                    stage=Stage.COMPLETION,
+                await self._append_event(
                     event_type=EventType.FAILED,
                     outcome_code=projection.code,
                     payload=CompletionPayload(
@@ -238,10 +236,10 @@ class ArticleCompletionAuditRepository:
                 # article_id を持たないので source_id + canonical_url で対象を辿れる
                 # よう log に残す。
                 if injected:
-                    record_injection_boundary_detected(stage="completion")
+                    record_injection_boundary_detected(stage=self.STAGE)
                     logger.warning(
                         "audit_injection_boundary_detected",
-                        stage="completion",
+                        stage=self.STAGE.value,
                         source_id=ready.source_id,
                         canonical_url=canonical_url,
                     )
@@ -256,8 +254,7 @@ class ArticleCompletionAuditRepository:
         payload: CompletionPayload,
     ) -> None:
         """scrape の内容棄却を rejected として記録する。"""
-        await self._events.append(
-            stage=Stage.COMPLETION,
+        await self._append_event(
             event_type=EventType.REJECTED,
             outcome_code=outcome_code.value,
             payload=payload,
@@ -276,8 +273,7 @@ class ArticleCompletionAuditRepository:
         free-text の error_message / error_class は持たない (構造的に PII-free)。
         写像漏れ (``unmapped`` 非空) は ``quality_gate_metric`` に痕跡を残す。
         """
-        await self._events.append(
-            stage=Stage.COMPLETION,
+        await self._append_event(
             event_type=EventType.REJECTED,
             outcome_code=rejection.reason_code,
             payload=CompletionPayload(
@@ -295,8 +291,7 @@ class ArticleCompletionAuditRepository:
 
     async def append_stale_attempt(self, *, ready: ReadyForArticleCompletion) -> None:
         """失効した claim の後処理を skipped として記録する。"""
-        await self._events.append(
-            stage=Stage.COMPLETION,
+        await self._append_event(
             event_type=EventType.SKIPPED,
             outcome_code=CompletionOutcomeCode.STALE_ATTEMPT.value,
             payload=CompletionPayload(
@@ -338,8 +333,7 @@ class ArticleCompletionAuditRepository:
             ),
             reason_code=projection.reason_code,
         )
-        await self._events.append(
-            stage=Stage.COMPLETION,
+        await self._append_event(
             event_type=projection.event_type,
             outcome_code=projection.code,
             payload=payload,
@@ -361,8 +355,7 @@ class ArticleCompletionAuditRepository:
     ) -> None:
         """persist 段で rollback された例外を別 tx の failed として記録する。"""
         projection = self._projection_of_persist_crash(exc)
-        await self._events.append(
-            stage=Stage.COMPLETION,
+        await self._append_event(
             event_type=EventType.FAILED,
             outcome_code=projection.code,
             payload=CompletionPayload(
@@ -376,6 +369,28 @@ class ArticleCompletionAuditRepository:
             source_id=ready.source_id,
             error_class=exception_fqn(exc),
             retryability=projection.retryability,
+        )
+
+    async def _append_event(
+        self,
+        *,
+        event_type: EventType,
+        outcome_code: str,
+        payload: BasePipelineEventPayload,
+        article_id: int | None = None,
+        source_id: int | None = None,
+        error_class: str | None = None,
+        retryability: Retryability | None = None,
+    ) -> None:
+        await self._events.append(
+            stage=self.STAGE,
+            event_type=event_type,
+            outcome_code=outcome_code,
+            payload=payload,
+            article_id=article_id,
+            source_id=source_id,
+            error_class=error_class,
+            retryability=retryability,
         )
 
     @staticmethod

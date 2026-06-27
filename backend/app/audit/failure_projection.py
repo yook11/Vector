@@ -1,6 +1,6 @@
 """失敗属性 projection の内部表現。
 
-失敗の意味論は stage error class の ClassVar と本 module の projection に集約する。
+失敗の意味論は marker error class の分類属性と本 module の projection に集約する。
 """
 
 from __future__ import annotations
@@ -10,7 +10,6 @@ from enum import StrEnum
 from typing import TypedDict
 
 from app.audit.db_errors import DbErrorCause, classify_db_error
-from app.audit.domain.event import Stage
 
 
 class Retryability(StrEnum):
@@ -35,7 +34,6 @@ class FailureProjection:
     retryability: Retryability
     failure_action: FailureAction | None
     code: str
-    stage: Stage | None = None
     # 原因詳細 (failure_kind = ファミリー / code = 具体 CODE とは別軸)。
     # marker が instance 値で持てば焼く。持たない marker (db / catch-all 等) は None。
     failure_reason: str | None = None
@@ -94,11 +92,8 @@ def project_marker_failure(exc: BaseException) -> FailureProjection | None:
     briefing / acquisition) に fallback する。``failure_reason`` は instance 値を持つ
     marker だけが焼く。
     """
-    stage = getattr(exc, "STAGE", None)
     failure_kind = _failure_kind_of_marker(exc)
     retryability = getattr(exc, "RETRYABILITY", None)
-    if not isinstance(stage, Stage):
-        return None
     if failure_kind is None:
         return None
     if not isinstance(retryability, Retryability):
@@ -117,7 +112,6 @@ def project_marker_failure(exc: BaseException) -> FailureProjection | None:
         retryability=retryability,
         failure_action=failure_action,
         code=code,
-        stage=stage,
         failure_reason=_failure_reason_of_marker(exc),
     )
 

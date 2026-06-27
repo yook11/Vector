@@ -275,7 +275,7 @@ async def _append_dispatch_source_event(
             source_name=source_name,
             audit_error_class=(exception_fqn(audit_exc)),
         )
-        record_audit_dropped(Stage.DISPATCH)
+        record_audit_dropped(DispatchAuditRepository.STAGE)
 
 
 async def _append_dispatch_run_completed(
@@ -294,7 +294,7 @@ async def _append_dispatch_run_completed(
             outcome_code=DispatchOutcomeCode.DISPATCH_RUN_COMPLETED.value,
             audit_error_class=(exception_fqn(audit_exc)),
         )
-        record_audit_dropped(Stage.DISPATCH)
+        record_audit_dropped(DispatchAuditRepository.STAGE)
 
 
 async def _append_dispatch_run_event(
@@ -321,7 +321,7 @@ async def _append_dispatch_run_event(
             outcome_code=outcome_code.value,
             audit_error_class=(exception_fqn(audit_exc)),
         )
-        record_audit_dropped(Stage.DISPATCH)
+        record_audit_dropped(DispatchAuditRepository.STAGE)
 
 
 async def _append_dispatch_run_failed(

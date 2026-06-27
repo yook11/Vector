@@ -88,7 +88,9 @@ async def generate_embedding(
         # precondition 未充足の stale trigger で AI quota を消費しない。
         gate = ctx.state.provider_rate_limit_gate
         if not await gate.acquire(embedder.rate_limit_policy):
-            record_rate_limit_gate_skipped(stage="embedding", model=embedder.model_name)
+            record_rate_limit_gate_skipped(
+                stage=Stage.EMBEDDING, model=embedder.model_name
+            )
             logger.info(
                 "embedding_ai_rate_limit_gate_skipped",
                 analyzed_article_id=ready.analyzed_article_id,
@@ -143,4 +145,4 @@ async def _append_ready_build_failed_audit(
             business_error_class=exception_fqn(exc),
             audit_error_class=exception_fqn(audit_exc),
         )
-        record_audit_dropped(Stage.EMBEDDING)
+        record_audit_dropped(EmbeddingAuditRepository.STAGE)

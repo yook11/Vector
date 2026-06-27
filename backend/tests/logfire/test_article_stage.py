@@ -16,6 +16,7 @@ import asyncio
 import pytest
 from logfire.testing import CaptureLogfire
 
+from app.audit.domain.event import Stage
 from app.logfire.article_stage import (
     AssessmentResult,
     CurationStageResult,
@@ -61,7 +62,7 @@ def test_curation_open_attributes(capfire: CaptureLogfire) -> None:
     with curation_stage_span(article_id=7):
         pass
     attrs = stage_attrs(capfire)
-    assert attrs["stage"] == "curation"
+    assert attrs["stage"] == Stage.CURATION.value
     assert attrs["task_name"] == "curate_content"
     assert attrs["article_id"] == 7
     assert attrs["next_task_enqueued"] is False
@@ -76,7 +77,7 @@ def test_assessment_open_attributes(capfire: CaptureLogfire) -> None:
     with assessment_stage_span(curation_id=11):
         pass
     attrs = stage_attrs(capfire)
-    assert attrs["stage"] == "assessment"
+    assert attrs["stage"] == Stage.ASSESSMENT.value
     assert attrs["task_name"] == "assess_content"
     assert attrs["curation_id"] == 11
     assert attrs["next_task_enqueued"] is False
@@ -89,7 +90,7 @@ def test_embedding_open_attributes(capfire: CaptureLogfire) -> None:
     with embedding_stage_span(analyzed_article_id=13):
         pass
     attrs = stage_attrs(capfire)
-    assert attrs["stage"] == "embedding"
+    assert attrs["stage"] == Stage.EMBEDDING.value
     assert attrs["task_name"] == "generate_embedding"
     assert attrs["analyzed_article_id"] == 13
     assert "analysis_id" not in attrs

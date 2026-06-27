@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from enum import StrEnum
+from typing import ClassVar
 
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -14,7 +15,7 @@ from app.analysis.embedding.domain.ready import (
 )
 from app.analysis.embedding.errors import EmbeddingError
 from app.audit.domain.event import EventType, Stage
-from app.audit.domain.payloads import EmbeddingPayload
+from app.audit.domain.payloads import BasePipelineEventPayload, EmbeddingPayload
 from app.audit.error_chain import extract_error_chain
 from app.audit.error_fields import error_message_of, exception_fqn
 from app.audit.failure_projection import (
@@ -38,6 +39,9 @@ class EmbeddingOutcomeCode(StrEnum):
 class EmbeddingAuditRepository:
     """Stage 5 専用の payload / outcome_code / failure projection を決める。"""
 
+    STAGE: ClassVar[Stage] = Stage.EMBEDDING
+    BACKFILL_STAGE: ClassVar[Stage] = Stage.BACKFILL_EMBED
+
     def __init__(self, session: AsyncSession) -> None:
         self._session = session
         self._events = PipelineEventRepository(session)
@@ -56,8 +60,7 @@ class EmbeddingAuditRepository:
             ai_model=embedder.model_name,
             vector_dimension=embedder.dimension,
         )
-        await self._events.append(
-            stage=Stage.EMBEDDING,
+        await self._append_event(
             event_type=EventType.SUCCEEDED,
             outcome_code=EmbeddingOutcomeCode.COMPLETED.value,
             payload=payload,
@@ -73,8 +76,7 @@ class EmbeddingAuditRepository:
         analyzable_article_id: int,
     ) -> None:
         """古い embedding NULL analyzed article を対象外にした事実を記録する。"""
-        await self._events.append(
-            stage=Stage.BACKFILL_EMBED,
+        await self._append_backfill_event(
             event_type=EventType.REJECTED,
             outcome_code=BackfillExclusionReason.EMBEDDING_AGED_OUT.value,
             payload=EmbeddingPayload(analyzed_article_id=analyzed_article_id),
@@ -90,8 +92,7 @@ class EmbeddingAuditRepository:
 
         Domain が reason code で説明できた停止なので rejected として焼く。
         """
-        await self._events.append(
-            stage=Stage.EMBEDDING,
+        await self._append_event(
             event_type=EventType.REJECTED,
             outcome_code=exc.code.value,
             payload=EmbeddingPayload(analyzed_article_id=analyzed_article_id),
@@ -101,15 +102,14 @@ class EmbeddingAuditRepository:
         self, *, analyzed_article_id: int, exc: Exception
     ) -> None:
         """Ready 構築中に blocked 以外の例外が出た事実を failed として記録する。"""
-        projection = project_ready_build_failure(stage_prefix="embedding", exc=exc)
+        projection = project_ready_build_failure(stage_prefix=self.STAGE.value, exc=exc)
         payload = EmbeddingPayload(
             failure_kind=projection.failure_kind,
             analyzed_article_id=analyzed_article_id,
             error_message=error_message_of(exc),
             error_chain=extract_error_chain(exc),
         )
-        await self._events.append(
-            stage=Stage.EMBEDDING,
+        await self._append_event(
             event_type=EventType.FAILED,
             outcome_code=projection.outcome_code,
             payload=payload,
@@ -159,8 +159,7 @@ class EmbeddingAuditRepository:
             error_message=error_message_of(exc),
             error_chain=extract_error_chain(exc),
         )
-        await self._events.append(
-            stage=projection.stage or Stage.EMBEDDING,
+        await self._append_event(
             event_type=EventType.FAILED,
             outcome_code=projection.code,
             payload=payload,
@@ -170,6 +169,50 @@ class EmbeddingAuditRepository:
         )
 
     # --- internal helpers -------------------------------------------------
+
+    async def _append_event(
+        self,
+        *,
+        event_type: EventType,
+        outcome_code: str,
+        payload: BasePipelineEventPayload,
+        article_id: int | None = None,
+        source_id: int | None = None,
+        error_class: str | None = None,
+        retryability: Retryability | None = None,
+    ) -> None:
+        await self._events.append(
+            stage=self.STAGE,
+            event_type=event_type,
+            outcome_code=outcome_code,
+            payload=payload,
+            article_id=article_id,
+            source_id=source_id,
+            error_class=error_class,
+            retryability=retryability,
+        )
+
+    async def _append_backfill_event(
+        self,
+        *,
+        event_type: EventType,
+        outcome_code: str,
+        payload: BasePipelineEventPayload,
+        article_id: int | None = None,
+        source_id: int | None = None,
+        error_class: str | None = None,
+        retryability: Retryability | None = None,
+    ) -> None:
+        await self._events.append(
+            stage=self.BACKFILL_STAGE,
+            event_type=event_type,
+            outcome_code=outcome_code,
+            payload=payload,
+            article_id=article_id,
+            source_id=source_id,
+            error_class=error_class,
+            retryability=retryability,
+        )
 
     @staticmethod
     def _projection_of(exc: BaseException) -> FailureProjection:

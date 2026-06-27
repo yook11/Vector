@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import hashlib
 from enum import StrEnum
-from typing import TYPE_CHECKING, TypedDict
+from typing import TYPE_CHECKING, ClassVar, TypedDict
 
 import structlog
 from sqlalchemy.exc import SQLAlchemyError
@@ -13,7 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.analysis.curation.ai.gemini_prompt import GeminiCurationPrompt
 from app.analysis.prompt_safety import screen_untrusted_text
 from app.audit.domain.event import EventType, Stage
-from app.audit.domain.payloads import CurationPayload
+from app.audit.domain.payloads import BasePipelineEventPayload, CurationPayload
 from app.audit.error_chain import extract_error_chain
 from app.audit.error_fields import error_message_of, exception_fqn
 from app.audit.failure_projection import (
@@ -53,6 +53,9 @@ class CurationOutcomeCode(StrEnum):
 class CurationAuditRepository:
     """Stage 3 専用の payload / outcome_code / failure projection を決める。"""
 
+    STAGE: ClassVar[Stage] = Stage.CURATION
+    BACKFILL_STAGE: ClassVar[Stage] = Stage.BACKFILL_CURATE
+
     def __init__(self, session: AsyncSession) -> None:
         self._session = session
         self._events = PipelineEventRepository(session)
@@ -75,8 +78,7 @@ class CurationAuditRepository:
             ai_raw_response=envelope.raw_response[:_AI_RAW_RESPONSE_LIMIT] or None,
             raw_relevance=envelope.raw_relevance,
         )
-        await self._events.append(
-            stage=Stage.CURATION,
+        await self._append_event(
             event_type=EventType.SUCCEEDED,
             outcome_code=code,
             payload=payload,
@@ -103,8 +105,7 @@ class CurationAuditRepository:
             ai_raw_response=envelope.raw_response[:_AI_RAW_RESPONSE_LIMIT] or None,
             raw_relevance=envelope.raw_relevance,
         )
-        await self._events.append(
-            stage=Stage.CURATION,
+        await self._append_event(
             event_type=EventType.SUCCEEDED,
             outcome_code=code,
             payload=payload,
@@ -141,8 +142,7 @@ class CurationAuditRepository:
             error_message=error_message_of(exc),
             error_chain=extract_error_chain(exc),
         )
-        await self._events.append(
-            stage=projection.stage or Stage.CURATION,
+        await self._append_event(
             event_type=EventType.FAILED,
             outcome_code=projection.code,
             payload=payload,
@@ -166,8 +166,7 @@ class CurationAuditRepository:
         削除に耐える記事識別子を payload に控える (これが無いと「どの記事か」が
         削除後に失われる)。
         """
-        await self._events.append(
-            stage=Stage.BACKFILL_CURATE,
+        await self._append_backfill_event(
             event_type=EventType.REJECTED,
             outcome_code=CurationOutcomeCode.BACKFILL_CURATION_AGED_OUT.value,
             payload=CurationPayload(target_article_id=analyzable_article_id),
@@ -188,8 +187,7 @@ class CurationAuditRepository:
             input_content_length=exc.content_length,
             max_content_length=exc.max_content_length,
         )
-        await self._events.append(
-            stage=Stage.CURATION,
+        await self._append_event(
             event_type=EventType.REJECTED,
             outcome_code=exc.code.value,
             payload=payload,
@@ -203,15 +201,14 @@ class CurationAuditRepository:
         self, *, target_article_id: int, exc: Exception
     ) -> None:
         """Ready 構築中に blocked 以外の例外が出た事実を failed として記録する。"""
-        projection = project_ready_build_failure(stage_prefix="curation", exc=exc)
+        projection = project_ready_build_failure(stage_prefix=self.STAGE.value, exc=exc)
         payload = CurationPayload(
             failure_kind=projection.failure_kind,
             target_article_id=target_article_id,
             error_message=error_message_of(exc),
             error_chain=extract_error_chain(exc),
         )
-        await self._events.append(
-            stage=Stage.CURATION,
+        await self._append_event(
             event_type=EventType.FAILED,
             outcome_code=projection.outcome_code,
             payload=payload,
@@ -271,8 +268,7 @@ class CurationAuditRepository:
             error_message=error_message_of(exc),
             error_chain=extract_error_chain(exc),
         )
-        await self._events.append(
-            stage=projection.stage or Stage.CURATION,
+        await self._append_event(
             event_type=EventType.FAILED,
             outcome_code=projection.code,
             payload=payload,
@@ -294,11 +290,55 @@ class CurationAuditRepository:
         倒れた場合に signal だけ残る「metric +1 だが pipeline_events 行なし」の乖離
         を防ぐ。検知自体は境界タグ限定の高信号、無害化 (sanitize) とは別軸。
         """
-        record_injection_boundary_detected(stage="curation")
+        record_injection_boundary_detected(stage=self.STAGE)
         logger.warning(
             "audit_injection_boundary_detected",
-            stage="curation",
+            stage=self.STAGE.value,
             analyzable_article_id=analyzable_article_id,
+        )
+
+    async def _append_event(
+        self,
+        *,
+        event_type: EventType,
+        outcome_code: str,
+        payload: BasePipelineEventPayload,
+        article_id: int | None = None,
+        source_id: int | None = None,
+        error_class: str | None = None,
+        retryability: Retryability | None = None,
+    ) -> None:
+        await self._events.append(
+            stage=self.STAGE,
+            event_type=event_type,
+            outcome_code=outcome_code,
+            payload=payload,
+            article_id=article_id,
+            source_id=source_id,
+            error_class=error_class,
+            retryability=retryability,
+        )
+
+    async def _append_backfill_event(
+        self,
+        *,
+        event_type: EventType,
+        outcome_code: str,
+        payload: BasePipelineEventPayload,
+        article_id: int | None = None,
+        source_id: int | None = None,
+        error_class: str | None = None,
+        retryability: Retryability | None = None,
+    ) -> None:
+        await self._events.append(
+            stage=self.BACKFILL_STAGE,
+            event_type=event_type,
+            outcome_code=outcome_code,
+            payload=payload,
+            article_id=article_id,
+            source_id=source_id,
+            error_class=error_class,
+            retryability=retryability,
         )
 
     @staticmethod

@@ -4,17 +4,19 @@ from __future__ import annotations
 
 from datetime import date
 from enum import StrEnum
+from typing import ClassVar
 
 from sqlalchemy import select
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.audit.domain.event import EventType, Stage
-from app.audit.domain.payloads import BriefingPayload
+from app.audit.domain.payloads import BasePipelineEventPayload, BriefingPayload
 from app.audit.error_chain import extract_error_chain
 from app.audit.error_fields import error_message_of, exception_fqn
 from app.audit.failure_projection import (
     FailureProjection,
+    Retryability,
     failure_action_value,
     project_failure,
     unknown_failure_projection,
@@ -42,6 +44,8 @@ class BriefingOutcomeCode(StrEnum):
 class BriefingAuditRepository:
     """Briefing 専用の payload / outcome_code / failure projection を決める。"""
 
+    STAGE: ClassVar[Stage] = Stage.BRIEFING
+
     def __init__(self, session: AsyncSession) -> None:
         self._session = session
         self._events = PipelineEventRepository(session)
@@ -64,8 +68,7 @@ class BriefingAuditRepository:
             article_count=article_count,
             ai_model=ai_model,
         )
-        await self._events.append(
-            stage=Stage.BRIEFING,
+        await self._append_event(
             event_type=EventType.SUCCEEDED,
             outcome_code=BriefingOutcomeCode.GENERATION_COMPLETED.value,
             payload=payload,
@@ -84,8 +87,7 @@ class BriefingAuditRepository:
             category_slug=category_slug,
             article_count=0,
         )
-        await self._events.append(
-            stage=Stage.BRIEFING,
+        await self._append_event(
             event_type=EventType.REJECTED,
             outcome_code=BriefingOutcomeCode.GENERATION_INPUT_EMPTY.value,
             payload=payload,
@@ -104,8 +106,7 @@ class BriefingAuditRepository:
             category_id=category_id,
             category_slug=category_slug,
         )
-        await self._events.append(
-            stage=Stage.BRIEFING,
+        await self._append_event(
             event_type=EventType.SKIPPED,
             outcome_code=BriefingOutcomeCode.GENERATION_ALREADY_EXISTS.value,
             payload=payload,
@@ -173,8 +174,7 @@ class BriefingAuditRepository:
             error_message=error_message_of(exc),
             error_chain=extract_error_chain(exc),
         )
-        await self._events.append(
-            stage=projection.stage or Stage.BRIEFING,
+        await self._append_event(
             event_type=EventType.FAILED,
             outcome_code=projection.code,
             payload=payload,
@@ -199,8 +199,7 @@ class BriefingAuditRepository:
             enqueued_category_count=enqueued_category_count,
             failed_category_count=failed_category_count,
         )
-        await self._events.append(
-            stage=Stage.BRIEFING,
+        await self._append_event(
             event_type=EventType.SUCCEEDED,
             outcome_code=BriefingOutcomeCode.DISPATCH_COMPLETED.value,
             payload=payload,
@@ -219,8 +218,7 @@ class BriefingAuditRepository:
             category_id=category_id,
             category_slug=category_slug,
         )
-        await self._events.append(
-            stage=Stage.BRIEFING,
+        await self._append_event(
             event_type=EventType.SUCCEEDED,
             outcome_code=BriefingOutcomeCode.CATEGORY_ENQUEUED.value,
             payload=payload,
@@ -248,8 +246,7 @@ class BriefingAuditRepository:
             error_message=error_message_of(exc),
             error_chain=extract_error_chain(exc),
         )
-        await self._events.append(
-            stage=Stage.BRIEFING,
+        await self._append_event(
             event_type=EventType.FAILED,
             outcome_code=BriefingOutcomeCode.CATEGORY_ENQUEUE_FAILED.value,
             payload=payload,
@@ -276,8 +273,7 @@ class BriefingAuditRepository:
             error_message=error_message_of(exc),
             error_chain=extract_error_chain(exc),
         )
-        await self._events.append(
-            stage=Stage.BRIEFING,
+        await self._append_event(
             event_type=EventType.FAILED,
             outcome_code=BriefingOutcomeCode.DISPATCH_CATEGORY_MASTER_LOAD_FAILED.value,
             payload=payload,
@@ -286,6 +282,28 @@ class BriefingAuditRepository:
         )
 
     # --- internal helpers -------------------------------------------------
+
+    async def _append_event(
+        self,
+        *,
+        event_type: EventType,
+        outcome_code: str,
+        payload: BasePipelineEventPayload,
+        article_id: int | None = None,
+        source_id: int | None = None,
+        error_class: str | None = None,
+        retryability: Retryability | None = None,
+    ) -> None:
+        await self._events.append(
+            stage=self.STAGE,
+            event_type=event_type,
+            outcome_code=outcome_code,
+            payload=payload,
+            article_id=article_id,
+            source_id=source_id,
+            error_class=error_class,
+            retryability=retryability,
+        )
 
     async def _resolve_category_slug(self, category_id: int) -> str | None:
         """``category_id`` から payload 用の slug を引く。"""
@@ -308,5 +326,4 @@ def _fixed_projection(exc: BaseException, *, code: str) -> FailureProjection:
         retryability=projection.retryability,
         failure_action=projection.failure_action,
         code=code,
-        stage=Stage.BRIEFING,
     )

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from enum import StrEnum
+from typing import ClassVar
 
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -15,7 +16,7 @@ from app.analysis.assessment.domain.ready import (
 from app.analysis.assessment.domain.result import InScope, OutOfScope
 from app.analysis.assessment.errors import AssessmentError
 from app.audit.domain.event import EventType, Stage
-from app.audit.domain.payloads import AssessmentPayload
+from app.audit.domain.payloads import AssessmentPayload, BasePipelineEventPayload
 from app.audit.error_chain import extract_error_chain
 from app.audit.error_fields import error_message_of, exception_fqn
 from app.audit.failure_projection import (
@@ -50,6 +51,9 @@ def _limited_str(value: object, limit: int) -> str | None:
 class AssessmentAuditRepository:
     """Stage 4 専用の payload / outcome_code / failure projection を決める。"""
 
+    STAGE: ClassVar[Stage] = Stage.ASSESSMENT
+    BACKFILL_STAGE: ClassVar[Stage] = Stage.BACKFILL_ASSESS
+
     def __init__(self, session: AsyncSession) -> None:
         self._session = session
         self._events = PipelineEventRepository(session)
@@ -75,8 +79,7 @@ class AssessmentAuditRepository:
             category_slug=in_scope.category.value,
             investor_take=in_scope.investor_take,
         )
-        await self._events.append(
-            stage=Stage.ASSESSMENT,
+        await self._append_event(
             event_type=EventType.SUCCEEDED,
             outcome_code=AssessmentOutcomeCode.IN_SCOPE.value,
             payload=payload,
@@ -102,8 +105,7 @@ class AssessmentAuditRepository:
             investor_take=out_of_scope.investor_take,
             # category_slug は in-scope 固有のため None
         )
-        await self._events.append(
-            stage=Stage.ASSESSMENT,
+        await self._append_event(
             event_type=EventType.SUCCEEDED,
             outcome_code=AssessmentOutcomeCode.OUT_OF_SCOPE.value,
             payload=payload,
@@ -119,8 +121,7 @@ class AssessmentAuditRepository:
         analyzable_article_id: int,
     ) -> None:
         """古い未 assessment curation を backfill が対象外にした事実を記録する。"""
-        await self._events.append(
-            stage=Stage.BACKFILL_ASSESS,
+        await self._append_backfill_event(
             event_type=EventType.REJECTED,
             outcome_code=BackfillExclusionReason.ASSESSMENT_AGED_OUT.value,
             payload=AssessmentPayload(
@@ -140,8 +141,7 @@ class AssessmentAuditRepository:
         ``article_id`` が判明する経路では top-level に渡して source_id を補填する
         (CURATION_MISSING は対象 curation 不在で article_id なし = source_id 空)。
         """
-        await self._events.append(
-            stage=Stage.ASSESSMENT,
+        await self._append_event(
             event_type=EventType.REJECTED,
             outcome_code=exc.code.value,
             payload=AssessmentPayload(
@@ -154,15 +154,14 @@ class AssessmentAuditRepository:
         self, *, curation_id: int, exc: Exception
     ) -> None:
         """Ready 構築中に blocked 以外の例外が出た事実を failed として記録する。"""
-        projection = project_ready_build_failure(stage_prefix="assessment", exc=exc)
+        projection = project_ready_build_failure(stage_prefix=self.STAGE.value, exc=exc)
         payload = AssessmentPayload(
             failure_kind=projection.failure_kind,
             curation_id=curation_id,
             error_message=error_message_of(exc),
             error_chain=extract_error_chain(exc),
         )
-        await self._events.append(
-            stage=Stage.ASSESSMENT,
+        await self._append_event(
             event_type=EventType.FAILED,
             outcome_code=projection.outcome_code,
             payload=payload,
@@ -213,8 +212,7 @@ class AssessmentAuditRepository:
                 getattr(exc, "raw_response", None), _AI_RAW_RESPONSE_LIMIT
             ),
         )
-        await self._events.append(
-            stage=projection.stage or Stage.ASSESSMENT,
+        await self._append_event(
             event_type=EventType.FAILED,
             outcome_code=projection.code,
             payload=payload,
@@ -224,6 +222,50 @@ class AssessmentAuditRepository:
         )
 
     # --- internal helpers -------------------------------------------------
+
+    async def _append_event(
+        self,
+        *,
+        event_type: EventType,
+        outcome_code: str,
+        payload: BasePipelineEventPayload,
+        article_id: int | None = None,
+        source_id: int | None = None,
+        error_class: str | None = None,
+        retryability: Retryability | None = None,
+    ) -> None:
+        await self._events.append(
+            stage=self.STAGE,
+            event_type=event_type,
+            outcome_code=outcome_code,
+            payload=payload,
+            article_id=article_id,
+            source_id=source_id,
+            error_class=error_class,
+            retryability=retryability,
+        )
+
+    async def _append_backfill_event(
+        self,
+        *,
+        event_type: EventType,
+        outcome_code: str,
+        payload: BasePipelineEventPayload,
+        article_id: int | None = None,
+        source_id: int | None = None,
+        error_class: str | None = None,
+        retryability: Retryability | None = None,
+    ) -> None:
+        await self._events.append(
+            stage=self.BACKFILL_STAGE,
+            event_type=event_type,
+            outcome_code=outcome_code,
+            payload=payload,
+            article_id=article_id,
+            source_id=source_id,
+            error_class=error_class,
+            retryability=retryability,
+        )
 
     @staticmethod
     def _projection_of(exc: BaseException) -> FailureProjection:

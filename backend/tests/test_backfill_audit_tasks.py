@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import inspect
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from types import SimpleNamespace
@@ -29,7 +30,6 @@ class _TaskCase:
     count_method: str
     target_method: str
     budget_role: str
-    stage: Stage
     backfill_stage: str
     target_kind: str
     limit: int
@@ -47,7 +47,6 @@ CASES = [
         count_method="count_articles_pending_curation",
         target_method="curation_targets_pending",
         budget_role="curate",
-        stage=Stage.BACKFILL_CURATE,
         backfill_stage="curate",
         target_kind="article",
         limit=tasks.CURATIONS_LIMIT,
@@ -63,7 +62,6 @@ CASES = [
         count_method="count_curations_pending_assessment",
         target_method="assessment_targets_pending",
         budget_role="assess",
-        stage=Stage.BACKFILL_ASSESS,
         backfill_stage="assess",
         target_kind="curation",
         limit=tasks.ASSESSMENTS_LIMIT,
@@ -79,7 +77,6 @@ CASES = [
         count_method="count_analyzed_articles_pending_embedding",
         target_method="embedding_targets_pending",
         budget_role="embed",
-        stage=Stage.BACKFILL_EMBED,
         backfill_stage="embed",
         target_kind="analyzed_article",
         limit=tasks.EMBEDDINGS_LIMIT,
@@ -112,6 +109,34 @@ def _item_outcomes(audit: AsyncMock) -> list[BackfillOutcomeCode]:
     return [call.kwargs["outcome_code"] for call in audit.await_args_list]
 
 
+def _assert_run_audit_derives_stage_from_backfill_stage(
+    audit: AsyncMock, case: _TaskCase
+) -> None:
+    kwargs = audit.await_args.kwargs
+    assert "stage" not in kwargs
+    assert kwargs["backfill_stage"] == case.backfill_stage
+
+
+def _assert_item_audit_derives_stage_from_backfill_stage(
+    audit: AsyncMock, case: _TaskCase
+) -> None:
+    for call in audit.await_args_list:
+        assert "stage" not in call.kwargs
+        assert call.kwargs["backfill_stage"] == case.backfill_stage
+
+
+@pytest.mark.parametrize(
+    "wrapper",
+    [tasks._append_backfill_item_event, tasks._append_backfill_run_event],
+)
+def test_backfill_audit_task_wrappers_do_not_accept_stage(wrapper: object) -> None:
+    """task-level wrapper も caller-provided stage を受け取らない。"""
+    params = inspect.signature(wrapper).parameters
+
+    assert "stage" not in params
+    assert "backfill_stage" in params
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize("case", CASES, ids=[case.name for case in CASES])
 async def test_kill_switch_disabled_is_audited(case: _TaskCase) -> None:
@@ -128,6 +153,7 @@ async def test_kill_switch_disabled_is_audited(case: _TaskCase) -> None:
     held.assert_not_called()
     backlog_cls.assert_not_called()
     assert _run_outcomes(run_audit) == [BackfillOutcomeCode.RUN_KILL_SWITCH_DISABLED]
+    _assert_run_audit_derives_stage_from_backfill_stage(run_audit, case)
     # daily_max は budget exhausted 専用 (停止閾値)。他 skip では焼かない。
     assert "daily_max" not in run_audit.await_args.kwargs
 
@@ -149,6 +175,7 @@ async def test_stage_hold_is_audited(case: _TaskCase) -> None:
     ageout.assert_not_called()
     backlog_cls.assert_not_called()
     assert _run_outcomes(run_audit) == [BackfillOutcomeCode.RUN_HELD_BY_STAGE_HOLD]
+    _assert_run_audit_derives_stage_from_backfill_stage(run_audit, case)
     assert "daily_max" not in run_audit.await_args.kwargs
 
 
@@ -173,6 +200,7 @@ async def test_no_targets_is_audited(case: _TaskCase) -> None:
 
     budget.assert_not_called()
     assert _run_outcomes(run_audit) == [BackfillOutcomeCode.RUN_NO_TARGETS]
+    _assert_run_audit_derives_stage_from_backfill_stage(run_audit, case)
     assert "daily_max" not in run_audit.await_args.kwargs
 
 
@@ -202,6 +230,7 @@ async def test_budget_exhausted_is_audited(case: _TaskCase) -> None:
 
     queue_task.kiq.assert_not_called()
     assert _run_outcomes(run_audit) == [BackfillOutcomeCode.RUN_DAILY_BUDGET_EXHAUSTED]
+    _assert_run_audit_derives_stage_from_backfill_stage(run_audit, case)
     # 停止閾値 daily_max は budget exhausted event でのみ KEEP。
     assert run_audit.await_args.kwargs["daily_max"] == case.daily_max
 
@@ -240,6 +269,7 @@ async def test_enqueue_success_items_are_audited_and_no_run_summary(
         BackfillOutcomeCode.ITEM_ENQUEUED,
         BackfillOutcomeCode.ITEM_ENQUEUED,
     ]
+    _assert_item_audit_derives_stage_from_backfill_stage(item_audit, case)
     # 成功 run では run event が一切焼かれない (occurrence は metric へ移設)。
     run_audit.assert_not_awaited()
 
@@ -281,6 +311,7 @@ async def test_enqueue_failure_is_audited_and_later_items_continue(
         BackfillOutcomeCode.ITEM_ENQUEUE_FAILED,
         BackfillOutcomeCode.ITEM_ENQUEUED,
     ]
+    _assert_item_audit_derives_stage_from_backfill_stage(item_audit, case)
     # item enqueue failed の forensic (exc) は残る (保証2)。
     failed_call = next(
         call
@@ -316,6 +347,7 @@ async def test_selection_failure_is_audited_and_reraised(case: _TaskCase) -> Non
             await case.task(ctx=_ctx())
 
     assert _run_outcomes(run_audit) == [BackfillOutcomeCode.RUN_FAILED]
+    _assert_run_audit_derives_stage_from_backfill_stage(run_audit, case)
     assert run_audit.await_args.kwargs["exc"] is not None
 
 

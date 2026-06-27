@@ -10,6 +10,8 @@ from __future__ import annotations
 
 import logfire
 
+from app.audit.domain.event import Stage
+
 _rate_limit_gate_skipped_counter = logfire.metric_counter(
     "vector.analysis.rate_limit_gate_skipped",
     unit="1",
@@ -17,6 +19,8 @@ _rate_limit_gate_skipped_counter = logfire.metric_counter(
 )
 
 
-def record_rate_limit_gate_skipped(*, stage: str, model: str) -> None:
+def record_rate_limit_gate_skipped(*, stage: Stage, model: str) -> None:
     """rate limit gate skip を metric counter に 1 件記録する。"""
-    _rate_limit_gate_skipped_counter.add(1, attributes={"stage": stage, "model": model})
+    _rate_limit_gate_skipped_counter.add(
+        1, attributes={"stage": stage.value, "model": model}
+    )

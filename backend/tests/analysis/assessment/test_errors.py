@@ -24,7 +24,6 @@ from app.analysis.assessment.errors import (
     AssessmentResponseInvalidError,
     AssessmentTerminalError,
 )
-from app.audit.domain.event import Stage
 from app.audit.failure_projection import Retryability
 
 # Layer 1 の 2 marker は同形 (retry 軸だけ classvar で違い、原因軸は instance 値)。
@@ -122,9 +121,9 @@ class TestStage4MarkerHierarchy:
     def test_assessment_error_is_exception(self) -> None:
         assert issubclass(AssessmentError, Exception)
 
-    def test_retry_axis_classvars_are_audit_projection_ssot(self) -> None:
+    def test_marker_classvars_are_audit_projection_contract(self) -> None:
         # retry 軸だけ型で固定 (原因軸 failure_kind は instance 値、本テスト対象外)。
-        assert AssessmentError.STAGE is Stage.ASSESSMENT
+        assert not hasattr(AssessmentError, "STAGE")
         assert AssessmentRecoverableError.RETRYABILITY is Retryability.RETRYABLE
         assert AssessmentTerminalError.RETRYABILITY is Retryability.NON_RETRYABLE
         assert AssessmentRecoverableError.FAILURE_ACTION is None

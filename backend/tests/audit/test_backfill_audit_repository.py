@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import inspect
+
 import pytest
 from pydantic import ValidationError
 from sqlalchemy import select
@@ -32,6 +34,63 @@ async def article_row(
     return article
 
 
+@pytest.mark.parametrize(
+    "method_name",
+    ["append_item_event", "append_run_event"],
+)
+def test_public_backfill_audit_api_derives_stage_internally(
+    method_name: str,
+) -> None:
+    """caller は stage を渡せず、backfill_stage だけが public な stage 入力になる。"""
+    params = inspect.signature(getattr(BackfillAuditRepository, method_name)).parameters
+
+    assert "stage" not in params
+    assert "backfill_stage" in params
+
+
+@pytest.mark.parametrize(
+    ("backfill_stage", "expected_stage"),
+    [
+        ("curate", Stage.BACKFILL_CURATE),
+        ("assess", Stage.BACKFILL_ASSESS),
+        ("embed", Stage.BACKFILL_EMBED),
+    ],
+)
+def test_stage_for_maps_backfill_stage_to_event_stage(
+    backfill_stage: str, expected_stage: Stage
+) -> None:
+    assert BackfillAuditRepository.stage_for(backfill_stage) is expected_stage  # type: ignore[arg-type]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("backfill_stage", "expected_stage"),
+    [
+        ("curate", "backfill_curate"),
+        ("assess", "backfill_assess"),
+        ("embed", "backfill_embed"),
+    ],
+)
+async def test_append_run_event_derives_pipeline_stage_from_backfill_stage(
+    db_session: AsyncSession,
+    backfill_stage: str,
+    expected_stage: str,
+) -> None:
+    repo = BackfillAuditRepository(db_session)
+
+    await repo.append_run_event(
+        event_type=EventType.SKIPPED,
+        outcome_code=BackfillOutcomeCode.RUN_NO_TARGETS,
+        backfill_stage=backfill_stage,  # type: ignore[arg-type]
+        run_id=f"run-{backfill_stage}",
+    )
+    await db_session.commit()
+
+    row = (await db_session.execute(select(PipelineEvent))).scalars().one()
+    assert row.stage == expected_stage
+    assert row.payload["backfill_stage"] == backfill_stage
+
+
 @pytest.mark.asyncio
 async def test_append_item_event_records_target_snapshot(
     db_session: AsyncSession,
@@ -42,7 +101,6 @@ async def test_append_item_event_records_target_snapshot(
     repo = BackfillAuditRepository(db_session)
 
     await repo.append_item_event(
-        stage=Stage.BACKFILL_ASSESS,
         event_type=EventType.SUCCEEDED,
         outcome_code=BackfillOutcomeCode.ITEM_ENQUEUED,
         backfill_stage="assess",
@@ -77,7 +135,6 @@ async def test_append_embed_item_event_records_analyzed_article_target_kind(
     repo = BackfillAuditRepository(db_session)
 
     await repo.append_item_event(
-        stage=Stage.BACKFILL_EMBED,
         event_type=EventType.SUCCEEDED,
         outcome_code=BackfillOutcomeCode.ITEM_ENQUEUED,
         backfill_stage="embed",
@@ -113,7 +170,6 @@ async def test_append_run_failed_records_error_without_counts(
     exc = RuntimeError("select failed")
 
     await repo.append_run_event(
-        stage=Stage.BACKFILL_EMBED,
         event_type=EventType.FAILED,
         outcome_code=BackfillOutcomeCode.RUN_FAILED,
         backfill_stage="embed",
@@ -150,7 +206,6 @@ async def test_append_run_budget_exhausted_records_daily_max(
     repo = BackfillAuditRepository(db_session)
 
     await repo.append_run_event(
-        stage=Stage.BACKFILL_EMBED,
         event_type=EventType.SKIPPED,
         outcome_code=BackfillOutcomeCode.RUN_DAILY_BUDGET_EXHAUSTED,
         backfill_stage="embed",

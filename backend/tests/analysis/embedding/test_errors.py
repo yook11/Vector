@@ -21,7 +21,6 @@ from app.analysis.embedding.errors import (
     EmbeddingResponseInvalidError,
     EmbeddingTerminalError,
 )
-from app.audit.domain.event import Stage
 from app.audit.failure_projection import Retryability
 
 _LAYER1_MARKERS = (EmbeddingRecoverableError, EmbeddingTerminalError)
@@ -117,8 +116,8 @@ class TestStage5MarkerHierarchy:
     def test_embedding_error_is_exception(self) -> None:
         assert issubclass(EmbeddingError, Exception)
 
-    def test_retry_axis_classvars_are_audit_projection_ssot(self) -> None:
-        assert EmbeddingError.STAGE is Stage.EMBEDDING
+    def test_marker_classvars_are_audit_projection_contract(self) -> None:
+        assert not hasattr(EmbeddingError, "STAGE")
         assert EmbeddingRecoverableError.RETRYABILITY is Retryability.RETRYABLE
         assert EmbeddingTerminalError.RETRYABILITY is Retryability.NON_RETRYABLE
         assert EmbeddingRecoverableError.FAILURE_ACTION is None

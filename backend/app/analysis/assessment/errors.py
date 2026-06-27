@@ -10,7 +10,6 @@ from app.analysis.ai_provider_errors import (
     AIProviderError,
     AIProviderStateError,
 )
-from app.audit.domain.event import Stage
 from app.audit.failure_projection import FailureAction, Retryability
 from app.logfire.exceptions import VectorDomainError
 
@@ -21,8 +20,6 @@ from app.logfire.exceptions import VectorDomainError
 
 class AssessmentError(VectorDomainError):
     """Stage 4 全例外の共通基底。直接の catch 対象にはしない。"""
-
-    STAGE: ClassVar[Stage] = Stage.ASSESSMENT
 
 
 class AssessmentRecoverableError(AssessmentError):

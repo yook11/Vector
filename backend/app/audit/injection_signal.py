@@ -11,6 +11,8 @@ from __future__ import annotations
 
 import logfire
 
+from app.audit.domain.event import Stage
+
 _injection_boundary_counter = logfire.metric_counter(
     "vector.audit.injection_boundary_detected",
     unit="1",
@@ -18,6 +20,6 @@ _injection_boundary_counter = logfire.metric_counter(
 )
 
 
-def record_injection_boundary_detected(*, stage: str) -> None:
+def record_injection_boundary_detected(*, stage: Stage) -> None:
     """境界タグ検知を metric counter に 1 件記録する。"""
-    _injection_boundary_counter.add(1, attributes={"stage": stage})
+    _injection_boundary_counter.add(1, attributes={"stage": stage.value})

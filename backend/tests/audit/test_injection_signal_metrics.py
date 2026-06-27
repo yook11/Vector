@@ -15,11 +15,13 @@
 
 from __future__ import annotations
 
+import inspect
 import json
-from typing import Any
+from typing import Any, get_type_hints
 
 from logfire.testing import CaptureLogfire
 
+from app.audit.domain.event import Stage
 from app.audit.injection_signal import record_injection_boundary_detected
 
 _METRIC = "vector.audit.injection_boundary_detected"
@@ -37,9 +39,18 @@ def _attributes_for(metric: dict[str, Any]) -> list[dict[str, Any]]:
     return [dp.get("attributes", {}) for dp in metric["data"]["data_points"]]
 
 
+def test_record_accepts_stage_enum_not_raw_string() -> None:
+    """closed stage label は raw string ではなく Stage enum で受ける。"""
+    params = inspect.signature(record_injection_boundary_detected).parameters
+    hints = get_type_hints(record_injection_boundary_detected)
+
+    assert "stage" in params
+    assert hints["stage"] is Stage
+
+
 def test_record_increments_counter_once(capfire: CaptureLogfire) -> None:
     """1 回の記録で counter は +1。"""
-    record_injection_boundary_detected(stage="completion")
+    record_injection_boundary_detected(stage=Stage.COMPLETION)
 
     metric = _find_metric(capfire.get_collected_metrics(), _METRIC)
     assert metric is not None
@@ -48,12 +59,12 @@ def test_record_increments_counter_once(capfire: CaptureLogfire) -> None:
 
 def test_attribute_is_stage_only(capfire: CaptureLogfire) -> None:
     """attribute は ``{"stage": ...}`` 1 key 固定。"""
-    record_injection_boundary_detected(stage="curation")
+    record_injection_boundary_detected(stage=Stage.CURATION)
 
     metric = _find_metric(capfire.get_collected_metrics(), _METRIC)
     assert metric is not None
     attrs_list = _attributes_for(metric)
-    assert attrs_list == [{"stage": "curation"}]
+    assert attrs_list == [{"stage": Stage.CURATION.value}]
 
 
 def test_metric_dump_carries_no_dynamic_value(capfire: CaptureLogfire) -> None:
@@ -62,8 +73,8 @@ def test_metric_dump_carries_no_dynamic_value(capfire: CaptureLogfire) -> None:
     将来 article_id / URL を attribute に足す regression が起きれば本 oracle が
     落ちる (`feedback_per_seam_mapping_totality_oracle`)。
     """
-    distinctive = "completion"
-    record_injection_boundary_detected(stage=distinctive)
+    distinctive_stage = Stage.COMPLETION
+    record_injection_boundary_detected(stage=distinctive_stage)
 
     metrics = capfire.get_collected_metrics()
     metric = _find_metric(metrics, _METRIC)

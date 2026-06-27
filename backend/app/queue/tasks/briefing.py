@@ -157,7 +157,7 @@ async def _append_dispatch_completed_audit(
             error_class=exception_fqn(exc),
             error_message=str(exc) or None,
         )
-        record_audit_dropped(Stage.BRIEFING)
+        record_audit_dropped(BriefingAuditRepository.STAGE)
 
 
 async def _append_category_enqueued_audit(
@@ -182,7 +182,7 @@ async def _append_category_enqueued_audit(
             error_class=exception_fqn(exc),
             error_message=str(exc) or None,
         )
-        record_audit_dropped(Stage.BRIEFING)
+        record_audit_dropped(BriefingAuditRepository.STAGE)
 
 
 async def _append_category_enqueue_failed_audit(
@@ -209,7 +209,7 @@ async def _append_category_enqueue_failed_audit(
             error_class=exception_fqn(audit_exc),
             error_message=str(audit_exc) or None,
         )
-        record_audit_dropped(Stage.BRIEFING)
+        record_audit_dropped(BriefingAuditRepository.STAGE)
 
 
 async def _append_dispatch_category_master_load_failed_audit(
@@ -235,7 +235,7 @@ async def _append_dispatch_category_master_load_failed_audit(
             error_class=exception_fqn(audit_exc),
             error_message=str(audit_exc) or None,
         )
-        record_audit_dropped(Stage.BRIEFING)
+        record_audit_dropped(BriefingAuditRepository.STAGE)
 
 
 @broker_briefing.task(
@@ -343,4 +343,4 @@ async def _append_generation_already_exists_audit(
             error_class=exception_fqn(exc),
             error_message=str(exc) or None,
         )
-        record_audit_dropped(Stage.BRIEFING)
+        record_audit_dropped(BriefingAuditRepository.STAGE)

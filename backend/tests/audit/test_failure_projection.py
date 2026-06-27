@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from dataclasses import fields
+
 import pytest
 from sqlalchemy.exc import (
     DataError,
@@ -18,7 +20,6 @@ from app.analysis.curation.errors import (
 )
 from app.analysis.embedding.errors import EmbeddingRecoverableError
 from app.analysis.gemini_error_translator import GeminiContentRejectionReason
-from app.audit.domain.event import Stage
 from app.audit.failure_projection import (
     FailureAction,
     FailureProjection,
@@ -43,6 +44,18 @@ from app.collection.external_fetch_errors import (
 from app.insights.briefing.errors import BriefingConfigurationError
 
 
+class _StageLessMarkerError(Exception):
+    """STAGE 削除後も duck-typed marker contract だけで分類される witness。"""
+
+    RETRYABILITY = Retryability.RETRYABLE
+    FAILURE_ACTION = None
+
+    def __init__(self) -> None:
+        super().__init__("marker")
+        self.failure_kind = "attempt_scoped"
+        self.code = "stage_less_marker"
+
+
 def _stmt_error(cls: type[Exception]) -> Exception:
     """``StatementError`` 系 (``statement, params, orig``) を生成する。"""
     return cls("SELECT 1", {}, Exception("orig"))
@@ -62,7 +75,6 @@ def test_project_marker_failure_reads_curation_instance_cause_axis() -> None:
         retryability=Retryability.NON_RETRYABLE,
         failure_action=FailureAction.DROP_ARTICLE,
         code="ai_error_output_blocked",
-        stage=Stage.CURATION,
         failure_reason="safety",
     )
 
@@ -77,7 +89,6 @@ def test_project_failure_prefers_marker_projection() -> None:
         retryability=Retryability.RETRYABLE,
         failure_action=None,
         code="ai_error_network",
-        stage=Stage.CURATION,
     )
 
 
@@ -94,7 +105,6 @@ def test_project_marker_failure_reads_instance_failure_kind_and_reason() -> None
         retryability=Retryability.RETRYABLE,
         failure_action=None,
         code="ai_error_rate_limited",
-        stage=Stage.ASSESSMENT,
         failure_reason="rate_limited",
     )
 
@@ -110,37 +120,74 @@ def test_project_marker_failure_classvar_marker_has_no_failure_reason() -> None:
     assert projection.failure_reason is None
 
 
+def test_failure_projection_no_longer_carries_event_stage() -> None:
+    """event stage は audit repository の責務で、projection は分類属性だけを運ぶ。"""
+    assert "stage" not in {field.name for field in fields(FailureProjection)}
+
+
+def test_project_marker_failure_does_not_require_stage_marker_attribute() -> None:
+    """Error.STAGE 削除後も marker 属性だけで non-unknown projection へ分類する。"""
+    projection = project_marker_failure(_StageLessMarkerError())
+
+    assert projection == FailureProjection(
+        failure_kind="attempt_scoped",
+        retryability=Retryability.RETRYABLE,
+        failure_action=None,
+        code="stage_less_marker",
+    )
+
+
 @pytest.mark.parametrize(
-    ("exc", "expected_stage"),
+    ("exc", "expected"),
     [
         (
             CurationRecoverableError(
                 code="ai_error_network", failure_kind="attempt_scoped"
             ),
-            Stage.CURATION,
+            FailureProjection(
+                failure_kind="attempt_scoped",
+                retryability=Retryability.RETRYABLE,
+                failure_action=None,
+                code="ai_error_network",
+            ),
         ),
         (
             AssessmentRecoverableError(
                 code="ai_error_network", failure_kind="attempt_scoped"
             ),
-            Stage.ASSESSMENT,
+            FailureProjection(
+                failure_kind="attempt_scoped",
+                retryability=Retryability.RETRYABLE,
+                failure_action=None,
+                code="ai_error_network",
+            ),
         ),
         (
             EmbeddingRecoverableError(
                 code="ai_error_network", failure_kind="attempt_scoped"
             ),
-            Stage.EMBEDDING,
+            FailureProjection(
+                failure_kind="attempt_scoped",
+                retryability=Retryability.RETRYABLE,
+                failure_action=None,
+                code="ai_error_network",
+            ),
         ),
-        (BriefingConfigurationError("missing key"), Stage.BRIEFING),
+        (
+            BriefingConfigurationError("missing key"),
+            FailureProjection(
+                failure_kind="configuration",
+                retryability=Retryability.NON_RETRYABLE,
+                failure_action=None,
+                code="briefing_generation_llm_configuration_invalid",
+            ),
+        ),
     ],
 )
-def test_project_marker_failure_reads_stage_from_parent_class(
-    exc: BaseException, expected_stage: Stage
+def test_project_marker_failure_projects_marker_attrs_without_stage(
+    exc: BaseException, expected: FailureProjection
 ) -> None:
-    projection = project_marker_failure(exc)
-
-    assert projection is not None
-    assert projection.stage is expected_stage
+    assert project_marker_failure(exc) == expected
 
 
 @pytest.mark.parametrize(
@@ -209,7 +256,6 @@ def test_project_failure_returns_unknown_for_catch_all() -> None:
                 retryability=Retryability.RETRYABLE,
                 failure_action=None,
                 code="fetch_gateway_failure",
-                stage=Stage.ACQUISITION,
             ),
         ),
         (
@@ -221,7 +267,6 @@ def test_project_failure_returns_unknown_for_catch_all() -> None:
                 retryability=Retryability.NON_RETRYABLE,
                 failure_action=None,
                 code="fetch_access_denied",
-                stage=Stage.ACQUISITION,
             ),
         ),
         (
@@ -237,7 +282,6 @@ def test_project_failure_returns_unknown_for_catch_all() -> None:
                 retryability=Retryability.NON_RETRYABLE,
                 failure_action=None,
                 code="read_unexpected_field_shape",
-                stage=Stage.ACQUISITION,
             ),
         ),
     ],

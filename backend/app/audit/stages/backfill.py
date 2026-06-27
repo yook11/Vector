@@ -17,6 +17,12 @@ from app.audit.repository import PipelineEventRepository
 BackfillStage = Literal["curate", "assess", "embed"]
 BackfillTargetKind = Literal["article", "curation", "analyzed_article"]
 
+_STAGE_BY_BACKFILL_STAGE: dict[BackfillStage, Stage] = {
+    "curate": Stage.BACKFILL_CURATE,
+    "assess": Stage.BACKFILL_ASSESS,
+    "embed": Stage.BACKFILL_EMBED,
+}
+
 
 class BackfillOutcomeCode(StrEnum):
     """Backfill stage の outcome code。"""
@@ -36,10 +42,13 @@ class BackfillAuditRepository:
     def __init__(self, session: AsyncSession) -> None:
         self._events = PipelineEventRepository(session)
 
+    @staticmethod
+    def stage_for(backfill_stage: BackfillStage) -> Stage:
+        return _STAGE_BY_BACKFILL_STAGE[backfill_stage]
+
     async def append_item_event(
         self,
         *,
-        stage: Stage,
         event_type: EventType,
         outcome_code: BackfillOutcomeCode,
         backfill_stage: BackfillStage,
@@ -62,7 +71,7 @@ class BackfillAuditRepository:
             error_chain=extract_error_chain(exc) if exc is not None else None,
         )
         await self._events.append(
-            stage=stage,
+            stage=self.stage_for(backfill_stage),
             event_type=event_type,
             outcome_code=outcome_code.value,
             payload=payload,
@@ -74,7 +83,6 @@ class BackfillAuditRepository:
     async def append_run_event(
         self,
         *,
-        stage: Stage,
         event_type: EventType,
         outcome_code: BackfillOutcomeCode,
         backfill_stage: BackfillStage,
@@ -92,7 +100,7 @@ class BackfillAuditRepository:
             error_chain=extract_error_chain(exc) if exc is not None else None,
         )
         await self._events.append(
-            stage=stage,
+            stage=self.stage_for(backfill_stage),
             event_type=event_type,
             outcome_code=outcome_code.value,
             payload=payload,

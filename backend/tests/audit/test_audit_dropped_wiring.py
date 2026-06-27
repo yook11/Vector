@@ -3,10 +3,8 @@
 各 drop site が実際にカウンタを emit することを、audit write を意図的に
 失敗させて確認する。テスト内容:
 
-- backfill item (stage は runtime パラメータ): BACKFILL_EMBED を渡して
-  ``_append_backfill_item_event`` の except 分岐で emit を確認。
-- backfill run (stage は runtime パラメータ): BACKFILL_ASSESS を渡して
-  ``_append_backfill_run_event`` の except 分岐で emit を確認。
+- backfill item: ``backfill_stage="embed"`` から BACKFILL_EMBED が導出される。
+- backfill run: ``backfill_stage="assess"`` から BACKFILL_ASSESS が導出される。
 - dispatch run (stage はリテラル): ``_append_dispatch_run_event`` の
   except 分岐で Stage.DISPATCH が emit されることを確認。
 - curation _audit_failure (stage はリテラル): ``CurationFailureHandler._audit_failure``
@@ -24,7 +22,7 @@ from logfire.testing import CaptureLogfire
 from app.analysis.curation.domain.ready import ReadyForCuration
 from app.analysis.curation.errors import CurationRecoverableError
 from app.analysis.curation.failure_handling import CurationFailureHandler
-from app.audit.domain.event import EventType, Stage
+from app.audit.domain.event import EventType
 from app.audit.stages.backfill import BackfillOutcomeCode
 from app.audit.stages.dispatch import DispatchOutcomeCode
 from app.queue.helpers.backlog import BackfillTarget
@@ -63,18 +61,18 @@ def _attributes_for(metric):  # noqa: ANN001, ANN202
 
 
 # ---------------------------------------------------------------------------
-# Site 1a: backfill item (stage は runtime パラメータ)
+# Site 1a: backfill item (stage は backfill_stage から導出)
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
-async def test_backfill_item_audit_drop_increments_counter_for_passed_stage(
+async def test_backfill_item_audit_drop_derives_stage_from_backfill_stage(
     capfire: CaptureLogfire,
 ) -> None:
     """audit write 失敗時に ``record_audit_dropped(stage)`` が +1 emit される。
 
-    stage=BACKFILL_EMBED を渡し、wire 値 "backfill_embed" が attribute に乗ることで
-    runtime パラメータのスレッドを確認する (hardcode なら別 wire 値で失敗する)。
+    caller は event stage を渡さず、backfill_stage="embed" だけで
+    wire 値 "backfill_embed" が attribute に乗ることを確認する。
     """
     target = BackfillTarget(
         target_id=1,
@@ -84,7 +82,6 @@ async def test_backfill_item_audit_drop_increments_counter_for_passed_stage(
 
     await _append_backfill_item_event(
         _FailingSessionFactory(),
-        stage=Stage.BACKFILL_EMBED,  # runtime パラメータ — ここが違う値になれば失敗
         backfill_stage="embed",
         run_id="run-wiring-001",
         target_kind="analyzed_article",
@@ -101,22 +98,21 @@ async def test_backfill_item_audit_drop_increments_counter_for_passed_stage(
 
 
 # ---------------------------------------------------------------------------
-# Site 1b: backfill run (stage は runtime パラメータ)
+# Site 1b: backfill run (stage は backfill_stage から導出)
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
-async def test_backfill_run_audit_drop_increments_counter_for_passed_stage(
+async def test_backfill_run_audit_drop_derives_stage_from_backfill_stage(
     capfire: CaptureLogfire,
 ) -> None:
     """audit write 失敗時に ``record_audit_dropped(stage)`` が +1 emit される。
 
-    stage=BACKFILL_ASSESS を渡し、wire 値 "backfill_assess" が attribute に乗ることで
-    runtime パラメータのスレッドを確認する。
+    caller は event stage を渡さず、backfill_stage="assess" だけで
+    wire 値 "backfill_assess" が attribute に乗ることを確認する。
     """
     await _append_backfill_run_event(
         _FailingSessionFactory(),
-        stage=Stage.BACKFILL_ASSESS,  # runtime パラメータ
         backfill_stage="assess",
         run_id="run-wiring-002",
         event_type=EventType.SKIPPED,

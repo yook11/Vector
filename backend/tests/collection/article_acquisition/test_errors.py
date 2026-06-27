@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import pytest
 
-from app.audit.domain.event import Stage
 from app.audit.failure_projection import Retryability
 from app.collection.article_acquisition.errors import (
     AcquisitionError,
@@ -26,8 +25,8 @@ from tests.collection.test_external_fetch_error_codes import (
 )
 
 
-def test_acquisition_error_is_stage_1_marker_base() -> None:
-    assert AcquisitionError.STAGE is Stage.ACQUISITION
+def test_acquisition_error_marker_base_carries_no_event_stage() -> None:
+    assert not hasattr(AcquisitionError, "STAGE")
 
 
 def test_read_error_derives_external_fetch_retryable_from_origin() -> None:
@@ -36,7 +35,7 @@ def test_read_error_derives_external_fetch_retryable_from_origin() -> None:
     exc = AcquisitionReadError(origin=origin)
 
     assert isinstance(exc, AcquisitionError)
-    assert exc.STAGE is Stage.ACQUISITION
+    assert not hasattr(exc, "STAGE")
     assert exc.FAILURE_KIND == "external_fetch"
     assert exc.RETRYABILITY is Retryability.RETRYABLE
     assert exc.FAILURE_ACTION is None

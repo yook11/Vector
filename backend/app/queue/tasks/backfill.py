@@ -145,7 +145,6 @@ def _new_backfill_run_id() -> str:
 async def _append_backfill_item_event(
     session_factory: async_sessionmaker[AsyncSession],
     *,
-    stage: Stage,
     backfill_stage: BackfillStage,
     run_id: str,
     target_kind: BackfillTargetKind,
@@ -155,10 +154,10 @@ async def _append_backfill_item_event(
     exc: BaseException | None = None,
 ) -> None:
     """item 単位監査を best-effort で焼く。"""
+    stage = BackfillAuditRepository.stage_for(backfill_stage)
     try:
         async with session_factory() as session:
             await BackfillAuditRepository(session).append_item_event(
-                stage=stage,
                 event_type=event_type,
                 outcome_code=outcome_code,
                 backfill_stage=backfill_stage,
@@ -186,7 +185,6 @@ async def _append_backfill_item_event(
 async def _append_backfill_run_event(
     session_factory: async_sessionmaker[AsyncSession],
     *,
-    stage: Stage,
     backfill_stage: BackfillStage,
     run_id: str,
     event_type: EventType,
@@ -195,10 +193,10 @@ async def _append_backfill_run_event(
     exc: BaseException | None = None,
 ) -> None:
     """run 単位の skip 制御 / 失敗監査を best-effort で焼く。"""
+    stage = BackfillAuditRepository.stage_for(backfill_stage)
     try:
         async with session_factory() as session:
             await BackfillAuditRepository(session).append_run_event(
-                stage=stage,
                 event_type=event_type,
                 outcome_code=outcome_code,
                 backfill_stage=backfill_stage,
@@ -448,7 +446,6 @@ async def backfill_curations(ctx: Context = TaskiqDepends()) -> None:
         if not settings.backfill_curations_enabled:
             await _append_backfill_run_event(
                 session_factory,
-                stage=Stage.BACKFILL_CURATE,
                 backfill_stage="curate",
                 run_id=run_id,
                 event_type=EventType.SKIPPED,
@@ -463,7 +460,6 @@ async def backfill_curations(ctx: Context = TaskiqDepends()) -> None:
             if curation_held:
                 await _append_backfill_run_event(
                     session_factory,
-                    stage=Stage.BACKFILL_CURATE,
                     backfill_stage="curate",
                     run_id=run_id,
                     event_type=EventType.SKIPPED,
@@ -497,7 +493,6 @@ async def backfill_curations(ctx: Context = TaskiqDepends()) -> None:
             if found == 0:
                 await _append_backfill_run_event(
                     session_factory,
-                    stage=Stage.BACKFILL_CURATE,
                     backfill_stage="curate",
                     run_id=run_id,
                     event_type=EventType.SKIPPED,
@@ -512,7 +507,6 @@ async def backfill_curations(ctx: Context = TaskiqDepends()) -> None:
             if granted == 0:
                 await _append_backfill_run_event(
                     session_factory,
-                    stage=Stage.BACKFILL_CURATE,
                     backfill_stage="curate",
                     run_id=run_id,
                     event_type=EventType.SKIPPED,
@@ -533,7 +527,6 @@ async def backfill_curations(ctx: Context = TaskiqDepends()) -> None:
                     failed += 1
                     await _append_backfill_item_event(
                         session_factory,
-                        stage=Stage.BACKFILL_CURATE,
                         backfill_stage="curate",
                         run_id=run_id,
                         target_kind="article",
@@ -552,7 +545,6 @@ async def backfill_curations(ctx: Context = TaskiqDepends()) -> None:
                 enqueued += 1
                 await _append_backfill_item_event(
                     session_factory,
-                    stage=Stage.BACKFILL_CURATE,
                     backfill_stage="curate",
                     run_id=run_id,
                     target_kind="article",
@@ -565,7 +557,6 @@ async def backfill_curations(ctx: Context = TaskiqDepends()) -> None:
         except Exception as exc:
             await _append_backfill_run_event(
                 session_factory,
-                stage=Stage.BACKFILL_CURATE,
                 backfill_stage="curate",
                 run_id=run_id,
                 event_type=EventType.FAILED,
@@ -609,7 +600,6 @@ async def backfill_assessments(ctx: Context = TaskiqDepends()) -> None:
         if not settings.backfill_assessments_enabled:
             await _append_backfill_run_event(
                 session_factory,
-                stage=Stage.BACKFILL_ASSESS,
                 backfill_stage="assess",
                 run_id=run_id,
                 event_type=EventType.SKIPPED,
@@ -624,7 +614,6 @@ async def backfill_assessments(ctx: Context = TaskiqDepends()) -> None:
             if assessment_held:
                 await _append_backfill_run_event(
                     session_factory,
-                    stage=Stage.BACKFILL_ASSESS,
                     backfill_stage="assess",
                     run_id=run_id,
                     event_type=EventType.SKIPPED,
@@ -660,7 +649,6 @@ async def backfill_assessments(ctx: Context = TaskiqDepends()) -> None:
             if found == 0:
                 await _append_backfill_run_event(
                     session_factory,
-                    stage=Stage.BACKFILL_ASSESS,
                     backfill_stage="assess",
                     run_id=run_id,
                     event_type=EventType.SKIPPED,
@@ -675,7 +663,6 @@ async def backfill_assessments(ctx: Context = TaskiqDepends()) -> None:
             if granted == 0:
                 await _append_backfill_run_event(
                     session_factory,
-                    stage=Stage.BACKFILL_ASSESS,
                     backfill_stage="assess",
                     run_id=run_id,
                     event_type=EventType.SKIPPED,
@@ -699,7 +686,6 @@ async def backfill_assessments(ctx: Context = TaskiqDepends()) -> None:
                     failed += 1
                     await _append_backfill_item_event(
                         session_factory,
-                        stage=Stage.BACKFILL_ASSESS,
                         backfill_stage="assess",
                         run_id=run_id,
                         target_kind="curation",
@@ -718,7 +704,6 @@ async def backfill_assessments(ctx: Context = TaskiqDepends()) -> None:
                 enqueued += 1
                 await _append_backfill_item_event(
                     session_factory,
-                    stage=Stage.BACKFILL_ASSESS,
                     backfill_stage="assess",
                     run_id=run_id,
                     target_kind="curation",
@@ -731,7 +716,6 @@ async def backfill_assessments(ctx: Context = TaskiqDepends()) -> None:
         except Exception as exc:
             await _append_backfill_run_event(
                 session_factory,
-                stage=Stage.BACKFILL_ASSESS,
                 backfill_stage="assess",
                 run_id=run_id,
                 event_type=EventType.FAILED,
@@ -772,7 +756,6 @@ async def backfill_embeddings(ctx: Context = TaskiqDepends()) -> None:
         if not settings.backfill_embeddings_enabled:
             await _append_backfill_run_event(
                 session_factory,
-                stage=Stage.BACKFILL_EMBED,
                 backfill_stage="embed",
                 run_id=run_id,
                 event_type=EventType.SKIPPED,
@@ -787,7 +770,6 @@ async def backfill_embeddings(ctx: Context = TaskiqDepends()) -> None:
             if embedding_held:
                 await _append_backfill_run_event(
                     session_factory,
-                    stage=Stage.BACKFILL_EMBED,
                     backfill_stage="embed",
                     run_id=run_id,
                     event_type=EventType.SKIPPED,
@@ -821,7 +803,6 @@ async def backfill_embeddings(ctx: Context = TaskiqDepends()) -> None:
             if found == 0:
                 await _append_backfill_run_event(
                     session_factory,
-                    stage=Stage.BACKFILL_EMBED,
                     backfill_stage="embed",
                     run_id=run_id,
                     event_type=EventType.SKIPPED,
@@ -836,7 +817,6 @@ async def backfill_embeddings(ctx: Context = TaskiqDepends()) -> None:
             if granted == 0:
                 await _append_backfill_run_event(
                     session_factory,
-                    stage=Stage.BACKFILL_EMBED,
                     backfill_stage="embed",
                     run_id=run_id,
                     event_type=EventType.SKIPPED,
@@ -860,7 +840,6 @@ async def backfill_embeddings(ctx: Context = TaskiqDepends()) -> None:
                     failed += 1
                     await _append_backfill_item_event(
                         session_factory,
-                        stage=Stage.BACKFILL_EMBED,
                         backfill_stage="embed",
                         run_id=run_id,
                         target_kind="analyzed_article",
@@ -879,7 +858,6 @@ async def backfill_embeddings(ctx: Context = TaskiqDepends()) -> None:
                 enqueued += 1
                 await _append_backfill_item_event(
                     session_factory,
-                    stage=Stage.BACKFILL_EMBED,
                     backfill_stage="embed",
                     run_id=run_id,
                     target_kind="analyzed_article",
@@ -892,7 +870,6 @@ async def backfill_embeddings(ctx: Context = TaskiqDepends()) -> None:
         except Exception as exc:
             await _append_backfill_run_event(
                 session_factory,
-                stage=Stage.BACKFILL_EMBED,
                 backfill_stage="embed",
                 run_id=run_id,
                 event_type=EventType.FAILED,

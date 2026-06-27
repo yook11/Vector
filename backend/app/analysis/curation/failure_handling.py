@@ -29,7 +29,6 @@ from app.analysis.curation.errors import (
 )
 from app.analysis.curation.metrics import record_curation_processing_outcome
 from app.analysis.failure_handling import FailureHandlingDecision
-from app.audit.domain.event import Stage
 from app.audit.error_fields import exception_fqn
 from app.audit.metrics import record_audit_dropped
 from app.audit.stages.curation import CurationAuditRepository
@@ -183,7 +182,7 @@ class CurationFailureHandler:
                 audit_error_class=(exception_fqn(audit_exc)),
                 audit_error_message=redact_secrets(str(audit_exc))[:500],
             )
-            record_audit_dropped(Stage.CURATION)
+            record_audit_dropped(CurationAuditRepository.STAGE)
 
     async def _audit_unexpected_failure(
         self,
@@ -209,4 +208,4 @@ class CurationFailureHandler:
                 audit_error_class=(exception_fqn(audit_exc)),
                 audit_error_message=redact_secrets(str(audit_exc))[:500],
             )
-            record_audit_dropped(Stage.CURATION)
+            record_audit_dropped(CurationAuditRepository.STAGE)

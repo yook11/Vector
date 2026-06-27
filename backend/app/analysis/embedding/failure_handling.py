@@ -28,7 +28,6 @@ from app.analysis.embedding.errors import (
 )
 from app.analysis.embedding.metrics import record_embedding_processing_outcome
 from app.analysis.failure_handling import FailureHandlingDecision
-from app.audit.domain.event import Stage
 from app.audit.error_fields import exception_fqn
 from app.audit.metrics import record_audit_dropped
 from app.audit.stages.embedding import EmbeddingAuditRepository
@@ -164,7 +163,7 @@ class EmbeddingFailureHandler:
                 audit_error_class=(exception_fqn(audit_exc)),
                 audit_error_message=redact_secrets(str(audit_exc))[:500],
             )
-            record_audit_dropped(Stage.EMBEDDING)
+            record_audit_dropped(EmbeddingAuditRepository.STAGE)
 
     async def _audit_unexpected_failure(
         self,
@@ -187,4 +186,4 @@ class EmbeddingFailureHandler:
                 audit_error_class=(exception_fqn(audit_exc)),
                 audit_error_message=redact_secrets(str(audit_exc))[:500],
             )
-            record_audit_dropped(Stage.EMBEDDING)
+            record_audit_dropped(EmbeddingAuditRepository.STAGE)

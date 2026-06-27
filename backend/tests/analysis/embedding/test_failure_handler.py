@@ -42,6 +42,7 @@ from app.analysis.embedding.errors import (
 )
 from app.analysis.embedding.failure_handling import EmbeddingFailureHandler
 from app.analysis.gemini_error_translator import GeminiContentRejectionReason
+from app.audit.stages.embedding import EmbeddingAuditRepository
 from app.models.analyzable_article_record import AnalyzableArticleRecord
 from app.models.news_source import NewsSource
 from app.models.pipeline_event import PipelineEvent
@@ -392,6 +393,7 @@ async def test_processing_outcome_emitted_even_when_audit_drops(
     with patch(
         "app.analysis.embedding.failure_handling.EmbeddingAuditRepository"
     ) as mock_audit_cls:
+        mock_audit_cls.STAGE = EmbeddingAuditRepository.STAGE
         mock_audit_cls.return_value.append_failure = AsyncMock(
             side_effect=RuntimeError("audit db down")
         )

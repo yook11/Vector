@@ -19,6 +19,7 @@ from app.analysis.assessment.domain.ready import (
 )
 from app.analysis.failure_handling import FailureHandlingDecision
 from app.analysis.rate_limit import AIModelRateLimitPolicy, RateLimitRule
+from app.audit.domain.event import Stage
 from app.queue.messages.assessment import AssessmentTrigger
 from app.queue.messages.embedding import EmbeddingTrigger
 from tests.logfire._span_helpers import one_article_stage_span, stage_attrs
@@ -229,7 +230,9 @@ class TestAssessContent:
 
         mock_svc_cls.assert_not_called()
         mock_embed.kiq.assert_not_called()
-        mock_record.assert_called_once_with(stage="assessment", model="test-model")
+        mock_record.assert_called_once()
+        assert mock_record.call_args.kwargs["stage"] is Stage.ASSESSMENT
+        assert mock_record.call_args.kwargs["model"] == "test-model"
         skips = [
             e for e in cap if e.get("event") == "assessment_ai_rate_limit_gate_skipped"
         ]

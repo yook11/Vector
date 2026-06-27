@@ -23,7 +23,6 @@ from app.analysis.curation.errors import (
     CurationTerminalKeepError,
 )
 from app.analysis.gemini_error_translator import GeminiContentRejectionReason
-from app.audit.domain.event import Stage
 from app.audit.failure_projection import FailureAction, Retryability
 
 # Layer 1 の 3 marker は同形 (retry / DROP 軸だけ classvar、原因軸は instance 値)。
@@ -120,9 +119,9 @@ class TestStage3MarkerHierarchy:
     def test_curation_error_is_exception(self) -> None:
         assert issubclass(CurationError, Exception)
 
-    def test_retry_and_action_classvars_are_audit_projection_ssot(self) -> None:
+    def test_marker_classvars_are_audit_projection_contract(self) -> None:
         # retry / DROP 軸だけ型で固定 (原因軸 failure_kind は instance 値で別途検証)。
-        assert CurationError.STAGE is Stage.CURATION
+        assert not hasattr(CurationError, "STAGE")
         assert CurationRecoverableError.RETRYABILITY is Retryability.RETRYABLE
         assert CurationRecoverableError.FAILURE_ACTION is None
         assert CurationTerminalKeepError.RETRYABILITY is Retryability.NON_RETRYABLE

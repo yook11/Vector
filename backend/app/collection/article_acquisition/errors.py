@@ -5,7 +5,6 @@ from __future__ import annotations
 from enum import StrEnum
 from typing import ClassVar
 
-from app.audit.domain.event import Stage
 from app.audit.failure_projection import FailureAction, Retryability
 from app.collection.article_acquisition.reader.read_errors import (
     UnreadableResponseError,
@@ -33,8 +32,6 @@ class AcquisitionError(VectorDomainError):
     外部接続境界の ``ExternalFetchError`` family は origin error なので、本基底を
     継承しない。Stage 1 の処理方針を持つ marker だけがここに属する。
     """
-
-    STAGE: ClassVar[Stage] = Stage.ACQUISITION
 
 
 class AcquisitionReadError(AcquisitionError):

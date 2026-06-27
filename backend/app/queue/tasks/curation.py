@@ -93,7 +93,9 @@ async def curate_content(
         if not await ctx.state.provider_rate_limit_gate.acquire(
             curator.rate_limit_policy
         ):
-            record_rate_limit_gate_skipped(stage="curation", model=curator.model_name)
+            record_rate_limit_gate_skipped(
+                stage=Stage.CURATION, model=curator.model_name
+            )
             logger.info(
                 "curation_ai_rate_limit_gate_skipped",
                 analyzable_article_id=ready.analyzable_article_id,
@@ -151,4 +153,4 @@ async def _append_ready_build_failed_audit(
             business_error_class=exception_fqn(exc),
             audit_error_class=exception_fqn(audit_exc),
         )
-        record_audit_dropped(Stage.CURATION)
+        record_audit_dropped(CurationAuditRepository.STAGE)

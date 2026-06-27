@@ -5,14 +5,11 @@ from __future__ import annotations
 from collections.abc import Sequence
 from typing import ClassVar
 
-from app.audit.domain.event import Stage
 from app.audit.failure_projection import FailureAction, Retryability
 
 
 class BriefingError(Exception):
     """Briefing 系処理の基底例外。"""
-
-    STAGE: ClassVar[Stage] = Stage.BRIEFING
 
 
 class BriefingConfigurationError(BriefingError):

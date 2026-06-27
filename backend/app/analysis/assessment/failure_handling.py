@@ -26,7 +26,6 @@ from app.analysis.assessment.errors import (
 )
 from app.analysis.assessment.metrics import record_assessment_processing_outcome
 from app.analysis.failure_handling import FailureHandlingDecision
-from app.audit.domain.event import Stage
 from app.audit.error_fields import exception_fqn
 from app.audit.metrics import record_audit_dropped
 from app.audit.stages.assessment import AssessmentAuditRepository
@@ -152,7 +151,7 @@ class AssessmentFailureHandler:
                 audit_error_class=(exception_fqn(audit_exc)),
                 audit_error_message=redact_secrets(str(audit_exc))[:500],
             )
-            record_audit_dropped(Stage.ASSESSMENT)
+            record_audit_dropped(AssessmentAuditRepository.STAGE)
 
     async def _audit_unexpected_failure(
         self,
@@ -175,4 +174,4 @@ class AssessmentFailureHandler:
                 audit_error_class=(exception_fqn(audit_exc)),
                 audit_error_message=redact_secrets(str(audit_exc))[:500],
             )
-            record_audit_dropped(Stage.ASSESSMENT)
+            record_audit_dropped(AssessmentAuditRepository.STAGE)

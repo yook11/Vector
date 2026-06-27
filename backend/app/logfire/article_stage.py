@@ -36,6 +36,7 @@ from typing import Literal
 import logfire
 from logfire import LogfireSpan
 
+from app.audit.domain.event import Stage
 from app.logfire.failure_attrs import annotate_span_failure
 
 # stage 別の result 語彙。値だけで「記事がどう抜けたか」が読めるよう自己記述的にする。
@@ -150,7 +151,7 @@ def curation_stage_span(*, article_id: int) -> Iterator[CurationStageSpan]:
     """
     with logfire.span(
         _SPAN_NAME,
-        stage="curation",
+        stage=Stage.CURATION.value,
         task_name="curate_content",
         article_id=article_id,
         next_task_enqueued=False,
@@ -177,7 +178,7 @@ def assessment_stage_span(*, curation_id: int) -> Iterator[AssessmentStageSpan]:
     """
     with logfire.span(
         _SPAN_NAME,
-        stage="assessment",
+        stage=Stage.ASSESSMENT.value,
         task_name="assess_content",
         curation_id=curation_id,
         next_task_enqueued=False,
@@ -204,7 +205,7 @@ def embedding_stage_span(*, analyzed_article_id: int) -> Iterator[EmbeddingStage
     """
     with logfire.span(
         _SPAN_NAME,
-        stage="embedding",
+        stage=Stage.EMBEDDING.value,
         task_name="generate_embedding",
         analyzed_article_id=analyzed_article_id,
     ) as span:

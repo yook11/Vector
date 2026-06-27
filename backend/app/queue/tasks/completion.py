@@ -210,4 +210,4 @@ async def _append_ready_build_error_audit(
             business_error_class=exception_fqn(exc),
             audit_error_class=exception_fqn(audit_exc),
         )
-        record_audit_dropped(Stage.COMPLETION)
+        record_audit_dropped(ArticleCompletionAuditRepository.STAGE)

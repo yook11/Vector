@@ -4,13 +4,13 @@ from __future__ import annotations
 
 from datetime import date
 from enum import StrEnum
-from typing import Literal
+from typing import ClassVar, Literal
 
 import structlog
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.audit.domain.event import EventType, Stage
-from app.audit.domain.payloads import TrendDiscoveryPayload
+from app.audit.domain.payloads import BasePipelineEventPayload, TrendDiscoveryPayload
 from app.audit.error_chain import extract_error_chain
 from app.audit.error_fields import error_message_of, exception_fqn
 from app.audit.failure_projection import Retryability
@@ -35,6 +35,8 @@ class TrendDiscoveryOutcomeCode(StrEnum):
 
 class TrendDiscoveryAuditRepository:
     """Trend discovery 専用の payload / outcome_code を決める。"""
+
+    STAGE: ClassVar[Stage] = Stage.TREND_DISCOVERY
 
     def __init__(self, session: AsyncSession) -> None:
         self._events = PipelineEventRepository(session)
@@ -67,13 +69,34 @@ class TrendDiscoveryAuditRepository:
         resolved_retryability = retryability
         if event_type == EventType.FAILED and resolved_retryability is None:
             resolved_retryability = Retryability.UNKNOWN
-        await self._events.append(
-            stage=Stage.TREND_DISCOVERY,
+        await self._append_event(
             event_type=event_type,
             outcome_code=outcome_code.value,
             payload=payload,
             error_class=exception_fqn(exc) if exc is not None else None,
             retryability=resolved_retryability,
+        )
+
+    async def _append_event(
+        self,
+        *,
+        event_type: EventType,
+        outcome_code: str,
+        payload: BasePipelineEventPayload,
+        article_id: int | None = None,
+        source_id: int | None = None,
+        error_class: str | None = None,
+        retryability: Retryability | None = None,
+    ) -> None:
+        await self._events.append(
+            stage=self.STAGE,
+            event_type=event_type,
+            outcome_code=outcome_code,
+            payload=payload,
+            article_id=article_id,
+            source_id=source_id,
+            error_class=error_class,
+            retryability=retryability,
         )
 
 
@@ -113,4 +136,4 @@ async def append_trend_discovery_run_event_best_effort(
             window_end=window_end.isoformat(),
             audit_error_class=exception_fqn(audit_exc),
         )
-        record_audit_dropped(Stage.TREND_DISCOVERY)
+        record_audit_dropped(TrendDiscoveryAuditRepository.STAGE)

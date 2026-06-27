@@ -92,7 +92,7 @@ async def assess_content(
             assessor.rate_limit_policy
         ):
             record_rate_limit_gate_skipped(
-                stage="assessment", model=assessor.model_name
+                stage=Stage.ASSESSMENT, model=assessor.model_name
             )
             logger.info(
                 "assessment_ai_rate_limit_gate_skipped",
@@ -153,4 +153,4 @@ async def _append_ready_build_failed_audit(
             business_error_class=exception_fqn(exc),
             audit_error_class=exception_fqn(audit_exc),
         )
-        record_audit_dropped(Stage.ASSESSMENT)
+        record_audit_dropped(AssessmentAuditRepository.STAGE)

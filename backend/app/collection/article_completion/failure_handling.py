@@ -8,7 +8,6 @@ import structlog
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from app.audit.domain.event import Stage
 from app.audit.error_fields import exception_fqn
 from app.audit.metrics import record_audit_dropped
 from app.audit.stages.completion import ArticleCompletionAuditRepository
@@ -117,7 +116,7 @@ class ArticleCompletionFailureHandler:
                 business_error_class=(exception_fqn(exc)),
                 audit_error_class=(exception_fqn(audit_exc)),
             )
-            record_audit_dropped(Stage.COMPLETION)
+            record_audit_dropped(ArticleCompletionAuditRepository.STAGE)
 
     async def _handle_temporary(
         self,

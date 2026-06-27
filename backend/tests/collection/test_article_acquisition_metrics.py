@@ -21,6 +21,7 @@ import pytest
 from logfire.testing import CaptureLogfire
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from app.audit.domain.event import Stage
 from app.collection.article_acquisition.errors import AcquisitionReadError
 from app.collection.article_acquisition.fetched_article import FetchedArticle
 from app.collection.article_acquisition.service import ArticleAcquisitionService
@@ -311,6 +312,8 @@ async def test_outcome_attribute_keys_are_result_only_no_pii(
 
 class _FailingConversionAuditRepo:
     """append_conversion_rejected が必ず raise する監査リポジトリ stub。"""
+
+    STAGE: ClassVar[Stage] = Stage.ACQUISITION
 
     def __init__(self, *_: Any, **__: Any) -> None: ...
 

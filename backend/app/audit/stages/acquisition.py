@@ -3,17 +3,18 @@
 from __future__ import annotations
 
 from enum import StrEnum
-from typing import TypedDict
+from typing import ClassVar, TypedDict
 
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.audit.domain.event import EventType, Stage
-from app.audit.domain.payloads import AcquisitionPayload
+from app.audit.domain.payloads import AcquisitionPayload, BasePipelineEventPayload
 from app.audit.error_chain import extract_error_chain
 from app.audit.error_fields import exception_fqn, redacted_audit_message
 from app.audit.failure_projection import (
     FailureProjection,
+    Retryability,
     failure_action_value,
     project_failure,
     unknown_failure_projection,
@@ -40,6 +41,8 @@ class AcquisitionOutcomeCode(StrEnum):
 class SourceAcquisitionAuditRepository:
     """Stage 1 専用の payload / outcome_code / failure projection を決める。"""
 
+    STAGE: ClassVar[Stage] = Stage.ACQUISITION
+
     def __init__(self, session: AsyncSession) -> None:
         self._session = session
         self._events = PipelineEventRepository(session)
@@ -56,8 +59,7 @@ class SourceAcquisitionAuditRepository:
         payload = AcquisitionPayload(
             source_name=source_name, canonical_url=canonical_url
         )
-        await self._events.append(
-            stage=Stage.ACQUISITION,
+        await self._append_event(
             event_type=EventType.SUCCEEDED,
             outcome_code=AcquisitionOutcomeCode.ARTICLE_CREATED.value,
             payload=payload,
@@ -77,8 +79,7 @@ class SourceAcquisitionAuditRepository:
         payload = AcquisitionPayload(
             source_name=source_name, canonical_url=canonical_url
         )
-        await self._events.append(
-            stage=Stage.ACQUISITION,
+        await self._append_event(
             event_type=EventType.SUCCEEDED,
             outcome_code=AcquisitionOutcomeCode.INCOMPLETE_ARTICLE_CREATED.value,
             payload=payload,
@@ -134,8 +135,7 @@ class SourceAcquisitionAuditRepository:
             error_chain=extract_error_chain(exc),
             **_origin_payload_fields(exc),
         )
-        await self._events.append(
-            stage=projection.stage or Stage.ACQUISITION,
+        await self._append_event(
             event_type=EventType.FAILED,
             outcome_code=projection.code,
             payload=payload,
@@ -167,13 +167,34 @@ class SourceAcquisitionAuditRepository:
             conversion_body_length=rejection.body_length,
             conversion_has_published_at=rejection.has_published_at,
         )
-        await self._events.append(
-            stage=Stage.ACQUISITION,
+        await self._append_event(
             event_type=EventType.REJECTED,
             outcome_code=rejection.outcome_code,
             payload=payload,
             source_id=source_id,
             error_class=exception_fqn(cause) if cause is not None else None,
+        )
+
+    async def _append_event(
+        self,
+        *,
+        event_type: EventType,
+        outcome_code: str,
+        payload: BasePipelineEventPayload,
+        article_id: int | None = None,
+        source_id: int | None = None,
+        error_class: str | None = None,
+        retryability: Retryability | None = None,
+    ) -> None:
+        await self._events.append(
+            stage=self.STAGE,
+            event_type=event_type,
+            outcome_code=outcome_code,
+            payload=payload,
+            article_id=article_id,
+            source_id=source_id,
+            error_class=error_class,
+            retryability=retryability,
         )
 
 
