@@ -232,33 +232,25 @@ ContentFetchResult = Fetched | AlreadyExists | Skipped
 flowchart TD
     src[外部ソースから取れた内容]
 
-    src --> check{分析に必要な条件を<br/>満たす?}
+    src --> conv{本文・公開日時が<br/>揃っている?}
 
-    check -- 満たす --> aa1[AnalyzableArticle<br/>分析に進める]
-    check -- 足りない --> obs[ObservedArticle<br/>取れた事実だけ保持]
+    conv -- 揃っている --> aa1[AnalyzableArticle]
+    conv -- 足りない --> obs[ObservedArticle<br/>取れた事実だけ保持]
 
-    obs --> ready[ReadyForArticleCompletion<br/>補完処理を実行できる]
-    ready --> complete{補完後に条件を<br/>満たす?}
+    obs -. HTML から補完できる段階で .-> ready[ReadyForArticleCompletion]
+    ready --> qcheck{補完後に条件を<br/>満たす?}
 
-    complete -- 満たす --> aa2[AnalyzableArticle<br/>分析に進める]
-    complete -- 満たさない --> reject[CompletionRejection<br/>処理終了]
+    qcheck -- 満たす --> aa2[AnalyzableArticle]
+    qcheck -- 満たさない --> rejected[CompletionRejection<br/>closed / audit に理由を記録]
 
-    aa1 --> analysis[分析工程]
+    aa1 --> analysis[分析工程へ]
     aa2 --> analysis
 
-    class src neutral
-    class check,complete decision
-    class aa1,aa2 analyzable
-    class obs observed
-    class ready,analysis process
-    class reject rejected
-
-    classDef neutral fill:#374151,stroke:#9ca3af,color:#f9fafb
-    classDef decision fill:#1f2937,stroke:#f59e0b,color:#f9fafb,stroke-width:2px
-    classDef analyzable fill:#064e3b,stroke:#34d399,color:#ecfdf5,stroke-width:2px
-    classDef observed fill:#78350f,stroke:#fbbf24,color:#fffbeb,stroke-width:2px
-    classDef process fill:#1e3a8a,stroke:#60a5fa,color:#eff6ff,stroke-width:2px
-    classDef rejected fill:#7f1d1d,stroke:#f87171,color:#fef2f2,stroke-width:2px
+    style aa1 fill:#e6f4ea,stroke:#34a853
+    style aa2 fill:#e6f4ea,stroke:#34a853
+    style obs fill:#fef7e0,stroke:#f9ab00
+    style analysis fill:#e8f0fe,stroke:#4285f4
+    style rejected fill:#fce8e6,stroke:#ea4335
 ```
 
 当時の設計には、まだ粗さが多く残っていました。何を型にするべきなのか。本当に保証すべき条件は何なのか。今振り返ると、そこまで十分に考えられていたわけではありません。
