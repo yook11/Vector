@@ -5,6 +5,15 @@ from __future__ import annotations
 from dataclasses import fields
 
 import pytest
+from redis.exceptions import (
+    ConnectionError as RedisConnectionError,
+)
+from redis.exceptions import (
+    RedisError,
+)
+from redis.exceptions import (
+    TimeoutError as RedisTimeoutError,
+)
 from sqlalchemy.exc import (
     DataError,
     IntegrityError,
@@ -28,6 +37,7 @@ from app.audit.failure_projection import (
     project_db_failure,
     project_failure,
     project_marker_failure,
+    project_redis_failure,
 )
 from app.audit.stages.completion import ArticleCompletionAuditRepository
 from app.collection.article_acquisition.errors import (
@@ -243,6 +253,42 @@ def test_project_failure_returns_unknown_for_catch_all() -> None:
         retryability=Retryability.UNKNOWN,
         failure_action=None,
         code="unexpected_error",
+    )
+
+
+@pytest.mark.parametrize(
+    "exc",
+    [
+        RedisConnectionError("connection refused"),
+        RedisTimeoutError("timeout"),
+    ],
+)
+def test_project_redis_failure_maps_unavailable_errors(exc: RedisError) -> None:
+    assert project_redis_failure(exc) == FailureProjection(
+        failure_kind="redis_unavailable",
+        retryability=Retryability.RETRYABLE,
+        failure_action=None,
+        code="redis_unavailable",
+    )
+
+
+def test_project_redis_failure_maps_generic_redis_error() -> None:
+    assert project_redis_failure(RedisError("ERR")) == FailureProjection(
+        failure_kind="redis_error",
+        retryability=Retryability.UNKNOWN,
+        failure_action=None,
+        code="redis_error",
+    )
+
+
+def test_project_failure_uses_redis_projection_before_catch_all() -> None:
+    assert project_failure(RedisConnectionError("connection refused")) == (
+        FailureProjection(
+            failure_kind="redis_unavailable",
+            retryability=Retryability.RETRYABLE,
+            failure_action=None,
+            code="redis_unavailable",
+        )
     )
 
 

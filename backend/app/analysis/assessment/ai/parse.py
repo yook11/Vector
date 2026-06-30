@@ -24,7 +24,7 @@ from app.analysis.assessment.domain.result import (
     InScopeCategory,
     KeyPoint,
     OutOfScope,
-    ValidCategory,
+    OutOfScopeCategory,
 )
 from app.analysis.assessment.errors import AssessmentResponseInvalidError
 
@@ -92,7 +92,7 @@ def parse_assessment(payload: dict[str, Any]) -> AssessmentResult:
 
     Raises:
         AssessmentResponseInvalidError: schema 違反 (key 欠落 / 型不一致 /
-            ``ValidCategory`` enum 外値 / Pydantic ``ValidationError``)。
+            category enum 外値 / Pydantic ``ValidationError``)。
 
     Strict 化方針:
         AI 応答 dict の 2 文字列値 (``category`` / ``investor_take``) を
@@ -144,25 +144,23 @@ def parse_assessment(payload: dict[str, Any]) -> AssessmentResult:
             AssessmentResponseDefect.KEY_POINT_INVALID
         ) from exc
 
-    # category enum 外値。
-    try:
-        category = ValidCategory(category_raw)
-    except ValueError as exc:
-        raise AssessmentResponseInvalidError(
-            AssessmentResponseDefect.CATEGORY_UNKNOWN_VALUE
-        ) from exc
-
     # 最終構築: InScope / OutOfScope の Field 制約 (investor_take 空/長さ,
     # key_points 件数上限) 違反を field 名で分類する。未知 loc は誤ラベルせず素の
     # ValidationError を伝播させる (task 層が unexpected_error に surface する)。
     try:
-        if category == ValidCategory.OUT_OF_SCOPE:
+        if category_raw == OutOfScopeCategory.OUT_OF_SCOPE.value:
             return OutOfScope(
                 investor_take=investor_take_raw,
                 key_points=key_points,
             )
+        try:
+            in_scope_category = InScopeCategory(category_raw)
+        except ValueError as exc:
+            raise AssessmentResponseInvalidError(
+                AssessmentResponseDefect.CATEGORY_UNKNOWN_VALUE
+            ) from exc
         return InScope(
-            category=InScopeCategory(category.value),
+            category=in_scope_category,
             investor_take=investor_take_raw,
             key_points=key_points,
         )

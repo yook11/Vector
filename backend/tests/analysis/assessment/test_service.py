@@ -30,6 +30,7 @@ from app.analysis.ai_provider_errors import (
     AIProviderConfigurationError,
     AIProviderNetworkError,
 )
+from app.analysis.analyzed_article import InScopeAnalyzedArticle
 from app.analysis.assessment.ai.base import BaseAssessor
 from app.analysis.assessment.ai.envelope import AssessmentCall
 from app.analysis.assessment.domain.ready import ReadyForAssessment
@@ -188,6 +189,38 @@ async def test_in_scope_success_records_audit(
     assert payload["investor_take"] == "bullish"
     assert payload["ai_model"] == _AI_MODEL
     assert payload["category_slug"] == "ai"
+
+
+@pytest.mark.asyncio
+async def test_in_scope_success_passes_snapshot_to_repository(
+    db_session: AsyncSession,
+    session_factory: async_sessionmaker[AsyncSession],
+    sample_source: NewsSource,
+) -> None:
+    article = await _make_article(db_session, sample_source)
+    extraction = await _make_extraction(db_session, article)
+    call = _in_scope_call(category=InScopeCategory.AI)
+    assessor = _make_assessor(return_envelope=call)
+    save_mock = AsyncMock(return_value=777)
+
+    svc = AssessmentService(session_factory)
+    with patch(
+        "app.analysis.assessment.repository.AssessmentRepository.save_in_scope",
+        new=save_mock,
+    ):
+        result = await svc.execute(_ready(extraction), assessor)
+
+    assert result == 777
+    saved_article = save_mock.await_args.args[0]
+    assert isinstance(saved_article, InScopeAnalyzedArticle)
+    assert saved_article.curation_id == extraction.id
+    assert saved_article.title == extraction.translated_title
+    assert saved_article.summary == extraction.summary
+    assert saved_article.assessment_result == call.result
+
+    events = await _fetch_assessment_events(db_session, article.id)
+    assert len(events) == 1
+    assert events[0].outcome_code == "assessed_in_scope"
 
 
 @pytest.mark.asyncio

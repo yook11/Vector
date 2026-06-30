@@ -13,6 +13,7 @@ from app.models.incomplete_article import IncompleteArticle
 from app.models.news_source import NewsSource, SourceType
 from app.models.out_of_scope_article_record import OutOfScopeArticleRecord
 from app.models.pipeline_event import PipelineEvent
+from app.models.query_embedding_cache import QueryEmbeddingCache
 from app.models.trends_snapshot import TrendsSnapshot
 from app.models.watchlist_entry import WatchlistEntry
 from app.models.weekly_briefing import WeeklyBriefing
@@ -30,6 +31,7 @@ __all__ = [
     "OutOfScopeArticleRecord",
     "IncompleteArticle",
     "PipelineEvent",
+    "QueryEmbeddingCache",
     "SourceType",
     "TrendsSnapshot",
     "WatchlistEntry",

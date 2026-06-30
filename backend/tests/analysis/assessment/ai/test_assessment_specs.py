@@ -31,6 +31,7 @@ from app.analysis.assessment.ai.spec import (
     DEEPSEEK_ASSESSMENT_SPEC,
     GEMINI_ASSESSMENT_SPEC,
 )
+from app.analysis.assessment.domain.result import assessment_category_values
 from app.analysis.rate_limit import AIModelRateLimitPolicy, RateLimitRule
 
 _HEX8 = re.compile(r"^[0-9a-f]{8}$")
@@ -108,6 +109,18 @@ def test_deepseek_model_is_v4_flash() -> None:
 
 def test_deepseek_response_schema_equals_tool_schema() -> None:
     assert dict(DEEPSEEK_ASSESSMENT_SPEC.response_schema) == ASSESSMENT_TOOL_SCHEMA
+
+
+def test_deepseek_category_enum_matches_assessment_category_values() -> None:
+    assert ASSESSMENT_TOOL_SCHEMA["properties"]["category"]["enum"] == list(
+        assessment_category_values()
+    )
+
+
+def test_gemini_category_enum_matches_assessment_category_values() -> None:
+    assert ASSESSMENT_GEMINI_SCHEMA["properties"]["category"]["enum"] == list(
+        assessment_category_values()
+    )
 
 
 def test_deepseek_gen_config_is_immutable() -> None:

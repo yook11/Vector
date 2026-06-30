@@ -13,6 +13,7 @@ import structlog
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.analysis.ai_provider_errors import AIProviderError
+from app.analysis.analyzed_article import InScopeAnalyzedArticle
 from app.analysis.assessment.ai.base import BaseAssessor
 from app.analysis.assessment.ai.envelope import AssessmentCall
 from app.analysis.assessment.domain.ready import ReadyForAssessment
@@ -79,9 +80,13 @@ class AssessmentService:
             match call:
                 case AssessmentCall(result=InScope()):
                     # `call` は ``AssessmentCall[InScope]`` に narrow される
+                    article = InScopeAnalyzedArticle.from_ready_and_assessment_result(
+                        ready=ready,
+                        assessment_result=call.result,
+                    )
                     analyzed_article_id = await AssessmentRepository(
                         session
-                    ).save_in_scope(call, ready=ready)
+                    ).save_in_scope(article)
                     # 楽観的ロック敗北時は、勝者だけが audit / commit する。
                     if analyzed_article_id is None:
                         logger.info(

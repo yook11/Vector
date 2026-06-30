@@ -7,13 +7,13 @@ from sqlalchemy import select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.analysis.analyzed_article import InScopeAnalyzedArticle
 from app.analysis.assessment.ai.envelope import AssessmentCall
 from app.analysis.assessment.domain.ready import (
     AssessmentReadyBuildFacts,
     ReadyForAssessment,
 )
 from app.analysis.assessment.domain.result import (
-    InScope,
     InScopeCategory,
     OutOfScope,
 )
@@ -107,12 +107,10 @@ class AssessmentRepository:
 
     async def save_in_scope(
         self,
-        call: AssessmentCall[InScope],
-        *,
-        ready: ReadyForAssessment,
+        article: InScopeAnalyzedArticle,
     ) -> int | None:
         """in-scope assessment を保存し、既存行に負けた場合は ``None`` を返す。"""
-        in_scope = call.result
+        in_scope = article.assessment_result
         category_id = await self._get_category_id_by_slug(in_scope.category.value)
         if category_id is None:
             # enum↔DB の不整合 = 不変条件の破れ。marker でない例外を投げ failure
@@ -121,16 +119,16 @@ class AssessmentRepository:
             logger.error(
                 "category_enum_database_mismatch",
                 slug=in_scope.category.value,
-                curation_id=ready.curation_id,
+                curation_id=article.curation_id,
             )
             raise CategoryEnumDatabaseMismatchError({in_scope.category.value})
 
         stmt = (
             pg_insert(AnalyzedArticleRecord)
             .values(
-                curation_id=ready.curation_id,
-                translated_title=ready.translated_title,
-                summary=ready.summary,
+                curation_id=article.curation_id,
+                translated_title=article.title,
+                summary=article.summary,
                 category_id=category_id,
                 investor_take=in_scope.investor_take,
                 key_points=[k.model_dump() for k in in_scope.key_points],

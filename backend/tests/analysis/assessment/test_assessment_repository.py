@@ -8,6 +8,7 @@ import pytest
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.analysis.analyzed_article import InScopeAnalyzedArticle
 from app.analysis.assessment.ai.envelope import AssessmentCall
 from app.analysis.assessment.domain.ready import ReadyForAssessment
 from app.analysis.assessment.domain.result import (
@@ -88,6 +89,26 @@ def _in_scope_call(
         raw_category=category.value,
         prompt_version="testver1",
         model_name=_AI_MODEL,
+    )
+
+
+def _in_scope_article(
+    extraction: ArticleCuration,
+    *,
+    title: str | None = None,
+    summary: str | None = None,
+    category: InScopeCategory = InScopeCategory.AI,
+    key_points: list[KeyPoint] | None = None,
+) -> InScopeAnalyzedArticle:
+    return InScopeAnalyzedArticle(
+        curation_id=extraction.id,
+        title=title or extraction.translated_title,
+        summary=summary or extraction.summary,
+        assessment_result=InScope(
+            category=category,
+            investor_take="bullish",
+            key_points=key_points or [],
+        ),
     )
 
 
@@ -189,8 +210,12 @@ async def test_save_in_scope_persists_snapshot_fields(
     repo = AssessmentRepository(db_session)
 
     saved_id = await repo.save_in_scope(
-        _in_scope_call(category=InScopeCategory.AI),
-        ready=_ready(extraction),
+        _in_scope_article(
+            extraction,
+            title="保存用タイトル",
+            summary="保存用要約",
+            category=InScopeCategory.AI,
+        ),
     )
     await db_session.commit()
 
@@ -205,8 +230,8 @@ async def test_save_in_scope_persists_snapshot_fields(
         )
     ).scalar_one()
     assert row.id == saved_id
-    assert row.translated_title == extraction.translated_title
-    assert row.summary == extraction.summary
+    assert row.translated_title == "保存用タイトル"
+    assert row.summary == "保存用要約"
     assert row.investor_take == "bullish"
 
 
@@ -231,8 +256,7 @@ async def test_save_in_scope_returns_none_on_race_lost(
 
     repo = AssessmentRepository(db_session)
     saved = await repo.save_in_scope(
-        _in_scope_call(category=InScopeCategory.AI),
-        ready=_ready(extraction),
+        _in_scope_article(extraction, category=InScopeCategory.AI),
     )
     await db_session.commit()
 
@@ -259,8 +283,7 @@ async def test_save_in_scope_persists_key_points_jsonb(
         )
     ]
     await repo.save_in_scope(
-        _in_scope_call(key_points=key_points),
-        ready=_ready(extraction),
+        _in_scope_article(extraction, key_points=key_points),
     )
     await db_session.commit()
 
@@ -292,7 +315,7 @@ async def test_save_in_scope_persists_empty_key_points_as_empty_list(
     extraction = await _make_extraction(db_session, sample_source)
     repo = AssessmentRepository(db_session)
 
-    await repo.save_in_scope(_in_scope_call(key_points=[]), ready=_ready(extraction))
+    await repo.save_in_scope(_in_scope_article(extraction, key_points=[]))
     await db_session.commit()
 
     row = (
@@ -378,8 +401,7 @@ async def test_save_in_scope_raises_when_category_unknown(
 
     with pytest.raises(CategoryEnumDatabaseMismatchError) as excinfo:
         await repo.save_in_scope(
-            _in_scope_call(category=InScopeCategory.AI),
-            ready=_ready(extraction),
+            _in_scope_article(extraction, category=InScopeCategory.AI),
         )
     assert excinfo.value.missing == {"ai"}
 

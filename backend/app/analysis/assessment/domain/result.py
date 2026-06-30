@@ -5,7 +5,7 @@ Stage 4 が産出する業務結果 (「対象範囲内 / 対象範囲外」+ ta
 要求する taxonomy に従って返すだけで、これらの型自体は domain 都合で
 定義される。
 
-公開型は **「結果型 1 つ + 構成型 4 つ」**:
+公開型は **「結果型 1 つ + 構成型 5 つ + helper 1 つ」**:
 
 - ``AssessmentResult = InScope | OutOfScope`` — Stage 4 判定結果 union。
   Service / Repository は ``match`` / ``isinstance`` で型ディスパッチする
@@ -14,8 +14,9 @@ Stage 4 が産出する業務結果 (「対象範囲内 / 対象範囲外」+ ta
 - ``OutOfScope`` — 対象範囲外確定後
 - ``InScopeCategory`` — in-scope 確定後の category slug 集合 (12 値、
   ``OUT_OF_SCOPE`` 排除)
-- ``ValidCategory`` — AI 境界に提示する全 slug 集合 (13 値、
-  ``OUT_OF_SCOPE`` を含む domain taxonomy のフラット表現)
+- ``OutOfScopeCategory`` — AI 境界の out-of-scope wire 値 (1 値)
+- ``assessment_category_values`` — AI schema に公開する全 category wire 値
+  (in-scope 12 値 + ``out_of_scope``)
 
 このほか key_point 構造として ``Mention`` / ``KeyPoint`` / ``MentionType`` と上限定数
 ``MAX_KEY_POINT_CONTENT_LEN`` / ``MAX_KEY_POINTS_PER_ASSESSMENT`` を公開し、
@@ -37,43 +38,12 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 from app.shared.text import normalize_mention_surface, normalize_text
 
 
-class ValidCategory(StrEnum):
-    """Stage 4 の domain taxonomy 全集合 (13 種、``OUT_OF_SCOPE`` 含む)。
-
-    AI 境界 schema 提示および assessor 内部の parse 検証で使用するが、これは
-    AI の都合ではなく domain が要求する taxonomy のフラット表現であり、AI は
-    この集合に従って返す責務を負う。判定後は ``InScopeCategory`` に詰め替える
-    ため、``InScope`` からは ``OUT_OF_SCOPE`` は型レベルで見えない。
-
-    先端技術の 11 カテゴリ + ``OTHER`` (先端テック領域外で投資判断に寄与する
-    記事) + ``OUT_OF_SCOPE`` (投資判断に寄与しない)。
-    """
-
-    AI = "ai"
-    BIO = "bio"
-    COMPUTING = "computing"
-    ENERGY = "energy"
-    MATERIALS = "materials"
-    MOBILITY = "mobility"
-    NETWORK = "network"
-    OTHER = "other"
-    ROBOTICS = "robotics"
-    SECURITY = "security"
-    SEMICONDUCTOR = "semiconductor"
-    SPACE = "space"
-    OUT_OF_SCOPE = "out_of_scope"
-
-
 class InScopeCategory(StrEnum):
     """in-scope 確定後のカテゴリ slug (12 種)。``OUT_OF_SCOPE`` を型レベルで除外。
 
     ``InScope.category`` の型に使うことで「対象範囲内なのに OUT_OF_SCOPE」という
-    矛盾状態を型システムで排除する。値は ``ValidCategory`` の ``OUT_OF_SCOPE`` 以外
-    と完全に一致 (``parse_assessment`` 内で ``InScopeCategory(category.value)`` と
-    詰め替える)。
-
-    新値を追加する場合は **必ず ``ValidCategory`` にも追加** すること
-    (parse 関数が両者間で値マッピングするため、不一致は ``ValueError`` で検出される)。
+    矛盾状態を型システムで排除する。AI schema に公開する全 category wire 値は
+    ``assessment_category_values()`` がこの enum から合成する。
     """
 
     AI = "ai"
@@ -89,6 +59,19 @@ class InScopeCategory(StrEnum):
     SEMICONDUCTOR = "semiconductor"
     SPACE = "space"
     # NO OUT_OF_SCOPE — 型レベルで排除
+
+
+class OutOfScopeCategory(StrEnum):
+    """AI 境界の out-of-scope category wire 値。"""
+
+    OUT_OF_SCOPE = "out_of_scope"
+
+
+def assessment_category_values() -> tuple[str, ...]:
+    """AI schema に公開する category wire 値を返す。"""
+    return tuple(category.value for category in InScopeCategory) + (
+        OutOfScopeCategory.OUT_OF_SCOPE.value,
+    )
 
 
 class MentionType(StrEnum):

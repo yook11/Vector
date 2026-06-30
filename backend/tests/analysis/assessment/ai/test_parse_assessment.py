@@ -27,6 +27,7 @@ from app.analysis.assessment.domain.result import (
     Mention,
     MentionType,
     OutOfScope,
+    OutOfScopeCategory,
 )
 from app.analysis.assessment.errors import AssessmentResponseInvalidError
 
@@ -61,23 +62,7 @@ class TestParseAssessmentInScope:
         assert result.category == InScopeCategory.AI
         assert result.investor_take == "Significant."
 
-    @pytest.mark.parametrize(
-        "slug",
-        [
-            "ai",
-            "bio",
-            "computing",
-            "energy",
-            "materials",
-            "mobility",
-            "network",
-            "other",
-            "robotics",
-            "security",
-            "semiconductor",
-            "space",
-        ],
-    )
+    @pytest.mark.parametrize("slug", [category.value for category in InScopeCategory])
     def test_each_in_scope_slug_dispatches_to_in_scope(self, slug: str) -> None:
         result = parse_assessment(_payload(category=slug))
         assert isinstance(result, InScope)
@@ -90,7 +75,7 @@ class TestParseAssessmentOutOfScope:
     def test_out_of_scope_returns_out_of_scope_instance(self) -> None:
         result = parse_assessment(
             _payload(
-                category="out_of_scope",
+                category=OutOfScopeCategory.OUT_OF_SCOPE.value,
                 investor_take="Not relevant.",
             )
         )
@@ -167,7 +152,10 @@ class TestParseAssessmentKeyPointsType:
     ) -> None:
         with pytest.raises(AssessmentResponseInvalidError) as exc_info:
             parse_assessment(
-                _payload(category="out_of_scope", key_points=non_list_value)
+                _payload(
+                    category=OutOfScopeCategory.OUT_OF_SCOPE.value,
+                    key_points=non_list_value,
+                )
             )
         assert exc_info.value.code == AssessmentResponseDefect.KEY_POINTS_WRONG_TYPE
 
@@ -191,7 +179,12 @@ class TestParseAssessmentValidationErrors:
     ) -> None:
         # OutOfScope.investor_take も min_length=1 (両 path 対称)
         with pytest.raises(AssessmentResponseInvalidError) as exc_info:
-            parse_assessment(_payload(category="out_of_scope", investor_take=""))
+            parse_assessment(
+                _payload(
+                    category=OutOfScopeCategory.OUT_OF_SCOPE.value,
+                    investor_take="",
+                )
+            )
         assert exc_info.value.code == AssessmentResponseDefect.INVESTOR_TAKE_INVALID
 
     def test_too_many_key_points_raises_key_points_too_many(self) -> None:
@@ -239,7 +232,7 @@ class TestParseAssessmentKeyPoints:
         # OutOfScope 経路でも key_points は domain に保持される (対称化)
         result = parse_assessment(
             _payload(
-                category="out_of_scope",
+                category=OutOfScopeCategory.OUT_OF_SCOPE.value,
                 key_points=[
                     {
                         "content": "Some key point.",
@@ -255,7 +248,9 @@ class TestParseAssessmentKeyPoints:
         assert result.key_points[0].content == "Some key point."
 
     def test_out_of_scope_with_empty_key_points_keeps_empty_list(self) -> None:
-        result = parse_assessment(_payload(category="out_of_scope", key_points=[]))
+        result = parse_assessment(
+            _payload(category=OutOfScopeCategory.OUT_OF_SCOPE.value, key_points=[])
+        )
         assert isinstance(result, OutOfScope)
         assert result.key_points == []
 

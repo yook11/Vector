@@ -1,5 +1,5 @@
-"""Stage 4 ドメイン結果型 — ``InScopeCategory`` / ``InScope`` / ``OutOfScope`` /
-``ValidCategory`` の型強制テスト。
+"""Stage 4 ドメイン結果型 — category taxonomy / ``InScope`` / ``OutOfScope`` の
+型強制テスト。
 
 ``InScopeCategory`` enum (12 値、``OUT_OF_SCOPE`` 排除) と ``InScope.category``
 の型が「対象範囲内」を型レベルで保証することを検証する。AI 境界での sanitize +
@@ -18,7 +18,8 @@ from app.analysis.assessment.domain.result import (
     Mention,
     MentionType,
     OutOfScope,
-    ValidCategory,
+    OutOfScopeCategory,
+    assessment_category_values,
 )
 
 
@@ -55,15 +56,32 @@ class TestInScopeCategoryValueSet:
     def test_contains_expected_slug(self, slug: str) -> None:
         assert InScopeCategory(slug).value == slug
 
-    def test_values_are_subset_of_valid_category(self) -> None:
-        # 運用ルール (新値追加時): InScopeCategory と ValidCategory の値が
-        # OUT_OF_SCOPE 以外で完全一致する必要がある (parse_assessment が値マッピング
-        # するため)。
-        in_scope_values = {c.value for c in InScopeCategory}
-        valid_values = {
-            c.value for c in ValidCategory if c != ValidCategory.OUT_OF_SCOPE
-        }
-        assert in_scope_values == valid_values
+
+class TestOutOfScopeCategoryValueSet:
+    """OutOfScopeCategory は AI 境界の out_of_scope wire 値だけを表す。"""
+
+    def test_has_single_value(self) -> None:
+        assert len(OutOfScopeCategory) == 1
+
+    def test_out_of_scope_wire_value(self) -> None:
+        assert OutOfScopeCategory.OUT_OF_SCOPE.value == "out_of_scope"
+
+
+class TestAssessmentCategoryValues:
+    """AI schema に渡す category enum values の SSoT を固定する。"""
+
+    def test_lists_in_scope_values_in_order_then_out_of_scope(self) -> None:
+        expected = tuple(category.value for category in InScopeCategory) + (
+            OutOfScopeCategory.OUT_OF_SCOPE.value,
+        )
+        assert assessment_category_values() == expected
+
+    def test_has_no_duplicate_values(self) -> None:
+        values = assessment_category_values()
+        assert len(values) == len(set(values))
+
+    def test_has_13_values(self) -> None:
+        assert len(assessment_category_values()) == 13
 
 
 class TestInScopeRejectsOutOfScope:

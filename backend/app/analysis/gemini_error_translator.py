@@ -81,6 +81,7 @@ class GeminiStateReason(StrEnum):
     NOT_CONFIGURED = "not_configured"
     EMPTY_EMBEDDINGS = "empty_embeddings"
     MISSING_VALUES = "missing_values"
+    EMBEDDING_COUNT_MISMATCH = "embedding_count_mismatch"
 
 
 # finish_reason 名 → content 拒否 reason。出力ブロックを検知した adapter が、

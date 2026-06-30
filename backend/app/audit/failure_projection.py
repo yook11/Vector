@@ -9,6 +9,16 @@ from dataclasses import dataclass
 from enum import StrEnum
 from typing import TypedDict
 
+from redis.exceptions import (
+    ConnectionError as RedisConnectionError,
+)
+from redis.exceptions import (
+    RedisError,
+)
+from redis.exceptions import (
+    TimeoutError as RedisTimeoutError,
+)
+
 from app.audit.db_errors import DbErrorCause, classify_db_error
 
 
@@ -81,6 +91,10 @@ def project_failure(
     if db is not None:
         return db
 
+    redis = project_redis_failure(exc)
+    if redis is not None:
+        return redis
+
     return unknown_failure_projection(code=fallback_code)
 
 
@@ -149,6 +163,25 @@ def project_db_failure(exc: BaseException) -> FailureProjection | None:
         failure_action=None,
         code=db.code,
     )
+
+
+def project_redis_failure(exc: BaseException) -> FailureProjection | None:
+    """Redis 例外を失敗属性へ投影する。"""
+    if isinstance(exc, (RedisConnectionError, RedisTimeoutError)):
+        return FailureProjection(
+            failure_kind="redis_unavailable",
+            retryability=Retryability.RETRYABLE,
+            failure_action=None,
+            code="redis_unavailable",
+        )
+    if isinstance(exc, RedisError):
+        return FailureProjection(
+            failure_kind="redis_error",
+            retryability=Retryability.UNKNOWN,
+            failure_action=None,
+            code="redis_error",
+        )
+    return None
 
 
 def unknown_failure_projection(*, code: str = "unexpected_error") -> FailureProjection:
