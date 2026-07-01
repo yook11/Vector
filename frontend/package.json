@@ -67,6 +67,7 @@
   "overrides": {
     "postcss": "^8.5.10",
     "ip-address": "^10.2.0",
-    "kysely": "^0.28.17"
+    "kysely": "^0.28.17",
+    "js-yaml": "^4.2.0"
   }
 }
