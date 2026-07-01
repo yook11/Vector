@@ -53,7 +53,8 @@ def seed_briefing_analysis(
             source_url=url,
             original_title=title,
             original_content="x" * 60,
-            published_at=published_at,
+            # 未指定は analyzed_at に倒す (published_at は DB NOT NULL)。
+            published_at=published_at if published_at is not None else analyzed_at,
         )
         db_session.add(article)
         await db_session.flush()

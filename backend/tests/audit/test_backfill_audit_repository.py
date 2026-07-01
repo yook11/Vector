@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import inspect
+from datetime import UTC, datetime
 
 import pytest
 from pydantic import ValidationError
@@ -27,6 +28,7 @@ async def article_row(
         source_url="https://example.com/backfill-audit",  # type: ignore[arg-type]
         original_title="title",
         original_content="content" * 20,
+        published_at=datetime(2026, 1, 1, tzinfo=UTC),
     )
     db_session.add(article)
     await db_session.commit()

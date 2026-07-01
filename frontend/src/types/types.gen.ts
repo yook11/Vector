@@ -36,7 +36,7 @@ export type ArticleBrief = {
     /**
      * Publishedat
      */
-    publishedAt: string | null;
+    publishedAt: string;
 };
 
 /**
@@ -74,7 +74,7 @@ export type ArticleDetail = {
     /**
      * Publishedat
      */
-    publishedAt?: string | null;
+    publishedAt: string;
     original: OriginalArticleEmbed;
 };
 
@@ -806,7 +806,7 @@ export type BriefingArticleEmbed = {
     /**
      * Publishedat
      */
-    publishedAt?: string | null;
+    publishedAt: string;
     /**
      * Keypoints
      */

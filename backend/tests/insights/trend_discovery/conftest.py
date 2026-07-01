@@ -16,7 +16,7 @@ URL の重複制約を避けるため fixture 内のカウンタで一意な URL
 from __future__ import annotations
 
 from collections.abc import Awaitable, Callable, Sequence
-from datetime import datetime
+from datetime import UTC, datetime
 from itertools import count
 
 import pytest
@@ -86,6 +86,7 @@ def seed_analysis(db_session: AsyncSession, sample_source: NewsSource) -> SeedAn
             source_url=url,
             original_title=f"seed-{n}",
             original_content="x" * 60,
+            published_at=datetime(2026, 1, 1, tzinfo=UTC),
         )
         db_session.add(article)
         await db_session.flush()

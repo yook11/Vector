@@ -45,8 +45,8 @@ const BriefingArticleEmbedSchema = z.object({
   translatedTitle: z.string(),
   source: NewsSourceEmbedSchema,
   url: z.string(),
-  // 元記事の公開日時 (Article.published_at)。未取得記事は null。
-  publishedAt: z.iso.datetime({ offset: true }).nullable(),
+  // 元記事の公開日時 (Article.published_at)。DB NOT NULL。
+  publishedAt: z.iso.datetime({ offset: true }),
   keyPoints: z.array(z.string()),
 });
 

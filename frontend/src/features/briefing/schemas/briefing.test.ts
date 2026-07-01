@@ -88,7 +88,7 @@ describe("BriefingResponseSchema", () => {
             translatedTitle: "記事2",
             source: { name: "Hacker News", attributionLabel: "HN 提供" },
             url: "https://y",
-            publishedAt: null,
+            publishedAt: "2026-04-18T09:00:00+09:00",
             keyPoints: [],
           },
         },
@@ -114,12 +114,36 @@ describe("BriefingResponseSchema", () => {
         "要点A",
         "要点B",
       ]);
-      expect(result.data.keyArticles[1]?.article.publishedAt).toBeNull();
+      expect(result.data.keyArticles[1]?.article.publishedAt).toBe(
+        "2026-04-18T09:00:00+09:00",
+      );
       expect(result.data.keyArticles[1]?.article.source.attributionLabel).toBe(
         "HN 提供",
       );
       expect(result.data.watchPoints).toEqual(["今後どこを見るべきか"]);
     }
+  });
+
+  it("rejects a key article whose publishedAt is null", () => {
+    const result = BriefingResponseSchema.safeParse({
+      state: "briefing",
+      weekStart: "2026-04-20",
+      generatedAt: "2026-04-27T00:05:00+09:00",
+      modelName: "deepseek-v4-pro",
+      inputArticleCount: 1,
+      category: CATEGORY,
+      headline: "今週のヘッドライン",
+      summary: "今週の総括リード",
+      chapters: [{ heading: "資金とインフラ", body: "本文" }],
+      keyArticles: [
+        {
+          significance: "なぜ重要か",
+          article: { ...ARTICLE_EMBED, publishedAt: null },
+        },
+      ],
+      watchPoints: ["今後どこを見るべきか"],
+    });
+    expect(result.success).toBe(false);
   });
 
   it("narrows to empty when state='empty'", () => {

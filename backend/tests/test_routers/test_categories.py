@@ -87,6 +87,7 @@ class TestListCategories:
             source_url=url,
             original_title="TF AnalyzableArticleRecord",
             original_content="TF content.",
+            published_at=datetime(2026, 4, 1, tzinfo=UTC),
         )
         db_session.add(article)
         await db_session.flush()
@@ -126,6 +127,7 @@ class TestListCategories:
             source_url=url,
             original_title="TF AnalyzableArticleRecord Old",
             original_content="TF content.",
+            published_at=datetime(2026, 4, 1, tzinfo=UTC),
         )
         db_session.add(article)
         await db_session.flush()

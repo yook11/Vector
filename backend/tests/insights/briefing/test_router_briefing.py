@@ -142,6 +142,7 @@ class TestGetBriefing:
                 source_url="https://example.com/decoy",
                 original_title="decoy",
                 original_content="x" * 60,
+                published_at=datetime(2026, 4, 20, 9, 0, tzinfo=JST),
             )
         )
         await db_session.flush()
@@ -200,34 +201,6 @@ class TestGetBriefing:
         assert article["keyPoints"] == []
         # 旧 articles[] lookup は契約から撤去済
         assert "articles" not in body
-
-    @pytest.mark.asyncio
-    async def test_article_published_at_is_null_when_unset(
-        self,
-        bff_client: AsyncClient,
-        db_session: AsyncSession,
-        ai_category: Category,
-        seed_briefing_analysis,
-    ) -> None:
-        """published_at 未設定の記事は ``publishedAt: null`` で返る。"""
-        analysis = await seed_briefing_analysis(
-            category_id=ai_category.id,
-            analyzed_at=datetime(2026, 4, 22, 12, 0, tzinfo=JST),
-        )
-        db_session.add(
-            _briefing(
-                ai_category.id,
-                key_articles=[
-                    {"analyzed_article_id": analysis.id, "significance": "なぜ重要か"}
-                ],
-            )
-        )
-        await db_session.commit()
-
-        resp = await bff_client.get("/api/v1/briefing/ai")
-        assert resp.status_code == 200
-        body = resp.json()
-        assert body["keyArticles"][0]["article"]["publishedAt"] is None
 
     @pytest.mark.asyncio
     async def test_multiple_key_articles_pair_and_preserve_order(

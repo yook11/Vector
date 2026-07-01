@@ -57,6 +57,7 @@ def _article(
         original_title="t",
         original_content="x" * 60,
         created_at=created_at,
+        published_at=created_at,
     )
 
 

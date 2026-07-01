@@ -73,8 +73,8 @@ class ArticleBrief(_CamelBase):
     summary_preview: str | None
     category: CategoryEmbed
     source: NewsSourceEmbed
-    # 元記事の公開日時。未取得は null だがキーは省略しない (required・nullable)。
-    published_at: datetime | None
+    # 元記事の公開日時。分析工程に進む記事は必ず持つ (DB NOT NULL + ドメイン不変条件)。
+    published_at: datetime
 
 
 class ArticleDetail(_CamelBase):
@@ -90,7 +90,7 @@ class ArticleDetail(_CamelBase):
     analyzed_at: datetime
     category: CategoryEmbed
     source: NewsSourceEmbed
-    published_at: datetime | None = None
+    published_at: datetime
     original: OriginalArticleEmbed
 
 

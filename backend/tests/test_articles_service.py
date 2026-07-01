@@ -14,6 +14,7 @@ build_brief の不変条件:
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
 from types import SimpleNamespace
 
 from app.services.articles import build_brief, extract_key_point_contents
@@ -36,7 +37,7 @@ def _make_analysis(
     source = SimpleNamespace(name="TechCrunch", attribution_label=None)
     article = SimpleNamespace(
         news_source=source,
-        published_at=None,
+        published_at=datetime(2026, 1, 1, tzinfo=UTC),
     )
     curation = SimpleNamespace(analyzable_article=article)
     category = SimpleNamespace(slug="ai", name="AI")

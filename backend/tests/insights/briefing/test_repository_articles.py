@@ -77,6 +77,7 @@ class TestFetch:
                 source_url="https://example.com/decoy",
                 original_title="decoy",
                 original_content="x" * 60,
+                published_at=datetime(2026, 4, 20, 9, 0, tzinfo=JST),
             )
         )
         await db_session.flush()

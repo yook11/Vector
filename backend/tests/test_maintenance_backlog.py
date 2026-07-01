@@ -35,6 +35,7 @@ async def _make_article(
         source_url=url,
         original_title="title",
         original_content="x" * 60,
+        published_at=created_at,
     )
     db_session.add(article)
     await db_session.commit()

@@ -9,6 +9,7 @@
 from __future__ import annotations
 
 import re
+from datetime import UTC, datetime
 
 import logfire
 import pytest
@@ -54,6 +55,7 @@ async def article_row(
         source_url=url,  # type: ignore[arg-type]
         original_title="t",
         original_content="c" * 100,
+        published_at=datetime(2026, 1, 1, tzinfo=UTC),
     )
     db_session.add(article)
     await db_session.commit()

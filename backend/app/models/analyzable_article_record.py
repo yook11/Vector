@@ -50,7 +50,7 @@ class AnalyzableArticleRecord(Base):
     source_url: Mapped[SafeUrl] = mapped_column(SafeUrlType)
     original_title: Mapped[str] = mapped_column(String(500))
     original_content: Mapped[str] = mapped_column(Text())
-    published_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    published_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )
