@@ -132,7 +132,7 @@ jobs:
       # _npx tarball が永続化されないため、CLI バージョン直接 key の専用 cache を
       # 別建てする (ci.yml と同形)。
       - name: Cache Better Auth CLI (npx tarball + extracted)
-        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae  # v5.0.5
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # v6.1.0
         with:
           path: |
             ~/.npm/_npx
