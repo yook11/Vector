@@ -5,14 +5,19 @@ from __future__ import annotations
 import pytest
 from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
-from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.agent.internal_retrieval.ai.gemini_spec import (
     GEMINI_QUERY_EMBEDDING_SPEC,
     embedder_identity_of,
 )
+from app.agent.internal_retrieval.query_embedding import (
+    InternalQueryEmbedding,
+    InternalSearchQueries,
+)
 from app.agent.internal_retrieval.query_embedding_cache import (
     QueryEmbeddingCacheRepository,
+    TransactionalQueryEmbeddingCache,
 )
 from app.analysis.embedding.domain.value_objects import (
     EMBEDDING_DIMENSION,
@@ -307,3 +312,54 @@ class TestCheckConstraint:
 
         with pytest.raises(IntegrityError):
             await db_session.flush()
+
+
+class TestTransactionalQueryEmbeddingCache:
+    async def test_store_commits_vector_in_cache_transaction(
+        self,
+        db_session: AsyncSession,
+        session_factory: async_sessionmaker[AsyncSession],
+        identity: str,
+    ) -> None:
+        cache = TransactionalQueryEmbeddingCache(
+            session_factory=session_factory,
+            embedder_identity=identity,
+        )
+
+        await cache.store(
+            InternalQueryEmbedding(query="transactional store", vector=_vector(0.6))
+        )
+
+        result = await QueryEmbeddingCacheRepository(db_session).fetch_cached(
+            embedder_identity=identity,
+            queries=["transactional store"],
+        )
+        assert result["transactional store"].to_list()[0] == pytest.approx(
+            0.6, abs=1e-2
+        )
+
+    async def test_fetch_cached_reads_from_cache_transaction(
+        self,
+        db_session: AsyncSession,
+        session_factory: async_sessionmaker[AsyncSession],
+        identity: str,
+    ) -> None:
+        await QueryEmbeddingCacheRepository(db_session).store(
+            embedder_identity=identity,
+            query_text="transactional fetch",
+            vector=_vector(0.7),
+        )
+        await db_session.commit()
+        cache = TransactionalQueryEmbeddingCache(
+            session_factory=session_factory,
+            embedder_identity=identity,
+        )
+
+        result = await cache.fetch_cached(
+            InternalSearchQueries(queries=("transactional fetch", "transactional miss"))
+        )
+
+        assert set(result) == {"transactional fetch"}
+        assert result["transactional fetch"].to_list()[0] == pytest.approx(
+            0.7, abs=1e-2
+        )

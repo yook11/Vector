@@ -3,17 +3,22 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
+from dataclasses import dataclass
 from typing import Any
 
 from sqlalchemy import select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
-from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from app.agent.internal_retrieval.query_embedding import query_hash_of
+from app.agent.internal_retrieval.query_embedding import (
+    InternalQueryEmbedding,
+    InternalSearchQueries,
+    query_hash_of,
+)
 from app.analysis.embedding.domain.value_objects import EmbeddingVector
 from app.models.query_embedding_cache import QueryEmbeddingCache
 
-__all__ = ["QueryEmbeddingCacheRepository"]
+__all__ = ["QueryEmbeddingCacheRepository", "TransactionalQueryEmbeddingCache"]
 
 
 def _as_floats(raw: Any) -> list[float]:
@@ -87,3 +92,34 @@ class QueryEmbeddingCacheRepository:
             )
         )
         await self._session.execute(stmt)
+
+
+@dataclass(frozen=True, slots=True)
+class TransactionalQueryEmbeddingCache:
+    """Query embedding cache port using its own session per operation."""
+
+    session_factory: async_sessionmaker[AsyncSession]
+    embedder_identity: str
+
+    async def fetch_cached(
+        self,
+        queries: InternalSearchQueries,
+    ) -> dict[str, EmbeddingVector]:
+        async with self.session_factory() as session:
+            repo = QueryEmbeddingCacheRepository(session)
+            result = await repo.fetch_cached(
+                embedder_identity=self.embedder_identity,
+                queries=queries.queries,
+            )
+            await session.commit()
+            return result
+
+    async def store(self, embedding: InternalQueryEmbedding) -> None:
+        async with self.session_factory() as session:
+            repo = QueryEmbeddingCacheRepository(session)
+            await repo.store(
+                embedder_identity=self.embedder_identity,
+                query_text=embedding.query,
+                vector=embedding.vector,
+            )
+            await session.commit()
