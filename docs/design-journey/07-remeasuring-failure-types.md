@@ -1,87 +1,278 @@
 [← 目次](README.md) ・ 前: [第6幕](06-domain-model-rebuild.md)
 
-# 第7幕 — 失敗の定義が、工程の理解を問うてきた
+# 第7幕 — 失敗と向き合う
 
-第6幕で取得パイプラインを再設計する中で、失敗にもいくつかの種類があることが見えてきました。
-接続できない失敗。応答は返ったが形式が合わない失敗。変換で棄却する失敗。品質が足りず、採用できない失敗。
-それらはすべて「失敗」ではあるものの、起きる場所も、意味も、後続ステージでの扱いも違います。
+工程の概念を整理し直していく中で、その工程で捉えなければならない失敗も見えてきました。
 
-難しかったのは、監査を書くことではありませんでした。共通のエラーをどのように定義し、どこからをドメインエラーとして扱い、それらをステージごとの事情に合わせて設計するか？でした。
+監査ログを一通り入れ終わったあと、残された内容を見返すと、まだ十分に表現できていないものがあることに気づきます。
 
-## 7.1 失敗の性質を考える
+どの工程で失敗したのかは分かる。けれど、その工程で何が起きたのかまでは分からない。
 
-当時の私は、記事を取得する工程で、失敗した処理をすべて同じように扱っていました。失敗しても、上限回数に達するまではもう一度試す。使い切ったら諦める。つまり、「再試行して意味がある失敗かどうか」を見ずに、同じ回数だけ試す設計にしていました。
-
-けれど、失敗には種類があります。一時的な通信の揺らぎなら、次の試行で通るかもしれない。相手側の混雑なら、時間を置けば通るかもしれない。設定ミスや存在しないページなら、人が直すまで何度投げても変わりません。
-
-回数が決められるのは、「どこまで試すか」だけです。「もう一度試して意味があるか」までは決められない。ここでようやく、失敗の性質と、工程の中での扱いを分けて考える必要が見えてきました。
+ここからは、工程ごとの失敗をもう一度見直し、何が起きたのかを後から読み返せる形にしていきます。
 
 
+## 7.1 理由は、検知した場所が持つ
 
-記事を取得する工程の失敗の多くは、サイトに繋がらない、アクセスを拒否される、時間切れになるなどの、工程特有の失敗ではなく、外部との通信で同じように起きる、いわば共通のエラーです。
+「何が起きたのか」が最初に曖昧だったのは、パイプラインの入口,外部ソースを読む Reader でした。
 
-難しかったのは、共通の失敗に対して、どのように工程特有の処理を紐づけるのかということでした。外部取得エラーや AI provider error は、記事取得だけ、本文補完だけ、分類だけのものではありません。どの工程でも起きうる。だから性質は一箇所に置きたい。けれど、実際にその失敗を受け取ったあと、いつ再試行するか、保留するか、対象を捨てるかは工程ごとに違います。
+Reader の仕事は、外部ソースから返ってきた response を、アプリケーションが扱える軽い Entry に写すことです。
 
-最初は、共通の失敗を工程ごとの処理方針へ写すために、tuple の一覧を持っていました。どのエラーを再試行する価値があり、どのエラーは無駄なのか。工程ごとに大枠を作り、そこへ共通エラーを紐づけていたのです。
+```python
+@dataclass(frozen=True)
+class HackerNewsEntry:
+    url: str | None
+    title: str | None
+    published: datetime | None
+    raw_created_at: str | None
+```
 
-この形は一見わかりやすい。けれど、新しい共通エラーが増えるたびに、各工程の一覧へ追加しなければならない。追加漏れを防ぐテストは書けても、エラーそのものの性質を工程ごとに定義し直していることは変わりませんでした。
+Reader は、外部形式ごとの違いをまずここで受け止めます。
 
-そこで見方を変えました。「同じ入力をもう一度実行して結果が変わりうるか」は、工程ごとの判断ではなく、失敗そのものの性質です。外部取得エラーなら再実行で変わりうるかを、AI provider error ならどんな回復の仕方を持つかを、失敗自身に持たせる。工程はそれを受け取って、いつ、どう再試行するか、保留するか、対象を捨てるかを決める。
+この部分で考えられる失敗は、外部ソースから帰ってきたレスポンスが空、JSON や XML として壊れている、こちらが期待している応答形式と合っていないということが起きます。
 
-まず考えるべきだったのは、その失敗が工程をまたいでも同じように扱われるのか、それとも工程ごとに意味が変わるのか、ということでした。
+けれど当時は、こうした違いがすべて `read_unreadable_response` という一語に潰れていました。Reader が読めなかったことは分かっても、何を読めなかったのかまでは分からなかったのです。
 
-同じように扱われるなら、その性質は失敗自身に持たせた方がいい。そうすれば、工程ごとに同じ判断を書き直さずに済みます。反対に、工程によって扱いが変わるなら、それは失敗自身ではなく、その工程の判断として残す必要がある。
+```python
+class UnreadableResponseError(Exception):
+    """応答を受け取ったが reader が構造化できなかった """
+    CODE: ClassVar[str] = "read_unreadable_response"   # これ以上のことは読み取れない
+```
 
-この線を引くには、各工程がその失敗を受け取ったあと、何を続け、何を諦め、何を守るのかを分かっていなければなりませんでした。
-共通の失敗を扱う難しさも、何をしているのか？理解することが重要だと学びました。
+そこで、読取失敗には Reader が検知した理由を持たせるようにしました。
+起こりうる失敗を `reason` として定義します。
 
-## 7.3 AI 呼び出しの失敗を整理する
+```python
+class UnreadableResponseReason(StrEnum):
+    EMPTY_BODY = "read_empty_body"  # 応答本文が空だった
+    MALFORMED_CONTENT = "read_malformed_content"  # JSON / XML として壊れていた
+    UNEXPECTED_ROOT_SHAPE = "read_unexpected_root_shape"  # 応答全体の形が違った
+    UNEXPECTED_FIELD_SHAPE = "read_unexpected_field_shape"  # 必要な項目の形が違った
 
-AI分析を行う工程でもエラーの性質を見直す必要がありました。
 
-AI 呼び出し特有の事情を考えることができていませんでした。
-レートリミットなら、枠が戻るまで待たなければならない。API キーやモデル指定の間違いなら、人が設定を直すまで変わらない。送った内容や生成された内容がポリシーで拒否されたなら、同じ内容を投げ直してもまた拒否される。期待した形式で返ってこない失敗も、単なる通信失敗とは別に扱う必要がありました。
+class UnreadableResponseError(Exception):
+    def __init__(
+        self,
+        *,
+        reason: UnreadableResponseReason,
+        response_format: str,
+        field: str | None = None,
+        parser_position: str | None = None,
+    ) -> None:
+        self.reason = reason
+        self.response_format = response_format
+        self.field = field
+        self.parser_position = parser_position
 
-待てば直るのか、条件が戻るまで待つのか、人が直す必要があるのか、対象そのものを諦めるべきなのか。回数を数える前に、その失敗がどんな立ち直り方を持つのかを見なければならなかったのです。
+    @property
+    def CODE(self) -> str:
+        return self.reason.value
 
-ところが、AI 分析の工程では、同じ失敗でも扱いを変える必要がありました。
 
-本文を要約・翻訳する工程で、送った本文そのものがポリシーに触れて拒否されたなら、その記事を分析へ進める価値はありません。同じ本文を投げ直しても、また拒否されるだけです。ここでは、記事を諦めるのが自然でした。
+raise UnreadableResponseError(
+    reason=UnreadableResponseReason.UNEXPECTED_FIELD_SHAPE,
+    response_format="json",
+    field="hits",
+)
+```
 
-けれど、次の工程では事情が違いました。本文から要約までは作れた。その要約を分類・評価しようとしたところで、AI に拒否された。これは記事そのものが最初から処理不能だった、という話ではありません。少なくとも、前の工程で作った要約は残っています。ならば記事ごと消すのではなく、どの工程で拒否されたのかを記録し、そこまでの結果は残すべきだと考えました。
 
-起きていることは、どちらも AI provider による拒否です。けれど、その拒否が何を止めたのかが違う。本文そのものを拒否されたのか、すでに作られた要約の次の処理を拒否されたのか。その違いによって、捨てるべきものも変わりました。
+## 7.2 変換できなかった理由
 
-実装では、AI provider error 自身に「回復クラス」と理由を持たせました。待てば直るのか、利用枠や設定が戻るまで待つ必要があるのか、人が直すしかないのか、同じ対象ではもう回復しないのか。これは、どの工程で起きても変わりにくい失敗自身の性質です。
+取得したデータをアプリケーション上の概念へ変換していく段階でも、
+同じように失敗理由を構造化する必要がありました。
+中でも重要なのは、記事を分析可能な AnalyzableArticle へ昇格させる段階です。
 
-## 7.4 監査に、失敗の理由が焼けていなかった
+条件を満たせなかったとき、以前は構築に失敗した理由を、Pydantic(バリデーター) の検証メッセージをそのまま使用していました。しかし、入力の値が、そのまま監査ログに永続化される問題や、後からどの部分が原因で構築が失敗したのか？を追うことができないものになっていました。
 
-失敗の定義を見直しているとき、後から監査ログを見返して「なぜ失敗したのか」を追える状態になっているのかが気になり、確認することにしました。
-すると、原因の異なる失敗が、すべて同じ一語にまとめられて記録されている箇所がありました。ある工程では、記録される失敗コードがどれも同じで、監査ログだけでは何が起きたのか、どの理由で失敗したのかを区別できなかったのです。
+そこで、昇格できなかった理由を、「どの不変条件に届かなかったか」定義しました。
 
-失敗の型には、属性として code を持たせていました。想定していたのは、失敗を受け取った側が、その属性を見て次の処理を選べるようにすること。再試行するのか、リトライしないのか——分岐に必要な区別は数種類でよく、code もその区別でできていました。
+```python
+class AnalyzableArticleDefect(StrEnum):
+    TITLE_MISSING = "analyzable_article_title_missing"  # タイトルがない
+    BODY_MISSING = "analyzable_article_body_missing"  # 本文がない
+    BODY_TOO_SHORT = "analyzable_article_body_too_short"  # 本文が短すぎる
+    PUBLISHED_AT_MISSING = "analyzable_article_published_at_missing"  # 公開日時がない
+```
 
-けれど、重要な点を見落としていました。なぜ失敗したのかは、それが起きた場所でしか分かりません。
-当時は、その箇所で「何が起きたか」まで伝えることが責任だ、という発想がありませんでした。
-だから監査に残った code は、「どう扱うか」はわかっても、「何が起きたか」はあとから追うことができなかったのです。
+そして、これらを束ねて、「品質が足りず昇格できなかった」ことを `QualityTooLow` として表しました。
 
-解決策として,「なぜ失敗したか」を失敗自身の属性として持たせました。外部取得エラーには CODE と retryable を、読取失敗には reason を持たせ、「何の失敗か」「再試行で変わりうるか」を失敗自身から読めるようにしたのです。
+```python
+@dataclass(frozen=True)
+class QualityTooLow:
+    defects: tuple[AnalyzableArticleDefect, ...]
+```
 
-「どのように扱うのか？」を属性から導くことができるようになったことで、ステージごとに処理を分岐するために 置いていた中間の型はをたたむことができ、よりシンプルな設計にするこができました。
+構築を試みて品質に届かなかった時、これでバリデーターのメッセージがそのまま使用されることは無くなりました。
 
-ここで学んだことは、失敗は「起きた」ことだけでなく、「なぜ起きたか」まで、起きた場所が伝えることが責任、ということでした。起きた場所だけが、その「なぜ」を正しく言えるからです。あとから監査を見た時にその時のことがわかるのか？という観点から整理することができました。
+```python
+built = AnalyzableArticle.build_or_reject(
+    title=resolved.title,
+    body=resolved.body,
+    published_at=resolved.published_at,
+    source_id=source_id,
+    source_url=source_url,
+)
+
+if isinstance(built, QualityTooLow):
+    return CompletionRejection.from_quality_too_low(built)
+```
+
+
+### AIの応答も可視化する
+
+AI の応答は、必ずしもこちらの期待したスキーマを守るわけではありません。key が欠けることも、値の型が違うこともあります。なぜそうなったのかを記録できるかどうかは、そのままプロンプトやスキーマの改善につながります。
+
+けれど当時は、その違いが `outcome_code = "assessment_response_invalid"` につぶれていました。
+
+そこで、collection でしたのと同じように、失敗を検知した場所——応答を parse する場所——が、何が起きたのかを defect として持つようにしました。
+
+```python
+class AssessmentResponseInvalidError(AssessmentRecoverableError):
+    def __init__(self, defect: StrEnum) -> None:
+        super().__init__(code=defect.value, provider_error=None)
+
+# defect:の定義
+class AssessmentResponseDefect(StrEnum):
+    CATEGORY_KEY_MISSING = "assessment_response_category_key_missing"
+    INVESTOR_TAKE_KEY_MISSING = "assessment_response_investor_take_key_missing"
+    CATEGORY_WRONG_TYPE = "assessment_response_category_wrong_type"
+    CATEGORY_UNKNOWN_VALUE = "assessment_response_category_unknown_value"
+```
+
+
+## 7.3 想定内の失敗にも理由を持たせる
+
+他の工程では失敗を例外として投げ、その定義に「なぜ失敗したのか」を `code` や `reason` として持たせていました。
+
+一方で、外部から取得した情報をアプリケーションの概念へ変換する段階では、最初から分析に進める品質を満たせないことを想定内の出来事として扱っていました。
+
+他の工程とは異なり、例外ではなく通常の分岐で表していたため「失敗に理由を持たせる」という発想が抜け落ちていました。
+
+```python
+def convert_fetched_article(
+    fetched: FetchedArticle,
+) -> AnalyzableArticle | ObservedArticle | None:
+    if not fetched.title:
+        return None   # title が無ければ、変換できないことをNoneで表す。
+    ...
+```
+
+`None` は「変換できない」を一括りにしていましたが、そこには意味の違う失敗が混ざっていました。
+
+分析に進める品質に届かないだけなら、それは失敗ではありません。取れた事実を `ObservedArticle` として残し、本文や公開日時は、後続の補完工程が URL を辿って埋めます。例外ではなく、補完待ちへ進むための通常分岐です。
+
+けれど、title と URL が無いと、その `ObservedArticle` すら組み立てられません。この二つは記事の identity だからです。URL は記事の住所であり、重複排除のキー（`incomplete_articles.url` の UNIQUE 制約）でもあります。取得の起点そのもので、他から補うことができません。title は「これが記事である」と言える最小の中身です。
+
+だから、品質不足は「補完待ち」で済みますが、identity の欠落は「記事として成り立たない」棄却になります。`None` で静かに落としていたこの失敗は、後から追える理由を持つべきでした。
+
+そこで、変換できなかったときに、なぜか？という理由を伝えるようにしました。
+
+```python
+class AcquisitionConversionDefect(StrEnum):
+    TITLE_MISSING = "acquisition_conversion_title_missing"
+    # title がなく、ObservedArticle としても残せない
+
+    UNEXPECTED_ERROR = "acquisition_conversion_unexpected_error"
+    # 通常は起きないはずの変換中のバグ
+
+
+def convert_fetched_article(
+    fetched: FetchedArticle,
+) -> AnalyzableArticle | ObservedArticle | AcquisitionConversionRejection:
+    if not fetched.title:
+        # 捨てるのではなく、「なぜ変換できなかったか」を残す
+        return _reject(reason=AcquisitionConversionDefect.TITLE_MISSING)
+
+    # 分析に進める品質があれば AnalyzableArticle
+    article = AnalyzableArticle.try_build(...)
+    if article is not None:
+        return article
+
+    # 分析には進めないが、取れた事実は ObservedArticle として残す
+    return ObservedArticle.build(...)
+```
+
+呼び出し側で、想定外のバグだけを例外として受ける.
+
+```python
+try:
+    outcome = convert_fetched_article(fetched)
+except Exception as exc:
+    # 例外として受け、UNEXPECTED_ERROR + stack trace で残す。
+    outcome = unexpected_rejection(fetched, cause=exc)
+```
+
+
+## 7.4 想定内のエラーにも種類がある
+
+失敗を「想定内」として一つずつ定義していく中で、その中に起きるかもしれないバグがあることに気づきました。
+
+投資判定の工程では、AI が選んだカテゴリを、DB に登録されたカテゴリへ解決します。この解決に失敗したとき、当初は「AI が catalog に無いカテゴリを返した」—— 想定内の失敗として扱っていました。
+
+```python
+class AssessmentCategoryMissingError(AssessmentTerminalError):
+    """AI が catalog に存在しない category slug を返した。"""
+    ...
+```
+
+けれど、この「解決できない」という同じ症状の中に、原因も直し方もまったく違うものが混じっていました。
+
+アプリ側の enum にもカテゴリを定義していて、それをAIに渡し、その中から選ばせる処理になっています。
+アプリケーション側に新しいカテゴリを足したのに、DB への登録（seed）を忘れると、その値は「アプリでは有効なのに、DB には無い」状態になります。この時原因は AI ではなく アプリケーション側のバグということになります。
+
+そこで、このずれを専用の型で表し、想定内の失敗から切り離しました。
+
+```python
+class CategoryEnumDatabaseMismatchError(Exception):
+    """アプリ側 enum と DB categories が食い違う、不変条件の破れ。
+
+    意図的に 想定内のエラーが属す marker 階層の外に置く。
+    """
+
+    def __init__(self, missing: set[str]) -> None:
+        self.missing = missing
+        ...
+
+
+# 解決できないのは AI のせいではない。想定内の失敗ではなく、バグとして投げる。
+if category_id is None:
+    raise CategoryEnumDatabaseMismatchError({in_scope.category.value})
+```
+
+想定内のエラーが属する marker 分岐には当たらず、想定外—に落ちて 記録されます。想定内の失敗とは、監査の上でもはっきり別のものになります。
+
+```python
+match exc:
+    case AssessmentTerminalError():      # 想定内・処理を終了する失敗
+        ...  # 監査に、その失敗固有の code を焼く
+    case AssessmentRecoverableError():   # 想定内・再試行しうる失敗
+        ...  # 監査に焼いて、リトライ
+    case SQLAlchemyError():              # 想定内・DB エラー
+        ...
+    case _:                              # 上のどれにも当てはまらない = 想定外
+        await self._audit_unexpected_failure(ready, exc)  # unexpected_error として焼く
+        logger.exception(...)            # スタックトレースも残す
+```
+
+さらに、このバグは、起きてから気づくのでは遅すぎます。そこで worker の起動時に、enum が DB に揃っているかを検証し、欠けていれば起動を止めるようにしました。
+
+```python
+async def assert_category_catalog_covers_enum(self) -> None:
+    db_slugs = await self._load_db_category_slugs()
+    missing = missing_category_slugs(db_slugs)  # enum のうち DB に無い slug
+    if missing:
+        raise CategoryEnumDatabaseMismatchError(missing)
+```
+
 
 ## 7.5 第7幕の終わりに
 
-振り返ると、難しかったのは、「この工程を理解して、その失敗をどのように扱うべきか」を考えることでした。
-共通して持てるものは属性として持たせ、そこから扱いを導けるようにする。そうすることで、不要な抽象を畳むことができました。
+振り返ると、この見直しで自分にとって一番大きかったのは、失敗を検知した場所が、その「なぜ」まで伝える——そこまでが責任なのだ、という考えを持てたことでした。
 
-そしてもう一つ大事だったのは、想定内の失敗と、起こる可能性は低いけれど、起きたら処理を続けてはいけない異常を分けることでした。アプリケーション側のコードと DB 側の制約の不整合のような異常には、通常の失敗とは別に、検出するための分岐を置きました。
-普通の失敗として並べるのではなく。起動時に止めるか、想定外の故障として扱う。バグを「想定内」に混ぜないことも、失敗を定義する作業の一部でした。
+失敗を定義するためには、その工程が何をしようとしているのかを、もう一度考え直すことになりました。
+初めからどのような失敗があるのか？考えることも重要なのではないか？ともうようになりました。
 
-こうして見ると、エラーを定義する作業は、一つひとつの工程を理解し直す作業でもありました。
+正直に言えば、この記録を、まだ改善には活かしきれていません。
+けれど、記録には、どのソースから取れた記事がどこで失敗したのか、AI の応答がなぜ弾かれたのかが、理由とともに残るようになりました。これを積み重ねていけば、どのソースが分析に進める記事を安定して出しているのか、AI 処理のどの失敗が多いのかが見えてきます。取得元の見直しや、プロンプト・スキーマの改善に、つなげていける素地ができたということです。
 
-第6幕では、「監査が書きづらい場所には設計の歪みがある」と気づきました。第7幕で分かったのは、「失敗がうまく定義できない場所には、まだ分かっていない工程がある」ということでした。
-
-
-HTMLから補完をする工程で、なぜ失敗を記録することができていなかったのか？ということを例とともにわかりやすく
+なぜ失敗したのかを残すことは、改善そのものではなく、改善を始められる場所をつくることでした。
