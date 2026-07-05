@@ -305,3 +305,18 @@ def test_postgres_collect_password_loaded_as_secretstr(
     s = Settings()
     assert isinstance(s.postgres_collect_password, SecretStr)
     assert s.postgres_collect_password.get_secret_value() == "test-collect-password"
+
+
+def test_tavily_api_key_defaults_to_empty_secretstr() -> None:
+    """TAVILY_API_KEY 未設定なら空 SecretStr。provider 側が fail-fast する。"""
+    s = Settings()
+    assert isinstance(s.tavily_api_key, SecretStr)
+    assert s.tavily_api_key.get_secret_value() == ""
+
+
+def test_tavily_api_key_loaded_as_secretstr(monkeypatch: pytest.MonkeyPatch) -> None:
+    """設定時は SecretStr として読め、値は settings 経由で provider に渡せる。"""
+    monkeypatch.setenv("TAVILY_API_KEY", "tvly-test-key")
+    s = Settings()
+    assert isinstance(s.tavily_api_key, SecretStr)
+    assert s.tavily_api_key.get_secret_value() == "tvly-test-key"

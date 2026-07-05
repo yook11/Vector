@@ -39,6 +39,12 @@ from app.agent.external_search.service import (
     ExternalSearchService,
     resolve_external_search_agent_count,
 )
+from app.agent.external_search.tavily import (
+    TAVILY_MAX_RESULTS_LIMIT,
+    TAVILY_REQUEST_TIMEOUT_SECONDS,
+    TAVILY_SEARCH_URL,
+    TavilySearchProvider,
+)
 
 __all__ = [
     "CANDIDATE_SNIPPET_MAX_CHARS",
@@ -73,5 +79,9 @@ __all__ = [
     "ResearchTaskReport",
     "ResearchTaskStatus",
     "SearchProvider",
+    "TAVILY_MAX_RESULTS_LIMIT",
+    "TAVILY_REQUEST_TIMEOUT_SECONDS",
+    "TAVILY_SEARCH_URL",
+    "TavilySearchProvider",
     "resolve_external_search_agent_count",
 ]

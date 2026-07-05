@@ -109,6 +109,7 @@ class Settings(BaseSettings):
     gemini_api_key: SecretStr = SecretStr("")
     openai_api_key: SecretStr = SecretStr("")
     deepseek_api_key: SecretStr = SecretStr("")
+    tavily_api_key: SecretStr = SecretStr("")
 
     # ニュース取得
     max_articles_per_fetch: int = 50
