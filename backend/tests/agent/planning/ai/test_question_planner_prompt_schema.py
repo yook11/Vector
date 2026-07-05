@@ -55,6 +55,30 @@ def test_internal_query_cap_is_guidance_not_schema_validation() -> None:
     assert "maxItems" not in internal_query_schema
 
 
+def test_external_collection_goal_schema_replaces_external_queries() -> None:
+    properties = QUESTION_PLANNER_GEMINI_SCHEMA["properties"]
+    goal_schema = properties["external_collection_goals"]
+
+    assert "external_queries" not in properties
+    assert "external_research_tasks" not in properties
+    assert "external_collection_goals" in QUESTION_PLANNER_GEMINI_SCHEMA["required"]
+    assert goal_schema["type"] == "ARRAY"
+    assert goal_schema["items"]["type"] == "STRING"
+    assert "maxItems" not in goal_schema
+
+
+def test_prompt_describes_external_collection_goals_without_query_generation() -> None:
+    prompt = GeminiQuestionPlannerPrompt.render(
+        question="今日のNVIDIAの発表は？",
+        as_of=datetime(2026, 6, 29, tzinfo=UTC),
+    )
+
+    assert "# external_collection_goals" in prompt
+    assert "何を確認したいか" in prompt
+    assert "external_queries" not in prompt
+    assert "keyword query" not in prompt
+
+
 def test_spec_uses_json_mode_and_schema() -> None:
     assert (
         GEMINI_QUESTION_PLANNER_SPEC.structured_output["response_mime_type"]

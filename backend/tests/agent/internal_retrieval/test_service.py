@@ -8,7 +8,7 @@ from typing import Any
 import pytest
 from logfire.testing import CaptureLogfire
 
-from app.agent.contract import QuestionPlan, RetrievalMode
+from app.agent.contract import ExternalResearchTask, QuestionPlan, RetrievalMode
 from app.agent.internal_retrieval.article_search import (
     InternalArticleContent,
     InternalArticleSearchHit,
@@ -38,21 +38,27 @@ def _plan(
     mode: RetrievalMode,
     *,
     internal_queries: list[str] | None = None,
-    external_queries: list[str] | None = None,
+    external_research_tasks: list[ExternalResearchTask] | None = None,
 ) -> QuestionPlan:
     if mode == "internal" and internal_queries is None:
         internal_queries = ["internal query"]
-    if mode == "external" and external_queries is None:
-        external_queries = ["external query"]
+    if mode == "external" and external_research_tasks is None:
+        external_research_tasks = [_external_task()]
     if mode == "internal_and_external":
         internal_queries = internal_queries or ["internal query"]
-        external_queries = external_queries or ["external query"]
+        external_research_tasks = external_research_tasks or [_external_task()]
     return QuestionPlan(
         retrieval_mode=mode,
         internal_queries=internal_queries or [],
-        external_queries=external_queries or [],
+        external_research_tasks=external_research_tasks or [],
         reason="test reason",
     )
+
+
+def _external_task(
+    collection_goal: str = "外部根拠を確認する",
+) -> ExternalResearchTask:
+    return ExternalResearchTask(collection_goal=collection_goal)
 
 
 class FakeInternalQueryEmbedder:

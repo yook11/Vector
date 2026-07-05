@@ -196,7 +196,7 @@ async def _record_plan_created(
         retry_used=retry_used,
         retrieval_mode=plan.retrieval_mode,
         internal_query_count=len(plan.internal_queries),
-        external_query_count=len(plan.external_queries),
+        external_query_count=len(plan.external_research_tasks),
         ai_model=ai_model,
         prompt_version=prompt_version,
     )
@@ -232,7 +232,7 @@ async def _fallback_with_audit(
             retry_used=retry_used,
             retrieval_mode=fallback.retrieval_mode,
             internal_query_count=len(fallback.internal_queries),
-            external_query_count=len(fallback.external_queries),
+            external_query_count=len(fallback.external_research_tasks),
             failure=failure,
             ai_model=ai_model,
             prompt_version=prompt_version,

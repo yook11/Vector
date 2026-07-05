@@ -89,7 +89,7 @@ async def test_call_api_returns_question_plan_draft() -> None:
     payload = {
         "retrieval_mode": "external",
         "internal_queries": [],
-        "external_queries": ["NVIDIA latest announcement"],
+        "external_collection_goals": ["NVIDIA の今日の発表根拠を集める"],
         "target_time_window": "今日",
         "reason": "今日の発表は外部最新ニュース確認が必要",
     }
@@ -100,7 +100,7 @@ async def test_call_api_returns_question_plan_draft() -> None:
     assert isinstance(plan, QuestionPlanDraft)
     assert plan.retrieval_mode == "external"
     assert plan.internal_queries == []
-    assert plan.external_queries == ["NVIDIA latest announcement"]
+    assert plan.external_collection_goals == ["NVIDIA の今日の発表根拠を集める"]
     assert plan.target_time_window == "今日"
     assert plan.reason == "今日の発表は外部最新ニュース確認が必要"
     kwargs = mock_call.await_args.kwargs
@@ -118,7 +118,7 @@ async def test_plan_includes_previous_error_in_repair_prompt() -> None:
     payload = {
         "retrieval_mode": "internal",
         "internal_queries": ["NVIDIA AI GPU 動向"],
-        "external_queries": [],
+        "external_collection_goals": [],
         "reason": "内部記事検索が必要",
     }
     mock_call = _patch_generate_content(planner, _stub_response(json.dumps(payload)))

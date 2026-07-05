@@ -8,11 +8,13 @@ import pytest
 from pydantic import ValidationError
 
 from app.agent.contract import (
+    EXTERNAL_RESEARCH_TASK_LIMIT,
     AnswerExecutionSummary,
     AnswerQuestionInput,
     AnswerQuestionResult,
     AnswerRetrievalSummary,
     ExecutionRoute,
+    ExternalResearchTask,
     ExternalUrlSource,
     InternalArticleSource,
     QuestionPlan,
@@ -40,6 +42,12 @@ def _external_source() -> ExternalUrlSource:
         url="https://example.com/news",
         title="外部記事",
     )
+
+
+def _external_task(
+    collection_goal: str = "NVIDIA の最新発表を確認する",
+) -> ExternalResearchTask:
+    return ExternalResearchTask(collection_goal=collection_goal)
 
 
 def _retrieval(
@@ -77,19 +85,35 @@ class TestAnswerQuestionInput:
             AnswerQuestionInput(question="", as_of=_as_of())
 
 
+class TestExternalResearchTask:
+    def test_has_collection_goal_only(self) -> None:
+        assert set(ExternalResearchTask.model_fields) == {"collection_goal"}
+
+    def test_strips_collection_goal(self) -> None:
+        task = ExternalResearchTask(
+            collection_goal="  NVIDIA の外部根拠を集める  ",
+        )
+
+        assert task.collection_goal == "NVIDIA の外部根拠を集める"
+
+    def test_rejects_blank_collection_goal(self) -> None:
+        with pytest.raises(ValidationError):
+            ExternalResearchTask(collection_goal="   ")
+
+
 class TestQuestionPlan:
     def test_accepts_retrieval_mode_and_queries(self) -> None:
         plan = QuestionPlan(
             retrieval_mode="internal_and_external",
             internal_queries=["NVIDIA 直近動向", "NVIDIA AI GPU"],
-            external_queries=["NVIDIA latest announcement"],
+            external_research_tasks=[_external_task()],
             target_time_window="直近24時間",
             reason="内部文脈と最新確認の両方が必要",
         )
 
         assert plan.retrieval_mode == "internal_and_external"
         assert plan.internal_queries == ["NVIDIA 直近動向", "NVIDIA AI GPU"]
-        assert plan.external_queries == ["NVIDIA latest announcement"]
+        assert plan.external_research_tasks == [_external_task()]
 
     def test_rejects_internal_without_internal_queries(self) -> None:
         with pytest.raises(ValidationError):
@@ -99,11 +123,11 @@ class TestQuestionPlan:
                 reason="内部記事が必要",
             )
 
-    def test_rejects_external_without_external_queries(self) -> None:
+    def test_rejects_external_without_external_research_tasks(self) -> None:
         with pytest.raises(ValidationError):
             QuestionPlan(
                 retrieval_mode="external",
-                external_queries=[],
+                external_research_tasks=[],
                 reason="外部ニュースが必要",
             )
 
@@ -112,7 +136,7 @@ class TestQuestionPlan:
             QuestionPlan(
                 retrieval_mode="none",
                 internal_queries=["ignored"],
-                external_queries=["ignored"],
+                external_research_tasks=[_external_task("ignored")],
                 reason="検索不要",
             )
 
@@ -124,33 +148,55 @@ class TestQuestionPlan:
                 reason="内部記事が必要",
             )
 
+    def test_rejects_duplicate_external_collection_goals(self) -> None:
+        with pytest.raises(ValidationError):
+            QuestionPlan(
+                retrieval_mode="external",
+                external_research_tasks=[
+                    _external_task("NVIDIA の発表を確認する"),
+                    _external_task("NVIDIA の発表を確認する"),
+                ],
+                reason="外部ニュースが必要",
+            )
+
+    def test_rejects_external_research_tasks_over_limit(self) -> None:
+        with pytest.raises(ValidationError):
+            QuestionPlan(
+                retrieval_mode="external",
+                external_research_tasks=[
+                    _external_task(f"外部根拠を確認する {index}")
+                    for index in range(EXTERNAL_RESEARCH_TASK_LIMIT + 1)
+                ],
+                reason="外部ニュースが必要",
+            )
+
     def test_from_draft_none_ignores_queries(self) -> None:
         plan = QuestionPlan.from_draft(
             QuestionPlanDraft(
                 retrieval_mode="none",
                 internal_queries=["ignored"],
-                external_queries=["ignored"],
+                external_collection_goals=["ignored"],
                 reason="検索不要",
             ),
             fallback_query="fallback",
         )
 
         assert plan.internal_queries == []
-        assert plan.external_queries == []
+        assert plan.external_research_tasks == []
 
     def test_from_draft_internal_uses_fallback_when_query_missing(self) -> None:
         plan = QuestionPlan.from_draft(
             QuestionPlanDraft(
                 retrieval_mode="internal",
                 internal_queries=["  "],
-                external_queries=["ignored"],
+                external_collection_goals=["ignored"],
                 reason="内部記事が必要",
             ),
             fallback_query="保存済みの記事からAI半導体ニュースをまとめて",
         )
 
         assert plan.internal_queries == ["保存済みの記事からAI半導体ニュースをまとめて"]
-        assert plan.external_queries == []
+        assert plan.external_research_tasks == []
 
     def test_from_draft_internal_queries_drop_blanks_and_keep_order(self) -> None:
         plan = QuestionPlan.from_draft(
@@ -168,19 +214,46 @@ class TestQuestionPlan:
 
         assert plan.internal_queries == ["NVIDIA AI GPU", "Blackwell supply chain"]
 
-    def test_from_draft_external_uses_fallback_when_query_missing(self) -> None:
+    def test_from_draft_external_uses_fallback_when_goal_missing(self) -> None:
         plan = QuestionPlan.from_draft(
             QuestionPlanDraft(
                 retrieval_mode="external",
                 internal_queries=["ignored"],
-                external_queries=["  "],
+                external_collection_goals=["  "],
                 reason="外部ニュースが必要",
             ),
             fallback_query="今日のNVIDIAの発表は？",
         )
 
         assert plan.internal_queries == []
-        assert plan.external_queries == ["今日のNVIDIAの発表は？"]
+        assert plan.external_research_tasks == [
+            ExternalResearchTask(collection_goal="今日のNVIDIAの発表は？")
+        ]
+
+    def test_from_draft_external_goals_drop_blanks_deduplicate_and_clamp(
+        self,
+    ) -> None:
+        plan = QuestionPlan.from_draft(
+            QuestionPlanDraft(
+                retrieval_mode="external",
+                external_collection_goals=[
+                    "  ",
+                    "  NVIDIA の直近発表を確認する  ",
+                    "NVIDIA の直近発表を確認する",
+                    "NVIDIA の供給需要を確認する",
+                    "NVIDIA の投資影響を確認する",
+                    "NVIDIA の規制影響を確認する",
+                ],
+                reason="外部ニュースが必要",
+            ),
+            fallback_query="fallback",
+        )
+
+        assert plan.external_research_tasks == [
+            ExternalResearchTask(collection_goal="NVIDIA の直近発表を確認する"),
+            ExternalResearchTask(collection_goal="NVIDIA の供給需要を確認する"),
+            ExternalResearchTask(collection_goal="NVIDIA の投資影響を確認する"),
+        ]
 
     def test_from_draft_internal_and_external_fills_both_queries(self) -> None:
         plan = QuestionPlan.from_draft(
@@ -192,14 +265,18 @@ class TestQuestionPlan:
         )
 
         assert plan.internal_queries == ["内部記事と最新ニュースを合わせて整理して"]
-        assert plan.external_queries == ["内部記事と最新ニュースを合わせて整理して"]
+        assert plan.external_research_tasks == [
+            ExternalResearchTask(
+                collection_goal="内部記事と最新ニュースを合わせて整理して",
+            )
+        ]
 
     def test_safe_fallback_defaults_to_internal(self) -> None:
         plan = QuestionPlan.safe_fallback(fallback_query="こんにちは")
 
         assert plan.retrieval_mode == "internal"
         assert plan.internal_queries == ["こんにちは"]
-        assert plan.external_queries == []
+        assert plan.external_research_tasks == []
 
     def test_rejects_empty_reason(self) -> None:
         with pytest.raises(ValidationError):

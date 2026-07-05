@@ -11,7 +11,12 @@ import pytest
 from logfire.testing import CaptureLogfire
 from pydantic import ValidationError
 
-from app.agent.contract import AnswerQuestionInput, QuestionPlan, RetrievalMode
+from app.agent.contract import (
+    AnswerQuestionInput,
+    ExternalResearchTask,
+    QuestionPlan,
+    RetrievalMode,
+)
 from app.agent.planning.ai.gemini import (
     GeminiQuestionPlannerResponseDefect,
     QuestionPlannerResponseInvalidError,
@@ -48,20 +53,20 @@ def _plan(
     mode: RetrievalMode,
     *,
     internal_queries: list[str] | None = None,
-    external_queries: list[str] | None = None,
+    external_research_tasks: list[ExternalResearchTask] | None = None,
     reason: str = "test reason",
 ) -> QuestionPlan:
     if mode == "internal" and internal_queries is None:
         internal_queries = ["internal query"]
-    if mode == "external" and external_queries is None:
-        external_queries = ["external query"]
+    if mode == "external" and external_research_tasks is None:
+        external_research_tasks = [_external_task()]
     if mode == "internal_and_external":
         internal_queries = internal_queries or ["internal query"]
-        external_queries = external_queries or ["external query"]
+        external_research_tasks = external_research_tasks or [_external_task()]
     return QuestionPlan(
         retrieval_mode=mode,
         internal_queries=internal_queries or [],
-        external_queries=external_queries or [],
+        external_research_tasks=external_research_tasks or [],
         reason=reason,
     )
 
@@ -70,15 +75,21 @@ def _draft(
     mode: RetrievalMode,
     *,
     internal_queries: list[str] | None = None,
-    external_queries: list[str] | None = None,
+    external_collection_goals: list[str] | None = None,
     reason: str = "test reason",
 ) -> QuestionPlanDraft:
     return QuestionPlanDraft(
         retrieval_mode=mode,
         internal_queries=internal_queries or [],
-        external_queries=external_queries or [],
+        external_collection_goals=external_collection_goals or [],
         reason=reason,
     )
+
+
+def _external_task(
+    collection_goal: str = "外部根拠を確認する",
+) -> ExternalResearchTask:
+    return ExternalResearchTask(collection_goal=collection_goal)
 
 
 def _validation_error() -> ValidationError:
@@ -155,19 +166,26 @@ class TestQuestionPlanningService:
     @pytest.mark.asyncio
     async def test_returns_completed_plan_from_draft(self) -> None:
         planner = FakePlanner(
-            [_draft("external", external_queries=["  NVIDIA latest news  "])]
+            [
+                _draft(
+                    "external",
+                    external_collection_goals=["  NVIDIA の直近発表を確認する  "],
+                )
+            ]
         )
 
         plan = await QuestionPlanningService(planner=planner).plan(_input())
 
-        assert plan.external_queries == ["NVIDIA latest news"]
+        assert plan.external_research_tasks == [
+            _external_task("NVIDIA の直近発表を確認する")
+        ]
         assert planner.previous_errors == [None]
 
     @pytest.mark.asyncio
     async def test_retries_once_with_previous_error(self) -> None:
         repaired = _draft(
             "external",
-            external_queries=["NVIDIA announcement"],
+            external_collection_goals=["NVIDIA の発表根拠を確認する"],
         )
         planner = FakePlanner([_response_invalid(), repaired])
 
@@ -224,7 +242,10 @@ class TestQuestionPlanningService:
 
     @pytest.mark.asyncio
     async def test_retry_success_records_attempt_failure_and_final_plan(self) -> None:
-        repaired = _draft("external", external_queries=["NVIDIA announcement"])
+        repaired = _draft(
+            "external",
+            external_collection_goals=["NVIDIA の発表根拠を確認する"],
+        )
         planner = FakePlanner([_response_invalid(), repaired])
         recorder = FakePlannerAuditRecorder()
 
@@ -245,6 +266,7 @@ class TestQuestionPlanningService:
         assert final.retry_used is True
         assert final.fallback_used is False
         assert final.retrieval_mode == "external"
+        assert final.external_query_count == len(plan.external_research_tasks)
 
     @pytest.mark.asyncio
     async def test_fallback_after_retry_failure_records_two_attempts(self) -> None:
@@ -327,7 +349,13 @@ class TestQuestionPlanningService:
         capfire: CaptureLogfire,
     ) -> None:
         planner = FakePlanner(
-            [_response_invalid(), _draft("external", external_queries=["NVIDIA"])]
+            [
+                _response_invalid(),
+                _draft(
+                    "external",
+                    external_collection_goals=["NVIDIA の外部根拠を確認する"],
+                ),
+            ]
         )
 
         await plan_question(planner, _input())
@@ -378,7 +406,7 @@ class TestPlanQuestionCompatibility:
 
         assert plan.retrieval_mode == "internal"
         assert plan.internal_queries == ["NVIDIA"]
-        assert plan.external_queries == []
+        assert plan.external_research_tasks == []
 
 
 class TestExternalUnavailableResult:

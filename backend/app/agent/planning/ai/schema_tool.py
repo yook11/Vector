@@ -18,7 +18,7 @@ QUESTION_PLANNER_GEMINI_SCHEMA: dict[str, Any] = {
     "required": [
         "retrieval_mode",
         "internal_queries",
-        "external_queries",
+        "external_collection_goals",
         "reason",
     ],
     "properties": {
@@ -41,12 +41,15 @@ QUESTION_PLANNER_GEMINI_SCHEMA: dict[str, Any] = {
                 "description": "One internal vector-search query.",
             },
         },
-        "external_queries": {
+        "external_collection_goals": {
             "type": "ARRAY",
-            "description": "Keyword queries for external news search.",
+            "description": (
+                "External research goals describing what evidence to collect. "
+                "Short Japanese sentences. Return at most 3 items."
+            ),
             "items": {
                 "type": "STRING",
-                "description": "One external news-search keyword query.",
+                "description": "One research goal for external news search.",
             },
         },
         "target_time_window": {

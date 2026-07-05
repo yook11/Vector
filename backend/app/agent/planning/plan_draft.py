@@ -14,6 +14,6 @@ class QuestionPlanDraft(BaseModel):
 
     retrieval_mode: RetrievalMode
     internal_queries: list[str] = Field(default_factory=list)
-    external_queries: list[str] = Field(default_factory=list)
+    external_collection_goals: list[str] = Field(default_factory=list)
     target_time_window: str | None = None
     reason: str = Field(min_length=1)

@@ -42,27 +42,32 @@ internal_queries:
 - NVIDIA AI 半導体 GPU データセンター 発表 提携 業績 規制 直近動向
 - NVIDIA Blackwell AI infrastructure supply chain demand
 
-# external_queries
+# external_collection_goals
 
-external_queries は外部ニュース検索エンジンに投げる keyword query のリスト。
-英語の固有名や latest / news / announcement など、外部検索でヒットしやすい短い
-query にする。
+external_collection_goals は外部ニュース検索で確認したい調査目的のリスト。
+その調査で何を確認したいか、何が根拠として有用かを短い日本語で書く。
+検索 query は作らない。query は実行時にリサーチャーが生成する。
+1〜3件までにする。
 
 例:
-- NVIDIA latest AI GPU datacenter news
-- NVIDIA latest announcement AI chips
+ユーザー: 直近のNVIDIAの動きと投資への影響を教えて
+external_collection_goals:
+- NVIDIA の直近の発表・提携・業績に関する報道を確認する
+- NVIDIA 製品の供給・需要の変化が投資判断に与える影響を確認する
 
-# mode ごとの query
+# mode ごとの出力
 
-- retrieval_mode=none: internal_queries=[], external_queries=[]
-- retrieval_mode=internal: internal_queries は原則 1 件以上、external_queries=[]
-- retrieval_mode=external: internal_queries=[], external_queries は原則 1 件以上
+- retrieval_mode=none: internal_queries=[], external_collection_goals=[]
+- retrieval_mode=internal:
+  internal_queries は原則 1 件以上、external_collection_goals=[]
+- retrieval_mode=external:
+  internal_queries=[], external_collection_goals は原則 1 件以上
 - retrieval_mode=internal_and_external:
-  internal_queries と external_queries の両方を原則 1 件以上
+  internal_queries と external_collection_goals の両方を原則 1 件以上
 
 target_time_window は「今日」「直近24時間」「今週」「2026年6月」など、
 質問内の時間軸を抽出できる場合だけ入れる。
-reason は短い日本語で、なぜその retrieval_mode と query にしたかを説明する。
+reason は短い日本語で、なぜその retrieval_mode と調査目的にしたかを説明する。
 """
 
 QUESTION_PLANNER_REPAIR_PROMPT = """\
