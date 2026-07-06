@@ -6,8 +6,9 @@ from collections.abc import Sequence
 from datetime import UTC, datetime
 
 import pytest
+from pydantic import ValidationError
 
-from app.agent.answering.service import QuestionAnsweringService
+from app.agent.answering.service import QuestionPlanRetrievalService, RetrievalOutcome
 from app.agent.contract import ExternalResearchTask, QuestionPlan, RetrievalMode
 from app.agent.external_search import ExternalSearchOutcome
 from app.agent.internal_retrieval.article_search import (
@@ -45,6 +46,15 @@ def _external_task(
     return ExternalResearchTask(collection_goal=collection_goal)
 
 
+def _external_outcome() -> ExternalSearchOutcome:
+    return ExternalSearchOutcome(
+        tasks=[],
+        evidence=[],
+        task_reports=[],
+        effective_agent_count=0,
+    )
+
+
 def _hit(*, curation_id: int, title: str, distance: float) -> InternalArticleSearchHit:
     article = InScopeAnalyzedArticle(
         curation_id=curation_id,
@@ -57,6 +67,7 @@ def _hit(*, curation_id: int, title: str, distance: float) -> InternalArticleSea
         ),
     )
     return InternalArticleSearchHit(
+        assessment_id=curation_id + 1000,
         article=article,
         content=InternalArticleContent.from_article(article, published_at=None),
         distance=distance,
@@ -86,12 +97,7 @@ class FakeInternalArticleRetriever:
 
 class FakeExternalPlanSearcher:
     def __init__(self, outcome: ExternalSearchOutcome | None = None) -> None:
-        self._outcome = outcome or ExternalSearchOutcome(
-            tasks=[],
-            evidence=[],
-            task_reports=[],
-            effective_agent_count=0,
-        )
+        self._outcome = outcome or _external_outcome()
         self.calls: list[tuple[QuestionPlan, datetime, int | None]] = []
 
     async def search_plan(
@@ -108,7 +114,7 @@ class FakeExternalPlanSearcher:
 @pytest.mark.asyncio
 async def test_retrieve_none_skips_internal_search_and_returns_empty_outcome() -> None:
     internal_search = FakeInternalArticleRetriever()
-    service = QuestionAnsweringService(internal_search=internal_search)
+    service = QuestionPlanRetrievalService(internal_search=internal_search)
 
     outcome = await service.retrieve(_plan("none"), as_of=_as_of())
 
@@ -128,7 +134,7 @@ async def test_retrieve_internal_preserves_search_hit_order() -> None:
         _hit(curation_id=2, title="NVIDIA", distance=0.1),
     ]
     internal_search = FakeInternalArticleRetriever(hits=hits)
-    service = QuestionAnsweringService(internal_search=internal_search)
+    service = QuestionPlanRetrievalService(internal_search=internal_search)
 
     outcome = await service.retrieve(plan, as_of=_as_of())
 
@@ -144,7 +150,7 @@ async def test_retrieve_internal_does_not_call_external_search() -> None:
     plan = _plan("internal")
     internal_search = FakeInternalArticleRetriever()
     external_search = FakeExternalPlanSearcher()
-    service = QuestionAnsweringService(
+    service = QuestionPlanRetrievalService(
         internal_search=internal_search,
         external_search=external_search,
     )
@@ -157,7 +163,7 @@ async def test_retrieve_internal_does_not_call_external_search() -> None:
 @pytest.mark.asyncio
 async def test_retrieve_external_skips_internal_search_and_records_unmet() -> None:
     internal_search = FakeInternalArticleRetriever()
-    service = QuestionAnsweringService(internal_search=internal_search)
+    service = QuestionPlanRetrievalService(internal_search=internal_search)
 
     outcome = await service.retrieve(_plan("external"), as_of=_as_of())
 
@@ -174,7 +180,7 @@ async def test_retrieve_external_runs_external_search_when_available() -> None:
     plan = _plan("external")
     internal_search = FakeInternalArticleRetriever()
     external_search = FakeExternalPlanSearcher()
-    service = QuestionAnsweringService(
+    service = QuestionPlanRetrievalService(
         internal_search=internal_search,
         external_search=external_search,
         requested_external_agent_count=4,
@@ -195,7 +201,7 @@ async def test_retrieve_internal_and_external_runs_internal_and_records_unmet() 
     plan = _plan("internal_and_external")
     hits = [_hit(curation_id=1, title="NVIDIA", distance=0.1)]
     internal_search = FakeInternalArticleRetriever(hits=hits)
-    service = QuestionAnsweringService(internal_search=internal_search)
+    service = QuestionPlanRetrievalService(internal_search=internal_search)
 
     outcome = await service.retrieve(plan, as_of=_as_of())
 
@@ -213,7 +219,7 @@ async def test_retrieve_internal_and_external_runs_both_retrievals() -> None:
     hits = [_hit(curation_id=1, title="NVIDIA", distance=0.1)]
     internal_search = FakeInternalArticleRetriever(hits=hits)
     external_search = FakeExternalPlanSearcher()
-    service = QuestionAnsweringService(
+    service = QuestionPlanRetrievalService(
         internal_search=internal_search,
         external_search=external_search,
     )
@@ -231,7 +237,7 @@ async def test_retrieve_internal_and_external_runs_both_retrievals() -> None:
 
 @pytest.mark.asyncio
 async def test_retrieve_propagates_internal_search_exception() -> None:
-    service = QuestionAnsweringService(
+    service = QuestionPlanRetrievalService(
         internal_search=FakeInternalArticleRetriever(
             error=RuntimeError("internal search failed"),
         ),
@@ -239,3 +245,18 @@ async def test_retrieve_propagates_internal_search_exception() -> None:
 
     with pytest.raises(RuntimeError, match="internal search failed"):
         await service.retrieve(_plan("internal"), as_of=_as_of())
+
+
+def test_retrieval_outcome_rejects_external_search_and_external_unmet() -> None:
+    with pytest.raises(ValidationError):
+        RetrievalOutcome(
+            external_search=_external_outcome(),
+            unmet_requirements=["external_search"],
+        )
+
+
+def test_retrieval_outcome_allows_external_unmet_when_search_is_absent() -> None:
+    outcome = RetrievalOutcome(unmet_requirements=["external_search"])
+
+    assert outcome.external_search is None
+    assert outcome.unmet_requirements == ["external_search"]

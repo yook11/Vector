@@ -1,13 +1,19 @@
 """Question answering package."""
 
+from app.agent.answering.evidence import (
+    AnswerEvidenceItem,
+    normalize_answer_evidence,
+)
 from app.agent.answering.service import (
     InternalArticleRetriever,
-    QuestionAnsweringService,
+    QuestionPlanRetrievalService,
     RetrievalOutcome,
 )
 
 __all__ = [
+    "AnswerEvidenceItem",
     "InternalArticleRetriever",
-    "QuestionAnsweringService",
+    "QuestionPlanRetrievalService",
     "RetrievalOutcome",
+    "normalize_answer_evidence",
 ]

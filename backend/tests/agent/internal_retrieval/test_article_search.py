@@ -138,7 +138,7 @@ class TestPgVectorArticleSearchRepository:
         sample_source: NewsSource,
         sample_categories: list[Category],
     ) -> None:
-        await _create_analysis(
+        analysis = await _create_analysis(
             db_session,
             sample_source,
             sample_categories[0],
@@ -166,6 +166,7 @@ class TestPgVectorArticleSearchRepository:
         assert len(hits) == 1
         hit = hits[0]
         assert isinstance(hit, InternalArticleSearchHit)
+        assert hit.assessment_id == analysis.id
         assert isinstance(hit.article, InScopeAnalyzedArticle)
         assert isinstance(hit.content, InternalArticleContent)
         assert hit.article.title == "OpenAI 半導体提携"

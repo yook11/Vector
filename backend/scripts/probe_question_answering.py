@@ -11,7 +11,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from app.agent.answering import QuestionAnsweringService
+from app.agent.answering import QuestionPlanRetrievalService
 from app.agent.contract import ExternalResearchTask, QuestionPlan
 from app.agent.external_search import (
     ExternalSearchEvidence,
@@ -47,7 +47,7 @@ class _UnreachableInternalSearch:
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description=(
-            "Probe QuestionAnsweringService external retrieval with real "
+            "Probe QuestionPlanRetrievalService external retrieval with real "
             "DeepSeek and Tavily adapters."
         )
     )
@@ -96,7 +96,7 @@ async def _probe(
             search_provider=provider,
             evidence_selector=DeepSeekEvidenceSelector(),
         )
-        service = QuestionAnsweringService(
+        service = QuestionPlanRetrievalService(
             internal_search=_UnreachableInternalSearch(),
             external_search=ExternalSearchService(runner=runner),
             requested_external_agent_count=requested_agent_count,

@@ -63,10 +63,11 @@ class InternalArticleContent(BaseModel):
 
 
 class InternalArticleSearchHit(BaseModel):
-    """Internal vector search hit for an in-scope analyzed article."""
+    """Internal vector search hit with the public /news article id."""
 
     model_config = ConfigDict(frozen=True)
 
+    assessment_id: int = Field(gt=0)
     article: InScopeAnalyzedArticle
     content: InternalArticleContent
     distance: float = Field(ge=0)
@@ -93,6 +94,7 @@ class PgVectorArticleSearchRepository:
         )
         stmt = (
             select(
+                AnalyzedArticleRecord.id.label("assessment_id"),
                 AnalyzedArticleRecord.curation_id,
                 AnalyzedArticleRecord.translated_title,
                 AnalyzedArticleRecord.summary,
@@ -143,6 +145,7 @@ def _hit_from_row(row: Any) -> InternalArticleSearchHit | None:
         return None
 
     return InternalArticleSearchHit(
+        assessment_id=row.assessment_id,
         article=article,
         content=InternalArticleContent.from_article(
             article,

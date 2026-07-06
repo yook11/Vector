@@ -3,9 +3,9 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Protocol
+from typing import Protocol, Self
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from app.agent.contract import QuestionPlan, UnmetRequirement
 from app.agent.external_search import ExternalSearchOutcome
@@ -14,7 +14,7 @@ from app.agent.internal_retrieval.article_search import InternalArticleSearchHit
 __all__ = [
     "ExternalPlanSearcher",
     "InternalArticleRetriever",
-    "QuestionAnsweringService",
+    "QuestionPlanRetrievalService",
     "RetrievalOutcome",
 ]
 
@@ -45,9 +45,18 @@ class RetrievalOutcome(BaseModel):
     external_search: ExternalSearchOutcome | None = None
     unmet_requirements: list[UnmetRequirement] = Field(default_factory=list)
 
+    @model_validator(mode="after")
+    def _validate_external_search_unmet_consistency(self) -> Self:
+        if (
+            self.external_search is not None
+            and "external_search" in self.unmet_requirements
+        ):
+            raise ValueError("external_search outcome cannot also be marked as unmet")
+        return self
 
-class QuestionAnsweringService:
-    """Plan を受け取り、retrieval_mode ごとの検索実行に振り分ける。"""
+
+class QuestionPlanRetrievalService:
+    """QuestionPlan を読んで internal/external retrieval を起動する工程。"""
 
     def __init__(
         self,

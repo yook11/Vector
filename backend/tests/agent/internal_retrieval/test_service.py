@@ -90,6 +90,7 @@ class FakeInternalQueryEmbedder:
 def _article_hit(
     *,
     curation_id: int,
+    assessment_id: int | None = None,
     title: str,
     distance: float,
 ) -> InternalArticleSearchHit:
@@ -104,6 +105,7 @@ def _article_hit(
         ),
     )
     return InternalArticleSearchHit(
+        assessment_id=assessment_id or curation_id + 1000,
         article=article,
         content=InternalArticleContent.from_article(article, published_at=None),
         distance=distance,
