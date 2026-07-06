@@ -7,6 +7,8 @@ updates:
       day: "monday"
       time: "09:00"
       timezone: "Asia/Tokyo"
+    cooldown:
+      default-days: 7
     open-pull-requests-limit: 10
     groups:
       python-minor-and-patch:
@@ -19,6 +21,8 @@ updates:
       day: "monday"
       time: "09:00"
       timezone: "Asia/Tokyo"
+    cooldown:
+      default-days: 7
     open-pull-requests-limit: 10
     groups:
       npm-minor-and-patch:
@@ -31,4 +35,6 @@ updates:
       day: "monday"
       time: "09:00"
       timezone: "Asia/Tokyo"
+    cooldown:
+      default-days: 7
     open-pull-requests-limit: 5
