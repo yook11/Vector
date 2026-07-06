@@ -8,6 +8,7 @@ worker が捕捉するのは分類済み境界 error と TimeoutError のみで�
 from __future__ import annotations
 
 import asyncio
+from datetime import datetime
 
 from app.agent.contract import ExternalResearchTask
 from app.agent.external_search.contract import (
@@ -41,6 +42,8 @@ __all__ = [
 QUERY_GENERATE_TIMEOUT_SECONDS = 30
 PROVIDER_SEARCH_TIMEOUT_SECONDS = 15
 EVIDENCE_SELECT_TIMEOUT_SECONDS = 30
+SELECTOR_TIMEOUT_REASON = "selector_timeout"
+SELECTOR_ERROR_REASON = "selector_error"
 
 
 class ExternalSearchResearchRunner:
@@ -150,16 +153,12 @@ class ExternalSearchResearchRunner:
                 candidate_count=0,
             )
 
-        try:
-            selection_result = await asyncio.wait_for(
-                self._evidence_selector.select(
-                    task=task,
-                    candidates=pool,
-                    as_of=request.as_of,
-                ),
-                timeout=EVIDENCE_SELECT_TIMEOUT_SECONDS,
-            )
-        except (ExternalEvidenceSelectorError, TimeoutError):
+        selection_result, selector_failure_reason = await self._select_evidence(
+            task=task,
+            candidates=pool,
+            as_of=request.as_of,
+        )
+        if selection_result is None:
             return [], self._task_report(
                 task_index=task_index,
                 task=task,
@@ -167,6 +166,7 @@ class ExternalSearchResearchRunner:
                 generated_queries=queries,
                 provider_failed_query_count=provider_failed_query_count,
                 candidate_count=len(pool),
+                selector_failure_reason=selector_failure_reason,
             )
 
         evidence, dropped_selection_count = _build_evidence(
@@ -202,6 +202,33 @@ class ExternalSearchResearchRunner:
             return [], True
         return candidates[:EXTERNAL_SEARCH_CANDIDATES_PER_QUERY], False
 
+    async def _select_evidence(
+        self,
+        *,
+        task: ExternalResearchTask,
+        candidates: list[ExternalSearchCandidate],
+        as_of: datetime,
+    ) -> tuple[EvidenceSelectionResult | None, str | None]:
+        selector_failure_reason: str | None = None
+        for _ in range(2):
+            try:
+                return (
+                    await asyncio.wait_for(
+                        self._evidence_selector.select(
+                            task=task,
+                            candidates=candidates,
+                            as_of=as_of,
+                        ),
+                        timeout=EVIDENCE_SELECT_TIMEOUT_SECONDS,
+                    ),
+                    None,
+                )
+            except ExternalEvidenceSelectorError as exc:
+                selector_failure_reason = _selector_failure_reason(exc)
+            except TimeoutError:
+                selector_failure_reason = SELECTOR_TIMEOUT_REASON
+        return None, selector_failure_reason
+
     def _task_report(
         self,
         *,
@@ -213,6 +240,7 @@ class ExternalSearchResearchRunner:
         candidate_count: int = 0,
         evidence_count: int = 0,
         dropped_selection_count: int = 0,
+        selector_failure_reason: str | None = None,
         missing: list[str] | None = None,
     ) -> ResearchTaskReport:
         return ResearchTaskReport.from_raw(
@@ -224,6 +252,7 @@ class ExternalSearchResearchRunner:
             candidate_count=candidate_count,
             evidence_count=evidence_count,
             dropped_selection_count=dropped_selection_count,
+            selector_failure_reason=selector_failure_reason,
             missing=missing,
         )
 
@@ -242,6 +271,12 @@ def _clean_generated_queries(raw_queries: list[str]) -> list[str]:
         if len(queries) >= EXTERNAL_TASK_QUERY_LIMIT:
             break
     return queries
+
+
+def _selector_failure_reason(exc: ExternalEvidenceSelectorError) -> str:
+    if exc.reason:
+        return str(exc.reason)
+    return SELECTOR_ERROR_REASON
 
 
 def _build_candidate_pool(

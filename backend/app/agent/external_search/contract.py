@@ -201,6 +201,7 @@ class ResearchTaskReport(BaseModel):
     candidate_count: int = Field(default=0, ge=0)
     evidence_count: int = Field(default=0, ge=0)
     dropped_selection_count: int = Field(default=0, ge=0)
+    selector_failure_reason: str | None = None
     missing: list[str] = Field(default_factory=list)
 
     @classmethod
@@ -215,6 +216,7 @@ class ResearchTaskReport(BaseModel):
         candidate_count: int = 0,
         evidence_count: int = 0,
         dropped_selection_count: int = 0,
+        selector_failure_reason: str | None = None,
         missing: list[str] | None = None,
     ) -> ResearchTaskReport:
         return cls(
@@ -226,6 +228,7 @@ class ResearchTaskReport(BaseModel):
             candidate_count=candidate_count,
             evidence_count=evidence_count,
             dropped_selection_count=dropped_selection_count,
+            selector_failure_reason=selector_failure_reason,
             missing=_clamp_missing(missing or []),
         )
 

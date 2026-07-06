@@ -158,6 +158,7 @@ class FakeEvidenceSelector:
         *,
         missing: list[str] | None = None,
         error: Exception | None = None,
+        side_effects: list[Exception | None] | None = None,
     ) -> None:
         self.selections = (
             selections
@@ -166,6 +167,7 @@ class FakeEvidenceSelector:
         )
         self.missing = missing if missing is not None else []
         self.error = error
+        self.side_effects = list(side_effects) if side_effects is not None else None
         self.calls: list[tuple[ExternalResearchTask, list[Any], datetime]] = []
 
     async def select(
@@ -176,6 +178,11 @@ class FakeEvidenceSelector:
         as_of: datetime,
     ) -> Any:
         self.calls.append((task, list(candidates), as_of))
+        call_index = len(self.calls) - 1
+        if self.side_effects is not None and call_index < len(self.side_effects):
+            side_effect = self.side_effects[call_index]
+            if side_effect is not None:
+                raise side_effect
         if self.error is not None:
             raise self.error
         return _selection_result(self.selections, missing=self.missing)
@@ -328,6 +335,93 @@ async def test_runner_timeouts_map_to_stage_failure_status(
 
     assert result.evidence == []
     assert result.task_reports[0].status == expected_status
+
+
+@pytest.mark.asyncio
+async def test_runner_retries_selector_once_with_same_inputs() -> None:
+    task = _task("selector retry")
+    selector_error = _model("ExternalEvidenceSelectorError")(
+        reason="external_search_deepseek_arguments_schema_invalid"
+    )
+    query_generator = FakeQueryGenerator({task.collection_goal: ["q"]})
+    search_provider = FakeSearchProvider(
+        {"q": [_candidate("https://example.com/q")]}
+    )
+    selector = FakeEvidenceSelector(side_effects=[selector_error, None])
+    runner = _runner(
+        query_generator=query_generator,
+        search_provider=search_provider,
+        evidence_selector=selector,
+    )
+
+    result = await runner.search(_request([task]))
+
+    assert len(selector.calls) == 2
+    assert selector.calls[0] == selector.calls[1]
+    assert query_generator.calls == [(task, _as_of(), "直近24時間")]
+    assert search_provider.calls == [
+        ("q", _const("EXTERNAL_SEARCH_CANDIDATES_PER_QUERY"))
+    ]
+    report = result.task_reports[0]
+    assert report.status == "succeeded"
+    assert report.evidence_count == 1
+    assert report.selector_failure_reason is None
+    assert [evidence.source_ref for evidence in result.evidence] == ["external-0-0"]
+
+
+@pytest.mark.asyncio
+async def test_runner_selector_failure_after_retry_reports_reason() -> None:
+    task = _task("selector failure")
+    selector_error = _model("ExternalEvidenceSelectorError")(
+        reason="external_search_deepseek_arguments_schema_invalid"
+    )
+    query_generator = FakeQueryGenerator({task.collection_goal: ["q"]})
+    search_provider = FakeSearchProvider(
+        {"q": [_candidate("https://example.com/q")]}
+    )
+    selector = FakeEvidenceSelector(
+        side_effects=[selector_error, selector_error],
+    )
+    runner = _runner(
+        query_generator=query_generator,
+        search_provider=search_provider,
+        evidence_selector=selector,
+    )
+
+    result = await runner.search(_request([task]))
+
+    report = result.task_reports[0]
+    assert result.evidence == []
+    assert len(selector.calls) == 2
+    assert report.status == "selector_failed"
+    assert report.selector_failure_reason == (
+        "external_search_deepseek_arguments_schema_invalid"
+    )
+
+
+@pytest.mark.asyncio
+async def test_runner_selector_timeout_after_retry_reports_timeout_reason() -> None:
+    task = _task("selector timeout")
+    query_generator = FakeQueryGenerator({task.collection_goal: ["q"]})
+    search_provider = FakeSearchProvider(
+        {"q": [_candidate("https://example.com/q")]}
+    )
+    selector = FakeEvidenceSelector(
+        side_effects=[TimeoutError(), TimeoutError()],
+    )
+    runner = _runner(
+        query_generator=query_generator,
+        search_provider=search_provider,
+        evidence_selector=selector,
+    )
+
+    result = await runner.search(_request([task]))
+
+    report = result.task_reports[0]
+    assert result.evidence == []
+    assert len(selector.calls) == 2
+    assert report.status == "selector_failed"
+    assert report.selector_failure_reason == "selector_timeout"
 
 
 @pytest.mark.asyncio
