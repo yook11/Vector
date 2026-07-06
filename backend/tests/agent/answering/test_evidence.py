@@ -6,12 +6,13 @@ from datetime import UTC, datetime
 
 from app.agent.answering.evidence import normalize_answer_evidence
 from app.agent.answering.service import RetrievalOutcome
-from app.agent.contract import ExternalResearchTask, ExternalUrlSource
+from app.agent.contract import ExternalUrlSource
 from app.agent.external_search import (
     ExternalSearchEvidence,
     ExternalSearchOutcome,
     ResearchTaskReport,
 )
+from app.agent.planning.contract import ExternalResearchTask
 from app.agent.internal_retrieval.article_search import (
     InternalArticleContent,
     InternalArticleSearchHit,

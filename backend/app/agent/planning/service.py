@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Protocol
+from typing import Protocol, assert_never
 
 from pydantic import ValidationError
 
@@ -11,16 +11,25 @@ from app.agent.contract import (
     AnswerQuestionInput,
     AnswerQuestionResult,
     AnswerRetrievalSummary,
-    QuestionPlan,
 )
 from app.agent.planning.ai.gemini import QuestionPlannerResponseInvalidError
 from app.agent.planning.audit import (
     PlannerAttemptFailureEvent,
     PlannerAuditRecorder,
+    PlannerDraftReceivedEvent,
     PlannerFailureAttributes,
     PlannerFinalEvent,
     RequestRetryDisposition,
     classify_planner_failure,
+)
+from app.agent.planning.contract import (
+    ExternalSearchPlan,
+    InternalAndExternalPlan,
+    InternalRetrievalPlan,
+    NoRetrievalPlan,
+    QuestionPlan,
+    plan_from_draft,
+    safe_fallback_plan,
 )
 from app.agent.planning.metrics import record_question_planner_outcome
 from app.agent.planning.plan_draft import QuestionPlanDraft
@@ -106,7 +115,14 @@ class QuestionPlanningService:
                     ai_model=ai_model,
                     prompt_version=prompt_version,
                 )
-            plan = QuestionPlan.from_draft(draft, fallback_query=input.question)
+            await _record_draft_received(
+                audit_recorder=self._audit_recorder,
+                draft=draft,
+                attempt_number=2,
+                ai_model=ai_model,
+                prompt_version=prompt_version,
+            )
+            plan = plan_from_draft(draft, fallback_query=input.question)
             await _record_plan_created(
                 audit_recorder=self._audit_recorder,
                 plan=plan,
@@ -122,7 +138,14 @@ class QuestionPlanningService:
             )
             return plan
 
-        plan = QuestionPlan.from_draft(draft, fallback_query=input.question)
+        await _record_draft_received(
+            audit_recorder=self._audit_recorder,
+            draft=draft,
+            attempt_number=1,
+            ai_model=ai_model,
+            prompt_version=prompt_version,
+        )
+        plan = plan_from_draft(draft, fallback_query=input.question)
         await _record_plan_created(
             audit_recorder=self._audit_recorder,
             plan=plan,
@@ -158,6 +181,30 @@ def _planner_attr(planner: QuestionPlanDraftGenerator, name: str) -> str | None:
     return value if isinstance(value, str) else None
 
 
+async def _record_draft_received(
+    *,
+    audit_recorder: PlannerAuditRecorder | None,
+    draft: QuestionPlanDraft,
+    attempt_number: int,
+    ai_model: str | None,
+    prompt_version: str | None,
+) -> None:
+    if audit_recorder is None:
+        return
+    event = PlannerDraftReceivedEvent(
+        attempt_number=attempt_number,
+        retrieval_mode=draft.retrieval_mode,
+        draft_internal_query_count=len(draft.internal_queries),
+        draft_external_query_count=len(draft.external_collection_goals),
+        ai_model=ai_model,
+        prompt_version=prompt_version,
+    )
+    try:
+        await audit_recorder.record_draft_received(event)
+    except Exception:
+        return
+
+
 async def _record_attempt_failure(
     *,
     audit_recorder: PlannerAuditRecorder | None,
@@ -191,12 +238,13 @@ async def _record_plan_created(
 ) -> None:
     if audit_recorder is None:
         return
+    internal_query_count, external_query_count = _plan_query_counts(plan)
     event = PlannerFinalEvent.plan_created(
         attempt_count=attempt_count,
         retry_used=retry_used,
         retrieval_mode=plan.retrieval_mode,
-        internal_query_count=len(plan.internal_queries),
-        external_query_count=len(plan.external_research_tasks),
+        internal_query_count=internal_query_count,
+        external_query_count=external_query_count,
         ai_model=ai_model,
         prompt_version=prompt_version,
     )
@@ -225,14 +273,15 @@ async def _fallback_with_audit(
     ai_model: str | None,
     prompt_version: str | None,
 ) -> QuestionPlan:
-    fallback = QuestionPlan.safe_fallback(fallback_query=input.question)
+    fallback = safe_fallback_plan(fallback_query=input.question)
     if audit_recorder is not None:
+        internal_query_count, external_query_count = _plan_query_counts(fallback)
         event = PlannerFinalEvent.fallback(
             attempt_count=attempt_count,
             retry_used=retry_used,
             retrieval_mode=fallback.retrieval_mode,
-            internal_query_count=len(fallback.internal_queries),
-            external_query_count=len(fallback.external_research_tasks),
+            internal_query_count=internal_query_count,
+            external_query_count=external_query_count,
             failure=failure,
             ai_model=ai_model,
             prompt_version=prompt_version,
@@ -246,22 +295,41 @@ async def _fallback_with_audit(
     return fallback
 
 
-def external_unavailable_result(plan: QuestionPlan) -> AnswerQuestionResult:
+def _plan_query_counts(plan: QuestionPlan) -> tuple[int, int]:
+    match plan:
+        case NoRetrievalPlan():
+            return 0, 0
+        case InternalRetrievalPlan(internal_queries=internal_queries):
+            return len(internal_queries), 0
+        case ExternalSearchPlan(external_research_tasks=external_research_tasks):
+            return 0, len(external_research_tasks)
+        case InternalAndExternalPlan(
+            internal_queries=internal_queries,
+            external_research_tasks=external_research_tasks,
+        ):
+            return len(internal_queries), len(external_research_tasks)
+        case _ as unreachable:
+            assert_never(unreachable)
+
+
+def external_unavailable_result(
+    plan: ExternalSearchPlan | InternalAndExternalPlan,
+) -> AnswerQuestionResult:
     """外部検索未実装 phase の insufficient result を作る。"""
 
-    if plan.retrieval_mode not in {"external", "internal_and_external"}:
-        raise ValueError("external unavailable result requires an external plan")
-
-    if plan.retrieval_mode == "internal_and_external":
-        answer = (
-            "この質問には内部記事の文脈に加えて外部最新情報の確認が必要ですが、"
-            "現在の実装では外部ニュース検索をまだ実行できません。"
-        )
-    else:
-        answer = (
-            "この質問には外部最新情報の確認が必要ですが、"
-            "現在の実装では外部ニュース検索をまだ実行できません。"
-        )
+    match plan:
+        case InternalAndExternalPlan():
+            answer = (
+                "この質問には内部記事の文脈に加えて外部最新情報の確認が必要ですが、"
+                "現在の実装では外部ニュース検索をまだ実行できません。"
+            )
+        case ExternalSearchPlan():
+            answer = (
+                "この質問には外部最新情報の確認が必要ですが、"
+                "現在の実装では外部ニュース検索をまだ実行できません。"
+            )
+        case _ as unreachable:
+            assert_never(unreachable)
 
     return AnswerQuestionResult(
         status="insufficient",

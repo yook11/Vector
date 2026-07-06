@@ -10,7 +10,6 @@ from __future__ import annotations
 import asyncio
 from datetime import datetime
 
-from app.agent.contract import ExternalResearchTask
 from app.agent.external_search.contract import (
     EXTERNAL_QUERY_MAX_CHARS,
     EXTERNAL_SEARCH_CANDIDATE_POOL_LIMIT_PER_TASK,
@@ -31,6 +30,7 @@ from app.agent.external_search.contract import (
     ResearchTaskStatus,
     SearchProvider,
 )
+from app.agent.planning.contract import ExternalResearchTask
 
 __all__ = [
     "EVIDENCE_SELECT_TIMEOUT_SECONDS",

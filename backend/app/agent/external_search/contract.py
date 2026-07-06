@@ -13,7 +13,7 @@ from typing import Literal, Protocol
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from app.agent.contract import ExternalResearchTask
+from app.agent.planning.contract import ExternalResearchTask
 from app.shared.security.safe_url import SafeUrl
 
 __all__ = [

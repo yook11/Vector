@@ -10,7 +10,7 @@ import pytest
 from pydantic import ValidationError
 
 import app.agent.external_search as external_search_module
-from app.agent.contract import ExternalResearchTask
+from app.agent.planning.contract import ExternalResearchTask
 
 
 def _as_of() -> datetime:

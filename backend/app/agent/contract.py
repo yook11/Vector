@@ -6,28 +6,22 @@ API / UI / graph runtime から独立した final result の型だけをここ�
 from __future__ import annotations
 
 from datetime import datetime
-from typing import TYPE_CHECKING, Annotated, Literal, Protocol, Self
+from typing import Annotated, Literal, Protocol, Self
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from app.shared.security.safe_url import SafeUrl
-
-if TYPE_CHECKING:
-    from app.agent.planning.plan_draft import QuestionPlanDraft
 
 __all__ = [
     "AnswerExecutionSummary",
     "AnswerQuestionInput",
     "AnswerQuestionResult",
     "AnswerRetrievalSummary",
-    "EXTERNAL_RESEARCH_TASK_LIMIT",
     "AnswerSource",
     "ExecutionRoute",
-    "ExternalResearchTask",
     "ExternalUrlSource",
     "InternalArticleSource",
     "QuestionAnsweringAgent",
-    "QuestionPlan",
     "RetrievalMode",
     "UnmetRequirement",
 ]
@@ -42,8 +36,6 @@ ExecutionRoute = Literal[
 ]
 UnmetRequirement = Literal["internal_retrieval", "external_search"]
 
-EXTERNAL_RESEARCH_TASK_LIMIT = 3
-
 
 class AnswerQuestionInput(BaseModel):
     """ユーザー質問と実行基準時刻を agent core に渡す入力。"""
@@ -52,147 +44,6 @@ class AnswerQuestionInput(BaseModel):
 
     question: str = Field(min_length=1)
     as_of: datetime
-
-
-class ExternalResearchTask(BaseModel):
-    """外部リサーチの実行単位。planner は調査目的だけを言語化する。"""
-
-    model_config = ConfigDict(frozen=True, str_strip_whitespace=True)
-
-    collection_goal: str = Field(min_length=1)
-
-
-class QuestionPlan(BaseModel):
-    """Planner が agent 内部へ返す完成済み plan。"""
-
-    model_config = ConfigDict(frozen=True)
-
-    retrieval_mode: RetrievalMode
-    internal_queries: list[str] = Field(default_factory=list)
-    external_research_tasks: list[ExternalResearchTask] = Field(default_factory=list)
-    target_time_window: str | None = None
-    reason: str = Field(min_length=1)
-
-    @classmethod
-    def from_draft(
-        cls,
-        draft: QuestionPlanDraft,
-        *,
-        fallback_query: str,
-    ) -> Self:
-        """LLM draft を完成済み plan に整える。"""
-
-        match draft.retrieval_mode:
-            case "none":
-                return cls(
-                    retrieval_mode="none",
-                    internal_queries=[],
-                    external_research_tasks=[],
-                    target_time_window=draft.target_time_window,
-                    reason=draft.reason,
-                )
-            case "internal":
-                return cls(
-                    retrieval_mode="internal",
-                    internal_queries=_clean_plan_queries(draft.internal_queries)
-                    or [fallback_query],
-                    external_research_tasks=[],
-                    target_time_window=draft.target_time_window,
-                    reason=draft.reason,
-                )
-            case "external":
-                return cls(
-                    retrieval_mode="external",
-                    internal_queries=[],
-                    external_research_tasks=_clean_external_research_tasks(
-                        draft.external_collection_goals
-                    )
-                    or [_default_external_research_task(fallback_query)],
-                    target_time_window=draft.target_time_window,
-                    reason=draft.reason,
-                )
-            case "internal_and_external":
-                return cls(
-                    retrieval_mode="internal_and_external",
-                    internal_queries=_clean_plan_queries(draft.internal_queries)
-                    or [fallback_query],
-                    external_research_tasks=_clean_external_research_tasks(
-                        draft.external_collection_goals
-                    )
-                    or [_default_external_research_task(fallback_query)],
-                    target_time_window=draft.target_time_window,
-                    reason=draft.reason,
-                )
-
-    @classmethod
-    def safe_fallback(cls, *, fallback_query: str) -> Self:
-        """Planner が使えない時の安全側 fallback plan。"""
-
-        return cls(
-            retrieval_mode="internal",
-            internal_queries=[fallback_query],
-            external_research_tasks=[],
-            reason="planner output invalid; defaulted to internal retrieval",
-        )
-
-    @model_validator(mode="after")
-    def _validate_completed_plan(self) -> Self:
-        if not _all_queries_clean(self.internal_queries):
-            raise ValueError("question plan queries must be non-empty strings")
-        if len(self.external_research_tasks) > EXTERNAL_RESEARCH_TASK_LIMIT:
-            raise ValueError("external research tasks exceed limit")
-        if not _external_task_goals_unique(self.external_research_tasks):
-            raise ValueError("external research task goals must be unique")
-        match self.retrieval_mode:
-            case "none":
-                if self.internal_queries or self.external_research_tasks:
-                    raise ValueError("none plan cannot include retrieval queries")
-            case "internal":
-                if not self.internal_queries or self.external_research_tasks:
-                    raise ValueError("internal plan requires internal queries only")
-            case "external":
-                if self.internal_queries or not self.external_research_tasks:
-                    raise ValueError(
-                        "external plan requires external research tasks only"
-                    )
-            case "internal_and_external":
-                if not self.internal_queries or not self.external_research_tasks:
-                    raise ValueError(
-                        "internal_and_external plan requires internal queries "
-                        "and external research tasks"
-                    )
-        return self
-
-
-def _clean_plan_queries(queries: list[str]) -> list[str]:
-    return [cleaned for query in queries if (cleaned := query.strip())]
-
-
-def _all_queries_clean(queries: list[str]) -> bool:
-    return all(bool(query.strip()) for query in queries)
-
-
-def _clean_external_research_tasks(goals: list[str]) -> list[ExternalResearchTask]:
-    cleaned_tasks: list[ExternalResearchTask] = []
-    seen_goals: set[str] = set()
-    for goal in goals:
-        collection_goal = goal.strip()
-        if not collection_goal or collection_goal in seen_goals:
-            continue
-        cleaned_tasks.append(ExternalResearchTask(collection_goal=collection_goal))
-        seen_goals.add(collection_goal)
-        if len(cleaned_tasks) >= EXTERNAL_RESEARCH_TASK_LIMIT:
-            break
-    return cleaned_tasks
-
-
-def _default_external_research_task(fallback_query: str) -> ExternalResearchTask:
-    return ExternalResearchTask(collection_goal=fallback_query)
-
-
-def _external_task_goals_unique(tasks: list[ExternalResearchTask]) -> bool:
-    goals = [task.collection_goal for task in tasks]
-    return len(goals) == len(set(goals))
 
 
 class AnswerRetrievalSummary(BaseModel):

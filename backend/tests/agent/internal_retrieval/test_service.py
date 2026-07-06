@@ -8,7 +8,6 @@ from typing import Any
 import pytest
 from logfire.testing import CaptureLogfire
 
-from app.agent.contract import ExternalResearchTask, QuestionPlan, RetrievalMode
 from app.agent.internal_retrieval.article_search import (
     InternalArticleContent,
     InternalArticleSearchHit,
@@ -34,31 +33,8 @@ def _vector(value: float = 0.1) -> EmbeddingVector:
     return EmbeddingVector(root=tuple([value] * EMBEDDING_DIMENSION))
 
 
-def _plan(
-    mode: RetrievalMode,
-    *,
-    internal_queries: list[str] | None = None,
-    external_research_tasks: list[ExternalResearchTask] | None = None,
-) -> QuestionPlan:
-    if mode == "internal" and internal_queries is None:
-        internal_queries = ["internal query"]
-    if mode == "external" and external_research_tasks is None:
-        external_research_tasks = [_external_task()]
-    if mode == "internal_and_external":
-        internal_queries = internal_queries or ["internal query"]
-        external_research_tasks = external_research_tasks or [_external_task()]
-    return QuestionPlan(
-        retrieval_mode=mode,
-        internal_queries=internal_queries or [],
-        external_research_tasks=external_research_tasks or [],
-        reason="test reason",
-    )
-
-
-def _external_task(
-    collection_goal: str = "外部根拠を確認する",
-) -> ExternalResearchTask:
-    return ExternalResearchTask(collection_goal=collection_goal)
+def _queries(*queries: str) -> InternalSearchQueries:
+    return InternalSearchQueries(queries=queries)
 
 
 class FakeInternalQueryEmbedder:
@@ -176,19 +152,14 @@ def _metric_attributes(
 
 
 class TestInternalSearchService:
-    async def test_internal_plan_embeds_normalized_queries(
+    async def test_embed_queries_embeds_normalized_queries(
         self,
         capfire: CaptureLogfire,
     ) -> None:
         embedder = FakeInternalQueryEmbedder()
         service = InternalSearchService(embedder=embedder)
 
-        embeddings = await service.embed_plan_queries(
-            _plan(
-                "internal",
-                internal_queries=["  NVIDIA  ", "nvidia", "OpenAI", "Apple", "Google"],
-            )
-        )
+        embeddings = await service.embed_queries(_queries("NVIDIA", "OpenAI", "Apple"))
 
         assert [embedding.query for embedding in embeddings] == [
             "NVIDIA",
@@ -204,35 +175,6 @@ class TestInternalSearchService:
             {"result": "succeeded", "query_count": 3}
         ]
 
-    async def test_internal_and_external_plan_embeds_internal_queries(self) -> None:
-        embedder = FakeInternalQueryEmbedder()
-        service = InternalSearchService(embedder=embedder)
-
-        embeddings = await service.embed_plan_queries(
-            _plan("internal_and_external", internal_queries=["NVIDIA"])
-        )
-
-        assert [embedding.query for embedding in embeddings] == ["NVIDIA"]
-        assert [call.queries for call in embedder.calls] == [("NVIDIA",)]
-
-    async def test_none_plan_skips_query_embedding(self) -> None:
-        embedder = FakeInternalQueryEmbedder()
-        service = InternalSearchService(embedder=embedder)
-
-        embeddings = await service.embed_plan_queries(_plan("none"))
-
-        assert embeddings == []
-        assert embedder.calls == []
-
-    async def test_external_plan_skips_query_embedding(self) -> None:
-        embedder = FakeInternalQueryEmbedder()
-        service = InternalSearchService(embedder=embedder)
-
-        embeddings = await service.embed_plan_queries(_plan("external"))
-
-        assert embeddings == []
-        assert embedder.calls == []
-
     async def test_empty_embedder_result_records_empty_metric(
         self,
         capfire: CaptureLogfire,
@@ -240,9 +182,7 @@ class TestInternalSearchService:
         embedder = FakeInternalQueryEmbedder(empty_result=True)
         service = InternalSearchService(embedder=embedder)
 
-        embeddings = await service.embed_plan_queries(
-            _plan("internal", internal_queries=["NVIDIA"])
-        )
+        embeddings = await service.embed_queries(_queries("NVIDIA"))
 
         assert embeddings == []
         metrics = collected_metrics(capfire)
@@ -259,9 +199,7 @@ class TestInternalSearchService:
         service = InternalSearchService(embedder=embedder)
 
         with pytest.raises(RuntimeError, match="embedder down"):
-            await service.embed_plan_queries(
-                _plan("internal", internal_queries=["NVIDIA secret query"])
-            )
+            await service.embed_queries(_queries("NVIDIA secret query"))
 
         metrics = collected_metrics(capfire)
         assert sum_counter_for_result(metrics, _METRIC, "failed") == 1
@@ -271,7 +209,7 @@ class TestInternalSearchService:
         dumped = json.dumps(metrics, default=str, ensure_ascii=False)
         assert "NVIDIA secret query" not in dumped
 
-    async def test_embed_plan_queries_uses_cache_hit_without_embedder(self) -> None:
+    async def test_embed_queries_uses_cache_hit_without_embedder(self) -> None:
         embedder = FakeInternalQueryEmbedder()
         cache = FakeQueryEmbeddingCache(cached={"NVIDIA": _vector(0.8)})
         service = InternalSearchService(
@@ -279,9 +217,7 @@ class TestInternalSearchService:
             query_embedding_cache=cache,
         )
 
-        embeddings = await service.embed_plan_queries(
-            _plan("internal", internal_queries=["NVIDIA"])
-        )
+        embeddings = await service.embed_queries(_queries("NVIDIA"))
 
         assert [embedding.query for embedding in embeddings] == ["NVIDIA"]
         assert embeddings[0].vector.to_list()[0] == pytest.approx(0.8)
@@ -289,7 +225,7 @@ class TestInternalSearchService:
         assert [call.queries for call in cache.fetch_calls] == [("NVIDIA",)]
         assert cache.store_calls == []
 
-    async def test_embed_plan_queries_embeds_only_cache_misses_and_stores_them(
+    async def test_embed_queries_embeds_only_cache_misses_and_stores_them(
         self,
     ) -> None:
         embedder = FakeInternalQueryEmbedder()
@@ -299,9 +235,7 @@ class TestInternalSearchService:
             query_embedding_cache=cache,
         )
 
-        embeddings = await service.embed_plan_queries(
-            _plan("internal", internal_queries=["NVIDIA", "OpenAI"])
-        )
+        embeddings = await service.embed_queries(_queries("NVIDIA", "OpenAI"))
 
         assert [embedding.query for embedding in embeddings] == ["NVIDIA", "OpenAI"]
         assert [call.queries for call in embedder.calls] == [("OpenAI",)]
@@ -318,9 +252,7 @@ class TestInternalSearchService:
             query_embedding_cache=cache,
         )
 
-        embeddings = await service.embed_plan_queries(
-            _plan("internal", internal_queries=["NVIDIA"])
-        )
+        embeddings = await service.embed_queries(_queries("NVIDIA"))
 
         assert [embedding.query for embedding in embeddings] == ["NVIDIA"]
         assert [call.queries for call in embedder.calls] == [("NVIDIA",)]
@@ -338,16 +270,14 @@ class TestInternalSearchService:
             query_embedding_cache=cache,
         )
 
-        embeddings = await service.embed_plan_queries(
-            _plan("internal", internal_queries=["NVIDIA"])
-        )
+        embeddings = await service.embed_queries(_queries("NVIDIA"))
 
         assert [embedding.query for embedding in embeddings] == ["NVIDIA"]
         assert [stored.query for stored in cache.store_calls] == ["NVIDIA"]
         metrics = collected_metrics(capfire)
         assert sum_counter_for_result(metrics, _CACHE_METRIC, "save_failed") == 1
 
-    async def test_search_plan_articles_searches_with_embedded_internal_queries(
+    async def test_search_articles_searches_with_embedded_internal_queries(
         self,
     ) -> None:
         embedder = FakeInternalQueryEmbedder()
@@ -366,8 +296,8 @@ class TestInternalSearchService:
             article_search_repository=search_repo,
         )
 
-        hits = await service.search_plan_articles(
-            _plan("internal", internal_queries=["NVIDIA", "OpenAI"]),
+        hits = await service.search_articles(
+            _queries("NVIDIA", "OpenAI"),
             per_query_limit=4,
             limit=5,
         )
@@ -378,21 +308,7 @@ class TestInternalSearchService:
             ("OpenAI", 4),
         ]
 
-    async def test_search_plan_articles_skips_non_internal_modes(self) -> None:
-        embedder = FakeInternalQueryEmbedder()
-        search_repo = FakeArticleVectorSearchRepository({})
-        service = InternalSearchService(
-            embedder=embedder,
-            article_search_repository=search_repo,
-        )
-
-        hits = await service.search_plan_articles(_plan("external"))
-
-        assert hits == []
-        assert embedder.calls == []
-        assert search_repo.calls == []
-
-    async def test_search_plan_articles_dedupes_by_curation_id_with_min_distance(
+    async def test_search_articles_dedupes_by_curation_id_with_min_distance(
         self,
     ) -> None:
         embedder = FakeInternalQueryEmbedder()
@@ -412,8 +328,8 @@ class TestInternalSearchService:
             article_search_repository=search_repo,
         )
 
-        hits = await service.search_plan_articles(
-            _plan("internal", internal_queries=["NVIDIA", "OpenAI"]),
+        hits = await service.search_articles(
+            _queries("NVIDIA", "OpenAI"),
             limit=10,
         )
 

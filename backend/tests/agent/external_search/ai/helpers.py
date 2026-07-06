@@ -8,9 +8,9 @@ from unittest.mock import AsyncMock, MagicMock
 import httpx
 from openai import APIStatusError
 
-from app.agent.contract import ExternalResearchTask
 from app.agent.external_search import ExternalSearchCandidate
 from app.agent.external_search.ai.spec import DEEPSEEK_QUERY_GENERATOR_SPEC
+from app.agent.planning.contract import ExternalResearchTask
 from app.shared.security.safe_url import SafeUrl
 
 DEEPSEEK_AS_OF = datetime(2026, 7, 5, tzinfo=UTC)

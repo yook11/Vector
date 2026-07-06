@@ -10,7 +10,6 @@ from app.agent.internal_retrieval.query_embedding import (
     InternalQueryEmbedder,
     InternalQueryEmbedding,
     InternalSearchQueries,
-    build_internal_search_queries,
 )
 from app.agent.internal_retrieval.query_embedding_cache import (
     QueryEmbeddingCacheRepository,
@@ -29,5 +28,4 @@ __all__ = [
     "PgVectorArticleSearchRepository",
     "QueryEmbeddingCacheRepository",
     "TransactionalQueryEmbeddingCache",
-    "build_internal_search_queries",
 ]

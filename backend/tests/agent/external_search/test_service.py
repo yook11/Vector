@@ -9,32 +9,16 @@ import pytest
 from pydantic import ValidationError
 
 import app.agent.external_search as external_search_module
-from app.agent.contract import ExternalResearchTask, QuestionPlan, RetrievalMode
 from app.agent.external_search import (
     ExternalSearchRequest,
     ExternalSearchService,
     resolve_external_search_agent_count,
 )
+from app.agent.planning.contract import ExternalResearchTask
 
 
 def _as_of() -> datetime:
     return datetime(2026, 7, 4, 9, 0, tzinfo=UTC)
-
-
-def _plan(
-    mode: RetrievalMode,
-    *,
-    external_research_tasks: list[ExternalResearchTask] | None = None,
-    target_time_window: str | None = "直近24時間",
-) -> QuestionPlan:
-    internal_queries = ["NVIDIA AI GPU"] if mode == "internal_and_external" else []
-    return QuestionPlan(
-        retrieval_mode=mode,
-        internal_queries=internal_queries,
-        external_research_tasks=external_research_tasks or [_task()],
-        target_time_window=target_time_window,
-        reason="test reason",
-    )
 
 
 def _task(
@@ -168,7 +152,7 @@ def test_resolve_external_search_agent_count_clamps_to_safe_range(
 
 
 @pytest.mark.asyncio
-async def test_search_plan_builds_outcome_from_run_result_and_reports() -> None:
+async def test_search_builds_outcome_from_run_result_and_reports() -> None:
     tasks = [
         _task("AI GPU 最新根拠を集める"),
         _task("Blackwell の最新根拠を集める"),
@@ -187,10 +171,10 @@ async def test_search_plan_builds_outcome_from_run_result_and_reports() -> None:
         _run_result(evidence=evidence, task_reports=reports)
     )
     service = ExternalSearchService(runner=runner)
-    plan = _plan("external", external_research_tasks=tasks)
 
-    outcome = await service.search_plan(
-        plan,
+    outcome = await service.search(
+        tasks,
+        target_time_window="直近24時間",
         as_of=_as_of(),
         requested_agent_count=4,
     )
@@ -213,7 +197,7 @@ async def test_search_plan_builds_outcome_from_run_result_and_reports() -> None:
 
 
 @pytest.mark.asyncio
-async def test_search_plan_defaults_count_to_task_count_with_cap() -> None:
+async def test_search_defaults_count_to_task_count_with_cap() -> None:
     tasks = [
         _task("AI GPU 最新根拠を集める"),
         _task("Blackwell の最新根拠を集める"),
@@ -222,12 +206,14 @@ async def test_search_plan_defaults_count_to_task_count_with_cap() -> None:
     runner = FakeExternalSearchRunner()
     service = ExternalSearchService(runner=runner)
 
-    await service.search_plan(
-        _plan("external", external_research_tasks=tasks[:2]),
+    await service.search(
+        tasks[:2],
+        target_time_window=None,
         as_of=_as_of(),
     )
-    await service.search_plan(
-        _plan("external", external_research_tasks=tasks),
+    await service.search(
+        tasks,
+        target_time_window=None,
         as_of=_as_of(),
     )
 
@@ -235,15 +221,13 @@ async def test_search_plan_defaults_count_to_task_count_with_cap() -> None:
 
 
 @pytest.mark.asyncio
-async def test_search_plan_skips_runner_when_no_external_retrieval() -> None:
+async def test_search_skips_runner_when_tasks_are_empty() -> None:
     runner = FakeExternalSearchRunner()
     service = ExternalSearchService(runner=runner)
 
-    outcome = await service.search_plan(
-        QuestionPlan(
-            retrieval_mode="none",
-            reason="検索不要",
-        ),
+    outcome = await service.search(
+        [],
+        target_time_window=None,
         as_of=_as_of(),
     )
 
@@ -256,7 +240,7 @@ async def test_search_plan_skips_runner_when_no_external_retrieval() -> None:
 
 
 @pytest.mark.asyncio
-async def test_search_plan_deduplicates_cross_task_urls_without_rewriting_refs() -> (
+async def test_search_deduplicates_cross_task_urls_without_rewriting_refs() -> (
     None
 ):
     tasks = [_task("需要面を調べる"), _task("供給面を調べる")]
@@ -292,8 +276,9 @@ async def test_search_plan_deduplicates_cross_task_urls_without_rewriting_refs()
     )
     service = ExternalSearchService(runner=runner)
 
-    outcome = await service.search_plan(
-        _plan("external", external_research_tasks=tasks),
+    outcome = await service.search(
+        tasks,
+        target_time_window="直近24時間",
         as_of=_as_of(),
     )
 

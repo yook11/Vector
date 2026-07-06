@@ -13,8 +13,6 @@ from pydantic import ValidationError
 
 from app.agent.contract import (
     AnswerQuestionInput,
-    ExternalResearchTask,
-    QuestionPlan,
     RetrievalMode,
 )
 from app.agent.planning.ai.gemini import (
@@ -23,9 +21,19 @@ from app.agent.planning.ai.gemini import (
 )
 from app.agent.planning.audit import (
     PlannerAttemptFailureEvent,
+    PlannerDraftReceivedEvent,
     PlannerFinalEvent,
     PlannerOutcomeCode,
     RequestRetryDisposition,
+)
+from app.agent.planning.contract import (
+    ExternalResearchTask,
+    ExternalSearchPlan,
+    InternalAndExternalPlan,
+    InternalRetrievalPlan,
+    NoRetrievalPlan,
+    QuestionPlan,
+    safe_fallback_plan,
 )
 from app.agent.planning.plan_draft import QuestionPlanDraft
 from app.agent.planning.planner import (
@@ -63,12 +71,25 @@ def _plan(
     if mode == "internal_and_external":
         internal_queries = internal_queries or ["internal query"]
         external_research_tasks = external_research_tasks or [_external_task()]
-    return QuestionPlan(
-        retrieval_mode=mode,
-        internal_queries=internal_queries or [],
-        external_research_tasks=external_research_tasks or [],
-        reason=reason,
-    )
+    match mode:
+        case "none":
+            return NoRetrievalPlan(reason=reason)
+        case "internal":
+            return InternalRetrievalPlan(
+                internal_queries=internal_queries or [],
+                reason=reason,
+            )
+        case "external":
+            return ExternalSearchPlan(
+                external_research_tasks=external_research_tasks or [],
+                reason=reason,
+            )
+        case "internal_and_external":
+            return InternalAndExternalPlan(
+                internal_queries=internal_queries or [],
+                external_research_tasks=external_research_tasks or [],
+                reason=reason,
+            )
 
 
 def _draft(
@@ -121,19 +142,38 @@ class FakePlanner:
 class FakePlannerAuditRecorder:
     def __init__(self) -> None:
         self.attempt_failures: list[PlannerAttemptFailureEvent] = []
+        self.draft_events: list[PlannerDraftReceivedEvent] = []
         self.final_events: list[PlannerFinalEvent] = []
+        self.events: list[
+            PlannerAttemptFailureEvent | PlannerDraftReceivedEvent | PlannerFinalEvent
+        ] = []
+
+    async def record_draft_received(
+        self,
+        event: PlannerDraftReceivedEvent,
+    ) -> None:
+        self.draft_events.append(event)
+        self.events.append(event)
 
     async def record_attempt_failure(
         self,
         event: PlannerAttemptFailureEvent,
     ) -> None:
         self.attempt_failures.append(event)
+        self.events.append(event)
 
     async def record_final_event(self, event: PlannerFinalEvent) -> None:
         self.final_events.append(event)
+        self.events.append(event)
 
 
 class RaisingPlannerAuditRecorder:
+    async def record_draft_received(
+        self,
+        event: PlannerDraftReceivedEvent,
+    ) -> None:
+        raise RuntimeError("audit recorder down")
+
     async def record_attempt_failure(
         self,
         event: PlannerAttemptFailureEvent,
@@ -204,7 +244,7 @@ class TestQuestionPlanningService:
             _input("保存済みの記事からAI半導体ニュースをまとめて"),
         )
 
-        assert plan == QuestionPlan.safe_fallback(
+        assert plan == safe_fallback_plan(
             fallback_query="保存済みの記事からAI半導体ニュースをまとめて"
         )
         assert planner.previous_errors[0] is None
@@ -221,7 +261,7 @@ class TestQuestionPlanningService:
             audit_recorder=recorder,
         )
 
-        assert plan == QuestionPlan.safe_fallback(
+        assert plan == safe_fallback_plan(
             fallback_query="保存済みの記事からAI半導体ニュースをまとめて"
         )
         assert planner.previous_errors == [None]
@@ -233,6 +273,7 @@ class TestQuestionPlanningService:
             is RequestRetryDisposition.DO_NOT_RETRY_IN_REQUEST
         )
         assert failure.failure_kind == "attempt_scoped"
+        assert recorder.draft_events == []
         assert len(recorder.final_events) == 1
         final = recorder.final_events[0]
         assert final.outcome_code is PlannerOutcomeCode.FALLBACK_USED
@@ -267,6 +308,57 @@ class TestQuestionPlanningService:
         assert final.fallback_used is False
         assert final.retrieval_mode == "external"
         assert final.external_query_count == len(plan.external_research_tasks)
+        assert len(recorder.draft_events) == 1
+        draft = recorder.draft_events[0]
+        assert draft.outcome_code is PlannerOutcomeCode.DRAFT_RECEIVED
+        assert draft.attempt_number == 2
+        assert draft.draft_internal_query_count == 0
+        assert draft.draft_external_query_count == 1
+
+    @pytest.mark.asyncio
+    async def test_plan_created_audit_records_raw_draft_and_capped_final_counts(
+        self,
+    ) -> None:
+        planner = FakePlanner(
+            [
+                _draft(
+                    "internal",
+                    internal_queries=[
+                        "  NVIDIA AI GPU  ",
+                        "nvidia ai gpu",
+                        "   ",
+                        "OpenAI",
+                        "Apple",
+                    ],
+                )
+            ]
+        )
+        recorder = FakePlannerAuditRecorder()
+
+        plan = await plan_question(planner, _input(), audit_recorder=recorder)
+
+        assert isinstance(plan, InternalRetrievalPlan)
+        assert plan.internal_queries == [
+            "NVIDIA AI GPU",
+            "OpenAI",
+            "Apple",
+        ]
+        draft = recorder.draft_events[0]
+        assert draft.attempt_number == 1
+        assert draft.retrieval_mode == "internal"
+        assert draft.draft_internal_query_count == 5
+        assert draft.draft_external_query_count == 0
+        final = recorder.final_events[0]
+        assert final.internal_query_count == 3
+        assert final.external_query_count == 0
+        assert recorder.events == [draft, final]
+        dumped = json.dumps(
+            [event.model_dump(mode="json") for event in recorder.events],
+            ensure_ascii=False,
+            default=str,
+        )
+        for query_text in ("NVIDIA AI GPU", "nvidia ai gpu", "OpenAI", "Apple"):
+            assert query_text not in dumped
 
     @pytest.mark.asyncio
     async def test_fallback_after_retry_failure_records_two_attempts(self) -> None:
@@ -275,8 +367,9 @@ class TestQuestionPlanningService:
 
         plan = await plan_question(planner, _input(), audit_recorder=recorder)
 
-        assert plan == QuestionPlan.safe_fallback(fallback_query=_input().question)
+        assert plan == safe_fallback_plan(fallback_query=_input().question)
         assert [event.attempt_number for event in recorder.attempt_failures] == [1, 2]
+        assert recorder.draft_events == []
         assert len(recorder.final_events) == 1
         final = recorder.final_events[0]
         assert final.outcome_code is PlannerOutcomeCode.FALLBACK_USED
@@ -304,9 +397,7 @@ class TestQuestionPlanningService:
             audit_recorder=RaisingPlannerAuditRecorder(),
         )
 
-        assert fallback == QuestionPlan.safe_fallback(
-            fallback_query="保存済み記事で見て"
-        )
+        assert fallback == safe_fallback_plan(fallback_query="保存済み記事で見て")
 
     @pytest.mark.asyncio
     async def test_non_validation_error_propagates_without_outcome_metric(
@@ -406,7 +497,7 @@ class TestPlanQuestionCompatibility:
 
         assert plan.retrieval_mode == "internal"
         assert plan.internal_queries == ["NVIDIA"]
-        assert plan.external_research_tasks == []
+        assert "external_research_tasks" not in type(plan).model_fields
 
 
 class TestExternalUnavailableResult:
@@ -432,5 +523,5 @@ class TestExternalUnavailableResult:
         assert "内部記事" in result.answer
 
     def test_rejects_non_external_plan(self) -> None:
-        with pytest.raises(ValueError):
+        with pytest.raises(AssertionError):
             external_unavailable_result(_plan("internal"))

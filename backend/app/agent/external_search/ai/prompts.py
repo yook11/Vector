@@ -5,8 +5,8 @@ from __future__ import annotations
 from datetime import datetime
 from typing import ClassVar
 
-from app.agent.contract import ExternalResearchTask
 from app.agent.external_search.contract import ExternalSearchCandidate
+from app.agent.planning.contract import ExternalResearchTask
 from app.analysis.prompt_safety import sanitize_for_untrusted_block
 
 EXTERNAL_QUERY_GENERATOR_PROMPT = """\

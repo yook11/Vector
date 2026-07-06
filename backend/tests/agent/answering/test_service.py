@@ -9,11 +9,20 @@ import pytest
 from pydantic import ValidationError
 
 from app.agent.answering.service import QuestionPlanRetrievalService, RetrievalOutcome
-from app.agent.contract import ExternalResearchTask, QuestionPlan, RetrievalMode
+from app.agent.contract import RetrievalMode
 from app.agent.external_search import ExternalSearchOutcome
 from app.agent.internal_retrieval.article_search import (
     InternalArticleContent,
     InternalArticleSearchHit,
+)
+from app.agent.internal_retrieval.query_embedding import InternalSearchQueries
+from app.agent.planning.contract import (
+    ExternalResearchTask,
+    ExternalSearchPlan,
+    InternalAndExternalPlan,
+    InternalRetrievalPlan,
+    NoRetrievalPlan,
+    QuestionPlan,
 )
 from app.analysis.analyzed_article import InScopeAnalyzedArticle
 from app.analysis.assessment.domain.result import InScope, InScopeCategory
@@ -23,21 +32,41 @@ def _as_of() -> datetime:
     return datetime(2026, 7, 4, 9, 0, tzinfo=UTC)
 
 
-def _plan(mode: RetrievalMode) -> QuestionPlan:
+def _plan(
+    mode: RetrievalMode,
+    *,
+    internal_queries: list[str] | None = None,
+    target_time_window: str | None = None,
+) -> QuestionPlan:
     internal_queries = (
-        ["NVIDIA AI GPU 直近動向"]
+        internal_queries or ["NVIDIA AI GPU 直近動向"]
         if mode in {"internal", "internal_and_external"}
         else []
     )
     external_research_tasks = (
         [_external_task()] if mode in {"external", "internal_and_external"} else []
     )
-    return QuestionPlan(
-        retrieval_mode=mode,
-        internal_queries=internal_queries,
-        external_research_tasks=external_research_tasks,
-        reason="test reason",
-    )
+    match mode:
+        case "none":
+            return NoRetrievalPlan(reason="test reason")
+        case "internal":
+            return InternalRetrievalPlan(
+                internal_queries=internal_queries,
+                reason="test reason",
+            )
+        case "external":
+            return ExternalSearchPlan(
+                external_research_tasks=external_research_tasks,
+                target_time_window=target_time_window,
+                reason="test reason",
+            )
+        case "internal_and_external":
+            return InternalAndExternalPlan(
+                internal_queries=internal_queries,
+                external_research_tasks=external_research_tasks,
+                target_time_window=target_time_window,
+                reason="test reason",
+            )
 
 
 def _external_task(
@@ -83,13 +112,13 @@ class FakeInternalArticleRetriever:
     ) -> None:
         self._hits = list(hits)
         self._error = error
-        self.calls: list[QuestionPlan] = []
+        self.calls: list[InternalSearchQueries] = []
 
-    async def search_plan_articles(
+    async def search_articles(
         self,
-        plan: QuestionPlan,
+        queries: InternalSearchQueries,
     ) -> list[InternalArticleSearchHit]:
-        self.calls.append(plan)
+        self.calls.append(queries)
         if self._error is not None:
             raise self._error
         return list(self._hits)
@@ -98,16 +127,21 @@ class FakeInternalArticleRetriever:
 class FakeExternalPlanSearcher:
     def __init__(self, outcome: ExternalSearchOutcome | None = None) -> None:
         self._outcome = outcome or _external_outcome()
-        self.calls: list[tuple[QuestionPlan, datetime, int | None]] = []
+        self.calls: list[
+            tuple[list[ExternalResearchTask], str | None, datetime, int | None]
+        ] = []
 
-    async def search_plan(
+    async def search(
         self,
-        plan: QuestionPlan,
+        external_research_tasks: list[ExternalResearchTask],
         *,
+        target_time_window: str | None,
         as_of: datetime,
         requested_agent_count: int | None = None,
     ) -> ExternalSearchOutcome:
-        self.calls.append((plan, as_of, requested_agent_count))
+        self.calls.append(
+            (external_research_tasks, target_time_window, as_of, requested_agent_count)
+        )
         return self._outcome
 
 
@@ -139,7 +173,8 @@ async def test_retrieve_internal_preserves_search_hit_order() -> None:
     outcome = await service.retrieve(plan, as_of=_as_of())
 
     assert (
-        internal_search.calls == [plan]
+        internal_search.calls
+        == [InternalSearchQueries(queries=("NVIDIA AI GPU 直近動向",))]
         and outcome.internal_hits == hits
         and outcome.unmet_requirements == []
     )
@@ -158,6 +193,22 @@ async def test_retrieve_internal_does_not_call_external_search() -> None:
     await service.retrieve(plan, as_of=_as_of())
 
     assert external_search.calls == []
+
+
+@pytest.mark.asyncio
+async def test_retrieve_internal_passes_plan_queries_directly_to_leaf_search() -> None:
+    plan = _plan(
+        "internal",
+        internal_queries=["NVIDIA", "nvidia", "OpenAI"],
+    )
+    internal_search = FakeInternalArticleRetriever()
+    service = QuestionPlanRetrievalService(internal_search=internal_search)
+
+    await service.retrieve(plan, as_of=_as_of())
+
+    assert internal_search.calls == [
+        InternalSearchQueries(queries=("NVIDIA", "nvidia", "OpenAI"))
+    ]
 
 
 @pytest.mark.asyncio
@@ -190,7 +241,7 @@ async def test_retrieve_external_runs_external_search_when_available() -> None:
 
     assert (
         internal_search.calls == []
-        and external_search.calls == [(plan, _as_of(), 4)]
+        and external_search.calls == [([_external_task()], None, _as_of(), 4)]
         and outcome.external_search == external_search._outcome
         and outcome.unmet_requirements == []
     )
@@ -206,7 +257,8 @@ async def test_retrieve_internal_and_external_runs_internal_and_records_unmet() 
     outcome = await service.retrieve(plan, as_of=_as_of())
 
     assert (
-        internal_search.calls == [plan]
+        internal_search.calls
+        == [InternalSearchQueries(queries=("NVIDIA AI GPU 直近動向",))]
         and outcome.internal_hits == hits
         and outcome.external_search is None
         and outcome.unmet_requirements == ["external_search"]
@@ -227,8 +279,9 @@ async def test_retrieve_internal_and_external_runs_both_retrievals() -> None:
     outcome = await service.retrieve(plan, as_of=_as_of())
 
     assert (
-        internal_search.calls == [plan]
-        and external_search.calls == [(plan, _as_of(), None)]
+        internal_search.calls
+        == [InternalSearchQueries(queries=("NVIDIA AI GPU 直近動向",))]
+        and external_search.calls == [([_external_task()], None, _as_of(), None)]
         and outcome.internal_hits == hits
         and outcome.external_search == external_search._outcome
         and outcome.unmet_requirements == []

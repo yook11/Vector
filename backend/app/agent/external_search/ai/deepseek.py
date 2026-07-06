@@ -10,7 +10,6 @@ from typing import Any, Final
 from openai import AsyncOpenAI
 from pydantic import ValidationError
 
-from app.agent.contract import ExternalResearchTask
 from app.agent.external_search.ai.prompts import (
     DeepSeekEvidenceSelectorPrompt,
     DeepSeekQueryGeneratorPrompt,
@@ -26,6 +25,7 @@ from app.agent.external_search.contract import (
     ExternalQueryGenerationError,
     ExternalSearchCandidate,
 )
+from app.agent.planning.contract import ExternalResearchTask
 from app.analysis.ai_provider_errors import (
     AIProviderConfigurationError,
     AIProviderError,

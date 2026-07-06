@@ -3,11 +3,11 @@
 from __future__ import annotations
 
 import hashlib
-from collections.abc import Sequence
 from typing import Any, Protocol, Self
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from app.agent.planning.contract import MAX_INTERNAL_QUERIES
 from app.analysis.embedding.domain.value_objects import EmbeddingVector
 
 __all__ = [
@@ -15,11 +15,8 @@ __all__ = [
     "InternalQueryEmbedder",
     "InternalQueryEmbedding",
     "InternalSearchQueries",
-    "build_internal_search_queries",
     "query_hash_of",
 ]
-
-MAX_INTERNAL_QUERIES = 3
 
 
 class InternalSearchQueries(BaseModel):
@@ -47,29 +44,6 @@ class InternalSearchQueries(BaseModel):
         if any(not query for query in self.queries):
             raise ValueError("internal search queries cannot include blank queries")
         return self
-
-
-def build_internal_search_queries(raw_queries: Sequence[str]) -> InternalSearchQueries:
-    """Normalize permissive planner output into capped internal search queries."""
-
-    queries: list[str] = []
-    seen: set[str] = set()
-
-    for raw_query in raw_queries:
-        query = raw_query.strip()
-        if not query:
-            continue
-
-        key = query.casefold()
-        if key in seen:
-            continue
-
-        seen.add(key)
-        queries.append(query)
-        if len(queries) >= MAX_INTERNAL_QUERIES:
-            break
-
-    return InternalSearchQueries(queries=tuple(queries))
 
 
 def query_hash_of(text: str) -> str:

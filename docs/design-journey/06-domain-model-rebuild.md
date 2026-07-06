@@ -268,39 +268,23 @@ class Fetcher(Protocol):
 
 ソースごとに事情は違い、VentureBeat なら本文に RSS の長いほうを採り、Electrek なら RSS 本文は信用せず後段に回し、Hacker News なら本文を持たない投稿は捨てる、といった差があります。
 
-しかし、どの Fetcher も、endpoint を読み、取れた項目を FetchedArticle に写して流す骨格は同じです。その共通の流れを、すべてのソースで繰り返し定義し、ソースを一つ増やすたびに書き足していました。
+しかし、どの Fetcher も、endpoint を読み、取れた項目を FetchedArticle に写す、骨格は同じです。
+その共通の流れを、すべてのソースで繰り返し定義し、ソースを一つ増やすたびに書き足していました。
 
-本来は、ソースごとの違いは加味しつつ、処理は共通にすべきでした。そう感じて、設計を変えることにしました
-
-
-### アダプターを定義する
-
-そこで次に、`SourceAdapter` という概念を定義しました。
-Adapter は、外部ソースをどう読み、取れた値を `FetchedArticle` という共通の取得材料に写すところを担います。
-
-```python
-class SourceAdapter(Protocol):
-    """外部 source ごとの raw 取得 + 共通言語化を担う。"""
-
-    NAME: str
-    ENDPOINT_URL: str
-    completion_policy: ArticleCompletionPolicy
-
-    def collect(self) -> AsyncIterator[FetchedArticle]: ...
-```
-共通の Fetcher は ソースごとのAdapter を呼び、返ってきた `FetchedArticle` を共通の変換処理に渡すだけになります。
-そのため、ソースごとに `Ready` / `Failed` の判断を書き散らすのではなく、取得材料をどう扱うかを一か所に集められるようになりました。
+本来は、ソースごとの違いは加味しつつ、処理は共通にすべきでした。そう感じて、設計を変えることにしました。
 
 
-### ポリシーを定義する
+### 共通の流れを切り出し、固有の事情を扱う
 
-作り直しながら、ソースごとの差には共通した形があることに気づきました。
-違っていたのは、どう取得するかよりも、取れた値のうち何を信じ、何を後から補うべきかでした。
+まずソース固有の事情を分けることにしました、
+確認していくと、ソースの性質にはある程度の共通点があることに気づきます。
 
-そこで、その違いをソースごとの補完ポリシーとして定義しました。
-ソースごとにポリシーを持たせれば、取れた値をどう扱うかを、個別の処理ではなく宣言に沿って判断できると考えたのです。
+そこで `ArticleCompletionPolicy` を定義しました。
+配信している情報の扱いについて、採用する情報、HTMLから補完する情報を優先するものなどポリシーとして定義して、
+それをソースに持たせます。
 
 ```python
+# 多くのソース: title と published_at は配信 (RSS) の値を信じ、body だけ HTML から取り直す。
 DEFAULT_POLICY = ArticleCompletionPolicy(
     {
         CompletableField.title: FieldCompletionRule.observed_preferred,
@@ -309,6 +293,7 @@ DEFAULT_POLICY = ArticleCompletionPolicy(
     }
 )
 
+# sitemap / listing 系: 配信側に本物のタイトルが無く、HTML 側を正本にする。
 HTML_TITLE_POLICY = ArticleCompletionPolicy(
     {
         CompletableField.title: FieldCompletionRule.html_preferred,
@@ -316,21 +301,28 @@ HTML_TITLE_POLICY = ArticleCompletionPolicy(
         CompletableField.published_at: FieldCompletionRule.observed_preferred,
     }
 )
-
-class FeedBasedSource:
-    name = SourceName("Feed Based Source")
-    completion_policy = DEFAULT_POLICY
-
-
-class ListingBasedSource:
-    name = SourceName("Listing Based Source")
-    completion_policy = HTML_TITLE_POLICY
 ```
 
-ポリシーによって、「取れた値をどう扱うか」は共通側へ寄せられました。
+次に、`SourceAdapter` を定義しました。
+ソースごとの固有の事情をこの部分に定義することで、記事を取得するときに、このアダプターを使用すれば、固有の事情を吸収することができると考えました。
 
-けれど、「外部ソースを読み、候補を選び、取得材料に写す」という流れは、まだソース側の `collect()` に残っていました。
-そのため、コード上ではまだ「ソースがニュースを取得する」という不自然な主語になっていたのです。
+```python
+class SourceAdapter(Protocol):
+    """外部ソースごとの読み取りと、共通の取得材料への写像を担う。"""
+
+    NAME: str
+    ENDPOINT_URL: str
+    completion_policy: ArticleCompletionPolicy
+
+    def collect(self) -> AsyncIterator[FetchedArticle]: ...
+```
+
+
+
+アダプターの`collect()`を呼ぶことでソース固有の情報を加味して取得することができる
+次は
+
+だから次にやりたかったのは、この流れをソースから取り上げ、共通の関数が、ソースごとの宣言を呼び出す形にすることでした。
 
 
 ### ソースを宣言に寄せる

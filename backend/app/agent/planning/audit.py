@@ -26,6 +26,7 @@ class PlannerOutcomeCode(StrEnum):
     """Planner audit outcome codes."""
 
     ATTEMPT_FAILED = "question_plan_attempt_failed"
+    DRAFT_RECEIVED = "question_plan_draft_received"
     PLAN_CREATED = "question_plan_created"
     FALLBACK_USED = "question_plan_fallback_used"
 
@@ -74,6 +75,21 @@ class PlannerAttemptFailureEvent(BaseModel):
             ai_model=ai_model,
             prompt_version=prompt_version,
         )
+
+
+class PlannerDraftReceivedEvent(BaseModel):
+    """Planner draft-level success event recorded before plan construction."""
+
+    model_config = ConfigDict(frozen=True)
+
+    kind: Literal["agent_planner"] = "agent_planner"
+    outcome_code: PlannerOutcomeCode = PlannerOutcomeCode.DRAFT_RECEIVED
+    attempt_number: int = Field(ge=1)
+    retrieval_mode: RetrievalMode
+    draft_internal_query_count: int = Field(ge=0)
+    draft_external_query_count: int = Field(ge=0)
+    ai_model: str | None = None
+    prompt_version: str | None = None
 
 
 class PlannerFinalEvent(BaseModel):
@@ -152,6 +168,11 @@ class PlannerFinalEvent(BaseModel):
 
 class PlannerAuditRecorder(Protocol):
     """Best-effort sink for planner audit events."""
+
+    async def record_draft_received(
+        self,
+        event: PlannerDraftReceivedEvent,
+    ) -> None: ...
 
     async def record_attempt_failure(
         self,

@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from app.agent.contract import QuestionPlan
 from app.agent.external_search.contract import (
     EXTERNAL_SEARCH_AGENT_HARD_LIMIT,
     ExternalSearchEvidence,
@@ -12,6 +11,7 @@ from app.agent.external_search.contract import (
     ExternalSearchRequest,
     ExternalSearchRunner,
 )
+from app.agent.planning.contract import ExternalResearchTask
 
 __all__ = [
     "ExternalSearchService",
@@ -25,17 +25,15 @@ class ExternalSearchService:
     def __init__(self, *, runner: ExternalSearchRunner) -> None:
         self._runner = runner
 
-    async def search_plan(
+    async def search(
         self,
-        plan: QuestionPlan,
+        external_research_tasks: list[ExternalResearchTask],
         *,
+        target_time_window: str | None,
         as_of: datetime,
         requested_agent_count: int | None = None,
     ) -> ExternalSearchOutcome:
-        if plan.retrieval_mode not in {"external", "internal_and_external"}:
-            return ExternalSearchOutcome()
-
-        tasks = plan.external_research_tasks
+        tasks = external_research_tasks
         effective_agent_count = resolve_external_search_agent_count(
             task_count=len(tasks),
             requested_agent_count=requested_agent_count,
@@ -52,7 +50,7 @@ class ExternalSearchService:
             requested_agent_count=requested_agent_count,
             effective_agent_count=effective_agent_count,
             as_of=as_of,
-            target_time_window=plan.target_time_window,
+            target_time_window=target_time_window,
         )
         run_result = await self._runner.search(request)
         evidence, deduplicated_evidence_count = _deduplicate_evidence_by_url(

@@ -10,6 +10,7 @@ from app.agent.planning.ai.gemini import (
 )
 from app.agent.planning.audit import (
     PlannerAttemptFailureEvent,
+    PlannerDraftReceivedEvent,
     PlannerFinalEvent,
     PlannerOutcomeCode,
     RequestRetryDisposition,
@@ -107,6 +108,27 @@ def test_final_event_records_counts_not_query_text() -> None:
     assert payload["fallback_used"] is False
     assert payload["internal_query_count"] == 2
     assert payload["external_query_count"] == 1
+    dumped = str(payload)
+    for needle in ("NVIDIA", "OpenAI", "query text", "raw_response"):
+        assert needle not in dumped
+
+
+def test_draft_received_event_records_raw_counts_not_query_text() -> None:
+    event = PlannerDraftReceivedEvent(
+        attempt_number=2,
+        retrieval_mode="internal_and_external",
+        draft_internal_query_count=5,
+        draft_external_query_count=4,
+        ai_model="gemini-2.5-flash",
+        prompt_version="question-planner-gemini-v1",
+    )
+
+    payload = event.model_dump(mode="json")
+    assert event.outcome_code is PlannerOutcomeCode.DRAFT_RECEIVED
+    assert payload["attempt_number"] == 2
+    assert payload["retrieval_mode"] == "internal_and_external"
+    assert payload["draft_internal_query_count"] == 5
+    assert payload["draft_external_query_count"] == 4
     dumped = str(payload)
     for needle in ("NVIDIA", "OpenAI", "query text", "raw_response"):
         assert needle not in dumped

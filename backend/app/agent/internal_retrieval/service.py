@@ -5,7 +5,6 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Protocol
 
-from app.agent.contract import QuestionPlan
 from app.agent.internal_retrieval.article_search import InternalArticleSearchHit
 from app.agent.internal_retrieval.metrics import (
     record_internal_retrieval_outcome,
@@ -15,7 +14,6 @@ from app.agent.internal_retrieval.query_embedding import (
     InternalQueryEmbedder,
     InternalQueryEmbedding,
     InternalSearchQueries,
-    build_internal_search_queries,
 )
 from app.analysis.embedding.domain.value_objects import EmbeddingVector
 
@@ -51,14 +49,10 @@ class InternalSearchService:
     article_search_repository: ArticleVectorSearchRepository | None = None
     query_embedding_cache: InternalQueryEmbeddingCache | None = None
 
-    async def embed_plan_queries(
+    async def embed_queries(
         self,
-        plan: QuestionPlan,
+        queries: InternalSearchQueries,
     ) -> list[InternalQueryEmbedding]:
-        if plan.retrieval_mode not in {"internal", "internal_and_external"}:
-            return []
-
-        queries = build_internal_search_queries(plan.internal_queries)
         if not queries.queries:
             return []
 
@@ -98,9 +92,9 @@ class InternalSearchService:
         )
         return embeddings
 
-    async def search_plan_articles(
+    async def search_articles(
         self,
-        plan: QuestionPlan,
+        queries: InternalSearchQueries,
         *,
         per_query_limit: int = 5,
         limit: int = 5,
@@ -110,7 +104,7 @@ class InternalSearchService:
         if self.article_search_repository is None:
             raise RuntimeError("article_search_repository is required")
 
-        embeddings = await self.embed_plan_queries(plan)
+        embeddings = await self.embed_queries(queries)
         if not embeddings:
             return []
 

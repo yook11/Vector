@@ -12,7 +12,6 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from app.agent.answering import QuestionPlanRetrievalService
-from app.agent.contract import ExternalResearchTask, QuestionPlan
 from app.agent.external_search import (
     ExternalSearchEvidence,
     ExternalSearchOutcome,
@@ -25,7 +24,9 @@ from app.agent.external_search.ai import (
     DeepSeekEvidenceSelector,
     DeepSeekQueryGenerator,
 )
+from app.agent.internal_retrieval import InternalSearchQueries
 from app.agent.internal_retrieval.article_search import InternalArticleSearchHit
+from app.agent.planning.contract import ExternalResearchTask, ExternalSearchPlan
 from app.config import settings
 from app.shared.security.safe_http import make_safe_async_client
 
@@ -35,13 +36,11 @@ SNIPPET_DISPLAY_MAX_CHARS = 240
 
 
 class _UnreachableInternalSearch:
-    async def search_plan_articles(
+    async def search_articles(
         self,
-        plan: QuestionPlan,
+        queries: InternalSearchQueries,
     ) -> list[InternalArticleSearchHit]:
-        raise AssertionError(
-            f"internal search must not be called for {plan.retrieval_mode!r} probe"
-        )
+        raise AssertionError(f"internal search must not be called: {queries!r}")
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -69,7 +68,7 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--time-window",
         default=None,
-        help="Optional QuestionPlan.target_time_window value.",
+        help="Optional external plan target_time_window value.",
     )
     return parser
 
@@ -121,7 +120,7 @@ def _build_external_plan(
     goals: Sequence[str],
     *,
     target_time_window: str | None,
-) -> QuestionPlan:
+) -> ExternalSearchPlan:
     cleaned_goals = [goal.strip() for goal in goals if goal.strip()]
     if not cleaned_goals:
         cleaned_goals = [DEFAULT_GOAL]
@@ -130,8 +129,7 @@ def _build_external_plan(
             f"external research goals must be at most {MAX_EXTERNAL_RESEARCH_TASKS}"
         )
 
-    return QuestionPlan(
-        retrieval_mode="external",
+    return ExternalSearchPlan(
         external_research_tasks=[
             ExternalResearchTask(collection_goal=goal) for goal in cleaned_goals
         ],
@@ -143,7 +141,7 @@ def _build_external_plan(
 def _print_probe_summary(
     *,
     as_of: datetime,
-    plan: QuestionPlan,
+    plan: ExternalSearchPlan,
     requested_agent_count: int,
     outcome: ExternalSearchOutcome | None,
     unmet_requirements: Sequence[str],

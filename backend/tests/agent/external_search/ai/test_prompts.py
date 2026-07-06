@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 
-from app.agent.contract import ExternalResearchTask
 from app.agent.external_search import ExternalSearchCandidate
 from app.agent.external_search.ai.prompts import (
     EXTERNAL_EVIDENCE_SELECTOR_PROMPT,
@@ -12,6 +11,7 @@ from app.agent.external_search.ai.prompts import (
     DeepSeekEvidenceSelectorPrompt,
     DeepSeekQueryGeneratorPrompt,
 )
+from app.agent.planning.contract import ExternalResearchTask
 from app.shared.security.safe_url import SafeUrl
 
 
