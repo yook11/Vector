@@ -204,11 +204,11 @@ async def test_append_run_failed_records_error_without_counts(
 async def test_append_run_budget_exhausted_records_daily_max(
     db_session: AsyncSession,
 ) -> None:
-    """daily budget 枯渇は停止閾値 daily_max のみ保存する (保証2)。"""
+    """daily budget 枯渇は REJECTED で停止閾値 daily_max のみ保存する (保証2)。"""
     repo = BackfillAuditRepository(db_session)
 
     await repo.append_run_event(
-        event_type=EventType.SKIPPED,
+        event_type=EventType.REJECTED,
         outcome_code=BackfillOutcomeCode.RUN_DAILY_BUDGET_EXHAUSTED,
         backfill_stage="embed",
         run_id="run-3",
@@ -217,6 +217,7 @@ async def test_append_run_budget_exhausted_records_daily_max(
     await db_session.commit()
 
     row = (await db_session.execute(select(PipelineEvent))).scalars().one()
+    assert row.event_type == "rejected"
     assert row.outcome_code == "backfill_run_daily_budget_exhausted"
     assert row.payload["daily_max"] == 1500
     assert "limit" not in row.payload

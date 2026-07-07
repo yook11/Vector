@@ -192,7 +192,7 @@ async def _append_backfill_run_event(
     daily_max: int | None = None,
     exc: BaseException | None = None,
 ) -> None:
-    """run 単位の skip 制御 / 失敗監査を best-effort で焼く。"""
+    """run 単位の棄却 (予算枯渇 REJECTED) / 失敗監査を best-effort で焼く。"""
     stage = BackfillAuditRepository.stage_for(backfill_stage)
     try:
         async with session_factory() as session:
@@ -487,11 +487,13 @@ async def backfill_curations(ctx: Context = TaskiqDepends()) -> None:
                 get_redis(), "curate", found, CURATIONS_DAILY_MAX
             )
             if granted == 0:
+                # 予算上限に到達し実対象を先送り = run レベルの棄却。
+                # benign skip ではなく REJECTED で監査に残す。
                 await _append_backfill_run_event(
                     session_factory,
                     backfill_stage="curate",
                     run_id=run_id,
-                    event_type=EventType.SKIPPED,
+                    event_type=EventType.REJECTED,
                     outcome_code=BackfillOutcomeCode.RUN_DAILY_BUDGET_EXHAUSTED,
                     daily_max=CURATIONS_DAILY_MAX,
                 )
@@ -625,11 +627,13 @@ async def backfill_assessments(ctx: Context = TaskiqDepends()) -> None:
                 get_redis(), "assess", found, ASSESSMENTS_DAILY_MAX
             )
             if granted == 0:
+                # 予算上限に到達し実対象を先送り = run レベルの棄却。
+                # benign skip ではなく REJECTED で監査に残す。
                 await _append_backfill_run_event(
                     session_factory,
                     backfill_stage="assess",
                     run_id=run_id,
-                    event_type=EventType.SKIPPED,
+                    event_type=EventType.REJECTED,
                     outcome_code=BackfillOutcomeCode.RUN_DAILY_BUDGET_EXHAUSTED,
                     daily_max=ASSESSMENTS_DAILY_MAX,
                 )
@@ -761,11 +765,13 @@ async def backfill_embeddings(ctx: Context = TaskiqDepends()) -> None:
                 get_redis(), "embed", found, EMBEDDINGS_DAILY_MAX
             )
             if granted == 0:
+                # 予算上限に到達し実対象を先送り = run レベルの棄却。
+                # benign skip ではなく REJECTED で監査に残す。
                 await _append_backfill_run_event(
                     session_factory,
                     backfill_stage="embed",
                     run_id=run_id,
-                    event_type=EventType.SKIPPED,
+                    event_type=EventType.REJECTED,
                     outcome_code=BackfillOutcomeCode.RUN_DAILY_BUDGET_EXHAUSTED,
                     daily_max=EMBEDDINGS_DAILY_MAX,
                 )

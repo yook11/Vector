@@ -88,7 +88,7 @@ class BackfillAuditRepository:
         exc: BaseException | None = None,
         retryability: Retryability | None = None,
     ) -> None:
-        """run 単位の skip 制御 / 失敗を記録する (成功 summary は焼かない)。"""
+        """run 単位の棄却 (予算枯渇) / 失敗を記録する (成功 summary は焼かない)。"""
         payload = BackfillPayload(
             backfill_stage=backfill_stage,
             run_id=run_id,

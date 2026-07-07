@@ -13,7 +13,7 @@ import pytest
 from logfire.testing import CaptureLogfire
 from structlog.testing import capture_logs
 
-from app.audit.domain.event import Stage
+from app.audit.domain.event import EventType, Stage
 from app.audit.stages.backfill import BackfillOutcomeCode
 from app.queue.helpers.backlog import BackfillTarget
 from app.queue.tasks import backfill as tasks
@@ -221,8 +221,8 @@ async def test_no_targets_is_logged_not_audited(case: _TaskCase) -> None:
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("case", CASES, ids=[case.name for case in CASES])
-async def test_budget_exhausted_is_audited(case: _TaskCase) -> None:
-    """daily budget 0 は run budget-exhausted として監査される。"""
+async def test_budget_exhausted_is_rejected(case: _TaskCase) -> None:
+    """daily budget 0 は benign skip でなく REJECTED として監査される。"""
     targets = [_target(1), _target(2)]
     backlog = MagicMock()
     setattr(backlog, case.target_method, AsyncMock(return_value=targets))
@@ -245,6 +245,8 @@ async def test_budget_exhausted_is_audited(case: _TaskCase) -> None:
 
     queue_task.kiq.assert_not_called()
     assert _run_outcomes(run_audit) == [BackfillOutcomeCode.RUN_DAILY_BUDGET_EXHAUSTED]
+    # 予算枯渇は先送り = 棄却。SKIPPED でなく REJECTED を焼く。
+    assert run_audit.await_args.kwargs["event_type"] == EventType.REJECTED
     _assert_run_audit_derives_stage_from_backfill_stage(run_audit, case)
     # 停止閾値 daily_max は budget exhausted event でのみ KEEP。
     assert run_audit.await_args.kwargs["daily_max"] == case.daily_max
