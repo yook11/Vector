@@ -8,33 +8,35 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Annotated, Literal, Protocol, Self
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    StringConstraints,
+    model_validator,
+)
 
 from app.shared.security.safe_url import SafeUrl
 
 __all__ = [
-    "AnswerExecutionSummary",
     "AnswerQuestionInput",
     "AnswerQuestionResult",
     "AnswerRetrievalSummary",
     "AnswerSource",
-    "ExecutionRoute",
     "ExternalUrlSource",
     "InternalArticleSource",
+    "NonBlankText",
     "QuestionAnsweringAgent",
     "RetrievalMode",
     "UnmetRequirement",
 ]
 
 RetrievalMode = Literal["none", "internal", "external", "internal_and_external"]
-ExecutionRoute = Literal[
-    "direct",
-    "internal",
-    "external_search",
-    "internal_and_external",
-    "workers",
-]
 UnmetRequirement = Literal["internal_retrieval", "external_search"]
+NonBlankText = Annotated[
+    str,
+    StringConstraints(strip_whitespace=True, min_length=1),
+]
 
 
 class AnswerQuestionInput(BaseModel):
@@ -53,30 +55,6 @@ class AnswerRetrievalSummary(BaseModel):
 
     planned_mode: RetrievalMode
     unmet_requirements: list[UnmetRequirement] = Field(default_factory=list)
-
-
-class AnswerExecutionSummary(BaseModel):
-    """final answer が実際に引用した根拠経路の summary。"""
-
-    model_config = ConfigDict(frozen=True)
-
-    route: ExecutionRoute
-    used_internal_retrieval: bool
-    used_external_search: bool
-
-    @model_validator(mode="after")
-    def _validate_route_consistency(self) -> Self:
-        expected = {
-            "direct": (False, False),
-            "internal": (True, False),
-            "external_search": (False, True),
-            "internal_and_external": (True, True),
-        }.get(self.route)
-        if expected is None:
-            return self
-        if (self.used_internal_retrieval, self.used_external_search) != expected:
-            raise ValueError(f"{self.route} route has inconsistent retrieval flags")
-        return self
 
 
 class InternalArticleSource(BaseModel):
@@ -119,33 +97,24 @@ class AnswerQuestionResult(BaseModel):
     model_config = ConfigDict(frozen=True)
 
     status: Literal["answered", "insufficient"]
-    answer: str = Field(min_length=1)
+    answer: NonBlankText
     sources: list[AnswerSource] = Field(default_factory=list)
-    missing_aspects: list[str] = Field(default_factory=list)
+    missing_aspects: list[NonBlankText] = Field(default_factory=list)
     retrieval: AnswerRetrievalSummary
-    execution: AnswerExecutionSummary
 
     @model_validator(mode="after")
     def _validate_provenance(self) -> Self:
         if self.status == "answered":
-            if self.execution.route != "direct" and not self.sources:
+            if self.retrieval.planned_mode != "none" and not self.sources:
                 raise ValueError("non-direct answered result must include a source")
             if self.missing_aspects:
                 raise ValueError("answered result cannot include missing aspects")
             if self.retrieval.unmet_requirements:
                 raise ValueError("answered result cannot include unmet requirements")
-        has_external_source = any(
-            isinstance(source, ExternalUrlSource) for source in self.sources
-        )
-        if (
-            self.status == "answered"
-            and self.execution.used_external_search
-            and not has_external_source
-        ):
-            raise ValueError(
-                "answered result using external search must include "
-                "an external URL source"
-            )
+        if self.status == "insufficient" and not self.missing_aspects:
+            raise ValueError("insufficient result must include missing aspects")
+        if self.retrieval.planned_mode == "none" and self.sources:
+            raise ValueError("direct planned result cannot include sources")
         return self
 
 

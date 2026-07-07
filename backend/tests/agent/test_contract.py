@@ -8,11 +8,9 @@ import pytest
 from pydantic import ValidationError
 
 from app.agent.contract import (
-    AnswerExecutionSummary,
     AnswerQuestionInput,
     AnswerQuestionResult,
     AnswerRetrievalSummary,
-    ExecutionRoute,
     ExternalUrlSource,
     InternalArticleSource,
     RetrievalMode,
@@ -50,19 +48,6 @@ def _retrieval(
     )
 
 
-def _execution(
-    route: ExecutionRoute = "internal",
-    *,
-    used_internal_retrieval: bool = True,
-    used_external_search: bool = False,
-) -> AnswerExecutionSummary:
-    return AnswerExecutionSummary(
-        route=route,
-        used_internal_retrieval=used_internal_retrieval,
-        used_external_search=used_external_search,
-    )
-
-
 class TestAnswerQuestionInput:
     def test_accepts_question_and_as_of(self) -> None:
         input_ = AnswerQuestionInput(question="NVIDIA の直近動向は？", as_of=_as_of())
@@ -84,83 +69,6 @@ class TestAnswerRetrievalSummary:
 
         assert summary.planned_mode == "external"
         assert summary.unmet_requirements == ["external_search"]
-
-
-class TestAnswerExecutionSummary:
-    def test_accepts_direct_without_any_retrieval(self) -> None:
-        summary = _execution(
-            "direct",
-            used_internal_retrieval=False,
-            used_external_search=False,
-        )
-
-        assert summary.route == "direct"
-
-    def test_rejects_direct_with_internal_retrieval(self) -> None:
-        with pytest.raises(ValidationError):
-            _execution(
-                "direct",
-                used_internal_retrieval=True,
-                used_external_search=False,
-            )
-
-    def test_accepts_internal_with_internal_retrieval_only(self) -> None:
-        summary = _execution(
-            "internal",
-            used_internal_retrieval=True,
-            used_external_search=False,
-        )
-
-        assert summary.used_internal_retrieval is True
-
-    def test_rejects_internal_with_external_search(self) -> None:
-        with pytest.raises(ValidationError):
-            _execution(
-                "internal",
-                used_internal_retrieval=True,
-                used_external_search=True,
-            )
-
-    def test_accepts_external_search_with_external_search_only(self) -> None:
-        summary = _execution(
-            "external_search",
-            used_internal_retrieval=False,
-            used_external_search=True,
-        )
-
-        assert summary.used_external_search is True
-
-    def test_rejects_external_search_with_internal_retrieval(self) -> None:
-        with pytest.raises(ValidationError):
-            _execution(
-                "external_search",
-                used_internal_retrieval=True,
-                used_external_search=True,
-            )
-
-    def test_accepts_internal_and_external_with_both_retrievals(self) -> None:
-        summary = _execution(
-            "internal_and_external",
-            used_internal_retrieval=True,
-            used_external_search=True,
-        )
-
-        assert summary.route == "internal_and_external"
-
-    @pytest.mark.parametrize("used_internal_retrieval", [False, True])
-    @pytest.mark.parametrize("used_external_search", [False, True])
-    def test_workers_allows_retrieval_flags_either_way(
-        self,
-        used_internal_retrieval: bool,
-        used_external_search: bool,
-    ) -> None:
-        summary = _execution(
-            "workers",
-            used_internal_retrieval=used_internal_retrieval,
-            used_external_search=used_external_search,
-        )
-
-        assert summary.route == "workers"
 
 
 class TestSources:
@@ -187,14 +95,10 @@ class TestAnswerQuestionResult:
             status="answered",
             answer="こんにちは。何を確認しますか？",
             retrieval=_retrieval("none"),
-            execution=_execution(
-                "direct",
-                used_internal_retrieval=False,
-                used_external_search=False,
-            ),
         )
 
         assert result.sources == []
+        assert not hasattr(result, "execution")
 
     def test_accepts_internal_answered_result_with_source(self) -> None:
         result = AnswerQuestionResult(
@@ -202,14 +106,19 @@ class TestAnswerQuestionResult:
             answer="内部記事から確認できました。",
             sources=[_internal_source()],
             retrieval=_retrieval("internal"),
-            execution=_execution(
-                "internal",
-                used_internal_retrieval=True,
-                used_external_search=False,
-            ),
         )
 
         assert result.status == "answered"
+
+    def test_accepts_insufficient_without_sources_when_missing_is_present(self) -> None:
+        result = AnswerQuestionResult(
+            status="insufficient",
+            answer="確認できた範囲では断定できません。",
+            missing_aspects=["企業側の一次情報"],
+            retrieval=_retrieval("internal"),
+        )
+
+        assert result.sources == []
 
     def test_rejects_non_direct_answered_result_without_sources(self) -> None:
         with pytest.raises(ValidationError):
@@ -217,11 +126,6 @@ class TestAnswerQuestionResult:
                 status="answered",
                 answer="確認できました。",
                 retrieval=_retrieval("internal"),
-                execution=_execution(
-                    "internal",
-                    used_internal_retrieval=True,
-                    used_external_search=False,
-                ),
             )
 
     def test_rejects_answered_result_with_missing_aspects(self) -> None:
@@ -232,11 +136,6 @@ class TestAnswerQuestionResult:
                 sources=[_internal_source()],
                 missing_aspects=["企業側の一次情報"],
                 retrieval=_retrieval("internal"),
-                execution=_execution(
-                    "internal",
-                    used_internal_retrieval=True,
-                    used_external_search=False,
-                ),
             )
 
     def test_rejects_answered_result_with_unmet_requirements(self) -> None:
@@ -244,86 +143,43 @@ class TestAnswerQuestionResult:
             AnswerQuestionResult(
                 status="answered",
                 answer="確認できました。",
+                sources=[_external_source()],
                 retrieval=_retrieval("external", ["external_search"]),
-                execution=_execution(
-                    "direct",
-                    used_internal_retrieval=False,
-                    used_external_search=False,
-                ),
             )
 
-    def test_rejects_answered_external_search_result_without_external_source(
-        self,
-    ) -> None:
+    def test_rejects_direct_planned_mode_with_sources(self) -> None:
         with pytest.raises(ValidationError):
             AnswerQuestionResult(
                 status="answered",
-                answer="外部検索も確認しました。",
+                answer="検索なし回答です。",
                 sources=[_internal_source()],
-                retrieval=_retrieval("external"),
-                execution=_execution(
-                    "external_search",
-                    used_internal_retrieval=False,
-                    used_external_search=True,
-                ),
+                retrieval=_retrieval("none"),
             )
 
-    def test_accepts_external_search_result_with_external_source(self) -> None:
-        result = AnswerQuestionResult(
-            status="answered",
-            answer="外部ニュースも確認しました。",
-            sources=[_internal_source(), _external_source()],
-            retrieval=_retrieval("external"),
-            execution=_execution(
-                "external_search",
-                used_internal_retrieval=False,
-                used_external_search=True,
-            ),
-        )
-
-        assert any(isinstance(source, ExternalUrlSource) for source in result.sources)
-
-    def test_accepts_external_unavailable_insufficient_without_sources(self) -> None:
-        result = AnswerQuestionResult(
-            status="insufficient",
-            answer="この質問には外部最新情報の確認が必要です。",
-            missing_aspects=["外部ニュース検索"],
-            retrieval=_retrieval("external", ["external_search"]),
-            execution=_execution(
-                "direct",
-                used_internal_retrieval=False,
-                used_external_search=False,
-            ),
-        )
-
-        assert result.sources == []
-        assert result.retrieval.unmet_requirements == ["external_search"]
-        assert result.execution.route == "direct"
-
-    def test_accepts_insufficient_without_sources(self) -> None:
-        result = AnswerQuestionResult(
-            status="insufficient",
-            answer="確認できた範囲では断定できません。",
-            missing_aspects=["企業側の一次情報"],
-            retrieval=_retrieval("internal"),
-            execution=_execution(
-                "internal",
-                used_internal_retrieval=True,
-                used_external_search=False,
-            ),
-        )
-
-        assert result.sources == []
-
-    def test_rejects_empty_answer_even_when_insufficient(self) -> None:
+    def test_rejects_insufficient_without_missing_aspects(self) -> None:
         with pytest.raises(ValidationError):
             AnswerQuestionResult(
                 status="insufficient",
-                answer="",
+                answer="確認できた範囲では断定できません。",
                 retrieval=_retrieval("internal"),
-                execution=_execution(
-                    "internal",
-                    used_internal_retrieval=True,
-                    used_external_search=False,
-                ),
+            )
+
+    @pytest.mark.parametrize("answer", ["", "   ", "\n"])
+    def test_rejects_blank_answer(self, answer: str) -> None:
+        with pytest.raises(ValidationError):
+            AnswerQuestionResult(
+                status="insufficient",
+                answer=answer,
+                missing_aspects=["企業側の一次情報"],
+                retrieval=_retrieval("internal"),
+            )
+
+    @pytest.mark.parametrize("missing", ["", "   ", "\n"])
+    def test_rejects_blank_missing_aspect(self, missing: str) -> None:
+        with pytest.raises(ValidationError):
+            AnswerQuestionResult(
+                status="insufficient",
+                answer="確認できた範囲では断定できません。",
+                missing_aspects=[missing],
+                retrieval=_retrieval("internal"),
             )

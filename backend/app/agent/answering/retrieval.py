@@ -16,8 +16,7 @@ from app.agent.planning.contract import (
     ExternalSearchPlan,
     InternalAndExternalPlan,
     InternalRetrievalPlan,
-    NoRetrievalPlan,
-    QuestionPlan,
+    RetrievalPlan,
 )
 
 __all__ = [
@@ -66,7 +65,7 @@ class RetrievalOutcome(BaseModel):
 
 
 class QuestionPlanRetrievalService:
-    """QuestionPlan を読んで internal/external retrieval を起動する工程。"""
+    """RetrievalPlan を読んで internal/external retrieval を起動する工程。"""
 
     def __init__(
         self,
@@ -81,13 +80,11 @@ class QuestionPlanRetrievalService:
 
     async def retrieve(
         self,
-        plan: QuestionPlan,
+        plan: RetrievalPlan,
         *,
         as_of: datetime,
     ) -> RetrievalOutcome:
         match plan:
-            case NoRetrievalPlan():
-                return RetrievalOutcome()
             case InternalRetrievalPlan(internal_queries=internal_queries):
                 hits = await self._internal_search.search_articles(
                     InternalSearchQueries(queries=tuple(internal_queries))

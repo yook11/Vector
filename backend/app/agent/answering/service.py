@@ -3,23 +3,21 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Protocol, assert_never
+from typing import Literal, Protocol, assert_never
 
+from app.agent.answering.direct import DirectAnswerer
 from app.agent.answering.evidence import AnswerEvidenceItem, normalize_answer_evidence
 from app.agent.answering.retrieval import RetrievalOutcome
 from app.agent.answering.synthesis import (
     AnswerDraft,
     AnswerDraftInvalidError,
-    AnswerSynthesizer,
+    EvidenceAnswerSynthesizer,
 )
 from app.agent.contract import (
-    AnswerExecutionSummary,
     AnswerQuestionInput,
     AnswerQuestionResult,
     AnswerRetrievalSummary,
     AnswerSource,
-    ExternalUrlSource,
-    InternalArticleSource,
     UnmetRequirement,
 )
 from app.agent.planning.contract import (
@@ -27,7 +25,7 @@ from app.agent.planning.contract import (
     InternalAndExternalPlan,
     InternalRetrievalPlan,
     NoRetrievalPlan,
-    QuestionPlan,
+    RetrievalPlan,
 )
 from app.agent.planning.planner import QuestionPlanner
 
@@ -44,7 +42,7 @@ _UNMET_REQUIREMENT_MISSING: dict[UnmetRequirement, str] = {
 class QuestionPlanRetriever(Protocol):
     async def retrieve(
         self,
-        plan: QuestionPlan,
+        plan: RetrievalPlan,
         *,
         as_of: datetime,
     ) -> RetrievalOutcome: ...
@@ -58,19 +56,51 @@ class QuestionAnsweringService:
         *,
         planner: QuestionPlanner,
         retriever: QuestionPlanRetriever,
-        synthesizer: AnswerSynthesizer,
+        synthesizer: EvidenceAnswerSynthesizer,
+        direct_answerer: DirectAnswerer,
     ) -> None:
         self._planner = planner
         self._retriever = retriever
         self._synthesizer = synthesizer
+        self._direct_answerer = direct_answerer
 
     async def answer(self, input: AnswerQuestionInput) -> AnswerQuestionResult:
         plan = await self._planner.plan(input)
+        match plan:
+            case NoRetrievalPlan():
+                draft = await self._direct_answerer.answer(
+                    question=input.question,
+                    as_of=input.as_of,
+                )
+                return AnswerQuestionResult(
+                    status="answered",
+                    answer=draft.answer,
+                    sources=[],
+                    missing_aspects=[],
+                    retrieval=AnswerRetrievalSummary(
+                        planned_mode="none",
+                        unmet_requirements=[],
+                    ),
+                )
+            case (
+                InternalRetrievalPlan()
+                | ExternalSearchPlan()
+                | InternalAndExternalPlan()
+            ):
+                return await self._answer_with_evidence(input=input, plan=plan)
+        assert_never(plan)
+
+    async def _answer_with_evidence(
+        self,
+        *,
+        input: AnswerQuestionInput,
+        plan: RetrievalPlan,
+    ) -> AnswerQuestionResult:
         outcome = await self._retriever.retrieve(plan, as_of=input.as_of)
         evidence = normalize_answer_evidence(outcome)
 
-        if not _is_direct_plan(plan) and not evidence:
-            return _assemble_result(
+        if not evidence:
+            return _assemble_evidence_result(
                 plan=plan,
                 outcome=outcome,
                 answer=_NO_EVIDENCE_ANSWER,
@@ -86,15 +116,15 @@ class QuestionAnsweringService:
             as_of=input.as_of,
             target_time_window=_plan_target_time_window(plan),
         )
-        _validate_draft_citations(plan=plan, evidence=evidence, draft=draft)
+        _validate_draft_citations(evidence=evidence, draft=draft)
         sources = _sources_for_citations(evidence=evidence, cited_refs=draft.cited_refs)
-        status = (
+        status: Literal["answered", "insufficient"] = (
             "insufficient"
             if outcome.unmet_requirements or draft.sufficiency == "insufficient"
             else "answered"
         )
 
-        return _assemble_result(
+        return _assemble_evidence_result(
             plan=plan,
             outcome=outcome,
             answer=draft.answer,
@@ -105,27 +135,17 @@ class QuestionAnsweringService:
         )
 
 
-def _is_direct_plan(plan: QuestionPlan) -> bool:
-    match plan:
-        case NoRetrievalPlan():
-            return True
-        case InternalRetrievalPlan() | ExternalSearchPlan() | InternalAndExternalPlan():
-            return False
-    assert_never(plan)
-
-
-def _plan_target_time_window(plan: QuestionPlan) -> str | None:
+def _plan_target_time_window(plan: RetrievalPlan) -> str | None:
     match plan:
         case ExternalSearchPlan() | InternalAndExternalPlan():
             return plan.target_time_window
-        case NoRetrievalPlan() | InternalRetrievalPlan():
+        case InternalRetrievalPlan():
             return None
     assert_never(plan)
 
 
 def _validate_draft_citations(
     *,
-    plan: QuestionPlan,
     evidence: list[AnswerEvidenceItem],
     draft: AnswerDraft,
 ) -> None:
@@ -133,12 +153,6 @@ def _validate_draft_citations(
     unknown_refs = [ref for ref in draft.cited_refs if ref not in existing_refs]
     if unknown_refs:
         raise AnswerDraftInvalidError(f"unknown citation ref: {unknown_refs[0]}")
-    if (
-        not _is_direct_plan(plan)
-        and draft.sufficiency == "answered"
-        and not draft.cited_refs
-    ):
-        raise AnswerDraftInvalidError("answered draft requires at least one citation")
 
 
 def _sources_for_citations(
@@ -150,18 +164,16 @@ def _sources_for_citations(
     return [item.source for item in evidence if item.source.source_ref in cited_ref_set]
 
 
-def _assemble_result(
+def _assemble_evidence_result(
     *,
-    plan: QuestionPlan,
+    plan: RetrievalPlan,
     outcome: RetrievalOutcome,
     answer: str,
     sources: list[AnswerSource],
     draft_missing_aspects: list[str],
-    status: str,
+    status: Literal["answered", "insufficient"],
     include_retrieval_empty_missing: bool,
 ) -> AnswerQuestionResult:
-    used_internal = any(isinstance(source, InternalArticleSource) for source in sources)
-    used_external = any(isinstance(source, ExternalUrlSource) for source in sources)
     missing_aspects: list[str] = []
     if status == "insufficient":
         missing_aspects = _missing_aspects(
@@ -178,14 +190,6 @@ def _assemble_result(
         retrieval=AnswerRetrievalSummary(
             planned_mode=plan.retrieval_mode,
             unmet_requirements=outcome.unmet_requirements,
-        ),
-        execution=AnswerExecutionSummary(
-            route=_route_for_usage(
-                used_internal=used_internal,
-                used_external=used_external,
-            ),
-            used_internal_retrieval=used_internal,
-            used_external_search=used_external,
         ),
     )
 
@@ -229,20 +233,3 @@ def _deduplicate(values: list[str]) -> list[str]:
         result.append(value)
         seen.add(value)
     return result
-
-
-def _route_for_usage(
-    *,
-    used_internal: bool,
-    used_external: bool,
-) -> str:
-    match (used_internal, used_external):
-        case (False, False):
-            return "direct"
-        case (True, False):
-            return "internal"
-        case (False, True):
-            return "external_search"
-        case (True, True):
-            return "internal_and_external"
-    assert_never((used_internal, used_external))

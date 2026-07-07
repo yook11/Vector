@@ -1,5 +1,6 @@
 """Question planning package."""
 
+from app.agent.planning.contract import RetrievalPlan
 from app.agent.planning.plan_draft import QuestionPlanDraft
 from app.agent.planning.planner import (
     QuestionPlanner,
@@ -15,5 +16,6 @@ __all__ = [
     "QuestionPlanDraftGenerator",
     "QuestionPlanningService",
     "QuestionPlanner",
+    "RetrievalPlan",
     "plan_question",
 ]

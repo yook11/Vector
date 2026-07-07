@@ -1,5 +1,6 @@
 """Question answering package."""
 
+from app.agent.answering.direct import DirectAnswerDraft, DirectAnswerer
 from app.agent.answering.evidence import (
     AnswerEvidenceItem,
     normalize_answer_evidence,
@@ -14,14 +15,16 @@ from app.agent.answering.service import QuestionAnsweringService, QuestionPlanRe
 from app.agent.answering.synthesis import (
     AnswerDraft,
     AnswerDraftInvalidError,
-    AnswerSynthesizer,
+    EvidenceAnswerSynthesizer,
 )
 
 __all__ = [
     "AnswerDraft",
     "AnswerDraftInvalidError",
     "AnswerEvidenceItem",
-    "AnswerSynthesizer",
+    "DirectAnswerDraft",
+    "DirectAnswerer",
+    "EvidenceAnswerSynthesizer",
     "ExternalPlanSearcher",
     "InternalArticleRetriever",
     "QuestionAnsweringService",

@@ -4,12 +4,12 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from datetime import UTC, datetime
+from typing import Literal
 
 import pytest
 from pydantic import ValidationError
 
 from app.agent.answering.retrieval import QuestionPlanRetrievalService, RetrievalOutcome
-from app.agent.contract import RetrievalMode
 from app.agent.external_search import ExternalSearchOutcome
 from app.agent.internal_retrieval.article_search import (
     InternalArticleContent,
@@ -21,8 +21,7 @@ from app.agent.planning.contract import (
     ExternalSearchPlan,
     InternalAndExternalPlan,
     InternalRetrievalPlan,
-    NoRetrievalPlan,
-    QuestionPlan,
+    RetrievalPlan,
 )
 from app.analysis.analyzed_article import InScopeAnalyzedArticle
 from app.analysis.assessment.domain.result import InScope, InScopeCategory
@@ -33,11 +32,11 @@ def _as_of() -> datetime:
 
 
 def _plan(
-    mode: RetrievalMode,
+    mode: Literal["internal", "external", "internal_and_external"],
     *,
     internal_queries: list[str] | None = None,
     target_time_window: str | None = None,
-) -> QuestionPlan:
+) -> RetrievalPlan:
     internal_queries = (
         internal_queries or ["NVIDIA AI GPU 直近動向"]
         if mode in {"internal", "internal_and_external"}
@@ -47,8 +46,6 @@ def _plan(
         [_external_task()] if mode in {"external", "internal_and_external"} else []
     )
     match mode:
-        case "none":
-            return NoRetrievalPlan(reason="test reason")
         case "internal":
             return InternalRetrievalPlan(
                 internal_queries=internal_queries,
@@ -143,20 +140,6 @@ class FakeExternalPlanSearcher:
             (external_research_tasks, target_time_window, as_of, requested_agent_count)
         )
         return self._outcome
-
-
-@pytest.mark.asyncio
-async def test_retrieve_none_skips_internal_search_and_returns_empty_outcome() -> None:
-    internal_search = FakeInternalArticleRetriever()
-    service = QuestionPlanRetrievalService(internal_search=internal_search)
-
-    outcome = await service.retrieve(_plan("none"), as_of=_as_of())
-
-    assert (
-        internal_search.calls == []
-        and outcome.internal_hits == []
-        and outcome.unmet_requirements == []
-    )
 
 
 @pytest.mark.asyncio

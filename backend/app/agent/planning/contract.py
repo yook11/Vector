@@ -19,6 +19,7 @@ __all__ = [
     "NoRetrievalPlan",
     "PlanQuery",
     "QuestionPlan",
+    "RetrievalPlan",
     "plan_from_draft",
     "safe_fallback_plan",
 ]
@@ -106,12 +107,10 @@ class InternalAndExternalPlan(BaseModel):
         return self
 
 
-type QuestionPlan = (
-    NoRetrievalPlan
-    | InternalRetrievalPlan
-    | ExternalSearchPlan
-    | InternalAndExternalPlan
+type RetrievalPlan = (
+    InternalRetrievalPlan | ExternalSearchPlan | InternalAndExternalPlan
 )
+type QuestionPlan = NoRetrievalPlan | RetrievalPlan
 
 
 def plan_from_draft(
