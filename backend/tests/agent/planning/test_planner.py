@@ -41,7 +41,6 @@ from app.agent.planning.planner import (
 )
 from app.agent.planning.service import (
     QuestionPlanningService,
-    external_unavailable_result,
     plan_question,
 )
 from app.analysis.ai_provider_errors import AIProviderNetworkError
@@ -498,30 +497,3 @@ class TestPlanQuestionCompatibility:
         assert plan.retrieval_mode == "internal"
         assert plan.internal_queries == ["NVIDIA"]
         assert "external_research_tasks" not in type(plan).model_fields
-
-
-class TestExternalUnavailableResult:
-    def test_external_plan_becomes_insufficient_without_running_external_search(
-        self,
-    ) -> None:
-        result = external_unavailable_result(_plan("external"))
-
-        assert result.status == "insufficient"
-        assert result.retrieval.planned_mode == "external"
-        assert result.retrieval.unmet_requirements == ["external_search"]
-        assert result.execution.route == "direct"
-        assert result.execution.used_internal_retrieval is False
-        assert result.execution.used_external_search is False
-        assert result.sources == []
-
-    def test_internal_and_external_plan_preserves_planned_mode(self) -> None:
-        result = external_unavailable_result(_plan("internal_and_external"))
-
-        assert result.status == "insufficient"
-        assert result.retrieval.planned_mode == "internal_and_external"
-        assert result.retrieval.unmet_requirements == ["external_search"]
-        assert "内部記事" in result.answer
-
-    def test_rejects_non_external_plan(self) -> None:
-        with pytest.raises(AssertionError):
-            external_unavailable_result(_plan("internal"))

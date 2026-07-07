@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from app.agent.answering.service import RetrievalOutcome
+from app.agent.answering.retrieval import RetrievalOutcome
 from app.agent.contract import AnswerSource, ExternalUrlSource, InternalArticleSource
 from app.agent.external_search import ExternalSearchEvidence
 from app.agent.internal_retrieval.article_search import InternalArticleSearchHit

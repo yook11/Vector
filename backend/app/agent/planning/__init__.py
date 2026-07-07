@@ -7,7 +7,6 @@ from app.agent.planning.planner import (
 from app.agent.planning.service import (
     QuestionPlanDraftGenerator,
     QuestionPlanningService,
-    external_unavailable_result,
     plan_question,
 )
 
@@ -16,6 +15,5 @@ __all__ = [
     "QuestionPlanDraftGenerator",
     "QuestionPlanningService",
     "QuestionPlanner",
-    "external_unavailable_result",
     "plan_question",
 ]

@@ -56,7 +56,7 @@ class AnswerRetrievalSummary(BaseModel):
 
 
 class AnswerExecutionSummary(BaseModel):
-    """agent が実際に通った主要経路の summary。"""
+    """final answer が実際に引用した根拠経路の summary。"""
 
     model_config = ConfigDict(frozen=True)
 

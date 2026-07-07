@@ -1,149 +1,248 @@
-"""Question answering service."""
+"""Question answer orchestration service."""
 
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Protocol, Self, assert_never
+from typing import Protocol, assert_never
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
-
-from app.agent.contract import UnmetRequirement
-from app.agent.external_search import ExternalSearchOutcome
-from app.agent.internal_retrieval.article_search import InternalArticleSearchHit
-from app.agent.internal_retrieval.query_embedding import InternalSearchQueries
+from app.agent.answering.evidence import AnswerEvidenceItem, normalize_answer_evidence
+from app.agent.answering.retrieval import RetrievalOutcome
+from app.agent.answering.synthesis import (
+    AnswerDraft,
+    AnswerDraftInvalidError,
+    AnswerSynthesizer,
+)
+from app.agent.contract import (
+    AnswerExecutionSummary,
+    AnswerQuestionInput,
+    AnswerQuestionResult,
+    AnswerRetrievalSummary,
+    AnswerSource,
+    ExternalUrlSource,
+    InternalArticleSource,
+    UnmetRequirement,
+)
 from app.agent.planning.contract import (
-    ExternalResearchTask,
     ExternalSearchPlan,
     InternalAndExternalPlan,
     InternalRetrievalPlan,
     NoRetrievalPlan,
     QuestionPlan,
 )
+from app.agent.planning.planner import QuestionPlanner
 
-__all__ = [
-    "ExternalPlanSearcher",
-    "InternalArticleRetriever",
-    "QuestionPlanRetrievalService",
-    "RetrievalOutcome",
-]
+__all__ = ["QuestionAnsweringService", "QuestionPlanRetriever"]
 
-
-class InternalArticleRetriever(Protocol):
-    async def search_articles(
-        self,
-        queries: InternalSearchQueries,
-    ) -> list[InternalArticleSearchHit]: ...
+_NO_EVIDENCE_ANSWER = "この質問に回答するための根拠を取得できませんでした。"
+_RETRIEVAL_EMPTY_MISSING = "回答に使える根拠を取得できませんでした"
+_UNMET_REQUIREMENT_MISSING: dict[UnmetRequirement, str] = {
+    "internal_retrieval": "内部記事検索を完了できませんでした",
+    "external_search": "外部検索を完了できませんでした",
+}
 
 
-class ExternalPlanSearcher(Protocol):
-    async def search(
-        self,
-        external_research_tasks: list[ExternalResearchTask],
-        *,
-        target_time_window: str | None,
-        as_of: datetime,
-        requested_agent_count: int | None = None,
-    ) -> ExternalSearchOutcome: ...
-
-
-class RetrievalOutcome(BaseModel):
-    """plan 実行の純粋な結果。回答の根拠候補データと未充足要件のみを持つ。"""
-
-    model_config = ConfigDict(frozen=True)
-
-    internal_hits: list[InternalArticleSearchHit] = Field(default_factory=list)
-    external_search: ExternalSearchOutcome | None = None
-    unmet_requirements: list[UnmetRequirement] = Field(default_factory=list)
-
-    @model_validator(mode="after")
-    def _validate_external_search_unmet_consistency(self) -> Self:
-        if (
-            self.external_search is not None
-            and "external_search" in self.unmet_requirements
-        ):
-            raise ValueError("external_search outcome cannot also be marked as unmet")
-        return self
-
-
-class QuestionPlanRetrievalService:
-    """QuestionPlan を読んで internal/external retrieval を起動する工程。"""
-
-    def __init__(
-        self,
-        *,
-        internal_search: InternalArticleRetriever,
-        external_search: ExternalPlanSearcher | None = None,
-        requested_external_agent_count: int | None = None,
-    ) -> None:
-        self._internal_search = internal_search
-        self._external_search = external_search
-        self._requested_external_agent_count = requested_external_agent_count
-
+class QuestionPlanRetriever(Protocol):
     async def retrieve(
         self,
         plan: QuestionPlan,
         *,
         as_of: datetime,
-    ) -> RetrievalOutcome:
-        match plan:
-            case NoRetrievalPlan():
-                return RetrievalOutcome()
-            case InternalRetrievalPlan(internal_queries=internal_queries):
-                hits = await self._internal_search.search_articles(
-                    InternalSearchQueries(queries=tuple(internal_queries))
-                )
-                return RetrievalOutcome(internal_hits=hits)
-            case ExternalSearchPlan(
-                external_research_tasks=external_research_tasks,
-                target_time_window=target_time_window,
-            ):
-                external = await self._search_external(
-                    external_research_tasks,
-                    target_time_window=target_time_window,
-                    as_of=as_of,
-                )
-                if external is not None:
-                    return RetrievalOutcome(external_search=external)
-                return RetrievalOutcome(
-                    unmet_requirements=["external_search"],
-                )
-            case InternalAndExternalPlan(
-                internal_queries=internal_queries,
-                external_research_tasks=external_research_tasks,
-                target_time_window=target_time_window,
-            ):
-                hits = await self._internal_search.search_articles(
-                    InternalSearchQueries(queries=tuple(internal_queries))
-                )
-                external = await self._search_external(
-                    external_research_tasks,
-                    target_time_window=target_time_window,
-                    as_of=as_of,
-                )
-                if external is not None:
-                    return RetrievalOutcome(
-                        internal_hits=hits,
-                        external_search=external,
-                    )
-                return RetrievalOutcome(
-                    internal_hits=hits,
-                    unmet_requirements=["external_search"],
-                )
-            case _ as unreachable:
-                assert_never(unreachable)
+    ) -> RetrievalOutcome: ...
 
-    async def _search_external(
+
+class QuestionAnsweringService:
+    """Top-level question answering use case."""
+
+    def __init__(
         self,
-        external_research_tasks: list[ExternalResearchTask],
         *,
-        target_time_window: str | None,
-        as_of: datetime,
-    ) -> ExternalSearchOutcome | None:
-        if self._external_search is None:
-            return None
-        return await self._external_search.search(
-            external_research_tasks,
-            target_time_window=target_time_window,
-            as_of=as_of,
-            requested_agent_count=self._requested_external_agent_count,
+        planner: QuestionPlanner,
+        retriever: QuestionPlanRetriever,
+        synthesizer: AnswerSynthesizer,
+    ) -> None:
+        self._planner = planner
+        self._retriever = retriever
+        self._synthesizer = synthesizer
+
+    async def answer(self, input: AnswerQuestionInput) -> AnswerQuestionResult:
+        plan = await self._planner.plan(input)
+        outcome = await self._retriever.retrieve(plan, as_of=input.as_of)
+        evidence = normalize_answer_evidence(outcome)
+
+        if not _is_direct_plan(plan) and not evidence:
+            return _assemble_result(
+                plan=plan,
+                outcome=outcome,
+                answer=_NO_EVIDENCE_ANSWER,
+                sources=[],
+                draft_missing_aspects=[],
+                status="insufficient",
+                include_retrieval_empty_missing=True,
+            )
+
+        draft = await self._synthesizer.synthesize(
+            question=input.question,
+            evidence=evidence,
+            as_of=input.as_of,
+            target_time_window=_plan_target_time_window(plan),
         )
+        _validate_draft_citations(plan=plan, evidence=evidence, draft=draft)
+        sources = _sources_for_citations(evidence=evidence, cited_refs=draft.cited_refs)
+        status = (
+            "insufficient"
+            if outcome.unmet_requirements or draft.sufficiency == "insufficient"
+            else "answered"
+        )
+
+        return _assemble_result(
+            plan=plan,
+            outcome=outcome,
+            answer=draft.answer,
+            sources=sources,
+            draft_missing_aspects=draft.missing_aspects,
+            status=status,
+            include_retrieval_empty_missing=False,
+        )
+
+
+def _is_direct_plan(plan: QuestionPlan) -> bool:
+    match plan:
+        case NoRetrievalPlan():
+            return True
+        case InternalRetrievalPlan() | ExternalSearchPlan() | InternalAndExternalPlan():
+            return False
+    assert_never(plan)
+
+
+def _plan_target_time_window(plan: QuestionPlan) -> str | None:
+    match plan:
+        case ExternalSearchPlan() | InternalAndExternalPlan():
+            return plan.target_time_window
+        case NoRetrievalPlan() | InternalRetrievalPlan():
+            return None
+    assert_never(plan)
+
+
+def _validate_draft_citations(
+    *,
+    plan: QuestionPlan,
+    evidence: list[AnswerEvidenceItem],
+    draft: AnswerDraft,
+) -> None:
+    existing_refs = {item.source.source_ref for item in evidence}
+    unknown_refs = [ref for ref in draft.cited_refs if ref not in existing_refs]
+    if unknown_refs:
+        raise AnswerDraftInvalidError(f"unknown citation ref: {unknown_refs[0]}")
+    if (
+        not _is_direct_plan(plan)
+        and draft.sufficiency == "answered"
+        and not draft.cited_refs
+    ):
+        raise AnswerDraftInvalidError("answered draft requires at least one citation")
+
+
+def _sources_for_citations(
+    *,
+    evidence: list[AnswerEvidenceItem],
+    cited_refs: list[str],
+) -> list[AnswerSource]:
+    cited_ref_set = set(cited_refs)
+    return [item.source for item in evidence if item.source.source_ref in cited_ref_set]
+
+
+def _assemble_result(
+    *,
+    plan: QuestionPlan,
+    outcome: RetrievalOutcome,
+    answer: str,
+    sources: list[AnswerSource],
+    draft_missing_aspects: list[str],
+    status: str,
+    include_retrieval_empty_missing: bool,
+) -> AnswerQuestionResult:
+    used_internal = any(isinstance(source, InternalArticleSource) for source in sources)
+    used_external = any(isinstance(source, ExternalUrlSource) for source in sources)
+    missing_aspects: list[str] = []
+    if status == "insufficient":
+        missing_aspects = _missing_aspects(
+            outcome=outcome,
+            draft_missing_aspects=draft_missing_aspects,
+            include_retrieval_empty_missing=include_retrieval_empty_missing,
+        )
+
+    return AnswerQuestionResult(
+        status=status,
+        answer=answer,
+        sources=sources,
+        missing_aspects=missing_aspects,
+        retrieval=AnswerRetrievalSummary(
+            planned_mode=plan.retrieval_mode,
+            unmet_requirements=outcome.unmet_requirements,
+        ),
+        execution=AnswerExecutionSummary(
+            route=_route_for_usage(
+                used_internal=used_internal,
+                used_external=used_external,
+            ),
+            used_internal_retrieval=used_internal,
+            used_external_search=used_external,
+        ),
+    )
+
+
+def _missing_aspects(
+    *,
+    outcome: RetrievalOutcome,
+    draft_missing_aspects: list[str],
+    include_retrieval_empty_missing: bool,
+) -> list[str]:
+    values: list[str] = []
+    if include_retrieval_empty_missing:
+        values.append(_RETRIEVAL_EMPTY_MISSING)
+    values.extend(
+        _UNMET_REQUIREMENT_MISSING[requirement]
+        for requirement in outcome.unmet_requirements
+    )
+    values.extend(_external_task_missing(outcome))
+    values.extend(draft_missing_aspects)
+    return _deduplicate(values)
+
+
+def _external_task_missing(outcome: RetrievalOutcome) -> list[str]:
+    if outcome.external_search is None:
+        return []
+    missing: list[str] = []
+    for report in sorted(
+        outcome.external_search.task_reports,
+        key=lambda report: report.task_index,
+    ):
+        missing.extend(report.missing)
+    return missing
+
+
+def _deduplicate(values: list[str]) -> list[str]:
+    result: list[str] = []
+    seen: set[str] = set()
+    for value in values:
+        if value in seen:
+            continue
+        result.append(value)
+        seen.add(value)
+    return result
+
+
+def _route_for_usage(
+    *,
+    used_internal: bool,
+    used_external: bool,
+) -> str:
+    match (used_internal, used_external):
+        case (False, False):
+            return "direct"
+        case (True, False):
+            return "internal"
+        case (False, True):
+            return "external_search"
+        case (True, True):
+            return "internal_and_external"
+    assert_never((used_internal, used_external))

@@ -6,12 +6,7 @@ from typing import Protocol, assert_never
 
 from pydantic import ValidationError
 
-from app.agent.contract import (
-    AnswerExecutionSummary,
-    AnswerQuestionInput,
-    AnswerQuestionResult,
-    AnswerRetrievalSummary,
-)
+from app.agent.contract import AnswerQuestionInput
 from app.agent.planning.ai.gemini import QuestionPlannerResponseInvalidError
 from app.agent.planning.audit import (
     PlannerAttemptFailureEvent,
@@ -310,38 +305,3 @@ def _plan_query_counts(plan: QuestionPlan) -> tuple[int, int]:
             return len(internal_queries), len(external_research_tasks)
         case _ as unreachable:
             assert_never(unreachable)
-
-
-def external_unavailable_result(
-    plan: ExternalSearchPlan | InternalAndExternalPlan,
-) -> AnswerQuestionResult:
-    """外部検索未実装 phase の insufficient result を作る。"""
-
-    match plan:
-        case InternalAndExternalPlan():
-            answer = (
-                "この質問には内部記事の文脈に加えて外部最新情報の確認が必要ですが、"
-                "現在の実装では外部ニュース検索をまだ実行できません。"
-            )
-        case ExternalSearchPlan():
-            answer = (
-                "この質問には外部最新情報の確認が必要ですが、"
-                "現在の実装では外部ニュース検索をまだ実行できません。"
-            )
-        case _ as unreachable:
-            assert_never(unreachable)
-
-    return AnswerQuestionResult(
-        status="insufficient",
-        answer=answer,
-        missing_aspects=["外部ニュース検索", "最新情報の確認"],
-        retrieval=AnswerRetrievalSummary(
-            planned_mode=plan.retrieval_mode,
-            unmet_requirements=["external_search"],
-        ),
-        execution=AnswerExecutionSummary(
-            route="direct",
-            used_internal_retrieval=False,
-            used_external_search=False,
-        ),
-    )
