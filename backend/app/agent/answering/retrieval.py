@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from datetime import datetime
 from typing import Protocol, Self, assert_never
 
@@ -109,14 +110,29 @@ class QuestionPlanRetrievalService:
                 external_research_tasks=external_research_tasks,
                 target_time_window=target_time_window,
             ):
-                hits = await self._internal_search.search_articles(
-                    InternalSearchQueries(queries=tuple(internal_queries))
+                internal_search_queries = InternalSearchQueries(
+                    queries=tuple(internal_queries)
                 )
-                external = await self._search_external(
-                    external_research_tasks,
-                    target_time_window=target_time_window,
-                    as_of=as_of,
+                if self._external_search is None:
+                    hits = await self._internal_search.search_articles(
+                        internal_search_queries
+                    )
+                    return RetrievalOutcome(
+                        internal_hits=hits,
+                        unmet_requirements=["external_search"],
+                    )
+
+                hits_result, external_result = await asyncio.gather(
+                    self._internal_search.search_articles(internal_search_queries),
+                    self._search_external(
+                        external_research_tasks,
+                        target_time_window=target_time_window,
+                        as_of=as_of,
+                    ),
+                    return_exceptions=True,
                 )
+                hits = _raise_if_exception(hits_result)
+                external = _raise_if_exception(external_result)
                 if external is not None:
                     return RetrievalOutcome(
                         internal_hits=hits,
@@ -144,3 +160,9 @@ class QuestionPlanRetrievalService:
             as_of=as_of,
             requested_agent_count=self._requested_external_agent_count,
         )
+
+
+def _raise_if_exception[ResultT](result: ResultT | BaseException) -> ResultT:
+    if isinstance(result, BaseException):
+        raise result
+    return result

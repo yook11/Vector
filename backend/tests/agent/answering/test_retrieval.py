@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import asyncio
+import contextlib
 from collections.abc import Sequence
 from datetime import UTC, datetime
 from typing import Literal
@@ -106,27 +108,54 @@ class FakeInternalArticleRetriever:
         *,
         hits: Sequence[InternalArticleSearchHit] = (),
         error: Exception | None = None,
+        started_event: asyncio.Event | None = None,
+        wait_for_event: asyncio.Event | None = None,
+        about_to_raise_event: asyncio.Event | None = None,
     ) -> None:
         self._hits = list(hits)
         self._error = error
+        self._started_event = started_event
+        self._wait_for_event = wait_for_event
+        self._about_to_raise_event = about_to_raise_event
         self.calls: list[InternalSearchQueries] = []
+        self.completed = False
 
     async def search_articles(
         self,
         queries: InternalSearchQueries,
     ) -> list[InternalArticleSearchHit]:
         self.calls.append(queries)
+        if self._started_event is not None:
+            self._started_event.set()
+        if self._wait_for_event is not None:
+            await self._wait_for_event.wait()
         if self._error is not None:
+            if self._about_to_raise_event is not None:
+                self._about_to_raise_event.set()
             raise self._error
+        self.completed = True
         return list(self._hits)
 
 
 class FakeExternalPlanSearcher:
-    def __init__(self, outcome: ExternalSearchOutcome | None = None) -> None:
+    def __init__(
+        self,
+        outcome: ExternalSearchOutcome | None = None,
+        *,
+        error: Exception | None = None,
+        started_event: asyncio.Event | None = None,
+        wait_for_event: asyncio.Event | None = None,
+        about_to_raise_event: asyncio.Event | None = None,
+    ) -> None:
         self._outcome = outcome or _external_outcome()
+        self._error = error
+        self._started_event = started_event
+        self._wait_for_event = wait_for_event
+        self._about_to_raise_event = about_to_raise_event
         self.calls: list[
             tuple[list[ExternalResearchTask], str | None, datetime, int | None]
         ] = []
+        self.completed = False
 
     async def search(
         self,
@@ -139,7 +168,32 @@ class FakeExternalPlanSearcher:
         self.calls.append(
             (external_research_tasks, target_time_window, as_of, requested_agent_count)
         )
+        if self._started_event is not None:
+            self._started_event.set()
+        if self._wait_for_event is not None:
+            await self._wait_for_event.wait()
+        if self._error is not None:
+            if self._about_to_raise_event is not None:
+                self._about_to_raise_event.set()
+            raise self._error
+        self.completed = True
         return self._outcome
+
+
+class InternalSearchBoom(Exception):
+    pass
+
+
+class ExternalSearchBoom(Exception):
+    pass
+
+
+async def _cancel_if_pending(task: asyncio.Task[object]) -> None:
+    if task.done():
+        return
+    task.cancel()
+    with contextlib.suppress(asyncio.CancelledError):
+        await task
 
 
 @pytest.mark.asyncio
@@ -269,6 +323,136 @@ async def test_retrieve_internal_and_external_runs_both_retrievals() -> None:
         and outcome.external_search == external_search._outcome
         and outcome.unmet_requirements == []
     )
+
+
+@pytest.mark.asyncio
+async def test_retrieve_internal_and_external_retrievals_overlap() -> None:
+    plan = _plan("internal_and_external")
+    hits = [_hit(curation_id=1, title="NVIDIA", distance=0.1)]
+    internal_started = asyncio.Event()
+    external_started = asyncio.Event()
+    internal_search = FakeInternalArticleRetriever(
+        hits=hits,
+        started_event=internal_started,
+        wait_for_event=external_started,
+    )
+    external_search = FakeExternalPlanSearcher(
+        started_event=external_started,
+        wait_for_event=internal_started,
+    )
+    service = QuestionPlanRetrievalService(
+        internal_search=internal_search,
+        external_search=external_search,
+    )
+
+    outcome = await asyncio.wait_for(
+        service.retrieve(plan, as_of=_as_of()),
+        timeout=0.5,
+    )
+
+    assert (
+        internal_started.is_set()
+        and external_started.is_set()
+        and outcome.internal_hits == hits
+        and outcome.external_search == external_search._outcome
+        and outcome.unmet_requirements == []
+    )
+
+
+@pytest.mark.asyncio
+async def test_retrieve_waits_for_external_on_internal_error() -> None:
+    plan = _plan("internal_and_external")
+    external_started = asyncio.Event()
+    external_may_complete = asyncio.Event()
+    internal_about_to_raise = asyncio.Event()
+    internal_search = FakeInternalArticleRetriever(
+        error=InternalSearchBoom("internal search failed"),
+        wait_for_event=external_started,
+        about_to_raise_event=internal_about_to_raise,
+    )
+    external_search = FakeExternalPlanSearcher(
+        started_event=external_started,
+        wait_for_event=external_may_complete,
+    )
+    service = QuestionPlanRetrievalService(
+        internal_search=internal_search,
+        external_search=external_search,
+    )
+    retrieve_task = asyncio.create_task(service.retrieve(plan, as_of=_as_of()))
+
+    try:
+        await asyncio.wait_for(internal_about_to_raise.wait(), timeout=0.5)
+        await asyncio.sleep(0)
+        assert not retrieve_task.done()
+
+        external_may_complete.set()
+        with pytest.raises(InternalSearchBoom, match="internal search failed"):
+            await asyncio.wait_for(retrieve_task, timeout=0.5)
+
+        assert external_search.completed
+    finally:
+        await _cancel_if_pending(retrieve_task)
+
+
+@pytest.mark.asyncio
+async def test_retrieve_waits_for_internal_on_external_error() -> None:
+    plan = _plan("internal_and_external")
+    hits = [_hit(curation_id=1, title="NVIDIA", distance=0.1)]
+    internal_started = asyncio.Event()
+    internal_may_complete = asyncio.Event()
+    external_about_to_raise = asyncio.Event()
+    internal_search = FakeInternalArticleRetriever(
+        hits=hits,
+        started_event=internal_started,
+        wait_for_event=internal_may_complete,
+    )
+    external_search = FakeExternalPlanSearcher(
+        error=ExternalSearchBoom("external search failed"),
+        wait_for_event=internal_started,
+        about_to_raise_event=external_about_to_raise,
+    )
+    service = QuestionPlanRetrievalService(
+        internal_search=internal_search,
+        external_search=external_search,
+    )
+    retrieve_task = asyncio.create_task(service.retrieve(plan, as_of=_as_of()))
+
+    try:
+        await asyncio.wait_for(external_about_to_raise.wait(), timeout=0.5)
+        await asyncio.sleep(0)
+        assert not retrieve_task.done()
+
+        internal_may_complete.set()
+        with pytest.raises(ExternalSearchBoom, match="external search failed"):
+            await asyncio.wait_for(retrieve_task, timeout=0.5)
+
+        assert internal_search.completed
+    finally:
+        await _cancel_if_pending(retrieve_task)
+
+
+@pytest.mark.asyncio
+async def test_retrieve_internal_and_external_prefers_internal_error() -> None:
+    plan = _plan("internal_and_external")
+    internal_started = asyncio.Event()
+    external_started = asyncio.Event()
+    internal_search = FakeInternalArticleRetriever(
+        error=InternalSearchBoom("internal search failed"),
+        started_event=internal_started,
+        wait_for_event=external_started,
+    )
+    external_search = FakeExternalPlanSearcher(
+        error=ExternalSearchBoom("external search failed"),
+        started_event=external_started,
+        wait_for_event=internal_started,
+    )
+    service = QuestionPlanRetrievalService(
+        internal_search=internal_search,
+        external_search=external_search,
+    )
+
+    with pytest.raises(InternalSearchBoom, match="internal search failed"):
+        await asyncio.wait_for(service.retrieve(plan, as_of=_as_of()), timeout=0.5)
 
 
 @pytest.mark.asyncio
