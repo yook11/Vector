@@ -88,6 +88,32 @@ def test_settings_reject_known_weak_database_url(
         Settings()
 
 
+@pytest.mark.parametrize(
+    ("env_name", "weak_url"),
+    [
+        (
+            "MIGRATION_DATABASE_URL",
+            "postgresql+asyncpg://vector:<set-strong-password-here>@db:5432/vector",
+        ),
+        (
+            "AUTH_RETENTION_DATABASE_URL",
+            "postgresql+asyncpg://vector_auth:vector_auth@db:5432/vector",
+        ),
+        (
+            "AUTH_RETENTION_DATABASE_URL",
+            "postgresql+asyncpg://vector_auth:<set-strong-password-here>@db:5432/vector",
+        ),
+    ],
+)
+def test_settings_reject_known_weak_optional_database_urls(
+    monkeypatch: pytest.MonkeyPatch, env_name: str, weak_url: str
+) -> None:
+    """任意 DB URL でも公開済 dev default / placeholder は ValidationError。"""
+    monkeypatch.setenv(env_name, weak_url)
+    with pytest.raises(ValidationError, match=env_name):
+        Settings()
+
+
 def test_settings_accept_ci_dummy_database_url(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -233,6 +259,9 @@ def test_internal_frontend_base_url_accepts_flycast_in_production() -> None:
 _NEON_DB_URL_NO_SSL = (
     "postgresql+asyncpg://vector_app:strongpassword@ep-x.neon.tech/neondb"
 )
+_NEON_AUTH_RETENTION_DB_URL_NO_SSL = (
+    "postgresql+asyncpg://vector_auth:strongpassword@ep-x.neon.tech/neondb"
+)
 
 
 def test_production_rejects_database_url_without_sslmode(
@@ -271,6 +300,29 @@ def test_production_rejects_migration_url_without_sslmode(
     monkeypatch.setenv("MIGRATION_DATABASE_URL", _NEON_DB_URL_NO_SSL)
     with pytest.raises(ValidationError, match="MIGRATION_DATABASE_URL"):
         Settings(env="production", internal_frontend_base_url=_VALID_FLYCAST_URL)
+
+
+def test_production_rejects_auth_retention_url_without_sslmode(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """production で AUTH_RETENTION_DATABASE_URL に sslmode が無ければ reject。"""
+    monkeypatch.setenv("DATABASE_URL", f"{_NEON_DB_URL_NO_SSL}?sslmode=require")
+    monkeypatch.setenv(
+        "AUTH_RETENTION_DATABASE_URL", _NEON_AUTH_RETENTION_DB_URL_NO_SSL
+    )
+    with pytest.raises(ValidationError, match="AUTH_RETENTION_DATABASE_URL"):
+        Settings(env="production", internal_frontend_base_url=_VALID_FLYCAST_URL)
+
+
+def test_production_accepts_auth_retention_url_with_sslmode_require(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """production で auth retention 用 URL も sslmode=require 付きなら通る。"""
+    auth_url = f"{_NEON_AUTH_RETENTION_DB_URL_NO_SSL}?sslmode=require"
+    monkeypatch.setenv("DATABASE_URL", f"{_NEON_DB_URL_NO_SSL}?sslmode=require")
+    monkeypatch.setenv("AUTH_RETENTION_DATABASE_URL", auth_url)
+    s = Settings(env="production", internal_frontend_base_url=_VALID_FLYCAST_URL)
+    assert s.auth_retention_database_url == auth_url
 
 
 def test_development_allows_database_url_without_sslmode(

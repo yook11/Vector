@@ -3,7 +3,7 @@ from pathlib import Path
 from typing import Literal, Self
 from urllib.parse import urlparse
 
-from pydantic import SecretStr, field_validator, model_validator
+from pydantic import SecretStr, ValidationInfo, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from sqlalchemy.exc import ArgumentError
 
@@ -26,14 +26,20 @@ _KNOWN_WEAK_INTERNAL_SECRETS = frozenset(
 )
 _INTERNAL_API_SECRET_MIN_LENGTH = 32
 
-# DATABASE_URL に含まれていれば起動時拒否する公開済 dev default / placeholder。
-# application 接続の弱秘密だけを対象にし、migration role の dev/CI default は除外する。
+# DB 接続 URL に含まれていれば起動時拒否する公開済 dev default / placeholder。
+# role 共通の placeholder を対象にし、migration role の dev/CI default は除外する。
 _KNOWN_WEAK_DATABASE_URL_PATTERNS = frozenset(
     {
         "vector_app:vector_app",
+        "vector_auth:vector_auth",
         "<set-strong-password",
     }
 )
+_DATABASE_URL_ENV_NAMES = {
+    "database_url": "DATABASE_URL",
+    "migration_database_url": "MIGRATION_DATABASE_URL",
+    "auth_retention_database_url": "AUTH_RETENTION_DATABASE_URL",
+}
 
 # revalidate 通知 (internal_frontend_base_url) の宛先ホスト allowlist。
 # notifier (FrontendRevalidateNotifier) は SSRF guard をバイパスして
@@ -96,6 +102,12 @@ class Settings(BaseSettings):
     # 未設定時は ``database_url`` にフォールバックし、後方互換を保つ。
     migration_database_url: str | None = None
 
+    # データベース (auth schema maintenance)
+    # Better Auth が管理する auth."rateLimit" retention など、auth schema 内の
+    # 保守処理だけが使う。通常 application role (vector_app) には auth.* DML を
+    # 広げないため、vector_auth 相当の接続文字列を別設定にする。
+    auth_retention_database_url: str | None = None
+
     # データベース (application role passwords)。権限境界テスト用に settings 経由で
     # 取得し、production runtime では password 単体としては読まない。
     postgres_auth_password: SecretStr | None = None
@@ -154,22 +166,32 @@ class Settings(BaseSettings):
     pipeline_events_retention_enabled: bool = True
     pipeline_events_retention_max_batches: int = 5
 
+    # Better Auth rateLimit retention。auth."rateLimit" は一時 counter であり、
+    # enforcement window 経過後の長期保持を避ける。
+    auth_rate_limit_retention_enabled: bool = True
+    auth_rate_limit_retention_max_batches: int = 5
+
     # 可観測性 (Logfire)
     # token 未設定時は Logfire 送信を no-op にする。token は必ず settings 経由で
     # 観測層 bootstrap に渡す。
     logfire_token: SecretStr | None = None
 
-    @field_validator("database_url")
+    @field_validator(
+        "database_url", "migration_database_url", "auth_retention_database_url"
+    )
     @classmethod
-    def _validate_database_url(cls, v: str) -> str:
+    def _validate_database_url(cls, v: str | None, info: ValidationInfo) -> str | None:
         """DB 接続文字列に公開済 default / placeholder が残らないことを起動時に強制。
 
         `.env` 設定漏れで弱秘密が production に滲むのを防ぐ。
         """
+        if v is None:
+            return v
+        env_name = _DATABASE_URL_ENV_NAMES[info.field_name]
         for pattern in _KNOWN_WEAK_DATABASE_URL_PATTERNS:
             if pattern in v:
                 raise ValueError(
-                    "DATABASE_URL contains a known dev placeholder/weak password "
+                    f"{env_name} contains a known dev placeholder/weak password "
                     f"({pattern!r}); use a strong password generated with "
                     "`openssl rand -hex 32` and configure via .env"
                 )
@@ -286,7 +308,8 @@ class Settings(BaseSettings):
         """production では DB 接続文字列に TLS sslmode を強制する (起動時 fail-fast)。
 
         Neon は public internet 越しの接続のため平文は不可。``database_url`` と
-        (設定されていれば) ``migration_database_url`` の sslmode が
+        (設定されていれば) ``migration_database_url`` /
+        ``auth_retention_database_url`` の sslmode が
         require / verify-ca / verify-full のいずれかでなければ起動を拒否する。
         sslmode の解釈と allowlist は ``db_ssl.parse_sslmode`` に委譲し二重定義を
         避ける (typo は parse_sslmode が ValueError で弾く)。SSLContext の組み立て
@@ -299,6 +322,7 @@ class Settings(BaseSettings):
         for name, url in (
             ("DATABASE_URL", self.database_url),
             ("MIGRATION_DATABASE_URL", self.migration_database_url),
+            ("AUTH_RETENTION_DATABASE_URL", self.auth_retention_database_url),
         ):
             if url is None:
                 continue

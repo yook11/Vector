@@ -52,6 +52,8 @@ WORKER_POOL_SIZING: dict[str, tuple[int, int]] = {
 # 減らす (60s マージン)。create_app_engine の factory 既定 (3600) を worker
 # のみ override する (API は 3600 据え置き)。
 WORKER_POOL_RECYCLE_SECONDS = 240
+AUTH_RETENTION_POOL_SIZE = 1
+AUTH_RETENTION_MAX_OVERFLOW = 1
 
 
 def worker_service_name(label: str) -> str:
@@ -73,6 +75,29 @@ def build_worker_engine(label: str) -> AsyncEngine:
         echo=False,
         pool_size=pool_size,
         max_overflow=max_overflow,
+        pool_recycle=WORKER_POOL_RECYCLE_SECONDS,
+    )
+
+
+def auth_retention_service_name() -> str:
+    """auth schema retention 用 DB 接続の service 名を返す。"""
+    return "vector-worker-maintenance-auth"
+
+
+def build_auth_retention_engine() -> AsyncEngine:
+    """auth schema retention 用 engine を作る。
+
+    通常 worker の ``database_url`` は vector_app role で auth."rateLimit" を
+    触れないため、auth 保守用の接続文字列を別設定から受ける。
+    """
+    if settings.auth_retention_database_url is None:
+        raise RuntimeError("AUTH_RETENTION_DATABASE_URL is not configured")
+    return create_app_engine(
+        settings.auth_retention_database_url,
+        application_name=auth_retention_service_name(),
+        echo=False,
+        pool_size=AUTH_RETENTION_POOL_SIZE,
+        max_overflow=AUTH_RETENTION_MAX_OVERFLOW,
         pool_recycle=WORKER_POOL_RECYCLE_SECONDS,
     )
 
@@ -111,6 +136,38 @@ def _register_worker_lifecycle(broker: RedisStreamBroker, label: str) -> None:
         register_pool_metrics(
             state.engine, pool_size=pool_size, max_overflow=max_overflow
         )
+        if label == "maintenance":
+            try:
+                state.auth_engine = build_auth_retention_engine()
+            except RuntimeError as exc:
+                logger.error(
+                    "maintenance_auth_retention_engine_missing",
+                    error_type=exc.__class__.__name__,
+                )
+            except Exception as exc:
+                logger.error(
+                    "maintenance_auth_retention_engine_failed",
+                    error_type=exc.__class__.__name__,
+                )
+            else:
+                state.auth_session_factory = async_sessionmaker(
+                    state.auth_engine,
+                    class_=AsyncSession,
+                    expire_on_commit=False,
+                )
+                logfire.instrument_sqlalchemy(engine=state.auth_engine)
+                log_pool_initialized(
+                    service_name=auth_retention_service_name(),
+                    pool_size=AUTH_RETENTION_POOL_SIZE,
+                    max_overflow=AUTH_RETENTION_MAX_OVERFLOW,
+                    pool_recycle=WORKER_POOL_RECYCLE_SECONDS,
+                    pool_timeout=DEFAULT_POOL_TIMEOUT,
+                )
+                register_pool_metrics(
+                    state.auth_engine,
+                    pool_size=AUTH_RETENTION_POOL_SIZE,
+                    max_overflow=AUTH_RETENTION_MAX_OVERFLOW,
+                )
         logger.info(f"{label}_worker_startup")
 
         if label == "analysis":
@@ -125,6 +182,8 @@ def _register_worker_lifecycle(broker: RedisStreamBroker, label: str) -> None:
 
     @broker.on_event(TaskiqEvents.WORKER_SHUTDOWN)
     async def on_shutdown(state: TaskiqState) -> None:
+        if hasattr(state, "auth_engine"):
+            await state.auth_engine.dispose()
         if hasattr(state, "engine"):
             await state.engine.dispose()
         logger.info(f"{label}_worker_shutdown")

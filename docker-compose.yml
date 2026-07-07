@@ -11,6 +11,7 @@ x-worker-base: &worker-base
     - .env
   environment:
     - DATABASE_URL=postgresql+asyncpg://vector_app:${POSTGRES_APP_PASSWORD}@db:5432/${POSTGRES_DB:-vector}
+    - AUTH_RETENTION_DATABASE_URL=postgresql+asyncpg://vector_auth:${POSTGRES_AUTH_PASSWORD}@db:5432/${POSTGRES_DB:-vector}
     - REDIS_URL=redis://redis:6379/0
   volumes:
     - ./backend/app:/app/app

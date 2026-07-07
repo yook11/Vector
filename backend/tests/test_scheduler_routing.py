@@ -58,6 +58,7 @@ _EXPECTED_CRON: list[tuple[str, TaskiqScheduler, set[str]]] = [
             "backfill_curations",
             "backfill_assessments",
             "backfill_embeddings",
+            "purge_auth_rate_limits",
             "purge_pipeline_events",
         },
     ),
@@ -65,7 +66,7 @@ _EXPECTED_CRON: list[tuple[str, TaskiqScheduler, set[str]]] = [
 
 # schedule.py の cron 時刻表 (SSoT) が列挙する cron task の総数。新 cron 追加時は
 # 時刻表・_EXPECTED_CRON・本定数の 3 点を同時更新する (drift 時に本テストが赤になる)。
-_TOTAL_CRON_COUNT = 11
+_TOTAL_CRON_COUNT = 12
 
 
 async def _discovered_cron_task_names(scheduler: TaskiqScheduler) -> set[str]:

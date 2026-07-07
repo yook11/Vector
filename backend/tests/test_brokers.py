@@ -4,12 +4,13 @@ import configparser
 import re
 from pathlib import Path
 from typing import Any
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 from pydantic import SecretStr
 from sqlalchemy.ext.asyncio import create_async_engine as _real_create_async_engine
-from taskiq import TaskiqState
+from structlog.testing import capture_logs
+from taskiq import TaskiqEvents, TaskiqState
 
 import app.db_ssl as db_ssl
 from app.collection.sources.fetch_cadence import FetchCadence
@@ -171,3 +172,35 @@ class TestWorkerApplicationName:
         build_worker_engine("content")
         server_settings = captured["connect_args"]["server_settings"]
         assert server_settings["application_name"] == worker_service_name("content")
+
+
+@pytest.mark.asyncio
+async def test_maintenance_startup_logs_auth_engine_failure_without_raising() -> None:
+    """auth retention engine 初期化失敗は maintenance worker startup を落とさない。"""
+    from app.queue.brokers import broker_maintenance
+
+    handler = broker_maintenance.event_handlers[TaskiqEvents.WORKER_STARTUP][0]
+    state = TaskiqState()
+
+    with (
+        patch("app.queue.lifecycle.setup_logfire"),
+        patch("app.queue.lifecycle.build_worker_engine", return_value=MagicMock()),
+        patch(
+            "app.queue.lifecycle.build_auth_retention_engine",
+            side_effect=ValueError("bad AUTH_RETENTION_DATABASE_URL"),
+        ),
+        patch("app.queue.lifecycle.logfire.instrument_sqlalchemy"),
+        patch("app.queue.lifecycle.log_pool_initialized"),
+        patch("app.queue.lifecycle.register_pool_metrics"),
+        capture_logs() as logs,
+    ):
+        await handler(state)
+
+    assert hasattr(state, "session_factory")
+    assert not hasattr(state, "auth_session_factory")
+    assert any(
+        log["event"] == "maintenance_auth_retention_engine_failed"
+        and log["error_type"] == "ValueError"
+        for log in logs
+    )
+    assert any(log["event"] == "maintenance_worker_startup" for log in logs)

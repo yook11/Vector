@@ -57,6 +57,16 @@ async def _require_alembic_applied_schema(conn: asyncpg.Connection) -> None:
         pytest.skip("alembic-applied schema required (public.watchlist_entries)")
 
 
+async def _require_auth_rate_limit_table(conn: asyncpg.Connection) -> None:
+    """Better Auth CLI 管理の auth.rateLimit table が無い環境では skip する。"""
+    exists = await conn.fetchval(
+        "SELECT EXISTS (SELECT 1 FROM pg_tables "
+        "WHERE schemaname = 'auth' AND tablename = 'rateLimit')"
+    )
+    if not exists:
+        pytest.skip('Better Auth schema required (auth."rateLimit")')
+
+
 @pytest.fixture
 async def auth_conn():
     """vector_auth role での asyncpg 接続を提供する (本番 vector db)。"""
@@ -119,6 +129,12 @@ class TestVectorAuthIsolation:
         rows = await auth_conn.fetch('SELECT id FROM auth."user" LIMIT 1')
         assert isinstance(rows, list)
 
+    async def test_can_delete_auth_rate_limit(self, auth_conn) -> None:
+        """vector_auth は auth.rateLimit retention 用に DELETE できる。"""
+        await _require_auth_rate_limit_table(auth_conn)
+        result = await auth_conn.execute('DELETE FROM auth."rateLimit" WHERE false')
+        assert result == "DELETE 0"
+
 
 class TestVectorAppIsolation:
     async def test_cannot_insert_into_auth_user(self, app_conn) -> None:
@@ -135,6 +151,12 @@ class TestVectorAppIsolation:
         """vector_app は auth.user に SELECT できる (FK 整合性確認に必要)。"""
         rows = await app_conn.fetch('SELECT id FROM auth."user" LIMIT 1')
         assert isinstance(rows, list)
+
+    async def test_cannot_delete_auth_rate_limit(self, app_conn) -> None:
+        """vector_app は auth.rateLimit を DELETE できない。"""
+        await _require_auth_rate_limit_table(app_conn)
+        with pytest.raises(asyncpg.InsufficientPrivilegeError):
+            await app_conn.execute('DELETE FROM auth."rateLimit" WHERE false')
 
     async def test_can_crud_public_categories(self, app_conn) -> None:
         """vector_app は public.* に CRUD できる (本来の application 経路)。
