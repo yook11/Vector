@@ -55,11 +55,14 @@ async def assess_content(
                     repo=AssessmentRepository(session),
                 )
             except AssessmentReadyBuildBlockedError as exc:
-                await AssessmentAuditRepository(session).append_ready_build_blocked(
-                    curation_id=trigger.curation_id,
-                    exc=exc,
-                )
-                await session.commit()
+                # 冪等 skip (ALREADY_*) は勝者の行と冗長。監査に残さず log のみ。
+                # 恒久的な欠損 (CURATION_MISSING) は REJECTED を残す。
+                if not exc.code.is_idempotent_skip:
+                    await AssessmentAuditRepository(session).append_ready_build_blocked(
+                        curation_id=trigger.curation_id,
+                        exc=exc,
+                    )
+                    await session.commit()
                 logger.info(
                     "assess_content_rejected",
                     curation_id=trigger.curation_id,

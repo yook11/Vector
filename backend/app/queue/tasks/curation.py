@@ -56,11 +56,14 @@ async def curate_content(
                     repo=CurationRepository(session),
                 )
             except CurationReadyBuildBlockedError as exc:
-                await CurationAuditRepository(session).append_ready_build_blocked(
-                    target_article_id=trigger.analyzable_article_id,
-                    exc=exc,
-                )
-                await session.commit()
+                # 冪等 skip (ALREADY_*) は勝者の行と冗長。監査に残さず log のみ。
+                # 恒久的な突き返し/欠損 (CONTENT_TOO_LARGE / ARTICLE_MISSING) は残す。
+                if not exc.code.is_idempotent_skip:
+                    await CurationAuditRepository(session).append_ready_build_blocked(
+                        target_article_id=trigger.analyzable_article_id,
+                        exc=exc,
+                    )
+                    await session.commit()
                 logger.info(
                     "curate_content_rejected",
                     analyzable_article_id=trigger.analyzable_article_id,

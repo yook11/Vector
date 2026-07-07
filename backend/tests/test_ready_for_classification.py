@@ -155,3 +155,14 @@ class TestAssessmentTrigger:
             AssessmentTrigger(curation_id=0)
         with pytest.raises(ValidationError):
             AssessmentTrigger(curation_id=-1)
+
+
+def test_ready_build_blocked_code_partitions_idempotent_skip_from_durable() -> None:
+    """ALREADY_* のみ冪等 skip、CURATION_MISSING は残す整合性兆候。"""
+    idempotent = {c for c in AssessmentReadyBuildBlockedCode if c.is_idempotent_skip}
+    durable = {c for c in AssessmentReadyBuildBlockedCode if not c.is_idempotent_skip}
+    assert idempotent == {
+        AssessmentReadyBuildBlockedCode.ALREADY_IN_SCOPE,
+        AssessmentReadyBuildBlockedCode.ALREADY_OUT_OF_SCOPE,
+    }
+    assert durable == {AssessmentReadyBuildBlockedCode.CURATION_MISSING}

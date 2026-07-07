@@ -255,3 +255,11 @@ class TestEmbeddingTrigger:
             EmbeddingTrigger(analyzed_article_id=1, analyzable_article_id=0)
         with pytest.raises(ValidationError):
             EmbeddingTrigger(analyzed_article_id=1, analyzable_article_id=-1)
+
+
+def test_ready_build_blocked_code_partitions_idempotent_skip_from_durable() -> None:
+    """ALREADY_EMBEDDED のみ冪等 skip、ANALYZED_ARTICLE_MISSING は残す整合性兆候。"""
+    idempotent = {c for c in EmbeddingReadyBuildBlockedCode if c.is_idempotent_skip}
+    durable = {c for c in EmbeddingReadyBuildBlockedCode if not c.is_idempotent_skip}
+    assert idempotent == {EmbeddingReadyBuildBlockedCode.ALREADY_EMBEDDED}
+    assert durable == {EmbeddingReadyBuildBlockedCode.ANALYZED_ARTICLE_MISSING}

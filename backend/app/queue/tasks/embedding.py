@@ -54,11 +54,14 @@ async def generate_embedding(
                     analyzable_hint=trigger.analyzable_article_id,
                 )
             except EmbeddingReadyBuildBlockedError as exc:
-                await EmbeddingAuditRepository(session).append_ready_build_blocked(
-                    analyzed_article_id=trigger.analyzed_article_id,
-                    exc=exc,
-                )
-                await session.commit()
+                # 冪等 skip (ALREADY_EMBEDDED) は勝者の行と冗長で log のみに逃がす。
+                # 恒久的な欠損 (ANALYZED_ARTICLE_MISSING) は REJECTED を残す。
+                if not exc.code.is_idempotent_skip:
+                    await EmbeddingAuditRepository(session).append_ready_build_blocked(
+                        analyzed_article_id=trigger.analyzed_article_id,
+                        exc=exc,
+                    )
+                    await session.commit()
                 logger.info(
                     "generate_embedding_rejected",
                     analyzed_article_id=trigger.analyzed_article_id,

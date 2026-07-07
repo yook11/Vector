@@ -27,6 +27,11 @@ class EmbeddingReadyBuildBlockedCode(StrEnum):
     ANALYZED_ARTICLE_MISSING = "embedding_ready_build_blocked_analyzed_article_missing"
     ALREADY_EMBEDDED = "embedding_ready_build_blocked_already_embedded"
 
+    @property
+    def is_idempotent_skip(self) -> bool:
+        """別 worker が先に処理済みで no-op になった冪等 skip か (勝者の行と冗長)。"""
+        return self is EmbeddingReadyBuildBlockedCode.ALREADY_EMBEDDED
+
 
 @dataclass(frozen=True, slots=True)
 class EmbeddingReadyBuildFacts:

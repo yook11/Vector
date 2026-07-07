@@ -25,6 +25,14 @@ class CurationReadyBuildBlockedCode(StrEnum):
     ALREADY_REJECTED_AS_NOISE = "curation_ready_build_blocked_already_rejected_as_noise"
     CONTENT_TOO_LARGE = "curation_ready_build_blocked_content_too_large"
 
+    @property
+    def is_idempotent_skip(self) -> bool:
+        """別 worker が先に処理済みで no-op になった冪等 skip か (勝者の行と冗長)。"""
+        return self in {
+            CurationReadyBuildBlockedCode.ALREADY_CURATED,
+            CurationReadyBuildBlockedCode.ALREADY_REJECTED_AS_NOISE,
+        }
+
 
 @dataclass(frozen=True, slots=True)
 class CurationReadyBuildFacts:

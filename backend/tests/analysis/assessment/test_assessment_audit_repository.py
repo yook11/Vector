@@ -259,35 +259,6 @@ async def test_append_ready_build_blocked_records_missing_curation_rejected(
 
 
 @pytest.mark.asyncio
-async def test_append_ready_build_blocked_records_source_id_for_already_assessed(
-    db_session: AsyncSession,
-    session_factory: async_sessionmaker[AsyncSession],
-    sample_source: NewsSource,
-) -> None:
-    """ALREADY_* blocked は article_id を運び top-level source_id を補填する。"""
-    article = await _make_article(db_session, sample_source)
-    extraction = await _make_extraction(db_session, article)
-
-    async with session_factory() as session:
-        await AssessmentAuditRepository(session).append_ready_build_blocked(
-            curation_id=extraction.id,
-            exc=AssessmentReadyBuildBlockedError(
-                AssessmentReadyBuildBlockedCode.ALREADY_IN_SCOPE,
-                analyzable_article_id=article.id,
-            ),
-        )
-        await session.commit()
-
-    ev = await _fetch_by_outcome(
-        db_session, AssessmentReadyBuildBlockedCode.ALREADY_IN_SCOPE.value
-    )
-    assert ev.event_type == "rejected"
-    assert ev.payload["curation_id"] == extraction.id
-    assert ev.article_id == article.id
-    assert ev.source_id == sample_source.id
-
-
-@pytest.mark.asyncio
 async def test_append_ready_build_failed_records_unknown_failure(
     db_session: AsyncSession,
     session_factory: async_sessionmaker[AsyncSession],

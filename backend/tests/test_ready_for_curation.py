@@ -166,3 +166,17 @@ class TestCurationTrigger:
             CurationTrigger(analyzable_article_id=0)
         with pytest.raises(ValidationError):
             CurationTrigger(analyzable_article_id=-1)
+
+
+def test_ready_build_blocked_code_partitions_idempotent_skip_from_durable() -> None:
+    """ALREADY_* のみ冪等 skip、MISSING/CONTENT_TOO_LARGE は残す恒久的棄却。"""
+    idempotent = {c for c in CurationReadyBuildBlockedCode if c.is_idempotent_skip}
+    durable = {c for c in CurationReadyBuildBlockedCode if not c.is_idempotent_skip}
+    assert idempotent == {
+        CurationReadyBuildBlockedCode.ALREADY_CURATED,
+        CurationReadyBuildBlockedCode.ALREADY_REJECTED_AS_NOISE,
+    }
+    assert durable == {
+        CurationReadyBuildBlockedCode.ARTICLE_MISSING,
+        CurationReadyBuildBlockedCode.CONTENT_TOO_LARGE,
+    }

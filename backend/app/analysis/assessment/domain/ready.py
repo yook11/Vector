@@ -24,6 +24,14 @@ class AssessmentReadyBuildBlockedCode(StrEnum):
     ALREADY_IN_SCOPE = "assessment_ready_build_blocked_already_in_scope"
     ALREADY_OUT_OF_SCOPE = "assessment_ready_build_blocked_already_out_of_scope"
 
+    @property
+    def is_idempotent_skip(self) -> bool:
+        """別 worker が先に処理済みで no-op になった冪等 skip か (勝者の行と冗長)。"""
+        return self in {
+            AssessmentReadyBuildBlockedCode.ALREADY_IN_SCOPE,
+            AssessmentReadyBuildBlockedCode.ALREADY_OUT_OF_SCOPE,
+        }
+
 
 @dataclass(frozen=True, slots=True)
 class AssessmentReadyBuildFacts:

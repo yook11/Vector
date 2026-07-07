@@ -207,6 +207,35 @@ class TestGenerateEmbedding:
         mock_svc_cls.assert_not_called()
 
     @pytest.mark.asyncio
+    async def test_idempotent_skip_escapes_audit_and_logs_only(self) -> None:
+        """ALREADY_EMBEDDED (冪等 skip) は監査行を焼かず log のみに逃がす。"""
+        from app.queue.tasks.embedding import generate_embedding
+
+        gate = _make_gate_fake()
+        mock_ctx = _make_ctx(embedder=_make_embedder_fake(), gate=gate)
+        trigger = _make_trigger(analyzed_article_id=42)
+        exc = EmbeddingReadyBuildBlockedError(
+            EmbeddingReadyBuildBlockedCode.ALREADY_EMBEDDED
+        )
+
+        with (
+            _patch_ready_construction(exc),
+            patch("app.queue.tasks.embedding.EmbeddingAuditRepository") as mock_audit,
+            patch("app.queue.tasks.embedding.EmbeddingService") as mock_svc_cls,
+            capture_logs() as cap,
+        ):
+            mock_audit.return_value.append_ready_build_blocked = AsyncMock()
+            await generate_embedding(trigger=trigger, ctx=mock_ctx)
+
+        # 冪等 skip は repository を触らず pipeline_events 行を焼かない
+        mock_audit.assert_not_called()
+        rejected = [e for e in cap if e["event"] == "generate_embedding_rejected"]
+        assert len(rejected) == 1
+        assert rejected[0]["code"] == exc.code.value
+        gate.acquire.assert_not_called()
+        mock_svc_cls.assert_not_called()
+
+    @pytest.mark.asyncio
     async def test_ready_build_exception_audits_and_reraises(self) -> None:
         """Ready 判定中の例外は failed audit 後に元例外を raise する。"""
         from app.queue.tasks.embedding import generate_embedding

@@ -125,6 +125,35 @@ class TestAssessContent:
         mock_svc_cls.assert_not_called()
 
     @pytest.mark.asyncio
+    async def test_idempotent_skip_escapes_audit_and_logs_only(self) -> None:
+        """ALREADY_* (冪等 skip) は監査行を焼かず log のみに逃がす。"""
+        from app.queue.tasks.assessment import assess_content
+
+        ctx = _make_ctx(assessor=_make_provider_fake())
+        trigger = _make_trigger(curation_id=42)
+        exc = AssessmentReadyBuildBlockedError(
+            AssessmentReadyBuildBlockedCode.ALREADY_IN_SCOPE,
+            analyzable_article_id=7,
+        )
+
+        with (
+            _patch_ready_construction(exc),
+            patch("app.queue.tasks.assessment.AssessmentAuditRepository") as mock_audit,
+            patch("app.queue.tasks.assessment.AssessmentService") as mock_svc_cls,
+            capture_logs() as cap,
+        ):
+            mock_audit.return_value.append_ready_build_blocked = AsyncMock()
+            await assess_content(trigger=trigger, ctx=ctx)
+
+        # 冪等 skip は repository を触らず pipeline_events 行を焼かない
+        mock_audit.assert_not_called()
+        rejected = [e for e in cap if e["event"] == "assess_content_rejected"]
+        assert len(rejected) == 1
+        assert rejected[0]["code"] == exc.code.value
+        ctx.state.provider_rate_limit_gate.acquire.assert_not_called()
+        mock_svc_cls.assert_not_called()
+
+    @pytest.mark.asyncio
     async def test_ready_build_exception_audits_and_reraises(self) -> None:
         """Ready 判定中の例外は failed audit 後に元例外を raise する。"""
         from app.queue.tasks.assessment import assess_content

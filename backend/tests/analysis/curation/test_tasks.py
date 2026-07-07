@@ -178,6 +178,37 @@ class TestCurateContent:
         mock_assess.kiq.assert_not_called()
 
     @pytest.mark.asyncio
+    async def test_idempotent_skip_escapes_audit_and_logs_only(self) -> None:
+        """ALREADY_* (冪等 skip) は監査行を焼かず log のみに逃がす。"""
+        from app.queue.tasks.curation import curate_content
+
+        mock_ctx = _make_ctx(curator=_make_provider_fake())
+        exc = CurationReadyBuildBlockedError(
+            CurationReadyBuildBlockedCode.ALREADY_CURATED,
+            analyzable_article_id=1,
+        )
+
+        with (
+            _patch_try_advance_from(exc),
+            patch("app.queue.tasks.curation.CurationAuditRepository") as mock_audit,
+            patch("app.queue.tasks.curation.CurationService") as mock_svc_cls,
+            patch("app.queue.tasks.curation.assess_content") as mock_assess,
+            capture_logs() as cap,
+        ):
+            mock_audit.return_value.append_ready_build_blocked = AsyncMock()
+            mock_assess.kiq = AsyncMock()
+            await curate_content(trigger=_trigger(), ctx=mock_ctx)
+
+        # 冪等 skip は repository を触らず pipeline_events 行を焼かない
+        mock_audit.assert_not_called()
+        # 逃がし先 log が code を保持する (可観測性維持)
+        rejected = [e for e in cap if e["event"] == "curate_content_rejected"]
+        assert len(rejected) == 1
+        assert rejected[0]["code"] == exc.code.value
+        mock_svc_cls.assert_not_called()
+        mock_assess.kiq.assert_not_called()
+
+    @pytest.mark.asyncio
     async def test_ready_build_exception_audits_and_reraises(self) -> None:
         """Ready 判定中の例外は failed audit 後に元例外を raise する。"""
         from app.queue.tasks.curation import curate_content
