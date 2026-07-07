@@ -31,7 +31,6 @@ from app.agent.planning.planner import QuestionPlanner
 
 __all__ = ["QuestionAnsweringService", "QuestionPlanRetriever"]
 
-_NO_EVIDENCE_ANSWER = "この質問に回答するための根拠を取得できませんでした。"
 _RETRIEVAL_EMPTY_MISSING = "回答に使える根拠を取得できませんでした"
 _UNMET_REQUIREMENT_MISSING: dict[UnmetRequirement, str] = {
     "internal_retrieval": "内部記事検索を完了できませんでした",
@@ -99,17 +98,6 @@ class QuestionAnsweringService:
         outcome = await self._retriever.retrieve(plan, as_of=input.as_of)
         evidence = normalize_answer_evidence(outcome)
 
-        if not evidence:
-            return _assemble_evidence_result(
-                plan=plan,
-                outcome=outcome,
-                answer=_NO_EVIDENCE_ANSWER,
-                sources=[],
-                draft_missing_aspects=[],
-                status="insufficient",
-                include_retrieval_empty_missing=True,
-            )
-
         draft = await self._synthesizer.synthesize(
             question=input.question,
             evidence=evidence,
@@ -118,11 +106,6 @@ class QuestionAnsweringService:
         )
         _validate_draft_citations(evidence=evidence, draft=draft)
         sources = _sources_for_citations(evidence=evidence, cited_refs=draft.cited_refs)
-        status: Literal["answered", "insufficient"] = (
-            "insufficient"
-            if outcome.unmet_requirements or draft.sufficiency == "insufficient"
-            else "answered"
-        )
 
         return _assemble_evidence_result(
             plan=plan,
@@ -130,8 +113,7 @@ class QuestionAnsweringService:
             answer=draft.answer,
             sources=sources,
             draft_missing_aspects=draft.missing_aspects,
-            status=status,
-            include_retrieval_empty_missing=False,
+            include_retrieval_empty_missing=not evidence,
         )
 
 
@@ -171,16 +153,21 @@ def _assemble_evidence_result(
     answer: str,
     sources: list[AnswerSource],
     draft_missing_aspects: list[str],
-    status: Literal["answered", "insufficient"],
     include_retrieval_empty_missing: bool,
 ) -> AnswerQuestionResult:
-    missing_aspects: list[str] = []
-    if status == "insufficient":
-        missing_aspects = _missing_aspects(
-            outcome=outcome,
-            draft_missing_aspects=draft_missing_aspects,
-            include_retrieval_empty_missing=include_retrieval_empty_missing,
-        )
+    missing_aspects = _missing_aspects(
+        outcome=outcome,
+        draft_missing_aspects=draft_missing_aspects,
+        include_retrieval_empty_missing=include_retrieval_empty_missing,
+    )
+    status = _derive_evidence_status(
+        plan=plan,
+        sources=sources,
+        missing_aspects=missing_aspects,
+        outcome=outcome,
+    )
+    if status == "answered":
+        missing_aspects = []
 
     return AnswerQuestionResult(
         status=status,
@@ -192,6 +179,20 @@ def _assemble_evidence_result(
             unmet_requirements=outcome.unmet_requirements,
         ),
     )
+
+
+def _derive_evidence_status(
+    *,
+    plan: RetrievalPlan,
+    sources: list[AnswerSource],
+    missing_aspects: list[str],
+    outcome: RetrievalOutcome,
+) -> Literal["answered", "insufficient"]:
+    if outcome.unmet_requirements or missing_aspects:
+        return "insufficient"
+    if plan.retrieval_mode != "none" and not sources:
+        return "insufficient"
+    return "answered"
 
 
 def _missing_aspects(

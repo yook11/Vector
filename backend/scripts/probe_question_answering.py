@@ -1,4 +1,4 @@
-"""Probe question answering external retrieval with real adapters."""
+"""Probe question answering retrieval/synthesis and direct answer paths."""
 
 from __future__ import annotations
 
@@ -11,7 +11,26 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from app.agent.answering import QuestionPlanRetrievalService
+from app.agent.answering import (
+    AnswerSynthesisService,
+    DirectAnswerService,
+    QuestionAnsweringService,
+    QuestionPlanRetrievalService,
+)
+from app.agent.answering.ai import (
+    GeminiDirectAnswerGenerator,
+    GeminiEvidenceAnswerDraftGenerator,
+)
+from app.agent.answering.audit import (
+    AnswerSynthesisAttemptFailureEvent,
+    AnswerSynthesisDefectEvent,
+    AnswerSynthesisFinalEvent,
+    DirectAnswerAttemptFailureEvent,
+    DirectAnswerFinalEvent,
+)
+from app.agent.answering.direct import DirectAnswerDraft
+from app.agent.answering.retrieval import RetrievalOutcome
+from app.agent.contract import AnswerQuestionInput, AnswerQuestionResult, AnswerSource
 from app.agent.external_search import (
     ExternalSearchEvidence,
     ExternalSearchOutcome,
@@ -26,11 +45,18 @@ from app.agent.external_search.ai import (
 )
 from app.agent.internal_retrieval import InternalSearchQueries
 from app.agent.internal_retrieval.article_search import InternalArticleSearchHit
-from app.agent.planning.contract import ExternalResearchTask, ExternalSearchPlan
+from app.agent.planning.contract import (
+    ExternalResearchTask,
+    ExternalSearchPlan,
+    NoRetrievalPlan,
+    RetrievalPlan,
+)
 from app.config import settings
 from app.shared.security.safe_http import make_safe_async_client
 
 DEFAULT_GOAL = "NVIDIA Blackwell AI GPU latest supply and customer demand evidence"
+DEFAULT_QUESTION = "NVIDIA Blackwell の直近の供給と顧客需要は投資判断に重要？"
+DEFAULT_DIRECT_QUESTION = "Vector の使い方を短く教えて"
 MAX_EXTERNAL_RESEARCH_TASKS = 3
 SNIPPET_DISPLAY_MAX_CHARS = 240
 
@@ -43,20 +69,124 @@ class _UnreachableInternalSearch:
         raise AssertionError(f"internal search must not be called: {queries!r}")
 
 
+class _FixedExternalPlanner:
+    def __init__(self, plan: ExternalSearchPlan) -> None:
+        self._plan = plan
+
+    async def plan(self, input: AnswerQuestionInput) -> ExternalSearchPlan:  # noqa: ARG002
+        return self._plan
+
+
+class _FixedDirectPlanner:
+    def __init__(self, plan: NoRetrievalPlan) -> None:
+        self._plan = plan
+
+    async def plan(self, input: AnswerQuestionInput) -> NoRetrievalPlan:  # noqa: ARG002
+        return self._plan
+
+
+class _RecordingRetriever:
+    def __init__(self, retriever: QuestionPlanRetrievalService) -> None:
+        self._retriever = retriever
+        self.last_outcome: RetrievalOutcome | None = None
+
+    async def retrieve(
+        self,
+        plan: ExternalSearchPlan,
+        *,
+        as_of: datetime,
+    ) -> RetrievalOutcome:
+        outcome = await self._retriever.retrieve(plan, as_of=as_of)
+        self.last_outcome = outcome
+        return outcome
+
+
+class _UnreachableDirectAnswerer:
+    async def answer(
+        self,
+        *,
+        question: str,
+        as_of: datetime,  # noqa: ARG002
+    ) -> DirectAnswerDraft:
+        raise AssertionError(f"direct answerer must not be called: {question!r}")
+
+
+class _UnreachableQuestionPlanRetriever:
+    async def retrieve(
+        self,
+        plan: RetrievalPlan,
+        *,
+        as_of: datetime,  # noqa: ARG002
+    ) -> RetrievalOutcome:
+        raise AssertionError(f"retriever must not be called: {plan!r}")
+
+
+class _UnreachableEvidenceSynthesizer:
+    async def synthesize(
+        self,
+        *,
+        question: str,
+        evidence: list[object],
+        as_of: datetime,  # noqa: ARG002
+        target_time_window: str | None,  # noqa: ARG002
+    ) -> object:
+        raise AssertionError(f"synthesizer must not be called: {question!r}")
+
+
+class _ProbeSynthesisAuditRecorder:
+    def __init__(self) -> None:
+        self.attempt_failures: list[AnswerSynthesisAttemptFailureEvent] = []
+        self.defects: list[AnswerSynthesisDefectEvent] = []
+        self.final_events: list[AnswerSynthesisFinalEvent] = []
+
+    async def record_attempt_failure(
+        self,
+        event: AnswerSynthesisAttemptFailureEvent,
+    ) -> None:
+        self.attempt_failures.append(event)
+
+    async def record_defect(self, event: AnswerSynthesisDefectEvent) -> None:
+        self.defects.append(event)
+
+    async def record_final_event(self, event: AnswerSynthesisFinalEvent) -> None:
+        self.final_events.append(event)
+
+
+class _ProbeDirectAnswerAuditRecorder:
+    def __init__(self) -> None:
+        self.attempt_failures: list[DirectAnswerAttemptFailureEvent] = []
+        self.final_events: list[DirectAnswerFinalEvent] = []
+
+    async def record_attempt_failure(
+        self,
+        event: DirectAnswerAttemptFailureEvent,
+    ) -> None:
+        self.attempt_failures.append(event)
+
+    async def record_final_event(self, event: DirectAnswerFinalEvent) -> None:
+        self.final_events.append(event)
+
+
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description=(
-            "Probe QuestionPlanRetrievalService external retrieval with real "
-            "DeepSeek and Tavily adapters."
+            "Probe QuestionAnsweringService external retrieval/evidence synthesis "
+            "or direct answer path."
         )
+    )
+    parser.add_argument(
+        "--mode",
+        choices=("external", "direct"),
+        default="external",
+        help="Probe mode. Defaults to external.",
     )
     parser.add_argument(
         "goals",
         nargs="*",
         metavar="goal",
         help=(
-            "External research collection_goal. Quote each goal containing spaces. "
-            "At most 3 goals are accepted."
+            "External research collection_goal for --mode external. Quote each goal "
+            "containing spaces. At most 3 goals are accepted."
         ),
     )
     parser.add_argument(
@@ -70,20 +200,47 @@ def _build_parser() -> argparse.ArgumentParser:
         default=None,
         help="Optional external plan target_time_window value.",
     )
+    parser.add_argument(
+        "--question",
+        default=None,
+        help="Question passed to QuestionAnsweringService.",
+    )
     return parser
 
 
 async def _probe(
     *,
+    mode: str,
+    question: str,
+    goals: Sequence[str],
+    requested_agent_count: int,
+    target_time_window: str | None,
+) -> None:
+    if mode == "direct":
+        await _probe_direct(question=question)
+        return
+    await _probe_external(
+        question=question,
+        goals=goals,
+        requested_agent_count=requested_agent_count,
+        target_time_window=target_time_window,
+    )
+
+
+async def _probe_external(
+    *,
+    question: str,
     goals: Sequence[str],
     requested_agent_count: int,
     target_time_window: str | None,
 ) -> None:
     _require_secret("TAVILY_API_KEY", settings.tavily_api_key.get_secret_value())
     _require_secret("DEEPSEEK_API_KEY", settings.deepseek_api_key.get_secret_value())
+    _require_secret("GEMINI_API_KEY", settings.gemini_api_key.get_secret_value())
 
     as_of = datetime.now(UTC)
     plan = _build_external_plan(goals, target_time_window=target_time_window)
+    synthesis_audit = _ProbeSynthesisAuditRecorder()
 
     async with make_safe_async_client() as client:
         provider = TavilySearchProvider(
@@ -95,20 +252,66 @@ async def _probe(
             search_provider=provider,
             evidence_selector=DeepSeekEvidenceSelector(),
         )
-        service = QuestionPlanRetrievalService(
-            internal_search=_UnreachableInternalSearch(),
-            external_search=ExternalSearchService(runner=runner),
-            requested_external_agent_count=requested_agent_count,
+        retriever = _RecordingRetriever(
+            QuestionPlanRetrievalService(
+                internal_search=_UnreachableInternalSearch(),
+                external_search=ExternalSearchService(runner=runner),
+                requested_external_agent_count=requested_agent_count,
+            )
         )
-        outcome = await service.retrieve(plan, as_of=as_of)
+        service = QuestionAnsweringService(
+            planner=_FixedExternalPlanner(plan),
+            retriever=retriever,
+            synthesizer=AnswerSynthesisService(
+                generator=GeminiEvidenceAnswerDraftGenerator(),
+                audit_recorder=synthesis_audit,
+            ),
+            direct_answerer=_UnreachableDirectAnswerer(),
+        )
+        result = await service.answer(
+            AnswerQuestionInput(question=question, as_of=as_of)
+        )
 
-    _print_probe_summary(
+    outcome = retriever.last_outcome
+    if outcome is None:
+        raise SystemExit("retrieval did not run")
+
+    _print_retrieval_summary(
         as_of=as_of,
         plan=plan,
         requested_agent_count=requested_agent_count,
         outcome=outcome.external_search,
         unmet_requirements=outcome.unmet_requirements,
     )
+    print()
+    _print_answer_result(result)
+    print()
+    _print_synthesis_audit(synthesis_audit)
+
+
+async def _probe_direct(*, question: str) -> None:
+    _require_secret("GEMINI_API_KEY", settings.gemini_api_key.get_secret_value())
+
+    as_of = datetime.now(UTC)
+    direct_audit = _ProbeDirectAnswerAuditRecorder()
+    service = QuestionAnsweringService(
+        planner=_FixedDirectPlanner(NoRetrievalPlan(reason="direct answer probe")),
+        retriever=_UnreachableQuestionPlanRetriever(),
+        synthesizer=_UnreachableEvidenceSynthesizer(),
+        direct_answerer=DirectAnswerService(
+            generator=GeminiDirectAnswerGenerator(),
+            audit_recorder=direct_audit,
+        ),
+    )
+    result = await service.answer(AnswerQuestionInput(question=question, as_of=as_of))
+
+    print("direct:")
+    print(f"  as_of={as_of.isoformat()}")
+    print("  planned_mode=none")
+    print()
+    _print_answer_result(result)
+    print()
+    _print_direct_audit(direct_audit)
 
 
 def _require_secret(name: str, value: str) -> None:
@@ -138,7 +341,7 @@ def _build_external_plan(
     )
 
 
-def _print_probe_summary(
+def _print_retrieval_summary(
     *,
     as_of: datetime,
     plan: ExternalSearchPlan,
@@ -146,27 +349,83 @@ def _print_probe_summary(
     outcome: ExternalSearchOutcome | None,
     unmet_requirements: Sequence[str],
 ) -> None:
-    print(f"as_of={as_of.isoformat()}")
-    print(f"planned_mode={plan.retrieval_mode}")
-    print(f"target_time_window={plan.target_time_window or ''}")
-    print(f"requested_agent_count={requested_agent_count}")
-    print(f"planned_task_count={len(plan.external_research_tasks)}")
+    print("retrieval:")
+    print(f"  as_of={as_of.isoformat()}")
+    print(f"  planned_mode={plan.retrieval_mode}")
+    print(f"  target_time_window={plan.target_time_window or ''}")
+    print(f"  requested_agent_count={requested_agent_count}")
+    print(f"  planned_task_count={len(plan.external_research_tasks)}")
 
     if outcome is None:
-        print("external_search_outcome=None")
-        print(f"unmet_requirements={list(unmet_requirements)}")
+        print("  external_search_outcome=None")
+        print(f"  unmet_requirements={list(unmet_requirements)}")
         return
 
-    print(f"effective_agent_count={outcome.effective_agent_count}")
-    print(f"hard_agent_limit={outcome.hard_agent_limit}")
-    print(f"outcome_task_count={len(outcome.tasks)}")
-    print(f"evidence_count={len(outcome.evidence)}")
-    print(f"deduplicated_evidence_count={outcome.deduplicated_evidence_count}")
-    print(f"unmet_requirements={list(unmet_requirements)}")
+    print(f"  effective_agent_count={outcome.effective_agent_count}")
+    print(f"  hard_agent_limit={outcome.hard_agent_limit}")
+    print(f"  outcome_task_count={len(outcome.tasks)}")
+    print(f"  evidence_count={len(outcome.evidence)}")
+    print(f"  deduplicated_evidence_count={outcome.deduplicated_evidence_count}")
+    print(f"  unmet_requirements={list(unmet_requirements)}")
     print()
     _print_task_reports(outcome.task_reports)
     print()
     _print_evidence(outcome.evidence)
+
+
+def _print_answer_result(result: AnswerQuestionResult) -> None:
+    print("answer:")
+    print(f"  status={result.status}")
+    print(f"  answer={result.answer}")
+    print(f"  missing_aspects={list(result.missing_aspects)}")
+    print(f"  retrieval_unmet={list(result.retrieval.unmet_requirements)}")
+    print("  sources:")
+    if not result.sources:
+        print("    (none)")
+        return
+    for source in result.sources:
+        _print_answer_source(source)
+
+
+def _print_answer_source(source: AnswerSource) -> None:
+    print(f"    [{source.source_ref}] kind={source.kind}")
+    print(f"        title={source.title}")
+    url = getattr(source, "url", None)
+    if url is not None:
+        print(f"        url={url}")
+    article_id = getattr(source, "article_id", None)
+    if article_id is not None:
+        print(f"        article_id={article_id}")
+    print(f"        source_name={source.source_name or ''}")
+    print(f"        published_at={_format_datetime(source.published_at)}")
+    if source.snippet:
+        print(f"        snippet={_truncate_for_display(source.snippet)}")
+
+
+def _print_synthesis_audit(recorder: _ProbeSynthesisAuditRecorder) -> None:
+    final = recorder.final_events[-1] if recorder.final_events else None
+    print("synthesis:")
+    print(f"  attempt_failures={len(recorder.attempt_failures)}")
+    print(f"  defects={len(recorder.defects)}")
+    if final is None:
+        print("  final_event=None")
+        return
+    print(f"  outcome_code={final.outcome_code.value}")
+    print(f"  retry_used={final.retry_used}")
+    print(f"  fallback_used={final.fallback_used}")
+    print(f"  status={final.status}")
+    print(f"  defect_count={final.defect_count}")
+
+
+def _print_direct_audit(recorder: _ProbeDirectAnswerAuditRecorder) -> None:
+    final = recorder.final_events[-1] if recorder.final_events else None
+    print("direct_answer:")
+    print(f"  attempt_failures={len(recorder.attempt_failures)}")
+    if final is None:
+        print("  final_event=None")
+        return
+    print(f"  outcome_code={final.outcome_code.value}")
+    print(f"  retry_used={final.retry_used}")
 
 
 def _print_task_reports(reports: Sequence[ResearchTaskReport]) -> None:
@@ -234,8 +493,13 @@ def _truncate_for_display(value: str) -> str:
 
 def main(argv: Sequence[str] | None = None) -> None:
     args = _build_parser().parse_args(argv)
+    question = args.question or (
+        DEFAULT_DIRECT_QUESTION if args.mode == "direct" else DEFAULT_QUESTION
+    )
     asyncio.run(
         _probe(
+            mode=args.mode,
+            question=question,
             goals=args.goals,
             requested_agent_count=args.agents,
             target_time_window=args.time_window,

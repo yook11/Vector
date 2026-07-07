@@ -428,19 +428,31 @@ async def test_answer_mixed_plan_omits_unused_external_source() -> None:
 
 
 @pytest.mark.asyncio
-async def test_answer_empty_retrieval_evidence_skips_synthesis() -> None:
+async def test_answer_empty_retrieval_evidence_calls_synthesis() -> None:
+    draft = AnswerDraft(
+        sufficiency="insufficient",
+        answer=(
+            "検索で引用できる根拠は見つかりませんでした。"
+            "一般論としては参考程度に扱ってください。"
+        ),
+        cited_refs=[],
+        missing_aspects=["引用できる検索根拠"],
+    )
     service, _, _, synthesizer, _ = _service(
         plan=_internal_plan(),
         outcome=RetrievalOutcome(),
+        draft=draft,
     )
 
     result = await service.answer(_input())
 
     assert result.status == "insufficient"
+    assert result.answer == draft.answer
     assert result.sources == []
     assert result.missing_aspects
-    assert "根拠" in result.missing_aspects[0]
-    assert synthesizer.calls == []
+    assert "引用できる検索根拠" in result.missing_aspects
+    assert len(synthesizer.calls) == 1
+    assert synthesizer.calls[0]["evidence"] == []
 
 
 @pytest.mark.asyncio
