@@ -81,8 +81,8 @@ async def test_append_run_event_derives_pipeline_stage_from_backfill_stage(
     repo = BackfillAuditRepository(db_session)
 
     await repo.append_run_event(
-        event_type=EventType.SKIPPED,
-        outcome_code=BackfillOutcomeCode.RUN_NO_TARGETS,
+        event_type=EventType.FAILED,
+        outcome_code=BackfillOutcomeCode.RUN_FAILED,
         backfill_stage=backfill_stage,  # type: ignore[arg-type]
         run_id=f"run-{backfill_stage}",
     )

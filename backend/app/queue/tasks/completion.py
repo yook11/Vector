@@ -22,7 +22,7 @@ from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from taskiq import Context, TaskiqDepends
 
-from app.audit.domain.event import EventType, Stage
+from app.audit.domain.event import Stage
 from app.audit.error_fields import exception_fqn
 from app.audit.metrics import record_audit_dropped
 from app.audit.stages.completion import ArticleCompletionAuditRepository
@@ -113,7 +113,8 @@ async def scrape_html_body(
 
     taskiq retry を持たず cron poller (``dispatch_html_fetch_jobs``) のみで
     再投入する。task は ``ReadyForArticleCompletion.try_advance_from`` で Ready を
-    構築し (対象外なら skipped audit + ``None``)、Service に渡す。
+    構築し (対象消滅 / 別 worker 完了済み等の benign な skip は log のみで ``None``)、
+    Service に渡す。
     analyzable_article_id が返れば ``curate_content`` に enqueue、``None`` は何もしない
     (DB 状態 + audit は
     Service / failure handler 内で完結済)。
@@ -129,15 +130,9 @@ async def scrape_html_body(
                     repo=ArticleCompletionRepository(session),
                 )
             except ArticleCompletionReadyBuildError as exc:
-                await _append_ready_build_error_audit(
-                    session_factory,
-                    incomplete_article_id=incomplete_article_id,
-                    exc=exc,
-                )
-                if exc.EVENT_TYPE == EventType.FAILED:
-                    # blocked (SKIPPED) は stale/冪等で計上しない。FAILED のみ failed。
-                    record_completion_processing_outcome("failed")
-                    raise
+                # 対象消滅 / 別 worker 完了済み等の benign な冪等 skip。監査には焼かず
+                # log で観測し、processing_outcome counter も汚さない。VO 構築失敗は
+                # この型を継承せず except Exception 側で failed として焼かれる。
                 logger.info(
                     "scrape_html_body_skipped",
                     incomplete_article_id=incomplete_article_id,

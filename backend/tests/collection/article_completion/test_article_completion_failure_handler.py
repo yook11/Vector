@@ -8,7 +8,7 @@
 - scrape ``Retryable`` exhausted → ``closed`` + ``failed`` audit (``retry_exhausted``)
 - scrape ``Retryable`` + server retry_after_seconds → その秒数で ready_at
 - completion ``CompletionRejection`` → ``closed`` + ``rejected`` audit
-- 失効 attempt (updated=False) → 状態変化なし + ``skipped`` / ``stale_attempt`` audit
+- 失効 attempt (updated=False) → 状態変化なし + 監査に焼かない (log で観測)
 
 handler は元の ``ScrapeFailure`` を受け内部で分類する (audit に variant を運ぶ J2)。
 handler は別 session で commit するので、検証前に ``db_session`` を rollback して
@@ -24,6 +24,7 @@ from logfire.testing import CaptureLogfire
 from sqlalchemy import select, update
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+from structlog.testing import capture_logs
 
 from app.collection.article_acquisition.repository import IncompleteArticleRepository
 from app.collection.article_completion.completion_failure import CompletionRejection
@@ -149,6 +150,24 @@ async def _fetch_event(db_session: AsyncSession, source_id: int) -> PipelineEven
     )
     assert len(rows) == 1
     return rows[0]
+
+
+async def _assert_no_event(db_session: AsyncSession, source_id: int) -> None:
+    """handler が completion audit を 1 件も焼いていないことを固定する。"""
+    await db_session.rollback()
+    rows = (
+        (
+            await db_session.execute(
+                select(PipelineEvent).where(
+                    PipelineEvent.stage == "completion",
+                    PipelineEvent.source_id == source_id,
+                )
+            )
+        )
+        .scalars()
+        .all()
+    )
+    assert rows == []
 
 
 @pytest.mark.asyncio
@@ -400,16 +419,16 @@ async def test_completion_rejected_audits_rejected_with_defects(
 
 
 @pytest.mark.asyncio
-async def test_stale_attempt_records_skipped_without_state_change(
+async def test_stale_attempt_records_no_audit_without_state_change(
     session_factory: async_sessionmaker[AsyncSession],
     db_session: AsyncSession,
     tc_source: NewsSource,
 ) -> None:
-    """attempt 失効 (他 worker が attempt_count を進めた) → stale_attempt audit。
+    """attempt 失効 (他 worker が attempt_count を進めた) → 監査に焼かない。
 
     ready は attempt_count=1 のまま、DB は別 worker が 2 に進めた状況を作る。
-    close_claimed が 0 行 (updated=False) になり、本来の outcome ではなく
-    ``skipped`` / ``stale_attempt`` が焼かれる。pending state は触られない。
+    close_claimed が 0 行 (updated=False) になり、stale trigger は監査に焼かず
+    log で観測する (audit skip 逃がしポリシー)。pending state は触られない。
     """
     ready = await _make_ready(db_session, tc_source, "https://techcrunch.com/stale")
     # 別 worker が再 claim して attempt を進めた状況 (ready.attempt_count=1 は失効)。
@@ -421,17 +440,18 @@ async def test_stale_attempt_records_skipped_without_state_change(
     await db_session.commit()
     handler = ArticleCompletionFailureHandler(session_factory)
 
-    await handler.handle_scrape_failure(
-        ready, ScrapeNotHtml(content_type="application/pdf")
-    )
+    with capture_logs() as logs:
+        await handler.handle_scrape_failure(
+            ready, ScrapeNotHtml(content_type="application/pdf")
+        )
 
-    ev = await _fetch_event(db_session, tc_source.id)
-    assert ev.event_type == "skipped"
-    assert ev.outcome_code == "stale_attempt"
-    assert ev.retryability is None
-    assert ev.payload["attempt_count"] == ready.attempt_count
+    await _assert_no_event(db_session, tc_source.id)
     pending = await _reload_pending(db_session, ready.incomplete_article_id)
     assert pending.status == "running"  # void な attempt は状態を変えない
+    # 監査を外した代わりに stale trigger は escape log で観測可能に保つ。
+    assert [
+        e for e in logs if e.get("event") == "article_completion_stale_attempt_ignored"
+    ]
 
 
 # processing_outcome metric (vector.completion.processing_outcome)

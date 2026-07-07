@@ -32,7 +32,6 @@ class BriefingOutcomeCode(StrEnum):
 
     GENERATION_COMPLETED = "briefing_generation_completed"
     GENERATION_INPUT_EMPTY = "briefing_generation_input_empty"
-    GENERATION_ALREADY_EXISTS = "briefing_generation_already_exists"
     DISPATCH_COMPLETED = "briefing_dispatch_completed"
     CATEGORY_ENQUEUED = "briefing_category_enqueued"
     CATEGORY_ENQUEUE_FAILED = "briefing_category_enqueue_failed"
@@ -90,25 +89,6 @@ class BriefingAuditRepository:
         await self._append_event(
             event_type=EventType.REJECTED,
             outcome_code=BriefingOutcomeCode.GENERATION_INPUT_EMPTY.value,
-            payload=payload,
-        )
-
-    async def append_generation_already_exists(
-        self,
-        *,
-        week_start: date,
-        category_id: int,
-    ) -> None:
-        """既存 briefing があり、生成しなかったことを記録する。"""
-        category_slug = await self._resolve_category_slug(category_id)
-        payload = BriefingPayload(
-            week_start=week_start.isoformat(),
-            category_id=category_id,
-            category_slug=category_slug,
-        )
-        await self._append_event(
-            event_type=EventType.SKIPPED,
-            outcome_code=BriefingOutcomeCode.GENERATION_ALREADY_EXISTS.value,
             payload=payload,
         )
 

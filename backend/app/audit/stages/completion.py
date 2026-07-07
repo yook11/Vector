@@ -29,7 +29,6 @@ from app.audit.injection_signal import record_injection_boundary_detected
 from app.audit.repository import PipelineEventRepository
 from app.collection.article_completion.completion_failure import CompletionRejection
 from app.collection.article_completion.ready import (
-    ArticleCompletionReadyBuildError,
     ArticleCompletionReadyBuildFacts,
     ReadyForArticleCompletion,
 )
@@ -63,14 +62,11 @@ class CompletionOutcomeCode(StrEnum):
     """Stage.COMPLETION の outcome code (stage ファイル内定義分のみ)。"""
 
     ARTICLE_COMPLETED = "article_completed"
-    PERSIST_SUPERSEDED = "persist_superseded"
-    PERSIST_URL_CONFLICT = "persist_url_conflict"
     PERSIST_CRASHED = "persist_crashed"
     SCRAPE_PARSE_CRASHED = "scrape_parse_crashed"
     SCRAPE_NOT_HTML = "scrape_not_html"
     SCRAPE_PARSER_GAVE_UP = "scrape_parser_gave_up"
     SCRAPE_CONTENT_QUALITY_TOO_LOW = "scrape_content_quality_too_low"
-    STALE_ATTEMPT = "stale_attempt"
     READY_BUILD_FAILED_URL_INVALID = "completion_ready_build_failed_url_invalid"
     READY_BUILD_FAILED_OBSERVED_ARTICLE_INVALID = (
         "completion_ready_build_failed_observed_article_invalid"
@@ -115,30 +111,12 @@ class ArticleCompletionAuditRepository:
                     source_id=ready.source_id,
                     article_id=analyzable_article_id,
                 )
-            case CompletionSuperseded():
-                await self._append_race_loss(
-                    ready=ready, outcome_code=CompletionOutcomeCode.PERSIST_SUPERSEDED
-                )
-            case CompletionUrlConflict():
-                await self._append_race_loss(
-                    ready=ready, outcome_code=CompletionOutcomeCode.PERSIST_URL_CONFLICT
-                )
+            case CompletionSuperseded() | CompletionUrlConflict():
+                # 楽観ロック敗北 / URL 衝突は業務状態を変えない冪等な race-loss。
+                # 監査に焼かず Service 側の log で観測する。
+                return
             case _ as unreachable:
                 assert_never(unreachable)
-
-    async def _append_race_loss(
-        self, *, ready: ReadyForArticleCompletion, outcome_code: CompletionOutcomeCode
-    ) -> None:
-        """persist race-loss を skipped として記録する。"""
-        await self._append_event(
-            event_type=EventType.SKIPPED,
-            outcome_code=outcome_code.value,
-            payload=CompletionPayload(
-                canonical_url=str(ready.source_url),
-                attempt_count=ready.attempt_count,
-            ),
-            source_id=ready.source_id,
-        )
 
     async def append_scrape_outcome(
         self,
@@ -289,18 +267,6 @@ class ArticleCompletionAuditRepository:
             source_id=ready.source_id,
         )
 
-    async def append_stale_attempt(self, *, ready: ReadyForArticleCompletion) -> None:
-        """失効した claim の後処理を skipped として記録する。"""
-        await self._append_event(
-            event_type=EventType.SKIPPED,
-            outcome_code=CompletionOutcomeCode.STALE_ATTEMPT.value,
-            payload=CompletionPayload(
-                canonical_url=str(ready.source_url),
-                attempt_count=ready.attempt_count,
-            ),
-            source_id=ready.source_id,
-        )
-
     async def append_ready_build_error(
         self,
         *,
@@ -308,46 +274,30 @@ class ArticleCompletionAuditRepository:
         exc: Exception,
         facts: ArticleCompletionReadyBuildFacts | None = None,
     ) -> None:
-        """Ready 構築不能の typed error / fallback error を記録する。"""
+        """Ready 構築失敗 (VO / entity build error) を failed として記録する。
+
+        対象消滅 / 別 worker 完了済みの benign な skip は task 側で log のみに
+        逃がすため、ここへ到達するのは常に FAILED (ドメイン構築失敗) となる。
+        """
         projection = _project_ready_build_error(exc)
         payload = CompletionPayload(
-            failure_kind=(
-                projection.failure_kind
-                if projection.event_type is EventType.FAILED
-                else None
-            ),
+            failure_kind=projection.failure_kind,
             incomplete_article_id=incomplete_article_id,
             incomplete_article_status=facts.status if facts is not None else None,
             source_name=str(facts.source_name) if facts is not None else None,
             canonical_url=facts.source_url if facts is not None else None,
             attempt_count=facts.attempt_count if facts is not None else None,
-            error_message=(
-                error_message_of(exc)
-                if projection.event_type is EventType.FAILED
-                else None
-            ),
-            error_chain=(
-                extract_error_chain(exc)
-                if projection.event_type is EventType.FAILED
-                else None
-            ),
+            error_message=error_message_of(exc),
+            error_chain=extract_error_chain(exc),
             reason_code=projection.reason_code,
         )
         await self._append_event(
-            event_type=projection.event_type,
+            event_type=EventType.FAILED,
             outcome_code=projection.code,
             payload=payload,
             source_id=facts.source_id if facts is not None else None,
-            error_class=(
-                exception_fqn(exc)
-                if projection.event_type is EventType.FAILED
-                else None
-            ),
-            retryability=(
-                Retryability.UNKNOWN
-                if projection.event_type is EventType.FAILED
-                else None
-            ),
+            error_class=exception_fqn(exc),
+            retryability=Retryability.UNKNOWN,
         )
 
     async def append_persist_crashed(
@@ -440,7 +390,6 @@ class ArticleCompletionAuditRepository:
 
 @dataclass(frozen=True, slots=True)
 class _ReadyBuildErrorProjection:
-    event_type: EventType
     code: str
     failure_kind: str | None
     # failure_kind は粗い集計タグ、reason_code は VO が掴んだ機械可読な細分
@@ -448,40 +397,29 @@ class _ReadyBuildErrorProjection:
 
 
 def _project_ready_build_error(exc: Exception) -> _ReadyBuildErrorProjection:
-    if isinstance(exc, ArticleCompletionReadyBuildError):
-        return _ReadyBuildErrorProjection(
-            event_type=exc.EVENT_TYPE,
-            code=exc.CODE,
-            failure_kind=exc.FAILURE_KIND,
-        )
     if isinstance(exc, CanonicalArticleUrlInvalidError):
         return _ReadyBuildErrorProjection(
-            event_type=EventType.FAILED,
             failure_kind="url_invalid",
             code=CompletionOutcomeCode.READY_BUILD_FAILED_URL_INVALID.value,
             reason_code=exc.reason,
         )
     if isinstance(exc, ObservedArticleInvalidError):
         return _ReadyBuildErrorProjection(
-            event_type=EventType.FAILED,
             failure_kind="observed_article_invalid",
             code=CompletionOutcomeCode.READY_BUILD_FAILED_OBSERVED_ARTICLE_INVALID.value,
             reason_code=exc.reason,
         )
     if isinstance(exc, SourceNotRegisteredError):
         return _ReadyBuildErrorProjection(
-            event_type=EventType.FAILED,
             failure_kind="source_not_registered",
             code=CompletionOutcomeCode.READY_BUILD_FAILED_SOURCE_NOT_REGISTERED.value,
         )
     if isinstance(exc, SQLAlchemyError):
         return _ReadyBuildErrorProjection(
-            event_type=EventType.FAILED,
             failure_kind="db_error",
             code=CompletionOutcomeCode.READY_BUILD_FAILED_DB_ERROR.value,
         )
     return _ReadyBuildErrorProjection(
-        event_type=EventType.FAILED,
         failure_kind="unexpected_error",
         code=CompletionOutcomeCode.READY_BUILD_FAILED_UNEXPECTED_ERROR.value,
     )

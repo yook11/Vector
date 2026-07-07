@@ -19,7 +19,7 @@ import ast
 from pathlib import Path
 
 # drop site を増減したら更新する意図的 tripwire (現 SSoT 件数)。
-EXPECTED_AUDIT_DROPPED_SITES = 25
+EXPECTED_AUDIT_DROPPED_SITES = 24
 
 _APP_DIR = Path(__file__).resolve().parents[2] / "app"
 

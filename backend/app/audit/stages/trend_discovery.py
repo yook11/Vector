@@ -27,9 +27,6 @@ class TrendDiscoveryOutcomeCode(StrEnum):
 
     RUN_COMPLETED = "trend_discovery_run_completed"
     RUN_UPDATED = "trend_discovery_run_updated"
-    RUN_NO_TARGET_ARTICLES = "trend_discovery_run_no_target_articles"
-    RUN_ALREADY_EXISTS = "trend_discovery_run_already_exists"
-    RUN_CONFLICT = "trend_discovery_run_conflict"
     RUN_FAILED = "trend_discovery_run_failed"
 
 

@@ -444,13 +444,7 @@ async def backfill_curations(ctx: Context = TaskiqDepends()) -> None:
         session_factory = ctx.state.session_factory
         run_id = _new_backfill_run_id()
         if not settings.backfill_curations_enabled:
-            await _append_backfill_run_event(
-                session_factory,
-                backfill_stage="curate",
-                run_id=run_id,
-                event_type=EventType.SKIPPED,
-                outcome_code=BackfillOutcomeCode.RUN_KILL_SWITCH_DISABLED,
-            )
+            # kill switch off = 運用ゲート。監査に焼かず log で観測する。
             logger.info("backfill_curations_disabled")
             return
 
@@ -458,13 +452,7 @@ async def backfill_curations(ctx: Context = TaskiqDepends()) -> None:
             curation_held = await is_curation_held(get_redis())
             _record_hold_state("curation", held=curation_held)
             if curation_held:
-                await _append_backfill_run_event(
-                    session_factory,
-                    backfill_stage="curate",
-                    run_id=run_id,
-                    event_type=EventType.SKIPPED,
-                    outcome_code=BackfillOutcomeCode.RUN_HELD_BY_STAGE_HOLD,
-                )
+                # stage hold = 運用ゲート。監査に焼かず log + held gauge で観測する。
                 logger.warning("backfill_curations_held")
                 return
 
@@ -491,13 +479,7 @@ async def backfill_curations(ctx: Context = TaskiqDepends()) -> None:
 
             found = len(targets)
             if found == 0:
-                await _append_backfill_run_event(
-                    session_factory,
-                    backfill_stage="curate",
-                    run_id=run_id,
-                    event_type=EventType.SKIPPED,
-                    outcome_code=BackfillOutcomeCode.RUN_NO_TARGETS,
-                )
+                # 対象 0 件 = 運用ゲート。監査に焼かず log + backlog gauge で観測する。
                 logger.info("backfill_curations_empty")
                 return
 
@@ -598,13 +580,7 @@ async def backfill_assessments(ctx: Context = TaskiqDepends()) -> None:
         session_factory = ctx.state.session_factory
         run_id = _new_backfill_run_id()
         if not settings.backfill_assessments_enabled:
-            await _append_backfill_run_event(
-                session_factory,
-                backfill_stage="assess",
-                run_id=run_id,
-                event_type=EventType.SKIPPED,
-                outcome_code=BackfillOutcomeCode.RUN_KILL_SWITCH_DISABLED,
-            )
+            # kill switch off = 運用ゲート。監査に焼かず log で観測する。
             logger.info("backfill_assessments_disabled")
             return
 
@@ -612,13 +588,7 @@ async def backfill_assessments(ctx: Context = TaskiqDepends()) -> None:
             assessment_held = await is_assessment_held(get_redis())
             _record_hold_state("assessment", held=assessment_held)
             if assessment_held:
-                await _append_backfill_run_event(
-                    session_factory,
-                    backfill_stage="assess",
-                    run_id=run_id,
-                    event_type=EventType.SKIPPED,
-                    outcome_code=BackfillOutcomeCode.RUN_HELD_BY_STAGE_HOLD,
-                )
+                # stage hold = 運用ゲート。監査に焼かず log + held gauge で観測する。
                 logger.warning("backfill_assessments_held")
                 return
 
@@ -647,13 +617,7 @@ async def backfill_assessments(ctx: Context = TaskiqDepends()) -> None:
 
             found = len(targets)
             if found == 0:
-                await _append_backfill_run_event(
-                    session_factory,
-                    backfill_stage="assess",
-                    run_id=run_id,
-                    event_type=EventType.SKIPPED,
-                    outcome_code=BackfillOutcomeCode.RUN_NO_TARGETS,
-                )
+                # 対象 0 件 = 運用ゲート。監査に焼かず log + backlog gauge で観測する。
                 logger.info("backfill_assessments_empty")
                 return
 
@@ -754,13 +718,7 @@ async def backfill_embeddings(ctx: Context = TaskiqDepends()) -> None:
         session_factory = ctx.state.session_factory
         run_id = _new_backfill_run_id()
         if not settings.backfill_embeddings_enabled:
-            await _append_backfill_run_event(
-                session_factory,
-                backfill_stage="embed",
-                run_id=run_id,
-                event_type=EventType.SKIPPED,
-                outcome_code=BackfillOutcomeCode.RUN_KILL_SWITCH_DISABLED,
-            )
+            # kill switch off = 運用ゲート。監査に焼かず log で観測する。
             logger.info("backfill_embeddings_disabled")
             return
 
@@ -768,13 +726,7 @@ async def backfill_embeddings(ctx: Context = TaskiqDepends()) -> None:
             embedding_held = await is_embedding_held(get_redis())
             _record_hold_state("embedding", held=embedding_held)
             if embedding_held:
-                await _append_backfill_run_event(
-                    session_factory,
-                    backfill_stage="embed",
-                    run_id=run_id,
-                    event_type=EventType.SKIPPED,
-                    outcome_code=BackfillOutcomeCode.RUN_HELD_BY_STAGE_HOLD,
-                )
+                # stage hold = 運用ゲート。監査に焼かず log + held gauge で観測する。
                 logger.warning("backfill_embeddings_held")
                 return
 
@@ -801,13 +753,7 @@ async def backfill_embeddings(ctx: Context = TaskiqDepends()) -> None:
 
             found = len(targets)
             if found == 0:
-                await _append_backfill_run_event(
-                    session_factory,
-                    backfill_stage="embed",
-                    run_id=run_id,
-                    event_type=EventType.SKIPPED,
-                    outcome_code=BackfillOutcomeCode.RUN_NO_TARGETS,
-                )
+                # 対象 0 件 = 運用ゲート。監査に焼かず log + backlog gauge で観測する。
                 logger.info("backfill_embeddings_empty")
                 return
 

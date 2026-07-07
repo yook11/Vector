@@ -11,6 +11,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from logfire.testing import CaptureLogfire
+from structlog.testing import capture_logs
 
 from app.audit.domain.event import Stage
 from app.audit.stages.backfill import BackfillOutcomeCode
@@ -34,6 +35,9 @@ class _TaskCase:
     target_kind: str
     limit: int
     daily_max: int
+    disabled_log: str
+    held_log: str
+    empty_log: str
 
 
 CASES = [
@@ -51,6 +55,9 @@ CASES = [
         target_kind="article",
         limit=tasks.CURATIONS_LIMIT,
         daily_max=tasks.CURATIONS_DAILY_MAX,
+        disabled_log="backfill_curations_disabled",
+        held_log="backfill_curations_held",
+        empty_log="backfill_curations_empty",
     ),
     _TaskCase(
         name="assess",
@@ -66,6 +73,9 @@ CASES = [
         target_kind="curation",
         limit=tasks.ASSESSMENTS_LIMIT,
         daily_max=tasks.ASSESSMENTS_DAILY_MAX,
+        disabled_log="backfill_assessments_disabled",
+        held_log="backfill_assessments_held",
+        empty_log="backfill_assessments_empty",
     ),
     _TaskCase(
         name="embed",
@@ -81,6 +91,9 @@ CASES = [
         target_kind="analyzed_article",
         limit=tasks.EMBEDDINGS_LIMIT,
         daily_max=tasks.EMBEDDINGS_DAILY_MAX,
+        disabled_log="backfill_embeddings_disabled",
+        held_log="backfill_embeddings_held",
+        empty_log="backfill_embeddings_empty",
     ),
 ]
 
@@ -139,29 +152,29 @@ def test_backfill_audit_task_wrappers_do_not_accept_stage(wrapper: object) -> No
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("case", CASES, ids=[case.name for case in CASES])
-async def test_kill_switch_disabled_is_audited(case: _TaskCase) -> None:
-    """kill switch false は run skipped として監査され、selection に進まない。"""
+async def test_kill_switch_disabled_is_logged_not_audited(case: _TaskCase) -> None:
+    """kill switch false は監査に焼かず log で観測し、selection に進まない。"""
     run_audit = AsyncMock()
     with (
         patch.object(tasks.settings, case.enabled_attr, False),
         patch(case.hold_patch, AsyncMock()) as held,
         patch("app.queue.tasks.backfill.PipelineBacklog") as backlog_cls,
         patch("app.queue.tasks.backfill._append_backfill_run_event", run_audit),
+        capture_logs() as logs,
     ):
         await case.task(ctx=_ctx())
 
     held.assert_not_called()
     backlog_cls.assert_not_called()
-    assert _run_outcomes(run_audit) == [BackfillOutcomeCode.RUN_KILL_SWITCH_DISABLED]
-    _assert_run_audit_derives_stage_from_backfill_stage(run_audit, case)
-    # daily_max は budget exhausted 専用 (停止閾値)。他 skip では焼かない。
-    assert "daily_max" not in run_audit.await_args.kwargs
+    # 運用ゲート (kill switch) は監査に焼かず log で観測する。
+    run_audit.assert_not_awaited()
+    assert [e for e in logs if e.get("event") == case.disabled_log]
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("case", CASES, ids=[case.name for case in CASES])
-async def test_stage_hold_is_audited(case: _TaskCase) -> None:
-    """hold 中は run skipped として監査され、selection に進まない。"""
+async def test_stage_hold_is_logged_not_audited(case: _TaskCase) -> None:
+    """hold 中は監査に焼かず log + held gauge で観測し、selection に進まない。"""
     run_audit = AsyncMock()
     with (
         patch.object(tasks.settings, case.enabled_attr, True),
@@ -169,20 +182,21 @@ async def test_stage_hold_is_audited(case: _TaskCase) -> None:
         patch(case.ageout_patch, AsyncMock(return_value=0)) as ageout,
         patch("app.queue.tasks.backfill.PipelineBacklog") as backlog_cls,
         patch("app.queue.tasks.backfill._append_backfill_run_event", run_audit),
+        capture_logs() as logs,
     ):
         await case.task(ctx=_ctx())
 
     ageout.assert_not_called()
     backlog_cls.assert_not_called()
-    assert _run_outcomes(run_audit) == [BackfillOutcomeCode.RUN_HELD_BY_STAGE_HOLD]
-    _assert_run_audit_derives_stage_from_backfill_stage(run_audit, case)
-    assert "daily_max" not in run_audit.await_args.kwargs
+    # 運用ゲート (hold) は監査に焼かず log で観測する (gauge は別テストが所有)。
+    run_audit.assert_not_awaited()
+    assert [e for e in logs if e.get("event") == case.held_log]
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("case", CASES, ids=[case.name for case in CASES])
-async def test_no_targets_is_audited(case: _TaskCase) -> None:
-    """対象 0 件は run no-targets として監査される。"""
+async def test_no_targets_is_logged_not_audited(case: _TaskCase) -> None:
+    """対象 0 件は監査に焼かず log + backlog gauge で観測する。"""
     backlog = MagicMock()
     setattr(backlog, case.target_method, AsyncMock(return_value=[]))
     setattr(backlog, case.count_method, AsyncMock(return_value=0))
@@ -195,13 +209,14 @@ async def test_no_targets_is_audited(case: _TaskCase) -> None:
         patch("app.queue.tasks.backfill.PipelineBacklog", return_value=backlog),
         patch("app.queue.tasks.backfill.consume_daily_budget", AsyncMock()) as budget,
         patch("app.queue.tasks.backfill._append_backfill_run_event", run_audit),
+        capture_logs() as logs,
     ):
         await case.task(ctx=_ctx())
 
     budget.assert_not_called()
-    assert _run_outcomes(run_audit) == [BackfillOutcomeCode.RUN_NO_TARGETS]
-    _assert_run_audit_derives_stage_from_backfill_stage(run_audit, case)
-    assert "daily_max" not in run_audit.await_args.kwargs
+    # 運用ゲート (対象 0 件) は監査に焼かず log で観測する (gauge は別テストが所有)。
+    run_audit.assert_not_awaited()
+    assert [e for e in logs if e.get("event") == case.empty_log]
 
 
 @pytest.mark.asyncio

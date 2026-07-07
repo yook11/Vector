@@ -96,30 +96,6 @@ async def test_append_generation_input_empty_records_rejected_row(
 
 
 @pytest.mark.asyncio
-async def test_append_generation_already_exists_records_skipped_row(
-    db_session: AsyncSession,
-    session_factory: async_sessionmaker[AsyncSession],
-    ai_category: Category,
-) -> None:
-    """既存 briefing skip が SKIPPED として記録される。"""
-    async with session_factory() as session:
-        await BriefingAuditRepository(session).append_generation_already_exists(
-            week_start=date(2026, 4, 20),
-            category_id=ai_category.id,
-        )
-        await session.commit()
-
-    ev = await _fetch_one(db_session)
-    assert ev.stage == "briefing"
-    assert ev.event_type == "skipped"
-    assert ev.outcome_code == BriefingOutcomeCode.GENERATION_ALREADY_EXISTS.value
-    assert ev.retryability is None
-    assert ev.payload["week_start"] == "2026-04-20"
-    assert ev.payload["category_id"] == ai_category.id
-    assert ev.payload["category_slug"] == "ai"
-
-
-@pytest.mark.asyncio
 @pytest.mark.parametrize(
     (
         "exc_factory",

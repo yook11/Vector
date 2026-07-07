@@ -35,7 +35,9 @@ class TestParser:
 
 class TestRun:
     @pytest.mark.asyncio
-    async def test_existing_briefing_skip_writes_audit(self) -> None:
+    async def test_existing_briefing_skip_prints_and_does_not_audit(
+        self, capsys: pytest.CaptureFixture[str]
+    ) -> None:
         args = argparse.Namespace(
             week=date(2026, 4, 20),
             category=None,
@@ -58,20 +60,14 @@ class TestRun:
         session_ctx.__aexit__ = AsyncMock(return_value=None)
         session_factory = MagicMock(return_value=session_ctx)
 
-        with (
-            patch.object(
-                ReadyForBriefing,
-                "try_advance_from",
-                new=AsyncMock(return_value=None),
-            ),
-            patch("app.insights.briefing.cli.BriefingAuditRepository") as audit_cls,
+        with patch.object(
+            ReadyForBriefing,
+            "try_advance_from",
+            new=AsyncMock(return_value=None),
         ):
-            audit_cls.return_value.append_generation_already_exists = AsyncMock()
             exit_code = await run(args, service, session_factory)
 
         assert exit_code == 0
         service.execute.assert_not_awaited()
-        audit_cls.return_value.append_generation_already_exists.assert_awaited_once_with(
-            week_start=date(2026, 4, 20),
-            category_id=1,
-        )
+        # 既存 briefing skip は監査に焼かず stdout で観測する。
+        assert "skipped existing" in capsys.readouterr().out

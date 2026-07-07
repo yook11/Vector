@@ -7,7 +7,6 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from app.audit.domain.event import EventType
 from app.collection.article_completion.ready import (
     ArticleCompletionReadyBuildFacts,
     ArticleCompletionReadyBuildIncompleteArticleMissingError,
@@ -117,7 +116,6 @@ async def test_raises_skipped_error_when_incomplete_article_missing() -> None:
             repo=repo,
         )
 
-    assert exc_info.value.EVENT_TYPE is EventType.SKIPPED
     assert (
         exc_info.value.CODE
         == "completion_ready_build_blocked_incomplete_article_missing"
@@ -138,7 +136,6 @@ async def test_raises_skipped_error_when_incomplete_article_not_running() -> Non
             repo=repo,
         )
 
-    assert exc_info.value.EVENT_TYPE is EventType.SKIPPED
     assert (
         exc_info.value.CODE
         == "completion_ready_build_blocked_incomplete_article_not_running"

@@ -265,11 +265,8 @@ class TestRun:
 
         assert rc == 0
         assert service.calls.executed == []
-        assert audit.await_args.kwargs["event_type"] == EventType.SKIPPED
-        assert (
-            audit.await_args.kwargs["outcome_code"]
-            == TrendDiscoveryOutcomeCode.RUN_ALREADY_EXISTS
-        )
+        # 既存 snapshot skip は監査に焼かず stdout で観測する。
+        audit.assert_not_awaited()
         out = capsys.readouterr().out
         assert "skipped existing" in out
         assert "use --force" in out
@@ -304,13 +301,8 @@ class TestRun:
 
         assert rc == 0
         assert service.calls.executed == [ready]
-        assert audit.await_args.kwargs["event_type"] == EventType.SKIPPED
-        assert (
-            audit.await_args.kwargs["outcome_code"]
-            == TrendDiscoveryOutcomeCode.RUN_NO_TARGET_ARTICLES
-        )
-        assert audit.await_args.kwargs["source_analysis_count"] == 0
-        assert audit.await_args.kwargs["completed_category_count"] is None
+        # 対象 0 件 skip は監査に焼かず stdout で観測する。
+        audit.assert_not_awaited()
         out = capsys.readouterr().out
         assert "skipped no target articles" in out
         assert "2026-05-03" in out
@@ -346,13 +338,8 @@ class TestRun:
 
         assert rc == 0
         assert service.calls.executed == [ready]
-        assert audit.await_args.kwargs["event_type"] == EventType.SKIPPED
-        assert (
-            audit.await_args.kwargs["outcome_code"]
-            == TrendDiscoveryOutcomeCode.RUN_CONFLICT
-        )
-        assert audit.await_args.kwargs["source_analysis_count"] == 42
-        assert audit.await_args.kwargs["completed_category_count"] == 3
+        # race 敗北 skip は監査に焼かず stdout で観測する。
+        audit.assert_not_awaited()
         out = capsys.readouterr().out
         assert "skipped conflict" in out
         assert "2026-05-03" in out

@@ -64,8 +64,6 @@ class ArticleCompletionFailureHandler:
             audit = ArticleCompletionAuditRepository(session)
             if updated:
                 await audit.append_completion_rejected(ready=ready, rejection=rejection)
-            else:
-                await audit.append_stale_attempt(ready=ready)
             await session.commit()
 
         if not updated:
@@ -143,8 +141,6 @@ class ArticleCompletionFailureHandler:
                 await audit.append_scrape_outcome(
                     ready=ready, failure=failure, retry_exhausted=exhausted
                 )
-            else:
-                await audit.append_stale_attempt(ready=ready)
             await session.commit()
 
         if not updated:
@@ -195,8 +191,6 @@ class ArticleCompletionFailureHandler:
             audit = ArticleCompletionAuditRepository(session)
             if updated:
                 await audit.append_scrape_outcome(ready=ready, failure=failure)
-            else:
-                await audit.append_stale_attempt(ready=ready)
             await session.commit()
 
         if not updated:

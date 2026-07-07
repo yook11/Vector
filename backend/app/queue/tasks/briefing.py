@@ -14,7 +14,7 @@
 エラー方針 (``feedback_failure_visibility.md``):
 - subtask は監査に焼いた後 raise し、taskiq の retry を継続する。
 - dispatcher は 1 カテゴリの enqueue 失敗を監査して続行する。
-- 既存 briefing あり (Ready が None) は skipped audit を焼いて正常終了する。
+- 既存 briefing あり (Ready が None) は監査に焼かず log で観測して正常終了する。
 """
 
 from __future__ import annotations
@@ -260,14 +260,10 @@ async def generate_briefing_for_category(
                 briefing_repo=repo,
             )
         if ready is None:
+            # 既存 briefing あり = benign な冪等 skip。監査に焼かず log で観測する。
             logger.info(
                 "briefing_subtask_skipped_existing",
                 week_start=input_.week_start.isoformat(),
-                category_id=input_.category_id,
-            )
-            await _append_generation_already_exists_audit(
-                session_factory,
-                week_start=input_.week_start,
                 category_id=input_.category_id,
             )
             return
@@ -319,28 +315,3 @@ async def generate_briefing_for_category(
             article_count=outcome.article_count,
             persisted=outcome.persisted,
         )
-
-
-async def _append_generation_already_exists_audit(
-    session_factory: async_sessionmaker[AsyncSession],
-    *,
-    week_start: date,
-    category_id: int,
-) -> None:
-    try:
-        async with session_factory() as session:
-            await BriefingAuditRepository(session).append_generation_already_exists(
-                week_start=week_start,
-                category_id=category_id,
-            )
-            await session.commit()
-    except Exception as exc:
-        logger.info(
-            "briefing_generation_audit_dropped",
-            outcome_code=BriefingOutcomeCode.GENERATION_ALREADY_EXISTS.value,
-            week_start=week_start.isoformat(),
-            category_id=category_id,
-            error_class=exception_fqn(exc),
-            error_message=str(exc) or None,
-        )
-        record_audit_dropped(BriefingAuditRepository.STAGE)

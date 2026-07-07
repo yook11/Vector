@@ -86,15 +86,7 @@ async def run_trend_discovery(ctx: Context = TaskiqDepends()) -> None:
             raise
 
         if ready is None:
-            await append_trend_discovery_run_event_best_effort(
-                session_factory,
-                event_type=EventType.SKIPPED,
-                outcome_code=TrendDiscoveryOutcomeCode.RUN_ALREADY_EXISTS,
-                window_start=window_start,
-                window_end=window_end,
-                trigger="cron",
-                requested_update=False,
-            )
+            # 既存 snapshot あり = benign な冪等 skip。監査に焼かず log で観測する。
             logger.info(
                 "trend_discovery_task_skipped_already_exists",
                 window_end=window_end.isoformat(),
@@ -118,34 +110,14 @@ async def run_trend_discovery(ctx: Context = TaskiqDepends()) -> None:
             raise
 
         if isinstance(outcome, SkippedNoTargetArticles):
-            await append_trend_discovery_run_event_best_effort(
-                session_factory,
-                event_type=EventType.SKIPPED,
-                outcome_code=TrendDiscoveryOutcomeCode.RUN_NO_TARGET_ARTICLES,
-                window_start=window_start,
-                window_end=outcome.window_end,
-                trigger="cron",
-                requested_update=False,
-                source_analysis_count=outcome.source_analysis_count,
-                completed_category_count=outcome.completed_category_count,
-            )
+            # 集計対象 0 件 = benign な skip。監査に焼かず log で観測する。
             logger.info(
                 "trend_discovery_task_skipped_no_target_articles",
                 window_end=outcome.window_end.isoformat(),
             )
             return
         if isinstance(outcome, TrendDiscoveryConflict):
-            await append_trend_discovery_run_event_best_effort(
-                session_factory,
-                event_type=EventType.SKIPPED,
-                outcome_code=TrendDiscoveryOutcomeCode.RUN_CONFLICT,
-                window_start=window_start,
-                window_end=outcome.window_end,
-                trigger="cron",
-                requested_update=False,
-                source_analysis_count=outcome.source_analysis_count,
-                completed_category_count=outcome.completed_category_count,
-            )
+            # race 敗北 = benign な skip。監査に焼かず log で観測する。
             logger.info(
                 "trend_discovery_task_conflict",
                 window_end=outcome.window_end.isoformat(),

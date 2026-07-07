@@ -5,7 +5,6 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, ClassVar, Protocol
 
-from app.audit.domain.event import EventType
 from app.collection.domain.canonical_article_url import CanonicalArticleUrl
 from app.collection.domain.observed_article import ObservedArticle
 from app.collection.sources.article_completion_policy import ArticleCompletionPolicy
@@ -36,11 +35,14 @@ class ArticleCompletionReadyBuildFacts:
 
 
 class ArticleCompletionReadyBuildError(Exception):
-    """Stage 2 Ready を構築できなかった理由を表す typed error。"""
+    """Stage 2 Ready を構築できなかった benign な skip を表す typed error。
+
+    対象消滅 / 別 worker 完了済み等の冪等 skip で、task 側は log のみに逃がし
+    監査には焼かない (audit skip 逃がしポリシー)。VO 構築失敗はこの型を継承せず
+    別途伝播し、呼び出し側の監査が failed として焼く。
+    """
 
     CODE: ClassVar[str]
-    EVENT_TYPE: ClassVar[EventType]
-    FAILURE_KIND: ClassVar[str | None] = None
     MESSAGE: ClassVar[str]
 
     def __init__(self) -> None:
@@ -53,7 +55,6 @@ class ArticleCompletionReadyBuildIncompleteArticleMissingError(
     """incomplete_article_id に対応する incomplete article 行が存在しなかった。"""
 
     CODE: ClassVar[str] = "completion_ready_build_blocked_incomplete_article_missing"
-    EVENT_TYPE: ClassVar[EventType] = EventType.SKIPPED
     MESSAGE: ClassVar[str] = (
         "incomplete article row is missing for completion ready build"
     )
@@ -67,7 +68,6 @@ class ArticleCompletionReadyBuildIncompleteArticleNotRunningError(
     CODE: ClassVar[str] = (
         "completion_ready_build_blocked_incomplete_article_not_running"
     )
-    EVENT_TYPE: ClassVar[EventType] = EventType.SKIPPED
     MESSAGE: ClassVar[str] = (
         "incomplete article row is not running for completion ready build"
     )

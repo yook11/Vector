@@ -13,7 +13,8 @@ task は処理開始時に ``ReadyForArticleCompletion.try_advance_from`` で厚
 
 検証する task 不変条件:
 
-- Ready build blocked → skipped audit + ``None`` 返却、Service 不構築 / chain 不発火
+- Ready build blocked → log のみ (監査に焼かない) + ``None`` 返却、
+  Service 不構築 / chain 不発火
 - Ready build failed → failed audit 後に re-raise、Service 不構築 / chain 不発火
 - ``int`` (analyzable_article_id) → ``curate_content.kiq`` を
   ``CurationTrigger(analyzable_article_id)`` で発火 + success dict 返却
@@ -30,6 +31,7 @@ import pytest
 from logfire.testing import CaptureLogfire
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+from structlog.testing import capture_logs
 
 from app.audit.domain.event import Stage
 from app.collection.article_completion.ready import (
@@ -105,16 +107,17 @@ def _patch_try_advance_from(
 
 
 @pytest.mark.asyncio
-async def test_ready_build_skipped_error_audits_and_does_not_call_service(
+async def test_ready_build_skipped_error_logs_and_does_not_call_service(
     session_factory: async_sessionmaker[AsyncSession],
 ) -> None:
-    """Ready build skipped error → audit + return、Service / chain 不発火。"""
+    """Ready build skipped error → 監査に焼かず log で観測 + return、Service / chain 不発火。"""  # noqa: E501
     exc = ArticleCompletionReadyBuildIncompleteArticleMissingError()
     with (
         _patch_try_advance_from(exc),
         patch("app.queue.tasks.completion.ArticleCompletionAuditRepository") as audit,
         patch(_SERVICE_CLS) as mock_svc_cls,
         patch(_CURATE_CONTENT_KIQ) as mock_kiq,
+        capture_logs() as logs,
     ):
         audit.return_value.append_ready_build_error = AsyncMock()
         result = await scrape_html_body(
@@ -122,11 +125,9 @@ async def test_ready_build_skipped_error_audits_and_does_not_call_service(
         )
 
     assert result is None
-    audit.return_value.append_ready_build_error.assert_awaited_once_with(
-        incomplete_article_id=999,
-        exc=exc,
-        facts=None,
-    )
+    # benign な冪等 skip は監査に焼かず log で観測する。
+    audit.return_value.append_ready_build_error.assert_not_awaited()
+    assert [e for e in logs if e.get("event") == "scrape_html_body_skipped"]
     mock_svc_cls.assert_not_called()
     mock_kiq.assert_not_awaited()
 
@@ -239,15 +240,13 @@ async def test_ready_build_skipped_does_not_emit_processing_outcome(
     session_factory: async_sessionmaker[AsyncSession],
     capfire: CaptureLogfire,
 ) -> None:
-    """blocked (SKIPPED) は stale/冪等で counter を汚さない。"""
+    """blocked (benign skip) は stale/冪等で counter を汚さない。"""
     exc = ArticleCompletionReadyBuildIncompleteArticleMissingError()
     with (
         _patch_try_advance_from(exc),
-        patch("app.queue.tasks.completion.ArticleCompletionAuditRepository") as audit,
         patch(_SERVICE_CLS),
         patch(_CURATE_CONTENT_KIQ),
     ):
-        audit.return_value.append_ready_build_error = AsyncMock()
         await scrape_html_body(incomplete_article_id=999, ctx=_ctx(session_factory))
 
     metrics = collected_metrics(capfire)

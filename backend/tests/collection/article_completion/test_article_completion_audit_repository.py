@@ -28,8 +28,6 @@ from app.audit.stages.completion import ArticleCompletionAuditRepository
 from app.collection.article_acquisition.repository import IncompleteArticleRepository
 from app.collection.article_completion.ready import (
     ArticleCompletionReadyBuildFacts,
-    ArticleCompletionReadyBuildIncompleteArticleMissingError,
-    ArticleCompletionReadyBuildIncompleteArticleNotRunningError,
     ReadyForArticleCompletion,
 )
 from app.collection.article_completion.repository import (
@@ -190,6 +188,24 @@ async def _fetch_one(db_session: AsyncSession, source_id: int) -> PipelineEvent:
     return rows[0]
 
 
+async def _fetch_none(db_session: AsyncSession, source_id: int) -> None:
+    """completion stage に source_id 宛の監査行が 1 件も無いことを固定する。"""
+    await db_session.rollback()
+    rows = (
+        (
+            await db_session.execute(
+                select(PipelineEvent).where(
+                    PipelineEvent.stage == "completion",
+                    PipelineEvent.source_id == source_id,
+                )
+            )
+        )
+        .scalars()
+        .all()
+    )
+    assert rows == []
+
+
 async def _fetch_by_outcome(
     db_session: AsyncSession, outcome_code: str
 ) -> PipelineEvent:
@@ -244,12 +260,12 @@ async def test_append_persist_outcome_success(
 
 
 @pytest.mark.asyncio
-async def test_append_persist_outcome_superseded(
+async def test_append_persist_outcome_superseded_writes_no_audit(
     session_factory: async_sessionmaker[AsyncSession],
     db_session: AsyncSession,
     tc_source: NewsSource,
 ) -> None:
-    """superseded (経路 6) → skipped / persist_superseded / article_id None。"""
+    """superseded (race-loss) → 監査に焼かない (log で観測、業務状態は不変)。"""
     ready = await _make_ready(db_session, tc_source, _URL)
     advanced = _analyzable(tc_source, _URL)
 
@@ -259,22 +275,16 @@ async def test_append_persist_outcome_superseded(
         )
         await session.commit()
 
-    ev = await _fetch_one(db_session, tc_source.id)
-    assert ev.event_type == "skipped"
-    assert ev.outcome_code == "persist_superseded"
-    assert ev.article_id is None
-    assert ev.retryability is None
-    assert ev.payload["attempt_count"] == ready.attempt_count
-    assert ev.payload["body_length"] is None  # 完成 body は破棄、焼かない
+    await _fetch_none(db_session, tc_source.id)
 
 
 @pytest.mark.asyncio
-async def test_append_persist_outcome_url_conflict(
+async def test_append_persist_outcome_url_conflict_writes_no_audit(
     session_factory: async_sessionmaker[AsyncSession],
     db_session: AsyncSession,
     tc_source: NewsSource,
 ) -> None:
-    """url_conflict (経路 7) → skipped / persist_url_conflict / article_id None。"""
+    """url_conflict (race-loss) → 監査に焼かない (log で観測、業務状態は不変)。"""
     ready = await _make_ready(db_session, tc_source, _URL)
     advanced = _analyzable(tc_source, _URL)
 
@@ -284,12 +294,7 @@ async def test_append_persist_outcome_url_conflict(
         )
         await session.commit()
 
-    ev = await _fetch_one(db_session, tc_source.id)
-    assert ev.event_type == "skipped"
-    assert ev.outcome_code == "persist_url_conflict"
-    assert ev.article_id is None
-    assert ev.retryability is None
-    assert ev.payload["attempt_count"] == ready.attempt_count
+    await _fetch_none(db_session, tc_source.id)
 
 
 @pytest.mark.asyncio
@@ -550,71 +555,6 @@ async def test_append_persist_crashed_db_error_uses_db_projection(
     assert ev.payload["failure_action"] is None
 
 
-@pytest.mark.asyncio
-async def test_append_ready_build_error_records_incomplete_article_missing_skipped(
-    session_factory: async_sessionmaker[AsyncSession],
-    db_session: AsyncSession,
-) -> None:
-    exc = ArticleCompletionReadyBuildIncompleteArticleMissingError()
-
-    async with session_factory() as session:
-        await ArticleCompletionAuditRepository(session).append_ready_build_error(
-            incomplete_article_id=999,
-            exc=exc,
-        )
-        await session.commit()
-
-    ev = await _fetch_by_outcome(
-        db_session, "completion_ready_build_blocked_incomplete_article_missing"
-    )
-    assert ev.event_type == "skipped"
-    assert ev.source_id is None
-    assert ev.retryability is None
-    assert ev.error_class is None
-    assert ev.payload["incomplete_article_id"] == 999
-    assert ev.payload["incomplete_article_status"] is None
-    assert ev.payload["failure_kind"] is None
-
-
-@pytest.mark.asyncio
-async def test_append_ready_build_error_records_incomplete_article_not_running_skipped(
-    session_factory: async_sessionmaker[AsyncSession],
-    db_session: AsyncSession,
-    tc_source: NewsSource,
-) -> None:
-    exc = ArticleCompletionReadyBuildIncompleteArticleNotRunningError()
-    facts = _ready_build_facts(
-        tc_source,
-        incomplete_article_id=100,
-        status="open",
-        url="https://techcrunch.com/open",
-        attempt_count=0,
-    )
-
-    async with session_factory() as session:
-        await ArticleCompletionAuditRepository(session).append_ready_build_error(
-            incomplete_article_id=100,
-            exc=exc,
-            facts=facts,
-        )
-        await session.commit()
-
-    ev = await _fetch_one(db_session, tc_source.id)
-    assert ev.event_type == "skipped"
-    assert (
-        ev.outcome_code
-        == "completion_ready_build_blocked_incomplete_article_not_running"
-    )
-    assert ev.retryability is None
-    assert ev.error_class is None
-    assert ev.payload["incomplete_article_id"] == 100
-    assert ev.payload["incomplete_article_status"] == "open"
-    assert ev.payload["source_name"] == "TechCrunch"
-    assert ev.payload["canonical_url"] == "https://techcrunch.com/open"
-    assert ev.payload["attempt_count"] == 0
-    assert ev.payload["failure_kind"] is None
-
-
 @pytest.mark.parametrize(
     ("exc", "canonical_url", "outcome_code", "failure_kind", "reason_code"),
     [
@@ -731,8 +671,9 @@ async def test_repository_does_not_commit(
     ready = await _make_ready(db_session, tc_source, _URL)
 
     async with session_factory() as session:
-        await ArticleCompletionAuditRepository(session).append_stale_attempt(
-            ready=ready
+        await ArticleCompletionAuditRepository(session).append_scrape_outcome(
+            ready=ready,
+            failure=ScrapeParseCrashed(error_class="LxmlError", error_message="boom"),
         )
         # 意図的に commit しない
 

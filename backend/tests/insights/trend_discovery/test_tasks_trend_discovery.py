@@ -16,6 +16,7 @@ from zoneinfo import ZoneInfo
 
 import pytest
 from logfire.testing import CaptureLogfire
+from structlog.testing import capture_logs
 
 from app.audit.domain.event import EventType, Stage
 from app.audit.stages.trend_discovery import TrendDiscoveryOutcomeCode
@@ -143,17 +144,18 @@ class TestRun:
                 "app.queue.tasks.trend_discovery.append_trend_discovery_run_event_best_effort",
                 new=AsyncMock(),
             ) as audit,
+            capture_logs() as logs,
         ):
             await trend_discovery.run_trend_discovery(ctx=ctx)
 
         service.execute.assert_not_awaited()
-        audit.assert_awaited_once()
-        assert audit.await_args.kwargs["event_type"] == EventType.SKIPPED
-        assert (
-            audit.await_args.kwargs["outcome_code"]
-            == TrendDiscoveryOutcomeCode.RUN_ALREADY_EXISTS
-        )
-        assert audit.await_args.kwargs["trigger"] == "cron"
+        # 既存 snapshot skip は監査に焼かず log で観測する。
+        audit.assert_not_awaited()
+        assert [
+            e
+            for e in logs
+            if e.get("event") == "trend_discovery_task_skipped_already_exists"
+        ]
 
     @pytest.mark.asyncio
     async def test_skips_when_service_reports_no_target_articles(self) -> None:
@@ -193,20 +195,20 @@ class TestRun:
                 "app.queue.tasks.trend_discovery.append_trend_discovery_run_event_best_effort",
                 new=AsyncMock(),
             ) as audit,
+            capture_logs() as logs,
         ):
             await trend_discovery.run_trend_discovery(ctx=ctx)
 
         service.execute.assert_awaited_once_with(ready)
         # 生成していないので revalidate は打たない。
         notifier.notify.assert_not_awaited()
-        audit.assert_awaited_once()
-        assert audit.await_args.kwargs["event_type"] == EventType.SKIPPED
-        assert (
-            audit.await_args.kwargs["outcome_code"]
-            == TrendDiscoveryOutcomeCode.RUN_NO_TARGET_ARTICLES
-        )
-        assert audit.await_args.kwargs["source_analysis_count"] == 0
-        assert audit.await_args.kwargs["completed_category_count"] is None
+        # 対象 0 件 skip は監査に焼かず log で観測する。
+        audit.assert_not_awaited()
+        assert [
+            e
+            for e in logs
+            if e.get("event") == "trend_discovery_task_skipped_no_target_articles"
+        ]
 
     @pytest.mark.asyncio
     async def test_skips_when_service_reports_conflict(self) -> None:
@@ -250,20 +252,21 @@ class TestRun:
                 "app.queue.tasks.trend_discovery.append_trend_discovery_run_event_best_effort",
                 new=AsyncMock(),
             ) as audit,
+            capture_logs() as logs,
         ):
             await trend_discovery.run_trend_discovery(ctx=ctx)
 
         service.execute.assert_awaited_once_with(ready)
         # conflict (別 worker が先に保存) では revalidate を打たない。
         notifier.notify.assert_not_awaited()
-        audit.assert_awaited_once()
-        assert audit.await_args.kwargs["event_type"] == EventType.SKIPPED
-        assert (
-            audit.await_args.kwargs["outcome_code"]
-            == TrendDiscoveryOutcomeCode.RUN_CONFLICT
-        )
-        assert audit.await_args.kwargs["source_analysis_count"] == 42
-        assert audit.await_args.kwargs["completed_category_count"] == 3
+        # race 敗北 skip は監査に焼かず log で観測する。
+        audit.assert_not_awaited()
+        conflict_logs = [
+            e for e in logs if e.get("event") == "trend_discovery_task_conflict"
+        ]
+        assert conflict_logs
+        assert conflict_logs[-1]["source_analysis_count"] == 42
+        assert conflict_logs[-1]["category_count"] == 3
 
     @pytest.mark.asyncio
     async def test_propagates_service_exception(self) -> None:

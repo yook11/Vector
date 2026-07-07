@@ -115,8 +115,8 @@ async def test_backfill_run_audit_drop_derives_stage_from_backfill_stage(
         _FailingSessionFactory(),
         backfill_stage="assess",
         run_id="run-wiring-002",
-        event_type=EventType.SKIPPED,
-        outcome_code=BackfillOutcomeCode.RUN_NO_TARGETS,
+        event_type=EventType.FAILED,
+        outcome_code=BackfillOutcomeCode.RUN_FAILED,
     )
 
     metric = _find_metric(capfire.get_collected_metrics(), _METRIC)

@@ -29,9 +29,6 @@ class BackfillOutcomeCode(StrEnum):
 
     ITEM_ENQUEUED = "backfill_item_enqueued"
     ITEM_ENQUEUE_FAILED = "backfill_item_enqueue_failed"
-    RUN_NO_TARGETS = "backfill_run_no_targets"
-    RUN_KILL_SWITCH_DISABLED = "backfill_run_kill_switch_disabled"
-    RUN_HELD_BY_STAGE_HOLD = "backfill_run_held_by_stage_hold"
     RUN_DAILY_BUDGET_EXHAUSTED = "backfill_run_daily_budget_exhausted"
     RUN_FAILED = "backfill_run_failed"
 

@@ -28,6 +28,7 @@ from logfire.testing import CaptureLogfire
 from sqlalchemy import select, update
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+from structlog.testing import capture_logs
 
 from app.collection.article_acquisition.fetched_article import FetchedArticle
 from app.collection.article_acquisition.repository import IncompleteArticleRepository
@@ -742,13 +743,13 @@ async def test_success_writes_article_completed_audit(
 
 
 @pytest.mark.asyncio
-async def test_url_conflict_writes_persist_url_conflict_audit(
+async def test_url_conflict_writes_no_audit(
     session_factory: async_sessionmaker[AsyncSession],
     db_session: AsyncSession,
     tc_source: NewsSource,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """別 worker が同 URL を先に記事化 → skipped / persist_url_conflict audit。"""
+    """別 worker が同 URL を先に記事化 (race-loss) → 監査に焼かない (log で観測)。"""
     canonical_url, _, ready = await _make_pending(
         db_session, tc_source, "https://techcrunch.com/audit-conflict"
     )
@@ -773,25 +774,23 @@ async def test_url_conflict_writes_persist_url_conflict_audit(
         ),
     )
 
-    await ArticleCompletionService(session_factory).execute(ready)
+    with capture_logs() as logs:
+        await ArticleCompletionService(session_factory).execute(ready)
 
     events = await _completion_events(db_session)
-    assert len(events) == 1
-    assert events[0].event_type == "skipped"
-    assert events[0].outcome_code == "persist_url_conflict"
-    assert events[0].retryability is None
-    assert events[0].article_id is None
-    assert events[0].payload["attempt_count"] == ready.attempt_count
+    assert events == []
+    # 監査を外した代わりに race-loss は escape log で観測可能に保つ。
+    assert [e for e in logs if e.get("event") == "article_completion_conflict_lost"]
 
 
 @pytest.mark.asyncio
-async def test_superseded_writes_persist_superseded_audit(
+async def test_superseded_writes_no_audit(
     session_factory: async_sessionmaker[AsyncSession],
     db_session: AsyncSession,
     tc_source: NewsSource,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """attempt 失効で DELETE 0 行 → ``skipped`` / ``persist_superseded`` audit。"""
+    """attempt 失効で DELETE 0 行 (race-loss) → 監査に焼かない (log で観測)。"""
     _, incomplete_article_id, ready = await _make_pending(
         db_session, tc_source, "https://techcrunch.com/audit-superseded"
     )
@@ -812,14 +811,15 @@ async def test_superseded_writes_persist_superseded_audit(
         ),
     )
 
-    await ArticleCompletionService(session_factory).execute(ready)
+    with capture_logs() as logs:
+        await ArticleCompletionService(session_factory).execute(ready)
 
     events = await _completion_events(db_session)
-    assert len(events) == 1
-    assert events[0].event_type == "skipped"
-    assert events[0].outcome_code == "persist_superseded"
-    assert events[0].retryability is None
-    assert events[0].payload["attempt_count"] == ready.attempt_count
+    assert events == []
+    # 監査を外した代わりに race-loss は escape log で観測可能に保つ。
+    assert [
+        e for e in logs if e.get("event") == "article_completion_stale_attempt_ignored"
+    ]
 
 
 @pytest.mark.asyncio

@@ -8,6 +8,7 @@ from zoneinfo import ZoneInfo
 
 import pytest
 from logfire.testing import CaptureLogfire
+from structlog.testing import capture_logs
 
 from app.audit.domain.event import Stage
 from app.insights.briefing.domain.ready import ReadyForBriefing
@@ -234,7 +235,7 @@ class TestDispatcher:
 
 class TestSubtask:
     @pytest.mark.asyncio
-    async def test_skips_when_ready_is_none_and_audits_existing(self) -> None:
+    async def test_skips_when_ready_is_none_and_logs_existing(self) -> None:
         from app.queue.tasks import briefing
 
         ctx = _ctx_with_session_factory()
@@ -252,18 +253,19 @@ class TestSubtask:
                 return_value=service,
             ),
             patch("app.queue.tasks.briefing.BriefingAuditRepository") as audit_cls,
+            capture_logs() as logs,
         ):
-            audit_cls.return_value.append_generation_already_exists = AsyncMock()
             await briefing.generate_briefing_for_category(
                 BriefingTaskInput(week_start=date(2026, 4, 20), category_id=1),
                 ctx=ctx,
             )
 
         service.execute.assert_not_awaited()
-        audit_cls.return_value.append_generation_already_exists.assert_awaited_once_with(
-            week_start=date(2026, 4, 20),
-            category_id=1,
-        )
+        # 既存 briefing skip は監査に焼かず log で観測する。
+        audit_cls.assert_not_called()
+        assert [
+            e for e in logs if e.get("event") == "briefing_subtask_skipped_existing"
+        ]
 
     @pytest.mark.asyncio
     async def test_invokes_service_when_ready(self) -> None:
