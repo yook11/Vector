@@ -17,7 +17,7 @@ from tests.fakes.stub_embedder import StubEmbedder
 
 def _ready(text: str) -> ReadyForEmbedding:
     return ReadyForEmbedding(
-        analyzed_article_id=1, text_for_embedding=text, analyzable_article_id=1
+        analyzed_article_id=1, text_for_embedding=text
     )
 
 

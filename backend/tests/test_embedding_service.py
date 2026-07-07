@@ -124,13 +124,11 @@ async def _build_analysis(
 def _make_ready(
     *,
     analyzed_article_id: int,
-    analyzable_article_id: int,
     text: str = "分析タイトル\n分析要約",
 ) -> ReadyForEmbedding:
     return ReadyForEmbedding(
         analyzed_article_id=analyzed_article_id,
         text_for_embedding=text,
-        analyzable_article_id=analyzable_article_id,
     )
 
 
@@ -167,10 +165,8 @@ async def test_execute_persists_embedding_on_success(
 
     embedder = _mock_embedder()
     svc = EmbeddingService(session_factory)
-    ready = _make_ready(
-        analyzed_article_id=analyzed_article_id, analyzable_article_id=article_id
-    )
-    result = await svc.execute(ready, embedder)
+    ready = _make_ready(analyzed_article_id=analyzed_article_id)
+    result = await svc.execute(ready, embedder, analyzable_article_id=article_id)
 
     assert result is None
     embedder.embed_document.assert_called_once_with(ready)
@@ -224,10 +220,8 @@ async def test_execute_shortcircuits_when_already_persisted(
     svc = EmbeddingService(session_factory)
     # Ready 構築時には未 embedded だったが、その直後に他ワーカーが先に書き込んだ
     # 並行状況を再現するため Ready を直接構築して execute に渡す。
-    ready = _make_ready(
-        analyzed_article_id=analyzed_article_id, analyzable_article_id=article_id
-    )
-    result = await svc.execute(ready, embedder)
+    ready = _make_ready(analyzed_article_id=analyzed_article_id)
+    result = await svc.execute(ready, embedder, analyzable_article_id=article_id)
 
     assert result is None
     # 先行する write の値のまま、後続の save で上書きされていない
@@ -277,12 +271,10 @@ async def test_execute_wraps_target_rejected_provider_error(
     )
     embedder = _mock_embedder(raises=original)
     svc = EmbeddingService(session_factory)
-    ready = _make_ready(
-        analyzed_article_id=analyzed_article_id, analyzable_article_id=article_id
-    )
+    ready = _make_ready(analyzed_article_id=analyzed_article_id)
 
     with pytest.raises(EmbeddingTerminalError) as exc_info:
-        await svc.execute(ready, embedder)
+        await svc.execute(ready, embedder, analyzable_article_id=article_id)
 
     # provider_error attr に元 instance が identity 付きで保持される
     assert exc_info.value.provider_error is original
@@ -331,12 +323,10 @@ async def test_execute_wraps_recoverable_provider_errors(
 
     embedder = _mock_embedder(raises=provider_exc)
     svc = EmbeddingService(session_factory)
-    ready = _make_ready(
-        analyzed_article_id=analyzed_article_id, analyzable_article_id=article_id
-    )
+    ready = _make_ready(analyzed_article_id=analyzed_article_id)
 
     with pytest.raises(EmbeddingRecoverableError) as exc_info:
-        await svc.execute(ready, embedder)
+        await svc.execute(ready, embedder, analyzable_article_id=article_id)
 
     assert exc_info.value.provider_error is provider_exc
     assert exc_info.value.__cause__ is provider_exc
@@ -370,12 +360,10 @@ async def test_execute_propagates_response_invalid_from_embedder(
     response_invalid = EmbeddingResponseInvalidError()
     embedder = _mock_embedder(raises=response_invalid)
     svc = EmbeddingService(session_factory)
-    ready = _make_ready(
-        analyzed_article_id=analyzed_article_id, analyzable_article_id=article_id
-    )
+    ready = _make_ready(analyzed_article_id=analyzed_article_id)
 
     with pytest.raises(EmbeddingResponseInvalidError) as exc_info:
-        await svc.execute(ready, embedder)
+        await svc.execute(ready, embedder, analyzable_article_id=article_id)
 
     assert exc_info.value is response_invalid
     assert exc_info.value.code == "embedding_response_invalid"

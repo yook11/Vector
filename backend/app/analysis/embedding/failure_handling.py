@@ -70,6 +70,7 @@ class EmbeddingFailureHandler:
         ready: ReadyForEmbedding,
         exc: BaseException,
         last_attempt: bool,
+        analyzable_article_id: int,
     ) -> FailureHandlingDecision:
         """marker dispatch を実行する。
 
@@ -96,7 +97,7 @@ class EmbeddingFailureHandler:
                     code=exc.code,
                     held=hold_reason is not None,
                 )
-                await self._audit_failure(ready, exc)
+                await self._audit_failure(ready, exc, analyzable_article_id)
                 return FailureHandlingDecision(
                     reraise=False,
                     stage_hold_reason=hold_reason,
@@ -108,7 +109,7 @@ class EmbeddingFailureHandler:
                     if is_infra_provider_error(recoverable.provider_error)
                     else "failed"
                 )
-                await self._audit_failure(ready, recoverable)
+                await self._audit_failure(ready, recoverable, analyzable_article_id)
                 if last_attempt:
                     hold_reason = _hold_reason(recoverable)
                     logger.warning(
@@ -124,11 +125,11 @@ class EmbeddingFailureHandler:
                 return FailureHandlingDecision(reraise=True)
             case SQLAlchemyError():
                 record_embedding_processing_outcome("infra_error")
-                await self._audit_failure(ready, exc)
+                await self._audit_failure(ready, exc, analyzable_article_id)
                 return FailureHandlingDecision(reraise=not last_attempt)
             case _:
                 record_embedding_processing_outcome("failed")
-                await self._audit_unexpected_failure(ready, exc)
+                await self._audit_unexpected_failure(ready, exc, analyzable_article_id)
                 if last_attempt:
                     logger.exception(
                         "generate_embedding_unexpected_exhausted",
@@ -141,6 +142,7 @@ class EmbeddingFailureHandler:
         self,
         ready: ReadyForEmbedding,
         exc: EmbeddingError | SQLAlchemyError,
+        analyzable_article_id: int,
     ) -> None:
         """best-effort failure audit (DB 落ち / schema 不整合は log fallback)。
 
@@ -151,7 +153,9 @@ class EmbeddingFailureHandler:
         try:
             async with self._session_factory() as session:
                 await EmbeddingAuditRepository(session).append_failure(
-                    ready=ready, exc=exc
+                    analyzed_article_id=ready.analyzed_article_id,
+                    article_id=analyzable_article_id,
+                    exc=exc,
                 )
                 await session.commit()
         except Exception as audit_exc:
@@ -169,12 +173,15 @@ class EmbeddingFailureHandler:
         self,
         ready: ReadyForEmbedding,
         exc: BaseException,
+        analyzable_article_id: int,
     ) -> None:
         """想定外失敗の best-effort audit。"""
         try:
             async with self._session_factory() as session:
                 await EmbeddingAuditRepository(session).append_unexpected_failure(
-                    ready=ready, exc=exc
+                    analyzed_article_id=ready.analyzed_article_id,
+                    article_id=analyzable_article_id,
+                    exc=exc,
                 )
                 await session.commit()
         except Exception as audit_exc:

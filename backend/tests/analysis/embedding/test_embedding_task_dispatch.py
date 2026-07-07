@@ -75,15 +75,16 @@ def _fixed_ready() -> ReadyForEmbedding:
     return ReadyForEmbedding(
         analyzed_article_id=1,
         text_for_embedding="分析タイトル\n分析要約",
-        analyzable_article_id=7,
     )
 
 
 def _patch_ready_construction(ready: ReadyForEmbedding | None = None) -> object:
-    """``ReadyForEmbedding.try_advance_from`` を固定値返却に patch するヘルパ。"""
+    """``try_advance_from`` を tuple 返却に patch するヘルパ。"""
     return patch(
         "app.queue.tasks.embedding.ReadyForEmbedding.try_advance_from",
-        new=AsyncMock(return_value=ready if ready is not None else _fixed_ready()),
+        new=AsyncMock(
+            return_value=(ready if ready is not None else _fixed_ready(), 7)
+        ),
     )
 
 

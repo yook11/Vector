@@ -181,8 +181,9 @@ class TestAssessContent:
         # 構築された Ready が Service に渡されていること
         call_args = mock_svc_cls.return_value.execute.call_args
         assert call_args[0][0] is ready
+        # 相関 id (元記事 id) も trigger に載せて chain する。
         mock_embed.kiq.assert_awaited_once_with(
-            EmbeddingTrigger(analyzed_article_id=100)
+            EmbeddingTrigger(analyzed_article_id=100, analyzable_article_id=7)
         )
 
     @pytest.mark.asyncio

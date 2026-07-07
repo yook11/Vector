@@ -31,7 +31,13 @@ class EmbeddingService:
     def __init__(self, session_factory: async_sessionmaker[AsyncSession]) -> None:
         self._session_factory = session_factory
 
-    async def execute(self, ready: ReadyForEmbedding, embedder: BaseEmbedder) -> None:
+    async def execute(
+        self,
+        ready: ReadyForEmbedding,
+        embedder: BaseEmbedder,
+        *,
+        analyzable_article_id: int,
+    ) -> None:
         """Ready 型を入力に埋め込みベクトルを生成し永続化する。
 
         AI 呼び出しは session 外で行い、保存成功時のみ audit を同一 tx で commit
@@ -64,7 +70,8 @@ class EmbeddingService:
                 return
             # 業務 UPDATE + audit を同一 tx で commit
             await EmbeddingAuditRepository(session).append_success(
-                ready=ready,
+                analyzed_article_id=ready.analyzed_article_id,
+                article_id=analyzable_article_id,
                 embedder=embedder,
             )
             await session.commit()

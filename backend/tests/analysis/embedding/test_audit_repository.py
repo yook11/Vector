@@ -42,7 +42,6 @@ from app.analysis.embedding.ai.base import BaseEmbedder
 from app.analysis.embedding.domain.ready import (
     EmbeddingReadyBuildBlockedCode,
     EmbeddingReadyBuildBlockedError,
-    ReadyForEmbedding,
 )
 from app.analysis.embedding.errors import (
     EmbeddingRecoverableError,
@@ -101,14 +100,6 @@ async def _make_extraction(
     await db_session.commit()
     await db_session.refresh(extraction)
     return extraction
-
-
-def _ready(article: AnalyzableArticleRecord) -> ReadyForEmbedding:
-    return ReadyForEmbedding(
-        analyzed_article_id=1,
-        text_for_embedding="title\nsummary",
-        analyzable_article_id=article.id,
-    )
 
 
 async def _fetch_one(db_session: AsyncSession, article_id: int) -> PipelineEvent:
@@ -225,7 +216,8 @@ async def test_append_success_records_with_code(
     embedder = _embedder_fake()
     async with session_factory() as session:
         await EmbeddingAuditRepository(session).append_success(
-            ready=_ready(article),
+            analyzed_article_id=1,
+            article_id=article.id,
             embedder=embedder,
         )
         await session.commit()
@@ -241,18 +233,19 @@ async def test_append_success_records_with_code(
 
 
 @pytest.mark.asyncio
-async def test_append_success_uses_article_id_from_ready(
+async def test_append_success_uses_explicit_article_id(
     db_session: AsyncSession,
     session_factory: async_sessionmaker[AsyncSession],
     sample_source: NewsSource,
 ) -> None:
-    """pipeline_events.article_id は Ready 構築時に取得済みの値を使う。"""
+    """pipeline_events.article_id は明示引数で渡した相関 id を使う。"""
     article = await _make_article(db_session, sample_source)
     await _make_extraction(db_session, article)
 
     async with session_factory() as session:
         await EmbeddingAuditRepository(session).append_success(
-            ready=_ready(article),
+            analyzed_article_id=1,
+            article_id=article.id,
             embedder=_embedder_fake(),
         )
         await session.commit()
@@ -273,7 +266,8 @@ async def test_append_success_does_not_commit(
 
     async with session_factory() as session:
         await EmbeddingAuditRepository(session).append_success(
-            ready=_ready(article),
+            analyzed_article_id=1,
+            article_id=article.id,
             embedder=_embedder_fake(),
         )
         # 意図的に commit しない (rollback で消える)
@@ -330,7 +324,8 @@ async def test_append_failure_recoverable_maps_to_retryable(
 
     async with session_factory() as session:
         await EmbeddingAuditRepository(session).append_failure(
-            ready=_ready(article),
+            analyzed_article_id=1,
+            article_id=article.id,
             exc=exc,
         )
         await session.commit()
@@ -356,7 +351,8 @@ async def test_append_failure_terminal_operator_action(
 
     async with session_factory() as session:
         await EmbeddingAuditRepository(session).append_failure(
-            ready=_ready(article),
+            analyzed_article_id=1,
+            article_id=article.id,
             exc=exc,
         )
         await session.commit()
@@ -383,7 +379,8 @@ async def test_append_failure_terminal_target_rejected(
 
     async with session_factory() as session:
         await EmbeddingAuditRepository(session).append_failure(
-            ready=_ready(article),
+            analyzed_article_id=1,
+            article_id=article.id,
             exc=exc,
         )
         await session.commit()
@@ -412,7 +409,8 @@ async def test_append_failure_layer_2b_response_invalid(
 
     async with session_factory() as session:
         await EmbeddingAuditRepository(session).append_failure(
-            ready=_ready(article),
+            analyzed_article_id=1,
+            article_id=article.id,
             exc=exc,
         )
         await session.commit()
@@ -438,7 +436,8 @@ async def test_append_failure_unknown_exception_maps_to_unknown(
 
     async with session_factory() as session:
         await EmbeddingAuditRepository(session).append_unexpected_failure(
-            ready=_ready(article),
+            analyzed_article_id=1,
+            article_id=article.id,
             exc=exc,
         )
         await session.commit()
@@ -503,7 +502,8 @@ async def test_append_failure_projects_db_exceptions(
 
     async with session_factory() as session:
         await EmbeddingAuditRepository(session).append_failure(
-            ready=_ready(article),
+            analyzed_article_id=1,
+            article_id=article.id,
             exc=exc,
         )
         await session.commit()
@@ -539,7 +539,8 @@ async def test_append_failure_walks_error_chain_via_cause(
     except EmbeddingRecoverableError as exc:
         async with session_factory() as session:
             await EmbeddingAuditRepository(session).append_failure(
-                ready=_ready(article),
+                analyzed_article_id=1,
+                article_id=article.id,
                 exc=exc,
             )
             await session.commit()
@@ -568,7 +569,8 @@ async def test_append_failure_redacts_secrets_in_error_message(
 
     async with session_factory() as session:
         await EmbeddingAuditRepository(session).append_unexpected_failure(
-            ready=_ready(article),
+            analyzed_article_id=1,
+            article_id=article.id,
             exc=exc,
         )
         await session.commit()

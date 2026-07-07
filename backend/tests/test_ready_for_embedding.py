@@ -68,7 +68,7 @@ class TestTryAdvanceFrom:
             )
         )
 
-        ready = await ReadyForEmbedding.try_advance_from(
+        ready, analyzable_article_id = await ReadyForEmbedding.try_advance_from(
             analyzed_article_id=100, embedding_repo=repo
         )
 
@@ -80,8 +80,9 @@ class TestTryAdvanceFrom:
                 "NVIDIAがBlackwell出荷を拡大。\n\n"
                 "OpenAI, GPT-5, NVIDIA, Blackwell"
             ),
-            analyzable_article_id=42,
         )
+        # hint 未指定なので facts.analyzable_article_id (=42) に fallback。
+        assert analyzable_article_id == 42
         assert "分析タイトル" not in ready.text_for_embedding
         assert "company" not in ready.text_for_embedding
         assert "product" not in ready.text_for_embedding
@@ -91,13 +92,35 @@ class TestTryAdvanceFrom:
         repo.load_ready_build_facts.assert_awaited_once_with(100)
 
     @pytest.mark.asyncio
+    async def test_uses_analyzable_hint_when_present(self) -> None:
+        # 新 message: trigger 由来の hint を優先し、facts.analyzable_article_id は無視。
+        repo = _repo_mock(facts=_facts(analyzable_article_id=42))
+
+        _ready, analyzable_article_id = await ReadyForEmbedding.try_advance_from(
+            analyzed_article_id=100, embedding_repo=repo, analyzable_hint=777
+        )
+
+        assert analyzable_article_id == 777
+
+    @pytest.mark.asyncio
+    async def test_falls_back_to_facts_when_hint_absent(self) -> None:
+        # 旧 message: hint=None なので facts.analyzable_article_id に fallback。
+        repo = _repo_mock(facts=_facts(analyzable_article_id=55))
+
+        _ready, analyzable_article_id = await ReadyForEmbedding.try_advance_from(
+            analyzed_article_id=100, embedding_repo=repo, analyzable_hint=None
+        )
+
+        assert analyzable_article_id == 55
+
+    @pytest.mark.asyncio
     @pytest.mark.parametrize("key_points", [None, [], {"content": "ignored"}])
     async def test_builds_summary_only_when_key_points_absent_or_malformed(
         self, key_points: object
     ) -> None:
         repo = _repo_mock(facts=_facts(key_points=key_points))
 
-        ready = await ReadyForEmbedding.try_advance_from(
+        ready, _ = await ReadyForEmbedding.try_advance_from(
             analyzed_article_id=100, embedding_repo=repo
         )
 
@@ -116,7 +139,7 @@ class TestTryAdvanceFrom:
             )
         )
 
-        ready = await ReadyForEmbedding.try_advance_from(
+        ready, _ = await ReadyForEmbedding.try_advance_from(
             analyzed_article_id=100, embedding_repo=repo
         )
 
@@ -138,7 +161,7 @@ class TestTryAdvanceFrom:
             )
         )
 
-        ready = await ReadyForEmbedding.try_advance_from(
+        ready, _ = await ReadyForEmbedding.try_advance_from(
             analyzed_article_id=100, embedding_repo=repo
         )
 
@@ -148,12 +171,13 @@ class TestTryAdvanceFrom:
         ]
 
     @pytest.mark.asyncio
-    async def test_raises_blocked_when_analyzed_article_missing(self) -> None:
+    async def test_hint_does_not_bypass_missing_precondition(self) -> None:
+        # hint があっても Ready 構築 precondition は迂回しない。
         repo = _repo_mock(missing=True)
 
         with pytest.raises(EmbeddingReadyBuildBlockedError) as exc_info:
             await ReadyForEmbedding.try_advance_from(
-                analyzed_article_id=100, embedding_repo=repo
+                analyzed_article_id=100, embedding_repo=repo, analyzable_hint=777
             )
 
         assert (
@@ -163,12 +187,12 @@ class TestTryAdvanceFrom:
         repo.load_ready_build_facts.assert_awaited_once_with(100)
 
     @pytest.mark.asyncio
-    async def test_raises_blocked_when_already_embedded(self) -> None:
+    async def test_hint_does_not_bypass_already_embedded(self) -> None:
         repo = _repo_mock(facts=_facts(has_embedding=True))
 
         with pytest.raises(EmbeddingReadyBuildBlockedError) as exc_info:
             await ReadyForEmbedding.try_advance_from(
-                analyzed_article_id=100, embedding_repo=repo
+                analyzed_article_id=100, embedding_repo=repo, analyzable_hint=777
             )
 
         assert exc_info.value.code is EmbeddingReadyBuildBlockedCode.ALREADY_EMBEDDED
@@ -187,48 +211,34 @@ class TestTryAdvanceFrom:
 class TestReadyForEmbeddingFieldConstraints:
     def test_rejects_non_positive_analyzed_article_id(self) -> None:
         with pytest.raises(ValidationError):
-            ReadyForEmbedding(
-                analyzed_article_id=0, text_for_embedding="t", analyzable_article_id=1
-            )
+            ReadyForEmbedding(analyzed_article_id=0, text_for_embedding="t")
         with pytest.raises(ValidationError):
-            ReadyForEmbedding(
-                analyzed_article_id=-1, text_for_embedding="t", analyzable_article_id=1
-            )
+            ReadyForEmbedding(analyzed_article_id=-1, text_for_embedding="t")
 
     def test_rejects_empty_text(self) -> None:
         with pytest.raises(ValidationError):
-            ReadyForEmbedding(
-                analyzed_article_id=1, text_for_embedding="", analyzable_article_id=1
-            )
-
-    def test_rejects_non_positive_analyzable_article_id(self) -> None:
-        with pytest.raises(ValidationError):
-            ReadyForEmbedding(
-                analyzed_article_id=1, text_for_embedding="t", analyzable_article_id=0
-            )
-        with pytest.raises(ValidationError):
-            ReadyForEmbedding(
-                analyzed_article_id=1, text_for_embedding="t", analyzable_article_id=-1
-            )
+            ReadyForEmbedding(analyzed_article_id=1, text_for_embedding="")
 
     def test_rejects_legacy_analysis_id_alias(self) -> None:
         with pytest.raises(ValidationError):
-            ReadyForEmbedding(
-                analysis_id=1, text_for_embedding="t", analyzable_article_id=1
-            )
+            ReadyForEmbedding(analysis_id=1, text_for_embedding="t")
 
     def test_is_frozen(self) -> None:
-        ready = ReadyForEmbedding(
-            analyzed_article_id=1, text_for_embedding="t\ns", analyzable_article_id=1
-        )
+        ready = ReadyForEmbedding(analyzed_article_id=1, text_for_embedding="t\ns")
         with pytest.raises(ValidationError):
             ready.analyzed_article_id = 999  # type: ignore[misc]
 
 
 class TestEmbeddingTrigger:
-    def test_carries_analyzed_article_id_only(self) -> None:
+    def test_defaults_analyzable_article_id_to_none(self) -> None:
+        # 旧 in-flight message 互換: analyzable_article_id は optional。
         trigger = EmbeddingTrigger(analyzed_article_id=42)
-        assert trigger.model_dump() == {"analyzed_article_id": 42}
+        assert trigger.analyzed_article_id == 42
+        assert trigger.analyzable_article_id is None
+
+    def test_carries_both_ids(self) -> None:
+        trigger = EmbeddingTrigger(analyzed_article_id=42, analyzable_article_id=7)
+        assert trigger.analyzable_article_id == 7
 
     def test_rejects_legacy_analysis_id_alias(self) -> None:
         with pytest.raises(ValidationError):
@@ -239,3 +249,9 @@ class TestEmbeddingTrigger:
             EmbeddingTrigger(analyzed_article_id=0)
         with pytest.raises(ValidationError):
             EmbeddingTrigger(analyzed_article_id=-1)
+
+    def test_rejects_non_positive_analyzable_article_id(self) -> None:
+        with pytest.raises(ValidationError):
+            EmbeddingTrigger(analyzed_article_id=1, analyzable_article_id=0)
+        with pytest.raises(ValidationError):
+            EmbeddingTrigger(analyzed_article_id=1, analyzable_article_id=-1)

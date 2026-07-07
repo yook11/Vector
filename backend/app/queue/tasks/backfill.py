@@ -834,7 +834,10 @@ async def backfill_embeddings(ctx: Context = TaskiqDepends()) -> None:
             for target in targets[:granted]:
                 try:
                     await generate_embedding.kiq(
-                        EmbeddingTrigger(analyzed_article_id=target.target_id),
+                        EmbeddingTrigger(
+                            analyzed_article_id=target.target_id,
+                            analyzable_article_id=target.analyzable_article_id,
+                        ),
                     )
                 except Exception as exc:  # noqa: BLE001
                     failed += 1

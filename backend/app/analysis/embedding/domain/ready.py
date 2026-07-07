@@ -64,15 +64,22 @@ class ReadyForEmbedding(BaseModel):
 
     analyzed_article_id: int = Field(gt=0)
     text_for_embedding: str = Field(min_length=1)
-    analyzable_article_id: int = Field(gt=0)
 
     @classmethod
     async def try_advance_from(
         cls,
         analyzed_article_id: int,
         embedding_repo: EmbeddingPreconditionProtocol,
-    ) -> ReadyForEmbedding:
-        """DB 事実から Ready を構築し、対象外なら blocked 例外を投げる。"""
+        *,
+        analyzable_hint: int | None = None,
+    ) -> tuple[ReadyForEmbedding, int]:
+        """DB 事実から Ready を構築し、監査主語の analyzable_article_id を確定する。
+
+        対象外なら blocked 例外を投げる。analyzable_article_id は trigger 由来の
+        ``analyzable_hint`` を優先し、旧 in-flight message (None) のときだけ DB 射影に
+        fallback する。Ready 構築が成功した時点で facts は非 None なので、返す
+        analyzable_article_id は必ず int になる。
+        """
         facts = await embedding_repo.load_ready_build_facts(analyzed_article_id)
         if facts is None:
             raise EmbeddingReadyBuildBlockedError(
@@ -84,14 +91,19 @@ class ReadyForEmbedding(BaseModel):
                 EmbeddingReadyBuildBlockedCode.ALREADY_EMBEDDED
             )
 
-        return cls(
+        ready = cls(
             analyzed_article_id=analyzed_article_id,
             text_for_embedding=_render_embedding_text(
                 summary=facts.summary,
                 key_points=facts.key_points,
             ),
-            analyzable_article_id=facts.analyzable_article_id,
         )
+        analyzable_article_id = (
+            analyzable_hint
+            if analyzable_hint is not None
+            else facts.analyzable_article_id
+        )
+        return ready, analyzable_article_id
 
 
 def _render_embedding_text(*, summary: str, key_points: Any) -> str:

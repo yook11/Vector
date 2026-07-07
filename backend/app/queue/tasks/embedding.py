@@ -48,9 +48,10 @@ async def generate_embedding(
     with embedding_stage_span(analyzed_article_id=trigger.analyzed_article_id) as stage:
         async with session_factory() as session:
             try:
-                ready = await ReadyForEmbedding.try_advance_from(
+                ready, analyzable_article_id = await ReadyForEmbedding.try_advance_from(
                     analyzed_article_id=trigger.analyzed_article_id,
                     embedding_repo=EmbeddingRepository(session),
+                    analyzable_hint=trigger.analyzable_article_id,
                 )
             except EmbeddingReadyBuildBlockedError as exc:
                 await EmbeddingAuditRepository(session).append_ready_build_blocked(
@@ -82,8 +83,7 @@ async def generate_embedding(
                 )
                 raise
 
-        # analyzable_article_id は trigger に無く ready で判明する (late-binding)。
-        stage.set_article_id(ready.analyzable_article_id)
+        stage.set_article_id(analyzable_article_id)
 
         # precondition 未充足の stale trigger で AI quota を消費しない。
         gate = ctx.state.provider_rate_limit_gate
@@ -94,7 +94,7 @@ async def generate_embedding(
             logger.info(
                 "embedding_ai_rate_limit_gate_skipped",
                 analyzed_article_id=ready.analyzed_article_id,
-                analyzable_article_id=ready.analyzable_article_id,
+                analyzable_article_id=analyzable_article_id,
                 embedding_model=embedder.model_name,
             )
             stage.set_result("rate_limited")
@@ -104,7 +104,9 @@ async def generate_embedding(
         handler = EmbeddingFailureHandler(session_factory)
 
         try:
-            await svc.execute(ready, embedder)
+            await svc.execute(
+                ready, embedder, analyzable_article_id=analyzable_article_id
+            )
         except Exception as exc:
             # handler / hold が二次例外で落ちても元の業務例外を span に残す
             # (no-override で最初の業務例外を保持)。
@@ -113,6 +115,7 @@ async def generate_embedding(
                 ready=ready,
                 exc=exc,
                 last_attempt=is_last_attempt(ctx),
+                analyzable_article_id=analyzable_article_id,
             )
             if decision.stage_hold_reason is not None:
                 await set_embedding_hold(get_redis(), reason=decision.stage_hold_reason)

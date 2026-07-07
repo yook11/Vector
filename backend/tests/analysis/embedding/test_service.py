@@ -40,7 +40,6 @@ def _ready() -> ReadyForEmbedding:
     return ReadyForEmbedding(
         analyzed_article_id=1,
         text_for_embedding="分析タイトル\n分析要約",
-        analyzable_article_id=7,
     )
 
 
@@ -62,7 +61,7 @@ async def test_save_success_sets_stage_result_succeeded(
             ) as mock_audit,
         ):
             mock_audit.return_value.append_success = AsyncMock()
-            await svc.execute(_ready(), _make_embedder())
+            await svc.execute(_ready(), _make_embedder(), analyzable_article_id=7)
 
     assert stage_attrs(capfire)["result"] == "succeeded"
 
@@ -85,7 +84,7 @@ async def test_save_success_emits_processing_outcome_succeeded(
             ) as mock_audit,
         ):
             mock_audit.return_value.append_success = AsyncMock()
-            await svc.execute(_ready(), _make_embedder())
+            await svc.execute(_ready(), _make_embedder(), analyzable_article_id=7)
 
     metrics = collected_metrics(capfire)
     assert sum_counter_for_result(metrics, _METRIC, "succeeded") == 1
@@ -105,7 +104,7 @@ async def test_race_loss_sets_stage_result_skipped(
             "app.analysis.embedding.repository.EmbeddingRepository.save",
             new=AsyncMock(return_value=False),
         ):
-            await svc.execute(_ready(), _make_embedder())
+            await svc.execute(_ready(), _make_embedder(), analyzable_article_id=7)
 
     assert stage_attrs(capfire)["result"] == "skipped"
 
@@ -122,7 +121,7 @@ async def test_race_loss_does_not_emit_processing_outcome(
             "app.analysis.embedding.repository.EmbeddingRepository.save",
             new=AsyncMock(return_value=False),
         ):
-            await svc.execute(_ready(), _make_embedder())
+            await svc.execute(_ready(), _make_embedder(), analyzable_article_id=7)
 
     metrics = collected_metrics(capfire)
     for result in _ALL_RESULTS:
@@ -157,7 +156,7 @@ async def test_commit_failure_does_not_emit_succeeded(
         ):
             mock_audit.return_value.append_success = AsyncMock()
             with pytest.raises(SQLAlchemyError):
-                await svc.execute(_ready(), _make_embedder())
+                await svc.execute(_ready(), _make_embedder(), analyzable_article_id=7)
 
     metrics = collected_metrics(capfire)
     for result in _ALL_RESULTS:

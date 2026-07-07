@@ -9,10 +9,7 @@ from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.analysis.embedding.ai.base import BaseEmbedder
-from app.analysis.embedding.domain.ready import (
-    EmbeddingReadyBuildBlockedError,
-    ReadyForEmbedding,
-)
+from app.analysis.embedding.domain.ready import EmbeddingReadyBuildBlockedError
 from app.analysis.embedding.errors import EmbeddingError
 from app.audit.domain.event import EventType, Stage
 from app.audit.domain.payloads import BasePipelineEventPayload, EmbeddingPayload
@@ -51,12 +48,13 @@ class EmbeddingAuditRepository:
     async def append_success(
         self,
         *,
-        ready: ReadyForEmbedding,
+        analyzed_article_id: int,
+        article_id: int,
         embedder: BaseEmbedder,
     ) -> None:
         """embedding 成功を記録する。"""
         payload = EmbeddingPayload(
-            analyzed_article_id=ready.analyzed_article_id,
+            analyzed_article_id=analyzed_article_id,
             ai_model=embedder.model_name,
             vector_dimension=embedder.dimension,
         )
@@ -64,7 +62,7 @@ class EmbeddingAuditRepository:
             event_type=EventType.SUCCEEDED,
             outcome_code=EmbeddingOutcomeCode.COMPLETED.value,
             payload=payload,
-            article_id=ready.analyzable_article_id,
+            article_id=article_id,
         )
 
     # --- 救済断念経路 (backfill exclusion と同一 tx) ----------------------
@@ -122,22 +120,30 @@ class EmbeddingAuditRepository:
     async def append_failure(
         self,
         *,
-        ready: ReadyForEmbedding,
+        analyzed_article_id: int,
+        article_id: int,
         exc: EmbeddingError | SQLAlchemyError,
     ) -> None:
         """embedding 失敗を記録する。"""
         projection = self._projection_of(exc)
-        await self._append_failed_event(ready=ready, exc=exc, projection=projection)
+        await self._append_failed_event(
+            analyzed_article_id=analyzed_article_id,
+            article_id=article_id,
+            exc=exc,
+            projection=projection,
+        )
 
     async def append_unexpected_failure(
         self,
         *,
-        ready: ReadyForEmbedding,
+        analyzed_article_id: int,
+        article_id: int,
         exc: BaseException,
     ) -> None:
         """想定外の embedding 失敗を unknown として記録する。"""
         await self._append_failed_event(
-            ready=ready,
+            analyzed_article_id=analyzed_article_id,
+            article_id=article_id,
             exc=exc,
             projection=unknown_failure_projection(),
         )
@@ -145,7 +151,8 @@ class EmbeddingAuditRepository:
     async def _append_failed_event(
         self,
         *,
-        ready: ReadyForEmbedding,
+        analyzed_article_id: int,
+        article_id: int,
         exc: BaseException,
         projection: FailureProjection,
     ) -> None:
@@ -153,7 +160,7 @@ class EmbeddingAuditRepository:
             failure_kind=projection.failure_kind,
             failure_action=failure_action_value(projection),
             failure_reason=projection.failure_reason,
-            analyzed_article_id=ready.analyzed_article_id,
+            analyzed_article_id=analyzed_article_id,
             ai_model=None,
             vector_dimension=None,
             error_message=error_message_of(exc),
@@ -163,7 +170,7 @@ class EmbeddingAuditRepository:
             event_type=EventType.FAILED,
             outcome_code=projection.code,
             payload=payload,
-            article_id=ready.analyzable_article_id,
+            article_id=article_id,
             error_class=exception_fqn(exc),
             retryability=projection.retryability,
         )

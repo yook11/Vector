@@ -76,27 +76,32 @@ def _make_ctx(
     return ctx
 
 
-def _make_trigger(analyzed_article_id: int = 1) -> EmbeddingTrigger:
-    return EmbeddingTrigger(analyzed_article_id=analyzed_article_id)
+def _make_trigger(
+    analyzed_article_id: int = 1, analyzable_article_id: int | None = None
+) -> EmbeddingTrigger:
+    return EmbeddingTrigger(
+        analyzed_article_id=analyzed_article_id,
+        analyzable_article_id=analyzable_article_id,
+    )
 
 
-def _make_ready(
-    analyzed_article_id: int = 1, analyzable_article_id: int = 7
-) -> ReadyForEmbedding:
+def _make_ready(analyzed_article_id: int = 1) -> ReadyForEmbedding:
     return ReadyForEmbedding(
         analyzed_article_id=analyzed_article_id,
         text_for_embedding="分析タイトル\n分析要約",
-        analyzable_article_id=analyzable_article_id,
     )
 
 
 def _patch_ready_construction(
     result: ReadyForEmbedding | EmbeddingReadyBuildBlockedError,
+    *,
+    analyzable_article_id: int = 7,
 ):
+    # try_advance_from は (ready, analyzable_article_id) を返す。
     mock = (
         AsyncMock(side_effect=result)
         if isinstance(result, EmbeddingReadyBuildBlockedError)
-        else AsyncMock(return_value=result)
+        else AsyncMock(return_value=(result, analyzable_article_id))
     )
     return patch(
         "app.queue.tasks.embedding.ReadyForEmbedding.try_advance_from",
@@ -129,6 +134,46 @@ class TestGenerateEmbedding:
         mock_ctx.state.provider_rate_limit_gate.acquire.assert_awaited_once_with(
             mock_ctx.state.embedder.rate_limit_policy
         )
+
+    @pytest.mark.asyncio
+    async def test_passes_trigger_analyzable_id_as_hint(self) -> None:
+        """新 message では trigger.analyzable_article_id を hint に渡す。"""
+        from app.queue.tasks.embedding import generate_embedding
+
+        mock_ctx = _make_ctx(embedder=_make_embedder_fake())
+        trigger = _make_trigger(analyzed_article_id=1, analyzable_article_id=99)
+        advance = AsyncMock(return_value=(_make_ready(analyzed_article_id=1), 99))
+        with (
+            patch(
+                "app.queue.tasks.embedding.ReadyForEmbedding.try_advance_from",
+                new=advance,
+            ),
+            patch("app.queue.tasks.embedding.EmbeddingService") as mock_svc_cls,
+        ):
+            mock_svc_cls.return_value.execute = AsyncMock(return_value=None)
+            await generate_embedding(trigger=trigger, ctx=mock_ctx)
+
+        assert advance.await_args.kwargs["analyzable_hint"] == 99
+
+    @pytest.mark.asyncio
+    async def test_passes_none_hint_for_legacy_trigger(self) -> None:
+        """analyzable_article_id 未設定の旧 message では hint=None を渡す。"""
+        from app.queue.tasks.embedding import generate_embedding
+
+        mock_ctx = _make_ctx(embedder=_make_embedder_fake())
+        trigger = _make_trigger(analyzed_article_id=1)
+        advance = AsyncMock(return_value=(_make_ready(analyzed_article_id=1), 7))
+        with (
+            patch(
+                "app.queue.tasks.embedding.ReadyForEmbedding.try_advance_from",
+                new=advance,
+            ),
+            patch("app.queue.tasks.embedding.EmbeddingService") as mock_svc_cls,
+        ):
+            mock_svc_cls.return_value.execute = AsyncMock(return_value=None)
+            await generate_embedding(trigger=trigger, ctx=mock_ctx)
+
+        assert advance.await_args.kwargs["analyzable_hint"] is None
 
     @pytest.mark.asyncio
     async def test_ready_build_blocked_audits_and_does_not_call_service(self) -> None:

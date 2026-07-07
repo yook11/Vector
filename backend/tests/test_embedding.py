@@ -38,7 +38,7 @@ def _v(value: float = 0.1) -> list[float]:
 def _ready(text: str = "hello") -> ReadyForEmbedding:
     """テスト用 ReadyForEmbedding を生成する。"""
     return ReadyForEmbedding(
-        analyzed_article_id=1, text_for_embedding=text, analyzable_article_id=1
+        analyzed_article_id=1, text_for_embedding=text
     )
 
 

@@ -71,13 +71,10 @@ async def _make_article(
     return article
 
 
-def _ready_for(
-    article_id: int, *, analyzed_article_id: int = 1234
-) -> ReadyForEmbedding:
+def _ready_for(*, analyzed_article_id: int = 1234) -> ReadyForEmbedding:
     return ReadyForEmbedding(
         analyzed_article_id=analyzed_article_id,
         text_for_embedding="分析タイトル\n分析要約",
-        analyzable_article_id=article_id,
     )
 
 
@@ -127,11 +124,16 @@ async def test_hold_reason_derived_from_provider_mode(
 ) -> None:
     """stage hold は marker 型ではなく provider error の回復クラスから決まる。"""
     article = await _make_article(db_session, sample_source)
-    ready = _ready_for(article.id)
+    ready = _ready_for()
     handler = EmbeddingFailureHandler(session_factory)
     exc = to_embedding_error(provider_exc)
 
-    decision = await handler.handle(ready=ready, exc=exc, last_attempt=last_attempt)
+    decision = await handler.handle(
+        ready=ready,
+        exc=exc,
+        last_attempt=last_attempt,
+        analyzable_article_id=article.id,
+    )
 
     assert decision.stage_hold_reason == expected_hold
 
@@ -144,11 +146,13 @@ async def test_recoverable_with_retry_budget_returns_true(
 ) -> None:
     """Recoverable + retry 余地あり → taskiq retry に委ねる (reraise=True)。"""
     article = await _make_article(db_session, sample_source)
-    ready = _ready_for(article.id)
+    ready = _ready_for()
     handler = EmbeddingFailureHandler(session_factory)
 
     exc = to_embedding_error(AIProviderNetworkError())
-    decision = await handler.handle(ready=ready, exc=exc, last_attempt=False)
+    decision = await handler.handle(
+        ready=ready, exc=exc, last_attempt=False, analyzable_article_id=article.id
+    )
 
     assert decision.reraise is True
     assert decision.stage_hold_reason is None
@@ -162,11 +166,13 @@ async def test_recoverable_last_attempt_returns_false(
 ) -> None:
     """Recoverable + retry 上限到達 → reraise=False。"""
     article = await _make_article(db_session, sample_source)
-    ready = _ready_for(article.id)
+    ready = _ready_for()
     handler = EmbeddingFailureHandler(session_factory)
 
     exc = to_embedding_error(AIProviderNetworkError())
-    decision = await handler.handle(ready=ready, exc=exc, last_attempt=True)
+    decision = await handler.handle(
+        ready=ready, exc=exc, last_attempt=True, analyzable_article_id=article.id
+    )
 
     assert decision.reraise is False
 
@@ -179,11 +185,13 @@ async def test_terminal_returns_false_without_reraise(
 ) -> None:
     """Terminal は retry 余地に関わらず reraise=False。"""
     article = await _make_article(db_session, sample_source)
-    ready = _ready_for(article.id)
+    ready = _ready_for()
     handler = EmbeddingFailureHandler(session_factory)
 
     exc = to_embedding_error(AIProviderConfigurationError())
-    decision = await handler.handle(ready=ready, exc=exc, last_attempt=False)
+    decision = await handler.handle(
+        ready=ready, exc=exc, last_attempt=False, analyzable_article_id=article.id
+    )
 
     assert decision.reraise is False
 
@@ -197,11 +205,13 @@ async def test_terminal_writes_single_failure_audit_row(
     """Terminal で failure audit row が 1 行記録され原因軸が焼かれる。"""
     article = await _make_article(db_session, sample_source)
     article_id = article.id
-    ready = _ready_for(article_id)
+    ready = _ready_for()
     handler = EmbeddingFailureHandler(session_factory)
 
     exc = to_embedding_error(_input_rejected())
-    await handler.handle(ready=ready, exc=exc, last_attempt=False)
+    await handler.handle(
+        ready=ready, exc=exc, last_attempt=False, analyzable_article_id=article_id
+    )
 
     await db_session.rollback()
     events = await _fetch_embedding_events(db_session, article_id)
@@ -223,11 +233,14 @@ async def test_unexpected_with_retry_budget_returns_true(
     """catch-all + retry 余地あり → unknown audit + reraise=True。"""
     article = await _make_article(db_session, sample_source)
     article_id = article.id
-    ready = _ready_for(article_id)
+    ready = _ready_for()
     handler = EmbeddingFailureHandler(session_factory)
 
     decision = await handler.handle(
-        ready=ready, exc=ValueError("surprise"), last_attempt=False
+        ready=ready,
+        exc=ValueError("surprise"),
+        last_attempt=False,
+        analyzable_article_id=article_id,
     )
 
     assert decision.reraise is True
@@ -249,11 +262,14 @@ async def test_unexpected_last_attempt_returns_false(
 ) -> None:
     """catch-all + retry 上限到達 → reraise=False。"""
     article = await _make_article(db_session, sample_source)
-    ready = _ready_for(article.id)
+    ready = _ready_for()
     handler = EmbeddingFailureHandler(session_factory)
 
     decision = await handler.handle(
-        ready=ready, exc=ValueError("surprise"), last_attempt=True
+        ready=ready,
+        exc=ValueError("surprise"),
+        last_attempt=True,
+        analyzable_article_id=article.id,
     )
 
     assert decision.reraise is False
@@ -271,7 +287,7 @@ async def test_audit_failure_falls_back_to_log_with_secrets_redacted(
     business / audit exception message に混入した secret prefix が log field
     から redact されることも検証する。"""
     article = await _make_article(db_session, sample_source)
-    ready = _ready_for(article.id)
+    ready = _ready_for()
     handler = EmbeddingFailureHandler(session_factory)
 
     # business 側の例外は __str__ が code 固定値のみ。
@@ -290,7 +306,10 @@ async def test_audit_failure_falls_back_to_log_with_secrets_redacted(
         )
         # handler は落ちずに完走 (Terminal → reraise=False)
         decision = await handler.handle(
-            ready=ready, exc=business_exc, last_attempt=False
+            ready=ready,
+            exc=business_exc,
+            last_attempt=False,
+            analyzable_article_id=article.id,
         )
 
     assert decision.reraise is False
@@ -362,14 +381,16 @@ async def test_handler_emits_classified_processing_outcome(
     audit 副作用をハンドラ上で no-op に差し替え、metric が audit / DB に依らないことを
     純 unit で固定する (emit は audit より先)。
     """
-    ready = _ready_for(article_id=1)
+    ready = _ready_for()
     handler = EmbeddingFailureHandler(MagicMock())
 
     with (
         patch.object(handler, "_audit_failure", new=AsyncMock()),
         patch.object(handler, "_audit_unexpected_failure", new=AsyncMock()),
     ):
-        await handler.handle(ready=ready, exc=exc, last_attempt=True)
+        await handler.handle(
+            ready=ready, exc=exc, last_attempt=True, analyzable_article_id=1
+        )
 
     metrics = collected_metrics(capfire)
     assert sum_counter_for_result(metrics, _METRIC, expected) == 1
@@ -386,7 +407,7 @@ async def test_processing_outcome_emitted_even_when_audit_drops(
     実 audit repository を raise させ、``_audit_failure`` の swallow 経路を DB 無しで
     通す。metric は audit より先に確定するため emit は残る。
     """
-    ready = _ready_for(article_id=1)
+    ready = _ready_for()
     handler = EmbeddingFailureHandler(_mock_session_factory())
     exc = to_embedding_error(AIProviderNetworkError())
 
@@ -397,7 +418,9 @@ async def test_processing_outcome_emitted_even_when_audit_drops(
         mock_audit_cls.return_value.append_failure = AsyncMock(
             side_effect=RuntimeError("audit db down")
         )
-        await handler.handle(ready=ready, exc=exc, last_attempt=True)
+        await handler.handle(
+            ready=ready, exc=exc, last_attempt=True, analyzable_article_id=1
+        )
 
     metrics = collected_metrics(capfire)
     assert sum_counter_for_result(metrics, _METRIC, "infra_error") == 1
