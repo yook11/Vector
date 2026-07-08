@@ -1,10 +1,12 @@
 """遅延 AI SDK import の構造保証テスト (import-time footprint guard)。
 
 非 AI を実行しない taskiq プロセス (scheduler / collect の metadata・content /
-maintenance / trend_discovery) は、起動時に重い AI SDK (``openai`` +
-``google.genai``、実測 ~133MB) を import してはならない。SDK は AI を実行する
-worker の WORKER_STARTUP hook (broker_analysis / broker_embedding /
-broker_briefing) でのみロードされる設計 (``app/queue/composition.py`` の遅延 import)。
+maintenance / trend_discovery) と API プロセスの module import は、起動時に重い
+AI SDK (``openai`` + ``google.genai``、実測 ~133MB) を import してはならない。
+SDK は AI を実行する worker の WORKER_STARTUP hook (broker_analysis /
+broker_embedding / broker_briefing)、または API の request-scoped factory 内でのみ
+ロードされる設計 (``app/queue/composition.py`` と ``app/agent/router.py`` の遅延
+import)。
 
 各プロセスの import surface は ``supervisord/{scheduler,fetch,insights,analysis}.conf``
 (maintenance program は analysis.conf) の ``taskiq worker``/``taskiq scheduler`` 起動
@@ -24,6 +26,10 @@ import pytest
 # taskiq は `module:object` の module 部 + 各 task module を import するため、ここでは
 # import 対象 module のみを列挙する (object 部は import に無関係)。
 _NON_AI_IMPORT_SURFACES = {
+    # API process: FastAPI app import + route registration は SDK-free に保つ。
+    "api": "import app.main",
+    # API route / schema import で app.agent package が読まれても SDK-free に保つ。
+    "agent_package": "import app.agent",
     # scheduler.conf: python -m app.queue.scheduler_entrypoint (4 cron scheduler 統合)。
     # entrypoint は schedulers + registry を import するため最広の import surface。
     "scheduler": "import app.queue.scheduler_entrypoint",

@@ -7,7 +7,6 @@ from typing import Protocol, assert_never
 from pydantic import ValidationError
 
 from app.agent.contract import AnswerQuestionInput
-from app.agent.planning.ai.gemini import QuestionPlannerResponseInvalidError
 from app.agent.planning.audit import (
     PlannerAttemptFailureEvent,
     PlannerAuditRecorder,
@@ -26,6 +25,7 @@ from app.agent.planning.contract import (
     plan_from_draft,
     safe_fallback_plan,
 )
+from app.agent.planning.errors import QuestionPlannerResponseInvalidError
 from app.agent.planning.metrics import record_question_planner_outcome
 from app.agent.planning.plan_draft import QuestionPlanDraft
 from app.analysis.ai_provider_errors import AIProviderError
@@ -155,20 +155,6 @@ class QuestionPlanningService:
             planned_retrieval_mode=plan.retrieval_mode,
         )
         return plan
-
-
-async def plan_question(
-    planner: QuestionPlanDraftGenerator,
-    input: AnswerQuestionInput,
-    *,
-    audit_recorder: PlannerAuditRecorder | None = None,
-) -> QuestionPlan:
-    """Compatibility helper for one-shot planning."""
-
-    return await QuestionPlanningService(
-        planner=planner,
-        audit_recorder=audit_recorder,
-    ).plan(input)
 
 
 def _planner_attr(planner: QuestionPlanDraftGenerator, name: str) -> str | None:

@@ -16,6 +16,7 @@ from app.agent.planning.ai.gemini_spec import (
     GEMINI_QUESTION_PLANNER_SPEC,
     GeminiQuestionPlannerSpec,
 )
+from app.agent.planning.errors import QuestionPlannerResponseInvalidError
 from app.agent.planning.plan_draft import QuestionPlanDraft
 from app.analysis.ai_provider_errors import (
     AIProviderConfigurationError,
@@ -37,14 +38,6 @@ class GeminiQuestionPlannerResponseDefect(StrEnum):
 
     NOT_JSON = "question_planner_response_gemini_not_json"
     NOT_OBJECT = "question_planner_response_gemini_not_object"
-
-
-class QuestionPlannerResponseInvalidError(ValueError):
-    """Planner response が ``QuestionPlanDraft`` として消化できない。"""
-
-    def __init__(self, defect: GeminiQuestionPlannerResponseDefect) -> None:
-        self.defect = defect
-        super().__init__(defect.value)
 
 
 class GeminiQuestionPlanner:

@@ -1,4 +1,4 @@
-from collections.abc import AsyncGenerator
+from collections.abc import AsyncGenerator, Iterable, Iterator
 from contextlib import asynccontextmanager
 from typing import Any
 
@@ -11,6 +11,7 @@ from sqlalchemy import text
 from starlette.middleware.base import BaseHTTPMiddleware, RequestResponseEndpoint
 
 from app.admin.router import admin_router
+from app.agent.router import router as research_router
 from app.config import settings
 from app.db import (
     API_POOL_MAX_OVERFLOW,
@@ -191,6 +192,7 @@ app.include_router(categories.router)
 app.include_router(watchlist.router)
 app.include_router(trends_router)
 app.include_router(briefing_router)
+app.include_router(research_router)
 app.include_router(admin_router)
 
 
@@ -219,6 +221,15 @@ async def health_check() -> dict:
 # (hey-api SDK) が path 由来の長大な関数名を出力する。Vector では関数名が
 # アプリ内でユニークなので、route.name (= 関数名)
 # をそのまま operation_id とする FastAPI 標準パターンを採用する。
-for _route in app.routes:
-    if isinstance(_route, APIRoute):
-        _route.operation_id = _route.name
+def _iter_api_routes(routes: Iterable[Any]) -> Iterator[APIRoute]:
+    for route in routes:
+        if isinstance(route, APIRoute):
+            yield route
+            continue
+        included_router = getattr(route, "original_router", None)
+        if included_router is not None:
+            yield from _iter_api_routes(included_router.routes)
+
+
+for _route in _iter_api_routes(app.routes):
+    _route.operation_id = _route.name

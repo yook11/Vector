@@ -3,8 +3,8 @@
 from app.agent.planning.ai.gemini import (
     GeminiQuestionPlanner,
     GeminiQuestionPlannerResponseDefect,
-    QuestionPlannerResponseInvalidError,
 )
+from app.agent.planning.errors import QuestionPlannerResponseInvalidError
 
 __all__ = [
     "GeminiQuestionPlanner",

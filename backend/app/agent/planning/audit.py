@@ -8,7 +8,7 @@ from typing import Literal, Protocol
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from app.agent.contract import RetrievalMode
-from app.agent.planning.ai.gemini import QuestionPlannerResponseInvalidError
+from app.agent.planning.errors import QuestionPlannerResponseInvalidError
 from app.analysis.ai_provider_errors import AIProviderError
 
 PYDANTIC_VALIDATION_FAILED = "question_planner_response_pydantic_validation_failed"

@@ -28,7 +28,6 @@ from app.agent.planning.planner import (
 from app.agent.planning.service import (
     QuestionPlanDraftGenerator,
     QuestionPlanningService,
-    plan_question,
 )
 
 __all__ = [
@@ -53,5 +52,4 @@ __all__ = [
     "RetrievalMode",
     "RetrievalPlan",
     "UnmetRequirement",
-    "plan_question",
 ]

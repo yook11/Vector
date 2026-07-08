@@ -568,6 +568,99 @@ export type PipelineStageHealth = {
 };
 
 /**
+ * ResearchExternalUrlSource
+ */
+export type ResearchExternalUrlSource = {
+    /**
+     * Kind
+     */
+    kind: 'external_url';
+    /**
+     * Sourceref
+     */
+    sourceRef: string;
+    url: SafeUrl;
+    /**
+     * Title
+     */
+    title: string;
+    /**
+     * Sourcename
+     */
+    sourceName: string | null;
+    /**
+     * Publishedat
+     */
+    publishedAt: string | null;
+    /**
+     * Snippet
+     */
+    snippet: string | null;
+};
+
+/**
+ * ResearchInternalArticleSource
+ */
+export type ResearchInternalArticleSource = {
+    /**
+     * Kind
+     */
+    kind: 'internal_article';
+    /**
+     * Sourceref
+     */
+    sourceRef: string;
+    /**
+     * Articleid
+     */
+    articleId: number;
+    /**
+     * Title
+     */
+    title: string;
+    /**
+     * Sourcename
+     */
+    sourceName: string | null;
+    /**
+     * Publishedat
+     */
+    publishedAt: string | null;
+    /**
+     * Snippet
+     */
+    snippet: string | null;
+};
+
+/**
+ * ResearchQuestionRequest
+ */
+export type ResearchQuestionRequest = {
+    /**
+     * Question
+     */
+    question: string;
+};
+
+/**
+ * ResearchResponse
+ */
+export type ResearchResponse = {
+    /**
+     * Answer
+     */
+    answer: string;
+    /**
+     * Sources
+     */
+    sources: Array<ResearchInternalArticleSource | ResearchExternalUrlSource>;
+    /**
+     * Missingaspects
+     */
+    missingAspects: Array<string>;
+};
+
+/**
  * SafeUrl
  *
  * Pydantic によって検証された HTTP/HTTPS URL。
@@ -993,7 +1086,7 @@ export type GetSimilarArticlesError = GetSimilarArticlesErrors[keyof GetSimilarA
 
 export type GetSimilarArticlesResponses = {
     /**
-     * Response Get Similar Articles Api V1 Articles  Article Id  Similar Get
+     * Response Get Similar Articles
      *
      * Successful Response
      */
@@ -1269,7 +1362,7 @@ export type GetTrendsError = GetTrendsErrors[keyof GetTrendsErrors];
 
 export type GetTrendsResponses = {
     /**
-     * Response Get Trends Api V1 Trends Get
+     * Response Get Trends
      *
      * Successful Response
      */
@@ -1354,7 +1447,7 @@ export type GetLatestBriefingError = GetLatestBriefingErrors[keyof GetLatestBrie
 
 export type GetLatestBriefingResponses = {
     /**
-     * Response Get Latest Briefing Api V1 Briefing  Category Slug  Get
+     * Response Get Latest Briefing
      *
      * Successful Response
      */
@@ -1366,6 +1459,45 @@ export type GetLatestBriefingResponses = {
 };
 
 export type GetLatestBriefingResponse = GetLatestBriefingResponses[keyof GetLatestBriefingResponses];
+
+export type CreateResearchResponseData = {
+    body: ResearchQuestionRequest;
+    headers?: {
+        /**
+         * Authorization
+         */
+        authorization?: string | null;
+    };
+    path?: never;
+    query?: never;
+    url: '/api/v1/research/responses';
+};
+
+export type CreateResearchResponseErrors = {
+    /**
+     * Bad request
+     */
+    400: unknown;
+    /**
+     * Validation Error
+     */
+    422: HttpValidationError;
+    /**
+     * Answer generation is temporarily unavailable
+     */
+    503: unknown;
+};
+
+export type CreateResearchResponseError = CreateResearchResponseErrors[keyof CreateResearchResponseErrors];
+
+export type CreateResearchResponseResponses = {
+    /**
+     * Successful Response
+     */
+    200: ResearchResponse;
+};
+
+export type CreateResearchResponseResponse = CreateResearchResponseResponses[keyof CreateResearchResponseResponses];
 
 export type ListNewsSourcesData = {
     body?: never;
