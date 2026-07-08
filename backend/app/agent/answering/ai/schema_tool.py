@@ -27,16 +27,21 @@ EVIDENCE_ANSWER_GEMINI_SCHEMA: dict[str, Any] = {
             "type": "STRING",
             "description": (
                 "Japanese answer shown to the user. It must be non-empty. "
+                "When citing evidence, put inline citation markers in the "
+                "form [[source_ref]] immediately after the supported sentence "
+                "or clause. "
                 "When evidence is missing, clearly say that no citable evidence "
-                "was found before giving any cautious reference answer."
+                "was found before giving any cautious reference answer, and do "
+                "not include citation markers."
             ),
         },
         "cited_refs": {
             "type": "ARRAY",
             "description": (
-                "source_ref values cited by the answer. Use only refs present in "
-                "the evidence block. Use an empty list when there is no citable "
-                "evidence."
+                "source_ref values used in the answer's inline citation markers. "
+                "Use only refs present in the evidence block, keep the first-use "
+                "order, and omit duplicates. Use an empty list when there is no "
+                "citable evidence."
             ),
             "items": {
                 "type": "STRING",

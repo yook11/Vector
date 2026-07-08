@@ -78,7 +78,12 @@ ResearchSource = Annotated[
 
 
 class ResearchResponse(_CamelBase):
-    answer: str
+    answer: str = Field(
+        description=(
+            "Generated answer text. Evidence-grounded answers may include inline "
+            "citation markers like [[1]], where the number matches sources[].sourceRef."
+        )
+    )
     sources: list[ResearchSource]
     missing_aspects: list[str]
 

@@ -169,7 +169,9 @@ Request  (app/schemas/research.py, _CamelBase):
   question: str    # strip, min_length=1, max_length=1000
 
 Response 200 (_CamelBase):
-  answer: str                     # C-3 以降は [[N]] marker を含みうる
+  answer: str                     # C-3 以降は [[N]] marker を含みうる。
+                                  # N は sources[].sourceRef に一致し、
+                                  # frontend は marker を parse して source に解決する。
   sources: list[Source]           # 実際に引用された根拠のみ, kind 判別 union
     - kind="internal_article": sourceRef, articleId (公開 /news id),
       title, sourceName, publishedAt, snippet

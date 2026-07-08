@@ -63,7 +63,7 @@ def _retrieval(
 def _answered_with_sources() -> AnswerQuestionResult:
     return AnswerQuestionResult(
         status="answered",
-        answer="NVIDIA は新製品発表後も需要が強いです。",
+        answer="NVIDIA は新製品発表後も需要が強いです。[[1]][[2]]",
         sources=[
             InternalArticleSource(
                 source_ref="1",
@@ -100,7 +100,7 @@ def _direct_answer() -> AnswerQuestionResult:
 def _insufficient_answer() -> AnswerQuestionResult:
     return AnswerQuestionResult(
         status="insufficient",
-        answer="確認できた範囲では需要は強いですが、一部指標は未確認です。",
+        answer="確認できた範囲では需要は強いですが、一部指標は未確認です。[[1]]",
         sources=[
             InternalArticleSource(
                 source_ref="1",
@@ -116,7 +116,7 @@ def _insufficient_answer() -> AnswerQuestionResult:
 def _metadata_null_answer() -> AnswerQuestionResult:
     return AnswerQuestionResult(
         status="answered",
-        answer="metadata が欠けた source の回答です。",
+        answer="metadata が欠けた source の回答です。[[1]]",
         sources=[
             InternalArticleSource(
                 source_ref="1",
@@ -182,7 +182,7 @@ class TestCreateResearchResponse:
         assert response.status_code == 200
         data = response.json()
         assert set(data) == {"answer", "sources", "missingAspects"}
-        assert data["answer"] == "NVIDIA は新製品発表後も需要が強いです。"
+        assert data["answer"] == "NVIDIA は新製品発表後も需要が強いです。[[1]][[2]]"
         assert data["missingAspects"] == []
         assert data["sources"] == [
             {
@@ -353,9 +353,17 @@ def test_openapi_exposes_operation_id_and_question_max_length() -> None:
     operation = schema["paths"][_URL]["post"]
     body_schema = operation["requestBody"]["content"]["application/json"]["schema"]
     request_schema = _resolve_ref(schema, body_schema["$ref"])
+    response_body_schema = operation["responses"]["200"]["content"]["application/json"][
+        "schema"
+    ]
+    response_schema = _resolve_ref(schema, response_body_schema["$ref"])
 
     assert operation["operationId"] == "create_research_response"
     assert request_schema["properties"]["question"]["maxLength"] == 1000
+    assert (
+        "citation markers like [[1]]"
+        in response_schema["properties"]["answer"]["description"]
+    )
 
 
 @pytest.mark.parametrize(

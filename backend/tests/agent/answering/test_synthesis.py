@@ -28,6 +28,7 @@ from app.analysis.ai_provider_errors import AIProviderNetworkError
 from tests.logfire._metric_helpers import collected_metrics, sum_counter_for_result
 
 _SYNTHESIS_OUTCOME_METRIC = "vector.agent.answer_synthesis.outcome"
+_DEFECT_CITED_REFS_RECOMPUTED = "cited_refs_recomputed_from_markers"
 
 
 def _as_of() -> datetime:
@@ -49,7 +50,7 @@ def _evidence(ref: str = "1") -> AnswerEvidenceItem:
 def _raw(
     *,
     sufficiency: str = "answered",
-    answer: object = "根拠から確認できます。",
+    answer: object = "根拠から確認できます。[[1]]",
     cited_refs: list[object] | None = None,
     missing_aspects: list[object] | None = None,
 ) -> RawAnswerDraft:
@@ -164,7 +165,7 @@ async def test_valid_raw_draft_passes_through_unchanged() -> None:
 
     assert draft == AnswerDraft(
         sufficiency="answered",
-        answer="根拠から確認できます。",
+        answer="根拠から確認できます。[[1]]",
         cited_refs=["1"],
     )
     assert generator.calls[0]["previous_error"] is None
@@ -182,12 +183,59 @@ async def test_valid_raw_draft_passes_through_unchanged() -> None:
 
 
 @pytest.mark.asyncio
+async def test_derives_refs_from_markers_and_records_mismatch_defect() -> None:
+    generator = FakeGenerator(
+        [
+            _raw(
+                answer="根拠 1 から確認できます。[[1]]",
+                cited_refs=[],
+            )
+        ]
+    )
+    recorder = FakeAnswerSynthesisAuditRecorder()
+
+    draft = await _synthesize(generator, recorder=recorder)
+
+    assert draft.cited_refs == ["1"]
+    assert draft.answer == "根拠 1 から確認できます。[[1]]"
+    assert generator.calls[0]["previous_error"] is None
+    assert recorder.attempt_failures == []
+    assert [event.defect_code for event in recorder.defect_events] == [
+        _DEFECT_CITED_REFS_RECOMPUTED
+    ]
+
+
+@pytest.mark.asyncio
+async def test_extra_declared_cited_refs_are_replaced_by_answer_markers() -> None:
+    generator = FakeGenerator(
+        [
+            _raw(
+                answer="根拠 1 だけを使っています。[[1]]",
+                cited_refs=["1", "2"],
+            )
+        ]
+    )
+    recorder = FakeAnswerSynthesisAuditRecorder()
+
+    draft = await _synthesize(
+        generator,
+        recorder=recorder,
+        evidence=[_evidence("1"), _evidence("2")],
+    )
+
+    assert draft.cited_refs == ["1"]
+    assert [event.defect_code for event in recorder.defect_events] == [
+        _DEFECT_CITED_REFS_RECOMPUTED
+    ]
+
+
+@pytest.mark.asyncio
 async def test_completes_insufficient_missing_aspects_and_records_defect() -> None:
     generator = FakeGenerator(
         [
             _raw(
                 sufficiency="insufficient",
-                answer="根拠の範囲では断定できません。",
+                answer="根拠の範囲では断定できません。[[1]]",
                 cited_refs=["1"],
                 missing_aspects=[],
             )
@@ -198,7 +246,7 @@ async def test_completes_insufficient_missing_aspects_and_records_defect() -> No
     draft = await _synthesize(generator, recorder=recorder)
 
     assert draft.sufficiency == "insufficient"
-    assert draft.answer == "根拠の範囲では断定できません。"
+    assert draft.answer == "根拠の範囲では断定できません。[[1]]"
     assert draft.cited_refs == ["1"]
     assert draft.missing_aspects
     assert len(generator.calls) == 1
@@ -212,7 +260,7 @@ async def test_removes_blank_and_duplicate_refs_and_missing_aspects() -> None:
         [
             _raw(
                 sufficiency="insufficient",
-                answer="一部だけ確認できます。",
+                answer="一部だけ確認できます。[[1]]",
                 cited_refs=["1", "", "1", "  ", "1"],
                 missing_aspects=["", "会社側の一次情報", "会社側の一次情報", "\n"],
             )
@@ -229,10 +277,10 @@ async def test_removes_blank_and_duplicate_refs_and_missing_aspects() -> None:
 
 
 @pytest.mark.asyncio
-async def test_noncompletable_defect_retries_once_with_previous_error() -> None:
+async def test_answered_without_marker_retries_once_with_previous_error() -> None:
     repaired = _raw(
         sufficiency="answered",
-        answer="修正後は根拠を引用しています。",
+        answer="修正後は根拠を引用しています。[[1]]",
         cited_refs=["1"],
     )
     generator = FakeGenerator(
@@ -240,7 +288,7 @@ async def test_noncompletable_defect_retries_once_with_previous_error() -> None:
             _raw(
                 sufficiency="answered",
                 answer="引用がありません。",
-                cited_refs=[],
+                cited_refs=["1"],
             ),
             repaired,
         ]
@@ -249,9 +297,9 @@ async def test_noncompletable_defect_retries_once_with_previous_error() -> None:
 
     draft = await _synthesize(generator, recorder=recorder)
 
-    assert draft.answer == "修正後は根拠を引用しています。"
+    assert draft.answer == "修正後は根拠を引用しています。[[1]]"
     assert [call["previous_error"] for call in generator.calls][0] is None
-    assert generator.calls[1]["previous_error"]
+    assert "citation marker" in generator.calls[1]["previous_error"]
     assert [event.attempt_number for event in recorder.attempt_failures] == [1]
     assert recorder.final_events[0].attempt_count == 2
     assert recorder.final_events[0].retry_used is True
@@ -263,11 +311,11 @@ async def test_persistent_noncompletable_defect_falls_back_to_valid_insufficient
 ) -> None:
     generator = FakeGenerator(
         [
-            _raw(sufficiency="answered", answer="引用がありません。", cited_refs=[]),
+            _raw(sufficiency="answered", answer="引用がありません。", cited_refs=["1"]),
             _raw(
                 sufficiency="answered",
                 answer="まだ引用がありません。",
-                cited_refs=[],
+                cited_refs=["1"],
             ),
         ]
     )
@@ -298,12 +346,12 @@ async def test_unknown_citation_ref_is_detected_inside_synthesis_and_retried() -
         [
             _raw(
                 sufficiency="answered",
-                answer="存在しない根拠を引用しています。",
+                answer="存在しない根拠を引用しています。[[2]]",
                 cited_refs=["2"],
             ),
             _raw(
                 sufficiency="answered",
-                answer="実在する根拠を引用しています。",
+                answer="実在する根拠を引用しています。[[1]]",
                 cited_refs=["1"],
             ),
         ]
@@ -313,8 +361,33 @@ async def test_unknown_citation_ref_is_detected_inside_synthesis_and_retried() -
     draft = await _synthesize(generator, recorder=recorder)
 
     assert draft.cited_refs == ["1"]
-    assert generator.calls[1]["previous_error"]
+    assert "[[2]]" in generator.calls[1]["previous_error"]
     assert recorder.attempt_failures[0].failure_kind == "ai_response_invalid"
+
+
+@pytest.mark.asyncio
+async def test_persistent_unknown_marker_falls_back_to_valid_insufficient() -> None:
+    generator = FakeGenerator(
+        [
+            _raw(
+                sufficiency="answered",
+                answer="存在しない根拠を引用しています。[[9]]",
+                cited_refs=["9"],
+            ),
+            _raw(
+                sufficiency="answered",
+                answer="まだ存在しない根拠を引用しています。[[9]]",
+                cited_refs=["9"],
+            ),
+        ]
+    )
+
+    draft = await _synthesize(generator)
+
+    assert draft.sufficiency == "insufficient"
+    assert draft.cited_refs == []
+    assert draft.missing_aspects
+    assert "[[9]]" in generator.calls[1]["previous_error"]
 
 
 @pytest.mark.asyncio
@@ -323,12 +396,12 @@ async def test_empty_evidence_answered_citation_falls_back_insufficient() -> Non
         [
             _raw(
                 sufficiency="answered",
-                answer="根拠がないのに引用しています。",
+                answer="根拠がないのに引用しています。[[1]]",
                 cited_refs=["1"],
             ),
             _raw(
                 sufficiency="answered",
-                answer="まだ根拠がないのに引用しています。",
+                answer="まだ根拠がないのに引用しています。[[1]]",
                 cited_refs=["1"],
             ),
         ]
@@ -340,6 +413,7 @@ async def test_empty_evidence_answered_citation_falls_back_insufficient() -> Non
     assert draft.cited_refs == []
     assert draft.missing_aspects
     assert len(generator.calls) == 2
+    assert "[[1]]" in generator.calls[1]["previous_error"]
 
 
 @pytest.mark.asyncio
@@ -361,6 +435,74 @@ async def test_empty_evidence_valid_insufficient_is_adopted_without_retry() -> N
     assert draft.cited_refs == []
     assert draft.missing_aspects == ["引用できる検索根拠"]
     assert len(generator.calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_marker_parse_boundaries_use_double_bracket_digits_only() -> None:
+    generator = FakeGenerator(
+        [
+            _raw(
+                answer=(
+                    "連続 marker を使います。[[1]][[2]] "
+                    "文中 marker も引用として扱います [[2]]。"
+                    "単括弧 [1] は marker ではありません。"
+                ),
+                cited_refs=["1", "2"],
+            )
+        ]
+    )
+    recorder = FakeAnswerSynthesisAuditRecorder()
+
+    draft = await _synthesize(
+        generator,
+        recorder=recorder,
+        evidence=[_evidence("1"), _evidence("2")],
+    )
+
+    assert draft.cited_refs == ["1", "2"]
+    assert recorder.defect_events == []
+
+
+@pytest.mark.asyncio
+async def test_repeated_markers_are_deduplicated_without_defect() -> None:
+    generator = FakeGenerator(
+        [
+            _raw(
+                answer="同じ根拠を複数回引用します。[[1]] 別の文でも使います。[[1]]",
+                cited_refs=["1"],
+            )
+        ]
+    )
+    recorder = FakeAnswerSynthesisAuditRecorder()
+
+    draft = await _synthesize(generator, recorder=recorder)
+
+    assert draft.cited_refs == ["1"]
+    assert recorder.defect_events == []
+
+
+@pytest.mark.asyncio
+async def test_insufficient_with_marker_keeps_partial_citations() -> None:
+    generator = FakeGenerator(
+        [
+            _raw(
+                sufficiency="insufficient",
+                answer="根拠の範囲では需要は強いです。[[1]]",
+                cited_refs=[],
+                missing_aspects=["会社側の一次情報"],
+            )
+        ]
+    )
+    recorder = FakeAnswerSynthesisAuditRecorder()
+
+    draft = await _synthesize(generator, recorder=recorder)
+
+    assert draft.sufficiency == "insufficient"
+    assert draft.cited_refs == ["1"]
+    assert draft.missing_aspects == ["会社側の一次情報"]
+    assert [event.defect_code for event in recorder.defect_events] == [
+        _DEFECT_CITED_REFS_RECOMPUTED
+    ]
 
 
 @pytest.mark.asyncio
@@ -400,7 +542,7 @@ async def test_recorder_errors_do_not_stop_synthesis() -> None:
         [
             _raw(
                 sufficiency="insufficient",
-                answer="一部だけ確認できます。",
+                answer="一部だけ確認できます。[[1]]",
                 cited_refs=["1"],
                 missing_aspects=[],
             )

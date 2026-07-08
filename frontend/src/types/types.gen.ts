@@ -648,6 +648,8 @@ export type ResearchQuestionRequest = {
 export type ResearchResponse = {
     /**
      * Answer
+     *
+     * Generated answer text. Evidence-grounded answers may include inline citation markers like [[1]], where the number matches sources[].sourceRef.
      */
     answer: string;
     /**

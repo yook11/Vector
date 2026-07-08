@@ -112,7 +112,7 @@ async def test_generate_returns_raw_answer_draft() -> None:
     generator = GeminiEvidenceAnswerDraftGenerator()
     payload = {
         "sufficiency": "answered",
-        "answer": "NVIDIA の発表は根拠から確認できます。",
+        "answer": "NVIDIA の発表は根拠から確認できます。[[1]]",
         "cited_refs": ["1"],
         "missing_aspects": [],
     }

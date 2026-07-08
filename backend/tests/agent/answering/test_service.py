@@ -485,7 +485,7 @@ async def test_answer_adopts_insufficient_draft_with_partial_citations() -> None
         outcome=_internal_outcome(1),
         draft=AnswerDraft(
             sufficiency="insufficient",
-            answer="内部根拠では断定できません。",
+            answer="内部根拠では断定できません。[[1]]",
             cited_refs=["1"],
             missing_aspects=["会社側の一次情報"],
         ),
@@ -494,6 +494,7 @@ async def test_answer_adopts_insufficient_draft_with_partial_citations() -> None
     result = await service.answer(_input())
 
     assert result.status == "insufficient"
+    assert result.answer == "内部根拠では断定できません。[[1]]"
     assert [source.source_ref for source in result.sources] == ["1"]
     assert result.missing_aspects == ["会社側の一次情報"]
 

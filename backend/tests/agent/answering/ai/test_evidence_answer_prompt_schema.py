@@ -57,6 +57,21 @@ def test_prompt_describes_no_evidence_reference_answer_path() -> None:
     assert "一般知識に基づく参考回答" in prompt
     assert "cited_refs" in prompt
     assert "missing_aspects" in prompt
+    assert "citation marker を書かない" in prompt
+
+
+def test_prompt_includes_inline_citation_rules() -> None:
+    prompt = GeminiEvidenceAnswerPrompt.render(
+        question="NVIDIA の直近発表は？",
+        evidence=[_evidence()],
+        as_of=datetime(2026, 7, 7, tzinfo=UTC),
+        target_time_window="今日",
+    )
+
+    assert "# Citation Rules" in prompt
+    assert "[[source_ref]]" in prompt
+    assert "sufficiency が insufficient の場合でも" in prompt
+    assert "References / Sources セクションは作らない" in prompt
 
 
 def test_prompt_includes_repair_context_when_previous_error_exists() -> None:
@@ -93,6 +108,14 @@ def test_schema_fields_are_required_and_arrays_are_unbounded_guidance() -> None:
         == "ARRAY"
     )
     assert "maxItems" not in EVIDENCE_ANSWER_GEMINI_SCHEMA["properties"]["cited_refs"]
+    assert (
+        "[[source_ref]]"
+        in EVIDENCE_ANSWER_GEMINI_SCHEMA["properties"]["answer"]["description"]
+    )
+    assert (
+        "citation markers"
+        in EVIDENCE_ANSWER_GEMINI_SCHEMA["properties"]["cited_refs"]["description"]
+    )
 
 
 def test_spec_uses_gemini_31_flash_lite_json_mode_schema_and_rate_limit() -> None:

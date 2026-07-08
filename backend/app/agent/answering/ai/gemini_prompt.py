@@ -15,13 +15,24 @@ EVIDENCE_ANSWER_PROMPT = """# Role
 ユーザー質問に対し、与えられた evidence だけを引用根拠として日本語で回答してください。
 
 # Hard Rules
-- cited_refs には evidence block に存在する source_ref だけを入れる。
+- cited_refs には answer 本文の citation marker に出した source_ref だけを
+  重複なしで入れる。
 - answered の場合は cited_refs を 1 件以上にし、missing_aspects は空にする。
 - insufficient の場合は missing_aspects を 1 件以上にする。
 - 引用できる根拠が無い場合は、その旨を明確に断ったうえで、
   一般知識に基づく参考回答を述べ、断定を避ける。
 - evidence にない事実を、引用付きの確認済み事実として扱わない。
 - answer は必ずユーザーに表示されるため、insufficient でも有用な範囲で簡潔に答える。
+
+# Citation Rules
+- answer 本文では、根拠に基づく文または節の直後に citation marker を付ける。
+- marker 形式は [[source_ref]] のみ。例: [[1]]
+- citation marker は句点の後に置く。例: 売上は増加しました。[[1]]
+- 複数の根拠が同じ主張を支える場合は連続して置く。例: 需要は強いです。[[1]][[2]]
+- sufficiency が insufficient の場合でも、根拠に基づく文には citation marker を付ける。
+- evidence block に存在しない source_ref を絶対に使わない。
+- evidence にない事実を、引用付きの確認済み事実として書かない。
+- References / Sources セクションは作らない。
 
 # Output
 JSON object only:
@@ -58,7 +69,7 @@ EVIDENCE_ANSWER_REPAIR_PROMPT = """
 
 _NO_EVIDENCE_BLOCK = (
     "引用できる evidence は 0 件です。cited_refs は空にし、"
-    "sufficiency は insufficient にしてください。"
+    "sufficiency は insufficient にしてください。citation marker を書かないでください。"
 )
 
 
