@@ -71,7 +71,8 @@ class DirectAnswerer(Protocol):
     ) -> DirectAnswerDraft: ...
 
 
-_DIRECT_AUDITED_ERRORS = (AIProviderError, DirectAnswerInvalidError)
+_DIRECT_ANSWER_FAILURES = (AIProviderError, DirectAnswerInvalidError)
+_MAX_ATTEMPTS = 2  # blank response 欠陥のみ 1 回だけリクエスト内リトライする
 
 
 class DirectAnswerService:
@@ -99,71 +100,50 @@ class DirectAnswerService:
 
         ai_model = _generator_attr(self._generator, "model_name")
         prompt_version = _generator_attr(self._generator, "prompt_version")
-        try:
-            draft = await self._generate_draft(
-                question=question,
-                as_of=as_of,
-                previous_error=None,
-            )
-        except _DIRECT_AUDITED_ERRORS as exc:
-            failure = classify_direct_answer_failure(exc)
-            await _record_attempt_failure(
-                audit_recorder=self._audit_recorder,
-                attempt_number=1,
-                failure=failure,
-                ai_model=ai_model,
-                prompt_version=prompt_version,
-            )
-            if (
-                failure.request_retry_disposition
-                is not RequestRetryDisposition.RETRY_IN_REQUEST
-            ):
-                await self._record_failed(
-                    attempt_count=1,
-                    retry_used=False,
-                    failure=failure,
-                    ai_model=ai_model,
-                    prompt_version=prompt_version,
-                )
-                raise
+        previous_error: str | None = None
+
+        for attempt_number in range(1, _MAX_ATTEMPTS + 1):
             try:
                 draft = await self._generate_draft(
                     question=question,
                     as_of=as_of,
-                    previous_error=str(exc),
+                    previous_error=previous_error,
                 )
-            except _DIRECT_AUDITED_ERRORS as retry_exc:
-                retry_failure = classify_direct_answer_failure(retry_exc)
+            except _DIRECT_ANSWER_FAILURES as exc:
+                failure = classify_direct_answer_failure(exc)
                 await _record_attempt_failure(
                     audit_recorder=self._audit_recorder,
-                    attempt_number=2,
-                    failure=retry_failure,
+                    attempt_number=attempt_number,
+                    failure=failure,
                     ai_model=ai_model,
                     prompt_version=prompt_version,
                 )
-                await self._record_failed(
-                    attempt_count=2,
-                    retry_used=True,
-                    failure=retry_failure,
-                    ai_model=ai_model,
-                    prompt_version=prompt_version,
+                retriable = (
+                    failure.request_retry_disposition
+                    is RequestRetryDisposition.RETRY_IN_REQUEST
+                    and attempt_number < _MAX_ATTEMPTS
                 )
-                raise
+                if not retriable:
+                    await self._record_failed(
+                        attempt_count=attempt_number,
+                        retry_used=attempt_number > 1,
+                        failure=failure,
+                        ai_model=ai_model,
+                        prompt_version=prompt_version,
+                    )
+                    raise
+                previous_error = str(exc)
+                continue
+
             await self._record_answered(
-                attempt_count=2,
-                retry_used=True,
+                attempt_count=attempt_number,
+                retry_used=attempt_number > 1,
                 ai_model=ai_model,
                 prompt_version=prompt_version,
             )
             return draft
 
-        await self._record_answered(
-            attempt_count=1,
-            retry_used=False,
-            ai_model=ai_model,
-            prompt_version=prompt_version,
-        )
-        return draft
+        raise AssertionError("unreachable: answer loop must return or raise")
 
     async def _generate_draft(
         self,

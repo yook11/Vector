@@ -141,6 +141,7 @@ async def test_blank_then_valid_retries_once_with_previous_error() -> None:
     attempt = recorder.attempt_failures[0]
     assert attempt.failure_kind == "ai_response_invalid"
     assert attempt.request_retry_disposition is RequestRetryDisposition.RETRY_IN_REQUEST
+    assert len(recorder.final_events) == 1
     final = recorder.final_events[0]
     assert final.outcome_code is DirectAnswerOutcomeCode.ANSWERED
     assert final.attempt_count == 2
@@ -162,6 +163,7 @@ async def test_blank_twice_raises_invalid_after_observation(
     assert {event.request_retry_disposition for event in recorder.attempt_failures} == {
         RequestRetryDisposition.RETRY_IN_REQUEST
     }
+    assert len(recorder.final_events) == 1
     final = recorder.final_events[0]
     assert final.outcome_code is DirectAnswerOutcomeCode.FAILED
     assert final.attempt_count == 2
@@ -191,6 +193,7 @@ async def test_ai_provider_error_propagates_unwrapped_without_retry() -> None:
     )
     assert attempt.failure_kind == provider_exc.FAILURE_MODE.value
     assert attempt.code == provider_exc.CODE
+    assert len(recorder.final_events) == 1
     final = recorder.final_events[0]
     assert final.outcome_code is DirectAnswerOutcomeCode.FAILED
     assert final.retry_used is False
