@@ -7,7 +7,6 @@ from typing import Literal, Protocol, assert_never
 
 from app.agent.answering.direct import DirectAnswerer
 from app.agent.answering.evidence import AnswerEvidenceItem, normalize_answer_evidence
-from app.agent.answering.retrieval import RetrievalOutcome
 from app.agent.answering.synthesis import (
     AnswerDraft,
     AnswerDraftInvalidError,
@@ -28,6 +27,7 @@ from app.agent.planning.contract import (
     RetrievalPlan,
 )
 from app.agent.planning.planner import QuestionPlanner
+from app.agent.retrieval import RetrievalOutcome
 
 __all__ = ["QuestionAnsweringService", "QuestionPlanRetriever"]
 

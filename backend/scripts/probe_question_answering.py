@@ -15,7 +15,6 @@ from app.agent.answering import (
     AnswerSynthesisService,
     DirectAnswerService,
     QuestionAnsweringService,
-    QuestionPlanRetrievalService,
 )
 from app.agent.answering.ai import (
     GeminiDirectAnswerGenerator,
@@ -29,7 +28,6 @@ from app.agent.answering.audit import (
     DirectAnswerFinalEvent,
 )
 from app.agent.answering.direct import DirectAnswerDraft
-from app.agent.answering.retrieval import RetrievalOutcome
 from app.agent.contract import AnswerQuestionInput, AnswerQuestionResult, AnswerSource
 from app.agent.external_search import (
     ExternalSearchEvidence,
@@ -51,6 +49,7 @@ from app.agent.planning.contract import (
     NoRetrievalPlan,
     RetrievalPlan,
 )
+from app.agent.retrieval import QuestionPlanRetrievalService, RetrievalOutcome
 from app.config import settings
 from app.shared.security.safe_http import make_safe_async_client
 

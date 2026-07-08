@@ -5,7 +5,6 @@ from __future__ import annotations
 from datetime import UTC, datetime
 
 from app.agent.answering.evidence import normalize_answer_evidence
-from app.agent.answering.retrieval import RetrievalOutcome
 from app.agent.contract import ExternalUrlSource
 from app.agent.external_search import (
     ExternalSearchEvidence,
@@ -17,6 +16,7 @@ from app.agent.internal_retrieval.article_search import (
     InternalArticleSearchHit,
 )
 from app.agent.planning.contract import ExternalResearchTask
+from app.agent.retrieval import RetrievalOutcome
 from app.analysis.analyzed_article import InScopeAnalyzedArticle
 from app.analysis.assessment.domain.result import InScope, InScopeCategory
 

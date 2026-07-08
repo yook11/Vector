@@ -52,7 +52,6 @@ def _build_question_answering_agent(
     from app.agent.answering.ai.gemini import GeminiEvidenceAnswerDraftGenerator
     from app.agent.answering.ai.gemini_direct import GeminiDirectAnswerGenerator
     from app.agent.answering.direct import DirectAnswerService
-    from app.agent.answering.retrieval import QuestionPlanRetrievalService
     from app.agent.answering.service import QuestionAnsweringService
     from app.agent.answering.synthesis import AnswerSynthesisService
     from app.agent.internal_retrieval.ai.gemini import GeminiQueryEmbedder
@@ -62,6 +61,7 @@ def _build_question_answering_agent(
     from app.agent.internal_retrieval.service import InternalSearchService
     from app.agent.planning.ai.gemini import GeminiQuestionPlanner
     from app.agent.planning.service import QuestionPlanningService
+    from app.agent.retrieval import QuestionPlanRetrievalService
 
     external_search = _build_external_search(tavily_client)
     internal_search = InternalSearchService(

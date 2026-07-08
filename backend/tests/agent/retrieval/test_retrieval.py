@@ -1,4 +1,4 @@
-"""Question answering service tests."""
+"""Question plan retrieval service tests."""
 
 from __future__ import annotations
 
@@ -11,7 +11,6 @@ from typing import Literal
 import pytest
 from pydantic import ValidationError
 
-from app.agent.answering.retrieval import QuestionPlanRetrievalService, RetrievalOutcome
 from app.agent.external_search import ExternalSearchOutcome
 from app.agent.internal_retrieval.article_search import (
     InternalArticleContent,
@@ -25,6 +24,7 @@ from app.agent.planning.contract import (
     InternalRetrievalPlan,
     RetrievalPlan,
 )
+from app.agent.retrieval import QuestionPlanRetrievalService, RetrievalOutcome
 from app.analysis.analyzed_article import InScopeAnalyzedArticle
 from app.analysis.assessment.domain.result import InScope, InScopeCategory
 

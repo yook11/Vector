@@ -8,7 +8,6 @@ import pytest
 from pydantic import ValidationError
 
 from app.agent.answering.direct import DirectAnswerDraft
-from app.agent.answering.retrieval import RetrievalOutcome
 from app.agent.answering.service import QuestionAnsweringService
 from app.agent.answering.synthesis import (
     AnswerDraft,
@@ -33,6 +32,7 @@ from app.agent.planning.contract import (
     QuestionPlan,
     RetrievalPlan,
 )
+from app.agent.retrieval import RetrievalOutcome
 from app.analysis.analyzed_article import InScopeAnalyzedArticle
 from app.analysis.assessment.domain.result import InScope, InScopeCategory
 

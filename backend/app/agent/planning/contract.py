@@ -107,6 +107,7 @@ class InternalAndExternalPlan(BaseModel):
         return self
 
 
+# 回答の根拠を取りに行く plan。取りに行かない NoRetrievalPlan と対をなす。
 type RetrievalPlan = (
     InternalRetrievalPlan | ExternalSearchPlan | InternalAndExternalPlan
 )
