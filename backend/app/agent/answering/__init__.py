@@ -11,7 +11,7 @@ from app.agent.answering.evidence import (
     AnswerEvidenceItem,
     normalize_answer_evidence,
 )
-from app.agent.answering.service import QuestionAnsweringService, QuestionPlanRetriever
+from app.agent.answering.service import EvidenceCollector, QuestionAnsweringService
 from app.agent.answering.synthesis import (
     AnswerDraft,
     AnswerDraftGenerationInvalidError,
@@ -37,8 +37,8 @@ __all__ = [
     "DirectAnswerService",
     "EvidenceAnswerDraftGenerator",
     "EvidenceAnswerSynthesizer",
+    "EvidenceCollector",
     "QuestionAnsweringService",
-    "QuestionPlanRetriever",
     "RawAnswerDraft",
     "normalize_answer_evidence",
 ]

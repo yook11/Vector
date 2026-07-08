@@ -6,6 +6,7 @@ from datetime import UTC, datetime
 
 from app.agent.answering.evidence import normalize_answer_evidence
 from app.agent.contract import ExternalUrlSource
+from app.agent.evidence_collection import EvidenceCollectionOutcome
 from app.agent.external_search import (
     ExternalSearchEvidence,
     ExternalSearchOutcome,
@@ -16,7 +17,6 @@ from app.agent.internal_retrieval.article_search import (
     InternalArticleSearchHit,
 )
 from app.agent.planning.contract import ExternalResearchTask
-from app.agent.retrieval import RetrievalOutcome
 from app.analysis.analyzed_article import InScopeAnalyzedArticle
 from app.analysis.assessment.domain.result import InScope, InScopeCategory
 
@@ -155,7 +155,7 @@ def test_normalize_maps_all_internal_and_external_evidence_with_sequential_refs(
             claim="Cloud providers increased AI capex.",
         ),
     ]
-    outcome = RetrievalOutcome(
+    outcome = EvidenceCollectionOutcome(
         internal_hits=internal_hits,
         external_search=_external_outcome(external),
     )
@@ -204,7 +204,7 @@ def test_normalize_preserves_internal_then_external_input_order() -> None:
     ]
 
     items = normalize_answer_evidence(
-        RetrievalOutcome(
+        EvidenceCollectionOutcome(
             internal_hits=internal_hits,
             external_search=_external_outcome(external),
         )
@@ -231,7 +231,7 @@ def test_normalize_preserves_external_provenance_and_uses_claim_as_snippet() -> 
     )
 
     item = normalize_answer_evidence(
-        RetrievalOutcome(external_search=_external_outcome([evidence]))
+        EvidenceCollectionOutcome(external_search=_external_outcome([evidence]))
     )[0]
 
     assert isinstance(item.source, ExternalUrlSource)
@@ -252,7 +252,7 @@ def test_normalize_preserves_internal_provenance_with_public_article_id() -> Non
         published_at=published_at,
     )
 
-    item = normalize_answer_evidence(RetrievalOutcome(internal_hits=[hit]))[0]
+    item = normalize_answer_evidence(EvidenceCollectionOutcome(internal_hits=[hit]))[0]
 
     assert item.source.kind == "internal_article"
     assert item.source.article_id == 301
@@ -291,7 +291,7 @@ def test_normalize_builds_kind_independent_text_deterministically() -> None:
     )
 
     items = normalize_answer_evidence(
-        RetrievalOutcome(
+        EvidenceCollectionOutcome(
             internal_hits=[internal_with_points, internal_without_points],
             external_search=_external_outcome(
                 [external_with_snippet, external_without_snippet]
@@ -316,7 +316,7 @@ def test_normalize_ignores_external_local_source_ref() -> None:
     )
 
     item = normalize_answer_evidence(
-        RetrievalOutcome(external_search=_external_outcome([evidence]))
+        EvidenceCollectionOutcome(external_search=_external_outcome([evidence]))
     )[0]
 
     assert item.source.source_ref == "1"
@@ -332,14 +332,14 @@ def test_normalize_omits_empty_external_snippet_from_text() -> None:
     )
 
     item = normalize_answer_evidence(
-        RetrievalOutcome(external_search=_external_outcome([evidence]))
+        EvidenceCollectionOutcome(external_search=_external_outcome([evidence]))
     )[0]
 
     assert item.text == "external claim"
 
 
 def test_normalize_is_deterministic_for_same_input() -> None:
-    outcome = RetrievalOutcome(
+    outcome = EvidenceCollectionOutcome(
         internal_hits=[
             _internal_hit(
                 assessment_id=501,
@@ -377,18 +377,20 @@ def test_normalize_accepts_empty_and_partial_retrieval_outcomes() -> None:
         effective_agent_count=0,
     )
 
-    assert normalize_answer_evidence(RetrievalOutcome()) == []
+    assert normalize_answer_evidence(EvidenceCollectionOutcome()) == []
     assert [
         item.source.source_ref
         for item in normalize_answer_evidence(
-            RetrievalOutcome(internal_hits=[internal_hit])
+            EvidenceCollectionOutcome(internal_hits=[internal_hit])
         )
     ] == ["1"]
-    assert normalize_answer_evidence(RetrievalOutcome(external_search=None)) == []
+    assert (
+        normalize_answer_evidence(EvidenceCollectionOutcome(external_search=None)) == []
+    )
     assert [
         item.source.source_ref
         for item in normalize_answer_evidence(
-            RetrievalOutcome(
+            EvidenceCollectionOutcome(
                 internal_hits=[internal_hit],
                 external_search=empty_external,
             )

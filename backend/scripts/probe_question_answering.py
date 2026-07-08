@@ -29,6 +29,10 @@ from app.agent.answering.audit import (
 )
 from app.agent.answering.direct import DirectAnswerDraft
 from app.agent.contract import AnswerQuestionInput, AnswerQuestionResult, AnswerSource
+from app.agent.evidence_collection import (
+    EvidenceCollectionOutcome,
+    EvidenceCollectionService,
+)
 from app.agent.external_search import (
     ExternalSearchEvidence,
     ExternalSearchOutcome,
@@ -49,7 +53,6 @@ from app.agent.planning.contract import (
     NoRetrievalPlan,
     RetrievalPlan,
 )
-from app.agent.retrieval import QuestionPlanRetrievalService, RetrievalOutcome
 from app.config import settings
 from app.shared.security.safe_http import make_safe_async_client
 
@@ -84,18 +87,18 @@ class _FixedDirectPlanner:
         return self._plan
 
 
-class _RecordingRetriever:
-    def __init__(self, retriever: QuestionPlanRetrievalService) -> None:
-        self._retriever = retriever
-        self.last_outcome: RetrievalOutcome | None = None
+class _RecordingEvidenceCollector:
+    def __init__(self, evidence_collector: EvidenceCollectionService) -> None:
+        self._evidence_collector = evidence_collector
+        self.last_outcome: EvidenceCollectionOutcome | None = None
 
-    async def retrieve(
+    async def collect(
         self,
         plan: ExternalSearchPlan,
         *,
         as_of: datetime,
-    ) -> RetrievalOutcome:
-        outcome = await self._retriever.retrieve(plan, as_of=as_of)
+    ) -> EvidenceCollectionOutcome:
+        outcome = await self._evidence_collector.collect(plan, as_of=as_of)
         self.last_outcome = outcome
         return outcome
 
@@ -110,14 +113,14 @@ class _UnreachableDirectAnswerer:
         raise AssertionError(f"direct answerer must not be called: {question!r}")
 
 
-class _UnreachableQuestionPlanRetriever:
-    async def retrieve(
+class _UnreachableEvidenceCollector:
+    async def collect(
         self,
         plan: RetrievalPlan,
         *,
         as_of: datetime,  # noqa: ARG002
-    ) -> RetrievalOutcome:
-        raise AssertionError(f"retriever must not be called: {plan!r}")
+    ) -> EvidenceCollectionOutcome:
+        raise AssertionError(f"evidence_collector must not be called: {plan!r}")
 
 
 class _UnreachableEvidenceSynthesizer:
@@ -251,8 +254,8 @@ async def _probe_external(
             search_provider=provider,
             evidence_selector=DeepSeekEvidenceSelector(),
         )
-        retriever = _RecordingRetriever(
-            QuestionPlanRetrievalService(
+        evidence_collector = _RecordingEvidenceCollector(
+            EvidenceCollectionService(
                 internal_search=_UnreachableInternalSearch(),
                 external_search=ExternalSearchService(runner=runner),
                 requested_external_agent_count=requested_agent_count,
@@ -260,7 +263,7 @@ async def _probe_external(
         )
         service = QuestionAnsweringService(
             planner=_FixedExternalPlanner(plan),
-            retriever=retriever,
+            evidence_collector=evidence_collector,
             synthesizer=AnswerSynthesisService(
                 generator=GeminiEvidenceAnswerDraftGenerator(),
                 audit_recorder=synthesis_audit,
@@ -271,7 +274,7 @@ async def _probe_external(
             AnswerQuestionInput(question=question, as_of=as_of)
         )
 
-    outcome = retriever.last_outcome
+    outcome = evidence_collector.last_outcome
     if outcome is None:
         raise SystemExit("retrieval did not run")
 
@@ -295,7 +298,7 @@ async def _probe_direct(*, question: str) -> None:
     direct_audit = _ProbeDirectAnswerAuditRecorder()
     service = QuestionAnsweringService(
         planner=_FixedDirectPlanner(NoRetrievalPlan(reason="direct answer probe")),
-        retriever=_UnreachableQuestionPlanRetriever(),
+        evidence_collector=_UnreachableEvidenceCollector(),
         synthesizer=_UnreachableEvidenceSynthesizer(),
         direct_answerer=DirectAnswerService(
             generator=GeminiDirectAnswerGenerator(),

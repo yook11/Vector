@@ -1,4 +1,4 @@
-"""Question plan retrieval contract: engine ports and outcome DTO."""
+"""Evidence collection contract: engine ports and outcome DTO."""
 
 from __future__ import annotations
 
@@ -14,9 +14,9 @@ from app.agent.internal_retrieval.query_embedding import InternalSearchQueries
 from app.agent.planning.contract import ExternalResearchTask
 
 __all__ = [
+    "EvidenceCollectionOutcome",
     "ExternalPlanSearcher",
     "InternalArticleRetriever",
-    "RetrievalOutcome",
 ]
 
 
@@ -38,7 +38,7 @@ class ExternalPlanSearcher(Protocol):
     ) -> ExternalSearchOutcome: ...
 
 
-class RetrievalOutcome(BaseModel):
+class EvidenceCollectionOutcome(BaseModel):
     """plan 実行の純粋な結果。回答の根拠候補データと未充足要件のみを持つ。"""
 
     model_config = ConfigDict(frozen=True)

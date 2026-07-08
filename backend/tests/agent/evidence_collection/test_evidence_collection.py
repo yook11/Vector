@@ -11,6 +11,10 @@ from typing import Literal
 import pytest
 from pydantic import ValidationError
 
+from app.agent.evidence_collection import (
+    EvidenceCollectionOutcome,
+    EvidenceCollectionService,
+)
 from app.agent.external_search import ExternalSearchOutcome
 from app.agent.internal_retrieval.article_search import (
     InternalArticleContent,
@@ -24,7 +28,6 @@ from app.agent.planning.contract import (
     InternalRetrievalPlan,
     RetrievalPlan,
 )
-from app.agent.retrieval import QuestionPlanRetrievalService, RetrievalOutcome
 from app.analysis.analyzed_article import InScopeAnalyzedArticle
 from app.analysis.assessment.domain.result import InScope, InScopeCategory
 
@@ -197,7 +200,7 @@ async def _cancel_if_pending(task: asyncio.Task[object]) -> None:
 
 
 @pytest.mark.asyncio
-async def test_retrieve_internal_preserves_search_hit_order() -> None:
+async def test_collect_internal_preserves_search_hit_order() -> None:
     plan = _plan("internal")
     # distance 降順で返す fake でも、search の返却順がそのまま保持される。
     hits = [
@@ -205,9 +208,9 @@ async def test_retrieve_internal_preserves_search_hit_order() -> None:
         _hit(curation_id=2, title="NVIDIA", distance=0.1),
     ]
     internal_search = FakeInternalArticleRetriever(hits=hits)
-    service = QuestionPlanRetrievalService(internal_search=internal_search)
+    service = EvidenceCollectionService(internal_search=internal_search)
 
-    outcome = await service.retrieve(plan, as_of=_as_of())
+    outcome = await service.collect(plan, as_of=_as_of())
 
     assert (
         internal_search.calls
@@ -218,30 +221,30 @@ async def test_retrieve_internal_preserves_search_hit_order() -> None:
 
 
 @pytest.mark.asyncio
-async def test_retrieve_internal_does_not_call_external_search() -> None:
+async def test_collect_internal_does_not_call_external_search() -> None:
     plan = _plan("internal")
     internal_search = FakeInternalArticleRetriever()
     external_search = FakeExternalPlanSearcher()
-    service = QuestionPlanRetrievalService(
+    service = EvidenceCollectionService(
         internal_search=internal_search,
         external_search=external_search,
     )
 
-    await service.retrieve(plan, as_of=_as_of())
+    await service.collect(plan, as_of=_as_of())
 
     assert external_search.calls == []
 
 
 @pytest.mark.asyncio
-async def test_retrieve_internal_passes_plan_queries_directly_to_leaf_search() -> None:
+async def test_collect_internal_passes_plan_queries_directly_to_leaf_search() -> None:
     plan = _plan(
         "internal",
         internal_queries=["NVIDIA", "nvidia", "OpenAI"],
     )
     internal_search = FakeInternalArticleRetriever()
-    service = QuestionPlanRetrievalService(internal_search=internal_search)
+    service = EvidenceCollectionService(internal_search=internal_search)
 
-    await service.retrieve(plan, as_of=_as_of())
+    await service.collect(plan, as_of=_as_of())
 
     assert internal_search.calls == [
         InternalSearchQueries(queries=("NVIDIA", "nvidia", "OpenAI"))
@@ -249,11 +252,11 @@ async def test_retrieve_internal_passes_plan_queries_directly_to_leaf_search() -
 
 
 @pytest.mark.asyncio
-async def test_retrieve_external_skips_internal_search_and_records_unmet() -> None:
+async def test_collect_external_skips_internal_search_and_records_unmet() -> None:
     internal_search = FakeInternalArticleRetriever()
-    service = QuestionPlanRetrievalService(internal_search=internal_search)
+    service = EvidenceCollectionService(internal_search=internal_search)
 
-    outcome = await service.retrieve(_plan("external"), as_of=_as_of())
+    outcome = await service.collect(_plan("external"), as_of=_as_of())
 
     assert (
         internal_search.calls == []
@@ -264,17 +267,17 @@ async def test_retrieve_external_skips_internal_search_and_records_unmet() -> No
 
 
 @pytest.mark.asyncio
-async def test_retrieve_external_runs_external_search_when_available() -> None:
+async def test_collect_external_runs_external_search_when_available() -> None:
     plan = _plan("external")
     internal_search = FakeInternalArticleRetriever()
     external_search = FakeExternalPlanSearcher()
-    service = QuestionPlanRetrievalService(
+    service = EvidenceCollectionService(
         internal_search=internal_search,
         external_search=external_search,
         requested_external_agent_count=4,
     )
 
-    outcome = await service.retrieve(plan, as_of=_as_of())
+    outcome = await service.collect(plan, as_of=_as_of())
 
     assert (
         internal_search.calls == []
@@ -285,13 +288,13 @@ async def test_retrieve_external_runs_external_search_when_available() -> None:
 
 
 @pytest.mark.asyncio
-async def test_retrieve_internal_and_external_runs_internal_and_records_unmet() -> None:
+async def test_collect_internal_and_external_runs_internal_and_records_unmet() -> None:
     plan = _plan("internal_and_external")
     hits = [_hit(curation_id=1, title="NVIDIA", distance=0.1)]
     internal_search = FakeInternalArticleRetriever(hits=hits)
-    service = QuestionPlanRetrievalService(internal_search=internal_search)
+    service = EvidenceCollectionService(internal_search=internal_search)
 
-    outcome = await service.retrieve(plan, as_of=_as_of())
+    outcome = await service.collect(plan, as_of=_as_of())
 
     assert (
         internal_search.calls
@@ -303,17 +306,17 @@ async def test_retrieve_internal_and_external_runs_internal_and_records_unmet() 
 
 
 @pytest.mark.asyncio
-async def test_retrieve_internal_and_external_runs_both_retrievals() -> None:
+async def test_collect_internal_and_external_runs_both_retrievals() -> None:
     plan = _plan("internal_and_external")
     hits = [_hit(curation_id=1, title="NVIDIA", distance=0.1)]
     internal_search = FakeInternalArticleRetriever(hits=hits)
     external_search = FakeExternalPlanSearcher()
-    service = QuestionPlanRetrievalService(
+    service = EvidenceCollectionService(
         internal_search=internal_search,
         external_search=external_search,
     )
 
-    outcome = await service.retrieve(plan, as_of=_as_of())
+    outcome = await service.collect(plan, as_of=_as_of())
 
     assert (
         internal_search.calls
@@ -326,7 +329,7 @@ async def test_retrieve_internal_and_external_runs_both_retrievals() -> None:
 
 
 @pytest.mark.asyncio
-async def test_retrieve_internal_and_external_retrievals_overlap() -> None:
+async def test_collect_internal_and_external_retrievals_overlap() -> None:
     plan = _plan("internal_and_external")
     hits = [_hit(curation_id=1, title="NVIDIA", distance=0.1)]
     internal_started = asyncio.Event()
@@ -340,13 +343,13 @@ async def test_retrieve_internal_and_external_retrievals_overlap() -> None:
         started_event=external_started,
         wait_for_event=internal_started,
     )
-    service = QuestionPlanRetrievalService(
+    service = EvidenceCollectionService(
         internal_search=internal_search,
         external_search=external_search,
     )
 
     outcome = await asyncio.wait_for(
-        service.retrieve(plan, as_of=_as_of()),
+        service.collect(plan, as_of=_as_of()),
         timeout=0.5,
     )
 
@@ -360,7 +363,7 @@ async def test_retrieve_internal_and_external_retrievals_overlap() -> None:
 
 
 @pytest.mark.asyncio
-async def test_retrieve_waits_for_external_on_internal_error() -> None:
+async def test_collect_waits_for_external_on_internal_error() -> None:
     plan = _plan("internal_and_external")
     external_started = asyncio.Event()
     external_may_complete = asyncio.Event()
@@ -374,28 +377,28 @@ async def test_retrieve_waits_for_external_on_internal_error() -> None:
         started_event=external_started,
         wait_for_event=external_may_complete,
     )
-    service = QuestionPlanRetrievalService(
+    service = EvidenceCollectionService(
         internal_search=internal_search,
         external_search=external_search,
     )
-    retrieve_task = asyncio.create_task(service.retrieve(plan, as_of=_as_of()))
+    collect_task = asyncio.create_task(service.collect(plan, as_of=_as_of()))
 
     try:
         await asyncio.wait_for(internal_about_to_raise.wait(), timeout=0.5)
         await asyncio.sleep(0)
-        assert not retrieve_task.done()
+        assert not collect_task.done()
 
         external_may_complete.set()
         with pytest.raises(InternalSearchBoom, match="internal search failed"):
-            await asyncio.wait_for(retrieve_task, timeout=0.5)
+            await asyncio.wait_for(collect_task, timeout=0.5)
 
         assert external_search.completed
     finally:
-        await _cancel_if_pending(retrieve_task)
+        await _cancel_if_pending(collect_task)
 
 
 @pytest.mark.asyncio
-async def test_retrieve_waits_for_internal_on_external_error() -> None:
+async def test_collect_waits_for_internal_on_external_error() -> None:
     plan = _plan("internal_and_external")
     hits = [_hit(curation_id=1, title="NVIDIA", distance=0.1)]
     internal_started = asyncio.Event()
@@ -411,28 +414,28 @@ async def test_retrieve_waits_for_internal_on_external_error() -> None:
         wait_for_event=internal_started,
         about_to_raise_event=external_about_to_raise,
     )
-    service = QuestionPlanRetrievalService(
+    service = EvidenceCollectionService(
         internal_search=internal_search,
         external_search=external_search,
     )
-    retrieve_task = asyncio.create_task(service.retrieve(plan, as_of=_as_of()))
+    collect_task = asyncio.create_task(service.collect(plan, as_of=_as_of()))
 
     try:
         await asyncio.wait_for(external_about_to_raise.wait(), timeout=0.5)
         await asyncio.sleep(0)
-        assert not retrieve_task.done()
+        assert not collect_task.done()
 
         internal_may_complete.set()
         with pytest.raises(ExternalSearchBoom, match="external search failed"):
-            await asyncio.wait_for(retrieve_task, timeout=0.5)
+            await asyncio.wait_for(collect_task, timeout=0.5)
 
         assert internal_search.completed
     finally:
-        await _cancel_if_pending(retrieve_task)
+        await _cancel_if_pending(collect_task)
 
 
 @pytest.mark.asyncio
-async def test_retrieve_internal_and_external_prefers_internal_error() -> None:
+async def test_collect_internal_and_external_prefers_internal_error() -> None:
     plan = _plan("internal_and_external")
     internal_started = asyncio.Event()
     external_started = asyncio.Event()
@@ -446,37 +449,37 @@ async def test_retrieve_internal_and_external_prefers_internal_error() -> None:
         started_event=external_started,
         wait_for_event=internal_started,
     )
-    service = QuestionPlanRetrievalService(
+    service = EvidenceCollectionService(
         internal_search=internal_search,
         external_search=external_search,
     )
 
     with pytest.raises(InternalSearchBoom, match="internal search failed"):
-        await asyncio.wait_for(service.retrieve(plan, as_of=_as_of()), timeout=0.5)
+        await asyncio.wait_for(service.collect(plan, as_of=_as_of()), timeout=0.5)
 
 
 @pytest.mark.asyncio
-async def test_retrieve_propagates_internal_search_exception() -> None:
-    service = QuestionPlanRetrievalService(
+async def test_collect_propagates_internal_search_exception() -> None:
+    service = EvidenceCollectionService(
         internal_search=FakeInternalArticleRetriever(
             error=RuntimeError("internal search failed"),
         ),
     )
 
     with pytest.raises(RuntimeError, match="internal search failed"):
-        await service.retrieve(_plan("internal"), as_of=_as_of())
+        await service.collect(_plan("internal"), as_of=_as_of())
 
 
 def test_retrieval_outcome_rejects_external_search_and_external_unmet() -> None:
     with pytest.raises(ValidationError):
-        RetrievalOutcome(
+        EvidenceCollectionOutcome(
             external_search=_external_outcome(),
             unmet_requirements=["external_search"],
         )
 
 
 def test_retrieval_outcome_allows_external_unmet_when_search_is_absent() -> None:
-    outcome = RetrievalOutcome(unmet_requirements=["external_search"])
+    outcome = EvidenceCollectionOutcome(unmet_requirements=["external_search"])
 
     assert outcome.external_search is None
     assert outcome.unmet_requirements == ["external_search"]

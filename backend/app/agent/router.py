@@ -54,6 +54,7 @@ def _build_question_answering_agent(
     from app.agent.answering.direct import DirectAnswerService
     from app.agent.answering.service import QuestionAnsweringService
     from app.agent.answering.synthesis import AnswerSynthesisService
+    from app.agent.evidence_collection import EvidenceCollectionService
     from app.agent.internal_retrieval.ai.gemini import GeminiQueryEmbedder
     from app.agent.internal_retrieval.article_search import (
         PgVectorArticleSearchRepository,
@@ -61,7 +62,6 @@ def _build_question_answering_agent(
     from app.agent.internal_retrieval.service import InternalSearchService
     from app.agent.planning.ai.gemini import GeminiQuestionPlanner
     from app.agent.planning.service import QuestionPlanningService
-    from app.agent.retrieval import QuestionPlanRetrievalService
 
     external_search = _build_external_search(tavily_client)
     internal_search = InternalSearchService(
@@ -73,7 +73,7 @@ def _build_question_answering_agent(
             planner=GeminiQuestionPlanner(),
             audit_recorder=None,
         ),
-        retriever=QuestionPlanRetrievalService(
+        evidence_collector=EvidenceCollectionService(
             internal_search=internal_search,
             external_search=external_search,
             requested_external_agent_count=None,

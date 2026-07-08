@@ -14,6 +14,7 @@ from app.agent.answering.synthesis import (
     AnswerDraftInvalidError,
 )
 from app.agent.contract import AnswerQuestionInput, ExternalUrlSource
+from app.agent.evidence_collection import EvidenceCollectionOutcome
 from app.agent.external_search import (
     ExternalSearchEvidence,
     ExternalSearchOutcome,
@@ -32,7 +33,6 @@ from app.agent.planning.contract import (
     QuestionPlan,
     RetrievalPlan,
 )
-from app.agent.retrieval import RetrievalOutcome
 from app.analysis.analyzed_article import InScopeAnalyzedArticle
 from app.analysis.assessment.domain.result import InScope, InScopeCategory
 
@@ -154,8 +154,8 @@ def _external_outcome(
     )
 
 
-def _internal_outcome(count: int = 2) -> RetrievalOutcome:
-    return RetrievalOutcome(
+def _internal_outcome(count: int = 2) -> EvidenceCollectionOutcome:
+    return EvidenceCollectionOutcome(
         internal_hits=[
             _internal_hit(assessment_id=1000 + index, title=f"internal {index}")
             for index in range(1, count + 1)
@@ -163,7 +163,7 @@ def _internal_outcome(count: int = 2) -> RetrievalOutcome:
     )
 
 
-def _external_outcome_only() -> RetrievalOutcome:
+def _external_outcome_only() -> EvidenceCollectionOutcome:
     evidence = [
         _external_evidence(
             task_index=0,
@@ -172,11 +172,11 @@ def _external_outcome_only() -> RetrievalOutcome:
             claim="external claim",
         )
     ]
-    return RetrievalOutcome(external_search=_external_outcome(evidence))
+    return EvidenceCollectionOutcome(external_search=_external_outcome(evidence))
 
 
-def _mixed_outcome() -> RetrievalOutcome:
-    return RetrievalOutcome(
+def _mixed_outcome() -> EvidenceCollectionOutcome:
+    return EvidenceCollectionOutcome(
         internal_hits=[_internal_hit(assessment_id=1001, title="internal 1")],
         external_search=_external_outcome(
             [
@@ -204,17 +204,17 @@ class FakePlanner:
         return self._plan
 
 
-class FakeRetriever:
-    def __init__(self, outcome: RetrievalOutcome | Exception) -> None:
+class FakeEvidenceCollector:
+    def __init__(self, outcome: EvidenceCollectionOutcome | Exception) -> None:
         self._outcome = outcome
         self.calls: list[tuple[RetrievalPlan, datetime]] = []
 
-    async def retrieve(
+    async def collect(
         self,
         plan: RetrievalPlan,
         *,
         as_of: datetime,
-    ) -> RetrievalOutcome:
+    ) -> EvidenceCollectionOutcome:
         self.calls.append((plan, as_of))
         if isinstance(self._outcome, Exception):
             raise self._outcome
@@ -267,8 +267,8 @@ class FakeDirectAnswerer:
 def _service(
     *,
     plan: QuestionPlan | Exception,
-    outcome: RetrievalOutcome | Exception = AssertionError(
-        "retriever must not be called"
+    outcome: EvidenceCollectionOutcome | Exception = AssertionError(
+        "evidence_collector must not be called"
     ),
     draft: AnswerDraft | Exception = AssertionError("synthesizer must not be called"),
     direct_draft: DirectAnswerDraft | Exception = AssertionError(
@@ -277,28 +277,28 @@ def _service(
 ) -> tuple[
     QuestionAnsweringService,
     FakePlanner,
-    FakeRetriever,
+    FakeEvidenceCollector,
     FakeSynthesizer,
     FakeDirectAnswerer,
 ]:
     planner = FakePlanner(plan)
-    retriever = FakeRetriever(outcome)
+    evidence_collector = FakeEvidenceCollector(outcome)
     synthesizer = FakeSynthesizer(draft)
     direct_answerer = FakeDirectAnswerer(direct_draft)
     service = QuestionAnsweringService(
         planner=planner,
-        retriever=retriever,
+        evidence_collector=evidence_collector,
         synthesizer=synthesizer,
         direct_answerer=direct_answerer,
     )
-    return service, planner, retriever, synthesizer, direct_answerer
+    return service, planner, evidence_collector, synthesizer, direct_answerer
 
 
 @pytest.mark.asyncio
 async def test_answer_direct_plan_calls_direct_answerer_only() -> None:
     input_ = _input("こんにちは")
     direct_draft = DirectAnswerDraft(answer="こんにちは。何を確認しますか？")
-    service, _, retriever, synthesizer, direct_answerer = _service(
+    service, _, evidence_collector, synthesizer, direct_answerer = _service(
         plan=NoRetrievalPlan(reason="direct answer"),
         direct_draft=direct_draft,
     )
@@ -313,7 +313,7 @@ async def test_answer_direct_plan_calls_direct_answerer_only() -> None:
     assert result.retrieval.unmet_requirements == []
     assert not hasattr(result, "execution")
     assert direct_answerer.calls == [(input_.question, input_.as_of)]
-    assert retriever.calls == []
+    assert evidence_collector.calls == []
     assert synthesizer.calls == []
 
 
@@ -328,7 +328,7 @@ async def test_answer_direct_plan_calls_direct_answerer_only() -> None:
 )
 async def test_answer_retrieval_plan_variants_do_not_call_direct_answerer(
     plan: RetrievalPlan,
-    outcome: RetrievalOutcome,
+    outcome: EvidenceCollectionOutcome,
     cited_refs: list[str],
 ) -> None:
     service, _, _, _, direct_answerer = _service(
@@ -440,7 +440,7 @@ async def test_answer_empty_retrieval_evidence_calls_synthesis() -> None:
     )
     service, _, _, synthesizer, _ = _service(
         plan=_internal_plan(),
-        outcome=RetrievalOutcome(),
+        outcome=EvidenceCollectionOutcome(),
         draft=draft,
     )
 
@@ -459,7 +459,7 @@ async def test_answer_empty_retrieval_evidence_calls_synthesis() -> None:
 async def test_answer_unmet_requirements_cap_answered_draft_to_insufficient() -> None:
     service, _, _, _, _ = _service(
         plan=_mixed_plan(),
-        outcome=RetrievalOutcome(
+        outcome=EvidenceCollectionOutcome(
             internal_hits=[_internal_hit(assessment_id=1001, title="internal 1")],
             unmet_requirements=["external_search"],
         ),
@@ -508,7 +508,7 @@ async def test_answer_missing_aspects_are_ordered_and_deduplicated() -> None:
     ]
     service, _, _, _, _ = _service(
         plan=_mixed_plan(),
-        outcome=RetrievalOutcome(
+        outcome=EvidenceCollectionOutcome(
             external_search=_external_outcome(
                 [
                     _external_evidence(
@@ -630,7 +630,7 @@ def test_direct_answer_draft_rejects_blank_answer(answer: str) -> None:
 @pytest.mark.asyncio
 async def test_answer_passes_pipeline_inputs_and_variant_time_window() -> None:
     input_ = _input()
-    service, planner, retriever, synthesizer, _ = _service(
+    service, planner, evidence_collector, synthesizer, _ = _service(
         plan=_mixed_plan(),
         outcome=_mixed_outcome(),
         draft=AnswerDraft(
@@ -643,7 +643,7 @@ async def test_answer_passes_pipeline_inputs_and_variant_time_window() -> None:
     await service.answer(input_)
 
     assert planner.calls == [input_]
-    assert retriever.calls == [(_mixed_plan(), _as_of())]
+    assert evidence_collector.calls == [(_mixed_plan(), _as_of())]
     assert synthesizer.calls[0]["question"] == input_.question
     assert synthesizer.calls[0]["as_of"] == input_.as_of
     assert synthesizer.calls[0]["target_time_window"] == "直近24時間"
@@ -672,7 +672,7 @@ async def test_answer_passes_none_time_window_for_internal_plan() -> None:
     [
         (
             RuntimeError("planner failed"),
-            RetrievalOutcome(),
+            EvidenceCollectionOutcome(),
             AnswerDraft(
                 sufficiency="answered",
                 answer="x",
@@ -682,13 +682,13 @@ async def test_answer_passes_none_time_window_for_internal_plan() -> None:
         ),
         (
             _internal_plan(),
-            RuntimeError("retriever failed"),
+            RuntimeError("evidence_collector failed"),
             AnswerDraft(
                 sufficiency="answered",
                 answer="x",
                 cited_refs=["1"],
             ),
-            "retriever failed",
+            "evidence_collector failed",
         ),
         (
             _internal_plan(),
@@ -700,7 +700,7 @@ async def test_answer_passes_none_time_window_for_internal_plan() -> None:
 )
 async def test_answer_propagates_step_exceptions(
     plan: QuestionPlan | Exception,
-    outcome: RetrievalOutcome | Exception,
+    outcome: EvidenceCollectionOutcome | Exception,
     draft: AnswerDraft | Exception,
     message: str,
 ) -> None:

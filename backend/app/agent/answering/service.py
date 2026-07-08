@@ -19,6 +19,7 @@ from app.agent.contract import (
     AnswerSource,
     UnmetRequirement,
 )
+from app.agent.evidence_collection import EvidenceCollectionOutcome
 from app.agent.planning.contract import (
     ExternalSearchPlan,
     InternalAndExternalPlan,
@@ -27,9 +28,8 @@ from app.agent.planning.contract import (
     RetrievalPlan,
 )
 from app.agent.planning.planner import QuestionPlanner
-from app.agent.retrieval import RetrievalOutcome
 
-__all__ = ["QuestionAnsweringService", "QuestionPlanRetriever"]
+__all__ = ["EvidenceCollector", "QuestionAnsweringService"]
 
 _RETRIEVAL_EMPTY_MISSING = "回答に使える根拠を取得できませんでした"
 _UNMET_REQUIREMENT_MISSING: dict[UnmetRequirement, str] = {
@@ -38,13 +38,13 @@ _UNMET_REQUIREMENT_MISSING: dict[UnmetRequirement, str] = {
 }
 
 
-class QuestionPlanRetriever(Protocol):
-    async def retrieve(
+class EvidenceCollector(Protocol):
+    async def collect(
         self,
         plan: RetrievalPlan,
         *,
         as_of: datetime,
-    ) -> RetrievalOutcome: ...
+    ) -> EvidenceCollectionOutcome: ...
 
 
 class QuestionAnsweringService:
@@ -54,12 +54,12 @@ class QuestionAnsweringService:
         self,
         *,
         planner: QuestionPlanner,
-        retriever: QuestionPlanRetriever,
+        evidence_collector: EvidenceCollector,
         synthesizer: EvidenceAnswerSynthesizer,
         direct_answerer: DirectAnswerer,
     ) -> None:
         self._planner = planner
-        self._retriever = retriever
+        self._evidence_collector = evidence_collector
         self._synthesizer = synthesizer
         self._direct_answerer = direct_answerer
 
@@ -95,7 +95,7 @@ class QuestionAnsweringService:
         input: AnswerQuestionInput,
         plan: RetrievalPlan,
     ) -> AnswerQuestionResult:
-        outcome = await self._retriever.retrieve(plan, as_of=input.as_of)
+        outcome = await self._evidence_collector.collect(plan, as_of=input.as_of)
         evidence = normalize_answer_evidence(outcome)
 
         draft = await self._synthesizer.synthesize(
@@ -149,7 +149,7 @@ def _sources_for_citations(
 def _assemble_evidence_result(
     *,
     plan: RetrievalPlan,
-    outcome: RetrievalOutcome,
+    outcome: EvidenceCollectionOutcome,
     answer: str,
     sources: list[AnswerSource],
     draft_missing_aspects: list[str],
@@ -186,7 +186,7 @@ def _derive_evidence_status(
     plan: RetrievalPlan,
     sources: list[AnswerSource],
     missing_aspects: list[str],
-    outcome: RetrievalOutcome,
+    outcome: EvidenceCollectionOutcome,
 ) -> Literal["answered", "insufficient"]:
     if outcome.unmet_requirements or missing_aspects:
         return "insufficient"
@@ -197,7 +197,7 @@ def _derive_evidence_status(
 
 def _missing_aspects(
     *,
-    outcome: RetrievalOutcome,
+    outcome: EvidenceCollectionOutcome,
     draft_missing_aspects: list[str],
     include_retrieval_empty_missing: bool,
 ) -> list[str]:
@@ -213,7 +213,7 @@ def _missing_aspects(
     return _deduplicate(values)
 
 
-def _external_task_missing(outcome: RetrievalOutcome) -> list[str]:
+def _external_task_missing(outcome: EvidenceCollectionOutcome) -> list[str]:
     if outcome.external_search is None:
         return []
     missing: list[str] = []

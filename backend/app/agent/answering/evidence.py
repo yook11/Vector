@@ -5,9 +5,9 @@ from __future__ import annotations
 from pydantic import BaseModel, ConfigDict, Field
 
 from app.agent.contract import AnswerSource, ExternalUrlSource, InternalArticleSource
+from app.agent.evidence_collection import EvidenceCollectionOutcome
 from app.agent.external_search import ExternalSearchEvidence
 from app.agent.internal_retrieval.article_search import InternalArticleSearchHit
-from app.agent.retrieval import RetrievalOutcome
 
 __all__ = ["AnswerEvidenceItem", "normalize_answer_evidence"]
 
@@ -21,7 +21,9 @@ class AnswerEvidenceItem(BaseModel):
     text: str = Field(min_length=1)
 
 
-def normalize_answer_evidence(outcome: RetrievalOutcome) -> list[AnswerEvidenceItem]:
+def normalize_answer_evidence(
+    outcome: EvidenceCollectionOutcome,
+) -> list[AnswerEvidenceItem]:
     items: list[AnswerEvidenceItem] = []
     next_ref = 1
 

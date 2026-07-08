@@ -1,4 +1,4 @@
-"""Question plan retrieval service."""
+"""Evidence collection service."""
 
 from __future__ import annotations
 
@@ -6,6 +6,11 @@ import asyncio
 from datetime import datetime
 from typing import assert_never
 
+from app.agent.evidence_collection.contract import (
+    EvidenceCollectionOutcome,
+    ExternalPlanSearcher,
+    InternalArticleRetriever,
+)
 from app.agent.external_search import ExternalSearchOutcome
 from app.agent.internal_retrieval.query_embedding import InternalSearchQueries
 from app.agent.planning.contract import (
@@ -15,17 +20,12 @@ from app.agent.planning.contract import (
     InternalRetrievalPlan,
     RetrievalPlan,
 )
-from app.agent.retrieval.contract import (
-    ExternalPlanSearcher,
-    InternalArticleRetriever,
-    RetrievalOutcome,
-)
 
-__all__ = ["QuestionPlanRetrievalService"]
+__all__ = ["EvidenceCollectionService"]
 
 
-class QuestionPlanRetrievalService:
-    """RetrievalPlan を読んで internal/external retrieval を起動する工程。"""
+class EvidenceCollectionService:
+    """RetrievalPlan を読んで internal/external の evidence 収集を起動する工程。"""
 
     def __init__(
         self,
@@ -38,18 +38,18 @@ class QuestionPlanRetrievalService:
         self._external_search = external_search
         self._requested_external_agent_count = requested_external_agent_count
 
-    async def retrieve(
+    async def collect(
         self,
         plan: RetrievalPlan,
         *,
         as_of: datetime,
-    ) -> RetrievalOutcome:
+    ) -> EvidenceCollectionOutcome:
         match plan:
             case InternalRetrievalPlan(internal_queries=internal_queries):
                 hits = await self._internal_search.search_articles(
                     InternalSearchQueries(queries=tuple(internal_queries))
                 )
-                return RetrievalOutcome(internal_hits=hits)
+                return EvidenceCollectionOutcome(internal_hits=hits)
             case ExternalSearchPlan(
                 external_research_tasks=external_research_tasks,
                 target_time_window=target_time_window,
@@ -60,8 +60,8 @@ class QuestionPlanRetrievalService:
                     as_of=as_of,
                 )
                 if external is not None:
-                    return RetrievalOutcome(external_search=external)
-                return RetrievalOutcome(
+                    return EvidenceCollectionOutcome(external_search=external)
+                return EvidenceCollectionOutcome(
                     unmet_requirements=["external_search"],
                 )
             case InternalAndExternalPlan(
@@ -76,7 +76,7 @@ class QuestionPlanRetrievalService:
                     hits = await self._internal_search.search_articles(
                         internal_search_queries
                     )
-                    return RetrievalOutcome(
+                    return EvidenceCollectionOutcome(
                         internal_hits=hits,
                         unmet_requirements=["external_search"],
                     )
@@ -93,11 +93,11 @@ class QuestionPlanRetrievalService:
                 hits = _raise_if_exception(hits_result)
                 external = _raise_if_exception(external_result)
                 if external is not None:
-                    return RetrievalOutcome(
+                    return EvidenceCollectionOutcome(
                         internal_hits=hits,
                         external_search=external,
                     )
-                return RetrievalOutcome(
+                return EvidenceCollectionOutcome(
                     internal_hits=hits,
                     unmet_requirements=["external_search"],
                 )
