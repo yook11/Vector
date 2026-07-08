@@ -70,7 +70,6 @@ def _ready(extraction: ArticleCuration) -> ReadyForAssessment:
         curation_id=extraction.id,
         translated_title=extraction.translated_title,
         summary=extraction.summary,
-        analyzable_article_id=extraction.analyzable_article_id,
     )
 
 
@@ -180,7 +179,6 @@ async def test_save_out_of_scope_returns_none_on_race_lost(
             curation_id=extraction.id,
             translated_title="敗者タイトル",
             summary="敗者要約",
-            analyzable_article_id=extraction.analyzable_article_id,
         ),
     )
     await db_session.commit()

@@ -479,10 +479,11 @@ async def test_assessment_persists_category(
         curation_id=curation_id,
         translated_title=extraction.translated_title,
         summary=extraction.summary,
-        analyzable_article_id=extraction.analyzable_article_id,
     )
     svc = AssessmentService(session_factory)
-    result = await svc.execute(ready, mock_assessor)
+    result = await svc.execute(
+        ready, mock_assessor, analyzable_article_id=extraction.analyzable_article_id
+    )
     # in-scope 成功時 Service は assessment id (int) を返す
     assert isinstance(result, int) and result > 0
 
@@ -524,13 +525,12 @@ async def test_assessment_persists_rejection_when_out_of_scope(
 
     curation_id = extraction.id
     ready = ReadyForAssessment(
-        analyzable_article_id=article.id,
         curation_id=curation_id,
         translated_title=extraction.translated_title,
         summary=extraction.summary,
     )
     svc = AssessmentService(session_factory)
-    result = await svc.execute(ready, mock_assessor)
+    result = await svc.execute(ready, mock_assessor, analyzable_article_id=article.id)
     # out-of-scope は Stage 5 chain しないため Service は None を返す
     assert result is None
 

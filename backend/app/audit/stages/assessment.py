@@ -65,6 +65,7 @@ class AssessmentAuditRepository:
         *,
         ready: ReadyForAssessment,
         call: AssessmentCall[InScope],
+        article_id: int,
     ) -> None:
         """in-scope 成功を記録する。"""
         in_scope = call.result
@@ -83,7 +84,7 @@ class AssessmentAuditRepository:
             event_type=EventType.SUCCEEDED,
             outcome_code=AssessmentOutcomeCode.IN_SCOPE.value,
             payload=payload,
-            article_id=ready.analyzable_article_id,
+            article_id=article_id,
         )
 
     async def append_out_of_scope(
@@ -91,6 +92,7 @@ class AssessmentAuditRepository:
         *,
         ready: ReadyForAssessment,
         call: AssessmentCall[OutOfScope],
+        article_id: int,
     ) -> None:
         """out-of-scope 成功を記録する。"""
         out_of_scope = call.result
@@ -109,7 +111,7 @@ class AssessmentAuditRepository:
             event_type=EventType.SUCCEEDED,
             outcome_code=AssessmentOutcomeCode.OUT_OF_SCOPE.value,
             payload=payload,
-            article_id=ready.analyzable_article_id,
+            article_id=article_id,
         )
 
     # --- 救済断念経路 (backfill exclusion と同一 tx) ----------------------
@@ -176,22 +178,27 @@ class AssessmentAuditRepository:
         *,
         ready: ReadyForAssessment,
         exc: AssessmentError | SQLAlchemyError,
+        article_id: int,
     ) -> None:
         """assessment 失敗を記録する。"""
         projection = self._projection_of(exc)
-        await self._append_failed_event(ready=ready, exc=exc, projection=projection)
+        await self._append_failed_event(
+            ready=ready, exc=exc, projection=projection, article_id=article_id
+        )
 
     async def append_unexpected_failure(
         self,
         *,
         ready: ReadyForAssessment,
         exc: BaseException,
+        article_id: int,
     ) -> None:
         """想定外の assessment 失敗を unknown として記録する。"""
         await self._append_failed_event(
             ready=ready,
             exc=exc,
             projection=unknown_failure_projection(),
+            article_id=article_id,
         )
 
     async def _append_failed_event(
@@ -200,6 +207,7 @@ class AssessmentAuditRepository:
         ready: ReadyForAssessment,
         exc: BaseException,
         projection: FailureProjection,
+        article_id: int,
     ) -> None:
         payload = AssessmentPayload(
             failure_kind=projection.failure_kind,
@@ -216,7 +224,7 @@ class AssessmentAuditRepository:
             event_type=EventType.FAILED,
             outcome_code=projection.code,
             payload=payload,
-            article_id=ready.analyzable_article_id,
+            article_id=article_id,
             error_class=exception_fqn(exc),
             retryability=projection.retryability,
         )

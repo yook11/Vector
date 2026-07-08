@@ -21,7 +21,6 @@ def _ready() -> ReadyForAssessment:
         curation_id=123,
         translated_title="翻訳タイトル",
         summary="要約本文",
-        analyzable_article_id=456,
     )
 
 

@@ -40,7 +40,6 @@ def _make_ready(**overrides: object) -> ReadyForAssessment:
         "curation_id": 42,
         "translated_title": "量子コンピューティングの新たなブレイクスルー",
         "summary": "MIT が新手法を発表。量子エラー訂正の分野で大きな進展。",
-        "analyzable_article_id": 7,
     }
     defaults.update(overrides)
     return ReadyForAssessment(**defaults)  # type: ignore[arg-type]
@@ -60,12 +59,16 @@ def _repo_mock(
 
 class TestTryAdvanceFrom:
     @pytest.mark.asyncio
-    async def test_builds_ready_from_repository_facts(self) -> None:
-        repo = _repo_mock(facts=_facts(curation_id=42))
+    async def test_builds_ready_and_returns_facts_derived_subject(self) -> None:
+        repo = _repo_mock(facts=_facts(curation_id=42, analyzable_article_id=7))
 
-        ready = await ReadyForAssessment.try_advance_from(curation_id=42, repo=repo)
+        ready, analyzable_article_id = await ReadyForAssessment.try_advance_from(
+            curation_id=42, repo=repo
+        )
 
         assert ready == _make_ready(curation_id=42)
+        # 監査主語は Ready に載せず facts 由来の値を外で返す (_facts の default = 7)
+        assert analyzable_article_id == 7
         repo.load_ready_build_facts.assert_awaited_once_with(42)
 
     @pytest.mark.asyncio
@@ -123,7 +126,6 @@ class TestReadyForAssessmentImmutability:
                 curation_id="not-an-int",  # type: ignore[arg-type]
                 translated_title="t",
                 summary="s",
-                analyzable_article_id=1,
             )
 
     def test_rejects_non_positive_curation_id(self) -> None:
@@ -132,16 +134,6 @@ class TestReadyForAssessmentImmutability:
                 curation_id=0,
                 translated_title="t",
                 summary="s",
-                analyzable_article_id=1,
-            )
-
-    def test_rejects_non_positive_article_id(self) -> None:
-        with pytest.raises(ValidationError):
-            ReadyForAssessment(
-                curation_id=1,
-                translated_title="t",
-                summary="s",
-                analyzable_article_id=0,
             )
 
 

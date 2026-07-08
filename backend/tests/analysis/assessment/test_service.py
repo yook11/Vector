@@ -102,7 +102,6 @@ def _ready(extraction: ArticleCuration) -> ReadyForAssessment:
         curation_id=extraction.id,
         translated_title=extraction.translated_title,
         summary=extraction.summary,
-        analyzable_article_id=extraction.analyzable_article_id,
     )
 
 
@@ -165,20 +164,33 @@ async def test_in_scope_success_records_audit(
     sample_source: NewsSource,
     sample_categories: list[Category],
 ) -> None:
-    """``_handle_in_scope`` 成功で ``outcome_code=assessed_in_scope`` の audit 1 行。"""
+    """``_handle_in_scope`` 成功で ``outcome_code=assessed_in_scope`` の audit 1 行。
+
+    監査主語は execute の明示引数 ``analyzable_article_id`` だけで決まることを、
+    ready/curation の記事とは別の実在記事 id を渡して独立に確認する。
+    """
     article = await _make_article(db_session, sample_source)
     extraction = await _make_extraction(db_session, article)
+    # ready/curation の記事とは別の実在記事を監査主語に渡す (FK 充足のため実在 id)
+    subject_article = await _make_article(
+        db_session, sample_source, url="https://e.com/subject"
+    )
+    assert subject_article.id != article.id
     # InScopeCategory.AI が catalog に存在する slug "ai" になることを前提
     assessor = _make_assessor(
         return_envelope=_in_scope_call(category=InScopeCategory.AI)
     )
 
     svc = AssessmentService(session_factory)
-    result = await svc.execute(_ready(extraction), assessor)
+    result = await svc.execute(
+        _ready(extraction), assessor, analyzable_article_id=subject_article.id
+    )
     # in-scope 成功時 Service は assessment id (int) を返す
     assert isinstance(result, int) and result > 0
 
-    events = await _fetch_assessment_events(db_session, article.id)
+    # 監査主語は明示引数 (subject_article) 側。ready/curation の記事では引けない
+    assert await _fetch_assessment_events(db_session, article.id) == []
+    events = await _fetch_assessment_events(db_session, subject_article.id)
     assert len(events) == 1
     ev = events[0]
     assert ev.event_type == "succeeded"
@@ -208,7 +220,9 @@ async def test_in_scope_success_passes_snapshot_to_repository(
         "app.analysis.assessment.repository.AssessmentRepository.save_in_scope",
         new=save_mock,
     ):
-        result = await svc.execute(_ready(extraction), assessor)
+        result = await svc.execute(
+            _ready(extraction), assessor, analyzable_article_id=article.id
+        )
 
     assert result == 777
     saved_article = save_mock.await_args.args[0]
@@ -235,7 +249,9 @@ async def test_out_of_scope_success_records_audit(
     assessor = _make_assessor(return_envelope=_out_of_scope_call())
 
     svc = AssessmentService(session_factory)
-    result = await svc.execute(_ready(extraction), assessor)
+    result = await svc.execute(
+        _ready(extraction), assessor, analyzable_article_id=article.id
+    )
     # out-of-scope は Stage 5 chain しないため Service は None を返す
     assert result is None
 
@@ -298,7 +314,9 @@ async def test_race_lost_does_not_record_audit(
         "app.analysis.assessment.repository.AssessmentRepository.save_in_scope",
         new=AsyncMock(return_value=None),
     ):
-        result = await svc.execute(_ready(extraction), assessor)
+        result = await svc.execute(
+            _ready(extraction), assessor, analyzable_article_id=article.id
+        )
 
     assert result is None
     events = await _fetch_assessment_events(db_session, article.id)
@@ -321,12 +339,11 @@ async def test_provider_network_error_is_wrapped_to_recoverable_marker(
         curation_id=1,
         translated_title="t",
         summary="s",
-        analyzable_article_id=1,
     )
     svc = AssessmentService(session_factory)
 
     with pytest.raises(AssessmentRecoverableError) as excinfo:
-        await svc.execute(ready, assessor)
+        await svc.execute(ready, assessor, analyzable_article_id=1)
     assert excinfo.value.__cause__ is provider_exc
     assert excinfo.value.provider_error is provider_exc
 
@@ -343,12 +360,11 @@ async def test_provider_configuration_error_is_wrapped_to_terminal_marker(
         curation_id=1,
         translated_title="t",
         summary="s",
-        analyzable_article_id=1,
     )
     svc = AssessmentService(session_factory)
 
     with pytest.raises(AssessmentTerminalError) as excinfo:
-        await svc.execute(ready, assessor)
+        await svc.execute(ready, assessor, analyzable_article_id=1)
     assert excinfo.value.__cause__ is provider_exc
     assert excinfo.value.provider_error is provider_exc
     assert excinfo.value.failure_kind == "operator_action_required"
@@ -375,7 +391,9 @@ async def test_unknown_category_raises_enum_db_mismatch(
 
     svc = AssessmentService(session_factory)
     with pytest.raises(CategoryEnumDatabaseMismatchError) as excinfo:
-        await svc.execute(_ready(extraction), assessor)
+        await svc.execute(
+            _ready(extraction), assessor, analyzable_article_id=article.id
+        )
     assert excinfo.value.missing == {"ai"}
 
 
@@ -396,7 +414,9 @@ async def test_unknown_category_does_not_record_audit_in_service(
 
     svc = AssessmentService(session_factory)
     with pytest.raises(CategoryEnumDatabaseMismatchError):
-        await svc.execute(_ready(extraction), assessor)
+        await svc.execute(
+            _ready(extraction), assessor, analyzable_article_id=article.id
+        )
 
     events = await _fetch_assessment_events(db_session, article.id)
     assert len(events) == 0
@@ -426,7 +446,9 @@ async def test_audit_rolled_back_when_commit_fails(
         new=AsyncMock(side_effect=boom),
     ):
         with pytest.raises(RuntimeError, match="commit failed"):
-            await svc.execute(_ready(extraction), assessor)
+            await svc.execute(
+                _ready(extraction), assessor, analyzable_article_id=article.id
+            )
 
     # audit も業務 analyzed_articles も両方ゼロ (同 tx で rollback)
     events = await _fetch_assessment_events(db_session, article.id)
@@ -470,7 +492,9 @@ async def test_out_of_scope_race_lost_does_not_record_audit(
         "app.analysis.assessment.repository.AssessmentRepository.save_out_of_scope",
         new=AsyncMock(return_value=None),
     ):
-        result = await svc.execute(_ready(extraction), assessor)
+        result = await svc.execute(
+            _ready(extraction), assessor, analyzable_article_id=article.id
+        )
 
     assert result is None
     events = await _fetch_assessment_events(db_session, article.id)
@@ -492,7 +516,9 @@ async def test_in_scope_sets_stage_result_in_scope(
 
     svc = AssessmentService(session_factory)
     with assessment_stage_span(curation_id=extraction.id):
-        await svc.execute(_ready(extraction), assessor)
+        await svc.execute(
+            _ready(extraction), assessor, analyzable_article_id=article.id
+        )
 
     assert stage_attrs(capfire)["result"] == "in_scope"
 
@@ -511,7 +537,9 @@ async def test_out_of_scope_sets_stage_result_out_of_scope(
 
     svc = AssessmentService(session_factory)
     with assessment_stage_span(curation_id=extraction.id):
-        await svc.execute(_ready(extraction), assessor)
+        await svc.execute(
+            _ready(extraction), assessor, analyzable_article_id=article.id
+        )
 
     assert stage_attrs(capfire)["result"] == "out_of_scope"
 
@@ -535,7 +563,9 @@ async def test_race_loss_sets_stage_result_skipped(
             "app.analysis.assessment.repository.AssessmentRepository.save_in_scope",
             new=AsyncMock(return_value=None),
         ):
-            await svc.execute(_ready(extraction), assessor)
+            await svc.execute(
+                _ready(extraction), assessor, analyzable_article_id=article.id
+            )
 
     assert stage_attrs(capfire)["result"] == "skipped"
 
@@ -557,7 +587,7 @@ async def test_in_scope_emits_processing_outcome_in_scope(
     assessor = _make_assessor(return_envelope=_in_scope_call(InScopeCategory.AI))
 
     svc = AssessmentService(session_factory)
-    await svc.execute(_ready(extraction), assessor)
+    await svc.execute(_ready(extraction), assessor, analyzable_article_id=article.id)
 
     metrics = collected_metrics(capfire)
     assert sum_counter_for_result(metrics, _PROCESSING_OUTCOME_METRIC, "in_scope") == 1
@@ -579,7 +609,7 @@ async def test_out_of_scope_emits_processing_outcome_out_of_scope(
     assessor = _make_assessor(return_envelope=_out_of_scope_call())
 
     svc = AssessmentService(session_factory)
-    await svc.execute(_ready(extraction), assessor)
+    await svc.execute(_ready(extraction), assessor, analyzable_article_id=article.id)
 
     metrics = collected_metrics(capfire)
     assert (
@@ -606,7 +636,9 @@ async def test_race_loss_does_not_emit_processing_outcome(
         "app.analysis.assessment.repository.AssessmentRepository.save_in_scope",
         new=AsyncMock(return_value=None),
     ):
-        await svc.execute(_ready(extraction), assessor)
+        await svc.execute(
+            _ready(extraction), assessor, analyzable_article_id=article.id
+        )
 
     metrics = collected_metrics(capfire)
     for result in ("in_scope", "out_of_scope", "failed", "infra_error"):

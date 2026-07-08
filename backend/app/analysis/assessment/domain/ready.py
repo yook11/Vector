@@ -78,7 +78,6 @@ class ReadyForAssessment(BaseModel):
     curation_id: int = Field(gt=0)
     translated_title: str = Field(min_length=1)
     summary: str = Field(min_length=1)
-    analyzable_article_id: int = Field(gt=0)
 
     @classmethod
     async def try_advance_from(
@@ -86,8 +85,10 @@ class ReadyForAssessment(BaseModel):
         *,
         curation_id: int,
         repo: AssessmentPreconditionProtocol,
-    ) -> ReadyForAssessment:
-        """DB 事実から Ready を構築し、対象外なら blocked 例外を投げる。"""
+    ) -> tuple[ReadyForAssessment, int]:
+        """DB 事実から Ready を構築し、facts 由来の authoritative な監査主語 (元記事 id)
+        を併せて返す。対象外なら blocked 例外を投げる。
+        """
         facts = await repo.load_ready_build_facts(curation_id)
         if facts is None:
             raise AssessmentReadyBuildBlockedError(
@@ -106,9 +107,9 @@ class ReadyForAssessment(BaseModel):
                 analyzable_article_id=facts.analyzable_article_id,
             )
 
-        return cls(
+        ready = cls(
             curation_id=facts.curation_id,
             translated_title=facts.translated_title,
             summary=facts.summary,
-            analyzable_article_id=facts.analyzable_article_id,
         )
+        return ready, facts.analyzable_article_id

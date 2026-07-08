@@ -89,7 +89,6 @@ def _ready_from(extraction: ArticleCuration) -> ReadyForAssessment:
         curation_id=extraction.id,
         translated_title=extraction.translated_title,
         summary=extraction.summary,
-        analyzable_article_id=extraction.analyzable_article_id,
     )
 
 
@@ -147,7 +146,12 @@ async def test_hold_reason_derived_from_provider_mode(
     handler = AssessmentFailureHandler(session_factory)
     exc = map_provider_to_assessment(provider_exc)
 
-    decision = await handler.handle(ready=ready, exc=exc, last_attempt=last_attempt)
+    decision = await handler.handle(
+        ready=ready,
+        exc=exc,
+        last_attempt=last_attempt,
+        analyzable_article_id=article.id,
+    )
 
     assert decision.stage_hold_reason == expected_hold
 
@@ -165,7 +169,12 @@ async def test_recoverable_with_retry_budget_returns_true(
     handler = AssessmentFailureHandler(session_factory)
 
     exc = map_provider_to_assessment(AIProviderNetworkError())
-    decision = await handler.handle(ready=ready, exc=exc, last_attempt=False)
+    decision = await handler.handle(
+        ready=ready,
+        exc=exc,
+        last_attempt=False,
+        analyzable_article_id=article.id,
+    )
 
     assert decision.reraise is True
     assert decision.stage_hold_reason is None
@@ -184,7 +193,12 @@ async def test_recoverable_last_attempt_returns_false(
     handler = AssessmentFailureHandler(session_factory)
 
     exc = map_provider_to_assessment(AIProviderNetworkError())
-    decision = await handler.handle(ready=ready, exc=exc, last_attempt=True)
+    decision = await handler.handle(
+        ready=ready,
+        exc=exc,
+        last_attempt=True,
+        analyzable_article_id=article.id,
+    )
 
     assert decision.reraise is False
 
@@ -202,7 +216,12 @@ async def test_terminal_returns_false_without_reraise(
     handler = AssessmentFailureHandler(session_factory)
 
     exc = map_provider_to_assessment(AIProviderConfigurationError())
-    decision = await handler.handle(ready=ready, exc=exc, last_attempt=False)
+    decision = await handler.handle(
+        ready=ready,
+        exc=exc,
+        last_attempt=False,
+        analyzable_article_id=article.id,
+    )
 
     assert decision.reraise is False
 
@@ -221,7 +240,12 @@ async def test_terminal_writes_single_failure_audit_row(
     handler = AssessmentFailureHandler(session_factory)
 
     exc = map_provider_to_assessment(_input_rejected())
-    await handler.handle(ready=ready, exc=exc, last_attempt=False)
+    await handler.handle(
+        ready=ready,
+        exc=exc,
+        last_attempt=False,
+        analyzable_article_id=article.id,
+    )
 
     await db_session.rollback()
     events = await _fetch_assessment_events(db_session, article_id)
@@ -248,7 +272,10 @@ async def test_unexpected_with_retry_budget_returns_true(
     handler = AssessmentFailureHandler(session_factory)
 
     decision = await handler.handle(
-        ready=ready, exc=ValueError("surprise"), last_attempt=False
+        ready=ready,
+        exc=ValueError("surprise"),
+        last_attempt=False,
+        analyzable_article_id=article.id,
     )
 
     assert decision.reraise is True
@@ -275,7 +302,10 @@ async def test_unexpected_last_attempt_returns_false(
     handler = AssessmentFailureHandler(session_factory)
 
     decision = await handler.handle(
-        ready=ready, exc=ValueError("surprise"), last_attempt=True
+        ready=ready,
+        exc=ValueError("surprise"),
+        last_attempt=True,
+        analyzable_article_id=article.id,
     )
 
     assert decision.reraise is False
@@ -313,7 +343,10 @@ async def test_audit_failure_falls_back_to_log_with_secrets_redacted(
         )
         # handler は落ちずに完走 (Terminal → reraise=False)
         decision = await handler.handle(
-            ready=ready, exc=business_exc, last_attempt=False
+            ready=ready,
+            exc=business_exc,
+            last_attempt=False,
+            analyzable_article_id=article.id,
         )
 
     assert decision.reraise is False
@@ -361,7 +394,12 @@ async def test_handle_emits_processing_outcome(
     ready = _ready_from(extraction)
     handler = AssessmentFailureHandler(session_factory)
 
-    await handler.handle(ready=ready, exc=make_exc(), last_attempt=False)
+    await handler.handle(
+        ready=ready,
+        exc=make_exc(),
+        last_attempt=False,
+        analyzable_article_id=article.id,
+    )
 
     metrics = collected_metrics(capfire)
     assert sum_counter_for_result(metrics, _PROCESSING_OUTCOME_METRIC, expected) == 1
@@ -399,7 +437,12 @@ async def test_failed_emitted_before_audit_side_effect(
         new=AsyncMock(side_effect=RuntimeError("audit blew up")),
     ):
         with pytest.raises(RuntimeError, match="audit blew up"):
-            await handler.handle(ready=ready, exc=exc, last_attempt=False)
+            await handler.handle(
+                ready=ready,
+                exc=exc,
+                last_attempt=False,
+                analyzable_article_id=article.id,
+            )
 
     metrics = collected_metrics(capfire)
     assert sum_counter_for_result(metrics, _PROCESSING_OUTCOME_METRIC, "failed") == 1

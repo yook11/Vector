@@ -68,6 +68,7 @@ class AssessmentFailureHandler:
         ready: ReadyForAssessment,
         exc: BaseException,
         last_attempt: bool,
+        analyzable_article_id: int,
     ) -> FailureHandlingDecision:
         """marker dispatch を実行する。
 
@@ -88,7 +89,9 @@ class AssessmentFailureHandler:
                     code=exc.code,
                     held=hold_reason is not None,
                 )
-                await self._audit_failure(ready, exc)
+                await self._audit_failure(
+                    ready, exc, analyzable_article_id=analyzable_article_id
+                )
                 return FailureHandlingDecision(
                     reraise=False,
                     stage_hold_reason=hold_reason,
@@ -96,7 +99,9 @@ class AssessmentFailureHandler:
             case AssessmentRecoverableError():
                 record_assessment_processing_outcome("failed")
                 recoverable = exc
-                await self._audit_failure(ready, recoverable)
+                await self._audit_failure(
+                    ready, recoverable, analyzable_article_id=analyzable_article_id
+                )
                 if last_attempt:
                     hold_reason = _hold_reason(recoverable)
                     logger.warning(
@@ -112,11 +117,15 @@ class AssessmentFailureHandler:
                 return FailureHandlingDecision(reraise=True)
             case SQLAlchemyError():
                 record_assessment_processing_outcome("infra_error")
-                await self._audit_failure(ready, exc)
+                await self._audit_failure(
+                    ready, exc, analyzable_article_id=analyzable_article_id
+                )
                 return FailureHandlingDecision(reraise=not last_attempt)
             case _:
                 record_assessment_processing_outcome("failed")
-                await self._audit_unexpected_failure(ready, exc)
+                await self._audit_unexpected_failure(
+                    ready, exc, analyzable_article_id=analyzable_article_id
+                )
                 if last_attempt:
                     logger.exception(
                         "assess_content_unexpected_exhausted",
@@ -129,6 +138,8 @@ class AssessmentFailureHandler:
         self,
         ready: ReadyForAssessment,
         exc: AssessmentError | SQLAlchemyError,
+        *,
+        analyzable_article_id: int,
     ) -> None:
         """best-effort failure audit (DB 落ち / schema 不整合は log fallback)。
 
@@ -139,7 +150,7 @@ class AssessmentFailureHandler:
         try:
             async with self._session_factory() as session:
                 await AssessmentAuditRepository(session).append_failure(
-                    ready=ready, exc=exc
+                    ready=ready, exc=exc, article_id=analyzable_article_id
                 )
                 await session.commit()
         except Exception as audit_exc:
@@ -157,12 +168,14 @@ class AssessmentFailureHandler:
         self,
         ready: ReadyForAssessment,
         exc: BaseException,
+        *,
+        analyzable_article_id: int,
     ) -> None:
         """想定外失敗の best-effort audit。"""
         try:
             async with self._session_factory() as session:
                 await AssessmentAuditRepository(session).append_unexpected_failure(
-                    ready=ready, exc=exc
+                    ready=ready, exc=exc, article_id=analyzable_article_id
                 )
                 await session.commit()
         except Exception as audit_exc:

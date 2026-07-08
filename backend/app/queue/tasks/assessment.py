@@ -50,7 +50,10 @@ async def assess_content(
     with assessment_stage_span(curation_id=trigger.curation_id) as stage:
         async with session_factory() as session:
             try:
-                ready = await ReadyForAssessment.try_advance_from(
+                (
+                    ready,
+                    analyzable_article_id,
+                ) = await ReadyForAssessment.try_advance_from(
                     curation_id=trigger.curation_id,
                     repo=AssessmentRepository(session),
                 )
@@ -87,8 +90,7 @@ async def assess_content(
                 )
                 raise
 
-        # analyzable_article_id は trigger に無く ready で判明する (late-binding)。
-        stage.set_article_id(ready.analyzable_article_id)
+        stage.set_article_id(analyzable_article_id)
 
         # precondition 未充足の stale trigger で AI quota を消費しない。
         if not await ctx.state.provider_rate_limit_gate.acquire(
@@ -100,7 +102,7 @@ async def assess_content(
             logger.info(
                 "assessment_ai_rate_limit_gate_skipped",
                 curation_id=ready.curation_id,
-                analyzable_article_id=ready.analyzable_article_id,
+                analyzable_article_id=analyzable_article_id,
                 ai_model=assessor.model_name,
                 prompt_version=assessor.prompt_version,
             )
@@ -111,7 +113,9 @@ async def assess_content(
         handler = AssessmentFailureHandler(session_factory)
 
         try:
-            result = await svc.execute(ready, assessor)
+            result = await svc.execute(
+                ready, assessor, analyzable_article_id=analyzable_article_id
+            )
         except Exception as exc:
             # handler / hold が二次例外で落ちても元の業務例外を span に残す
             # (no-override で最初の業務例外を保持)。
@@ -120,6 +124,7 @@ async def assess_content(
                 ready=ready,
                 exc=exc,
                 last_attempt=is_last_attempt(ctx),
+                analyzable_article_id=analyzable_article_id,
             )
             if decision.stage_hold_reason is not None:
                 await set_assessment_hold(
@@ -134,7 +139,7 @@ async def assess_content(
             await generate_embedding.kiq(
                 EmbeddingTrigger(
                     analyzed_article_id=result,
-                    analyzable_article_id=ready.analyzable_article_id,
+                    analyzable_article_id=analyzable_article_id,
                 )
             )
             stage.mark_next_task_enqueued()

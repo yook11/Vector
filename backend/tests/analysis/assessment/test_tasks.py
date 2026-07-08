@@ -75,17 +75,19 @@ def _make_ready(curation_id: int = 2) -> ReadyForAssessment:
         curation_id=curation_id,
         translated_title="title",
         summary="summary",
-        analyzable_article_id=7,
     )
 
 
 def _patch_ready_construction(
     result: ReadyForAssessment | AssessmentReadyBuildBlockedError,
+    *,
+    analyzable_article_id: int = 7,
 ):
+    """try_advance_from を patch する。成功時は (ready, 監査主語) の tuple を返す。"""
     mock = (
         AsyncMock(side_effect=result)
         if isinstance(result, AssessmentReadyBuildBlockedError)
-        else AsyncMock(return_value=result)
+        else AsyncMock(return_value=(result, analyzable_article_id))
     )
     return patch(
         "app.queue.tasks.assessment.ReadyForAssessment.try_advance_from",
@@ -207,10 +209,11 @@ class TestAssessContent:
             mock_embed.kiq = AsyncMock()
             await assess_content(trigger=trigger, ctx=mock_ctx)
 
-        # 構築された Ready が Service に渡されていること
+        # 構築された Ready が Service に渡され、監査主語 (元記事 id) が明示引数で届く
         call_args = mock_svc_cls.return_value.execute.call_args
         assert call_args[0][0] is ready
-        # 相関 id (元記事 id) も trigger に載せて chain する。
+        assert call_args.kwargs["analyzable_article_id"] == 7
+        # 監査主語 (元記事 id) を Stage 5 へ引き継いで chain する。
         mock_embed.kiq.assert_awaited_once_with(
             EmbeddingTrigger(analyzed_article_id=100, analyzable_article_id=7)
         )

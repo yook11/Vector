@@ -89,15 +89,14 @@ def _fixed_ready() -> ReadyForAssessment:
         curation_id=2,
         translated_title="title",
         summary="summary",
-        analyzable_article_id=7,
     )
 
 
 def _patch_ready_construction(ready: ReadyForAssessment | None = None) -> object:
-    """``ReadyForAssessment.try_advance_from`` を固定値返却に patch するヘルパ。"""
+    """``try_advance_from`` を (ready, 監査主語=7) の固定 tuple 返却に patch する。"""
     return patch(
         "app.queue.tasks.assessment.ReadyForAssessment.try_advance_from",
-        new=AsyncMock(return_value=ready if ready is not None else _fixed_ready()),
+        new=AsyncMock(return_value=(ready if ready is not None else _fixed_ready(), 7)),
     )
 
 
@@ -139,6 +138,8 @@ async def test_terminal_delegates_to_handler() -> None:
     kwargs = handler_handle.await_args.kwargs
     assert kwargs["exc"] is exc
     assert kwargs["last_attempt"] is False
+    # 監査主語 (元記事 id) が handler にも明示引数で届く
+    assert kwargs["analyzable_article_id"] == 7
     hold.assert_awaited_once()
     assert hold.await_args.kwargs["reason"] == "ai_error_configuration"
 

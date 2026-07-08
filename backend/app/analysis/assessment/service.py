@@ -1,8 +1,9 @@
 """AssessmentService — Stage 4 の AI 判定と永続化境界。
 
-``ReadyForAssessment`` が precondition と audit 用参照値を保証するため、
-Service は AI 呼び出し、結果別の保存、audit + commit だけを担う。楽観的ロックに
-敗れた worker は audit / commit せず ``None`` を返し、下流 chain も起動しない。
+``ReadyForAssessment`` が precondition を、明示引数 ``analyzable_article_id`` が
+監査主語を保証するため、Service は AI 呼び出し、結果別の保存、audit + commit だけを
+担う。楽観的ロックに敗れた worker は audit / commit せず ``None`` を返し、下流 chain も
+起動しない。
 """
 
 from __future__ import annotations
@@ -46,6 +47,8 @@ class AssessmentService:
         self,
         ready: ReadyForAssessment,
         assessor: BaseAssessor,
+        *,
+        analyzable_article_id: int,
     ) -> int | None:
         """Ready 型を受け取り判定 → 永続化 → 下流 chain 用 id を返す。
 
@@ -99,6 +102,7 @@ class AssessmentService:
                     await AssessmentAuditRepository(session).append_in_scope(
                         ready=ready,
                         call=call,
+                        article_id=analyzable_article_id,
                     )
                     await session.commit()
                     logger.info(
@@ -126,6 +130,7 @@ class AssessmentService:
                     await AssessmentAuditRepository(session).append_out_of_scope(
                         ready=ready,
                         call=call,
+                        article_id=analyzable_article_id,
                     )
                     await session.commit()
                     logger.info(

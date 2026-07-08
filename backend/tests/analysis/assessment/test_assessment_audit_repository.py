@@ -125,7 +125,6 @@ def _ready(
         curation_id=extraction.id,
         translated_title=extraction.translated_title,
         summary=summary if summary is not None else extraction.summary,
-        analyzable_article_id=extraction.analyzable_article_id,
     )
 
 
@@ -297,6 +296,7 @@ async def test_append_in_scope_records_success_with_code(
     async with session_factory() as session:
         await AssessmentAuditRepository(session).append_in_scope(
             ready=_ready(extraction),
+            article_id=article.id,
             call=_in_scope_call(),
         )
         await session.commit()
@@ -335,6 +335,7 @@ async def test_append_in_scope_derives_category_slug_from_in_scope(
     async with session_factory() as session:
         await AssessmentAuditRepository(session).append_in_scope(
             ready=_ready(extraction),
+            article_id=article.id,
             call=call,
         )
         await session.commit()
@@ -345,26 +346,39 @@ async def test_append_in_scope_derives_category_slug_from_in_scope(
 
 
 @pytest.mark.asyncio
-async def test_append_in_scope_uses_article_id_from_ready(
+async def test_append_in_scope_uses_explicit_article_id_subject(
     db_session: AsyncSession,
     session_factory: async_sessionmaker[AsyncSession],
     sample_source: NewsSource,
     sample_categories: list[Category],
 ) -> None:
-    """pipeline_events.article_id が Ready 由来 (案 3: Ready 構築時に取得済)。"""
+    """pipeline_events.article_id は明示引数の監査主語だけで決まる。
+
+    ready/curation が紐づく記事とは別の実在記事 id を渡し、記録される article_id が
+    その明示引数と一致することで、DB / ready から再導出していないことを独立に示す。
+    """
     article = await _make_article(db_session, sample_source)
     extraction = await _make_extraction(db_session, article)
     await _persist_in_scope(db_session, extraction, sample_categories[0])
+    # ready/curation の記事とは別の実在記事を監査主語に渡す (FK 充足のため実在 id)
+    subject_article = await _make_article(
+        db_session, sample_source, url="https://e.com/subject"
+    )
+    assert subject_article.id != article.id
 
     async with session_factory() as session:
         await AssessmentAuditRepository(session).append_in_scope(
             ready=_ready(extraction),
+            article_id=subject_article.id,
             call=_in_scope_call(),
         )
         await session.commit()
 
-    ev = await _fetch_one(db_session, article.id)
-    assert ev.article_id == article.id
+    # 再導出実装なら subject_article.id 下に行が無く _fetch_one が落ちる
+    ev = await _fetch_one(db_session, subject_article.id)
+    assert ev.article_id == subject_article.id
+    # payload は ready 由来 (curation)、article_id は明示引数 = 別データ経路
+    assert ev.payload["curation_id"] == extraction.id
 
 
 @pytest.mark.asyncio
@@ -382,6 +396,7 @@ async def test_append_in_scope_does_not_commit(
     async with session_factory() as session:
         await AssessmentAuditRepository(session).append_in_scope(
             ready=_ready(extraction),
+            article_id=article.id,
             call=_in_scope_call(),
         )
         # 意図的に commit しない (rollback で消える)
@@ -415,6 +430,7 @@ async def test_append_in_scope_truncates_raw_response(
     async with session_factory() as session:
         await AssessmentAuditRepository(session).append_in_scope(
             ready=_ready(extraction),
+            article_id=article.id,
             call=call,
         )
         await session.commit()
@@ -438,6 +454,7 @@ async def test_append_out_of_scope_records_success_with_code(
     async with session_factory() as session:
         await AssessmentAuditRepository(session).append_out_of_scope(
             ready=_ready(extraction),
+            article_id=article.id,
             call=_out_of_scope_call(),
         )
         await session.commit()
@@ -466,6 +483,7 @@ async def test_append_out_of_scope_records_investor_take(
     async with session_factory() as session:
         await AssessmentAuditRepository(session).append_out_of_scope(
             ready=_ready(extraction),
+            article_id=article.id,
             call=_out_of_scope_call(),
         )
         await session.commit()
@@ -517,6 +535,7 @@ async def test_append_failure_recoverable_maps_to_retryable(
     async with session_factory() as session:
         await AssessmentAuditRepository(session).append_failure(
             ready=_ready(extraction),
+            article_id=article.id,
             exc=exc,
         )
         await session.commit()
@@ -543,6 +562,7 @@ async def test_append_failure_terminal_operator_action(
     async with session_factory() as session:
         await AssessmentAuditRepository(session).append_failure(
             ready=_ready(extraction),
+            article_id=article.id,
             exc=exc,
         )
         await session.commit()
@@ -570,6 +590,7 @@ async def test_append_failure_terminal_target_rejected(
     async with session_factory() as session:
         await AssessmentAuditRepository(session).append_failure(
             ready=_ready(extraction),
+            article_id=article.id,
             exc=exc,
         )
         await session.commit()
@@ -600,6 +621,7 @@ async def test_append_failure_response_invalid_bakes_parse_defect_code(
     async with session_factory() as session:
         await AssessmentAuditRepository(session).append_failure(
             ready=_ready(extraction),
+            article_id=article.id,
             exc=exc,
         )
         await session.commit()
@@ -630,6 +652,7 @@ async def test_append_failure_response_invalid_bakes_provider_envelope_code(
     async with session_factory() as session:
         await AssessmentAuditRepository(session).append_failure(
             ready=_ready(extraction),
+            article_id=article.id,
             exc=exc,
         )
         await session.commit()
@@ -655,6 +678,7 @@ async def test_append_failure_unknown_exception_maps_to_unknown(
     async with session_factory() as session:
         await AssessmentAuditRepository(session).append_unexpected_failure(
             ready=_ready(extraction),
+            article_id=article.id,
             exc=exc,
         )
         await session.commit()
@@ -720,6 +744,7 @@ async def test_append_failure_projects_db_exceptions(
     async with session_factory() as session:
         await AssessmentAuditRepository(session).append_failure(
             ready=_ready(extraction),
+            article_id=article.id,
             exc=exc,
         )
         await session.commit()
@@ -756,6 +781,7 @@ async def test_append_failure_walks_error_chain_via_cause(
         async with session_factory() as session:
             await AssessmentAuditRepository(session).append_failure(
                 ready=_ready(extraction),
+                article_id=article.id,
                 exc=exc,
             )
             await session.commit()
@@ -785,6 +811,7 @@ async def test_append_failure_redacts_secrets_in_error_message(
     async with session_factory() as session:
         await AssessmentAuditRepository(session).append_unexpected_failure(
             ready=_ready(extraction),
+            article_id=article.id,
             exc=exc,
         )
         await session.commit()
@@ -810,6 +837,7 @@ async def test_append_failure_truncates_raw_response_attr(
     async with session_factory() as session:
         await AssessmentAuditRepository(session).append_unexpected_failure(
             ready=_ready(extraction),
+            article_id=article.id,
             exc=exc,
         )
         await session.commit()
@@ -836,6 +864,7 @@ async def test_append_failure_records_curation_id_in_payload(
     async with session_factory() as session:
         await AssessmentAuditRepository(session).append_unexpected_failure(
             ready=_ready(extraction),
+            article_id=article.id,
             exc=exc,
         )
         await session.commit()
