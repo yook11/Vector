@@ -13,6 +13,8 @@ from app.agent.answering.synthesis import (
     EvidenceAnswerSynthesizer,
 )
 from app.agent.contract import (
+    AnswerProgressReporter,
+    AnswerProgressStage,
     AnswerQuestionInput,
     AnswerQuestionResult,
     AnswerRetrievalSummary,
@@ -57,16 +59,20 @@ class QuestionAnsweringService:
         evidence_collector: EvidenceCollector,
         synthesizer: EvidenceAnswerSynthesizer,
         direct_answerer: DirectAnswerer,
+        progress: AnswerProgressReporter | None = None,
     ) -> None:
         self._planner = planner
         self._evidence_collector = evidence_collector
         self._synthesizer = synthesizer
         self._direct_answerer = direct_answerer
+        self._progress = progress
 
     async def answer(self, input: AnswerQuestionInput) -> AnswerQuestionResult:
+        await self._report_progress("planning")
         plan = await self._planner.plan(input)
         match plan:
             case NoRetrievalPlan():
+                await self._report_progress("synthesizing")
                 draft = await self._direct_answerer.answer(
                     question=input.question,
                     as_of=input.as_of,
@@ -95,9 +101,11 @@ class QuestionAnsweringService:
         input: AnswerQuestionInput,
         plan: RetrievalPlan,
     ) -> AnswerQuestionResult:
+        await self._report_progress("retrieving")
         outcome = await self._evidence_collector.collect(plan, as_of=input.as_of)
         evidence = normalize_answer_evidence(outcome)
 
+        await self._report_progress("synthesizing")
         draft = await self._synthesizer.synthesize(
             question=input.question,
             evidence=evidence,
@@ -115,6 +123,11 @@ class QuestionAnsweringService:
             draft_missing_aspects=draft.missing_aspects,
             include_retrieval_empty_missing=not evidence,
         )
+
+    async def _report_progress(self, stage: AnswerProgressStage) -> None:
+        if self._progress is None:
+            return
+        await self._progress.stage_changed(stage)
 
 
 def _plan_target_time_window(plan: RetrievalPlan) -> str | None:

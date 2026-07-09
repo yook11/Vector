@@ -18,3 +18,9 @@ class AgentRunErrorCode(StrEnum):
     ENQUEUE_FAILED = "enqueue_failed"
     STALE = "stale"
     CANCELLED = "cancelled"
+
+
+class AgentRunProgressStage(StrEnum):
+    PLANNING = "planning"
+    RETRIEVING = "retrieving"
+    SYNTHESIZING = "synthesizing"

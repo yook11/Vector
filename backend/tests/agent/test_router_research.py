@@ -144,6 +144,7 @@ async def _create_run(
     status: str = "queued",
     assistant_message_id: UUID | None = None,
     error_code: str | None = None,
+    progress_stage: str | None = None,
 ) -> AgentRun:
     run = AgentRun(
         thread_id=thread_id,
@@ -151,6 +152,7 @@ async def _create_run(
         assistant_message_id=assistant_message_id,
         status=status,
         error_code=error_code,
+        progress_stage=progress_stage,
     )
     session.add(run)
     await session.commit()
@@ -619,6 +621,7 @@ class TestGetResearchThread:
             thread_id=thread.id,
             user_message_id=active_user.id,
             status="queued",
+            progress_stage=None,
         )
         answered_user = await _create_message(
             db_session,
@@ -666,6 +669,7 @@ class TestGetResearchThread:
             user_message_id=answered_user.id,
             assistant_message_id=assistant_message.id,
             status="completed",
+            progress_stage="synthesizing",
         )
         cancelled_user = await _create_message(
             db_session,
@@ -699,11 +703,13 @@ class TestGetResearchThread:
             "runId": str(active_run.id),
             "status": "queued",
             "errorCode": None,
+            "progressStage": None,
         }
         assert data["messages"][1]["run"] == {
             "runId": str(completed_run.id),
             "status": "completed",
             "errorCode": None,
+            "progressStage": "synthesizing",
         }
         assert data["messages"][2]["content"] == "回答です。[[1]][[2]]"
         assert data["messages"][2]["missingAspects"] == ["未確認の観点"]
@@ -729,6 +735,7 @@ class TestGetResearchThread:
             "runId": str(cancelled_run.id),
             "status": "failed",
             "errorCode": "cancelled",
+            "progressStage": None,
         }
         assert all("createdAt" in message for message in data["messages"])
 
@@ -1041,6 +1048,7 @@ class TestGetResearchRun:
             thread_id=running_thread.id,
             user_message_id=running_user.id,
             status="running",
+            progress_stage="retrieving",
         )
         failed_thread = await _create_thread(db_session)
         failed_user = await _create_message(
@@ -1056,6 +1064,7 @@ class TestGetResearchRun:
             user_message_id=failed_user.id,
             status="failed",
             error_code="generation_unavailable",
+            progress_stage="synthesizing",
         )
         completed_thread = await _create_thread(db_session)
         completed_user = await _create_message(
@@ -1081,12 +1090,12 @@ class TestGetResearchRun:
         )
 
         expected = {
-            queued_run.id: ("queued", None),
-            running_run.id: ("running", None),
-            failed_run.id: ("failed", "generation_unavailable"),
-            completed_run.id: ("completed", None),
+            queued_run.id: ("queued", None, None),
+            running_run.id: ("running", None, "retrieving"),
+            failed_run.id: ("failed", "generation_unavailable", "synthesizing"),
+            completed_run.id: ("completed", None, None),
         }
-        for run_id, (status_value, error_code) in expected.items():
+        for run_id, (status_value, error_code, progress_stage) in expected.items():
             response = await client.get(f"/api/v1/research/runs/{run_id}")
             assert response.status_code == 200
             assert response.json() == {
@@ -1094,6 +1103,7 @@ class TestGetResearchRun:
                 "threadId": str((await _fetch_run(db_session, run_id)).thread_id),
                 "status": status_value,
                 "errorCode": error_code,
+                "progressStage": progress_stage,
             }
 
     async def test_other_users_run_is_404(
@@ -1179,9 +1189,11 @@ def test_openapi_exposes_thread_ui_contract_and_slim_run_signal() -> None:
         "threadId",
         "status",
         "errorCode",
+        "progressStage",
     }
     assert "result" not in run_schema["properties"]
     assert "cancelled" in str(run_schema["properties"]["errorCode"])
+    assert "planning" in str(run_schema["properties"]["progressStage"])
 
     assistant_schema = schema["components"]["schemas"]["ResearchAssistantMessage"]
     assert "[[1]]" in assistant_schema["properties"]["content"]["description"]

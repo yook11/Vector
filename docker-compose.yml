@@ -20,6 +20,9 @@ x-worker-base: &worker-base
       condition: service_healthy
     redis:
       condition: service_healthy
+  # Backend image healthcheck probes uvicorn; worker liveness is surfaced by supervisord exiting on FATAL.
+  healthcheck:
+    disable: true
   restart: unless-stopped
   networks:
     - public

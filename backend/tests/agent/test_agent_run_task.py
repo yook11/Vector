@@ -26,7 +26,10 @@ from app.agent.history.mapper import (
     build_source_rows_for_message,
 )
 from app.agent.history.projection import build_research_assistant_message
-from app.analysis.ai_provider_errors import AIProviderError
+from app.analysis.ai_provider_errors import (
+    AIProviderConfigurationError,
+    AIProviderError,
+)
 from app.models.agent_message import AgentMessage, AgentMessageSource
 from app.models.agent_run import AgentRun
 from app.models.agent_thread import AgentThread
@@ -40,13 +43,19 @@ class FakeAgent:
         self,
         result: AnswerQuestionResult | None = None,
         exc: Exception | None = None,
+        stage: str | None = None,
     ) -> None:
         self.result = result
         self.exc = exc
+        self.stage = stage
+        self.progress = None
         self.calls: list[AnswerQuestionInput] = []
 
     async def answer(self, input_: AnswerQuestionInput) -> AnswerQuestionResult:
         self.calls.append(input_)
+        if self.stage is not None:
+            assert self.progress is not None
+            await self.progress.stage_changed(self.stage)
         if self.exc is not None:
             raise self.exc
         assert self.result is not None
@@ -181,6 +190,34 @@ async def test_run_agent_answer_completes_run_and_persists_assistant_message(
 
 
 @pytest.mark.asyncio
+async def test_run_agent_answer_completion_preserves_last_progress_stage(
+    session_factory: async_sessionmaker[AsyncSession],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async with session_factory() as session:
+        _thread, _message, run = await _create_thread_message_run(session)
+    fake_agent = FakeAgent(_direct_result(), stage="synthesizing")
+
+    def build_agent(**kwargs: object) -> FakeAgent:
+        fake_agent.progress = kwargs["progress"]
+        return fake_agent
+
+    monkeypatch.setattr(agent_run_tasks, "make_safe_async_client", _fake_http_client)
+    monkeypatch.setattr(agent_run_tasks, "build_question_answering_agent", build_agent)
+
+    await agent_run_tasks.run_agent_answer(
+        trigger=AgentRunTrigger(run_id=run.id),
+        ctx=_ctx(session_factory),
+    )
+
+    async with session_factory() as session:
+        completed = await session.get(AgentRun, run.id)
+        assert completed is not None
+        assert completed.status == "completed"
+        assert completed.progress_stage == "synthesizing"
+
+
+@pytest.mark.asyncio
 async def test_complete_run_warns_on_citation_source_mismatch_without_failing_run(
     session_factory: async_sessionmaker[AsyncSession],
 ) -> None:
@@ -276,6 +313,62 @@ async def test_run_agent_answer_generation_error_marks_failed_without_leaking_me
             .all()
         )
         assert [m.role for m in messages] == ["user"]
+
+
+@pytest.mark.asyncio
+async def test_run_agent_answer_generation_error_preserves_death_progress_stage(
+    session_factory: async_sessionmaker[AsyncSession],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async with session_factory() as session:
+        _thread, _message, run = await _create_thread_message_run(session)
+    fake_agent = FakeAgent(exc=AIProviderError("SHOULD_NOT_LEAK"), stage="retrieving")
+
+    def build_agent(**kwargs: object) -> FakeAgent:
+        fake_agent.progress = kwargs["progress"]
+        return fake_agent
+
+    monkeypatch.setattr(agent_run_tasks, "make_safe_async_client", _fake_http_client)
+    monkeypatch.setattr(agent_run_tasks, "build_question_answering_agent", build_agent)
+
+    await agent_run_tasks.run_agent_answer(
+        trigger=AgentRunTrigger(run_id=run.id),
+        ctx=_ctx(session_factory),
+    )
+
+    async with session_factory() as session:
+        failed = await session.get(AgentRun, run.id)
+        assert failed is not None
+        assert failed.status == "failed"
+        assert failed.error_code == "generation_unavailable"
+        assert failed.progress_stage == "retrieving"
+
+
+@pytest.mark.asyncio
+async def test_run_agent_answer_pre_answer_build_failure_leaves_progress_stage_null(
+    session_factory: async_sessionmaker[AsyncSession],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async with session_factory() as session:
+        _thread, _message, run = await _create_thread_message_run(session)
+
+    def build_agent(**_kwargs: object) -> None:
+        raise AIProviderConfigurationError()
+
+    monkeypatch.setattr(agent_run_tasks, "make_safe_async_client", _fake_http_client)
+    monkeypatch.setattr(agent_run_tasks, "build_question_answering_agent", build_agent)
+
+    await agent_run_tasks.run_agent_answer(
+        trigger=AgentRunTrigger(run_id=run.id),
+        ctx=_ctx(session_factory),
+    )
+
+    async with session_factory() as session:
+        failed = await session.get(AgentRun, run.id)
+        assert failed is not None
+        assert failed.status == "failed"
+        assert failed.error_code == "generation_unavailable"
+        assert failed.progress_stage is None
 
 
 @pytest.mark.asyncio

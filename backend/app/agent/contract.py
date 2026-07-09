@@ -20,6 +20,8 @@ from app.shared.security.safe_url import SafeUrl
 
 __all__ = [
     "AnswerQuestionInput",
+    "AnswerProgressReporter",
+    "AnswerProgressStage",
     "AnswerQuestionResult",
     "AnswerRetrievalSummary",
     "AnswerSource",
@@ -33,6 +35,7 @@ __all__ = [
 
 RetrievalMode = Literal["none", "internal", "external", "internal_and_external"]
 UnmetRequirement = Literal["internal_retrieval", "external_search"]
+AnswerProgressStage = Literal["planning", "retrieving", "synthesizing"]
 NonBlankText = Annotated[
     str,
     StringConstraints(strip_whitespace=True, min_length=1),
@@ -120,3 +123,9 @@ class QuestionAnsweringAgent(Protocol):
     """agent core の最小呼び出し口。"""
 
     async def answer(self, input: AnswerQuestionInput) -> AnswerQuestionResult: ...
+
+
+class AnswerProgressReporter(Protocol):
+    """agent core が回答工程の粗い進捗を通知する sink。"""
+
+    async def stage_changed(self, stage: AnswerProgressStage) -> None: ...

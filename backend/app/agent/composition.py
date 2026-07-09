@@ -6,9 +6,9 @@ call the builder when they actually execute an agent run.
 
 from __future__ import annotations
 
-from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from app.agent.contract import QuestionAnsweringAgent
+from app.agent.contract import AnswerProgressReporter, QuestionAnsweringAgent
 from app.agent.external_search.tavily import TavilyHttpClient
 from app.analysis.ai_provider_errors import AIProviderConfigurationError
 from app.config import settings
@@ -24,8 +24,9 @@ def ensure_question_answering_agent_configured() -> None:
 
 def build_question_answering_agent(
     *,
-    session: AsyncSession,
+    session_factory: async_sessionmaker[AsyncSession],
     tavily_client: TavilyHttpClient,
+    progress: AnswerProgressReporter | None = None,
 ) -> QuestionAnsweringAgent:
     ensure_question_answering_agent_configured()
 
@@ -46,7 +47,7 @@ def build_question_answering_agent(
     external_search = _build_external_search(tavily_client)
     internal_search = InternalSearchService(
         embedder=GeminiQueryEmbedder(),
-        article_search_repository=PgVectorArticleSearchRepository(session),
+        article_search_repository=PgVectorArticleSearchRepository(session_factory),
     )
     return QuestionAnsweringService(
         planner=QuestionPlanningService(
@@ -66,6 +67,7 @@ def build_question_answering_agent(
             generator=GeminiDirectAnswerGenerator(),
             audit_recorder=None,
         ),
+        progress=progress,
     )
 
 

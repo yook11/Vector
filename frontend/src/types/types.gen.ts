@@ -698,6 +698,10 @@ export type ResearchMessageRun = {
      * Errorcode
      */
     errorCode: 'generation_unavailable' | 'internal_error' | 'enqueue_failed' | 'stale' | 'cancelled' | null;
+    /**
+     * Progressstage
+     */
+    progressStage: 'planning' | 'retrieving' | 'synthesizing' | null;
 };
 
 /**
@@ -734,6 +738,10 @@ export type ResearchRunResponse = {
      * Errorcode
      */
     errorCode: 'generation_unavailable' | 'internal_error' | 'enqueue_failed' | 'stale' | 'cancelled' | null;
+    /**
+     * Progressstage
+     */
+    progressStage: 'planning' | 'retrieving' | 'synthesizing' | null;
 };
 
 /**

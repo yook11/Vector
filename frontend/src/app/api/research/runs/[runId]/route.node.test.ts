@@ -50,6 +50,7 @@ describe("GET /api/research/runs/[runId]", () => {
       threadId: THREAD_ID,
       status: "running",
       errorCode: null,
+      progressStage: "retrieving",
     };
     mocks.getResearchRun.mockResolvedValue(data);
 

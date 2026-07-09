@@ -264,6 +264,14 @@ class FakeDirectAnswerer:
         return self._draft
 
 
+class FakeProgressReporter:
+    def __init__(self) -> None:
+        self.stages: list[str] = []
+
+    async def stage_changed(self, stage: str) -> None:
+        self.stages.append(stage)
+
+
 def _service(
     *,
     plan: QuestionPlan | Exception,
@@ -274,6 +282,7 @@ def _service(
     direct_draft: DirectAnswerDraft | Exception = AssertionError(
         "direct answerer must not be called"
     ),
+    progress: FakeProgressReporter | None = None,
 ) -> tuple[
     QuestionAnsweringService,
     FakePlanner,
@@ -285,11 +294,15 @@ def _service(
     evidence_collector = FakeEvidenceCollector(outcome)
     synthesizer = FakeSynthesizer(draft)
     direct_answerer = FakeDirectAnswerer(direct_draft)
+    kwargs = {}
+    if progress is not None:
+        kwargs["progress"] = progress
     service = QuestionAnsweringService(
         planner=planner,
         evidence_collector=evidence_collector,
         synthesizer=synthesizer,
         direct_answerer=direct_answerer,
+        **kwargs,
     )
     return service, planner, evidence_collector, synthesizer, direct_answerer
 
@@ -315,6 +328,20 @@ async def test_answer_direct_plan_calls_direct_answerer_only() -> None:
     assert direct_answerer.calls == [(input_.question, input_.as_of)]
     assert evidence_collector.calls == []
     assert synthesizer.calls == []
+
+
+@pytest.mark.asyncio
+async def test_answer_direct_plan_reports_planning_then_synthesizing() -> None:
+    progress = FakeProgressReporter()
+    service, _, _, _, _ = _service(
+        plan=NoRetrievalPlan(reason="direct answer"),
+        direct_draft=DirectAnswerDraft(answer="直接回答です。"),
+        progress=progress,
+    )
+
+    await service.answer(_input("こんにちは"))
+
+    assert progress.stages == ["planning", "synthesizing"]
 
 
 @pytest.mark.asyncio
@@ -345,6 +372,25 @@ async def test_answer_retrieval_plan_variants_do_not_call_direct_answerer(
 
     assert result.status == "answered"
     assert direct_answerer.calls == []
+
+
+@pytest.mark.asyncio
+async def test_answer_evidence_plan_reports_all_progress_stages_in_order() -> None:
+    progress = FakeProgressReporter()
+    service, _, _, _, _ = _service(
+        plan=_mixed_plan(),
+        outcome=_mixed_outcome(),
+        draft=AnswerDraft(
+            sufficiency="answered",
+            answer="根拠から確認できます。",
+            cited_refs=["1", "2"],
+        ),
+        progress=progress,
+    )
+
+    await service.answer(_input())
+
+    assert progress.stages == ["planning", "retrieving", "synthesizing"]
 
 
 @pytest.mark.asyncio

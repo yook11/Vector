@@ -18,6 +18,7 @@ from app.agent.history import (
     PreparedAgentRun,
     RunTransitionLostError,
 )
+from app.agent.history.progress import AgentRunProgressWriter
 from app.analysis.ai_provider_errors import (
     AIProviderConfigurationError,
     AIProviderError,
@@ -47,18 +48,21 @@ async def run_agent_answer(
         return
 
     try:
-        async with session_factory() as agent_session:
-            async with make_safe_async_client() as tavily_client:
-                agent = build_question_answering_agent(
-                    session=agent_session,
-                    tavily_client=tavily_client,
+        async with make_safe_async_client() as tavily_client:
+            agent = build_question_answering_agent(
+                session_factory=session_factory,
+                tavily_client=tavily_client,
+                progress=AgentRunProgressWriter(
+                    session_factory,
+                    prepared.run_id,
+                ),
+            )
+            result = await agent.answer(
+                AnswerQuestionInput(
+                    question=prepared.question,
+                    as_of=datetime.now(UTC),
                 )
-                result = await agent.answer(
-                    AnswerQuestionInput(
-                        question=prepared.question,
-                        as_of=datetime.now(UTC),
-                    )
-                )
+            )
     except (
         AIProviderConfigurationError,
         AIProviderError,

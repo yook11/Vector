@@ -5,7 +5,8 @@ from __future__ import annotations
 from datetime import UTC, datetime, timedelta
 
 import pytest
-from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import text
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.agent.internal_retrieval.article_search import (
     InternalArticleContent,
@@ -135,6 +136,7 @@ class TestPgVectorArticleSearchRepository:
     async def test_search_returns_in_scope_article_projection(
         self,
         db_session: AsyncSession,
+        session_factory: async_sessionmaker[AsyncSession],
         sample_source: NewsSource,
         sample_categories: list[Category],
     ) -> None:
@@ -159,7 +161,7 @@ class TestPgVectorArticleSearchRepository:
             ],
             published_at=datetime(2026, 1, 2, tzinfo=UTC),
         )
-        repo = PgVectorArticleSearchRepository(db_session)
+        repo = PgVectorArticleSearchRepository(session_factory)
 
         hits = await repo.search_by_embedding(_query_embedding(), limit=5)
 
@@ -178,9 +180,35 @@ class TestPgVectorArticleSearchRepository:
         assert hit.content.published_at == datetime(2026, 1, 2, tzinfo=UTC)
         assert hit.distance == pytest.approx(0.0, abs=1e-3)
 
+    async def test_search_uses_own_session_when_caller_session_has_transaction(
+        self,
+        db_session: AsyncSession,
+        session_factory: async_sessionmaker[AsyncSession],
+        sample_source: NewsSource,
+        sample_categories: list[Category],
+    ) -> None:
+        await _create_analysis(
+            db_session,
+            sample_source,
+            sample_categories[0],
+            url="https://example.com/read-tx",
+            translated_title="read tx",
+            embedding=_vector(1.0, 0.0),
+        )
+        await db_session.execute(text("select 1"))
+        assert db_session.in_transaction() is True
+        repo = PgVectorArticleSearchRepository(session_factory)
+
+        hits = await repo.search_by_embedding(_query_embedding(), limit=5)
+
+        assert len(hits) == 1
+        assert db_session.in_transaction() is True
+        await db_session.rollback()
+
     async def test_search_excludes_rows_without_embedding(
         self,
         db_session: AsyncSession,
+        session_factory: async_sessionmaker[AsyncSession],
         sample_source: NewsSource,
         sample_categories: list[Category],
     ) -> None:
@@ -200,7 +228,7 @@ class TestPgVectorArticleSearchRepository:
             translated_title="embeddingあり",
             embedding=_vector(1.0),
         )
-        repo = PgVectorArticleSearchRepository(db_session)
+        repo = PgVectorArticleSearchRepository(session_factory)
 
         hits = await repo.search_by_embedding(_query_embedding(), limit=5)
 
@@ -209,6 +237,7 @@ class TestPgVectorArticleSearchRepository:
     async def test_search_excludes_unassessed_and_out_of_scope_articles(
         self,
         db_session: AsyncSession,
+        session_factory: async_sessionmaker[AsyncSession],
         sample_source: NewsSource,
         sample_categories: list[Category],
     ) -> None:
@@ -232,7 +261,7 @@ class TestPgVectorArticleSearchRepository:
             translated_title="対象内",
             embedding=_vector(1.0),
         )
-        repo = PgVectorArticleSearchRepository(db_session)
+        repo = PgVectorArticleSearchRepository(session_factory)
 
         hits = await repo.search_by_embedding(_query_embedding(), limit=5)
 
@@ -241,6 +270,7 @@ class TestPgVectorArticleSearchRepository:
     async def test_search_orders_by_cosine_distance_and_respects_limit(
         self,
         db_session: AsyncSession,
+        session_factory: async_sessionmaker[AsyncSession],
         sample_source: NewsSource,
         sample_categories: list[Category],
     ) -> None:
@@ -272,7 +302,7 @@ class TestPgVectorArticleSearchRepository:
             embedding=_vector(1.0, 1.0),
             published_at=now - timedelta(days=2),
         )
-        repo = PgVectorArticleSearchRepository(db_session)
+        repo = PgVectorArticleSearchRepository(session_factory)
 
         hits = await repo.search_by_embedding(_query_embedding(), limit=2)
 
@@ -282,6 +312,7 @@ class TestPgVectorArticleSearchRepository:
     async def test_search_orders_same_distance_by_newer_published_at(
         self,
         db_session: AsyncSession,
+        session_factory: async_sessionmaker[AsyncSession],
         sample_source: NewsSource,
         sample_categories: list[Category],
     ) -> None:
@@ -305,7 +336,7 @@ class TestPgVectorArticleSearchRepository:
             embedding=_vector(1.0, 0.0),
             published_at=newer,
         )
-        repo = PgVectorArticleSearchRepository(db_session)
+        repo = PgVectorArticleSearchRepository(session_factory)
 
         hits = await repo.search_by_embedding(_query_embedding(), limit=2)
 
@@ -317,6 +348,7 @@ class TestPgVectorArticleSearchRepository:
     async def test_search_normalizes_null_key_points_to_empty_content(
         self,
         db_session: AsyncSession,
+        session_factory: async_sessionmaker[AsyncSession],
         sample_source: NewsSource,
         sample_categories: list[Category],
     ) -> None:
@@ -329,7 +361,7 @@ class TestPgVectorArticleSearchRepository:
             embedding=_vector(1.0),
             key_points=None,
         )
-        repo = PgVectorArticleSearchRepository(db_session)
+        repo = PgVectorArticleSearchRepository(session_factory)
 
         hits = await repo.search_by_embedding(_query_embedding(), limit=5)
 
@@ -339,6 +371,7 @@ class TestPgVectorArticleSearchRepository:
     async def test_search_skips_rows_that_cannot_be_reconstructed_as_in_scope(
         self,
         db_session: AsyncSession,
+        session_factory: async_sessionmaker[AsyncSession],
         sample_source: NewsSource,
         sample_categories: list[Category],
     ) -> None:
@@ -360,7 +393,7 @@ class TestPgVectorArticleSearchRepository:
             embedding=_vector(1.0, 0.1),
             key_points=[],
         )
-        repo = PgVectorArticleSearchRepository(db_session)
+        repo = PgVectorArticleSearchRepository(session_factory)
 
         hits = await repo.search_by_embedding(_query_embedding(), limit=5)
 
@@ -369,6 +402,7 @@ class TestPgVectorArticleSearchRepository:
     async def test_hit_does_not_expose_embedding_raw_row_or_raw_key_points(
         self,
         db_session: AsyncSession,
+        session_factory: async_sessionmaker[AsyncSession],
         sample_source: NewsSource,
         sample_categories: list[Category],
     ) -> None:
@@ -386,7 +420,7 @@ class TestPgVectorArticleSearchRepository:
                 }
             ],
         )
-        repo = PgVectorArticleSearchRepository(db_session)
+        repo = PgVectorArticleSearchRepository(session_factory)
 
         hit = (await repo.search_by_embedding(_query_embedding(), limit=5))[0]
 

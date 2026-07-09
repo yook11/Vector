@@ -8,12 +8,17 @@ from app.agent.history.repository import (
     RunTransitionLostError,
     ThreadNotFoundError,
 )
-from app.agent.history.types import AgentRunErrorCode, AgentRunStatus
+from app.agent.history.types import (
+    AgentRunErrorCode,
+    AgentRunProgressStage,
+    AgentRunStatus,
+)
 
 __all__ = [
     "ActiveRunConflictError",
     "AgentHistoryRepository",
     "AgentRunErrorCode",
+    "AgentRunProgressStage",
     "AgentRunStatus",
     "CancelRunOutcome",
     "PreparedAgentRun",

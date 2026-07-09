@@ -7,7 +7,7 @@ from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 from sqlalchemy import select
-from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.agent.internal_retrieval.query_embedding import InternalQueryEmbedding
 from app.analysis.analyzed_article import InScopeAnalyzedArticle
@@ -76,8 +76,8 @@ class InternalArticleSearchHit(BaseModel):
 class PgVectorArticleSearchRepository:
     """Search in-scope analyzed articles by query embedding."""
 
-    def __init__(self, session: AsyncSession) -> None:
-        self._session = session
+    def __init__(self, session_factory: async_sessionmaker[AsyncSession]) -> None:
+        self._session_factory = session_factory
 
     async def search_by_embedding(
         self,
@@ -121,7 +121,9 @@ class PgVectorArticleSearchRepository:
             )
             .limit(limit)
         )
-        rows = (await self._session.execute(stmt)).all()
+        async with self._session_factory() as session:
+            async with session.begin():
+                rows = (await session.execute(stmt)).all()
 
         hits: list[InternalArticleSearchHit] = []
         for row in rows:

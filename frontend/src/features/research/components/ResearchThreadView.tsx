@@ -3,7 +3,6 @@ import {
   Bot,
   ExternalLink,
   FileText,
-  Loader2,
   MessageSquareText,
 } from "lucide-react";
 import Link from "next/link";
@@ -13,10 +12,10 @@ import type {
   ResearchThreadDetail,
   ResearchUserMessage,
 } from "@/types/types.gen";
+import { ActiveRunStatus } from "./ActiveRunStatus";
 import { CitedAnswerContent } from "./CitedAnswerContent";
 import { DeleteThreadButton } from "./DeleteThreadButton";
 import { ResearchComposer } from "./ResearchComposer";
-import { ResearchRunPoller } from "./ResearchRunPoller";
 
 type ResearchThreadMessage = ResearchUserMessage | ResearchAssistantMessage;
 
@@ -24,9 +23,7 @@ interface ResearchThreadViewProps {
   thread: ResearchThreadDetail;
 }
 
-function runStatusText(run: ResearchMessageRun): string | null {
-  if (run.status === "queued") return "待機中";
-  if (run.status === "running") return "生成中";
+function failedRunStatusText(run: ResearchMessageRun): string | null {
   if (run.status !== "failed") return null;
   switch (run.errorCode) {
     case "cancelled":
@@ -51,31 +48,37 @@ function activeRunId(messages: ResearchThreadMessage[]): string | null {
   return active?.role === "user" ? active.run.runId : null;
 }
 
+function UserRunStatus({ run }: { run: ResearchMessageRun }) {
+  if (run.status === "queued" || run.status === "running") {
+    return (
+      <ActiveRunStatus
+        runId={run.runId}
+        initialStatus={run.status}
+        initialStage={run.progressStage}
+      />
+    );
+  }
+
+  const statusText = failedRunStatusText(run);
+  if (!statusText) return null;
+  return (
+    <div className="mt-2 flex min-w-0 items-center gap-1.5 text-xs text-[var(--vector-ink-muted)]">
+      <AlertTriangle aria-hidden="true" className="size-3.5 shrink-0" />
+      <span className="min-w-0 break-words [overflow-wrap:anywhere]">
+        {statusText}
+      </span>
+    </div>
+  );
+}
+
 function UserMessage({ message }: { message: ResearchUserMessage }) {
-  const statusText = runStatusText(message.run);
-  const running =
-    message.run.status === "queued" || message.run.status === "running";
   return (
     <article className="flex min-w-0 justify-end">
       <div className="min-w-0 max-w-[min(720px,92%)] rounded-md border border-[var(--vector-line)] bg-[var(--vector-paper)] px-4 py-3">
         <p className="whitespace-pre-wrap break-words text-sm leading-6 text-[var(--vector-ink)] [overflow-wrap:anywhere]">
           {message.content}
         </p>
-        {statusText && (
-          <div className="mt-2 flex min-w-0 items-center gap-1.5 text-xs text-[var(--vector-ink-muted)]">
-            {running ? (
-              <Loader2
-                aria-hidden="true"
-                className="size-3.5 shrink-0 animate-spin"
-              />
-            ) : (
-              <AlertTriangle aria-hidden="true" className="size-3.5 shrink-0" />
-            )}
-            <span className="min-w-0 break-words [overflow-wrap:anywhere]">
-              {statusText}
-            </span>
-          </div>
-        )}
+        <UserRunStatus run={message.run} />
       </div>
     </article>
   );
@@ -167,7 +170,6 @@ export function ResearchThreadView({ thread }: ResearchThreadViewProps) {
   const currentRunId = activeRunId(thread.messages);
   return (
     <section className="flex min-h-0 min-w-0 flex-1 flex-col bg-[var(--vector-surface-2)]">
-      <ResearchRunPoller runId={currentRunId} />
       <header className="flex items-center justify-between gap-3 border-b border-[var(--vector-rule)] bg-[var(--vector-surface)]/92 px-4 py-3">
         <div className="min-w-0">
           <p

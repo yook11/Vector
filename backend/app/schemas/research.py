@@ -60,6 +60,7 @@ ResearchRunErrorCode = Literal[
     "stale",
     "cancelled",
 ]
+ResearchProgressStage = Literal["planning", "retrieving", "synthesizing"]
 
 
 class ResearchRunResponse(_CamelBase):
@@ -67,6 +68,7 @@ class ResearchRunResponse(_CamelBase):
     thread_id: UUID
     status: ResearchRunStatus
     error_code: ResearchRunErrorCode | None
+    progress_stage: ResearchProgressStage | None
 
 
 class ResearchThreadListParams(PaginationParams):
@@ -108,6 +110,7 @@ class ResearchMessageRun(_CamelBase):
     run_id: UUID
     status: ResearchRunStatus
     error_code: ResearchRunErrorCode | None
+    progress_stage: ResearchProgressStage | None
 
 
 class ResearchUserMessage(_CamelBase):
