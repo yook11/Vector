@@ -28,8 +28,8 @@ ARG AUTH_DATABASE_URL=postgresql://build:build@localhost:5432/build
 # INTERNAL_API_URL は production build (builder stage は NODE_ENV=production) 時に
 # internal-config.ts の「production では *.flycast 必須」assertion が module 評価で
 # 走るため、ダミーも *.flycast にする (dev 値 http://backend:... だと build が
-# "in production INTERNAL_API_URL must be a *.flycast host" で落ちる)。非秘密で
-# runtime も fly.toml [env] が同じ flycast 値を渡すため実ホストを既定にする。
+# "in production INTERNAL_API_URL must be a *.flycast host" で落ちる)。公開 repo
+# では placeholder を既定にし、実運用値は private deploy secrets から渡す。
 ARG INTERNAL_API_URL=http://your-vector-core-app.flycast:8000/api/v1
 # 内部 trust 境界の 2 secret (BFF JWT 署名鍵 / revalidate Bearer / red-team C1)。
 ARG BFF_JWT_SIGNING_SECRET=build-time-placeholder-do-not-use-in-runtime-bff

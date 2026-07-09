@@ -29,6 +29,13 @@
 - 環境変数は設定層経由で扱い、`.env` を読まない・表示しない・編集しない。
 - 認証・認可ロジックを簡略化、迂回、無効化しない。
 
+## Public Repository Hygiene
+
+- 実 production の Fly app 名、internal hostname、deploy / rollback / restore の具体手順は commit しない。
+- `fly*.toml` は portfolio 用の構成例として公開し、app 名や URL は placeholder にする。
+- 本番 deploy に必要な実値は GitHub Environment secrets / Fly secrets / private runbook 側で管理する。
+- docs では設計意図と境界を説明し、運用者だけが使う詳細手順や復旧コマンドは公開しない。
+
 ## Research
 
 - ライブラリやフレームワークの使用方法は、憶測で実装せず、`/research` スキルや最新の公式ドキュメントで確認する。

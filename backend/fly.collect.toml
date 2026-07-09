@@ -4,7 +4,7 @@
 # parse する」側。RCE/SSRF の攻撃面を持つため、AI 鍵も本物 BFF 鍵も保持しない。
 # 保持する秘密は DB (collection 最小権限 role) と Redis (AUTH) のみで、config が
 # import 時に要求する未使用の必須鍵 (bff_jwt / revalidate) は throwaway random を
-# secret で与える (plan file Part 5)。fly.core.toml と同一 image を deploy する。
+# secret で与える。fly.core.toml と同一 image を deploy する。
 #
 # See https://fly.io/docs/reference/configuration/
 
@@ -49,4 +49,4 @@ primary_region = 'nrt'
   worker-fetch = "supervisord -n -c /app/supervisord/fetch.conf"
 
 # release_command は無し (migration は core/collect いずれの Fly runtime でも実行
-# しない。CI/手元のみ。plan file "deploy runbook" 参照)。
+# しない。CI/手元のみ)。

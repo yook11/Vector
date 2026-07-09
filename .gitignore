@@ -4,12 +4,29 @@
 .env
 .env.local
 .env.*.local
+.env.*
+!.env.example
+
+# Local credentials / captured traffic / runtime logs
+*.log
+*.har
+*.db
+*.sqlite
+*.sqlite3
+*.pem
+*.key
+*.p12
+*.p8
+*.crt
+credentials*.json
+service-account*.json
 
 # ===========================
 # Database backups / dumps
 # ===========================
 backups/
 *.sql
+*.sql.gz
 *.dump
 *.dump.gz
 
@@ -65,6 +82,7 @@ Thumbs.db
 .claude/*
 !.claude/commands/
 !.claude/agents/
+.claude/commands/private-production-runbook.md
 .claude/agents/*
 !.claude/agents/frontend-ui-builder.md
 !.claude/agents/test-writer.md

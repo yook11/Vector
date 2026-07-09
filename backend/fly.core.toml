@@ -21,8 +21,7 @@ primary_region = 'nrt'
 # - [[services]] で internal_port=8000 だけ宣言、processes=['api'] に scope:
 #   public IP を release 済なら flycast (org-private DNS) からのみ届く
 # - flycast は HTTP-only (TLS 終端なし) のため force_https は宣言しない
-# 初回 deploy 手順: plan file の "deploy runbook" 参照
-# (fly ips allocate-v6 --private → fly ips release <public>)。
+# 初回 deploy では private IPv6 のみを割り当て、public IP は持たせない。
 [[services]]
   internal_port = 8000
   protocol = "tcp"
@@ -98,9 +97,8 @@ primary_region = 'nrt'
 [env]
   ENV = "production"
   # ブラウザ起源の CORS allow_origins 用 (config.py の frontend_url、production 必須)。
-  # 独自ドメインは当面使わないため Fly デフォルト公開ドメイン (frontend は
-  # force_https)。独自ドメイン化する場合は fly certs add 後に本値と frontend の
-  # BETTER_AUTH_URL を更新する。非秘密のため [env] に置いて commit する。
+  # 公開 repo では placeholder を置き、実運用値は private deploy secrets /
+  # flyctl --env で渡す。
   FRONTEND_URL = "https://your-vector-frontend-app.fly.dev"
   # backend → frontend revalidate 通知の宛先 (flycast 内部通信)。
   # backend/app/config.py の _enforce_flycast_in_production が production で
@@ -138,5 +136,4 @@ primary_region = 'nrt'
 
 # release_command は撤去する。Neon には schema migration を適用済みで、migration の
 # owner URL (MIGRATION_DATABASE_URL) を Fly runtime secret に置かない方針のため。
-# 今後の migration は CI / 手元から owner URL + full Settings env で実行する
-# (plan file の "deploy runbook" 参照)。
+# 今後の migration は CI / 手元から owner URL + full Settings env で実行する。

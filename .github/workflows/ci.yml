@@ -706,14 +706,27 @@ jobs:
       MIGRATION_DATABASE_URL: ${{ secrets.MIGRATION_DATABASE_URL }}
       BFF_JWT_SIGNING_SECRET: ci4444444444444444444444444444444444444444444444444444444444444444
       REVALIDATE_BEARER_SECRET: ci5555555555555555555555555555555555555555555555555555555555555555
-      FRONTEND_URL: https://vector.example.invalid
-      INTERNAL_FRONTEND_BASE_URL: https://your-vector-frontend-app.internal.flycast
+      # production Environment secrets. App-specific URLs are masked even though
+      # they are not credentials.
+      FRONTEND_URL: ${{ secrets.FRONTEND_URL }}
+      INTERNAL_FRONTEND_BASE_URL: ${{ secrets.INTERNAL_FRONTEND_BASE_URL }}
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
 
       - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1  # v6.3.0
         with:
           python-version: "3.13"
+
+      - name: Verify production environment secrets
+        run: |
+          missing=0
+          for name in FRONTEND_URL INTERNAL_FRONTEND_BASE_URL; do
+            if [ -z "${!name:-}" ]; then
+              echo "::error::$name is not configured in the production environment"
+              missing=1
+            fi
+          done
+          exit "$missing"
 
       - name: Install uv
         uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39  # v8.2.0
@@ -787,8 +800,15 @@ jobs:
       cancel-in-progress: false
     env:
       # org-scoped token (collect が core の registry image を cross-app pull するため
-      # 必須)。GitHub repo secret に登録する。手動前提は plan file / runbook 参照。
+      # 必須)。app 名と URL も public Actions log で mask するため secrets として渡す。
       FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+      FLY_CORE_APP: ${{ secrets.FLY_CORE_APP }}
+      FLY_COLLECT_APP: ${{ secrets.FLY_COLLECT_APP }}
+      FLY_FRONTEND_APP: ${{ secrets.FLY_FRONTEND_APP }}
+      FRONTEND_URL: ${{ secrets.FRONTEND_URL }}
+      INTERNAL_FRONTEND_BASE_URL: ${{ secrets.INTERNAL_FRONTEND_BASE_URL }}
+      INTERNAL_API_URL: ${{ secrets.INTERNAL_API_URL }}
+      BETTER_AUTH_URL: ${{ secrets.BETTER_AUTH_URL }}
     steps:
       # deploy 判定を Step Summary に焼く: paths-filter の結果と SHA を可視化し、
       # 「deploy したつもりが skip されていた」を run 概要から追えるようにする。
@@ -810,33 +830,52 @@ jobs:
       - uses: superfly/flyctl-actions/setup-flyctl@ed8efb33836e8b2096c7fd3ba1c8afe303ebbff1  # v1.6
 
       # ---- backend を先に: build once → core / collect を同一 image で release ----
+      - name: Verify production deploy secrets
+        run: |
+          missing=0
+          for name in FLY_API_TOKEN FLY_CORE_APP FLY_COLLECT_APP FLY_FRONTEND_APP FRONTEND_URL INTERNAL_FRONTEND_BASE_URL INTERNAL_API_URL BETTER_AUTH_URL; do
+            if [ -z "${!name:-}" ]; then
+              echo "::error::$name is not configured in the production environment"
+              missing=1
+            fi
+          done
+          exit "$missing"
+
       # --build-only --push で build + registry push のみ (release しない)。image-label に
       # git SHA を焼くと ref は registry.fly.io/<app>:<SHA> に確定する。
       - name: Build & push backend image once (label = SHA)
         if: ${{ needs.changes.outputs.backend == 'true' }}
         working-directory: backend
         run: |
-          flyctl deploy -c fly.core.toml -a your-vector-core-app \
+          flyctl deploy -c fly.core.toml -a "$FLY_CORE_APP" \
             --remote-only --build-only --push --image-label "${{ github.sha }}"
 
       - name: Release vector-core (prebuilt image)
         if: ${{ needs.changes.outputs.backend == 'true' }}
         working-directory: backend
         run: |
-          flyctl deploy -c fly.core.toml -a your-vector-core-app \
-            --image "registry.fly.io/your-vector-core-app:${{ github.sha }}"
+          flyctl deploy -c fly.core.toml -a "$FLY_CORE_APP" \
+            --image "registry.fly.io/${FLY_CORE_APP}:${{ github.sha }}" \
+            --env FRONTEND_URL="$FRONTEND_URL" \
+            --env INTERNAL_FRONTEND_BASE_URL="$INTERNAL_FRONTEND_BASE_URL"
 
       - name: Release vector-collect (same image as core)
         if: ${{ needs.changes.outputs.backend == 'true' }}
         working-directory: backend
         run: |
-          flyctl deploy -c fly.collect.toml -a your-vector-collect-app \
-            --image "registry.fly.io/your-vector-core-app:${{ github.sha }}"
+          flyctl deploy -c fly.collect.toml -a "$FLY_COLLECT_APP" \
+            --image "registry.fly.io/${FLY_CORE_APP}:${{ github.sha }}" \
+            --env FRONTEND_URL="$FRONTEND_URL" \
+            --env INTERNAL_FRONTEND_BASE_URL="$INTERNAL_FRONTEND_BASE_URL"
 
       # ---- frontend を後に: build + release (こちらは共有しないので通常 deploy) ----
       - name: Deploy frontend (build + release, label = SHA)
         if: ${{ needs.changes.outputs.frontend == 'true' }}
         working-directory: frontend
         run: |
-          flyctl deploy -c fly.toml -a your-vector-frontend-app \
-            --remote-only --image-label "${{ github.sha }}"
+          flyctl deploy -c fly.toml -a "$FLY_FRONTEND_APP" \
+            --remote-only --image-label "${{ github.sha }}" \
+            --build-arg INTERNAL_API_URL="$INTERNAL_API_URL" \
+            --build-arg BETTER_AUTH_URL="$BETTER_AUTH_URL" \
+            --env INTERNAL_API_URL="$INTERNAL_API_URL" \
+            --env BETTER_AUTH_URL="$BETTER_AUTH_URL"

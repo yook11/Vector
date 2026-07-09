@@ -1,4 +1,4 @@
-# fly.toml app configuration file generated for your-vector-frontend-app on 2026-05-06T11:28:11+09:00
+# Public Fly app configuration example for the Vector frontend.
 #
 # See https://fly.io/docs/reference/configuration/ for information about how to use this file.
 #
@@ -24,9 +24,8 @@ primary_region = 'nrt'
 # backend は flycast 経由のみ到達可能な internal-only 構成 (transport 層
 # defense in depth)。frontend → backend の唯一の経路として server-only に
 # 評価される (NEXT_PUBLIC_ プレフィックスを持たないため client bundle に
-# 出ない)。値は publicly-derivable な接続先識別子で秘密ではないため Fly
-# secrets ではなく fly.toml [env] に置いて commit する (deploy 設定の
-# 可視化を優先 — backend/fly.core.toml [env] ENV="production" と同じ思想)。
+# 出ない)。公開 repo では placeholder を置き、実運用値は private deploy
+# secrets / flyctl --env で渡す。
 # frontend/src/lib/api/internal-config.ts が起動時に host が *.flycast で
 # 終わることを fail-closed 検証する (NODE_ENV=production narrowing)。
 [env]
