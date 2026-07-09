@@ -94,7 +94,10 @@ skills-lock.json
 # OpenAI Codex CLI 設定 / Claude Code 以外の skills 配置。
 # AGENTS.md (中身はプロジェクト憲法) は commit する側、tooling 設定は除外。
 .agents/
-.codex/
+.codex/*
+!.codex/agents/
+.codex/agents/*
+!.codex/agents/test-writer.toml
 
 # ===========================
 # Red-team session output

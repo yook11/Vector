@@ -17,6 +17,10 @@ vitest (unit / component / RSC) と Playwright (E2E) の両方をここで扱う
 - **vitest glob**: `src/**/*.{test,spec}.{ts,tsx}` (e2e/ は coverage exclude)
 - **E2E**: `frontend/e2e/<name>.spec.ts` (co-locate せず Playwright の `testDir` で拾う)
 
+## テスト設計原則
+
+- 各テストは他のテストの状態・実行順・成否に依存させず、必要な状態は各テストまたは fixture で準備・破棄する。
+
 ## Mock 戦略
 
 - `vi.mock("../api/<name>")` で **相対 path** で Server Action を mock (own feature 内のみ)
