@@ -103,6 +103,9 @@ class EvidenceAnswerDraftGenerator(Protocol):
         evidence: list[AnswerEvidenceItem],
         as_of: datetime,
         target_time_window: str | None,
+        user_intent: str = "",
+        prior_coverage: str = "",
+        user_activity_context: str = "",
         previous_error: str | None = None,
     ) -> RawAnswerDraft: ...
 
@@ -117,6 +120,9 @@ class EvidenceAnswerSynthesizer(Protocol):
         evidence: list[AnswerEvidenceItem],
         as_of: datetime,
         target_time_window: str | None,
+        user_intent: str = "",
+        prior_coverage: str = "",
+        user_activity_context: str = "",
     ) -> AnswerDraft: ...
 
 
@@ -151,6 +157,9 @@ class AnswerSynthesisService:
         evidence: list[AnswerEvidenceItem],
         as_of: datetime,
         target_time_window: str | None,
+        user_intent: str = "",
+        prior_coverage: str = "",
+        user_activity_context: str = "",
     ) -> AnswerDraft:
         """Return a valid draft, retrying only audited response-boundary failures."""
 
@@ -164,6 +173,9 @@ class AnswerSynthesisService:
                 evidence=evidence,
                 as_of=as_of,
                 target_time_window=target_time_window,
+                user_intent=user_intent,
+                prior_coverage=prior_coverage,
+                user_activity_context=user_activity_context,
                 previous_error=None,
                 attempt_number=1,
                 ai_model=ai_model,
@@ -197,6 +209,9 @@ class AnswerSynthesisService:
                     evidence=evidence,
                     as_of=as_of,
                     target_time_window=target_time_window,
+                    user_intent=user_intent,
+                    prior_coverage=prior_coverage,
+                    user_activity_context=user_activity_context,
                     previous_error=str(exc),
                     attempt_number=2,
                     ai_model=ai_model,
@@ -251,6 +266,9 @@ class AnswerSynthesisService:
         evidence: list[AnswerEvidenceItem],
         as_of: datetime,
         target_time_window: str | None,
+        user_intent: str,
+        prior_coverage: str,
+        user_activity_context: str,
         previous_error: str | None,
         attempt_number: int,
         ai_model: str | None,
@@ -261,6 +279,9 @@ class AnswerSynthesisService:
             evidence=evidence,
             as_of=as_of,
             target_time_window=target_time_window,
+            user_intent=user_intent,
+            prior_coverage=prior_coverage,
+            user_activity_context=user_activity_context,
             previous_error=previous_error,
         )
         draft, defects = _draft_from_raw(raw, evidence=evidence)

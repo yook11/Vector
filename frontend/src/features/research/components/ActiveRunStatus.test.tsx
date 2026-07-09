@@ -127,6 +127,94 @@ describe("ActiveRunStatus", () => {
     expect(mocks.refresh).not.toHaveBeenCalled();
   });
 
+  it("shows the resolved question while planning", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      runResponse("running", "planning", [
+        {
+          type: "question.resolved",
+          ts: "2026-07-09T01:00:00Z",
+          standaloneQuestion: "NVIDIA の発表が株価へ与える影響は？",
+        },
+      ]),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(
+      <ActiveRunStatus
+        runId={RUN_ID}
+        initialStatus="running"
+        initialStage={null}
+      />,
+    );
+
+    await waitFor(() => expect(screen.getByText("計画中")).toBeInTheDocument());
+    expect(
+      screen.getByText("“NVIDIA の発表が株価へ与える影響は？”について調査中"),
+    ).toBeInTheDocument();
+  });
+
+  it("shows the resolved question before planning starts", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      runResponse("running", null, [
+        {
+          type: "question.resolved",
+          ts: "2026-07-09T01:00:00Z",
+          standaloneQuestion: "NVIDIA の発表が株価へ与える影響は？",
+        },
+      ]),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(
+      <ActiveRunStatus
+        runId={RUN_ID}
+        initialStatus="running"
+        initialStage={null}
+      />,
+    );
+
+    await waitFor(() => expect(screen.getByText("生成中")).toBeInTheDocument());
+    expect(
+      screen.getByText("“NVIDIA の発表が株価へ与える影響は？”について調査中"),
+    ).toBeInTheDocument();
+  });
+
+  it("prioritizes search status over the resolved question while retrieving", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      runResponse("running", "retrieving", [
+        {
+          type: "question.resolved",
+          ts: "2026-07-09T01:00:00Z",
+          standaloneQuestion: "NVIDIA の発表が株価へ与える影響は？",
+        },
+        {
+          type: "external_search.queries_generated",
+          ts: "2026-07-09T01:00:01Z",
+          taskIndex: 0,
+          queries: ["NVIDIA stock impact"],
+        },
+      ]),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(
+      <ActiveRunStatus
+        runId={RUN_ID}
+        initialStatus="running"
+        initialStage="planning"
+      />,
+    );
+
+    await waitFor(() =>
+      expect(
+        screen.getByText("“NVIDIA stock impact” を検索中"),
+      ).toBeInTheDocument(),
+    );
+    expect(
+      screen.queryByText("“NVIDIA の発表が株価へ与える影響は？”について調査中"),
+    ).not.toBeInTheDocument();
+  });
+
   it("uses the most recent known event when newer events are unknown", async () => {
     const fetchMock = vi.fn().mockResolvedValue(
       runResponse("running", "retrieving", [

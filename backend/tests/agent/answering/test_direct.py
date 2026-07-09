@@ -43,12 +43,18 @@ class FakeDirectAnswerGenerator:
         *,
         question: str,
         as_of: datetime,
+        user_intent: str = "",
+        user_activity_context: str = "",
+        previous_answer: str = "",
         previous_error: str | None = None,
     ) -> str:
         self.calls.append(
             {
                 "question": question,
                 "as_of": as_of,
+                "user_intent": user_intent,
+                "user_activity_context": user_activity_context,
+                "previous_answer": previous_answer,
                 "previous_error": previous_error,
             }
         )
@@ -123,6 +129,26 @@ async def test_valid_text_returns_direct_draft_without_retry(
     assert (
         sum_counter_for_result(metrics, _DIRECT_ANSWER_OUTCOME_METRIC, "answered") == 1
     )
+
+
+@pytest.mark.asyncio
+async def test_direct_answer_removes_inline_citation_markers_after_generation() -> None:
+    generator = FakeDirectAnswerGenerator(
+        ["結論は維持します。[[1]] 詳細は省略します。[[2]]"]
+    )
+
+    draft = await DirectAnswerService(generator=generator).answer(
+        question="前回の結論だけ",
+        as_of=_as_of(),
+        user_intent="結論だけを短く",
+        user_activity_context="投資判断を調査中",
+        previous_answer="根拠付き前回答 [[1]]",
+    )
+
+    assert draft.answer == "結論は維持します。 詳細は省略します。"
+    assert generator.calls[0]["user_intent"] == "結論だけを短く"
+    assert generator.calls[0]["user_activity_context"] == "投資判断を調査中"
+    assert generator.calls[0]["previous_answer"] == "根拠付き前回答 [[1]]"
 
 
 @pytest.mark.asyncio

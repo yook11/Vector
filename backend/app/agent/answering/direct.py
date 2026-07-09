@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from datetime import datetime
 from typing import Protocol
 
@@ -53,6 +54,9 @@ class DirectAnswerGenerator(Protocol):
         *,
         question: str,
         as_of: datetime,
+        user_intent: str = "",
+        user_activity_context: str = "",
+        previous_answer: str = "",
         previous_error: str | None = None,
     ) -> str: ...
 
@@ -68,11 +72,15 @@ class DirectAnswerer(Protocol):
         *,
         question: str,
         as_of: datetime,
+        user_intent: str = "",
+        user_activity_context: str = "",
+        previous_answer: str = "",
     ) -> DirectAnswerDraft: ...
 
 
 _DIRECT_ANSWER_FAILURES = (AIProviderError, DirectAnswerInvalidError)
 _MAX_ATTEMPTS = 2  # blank response 欠陥のみ 1 回だけリクエスト内リトライする
+_CITATION_MARKER_RE = re.compile(r"\[\[[0-9]+\]\]")
 
 
 class DirectAnswerService:
@@ -95,6 +103,9 @@ class DirectAnswerService:
         *,
         question: str,
         as_of: datetime,
+        user_intent: str = "",
+        user_activity_context: str = "",
+        previous_answer: str = "",
     ) -> DirectAnswerDraft:
         """Return a valid direct draft, retrying only blank response defects."""
 
@@ -107,6 +118,9 @@ class DirectAnswerService:
                 draft = await self._generate_draft(
                     question=question,
                     as_of=as_of,
+                    user_intent=user_intent,
+                    user_activity_context=user_activity_context,
+                    previous_answer=previous_answer,
                     previous_error=previous_error,
                 )
             except _DIRECT_ANSWER_FAILURES as exc:
@@ -150,13 +164,20 @@ class DirectAnswerService:
         *,
         question: str,
         as_of: datetime,
+        user_intent: str,
+        user_activity_context: str,
+        previous_answer: str,
         previous_error: str | None,
     ) -> DirectAnswerDraft:
         answer = await self._generator.generate(
             question=question,
             as_of=as_of,
+            user_intent=user_intent,
+            user_activity_context=user_activity_context,
+            previous_answer=previous_answer,
             previous_error=previous_error,
         )
+        answer = _CITATION_MARKER_RE.sub("", answer)
         if not answer.strip():
             raise DirectAnswerInvalidError()
         return DirectAnswerDraft(answer=answer)

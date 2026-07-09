@@ -76,6 +76,9 @@ class QuestionAnsweringService:
                 draft = await self._direct_answerer.answer(
                     question=input.question,
                     as_of=input.as_of,
+                    user_intent=input.user_intent,
+                    user_activity_context=input.user_activity_context,
+                    previous_answer=input.previous_answer,
                 )
                 return AnswerQuestionResult(
                     status="answered",
@@ -111,6 +114,9 @@ class QuestionAnsweringService:
             evidence=evidence,
             as_of=input.as_of,
             target_time_window=_plan_target_time_window(plan),
+            user_intent=input.user_intent,
+            prior_coverage=input.prior_coverage,
+            user_activity_context=input.user_activity_context,
         )
         _validate_draft_citations(evidence=evidence, draft=draft)
         sources = _sources_for_citations(evidence=evidence, cited_refs=draft.cited_refs)

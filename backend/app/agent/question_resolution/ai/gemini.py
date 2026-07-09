@@ -1,8 +1,9 @@
-"""Gemini implementation of the question planner."""
+"""Gemini implementation of question resolution."""
 
 from __future__ import annotations
 
 import json
+from datetime import datetime
 from enum import StrEnum
 from typing import Final
 
@@ -10,14 +11,18 @@ from google import genai
 from google.genai.types import GenerateContentConfig
 from pydantic import ValidationError
 
-from app.agent.contract import AnswerQuestionInput
-from app.agent.planning.ai.gemini_prompt import GeminiQuestionPlannerPrompt
-from app.agent.planning.ai.gemini_spec import (
-    GEMINI_QUESTION_PLANNER_SPEC,
-    GeminiQuestionPlannerSpec,
+from app.agent.history.repository import ThreadMessageSnapshot
+from app.agent.question_resolution.ai.gemini_prompt import (
+    GeminiQuestionResolutionPrompt,
 )
-from app.agent.planning.errors import QuestionPlannerResponseInvalidError
-from app.agent.planning.plan_draft import QuestionPlanDraft
+from app.agent.question_resolution.ai.gemini_spec import (
+    GEMINI_QUESTION_RESOLUTION_SPEC,
+    GeminiQuestionResolutionSpec,
+)
+from app.agent.question_resolution.contract import (
+    QuestionResolutionResponseInvalidError,
+    ResolvedQuestionDraft,
+)
 from app.analysis.ai_provider_errors import (
     AIProviderConfigurationError,
     AIProviderOutputBlockedError,
@@ -33,17 +38,17 @@ from app.config import settings
 _BLOCKED_FINISH_REASONS = frozenset({"SAFETY", "RECITATION"})
 
 
-class GeminiQuestionPlannerResponseDefect(StrEnum):
-    """Gemini planner adapter が検知する response envelope 違反。"""
+class GeminiQuestionResolutionResponseDefect(StrEnum):
+    """Malformed Gemini response-envelope categories."""
 
-    NOT_JSON = "question_planner_response_gemini_not_json"
-    NOT_OBJECT = "question_planner_response_gemini_not_object"
+    NOT_JSON = "question_resolution_response_gemini_not_json"
+    NOT_OBJECT = "question_resolution_response_gemini_not_object"
 
 
-class GeminiQuestionPlanner:
-    """Gemini API backed question plan draft generator."""
+class GeminiQuestionResolver:
+    """Gemini-backed structured resolver for one bounded thread window."""
 
-    SPEC: Final[GeminiQuestionPlannerSpec] = GEMINI_QUESTION_PLANNER_SPEC
+    SPEC: Final[GeminiQuestionResolutionSpec] = GEMINI_QUESTION_RESOLUTION_SPEC
 
     def __init__(self) -> None:
         api_key = settings.gemini_api_key.get_secret_value()
@@ -63,34 +68,30 @@ class GeminiQuestionPlanner:
     def rate_limit_policy(self) -> AIModelRateLimitPolicy:
         return self.SPEC.rate_limit_policy
 
-    async def plan(
+    async def resolve(
         self,
-        input: AnswerQuestionInput,
         *,
-        previous_error: str | None = None,
-    ) -> QuestionPlanDraft:
-        prompt = GeminiQuestionPlannerPrompt.render(
-            question=input.question,
-            as_of=input.as_of,
-            user_intent=input.user_intent,
-            prior_coverage=input.prior_coverage,
-            user_activity_context=input.user_activity_context,
-            previous_error=previous_error,
+        question: str,
+        history: list[ThreadMessageSnapshot],
+        as_of: datetime,
+    ) -> ResolvedQuestionDraft:
+        prompt = GeminiQuestionResolutionPrompt.render(
+            question=question,
+            history=history,
+            as_of=as_of,
         )
         try:
             return await self._call_api(prompt)
         except (
             AIProviderOutputBlockedError,
-            QuestionPlannerResponseInvalidError,
+            QuestionResolutionResponseInvalidError,
             ValidationError,
         ):
             raise
         except Exception as exc:
             raise translate_gemini_error(exc) from exc
 
-    async def _call_api(self, prompt: str) -> QuestionPlanDraft:
-        """Gemini の structured JSON response を draft に詰める。"""
-
+    async def _call_api(self, prompt: str) -> ResolvedQuestionDraft:
         response = await self._client.aio.models.generate_content(
             model=self.SPEC.model,
             contents=prompt,
@@ -100,30 +101,22 @@ class GeminiQuestionPlanner:
                 response_schema=dict(self.SPEC.response_schema),
             ),
         )
-
         finish_reason_name = self._extract_finish_reason_name(response)
-        if (
-            finish_reason_name is not None
-            and finish_reason_name in _BLOCKED_FINISH_REASONS
-        ):
+        if finish_reason_name in _BLOCKED_FINISH_REASONS:
             raise AIProviderOutputBlockedError(
                 reason=output_blocked_reason(finish_reason_name)
             )
-
-        text = response.text or ""
         try:
-            payload = json.loads(text)
+            payload = json.loads(response.text or "")
         except json.JSONDecodeError as exc:
-            raise QuestionPlannerResponseInvalidError(
-                GeminiQuestionPlannerResponseDefect.NOT_JSON
+            raise QuestionResolutionResponseInvalidError(
+                GeminiQuestionResolutionResponseDefect.NOT_JSON
             ) from exc
-
         if not isinstance(payload, dict):
-            raise QuestionPlannerResponseInvalidError(
-                GeminiQuestionPlannerResponseDefect.NOT_OBJECT
+            raise QuestionResolutionResponseInvalidError(
+                GeminiQuestionResolutionResponseDefect.NOT_OBJECT
             )
-
-        return QuestionPlanDraft.model_validate(payload)
+        return ResolvedQuestionDraft.model_validate(payload)
 
     @staticmethod
     def _extract_finish_reason_name(response: object) -> str | None:

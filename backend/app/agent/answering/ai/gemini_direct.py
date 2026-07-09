@@ -56,11 +56,17 @@ class GeminiDirectAnswerGenerator:
         *,
         question: str,
         as_of: datetime,
+        user_intent: str = "",
+        user_activity_context: str = "",
+        previous_answer: str = "",
         previous_error: str | None = None,
     ) -> str:
         prompt = GeminiDirectAnswerPrompt.render(
             question=question,
             as_of=as_of,
+            user_intent=user_intent,
+            user_activity_context=user_activity_context,
+            previous_answer=previous_answer,
             previous_error=previous_error,
         )
         return await self._call_api(prompt)

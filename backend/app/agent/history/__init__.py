@@ -6,6 +6,7 @@ from app.agent.history.repository import (
     CancelRunOutcome,
     PreparedAgentRun,
     RunTransitionLostError,
+    ThreadMessageSnapshot,
     ThreadNotFoundError,
 )
 from app.agent.history.types import (
@@ -23,5 +24,6 @@ __all__ = [
     "CancelRunOutcome",
     "PreparedAgentRun",
     "RunTransitionLostError",
+    "ThreadMessageSnapshot",
     "ThreadNotFoundError",
 ]

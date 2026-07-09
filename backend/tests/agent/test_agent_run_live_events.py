@@ -19,6 +19,7 @@ from app.agent.contract import (
     ExternalSearchQueriesGeneratedEvent,
     InternalSearchCompletedEvent,
     InternalSearchStartedEvent,
+    QuestionResolvedEvent,
 )
 from app.agent.history.live_events import (
     AGENT_RUN_LIVE_EVENT_READ_LIMIT,
@@ -151,6 +152,9 @@ async def test_all_contract_event_types_round_trip_through_api_schema() -> None:
                 task_index=0,
                 evidence_count=2,
             ),
+            QuestionResolvedEvent(
+                standalone_question="NVIDIA の発表が株価へ与える影響は？"
+            ),
         ]
 
         for event in events:
@@ -164,12 +168,16 @@ async def test_all_contract_event_types_round_trip_through_api_schema() -> None:
             "external_search.queries_generated",
             "external_search.candidates_fetched",
             "external_search.evidence_selected",
+            "question.resolved",
         ]
         assert recent_events[0].query_count == 2
         assert recent_events[1].hit_count == 3
         assert recent_events[2].queries == ["NVIDIA AI"]
         assert recent_events[3].candidate_count == 8
         assert recent_events[4].evidence_count == 2
+        assert recent_events[5].standalone_question == (
+            "NVIDIA の発表が株価へ与える影響は？"
+        )
     finally:
         await redis.flushdb()
         await redis.aclose()

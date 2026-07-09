@@ -61,6 +61,16 @@ function latestKnownEventText(events: readonly unknown[]): string | null {
   return null;
 }
 
+function latestResolvedQuestion(events: readonly unknown[]): string | null {
+  for (let index = events.length - 1; index >= 0; index -= 1) {
+    const event = events[index];
+    if (!isRecord(event) || event.type !== "question.resolved") continue;
+    const question = event.standaloneQuestion;
+    if (typeof question === "string" && question.length > 0) return question;
+  }
+  return null;
+}
+
 function liveEventText(event: unknown): string | null {
   if (!isRecord(event) || typeof event.type !== "string") return null;
 
@@ -201,10 +211,16 @@ export function ActiveRunStatus({
 
   const text = activeRunText(signal);
   if (text === null) return null;
-  const eventText =
-    signal.status === "running" && signal.progressStage === "retrieving"
-      ? latestKnownEventText(signal.recentEvents)
-      : null;
+  let eventText: string | null = null;
+  if (signal.status === "running" && signal.progressStage === "retrieving") {
+    eventText = latestKnownEventText(signal.recentEvents);
+  } else if (
+    signal.status === "running" &&
+    (signal.progressStage === null || signal.progressStage === "planning")
+  ) {
+    const question = latestResolvedQuestion(signal.recentEvents);
+    eventText = question === null ? null : `“${question}”について調査中`;
+  }
 
   return (
     <div

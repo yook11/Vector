@@ -36,6 +36,7 @@ __all__ = [
     "InternalArticleSource",
     "NonBlankText",
     "QuestionAnsweringAgent",
+    "QuestionResolvedEvent",
     "RetrievalMode",
     "UnmetRequirement",
 ]
@@ -56,6 +57,10 @@ class AnswerQuestionInput(BaseModel):
 
     question: str = Field(min_length=1)
     as_of: datetime
+    user_intent: str = ""
+    prior_coverage: str = ""
+    user_activity_context: str = ""
+    previous_answer: str = ""
 
 
 class AnswerRetrievalSummary(BaseModel):
@@ -143,12 +148,20 @@ class ExternalSearchEvidenceSelectedEvent(BaseModel):
     evidence_count: int = Field(ge=0)
 
 
+class QuestionResolvedEvent(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    type: Literal["question.resolved"] = "question.resolved"
+    standalone_question: str = Field(min_length=1, max_length=500)
+
+
 AnswerProgressEvent = Annotated[
     InternalSearchStartedEvent
     | InternalSearchCompletedEvent
     | ExternalSearchQueriesGeneratedEvent
     | ExternalSearchCandidatesFetchedEvent
-    | ExternalSearchEvidenceSelectedEvent,
+    | ExternalSearchEvidenceSelectedEvent
+    | QuestionResolvedEvent,
     Field(discriminator="type"),
 ]
 

@@ -23,6 +23,7 @@ EVIDENCE_ANSWER_PROMPT = """# Role
   一般知識に基づく参考回答を述べ、断定を避ける。
 - evidence にない事実を、引用付きの確認済み事実として扱わない。
 - answer は必ずユーザーに表示されるため、insufficient でも有用な範囲で簡潔に答える。
+- 下記の会話文脈は回答の形だけを決める。事実の根拠は evidence だけに限定する。
 
 # Citation Rules
 - answer 本文では、根拠に基づく文または節の直後に citation marker を付ける。
@@ -50,6 +51,13 @@ target_time_window: {target_time_window}
 # User Question
 <untrusted_input>
 {question}
+</untrusted_input>
+
+# Conversation Context
+<untrusted_input>
+user_intent: {user_intent}
+prior_coverage: {prior_coverage}
+user_activity_context: {user_activity_context}
 </untrusted_input>
 
 # Evidence
@@ -86,6 +94,9 @@ class GeminiEvidenceAnswerPrompt:
         evidence: list[AnswerEvidenceItem],
         as_of: datetime,
         target_time_window: str | None,
+        user_intent: str = "",
+        prior_coverage: str = "",
+        user_activity_context: str = "",
         previous_error: str | None = None,
     ) -> str:
         prompt = cls.TEMPLATE.format(
@@ -93,6 +104,9 @@ class GeminiEvidenceAnswerPrompt:
             evidence=_render_evidence(evidence),
             as_of=as_of.isoformat(),
             target_time_window=target_time_window or "",
+            user_intent=sanitize_for_untrusted_block(user_intent),
+            prior_coverage=sanitize_for_untrusted_block(prior_coverage),
+            user_activity_context=sanitize_for_untrusted_block(user_activity_context),
         )
         if previous_error is None:
             return prompt

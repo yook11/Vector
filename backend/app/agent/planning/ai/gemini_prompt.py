@@ -23,11 +23,17 @@ class GeminiQuestionPlannerPrompt:
         *,
         question: str,
         as_of: datetime,
+        user_intent: str = "",
+        prior_coverage: str = "",
+        user_activity_context: str = "",
         previous_error: str | None = None,
     ) -> str:
         prompt = cls.TEMPLATE.format(
             question=sanitize_for_untrusted_block(question),
             as_of=as_of.isoformat(),
+            user_intent=sanitize_for_untrusted_block(user_intent),
+            prior_coverage=sanitize_for_untrusted_block(prior_coverage),
+            user_activity_context=sanitize_for_untrusted_block(user_activity_context),
         )
         if previous_error is None:
             return prompt

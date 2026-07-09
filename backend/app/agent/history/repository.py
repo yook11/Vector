@@ -6,6 +6,7 @@ import uuid as uuid_mod
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from enum import StrEnum
+from typing import Literal
 
 import structlog
 from sqlalchemy import delete, exists, func, select, update
@@ -63,6 +64,15 @@ class PreparedAgentRun:
     run_id: uuid_mod.UUID
     thread_id: uuid_mod.UUID
     question: str
+    user_message_seq: int
+
+
+@dataclass(frozen=True, slots=True)
+class ThreadMessageSnapshot:
+    """Resolution に渡す、thread 内メッセージの最小投影。"""
+
+    role: Literal["user", "assistant"]
+    content: str
 
 
 _ACTIVE_STATUSES = (AgentRunStatus.QUEUED.value, AgentRunStatus.RUNNING.value)
@@ -184,14 +194,14 @@ class AgentHistoryRepository:
         now = now or datetime.now(UTC)
         row = (
             await self._session.execute(
-                select(AgentRun, AgentMessage.content)
+                select(AgentRun, AgentMessage.content, AgentMessage.seq)
                 .join(AgentMessage, AgentRun.user_message_id == AgentMessage.id)
                 .where(AgentRun.id == run_id)
             )
         ).one_or_none()
         if row is None:
             return None
-        run, question = row
+        run, question, user_message_seq = row
         if run.status in _TERMINAL_STATUSES:
             return None
         result = await self._session.execute(
@@ -209,7 +219,37 @@ class AgentHistoryRepository:
             run_id=run.id,
             thread_id=run.thread_id,
             question=question,
+            user_message_seq=user_message_seq,
         )
+
+    async def read_recent_messages_before(
+        self,
+        *,
+        thread_id: uuid_mod.UUID,
+        before_seq: int,
+        limit: int,
+    ) -> list[ThreadMessageSnapshot]:
+        """Return up to ``limit`` prior messages in chronological order."""
+
+        if limit <= 0:
+            return []
+        rows = (
+            await self._session.execute(
+                select(AgentMessage.role, AgentMessage.content)
+                .where(
+                    AgentMessage.thread_id == thread_id,
+                    AgentMessage.seq < before_seq,
+                )
+                .order_by(AgentMessage.seq.desc())
+                .limit(limit)
+            )
+        ).all()
+        snapshots: list[ThreadMessageSnapshot] = []
+        for role, content in reversed(rows):
+            if role not in {"user", "assistant"}:
+                raise ValueError(f"unexpected agent message role: {role!r}")
+            snapshots.append(ThreadMessageSnapshot(role=role, content=content))
+        return snapshots
 
     async def complete_run(
         self,

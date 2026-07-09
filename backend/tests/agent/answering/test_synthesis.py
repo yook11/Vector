@@ -77,6 +77,9 @@ class FakeGenerator:
         evidence: list[AnswerEvidenceItem],
         as_of: datetime,
         target_time_window: str | None,
+        user_intent: str = "",
+        prior_coverage: str = "",
+        user_activity_context: str = "",
         previous_error: str | None = None,
     ) -> RawAnswerDraft:
         self.calls.append(
@@ -85,6 +88,9 @@ class FakeGenerator:
                 "evidence": evidence,
                 "as_of": as_of,
                 "target_time_window": target_time_window,
+                "user_intent": user_intent,
+                "prior_coverage": prior_coverage,
+                "user_activity_context": user_activity_context,
                 "previous_error": previous_error,
             }
         )

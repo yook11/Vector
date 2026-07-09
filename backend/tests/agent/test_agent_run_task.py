@@ -30,6 +30,7 @@ from app.analysis.ai_provider_errors import (
     AIProviderConfigurationError,
     AIProviderError,
 )
+from app.agent.question_resolution.contract import ResolvedQuestionDraft
 from app.models.agent_message import AgentMessage, AgentMessageSource
 from app.models.agent_run import AgentRun
 from app.models.agent_thread import AgentThread
@@ -79,6 +80,18 @@ class FakeLiveEventPublisher:
         self.events.append(event)
 
 
+class FakeQuestionResolver:
+    def __init__(self, outcome: ResolvedQuestionDraft | Exception) -> None:
+        self.outcome = outcome
+        self.calls: list[dict[str, object]] = []
+
+    async def resolve(self, **kwargs: object) -> ResolvedQuestionDraft:
+        self.calls.append(kwargs)
+        if isinstance(self.outcome, Exception):
+            raise self.outcome
+        return self.outcome
+
+
 def _ctx(session_factory: async_sessionmaker[AsyncSession]) -> SimpleNamespace:
     return SimpleNamespace(state=SimpleNamespace(session_factory=session_factory))
 
@@ -120,6 +133,8 @@ async def _create_thread_message_run(
     session: AsyncSession,
     *,
     status: str = "queued",
+    question: str = "worker question",
+    history: list[tuple[str, str]] | None = None,
     created_at: datetime | None = None,
     started_at: datetime | None = None,
     error_code: str | None = None,
@@ -131,11 +146,23 @@ async def _create_thread_message_run(
     )
     session.add(thread)
     await session.flush()
+    history = history or []
+    for seq, (role, content) in enumerate(history, start=1):
+        session.add(
+            AgentMessage(
+                thread_id=thread.id,
+                seq=seq,
+                role=role,
+                content=content,
+                missing_aspects=[],
+            )
+        )
+    await session.flush()
     message = AgentMessage(
         thread_id=thread.id,
-        seq=1,
+        seq=len(history) + 1,
         role="user",
-        content="worker question",
+        content=question,
         missing_aspects=[],
     )
     session.add(message)
@@ -270,6 +297,152 @@ async def test_run_agent_answer_resets_live_events_and_injects_reporter(
     assert publisher.run_id == run.id
     assert publisher.reset_calls == 1
     assert captured_kwargs["events"] is publisher
+
+
+@pytest.mark.asyncio
+async def test_run_agent_answer_resolves_history_and_publishes_non_echo_question(
+    session_factory: async_sessionmaker[AsyncSession],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async with session_factory() as session:
+        _thread, _message, run = await _create_thread_message_run(
+            session,
+            question="それの株価への影響は？",
+            history=[
+                ("user", "NVIDIA の発表を説明して"),
+                ("assistant", "前回の回答 [[1]]"),
+            ],
+        )
+    fake_agent = FakeAgent(_direct_result())
+    resolver = FakeQuestionResolver(
+        ResolvedQuestionDraft(
+            standalone_question="NVIDIA の発表が株価へ与える影響は？",
+            user_intent="投資判断向けに詳しく説明して",
+            prior_coverage="発表内容は既に説明済み",
+            user_activity_context="半導体投資を調査中",
+        )
+    )
+    FakeLiveEventPublisher.instances = []
+    monkeypatch.setattr(agent_run_tasks, "make_safe_async_client", _fake_http_client)
+    monkeypatch.setattr(
+        agent_run_tasks,
+        "build_question_answering_agent",
+        lambda **_kwargs: fake_agent,
+    )
+    monkeypatch.setattr(
+        agent_run_tasks,
+        "build_question_resolver",
+        lambda: resolver,
+    )
+    monkeypatch.setattr(
+        agent_run_tasks,
+        "AgentRunLiveEventPublisher",
+        FakeLiveEventPublisher,
+    )
+
+    await agent_run_tasks.run_agent_answer(
+        trigger=AgentRunTrigger(run_id=run.id),
+        ctx=_ctx(session_factory),
+    )
+
+    assert fake_agent.calls == [
+        AnswerQuestionInput(
+            question="NVIDIA の発表が株価へ与える影響は？",
+            as_of=fake_agent.calls[0].as_of,
+            user_intent="投資判断向けに詳しく説明して",
+            prior_coverage="発表内容は既に説明済み",
+            user_activity_context="半導体投資を調査中",
+            previous_answer="前回の回答 [[1]]",
+        )
+    ]
+    assert [message.content for message in resolver.calls[0]["history"]] == [
+        "NVIDIA の発表を説明して",
+        "前回の回答 [[1]]",
+    ]
+    publisher = FakeLiveEventPublisher.instances[0]
+    assert len(publisher.events) == 1
+    assert getattr(publisher.events[0], "type") == "question.resolved"
+    assert getattr(publisher.events[0], "standalone_question") == (
+        "NVIDIA の発表が株価へ与える影響は？"
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "outcome",
+    [
+        ResolvedQuestionDraft(standalone_question="それの株価への影響は？"),
+        AIProviderError(),
+    ],
+)
+async def test_run_agent_answer_does_not_publish_echo_or_fallback_resolution(
+    outcome: ResolvedQuestionDraft | Exception,
+    session_factory: async_sessionmaker[AsyncSession],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    question = "それの株価への影響は？"
+    async with session_factory() as session:
+        _thread, _message, run = await _create_thread_message_run(
+            session,
+            question=question,
+            history=[("assistant", "前回の回答")],
+        )
+    fake_agent = FakeAgent(_direct_result())
+    FakeLiveEventPublisher.instances = []
+    monkeypatch.setattr(agent_run_tasks, "make_safe_async_client", _fake_http_client)
+    monkeypatch.setattr(
+        agent_run_tasks,
+        "build_question_answering_agent",
+        lambda **_kwargs: fake_agent,
+    )
+    monkeypatch.setattr(
+        agent_run_tasks,
+        "build_question_resolver",
+        lambda: FakeQuestionResolver(outcome),
+    )
+    monkeypatch.setattr(
+        agent_run_tasks,
+        "AgentRunLiveEventPublisher",
+        FakeLiveEventPublisher,
+    )
+
+    await agent_run_tasks.run_agent_answer(
+        trigger=AgentRunTrigger(run_id=run.id),
+        ctx=_ctx(session_factory),
+    )
+
+    assert fake_agent.calls[0].question == question
+    assert fake_agent.calls[0].previous_answer == "前回の回答"
+    assert FakeLiveEventPublisher.instances[0].events == []
+
+
+@pytest.mark.asyncio
+async def test_read_recent_messages_before_returns_bounded_oldest_first_thread_window(
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    async with session_factory() as session:
+        thread, message, _run = await _create_thread_message_run(
+            session,
+            history=[
+                ("user", "old user"),
+                ("assistant", "old assistant"),
+                ("user", "latest prior user"),
+            ],
+        )
+
+    async with session_factory() as session:
+        messages = await AgentHistoryRepository(
+            session
+        ).read_recent_messages_before(
+            thread_id=thread.id,
+            before_seq=message.seq,
+            limit=2,
+        )
+
+    assert [(item.role, item.content) for item in messages] == [
+        ("assistant", "old assistant"),
+        ("user", "latest prior user"),
+    ]
 
 
 @pytest.mark.asyncio
@@ -539,6 +712,7 @@ async def test_acquire_for_execution_reexecutes_running_and_skips_terminal_runs(
     assert prepared is not None
     assert prepared.run_id == running.id
     assert prepared.question == "worker question"
+    assert prepared.user_message_seq == 1
     assert skipped is None
     async with session_factory() as session:
         reacquired = await session.get(AgentRun, running.id)

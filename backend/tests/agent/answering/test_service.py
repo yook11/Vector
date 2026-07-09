@@ -43,8 +43,20 @@ def _as_of() -> datetime:
 
 def _input(
     question: str = "NVIDIA の直近発表は投資判断に重要？",
+    *,
+    user_intent: str = "",
+    prior_coverage: str = "",
+    user_activity_context: str = "",
+    previous_answer: str = "",
 ) -> AnswerQuestionInput:
-    return AnswerQuestionInput(question=question, as_of=_as_of())
+    return AnswerQuestionInput(
+        question=question,
+        as_of=_as_of(),
+        user_intent=user_intent,
+        prior_coverage=prior_coverage,
+        user_activity_context=user_activity_context,
+        previous_answer=previous_answer,
+    )
 
 
 def _internal_plan() -> InternalRetrievalPlan:
@@ -233,6 +245,9 @@ class FakeSynthesizer:
         evidence: list[object],
         as_of: datetime,
         target_time_window: str | None,
+        user_intent: str = "",
+        prior_coverage: str = "",
+        user_activity_context: str = "",
     ) -> AnswerDraft:
         self.calls.append(
             {
@@ -240,6 +255,9 @@ class FakeSynthesizer:
                 "evidence": evidence,
                 "as_of": as_of,
                 "target_time_window": target_time_window,
+                "user_intent": user_intent,
+                "prior_coverage": prior_coverage,
+                "user_activity_context": user_activity_context,
             }
         )
         if isinstance(self._draft, Exception):
@@ -250,15 +268,26 @@ class FakeSynthesizer:
 class FakeDirectAnswerer:
     def __init__(self, draft: DirectAnswerDraft | Exception) -> None:
         self._draft = draft
-        self.calls: list[tuple[str, datetime]] = []
+        self.calls: list[dict[str, object]] = []
 
     async def answer(
         self,
         *,
         question: str,
         as_of: datetime,
+        user_intent: str = "",
+        user_activity_context: str = "",
+        previous_answer: str = "",
     ) -> DirectAnswerDraft:
-        self.calls.append((question, as_of))
+        self.calls.append(
+            {
+                "question": question,
+                "as_of": as_of,
+                "user_intent": user_intent,
+                "user_activity_context": user_activity_context,
+                "previous_answer": previous_answer,
+            }
+        )
         if isinstance(self._draft, Exception):
             raise self._draft
         return self._draft
@@ -309,7 +338,13 @@ def _service(
 
 @pytest.mark.asyncio
 async def test_answer_direct_plan_calls_direct_answerer_only() -> None:
-    input_ = _input("こんにちは")
+    input_ = _input(
+        "前回の結論だけ",
+        user_intent="結論だけを短く",
+        prior_coverage="これは direct に渡さない",
+        user_activity_context="投資判断を調査中",
+        previous_answer="根拠付き前回答 [[1]]",
+    )
     direct_draft = DirectAnswerDraft(answer="こんにちは。何を確認しますか？")
     service, _, evidence_collector, synthesizer, direct_answerer = _service(
         plan=NoRetrievalPlan(reason="direct answer"),
@@ -325,7 +360,15 @@ async def test_answer_direct_plan_calls_direct_answerer_only() -> None:
     assert result.retrieval.planned_mode == "none"
     assert result.retrieval.unmet_requirements == []
     assert not hasattr(result, "execution")
-    assert direct_answerer.calls == [(input_.question, input_.as_of)]
+    assert direct_answerer.calls == [
+        {
+            "question": input_.question,
+            "as_of": input_.as_of,
+            "user_intent": input_.user_intent,
+            "user_activity_context": input_.user_activity_context,
+            "previous_answer": input_.previous_answer,
+        }
+    ]
     assert evidence_collector.calls == []
     assert synthesizer.calls == []
 
@@ -675,7 +718,11 @@ def test_direct_answer_draft_rejects_blank_answer(answer: str) -> None:
 
 @pytest.mark.asyncio
 async def test_answer_passes_pipeline_inputs_and_variant_time_window() -> None:
-    input_ = _input()
+    input_ = _input(
+        user_intent="差分を詳しく",
+        prior_coverage="発表内容は既出",
+        user_activity_context="投資判断を調査中",
+    )
     service, planner, evidence_collector, synthesizer, _ = _service(
         plan=_mixed_plan(),
         outcome=_mixed_outcome(),
@@ -693,6 +740,9 @@ async def test_answer_passes_pipeline_inputs_and_variant_time_window() -> None:
     assert synthesizer.calls[0]["question"] == input_.question
     assert synthesizer.calls[0]["as_of"] == input_.as_of
     assert synthesizer.calls[0]["target_time_window"] == "直近24時間"
+    assert synthesizer.calls[0]["user_intent"] == input_.user_intent
+    assert synthesizer.calls[0]["prior_coverage"] == input_.prior_coverage
+    assert synthesizer.calls[0]["user_activity_context"] == input_.user_activity_context
 
 
 @pytest.mark.asyncio

@@ -17,6 +17,13 @@ as_of: {as_of}
 question: {question}
 </untrusted_input>
 
+# Conversation Context
+<untrusted_input>
+user_intent: {user_intent}
+prior_coverage: {prior_coverage}
+user_activity_context: {user_activity_context}
+</untrusted_input>
+
 # 判断すること
 
 retrieval_mode は次の 4 つから 1 つ選ぶ。

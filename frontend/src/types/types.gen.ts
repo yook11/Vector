@@ -821,6 +821,24 @@ export type ResearchRunInternalSearchStartedEvent = {
 };
 
 /**
+ * ResearchRunQuestionResolvedEvent
+ */
+export type ResearchRunQuestionResolvedEvent = {
+    /**
+     * Type
+     */
+    type: 'question.resolved';
+    /**
+     * Ts
+     */
+    ts: string;
+    /**
+     * Standalonequestion
+     */
+    standaloneQuestion: string;
+};
+
+/**
  * ResearchRunResponse
  */
 export type ResearchRunResponse = {
@@ -847,7 +865,7 @@ export type ResearchRunResponse = {
     /**
      * Recentevents
      */
-    recentEvents?: Array<ResearchRunInternalSearchStartedEvent | ResearchRunInternalSearchCompletedEvent | ResearchRunExternalSearchQueriesGeneratedEvent | ResearchRunExternalSearchCandidatesFetchedEvent | ResearchRunExternalSearchEvidenceSelectedEvent>;
+    recentEvents?: Array<ResearchRunInternalSearchStartedEvent | ResearchRunInternalSearchCompletedEvent | ResearchRunExternalSearchQueriesGeneratedEvent | ResearchRunExternalSearchCandidatesFetchedEvent | ResearchRunExternalSearchEvidenceSelectedEvent | ResearchRunQuestionResolvedEvent>;
 };
 
 /**
