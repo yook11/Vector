@@ -2,7 +2,7 @@
 
 import type { Client, ClientMeta, Options as Options2, RequestResult, TDataShape } from './client';
 import { client } from './client.gen';
-import type { ActivateSourceData, ActivateSourceErrors, ActivateSourceResponses, AddToWatchlistData, AddToWatchlistErrors, AddToWatchlistResponses, CreateNewsSourceData, CreateNewsSourceErrors, CreateNewsSourceResponses, CreateResearchResponseData, CreateResearchResponseErrors, CreateResearchResponseResponses, DeactivateSourceData, DeactivateSourceErrors, DeactivateSourceResponses, DeleteNewsSourceData, DeleteNewsSourceErrors, DeleteNewsSourceResponses, FetchNewsData, FetchNewsErrors, FetchNewsResponses, GetArticleData, GetArticleErrors, GetArticleResponses, GetLatestBriefingData, GetLatestBriefingErrors, GetLatestBriefingResponses, GetPipelineHealthData, GetPipelineHealthErrors, GetPipelineHealthResponses, GetResearchRunData, GetResearchRunErrors, GetResearchRunResponses, GetSimilarArticlesData, GetSimilarArticlesErrors, GetSimilarArticlesResponses, GetSourceHealthData, GetSourceHealthErrors, GetSourceHealthResponses, GetTrendsData, GetTrendsErrors, GetTrendsResponses, HealthCheckData, HealthCheckErrors, HealthCheckResponses, ListArticlesData, ListArticlesErrors, ListArticlesInWatchlistData, ListArticlesInWatchlistErrors, ListArticlesInWatchlistResponses, ListArticlesResponses, ListBriefingsData, ListBriefingsErrors, ListBriefingsResponses, ListCategoriesData, ListCategoriesErrors, ListCategoriesResponses, ListNewsSourcesData, ListNewsSourcesErrors, ListNewsSourcesResponses, ListWatchlistIdsData, ListWatchlistIdsErrors, ListWatchlistIdsResponses, RemoveFromWatchlistData, RemoveFromWatchlistErrors, RemoveFromWatchlistResponses } from './types.gen';
+import type { ActivateSourceData, ActivateSourceErrors, ActivateSourceResponses, AddToWatchlistData, AddToWatchlistErrors, AddToWatchlistResponses, CancelResearchRunData, CancelResearchRunErrors, CancelResearchRunResponses, CreateNewsSourceData, CreateNewsSourceErrors, CreateNewsSourceResponses, CreateResearchResponseData, CreateResearchResponseErrors, CreateResearchResponseResponses, DeactivateSourceData, DeactivateSourceErrors, DeactivateSourceResponses, DeleteNewsSourceData, DeleteNewsSourceErrors, DeleteNewsSourceResponses, DeleteResearchThreadData, DeleteResearchThreadErrors, DeleteResearchThreadResponses, FetchNewsData, FetchNewsErrors, FetchNewsResponses, GetArticleData, GetArticleErrors, GetArticleResponses, GetLatestBriefingData, GetLatestBriefingErrors, GetLatestBriefingResponses, GetPipelineHealthData, GetPipelineHealthErrors, GetPipelineHealthResponses, GetResearchRunData, GetResearchRunErrors, GetResearchRunResponses, GetResearchThreadData, GetResearchThreadErrors, GetResearchThreadResponses, GetSimilarArticlesData, GetSimilarArticlesErrors, GetSimilarArticlesResponses, GetSourceHealthData, GetSourceHealthErrors, GetSourceHealthResponses, GetTrendsData, GetTrendsErrors, GetTrendsResponses, HealthCheckData, HealthCheckErrors, HealthCheckResponses, ListArticlesData, ListArticlesErrors, ListArticlesInWatchlistData, ListArticlesInWatchlistErrors, ListArticlesInWatchlistResponses, ListArticlesResponses, ListBriefingsData, ListBriefingsErrors, ListBriefingsResponses, ListCategoriesData, ListCategoriesErrors, ListCategoriesResponses, ListNewsSourcesData, ListNewsSourcesErrors, ListNewsSourcesResponses, ListResearchThreadsData, ListResearchThreadsErrors, ListResearchThreadsResponses, ListWatchlistIdsData, ListWatchlistIdsErrors, ListWatchlistIdsResponses, RemoveFromWatchlistData, RemoveFromWatchlistErrors, RemoveFromWatchlistResponses } from './types.gen';
 
 export type Options<TData extends TDataShape = TDataShape, ThrowOnError extends boolean = boolean, TResponse = unknown> = Options2<TData, ThrowOnError, TResponse> & {
     /**
@@ -119,6 +119,26 @@ export const createResearchResponse = <ThrowOnError extends boolean = false>(opt
         ...options.headers
     }
 });
+
+/**
+ * List Research Threads
+ */
+export const listResearchThreads = <ThrowOnError extends boolean = false>(options?: Options<ListResearchThreadsData, ThrowOnError>): RequestResult<ListResearchThreadsResponses, ListResearchThreadsErrors, ThrowOnError> => (options?.client ?? client).get<ListResearchThreadsResponses, ListResearchThreadsErrors, ThrowOnError>({ url: '/api/v1/research/threads', ...options });
+
+/**
+ * Delete Research Thread
+ */
+export const deleteResearchThread = <ThrowOnError extends boolean = false>(options: Options<DeleteResearchThreadData, ThrowOnError>): RequestResult<DeleteResearchThreadResponses, DeleteResearchThreadErrors, ThrowOnError> => (options.client ?? client).delete<DeleteResearchThreadResponses, DeleteResearchThreadErrors, ThrowOnError>({ url: '/api/v1/research/threads/{thread_id}', ...options });
+
+/**
+ * Get Research Thread
+ */
+export const getResearchThread = <ThrowOnError extends boolean = false>(options: Options<GetResearchThreadData, ThrowOnError>): RequestResult<GetResearchThreadResponses, GetResearchThreadErrors, ThrowOnError> => (options.client ?? client).get<GetResearchThreadResponses, GetResearchThreadErrors, ThrowOnError>({ url: '/api/v1/research/threads/{thread_id}', ...options });
+
+/**
+ * Cancel Research Run
+ */
+export const cancelResearchRun = <ThrowOnError extends boolean = false>(options: Options<CancelResearchRunData, ThrowOnError>): RequestResult<CancelResearchRunResponses, CancelResearchRunErrors, ThrowOnError> => (options.client ?? client).post<CancelResearchRunResponses, CancelResearchRunErrors, ThrowOnError>({ url: '/api/v1/research/runs/{run_id}/cancel', ...options });
 
 /**
  * Get Research Run

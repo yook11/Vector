@@ -3,16 +3,23 @@
 from __future__ import annotations
 
 from typing import Literal
+from uuid import UUID
 
 from app.agent.history.types import AgentRunErrorCode, AgentRunStatus
 from app.models.agent_message import AgentMessage, AgentMessageSource
 from app.models.agent_run import AgentRun
+from app.models.agent_thread import AgentThread
 from app.schemas.research import (
+    ResearchAssistantMessage,
     ResearchExternalUrlSource,
     ResearchInternalArticleSource,
-    ResearchResponse,
+    ResearchMessageRun,
     ResearchRunResponse,
     ResearchSource,
+    ResearchThreadDetail,
+    ResearchThreadListItem,
+    ResearchThreadMessage,
+    ResearchUserMessage,
 )
 from app.shared.security.safe_url import SafeUrl
 
@@ -22,32 +29,94 @@ ResearchRunErrorCodeValue = Literal[
     "internal_error",
     "enqueue_failed",
     "stale",
+    "cancelled",
 ]
 
 
-def build_research_run_response(
-    *,
-    run: AgentRun,
-    result: ResearchResponse | None,
-) -> ResearchRunResponse:
+def build_research_run_response(*, run: AgentRun) -> ResearchRunResponse:
     return ResearchRunResponse(
         run_id=run.id,
         thread_id=run.thread_id,
         status=_run_status_value(run.status),
-        result=result,
         error_code=_run_error_code_value(run.error_code),
     )
 
 
-def build_research_response_from_rows(
+def build_research_thread_list_item(
+    *,
+    thread: AgentThread,
+    has_active_run: bool,
+) -> ResearchThreadListItem:
+    return ResearchThreadListItem(
+        thread_id=thread.id,
+        title=thread.title,
+        updated_at=thread.updated_at,
+        has_active_run=has_active_run,
+    )
+
+
+def build_research_thread_detail(
+    *,
+    thread: AgentThread,
+    messages: list[AgentMessage],
+    runs_by_user_message_id: dict[UUID, AgentRun],
+    sources_by_message_id: dict[UUID, list[AgentMessageSource]],
+) -> ResearchThreadDetail:
+    return ResearchThreadDetail(
+        thread_id=thread.id,
+        title=thread.title,
+        messages=[
+            _message_response(
+                message,
+                runs_by_user_message_id=runs_by_user_message_id,
+                sources_by_message_id=sources_by_message_id,
+            )
+            for message in messages
+        ],
+    )
+
+
+def build_research_assistant_message(
     *,
     message: AgentMessage,
     sources: list[AgentMessageSource],
-) -> ResearchResponse:
-    return ResearchResponse(
-        answer=message.content,
+) -> ResearchAssistantMessage:
+    return ResearchAssistantMessage(
+        role="assistant",
+        seq=message.seq,
+        content=message.content,
+        created_at=message.created_at,
         sources=[_source_response(source) for source in sources],
         missing_aspects=list(message.missing_aspects),
+    )
+
+
+def _message_response(
+    message: AgentMessage,
+    *,
+    runs_by_user_message_id: dict[UUID, AgentRun],
+    sources_by_message_id: dict[UUID, list[AgentMessageSource]],
+) -> ResearchThreadMessage:
+    if message.role == "user":
+        run = runs_by_user_message_id.get(message.id)
+        if run is None:
+            raise ValueError("user message is missing its agent run")
+        return ResearchUserMessage(
+            role="user",
+            seq=message.seq,
+            content=message.content,
+            created_at=message.created_at,
+            run=ResearchMessageRun(
+                run_id=run.id,
+                status=_run_status_value(run.status),
+                error_code=_run_error_code_value(run.error_code),
+            ),
+        )
+    if message.role != "assistant":
+        raise ValueError(f"unknown agent message role: {message.role!r}")
+    return build_research_assistant_message(
+        message=message,
+        sources=sources_by_message_id.get(message.id, []),
     )
 
 
@@ -99,3 +168,5 @@ def _run_error_code_value(value: str | None) -> ResearchRunErrorCodeValue | None
             return "enqueue_failed"
         case AgentRunErrorCode.STALE:
             return "stale"
+        case AgentRunErrorCode.CANCELLED:
+            return "cancelled"

@@ -478,6 +478,32 @@ export type PaginatedArticleResponse = {
 };
 
 /**
+ * PaginatedResearchThreadResponse
+ */
+export type PaginatedResearchThreadResponse = {
+    /**
+     * Items
+     */
+    items: Array<ResearchThreadListItem>;
+    /**
+     * Total
+     */
+    total: number;
+    /**
+     * Page
+     */
+    page: number;
+    /**
+     * Perpage
+     */
+    perPage: number;
+    /**
+     * Totalpages
+     */
+    totalPages: number;
+};
+
+/**
  * PipelineHealthResponse
  *
  * GET /api/v1/admin/pipeline/health のレスポンス。
@@ -568,6 +594,38 @@ export type PipelineStageHealth = {
 };
 
 /**
+ * ResearchAssistantMessage
+ */
+export type ResearchAssistantMessage = {
+    /**
+     * Role
+     */
+    role: 'assistant';
+    /**
+     * Seq
+     */
+    seq: number;
+    /**
+     * Content
+     *
+     * Generated answer text. Evidence-grounded answers may include inline citation markers like [[1]], where the number matches sources[].sourceRef.
+     */
+    content: string;
+    /**
+     * Createdat
+     */
+    createdAt: string;
+    /**
+     * Sources
+     */
+    sources: Array<ResearchInternalArticleSource | ResearchExternalUrlSource>;
+    /**
+     * Missingaspects
+     */
+    missingAspects: Array<string>;
+};
+
+/**
  * ResearchExternalUrlSource
  */
 export type ResearchExternalUrlSource = {
@@ -625,6 +683,24 @@ export type ResearchInternalArticleSource = {
 };
 
 /**
+ * ResearchMessageRun
+ */
+export type ResearchMessageRun = {
+    /**
+     * Runid
+     */
+    runId: string;
+    /**
+     * Status
+     */
+    status: 'queued' | 'running' | 'completed' | 'failed';
+    /**
+     * Errorcode
+     */
+    errorCode: 'generation_unavailable' | 'internal_error' | 'enqueue_failed' | 'stale' | 'cancelled' | null;
+};
+
+/**
  * ResearchQuestionRequest
  */
 export type ResearchQuestionRequest = {
@@ -636,26 +712,6 @@ export type ResearchQuestionRequest = {
      * Threadid
      */
     threadId?: string | null;
-};
-
-/**
- * ResearchResponse
- */
-export type ResearchResponse = {
-    /**
-     * Answer
-     *
-     * Generated answer text. Evidence-grounded answers may include inline citation markers like [[1]], where the number matches sources[].sourceRef.
-     */
-    answer: string;
-    /**
-     * Sources
-     */
-    sources: Array<ResearchInternalArticleSource | ResearchExternalUrlSource>;
-    /**
-     * Missingaspects
-     */
-    missingAspects: Array<string>;
 };
 
 /**
@@ -674,11 +730,10 @@ export type ResearchRunResponse = {
      * Status
      */
     status: 'queued' | 'running' | 'completed' | 'failed';
-    result: ResearchResponse | null;
     /**
      * Errorcode
      */
-    errorCode: 'generation_unavailable' | 'internal_error' | 'enqueue_failed' | 'stale' | null;
+    errorCode: 'generation_unavailable' | 'internal_error' | 'enqueue_failed' | 'stale' | 'cancelled' | null;
 };
 
 /**
@@ -693,6 +748,69 @@ export type ResearchRunStartResponse = {
      * Runid
      */
     runId: string;
+};
+
+/**
+ * ResearchThreadDetail
+ */
+export type ResearchThreadDetail = {
+    /**
+     * Threadid
+     */
+    threadId: string;
+    /**
+     * Title
+     */
+    title: string;
+    /**
+     * Messages
+     */
+    messages: Array<ResearchUserMessage | ResearchAssistantMessage>;
+};
+
+/**
+ * ResearchThreadListItem
+ */
+export type ResearchThreadListItem = {
+    /**
+     * Threadid
+     */
+    threadId: string;
+    /**
+     * Title
+     */
+    title: string;
+    /**
+     * Updatedat
+     */
+    updatedAt: string;
+    /**
+     * Hasactiverun
+     */
+    hasActiveRun: boolean;
+};
+
+/**
+ * ResearchUserMessage
+ */
+export type ResearchUserMessage = {
+    /**
+     * Role
+     */
+    role: 'user';
+    /**
+     * Seq
+     */
+    seq: number;
+    /**
+     * Content
+     */
+    content: string;
+    /**
+     * Createdat
+     */
+    createdAt: string;
+    run: ResearchMessageRun;
 };
 
 /**
@@ -1537,6 +1655,174 @@ export type CreateResearchResponseResponses = {
 };
 
 export type CreateResearchResponseResponse = CreateResearchResponseResponses[keyof CreateResearchResponseResponses];
+
+export type ListResearchThreadsData = {
+    body?: never;
+    headers?: {
+        /**
+         * Authorization
+         */
+        authorization?: string | null;
+    };
+    path?: never;
+    query?: {
+        /**
+         * Page
+         */
+        page?: number;
+        /**
+         * Perpage
+         */
+        perPage?: number;
+    };
+    url: '/api/v1/research/threads';
+};
+
+export type ListResearchThreadsErrors = {
+    /**
+     * Bad request
+     */
+    400: unknown;
+    /**
+     * Validation Error
+     */
+    422: HttpValidationError;
+};
+
+export type ListResearchThreadsError = ListResearchThreadsErrors[keyof ListResearchThreadsErrors];
+
+export type ListResearchThreadsResponses = {
+    /**
+     * Successful Response
+     */
+    200: PaginatedResearchThreadResponse;
+};
+
+export type ListResearchThreadsResponse = ListResearchThreadsResponses[keyof ListResearchThreadsResponses];
+
+export type DeleteResearchThreadData = {
+    body?: never;
+    headers?: {
+        /**
+         * Authorization
+         */
+        authorization?: string | null;
+    };
+    path: {
+        /**
+         * Thread Id
+         */
+        thread_id: string;
+    };
+    query?: never;
+    url: '/api/v1/research/threads/{thread_id}';
+};
+
+export type DeleteResearchThreadErrors = {
+    /**
+     * Bad request
+     */
+    400: unknown;
+    /**
+     * Validation Error
+     */
+    422: HttpValidationError;
+};
+
+export type DeleteResearchThreadError = DeleteResearchThreadErrors[keyof DeleteResearchThreadErrors];
+
+export type DeleteResearchThreadResponses = {
+    /**
+     * Successful Response
+     */
+    204: void;
+};
+
+export type DeleteResearchThreadResponse = DeleteResearchThreadResponses[keyof DeleteResearchThreadResponses];
+
+export type GetResearchThreadData = {
+    body?: never;
+    headers?: {
+        /**
+         * Authorization
+         */
+        authorization?: string | null;
+    };
+    path: {
+        /**
+         * Thread Id
+         */
+        thread_id: string;
+    };
+    query?: never;
+    url: '/api/v1/research/threads/{thread_id}';
+};
+
+export type GetResearchThreadErrors = {
+    /**
+     * Bad request
+     */
+    400: unknown;
+    /**
+     * Validation Error
+     */
+    422: HttpValidationError;
+};
+
+export type GetResearchThreadError = GetResearchThreadErrors[keyof GetResearchThreadErrors];
+
+export type GetResearchThreadResponses = {
+    /**
+     * Successful Response
+     */
+    200: ResearchThreadDetail;
+};
+
+export type GetResearchThreadResponse = GetResearchThreadResponses[keyof GetResearchThreadResponses];
+
+export type CancelResearchRunData = {
+    body?: never;
+    headers?: {
+        /**
+         * Authorization
+         */
+        authorization?: string | null;
+    };
+    path: {
+        /**
+         * Run Id
+         */
+        run_id: string;
+    };
+    query?: never;
+    url: '/api/v1/research/runs/{run_id}/cancel';
+};
+
+export type CancelResearchRunErrors = {
+    /**
+     * Bad request
+     */
+    400: unknown;
+    /**
+     * Run already completed
+     */
+    409: unknown;
+    /**
+     * Validation Error
+     */
+    422: HttpValidationError;
+};
+
+export type CancelResearchRunError = CancelResearchRunErrors[keyof CancelResearchRunErrors];
+
+export type CancelResearchRunResponses = {
+    /**
+     * Successful Response
+     */
+    204: void;
+};
+
+export type CancelResearchRunResponse = CancelResearchRunResponses[keyof CancelResearchRunResponses];
 
 export type GetResearchRunData = {
     body?: never;

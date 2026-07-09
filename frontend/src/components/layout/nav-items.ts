@@ -1,4 +1,5 @@
 import {
+  Bot,
   Eye,
   FileText,
   type LucideIcon,
@@ -12,6 +13,7 @@ import {
 // コンポーネント解決は各 consumer の render 時に NAV_ICONS 経由で行う。
 export type NavIconKey =
   | "news"
+  | "research"
   | "briefing"
   | "trend"
   | "watchlist"
@@ -19,6 +21,7 @@ export type NavIconKey =
 
 export const NAV_ICONS: Record<NavIconKey, LucideIcon> = {
   news: Newspaper,
+  research: Bot,
   briefing: FileText,
   trend: TrendingUp,
   watchlist: Eye,
@@ -33,6 +36,7 @@ export type ProtectedNavItem = {
 
 const baseNavItems = [
   { href: "/", label: "ニュース", icon: "news" },
+  { href: "/research", label: "Research", icon: "research" },
   { href: "/briefing", label: "Briefing", icon: "briefing" },
   { href: "/trends", label: "トレンド", icon: "trend" },
   { href: "/watchlist", label: "ウォッチリスト", icon: "watchlist" },

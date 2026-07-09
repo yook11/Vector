@@ -3,6 +3,7 @@
 from app.agent.history.repository import (
     ActiveRunConflictError,
     AgentHistoryRepository,
+    CancelRunOutcome,
     PreparedAgentRun,
     RunTransitionLostError,
     ThreadNotFoundError,
@@ -14,6 +15,7 @@ __all__ = [
     "AgentHistoryRepository",
     "AgentRunErrorCode",
     "AgentRunStatus",
+    "CancelRunOutcome",
     "PreparedAgentRun",
     "RunTransitionLostError",
     "ThreadNotFoundError",

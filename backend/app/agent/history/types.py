@@ -17,3 +17,4 @@ class AgentRunErrorCode(StrEnum):
     INTERNAL_ERROR = "internal_error"
     ENQUEUE_FAILED = "enqueue_failed"
     STALE = "stale"
+    CANCELLED = "cancelled"

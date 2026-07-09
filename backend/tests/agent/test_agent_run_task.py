@@ -24,7 +24,7 @@ from app.agent.history.mapper import (
     build_assistant_message_for_result,
     build_source_rows_for_message,
 )
-from app.agent.history.projection import build_research_response_from_rows
+from app.agent.history.projection import build_research_assistant_message
 from app.analysis.ai_provider_errors import AIProviderError
 from app.models.agent_message import AgentMessage, AgentMessageSource
 from app.models.agent_run import AgentRun
@@ -421,6 +421,7 @@ def test_source_mapper_structures_internal_and_external_rows() -> None:
         result=result,
     )
     message.id = UUID("00000000-0000-4000-a000-000000000010")
+    message.created_at = datetime(2026, 7, 9, tzinfo=UTC)
 
     rows = build_source_rows_for_message(message, result)
 
@@ -433,7 +434,7 @@ def test_source_mapper_structures_internal_and_external_rows() -> None:
     assert rows[1].analyzed_article_id is None
     assert rows[1].evidence_claim == "Claim"
 
-    response = build_research_response_from_rows(message=message, sources=rows)
-    assert response.answer == "answer [[1]][[2]]"
+    response = build_research_assistant_message(message=message, sources=rows)
+    assert response.content == "answer [[1]][[2]]"
     assert response.sources[0].kind == "internal_article"
     assert response.sources[1].kind == "external_url"

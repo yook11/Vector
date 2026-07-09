@@ -5,8 +5,9 @@ from __future__ import annotations
 import uuid as uuid_mod
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
+from enum import StrEnum
 
-from sqlalchemy import func, select, update
+from sqlalchemy import delete, exists, func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.agent.contract import AnswerQuestionResult
@@ -15,14 +16,20 @@ from app.agent.history.mapper import (
     build_source_rows_for_message,
 )
 from app.agent.history.projection import (
-    build_research_response_from_rows,
     build_research_run_response,
+    build_research_thread_detail,
+    build_research_thread_list_item,
 )
 from app.agent.history.types import AgentRunErrorCode, AgentRunStatus
 from app.models.agent_message import AgentMessage, AgentMessageSource
 from app.models.agent_run import AgentRun
 from app.models.agent_thread import AgentThread
-from app.schemas.research import ResearchResponse, ResearchRunResponse
+from app.schemas.research import (
+    PaginatedResearchThreadResponse,
+    ResearchRunResponse,
+    ResearchThreadDetail,
+    ResearchThreadListParams,
+)
 
 
 class ThreadNotFoundError(Exception):
@@ -35,6 +42,12 @@ class ActiveRunConflictError(Exception):
 
 class RunTransitionLostError(Exception):
     """Another actor moved the run before this transition could commit."""
+
+
+class CancelRunOutcome(StrEnum):
+    CANCELLED = "cancelled"
+    ALREADY_FAILED = "already_failed"
+    ALREADY_COMPLETED = "already_completed"
 
 
 @dataclass(frozen=True, slots=True)
@@ -262,11 +275,195 @@ class AgentHistoryRepository:
         ).scalar_one_or_none()
         if run is None:
             return None
+        return build_research_run_response(run=run)
 
-        result: ResearchResponse | None = None
-        if run.status == AgentRunStatus.COMPLETED.value:
-            result = await self._read_completed_result(run)
-        return build_research_run_response(run=run, result=result)
+    async def list_threads_for_user(
+        self,
+        *,
+        user_id: uuid_mod.UUID,
+        pagination: ResearchThreadListParams,
+    ) -> PaginatedResearchThreadResponse:
+        total = (
+            await self._session.execute(
+                select(func.count(AgentThread.id)).where(AgentThread.user_id == user_id)
+            )
+        ).scalar_one()
+        has_active_run = exists(
+            select(AgentRun.id).where(
+                AgentRun.thread_id == AgentThread.id,
+                AgentRun.status.in_(_ACTIVE_STATUSES),
+            )
+        )
+        rows = (
+            await self._session.execute(
+                select(AgentThread, has_active_run.label("has_active_run"))
+                .where(AgentThread.user_id == user_id)
+                .order_by(AgentThread.updated_at.desc(), AgentThread.id.desc())
+                .offset(pagination.offset)
+                .limit(pagination.limit)
+            )
+        ).all()
+        return PaginatedResearchThreadResponse.create(
+            items=[
+                build_research_thread_list_item(
+                    thread=thread,
+                    has_active_run=bool(has_active),
+                )
+                for thread, has_active in rows
+            ],
+            total=total,
+            pagination=pagination,
+        )
+
+    async def read_thread_detail_for_user(
+        self,
+        *,
+        thread_id: uuid_mod.UUID,
+        user_id: uuid_mod.UUID,
+    ) -> ResearchThreadDetail | None:
+        thread = (
+            await self._session.execute(
+                select(AgentThread).where(
+                    AgentThread.id == thread_id,
+                    AgentThread.user_id == user_id,
+                )
+            )
+        ).scalar_one_or_none()
+        if thread is None:
+            return None
+
+        messages = (
+            (
+                await self._session.execute(
+                    select(AgentMessage)
+                    .where(AgentMessage.thread_id == thread.id)
+                    .order_by(AgentMessage.seq)
+                )
+            )
+            .scalars()
+            .all()
+        )
+        user_message_ids = [
+            message.id for message in messages if message.role == "user"
+        ]
+        runs_by_user_message_id: dict[uuid_mod.UUID, AgentRun] = {}
+        if user_message_ids:
+            runs = (
+                (
+                    await self._session.execute(
+                        select(AgentRun).where(
+                            AgentRun.thread_id == thread.id,
+                            AgentRun.user_message_id.in_(user_message_ids),
+                        )
+                    )
+                )
+                .scalars()
+                .all()
+            )
+            runs_by_user_message_id = {run.user_message_id: run for run in runs}
+
+        assistant_message_ids = [
+            message.id for message in messages if message.role == "assistant"
+        ]
+        sources_by_message_id: dict[uuid_mod.UUID, list[AgentMessageSource]] = {}
+        if assistant_message_ids:
+            sources = (
+                (
+                    await self._session.execute(
+                        select(AgentMessageSource)
+                        .where(AgentMessageSource.message_id.in_(assistant_message_ids))
+                        .order_by(
+                            AgentMessageSource.message_id,
+                            AgentMessageSource.ordinal,
+                        )
+                    )
+                )
+                .scalars()
+                .all()
+            )
+            for source in sources:
+                sources_by_message_id.setdefault(source.message_id, []).append(source)
+
+        return build_research_thread_detail(
+            thread=thread,
+            messages=messages,
+            runs_by_user_message_id=runs_by_user_message_id,
+            sources_by_message_id=sources_by_message_id,
+        )
+
+    async def delete_thread_for_user(
+        self,
+        *,
+        thread_id: uuid_mod.UUID,
+        user_id: uuid_mod.UUID,
+    ) -> bool:
+        result = await self._session.execute(
+            delete(AgentThread)
+            .where(
+                AgentThread.id == thread_id,
+                AgentThread.user_id == user_id,
+            )
+            .execution_options(synchronize_session=False)
+        )
+        return (result.rowcount or 0) == 1
+
+    async def cancel_run_for_user(
+        self,
+        *,
+        run_id: uuid_mod.UUID,
+        user_id: uuid_mod.UUID,
+        now: datetime | None = None,
+    ) -> CancelRunOutcome | None:
+        now = now or datetime.now(UTC)
+        run = (
+            await self._session.execute(
+                select(AgentRun)
+                .join(AgentThread, AgentRun.thread_id == AgentThread.id)
+                .where(
+                    AgentRun.id == run_id,
+                    AgentThread.user_id == user_id,
+                )
+            )
+        ).scalar_one_or_none()
+        if run is None:
+            return None
+        status_value = AgentRunStatus(run.status)
+        if status_value is AgentRunStatus.COMPLETED:
+            return CancelRunOutcome.ALREADY_COMPLETED
+        if status_value is AgentRunStatus.FAILED:
+            return CancelRunOutcome.ALREADY_FAILED
+
+        result = await self._session.execute(
+            update(AgentRun)
+            .where(
+                AgentRun.id == run_id,
+                AgentRun.status.in_(_ACTIVE_STATUSES),
+            )
+            .values(
+                status=AgentRunStatus.FAILED.value,
+                error_code=AgentRunErrorCode.CANCELLED.value,
+                completed_at=now,
+            )
+            .execution_options(synchronize_session=False)
+        )
+        if (result.rowcount or 0) == 1:
+            return CancelRunOutcome.CANCELLED
+
+        refreshed_status = (
+            await self._session.execute(
+                select(AgentRun.status)
+                .join(AgentThread, AgentRun.thread_id == AgentThread.id)
+                .where(
+                    AgentRun.id == run_id,
+                    AgentThread.user_id == user_id,
+                )
+            )
+        ).scalar_one_or_none()
+        if refreshed_status is None:
+            return None
+        if AgentRunStatus(refreshed_status) is AgentRunStatus.COMPLETED:
+            return CancelRunOutcome.ALREADY_COMPLETED
+        return CancelRunOutcome.ALREADY_FAILED
 
     async def sweep_stale_runs(
         self,
@@ -311,22 +508,3 @@ class AgentHistoryRepository:
             )
         ).scalar_one()
         return int(value)
-
-    async def _read_completed_result(self, run: AgentRun) -> ResearchResponse | None:
-        if run.assistant_message_id is None:
-            return None
-        message = await self._session.get(AgentMessage, run.assistant_message_id)
-        if message is None:
-            return None
-        source_rows = (
-            (
-                await self._session.execute(
-                    select(AgentMessageSource)
-                    .where(AgentMessageSource.message_id == message.id)
-                    .order_by(AgentMessageSource.ordinal)
-                )
-            )
-            .scalars()
-            .all()
-        )
-        return build_research_response_from_rows(message=message, sources=source_rows)

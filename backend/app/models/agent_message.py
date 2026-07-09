@@ -2,7 +2,7 @@
 
 message は user 質問 / assistant 回答の 1 行。source は assistant 回答が接地した
 引用 (internal 記事 or external URL) で、message の子として単独の意味を持たないため
-同一 module に置く。表示契約 (``ResearchResponse``) の完全再現に要る値の非空・型を
+同一 module に置く。assistant 表示契約の完全再現に要る値の非空・型を
 DB 制約で焼く。
 """
 

@@ -6,9 +6,10 @@ from datetime import datetime
 from typing import Annotated, Literal
 from uuid import UUID
 
+from fastapi import Query
 from pydantic import Field, StringConstraints
 
-from app.schemas.base import _CamelBase
+from app.schemas.base import MAX_PER_PAGE, PaginationParams, _CamelBase
 from app.shared.security.safe_url import SafeUrl
 
 ResearchQuestion = Annotated[
@@ -46,33 +47,98 @@ ResearchSource = Annotated[
 ]
 
 
-class ResearchResponse(_CamelBase):
-    answer: str = Field(
-        description=(
-            "Generated answer text. Evidence-grounded answers may include inline "
-            "citation markers like [[1]], where the number matches sources[].sourceRef."
-        )
-    )
-    sources: list[ResearchSource]
-    missing_aspects: list[str]
-
-
 class ResearchRunStartResponse(_CamelBase):
     thread_id: UUID
     run_id: UUID
 
 
+ResearchRunStatus = Literal["queued", "running", "completed", "failed"]
+ResearchRunErrorCode = Literal[
+    "generation_unavailable",
+    "internal_error",
+    "enqueue_failed",
+    "stale",
+    "cancelled",
+]
+
+
 class ResearchRunResponse(_CamelBase):
     run_id: UUID
     thread_id: UUID
-    status: Literal["queued", "running", "completed", "failed"]
-    result: ResearchResponse | None
-    error_code: (
-        Literal[
-            "generation_unavailable",
-            "internal_error",
-            "enqueue_failed",
-            "stale",
-        ]
-        | None
+    status: ResearchRunStatus
+    error_code: ResearchRunErrorCode | None
+
+
+class ResearchThreadListParams(PaginationParams):
+    per_page: Annotated[int, Query(ge=1, le=MAX_PER_PAGE, alias="perPage")] = 20
+
+
+class ResearchThreadListItem(_CamelBase):
+    thread_id: UUID
+    title: str
+    updated_at: datetime
+    has_active_run: bool
+
+
+class PaginatedResearchThreadResponse(_CamelBase):
+    items: list[ResearchThreadListItem]
+    total: int
+    page: int
+    per_page: int
+    total_pages: int
+
+    @classmethod
+    def create(
+        cls,
+        *,
+        items: list[ResearchThreadListItem],
+        total: int,
+        pagination: ResearchThreadListParams,
+    ) -> PaginatedResearchThreadResponse:
+        return cls(
+            items=items,
+            total=total,
+            page=pagination.page,
+            per_page=pagination.per_page,
+            total_pages=pagination.total_pages(total),
+        )
+
+
+class ResearchMessageRun(_CamelBase):
+    run_id: UUID
+    status: ResearchRunStatus
+    error_code: ResearchRunErrorCode | None
+
+
+class ResearchUserMessage(_CamelBase):
+    role: Literal["user"]
+    seq: int
+    content: str
+    created_at: datetime
+    run: ResearchMessageRun
+
+
+class ResearchAssistantMessage(_CamelBase):
+    role: Literal["assistant"]
+    seq: int
+    content: str = Field(
+        description=(
+            "Generated answer text. Evidence-grounded answers may include inline "
+            "citation markers like [[1]], where the number matches sources[].sourceRef."
+        )
     )
+    created_at: datetime
+    sources: list[ResearchSource]
+    missing_aspects: list[str]
+
+
+ResearchThreadMessage = Annotated[
+    ResearchUserMessage | ResearchAssistantMessage,
+    Field(discriminator="role"),
+]
+
+
+class ResearchThreadDetail(_CamelBase):
+    thread_id: UUID
+    title: str
+    messages: list[ResearchThreadMessage]

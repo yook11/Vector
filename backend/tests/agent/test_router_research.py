@@ -10,10 +10,12 @@ from uuid import UUID
 import pytest
 from httpx import ASGITransport, AsyncClient
 from pydantic import SecretStr
-from sqlalchemy import select, update
+from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 import app.agent.router as research_router_module
+from app.agent.contract import AnswerQuestionResult, AnswerRetrievalSummary
+from app.agent.history import AgentHistoryRepository
 from app.config import settings
 from app.main import app
 from app.models.agent_message import AgentMessage, AgentMessageSource
@@ -22,6 +24,7 @@ from app.models.agent_thread import AgentThread
 from tests.conftest import TEST_ADMIN_ID, TEST_USER_ID
 
 _RESPONSES_URL = "/api/v1/research/responses"
+_THREADS_URL = "/api/v1/research/threads"
 
 
 class FakeEnqueue:
@@ -153,6 +156,16 @@ async def _create_run(
     await session.commit()
     await session.refresh(run)
     return run
+
+
+def _direct_result(answer: str = "worker answer") -> AnswerQuestionResult:
+    return AnswerQuestionResult(
+        status="answered",
+        answer=answer,
+        sources=[],
+        missing_aspects=[],
+        retrieval=AnswerRetrievalSummary(planned_mode="none"),
+    )
 
 
 @pytest.mark.asyncio
@@ -488,8 +501,517 @@ class TestCreateResearchResponse:
 
 
 @pytest.mark.asyncio
+class TestListResearchThreads:
+    async def test_lists_only_own_threads_by_updated_at_with_default_page_size(
+        self,
+        research_client: tuple[AsyncClient, FakeEnqueue],
+        db_session: AsyncSession,
+    ) -> None:
+        client, _fake_enqueue = research_client
+        base = datetime(2026, 7, 1, tzinfo=UTC)
+        threads = [
+            await _create_thread(
+                db_session,
+                title=f"own-{index}",
+                updated_at=base.replace(day=index + 1),
+            )
+            for index in range(22)
+        ]
+        active_user = await _create_message(
+            db_session,
+            thread_id=threads[21].id,
+            seq=1,
+            role="user",
+            content="active",
+        )
+        await _create_run(
+            db_session,
+            thread_id=threads[21].id,
+            user_message_id=active_user.id,
+            status="running",
+        )
+        terminal_user = await _create_message(
+            db_session,
+            thread_id=threads[20].id,
+            seq=1,
+            role="user",
+            content="terminal",
+        )
+        await _create_run(
+            db_session,
+            thread_id=threads[20].id,
+            user_message_id=terminal_user.id,
+            status="failed",
+            error_code="internal_error",
+        )
+        await _create_thread(
+            db_session,
+            user_id=TEST_ADMIN_ID,
+            title="other-user-newer",
+            updated_at=datetime(2026, 7, 31, tzinfo=UTC),
+        )
+
+        response = await client.get(_THREADS_URL)
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["total"] == 22
+        assert data["page"] == 1
+        assert data["perPage"] == 20
+        assert data["totalPages"] == 2
+        assert len(data["items"]) == 20
+        assert data["items"][0] == {
+            "threadId": str(threads[21].id),
+            "title": "own-21",
+            "updatedAt": "2026-07-22T00:00:00Z",
+            "hasActiveRun": True,
+        }
+        assert data["items"][1]["threadId"] == str(threads[20].id)
+        assert data["items"][1]["hasActiveRun"] is False
+        assert all(item["title"] != "other-user-newer" for item in data["items"])
+
+    async def test_list_empty_threads_returns_200(
+        self,
+        research_client: tuple[AsyncClient, FakeEnqueue],
+    ) -> None:
+        client, _fake_enqueue = research_client
+
+        response = await client.get(_THREADS_URL)
+
+        assert response.status_code == 200
+        assert response.json() == {
+            "items": [],
+            "total": 0,
+            "page": 1,
+            "perPage": 20,
+            "totalPages": 0,
+        }
+
+    async def test_list_rejects_per_page_over_100(
+        self,
+        research_client: tuple[AsyncClient, FakeEnqueue],
+    ) -> None:
+        client, _fake_enqueue = research_client
+
+        response = await client.get(_THREADS_URL, params={"perPage": 101})
+
+        assert response.status_code == 422
+
+
+@pytest.mark.asyncio
+class TestGetResearchThread:
+    async def test_returns_thread_detail_as_message_discriminated_union(
+        self,
+        research_client: tuple[AsyncClient, FakeEnqueue],
+        db_session: AsyncSession,
+    ) -> None:
+        client, _fake_enqueue = research_client
+        thread = await _create_thread(db_session, title="AI 半導体")
+        active_user = await _create_message(
+            db_session,
+            thread_id=thread.id,
+            seq=1,
+            role="user",
+            content="実行中の質問",
+        )
+        active_run = await _create_run(
+            db_session,
+            thread_id=thread.id,
+            user_message_id=active_user.id,
+            status="queued",
+        )
+        answered_user = await _create_message(
+            db_session,
+            thread_id=thread.id,
+            seq=2,
+            role="user",
+            content="回答済みの質問",
+        )
+        assistant_message = await _create_message(
+            db_session,
+            thread_id=thread.id,
+            seq=3,
+            role="assistant",
+            content="回答です。[[1]][[2]]",
+            missing_aspects=["未確認の観点"],
+        )
+        db_session.add_all(
+            [
+                AgentMessageSource(
+                    message_id=assistant_message.id,
+                    ordinal=1,
+                    kind="internal_article",
+                    source_ref="1",
+                    analyzed_article_id=None,
+                    title="削除済み内部記事",
+                    published_at=datetime(2026, 7, 1, tzinfo=UTC),
+                ),
+                AgentMessageSource(
+                    message_id=assistant_message.id,
+                    ordinal=2,
+                    kind="external_url",
+                    source_ref="2",
+                    url="https://example.com/source",
+                    title="External source",
+                    source_name="Example",
+                    published_at=None,
+                    evidence_claim="External claim.",
+                ),
+            ]
+        )
+        await db_session.commit()
+        completed_run = await _create_run(
+            db_session,
+            thread_id=thread.id,
+            user_message_id=answered_user.id,
+            assistant_message_id=assistant_message.id,
+            status="completed",
+        )
+        cancelled_user = await _create_message(
+            db_session,
+            thread_id=thread.id,
+            seq=4,
+            role="user",
+            content="止めた質問",
+        )
+        cancelled_run = await _create_run(
+            db_session,
+            thread_id=thread.id,
+            user_message_id=cancelled_user.id,
+            status="failed",
+            error_code="cancelled",
+        )
+
+        response = await client.get(f"{_THREADS_URL}/{thread.id}")
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["threadId"] == str(thread.id)
+        assert data["title"] == "AI 半導体"
+        assert [message["role"] for message in data["messages"]] == [
+            "user",
+            "user",
+            "assistant",
+            "user",
+        ]
+        assert [message["seq"] for message in data["messages"]] == [1, 2, 3, 4]
+        assert data["messages"][0]["run"] == {
+            "runId": str(active_run.id),
+            "status": "queued",
+            "errorCode": None,
+        }
+        assert data["messages"][1]["run"] == {
+            "runId": str(completed_run.id),
+            "status": "completed",
+            "errorCode": None,
+        }
+        assert data["messages"][2]["content"] == "回答です。[[1]][[2]]"
+        assert data["messages"][2]["missingAspects"] == ["未確認の観点"]
+        assert data["messages"][2]["sources"] == [
+            {
+                "kind": "internal_article",
+                "sourceRef": "1",
+                "articleId": None,
+                "title": "削除済み内部記事",
+                "publishedAt": "2026-07-01T00:00:00Z",
+            },
+            {
+                "kind": "external_url",
+                "sourceRef": "2",
+                "url": "https://example.com/source",
+                "title": "External source",
+                "sourceName": "Example",
+                "publishedAt": None,
+                "evidenceClaim": "External claim.",
+            },
+        ]
+        assert data["messages"][3]["run"] == {
+            "runId": str(cancelled_run.id),
+            "status": "failed",
+            "errorCode": "cancelled",
+        }
+        assert all("createdAt" in message for message in data["messages"])
+
+    async def test_thread_detail_other_user_is_404(
+        self,
+        research_client: tuple[AsyncClient, FakeEnqueue],
+        db_session: AsyncSession,
+    ) -> None:
+        client, _fake_enqueue = research_client
+        thread = await _create_thread(db_session, user_id=TEST_ADMIN_ID)
+
+        response = await client.get(f"{_THREADS_URL}/{thread.id}")
+
+        assert response.status_code == 404
+
+
+@pytest.mark.asyncio
+class TestDeleteResearchThread:
+    async def test_deletes_thread_and_cascades_history_rows(
+        self,
+        research_client: tuple[AsyncClient, FakeEnqueue],
+        db_session: AsyncSession,
+    ) -> None:
+        client, _fake_enqueue = research_client
+        thread = await _create_thread(db_session)
+        user_message = await _create_message(
+            db_session, thread_id=thread.id, seq=1, role="user", content="question"
+        )
+        assistant_message = await _create_message(
+            db_session, thread_id=thread.id, seq=2, role="assistant", content="answer"
+        )
+        db_session.add(
+            AgentMessageSource(
+                message_id=assistant_message.id,
+                ordinal=1,
+                kind="external_url",
+                source_ref="1",
+                url="https://example.com/source",
+                title="External source",
+                evidence_claim="External claim.",
+            )
+        )
+        await db_session.commit()
+        await _create_run(
+            db_session,
+            thread_id=thread.id,
+            user_message_id=user_message.id,
+            assistant_message_id=assistant_message.id,
+            status="completed",
+        )
+        thread_id = thread.id
+
+        response = await client.delete(f"{_THREADS_URL}/{thread_id}")
+
+        assert response.status_code == 204
+        db_session.expire_all()
+        assert (
+            await db_session.scalar(
+                select(func.count())
+                .select_from(AgentThread)
+                .where(AgentThread.id == thread_id)
+            )
+            == 0
+        )
+        assert (
+            await db_session.scalar(select(func.count()).select_from(AgentMessage)) == 0
+        )
+        assert await db_session.scalar(select(func.count()).select_from(AgentRun)) == 0
+        assert (
+            await db_session.scalar(
+                select(func.count()).select_from(AgentMessageSource)
+            )
+            == 0
+        )
+        second_response = await client.delete(f"{_THREADS_URL}/{thread_id}")
+        assert second_response.status_code == 404
+
+    async def test_active_run_delete_makes_worker_completion_harmless(
+        self,
+        research_client: tuple[AsyncClient, FakeEnqueue],
+        db_session: AsyncSession,
+    ) -> None:
+        client, _fake_enqueue = research_client
+        thread = await _create_thread(db_session)
+        user_message = await _create_message(
+            db_session, thread_id=thread.id, seq=1, role="user", content="active"
+        )
+        run = await _create_run(
+            db_session,
+            thread_id=thread.id,
+            user_message_id=user_message.id,
+            status="running",
+        )
+        run_id = run.id
+
+        response = await client.delete(f"{_THREADS_URL}/{thread.id}")
+
+        assert response.status_code == 204
+        if db_session.in_transaction():
+            await db_session.commit()
+        db_session.expire_all()
+        async with db_session.begin():
+            completed = await AgentHistoryRepository(db_session).complete_run(
+                run_id=run_id,
+                result=_direct_result(),
+            )
+        assert completed is False
+        assert await db_session.scalar(select(func.count()).select_from(AgentRun)) == 0
+        assert (
+            await db_session.scalar(select(func.count()).select_from(AgentMessage)) == 0
+        )
+        assert (
+            await db_session.scalar(
+                select(func.count()).select_from(AgentMessageSource)
+            )
+            == 0
+        )
+
+    async def test_delete_other_user_thread_is_404(
+        self,
+        research_client: tuple[AsyncClient, FakeEnqueue],
+        db_session: AsyncSession,
+    ) -> None:
+        client, _fake_enqueue = research_client
+        thread = await _create_thread(db_session, user_id=TEST_ADMIN_ID)
+
+        response = await client.delete(f"{_THREADS_URL}/{thread.id}")
+
+        assert response.status_code == 404
+
+
+@pytest.mark.asyncio
+class TestCancelResearchRun:
+    @pytest.mark.parametrize("initial_status", ["queued", "running"])
+    async def test_cancel_active_run_marks_cancelled(
+        self,
+        research_client: tuple[AsyncClient, FakeEnqueue],
+        db_session: AsyncSession,
+        initial_status: str,
+    ) -> None:
+        client, _fake_enqueue = research_client
+        thread = await _create_thread(db_session)
+        user_message = await _create_message(
+            db_session, thread_id=thread.id, seq=1, role="user", content="active"
+        )
+        run = await _create_run(
+            db_session,
+            thread_id=thread.id,
+            user_message_id=user_message.id,
+            status=initial_status,
+        )
+
+        response = await client.post(f"/api/v1/research/runs/{run.id}/cancel")
+
+        assert response.status_code == 204
+        await db_session.refresh(run)
+        assert run.status == "failed"
+        assert run.error_code == "cancelled"
+
+    async def test_cancel_completed_run_returns_409_and_preserves_completed(
+        self,
+        research_client: tuple[AsyncClient, FakeEnqueue],
+        db_session: AsyncSession,
+    ) -> None:
+        client, _fake_enqueue = research_client
+        thread = await _create_thread(db_session)
+        user_message = await _create_message(
+            db_session, thread_id=thread.id, seq=1, role="user", content="done"
+        )
+        assistant_message = await _create_message(
+            db_session, thread_id=thread.id, seq=2, role="assistant", content="answer"
+        )
+        run = await _create_run(
+            db_session,
+            thread_id=thread.id,
+            user_message_id=user_message.id,
+            assistant_message_id=assistant_message.id,
+            status="completed",
+        )
+
+        response = await client.post(f"/api/v1/research/runs/{run.id}/cancel")
+
+        assert response.status_code == 409
+        assert response.json() == {"detail": "Run already completed"}
+        await db_session.refresh(run)
+        assert run.status == "completed"
+        assert run.error_code is None
+
+    async def test_cancel_failed_run_is_204_and_preserves_error_code(
+        self,
+        research_client: tuple[AsyncClient, FakeEnqueue],
+        db_session: AsyncSession,
+    ) -> None:
+        client, _fake_enqueue = research_client
+        thread = await _create_thread(db_session)
+        user_message = await _create_message(
+            db_session, thread_id=thread.id, seq=1, role="user", content="failed"
+        )
+        run = await _create_run(
+            db_session,
+            thread_id=thread.id,
+            user_message_id=user_message.id,
+            status="failed",
+            error_code="internal_error",
+        )
+
+        response = await client.post(f"/api/v1/research/runs/{run.id}/cancel")
+
+        assert response.status_code == 204
+        await db_session.refresh(run)
+        assert run.status == "failed"
+        assert run.error_code == "internal_error"
+
+    async def test_cancel_other_users_run_is_404(
+        self,
+        research_client: tuple[AsyncClient, FakeEnqueue],
+        db_session: AsyncSession,
+    ) -> None:
+        client, _fake_enqueue = research_client
+        thread = await _create_thread(db_session, user_id=TEST_ADMIN_ID)
+        user_message = await _create_message(
+            db_session, thread_id=thread.id, seq=1, role="user", content="other"
+        )
+        run = await _create_run(
+            db_session, thread_id=thread.id, user_message_id=user_message.id
+        )
+
+        response = await client.post(f"/api/v1/research/runs/{run.id}/cancel")
+
+        assert response.status_code == 404
+
+    async def test_cancelled_run_is_not_overwritten_by_worker_completion(
+        self,
+        research_client: tuple[AsyncClient, FakeEnqueue],
+        db_session: AsyncSession,
+    ) -> None:
+        client, _fake_enqueue = research_client
+        thread = await _create_thread(db_session)
+        user_message = await _create_message(
+            db_session, thread_id=thread.id, seq=1, role="user", content="active"
+        )
+        run = await _create_run(
+            db_session,
+            thread_id=thread.id,
+            user_message_id=user_message.id,
+            status="running",
+        )
+        run_id = run.id
+        thread_id = thread.id
+
+        response = await client.post(f"/api/v1/research/runs/{run_id}/cancel")
+
+        assert response.status_code == 204
+        if db_session.in_transaction():
+            await db_session.commit()
+        db_session.expire_all()
+        async with db_session.begin():
+            completed = await AgentHistoryRepository(db_session).complete_run(
+                run_id=run_id,
+                result=_direct_result(),
+            )
+        refreshed_run = await db_session.get(AgentRun, run_id)
+        assert refreshed_run is not None
+        assert completed is False
+        assert refreshed_run.status == "failed"
+        assert refreshed_run.error_code == "cancelled"
+        messages = (
+            (
+                await db_session.execute(
+                    select(AgentMessage)
+                    .where(AgentMessage.thread_id == thread_id)
+                    .order_by(AgentMessage.seq)
+                )
+            )
+            .scalars()
+            .all()
+        )
+        assert [message.role for message in messages] == ["user"]
+
+
+@pytest.mark.asyncio
 class TestGetResearchRun:
-    async def test_returns_queued_running_failed_and_completed_from_rows(
+    async def test_returns_slim_signal_for_all_run_statuses(
         self,
         research_client: tuple[AsyncClient, FakeEnqueue],
         db_session: AsyncSession,
@@ -535,98 +1057,44 @@ class TestGetResearchRun:
             status="failed",
             error_code="generation_unavailable",
         )
-
-        assert (await client.get(f"/api/v1/research/runs/{queued_run.id}")).json()[
-            "status"
-        ] == "queued"
-        assert (await client.get(f"/api/v1/research/runs/{running_run.id}")).json()[
-            "status"
-        ] == "running"
-        failed_response = await client.get(f"/api/v1/research/runs/{failed_run.id}")
-        assert failed_response.json()["errorCode"] == "generation_unavailable"
-
-    async def test_completed_result_allows_null_internal_article_id(
-        self,
-        research_client: tuple[AsyncClient, FakeEnqueue],
-        db_session: AsyncSession,
-    ) -> None:
-        client, _fake_enqueue = research_client
-        thread = await _create_thread(db_session)
-        user_message = await _create_message(
-            db_session, thread_id=thread.id, seq=1, role="user", content="answer?"
-        )
-        assistant_message = await _create_message(
+        completed_thread = await _create_thread(db_session)
+        completed_user = await _create_message(
             db_session,
-            thread_id=thread.id,
+            thread_id=completed_thread.id,
+            seq=1,
+            role="user",
+            content="completed?",
+        )
+        completed_message = await _create_message(
+            db_session,
+            thread_id=completed_thread.id,
             seq=2,
             role="assistant",
-            content="回答です。[[1]][[2]]",
-            missing_aspects=["未確認の観点"],
+            content="completed answer",
         )
-        db_session.add_all(
-            [
-                AgentMessageSource(
-                    message_id=assistant_message.id,
-                    ordinal=1,
-                    kind="internal_article",
-                    source_ref="1",
-                    analyzed_article_id=None,
-                    title="削除済み内部記事",
-                    published_at=datetime(2026, 7, 1, tzinfo=UTC),
-                ),
-                AgentMessageSource(
-                    message_id=assistant_message.id,
-                    ordinal=2,
-                    kind="external_url",
-                    source_ref="2",
-                    url="https://example.com/source",
-                    title="External source",
-                    source_name="Example",
-                    published_at=None,
-                    evidence_claim="External claim.",
-                ),
-            ]
-        )
-        await db_session.commit()
-        run = await _create_run(
+        completed_run = await _create_run(
             db_session,
-            thread_id=thread.id,
-            user_message_id=user_message.id,
-            assistant_message_id=assistant_message.id,
+            thread_id=completed_thread.id,
+            user_message_id=completed_user.id,
+            assistant_message_id=completed_message.id,
             status="completed",
         )
 
-        response = await client.get(f"/api/v1/research/runs/{run.id}")
-
-        assert response.status_code == 200
-        assert response.json() == {
-            "runId": str(run.id),
-            "threadId": str(thread.id),
-            "status": "completed",
-            "result": {
-                "answer": "回答です。[[1]][[2]]",
-                "missingAspects": ["未確認の観点"],
-                "sources": [
-                    {
-                        "kind": "internal_article",
-                        "sourceRef": "1",
-                        "articleId": None,
-                        "title": "削除済み内部記事",
-                        "publishedAt": "2026-07-01T00:00:00Z",
-                    },
-                    {
-                        "kind": "external_url",
-                        "sourceRef": "2",
-                        "url": "https://example.com/source",
-                        "title": "External source",
-                        "sourceName": "Example",
-                        "publishedAt": None,
-                        "evidenceClaim": "External claim.",
-                    },
-                ],
-            },
-            "errorCode": None,
+        expected = {
+            queued_run.id: ("queued", None),
+            running_run.id: ("running", None),
+            failed_run.id: ("failed", "generation_unavailable"),
+            completed_run.id: ("completed", None),
         }
+        for run_id, (status_value, error_code) in expected.items():
+            response = await client.get(f"/api/v1/research/runs/{run_id}")
+            assert response.status_code == 200
+            assert response.json() == {
+                "runId": str(run_id),
+                "threadId": str((await _fetch_run(db_session, run_id)).thread_id),
+                "status": status_value,
+                "errorCode": error_code,
+            }
 
     async def test_other_users_run_is_404(
         self,
@@ -679,6 +1147,44 @@ def test_openapi_exposes_async_contract_and_question_shape() -> None:
     assert request_schema["properties"]["question"]["maxLength"] == 1000
     assert "threadId" in request_schema["properties"]
     assert set(accepted_schema["properties"]) == {"threadId", "runId"}
+
+
+def test_openapi_exposes_thread_ui_contract_and_slim_run_signal() -> None:
+    app.openapi_schema = None
+    schema = app.openapi()
+    paths = schema["paths"]
+    assert paths[_THREADS_URL]["get"]["operationId"] == "list_research_threads"
+    assert (
+        paths[f"{_THREADS_URL}/{{thread_id}}"]["get"]["operationId"]
+        == "get_research_thread"
+    )
+    assert (
+        paths[f"{_THREADS_URL}/{{thread_id}}"]["delete"]["operationId"]
+        == "delete_research_thread"
+    )
+    assert (
+        paths["/api/v1/research/runs/{run_id}/cancel"]["post"]["operationId"]
+        == "cancel_research_run"
+    )
+
+    run_operation = paths["/api/v1/research/runs/{run_id}"]["get"]
+    run_schema = _resolve_ref(
+        schema,
+        run_operation["responses"]["200"]["content"]["application/json"]["schema"][
+            "$ref"
+        ],
+    )
+    assert set(run_schema["properties"]) == {
+        "runId",
+        "threadId",
+        "status",
+        "errorCode",
+    }
+    assert "result" not in run_schema["properties"]
+    assert "cancelled" in str(run_schema["properties"]["errorCode"])
+
+    assistant_schema = schema["components"]["schemas"]["ResearchAssistantMessage"]
+    assert "[[1]]" in assistant_schema["properties"]["content"]["description"]
 
 
 def test_openapi_exposes_variant_specific_source_contract() -> None:
