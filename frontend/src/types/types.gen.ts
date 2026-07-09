@@ -593,9 +593,9 @@ export type ResearchExternalUrlSource = {
      */
     publishedAt: string | null;
     /**
-     * Snippet
+     * Evidenceclaim
      */
-    snippet: string | null;
+    evidenceClaim: string;
 };
 
 /**
@@ -619,17 +619,9 @@ export type ResearchInternalArticleSource = {
      */
     title: string;
     /**
-     * Sourcename
-     */
-    sourceName: string | null;
-    /**
      * Publishedat
      */
     publishedAt: string | null;
-    /**
-     * Snippet
-     */
-    snippet: string | null;
 };
 
 /**

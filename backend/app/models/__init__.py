@@ -1,3 +1,6 @@
+from app.models.agent_message import AgentMessage, AgentMessageSource
+from app.models.agent_run import AgentRun
+from app.models.agent_thread import AgentThread
 from app.models.analyzable_article_record import AnalyzableArticleRecord
 from app.models.analyzed_article_record import AnalyzedArticleRecord
 from app.models.article_curation import ArticleCuration
@@ -19,6 +22,10 @@ from app.models.watchlist_entry import WatchlistEntry
 from app.models.weekly_briefing import WeeklyBriefing
 
 __all__ = [
+    "AgentMessage",
+    "AgentMessageSource",
+    "AgentRun",
+    "AgentThread",
     "AnalyzableArticleRecord",
     "ArticleCuration",
     "AssessmentBackfillExclusion",

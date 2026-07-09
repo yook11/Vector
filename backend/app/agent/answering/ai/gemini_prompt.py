@@ -122,10 +122,12 @@ def _render_evidence_item(item: AnswerEvidenceItem) -> str:
         parts.append(f"article_id: {article_id}")
     if source.published_at is not None:
         parts.append(f"published_at: {source.published_at.isoformat()}")
-    if source.source_name:
-        parts.append(f"source_name: {sanitize_for_untrusted_block(source.source_name)}")
-    if source.snippet:
-        parts.append(f"snippet: {sanitize_for_untrusted_block(source.snippet)}")
+    if source.kind == "external_url":
+        if source.source_name:
+            parts.append(
+                f"source_name: {sanitize_for_untrusted_block(source.source_name)}"
+            )
+        parts.append(f"claim: {sanitize_for_untrusted_block(source.evidence_claim)}")
     parts.append("text:")
     parts.append("<untrusted_input>")
     parts.append(sanitize_for_untrusted_block(item.text))

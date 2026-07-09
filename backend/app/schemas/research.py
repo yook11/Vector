@@ -30,9 +30,7 @@ class ResearchInternalArticleSource(_CamelBase):
     source_ref: str
     article_id: int
     title: str
-    source_name: str | None
     published_at: datetime | None
-    snippet: str | None
 
     @classmethod
     def from_source(
@@ -43,9 +41,7 @@ class ResearchInternalArticleSource(_CamelBase):
             source_ref=source.source_ref,
             article_id=source.article_id,
             title=source.title,
-            source_name=source.source_name,
             published_at=source.published_at,
-            snippet=source.snippet,
         )
 
 
@@ -56,7 +52,7 @@ class ResearchExternalUrlSource(_CamelBase):
     title: str
     source_name: str | None
     published_at: datetime | None
-    snippet: str | None
+    evidence_claim: str
 
     @classmethod
     def from_source(cls, source: ExternalUrlSource) -> ResearchExternalUrlSource:
@@ -67,7 +63,7 @@ class ResearchExternalUrlSource(_CamelBase):
             title=source.title,
             source_name=source.source_name,
             published_at=source.published_at,
-            snippet=source.snippet,
+            evidence_claim=source.evidence_claim,
         )
 
 

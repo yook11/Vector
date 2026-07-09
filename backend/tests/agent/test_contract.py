@@ -35,6 +35,7 @@ def _external_source() -> ExternalUrlSource:
         source_ref="source_2",
         url="https://example.com/news",
         title="外部記事",
+        evidence_claim="外部記事が支える主張",
     )
 
 
@@ -86,6 +87,16 @@ class TestSources:
                 source_ref="source_1",
                 url="file:///tmp/news",
                 title="外部記事",
+                evidence_claim="外部記事が支える主張",
+            )
+
+    def test_rejects_blank_external_evidence_claim(self) -> None:
+        with pytest.raises(ValidationError):
+            ExternalUrlSource(
+                source_ref="source_1",
+                url="https://example.com/news",
+                title="外部記事",
+                evidence_claim="   ",
             )
 
 

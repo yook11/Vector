@@ -218,7 +218,9 @@ def test_normalize_preserves_internal_then_external_input_order() -> None:
     ]
 
 
-def test_normalize_preserves_external_provenance_and_uses_claim_as_snippet() -> None:
+def test_normalize_preserves_external_provenance_and_uses_claim_as_evidence_claim() -> (
+    None
+):
     published_at = _published_at(4)
     evidence = _external_evidence(
         source_ref="external-9-9",
@@ -237,7 +239,7 @@ def test_normalize_preserves_external_provenance_and_uses_claim_as_snippet() -> 
     assert isinstance(item.source, ExternalUrlSource)
     assert str(item.source.url) == "https://example.com/nvidia"
     assert item.source.title == "NVIDIA source"
-    assert item.source.snippet == "NVIDIA introduced a new accelerator."
+    assert item.source.evidence_claim == "NVIDIA introduced a new accelerator."
     assert item.source.published_at == published_at
     assert item.source.source_name == "Example News"
 
@@ -257,9 +259,10 @@ def test_normalize_preserves_internal_provenance_with_public_article_id() -> Non
     assert item.source.kind == "internal_article"
     assert item.source.article_id == 301
     assert item.source.title == "内部 NVIDIA 記事"
-    assert item.source.snippet == "内部分析の要約。"
     assert item.source.published_at == published_at
-    assert item.source.source_name is None
+    assert not hasattr(item.source, "snippet")
+    assert not hasattr(item.source, "evidence_claim")
+    assert not hasattr(item.source, "source_name")
 
 
 def test_normalize_builds_kind_independent_text_deterministically() -> None:

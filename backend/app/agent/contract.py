@@ -60,27 +60,25 @@ class AnswerRetrievalSummary(BaseModel):
 class InternalArticleSource(BaseModel):
     """内部分析済み記事に接地した回答 source。"""
 
-    model_config = ConfigDict(frozen=True)
+    model_config = ConfigDict(frozen=True, extra="forbid")
 
     kind: Literal["internal_article"] = "internal_article"
     source_ref: str = Field(min_length=1)
     article_id: int = Field(gt=0)
     title: str = Field(min_length=1)
-    snippet: str | None = None
     published_at: datetime | None = None
-    source_name: str | None = None
 
 
 class ExternalUrlSource(BaseModel):
     """外部 URL に接地した回答 source。"""
 
-    model_config = ConfigDict(frozen=True)
+    model_config = ConfigDict(frozen=True, extra="forbid")
 
     kind: Literal["external_url"] = "external_url"
     source_ref: str = Field(min_length=1)
     url: SafeUrl
     title: str = Field(min_length=1)
-    snippet: str | None = None
+    evidence_claim: NonBlankText
     published_at: datetime | None = None
     source_name: str | None = None
 

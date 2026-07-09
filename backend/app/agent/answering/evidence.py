@@ -52,9 +52,7 @@ def _normalize_internal_hit(
             # Internal transport calls the public /news id assessment_id.
             article_id=hit.assessment_id,
             title=hit.content.title,
-            snippet=hit.content.summary,
             published_at=hit.content.published_at,
-            source_name=None,
         ),
         text=_internal_text(hit),
     )
@@ -70,7 +68,7 @@ def _normalize_external_evidence(
             source_ref=source_ref,
             url=evidence.url,
             title=evidence.title,
-            snippet=evidence.claim,
+            evidence_claim=evidence.claim,
             published_at=evidence.published_at,
             source_name=evidence.source_name,
         ),

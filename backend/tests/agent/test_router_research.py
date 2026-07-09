@@ -69,15 +69,13 @@ def _answered_with_sources() -> AnswerQuestionResult:
                 source_ref="1",
                 article_id=123,
                 title="GPU 需要の分析",
-                snippet="データセンター向け GPU 需要が強い。",
                 published_at=datetime(2026, 7, 1, 9, 0, tzinfo=UTC),
-                source_name="Vector",
             ),
             ExternalUrlSource(
                 source_ref="2",
                 url=SafeUrl("https://example.com/nvidia-demand"),
                 title="NVIDIA demand update",
-                snippet="Analysts point to continued demand.",
+                evidence_claim="Analysts point to continued demand.",
                 published_at=datetime(2026, 7, 2, 12, 0, tzinfo=UTC),
                 source_name="Example News",
             ),
@@ -190,16 +188,14 @@ class TestCreateResearchResponse:
                 "sourceRef": "1",
                 "articleId": 123,
                 "title": "GPU 需要の分析",
-                "snippet": "データセンター向け GPU 需要が強い。",
                 "publishedAt": "2026-07-01T09:00:00Z",
-                "sourceName": "Vector",
             },
             {
                 "kind": "external_url",
                 "sourceRef": "2",
                 "url": "https://example.com/nvidia-demand",
                 "title": "NVIDIA demand update",
-                "snippet": "Analysts point to continued demand.",
+                "evidenceClaim": "Analysts point to continued demand.",
                 "publishedAt": "2026-07-02T12:00:00Z",
                 "sourceName": "Example News",
             },
@@ -218,9 +214,10 @@ class TestCreateResearchResponse:
 
         assert response.status_code == 200
         source = response.json()["sources"][0]
-        assert "sourceName" in source and source["sourceName"] is None
         assert "publishedAt" in source and source["publishedAt"] is None
-        assert "snippet" in source and source["snippet"] is None
+        assert "sourceName" not in source
+        assert "snippet" not in source
+        assert "evidenceClaim" not in source
 
     async def test_direct_answer_keeps_empty_sources_and_missing_aspects(
         self,
@@ -364,6 +361,27 @@ def test_openapi_exposes_operation_id_and_question_max_length() -> None:
         "citation markers like [[1]]"
         in response_schema["properties"]["answer"]["description"]
     )
+
+
+def test_openapi_exposes_variant_specific_source_contract() -> None:
+    app.openapi_schema = None
+    schema = app.openapi()
+    internal_schema = schema["components"]["schemas"]["ResearchInternalArticleSource"]
+    external_schema = schema["components"]["schemas"]["ResearchExternalUrlSource"]
+
+    assert set(internal_schema["properties"]) == {
+        "kind",
+        "sourceRef",
+        "articleId",
+        "title",
+        "publishedAt",
+    }
+    assert "snippet" not in internal_schema["properties"]
+    assert "sourceName" not in internal_schema["properties"]
+    assert "evidenceClaim" not in internal_schema["properties"]
+    assert "evidenceClaim" in external_schema["properties"]
+    assert "evidenceClaim" in external_schema["required"]
+    assert "snippet" not in external_schema["properties"]
 
 
 @pytest.mark.parametrize(

@@ -45,7 +45,7 @@ def _evidence(ref: str = "1") -> AnswerEvidenceItem:
             source_ref=ref,
             url=f"https://example.com/source-{ref}",
             title=f"source {ref}",
-            snippet=f"claim {ref}",
+            evidence_claim=f"claim {ref}",
         ),
         text=f"claim {ref}\nsnippet {ref}",
     )
