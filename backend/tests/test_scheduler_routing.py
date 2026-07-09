@@ -1,6 +1,6 @@
 """scheduler routing totality oracle — cron task の broker(queue)割り当て不変条件。
 
-統合 scheduler (``app.queue.scheduler_entrypoint``) は 4 つの stock TaskiqScheduler を
+統合 scheduler (``app.queue.scheduler_entrypoint``) は 5 つの stock TaskiqScheduler を
 1 プロセスで並行実行する。各 scheduler は自分の broker へ kick するため、cron task →
 queue の routing が壊れないことが Option B の前提。本テストはその不変条件を Redis なしで
 固定する:
@@ -29,6 +29,7 @@ from app.queue.brokers import (
     broker_embedding,
 )
 from app.queue.schedulers import (
+    scheduler_agent,
     scheduler_briefing,
     scheduler_maintenance,
     scheduler_metadata,
@@ -50,6 +51,7 @@ _EXPECTED_CRON: list[tuple[str, TaskiqScheduler, set[str]]] = [
         },
     ),
     ("trend_discovery", scheduler_trend_discovery, {"run_trend_discovery"}),
+    ("agent", scheduler_agent, {"sweep_stale_agent_runs"}),
     ("briefing", scheduler_briefing, {"dispatch_weekly_briefings"}),
     (
         "maintenance",
@@ -66,7 +68,7 @@ _EXPECTED_CRON: list[tuple[str, TaskiqScheduler, set[str]]] = [
 
 # schedule.py の cron 時刻表 (SSoT) が列挙する cron task の総数。新 cron 追加時は
 # 時刻表・_EXPECTED_CRON・本定数の 3 点を同時更新する (drift 時に本テストが赤になる)。
-_TOTAL_CRON_COUNT = 12
+_TOTAL_CRON_COUNT = 13
 
 
 async def _discovered_cron_task_names(scheduler: TaskiqScheduler) -> set[str]:
@@ -98,7 +100,7 @@ async def test_scheduler_discovers_exactly_its_brokers_cron(
 
 @pytest.mark.asyncio
 async def test_all_cron_partitioned_across_schedulers() -> None:
-    """4 scheduler 全体で全 cron を漏れ・重複なく分割発見する (totality)。"""
+    """5 scheduler 全体で全 cron を漏れ・重複なく分割発見する (totality)。"""
     discovered = [await _discovered_cron_task_names(s) for _, s, _ in _EXPECTED_CRON]
     union: set[str] = set().union(*discovered)
     # 重複なし: 各 scheduler の発見数の総和が union サイズと一致 = pairwise disjoint

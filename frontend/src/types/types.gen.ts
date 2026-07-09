@@ -613,7 +613,7 @@ export type ResearchInternalArticleSource = {
     /**
      * Articleid
      */
-    articleId: number;
+    articleId: number | null;
     /**
      * Title
      */
@@ -632,6 +632,10 @@ export type ResearchQuestionRequest = {
      * Question
      */
     question: string;
+    /**
+     * Threadid
+     */
+    threadId?: string | null;
 };
 
 /**
@@ -652,6 +656,43 @@ export type ResearchResponse = {
      * Missingaspects
      */
     missingAspects: Array<string>;
+};
+
+/**
+ * ResearchRunResponse
+ */
+export type ResearchRunResponse = {
+    /**
+     * Runid
+     */
+    runId: string;
+    /**
+     * Threadid
+     */
+    threadId: string;
+    /**
+     * Status
+     */
+    status: 'queued' | 'running' | 'completed' | 'failed';
+    result: ResearchResponse | null;
+    /**
+     * Errorcode
+     */
+    errorCode: 'generation_unavailable' | 'internal_error' | 'enqueue_failed' | 'stale' | null;
+};
+
+/**
+ * ResearchRunStartResponse
+ */
+export type ResearchRunStartResponse = {
+    /**
+     * Threadid
+     */
+    threadId: string;
+    /**
+     * Runid
+     */
+    runId: string;
 };
 
 /**
@@ -1473,6 +1514,10 @@ export type CreateResearchResponseErrors = {
      */
     400: unknown;
     /**
+     * A run is already in progress for this thread
+     */
+    409: unknown;
+    /**
      * Validation Error
      */
     422: HttpValidationError;
@@ -1488,10 +1533,50 @@ export type CreateResearchResponseResponses = {
     /**
      * Successful Response
      */
-    200: ResearchResponse;
+    202: ResearchRunStartResponse;
 };
 
 export type CreateResearchResponseResponse = CreateResearchResponseResponses[keyof CreateResearchResponseResponses];
+
+export type GetResearchRunData = {
+    body?: never;
+    headers?: {
+        /**
+         * Authorization
+         */
+        authorization?: string | null;
+    };
+    path: {
+        /**
+         * Run Id
+         */
+        run_id: string;
+    };
+    query?: never;
+    url: '/api/v1/research/runs/{run_id}';
+};
+
+export type GetResearchRunErrors = {
+    /**
+     * Bad request
+     */
+    400: unknown;
+    /**
+     * Validation Error
+     */
+    422: HttpValidationError;
+};
+
+export type GetResearchRunError = GetResearchRunErrors[keyof GetResearchRunErrors];
+
+export type GetResearchRunResponses = {
+    /**
+     * Successful Response
+     */
+    200: ResearchRunResponse;
+};
+
+export type GetResearchRunResponse = GetResearchRunResponses[keyof GetResearchRunResponses];
 
 export type ListNewsSourcesData = {
     body?: never;

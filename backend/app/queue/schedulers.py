@@ -1,11 +1,12 @@
-"""TaskiqScheduler 定義 — cron 駆動を持つ broker ごとに 1 つ (計 4)。
+"""TaskiqScheduler 定義 — cron 駆動を持つ broker ごとに 1 つ (計 5)。
 
   - scheduler_metadata:        収集 dispatch 用 cron
   - scheduler_trend_discovery: Trend Discovery 用 cron
   - scheduler_briefing:        週次 briefing 用 cron
+  - scheduler_agent:           agent run stale sweeper 用 cron
   - scheduler_maintenance:     back-fill 救済 + retention purge 用 cron
 
-4 つは ``app.queue.scheduler_entrypoint`` が 1 プロセスで並行実行する
+5 つは ``app.queue.scheduler_entrypoint`` が 1 プロセスで並行実行する
 (``python -m app.queue.scheduler_entrypoint``)。各 scheduler は自分の broker へ kick
 するため task→queue routing は不変 (Option B、routing 不変条件は
 ``tests/test_scheduler_routing.py`` が pin)。cron 表現は ``schedule.py`` の SSoT を、
@@ -18,6 +19,7 @@ from taskiq import TaskiqScheduler
 from taskiq.schedule_sources import LabelScheduleSource
 
 from app.queue.brokers import (
+    broker_agent,
     broker_briefing,
     broker_maintenance,
     broker_metadata,
@@ -35,6 +37,10 @@ scheduler_trend_discovery = TaskiqScheduler(
 scheduler_briefing = TaskiqScheduler(
     broker=broker_briefing,
     sources=[LabelScheduleSource(broker_briefing)],
+)
+scheduler_agent = TaskiqScheduler(
+    broker=broker_agent,
+    sources=[LabelScheduleSource(broker_agent)],
 )
 scheduler_maintenance = TaskiqScheduler(
     broker=broker_maintenance,

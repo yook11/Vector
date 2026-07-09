@@ -15,6 +15,7 @@
   5,35 * * * *       | :05,:35      | :05,:35      | backfill_assessments
   10,40 * * * *      | :10,:40      | :10,:40      | backfill_embeddings
   20,50 * * * *      | :20,:50      | :20,:50      | purge_auth_rate_limits
+  3,13,23,33,43,53 * * * * | :03,:13,... | :03,:13,... | sweep_stale_agent_runs
   25 * * * *         | :25          | :25          | purge_pipeline_events
   0 * * * *          | :00          | :00          | dispatch_medium
   0 */6 * * *        | 00,06,12,18  | (UTC=JST-9)  | dispatch_low
@@ -47,6 +48,9 @@ CRON_BACKFILL_EMBEDDINGS = "10,40 * * * *"
 
 # 30 分間隔 + 20 分オフセット — Better Auth rateLimit retention purge
 CRON_AUTH_RATE_LIMIT_PURGE = "20,50 * * * *"
+
+# 10 分間隔 + 3 分オフセット — agent run stale 回収
+CRON_AGENT_RUN_SWEEP = "3,13,23,33,43,53 * * * *"
 
 # :25 — pipeline_events retention purge (他 cron と最少 overlap な minute)
 CRON_PIPELINE_EVENTS_PURGE = "25 * * * *"

@@ -1,145 +1,134 @@
-"""Research response API router."""
+"""Research async run API router."""
 
 from __future__ import annotations
 
 from collections.abc import AsyncGenerator
-from datetime import UTC, datetime
 from typing import Annotated
+from uuid import UUID
 
+import structlog
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.agent.answering.direct import DirectAnswerInvalidError
-from app.agent.contract import AnswerQuestionInput, QuestionAnsweringAgent
-from app.agent.external_search.tavily import TavilyHttpClient
-from app.analysis.ai_provider_errors import (
-    AIProviderConfigurationError,
-    AIProviderError,
+from app.agent.composition import ensure_question_answering_agent_configured
+from app.agent.history import (
+    ActiveRunConflictError,
+    AgentHistoryRepository,
+    ThreadNotFoundError,
 )
-from app.config import settings
-from app.dependencies import CurrentUser, get_current_user, get_session
-from app.schemas.research import ResearchQuestionRequest, ResearchResponse
-from app.shared.security.safe_http import make_safe_async_client
+from app.analysis.ai_provider_errors import AIProviderError
+from app.db import engine
+from app.dependencies import CurrentUser, get_current_user
+from app.schemas.research import (
+    ResearchQuestionRequest,
+    ResearchRunResponse,
+    ResearchRunStartResponse,
+)
 
 router = APIRouter(prefix="/api/v1/research", tags=["research"])
 
+logger = structlog.get_logger(__name__)
+
 _GENERATION_UNAVAILABLE_DETAIL = "Answer generation is temporarily unavailable"
+_ACTIVE_RUN_DETAIL = "A run is already in progress for this thread"
 
 
-async def get_tavily_http_client() -> AsyncGenerator[TavilyHttpClient]:
-    async with make_safe_async_client() as client:
-        yield client
+async def get_agent_history_session() -> AsyncGenerator[AsyncSession]:
+    # get_session の request-wide UoW は commit→kiq→failed 更新の 2 tx 制御と分ける。
+    async with AsyncSession(engine, expire_on_commit=False) as session:
+        yield session
 
 
-def get_question_answering_agent(
-    session: Annotated[AsyncSession, Depends(get_session)],
-    tavily_client: Annotated[TavilyHttpClient, Depends(get_tavily_http_client)],
-) -> QuestionAnsweringAgent:
-    try:
-        return _build_question_answering_agent(
-            session=session,
-            tavily_client=tavily_client,
-        )
-    except AIProviderError as exc:
-        raise _generation_unavailable() from exc
+async def enqueue_agent_run(run_id: UUID) -> None:
+    from app.queue.messages.agent_run import AgentRunTrigger
+    from app.queue.tasks.agent_run import run_agent_answer
 
-
-def _build_question_answering_agent(
-    *,
-    session: AsyncSession,
-    tavily_client: TavilyHttpClient,
-) -> QuestionAnsweringAgent:
-    from app.agent.answering.ai.gemini import GeminiEvidenceAnswerDraftGenerator
-    from app.agent.answering.ai.gemini_direct import GeminiDirectAnswerGenerator
-    from app.agent.answering.direct import DirectAnswerService
-    from app.agent.answering.service import QuestionAnsweringService
-    from app.agent.answering.synthesis import AnswerSynthesisService
-    from app.agent.evidence_collection import EvidenceCollectionService
-    from app.agent.internal_retrieval.ai.gemini import GeminiQueryEmbedder
-    from app.agent.internal_retrieval.article_search import (
-        PgVectorArticleSearchRepository,
-    )
-    from app.agent.internal_retrieval.service import InternalSearchService
-    from app.agent.planning.ai.gemini import GeminiQuestionPlanner
-    from app.agent.planning.service import QuestionPlanningService
-
-    external_search = _build_external_search(tavily_client)
-    internal_search = InternalSearchService(
-        embedder=GeminiQueryEmbedder(),
-        article_search_repository=PgVectorArticleSearchRepository(session),
-    )
-    return QuestionAnsweringService(
-        planner=QuestionPlanningService(
-            planner=GeminiQuestionPlanner(),
-            audit_recorder=None,
-        ),
-        evidence_collector=EvidenceCollectionService(
-            internal_search=internal_search,
-            external_search=external_search,
-            requested_external_agent_count=None,
-        ),
-        synthesizer=AnswerSynthesisService(
-            generator=GeminiEvidenceAnswerDraftGenerator(),
-            audit_recorder=None,
-        ),
-        direct_answerer=DirectAnswerService(
-            generator=GeminiDirectAnswerGenerator(),
-            audit_recorder=None,
-        ),
-    )
-
-
-def _build_external_search(tavily_client: TavilyHttpClient) -> object:
-    if not (
-        settings.deepseek_api_key.get_secret_value()
-        and settings.tavily_api_key.get_secret_value()
-    ):
-        raise AIProviderConfigurationError()
-
-    from app.agent.external_search.ai.deepseek import (
-        DeepSeekEvidenceSelector,
-        DeepSeekQueryGenerator,
-    )
-    from app.agent.external_search.runner import ExternalSearchResearchRunner
-    from app.agent.external_search.service import ExternalSearchService
-    from app.agent.external_search.tavily import TavilySearchProvider
-
-    return ExternalSearchService(
-        runner=ExternalSearchResearchRunner(
-            query_generator=DeepSeekQueryGenerator(),
-            search_provider=TavilySearchProvider(
-                api_key=settings.tavily_api_key,
-                client=tavily_client,
-            ),
-            evidence_selector=DeepSeekEvidenceSelector(),
-        )
-    )
+    await run_agent_answer.kiq(AgentRunTrigger(run_id=run_id))
 
 
 @router.post(
     "/responses",
     operation_id="create_research_response",
+    status_code=status.HTTP_202_ACCEPTED,
+    response_model=ResearchRunStartResponse,
     responses={
         status.HTTP_503_SERVICE_UNAVAILABLE: {
             "description": "Answer generation is temporarily unavailable"
-        }
+        },
+        status.HTTP_409_CONFLICT: {"description": _ACTIVE_RUN_DETAIL},
     },
 )
 async def create_research_response(
     body: ResearchQuestionRequest,
-    _user: Annotated[CurrentUser, Depends(get_current_user)],
-    agent: Annotated[QuestionAnsweringAgent, Depends(get_question_answering_agent)],
-) -> ResearchResponse:
+    user: Annotated[CurrentUser, Depends(get_current_user)],
+    session: Annotated[AsyncSession, Depends(get_agent_history_session)],
+) -> ResearchRunStartResponse:
     try:
-        result = await agent.answer(
-            AnswerQuestionInput(
-                question=body.question,
-                as_of=datetime.now(UTC),
-            )
-        )
-    except (AIProviderError, DirectAnswerInvalidError) as exc:
+        ensure_question_answering_agent_configured()
+    except AIProviderError as exc:
         raise _generation_unavailable() from exc
-    return ResearchResponse.from_result(result)
+
+    repo = AgentHistoryRepository(session)
+    try:
+        async with session.begin():
+            created = await repo.create_user_run(
+                user_id=user.id,
+                question=body.question,
+                thread_id=body.thread_id,
+            )
+    except ThreadNotFoundError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND) from exc
+    except ActiveRunConflictError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=_ACTIVE_RUN_DETAIL,
+        ) from exc
+
+    try:
+        await enqueue_agent_run(created.run_id)
+    except Exception as exc:
+        logger.exception(
+            "agent_run_enqueue_failed",
+            run_id=str(created.run_id),
+            error_type=exc.__class__.__name__,
+        )
+        try:
+            async with session.begin():
+                updated = await repo.mark_enqueue_failed(created.run_id)
+                if not updated:
+                    logger.info(
+                        "agent_run_enqueue_failed_mark_failed_skipped",
+                        run_id=str(created.run_id),
+                    )
+        except Exception as update_exc:
+            logger.exception(
+                "agent_run_enqueue_failed_mark_failed_failed",
+                run_id=str(created.run_id),
+                error_type=update_exc.__class__.__name__,
+            )
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="Failed to enqueue research run",
+            ) from update_exc
+
+    return ResearchRunStartResponse(thread_id=created.thread_id, run_id=created.run_id)
+
+
+@router.get(
+    "/runs/{run_id}",
+    operation_id="get_research_run",
+    response_model=ResearchRunResponse,
+)
+async def get_research_run(
+    run_id: UUID,
+    user: Annotated[CurrentUser, Depends(get_current_user)],
+    session: Annotated[AsyncSession, Depends(get_agent_history_session)],
+) -> ResearchRunResponse:
+    repo = AgentHistoryRepository(session)
+    response = await repo.read_run_for_user(run_id=run_id, user_id=user.id)
+    if response is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND)
+    return response
 
 
 def _generation_unavailable() -> HTTPException:

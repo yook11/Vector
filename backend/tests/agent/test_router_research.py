@@ -1,342 +1,662 @@
-"""Research response API router contract tests."""
+"""Research async run API contract tests."""
 
 from __future__ import annotations
 
 from collections.abc import AsyncGenerator
 from datetime import UTC, datetime
 from typing import Any
+from uuid import UUID
 
 import pytest
-from fastapi import HTTPException
 from httpx import ASGITransport, AsyncClient
 from pydantic import SecretStr
+from sqlalchemy import select, update
+from sqlalchemy.ext.asyncio import AsyncSession
 
 import app.agent.router as research_router_module
-from app.agent.answering.direct import DirectAnswerInvalidError
-from app.agent.contract import (
-    AnswerQuestionInput,
-    AnswerQuestionResult,
-    AnswerRetrievalSummary,
-    ExternalUrlSource,
-    InternalArticleSource,
-)
-from app.agent.router import get_question_answering_agent
-from app.analysis.ai_provider_errors import (
-    AIProviderConfigurationError,
-    AIProviderError,
-)
 from app.config import settings
 from app.main import app
-from app.shared.security.safe_url import SafeUrl
+from app.models.agent_message import AgentMessage, AgentMessageSource
+from app.models.agent_run import AgentRun
+from app.models.agent_thread import AgentThread
+from tests.conftest import TEST_ADMIN_ID, TEST_USER_ID
 
-_URL = "/api/v1/research/responses"
-
-
-class FakeQuestionAnsweringAgent:
-    def __init__(
-        self,
-        result: AnswerQuestionResult | None = None,
-        exc: Exception | None = None,
-    ) -> None:
-        self._result = result
-        self._exc = exc
-        self.calls: list[AnswerQuestionInput] = []
-
-    async def answer(self, input: AnswerQuestionInput) -> AnswerQuestionResult:
-        self.calls.append(input)
-        if self._exc is not None:
-            raise self._exc
-        if self._result is None:
-            raise AssertionError("fake result is not configured")
-        return self._result
+_RESPONSES_URL = "/api/v1/research/responses"
 
 
-def _retrieval(
-    planned_mode: str = "internal",
-) -> AnswerRetrievalSummary:
-    return AnswerRetrievalSummary(
-        planned_mode=planned_mode,  # type: ignore[arg-type]
-        unmet_requirements=[],
-    )
+class FakeEnqueue:
+    def __init__(self, exc: Exception | None = None) -> None:
+        self.exc = exc
+        self.calls: list[UUID] = []
+
+    async def __call__(self, run_id: UUID) -> None:
+        self.calls.append(run_id)
+        if self.exc is not None:
+            raise self.exc
 
 
-def _answered_with_sources() -> AnswerQuestionResult:
-    return AnswerQuestionResult(
-        status="answered",
-        answer="NVIDIA は新製品発表後も需要が強いです。[[1]][[2]]",
-        sources=[
-            InternalArticleSource(
-                source_ref="1",
-                article_id=123,
-                title="GPU 需要の分析",
-                published_at=datetime(2026, 7, 1, 9, 0, tzinfo=UTC),
-            ),
-            ExternalUrlSource(
-                source_ref="2",
-                url=SafeUrl("https://example.com/nvidia-demand"),
-                title="NVIDIA demand update",
-                evidence_claim="Analysts point to continued demand.",
-                published_at=datetime(2026, 7, 2, 12, 0, tzinfo=UTC),
-                source_name="Example News",
-            ),
-        ],
-        missing_aspects=[],
-        retrieval=_retrieval("internal_and_external"),
-    )
-
-
-def _direct_answer() -> AnswerQuestionResult:
-    return AnswerQuestionResult(
-        status="answered",
-        answer="検索なしの一般回答です。",
-        sources=[],
-        missing_aspects=[],
-        retrieval=_retrieval("none"),
-    )
-
-
-def _insufficient_answer() -> AnswerQuestionResult:
-    return AnswerQuestionResult(
-        status="insufficient",
-        answer="確認できた範囲では需要は強いですが、一部指標は未確認です。[[1]]",
-        sources=[
-            InternalArticleSource(
-                source_ref="1",
-                article_id=123,
-                title="GPU 需要の分析",
-            )
-        ],
-        missing_aspects=["直近四半期の出荷数は確認できませんでした"],
-        retrieval=_retrieval("internal"),
-    )
-
-
-def _metadata_null_answer() -> AnswerQuestionResult:
-    return AnswerQuestionResult(
-        status="answered",
-        answer="metadata が欠けた source の回答です。[[1]]",
-        sources=[
-            InternalArticleSource(
-                source_ref="1",
-                article_id=123,
-                title="metadata 欠損記事",
-            )
-        ],
-        missing_aspects=[],
-        retrieval=_retrieval("internal"),
-    )
-
-
-def _override_agent(agent: FakeQuestionAnsweringAgent) -> None:
-    app.dependency_overrides[get_question_answering_agent] = lambda: agent
+@pytest.fixture(autouse=True)
+def _configured_generation(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(settings, "deepseek_api_key", SecretStr("deepseek-test-key"))
+    monkeypatch.setattr(settings, "tavily_api_key", SecretStr("tvly-test-key"))
 
 
 @pytest.fixture
 async def research_client(
     auth_headers: dict[str, str],
-) -> AsyncGenerator[AsyncClient]:
+    db_session: AsyncSession,
+    monkeypatch: pytest.MonkeyPatch,
+) -> AsyncGenerator[tuple[AsyncClient, FakeEnqueue]]:
+    async def override_history_session() -> AsyncGenerator[AsyncSession]:
+        if db_session.in_transaction():
+            await db_session.commit()
+        yield db_session
+
+    fake_enqueue = FakeEnqueue()
+    app.dependency_overrides[research_router_module.get_agent_history_session] = (
+        override_history_session
+    )
+    monkeypatch.setattr(research_router_module, "enqueue_agent_run", fake_enqueue)
     async with AsyncClient(
         transport=ASGITransport(app=app),
         base_url="http://test",
         headers=auth_headers,
     ) as client:
-        yield client
-    app.dependency_overrides.pop(get_question_answering_agent, None)
+        yield client, fake_enqueue
+    app.dependency_overrides.clear()
 
 
 @pytest.fixture
-async def anonymous_research_client() -> AsyncGenerator[AsyncClient]:
+async def anonymous_research_client(
+    db_session: AsyncSession,
+) -> AsyncGenerator[AsyncClient]:
+    async def override_history_session() -> AsyncGenerator[AsyncSession]:
+        if db_session.in_transaction():
+            await db_session.commit()
+        yield db_session
+
+    app.dependency_overrides[research_router_module.get_agent_history_session] = (
+        override_history_session
+    )
     async with AsyncClient(
         transport=ASGITransport(app=app),
         base_url="http://test",
     ) as client:
         yield client
-    app.dependency_overrides.pop(get_question_answering_agent, None)
+    app.dependency_overrides.clear()
 
 
-@pytest.fixture
-async def research_client_no_raise(
-    auth_headers: dict[str, str],
-) -> AsyncGenerator[AsyncClient]:
-    async with AsyncClient(
-        transport=ASGITransport(app=app, raise_app_exceptions=False),
-        base_url="http://test",
-        headers=auth_headers,
-    ) as client:
-        yield client
-    app.dependency_overrides.pop(get_question_answering_agent, None)
+async def _fetch_run(session: AsyncSession, run_id: UUID) -> AgentRun:
+    run = await session.get(AgentRun, run_id)
+    assert run is not None
+    return run
+
+
+async def _create_thread(
+    session: AsyncSession,
+    *,
+    user_id: str = TEST_USER_ID,
+    title: str = "既存 thread",
+    updated_at: datetime | None = None,
+) -> AgentThread:
+    thread = AgentThread(
+        user_id=UUID(user_id),
+        title=title,
+    )
+    if updated_at is not None:
+        thread.updated_at = updated_at
+    session.add(thread)
+    await session.commit()
+    await session.refresh(thread)
+    return thread
+
+
+async def _create_message(
+    session: AsyncSession,
+    *,
+    thread_id: UUID,
+    seq: int,
+    role: str,
+    content: str,
+    missing_aspects: list[str] | None = None,
+) -> AgentMessage:
+    message = AgentMessage(
+        thread_id=thread_id,
+        seq=seq,
+        role=role,
+        content=content,
+        missing_aspects=missing_aspects or [],
+    )
+    session.add(message)
+    await session.commit()
+    await session.refresh(message)
+    return message
+
+
+async def _create_run(
+    session: AsyncSession,
+    *,
+    thread_id: UUID,
+    user_message_id: UUID,
+    status: str = "queued",
+    assistant_message_id: UUID | None = None,
+    error_code: str | None = None,
+) -> AgentRun:
+    run = AgentRun(
+        thread_id=thread_id,
+        user_message_id=user_message_id,
+        assistant_message_id=assistant_message_id,
+        status=status,
+        error_code=error_code,
+    )
+    session.add(run)
+    await session.commit()
+    await session.refresh(run)
+    return run
 
 
 @pytest.mark.asyncio
 class TestCreateResearchResponse:
-    async def test_maps_result_to_public_contract(
+    async def test_creates_new_thread_user_message_run_and_enqueues(
         self,
-        research_client: AsyncClient,
+        research_client: tuple[AsyncClient, FakeEnqueue],
+        db_session: AsyncSession,
     ) -> None:
-        _override_agent(FakeQuestionAnsweringAgent(_answered_with_sources()))
+        client, fake_enqueue = research_client
 
-        response = await research_client.post(_URL, json={"question": "NVIDIA は？"})
-
-        assert response.status_code == 200
-        data = response.json()
-        assert set(data) == {"answer", "sources", "missingAspects"}
-        assert data["answer"] == "NVIDIA は新製品発表後も需要が強いです。[[1]][[2]]"
-        assert data["missingAspects"] == []
-        assert data["sources"] == [
-            {
-                "kind": "internal_article",
-                "sourceRef": "1",
-                "articleId": 123,
-                "title": "GPU 需要の分析",
-                "publishedAt": "2026-07-01T09:00:00Z",
-            },
-            {
-                "kind": "external_url",
-                "sourceRef": "2",
-                "url": "https://example.com/nvidia-demand",
-                "title": "NVIDIA demand update",
-                "evidenceClaim": "Analysts point to continued demand.",
-                "publishedAt": "2026-07-02T12:00:00Z",
-                "sourceName": "Example News",
-            },
-        ]
-        assert "status" not in data
-        assert "retrieval" not in data
-        assert "sufficiency" not in data
-
-    async def test_source_nullable_metadata_is_present_as_null(
-        self,
-        research_client: AsyncClient,
-    ) -> None:
-        _override_agent(FakeQuestionAnsweringAgent(_metadata_null_answer()))
-
-        response = await research_client.post(_URL, json={"question": "metadata は？"})
-
-        assert response.status_code == 200
-        source = response.json()["sources"][0]
-        assert "publishedAt" in source and source["publishedAt"] is None
-        assert "sourceName" not in source
-        assert "snippet" not in source
-        assert "evidenceClaim" not in source
-
-    async def test_direct_answer_keeps_empty_sources_and_missing_aspects(
-        self,
-        research_client: AsyncClient,
-    ) -> None:
-        _override_agent(FakeQuestionAnsweringAgent(_direct_answer()))
-
-        response = await research_client.post(_URL, json={"question": "用語説明して"})
-
-        assert response.status_code == 200
-        assert response.json() == {
-            "answer": "検索なしの一般回答です。",
-            "sources": [],
-            "missingAspects": [],
-        }
-
-    async def test_insufficient_answer_exposes_missing_aspects_without_status(
-        self,
-        research_client: AsyncClient,
-    ) -> None:
-        _override_agent(FakeQuestionAnsweringAgent(_insufficient_answer()))
-
-        response = await research_client.post(_URL, json={"question": "需要は？"})
-
-        assert response.status_code == 200
-        data = response.json()
-        assert data["missingAspects"] == ["直近四半期の出荷数は確認できませんでした"]
-        assert "status" not in data
-        assert "retrieval" not in data
-
-    async def test_passes_stripped_question_and_utc_aware_as_of(
-        self,
-        research_client: AsyncClient,
-    ) -> None:
-        agent = FakeQuestionAnsweringAgent(_direct_answer())
-        _override_agent(agent)
-
-        response = await research_client.post(_URL, json={"question": "  用語説明  "})
-
-        assert response.status_code == 200
-        assert len(agent.calls) == 1
-        input_ = agent.calls[0]
-        assert input_.question == "用語説明"
-        assert input_.as_of.tzinfo is UTC
-
-    async def test_requires_auth(
-        self,
-        anonymous_research_client: AsyncClient,
-    ) -> None:
-        _override_agent(FakeQuestionAnsweringAgent(_direct_answer()))
-
-        response = await anonymous_research_client.post(
-            _URL, json={"question": "NVIDIA は？"}
+        response = await client.post(
+            _RESPONSES_URL, json={"question": "  NVIDIA の直近動向は？  "}
         )
 
-        assert response.status_code == 401
-        assert response.json() == {"detail": "Not authenticated"}
+        assert response.status_code == 202
+        data = response.json()
+        assert set(data) == {"threadId", "runId"}
+        run_id = UUID(data["runId"])
+        thread_id = UUID(data["threadId"])
+        assert fake_enqueue.calls == [run_id]
 
-    @pytest.mark.parametrize(
-        "question",
-        ["", "   ", "あ" * 1001],
-    )
-    async def test_rejects_invalid_question(
+        thread = await db_session.get(AgentThread, thread_id)
+        assert thread is not None
+        assert thread.user_id == UUID(TEST_USER_ID)
+        assert thread.title == "NVIDIA の直近動向は？"
+
+        messages = (
+            (
+                await db_session.execute(
+                    select(AgentMessage).where(AgentMessage.thread_id == thread_id)
+                )
+            )
+            .scalars()
+            .all()
+        )
+        assert len(messages) == 1
+        assert messages[0].seq == 1
+        assert messages[0].role == "user"
+        assert messages[0].content == "NVIDIA の直近動向は？"
+        assert messages[0].missing_aspects == []
+
+        run = await _fetch_run(db_session, run_id)
+        assert run.thread_id == thread_id
+        assert run.user_message_id == messages[0].id
+        assert run.status == "queued"
+        assert run.error_code is None
+
+    @pytest.mark.parametrize("length", [50, 51])
+    async def test_new_thread_title_uses_first_50_chars(
         self,
-        research_client: AsyncClient,
-        question: str,
+        research_client: tuple[AsyncClient, FakeEnqueue],
+        db_session: AsyncSession,
+        length: int,
     ) -> None:
-        _override_agent(FakeQuestionAnsweringAgent(_direct_answer()))
+        client, _fake_enqueue = research_client
+        question = "あ" * length
 
-        response = await research_client.post(_URL, json={"question": question})
+        response = await client.post(_RESPONSES_URL, json={"question": question})
 
-        assert response.status_code == 422
-        detail = response.json()["detail"]
-        assert isinstance(detail, list)
-        assert detail[0]["loc"] == ["body", "question"]
+        assert response.status_code == 202
+        thread = await db_session.get(AgentThread, UUID(response.json()["threadId"]))
+        assert thread is not None
+        assert thread.title == "あ" * 50
 
-    async def test_accepts_question_at_max_length(
+    async def test_existing_thread_uses_next_seq_and_bumps_updated_at(
         self,
-        research_client: AsyncClient,
+        research_client: tuple[AsyncClient, FakeEnqueue],
+        db_session: AsyncSession,
     ) -> None:
-        _override_agent(FakeQuestionAnsweringAgent(_direct_answer()))
+        client, _fake_enqueue = research_client
+        old_updated_at = datetime(2026, 1, 1, tzinfo=UTC)
+        thread = await _create_thread(db_session, updated_at=old_updated_at)
+        await _create_message(
+            db_session,
+            thread_id=thread.id,
+            seq=1,
+            role="user",
+            content="最初の質問",
+        )
 
-        response = await research_client.post(_URL, json={"question": "あ" * 1000})
+        response = await client.post(
+            _RESPONSES_URL,
+            json={"question": "続きの質問", "threadId": str(thread.id)},
+        )
 
-        assert response.status_code == 200
+        assert response.status_code == 202
+        await db_session.refresh(thread)
+        assert thread.updated_at > old_updated_at
+        messages = (
+            (
+                await db_session.execute(
+                    select(AgentMessage)
+                    .where(AgentMessage.thread_id == thread.id)
+                    .order_by(AgentMessage.seq)
+                )
+            )
+            .scalars()
+            .all()
+        )
+        assert [m.seq for m in messages] == [1, 2]
+        assert messages[1].content == "続きの質問"
 
-    @pytest.mark.parametrize(
-        "exc",
-        [
-            AIProviderError("provider internal reason SHOULD_NOT_LEAK"),
-            DirectAnswerInvalidError("direct_internal_reason_SHOULD_NOT_LEAK"),
-        ],
-    )
-    async def test_typed_generation_errors_return_generic_503(
+    async def test_active_run_returns_409(
         self,
-        research_client: AsyncClient,
-        exc: Exception,
+        research_client: tuple[AsyncClient, FakeEnqueue],
+        db_session: AsyncSession,
     ) -> None:
-        _override_agent(FakeQuestionAnsweringAgent(exc=exc))
+        client, fake_enqueue = research_client
+        thread = await _create_thread(db_session)
+        user_message = await _create_message(
+            db_session,
+            thread_id=thread.id,
+            seq=1,
+            role="user",
+            content="実行中の質問",
+        )
+        await _create_run(
+            db_session,
+            thread_id=thread.id,
+            user_message_id=user_message.id,
+            status="running",
+        )
 
-        response = await research_client.post(_URL, json={"question": "NVIDIA は？"})
+        response = await client.post(
+            _RESPONSES_URL,
+            json={"question": "次の質問", "threadId": str(thread.id)},
+        )
+
+        assert response.status_code == 409
+        assert response.json() == {
+            "detail": "A run is already in progress for this thread"
+        }
+        assert fake_enqueue.calls == []
+
+    @pytest.mark.parametrize("terminal_status", ["completed", "failed"])
+    async def test_terminal_run_allows_next_question(
+        self,
+        research_client: tuple[AsyncClient, FakeEnqueue],
+        db_session: AsyncSession,
+        terminal_status: str,
+    ) -> None:
+        client, fake_enqueue = research_client
+        thread = await _create_thread(db_session)
+        user_message = await _create_message(
+            db_session,
+            thread_id=thread.id,
+            seq=1,
+            role="user",
+            content="完了済みの質問",
+        )
+        assistant_message_id: UUID | None = None
+        error_code: str | None = None
+        expected_next_seq = 2
+        if terminal_status == "completed":
+            assistant_message = await _create_message(
+                db_session,
+                thread_id=thread.id,
+                seq=2,
+                role="assistant",
+                content="完了済みの回答",
+            )
+            assistant_message_id = assistant_message.id
+            expected_next_seq = 3
+        else:
+            error_code = "internal_error"
+        await _create_run(
+            db_session,
+            thread_id=thread.id,
+            user_message_id=user_message.id,
+            assistant_message_id=assistant_message_id,
+            status=terminal_status,
+            error_code=error_code,
+        )
+
+        response = await client.post(
+            _RESPONSES_URL,
+            json={"question": "次の質問", "threadId": str(thread.id)},
+        )
+
+        assert response.status_code == 202
+        new_run_id = UUID(response.json()["runId"])
+        assert fake_enqueue.calls == [new_run_id]
+        messages = (
+            (
+                await db_session.execute(
+                    select(AgentMessage)
+                    .where(AgentMessage.thread_id == thread.id)
+                    .order_by(AgentMessage.seq)
+                )
+            )
+            .scalars()
+            .all()
+        )
+        assert messages[-1].seq == expected_next_seq
+        assert messages[-1].role == "user"
+        assert messages[-1].content == "次の質問"
+        run = await _fetch_run(db_session, new_run_id)
+        assert run.status == "queued"
+        assert run.user_message_id == messages[-1].id
+
+    async def test_other_users_thread_is_404(
+        self,
+        research_client: tuple[AsyncClient, FakeEnqueue],
+        db_session: AsyncSession,
+    ) -> None:
+        client, fake_enqueue = research_client
+        thread = await _create_thread(db_session, user_id=TEST_ADMIN_ID)
+
+        response = await client.post(
+            _RESPONSES_URL,
+            json={"question": "横取り", "threadId": str(thread.id)},
+        )
+
+        assert response.status_code == 404
+        assert fake_enqueue.calls == []
+
+    async def test_enqueue_failure_marks_failed_but_still_returns_run_id(
+        self,
+        auth_headers: dict[str, str],
+        db_session: AsyncSession,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        async def override_history_session() -> AsyncGenerator[AsyncSession]:
+            if db_session.in_transaction():
+                await db_session.commit()
+            yield db_session
+
+        fake_enqueue = FakeEnqueue(exc=RuntimeError("redis down SHOULD_NOT_LEAK"))
+        app.dependency_overrides[research_router_module.get_agent_history_session] = (
+            override_history_session
+        )
+        monkeypatch.setattr(research_router_module, "enqueue_agent_run", fake_enqueue)
+        async with AsyncClient(
+            transport=ASGITransport(app=app),
+            base_url="http://test",
+            headers=auth_headers,
+        ) as client:
+            response = await client.post(
+                _RESPONSES_URL, json={"question": "enqueue 失敗する質問"}
+            )
+        app.dependency_overrides.clear()
+
+        assert response.status_code == 202
+        run_id = UUID(response.json()["runId"])
+        run = await _fetch_run(db_session, run_id)
+        assert run.status == "failed"
+        assert run.error_code == "enqueue_failed"
+        assert "SHOULD_NOT_LEAK" not in response.text
+
+    async def test_enqueue_failure_does_not_fail_run_that_already_started(
+        self,
+        auth_headers: dict[str, str],
+        db_session: AsyncSession,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        async def override_history_session() -> AsyncGenerator[AsyncSession]:
+            if db_session.in_transaction():
+                await db_session.commit()
+            yield db_session
+
+        async def enqueue_then_start_and_fail(run_id: UUID) -> None:
+            await db_session.execute(
+                update(AgentRun).where(AgentRun.id == run_id).values(status="running")
+            )
+            await db_session.commit()
+            raise RuntimeError("redis uncertain SHOULD_NOT_LEAK")
+
+        app.dependency_overrides[research_router_module.get_agent_history_session] = (
+            override_history_session
+        )
+        monkeypatch.setattr(
+            research_router_module, "enqueue_agent_run", enqueue_then_start_and_fail
+        )
+        async with AsyncClient(
+            transport=ASGITransport(app=app),
+            base_url="http://test",
+            headers=auth_headers,
+        ) as client:
+            response = await client.post(
+                _RESPONSES_URL, json={"question": "enqueue 失敗 race"}
+            )
+        app.dependency_overrides.clear()
+
+        assert response.status_code == 202
+        run = await _fetch_run(db_session, UUID(response.json()["runId"]))
+        assert run.status == "running"
+        assert run.error_code is None
+        assert "SHOULD_NOT_LEAK" not in response.text
+
+    async def test_key_missing_fails_fast_without_persisting_run(
+        self,
+        research_client: tuple[AsyncClient, FakeEnqueue],
+        db_session: AsyncSession,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        client, fake_enqueue = research_client
+        monkeypatch.setattr(settings, "deepseek_api_key", SecretStr(""))
+
+        response = await client.post(_RESPONSES_URL, json={"question": "NVIDIA は？"})
 
         assert response.status_code == 503
         assert response.json() == {
             "detail": "Answer generation is temporarily unavailable"
         }
-        assert "SHOULD_NOT_LEAK" not in response.text
+        assert fake_enqueue.calls == []
+        runs = (await db_session.execute(select(AgentRun))).scalars().all()
+        assert runs == []
 
-    async def test_unexpected_error_stays_500(
+    async def test_requires_auth(
         self,
-        research_client_no_raise: AsyncClient,
+        anonymous_research_client: AsyncClient,
     ) -> None:
-        _override_agent(FakeQuestionAnsweringAgent(exc=RuntimeError("boom")))
-
-        response = await research_client_no_raise.post(
-            _URL, json={"question": "NVIDIA は？"}
+        response = await anonymous_research_client.post(
+            _RESPONSES_URL, json={"question": "NVIDIA は？"}
         )
 
-        assert response.status_code == 500
+        assert response.status_code == 401
+        assert response.json() == {"detail": "Not authenticated"}
+
+    @pytest.mark.parametrize("question", ["", "   ", "あ" * 1001])
+    async def test_rejects_invalid_question(
+        self,
+        research_client: tuple[AsyncClient, FakeEnqueue],
+        question: str,
+    ) -> None:
+        client, fake_enqueue = research_client
+
+        response = await client.post(_RESPONSES_URL, json={"question": question})
+
+        assert response.status_code == 422
+        assert fake_enqueue.calls == []
+
+
+@pytest.mark.asyncio
+class TestGetResearchRun:
+    async def test_returns_queued_running_failed_and_completed_from_rows(
+        self,
+        research_client: tuple[AsyncClient, FakeEnqueue],
+        db_session: AsyncSession,
+    ) -> None:
+        client, _fake_enqueue = research_client
+        queued_thread = await _create_thread(db_session)
+        queued_user = await _create_message(
+            db_session,
+            thread_id=queued_thread.id,
+            seq=1,
+            role="user",
+            content="queued?",
+        )
+        queued_run = await _create_run(
+            db_session, thread_id=queued_thread.id, user_message_id=queued_user.id
+        )
+        running_thread = await _create_thread(db_session)
+        running_user = await _create_message(
+            db_session,
+            thread_id=running_thread.id,
+            seq=1,
+            role="user",
+            content="running?",
+        )
+        running_run = await _create_run(
+            db_session,
+            thread_id=running_thread.id,
+            user_message_id=running_user.id,
+            status="running",
+        )
+        failed_thread = await _create_thread(db_session)
+        failed_user = await _create_message(
+            db_session,
+            thread_id=failed_thread.id,
+            seq=1,
+            role="user",
+            content="failed?",
+        )
+        failed_run = await _create_run(
+            db_session,
+            thread_id=failed_thread.id,
+            user_message_id=failed_user.id,
+            status="failed",
+            error_code="generation_unavailable",
+        )
+
+        assert (await client.get(f"/api/v1/research/runs/{queued_run.id}")).json()[
+            "status"
+        ] == "queued"
+        assert (await client.get(f"/api/v1/research/runs/{running_run.id}")).json()[
+            "status"
+        ] == "running"
+        failed_response = await client.get(f"/api/v1/research/runs/{failed_run.id}")
+        assert failed_response.json()["errorCode"] == "generation_unavailable"
+
+    async def test_completed_result_allows_null_internal_article_id(
+        self,
+        research_client: tuple[AsyncClient, FakeEnqueue],
+        db_session: AsyncSession,
+    ) -> None:
+        client, _fake_enqueue = research_client
+        thread = await _create_thread(db_session)
+        user_message = await _create_message(
+            db_session, thread_id=thread.id, seq=1, role="user", content="answer?"
+        )
+        assistant_message = await _create_message(
+            db_session,
+            thread_id=thread.id,
+            seq=2,
+            role="assistant",
+            content="回答です。[[1]][[2]]",
+            missing_aspects=["未確認の観点"],
+        )
+        db_session.add_all(
+            [
+                AgentMessageSource(
+                    message_id=assistant_message.id,
+                    ordinal=1,
+                    kind="internal_article",
+                    source_ref="1",
+                    analyzed_article_id=None,
+                    title="削除済み内部記事",
+                    published_at=datetime(2026, 7, 1, tzinfo=UTC),
+                ),
+                AgentMessageSource(
+                    message_id=assistant_message.id,
+                    ordinal=2,
+                    kind="external_url",
+                    source_ref="2",
+                    url="https://example.com/source",
+                    title="External source",
+                    source_name="Example",
+                    published_at=None,
+                    evidence_claim="External claim.",
+                ),
+            ]
+        )
+        await db_session.commit()
+        run = await _create_run(
+            db_session,
+            thread_id=thread.id,
+            user_message_id=user_message.id,
+            assistant_message_id=assistant_message.id,
+            status="completed",
+        )
+
+        response = await client.get(f"/api/v1/research/runs/{run.id}")
+
+        assert response.status_code == 200
+        assert response.json() == {
+            "runId": str(run.id),
+            "threadId": str(thread.id),
+            "status": "completed",
+            "result": {
+                "answer": "回答です。[[1]][[2]]",
+                "missingAspects": ["未確認の観点"],
+                "sources": [
+                    {
+                        "kind": "internal_article",
+                        "sourceRef": "1",
+                        "articleId": None,
+                        "title": "削除済み内部記事",
+                        "publishedAt": "2026-07-01T00:00:00Z",
+                    },
+                    {
+                        "kind": "external_url",
+                        "sourceRef": "2",
+                        "url": "https://example.com/source",
+                        "title": "External source",
+                        "sourceName": "Example",
+                        "publishedAt": None,
+                        "evidenceClaim": "External claim.",
+                    },
+                ],
+            },
+            "errorCode": None,
+        }
+
+    async def test_other_users_run_is_404(
+        self,
+        research_client: tuple[AsyncClient, FakeEnqueue],
+        db_session: AsyncSession,
+    ) -> None:
+        client, _fake_enqueue = research_client
+        thread = await _create_thread(db_session, user_id=TEST_ADMIN_ID)
+        user_message = await _create_message(
+            db_session, thread_id=thread.id, seq=1, role="user", content="other"
+        )
+        run = await _create_run(
+            db_session, thread_id=thread.id, user_message_id=user_message.id
+        )
+
+        response = await client.get(f"/api/v1/research/runs/{run.id}")
+
+        assert response.status_code == 404
+
+    async def test_unknown_run_is_404(
+        self,
+        research_client: tuple[AsyncClient, FakeEnqueue],
+    ) -> None:
+        client, _fake_enqueue = research_client
+
+        response = await client.get(
+            "/api/v1/research/runs/00000000-0000-4000-a000-000000000099"
+        )
+
+        assert response.status_code == 404
 
 
 def _resolve_ref(schema: dict[str, Any], ref: str) -> dict[str, Any]:
@@ -344,23 +664,21 @@ def _resolve_ref(schema: dict[str, Any], ref: str) -> dict[str, Any]:
     return schema["components"]["schemas"][name]
 
 
-def test_openapi_exposes_operation_id_and_question_max_length() -> None:
+def test_openapi_exposes_async_contract_and_question_shape() -> None:
     app.openapi_schema = None
     schema = app.openapi()
-    operation = schema["paths"][_URL]["post"]
+    operation = schema["paths"][_RESPONSES_URL]["post"]
     body_schema = operation["requestBody"]["content"]["application/json"]["schema"]
     request_schema = _resolve_ref(schema, body_schema["$ref"])
-    response_body_schema = operation["responses"]["200"]["content"]["application/json"][
-        "schema"
-    ]
-    response_schema = _resolve_ref(schema, response_body_schema["$ref"])
+    accepted_schema = _resolve_ref(
+        schema,
+        operation["responses"]["202"]["content"]["application/json"]["schema"]["$ref"],
+    )
 
     assert operation["operationId"] == "create_research_response"
     assert request_schema["properties"]["question"]["maxLength"] == 1000
-    assert (
-        "citation markers like [[1]]"
-        in response_schema["properties"]["answer"]["description"]
-    )
+    assert "threadId" in request_schema["properties"]
+    assert set(accepted_schema["properties"]) == {"threadId", "runId"}
 
 
 def test_openapi_exposes_variant_specific_source_contract() -> None:
@@ -379,48 +697,10 @@ def test_openapi_exposes_variant_specific_source_contract() -> None:
     assert "snippet" not in internal_schema["properties"]
     assert "sourceName" not in internal_schema["properties"]
     assert "evidenceClaim" not in internal_schema["properties"]
+    assert any(
+        branch.get("type") == "null"
+        for branch in internal_schema["properties"]["articleId"]["anyOf"]
+    )
     assert "evidenceClaim" in external_schema["properties"]
     assert "evidenceClaim" in external_schema["required"]
     assert "snippet" not in external_schema["properties"]
-
-
-@pytest.mark.parametrize(
-    ("deepseek_key", "tavily_key"),
-    [
-        ("", "tvly-test-key"),
-        ("deepseek-test-key", ""),
-        ("", ""),
-    ],
-)
-def test_external_search_key_missing_is_configuration_error(
-    monkeypatch: pytest.MonkeyPatch,
-    deepseek_key: str,
-    tavily_key: str,
-) -> None:
-    monkeypatch.setattr(settings, "deepseek_api_key", SecretStr(deepseek_key))
-    monkeypatch.setattr(settings, "tavily_api_key", SecretStr(tavily_key))
-
-    with pytest.raises(AIProviderConfigurationError):
-        research_router_module._build_external_search(object())  # type: ignore[arg-type]
-
-
-def test_agent_factory_maps_configuration_error_to_503(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    def raise_configuration_error(**_kwargs: object) -> None:
-        raise AIProviderConfigurationError()
-
-    monkeypatch.setattr(
-        research_router_module,
-        "_build_question_answering_agent",
-        raise_configuration_error,
-    )
-
-    with pytest.raises(HTTPException) as exc_info:
-        get_question_answering_agent(
-            session=object(),  # type: ignore[arg-type]
-            tavily_client=object(),  # type: ignore[arg-type]
-        )
-
-    assert exc_info.value.status_code == 503
-    assert exc_info.value.detail == "Answer generation is temporarily unavailable"

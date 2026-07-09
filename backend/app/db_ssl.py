@@ -186,6 +186,7 @@ def create_app_engine(
     # stale-connection resilience を既定付与する (呼び出し側が明示すれば override)。
     engine_kwargs.setdefault("pool_pre_ping", True)  # checkout 時 liveness check
     engine_kwargs.setdefault("pool_recycle", DEFAULT_POOL_RECYCLE)
+    engine_kwargs.setdefault("hide_parameters", True)
     # pool_timeout は QueuePool 専用。NullPool 移行時は付与しない
     # (neon-connection-routing.md の pooler 昇格手順)。
     if engine_kwargs.get("poolclass") is not NullPool:

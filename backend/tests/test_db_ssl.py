@@ -182,6 +182,14 @@ class TestCreateAppEngine:
         engine = create_app_engine(f"{_NEON}?sslmode=require", echo=True)
         assert engine.sync_engine.echo is True
 
+    def test_engine_hides_sql_parameters_by_default(self) -> None:
+        engine = create_app_engine(f"{_NEON}?sslmode=require")
+        assert engine.sync_engine.hide_parameters is True
+
+    def test_caller_can_override_hide_parameters(self) -> None:
+        engine = create_app_engine(f"{_NEON}?sslmode=require", hide_parameters=False)
+        assert engine.sync_engine.hide_parameters is False
+
     def test_caller_passed_ssl_connect_arg_raises(self) -> None:
         # SSL 決定権の一元化: 呼び出し側の connect_args['ssl'] は fail-fast
         ctx = ssl.create_default_context()

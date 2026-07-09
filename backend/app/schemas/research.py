@@ -4,14 +4,10 @@ from __future__ import annotations
 
 from datetime import datetime
 from typing import Annotated, Literal
+from uuid import UUID
 
 from pydantic import Field, StringConstraints
 
-from app.agent.contract import (
-    AnswerQuestionResult,
-    ExternalUrlSource,
-    InternalArticleSource,
-)
 from app.schemas.base import _CamelBase
 from app.shared.security.safe_url import SafeUrl
 
@@ -23,26 +19,15 @@ ResearchQuestion = Annotated[
 
 class ResearchQuestionRequest(_CamelBase):
     question: ResearchQuestion
+    thread_id: UUID | None = None
 
 
 class ResearchInternalArticleSource(_CamelBase):
     kind: Literal["internal_article"]
     source_ref: str
-    article_id: int
+    article_id: int | None
     title: str
     published_at: datetime | None
-
-    @classmethod
-    def from_source(
-        cls, source: InternalArticleSource
-    ) -> ResearchInternalArticleSource:
-        return cls(
-            kind=source.kind,
-            source_ref=source.source_ref,
-            article_id=source.article_id,
-            title=source.title,
-            published_at=source.published_at,
-        )
 
 
 class ResearchExternalUrlSource(_CamelBase):
@@ -53,18 +38,6 @@ class ResearchExternalUrlSource(_CamelBase):
     source_name: str | None
     published_at: datetime | None
     evidence_claim: str
-
-    @classmethod
-    def from_source(cls, source: ExternalUrlSource) -> ResearchExternalUrlSource:
-        return cls(
-            kind=source.kind,
-            source_ref=source.source_ref,
-            url=source.url,
-            title=source.title,
-            source_name=source.source_name,
-            published_at=source.published_at,
-            evidence_claim=source.evidence_claim,
-        )
 
 
 ResearchSource = Annotated[
@@ -83,17 +56,23 @@ class ResearchResponse(_CamelBase):
     sources: list[ResearchSource]
     missing_aspects: list[str]
 
-    @classmethod
-    def from_result(cls, result: AnswerQuestionResult) -> ResearchResponse:
-        sources: list[ResearchSource] = []
-        for source in result.sources:
-            match source:
-                case InternalArticleSource():
-                    sources.append(ResearchInternalArticleSource.from_source(source))
-                case ExternalUrlSource():
-                    sources.append(ResearchExternalUrlSource.from_source(source))
-        return cls(
-            answer=result.answer,
-            sources=sources,
-            missing_aspects=result.missing_aspects,
-        )
+
+class ResearchRunStartResponse(_CamelBase):
+    thread_id: UUID
+    run_id: UUID
+
+
+class ResearchRunResponse(_CamelBase):
+    run_id: UUID
+    thread_id: UUID
+    status: Literal["queued", "running", "completed", "failed"]
+    result: ResearchResponse | None
+    error_code: (
+        Literal[
+            "generation_unavailable",
+            "internal_error",
+            "enqueue_failed",
+            "stale",
+        ]
+        | None
+    )

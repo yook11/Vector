@@ -1,0 +1,439 @@
+"""Agent run worker and history repository tests."""
+
+from __future__ import annotations
+
+from contextlib import asynccontextmanager
+from datetime import UTC, datetime, timedelta
+from types import SimpleNamespace
+from uuid import UUID
+
+import pytest
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+
+import app.queue.tasks.agent_run as agent_run_tasks
+from app.agent.contract import (
+    AnswerQuestionInput,
+    AnswerQuestionResult,
+    AnswerRetrievalSummary,
+    ExternalUrlSource,
+    InternalArticleSource,
+)
+from app.agent.history import AgentHistoryRepository, RunTransitionLostError
+from app.agent.history.mapper import (
+    build_assistant_message_for_result,
+    build_source_rows_for_message,
+)
+from app.agent.history.projection import build_research_response_from_rows
+from app.analysis.ai_provider_errors import AIProviderError
+from app.models.agent_message import AgentMessage, AgentMessageSource
+from app.models.agent_run import AgentRun
+from app.models.agent_thread import AgentThread
+from app.queue.messages.agent_run import AgentRunTrigger
+from app.shared.security.safe_url import SafeUrl
+from tests.conftest import TEST_USER_ID
+
+
+class FakeAgent:
+    def __init__(
+        self,
+        result: AnswerQuestionResult | None = None,
+        exc: Exception | None = None,
+    ) -> None:
+        self.result = result
+        self.exc = exc
+        self.calls: list[AnswerQuestionInput] = []
+
+    async def answer(self, input_: AnswerQuestionInput) -> AnswerQuestionResult:
+        self.calls.append(input_)
+        if self.exc is not None:
+            raise self.exc
+        assert self.result is not None
+        return self.result
+
+
+def _ctx(session_factory: async_sessionmaker[AsyncSession]) -> SimpleNamespace:
+    return SimpleNamespace(state=SimpleNamespace(session_factory=session_factory))
+
+
+@asynccontextmanager
+async def _fake_http_client() -> object:
+    yield object()
+
+
+def _direct_result(answer: str = "worker answer") -> AnswerQuestionResult:
+    return AnswerQuestionResult(
+        status="answered",
+        answer=answer,
+        sources=[],
+        missing_aspects=[],
+        retrieval=AnswerRetrievalSummary(planned_mode="none"),
+    )
+
+
+def _external_result() -> AnswerQuestionResult:
+    return AnswerQuestionResult(
+        status="answered",
+        answer="外部根拠つき回答。[[1]]",
+        sources=[
+            ExternalUrlSource(
+                source_ref="1",
+                url=SafeUrl("https://example.com/agent-source"),
+                title="Agent source",
+                evidence_claim="Agent claim.",
+                source_name="Example",
+            )
+        ],
+        missing_aspects=[],
+        retrieval=AnswerRetrievalSummary(planned_mode="external"),
+    )
+
+
+async def _create_thread_message_run(
+    session: AsyncSession,
+    *,
+    status: str = "queued",
+    created_at: datetime | None = None,
+    started_at: datetime | None = None,
+    error_code: str | None = None,
+) -> tuple[AgentThread, AgentMessage, AgentRun]:
+    thread = AgentThread(
+        user_id=UUID(TEST_USER_ID),
+        title="thread",
+        updated_at=datetime(2026, 1, 1, tzinfo=UTC),
+    )
+    session.add(thread)
+    await session.flush()
+    message = AgentMessage(
+        thread_id=thread.id,
+        seq=1,
+        role="user",
+        content="worker question",
+        missing_aspects=[],
+    )
+    session.add(message)
+    await session.flush()
+    run = AgentRun(
+        thread_id=thread.id,
+        user_message_id=message.id,
+        status=status,
+        started_at=started_at,
+        error_code=error_code,
+    )
+    if created_at is not None:
+        run.created_at = created_at
+    session.add(run)
+    await session.commit()
+    await session.refresh(thread)
+    await session.refresh(message)
+    await session.refresh(run)
+    return thread, message, run
+
+
+@pytest.mark.asyncio
+async def test_run_agent_answer_completes_run_and_persists_assistant_message(
+    session_factory: async_sessionmaker[AsyncSession],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async with session_factory() as session:
+        thread, _message, run = await _create_thread_message_run(session)
+    fake_agent = FakeAgent(_external_result())
+    monkeypatch.setattr(agent_run_tasks, "make_safe_async_client", _fake_http_client)
+    monkeypatch.setattr(
+        agent_run_tasks,
+        "build_question_answering_agent",
+        lambda **_kwargs: fake_agent,
+    )
+
+    await agent_run_tasks.run_agent_answer(
+        trigger=AgentRunTrigger(run_id=run.id),
+        ctx=_ctx(session_factory),
+    )
+
+    async with session_factory() as session:
+        completed = await session.get(AgentRun, run.id)
+        assert completed is not None
+        assert completed.status == "completed"
+        assert completed.assistant_message_id is not None
+        assistant = await session.get(AgentMessage, completed.assistant_message_id)
+        assert assistant is not None
+        assert assistant.seq == 2
+        assert assistant.role == "assistant"
+        assert assistant.content == "外部根拠つき回答。[[1]]"
+        sources = (
+            (
+                await session.execute(
+                    select(AgentMessageSource).where(
+                        AgentMessageSource.message_id == assistant.id
+                    )
+                )
+            )
+            .scalars()
+            .all()
+        )
+        assert len(sources) == 1
+        assert sources[0].evidence_claim == "Agent claim."
+        refreshed_thread = await session.get(AgentThread, thread.id)
+        assert refreshed_thread is not None
+        assert refreshed_thread.updated_at > datetime(2026, 1, 1, tzinfo=UTC)
+    assert fake_agent.calls[0].question == "worker question"
+
+
+@pytest.mark.asyncio
+async def test_run_agent_answer_generation_error_marks_failed_without_leaking_message(
+    session_factory: async_sessionmaker[AsyncSession],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async with session_factory() as session:
+        _thread, _message, run = await _create_thread_message_run(session)
+    fake_agent = FakeAgent(exc=AIProviderError("SHOULD_NOT_LEAK"))
+    monkeypatch.setattr(agent_run_tasks, "make_safe_async_client", _fake_http_client)
+    monkeypatch.setattr(
+        agent_run_tasks,
+        "build_question_answering_agent",
+        lambda **_kwargs: fake_agent,
+    )
+
+    await agent_run_tasks.run_agent_answer(
+        trigger=AgentRunTrigger(run_id=run.id),
+        ctx=_ctx(session_factory),
+    )
+
+    async with session_factory() as session:
+        failed = await session.get(AgentRun, run.id)
+        assert failed is not None
+        assert failed.status == "failed"
+        assert failed.error_code == "generation_unavailable"
+        messages = (
+            (
+                await session.execute(
+                    select(AgentMessage).where(
+                        AgentMessage.thread_id == failed.thread_id
+                    )
+                )
+            )
+            .scalars()
+            .all()
+        )
+        assert [m.role for m in messages] == ["user"]
+
+
+@pytest.mark.asyncio
+async def test_run_agent_answer_unexpected_error_marks_internal_error(
+    session_factory: async_sessionmaker[AsyncSession],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async with session_factory() as session:
+        _thread, _message, run = await _create_thread_message_run(session)
+    fake_agent = FakeAgent(exc=RuntimeError("SHOULD_NOT_LEAK"))
+    monkeypatch.setattr(agent_run_tasks, "make_safe_async_client", _fake_http_client)
+    monkeypatch.setattr(
+        agent_run_tasks,
+        "build_question_answering_agent",
+        lambda **_kwargs: fake_agent,
+    )
+
+    await agent_run_tasks.run_agent_answer(
+        trigger=AgentRunTrigger(run_id=run.id),
+        ctx=_ctx(session_factory),
+    )
+
+    async with session_factory() as session:
+        failed = await session.get(AgentRun, run.id)
+        assert failed is not None
+        assert failed.status == "failed"
+        assert failed.error_code == "internal_error"
+        messages = (
+            (
+                await session.execute(
+                    select(AgentMessage).where(
+                        AgentMessage.thread_id == failed.thread_id
+                    )
+                )
+            )
+            .scalars()
+            .all()
+        )
+        assert [m.role for m in messages] == ["user"]
+
+
+@pytest.mark.asyncio
+async def test_complete_run_lost_race_rolls_back_assistant_message(
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    async with session_factory() as setup_session:
+        _thread, _message, run = await _create_thread_message_run(
+            setup_session, status="running"
+        )
+    stale_session = session_factory()
+    try:
+        async with stale_session.begin():
+            stale_run = await stale_session.get(AgentRun, run.id)
+            assert stale_run is not None and stale_run.status == "running"
+
+        async with session_factory() as winner_session:
+            async with winner_session.begin():
+                await AgentHistoryRepository(winner_session).mark_failed(
+                    run.id,
+                    error_code=agent_run_tasks.AgentRunErrorCode.STALE,
+                )
+
+        with pytest.raises(RunTransitionLostError):
+            async with stale_session.begin():
+                await AgentHistoryRepository(stale_session).complete_run(
+                    run_id=run.id,
+                    result=_direct_result(),
+                )
+    finally:
+        await stale_session.close()
+
+    async with session_factory() as session:
+        failed = await session.get(AgentRun, run.id)
+        assert failed is not None
+        assert failed.status == "failed"
+        messages = (
+            (
+                await session.execute(
+                    select(AgentMessage).where(
+                        AgentMessage.thread_id == failed.thread_id
+                    )
+                )
+            )
+            .scalars()
+            .all()
+        )
+        assert [m.role for m in messages] == ["user"]
+
+
+@pytest.mark.asyncio
+async def test_acquire_for_execution_reexecutes_running_and_skips_terminal_runs(
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    now = datetime(2026, 7, 9, 12, 0, tzinfo=UTC)
+    async with session_factory() as setup_session:
+        _thread, _message, running = await _create_thread_message_run(
+            setup_session,
+            status="running",
+            started_at=now - timedelta(minutes=11),
+        )
+        _terminal_thread, _terminal_message, failed = await _create_thread_message_run(
+            setup_session,
+            status="failed",
+            error_code="internal_error",
+        )
+
+    async with session_factory() as session:
+        async with session.begin():
+            repo = AgentHistoryRepository(session)
+            prepared = await repo.acquire_for_execution(running.id, now=now)
+            skipped = await repo.acquire_for_execution(failed.id, now=now)
+
+    assert prepared is not None
+    assert prepared.run_id == running.id
+    assert prepared.question == "worker question"
+    assert skipped is None
+    async with session_factory() as session:
+        reacquired = await session.get(AgentRun, running.id)
+        terminal = await session.get(AgentRun, failed.id)
+        assert reacquired is not None
+        assert terminal is not None
+        assert reacquired.status == "running"
+        assert reacquired.started_at == now
+        assert terminal.status == "failed"
+        assert terminal.error_code == "internal_error"
+
+
+@pytest.mark.asyncio
+async def test_sweep_stale_agent_runs_marks_only_old_active_runs(
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    now = datetime(2026, 7, 9, 12, 0, tzinfo=UTC)
+    async with session_factory() as session:
+        _t1, _m1, old_queued = await _create_thread_message_run(
+            session, created_at=now - timedelta(minutes=21)
+        )
+        _t2, _m2, old_running = await _create_thread_message_run(
+            session,
+            status="running",
+            created_at=now - timedelta(minutes=30),
+            started_at=now - timedelta(minutes=21),
+        )
+        _t3, _m3, fresh = await _create_thread_message_run(
+            session, created_at=now - timedelta(minutes=19)
+        )
+        _t4, _m4, terminal = await _create_thread_message_run(
+            session,
+            status="failed",
+            created_at=now - timedelta(minutes=30),
+            error_code="internal_error",
+        )
+        count = await AgentHistoryRepository(session).sweep_stale_runs(now=now)
+        await session.commit()
+        assert count == 2
+
+    async with session_factory() as session:
+        swept_queued = await session.get(AgentRun, old_queued.id)
+        swept_running = await session.get(AgentRun, old_running.id)
+        untouched_fresh = await session.get(AgentRun, fresh.id)
+        untouched_terminal = await session.get(AgentRun, terminal.id)
+        assert swept_queued is not None
+        assert swept_running is not None
+        assert untouched_fresh is not None
+        assert untouched_terminal is not None
+        assert swept_queued.status == "failed"
+        assert swept_running.error_code == "stale"
+        assert untouched_fresh.status == "queued"
+        assert untouched_terminal.error_code == "internal_error"
+
+
+def test_source_mapper_rejects_user_message() -> None:
+    message = AgentMessage(
+        thread_id=UUID("00000000-0000-4000-a000-000000000001"),
+        seq=1,
+        role="user",
+        content="question",
+        missing_aspects=[],
+    )
+
+    with pytest.raises(ValueError, match="assistant messages"):
+        build_source_rows_for_message(message, _direct_result())
+
+
+def test_source_mapper_structures_internal_and_external_rows() -> None:
+    result = AnswerQuestionResult(
+        status="answered",
+        answer="answer [[1]][[2]]",
+        sources=[
+            InternalArticleSource(source_ref="1", article_id=123, title="Internal"),
+            ExternalUrlSource(
+                source_ref="2",
+                url=SafeUrl("https://example.com/e"),
+                title="External",
+                evidence_claim="Claim",
+            ),
+        ],
+        missing_aspects=[],
+        retrieval=AnswerRetrievalSummary(planned_mode="internal_and_external"),
+    )
+    message = build_assistant_message_for_result(
+        thread_id=UUID("00000000-0000-4000-a000-000000000001"),
+        seq=2,
+        result=result,
+    )
+    message.id = UUID("00000000-0000-4000-a000-000000000010")
+
+    rows = build_source_rows_for_message(message, result)
+
+    assert message.role == "assistant"
+    assert message.content == "answer [[1]][[2]]"
+    assert rows[0].analyzed_article_id == 123
+    assert rows[0].url is None
+    assert rows[0].evidence_claim is None
+    assert rows[1].url == "https://example.com/e"
+    assert rows[1].analyzed_article_id is None
+    assert rows[1].evidence_claim == "Claim"
+
+    response = build_research_response_from_rows(message=message, sources=rows)
+    assert response.answer == "answer [[1]][[2]]"
+    assert response.sources[0].kind == "internal_article"
+    assert response.sources[1].kind == "external_url"

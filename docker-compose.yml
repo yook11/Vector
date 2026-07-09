@@ -343,7 +343,12 @@ services:
     init: true
     command: supervisord -n -c /app/supervisord/insights.conf
 
-  # --- taskiq scheduler (metadata + trend discovery + briefing cron を 1 container に同居) ---
+  worker-agent:
+    <<: *worker-base
+    init: true
+    command: supervisord -n -c /app/supervisord/agent.conf
+
+  # --- taskiq scheduler (metadata + trend discovery + briefing + agent cron を 1 container に同居) ---
   scheduler:
     <<: *worker-base
     init: true

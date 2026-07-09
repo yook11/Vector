@@ -1,7 +1,7 @@
-"""統合 scheduler entrypoint — 4 つの stock TaskiqScheduler を 1 event loop で並行実行。
+"""統合 scheduler entrypoint — 5 つの stock TaskiqScheduler を 1 event loop で並行実行。
 
 各 scheduler は自分の broker へ kick するため task→queue routing は壊れない (Option B)。
-4 プロセス分の full app import (~140MB×4) を 1 回に畳み scheduler VM を 512mb に下げる。
+5 プロセス分の full app import を 1 回に畳み scheduler VM を 512mb に下げる。
 
 `taskiq scheduler` CLI (``run_scheduler``) が行う処理のうち必要分だけ再現する:
 ①各 broker に ``is_scheduler_process=True``、②``registry`` の副作用 import (cron 登録)、
@@ -24,6 +24,7 @@ from taskiq.cli.scheduler.run import SchedulerLoop
 import app.queue.registry  # noqa: F401  cron 登録の副作用 import (get_all_tasks を満たす)
 from app.logfire.setup import setup_logfire
 from app.queue.schedulers import (
+    scheduler_agent,
     scheduler_briefing,
     scheduler_maintenance,
     scheduler_metadata,
@@ -37,6 +38,7 @@ _LOOP_INTERVAL = timedelta(seconds=1)
 _SCHEDULERS: tuple[TaskiqScheduler, ...] = (
     scheduler_metadata,
     scheduler_trend_discovery,
+    scheduler_agent,
     scheduler_briefing,
     scheduler_maintenance,
 )

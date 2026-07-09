@@ -1,0 +1,92 @@
+"""Question-answering agent composition.
+
+The API process only performs the lightweight configuration check; worker tasks
+call the builder when they actually execute an agent run.
+"""
+
+from __future__ import annotations
+
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.agent.contract import QuestionAnsweringAgent
+from app.agent.external_search.tavily import TavilyHttpClient
+from app.analysis.ai_provider_errors import AIProviderConfigurationError
+from app.config import settings
+
+
+def ensure_question_answering_agent_configured() -> None:
+    if not (
+        settings.deepseek_api_key.get_secret_value()
+        and settings.tavily_api_key.get_secret_value()
+    ):
+        raise AIProviderConfigurationError()
+
+
+def build_question_answering_agent(
+    *,
+    session: AsyncSession,
+    tavily_client: TavilyHttpClient,
+) -> QuestionAnsweringAgent:
+    ensure_question_answering_agent_configured()
+
+    from app.agent.answering.ai.gemini import GeminiEvidenceAnswerDraftGenerator
+    from app.agent.answering.ai.gemini_direct import GeminiDirectAnswerGenerator
+    from app.agent.answering.direct import DirectAnswerService
+    from app.agent.answering.service import QuestionAnsweringService
+    from app.agent.answering.synthesis import AnswerSynthesisService
+    from app.agent.evidence_collection import EvidenceCollectionService
+    from app.agent.internal_retrieval.ai.gemini import GeminiQueryEmbedder
+    from app.agent.internal_retrieval.article_search import (
+        PgVectorArticleSearchRepository,
+    )
+    from app.agent.internal_retrieval.service import InternalSearchService
+    from app.agent.planning.ai.gemini import GeminiQuestionPlanner
+    from app.agent.planning.service import QuestionPlanningService
+
+    external_search = _build_external_search(tavily_client)
+    internal_search = InternalSearchService(
+        embedder=GeminiQueryEmbedder(),
+        article_search_repository=PgVectorArticleSearchRepository(session),
+    )
+    return QuestionAnsweringService(
+        planner=QuestionPlanningService(
+            planner=GeminiQuestionPlanner(),
+            audit_recorder=None,
+        ),
+        evidence_collector=EvidenceCollectionService(
+            internal_search=internal_search,
+            external_search=external_search,
+            requested_external_agent_count=None,
+        ),
+        synthesizer=AnswerSynthesisService(
+            generator=GeminiEvidenceAnswerDraftGenerator(),
+            audit_recorder=None,
+        ),
+        direct_answerer=DirectAnswerService(
+            generator=GeminiDirectAnswerGenerator(),
+            audit_recorder=None,
+        ),
+    )
+
+
+def _build_external_search(tavily_client: TavilyHttpClient) -> object:
+    ensure_question_answering_agent_configured()
+
+    from app.agent.external_search.ai.deepseek import (
+        DeepSeekEvidenceSelector,
+        DeepSeekQueryGenerator,
+    )
+    from app.agent.external_search.runner import ExternalSearchResearchRunner
+    from app.agent.external_search.service import ExternalSearchService
+    from app.agent.external_search.tavily import TavilySearchProvider
+
+    return ExternalSearchService(
+        runner=ExternalSearchResearchRunner(
+            query_generator=DeepSeekQueryGenerator(),
+            search_provider=TavilySearchProvider(
+                api_key=settings.tavily_api_key,
+                client=tavily_client,
+            ),
+            evidence_selector=DeepSeekEvidenceSelector(),
+        )
+    )
