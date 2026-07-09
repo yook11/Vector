@@ -10,6 +10,7 @@ from uuid import UUID
 import pytest
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+from structlog.testing import capture_logs
 
 import app.queue.tasks.agent_run as agent_run_tasks
 from app.agent.contract import (
@@ -177,6 +178,65 @@ async def test_run_agent_answer_completes_run_and_persists_assistant_message(
         assert refreshed_thread is not None
         assert refreshed_thread.updated_at > datetime(2026, 1, 1, tzinfo=UTC)
     assert fake_agent.calls[0].question == "worker question"
+
+
+@pytest.mark.asyncio
+async def test_complete_run_warns_on_citation_source_mismatch_without_failing_run(
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    async with session_factory() as session:
+        _thread, _message, run = await _create_thread_message_run(
+            session,
+            status="running",
+            started_at=datetime.now(UTC),
+        )
+    result = AnswerQuestionResult(
+        status="answered",
+        answer="sensitive answer body [[2]]",
+        sources=[
+            ExternalUrlSource(
+                source_ref="1",
+                url=SafeUrl("https://example.com/secret-source-url"),
+                title="Sensitive source title",
+                evidence_claim="Sensitive evidence claim.",
+                source_name="Example",
+            )
+        ],
+        missing_aspects=[],
+        retrieval=AnswerRetrievalSummary(planned_mode="external"),
+    )
+
+    with capture_logs() as logs:
+        async with session_factory() as session:
+            async with session.begin():
+                completed = await AgentHistoryRepository(session).complete_run(
+                    run_id=run.id,
+                    result=result,
+                )
+
+    assert completed is True
+    mismatch_logs = [
+        entry
+        for entry in logs
+        if entry.get("event") == "agent_citation_source_mismatch"
+    ]
+    assert len(mismatch_logs) == 1
+    warning = mismatch_logs[0]
+    assert warning["log_level"] == "warning"
+    assert warning["run_id"] == str(run.id)
+    assert warning["marker_without_source_refs"] == ["2"]
+    assert warning["source_without_marker_refs"] == ["1"]
+    serialized_warning = repr(warning)
+    assert "sensitive answer body" not in serialized_warning
+    assert "secret-source-url" not in serialized_warning
+    assert "Sensitive source title" not in serialized_warning
+    assert "Sensitive evidence claim" not in serialized_warning
+
+    async with session_factory() as session:
+        completed_run = await session.get(AgentRun, run.id)
+        assert completed_run is not None
+        assert completed_run.status == "completed"
+        assert completed_run.assistant_message_id is not None
 
 
 @pytest.mark.asyncio

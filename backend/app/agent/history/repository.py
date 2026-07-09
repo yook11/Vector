@@ -7,10 +7,12 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from enum import StrEnum
 
+import structlog
 from sqlalchemy import delete, exists, func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.agent.contract import AnswerQuestionResult
+from app.agent.history.citation_integrity import assess_citation_integrity
 from app.agent.history.mapper import (
     build_assistant_message_for_result,
     build_source_rows_for_message,
@@ -66,6 +68,7 @@ class PreparedAgentRun:
 _ACTIVE_STATUSES = (AgentRunStatus.QUEUED.value, AgentRunStatus.RUNNING.value)
 _TERMINAL_STATUSES = (AgentRunStatus.COMPLETED.value, AgentRunStatus.FAILED.value)
 _STALE_AFTER = timedelta(minutes=20)
+logger = structlog.get_logger(__name__)
 
 
 class AgentHistoryRepository:
@@ -236,7 +239,13 @@ class AgentHistoryRepository:
         )
         self._session.add(assistant_message)
         await self._session.flush()
-        self._session.add_all(build_source_rows_for_message(assistant_message, result))
+        source_rows = build_source_rows_for_message(assistant_message, result)
+        _warn_on_citation_source_mismatch(
+            run_id=run_id,
+            answer=result.answer,
+            source_refs=[row.source_ref for row in source_rows],
+        )
+        self._session.add_all(source_rows)
         await self._session.flush()
 
         update_result = await self._session.execute(
@@ -508,3 +517,20 @@ class AgentHistoryRepository:
             )
         ).scalar_one()
         return int(value)
+
+
+def _warn_on_citation_source_mismatch(
+    *,
+    run_id: uuid_mod.UUID,
+    answer: str,
+    source_refs: list[str],
+) -> None:
+    report = assess_citation_integrity(answer=answer, source_refs=source_refs)
+    if not report.has_mismatch:
+        return
+    logger.warning(
+        "agent_citation_source_mismatch",
+        run_id=str(run_id),
+        marker_without_source_refs=list(report.marker_without_source_refs),
+        source_without_marker_refs=list(report.source_without_marker_refs),
+    )

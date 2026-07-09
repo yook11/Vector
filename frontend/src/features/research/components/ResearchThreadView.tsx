@@ -13,6 +13,7 @@ import type {
   ResearchThreadDetail,
   ResearchUserMessage,
 } from "@/types/types.gen";
+import { CitedAnswerContent } from "./CitedAnswerContent";
 import { DeleteThreadButton } from "./DeleteThreadButton";
 import { ResearchComposer } from "./ResearchComposer";
 import { ResearchRunPoller } from "./ResearchRunPoller";
@@ -88,7 +89,10 @@ function AssistantMessage({ message }: { message: ResearchAssistantMessage }) {
       </div>
       <div className="min-w-0 flex-1">
         <div className="whitespace-pre-wrap break-words text-sm leading-7 text-[var(--vector-ink)] [overflow-wrap:anywhere]">
-          {message.content}
+          <CitedAnswerContent
+            content={message.content}
+            sources={message.sources}
+          />
         </div>
         {message.missingAspects.length > 0 && (
           <div className="mt-3 rounded-md border border-[var(--vector-rule)] bg-[var(--vector-paper)] px-3 py-2 text-xs text-[var(--vector-ink-muted)] break-words [overflow-wrap:anywhere]">
