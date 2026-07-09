@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from collections.abc import AsyncGenerator
 from datetime import UTC, datetime
 from typing import Any
@@ -10,6 +11,7 @@ from uuid import UUID
 import pytest
 from httpx import ASGITransport, AsyncClient
 from pydantic import SecretStr
+from redis.exceptions import ConnectionError as RedisConnectionError
 from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -17,6 +19,7 @@ import app.agent.router as research_router_module
 from app.agent.contract import AnswerQuestionResult, AnswerRetrievalSummary
 from app.agent.history import AgentHistoryRepository
 from app.config import settings
+from app.dependencies import get_redis_client
 from app.main import app
 from app.models.agent_message import AgentMessage, AgentMessageSource
 from app.models.agent_run import AgentRun
@@ -36,6 +39,23 @@ class FakeEnqueue:
         self.calls.append(run_id)
         if self.exc is not None:
             raise self.exc
+
+
+class FakeRunEventsRedis:
+    def __init__(
+        self,
+        values: list[str] | None = None,
+        exc: Exception | None = None,
+    ) -> None:
+        self.values = values or []
+        self.exc = exc
+        self.calls: list[tuple[str, int, int]] = []
+
+    async def lrange(self, key: str, start: int, end: int) -> list[str]:
+        self.calls.append((key, start, end))
+        if self.exc is not None:
+            raise self.exc
+        return list(self.values)
 
 
 @pytest.fixture(autouse=True)
@@ -59,6 +79,7 @@ async def research_client(
     app.dependency_overrides[research_router_module.get_agent_history_session] = (
         override_history_session
     )
+    app.dependency_overrides[get_redis_client] = lambda: FakeRunEventsRedis()
     monkeypatch.setattr(research_router_module, "enqueue_agent_run", fake_enqueue)
     async with AsyncClient(
         transport=ASGITransport(app=app),
@@ -1104,7 +1125,78 @@ class TestGetResearchRun:
                 "status": status_value,
                 "errorCode": error_code,
                 "progressStage": progress_stage,
+                "recentEvents": [],
             }
+
+    async def test_returns_recent_events_for_owned_run(
+        self,
+        research_client: tuple[AsyncClient, FakeEnqueue],
+        db_session: AsyncSession,
+    ) -> None:
+        client, _fake_enqueue = research_client
+        thread = await _create_thread(db_session)
+        user_message = await _create_message(
+            db_session, thread_id=thread.id, seq=1, role="user", content="owned"
+        )
+        run = await _create_run(
+            db_session,
+            thread_id=thread.id,
+            user_message_id=user_message.id,
+            status="running",
+            progress_stage="retrieving",
+        )
+        redis = FakeRunEventsRedis(
+            [
+                json.dumps(
+                    {
+                        "type": "external_search.queries_generated",
+                        "ts": "2026-07-09T01:00:00+00:00",
+                        "task_index": 0,
+                        "queries": ["NVIDIA AI"],
+                    }
+                )
+            ]
+        )
+        app.dependency_overrides[get_redis_client] = lambda: redis
+
+        response = await client.get(f"/api/v1/research/runs/{run.id}")
+
+        assert response.status_code == 200
+        assert response.json()["recentEvents"] == [
+            {
+                "type": "external_search.queries_generated",
+                "ts": "2026-07-09T01:00:00Z",
+                "taskIndex": 0,
+                "queries": ["NVIDIA AI"],
+            }
+        ]
+        assert redis.calls == [(f"agent:run:{run.id}:events", 0, 9)]
+
+    async def test_redis_failure_returns_empty_recent_events_without_500(
+        self,
+        research_client: tuple[AsyncClient, FakeEnqueue],
+        db_session: AsyncSession,
+    ) -> None:
+        client, _fake_enqueue = research_client
+        thread = await _create_thread(db_session)
+        user_message = await _create_message(
+            db_session, thread_id=thread.id, seq=1, role="user", content="owned"
+        )
+        run = await _create_run(
+            db_session,
+            thread_id=thread.id,
+            user_message_id=user_message.id,
+            status="running",
+            progress_stage="retrieving",
+        )
+        redis = FakeRunEventsRedis(exc=RedisConnectionError("redis down"))
+        app.dependency_overrides[get_redis_client] = lambda: redis
+
+        response = await client.get(f"/api/v1/research/runs/{run.id}")
+
+        assert response.status_code == 200
+        assert response.json()["recentEvents"] == []
+        assert redis.calls == [(f"agent:run:{run.id}:events", 0, 9)]
 
     async def test_other_users_run_is_404(
         self,
@@ -1119,10 +1211,13 @@ class TestGetResearchRun:
         run = await _create_run(
             db_session, thread_id=thread.id, user_message_id=user_message.id
         )
+        redis = FakeRunEventsRedis()
+        app.dependency_overrides[get_redis_client] = lambda: redis
 
         response = await client.get(f"/api/v1/research/runs/{run.id}")
 
         assert response.status_code == 404
+        assert redis.calls == []
 
     async def test_unknown_run_is_404(
         self,
@@ -1190,6 +1285,7 @@ def test_openapi_exposes_thread_ui_contract_and_slim_run_signal() -> None:
         "status",
         "errorCode",
         "progressStage",
+        "recentEvents",
     }
     assert "result" not in run_schema["properties"]
     assert "cancelled" in str(run_schema["properties"]["errorCode"])

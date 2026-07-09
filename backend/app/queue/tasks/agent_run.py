@@ -18,6 +18,7 @@ from app.agent.history import (
     PreparedAgentRun,
     RunTransitionLostError,
 )
+from app.agent.history.live_events import AgentRunLiveEventPublisher
 from app.agent.history.progress import AgentRunProgressWriter
 from app.analysis.ai_provider_errors import (
     AIProviderConfigurationError,
@@ -26,6 +27,7 @@ from app.analysis.ai_provider_errors import (
 from app.queue.brokers import broker_agent
 from app.queue.messages.agent_run import AgentRunTrigger
 from app.queue.schedule import CRON_AGENT_RUN_SWEEP
+from app.redis import get_redis
 from app.shared.security.safe_http import make_safe_async_client
 
 logger = structlog.get_logger(__name__)
@@ -46,8 +48,10 @@ async def run_agent_answer(
     if prepared is None:
         logger.info("agent_run_idempotent_skip", run_id=str(trigger.run_id))
         return
+    events = AgentRunLiveEventPublisher(get_redis(), prepared.run_id)
 
     try:
+        await events.reset()
         async with make_safe_async_client() as tavily_client:
             agent = build_question_answering_agent(
                 session_factory=session_factory,
@@ -56,6 +60,7 @@ async def run_agent_answer(
                     session_factory,
                     prepared.run_id,
                 ),
+                events=events,
             )
             result = await agent.answer(
                 AnswerQuestionInput(

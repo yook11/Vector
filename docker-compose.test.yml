@@ -1,4 +1,4 @@
-# 統合テスト専用 Postgres (`make test-integration` 経由でのみ起動)。
+# 統合テスト専用 Postgres / Redis (`make test-integration` 経由でのみ起動)。
 #
 # 本体 `db` (本番想定 / host 非露出) とは network/volume 完全分離。
 # project 名は Makefile が worktree ごとに `vector-test-<slug>-<hash>` を算出し
@@ -43,6 +43,18 @@ services:
       - "127.0.0.1::5432"
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U vector -d vector"]
+      interval: 1s
+      timeout: 3s
+      retries: 30
+
+  redis-test:
+    image: redis:7-alpine
+    tmpfs:
+      - /data
+    ports:
+      - "127.0.0.1::6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
       interval: 1s
       timeout: 3s
       retries: 30

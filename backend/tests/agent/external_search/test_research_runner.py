@@ -76,11 +76,13 @@ def _runner(
     query_generator: Any,
     search_provider: Any,
     evidence_selector: Any,
+    events: Any | None = None,
 ) -> Any:
     return _model("ExternalSearchResearchRunner")(
         query_generator=query_generator,
         search_provider=search_provider,
         evidence_selector=evidence_selector,
+        events=events,
     )
 
 
@@ -188,6 +190,14 @@ class FakeEvidenceSelector:
         return _selection_result(self.selections, missing=self.missing)
 
 
+class FakeEventReporter:
+    def __init__(self) -> None:
+        self.events: list[Any] = []
+
+    async def event_occurred(self, event: Any) -> None:
+        self.events.append(event)
+
+
 @pytest.mark.asyncio
 async def test_runner_limits_parallelism_without_dropping_tasks() -> None:
     tasks = [_task("task-0"), _task("task-1"), _task("task-2")]
@@ -276,6 +286,67 @@ async def test_runner_partial_provider_failure_continues_with_visible_count() ->
 
 
 @pytest.mark.asyncio
+async def test_runner_reports_live_events_for_successful_task() -> None:
+    task = _task("external live events")
+    reporter = FakeEventReporter()
+    query_generator = FakeQueryGenerator({task.collection_goal: [" q1 ", "q2"]})
+    search_provider = FakeSearchProvider(
+        {
+            "q1": [_candidate("https://example.com/q1")],
+            "q2": [_candidate("https://example.com/q2")],
+        }
+    )
+    selector = FakeEvidenceSelector(
+        selections=[
+            {"candidate_index": 0, "claim": "claim", "why_selected": "why"},
+            {"candidate_index": 1, "claim": "claim 2", "why_selected": "why"},
+        ]
+    )
+    runner = _runner(
+        query_generator=query_generator,
+        search_provider=search_provider,
+        evidence_selector=selector,
+        events=reporter,
+    )
+
+    result = await runner.search(_request([task]))
+
+    assert result.task_reports[0].status == "succeeded"
+    assert [event.type for event in reporter.events] == [
+        "external_search.queries_generated",
+        "external_search.candidates_fetched",
+        "external_search.evidence_selected",
+    ]
+    assert reporter.events[0].task_index == 0
+    assert reporter.events[0].queries == ["q1", "q2"]
+    assert reporter.events[1].candidate_count == 2
+    assert reporter.events[2].evidence_count == 2
+
+
+@pytest.mark.asyncio
+async def test_runner_omits_later_events_when_all_provider_calls_fail() -> None:
+    task = _task("provider all failure")
+    reporter = FakeEventReporter()
+    provider_error = _model("ExternalSearchProviderError")("provider failed")
+    query_generator = FakeQueryGenerator({task.collection_goal: ["q1", "q2"]})
+    runner = _runner(
+        query_generator=query_generator,
+        search_provider=FakeSearchProvider(
+            errors_by_query={"q1": provider_error, "q2": provider_error},
+        ),
+        evidence_selector=FakeEvidenceSelector(),
+        events=reporter,
+    )
+
+    result = await runner.search(_request([task]))
+
+    assert result.task_reports[0].status == "provider_failed"
+    assert [event.type for event in reporter.events] == [
+        "external_search.queries_generated"
+    ]
+
+
+@pytest.mark.asyncio
 async def test_runner_all_provider_failures_are_classified_without_selection() -> None:
     task = _task("provider all failure")
     provider_error = _model("ExternalSearchProviderError")("provider failed")
@@ -344,9 +415,7 @@ async def test_runner_retries_selector_once_with_same_inputs() -> None:
         reason="external_search_deepseek_arguments_schema_invalid"
     )
     query_generator = FakeQueryGenerator({task.collection_goal: ["q"]})
-    search_provider = FakeSearchProvider(
-        {"q": [_candidate("https://example.com/q")]}
-    )
+    search_provider = FakeSearchProvider({"q": [_candidate("https://example.com/q")]})
     selector = FakeEvidenceSelector(side_effects=[selector_error, None])
     runner = _runner(
         query_generator=query_generator,
@@ -376,9 +445,7 @@ async def test_runner_selector_failure_after_retry_reports_reason() -> None:
         reason="external_search_deepseek_arguments_schema_invalid"
     )
     query_generator = FakeQueryGenerator({task.collection_goal: ["q"]})
-    search_provider = FakeSearchProvider(
-        {"q": [_candidate("https://example.com/q")]}
-    )
+    search_provider = FakeSearchProvider({"q": [_candidate("https://example.com/q")]})
     selector = FakeEvidenceSelector(
         side_effects=[selector_error, selector_error],
     )
@@ -403,9 +470,7 @@ async def test_runner_selector_failure_after_retry_reports_reason() -> None:
 async def test_runner_selector_timeout_after_retry_reports_timeout_reason() -> None:
     task = _task("selector timeout")
     query_generator = FakeQueryGenerator({task.collection_goal: ["q"]})
-    search_provider = FakeSearchProvider(
-        {"q": [_candidate("https://example.com/q")]}
-    )
+    search_provider = FakeSearchProvider({"q": [_candidate("https://example.com/q")]})
     selector = FakeEvidenceSelector(
         side_effects=[TimeoutError(), TimeoutError()],
     )

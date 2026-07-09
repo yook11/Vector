@@ -139,6 +139,14 @@ class FakeQueryEmbeddingCache:
             raise self.store_error
 
 
+class FakeEventReporter:
+    def __init__(self) -> None:
+        self.events: list[Any] = []
+
+    async def event_occurred(self, event: Any) -> None:
+        self.events.append(event)
+
+
 def _metric_attributes(
     metrics: list[dict[str, Any]],
     metric_name: str,
@@ -307,6 +315,75 @@ class TestInternalSearchService:
             ("NVIDIA", 4),
             ("OpenAI", 4),
         ]
+
+    async def test_search_articles_reports_counts_without_query_text(self) -> None:
+        reporter = FakeEventReporter()
+        embedder = FakeInternalQueryEmbedder()
+        search_repo = FakeArticleVectorSearchRepository(
+            {
+                "SECRET raw user question": [
+                    _article_hit(curation_id=1, title="NVIDIA記事", distance=0.1)
+                ],
+            }
+        )
+        service = InternalSearchService(
+            embedder=embedder,
+            article_search_repository=search_repo,
+            events=reporter,
+        )
+
+        await service.search_articles(_queries("SECRET raw user question"))
+
+        assert [event.type for event in reporter.events] == [
+            "internal_search.started",
+            "internal_search.completed",
+        ]
+        assert reporter.events[0].query_count == 1
+        assert reporter.events[1].hit_count == 1
+        serialized = json.dumps(
+            [event.model_dump(mode="json") for event in reporter.events],
+            ensure_ascii=False,
+        )
+        assert "SECRET raw user question" not in serialized
+
+    @pytest.mark.parametrize("kwargs", [{"limit": 0}, {"per_query_limit": 0}])
+    async def test_search_articles_limit_guard_returns_without_events(
+        self,
+        kwargs: dict[str, int],
+    ) -> None:
+        reporter = FakeEventReporter()
+        search_repo = FakeArticleVectorSearchRepository({})
+        service = InternalSearchService(
+            embedder=FakeInternalQueryEmbedder(),
+            article_search_repository=search_repo,
+            events=reporter,
+        )
+
+        hits = await service.search_articles(_queries("NVIDIA"), **kwargs)
+
+        assert hits == []
+        assert search_repo.calls == []
+        assert reporter.events == []
+
+    async def test_search_articles_reports_zero_hits_when_embeddings_are_empty(
+        self,
+    ) -> None:
+        reporter = FakeEventReporter()
+        service = InternalSearchService(
+            embedder=FakeInternalQueryEmbedder(empty_result=True),
+            article_search_repository=FakeArticleVectorSearchRepository({}),
+            events=reporter,
+        )
+
+        hits = await service.search_articles(_queries("SECRET fallback question"))
+
+        assert hits == []
+        assert [event.type for event in reporter.events] == [
+            "internal_search.started",
+            "internal_search.completed",
+        ]
+        assert reporter.events[0].query_count == 1
+        assert reporter.events[1].hit_count == 0
 
     async def test_search_articles_dedupes_by_curation_id_with_min_distance(
         self,

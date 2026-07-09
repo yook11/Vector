@@ -10,6 +10,13 @@ from __future__ import annotations
 import asyncio
 from datetime import datetime
 
+from app.agent.contract import (
+    AnswerEventReporter,
+    AnswerProgressEvent,
+    ExternalSearchCandidatesFetchedEvent,
+    ExternalSearchEvidenceSelectedEvent,
+    ExternalSearchQueriesGeneratedEvent,
+)
 from app.agent.external_search.contract import (
     EXTERNAL_QUERY_MAX_CHARS,
     EXTERNAL_SEARCH_CANDIDATE_POOL_LIMIT_PER_TASK,
@@ -55,10 +62,12 @@ class ExternalSearchResearchRunner:
         query_generator: QueryGenerator,
         search_provider: SearchProvider,
         evidence_selector: EvidenceSelector,
+        events: AnswerEventReporter | None = None,
     ) -> None:
         self._query_generator = query_generator
         self._search_provider = search_provider
         self._evidence_selector = evidence_selector
+        self._events = events
 
     async def search(self, request: ExternalSearchRequest) -> ExternalSearchRunResult:
         if not request.tasks:
@@ -120,6 +129,12 @@ class ExternalSearchResearchRunner:
                 task=task,
                 status="query_generation_failed",
             )
+        await self._report_event(
+            ExternalSearchQueriesGeneratedEvent(
+                task_index=task_index,
+                queries=queries,
+            )
+        )
 
         query_candidates: list[list[ExternalSearchCandidate]] = []
         provider_failed_query_count = 0
@@ -143,6 +158,12 @@ class ExternalSearchResearchRunner:
             )
 
         pool = _build_candidate_pool(query_candidates)
+        await self._report_event(
+            ExternalSearchCandidatesFetchedEvent(
+                task_index=task_index,
+                candidate_count=len(pool),
+            )
+        )
         if not pool:
             return [], self._task_report(
                 task_index=task_index,
@@ -173,6 +194,12 @@ class ExternalSearchResearchRunner:
             task_index=task_index,
             pool=pool,
             selection_result=selection_result,
+        )
+        await self._report_event(
+            ExternalSearchEvidenceSelectedEvent(
+                task_index=task_index,
+                evidence_count=len(evidence),
+            )
         )
         return evidence, self._task_report(
             task_index=task_index,
@@ -255,6 +282,11 @@ class ExternalSearchResearchRunner:
             selector_failure_reason=selector_failure_reason,
             missing=missing,
         )
+
+    async def _report_event(self, event: AnswerProgressEvent) -> None:
+        if self._events is None:
+            return
+        await self._events.event_occurred(event)
 
 
 def _clean_generated_queries(raw_queries: list[str]) -> list[str]:

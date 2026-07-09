@@ -8,7 +8,11 @@ from __future__ import annotations
 
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from app.agent.contract import AnswerProgressReporter, QuestionAnsweringAgent
+from app.agent.contract import (
+    AnswerEventReporter,
+    AnswerProgressReporter,
+    QuestionAnsweringAgent,
+)
 from app.agent.external_search.tavily import TavilyHttpClient
 from app.analysis.ai_provider_errors import AIProviderConfigurationError
 from app.config import settings
@@ -27,6 +31,7 @@ def build_question_answering_agent(
     session_factory: async_sessionmaker[AsyncSession],
     tavily_client: TavilyHttpClient,
     progress: AnswerProgressReporter | None = None,
+    events: AnswerEventReporter | None = None,
 ) -> QuestionAnsweringAgent:
     ensure_question_answering_agent_configured()
 
@@ -44,10 +49,11 @@ def build_question_answering_agent(
     from app.agent.planning.ai.gemini import GeminiQuestionPlanner
     from app.agent.planning.service import QuestionPlanningService
 
-    external_search = _build_external_search(tavily_client)
+    external_search = _build_external_search(tavily_client, events=events)
     internal_search = InternalSearchService(
         embedder=GeminiQueryEmbedder(),
         article_search_repository=PgVectorArticleSearchRepository(session_factory),
+        events=events,
     )
     return QuestionAnsweringService(
         planner=QuestionPlanningService(
@@ -71,7 +77,11 @@ def build_question_answering_agent(
     )
 
 
-def _build_external_search(tavily_client: TavilyHttpClient) -> object:
+def _build_external_search(
+    tavily_client: TavilyHttpClient,
+    *,
+    events: AnswerEventReporter | None = None,
+) -> object:
     ensure_question_answering_agent_configured()
 
     from app.agent.external_search.ai.deepseek import (
@@ -90,5 +100,6 @@ def _build_external_search(tavily_client: TavilyHttpClient) -> object:
                 client=tavily_client,
             ),
             evidence_selector=DeepSeekEvidenceSelector(),
+            events=events,
         )
     )

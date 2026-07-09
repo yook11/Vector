@@ -23,6 +23,7 @@ interface ActiveRunStatusProps {
 interface RunSignal {
   status: ResearchRunResponse["status"];
   progressStage: ProgressStage;
+  recentEvents: readonly unknown[];
 }
 
 function activeRunText(signal: RunSignal): string | null {
@@ -40,6 +41,59 @@ function activeRunText(signal: RunSignal): string | null {
   }
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
+}
+
+function numericField(
+  event: Record<string, unknown>,
+  key: string,
+): number | null {
+  const value = event[key];
+  return typeof value === "number" && Number.isFinite(value) ? value : null;
+}
+
+function latestKnownEventText(events: readonly unknown[]): string | null {
+  for (let index = events.length - 1; index >= 0; index -= 1) {
+    const text = liveEventText(events[index]);
+    if (text !== null) return text;
+  }
+  return null;
+}
+
+function liveEventText(event: unknown): string | null {
+  if (!isRecord(event) || typeof event.type !== "string") return null;
+
+  switch (event.type) {
+    case "internal_search.started":
+      return "関連記事を検索中";
+    case "internal_search.completed": {
+      const count = numericField(event, "hitCount");
+      return count === null ? null : `関連記事${count}件を確認`;
+    }
+    case "external_search.queries_generated": {
+      if (!Array.isArray(event.queries)) return null;
+      const queries = event.queries.filter(
+        (query): query is string =>
+          typeof query === "string" && query.length > 0,
+      );
+      if (queries.length === 0) return null;
+      if (queries.length === 1) return `“${queries[0]}” を検索中`;
+      return `“${queries[0]}” など${queries.length}件を検索中`;
+    }
+    case "external_search.candidates_fetched": {
+      const count = numericField(event, "candidateCount");
+      return count === null ? null : `候補${count}件を取得`;
+    }
+    case "external_search.evidence_selected": {
+      const count = numericField(event, "evidenceCount");
+      return count === null ? null : `根拠${count}件を選別`;
+    }
+    default:
+      return null;
+  }
+}
+
 export function ActiveRunStatus({
   runId,
   initialStatus,
@@ -49,6 +103,7 @@ export function ActiveRunStatus({
   const [signal, setSignal] = useState<RunSignal>({
     status: initialStatus,
     progressStage: initialStage,
+    recentEvents: [],
   });
 
   useEffect(() => {
@@ -59,7 +114,11 @@ export function ActiveRunStatus({
       ) {
         return current;
       }
-      return { status: initialStatus, progressStage: initialStage };
+      return {
+        status: initialStatus,
+        progressStage: initialStage,
+        recentEvents: [],
+      };
     });
   }, [initialStatus, initialStage]);
 
@@ -106,7 +165,13 @@ export function ActiveRunStatus({
           router.refresh();
           return;
         }
-        setSignal({ status: data.status, progressStage: data.progressStage });
+        setSignal({
+          status: data.status,
+          progressStage: data.progressStage,
+          recentEvents: Array.isArray(data.recentEvents)
+            ? data.recentEvents
+            : [],
+        });
         schedule();
       } catch {
         if (stopped) return;
@@ -136,16 +201,30 @@ export function ActiveRunStatus({
 
   const text = activeRunText(signal);
   if (text === null) return null;
+  const eventText =
+    signal.status === "running" && signal.progressStage === "retrieving"
+      ? latestKnownEventText(signal.recentEvents)
+      : null;
 
   return (
     <div
-      className="mt-2 flex min-w-0 items-center gap-1.5 text-xs text-[var(--vector-ink-muted)]"
+      className="mt-2 flex min-w-0 items-start gap-1.5 text-xs text-[var(--vector-ink-muted)]"
       role="status"
       aria-live="polite"
     >
-      <Loader2 aria-hidden="true" className="size-3.5 shrink-0 animate-spin" />
-      <span className="min-w-0 break-words [overflow-wrap:anywhere]">
-        {text}
+      <Loader2
+        aria-hidden="true"
+        className="mt-px size-3.5 shrink-0 animate-spin"
+      />
+      <span className="flex min-w-0 flex-col gap-0.5">
+        <span className="min-w-0 break-words [overflow-wrap:anywhere]">
+          {text}
+        </span>
+        {eventText ? (
+          <span className="min-w-0 break-words text-[11px] leading-4 text-[var(--vector-ink-soft)] [overflow-wrap:anywhere]">
+            {eventText}
+          </span>
+        ) : null}
       </span>
     </div>
   );

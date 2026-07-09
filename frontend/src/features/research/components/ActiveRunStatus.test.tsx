@@ -21,6 +21,7 @@ let hiddenSpy: ReturnType<typeof vi.spyOn>;
 function runResponse(
   status: "queued" | "running" | "completed" | "failed",
   progressStage: "planning" | "retrieving" | "synthesizing" | null,
+  recentEvents: unknown[] = [],
 ) {
   return new Response(
     JSON.stringify({
@@ -29,6 +30,7 @@ function runResponse(
       status,
       errorCode: status === "failed" ? "internal_error" : null,
       progressStage,
+      recentEvents,
     }),
     { status: 200, headers: { "Content-Type": "application/json" } },
   );
@@ -95,6 +97,91 @@ describe("ActiveRunStatus", () => {
       expect(screen.getByText("情報収集中")).toBeInTheDocument(),
     );
     expect(mocks.refresh).not.toHaveBeenCalled();
+  });
+
+  it("shows latest known live event subtext while retrieving", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      runResponse("running", "retrieving", [
+        {
+          type: "external_search.queries_generated",
+          ts: "2026-07-09T01:00:00Z",
+          taskIndex: 0,
+          queries: ["NVIDIA AI"],
+        },
+      ]),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(
+      <ActiveRunStatus
+        runId={RUN_ID}
+        initialStatus="running"
+        initialStage="planning"
+      />,
+    );
+
+    await waitFor(() =>
+      expect(screen.getByText("情報収集中")).toBeInTheDocument(),
+    );
+    expect(screen.getByText("“NVIDIA AI” を検索中")).toBeInTheDocument();
+    expect(mocks.refresh).not.toHaveBeenCalled();
+  });
+
+  it("uses the most recent known event when newer events are unknown", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      runResponse("running", "retrieving", [
+        {
+          type: "external_search.candidates_fetched",
+          ts: "2026-07-09T01:00:00Z",
+          taskIndex: 0,
+          candidateCount: 8,
+        },
+        {
+          type: "future.event",
+          ts: "2026-07-09T01:00:01Z",
+        },
+      ]),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(
+      <ActiveRunStatus
+        runId={RUN_ID}
+        initialStatus="running"
+        initialStage="planning"
+      />,
+    );
+
+    await waitFor(() =>
+      expect(screen.getByText("候補8件を取得")).toBeInTheDocument(),
+    );
+  });
+
+  it("hides live event subtext outside retrieving", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      runResponse("running", "synthesizing", [
+        {
+          type: "external_search.candidates_fetched",
+          ts: "2026-07-09T01:00:00Z",
+          taskIndex: 0,
+          candidateCount: 8,
+        },
+      ]),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(
+      <ActiveRunStatus
+        runId={RUN_ID}
+        initialStatus="running"
+        initialStage="retrieving"
+      />,
+    );
+
+    await waitFor(() =>
+      expect(screen.getByText("回答作成中")).toBeInTheDocument(),
+    );
+    expect(screen.queryByText("候補8件を取得")).not.toBeInTheDocument();
   });
 
   it("refreshes on terminal status", async () => {

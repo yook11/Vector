@@ -719,6 +719,108 @@ export type ResearchQuestionRequest = {
 };
 
 /**
+ * ResearchRunExternalSearchCandidatesFetchedEvent
+ */
+export type ResearchRunExternalSearchCandidatesFetchedEvent = {
+    /**
+     * Type
+     */
+    type: 'external_search.candidates_fetched';
+    /**
+     * Ts
+     */
+    ts: string;
+    /**
+     * Taskindex
+     */
+    taskIndex: number;
+    /**
+     * Candidatecount
+     */
+    candidateCount: number;
+};
+
+/**
+ * ResearchRunExternalSearchEvidenceSelectedEvent
+ */
+export type ResearchRunExternalSearchEvidenceSelectedEvent = {
+    /**
+     * Type
+     */
+    type: 'external_search.evidence_selected';
+    /**
+     * Ts
+     */
+    ts: string;
+    /**
+     * Taskindex
+     */
+    taskIndex: number;
+    /**
+     * Evidencecount
+     */
+    evidenceCount: number;
+};
+
+/**
+ * ResearchRunExternalSearchQueriesGeneratedEvent
+ */
+export type ResearchRunExternalSearchQueriesGeneratedEvent = {
+    /**
+     * Type
+     */
+    type: 'external_search.queries_generated';
+    /**
+     * Ts
+     */
+    ts: string;
+    /**
+     * Taskindex
+     */
+    taskIndex: number;
+    /**
+     * Queries
+     */
+    queries: Array<string>;
+};
+
+/**
+ * ResearchRunInternalSearchCompletedEvent
+ */
+export type ResearchRunInternalSearchCompletedEvent = {
+    /**
+     * Type
+     */
+    type: 'internal_search.completed';
+    /**
+     * Ts
+     */
+    ts: string;
+    /**
+     * Hitcount
+     */
+    hitCount: number;
+};
+
+/**
+ * ResearchRunInternalSearchStartedEvent
+ */
+export type ResearchRunInternalSearchStartedEvent = {
+    /**
+     * Type
+     */
+    type: 'internal_search.started';
+    /**
+     * Ts
+     */
+    ts: string;
+    /**
+     * Querycount
+     */
+    queryCount: number;
+};
+
+/**
  * ResearchRunResponse
  */
 export type ResearchRunResponse = {
@@ -742,6 +844,10 @@ export type ResearchRunResponse = {
      * Progressstage
      */
     progressStage: 'planning' | 'retrieving' | 'synthesizing' | null;
+    /**
+     * Recentevents
+     */
+    recentEvents?: Array<ResearchRunInternalSearchStartedEvent | ResearchRunInternalSearchCompletedEvent | ResearchRunExternalSearchQueriesGeneratedEvent | ResearchRunExternalSearchCandidatesFetchedEvent | ResearchRunExternalSearchEvidenceSelectedEvent>;
 };
 
 /**

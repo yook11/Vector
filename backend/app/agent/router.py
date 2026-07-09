@@ -6,6 +6,7 @@ from collections.abc import AsyncGenerator
 from typing import Annotated
 from uuid import UUID
 
+import redis.asyncio as aioredis
 import structlog
 from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -17,9 +18,10 @@ from app.agent.history import (
     CancelRunOutcome,
     ThreadNotFoundError,
 )
+from app.agent.history.live_events import AgentRunLiveEventReader
 from app.analysis.ai_provider_errors import AIProviderError
 from app.db import engine
-from app.dependencies import CurrentUser, get_current_user
+from app.dependencies import CurrentUser, get_current_user, get_redis_client
 from app.schemas.research import (
     PaginatedResearchThreadResponse,
     ResearchQuestionRequest,
@@ -209,12 +211,14 @@ async def get_research_run(
     run_id: UUID,
     user: Annotated[CurrentUser, Depends(get_current_user)],
     session: Annotated[AsyncSession, Depends(get_agent_history_session)],
+    redis: Annotated[aioredis.Redis, Depends(get_redis_client)],
 ) -> ResearchRunResponse:
     repo = AgentHistoryRepository(session)
     response = await repo.read_run_for_user(run_id=run_id, user_id=user.id)
     if response is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND)
-    return response
+    recent_events = await AgentRunLiveEventReader(redis).recent_events(run_id)
+    return response.model_copy(update={"recent_events": recent_events})
 
 
 def _generation_unavailable() -> HTTPException:

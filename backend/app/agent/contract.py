@@ -21,11 +21,18 @@ from app.shared.security.safe_url import SafeUrl
 __all__ = [
     "AnswerQuestionInput",
     "AnswerProgressReporter",
+    "AnswerProgressEvent",
     "AnswerProgressStage",
     "AnswerQuestionResult",
     "AnswerRetrievalSummary",
+    "AnswerEventReporter",
+    "ExternalSearchCandidatesFetchedEvent",
+    "ExternalSearchEvidenceSelectedEvent",
+    "ExternalSearchQueriesGeneratedEvent",
     "AnswerSource",
     "ExternalUrlSource",
+    "InternalSearchCompletedEvent",
+    "InternalSearchStartedEvent",
     "InternalArticleSource",
     "NonBlankText",
     "QuestionAnsweringAgent",
@@ -92,6 +99,60 @@ AnswerSource = Annotated[
 ]
 
 
+class InternalSearchStartedEvent(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    type: Literal["internal_search.started"] = "internal_search.started"
+    query_count: int = Field(ge=0)
+
+
+class InternalSearchCompletedEvent(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    type: Literal["internal_search.completed"] = "internal_search.completed"
+    hit_count: int = Field(ge=0)
+
+
+class ExternalSearchQueriesGeneratedEvent(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    type: Literal["external_search.queries_generated"] = (
+        "external_search.queries_generated"
+    )
+    task_index: int = Field(ge=0)
+    queries: list[NonBlankText] = Field(default_factory=list)
+
+
+class ExternalSearchCandidatesFetchedEvent(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    type: Literal["external_search.candidates_fetched"] = (
+        "external_search.candidates_fetched"
+    )
+    task_index: int = Field(ge=0)
+    candidate_count: int = Field(ge=0)
+
+
+class ExternalSearchEvidenceSelectedEvent(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    type: Literal["external_search.evidence_selected"] = (
+        "external_search.evidence_selected"
+    )
+    task_index: int = Field(ge=0)
+    evidence_count: int = Field(ge=0)
+
+
+AnswerProgressEvent = Annotated[
+    InternalSearchStartedEvent
+    | InternalSearchCompletedEvent
+    | ExternalSearchQueriesGeneratedEvent
+    | ExternalSearchCandidatesFetchedEvent
+    | ExternalSearchEvidenceSelectedEvent,
+    Field(discriminator="type"),
+]
+
+
 class AnswerQuestionResult(BaseModel):
     """chat UI に変換される agent core の final result。"""
 
@@ -129,3 +190,9 @@ class AnswerProgressReporter(Protocol):
     """agent core が回答工程の粗い進捗を通知する sink。"""
 
     async def stage_changed(self, stage: AnswerProgressStage) -> None: ...
+
+
+class AnswerEventReporter(Protocol):
+    """実装は best-effort とし、送信失敗を呼び出し元へ伝播させない。"""
+
+    async def event_occurred(self, event: AnswerProgressEvent) -> None: ...

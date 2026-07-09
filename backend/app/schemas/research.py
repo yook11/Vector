@@ -63,12 +63,56 @@ ResearchRunErrorCode = Literal[
 ResearchProgressStage = Literal["planning", "retrieving", "synthesizing"]
 
 
+class ResearchRunInternalSearchStartedEvent(_CamelBase):
+    type: Literal["internal_search.started"]
+    ts: datetime
+    query_count: int = Field(ge=0)
+
+
+class ResearchRunInternalSearchCompletedEvent(_CamelBase):
+    type: Literal["internal_search.completed"]
+    ts: datetime
+    hit_count: int = Field(ge=0)
+
+
+class ResearchRunExternalSearchQueriesGeneratedEvent(_CamelBase):
+    type: Literal["external_search.queries_generated"]
+    ts: datetime
+    task_index: int = Field(ge=0)
+    queries: list[str]
+
+
+class ResearchRunExternalSearchCandidatesFetchedEvent(_CamelBase):
+    type: Literal["external_search.candidates_fetched"]
+    ts: datetime
+    task_index: int = Field(ge=0)
+    candidate_count: int = Field(ge=0)
+
+
+class ResearchRunExternalSearchEvidenceSelectedEvent(_CamelBase):
+    type: Literal["external_search.evidence_selected"]
+    ts: datetime
+    task_index: int = Field(ge=0)
+    evidence_count: int = Field(ge=0)
+
+
+ResearchRunEvent = Annotated[
+    ResearchRunInternalSearchStartedEvent
+    | ResearchRunInternalSearchCompletedEvent
+    | ResearchRunExternalSearchQueriesGeneratedEvent
+    | ResearchRunExternalSearchCandidatesFetchedEvent
+    | ResearchRunExternalSearchEvidenceSelectedEvent,
+    Field(discriminator="type"),
+]
+
+
 class ResearchRunResponse(_CamelBase):
     run_id: UUID
     thread_id: UUID
     status: ResearchRunStatus
     error_code: ResearchRunErrorCode | None
     progress_stage: ResearchProgressStage | None
+    recent_events: list[ResearchRunEvent] = Field(default_factory=list)
 
 
 class ResearchThreadListParams(PaginationParams):

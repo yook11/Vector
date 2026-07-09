@@ -154,9 +154,19 @@ jobs:
           --health-interval 5s
           --health-timeout 5s
           --health-retries 5
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 5
 
     env:
       DATABASE_URL: postgresql+asyncpg://vector:vector@localhost:5432/vector
+      REDIS_URL: redis://localhost:6379/0
       # CI 専用のダミー値。本番値とは無関係で、Settings の長さ要件 (>=32) を
       # 満たすために 64 桁の hex を直書きする (秘密ではない)。2 分割した secret は
       # 互いに別値で投入する (同一値拒否を回避)。

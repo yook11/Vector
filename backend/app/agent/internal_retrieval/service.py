@@ -5,6 +5,12 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Protocol
 
+from app.agent.contract import (
+    AnswerEventReporter,
+    AnswerProgressEvent,
+    InternalSearchCompletedEvent,
+    InternalSearchStartedEvent,
+)
 from app.agent.internal_retrieval.article_search import InternalArticleSearchHit
 from app.agent.internal_retrieval.metrics import (
     record_internal_retrieval_outcome,
@@ -48,6 +54,7 @@ class InternalSearchService:
     embedder: InternalQueryEmbedder
     article_search_repository: ArticleVectorSearchRepository | None = None
     query_embedding_cache: InternalQueryEmbeddingCache | None = None
+    events: AnswerEventReporter | None = None
 
     async def embed_queries(
         self,
@@ -104,8 +111,12 @@ class InternalSearchService:
         if self.article_search_repository is None:
             raise RuntimeError("article_search_repository is required")
 
+        await self._report_event(
+            InternalSearchStartedEvent(query_count=len(queries.queries))
+        )
         embeddings = await self.embed_queries(queries)
         if not embeddings:
+            await self._report_event(InternalSearchCompletedEvent(hit_count=0))
             return []
 
         best_by_curation_id: dict[int, InternalArticleSearchHit] = {}
@@ -119,10 +130,12 @@ class InternalSearchService:
                 if current is None or hit.distance < current.distance:
                     best_by_curation_id[hit.article.curation_id] = hit
 
-        return sorted(
+        hits = sorted(
             best_by_curation_id.values(),
             key=lambda hit: hit.distance,
         )[:limit]
+        await self._report_event(InternalSearchCompletedEvent(hit_count=len(hits)))
+        return hits
 
     async def _fetch_cached_query_vectors(
         self,
@@ -153,3 +166,8 @@ class InternalSearchService:
                     result="save_failed",
                     query_count=1,
                 )
+
+    async def _report_event(self, event: AnswerProgressEvent) -> None:
+        if self.events is None:
+            return
+        await self.events.event_occurred(event)

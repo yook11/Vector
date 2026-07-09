@@ -62,6 +62,23 @@ class FakeAgent:
         return self.result
 
 
+class FakeLiveEventPublisher:
+    instances: list[FakeLiveEventPublisher] = []
+
+    def __init__(self, redis: object, run_id: UUID) -> None:
+        self.redis = redis
+        self.run_id = run_id
+        self.reset_calls = 0
+        self.events: list[object] = []
+        FakeLiveEventPublisher.instances.append(self)
+
+    async def reset(self) -> None:
+        self.reset_calls += 1
+
+    async def event_occurred(self, event: object) -> None:
+        self.events.append(event)
+
+
 def _ctx(session_factory: async_sessionmaker[AsyncSession]) -> SimpleNamespace:
     return SimpleNamespace(state=SimpleNamespace(session_factory=session_factory))
 
@@ -215,6 +232,44 @@ async def test_run_agent_answer_completion_preserves_last_progress_stage(
         assert completed is not None
         assert completed.status == "completed"
         assert completed.progress_stage == "synthesizing"
+
+
+@pytest.mark.asyncio
+async def test_run_agent_answer_resets_live_events_and_injects_reporter(
+    session_factory: async_sessionmaker[AsyncSession],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async with session_factory() as session:
+        _thread, _message, run = await _create_thread_message_run(session)
+    fake_agent = FakeAgent(_direct_result())
+    captured_kwargs: dict[str, object] = {}
+    FakeLiveEventPublisher.instances = []
+
+    def build_agent(**kwargs: object) -> FakeAgent:
+        captured_kwargs.update(kwargs)
+        return fake_agent
+
+    redis = object()
+    monkeypatch.setattr(agent_run_tasks, "make_safe_async_client", _fake_http_client)
+    monkeypatch.setattr(agent_run_tasks, "build_question_answering_agent", build_agent)
+    monkeypatch.setattr(agent_run_tasks, "get_redis", lambda: redis)
+    monkeypatch.setattr(
+        agent_run_tasks,
+        "AgentRunLiveEventPublisher",
+        FakeLiveEventPublisher,
+    )
+
+    await agent_run_tasks.run_agent_answer(
+        trigger=AgentRunTrigger(run_id=run.id),
+        ctx=_ctx(session_factory),
+    )
+
+    assert len(FakeLiveEventPublisher.instances) == 1
+    publisher = FakeLiveEventPublisher.instances[0]
+    assert publisher.redis is redis
+    assert publisher.run_id == run.id
+    assert publisher.reset_calls == 1
+    assert captured_kwargs["events"] is publisher
 
 
 @pytest.mark.asyncio
