@@ -1,4 +1,4 @@
-"""Conversation contracts shared with agent application services."""
+"""Thread contracts shared with agent application services."""
 
 from __future__ import annotations
 

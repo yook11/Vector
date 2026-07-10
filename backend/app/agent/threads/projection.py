@@ -1,4 +1,4 @@
-"""Project persisted conversation rows into public research responses."""
+"""Project persisted thread rows into public research responses."""
 
 from __future__ import annotations
 

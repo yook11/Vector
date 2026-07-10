@@ -8,7 +8,6 @@ from uuid import UUID
 import structlog
 from pydantic import ValidationError
 
-from app.agent.conversations.contracts import ThreadMessageSnapshot
 from app.agent.question_resolution.contract import (
     QuestionResolutionResponseInvalidError,
     QuestionResolver,
@@ -16,6 +15,7 @@ from app.agent.question_resolution.contract import (
     resolved_question_from_draft,
 )
 from app.agent.question_resolution.metrics import record_question_resolution_outcome
+from app.agent.threads.contracts import ThreadMessageSnapshot
 from app.analysis.ai_provider_errors import AIProviderError
 
 HISTORY_MESSAGE_LIMIT = 6

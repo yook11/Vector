@@ -15,8 +15,6 @@ from app.agent.composition import (
     build_question_resolver,
 )
 from app.agent.contract import AnswerQuestionInput, QuestionResolvedEvent
-from app.agent.conversations.contracts import ThreadMessageSnapshot
-from app.agent.conversations.repository import AgentConversationRepository
 from app.agent.live_updates.recent_events import AgentRunLiveEventPublisher
 from app.agent.live_updates.stream import AgentRunLiveStreamPublisher
 from app.agent.question_resolution.service import (
@@ -30,6 +28,8 @@ from app.agent.runs.contracts import (
 from app.agent.runs.progress import AgentRunProgressWriter
 from app.agent.runs.repository import AgentRunRepository
 from app.agent.runs.types import AgentRunErrorCode
+from app.agent.threads.contracts import ThreadMessageSnapshot
+from app.agent.threads.repository import AgentThreadRepository
 from app.analysis.ai_provider_errors import (
     AIProviderConfigurationError,
     AIProviderError,
@@ -197,7 +197,7 @@ async def _read_history(
     prepared: PreparedAgentRun,
 ) -> list[ThreadMessageSnapshot]:
     async with session_factory() as session:
-        return await AgentConversationRepository(session).read_recent_messages_before(
+        return await AgentThreadRepository(session).read_recent_messages_before(
             thread_id=prepared.thread_id,
             before_seq=prepared.user_message_seq,
             limit=HISTORY_MESSAGE_LIMIT,

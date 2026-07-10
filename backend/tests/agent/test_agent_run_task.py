@@ -21,8 +21,6 @@ from app.agent.contract import (
     ExternalUrlSource,
     InternalArticleSource,
 )
-from app.agent.conversations.projection import build_research_assistant_message
-from app.agent.conversations.repository import AgentConversationRepository
 from app.agent.question_resolution.contract import ResolvedQuestionDraft
 from app.agent.runs.contracts import RunTransitionLostError
 from app.agent.runs.repository import AgentRunRepository
@@ -30,6 +28,8 @@ from app.agent.runs.result_mapper import (
     build_assistant_message_for_result,
     build_source_rows_for_message,
 )
+from app.agent.threads.projection import build_research_assistant_message
+from app.agent.threads.repository import AgentThreadRepository
 from app.analysis.ai_provider_errors import (
     AIProviderConfigurationError,
     AIProviderError,
@@ -562,9 +562,7 @@ async def test_read_recent_messages_before_returns_bounded_oldest_first_thread_w
         )
 
     async with session_factory() as session:
-        messages = await AgentConversationRepository(
-            session
-        ).read_recent_messages_before(
+        messages = await AgentThreadRepository(session).read_recent_messages_before(
             thread_id=thread.id,
             before_seq=message.seq,
             limit=2,

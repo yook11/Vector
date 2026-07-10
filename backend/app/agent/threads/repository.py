@@ -1,4 +1,4 @@
-"""Repository for persisted agent conversation reads and management."""
+"""Repository for persisted agent thread reads and management."""
 
 from __future__ import annotations
 
@@ -7,12 +7,12 @@ import uuid as uuid_mod
 from sqlalchemy import delete, exists, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.agent.conversations.contracts import ThreadMessageSnapshot
-from app.agent.conversations.projection import (
+from app.agent.runs.types import AgentRunStatus
+from app.agent.threads.contracts import ThreadMessageSnapshot
+from app.agent.threads.projection import (
     build_research_thread_detail,
     build_research_thread_list_item,
 )
-from app.agent.runs.types import AgentRunStatus
 from app.models.agent_message import AgentMessage, AgentMessageSource
 from app.models.agent_run import AgentRun
 from app.models.agent_thread import AgentThread
@@ -25,7 +25,7 @@ from app.schemas.research import (
 _ACTIVE_STATUSES = (AgentRunStatus.QUEUED.value, AgentRunStatus.RUNNING.value)
 
 
-class AgentConversationRepository:
+class AgentThreadRepository:
     def __init__(self, session: AsyncSession) -> None:
         self._session = session
 

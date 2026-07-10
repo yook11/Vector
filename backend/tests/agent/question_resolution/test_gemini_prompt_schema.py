@@ -4,13 +4,13 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 
-from app.agent.conversations.contracts import ThreadMessageSnapshot
 from app.agent.question_resolution.ai.gemini_prompt import (
     GeminiQuestionResolutionPrompt,
 )
 from app.agent.question_resolution.ai.schema_tool import (
     QUESTION_RESOLUTION_GEMINI_SCHEMA,
 )
+from app.agent.threads.contracts import ThreadMessageSnapshot
 
 
 def test_prompt_sanitizes_current_question_and_history_boundaries() -> None:

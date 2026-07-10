@@ -5,8 +5,8 @@ from __future__ import annotations
 from datetime import datetime
 from typing import ClassVar
 
-from app.agent.conversations.contracts import ThreadMessageSnapshot
 from app.agent.question_resolution.ai.prompts import QUESTION_RESOLUTION_PROMPT
+from app.agent.threads.contracts import ThreadMessageSnapshot
 from app.analysis.prompt_safety import sanitize_for_untrusted_block
 
 

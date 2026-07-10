@@ -12,7 +12,6 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.agent.composition import ensure_question_answering_agent_configured
-from app.agent.conversations.repository import AgentConversationRepository
 from app.agent.live_updates.recent_events import AgentRunLiveEventReader
 from app.agent.runs.contracts import (
     ActiveRunConflictError,
@@ -20,6 +19,7 @@ from app.agent.runs.contracts import (
     ThreadNotFoundError,
 )
 from app.agent.runs.repository import AgentRunRepository
+from app.agent.threads.repository import AgentThreadRepository
 from app.analysis.ai_provider_errors import AIProviderError
 from app.db import engine
 from app.dependencies import CurrentUser, get_current_user, get_redis_client
@@ -135,7 +135,7 @@ async def list_research_threads(
     user: Annotated[CurrentUser, Depends(get_current_user)],
     session: Annotated[AsyncSession, Depends(get_agent_persistence_session)],
 ) -> PaginatedResearchThreadResponse:
-    repo = AgentConversationRepository(session)
+    repo = AgentThreadRepository(session)
     return await repo.list_threads_for_user(user_id=user.id, pagination=pagination)
 
 
@@ -152,7 +152,7 @@ async def get_research_thread(
     user: Annotated[CurrentUser, Depends(get_current_user)],
     session: Annotated[AsyncSession, Depends(get_agent_persistence_session)],
 ) -> ResearchThreadDetail:
-    repo = AgentConversationRepository(session)
+    repo = AgentThreadRepository(session)
     response = await repo.read_thread_detail_for_user(
         thread_id=thread_id,
         user_id=user.id,
@@ -175,7 +175,7 @@ async def delete_research_thread(
     user: Annotated[CurrentUser, Depends(get_current_user)],
     session: Annotated[AsyncSession, Depends(get_agent_persistence_session)],
 ) -> Response:
-    repo = AgentConversationRepository(session)
+    repo = AgentThreadRepository(session)
     async with session.begin():
         deleted = await repo.delete_thread_for_user(
             thread_id=thread_id,

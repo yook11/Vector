@@ -10,13 +10,13 @@ import pytest
 from logfire.testing import CaptureLogfire
 from structlog.testing import capture_logs
 
-from app.agent.conversations.contracts import ThreadMessageSnapshot
 from app.agent.question_resolution.contract import ResolvedQuestionDraft
 from app.agent.question_resolution.service import (
     HISTORY_MESSAGE_CHAR_CAP,
     QuestionResolutionResponseInvalidError,
     QuestionResolutionService,
 )
+from app.agent.threads.contracts import ThreadMessageSnapshot
 from app.analysis.ai_provider_errors import AIProviderNetworkError
 from tests.logfire._metric_helpers import collected_metrics, sum_counter_for_result
 
