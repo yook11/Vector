@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from app.agent.history.citation_integrity import assess_citation_integrity
+from app.agent.runs.citation_integrity import assess_citation_integrity
 
 
 @pytest.mark.parametrize(

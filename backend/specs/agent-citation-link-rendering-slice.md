@@ -27,7 +27,7 @@ Slice 3（thread UI）の後、Slice 4（progress_stage）の前に行う。
   - → **通常経路では保存済み回答に「対応 source の無い marker」は発生しない**。
     発生 = backend regression であり、検知責務は backend。
 - **保存境界には最後の網がまだ無い**:
-  - `AgentHistoryRepository.complete_run` が assistant message と source rows を同一 tx で
+  - `AgentRunRepository.complete_run` が assistant message と source rows を同一 tx で
     保存し、run を completed に遷移させる決定境界。
   - 生成時検証を通った後に mapper / repository / 将来変更で不整合が入り込んだ場合、
     現状は保存時点で確定的に検知されない。
@@ -85,7 +85,7 @@ frontend/src/features/research/components/
   SourcePreviewBadge.tsx     (新規: バッジ + プレビュー popover)
   ResearchThreadView.tsx     (AssistantMessage の content 描画を CitedAnswerContent へ)
 frontend/src/components/ui/  (shadcn CLI で popover 系を追加)
-backend/app/agent/history/
+backend/app/agent/runs/
   citation_integrity.py      (新規: marker/source_ref 照合の純関数)
   repository.py              (complete_run 保存 tx 内で warning 記録)
 ```

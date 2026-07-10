@@ -12,13 +12,14 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.agent.composition import ensure_question_answering_agent_configured
-from app.agent.history import (
+from app.agent.conversations.repository import AgentConversationRepository
+from app.agent.live_updates.recent_events import AgentRunLiveEventReader
+from app.agent.runs.contracts import (
     ActiveRunConflictError,
-    AgentHistoryRepository,
     CancelRunOutcome,
     ThreadNotFoundError,
 )
-from app.agent.history.live_events import AgentRunLiveEventReader
+from app.agent.runs.repository import AgentRunRepository
 from app.analysis.ai_provider_errors import AIProviderError
 from app.db import engine
 from app.dependencies import CurrentUser, get_current_user, get_redis_client
@@ -40,7 +41,7 @@ _ACTIVE_RUN_DETAIL = "A run is already in progress for this thread"
 _RUN_ALREADY_COMPLETED_DETAIL = "Run already completed"
 
 
-async def get_agent_history_session() -> AsyncGenerator[AsyncSession]:
+async def get_agent_persistence_session() -> AsyncGenerator[AsyncSession]:
     # get_session の request-wide UoW は commit→kiq→failed 更新の 2 tx 制御と分ける。
     async with AsyncSession(engine, expire_on_commit=False) as session:
         yield session
@@ -68,14 +69,14 @@ async def enqueue_agent_run(run_id: UUID) -> None:
 async def create_research_response(
     body: ResearchQuestionRequest,
     user: Annotated[CurrentUser, Depends(get_current_user)],
-    session: Annotated[AsyncSession, Depends(get_agent_history_session)],
+    session: Annotated[AsyncSession, Depends(get_agent_persistence_session)],
 ) -> ResearchRunStartResponse:
     try:
         ensure_question_answering_agent_configured()
     except AIProviderError as exc:
         raise _generation_unavailable() from exc
 
-    repo = AgentHistoryRepository(session)
+    repo = AgentRunRepository(session)
     try:
         async with session.begin():
             created = await repo.create_user_run(
@@ -129,9 +130,9 @@ async def create_research_response(
 async def list_research_threads(
     pagination: Annotated[ResearchThreadListParams, Query()],
     user: Annotated[CurrentUser, Depends(get_current_user)],
-    session: Annotated[AsyncSession, Depends(get_agent_history_session)],
+    session: Annotated[AsyncSession, Depends(get_agent_persistence_session)],
 ) -> PaginatedResearchThreadResponse:
-    repo = AgentHistoryRepository(session)
+    repo = AgentConversationRepository(session)
     return await repo.list_threads_for_user(user_id=user.id, pagination=pagination)
 
 
@@ -143,9 +144,9 @@ async def list_research_threads(
 async def get_research_thread(
     thread_id: UUID,
     user: Annotated[CurrentUser, Depends(get_current_user)],
-    session: Annotated[AsyncSession, Depends(get_agent_history_session)],
+    session: Annotated[AsyncSession, Depends(get_agent_persistence_session)],
 ) -> ResearchThreadDetail:
-    repo = AgentHistoryRepository(session)
+    repo = AgentConversationRepository(session)
     response = await repo.read_thread_detail_for_user(
         thread_id=thread_id,
         user_id=user.id,
@@ -163,9 +164,9 @@ async def get_research_thread(
 async def delete_research_thread(
     thread_id: UUID,
     user: Annotated[CurrentUser, Depends(get_current_user)],
-    session: Annotated[AsyncSession, Depends(get_agent_history_session)],
+    session: Annotated[AsyncSession, Depends(get_agent_persistence_session)],
 ) -> Response:
-    repo = AgentHistoryRepository(session)
+    repo = AgentConversationRepository(session)
     async with session.begin():
         deleted = await repo.delete_thread_for_user(
             thread_id=thread_id,
@@ -187,9 +188,9 @@ async def delete_research_thread(
 async def cancel_research_run(
     run_id: UUID,
     user: Annotated[CurrentUser, Depends(get_current_user)],
-    session: Annotated[AsyncSession, Depends(get_agent_history_session)],
+    session: Annotated[AsyncSession, Depends(get_agent_persistence_session)],
 ) -> Response:
-    repo = AgentHistoryRepository(session)
+    repo = AgentRunRepository(session)
     async with session.begin():
         outcome = await repo.cancel_run_for_user(run_id=run_id, user_id=user.id)
     if outcome is None:
@@ -210,10 +211,10 @@ async def cancel_research_run(
 async def get_research_run(
     run_id: UUID,
     user: Annotated[CurrentUser, Depends(get_current_user)],
-    session: Annotated[AsyncSession, Depends(get_agent_history_session)],
+    session: Annotated[AsyncSession, Depends(get_agent_persistence_session)],
     redis: Annotated[aioredis.Redis, Depends(get_redis_client)],
 ) -> ResearchRunResponse:
-    repo = AgentHistoryRepository(session)
+    repo = AgentRunRepository(session)
     response = await repo.read_run_for_user(run_id=run_id, user_id=user.id)
     if response is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND)

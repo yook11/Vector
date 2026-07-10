@@ -133,7 +133,7 @@ retrieving（並列の internal/external 検索、30 秒級）の内訳が見え
      失敗の記録は task_reports / missingAspects / errorCode の既存責務）。
    - direct 経路はイベントなし（検索しないため。stage のみで表現）。
 
-3. **publisher は worker 側 `app/agent/history/live_events.py`（新規）に置く**。
+3. **publisher は worker 側 `app/agent/live_updates/recent_events.py` に置く**。
    `AgentRunLiveEventPublisher(redis, run_id)` が `event_occurred` を実装:
    契約イベントを JSON 化（`type` + 属性 + publisher が押す `ts`）し、
    pipeline で `LPUSH → LTRIM 0 49 → EXPIRE 900` を 1 往復で実行。
@@ -143,7 +143,7 @@ retrieving（並列の internal/external 検索、30 秒級）の内訳が見え
    - **短い timeout で諦める**: 共有 client（`get_redis()`）は socket timeout
      未設定のため、Redis の遅延・半断で await が長く塞がると検索処理・API 応答が
      Redis 待ちにブロックされ non-authoritative の建前が崩れる。publish / reset /
-     read はすべて `asyncio.wait_for`（1 秒級、定数は live_events.py）で打ち切り、
+     read はすべて `asyncio.wait_for`（1 秒級、定数は recent_events.py）で打ち切り、
      timeout も他の例外と同じく warning + 続行。cancel 時の redis-py connection
      状態の扱い（破棄されるか）は実装時に `/research` で確認する。
 
@@ -239,7 +239,7 @@ backend/app/agent/contract.py               (AnswerProgressEvent union + AnswerE
 backend/app/agent/internal_retrieval/service.py (events field + started/completed 発火)
 backend/app/agent/external_search/runner.py     (events 注入 + per-task 3 イベント発火)
 backend/app/agent/composition.py                (events 引数の配線)
-backend/app/agent/history/live_events.py        (新規: publisher/reader + key・cap 50・TTL 900・read 10 の定数)
+backend/app/agent/live_updates/recent_events.py (publisher/reader + key・cap 50・TTL 900・read 10 の定数)
 backend/app/queue/tasks/agent_run.py            (publisher 生成 + acquire 後 reset + 注入)
 backend/app/agent/router.py                     (GET /runs に reader 結線)
 backend/app/schemas/research.py                 (ResearchRunEvent union + recent_events)

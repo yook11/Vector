@@ -184,7 +184,8 @@ sweeper sweep_stale_agent_runs (broker_agent cron "*/10 * * * *"):
 backend/app/agent/composition.py            (新規: agent builder を router から移設、worker 専用)
 backend/app/agent/router.py                 (202 化、kiq、404/409、GET runs 追加。
                                              builder 削除、軽量 config check のみ残す)
-backend/app/agent/history/                  (新規: 保存 mapper + read projection + repository)
+backend/app/agent/conversations/            (保存 mapper + conversation read projection / repository)
+backend/app/agent/runs/                     (run lifecycle projection / repository / types)
 backend/app/queue/brokers.py                (broker_agent 追加)
 backend/app/queue/messages/agent_run.py     (新規: AgentRunTrigger(run_id: UUID))
 backend/app/queue/tasks/agent_run.py        (新規: run_agent_answer + sweep_stale_agent_runs)

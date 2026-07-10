@@ -1,4 +1,4 @@
-"""Agent run worker and history repository tests."""
+"""Agent run worker and conversation/run repository tests."""
 
 from __future__ import annotations
 
@@ -20,17 +20,19 @@ from app.agent.contract import (
     ExternalUrlSource,
     InternalArticleSource,
 )
-from app.agent.history import AgentHistoryRepository, RunTransitionLostError
-from app.agent.history.mapper import (
+from app.agent.conversations.projection import build_research_assistant_message
+from app.agent.conversations.repository import AgentConversationRepository
+from app.agent.question_resolution.contract import ResolvedQuestionDraft
+from app.agent.runs.contracts import RunTransitionLostError
+from app.agent.runs.repository import AgentRunRepository
+from app.agent.runs.result_mapper import (
     build_assistant_message_for_result,
     build_source_rows_for_message,
 )
-from app.agent.history.projection import build_research_assistant_message
 from app.analysis.ai_provider_errors import (
     AIProviderConfigurationError,
     AIProviderError,
 )
-from app.agent.question_resolution.contract import ResolvedQuestionDraft
 from app.models.agent_message import AgentMessage, AgentMessageSource
 from app.models.agent_run import AgentRun
 from app.models.agent_thread import AgentThread
@@ -78,6 +80,23 @@ class FakeLiveEventPublisher:
 
     async def event_occurred(self, event: object) -> None:
         self.events.append(event)
+
+
+class FakeLiveStreamPublisher:
+    instances: list[FakeLiveStreamPublisher] = []
+    raise_on_begin = False
+
+    def __init__(self, redis: object, run_id: UUID, attempt_epoch: datetime) -> None:
+        self.redis = redis
+        self.run_id = run_id
+        self.attempt_epoch = attempt_epoch
+        self.begin_attempt_calls = 0
+        FakeLiveStreamPublisher.instances.append(self)
+
+    async def begin_attempt(self) -> None:
+        self.begin_attempt_calls += 1
+        if self.raise_on_begin:
+            raise RuntimeError("Redis unavailable")
 
 
 class FakeQuestionResolver:
@@ -300,6 +319,117 @@ async def test_run_agent_answer_resets_live_events_and_injects_reporter(
 
 
 @pytest.mark.asyncio
+async def test_run_agent_answer_starts_stream_attempt_only_after_acquire(
+    session_factory: async_sessionmaker[AsyncSession],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async with session_factory() as session:
+        _thread, _message, run = await _create_thread_message_run(session)
+    fake_agent = FakeAgent(_direct_result())
+    redis = object()
+    FakeLiveStreamPublisher.instances = []
+    FakeLiveStreamPublisher.raise_on_begin = False
+
+    def build_agent(**_kwargs: object) -> FakeAgent:
+        assert len(FakeLiveStreamPublisher.instances) == 1
+        assert FakeLiveStreamPublisher.instances[0].begin_attempt_calls == 1
+        return fake_agent
+
+    monkeypatch.setattr(agent_run_tasks, "make_safe_async_client", _fake_http_client)
+    monkeypatch.setattr(agent_run_tasks, "build_question_answering_agent", build_agent)
+    monkeypatch.setattr(agent_run_tasks, "get_redis", lambda: redis)
+    monkeypatch.setattr(
+        agent_run_tasks,
+        "AgentRunLiveEventPublisher",
+        FakeLiveEventPublisher,
+    )
+    monkeypatch.setattr(
+        agent_run_tasks,
+        "AgentRunLiveStreamPublisher",
+        FakeLiveStreamPublisher,
+        raising=False,
+    )
+
+    await agent_run_tasks.run_agent_answer(
+        trigger=AgentRunTrigger(run_id=run.id),
+        ctx=_ctx(session_factory),
+    )
+
+    assert len(FakeLiveStreamPublisher.instances) == 1
+    publisher = FakeLiveStreamPublisher.instances[0]
+    assert publisher.redis is redis
+    assert publisher.run_id == run.id
+    assert publisher.begin_attempt_calls == 1
+
+
+@pytest.mark.asyncio
+async def test_run_agent_answer_continues_when_stream_begin_attempt_raises(
+    session_factory: async_sessionmaker[AsyncSession],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async with session_factory() as session:
+        _thread, _message, run = await _create_thread_message_run(session)
+    fake_agent = FakeAgent(_direct_result())
+    FakeLiveStreamPublisher.instances = []
+    monkeypatch.setattr(FakeLiveStreamPublisher, "raise_on_begin", True)
+    monkeypatch.setattr(agent_run_tasks, "make_safe_async_client", _fake_http_client)
+    monkeypatch.setattr(
+        agent_run_tasks,
+        "build_question_answering_agent",
+        lambda **_kwargs: fake_agent,
+    )
+    monkeypatch.setattr(
+        agent_run_tasks,
+        "AgentRunLiveEventPublisher",
+        FakeLiveEventPublisher,
+    )
+    monkeypatch.setattr(
+        agent_run_tasks,
+        "AgentRunLiveStreamPublisher",
+        FakeLiveStreamPublisher,
+        raising=False,
+    )
+
+    await agent_run_tasks.run_agent_answer(
+        trigger=AgentRunTrigger(run_id=run.id),
+        ctx=_ctx(session_factory),
+    )
+
+    assert FakeLiveStreamPublisher.instances[0].begin_attempt_calls == 1
+    async with session_factory() as session:
+        completed = await session.get(AgentRun, run.id)
+        assert completed is not None
+        assert completed.status == "completed"
+
+
+@pytest.mark.asyncio
+async def test_idempotent_skip_does_not_create_or_start_stream_publisher(
+    session_factory: async_sessionmaker[AsyncSession],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async with session_factory() as session:
+        _thread, _message, run = await _create_thread_message_run(
+            session,
+            status="failed",
+            error_code="internal_error",
+        )
+    FakeLiveStreamPublisher.instances = []
+    monkeypatch.setattr(
+        agent_run_tasks,
+        "AgentRunLiveStreamPublisher",
+        FakeLiveStreamPublisher,
+        raising=False,
+    )
+
+    await agent_run_tasks.run_agent_answer(
+        trigger=AgentRunTrigger(run_id=run.id),
+        ctx=_ctx(session_factory),
+    )
+
+    assert FakeLiveStreamPublisher.instances == []
+
+
+@pytest.mark.asyncio
 async def test_run_agent_answer_resolves_history_and_publishes_non_echo_question(
     session_factory: async_sessionmaker[AsyncSession],
     monkeypatch: pytest.MonkeyPatch,
@@ -431,7 +561,7 @@ async def test_read_recent_messages_before_returns_bounded_oldest_first_thread_w
         )
 
     async with session_factory() as session:
-        messages = await AgentHistoryRepository(
+        messages = await AgentConversationRepository(
             session
         ).read_recent_messages_before(
             thread_id=thread.id,
@@ -474,7 +604,7 @@ async def test_complete_run_warns_on_citation_source_mismatch_without_failing_ru
     with capture_logs() as logs:
         async with session_factory() as session:
             async with session.begin():
-                completed = await AgentHistoryRepository(session).complete_run(
+                completed = await AgentRunRepository(session).complete_run(
                     run_id=run.id,
                     result=result,
                 )
@@ -654,14 +784,14 @@ async def test_complete_run_lost_race_rolls_back_assistant_message(
 
         async with session_factory() as winner_session:
             async with winner_session.begin():
-                await AgentHistoryRepository(winner_session).mark_failed(
+                await AgentRunRepository(winner_session).mark_failed(
                     run.id,
                     error_code=agent_run_tasks.AgentRunErrorCode.STALE,
                 )
 
         with pytest.raises(RunTransitionLostError):
             async with stale_session.begin():
-                await AgentHistoryRepository(stale_session).complete_run(
+                await AgentRunRepository(stale_session).complete_run(
                     run_id=run.id,
                     result=_direct_result(),
                 )
@@ -705,7 +835,7 @@ async def test_acquire_for_execution_reexecutes_running_and_skips_terminal_runs(
 
     async with session_factory() as session:
         async with session.begin():
-            repo = AgentHistoryRepository(session)
+            repo = AgentRunRepository(session)
             prepared = await repo.acquire_for_execution(running.id, now=now)
             skipped = await repo.acquire_for_execution(failed.id, now=now)
 
@@ -713,6 +843,7 @@ async def test_acquire_for_execution_reexecutes_running_and_skips_terminal_runs(
     assert prepared.run_id == running.id
     assert prepared.question == "worker question"
     assert prepared.user_message_seq == 1
+    assert prepared.attempt_epoch == now
     assert skipped is None
     async with session_factory() as session:
         reacquired = await session.get(AgentRun, running.id)
@@ -749,7 +880,7 @@ async def test_sweep_stale_agent_runs_marks_only_old_active_runs(
             created_at=now - timedelta(minutes=30),
             error_code="internal_error",
         )
-        count = await AgentHistoryRepository(session).sweep_stale_runs(now=now)
+        count = await AgentRunRepository(session).sweep_stale_runs(now=now)
         await session.commit()
         assert count == 2
 

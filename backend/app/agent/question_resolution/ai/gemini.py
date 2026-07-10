@@ -11,7 +11,7 @@ from google import genai
 from google.genai.types import GenerateContentConfig
 from pydantic import ValidationError
 
-from app.agent.history.repository import ThreadMessageSnapshot
+from app.agent.conversations.contracts import ThreadMessageSnapshot
 from app.agent.question_resolution.ai.gemini_prompt import (
     GeminiQuestionResolutionPrompt,
 )

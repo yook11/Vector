@@ -17,7 +17,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 import app.agent.router as research_router_module
 from app.agent.contract import AnswerQuestionResult, AnswerRetrievalSummary
-from app.agent.history import AgentHistoryRepository
+from app.agent.runs.repository import AgentRunRepository
 from app.config import settings
 from app.dependencies import get_redis_client
 from app.main import app
@@ -76,7 +76,7 @@ async def research_client(
         yield db_session
 
     fake_enqueue = FakeEnqueue()
-    app.dependency_overrides[research_router_module.get_agent_history_session] = (
+    app.dependency_overrides[research_router_module.get_agent_persistence_session] = (
         override_history_session
     )
     app.dependency_overrides[get_redis_client] = lambda: FakeRunEventsRedis()
@@ -99,7 +99,7 @@ async def anonymous_research_client(
             await db_session.commit()
         yield db_session
 
-    app.dependency_overrides[research_router_module.get_agent_history_session] = (
+    app.dependency_overrides[research_router_module.get_agent_persistence_session] = (
         override_history_session
     )
     async with AsyncClient(
@@ -418,9 +418,9 @@ class TestCreateResearchResponse:
             yield db_session
 
         fake_enqueue = FakeEnqueue(exc=RuntimeError("redis down SHOULD_NOT_LEAK"))
-        app.dependency_overrides[research_router_module.get_agent_history_session] = (
-            override_history_session
-        )
+        app.dependency_overrides[
+            research_router_module.get_agent_persistence_session
+        ] = override_history_session
         monkeypatch.setattr(research_router_module, "enqueue_agent_run", fake_enqueue)
         async with AsyncClient(
             transport=ASGITransport(app=app),
@@ -457,9 +457,9 @@ class TestCreateResearchResponse:
             await db_session.commit()
             raise RuntimeError("redis uncertain SHOULD_NOT_LEAK")
 
-        app.dependency_overrides[research_router_module.get_agent_history_session] = (
-            override_history_session
-        )
+        app.dependency_overrides[
+            research_router_module.get_agent_persistence_session
+        ] = override_history_session
         monkeypatch.setattr(
             research_router_module, "enqueue_agent_run", enqueue_then_start_and_fail
         )
@@ -859,7 +859,7 @@ class TestDeleteResearchThread:
             await db_session.commit()
         db_session.expire_all()
         async with db_session.begin():
-            completed = await AgentHistoryRepository(db_session).complete_run(
+            completed = await AgentRunRepository(db_session).complete_run(
                 run_id=run_id,
                 result=_direct_result(),
             )
@@ -1014,7 +1014,7 @@ class TestCancelResearchRun:
             await db_session.commit()
         db_session.expire_all()
         async with db_session.begin():
-            completed = await AgentHistoryRepository(db_session).complete_run(
+            completed = await AgentRunRepository(db_session).complete_run(
                 run_id=run_id,
                 result=_direct_result(),
             )

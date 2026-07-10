@@ -7,7 +7,7 @@ from typing import Annotated, Protocol
 
 from pydantic import BaseModel, ConfigDict, StringConstraints
 
-from app.agent.history.repository import ThreadMessageSnapshot
+from app.agent.conversations.contracts import ThreadMessageSnapshot
 
 MAX_STANDALONE_QUESTION_LENGTH = 500
 MAX_USER_INTENT_LENGTH = 500

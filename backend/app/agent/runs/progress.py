@@ -9,7 +9,7 @@ from sqlalchemy import update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.agent.contract import AnswerProgressStage
-from app.agent.history.types import AgentRunProgressStage, AgentRunStatus
+from app.agent.runs.types import AgentRunProgressStage, AgentRunStatus
 from app.models.agent_run import AgentRun
 
 logger = structlog.get_logger(__name__)

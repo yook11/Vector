@@ -21,7 +21,7 @@ from app.agent.contract import (
     InternalSearchStartedEvent,
     QuestionResolvedEvent,
 )
-from app.agent.history.live_events import (
+from app.agent.live_updates.recent_events import (
     AGENT_RUN_LIVE_EVENT_READ_LIMIT,
     AGENT_RUN_LIVE_EVENT_TTL_SECONDS,
     AgentRunLiveEventPublisher,

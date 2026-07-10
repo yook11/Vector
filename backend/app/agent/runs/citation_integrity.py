@@ -1,4 +1,4 @@
-"""Validate persisted citation markers against saved source refs."""
+"""Validate completed-run citation markers against saved source refs."""
 
 from __future__ import annotations
 

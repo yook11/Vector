@@ -1,15 +1,10 @@
-"""Project persisted agent history rows into public research responses."""
+"""Project persisted conversation rows into public research responses."""
 
 from __future__ import annotations
 
-from typing import Literal
 from uuid import UUID
 
-from app.agent.history.types import (
-    AgentRunErrorCode,
-    AgentRunProgressStage,
-    AgentRunStatus,
-)
+from app.agent.runs.projection import build_research_message_run
 from app.models.agent_message import AgentMessage, AgentMessageSource
 from app.models.agent_run import AgentRun
 from app.models.agent_thread import AgentThread
@@ -17,8 +12,6 @@ from app.schemas.research import (
     ResearchAssistantMessage,
     ResearchExternalUrlSource,
     ResearchInternalArticleSource,
-    ResearchMessageRun,
-    ResearchRunResponse,
     ResearchSource,
     ResearchThreadDetail,
     ResearchThreadListItem,
@@ -26,26 +19,6 @@ from app.schemas.research import (
     ResearchUserMessage,
 )
 from app.shared.security.safe_url import SafeUrl
-
-ResearchRunStatusValue = Literal["queued", "running", "completed", "failed"]
-ResearchRunErrorCodeValue = Literal[
-    "generation_unavailable",
-    "internal_error",
-    "enqueue_failed",
-    "stale",
-    "cancelled",
-]
-ResearchProgressStageValue = Literal["planning", "retrieving", "synthesizing"]
-
-
-def build_research_run_response(*, run: AgentRun) -> ResearchRunResponse:
-    return ResearchRunResponse(
-        run_id=run.id,
-        thread_id=run.thread_id,
-        status=_run_status_value(run.status),
-        error_code=_run_error_code_value(run.error_code),
-        progress_stage=_run_progress_stage_value(run.progress_stage),
-    )
 
 
 def build_research_thread_list_item(
@@ -112,12 +85,7 @@ def _message_response(
             seq=message.seq,
             content=message.content,
             created_at=message.created_at,
-            run=ResearchMessageRun(
-                run_id=run.id,
-                status=_run_status_value(run.status),
-                error_code=_run_error_code_value(run.error_code),
-                progress_stage=_run_progress_stage_value(run.progress_stage),
-            ),
+            run=build_research_message_run(run=run),
         )
     if message.role != "assistant":
         raise ValueError(f"unknown agent message role: {message.role!r}")
@@ -149,43 +117,3 @@ def _source_response(source: AgentMessageSource) -> ResearchSource:
         published_at=source.published_at,
         evidence_claim=source.evidence_claim,
     )
-
-
-def _run_status_value(value: str) -> ResearchRunStatusValue:
-    match AgentRunStatus(value):
-        case AgentRunStatus.QUEUED:
-            return "queued"
-        case AgentRunStatus.RUNNING:
-            return "running"
-        case AgentRunStatus.COMPLETED:
-            return "completed"
-        case AgentRunStatus.FAILED:
-            return "failed"
-
-
-def _run_error_code_value(value: str | None) -> ResearchRunErrorCodeValue | None:
-    if value is None:
-        return None
-    match AgentRunErrorCode(value):
-        case AgentRunErrorCode.GENERATION_UNAVAILABLE:
-            return "generation_unavailable"
-        case AgentRunErrorCode.INTERNAL_ERROR:
-            return "internal_error"
-        case AgentRunErrorCode.ENQUEUE_FAILED:
-            return "enqueue_failed"
-        case AgentRunErrorCode.STALE:
-            return "stale"
-        case AgentRunErrorCode.CANCELLED:
-            return "cancelled"
-
-
-def _run_progress_stage_value(value: str | None) -> ResearchProgressStageValue | None:
-    if value is None:
-        return None
-    match AgentRunProgressStage(value):
-        case AgentRunProgressStage.PLANNING:
-            return "planning"
-        case AgentRunProgressStage.RETRIEVING:
-            return "retrieving"
-        case AgentRunProgressStage.SYNTHESIZING:
-            return "synthesizing"

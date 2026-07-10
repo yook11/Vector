@@ -15,19 +15,21 @@ from app.agent.composition import (
     build_question_resolver,
 )
 from app.agent.contract import AnswerQuestionInput, QuestionResolvedEvent
-from app.agent.history import (
-    AgentHistoryRepository,
-    AgentRunErrorCode,
-    PreparedAgentRun,
-    RunTransitionLostError,
-    ThreadMessageSnapshot,
-)
-from app.agent.history.live_events import AgentRunLiveEventPublisher
-from app.agent.history.progress import AgentRunProgressWriter
+from app.agent.conversations.contracts import ThreadMessageSnapshot
+from app.agent.conversations.repository import AgentConversationRepository
+from app.agent.live_updates.recent_events import AgentRunLiveEventPublisher
+from app.agent.live_updates.stream import AgentRunLiveStreamPublisher
 from app.agent.question_resolution.service import (
     HISTORY_MESSAGE_LIMIT,
     QuestionResolutionService,
 )
+from app.agent.runs.contracts import (
+    PreparedAgentRun,
+    RunTransitionLostError,
+)
+from app.agent.runs.progress import AgentRunProgressWriter
+from app.agent.runs.repository import AgentRunRepository
+from app.agent.runs.types import AgentRunErrorCode
 from app.analysis.ai_provider_errors import (
     AIProviderConfigurationError,
     AIProviderError,
@@ -56,7 +58,20 @@ async def run_agent_answer(
     if prepared is None:
         logger.info("agent_run_idempotent_skip", run_id=str(trigger.run_id))
         return
-    events = AgentRunLiveEventPublisher(get_redis(), prepared.run_id)
+    redis = get_redis()
+    events = AgentRunLiveEventPublisher(redis, prepared.run_id)
+    stream_events = AgentRunLiveStreamPublisher(
+        redis,
+        prepared.run_id,
+        prepared.attempt_epoch,
+    )
+    try:
+        await stream_events.begin_attempt()
+    except Exception:
+        logger.warning(
+            "agent_run_live_stream_begin_attempt_failed",
+            run_id=str(prepared.run_id),
+        )
 
     try:
         await events.reset()
@@ -127,7 +142,7 @@ async def run_agent_answer(
     try:
         async with session_factory() as session:
             async with session.begin():
-                completed = await AgentHistoryRepository(session).complete_run(
+                completed = await AgentRunRepository(session).complete_run(
                     run_id=prepared.run_id,
                     result=result,
                 )
@@ -162,7 +177,7 @@ async def sweep_stale_agent_runs(ctx: Context = TaskiqDepends()) -> None:
     session_factory = ctx.state.session_factory
     async with session_factory() as session:
         async with session.begin():
-            count = await AgentHistoryRepository(session).sweep_stale_runs()
+            count = await AgentRunRepository(session).sweep_stale_runs()
     logger.info("agent_runs_stale_swept", count=count)
 
 
@@ -172,7 +187,7 @@ async def _acquire_run(
 ) -> PreparedAgentRun | None:
     async with session_factory() as session:
         async with session.begin():
-            return await AgentHistoryRepository(session).acquire_for_execution(
+            return await AgentRunRepository(session).acquire_for_execution(
                 trigger.run_id
             )
 
@@ -182,7 +197,7 @@ async def _read_history(
     prepared: PreparedAgentRun,
 ) -> list[ThreadMessageSnapshot]:
     async with session_factory() as session:
-        return await AgentHistoryRepository(session).read_recent_messages_before(
+        return await AgentConversationRepository(session).read_recent_messages_before(
             thread_id=prepared.thread_id,
             before_seq=prepared.user_message_seq,
             limit=HISTORY_MESSAGE_LIMIT,
@@ -203,7 +218,7 @@ async def _mark_failed(
 ) -> None:
     async with session_factory() as session:
         async with session.begin():
-            await AgentHistoryRepository(session).mark_failed(
+            await AgentRunRepository(session).mark_failed(
                 run_id,
                 error_code=error_code,
             )

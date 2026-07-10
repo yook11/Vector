@@ -1,4 +1,4 @@
-"""Map agent core results to persisted conversation rows."""
+"""Map completed agent results to persisted conversation rows."""
 
 from __future__ import annotations
 

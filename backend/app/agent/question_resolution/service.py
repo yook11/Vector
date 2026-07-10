@@ -8,7 +8,7 @@ from uuid import UUID
 import structlog
 from pydantic import ValidationError
 
-from app.agent.history.repository import ThreadMessageSnapshot
+from app.agent.conversations.contracts import ThreadMessageSnapshot
 from app.agent.question_resolution.contract import (
     QuestionResolutionResponseInvalidError,
     QuestionResolver,

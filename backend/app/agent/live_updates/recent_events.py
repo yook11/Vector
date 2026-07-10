@@ -1,4 +1,4 @@
-"""Best-effort Redis live events for active agent runs."""
+"""Best-effort Redis recent events for active agent runs."""
 
 from __future__ import annotations
 
