@@ -27,11 +27,12 @@ concurrency:
   cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 jobs:
-  # E2E smoke を path-filter で関連変更 PR のみに走らせるため、changed file
-  # 判定を 1 ジョブに切り出す。Vector は GitHub Free / private repo で
-  # branch protection / required checks が使えないため、skip しても merge を
-  # ブロックしない。auth/E2E に無関係な PR (例: backend digest refactor、docs)
-  # では `frontend-e2e-smoke` 全体が skip され CI wallclock が縮む。
+  # E2E smoke / backend / frontend の各テスト job を path-filter で関連変更 PR
+  # のみに走らせるため、changed file 判定を 1 ジョブに切り出す。Vector は
+  # GitHub Free / private repo で branch protection / required checks が
+  # 使えないため、skip しても merge をブロックしない。無関係な PR (例:
+  # frontend-only 変更での backend テスト) では該当 job 全体が skip され
+  # CI wallclock が縮む。
   changes:
     name: Detect changes
     runs-on: ubuntu-latest
@@ -45,12 +46,17 @@ jobs:
       pull-requests: read
     outputs:
       e2e: ${{ steps.filter.outputs.e2e }}
-      # deploy-production の per-area gate 用。backend/frontend のどちらが変わったかで
-      # release step を出し分け、migrations 変更は自動 deploy を block する。
+      # deploy-production の per-area gate と PR テスト job の skip 判定に共用。
+      # backend/frontend のどちらが変わったかで release step を出し分け、
+      # migrations 変更は自動 deploy を block する。
       backend: ${{ steps.filter.outputs.backend }}
       frontend: ${{ steps.filter.outputs.frontend }}
       migrations: ${{ steps.filter.outputs.migrations }}
       migration_files: ${{ steps.filter.outputs.migrations_files }}
+      # workflow 定義の変更は backend/frontend 両テスト job を強制実行する。
+      # deploy の per-area gate には影響させないため backend/frontend filter とは
+      # 分離する。
+      ci: ${{ steps.filter.outputs.ci }}
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
       - uses: dorny/paths-filter@fbd0ab8f3e69293af611ebaee6363fc25e6d187d  # v4.0.1
@@ -62,6 +68,8 @@ jobs:
               - 'backend/**'
             frontend:
               - 'frontend/**'
+            ci:
+              - '.github/workflows/**'
             # 自動 deploy を止める判定 (本 slice は migration を手動運用)。
             migrations:
               - 'backend/alembic/versions/**'
@@ -93,6 +101,12 @@ jobs:
   backend-unit:
     name: Backend (unit + lint)
     runs-on: ubuntu-latest
+    needs: changes
+    # main push は deploy に直結するため path-filter で skip せず常時フル実行する。
+    if: >-
+      github.event_name == 'push'
+      || needs.changes.outputs.backend == 'true'
+      || needs.changes.outputs.ci == 'true'
 
     env:
       # unit テストは実際には接続しないが、conftest が settings.database_url を
@@ -139,6 +153,12 @@ jobs:
   backend-integration:
     name: Backend (integration)
     runs-on: ubuntu-latest
+    needs: changes
+    # main push は deploy に直結するため path-filter で skip せず常時フル実行する。
+    if: >-
+      github.event_name == 'push'
+      || needs.changes.outputs.backend == 'true'
+      || needs.changes.outputs.ci == 'true'
 
     services:
       postgres:
@@ -200,6 +220,12 @@ jobs:
   frontend:
     name: Frontend (lint + type check)
     runs-on: ubuntu-latest
+    needs: changes
+    # main push は deploy に直結するため path-filter で skip せず常時フル実行する。
+    if: >-
+      github.event_name == 'push'
+      || needs.changes.outputs.frontend == 'true'
+      || needs.changes.outputs.ci == 'true'
 
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
@@ -656,46 +682,48 @@ jobs:
   # ---- CI gate (全必須チェックの集約) ----
   # deploy-production が個別テスト job で先走らないよう、全テスト job を 1 つに
   # 集約する単一ゲート。deploy は本 job の success だけを待てばよい。
-  # frontend-e2e-smoke / migration-check は path 条件で skip されうるため
-  # success|skipped を許容し、それ以外 (backend-unit / backend-integration /
-  # frontend / pre-commit) は success 必須とする。
+  # path-filter 対象 job (backend-unit / backend-integration / frontend /
+  # frontend-e2e-smoke / migration-check) は PR で skip されうるため
+  # success|skipped を許容する (main push は各 job の if で常時実行)。
+  # changes 自体が失敗すると全テスト job が skip され gate が素通りするため、
+  # changes / pre-commit は success 必須とする。
   ci-gate:
     name: CI gate
     needs:
+      - changes
       - backend-unit
       - backend-integration
       - frontend
       - frontend-e2e-smoke
       - pre-commit
       - migration-check
-    # 一部 needs が skip (e2e) されても本 job 自体は評価したいので !cancelled()。
+    # 一部 needs が skip されても本 job 自体は評価したいので !cancelled()。
     # 失敗 needs があっても下の script で明示判定して exit 1 する。
     if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
     steps:
-      - name: Require all checks (frontend-e2e-smoke は skip 許容)
+      - name: Require all checks (path-filter 対象 job は skip 許容)
         run: |
           fail=0
           for r in \
-            "backend-unit=${{ needs.backend-unit.result }}" \
-            "backend-integration=${{ needs.backend-integration.result }}" \
-            "frontend=${{ needs.frontend.result }}" \
+            "changes=${{ needs.changes.result }}" \
             "pre-commit=${{ needs.pre-commit.result }}"; do
             if [ "${r#*=}" != "success" ]; then
               echo "::error::${r%%=*} = ${r#*=} (success required)"
               fail=1
             fi
           done
-          e2e="${{ needs.frontend-e2e-smoke.result }}"
-          case "$e2e" in
-            success|skipped) echo "frontend-e2e-smoke = $e2e (ok)" ;;
-            *) echo "::error::frontend-e2e-smoke = $e2e (success or skipped required)"; fail=1 ;;
-          esac
-          migration_check="${{ needs.migration-check.result }}"
-          case "$migration_check" in
-            success|skipped) echo "migration-check = $migration_check (ok)" ;;
-            *) echo "::error::migration-check = $migration_check (success or skipped required)"; fail=1 ;;
-          esac
+          for r in \
+            "backend-unit=${{ needs.backend-unit.result }}" \
+            "backend-integration=${{ needs.backend-integration.result }}" \
+            "frontend=${{ needs.frontend.result }}" \
+            "frontend-e2e-smoke=${{ needs.frontend-e2e-smoke.result }}" \
+            "migration-check=${{ needs.migration-check.result }}"; do
+            case "${r#*=}" in
+              success|skipped) echo "${r%%=*} = ${r#*=} (ok)" ;;
+              *) echo "::error::${r%%=*} = ${r#*=} (success or skipped required)"; fail=1 ;;
+            esac
+          done
           exit $fail
 
   migrate-production:
