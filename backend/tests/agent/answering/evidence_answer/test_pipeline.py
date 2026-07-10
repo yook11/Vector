@@ -1,4 +1,4 @@
-"""Answer synthesis service tests."""
+"""Evidence answer pipeline tests."""
 
 from __future__ import annotations
 
@@ -17,12 +17,13 @@ from app.agent.answering.audit import (
     AnswerSynthesisOutcomeCode,
     RequestRetryDisposition,
 )
-from app.agent.answering.evidence import AnswerEvidenceItem
-from app.agent.answering.synthesis import (
-    AnswerDraft,
-    AnswerSynthesisService,
-    RawAnswerDraft,
+from app.agent.answering.evidence_answer.contract import (
+    EvidenceAnswerDraft,
+    EvidenceAnswerDraftGenerationInvalidError,
+    RawEvidenceAnswerDraft,
 )
+from app.agent.answering.evidence_answer.evidence import AnswerEvidenceItem
+from app.agent.answering.evidence_answer.pipeline import EvidenceAnswerPipeline
 from app.agent.contract import ExternalUrlSource
 from app.analysis.ai_provider_errors import AIProviderNetworkError
 from tests.logfire._metric_helpers import collected_metrics, sum_counter_for_result
@@ -53,8 +54,8 @@ def _raw(
     answer: object = "根拠から確認できます。[[1]]",
     cited_refs: list[object] | None = None,
     missing_aspects: list[object] | None = None,
-) -> RawAnswerDraft:
-    return RawAnswerDraft(
+) -> RawEvidenceAnswerDraft:
+    return RawEvidenceAnswerDraft(
         sufficiency=sufficiency,
         answer=answer,
         cited_refs=["1"] if cited_refs is None else cited_refs,
@@ -66,7 +67,7 @@ class FakeGenerator:
     model_name = "fake-answer-model"
     prompt_version = "fake0001"
 
-    def __init__(self, outcomes: Sequence[RawAnswerDraft | Exception]) -> None:
+    def __init__(self, outcomes: Sequence[RawEvidenceAnswerDraft | Exception]) -> None:
         self._outcomes = list(outcomes)
         self.calls: list[dict[str, Any]] = []
 
@@ -81,7 +82,7 @@ class FakeGenerator:
         prior_coverage: str = "",
         user_activity_context: str = "",
         previous_error: str | None = None,
-    ) -> RawAnswerDraft:
+    ) -> RawEvidenceAnswerDraft:
         self.calls.append(
             {
                 "question": question,
@@ -133,16 +134,16 @@ class RaisingAnswerSynthesisAuditRecorder:
         raise RuntimeError("audit recorder down")
 
 
-async def _synthesize(
+async def _answer(
     generator: FakeGenerator,
     *,
     recorder: FakeAnswerSynthesisAuditRecorder | None = None,
     evidence: list[AnswerEvidenceItem] | None = None,
-) -> AnswerDraft:
-    return await AnswerSynthesisService(
+) -> EvidenceAnswerDraft:
+    return await EvidenceAnswerPipeline(
         generator=generator,
         audit_recorder=recorder,
-    ).synthesize(
+    ).answer(
         question="NVIDIA の直近発表は投資判断に重要？",
         evidence=[_evidence()] if evidence is None else evidence,
         as_of=_as_of(),
@@ -167,9 +168,9 @@ async def test_valid_raw_draft_passes_through_unchanged() -> None:
     generator = FakeGenerator([_raw(cited_refs=["1"])])
     recorder = FakeAnswerSynthesisAuditRecorder()
 
-    draft = await _synthesize(generator, recorder=recorder)
+    draft = await _answer(generator, recorder=recorder)
 
-    assert draft == AnswerDraft(
+    assert draft == EvidenceAnswerDraft(
         sufficiency="answered",
         answer="根拠から確認できます。[[1]]",
         cited_refs=["1"],
@@ -200,7 +201,7 @@ async def test_derives_refs_from_markers_and_records_mismatch_defect() -> None:
     )
     recorder = FakeAnswerSynthesisAuditRecorder()
 
-    draft = await _synthesize(generator, recorder=recorder)
+    draft = await _answer(generator, recorder=recorder)
 
     assert draft.cited_refs == ["1"]
     assert draft.answer == "根拠 1 から確認できます。[[1]]"
@@ -223,7 +224,7 @@ async def test_extra_declared_cited_refs_are_replaced_by_answer_markers() -> Non
     )
     recorder = FakeAnswerSynthesisAuditRecorder()
 
-    draft = await _synthesize(
+    draft = await _answer(
         generator,
         recorder=recorder,
         evidence=[_evidence("1"), _evidence("2")],
@@ -249,7 +250,7 @@ async def test_completes_insufficient_missing_aspects_and_records_defect() -> No
     )
     recorder = FakeAnswerSynthesisAuditRecorder()
 
-    draft = await _synthesize(generator, recorder=recorder)
+    draft = await _answer(generator, recorder=recorder)
 
     assert draft.sufficiency == "insufficient"
     assert draft.answer == "根拠の範囲では断定できません。[[1]]"
@@ -274,7 +275,7 @@ async def test_removes_blank_and_duplicate_refs_and_missing_aspects() -> None:
     )
     recorder = FakeAnswerSynthesisAuditRecorder()
 
-    draft = await _synthesize(generator, recorder=recorder)
+    draft = await _answer(generator, recorder=recorder)
 
     assert draft.cited_refs == ["1"]
     assert draft.missing_aspects == ["会社側の一次情報"]
@@ -301,7 +302,7 @@ async def test_answered_without_marker_retries_once_with_previous_error() -> Non
     )
     recorder = FakeAnswerSynthesisAuditRecorder()
 
-    draft = await _synthesize(generator, recorder=recorder)
+    draft = await _answer(generator, recorder=recorder)
 
     assert draft.answer == "修正後は根拠を引用しています。[[1]]"
     assert [call["previous_error"] for call in generator.calls][0] is None
@@ -327,7 +328,7 @@ async def test_persistent_noncompletable_defect_falls_back_to_valid_insufficient
     )
     recorder = FakeAnswerSynthesisAuditRecorder()
 
-    draft = await _synthesize(generator, recorder=recorder)
+    draft = await _answer(generator, recorder=recorder)
 
     assert draft.sufficiency == "insufficient"
     assert draft.answer
@@ -364,7 +365,7 @@ async def test_unknown_citation_ref_is_detected_inside_synthesis_and_retried() -
     )
     recorder = FakeAnswerSynthesisAuditRecorder()
 
-    draft = await _synthesize(generator, recorder=recorder)
+    draft = await _answer(generator, recorder=recorder)
 
     assert draft.cited_refs == ["1"]
     assert "[[2]]" in generator.calls[1]["previous_error"]
@@ -388,7 +389,7 @@ async def test_persistent_unknown_marker_falls_back_to_valid_insufficient() -> N
         ]
     )
 
-    draft = await _synthesize(generator)
+    draft = await _answer(generator)
 
     assert draft.sufficiency == "insufficient"
     assert draft.cited_refs == []
@@ -413,7 +414,7 @@ async def test_empty_evidence_answered_citation_falls_back_insufficient() -> Non
         ]
     )
 
-    draft = await _synthesize(generator, evidence=[])
+    draft = await _answer(generator, evidence=[])
 
     assert draft.sufficiency == "insufficient"
     assert draft.cited_refs == []
@@ -435,7 +436,7 @@ async def test_empty_evidence_valid_insufficient_is_adopted_without_retry() -> N
         ]
     )
 
-    draft = await _synthesize(generator, evidence=[])
+    draft = await _answer(generator, evidence=[])
 
     assert draft.sufficiency == "insufficient"
     assert draft.cited_refs == []
@@ -459,7 +460,7 @@ async def test_marker_parse_boundaries_use_double_bracket_digits_only() -> None:
     )
     recorder = FakeAnswerSynthesisAuditRecorder()
 
-    draft = await _synthesize(
+    draft = await _answer(
         generator,
         recorder=recorder,
         evidence=[_evidence("1"), _evidence("2")],
@@ -481,7 +482,7 @@ async def test_repeated_markers_are_deduplicated_without_defect() -> None:
     )
     recorder = FakeAnswerSynthesisAuditRecorder()
 
-    draft = await _synthesize(generator, recorder=recorder)
+    draft = await _answer(generator, recorder=recorder)
 
     assert draft.cited_refs == ["1"]
     assert recorder.defect_events == []
@@ -501,7 +502,7 @@ async def test_insufficient_with_marker_keeps_partial_citations() -> None:
     )
     recorder = FakeAnswerSynthesisAuditRecorder()
 
-    draft = await _synthesize(generator, recorder=recorder)
+    draft = await _answer(generator, recorder=recorder)
 
     assert draft.sufficiency == "insufficient"
     assert draft.cited_refs == ["1"]
@@ -516,7 +517,7 @@ async def test_provider_error_falls_back_without_retry() -> None:
     generator = FakeGenerator([AIProviderNetworkError()])
     recorder = FakeAnswerSynthesisAuditRecorder()
 
-    draft = await _synthesize(generator, recorder=recorder)
+    draft = await _answer(generator, recorder=recorder)
 
     assert draft.sufficiency == "insufficient"
     assert len(generator.calls) == 1
@@ -527,6 +528,23 @@ async def test_provider_error_falls_back_without_retry() -> None:
 
 
 @pytest.mark.asyncio
+async def test_response_envelope_error_retries_once_with_previous_error() -> None:
+    invalid = EvidenceAnswerDraftGenerationInvalidError("response_not_json")
+    generator = FakeGenerator([invalid, _raw(cited_refs=["1"])])
+    recorder = FakeAnswerSynthesisAuditRecorder()
+
+    draft = await _answer(generator, recorder=recorder)
+
+    assert draft.sufficiency == "answered"
+    assert [call["previous_error"] for call in generator.calls] == [
+        None,
+        "response_not_json",
+    ]
+    assert recorder.attempt_failures[0].code == "response_not_json"
+    assert recorder.final_events[0].retry_used is True
+
+
+@pytest.mark.asyncio
 async def test_unexpected_exception_propagates_without_fallback(
     capfire: CaptureLogfire,
 ) -> None:
@@ -534,7 +552,7 @@ async def test_unexpected_exception_propagates_without_fallback(
     recorder = FakeAnswerSynthesisAuditRecorder()
 
     with pytest.raises(RuntimeError, match="bug in generator"):
-        await _synthesize(generator, recorder=recorder)
+        await _answer(generator, recorder=recorder)
 
     assert len(generator.calls) == 1
     assert recorder.final_events == []
@@ -555,10 +573,10 @@ async def test_recorder_errors_do_not_stop_synthesis() -> None:
         ]
     )
 
-    draft = await AnswerSynthesisService(
+    draft = await EvidenceAnswerPipeline(
         generator=generator,
         audit_recorder=RaisingAnswerSynthesisAuditRecorder(),
-    ).synthesize(
+    ).answer(
         question="NVIDIA の直近発表は投資判断に重要？",
         evidence=[_evidence()],
         as_of=_as_of(),
@@ -575,7 +593,7 @@ async def test_outcome_metric_records_synthesized_once(
 ) -> None:
     generator = FakeGenerator([_raw(cited_refs=["1"])])
 
-    await _synthesize(generator)
+    await _answer(generator)
 
     metrics = collected_metrics(capfire)
     assert (

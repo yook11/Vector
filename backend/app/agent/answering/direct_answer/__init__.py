@@ -1,0 +1,1 @@
+"""Direct answer pipeline."""

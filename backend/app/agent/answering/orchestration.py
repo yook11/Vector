@@ -1,16 +1,19 @@
-"""Question answer orchestration service."""
+"""Question answering use-case orchestration."""
 
 from __future__ import annotations
 
 from datetime import datetime
 from typing import Literal, Protocol, assert_never
 
-from app.agent.answering.direct import DirectAnswerer
-from app.agent.answering.evidence import AnswerEvidenceItem, normalize_answer_evidence
-from app.agent.answering.synthesis import (
-    AnswerDraft,
-    AnswerDraftInvalidError,
-    EvidenceAnswerSynthesizer,
+from app.agent.answering.direct_answer.contract import DirectAnswerer
+from app.agent.answering.evidence_answer.contract import (
+    EvidenceAnswerDraft,
+    EvidenceAnswerDraftInvalidError,
+    EvidenceAnswerer,
+)
+from app.agent.answering.evidence_answer.evidence import (
+    AnswerEvidenceItem,
+    normalize_answer_evidence,
 )
 from app.agent.contract import (
     AnswerProgressReporter,
@@ -31,7 +34,7 @@ from app.agent.planning.contract import (
 )
 from app.agent.planning.planner import QuestionPlanner
 
-__all__ = ["EvidenceCollector", "QuestionAnsweringService"]
+__all__ = ["EvidenceCollector", "QuestionAnsweringOrchestrator"]
 
 _RETRIEVAL_EMPTY_MISSING = "回答に使える根拠を取得できませんでした"
 _UNMET_REQUIREMENT_MISSING: dict[UnmetRequirement, str] = {
@@ -49,7 +52,7 @@ class EvidenceCollector(Protocol):
     ) -> EvidenceCollectionOutcome: ...
 
 
-class QuestionAnsweringService:
+class QuestionAnsweringOrchestrator:
     """Top-level question answering use case."""
 
     def __init__(
@@ -57,13 +60,13 @@ class QuestionAnsweringService:
         *,
         planner: QuestionPlanner,
         evidence_collector: EvidenceCollector,
-        synthesizer: EvidenceAnswerSynthesizer,
+        evidence_answerer: EvidenceAnswerer,
         direct_answerer: DirectAnswerer,
         progress: AnswerProgressReporter | None = None,
     ) -> None:
         self._planner = planner
         self._evidence_collector = evidence_collector
-        self._synthesizer = synthesizer
+        self._evidence_answerer = evidence_answerer
         self._direct_answerer = direct_answerer
         self._progress = progress
 
@@ -109,7 +112,7 @@ class QuestionAnsweringService:
         evidence = normalize_answer_evidence(outcome)
 
         await self._report_progress("synthesizing")
-        draft = await self._synthesizer.synthesize(
+        draft = await self._evidence_answerer.answer(
             question=input.question,
             evidence=evidence,
             as_of=input.as_of,
@@ -148,12 +151,14 @@ def _plan_target_time_window(plan: RetrievalPlan) -> str | None:
 def _validate_draft_citations(
     *,
     evidence: list[AnswerEvidenceItem],
-    draft: AnswerDraft,
+    draft: EvidenceAnswerDraft,
 ) -> None:
     existing_refs = {item.source.source_ref for item in evidence}
     unknown_refs = [ref for ref in draft.cited_refs if ref not in existing_refs]
     if unknown_refs:
-        raise AnswerDraftInvalidError(f"unknown citation ref: {unknown_refs[0]}")
+        raise EvidenceAnswerDraftInvalidError(
+            f"unknown citation ref: {unknown_refs[0]}"
+        )
 
 
 def _sources_for_citations(

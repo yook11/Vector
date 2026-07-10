@@ -1,15 +1,11 @@
-"""Direct answer port and draft contract."""
+"""Validated direct answer pipeline."""
 
 from __future__ import annotations
 
 import re
 from datetime import datetime
-from typing import Protocol
-
-from pydantic import BaseModel, ConfigDict
 
 from app.agent.answering.audit import (
-    DIRECT_ANSWER_BLANK_RESPONSE,
     DirectAnswerAttemptFailureEvent,
     DirectAnswerAuditRecorder,
     DirectAnswerFailureAttributes,
@@ -17,74 +13,23 @@ from app.agent.answering.audit import (
     RequestRetryDisposition,
     classify_direct_answer_failure,
 )
+from app.agent.answering.direct_answer.contract import (
+    DirectAnswerDraft,
+    DirectAnswerGenerator,
+    DirectAnswerInvalidError,
+)
 from app.agent.answering.metrics import record_direct_answer_outcome
-from app.agent.contract import NonBlankText
 from app.analysis.ai_provider_errors import AIProviderError
 
-__all__ = [
-    "DirectAnswerDraft",
-    "DirectAnswerer",
-    "DirectAnswerGenerator",
-    "DirectAnswerInvalidError",
-    "DirectAnswerService",
-]
-
-
-class DirectAnswerInvalidError(ValueError):
-    """Direct answer response が answer draft として消化できない。"""
-
-    def __init__(self, code: str = DIRECT_ANSWER_BLANK_RESPONSE) -> None:
-        self.code = code
-        super().__init__(code)
-
-
-class DirectAnswerDraft(BaseModel):
-    """Direct 回答工程 (LLM) の出力 draft。"""
-
-    model_config = ConfigDict(frozen=True)
-
-    answer: NonBlankText
-
-
-class DirectAnswerGenerator(Protocol):
-    """LLM adapter boundary that returns unvalidated direct answer text."""
-
-    async def generate(
-        self,
-        *,
-        question: str,
-        as_of: datetime,
-        user_intent: str = "",
-        user_activity_context: str = "",
-        previous_answer: str = "",
-        previous_error: str | None = None,
-    ) -> str: ...
-
-
-class DirectAnswerer(Protocol):
-    """検索なしで自然に回答する工程。
-
-    失敗時は AIProviderError | DirectAnswerInvalidError を伝播する。
-    """
-
-    async def answer(
-        self,
-        *,
-        question: str,
-        as_of: datetime,
-        user_intent: str = "",
-        user_activity_context: str = "",
-        previous_answer: str = "",
-    ) -> DirectAnswerDraft: ...
-
+__all__ = ["DirectAnswerPipeline"]
 
 _DIRECT_ANSWER_FAILURES = (AIProviderError, DirectAnswerInvalidError)
-_MAX_ATTEMPTS = 2  # blank response 欠陥のみ 1 回だけリクエスト内リトライする
+_MAX_ATTEMPTS = 2
 _CITATION_MARKER_RE = re.compile(r"\[\[[0-9]+\]\]")
 
 
-class DirectAnswerService:
-    """Create direct answer drafts.
+class DirectAnswerPipeline:
+    """Create validated direct answer drafts.
 
     Propagates AIProviderError or DirectAnswerInvalidError.
     """

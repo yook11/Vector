@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 
-from app.agent.answering.evidence import normalize_answer_evidence
+from app.agent.answering.evidence_answer.evidence import normalize_answer_evidence
 from app.agent.contract import ExternalUrlSource
 from app.agent.evidence_collection import EvidenceCollectionOutcome
 from app.agent.external_search import (

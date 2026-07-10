@@ -1,4 +1,4 @@
-"""Answer evidence normalization."""
+"""Evidence answer input normalization."""
 
 from __future__ import annotations
 
@@ -13,7 +13,7 @@ __all__ = ["AnswerEvidenceItem", "normalize_answer_evidence"]
 
 
 class AnswerEvidenceItem(BaseModel):
-    """synthesizer 向け本文と provenance 正本を対で持つ根拠 1 件。"""
+    """回答向け本文と provenance 正本を対で持つ根拠 1 件。"""
 
     model_config = ConfigDict(frozen=True)
 

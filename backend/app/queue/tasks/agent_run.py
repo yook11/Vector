@@ -9,7 +9,7 @@ import structlog
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from taskiq import Context, TaskiqDepends
 
-from app.agent.answering.direct import DirectAnswerInvalidError
+from app.agent.answering.direct_answer.contract import DirectAnswerInvalidError
 from app.agent.composition import (
     build_question_answering_agent,
     build_question_resolver,

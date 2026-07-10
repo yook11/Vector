@@ -11,15 +11,6 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from app.agent.answering import (
-    AnswerSynthesisService,
-    DirectAnswerService,
-    QuestionAnsweringService,
-)
-from app.agent.answering.ai import (
-    GeminiDirectAnswerGenerator,
-    GeminiEvidenceAnswerDraftGenerator,
-)
 from app.agent.answering.audit import (
     AnswerSynthesisAttemptFailureEvent,
     AnswerSynthesisDefectEvent,
@@ -27,7 +18,14 @@ from app.agent.answering.audit import (
     DirectAnswerAttemptFailureEvent,
     DirectAnswerFinalEvent,
 )
-from app.agent.answering.direct import DirectAnswerDraft
+from app.agent.answering.direct_answer.ai.gemini import GeminiDirectAnswerGenerator
+from app.agent.answering.direct_answer.contract import DirectAnswerDraft
+from app.agent.answering.direct_answer.pipeline import DirectAnswerPipeline
+from app.agent.answering.evidence_answer.ai.gemini import (
+    GeminiEvidenceAnswerDraftGenerator,
+)
+from app.agent.answering.evidence_answer.pipeline import EvidenceAnswerPipeline
+from app.agent.answering.orchestration import QuestionAnsweringOrchestrator
 from app.agent.contract import AnswerQuestionInput, AnswerQuestionResult, AnswerSource
 from app.agent.evidence_collection import (
     EvidenceCollectionOutcome,
@@ -123,8 +121,8 @@ class _UnreachableEvidenceCollector:
         raise AssertionError(f"evidence_collector must not be called: {plan!r}")
 
 
-class _UnreachableEvidenceSynthesizer:
-    async def synthesize(
+class _UnreachableEvidenceAnswerer:
+    async def answer(
         self,
         *,
         question: str,
@@ -132,7 +130,7 @@ class _UnreachableEvidenceSynthesizer:
         as_of: datetime,  # noqa: ARG002
         target_time_window: str | None,  # noqa: ARG002
     ) -> object:
-        raise AssertionError(f"synthesizer must not be called: {question!r}")
+        raise AssertionError(f"evidence answerer must not be called: {question!r}")
 
 
 class _ProbeSynthesisAuditRecorder:
@@ -172,7 +170,7 @@ class _ProbeDirectAnswerAuditRecorder:
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description=(
-            "Probe QuestionAnsweringService external retrieval/evidence synthesis "
+            "Probe QuestionAnsweringOrchestrator external retrieval/evidence answer "
             "or direct answer path."
         )
     )
@@ -205,7 +203,7 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--question",
         default=None,
-        help="Question passed to QuestionAnsweringService.",
+        help="Question passed to QuestionAnsweringOrchestrator.",
     )
     return parser
 
@@ -261,16 +259,16 @@ async def _probe_external(
                 requested_external_agent_count=requested_agent_count,
             )
         )
-        service = QuestionAnsweringService(
+        orchestrator = QuestionAnsweringOrchestrator(
             planner=_FixedExternalPlanner(plan),
             evidence_collector=evidence_collector,
-            synthesizer=AnswerSynthesisService(
+            evidence_answerer=EvidenceAnswerPipeline(
                 generator=GeminiEvidenceAnswerDraftGenerator(),
                 audit_recorder=synthesis_audit,
             ),
             direct_answerer=_UnreachableDirectAnswerer(),
         )
-        result = await service.answer(
+        result = await orchestrator.answer(
             AnswerQuestionInput(question=question, as_of=as_of)
         )
 
@@ -296,16 +294,18 @@ async def _probe_direct(*, question: str) -> None:
 
     as_of = datetime.now(UTC)
     direct_audit = _ProbeDirectAnswerAuditRecorder()
-    service = QuestionAnsweringService(
+    orchestrator = QuestionAnsweringOrchestrator(
         planner=_FixedDirectPlanner(NoRetrievalPlan(reason="direct answer probe")),
         evidence_collector=_UnreachableEvidenceCollector(),
-        synthesizer=_UnreachableEvidenceSynthesizer(),
-        direct_answerer=DirectAnswerService(
+        evidence_answerer=_UnreachableEvidenceAnswerer(),
+        direct_answerer=DirectAnswerPipeline(
             generator=GeminiDirectAnswerGenerator(),
             audit_recorder=direct_audit,
         ),
     )
-    result = await service.answer(AnswerQuestionInput(question=question, as_of=as_of))
+    result = await orchestrator.answer(
+        AnswerQuestionInput(question=question, as_of=as_of)
+    )
 
     print("direct:")
     print(f"  as_of={as_of.isoformat()}")

@@ -13,6 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from structlog.testing import capture_logs
 
 import app.queue.tasks.agent_run as agent_run_tasks
+from app.agent.answering.direct_answer.contract import DirectAnswerInvalidError
 from app.agent.contract import (
     AnswerQuestionInput,
     AnswerQuestionResult,
@@ -635,13 +636,19 @@ async def test_complete_run_warns_on_citation_source_mismatch_without_failing_ru
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "generation_error",
+    [AIProviderError("SHOULD_NOT_LEAK"), DirectAnswerInvalidError()],
+    ids=("provider", "direct-draft"),
+)
 async def test_run_agent_answer_generation_error_marks_failed_without_leaking_message(
     session_factory: async_sessionmaker[AsyncSession],
     monkeypatch: pytest.MonkeyPatch,
+    generation_error: Exception,
 ) -> None:
     async with session_factory() as session:
         _thread, _message, run = await _create_thread_message_run(session)
-    fake_agent = FakeAgent(exc=AIProviderError("SHOULD_NOT_LEAK"))
+    fake_agent = FakeAgent(exc=generation_error)
     monkeypatch.setattr(agent_run_tasks, "make_safe_async_client", _fake_http_client)
     monkeypatch.setattr(
         agent_run_tasks,

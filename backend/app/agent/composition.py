@@ -36,11 +36,15 @@ def build_question_answering_agent(
 ) -> QuestionAnsweringAgent:
     ensure_question_answering_agent_configured()
 
-    from app.agent.answering.ai.gemini import GeminiEvidenceAnswerDraftGenerator
-    from app.agent.answering.ai.gemini_direct import GeminiDirectAnswerGenerator
-    from app.agent.answering.direct import DirectAnswerService
-    from app.agent.answering.service import QuestionAnsweringService
-    from app.agent.answering.synthesis import AnswerSynthesisService
+    from app.agent.answering.direct_answer.ai.gemini import (
+        GeminiDirectAnswerGenerator,
+    )
+    from app.agent.answering.direct_answer.pipeline import DirectAnswerPipeline
+    from app.agent.answering.evidence_answer.ai.gemini import (
+        GeminiEvidenceAnswerDraftGenerator,
+    )
+    from app.agent.answering.evidence_answer.pipeline import EvidenceAnswerPipeline
+    from app.agent.answering.orchestration import QuestionAnsweringOrchestrator
     from app.agent.evidence_collection import EvidenceCollectionService
     from app.agent.internal_retrieval.ai.gemini import GeminiQueryEmbedder
     from app.agent.internal_retrieval.article_search import (
@@ -56,7 +60,7 @@ def build_question_answering_agent(
         article_search_repository=PgVectorArticleSearchRepository(session_factory),
         events=events,
     )
-    return QuestionAnsweringService(
+    return QuestionAnsweringOrchestrator(
         planner=QuestionPlanningService(
             planner=GeminiQuestionPlanner(),
             audit_recorder=None,
@@ -66,11 +70,11 @@ def build_question_answering_agent(
             external_search=external_search,
             requested_external_agent_count=None,
         ),
-        synthesizer=AnswerSynthesisService(
+        evidence_answerer=EvidenceAnswerPipeline(
             generator=GeminiEvidenceAnswerDraftGenerator(),
             audit_recorder=None,
         ),
-        direct_answerer=DirectAnswerService(
+        direct_answerer=DirectAnswerPipeline(
             generator=GeminiDirectAnswerGenerator(),
             audit_recorder=None,
         ),

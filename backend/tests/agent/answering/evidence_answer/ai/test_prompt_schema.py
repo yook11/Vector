@@ -9,11 +9,13 @@ from typing import get_args
 
 import pytest
 
-from app.agent.answering.ai.gemini_prompt import GeminiEvidenceAnswerPrompt
-from app.agent.answering.ai.gemini_spec import GEMINI_EVIDENCE_ANSWER_SPEC
-from app.agent.answering.ai.schema_tool import EVIDENCE_ANSWER_GEMINI_SCHEMA
-from app.agent.answering.evidence import AnswerEvidenceItem
-from app.agent.answering.synthesis import AnswerSufficiency
+from app.agent.answering.evidence_answer.ai.prompt import GeminiEvidenceAnswerPrompt
+from app.agent.answering.evidence_answer.ai.schema_tool import (
+    EVIDENCE_ANSWER_GEMINI_SCHEMA,
+)
+from app.agent.answering.evidence_answer.ai.spec import GEMINI_EVIDENCE_ANSWER_SPEC
+from app.agent.answering.evidence_answer.contract import EvidenceAnswerSufficiency
+from app.agent.answering.evidence_answer.evidence import AnswerEvidenceItem
 from app.agent.contract import ExternalUrlSource, InternalArticleSource
 from app.analysis.rate_limit import AIModelRateLimitPolicy, RateLimitRule
 
@@ -141,7 +143,7 @@ def test_schema_sufficiency_values_match_contract() -> None:
         EVIDENCE_ANSWER_GEMINI_SCHEMA["properties"]["sufficiency"]["enum"]
     )
 
-    assert schema_values == set(get_args(AnswerSufficiency))
+    assert schema_values == set(get_args(EvidenceAnswerSufficiency))
 
 
 def test_schema_fields_are_required_and_arrays_are_unbounded_guidance() -> None:

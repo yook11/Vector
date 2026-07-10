@@ -11,16 +11,16 @@ from google import genai
 from google.genai.types import GenerateContentConfig
 from pydantic import ValidationError
 
-from app.agent.answering.ai.gemini_prompt import GeminiEvidenceAnswerPrompt
-from app.agent.answering.ai.gemini_spec import (
+from app.agent.answering.evidence_answer.ai.prompt import GeminiEvidenceAnswerPrompt
+from app.agent.answering.evidence_answer.ai.spec import (
     GEMINI_EVIDENCE_ANSWER_SPEC,
     GeminiEvidenceAnswerSpec,
 )
-from app.agent.answering.evidence import AnswerEvidenceItem
-from app.agent.answering.synthesis import (
-    AnswerDraftGenerationInvalidError,
-    RawAnswerDraft,
+from app.agent.answering.evidence_answer.contract import (
+    EvidenceAnswerDraftGenerationInvalidError,
+    RawEvidenceAnswerDraft,
 )
+from app.agent.answering.evidence_answer.evidence import AnswerEvidenceItem
 from app.analysis.ai_provider_errors import (
     AIProviderConfigurationError,
     AIProviderOutputBlockedError,
@@ -43,8 +43,10 @@ class GeminiEvidenceAnswerResponseDefect(StrEnum):
     NOT_OBJECT = "evidence_answer_response_gemini_not_object"
 
 
-class GeminiEvidenceAnswerResponseInvalidError(AnswerDraftGenerationInvalidError):
-    """Evidence answer response が ``RawAnswerDraft`` として消化できない。"""
+class GeminiEvidenceAnswerResponseInvalidError(
+    EvidenceAnswerDraftGenerationInvalidError
+):
+    """Evidence answer response が ``RawEvidenceAnswerDraft`` として消化できない。"""
 
     def __init__(self, defect: GeminiEvidenceAnswerResponseDefect) -> None:
         self.defect = defect
@@ -85,7 +87,7 @@ class GeminiEvidenceAnswerDraftGenerator:
         prior_coverage: str = "",
         user_activity_context: str = "",
         previous_error: str | None = None,
-    ) -> RawAnswerDraft:
+    ) -> RawEvidenceAnswerDraft:
         prompt = GeminiEvidenceAnswerPrompt.render(
             question=question,
             evidence=evidence,
@@ -105,7 +107,7 @@ class GeminiEvidenceAnswerDraftGenerator:
         ):
             raise
 
-    async def _call_api(self, prompt: str) -> RawAnswerDraft:
+    async def _call_api(self, prompt: str) -> RawEvidenceAnswerDraft:
         """Gemini の structured JSON response を raw draft に詰める。"""
 
         try:
@@ -143,7 +145,7 @@ class GeminiEvidenceAnswerDraftGenerator:
                 GeminiEvidenceAnswerResponseDefect.NOT_OBJECT
             )
 
-        return RawAnswerDraft.model_validate(payload)
+        return RawEvidenceAnswerDraft.model_validate(payload)
 
     @staticmethod
     def _extract_finish_reason_name(response: object) -> str | None:

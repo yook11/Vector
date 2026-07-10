@@ -1,44 +1,47 @@
 """Question answering package."""
 
-from app.agent.answering.direct import (
+from app.agent.answering.direct_answer.contract import (
     DirectAnswerDraft,
     DirectAnswerer,
     DirectAnswerGenerator,
     DirectAnswerInvalidError,
-    DirectAnswerService,
 )
-from app.agent.answering.evidence import (
+from app.agent.answering.direct_answer.pipeline import DirectAnswerPipeline
+from app.agent.answering.evidence_answer.contract import (
+    EvidenceAnswerDraft,
+    EvidenceAnswerDraftGenerationInvalidError,
+    EvidenceAnswerDraftGenerator,
+    EvidenceAnswerDraftInvalidError,
+    EvidenceAnswerer,
+    EvidenceAnswerSufficiency,
+    RawEvidenceAnswerDraft,
+)
+from app.agent.answering.evidence_answer.evidence import (
     AnswerEvidenceItem,
     normalize_answer_evidence,
 )
-from app.agent.answering.service import EvidenceCollector, QuestionAnsweringService
-from app.agent.answering.synthesis import (
-    AnswerDraft,
-    AnswerDraftGenerationInvalidError,
-    AnswerDraftInvalidError,
-    AnswerSufficiency,
-    AnswerSynthesisService,
-    EvidenceAnswerDraftGenerator,
-    EvidenceAnswerSynthesizer,
-    RawAnswerDraft,
+from app.agent.answering.evidence_answer.pipeline import EvidenceAnswerPipeline
+from app.agent.answering.orchestration import (
+    EvidenceCollector,
+    QuestionAnsweringOrchestrator,
 )
 
 __all__ = [
-    "AnswerDraft",
-    "AnswerDraftGenerationInvalidError",
-    "AnswerDraftInvalidError",
     "AnswerEvidenceItem",
-    "AnswerSufficiency",
-    "AnswerSynthesisService",
     "DirectAnswerDraft",
     "DirectAnswerer",
     "DirectAnswerGenerator",
     "DirectAnswerInvalidError",
-    "DirectAnswerService",
+    "DirectAnswerPipeline",
+    "EvidenceAnswerDraft",
+    "EvidenceAnswerDraftGenerationInvalidError",
     "EvidenceAnswerDraftGenerator",
-    "EvidenceAnswerSynthesizer",
+    "EvidenceAnswerDraftInvalidError",
+    "EvidenceAnswerer",
+    "EvidenceAnswerPipeline",
+    "EvidenceAnswerSufficiency",
     "EvidenceCollector",
-    "QuestionAnsweringService",
-    "RawAnswerDraft",
+    "QuestionAnsweringOrchestrator",
+    "RawEvidenceAnswerDraft",
     "normalize_answer_evidence",
 ]

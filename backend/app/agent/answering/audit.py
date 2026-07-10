@@ -12,7 +12,6 @@ from app.analysis.ai_provider_errors import AIProviderError
 
 PYDANTIC_VALIDATION_FAILED = "answer_synthesis_pydantic_validation_failed"
 ANSWER_DRAFT_INVALID = "answer_synthesis_draft_invalid"
-DIRECT_ANSWER_BLANK_RESPONSE = "direct_answer_blank_response"
 
 
 class RequestRetryDisposition(StrEnum):
@@ -317,9 +316,9 @@ def classify_answer_synthesis_failure(
 ) -> AnswerSynthesisFailureAttributes:
     """Map answer-synthesis-boundary failures to request-local audit attributes."""
 
-    from app.agent.answering.synthesis import (
-        AnswerDraftGenerationInvalidError,
-        AnswerDraftInvalidError,
+    from app.agent.answering.evidence_answer.contract import (
+        EvidenceAnswerDraftGenerationInvalidError,
+        EvidenceAnswerDraftInvalidError,
     )
 
     if isinstance(exc, AIProviderError):
@@ -330,14 +329,14 @@ def classify_answer_synthesis_failure(
             failure_reason=reason.value if reason is not None else None,
             request_retry_disposition=(RequestRetryDisposition.DO_NOT_RETRY_IN_REQUEST),
         )
-    if isinstance(exc, AnswerDraftGenerationInvalidError):
+    if isinstance(exc, EvidenceAnswerDraftGenerationInvalidError):
         return AnswerSynthesisFailureAttributes(
             code=exc.defect_code,
             failure_kind="ai_response_invalid",
             failure_reason=exc.defect_code,
             request_retry_disposition=RequestRetryDisposition.RETRY_IN_REQUEST,
         )
-    if isinstance(exc, AnswerDraftInvalidError):
+    if isinstance(exc, EvidenceAnswerDraftInvalidError):
         return AnswerSynthesisFailureAttributes(
             code=ANSWER_DRAFT_INVALID,
             failure_kind="ai_response_invalid",
@@ -364,7 +363,7 @@ def classify_direct_answer_failure(
 ) -> DirectAnswerFailureAttributes:
     """Map direct-answer-boundary failures to request-local audit attributes."""
 
-    from app.agent.answering.direct import DirectAnswerInvalidError
+    from app.agent.answering.direct_answer.contract import DirectAnswerInvalidError
 
     if isinstance(exc, AIProviderError):
         reason = getattr(exc, "reason", None)

@@ -8,8 +8,8 @@ from types import MappingProxyType
 
 import pytest
 
-from app.agent.answering.ai.gemini_direct_prompt import GeminiDirectAnswerPrompt
-from app.agent.answering.ai.gemini_direct_spec import GEMINI_DIRECT_ANSWER_SPEC
+from app.agent.answering.direct_answer.ai.prompt import GeminiDirectAnswerPrompt
+from app.agent.answering.direct_answer.ai.spec import GEMINI_DIRECT_ANSWER_SPEC
 from app.analysis.rate_limit import AIModelRateLimitPolicy, RateLimitRule
 
 

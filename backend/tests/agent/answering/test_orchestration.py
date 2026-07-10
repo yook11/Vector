@@ -1,18 +1,17 @@
-"""Question answer orchestration service tests."""
+"""Question answering orchestrator tests."""
 
 from __future__ import annotations
 
 from datetime import UTC, datetime
 
 import pytest
-from pydantic import ValidationError
 
-from app.agent.answering.direct import DirectAnswerDraft
-from app.agent.answering.service import QuestionAnsweringService
-from app.agent.answering.synthesis import (
-    AnswerDraft,
-    AnswerDraftInvalidError,
+from app.agent.answering.direct_answer.contract import DirectAnswerDraft
+from app.agent.answering.evidence_answer.contract import (
+    EvidenceAnswerDraft,
+    EvidenceAnswerDraftInvalidError,
 )
+from app.agent.answering.orchestration import QuestionAnsweringOrchestrator
 from app.agent.contract import AnswerQuestionInput, ExternalUrlSource
 from app.agent.evidence_collection import EvidenceCollectionOutcome
 from app.agent.external_search import (
@@ -233,12 +232,12 @@ class FakeEvidenceCollector:
         return self._outcome
 
 
-class FakeSynthesizer:
-    def __init__(self, draft: AnswerDraft | Exception) -> None:
+class FakeEvidenceAnswerer:
+    def __init__(self, draft: EvidenceAnswerDraft | Exception) -> None:
         self._draft = draft
         self.calls: list[dict[str, object]] = []
 
-    async def synthesize(
+    async def answer(
         self,
         *,
         question: str,
@@ -248,7 +247,7 @@ class FakeSynthesizer:
         user_intent: str = "",
         prior_coverage: str = "",
         user_activity_context: str = "",
-    ) -> AnswerDraft:
+    ) -> EvidenceAnswerDraft:
         self.calls.append(
             {
                 "question": question,
@@ -301,39 +300,41 @@ class FakeProgressReporter:
         self.stages.append(stage)
 
 
-def _service(
+def _orchestrator(
     *,
     plan: QuestionPlan | Exception,
     outcome: EvidenceCollectionOutcome | Exception = AssertionError(
         "evidence_collector must not be called"
     ),
-    draft: AnswerDraft | Exception = AssertionError("synthesizer must not be called"),
+    draft: EvidenceAnswerDraft | Exception = AssertionError(
+        "evidence_answerer must not be called"
+    ),
     direct_draft: DirectAnswerDraft | Exception = AssertionError(
         "direct answerer must not be called"
     ),
     progress: FakeProgressReporter | None = None,
 ) -> tuple[
-    QuestionAnsweringService,
+    QuestionAnsweringOrchestrator,
     FakePlanner,
     FakeEvidenceCollector,
-    FakeSynthesizer,
+    FakeEvidenceAnswerer,
     FakeDirectAnswerer,
 ]:
     planner = FakePlanner(plan)
     evidence_collector = FakeEvidenceCollector(outcome)
-    synthesizer = FakeSynthesizer(draft)
+    evidence_answerer = FakeEvidenceAnswerer(draft)
     direct_answerer = FakeDirectAnswerer(direct_draft)
     kwargs = {}
     if progress is not None:
         kwargs["progress"] = progress
-    service = QuestionAnsweringService(
+    orchestrator = QuestionAnsweringOrchestrator(
         planner=planner,
         evidence_collector=evidence_collector,
-        synthesizer=synthesizer,
+        evidence_answerer=evidence_answerer,
         direct_answerer=direct_answerer,
         **kwargs,
     )
-    return service, planner, evidence_collector, synthesizer, direct_answerer
+    return orchestrator, planner, evidence_collector, evidence_answerer, direct_answerer
 
 
 @pytest.mark.asyncio
@@ -346,12 +347,14 @@ async def test_answer_direct_plan_calls_direct_answerer_only() -> None:
         previous_answer="根拠付き前回答 [[1]]",
     )
     direct_draft = DirectAnswerDraft(answer="こんにちは。何を確認しますか？")
-    service, _, evidence_collector, synthesizer, direct_answerer = _service(
-        plan=NoRetrievalPlan(reason="direct answer"),
-        direct_draft=direct_draft,
+    orchestrator, _, evidence_collector, evidence_answerer, direct_answerer = (
+        _orchestrator(
+            plan=NoRetrievalPlan(reason="direct answer"),
+            direct_draft=direct_draft,
+        )
     )
 
-    result = await service.answer(input_)
+    result = await orchestrator.answer(input_)
 
     assert result.status == "answered"
     assert result.answer == direct_draft.answer
@@ -370,19 +373,19 @@ async def test_answer_direct_plan_calls_direct_answerer_only() -> None:
         }
     ]
     assert evidence_collector.calls == []
-    assert synthesizer.calls == []
+    assert evidence_answerer.calls == []
 
 
 @pytest.mark.asyncio
 async def test_answer_direct_plan_reports_planning_then_synthesizing() -> None:
     progress = FakeProgressReporter()
-    service, _, _, _, _ = _service(
+    orchestrator, _, _, _, _ = _orchestrator(
         plan=NoRetrievalPlan(reason="direct answer"),
         direct_draft=DirectAnswerDraft(answer="直接回答です。"),
         progress=progress,
     )
 
-    await service.answer(_input("こんにちは"))
+    await orchestrator.answer(_input("こんにちは"))
 
     assert progress.stages == ["planning", "synthesizing"]
 
@@ -401,17 +404,17 @@ async def test_answer_retrieval_plan_variants_do_not_call_direct_answerer(
     outcome: EvidenceCollectionOutcome,
     cited_refs: list[str],
 ) -> None:
-    service, _, _, _, direct_answerer = _service(
+    orchestrator, _, _, _, direct_answerer = _orchestrator(
         plan=plan,
         outcome=outcome,
-        draft=AnswerDraft(
+        draft=EvidenceAnswerDraft(
             sufficiency="answered",
             answer="根拠から確認できます。",
             cited_refs=cited_refs,
         ),
     )
 
-    result = await service.answer(_input())
+    result = await orchestrator.answer(_input())
 
     assert result.status == "answered"
     assert direct_answerer.calls == []
@@ -420,10 +423,10 @@ async def test_answer_retrieval_plan_variants_do_not_call_direct_answerer(
 @pytest.mark.asyncio
 async def test_answer_evidence_plan_reports_all_progress_stages_in_order() -> None:
     progress = FakeProgressReporter()
-    service, _, _, _, _ = _service(
+    orchestrator, _, _, _, _ = _orchestrator(
         plan=_mixed_plan(),
         outcome=_mixed_outcome(),
-        draft=AnswerDraft(
+        draft=EvidenceAnswerDraft(
             sufficiency="answered",
             answer="根拠から確認できます。",
             cited_refs=["1", "2"],
@@ -431,24 +434,24 @@ async def test_answer_evidence_plan_reports_all_progress_stages_in_order() -> No
         progress=progress,
     )
 
-    await service.answer(_input())
+    await orchestrator.answer(_input())
 
     assert progress.stages == ["planning", "retrieving", "synthesizing"]
 
 
 @pytest.mark.asyncio
 async def test_answer_internal_sources_and_status_from_citations() -> None:
-    service, _, _, _, _ = _service(
+    orchestrator, _, _, _, _ = _orchestrator(
         plan=_internal_plan(),
         outcome=_internal_outcome(2),
-        draft=AnswerDraft(
+        draft=EvidenceAnswerDraft(
             sufficiency="answered",
             answer="内部記事 1 と 2 から確認できます。",
             cited_refs=["1", "2"],
         ),
     )
 
-    result = await service.answer(_input())
+    result = await orchestrator.answer(_input())
 
     assert result.status == "answered"
     assert result.retrieval.planned_mode == "internal"
@@ -459,17 +462,17 @@ async def test_answer_internal_sources_and_status_from_citations() -> None:
 
 @pytest.mark.asyncio
 async def test_answer_external_source_is_cited_source_only() -> None:
-    service, _, _, _, _ = _service(
+    orchestrator, _, _, _, _ = _orchestrator(
         plan=_external_plan(),
         outcome=_external_outcome_only(),
-        draft=AnswerDraft(
+        draft=EvidenceAnswerDraft(
             sufficiency="answered",
             answer="外部根拠から確認できます。",
             cited_refs=["1"],
         ),
     )
 
-    result = await service.answer(_input())
+    result = await orchestrator.answer(_input())
 
     assert result.status == "answered"
     assert result.retrieval.planned_mode == "external"
@@ -479,17 +482,17 @@ async def test_answer_external_source_is_cited_source_only() -> None:
 
 @pytest.mark.asyncio
 async def test_answer_mixed_plan_with_both_evidence_types_cited() -> None:
-    service, _, _, _, _ = _service(
+    orchestrator, _, _, _, _ = _orchestrator(
         plan=_mixed_plan(),
         outcome=_mixed_outcome(),
-        draft=AnswerDraft(
+        draft=EvidenceAnswerDraft(
             sufficiency="answered",
             answer="内部根拠と外部根拠から確認できます。",
             cited_refs=["1", "2"],
         ),
     )
 
-    result = await service.answer(_input())
+    result = await orchestrator.answer(_input())
 
     assert result.status == "answered"
     assert result.retrieval.planned_mode == "internal_and_external"
@@ -498,17 +501,17 @@ async def test_answer_mixed_plan_with_both_evidence_types_cited() -> None:
 
 @pytest.mark.asyncio
 async def test_answer_mixed_plan_omits_unused_external_source() -> None:
-    service, _, _, _, _ = _service(
+    orchestrator, _, _, _, _ = _orchestrator(
         plan=_mixed_plan(),
         outcome=_mixed_outcome(),
-        draft=AnswerDraft(
+        draft=EvidenceAnswerDraft(
             sufficiency="answered",
             answer="内部根拠だけで確認できます。",
             cited_refs=["1"],
         ),
     )
 
-    result = await service.answer(_input())
+    result = await orchestrator.answer(_input())
 
     assert result.status == "answered"
     assert result.retrieval.planned_mode == "internal_and_external"
@@ -518,7 +521,7 @@ async def test_answer_mixed_plan_omits_unused_external_source() -> None:
 
 @pytest.mark.asyncio
 async def test_answer_empty_retrieval_evidence_calls_synthesis() -> None:
-    draft = AnswerDraft(
+    draft = EvidenceAnswerDraft(
         sufficiency="insufficient",
         answer=(
             "検索で引用できる根拠は見つかりませんでした。"
@@ -527,39 +530,39 @@ async def test_answer_empty_retrieval_evidence_calls_synthesis() -> None:
         cited_refs=[],
         missing_aspects=["引用できる検索根拠"],
     )
-    service, _, _, synthesizer, _ = _service(
+    orchestrator, _, _, evidence_answerer, _ = _orchestrator(
         plan=_internal_plan(),
         outcome=EvidenceCollectionOutcome(),
         draft=draft,
     )
 
-    result = await service.answer(_input())
+    result = await orchestrator.answer(_input())
 
     assert result.status == "insufficient"
     assert result.answer == draft.answer
     assert result.sources == []
     assert result.missing_aspects
     assert "引用できる検索根拠" in result.missing_aspects
-    assert len(synthesizer.calls) == 1
-    assert synthesizer.calls[0]["evidence"] == []
+    assert len(evidence_answerer.calls) == 1
+    assert evidence_answerer.calls[0]["evidence"] == []
 
 
 @pytest.mark.asyncio
 async def test_answer_unmet_requirements_cap_answered_draft_to_insufficient() -> None:
-    service, _, _, _, _ = _service(
+    orchestrator, _, _, _, _ = _orchestrator(
         plan=_mixed_plan(),
         outcome=EvidenceCollectionOutcome(
             internal_hits=[_internal_hit(assessment_id=1001, title="internal 1")],
             unmet_requirements=["external_search"],
         ),
-        draft=AnswerDraft(
+        draft=EvidenceAnswerDraft(
             sufficiency="answered",
             answer="内部根拠の範囲では確認できます。",
             cited_refs=["1"],
         ),
     )
 
-    result = await service.answer(_input())
+    result = await orchestrator.answer(_input())
 
     assert result.status == "insufficient"
     assert result.answer == "内部根拠の範囲では確認できます。"
@@ -569,10 +572,10 @@ async def test_answer_unmet_requirements_cap_answered_draft_to_insufficient() ->
 
 @pytest.mark.asyncio
 async def test_answer_adopts_insufficient_draft_with_partial_citations() -> None:
-    service, _, _, _, _ = _service(
+    orchestrator, _, _, _, _ = _orchestrator(
         plan=_internal_plan(),
         outcome=_internal_outcome(1),
-        draft=AnswerDraft(
+        draft=EvidenceAnswerDraft(
             sufficiency="insufficient",
             answer="内部根拠では断定できません。[[1]]",
             cited_refs=["1"],
@@ -580,7 +583,7 @@ async def test_answer_adopts_insufficient_draft_with_partial_citations() -> None
         ),
     )
 
-    result = await service.answer(_input())
+    result = await orchestrator.answer(_input())
 
     assert result.status == "insufficient"
     assert result.answer == "内部根拠では断定できません。[[1]]"
@@ -595,7 +598,7 @@ async def test_answer_missing_aspects_are_ordered_and_deduplicated() -> None:
         _report(task_index=1, missing=["市場予想値", "会社側コメント"]),
         _report(task_index=0, missing=["市場予想値", "実績値"], evidence_count=1),
     ]
-    service, _, _, _, _ = _service(
+    orchestrator, _, _, _, _ = _orchestrator(
         plan=_mixed_plan(),
         outcome=EvidenceCollectionOutcome(
             external_search=_external_outcome(
@@ -612,7 +615,7 @@ async def test_answer_missing_aspects_are_ordered_and_deduplicated() -> None:
             ),
             unmet_requirements=["internal_retrieval"],
         ),
-        draft=AnswerDraft(
+        draft=EvidenceAnswerDraft(
             sufficiency="insufficient",
             answer="根拠が不足しています。",
             cited_refs=["1"],
@@ -620,7 +623,7 @@ async def test_answer_missing_aspects_are_ordered_and_deduplicated() -> None:
         ),
     )
 
-    result = await service.answer(_input())
+    result = await orchestrator.answer(_input())
 
     assert "内部" in result.missing_aspects[0]
     assert result.missing_aspects[1:] == [
@@ -633,87 +636,35 @@ async def test_answer_missing_aspects_are_ordered_and_deduplicated() -> None:
 
 @pytest.mark.asyncio
 async def test_answer_rejects_unknown_citation_ref() -> None:
-    service, _, _, _, _ = _service(
+    orchestrator, _, _, _, _ = _orchestrator(
         plan=_internal_plan(),
         outcome=_internal_outcome(1),
-        draft=AnswerDraft(
+        draft=EvidenceAnswerDraft(
             sufficiency="answered",
             answer="存在しない根拠を引用しています。",
             cited_refs=["2"],
         ),
     )
 
-    with pytest.raises(AnswerDraftInvalidError, match="unknown citation ref"):
-        await service.answer(_input())
+    with pytest.raises(EvidenceAnswerDraftInvalidError, match="unknown citation ref"):
+        await orchestrator.answer(_input())
 
 
 @pytest.mark.asyncio
 async def test_answer_deduplicates_repeated_citation_refs_in_source_order() -> None:
-    service, _, _, _, _ = _service(
+    orchestrator, _, _, _, _ = _orchestrator(
         plan=_internal_plan(),
         outcome=_internal_outcome(2),
-        draft=AnswerDraft(
+        draft=EvidenceAnswerDraft(
             sufficiency="answered",
             answer="重複引用を含みます。",
             cited_refs=["2", "1", "2", "1"],
         ),
     )
 
-    result = await service.answer(_input())
+    result = await orchestrator.answer(_input())
 
     assert [source.source_ref for source in result.sources] == ["1", "2"]
-
-
-def test_answer_draft_rejects_answered_without_citations() -> None:
-    with pytest.raises(ValidationError):
-        AnswerDraft(
-            sufficiency="answered",
-            answer="根拠を引用せずに回答しています。",
-        )
-
-
-def test_answer_draft_rejects_answered_with_missing_aspects() -> None:
-    with pytest.raises(ValidationError):
-        AnswerDraft(
-            sufficiency="answered",
-            answer="回答できました。",
-            cited_refs=["1"],
-            missing_aspects=["不足"],
-        )
-
-
-def test_answer_draft_rejects_insufficient_without_missing_aspects() -> None:
-    with pytest.raises(ValidationError):
-        AnswerDraft(
-            sufficiency="insufficient",
-            answer="断定できません。",
-        )
-
-
-@pytest.mark.parametrize("answer", ["", "   ", "\n"])
-def test_answer_draft_rejects_blank_answer(answer: str) -> None:
-    with pytest.raises(ValidationError):
-        AnswerDraft(
-            sufficiency="insufficient",
-            answer=answer,
-            missing_aspects=["不足"],
-        )
-
-
-@pytest.mark.parametrize("missing", ["", "   ", "\n"])
-def test_answer_draft_rejects_blank_missing_aspect(missing: str) -> None:
-    with pytest.raises(ValidationError):
-        AnswerDraft(
-            sufficiency="insufficient",
-            answer="断定できません。",
-            missing_aspects=[missing],
-        )
-
-
-@pytest.mark.parametrize("answer", ["", "   ", "\n"])
-def test_direct_answer_draft_rejects_blank_answer(answer: str) -> None:
-    with pytest.raises(ValidationError):
-        DirectAnswerDraft(answer=answer)
 
 
 @pytest.mark.asyncio
@@ -723,43 +674,46 @@ async def test_answer_passes_pipeline_inputs_and_variant_time_window() -> None:
         prior_coverage="発表内容は既出",
         user_activity_context="投資判断を調査中",
     )
-    service, planner, evidence_collector, synthesizer, _ = _service(
+    orchestrator, planner, evidence_collector, evidence_answerer, _ = _orchestrator(
         plan=_mixed_plan(),
         outcome=_mixed_outcome(),
-        draft=AnswerDraft(
+        draft=EvidenceAnswerDraft(
             sufficiency="answered",
             answer="確認できます。",
             cited_refs=["1", "2"],
         ),
     )
 
-    await service.answer(input_)
+    await orchestrator.answer(input_)
 
     assert planner.calls == [input_]
     assert evidence_collector.calls == [(_mixed_plan(), _as_of())]
-    assert synthesizer.calls[0]["question"] == input_.question
-    assert synthesizer.calls[0]["as_of"] == input_.as_of
-    assert synthesizer.calls[0]["target_time_window"] == "直近24時間"
-    assert synthesizer.calls[0]["user_intent"] == input_.user_intent
-    assert synthesizer.calls[0]["prior_coverage"] == input_.prior_coverage
-    assert synthesizer.calls[0]["user_activity_context"] == input_.user_activity_context
+    assert evidence_answerer.calls[0]["question"] == input_.question
+    assert evidence_answerer.calls[0]["as_of"] == input_.as_of
+    assert evidence_answerer.calls[0]["target_time_window"] == "直近24時間"
+    assert evidence_answerer.calls[0]["user_intent"] == input_.user_intent
+    assert evidence_answerer.calls[0]["prior_coverage"] == input_.prior_coverage
+    assert (
+        evidence_answerer.calls[0]["user_activity_context"]
+        == input_.user_activity_context
+    )
 
 
 @pytest.mark.asyncio
 async def test_answer_passes_none_time_window_for_internal_plan() -> None:
-    service, _, _, synthesizer, _ = _service(
+    orchestrator, _, _, evidence_answerer, _ = _orchestrator(
         plan=_internal_plan(),
         outcome=_internal_outcome(1),
-        draft=AnswerDraft(
+        draft=EvidenceAnswerDraft(
             sufficiency="answered",
             answer="確認できます。",
             cited_refs=["1"],
         ),
     )
 
-    await service.answer(_input())
+    await orchestrator.answer(_input())
 
-    assert synthesizer.calls[0]["target_time_window"] is None
+    assert evidence_answerer.calls[0]["target_time_window"] is None
 
 
 @pytest.mark.asyncio
@@ -769,7 +723,7 @@ async def test_answer_passes_none_time_window_for_internal_plan() -> None:
         (
             RuntimeError("planner failed"),
             EvidenceCollectionOutcome(),
-            AnswerDraft(
+            EvidenceAnswerDraft(
                 sufficiency="answered",
                 answer="x",
                 cited_refs=["1"],
@@ -779,7 +733,7 @@ async def test_answer_passes_none_time_window_for_internal_plan() -> None:
         (
             _internal_plan(),
             RuntimeError("evidence_collector failed"),
-            AnswerDraft(
+            EvidenceAnswerDraft(
                 sufficiency="answered",
                 answer="x",
                 cited_refs=["1"],
@@ -789,29 +743,29 @@ async def test_answer_passes_none_time_window_for_internal_plan() -> None:
         (
             _internal_plan(),
             _internal_outcome(1),
-            RuntimeError("synthesizer failed"),
-            "synthesizer failed",
+            RuntimeError("evidence_answerer failed"),
+            "evidence_answerer failed",
         ),
     ],
 )
 async def test_answer_propagates_step_exceptions(
     plan: QuestionPlan | Exception,
     outcome: EvidenceCollectionOutcome | Exception,
-    draft: AnswerDraft | Exception,
+    draft: EvidenceAnswerDraft | Exception,
     message: str,
 ) -> None:
-    service, _, _, _, _ = _service(plan=plan, outcome=outcome, draft=draft)
+    orchestrator, _, _, _, _ = _orchestrator(plan=plan, outcome=outcome, draft=draft)
 
     with pytest.raises(RuntimeError, match=message):
-        await service.answer(_input())
+        await orchestrator.answer(_input())
 
 
 @pytest.mark.asyncio
 async def test_answer_propagates_direct_answerer_exception() -> None:
-    service, _, _, _, _ = _service(
+    orchestrator, _, _, _, _ = _orchestrator(
         plan=NoRetrievalPlan(reason="direct answer"),
         direct_draft=RuntimeError("direct failed"),
     )
 
     with pytest.raises(RuntimeError, match="direct failed"):
-        await service.answer(_input("こんにちは"))
+        await orchestrator.answer(_input("こんにちは"))

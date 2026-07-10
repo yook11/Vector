@@ -8,8 +8,8 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 from pydantic import SecretStr
 
-from app.agent.answering.ai.gemini_direct import GeminiDirectAnswerGenerator
-from app.agent.answering.ai.gemini_direct_spec import GEMINI_DIRECT_ANSWER_SPEC
+from app.agent.answering.direct_answer.ai.gemini import GeminiDirectAnswerGenerator
+from app.agent.answering.direct_answer.ai.spec import GEMINI_DIRECT_ANSWER_SPEC
 from app.analysis.ai_provider_errors import (
     AIProviderConfigurationError,
     AIProviderNetworkError,

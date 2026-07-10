@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import ClassVar
 
-from app.agent.answering.evidence import AnswerEvidenceItem
+from app.agent.answering.evidence_answer.evidence import AnswerEvidenceItem
 from app.analysis.prompt_safety import sanitize_for_untrusted_block
 
 EVIDENCE_ANSWER_PROMPT = """# Role
