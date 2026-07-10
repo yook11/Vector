@@ -39,6 +39,8 @@ logger = structlog.get_logger(__name__)
 _GENERATION_UNAVAILABLE_DETAIL = "Answer generation is temporarily unavailable"
 _ACTIVE_RUN_DETAIL = "A run is already in progress for this thread"
 _RUN_ALREADY_COMPLETED_DETAIL = "Run already completed"
+_THREAD_NOT_FOUND_DETAIL = "Research thread not found"
+_RUN_NOT_FOUND_DETAIL = "Research run not found"
 
 
 async def get_agent_persistence_session() -> AsyncGenerator[AsyncSession]:
@@ -64,6 +66,7 @@ async def enqueue_agent_run(run_id: UUID) -> None:
             "description": "Answer generation is temporarily unavailable"
         },
         status.HTTP_409_CONFLICT: {"description": _ACTIVE_RUN_DETAIL},
+        status.HTTP_404_NOT_FOUND: {"description": _THREAD_NOT_FOUND_DETAIL},
     },
 )
 async def create_research_response(
@@ -140,6 +143,9 @@ async def list_research_threads(
     "/threads/{thread_id}",
     operation_id="get_research_thread",
     response_model=ResearchThreadDetail,
+    responses={
+        status.HTTP_404_NOT_FOUND: {"description": _THREAD_NOT_FOUND_DETAIL},
+    },
 )
 async def get_research_thread(
     thread_id: UUID,
@@ -160,6 +166,9 @@ async def get_research_thread(
     "/threads/{thread_id}",
     operation_id="delete_research_thread",
     status_code=status.HTTP_204_NO_CONTENT,
+    responses={
+        status.HTTP_404_NOT_FOUND: {"description": _THREAD_NOT_FOUND_DETAIL},
+    },
 )
 async def delete_research_thread(
     thread_id: UUID,
@@ -182,6 +191,7 @@ async def delete_research_thread(
     operation_id="cancel_research_run",
     status_code=status.HTTP_204_NO_CONTENT,
     responses={
+        status.HTTP_404_NOT_FOUND: {"description": _RUN_NOT_FOUND_DETAIL},
         status.HTTP_409_CONFLICT: {"description": _RUN_ALREADY_COMPLETED_DETAIL},
     },
 )
@@ -207,6 +217,9 @@ async def cancel_research_run(
     "/runs/{run_id}",
     operation_id="get_research_run",
     response_model=ResearchRunResponse,
+    responses={
+        status.HTTP_404_NOT_FOUND: {"description": _RUN_NOT_FOUND_DETAIL},
+    },
 )
 async def get_research_run(
     run_id: UUID,

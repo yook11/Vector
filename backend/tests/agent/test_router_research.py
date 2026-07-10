@@ -1252,6 +1252,7 @@ def test_openapi_exposes_async_contract_and_question_shape() -> None:
     assert request_schema["properties"]["question"]["maxLength"] == 1000
     assert "threadId" in request_schema["properties"]
     assert set(accepted_schema["properties"]) == {"threadId", "runId"}
+    assert "404" in operation["responses"]
 
 
 def test_openapi_exposes_thread_ui_contract_and_slim_run_signal() -> None:
@@ -1270,6 +1271,16 @@ def test_openapi_exposes_thread_ui_contract_and_slim_run_signal() -> None:
     assert (
         paths["/api/v1/research/runs/{run_id}/cancel"]["post"]["operationId"]
         == "cancel_research_run"
+    )
+
+    operations_with_not_found = (
+        paths[f"{_THREADS_URL}/{{thread_id}}"]["get"],
+        paths[f"{_THREADS_URL}/{{thread_id}}"]["delete"],
+        paths["/api/v1/research/runs/{run_id}/cancel"]["post"],
+        paths["/api/v1/research/runs/{run_id}"]["get"],
+    )
+    assert all(
+        "404" in operation["responses"] for operation in operations_with_not_found
     )
 
     run_operation = paths["/api/v1/research/runs/{run_id}"]["get"]

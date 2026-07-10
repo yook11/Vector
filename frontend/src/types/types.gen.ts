@@ -1764,6 +1764,10 @@ export type CreateResearchResponseErrors = {
      */
     400: unknown;
     /**
+     * Research thread not found
+     */
+    404: unknown;
+    /**
      * A run is already in progress for this thread
      */
     409: unknown;
@@ -1856,6 +1860,10 @@ export type DeleteResearchThreadErrors = {
      */
     400: unknown;
     /**
+     * Research thread not found
+     */
+    404: unknown;
+    /**
      * Validation Error
      */
     422: HttpValidationError;
@@ -1896,6 +1904,10 @@ export type GetResearchThreadErrors = {
      */
     400: unknown;
     /**
+     * Research thread not found
+     */
+    404: unknown;
+    /**
      * Validation Error
      */
     422: HttpValidationError;
@@ -1935,6 +1947,10 @@ export type CancelResearchRunErrors = {
      * Bad request
      */
     400: unknown;
+    /**
+     * Research run not found
+     */
+    404: unknown;
     /**
      * Run already completed
      */
@@ -1979,6 +1995,10 @@ export type GetResearchRunErrors = {
      * Bad request
      */
     400: unknown;
+    /**
+     * Research run not found
+     */
+    404: unknown;
     /**
      * Validation Error
      */

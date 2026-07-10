@@ -2,15 +2,11 @@ name: Schemathesis Nightly
 
 # Phase 2 #1 (Phase 0 鏡像): FastAPI /openapi.json と実装の適合性 fuzz (blocking 化済)。
 # - 5xx leak / undeclared status / response schema mismatch を property-based fuzz で検出
-# - 初回は GET only + minimal checks (not_a_server_error / status_code_conformance /
-#   response_schema_conformance) で signal 切り分け
+# - 全 HTTP method + minimal checks (not_a_server_error / status_code_conformance /
+#   response_schema_conformance) で API contract を検査
 # - JUnit XML + VCR cassette を Actions Artifacts に保存 (Code scanning GHAS disabled)
 #
-# 段階的昇格 (Phase 0 / 1 と同型):
-#   * 本 PR: warn-only (continue-on-error: true)
-#   * 次 PR-A: finding triage (実装 or schema 修正)
-#   * 次 PR-B: continue-on-error 削除 → blocking 化 (Phase 1 finding gate 化 PR と同型)
-#   * 次 PR-C: POST/PUT/DELETE / stateful / PR gate 化 (Out of Scope)
+# 全 HTTP method をblocking検査する。stateful / PR gate 化は Out of Scope。
 
 on:
   schedule:
@@ -30,7 +26,7 @@ jobs:
   schemathesis:
     name: Schemathesis (FastAPI spec conformance)
     runs-on: ubuntu-latest
-    timeout-minutes: 45  # 25 examples × GET endpoints + uvicorn 起動 + alembic で十分
+    timeout-minutes: 45  # 25 examples × 全 endpoint + uvicorn 起動 + alembic で十分
 
     services:
       postgres:
@@ -84,6 +80,10 @@ jobs:
       # production deploy 時は stub→gemini を起動時 reject (factory 側で guard)。
       # 本物 API key を CI に置かないことで cost / supply chain 両面の表面を絞る。
       EMBEDDER_PROVIDER: stub
+      # API request は構成チェック後に queue へ積むだけで、Nightly では worker を
+      # 起動しない。外部 provider を呼ばず全 HTTP method を契約検査するための dummy。
+      DEEPSEEK_API_KEY: ci-schemathesis-dummy
+      TAVILY_API_KEY: ci-schemathesis-dummy
 
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
@@ -236,7 +236,7 @@ jobs:
         run: pip install 'schemathesis==4.17.0'
 
       # Schemathesis 4.x flag 仕様 (3.x → 4.x で renamed あり):
-      # - --include-method GET: GET endpoint のみ fuzz (初回は signal 切り分け優先)
+      # - method filter なし: OpenAPI に定義された全 HTTP method を fuzz
       # - -H Authorization: ... : admin JWT を全 request に固定付与
       # - --checks: not_a_server_error / status_code_conformance /
       #   response_schema_conformance のみ (--checks=all は header / content-type
