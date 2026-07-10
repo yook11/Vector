@@ -1,4 +1,4 @@
-"""Evidence answer pipeline tests."""
+"""Evidence answer flow tests."""
 
 from __future__ import annotations
 
@@ -23,7 +23,7 @@ from app.agent.answering.evidence_answer.contract import (
     RawEvidenceAnswerDraft,
 )
 from app.agent.answering.evidence_answer.evidence import AnswerEvidenceItem
-from app.agent.answering.evidence_answer.pipeline import EvidenceAnswerPipeline
+from app.agent.answering.evidence_answer.flow import EvidenceAnswerFlow
 from app.agent.contract import ExternalUrlSource
 from app.analysis.ai_provider_errors import AIProviderNetworkError
 from tests.logfire._metric_helpers import collected_metrics, sum_counter_for_result
@@ -140,7 +140,7 @@ async def _answer(
     recorder: FakeAnswerSynthesisAuditRecorder | None = None,
     evidence: list[AnswerEvidenceItem] | None = None,
 ) -> EvidenceAnswerDraft:
-    return await EvidenceAnswerPipeline(
+    return await EvidenceAnswerFlow(
         generator=generator,
         audit_recorder=recorder,
     ).answer(
@@ -573,7 +573,7 @@ async def test_recorder_errors_do_not_stop_synthesis() -> None:
         ]
     )
 
-    draft = await EvidenceAnswerPipeline(
+    draft = await EvidenceAnswerFlow(
         generator=generator,
         audit_recorder=RaisingAnswerSynthesisAuditRecorder(),
     ).answer(

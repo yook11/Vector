@@ -20,11 +20,11 @@ from app.agent.answering.audit import (
 )
 from app.agent.answering.direct_answer.ai.gemini import GeminiDirectAnswerGenerator
 from app.agent.answering.direct_answer.contract import DirectAnswerDraft
-from app.agent.answering.direct_answer.pipeline import DirectAnswerPipeline
+from app.agent.answering.direct_answer.flow import DirectAnswerFlow
 from app.agent.answering.evidence_answer.ai.gemini import (
     GeminiEvidenceAnswerDraftGenerator,
 )
-from app.agent.answering.evidence_answer.pipeline import EvidenceAnswerPipeline
+from app.agent.answering.evidence_answer.flow import EvidenceAnswerFlow
 from app.agent.answering.orchestration import QuestionAnsweringOrchestrator
 from app.agent.contract import AnswerQuestionInput, AnswerQuestionResult, AnswerSource
 from app.agent.evidence_collection import (
@@ -262,7 +262,7 @@ async def _probe_external(
         orchestrator = QuestionAnsweringOrchestrator(
             planner=_FixedExternalPlanner(plan),
             evidence_collector=evidence_collector,
-            evidence_answerer=EvidenceAnswerPipeline(
+            evidence_answerer=EvidenceAnswerFlow(
                 generator=GeminiEvidenceAnswerDraftGenerator(),
                 audit_recorder=synthesis_audit,
             ),
@@ -298,7 +298,7 @@ async def _probe_direct(*, question: str) -> None:
         planner=_FixedDirectPlanner(NoRetrievalPlan(reason="direct answer probe")),
         evidence_collector=_UnreachableEvidenceCollector(),
         evidence_answerer=_UnreachableEvidenceAnswerer(),
-        direct_answerer=DirectAnswerPipeline(
+        direct_answerer=DirectAnswerFlow(
             generator=GeminiDirectAnswerGenerator(),
             audit_recorder=direct_audit,
         ),

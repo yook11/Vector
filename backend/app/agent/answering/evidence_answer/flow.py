@@ -1,4 +1,4 @@
-"""Validated evidence-grounded answer pipeline."""
+"""Validated evidence-grounded answer flow."""
 
 from __future__ import annotations
 
@@ -28,7 +28,7 @@ from app.agent.answering.evidence_answer.validation import (
 from app.agent.answering.metrics import record_answer_synthesis_outcome
 from app.analysis.ai_provider_errors import AIProviderError
 
-__all__ = ["EvidenceAnswerPipeline"]
+__all__ = ["EvidenceAnswerFlow"]
 
 _FALLBACK_ANSWER = (
     "回答を生成できませんでした。根拠の不足または応答形式の不備により、"
@@ -43,7 +43,7 @@ _EVIDENCE_ANSWER_AUDITED_ERRORS = (
 )
 
 
-class EvidenceAnswerPipeline:
+class EvidenceAnswerFlow:
     """Create strict evidence answer drafts from lenient LLM drafts."""
 
     def __init__(

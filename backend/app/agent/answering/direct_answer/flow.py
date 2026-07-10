@@ -1,4 +1,4 @@
-"""Validated direct answer pipeline."""
+"""Validated direct answer flow."""
 
 from __future__ import annotations
 
@@ -21,14 +21,14 @@ from app.agent.answering.direct_answer.contract import (
 from app.agent.answering.metrics import record_direct_answer_outcome
 from app.analysis.ai_provider_errors import AIProviderError
 
-__all__ = ["DirectAnswerPipeline"]
+__all__ = ["DirectAnswerFlow"]
 
 _DIRECT_ANSWER_FAILURES = (AIProviderError, DirectAnswerInvalidError)
 _MAX_ATTEMPTS = 2
 _CITATION_MARKER_RE = re.compile(r"\[\[[0-9]+\]\]")
 
 
-class DirectAnswerPipeline:
+class DirectAnswerFlow:
     """Create validated direct answer drafts.
 
     Propagates AIProviderError or DirectAnswerInvalidError.

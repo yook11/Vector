@@ -6,7 +6,7 @@ from app.agent.answering.direct_answer.contract import (
     DirectAnswerGenerator,
     DirectAnswerInvalidError,
 )
-from app.agent.answering.direct_answer.pipeline import DirectAnswerPipeline
+from app.agent.answering.direct_answer.flow import DirectAnswerFlow
 from app.agent.answering.evidence_answer.contract import (
     EvidenceAnswerDraft,
     EvidenceAnswerDraftGenerationInvalidError,
@@ -20,7 +20,7 @@ from app.agent.answering.evidence_answer.evidence import (
     AnswerEvidenceItem,
     normalize_answer_evidence,
 )
-from app.agent.answering.evidence_answer.pipeline import EvidenceAnswerPipeline
+from app.agent.answering.evidence_answer.flow import EvidenceAnswerFlow
 from app.agent.answering.orchestration import (
     EvidenceCollector,
     QuestionAnsweringOrchestrator,
@@ -32,13 +32,13 @@ __all__ = [
     "DirectAnswerer",
     "DirectAnswerGenerator",
     "DirectAnswerInvalidError",
-    "DirectAnswerPipeline",
+    "DirectAnswerFlow",
     "EvidenceAnswerDraft",
     "EvidenceAnswerDraftGenerationInvalidError",
     "EvidenceAnswerDraftGenerator",
     "EvidenceAnswerDraftInvalidError",
     "EvidenceAnswerer",
-    "EvidenceAnswerPipeline",
+    "EvidenceAnswerFlow",
     "EvidenceAnswerSufficiency",
     "EvidenceCollector",
     "QuestionAnsweringOrchestrator",

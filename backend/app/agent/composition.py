@@ -39,11 +39,11 @@ def build_question_answering_agent(
     from app.agent.answering.direct_answer.ai.gemini import (
         GeminiDirectAnswerGenerator,
     )
-    from app.agent.answering.direct_answer.pipeline import DirectAnswerPipeline
+    from app.agent.answering.direct_answer.flow import DirectAnswerFlow
     from app.agent.answering.evidence_answer.ai.gemini import (
         GeminiEvidenceAnswerDraftGenerator,
     )
-    from app.agent.answering.evidence_answer.pipeline import EvidenceAnswerPipeline
+    from app.agent.answering.evidence_answer.flow import EvidenceAnswerFlow
     from app.agent.answering.orchestration import QuestionAnsweringOrchestrator
     from app.agent.evidence_collection import EvidenceCollectionService
     from app.agent.internal_retrieval.ai.gemini import GeminiQueryEmbedder
@@ -70,11 +70,11 @@ def build_question_answering_agent(
             external_search=external_search,
             requested_external_agent_count=None,
         ),
-        evidence_answerer=EvidenceAnswerPipeline(
+        evidence_answerer=EvidenceAnswerFlow(
             generator=GeminiEvidenceAnswerDraftGenerator(),
             audit_recorder=None,
         ),
-        direct_answerer=DirectAnswerPipeline(
+        direct_answerer=DirectAnswerFlow(
             generator=GeminiDirectAnswerGenerator(),
             audit_recorder=None,
         ),

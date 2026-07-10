@@ -1,4 +1,4 @@
-"""Direct answer pipeline tests."""
+"""Direct answer flow tests."""
 
 from __future__ import annotations
 
@@ -19,7 +19,7 @@ from app.agent.answering.direct_answer.contract import (
     DirectAnswerDraft,
     DirectAnswerInvalidError,
 )
-from app.agent.answering.direct_answer.pipeline import DirectAnswerPipeline
+from app.agent.answering.direct_answer.flow import DirectAnswerFlow
 from app.analysis.ai_provider_errors import AIProviderNetworkError
 from tests.logfire._metric_helpers import collected_metrics, sum_counter_for_result
 
@@ -95,7 +95,7 @@ async def _answer(
     *,
     recorder: FakeDirectAnswerAuditRecorder | RaisingDirectAnswerAuditRecorder | None,
 ) -> DirectAnswerDraft:
-    return await DirectAnswerPipeline(
+    return await DirectAnswerFlow(
         generator=generator,
         audit_recorder=recorder,
     ).answer(
@@ -137,7 +137,7 @@ async def test_direct_answer_removes_inline_citation_markers_after_generation() 
         ["結論は維持します。[[1]] 詳細は省略します。[[2]]"]
     )
 
-    draft = await DirectAnswerPipeline(generator=generator).answer(
+    draft = await DirectAnswerFlow(generator=generator).answer(
         question="前回の結論だけ",
         as_of=_as_of(),
         user_intent="結論だけを短く",
