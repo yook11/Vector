@@ -7,6 +7,9 @@
 # .env がある環境では pydantic-settings の優先順位を壊さないよう補完しない。
 # DATABASE_URL は .invalid に向け、integration fixture 外で実 DB へ誤接続しない。
 import os
+import re
+import time
+from collections.abc import AsyncGenerator
 from pathlib import Path
 
 _REPO_ROOT_ENV = Path(__file__).resolve().parent.parent.parent / ".env"
@@ -28,15 +31,15 @@ if not _REPO_ROOT_ENV.exists():
     os.environ.setdefault("FRONTEND_URL", "http://localhost:3000")
     os.environ.setdefault("INTERNAL_FRONTEND_BASE_URL", "http://localhost:3000")
 
-import time
-from collections.abc import AsyncGenerator
-
 import jwt
 import pytest
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+from sqlalchemy.ext.compiler import compiles
 from sqlalchemy.pool import NullPool
+from sqlalchemy.sql.compiler import DDLCompiler
+from sqlalchemy.sql.ddl import ExecutableDDLElement
 
 from app.config import settings
 from app.dependencies import get_session
@@ -55,10 +58,40 @@ from app.models import (  # noqa: F401
 )
 from app.models.base import Base
 
+_XDIST_WORKER_PATTERN = re.compile(r"gw\d+")
+
+
+class _CreateDatabase(ExecutableDDLElement):
+    inherit_cache = False
+
+    def __init__(self, name: str) -> None:
+        self.name = name
+
+
+@compiles(_CreateDatabase, "postgresql")
+def _compile_create_database(
+    element: _CreateDatabase, compiler: DDLCompiler, **_: object
+) -> str:
+    return f"CREATE DATABASE {compiler.preparer.quote(element.name)}"
+
+
+def _test_database_name_for_worker(worker_id: str | None) -> str:
+    """xdist worker ごとに衝突しないテスト DB 名を返す。"""
+    if worker_id in {None, "master"}:
+        return "vector_test"
+    if _XDIST_WORKER_PATTERN.fullmatch(worker_id) is None:
+        raise ValueError(f"invalid pytest-xdist worker id: {worker_id!r}")
+    return f"vector_test_{worker_id}"
+
+
 # テスト DB 初期化は table owner 権限が必要なため migration role で接続する。
 # application role の権限境界は tests/test_db_user_isolation.py が所有する。
 _ADMIN_DB_URL = settings.migration_database_url or settings.database_url
-TEST_DATABASE_URL = _ADMIN_DB_URL.rsplit("/", 1)[0] + "/vector_test"
+TEST_DATABASE_NAME = _test_database_name_for_worker(
+    os.environ.get("PYTEST_XDIST_WORKER")
+)
+TEST_DATABASE_URL = _ADMIN_DB_URL.rsplit("/", 1)[0] + f"/{TEST_DATABASE_NAME}"
+# pytest-asyncio の function-scope loop 間で接続を再利用しない。
 engine_test = create_async_engine(TEST_DATABASE_URL, echo=False, poolclass=NullPool)
 
 TEST_USER_ID = "00000000-0000-4000-a000-000000000001"
@@ -127,6 +160,7 @@ _INTEGRATION_FIXTURES = frozenset(
         "authed_client",
         "admin_client",
         "session_factory",
+        "test_database_url",
         "sample_categories",
         "sample_source",
         "sample_hn_source",
@@ -159,7 +193,7 @@ _test_schema_initialized = False
 
 
 async def _ensure_test_schema_once() -> None:
-    """integration 初回だけ vector_test DB・extension・schema・全テーブルを確保する。"""
+    """worker の integration 初回だけ DB・schema・全テーブルを確保する。"""
     global _test_schema_initialized
     if _test_schema_initialized:
         return
@@ -169,10 +203,11 @@ async def _ensure_test_schema_once() -> None:
     )
     async with engine.connect() as conn:
         result = await conn.execute(
-            text("SELECT 1 FROM pg_database WHERE datname = 'vector_test'")
+            text("SELECT 1 FROM pg_database WHERE datname = :database_name"),
+            {"database_name": TEST_DATABASE_NAME},
         )
         if not result.scalar():
-            await conn.execute(text("CREATE DATABASE vector_test"))
+            await conn.execute(_CreateDatabase(TEST_DATABASE_NAME))
     await engine.dispose()
 
     async with engine_test.connect() as conn:
@@ -214,6 +249,12 @@ async def setup_db(request: pytest.FixtureRequest) -> AsyncGenerator[None]:
             {"uid1": TEST_USER_ID, "uid2": TEST_ADMIN_ID},
         )
     yield
+
+
+@pytest.fixture
+def test_database_url() -> str:
+    """現在の pytest worker 専用テスト DB URL を返す。"""
+    return TEST_DATABASE_URL
 
 
 @pytest.fixture

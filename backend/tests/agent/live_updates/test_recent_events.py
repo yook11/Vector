@@ -30,6 +30,8 @@ from app.agent.live_updates.recent_events import (
 )
 from app.config import settings
 
+pytestmark = pytest.mark.xdist_group("redis")
+
 RUN_ID = UUID("00000000-0000-4000-a000-000000000010")
 
 

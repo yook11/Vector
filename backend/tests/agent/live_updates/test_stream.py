@@ -31,6 +31,8 @@ from app.agent.live_updates.stream import (
 )
 from app.config import settings
 
+pytestmark = pytest.mark.xdist_group("redis")
+
 RUN_ID = UUID("00000000-0000-4000-a000-000000000011")
 EPOCH_1 = datetime(2026, 7, 10, 1, 0, tzinfo=UTC)
 EPOCH_2 = EPOCH_1 + timedelta(minutes=1)

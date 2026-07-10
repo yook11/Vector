@@ -214,7 +214,9 @@ jobs:
         working-directory: backend
 
       - name: Run integration tests
-        run: uv run pytest tests/ -m integration -x -q --durations=20
+        run: >-
+          uv run pytest tests/ -m integration -n 2 --dist loadgroup
+          -x -q --durations=20
         working-directory: backend
 
   frontend:

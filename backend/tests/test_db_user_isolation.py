@@ -17,7 +17,7 @@ import pytest
 
 from app.config import settings
 
-pytestmark = pytest.mark.asyncio
+pytestmark = [pytest.mark.asyncio, pytest.mark.xdist_group("role_db")]
 
 
 def _connection_kwargs(user: str, password: str) -> dict[str, object]:

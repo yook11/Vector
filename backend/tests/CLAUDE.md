@@ -11,8 +11,9 @@
 - 1テスト = 1アサーション（原則）
 
 ### フィクスチャ (conftest.py)
-- `setup_db` (autouse): integration テストのみ各テスト前に `create_all` / 終了後 `drop_all`。`auth."user"` を seed (unit テストは DDL を流さない)
+- `setup_db` (autouse): integration テストのみ各テスト前に全テーブルを `TRUNCATE`。`auth."user"` を seed (unit テストは DDL を流さない)
 - `session_factory`: Service クラステスト用の `async_sessionmaker`
+- `test_database_url`: 現在の pytest worker 専用テスト DB URL
 - `db_session`: テスト用 AsyncSession (`expire_on_commit=False`)
 - `client`: DI でセッション差し替え済みの未認証 httpx.AsyncClient
 - `auth_headers`: 通常ユーザー用 BFF プロキシ認証ヘッダー
@@ -22,7 +23,7 @@
 - `sample_source`: RSS ニュースソース
 - `sample_hn_source`: Hacker News API ソース
 - `sample_av_source`: Alpha Vantage API ソース
-- テストDBは db-test 上の `vector_test` を使用 (conftest が migration role で create/drop、`DATABASE_URL` の DB 名は無視され常に `vector_test`)
+- テストDBは db-test 上の `vector_test` (直列) / `vector_test_gwN` (xdist) を使用 (conftest が migration role で worker ごとに初期化)
 
 ### モック方針
 - 外部API（Gemini, RSS取得）は必ずモック
