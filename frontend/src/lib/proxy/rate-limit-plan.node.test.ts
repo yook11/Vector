@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { buildRateLimitPlan, type RateLimitLimits } from "./rate-limit-plan";
+import {
+  buildRateLimitPlan,
+  buildSseRateLimitPlan,
+  type RateLimitLimits,
+} from "./rate-limit-plan";
 
 // 固定 limits で tier 表の全セルを oracle 化する。
 const LIMITS: RateLimitLimits = {
@@ -31,6 +35,75 @@ function build(overrides: Partial<Args> = {}) {
 
 const READ_METHODS = ["GET", "HEAD", "OPTIONS"] as const;
 const MUTATION_METHODS = ["POST", "PUT", "PATCH", "DELETE"] as const;
+
+describe("buildSseRateLimitPlan — dedicated connection-start tiers", () => {
+  it("applies session+run, session, and IP tiers together", () => {
+    const plan = buildSseRateLimitPlan({
+      sessionIdentity: "unverified-session-token",
+      runId: "00000000-0000-4000-a000-000000000010",
+      flyClientIp: "203.0.113.5",
+      forwardedFor: null,
+      realIp: null,
+      isProduction: true,
+    });
+
+    expect(plan.tiers).toHaveLength(3);
+    expect(plan.tiers[0]).toMatchObject({ limit: 12 });
+    expect(plan.tiers[0]?.key).toMatch(
+      /^rl:sse:session-run:[0-9a-f]{16}:00000000-0000-4000-a000-000000000010$/,
+    );
+    expect(plan.tiers[1]).toMatchObject({ limit: 30 });
+    expect(plan.tiers[1]?.key).toMatch(/^rl:sse:session:[0-9a-f]{16}$/);
+    expect(plan.tiers[2]).toEqual({
+      key: "rl:sse:ip:203.0.113.5",
+      limit: 120,
+    });
+  });
+
+  it("keeps the two session tiers and signals when production IP is missing", () => {
+    const plan = buildSseRateLimitPlan({
+      sessionIdentity: "unverified-session-token",
+      runId: "00000000-0000-4000-a000-000000000010",
+      flyClientIp: null,
+      forwardedFor: "198.51.100.8",
+      realIp: null,
+      isProduction: true,
+    });
+
+    expect(plan.tiers).toHaveLength(2);
+    expect(plan.tiers.some((tier) => tier.key.startsWith("rl:sse:ip:"))).toBe(
+      false,
+    );
+    expect(plan.signal).toBe("missing_ip");
+  });
+
+  it("uses independent limits supplied by configuration", () => {
+    const plan = buildSseRateLimitPlan({
+      sessionIdentity: "unverified-session-token",
+      runId: "00000000-0000-4000-a000-000000000010",
+      flyClientIp: "203.0.113.5",
+      forwardedFor: null,
+      realIp: null,
+      isProduction: true,
+      limits: { sessionRun: 2, session: 3, ip: 4 },
+    });
+
+    expect(plan.tiers.map((tier) => tier.limit)).toEqual([2, 3, 4]);
+  });
+
+  it("limits an unauthenticated request by IP before session lookup", () => {
+    const plan = buildSseRateLimitPlan({
+      sessionIdentity: null,
+      runId: "00000000-0000-4000-a000-000000000010",
+      flyClientIp: "203.0.113.5",
+      forwardedFor: null,
+      realIp: null,
+      isProduction: true,
+    });
+
+    expect(plan.tiers).toEqual([{ key: "rl:sse:ip:203.0.113.5", limit: 120 }]);
+  });
+});
 
 describe("buildRateLimitPlan — _rsc GET tier (寛容 ceiling / 別財布)", () => {
   it("IP 解決時は rl:rsc:<ip> 600 のみ (session 無)", () => {

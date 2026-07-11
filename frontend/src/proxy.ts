@@ -12,7 +12,10 @@ import {
   buildCspHeader,
   generateNonce,
 } from "@/lib/proxy/csp";
-import { buildRateLimitPlan } from "@/lib/proxy/rate-limit-plan";
+import {
+  buildRateLimitPlan,
+  isAgentRunSseRoute,
+} from "@/lib/proxy/rate-limit-plan";
 
 // Next.js 16 の proxy は Node.js runtime 固定。`export const runtime` は使えない。
 
@@ -41,28 +44,34 @@ export async function proxy(request: NextRequest) {
   // CSP nonce 生成や session 検証より前に実行する。
   // Redis 不通・tiers 空時は fail-open し、storage 障害がアプリ全体の停止に直結しない。
   const sessionToken = getSessionCookie(request);
-  const plan = buildRateLimitPlan({
-    method: request.method,
-    hasRsc: request.nextUrl.searchParams.has("_rsc"),
-    flyClientIp: request.headers.get("fly-client-ip"),
-    forwardedFor: request.headers.get("x-forwarded-for"),
-    realIp: request.headers.get("x-real-ip"),
-    sessionToken,
-    isProduction: process.env.NODE_ENV === "production",
-    limits: calculateLimits(),
-  });
-  if (plan.signal) {
-    recordRateLimitSignal(plan.signal);
-  }
-  const decision = await checkRateLimit(plan);
-  if (!decision.allowed) {
-    return new NextResponse("Too Many Requests", {
-      status: 429,
-      headers: {
-        "Retry-After": String(decision.retryAfterSeconds),
-        "Content-Type": "text/plain; charset=utf-8",
-      },
+  if (!isAgentRunSseRoute(pathname)) {
+    const plan = buildRateLimitPlan({
+      method: request.method,
+      hasRsc: request.nextUrl.searchParams.has("_rsc"),
+      flyClientIp: request.headers.get("fly-client-ip"),
+      forwardedFor: request.headers.get("x-forwarded-for"),
+      realIp: request.headers.get("x-real-ip"),
+      sessionToken,
+      isProduction: process.env.NODE_ENV === "production",
+      limits: calculateLimits(),
     });
+    if (plan.signal) {
+      recordRateLimitSignal(plan.signal);
+    }
+    const decision = await checkRateLimit(plan, {
+      requestClass: ["GET", "HEAD", "OPTIONS"].includes(request.method)
+        ? "read"
+        : "mutation",
+    });
+    if (!decision.allowed) {
+      return new NextResponse("Too Many Requests", {
+        status: 429,
+        headers: {
+          "Retry-After": String(decision.retryAfterSeconds),
+          "Content-Type": "text/plain; charset=utf-8",
+        },
+      });
+    }
   }
 
   // --- XSS対策: Content Security Policy (CSP) ---

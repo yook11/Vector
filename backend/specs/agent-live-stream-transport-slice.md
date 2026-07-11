@@ -112,8 +112,9 @@ entryは個別に捨て、同じStream内の有効entryを返す。`attempt.star
 
 ### Event vocabulary
 
-以下の `{ ... }` はSSEへ出す平坦なevent表記である。Redis entryでは `attemptEpoch` は
-共通envelope field、残りは `payload` JSONに入れる。
+以下の `{ ... }` はSSEへ投影する公開data表記である。Redis entryでは `attemptEpoch` は
+共通envelope field、残りは `payload` JSONに入れる。`activity` だけは配信制御fieldと
+domain payloadを分けるため、activity固有payloadをnestedにする。
 
 ```text
 attempt.started
@@ -123,7 +124,7 @@ stage
   { attemptEpoch, stage: "planning" | "retrieving" | "synthesizing" }
 
 activity
-  { attemptEpoch, event: existing safe AnswerProgressEvent }
+  { attemptEpoch, activity: existing safe AnswerProgressEvent }
 
 answer.delta
   { attemptEpoch, generation: positive integer, text: non-empty string }
@@ -143,6 +144,8 @@ terminal
 - markerはUIの破棄通知であり、event帰属の正本ではない。readerはenvelopeのinteger epochを
   比較し、小さいentryを捨て、等しいentryだけを返し、大きいentryを新attempt境界とする。
 - Stream keyは削除しない。Stream IDは単調な再接続cursorとしてのみ使う。
+- `activity` のnested field名は `activity` とし、`event` は使わない。SSE protocolの
+  `event: activity`、DOM `MessageEvent`、JSON data内のfieldをコード上で区別できる恒久契約にする。
 - `answer.delta` / `answer.reset` / `terminal` はこのsliceで型とstorageだけを用意する。
   producerを接続するのはそれぞれ後続sliceである。
 
@@ -200,8 +203,9 @@ agent coreはRedisやrun IDを知らず、後続sliceが必要なreporterをcons
   ```
 
   `attempt_absent` は接続を閉じる信号ではない。follow readは返された `next_cursor` から
-  継続し、初回readもworker開始raceとして有限時間待つ。`attempt_advanced` はDB contextを
-  再取得して新attemptへ接続し直す。`stream_missing`、`cursor_trimmed`、`unavailable` は
+  継続し、初回readもworker開始raceとして有限時間待つ。`attempt_advanced` は観測epochへ
+  pinを更新し、境界前cursorを維持して同じ接続で再読する。`stream_missing`、
+  `cursor_trimmed`、`unavailable` は
   後続SSE層が接続を閉じ、pollingと最終DB結果へ劣化する信号である。
 - `read_after()` が内部で行う`XRANGE` / `XREAD` / `EXISTS`を含む全readは、1回の
   `asyncio.wait_for`で0.5秒以内に収束させる。
@@ -223,13 +227,13 @@ markerがtrim・破損・lazy retry重複しても、残存entryの `attemptEpoc
 大きいepochを観測した場合、その境界entryを旧cursorで消費せず `attempt_advanced` を返す。
 
 read完了直後に新attemptが始まるraceは避けられない。readerの保証は「read開始時に渡された
-epochに一致するentryだけを返す」までである。consumerは異なるepochの`attempt.started`を
-受信した時点で下書きを破棄し、同一epochの重複markerでは何もしない。
+epochに一致するentryだけを返す」までである。consumerはevent typeにかかわらず、現在値より
+大きいepochのeventを受信した時点で下書きを破棄し、同一epochの重複markerでは何もしない。
 
 ## Required file changes
 
 ```text
-backend/app/agent/live_updates/stream.py          # publisher / reader / event models / constants
+backend/app/agent/live_updates/stream.py          # publisher / reader / event models / constants、activity field改名
 backend/app/agent/live_updates/__init__.py        # live transport package boundary
 backend/app/agent/runs/contracts.py               # PreparedAgentRun.attempt_epoch
 backend/app/agent/runs/repository.py              # acquire時にattempt_epochを返す
@@ -241,6 +245,12 @@ backend/tests/agent/test_agent_run_task.py        # worker正負パス + attempt
 `app/schemas/research.py`、generated TypeScript、frontend、router、既存
 `recent_events.py` は変更しない。既存のworker task・repositoryに未コミット変更がある場合は、
 実装開始前に差分の所有者と競合範囲を確認する。
+
+`AgentRunLiveStreamActivityEvent` のfieldは `event` から `activity` へ変更する。旧形式は
+strict decodeで個別skipし、恒久的なdual-name aliasは持たない。Stream TTLは15分であり、
+この時点ではStreamのactivity producerとSSE consumerが未接続なので、rolling deploy中に
+旧activity entryが読めなくてもlive補助表示の短時間欠落だけを受容する。他event、run状態、
+最終DB結果、既存Listの `recentEvents` には影響させない。
 
 ## Redis ACL and deployment check
 
@@ -279,6 +289,8 @@ deploy前に検出・修正する。
 - Stream payloadに質問本文、prompt、chain of thought、未選別evidence、provider生応答、
   secret、例外本文を含めない。
 - payloadはログ、metric label、trace attribute、例外messageへ含めない。
+- activity payloadは `{ activity: AnswerProgressEvent }` にnestedし、曖昧な `{ event: ... }` や
+  activity固有fieldのtop-level flattenを許可しない。
 - 既存List / `recentEvents` の動作・API契約・polling間隔は不変である。
 
 ## Tests
@@ -307,6 +319,9 @@ deploy前に検出・修正する。
    現epoch eventを同じ接続で取得できる。
 9. `publishedAt` の形式不良は現epoch eventや新attempt境界を失わせず、旧・新epochの
    payloadはdecodeしない。
+10. activityを `{ "activity": { "type": ... } }` でencode / decodeできる。旧
+    `{ "event": { "type": ... } }`、両field併記、activity固有fieldのtop-level flattenは
+    schema違反としてそのentryだけをskipする。
 
 ### Repository and worker integration
 
@@ -352,5 +367,7 @@ deploy前に検出・修正する。
   trimで旧attemptを混ぜない。
 - Redis障害、壊れたentry、未知event、trim済みcursor、worker再配送で最終回答・run状態・
   既存pollingが壊れず、不完全な下書きは劣化表示へ移る。
+- activityが `{ attemptEpoch, activity: AnswerProgressEvent }` のnested契約でround-tripし、
+  旧 `event` fieldを恒久aliasとして受理しない。
 - 実Redisテストとtimeout / payload非漏洩テストがgreenである。
 - SSE endpoint、UI、Gemini streaming、既存 `recentEvents` へ変更を入れていない。

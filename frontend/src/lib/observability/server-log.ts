@@ -7,7 +7,9 @@ export type ServerLogEvent =
   | "frontend_auth_session_slow"
   | "frontend_auth_session_error"
   | "frontend_rate_limit_missing_ip"
-  | "frontend_rate_limit_unknown_write";
+  | "frontend_rate_limit_unknown_write"
+  | "frontend_rate_limit_redis_client_error"
+  | "frontend_rate_limit_redis_fail_open";
 
 export interface ServerLogFields {
   method?: string | undefined;
@@ -17,6 +19,8 @@ export interface ServerLogFields {
   detail?: string | undefined;
   elapsedMs?: number | undefined;
   hasSession?: boolean | undefined;
+  requestClass?: "sse" | "read" | "mutation" | undefined;
+  errorType?: "unconfigured" | "connect" | "eval" | undefined;
 }
 
 function sanitizeFields(fields: ServerLogFields): ServerLogFields {

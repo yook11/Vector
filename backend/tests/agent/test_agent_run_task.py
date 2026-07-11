@@ -29,6 +29,7 @@ from app.agent.runs.result_mapper import (
     build_assistant_message_for_result,
     build_source_rows_for_message,
 )
+from app.agent.runs.types import AgentRunStatus
 from app.agent.threads.projection import build_research_assistant_message
 from app.agent.threads.repository import AgentThreadRepository
 from app.analysis.ai_provider_errors import (
@@ -40,7 +41,7 @@ from app.models.agent_run import AgentRun
 from app.models.agent_thread import AgentThread
 from app.queue.messages.agent_run import AgentRunTrigger
 from app.shared.security.safe_url import SafeUrl
-from tests.conftest import TEST_USER_ID
+from tests.conftest import TEST_ADMIN_ID, TEST_USER_ID
 
 
 class FakeAgent:
@@ -160,9 +161,10 @@ async def _create_thread_message_run(
     started_at: datetime | None = None,
     attempt_epoch: int | None = None,
     error_code: str | None = None,
+    user_id: str = TEST_USER_ID,
 ) -> tuple[AgentThread, AgentMessage, AgentRun]:
     thread = AgentThread(
-        user_id=UUID(TEST_USER_ID),
+        user_id=UUID(user_id),
         title="thread",
         updated_at=datetime(2026, 1, 1, tzinfo=UTC),
     )
@@ -206,6 +208,65 @@ async def _create_thread_message_run(
     await session.refresh(message)
     await session.refresh(run)
     return thread, message, run
+
+
+@pytest.mark.asyncio
+async def test_read_live_context_for_user_returns_only_owned_internal_fields(
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    async with session_factory() as setup_session:
+        _thread, _message, run = await _create_thread_message_run(
+            setup_session,
+            status="running",
+            attempt_epoch=3,
+        )
+
+    async with session_factory() as session:
+        repo = AgentRunRepository(session)
+        owned = await repo.read_live_context_for_user(
+            run_id=run.id,
+            user_id=UUID(TEST_USER_ID),
+        )
+        other_user = await repo.read_live_context_for_user(
+            run_id=run.id,
+            user_id=UUID(TEST_ADMIN_ID),
+        )
+        missing = await repo.read_live_context_for_user(
+            run_id=UUID("00000000-0000-4000-a000-000000000099"),
+            user_id=UUID(TEST_USER_ID),
+        )
+
+    assert owned is not None
+    assert owned.run_id == run.id
+    assert owned.status is AgentRunStatus.RUNNING
+    assert owned.attempt_epoch == 3
+    assert owned.error_code is None
+    assert other_user is None
+    assert missing is None
+
+
+@pytest.mark.asyncio
+async def test_read_live_context_for_user_preserves_terminal_error_code(
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    async with session_factory() as setup_session:
+        _thread, _message, run = await _create_thread_message_run(
+            setup_session,
+            status="failed",
+            attempt_epoch=2,
+            error_code="cancelled",
+        )
+
+    async with session_factory() as session:
+        context = await AgentRunRepository(session).read_live_context_for_user(
+            run_id=run.id,
+            user_id=UUID(TEST_USER_ID),
+        )
+
+    assert context is not None
+    assert context.status is AgentRunStatus.FAILED
+    assert context.attempt_epoch == 2
+    assert context.error_code == "cancelled"
 
 
 @pytest.mark.asyncio

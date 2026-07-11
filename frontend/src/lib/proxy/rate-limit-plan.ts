@@ -45,11 +45,71 @@ export type RateLimitLimits = {
   unknownWrite: number;
 };
 
+export type SseRateLimitLimits = {
+  sessionRun: number;
+  session: number;
+  ip: number;
+};
+
+const DEFAULT_SSE_LIMITS: SseRateLimitLimits = {
+  sessionRun: 12,
+  session: 30,
+  ip: 120,
+};
+
 import { createHash } from "node:crypto";
 
 function sessionKey(token: string): string {
   const digest = createHash("sha256").update(token).digest("hex").slice(0, 16);
   return `rl:sess:${digest}`;
+}
+
+function identityDigest(identity: string): string {
+  return createHash("sha256").update(identity).digest("hex").slice(0, 16);
+}
+
+export type BuildSseRateLimitPlanArgs = {
+  sessionIdentity: string | null;
+  runId: string;
+  flyClientIp: string | null;
+  forwardedFor: string | null;
+  realIp: string | null;
+  isProduction: boolean;
+  limits?: SseRateLimitLimits;
+};
+
+export function buildSseRateLimitPlan({
+  sessionIdentity,
+  runId,
+  flyClientIp,
+  forwardedFor,
+  realIp,
+  isProduction,
+  limits = DEFAULT_SSE_LIMITS,
+}: BuildSseRateLimitPlanArgs): RateLimitPlan {
+  const ip = extractClientIp(flyClientIp, forwardedFor, realIp, isProduction);
+  const tiers: RateLimitTier[] = [];
+  if (sessionIdentity) {
+    const identity = identityDigest(sessionIdentity);
+    tiers.push(
+      {
+        key: `rl:sse:session-run:${identity}:${runId}`,
+        limit: limits.sessionRun,
+      },
+      { key: `rl:sse:session:${identity}`, limit: limits.session },
+    );
+  }
+  if (ip !== null) {
+    tiers.push({ key: `rl:sse:ip:${ip}`, limit: limits.ip });
+  }
+  return {
+    tiers,
+    signal: isProduction && ip === null ? "missing_ip" : undefined,
+  };
+}
+
+export function isAgentRunSseRoute(pathname: string): boolean {
+  return /^\/api\/research\/runs\/[^/]+\/events$/.test(pathname);
 }
 
 function isReadMethod(method: string): boolean {

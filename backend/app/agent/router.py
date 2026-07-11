@@ -2,23 +2,51 @@
 
 from __future__ import annotations
 
+import asyncio
+import time
 from collections.abc import AsyncGenerator
 from typing import Annotated
 from uuid import UUID
 
 import redis.asyncio as aioredis
 import structlog
-from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
+from fastapi import (
+    APIRouter,
+    Depends,
+    Header,
+    HTTPException,
+    Query,
+    Request,
+    Response,
+    status,
+)
+from fastapi.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.agent.composition import ensure_question_answering_agent_configured
 from app.agent.live_updates.recent_events import AgentRunLiveEventReader
+from app.agent.live_updates.sse import (
+    AgentRunQueuedSseConnection,
+    AgentRunSseCapacity,
+    AgentRunSsePreflightFailure,
+    AgentRunSseTiming,
+    prepare_running_sse_connection,
+    validate_redis_stream_id,
+)
+from app.agent.live_updates.sse_response import AgentRunSseStreamingResponse
+from app.agent.live_updates.stream import (
+    AGENT_RUN_LIVE_STREAM_TIMEOUT_SECONDS,
+    AgentRunLiveStreamReader,
+    agent_run_live_stream_key,
+)
 from app.agent.runs.contracts import (
     ActiveRunConflictError,
     CancelRunOutcome,
+    OwnedAgentRunLiveContext,
     ThreadNotFoundError,
 )
 from app.agent.runs.repository import AgentRunRepository
+from app.agent.runs.types import AgentRunStatus
 from app.agent.threads.repository import AgentThreadRepository
 from app.analysis.ai_provider_errors import AIProviderError
 from app.db import engine
@@ -41,6 +69,8 @@ _ACTIVE_RUN_DETAIL = "A run is already in progress for this thread"
 _RUN_ALREADY_COMPLETED_DETAIL = "Run already completed"
 _THREAD_NOT_FOUND_DETAIL = "Research thread not found"
 _RUN_NOT_FOUND_DETAIL = "Research run not found"
+_SSE_RETRY_AFTER_SECONDS = 5
+_SSE_CAPACITY_STATE_KEY = "agent_run_sse_capacity"
 
 
 async def get_agent_persistence_session() -> AsyncGenerator[AsyncSession]:
@@ -54,6 +84,34 @@ async def enqueue_agent_run(run_id: UUID) -> None:
     from app.queue.tasks.agent_run import run_agent_answer
 
     await run_agent_answer.kiq(AgentRunTrigger(run_id=run_id))
+
+
+async def read_agent_run_live_context(
+    *,
+    run_id: UUID,
+    user_id: UUID,
+) -> OwnedAgentRunLiveContext | None:
+    async with AsyncSession(engine, expire_on_commit=False) as session:
+        return await AgentRunRepository(session).read_live_context_for_user(
+            run_id=run_id,
+            user_id=user_id,
+        )
+
+
+def get_agent_run_sse_request_started_at() -> float:
+    return time.monotonic()
+
+
+def get_agent_run_sse_capacity(request: Request) -> AgentRunSseCapacity:
+    capacity = getattr(request.app.state, _SSE_CAPACITY_STATE_KEY, None)
+    if capacity is None:
+        capacity = AgentRunSseCapacity()
+        setattr(request.app.state, _SSE_CAPACITY_STATE_KEY, capacity)
+    return capacity
+
+
+def get_agent_run_sse_timing() -> AgentRunSseTiming:
+    return AgentRunSseTiming()
 
 
 @router.post(
@@ -214,6 +272,127 @@ async def cancel_research_run(
 
 
 @router.get(
+    "/runs/{run_id}/events",
+    operation_id="stream_research_run_events",
+    response_class=StreamingResponse,
+    responses={
+        200: {
+            "description": "SSE channel started",
+            "content": {"text/event-stream": {}},
+        },
+        204: {"description": "Run is already terminal"},
+        400: {"description": "Malformed run ID or Last-Event-ID"},
+        401: {"description": "Not authenticated"},
+        404: {"description": _RUN_NOT_FOUND_DETAIL},
+        409: {"description": "The replay cursor was trimmed"},
+        429: {"description": "Run or user connection limit exceeded"},
+        503: {"description": "Live delivery is temporarily unavailable"},
+    },
+)
+async def stream_research_run_events(
+    run_id: str,
+    request: Request,
+    request_started_at: Annotated[
+        float,
+        Depends(get_agent_run_sse_request_started_at),
+    ],
+    user: Annotated[CurrentUser, Depends(get_current_user)],
+    redis: Annotated[aioredis.Redis, Depends(get_redis_client)],
+    capacity: Annotated[AgentRunSseCapacity, Depends(get_agent_run_sse_capacity)],
+    timing: Annotated[AgentRunSseTiming, Depends(get_agent_run_sse_timing)],
+    last_event_id: Annotated[str | None, Header(alias="Last-Event-ID")] = None,
+) -> Response:
+    parsed_run_id = _parse_sse_run_id(run_id)
+    cursor = _parse_sse_cursor(last_event_id)
+    lease = await capacity.try_acquire_process()
+    if lease is None:
+        return _sse_error_response(status.HTTP_503_SERVICE_UNAVAILABLE)
+    try:
+        context = await read_agent_run_live_context(
+            run_id=parsed_run_id,
+            user_id=user.id,
+        )
+        if context is None:
+            await lease.release()
+            return Response(
+                status_code=status.HTTP_404_NOT_FOUND,
+                headers={"Cache-Control": "no-store"},
+            )
+        if context.status in (AgentRunStatus.COMPLETED, AgentRunStatus.FAILED):
+            await lease.release()
+            return Response(
+                status_code=status.HTTP_204_NO_CONTENT,
+                headers={"Cache-Control": "no-store"},
+            )
+        rejection = await lease.try_acquire_owned(
+            run_id=parsed_run_id,
+            user_id=user.id,
+        )
+        if rejection is not None:
+            return _sse_error_response(status.HTTP_429_TOO_MANY_REQUESTS)
+        reader = AgentRunLiveStreamReader(redis)
+        if context.status is AgentRunStatus.QUEUED and context.attempt_epoch == 0:
+            try:
+                await asyncio.wait_for(
+                    redis.exists(agent_run_live_stream_key(parsed_run_id)),
+                    timeout=AGENT_RUN_LIVE_STREAM_TIMEOUT_SECONDS,
+                )
+            except Exception:
+                await lease.release()
+                return _sse_error_response(status.HTTP_503_SERVICE_UNAVAILABLE)
+
+            async def load_context() -> OwnedAgentRunLiveContext | None:
+                return await read_agent_run_live_context(
+                    run_id=parsed_run_id,
+                    user_id=user.id,
+                )
+
+            connection = AgentRunQueuedSseConnection(
+                run_id=parsed_run_id,
+                cursor=cursor,
+                reader=reader,
+                lease=lease,
+                load_context=load_context,
+                timing=timing,
+                started_at=request_started_at,
+                clock=time.monotonic,
+                sleep=asyncio.sleep,
+                is_disconnected=request.is_disconnected,
+            )
+        else:
+            if context.attempt_epoch < 1:
+                await lease.release()
+                return _sse_error_response(status.HTTP_503_SERVICE_UNAVAILABLE)
+            prepared = await prepare_running_sse_connection(
+                run_id=parsed_run_id,
+                attempt_epoch=context.attempt_epoch,
+                cursor=cursor,
+                reader=reader,
+                lease=lease,
+                timing=timing,
+                is_disconnected=request.is_disconnected,
+                started_at=request_started_at,
+            )
+            if prepared is AgentRunSsePreflightFailure.CURSOR_TRIMMED:
+                return _sse_error_response(status.HTTP_409_CONFLICT)
+            if prepared is AgentRunSsePreflightFailure.UNAVAILABLE:
+                return _sse_error_response(status.HTTP_503_SERVICE_UNAVAILABLE)
+            connection = prepared
+        return AgentRunSseStreamingResponse(
+            connection.frames(),
+            lease=lease,
+            media_type="text/event-stream",
+            headers={
+                "Cache-Control": "no-store, no-transform",
+                "X-Accel-Buffering": "no",
+            },
+        )
+    except BaseException:
+        await lease.release()
+        raise
+
+
+@router.get(
     "/runs/{run_id}",
     operation_id="get_research_run",
     response_model=ResearchRunResponse,
@@ -239,4 +418,36 @@ def _generation_unavailable() -> HTTPException:
     return HTTPException(
         status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
         detail=_GENERATION_UNAVAILABLE_DETAIL,
+    )
+
+
+def _parse_sse_run_id(value: str) -> UUID:
+    try:
+        parsed = UUID(value)
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST) from exc
+    if str(parsed) != value.lower():
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST)
+    return parsed
+
+
+def _parse_sse_cursor(value: str | None) -> str | None:
+    if value is None:
+        return None
+    try:
+        return validate_redis_stream_id(value)
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST) from exc
+
+
+def _sse_error_response(status_code: int) -> Response:
+    headers = {"Cache-Control": "no-store"}
+    if status_code in (
+        status.HTTP_429_TOO_MANY_REQUESTS,
+        status.HTTP_503_SERVICE_UNAVAILABLE,
+    ):
+        headers["Retry-After"] = str(_SSE_RETRY_AFTER_SECONDS)
+    return Response(
+        status_code=status_code,
+        headers=headers,
     )

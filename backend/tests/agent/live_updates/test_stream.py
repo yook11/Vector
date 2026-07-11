@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import time
 from datetime import UTC, datetime
-from uuid import UUID
+from uuid import UUID, uuid4
 
 import pytest
 import redis.asyncio as aioredis
+from pydantic import ValidationError
 from redis.exceptions import ConnectionError as RedisConnectionError
 from structlog.testing import capture_logs
 
@@ -170,7 +172,7 @@ async def test_stream_round_trip_filters_epoch_and_skips_bad_payload() -> None:
     assert (
         await publisher_2.publish(
             AgentRunLiveStreamActivityEvent(
-                event=InternalSearchStartedEvent(query_count=2)
+                activity=InternalSearchStartedEvent(query_count=2)
             )
         )
         == "4-0"
@@ -243,6 +245,55 @@ async def test_stream_round_trip_filters_epoch_and_skips_bad_payload() -> None:
     ]
     assert all(entry.attempt_epoch == EPOCH_2 for entry in result.events)
     assert all("attemptEpoch" in fields for _id, fields in redis.entries)
+    assert json.loads(redis.entries[3][1]["payload"]) == {
+        "activity": {"type": "internal_search.started", "query_count": 2}
+    }
+
+
+def test_activity_event_contract_rejects_legacy_and_ambiguous_shapes() -> None:
+    activity = InternalSearchStartedEvent(query_count=2)
+
+    event = AgentRunLiveStreamActivityEvent(activity=activity)
+
+    assert event.activity == activity
+    with pytest.raises(ValidationError):
+        AgentRunLiveStreamActivityEvent(event=activity)  # type: ignore[call-arg]
+    with pytest.raises(ValidationError):
+        AgentRunLiveStreamActivityEvent(  # type: ignore[call-arg]
+            activity=activity,
+            event=activity,
+        )
+
+
+@pytest.mark.asyncio
+async def test_reader_skips_legacy_activity_field_without_losing_following_event() -> (
+    None
+):
+    redis = MemoryRedis(
+        entries=[
+            (
+                "1-0",
+                _envelope(
+                    EPOCH_1,
+                    event_type="activity",
+                    payload=(
+                        '{"event":{"type":"internal_search.started","query_count":2}}'
+                    ),
+                ),
+            ),
+            ("2-0", _envelope(EPOCH_1, event_type="stage")),
+        ]
+    )
+
+    result = await AgentRunLiveStreamReader(redis).read_after(
+        RUN_ID,
+        EPOCH_1,
+        None,
+    )
+
+    assert result.status is AgentRunLiveStreamReadStatus.EVENTS
+    assert [entry.stream_id for entry in result.events] == ["2-0"]
+    assert result.next_cursor == "2-0"
 
 
 @pytest.mark.asyncio
@@ -593,17 +644,17 @@ def test_stream_id_comparison_is_numeric_pair_ordering() -> None:
 @pytest.mark.integration
 async def test_real_redis_orders_entries_and_readers_replay_independently() -> None:
     redis = aioredis.from_url(settings.redis_url, decode_responses=True)
+    run_id = uuid4()
     try:
-        await redis.flushdb()
-        publisher = AgentRunLiveStreamPublisher(redis, RUN_ID, EPOCH_1)
+        publisher = AgentRunLiveStreamPublisher(redis, run_id, EPOCH_1)
         reader = AgentRunLiveStreamReader(redis)
 
         marker_id = await publisher.begin_attempt()
         stage_id = await publisher.publish(
             AgentRunLiveStreamStageEvent(stage="planning")
         )
-        first = await reader.read_after(RUN_ID, EPOCH_1, None)
-        second = await reader.read_after(RUN_ID, EPOCH_1, None)
+        first = await reader.read_after(run_id, EPOCH_1, None)
+        second = await reader.read_after(run_id, EPOCH_1, None)
 
         assert marker_id is not None
         assert stage_id is not None
@@ -613,7 +664,7 @@ async def test_real_redis_orders_entries_and_readers_replay_independently() -> N
         assert first.events == second.events
         assert [entry.stream_id for entry in first.events] == [marker_id, stage_id]
     finally:
-        await redis.flushdb()
+        await redis.delete(agent_run_live_stream_key(run_id))
         await redis.aclose()
 
 
@@ -621,18 +672,18 @@ async def test_real_redis_orders_entries_and_readers_replay_independently() -> N
 @pytest.mark.integration
 async def test_real_redis_excludes_zombie_epoch_and_allows_duplicate_marker() -> None:
     redis = aioredis.from_url(settings.redis_url, decode_responses=True)
+    run_id = uuid4()
     try:
-        await redis.flushdb()
-        old_attempt = AgentRunLiveStreamPublisher(redis, RUN_ID, EPOCH_1)
-        current_attempt = AgentRunLiveStreamPublisher(redis, RUN_ID, EPOCH_2)
+        old_attempt = AgentRunLiveStreamPublisher(redis, run_id, EPOCH_1)
+        current_attempt = AgentRunLiveStreamPublisher(redis, run_id, EPOCH_2)
 
         await old_attempt.begin_attempt()
         await old_attempt.publish(AgentRunLiveStreamStageEvent(stage="planning"))
         await current_attempt.begin_attempt()
         await old_attempt.publish(AgentRunLiveStreamStageEvent(stage="retrieving"))
-        await AgentRunLiveStreamPublisher(redis, RUN_ID, EPOCH_2).begin_attempt()
+        await AgentRunLiveStreamPublisher(redis, run_id, EPOCH_2).begin_attempt()
 
-        result = await AgentRunLiveStreamReader(redis).read_after(RUN_ID, EPOCH_2, None)
+        result = await AgentRunLiveStreamReader(redis).read_after(run_id, EPOCH_2, None)
 
         assert result.status is AgentRunLiveStreamReadStatus.EVENTS
         assert [entry.event.type for entry in result.events] == [
@@ -641,7 +692,7 @@ async def test_real_redis_excludes_zombie_epoch_and_allows_duplicate_marker() ->
         ]
         assert {entry.attempt_epoch for entry in result.events} == {EPOCH_2}
     finally:
-        await redis.flushdb()
+        await redis.delete(agent_run_live_stream_key(run_id))
         await redis.aclose()
 
 
@@ -649,30 +700,30 @@ async def test_real_redis_excludes_zombie_epoch_and_allows_duplicate_marker() ->
 @pytest.mark.integration
 async def test_real_redis_marker_trim_keeps_epoch_filter_and_flags_old_cursor() -> None:
     redis = aioredis.from_url(settings.redis_url, decode_responses=True)
+    run_id = uuid4()
     try:
-        await redis.flushdb()
-        publisher = AgentRunLiveStreamPublisher(redis, RUN_ID, EPOCH_2)
+        publisher = AgentRunLiveStreamPublisher(redis, run_id, EPOCH_2)
         marker_id = await publisher.begin_attempt()
         await publisher.publish(AgentRunLiveStreamStageEvent(stage="synthesizing"))
         assert marker_id is not None
         await redis.xtrim(
-            agent_run_live_stream_key(RUN_ID),
+            agent_run_live_stream_key(run_id),
             maxlen=1,
             approximate=False,
         )
 
         current = await AgentRunLiveStreamReader(redis).read_after(
-            RUN_ID, EPOCH_2, None
+            run_id, EPOCH_2, None
         )
         trimmed = await AgentRunLiveStreamReader(redis).read_after(
-            RUN_ID, EPOCH_2, marker_id
+            run_id, EPOCH_2, marker_id
         )
 
         assert current.status is AgentRunLiveStreamReadStatus.EVENTS
         assert [entry.event.type for entry in current.events] == ["stage"]
         assert trimmed.status is AgentRunLiveStreamReadStatus.CURSOR_TRIMMED
     finally:
-        await redis.flushdb()
+        await redis.delete(agent_run_live_stream_key(run_id))
         await redis.aclose()
 
 
@@ -680,17 +731,17 @@ async def test_real_redis_marker_trim_keeps_epoch_filter_and_flags_old_cursor() 
 @pytest.mark.integration
 async def test_real_redis_pages_current_epoch_and_enforces_cap_and_ttl() -> None:
     redis = aioredis.from_url(settings.redis_url, decode_responses=True)
+    run_id = uuid4()
     try:
-        await redis.flushdb()
-        publisher = AgentRunLiveStreamPublisher(redis, RUN_ID, EPOCH_1)
+        publisher = AgentRunLiveStreamPublisher(redis, run_id, EPOCH_1)
         await publisher.begin_attempt()
         for _ in range(130):
             await publisher.publish(AgentRunLiveStreamStageEvent(stage="planning"))
 
         reader = AgentRunLiveStreamReader(redis)
-        first_page = await reader.read_after(RUN_ID, EPOCH_1, None)
+        first_page = await reader.read_after(run_id, EPOCH_1, None)
         second_page = await reader.read_after(
-            RUN_ID,
+            run_id,
             EPOCH_1,
             first_page.next_cursor,
         )
@@ -699,7 +750,7 @@ async def test_real_redis_pages_current_epoch_and_enforces_cap_and_ttl() -> None
         assert len(first_page.events) == AGENT_RUN_LIVE_STREAM_PAGE_SIZE
         assert second_page.status is AgentRunLiveStreamReadStatus.EVENTS
         assert len(second_page.events) == 3
-        assert await redis.ttl(agent_run_live_stream_key(RUN_ID)) in range(
+        assert await redis.ttl(agent_run_live_stream_key(run_id)) in range(
             1,
             AGENT_RUN_LIVE_STREAM_TTL_SECONDS + 1,
         )
@@ -707,21 +758,21 @@ async def test_real_redis_pages_current_epoch_and_enforces_cap_and_ttl() -> None
         pipeline = redis.pipeline()
         for _ in range(AGENT_RUN_LIVE_STREAM_MAXLEN + 1):
             pipeline.xadd(
-                agent_run_live_stream_key(RUN_ID),
+                agent_run_live_stream_key(run_id),
                 _envelope(EPOCH_1),
                 maxlen=AGENT_RUN_LIVE_STREAM_MAXLEN,
                 approximate=False,
             )
         pipeline.expire(
-            agent_run_live_stream_key(RUN_ID), AGENT_RUN_LIVE_STREAM_TTL_SECONDS
+            agent_run_live_stream_key(run_id), AGENT_RUN_LIVE_STREAM_TTL_SECONDS
         )
         await pipeline.execute()
 
-        assert await redis.xlen(agent_run_live_stream_key(RUN_ID)) == (
+        assert await redis.xlen(agent_run_live_stream_key(run_id)) == (
             AGENT_RUN_LIVE_STREAM_MAXLEN
         )
     finally:
-        await redis.flushdb()
+        await redis.delete(agent_run_live_stream_key(run_id))
         await redis.aclose()
 
 
@@ -729,14 +780,14 @@ async def test_real_redis_pages_current_epoch_and_enforces_cap_and_ttl() -> None
 @pytest.mark.integration
 async def test_real_redis_passes_events_after_terminal() -> None:
     redis = aioredis.from_url(settings.redis_url, decode_responses=True)
+    run_id = uuid4()
     try:
-        await redis.flushdb()
-        publisher = AgentRunLiveStreamPublisher(redis, RUN_ID, EPOCH_1)
+        publisher = AgentRunLiveStreamPublisher(redis, run_id, EPOCH_1)
         await publisher.begin_attempt()
         await publisher.publish(AgentRunLiveStreamTerminalEvent(status="completed"))
         await publisher.publish(AgentRunLiveStreamStageEvent(stage="retrieving"))
 
-        result = await AgentRunLiveStreamReader(redis).read_after(RUN_ID, EPOCH_1, None)
+        result = await AgentRunLiveStreamReader(redis).read_after(run_id, EPOCH_1, None)
 
         assert result.status is AgentRunLiveStreamReadStatus.EVENTS
         assert [entry.event.type for entry in result.events] == [
@@ -745,7 +796,7 @@ async def test_real_redis_passes_events_after_terminal() -> None:
             "stage",
         ]
     finally:
-        await redis.flushdb()
+        await redis.delete(agent_run_live_stream_key(run_id))
         await redis.aclose()
 
 

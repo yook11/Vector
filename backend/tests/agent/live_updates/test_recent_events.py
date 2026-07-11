@@ -6,7 +6,7 @@ import asyncio
 import json
 import time
 from datetime import UTC, datetime
-from uuid import UUID
+from uuid import UUID, uuid4
 
 import pytest
 import redis.asyncio as aioredis
@@ -94,10 +94,10 @@ async def _sleep_forever() -> None:
 @pytest.mark.integration
 async def test_publisher_reader_round_trip_uses_real_redis_semantics() -> None:
     redis = aioredis.from_url(settings.redis_url, decode_responses=True)
-    key = agent_run_live_events_key(RUN_ID)
+    run_id = uuid4()
+    key = agent_run_live_events_key(run_id)
     try:
-        await redis.flushdb()
-        publisher = AgentRunLiveEventPublisher(redis, RUN_ID)
+        publisher = AgentRunLiveEventPublisher(redis, run_id)
         reader = AgentRunLiveEventReader(redis)
 
         for index in range(51):
@@ -116,7 +116,7 @@ async def test_publisher_reader_round_trip_uses_real_redis_semantics() -> None:
         assert oldest["task_index"] == 1
         assert await redis.ttl(key) in range(1, AGENT_RUN_LIVE_EVENT_TTL_SECONDS + 1)
 
-        events = await reader.recent_events(RUN_ID)
+        events = await reader.recent_events(run_id)
 
         assert [event.task_index for event in events] == list(range(41, 51))
         assert events[0].type == "external_search.queries_generated"
@@ -127,7 +127,7 @@ async def test_publisher_reader_round_trip_uses_real_redis_semantics() -> None:
 
         assert await redis.exists(key) == 0
     finally:
-        await redis.flushdb()
+        await redis.delete(key)
         await redis.aclose()
 
 
@@ -135,9 +135,10 @@ async def test_publisher_reader_round_trip_uses_real_redis_semantics() -> None:
 @pytest.mark.integration
 async def test_all_contract_event_types_round_trip_through_api_schema() -> None:
     redis = aioredis.from_url(settings.redis_url, decode_responses=True)
+    run_id = uuid4()
+    key = agent_run_live_events_key(run_id)
     try:
-        await redis.flushdb()
-        publisher = AgentRunLiveEventPublisher(redis, RUN_ID)
+        publisher = AgentRunLiveEventPublisher(redis, run_id)
         reader = AgentRunLiveEventReader(redis)
         events = [
             InternalSearchStartedEvent(query_count=2),
@@ -162,7 +163,7 @@ async def test_all_contract_event_types_round_trip_through_api_schema() -> None:
         for event in events:
             await publisher.event_occurred(event)
 
-        recent_events = await reader.recent_events(RUN_ID)
+        recent_events = await reader.recent_events(run_id)
 
         assert [event.type for event in recent_events] == [
             "internal_search.started",
@@ -181,7 +182,7 @@ async def test_all_contract_event_types_round_trip_through_api_schema() -> None:
             "NVIDIA の発表が株価へ与える影響は？"
         )
     finally:
-        await redis.flushdb()
+        await redis.delete(key)
         await redis.aclose()
 
 

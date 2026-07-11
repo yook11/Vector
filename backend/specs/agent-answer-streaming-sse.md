@@ -75,9 +75,10 @@ run 中の user message の直下に、次の二層を表示する。
 error code に従い、キャンセル後の下書きは画面から除去する。物理的に provider の
 処理を中断するかは、この仕様の初期範囲には含めない。
 
-client は異なる `attemptEpoch` の `attempt.started` を受信したときだけ、表示中の
-下書きを破棄する。同一epochのmarker重複は、Redis timeout後のlazy retryとして
-起こり得るため、破棄シグナルではない。
+client はevent typeにかかわらず、現在値より大きい `attemptEpoch` を受信した時点で
+表示中の下書きを破棄し、epochを更新してからeventを適用する。`attempt.started` は通常の
+境界通知だが、markerのtrim・publish喪失・decode不良があっても正しさを失わないよう、
+下書き破棄をmarkerの存在だけに依存させない。同一epochのmarker重複は破棄シグナルではない。
 
 ## Architecture
 
@@ -120,8 +121,8 @@ output token 上限を照合して確定するが、次を守る。
 イベントは表示文言でなく、型付き payload とする。日本語表示は frontend が所有する。
 すべてのentryは共通envelopeとして `attemptEpoch` を持つ。Python内部のfield名は
 `attempt_epoch`、SSEでのserialized field名は `attemptEpoch` とする。
-以下の `{ ... }` はSSEへ出す平坦なevent表記であり、Redis entryの `payload` fieldには
-event固有の属性だけを入れる。
+以下の `{ ... }` はSSEへ出す公開data表記であり、Redis entryの `payload` fieldには
+event固有の属性だけを入れる。`activity` は配信制御fieldとdomain payloadを分離するためnestedにする。
 
 ```text
 attempt.started
@@ -131,7 +132,7 @@ stage
   { attemptEpoch, stage: "planning" | "retrieving" | "synthesizing" }
 
 activity
-  { attemptEpoch, type: 既存の検索イベント型, ...既存の安全な属性 }
+  { attemptEpoch, activity: { type: 既存の検索イベント型, ...既存の安全な属性 } }
 
 answer.delta
   { attemptEpoch, generation: positive integer, text: non-empty string }
@@ -146,6 +147,9 @@ terminal
 - `attempt.started` は worker が run の実行を取得した直後に送る。Redis timeoutで
   成否が不明な場合は、同じepochの次のpublish前にlazy retryしてよい。
 - Stream ID を SSE の `id` にそのまま対応させる。client は受信済み ID を再適用しない。
+- activity固有payloadは `activity` fieldへnestedし、frontendは `payload.activity.type` で
+  discriminateする。SSE protocolの `event: activity` と混同するため、JSON field名に
+  `event` は使わず、activity固有fieldもtop-levelへflattenしない。
 - `answer.reset` は、生成結果の検証失敗による retry で以前の下書きを取り消すための
   イベントである。次の generation の delta だけを画面に表示する。
 - `terminal` は DB の commit 後に publish する。publish 失敗時にも polling により
@@ -187,19 +191,34 @@ Last-Event-ID: <optional Redis Stream ID>
 2. run と user の所有権を DB で確認する。存在しない、または他者の run は 404 に収束する。
 3. DBから得た1以上の `attempt_epoch` をreaderへ渡し、`Last-Event-ID` があればその直後、
    無ければ現epochの保持済みeventから読む。小さいepochは送らず、大きいepochを観測したら
-   DB contextを再取得して新attemptへ切り替える。
+   境界前cursorを維持して同じ接続を観測epochへre-pinする。attempt取得transactionはRedis
+   publishより先にcommitされるため、re-pinのためのDB再取得は行わない。
 4. Stream を SSE frame (`id`, `event`, JSON `data`) に変換して送信する。
-5. 定期 heartbeat を送り、terminal を送信したら接続を閉じる。
+5. stream冒頭で `retry: 1000` を送り、10秒間隔のheartbeat commentを送る。
+6. backend request受付から45秒で接続を閉じ、terminalを送信した場合も接続を閉じる。
 
-response は `text/event-stream`、`Cache-Control: no-store` とし、中継・CDN による
+response は `text/event-stream`、`Cache-Control: no-store, no-transform` とし、中継・CDN による
 buffering を避けるヘッダを deployment slice で検証する。Redis が読めないときは
-SSE をエラーとして閉じ、frontend は既存 polling の工程表示へ劣化する。SSE 障害が
+200開始前なら503、開始後ならeventを合成せず接続を閉じ、frontend は既存pollingの工程表示へ
+劣化する。SSE固有のcontrol eventは追加しない。SSE障害が
 run の失敗やDBの状態変更を引き起こしてはならない。
 
 browser は backend に直接接続せず、同一 origin の Next.js Route Handler に
 `EventSource` 接続する。BFF は session を検証し、接続ごとに発行した短命 JWT と
 `Last-Event-ID` を private backend へ中継する。SSE 専用の upstream fetch は既存の
 15 秒 API timeout を使わない。長期接続の中断・cleanup を明示的に扱う。
+
+SSEの接続開始は通常read rate limitと別bucketにし、BFFでsession+run 12回/分、session
+30回/分、IP 120回/分を同時に適用する。open connectionの最終上限はbackendの各API processで
+run 2、user 4、process 50とする。run / user超過は429、process超過は503で開始前に拒否し、
+全終了経路でslotをresponse EOF前に解放する。このsliceではdistributed counterを追加せず、
+1 Uvicorn process/Machine・API Machine最大2を運用制約とするため、全体100は厳密なglobal上限
+ではなく運用上のceilingである。BFF limiterのRedis障害はfail-openするが、request class別の
+metricとPIIを含まない固定event logへ記録する。
+
+45秒のmax age closeは下書き破棄条件ではない。同じEventSourceは `retry: 1000` と
+Last-Event-IDで約1秒後の再接続を開始し、同じepochならdraft、current epoch、適用済みevent IDを
+維持して差分だけを続ける。大きいepochのeventを受信した場合だけepoch境界としてdraftを破棄する。
 
 ## Generation and finalization
 
@@ -255,10 +274,13 @@ assistant message を保存しないことを維持する。
 - attemptの帰属は整数epochの大小比較で決める。新attempt開始後に旧workerが遅延publishしても、
   小さいepochはreaderが返さず、大きいepochは切替境界になる。Stream IDとmarker位置は
   再開・表示通知だけの責務である。
+- 6種類すべてのeventのepoch増加をclientの下書き破棄境界とし、markerだけへ依存しない。
 - SSE 接続は開始時に必ず所有権を確認する。event ID を推測して他者の payload を読む
   経路を作らない。
 - 再接続・再配送・retry で同じ delta が複数届いても、client は ID と generation により
   重複表示しない。
+- max ageによる定常再接続では同じepochのdraftを消さず、loading表示へ戻さず、deltaを
+  二重適用しない。
 - transport readerはterminal後に同epochのentryが届いても捨てない。terminalを受信した
   consumerが、その後の表示更新を無視する。
 - citation marker、source card、missing aspects は最終DB結果からだけ描画する。
@@ -313,6 +335,10 @@ assistant message を保存しないことを維持する。
 8. log、trace、metric、例外に回答本文や Stream payload が含まれない。
 9. 新attemptのmarker後に旧epochのeventが届いても表示されず、同一epochのmarker重複では
    下書きが破棄されない。
+10. BFFのSSE接続開始制限とbackendのrun / user / process同時接続上限が独立して働き、
+    limiter劣化とcapacity拒否をpayload・user ID・run IDなしで観測できる。
+11. activityはnested `activity` fieldとcamelCase属性で配信され、旧 `event` field、flatten、
+    未知activity typeをfrontendへraw転送しない。
 
 ## Done
 
@@ -321,4 +347,6 @@ assistant message を保存しないことを維持する。
 - 切断、retry、cancel、Redis 障害、worker 再配送で回答の正本・引用整合性・所有権が
   壊れない。
 - SSE が使えない場合も、既存の polling 表示と最終結果表示へ安全に劣化する。
+- 接続開始頻度とopen connection数が別々に制限され、process単位の保証と運用上のglobal
+  ceilingを混同しない。
 - 各 slice のテスト、型生成、deploy 環境の検証が完了している。

@@ -6,6 +6,8 @@ from dataclasses import dataclass
 from enum import StrEnum
 from uuid import UUID
 
+from app.agent.runs.types import AgentRunErrorCode, AgentRunStatus
+
 
 class ThreadNotFoundError(Exception):
     """Requested thread is missing or not owned by the current user."""
@@ -38,3 +40,11 @@ class PreparedAgentRun:
     question: str
     user_message_seq: int
     attempt_epoch: int
+
+
+@dataclass(frozen=True, slots=True)
+class OwnedAgentRunLiveContext:
+    run_id: UUID
+    status: AgentRunStatus
+    attempt_epoch: int
+    error_code: AgentRunErrorCode | None

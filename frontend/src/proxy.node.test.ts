@@ -34,6 +34,7 @@ const g = globalThis as unknown as {
   __vectorRateLimitRedis?: unknown;
   __vectorRateLimitErrorLastMs?: number;
   __vectorRateLimitSignalLastMs?: Record<string, number>;
+  __vectorRateLimitFailOpenLastMs?: Record<string, number>;
 };
 
 let warnSpy: MockInstance<typeof console.warn>;
@@ -42,6 +43,7 @@ beforeEach(() => {
   delete g.__vectorRateLimitRedis;
   delete g.__vectorRateLimitErrorLastMs;
   delete g.__vectorRateLimitSignalLastMs;
+  delete g.__vectorRateLimitFailOpenLastMs;
   mockEval.mockReset();
   mockConnect.mockReset();
   mockOn.mockReset();
@@ -81,6 +83,18 @@ function findLoggedEvent(event: string): Record<string, unknown> | undefined {
 }
 
 describe("proxy — rate-limit tier 結線 (ADR-009)", () => {
+  it("SSE route is excluded from the ordinary read bucket", async () => {
+    mockIsOpenValue = true;
+    mockEval.mockResolvedValue(1);
+    const req = mockNextRequest(
+      "http://localhost:3000/api/research/runs/00000000-0000-4000-a000-000000000010/events",
+      { headers: { "x-forwarded-for": "1.2.3.4" } },
+    );
+
+    await proxy(req);
+
+    expect(mockEval).not.toHaveBeenCalled();
+  });
   it("(1) anon POST /api/auth/sign-in/email (dev xff) は rl:ip:<ip> 300 で count される", () => {
     // /api/auth/* も rate-limit を経由するが handler には透過する。
     mockIsOpenValue = true;

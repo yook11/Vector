@@ -73,17 +73,37 @@ const globalForRedis = globalThis as unknown as {
   __vectorRateLimitRedis?: RedisClientType;
   __vectorRateLimitErrorLastMs?: number;
   __vectorRateLimitSignalLastMs?: Record<string, number>;
+  __vectorRateLimitFailOpenLastMs?: Record<string, number>;
 };
 
-function logRedisError(context: string, err: unknown): void {
-  // Redis 永続障害を無音にしないため、warn は 60 秒ごとに継続出力する。
+function logRedisClientError(): void {
   const now = Date.now();
   const last = globalForRedis.__vectorRateLimitErrorLastMs;
   if (last !== undefined && now - last < ERROR_LOG_INTERVAL_MS) {
     return;
   }
-  console.warn(`rate-limit: ${context}, failing open`, err);
+  logServerEvent("warn", "frontend_rate_limit_redis_client_error");
   globalForRedis.__vectorRateLimitErrorLastMs = now;
+}
+
+export type RateLimitRequestClass = "sse" | "read" | "mutation";
+type RateLimitFailOpenError = "unconfigured" | "connect" | "eval";
+
+function recordRateLimitFailOpen(
+  requestClass: RateLimitRequestClass,
+  errorType: RateLimitFailOpenError,
+): void {
+  const now = Date.now();
+  const store = globalForRedis.__vectorRateLimitFailOpenLastMs ?? {};
+  globalForRedis.__vectorRateLimitFailOpenLastMs = store;
+  const key = `${requestClass}:${errorType}`;
+  const last = store[key];
+  if (last !== undefined && now - last < ERROR_LOG_INTERVAL_MS) return;
+  store[key] = now;
+  logServerEvent("warn", "frontend_rate_limit_redis_fail_open", {
+    requestClass,
+    errorType,
+  });
 }
 
 const SIGNAL_EVENT: Record<RateLimitSignal, ServerLogEvent> = {
@@ -123,9 +143,7 @@ function getRateLimitRedisClient(): RedisClientType | null {
   const url = process.env.REDIS_URL_RL || process.env.REDIS_URL;
   if (!url) return null;
   const c = createClient({ url }) as RedisClientType;
-  c.on("error", (err) => {
-    logRedisError("redis client error", err);
-  });
+  c.on("error", logRedisClientError);
   globalForRedis.__vectorRateLimitRedis = c;
   return c;
 }
@@ -175,18 +193,22 @@ return 1
  */
 export async function checkRateLimit(
   plan: RateLimitPlan,
+  options: { requestClass?: RateLimitRequestClass } = {},
 ): Promise<RateLimitDecision> {
   if (plan.tiers.length === 0) {
     return { allowed: true };
   }
   const c = getRateLimitRedisClient();
   if (!c) {
+    recordRateLimitFailOpen(options.requestClass ?? "read", "unconfigured");
     return { allowed: true };
   }
+  let operation: RateLimitFailOpenError = "connect";
   try {
     if (!c.isOpen) {
       await c.connect();
     }
+    operation = "eval";
     const result = (await c.eval(MULTI_SLIDING_WINDOW_SCRIPT, {
       keys: plan.tiers.map((t) => t.key),
       arguments: [
@@ -200,8 +222,8 @@ export async function checkRateLimit(
     return result === 1
       ? { allowed: true }
       : { allowed: false, retryAfterSeconds: WINDOW_SEC };
-  } catch (err) {
-    logRedisError("eval failed", err);
+  } catch {
+    recordRateLimitFailOpen(options.requestClass ?? "read", operation);
     return { allowed: true };
   }
 }

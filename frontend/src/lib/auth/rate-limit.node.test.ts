@@ -40,6 +40,7 @@ const g = globalThis as unknown as {
   __vectorRateLimitRedis?: unknown;
   __vectorRateLimitErrorLastMs?: number;
   __vectorRateLimitSignalLastMs?: Record<string, number>;
+  __vectorRateLimitFailOpenLastMs?: Record<string, number>;
 };
 
 let warnSpy: MockInstance<typeof console.warn>;
@@ -53,6 +54,7 @@ beforeEach(() => {
   delete g.__vectorRateLimitRedis;
   delete g.__vectorRateLimitErrorLastMs;
   delete g.__vectorRateLimitSignalLastMs;
+  delete g.__vectorRateLimitFailOpenLastMs;
   mockEval.mockReset();
   mockConnect.mockReset();
   mockOn.mockReset();
@@ -227,6 +229,32 @@ describe("checkRateLimit", () => {
     );
     expect(decision).toEqual({ allowed: true });
     expect(warnSpy).toHaveBeenCalledOnce();
+    const payload = JSON.parse(warnSpy.mock.calls[0]?.[0] as string);
+    expect(payload).toMatchObject({
+      event: "frontend_rate_limit_redis_fail_open",
+      requestClass: "read",
+      errorType: "eval",
+    });
+    expect(JSON.stringify(payload)).not.toContain("redis down");
+  });
+
+  it("records SSE fail-open with only fixed low-cardinality fields", async () => {
+    mockIsOpenValue = true;
+    mockEval.mockRejectedValue(new Error("SECRET redis://private"));
+
+    await checkRateLimit(plan({ key: "rl:sse:session:hash", limit: 30 }), {
+      requestClass: "sse",
+    });
+
+    const payload = JSON.parse(warnSpy.mock.calls[0]?.[0] as string);
+    expect(payload).toMatchObject({
+      event: "frontend_rate_limit_redis_fail_open",
+      requestClass: "sse",
+      errorType: "eval",
+    });
+    expect(JSON.stringify(payload)).not.toContain("SECRET");
+    expect(JSON.stringify(payload)).not.toContain("private");
+    expect(JSON.stringify(payload)).not.toContain("rl:sse");
   });
 
   it("suppresses repeat warnings within 60 seconds (window-bounded log)", async () => {

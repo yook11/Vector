@@ -47,7 +47,7 @@ class AgentRunLiveStreamStageEvent(_StreamEventBase):
 
 class AgentRunLiveStreamActivityEvent(_StreamEventBase):
     type: Literal["activity"] = "activity"
-    event: AnswerProgressEvent
+    activity: AnswerProgressEvent
 
 
 class AgentRunLiveStreamAnswerDeltaEvent(_StreamEventBase):
