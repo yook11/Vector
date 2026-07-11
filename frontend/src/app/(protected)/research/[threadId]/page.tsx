@@ -3,16 +3,13 @@ import { notFound } from "next/navigation";
 import { ShellMasthead } from "@/components/layout/ShellMasthead";
 import { PaperSurface, PaperTexture } from "@/components/paper";
 import {
-  getResearchThread,
-  getResearchThreads,
+  loadResearchThreadPage,
   parseResearchLimit,
   ResearchUuidSchema,
   ResearchWorkspace,
 } from "@/features/research";
-import { ApiError } from "@/lib/api/error";
 import { requireSession } from "@/lib/auth/guards";
 import type { SearchParams } from "@/lib/types/route";
-import type { ResearchThreadDetail } from "@/types/types.gen";
 
 export const metadata: Metadata = {
   title: "Research Thread | Vector",
@@ -37,23 +34,21 @@ export default async function ResearchThreadPage({
     notFound();
   }
   const limit = parseResearchLimit(rawSearchParams);
-  let thread: ResearchThreadDetail;
-  try {
-    thread = await getResearchThread(parsedThreadId.data);
-  } catch (err) {
-    if (err instanceof ApiError && err.status === 404) {
-      notFound();
-    }
-    throw err;
+  const model = await loadResearchThreadPage(parsedThreadId.data, limit);
+  if (model.state === "not-found") {
+    notFound();
   }
-  const threads = await getResearchThreads(limit);
 
   return (
     <PaperSurface>
       <ShellMasthead />
       <div className="relative min-h-dvh w-full overflow-hidden px-4 pb-6 md:px-6">
         <PaperTexture />
-        <ResearchWorkspace threads={threads} thread={thread} limit={limit} />
+        <ResearchWorkspace
+          threads={model.threads}
+          thread={model.thread}
+          limit={limit}
+        />
       </div>
     </PaperSurface>
   );

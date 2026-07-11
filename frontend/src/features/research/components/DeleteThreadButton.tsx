@@ -17,6 +17,7 @@ import { Button } from "@/components/ui/button";
 import { isRedirectError } from "@/lib/utils/redirect-error";
 import { toastError } from "@/lib/utils/toast-error";
 import { deleteResearchThread } from "../api/delete-research-thread";
+import { useResearchNavigation } from "./ResearchNavigationBoundary";
 
 interface DeleteThreadButtonProps {
   threadId: string;
@@ -27,9 +28,12 @@ export function DeleteThreadButton({
   threadId,
   title,
 }: DeleteThreadButtonProps) {
+  const { isNavigationPending } = useResearchNavigation();
   const [pending, startTransition] = useTransition();
+  const disabled = pending || isNavigationPending;
 
   function handleDelete() {
+    if (disabled) return;
     startTransition(async () => {
       try {
         await deleteResearchThread(threadId);
@@ -50,7 +54,7 @@ export function DeleteThreadButton({
           className="text-[var(--vector-ink-muted)] hover:text-destructive"
           aria-label="スレッドを削除"
           title="スレッドを削除"
-          disabled={pending}
+          disabled={disabled}
         >
           <Trash2 aria-hidden="true" />
         </Button>
@@ -63,10 +67,10 @@ export function DeleteThreadButton({
           </AlertDialogDescription>
         </AlertDialogHeader>
         <AlertDialogFooter>
-          <AlertDialogCancel disabled={pending}>キャンセル</AlertDialogCancel>
+          <AlertDialogCancel disabled={disabled}>キャンセル</AlertDialogCancel>
           <AlertDialogAction
             variant="destructive"
-            disabled={pending}
+            disabled={disabled}
             onClick={handleDelete}
           >
             削除

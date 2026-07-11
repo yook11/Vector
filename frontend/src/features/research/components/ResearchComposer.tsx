@@ -8,6 +8,7 @@ import { isRedirectError } from "@/lib/utils/redirect-error";
 import { toastError } from "@/lib/utils/toast-error";
 import { cancelResearchRun } from "../api/cancel-research-run";
 import { submitResearchQuestion } from "../api/submit-research-question";
+import { useResearchNavigation } from "./ResearchNavigationBoundary";
 
 interface ResearchComposerProps {
   threadId?: string;
@@ -18,10 +19,11 @@ export function ResearchComposer({
   threadId,
   activeRunId,
 }: ResearchComposerProps) {
+  const { isNavigationPending } = useResearchNavigation();
   const router = useRouter();
   const [question, setQuestion] = useState("");
   const [pending, startTransition] = useTransition();
-  const disabled = pending || activeRunId !== null;
+  const disabled = pending || activeRunId !== null || isNavigationPending;
 
   function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -83,7 +85,7 @@ export function ResearchComposer({
             variant="outline"
             className="h-16 border-[var(--vector-rule)] bg-[var(--vector-surface)] text-[var(--vector-ink)]"
             onClick={handleCancel}
-            disabled={pending}
+            disabled={pending || isNavigationPending}
           >
             {pending ? (
               <Loader2 aria-hidden="true" className="animate-spin" />
