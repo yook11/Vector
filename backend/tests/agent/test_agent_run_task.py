@@ -6,6 +6,7 @@ import asyncio
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
+from typing import cast
 from uuid import UUID
 
 import pytest
@@ -22,8 +23,18 @@ from app.agent.contract import (
     ExternalUrlSource,
     InternalArticleSource,
 )
+from app.agent.live_updates.reporters import AgentRunLiveActivityReporter
+from app.agent.live_updates.stream import (
+    AgentRunLiveStreamActivityEvent,
+    AgentRunLiveStreamStageEvent,
+    AgentRunLiveStreamTerminalEvent,
+)
 from app.agent.question_resolution.contract import ResolvedQuestionDraft
-from app.agent.runs.contracts import RunTransitionLostError
+from app.agent.runs.contracts import (
+    CancelRunOutcome,
+    CancelRunResult,
+    RunTransitionLostError,
+)
 from app.agent.runs.repository import AgentRunRepository
 from app.agent.runs.result_mapper import (
     build_assistant_message_for_result,
@@ -88,17 +99,24 @@ class FakeLiveEventPublisher:
 class FakeLiveStreamPublisher:
     instances: list[FakeLiveStreamPublisher] = []
     raise_on_begin = False
+    raise_on_publish = False
 
     def __init__(self, redis: object, run_id: UUID, attempt_epoch: int) -> None:
         self.redis = redis
         self.run_id = run_id
         self.attempt_epoch = attempt_epoch
         self.begin_attempt_calls = 0
+        self.published: list[object] = []
         FakeLiveStreamPublisher.instances.append(self)
 
     async def begin_attempt(self) -> None:
         self.begin_attempt_calls += 1
         if self.raise_on_begin:
+            raise RuntimeError("Redis unavailable")
+
+    async def publish(self, event: object) -> None:
+        self.published.append(event)
+        if self.raise_on_publish:
             raise RuntimeError("Redis unavailable")
 
 
@@ -270,6 +288,65 @@ async def test_read_live_context_for_user_preserves_terminal_error_code(
 
 
 @pytest.mark.asyncio
+async def test_cancel_returns_epoch_from_winning_update_during_acquire_race(
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    async with session_factory() as setup_session:
+        _thread, _message, run = await _create_thread_message_run(setup_session)
+
+    initial_select_finished = asyncio.Event()
+    allow_cancel_update = asyncio.Event()
+
+    class PausingSession:
+        def __init__(self, session: AsyncSession) -> None:
+            self._session = session
+            self.execute_calls = 0
+
+        async def execute(self, *args: object, **kwargs: object) -> object:
+            result = await self._session.execute(*args, **kwargs)
+            self.execute_calls += 1
+            if self.execute_calls == 1:
+                initial_select_finished.set()
+                await allow_cancel_update.wait()
+            return result
+
+    async def cancel() -> CancelRunResult | None:
+        async with session_factory() as raw_session:
+            paused = cast(AsyncSession, PausingSession(raw_session))
+            async with raw_session.begin():
+                return await AgentRunRepository(paused).cancel_run_for_user(
+                    run_id=run.id,
+                    user_id=UUID(TEST_USER_ID),
+                )
+
+    cancel_task = asyncio.create_task(cancel())
+    await asyncio.wait_for(initial_select_finished.wait(), timeout=1)
+    try:
+        async with session_factory() as acquire_session:
+            async with acquire_session.begin():
+                prepared = await AgentRunRepository(
+                    acquire_session
+                ).acquire_for_execution(run.id)
+        assert prepared is not None
+        assert prepared.attempt_epoch == 1
+    finally:
+        allow_cancel_update.set()
+
+    result = await asyncio.wait_for(cancel_task, timeout=2)
+
+    assert result == CancelRunResult(
+        outcome=CancelRunOutcome.CANCELLED,
+        attempt_epoch=1,
+    )
+    async with session_factory() as session:
+        cancelled = await session.get(AgentRun, run.id)
+        assert cancelled is not None
+        assert cancelled.status == "failed"
+        assert cancelled.error_code == "cancelled"
+        assert cancelled.attempt_epoch == 1
+
+
+@pytest.mark.asyncio
 async def test_run_agent_answer_completes_run_and_persists_assistant_message(
     session_factory: async_sessionmaker[AsyncSession],
     monkeypatch: pytest.MonkeyPatch,
@@ -326,6 +403,7 @@ async def test_run_agent_answer_completion_preserves_last_progress_stage(
     async with session_factory() as session:
         _thread, _message, run = await _create_thread_message_run(session)
     fake_agent = FakeAgent(_direct_result(), stage="synthesizing")
+    FakeLiveStreamPublisher.instances = []
 
     def build_agent(**kwargs: object) -> FakeAgent:
         fake_agent.progress = kwargs["progress"]
@@ -333,6 +411,16 @@ async def test_run_agent_answer_completion_preserves_last_progress_stage(
 
     monkeypatch.setattr(agent_run_tasks, "make_safe_async_client", _fake_http_client)
     monkeypatch.setattr(agent_run_tasks, "build_question_answering_agent", build_agent)
+    monkeypatch.setattr(
+        agent_run_tasks,
+        "AgentRunLiveEventPublisher",
+        FakeLiveEventPublisher,
+    )
+    monkeypatch.setattr(
+        agent_run_tasks,
+        "AgentRunLiveStreamPublisher",
+        FakeLiveStreamPublisher,
+    )
 
     await agent_run_tasks.run_agent_answer(
         trigger=AgentRunTrigger(run_id=run.id),
@@ -344,6 +432,13 @@ async def test_run_agent_answer_completion_preserves_last_progress_stage(
         assert completed is not None
         assert completed.status == "completed"
         assert completed.progress_stage == "synthesizing"
+    stream = FakeLiveStreamPublisher.instances[0]
+    stages = [
+        event
+        for event in stream.published
+        if isinstance(event, AgentRunLiveStreamStageEvent)
+    ]
+    assert [event.stage for event in stages] == ["synthesizing"]
 
 
 @pytest.mark.asyncio
@@ -381,7 +476,7 @@ async def test_run_agent_answer_resets_live_events_and_injects_reporter(
     assert publisher.redis is redis
     assert publisher.run_id == run.id
     assert publisher.reset_calls == 1
-    assert captured_kwargs["events"] is publisher
+    assert isinstance(captured_kwargs["events"], AgentRunLiveActivityReporter)
 
 
 @pytest.mark.asyncio
@@ -520,6 +615,7 @@ async def test_run_agent_answer_resolves_history_and_publishes_non_echo_question
         )
     )
     FakeLiveEventPublisher.instances = []
+    FakeLiveStreamPublisher.instances = []
     monkeypatch.setattr(agent_run_tasks, "make_safe_async_client", _fake_http_client)
     monkeypatch.setattr(
         agent_run_tasks,
@@ -535,6 +631,11 @@ async def test_run_agent_answer_resolves_history_and_publishes_non_echo_question
         agent_run_tasks,
         "AgentRunLiveEventPublisher",
         FakeLiveEventPublisher,
+    )
+    monkeypatch.setattr(
+        agent_run_tasks,
+        "AgentRunLiveStreamPublisher",
+        FakeLiveStreamPublisher,
     )
 
     await agent_run_tasks.run_agent_answer(
@@ -561,6 +662,363 @@ async def test_run_agent_answer_resolves_history_and_publishes_non_echo_question
     assert getattr(publisher.events[0], "type") == "question.resolved"
     assert getattr(publisher.events[0], "standalone_question") == (
         "NVIDIA の発表が株価へ与える影響は？"
+    )
+    stream_activities = [
+        event
+        for event in FakeLiveStreamPublisher.instances[0].published
+        if isinstance(event, AgentRunLiveStreamActivityEvent)
+    ]
+    assert len(stream_activities) == 1
+    assert stream_activities[0].activity == publisher.events[0]
+
+
+@pytest.mark.asyncio
+async def test_run_agent_answer_publishes_completed_terminal_after_commit(
+    session_factory: async_sessionmaker[AsyncSession],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async with session_factory() as session:
+        _thread, _message, run = await _create_thread_message_run(session)
+    fake_agent = FakeAgent(_direct_result())
+    FakeLiveStreamPublisher.instances = []
+
+    class CommitCheckingPublisher(FakeLiveStreamPublisher):
+        async def publish(self, event: object) -> None:
+            if isinstance(event, AgentRunLiveStreamTerminalEvent):
+                async with session_factory() as session:
+                    persisted = await session.get(AgentRun, run.id)
+                    assert persisted is not None
+                    assert persisted.status == "completed"
+            await super().publish(event)
+
+    monkeypatch.setattr(agent_run_tasks, "make_safe_async_client", _fake_http_client)
+    monkeypatch.setattr(
+        agent_run_tasks,
+        "build_question_answering_agent",
+        lambda **_kwargs: fake_agent,
+    )
+    monkeypatch.setattr(
+        agent_run_tasks,
+        "AgentRunLiveEventPublisher",
+        FakeLiveEventPublisher,
+    )
+    monkeypatch.setattr(
+        agent_run_tasks,
+        "AgentRunLiveStreamPublisher",
+        CommitCheckingPublisher,
+    )
+
+    await agent_run_tasks.run_agent_answer(
+        trigger=AgentRunTrigger(run_id=run.id),
+        ctx=_ctx(session_factory),
+    )
+
+    terminal = [
+        event
+        for event in FakeLiveStreamPublisher.instances[0].published
+        if isinstance(event, AgentRunLiveStreamTerminalEvent)
+    ]
+    assert terminal == [AgentRunLiveStreamTerminalEvent(status="completed")]
+
+
+@pytest.mark.asyncio
+async def test_run_agent_answer_publishes_failed_terminal_after_commit(
+    session_factory: async_sessionmaker[AsyncSession],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async with session_factory() as session:
+        _thread, _message, run = await _create_thread_message_run(session)
+    fake_agent = FakeAgent(exc=AIProviderError("provider unavailable"))
+    FakeLiveStreamPublisher.instances = []
+
+    class CommitCheckingPublisher(FakeLiveStreamPublisher):
+        async def publish(self, event: object) -> None:
+            if isinstance(event, AgentRunLiveStreamTerminalEvent):
+                async with session_factory() as session:
+                    persisted = await session.get(AgentRun, run.id)
+                    assert persisted is not None
+                    assert persisted.status == "failed"
+                    assert persisted.error_code == "generation_unavailable"
+            await super().publish(event)
+
+    monkeypatch.setattr(agent_run_tasks, "make_safe_async_client", _fake_http_client)
+    monkeypatch.setattr(
+        agent_run_tasks,
+        "build_question_answering_agent",
+        lambda **_kwargs: fake_agent,
+    )
+    monkeypatch.setattr(
+        agent_run_tasks,
+        "AgentRunLiveEventPublisher",
+        FakeLiveEventPublisher,
+    )
+    monkeypatch.setattr(
+        agent_run_tasks,
+        "AgentRunLiveStreamPublisher",
+        CommitCheckingPublisher,
+    )
+
+    await agent_run_tasks.run_agent_answer(
+        trigger=AgentRunTrigger(run_id=run.id),
+        ctx=_ctx(session_factory),
+    )
+
+    terminal = [
+        event
+        for event in FakeLiveStreamPublisher.instances[0].published
+        if isinstance(event, AgentRunLiveStreamTerminalEvent)
+    ]
+    assert terminal == [
+        AgentRunLiveStreamTerminalEvent(
+            status="failed",
+            errorCode="generation_unavailable",
+        )
+    ]
+
+
+@pytest.mark.asyncio
+async def test_completion_failure_uses_failed_terminal_choke_point(
+    session_factory: async_sessionmaker[AsyncSession],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async with session_factory() as session:
+        _thread, _message, run = await _create_thread_message_run(session)
+    fake_agent = FakeAgent(_direct_result())
+    FakeLiveStreamPublisher.instances = []
+
+    async def fail_completion(
+        _repo: AgentRunRepository,
+        **_kwargs: object,
+    ) -> bool:
+        raise RuntimeError("completion failed")
+
+    monkeypatch.setattr(agent_run_tasks, "make_safe_async_client", _fake_http_client)
+    monkeypatch.setattr(
+        agent_run_tasks,
+        "build_question_answering_agent",
+        lambda **_kwargs: fake_agent,
+    )
+    monkeypatch.setattr(
+        agent_run_tasks,
+        "AgentRunLiveEventPublisher",
+        FakeLiveEventPublisher,
+    )
+    monkeypatch.setattr(
+        agent_run_tasks,
+        "AgentRunLiveStreamPublisher",
+        FakeLiveStreamPublisher,
+    )
+    monkeypatch.setattr(AgentRunRepository, "complete_run", fail_completion)
+
+    await agent_run_tasks.run_agent_answer(
+        trigger=AgentRunTrigger(run_id=run.id),
+        ctx=_ctx(session_factory),
+    )
+
+    async with session_factory() as session:
+        persisted = await session.get(AgentRun, run.id)
+        assert persisted is not None
+        assert persisted.status == "failed"
+        assert persisted.error_code == "internal_error"
+    terminal = [
+        event
+        for event in FakeLiveStreamPublisher.instances[0].published
+        if isinstance(event, AgentRunLiveStreamTerminalEvent)
+    ]
+    assert terminal == [
+        AgentRunLiveStreamTerminalEvent(
+            status="failed",
+            errorCode="internal_error",
+        )
+    ]
+
+
+@pytest.mark.asyncio
+async def test_completion_transition_loser_does_not_publish_terminal(
+    session_factory: async_sessionmaker[AsyncSession],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async with session_factory() as session:
+        _thread, _message, run = await _create_thread_message_run(session)
+    fake_agent = FakeAgent(_direct_result())
+    FakeLiveStreamPublisher.instances = []
+
+    async def lose_completion(
+        _repo: AgentRunRepository,
+        **_kwargs: object,
+    ) -> bool:
+        raise RunTransitionLostError
+
+    monkeypatch.setattr(agent_run_tasks, "make_safe_async_client", _fake_http_client)
+    monkeypatch.setattr(
+        agent_run_tasks,
+        "build_question_answering_agent",
+        lambda **_kwargs: fake_agent,
+    )
+    monkeypatch.setattr(
+        agent_run_tasks,
+        "AgentRunLiveEventPublisher",
+        FakeLiveEventPublisher,
+    )
+    monkeypatch.setattr(
+        agent_run_tasks,
+        "AgentRunLiveStreamPublisher",
+        FakeLiveStreamPublisher,
+    )
+    monkeypatch.setattr(AgentRunRepository, "complete_run", lose_completion)
+
+    await agent_run_tasks.run_agent_answer(
+        trigger=AgentRunTrigger(run_id=run.id),
+        ctx=_ctx(session_factory),
+    )
+
+    terminal = [
+        event
+        for event in FakeLiveStreamPublisher.instances[0].published
+        if isinstance(event, AgentRunLiveStreamTerminalEvent)
+    ]
+    assert terminal == []
+
+
+@pytest.mark.asyncio
+async def test_completion_skip_does_not_publish_terminal(
+    session_factory: async_sessionmaker[AsyncSession],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async with session_factory() as session:
+        _thread, _message, run = await _create_thread_message_run(session)
+    fake_agent = FakeAgent(_direct_result())
+    FakeLiveStreamPublisher.instances = []
+
+    async def skip_completion(
+        _repo: AgentRunRepository,
+        **_kwargs: object,
+    ) -> bool:
+        return False
+
+    monkeypatch.setattr(agent_run_tasks, "make_safe_async_client", _fake_http_client)
+    monkeypatch.setattr(
+        agent_run_tasks,
+        "build_question_answering_agent",
+        lambda **_kwargs: fake_agent,
+    )
+    monkeypatch.setattr(
+        agent_run_tasks,
+        "AgentRunLiveEventPublisher",
+        FakeLiveEventPublisher,
+    )
+    monkeypatch.setattr(
+        agent_run_tasks,
+        "AgentRunLiveStreamPublisher",
+        FakeLiveStreamPublisher,
+    )
+    monkeypatch.setattr(AgentRunRepository, "complete_run", skip_completion)
+
+    await agent_run_tasks.run_agent_answer(
+        trigger=AgentRunTrigger(run_id=run.id),
+        ctx=_ctx(session_factory),
+    )
+
+    terminal = [
+        event
+        for event in FakeLiveStreamPublisher.instances[0].published
+        if isinstance(event, AgentRunLiveStreamTerminalEvent)
+    ]
+    assert terminal == []
+
+
+@pytest.mark.asyncio
+async def test_failed_transition_loser_does_not_publish_terminal(
+    session_factory: async_sessionmaker[AsyncSession],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async with session_factory() as session:
+        _thread, _message, run = await _create_thread_message_run(session)
+    fake_agent = FakeAgent(exc=AIProviderError("provider unavailable"))
+    FakeLiveStreamPublisher.instances = []
+
+    async def lose_transition(
+        _repo: AgentRunRepository,
+        _run_id: UUID,
+        **_kwargs: object,
+    ) -> bool:
+        return False
+
+    monkeypatch.setattr(agent_run_tasks, "make_safe_async_client", _fake_http_client)
+    monkeypatch.setattr(
+        agent_run_tasks,
+        "build_question_answering_agent",
+        lambda **_kwargs: fake_agent,
+    )
+    monkeypatch.setattr(
+        agent_run_tasks,
+        "AgentRunLiveEventPublisher",
+        FakeLiveEventPublisher,
+    )
+    monkeypatch.setattr(
+        agent_run_tasks,
+        "AgentRunLiveStreamPublisher",
+        FakeLiveStreamPublisher,
+    )
+    monkeypatch.setattr(AgentRunRepository, "mark_failed", lose_transition)
+
+    await agent_run_tasks.run_agent_answer(
+        trigger=AgentRunTrigger(run_id=run.id),
+        ctx=_ctx(session_factory),
+    )
+
+    terminal = [
+        event
+        for event in FakeLiveStreamPublisher.instances[0].published
+        if isinstance(event, AgentRunLiveStreamTerminalEvent)
+    ]
+    assert terminal == []
+
+
+@pytest.mark.asyncio
+async def test_terminal_publish_failure_does_not_revert_completed_run(
+    session_factory: async_sessionmaker[AsyncSession],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async with session_factory() as session:
+        _thread, _message, run = await _create_thread_message_run(session)
+    fake_agent = FakeAgent(_direct_result(), stage="synthesizing")
+    FakeLiveStreamPublisher.instances = []
+    monkeypatch.setattr(FakeLiveStreamPublisher, "raise_on_publish", True)
+
+    def build_agent(**kwargs: object) -> FakeAgent:
+        fake_agent.progress = kwargs["progress"]
+        return fake_agent
+
+    monkeypatch.setattr(agent_run_tasks, "make_safe_async_client", _fake_http_client)
+    monkeypatch.setattr(
+        agent_run_tasks,
+        "build_question_answering_agent",
+        build_agent,
+    )
+    monkeypatch.setattr(
+        agent_run_tasks,
+        "AgentRunLiveEventPublisher",
+        FakeLiveEventPublisher,
+    )
+    monkeypatch.setattr(
+        agent_run_tasks,
+        "AgentRunLiveStreamPublisher",
+        FakeLiveStreamPublisher,
+    )
+
+    await agent_run_tasks.run_agent_answer(
+        trigger=AgentRunTrigger(run_id=run.id),
+        ctx=_ctx(session_factory),
+    )
+
+    async with session_factory() as session:
+        persisted = await session.get(AgentRun, run.id)
+        assert persisted is not None
+        assert persisted.status == "completed"
+    assert any(
+        isinstance(event, AgentRunLiveStreamTerminalEvent)
+        for event in FakeLiveStreamPublisher.instances[0].published
     )
 
 
@@ -808,11 +1266,22 @@ async def test_run_agent_answer_unexpected_error_marks_internal_error(
     async with session_factory() as session:
         _thread, _message, run = await _create_thread_message_run(session)
     fake_agent = FakeAgent(exc=RuntimeError("SHOULD_NOT_LEAK"))
+    FakeLiveStreamPublisher.instances = []
     monkeypatch.setattr(agent_run_tasks, "make_safe_async_client", _fake_http_client)
     monkeypatch.setattr(
         agent_run_tasks,
         "build_question_answering_agent",
         lambda **_kwargs: fake_agent,
+    )
+    monkeypatch.setattr(
+        agent_run_tasks,
+        "AgentRunLiveEventPublisher",
+        FakeLiveEventPublisher,
+    )
+    monkeypatch.setattr(
+        agent_run_tasks,
+        "AgentRunLiveStreamPublisher",
+        FakeLiveStreamPublisher,
     )
 
     await agent_run_tasks.run_agent_answer(
@@ -837,6 +1306,17 @@ async def test_run_agent_answer_unexpected_error_marks_internal_error(
             .all()
         )
         assert [m.role for m in messages] == ["user"]
+    terminal = [
+        event
+        for event in FakeLiveStreamPublisher.instances[0].published
+        if isinstance(event, AgentRunLiveStreamTerminalEvent)
+    ]
+    assert terminal == [
+        AgentRunLiveStreamTerminalEvent(
+            status="failed",
+            errorCode="internal_error",
+        )
+    ]
 
 
 @pytest.mark.asyncio

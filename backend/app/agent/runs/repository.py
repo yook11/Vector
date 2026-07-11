@@ -14,6 +14,7 @@ from app.agent.runs.citation_integrity import assess_citation_integrity
 from app.agent.runs.contracts import (
     ActiveRunConflictError,
     CancelRunOutcome,
+    CancelRunResult,
     CreatedAgentRun,
     OwnedAgentRunLiveContext,
     PreparedAgentRun,
@@ -297,7 +298,7 @@ class AgentRunRepository:
         run_id: uuid_mod.UUID,
         user_id: uuid_mod.UUID,
         now: datetime | None = None,
-    ) -> CancelRunOutcome | None:
+    ) -> CancelRunResult | None:
         now = now or datetime.now(UTC)
         run = (
             await self._session.execute(
@@ -313,25 +314,33 @@ class AgentRunRepository:
             return None
         status_value = AgentRunStatus(run.status)
         if status_value is AgentRunStatus.COMPLETED:
-            return CancelRunOutcome.ALREADY_COMPLETED
+            return CancelRunResult(CancelRunOutcome.ALREADY_COMPLETED)
         if status_value is AgentRunStatus.FAILED:
-            return CancelRunOutcome.ALREADY_FAILED
+            return CancelRunResult(CancelRunOutcome.ALREADY_FAILED)
 
         result = await self._session.execute(
             update(AgentRun)
             .where(
                 AgentRun.id == run_id,
                 AgentRun.status.in_(_ACTIVE_STATUSES),
+                AgentRun.thread_id.in_(
+                    select(AgentThread.id).where(AgentThread.user_id == user_id)
+                ),
             )
             .values(
                 status=AgentRunStatus.FAILED.value,
                 error_code=AgentRunErrorCode.CANCELLED.value,
                 completed_at=now,
             )
+            .returning(AgentRun.attempt_epoch)
             .execution_options(synchronize_session=False)
         )
-        if (result.rowcount or 0) == 1:
-            return CancelRunOutcome.CANCELLED
+        attempt_epoch = result.scalar_one_or_none()
+        if attempt_epoch is not None:
+            return CancelRunResult(
+                outcome=CancelRunOutcome.CANCELLED,
+                attempt_epoch=attempt_epoch,
+            )
 
         refreshed_status = (
             await self._session.execute(
@@ -346,8 +355,8 @@ class AgentRunRepository:
         if refreshed_status is None:
             return None
         if AgentRunStatus(refreshed_status) is AgentRunStatus.COMPLETED:
-            return CancelRunOutcome.ALREADY_COMPLETED
-        return CancelRunOutcome.ALREADY_FAILED
+            return CancelRunResult(CancelRunOutcome.ALREADY_COMPLETED)
+        return CancelRunResult(CancelRunOutcome.ALREADY_FAILED)
 
     async def sweep_stale_runs(
         self,

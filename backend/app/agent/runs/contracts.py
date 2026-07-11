@@ -28,6 +28,19 @@ class CancelRunOutcome(StrEnum):
 
 
 @dataclass(frozen=True, slots=True)
+class CancelRunResult:
+    outcome: CancelRunOutcome
+    attempt_epoch: int | None = None
+
+    def __post_init__(self) -> None:
+        if self.outcome is CancelRunOutcome.CANCELLED:
+            if self.attempt_epoch is None or self.attempt_epoch < 0:
+                raise ValueError("cancelled run requires a non-negative attempt epoch")
+        elif self.attempt_epoch is not None:
+            raise ValueError("attempt epoch is only valid for a cancelled run")
+
+
+@dataclass(frozen=True, slots=True)
 class CreatedAgentRun:
     thread_id: UUID
     run_id: UUID

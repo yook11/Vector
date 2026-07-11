@@ -16,7 +16,14 @@ from app.agent.composition import (
 )
 from app.agent.contract import AnswerQuestionInput, QuestionResolvedEvent
 from app.agent.live_updates.recent_events import AgentRunLiveEventPublisher
-from app.agent.live_updates.stream import AgentRunLiveStreamPublisher
+from app.agent.live_updates.reporters import (
+    AgentRunLiveActivityReporter,
+    AgentRunLiveStageReporter,
+)
+from app.agent.live_updates.stream import (
+    AgentRunLiveStreamPublisher,
+    AgentRunLiveStreamTerminalEvent,
+)
 from app.agent.question_resolution.service import (
     HISTORY_MESSAGE_LIMIT,
     QuestionResolutionService,
@@ -75,6 +82,14 @@ async def run_agent_answer(
 
     try:
         await events.reset()
+        activity_reporter = AgentRunLiveActivityReporter(events, stream_events)
+        progress_reporter = AgentRunLiveStageReporter(
+            AgentRunProgressWriter(
+                session_factory,
+                prepared.run_id,
+            ),
+            stream_events,
+        )
         as_of = datetime.now(UTC)
         history = await _read_history(session_factory, prepared)
         resolver = build_question_resolver() if history else None
@@ -85,7 +100,7 @@ async def run_agent_answer(
             run_id=prepared.run_id,
         )
         if resolved.standalone_question.strip() != prepared.question.strip():
-            await events.event_occurred(
+            await activity_reporter.event_occurred(
                 QuestionResolvedEvent(
                     standalone_question=resolved.standalone_question,
                 )
@@ -94,11 +109,8 @@ async def run_agent_answer(
             agent = build_question_answering_agent(
                 session_factory=session_factory,
                 tavily_client=tavily_client,
-                progress=AgentRunProgressWriter(
-                    session_factory,
-                    prepared.run_id,
-                ),
-                events=events,
+                progress=progress_reporter,
+                events=activity_reporter,
             )
             result = await agent.answer(
                 AnswerQuestionInput(
@@ -124,6 +136,7 @@ async def run_agent_answer(
             session_factory,
             prepared.run_id,
             AgentRunErrorCode.GENERATION_UNAVAILABLE,
+            stream_events,
         )
         return
     except Exception as exc:
@@ -136,6 +149,7 @@ async def run_agent_answer(
             session_factory,
             prepared.run_id,
             AgentRunErrorCode.INTERNAL_ERROR,
+            stream_events,
         )
         return
 
@@ -151,6 +165,12 @@ async def run_agent_answer(
                         "agent_run_completion_skipped",
                         run_id=str(prepared.run_id),
                     )
+        if completed:
+            await _publish_terminal(
+                stream_events,
+                prepared.run_id,
+                AgentRunLiveStreamTerminalEvent(status="completed"),
+            )
     except RunTransitionLostError:
         logger.info("agent_run_completion_lost_race", run_id=str(prepared.run_id))
     except Exception as exc:
@@ -163,6 +183,7 @@ async def run_agent_answer(
             session_factory,
             prepared.run_id,
             AgentRunErrorCode.INTERNAL_ERROR,
+            stream_events,
         )
 
 
@@ -215,10 +236,37 @@ async def _mark_failed(
     session_factory: async_sessionmaker[AsyncSession],
     run_id: UUID,
     error_code: AgentRunErrorCode,
-) -> None:
+    stream_events: AgentRunLiveStreamPublisher,
+) -> bool:
     async with session_factory() as session:
         async with session.begin():
-            await AgentRunRepository(session).mark_failed(
+            transitioned = await AgentRunRepository(session).mark_failed(
                 run_id,
                 error_code=error_code,
             )
+    if not transitioned:
+        return False
+    await _publish_terminal(
+        stream_events,
+        run_id,
+        AgentRunLiveStreamTerminalEvent(
+            status="failed",
+            errorCode=error_code,
+        ),
+    )
+    return True
+
+
+async def _publish_terminal(
+    stream_events: AgentRunLiveStreamPublisher,
+    run_id: UUID,
+    event: AgentRunLiveStreamTerminalEvent,
+) -> None:
+    try:
+        await stream_events.publish(event)
+    except Exception:
+        logger.warning(
+            "agent_run_live_stream_terminal_publish_failed",
+            run_id=str(run_id),
+            terminal_status=event.status,
+        )

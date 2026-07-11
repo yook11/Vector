@@ -6,6 +6,7 @@ import asyncio
 import json
 import time
 from datetime import UTC, datetime
+from unittest.mock import AsyncMock
 from uuid import UUID, uuid4
 
 import pytest
@@ -27,6 +28,18 @@ from app.agent.live_updates.recent_events import (
     AgentRunLiveEventPublisher,
     AgentRunLiveEventReader,
     agent_run_live_events_key,
+)
+from app.agent.live_updates.reporters import (
+    AgentRunLiveActivityReporter,
+    AgentRunLiveStageReporter,
+)
+from app.agent.live_updates.sse import serialize_agent_run_sse_entry
+from app.agent.live_updates.stream import (
+    AgentRunLiveStreamPublisher,
+    AgentRunLiveStreamReader,
+    AgentRunLiveStreamReadStatus,
+    AgentRunLiveStreamTerminalEvent,
+    agent_run_live_stream_key,
 )
 from app.config import settings
 
@@ -183,6 +196,74 @@ async def test_all_contract_event_types_round_trip_through_api_schema() -> None:
         )
     finally:
         await redis.delete(key)
+        await redis.aclose()
+
+
+@pytest.mark.asyncio
+@pytest.mark.integration
+async def test_live_reporters_dual_write_and_project_activity_at_sse_boundary() -> None:
+    redis = aioredis.from_url(settings.redis_url, decode_responses=True)
+    run_id = uuid4()
+    list_key = agent_run_live_events_key(run_id)
+    stream_key = agent_run_live_stream_key(run_id)
+    epoch = 3
+    try:
+        list_publisher = AgentRunLiveEventPublisher(redis, run_id)
+        stream_publisher = AgentRunLiveStreamPublisher(redis, run_id, epoch)
+        stage_reporter = AgentRunLiveStageReporter(AsyncMock(), stream_publisher)
+        activity_reporter = AgentRunLiveActivityReporter(
+            list_publisher,
+            stream_publisher,
+        )
+        activity = ExternalSearchCandidatesFetchedEvent(
+            task_index=2,
+            candidate_count=5,
+        )
+
+        await stream_publisher.begin_attempt()
+        await stage_reporter.stage_changed("retrieving")
+        await activity_reporter.event_occurred(activity)
+        await stream_publisher.publish(
+            AgentRunLiveStreamTerminalEvent(status="completed")
+        )
+
+        stream_entries = await redis.xrange(stream_key)
+        assert [fields["type"] for _stream_id, fields in stream_entries] == [
+            "attempt.started",
+            "stage",
+            "activity",
+            "terminal",
+        ]
+        activity_payload = json.loads(stream_entries[2][1]["payload"])
+        assert activity_payload == {
+            "activity": {
+                "type": "external_search.candidates_fetched",
+                "task_index": 2,
+                "candidate_count": 5,
+            }
+        }
+
+        list_entries = await redis.lrange(list_key, 0, -1)
+        assert len(list_entries) == 1
+        assert json.loads(list_entries[0])["task_index"] == 2
+
+        result = await AgentRunLiveStreamReader(redis).read_after(
+            run_id,
+            epoch,
+            None,
+        )
+        assert result.status is AgentRunLiveStreamReadStatus.EVENTS
+        activity_entry = next(
+            entry for entry in result.events if entry.event.type == "activity"
+        )
+        frame = serialize_agent_run_sse_entry(activity_entry)
+        assert frame is not None
+        assert b'"taskIndex":2' in frame
+        assert b'"candidateCount":5' in frame
+        assert b"task_index" not in frame
+        assert b"candidate_count" not in frame
+    finally:
+        await redis.delete(list_key, stream_key)
         await redis.aclose()
 
 

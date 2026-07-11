@@ -123,6 +123,9 @@ output token 上限を照合して確定するが、次を守る。
 `attempt_epoch`、SSEでのserialized field名は `attemptEpoch` とする。
 以下の `{ ... }` はSSEへ出す公開data表記であり、Redis entryの `payload` fieldには
 event固有の属性だけを入れる。`activity` は配信制御fieldとdomain payloadを分離するためnestedにする。
+Redis Stream内のactivity固有fieldはPython domain modelのsnake_caseを保ち、JavaScriptへ公開する
+SSE serializer境界でだけcamelCaseへ変換する。ケース変換のためにdomain modelをcamelCase化したり、
+継承modelを作ったりしない。
 
 ```text
 attempt.started
@@ -304,20 +307,25 @@ assistant message を保存しないことを維持する。
 実装は次の順で分ける。各 slice は Problem / Evidence / Invariants / Done を個別に
 定義し、前の slice の検証が完了してから次へ進む。
 
+現在は1〜4まで実装済みであり、次は5のDirect answer deltasである。
+
 1. **Live stream transport**: Redis Stream の key / TTL / ACL / publisher / reader、
    event vocabulary、実Redisでの replay・timeout・payload非露出テスト。
 2. **Attempt epoch fencing token**: DB採番の正整数epoch、ゾンビworker除外、
    `attempt_advanced` と境界非消費。
 3. **SSE backend and BFF**: FastAPI の所有権確認付き SSE、Next.js の同一 origin proxy、
    reconnect / heartbeat / terminal close。新しい外部API契約のため `/api-contract` を使う。
-4. **Direct answer deltas**: plain text generator の streaming 化、coalescing、final
+4. **Live event producer wiring**: 既存の DB stage / Redis List activity を残したまま
+   Redis Stream へ二重書きし、DB commit 後の completed / failed / cancelled terminal を
+   best-effort で接続する。専用仕様は `agent-live-event-producer-wiring-slice.md`。
+5. **Direct answer deltas**: plain text generator の streaming 化、coalescing、final
    persistence と terminal 順序、cancel後の抑止。
-5. **Evidence answer draft deltas**: structured JSON の増分復元、retry 時の reset、
+6. **Evidence answer draft deltas**: structured JSON の増分復元、retry 時の reset、
    citation検証後の確定表示。この slice は既存 synthesis contract の変更範囲を先に
    確認する。
-6. **Research UI**: 工程表示と下書き領域、EventSource lifecycle、replay / reset /
+7. **Research UI**: 工程表示と下書き領域、EventSource lifecycle、replay / reset /
    terminal / polling fallback、アクセシビリティ。
-7. **Operational verification**: Fly の buffering・idle timeout、Redis ACL、observability、
+8. **Operational verification**: Fly の buffering・idle timeout、Redis ACL、observability、
    負荷・障害時の劣化、E2E。
 
 ## Verification

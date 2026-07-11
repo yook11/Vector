@@ -17,6 +17,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 import app.agent.router as research_router_module
 from app.agent.contract import AnswerQuestionResult, AnswerRetrievalSummary
+from app.agent.live_updates.stream import AgentRunLiveStreamTerminalEvent
 from app.agent.runs.repository import AgentRunRepository
 from app.config import settings
 from app.dependencies import get_redis_client
@@ -56,6 +57,23 @@ class FakeRunEventsRedis:
         if self.exc is not None:
             raise self.exc
         return list(self.values)
+
+
+class FakeCancelStreamPublisher:
+    instances: list[FakeCancelStreamPublisher] = []
+    raise_on_publish = False
+
+    def __init__(self, redis: object, run_id: UUID, attempt_epoch: int) -> None:
+        self.redis = redis
+        self.run_id = run_id
+        self.attempt_epoch = attempt_epoch
+        self.published: list[object] = []
+        self.instances.append(self)
+
+    async def publish(self, event: object) -> None:
+        self.published.append(event)
+        if self.raise_on_publish:
+            raise RuntimeError("Redis unavailable")
 
 
 @pytest.fixture(autouse=True)
@@ -166,6 +184,7 @@ async def _create_run(
     assistant_message_id: UUID | None = None,
     error_code: str | None = None,
     progress_stage: str | None = None,
+    attempt_epoch: int | None = None,
 ) -> AgentRun:
     run = AgentRun(
         thread_id=thread_id,
@@ -175,6 +194,8 @@ async def _create_run(
         error_code=error_code,
         progress_stage=progress_stage,
     )
+    if attempt_epoch is not None:
+        run.attempt_epoch = attempt_epoch
     session.add(run)
     await session.commit()
     await session.refresh(run)
@@ -916,10 +937,126 @@ class TestCancelResearchRun:
         assert run.status == "failed"
         assert run.error_code == "cancelled"
 
+    async def test_cancel_running_run_publishes_terminal_after_commit(
+        self,
+        research_client: tuple[AsyncClient, FakeEnqueue],
+        db_session: AsyncSession,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        client, _fake_enqueue = research_client
+        thread = await _create_thread(db_session)
+        user_message = await _create_message(
+            db_session, thread_id=thread.id, seq=1, role="user", content="running"
+        )
+        run = await _create_run(
+            db_session,
+            thread_id=thread.id,
+            user_message_id=user_message.id,
+            status="running",
+            attempt_epoch=3,
+        )
+        FakeCancelStreamPublisher.instances = []
+
+        class CommitCheckingPublisher(FakeCancelStreamPublisher):
+            async def publish(self, event: object) -> None:
+                assert not db_session.in_transaction()
+                await super().publish(event)
+
+        monkeypatch.setattr(
+            research_router_module,
+            "AgentRunLiveStreamPublisher",
+            CommitCheckingPublisher,
+            raising=False,
+        )
+
+        response = await client.post(f"/api/v1/research/runs/{run.id}/cancel")
+
+        assert response.status_code == 204
+        assert len(FakeCancelStreamPublisher.instances) == 1
+        publisher = FakeCancelStreamPublisher.instances[0]
+        assert publisher.run_id == run.id
+        assert publisher.attempt_epoch == 3
+        assert publisher.published == [
+            AgentRunLiveStreamTerminalEvent(
+                status="failed",
+                errorCode="cancelled",
+            )
+        ]
+
+    async def test_cancel_queued_epoch_zero_does_not_create_stream_publisher(
+        self,
+        research_client: tuple[AsyncClient, FakeEnqueue],
+        db_session: AsyncSession,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        client, _fake_enqueue = research_client
+        thread = await _create_thread(db_session)
+        user_message = await _create_message(
+            db_session, thread_id=thread.id, seq=1, role="user", content="queued"
+        )
+        run = await _create_run(
+            db_session,
+            thread_id=thread.id,
+            user_message_id=user_message.id,
+            status="queued",
+            attempt_epoch=0,
+        )
+        FakeCancelStreamPublisher.instances = []
+        monkeypatch.setattr(
+            research_router_module,
+            "AgentRunLiveStreamPublisher",
+            FakeCancelStreamPublisher,
+            raising=False,
+        )
+
+        response = await client.post(f"/api/v1/research/runs/{run.id}/cancel")
+
+        assert response.status_code == 204
+        assert FakeCancelStreamPublisher.instances == []
+
+    async def test_cancel_terminal_publish_failure_preserves_204(
+        self,
+        research_client: tuple[AsyncClient, FakeEnqueue],
+        db_session: AsyncSession,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        client, _fake_enqueue = research_client
+        thread = await _create_thread(db_session)
+        user_message = await _create_message(
+            db_session, thread_id=thread.id, seq=1, role="user", content="running"
+        )
+        run = await _create_run(
+            db_session,
+            thread_id=thread.id,
+            user_message_id=user_message.id,
+            status="running",
+            attempt_epoch=2,
+        )
+        FakeCancelStreamPublisher.instances = []
+        monkeypatch.setattr(FakeCancelStreamPublisher, "raise_on_publish", True)
+        monkeypatch.setattr(
+            research_router_module,
+            "AgentRunLiveStreamPublisher",
+            FakeCancelStreamPublisher,
+            raising=False,
+        )
+
+        response = await client.post(f"/api/v1/research/runs/{run.id}/cancel")
+
+        assert response.status_code == 204
+        assert any(
+            isinstance(event, AgentRunLiveStreamTerminalEvent)
+            for event in FakeCancelStreamPublisher.instances[0].published
+        )
+        await db_session.refresh(run)
+        assert run.status == "failed"
+        assert run.error_code == "cancelled"
+
     async def test_cancel_completed_run_returns_409_and_preserves_completed(
         self,
         research_client: tuple[AsyncClient, FakeEnqueue],
         db_session: AsyncSession,
+        monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         client, _fake_enqueue = research_client
         thread = await _create_thread(db_session)
@@ -936,6 +1073,13 @@ class TestCancelResearchRun:
             assistant_message_id=assistant_message.id,
             status="completed",
         )
+        FakeCancelStreamPublisher.instances = []
+        monkeypatch.setattr(
+            research_router_module,
+            "AgentRunLiveStreamPublisher",
+            FakeCancelStreamPublisher,
+            raising=False,
+        )
 
         response = await client.post(f"/api/v1/research/runs/{run.id}/cancel")
 
@@ -944,11 +1088,13 @@ class TestCancelResearchRun:
         await db_session.refresh(run)
         assert run.status == "completed"
         assert run.error_code is None
+        assert FakeCancelStreamPublisher.instances == []
 
     async def test_cancel_failed_run_is_204_and_preserves_error_code(
         self,
         research_client: tuple[AsyncClient, FakeEnqueue],
         db_session: AsyncSession,
+        monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         client, _fake_enqueue = research_client
         thread = await _create_thread(db_session)
@@ -962,6 +1108,13 @@ class TestCancelResearchRun:
             status="failed",
             error_code="internal_error",
         )
+        FakeCancelStreamPublisher.instances = []
+        monkeypatch.setattr(
+            research_router_module,
+            "AgentRunLiveStreamPublisher",
+            FakeCancelStreamPublisher,
+            raising=False,
+        )
 
         response = await client.post(f"/api/v1/research/runs/{run.id}/cancel")
 
@@ -969,11 +1122,13 @@ class TestCancelResearchRun:
         await db_session.refresh(run)
         assert run.status == "failed"
         assert run.error_code == "internal_error"
+        assert FakeCancelStreamPublisher.instances == []
 
     async def test_cancel_other_users_run_is_404(
         self,
         research_client: tuple[AsyncClient, FakeEnqueue],
         db_session: AsyncSession,
+        monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         client, _fake_enqueue = research_client
         thread = await _create_thread(db_session, user_id=TEST_ADMIN_ID)
@@ -983,10 +1138,39 @@ class TestCancelResearchRun:
         run = await _create_run(
             db_session, thread_id=thread.id, user_message_id=user_message.id
         )
+        FakeCancelStreamPublisher.instances = []
+        monkeypatch.setattr(
+            research_router_module,
+            "AgentRunLiveStreamPublisher",
+            FakeCancelStreamPublisher,
+            raising=False,
+        )
 
         response = await client.post(f"/api/v1/research/runs/{run.id}/cancel")
 
         assert response.status_code == 404
+        assert FakeCancelStreamPublisher.instances == []
+
+    async def test_cancel_unknown_run_is_404_without_terminal(
+        self,
+        research_client: tuple[AsyncClient, FakeEnqueue],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        client, _fake_enqueue = research_client
+        FakeCancelStreamPublisher.instances = []
+        monkeypatch.setattr(
+            research_router_module,
+            "AgentRunLiveStreamPublisher",
+            FakeCancelStreamPublisher,
+            raising=False,
+        )
+
+        response = await client.post(
+            "/api/v1/research/runs/00000000-0000-4000-a000-000000000099/cancel"
+        )
+
+        assert response.status_code == 404
+        assert FakeCancelStreamPublisher.instances == []
 
     async def test_cancelled_run_is_not_overwritten_by_worker_completion(
         self,

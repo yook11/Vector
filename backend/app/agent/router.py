@@ -36,7 +36,9 @@ from app.agent.live_updates.sse import (
 from app.agent.live_updates.sse_response import AgentRunSseStreamingResponse
 from app.agent.live_updates.stream import (
     AGENT_RUN_LIVE_STREAM_TIMEOUT_SECONDS,
+    AgentRunLiveStreamPublisher,
     AgentRunLiveStreamReader,
+    AgentRunLiveStreamTerminalEvent,
     agent_run_live_stream_key,
 )
 from app.agent.runs.contracts import (
@@ -46,7 +48,7 @@ from app.agent.runs.contracts import (
     ThreadNotFoundError,
 )
 from app.agent.runs.repository import AgentRunRepository
-from app.agent.runs.types import AgentRunStatus
+from app.agent.runs.types import AgentRunErrorCode, AgentRunStatus
 from app.agent.threads.repository import AgentThreadRepository
 from app.analysis.ai_provider_errors import AIProviderError
 from app.db import engine
@@ -257,18 +259,53 @@ async def cancel_research_run(
     run_id: UUID,
     user: Annotated[CurrentUser, Depends(get_current_user)],
     session: Annotated[AsyncSession, Depends(get_agent_persistence_session)],
+    redis: Annotated[aioredis.Redis, Depends(get_redis_client)],
 ) -> Response:
     repo = AgentRunRepository(session)
     async with session.begin():
         outcome = await repo.cancel_run_for_user(run_id=run_id, user_id=user.id)
     if outcome is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND)
-    if outcome is CancelRunOutcome.ALREADY_COMPLETED:
+    if outcome.outcome is CancelRunOutcome.ALREADY_COMPLETED:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail=_RUN_ALREADY_COMPLETED_DETAIL,
         )
+    if (
+        outcome.outcome is CancelRunOutcome.CANCELLED
+        and outcome.attempt_epoch is not None
+        and outcome.attempt_epoch >= 1
+    ):
+        await _publish_cancel_terminal(
+            redis=redis,
+            run_id=run_id,
+            attempt_epoch=outcome.attempt_epoch,
+        )
     return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+async def _publish_cancel_terminal(
+    *,
+    redis: aioredis.Redis,
+    run_id: UUID,
+    attempt_epoch: int,
+) -> None:
+    try:
+        await AgentRunLiveStreamPublisher(
+            redis,
+            run_id,
+            attempt_epoch,
+        ).publish(
+            AgentRunLiveStreamTerminalEvent(
+                status="failed",
+                errorCode=AgentRunErrorCode.CANCELLED,
+            )
+        )
+    except Exception:
+        logger.warning(
+            "agent_run_cancel_terminal_publish_failed",
+            run_id=str(run_id),
+        )
 
 
 @router.get(
