@@ -90,6 +90,7 @@ jobs:
               - 'backend/app/main.py'
               - 'backend/app/config.py'
               - 'backend/app/dependencies.py'
+              - 'backend/tests/test_db_user_isolation.py'
               - 'backend/alembic/versions/**'
               - 'backend/pyproject.toml'
               - 'backend/uv.lock'
@@ -431,6 +432,22 @@ jobs:
         env:
           ALEMBIC_ALLOW_DESTRUCTIVE: yes-i-know
         run: uv run alembic upgrade head
+        working-directory: backend
+
+      - name: Verify application Postgres role isolation
+        run: |
+          report="${RUNNER_TEMP}/db-role-isolation.xml"
+          uv run pytest tests/test_db_user_isolation.py -q -rs --junitxml="$report"
+          # pytest は skip でも成功するため、権限境界を未検証のまま通さない。
+          uv run python - "$report" <<'PY'
+          import sys
+          import xml.etree.ElementTree as ET
+
+          suites = ET.parse(sys.argv[1]).iter("testsuite")
+          skipped = sum(int(suite.attrib.get("skipped", 0)) for suite in suites)
+          if skipped:
+              raise SystemExit(f"{skipped} DB role isolation test(s) skipped")
+          PY
         working-directory: backend
 
       - name: Seed E2E test users (CI only — red-team C2 防御で migration から分離)
