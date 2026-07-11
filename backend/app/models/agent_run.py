@@ -11,6 +11,7 @@ import uuid as uuid_mod
 from datetime import datetime
 
 from sqlalchemy import (
+    BigInteger,
     CheckConstraint,
     DateTime,
     ForeignKey,
@@ -62,6 +63,10 @@ class AgentRun(Base):
             "progress_stage IN ('planning', 'retrieving', 'synthesizing')",
             name="ck_agent_runs_progress_stage",
         ),
+        CheckConstraint(
+            "attempt_epoch >= 0",
+            name="ck_agent_runs_attempt_epoch_nonnegative",
+        ),
         # 完了 run は必ず回答を持ち、未完了・失敗は持たない (設計判断 5)。
         CheckConstraint(
             "(status = 'completed') = (assistant_message_id IS NOT NULL)",
@@ -105,6 +110,9 @@ class AgentRun(Base):
     )
     started_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
+    )
+    attempt_epoch: Mapped[int] = mapped_column(
+        BigInteger(), nullable=False, server_default=text("0")
     )
     completed_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True

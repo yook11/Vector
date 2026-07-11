@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
@@ -87,7 +88,7 @@ class FakeLiveStreamPublisher:
     instances: list[FakeLiveStreamPublisher] = []
     raise_on_begin = False
 
-    def __init__(self, redis: object, run_id: UUID, attempt_epoch: datetime) -> None:
+    def __init__(self, redis: object, run_id: UUID, attempt_epoch: int) -> None:
         self.redis = redis
         self.run_id = run_id
         self.attempt_epoch = attempt_epoch
@@ -157,6 +158,7 @@ async def _create_thread_message_run(
     history: list[tuple[str, str]] | None = None,
     created_at: datetime | None = None,
     started_at: datetime | None = None,
+    attempt_epoch: int | None = None,
     error_code: str | None = None,
 ) -> tuple[AgentThread, AgentMessage, AgentRun]:
     thread = AgentThread(
@@ -194,6 +196,8 @@ async def _create_thread_message_run(
         started_at=started_at,
         error_code=error_code,
     )
+    if attempt_epoch is not None:
+        run.attempt_epoch = attempt_epoch
     if created_at is not None:
         run.created_at = created_at
     session.add(run)
@@ -360,6 +364,7 @@ async def test_run_agent_answer_starts_stream_attempt_only_after_acquire(
     publisher = FakeLiveStreamPublisher.instances[0]
     assert publisher.redis is redis
     assert publisher.run_id == run.id
+    assert publisher.attempt_epoch == 1
     assert publisher.begin_attempt_calls == 1
 
 
@@ -831,6 +836,7 @@ async def test_acquire_for_execution_reexecutes_running_and_skips_terminal_runs(
             setup_session,
             status="running",
             started_at=now - timedelta(minutes=11),
+            attempt_epoch=1,
         )
         _terminal_thread, _terminal_message, failed = await _create_thread_message_run(
             setup_session,
@@ -848,7 +854,7 @@ async def test_acquire_for_execution_reexecutes_running_and_skips_terminal_runs(
     assert prepared.run_id == running.id
     assert prepared.question == "worker question"
     assert prepared.user_message_seq == 1
-    assert prepared.attempt_epoch == now
+    assert prepared.attempt_epoch == 2
     assert skipped is None
     async with session_factory() as session:
         reacquired = await session.get(AgentRun, running.id)
@@ -857,8 +863,170 @@ async def test_acquire_for_execution_reexecutes_running_and_skips_terminal_runs(
         assert terminal is not None
         assert reacquired.status == "running"
         assert reacquired.started_at == now
+        assert reacquired.attempt_epoch == 2
         assert terminal.status == "failed"
         assert terminal.error_code == "internal_error"
+        assert terminal.attempt_epoch == 0
+
+
+@pytest.mark.asyncio
+async def test_acquire_for_execution_allocates_first_attempt_epoch(
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    async with session_factory() as setup_session:
+        _thread, _message, run = await _create_thread_message_run(setup_session)
+
+    async with session_factory() as session:
+        async with session.begin():
+            prepared = await AgentRunRepository(session).acquire_for_execution(run.id)
+
+    async with session_factory() as session:
+        acquired = await session.get(AgentRun, run.id)
+        assert prepared is not None
+        assert acquired is not None
+        assert prepared.attempt_epoch == 1
+        assert acquired.attempt_epoch == 1
+
+
+@pytest.mark.asyncio
+async def test_acquire_for_execution_increment_rolls_back_with_transaction(
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    async with session_factory() as setup_session:
+        _thread, _message, run = await _create_thread_message_run(setup_session)
+
+    async with session_factory() as session:
+        prepared = await AgentRunRepository(session).acquire_for_execution(run.id)
+        assert prepared is not None
+        assert prepared.attempt_epoch == 1
+        await session.rollback()
+
+    async with session_factory() as session:
+        unchanged = await session.get(AgentRun, run.id)
+        assert unchanged is not None
+        assert unchanged.status == "queued"
+        assert unchanged.attempt_epoch == 0
+
+
+@pytest.mark.asyncio
+async def test_concurrent_acquisitions_receive_distinct_sequence_values(
+    session_factory: async_sessionmaker[AsyncSession],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async with session_factory() as setup_session:
+        _thread, _message, run = await _create_thread_message_run(setup_session)
+
+    selected_count = 0
+    selected_lock = asyncio.Lock()
+    both_selected = asyncio.Event()
+    release_updates = asyncio.Event()
+
+    async def acquire() -> int:
+        nonlocal selected_count
+        async with session_factory() as session:
+            original_execute = session.execute
+            execute_count = 0
+
+            async def execute_with_barrier(*args: object, **kwargs: object) -> object:
+                nonlocal execute_count, selected_count
+                result = await original_execute(*args, **kwargs)  # type: ignore[arg-type]
+                execute_count += 1
+                if execute_count == 1:
+                    async with selected_lock:
+                        selected_count += 1
+                        if selected_count == 2:
+                            both_selected.set()
+                    await release_updates.wait()
+                return result
+
+            monkeypatch.setattr(session, "execute", execute_with_barrier)
+            async with session.begin():
+                prepared = await AgentRunRepository(session).acquire_for_execution(
+                    run.id
+                )
+                assert prepared is not None
+                return prepared.attempt_epoch
+
+    acquire_tasks = [asyncio.create_task(acquire()), asyncio.create_task(acquire())]
+    try:
+        await asyncio.wait_for(both_selected.wait(), timeout=1)
+    finally:
+        release_updates.set()
+    epochs = await asyncio.gather(*acquire_tasks)
+
+    assert sorted(epochs) == [1, 2]
+    async with session_factory() as session:
+        acquired = await session.get(AgentRun, run.id)
+        assert acquired is not None
+        assert acquired.attempt_epoch == 2
+
+
+@pytest.mark.asyncio
+async def test_acquire_for_execution_returns_none_for_missing_run(
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    missing_run_id = UUID("00000000-0000-4000-a000-000000000099")
+
+    async with session_factory() as session:
+        async with session.begin():
+            prepared = await AgentRunRepository(session).acquire_for_execution(
+                missing_run_id
+            )
+
+    assert prepared is None
+
+
+@pytest.mark.asyncio
+async def test_acquire_for_execution_returns_none_when_transition_loses_race(
+    session_factory: async_sessionmaker[AsyncSession],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async with session_factory() as setup_session:
+        _thread, _message, run = await _create_thread_message_run(setup_session)
+
+    selected = asyncio.Event()
+    resume = asyncio.Event()
+    contender = session_factory()
+    original_execute = contender.execute
+    execute_count = 0
+
+    async def execute_with_pause(*args: object, **kwargs: object) -> object:
+        nonlocal execute_count
+        result = await original_execute(*args, **kwargs)  # type: ignore[arg-type]
+        execute_count += 1
+        if execute_count == 1:
+            selected.set()
+            await resume.wait()
+        return result
+
+    monkeypatch.setattr(contender, "execute", execute_with_pause)
+    try:
+
+        async def acquire() -> object:
+            async with contender.begin():
+                return await AgentRunRepository(contender).acquire_for_execution(run.id)
+
+        acquire_task = asyncio.create_task(acquire())
+        await selected.wait()
+        async with session_factory() as winner:
+            async with winner.begin():
+                changed = await AgentRunRepository(winner).mark_failed(
+                    run.id,
+                    error_code=agent_run_tasks.AgentRunErrorCode.STALE,
+                )
+                assert changed is True
+        resume.set()
+        prepared = await acquire_task
+    finally:
+        resume.set()
+        await contender.close()
+
+    assert prepared is None
+    async with session_factory() as session:
+        failed = await session.get(AgentRun, run.id)
+        assert failed is not None
+        assert failed.status == "failed"
+        assert failed.attempt_epoch == 0
 
 
 @pytest.mark.asyncio

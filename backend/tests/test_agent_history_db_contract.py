@@ -1371,3 +1371,67 @@ def test_agent_runs_thread_active_partial_unique_index_predicate() -> None:
         _index_where("agent_runs", "uq_agent_runs_thread_active")
         == "status IN ('queued', 'running')"
     )
+
+
+# ---------------------------------------------------------------------------
+# Test 19: attempt epoch fencing token
+# ---------------------------------------------------------------------------
+
+
+def test_agent_runs_attempt_epoch_model_contract() -> None:
+    column = AGENT_RUNS.c.attempt_epoch
+    constraint = next(
+        constraint
+        for constraint in AGENT_RUNS.constraints
+        if constraint.name == "ck_agent_runs_attempt_epoch_nonnegative"
+    )
+
+    assert column.type.python_type is int
+    assert column.nullable is False
+    assert column.server_default is not None
+    assert str(column.server_default.arg) == "0"
+    assert str(constraint.sqltext) == "attempt_epoch >= 0"
+
+
+@pytest.mark.asyncio
+async def test_run_with_negative_attempt_epoch_violates_check(
+    db_session: AsyncSession,
+) -> None:
+    thread_id = await _insert_thread(db_session)
+    user_message_id = await _insert_message(
+        db_session, thread_id=thread_id, seq=1, role="user", content="q"
+    )
+
+    await _assert_integrity_violation(
+        db_session,
+        insert(AGENT_RUNS).values(
+            thread_id=thread_id,
+            user_message_id=user_message_id,
+            status="queued",
+            attempt_epoch=-1,
+        ),
+        sqlstate=CHECK_VIOLATION,
+        constraint_name="ck_agent_runs_attempt_epoch_nonnegative",
+    )
+
+
+@pytest.mark.asyncio
+async def test_agent_run_attempt_epoch_defaults_to_zero(
+    db_session: AsyncSession,
+) -> None:
+    thread_id = await _insert_thread(db_session)
+    user_message_id = await _insert_message(
+        db_session, thread_id=thread_id, seq=1, role="user", content="q"
+    )
+    run_id = await _insert_run(
+        db_session,
+        thread_id=thread_id,
+        user_message_id=user_message_id,
+    )
+
+    attempt_epoch = (
+        await db_session.execute(
+            select(AGENT_RUNS.c.attempt_epoch).where(AGENT_RUNS.c.id == run_id)
+        )
+    ).scalar_one()
+    assert attempt_epoch == 0

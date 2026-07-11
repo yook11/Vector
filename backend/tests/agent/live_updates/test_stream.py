@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import time
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 from uuid import UUID
 
 import pytest
@@ -23,6 +23,7 @@ from app.agent.live_updates.stream import (
     AgentRunLiveStreamAnswerResetEvent,
     AgentRunLiveStreamPublisher,
     AgentRunLiveStreamReader,
+    AgentRunLiveStreamReadResult,
     AgentRunLiveStreamReadStatus,
     AgentRunLiveStreamStageEvent,
     AgentRunLiveStreamTerminalEvent,
@@ -34,8 +35,10 @@ from app.config import settings
 pytestmark = pytest.mark.xdist_group("redis")
 
 RUN_ID = UUID("00000000-0000-4000-a000-000000000011")
-EPOCH_1 = datetime(2026, 7, 10, 1, 0, tzinfo=UTC)
-EPOCH_2 = EPOCH_1 + timedelta(minutes=1)
+EPOCH_1 = 1
+EPOCH_2 = 2
+EPOCH_3 = 3
+PUBLISHED_AT = datetime(2026, 7, 10, 1, 0, tzinfo=UTC)
 
 
 class MemoryPipeline:
@@ -142,6 +145,11 @@ class DelayedRedis(MemoryRedis):
         return 0
 
 
+class UnexpectedRedisAccess:
+    def __getattr__(self, _name: str) -> object:
+        raise AssertionError("Redis must not be accessed")
+
+
 async def _sleep_forever() -> None:
     while True:
         await asyncio.sleep(3600)
@@ -190,8 +198,8 @@ async def test_stream_round_trip_filters_epoch_and_skips_bad_payload() -> None:
                 "8-0",
                 {
                     "type": "future.event",
-                    "attemptEpoch": EPOCH_2.isoformat(),
-                    "publishedAt": EPOCH_2.isoformat(),
+                    "attemptEpoch": str(EPOCH_2),
+                    "publishedAt": PUBLISHED_AT.isoformat(),
                     "payload": "{}",
                 },
             ),
@@ -199,8 +207,8 @@ async def test_stream_round_trip_filters_epoch_and_skips_bad_payload() -> None:
                 "9-0",
                 {
                     "type": "stage",
-                    "attemptEpoch": EPOCH_2.isoformat(),
-                    "publishedAt": EPOCH_2.isoformat(),
+                    "attemptEpoch": str(EPOCH_2),
+                    "publishedAt": PUBLISHED_AT.isoformat(),
                     "payload": "not-json",
                 },
             ),
@@ -208,8 +216,8 @@ async def test_stream_round_trip_filters_epoch_and_skips_bad_payload() -> None:
                 "10-0",
                 {
                     "type": "attempt.started",
-                    "attemptEpoch": EPOCH_2.isoformat(),
-                    "publishedAt": EPOCH_2.isoformat(),
+                    "attemptEpoch": str(EPOCH_2),
+                    "publishedAt": PUBLISHED_AT.isoformat(),
                     "payload": '{"unexpected":true}',
                 },
             ),
@@ -262,6 +270,244 @@ async def test_reader_distinguishes_degradation_results() -> None:
         RUN_ID, EPOCH_1, None
     )
     assert unavailable.status is AgentRunLiveStreamReadStatus.UNAVAILABLE
+
+
+@pytest.mark.asyncio
+async def test_reader_skips_only_older_epochs_and_advances_cursor() -> None:
+    redis = MemoryRedis(
+        entries=[
+            ("1-0", _envelope(EPOCH_1)),
+            ("2-0", _envelope(EPOCH_1)),
+        ]
+    )
+    reader = AgentRunLiveStreamReader(redis)
+
+    absent = await reader.read_after(RUN_ID, EPOCH_2, None)
+    after_skipped = await reader.read_after(
+        RUN_ID,
+        EPOCH_2,
+        absent.next_cursor,
+    )
+
+    assert absent.status is AgentRunLiveStreamReadStatus.ATTEMPT_ABSENT
+    assert absent.next_cursor == "2-0"
+    assert after_skipped.status is AgentRunLiveStreamReadStatus.EMPTY
+
+
+@pytest.mark.asyncio
+async def test_follow_read_continues_after_only_zombie_entries() -> None:
+    redis = MemoryRedis(
+        entries=[
+            ("1-0", _envelope(EPOCH_2)),
+            ("2-0", _envelope(EPOCH_1)),
+        ]
+    )
+    reader = AgentRunLiveStreamReader(redis)
+
+    zombies = await reader.read_after(RUN_ID, EPOCH_2, "1-0")
+    redis.entries.append(("3-0", _envelope(EPOCH_2, event_type="stage")))
+    resumed = await reader.read_after(RUN_ID, EPOCH_2, zombies.next_cursor)
+
+    assert zombies.status is AgentRunLiveStreamReadStatus.ATTEMPT_ABSENT
+    assert zombies.next_cursor == "2-0"
+    assert resumed.status is AgentRunLiveStreamReadStatus.EVENTS
+    assert [entry.stream_id for entry in resumed.events] == ["3-0"]
+
+
+@pytest.mark.asyncio
+async def test_reader_reports_newer_epoch_without_consuming_boundary() -> None:
+    redis = MemoryRedis(
+        entries=[
+            ("1-0", _envelope(EPOCH_1)),
+            ("2-0", _envelope(EPOCH_3)),
+        ]
+    )
+
+    result = await AgentRunLiveStreamReader(redis).read_after(
+        RUN_ID,
+        EPOCH_1,
+        "1-0",
+    )
+
+    assert result.status is AgentRunLiveStreamReadStatus.ATTEMPT_ADVANCED
+    assert result.events == ()
+    assert result.observed_attempt_epoch == EPOCH_3
+    assert result.next_cursor == "1-0"
+
+
+@pytest.mark.asyncio
+async def test_reader_returns_current_before_boundary_and_replays_new_attempt() -> None:
+    redis = MemoryRedis(
+        entries=[
+            ("1-0", _envelope(EPOCH_1)),
+            ("2-0", _envelope(EPOCH_1, event_type="stage")),
+            ("3-0", _envelope(EPOCH_3)),
+            ("4-0", _envelope(EPOCH_1, event_type="stage")),
+            ("5-0", _envelope(EPOCH_3, event_type="stage")),
+        ]
+    )
+    reader = AgentRunLiveStreamReader(redis)
+
+    current = await reader.read_after(RUN_ID, EPOCH_1, None)
+    advanced = await reader.read_after(RUN_ID, EPOCH_1, current.next_cursor)
+    new_attempt = await reader.read_after(RUN_ID, EPOCH_3, None)
+
+    assert current.status is AgentRunLiveStreamReadStatus.EVENTS
+    assert [entry.stream_id for entry in current.events] == ["1-0", "2-0"]
+    assert current.next_cursor == "2-0"
+    assert advanced.status is AgentRunLiveStreamReadStatus.ATTEMPT_ADVANCED
+    assert advanced.next_cursor == "2-0"
+    assert advanced.observed_attempt_epoch == EPOCH_3
+    assert [entry.stream_id for entry in new_attempt.events] == ["3-0", "5-0"]
+    assert {entry.attempt_epoch for entry in new_attempt.events} == {EPOCH_3}
+
+
+@pytest.mark.asyncio
+async def test_reader_uses_valid_envelope_epoch_when_marker_payload_is_broken() -> None:
+    redis = MemoryRedis(
+        entries=[
+            (
+                "1-0",
+                _envelope(
+                    EPOCH_3,
+                    payload='{ "unexpected": true }',
+                ),
+            )
+        ]
+    )
+
+    result = await AgentRunLiveStreamReader(redis).read_after(
+        RUN_ID,
+        EPOCH_1,
+        None,
+    )
+
+    assert result.status is AgentRunLiveStreamReadStatus.ATTEMPT_ADVANCED
+    assert result.observed_attempt_epoch == EPOCH_3
+    assert result.next_cursor is None
+
+
+@pytest.mark.asyncio
+async def test_reader_ignores_malformed_diagnostic_timestamp() -> None:
+    current = _envelope(EPOCH_1, event_type="stage")
+    current["publishedAt"] = "not-a-timestamp"
+    advanced = _envelope(EPOCH_3)
+    advanced["publishedAt"] = "also-not-a-timestamp"
+    redis = MemoryRedis(entries=[("1-0", current), ("2-0", advanced)])
+    reader = AgentRunLiveStreamReader(redis)
+
+    current_result = await reader.read_after(RUN_ID, EPOCH_1, None)
+    advanced_result = await reader.read_after(
+        RUN_ID,
+        EPOCH_1,
+        current_result.next_cursor,
+    )
+
+    assert [entry.stream_id for entry in current_result.events] == ["1-0"]
+    assert advanced_result.status is AgentRunLiveStreamReadStatus.ATTEMPT_ADVANCED
+    assert advanced_result.observed_attempt_epoch == EPOCH_3
+
+
+@pytest.mark.asyncio
+async def test_reader_does_not_decode_payload_for_other_epochs(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    redis = MemoryRedis(
+        entries=[
+            ("1-0", _envelope(EPOCH_1, payload="not-json")),
+            ("2-0", _envelope(EPOCH_3, payload="not-json")),
+        ]
+    )
+
+    def fail_if_called(_payload: str) -> object:
+        raise AssertionError("payload decode must follow epoch classification")
+
+    monkeypatch.setattr("app.agent.live_updates.stream.json.loads", fail_if_called)
+    result = await AgentRunLiveStreamReader(redis).read_after(
+        RUN_ID,
+        EPOCH_2,
+        None,
+    )
+
+    assert result.status is AgentRunLiveStreamReadStatus.ATTEMPT_ADVANCED
+    assert result.next_cursor == "1-0"
+
+
+def test_read_result_enforces_attempt_advanced_invariant() -> None:
+    with pytest.raises(ValueError, match="observed attempt epoch"):
+        AgentRunLiveStreamReadResult(
+            status=AgentRunLiveStreamReadStatus.ATTEMPT_ADVANCED,
+        )
+    with pytest.raises(ValueError, match="only valid for attempt advanced"):
+        AgentRunLiveStreamReadResult(
+            status=AgentRunLiveStreamReadStatus.EMPTY,
+            observed_attempt_epoch=EPOCH_2,
+        )
+
+
+@pytest.mark.asyncio
+async def test_reader_rejects_nonpositive_requested_epoch_before_redis_access() -> None:
+    reader = AgentRunLiveStreamReader(UnexpectedRedisAccess())
+
+    with pytest.raises(ValueError, match="attempt epoch must be positive"):
+        await reader.read_after(RUN_ID, 0, None)
+    with pytest.raises(ValueError, match="attempt epoch must be positive"):
+        await reader.read_after(RUN_ID, -1, None)
+
+
+@pytest.mark.asyncio
+async def test_old_timestamp_only_stream_is_attempt_absent() -> None:
+    redis = MemoryRedis(
+        entries=[
+            (
+                "1-0",
+                {
+                    "type": "attempt.started",
+                    "attemptEpoch": PUBLISHED_AT.isoformat(),
+                    "publishedAt": PUBLISHED_AT.isoformat(),
+                    "payload": "{}",
+                },
+            )
+        ]
+    )
+
+    result = await AgentRunLiveStreamReader(redis).read_after(
+        RUN_ID,
+        EPOCH_1,
+        None,
+    )
+
+    assert result.status is AgentRunLiveStreamReadStatus.ATTEMPT_ABSENT
+    assert result.next_cursor == "1-0"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("invalid_epoch", ["0", "-1", "1.5", "true", "abc"])
+async def test_reader_skips_invalid_integer_epoch_strings(
+    invalid_epoch: str,
+) -> None:
+    invalid = _envelope(EPOCH_1)
+    invalid["attemptEpoch"] = invalid_epoch
+    redis = MemoryRedis(
+        entries=[
+            ("1-0", invalid),
+            ("2-0", _envelope(EPOCH_1)),
+        ]
+    )
+
+    result = await AgentRunLiveStreamReader(redis).read_after(
+        RUN_ID,
+        EPOCH_1,
+        None,
+    )
+
+    assert [entry.stream_id for entry in result.events] == ["2-0"]
+
+
+@pytest.mark.parametrize("attempt_epoch", [0, -1])
+def test_publisher_rejects_nonpositive_attempt_epoch(attempt_epoch: int) -> None:
+    with pytest.raises(ValueError, match="attempt epoch must be positive"):
+        AgentRunLiveStreamPublisher(UnexpectedRedisAccess(), RUN_ID, attempt_epoch)
 
 
 @pytest.mark.asyncio
@@ -503,10 +749,17 @@ async def test_real_redis_passes_events_after_terminal() -> None:
         await redis.aclose()
 
 
-def _envelope(epoch: datetime) -> dict[str, str]:
+def _envelope(
+    epoch: int,
+    *,
+    event_type: str = "attempt.started",
+    payload: str | None = None,
+) -> dict[str, str]:
+    if payload is None:
+        payload = '{"stage":"planning"}' if event_type == "stage" else "{}"
     return {
-        "type": "attempt.started",
-        "attemptEpoch": epoch.isoformat(),
-        "publishedAt": epoch.isoformat(),
-        "payload": "{}",
+        "type": event_type,
+        "attemptEpoch": str(epoch),
+        "publishedAt": PUBLISHED_AT.isoformat(),
+        "payload": payload,
     }

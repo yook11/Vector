@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime
 from enum import StrEnum
 from uuid import UUID
 
@@ -38,4 +37,4 @@ class PreparedAgentRun:
     thread_id: UUID
     question: str
     user_message_seq: int
-    attempt_epoch: datetime
+    attempt_epoch: int

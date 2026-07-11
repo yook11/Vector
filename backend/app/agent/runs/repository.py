@@ -165,17 +165,23 @@ class AgentRunRepository:
                 AgentRun.id == run_id,
                 AgentRun.status.in_(_ACTIVE_STATUSES),
             )
-            .values(status=AgentRunStatus.RUNNING.value, started_at=now)
+            .values(
+                status=AgentRunStatus.RUNNING.value,
+                started_at=now,
+                attempt_epoch=AgentRun.attempt_epoch + 1,
+            )
+            .returning(AgentRun.attempt_epoch)
             .execution_options(synchronize_session=False)
         )
-        if (result.rowcount or 0) != 1:
+        attempt_epoch = result.scalar_one_or_none()
+        if attempt_epoch is None:
             return None
         return PreparedAgentRun(
             run_id=run.id,
             thread_id=run.thread_id,
             question=question,
             user_message_seq=user_message_seq,
-            attempt_epoch=now,
+            attempt_epoch=attempt_epoch,
         )
 
     async def complete_run(

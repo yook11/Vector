@@ -12,7 +12,14 @@ from uuid import UUID
 
 import redis.asyncio as aioredis
 import structlog
-from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, ValidationError
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    TypeAdapter,
+    ValidationError,
+    field_validator,
+)
 
 from app.agent.contract import AnswerProgressEvent
 from app.agent.runs.types import AgentRunErrorCode
@@ -76,9 +83,16 @@ class _StreamEnvelope(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid", populate_by_name=True)
 
     type: str
-    attempt_epoch: datetime = Field(alias="attemptEpoch")
+    attempt_epoch: int = Field(ge=1, alias="attemptEpoch")
     payload: str
-    published_at: datetime = Field(alias="publishedAt")
+    published_at: str = Field(alias="publishedAt")
+
+    @field_validator("attempt_epoch", mode="before")
+    @classmethod
+    def parse_attempt_epoch(cls, value: object) -> int:
+        if not isinstance(value, str) or not value.isascii() or not value.isdecimal():
+            raise ValueError("attempt epoch must be a decimal integer string")
+        return int(value)
 
 
 class AgentRunLiveStreamReadStatus(StrEnum):
@@ -86,6 +100,7 @@ class AgentRunLiveStreamReadStatus(StrEnum):
     EMPTY = "empty"
     STREAM_MISSING = "stream_missing"
     ATTEMPT_ABSENT = "attempt_absent"
+    ATTEMPT_ADVANCED = "attempt_advanced"
     CURSOR_TRIMMED = "cursor_trimmed"
     UNAVAILABLE = "unavailable"
 
@@ -93,7 +108,7 @@ class AgentRunLiveStreamReadStatus(StrEnum):
 @dataclass(frozen=True, slots=True)
 class AgentRunLiveStreamEntry:
     stream_id: str
-    attempt_epoch: datetime
+    attempt_epoch: int
     event: AgentRunLiveStreamEvent
 
 
@@ -102,6 +117,28 @@ class AgentRunLiveStreamReadResult:
     status: AgentRunLiveStreamReadStatus
     events: tuple[AgentRunLiveStreamEntry, ...] = ()
     next_cursor: str | None = None
+    observed_attempt_epoch: int | None = None
+
+    def __post_init__(self) -> None:
+        if self.status is AgentRunLiveStreamReadStatus.ATTEMPT_ADVANCED:
+            if self.observed_attempt_epoch is None or self.observed_attempt_epoch < 1:
+                raise ValueError(
+                    "observed attempt epoch is required for attempt advanced"
+                )
+            if self.events:
+                raise ValueError("attempt advanced cannot contain events")
+        elif self.observed_attempt_epoch is not None:
+            raise ValueError(
+                "observed attempt epoch is only valid for attempt advanced"
+            )
+
+
+@dataclass(frozen=True, slots=True)
+class _DecodedStreamEnvelope:
+    stream_id: str
+    attempt_epoch: int
+    event_type: str
+    payload: str
 
 
 def agent_run_live_stream_key(run_id: UUID) -> str:
@@ -117,10 +154,11 @@ class AgentRunLiveStreamPublisher:
         self,
         redis: aioredis.Redis,
         run_id: UUID,
-        attempt_epoch: datetime,
+        attempt_epoch: int,
         *,
         timeout_seconds: float = AGENT_RUN_LIVE_STREAM_TIMEOUT_SECONDS,
     ) -> None:
+        _validate_attempt_epoch(attempt_epoch)
         self._redis = redis
         self._run_id = run_id
         self._attempt_epoch = attempt_epoch
@@ -200,9 +238,10 @@ class AgentRunLiveStreamReader:
     async def read_after(
         self,
         run_id: UUID,
-        attempt_epoch: datetime,
+        attempt_epoch: int,
         cursor: str | None,
     ) -> AgentRunLiveStreamReadResult:
+        _validate_attempt_epoch(attempt_epoch)
         try:
             return await asyncio.wait_for(
                 self._read_after(run_id, attempt_epoch, cursor),
@@ -220,7 +259,7 @@ class AgentRunLiveStreamReader:
     async def _read_after(
         self,
         run_id: UUID,
-        attempt_epoch: datetime,
+        attempt_epoch: int,
         cursor: str | None,
     ) -> AgentRunLiveStreamReadResult:
         key = agent_run_live_stream_key(run_id)
@@ -233,7 +272,7 @@ class AgentRunLiveStreamReader:
             )
             if not raw_entries:
                 return await self._empty_initial_result(key)
-            return self._initial_result(raw_entries, attempt_epoch)
+            return _entries_result(raw_entries, attempt_epoch, previous_cursor=None)
 
         earliest = await self._redis.xrange(key, "-", "+", count=1)
         if not earliest:
@@ -260,17 +299,10 @@ class AgentRunLiveStreamReader:
                 status=AgentRunLiveStreamReadStatus.EMPTY,
                 next_cursor=cursor,
             )
-        next_cursor = _as_stream_id(raw_entries[-1][0])
-        events = _decode_entries(raw_entries, attempt_epoch)
-        if not events:
-            return AgentRunLiveStreamReadResult(
-                status=AgentRunLiveStreamReadStatus.EMPTY,
-                next_cursor=next_cursor,
-            )
-        return AgentRunLiveStreamReadResult(
-            status=AgentRunLiveStreamReadStatus.EVENTS,
-            events=tuple(events),
-            next_cursor=next_cursor,
+        return _entries_result(
+            raw_entries,
+            attempt_epoch,
+            previous_cursor=cursor,
         )
 
     async def _empty_initial_result(
@@ -285,78 +317,110 @@ class AgentRunLiveStreamReader:
             status=AgentRunLiveStreamReadStatus.ATTEMPT_ABSENT
         )
 
-    def _initial_result(
-        self,
-        raw_entries: list[tuple[Any, Any]],
-        attempt_epoch: datetime,
-    ) -> AgentRunLiveStreamReadResult:
-        events: list[AgentRunLiveStreamEntry] = []
-        next_cursor: str | None = None
-        for stream_id, fields in raw_entries:
-            next_cursor = _as_stream_id(stream_id)
-            entry = _decode_entry(stream_id, fields)
-            if entry is not None and entry.attempt_epoch == attempt_epoch:
-                events.append(entry)
-            if len(events) == AGENT_RUN_LIVE_STREAM_PAGE_SIZE:
-                break
-        if not events:
-            return AgentRunLiveStreamReadResult(
-                status=AgentRunLiveStreamReadStatus.ATTEMPT_ABSENT
-            )
-        return AgentRunLiveStreamReadResult(
-            status=AgentRunLiveStreamReadStatus.EVENTS,
-            events=tuple(events),
-            next_cursor=next_cursor,
-        )
-
 
 def _encode_envelope(
     event: AgentRunLiveStreamEvent,
-    attempt_epoch: datetime,
+    attempt_epoch: int,
 ) -> dict[str, str]:
     payload = event.model_dump(mode="json", by_alias=True)
     event_type = payload.pop("type")
     return {
         "type": event_type,
-        "attemptEpoch": attempt_epoch.astimezone(UTC).isoformat(),
+        "attemptEpoch": str(attempt_epoch),
         "payload": json.dumps(payload, ensure_ascii=False, separators=(",", ":")),
         "publishedAt": datetime.now(UTC).isoformat(),
     }
 
 
-def _decode_entries(
+def _entries_result(
     raw_entries: list[tuple[Any, Any]],
-    attempt_epoch: datetime,
-) -> list[AgentRunLiveStreamEntry]:
+    attempt_epoch: int,
+    *,
+    previous_cursor: str | None,
+) -> AgentRunLiveStreamReadResult:
     events: list[AgentRunLiveStreamEntry] = []
+    next_cursor = previous_cursor
     for stream_id, fields in raw_entries:
-        entry = _decode_entry(stream_id, fields)
-        if entry is not None and entry.attempt_epoch == attempt_epoch:
-            events.append(entry)
-    return events
+        stream_id_text = _as_stream_id(stream_id)
+        entry = _decode_envelope(stream_id, fields)
+        if entry is None:
+            next_cursor = stream_id_text
+            continue
+        if entry.attempt_epoch < attempt_epoch:
+            next_cursor = stream_id_text
+            continue
+        if entry.attempt_epoch > attempt_epoch:
+            if events:
+                break
+            return AgentRunLiveStreamReadResult(
+                status=AgentRunLiveStreamReadStatus.ATTEMPT_ADVANCED,
+                next_cursor=next_cursor,
+                observed_attempt_epoch=entry.attempt_epoch,
+            )
+        next_cursor = stream_id_text
+        event = _decode_event(entry)
+        if event is not None:
+            events.append(
+                AgentRunLiveStreamEntry(
+                    stream_id=entry.stream_id,
+                    attempt_epoch=entry.attempt_epoch,
+                    event=event,
+                )
+            )
+        if len(events) == AGENT_RUN_LIVE_STREAM_PAGE_SIZE:
+            break
+    if events:
+        return AgentRunLiveStreamReadResult(
+            status=AgentRunLiveStreamReadStatus.EVENTS,
+            events=tuple(events),
+            next_cursor=next_cursor,
+        )
+    return AgentRunLiveStreamReadResult(
+        status=AgentRunLiveStreamReadStatus.ATTEMPT_ABSENT,
+        next_cursor=next_cursor,
+    )
 
 
-def _decode_entry(stream_id: Any, fields: Any) -> AgentRunLiveStreamEntry | None:
+def _decode_envelope(
+    stream_id: Any,
+    fields: Any,
+) -> _DecodedStreamEnvelope | None:
     try:
         envelope = _StreamEnvelope.model_validate(_string_fields(fields))
-        payload = json.loads(envelope.payload)
-        if not isinstance(payload, dict):
-            return None
-        payload["type"] = envelope.type
-        event = _event_adapter.validate_python(payload)
-        return AgentRunLiveStreamEntry(
-            stream_id=_as_stream_id(stream_id),
-            attempt_epoch=envelope.attempt_epoch,
-            event=event,
-        )
+        stream_id_text = _as_stream_id(stream_id)
+    except (TypeError, ValueError, ValidationError, UnicodeDecodeError):
+        return None
+    return _DecodedStreamEnvelope(
+        stream_id=stream_id_text,
+        attempt_epoch=envelope.attempt_epoch,
+        event_type=envelope.type,
+        payload=envelope.payload,
+    )
+
+
+def _decode_event(entry: _DecodedStreamEnvelope) -> AgentRunLiveStreamEvent | None:
+    try:
+        payload = json.loads(entry.payload)
+        if isinstance(payload, dict):
+            payload["type"] = entry.event_type
+            return _event_adapter.validate_python(payload)
     except (
         TypeError,
         ValueError,
         ValidationError,
-        UnicodeDecodeError,
         json.JSONDecodeError,
     ):
-        return None
+        pass
+    return None
+
+
+def _validate_attempt_epoch(attempt_epoch: int) -> None:
+    if (
+        isinstance(attempt_epoch, bool)
+        or not isinstance(attempt_epoch, int)
+        or attempt_epoch < 1
+    ):
+        raise ValueError("attempt epoch must be positive")
 
 
 def _string_fields(fields: Any) -> dict[str, str]:

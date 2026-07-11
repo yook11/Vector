@@ -47,8 +47,8 @@ slice に分割して行い、ここで直接コードは変更しない。
 - worker は Taskiq 上で `agent.answer()` を実行し、成功後にだけ assistant message /
   source rows / run の完了状態を同一トランザクションで保存する。
 - `acquire_for_execution()` は queued / running のrunを再取得し、そのたびに
-  `agent_runs.started_at` を更新する。worker timeoutは300秒であり、重複配送時には
-  旧workerと新workerのeventがRedis上で交差し得る。
+  `agent_runs.started_at` を更新し、`attempt_epoch` をDB内で原子的に1増やす。worker
+  timeoutは300秒であり、重複配送時には旧workerと新workerのeventがRedis上で交差し得る。
 - direct 回答は plain text だが、evidence 回答は `sufficiency`、`answer`、
   `cited_refs`、`missing_aspects` を持つ structured JSON である。後者は marker と
   evidence の整合検証に失敗すると retry または fallback になる。
@@ -111,9 +111,9 @@ output token 上限を照合して確定するが、次を守る。
   最小文字量で delta を coalesce し、UI が自然に読める間隔で publish する。
 - Stream の read / write / reset が失敗しても、回答生成・DB 保存・run 状態遷移を
   失敗させない。Redis は live 表示だけの補助データである。
-- eventの帰属はRedis Stream IDや`attempt.started`の位置ではなく、全entryに入る
-  `attemptEpoch` の等値比較だけで決める。epochはrunを取得した時点の
-  `agent_runs.started_at` であり、再取得ごとに新しくなる。
+- eventの帰属はRedis Stream IDや`attempt.started`の位置ではなく、全entryに入る正の整数
+  `attemptEpoch` で決める。要求epochより小さいentryは旧workerとして捨て、等しいentryだけを
+  返し、大きいentryは新attempt境界として通知する。epochはrun取得ごとにDBで1増える。
 
 ### Event vocabulary
 
@@ -185,8 +185,9 @@ Last-Event-ID: <optional Redis Stream ID>
 
 1. BFF JWT を検証する。
 2. run と user の所有権を DB で確認する。存在しない、または他者の run は 404 に収束する。
-3. DBから得た現在の `started_at` をattempt epochとして渡し、`Last-Event-ID` があれば
-   その直後、無ければ現epochの保持済みeventから読む。epoch不一致eventは送らない。
+3. DBから得た1以上の `attempt_epoch` をreaderへ渡し、`Last-Event-ID` があればその直後、
+   無ければ現epochの保持済みeventから読む。小さいepochは送らず、大きいepochを観測したら
+   DB contextを再取得して新attemptへ切り替える。
 4. Stream を SSE frame (`id`, `event`, JSON `data`) に変換して送信する。
 5. 定期 heartbeat を送り、terminal を送信したら接続を閉じる。
 
@@ -251,8 +252,9 @@ assistant message を保存しないことを維持する。
   行う。
 - streaming reporter の失敗は回答生成を止めない。publisher は短い timeout で諦め、
   DB connection や長いトランザクションを保持しない。
-- attemptの帰属はepochの等値比較で決める。新attempt開始後に旧workerが遅延publishしても、
-  epoch不一致ならreaderは返さない。Stream IDとmarker位置は再開・表示通知だけの責務である。
+- attemptの帰属は整数epochの大小比較で決める。新attempt開始後に旧workerが遅延publishしても、
+  小さいepochはreaderが返さず、大きいepochは切替境界になる。Stream IDとmarker位置は
+  再開・表示通知だけの責務である。
 - SSE 接続は開始時に必ず所有権を確認する。event ID を推測して他者の payload を読む
   経路を作らない。
 - 再接続・再配送・retry で同じ delta が複数届いても、client は ID と generation により
@@ -272,7 +274,8 @@ assistant message を保存しないことを維持する。
 - citation 品質や回答品質そのものを改善すること。
 - 既存 `recentEvents` に回答断片を追加すること。
 - Redis Stream を監査ログや長期分析データとして使うこと。
-- DB schema migration。永続 cursor や下書き保存が必要になった時点で別途 Ask First とする。
+- `agent_runs.attempt_epoch` 以外のDB schema migration。永続cursorや下書き保存が必要に
+  なった時点で別途Ask Firstとする。
 
 ## Suggested slice boundaries
 
@@ -281,16 +284,18 @@ assistant message を保存しないことを維持する。
 
 1. **Live stream transport**: Redis Stream の key / TTL / ACL / publisher / reader、
    event vocabulary、実Redisでの replay・timeout・payload非露出テスト。
-2. **SSE backend and BFF**: FastAPI の所有権確認付き SSE、Next.js の同一 origin proxy、
+2. **Attempt epoch fencing token**: DB採番の正整数epoch、ゾンビworker除外、
+   `attempt_advanced` と境界非消費。
+3. **SSE backend and BFF**: FastAPI の所有権確認付き SSE、Next.js の同一 origin proxy、
    reconnect / heartbeat / terminal close。新しい外部API契約のため `/api-contract` を使う。
-3. **Direct answer deltas**: plain text generator の streaming 化、coalescing、final
+4. **Direct answer deltas**: plain text generator の streaming 化、coalescing、final
    persistence と terminal 順序、cancel後の抑止。
-4. **Evidence answer draft deltas**: structured JSON の増分復元、retry 時の reset、
+5. **Evidence answer draft deltas**: structured JSON の増分復元、retry 時の reset、
    citation検証後の確定表示。この slice は既存 synthesis contract の変更範囲を先に
    確認する。
-5. **Research UI**: 工程表示と下書き領域、EventSource lifecycle、replay / reset /
+6. **Research UI**: 工程表示と下書き領域、EventSource lifecycle、replay / reset /
    terminal / polling fallback、アクセシビリティ。
-6. **Operational verification**: Fly の buffering・idle timeout、Redis ACL、observability、
+7. **Operational verification**: Fly の buffering・idle timeout、Redis ACL、observability、
    負荷・障害時の劣化、E2E。
 
 ## Verification
