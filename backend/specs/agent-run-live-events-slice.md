@@ -236,8 +236,8 @@ frontend ActiveRunStatus:
 
 ```text
 backend/app/agent/contract.py               (AnswerProgressEvent union + AnswerEventReporter)
-backend/app/agent/internal_retrieval/service.py (events field + started/completed 発火)
-backend/app/agent/external_search/runner.py     (events 注入 + per-task 3 イベント発火)
+backend/app/agent/evidence_collection/internal_search/service.py (events field + started/completed 発火)
+backend/app/agent/evidence_collection/external_search/runner.py     (events 注入 + per-task 3 イベント発火)
 backend/app/agent/composition.py                (events 引数の配線)
 backend/app/agent/live_updates/recent_events.py (publisher/reader + key・cap 50・TTL 900・read 10 の定数)
 backend/app/queue/tasks/agent_run.py            (publisher 生成 + acquire 後 reset + 注入)

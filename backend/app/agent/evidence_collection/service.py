@@ -11,8 +11,10 @@ from app.agent.evidence_collection.contract import (
     ExternalPlanSearcher,
     InternalArticleRetriever,
 )
-from app.agent.external_search import ExternalSearchOutcome
-from app.agent.internal_retrieval.query_embedding import InternalSearchQueries
+from app.agent.evidence_collection.external_search import ExternalSearchOutcome
+from app.agent.evidence_collection.internal_search.query_embedding import (
+    InternalSearchQueries,
+)
 from app.agent.planning.contract import (
     ExternalResearchTask,
     ExternalSearchPlan,

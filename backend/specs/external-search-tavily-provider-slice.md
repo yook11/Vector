@@ -35,12 +35,12 @@ runner の `SearchProvider` port には fake しか存在しない。実 provide
 
 ## Evidence
 
-- `backend/app/agent/external_search/contract.py`
+- `backend/app/agent/evidence_collection/external_search/contract.py`
   - `SearchProvider` port は `search(query, *, limit) -> list[ExternalSearchCandidate]`。
   - `ExternalSearchCandidate` は url(SafeUrl) / title / snippet / published_at /
     source_name。snippet に max_length が無い(本 slice で追加)。
   - `ExternalSearchProviderError` が分類済み境界 error として定義済み。
-- `backend/app/agent/external_search/runner.py`
+- `backend/app/agent/evidence_collection/external_search/runner.py`
   - runner は `limit=EXTERNAL_SEARCH_CANDIDATES_PER_QUERY(10)` で呼び、
     15 秒の backstop timeout と応答の防御的 truncate を既に持つ。
 - `backend/app/config.py`
@@ -70,7 +70,7 @@ runner の `SearchProvider` port には fake しか存在しない。実 provide
 
 ## Decision
 
-`app/agent/external_search/tavily.py` に `TavilySearchProvider` を実装する。
+`app/agent/evidence_collection/external_search/tavily.py` に `TavilySearchProvider` を実装する。
 
 ```python
 TAVILY_SEARCH_URL = "https://api.tavily.com/search"

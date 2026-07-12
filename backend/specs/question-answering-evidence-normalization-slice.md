@@ -39,11 +39,11 @@ Q&A エージェントの工程 3。retrieval 結果 (`RetrievalOutcome`) を、
 
 - `backend/app/services/articles.py` — `ArticleBrief(id=analysis.id, ...)`。
   公開 /news id 空間 = `AnalyzedArticleRecord.id`。
-- `backend/app/agent/internal_retrieval/article_search.py`
+- `backend/app/agent/evidence_collection/internal_search/article_search.py`
   - SELECT は `curation_id` のみで `AnalyzedArticleRecord.id` を取っていない。
   - `InternalArticleContent`: title / summary / key_points / mentions /
     published_at。
-- `backend/app/agent/external_search/contract.py` — `ExternalSearchEvidence`:
+- `backend/app/agent/evidence_collection/external_search/contract.py` — `ExternalSearchEvidence`:
   source_ref (external package ローカル) / task_index / title / url (SafeUrl) /
   source_name / published_at / claim / why_selected / snippet。
   `ResearchTaskReport.missing` は task 単位の不足情報。
@@ -187,10 +187,10 @@ external: claim
 backend/app/agent/answering/evidence.py            (新規)
 backend/app/agent/answering/service.py             (RetrievalOutcome validator 追加)
 backend/app/agent/answering/__init__.py            (export 追加)
-backend/app/agent/internal_retrieval/article_search.py  (SELECT + hit field)
+backend/app/agent/evidence_collection/internal_search/article_search.py  (SELECT + hit field)
 backend/tests/agent/answering/test_evidence.py     (新規)
 backend/tests/agent/answering/test_service.py      (validator テスト + hit fixture 追従)
-backend/tests/agent/internal_retrieval/            (assessment_id 追従 + 一致検証)
+backend/tests/agent/evidence_collection/internal_search/            (assessment_id 追従 + 一致検証)
 ```
 
 `InternalArticleSearchHit.assessment_id` は required とするため、既存テストの
@@ -227,7 +227,7 @@ hit 構築漏れは実行時に必ず検出される。
 9. `external_search` set + `unmet_requirements=["external_search"]` →
    ValidationError。`external_search=None` + 同 unmet → 構築可 (F)。
 
-`backend/tests/agent/internal_retrieval/` (追従):
+`backend/tests/agent/evidence_collection/internal_search/` (追従):
 
 10. `search_by_embedding` が返す hit の `assessment_id` が検索対象行の
     `AnalyzedArticleRecord.id` と一致する (C4 の供給側検証)。

@@ -42,7 +42,7 @@ runner には次を同時に満たす実行構造が必要になる。
 
 ## Evidence
 
-- `backend/app/agent/external_search/service.py`
+- `backend/app/agent/evidence_collection/external_search/service.py`
   - `ExternalSearchRunner` protocol、`resolve_external_search_agent_count`、
     `EXTERNAL_SEARCH_AGENT_HARD_LIMIT = 3` が既にある。
   - `ExternalSearchEvidence` は url / title / snippet / published_at /
