@@ -1,8 +1,8 @@
-"""Question planning service."""
+"""Question planning flow."""
 
 from __future__ import annotations
 
-from typing import Protocol, assert_never
+from typing import assert_never
 
 from pydantic import ValidationError
 
@@ -22,12 +22,13 @@ from app.agent.planning.contract import (
     InternalRetrievalPlan,
     NoRetrievalPlan,
     QuestionPlan,
+    QuestionPlanDraft,
+    QuestionPlanDraftGenerator,
+    QuestionPlannerResponseInvalidError,
     plan_from_draft,
     safe_fallback_plan,
 )
-from app.agent.planning.errors import QuestionPlannerResponseInvalidError
 from app.agent.planning.metrics import record_question_planner_outcome
-from app.agent.planning.plan_draft import QuestionPlanDraft
 from app.analysis.ai_provider_errors import AIProviderError
 
 _PLANNER_AUDITED_ERRORS = (
@@ -35,20 +36,10 @@ _PLANNER_AUDITED_ERRORS = (
     QuestionPlannerResponseInvalidError,
     ValidationError,
 )
+_MAX_ATTEMPTS = 2
 
 
-class QuestionPlanDraftGenerator(Protocol):
-    """LLM adapter boundary that returns draft plans."""
-
-    async def plan(
-        self,
-        input: AnswerQuestionInput,
-        *,
-        previous_error: str | None = None,
-    ) -> QuestionPlanDraft: ...
-
-
-class QuestionPlanningService:
+class QuestionPlanningFlow:
     """Create completed question plans from LLM drafts."""
 
     def __init__(
@@ -65,55 +56,45 @@ class QuestionPlanningService:
 
         ai_model = _planner_attr(self._planner, "model_name")
         prompt_version = _planner_attr(self._planner, "prompt_version")
+        previous_error: str | None = None
 
-        try:
-            draft = await self._planner.plan(input)
-        except _PLANNER_AUDITED_ERRORS as exc:
-            failure = classify_planner_failure(exc)
-            await _record_attempt_failure(
-                audit_recorder=self._audit_recorder,
-                attempt_number=1,
-                failure=failure,
-                ai_model=ai_model,
-                prompt_version=prompt_version,
-            )
-            if (
-                failure.request_retry_disposition
-                is not RequestRetryDisposition.RETRY_IN_REQUEST
-            ):
-                return await _fallback_with_audit(
-                    input=input,
+        for attempt_number in range(1, _MAX_ATTEMPTS + 1):
+            try:
+                draft = await self._planner.plan(
+                    input,
+                    previous_error=previous_error,
+                )
+            except _PLANNER_AUDITED_ERRORS as exc:
+                failure = classify_planner_failure(exc)
+                await _record_attempt_failure(
                     audit_recorder=self._audit_recorder,
-                    attempt_count=1,
-                    retry_used=False,
+                    attempt_number=attempt_number,
                     failure=failure,
                     ai_model=ai_model,
                     prompt_version=prompt_version,
                 )
-            try:
-                draft = await self._planner.plan(input, previous_error=str(exc))
-            except _PLANNER_AUDITED_ERRORS as retry_exc:
-                retry_failure = classify_planner_failure(retry_exc)
-                await _record_attempt_failure(
-                    audit_recorder=self._audit_recorder,
-                    attempt_number=2,
-                    failure=retry_failure,
-                    ai_model=ai_model,
-                    prompt_version=prompt_version,
+                retriable = (
+                    failure.request_retry_disposition
+                    is RequestRetryDisposition.RETRY_IN_REQUEST
+                    and attempt_number < _MAX_ATTEMPTS
                 )
+                if retriable:
+                    previous_error = str(exc)
+                    continue
                 return await _fallback_with_audit(
                     input=input,
                     audit_recorder=self._audit_recorder,
-                    attempt_count=2,
-                    retry_used=True,
-                    failure=retry_failure,
+                    attempt_count=attempt_number,
+                    retry_used=attempt_number > 1,
+                    failure=failure,
                     ai_model=ai_model,
                     prompt_version=prompt_version,
                 )
+
             await _record_draft_received(
                 audit_recorder=self._audit_recorder,
                 draft=draft,
-                attempt_number=2,
+                attempt_number=attempt_number,
                 ai_model=ai_model,
                 prompt_version=prompt_version,
             )
@@ -121,40 +102,19 @@ class QuestionPlanningService:
             await _record_plan_created(
                 audit_recorder=self._audit_recorder,
                 plan=plan,
-                attempt_count=2,
-                retry_used=True,
+                attempt_count=attempt_number,
+                retry_used=attempt_number > 1,
                 ai_model=ai_model,
                 prompt_version=prompt_version,
             )
             record_question_planner_outcome(
                 result="planned",
-                retry_used=True,
+                retry_used=attempt_number > 1,
                 planned_retrieval_mode=plan.retrieval_mode,
             )
             return plan
 
-        await _record_draft_received(
-            audit_recorder=self._audit_recorder,
-            draft=draft,
-            attempt_number=1,
-            ai_model=ai_model,
-            prompt_version=prompt_version,
-        )
-        plan = plan_from_draft(draft, fallback_query=input.question)
-        await _record_plan_created(
-            audit_recorder=self._audit_recorder,
-            plan=plan,
-            attempt_count=1,
-            retry_used=False,
-            ai_model=ai_model,
-            prompt_version=prompt_version,
-        )
-        record_question_planner_outcome(
-            result="planned",
-            retry_used=False,
-            planned_retrieval_mode=plan.retrieval_mode,
-        )
-        return plan
+        raise AssertionError("unreachable: planning loop must return or raise")
 
 
 def _planner_attr(planner: QuestionPlanDraftGenerator, name: str) -> str | None:

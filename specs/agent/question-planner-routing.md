@@ -18,7 +18,7 @@ Scope: LLM planner が検索要否と検索先を判断する仕様
 ## Decisions
 
 - UI で外部検索の切り替えは提供しない。検索要否は agent が判断する。
-- LLM adapter は `QuestionPlanDraft` を返し、`QuestionPlanningService` が完成済み `QuestionPlan` にする。
+- LLM adapter は `QuestionPlanDraft` を返し、`QuestionPlanningFlow` が完成済み `QuestionPlan` にする。
 - Planner の public contract は完成済み `QuestionPlan` を返すこと。
 - `QuestionPlanDraft` は LLM 境界なので、軽微な mode/query 不整合を hard fail しすぎない。
 - `QuestionPlan` は agent 内部で使う完成済み plan として mode/query の整合性を保証する。
@@ -121,14 +121,14 @@ Vector 内部の分析済み記事を検索して回答すべき質問。
 
 ## Planning Semantics
 
-LLM adapter は初期 retrieval proposal である `QuestionPlanDraft` を作る。`QuestionPlanningService` は retry / fallback / audit / metrics を扱い、agent 内部が使える完成済み `QuestionPlan` を返す。最終回答の `status` は取得結果を見た後に決める。
+LLM adapter は初期 retrieval proposal である `QuestionPlanDraft` を作る。`QuestionPlanningFlow` は retry / fallback / audit / metrics を扱い、agent 内部が使える完成済み `QuestionPlan` を返す。最終回答の `status` は取得結果を見た後に決める。
 
 `retrieval_mode` は「必要だと判断した情報取得」であり、`AnswerExecutionSummary.route` は「実際に実行した経路」である。この 2 つを混同しない。
 
 責務分担:
 
 - LLM adapter: 検索不要 / 内部 / 外部 / 両方の初期判断を draft として出す。
-- QuestionPlanningService: draft を完成済み `QuestionPlan` にし、planner failure の retry / fallback / audit / metrics を扱う。
+- QuestionPlanningFlow: draft を完成済み `QuestionPlan` にし、planner failure の retry / fallback / audit / metrics を扱う。
 - Evidence Grader: 取得済み source で回答可能かを判定し、必要なら `insufficient` に落とす。
 
 Planner と Evidence Grader が矛盾した場合、source なしで断定する方向には倒さない。安全側は `internal` retrieval または `insufficient` である。
