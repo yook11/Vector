@@ -1,19 +1,19 @@
-"""Gemini question-resolution prompt renderer."""
+"""Gemini question context prompt renderer."""
 
 from __future__ import annotations
 
 from datetime import datetime
 from typing import ClassVar
 
-from app.agent.question_resolution.ai.prompts import QUESTION_RESOLUTION_PROMPT
+from app.agent.question_context.ai.prompts import QUESTION_CONTEXT_PROMPT
 from app.agent.threads.contracts import ThreadMessageSnapshot
 from app.analysis.prompt_safety import sanitize_for_untrusted_block
 
 
-class GeminiQuestionResolutionPrompt:
+class GeminiQuestionContextPrompt:
     """Prompt renderer that preserves every conversation field as untrusted text."""
 
-    TEMPLATE: ClassVar[str] = QUESTION_RESOLUTION_PROMPT
+    TEMPLATE: ClassVar[str] = QUESTION_CONTEXT_PROMPT
 
     @classmethod
     def render(

@@ -16,7 +16,7 @@ from app.agent.contract import (
     QuestionAnsweringAgent,
 )
 from app.agent.external_search.tavily import TavilyHttpClient
-from app.agent.question_resolution.contract import QuestionResolver
+from app.agent.question_context.contract import QuestionContextGenerator
 from app.analysis.ai_provider_errors import AIProviderConfigurationError
 from app.config import settings
 
@@ -88,12 +88,12 @@ def build_question_answering_agent(
     )
 
 
-def build_question_resolver() -> QuestionResolver:
-    """Build the worker-owned resolver without coupling agent core to history."""
+def build_question_context_generator() -> QuestionContextGenerator:
+    """Build the worker-owned generator without coupling agent core to history."""
 
-    from app.agent.question_resolution.ai.gemini import GeminiQuestionResolver
+    from app.agent.question_context.ai.gemini import GeminiQuestionContextGenerator
 
-    return GeminiQuestionResolver()
+    return GeminiQuestionContextGenerator()
 
 
 def _build_external_search(

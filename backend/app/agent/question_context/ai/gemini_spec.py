@@ -1,4 +1,4 @@
-"""Gemini question-resolution call specification."""
+"""Gemini question context call specification."""
 
 from __future__ import annotations
 
@@ -7,19 +7,19 @@ from dataclasses import dataclass
 from types import MappingProxyType
 from typing import Any, Final
 
-from app.agent.question_resolution.ai.gemini_prompt import (
-    GeminiQuestionResolutionPrompt,
+from app.agent.question_context.ai.gemini_prompt import (
+    GeminiQuestionContextPrompt,
 )
-from app.agent.question_resolution.ai.schema_tool import (
-    QUESTION_RESOLUTION_GEMINI_SCHEMA,
+from app.agent.question_context.ai.schema_tool import (
+    QUESTION_CONTEXT_GEMINI_SCHEMA,
 )
 from app.analysis.prompt_versions import compute_call_signature
 from app.analysis.rate_limit import AIModelRateLimitPolicy, RateLimitRule
 
 
 @dataclass(frozen=True, slots=True)
-class GeminiQuestionResolutionSpec:
-    """One structured Gemini resolution call."""
+class GeminiQuestionContextSpec:
+    """One structured Gemini question context call."""
 
     provider: str
     model: str
@@ -39,19 +39,19 @@ _STRUCTURED_OUTPUT: Final[Mapping[str, Any]] = MappingProxyType(
     {"response_mime_type": "application/json"}
 )
 _RESPONSE_SCHEMA: Final[Mapping[str, Any]] = MappingProxyType(
-    QUESTION_RESOLUTION_GEMINI_SCHEMA
+    QUESTION_CONTEXT_GEMINI_SCHEMA
 )
 _SYSTEM_INSTRUCTION: Final[str | None] = None
 _VERSION: Final[str] = compute_call_signature(
-    prompt_template=GeminiQuestionResolutionPrompt.TEMPLATE,
+    prompt_template=GeminiQuestionContextPrompt.TEMPLATE,
     model=_MODEL,
     gen_config={**_GEN_CONFIG, **_STRUCTURED_OUTPUT},
     response_schema=_RESPONSE_SCHEMA,
     system_instruction=_SYSTEM_INSTRUCTION,
 )
 
-GEMINI_QUESTION_RESOLUTION_SPEC: Final[GeminiQuestionResolutionSpec] = (
-    GeminiQuestionResolutionSpec(
+GEMINI_QUESTION_CONTEXT_SPEC: Final[GeminiQuestionContextSpec] = (
+    GeminiQuestionContextSpec(
         provider="gemini",
         model=_MODEL,
         gen_config=_GEN_CONFIG,

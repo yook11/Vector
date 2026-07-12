@@ -1,8 +1,8 @@
-"""Question-resolution prompt resources."""
+"""Question context prompt resources."""
 
 from __future__ import annotations
 
-QUESTION_RESOLUTION_PROMPT = """\\
+QUESTION_CONTEXT_PROMPT = """\\
 あなたは Vector の会話文脈 resolver です。回答本文や検索計画を作らず、現在の質問を
 会話の文脈で解釈して JSON schema に従う4フィールドだけを返してください。
 

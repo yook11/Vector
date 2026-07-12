@@ -1,4 +1,4 @@
-"""Thread-scoped question resolution with a safe passthrough fallback."""
+"""Thread-scoped question context preparation with a safe fallback."""
 
 from __future__ import annotations
 
@@ -8,13 +8,13 @@ from uuid import UUID
 import structlog
 from pydantic import ValidationError
 
-from app.agent.question_resolution.contract import (
-    QuestionResolutionResponseInvalidError,
-    QuestionResolver,
-    ResolvedQuestion,
-    resolved_question_from_draft,
+from app.agent.question_context.contract import (
+    QuestionContext,
+    QuestionContextGenerator,
+    QuestionContextResponseInvalidError,
+    question_context_from_draft,
 )
-from app.agent.question_resolution.metrics import record_question_resolution_outcome
+from app.agent.question_context.metrics import record_question_context_outcome
 from app.agent.threads.contracts import ThreadMessageSnapshot
 from app.analysis.ai_provider_errors import AIProviderError
 
@@ -22,55 +22,55 @@ HISTORY_MESSAGE_LIMIT = 6
 HISTORY_MESSAGE_CHAR_CAP = 2000
 
 logger = structlog.get_logger(__name__)
-_RESOLUTION_FAILURES = (
+_CONTEXT_FAILURES = (
     AIProviderError,
-    QuestionResolutionResponseInvalidError,
+    QuestionContextResponseInvalidError,
     ValidationError,
 )
 
 
-class QuestionResolutionService:
-    """Resolve follow-up questions while preserving existing behavior on failure."""
+class QuestionContextService:
+    """Prepare question context while preserving existing behavior on failure."""
 
-    def __init__(self, *, resolver: QuestionResolver | None) -> None:
-        self._resolver = resolver
+    def __init__(self, *, generator: QuestionContextGenerator | None) -> None:
+        self._generator = generator
 
-    async def resolve(
+    async def prepare(
         self,
         *,
         question: str,
         history: list[ThreadMessageSnapshot],
         as_of: datetime,
         run_id: UUID,
-    ) -> ResolvedQuestion:
+    ) -> QuestionContext:
         if not history:
-            record_question_resolution_outcome(result="skipped")
+            record_question_context_outcome(result="skipped")
             return _passthrough(question)
-        if self._resolver is None:
-            raise RuntimeError("resolver is required when history is present")
+        if self._generator is None:
+            raise RuntimeError("generator is required when history is present")
 
         try:
-            draft = await self._resolver.resolve(
+            draft = await self._generator.generate(
                 question=question,
                 history=_history_for_prompt(history),
                 as_of=as_of,
             )
-            resolved = resolved_question_from_draft(draft)
-        except _RESOLUTION_FAILURES as exc:
+            context = question_context_from_draft(draft)
+        except _CONTEXT_FAILURES as exc:
             logger.warning(
                 "question_resolution_failed",
                 run_id=str(run_id),
                 failure_type=exc.__class__.__name__,
             )
-            record_question_resolution_outcome(result="failed")
+            record_question_context_outcome(result="failed")
             return _passthrough(question)
 
-        record_question_resolution_outcome(result="resolved")
-        return resolved
+        record_question_context_outcome(result="resolved")
+        return context
 
 
-def _passthrough(question: str) -> ResolvedQuestion:
-    return ResolvedQuestion(standalone_question=question)
+def _passthrough(question: str) -> QuestionContext:
+    return QuestionContext(standalone_question=question)
 
 
 def _history_for_prompt(

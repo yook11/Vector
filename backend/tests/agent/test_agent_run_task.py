@@ -34,7 +34,7 @@ from app.agent.live_updates.stream import (
     AgentRunLiveStreamStageEvent,
     AgentRunLiveStreamTerminalEvent,
 )
-from app.agent.question_resolution.contract import ResolvedQuestionDraft
+from app.agent.question_context.contract import QuestionContextDraft
 from app.agent.runs.contracts import (
     CancelRunOutcome,
     CancelRunResult,
@@ -133,12 +133,12 @@ class FakeLiveStreamPublisher:
         return f"{len(self.published)}-0"
 
 
-class FakeQuestionResolver:
-    def __init__(self, outcome: ResolvedQuestionDraft | Exception) -> None:
+class FakeQuestionContextGenerator:
+    def __init__(self, outcome: QuestionContextDraft | Exception) -> None:
         self.outcome = outcome
         self.calls: list[dict[str, object]] = []
 
-    async def resolve(self, **kwargs: object) -> ResolvedQuestionDraft:
+    async def generate(self, **kwargs: object) -> QuestionContextDraft:
         self.calls.append(kwargs)
         if isinstance(self.outcome, Exception):
             raise self.outcome
@@ -880,7 +880,7 @@ async def test_idempotent_skip_does_not_create_or_start_stream_publisher(
 
 
 @pytest.mark.asyncio
-async def test_run_agent_answer_resolves_history_and_publishes_non_echo_question(
+async def test_run_agent_answer_prepares_context_and_publishes_non_echo_question(
     session_factory: async_sessionmaker[AsyncSession],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -894,8 +894,8 @@ async def test_run_agent_answer_resolves_history_and_publishes_non_echo_question
             ],
         )
     fake_agent = FakeAgent(_direct_result())
-    resolver = FakeQuestionResolver(
-        ResolvedQuestionDraft(
+    generator = FakeQuestionContextGenerator(
+        QuestionContextDraft(
             standalone_question="NVIDIA の発表が株価へ与える影響は？",
             user_intent="投資判断向けに詳しく説明して",
             prior_coverage="発表内容は既に説明済み",
@@ -912,8 +912,8 @@ async def test_run_agent_answer_resolves_history_and_publishes_non_echo_question
     )
     monkeypatch.setattr(
         agent_run_tasks,
-        "build_question_resolver",
-        lambda: resolver,
+        "build_question_context_generator",
+        lambda: generator,
     )
     monkeypatch.setattr(
         agent_run_tasks,
@@ -941,7 +941,7 @@ async def test_run_agent_answer_resolves_history_and_publishes_non_echo_question
             previous_answer="前回の回答 [[1]]",
         )
     ]
-    assert [message.content for message in resolver.calls[0]["history"]] == [
+    assert [message.content for message in generator.calls[0]["history"]] == [
         "NVIDIA の発表を説明して",
         "前回の回答 [[1]]",
     ]
@@ -1736,12 +1736,12 @@ async def test_terminal_publish_failure_does_not_revert_completed_run(
 @pytest.mark.parametrize(
     "outcome",
     [
-        ResolvedQuestionDraft(standalone_question="それの株価への影響は？"),
+        QuestionContextDraft(standalone_question="それの株価への影響は？"),
         AIProviderError(),
     ],
 )
-async def test_run_agent_answer_does_not_publish_echo_or_fallback_resolution(
-    outcome: ResolvedQuestionDraft | Exception,
+async def test_run_agent_answer_does_not_publish_echo_or_fallback_context(
+    outcome: QuestionContextDraft | Exception,
     session_factory: async_sessionmaker[AsyncSession],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -1762,8 +1762,8 @@ async def test_run_agent_answer_does_not_publish_echo_or_fallback_resolution(
     )
     monkeypatch.setattr(
         agent_run_tasks,
-        "build_question_resolver",
-        lambda: FakeQuestionResolver(outcome),
+        "build_question_context_generator",
+        lambda: FakeQuestionContextGenerator(outcome),
     )
     monkeypatch.setattr(
         agent_run_tasks,

@@ -1,4 +1,4 @@
-"""Question-resolution contracts and output guards."""
+"""Question context contracts and output guards."""
 
 from __future__ import annotations
 
@@ -29,11 +29,11 @@ UserActivityContext = Annotated[
 ]
 
 
-class QuestionResolutionResponseInvalidError(ValueError):
-    """Resolver output cannot be consumed as a structured draft."""
+class QuestionContextResponseInvalidError(ValueError):
+    """Generator output cannot be consumed as a structured draft."""
 
 
-class ResolvedQuestion(BaseModel):
+class QuestionContext(BaseModel):
     """Validated question context passed into the agent core."""
 
     model_config = ConfigDict(frozen=True)
@@ -44,8 +44,8 @@ class ResolvedQuestion(BaseModel):
     user_activity_context: UserActivityContext = ""
 
 
-class ResolvedQuestionDraft(BaseModel):
-    """Lenient structured output at the resolver adapter boundary."""
+class QuestionContextDraft(BaseModel):
+    """Lenient structured output at the generator adapter boundary."""
 
     model_config = ConfigDict(frozen=True)
 
@@ -55,22 +55,22 @@ class ResolvedQuestionDraft(BaseModel):
     user_activity_context: str = ""
 
 
-class QuestionResolver(Protocol):
+class QuestionContextGenerator(Protocol):
     """LLM port that derives structured context from a bounded thread window."""
 
-    async def resolve(
+    async def generate(
         self,
         *,
         question: str,
         history: list[ThreadMessageSnapshot],
         as_of: datetime,
-    ) -> ResolvedQuestionDraft: ...
+    ) -> QuestionContextDraft: ...
 
 
-def resolved_question_from_draft(draft: ResolvedQuestionDraft) -> ResolvedQuestion:
+def question_context_from_draft(draft: QuestionContextDraft) -> QuestionContext:
     """Normalize model text before applying the strict public context contract."""
 
-    return ResolvedQuestion(
+    return QuestionContext(
         standalone_question=_clean(
             draft.standalone_question, MAX_STANDALONE_QUESTION_LENGTH
         ),
