@@ -48,6 +48,7 @@ _FALLBACK_ANSWER = (
     "参考回答を安全に構築できませんでした。"
 )
 _FALLBACK_MISSING_ASPECT = "回答生成に必要な根拠または応答形式が不足しました"
+_MAX_ATTEMPTS = 2
 _EVIDENCE_ANSWER_AUDITED_ERRORS = (
     AIProviderError,
     EvidenceAnswerDraftGenerationInvalidError,
@@ -87,47 +88,10 @@ class EvidenceAnswerFlow:
 
         ai_model = _generator_attr(self._generator, "model_name")
         prompt_version = _generator_attr(self._generator, "prompt_version")
+        previous_error: str | None = None
         defect_count = 0
 
-        try:
-            draft, defects = await self._generate_strict_draft(
-                question=question,
-                evidence=evidence,
-                as_of=as_of,
-                target_time_window=target_time_window,
-                user_intent=user_intent,
-                prior_coverage=prior_coverage,
-                user_activity_context=user_activity_context,
-                previous_error=None,
-                attempt_number=1,
-                generation=1,
-                ai_model=ai_model,
-                prompt_version=prompt_version,
-            )
-        except _EVIDENCE_ANSWER_AUDITED_ERRORS as exc:
-            failure = classify_answer_synthesis_failure(exc)
-            await _record_attempt_failure(
-                audit_recorder=self._audit_recorder,
-                attempt_number=1,
-                failure=failure,
-                ai_model=ai_model,
-                prompt_version=prompt_version,
-            )
-            if (
-                failure.request_retry_disposition
-                is not RequestRetryDisposition.RETRY_IN_REQUEST
-            ):
-                return await self._fallback_with_audit(
-                    generation=2,
-                    attempt_count=1,
-                    retry_used=False,
-                    failure=failure,
-                    evidence_count=len(evidence),
-                    defect_count=defect_count,
-                    ai_model=ai_model,
-                    prompt_version=prompt_version,
-                )
-            await self._start_revision(generation=2)
+        for attempt_number in range(1, _MAX_ATTEMPTS + 1):
             try:
                 draft, defects = await self._generate_strict_draft(
                     question=question,
@@ -137,36 +101,46 @@ class EvidenceAnswerFlow:
                     user_intent=user_intent,
                     prior_coverage=prior_coverage,
                     user_activity_context=user_activity_context,
-                    previous_error=str(exc),
-                    attempt_number=2,
-                    generation=2,
+                    previous_error=previous_error,
+                    attempt_number=attempt_number,
+                    generation=attempt_number,
                     ai_model=ai_model,
                     prompt_version=prompt_version,
                 )
-            except _EVIDENCE_ANSWER_AUDITED_ERRORS as retry_exc:
-                retry_failure = classify_answer_synthesis_failure(retry_exc)
+            except _EVIDENCE_ANSWER_AUDITED_ERRORS as exc:
+                failure = classify_answer_synthesis_failure(exc)
                 await _record_attempt_failure(
                     audit_recorder=self._audit_recorder,
-                    attempt_number=2,
-                    failure=retry_failure,
+                    attempt_number=attempt_number,
+                    failure=failure,
                     ai_model=ai_model,
                     prompt_version=prompt_version,
                 )
-                return await self._fallback_with_audit(
-                    generation=3,
-                    attempt_count=2,
-                    retry_used=True,
-                    failure=retry_failure,
-                    evidence_count=len(evidence),
-                    defect_count=defect_count,
-                    ai_model=ai_model,
-                    prompt_version=prompt_version,
+                retriable = (
+                    failure.request_retry_disposition
+                    is RequestRetryDisposition.RETRY_IN_REQUEST
+                    and attempt_number < _MAX_ATTEMPTS
                 )
+                if not retriable:
+                    return await self._fallback_with_audit(
+                        generation=attempt_number + 1,
+                        attempt_count=attempt_number,
+                        retry_used=attempt_number > 1,
+                        failure=failure,
+                        evidence_count=len(evidence),
+                        defect_count=defect_count,
+                        ai_model=ai_model,
+                        prompt_version=prompt_version,
+                    )
+                await self._start_revision(generation=attempt_number + 1)
+                previous_error = str(exc)
+                continue
+
             defect_count += len(defects)
             await self._record_synthesized(
                 draft=draft,
-                attempt_count=2,
-                retry_used=True,
+                attempt_count=attempt_number,
+                retry_used=attempt_number > 1,
                 evidence_count=len(evidence),
                 defect_count=defect_count,
                 ai_model=ai_model,
@@ -174,17 +148,7 @@ class EvidenceAnswerFlow:
             )
             return draft
 
-        defect_count += len(defects)
-        await self._record_synthesized(
-            draft=draft,
-            attempt_count=1,
-            retry_used=False,
-            evidence_count=len(evidence),
-            defect_count=defect_count,
-            ai_model=ai_model,
-            prompt_version=prompt_version,
-        )
-        return draft
+        raise AssertionError("unreachable: answer loop must return or raise")
 
     async def _generate_strict_draft(
         self,
