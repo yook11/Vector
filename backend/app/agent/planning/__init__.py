@@ -6,12 +6,12 @@ from app.agent.planning.contract import (
     QuestionPlanner,
     RetrievalPlan,
 )
-from app.agent.planning.flow import QuestionPlanningFlow
+from app.agent.planning.service import QuestionPlanningService
 
 __all__ = [
     "QuestionPlanDraft",
     "QuestionPlanDraftGenerator",
-    "QuestionPlanningFlow",
+    "QuestionPlanningService",
     "QuestionPlanner",
     "RetrievalPlan",
 ]

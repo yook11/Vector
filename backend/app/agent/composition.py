@@ -60,7 +60,7 @@ def build_question_answering_agent(
         InternalSearchService,
     )
     from app.agent.planning.ai.gemini import GeminiQuestionPlanner
-    from app.agent.planning.flow import QuestionPlanningFlow
+    from app.agent.planning.service import QuestionPlanningService
 
     external_search = _build_external_search(tavily_client, events=events)
     internal_search = InternalSearchService(
@@ -69,7 +69,7 @@ def build_question_answering_agent(
         events=events,
     )
     return QuestionAnsweringOrchestrator(
-        planner=QuestionPlanningFlow(
+        planner=QuestionPlanningService(
             planner=GeminiQuestionPlanner(),
             audit_recorder=None,
         ),

@@ -1,4 +1,4 @@
-"""Question planning flow."""
+"""Question planning service."""
 
 from __future__ import annotations
 
@@ -39,7 +39,7 @@ _PLANNER_AUDITED_ERRORS = (
 _MAX_ATTEMPTS = 2
 
 
-class QuestionPlanningFlow:
+class QuestionPlanningService:
     """Create completed question plans from LLM drafts."""
 
     def __init__(

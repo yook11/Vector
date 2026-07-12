@@ -1,4 +1,4 @@
-"""Question planning flow tests."""
+"""Question planning service tests."""
 
 from __future__ import annotations
 
@@ -37,8 +37,8 @@ from app.agent.planning.contract import (
     QuestionPlanner,
     safe_fallback_plan,
 )
-from app.agent.planning.flow import (
-    QuestionPlanningFlow,
+from app.agent.planning.service import (
+    QuestionPlanningService,
 )
 from app.analysis.ai_provider_errors import AIProviderNetworkError
 from tests.logfire._metric_helpers import collected_metrics, sum_counter_for_result
@@ -198,7 +198,7 @@ def _metric_attributes(
     ]
 
 
-class TestQuestionPlanningFlow:
+class TestQuestionPlanningService:
     @pytest.mark.asyncio
     async def test_returns_completed_plan_from_draft(self) -> None:
         planner = FakePlanner(
@@ -210,7 +210,7 @@ class TestQuestionPlanningFlow:
             ]
         )
 
-        plan = await QuestionPlanningFlow(planner=planner).plan(_input())
+        plan = await QuestionPlanningService(planner=planner).plan(_input())
 
         assert plan.external_research_tasks == [
             _external_task("NVIDIA の直近発表を確認する")
@@ -225,7 +225,7 @@ class TestQuestionPlanningFlow:
         )
         planner = FakePlanner([_response_invalid(), repaired])
 
-        plan = await QuestionPlanningFlow(planner=planner).plan(_input())
+        plan = await QuestionPlanningService(planner=planner).plan(_input())
 
         assert plan.retrieval_mode == "external"
         assert planner.previous_errors[0] is None
@@ -235,7 +235,7 @@ class TestQuestionPlanningFlow:
     async def test_falls_back_after_retry_failure(self) -> None:
         planner = FakePlanner([_response_invalid(), _validation_error()])
 
-        plan = await QuestionPlanningFlow(planner=planner).plan(
+        plan = await QuestionPlanningService(planner=planner).plan(
             _input("保存済みの記事からAI半導体ニュースをまとめて")
         )
 
@@ -250,7 +250,7 @@ class TestQuestionPlanningFlow:
         planner = FakePlanner([AIProviderNetworkError()])
         recorder = FakePlannerAuditRecorder()
 
-        plan = await QuestionPlanningFlow(
+        plan = await QuestionPlanningService(
             planner=planner,
             audit_recorder=recorder,
         ).plan(_input("保存済みの記事からAI半導体ニュースをまとめて"))
@@ -284,7 +284,7 @@ class TestQuestionPlanningFlow:
         planner = FakePlanner([_response_invalid(), repaired])
         recorder = FakePlannerAuditRecorder()
 
-        plan = await QuestionPlanningFlow(
+        plan = await QuestionPlanningService(
             planner=planner,
             audit_recorder=recorder,
         ).plan(_input())
@@ -332,7 +332,7 @@ class TestQuestionPlanningFlow:
         )
         recorder = FakePlannerAuditRecorder()
 
-        plan = await QuestionPlanningFlow(
+        plan = await QuestionPlanningService(
             planner=planner,
             audit_recorder=recorder,
         ).plan(_input())
@@ -365,7 +365,7 @@ class TestQuestionPlanningFlow:
         planner = FakePlanner([_response_invalid(), _validation_error()])
         recorder = FakePlannerAuditRecorder()
 
-        plan = await QuestionPlanningFlow(
+        plan = await QuestionPlanningService(
             planner=planner,
             audit_recorder=recorder,
         ).plan(_input())
@@ -385,7 +385,7 @@ class TestQuestionPlanningFlow:
         repaired = _draft("internal", internal_queries=["NVIDIA AI GPU"])
         planner = FakePlanner([_response_invalid(), repaired])
 
-        plan = await QuestionPlanningFlow(
+        plan = await QuestionPlanningService(
             planner=planner,
             audit_recorder=RaisingPlannerAuditRecorder(),
         ).plan(_input())
@@ -393,7 +393,7 @@ class TestQuestionPlanningFlow:
         assert plan.retrieval_mode == "internal"
 
         fallback_planner = FakePlanner([AIProviderNetworkError()])
-        fallback = await QuestionPlanningFlow(
+        fallback = await QuestionPlanningService(
             planner=fallback_planner,
             audit_recorder=RaisingPlannerAuditRecorder(),
         ).plan(_input("保存済み記事で見て"))
@@ -408,7 +408,7 @@ class TestQuestionPlanningFlow:
         planner = FakePlanner([TimeoutError("provider timeout")])
 
         with pytest.raises(TimeoutError):
-            await QuestionPlanningFlow(planner=planner).plan(_input())
+            await QuestionPlanningService(planner=planner).plan(_input())
         metrics = collected_metrics(capfire)
         assert _metric_attributes(metrics, _PLANNER_OUTCOME_METRIC) == []
 
@@ -419,7 +419,7 @@ class TestQuestionPlanningFlow:
     ) -> None:
         planner = FakePlanner([_draft("internal", internal_queries=["NVIDIA"])])
 
-        await QuestionPlanningFlow(planner=planner).plan(
+        await QuestionPlanningService(planner=planner).plan(
             _input("生の質問テキストを混ぜない")
         )
 
@@ -452,7 +452,7 @@ class TestQuestionPlanningFlow:
             ]
         )
 
-        await QuestionPlanningFlow(planner=planner).plan(_input())
+        await QuestionPlanningService(planner=planner).plan(_input())
 
         metrics = collected_metrics(capfire)
         assert sum_counter_for_result(metrics, _PLANNER_OUTCOME_METRIC, "planned") == 1
@@ -472,7 +472,7 @@ class TestQuestionPlanningFlow:
     ) -> None:
         planner = FakePlanner([AIProviderNetworkError()])
 
-        await QuestionPlanningFlow(planner=planner).plan(_input())
+        await QuestionPlanningService(planner=planner).plan(_input())
 
         metrics = collected_metrics(capfire)
         assert sum_counter_for_result(metrics, _PLANNER_OUTCOME_METRIC, "fallback") == 1
