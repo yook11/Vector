@@ -6,12 +6,19 @@ import asyncio
 from datetime import datetime
 from typing import assert_never
 
+from app.agent.contract import EvidenceCollectionFailure
 from app.agent.evidence_collection.contract import (
     EvidenceCollectionOutcome,
     ExternalPlanSearcher,
     InternalArticleRetriever,
 )
 from app.agent.evidence_collection.external_search import ExternalSearchOutcome
+from app.agent.evidence_collection.internal_search.article_search import (
+    InternalArticleSearchHit,
+)
+from app.agent.evidence_collection.internal_search.contract import (
+    InternalSearchError,
+)
 from app.agent.evidence_collection.internal_search.query_embedding import (
     InternalSearchQueries,
 )
@@ -48,10 +55,15 @@ class EvidenceCollectionService:
     ) -> EvidenceCollectionOutcome:
         match plan:
             case InternalRetrievalPlan(internal_queries=internal_queries):
-                hits = await self._internal_search.search_articles(
+                hits, internal_failed = await self._collect_internal(
                     InternalSearchQueries(queries=tuple(internal_queries))
                 )
-                return EvidenceCollectionOutcome(internal_hits=hits)
+                return EvidenceCollectionOutcome(
+                    internal_hits=hits,
+                    collection_failures=(
+                        ["internal_search"] if internal_failed else []
+                    ),
+                )
             case ExternalSearchPlan(
                 external_research_tasks=external_research_tasks,
                 target_time_window=target_time_window,
@@ -64,7 +76,7 @@ class EvidenceCollectionService:
                 if external is not None:
                     return EvidenceCollectionOutcome(external_search=external)
                 return EvidenceCollectionOutcome(
-                    unmet_requirements=["external_search"],
+                    collection_failures=["external_search"],
                 )
             case InternalAndExternalPlan(
                 internal_queries=internal_queries,
@@ -75,16 +87,20 @@ class EvidenceCollectionService:
                     queries=tuple(internal_queries)
                 )
                 if self._external_search is None:
-                    hits = await self._internal_search.search_articles(
+                    hits, internal_failed = await self._collect_internal(
                         internal_search_queries
                     )
+                    collection_failures: list[EvidenceCollectionFailure] = []
+                    if internal_failed:
+                        collection_failures.append("internal_search")
+                    collection_failures.append("external_search")
                     return EvidenceCollectionOutcome(
                         internal_hits=hits,
-                        unmet_requirements=["external_search"],
+                        collection_failures=collection_failures,
                     )
 
-                hits_result, external_result = await asyncio.gather(
-                    self._internal_search.search_articles(internal_search_queries),
+                internal_result, external_result = await asyncio.gather(
+                    self._collect_internal(internal_search_queries),
                     self._search_external(
                         external_research_tasks,
                         target_time_window=target_time_window,
@@ -92,16 +108,21 @@ class EvidenceCollectionService:
                     ),
                     return_exceptions=True,
                 )
-                hits = _raise_if_exception(hits_result)
+                hits, internal_failed = _raise_if_exception(internal_result)
                 external = _raise_if_exception(external_result)
+                collection_failures: list[EvidenceCollectionFailure] = (
+                    ["internal_search"] if internal_failed else []
+                )
                 if external is not None:
                     return EvidenceCollectionOutcome(
                         internal_hits=hits,
                         external_search=external,
+                        collection_failures=collection_failures,
                     )
+                collection_failures.append("external_search")
                 return EvidenceCollectionOutcome(
                     internal_hits=hits,
-                    unmet_requirements=["external_search"],
+                    collection_failures=collection_failures,
                 )
             case _ as unreachable:
                 assert_never(unreachable)
@@ -121,6 +142,15 @@ class EvidenceCollectionService:
             as_of=as_of,
             requested_agent_count=self._requested_external_agent_count,
         )
+
+    async def _collect_internal(
+        self,
+        queries: InternalSearchQueries,
+    ) -> tuple[list[InternalArticleSearchHit], bool]:
+        try:
+            return await self._internal_search.search_articles(queries), False
+        except InternalSearchError:
+            return [], True
 
 
 def _raise_if_exception[ResultT](result: ResultT | BaseException) -> ResultT:

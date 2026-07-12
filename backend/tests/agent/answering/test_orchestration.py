@@ -361,7 +361,7 @@ async def test_answer_direct_plan_calls_direct_answerer_only() -> None:
     assert result.sources == []
     assert result.missing_aspects == []
     assert result.retrieval.planned_mode == "none"
-    assert result.retrieval.unmet_requirements == []
+    assert result.retrieval.collection_failures == []
     assert not hasattr(result, "execution")
     assert direct_answerer.calls == [
         {
@@ -548,12 +548,12 @@ async def test_answer_empty_retrieval_evidence_calls_synthesis() -> None:
 
 
 @pytest.mark.asyncio
-async def test_answer_unmet_requirements_cap_answered_draft_to_insufficient() -> None:
+async def test_answer_collection_failures_cap_answered_draft_to_insufficient() -> None:
     orchestrator, _, _, _, _ = _orchestrator(
         plan=_mixed_plan(),
         outcome=EvidenceCollectionOutcome(
             internal_hits=[_internal_hit(assessment_id=1001, title="internal 1")],
-            unmet_requirements=["external_search"],
+            collection_failures=["external_search"],
         ),
         draft=EvidenceAnswerDraft(
             sufficiency="answered",
@@ -566,7 +566,7 @@ async def test_answer_unmet_requirements_cap_answered_draft_to_insufficient() ->
 
     assert result.status == "insufficient"
     assert result.answer == "内部根拠の範囲では確認できます。"
-    assert result.retrieval.unmet_requirements == ["external_search"]
+    assert result.retrieval.collection_failures == ["external_search"]
     assert any("外部" in item for item in result.missing_aspects)
 
 
@@ -613,7 +613,7 @@ async def test_answer_missing_aspects_are_ordered_and_deduplicated() -> None:
                 reports=reports,
                 tasks=tasks,
             ),
-            unmet_requirements=["internal_retrieval"],
+            collection_failures=["internal_search"],
         ),
         draft=EvidenceAnswerDraft(
             sufficiency="insufficient",

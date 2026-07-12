@@ -4,19 +4,23 @@ from __future__ import annotations
 
 import json
 from typing import Any
+from unittest.mock import Mock
 
 import pytest
 from logfire.testing import CaptureLogfire
 
+import app.agent.evidence_collection.internal_search.service as service_module
 from app.agent.evidence_collection.internal_search.article_search import (
     InternalArticleContent,
     InternalArticleSearchHit,
 )
+from app.agent.evidence_collection.internal_search.contract import InternalSearchError
 from app.agent.evidence_collection.internal_search.query_embedding import (
     InternalQueryEmbedding,
     InternalSearchQueries,
 )
 from app.agent.evidence_collection.internal_search.service import InternalSearchService
+from app.analysis.ai_provider_errors import AIProviderError
 from app.analysis.analyzed_article import InScopeAnalyzedArticle
 from app.analysis.assessment.domain.result import InScope, InScopeCategory
 from app.analysis.embedding.domain.value_objects import (
@@ -92,8 +96,11 @@ class FakeArticleVectorSearchRepository:
     def __init__(
         self,
         hits_by_query: dict[str, list[InternalArticleSearchHit]],
+        *,
+        error: Exception | None = None,
     ) -> None:
         self.hits_by_query = hits_by_query
+        self.error = error
         self.calls: list[tuple[InternalQueryEmbedding, int]] = []
 
     async def search_by_embedding(
@@ -103,6 +110,8 @@ class FakeArticleVectorSearchRepository:
         limit: int,
     ) -> list[InternalArticleSearchHit]:
         self.calls.append((embedding, limit))
+        if self.error is not None:
+            raise self.error
         return list(self.hits_by_query.get(embedding.query, []))
 
 
@@ -177,11 +186,10 @@ class TestInternalSearchService:
         assert [call.queries for call in embedder.calls] == [
             ("NVIDIA", "OpenAI", "Apple")
         ]
-        metrics = collected_metrics(capfire)
-        assert sum_counter_for_result(metrics, _METRIC, "succeeded") == 1
-        assert _metric_attributes(metrics, _METRIC) == [
-            {"result": "succeeded", "query_count": 3}
-        ]
+        assert (
+            sum_counter_for_result(collected_metrics(capfire), _METRIC, "succeeded")
+            == 0
+        )
 
     async def test_empty_embedder_result_records_empty_metric(
         self,
@@ -193,11 +201,7 @@ class TestInternalSearchService:
         embeddings = await service.embed_queries(_queries("NVIDIA"))
 
         assert embeddings == []
-        metrics = collected_metrics(capfire)
-        assert sum_counter_for_result(metrics, _METRIC, "empty") == 1
-        assert _metric_attributes(metrics, _METRIC) == [
-            {"result": "empty", "query_count": 1}
-        ]
+        assert sum_counter_for_result(collected_metrics(capfire), _METRIC, "empty") == 0
 
     async def test_embedder_failure_records_failed_metric(
         self,
@@ -210,10 +214,7 @@ class TestInternalSearchService:
             await service.embed_queries(_queries("NVIDIA secret query"))
 
         metrics = collected_metrics(capfire)
-        assert sum_counter_for_result(metrics, _METRIC, "failed") == 1
-        assert _metric_attributes(metrics, _METRIC) == [
-            {"result": "failed", "query_count": 1}
-        ]
+        assert sum_counter_for_result(metrics, _METRIC, "failed") == 0
         dumped = json.dumps(metrics, default=str, ensure_ascii=False)
         assert "NVIDIA secret query" not in dumped
 
@@ -287,6 +288,7 @@ class TestInternalSearchService:
 
     async def test_search_articles_searches_with_embedded_internal_queries(
         self,
+        capfire: CaptureLogfire,
     ) -> None:
         embedder = FakeInternalQueryEmbedder()
         search_repo = FakeArticleVectorSearchRepository(
@@ -314,6 +316,107 @@ class TestInternalSearchService:
         assert [(call.query, limit) for call, limit in search_repo.calls] == [
             ("NVIDIA", 4),
             ("OpenAI", 4),
+        ]
+        assert _metric_attributes(collected_metrics(capfire), _METRIC) == [
+            {"result": "succeeded", "query_count": 2}
+        ]
+
+    async def test_search_articles_empty_result_records_overall_empty_metric(
+        self,
+        capfire: CaptureLogfire,
+    ) -> None:
+        service = InternalSearchService(
+            embedder=FakeInternalQueryEmbedder(),
+            article_search_repository=FakeArticleVectorSearchRepository({}),
+        )
+
+        hits = await service.search_articles(_queries("NVIDIA"))
+
+        assert hits == []
+        assert _metric_attributes(collected_metrics(capfire), _METRIC) == [
+            {"result": "empty", "query_count": 1}
+        ]
+
+    async def test_search_articles_wraps_provider_failure_and_records_phase(
+        self,
+        capfire: CaptureLogfire,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        warning = Mock()
+        monkeypatch.setattr(service_module.logger, "warning", warning)
+        provider_error = AIProviderError("SECRET provider message")
+        service = InternalSearchService(
+            embedder=FakeInternalQueryEmbedder(error=provider_error),
+            article_search_repository=FakeArticleVectorSearchRepository({}),
+        )
+
+        with pytest.raises(InternalSearchError) as captured:
+            await service.search_articles(_queries("SECRET raw user question"))
+
+        assert captured.value.phase == "query_embedding"
+        assert captured.value.__cause__ is provider_error
+        attributes = _metric_attributes(collected_metrics(capfire), _METRIC)
+        assert attributes == [
+            {
+                "result": "failed",
+                "query_count": 1,
+                "failure_phase": "query_embedding",
+            }
+        ]
+        assert "SECRET raw user question" not in json.dumps(
+            attributes, ensure_ascii=False
+        )
+        warning.assert_called_once_with(
+            "internal_search_failed",
+            failure_phase="query_embedding",
+            query_count=1,
+        )
+        assert "SECRET" not in repr(warning.call_args)
+
+    async def test_search_articles_classified_repository_failure_records_phase(
+        self,
+        capfire: CaptureLogfire,
+    ) -> None:
+        repository_error = InternalSearchError(phase="article_search")
+        service = InternalSearchService(
+            embedder=FakeInternalQueryEmbedder(),
+            article_search_repository=FakeArticleVectorSearchRepository(
+                {}, error=repository_error
+            ),
+        )
+
+        with pytest.raises(InternalSearchError) as captured:
+            await service.search_articles(_queries("SECRET raw user question"))
+
+        assert captured.value is repository_error
+        assert _metric_attributes(collected_metrics(capfire), _METRIC) == [
+            {
+                "result": "failed",
+                "query_count": 1,
+                "failure_phase": "article_search",
+            }
+        ]
+
+    async def test_search_articles_unclassified_failure_records_unknown_and_propagates(
+        self,
+        capfire: CaptureLogfire,
+    ) -> None:
+        service = InternalSearchService(
+            embedder=FakeInternalQueryEmbedder(),
+            article_search_repository=FakeArticleVectorSearchRepository(
+                {}, error=RuntimeError("repository bug")
+            ),
+        )
+
+        with pytest.raises(RuntimeError, match="repository bug"):
+            await service.search_articles(_queries("SECRET raw user question"))
+
+        assert _metric_attributes(collected_metrics(capfire), _METRIC) == [
+            {
+                "result": "failed",
+                "query_count": 1,
+                "failure_phase": "unknown",
+            }
         ]
 
     async def test_search_articles_reports_counts_without_query_text(self) -> None:

@@ -5,11 +5,11 @@ from app.agent.contract import (
     AnswerQuestionResult,
     AnswerRetrievalSummary,
     AnswerSource,
+    EvidenceCollectionFailure,
     ExternalUrlSource,
     InternalArticleSource,
     QuestionAnsweringAgent,
     RetrievalMode,
-    UnmetRequirement,
 )
 from app.agent.planning.contract import (
     EXTERNAL_RESEARCH_TASK_LIMIT,
@@ -51,5 +51,5 @@ __all__ = [
     "QuestionPlanner",
     "RetrievalMode",
     "RetrievalPlan",
-    "UnmetRequirement",
+    "EvidenceCollectionFailure",
 ]

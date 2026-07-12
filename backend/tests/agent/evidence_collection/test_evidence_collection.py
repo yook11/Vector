@@ -20,6 +20,7 @@ from app.agent.evidence_collection.internal_search.article_search import (
     InternalArticleContent,
     InternalArticleSearchHit,
 )
+from app.agent.evidence_collection.internal_search.contract import InternalSearchError
 from app.agent.evidence_collection.internal_search.query_embedding import (
     InternalSearchQueries,
 )
@@ -218,7 +219,7 @@ async def test_collect_internal_preserves_search_hit_order() -> None:
         internal_search.calls
         == [InternalSearchQueries(queries=("NVIDIA AI GPU 直近動向",))]
         and outcome.internal_hits == hits
-        and outcome.unmet_requirements == []
+        and outcome.collection_failures == []
     )
 
 
@@ -254,7 +255,7 @@ async def test_collect_internal_passes_plan_queries_directly_to_leaf_search() ->
 
 
 @pytest.mark.asyncio
-async def test_collect_external_skips_internal_search_and_records_unmet() -> None:
+async def test_collect_external_skips_internal_search_and_records_failure() -> None:
     internal_search = FakeInternalArticleRetriever()
     service = EvidenceCollectionService(internal_search=internal_search)
 
@@ -264,7 +265,7 @@ async def test_collect_external_skips_internal_search_and_records_unmet() -> Non
         internal_search.calls == []
         and outcome.internal_hits == []
         and outcome.external_search is None
-        and outcome.unmet_requirements == ["external_search"]
+        and outcome.collection_failures == ["external_search"]
     )
 
 
@@ -285,12 +286,12 @@ async def test_collect_external_runs_external_search_when_available() -> None:
         internal_search.calls == []
         and external_search.calls == [([_external_task()], None, _as_of(), 4)]
         and outcome.external_search == external_search._outcome
-        and outcome.unmet_requirements == []
+        and outcome.collection_failures == []
     )
 
 
 @pytest.mark.asyncio
-async def test_collect_internal_and_external_runs_internal_and_records_unmet() -> None:
+async def test_collect_mixed_runs_internal_and_records_external_failure() -> None:
     plan = _plan("internal_and_external")
     hits = [_hit(curation_id=1, title="NVIDIA", distance=0.1)]
     internal_search = FakeInternalArticleRetriever(hits=hits)
@@ -303,7 +304,7 @@ async def test_collect_internal_and_external_runs_internal_and_records_unmet() -
         == [InternalSearchQueries(queries=("NVIDIA AI GPU 直近動向",))]
         and outcome.internal_hits == hits
         and outcome.external_search is None
-        and outcome.unmet_requirements == ["external_search"]
+        and outcome.collection_failures == ["external_search"]
     )
 
 
@@ -326,7 +327,7 @@ async def test_collect_internal_and_external_runs_both_retrievals() -> None:
         and external_search.calls == [([_external_task()], None, _as_of(), None)]
         and outcome.internal_hits == hits
         and outcome.external_search == external_search._outcome
-        and outcome.unmet_requirements == []
+        and outcome.collection_failures == []
     )
 
 
@@ -360,7 +361,7 @@ async def test_collect_internal_and_external_retrievals_overlap() -> None:
         and external_started.is_set()
         and outcome.internal_hits == hits
         and outcome.external_search == external_search._outcome
-        and outcome.unmet_requirements == []
+        and outcome.collection_failures == []
     )
 
 
@@ -472,16 +473,86 @@ async def test_collect_propagates_internal_search_exception() -> None:
         await service.collect(_plan("internal"), as_of=_as_of())
 
 
-def test_retrieval_outcome_rejects_external_search_and_external_unmet() -> None:
+@pytest.mark.asyncio
+async def test_collect_internal_converts_classified_failure_to_outcome() -> None:
+    service = EvidenceCollectionService(
+        internal_search=FakeInternalArticleRetriever(
+            error=InternalSearchError(phase="query_embedding"),
+        ),
+    )
+
+    outcome = await service.collect(_plan("internal"), as_of=_as_of())
+
+    assert outcome.internal_hits == []
+    assert outcome.collection_failures == ["internal_search"]
+
+
+@pytest.mark.asyncio
+async def test_collect_mixed_keeps_external_on_classified_internal_failure() -> None:
+    external_outcome = _external_outcome()
+    service = EvidenceCollectionService(
+        internal_search=FakeInternalArticleRetriever(
+            error=InternalSearchError(phase="article_search"),
+        ),
+        external_search=FakeExternalPlanSearcher(external_outcome),
+    )
+
+    outcome = await service.collect(_plan("internal_and_external"), as_of=_as_of())
+
+    assert outcome.internal_hits == []
+    assert outcome.external_search is external_outcome
+    assert outcome.collection_failures == ["internal_search"]
+
+
+@pytest.mark.asyncio
+async def test_collect_mixed_classified_internal_failure_orders_both_failures() -> None:
+    service = EvidenceCollectionService(
+        internal_search=FakeInternalArticleRetriever(
+            error=InternalSearchError(phase="article_search"),
+        ),
+    )
+
+    outcome = await service.collect(_plan("internal_and_external"), as_of=_as_of())
+
+    assert outcome.internal_hits == []
+    assert outcome.external_search is None
+    assert outcome.collection_failures == ["internal_search", "external_search"]
+
+
+def test_outcome_rejects_external_search_and_external_failure() -> None:
     with pytest.raises(ValidationError):
         EvidenceCollectionOutcome(
             external_search=_external_outcome(),
-            unmet_requirements=["external_search"],
+            collection_failures=["external_search"],
         )
 
 
-def test_retrieval_outcome_allows_external_unmet_when_search_is_absent() -> None:
-    outcome = EvidenceCollectionOutcome(unmet_requirements=["external_search"])
+def test_outcome_allows_external_failure_when_search_is_absent() -> None:
+    outcome = EvidenceCollectionOutcome(collection_failures=["external_search"])
 
     assert outcome.external_search is None
-    assert outcome.unmet_requirements == ["external_search"]
+    assert outcome.collection_failures == ["external_search"]
+
+
+def test_outcome_rejects_duplicate_or_out_of_order_failures() -> None:
+    for failures in (
+        ["internal_search", "internal_search"],
+        ["external_search", "external_search"],
+        ["external_search", "internal_search"],
+    ):
+        with pytest.raises(ValidationError):
+            EvidenceCollectionOutcome(collection_failures=failures)
+
+
+def test_outcome_rejects_internal_hits_and_internal_failure() -> None:
+    with pytest.raises(ValidationError):
+        EvidenceCollectionOutcome(
+            internal_hits=[_hit(curation_id=1, title="NVIDIA", distance=0.1)],
+            collection_failures=["internal_search"],
+        )
+
+
+def test_outcome_allows_empty_internal_search_without_failure() -> None:
+    outcome = EvidenceCollectionOutcome(internal_hits=[])
+
+    assert outcome.collection_failures == []
