@@ -14,7 +14,7 @@ from app.agent.contract import (
     ExternalUrlSource,
     InternalArticleSource,
     RetrievalMode,
-    UnmetRequirement,
+    EvidenceCollectionFailure,
 )
 
 
@@ -41,11 +41,11 @@ def _external_source() -> ExternalUrlSource:
 
 def _retrieval(
     planned_mode: RetrievalMode = "internal",
-    unmet_requirements: list[UnmetRequirement] | None = None,
+    collection_failures: list[EvidenceCollectionFailure] | None = None,
 ) -> AnswerRetrievalSummary:
     return AnswerRetrievalSummary(
         planned_mode=planned_mode,
-        unmet_requirements=unmet_requirements or [],
+        collection_failures=collection_failures or [],
     )
 
 
@@ -62,14 +62,18 @@ class TestAnswerQuestionInput:
 
 
 class TestAnswerRetrievalSummary:
-    def test_accepts_planned_mode_and_unmet_requirements(self) -> None:
+    @pytest.mark.parametrize("failure", ["internal_search", "external_search"])
+    def test_accepts_planned_mode_and_collection_failures(
+        self,
+        failure: EvidenceCollectionFailure,
+    ) -> None:
         summary = AnswerRetrievalSummary(
-            planned_mode="external",
-            unmet_requirements=["external_search"],
+            planned_mode="internal_and_external",
+            collection_failures=[failure],
         )
 
-        assert summary.planned_mode == "external"
-        assert summary.unmet_requirements == ["external_search"]
+        assert summary.planned_mode == "internal_and_external"
+        assert summary.collection_failures == [failure]
 
 
 class TestSources:
@@ -149,7 +153,7 @@ class TestAnswerQuestionResult:
                 retrieval=_retrieval("internal"),
             )
 
-    def test_rejects_answered_result_with_unmet_requirements(self) -> None:
+    def test_rejects_answered_result_with_collection_failures(self) -> None:
         with pytest.raises(ValidationError):
             AnswerQuestionResult(
                 status="answered",

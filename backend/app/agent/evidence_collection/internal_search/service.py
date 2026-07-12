@@ -5,6 +5,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Protocol
 
+import structlog
+
 from app.agent.contract import (
     AnswerEventReporter,
     AnswerProgressEvent,
@@ -13,6 +15,9 @@ from app.agent.contract import (
 )
 from app.agent.evidence_collection.internal_search.article_search import (
     InternalArticleSearchHit,
+)
+from app.agent.evidence_collection.internal_search.contract import (
+    InternalSearchError,
 )
 from app.agent.evidence_collection.internal_search.metrics import (
     record_internal_retrieval_outcome,
@@ -23,9 +28,12 @@ from app.agent.evidence_collection.internal_search.query_embedding import (
     InternalQueryEmbedding,
     InternalSearchQueries,
 )
+from app.analysis.ai_provider_errors import AIProviderError
 from app.analysis.embedding.domain.value_objects import EmbeddingVector
 
 __all__ = ["InternalSearchService"]
+
+logger = structlog.get_logger(__name__)
 
 
 class ArticleVectorSearchRepository(Protocol):
@@ -70,17 +78,13 @@ class InternalSearchService:
             query for query in queries.queries if query not in cached_vectors
         )
         new_embeddings: list[InternalQueryEmbedding] = []
-        try:
-            if missing_queries:
+        if missing_queries:
+            try:
                 new_embeddings = await self.embedder.embed_queries(
                     InternalSearchQueries(queries=missing_queries)
                 )
-        except Exception:
-            record_internal_retrieval_outcome(
-                result="failed",
-                query_count=len(queries.queries),
-            )
-            raise
+            except AIProviderError as exc:
+                raise InternalSearchError(phase="query_embedding") from exc
 
         await self._store_new_query_embeddings(new_embeddings)
         embeddings_by_query = {
@@ -95,10 +99,6 @@ class InternalSearchService:
             for query in queries.queries
             if query in embeddings_by_query
         ]
-        record_internal_retrieval_outcome(
-            result="succeeded" if embeddings else "empty",
-            query_count=len(queries.queries),
-        )
         return embeddings
 
     async def search_articles(
@@ -116,26 +116,44 @@ class InternalSearchService:
         await self._report_event(
             InternalSearchStartedEvent(query_count=len(queries.queries))
         )
-        embeddings = await self.embed_queries(queries)
-        if not embeddings:
-            await self._report_event(InternalSearchCompletedEvent(hit_count=0))
-            return []
+        try:
+            embeddings = await self.embed_queries(queries)
+            best_by_curation_id: dict[int, InternalArticleSearchHit] = {}
+            for embedding in embeddings:
+                hits = await self.article_search_repository.search_by_embedding(
+                    embedding,
+                    limit=per_query_limit,
+                )
+                for hit in hits:
+                    current = best_by_curation_id.get(hit.article.curation_id)
+                    if current is None or hit.distance < current.distance:
+                        best_by_curation_id[hit.article.curation_id] = hit
 
-        best_by_curation_id: dict[int, InternalArticleSearchHit] = {}
-        for embedding in embeddings:
-            hits = await self.article_search_repository.search_by_embedding(
-                embedding,
-                limit=per_query_limit,
+            hits = sorted(
+                best_by_curation_id.values(),
+                key=lambda hit: hit.distance,
+            )[:limit]
+        except Exception as exc:
+            failure_phase = (
+                exc.phase if isinstance(exc, InternalSearchError) else "unknown"
             )
-            for hit in hits:
-                current = best_by_curation_id.get(hit.article.curation_id)
-                if current is None or hit.distance < current.distance:
-                    best_by_curation_id[hit.article.curation_id] = hit
+            record_internal_retrieval_outcome(
+                result="failed",
+                query_count=len(queries.queries),
+                failure_phase=failure_phase,
+            )
+            if isinstance(exc, InternalSearchError):
+                logger.warning(
+                    "internal_search_failed",
+                    failure_phase=exc.phase,
+                    query_count=len(queries.queries),
+                )
+            raise
 
-        hits = sorted(
-            best_by_curation_id.values(),
-            key=lambda hit: hit.distance,
-        )[:limit]
+        record_internal_retrieval_outcome(
+            result="succeeded" if hits else "empty",
+            query_count=len(queries.queries),
+        )
         await self._report_event(InternalSearchCompletedEvent(hit_count=len(hits)))
         return hits
 

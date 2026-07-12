@@ -6,6 +6,15 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 from sqlalchemy import text
+from sqlalchemy.exc import (
+    IntegrityError,
+    InterfaceError,
+    OperationalError,
+    ProgrammingError,
+)
+from sqlalchemy.exc import (
+    TimeoutError as SQLAlchemyTimeoutError,
+)
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.agent.evidence_collection.internal_search.article_search import (
@@ -13,6 +22,7 @@ from app.agent.evidence_collection.internal_search.article_search import (
     InternalArticleSearchHit,
     PgVectorArticleSearchRepository,
 )
+from app.agent.evidence_collection.internal_search.contract import InternalSearchError
 from app.agent.evidence_collection.internal_search.query_embedding import (
     InternalQueryEmbedding,
 )
@@ -41,6 +51,31 @@ def _query_embedding(first: float = 1.0, second: float = 0.0) -> InternalQueryEm
         query="AI semiconductor demand",
         vector=EmbeddingVector(root=tuple(_vector(first, second))),
     )
+
+
+class _FailingSession:
+    def __init__(self, error: Exception) -> None:
+        self._error = error
+
+    async def __aenter__(self) -> _FailingSession:
+        return self
+
+    async def __aexit__(self, *_args: object) -> None:
+        return None
+
+    def begin(self) -> _FailingSession:
+        return self
+
+    async def execute(self, _statement: object) -> None:
+        raise self._error
+
+
+class _FailingSessionFactory:
+    def __init__(self, error: Exception) -> None:
+        self._error = error
+
+    def __call__(self) -> _FailingSession:
+        return _FailingSession(self._error)
 
 
 async def _create_curation(
@@ -135,6 +170,63 @@ async def _create_out_of_scope(
 
 
 class TestPgVectorArticleSearchRepository:
+    @pytest.mark.parametrize(
+        "error",
+        [
+            SQLAlchemyTimeoutError("SECRET db timeout"),
+            OperationalError("SECRET statement", {}, RuntimeError("db down")),
+            InterfaceError(
+                "SECRET statement",
+                {},
+                RuntimeError("connection lost"),
+                connection_invalidated=True,
+            ),
+        ],
+    )
+    async def test_search_wraps_only_operational_database_failures(
+        self,
+        error: Exception,
+    ) -> None:
+        repo = PgVectorArticleSearchRepository(_FailingSessionFactory(error))  # type: ignore[arg-type]
+
+        with pytest.raises(InternalSearchError) as captured:
+            await repo.search_by_embedding(_query_embedding(), limit=5)
+
+        assert captured.value.phase == "article_search"
+        assert captured.value.__cause__ is error
+
+    async def test_search_does_not_wrap_valid_interface_error(self) -> None:
+        error = InterfaceError(
+            "SECRET statement",
+            {},
+            RuntimeError("interface misuse"),
+            connection_invalidated=False,
+        )
+        repo = PgVectorArticleSearchRepository(_FailingSessionFactory(error))  # type: ignore[arg-type]
+
+        with pytest.raises(InterfaceError) as captured:
+            await repo.search_by_embedding(_query_embedding(), limit=5)
+
+        assert captured.value is error
+
+    @pytest.mark.parametrize(
+        "error",
+        [
+            ProgrammingError("SECRET statement", {}, RuntimeError("schema bug")),
+            IntegrityError("SECRET statement", {}, RuntimeError("constraint bug")),
+        ],
+    )
+    async def test_search_does_not_wrap_schema_or_integrity_failures(
+        self,
+        error: Exception,
+    ) -> None:
+        repo = PgVectorArticleSearchRepository(_FailingSessionFactory(error))  # type: ignore[arg-type]
+
+        with pytest.raises(type(error)) as captured:
+            await repo.search_by_embedding(_query_embedding(), limit=5)
+
+        assert captured.value is error
+
     async def test_search_returns_in_scope_article_projection(
         self,
         db_session: AsyncSession,

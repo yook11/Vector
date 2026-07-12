@@ -22,7 +22,7 @@ from app.agent.contract import (
     AnswerQuestionResult,
     AnswerRetrievalSummary,
     AnswerSource,
-    UnmetRequirement,
+    EvidenceCollectionFailure,
 )
 from app.agent.evidence_collection import EvidenceCollectionOutcome
 from app.agent.planning.contract import (
@@ -37,8 +37,8 @@ from app.agent.planning.planner import QuestionPlanner
 __all__ = ["EvidenceCollector", "QuestionAnsweringOrchestrator"]
 
 _RETRIEVAL_EMPTY_MISSING = "回答に使える根拠を取得できませんでした"
-_UNMET_REQUIREMENT_MISSING: dict[UnmetRequirement, str] = {
-    "internal_retrieval": "内部記事検索を完了できませんでした",
+_COLLECTION_FAILURE_MISSING: dict[EvidenceCollectionFailure, str] = {
+    "internal_search": "内部記事検索を完了できませんでした",
     "external_search": "外部検索を完了できませんでした",
 }
 
@@ -90,7 +90,7 @@ class QuestionAnsweringOrchestrator:
                     missing_aspects=[],
                     retrieval=AnswerRetrievalSummary(
                         planned_mode="none",
-                        unmet_requirements=[],
+                        collection_failures=[],
                     ),
                 )
             case (
@@ -200,7 +200,7 @@ def _assemble_evidence_result(
         missing_aspects=missing_aspects,
         retrieval=AnswerRetrievalSummary(
             planned_mode=plan.retrieval_mode,
-            unmet_requirements=outcome.unmet_requirements,
+            collection_failures=outcome.collection_failures,
         ),
     )
 
@@ -212,7 +212,7 @@ def _derive_evidence_status(
     missing_aspects: list[str],
     outcome: EvidenceCollectionOutcome,
 ) -> Literal["answered", "insufficient"]:
-    if outcome.unmet_requirements or missing_aspects:
+    if outcome.collection_failures or missing_aspects:
         return "insufficient"
     if plan.retrieval_mode != "none" and not sources:
         return "insufficient"
@@ -229,8 +229,7 @@ def _missing_aspects(
     if include_retrieval_empty_missing:
         values.append(_RETRIEVAL_EMPTY_MISSING)
     values.extend(
-        _UNMET_REQUIREMENT_MISSING[requirement]
-        for requirement in outcome.unmet_requirements
+        _COLLECTION_FAILURE_MISSING[failure] for failure in outcome.collection_failures
     )
     values.extend(_external_task_missing(outcome))
     values.extend(draft_missing_aspects)

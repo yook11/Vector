@@ -5,6 +5,10 @@ from app.agent.evidence_collection.internal_search.article_search import (
     InternalArticleSearchHit,
     PgVectorArticleSearchRepository,
 )
+from app.agent.evidence_collection.internal_search.contract import (
+    InternalSearchError,
+    InternalSearchFailurePhase,
+)
 from app.agent.evidence_collection.internal_search.query_embedding import (
     MAX_INTERNAL_QUERIES,
     InternalQueryEmbedder,
@@ -23,6 +27,8 @@ __all__ = [
     "MAX_INTERNAL_QUERIES",
     "InternalQueryEmbedder",
     "InternalQueryEmbedding",
+    "InternalSearchError",
+    "InternalSearchFailurePhase",
     "InternalSearchQueries",
     "InternalSearchService",
     "PgVectorArticleSearchRepository",

@@ -41,11 +41,11 @@ __all__ = [
     "QuestionAnsweringAgent",
     "QuestionResolvedEvent",
     "RetrievalMode",
-    "UnmetRequirement",
+    "EvidenceCollectionFailure",
 ]
 
 RetrievalMode = Literal["none", "internal", "external", "internal_and_external"]
-UnmetRequirement = Literal["internal_retrieval", "external_search"]
+EvidenceCollectionFailure = Literal["internal_search", "external_search"]
 AnswerProgressStage = Literal["planning", "retrieving", "synthesizing"]
 NonBlankText = Annotated[
     str,
@@ -67,12 +67,12 @@ class AnswerQuestionInput(BaseModel):
 
 
 class AnswerRetrievalSummary(BaseModel):
-    """planner が必要と判断した情報取得と、未充足の要件。"""
+    """planner が必要と判断した情報取得と、失敗した収集経路。"""
 
     model_config = ConfigDict(frozen=True)
 
     planned_mode: RetrievalMode
-    unmet_requirements: list[UnmetRequirement] = Field(default_factory=list)
+    collection_failures: list[EvidenceCollectionFailure] = Field(default_factory=list)
 
 
 class InternalArticleSource(BaseModel):
@@ -187,8 +187,8 @@ class AnswerQuestionResult(BaseModel):
                 raise ValueError("non-direct answered result must include a source")
             if self.missing_aspects:
                 raise ValueError("answered result cannot include missing aspects")
-            if self.retrieval.unmet_requirements:
-                raise ValueError("answered result cannot include unmet requirements")
+            if self.retrieval.collection_failures:
+                raise ValueError("answered result cannot include collection failures")
         if self.status == "insufficient" and not self.missing_aspects:
             raise ValueError("insufficient result must include missing aspects")
         if self.retrieval.planned_mode == "none" and self.sources:

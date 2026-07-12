@@ -7,8 +7,13 @@ from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 from sqlalchemy import select
+from sqlalchemy.exc import InterfaceError, OperationalError
+from sqlalchemy.exc import TimeoutError as SQLAlchemyTimeoutError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from app.agent.evidence_collection.internal_search.contract import (
+    InternalSearchError,
+)
 from app.agent.evidence_collection.internal_search.query_embedding import (
     InternalQueryEmbedding,
 )
@@ -123,9 +128,16 @@ class PgVectorArticleSearchRepository:
             )
             .limit(limit)
         )
-        async with self._session_factory() as session:
-            async with session.begin():
-                rows = (await session.execute(stmt)).all()
+        try:
+            async with self._session_factory() as session:
+                async with session.begin():
+                    rows = (await session.execute(stmt)).all()
+        except (SQLAlchemyTimeoutError, OperationalError) as exc:
+            raise InternalSearchError(phase="article_search") from exc
+        except InterfaceError as exc:
+            if not exc.connection_invalidated:
+                raise
+            raise InternalSearchError(phase="article_search") from exc
 
         hits: list[InternalArticleSearchHit] = []
         for row in rows:

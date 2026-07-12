@@ -7,12 +7,17 @@ from typing import Literal
 import logfire
 
 InternalRetrievalResult = Literal["succeeded", "empty", "failed"]
+InternalRetrievalFailurePhase = Literal[
+    "query_embedding",
+    "article_search",
+    "unknown",
+]
 QueryEmbeddingCacheResult = Literal["lookup_failed", "save_failed"]
 
 _internal_retrieval_outcome_counter = logfire.metric_counter(
     "vector.agent.internal_retrieval.outcome",
     unit="1",
-    description="Internal retrieval component outcome when query embedding runs",
+    description="Internal search outcome including embedding and article lookup",
 )
 
 _query_embedding_cache_counter = logfire.metric_counter(
@@ -26,12 +31,19 @@ def record_internal_retrieval_outcome(
     *,
     result: InternalRetrievalResult,
     query_count: int,
+    failure_phase: InternalRetrievalFailurePhase | None = None,
 ) -> None:
     """Record the internal retrieval boundary outcome."""
 
+    attributes: dict[str, str | int] = {
+        "result": result,
+        "query_count": query_count,
+    }
+    if failure_phase is not None:
+        attributes["failure_phase"] = failure_phase
     _internal_retrieval_outcome_counter.add(
         1,
-        attributes={"result": result, "query_count": query_count},
+        attributes=attributes,
     )
 
 
