@@ -22,11 +22,15 @@ from app.agent.answering.direct_answer.contract import (
 from app.agent.answering.direct_answer.stream_filter import (
     DirectAnswerVisibleTextFilter,
 )
+from app.agent.answering.live_delivery import (
+    BestEffortAnswerDeltaReporter,
+    close_answer_stream,
+    ensure_answer_generation_continues,
+)
 from app.agent.answering.metrics import record_direct_answer_outcome
 from app.agent.contract import (
     AnswerDeltaReporter,
     AnswerGenerationContinuation,
-    AnswerGenerationStopped,
 )
 from app.analysis.ai_provider_errors import AIProviderError
 
@@ -53,7 +57,7 @@ class DirectAnswerFlow:
     ) -> None:
         self._generator = generator
         self._audit_recorder = audit_recorder
-        self._delta_reporter = delta_reporter
+        self._delta = BestEffortAnswerDeltaReporter(delta_reporter)
         self._continuation = continuation
 
     async def answer(
@@ -133,8 +137,7 @@ class DirectAnswerFlow:
         stream_filter = DirectAnswerVisibleTextFilter()
         raw_fragments: list[str] = []
         try:
-            if not await self._should_continue():
-                raise AnswerGenerationStopped
+            await ensure_answer_generation_continues(self._continuation)
 
             stream = self._generator.stream(
                 question=question,
@@ -145,15 +148,13 @@ class DirectAnswerFlow:
                 previous_error=previous_error,
             )
             async for fragment in stream:
-                if not await self._should_continue():
-                    raise AnswerGenerationStopped
+                await ensure_answer_generation_continues(self._continuation)
                 raw_fragments.append(fragment)
                 visible = stream_filter.append(fragment)
                 if visible:
-                    await self._report_append(generation=generation, text=visible)
+                    await self._delta.append(generation=generation, text=visible)
 
-            if not await self._should_continue():
-                raise AnswerGenerationStopped
+            await ensure_answer_generation_continues(self._continuation)
             visible_tail = stream_filter.finish()
             answer = _CITATION_MARKER_RE.sub("", "".join(raw_fragments))
             if not answer.strip():
@@ -161,43 +162,14 @@ class DirectAnswerFlow:
             draft = DirectAnswerDraft(answer=answer)
 
             if visible_tail:
-                await self._report_append(generation=generation, text=visible_tail)
-            await self._report_finish(generation=generation)
+                await self._delta.append(generation=generation, text=visible_tail)
+            await self._delta.finish(generation=generation)
             return draft
         except BaseException:
-            await self._report_abort(generation=generation)
+            await self._delta.abort(generation=generation)
             raise
         finally:
-            await _close_stream(stream)
-
-    async def _should_continue(self) -> bool:
-        if self._continuation is None:
-            return True
-        return await self._continuation.should_continue()
-
-    async def _report_append(self, *, generation: int, text: str) -> None:
-        if self._delta_reporter is None:
-            return
-        try:
-            await self._delta_reporter.append(generation=generation, text=text)
-        except Exception:
-            return
-
-    async def _report_finish(self, *, generation: int) -> None:
-        if self._delta_reporter is None:
-            return
-        try:
-            await self._delta_reporter.finish(generation=generation)
-        except Exception:
-            return
-
-    async def _report_abort(self, *, generation: int) -> None:
-        if self._delta_reporter is None:
-            return
-        try:
-            await self._delta_reporter.abort(generation=generation)
-        except Exception:
-            return
+            await close_answer_stream(stream)
 
     async def _record_answered(
         self,
@@ -271,17 +243,5 @@ async def _record_final_event(
         return
     try:
         await audit_recorder.record_final_event(event)
-    except Exception:
-        return
-
-
-async def _close_stream(stream: AsyncIterator[str] | None) -> None:
-    if stream is None:
-        return
-    close = getattr(stream, "aclose", None)
-    if close is None:
-        return
-    try:
-        await close()
     except Exception:
         return
