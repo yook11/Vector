@@ -98,6 +98,7 @@ skills-lock.json
 !.codex/agents/
 .codex/agents/*
 !.codex/agents/test-writer.toml
+!.codex/agents/frontend-ui-builder.toml
 
 # ===========================
 # Red-team session output

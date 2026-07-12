@@ -1,5 +1,7 @@
 name = "test-writer"
 description = "Problem / Done / Invariants からテストを設計・追加する専門エージェント。"
+model = "gpt-5.6-terra"
+model_reasoning_effort = "xhigh"
 developer_instructions = """
 最初に `.claude/agents/test-writer.md` を読み、その全指示に従う。
 対象領域の AGENTS.md も確認する。
