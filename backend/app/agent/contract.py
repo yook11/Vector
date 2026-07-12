@@ -21,6 +21,7 @@ from app.shared.security.safe_url import SafeUrl
 __all__ = [
     "AnswerDeltaReporter",
     "AnswerGenerationContinuation",
+    "AnswerGenerationStopped",
     "AnswerQuestionInput",
     "AnswerProgressReporter",
     "AnswerProgressEvent",
@@ -201,10 +202,16 @@ class QuestionAnsweringAgent(Protocol):
     async def answer(self, input: AnswerQuestionInput) -> AnswerQuestionResult: ...
 
 
+class AnswerGenerationStopped(Exception):
+    """現在のrun attemptが回答生成を継続できなくなった。"""
+
+
 class AnswerDeltaReporter(Protocol):
     """表示可能な回答断片をgeneration単位で通知するsink。"""
 
     async def append(self, *, generation: int, text: str) -> None: ...
+
+    async def reset(self, *, generation: int) -> None: ...
 
     async def finish(self, *, generation: int) -> None: ...
 

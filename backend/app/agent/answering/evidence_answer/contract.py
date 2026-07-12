@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import AsyncIterator
 from datetime import datetime
 from typing import Literal, Protocol, Self
 
@@ -65,9 +66,9 @@ class RawEvidenceAnswerDraft(BaseModel):
 
 
 class EvidenceAnswerDraftGenerator(Protocol):
-    """LLM adapter boundary that returns lenient evidence answer drafts."""
+    """LLM adapter boundary that streams an unvalidated evidence JSON envelope."""
 
-    async def generate(
+    def stream(
         self,
         *,
         question: str,
@@ -78,7 +79,7 @@ class EvidenceAnswerDraftGenerator(Protocol):
         prior_coverage: str = "",
         user_activity_context: str = "",
         previous_error: str | None = None,
-    ) -> RawEvidenceAnswerDraft: ...
+    ) -> AsyncIterator[str]: ...
 
 
 class EvidenceAnswerer(Protocol):

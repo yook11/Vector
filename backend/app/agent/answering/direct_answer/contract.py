@@ -8,7 +8,7 @@ from typing import Protocol
 
 from pydantic import BaseModel, ConfigDict
 
-from app.agent.contract import NonBlankText
+from app.agent.contract import AnswerGenerationStopped, NonBlankText
 
 __all__ = [
     "AnswerGenerationStopped",
@@ -19,10 +19,6 @@ __all__ = [
 ]
 
 _DIRECT_ANSWER_BLANK_RESPONSE = "direct_answer_blank_response"
-
-
-class AnswerGenerationStopped(Exception):
-    """現在のrun attemptが回答生成を継続できなくなった。"""
 
 
 class DirectAnswerInvalidError(ValueError):

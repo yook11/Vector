@@ -1,4 +1,4 @@
-"""Direct answer delta producerから実Redis readerまでの境界検証。"""
+"""Answer delta producerから実Redis readerまでの境界検証。"""
 
 from __future__ import annotations
 
@@ -13,7 +13,13 @@ import redis.asyncio as aioredis
 
 from app.agent.answering.direct_answer.contract import DirectAnswerDraft
 from app.agent.answering.direct_answer.flow import DirectAnswerFlow
-from app.agent.contract import ExternalSearchCandidatesFetchedEvent
+from app.agent.answering.evidence_answer.contract import EvidenceAnswerDraft
+from app.agent.answering.evidence_answer.evidence import AnswerEvidenceItem
+from app.agent.answering.evidence_answer.flow import EvidenceAnswerFlow
+from app.agent.contract import (
+    ExternalSearchCandidatesFetchedEvent,
+    ExternalUrlSource,
+)
 from app.agent.live_updates.answer_delta import AgentRunLiveAnswerDeltaReporter
 from app.agent.live_updates.recent_events import (
     AgentRunLiveEventPublisher,
@@ -23,6 +29,7 @@ from app.agent.live_updates.recent_events import (
 from app.agent.live_updates.stream import (
     AgentRunLiveStreamActivityEvent,
     AgentRunLiveStreamAnswerDeltaEvent,
+    AgentRunLiveStreamAnswerResetEvent,
     AgentRunLiveStreamAttemptStartedEvent,
     AgentRunLiveStreamPublisher,
     AgentRunLiveStreamReader,
@@ -67,6 +74,23 @@ class FailingDeltaPublisher:
         return None
 
 
+class ResetDroppingPublisher:
+    def __init__(self, delegate: AgentRunLiveStreamPublisher) -> None:
+        self.delegate = delegate
+        self.dropped_resets: list[AgentRunLiveStreamAnswerResetEvent] = []
+        self.delegated_deltas: list[AgentRunLiveStreamAnswerDeltaEvent] = []
+
+    async def publish(
+        self,
+        event: AgentRunLiveStreamAnswerDeltaEvent | AgentRunLiveStreamAnswerResetEvent,
+    ) -> str | None:
+        if isinstance(event, AgentRunLiveStreamAnswerResetEvent):
+            self.dropped_resets.append(event)
+            return None
+        self.delegated_deltas.append(event)
+        return await self.delegate.publish(event)
+
+
 async def _answer(
     generator: FakeStreamingGenerator,
     reporter: AgentRunLiveAnswerDeltaReporter,
@@ -77,6 +101,31 @@ async def _answer(
     ).answer(
         question="実Redisへのdelta配信を確認する",
         as_of=datetime(2026, 7, 12, tzinfo=UTC),
+    )
+
+
+async def _evidence_answer(
+    generator: FakeStreamingGenerator,
+    reporter: AgentRunLiveAnswerDeltaReporter,
+) -> EvidenceAnswerDraft:
+    return await EvidenceAnswerFlow(
+        generator=generator,
+        delta_reporter=reporter,
+    ).answer(
+        question="実RedisへのEvidence revision配信を確認する",
+        evidence=[
+            AnswerEvidenceItem(
+                source=ExternalUrlSource(
+                    source_ref="1",
+                    url="https://example.com/evidence-1",
+                    title="Evidence source",
+                    evidence_claim="根拠を確認しました。",
+                ),
+                text="根拠を確認しました。",
+            )
+        ],
+        as_of=datetime(2026, 7, 12, tzinfo=UTC),
+        target_time_window="今日",
     )
 
 
@@ -205,6 +254,171 @@ async def test_blank_generation_retries_without_reset_and_splits_generation_two(
             isinstance(event, AgentRunLiveStreamAnswerDeltaEvent)
             and event.generation == 1
             for event in events
+        )
+    finally:
+        await redis.delete(stream_key)
+        await redis.aclose()
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_evidence_retry_round_trip_preserves_reset_delta_and_envelope() -> None:
+    redis = aioredis.from_url(settings.redis_url, decode_responses=True)
+    run_id = uuid4()
+    attempt_epoch = 11
+    stream_key = agent_run_live_stream_key(run_id)
+    visible_answer = "根拠を確認  しました。"
+    try:
+        stream_publisher = AgentRunLiveStreamPublisher(
+            redis,
+            run_id,
+            attempt_epoch,
+        )
+        marker_id = await stream_publisher.begin_attempt()
+        assert marker_id is not None
+        reporter = AgentRunLiveAnswerDeltaReporter(
+            stream_publisher,
+            run_id=run_id,
+            attempt_epoch=attempt_epoch,
+        )
+        generator = FakeStreamingGenerator(
+            [
+                ["not ", "json"],
+                [
+                    '{"sufficiency":"answered","answer":" 根拠を確認 [[',
+                    '1]] しました。 ","cited_refs":["1"],',
+                    '"missing_aspects":[]}',
+                ],
+            ]
+        )
+
+        draft = await _evidence_answer(generator, reporter)
+        result = await AgentRunLiveStreamReader(redis).read_after(
+            run_id,
+            attempt_epoch,
+            None,
+        )
+
+        assert draft == EvidenceAnswerDraft(
+            sufficiency="answered",
+            answer="根拠を確認 [[1]] しました。",
+            cited_refs=["1"],
+        )
+        assert result.status is AgentRunLiveStreamReadStatus.EVENTS
+        assert [entry.event for entry in result.events] == [
+            AgentRunLiveStreamAttemptStartedEvent(),
+            AgentRunLiveStreamAnswerResetEvent(generation=2),
+            AgentRunLiveStreamAnswerDeltaEvent(
+                generation=2,
+                text=visible_answer,
+            ),
+        ]
+        assert all(entry.attempt_epoch == attempt_epoch for entry in result.events)
+        assert result.events[0].stream_id == marker_id
+        assert all(
+            is_stream_id_before(left.stream_id, right.stream_id)
+            for left, right in zip(result.events, result.events[1:])
+        )
+
+        raw_entries = await redis.xrange(stream_key)
+        assert [fields["type"] for _id, fields in raw_entries] == [
+            "attempt.started",
+            "answer.reset",
+            "answer.delta",
+        ]
+        assert all(
+            set(fields) == {"type", "attemptEpoch", "payload", "publishedAt"}
+            for _id, fields in raw_entries
+        )
+        assert {fields["attemptEpoch"] for _id, fields in raw_entries} == {
+            str(attempt_epoch)
+        }
+        assert [json.loads(fields["payload"]) for _id, fields in raw_entries] == [
+            {},
+            {"generation": 2},
+            {"generation": 2, "text": visible_answer},
+        ]
+        raw_ids = [stream_id for stream_id, _fields in raw_entries]
+        assert all(
+            is_stream_id_before(left, right)
+            for left, right in zip(raw_ids, raw_ids[1:])
+        )
+    finally:
+        await redis.delete(stream_key)
+        await redis.aclose()
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_evidence_higher_generation_delta_survives_reset_loss() -> None:
+    redis = aioredis.from_url(settings.redis_url, decode_responses=True)
+    run_id = uuid4()
+    attempt_epoch = 12
+    stream_key = agent_run_live_stream_key(run_id)
+    visible_answer = "resetなしでも修正版を表示します。"
+    try:
+        stream_publisher = AgentRunLiveStreamPublisher(
+            redis,
+            run_id,
+            attempt_epoch,
+        )
+        assert await stream_publisher.begin_attempt() is not None
+        reset_dropping_publisher = ResetDroppingPublisher(stream_publisher)
+        reporter = AgentRunLiveAnswerDeltaReporter(
+            reset_dropping_publisher,
+            run_id=run_id,
+            attempt_epoch=attempt_epoch,
+        )
+        generator = FakeStreamingGenerator(
+            [
+                ["not json"],
+                [
+                    (
+                        '{"sufficiency":"answered","answer":"'
+                        "resetなしでも修正版を表示します。[["
+                    ),
+                    '1]]","cited_refs":["1"],"missing_aspects":[]}',
+                ],
+            ]
+        )
+
+        draft = await _evidence_answer(generator, reporter)
+        result = await AgentRunLiveStreamReader(redis).read_after(
+            run_id,
+            attempt_epoch,
+            None,
+        )
+
+        assert draft == EvidenceAnswerDraft(
+            sufficiency="answered",
+            answer="resetなしでも修正版を表示します。[[1]]",
+            cited_refs=["1"],
+        )
+        assert reset_dropping_publisher.dropped_resets == [
+            AgentRunLiveStreamAnswerResetEvent(generation=2)
+        ]
+        assert reset_dropping_publisher.delegated_deltas == [
+            AgentRunLiveStreamAnswerDeltaEvent(
+                generation=2,
+                text=visible_answer,
+            )
+        ]
+        assert result.status is AgentRunLiveStreamReadStatus.EVENTS
+        assert [entry.event for entry in result.events] == [
+            AgentRunLiveStreamAttemptStartedEvent(),
+            AgentRunLiveStreamAnswerDeltaEvent(
+                generation=2,
+                text=visible_answer,
+            ),
+        ]
+        assert not any(
+            isinstance(entry.event, AgentRunLiveStreamAnswerResetEvent)
+            for entry in result.events
+        )
+        assert all(entry.attempt_epoch == attempt_epoch for entry in result.events)
+        assert is_stream_id_before(
+            result.events[0].stream_id,
+            result.events[1].stream_id,
         )
     finally:
         await redis.delete(stream_key)

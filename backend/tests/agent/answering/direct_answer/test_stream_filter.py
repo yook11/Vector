@@ -30,6 +30,19 @@ def _new_filter() -> _VisibleTextFilter:
     return cast("_VisibleTextFilter", filter_type())
 
 
+def _new_shared_filter() -> _VisibleTextFilter:
+    try:
+        module = import_module("app.agent.answering.visible_text")
+    except ModuleNotFoundError as exc:
+        if exc.name != "app.agent.answering.visible_text":
+            raise
+        pytest.fail("共有の回答表示filterが未実装です", pytrace=False)
+
+    filter_type = getattr(module, "AnswerVisibleTextFilter", None)
+    assert filter_type is not None, "visible_text.AnswerVisibleTextFilter が未実装です"
+    return cast("_VisibleTextFilter", filter_type())
+
+
 def _visible_fragments(chunks: Iterable[str]) -> list[str]:
     stream_filter = _new_filter()
     fragments: list[str] = []
@@ -45,6 +58,13 @@ def _visible_fragments(chunks: Iterable[str]) -> list[str]:
 
 def _visible_text(chunks: Iterable[str]) -> str:
     return "".join(_visible_fragments(chunks))
+
+
+def _shared_visible_text(chunks: Iterable[str]) -> str:
+    stream_filter = _new_shared_filter()
+    fragments = [stream_filter.append(chunk) for chunk in chunks]
+    fragments.append(stream_filter.finish())
+    return "".join(fragment for fragment in fragments if fragment)
 
 
 def _all_two_chunk_splits(text: str) -> Iterator[list[str]]:
@@ -166,3 +186,13 @@ def test_representative_input_is_independent_of_every_chunk_partition() -> None:
 
     for chunks in _all_chunk_partitions(raw):
         assert _visible_text(chunks) == "A B", chunks
+
+
+def test_shared_visible_filter_matches_direct_contract_across_chunk_splits() -> None:
+    raw = "[[1]] 本文"
+
+    for chunks in _all_two_chunk_splits(raw):
+        assert _shared_visible_text(chunks) == "本文", chunks
+
+    assert _shared_visible_text(list(raw)) == "本文"
+    assert _shared_visible_text(["前[[", "22]]中[[x]]後 \n"]) == "前中[[x]]後"

@@ -2,6 +2,11 @@
 
 Status: Implemented — 2026-07-12
 
+`agent-evidence-answer-draft-deltas-slice.md`の実装により、`AnswerVisibleTextFilter`と
+`AnswerGenerationStopped`は共有answering位置へ昇格済みである。`generation`は共通の表示revisionであり、
+Direct pathでは引き続きprovider attempt number 1〜2と一致する。共有化後もDirect固有のmarker / outer
+whitespace、retry、finalizationの意味論は変更しない。
+
 親仕様: `agent-answer-streaming-sse.md`。
 
 前提slice:
@@ -14,7 +19,6 @@ Status: Implemented — 2026-07-12
 
 後続slice:
 
-- Evidence answer draft deltas
 - Research UI
 - Operational verification
 

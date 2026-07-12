@@ -77,6 +77,8 @@ def build_question_answering_agent(
         evidence_answerer=EvidenceAnswerFlow(
             generator=GeminiEvidenceAnswerDraftGenerator(),
             audit_recorder=None,
+            delta_reporter=delta_reporter,
+            continuation=continuation,
         ),
         direct_answerer=DirectAnswerFlow(
             generator=GeminiDirectAnswerGenerator(),

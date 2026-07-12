@@ -68,7 +68,7 @@ run 中の user message の直下に、次の二層を表示する。
 
 完成前の下書きには sources 一覧、citation のリンク・プレビュー、missing aspects を
 表示しない。Direct pathでは最終回答から除去される `[[1]]` のようなmarkerを増分経路でも
-表示しない。Evidence pathの未確定citationはproviderのraw JSONを直接表示せず、後続sliceの
+表示しない。Evidence pathの未確定citationはproviderのraw JSONを直接表示せず、専用sliceで実装済みの
 増分復元契約に従う。run 完了を受信したら thread 詳細を再取得し、既存の
 `CitedAnswerContent` による検証済み表示へ置き換える。
 
@@ -111,7 +111,7 @@ output token 上限を照合して確定するが、次を守る。
 - Stream は bounded かつ短期 TTL とし、会話履歴の保存先にしない。
 - 1文字または1 provider chunkごとにRedisへ書かない。Direct pathは250msの時間窓を主条件、
   512 Unicode code pointを1 deltaの上限としてcoalesceし、最小文字数gateを設けない。
-  Evidence pathの値は専用sliceで同じMAXLEN / timeout予算と合わせて決める。
+  Evidence pathも同じcoalescerとMAXLEN / timeout予算を再利用する。
 - Stream の read / write / reset が失敗しても、回答生成・DB 保存・run 状態遷移を
   失敗させない。Redis は live 表示だけの補助データである。
 - eventの帰属はRedis Stream IDや`attempt.started`の位置ではなく、全entryに入る正の整数
@@ -149,14 +149,20 @@ terminal
   { attemptEpoch, status: "completed" | "failed", errorCode?: existing run error code }
 ```
 
+`generation`は同一`attemptEpoch`内の回答下書きの表示revisionであり、値が大きいrevisionが新しい。
+Direct pathではprovider attempt number 1〜2と一致する。Evidence pathではprovider retryに加えて、provider
+requestを伴わないfallbackへの置換でも1増える。consumerは経路固有の生成回数ではなく、この共通revisionの
+大小だけで下書き境界を判定する。現在値より大きければevent適用前に旧draftを破棄し、同じ値なら現在draftを
+維持し、小さい値なら遅延eventとして無視する。
+
 - `attempt.started` は worker が run の実行を取得した直後に送る。Redis timeoutで
   成否が不明な場合は、同じepochの次のpublish前にlazy retryしてよい。
 - Stream ID を SSE の `id` にそのまま対応させる。client は受信済み ID を再適用しない。
 - activity固有payloadは `activity` fieldへnestedし、frontendは `payload.activity.type` で
   discriminateする。SSE protocolの `event: activity` と混同するため、JSON field名に
   `event` は使わず、activity固有fieldもtop-levelへflattenしない。
-- `answer.reset` は、生成結果の検証失敗による retry で以前の下書きを取り消すための
-  イベントである。次の generation の delta だけを画面に表示する。
+- `answer.reset` は、生成結果の検証失敗によるretryまたはfallbackへの置換で以前の下書きを取り消すための
+  イベントである。次のgenerationのdeltaだけを画面に表示する。
 - `terminal` は DB の commit 後に publish する。publish 失敗時にも polling により
   terminal status を検知して thread 詳細を再取得できる。
 - cancel endpoint が run を terminal にした時も、browser が直ちに下書きを閉じられる
@@ -249,18 +255,32 @@ evidence 回答は structured JSON を使い、`answer` だけでなく sufficie
 missing aspects を最終検証する。structured output の途中 chunk は完全な JSON ではない
 ため、provider の chunk をそのまま UI に出してはならない。
 
-この経路の実装 slice では、次の二択を明示的に決める。
+専用sliceでは次の二択を検討し、下書き許容方式を採用・実装した。
 
-1. **下書き許容方式（初期推奨）**: JSON stream から `answer` field の有効な文字列だけを
+1. **下書き許容方式（採用済み）**: JSON stream から `answer` field の有効な文字列だけを
    増分復元して下書き表示する。最終の構文・citation 検証で retry になれば
    `answer.reset` を送り、次の generation を表示する。
 2. **安定本文方式**: text-only の回答ストリームと、最終 metadata を確定する責務を
    分離する。この方式は再生成を見せない代わりに synthesis contract の再設計または
    追加の model call が必要になる。
 
-本親仕様では下書き許容方式を採用する。つまり下書きの書き換えは正しい UX として
-許容し、最終回答だけを権威あるものとする。JSON の増分復元器は独立した小さな部品にし、
-JSON escape、Unicode、field 順序、途中切断、retry のテストを必須とする。
+本親仕様と`agent-evidence-answer-draft-deltas-slice.md`は下書き許容方式を採用し、backend producerまで
+実装済みである。下書きの書き換えは正しい UX として許容し、最終回答だけを権威あるものとする。
+JSON の増分復元器は独立した小さな部品とし、JSON escape、Unicode、field 順序、途中切断、retryを
+テストで固定している。
+
+Evidence下書きでは未検証の`[[N]]` citation markerを表示せず、DB確定後のcitation UIへ委ねる。
+object直下の全top-level重複keyは増分表示とfinal JSON decoderの不一致を防ぐため、EOF後の最終parserを正本として
+`EvidenceAnswerDraftGenerationInvalidError`へ分類しrejectする。extractor側検出は早期停止の最適化に限定する。
+generationは
+表示revisionとして単調増加させ、retryだけでなくfallbackへ置き換える場合も旧下書きをresetしてから、
+安全な既存fallback本文を次generationで配信する。visible deltaが0件でもresetを送り、reset publishが
+失敗しても待たずに次generationへ進む。大きいgenerationのdelta自体もimplicit resetとして扱う。
+
+Evidence adapterはDirect adapterと同じterminal metadata規則を使う。`STOP` / `MAX_TOKENS`をterminalとして
+受理して最終JSON parseへ進み、terminal reasonなしEOFは`AIProviderNetworkError(STREAM_TRUNCATED)`として
+retryせずfallbackへ進む。`MAX_TOKENS`でJSONが不完全な場合はgeneration invalidとしてretryする。
+`sufficiency="insufficient"`でもanswer本文は通常どおり下書き配信し、最終statusはEOF後に確定する。
 
 ### Finalization order
 
@@ -321,7 +341,7 @@ assistant message を保存しないことを維持する。
 実装は次の順で分ける。各 slice は Problem / Evidence / Invariants / Done を個別に
 定義し、前の slice の検証が完了してから次へ進む。
 
-現在は1〜5まで実装済みであり、次は6のEvidence answer draft deltasへ進む。
+現在は1〜6まで実装済みであり、次は7のResearch UIへ進む。
 
 1. **Live stream transport**: Redis Stream の key / TTL / ACL / publisher / reader、
    event vocabulary、実Redisでの replay・timeout・payload非露出テスト。
@@ -336,8 +356,8 @@ assistant message を保存しないことを維持する。
    coalescing、cancel後の抑止、delta専用circuit breaker。専用仕様は
    `agent-direct-answer-deltas-slice.md`。
 6. **Evidence answer draft deltas**: structured JSON の増分復元、retry 時の reset、
-   citation検証後の確定表示。この slice は既存 synthesis contract の変更範囲を先に
-   確認する。
+   fallbackを含むgeneration切替、citation検証後の確定境界を実装済み。専用仕様は
+   `agent-evidence-answer-draft-deltas-slice.md`。
 7. **Research UI**: 工程表示と下書き領域、EventSource lifecycle、replay / reset /
    terminal / polling fallback、アクセシビリティ。
 8. **Operational verification**: Fly の buffering・idle timeout、Redis ACL、observability、
@@ -350,22 +370,24 @@ assistant message を保存しないことを維持する。
 1. direct run で工程表示後に本文が追記され、完了後はDBの回答に置き換わる。
 2. evidence run で途中の JSON 構文や未確定 citation がUIに露出しない。
 3. evidence retry で古い下書きが `answer.reset` 後に残らない。
-4. 接続断後に同じ run へ再接続しても、保持期間内の同一epoch eventは重複なく再開する。
+4. Evidenceの同一generation resetが再配送されても現在の正しい下書きを破棄せず、大きいgenerationの
+   reset / deltaではevent適用前に旧下書きを破棄する。
+5. 接続断後に同じ run へ再接続しても、保持期間内の同一epoch eventは重複なく再開する。
    trim済みcursorは下書きの完全復元を主張せず、劣化状態として扱う。
-5. 他ユーザーの run の SSE は 404 であり、Redis を読む前に拒否される。
-6. Redis を止めても回答はDBに保存され、UIは既存 polling の工程表示へ劣化する。
-7. cancel / failure 後に下書きが確定回答や sources として表示されない。
-8. log、trace、metric、例外に回答本文や Stream payload が含まれない。
-9. 新attemptのmarker後に旧epochのeventが届いても表示されず、同一epochのmarker重複では
+6. 他ユーザーの run の SSE は 404 であり、Redis を読む前に拒否される。
+7. Redis を止めても回答はDBに保存され、UIは既存 polling の工程表示へ劣化する。
+8. cancel / failure 後に下書きが確定回答や sources として表示されない。
+9. log、trace、metric、例外に回答本文や Stream payload が含まれない。
+10. 新attemptのmarker後に旧epochのeventが届いても表示されず、同一epochのmarker重複では
    下書きが破棄されない。
-10. BFFのSSE接続開始制限とbackendのrun / user / process同時接続上限が独立して働き、
+11. BFFのSSE接続開始制限とbackendのrun / user / process同時接続上限が独立して働き、
     limiter劣化とcapacity拒否をpayload・user ID・run IDなしで観測できる。
-11. activityはnested `activity` fieldとcamelCase属性で配信され、旧 `event` field、flatten、
+12. activityはnested `activity` fieldとcamelCase属性で配信され、旧 `event` field、flatten、
     未知activity typeをfrontendへraw転送しない。
-12. direct回答の正常配信では、同じgenerationのdelta連結が最終Direct回答と一致する。
-13. marker / whitespaceだけのblank retryはdelta / resetを作らず、generation 2だけを表示する。
-14. delta publishが連続失敗しても回答をDBへ保存し、terminalを別経路で試行する。
-15. cancelまたはepoch前進を検出したworkerは、runをfailedへ再遷移させずroutineに停止する。
+13. direct回答の正常配信では、同じgenerationのdelta連結が最終Direct回答と一致する。
+14. marker / whitespaceだけのblank retryはdelta / resetを作らず、generation 2だけを表示する。
+15. delta publishが連続失敗しても回答をDBへ保存し、terminalを別経路で試行する。
+16. cancelまたはepoch前進を検出したworkerは、runをfailedへ再遷移させずroutineに停止する。
 
 ## Done
 
