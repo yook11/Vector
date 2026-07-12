@@ -2,30 +2,28 @@
 
 from __future__ import annotations
 
-import json
+from collections.abc import AsyncIterator
 from datetime import datetime
-from enum import StrEnum
 from typing import Final
 
 from google import genai
 from google.genai.types import GenerateContentConfig
-from pydantic import ValidationError
 
 from app.agent.answering.evidence_answer.ai.prompt import GeminiEvidenceAnswerPrompt
 from app.agent.answering.evidence_answer.ai.spec import (
     GEMINI_EVIDENCE_ANSWER_SPEC,
     GeminiEvidenceAnswerSpec,
 )
-from app.agent.answering.evidence_answer.contract import (
-    EvidenceAnswerDraftGenerationInvalidError,
-    RawEvidenceAnswerDraft,
-)
 from app.agent.answering.evidence_answer.evidence import AnswerEvidenceItem
 from app.analysis.ai_provider_errors import (
     AIProviderConfigurationError,
+    AIProviderError,
+    AIProviderInputRejectedError,
+    AIProviderNetworkError,
     AIProviderOutputBlockedError,
 )
 from app.analysis.gemini_error_translator import (
+    GeminiContentRejectionReason,
     GeminiStateReason,
     output_blocked_reason,
     translate_gemini_error,
@@ -34,23 +32,6 @@ from app.analysis.rate_limit import AIModelRateLimitPolicy
 from app.config import settings
 
 _BLOCKED_FINISH_REASONS = frozenset({"SAFETY", "RECITATION"})
-
-
-class GeminiEvidenceAnswerResponseDefect(StrEnum):
-    """Gemini evidence answer adapter が検知する response envelope 違反。"""
-
-    NOT_JSON = "evidence_answer_response_gemini_not_json"
-    NOT_OBJECT = "evidence_answer_response_gemini_not_object"
-
-
-class GeminiEvidenceAnswerResponseInvalidError(
-    EvidenceAnswerDraftGenerationInvalidError
-):
-    """Evidence answer response が ``RawEvidenceAnswerDraft`` として消化できない。"""
-
-    def __init__(self, defect: GeminiEvidenceAnswerResponseDefect) -> None:
-        self.defect = defect
-        super().__init__(defect.value)
 
 
 class GeminiEvidenceAnswerDraftGenerator:
@@ -76,7 +57,7 @@ class GeminiEvidenceAnswerDraftGenerator:
     def rate_limit_policy(self) -> AIModelRateLimitPolicy:
         return self.SPEC.rate_limit_policy
 
-    async def generate(
+    async def stream(
         self,
         *,
         question: str,
@@ -87,7 +68,7 @@ class GeminiEvidenceAnswerDraftGenerator:
         prior_coverage: str = "",
         user_activity_context: str = "",
         previous_error: str | None = None,
-    ) -> RawEvidenceAnswerDraft:
+    ) -> AsyncIterator[str]:
         prompt = GeminiEvidenceAnswerPrompt.render(
             question=question,
             evidence=evidence,
@@ -98,20 +79,10 @@ class GeminiEvidenceAnswerDraftGenerator:
             user_activity_context=user_activity_context,
             previous_error=previous_error,
         )
+        sdk_stream: AsyncIterator[object] | None = None
+        terminal_reason_seen = False
         try:
-            return await self._call_api(prompt)
-        except (
-            AIProviderOutputBlockedError,
-            GeminiEvidenceAnswerResponseInvalidError,
-            ValidationError,
-        ):
-            raise
-
-    async def _call_api(self, prompt: str) -> RawEvidenceAnswerDraft:
-        """Gemini の structured JSON response を raw draft に詰める。"""
-
-        try:
-            response = await self._client.aio.models.generate_content(
+            sdk_stream = await self._client.aio.models.generate_content_stream(
                 model=self.SPEC.model,
                 contents=prompt,
                 config=GenerateContentConfig(
@@ -120,39 +91,71 @@ class GeminiEvidenceAnswerDraftGenerator:
                     response_schema=dict(self.SPEC.response_schema),
                 ),
             )
+            async for chunk in sdk_stream:
+                if self._has_prompt_block(chunk):
+                    raise AIProviderInputRejectedError(
+                        reason=GeminiContentRejectionReason.INPUT_BLOCKED
+                    )
+
+                finish_reason_names = self._extract_finish_reason_names(chunk)
+                blocked_reason_name = next(
+                    (
+                        reason
+                        for reason in finish_reason_names
+                        if reason in _BLOCKED_FINISH_REASONS
+                    ),
+                    None,
+                )
+                if blocked_reason_name is not None:
+                    raise AIProviderOutputBlockedError(
+                        reason=output_blocked_reason(blocked_reason_name)
+                    )
+                terminal_reason_seen = terminal_reason_seen or bool(finish_reason_names)
+
+                text = getattr(chunk, "text", None)
+                if text:
+                    yield text
+
+            if not terminal_reason_seen:
+                raise AIProviderNetworkError(reason=GeminiStateReason.STREAM_TRUNCATED)
+        except AIProviderError:
+            raise
         except Exception as exc:
-            raise translate_gemini_error(exc) from exc
-
-        finish_reason_name = self._extract_finish_reason_name(response)
-        if (
-            finish_reason_name is not None
-            and finish_reason_name in _BLOCKED_FINISH_REASONS
-        ):
-            raise AIProviderOutputBlockedError(
-                reason=output_blocked_reason(finish_reason_name)
-            )
-
-        text = response.text or ""
-        try:
-            payload = json.loads(text)
-        except json.JSONDecodeError as exc:
-            raise GeminiEvidenceAnswerResponseInvalidError(
-                GeminiEvidenceAnswerResponseDefect.NOT_JSON
-            ) from exc
-
-        if not isinstance(payload, dict):
-            raise GeminiEvidenceAnswerResponseInvalidError(
-                GeminiEvidenceAnswerResponseDefect.NOT_OBJECT
-            )
-
-        return RawEvidenceAnswerDraft.model_validate(payload)
+            translated = translate_gemini_error(exc)
+            if translated is exc:
+                raise
+            raise translated from exc
+        finally:
+            await _close_stream(sdk_stream)
 
     @staticmethod
-    def _extract_finish_reason_name(response: object) -> str | None:
-        candidates = getattr(response, "candidates", None) or []
-        if not candidates:
-            return None
-        finish_reason = getattr(candidates[0], "finish_reason", None)
-        if finish_reason is None:
-            return None
-        return getattr(finish_reason, "name", None) or str(finish_reason)
+    def _has_prompt_block(response: object) -> bool:
+        prompt_feedback = getattr(response, "prompt_feedback", None)
+        return (
+            prompt_feedback is not None
+            and getattr(prompt_feedback, "block_reason", None) is not None
+        )
+
+    @staticmethod
+    def _extract_finish_reason_names(response: object) -> list[str]:
+        names: list[str] = []
+        for candidate in getattr(response, "candidates", None) or []:
+            finish_reason = getattr(candidate, "finish_reason", None)
+            if finish_reason is None:
+                continue
+            name = getattr(finish_reason, "name", None) or str(finish_reason)
+            if name:
+                names.append(name)
+        return names
+
+
+async def _close_stream(stream: AsyncIterator[object] | None) -> None:
+    if stream is None:
+        return
+    close = getattr(stream, "aclose", None)
+    if close is None:
+        return
+    try:
+        await close()
+    except Exception:
+        return

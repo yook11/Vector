@@ -117,7 +117,7 @@ class RecordingDeltaReporter:
         if "abort" in self.fail_on:
             raise RuntimeError("reporter abort unavailable")
 
-    async def reset(self) -> None:
+    async def reset(self, *, generation: int) -> None:
         self.reset_calls += 1
 
 
@@ -139,6 +139,17 @@ def _answer_generation_stopped_type() -> type[BaseException]:
     assert stopped_type is not None, "AnswerGenerationStopped が未実装です"
     assert isinstance(stopped_type, type) and issubclass(stopped_type, BaseException)
     return stopped_type
+
+
+def test_answer_generation_stopped_is_shared_identity_compatible_reexport() -> None:
+    shared_contract = import_module("app.agent.contract")
+    direct_contract = import_module("app.agent.answering.direct_answer.contract")
+
+    shared_type = getattr(shared_contract, "AnswerGenerationStopped", None)
+    direct_type = getattr(direct_contract, "AnswerGenerationStopped", None)
+
+    assert shared_type is not None, "shared AnswerGenerationStopped が未実装です"
+    assert direct_type is shared_type
 
 
 class FakeDirectAnswerAuditRecorder:

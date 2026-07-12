@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import ast
 import asyncio
+import inspect
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
@@ -17,10 +19,10 @@ from structlog.testing import capture_logs
 import app.agent.composition as composition
 import app.queue.tasks.agent_run as agent_run_tasks
 from app.agent.answering.direct_answer.contract import (
-    AnswerGenerationStopped,
     DirectAnswerInvalidError,
 )
 from app.agent.contract import (
+    AnswerGenerationStopped,
     AnswerQuestionInput,
     AnswerQuestionResult,
     AnswerRetrievalSummary,
@@ -31,6 +33,7 @@ from app.agent.live_updates.reporters import AgentRunLiveActivityReporter
 from app.agent.live_updates.stream import (
     AgentRunLiveStreamActivityEvent,
     AgentRunLiveStreamAnswerDeltaEvent,
+    AgentRunLiveStreamAnswerResetEvent,
     AgentRunLiveStreamStageEvent,
     AgentRunLiveStreamTerminalEvent,
 )
@@ -176,6 +179,25 @@ class DeltaReportingAgent:
         return self.result
 
 
+class RevisionReportingAgent:
+    def __init__(self, result: AnswerQuestionResult, text: str) -> None:
+        self.result = result
+        self.text = text
+        self.delta_reporter: object | None = None
+        self.continuation: object | None = None
+
+    async def answer(self, _input: AnswerQuestionInput) -> AnswerQuestionResult:
+        assert self.delta_reporter is not None
+        assert self.continuation is not None
+        await self.delta_reporter.reset(generation=2)  # type: ignore[attr-defined]
+        await self.delta_reporter.append(  # type: ignore[attr-defined]
+            generation=2,
+            text=self.text,
+        )
+        await self.delta_reporter.finish(generation=2)  # type: ignore[attr-defined]
+        return self.result
+
+
 class CapturingDeltaReporter:
     instances: list[CapturingDeltaReporter] = []
 
@@ -272,7 +294,7 @@ def _external_result() -> AnswerQuestionResult:
     )
 
 
-def test_composition_injects_live_controls_only_into_direct_flow(
+def test_composition_injects_same_live_controls_into_both_answer_flows(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     import app.agent.answering.direct_answer.ai.gemini as direct_gemini_module
@@ -362,10 +384,26 @@ def test_composition_injects_live_controls_only_into_direct_flow(
 
     assert captured["direct"]["delta_reporter"] is delta_reporter
     assert captured["direct"]["continuation"] is continuation
-    assert "delta_reporter" not in captured["evidence"]
-    assert "continuation" not in captured["evidence"]
+    assert captured["evidence"]["delta_reporter"] is delta_reporter
+    assert captured["evidence"]["continuation"] is continuation
     assert captured["orchestrator"]["direct_answerer"] is not None
     assert captured["orchestrator"]["evidence_answerer"] is not None
+
+
+def test_worker_imports_generation_stopped_from_shared_agent_contract() -> None:
+    tree = ast.parse(inspect.getsource(agent_run_tasks))
+    imports = {
+        node.module: {alias.name for alias in node.names}
+        for node in ast.walk(tree)
+        if isinstance(node, ast.ImportFrom) and node.module is not None
+    }
+
+    assert "AnswerGenerationStopped" in imports.get("app.agent.contract", set())
+    assert "AnswerGenerationStopped" not in imports.get(
+        "app.agent.answering.direct_answer.contract",
+        set(),
+    )
+    assert agent_run_tasks.AnswerGenerationStopped is AnswerGenerationStopped
 
 
 async def _create_thread_message_run(
@@ -1312,6 +1350,65 @@ async def test_delta_finish_precedes_completed_commit_and_terminal(
         assert persisted is not None
         assert persisted.status == "completed"
         assert persisted.assistant_message_id is not None
+
+
+@pytest.mark.asyncio
+async def test_evidence_revision_events_precede_persisted_completed_terminal(
+    session_factory: async_sessionmaker[AsyncSession],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async with session_factory() as session:
+        _thread, _message, run = await _create_thread_message_run(session)
+    result = _external_result()
+    visible_revision = "外部根拠つき回答。"
+    fake_agent = RevisionReportingAgent(result, visible_revision)
+    captured_controls: dict[str, object] = {}
+
+    def build_agent(**kwargs: object) -> RevisionReportingAgent:
+        captured_controls.update(kwargs)
+        fake_agent.delta_reporter = kwargs["delta_reporter"]
+        fake_agent.continuation = kwargs["continuation"]
+        return fake_agent
+
+    class CommitCheckingPublisher(FakeLiveStreamPublisher):
+        async def publish(self, event: object) -> str | None:
+            if isinstance(event, AgentRunLiveStreamTerminalEvent):
+                async with session_factory() as session:
+                    persisted = await session.get(AgentRun, run.id)
+                    assert persisted is not None
+                    assert persisted.status == "completed"
+                    assert persisted.assistant_message_id is not None
+                    assistant = await session.get(
+                        AgentMessage,
+                        persisted.assistant_message_id,
+                    )
+                    assert assistant is not None
+                    assert assistant.role == "assistant"
+                    assert assistant.content == result.answer
+            return await super().publish(event)
+
+    _patch_delta_worker(
+        monkeypatch,
+        build_agent,
+        stream_publisher=CommitCheckingPublisher,
+    )
+
+    await agent_run_tasks.run_agent_answer(
+        trigger=AgentRunTrigger(run_id=run.id),
+        ctx=_ctx(session_factory),
+    )
+
+    stream = FakeLiveStreamPublisher.instances[0]
+    assert stream.published == [
+        AgentRunLiveStreamAnswerResetEvent(generation=2),
+        AgentRunLiveStreamAnswerDeltaEvent(
+            generation=2,
+            text=visible_revision,
+        ),
+        AgentRunLiveStreamTerminalEvent(status="completed"),
+    ]
+    assert captured_controls["delta_reporter"] is fake_agent.delta_reporter
+    assert captured_controls["continuation"] is fake_agent.continuation
 
 
 @pytest.mark.asyncio

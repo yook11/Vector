@@ -15,7 +15,6 @@ from app.agent.answering.audit import (
     classify_direct_answer_failure,
 )
 from app.agent.answering.direct_answer.contract import (
-    AnswerGenerationStopped,
     DirectAnswerDraft,
     DirectAnswerGenerator,
     DirectAnswerInvalidError,
@@ -24,7 +23,11 @@ from app.agent.answering.direct_answer.stream_filter import (
     DirectAnswerVisibleTextFilter,
 )
 from app.agent.answering.metrics import record_direct_answer_outcome
-from app.agent.contract import AnswerDeltaReporter, AnswerGenerationContinuation
+from app.agent.contract import (
+    AnswerDeltaReporter,
+    AnswerGenerationContinuation,
+    AnswerGenerationStopped,
+)
 from app.analysis.ai_provider_errors import AIProviderError
 
 __all__ = ["DirectAnswerFlow"]

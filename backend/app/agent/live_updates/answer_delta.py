@@ -10,7 +10,10 @@ from uuid import UUID
 import structlog
 
 from app.agent.live_updates.metrics import record_answer_delta_breaker_open
-from app.agent.live_updates.stream import AgentRunLiveStreamAnswerDeltaEvent
+from app.agent.live_updates.stream import (
+    AgentRunLiveStreamAnswerDeltaEvent,
+    AgentRunLiveStreamAnswerResetEvent,
+)
 
 ANSWER_DELTA_FLUSH_INTERVAL_SECONDS = 0.25
 ANSWER_DELTA_MAX_CHARACTERS = 512
@@ -22,7 +25,7 @@ logger = structlog.get_logger(__name__)
 class _AnswerDeltaPublisher(Protocol):
     async def publish(
         self,
-        event: AgentRunLiveStreamAnswerDeltaEvent,
+        event: AgentRunLiveStreamAnswerDeltaEvent | AgentRunLiveStreamAnswerResetEvent,
     ) -> str | None: ...
 
 
@@ -69,6 +72,15 @@ class AgentRunLiveAnswerDeltaReporter:
                     self._start_timer_locked(generation)
         finally:
             await _await_cancelled_timer(timer_to_await)
+
+    async def reset(self, *, generation: int) -> None:
+        async with self._lock:
+            if self._breaker_open:
+                return
+            await self._publish_event_locked(
+                AgentRunLiveStreamAnswerResetEvent(generation=generation),
+                generation=generation,
+            )
 
     async def finish(self, *, generation: int) -> None:
         timer_to_await: asyncio.Task[None] | None = None
@@ -168,13 +180,22 @@ class AgentRunLiveAnswerDeltaReporter:
             await self._publish_locked(generation, text)
 
     async def _publish_locked(self, generation: int, text: str) -> None:
+        await self._publish_event_locked(
+            AgentRunLiveStreamAnswerDeltaEvent(
+                generation=generation,
+                text=text,
+            ),
+            generation=generation,
+        )
+
+    async def _publish_event_locked(
+        self,
+        event: AgentRunLiveStreamAnswerDeltaEvent | AgentRunLiveStreamAnswerResetEvent,
+        *,
+        generation: int,
+    ) -> None:
         try:
-            stream_id = await self._publisher.publish(
-                AgentRunLiveStreamAnswerDeltaEvent(
-                    generation=generation,
-                    text=text,
-                )
-            )
+            stream_id = await self._publisher.publish(event)
         except Exception:
             stream_id = None
 

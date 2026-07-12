@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import AsyncIterator
 from datetime import datetime
 
 from pydantic import ValidationError
@@ -22,10 +23,22 @@ from app.agent.answering.evidence_answer.contract import (
     EvidenceAnswerDraftInvalidError,
 )
 from app.agent.answering.evidence_answer.evidence import AnswerEvidenceItem
+from app.agent.answering.evidence_answer.final_json import (
+    parse_evidence_answer_final_json,
+)
+from app.agent.answering.evidence_answer.json_answer_extractor import (
+    IncrementalJsonAnswerExtractor,
+)
 from app.agent.answering.evidence_answer.validation import (
     finalize_evidence_answer_draft,
 )
 from app.agent.answering.metrics import record_answer_synthesis_outcome
+from app.agent.answering.visible_text import AnswerVisibleTextFilter
+from app.agent.contract import (
+    AnswerDeltaReporter,
+    AnswerGenerationContinuation,
+    AnswerGenerationStopped,
+)
 from app.analysis.ai_provider_errors import AIProviderError
 
 __all__ = ["EvidenceAnswerFlow"]
@@ -51,9 +64,13 @@ class EvidenceAnswerFlow:
         *,
         generator: EvidenceAnswerDraftGenerator,
         audit_recorder: AnswerSynthesisAuditRecorder | None = None,
+        delta_reporter: AnswerDeltaReporter | None = None,
+        continuation: AnswerGenerationContinuation | None = None,
     ) -> None:
         self._generator = generator
         self._audit_recorder = audit_recorder
+        self._delta_reporter = delta_reporter
+        self._continuation = continuation
 
     async def answer(
         self,
@@ -83,6 +100,7 @@ class EvidenceAnswerFlow:
                 user_activity_context=user_activity_context,
                 previous_error=None,
                 attempt_number=1,
+                generation=1,
                 ai_model=ai_model,
                 prompt_version=prompt_version,
             )
@@ -100,6 +118,7 @@ class EvidenceAnswerFlow:
                 is not RequestRetryDisposition.RETRY_IN_REQUEST
             ):
                 return await self._fallback_with_audit(
+                    generation=2,
                     attempt_count=1,
                     retry_used=False,
                     failure=failure,
@@ -108,6 +127,7 @@ class EvidenceAnswerFlow:
                     ai_model=ai_model,
                     prompt_version=prompt_version,
                 )
+            await self._start_revision(generation=2)
             try:
                 draft, defects = await self._generate_strict_draft(
                     question=question,
@@ -119,6 +139,7 @@ class EvidenceAnswerFlow:
                     user_activity_context=user_activity_context,
                     previous_error=str(exc),
                     attempt_number=2,
+                    generation=2,
                     ai_model=ai_model,
                     prompt_version=prompt_version,
                 )
@@ -132,6 +153,7 @@ class EvidenceAnswerFlow:
                     prompt_version=prompt_version,
                 )
                 return await self._fallback_with_audit(
+                    generation=3,
                     attempt_count=2,
                     retry_used=True,
                     failure=retry_failure,
@@ -176,29 +198,108 @@ class EvidenceAnswerFlow:
         user_activity_context: str,
         previous_error: str | None,
         attempt_number: int,
+        generation: int,
         ai_model: str | None,
         prompt_version: str | None,
     ) -> tuple[EvidenceAnswerDraft, list[str]]:
-        raw = await self._generator.generate(
-            question=question,
-            evidence=evidence,
-            as_of=as_of,
-            target_time_window=target_time_window,
-            user_intent=user_intent,
-            prior_coverage=prior_coverage,
-            user_activity_context=user_activity_context,
-            previous_error=previous_error,
-        )
-        draft, defects = finalize_evidence_answer_draft(raw, evidence=evidence)
-        for defect in defects:
-            await _record_defect(
-                audit_recorder=self._audit_recorder,
-                attempt_number=attempt_number,
-                defect_code=defect,
-                ai_model=ai_model,
-                prompt_version=prompt_version,
+        stream: AsyncIterator[str] | None = None
+        extractor = IncrementalJsonAnswerExtractor()
+        visible_filter = AnswerVisibleTextFilter()
+        raw_fragments: list[str] = []
+        try:
+            if not await self._should_continue():
+                raise AnswerGenerationStopped
+
+            stream = self._generator.stream(
+                question=question,
+                evidence=evidence,
+                as_of=as_of,
+                target_time_window=target_time_window,
+                user_intent=user_intent,
+                prior_coverage=prior_coverage,
+                user_activity_context=user_activity_context,
+                previous_error=previous_error,
             )
-        return draft, defects
+            async for raw_fragment in stream:
+                if not await self._should_continue():
+                    raise AnswerGenerationStopped
+                raw_fragments.append(raw_fragment)
+                decoded = extractor.append(raw_fragment)
+                if decoded:
+                    visible = visible_filter.append(decoded)
+                    if visible:
+                        await self._report_append(
+                            generation=generation,
+                            text=visible,
+                        )
+
+            if not await self._should_continue():
+                raise AnswerGenerationStopped
+            extractor.finish()
+
+            raw = parse_evidence_answer_final_json("".join(raw_fragments))
+            draft, defects = finalize_evidence_answer_draft(raw, evidence=evidence)
+            for defect in defects:
+                await _record_defect(
+                    audit_recorder=self._audit_recorder,
+                    attempt_number=attempt_number,
+                    defect_code=defect,
+                    ai_model=ai_model,
+                    prompt_version=prompt_version,
+                )
+
+            visible_tail = visible_filter.finish()
+            if visible_tail:
+                await self._report_append(generation=generation, text=visible_tail)
+            await self._report_finish(generation=generation)
+            return draft, defects
+        except BaseException:
+            await self._report_abort(generation=generation)
+            raise
+        finally:
+            await _close_stream(stream)
+
+    async def _should_continue(self) -> bool:
+        if self._continuation is None:
+            return True
+        return await self._continuation.should_continue()
+
+    async def _start_revision(self, *, generation: int) -> None:
+        if not await self._should_continue():
+            raise AnswerGenerationStopped
+        await self._report_reset(generation=generation)
+
+    async def _report_append(self, *, generation: int, text: str) -> None:
+        if self._delta_reporter is None:
+            return
+        try:
+            await self._delta_reporter.append(generation=generation, text=text)
+        except Exception:
+            return
+
+    async def _report_reset(self, *, generation: int) -> None:
+        if self._delta_reporter is None:
+            return
+        try:
+            await self._delta_reporter.reset(generation=generation)
+        except Exception:
+            return
+
+    async def _report_finish(self, *, generation: int) -> None:
+        if self._delta_reporter is None:
+            return
+        try:
+            await self._delta_reporter.finish(generation=generation)
+        except Exception:
+            return
+
+    async def _report_abort(self, *, generation: int) -> None:
+        if self._delta_reporter is None:
+            return
+        try:
+            await self._delta_reporter.abort(generation=generation)
+        except Exception:
+            return
 
     async def _record_synthesized(
         self,
@@ -233,6 +334,7 @@ class EvidenceAnswerFlow:
     async def _fallback_with_audit(
         self,
         *,
+        generation: int,
         attempt_count: int,
         retry_used: bool,
         failure: AnswerSynthesisFailureAttributes,
@@ -241,12 +343,15 @@ class EvidenceAnswerFlow:
         ai_model: str | None,
         prompt_version: str | None,
     ) -> EvidenceAnswerDraft:
+        await self._start_revision(generation=generation)
         fallback = EvidenceAnswerDraft(
             sufficiency="insufficient",
             answer=_FALLBACK_ANSWER,
             cited_refs=[],
             missing_aspects=[_FALLBACK_MISSING_ASPECT],
         )
+        await self._report_append(generation=generation, text=fallback.answer)
+        await self._report_finish(generation=generation)
         event = AnswerSynthesisFinalEvent.fallback(
             attempt_count=attempt_count,
             retry_used=retry_used,
@@ -326,5 +431,17 @@ async def _record_final_event(
         return
     try:
         await audit_recorder.record_final_event(event)
+    except Exception:
+        return
+
+
+async def _close_stream(stream: AsyncIterator[str] | None) -> None:
+    if stream is None:
+        return
+    close = getattr(stream, "aclose", None)
+    if close is None:
+        return
+    try:
+        await close()
     except Exception:
         return

@@ -9,15 +9,16 @@ import structlog
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from taskiq import Context, TaskiqDepends
 
-from app.agent.answering.direct_answer.contract import (
-    AnswerGenerationStopped,
-    DirectAnswerInvalidError,
-)
+from app.agent.answering.direct_answer.contract import DirectAnswerInvalidError
 from app.agent.composition import (
     build_question_answering_agent,
     build_question_context_generator,
 )
-from app.agent.contract import AnswerQuestionInput, QuestionResolvedEvent
+from app.agent.contract import (
+    AnswerGenerationStopped,
+    AnswerQuestionInput,
+    QuestionResolvedEvent,
+)
 from app.agent.live_updates.answer_delta import AgentRunLiveAnswerDeltaReporter
 from app.agent.live_updates.recent_events import AgentRunLiveEventPublisher
 from app.agent.live_updates.reporters import (

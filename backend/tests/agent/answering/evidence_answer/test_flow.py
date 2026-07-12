@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 import json
-from collections.abc import Sequence
+from collections.abc import AsyncIterator, Sequence
 from datetime import UTC, datetime
+from importlib import import_module
 from typing import Any
 
 import pytest
@@ -25,7 +26,7 @@ from app.agent.answering.evidence_answer.contract import (
 from app.agent.answering.evidence_answer.evidence import AnswerEvidenceItem
 from app.agent.answering.evidence_answer.flow import EvidenceAnswerFlow
 from app.agent.contract import ExternalUrlSource
-from app.analysis.ai_provider_errors import AIProviderNetworkError
+from app.analysis.ai_provider_errors import AIProviderError, AIProviderNetworkError
 from tests.logfire._metric_helpers import collected_metrics, sum_counter_for_result
 
 _SYNTHESIS_OUTCOME_METRIC = "vector.agent.answer_synthesis.outcome"
@@ -63,15 +64,56 @@ def _raw(
     )
 
 
+def _raw_json(raw: RawEvidenceAnswerDraft) -> str:
+    return json.dumps(raw.model_dump(mode="json"), ensure_ascii=False)
+
+
+def _operation_names(reporter: RecordingDeltaReporter) -> list[tuple[str, int]]:
+    return [(name, generation) for name, generation, _ in reporter.operations]
+
+
+StreamOutcome = RawEvidenceAnswerDraft | str | Sequence[str] | Exception
+
+
+class FakeEvidenceAnswerStream:
+    def __init__(self, outcome: StreamOutcome) -> None:
+        if isinstance(outcome, Exception):
+            self._items: list[str | Exception] = [outcome]
+        elif isinstance(outcome, RawEvidenceAnswerDraft):
+            self._items = [
+                json.dumps(outcome.model_dump(mode="json"), ensure_ascii=False)
+            ]
+        elif isinstance(outcome, str):
+            self._items = [outcome]
+        else:
+            self._items = list(outcome)
+        self.closed = False
+
+    def __aiter__(self) -> FakeEvidenceAnswerStream:
+        return self
+
+    async def __anext__(self) -> str:
+        if not self._items:
+            raise StopAsyncIteration
+        item = self._items.pop(0)
+        if isinstance(item, Exception):
+            raise item
+        return item
+
+    async def aclose(self) -> None:
+        self.closed = True
+
+
 class FakeGenerator:
     model_name = "fake-answer-model"
     prompt_version = "fake0001"
 
-    def __init__(self, outcomes: Sequence[RawEvidenceAnswerDraft | Exception]) -> None:
+    def __init__(self, outcomes: Sequence[StreamOutcome]) -> None:
         self._outcomes = list(outcomes)
         self.calls: list[dict[str, Any]] = []
+        self.streams: list[FakeEvidenceAnswerStream] = []
 
-    async def generate(
+    def stream(
         self,
         *,
         question: str,
@@ -82,7 +124,7 @@ class FakeGenerator:
         prior_coverage: str = "",
         user_activity_context: str = "",
         previous_error: str | None = None,
-    ) -> RawEvidenceAnswerDraft:
+    ) -> AsyncIterator[str]:
         self.calls.append(
             {
                 "question": question,
@@ -96,9 +138,63 @@ class FakeGenerator:
             }
         )
         outcome = self._outcomes.pop(0)
-        if isinstance(outcome, Exception):
-            raise outcome
-        return outcome
+        stream = FakeEvidenceAnswerStream(outcome)
+        self.streams.append(stream)
+        return stream
+
+
+class RecordingDeltaReporter:
+    def __init__(self, *, fail_on: frozenset[str] = frozenset()) -> None:
+        self.fail_on = fail_on
+        self.appended: list[tuple[int, str]] = []
+        self.finished: list[int] = []
+        self.aborted: list[int] = []
+        self.reset_generations: list[int] = []
+        self.operations: list[tuple[str, int, str | None]] = []
+
+    async def append(self, *, generation: int, text: str) -> None:
+        self.appended.append((generation, text))
+        self.operations.append(("append", generation, text))
+        if "append" in self.fail_on:
+            raise RuntimeError("REPORTER_APPEND_SECRET")
+
+    async def finish(self, *, generation: int) -> None:
+        self.finished.append(generation)
+        self.operations.append(("finish", generation, None))
+        if "finish" in self.fail_on:
+            raise RuntimeError("REPORTER_FINISH_SECRET")
+
+    async def abort(self, *, generation: int) -> None:
+        self.aborted.append(generation)
+        self.operations.append(("abort", generation, None))
+        if "abort" in self.fail_on:
+            raise RuntimeError("REPORTER_ABORT_SECRET")
+
+    async def reset(self, *, generation: int) -> None:
+        self.reset_generations.append(generation)
+        self.operations.append(("reset", generation, None))
+        if "reset" in self.fail_on:
+            raise RuntimeError("REPORTER_RESET_SECRET")
+
+
+class SequenceContinuation:
+    def __init__(self, results: Sequence[bool]) -> None:
+        self._results = list(results)
+        self.calls = 0
+
+    async def should_continue(self) -> bool:
+        self.calls += 1
+        if not self._results:
+            return True
+        return self._results.pop(0)
+
+
+def _answer_generation_stopped_type() -> type[BaseException]:
+    contract = import_module("app.agent.contract")
+    stopped_type = getattr(contract, "AnswerGenerationStopped", None)
+    assert stopped_type is not None, "shared AnswerGenerationStopped が未実装です"
+    assert isinstance(stopped_type, type) and issubclass(stopped_type, BaseException)
+    return stopped_type
 
 
 class FakeAnswerSynthesisAuditRecorder:
@@ -137,13 +233,22 @@ class RaisingAnswerSynthesisAuditRecorder:
 async def _answer(
     generator: FakeGenerator,
     *,
-    recorder: FakeAnswerSynthesisAuditRecorder | None = None,
+    recorder: (
+        FakeAnswerSynthesisAuditRecorder | RaisingAnswerSynthesisAuditRecorder | None
+    ) = None,
     evidence: list[AnswerEvidenceItem] | None = None,
+    delta_reporter: RecordingDeltaReporter | None = None,
+    continuation: SequenceContinuation | None = None,
 ) -> EvidenceAnswerDraft:
-    return await EvidenceAnswerFlow(
-        generator=generator,
-        audit_recorder=recorder,
-    ).answer(
+    flow_kwargs: dict[str, Any] = {
+        "generator": generator,
+        "audit_recorder": recorder,
+    }
+    if delta_reporter is not None:
+        flow_kwargs["delta_reporter"] = delta_reporter
+    if continuation is not None:
+        flow_kwargs["continuation"] = continuation
+    return await EvidenceAnswerFlow(**flow_kwargs).answer(
         question="NVIDIA の直近発表は投資判断に重要？",
         evidence=[_evidence()] if evidence is None else evidence,
         as_of=_as_of(),
@@ -610,3 +715,352 @@ async def test_outcome_metric_records_synthesized_once(
             "fallback_used": False,
         }
     ]
+
+
+@pytest.mark.asyncio
+async def test_stream_displays_only_filtered_root_answer_for_generation_one() -> None:
+    raw_json = (
+        '{"sufficiency":"answered","metadata":{"answer":"NESTED_SECRET"},'
+        '"answer":"  結論 [[1]] と [[x]] は残す。  ",'
+        '"cited_refs":["1"],"missing_aspects":[]}'
+    )
+    generator = FakeGenerator(
+        [
+            [
+                raw_json[:72],
+                raw_json[72:88],
+                raw_json[88:91],
+                raw_json[91:],
+            ]
+        ]
+    )
+    reporter = RecordingDeltaReporter()
+
+    draft = await _answer(generator, delta_reporter=reporter)
+
+    visible = "".join(text for _, text in reporter.appended)
+    assert visible == "結論  と [[x]] は残す。"
+    assert visible == draft.answer.replace("[[1]]", "").strip()
+    assert "NESTED_SECRET" not in visible
+    assert "sufficiency" not in visible
+    assert "cited_refs" not in visible
+    assert "missing_aspects" not in visible
+    assert generator.calls == [
+        {
+            "question": "NVIDIA の直近発表は投資判断に重要？",
+            "evidence": [_evidence()],
+            "as_of": _as_of(),
+            "target_time_window": "今日",
+            "user_intent": "",
+            "prior_coverage": "",
+            "user_activity_context": "",
+            "previous_error": None,
+        }
+    ]
+    assert generator.streams[0].closed is True
+    assert reporter.finished == [1]
+    assert reporter.aborted == []
+    assert reporter.reset_generations == []
+
+
+@pytest.mark.asyncio
+async def test_insufficient_root_answer_is_streamed_normally() -> None:
+    generator = FakeGenerator(
+        [
+            _raw(
+                sufficiency="insufficient",
+                answer="根拠の範囲では一部だけ確認できます。[[1]]",
+                cited_refs=["1"],
+                missing_aspects=["会社側の一次情報"],
+            )
+        ]
+    )
+    reporter = RecordingDeltaReporter()
+
+    draft = await _answer(generator, delta_reporter=reporter)
+
+    assert draft.sufficiency == "insufficient"
+    assert "".join(text for _, text in reporter.appended) == (
+        "根拠の範囲では一部だけ確認できます。"
+    )
+    assert reporter.finished == [1]
+
+
+@pytest.mark.parametrize(
+    "invalid_json",
+    [
+        "not json",
+        "[]",
+        (
+            '{"sufficiency":"answered","answer":"first",'
+            '"answer":"second","cited_refs":["1"],"missing_aspects":[]}'
+        ),
+        (
+            '{"sufficiency":"answered","answer":"schema invalid",'
+            '"cited_refs":"1","missing_aspects":[]}'
+        ),
+    ],
+    ids=["invalid-json", "non-object", "duplicate-top-level-key", "schema"],
+)
+@pytest.mark.asyncio
+async def test_final_json_boundary_retries_then_falls_back_with_typed_audit(
+    invalid_json: str,
+) -> None:
+    generator = FakeGenerator([invalid_json, invalid_json])
+    recorder = FakeAnswerSynthesisAuditRecorder()
+
+    draft = await _answer(generator, recorder=recorder)
+
+    assert draft.sufficiency == "insufficient"
+    assert len(generator.calls) == 2
+    assert all(stream.closed for stream in generator.streams)
+    assert [event.attempt_number for event in recorder.attempt_failures] == [1, 2]
+    assert all(
+        event.failure_kind == "ai_response_invalid"
+        for event in recorder.attempt_failures
+    )
+    assert {event.request_retry_disposition for event in recorder.attempt_failures} == {
+        RequestRetryDisposition.RETRY_IN_REQUEST
+    }
+    assert recorder.final_events[0].outcome_code is (
+        AnswerSynthesisOutcomeCode.FALLBACK_USED
+    )
+
+
+@pytest.mark.asyncio
+async def test_retry_aborts_then_resets_before_generation_two_delta() -> None:
+    generator = FakeGenerator(
+        [
+            _raw(answer="引用がありません。", cited_refs=["1"]),
+            _raw(answer="修正後は引用します。[[1]]", cited_refs=["1"]),
+        ]
+    )
+    recorder = FakeAnswerSynthesisAuditRecorder()
+    reporter = RecordingDeltaReporter()
+
+    draft = await _answer(
+        generator,
+        recorder=recorder,
+        delta_reporter=reporter,
+    )
+
+    assert draft.answer == "修正後は引用します。[[1]]"
+    assert reporter.aborted == [1]
+    assert reporter.reset_generations == [2]
+    assert reporter.finished == [2]
+    operations = _operation_names(reporter)
+    assert operations.index(("abort", 1)) < operations.index(("reset", 2))
+    first_generation_two_append = operations.index(("append", 2))
+    assert operations.index(("reset", 2)) < first_generation_two_append
+    assert "citation marker" in generator.calls[1]["previous_error"]
+    assert all(stream.closed for stream in generator.streams)
+    assert recorder.final_events[0].attempt_count == 2
+    assert recorder.final_events[0].retry_used is True
+
+
+@pytest.mark.asyncio
+async def test_retry_resets_even_when_failed_generation_had_no_visible_delta() -> None:
+    generator = FakeGenerator(
+        [
+            "not json",
+            _raw(answer="再試行は引用します。[[1]]", cited_refs=["1"]),
+        ]
+    )
+    reporter = RecordingDeltaReporter()
+
+    draft = await _answer(generator, delta_reporter=reporter)
+
+    assert draft.answer == "再試行は引用します。[[1]]"
+    assert all(generation != 1 for generation, _ in reporter.appended)
+    assert reporter.aborted == [1]
+    assert reporter.reset_generations == [2]
+    assert reporter.finished == [2]
+
+
+@pytest.mark.asyncio
+async def test_two_retryable_failures_reset_to_generation_three_fallback() -> None:
+    generator = FakeGenerator(["not json", "still not json"])
+    recorder = FakeAnswerSynthesisAuditRecorder()
+    reporter = RecordingDeltaReporter()
+
+    draft = await _answer(
+        generator,
+        recorder=recorder,
+        delta_reporter=reporter,
+    )
+
+    assert draft.sufficiency == "insufficient"
+    assert reporter.aborted == [1, 2]
+    assert reporter.reset_generations == [2, 3]
+    assert reporter.finished == [3]
+    assert {generation for generation, _ in reporter.appended} == {3}
+    assert (
+        "".join(text for generation, text in reporter.appended if generation == 3)
+        == draft.answer
+    )
+    operations = _operation_names(reporter)
+    assert operations.index(("abort", 1)) < operations.index(("reset", 2))
+    assert operations.index(("abort", 2)) < operations.index(("reset", 3))
+    assert operations.index(("reset", 3)) < operations.index(("append", 3))
+    assert recorder.final_events[0].fallback_used is True
+    assert recorder.final_events[0].retry_used is True
+
+
+@pytest.mark.asyncio
+async def test_provider_error_resets_once_then_streams_generation_two_fallback() -> (
+    None
+):
+    generator = FakeGenerator([AIProviderNetworkError()])
+    reporter = RecordingDeltaReporter()
+
+    draft = await _answer(generator, delta_reporter=reporter)
+
+    assert draft.sufficiency == "insufficient"
+    assert reporter.aborted == [1]
+    assert reporter.reset_generations == [2]
+    assert reporter.finished == [2]
+    assert {generation for generation, _ in reporter.appended} == {2}
+    assert (
+        "".join(text for generation, text in reporter.appended if generation == 2)
+        == draft.answer
+    )
+    assert generator.streams[0].closed is True
+
+
+@pytest.mark.asyncio
+async def test_all_reporter_failures_do_not_change_retry_result() -> None:
+    generator = FakeGenerator(
+        [
+            _raw(answer="引用がありません。", cited_refs=["1"]),
+            _raw(answer="修正後の回答です。[[1]]", cited_refs=["1"]),
+        ]
+    )
+    reporter = RecordingDeltaReporter(
+        fail_on=frozenset({"append", "finish", "abort", "reset"})
+    )
+
+    draft = await _answer(generator, delta_reporter=reporter)
+
+    assert draft.answer == "修正後の回答です。[[1]]"
+    assert reporter.aborted == [1]
+    assert reporter.reset_generations == [2]
+    assert reporter.finished == [2]
+    assert any(generation == 2 for generation, _ in reporter.appended)
+
+
+@pytest.mark.parametrize("with_failing_reporter", [False, True])
+@pytest.mark.asyncio
+async def test_reporter_is_not_part_of_final_draft_correctness(
+    with_failing_reporter: bool,
+) -> None:
+    generator = FakeGenerator([_raw(cited_refs=["1"])])
+    reporter = (
+        RecordingDeltaReporter(fail_on=frozenset({"append", "finish"}))
+        if with_failing_reporter
+        else None
+    )
+
+    draft = await _answer(generator, delta_reporter=reporter)
+
+    assert draft == EvidenceAnswerDraft(
+        sufficiency="answered",
+        answer="根拠から確認できます。[[1]]",
+        cited_refs=["1"],
+    )
+
+
+@pytest.mark.asyncio
+async def test_continuation_false_before_provider_start_is_routine_stop() -> None:
+    stopped_type = _answer_generation_stopped_type()
+    assert not issubclass(stopped_type, AIProviderError)
+    generator = FakeGenerator([_raw()])
+    recorder = FakeAnswerSynthesisAuditRecorder()
+    reporter = RecordingDeltaReporter()
+
+    with pytest.raises(stopped_type):
+        await _answer(
+            generator,
+            recorder=recorder,
+            delta_reporter=reporter,
+            continuation=SequenceContinuation([False]),
+        )
+
+    assert generator.calls == []
+    assert generator.streams == []
+    assert reporter.aborted == [1]
+    assert reporter.appended == []
+    assert reporter.finished == []
+    assert recorder.attempt_failures == []
+    assert recorder.final_events == []
+
+
+@pytest.mark.asyncio
+async def test_continuation_false_mid_stream_closes_and_aborts() -> None:
+    stopped_type = _answer_generation_stopped_type()
+    raw_json = _raw_json(_raw(answer="表示済み本文と非表示本文。[[1]]"))
+    answer_start = raw_json.index("表示済み本文") + len("表示済み本文")
+    generator = FakeGenerator([[raw_json[:answer_start], raw_json[answer_start:]]])
+    recorder = FakeAnswerSynthesisAuditRecorder()
+    reporter = RecordingDeltaReporter()
+    continuation = SequenceContinuation([True, True, False])
+
+    with pytest.raises(stopped_type):
+        await _answer(
+            generator,
+            recorder=recorder,
+            delta_reporter=reporter,
+            continuation=continuation,
+        )
+
+    assert "".join(text for _, text in reporter.appended) == "表示済み本文"
+    assert reporter.aborted == [1]
+    assert reporter.finished == []
+    assert generator.streams[0].closed is True
+    assert recorder.final_events == []
+
+
+@pytest.mark.asyncio
+async def test_continuation_false_at_eof_stops_before_final_parse_and_audit() -> None:
+    stopped_type = _answer_generation_stopped_type()
+    generator = FakeGenerator([_raw()])
+    recorder = FakeAnswerSynthesisAuditRecorder()
+    reporter = RecordingDeltaReporter()
+    continuation = SequenceContinuation([True, True, False])
+
+    with pytest.raises(stopped_type):
+        await _answer(
+            generator,
+            recorder=recorder,
+            delta_reporter=reporter,
+            continuation=continuation,
+        )
+
+    assert reporter.aborted == [1]
+    assert reporter.finished == []
+    assert reporter.reset_generations == []
+    assert generator.streams[0].closed is True
+    assert recorder.attempt_failures == []
+    assert recorder.final_events == []
+
+
+@pytest.mark.asyncio
+async def test_continuation_false_after_provider_error_stops_before_fallback() -> None:
+    stopped_type = _answer_generation_stopped_type()
+    generator = FakeGenerator([AIProviderNetworkError()])
+    recorder = FakeAnswerSynthesisAuditRecorder()
+    reporter = RecordingDeltaReporter()
+
+    with pytest.raises(stopped_type):
+        await _answer(
+            generator,
+            recorder=recorder,
+            delta_reporter=reporter,
+            continuation=SequenceContinuation([True, False]),
+        )
+
+    assert generator.streams[0].closed is True
+    assert reporter.aborted == [1]
+    assert reporter.reset_generations == []
+    assert reporter.appended == []
+    assert reporter.finished == []
+    assert recorder.final_events == []

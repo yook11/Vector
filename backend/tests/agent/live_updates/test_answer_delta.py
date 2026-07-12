@@ -13,7 +13,10 @@ import pytest
 from logfire.testing import CaptureLogfire
 from structlog.testing import capture_logs
 
-from app.agent.live_updates.stream import AgentRunLiveStreamAnswerDeltaEvent
+from app.agent.live_updates.stream import (
+    AgentRunLiveStreamAnswerDeltaEvent,
+    AgentRunLiveStreamAnswerResetEvent,
+)
 from tests.logfire._metric_helpers import collected_metrics
 
 RUN_ID = UUID("00000000-0000-4000-a000-000000000011")
@@ -23,6 +26,8 @@ BREAKER_METRIC = "vector.agent.answer_delta.breaker_open"
 
 class _AnswerDeltaReporter(Protocol):
     async def append(self, *, generation: int, text: str) -> None: ...
+
+    async def reset(self, *, generation: int) -> None: ...
 
     async def finish(self, *, generation: int) -> None: ...
 
@@ -66,11 +71,16 @@ class ScriptedPublisher:
         outcomes: Sequence[str | None | BaseException] = (),
     ) -> None:
         self._outcomes = deque(outcomes)
-        self.events: list[AgentRunLiveStreamAnswerDeltaEvent] = []
+        self.events: list[
+            AgentRunLiveStreamAnswerDeltaEvent | AgentRunLiveStreamAnswerResetEvent
+        ] = []
         self.published = asyncio.Event()
 
     async def publish(self, event: object) -> str | None:
-        assert isinstance(event, AgentRunLiveStreamAnswerDeltaEvent)
+        assert isinstance(
+            event,
+            AgentRunLiveStreamAnswerDeltaEvent | AgentRunLiveStreamAnswerResetEvent,
+        )
         self.events.append(event)
         self.published.set()
         outcome: str | None | BaseException = "1-0"
@@ -126,7 +136,11 @@ async def _next_event_loop_turn() -> None:
 
 
 def _texts(publisher: ScriptedPublisher) -> list[str]:
-    return [event.text for event in publisher.events]
+    return [
+        event.text
+        for event in publisher.events
+        if isinstance(event, AgentRunLiveStreamAnswerDeltaEvent)
+    ]
 
 
 def _metric_points(
@@ -300,6 +314,145 @@ async def test_timer_size_and_finish_race_has_no_loss_duplication_or_reordering(
     assert "".join(_texts(publisher)) == "A" + ("B" * 512)
     assert all(1 <= len(text) <= 512 for text in _texts(publisher))
     assert {event.generation for event in publisher.events} == {6}
+    assert sleeper.active == 0
+
+
+@pytest.mark.parametrize(
+    "outcome",
+    [None, RuntimeError("RESET_PUBLISH_SECRET")],
+    ids=["unconfirmed", "exception"],
+)
+@pytest.mark.asyncio
+async def test_reset_publishes_immediately_without_timer_or_lazy_retry(
+    outcome: str | None | BaseException,
+) -> None:
+    publisher = ScriptedPublisher([outcome, "must-not-be-used"])
+    sleeper = ManualSleeper()
+    reporter = _new_reporter(publisher, sleeper)
+
+    await reporter.reset(generation=2)
+
+    assert publisher.events == [AgentRunLiveStreamAnswerResetEvent(generation=2)]
+    assert sleeper.calls == []
+    assert sleeper.active == 0
+
+
+@pytest.mark.asyncio
+async def test_reset_without_visible_delta_preserves_explicit_generation() -> None:
+    publisher = ScriptedPublisher(["1-0", "2-0"])
+    sleeper = ManualSleeper()
+    reporter = _new_reporter(publisher, sleeper)
+
+    await reporter.reset(generation=8)
+    await reporter.reset(generation=8)
+
+    assert publisher.events == [
+        AgentRunLiveStreamAnswerResetEvent(generation=8),
+        AgentRunLiveStreamAnswerResetEvent(generation=8),
+    ]
+    assert sleeper.calls == []
+
+
+@pytest.mark.asyncio
+async def test_reset_and_delta_failures_share_one_breaker(
+    capfire: CaptureLogfire,
+) -> None:
+    publisher = ScriptedPublisher(
+        [None, RuntimeError("SHARED_BREAKER_SECRET"), None, "must-not-be-used"]
+    )
+    reporter = _new_reporter(publisher, ManualSleeper())
+    secret_text = "RESET_DELTA_PAYLOAD_SECRET".ljust(512, "X")
+
+    with capture_logs() as logs:
+        await reporter.reset(generation=4)
+        await reporter.append(generation=4, text=secret_text)
+        await reporter.reset(generation=4)
+        await reporter.append(generation=4, text="blocked".ljust(512, "X"))
+        await reporter.reset(generation=5)
+
+    assert publisher.events == [
+        AgentRunLiveStreamAnswerResetEvent(generation=4),
+        AgentRunLiveStreamAnswerDeltaEvent(generation=4, text=secret_text),
+        AgentRunLiveStreamAnswerResetEvent(generation=4),
+    ]
+    breaker_logs = [
+        entry
+        for entry in logs
+        if entry.get("event") == "agent_run_answer_delta_breaker_open"
+    ]
+    assert len(breaker_logs) == 1
+    assert breaker_logs[0]["generation"] == 4
+    serialized_logs = repr(logs)
+    assert secret_text not in serialized_logs
+    assert "SHARED_BREAKER_SECRET" not in serialized_logs
+    points = _metric_points(capfire)
+    assert len(points) == 1
+    assert points[0]["value"] == 1
+    assert points[0].get("attributes", {}) == {"reason": "consecutive_publish_failures"}
+
+
+@pytest.mark.asyncio
+async def test_reset_success_resets_delta_failure_count() -> None:
+    publisher = ScriptedPublisher([None, None, "3-0", None, None, "6-0"])
+    reporter = _new_reporter(publisher, ManualSleeper())
+
+    await reporter.append(generation=1, text="A" * 512)
+    await reporter.append(generation=1, text="B" * 512)
+    await reporter.reset(generation=1)
+    await reporter.append(generation=1, text="C" * 512)
+    await reporter.append(generation=1, text="D" * 512)
+    await reporter.reset(generation=1)
+
+    assert len(publisher.events) == 6
+    assert publisher.events[2] == AgentRunLiveStreamAnswerResetEvent(generation=1)
+    assert publisher.events[5] == AgentRunLiveStreamAnswerResetEvent(generation=1)
+
+
+@pytest.mark.asyncio
+async def test_delta_success_resets_reset_failure_count() -> None:
+    publisher = ScriptedPublisher(
+        [None, RuntimeError("RESET_FAILURE_SECRET"), "3-0", None, None, "6-0"]
+    )
+    reporter = _new_reporter(publisher, ManualSleeper())
+
+    await reporter.reset(generation=1)
+    await reporter.reset(generation=1)
+    await reporter.append(generation=1, text="A" * 512)
+    await reporter.reset(generation=1)
+    await reporter.reset(generation=1)
+    await reporter.append(generation=1, text="B" * 512)
+
+    assert len(publisher.events) == 6
+    assert publisher.events[2] == AgentRunLiveStreamAnswerDeltaEvent(
+        generation=1,
+        text="A" * 512,
+    )
+    assert publisher.events[5] == AgentRunLiveStreamAnswerDeltaEvent(
+        generation=1,
+        text="B" * 512,
+    )
+
+
+@pytest.mark.asyncio
+async def test_abort_cleans_pending_buffer_and_timer_after_reset_opens_breaker() -> (
+    None
+):
+    publisher = ScriptedPublisher([None, None, None])
+    sleeper = ManualSleeper()
+    reporter = _new_reporter(publisher, sleeper)
+    await reporter.append(generation=1, text="破棄する保留本文")
+    await sleeper.wait_until_scheduled(1)
+
+    for _ in range(3):
+        await reporter.reset(generation=2)
+    await reporter.abort(generation=1)
+
+    assert publisher.events == [
+        AgentRunLiveStreamAnswerResetEvent(generation=2),
+        AgentRunLiveStreamAnswerResetEvent(generation=2),
+        AgentRunLiveStreamAnswerResetEvent(generation=2),
+    ]
+    assert sleeper.cancelled == 1
     assert sleeper.active == 0
 
 
