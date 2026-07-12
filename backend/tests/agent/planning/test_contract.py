@@ -13,10 +13,10 @@ from app.agent.planning.contract import (
     InternalAndExternalPlan,
     InternalRetrievalPlan,
     NoRetrievalPlan,
+    QuestionPlanDraft,
     plan_from_draft,
     safe_fallback_plan,
 )
-from app.agent.planning.plan_draft import QuestionPlanDraft
 
 
 def _external_task(

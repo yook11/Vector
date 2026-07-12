@@ -30,9 +30,9 @@ from app.agent.planning.contract import (
     InternalAndExternalPlan,
     InternalRetrievalPlan,
     NoRetrievalPlan,
+    QuestionPlanner,
     RetrievalPlan,
 )
-from app.agent.planning.planner import QuestionPlanner
 
 __all__ = ["EvidenceCollector", "QuestionAnsweringOrchestrator"]
 

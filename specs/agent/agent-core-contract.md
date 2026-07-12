@@ -56,7 +56,7 @@ class QuestionPlan(BaseModel):
     reason: str
 ```
 
-「最新情報が必要か」「外部検索すべきか」「どの query を使うか」は request で渡さず、agent が `question` と `as_of` から判断する。LLM adapter は緩い `QuestionPlanDraft` を返し、`QuestionPlanningService` が完成済み `QuestionPlan` にする。agent 内部の downstream は完成済み `QuestionPlan` だけを使う。
+「最新情報が必要か」「外部検索すべきか」「どの query を使うか」は request で渡さず、agent が `question` と `as_of` から判断する。LLM adapter は緩い `QuestionPlanDraft` を返し、`QuestionPlanningFlow` が完成済み `QuestionPlan` にする。agent 内部の downstream は完成済み `QuestionPlan` だけを使う。
 
 ## Output
 

@@ -1,13 +1,13 @@
-"""Question planning-owned completed plan contract."""
+"""Question planning contracts."""
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Annotated, Literal, Self, assert_never
+from enum import StrEnum
+from typing import Annotated, Literal, Protocol, Self, assert_never
 
 from pydantic import BaseModel, ConfigDict, Field, StringConstraints, model_validator
 
-if TYPE_CHECKING:
-    from app.agent.planning.plan_draft import QuestionPlanDraft
+from app.agent.contract import AnswerQuestionInput, RetrievalMode
 
 __all__ = [
     "EXTERNAL_RESEARCH_TASK_LIMIT",
@@ -19,6 +19,10 @@ __all__ = [
     "NoRetrievalPlan",
     "PlanQuery",
     "QuestionPlan",
+    "QuestionPlanDraft",
+    "QuestionPlanDraftGenerator",
+    "QuestionPlanner",
+    "QuestionPlannerResponseInvalidError",
     "RetrievalPlan",
     "plan_from_draft",
     "safe_fallback_plan",
@@ -31,6 +35,37 @@ PlanQuery = Annotated[
     str,
     StringConstraints(strip_whitespace=True, min_length=1),
 ]
+
+
+class QuestionPlannerResponseInvalidError(ValueError):
+    """Planner response が ``QuestionPlanDraft`` として消化できない。"""
+
+    def __init__(self, defect: StrEnum) -> None:
+        self.defect = defect
+        super().__init__(defect.value)
+
+
+class QuestionPlanDraft(BaseModel):
+    """Planner-internal draft parsed from structured LLM output."""
+
+    model_config = ConfigDict(frozen=True)
+
+    retrieval_mode: RetrievalMode
+    internal_queries: list[str] = Field(default_factory=list)
+    external_collection_goals: list[str] = Field(default_factory=list)
+    target_time_window: str | None = None
+    reason: str = Field(min_length=1)
+
+
+class QuestionPlanDraftGenerator(Protocol):
+    """LLM adapter boundary that returns draft plans."""
+
+    async def plan(
+        self,
+        input: AnswerQuestionInput,
+        *,
+        previous_error: str | None = None,
+    ) -> QuestionPlanDraft: ...
 
 
 class ExternalResearchTask(BaseModel):
@@ -112,6 +147,12 @@ type RetrievalPlan = (
     InternalRetrievalPlan | ExternalSearchPlan | InternalAndExternalPlan
 )
 type QuestionPlan = NoRetrievalPlan | RetrievalPlan
+
+
+class QuestionPlanner(Protocol):
+    """Planner boundary that returns a completed ``QuestionPlan``."""
+
+    async def plan(self, input: AnswerQuestionInput) -> QuestionPlan: ...
 
 
 def plan_from_draft(

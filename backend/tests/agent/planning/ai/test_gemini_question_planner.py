@@ -16,7 +16,7 @@ from app.agent.planning.ai.gemini import (
     QuestionPlannerResponseInvalidError,
 )
 from app.agent.planning.ai.gemini_spec import GEMINI_QUESTION_PLANNER_SPEC
-from app.agent.planning.plan_draft import QuestionPlanDraft
+from app.agent.planning.contract import QuestionPlanDraft
 from app.analysis.ai_provider_errors import (
     AIProviderConfigurationError,
     AIProviderNetworkError,

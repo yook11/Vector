@@ -19,16 +19,12 @@ from app.agent.planning.contract import (
     InternalRetrievalPlan,
     NoRetrievalPlan,
     QuestionPlan,
+    QuestionPlanDraft,
+    QuestionPlanDraftGenerator,
+    QuestionPlanner,
     RetrievalPlan,
 )
-from app.agent.planning.plan_draft import QuestionPlanDraft
-from app.agent.planning.planner import (
-    QuestionPlanner,
-)
-from app.agent.planning.service import (
-    QuestionPlanDraftGenerator,
-    QuestionPlanningService,
-)
+from app.agent.planning.flow import QuestionPlanningFlow
 
 __all__ = [
     "AnswerQuestionInput",
@@ -47,7 +43,7 @@ __all__ = [
     "QuestionPlan",
     "QuestionPlanDraft",
     "QuestionPlanDraftGenerator",
-    "QuestionPlanningService",
+    "QuestionPlanningFlow",
     "QuestionPlanner",
     "RetrievalMode",
     "RetrievalPlan",

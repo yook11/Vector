@@ -307,7 +307,7 @@ def test_composition_injects_same_live_controls_into_both_answer_flows(
     import app.agent.evidence_collection.internal_search.article_search as article_search_module
     import app.agent.evidence_collection.internal_search.service as internal_search_module
     import app.agent.planning.ai.gemini as planner_module
-    import app.agent.planning.service as planning_service_module
+    import app.agent.planning.flow as planning_flow_module
 
     captured: dict[str, dict[str, object]] = {}
 
@@ -368,8 +368,8 @@ def test_composition_injects_same_live_controls_into_both_answer_flows(
     )
     monkeypatch.setattr(planner_module, "GeminiQuestionPlanner", lambda: object())
     monkeypatch.setattr(
-        planning_service_module,
-        "QuestionPlanningService",
+        planning_flow_module,
+        "QuestionPlanningFlow",
         lambda **_kwargs: object(),
     )
     delta_reporter = object()

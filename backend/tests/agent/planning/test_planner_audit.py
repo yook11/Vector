@@ -16,7 +16,7 @@ from app.agent.planning.audit import (
     RequestRetryDisposition,
     classify_planner_failure,
 )
-from app.agent.planning.plan_draft import QuestionPlanDraft
+from app.agent.planning.contract import QuestionPlanDraft
 from app.analysis.ai_provider_errors import AIProviderNetworkError
 
 
