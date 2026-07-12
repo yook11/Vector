@@ -1,10 +1,10 @@
-"""Gemini response schema for question resolution."""
+"""Gemini response schema for question context generation."""
 
 from __future__ import annotations
 
 from typing import Any
 
-QUESTION_RESOLUTION_GEMINI_SCHEMA: dict[str, Any] = {
+QUESTION_CONTEXT_GEMINI_SCHEMA: dict[str, Any] = {
     "type": "OBJECT",
     "required": [
         "standalone_question",

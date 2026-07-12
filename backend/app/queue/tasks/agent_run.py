@@ -15,7 +15,7 @@ from app.agent.answering.direct_answer.contract import (
 )
 from app.agent.composition import (
     build_question_answering_agent,
-    build_question_resolver,
+    build_question_context_generator,
 )
 from app.agent.contract import AnswerQuestionInput, QuestionResolvedEvent
 from app.agent.live_updates.answer_delta import AgentRunLiveAnswerDeltaReporter
@@ -28,9 +28,9 @@ from app.agent.live_updates.stream import (
     AgentRunLiveStreamPublisher,
     AgentRunLiveStreamTerminalEvent,
 )
-from app.agent.question_resolution.service import (
+from app.agent.question_context.service import (
     HISTORY_MESSAGE_LIMIT,
-    QuestionResolutionService,
+    QuestionContextService,
 )
 from app.agent.runs.contracts import (
     PreparedAgentRun,
@@ -107,17 +107,17 @@ async def run_agent_answer(
         )
         as_of = datetime.now(UTC)
         history = await _read_history(session_factory, prepared)
-        resolver = build_question_resolver() if history else None
-        resolved = await QuestionResolutionService(resolver=resolver).resolve(
+        generator = build_question_context_generator() if history else None
+        question_context = await QuestionContextService(generator=generator).prepare(
             question=prepared.question,
             history=history,
             as_of=as_of,
             run_id=prepared.run_id,
         )
-        if resolved.standalone_question.strip() != prepared.question.strip():
+        if question_context.standalone_question.strip() != prepared.question.strip():
             await activity_reporter.event_occurred(
                 QuestionResolvedEvent(
-                    standalone_question=resolved.standalone_question,
+                    standalone_question=question_context.standalone_question,
                 )
             )
         async with make_safe_async_client() as tavily_client:
@@ -131,11 +131,11 @@ async def run_agent_answer(
             )
             result = await agent.answer(
                 AnswerQuestionInput(
-                    question=resolved.standalone_question,
+                    question=question_context.standalone_question,
                     as_of=as_of,
-                    user_intent=resolved.user_intent,
-                    prior_coverage=resolved.prior_coverage,
-                    user_activity_context=resolved.user_activity_context,
+                    user_intent=question_context.user_intent,
+                    prior_coverage=question_context.prior_coverage,
+                    user_activity_context=question_context.user_activity_context,
                     previous_answer=_latest_assistant_answer(history),
                 )
             )

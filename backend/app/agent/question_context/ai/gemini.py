@@ -1,4 +1,4 @@
-"""Gemini implementation of question resolution."""
+"""Gemini implementation of question context generation."""
 
 from __future__ import annotations
 
@@ -11,16 +11,16 @@ from google import genai
 from google.genai.types import GenerateContentConfig
 from pydantic import ValidationError
 
-from app.agent.question_resolution.ai.gemini_prompt import (
-    GeminiQuestionResolutionPrompt,
+from app.agent.question_context.ai.gemini_prompt import (
+    GeminiQuestionContextPrompt,
 )
-from app.agent.question_resolution.ai.gemini_spec import (
-    GEMINI_QUESTION_RESOLUTION_SPEC,
-    GeminiQuestionResolutionSpec,
+from app.agent.question_context.ai.gemini_spec import (
+    GEMINI_QUESTION_CONTEXT_SPEC,
+    GeminiQuestionContextSpec,
 )
-from app.agent.question_resolution.contract import (
-    QuestionResolutionResponseInvalidError,
-    ResolvedQuestionDraft,
+from app.agent.question_context.contract import (
+    QuestionContextDraft,
+    QuestionContextResponseInvalidError,
 )
 from app.agent.threads.contracts import ThreadMessageSnapshot
 from app.analysis.ai_provider_errors import (
@@ -38,17 +38,17 @@ from app.config import settings
 _BLOCKED_FINISH_REASONS = frozenset({"SAFETY", "RECITATION"})
 
 
-class GeminiQuestionResolutionResponseDefect(StrEnum):
+class GeminiQuestionContextResponseDefect(StrEnum):
     """Malformed Gemini response-envelope categories."""
 
     NOT_JSON = "question_resolution_response_gemini_not_json"
     NOT_OBJECT = "question_resolution_response_gemini_not_object"
 
 
-class GeminiQuestionResolver:
-    """Gemini-backed structured resolver for one bounded thread window."""
+class GeminiQuestionContextGenerator:
+    """Gemini-backed context generator for one bounded thread window."""
 
-    SPEC: Final[GeminiQuestionResolutionSpec] = GEMINI_QUESTION_RESOLUTION_SPEC
+    SPEC: Final[GeminiQuestionContextSpec] = GEMINI_QUESTION_CONTEXT_SPEC
 
     def __init__(self) -> None:
         api_key = settings.gemini_api_key.get_secret_value()
@@ -68,14 +68,14 @@ class GeminiQuestionResolver:
     def rate_limit_policy(self) -> AIModelRateLimitPolicy:
         return self.SPEC.rate_limit_policy
 
-    async def resolve(
+    async def generate(
         self,
         *,
         question: str,
         history: list[ThreadMessageSnapshot],
         as_of: datetime,
-    ) -> ResolvedQuestionDraft:
-        prompt = GeminiQuestionResolutionPrompt.render(
+    ) -> QuestionContextDraft:
+        prompt = GeminiQuestionContextPrompt.render(
             question=question,
             history=history,
             as_of=as_of,
@@ -84,14 +84,14 @@ class GeminiQuestionResolver:
             return await self._call_api(prompt)
         except (
             AIProviderOutputBlockedError,
-            QuestionResolutionResponseInvalidError,
+            QuestionContextResponseInvalidError,
             ValidationError,
         ):
             raise
         except Exception as exc:
             raise translate_gemini_error(exc) from exc
 
-    async def _call_api(self, prompt: str) -> ResolvedQuestionDraft:
+    async def _call_api(self, prompt: str) -> QuestionContextDraft:
         response = await self._client.aio.models.generate_content(
             model=self.SPEC.model,
             contents=prompt,
@@ -109,14 +109,14 @@ class GeminiQuestionResolver:
         try:
             payload = json.loads(response.text or "")
         except json.JSONDecodeError as exc:
-            raise QuestionResolutionResponseInvalidError(
-                GeminiQuestionResolutionResponseDefect.NOT_JSON
+            raise QuestionContextResponseInvalidError(
+                GeminiQuestionContextResponseDefect.NOT_JSON
             ) from exc
         if not isinstance(payload, dict):
-            raise QuestionResolutionResponseInvalidError(
-                GeminiQuestionResolutionResponseDefect.NOT_OBJECT
+            raise QuestionContextResponseInvalidError(
+                GeminiQuestionContextResponseDefect.NOT_OBJECT
             )
-        return ResolvedQuestionDraft.model_validate(payload)
+        return QuestionContextDraft.model_validate(payload)
 
     @staticmethod
     def _extract_finish_reason_name(response: object) -> str | None:
