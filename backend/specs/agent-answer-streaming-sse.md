@@ -67,8 +67,9 @@ run 中の user message の直下に、次の二層を表示する。
    テキストを追記する。表示ラベルは「回答を作成中」とし、確定回答と区別する。
 
 完成前の下書きには sources 一覧、citation のリンク・プレビュー、missing aspects を
-表示しない。本文に `[[1]]` のような marker が含まれても、完成前はただのテキストと
-して扱う。run 完了を受信したら thread 詳細を再取得し、既存の
+表示しない。Direct pathでは最終回答から除去される `[[1]]` のようなmarkerを増分経路でも
+表示しない。Evidence pathの未確定citationはproviderのraw JSONを直接表示せず、後続sliceの
+増分復元契約に従う。run 完了を受信したら thread 詳細を再取得し、既存の
 `CitedAnswerContent` による検証済み表示へ置き換える。
 
 失敗・キャンセル・再試行時は下書きを確定回答として残さない。失敗表示は既存の
@@ -108,8 +109,9 @@ output token 上限を照合して確定するが、次を守る。
 
 - key は run ID を含み、他 run と混ざらない。
 - Stream は bounded かつ短期 TTL とし、会話履歴の保存先にしない。
-- 1 文字または 1 provider chunk ごとに Redis へ書かない。worker は短い時間窓または
-  最小文字量で delta を coalesce し、UI が自然に読める間隔で publish する。
+- 1文字または1 provider chunkごとにRedisへ書かない。Direct pathは250msの時間窓を主条件、
+  512 Unicode code pointを1 deltaの上限としてcoalesceし、最小文字数gateを設けない。
+  Evidence pathの値は専用sliceで同じMAXLEN / timeout予算と合わせて決める。
 - Stream の read / write / reset が失敗しても、回答生成・DB 保存・run 状態遷移を
   失敗させない。Redis は live 表示だけの補助データである。
 - eventの帰属はRedis Stream IDや`attempt.started`の位置ではなく、全entryに入る正の整数
@@ -227,9 +229,19 @@ Last-Event-IDで約1秒後の再接続を開始し、同じepochならdraft、cu
 
 ### Direct path
 
-direct 回答は plain text のため、Gemini の async streaming API から届くテキストを
-集約しながら `answer.delta` として publish できる。全テキストは従来どおり worker 内で
-集約し、空回答検証を通過してから最終結果として保存する。
+direct 回答はplain textのため、Geminiのasync streaming APIから届く増分textをworker内で
+全文へ集約しながら`answer.delta`としてpublishする。表示経路ではchunkをまたぐcitation markerと
+最終結果でstripされるouter whitespaceを増分除去し、正常時のdelta連結を最終
+`DirectAnswerDraft.answer`と一致させる。
+
+`generation`は`DirectAnswerFlow`のattempt number 1〜2を使う。in-request retryはmarker / whitespace
+除去後のblankだけであり、そのgenerationは可視deltaを0件とするため、Direct pathから
+`answer.reset`を送らない。250ms / 512文字coalescing、2秒cache付きcancel / stale worker抑止、
+3連続publish失敗時のdelta専用circuit breakerは
+`agent-direct-answer-deltas-slice.md`を正本とする。
+
+全テキストは従来どおり検証して最終結果へ渡す。Redis障害やdelta breakerは最終validation、
+DB保存、terminal producerを停止しない。
 
 ### Evidence path
 
@@ -270,8 +282,8 @@ assistant message を保存しないことを維持する。
 - progress stage は低頻度・復元価値ありの DB 状態、live event は高頻度・短命の表示用
   データ、最終回答は DB の永続データという分類を保つ。
 - agent core は Redis、run ID、SSE、時計、HTTP を知らない。回答生成時の通知は
-  `AnswerProgressReporter` / `AnswerEventReporter` と分離した optional protocol 越しに
-  行う。
+  `AnswerProgressReporter` / `AnswerEventReporter` / `AnswerDeltaReporter` と分離した
+  optional protocol越しに行い、workerがrun固有のpublisherとcontinuationをbindする。
 - streaming reporter の失敗は回答生成を止めない。publisher は短い timeout で諦め、
   DB connection や長いトランザクションを保持しない。
 - attemptの帰属は整数epochの大小比較で決める。新attempt開始後に旧workerが遅延publishしても、
@@ -286,7 +298,8 @@ assistant message を保存しないことを維持する。
   二重適用しない。
 - transport readerはterminal後に同epochのentryが届いても捨てない。terminalを受信した
   consumerが、その後の表示更新を無視する。
-- citation marker、source card、missing aspects は最終DB結果からだけ描画する。
+- Direct pathのcitation markerは下書きにも最終回答にも描画しない。citation link、source card、
+  missing aspectsは最終DB結果からだけ描画する。
 - 既存の polling は SSE 接続不可時、terminal publish 失敗時、初期 rollout 時の
   degradation path として残す。
 
@@ -295,7 +308,8 @@ assistant message を保存しないことを維持する。
 - LLM の思考過程、tool call、prompt、内部検索全文を表示すること。
 - 回答下書きのDB永続化、下書きからの会話復元、ページをまたぐ下書き編集。
 - 双方向 WebSocket、リアルタイム共同編集、stream の consumer group。
-- 初期リリースで provider の実行を物理的に cancel すること。
+- 初期リリースでproviderの実行を物理的にcancelすること。Direct pathはcancel / stale検知後に
+  ローカルiterator消費をbest-effortで止めるが、provider server側の停止・課金停止は保証しない。
 - citation 品質や回答品質そのものを改善すること。
 - 既存 `recentEvents` に回答断片を追加すること。
 - Redis Stream を監査ログや長期分析データとして使うこと。
@@ -307,7 +321,7 @@ assistant message を保存しないことを維持する。
 実装は次の順で分ける。各 slice は Problem / Evidence / Invariants / Done を個別に
 定義し、前の slice の検証が完了してから次へ進む。
 
-現在は1〜4まで実装済みであり、次は5のDirect answer deltasである。
+現在は1〜5まで実装済みであり、次は6のEvidence answer draft deltasへ進む。
 
 1. **Live stream transport**: Redis Stream の key / TTL / ACL / publisher / reader、
    event vocabulary、実Redisでの replay・timeout・payload非露出テスト。
@@ -318,8 +332,9 @@ assistant message を保存しないことを維持する。
 4. **Live event producer wiring**: 既存の DB stage / Redis List activity を残したまま
    Redis Stream へ二重書きし、DB commit 後の completed / failed / cancelled terminal を
    best-effort で接続する。専用仕様は `agent-live-event-producer-wiring-slice.md`。
-5. **Direct answer deltas**: plain text generator の streaming 化、coalescing、final
-   persistence と terminal 順序、cancel後の抑止。
+5. **Direct answer deltas**: plain text generatorのstreaming化、増分citation / whitespace除去、
+   coalescing、cancel後の抑止、delta専用circuit breaker。専用仕様は
+   `agent-direct-answer-deltas-slice.md`。
 6. **Evidence answer draft deltas**: structured JSON の増分復元、retry 時の reset、
    citation検証後の確定表示。この slice は既存 synthesis contract の変更範囲を先に
    確認する。
@@ -347,6 +362,10 @@ assistant message を保存しないことを維持する。
     limiter劣化とcapacity拒否をpayload・user ID・run IDなしで観測できる。
 11. activityはnested `activity` fieldとcamelCase属性で配信され、旧 `event` field、flatten、
     未知activity typeをfrontendへraw転送しない。
+12. direct回答の正常配信では、同じgenerationのdelta連結が最終Direct回答と一致する。
+13. marker / whitespaceだけのblank retryはdelta / resetを作らず、generation 2だけを表示する。
+14. delta publishが連続失敗しても回答をDBへ保存し、terminalを別経路で試行する。
+15. cancelまたはepoch前進を検出したworkerは、runをfailedへ再遷移させずroutineに停止する。
 
 ## Done
 

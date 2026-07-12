@@ -1,5 +1,9 @@
 # Direct 回答 (工程 4D) 実装 slice 仕様 (Slice B-2)
 
+> 後続更新: 本仕様が確立した外側の`DirectAnswerer`、blank retry、typed error、audit / metric契約は
+> 維持する。内部`DirectAnswerGenerator.generate() -> str`は、後続の
+> `agent-direct-answer-deltas-slice.md`でincremental stream contractへ置き換える。
+
 ## 位置付け
 
 Slice A rev.2 で port 分離した回答工程のうち、direct 経路 (`DirectAnswerer`)

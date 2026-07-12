@@ -19,6 +19,8 @@ from pydantic import (
 from app.shared.security.safe_url import SafeUrl
 
 __all__ = [
+    "AnswerDeltaReporter",
+    "AnswerGenerationContinuation",
     "AnswerQuestionInput",
     "AnswerProgressReporter",
     "AnswerProgressEvent",
@@ -197,6 +199,22 @@ class QuestionAnsweringAgent(Protocol):
     """agent core の最小呼び出し口。"""
 
     async def answer(self, input: AnswerQuestionInput) -> AnswerQuestionResult: ...
+
+
+class AnswerDeltaReporter(Protocol):
+    """表示可能な回答断片をgeneration単位で通知するsink。"""
+
+    async def append(self, *, generation: int, text: str) -> None: ...
+
+    async def finish(self, *, generation: int) -> None: ...
+
+    async def abort(self, *, generation: int) -> None: ...
+
+
+class AnswerGenerationContinuation(Protocol):
+    """現在の回答生成を継続できるか判定する。"""
+
+    async def should_continue(self) -> bool: ...
 
 
 class AnswerProgressReporter(Protocol):

@@ -79,6 +79,7 @@ class GeminiStateReason(StrEnum):
     RATE_LIMITED = "rate_limited"
     # gemini adapter local 検知 (translator 分岐外)。
     NOT_CONFIGURED = "not_configured"
+    STREAM_TRUNCATED = "stream_truncated"
     EMPTY_EMBEDDINGS = "empty_embeddings"
     MISSING_VALUES = "missing_values"
     EMBEDDING_COUNT_MISMATCH = "embedding_count_mismatch"

@@ -1,4 +1,4 @@
-"""Low-cardinality metrics for agent run SSE connections."""
+"""Low-cardinality metrics for agent run live updates."""
 
 from __future__ import annotations
 
@@ -43,6 +43,16 @@ _projection_drop = logfire.metric_counter(
     unit="1",
     description="Agent run event dropped by the public SSE allowlist",
 )
+_answer_delta_breaker_open = logfire.metric_counter(
+    "vector.agent.answer_delta.breaker_open",
+    unit="1",
+    description="Direct answer delta breaker opened after publish failures",
+)
+_execution_probe_unavailable = logfire.metric_counter(
+    "vector.agent.execution_probe.unavailable",
+    unit="1",
+    description="Agent run execution probe database check unavailable",
+)
 
 
 def record_agent_run_sse_open() -> None:
@@ -69,3 +79,17 @@ def record_agent_run_sse_capacity_rejection(
 
 def record_agent_run_sse_projection_drop() -> None:
     _projection_drop.add(1, attributes={"reason": "unknown_event"})
+
+
+def record_answer_delta_breaker_open() -> None:
+    _answer_delta_breaker_open.add(
+        1,
+        attributes={"reason": "consecutive_publish_failures"},
+    )
+
+
+def record_agent_run_execution_probe_unavailable() -> None:
+    _execution_probe_unavailable.add(
+        1,
+        attributes={"reason": "database_unavailable"},
+    )

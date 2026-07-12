@@ -6,7 +6,7 @@ import asyncio
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
-from typing import cast
+from typing import Any, cast
 from uuid import UUID
 
 import pytest
@@ -14,8 +14,12 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from structlog.testing import capture_logs
 
+import app.agent.composition as composition
 import app.queue.tasks.agent_run as agent_run_tasks
-from app.agent.answering.direct_answer.contract import DirectAnswerInvalidError
+from app.agent.answering.direct_answer.contract import (
+    AnswerGenerationStopped,
+    DirectAnswerInvalidError,
+)
 from app.agent.contract import (
     AnswerQuestionInput,
     AnswerQuestionResult,
@@ -26,6 +30,7 @@ from app.agent.contract import (
 from app.agent.live_updates.reporters import AgentRunLiveActivityReporter
 from app.agent.live_updates.stream import (
     AgentRunLiveStreamActivityEvent,
+    AgentRunLiveStreamAnswerDeltaEvent,
     AgentRunLiveStreamStageEvent,
     AgentRunLiveStreamTerminalEvent,
 )
@@ -100,6 +105,7 @@ class FakeLiveStreamPublisher:
     instances: list[FakeLiveStreamPublisher] = []
     raise_on_begin = False
     raise_on_publish = False
+    publish_outcomes: list[str | None | BaseException] = []
 
     def __init__(self, redis: object, run_id: UUID, attempt_epoch: int) -> None:
         self.redis = redis
@@ -109,15 +115,22 @@ class FakeLiveStreamPublisher:
         self.published: list[object] = []
         FakeLiveStreamPublisher.instances.append(self)
 
-    async def begin_attempt(self) -> None:
+    async def begin_attempt(self) -> str | None:
         self.begin_attempt_calls += 1
         if self.raise_on_begin:
             raise RuntimeError("Redis unavailable")
+        return "attempt-0"
 
-    async def publish(self, event: object) -> None:
+    async def publish(self, event: object) -> str | None:
         self.published.append(event)
         if self.raise_on_publish:
             raise RuntimeError("Redis unavailable")
+        if self.publish_outcomes:
+            outcome = self.publish_outcomes.pop(0)
+            if isinstance(outcome, BaseException):
+                raise outcome
+            return outcome
+        return f"{len(self.published)}-0"
 
 
 class FakeQuestionResolver:
@@ -132,6 +145,73 @@ class FakeQuestionResolver:
         return self.outcome
 
 
+class DeltaReportingAgent:
+    def __init__(
+        self,
+        *,
+        result: AnswerQuestionResult | None = None,
+        exc: Exception | None = None,
+        fragments: list[str] | None = None,
+        finish: bool = True,
+        order: list[str] | None = None,
+    ) -> None:
+        self.result = result
+        self.exc = exc
+        self.fragments = fragments or []
+        self.finish = finish
+        self.order = order
+        self.delta_reporter: object | None = None
+
+    async def answer(self, _input: AnswerQuestionInput) -> AnswerQuestionResult:
+        assert self.delta_reporter is not None
+        for fragment in self.fragments:
+            await self.delta_reporter.append(generation=1, text=fragment)  # type: ignore[attr-defined]
+        if self.finish:
+            await self.delta_reporter.finish(generation=1)  # type: ignore[attr-defined]
+            if self.order is not None:
+                self.order.append("delta_finish")
+        if self.exc is not None:
+            raise self.exc
+        assert self.result is not None
+        return self.result
+
+
+class CapturingDeltaReporter:
+    instances: list[CapturingDeltaReporter] = []
+
+    def __init__(
+        self,
+        publisher: object,
+        *,
+        run_id: UUID,
+        attempt_epoch: int,
+    ) -> None:
+        self.publisher = publisher
+        self.run_id = run_id
+        self.attempt_epoch = attempt_epoch
+        CapturingDeltaReporter.instances.append(self)
+
+
+class CapturingExecutionProbe:
+    instances: list[CapturingExecutionProbe] = []
+
+    def __init__(
+        self,
+        session_factory: object,
+        run_id: UUID,
+        attempt_epoch: int,
+    ) -> None:
+        self.session_factory = session_factory
+        self.run_id = run_id
+        self.attempt_epoch = attempt_epoch
+        CapturingExecutionProbe.instances.append(self)
+
+
+class ForbiddenConstruction:
+    def __init__(self, *_args: object, **_kwargs: object) -> None:
+        raise AssertionError("acquire skip後にlive dependencyを生成してはいけません")
+
+
 def _ctx(session_factory: async_sessionmaker[AsyncSession]) -> SimpleNamespace:
     return SimpleNamespace(state=SimpleNamespace(session_factory=session_factory))
 
@@ -139,6 +219,29 @@ def _ctx(session_factory: async_sessionmaker[AsyncSession]) -> SimpleNamespace:
 @asynccontextmanager
 async def _fake_http_client() -> object:
     yield object()
+
+
+def _patch_delta_worker(
+    monkeypatch: pytest.MonkeyPatch,
+    builder: object,
+    *,
+    stream_publisher: type[FakeLiveStreamPublisher] = FakeLiveStreamPublisher,
+) -> None:
+    FakeLiveEventPublisher.instances = []
+    FakeLiveStreamPublisher.instances = []
+    monkeypatch.setattr(FakeLiveStreamPublisher, "publish_outcomes", [])
+    monkeypatch.setattr(agent_run_tasks, "make_safe_async_client", _fake_http_client)
+    monkeypatch.setattr(agent_run_tasks, "build_question_answering_agent", builder)
+    monkeypatch.setattr(
+        agent_run_tasks,
+        "AgentRunLiveEventPublisher",
+        FakeLiveEventPublisher,
+    )
+    monkeypatch.setattr(
+        agent_run_tasks,
+        "AgentRunLiveStreamPublisher",
+        stream_publisher,
+    )
 
 
 def _direct_result(answer: str = "worker answer") -> AnswerQuestionResult:
@@ -167,6 +270,102 @@ def _external_result() -> AnswerQuestionResult:
         missing_aspects=[],
         retrieval=AnswerRetrievalSummary(planned_mode="external"),
     )
+
+
+def test_composition_injects_live_controls_only_into_direct_flow(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import app.agent.answering.direct_answer.ai.gemini as direct_gemini_module
+    import app.agent.answering.direct_answer.flow as direct_flow_module
+    import app.agent.answering.evidence_answer.ai.gemini as evidence_gemini_module
+    import app.agent.answering.evidence_answer.flow as evidence_flow_module
+    import app.agent.answering.orchestration as orchestration_module
+    import app.agent.evidence_collection as evidence_collection_module
+    import app.agent.internal_retrieval.ai.gemini as embedder_module
+    import app.agent.internal_retrieval.article_search as article_search_module
+    import app.agent.internal_retrieval.service as internal_search_module
+    import app.agent.planning.ai.gemini as planner_module
+    import app.agent.planning.service as planning_service_module
+
+    captured: dict[str, dict[str, object]] = {}
+
+    def capture_direct(**kwargs: object) -> object:
+        captured["direct"] = kwargs
+        return object()
+
+    def capture_evidence(**kwargs: object) -> object:
+        captured["evidence"] = kwargs
+        return object()
+
+    def capture_orchestrator(**kwargs: object) -> object:
+        captured["orchestrator"] = kwargs
+        return object()
+
+    monkeypatch.setattr(
+        composition,
+        "ensure_question_answering_agent_configured",
+        lambda: None,
+    )
+    monkeypatch.setattr(
+        composition,
+        "_build_external_search",
+        lambda *_args, **_kwargs: object(),
+    )
+    monkeypatch.setattr(
+        direct_gemini_module,
+        "GeminiDirectAnswerGenerator",
+        lambda: object(),
+    )
+    monkeypatch.setattr(direct_flow_module, "DirectAnswerFlow", capture_direct)
+    monkeypatch.setattr(
+        evidence_gemini_module,
+        "GeminiEvidenceAnswerDraftGenerator",
+        lambda: object(),
+    )
+    monkeypatch.setattr(evidence_flow_module, "EvidenceAnswerFlow", capture_evidence)
+    monkeypatch.setattr(
+        orchestration_module,
+        "QuestionAnsweringOrchestrator",
+        capture_orchestrator,
+    )
+    monkeypatch.setattr(
+        evidence_collection_module,
+        "EvidenceCollectionService",
+        lambda **_kwargs: object(),
+    )
+    monkeypatch.setattr(embedder_module, "GeminiQueryEmbedder", lambda: object())
+    monkeypatch.setattr(
+        article_search_module,
+        "PgVectorArticleSearchRepository",
+        lambda *_args: object(),
+    )
+    monkeypatch.setattr(
+        internal_search_module,
+        "InternalSearchService",
+        lambda **_kwargs: object(),
+    )
+    monkeypatch.setattr(planner_module, "GeminiQuestionPlanner", lambda: object())
+    monkeypatch.setattr(
+        planning_service_module,
+        "QuestionPlanningService",
+        lambda **_kwargs: object(),
+    )
+    delta_reporter = object()
+    continuation = object()
+
+    composition.build_question_answering_agent(
+        session_factory=cast(async_sessionmaker[AsyncSession], object()),
+        tavily_client=cast(Any, object()),
+        delta_reporter=delta_reporter,
+        continuation=continuation,
+    )
+
+    assert captured["direct"]["delta_reporter"] is delta_reporter
+    assert captured["direct"]["continuation"] is continuation
+    assert "delta_reporter" not in captured["evidence"]
+    assert "continuation" not in captured["evidence"]
+    assert captured["orchestrator"]["direct_answerer"] is not None
+    assert captured["orchestrator"]["evidence_answerer"] is not None
 
 
 async def _create_thread_message_run(
@@ -525,6 +724,70 @@ async def test_run_agent_answer_starts_stream_attempt_only_after_acquire(
 
 
 @pytest.mark.asyncio
+async def test_run_agent_answer_binds_delta_reporter_and_probe_after_acquire(
+    session_factory: async_sessionmaker[AsyncSession],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async with session_factory() as session:
+        _thread, _message, run = await _create_thread_message_run(session)
+    fake_agent = FakeAgent(_direct_result())
+    captured_kwargs: dict[str, object] = {}
+    redis = object()
+    FakeLiveStreamPublisher.instances = []
+    CapturingDeltaReporter.instances = []
+    CapturingExecutionProbe.instances = []
+
+    def build_agent(**kwargs: object) -> FakeAgent:
+        captured_kwargs.update(kwargs)
+        return fake_agent
+
+    monkeypatch.setattr(agent_run_tasks, "make_safe_async_client", _fake_http_client)
+    monkeypatch.setattr(agent_run_tasks, "build_question_answering_agent", build_agent)
+    monkeypatch.setattr(agent_run_tasks, "get_redis", lambda: redis)
+    monkeypatch.setattr(
+        agent_run_tasks,
+        "AgentRunLiveEventPublisher",
+        FakeLiveEventPublisher,
+    )
+    monkeypatch.setattr(
+        agent_run_tasks,
+        "AgentRunLiveStreamPublisher",
+        FakeLiveStreamPublisher,
+    )
+    monkeypatch.setattr(
+        agent_run_tasks,
+        "AgentRunLiveAnswerDeltaReporter",
+        CapturingDeltaReporter,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        agent_run_tasks,
+        "AgentRunExecutionProbe",
+        CapturingExecutionProbe,
+        raising=False,
+    )
+
+    await agent_run_tasks.run_agent_answer(
+        trigger=AgentRunTrigger(run_id=run.id),
+        ctx=_ctx(session_factory),
+    )
+
+    assert len(CapturingDeltaReporter.instances) == 1
+    assert len(CapturingExecutionProbe.instances) == 1
+    stream = FakeLiveStreamPublisher.instances[0]
+    delta_reporter = CapturingDeltaReporter.instances[0]
+    probe = CapturingExecutionProbe.instances[0]
+    assert delta_reporter.publisher is stream
+    assert delta_reporter.run_id == run.id
+    assert delta_reporter.attempt_epoch == 1
+    assert probe.session_factory is session_factory
+    assert probe.run_id == run.id
+    assert probe.attempt_epoch == 1
+    assert captured_kwargs["delta_reporter"] is delta_reporter
+    assert captured_kwargs["continuation"] is probe
+
+
+@pytest.mark.asyncio
 async def test_run_agent_answer_continues_when_stream_begin_attempt_raises(
     session_factory: async_sessionmaker[AsyncSession],
     monkeypatch: pytest.MonkeyPatch,
@@ -576,10 +839,33 @@ async def test_idempotent_skip_does_not_create_or_start_stream_publisher(
             error_code="internal_error",
         )
     FakeLiveStreamPublisher.instances = []
+    CapturingDeltaReporter.instances = []
+    CapturingExecutionProbe.instances = []
+
+    def forbidden_builder(**_kwargs: object) -> None:
+        raise AssertionError("acquire skip後にagentをbuildしてはいけません")
+
+    monkeypatch.setattr(
+        agent_run_tasks,
+        "build_question_answering_agent",
+        forbidden_builder,
+    )
     monkeypatch.setattr(
         agent_run_tasks,
         "AgentRunLiveStreamPublisher",
         FakeLiveStreamPublisher,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        agent_run_tasks,
+        "AgentRunLiveAnswerDeltaReporter",
+        ForbiddenConstruction,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        agent_run_tasks,
+        "AgentRunExecutionProbe",
+        ForbiddenConstruction,
         raising=False,
     )
 
@@ -589,6 +875,8 @@ async def test_idempotent_skip_does_not_create_or_start_stream_publisher(
     )
 
     assert FakeLiveStreamPublisher.instances == []
+    assert CapturingDeltaReporter.instances == []
+    assert CapturingExecutionProbe.instances == []
 
 
 @pytest.mark.asyncio
@@ -774,6 +1062,428 @@ async def test_run_agent_answer_publishes_failed_terminal_after_commit(
             errorCode="generation_unavailable",
         )
     ]
+
+
+@pytest.mark.asyncio
+async def test_generation_stopped_is_routine_return_without_run_transition(
+    session_factory: async_sessionmaker[AsyncSession],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async with session_factory() as session:
+        _thread, _message, run = await _create_thread_message_run(session)
+    fake_agent = FakeAgent(exc=AnswerGenerationStopped())
+    complete_calls: list[UUID] = []
+    mark_failed_calls: list[UUID] = []
+
+    async def observe_complete(
+        _repository: AgentRunRepository,
+        *,
+        run_id: UUID,
+        **_kwargs: object,
+    ) -> bool:
+        complete_calls.append(run_id)
+        return False
+
+    async def observe_mark_failed(
+        _repository: AgentRunRepository,
+        run_id: UUID,
+        **_kwargs: object,
+    ) -> bool:
+        mark_failed_calls.append(run_id)
+        return False
+
+    _patch_delta_worker(
+        monkeypatch,
+        lambda **_kwargs: fake_agent,
+    )
+    monkeypatch.setattr(AgentRunRepository, "complete_run", observe_complete)
+    monkeypatch.setattr(AgentRunRepository, "mark_failed", observe_mark_failed)
+
+    with capture_logs() as logs:
+        await agent_run_tasks.run_agent_answer(
+            trigger=AgentRunTrigger(run_id=run.id),
+            ctx=_ctx(session_factory),
+        )
+
+    assert complete_calls == []
+    assert mark_failed_calls == []
+    stop_logs = [
+        entry for entry in logs if entry.get("event") == "agent_run_generation_stopped"
+    ]
+    assert len(stop_logs) == 1
+    assert stop_logs[0]["log_level"] == "info"
+    assert stop_logs[0]["run_id"] == str(run.id)
+    assert not any(
+        entry.get("event")
+        in {"agent_run_generation_unavailable", "agent_run_unexpected_error"}
+        for entry in logs
+    )
+    stream = FakeLiveStreamPublisher.instances[0]
+    assert not any(
+        isinstance(event, AgentRunLiveStreamTerminalEvent) for event in stream.published
+    )
+    async with session_factory() as session:
+        persisted = await session.get(AgentRun, run.id)
+        assert persisted is not None
+        assert persisted.status == "running"
+        assert persisted.attempt_epoch == 1
+        messages = (
+            (
+                await session.execute(
+                    select(AgentMessage).where(
+                        AgentMessage.thread_id == persisted.thread_id
+                    )
+                )
+            )
+            .scalars()
+            .all()
+        )
+        assert [message.role for message in messages] == ["user"]
+
+
+@pytest.mark.asyncio
+async def test_epoch_advance_stops_old_worker_through_actual_probe(
+    session_factory: async_sessionmaker[AsyncSession],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async with session_factory() as session:
+        _thread, _message, run = await _create_thread_message_run(session)
+
+    class ManualClock:
+        def __init__(self) -> None:
+            self.now = 0.0
+
+        def __call__(self) -> float:
+            return self.now
+
+    clock = ManualClock()
+    production_probe_type = agent_run_tasks.AgentRunExecutionProbe
+    probe_bindings: list[tuple[object, UUID, int]] = []
+    complete_calls: list[UUID] = []
+    mark_failed_calls: list[UUID] = []
+
+    def build_probe(
+        bound_session_factory: object,
+        run_id: UUID,
+        attempt_epoch: int,
+    ) -> object:
+        probe_bindings.append((bound_session_factory, run_id, attempt_epoch))
+        return production_probe_type(
+            bound_session_factory,
+            run_id,
+            attempt_epoch,
+            clock=clock,
+        )
+
+    class EpochAdvancingAgent:
+        def __init__(self) -> None:
+            self.continuation: object | None = None
+
+        async def answer(self, _input: AnswerQuestionInput) -> AnswerQuestionResult:
+            assert self.continuation is not None
+            assert await self.continuation.should_continue() is True  # type: ignore[attr-defined]
+            async with session_factory() as reacquire_session:
+                async with reacquire_session.begin():
+                    prepared = await AgentRunRepository(
+                        reacquire_session
+                    ).acquire_for_execution(run.id)
+            assert prepared is not None
+            assert prepared.attempt_epoch == 2
+            clock.now = 2.0
+            assert await self.continuation.should_continue() is False  # type: ignore[attr-defined]
+            raise AnswerGenerationStopped
+
+    fake_agent = EpochAdvancingAgent()
+
+    def build_agent(**kwargs: object) -> EpochAdvancingAgent:
+        fake_agent.continuation = kwargs["continuation"]
+        return fake_agent
+
+    async def observe_complete(
+        _repository: AgentRunRepository,
+        *,
+        run_id: UUID,
+        **_kwargs: object,
+    ) -> bool:
+        complete_calls.append(run_id)
+        return False
+
+    async def observe_mark_failed(
+        _repository: AgentRunRepository,
+        run_id: UUID,
+        **_kwargs: object,
+    ) -> bool:
+        mark_failed_calls.append(run_id)
+        return False
+
+    _patch_delta_worker(monkeypatch, build_agent)
+    monkeypatch.setattr(agent_run_tasks, "AgentRunExecutionProbe", build_probe)
+    monkeypatch.setattr(AgentRunRepository, "complete_run", observe_complete)
+    monkeypatch.setattr(AgentRunRepository, "mark_failed", observe_mark_failed)
+
+    with capture_logs() as logs:
+        await agent_run_tasks.run_agent_answer(
+            trigger=AgentRunTrigger(run_id=run.id),
+            ctx=_ctx(session_factory),
+        )
+
+    assert probe_bindings == [(session_factory, run.id, 1)]
+    assert complete_calls == []
+    assert mark_failed_calls == []
+    stop_logs = [
+        entry for entry in logs if entry.get("event") == "agent_run_generation_stopped"
+    ]
+    assert len(stop_logs) == 1
+    assert stop_logs[0]["log_level"] == "info"
+    assert stop_logs[0]["run_id"] == str(run.id)
+    assert not any(
+        entry.get("event")
+        in {"agent_run_generation_unavailable", "agent_run_unexpected_error"}
+        for entry in logs
+    )
+    assert not any(
+        isinstance(event, AgentRunLiveStreamTerminalEvent)
+        for event in FakeLiveStreamPublisher.instances[0].published
+    )
+    async with session_factory() as session:
+        persisted = await session.get(AgentRun, run.id)
+        assert persisted is not None
+        assert persisted.status == "running"
+        assert persisted.attempt_epoch == 2
+        assert persisted.assistant_message_id is None
+        messages = (
+            (
+                await session.execute(
+                    select(AgentMessage).where(
+                        AgentMessage.thread_id == persisted.thread_id
+                    )
+                )
+            )
+            .scalars()
+            .all()
+        )
+        assert [message.role for message in messages] == ["user"]
+
+
+@pytest.mark.asyncio
+async def test_delta_finish_precedes_completed_commit_and_terminal(
+    session_factory: async_sessionmaker[AsyncSession],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async with session_factory() as session:
+        _thread, _message, run = await _create_thread_message_run(session)
+    order: list[str] = []
+    fake_agent = DeltaReportingAgent(
+        result=_direct_result(),
+        fragments=["D" * 512],
+        order=order,
+    )
+    original_complete = AgentRunRepository.complete_run
+
+    def build_agent(**kwargs: object) -> DeltaReportingAgent:
+        fake_agent.delta_reporter = kwargs["delta_reporter"]
+        assert kwargs["continuation"] is not None
+        return fake_agent
+
+    async def observe_complete(
+        repository: AgentRunRepository,
+        **kwargs: object,
+    ) -> bool:
+        order.append("complete_start")
+        return await original_complete(repository, **kwargs)  # type: ignore[arg-type]
+
+    _patch_delta_worker(monkeypatch, build_agent)
+    monkeypatch.setattr(AgentRunRepository, "complete_run", observe_complete)
+
+    await agent_run_tasks.run_agent_answer(
+        trigger=AgentRunTrigger(run_id=run.id),
+        ctx=_ctx(session_factory),
+    )
+
+    assert order == ["delta_finish", "complete_start"]
+    stream = FakeLiveStreamPublisher.instances[0]
+    assert [type(event) for event in stream.published] == [
+        AgentRunLiveStreamAnswerDeltaEvent,
+        AgentRunLiveStreamTerminalEvent,
+    ]
+    assert stream.published[-1] == AgentRunLiveStreamTerminalEvent(status="completed")
+    async with session_factory() as session:
+        persisted = await session.get(AgentRun, run.id)
+        assert persisted is not None
+        assert persisted.status == "completed"
+        assert persisted.assistant_message_id is not None
+
+
+@pytest.mark.asyncio
+async def test_delta_breaker_open_does_not_block_final_commit_or_terminal(
+    session_factory: async_sessionmaker[AsyncSession],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async with session_factory() as session:
+        _thread, _message, run = await _create_thread_message_run(session)
+    fake_agent = DeltaReportingAgent(
+        result=_direct_result(),
+        fragments=["A" * 512, "B" * 512, "C" * 512, "D" * 512],
+    )
+
+    def build_agent(**kwargs: object) -> DeltaReportingAgent:
+        fake_agent.delta_reporter = kwargs["delta_reporter"]
+        return fake_agent
+
+    _patch_delta_worker(monkeypatch, build_agent)
+    monkeypatch.setattr(
+        FakeLiveStreamPublisher,
+        "publish_outcomes",
+        [None, None, None, "terminal-0"],
+    )
+
+    await agent_run_tasks.run_agent_answer(
+        trigger=AgentRunTrigger(run_id=run.id),
+        ctx=_ctx(session_factory),
+    )
+
+    stream = FakeLiveStreamPublisher.instances[0]
+    deltas = [
+        event
+        for event in stream.published
+        if isinstance(event, AgentRunLiveStreamAnswerDeltaEvent)
+    ]
+    terminals = [
+        event
+        for event in stream.published
+        if isinstance(event, AgentRunLiveStreamTerminalEvent)
+    ]
+    assert len(deltas) == 3
+    assert terminals == [AgentRunLiveStreamTerminalEvent(status="completed")]
+    async with session_factory() as session:
+        persisted = await session.get(AgentRun, run.id)
+        assert persisted is not None
+        assert persisted.status == "completed"
+        assert persisted.assistant_message_id is not None
+
+
+@pytest.mark.asyncio
+async def test_provider_failure_after_delta_commits_failed_without_assistant(
+    session_factory: async_sessionmaker[AsyncSession],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async with session_factory() as session:
+        _thread, _message, run = await _create_thread_message_run(session)
+    fake_agent = DeltaReportingAgent(
+        exc=AIProviderError(),
+        fragments=["P" * 512],
+        finish=False,
+    )
+
+    def build_agent(**kwargs: object) -> DeltaReportingAgent:
+        fake_agent.delta_reporter = kwargs["delta_reporter"]
+        return fake_agent
+
+    _patch_delta_worker(monkeypatch, build_agent)
+
+    await agent_run_tasks.run_agent_answer(
+        trigger=AgentRunTrigger(run_id=run.id),
+        ctx=_ctx(session_factory),
+    )
+
+    stream = FakeLiveStreamPublisher.instances[0]
+    assert [type(event) for event in stream.published] == [
+        AgentRunLiveStreamAnswerDeltaEvent,
+        AgentRunLiveStreamTerminalEvent,
+    ]
+    assert stream.published[-1] == AgentRunLiveStreamTerminalEvent(
+        status="failed",
+        errorCode="generation_unavailable",
+    )
+    async with session_factory() as session:
+        persisted = await session.get(AgentRun, run.id)
+        assert persisted is not None
+        assert persisted.status == "failed"
+        assert persisted.error_code == "generation_unavailable"
+        assert persisted.assistant_message_id is None
+        messages = (
+            (
+                await session.execute(
+                    select(AgentMessage).where(
+                        AgentMessage.thread_id == persisted.thread_id
+                    )
+                )
+            )
+            .scalars()
+            .all()
+        )
+        assert [message.role for message in messages] == ["user"]
+
+
+@pytest.mark.parametrize("completion_outcome", ["lost", "skipped"])
+@pytest.mark.asyncio
+async def test_completion_loser_with_existing_delta_has_no_terminal_or_assistant(
+    completion_outcome: str,
+    session_factory: async_sessionmaker[AsyncSession],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async with session_factory() as session:
+        _thread, _message, run = await _create_thread_message_run(session)
+    fake_agent = DeltaReportingAgent(
+        result=_direct_result(),
+        fragments=["L" * 512],
+    )
+
+    def build_agent(**kwargs: object) -> DeltaReportingAgent:
+        fake_agent.delta_reporter = kwargs["delta_reporter"]
+        return fake_agent
+
+    async def lose_or_skip_completion(
+        _repository: AgentRunRepository,
+        **_kwargs: object,
+    ) -> bool:
+        if completion_outcome == "lost":
+            raise RunTransitionLostError
+        return False
+
+    _patch_delta_worker(monkeypatch, build_agent)
+    monkeypatch.setattr(
+        AgentRunRepository,
+        "complete_run",
+        lose_or_skip_completion,
+    )
+
+    await agent_run_tasks.run_agent_answer(
+        trigger=AgentRunTrigger(run_id=run.id),
+        ctx=_ctx(session_factory),
+    )
+
+    stream = FakeLiveStreamPublisher.instances[0]
+    assert (
+        len(
+            [
+                event
+                for event in stream.published
+                if isinstance(event, AgentRunLiveStreamAnswerDeltaEvent)
+            ]
+        )
+        == 1
+    )
+    assert not any(
+        isinstance(event, AgentRunLiveStreamTerminalEvent) for event in stream.published
+    )
+    async with session_factory() as session:
+        persisted = await session.get(AgentRun, run.id)
+        assert persisted is not None
+        assert persisted.status == "running"
+        assert persisted.assistant_message_id is None
+        messages = (
+            (
+                await session.execute(
+                    select(AgentMessage).where(
+                        AgentMessage.thread_id == persisted.thread_id
+                    )
+                )
+            )
+            .scalars()
+            .all()
+        )
+        assert [message.role for message in messages] == ["user"]
 
 
 @pytest.mark.asyncio

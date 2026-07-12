@@ -9,12 +9,16 @@ import structlog
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from taskiq import Context, TaskiqDepends
 
-from app.agent.answering.direct_answer.contract import DirectAnswerInvalidError
+from app.agent.answering.direct_answer.contract import (
+    AnswerGenerationStopped,
+    DirectAnswerInvalidError,
+)
 from app.agent.composition import (
     build_question_answering_agent,
     build_question_resolver,
 )
 from app.agent.contract import AnswerQuestionInput, QuestionResolvedEvent
+from app.agent.live_updates.answer_delta import AgentRunLiveAnswerDeltaReporter
 from app.agent.live_updates.recent_events import AgentRunLiveEventPublisher
 from app.agent.live_updates.reporters import (
     AgentRunLiveActivityReporter,
@@ -32,6 +36,7 @@ from app.agent.runs.contracts import (
     PreparedAgentRun,
     RunTransitionLostError,
 )
+from app.agent.runs.execution_probe import AgentRunExecutionProbe
 from app.agent.runs.progress import AgentRunProgressWriter
 from app.agent.runs.repository import AgentRunRepository
 from app.agent.runs.types import AgentRunErrorCode
@@ -69,6 +74,16 @@ async def run_agent_answer(
     events = AgentRunLiveEventPublisher(redis, prepared.run_id)
     stream_events = AgentRunLiveStreamPublisher(
         redis,
+        prepared.run_id,
+        prepared.attempt_epoch,
+    )
+    delta_reporter = AgentRunLiveAnswerDeltaReporter(
+        stream_events,
+        run_id=prepared.run_id,
+        attempt_epoch=prepared.attempt_epoch,
+    )
+    continuation = AgentRunExecutionProbe(
+        session_factory,
         prepared.run_id,
         prepared.attempt_epoch,
     )
@@ -111,6 +126,8 @@ async def run_agent_answer(
                 tavily_client=tavily_client,
                 progress=progress_reporter,
                 events=activity_reporter,
+                delta_reporter=delta_reporter,
+                continuation=continuation,
             )
             result = await agent.answer(
                 AnswerQuestionInput(
@@ -122,6 +139,12 @@ async def run_agent_answer(
                     previous_answer=_latest_assistant_answer(history),
                 )
             )
+    except AnswerGenerationStopped:
+        logger.info(
+            "agent_run_generation_stopped",
+            run_id=str(prepared.run_id),
+        )
+        return
     except (
         AIProviderConfigurationError,
         AIProviderError,

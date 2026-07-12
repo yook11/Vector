@@ -1,6 +1,7 @@
 """Question answering package."""
 
 from app.agent.answering.direct_answer.contract import (
+    AnswerGenerationStopped,
     DirectAnswerDraft,
     DirectAnswerer,
     DirectAnswerGenerator,
@@ -27,6 +28,7 @@ from app.agent.answering.orchestration import (
 )
 
 __all__ = [
+    "AnswerGenerationStopped",
     "AnswerEvidenceItem",
     "DirectAnswerDraft",
     "DirectAnswerer",

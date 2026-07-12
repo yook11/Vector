@@ -186,6 +186,26 @@ class AgentRunRepository:
             attempt_epoch=attempt_epoch,
         )
 
+    async def is_execution_current(
+        self,
+        *,
+        run_id: uuid_mod.UUID,
+        attempt_epoch: int,
+    ) -> bool:
+        value = (
+            await self._session.execute(
+                select(1)
+                .select_from(AgentRun)
+                .where(
+                    AgentRun.id == run_id,
+                    AgentRun.status == AgentRunStatus.RUNNING.value,
+                    AgentRun.attempt_epoch == attempt_epoch,
+                )
+                .limit(1)
+            )
+        ).scalar_one_or_none()
+        return value is not None
+
     async def complete_run(
         self,
         *,

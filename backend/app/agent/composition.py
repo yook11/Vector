@@ -9,7 +9,9 @@ from __future__ import annotations
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.agent.contract import (
+    AnswerDeltaReporter,
     AnswerEventReporter,
+    AnswerGenerationContinuation,
     AnswerProgressReporter,
     QuestionAnsweringAgent,
 )
@@ -33,6 +35,8 @@ def build_question_answering_agent(
     tavily_client: TavilyHttpClient,
     progress: AnswerProgressReporter | None = None,
     events: AnswerEventReporter | None = None,
+    delta_reporter: AnswerDeltaReporter | None = None,
+    continuation: AnswerGenerationContinuation | None = None,
 ) -> QuestionAnsweringAgent:
     ensure_question_answering_agent_configured()
 
@@ -77,6 +81,8 @@ def build_question_answering_agent(
         direct_answerer=DirectAnswerFlow(
             generator=GeminiDirectAnswerGenerator(),
             audit_recorder=None,
+            delta_reporter=delta_reporter,
+            continuation=continuation,
         ),
         progress=progress,
     )

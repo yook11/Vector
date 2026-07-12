@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import AsyncIterator
 from datetime import datetime
 from typing import Protocol
 
@@ -10,6 +11,7 @@ from pydantic import BaseModel, ConfigDict
 from app.agent.contract import NonBlankText
 
 __all__ = [
+    "AnswerGenerationStopped",
     "DirectAnswerDraft",
     "DirectAnswerer",
     "DirectAnswerGenerator",
@@ -17,6 +19,10 @@ __all__ = [
 ]
 
 _DIRECT_ANSWER_BLANK_RESPONSE = "direct_answer_blank_response"
+
+
+class AnswerGenerationStopped(Exception):
+    """現在のrun attemptが回答生成を継続できなくなった。"""
 
 
 class DirectAnswerInvalidError(ValueError):
@@ -36,9 +42,9 @@ class DirectAnswerDraft(BaseModel):
 
 
 class DirectAnswerGenerator(Protocol):
-    """LLM adapter boundary that returns unvalidated direct answer text."""
+    """LLM adapter boundary that streams unvalidated direct answer text."""
 
-    async def generate(
+    def stream(
         self,
         *,
         question: str,
@@ -47,13 +53,13 @@ class DirectAnswerGenerator(Protocol):
         user_activity_context: str = "",
         previous_answer: str = "",
         previous_error: str | None = None,
-    ) -> str: ...
+    ) -> AsyncIterator[str]: ...
 
 
 class DirectAnswerer(Protocol):
     """検索なしで自然に回答する工程。
 
-    失敗時は AIProviderError | DirectAnswerInvalidError を伝播する。
+    provider・validation失敗またはroutine stop signalを伝播する。
     """
 
     async def answer(
