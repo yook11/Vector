@@ -19,14 +19,12 @@ from app.agent.answering.direct_answer.contract import (
     DirectAnswerGenerator,
     DirectAnswerInvalidError,
 )
-from app.agent.answering.direct_answer.stream_filter import (
-    DirectAnswerVisibleTextFilter,
-)
 from app.agent.answering.live_delivery import (
     BestEffortAnswerDeltaReporter,
     close_answer_stream,
     ensure_answer_generation_continues,
 )
+from app.agent.answering.live_draft import LiveAnswerDraftSession
 from app.agent.answering.metrics import record_direct_answer_outcome
 from app.agent.contract import (
     AnswerDeltaReporter,
@@ -134,40 +132,35 @@ class DirectAnswerFlow:
         generation: int,
     ) -> DirectAnswerDraft:
         stream: AsyncIterator[str] | None = None
-        stream_filter = DirectAnswerVisibleTextFilter()
         raw_fragments: list[str] = []
         try:
-            await ensure_answer_generation_continues(self._continuation)
-
-            stream = self._generator.stream(
-                question=question,
-                as_of=as_of,
-                user_intent=user_intent,
-                user_activity_context=user_activity_context,
-                previous_answer=previous_answer,
-                previous_error=previous_error,
-            )
-            async for fragment in stream:
+            async with LiveAnswerDraftSession(
+                generation=generation,
+                delta_reporter=self._delta,
+            ) as live_draft:
                 await ensure_answer_generation_continues(self._continuation)
-                raw_fragments.append(fragment)
-                visible = stream_filter.append(fragment)
-                if visible:
-                    await self._delta.append(generation=generation, text=visible)
 
-            await ensure_answer_generation_continues(self._continuation)
-            visible_tail = stream_filter.finish()
-            answer = _CITATION_MARKER_RE.sub("", "".join(raw_fragments))
-            if not answer.strip():
-                raise DirectAnswerInvalidError()
-            draft = DirectAnswerDraft(answer=answer)
+                stream = self._generator.stream(
+                    question=question,
+                    as_of=as_of,
+                    user_intent=user_intent,
+                    user_activity_context=user_activity_context,
+                    previous_answer=previous_answer,
+                    previous_error=previous_error,
+                )
+                async for fragment in stream:
+                    await ensure_answer_generation_continues(self._continuation)
+                    raw_fragments.append(fragment)
+                    await live_draft.append(fragment)
 
-            if visible_tail:
-                await self._delta.append(generation=generation, text=visible_tail)
-            await self._delta.finish(generation=generation)
-            return draft
-        except BaseException:
-            await self._delta.abort(generation=generation)
-            raise
+                await ensure_answer_generation_continues(self._continuation)
+                answer = _CITATION_MARKER_RE.sub("", "".join(raw_fragments))
+                if not answer.strip():
+                    raise DirectAnswerInvalidError()
+                draft = DirectAnswerDraft(answer=answer)
+
+                await live_draft.commit()
+                return draft
         finally:
             await close_answer_stream(stream)
 

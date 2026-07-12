@@ -37,8 +37,8 @@ from app.agent.answering.live_delivery import (
     close_answer_stream,
     ensure_answer_generation_continues,
 )
+from app.agent.answering.live_draft import LiveAnswerDraftSession
 from app.agent.answering.metrics import record_answer_synthesis_outcome
-from app.agent.answering.visible_text import AnswerVisibleTextFilter
 from app.agent.contract import (
     AnswerDeltaReporter,
     AnswerGenerationContinuation,
@@ -172,52 +172,47 @@ class EvidenceAnswerFlow:
     ) -> tuple[EvidenceAnswerDraft, list[str]]:
         stream: AsyncIterator[str] | None = None
         extractor = IncrementalJsonAnswerExtractor()
-        visible_filter = AnswerVisibleTextFilter()
         raw_fragments: list[str] = []
         try:
-            await ensure_answer_generation_continues(self._continuation)
-
-            stream = self._generator.stream(
-                question=question,
-                evidence=evidence,
-                as_of=as_of,
-                target_time_window=target_time_window,
-                user_intent=user_intent,
-                prior_coverage=prior_coverage,
-                user_activity_context=user_activity_context,
-                previous_error=previous_error,
-            )
-            async for raw_fragment in stream:
+            async with LiveAnswerDraftSession(
+                generation=generation,
+                delta_reporter=self._delta,
+            ) as live_draft:
                 await ensure_answer_generation_continues(self._continuation)
-                raw_fragments.append(raw_fragment)
-                decoded = extractor.append(raw_fragment)
-                if decoded:
-                    visible = visible_filter.append(decoded)
-                    if visible:
-                        await self._delta.append(generation=generation, text=visible)
 
-            await ensure_answer_generation_continues(self._continuation)
-            extractor.finish()
-
-            raw = parse_evidence_answer_final_json("".join(raw_fragments))
-            draft, defects = finalize_evidence_answer_draft(raw, evidence=evidence)
-            for defect in defects:
-                await _record_defect(
-                    audit_recorder=self._audit_recorder,
-                    attempt_number=attempt_number,
-                    defect_code=defect,
-                    ai_model=ai_model,
-                    prompt_version=prompt_version,
+                stream = self._generator.stream(
+                    question=question,
+                    evidence=evidence,
+                    as_of=as_of,
+                    target_time_window=target_time_window,
+                    user_intent=user_intent,
+                    prior_coverage=prior_coverage,
+                    user_activity_context=user_activity_context,
+                    previous_error=previous_error,
                 )
+                async for raw_fragment in stream:
+                    await ensure_answer_generation_continues(self._continuation)
+                    raw_fragments.append(raw_fragment)
+                    decoded = extractor.append(raw_fragment)
+                    if decoded:
+                        await live_draft.append(decoded)
 
-            visible_tail = visible_filter.finish()
-            if visible_tail:
-                await self._delta.append(generation=generation, text=visible_tail)
-            await self._delta.finish(generation=generation)
-            return draft, defects
-        except BaseException:
-            await self._delta.abort(generation=generation)
-            raise
+                await ensure_answer_generation_continues(self._continuation)
+                extractor.finish()
+
+                raw = parse_evidence_answer_final_json("".join(raw_fragments))
+                draft, defects = finalize_evidence_answer_draft(raw, evidence=evidence)
+                for defect in defects:
+                    await _record_defect(
+                        audit_recorder=self._audit_recorder,
+                        attempt_number=attempt_number,
+                        defect_code=defect,
+                        ai_model=ai_model,
+                        prompt_version=prompt_version,
+                    )
+
+                await live_draft.commit()
+                return draft, defects
         finally:
             await close_answer_stream(stream)
 
