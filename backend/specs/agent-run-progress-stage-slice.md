@@ -163,7 +163,7 @@ frontend:
 ## New Types / Structure
 
 ```text
-backend/app/agent/internal_retrieval/ or evidence_collection/
+backend/app/agent/evidence_collection/internal_search/ or evidence_collection/
                                          (前提整理 1: 読み取り tx を読了ごとに閉じる)
 backend/app/agent/contract.py            (AnswerProgressStage + AnswerProgressReporter)
 backend/app/agent/answering/service.py  (progress 注入 + 3 箇所の報告)

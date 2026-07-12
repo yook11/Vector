@@ -8,9 +8,13 @@ from typing import Protocol, Self
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from app.agent.contract import UnmetRequirement
-from app.agent.external_search import ExternalSearchOutcome
-from app.agent.internal_retrieval.article_search import InternalArticleSearchHit
-from app.agent.internal_retrieval.query_embedding import InternalSearchQueries
+from app.agent.evidence_collection.external_search import ExternalSearchOutcome
+from app.agent.evidence_collection.internal_search.article_search import (
+    InternalArticleSearchHit,
+)
+from app.agent.evidence_collection.internal_search.query_embedding import (
+    InternalSearchQueries,
+)
 from app.agent.planning.contract import ExternalResearchTask
 
 __all__ = [

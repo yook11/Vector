@@ -29,7 +29,7 @@ agent 本体から呼ばれていない。
 - `backend/app/agent/answering/service.py`
   - `plan()` は walking skeleton 用の暫定 seam。呼び出し元はテストのみ
     (`app/` 側参照ゼロ) であり、本 slice で `retrieve()` に置き換える。
-- `backend/app/agent/internal_retrieval/service.py`
+- `backend/app/agent/evidence_collection/internal_search/service.py`
   - `InternalSearchService.search_plan_articles(plan, *, per_query_limit=5,
     limit=5)` が `list[InternalArticleSearchHit]` を返す。キーワード引数は
     default 持ちのため、最小 signature の port にそのまま適合する。

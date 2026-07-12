@@ -11,7 +11,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from app.agent.external_search import (
+from app.agent.evidence_collection.external_search import (
     TAVILY_MAX_RESULTS_LIMIT,
     TAVILY_REQUEST_TIMEOUT_SECONDS,
     TAVILY_SEARCH_URL,

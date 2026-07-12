@@ -15,7 +15,7 @@ from app.agent.contract import (
     AnswerProgressReporter,
     QuestionAnsweringAgent,
 )
-from app.agent.external_search.tavily import TavilyHttpClient
+from app.agent.evidence_collection.external_search.tavily import TavilyHttpClient
 from app.agent.question_context.contract import QuestionContextGenerator
 from app.analysis.ai_provider_errors import AIProviderConfigurationError
 from app.config import settings
@@ -50,11 +50,15 @@ def build_question_answering_agent(
     from app.agent.answering.evidence_answer.flow import EvidenceAnswerFlow
     from app.agent.answering.orchestration import QuestionAnsweringOrchestrator
     from app.agent.evidence_collection import EvidenceCollectionService
-    from app.agent.internal_retrieval.ai.gemini import GeminiQueryEmbedder
-    from app.agent.internal_retrieval.article_search import (
+    from app.agent.evidence_collection.internal_search.ai.gemini import (
+        GeminiQueryEmbedder,
+    )
+    from app.agent.evidence_collection.internal_search.article_search import (
         PgVectorArticleSearchRepository,
     )
-    from app.agent.internal_retrieval.service import InternalSearchService
+    from app.agent.evidence_collection.internal_search.service import (
+        InternalSearchService,
+    )
     from app.agent.planning.ai.gemini import GeminiQuestionPlanner
     from app.agent.planning.service import QuestionPlanningService
 
@@ -105,13 +109,19 @@ def _build_external_search(
 ) -> object:
     ensure_question_answering_agent_configured()
 
-    from app.agent.external_search.ai.deepseek import (
+    from app.agent.evidence_collection.external_search.ai.deepseek import (
         DeepSeekEvidenceSelector,
         DeepSeekQueryGenerator,
     )
-    from app.agent.external_search.runner import ExternalSearchResearchRunner
-    from app.agent.external_search.service import ExternalSearchService
-    from app.agent.external_search.tavily import TavilySearchProvider
+    from app.agent.evidence_collection.external_search.runner import (
+        ExternalSearchResearchRunner,
+    )
+    from app.agent.evidence_collection.external_search.service import (
+        ExternalSearchService,
+    )
+    from app.agent.evidence_collection.external_search.tavily import (
+        TavilySearchProvider,
+    )
 
     return ExternalSearchService(
         runner=ExternalSearchResearchRunner(

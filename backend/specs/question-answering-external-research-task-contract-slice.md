@@ -58,13 +58,13 @@ report が持つ(観測は決定を所有する者が出す)。
   - `PlannerFinalEvent` は `external_query_count` を焼いている。audit payload の
     field 名変更は audit 側 schema へ波及するため名前は維持し、意味を
     「external research task 数」として test で固定する。
-- `backend/app/agent/external_search/service.py`
+- `backend/app/agent/evidence_collection/external_search/service.py`
   - `ExternalSearchService.search_plan` が `plan.external_queries` を消費している。
 - 既存テスト
   - `tests/agent/test_contract.py`
   - `tests/agent/planning/test_planner.py`
   - `tests/agent/planning/ai/test_gemini_question_planner.py`
-  - `tests/agent/external_search/test_service.py`
+  - `tests/agent/evidence_collection/external_search/test_service.py`
   - `tests/agent/answering/test_service.py`
 
 ## Decision

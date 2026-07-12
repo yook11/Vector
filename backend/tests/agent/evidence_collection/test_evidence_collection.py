@@ -15,12 +15,14 @@ from app.agent.evidence_collection import (
     EvidenceCollectionOutcome,
     EvidenceCollectionService,
 )
-from app.agent.external_search import ExternalSearchOutcome
-from app.agent.internal_retrieval.article_search import (
+from app.agent.evidence_collection.external_search import ExternalSearchOutcome
+from app.agent.evidence_collection.internal_search.article_search import (
     InternalArticleContent,
     InternalArticleSearchHit,
 )
-from app.agent.internal_retrieval.query_embedding import InternalSearchQueries
+from app.agent.evidence_collection.internal_search.query_embedding import (
+    InternalSearchQueries,
+)
 from app.agent.planning.contract import (
     ExternalResearchTask,
     ExternalSearchPlan,

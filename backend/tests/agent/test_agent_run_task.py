@@ -303,9 +303,9 @@ def test_composition_injects_same_live_controls_into_both_answer_flows(
     import app.agent.answering.evidence_answer.flow as evidence_flow_module
     import app.agent.answering.orchestration as orchestration_module
     import app.agent.evidence_collection as evidence_collection_module
-    import app.agent.internal_retrieval.ai.gemini as embedder_module
-    import app.agent.internal_retrieval.article_search as article_search_module
-    import app.agent.internal_retrieval.service as internal_search_module
+    import app.agent.evidence_collection.internal_search.ai.gemini as embedder_module
+    import app.agent.evidence_collection.internal_search.article_search as article_search_module
+    import app.agent.evidence_collection.internal_search.service as internal_search_module
     import app.agent.planning.ai.gemini as planner_module
     import app.agent.planning.service as planning_service_module
 

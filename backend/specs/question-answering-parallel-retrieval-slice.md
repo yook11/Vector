@@ -27,9 +27,9 @@ Q&A エージェントのコア工程 (planning / retrieval / evidence / 4E / 4D
   `QuestionPlanRetrievalService.retrieve` の match dispatch。
   `InternalAndExternalPlan` 分岐で internal を await してから external を
   開始している。
-- `backend/app/agent/external_search/runner.py:67-80` — external 内部の
+- `backend/app/agent/evidence_collection/external_search/runner.py:67-80` — external 内部の
   並列実行の前例 (`asyncio.Semaphore` + `asyncio.gather`)。
-- `backend/app/agent/internal_retrieval/service.py:136-152` — internal
+- `backend/app/agent/evidence_collection/internal_search/service.py:136-152` — internal
   検索の途中 side effect: query embedding cache の store (operation ごと
   独自 session で DB 書込) と cache outcome metrics。キャンセルすると
   これらが飛ぶ (並列化の設計判断 4 の根拠)。

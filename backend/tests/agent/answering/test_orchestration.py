@@ -14,12 +14,12 @@ from app.agent.answering.evidence_answer.contract import (
 from app.agent.answering.orchestration import QuestionAnsweringOrchestrator
 from app.agent.contract import AnswerQuestionInput, ExternalUrlSource
 from app.agent.evidence_collection import EvidenceCollectionOutcome
-from app.agent.external_search import (
+from app.agent.evidence_collection.external_search import (
     ExternalSearchEvidence,
     ExternalSearchOutcome,
     ResearchTaskReport,
 )
-from app.agent.internal_retrieval.article_search import (
+from app.agent.evidence_collection.internal_search.article_search import (
     InternalArticleContent,
     InternalArticleSearchHit,
 )

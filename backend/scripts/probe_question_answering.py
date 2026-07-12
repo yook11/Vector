@@ -31,7 +31,7 @@ from app.agent.evidence_collection import (
     EvidenceCollectionOutcome,
     EvidenceCollectionService,
 )
-from app.agent.external_search import (
+from app.agent.evidence_collection.external_search import (
     ExternalSearchEvidence,
     ExternalSearchOutcome,
     ExternalSearchResearchRunner,
@@ -39,12 +39,14 @@ from app.agent.external_search import (
     ResearchTaskReport,
     TavilySearchProvider,
 )
-from app.agent.external_search.ai import (
+from app.agent.evidence_collection.external_search.ai import (
     DeepSeekEvidenceSelector,
     DeepSeekQueryGenerator,
 )
-from app.agent.internal_retrieval import InternalSearchQueries
-from app.agent.internal_retrieval.article_search import InternalArticleSearchHit
+from app.agent.evidence_collection.internal_search import InternalSearchQueries
+from app.agent.evidence_collection.internal_search.article_search import (
+    InternalArticleSearchHit,
+)
 from app.agent.planning.contract import (
     ExternalResearchTask,
     ExternalSearchPlan,

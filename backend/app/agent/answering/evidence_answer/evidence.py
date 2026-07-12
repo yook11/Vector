@@ -6,8 +6,10 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from app.agent.contract import AnswerSource, ExternalUrlSource, InternalArticleSource
 from app.agent.evidence_collection import EvidenceCollectionOutcome
-from app.agent.external_search import ExternalSearchEvidence
-from app.agent.internal_retrieval.article_search import InternalArticleSearchHit
+from app.agent.evidence_collection.external_search import ExternalSearchEvidence
+from app.agent.evidence_collection.internal_search.article_search import (
+    InternalArticleSearchHit,
+)
 
 __all__ = ["AnswerEvidenceItem", "normalize_answer_evidence"]
 
