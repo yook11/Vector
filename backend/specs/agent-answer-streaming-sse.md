@@ -359,7 +359,8 @@ assistant message を保存しないことを維持する。
    fallbackを含むgeneration切替、citation検証後の確定境界を実装済み。専用仕様は
    `agent-evidence-answer-draft-deltas-slice.md`。
 7. **Research UI**: 工程表示と下書き領域、EventSource lifecycle、replay / reset /
-   terminal / polling fallback、アクセシビリティ。
+   terminal / polling fallback、アクセシビリティ。専用仕様は
+   `../../frontend/specs/agent-research-live-ui-slice.md`。
 8. **Operational verification**: Fly の buffering・idle timeout、Redis ACL、observability、
    負荷・障害時の劣化、E2E。
 

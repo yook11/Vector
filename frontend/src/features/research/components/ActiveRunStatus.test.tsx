@@ -1,366 +1,145 @@
-import { act, render, screen, waitFor } from "@testing-library/react";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { render, screen, within } from "@testing-library/react";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import type { ResearchLiveActivity } from "../live/events";
 import { ActiveRunStatus } from "./ActiveRunStatus";
 
-const mocks = vi.hoisted(() => {
-  const refresh = vi.fn();
-  return {
-    refresh,
-    router: { refresh },
-  };
-});
-
-vi.mock("next/navigation", () => ({
-  useRouter: () => mocks.router,
-}));
-
-const RUN_ID = "00000000-0000-4000-a000-000000000010";
-
-let hiddenSpy: ReturnType<typeof vi.spyOn>;
-
-function runResponse(
-  status: "queued" | "running" | "completed" | "failed",
-  progressStage: "planning" | "retrieving" | "synthesizing" | null,
-  recentEvents: unknown[] = [],
-) {
-  return new Response(
-    JSON.stringify({
-      runId: RUN_ID,
-      threadId: "00000000-0000-4000-a000-000000000020",
-      status,
-      errorCode: status === "failed" ? "internal_error" : null,
-      progressStage,
-      recentEvents,
-    }),
-    { status: 200, headers: { "Content-Type": "application/json" } },
-  );
-}
-
-beforeEach(() => {
-  vi.clearAllMocks();
-  hiddenSpy = vi.spyOn(document, "hidden", "get").mockReturnValue(false);
-});
-
 afterEach(() => {
-  hiddenSpy.mockRestore();
+  vi.restoreAllMocks();
   vi.unstubAllGlobals();
-  vi.useRealTimers();
 });
 
 describe("ActiveRunStatus", () => {
-  it("renders queued initial status before the first poll completes", () => {
-    const fetchMock = vi.fn(() => new Promise<Response>(() => undefined));
-    vi.stubGlobal("fetch", fetchMock);
+  it.each([
+    ["queued", null, "待機中"],
+    ["running", null, "生成中"],
+    ["running", "planning", "計画中"],
+    ["running", "retrieving", "情報収集中"],
+    ["running", "synthesizing", "回答作成中"],
+  ] as const)("renders %s / %s as %s", (status, stage, text) => {
+    render(<ActiveRunStatus status={status} stage={stage} activity={null} />);
 
-    render(
-      <ActiveRunStatus
-        runId={RUN_ID}
-        initialStatus="queued"
-        initialStage={null}
-      />,
-    );
-
-    expect(screen.getByText("待機中")).toBeInTheDocument();
+    expect(screen.getByText(text)).toBeInTheDocument();
   });
 
-  it("renders running null-stage fallback before the first poll completes", () => {
-    const fetchMock = vi.fn(() => new Promise<Response>(() => undefined));
-    vi.stubGlobal("fetch", fetchMock);
-
+  it.each([
+    [
+      "retrieving",
+      { type: "internal_search.started", queryCount: 2 },
+      "関連記事を検索中",
+    ],
+    [
+      "retrieving",
+      { type: "internal_search.completed", hitCount: 8 },
+      "関連記事8件を確認",
+    ],
+    [
+      "retrieving",
+      {
+        type: "external_search.queries_generated",
+        taskIndex: 0,
+        queries: ["NVIDIA AI", "半導体需要"],
+      },
+      "“NVIDIA AI” など2件を検索中",
+    ],
+    [
+      "retrieving",
+      {
+        type: "external_search.candidates_fetched",
+        taskIndex: 1,
+        candidateCount: 12,
+      },
+      "候補12件を取得",
+    ],
+    [
+      "retrieving",
+      {
+        type: "external_search.evidence_selected",
+        taskIndex: 1,
+        evidenceCount: 4,
+      },
+      "根拠4件を選別",
+    ],
+    [
+      "planning",
+      {
+        type: "question.resolved",
+        standaloneQuestion: "NVIDIAの発表は株価へどう影響する？",
+      },
+      "“NVIDIAの発表は株価へどう影響する？”について調査中",
+    ],
+  ] satisfies ReadonlyArray<
+    readonly ["planning" | "retrieving", ResearchLiveActivity, string]
+  >)("renders the known $1 activity", (stage, activity, text) => {
     render(
-      <ActiveRunStatus
-        runId={RUN_ID}
-        initialStatus="running"
-        initialStage={null}
-      />,
+      <ActiveRunStatus status="running" stage={stage} activity={activity} />,
     );
 
-    expect(screen.getByText("生成中")).toBeInTheDocument();
+    expect(screen.getByText(text)).toBeInTheDocument();
   });
 
-  it("updates stage text without refreshing the thread", async () => {
-    const fetchMock = vi
-      .fn()
-      .mockResolvedValue(runResponse("running", "retrieving"));
-    vi.stubGlobal("fetch", fetchMock);
-
+  it("keeps activity content outside the polite stage status region", () => {
     render(
       <ActiveRunStatus
-        runId={RUN_ID}
-        initialStatus="running"
-        initialStage="planning"
-      />,
-    );
-
-    expect(screen.getByText("計画中")).toBeInTheDocument();
-    await waitFor(() =>
-      expect(screen.getByText("情報収集中")).toBeInTheDocument(),
-    );
-    expect(mocks.refresh).not.toHaveBeenCalled();
-  });
-
-  it("shows latest known live event subtext while retrieving", async () => {
-    const fetchMock = vi.fn().mockResolvedValue(
-      runResponse("running", "retrieving", [
-        {
-          type: "external_search.queries_generated",
-          ts: "2026-07-09T01:00:00Z",
-          taskIndex: 0,
-          queries: ["NVIDIA AI"],
-        },
-      ]),
-    );
-    vi.stubGlobal("fetch", fetchMock);
-
-    render(
-      <ActiveRunStatus
-        runId={RUN_ID}
-        initialStatus="running"
-        initialStage="planning"
-      />,
-    );
-
-    await waitFor(() =>
-      expect(screen.getByText("情報収集中")).toBeInTheDocument(),
-    );
-    expect(screen.getByText("“NVIDIA AI” を検索中")).toBeInTheDocument();
-    expect(mocks.refresh).not.toHaveBeenCalled();
-  });
-
-  it("shows the resolved question while planning", async () => {
-    const fetchMock = vi.fn().mockResolvedValue(
-      runResponse("running", "planning", [
-        {
-          type: "question.resolved",
-          ts: "2026-07-09T01:00:00Z",
-          standaloneQuestion: "NVIDIA の発表が株価へ与える影響は？",
-        },
-      ]),
-    );
-    vi.stubGlobal("fetch", fetchMock);
-
-    render(
-      <ActiveRunStatus
-        runId={RUN_ID}
-        initialStatus="running"
-        initialStage={null}
-      />,
-    );
-
-    await waitFor(() => expect(screen.getByText("計画中")).toBeInTheDocument());
-    expect(
-      screen.getByText("“NVIDIA の発表が株価へ与える影響は？”について調査中"),
-    ).toBeInTheDocument();
-  });
-
-  it("shows the resolved question before planning starts", async () => {
-    const fetchMock = vi.fn().mockResolvedValue(
-      runResponse("running", null, [
-        {
-          type: "question.resolved",
-          ts: "2026-07-09T01:00:00Z",
-          standaloneQuestion: "NVIDIA の発表が株価へ与える影響は？",
-        },
-      ]),
-    );
-    vi.stubGlobal("fetch", fetchMock);
-
-    render(
-      <ActiveRunStatus
-        runId={RUN_ID}
-        initialStatus="running"
-        initialStage={null}
-      />,
-    );
-
-    await waitFor(() => expect(screen.getByText("生成中")).toBeInTheDocument());
-    expect(
-      screen.getByText("“NVIDIA の発表が株価へ与える影響は？”について調査中"),
-    ).toBeInTheDocument();
-  });
-
-  it("prioritizes search status over the resolved question while retrieving", async () => {
-    const fetchMock = vi.fn().mockResolvedValue(
-      runResponse("running", "retrieving", [
-        {
-          type: "question.resolved",
-          ts: "2026-07-09T01:00:00Z",
-          standaloneQuestion: "NVIDIA の発表が株価へ与える影響は？",
-        },
-        {
-          type: "external_search.queries_generated",
-          ts: "2026-07-09T01:00:01Z",
-          taskIndex: 0,
-          queries: ["NVIDIA stock impact"],
-        },
-      ]),
-    );
-    vi.stubGlobal("fetch", fetchMock);
-
-    render(
-      <ActiveRunStatus
-        runId={RUN_ID}
-        initialStatus="running"
-        initialStage="planning"
-      />,
-    );
-
-    await waitFor(() =>
-      expect(
-        screen.getByText("“NVIDIA stock impact” を検索中"),
-      ).toBeInTheDocument(),
-    );
-    expect(
-      screen.queryByText("“NVIDIA の発表が株価へ与える影響は？”について調査中"),
-    ).not.toBeInTheDocument();
-  });
-
-  it("uses the most recent known event when newer events are unknown", async () => {
-    const fetchMock = vi.fn().mockResolvedValue(
-      runResponse("running", "retrieving", [
-        {
+        status="running"
+        stage="retrieving"
+        activity={{
           type: "external_search.candidates_fetched",
-          ts: "2026-07-09T01:00:00Z",
           taskIndex: 0,
           candidateCount: 8,
-        },
-        {
-          type: "future.event",
-          ts: "2026-07-09T01:00:01Z",
-        },
-      ]),
-    );
-    vi.stubGlobal("fetch", fetchMock);
-
-    render(
-      <ActiveRunStatus
-        runId={RUN_ID}
-        initialStatus="running"
-        initialStage="planning"
+        }}
       />,
     );
 
-    await waitFor(() =>
-      expect(screen.getByText("候補8件を取得")).toBeInTheDocument(),
-    );
+    const status = screen.getByRole("status");
+    const activity = screen.getByText("候補8件を取得");
+    expect(status).toHaveAttribute("aria-live", "polite");
+    expect(within(status).getByText("情報収集中")).toBeInTheDocument();
+    expect(status).not.toContainElement(activity);
+    expect(activity.closest('[aria-live="polite"]')).toBeNull();
   });
 
-  it("hides live event subtext outside retrieving", async () => {
-    const fetchMock = vi.fn().mockResolvedValue(
-      runResponse("running", "synthesizing", [
-        {
-          type: "external_search.candidates_fetched",
-          ts: "2026-07-09T01:00:00Z",
-          taskIndex: 0,
-          candidateCount: 8,
-        },
-      ]),
-    );
-    vi.stubGlobal("fetch", fetchMock);
-
+  it("hides activity when it does not describe the current stage", () => {
     render(
       <ActiveRunStatus
-        runId={RUN_ID}
-        initialStatus="running"
-        initialStage="retrieving"
+        status="running"
+        stage="synthesizing"
+        activity={{
+          type: "external_search.candidates_fetched",
+          taskIndex: 0,
+          candidateCount: 8,
+        }}
       />,
     );
 
-    await waitFor(() =>
-      expect(screen.getByText("回答作成中")).toBeInTheDocument(),
-    );
     expect(screen.queryByText("候補8件を取得")).not.toBeInTheDocument();
   });
 
-  it("refreshes on terminal status", async () => {
-    const fetchMock = vi
-      .fn()
-      .mockResolvedValue(runResponse("completed", "synthesizing"));
-    vi.stubGlobal("fetch", fetchMock);
-
+  it("marks the spinner decorative and disables its animation for reduced motion", () => {
     render(
-      <ActiveRunStatus
-        runId={RUN_ID}
-        initialStatus="running"
-        initialStage="synthesizing"
-      />,
+      <ActiveRunStatus status="running" stage="planning" activity={null} />,
     );
 
-    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
-    await waitFor(() => expect(mocks.refresh).toHaveBeenCalledTimes(1));
+    const spinner = screen
+      .getByRole("status")
+      .querySelector('[aria-hidden="true"]');
+    expect(spinner).not.toBeNull();
+    expect(spinner).toHaveClass("animate-spin");
+    expect(spinner).toHaveClass("motion-reduce:animate-none");
   });
 
-  it("pauses while hidden and polls immediately when visible again", async () => {
-    hiddenSpy.mockReturnValue(true);
-    const fetchMock = vi
-      .fn()
-      .mockResolvedValue(runResponse("running", "planning"));
+  it("does not own fetch, EventSource, timers, or router side effects", () => {
+    const fetchMock = vi.fn();
+    const eventSourceMock = vi.fn();
+    const timerSpy = vi.spyOn(globalThis, "setTimeout");
     vi.stubGlobal("fetch", fetchMock);
+    vi.stubGlobal("EventSource", eventSourceMock);
 
     render(
-      <ActiveRunStatus
-        runId={RUN_ID}
-        initialStatus="running"
-        initialStage={null}
-      />,
+      <ActiveRunStatus status="running" stage="planning" activity={null} />,
     );
 
     expect(fetchMock).not.toHaveBeenCalled();
-
-    hiddenSpy.mockReturnValue(false);
-    document.dispatchEvent(new Event("visibilitychange"));
-
-    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
-  });
-
-  it("backs off after transient poll failures", async () => {
-    vi.useFakeTimers();
-    const fetchMock = vi
-      .fn()
-      .mockResolvedValueOnce(new Response(null, { status: 500 }))
-      .mockResolvedValueOnce(runResponse("running", "planning"));
-    vi.stubGlobal("fetch", fetchMock);
-
-    render(
-      <ActiveRunStatus
-        runId={RUN_ID}
-        initialStatus="running"
-        initialStage={null}
-      />,
-    );
-
-    await act(async () => {
-      await Promise.resolve();
-    });
-    expect(fetchMock).toHaveBeenCalledTimes(1);
-    await act(async () => {
-      await vi.advanceTimersByTimeAsync(3999);
-    });
-    expect(fetchMock).toHaveBeenCalledTimes(1);
-
-    await act(async () => {
-      await vi.advanceTimersByTimeAsync(1);
-    });
-
-    expect(fetchMock).toHaveBeenCalledTimes(2);
-    expect(screen.getByText("計画中")).toBeInTheDocument();
-  });
-
-  it("refreshes and stops on 404", async () => {
-    const fetchMock = vi
-      .fn()
-      .mockResolvedValue(new Response(null, { status: 404 }));
-    vi.stubGlobal("fetch", fetchMock);
-
-    render(
-      <ActiveRunStatus
-        runId={RUN_ID}
-        initialStatus="running"
-        initialStage={null}
-      />,
-    );
-
-    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
-    await waitFor(() => expect(mocks.refresh).toHaveBeenCalledTimes(1));
+    expect(eventSourceMock).not.toHaveBeenCalled();
+    expect(timerSpy).not.toHaveBeenCalled();
   });
 });
