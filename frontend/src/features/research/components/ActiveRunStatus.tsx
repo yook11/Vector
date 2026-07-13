@@ -13,7 +13,7 @@ interface ActiveRunStatusProps {
   activity: ResearchLiveActivity | null;
 }
 
-function activeRunText(
+export function activeRunText(
   status: ActiveRunStatusValue,
   stage: ResearchLiveStage | null,
 ): string {
@@ -75,22 +75,17 @@ export function ActiveRunStatus({
 
   return (
     <div className="mt-2 min-w-0 text-xs text-[var(--vector-ink-muted)]">
-      <div
-        className="flex min-w-0 items-center gap-1.5"
-        role="status"
-        aria-live="polite"
-        aria-atomic="true"
-      >
+      <div className="flex min-w-0 items-center gap-1.5">
         <Loader2
           aria-hidden="true"
           className="size-3.5 shrink-0 animate-spin motion-reduce:animate-none"
         />
-        <span className="min-w-0 break-words [overflow-wrap:anywhere]">
+        <span className="min-w-0 whitespace-nowrap">
           {activeRunText(status, stage)}
         </span>
       </div>
       {detail ? (
-        <p className="mt-0.5 min-w-0 break-words pl-5 text-[11px] leading-4 text-[var(--vector-ink-soft)] [overflow-wrap:anywhere]">
+        <p className="mt-0.5 line-clamp-2 min-w-0 break-words pl-5 text-[11px] leading-4 text-[var(--vector-ink-soft)] [overflow-wrap:anywhere]">
           {detail}
         </p>
       ) : null}

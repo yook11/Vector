@@ -29,12 +29,12 @@ describe("LiveAnswerDraft", () => {
       />,
     );
 
-    const label = screen.getByRole("status");
+    const label = screen.getByText("回答を生成中…");
     const text = screen.getByText("調査結果の下書きです。");
-    expect(label).toHaveTextContent("回答を生成中…");
-    expect(label).toHaveAttribute("aria-live", "polite");
+    expect(screen.queryByRole("status")).not.toBeInTheDocument();
+    expect(label.closest("[aria-live]")).toBeNull();
     expect(label).not.toContainElement(text);
-    expect(text.closest('[aria-live="polite"]')).toBeNull();
+    expect(text.closest("[aria-live]")).toBeNull();
     expect(label.closest('[aria-busy="true"]')).not.toBeNull();
   });
 
@@ -48,9 +48,7 @@ describe("LiveAnswerDraft", () => {
       />,
     );
 
-    const spinner = screen
-      .getByRole("status")
-      .querySelector('[aria-hidden="true"]');
+    const spinner = document.querySelector('[aria-hidden="true"].animate-spin');
     expect(spinner).not.toBeNull();
     expect(spinner).toHaveClass("animate-spin");
     expect(spinner).toHaveClass("motion-reduce:animate-none");
@@ -66,9 +64,7 @@ describe("LiveAnswerDraft", () => {
       />,
     );
 
-    expect(screen.getByRole("status")).toHaveTextContent(
-      "回答を確定しています…",
-    );
+    expect(screen.getByText("回答を確定しています…")).toBeInTheDocument();
     expect(screen.getByText("確定待ちの下書き")).toBeInTheDocument();
   });
 
@@ -82,9 +78,7 @@ describe("LiveAnswerDraft", () => {
       />,
     );
 
-    expect(screen.getByRole("status")).toHaveTextContent(
-      "回答を確定しています…",
-    );
+    expect(screen.getByText("回答を確定しています…")).toBeInTheDocument();
     expect(screen.queryByText("復活させない本文")).not.toBeInTheDocument();
   });
 
@@ -108,7 +102,7 @@ describe("LiveAnswerDraft", () => {
     expect(
       screen.queryByText("残してはいけない下書き"),
     ).not.toBeInTheDocument();
-    expect(screen.getByRole("status")).toHaveTextContent(message);
+    expect(screen.getByText(message)).toBeInTheDocument();
   });
 
   it("renders received text as escaped React text without filtering citations", () => {

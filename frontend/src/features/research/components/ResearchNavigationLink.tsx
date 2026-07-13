@@ -43,22 +43,28 @@ function sameTarget(
 
 export function ResearchNavigationLink(props: ResearchNavigationLinkProps) {
   const pathname = usePathname();
-  const { isNavigationPending, pendingTarget, navigate } =
-    useResearchNavigation();
-  const targetPending = sameTarget(pendingTarget, props.target);
+  const {
+    isNavigationPending,
+    pendingTarget,
+    navigate,
+    dismissHistoryAfterSelection,
+  } = useResearchNavigation();
+  const target = props.target;
+  const targetPending = sameTarget(pendingTarget, target);
   const active = props.variant === "thread" && props.active;
 
   function handleNavigate(event: { preventDefault: () => void }) {
-    if (
-      active ||
-      isNavigationPending ||
-      (props.target.kind === "new" && pathname === "/research")
-    ) {
+    if (isNavigationPending) {
       event.preventDefault();
       return;
     }
+    if (active || (props.target.kind === "new" && pathname === "/research")) {
+      event.preventDefault();
+      dismissHistoryAfterSelection(target);
+      return;
+    }
     event.preventDefault();
-    navigate(props.target);
+    if (navigate(target)) dismissHistoryAfterSelection(target);
   }
 
   const navigationAria = {
@@ -99,7 +105,7 @@ export function ResearchNavigationLink(props: ResearchNavigationLinkProps) {
   if (props.variant === "more") {
     return (
       <Link
-        href={props.target.href}
+        href={target.href}
         onNavigate={handleNavigate}
         className={cn(
           buttonVariants({ variant: "outline" }),
@@ -127,7 +133,7 @@ export function ResearchNavigationLink(props: ResearchNavigationLinkProps) {
 
   return (
     <Link
-      href={props.target.href}
+      href={target.href}
       onNavigate={handleNavigate}
       aria-current={props.active ? "page" : undefined}
       className={cn(

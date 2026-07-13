@@ -27,7 +27,11 @@ export function ResearchWorkspace({
         />
       }
     >
-      {thread ? <ResearchThreadView thread={thread} /> : <ResearchEmptyView />}
+      {thread ? (
+        <ResearchThreadView thread={thread} withSourcesPanel />
+      ) : (
+        <ResearchEmptyView />
+      )}
     </ResearchNavigationBoundary>
   );
 }

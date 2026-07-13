@@ -9,7 +9,11 @@ interface LiveAnswerDraftProps {
   errorCode: ResearchRunResponse["errorCode"];
 }
 
-function failureText(errorCode: ResearchRunResponse["errorCode"]): string {
+type LiveAnswerDraftContentProps = LiveAnswerDraftProps;
+
+export function failureText(
+  errorCode: ResearchRunResponse["errorCode"],
+): string {
   switch (errorCode) {
     case "cancelled":
       return "キャンセルしました";
@@ -20,6 +24,79 @@ function failureText(errorCode: ResearchRunResponse["errorCode"]): string {
     default:
       return "回答を生成できませんでした";
   }
+}
+
+function FailureContent({
+  errorCode,
+}: Pick<LiveAnswerDraftContentProps, "errorCode">) {
+  return (
+    <div className="flex min-w-0 items-center gap-1.5 text-xs font-medium text-[var(--vector-ink-muted)]">
+      <AlertTriangle aria-hidden="true" className="size-3.5 shrink-0" />
+      <span className="min-w-0 break-words [overflow-wrap:anywhere]">
+        {failureText(errorCode)}
+      </span>
+    </div>
+  );
+}
+
+function DraftContent({
+  status,
+  draftMode,
+  draftText,
+}: Pick<LiveAnswerDraftContentProps, "status" | "draftMode" | "draftText">) {
+  const isFinalizing = status === "completed";
+  const showsDraft = draftMode === "visible" && draftText.length > 0;
+
+  return (
+    <>
+      <div className="mb-2 flex min-w-0 items-center gap-1.5 text-[11px] font-semibold tracking-[0.04em] text-[var(--vector-accent-ink)]">
+        <Loader2
+          aria-hidden="true"
+          className="size-3.5 shrink-0 animate-spin motion-reduce:animate-none"
+        />
+        <span>{isFinalizing ? "回答を確定しています…" : "回答を生成中…"}</span>
+      </div>
+      {showsDraft ? (
+        <p className="whitespace-pre-wrap break-words text-sm leading-7 text-[var(--vector-ink)] [overflow-wrap:anywhere]">
+          {draftText}
+        </p>
+      ) : null}
+    </>
+  );
+}
+
+export function LiveAnswerSlotContent({
+  status,
+  draftMode,
+  draftText,
+  errorCode,
+}: LiveAnswerDraftContentProps) {
+  if (status === "failed") {
+    return <FailureContent errorCode={errorCode} />;
+  }
+  if (draftMode === "visible" && draftText.length > 0) {
+    return (
+      <DraftContent
+        status={status}
+        draftMode={draftMode}
+        draftText={draftText}
+      />
+    );
+  }
+  if (status === "completed") {
+    return (
+      <p className="text-sm leading-6 text-[var(--vector-ink-muted)]">
+        回答を確定しています…
+      </p>
+    );
+  }
+  return (
+    <p className="text-sm leading-6 text-[var(--vector-ink-muted)]">
+      {draftMode === "suppressed"
+        ? "回答の状態を確認しています…"
+        : "回答を準備しています…"}
+    </p>
+  );
 }
 
 export function LiveAnswerDraft({
@@ -43,24 +120,11 @@ export function LiveAnswerDraft({
           <Bot aria-hidden="true" className="size-4" />
         </div>
         <div className="min-w-0 flex-1 pt-1.5">
-          <div
-            className="flex min-w-0 items-center gap-1.5 text-xs font-medium text-[var(--vector-ink-muted)]"
-            role="status"
-            aria-live="polite"
-            aria-atomic="true"
-          >
-            <AlertTriangle aria-hidden="true" className="size-3.5 shrink-0" />
-            <span className="min-w-0 break-words [overflow-wrap:anywhere]">
-              {failureText(errorCode)}
-            </span>
-          </div>
+          <FailureContent errorCode={errorCode} />
         </div>
       </article>
     );
   }
-
-  const isFinalizing = status === "completed";
-  const showsDraft = draftMode === "visible" && draftText.length > 0;
 
   return (
     <article className="flex min-w-0 gap-3" aria-busy="true">
@@ -68,25 +132,11 @@ export function LiveAnswerDraft({
         <Bot aria-hidden="true" className="size-4" />
       </div>
       <div className="min-w-0 flex-1">
-        <div
-          className="mb-2 flex min-w-0 items-center gap-1.5 text-[11px] font-semibold tracking-[0.04em] text-[var(--vector-accent-ink)]"
-          role="status"
-          aria-live="polite"
-          aria-atomic="true"
-        >
-          <Loader2
-            aria-hidden="true"
-            className="size-3.5 shrink-0 animate-spin motion-reduce:animate-none"
-          />
-          <span>
-            {isFinalizing ? "回答を確定しています…" : "回答を生成中…"}
-          </span>
-        </div>
-        {showsDraft ? (
-          <p className="whitespace-pre-wrap break-words text-sm leading-7 text-[var(--vector-ink)] [overflow-wrap:anywhere]">
-            {draftText}
-          </p>
-        ) : null}
+        <DraftContent
+          status={status}
+          draftMode={draftMode}
+          draftText={draftText}
+        />
       </div>
     </article>
   );

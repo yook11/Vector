@@ -71,6 +71,15 @@ beforeEach(() => {
 });
 
 describe("ResearchNavigationBoundary", () => {
+  it("親から与えられた高さと幅をworkspaceの内部scroll境界へ渡す", () => {
+    renderBoundary();
+
+    const workspace = screen.getByRole("main");
+    expect(workspace).toHaveClass("h-full", "min-h-0", "w-full");
+    expect(workspace.className).not.toContain("calc(100dvh");
+    expect(workspace).not.toHaveClass("mx-auto", "max-w-[1280px]");
+  });
+
   it("idleではworkspaceと常設statusをbusyにしない", () => {
     renderBoundary();
 
