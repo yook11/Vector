@@ -108,17 +108,24 @@ async def run_agent_answer(
         )
         as_of = datetime.now(UTC)
         history = await _read_history(session_factory, prepared)
-        generator = build_question_context_generator() if history else None
-        question_context = await QuestionContextService(generator=generator).prepare(
+        try:
+            generator = build_question_context_generator()
+        except (AIProviderConfigurationError, AIProviderError):
+            generator = None
+        preparation = await QuestionContextService(generator=generator).prepare(
             question=prepared.question,
             history=history,
             as_of=as_of,
             run_id=prepared.run_id,
         )
-        if question_context.standalone_question.strip() != prepared.question.strip():
+        if (
+            history
+            and preparation.context.standalone_question.strip()
+            != prepared.question.strip()
+        ):
             await activity_reporter.event_occurred(
                 QuestionResolvedEvent(
-                    standalone_question=question_context.standalone_question,
+                    standalone_question=preparation.context.standalone_question,
                 )
             )
         async with make_safe_async_client() as tavily_client:
@@ -132,11 +139,8 @@ async def run_agent_answer(
             )
             result = await agent.answer(
                 AnswerQuestionInput(
-                    question=question_context.standalone_question,
+                    context=preparation.context,
                     as_of=as_of,
-                    user_intent=question_context.user_intent,
-                    prior_coverage=question_context.prior_coverage,
-                    user_activity_context=question_context.user_activity_context,
                     previous_answer=_latest_assistant_answer(history),
                 )
             )

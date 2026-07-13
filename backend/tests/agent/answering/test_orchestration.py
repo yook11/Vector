@@ -6,6 +6,7 @@ from datetime import UTC, datetime
 
 import pytest
 
+from app.agent.answering.contract import AnsweringRequest
 from app.agent.answering.direct_answer.contract import DirectAnswerDraft
 from app.agent.answering.evidence_answer.contract import (
     EvidenceAnswerDraft,
@@ -29,9 +30,11 @@ from app.agent.planning.contract import (
     InternalAndExternalPlan,
     InternalRetrievalPlan,
     NoRetrievalPlan,
+    PlanningRequest,
     QuestionPlan,
     RetrievalPlan,
 )
+from app.agent.question_context.contract import AnswerRequirement, QuestionContext
 from app.analysis.analyzed_article import InScopeAnalyzedArticle
 from app.analysis.assessment.domain.result import InScope, InScopeCategory
 
@@ -43,17 +46,29 @@ def _as_of() -> datetime:
 def _input(
     question: str = "NVIDIA の直近発表は投資判断に重要？",
     *,
-    user_intent: str = "",
-    prior_coverage: str = "",
-    user_activity_context: str = "",
+    content_requirements: list[str] | None = None,
+    response_requirements: list[str] | None = None,
+    relevant_prior_coverage: str = "",
+    active_goal: str = "",
     previous_answer: str = "",
 ) -> AnswerQuestionInput:
     return AnswerQuestionInput(
-        question=question,
+        context=QuestionContext(
+            standalone_question=question,
+            content_requirements=[
+                AnswerRequirement(requirement_id=f"c{index}", description=description)
+                for index, description in enumerate(content_requirements or [], start=1)
+            ],
+            response_requirements=[
+                AnswerRequirement(requirement_id=f"p{index}", description=description)
+                for index, description in enumerate(
+                    response_requirements or [], start=1
+                )
+            ],
+            relevant_prior_coverage=relevant_prior_coverage,
+            active_goal=active_goal,
+        ),
         as_of=_as_of(),
-        user_intent=user_intent,
-        prior_coverage=prior_coverage,
-        user_activity_context=user_activity_context,
         previous_answer=previous_answer,
     )
 
@@ -206,10 +221,10 @@ def _mixed_outcome() -> EvidenceCollectionOutcome:
 class FakePlanner:
     def __init__(self, plan: QuestionPlan | Exception) -> None:
         self._plan = plan
-        self.calls: list[AnswerQuestionInput] = []
+        self.calls: list[PlanningRequest] = []
 
-    async def plan(self, input: AnswerQuestionInput) -> QuestionPlan:
-        self.calls.append(input)
+    async def plan(self, request: PlanningRequest) -> QuestionPlan:
+        self.calls.append(request)
         if isinstance(self._plan, Exception):
             raise self._plan
         return self._plan
@@ -240,23 +255,15 @@ class FakeEvidenceAnswerer:
     async def answer(
         self,
         *,
-        question: str,
+        request: AnsweringRequest,
         evidence: list[object],
-        as_of: datetime,
         target_time_window: str | None,
-        user_intent: str = "",
-        prior_coverage: str = "",
-        user_activity_context: str = "",
     ) -> EvidenceAnswerDraft:
         self.calls.append(
             {
-                "question": question,
+                "request": request,
                 "evidence": evidence,
-                "as_of": as_of,
                 "target_time_window": target_time_window,
-                "user_intent": user_intent,
-                "prior_coverage": prior_coverage,
-                "user_activity_context": user_activity_context,
             }
         )
         if isinstance(self._draft, Exception):
@@ -272,18 +279,12 @@ class FakeDirectAnswerer:
     async def answer(
         self,
         *,
-        question: str,
-        as_of: datetime,
-        user_intent: str = "",
-        user_activity_context: str = "",
+        request: AnsweringRequest,
         previous_answer: str = "",
     ) -> DirectAnswerDraft:
         self.calls.append(
             {
-                "question": question,
-                "as_of": as_of,
-                "user_intent": user_intent,
-                "user_activity_context": user_activity_context,
+                "request": request,
                 "previous_answer": previous_answer,
             }
         )
@@ -341,9 +342,10 @@ def _orchestrator(
 async def test_answer_direct_plan_calls_direct_answerer_only() -> None:
     input_ = _input(
         "前回の結論だけ",
-        user_intent="結論だけを短く",
-        prior_coverage="これは direct に渡さない",
-        user_activity_context="投資判断を調査中",
+        content_requirements=["結論を説明する"],
+        response_requirements=["結論だけを短く"],
+        relevant_prior_coverage="前回は根拠を説明済み",
+        active_goal="投資判断を調査中",
         previous_answer="根拠付き前回答 [[1]]",
     )
     direct_draft = DirectAnswerDraft(answer="こんにちは。何を確認しますか？")
@@ -365,13 +367,11 @@ async def test_answer_direct_plan_calls_direct_answerer_only() -> None:
     assert not hasattr(result, "execution")
     assert direct_answerer.calls == [
         {
-            "question": input_.question,
-            "as_of": input_.as_of,
-            "user_intent": input_.user_intent,
-            "user_activity_context": input_.user_activity_context,
+            "request": AnsweringRequest(context=input_.context, as_of=input_.as_of),
             "previous_answer": input_.previous_answer,
         }
     ]
+    assert direct_answerer.calls[0]["request"].context is input_.context
     assert evidence_collector.calls == []
     assert evidence_answerer.calls == []
 
@@ -670,9 +670,10 @@ async def test_answer_deduplicates_repeated_citation_refs_in_source_order() -> N
 @pytest.mark.asyncio
 async def test_answer_passes_pipeline_inputs_and_variant_time_window() -> None:
     input_ = _input(
-        user_intent="差分を詳しく",
-        prior_coverage="発表内容は既出",
-        user_activity_context="投資判断を調査中",
+        content_requirements=["発表後の差分を説明する"],
+        response_requirements=["詳しく説明する"],
+        relevant_prior_coverage="発表内容は既出",
+        active_goal="投資判断を調査中",
     )
     orchestrator, planner, evidence_collector, evidence_answerer, _ = _orchestrator(
         plan=_mixed_plan(),
@@ -686,17 +687,22 @@ async def test_answer_passes_pipeline_inputs_and_variant_time_window() -> None:
 
     await orchestrator.answer(input_)
 
-    assert planner.calls == [input_]
+    assert planner.calls == [
+        PlanningRequest(context=input_.context, as_of=input_.as_of)
+    ]
+    assert planner.calls[0].context is input_.context
     assert evidence_collector.calls == [(_mixed_plan(), _as_of())]
-    assert evidence_answerer.calls[0]["question"] == input_.question
-    assert evidence_answerer.calls[0]["as_of"] == input_.as_of
-    assert evidence_answerer.calls[0]["target_time_window"] == "直近24時間"
-    assert evidence_answerer.calls[0]["user_intent"] == input_.user_intent
-    assert evidence_answerer.calls[0]["prior_coverage"] == input_.prior_coverage
-    assert (
-        evidence_answerer.calls[0]["user_activity_context"]
-        == input_.user_activity_context
+    assert evidence_answerer.calls[0]["request"] == AnsweringRequest(
+        context=input_.context,
+        as_of=input_.as_of,
     )
+    assert evidence_answerer.calls[0]["request"].context is input_.context
+    assert evidence_answerer.calls[0]["target_time_window"] == "直近24時間"
+    assert set(evidence_answerer.calls[0]) == {
+        "request",
+        "evidence",
+        "target_time_window",
+    }
 
 
 @pytest.mark.asyncio

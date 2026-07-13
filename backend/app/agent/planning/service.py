@@ -6,7 +6,6 @@ from typing import assert_never
 
 from pydantic import ValidationError
 
-from app.agent.contract import AnswerQuestionInput
 from app.agent.planning.audit import (
     PlannerAttemptFailureEvent,
     PlannerAuditRecorder,
@@ -21,6 +20,7 @@ from app.agent.planning.contract import (
     InternalAndExternalPlan,
     InternalRetrievalPlan,
     NoRetrievalPlan,
+    PlanningRequest,
     QuestionPlan,
     QuestionPlanDraft,
     QuestionPlanDraftGenerator,
@@ -51,7 +51,7 @@ class QuestionPlanningService:
         self._planner = planner
         self._audit_recorder = audit_recorder
 
-    async def plan(self, input: AnswerQuestionInput) -> QuestionPlan:
+    async def plan(self, request: PlanningRequest) -> QuestionPlan:
         """Return a completed plan, retrying only response-shape failures."""
 
         ai_model = _planner_attr(self._planner, "model_name")
@@ -61,7 +61,7 @@ class QuestionPlanningService:
         for attempt_number in range(1, _MAX_ATTEMPTS + 1):
             try:
                 draft = await self._planner.plan(
-                    input,
+                    request,
                     previous_error=previous_error,
                 )
             except _PLANNER_AUDITED_ERRORS as exc:
@@ -82,7 +82,7 @@ class QuestionPlanningService:
                     previous_error = str(exc)
                     continue
                 return await _fallback_with_audit(
-                    input=input,
+                    request=request,
                     audit_recorder=self._audit_recorder,
                     attempt_count=attempt_number,
                     retry_used=attempt_number > 1,
@@ -98,7 +98,10 @@ class QuestionPlanningService:
                 ai_model=ai_model,
                 prompt_version=prompt_version,
             )
-            plan = plan_from_draft(draft, fallback_query=input.question)
+            plan = plan_from_draft(
+                draft,
+                fallback_query=request.context.standalone_question,
+            )
             await _record_plan_created(
                 audit_recorder=self._audit_recorder,
                 plan=plan,
@@ -206,7 +209,7 @@ async def _record_final_event(
 
 async def _fallback_with_audit(
     *,
-    input: AnswerQuestionInput,
+    request: PlanningRequest,
     audit_recorder: PlannerAuditRecorder | None,
     attempt_count: int,
     retry_used: bool,
@@ -214,7 +217,7 @@ async def _fallback_with_audit(
     ai_model: str | None,
     prompt_version: str | None,
 ) -> QuestionPlan:
-    fallback = safe_fallback_plan(fallback_query=input.question)
+    fallback = safe_fallback_plan(fallback_query=request.context.standalone_question)
     if audit_recorder is not None:
         internal_query_count, external_query_count = _plan_query_counts(fallback)
         event = PlannerFinalEvent.fallback(

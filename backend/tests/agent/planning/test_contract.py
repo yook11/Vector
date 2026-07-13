@@ -2,6 +2,11 @@
 
 from __future__ import annotations
 
+import importlib
+import inspect
+from datetime import UTC, datetime
+from typing import get_type_hints
+
 import pytest
 from pydantic import ValidationError
 
@@ -14,15 +19,83 @@ from app.agent.planning.contract import (
     InternalRetrievalPlan,
     NoRetrievalPlan,
     QuestionPlanDraft,
+    QuestionPlanDraftGenerator,
+    QuestionPlanner,
     plan_from_draft,
     safe_fallback_plan,
 )
+from app.agent.planning.service import QuestionPlanningService
+from app.agent.question_context.contract import QuestionContext
 
 
 def _external_task(
     collection_goal: str = "NVIDIA の最新発表を確認する",
 ) -> ExternalResearchTask:
     return ExternalResearchTask(collection_goal=collection_goal)
+
+
+def _request_type(module_name: str, type_name: str) -> type[object]:
+    try:
+        module = importlib.import_module(module_name)
+    except ModuleNotFoundError as exc:
+        pytest.fail(f"{module_name} must define {type_name}: {exc}")
+    request_type = getattr(module, type_name, None)
+    if request_type is None:
+        pytest.fail(f"{module_name} must define {type_name}")
+    return request_type
+
+
+def _first_input_annotation(method: object) -> object | None:
+    parameter_names = tuple(inspect.signature(method).parameters)
+    return get_type_hints(method).get(parameter_names[1])
+
+
+def test_planning_request_is_a_frozen_context_consumer_wrapper() -> None:
+    request_type = _request_type("app.agent.planning.contract", "PlanningRequest")
+    context = QuestionContext(standalone_question="NVIDIA の直近発表は？")
+    as_of = datetime(2026, 7, 10, tzinfo=UTC)
+    request = request_type(context=context, as_of=as_of)
+
+    with pytest.raises(ValidationError):
+        request.as_of = datetime(2026, 7, 11, tzinfo=UTC)
+    with pytest.raises(ValidationError):
+        request_type(context=context, as_of=as_of, telemetry=object())
+
+    assert (
+        set(request_type.model_fields),
+        request_type.model_fields["context"].annotation,
+        request_type.model_fields["as_of"].annotation,
+        request.context is context,
+        request.context,
+        request.as_of,
+        "as_of" not in QuestionContext.model_fields,
+    ) == (
+        {"context", "as_of"},
+        QuestionContext,
+        datetime,
+        True,
+        context,
+        as_of,
+        True,
+    )
+
+
+def test_planning_boundaries_accept_planning_request() -> None:
+    assert (
+        tuple(inspect.signature(QuestionPlanDraftGenerator.plan).parameters),
+        tuple(inspect.signature(QuestionPlanner.plan).parameters),
+        tuple(inspect.signature(QuestionPlanningService.plan).parameters),
+        _first_input_annotation(QuestionPlanDraftGenerator.plan),
+        _first_input_annotation(QuestionPlanner.plan),
+        _first_input_annotation(QuestionPlanningService.plan),
+    ) == (
+        ("self", "request", "previous_error"),
+        ("self", "request"),
+        ("self", "request"),
+        _request_type("app.agent.planning.contract", "PlanningRequest"),
+        _request_type("app.agent.planning.contract", "PlanningRequest"),
+        _request_type("app.agent.planning.contract", "PlanningRequest"),
+    )
 
 
 class TestExternalResearchTask:

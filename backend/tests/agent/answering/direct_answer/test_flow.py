@@ -16,11 +16,13 @@ from app.agent.answering.audit import (
     DirectAnswerOutcomeCode,
     RequestRetryDisposition,
 )
+from app.agent.answering.contract import AnsweringRequest
 from app.agent.answering.direct_answer.contract import (
     DirectAnswerDraft,
     DirectAnswerInvalidError,
 )
 from app.agent.answering.direct_answer.flow import DirectAnswerFlow
+from app.agent.question_context.contract import AnswerRequirement, QuestionContext
 from app.analysis.ai_provider_errors import AIProviderError, AIProviderNetworkError
 from tests.logfire._metric_helpers import collected_metrics, sum_counter_for_result
 
@@ -29,6 +31,29 @@ _DIRECT_ANSWER_OUTCOME_METRIC = "vector.agent.direct_answer.outcome"
 
 def _as_of() -> datetime:
     return datetime(2026, 7, 7, 9, 0, tzinfo=UTC)
+
+
+def _request() -> AnsweringRequest:
+    return AnsweringRequest(
+        context=QuestionContext(
+            standalone_question="Vector の使い方を短く教えて",
+            content_requirements=[
+                AnswerRequirement(
+                    requirement_id="c1",
+                    description="Vector の使い方を説明する",
+                )
+            ],
+            response_requirements=[
+                AnswerRequirement(
+                    requirement_id="p1",
+                    description="短く回答する",
+                )
+            ],
+            relevant_prior_coverage="前回は基本操作を説明済み",
+            active_goal="Vector を使い始める",
+        ),
+        as_of=_as_of(),
+    )
 
 
 StreamOutcome = str | Sequence[str] | Exception
@@ -71,19 +96,13 @@ class FakeDirectAnswerGenerator:
     def stream(
         self,
         *,
-        question: str,
-        as_of: datetime,
-        user_intent: str = "",
-        user_activity_context: str = "",
+        request: AnsweringRequest,
         previous_answer: str = "",
         previous_error: str | None = None,
     ) -> AsyncIterator[str]:
         self.calls.append(
             {
-                "question": question,
-                "as_of": as_of,
-                "user_intent": user_intent,
-                "user_activity_context": user_activity_context,
+                "request": request,
                 "previous_answer": previous_answer,
                 "previous_error": previous_error,
             }
@@ -191,8 +210,8 @@ async def _answer(
         delta_reporter=delta_reporter,
         continuation=continuation,
     ).answer(
-        question="Vector の使い方を短く教えて",
-        as_of=_as_of(),
+        request=_request(),
+        previous_answer="",
     )
 
 
@@ -234,16 +253,43 @@ async def test_direct_answer_removes_inline_citation_markers_after_generation() 
     )
 
     draft = await DirectAnswerFlow(generator=generator).answer(
-        question="前回の結論だけ",
-        as_of=_as_of(),
-        user_intent="結論だけを短く",
-        user_activity_context="投資判断を調査中",
+        request=AnsweringRequest(
+            context=QuestionContext(
+                standalone_question="前回の結論だけ",
+                content_requirements=[
+                    AnswerRequirement(
+                        requirement_id="c1",
+                        description="前回の結論を説明する",
+                    )
+                ],
+                response_requirements=[
+                    AnswerRequirement(
+                        requirement_id="p1",
+                        description="結論だけを短く回答する",
+                    )
+                ],
+                relevant_prior_coverage="根拠は説明済み",
+                active_goal="投資判断を進める",
+            ),
+            as_of=_as_of(),
+        ),
         previous_answer="根拠付き前回答 [[1]]",
     )
 
     assert draft.answer == "結論は維持します。 詳細は省略します。"
-    assert generator.calls[0]["user_intent"] == "結論だけを短く"
-    assert generator.calls[0]["user_activity_context"] == "投資判断を調査中"
+    assert (
+        generator.calls[0]["request"].context.content_requirements[0].description
+        == "前回の結論を説明する"
+    )
+    assert (
+        generator.calls[0]["request"].context.response_requirements[0].description
+        == "結論だけを短く回答する"
+    )
+    assert (
+        generator.calls[0]["request"].context.relevant_prior_coverage
+        == "根拠は説明済み"
+    )
+    assert generator.calls[0]["request"].context.active_goal == "投資判断を進める"
     assert generator.calls[0]["previous_answer"] == "根拠付き前回答 [[1]]"
 
 

@@ -3,12 +3,12 @@
 from __future__ import annotations
 
 from collections.abc import AsyncIterator
-from datetime import datetime
 from typing import Final
 
 from google import genai
 from google.genai.types import GenerateContentConfig
 
+from app.agent.answering.contract import AnsweringRequest
 from app.agent.answering.direct_answer.ai.prompt import GeminiDirectAnswerPrompt
 from app.agent.answering.direct_answer.ai.spec import (
     GEMINI_DIRECT_ANSWER_SPEC,
@@ -59,18 +59,12 @@ class GeminiDirectAnswerGenerator:
     async def stream(
         self,
         *,
-        question: str,
-        as_of: datetime,
-        user_intent: str = "",
-        user_activity_context: str = "",
+        request: AnsweringRequest,
         previous_answer: str = "",
         previous_error: str | None = None,
     ) -> AsyncIterator[str]:
         prompt = GeminiDirectAnswerPrompt.render(
-            question=question,
-            as_of=as_of,
-            user_intent=user_intent,
-            user_activity_context=user_activity_context,
+            request=request,
             previous_answer=previous_answer,
             previous_error=previous_error,
         )

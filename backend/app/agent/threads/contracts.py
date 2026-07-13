@@ -8,7 +8,8 @@ from typing import Literal
 
 @dataclass(frozen=True, slots=True)
 class ThreadMessageSnapshot:
-    """Resolution に渡す、thread 内メッセージの最小投影。"""
+    """Question context preparation に渡すthread内メッセージの最小投影。"""
 
     role: Literal["user", "assistant"]
     content: str
+    missing_aspects: tuple[str, ...] = ()

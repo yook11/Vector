@@ -37,7 +37,7 @@ from app.agent.live_updates.stream import (
     AgentRunLiveStreamStageEvent,
     AgentRunLiveStreamTerminalEvent,
 )
-from app.agent.question_context.contract import QuestionContextDraft
+from app.agent.question_context.contract import QuestionContext, QuestionContextDraft
 from app.agent.runs.contracts import (
     CancelRunOutcome,
     CancelRunResult,
@@ -411,7 +411,7 @@ async def _create_thread_message_run(
     *,
     status: str = "queued",
     question: str = "worker question",
-    history: list[tuple[str, str]] | None = None,
+    history: list[tuple[str, str] | tuple[str, str, list[object]]] | None = None,
     created_at: datetime | None = None,
     started_at: datetime | None = None,
     attempt_epoch: int | None = None,
@@ -426,14 +426,15 @@ async def _create_thread_message_run(
     session.add(thread)
     await session.flush()
     history = history or []
-    for seq, (role, content) in enumerate(history, start=1):
+    for seq, entry in enumerate(history, start=1):
+        role, content, *missing_aspects = entry
         session.add(
             AgentMessage(
                 thread_id=thread.id,
                 seq=seq,
                 role=role,
                 content=content,
-                missing_aspects=[],
+                missing_aspects=missing_aspects[0] if missing_aspects else [],
             )
         )
     await session.flush()
@@ -629,7 +630,7 @@ async def test_run_agent_answer_completes_run_and_persists_assistant_message(
         refreshed_thread = await session.get(AgentThread, thread.id)
         assert refreshed_thread is not None
         assert refreshed_thread.updated_at > datetime(2026, 1, 1, tzinfo=UTC)
-    assert fake_agent.calls[0].question == "worker question"
+    assert fake_agent.calls[0].context.standalone_question == "worker question"
 
 
 @pytest.mark.asyncio
@@ -918,7 +919,7 @@ async def test_idempotent_skip_does_not_create_or_start_stream_publisher(
 
 
 @pytest.mark.asyncio
-async def test_run_agent_answer_prepares_context_and_publishes_non_echo_question(
+async def test_run_agent_answer_prepares_question_context_and_publishes_resolved_event(
     session_factory: async_sessionmaker[AsyncSession],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -928,18 +929,21 @@ async def test_run_agent_answer_prepares_context_and_publishes_non_echo_question
             question="それの株価への影響は？",
             history=[
                 ("user", "NVIDIA の発表を説明して"),
-                ("assistant", "前回の回答 [[1]]"),
+                ("assistant", "古い回答 [[0]]"),
+                ("assistant", "前回の回答 [[1]]", ["保存済みの不足"]),
             ],
         )
     fake_agent = FakeAgent(_direct_result())
     generator = FakeQuestionContextGenerator(
         QuestionContextDraft(
             standalone_question="NVIDIA の発表が株価へ与える影響は？",
-            user_intent="投資判断向けに詳しく説明して",
-            prior_coverage="発表内容は既に説明済み",
-            user_activity_context="半導体投資を調査中",
+            content_requirements=["株価への影響を説明する"],
+            response_requirements=["投資判断向けに詳しく説明する"],
+            relevant_prior_coverage="発表内容は既に説明済み",
+            active_goal="半導体投資を調査中",
         )
     )
+    builder_calls: list[None] = []
     FakeLiveEventPublisher.instances = []
     FakeLiveStreamPublisher.instances = []
     monkeypatch.setattr(agent_run_tasks, "make_safe_async_client", _fake_http_client)
@@ -951,7 +955,7 @@ async def test_run_agent_answer_prepares_context_and_publishes_non_echo_question
     monkeypatch.setattr(
         agent_run_tasks,
         "build_question_context_generator",
-        lambda: generator,
+        lambda: builder_calls.append(None) or generator,
     )
     monkeypatch.setattr(
         agent_run_tasks,
@@ -969,20 +973,37 @@ async def test_run_agent_answer_prepares_context_and_publishes_non_echo_question
         ctx=_ctx(session_factory),
     )
 
+    assert builder_calls == [None]
+    assert len(fake_agent.calls) == 1
     assert fake_agent.calls == [
         AnswerQuestionInput(
-            question="NVIDIA の発表が株価へ与える影響は？",
+            context=QuestionContext(
+                standalone_question="NVIDIA の発表が株価へ与える影響は？",
+                content_requirements=[
+                    {
+                        "requirement_id": "c1",
+                        "description": "株価への影響を説明する",
+                    }
+                ],
+                response_requirements=[
+                    {
+                        "requirement_id": "p1",
+                        "description": "投資判断向けに詳しく説明する",
+                    }
+                ],
+                relevant_prior_coverage="発表内容は既に説明済み",
+                active_goal="半導体投資を調査中",
+            ),
             as_of=fake_agent.calls[0].as_of,
-            user_intent="投資判断向けに詳しく説明して",
-            prior_coverage="発表内容は既に説明済み",
-            user_activity_context="半導体投資を調査中",
             previous_answer="前回の回答 [[1]]",
         )
     ]
     assert [message.content for message in generator.calls[0]["history"]] == [
         "NVIDIA の発表を説明して",
+        "古い回答 [[0]]",
         "前回の回答 [[1]]",
     ]
+    assert generator.calls[0]["history"][2].missing_aspects == ("保存済みの不足",)
     publisher = FakeLiveEventPublisher.instances[0]
     assert len(publisher.events) == 1
     assert getattr(publisher.events[0], "type") == "question.resolved"
@@ -1837,7 +1858,7 @@ async def test_terminal_publish_failure_does_not_revert_completed_run(
         AIProviderError(),
     ],
 )
-async def test_run_agent_answer_does_not_publish_echo_or_fallback_context(
+async def test_run_agent_answer_does_not_publish_echo_or_fallback_question_context(
     outcome: QuestionContextDraft | Exception,
     session_factory: async_sessionmaker[AsyncSession],
     monkeypatch: pytest.MonkeyPatch,
@@ -1873,8 +1894,136 @@ async def test_run_agent_answer_does_not_publish_echo_or_fallback_context(
         ctx=_ctx(session_factory),
     )
 
-    assert fake_agent.calls[0].question == question
+    assert len(fake_agent.calls) == 1
+    assert fake_agent.calls[0].context.standalone_question == question
     assert fake_agent.calls[0].previous_answer == "前回の回答"
+    assert FakeLiveEventPublisher.instances[0].events == []
+
+
+@pytest.mark.asyncio
+async def test_initial_question_context_ignores_rewrite_without_resolved_event(
+    session_factory: async_sessionmaker[AsyncSession],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    question = "NVIDIA の直近発表は？"
+    async with session_factory() as session:
+        _thread, _message, run = await _create_thread_message_run(
+            session,
+            question=question,
+        )
+    fake_agent = FakeAgent(_direct_result())
+    generator = FakeQuestionContextGenerator(
+        QuestionContextDraft(
+            standalone_question="書き換えた質問",
+            content_requirements=["NVIDIA の発表内容"],
+            response_requirements=["表形式で回答する"],
+            relevant_prior_coverage="初回では採用しない",
+            active_goal="投資判断を進める",
+            explicit_feedback_detected=True,
+        )
+    )
+    builder_calls: list[None] = []
+    FakeLiveEventPublisher.instances = []
+    monkeypatch.setattr(agent_run_tasks, "make_safe_async_client", _fake_http_client)
+    monkeypatch.setattr(
+        agent_run_tasks,
+        "build_question_answering_agent",
+        lambda **_kwargs: fake_agent,
+    )
+    monkeypatch.setattr(
+        agent_run_tasks,
+        "build_question_context_generator",
+        lambda: builder_calls.append(None) or generator,
+    )
+    monkeypatch.setattr(
+        agent_run_tasks,
+        "AgentRunLiveEventPublisher",
+        FakeLiveEventPublisher,
+    )
+
+    await agent_run_tasks.run_agent_answer(
+        trigger=AgentRunTrigger(run_id=run.id),
+        ctx=_ctx(session_factory),
+    )
+
+    assert builder_calls == [None]
+    assert len(generator.calls) == 1
+    assert generator.calls[0]["question"] == question
+    assert generator.calls[0]["history"] == []
+    assert isinstance(generator.calls[0]["as_of"], datetime)
+    assert len(fake_agent.calls) == 1
+    assert fake_agent.calls[0] == AnswerQuestionInput(
+        context=QuestionContext(
+            standalone_question=question,
+            content_requirements=[
+                {"requirement_id": "c1", "description": "NVIDIA の発表内容"}
+            ],
+            response_requirements=[
+                {"requirement_id": "p1", "description": "表形式で回答する"}
+            ],
+            relevant_prior_coverage="",
+            active_goal="投資判断を進める",
+        ),
+        as_of=fake_agent.calls[0].as_of,
+        previous_answer="",
+    )
+    assert FakeLiveEventPublisher.instances[0].events == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("exc", [AIProviderConfigurationError(), AIProviderError()])
+async def test_run_agent_answer_question_context_builder_failure_uses_safe_fallback(
+    exc: Exception,
+    session_factory: async_sessionmaker[AsyncSession],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    question = "NVIDIA の直近発表は？"
+    async with session_factory() as session:
+        _thread, _message, run = await _create_thread_message_run(
+            session,
+            question=question,
+            history=[("assistant", "前回の回答")],
+        )
+    fake_agent = FakeAgent(_direct_result())
+    FakeLiveEventPublisher.instances = []
+    monkeypatch.setattr(agent_run_tasks, "make_safe_async_client", _fake_http_client)
+    monkeypatch.setattr(
+        agent_run_tasks,
+        "build_question_answering_agent",
+        lambda **_kwargs: fake_agent,
+    )
+    monkeypatch.setattr(
+        agent_run_tasks,
+        "build_question_context_generator",
+        lambda: (_ for _ in ()).throw(exc),
+    )
+    monkeypatch.setattr(
+        agent_run_tasks,
+        "AgentRunLiveEventPublisher",
+        FakeLiveEventPublisher,
+    )
+
+    await agent_run_tasks.run_agent_answer(
+        trigger=AgentRunTrigger(run_id=run.id),
+        ctx=_ctx(session_factory),
+    )
+
+    assert len(fake_agent.calls) == 1
+    assert fake_agent.calls == [
+        AnswerQuestionInput(
+            context=QuestionContext(
+                standalone_question=question,
+                content_requirements=[
+                    {"requirement_id": "c1", "description": question}
+                ],
+                response_requirements=[],
+                relevant_prior_coverage="",
+                active_goal="",
+            ),
+            as_of=fake_agent.calls[0].as_of,
+            previous_answer="前回の回答",
+        )
+    ]
     assert FakeLiveEventPublisher.instances[0].events == []
 
 

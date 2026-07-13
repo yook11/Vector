@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import re
 from collections.abc import AsyncIterator
-from datetime import datetime
 
 from app.agent.answering.audit import (
     DirectAnswerAttemptFailureEvent,
@@ -14,6 +13,7 @@ from app.agent.answering.audit import (
     RequestRetryDisposition,
     classify_direct_answer_failure,
 )
+from app.agent.answering.contract import AnsweringRequest
 from app.agent.answering.direct_answer.contract import (
     DirectAnswerDraft,
     DirectAnswerGenerator,
@@ -61,10 +61,7 @@ class DirectAnswerFlow:
     async def answer(
         self,
         *,
-        question: str,
-        as_of: datetime,
-        user_intent: str = "",
-        user_activity_context: str = "",
+        request: AnsweringRequest,
         previous_answer: str = "",
     ) -> DirectAnswerDraft:
         """Return a valid direct draft, retrying only blank response defects."""
@@ -76,10 +73,7 @@ class DirectAnswerFlow:
         for attempt_number in range(1, _MAX_ATTEMPTS + 1):
             try:
                 draft = await self._generate_draft(
-                    question=question,
-                    as_of=as_of,
-                    user_intent=user_intent,
-                    user_activity_context=user_activity_context,
+                    request=request,
                     previous_answer=previous_answer,
                     previous_error=previous_error,
                     generation=attempt_number,
@@ -123,10 +117,7 @@ class DirectAnswerFlow:
     async def _generate_draft(
         self,
         *,
-        question: str,
-        as_of: datetime,
-        user_intent: str,
-        user_activity_context: str,
+        request: AnsweringRequest,
         previous_answer: str,
         previous_error: str | None,
         generation: int,
@@ -141,10 +132,7 @@ class DirectAnswerFlow:
                 await ensure_answer_generation_continues(self._continuation)
 
                 stream = self._generator.stream(
-                    question=question,
-                    as_of=as_of,
-                    user_intent=user_intent,
-                    user_activity_context=user_activity_context,
+                    request=request,
                     previous_answer=previous_answer,
                     previous_error=previous_error,
                 )

@@ -3,12 +3,12 @@
 from __future__ import annotations
 
 from collections.abc import AsyncIterator
-from datetime import datetime
 from typing import Final
 
 from google import genai
 from google.genai.types import GenerateContentConfig
 
+from app.agent.answering.contract import AnsweringRequest
 from app.agent.answering.evidence_answer.ai.prompt import GeminiEvidenceAnswerPrompt
 from app.agent.answering.evidence_answer.ai.spec import (
     GEMINI_EVIDENCE_ANSWER_SPEC,
@@ -60,23 +60,15 @@ class GeminiEvidenceAnswerDraftGenerator:
     async def stream(
         self,
         *,
-        question: str,
+        request: AnsweringRequest,
         evidence: list[AnswerEvidenceItem],
-        as_of: datetime,
         target_time_window: str | None,
-        user_intent: str = "",
-        prior_coverage: str = "",
-        user_activity_context: str = "",
         previous_error: str | None = None,
     ) -> AsyncIterator[str]:
         prompt = GeminiEvidenceAnswerPrompt.render(
-            question=question,
+            request=request,
             evidence=evidence,
-            as_of=as_of,
             target_time_window=target_time_window,
-            user_intent=user_intent,
-            prior_coverage=prior_coverage,
-            user_activity_context=user_activity_context,
             previous_error=previous_error,
         )
         sdk_stream: AsyncIterator[object] | None = None

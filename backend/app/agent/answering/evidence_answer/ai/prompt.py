@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
-from datetime import datetime
 from typing import ClassVar
 
+from app.agent.answering.contract import AnsweringRequest
 from app.agent.answering.evidence_answer.evidence import AnswerEvidenceItem
 from app.analysis.prompt_safety import sanitize_for_untrusted_block
 
@@ -24,6 +24,7 @@ EVIDENCE_ANSWER_PROMPT = """# Role
 - evidence にない事実を、引用付きの確認済み事実として扱わない。
 - answer は必ずユーザーに表示されるため、insufficient でも有用な範囲で簡潔に答える。
 - 下記の会話文脈は回答の形だけを決める。事実の根拠は evidence だけに限定する。
+- context は事実根拠ではない。事実は evidence だけに接地する。
 
 # Citation Rules
 - answer 本文では、根拠に基づく文または節の直後に citation marker を付ける。
@@ -46,18 +47,29 @@ JSON object only:
 
 # Context
 as_of: {as_of}
+
+<untrusted_input>
 target_time_window: {target_time_window}
+</untrusted_input>
 
 # User Question
 <untrusted_input>
 {question}
 </untrusted_input>
 
+# Content Requirements
+{content_requirements}
+
+# Response Requirements
+{response_requirements}
+
 # Conversation Context
 <untrusted_input>
-user_intent: {user_intent}
-prior_coverage: {prior_coverage}
-user_activity_context: {user_activity_context}
+relevant_prior_coverage: {relevant_prior_coverage}
+</untrusted_input>
+
+<untrusted_input>
+active_goal: {active_goal}
 </untrusted_input>
 
 # Evidence
@@ -90,29 +102,46 @@ class GeminiEvidenceAnswerPrompt:
     def render(
         cls,
         *,
-        question: str,
+        request: AnsweringRequest,
         evidence: list[AnswerEvidenceItem],
-        as_of: datetime,
         target_time_window: str | None,
-        user_intent: str = "",
-        prior_coverage: str = "",
-        user_activity_context: str = "",
         previous_error: str | None = None,
     ) -> str:
         prompt = cls.TEMPLATE.format(
-            question=sanitize_for_untrusted_block(question),
+            question=sanitize_for_untrusted_block(request.context.standalone_question),
             evidence=_render_evidence(evidence),
-            as_of=as_of.isoformat(),
-            target_time_window=target_time_window or "",
-            user_intent=sanitize_for_untrusted_block(user_intent),
-            prior_coverage=sanitize_for_untrusted_block(prior_coverage),
-            user_activity_context=sanitize_for_untrusted_block(user_activity_context),
+            as_of=request.as_of.isoformat(),
+            target_time_window=sanitize_for_untrusted_block(target_time_window or ""),
+            content_requirements=_render_requirements(
+                request.context.content_requirements
+            ),
+            response_requirements=_render_requirements(
+                request.context.response_requirements
+            ),
+            relevant_prior_coverage=sanitize_for_untrusted_block(
+                request.context.relevant_prior_coverage
+            ),
+            active_goal=sanitize_for_untrusted_block(request.context.active_goal),
         )
         if previous_error is None:
             return prompt
         return prompt + EVIDENCE_ANSWER_REPAIR_PROMPT.format(
             previous_error=sanitize_for_untrusted_block(previous_error)
         )
+
+
+def _render_requirements(requirements: list[object]) -> str:
+    return "\n".join(
+        "\n".join(
+            [
+                "<untrusted_input>",
+                f"{getattr(requirement, 'requirement_id')}: "
+                f"{sanitize_for_untrusted_block(getattr(requirement, 'description'))}",
+                "</untrusted_input>",
+            ]
+        )
+        for requirement in requirements
+    )
 
 
 def _render_evidence(evidence: list[AnswerEvidenceItem]) -> str:
