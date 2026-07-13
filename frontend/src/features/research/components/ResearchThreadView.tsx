@@ -6,16 +6,23 @@ import {
   MessageSquareText,
 } from "lucide-react";
 import Link from "next/link";
+import type { ReactNode } from "react";
 import type {
   ResearchAssistantMessage,
   ResearchMessageRun,
   ResearchThreadDetail,
   ResearchUserMessage,
 } from "@/types/types.gen";
-import { ActiveRunStatus } from "./ActiveRunStatus";
 import { CitedAnswerContent } from "./CitedAnswerContent";
 import { DeleteThreadButton } from "./DeleteThreadButton";
 import { ResearchComposer } from "./ResearchComposer";
+import { ResearchLiveAnnouncer } from "./ResearchLiveAnnouncer";
+import {
+  ResearchActiveRunBoundary,
+  ResearchActiveRunDraft,
+  ResearchActiveRunStatus,
+  ResearchLiveScrollRegion,
+} from "./ResearchThreadLiveBoundary";
 
 type ResearchThreadMessage = ResearchUserMessage | ResearchAssistantMessage;
 
@@ -48,17 +55,25 @@ function activeRunId(messages: ResearchThreadMessage[]): string | null {
   return active?.role === "user" ? active.run.runId : null;
 }
 
-function UserRunStatus({ run }: { run: ResearchMessageRun }) {
-  if (run.status === "queued" || run.status === "running") {
-    return (
-      <ActiveRunStatus
-        runId={run.runId}
-        initialStatus={run.status}
-        initialStage={run.progressStage}
-      />
-    );
-  }
+function completedRunIds(messages: ResearchThreadMessage[]): string[] {
+  return messages.flatMap((message) =>
+    message.role === "user" && message.run.status === "completed"
+      ? [message.run.runId]
+      : [],
+  );
+}
 
+function finalAnswerContentKey(messages: ResearchThreadMessage[]): string {
+  return messages
+    .flatMap((message) =>
+      message.role === "assistant"
+        ? [`${message.seq}@${message.createdAt}`]
+        : [],
+    )
+    .join("|");
+}
+
+function UserRunStatus({ run }: { run: ResearchMessageRun }) {
   const statusText = failedRunStatusText(run);
   if (!statusText) return null;
   return (
@@ -71,14 +86,19 @@ function UserRunStatus({ run }: { run: ResearchMessageRun }) {
   );
 }
 
-function UserMessage({ message }: { message: ResearchUserMessage }) {
+interface UserMessageProps {
+  message: ResearchUserMessage;
+  liveStatus?: ReactNode;
+}
+
+function UserMessage({ message, liveStatus }: UserMessageProps) {
   return (
     <article className="flex min-w-0 justify-end">
       <div className="min-w-0 max-w-[min(720px,92%)] rounded-md border border-[var(--vector-line)] bg-[var(--vector-paper)] px-4 py-3">
         <p className="whitespace-pre-wrap break-words text-sm leading-6 text-[var(--vector-ink)] [overflow-wrap:anywhere]">
           {message.content}
         </p>
-        <UserRunStatus run={message.run} />
+        {liveStatus ?? <UserRunStatus run={message.run} />}
       </div>
     </article>
   );
@@ -159,8 +179,31 @@ function AssistantMessage({ message }: { message: ResearchAssistantMessage }) {
   );
 }
 
-function ResearchMessage({ message }: { message: ResearchThreadMessage }) {
+interface ResearchMessageProps {
+  message: ResearchThreadMessage;
+  activeRunId: string | null;
+}
+
+function ResearchMessage({ message, activeRunId }: ResearchMessageProps) {
   if (message.role === "user") {
+    if (
+      message.run.runId === activeRunId &&
+      (message.run.status === "queued" || message.run.status === "running")
+    ) {
+      return (
+        <ResearchActiveRunBoundary
+          runId={message.run.runId}
+          initialStatus={message.run.status}
+          initialStage={message.run.progressStage}
+        >
+          <UserMessage
+            message={message}
+            liveStatus={<ResearchActiveRunStatus />}
+          />
+          <ResearchActiveRunDraft />
+        </ResearchActiveRunBoundary>
+      );
+    }
     return <UserMessage message={message} />;
   }
   return <AssistantMessage message={message} />;
@@ -168,6 +211,8 @@ function ResearchMessage({ message }: { message: ResearchThreadMessage }) {
 
 export function ResearchThreadView({ thread }: ResearchThreadViewProps) {
   const currentRunId = activeRunId(thread.messages);
+  const completedIds = completedRunIds(thread.messages);
+  const finalContentKey = finalAnswerContentKey(thread.messages);
   return (
     <section className="flex min-h-0 min-w-0 flex-1 flex-col bg-[var(--vector-surface-2)]">
       <header className="flex items-center justify-between gap-3 border-b border-[var(--vector-rule)] bg-[var(--vector-surface)]/92 px-4 py-3">
@@ -184,16 +229,22 @@ export function ResearchThreadView({ thread }: ResearchThreadViewProps) {
         </div>
         <DeleteThreadButton threadId={thread.threadId} title={thread.title} />
       </header>
-      <div className="min-h-0 min-w-0 flex-1 overflow-y-auto overflow-x-hidden px-4 py-5">
+      <ResearchLiveAnnouncer
+        threadId={thread.threadId}
+        activeRunId={currentRunId}
+        completedRunIds={completedIds}
+      />
+      <ResearchLiveScrollRegion finalContentKey={finalContentKey}>
         <div className="mx-auto flex max-w-[860px] min-w-0 flex-col gap-5">
           {thread.messages.map((message) => (
             <ResearchMessage
               key={`${message.role}-${message.seq}`}
               message={message}
+              activeRunId={currentRunId}
             />
           ))}
         </div>
-      </div>
+      </ResearchLiveScrollRegion>
       <ResearchComposer threadId={thread.threadId} activeRunId={currentRunId} />
     </section>
   );
