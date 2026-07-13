@@ -35,10 +35,12 @@ from app.agent.planning.contract import (
     QuestionPlanner,
     RetrievalPlan,
 )
+from app.agent.question_context.contract import QuestionContext
 
 __all__ = ["EvidenceCollector", "QuestionAnsweringOrchestrator"]
 
 _RETRIEVAL_EMPTY_MISSING = "回答に使える根拠を取得できませんでした"
+_REQUIREMENT_MISSING_PREFIX = "回答要望を満たせませんでした: "
 _COLLECTION_FAILURE_MISSING: dict[EvidenceCollectionFailure, str] = {
     "internal_search": "内部記事検索を完了できませんでした",
     "external_search": "外部検索を完了できませんでした",
@@ -122,6 +124,10 @@ class QuestionAnsweringOrchestrator:
             target_time_window=_plan_target_time_window(plan),
         )
         _validate_draft_citations(evidence=evidence, draft=draft)
+        requirement_missing_aspects = _unfulfilled_requirement_missing_aspects(
+            context=request.context,
+            requirement_ids=draft.unfulfilled_requirement_ids,
+        )
         sources = _sources_for_citations(evidence=evidence, cited_refs=draft.cited_refs)
 
         return _assemble_evidence_result(
@@ -130,6 +136,7 @@ class QuestionAnsweringOrchestrator:
             answer=draft.answer,
             sources=sources,
             draft_missing_aspects=draft.missing_aspects,
+            requirement_missing_aspects=requirement_missing_aspects,
             include_retrieval_empty_missing=not evidence,
         )
 
@@ -161,6 +168,27 @@ def _validate_draft_citations(
         )
 
 
+def _unfulfilled_requirement_missing_aspects(
+    *,
+    context: QuestionContext,
+    requirement_ids: list[str],
+) -> list[str]:
+    requirements = [
+        *context.content_requirements,
+        *context.response_requirements,
+    ]
+    known_ids = {requirement.requirement_id for requirement in requirements}
+    if any(requirement_id not in known_ids for requirement_id in requirement_ids):
+        raise EvidenceAnswerDraftInvalidError("unknown unfulfilled requirement id")
+
+    unfulfilled_ids = set(requirement_ids)
+    return [
+        f"{_REQUIREMENT_MISSING_PREFIX}{requirement.description}"
+        for requirement in requirements
+        if requirement.requirement_id in unfulfilled_ids
+    ]
+
+
 def _sources_for_citations(
     *,
     evidence: list[AnswerEvidenceItem],
@@ -177,11 +205,13 @@ def _assemble_evidence_result(
     answer: str,
     sources: list[AnswerSource],
     draft_missing_aspects: list[str],
+    requirement_missing_aspects: list[str],
     include_retrieval_empty_missing: bool,
 ) -> AnswerQuestionResult:
     missing_aspects = _missing_aspects(
         outcome=outcome,
         draft_missing_aspects=draft_missing_aspects,
+        requirement_missing_aspects=requirement_missing_aspects,
         include_retrieval_empty_missing=include_retrieval_empty_missing,
     )
     status = _derive_evidence_status(
@@ -223,6 +253,7 @@ def _missing_aspects(
     *,
     outcome: EvidenceCollectionOutcome,
     draft_missing_aspects: list[str],
+    requirement_missing_aspects: list[str],
     include_retrieval_empty_missing: bool,
 ) -> list[str]:
     values: list[str] = []
@@ -233,6 +264,7 @@ def _missing_aspects(
     )
     values.extend(_external_task_missing(outcome))
     values.extend(draft_missing_aspects)
+    values.extend(requirement_missing_aspects)
     return _deduplicate(values)
 
 

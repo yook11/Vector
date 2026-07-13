@@ -185,7 +185,19 @@ class EvidenceAnswerFlow:
                 extractor.finish()
 
                 raw = parse_evidence_answer_final_json("".join(raw_fragments))
-                draft, defects = finalize_evidence_answer_draft(raw, evidence=evidence)
+                requirement_ids = [
+                    requirement.requirement_id
+                    for requirements in (
+                        request.context.content_requirements,
+                        request.context.response_requirements,
+                    )
+                    for requirement in requirements
+                ]
+                draft, defects = finalize_evidence_answer_draft(
+                    raw,
+                    evidence=evidence,
+                    requirement_ids=requirement_ids,
+                )
                 for defect in defects:
                     await _record_defect(
                         audit_recorder=self._audit_recorder,
@@ -215,13 +227,19 @@ class EvidenceAnswerFlow:
         ai_model: str | None,
         prompt_version: str | None,
     ) -> None:
+        synthesized_status = (
+            "insufficient" if draft.unfulfilled_requirement_ids else draft.sufficiency
+        )
+        synthesized_missing_aspect_count = len(draft.missing_aspects) + len(
+            draft.unfulfilled_requirement_ids
+        )
         event = AnswerSynthesisFinalEvent.synthesized(
             attempt_count=attempt_count,
             retry_used=retry_used,
-            status=draft.sufficiency,
+            status=synthesized_status,
             evidence_count=evidence_count,
             cited_ref_count=len(draft.cited_refs),
-            missing_aspect_count=len(draft.missing_aspects),
+            missing_aspect_count=synthesized_missing_aspect_count,
             defect_count=defect_count,
             ai_model=ai_model,
             prompt_version=prompt_version,
@@ -230,7 +248,7 @@ class EvidenceAnswerFlow:
         record_answer_synthesis_outcome(
             result="synthesized",
             retry_used=retry_used,
-            status=draft.sufficiency,
+            status=synthesized_status,
             fallback_used=False,
         )
 

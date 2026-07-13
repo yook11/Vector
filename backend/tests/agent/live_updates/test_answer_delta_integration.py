@@ -40,7 +40,7 @@ from app.agent.live_updates.stream import (
     agent_run_live_stream_key,
     is_stream_id_before,
 )
-from app.agent.question_context.contract import QuestionContext
+from app.agent.question_context.contract import AnswerRequirement, QuestionContext
 from app.config import settings
 
 pytestmark = pytest.mark.xdist_group("redis")
@@ -65,9 +65,18 @@ class FakeStreamingGenerator:
         return generate()
 
 
-def _answering_request(question: str) -> AnsweringRequest:
+def _answering_request(
+    question: str,
+    *,
+    content_requirements: list[AnswerRequirement] | None = None,
+    response_requirements: list[AnswerRequirement] | None = None,
+) -> AnsweringRequest:
     return AnsweringRequest(
-        context=QuestionContext(standalone_question=question),
+        context=QuestionContext(
+            standalone_question=question,
+            content_requirements=content_requirements or [],
+            response_requirements=response_requirements or [],
+        ),
         as_of=datetime(2026, 7, 12, tzinfo=UTC),
     )
 
@@ -117,12 +126,18 @@ async def _answer(
 async def _evidence_answer(
     generator: FakeStreamingGenerator,
     reporter: AgentRunLiveAnswerDeltaReporter,
+    *,
+    request: AnsweringRequest | None = None,
 ) -> EvidenceAnswerDraft:
     return await EvidenceAnswerFlow(
         generator=generator,
         delta_reporter=reporter,
     ).answer(
-        request=_answering_request("実RedisへのEvidence revision配信を確認する"),
+        request=(
+            _answering_request("実RedisへのEvidence revision配信を確認する")
+            if request is None
+            else request
+        ),
         evidence=[
             AnswerEvidenceItem(
                 source=ExternalUrlSource(
@@ -146,6 +161,104 @@ def _delta_events(
         for event in events
         if isinstance(event, AgentRunLiveStreamAnswerDeltaEvent)
     ]
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "assessment_position",
+    ["before-answer", "after-answer"],
+)
+async def test_evidence_assessment_array_does_not_leak_into_answer_delta(
+    assessment_position: str,
+) -> None:
+    redis = aioredis.from_url(settings.redis_url, decode_responses=True)
+    run_id = uuid4()
+    attempt_epoch = 13
+    stream_key = agent_run_live_stream_key(run_id)
+    final_answer = '配信本文\n日本語と"引用"。[[1]]'
+    visible_answer = '配信本文\n日本語と"引用"。'
+    assessment = ["p1", "c1"]
+    common_fields = {
+        "sufficiency": "answered",
+        "cited_refs": ["1"],
+        "missing_aspects": [],
+    }
+    if assessment_position == "before-answer":
+        payload = {
+            "sufficiency": common_fields["sufficiency"],
+            "unfulfilled_requirement_ids": assessment,
+            "answer": final_answer,
+            "cited_refs": common_fields["cited_refs"],
+            "missing_aspects": common_fields["missing_aspects"],
+        }
+    else:
+        payload = {
+            **common_fields,
+            "answer": final_answer,
+            "unfulfilled_requirement_ids": assessment,
+        }
+    raw_json = json.dumps(payload, ensure_ascii=True, separators=(",", ":"))
+    fragments = [raw_json[index : index + 7] for index in range(0, len(raw_json), 7)]
+    request = _answering_request(
+        "assessmentを表示せず回答する",
+        content_requirements=[
+            AnswerRequirement(requirement_id="c1", description="content requirement")
+        ],
+        response_requirements=[
+            AnswerRequirement(requirement_id="p1", description="response requirement")
+        ],
+    )
+    try:
+        stream_publisher = AgentRunLiveStreamPublisher(redis, run_id, attempt_epoch)
+        assert await stream_publisher.begin_attempt() is not None
+        reporter = AgentRunLiveAnswerDeltaReporter(
+            stream_publisher,
+            run_id=run_id,
+            attempt_epoch=attempt_epoch,
+        )
+
+        draft = await _evidence_answer(
+            FakeStreamingGenerator([fragments]),
+            reporter,
+            request=request,
+        )
+        result = await AgentRunLiveStreamReader(redis).read_after(
+            run_id,
+            attempt_epoch,
+            None,
+        )
+
+        deltas = _delta_events([entry.event for entry in result.events])
+        visible = "".join(event.text for event in deltas)
+        leak_tokens = (
+            "{",
+            "}",
+            "sufficiency",
+            "answer",
+            "cited_refs",
+            "missing_aspects",
+            "unfulfilled_requirement_ids",
+            "answered",
+            "c1",
+            "p1",
+        )
+        assert (
+            draft.answer,
+            draft.unfulfilled_requirement_ids,
+            visible,
+            {event.generation for event in deltas},
+            [token for token in leak_tokens if token in visible],
+        ) == (
+            final_answer,
+            ["c1", "p1"],
+            visible_answer,
+            {1},
+            [],
+        )
+    finally:
+        await redis.delete(stream_key)
+        await redis.aclose()
 
 
 @pytest.mark.integration

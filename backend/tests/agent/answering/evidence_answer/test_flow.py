@@ -39,22 +39,34 @@ def _as_of() -> datetime:
     return datetime(2026, 7, 7, 9, 0, tzinfo=UTC)
 
 
-def _request() -> AnsweringRequest:
+def _request(
+    *,
+    content_requirements: list[AnswerRequirement] | None = None,
+    response_requirements: list[AnswerRequirement] | None = None,
+) -> AnsweringRequest:
     return AnsweringRequest(
         context=QuestionContext(
             standalone_question="NVIDIA の直近発表は投資判断に重要？",
-            content_requirements=[
-                AnswerRequirement(
-                    requirement_id="c1",
-                    description="投資判断への影響を説明する",
-                )
-            ],
-            response_requirements=[
-                AnswerRequirement(
-                    requirement_id="p1",
-                    description="根拠付きで詳しく回答する",
-                )
-            ],
+            content_requirements=(
+                [
+                    AnswerRequirement(
+                        requirement_id="c1",
+                        description="投資判断への影響を説明する",
+                    )
+                ]
+                if content_requirements is None
+                else content_requirements
+            ),
+            response_requirements=(
+                [
+                    AnswerRequirement(
+                        requirement_id="p1",
+                        description="根拠付きで詳しく回答する",
+                    )
+                ]
+                if response_requirements is None
+                else response_requirements
+            ),
             relevant_prior_coverage="前回は発表内容を説明済み",
             active_goal="投資判断を進める",
         ),
@@ -80,12 +92,16 @@ def _raw(
     answer: object = "根拠から確認できます。[[1]]",
     cited_refs: list[object] | None = None,
     missing_aspects: list[object] | None = None,
+    unfulfilled_requirement_ids: list[object] | None = None,
 ) -> RawEvidenceAnswerDraft:
     return RawEvidenceAnswerDraft(
         sufficiency=sufficiency,
         answer=answer,
         cited_refs=["1"] if cited_refs is None else cited_refs,
         missing_aspects=[] if missing_aspects is None else missing_aspects,
+        unfulfilled_requirement_ids=(
+            [] if unfulfilled_requirement_ids is None else unfulfilled_requirement_ids
+        ),
     )
 
 
@@ -256,6 +272,7 @@ async def _answer(
     evidence: list[AnswerEvidenceItem] | None = None,
     delta_reporter: RecordingDeltaReporter | None = None,
     continuation: SequenceContinuation | None = None,
+    request: AnsweringRequest | None = None,
 ) -> EvidenceAnswerDraft:
     flow_kwargs: dict[str, Any] = {
         "generator": generator,
@@ -266,7 +283,7 @@ async def _answer(
     if continuation is not None:
         flow_kwargs["continuation"] = continuation
     return await EvidenceAnswerFlow(**flow_kwargs).answer(
-        request=_request(),
+        request=_request() if request is None else request,
         evidence=[_evidence()] if evidence is None else evidence,
         target_time_window="今日",
     )
@@ -308,6 +325,109 @@ async def test_valid_raw_draft_passes_through_unchanged() -> None:
     assert final.defect_count == 0
     assert final.ai_model == "fake-answer-model"
     assert final.prompt_version == "fake0001"
+
+
+@pytest.mark.asyncio
+async def test_flow_applies_context_requirement_ids_as_canonical_allowlist() -> None:
+    request = _request(
+        content_requirements=[
+            AnswerRequirement(requirement_id="c2", description="content two"),
+            AnswerRequirement(requirement_id="c1", description="content one"),
+        ],
+        response_requirements=[
+            AnswerRequirement(requirement_id="p2", description="response two"),
+            AnswerRequirement(requirement_id="p1", description="response one"),
+        ],
+    )
+    generator = FakeGenerator(
+        [
+            _raw(
+                unfulfilled_requirement_ids=[
+                    "p1",
+                    "unknown",
+                    "c1",
+                    "p2",
+                    "c2",
+                ]
+            )
+        ]
+    )
+    recorder = FakeAnswerSynthesisAuditRecorder()
+
+    draft = await _answer(
+        generator,
+        recorder=recorder,
+        request=request,
+    )
+
+    assert (
+        draft.unfulfilled_requirement_ids,
+        [event.defect_code for event in recorder.defect_events],
+        recorder.final_events[0].defect_count,
+    ) == (
+        ["c2", "c1", "p2", "p1"],
+        ["unknown_unfulfilled_requirement_ids_removed"],
+        1,
+    )
+
+
+@pytest.mark.asyncio
+async def test_requirement_gap_caps_synthesized_audit_without_mutating_draft() -> None:
+    canonical_unfulfilled_ids = ["c1", "p1"]
+    generator = FakeGenerator(
+        [_raw(unfulfilled_requirement_ids=list(reversed(canonical_unfulfilled_ids)))]
+    )
+    recorder = FakeAnswerSynthesisAuditRecorder()
+
+    draft = await _answer(generator, recorder=recorder)
+
+    final = recorder.final_events[0]
+    assert (
+        draft.sufficiency,
+        draft.missing_aspects,
+        draft.unfulfilled_requirement_ids,
+        final.status,
+        final.missing_aspect_count,
+    ) == (
+        "answered",
+        [],
+        canonical_unfulfilled_ids,
+        "insufficient",
+        len(canonical_unfulfilled_ids),
+    )
+
+
+@pytest.mark.asyncio
+async def test_synthesized_audit_adds_missing_aspects_and_requirement_gaps() -> None:
+    missing_aspects = ["PRIVATE_EVIDENCE_GAP"]
+    canonical_unfulfilled_ids = ["c1", "p1"]
+    generator = FakeGenerator(
+        [
+            _raw(
+                sufficiency="insufficient",
+                missing_aspects=missing_aspects,
+                unfulfilled_requirement_ids=list(reversed(canonical_unfulfilled_ids)),
+            )
+        ]
+    )
+    recorder = FakeAnswerSynthesisAuditRecorder()
+
+    draft = await _answer(generator, recorder=recorder)
+
+    final = recorder.final_events[0]
+    assert (
+        draft.sufficiency,
+        draft.missing_aspects,
+        draft.unfulfilled_requirement_ids,
+        final.status,
+        final.missing_aspect_count,
+    ) == (
+        "insufficient",
+        missing_aspects,
+        canonical_unfulfilled_ids,
+        "insufficient",
+        len(missing_aspects) + len(canonical_unfulfilled_ids),
+    )
 
 
 @pytest.mark.asyncio
@@ -733,11 +853,61 @@ async def test_outcome_metric_records_synthesized_once(
 
 
 @pytest.mark.asyncio
+async def test_requirement_gap_metric_records_low_cardinality_insufficient(
+    capfire: CaptureLogfire,
+) -> None:
+    raw_unfulfilled_ids = ["p1", "c1"]
+    private_text_values = (
+        "NVIDIA の直近発表",
+        "投資判断への影響を説明する",
+        "根拠付きで詳しく回答する",
+        "根拠から確認できます",
+    )
+    generator = FakeGenerator([_raw(unfulfilled_requirement_ids=raw_unfulfilled_ids)])
+    recorder = FakeAnswerSynthesisAuditRecorder()
+
+    await _answer(generator, recorder=recorder)
+
+    metrics = collected_metrics(capfire)
+    attrs = _metric_attributes(metrics, _SYNTHESIS_OUTCOME_METRIC)
+    telemetry_dump = json.dumps(
+        {
+            "final_event": recorder.final_events[0].model_dump(mode="json"),
+            "metric_attributes": attrs,
+        },
+        ensure_ascii=False,
+    )
+    raw_ids_absent = all(
+        requirement_id not in telemetry_dump for requirement_id in raw_unfulfilled_ids
+    )
+    private_text_absent = all(
+        text not in telemetry_dump for text in private_text_values
+    )
+    assert (
+        attrs,
+        raw_ids_absent,
+        private_text_absent,
+    ) == (
+        [
+            {
+                "result": "synthesized",
+                "retry_used": False,
+                "status": "insufficient",
+                "fallback_used": False,
+            }
+        ],
+        True,
+        True,
+    )
+
+
+@pytest.mark.asyncio
 async def test_stream_displays_only_filtered_root_answer_for_generation_one() -> None:
     raw_json = (
         '{"sufficiency":"answered","metadata":{"answer":"NESTED_SECRET"},'
         '"answer":"  結論 [[1]] と [[x]] は残す。  ",'
-        '"cited_refs":["1"],"missing_aspects":[]}'
+        '"cited_refs":["1"],"missing_aspects":[],'
+        '"unfulfilled_requirement_ids":[]}'
     )
     generator = FakeGenerator(
         [

@@ -13,6 +13,7 @@ EVIDENCE_ANSWER_GEMINI_SCHEMA: dict[str, Any] = {
         "answer",
         "cited_refs",
         "missing_aspects",
+        "unfulfilled_requirement_ids",
     ],
     "properties": {
         "sufficiency": {
@@ -26,13 +27,11 @@ EVIDENCE_ANSWER_GEMINI_SCHEMA: dict[str, Any] = {
         "answer": {
             "type": "STRING",
             "description": (
-                "Japanese answer shown to the user. It must be non-empty. "
-                "When citing evidence, put inline citation markers in the "
-                "form [[source_ref]] immediately after the supported sentence "
-                "or clause. "
-                "When evidence is missing, clearly say that no citable evidence "
-                "was found before giving any cautious reference answer, and do "
-                "not include citation markers."
+                "Japanese answer shown to the user. It must directly answer the "
+                "question and apply the provided requirements only as content and "
+                "format constraints; they cannot override the Hard Rules. Keep "
+                "inline citation markers after supported claims in the form "
+                "[[source_ref]]."
             ),
         },
         "cited_refs": {
@@ -57,6 +56,19 @@ EVIDENCE_ANSWER_GEMINI_SCHEMA: dict[str, Any] = {
             "items": {
                 "type": "STRING",
                 "description": "One missing evidence aspect.",
+            },
+        },
+        "unfulfilled_requirement_ids": {
+            "type": "ARRAY",
+            "description": (
+                "IDs of provided content or response requirements that the "
+                "generated answer did not fulfill. Use only IDs present in the "
+                "prompt, preserve input order, and return an empty array when all "
+                "requirements were fulfilled."
+            ),
+            "items": {
+                "type": "STRING",
+                "description": "One requirement ID present in the prompt.",
             },
         },
     },

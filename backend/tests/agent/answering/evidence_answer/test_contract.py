@@ -45,12 +45,57 @@ def test_raw_draft_accepts_lenient_provider_values() -> None:
         answer=None,
         cited_refs=["1", 2, None],
         missing_aspects=["一次情報", False],
+        unfulfilled_requirement_ids=["c1", 2, None],
     )
 
     assert draft.sufficiency == 1
     assert draft.answer is None
     assert draft.cited_refs == ["1", 2, None]
     assert draft.missing_aspects == ["一次情報", False]
+    assert draft.unfulfilled_requirement_ids == ["c1", 2, None]
+
+
+def test_raw_draft_rejects_non_array_unfulfilled_requirement_ids() -> None:
+    with pytest.raises(ValidationError):
+        RawEvidenceAnswerDraft.model_validate({"unfulfilled_requirement_ids": "c1"})
+
+
+@pytest.mark.parametrize(
+    "requirement_ids",
+    [[], ["c1", "p1"]],
+    ids=["empty", "non-empty"],
+)
+def test_strict_draft_preserves_unfulfilled_requirement_ids(
+    requirement_ids: list[str],
+) -> None:
+    draft = EvidenceAnswerDraft(
+        sufficiency="answered",
+        answer="回答です。[[1]]",
+        cited_refs=["1"],
+        unfulfilled_requirement_ids=requirement_ids,
+    )
+
+    assert draft.unfulfilled_requirement_ids == requirement_ids
+
+
+def test_strict_draft_rejects_non_string_unfulfilled_requirement_id() -> None:
+    with pytest.raises(ValidationError):
+        EvidenceAnswerDraft.model_validate(
+            {
+                "sufficiency": "answered",
+                "answer": "回答です。[[1]]",
+                "cited_refs": ["1"],
+                "unfulfilled_requirement_ids": [1],
+            }
+        )
+
+
+def test_evidence_answerer_documents_unfulfilled_ids_subset_contract() -> None:
+    doc = EvidenceAnswerer.__doc__ or ""
+
+    assert "unfulfilled_requirement_ids" in doc and (
+        "部分集合" in doc or "subset" in doc.lower()
+    )
 
 
 @pytest.mark.parametrize(
@@ -60,17 +105,20 @@ def test_raw_draft_accepts_lenient_provider_values() -> None:
             "sufficiency": "answered",
             "answer": "回答です。[[1]]",
             "cited_refs": [],
+            "unfulfilled_requirement_ids": [],
         },
         {
             "sufficiency": "answered",
             "answer": "回答です。[[1]]",
             "cited_refs": ["1"],
             "missing_aspects": ["不足"],
+            "unfulfilled_requirement_ids": ["c1"],
         },
         {
             "sufficiency": "insufficient",
             "answer": "不足しています。",
             "missing_aspects": [],
+            "unfulfilled_requirement_ids": [],
         },
     ],
 )

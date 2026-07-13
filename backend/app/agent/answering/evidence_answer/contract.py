@@ -41,6 +41,7 @@ class EvidenceAnswerDraft(BaseModel):
     answer: NonBlankText
     cited_refs: list[str] = Field(default_factory=list)
     missing_aspects: list[NonBlankText] = Field(default_factory=list)
+    unfulfilled_requirement_ids: list[str] = Field(default_factory=list)
 
     @model_validator(mode="after")
     def _validate_sufficiency_contract(self) -> Self:
@@ -63,6 +64,7 @@ class RawEvidenceAnswerDraft(BaseModel):
     answer: object | None = None
     cited_refs: list[object] = Field(default_factory=list)
     missing_aspects: list[object] = Field(default_factory=list)
+    unfulfilled_requirement_ids: list[object] = Field(default_factory=list)
 
 
 class EvidenceAnswerDraftGenerator(Protocol):
@@ -79,7 +81,9 @@ class EvidenceAnswerDraftGenerator(Protocol):
 
 
 class EvidenceAnswerer(Protocol):
-    """evidence に接地し、marker と cited refs が整合した draft を返す。"""
+    """markerとcited refsが整合し、unfulfilled_requirement_idsが
+    request contextの入力requirement IDの部分集合であるdraftを返す。
+    """
 
     async def answer(
         self,

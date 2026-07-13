@@ -461,6 +461,174 @@ async def test_answer_internal_sources_and_status_from_citations() -> None:
 
 
 @pytest.mark.asyncio
+async def test_answered_evidence_draft_with_no_unfulfilled_ids_stays_answered() -> None:
+    answer = "内部根拠から確認できます。[[1]]"
+    orchestrator, _, _, _, _ = _orchestrator(
+        plan=_internal_plan(),
+        outcome=_internal_outcome(1),
+        draft=EvidenceAnswerDraft(
+            sufficiency="answered",
+            answer=answer,
+            cited_refs=["1"],
+            unfulfilled_requirement_ids=[],
+        ),
+    )
+
+    result = await orchestrator.answer(
+        _input(content_requirements=["投資判断への影響を説明する"])
+    )
+
+    assert (
+        result.status,
+        result.answer,
+        [source.source_ref for source in result.sources],
+        result.missing_aspects,
+    ) == ("answered", answer, ["1"], [])
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    (
+        "content_requirements",
+        "response_requirements",
+        "unfulfilled_requirement_id",
+        "description",
+    ),
+    [
+        (["投資判断への影響を説明する"], [], "c1", "投資判断への影響を説明する"),
+        ([], ["初心者向けに説明する"], "p1", "初心者向けに説明する"),
+    ],
+    ids=["content", "response"],
+)
+async def test_unfulfilled_requirement_caps_status_and_preserves_answer_sources(
+    content_requirements: list[str],
+    response_requirements: list[str],
+    unfulfilled_requirement_id: str,
+    description: str,
+) -> None:
+    answer = "確認できた範囲を回答します。[[1]]"
+    orchestrator, _, _, _, _ = _orchestrator(
+        plan=_internal_plan(),
+        outcome=_internal_outcome(1),
+        draft=EvidenceAnswerDraft(
+            sufficiency="answered",
+            answer=answer,
+            cited_refs=["1"],
+            unfulfilled_requirement_ids=[unfulfilled_requirement_id],
+        ),
+    )
+
+    result = await orchestrator.answer(
+        _input(
+            content_requirements=content_requirements,
+            response_requirements=response_requirements,
+        )
+    )
+
+    assert (
+        result.status,
+        result.answer,
+        [source.source_ref for source in result.sources],
+        result.missing_aspects,
+    ) == (
+        "insufficient",
+        answer,
+        ["1"],
+        [f"回答要望を満たせませんでした: {description}"],
+    )
+
+
+@pytest.mark.asyncio
+async def test_requirement_missing_follows_existing_missing_in_context_order() -> None:
+    tasks = [_task(0), _task(1)]
+    outcome = EvidenceCollectionOutcome(
+        external_search=_external_outcome(
+            [],
+            reports=[
+                _report(task_index=1, missing=["外部タスク1の不足"]),
+                _report(task_index=0, missing=["外部タスク0の不足"]),
+            ],
+            tasks=tasks,
+        ),
+        collection_failures=["internal_search"],
+    )
+    orchestrator, _, _, _, _ = _orchestrator(
+        plan=_mixed_plan(),
+        outcome=outcome,
+        draft=EvidenceAnswerDraft(
+            sufficiency="insufficient",
+            answer="取得できた範囲では断定できません。",
+            cited_refs=[],
+            missing_aspects=["draftの不足"],
+            unfulfilled_requirement_ids=["p2", "c2", "p1", "c1"],
+        ),
+    )
+
+    result = await orchestrator.answer(
+        _input(
+            content_requirements=["content 1", "content 2"],
+            response_requirements=["response 1", "response 2"],
+        )
+    )
+
+    assert result.missing_aspects == [
+        "回答に使える根拠を取得できませんでした",
+        "内部記事検索を完了できませんでした",
+        "外部タスク0の不足",
+        "外部タスク1の不足",
+        "draftの不足",
+        "回答要望を満たせませんでした: content 1",
+        "回答要望を満たせませんでした: content 2",
+        "回答要望を満たせませんでした: response 1",
+        "回答要望を満たせませんでした: response 2",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_requirement_missing_is_deduplicated_against_existing_missing() -> None:
+    duplicate = "回答要望を満たせませんでした: 重複する要望"
+    orchestrator, _, _, _, _ = _orchestrator(
+        plan=_internal_plan(),
+        outcome=_internal_outcome(1),
+        draft=EvidenceAnswerDraft(
+            sufficiency="insufficient",
+            answer="一部のみ回答します。[[1]]",
+            cited_refs=["1"],
+            missing_aspects=[duplicate],
+            unfulfilled_requirement_ids=["c2", "c1"],
+        ),
+    )
+
+    result = await orchestrator.answer(
+        _input(content_requirements=["重複する要望", "追加の要望"])
+    )
+
+    assert result.missing_aspects == [
+        duplicate,
+        "回答要望を満たせませんでした: 追加の要望",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_answer_rejects_unknown_unfulfilled_requirement_id() -> None:
+    orchestrator, _, _, _, _ = _orchestrator(
+        plan=_internal_plan(),
+        outcome=_internal_outcome(1),
+        draft=EvidenceAnswerDraft(
+            sufficiency="answered",
+            answer="内部根拠から確認できます。[[1]]",
+            cited_refs=["1"],
+            unfulfilled_requirement_ids=["unknown"],
+        ),
+    )
+
+    with pytest.raises(EvidenceAnswerDraftInvalidError):
+        await orchestrator.answer(
+            _input(content_requirements=["投資判断への影響を説明する"])
+        )
+
+
+@pytest.mark.asyncio
 async def test_answer_external_source_is_cited_source_only() -> None:
     orchestrator, _, _, _, _ = _orchestrator(
         plan=_external_plan(),
