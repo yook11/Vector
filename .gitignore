@@ -101,6 +101,21 @@ skills-lock.json
 !.codex/agents/frontend-ui-builder.toml
 
 # ===========================
+# Browser automation artifacts
+# ===========================
+/.playwright-cli/
+/output/
+
+# ===========================
+# Local research artifacts
+# ===========================
+/backend/scripts/probe_gdelt_timeline.py
+/backend/specs/trend-discovery-gdelt-measurement-contract-slice.md
+/backend/specs/trend-discovery-gdelt-snapshot.md
+/backend/tests/fixtures/gdelt/
+/backend/tests/scripts/test_probe_gdelt_timeline.py
+
+# ===========================
 # Red-team session output
 # ===========================
 .red-team/
