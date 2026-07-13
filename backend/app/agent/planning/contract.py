@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+from datetime import datetime
 from enum import StrEnum
 from typing import Annotated, Literal, Protocol, Self, assert_never
 
 from pydantic import BaseModel, ConfigDict, Field, StringConstraints, model_validator
 
-from app.agent.contract import AnswerQuestionInput, RetrievalMode
+from app.agent.contract import RetrievalMode
+from app.agent.question_context.contract import QuestionContext
 
 __all__ = [
     "EXTERNAL_RESEARCH_TASK_LIMIT",
@@ -18,6 +20,7 @@ __all__ = [
     "MAX_INTERNAL_QUERIES",
     "NoRetrievalPlan",
     "PlanQuery",
+    "PlanningRequest",
     "QuestionPlan",
     "QuestionPlanDraft",
     "QuestionPlanDraftGenerator",
@@ -35,6 +38,15 @@ PlanQuery = Annotated[
     str,
     StringConstraints(strip_whitespace=True, min_length=1),
 ]
+
+
+class PlanningRequest(BaseModel):
+    """Plannerへ渡す質問コンテキストと実行時点。"""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    context: QuestionContext
+    as_of: datetime
 
 
 class QuestionPlannerResponseInvalidError(ValueError):
@@ -62,7 +74,7 @@ class QuestionPlanDraftGenerator(Protocol):
 
     async def plan(
         self,
-        input: AnswerQuestionInput,
+        request: PlanningRequest,
         *,
         previous_error: str | None = None,
     ) -> QuestionPlanDraft: ...
@@ -152,7 +164,7 @@ type QuestionPlan = NoRetrievalPlan | RetrievalPlan
 class QuestionPlanner(Protocol):
     """Planner boundary that returns a completed ``QuestionPlan``."""
 
-    async def plan(self, input: AnswerQuestionInput) -> QuestionPlan: ...
+    async def plan(self, request: PlanningRequest) -> QuestionPlan: ...
 
 
 def plan_from_draft(

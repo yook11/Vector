@@ -3,11 +3,11 @@
 from __future__ import annotations
 
 from collections.abc import AsyncIterator
-from datetime import datetime
 from typing import Protocol
 
 from pydantic import BaseModel, ConfigDict
 
+from app.agent.answering.contract import AnsweringRequest
 from app.agent.contract import AnswerGenerationStopped, NonBlankText
 
 __all__ = [
@@ -43,10 +43,7 @@ class DirectAnswerGenerator(Protocol):
     def stream(
         self,
         *,
-        question: str,
-        as_of: datetime,
-        user_intent: str = "",
-        user_activity_context: str = "",
+        request: AnsweringRequest,
         previous_answer: str = "",
         previous_error: str | None = None,
     ) -> AsyncIterator[str]: ...
@@ -61,9 +58,6 @@ class DirectAnswerer(Protocol):
     async def answer(
         self,
         *,
-        question: str,
-        as_of: datetime,
-        user_intent: str = "",
-        user_activity_context: str = "",
+        request: AnsweringRequest,
         previous_answer: str = "",
     ) -> DirectAnswerDraft: ...

@@ -18,10 +18,18 @@ question: {question}
 </untrusted_input>
 
 # Conversation Context
+content_requirements:
+{content_requirements}
+
+response_requirements:
+{response_requirements}
+
 <untrusted_input>
-user_intent: {user_intent}
-prior_coverage: {prior_coverage}
-user_activity_context: {user_activity_context}
+relevant_prior_coverage: {relevant_prior_coverage}
+</untrusted_input>
+
+<untrusted_input>
+active_goal: {active_goal}
 </untrusted_input>
 
 # 判断すること
@@ -35,6 +43,12 @@ retrieval_mode は次の 4 つから 1 つ選ぶ。
 
 迷った場合は none にしない。ニュース、企業、投資判断、株価、規制、セキュリティ、
 研究発表、最新性、日付相対表現を含む事実質問は none にしない。
+
+content_requirements を満たすために必要な調査対象・観点・比較軸を plan へ反映する。
+response_requirements は回答の形式・深さを表す。
+{format_only_retrieval_rule}
+relevant_prior_coverage と active_goal は会話上の文脈である。
+context は事実根拠ではない。
 
 # internal_queries
 

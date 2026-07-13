@@ -31,14 +31,21 @@ class GeminiQuestionContextPrompt:
 
 
 def _render_history(history: list[ThreadMessageSnapshot]) -> str:
-    return "\\n\\n".join(
-        "\\n".join(
-            [
-                f"role: {message.role}",
-                "<untrusted_input>",
-                sanitize_for_untrusted_block(message.content),
-                "</untrusted_input>",
-            ]
+    return "\\n\\n".join(_render_message(message) for message in history)
+
+
+def _render_message(message: ThreadMessageSnapshot) -> str:
+    lines = [
+        f"role: {message.role}",
+        "<untrusted_input>",
+        "content:",
+        sanitize_for_untrusted_block(message.content),
+    ]
+    if message.role == "assistant":
+        lines.append("missing_aspects:")
+        lines.extend(
+            f"- {sanitize_for_untrusted_block(missing_aspect)}"
+            for missing_aspect in message.missing_aspects
         )
-        for message in history
-    )
+    lines.append("</untrusted_input>")
+    return "\\n".join(lines)

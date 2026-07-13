@@ -11,6 +11,7 @@ from uuid import uuid4
 import pytest
 import redis.asyncio as aioredis
 
+from app.agent.answering.contract import AnsweringRequest
 from app.agent.answering.direct_answer.contract import DirectAnswerDraft
 from app.agent.answering.direct_answer.flow import DirectAnswerFlow
 from app.agent.answering.evidence_answer.contract import EvidenceAnswerDraft
@@ -39,6 +40,7 @@ from app.agent.live_updates.stream import (
     agent_run_live_stream_key,
     is_stream_id_before,
 )
+from app.agent.question_context.contract import QuestionContext
 from app.config import settings
 
 pytestmark = pytest.mark.xdist_group("redis")
@@ -50,6 +52,8 @@ class FakeStreamingGenerator:
 
     def stream(
         self,
+        *,
+        request: AnsweringRequest,
         **_kwargs: object,
     ) -> AsyncIterator[str]:
         chunks = self._generations.popleft()
@@ -59,6 +63,13 @@ class FakeStreamingGenerator:
                 yield chunk
 
         return generate()
+
+
+def _answering_request(question: str) -> AnsweringRequest:
+    return AnsweringRequest(
+        context=QuestionContext(standalone_question=question),
+        as_of=datetime(2026, 7, 12, tzinfo=UTC),
+    )
 
 
 class FailingDeltaPublisher:
@@ -99,8 +110,7 @@ async def _answer(
         generator=generator,
         delta_reporter=reporter,
     ).answer(
-        question="実Redisへのdelta配信を確認する",
-        as_of=datetime(2026, 7, 12, tzinfo=UTC),
+        request=_answering_request("実Redisへのdelta配信を確認する"),
     )
 
 
@@ -112,7 +122,7 @@ async def _evidence_answer(
         generator=generator,
         delta_reporter=reporter,
     ).answer(
-        question="実RedisへのEvidence revision配信を確認する",
+        request=_answering_request("実RedisへのEvidence revision配信を確認する"),
         evidence=[
             AnswerEvidenceItem(
                 source=ExternalUrlSource(
@@ -124,7 +134,6 @@ async def _evidence_answer(
                 text="根拠を確認しました。",
             )
         ],
-        as_of=datetime(2026, 7, 12, tzinfo=UTC),
         target_time_window="今日",
     )
 

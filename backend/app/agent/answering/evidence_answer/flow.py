@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from collections.abc import AsyncIterator
-from datetime import datetime
 
 from pydantic import ValidationError
 
@@ -16,6 +15,7 @@ from app.agent.answering.audit import (
     RequestRetryDisposition,
     classify_answer_synthesis_failure,
 )
+from app.agent.answering.contract import AnsweringRequest
 from app.agent.answering.evidence_answer.contract import (
     EvidenceAnswerDraft,
     EvidenceAnswerDraftGenerationInvalidError,
@@ -80,13 +80,9 @@ class EvidenceAnswerFlow:
     async def answer(
         self,
         *,
-        question: str,
+        request: AnsweringRequest,
         evidence: list[AnswerEvidenceItem],
-        as_of: datetime,
         target_time_window: str | None,
-        user_intent: str = "",
-        prior_coverage: str = "",
-        user_activity_context: str = "",
     ) -> EvidenceAnswerDraft:
         """Return a valid draft, retrying audited response-boundary failures."""
 
@@ -98,13 +94,9 @@ class EvidenceAnswerFlow:
         for attempt_number in range(1, _MAX_ATTEMPTS + 1):
             try:
                 draft, defects = await self._generate_strict_draft(
-                    question=question,
+                    request=request,
                     evidence=evidence,
-                    as_of=as_of,
                     target_time_window=target_time_window,
-                    user_intent=user_intent,
-                    prior_coverage=prior_coverage,
-                    user_activity_context=user_activity_context,
                     previous_error=previous_error,
                     attempt_number=attempt_number,
                     generation=attempt_number,
@@ -157,13 +149,9 @@ class EvidenceAnswerFlow:
     async def _generate_strict_draft(
         self,
         *,
-        question: str,
+        request: AnsweringRequest,
         evidence: list[AnswerEvidenceItem],
-        as_of: datetime,
         target_time_window: str | None,
-        user_intent: str,
-        prior_coverage: str,
-        user_activity_context: str,
         previous_error: str | None,
         attempt_number: int,
         generation: int,
@@ -181,13 +169,9 @@ class EvidenceAnswerFlow:
                 await ensure_answer_generation_continues(self._continuation)
 
                 stream = self._generator.stream(
-                    question=question,
+                    request=request,
                     evidence=evidence,
-                    as_of=as_of,
                     target_time_window=target_time_window,
-                    user_intent=user_intent,
-                    prior_coverage=prior_coverage,
-                    user_activity_context=user_activity_context,
                     previous_error=previous_error,
                 )
                 async for raw_fragment in stream:

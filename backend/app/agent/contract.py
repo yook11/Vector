@@ -16,6 +16,7 @@ from pydantic import (
     model_validator,
 )
 
+from app.agent.question_context.contract import QuestionContext
 from app.shared.security.safe_url import SafeUrl
 
 __all__ = [
@@ -56,13 +57,10 @@ NonBlankText = Annotated[
 class AnswerQuestionInput(BaseModel):
     """ユーザー質問と実行基準時刻を agent core に渡す入力。"""
 
-    model_config = ConfigDict(frozen=True)
+    model_config = ConfigDict(frozen=True, extra="forbid")
 
-    question: str = Field(min_length=1)
+    context: QuestionContext
     as_of: datetime
-    user_intent: str = ""
-    prior_coverage: str = ""
-    user_activity_context: str = ""
     previous_answer: str = ""
 
 

@@ -18,6 +18,7 @@ from app.agent.answering.audit import (
     AnswerSynthesisOutcomeCode,
     RequestRetryDisposition,
 )
+from app.agent.answering.contract import AnsweringRequest
 from app.agent.answering.evidence_answer.contract import (
     EvidenceAnswerDraft,
     EvidenceAnswerDraftGenerationInvalidError,
@@ -26,6 +27,7 @@ from app.agent.answering.evidence_answer.contract import (
 from app.agent.answering.evidence_answer.evidence import AnswerEvidenceItem
 from app.agent.answering.evidence_answer.flow import EvidenceAnswerFlow
 from app.agent.contract import ExternalUrlSource
+from app.agent.question_context.contract import AnswerRequirement, QuestionContext
 from app.analysis.ai_provider_errors import AIProviderError, AIProviderNetworkError
 from tests.logfire._metric_helpers import collected_metrics, sum_counter_for_result
 
@@ -35,6 +37,29 @@ _DEFECT_CITED_REFS_RECOMPUTED = "cited_refs_recomputed_from_markers"
 
 def _as_of() -> datetime:
     return datetime(2026, 7, 7, 9, 0, tzinfo=UTC)
+
+
+def _request() -> AnsweringRequest:
+    return AnsweringRequest(
+        context=QuestionContext(
+            standalone_question="NVIDIA の直近発表は投資判断に重要？",
+            content_requirements=[
+                AnswerRequirement(
+                    requirement_id="c1",
+                    description="投資判断への影響を説明する",
+                )
+            ],
+            response_requirements=[
+                AnswerRequirement(
+                    requirement_id="p1",
+                    description="根拠付きで詳しく回答する",
+                )
+            ],
+            relevant_prior_coverage="前回は発表内容を説明済み",
+            active_goal="投資判断を進める",
+        ),
+        as_of=_as_of(),
+    )
 
 
 def _evidence(ref: str = "1") -> AnswerEvidenceItem:
@@ -116,24 +141,16 @@ class FakeGenerator:
     def stream(
         self,
         *,
-        question: str,
+        request: AnsweringRequest,
         evidence: list[AnswerEvidenceItem],
-        as_of: datetime,
         target_time_window: str | None,
-        user_intent: str = "",
-        prior_coverage: str = "",
-        user_activity_context: str = "",
         previous_error: str | None = None,
     ) -> AsyncIterator[str]:
         self.calls.append(
             {
-                "question": question,
+                "request": request,
                 "evidence": evidence,
-                "as_of": as_of,
                 "target_time_window": target_time_window,
-                "user_intent": user_intent,
-                "prior_coverage": prior_coverage,
-                "user_activity_context": user_activity_context,
                 "previous_error": previous_error,
             }
         )
@@ -249,9 +266,8 @@ async def _answer(
     if continuation is not None:
         flow_kwargs["continuation"] = continuation
     return await EvidenceAnswerFlow(**flow_kwargs).answer(
-        question="NVIDIA の直近発表は投資判断に重要？",
+        request=_request(),
         evidence=[_evidence()] if evidence is None else evidence,
-        as_of=_as_of(),
         target_time_window="今日",
     )
 
@@ -682,9 +698,8 @@ async def test_recorder_errors_do_not_stop_synthesis() -> None:
         generator=generator,
         audit_recorder=RaisingAnswerSynthesisAuditRecorder(),
     ).answer(
-        question="NVIDIA の直近発表は投資判断に重要？",
+        request=_request(),
         evidence=[_evidence()],
-        as_of=_as_of(),
         target_time_window="今日",
     )
 
@@ -747,13 +762,9 @@ async def test_stream_displays_only_filtered_root_answer_for_generation_one() ->
     assert "missing_aspects" not in visible
     assert generator.calls == [
         {
-            "question": "NVIDIA の直近発表は投資判断に重要？",
+            "request": _request(),
             "evidence": [_evidence()],
-            "as_of": _as_of(),
             "target_time_window": "今日",
-            "user_intent": "",
-            "prior_coverage": "",
-            "user_activity_context": "",
             "previous_error": None,
         }
     ]

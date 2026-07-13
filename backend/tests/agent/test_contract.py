@@ -11,11 +11,12 @@ from app.agent.contract import (
     AnswerQuestionInput,
     AnswerQuestionResult,
     AnswerRetrievalSummary,
+    EvidenceCollectionFailure,
     ExternalUrlSource,
     InternalArticleSource,
     RetrievalMode,
-    EvidenceCollectionFailure,
 )
+from app.agent.question_context.contract import QuestionContext
 
 
 def _as_of() -> datetime:
@@ -50,15 +51,36 @@ def _retrieval(
 
 
 class TestAnswerQuestionInput:
-    def test_accepts_question_and_as_of(self) -> None:
-        input_ = AnswerQuestionInput(question="NVIDIA の直近動向は？", as_of=_as_of())
+    def test_holds_only_shared_context_execution_time_and_previous_answer(self) -> None:
+        context = QuestionContext(standalone_question="NVIDIA の直近動向は？")
+        input_ = AnswerQuestionInput(
+            context=context,
+            as_of=_as_of(),
+            previous_answer="前回の回答本文",
+        )
 
-        assert input_.question == "NVIDIA の直近動向は？"
-        assert input_.as_of == _as_of()
-
-    def test_rejects_empty_question(self) -> None:
         with pytest.raises(ValidationError):
-            AnswerQuestionInput(question="", as_of=_as_of())
+            input_.previous_answer = "変更不可"
+
+        assert (
+            set(AnswerQuestionInput.model_fields),
+            input_.context is context,
+            input_.as_of,
+            input_.previous_answer,
+        ) == (
+            {"context", "as_of", "previous_answer"},
+            True,
+            _as_of(),
+            "前回の回答本文",
+        )
+
+    def test_rejects_legacy_flat_context_fields(self) -> None:
+        with pytest.raises(ValidationError):
+            AnswerQuestionInput(
+                context=QuestionContext(standalone_question="NVIDIA の直近動向は？"),
+                as_of=_as_of(),
+                question="legacy question",
+            )
 
 
 class TestAnswerRetrievalSummary:

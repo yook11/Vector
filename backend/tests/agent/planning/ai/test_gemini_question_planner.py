@@ -9,14 +9,17 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 from pydantic import SecretStr, ValidationError
 
-from app.agent.contract import AnswerQuestionInput
 from app.agent.planning.ai.gemini import (
     GeminiQuestionPlanner,
     GeminiQuestionPlannerResponseDefect,
     QuestionPlannerResponseInvalidError,
 )
 from app.agent.planning.ai.gemini_spec import GEMINI_QUESTION_PLANNER_SPEC
-from app.agent.planning.contract import QuestionPlanDraft
+from app.agent.planning.contract import PlanningRequest, QuestionPlanDraft
+from app.agent.question_context.contract import (
+    AnswerRequirement,
+    QuestionContext,
+)
 from app.analysis.ai_provider_errors import (
     AIProviderConfigurationError,
     AIProviderNetworkError,
@@ -34,9 +37,25 @@ def _set_gemini_key(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(settings, "gemini_api_key", SecretStr("test-key"))
 
 
-def _input() -> AnswerQuestionInput:
-    return AnswerQuestionInput(
-        question="今日のNVIDIAの発表は？",
+def _request() -> PlanningRequest:
+    return PlanningRequest(
+        context=QuestionContext(
+            standalone_question="今日のNVIDIAの発表は？",
+            content_requirements=[
+                AnswerRequirement(
+                    requirement_id="c1",
+                    description="NVIDIA の発表内容",
+                )
+            ],
+            response_requirements=[
+                AnswerRequirement(
+                    requirement_id="p1",
+                    description="表形式で回答する",
+                )
+            ],
+            relevant_prior_coverage="前回は発表内容を説明済み",
+            active_goal="投資判断を進める",
+        ),
         as_of=datetime(2026, 6, 29, tzinfo=UTC),
     )
 
@@ -95,7 +114,7 @@ async def test_call_api_returns_question_plan_draft() -> None:
     }
     mock_call = _patch_generate_content(planner, _stub_response(json.dumps(payload)))
 
-    plan = await planner.plan(_input())
+    plan = await planner.plan(_request())
 
     assert isinstance(plan, QuestionPlanDraft)
     assert plan.retrieval_mode == "external"
@@ -106,6 +125,10 @@ async def test_call_api_returns_question_plan_draft() -> None:
     kwargs = mock_call.await_args.kwargs
     assert kwargs["model"] == GEMINI_QUESTION_PLANNER_SPEC.model
     assert "今日のNVIDIAの発表は？" in kwargs["contents"]
+    assert "NVIDIA の発表内容" in kwargs["contents"]
+    assert "表形式で回答する" in kwargs["contents"]
+    assert "前回は発表内容を説明済み" in kwargs["contents"]
+    assert "投資判断を進める" in kwargs["contents"]
     config = kwargs["config"]
     assert config.response_mime_type == "application/json"
     assert isinstance(config.response_schema, dict)
@@ -123,7 +146,7 @@ async def test_plan_includes_previous_error_in_repair_prompt() -> None:
     }
     mock_call = _patch_generate_content(planner, _stub_response(json.dumps(payload)))
 
-    await planner.plan(_input(), previous_error="missing field: reason")
+    await planner.plan(_request(), previous_error="missing field: reason")
 
     assert "missing field: reason" in mock_call.await_args.kwargs["contents"]
 
@@ -134,7 +157,7 @@ async def test_invalid_json_raises_response_invalid() -> None:
     _patch_generate_content(planner, _stub_response("not json"))
 
     with pytest.raises(QuestionPlannerResponseInvalidError) as exc_info:
-        await planner.plan(_input())
+        await planner.plan(_request())
 
     assert exc_info.value.defect is GeminiQuestionPlannerResponseDefect.NOT_JSON
 
@@ -145,7 +168,7 @@ async def test_non_object_payload_raises_response_invalid() -> None:
     _patch_generate_content(planner, _stub_response("[1, 2, 3]"))
 
     with pytest.raises(QuestionPlannerResponseInvalidError) as exc_info:
-        await planner.plan(_input())
+        await planner.plan(_request())
 
     assert exc_info.value.defect is GeminiQuestionPlannerResponseDefect.NOT_OBJECT
 
@@ -156,7 +179,7 @@ async def test_schema_invalid_payload_raises_validation_error() -> None:
     _patch_generate_content(planner, _stub_response(json.dumps({"retrieval_mode": 1})))
 
     with pytest.raises(ValidationError):
-        await planner.plan(_input())
+        await planner.plan(_request())
 
 
 @pytest.mark.asyncio
@@ -168,7 +191,7 @@ async def test_finish_reason_safety_raises_output_blocked() -> None:
     )
 
     with pytest.raises(AIProviderOutputBlockedError) as exc_info:
-        await planner.plan(_input())
+        await planner.plan(_request())
 
     assert exc_info.value.reason is GeminiContentRejectionReason.SAFETY
 
@@ -181,4 +204,4 @@ async def test_sdk_timeout_translates_to_network_error() -> None:
     planner._client.aio.models.generate_content = mock_call
 
     with pytest.raises(AIProviderNetworkError):
-        await planner.plan(_input())
+        await planner.plan(_request())

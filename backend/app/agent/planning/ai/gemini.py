@@ -10,13 +10,13 @@ from google import genai
 from google.genai.types import GenerateContentConfig
 from pydantic import ValidationError
 
-from app.agent.contract import AnswerQuestionInput
 from app.agent.planning.ai.gemini_prompt import GeminiQuestionPlannerPrompt
 from app.agent.planning.ai.gemini_spec import (
     GEMINI_QUESTION_PLANNER_SPEC,
     GeminiQuestionPlannerSpec,
 )
 from app.agent.planning.contract import (
+    PlanningRequest,
     QuestionPlanDraft,
     QuestionPlannerResponseInvalidError,
 )
@@ -67,16 +67,12 @@ class GeminiQuestionPlanner:
 
     async def plan(
         self,
-        input: AnswerQuestionInput,
+        request: PlanningRequest,
         *,
         previous_error: str | None = None,
     ) -> QuestionPlanDraft:
         prompt = GeminiQuestionPlannerPrompt.render(
-            question=input.question,
-            as_of=input.as_of,
-            user_intent=input.user_intent,
-            prior_coverage=input.prior_coverage,
-            user_activity_context=input.user_activity_context,
+            request=request,
             previous_error=previous_error,
         )
         try:

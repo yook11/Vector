@@ -11,10 +11,7 @@ import pytest
 from logfire.testing import CaptureLogfire
 from pydantic import ValidationError
 
-from app.agent.contract import (
-    AnswerQuestionInput,
-    RetrievalMode,
-)
+from app.agent.contract import RetrievalMode
 from app.agent.planning.ai.gemini import (
     GeminiQuestionPlannerResponseDefect,
     QuestionPlannerResponseInvalidError,
@@ -32,6 +29,7 @@ from app.agent.planning.contract import (
     InternalAndExternalPlan,
     InternalRetrievalPlan,
     NoRetrievalPlan,
+    PlanningRequest,
     QuestionPlan,
     QuestionPlanDraft,
     QuestionPlanner,
@@ -40,15 +38,16 @@ from app.agent.planning.contract import (
 from app.agent.planning.service import (
     QuestionPlanningService,
 )
+from app.agent.question_context.contract import QuestionContext
 from app.analysis.ai_provider_errors import AIProviderNetworkError
 from tests.logfire._metric_helpers import collected_metrics, sum_counter_for_result
 
 _PLANNER_OUTCOME_METRIC = "vector.agent.planner.outcome"
 
 
-def _input(question: str = "今日のNVIDIAの発表は？") -> AnswerQuestionInput:
-    return AnswerQuestionInput(
-        question=question,
+def _input(question: str = "今日のNVIDIAの発表は？") -> PlanningRequest:
+    return PlanningRequest(
+        context=QuestionContext(standalone_question=question),
         as_of=datetime(2026, 6, 29, tzinfo=UTC),
     )
 
@@ -121,13 +120,15 @@ class FakePlanner:
     def __init__(self, outcomes: Sequence[QuestionPlanDraft | Exception]) -> None:
         self._outcomes = list(outcomes)
         self.previous_errors: list[str | None] = []
+        self.requests: list[PlanningRequest] = []
 
     async def plan(
         self,
-        input: AnswerQuestionInput,
+        request: PlanningRequest,
         *,
         previous_error: str | None = None,
     ) -> QuestionPlanDraft:
+        self.requests.append(request)
         self.previous_errors.append(previous_error)
         outcome = self._outcomes.pop(0)
         if isinstance(outcome, Exception):
@@ -216,6 +217,7 @@ class TestQuestionPlanningService:
             _external_task("NVIDIA の直近発表を確認する")
         ]
         assert planner.previous_errors == [None]
+        assert planner.requests == [_input()]
 
     @pytest.mark.asyncio
     async def test_retries_once_with_previous_error(self) -> None:
@@ -370,7 +372,9 @@ class TestQuestionPlanningService:
             audit_recorder=recorder,
         ).plan(_input())
 
-        assert plan == safe_fallback_plan(fallback_query=_input().question)
+        assert plan == safe_fallback_plan(
+            fallback_query=_input().context.standalone_question
+        )
         assert [event.attempt_number for event in recorder.attempt_failures] == [1, 2]
         assert recorder.draft_events == []
         assert len(recorder.final_events) == 1

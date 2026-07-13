@@ -3,11 +3,11 @@
 from __future__ import annotations
 
 from collections.abc import AsyncIterator
-from datetime import datetime
 from typing import Literal, Protocol, Self
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from app.agent.answering.contract import AnsweringRequest
 from app.agent.answering.evidence_answer.evidence import AnswerEvidenceItem
 from app.agent.contract import NonBlankText
 
@@ -71,13 +71,9 @@ class EvidenceAnswerDraftGenerator(Protocol):
     def stream(
         self,
         *,
-        question: str,
+        request: AnsweringRequest,
         evidence: list[AnswerEvidenceItem],
-        as_of: datetime,
         target_time_window: str | None,
-        user_intent: str = "",
-        prior_coverage: str = "",
-        user_activity_context: str = "",
         previous_error: str | None = None,
     ) -> AsyncIterator[str]: ...
 
@@ -88,13 +84,9 @@ class EvidenceAnswerer(Protocol):
     async def answer(
         self,
         *,
-        question: str,
+        request: AnsweringRequest,
         evidence: list[AnswerEvidenceItem],
-        as_of: datetime,
         target_time_window: str | None,
-        user_intent: str = "",
-        prior_coverage: str = "",
-        user_activity_context: str = "",
     ) -> EvidenceAnswerDraft: ...
 
 

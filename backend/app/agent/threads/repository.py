@@ -42,7 +42,11 @@ class AgentThreadRepository:
             return []
         rows = (
             await self._session.execute(
-                select(AgentMessage.role, AgentMessage.content)
+                select(
+                    AgentMessage.role,
+                    AgentMessage.content,
+                    AgentMessage.missing_aspects,
+                )
                 .where(
                     AgentMessage.thread_id == thread_id,
                     AgentMessage.seq < before_seq,
@@ -52,10 +56,20 @@ class AgentThreadRepository:
             )
         ).all()
         snapshots: list[ThreadMessageSnapshot] = []
-        for role, content in reversed(rows):
+        for role, content, missing_aspects in reversed(rows):
             if role not in {"user", "assistant"}:
                 raise ValueError(f"unexpected agent message role: {role!r}")
-            snapshots.append(ThreadMessageSnapshot(role=role, content=content))
+            snapshots.append(
+                ThreadMessageSnapshot(
+                    role=role,
+                    content=content,
+                    missing_aspects=(
+                        _assistant_missing_aspects(missing_aspects)
+                        if role == "assistant"
+                        else ()
+                    ),
+                )
+            )
         return snapshots
 
     async def list_threads_for_user(
@@ -187,3 +201,9 @@ class AgentThreadRepository:
             .execution_options(synchronize_session=False)
         )
         return (result.rowcount or 0) == 1
+
+
+def _assistant_missing_aspects(value: object) -> tuple[str, ...]:
+    if not isinstance(value, list):
+        return ()
+    return tuple(item for item in value if isinstance(item, str) and item)

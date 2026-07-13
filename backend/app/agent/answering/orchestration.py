@@ -5,6 +5,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Literal, Protocol, assert_never
 
+from app.agent.answering.contract import AnsweringRequest
 from app.agent.answering.direct_answer.contract import DirectAnswerer
 from app.agent.answering.evidence_answer.contract import (
     EvidenceAnswerDraft,
@@ -30,6 +31,7 @@ from app.agent.planning.contract import (
     InternalAndExternalPlan,
     InternalRetrievalPlan,
     NoRetrievalPlan,
+    PlanningRequest,
     QuestionPlanner,
     RetrievalPlan,
 )
@@ -72,15 +74,14 @@ class QuestionAnsweringOrchestrator:
 
     async def answer(self, input: AnswerQuestionInput) -> AnswerQuestionResult:
         await self._report_progress("planning")
-        plan = await self._planner.plan(input)
+        planning_request = PlanningRequest(context=input.context, as_of=input.as_of)
+        answering_request = AnsweringRequest(context=input.context, as_of=input.as_of)
+        plan = await self._planner.plan(planning_request)
         match plan:
             case NoRetrievalPlan():
                 await self._report_progress("synthesizing")
                 draft = await self._direct_answerer.answer(
-                    question=input.question,
-                    as_of=input.as_of,
-                    user_intent=input.user_intent,
-                    user_activity_context=input.user_activity_context,
+                    request=answering_request,
                     previous_answer=input.previous_answer,
                 )
                 return AnswerQuestionResult(
@@ -98,28 +99,27 @@ class QuestionAnsweringOrchestrator:
                 | ExternalSearchPlan()
                 | InternalAndExternalPlan()
             ):
-                return await self._answer_with_evidence(input=input, plan=plan)
+                return await self._answer_with_evidence(
+                    request=answering_request,
+                    plan=plan,
+                )
         assert_never(plan)
 
     async def _answer_with_evidence(
         self,
         *,
-        input: AnswerQuestionInput,
+        request: AnsweringRequest,
         plan: RetrievalPlan,
     ) -> AnswerQuestionResult:
         await self._report_progress("retrieving")
-        outcome = await self._evidence_collector.collect(plan, as_of=input.as_of)
+        outcome = await self._evidence_collector.collect(plan, as_of=request.as_of)
         evidence = normalize_answer_evidence(outcome)
 
         await self._report_progress("synthesizing")
         draft = await self._evidence_answerer.answer(
-            question=input.question,
+            request=request,
             evidence=evidence,
-            as_of=input.as_of,
             target_time_window=_plan_target_time_window(plan),
-            user_intent=input.user_intent,
-            prior_coverage=input.prior_coverage,
-            user_activity_context=input.user_activity_context,
         )
         _validate_draft_citations(evidence=evidence, draft=draft)
         sources = _sources_for_citations(evidence=evidence, cited_refs=draft.cited_refs)
