@@ -59,14 +59,15 @@ export function ResearchComposer({
   return (
     <form
       onSubmit={handleSubmit}
-      className="min-w-0 border-t border-[var(--vector-rule)] bg-[var(--vector-surface)]/92 p-3 shadow-[0_-10px_30px_rgba(34,28,22,0.05)]"
+      className="min-w-0 shrink-0 border-t border-[var(--vector-rule)] bg-[var(--vector-surface)]/92 px-3 pt-3 pb-[calc(0.75rem+env(safe-area-inset-bottom))] shadow-[0_-10px_30px_rgba(34,28,22,0.05)]"
     >
-      <div className="flex min-w-0 items-end gap-2">
+      <div className="mx-auto flex w-full max-w-[860px] min-w-0 items-end gap-2">
         <label className="sr-only" htmlFor="research-question">
           質問
         </label>
         <textarea
           id="research-question"
+          name="question"
           value={question}
           onChange={(event) => setQuestion(event.target.value)}
           placeholder={
@@ -77,7 +78,7 @@ export function ResearchComposer({
           disabled={disabled}
           rows={2}
           maxLength={1000}
-          className="min-h-16 min-w-0 flex-1 resize-none rounded-md border border-[var(--vector-line)] bg-[var(--vector-paper)] px-3 py-2 text-sm leading-6 text-[var(--vector-ink)] outline-none transition focus:border-[var(--vector-accent)] focus:ring-2 focus:ring-[var(--vector-accent)]/20 disabled:cursor-not-allowed disabled:opacity-60"
+          className="min-h-16 min-w-0 flex-1 resize-none rounded-md border border-[var(--vector-line)] bg-[var(--vector-paper)] px-3 py-2 text-base leading-6 text-[var(--vector-ink)] outline-none transition focus:border-[var(--vector-accent)] focus:ring-2 focus:ring-[var(--vector-accent)]/20 disabled:cursor-not-allowed disabled:opacity-60"
         />
         {activeRunId ? (
           <Button

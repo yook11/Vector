@@ -7,7 +7,7 @@ const THREAD_ONE = "00000000-0000-4000-a000-000000000001";
 const THREAD_TWO = "00000000-0000-4000-a000-000000000002";
 
 describe("ResearchLiveAnnouncer", () => {
-  it("announces an observed active run exactly once when the same thread becomes completed", () => {
+  it("keeps one stable polite atomic region and announces observed completion exactly once", () => {
     const { rerender } = render(
       <ResearchLiveAnnouncer
         threadId={THREAD_ONE}
@@ -15,7 +15,10 @@ describe("ResearchLiveAnnouncer", () => {
         completedRunIds={[]}
       />,
     );
-    expect(screen.queryByRole("status")).not.toBeInTheDocument();
+    const announcer = screen.getByRole("status");
+    expect(announcer).toHaveClass("sr-only");
+    expect(announcer).toHaveAttribute("aria-live", "polite");
+    expect(announcer).toHaveAttribute("aria-atomic", "true");
 
     rerender(
       <ResearchLiveAnnouncer
@@ -24,8 +27,8 @@ describe("ResearchLiveAnnouncer", () => {
         completedRunIds={[RUN_ONE]}
       />,
     );
-    expect(screen.getByRole("status")).toHaveTextContent("回答が完了しました");
-    expect(screen.getByRole("status")).toHaveAttribute("aria-live", "polite");
+    expect(screen.getByRole("status")).toBe(announcer);
+    expect(announcer).toHaveTextContent("回答が完了しました");
 
     rerender(
       <ResearchLiveAnnouncer
@@ -34,10 +37,11 @@ describe("ResearchLiveAnnouncer", () => {
         completedRunIds={[RUN_ONE]}
       />,
     );
+    expect(screen.getByRole("status")).toBe(announcer);
     expect(screen.getAllByText("回答が完了しました")).toHaveLength(1);
   });
 
-  it("does not announce an initially completed thread or a revisit", () => {
+  it("keeps an initially completed thread and a revisit silent", () => {
     const firstVisit = render(
       <ResearchLiveAnnouncer
         threadId={THREAD_ONE}
@@ -45,7 +49,7 @@ describe("ResearchLiveAnnouncer", () => {
         completedRunIds={[RUN_ONE]}
       />,
     );
-    expect(screen.queryByText("回答が完了しました")).not.toBeInTheDocument();
+    expect(screen.getByRole("status")).toBeEmptyDOMElement();
     firstVisit.unmount();
 
     render(
@@ -55,10 +59,10 @@ describe("ResearchLiveAnnouncer", () => {
         completedRunIds={[RUN_ONE]}
       />,
     );
-    expect(screen.queryByText("回答が完了しました")).not.toBeInTheDocument();
+    expect(screen.getByRole("status")).toBeEmptyDOMElement();
   });
 
-  it("does not announce ordinary rerenders such as activity or delta updates", () => {
+  it("does not replace or mutate the region for ordinary rerenders", () => {
     const { rerender } = render(
       <ResearchLiveAnnouncer
         threadId={THREAD_ONE}
@@ -66,6 +70,7 @@ describe("ResearchLiveAnnouncer", () => {
         completedRunIds={[]}
       />,
     );
+    const announcer = screen.getByRole("status");
 
     rerender(
       <ResearchLiveAnnouncer
@@ -82,7 +87,8 @@ describe("ResearchLiveAnnouncer", () => {
       />,
     );
 
-    expect(screen.queryByText("回答が完了しました")).not.toBeInTheDocument();
+    expect(screen.getByRole("status")).toBe(announcer);
+    expect(announcer).toBeEmptyDOMElement();
   });
 
   it("does not announce an old run after leaving its thread and revisiting", () => {
@@ -109,6 +115,6 @@ describe("ResearchLiveAnnouncer", () => {
       />,
     );
 
-    expect(screen.queryByText("回答が完了しました")).not.toBeInTheDocument();
+    expect(screen.getByRole("status")).toBeEmptyDOMElement();
   });
 });

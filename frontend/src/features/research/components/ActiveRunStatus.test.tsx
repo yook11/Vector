@@ -1,4 +1,4 @@
-import { render, screen, within } from "@testing-library/react";
+import { render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ResearchLiveActivity } from "../live/events";
 import { ActiveRunStatus } from "./ActiveRunStatus";
@@ -77,8 +77,8 @@ describe("ActiveRunStatus", () => {
     expect(screen.getByText(text)).toBeInTheDocument();
   });
 
-  it("keeps activity content outside the polite stage status region", () => {
-    render(
+  it("leaves live notification ownership to the workspace announcer", () => {
+    const { container } = render(
       <ActiveRunStatus
         status="running"
         stage="retrieving"
@@ -90,12 +90,33 @@ describe("ActiveRunStatus", () => {
       />,
     );
 
-    const status = screen.getByRole("status");
-    const activity = screen.getByText("候補8件を取得");
-    expect(status).toHaveAttribute("aria-live", "polite");
-    expect(within(status).getByText("情報収集中")).toBeInTheDocument();
-    expect(status).not.toContainElement(activity);
-    expect(activity.closest('[aria-live="polite"]')).toBeNull();
+    expect(screen.getByText("情報収集中")).toBeInTheDocument();
+    expect(screen.getByText("候補8件を取得")).toBeInTheDocument();
+    expect(screen.queryByRole("status")).not.toBeInTheDocument();
+    expect(container.querySelector("[aria-live]")).toBeNull();
+  });
+
+  it("keeps the stage on one line and long activity to two breakable lines", () => {
+    render(
+      <ActiveRunStatus
+        status="running"
+        stage="retrieving"
+        activity={{
+          type: "external_search.queries_generated",
+          taskIndex: 0,
+          queries: [
+            "VeryLongSearchQueryWithoutNaturalWhitespaceForOverflowVerification",
+          ],
+        }}
+      />,
+    );
+
+    expect(screen.getByText("情報収集中")).toHaveClass("whitespace-nowrap");
+    expect(
+      screen.getByText(
+        "“VeryLongSearchQueryWithoutNaturalWhitespaceForOverflowVerification” を検索中",
+      ),
+    ).toHaveClass("line-clamp-2", "break-words", "[overflow-wrap:anywhere]");
   });
 
   it("hides activity when it does not describe the current stage", () => {
@@ -119,9 +140,7 @@ describe("ActiveRunStatus", () => {
       <ActiveRunStatus status="running" stage="planning" activity={null} />,
     );
 
-    const spinner = screen
-      .getByRole("status")
-      .querySelector('[aria-hidden="true"]');
+    const spinner = document.querySelector('[aria-hidden="true"].animate-spin');
     expect(spinner).not.toBeNull();
     expect(spinner).toHaveClass("animate-spin");
     expect(spinner).toHaveClass("motion-reduce:animate-none");

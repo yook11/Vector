@@ -111,6 +111,25 @@ describe("ResearchNavigationLink", () => {
     expect(active).toHaveAttribute("aria-current", "page");
   });
 
+  it("旧view queryをthread/new/more hrefへ継承せず既存limitだけを維持する", () => {
+    mocks.search = "limit=2&view=sources";
+    renderLinks();
+
+    const expectations = [
+      [screen.getByRole("link", { name: /Thread A/ }), "2"],
+      [screen.getByRole("link", { name: /Thread B/ }), "2"],
+      [screen.getByRole("link", { name: /さらに表示/ }), "3"],
+      [screen.getByRole("link", { name: "新しいスレッド" }), null],
+    ] as const;
+    for (const [link, limit] of expectations) {
+      const href = link.getAttribute("href");
+      expect(href).not.toBeNull();
+      const url = new URL(href ?? "", "http://research.local");
+      expect(url.searchParams.get("limit")).toBe(limit);
+      expect(url.searchParams.has("view")).toBe(false);
+    }
+  });
+
   it("clicked threadをbusyにし、他のResearch navigationもlockする", async () => {
     const user = userEvent.setup();
     renderLinks();

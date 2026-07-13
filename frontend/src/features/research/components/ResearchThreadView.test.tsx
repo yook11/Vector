@@ -1,4 +1,4 @@
-import { act, render, screen } from "@testing-library/react";
+import { act, cleanup, render, screen, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type {
   ResearchAssistantMessage,
@@ -21,6 +21,7 @@ interface ScrollCapture {
 const mocks = vi.hoisted(() => ({
   refresh: vi.fn(),
   scrollProps: [] as ScrollCapture[],
+  renderActualScroll: false,
 }));
 
 vi.mock("next/navigation", () => ({
@@ -37,12 +38,18 @@ vi.mock("./ResearchComposer", () => ({
   ),
 }));
 
-vi.mock("./ResearchLiveScrollButton", () => ({
-  ResearchLiveScrollButton: (props: ScrollCapture) => {
-    mocks.scrollProps.push(props);
-    return null;
-  },
-}));
+vi.mock("./ResearchLiveScrollButton", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("./ResearchLiveScrollButton")>();
+  return {
+    ResearchLiveScrollButton: (props: ScrollCapture) => {
+      mocks.scrollProps.push(props);
+      return mocks.renderActualScroll ? (
+        <actual.ResearchLiveScrollButton {...props} />
+      ) : null;
+    },
+  };
+});
 
 type Listener = EventListenerOrEventListenerObject;
 
@@ -134,14 +141,18 @@ function userMessage(
 
 function assistantMessage(
   content = "DBで確定した回答",
+  details: Pick<ResearchAssistantMessage, "sources" | "missingAspects"> = {
+    sources: [],
+    missingAspects: [],
+  },
 ): ResearchAssistantMessage {
   return {
     role: "assistant",
     seq: 2,
     content,
     createdAt: "2026-07-13T00:01:00Z",
-    sources: [],
-    missingAspects: [],
+    sources: details.sources,
+    missingAspects: details.missingAspects,
   };
 }
 
@@ -168,6 +179,130 @@ function latestScrollProps(): ScrollCapture {
   return props;
 }
 
+function answerSlot(): HTMLElement {
+  return screen.getByTestId("research-answer-slot");
+}
+
+function expectExclusiveAnswer(
+  slot: HTMLElement,
+  expected: "draft" | "final",
+): void {
+  const draft = within(slot).queryByText("一時下書き");
+  const final = within(slot).queryByText("DBで確定した回答");
+  expect([draft, final].filter((element) => element !== null)).toHaveLength(1);
+  expect(draft !== null ? "draft" : "final").toBe(expected);
+  expect(slot.textContent?.trim()).not.toBe("");
+}
+
+let animationFrameId = 0;
+let animationFrames = new Map<number, FrameRequestCallback>();
+
+function flushAnimationFrames(): void {
+  const frames = [...animationFrames.values()];
+  animationFrames = new Map();
+  for (const callback of frames) callback(performance.now());
+}
+
+interface ConfiguredScroller {
+  scrollTo: ReturnType<typeof vi.fn>;
+  setScrollHeight: (value: number) => void;
+}
+
+function configureScroller(
+  element: HTMLElement,
+  geometry: {
+    scrollHeight: number;
+    clientHeight: number;
+    scrollTop: number;
+  },
+): ConfiguredScroller {
+  let scrollHeight = geometry.scrollHeight;
+  Object.defineProperties(element, {
+    scrollHeight: { configurable: true, get: () => scrollHeight },
+    clientHeight: { configurable: true, value: geometry.clientHeight },
+    scrollTop: {
+      configurable: true,
+      writable: true,
+      value: geometry.scrollTop,
+    },
+  });
+  const scrollTo = vi.fn((options: ScrollToOptions) => {
+    element.scrollTop = Number(options.top ?? element.scrollTop);
+  });
+  Object.defineProperty(element, "scrollTo", {
+    configurable: true,
+    value: scrollTo,
+  });
+  return {
+    scrollTo,
+    setScrollHeight(value: number) {
+      scrollHeight = value;
+    },
+  };
+}
+
+function visualAnswerAnchor(scroller: HTMLElement, documentTop: number): void {
+  vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(
+    function (this: HTMLElement) {
+      const text = this.textContent ?? "";
+      const isAnswerAnchor =
+        this.dataset.testid === "research-answer-slot" ||
+        this.hasAttribute("data-research-answer-anchor") ||
+        (this.tagName === "ARTICLE" &&
+          (text.includes("一時下書き") || text.includes("DBで確定した回答")));
+      const top = isAnswerAnchor ? documentTop - scroller.scrollTop : 0;
+      const height = isAnswerAnchor ? 80 : 0;
+      return {
+        x: 0,
+        y: top,
+        top,
+        right: 0,
+        bottom: top + height,
+        left: 0,
+        width: 0,
+        height,
+        toJSON: () => ({}),
+      };
+    },
+  );
+}
+
+function answerAnchor(text: string): HTMLElement {
+  const content = screen.getByText(text);
+  return (
+    content.closest<HTMLElement>(
+      '[data-testid="research-answer-slot"], [data-research-answer-anchor], article',
+    ) ?? content
+  );
+}
+
+function directChildContaining(
+  parent: HTMLElement,
+  descendant: HTMLElement,
+): HTMLElement {
+  const child = Array.from(parent.children).find((candidate) =>
+    candidate.contains(descendant),
+  );
+  if (!(child instanceof HTMLElement)) {
+    throw new Error("expected a direct child containing the element");
+  }
+  return child;
+}
+
+function onlyLiveAnnouncer(container: HTMLElement): HTMLElement {
+  const owners = Array.from(
+    container.querySelectorAll<HTMLElement>('[role="status"], [aria-live]'),
+  );
+  expect(owners).toHaveLength(1);
+  const announcer = owners[0];
+  if (announcer === undefined) throw new Error("live announcer is missing");
+  expect(announcer).toHaveAttribute("role", "status");
+  expect(announcer).toHaveAttribute("aria-live", "polite");
+  expect(announcer).toHaveAttribute("aria-atomic", "true");
+  expect(announcer).toHaveClass("sr-only");
+  return announcer;
+}
+
 function deferred<T>() {
   let resolve!: (value: T) => void;
   const promise = new Promise<T>((resolvePromise) => {
@@ -179,19 +314,57 @@ function deferred<T>() {
 beforeEach(() => {
   mocks.refresh.mockReset();
   mocks.scrollProps.length = 0;
+  mocks.renderActualScroll = false;
   FakeEventSource.instances.length = 0;
+  animationFrameId = 0;
+  animationFrames = new Map();
   vi.stubGlobal("EventSource", FakeEventSource);
   vi.stubGlobal(
     "fetch",
     vi.fn(() => new Promise<Response>(() => undefined)),
   );
+  vi.stubGlobal(
+    "requestAnimationFrame",
+    vi.fn((callback: FrameRequestCallback) => {
+      animationFrameId += 1;
+      animationFrames.set(animationFrameId, callback);
+      return animationFrameId;
+    }),
+  );
+  vi.stubGlobal(
+    "cancelAnimationFrame",
+    vi.fn((id: number) => animationFrames.delete(id)),
+  );
 });
 
 afterEach(() => {
+  cleanup();
+  vi.restoreAllMocks();
   vi.unstubAllGlobals();
 });
 
 describe("ResearchThreadView live integration", () => {
+  it("headerとcomposerをanswer scroller外の非scroll siblingに保つ", () => {
+    const view = render(<ResearchThreadView thread={activeThread()} />);
+    const threadPane = view.container.querySelector("section");
+    const header = view.container.querySelector("header");
+    const composer = screen.getByTestId("composer-run-id");
+    const answerScroller = latestScrollProps().containerRef.current;
+    const answerRegion = answerScroller?.parentElement;
+
+    expect(threadPane).not.toBeNull();
+    expect(header?.parentElement).toBe(threadPane);
+    expect(answerRegion?.parentElement).toBe(threadPane);
+    expect(composer.parentElement).toBe(threadPane);
+    expect(Array.from(threadPane?.children ?? [])).toEqual([
+      header,
+      answerRegion,
+      composer,
+    ]);
+    expect(answerRegion).toHaveClass("min-h-0", "flex-1");
+    expect(answerScroller).toHaveClass("h-full", "min-h-0", "overflow-y-auto");
+  });
+
   it("promotes queued UI to running and shows the draft after accepted SSE", async () => {
     vi.stubGlobal(
       "fetch",
@@ -264,12 +437,20 @@ describe("ResearchThreadView live integration", () => {
     expect(screen.queryByText("discarded")).not.toBeInTheDocument();
   });
 
-  it("keeps progress in the user card and adds the first draft in a following assistant article", () => {
+  it("places the status rail after the question-only bubble and before the temporary draft", () => {
     render(<ResearchThreadView thread={activeThread()} />);
     const userText = screen.getByText("このニュースの影響は？");
     const userArticle = userText.closest("article");
+    const stage = screen.getByText("計画中");
 
-    expect(screen.getByText("計画中")).toBeInTheDocument();
+    expect(userArticle).not.toBeNull();
+    if (userArticle === null || userArticle.parentElement === null) {
+      throw new Error("question turn is missing");
+    }
+    const statusRail = directChildContaining(userArticle.parentElement, stage);
+    expect(userArticle).toHaveTextContent("このニュースの影響は？");
+    expect(userArticle.textContent).toBe("このニュースの影響は？");
+    expect(userArticle.nextElementSibling).toBe(statusRail);
     expect(screen.queryByText("回答を生成中…")).not.toBeInTheDocument();
 
     act(() => {
@@ -283,14 +464,41 @@ describe("ResearchThreadView live integration", () => {
     const draft = screen.getByText("保持suffixの下書き");
     const draftArticle = draft.closest("article");
     expect(screen.getByText("回答を生成中…")).toBeInTheDocument();
-    expect(userArticle).not.toBeNull();
     expect(draftArticle).not.toBeNull();
     expect(draftArticle).not.toBe(userArticle);
-    expect(userArticle?.nextElementSibling).toBe(draftArticle);
+    expect(statusRail.nextElementSibling).toBe(draftArticle);
+  });
+
+  it.each([
+    ["internal_error", "回答を生成できませんでした"],
+    ["cancelled", "キャンセルしました"],
+  ] as const)("places persisted %s wording outside and immediately after the question bubble", (errorCode, message) => {
+    render(
+      <ResearchThreadView
+        thread={thread([userMessage(run(RUN_ONE, "failed", errorCode))])}
+      />,
+    );
+    const question = screen.getByText("このニュースの影響は？");
+    const questionArticle = question.closest("article");
+    const status = screen.getByText(message);
+
+    expect(questionArticle).not.toBeNull();
+    if (questionArticle === null || questionArticle.parentElement === null) {
+      throw new Error("question turn is missing");
+    }
+    const statusRail = directChildContaining(
+      questionArticle.parentElement,
+      status,
+    );
+    expect(questionArticle.textContent).toBe("このニュースの影響は？");
+    expect(questionArticle.nextElementSibling).toBe(statusRail);
   });
 
   it("connects the scroll container and changes content revision only for answer content", () => {
     const view = render(<ResearchThreadView thread={activeThread()} />);
+    const questionArticle = screen
+      .getByText("このニュースの影響は？")
+      .closest("article");
     const initialScroll = latestScrollProps();
     expect(initialScroll.containerRef.current).not.toBeNull();
     expect(initialScroll.containerRef.current).toHaveClass("overflow-y-auto");
@@ -304,12 +512,37 @@ describe("ResearchThreadView live integration", () => {
     });
     const afterStage = latestScrollProps();
     expect(afterStage.contentRevision).toBe(initialScroll.contentRevision);
+    expect(screen.getByText("このニュースの影響は？").closest("article")).toBe(
+      questionArticle,
+    );
+    expect(questionArticle?.textContent).toBe("このニュースの影響は？");
+
+    act(() => {
+      currentSource().emit(
+        "activity",
+        {
+          attemptEpoch: 1,
+          activity: {
+            type: "external_search.candidates_fetched",
+            taskIndex: 0,
+            candidateCount: 8,
+          },
+        },
+        "2-0",
+      );
+    });
+    const afterActivity = latestScrollProps();
+    expect(afterActivity.contentRevision).toBe(afterStage.contentRevision);
+    expect(screen.getByText("このニュースの影響は？").closest("article")).toBe(
+      questionArticle,
+    );
+    expect(questionArticle?.textContent).toBe("このニュースの影響は？");
 
     act(() => {
       currentSource().emit(
         "answer.delta",
         { attemptEpoch: 1, generation: 1, text: "draft" },
-        "2-0",
+        "3-0",
       );
     });
     const afterDelta = latestScrollProps();
@@ -319,7 +552,7 @@ describe("ResearchThreadView live integration", () => {
       currentSource().emit(
         "answer.reset",
         { attemptEpoch: 1, generation: 2 },
-        "3-0",
+        "4-0",
       );
     });
     const afterReset = latestScrollProps();
@@ -336,6 +569,103 @@ describe("ResearchThreadView live integration", () => {
     expect(latestScrollProps().contentRevision).not.toBe(
       afterReset.contentRevision,
     );
+  });
+
+  it("uses one stable announcer for queued, stage, generation, finalizing, and completion without announcing activity or draft text", () => {
+    const view = render(
+      <ResearchThreadView
+        thread={thread([userMessage(run(RUN_ONE, "queued"))])}
+      />,
+    );
+    const focusTarget = screen.getByRole("button", { name: "削除" });
+    focusTarget.focus();
+    const announcer = onlyLiveAnnouncer(view.container);
+    expect(announcer).toHaveTextContent("待機中");
+
+    act(() => {
+      currentSource().emit("attempt.started", { attemptEpoch: 1 }, "1-0");
+      currentSource().emit(
+        "stage",
+        { attemptEpoch: 1, stage: "retrieving" },
+        "2-0",
+      );
+    });
+    expect(onlyLiveAnnouncer(view.container)).toBe(announcer);
+    expect(announcer).toHaveTextContent("情報収集中");
+    expect(focusTarget).toHaveFocus();
+
+    act(() => {
+      currentSource().emit(
+        "activity",
+        {
+          attemptEpoch: 1,
+          activity: {
+            type: "external_search.candidates_fetched",
+            taskIndex: 0,
+            candidateCount: 8,
+          },
+        },
+        "3-0",
+      );
+    });
+    expect(onlyLiveAnnouncer(view.container)).toBe(announcer);
+    expect(announcer).toHaveTextContent("情報収集中");
+    expect(announcer).not.toHaveTextContent("候補8件を取得");
+
+    act(() => {
+      currentSource().emit(
+        "answer.delta",
+        { attemptEpoch: 1, generation: 1, text: "通知しない下書き本文" },
+        "4-0",
+      );
+    });
+    expect(onlyLiveAnnouncer(view.container)).toBe(announcer);
+    expect(announcer).toHaveTextContent("回答を生成中…");
+    expect(announcer).not.toHaveTextContent("通知しない下書き本文");
+
+    act(() => {
+      currentSource().emit(
+        "terminal",
+        { attemptEpoch: 1, status: "completed" },
+        "5-0",
+      );
+    });
+    expect(onlyLiveAnnouncer(view.container)).toBe(announcer);
+    expect(announcer).toHaveTextContent("回答を確定しています…");
+
+    view.rerender(
+      <ResearchThreadView
+        thread={thread([
+          userMessage(run(RUN_ONE, "completed")),
+          assistantMessage(),
+        ])}
+      />,
+    );
+    expect(onlyLiveAnnouncer(view.container)).toBe(announcer);
+    expect(announcer).toHaveTextContent("回答が完了しました");
+    expect(focusTarget).toHaveFocus();
+  });
+
+  it.each([
+    ["internal_error", "回答を生成できませんでした"],
+    ["cancelled", "キャンセルしました"],
+  ] as const)("announces a live %s terminal state from the single stable region", (errorCode, message) => {
+    const view = render(<ResearchThreadView thread={activeThread()} />);
+    const announcer = onlyLiveAnnouncer(view.container);
+
+    act(() => {
+      currentSource().emit(
+        "terminal",
+        { attemptEpoch: 1, status: "failed", errorCode },
+        "1-0",
+      );
+    });
+
+    expect(onlyLiveAnnouncer(view.container)).toBe(announcer);
+    expect(announcer).toHaveTextContent(message);
+    expect(
+      screen.getByText("このニュースの影響は？").closest("article"),
+    ).not.toContainElement(screen.getByText(message));
   });
 
   it("keeps one EventSource and the same draft through CONNECTING retry before finalizing", () => {
@@ -391,14 +721,16 @@ describe("ResearchThreadView live integration", () => {
     expect(screen.getByText(message)).toBeInTheDocument();
   });
 
-  it("removes a visible draft on CLOSED and never revives it after polling completion", async () => {
+  it("S4B CLOSEDでは同じanswer slotで未完了draftをplaceholderへ抑制し、poll完了後にDB回答へ収束する", async () => {
     const pendingResponse = deferred<Response>();
     vi.stubGlobal(
       "fetch",
       vi.fn(() => pendingResponse.promise),
     );
-    render(<ResearchThreadView thread={activeThread()} />);
+    const view = render(<ResearchThreadView thread={activeThread()} />);
     const source = currentSource();
+    const focusTarget = screen.getByRole("button", { name: "削除" });
+    focusTarget.focus();
     act(() => {
       source.emit(
         "answer.delta",
@@ -407,9 +739,19 @@ describe("ResearchThreadView live integration", () => {
       );
     });
     expect(screen.getByText("不完全な下書き")).toBeInTheDocument();
+    const slot = answerSlot();
+    expect(slot).toContainElement(screen.getByText("不完全な下書き"));
+    expect(slot.textContent?.trim().length).toBeGreaterThan(0);
+    expect(focusTarget).toHaveFocus();
 
     act(() => source.closed());
+    expect(answerSlot()).toBe(slot);
     expect(screen.queryByText("不完全な下書き")).not.toBeInTheDocument();
+    expect(within(slot).queryByText("DBで確定した回答")).toBeNull();
+    expect(slot.textContent?.trim().length).toBeGreaterThan(0);
+    expect(slot).not.toHaveTextContent("回答を確定しています…");
+    expect(slot).not.toHaveTextContent("回答が完了しました");
+    expect(focusTarget).toHaveFocus();
     expect(FakeEventSource.instances).toHaveLength(1);
 
     await act(async () => {
@@ -430,21 +772,15 @@ describe("ResearchThreadView live integration", () => {
       await Promise.resolve();
     });
 
-    expect(screen.getByText("回答を確定しています…")).toBeInTheDocument();
+    expect(answerSlot()).toBe(slot);
+    expect(screen.getAllByText("回答を確定しています…").length).toBeGreaterThan(
+      0,
+    );
     expect(screen.queryByText("不完全な下書き")).not.toBeInTheDocument();
+    expect(within(slot).queryByText("DBで確定した回答")).toBeNull();
+    expect(slot.textContent?.trim().length).toBeGreaterThan(0);
+    expect(focusTarget).toHaveFocus();
     expect(FakeEventSource.instances).toHaveLength(1);
-  });
-
-  it("atomically replaces a live draft with the DB assistant message", () => {
-    const view = render(<ResearchThreadView thread={activeThread()} />);
-    act(() => {
-      currentSource().emit(
-        "answer.delta",
-        { attemptEpoch: 1, generation: 1, text: "一時下書き" },
-        "1-0",
-      );
-    });
-    expect(screen.getByText("一時下書き")).toBeInTheDocument();
 
     view.rerender(
       <ResearchThreadView
@@ -455,11 +791,182 @@ describe("ResearchThreadView live integration", () => {
       />,
     );
 
+    expect(answerSlot()).toBe(slot);
+    expectExclusiveAnswer(slot, "final");
+    expect(screen.queryByText("不完全な下書き")).not.toBeInTheDocument();
+    expect(focusTarget).toHaveFocus();
+  });
+
+  it("S4B 通常完了では同じanswer slotがdraftとfinalizingを保持し、空renderなしでDB回答だけへ置換する", () => {
+    const view = render(<ResearchThreadView thread={activeThread()} />);
+    const focusTarget = screen.getByRole("button", { name: "削除" });
+    focusTarget.focus();
+    act(() => {
+      currentSource().emit(
+        "answer.delta",
+        { attemptEpoch: 1, generation: 1, text: "一時下書き" },
+        "1-0",
+      );
+    });
+    expect(screen.getByText("一時下書き")).toBeInTheDocument();
+    const slot = answerSlot();
+    expectExclusiveAnswer(slot, "draft");
+    expect(focusTarget).toHaveFocus();
+
+    act(() => {
+      currentSource().emit(
+        "terminal",
+        { attemptEpoch: 1, status: "completed" },
+        "2-0",
+      );
+    });
+
+    expect(answerSlot()).toBe(slot);
+    expectExclusiveAnswer(slot, "draft");
+    expect(screen.getAllByText("回答を確定しています…").length).toBeGreaterThan(
+      0,
+    );
+    expect(focusTarget).toHaveFocus();
+
+    view.rerender(
+      <ResearchThreadView
+        thread={thread([
+          userMessage(run(RUN_ONE, "completed")),
+          assistantMessage(),
+        ])}
+      />,
+    );
+
+    expect(answerSlot()).toBe(slot);
+    expectExclusiveAnswer(slot, "final");
     expect(screen.queryByText("一時下書き")).not.toBeInTheDocument();
     expect(screen.getByText("DBで確定した回答")).toBeInTheDocument();
     expect(screen.getByText("回答が完了しました")).toBeInTheDocument();
     expect(screen.queryByText("回答を生成中…")).not.toBeInTheDocument();
     expect(screen.queryByText("回答を確定しています…")).not.toBeInTheDocument();
+    expect(focusTarget).toHaveFocus();
+  });
+
+  it("S4B 96px超でfinalを置換してもscrollTopを維持し、viewport外の回答にはlatest buttonを出す", () => {
+    mocks.renderActualScroll = true;
+    const view = render(<ResearchThreadView thread={activeThread()} />);
+    const scroller = latestScrollProps().containerRef.current;
+    expect(scroller).not.toBeNull();
+    if (scroller === null) throw new Error("answer scroller is missing");
+    const configured = configureScroller(scroller, {
+      scrollHeight: 1200,
+      clientHeight: 500,
+      scrollTop: 660,
+    });
+    visualAnswerAnchor(scroller, 1100);
+    act(flushAnimationFrames);
+
+    act(() => {
+      currentSource().emit(
+        "answer.delta",
+        { attemptEpoch: 1, generation: 1, text: "一時下書き" },
+        "1-0",
+      );
+    });
+    act(flushAnimationFrames);
+    scroller.scrollTop = 400;
+    act(() => scroller.dispatchEvent(new Event("scroll")));
+    configured.scrollTo.mockClear();
+    const scrollTopBeforeFinal = scroller.scrollTop;
+    const focusTarget = screen.getByRole("button", { name: "削除" });
+    focusTarget.focus();
+    configured.setScrollHeight(1500);
+
+    view.rerender(
+      <ResearchThreadView
+        thread={thread([
+          userMessage(run(RUN_ONE, "completed")),
+          assistantMessage(),
+        ])}
+      />,
+    );
+    act(flushAnimationFrames);
+
+    const finalAnchor = answerAnchor("DBで確定した回答");
+    expect(
+      Math.abs(scroller.scrollTop - scrollTopBeforeFinal),
+    ).toBeLessThanOrEqual(1);
+    expect(configured.scrollTo).not.toHaveBeenCalled();
+    expect(finalAnchor.getBoundingClientRect().top).toBeGreaterThan(
+      scroller.clientHeight,
+    );
+    expect(
+      screen.getByRole("button", { name: "最新の回答へ" }),
+    ).toBeInTheDocument();
+    expect(focusTarget).toHaveFocus();
+  });
+
+  it("S4B 末尾付近のfinal・source・missing同時commitでもanswer anchorを保ち絶対末尾へscrollしない", () => {
+    mocks.renderActualScroll = true;
+    const view = render(<ResearchThreadView thread={activeThread()} />);
+    const scroller = latestScrollProps().containerRef.current;
+    expect(scroller).not.toBeNull();
+    if (scroller === null) throw new Error("answer scroller is missing");
+    const configured = configureScroller(scroller, {
+      scrollHeight: 1200,
+      clientHeight: 500,
+      scrollTop: 660,
+    });
+    visualAnswerAnchor(scroller, 800);
+    act(flushAnimationFrames);
+
+    act(() => {
+      currentSource().emit(
+        "answer.delta",
+        { attemptEpoch: 1, generation: 1, text: "一時下書き" },
+        "1-0",
+      );
+    });
+    act(flushAnimationFrames);
+    scroller.scrollTop = 660;
+    act(() => scroller.dispatchEvent(new Event("scroll")));
+    configured.scrollTo.mockClear();
+    const draftAnchor = answerAnchor("一時下書き");
+    const anchorTopBeforeFinal = draftAnchor.getBoundingClientRect().top;
+    const focusTarget = screen.getByRole("button", { name: "削除" });
+    focusTarget.focus();
+    configured.setScrollHeight(1600);
+
+    view.rerender(
+      <ResearchThreadView
+        thread={thread([
+          userMessage(run(RUN_ONE, "completed")),
+          assistantMessage("DBで確定した回答 [[1]]", {
+            sources: [
+              {
+                kind: "external_url",
+                sourceRef: "1",
+                url: "https://example.com/final-source",
+                title: "確定ソース",
+                sourceName: "Example",
+                publishedAt: "2026-07-13T00:00:00Z",
+                evidenceClaim: "確定回答を裏付ける情報",
+              },
+            ],
+            missingAspects: ["追加確認が必要な論点"],
+          }),
+        ])}
+      />,
+    );
+    act(flushAnimationFrames);
+
+    const finalAnchor = answerAnchor("DBで確定した回答");
+    const anchorTopAfterFinal = finalAnchor.getBoundingClientRect().top;
+    expect(
+      Math.abs(anchorTopAfterFinal - anchorTopBeforeFinal),
+    ).toBeLessThanOrEqual(1);
+    expect(configured.scrollTo).not.toHaveBeenCalledWith({
+      top: scroller.scrollHeight,
+      behavior: "auto",
+    });
+    expect(screen.getByRole("button", { name: "出典 1" })).toBeInTheDocument();
+    expect(screen.getByText("追加確認が必要な論点")).toBeInTheDocument();
+    expect(focusTarget).toHaveFocus();
   });
 
   it("cleans the old run before subscribing to another thread and ignores its late event", () => {

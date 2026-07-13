@@ -24,7 +24,10 @@ export function ResearchSidebar({
 }: ResearchSidebarProps) {
   const nextLimit = nextResearchLimit(limit, threads.total);
   return (
-    <aside className="flex min-h-0 flex-col border-b border-[var(--vector-rule)] bg-[var(--vector-surface)]/90 md:w-[320px] md:border-r md:border-b-0">
+    <aside
+      id="research-history"
+      className="flex h-full min-h-0 w-full flex-col border-r border-[var(--vector-rule)] bg-[var(--vector-surface)]/90"
+    >
       <div className="flex items-center justify-between gap-3 border-b border-[var(--vector-rule)] px-4 py-3">
         <div>
           <p
@@ -47,7 +50,10 @@ export function ResearchSidebar({
         />
       </div>
 
-      <nav className="min-h-0 flex-1 overflow-y-auto p-2">
+      <nav
+        aria-label="リサーチ履歴"
+        className="min-h-0 flex-1 overflow-y-auto overscroll-contain p-2"
+      >
         {threads.items.length === 0 ? (
           <div className="px-3 py-10 text-center text-sm text-[var(--vector-ink-muted)]">
             履歴はまだありません。

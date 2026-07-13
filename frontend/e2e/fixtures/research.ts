@@ -15,3 +15,8 @@ export const RESEARCH_THREADS = {
     answer: "Gamma answer marker",
   },
 } as const;
+
+export const RESEARCH_HISTORY_LIMIT = 20;
+export const RESEARCH_SOURCE_COUNT = 14;
+export const RESEARCH_SOURCE_HREF =
+  "https://example.com/e2e/research-alpha/source-1";

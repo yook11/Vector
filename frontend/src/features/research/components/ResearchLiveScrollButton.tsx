@@ -8,22 +8,55 @@ const AUTO_FOLLOW_DISTANCE_PX = 96;
 interface ResearchLiveScrollButtonProps {
   containerRef: RefObject<HTMLElement | null>;
   contentRevision: number;
+  finalReplacementRevision?: number;
+  isActive?: boolean;
 }
 
 function distanceFromBottom(element: HTMLElement): number {
   return element.scrollHeight - element.scrollTop - element.clientHeight;
 }
 
+function latestAnswerAnchor(container: HTMLElement): HTMLElement | null {
+  const anchors = container.querySelectorAll<HTMLElement>(
+    "[data-research-answer-anchor]",
+  );
+  return anchors.item(anchors.length - 1);
+}
+
+function answerAnchorTop(container: HTMLElement): number | null {
+  const anchor = latestAnswerAnchor(container);
+  if (anchor === null) return null;
+  return anchor.getBoundingClientRect().top;
+}
+
+function answerAnchorIsOutsideViewport(container: HTMLElement): boolean {
+  const anchor = latestAnswerAnchor(container);
+  if (anchor === null) return true;
+  const containerTop = container.getBoundingClientRect().top;
+  const anchorRect = anchor.getBoundingClientRect();
+  const relativeTop = anchorRect.top - containerTop;
+  return (
+    relativeTop > container.clientHeight || relativeTop + anchorRect.height < 0
+  );
+}
+
 export function ResearchLiveScrollButton({
   containerRef,
   contentRevision,
+  finalReplacementRevision = 0,
+  isActive = true,
 }: ResearchLiveScrollButtonProps) {
   const [offersLatestAnswer, setOffersLatestAnswer] = useState(false);
   const lastDistance = useRef(0);
   const previousRevision = useRef(contentRevision);
+  const previousFinalReplacementRevision = useRef(finalReplacementRevision);
   const measurementFrame = useRef<number | null>(null);
   const updateFrame = useRef<number | null>(null);
+  const finalReplacementFrame = useRef<number | null>(null);
   const followOnUpdate = useRef(true);
+  const hasUnseenUpdate = useRef(false);
+  const lastScrollTop = useRef(0);
+  const lastAnswerAnchorTop = useRef<number | null>(null);
 
   useEffect(() => {
     const container = containerRef.current;
@@ -31,6 +64,8 @@ export function ResearchLiveScrollButton({
 
     const measure = () => {
       lastDistance.current = distanceFromBottom(container);
+      lastScrollTop.current = container.scrollTop;
+      lastAnswerAnchorTop.current = answerAnchorTop(container);
       if (lastDistance.current <= AUTO_FOLLOW_DISTANCE_PX) {
         setOffersLatestAnswer(false);
       }
@@ -57,12 +92,19 @@ export function ResearchLiveScrollButton({
       if (updateFrame.current !== null) {
         cancelAnimationFrame(updateFrame.current);
       }
+      if (finalReplacementFrame.current !== null) {
+        cancelAnimationFrame(finalReplacementFrame.current);
+      }
     };
   }, [containerRef]);
 
   useEffect(() => {
     if (previousRevision.current === contentRevision) return;
     previousRevision.current = contentRevision;
+    if (!isActive) {
+      hasUnseenUpdate.current = true;
+      return;
+    }
     followOnUpdate.current = lastDistance.current <= AUTO_FOLLOW_DISTANCE_PX;
     if (updateFrame.current !== null) return;
 
@@ -73,12 +115,66 @@ export function ResearchLiveScrollButton({
       if (followOnUpdate.current) {
         container.scrollTo({ top: container.scrollHeight, behavior: "auto" });
         lastDistance.current = 0;
+        lastScrollTop.current = container.scrollTop;
+        lastAnswerAnchorTop.current = answerAnchorTop(container);
         setOffersLatestAnswer(false);
         return;
       }
+      lastScrollTop.current = container.scrollTop;
+      lastAnswerAnchorTop.current = answerAnchorTop(container);
       setOffersLatestAnswer(true);
     });
-  }, [containerRef, contentRevision]);
+  }, [containerRef, contentRevision, isActive]);
+
+  useEffect(() => {
+    if (previousFinalReplacementRevision.current === finalReplacementRevision) {
+      return;
+    }
+    previousFinalReplacementRevision.current = finalReplacementRevision;
+    if (!isActive) {
+      hasUnseenUpdate.current = true;
+      return;
+    }
+
+    const distanceBeforeReplacement = lastDistance.current;
+    const scrollTopBeforeReplacement = lastScrollTop.current;
+    const anchorTopBeforeReplacement = lastAnswerAnchorTop.current;
+    if (updateFrame.current !== null) {
+      cancelAnimationFrame(updateFrame.current);
+      updateFrame.current = null;
+    }
+    if (finalReplacementFrame.current !== null) return;
+
+    finalReplacementFrame.current = requestAnimationFrame(() => {
+      finalReplacementFrame.current = null;
+      const container = containerRef.current;
+      if (container === null) return;
+
+      if (distanceBeforeReplacement > AUTO_FOLLOW_DISTANCE_PX) {
+        container.scrollTop = scrollTopBeforeReplacement;
+        setOffersLatestAnswer(answerAnchorIsOutsideViewport(container));
+      } else if (anchorTopBeforeReplacement !== null) {
+        const currentAnchorTop = answerAnchorTop(container);
+        if (currentAnchorTop !== null) {
+          container.scrollTop += currentAnchorTop - anchorTopBeforeReplacement;
+        }
+        setOffersLatestAnswer(false);
+      }
+
+      lastDistance.current = distanceFromBottom(container);
+      lastScrollTop.current = container.scrollTop;
+      lastAnswerAnchorTop.current = answerAnchorTop(container);
+    });
+  }, [containerRef, finalReplacementRevision, isActive]);
+
+  useEffect(() => {
+    if (!isActive || !hasUnseenUpdate.current) return;
+    hasUnseenUpdate.current = false;
+    const container = containerRef.current;
+    if (container === null) return;
+    lastDistance.current = distanceFromBottom(container);
+    setOffersLatestAnswer(lastDistance.current > AUTO_FOLLOW_DISTANCE_PX);
+  }, [containerRef, isActive]);
 
   if (!offersLatestAnswer) return null;
 
@@ -93,6 +189,8 @@ export function ResearchLiveScrollButton({
       behavior: reducedMotion ? "auto" : "smooth",
     });
     lastDistance.current = 0;
+    lastScrollTop.current = container.scrollTop;
+    lastAnswerAnchorTop.current = answerAnchorTop(container);
     setOffersLatestAnswer(false);
   };
 

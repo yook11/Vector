@@ -40,9 +40,9 @@ export default async function ResearchThreadPage({
   }
 
   return (
-    <PaperSurface>
+    <PaperSurface className="flex h-dvh min-h-0 flex-col overflow-hidden [&>header]:shrink-0">
       <ShellMasthead />
-      <div className="relative min-h-dvh w-full overflow-hidden px-4 pb-6 md:px-6">
+      <div className="relative flex min-h-0 w-full flex-1 overflow-hidden">
         <PaperTexture />
         <ResearchWorkspace
           threads={model.threads}
