@@ -1,4 +1,4 @@
-name: Security Nightly
+name: Security Scan (Manual)
 
 # Phase 0 security gate (Trivy fs + config scan)。
 # - fs scan: backend/uv.lock + frontend/package-lock.json の既知 CVE 検出
@@ -12,12 +12,10 @@ name: Security Nightly
 #
 # Phase 0 では warn-only (exit-code: '0') で start し finding triage 期間を確保した。
 # Phase 1 finding gate 化 PR (本 PR) で exit-code: '1' に昇格して blocking 化した。
-# 新規 HIGH+/CRITICAL finding は nightly run を fail させて通知される。
+# 公開初期はworkflow_dispatchだけで実行し、定期scheduleは運用コスト確認後に判断する。
+# 新規 HIGH+/CRITICAL finding は手動runをfailさせる。
 
 on:
-  schedule:
-    # UTC 18:17 = JST 03:17 (午前 3 時台、CI 渋滞を避ける)
-    - cron: '17 18 * * *'
   workflow_dispatch:
 
 permissions:

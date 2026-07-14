@@ -45,6 +45,10 @@ def reload_app_with_env(
                 "?sslmode=require",
             )
             monkeypatch.delenv("MIGRATION_DATABASE_URL", raising=False)
+            # productionではCI用dummyを拒否するため、受信可能alias相当の値を使う。
+            monkeypatch.setenv(
+                "CROSSREF_CONTACT_EMAIL", "crossref-contact@portfolio.dev"
+            )
         from app import config, main
 
         importlib.reload(config)

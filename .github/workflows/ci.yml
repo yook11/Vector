@@ -13,7 +13,7 @@ env:
   CROSSREF_CONTACT_EMAIL: crossref-contact@example.invalid
 
 # 同一 branch / PR の古い run を新しい push で cancel する。force push / 連打時の
-# 計算資源消費を抑制。schemathesis-nightly は schedule 専用で別の concurrency 設定。
+# 計算資源消費を抑制。Schemathesisの手動workflowは別のconcurrency設定を持つ。
 # ただし main (= 自動 deploy が走る) では cancel しない: deploy 進行中に後続 push が
 # 来ても release を中断させない (中途半端な deploy を防ぐ)。
 concurrency:

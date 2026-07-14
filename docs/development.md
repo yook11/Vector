@@ -10,18 +10,22 @@
 uvx pre-commit install
 ```
 
-これにより `git commit` 時に gitleaks (secret 検出) / hadolint (Dockerfile lint) / Ruff / Biome が staged diff に対して自動実行される。CI 側でも同じ hook が再実行されるため、`--no-verify` で bypass しても PR で fail する。
+これにより `git commit` 時に gitleaks (secret 検出) / hadolint (Dockerfile lint) / Ruff / Biome が staged diff に対して自動実行される。
+CI では Gitleaks が導入 patch と commit message を別々に検査し、Hadolint も再実行するため、`--no-verify` で bypass しても PR で fail する。
 
 ## CI security gate
 
-PR / push に対し GitHub Actions 上で blocking gate が自動実行される。詳細設定は各 workflow が正本。
+PR / main push では次の blocking gate が自動実行される。詳細設定は各 workflow が正本。
 
 - [`security-pr.yml`](../.github/workflows/security-pr.yml) — osv-scanner (lockfile SCA) + npm audit (`--audit-level=high`) + Semgrep CE (`p/owasp-top-ten` + `p/security-audit`)
-- [`security-nightly.yml`](../.github/workflows/security-nightly.yml) — Trivy fs / config scan (HIGH+CRITICAL)
-- [`schemathesis-nightly.yml`](../.github/workflows/schemathesis-nightly.yml) — FastAPI `/openapi.json` と実装の適合性 fuzz (Schemathesis, GET 中心)
 - [`ci.yml`](../.github/workflows/ci.yml) — Ruff / Biome / tsc + unit / integration test + Playwright E2E smoke
 
-新規 finding は CI fail として PR を block する。検出結果は Actions Artifacts に退避する。
+公開初期は次の高コストな検査を Actions UI から手動実行する。
+
+- [`security-nightly.yml`](../.github/workflows/security-nightly.yml) — Trivy fs / config scan (HIGH+CRITICAL)
+- [`schemathesis-nightly.yml`](../.github/workflows/schemathesis-nightly.yml) — FastAPI `/openapi.json` と実装の適合性 fuzz (Schemathesis)
+
+自動 gate の新規 finding は PR を block し、手動検査の finding はその run を fail させる。検出結果は Actions Artifacts に退避する。
 
 ローカル再現:
 

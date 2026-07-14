@@ -1,4 +1,4 @@
-name: Schemathesis Nightly
+name: Schemathesis (Manual)
 
 # Phase 2 #1 (Phase 0 鏡像): FastAPI /openapi.json と実装の適合性 fuzz (blocking 化済)。
 # - 5xx leak / undeclared status / response schema mismatch を property-based fuzz で検出
@@ -6,13 +6,10 @@ name: Schemathesis Nightly
 #   response_schema_conformance) で API contract を検査
 # - JUnit XML + VCR cassette を Actions Artifacts に保存 (Code scanning GHAS disabled)
 #
-# 全 HTTP method をblocking検査する。stateful / PR gate 化は Out of Scope。
+# 全 HTTP method をblocking検査する。公開初期は手動実行のみとし、
+# stateful / PR gate化・定期schedule再開はOut of Scope。
 
 on:
-  schedule:
-    # UTC 18:37 = JST 03:37 (Trivy nightly UTC 18:17 と 20 分ずらし、
-    # uvicorn 起動を伴うため runner 同時負荷を回避)
-    - cron: '37 18 * * *'
   workflow_dispatch:
 
 env:
@@ -247,7 +244,7 @@ jobs:
       # - --checks: not_a_server_error / status_code_conformance /
       #   response_schema_conformance のみ (--checks=all は header / content-type
       #   系ノイズ多発のため最低限 3 つで signal を見極める)
-      # - -n 25 (= --max-examples 25): default 100 で nightly 30 分超リスク、
+      # - -n 25 (= --max-examples 25): default 100 で1 runが30分を超えるリスク、
       #   25 で endpoints × 25 ≈ 数百 input に抑制
       # - --phases examples,coverage,fuzzing: stateful 除外 (OpenAPI links 未定義、
       #   stateful 化は別 PR)

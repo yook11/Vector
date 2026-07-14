@@ -150,3 +150,8 @@ docker compose up -d --build
 - [docs/design-journey/](docs/design-journey/): 設計に対する考え方が変わっていった記録
 - [docs/how-i-build-with-ai.md](docs/how-i-build-with-ai.md): AI エージェントとの開発プロセス
 - [docs/development.md](docs/development.md): ローカル開発、検証コマンド、CI / security gate
+
+## 利用条件
+
+本リポジトリには現時点でオープンソースライセンスを付与していません。
+コードの再利用・改変・再配布を希望する場合は、事前に許諾を得てください。
