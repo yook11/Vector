@@ -1,11 +1,11 @@
 name: Security (PR gate)
 
 # Phase 1 PR 2 で導入、Phase 1 finding gate 化 PR で blocking に昇格 (本 file)。
-# - osv-scanner: backend/uv.lock + frontend/package-lock.json の OSV.dev 照合
+# - osv-scanner: backend/uv.lock + frontend/package-lock.json の差分・絶対 OSV.dev 照合
 # - npm audit: frontend の npm Advisory DB 照合 (production deps のみ)
 # - Semgrep CE: backend/frontend ソースの SAST (p/owasp-top-ten + p/security-audit)
 #
-# 全 3 step は **blocking** mode (`fail-on-vuln: true` / 素の exit code / `--error`)。
+# 全 4 job は **blocking** mode (`fail-on-vuln: true` / 素の exit code / `--error`)。
 # main の finding が 0 になった時点 (PR #392 / #391 / #390 merged) で warn-only から
 # 昇格した。新規 finding は CI fail として PR を block する。
 #
@@ -56,6 +56,19 @@ jobs:
       results-file-name: osv-results.sarif
       fail-on-vuln: true   # blocking (Phase 1 finding gate 化で warn-only から昇格)
       upload-sarif: false  # Code scanning disabled (上記 NOTE 参照)、artifact のみ
+
+  # 差分 gate だけでは既存 finding を見逃すため、現在 HEAD を絶対評価する。
+  osv-absolute:
+    name: OSV-Scanner (absolute HEAD)
+    uses: google/osv-scanner-action/.github/workflows/osv-scanner-reusable.yml@9a498708959aeaef5ef730655706c5a1df1edbc2  # v2.3.8
+    with:
+      scan-args: |-
+        -r
+        ./
+      results-file-name: osv-results.sarif
+      matrix-property: absolute-
+      fail-on-vuln: true
+      upload-sarif: false
 
   # ---- npm audit: 自前 job (third-party action 依存なし) ----
   npm-audit:
