@@ -40,7 +40,7 @@ secret も独立しているため、collect 側に `LOGFIRE_TOKEN` を入れな
 **同じ write token** を使えば同じ Logfire プロジェクトに集約される:
 
 ```sh
-fly secrets set LOGFIRE_TOKEN=<core と同じ write token> -a vector-collect
+fly secrets set LOGFIRE_TOKEN=<core と同じ write token> -a your-vector-collect-app
 ```
 
 #715 の起動時 fail-fast 検証が効くため、形式 (`pylf_v1_<region>_…`) の正しい write token を入れること
