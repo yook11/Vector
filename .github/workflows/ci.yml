@@ -694,7 +694,9 @@ jobs:
         run: uv run alembic upgrade head
         working-directory: backend
 
+      # ref作成pushは比較元がなく全migrationが追加扱いになるため、分類だけ除外する。
       - name: Classify changed migration revisions
+        if: ${{ github.event_name != 'push' || github.event.created != true }}
         env:
           MIGRATION_GATE_FILES_JSON: ${{ needs.changes.outputs.migration_files }}
         run: |
