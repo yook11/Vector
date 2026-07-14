@@ -15,20 +15,10 @@ name: Security (PR gate)
 on:
   pull_request:
     branches: [main]
-    paths-ignore:
-      - '**/*.md'
-      - 'docs/**'
-      - 'specs/**'
-      - '.claude/**'
   push:
     # develop 廃止 + feature branch への push 重複解消 (PR では pull_request trigger
     # のみ走り、main への merge 時のみ push trigger が走る)。
     branches: [main]
-    paths-ignore:
-      - '**/*.md'
-      - 'docs/**'
-      - 'specs/**'
-      - '.claude/**'
 
 # 同一 branch / PR の古い run を新しい push で cancel する。
 concurrency:
@@ -73,6 +63,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
+        with:
+          persist-credentials: false
       - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e  # v6.4.0
         with:
           node-version: "20"
@@ -110,6 +102,7 @@ jobs:
         with:
           # `semgrep ci` は base/HEAD 比較で incremental scan を行うため fetch-depth: 0 が安全。
           fetch-depth: 0
+          persist-credentials: false
 
       - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1  # v6.3.0
         with:

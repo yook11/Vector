@@ -1,5 +1,24 @@
-# Phase 1 PR 1: gitleaks v8 の allowlist file。
-# 形式: <commit-sha>:<file-path>:<rule-id> (1 行 1 finding)。
-# 初回 `pre-commit run --all-files` で false positive が出た場合のみ追加する。
-# Vector CI 専用ダミー値 (ci.yml 内の `ci0000...` `ci1111...` 等) は entropy 低のため
-# default rule では false negative の見込みだが、実際に検出されたらここに登録する。
+# Phase 1後のsealed履歴にある、テスト用synthetic secretだけをfingerprint単位で許可する。
+# path/rule単位では許可せず、fixture変更でfingerprintが変われば再検出させる。
+070dd8f9c6c773f3fbe527737f2b886044909d1a:backend/tests/insights/briefing/application/test_service.py:generic-api-key:239
+4295facac017daaa00184c02012811de83c96950:backend/tests/analysis/test_gemini_error_translator.py:gcp-api-key:96
+8b8c4abf0f678b52e3f68e3bb712feb906bf71eb:frontend/src/app/api/internal/revalidate/route.test.ts:generic-api-key:4
+aa3135e10704dac858b0034cf76672286f0905de:backend/tests/analysis/classifier/test_classifier_gemini_translate_error.py:gcp-api-key:160
+b7093ab11ed335769f08256e02f794d1749b6c4b:backend/tests/insights/briefing/application/test_notifier.py:generic-api-key:20
+e83e7a2dd5d12c68dd9c0a24c4c79b2422b6c5ff:backend/tests/search/embedding/test_gemini_query.py:gcp-api-key:158
+f2a5d567260a118cb6d0c1d4e00d3a1a7fc68acc:backend/tests/analysis/extraction/extractor/test_gemini_translate_error.py:gcp-api-key:94
+f2a5d567260a118cb6d0c1d4e00d3a1a7fc68acc:backend/tests/observability/test_redact.py:gcp-api-key:100
+f2a5d567260a118cb6d0c1d4e00d3a1a7fc68acc:backend/tests/observability/test_redact.py:gcp-api-key:142
+f2a5d567260a118cb6d0c1d4e00d3a1a7fc68acc:backend/tests/observability/test_redact.py:gcp-api-key:148
+f2a5d567260a118cb6d0c1d4e00d3a1a7fc68acc:backend/tests/observability/test_redact.py:gcp-api-key:157
+f2a5d567260a118cb6d0c1d4e00d3a1a7fc68acc:backend/tests/observability/test_redact.py:gcp-api-key:170
+f2a5d567260a118cb6d0c1d4e00d3a1a7fc68acc:backend/tests/observability/test_redact.py:gcp-api-key:185
+f2a5d567260a118cb6d0c1d4e00d3a1a7fc68acc:backend/tests/observability/test_redact.py:gcp-api-key:197
+f2a5d567260a118cb6d0c1d4e00d3a1a7fc68acc:backend/tests/observability/test_redact.py:gcp-api-key:198
+f2a5d567260a118cb6d0c1d4e00d3a1a7fc68acc:backend/tests/observability/test_redact.py:gcp-api-key:222
+f2a5d567260a118cb6d0c1d4e00d3a1a7fc68acc:backend/tests/observability/test_redact.py:gcp-api-key:27
+f2a5d567260a118cb6d0c1d4e00d3a1a7fc68acc:backend/tests/observability/test_redact.py:jwt:128
+f2a5d567260a118cb6d0c1d4e00d3a1a7fc68acc:backend/tests/observability/test_redact.py:jwt:225
+f2a5d567260a118cb6d0c1d4e00d3a1a7fc68acc:backend/tests/test_ai_analyzer.py:gcp-api-key:508
+f2a5d567260a118cb6d0c1d4e00d3a1a7fc68acc:backend/tests/test_gemini_embedder.py:gcp-api-key:178
+f2a5d567260a118cb6d0c1d4e00d3a1a7fc68acc:backend/tests/test_observability_recording.py:gcp-api-key:114
