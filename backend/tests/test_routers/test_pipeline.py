@@ -6,6 +6,7 @@ import pytest
 from httpx import AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.main import app
 from app.models.news_source import NewsSource, SourceType
 from app.queue.messages.collection import AcquireSourceTaskInput
 
@@ -108,6 +109,53 @@ class TestFetchNews:
         assert resp.status_code == 422
         detail = resp.json()["detail"]
         assert any("sourceIds" in str(d.get("loc", "")) for d in detail)
+
+    @pytest.mark.parametrize("source_id", [-1, 0, 2_147_483_648])
+    async def test_fetch_rejects_source_id_outside_postgresql_integer_range(
+        self,
+        admin_client: AsyncClient,
+        source_id: int,
+    ) -> None:
+        resp = await admin_client.post(
+            "/api/v1/admin/pipeline/fetch",
+            json={"sourceIds": [source_id]},
+        )
+
+        assert resp.status_code == 422
+
+    @pytest.mark.parametrize("source_id", [1, 2_147_483_647])
+    async def test_fetch_accepts_source_id_at_postgresql_integer_boundaries(
+        self,
+        admin_client: AsyncClient,
+        source_id: int,
+    ) -> None:
+        with patch(
+            "app.queue.tasks.acquisition.acquire_source",
+        ) as mock_task:
+            mock_task.kiq = AsyncMock()
+            resp = await admin_client.post(
+                "/api/v1/admin/pipeline/fetch",
+                json={"sourceIds": [source_id]},
+            )
+
+        assert (resp.status_code, resp.json()["dispatchedCount"]) == (202, 0)
+
+
+def test_fetch_request_openapi_declares_postgresql_integer_item_range() -> None:
+    app.openapi_schema = None
+    source_ids_schema = app.openapi()["components"]["schemas"]["FetchRequest"][
+        "properties"
+    ]["sourceIds"]
+    array_schema = next(
+        candidate
+        for candidate in source_ids_schema["anyOf"]
+        if candidate.get("type") == "array"
+    )
+
+    assert {
+        "minimum": array_schema["items"].get("minimum"),
+        "maximum": array_schema["items"].get("maximum"),
+    } == {"minimum": 1, "maximum": 2_147_483_647}
 
 
 @pytest.mark.asyncio
