@@ -11,6 +11,7 @@ import json
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 from unittest.mock import AsyncMock, patch
 
@@ -25,6 +26,7 @@ from app.collection.article_acquisition.reader.read_errors import (
     UnreadableResponseError,
     UnreadableResponseReason,
 )
+from app.collection.article_acquisition.tools.reader_tools import ReaderTools
 from app.collection.external_fetch_errors import (
     FetchAccessDeniedError,
     FetchOriginServerError,
@@ -33,7 +35,9 @@ from app.collection.external_fetch_errors import (
 # reader/ -> fetchers/ -> collection/ -> tests/ -> tests/fixtures (C1 と同一)
 _FIXTURES_DIR = Path(__file__).parents[3] / "fixtures"
 _MOD = "app.collection.article_acquisition.reader.crossref_reader"
+_TOOLS_MOD = "app.collection.article_acquisition.tools.reader_tools"
 _FIXTURE = "mdpi_crossref.json"
+_CONTACT_EMAIL = "crossref-contact@example.invalid"
 
 
 def _raw_items() -> list[dict[str, Any]]:
@@ -66,7 +70,7 @@ async def _reader_entries() -> list[CrossrefEntry]:
         yield client
 
     with patch(f"{_MOD}.make_safe_async_client", _fake_safe_client):
-        return await CrossrefReader().fetch_works(
+        return await CrossrefReader(contact_email=_CONTACT_EMAIL).fetch_works(
             source_name="crossref-reader-contract",
             issn="0000-0000",
             from_pub_date="2000-01-01",
@@ -98,7 +102,7 @@ async def _raise_through(status_code: int) -> None:
         yield client
 
     with patch(f"{_MOD}.make_safe_async_client", _fake_safe_client):
-        await CrossrefReader().fetch_works(
+        await CrossrefReader(contact_email=_CONTACT_EMAIL).fetch_works(
             source_name="crossref-reader-contract",
             issn="0000-0000",
             from_pub_date="2000-01-01",
@@ -129,7 +133,7 @@ async def _fetch_body(content: bytes) -> list[CrossrefEntry]:
         yield client
 
     with patch(f"{_MOD}.make_safe_async_client", _fake_safe_client):
-        return await CrossrefReader().fetch_works(
+        return await CrossrefReader(contact_email=_CONTACT_EMAIL).fetch_works(
             source_name="crossref-reader-contract",
             issn="0000-0000",
             from_pub_date="2000-01-01",
@@ -192,3 +196,33 @@ async def test_unreadable_payload_classified_by_reason(
 async def test_empty_items_is_success_not_unreadable() -> None:
     """正常な空 items は成功 (空列) で、unreadable に倒さない。"""
     assert await _fetch_body(b'{"message":{"items":[]}}') == []
+
+
+async def test_reader_tools_injects_contact_without_real_network(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """設定層の連絡先をReaderへ注入し、HTTP境界はmock内に閉じる。"""
+    captured_headers: dict[str, str] = {}
+    response = _response(200, b'{"message":{"items":[]}}')
+
+    monkeypatch.setattr(
+        f"{_TOOLS_MOD}.settings",
+        SimpleNamespace(crossref_contact_email=_CONTACT_EMAIL),
+    )
+
+    @asynccontextmanager
+    async def _fake_safe_client(**kwargs: Any) -> AsyncIterator[Any]:
+        captured_headers.update(kwargs["headers"])
+        client = AsyncMock(spec=httpx.AsyncClient)
+        client.get = AsyncMock(return_value=response)
+        yield client
+
+    with patch(f"{_MOD}.make_safe_async_client", _fake_safe_client):
+        await ReaderTools().crossref.fetch_works(
+            source_name="crossref-reader-contract",
+            issn="0000-0000",
+            from_pub_date="2000-01-01",
+            rows=1,
+        )
+
+    assert f"mailto:{_CONTACT_EMAIL}" in captured_headers["User-Agent"]

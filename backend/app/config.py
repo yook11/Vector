@@ -3,7 +3,13 @@ from pathlib import Path
 from typing import Literal, Self
 from urllib.parse import urlparse
 
-from pydantic import SecretStr, ValidationInfo, field_validator, model_validator
+from pydantic import (
+    EmailStr,
+    SecretStr,
+    ValidationInfo,
+    field_validator,
+    model_validator,
+)
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from sqlalchemy.exc import ArgumentError
 
@@ -126,6 +132,8 @@ class Settings(BaseSettings):
     # ニュース取得
     max_articles_per_fetch: int = 50
     max_analysis_per_run: int = 200
+    # CI/test は予約ドメインの dummy、本番は受信可能な専用 alias を設定する。
+    crossref_contact_email: EmailStr | Literal["crossref-contact@example.invalid"]
 
     # 分析
     max_analysis_consecutive_failures: int = 3  # サーキットブレーカー
@@ -281,6 +289,19 @@ class Settings(BaseSettings):
                 "would compromise both trust boundaries)"
             )
 
+        return self
+
+    @model_validator(mode="after")
+    def _require_crossref_contact_in_production(self) -> Self:
+        """production では Crossref から連絡可能な alias を必須にする。"""
+        if (
+            self.env == "production"
+            and self.crossref_contact_email == "crossref-contact@example.invalid"
+        ):
+            raise ValueError(
+                "in production CROSSREF_CONTACT_EMAIL must be a monitored alias; "
+                "the example.invalid value is reserved for CI/test"
+            )
         return self
 
     @model_validator(mode="after")

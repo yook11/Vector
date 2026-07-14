@@ -30,6 +30,7 @@ if not _REPO_ROOT_ENV.exists():
     )
     os.environ.setdefault("FRONTEND_URL", "http://localhost:3000")
     os.environ.setdefault("INTERNAL_FRONTEND_BASE_URL", "http://localhost:3000")
+    os.environ.setdefault("CROSSREF_CONTACT_EMAIL", "crossref-contact@example.invalid")
 
 import jwt
 import pytest

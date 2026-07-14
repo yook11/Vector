@@ -15,6 +15,10 @@ on:
     - cron: '37 18 * * *'
   workflow_dispatch:
 
+env:
+  # SchemathesisはCrossrefへ通信しないため、設定検証だけを満たす予約ドメインを使う。
+  CROSSREF_CONTACT_EMAIL: crossref-contact@example.invalid
+
 permissions:
   contents: read
 

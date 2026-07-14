@@ -16,6 +16,7 @@ from app.collection.article_acquisition.reader.multi_feed_rss_reader import (
 from app.collection.article_acquisition.reader.rss_reader import RssReader
 from app.collection.article_acquisition.reader.sitemap_reader import SitemapReader
 from app.collection.article_acquisition.tools.raw_http_client import RawHttpClient
+from app.config import settings
 
 
 def _default_raw_http(accept: str) -> RawHttpClient:
@@ -23,12 +24,17 @@ def _default_raw_http(accept: str) -> RawHttpClient:
     return RawHttpClient(accept=accept)
 
 
+def _default_crossref() -> CrossrefReader:
+    """設定層の連絡先を注入した既定の Crossref reader を返す。"""
+    return CrossrefReader(contact_email=str(settings.crossref_contact_email))
+
+
 @dataclass(frozen=True, slots=True)
 class ReaderTools:
     """stateless I/O クライアントの束。"""
 
     rss: RssReader = field(default_factory=RssReader)
-    crossref: CrossrefReader = field(default_factory=CrossrefReader)
+    crossref: CrossrefReader = field(default_factory=_default_crossref)
     hacker_news: HackerNewsReader = field(default_factory=HackerNewsReader)
     raw_http_factory: Callable[[str], RawHttpClient] = field(
         default_factory=lambda: _default_raw_http

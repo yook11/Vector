@@ -23,11 +23,6 @@ from app.shared.security.ssrf_guard import HostBlockedError, HostResolutionError
 
 logger = structlog.get_logger(__name__)
 
-# Crossref polite pool 降格防止のため User-Agent に mailto: が必須。
-_USER_AGENT = (
-    "Mozilla/5.0 (compatible; Vector/1.0; "
-    "+https://github.com/yook11/Vector; mailto:crossref-contact@example.invalid)"
-)
 _HTTP_TIMEOUT = httpx.Timeout(connect=5.0, read=30.0, write=10.0, pool=5.0)
 
 # JATS prefix (<jats:p>) と HTML tag を一括で剥がす
@@ -140,8 +135,18 @@ class CrossrefReader:
 
     DEFAULT_ENDPOINT: ClassVar[str] = "https://api.crossref.org/works"
 
-    def __init__(self, *, endpoint_url: str = DEFAULT_ENDPOINT) -> None:
+    def __init__(
+        self,
+        *,
+        contact_email: str,
+        endpoint_url: str = DEFAULT_ENDPOINT,
+    ) -> None:
         self._endpoint_url = endpoint_url
+        # Crossref polite pool 降格防止のため User-Agent に連絡可能な mailto を載せる。
+        self._user_agent = (
+            "Mozilla/5.0 (compatible; Vector/1.0; "
+            f"+https://github.com/yook11/Vector; mailto:{contact_email})"
+        )
 
     async def fetch_works(
         self,
@@ -164,7 +169,7 @@ class CrossrefReader:
         }
 
         async with make_safe_async_client(
-            headers={"User-Agent": _USER_AGENT, "Accept": "application/json"},
+            headers={"User-Agent": self._user_agent, "Accept": "application/json"},
             verify=True,
             timeout=_HTTP_TIMEOUT,
         ) as client:

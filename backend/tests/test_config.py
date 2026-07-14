@@ -20,6 +20,8 @@ _VALID_DATABASE_URL = (
 )
 _VALID_FRONTEND_URL = "https://app.example.com"
 _VALID_INTERNAL_FRONTEND_BASE_URL = "http://frontend:3000"
+_VALID_CROSSREF_CONTACT_EMAIL = "crossref-contact@portfolio.dev"
+_CI_CROSSREF_CONTACT_EMAIL = "crossref-contact@example.invalid"
 
 # 強度テストで parametrize する内部 secret の field 名。
 _NEW_SECRET_FIELD_NAMES = ["bff_jwt_signing_secret", "revalidate_bearer_secret"]
@@ -42,6 +44,7 @@ def _isolate_env(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
     # baseline は両 secret を valid な別値で設定する。
     monkeypatch.setenv("BFF_JWT_SIGNING_SECRET", _VALID_BFF_SECRET)
     monkeypatch.setenv("REVALIDATE_BEARER_SECRET", _VALID_REVALIDATE_SECRET)
+    monkeypatch.setenv("CROSSREF_CONTACT_EMAIL", _VALID_CROSSREF_CONTACT_EMAIL)
 
 
 def test_settings_construct_with_all_required_env() -> None:
@@ -50,6 +53,7 @@ def test_settings_construct_with_all_required_env() -> None:
     assert s.database_url == _VALID_DATABASE_URL
     assert s.frontend_url == _VALID_FRONTEND_URL
     assert s.internal_frontend_base_url == _VALID_INTERNAL_FRONTEND_BASE_URL
+    assert str(s.crossref_contact_email) == _VALID_CROSSREF_CONTACT_EMAIL
 
 
 @pytest.mark.parametrize(
@@ -60,6 +64,7 @@ def test_settings_construct_with_all_required_env() -> None:
         "INTERNAL_FRONTEND_BASE_URL",
         "BFF_JWT_SIGNING_SECRET",
         "REVALIDATE_BEARER_SECRET",
+        "CROSSREF_CONTACT_EMAIL",
     ],
 )
 def test_settings_fail_fast_when_required_env_missing(
@@ -70,6 +75,28 @@ def test_settings_fail_fast_when_required_env_missing(
     with pytest.raises(ValidationError) as exc_info:
         Settings()
     assert missing_env.lower() in str(exc_info.value).lower()
+
+
+def test_settings_accepts_crossref_ci_dummy() -> None:
+    """外部通信しないCI/testでは予約ドメインのdummyを許可する。"""
+    s = Settings(crossref_contact_email=_CI_CROSSREF_CONTACT_EMAIL)
+    assert s.crossref_contact_email == _CI_CROSSREF_CONTACT_EMAIL
+
+
+def test_settings_rejects_malformed_crossref_contact_email() -> None:
+    """User-Agent headerを壊す改行入り連絡先は起動時に拒否する。"""
+    with pytest.raises(ValidationError, match="crossref_contact_email"):
+        Settings(crossref_contact_email="contact@example.com\r\nX-Test: injected")
+
+
+def test_settings_rejects_crossref_ci_dummy_in_production() -> None:
+    """productionでは連絡不能なCI dummyを拒否する。"""
+    with pytest.raises(ValidationError, match="monitored alias"):
+        Settings(
+            env="production",
+            internal_frontend_base_url="http://your-vector-frontend-app.flycast:3000",
+            crossref_contact_email=_CI_CROSSREF_CONTACT_EMAIL,
+        )
 
 
 @pytest.mark.parametrize(
@@ -205,7 +232,8 @@ _DEV_HOST_URLS = [
         "http://169.254.169.254",
         "http://frontend.attacker.com",  # substring 混同 (frontend で始まる別ホスト)
         "http://xflycast:3000",  # suffix の前に dot が無い
-        "http://your-vector-frontend-app.flycast.attacker.com:3000",  # suffix が末尾でない
+        # flycast suffix がホスト末尾でない。
+        "http://your-vector-frontend-app.flycast.attacker.com:3000",
     ],
 )
 def test_internal_frontend_base_url_rejects_external_host(bad_url: str) -> None:

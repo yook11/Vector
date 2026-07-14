@@ -70,7 +70,9 @@ _MECHANISMS: list[_Mechanism] = [
         name="crossref",
         module="app.collection.article_acquisition.reader.crossref_reader",
         fixture="mdpi_crossref.json",
-        invoke=lambda: CrossrefReader().fetch_works(
+        invoke=lambda: CrossrefReader(
+            contact_email="crossref-contact@example.invalid"
+        ).fetch_works(
             source_name=_NAME,
             issn="0000-0000",
             from_pub_date="2000-01-01",

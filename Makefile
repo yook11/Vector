@@ -171,6 +171,7 @@ test-integration: test-integration-up  ## db-test / redis-test を立てて pyte
 	  INTERNAL_API_SECRET=test-only-collect-bootstrap-xxxxxxxxxxxx \
 	  FRONTEND_URL=http://localhost:3000 \
 	  INTERNAL_FRONTEND_BASE_URL=http://localhost:3000 \
+	  CROSSREF_CONTACT_EMAIL=crossref-contact@example.invalid \
 	  uv run pytest -m integration $(PYTEST_XDIST_ARGS) $(PYTEST_ARGS)
 
 test-integration-up: test-integration-guard  ## test infra を fresh 状態で起動（前回の残骸を down -v してから up --wait）
