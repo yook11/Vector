@@ -771,8 +771,9 @@ jobs:
   migrate-production:
     name: Migrate production
     needs: [ci-gate, changes]
-    # リポジトリ変数で明示許可した場合だけ本番DBを変更する。
+    # 公開準備中は既定で停止し、2つのリポジトリ変数で明示解除した場合だけ本番DBを変更する。
     if: ${{ vars.ENABLE_PRODUCTION_DEPLOY == 'true'
+            && vars.PUBLICATION_FREEZE == 'false'
             && github.event_name == 'push' && github.ref == 'refs/heads/main'
             && needs.ci-gate.result == 'success'
             && needs.changes.outputs.migrations == 'true' }}
@@ -867,8 +868,9 @@ jobs:
     # main への push かつ ci-gate 成功、かつ backend/frontend のいずれかが変わったときのみ。
     # migrate-production は migration 変更なしでは skip されるため、!cancelled() で
     # skipped needs を評価対象にし、migration 変更時だけ success を要求する。
-    # リポジトリ変数で明示許可した場合だけ本番アプリを更新する。
+    # 公開準備中は既定で停止し、2つのリポジトリ変数で明示解除した場合だけ本番アプリを更新する。
     if: ${{ vars.ENABLE_PRODUCTION_DEPLOY == 'true'
+            && vars.PUBLICATION_FREEZE == 'false'
             && !cancelled()
             && github.event_name == 'push' && github.ref == 'refs/heads/main'
             && needs.ci-gate.result == 'success'
