@@ -12,6 +12,10 @@ env:
   # Crossref通信を行わないCI用dummy。production migrationは専用secretで上書きする。
   CROSSREF_CONTACT_EMAIL: crossref-contact@example.invalid
 
+# リポジトリ設定が変わっても、各jobのGITHUB_TOKENは既定でread-onlyに保つ。
+permissions:
+  contents: read
+
 # 同一 branch / PR の古い run を新しい push で cancel する。force push / 連打時の
 # 計算資源消費を抑制。Schemathesisの手動workflowは別のconcurrency設定を持つ。
 # ただし main (= 自動 deploy が走る) では cancel しない: deploy 進行中に後続 push が
@@ -163,7 +167,7 @@ jobs:
 
     services:
       postgres:
-        image: pgvector/pgvector:0.8.2-pg18-bookworm
+        image: pgvector/pgvector:0.8.2-pg18-bookworm@sha256:42e7f6b4e1eceb02ff14e3e6bc6108bbe259abbe83879dc1845d0da1ddeb555d
         env:
           POSTGRES_USER: vector
           POSTGRES_PASSWORD: vector
@@ -177,7 +181,7 @@ jobs:
           --health-timeout 5s
           --health-retries 5
       redis:
-        image: redis:7-alpine
+        image: redis:7.4.9-alpine3.21@sha256:6ab0b6e7381779332f97b8ca76193e45b0756f38d4c0dcda72dbb3c32061ab99
         ports:
           - 6379:6379
         options: >-
@@ -285,7 +289,7 @@ jobs:
 
     services:
       postgres:
-        image: pgvector/pgvector:0.8.2-pg18-bookworm
+        image: pgvector/pgvector:0.8.2-pg18-bookworm@sha256:42e7f6b4e1eceb02ff14e3e6bc6108bbe259abbe83879dc1845d0da1ddeb555d
         env:
           POSTGRES_USER: vector
           POSTGRES_PASSWORD: vector
@@ -298,7 +302,7 @@ jobs:
           --health-timeout 5s
           --health-retries 5
       redis:
-        image: redis:7-alpine
+        image: redis:7.4.9-alpine3.21@sha256:6ab0b6e7381779332f97b8ca76193e45b0756f38d4c0dcda72dbb3c32061ab99
         ports:
           - 6379:6379
         options: >-
@@ -614,7 +618,7 @@ jobs:
 
     services:
       postgres:
-        image: pgvector/pgvector:0.8.2-pg18-bookworm
+        image: pgvector/pgvector:0.8.2-pg18-bookworm@sha256:42e7f6b4e1eceb02ff14e3e6bc6108bbe259abbe83879dc1845d0da1ddeb555d
         env:
           POSTGRES_USER: vector
           POSTGRES_PASSWORD: vector
