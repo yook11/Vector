@@ -13,12 +13,20 @@ from app.agent.contract import (
     AnswerEventReporter,
     AnswerGenerationContinuation,
     AnswerProgressReporter,
+    AnswerQuestionInput,
+    AnswerQuestionResult,
     QuestionAnsweringAgent,
 )
 from app.agent.evidence_collection.external_search.tavily import TavilyHttpClient
 from app.agent.question_context.contract import QuestionContextGenerator
-from app.analysis.ai_provider_errors import AIProviderConfigurationError
+from app.agent.question_context.service import QuestionContextService
+from app.agent.running import Runner
+from app.analysis.ai_provider_errors import (
+    AIProviderConfigurationError,
+    AIProviderError,
+)
 from app.config import settings
+from app.shared.security.safe_http import make_safe_async_client
 
 
 def ensure_question_answering_agent_configured() -> None:
@@ -27,6 +35,52 @@ def ensure_question_answering_agent_configured() -> None:
         and settings.tavily_api_key.get_secret_value()
     ):
         raise AIProviderConfigurationError()
+
+
+class _DeferredQuestionAnsweringAgent:
+    def __init__(
+        self,
+        *,
+        session_factory: async_sessionmaker[AsyncSession],
+        progress: AnswerProgressReporter | None,
+        events: AnswerEventReporter | None,
+        delta_reporter: AnswerDeltaReporter | None,
+        continuation: AnswerGenerationContinuation | None,
+    ) -> None:
+        self._session_factory = session_factory
+        self._progress = progress
+        self._events = events
+        self._delta_reporter = delta_reporter
+        self._continuation = continuation
+
+    async def answer(self, input: AnswerQuestionInput) -> AnswerQuestionResult:
+        async with make_safe_async_client() as tavily_client:
+            agent = build_question_answering_agent(
+                session_factory=self._session_factory,
+                tavily_client=tavily_client,
+                progress=self._progress,
+                events=self._events,
+                delta_reporter=self._delta_reporter,
+                continuation=self._continuation,
+            )
+            return await agent.answer(input)
+
+
+def build_question_answering_starting_agent(
+    *,
+    session_factory: async_sessionmaker[AsyncSession],
+    progress: AnswerProgressReporter | None = None,
+    events: AnswerEventReporter | None = None,
+    delta_reporter: AnswerDeltaReporter | None = None,
+    continuation: AnswerGenerationContinuation | None = None,
+) -> QuestionAnsweringAgent:
+    return _DeferredQuestionAnsweringAgent(
+        session_factory=session_factory,
+        progress=progress,
+        events=events,
+        delta_reporter=delta_reporter,
+        continuation=continuation,
+    )
 
 
 def build_question_answering_agent(
@@ -100,6 +154,16 @@ def build_question_context_generator() -> QuestionContextGenerator:
     from app.agent.question_context.ai.gemini import GeminiQuestionContextGenerator
 
     return GeminiQuestionContextGenerator()
+
+
+def build_runner() -> Runner:
+    try:
+        generator = build_question_context_generator()
+    except (AIProviderConfigurationError, AIProviderError):
+        generator = None
+    return Runner(
+        context_preparer=QuestionContextService(generator=generator),
+    )
 
 
 def _build_external_search(

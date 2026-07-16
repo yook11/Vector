@@ -5,7 +5,7 @@ from __future__ import annotations
 import ast
 import asyncio
 import inspect
-from contextlib import asynccontextmanager
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 from typing import Any, cast
@@ -37,7 +37,14 @@ from app.agent.live_updates.stream import (
     AgentRunLiveStreamStageEvent,
     AgentRunLiveStreamTerminalEvent,
 )
-from app.agent.question_context.contract import QuestionContext, QuestionContextDraft
+from app.agent.question_context.contract import QuestionContext
+from app.agent.running import (
+    AnsweringRunContext,
+    QuestionResolvedRunHooks,
+    RunContext,
+    RunInput,
+    RunResult,
+)
 from app.agent.runs.contracts import (
     CancelRunOutcome,
     CancelRunResult,
@@ -49,6 +56,7 @@ from app.agent.runs.result_mapper import (
     build_source_rows_for_message,
 )
 from app.agent.runs.types import AgentRunStatus
+from app.agent.threads.contracts import ThreadMessageSnapshot
 from app.agent.threads.projection import build_research_assistant_message
 from app.agent.threads.repository import AgentThreadRepository
 from app.analysis.ai_provider_errors import (
@@ -85,6 +93,67 @@ class FakeAgent:
             raise self.exc
         assert self.result is not None
         return self.result
+
+
+@dataclass(frozen=True, slots=True)
+class FakeRunnerCall:
+    starting_agent: object
+    input: RunInput
+    run_context: RunContext
+    hooks: object | None
+
+
+class FakeRunner:
+    def __init__(
+        self,
+        *,
+        exc: BaseException | None = None,
+        question_context: QuestionContext | None = None,
+    ) -> None:
+        self.exc = exc
+        self.question_context = question_context
+        self.calls: list[FakeRunnerCall] = []
+
+    async def run(
+        self,
+        starting_agent: object,
+        input: RunInput,
+        *,
+        run_context: RunContext,
+        hooks: object | None = None,
+    ) -> RunResult:
+        self.calls.append(
+            FakeRunnerCall(
+                starting_agent=starting_agent,
+                input=input,
+                run_context=run_context,
+                hooks=hooks,
+            )
+        )
+        if self.exc is not None:
+            raise self.exc
+        question_context = self.question_context or QuestionContext(
+            standalone_question=input.question
+        )
+        answering_context = AnsweringRunContext(
+            run_context=run_context,
+            question_context=question_context,
+            previous_answer="",
+        )
+        if hooks is not None:
+            await cast(Any, hooks).on_answering_context_prepared(
+                original_question=input.question,
+                has_history=bool(input.history),
+                question_context=question_context,
+            )
+        final_output = await cast(Any, starting_agent).answer(
+            AnswerQuestionInput(
+                context=question_context,
+                as_of=run_context.as_of,
+                previous_answer="",
+            )
+        )
+        return RunResult(final_output=final_output, context=answering_context)
 
 
 class FakeLiveEventPublisher:
@@ -134,18 +203,6 @@ class FakeLiveStreamPublisher:
                 raise outcome
             return outcome
         return f"{len(self.published)}-0"
-
-
-class FakeQuestionContextGenerator:
-    def __init__(self, outcome: QuestionContextDraft | Exception) -> None:
-        self.outcome = outcome
-        self.calls: list[dict[str, object]] = []
-
-    async def generate(self, **kwargs: object) -> QuestionContextDraft:
-        self.calls.append(kwargs)
-        if isinstance(self.outcome, Exception):
-            raise self.outcome
-        return self.outcome
 
 
 class DeltaReportingAgent:
@@ -238,9 +295,26 @@ def _ctx(session_factory: async_sessionmaker[AsyncSession]) -> SimpleNamespace:
     return SimpleNamespace(state=SimpleNamespace(session_factory=session_factory))
 
 
-@asynccontextmanager
-async def _fake_http_client() -> object:
-    yield object()
+def _patch_worker_execution(
+    monkeypatch: pytest.MonkeyPatch,
+    starting_agent_builder: object,
+    *,
+    runner: FakeRunner | None = None,
+) -> FakeRunner:
+    runner = runner or FakeRunner()
+    monkeypatch.setattr(
+        agent_run_tasks,
+        "build_runner",
+        lambda: runner,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        agent_run_tasks,
+        "build_question_answering_starting_agent",
+        starting_agent_builder,
+        raising=False,
+    )
+    return runner
 
 
 def _patch_delta_worker(
@@ -252,8 +326,7 @@ def _patch_delta_worker(
     FakeLiveEventPublisher.instances = []
     FakeLiveStreamPublisher.instances = []
     monkeypatch.setattr(FakeLiveStreamPublisher, "publish_outcomes", [])
-    monkeypatch.setattr(agent_run_tasks, "make_safe_async_client", _fake_http_client)
-    monkeypatch.setattr(agent_run_tasks, "build_question_answering_agent", builder)
+    _patch_worker_execution(monkeypatch, builder)
     monkeypatch.setattr(
         agent_run_tasks,
         "AgentRunLiveEventPublisher",
@@ -304,10 +377,14 @@ def test_composition_injects_same_live_controls_into_both_answer_flows(
     import app.agent.answering.orchestration as orchestration_module
     import app.agent.evidence_collection as evidence_collection_module
     import app.agent.evidence_collection.internal_search.ai.gemini as embedder_module
-    import app.agent.evidence_collection.internal_search.article_search as article_search_module
-    import app.agent.evidence_collection.internal_search.service as internal_search_module
     import app.agent.planning.ai.gemini as planner_module
     import app.agent.planning.service as planning_service_module
+    from app.agent.evidence_collection.internal_search import (
+        article_search as article_search_module,
+    )
+    from app.agent.evidence_collection.internal_search import (
+        service as internal_search_module,
+    )
 
     captured: dict[str, dict[str, object]] = {}
 
@@ -404,6 +481,53 @@ def test_worker_imports_generation_stopped_from_shared_agent_contract() -> None:
         set(),
     )
     assert agent_run_tasks.AnswerGenerationStopped is AnswerGenerationStopped
+
+
+def test_worker_owns_only_runner_boundary_wiring_for_semantic_answer_execution() -> (
+    None
+):
+    tree = ast.parse(inspect.getsource(agent_run_tasks))
+    imports: dict[str, set[str]] = {}
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ImportFrom) and node.module is not None:
+            imports.setdefault(node.module, set()).update(
+                alias.name for alias in node.names
+            )
+    loaded_names = {
+        node.id
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Load)
+    }
+    function_names = {
+        node.name for node in ast.walk(tree) if isinstance(node, ast.FunctionDef)
+    }
+    old_semantic_owners = {
+        "AnswerQuestionInput",
+        "QuestionContextService",
+        "QuestionResolvedEvent",
+        "_latest_assistant_answer",
+        "build_question_answering_agent",
+        "build_question_context_generator",
+        "make_safe_async_client",
+    }
+    imported_names = {
+        imported_name
+        for module_names in imports.values()
+        for imported_name in module_names
+    }
+
+    assert (
+        {
+            "build_runner",
+            "build_question_answering_starting_agent",
+        }
+        <= imports.get("app.agent.composition", set()),
+        {"QuestionResolvedRunHooks", "RunContext", "RunInput"}
+        <= imports.get("app.agent.running", set()),
+        old_semantic_owners.isdisjoint(imported_names),
+        old_semantic_owners.isdisjoint(loaded_names),
+        "_latest_assistant_answer" not in function_names,
+    ) == (True, True, True, True, True)
 
 
 async def _create_thread_message_run(
@@ -592,11 +716,26 @@ async def test_run_agent_answer_completes_run_and_persists_assistant_message(
     async with session_factory() as session:
         thread, _message, run = await _create_thread_message_run(session)
     fake_agent = FakeAgent(_external_result())
-    monkeypatch.setattr(agent_run_tasks, "make_safe_async_client", _fake_http_client)
-    monkeypatch.setattr(
-        agent_run_tasks,
-        "build_question_answering_agent",
+    persisted_results: list[AnswerQuestionResult] = []
+    original_complete = AgentRunRepository.complete_run
+
+    async def capture_completed_result(
+        repository: AgentRunRepository,
+        *,
+        run_id: UUID,
+        result: AnswerQuestionResult,
+    ) -> bool:
+        persisted_results.append(result)
+        return await original_complete(repository, run_id=run_id, result=result)
+
+    runner = _patch_worker_execution(
+        monkeypatch,
         lambda **_kwargs: fake_agent,
+    )
+    monkeypatch.setattr(
+        AgentRunRepository,
+        "complete_run",
+        capture_completed_result,
     )
 
     await agent_run_tasks.run_agent_answer(
@@ -630,7 +769,9 @@ async def test_run_agent_answer_completes_run_and_persists_assistant_message(
         refreshed_thread = await session.get(AgentThread, thread.id)
         assert refreshed_thread is not None
         assert refreshed_thread.updated_at > datetime(2026, 1, 1, tzinfo=UTC)
-    assert fake_agent.calls[0].context.standalone_question == "worker question"
+    assert runner.calls[0].input.question == "worker question"
+    assert persisted_results == [fake_agent.result]
+    assert persisted_results[0] is fake_agent.result
 
 
 @pytest.mark.asyncio
@@ -647,8 +788,7 @@ async def test_run_agent_answer_completion_preserves_last_progress_stage(
         fake_agent.progress = kwargs["progress"]
         return fake_agent
 
-    monkeypatch.setattr(agent_run_tasks, "make_safe_async_client", _fake_http_client)
-    monkeypatch.setattr(agent_run_tasks, "build_question_answering_agent", build_agent)
+    _patch_worker_execution(monkeypatch, build_agent)
     monkeypatch.setattr(
         agent_run_tasks,
         "AgentRunLiveEventPublisher",
@@ -695,8 +835,7 @@ async def test_run_agent_answer_resets_live_events_and_injects_reporter(
         return fake_agent
 
     redis = object()
-    monkeypatch.setattr(agent_run_tasks, "make_safe_async_client", _fake_http_client)
-    monkeypatch.setattr(agent_run_tasks, "build_question_answering_agent", build_agent)
+    _patch_worker_execution(monkeypatch, build_agent)
     monkeypatch.setattr(agent_run_tasks, "get_redis", lambda: redis)
     monkeypatch.setattr(
         agent_run_tasks,
@@ -734,8 +873,7 @@ async def test_run_agent_answer_starts_stream_attempt_only_after_acquire(
         assert FakeLiveStreamPublisher.instances[0].begin_attempt_calls == 1
         return fake_agent
 
-    monkeypatch.setattr(agent_run_tasks, "make_safe_async_client", _fake_http_client)
-    monkeypatch.setattr(agent_run_tasks, "build_question_answering_agent", build_agent)
+    _patch_worker_execution(monkeypatch, build_agent)
     monkeypatch.setattr(agent_run_tasks, "get_redis", lambda: redis)
     monkeypatch.setattr(
         agent_run_tasks,
@@ -780,8 +918,7 @@ async def test_run_agent_answer_binds_delta_reporter_and_probe_after_acquire(
         captured_kwargs.update(kwargs)
         return fake_agent
 
-    monkeypatch.setattr(agent_run_tasks, "make_safe_async_client", _fake_http_client)
-    monkeypatch.setattr(agent_run_tasks, "build_question_answering_agent", build_agent)
+    _patch_worker_execution(monkeypatch, build_agent)
     monkeypatch.setattr(agent_run_tasks, "get_redis", lambda: redis)
     monkeypatch.setattr(
         agent_run_tasks,
@@ -836,12 +973,7 @@ async def test_run_agent_answer_continues_when_stream_begin_attempt_raises(
     fake_agent = FakeAgent(_direct_result())
     FakeLiveStreamPublisher.instances = []
     monkeypatch.setattr(FakeLiveStreamPublisher, "raise_on_begin", True)
-    monkeypatch.setattr(agent_run_tasks, "make_safe_async_client", _fake_http_client)
-    monkeypatch.setattr(
-        agent_run_tasks,
-        "build_question_answering_agent",
-        lambda **_kwargs: fake_agent,
-    )
+    _patch_worker_execution(monkeypatch, lambda **_kwargs: fake_agent)
     monkeypatch.setattr(
         agent_run_tasks,
         "AgentRunLiveEventPublisher",
@@ -881,13 +1013,32 @@ async def test_idempotent_skip_does_not_create_or_start_stream_publisher(
     CapturingDeltaReporter.instances = []
     CapturingExecutionProbe.instances = []
 
-    def forbidden_builder(**_kwargs: object) -> None:
-        raise AssertionError("acquire skip後にagentをbuildしてはいけません")
+    def forbidden_builder(*_args: object, **_kwargs: object) -> None:
+        pytest.fail(
+            "acquire skip後にexecution dependencyをbuildしてはいけません",
+        )
 
     monkeypatch.setattr(
         agent_run_tasks,
-        "build_question_answering_agent",
+        "build_runner",
         forbidden_builder,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        agent_run_tasks,
+        "build_question_answering_starting_agent",
+        forbidden_builder,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        agent_run_tasks,
+        "get_redis",
+        forbidden_builder,
+    )
+    monkeypatch.setattr(
+        agent_run_tasks,
+        "AgentRunLiveEventPublisher",
+        ForbiddenConstruction,
     )
     monkeypatch.setattr(
         agent_run_tasks,
@@ -919,44 +1070,73 @@ async def test_idempotent_skip_does_not_create_or_start_stream_publisher(
 
 
 @pytest.mark.asyncio
-async def test_run_agent_answer_prepares_question_context_and_publishes_resolved_event(
+async def test_run_agent_answer_passes_runner_boundary_and_resolved_hook(
     session_factory: async_sessionmaker[AsyncSession],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    question = "それの株価への影響は？"
     async with session_factory() as session:
         _thread, _message, run = await _create_thread_message_run(
             session,
-            question="それの株価への影響は？",
+            question=question,
             history=[
-                ("user", "NVIDIA の発表を説明して"),
+                ("user", "bounded window外の質問"),
                 ("assistant", "古い回答 [[0]]"),
-                ("assistant", "前回の回答 [[1]]", ["保存済みの不足"]),
+                ("user", "NVIDIA の発表を説明して"),
+                ("assistant", "中間回答 [[1]]"),
+                ("user", "株価への影響も知りたい"),
+                ("assistant", "前回の回答 [[2]]", ["保存済みの不足"]),
+                ("user", "さらに詳しく"),
             ],
+            attempt_epoch=4,
         )
     fake_agent = FakeAgent(_direct_result())
-    generator = FakeQuestionContextGenerator(
-        QuestionContextDraft(
+    runner = FakeRunner(
+        question_context=QuestionContext(
             standalone_question="NVIDIA の発表が株価へ与える影響は？",
-            content_requirements=["株価への影響を説明する"],
-            response_requirements=["投資判断向けに詳しく説明する"],
-            relevant_prior_coverage="発表内容は既に説明済み",
-            active_goal="半導体投資を調査中",
         )
     )
-    builder_calls: list[None] = []
+    starting_agent_builder_calls: list[dict[str, object]] = []
+
+    def build_starting_agent(**kwargs: object) -> FakeAgent:
+        starting_agent_builder_calls.append(kwargs)
+        return fake_agent
+
+    class FixedDateTime:
+        calls = 0
+
+        @classmethod
+        def now(cls, timezone: object) -> datetime:
+            assert timezone is UTC
+            cls.calls += 1
+            return datetime(2026, 7, 16, 9, 30, tzinfo=UTC)
+
     FakeLiveEventPublisher.instances = []
     FakeLiveStreamPublisher.instances = []
-    monkeypatch.setattr(agent_run_tasks, "make_safe_async_client", _fake_http_client)
-    monkeypatch.setattr(
-        agent_run_tasks,
-        "build_question_answering_agent",
-        lambda **_kwargs: fake_agent,
+    _patch_worker_execution(
+        monkeypatch,
+        build_starting_agent,
+        runner=runner,
     )
-    monkeypatch.setattr(
-        agent_run_tasks,
+
+    def fail_if_legacy_semantic_owner_is_called(
+        *_args: object,
+        **_kwargs: object,
+    ) -> None:
+        pytest.fail("workerがRunner境界ではなく旧semantic ownerを呼びました")
+
+    for legacy_name in (
         "build_question_context_generator",
-        lambda: builder_calls.append(None) or generator,
-    )
+        "make_safe_async_client",
+        "build_question_answering_agent",
+    ):
+        monkeypatch.setattr(
+            agent_run_tasks,
+            legacy_name,
+            fail_if_legacy_semantic_owner_is_called,
+            raising=False,
+        )
+    monkeypatch.setattr(agent_run_tasks, "datetime", FixedDateTime)
     monkeypatch.setattr(
         agent_run_tasks,
         "AgentRunLiveEventPublisher",
@@ -973,37 +1153,38 @@ async def test_run_agent_answer_prepares_question_context_and_publishes_resolved
         ctx=_ctx(session_factory),
     )
 
-    assert builder_calls == [None]
+    assert FixedDateTime.calls == 1
+    assert len(runner.calls) == 1
+    runner_call = runner.calls[0]
+    assert runner_call.starting_agent is fake_agent
+    assert runner_call.input.question == question
+    assert isinstance(runner_call.input.history, tuple)
+    assert [
+        (message.role, message.content, message.missing_aspects)
+        for message in runner_call.input.history
+    ] == [
+        ("assistant", "古い回答 [[0]]", ()),
+        ("user", "NVIDIA の発表を説明して", ()),
+        ("assistant", "中間回答 [[1]]", ()),
+        ("user", "株価への影響も知りたい", ()),
+        ("assistant", "前回の回答 [[2]]", ("保存済みの不足",)),
+        ("user", "さらに詳しく", ()),
+    ]
+    assert runner_call.run_context == RunContext(
+        run_id=run.id,
+        as_of=datetime(2026, 7, 16, 9, 30, tzinfo=UTC),
+    )
+    assert runner_call.run_context.as_of.utcoffset() == timedelta(0)
+    assert isinstance(runner_call.hooks, QuestionResolvedRunHooks)
     assert len(fake_agent.calls) == 1
-    assert fake_agent.calls == [
-        AnswerQuestionInput(
-            context=QuestionContext(
-                standalone_question="NVIDIA の発表が株価へ与える影響は？",
-                content_requirements=[
-                    {
-                        "requirement_id": "c1",
-                        "description": "株価への影響を説明する",
-                    }
-                ],
-                response_requirements=[
-                    {
-                        "requirement_id": "p1",
-                        "description": "投資判断向けに詳しく説明する",
-                    }
-                ],
-                relevant_prior_coverage="発表内容は既に説明済み",
-                active_goal="半導体投資を調査中",
-            ),
-            as_of=fake_agent.calls[0].as_of,
-            previous_answer="前回の回答 [[1]]",
-        )
-    ]
-    assert [message.content for message in generator.calls[0]["history"]] == [
-        "NVIDIA の発表を説明して",
-        "古い回答 [[0]]",
-        "前回の回答 [[1]]",
-    ]
-    assert generator.calls[0]["history"][2].missing_aspects == ("保存済みの不足",)
+    assert fake_agent.calls[0].as_of == runner_call.run_context.as_of
+    assert len(starting_agent_builder_calls) == 1
+    starting_kwargs = starting_agent_builder_calls[0]
+    assert starting_kwargs["session_factory"] is session_factory
+    assert isinstance(starting_kwargs["events"], AgentRunLiveActivityReporter)
+    assert starting_kwargs["progress"] is not None
+    assert starting_kwargs["delta_reporter"] is not None
+    assert starting_kwargs["continuation"] is not None
     publisher = FakeLiveEventPublisher.instances[0]
     assert len(publisher.events) == 1
     assert getattr(publisher.events[0], "type") == "question.resolved"
@@ -1017,6 +1198,9 @@ async def test_run_agent_answer_prepares_question_context_and_publishes_resolved
     ]
     assert len(stream_activities) == 1
     assert stream_activities[0].activity == publisher.events[0]
+    stream = FakeLiveStreamPublisher.instances[0]
+    assert stream.run_id == run.id
+    assert stream.attempt_epoch == 5
 
 
 @pytest.mark.asyncio
@@ -1038,12 +1222,7 @@ async def test_run_agent_answer_publishes_completed_terminal_after_commit(
                     assert persisted.status == "completed"
             await super().publish(event)
 
-    monkeypatch.setattr(agent_run_tasks, "make_safe_async_client", _fake_http_client)
-    monkeypatch.setattr(
-        agent_run_tasks,
-        "build_question_answering_agent",
-        lambda **_kwargs: fake_agent,
-    )
+    _patch_worker_execution(monkeypatch, lambda **_kwargs: fake_agent)
     monkeypatch.setattr(
         agent_run_tasks,
         "AgentRunLiveEventPublisher",
@@ -1088,12 +1267,7 @@ async def test_run_agent_answer_publishes_failed_terminal_after_commit(
                     assert persisted.error_code == "generation_unavailable"
             await super().publish(event)
 
-    monkeypatch.setattr(agent_run_tasks, "make_safe_async_client", _fake_http_client)
-    monkeypatch.setattr(
-        agent_run_tasks,
-        "build_question_answering_agent",
-        lambda **_kwargs: fake_agent,
-    )
+    _patch_worker_execution(monkeypatch, lambda **_kwargs: fake_agent)
     monkeypatch.setattr(
         agent_run_tasks,
         "AgentRunLiveEventPublisher",
@@ -1620,12 +1794,7 @@ async def test_completion_failure_uses_failed_terminal_choke_point(
     ) -> bool:
         raise RuntimeError("completion failed")
 
-    monkeypatch.setattr(agent_run_tasks, "make_safe_async_client", _fake_http_client)
-    monkeypatch.setattr(
-        agent_run_tasks,
-        "build_question_answering_agent",
-        lambda **_kwargs: fake_agent,
-    )
+    _patch_worker_execution(monkeypatch, lambda **_kwargs: fake_agent)
     monkeypatch.setattr(
         agent_run_tasks,
         "AgentRunLiveEventPublisher",
@@ -1677,12 +1846,7 @@ async def test_completion_transition_loser_does_not_publish_terminal(
     ) -> bool:
         raise RunTransitionLostError
 
-    monkeypatch.setattr(agent_run_tasks, "make_safe_async_client", _fake_http_client)
-    monkeypatch.setattr(
-        agent_run_tasks,
-        "build_question_answering_agent",
-        lambda **_kwargs: fake_agent,
-    )
+    _patch_worker_execution(monkeypatch, lambda **_kwargs: fake_agent)
     monkeypatch.setattr(
         agent_run_tasks,
         "AgentRunLiveEventPublisher",
@@ -1724,12 +1888,7 @@ async def test_completion_skip_does_not_publish_terminal(
     ) -> bool:
         return False
 
-    monkeypatch.setattr(agent_run_tasks, "make_safe_async_client", _fake_http_client)
-    monkeypatch.setattr(
-        agent_run_tasks,
-        "build_question_answering_agent",
-        lambda **_kwargs: fake_agent,
-    )
+    _patch_worker_execution(monkeypatch, lambda **_kwargs: fake_agent)
     monkeypatch.setattr(
         agent_run_tasks,
         "AgentRunLiveEventPublisher",
@@ -1772,12 +1931,7 @@ async def test_failed_transition_loser_does_not_publish_terminal(
     ) -> bool:
         return False
 
-    monkeypatch.setattr(agent_run_tasks, "make_safe_async_client", _fake_http_client)
-    monkeypatch.setattr(
-        agent_run_tasks,
-        "build_question_answering_agent",
-        lambda **_kwargs: fake_agent,
-    )
+    _patch_worker_execution(monkeypatch, lambda **_kwargs: fake_agent)
     monkeypatch.setattr(
         agent_run_tasks,
         "AgentRunLiveEventPublisher",
@@ -1818,12 +1972,7 @@ async def test_terminal_publish_failure_does_not_revert_completed_run(
         fake_agent.progress = kwargs["progress"]
         return fake_agent
 
-    monkeypatch.setattr(agent_run_tasks, "make_safe_async_client", _fake_http_client)
-    monkeypatch.setattr(
-        agent_run_tasks,
-        "build_question_answering_agent",
-        build_agent,
-    )
+    _patch_worker_execution(monkeypatch, build_agent)
     monkeypatch.setattr(
         agent_run_tasks,
         "AgentRunLiveEventPublisher",
@@ -1852,14 +2001,23 @@ async def test_terminal_publish_failure_does_not_revert_completed_run(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    "outcome",
+    "question_context",
     [
-        QuestionContextDraft(standalone_question="それの株価への影響は？"),
-        AIProviderError(),
+        QuestionContext(standalone_question="それの株価への影響は？"),
+        QuestionContext(
+            standalone_question="それの株価への影響は？",
+            content_requirements=[
+                {
+                    "requirement_id": "c1",
+                    "description": "それの株価への影響は？",
+                }
+            ],
+        ),
     ],
+    ids=("echo", "safe-fallback"),
 )
 async def test_run_agent_answer_does_not_publish_echo_or_fallback_question_context(
-    outcome: QuestionContextDraft | Exception,
+    question_context: QuestionContext,
     session_factory: async_sessionmaker[AsyncSession],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -1871,17 +2029,12 @@ async def test_run_agent_answer_does_not_publish_echo_or_fallback_question_conte
             history=[("assistant", "前回の回答")],
         )
     fake_agent = FakeAgent(_direct_result())
+    runner = FakeRunner(question_context=question_context)
     FakeLiveEventPublisher.instances = []
-    monkeypatch.setattr(agent_run_tasks, "make_safe_async_client", _fake_http_client)
-    monkeypatch.setattr(
-        agent_run_tasks,
-        "build_question_answering_agent",
+    _patch_worker_execution(
+        monkeypatch,
         lambda **_kwargs: fake_agent,
-    )
-    monkeypatch.setattr(
-        agent_run_tasks,
-        "build_question_context_generator",
-        lambda: FakeQuestionContextGenerator(outcome),
+        runner=runner,
     )
     monkeypatch.setattr(
         agent_run_tasks,
@@ -1896,12 +2049,14 @@ async def test_run_agent_answer_does_not_publish_echo_or_fallback_question_conte
 
     assert len(fake_agent.calls) == 1
     assert fake_agent.calls[0].context.standalone_question == question
-    assert fake_agent.calls[0].previous_answer == "前回の回答"
+    assert runner.calls[0].input.history == (
+        ThreadMessageSnapshot(role="assistant", content="前回の回答"),
+    )
     assert FakeLiveEventPublisher.instances[0].events == []
 
 
 @pytest.mark.asyncio
-async def test_initial_question_context_ignores_rewrite_without_resolved_event(
+async def test_initial_question_does_not_publish_resolved_event(
     session_factory: async_sessionmaker[AsyncSession],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -1912,28 +2067,14 @@ async def test_initial_question_context_ignores_rewrite_without_resolved_event(
             question=question,
         )
     fake_agent = FakeAgent(_direct_result())
-    generator = FakeQuestionContextGenerator(
-        QuestionContextDraft(
-            standalone_question="書き換えた質問",
-            content_requirements=["NVIDIA の発表内容"],
-            response_requirements=["表形式で回答する"],
-            relevant_prior_coverage="初回では採用しない",
-            active_goal="投資判断を進める",
-            explicit_feedback_detected=True,
-        )
+    runner = FakeRunner(
+        question_context=QuestionContext(standalone_question="書き換えた質問")
     )
-    builder_calls: list[None] = []
     FakeLiveEventPublisher.instances = []
-    monkeypatch.setattr(agent_run_tasks, "make_safe_async_client", _fake_http_client)
-    monkeypatch.setattr(
-        agent_run_tasks,
-        "build_question_answering_agent",
+    _patch_worker_execution(
+        monkeypatch,
         lambda **_kwargs: fake_agent,
-    )
-    monkeypatch.setattr(
-        agent_run_tasks,
-        "build_question_context_generator",
-        lambda: builder_calls.append(None) or generator,
+        runner=runner,
     )
     monkeypatch.setattr(
         agent_run_tasks,
@@ -1946,33 +2087,15 @@ async def test_initial_question_context_ignores_rewrite_without_resolved_event(
         ctx=_ctx(session_factory),
     )
 
-    assert builder_calls == [None]
-    assert len(generator.calls) == 1
-    assert generator.calls[0]["question"] == question
-    assert generator.calls[0]["history"] == []
-    assert isinstance(generator.calls[0]["as_of"], datetime)
+    assert len(runner.calls) == 1
+    assert runner.calls[0].input == RunInput(question=question, history=())
     assert len(fake_agent.calls) == 1
-    assert fake_agent.calls[0] == AnswerQuestionInput(
-        context=QuestionContext(
-            standalone_question=question,
-            content_requirements=[
-                {"requirement_id": "c1", "description": "NVIDIA の発表内容"}
-            ],
-            response_requirements=[
-                {"requirement_id": "p1", "description": "表形式で回答する"}
-            ],
-            relevant_prior_coverage="",
-            active_goal="投資判断を進める",
-        ),
-        as_of=fake_agent.calls[0].as_of,
-        previous_answer="",
-    )
     assert FakeLiveEventPublisher.instances[0].events == []
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("exc", [AIProviderConfigurationError(), AIProviderError()])
-async def test_run_agent_answer_question_context_builder_failure_uses_safe_fallback(
+async def test_run_agent_answer_runner_setup_error_marks_generation_unavailable(
     exc: Exception,
     session_factory: async_sessionmaker[AsyncSession],
     monkeypatch: pytest.MonkeyPatch,
@@ -1985,17 +2108,12 @@ async def test_run_agent_answer_question_context_builder_failure_uses_safe_fallb
             history=[("assistant", "前回の回答")],
         )
     fake_agent = FakeAgent(_direct_result())
+    runner = FakeRunner(exc=exc)
     FakeLiveEventPublisher.instances = []
-    monkeypatch.setattr(agent_run_tasks, "make_safe_async_client", _fake_http_client)
-    monkeypatch.setattr(
-        agent_run_tasks,
-        "build_question_answering_agent",
+    _patch_worker_execution(
+        monkeypatch,
         lambda **_kwargs: fake_agent,
-    )
-    monkeypatch.setattr(
-        agent_run_tasks,
-        "build_question_context_generator",
-        lambda: (_ for _ in ()).throw(exc),
+        runner=runner,
     )
     monkeypatch.setattr(
         agent_run_tasks,
@@ -2008,23 +2126,13 @@ async def test_run_agent_answer_question_context_builder_failure_uses_safe_fallb
         ctx=_ctx(session_factory),
     )
 
-    assert len(fake_agent.calls) == 1
-    assert fake_agent.calls == [
-        AnswerQuestionInput(
-            context=QuestionContext(
-                standalone_question=question,
-                content_requirements=[
-                    {"requirement_id": "c1", "description": question}
-                ],
-                response_requirements=[],
-                relevant_prior_coverage="",
-                active_goal="",
-            ),
-            as_of=fake_agent.calls[0].as_of,
-            previous_answer="前回の回答",
-        )
-    ]
-    assert FakeLiveEventPublisher.instances[0].events == []
+    assert len(runner.calls) == 1
+    assert fake_agent.calls == []
+    async with session_factory() as session:
+        failed = await session.get(AgentRun, run.id)
+        assert failed is not None
+        assert failed.status == "failed"
+        assert failed.error_code == "generation_unavailable"
 
 
 @pytest.mark.asyncio
@@ -2116,8 +2224,12 @@ async def test_complete_run_warns_on_citation_source_mismatch_without_failing_ru
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     "generation_error",
-    [AIProviderError("SHOULD_NOT_LEAK"), DirectAnswerInvalidError()],
-    ids=("provider", "direct-draft"),
+    [
+        AIProviderConfigurationError(),
+        AIProviderError("SHOULD_NOT_LEAK"),
+        DirectAnswerInvalidError(),
+    ],
+    ids=("configuration", "provider", "direct-draft"),
 )
 async def test_run_agent_answer_generation_error_marks_failed_without_leaking_message(
     session_factory: async_sessionmaker[AsyncSession],
@@ -2127,12 +2239,7 @@ async def test_run_agent_answer_generation_error_marks_failed_without_leaking_me
     async with session_factory() as session:
         _thread, _message, run = await _create_thread_message_run(session)
     fake_agent = FakeAgent(exc=generation_error)
-    monkeypatch.setattr(agent_run_tasks, "make_safe_async_client", _fake_http_client)
-    monkeypatch.setattr(
-        agent_run_tasks,
-        "build_question_answering_agent",
-        lambda **_kwargs: fake_agent,
-    )
+    _patch_worker_execution(monkeypatch, lambda **_kwargs: fake_agent)
 
     await agent_run_tasks.run_agent_answer(
         trigger=AgentRunTrigger(run_id=run.id),
@@ -2171,8 +2278,7 @@ async def test_run_agent_answer_generation_error_preserves_death_progress_stage(
         fake_agent.progress = kwargs["progress"]
         return fake_agent
 
-    monkeypatch.setattr(agent_run_tasks, "make_safe_async_client", _fake_http_client)
-    monkeypatch.setattr(agent_run_tasks, "build_question_answering_agent", build_agent)
+    _patch_worker_execution(monkeypatch, build_agent)
 
     await agent_run_tasks.run_agent_answer(
         trigger=AgentRunTrigger(run_id=run.id),
@@ -2188,18 +2294,20 @@ async def test_run_agent_answer_generation_error_preserves_death_progress_stage(
 
 
 @pytest.mark.asyncio
-async def test_run_agent_answer_pre_answer_build_failure_leaves_progress_stage_null(
+async def test_runner_pre_answer_failure_does_not_call_starting_agent(
     session_factory: async_sessionmaker[AsyncSession],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     async with session_factory() as session:
         _thread, _message, run = await _create_thread_message_run(session)
-
-    def build_agent(**_kwargs: object) -> None:
-        raise AIProviderConfigurationError()
-
-    monkeypatch.setattr(agent_run_tasks, "make_safe_async_client", _fake_http_client)
-    monkeypatch.setattr(agent_run_tasks, "build_question_answering_agent", build_agent)
+    fake_agent = FakeAgent(_direct_result())
+    error = AIProviderConfigurationError()
+    runner = FakeRunner(exc=error)
+    _patch_worker_execution(
+        monkeypatch,
+        lambda **_kwargs: fake_agent,
+        runner=runner,
+    )
 
     await agent_run_tasks.run_agent_answer(
         trigger=AgentRunTrigger(run_id=run.id),
@@ -2212,6 +2320,8 @@ async def test_run_agent_answer_pre_answer_build_failure_leaves_progress_stage_n
         assert failed.status == "failed"
         assert failed.error_code == "generation_unavailable"
         assert failed.progress_stage is None
+    assert len(runner.calls) == 1
+    assert fake_agent.calls == []
 
 
 @pytest.mark.asyncio
@@ -2223,12 +2333,7 @@ async def test_run_agent_answer_unexpected_error_marks_internal_error(
         _thread, _message, run = await _create_thread_message_run(session)
     fake_agent = FakeAgent(exc=RuntimeError("SHOULD_NOT_LEAK"))
     FakeLiveStreamPublisher.instances = []
-    monkeypatch.setattr(agent_run_tasks, "make_safe_async_client", _fake_http_client)
-    monkeypatch.setattr(
-        agent_run_tasks,
-        "build_question_answering_agent",
-        lambda **_kwargs: fake_agent,
-    )
+    _patch_worker_execution(monkeypatch, lambda **_kwargs: fake_agent)
     monkeypatch.setattr(
         agent_run_tasks,
         "AgentRunLiveEventPublisher",

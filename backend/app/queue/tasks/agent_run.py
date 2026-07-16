@@ -11,14 +11,10 @@ from taskiq import Context, TaskiqDepends
 
 from app.agent.answering.direct_answer.contract import DirectAnswerInvalidError
 from app.agent.composition import (
-    build_question_answering_agent,
-    build_question_context_generator,
+    build_question_answering_starting_agent,
+    build_runner,
 )
-from app.agent.contract import (
-    AnswerGenerationStopped,
-    AnswerQuestionInput,
-    QuestionResolvedEvent,
-)
+from app.agent.contract import AnswerGenerationStopped
 from app.agent.live_updates.answer_delta import AgentRunLiveAnswerDeltaReporter
 from app.agent.live_updates.recent_events import AgentRunLiveEventPublisher
 from app.agent.live_updates.reporters import (
@@ -29,9 +25,11 @@ from app.agent.live_updates.stream import (
     AgentRunLiveStreamPublisher,
     AgentRunLiveStreamTerminalEvent,
 )
-from app.agent.question_context.service import (
-    HISTORY_MESSAGE_LIMIT,
-    QuestionContextService,
+from app.agent.question_context.service import HISTORY_MESSAGE_LIMIT
+from app.agent.running import (
+    QuestionResolvedRunHooks,
+    RunContext,
+    RunInput,
 )
 from app.agent.runs.contracts import (
     PreparedAgentRun,
@@ -51,7 +49,6 @@ from app.queue.brokers import broker_agent
 from app.queue.messages.agent_run import AgentRunTrigger
 from app.queue.schedule import CRON_AGENT_RUN_SWEEP
 from app.redis import get_redis
-from app.shared.security.safe_http import make_safe_async_client
 
 logger = structlog.get_logger(__name__)
 
@@ -108,42 +105,27 @@ async def run_agent_answer(
         )
         as_of = datetime.now(UTC)
         history = await _read_history(session_factory, prepared)
-        try:
-            generator = build_question_context_generator()
-        except (AIProviderConfigurationError, AIProviderError):
-            generator = None
-        preparation = await QuestionContextService(generator=generator).prepare(
-            question=prepared.question,
-            history=history,
-            as_of=as_of,
-            run_id=prepared.run_id,
+        runner = build_runner()
+        starting_agent = build_question_answering_starting_agent(
+            session_factory=session_factory,
+            progress=progress_reporter,
+            events=activity_reporter,
+            delta_reporter=delta_reporter,
+            continuation=continuation,
         )
-        if (
-            history
-            and preparation.context.standalone_question.strip()
-            != prepared.question.strip()
-        ):
-            await activity_reporter.event_occurred(
-                QuestionResolvedEvent(
-                    standalone_question=preparation.context.standalone_question,
-                )
-            )
-        async with make_safe_async_client() as tavily_client:
-            agent = build_question_answering_agent(
-                session_factory=session_factory,
-                tavily_client=tavily_client,
-                progress=progress_reporter,
-                events=activity_reporter,
-                delta_reporter=delta_reporter,
-                continuation=continuation,
-            )
-            result = await agent.answer(
-                AnswerQuestionInput(
-                    context=preparation.context,
-                    as_of=as_of,
-                    previous_answer=_latest_assistant_answer(history),
-                )
-            )
+        run_result = await runner.run(
+            starting_agent,
+            RunInput(
+                question=prepared.question,
+                history=tuple(history),
+            ),
+            run_context=RunContext(
+                run_id=prepared.run_id,
+                as_of=as_of,
+            ),
+            hooks=QuestionResolvedRunHooks(events=activity_reporter),
+        )
+        result = run_result.final_output
     except AnswerGenerationStopped:
         logger.info(
             "agent_run_generation_stopped",
@@ -251,13 +233,6 @@ async def _read_history(
             before_seq=prepared.user_message_seq,
             limit=HISTORY_MESSAGE_LIMIT,
         )
-
-
-def _latest_assistant_answer(history: list[ThreadMessageSnapshot]) -> str:
-    for message in reversed(history):
-        if message.role == "assistant":
-            return message.content
-    return ""
 
 
 async def _mark_failed(
