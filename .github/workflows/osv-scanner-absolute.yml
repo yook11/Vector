@@ -1,0 +1,60 @@
+name: OSV-Scanner absolute scan
+
+on:
+  workflow_call:
+    inputs:
+      scan-args:
+        description: OSV-Scanner arguments excluding output format and path
+        type: string
+        default: |-
+          -r
+          ./
+      results-file-name:
+        description: SARIF artifact file name
+        type: string
+        default: osv-results.sarif
+      matrix-property:
+        description: Optional prefix for matrix-compatible output files
+        type: string
+        default: ""
+      fail-on-vuln:
+        description: Fail when the reporter finds a vulnerability
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+jobs:
+  osv-scan:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
+        with:
+          persist-credentials: false
+
+      - name: Run OSV-Scanner
+        uses: google/osv-scanner-action/osv-scanner-action@8dc09193bb540e09b23da07ad7e30bd33bf87018  # v2.3.8
+        continue-on-error: true
+        with:
+          scan-args: |-
+            --output=${{ inputs.matrix-property }}results.json
+            --format=json
+            ${{ inputs.scan-args }}
+
+      - name: Report OSV-Scanner results
+        uses: google/osv-scanner-action/osv-reporter-action@8dc09193bb540e09b23da07ad7e30bd33bf87018  # v2.3.8
+        with:
+          scan-args: |-
+            --output=${{ inputs.matrix-property }}${{ inputs.results-file-name }}
+            --new=${{ inputs.matrix-property }}results.json
+            --gh-annotations=false
+            --fail-on-vuln=${{ inputs.fail-on-vuln }}
+
+      - name: Upload OSV-Scanner SARIF artifact
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
+        with:
+          name: ${{ inputs.matrix-property }}osv-scanner-sarif
+          path: ${{ inputs.matrix-property }}${{ inputs.results-file-name }}
+          retention-days: 5

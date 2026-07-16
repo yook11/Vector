@@ -27,24 +27,18 @@ concurrency:
 
 permissions:
   contents: read
-  # NOTE: `security-events: write` は osv-scanner reusable workflow が permission として
-  # 宣言要求するため必要。Vector は private repo + GitHub Free で Code scanning (GHAS)
-  # が無効なため、実際の SARIF upload は `upload-sarif: false` で skip する設計だが、
-  # caller の permission 宣言は reusable workflow の require を満たさないと
-  # startup_failure になる。
+  # 公式 PR reusable workflow が宣言する権限を caller 側でも満たす必要がある。
+  # SARIF upload は `upload-sarif: false` で無効化したままにする。
   security-events: write
   actions: read           # osv-scanner reusable workflow が要求
 
 jobs:
-  # ---- osv-scanner: 公式 reusable workflow を SHA pin で呼ぶ ----
-  # reusable workflow が内部で base/head 差分 scan + osv-reporter を完結する。
-  # 内部 step も SHA pin 済で supply chain 表面が小さい。
+  # ---- osv-scanner: PR 差分は公式 workflow、絶対 scan は local workflow ----
+  # PR workflow は内部 action も SHA pin 済。公式の絶対 scan workflow は未 pin の
+  # optional action を含むため、同じ scanner/reporter を local workflow から呼ぶ。
   #
-  # NOTE: `upload-sarif: false` にしている。Vector は private repo + GitHub Free で
-  # Code scanning (GHAS) が disabled なため、SARIF を Code Scanning に upload すると
-  # configuration error で job が fail する。reusable workflow は `osv-results.sarif`
-  # を artifact として別途 upload するので、Actions Artifacts から DL して triage 可能。
-  # GHAS 契約 or repo public 化で Code scanning が enable されたら upload-sarif: true に戻す。
+  # NOTE: Code Scanning 連携は本修正の対象外とし、既存どおり SARIF artifact だけを残す。
+  # PR workflow は `upload-sarif: false`、local absolute workflow は upload step 自体を持たない。
   osv-scan:
     name: OSV-Scanner (lockfile SCA)
     uses: google/osv-scanner-action/.github/workflows/osv-scanner-reusable-pr.yml@9a498708959aeaef5ef730655706c5a1df1edbc2  # v2.3.8
@@ -55,12 +49,12 @@ jobs:
         ./
       results-file-name: osv-results.sarif
       fail-on-vuln: true   # blocking (Phase 1 finding gate 化で warn-only から昇格)
-      upload-sarif: false  # Code scanning disabled (上記 NOTE 参照)、artifact のみ
+      upload-sarif: false  # artifact のみ
 
   # 差分 gate だけでは既存 finding を見逃すため、現在 HEAD を絶対評価する。
   osv-absolute:
     name: OSV-Scanner (absolute HEAD)
-    uses: google/osv-scanner-action/.github/workflows/osv-scanner-reusable.yml@9a498708959aeaef5ef730655706c5a1df1edbc2  # v2.3.8
+    uses: ./.github/workflows/osv-scanner-absolute.yml
     with:
       scan-args: |-
         -r
@@ -68,7 +62,6 @@ jobs:
       results-file-name: osv-results.sarif
       matrix-property: absolute-
       fail-on-vuln: true
-      upload-sarif: false
 
   # ---- npm audit: 自前 job (third-party action 依存なし) ----
   npm-audit:
