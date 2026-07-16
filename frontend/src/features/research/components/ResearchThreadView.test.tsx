@@ -1,4 +1,11 @@
-import { act, cleanup, render, screen, within } from "@testing-library/react";
+import {
+  act,
+  cleanup,
+  render,
+  screen,
+  waitFor,
+  within,
+} from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type {
   ResearchAssistantMessage,
@@ -16,6 +23,7 @@ const RUN_TWO = "00000000-0000-4000-a000-000000000020";
 interface ScrollCapture {
   containerRef: { readonly current: HTMLElement | null };
   contentRevision: number;
+  failedContractionRevision?: number;
 }
 
 const mocks = vi.hoisted(() => ({
@@ -303,6 +311,16 @@ function onlyLiveAnnouncer(container: HTMLElement): HTMLElement {
   return announcer;
 }
 
+function onlyVisibleText(text: string): HTMLElement {
+  const matches = screen
+    .getAllByText(text)
+    .filter((element) => element.closest(".sr-only") === null);
+  expect(matches).toHaveLength(1);
+  const match = matches[0];
+  if (match === undefined) throw new Error("visible text is missing");
+  return match;
+}
+
 function deferred<T>() {
   let resolve!: (value: T) => void;
   const promise = new Promise<T>((resolvePromise) => {
@@ -471,9 +489,12 @@ describe("ResearchThreadView live integration", () => {
 
   it.each([
     ["internal_error", "回答を生成できませんでした"],
+    ["generation_unavailable", "回答を生成できませんでした"],
+    ["stale", "時間切れになりました"],
     ["cancelled", "キャンセルしました"],
+    ["enqueue_failed", "実行キューに投入できませんでした"],
   ] as const)("places persisted %s wording outside and immediately after the question bubble", (errorCode, message) => {
-    render(
+    const view = render(
       <ResearchThreadView
         thread={thread([userMessage(run(RUN_ONE, "failed", errorCode))])}
       />,
@@ -492,6 +513,9 @@ describe("ResearchThreadView live integration", () => {
     );
     expect(questionArticle.textContent).toBe("このニュースの影響は？");
     expect(questionArticle.nextElementSibling).toBe(statusRail);
+    expect(onlyVisibleText(message)).toBe(status);
+    expect(status.closest('[role="status"], [aria-live]')).toBeNull();
+    onlyLiveAnnouncer(view.container);
   });
 
   it("connects the scroll container and changes content revision only for answer content", () => {
@@ -700,10 +724,19 @@ describe("ResearchThreadView live integration", () => {
 
   it.each([
     ["internal_error", "回答を生成できませんでした"],
+    ["generation_unavailable", "回答を生成できませんでした"],
+    ["stale", "時間切れになりました"],
     ["cancelled", "キャンセルしました"],
   ] as const)("removes draft and shows a fixed message for %s", (errorCode, message) => {
-    render(<ResearchThreadView thread={activeThread()} />);
+    const view = render(<ResearchThreadView thread={activeThread()} />);
     const source = currentSource();
+    const questionArticle = screen
+      .getByText("このニュースの影響は？")
+      .closest("article");
+    expect(questionArticle).not.toBeNull();
+    if (questionArticle === null || questionArticle.parentElement === null) {
+      throw new Error("question turn is missing");
+    }
     act(() => {
       source.emit(
         "answer.delta",
@@ -712,13 +745,212 @@ describe("ResearchThreadView live integration", () => {
       );
       source.emit(
         "terminal",
-        { attemptEpoch: 1, status: "failed", errorCode },
+        {
+          attemptEpoch: 1,
+          status: "failed",
+          errorCode,
+          internalDetail: "INTERNAL_PAYLOAD_SHOULD_NOT_LEAK",
+        },
         "2-0",
       );
     });
 
     expect(screen.queryByText("消える下書き")).not.toBeInTheDocument();
-    expect(screen.getByText(message)).toBeInTheDocument();
+    expect(
+      screen.queryByTestId("research-answer-slot"),
+    ).not.toBeInTheDocument();
+    const failure = onlyVisibleText(message);
+    const statusRail = directChildContaining(
+      questionArticle.parentElement,
+      failure,
+    );
+    expect(questionArticle.textContent).toBe("このニュースの影響は？");
+    expect(questionArticle.nextElementSibling).toBe(statusRail);
+    expect(failure.closest('[role="status"], [aria-live]')).toBeNull();
+    expect(onlyLiveAnnouncer(view.container)).toHaveTextContent(message);
+    expect(
+      screen.queryByText("INTERNAL_PAYLOAD_SHOULD_NOT_LEAK"),
+    ).not.toBeInTheDocument();
+  });
+
+  it("keeps one failed turn, failure rail, focus, and announcement across live-to-persisted convergence", () => {
+    const view = render(<ResearchThreadView thread={activeThread()} />);
+    const source = currentSource();
+    const questionArticle = screen
+      .getByText("このニュースの影響は？")
+      .closest("article");
+    expect(questionArticle).not.toBeNull();
+    if (questionArticle === null || questionArticle.parentElement === null) {
+      throw new Error("question turn is missing");
+    }
+    const turn = questionArticle.parentElement;
+    expect(turn).toHaveAttribute("data-research-run-id", RUN_ONE);
+    expect(turn).toHaveAttribute("data-research-persisted-status", "running");
+    expect(turn.querySelectorAll("[data-research-failure-rail]")).toHaveLength(
+      0,
+    );
+    const answerScrollRegion = latestScrollProps().containerRef.current;
+    expect(answerScrollRegion).not.toBeNull();
+    if (answerScrollRegion === null) {
+      throw new Error("answer scroll region is missing");
+    }
+    expect(answerScrollRegion).toHaveAttribute(
+      "data-research-answer-scroll-region",
+    );
+    const focusTarget = screen.getByRole("button", { name: "削除" });
+    focusTarget.focus();
+    const announcer = onlyLiveAnnouncer(view.container);
+
+    act(() => {
+      source.emit(
+        "answer.delta",
+        { attemptEpoch: 1, generation: 1, text: "失敗前の下書き" },
+        "1-0",
+      );
+    });
+    expect(screen.getByText("失敗前の下書き")).toBeInTheDocument();
+    expect(answerSlot()).toContainElement(screen.getByText("失敗前の下書き"));
+    expect(turn).toHaveAttribute("data-research-persisted-status", "running");
+    expect(turn.querySelectorAll("[data-research-failure-rail]")).toHaveLength(
+      0,
+    );
+    expect(latestScrollProps().containerRef.current).toBe(answerScrollRegion);
+    const revisionBeforeFailure =
+      latestScrollProps().failedContractionRevision ?? 0;
+
+    act(() => {
+      source.emit(
+        "terminal",
+        {
+          attemptEpoch: 1,
+          status: "failed",
+          errorCode: "internal_error",
+        },
+        "2-0",
+      );
+    });
+
+    expect(screen.queryByText("失敗前の下書き")).not.toBeInTheDocument();
+    expect(
+      screen.queryByTestId("research-answer-slot"),
+    ).not.toBeInTheDocument();
+    const liveFailure = onlyVisibleText("回答を生成できませんでした");
+    const liveFailureRail = directChildContaining(turn, liveFailure);
+    const liveFailureRails = turn.querySelectorAll(
+      "[data-research-failure-rail]",
+    );
+    expect(turn).toHaveAttribute("data-research-run-id", RUN_ONE);
+    expect(turn).toHaveAttribute("data-research-persisted-status", "running");
+    expect(liveFailureRails).toHaveLength(1);
+    expect(liveFailureRails[0]).toBe(liveFailureRail);
+    expect(latestScrollProps().containerRef.current).toBe(answerScrollRegion);
+    expect(questionArticle.textContent).toBe("このニュースの影響は？");
+    expect(questionArticle.nextElementSibling).toBe(liveFailureRail);
+    expect(liveFailure.closest('[role="status"], [aria-live]')).toBeNull();
+    expect(onlyLiveAnnouncer(view.container)).toBe(announcer);
+    expect(announcer).toHaveTextContent("回答を生成できませんでした");
+    expect(focusTarget).toHaveFocus();
+    const liveFailureRevision =
+      latestScrollProps().failedContractionRevision ?? 0;
+    expect(liveFailureRevision).toBeGreaterThan(revisionBeforeFailure);
+    const announcementNode = announcer.firstChild;
+    const announcementMutations: MutationRecord[] = [];
+    const observer = new MutationObserver((records) => {
+      announcementMutations.push(...records);
+    });
+    observer.observe(announcer, {
+      characterData: true,
+      childList: true,
+      subtree: true,
+    });
+
+    view.rerender(
+      <ResearchThreadView
+        thread={thread([userMessage(run(RUN_ONE, "failed", "internal_error"))])}
+      />,
+    );
+    announcementMutations.push(...observer.takeRecords());
+    observer.disconnect();
+
+    const persistedQuestionArticle = screen
+      .getByText("このニュースの影響は？")
+      .closest("article");
+    const persistedFailure = onlyVisibleText("回答を生成できませんでした");
+    const persistedFailureRail = directChildContaining(turn, persistedFailure);
+    const persistedFailureRails = turn.querySelectorAll(
+      "[data-research-failure-rail]",
+    );
+    expect(persistedQuestionArticle).toBe(questionArticle);
+    expect(questionArticle.parentElement).toBe(turn);
+    expect(turn).toHaveAttribute("data-research-run-id", RUN_ONE);
+    expect(turn).toHaveAttribute("data-research-persisted-status", "failed");
+    expect(persistedFailure).toBe(liveFailure);
+    expect(persistedFailureRail).toBe(liveFailureRail);
+    expect(persistedFailureRails).toHaveLength(1);
+    expect(persistedFailureRails[0]).toBe(liveFailureRail);
+    expect(latestScrollProps().containerRef.current).toBe(answerScrollRegion);
+    expect(answerScrollRegion).toHaveAttribute(
+      "data-research-answer-scroll-region",
+    );
+    expect(questionArticle.nextElementSibling).toBe(persistedFailureRail);
+    expect(
+      screen.queryByTestId("research-answer-slot"),
+    ).not.toBeInTheDocument();
+    expect(onlyLiveAnnouncer(view.container)).toBe(announcer);
+    expect(announcer.firstChild).toBe(announcementNode);
+    expect(announcementMutations).toHaveLength(0);
+    expect(focusTarget).toHaveFocus();
+    expect(latestScrollProps().failedContractionRevision ?? 0).toBe(
+      liveFailureRevision,
+    );
+  });
+
+  it("uses the same question-adjacent failure rail when polling observes failure", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        new Response(
+          JSON.stringify({
+            status: "failed",
+            progressStage: "synthesizing",
+            recentEvents: [],
+            errorCode: "stale",
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        ),
+      ),
+    );
+    const view = render(<ResearchThreadView thread={activeThread()} />);
+    const questionArticle = screen
+      .getByText("このニュースの影響は？")
+      .closest("article");
+    expect(questionArticle).not.toBeNull();
+    if (questionArticle === null || questionArticle.parentElement === null) {
+      throw new Error("question turn is missing");
+    }
+
+    await waitFor(() => {
+      expect(
+        screen.queryByTestId("research-answer-slot"),
+      ).not.toBeInTheDocument();
+      expect(
+        screen
+          .getAllByText("時間切れになりました")
+          .filter((element) => element.closest(".sr-only") === null),
+      ).toHaveLength(1);
+    });
+
+    const failure = onlyVisibleText("時間切れになりました");
+    const statusRail = directChildContaining(
+      questionArticle.parentElement,
+      failure,
+    );
+    expect(questionArticle.textContent).toBe("このニュースの影響は？");
+    expect(questionArticle.nextElementSibling).toBe(statusRail);
+    expect(failure.closest('[role="status"], [aria-live]')).toBeNull();
+    expect(onlyLiveAnnouncer(view.container)).toHaveTextContent(
+      "時間切れになりました",
+    );
   });
 
   it("S4B CLOSEDでは同じanswer slotで未完了draftをplaceholderへ抑制し、poll完了後にDB回答へ収束する", async () => {
@@ -967,6 +1199,32 @@ describe("ResearchThreadView live integration", () => {
     expect(screen.getByRole("button", { name: "出典 1" })).toBeInTheDocument();
     expect(screen.getByText("追加確認が必要な論点")).toBeInTheDocument();
     expect(focusTarget).toHaveFocus();
+  });
+
+  it("renders final missing aspects inside the answer as a labeled semantic list", () => {
+    render(
+      <ResearchThreadView
+        thread={thread([
+          userMessage(run(RUN_ONE, "completed")),
+          assistantMessage("確定した回答", {
+            sources: [],
+            missingAspects: ["企業の一次情報", "地域別の内訳"],
+          }),
+        ])}
+      />,
+    );
+
+    const slot = answerSlot();
+    const label = within(slot).getByText("確認できなかった点");
+    const list = within(slot).getByRole("list");
+    expect(label).toBeVisible();
+    expect(within(list).getAllByRole("listitem")).toHaveLength(2);
+    expect(
+      within(list)
+        .getAllByRole("listitem")
+        .map((item) => item.textContent),
+    ).toEqual(["企業の一次情報", "地域別の内訳"]);
+    expect(slot).not.toHaveTextContent("企業の一次情報 / 地域別の内訳");
   });
 
   it("cleans the old run before subscribing to another thread and ignores its late event", () => {

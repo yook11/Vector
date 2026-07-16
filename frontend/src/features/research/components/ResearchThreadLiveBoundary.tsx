@@ -1,24 +1,33 @@
 "use client";
 
+import { AlertTriangle } from "lucide-react";
 import {
   createContext,
   type ReactNode,
   useCallback,
   useContext,
   useEffect,
+  useLayoutEffect,
   useRef,
   useState,
 } from "react";
-import type { ResearchMessageRun } from "@/types/types.gen";
+import type {
+  ResearchAssistantMessage,
+  ResearchMessageRun,
+} from "@/types/types.gen";
 import { useResearchRunLiveState } from "../hooks/useResearchRunLiveState";
 import type { ResearchRunLiveSnapshot } from "../live/controller";
 import { createInitialResearchLiveState } from "../live/reducer";
 import { ActiveRunStatus, activeRunText } from "./ActiveRunStatus";
 import { failureText, LiveAnswerSlotContent } from "./LiveAnswerDraft";
+import { ResearchAnswerSlot } from "./ResearchAnswerSlot";
 import { useResearchLiveAnnouncementReporter } from "./ResearchLiveAnnouncer";
 import { ResearchLiveScrollButton } from "./ResearchLiveScrollButton";
 
 const AnswerContentRevisionContext = createContext<(() => void) | null>(null);
+const FailedContractionRevisionContext = createContext<(() => void) | null>(
+  null,
+);
 const ActiveRunSnapshotContext = createContext<ResearchRunLiveSnapshot | null>(
   null,
 );
@@ -36,8 +45,13 @@ export function ResearchLiveScrollRegion({
   const previousFinalContentKey = useRef(finalContentKey);
   const [contentRevision, setContentRevision] = useState(0);
   const [finalReplacementRevision, setFinalReplacementRevision] = useState(0);
+  const [failedContractionRevision, setFailedContractionRevision] = useState(0);
   const markAnswerContentChanged = useCallback(
     () => setContentRevision((revision) => revision + 1),
+    [],
+  );
+  const markFailedContraction = useCallback(
+    () => setFailedContractionRevision((revision) => revision + 1),
     [],
   );
 
@@ -50,19 +64,23 @@ export function ResearchLiveScrollRegion({
 
   return (
     <AnswerContentRevisionContext.Provider value={markAnswerContentChanged}>
-      <div className="relative min-h-0 min-w-0 flex-1">
-        <div
-          ref={containerRef}
-          className="h-full min-h-0 min-w-0 overflow-y-auto overflow-x-hidden overscroll-contain px-4 py-5"
-        >
-          {children}
+      <FailedContractionRevisionContext.Provider value={markFailedContraction}>
+        <div className="relative min-h-0 min-w-0 flex-1">
+          <div
+            ref={containerRef}
+            data-research-answer-scroll-region
+            className="h-full min-h-0 min-w-0 overflow-y-auto overflow-x-hidden overscroll-contain px-4 py-5"
+          >
+            {children}
+          </div>
+          <ResearchLiveScrollButton
+            containerRef={containerRef}
+            contentRevision={contentRevision}
+            finalReplacementRevision={finalReplacementRevision}
+            failedContractionRevision={failedContractionRevision}
+          />
         </div>
-        <ResearchLiveScrollButton
-          containerRef={containerRef}
-          contentRevision={contentRevision}
-          finalReplacementRevision={finalReplacementRevision}
-        />
-      </div>
+      </FailedContractionRevisionContext.Provider>
     </AnswerContentRevisionContext.Provider>
   );
 }
@@ -129,6 +147,7 @@ export function ResearchActiveRunBoundary({
       ? "inactive"
       : `${snapshot.liveState.draftMode}\0${snapshot.liveState.draftText}`;
   const previousAnswerPresentationKey = useRef(answerPresentationKey);
+  const isLiveFailed = snapshot?.runStatus === "failed";
   const updateSnapshot = useCallback(
     (nextSnapshot: ResearchRunLiveSnapshot) => setSnapshot(nextSnapshot),
     [],
@@ -139,8 +158,9 @@ export function ResearchActiveRunBoundary({
       return;
     }
     previousAnswerPresentationKey.current = answerPresentationKey;
+    if (isLiveFailed) return;
     markAnswerContentChanged?.();
-  }, [answerPresentationKey, markAnswerContentChanged]);
+  }, [answerPresentationKey, isLiveFailed, markAnswerContentChanged]);
 
   useEffect(() => {
     if (snapshot === null) return;
@@ -184,17 +204,50 @@ export function ResearchActiveRunBoundary({
   );
 }
 
-function useActiveRunSnapshot(): ResearchRunLiveSnapshot {
-  const snapshot = useContext(ActiveRunSnapshotContext);
-  if (snapshot === null) {
-    throw new Error("Research active run context is missing");
-  }
-  return snapshot;
+interface ResearchRunPresentationProps {
+  run: ResearchMessageRun;
+  isActive: boolean;
 }
 
-export function ResearchActiveRunStatus() {
-  const snapshot = useActiveRunSnapshot();
-  if (snapshot.runStatus !== "queued" && snapshot.runStatus !== "running") {
+export function ResearchRunStatusRail({
+  run,
+  isActive,
+}: ResearchRunPresentationProps) {
+  const snapshot = useContext(ActiveRunSnapshotContext);
+  const markFailedContraction = useContext(FailedContractionRevisionContext);
+  const liveFailure =
+    snapshot?.runStatus === "failed" &&
+    snapshot.liveState.terminal?.status === "failed"
+      ? snapshot.liveState.terminal
+      : null;
+  const isFailed = run.status === "failed" || liveFailure !== null;
+  const previousIsFailed = useRef(isFailed);
+
+  useLayoutEffect(() => {
+    if (!previousIsFailed.current && isFailed) {
+      markFailedContraction?.();
+    }
+    previousIsFailed.current = isFailed;
+  }, [isFailed, markFailedContraction]);
+
+  if (isFailed) {
+    return (
+      <div
+        data-research-failure-rail
+        className="mt-2 flex min-w-0 items-center gap-1.5 text-xs text-[var(--vector-ink-muted)]"
+      >
+        <AlertTriangle aria-hidden="true" className="size-3.5 shrink-0" />
+        <span className="min-w-0 break-words [overflow-wrap:anywhere]">
+          {failureText(liveFailure?.errorCode ?? run.errorCode)}
+        </span>
+      </div>
+    );
+  }
+  if (
+    !isActive ||
+    snapshot === null ||
+    (snapshot.runStatus !== "queued" && snapshot.runStatus !== "running")
+  ) {
     return null;
   }
   return (
@@ -206,15 +259,33 @@ export function ResearchActiveRunStatus() {
   );
 }
 
-export function ResearchActiveRunAnswerContent() {
-  const snapshot = useActiveRunSnapshot();
+interface ResearchRunAnswerSlotProps extends ResearchRunPresentationProps {
+  finalAnswer: ResearchAssistantMessage | null;
+}
+
+export function ResearchRunAnswerSlot({
+  run,
+  isActive,
+  finalAnswer,
+}: ResearchRunAnswerSlotProps) {
+  const snapshot = useContext(ActiveRunSnapshotContext);
+  const isFailed = run.status === "failed" || snapshot?.runStatus === "failed";
+  if (isFailed) return null;
+
+  if (finalAnswer !== null) {
+    return <ResearchAnswerSlot finalAnswer={finalAnswer} />;
+  }
+  if (!isActive || snapshot === null) return null;
+
   const terminal = snapshot.liveState.terminal;
   return (
-    <LiveAnswerSlotContent
-      status={snapshot.runStatus}
-      draftMode={snapshot.liveState.draftMode}
-      draftText={snapshot.liveState.draftText}
-      errorCode={terminal?.status === "failed" ? terminal.errorCode : null}
-    />
+    <ResearchAnswerSlot finalAnswer={null}>
+      <LiveAnswerSlotContent
+        status={snapshot.runStatus}
+        draftMode={snapshot.liveState.draftMode}
+        draftText={snapshot.liveState.draftText}
+        errorCode={terminal?.status === "failed" ? terminal.errorCode : null}
+      />
+    </ResearchAnswerSlot>
   );
 }

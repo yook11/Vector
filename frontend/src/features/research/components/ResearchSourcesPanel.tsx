@@ -5,6 +5,7 @@ import Link from "next/link";
 import {
   type ReactNode,
   useEffect,
+  useLayoutEffect,
   useRef,
   useState,
   useSyncExternalStore,
@@ -23,12 +24,25 @@ import type {
   ResearchAssistantMessage,
   ResearchThreadDetail,
 } from "@/types/types.gen";
+import { useResearchNavigation } from "./ResearchNavigationBoundary";
 
 const WIDE_SOURCES_QUERY = "(min-width: 80rem)";
 const INLINE_SOURCES_ID = "research-sources-inline";
 const SHEET_SOURCES_ID = "research-sources-sheet";
 
 type ResearchSource = ResearchAssistantMessage["sources"][number];
+type SourcesSurface = "closed" | "inline" | "sheet";
+
+interface SourcesDisclosureState {
+  threadId: string;
+  surface: SourcesSurface;
+}
+
+interface PendingAnswerScrollRestore {
+  owner: HTMLElement;
+  scrollTop: number;
+  surface: SourcesSurface;
+}
 
 function subscribeWideSources(listener: () => void): () => void {
   if (typeof window.matchMedia !== "function") return () => undefined;
@@ -167,6 +181,7 @@ function SourcesList({
 }
 
 interface ResearchSourcesPanelProps {
+  threadId: string;
   messages: ResearchThreadDetail["messages"];
   headerLeading: ReactNode;
   headerActions: ReactNode;
@@ -175,6 +190,7 @@ interface ResearchSourcesPanelProps {
 }
 
 export function ResearchSourcesPanel({
+  threadId,
   messages,
   headerLeading,
   headerActions,
@@ -182,33 +198,102 @@ export function ResearchSourcesPanel({
   composer,
 }: ResearchSourcesPanelProps) {
   const isWide = useWideSourcesViewport();
-  const [inlineOpen, setInlineOpen] = useState(true);
-  const [sheetOpen, setSheetOpen] = useState(false);
-  const previousWide = useRef(isWide);
+  const { pendingTarget } = useResearchNavigation();
   const triggerRef = useRef<HTMLButtonElement>(null);
   const sheetCloseRef = useRef<HTMLButtonElement>(null);
+  const contentRef = useRef<HTMLDivElement>(null);
+  const disconnectedRef = useRef(false);
+  const pendingAnswerScrollRestoreRef =
+    useRef<PendingAnswerScrollRestore | null>(null);
   const sourceCount = messages.reduce(
     (count, message) =>
       count + (message.role === "assistant" ? message.sources.length : 0),
     0,
   );
-  const expanded = isWide ? inlineOpen : sheetOpen;
-  const controlledId = isWide ? INLINE_SOURCES_ID : SHEET_SOURCES_ID;
+  const hasSources = sourceCount > 0;
+  const [disclosure, setDisclosure] = useState<SourcesDisclosureState>(() => ({
+    threadId,
+    surface: "closed",
+  }));
+  const navigatingAway =
+    pendingTarget?.kind === "new" ||
+    (pendingTarget?.kind === "thread" && pendingTarget.threadId !== threadId);
+  const selectedSurface =
+    disclosure.threadId === threadId &&
+    !navigatingAway &&
+    !disconnectedRef.current
+      ? disclosure.surface
+      : "closed";
+  const surface =
+    hasSources &&
+    ((selectedSurface === "inline" && isWide) ||
+      (selectedSurface === "sheet" && !isWide))
+      ? selectedSurface
+      : "closed";
+  const controlledId =
+    surface === "inline"
+      ? INLINE_SOURCES_ID
+      : surface === "sheet"
+        ? SHEET_SOURCES_ID
+        : undefined;
+
+  useLayoutEffect(() => {
+    if (disconnectedRef.current) {
+      disconnectedRef.current = false;
+      setDisclosure({ threadId, surface: "closed" });
+    }
+    return () => {
+      disconnectedRef.current = true;
+    };
+  }, [threadId]);
 
   useEffect(() => {
-    if (previousWide.current === isWide) return;
-    previousWide.current = isWide;
-    setSheetOpen(false);
-    if (isWide) setInlineOpen(true);
-  }, [isWide]);
-
-  function toggleSources() {
-    if (sourceCount === 0) return;
-    if (isWide) {
-      setInlineOpen((open) => !open);
+    if (disclosure.threadId === threadId && disclosure.surface === surface) {
       return;
     }
-    setSheetOpen(true);
+    setDisclosure({ threadId, surface: "closed" });
+  }, [disclosure.surface, disclosure.threadId, surface, threadId]);
+
+  useLayoutEffect(() => {
+    const pending = pendingAnswerScrollRestoreRef.current;
+    if (pending === null || pending.surface !== surface) return;
+    pendingAnswerScrollRestoreRef.current = null;
+    const currentOwner = contentRef.current?.querySelector<HTMLElement>(
+      "[data-research-answer-scroll-region]",
+    );
+    if (currentOwner === pending.owner) {
+      currentOwner.scrollTop = pending.scrollTop;
+    }
+  }, [surface]);
+
+  function captureAnswerScroll(nextSurface: SourcesSurface) {
+    const owner = contentRef.current?.querySelector<HTMLElement>(
+      "[data-research-answer-scroll-region]",
+    );
+    if (owner === undefined || owner === null) return;
+    pendingAnswerScrollRestoreRef.current = {
+      owner,
+      scrollTop: owner.scrollTop,
+      surface: nextSurface,
+    };
+  }
+
+  function toggleSources() {
+    if (!hasSources) return;
+    if (isWide) {
+      const nextSurface = surface === "inline" ? "closed" : "inline";
+      captureAnswerScroll(nextSurface);
+      setDisclosure({
+        threadId,
+        surface: nextSurface,
+      });
+      return;
+    }
+    setDisclosure({ threadId, surface: "sheet" });
+  }
+
+  function closeSources() {
+    setDisclosure({ threadId, surface: "closed" });
   }
 
   return (
@@ -221,9 +306,9 @@ export function ResearchSourcesPanel({
             type="button"
             variant="outline"
             size="sm"
-            aria-expanded={expanded}
+            aria-expanded={surface !== "closed"}
             aria-controls={controlledId}
-            disabled={sourceCount === 0}
+            disabled={!hasSources}
             onClick={toggleSources}
             className="border-[var(--vector-rule)] bg-[var(--vector-paper)] shadow-none"
           >
@@ -237,9 +322,9 @@ export function ResearchSourcesPanel({
         </div>
       </header>
 
-      <div className="flex min-h-0 min-w-0 flex-1">
+      <div ref={contentRef} className="flex min-h-0 min-w-0 flex-1">
         {answerPanel}
-        {isWide && inlineOpen ? (
+        {surface === "inline" ? (
           <aside
             id={INLINE_SOURCES_ID}
             aria-label="ソース"
@@ -261,8 +346,10 @@ export function ResearchSourcesPanel({
       </div>
 
       <Sheet
-        open={!isWide && sheetOpen}
-        onOpenChange={(open) => setSheetOpen(!isWide && open)}
+        open={surface === "sheet"}
+        onOpenChange={(open) => {
+          if (!open) closeSources();
+        }}
       >
         <SheetContent
           id={SHEET_SOURCES_ID}
@@ -309,7 +396,7 @@ export function ResearchSourcesPanel({
 
       <div className="flex min-w-0 shrink-0">
         <div className="min-w-0 flex-1">{composer}</div>
-        {isWide && inlineOpen ? (
+        {surface === "inline" ? (
           <div
             aria-hidden="true"
             className="w-80 shrink-0 border-t border-l border-[var(--vector-rule)] bg-[var(--vector-paper)]"

@@ -37,6 +37,7 @@ vi.mock("../api/submit-research-question", () => ({
 }));
 
 const THREAD_ID = "00000000-0000-4000-a000-000000000001";
+const THREAD_TWO = "00000000-0000-4000-a000-000000000002";
 const RUN_ONE = "00000000-0000-4000-a000-000000000011";
 const RUN_TWO = "00000000-0000-4000-a000-000000000012";
 const LONG_EXTERNAL_TITLE =
@@ -169,7 +170,7 @@ function run(
   return {
     runId,
     status,
-    errorCode: null,
+    errorCode: status === "failed" ? "internal_error" : null,
     progressStage: status === "running" ? "synthesizing" : null,
   };
 }
@@ -202,9 +203,9 @@ function assistantMessage(
   };
 }
 
-function completedThread(): ResearchThreadDetail {
+function completedThread(threadId = THREAD_ID): ResearchThreadDetail {
   return {
-    threadId: THREAD_ID,
+    threadId,
     title: "Sources contract",
     messages: [
       userMessage(1, run(RUN_ONE, "completed")),
@@ -215,9 +216,9 @@ function completedThread(): ResearchThreadDetail {
   };
 }
 
-function emptySourceThread(): ResearchThreadDetail {
+function emptySourceThread(threadId = THREAD_ID): ResearchThreadDetail {
   return {
-    threadId: THREAD_ID,
+    threadId,
     title: "Sources contract",
     messages: [
       userMessage(1, run(RUN_ONE, "completed")),
@@ -226,14 +227,33 @@ function emptySourceThread(): ResearchThreadDetail {
   };
 }
 
-function activeThread(): ResearchThreadDetail {
+function activeThread(
+  sources: ResearchAssistantMessage["sources"] = [externalSource],
+  threadId = THREAD_ID,
+): ResearchThreadDetail {
   return {
-    threadId: THREAD_ID,
+    threadId,
     title: "Sources contract",
     messages: [
       userMessage(1, run(RUN_ONE, "completed")),
-      assistantMessage(2, 1, [externalSource]),
+      assistantMessage(2, 1, sources),
       userMessage(3, run(RUN_TWO, "running")),
+    ],
+  };
+}
+
+function statusThread(
+  status: ResearchMessageRun["status"],
+  sources: ResearchAssistantMessage["sources"] = [externalSource],
+  threadId = THREAD_ID,
+): ResearchThreadDetail {
+  return {
+    threadId,
+    title: "Sources contract",
+    messages: [
+      userMessage(1, run(RUN_ONE, "completed")),
+      assistantMessage(2, 1, sources),
+      userMessage(3, run(RUN_TWO, status)),
     ],
   };
 }
@@ -306,6 +326,42 @@ function sourcesAside(): HTMLElement {
   return screen.getByRole("complementary", { name: "ソース" });
 }
 
+function sourcesDialog(): HTMLElement {
+  return screen.getByRole("dialog", { name: "ソース" });
+}
+
+function composerSpacer(): HTMLElement | null {
+  let candidate = document.querySelector<HTMLElement>("#research-question");
+  if (candidate === null) throw new Error("composer textarea is missing");
+  const threadPane = candidate.closest<HTMLElement>("section");
+  while (candidate.parentElement !== null && candidate !== threadPane) {
+    const spacer = Array.from(candidate.parentElement.children).find(
+      (sibling) =>
+        sibling !== candidate &&
+        sibling instanceof HTMLElement &&
+        sibling.tagName === "DIV" &&
+        sibling.getAttribute("aria-hidden") === "true" &&
+        sibling.childElementCount === 0,
+    );
+    if (spacer instanceof HTMLElement) return spacer;
+    candidate = candidate.parentElement;
+  }
+  return null;
+}
+
+function expectSourcesClosed(): void {
+  const trigger = sourcesTrigger();
+  expect(trigger).toHaveAttribute("aria-expanded", "false");
+  expect(trigger).not.toHaveAttribute("aria-controls");
+  expect(
+    screen.queryByRole("complementary", { name: "ソース", hidden: true }),
+  ).not.toBeInTheDocument();
+  expect(
+    screen.queryByRole("dialog", { name: "ソース", hidden: true }),
+  ).toBeNull();
+  expect(composerSpacer()).toBeNull();
+}
+
 function scrollOwner(root: HTMLElement): HTMLElement {
   const candidate = [root, ...root.querySelectorAll<HTMLElement>("*")].find(
     (element) => element.classList.contains("overflow-y-auto"),
@@ -374,86 +430,139 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
-describe("S3R Research workspace sources", () => {
-  it("threadではtabsなしでwide inline sourcesを初期表示し、独立scroll ownerのままclose/reopenする", async () => {
-    installMatchMedia(1280);
-    const user = userEvent.setup();
+describe("Research workspace sources disclosure", () => {
+  it.each([
+    ["wide", 1280],
+    ["compact", 1279],
+  ] as const)("sourceありの%s初期表示をclosedに保つ", (_label, width) => {
+    installMatchMedia(width);
     render(workspaceElement(completedThread()));
 
     expect(screen.queryByRole("tablist")).not.toBeInTheDocument();
     expect(screen.queryByRole("tab")).not.toBeInTheDocument();
     expect(screen.queryByRole("tabpanel")).not.toBeInTheDocument();
+    expect(sourcesTrigger()).toBeEnabled();
+    expect(sourcesTrigger()).toHaveTextContent("4");
+    expectSourcesClosed();
+  });
+
+  it("wideではtrigger操作だけでinline surfaceとcomposer spacerを同時にopen/closeする", async () => {
+    installMatchMedia(1280);
+    const user = userEvent.setup();
+    render(workspaceElement(completedThread()));
     const trigger = sourcesTrigger();
-    expect(trigger).toHaveAttribute("aria-expanded", "true");
-    expect(trigger).toHaveTextContent("4");
+    expectSourcesClosed();
+
+    await user.click(trigger);
     const aside = sourcesAside();
-    expect(trigger).toHaveAttribute("aria-controls", aside.id);
+    const stableId = aside.id;
+    expect(stableId).not.toBe("");
+    expect(trigger).toHaveAttribute("aria-expanded", "true");
+    expect(trigger).toHaveAttribute("aria-controls", stableId);
+    expect(screen.queryByRole("dialog", { name: "ソース" })).toBeNull();
+    expect(composerSpacer()).not.toBeNull();
     expect(scrollOwner(aside)).not.toBe(answerScroller());
 
     await user.click(trigger);
-    expect(trigger).toHaveAttribute("aria-expanded", "false");
+    expectSourcesClosed();
+
+    await user.click(trigger);
+    expect(sourcesAside().id).toBe(stableId);
+    expect(trigger).toHaveAttribute("aria-expanded", "true");
+    expect(trigger).toHaveAttribute("aria-controls", stableId);
+  });
+
+  it("compactではtrigger操作だけでmodalを開きEscape/close後にcontrolsを消してfocusを戻す", async () => {
+    installMatchMedia(1279);
+    const user = userEvent.setup();
+    render(workspaceElement(completedThread()));
+    const trigger = sourcesTrigger();
+    expectSourcesClosed();
+
+    await user.click(trigger);
+    const dialog = sourcesDialog();
+    const stableId = dialog.id;
+    expect(stableId).not.toBe("");
+    expect(dialog).toHaveAttribute("aria-modal", "true");
+    expect(dialog).toHaveClass("right-0", "border-l");
+    expect(trigger).toHaveAttribute("aria-expanded", "true");
+    expect(trigger).toHaveAttribute("aria-controls", stableId);
     expect(
       screen.queryByRole("complementary", { name: "ソース" }),
     ).not.toBeInTheDocument();
+    expect(composerSpacer()).toBeNull();
+
+    await user.keyboard("{Escape}");
+    await waitFor(expectSourcesClosed);
+    expect(trigger).toHaveFocus();
 
     await user.click(trigger);
-    expect(trigger).toHaveAttribute("aria-expanded", "true");
-    expect(sourcesAside()).toBeInTheDocument();
+    const reopened = sourcesDialog();
+    expect(reopened.id).toBe(stableId);
+    await user.click(
+      within(reopened).getByRole("button", { name: "ソースを閉じる" }),
+    );
+    await waitFor(expectSourcesClosed);
+    expect(trigger).toHaveFocus();
   });
 
-  it("compactではinlineと同時表示せず右modal sheetをEscape/closeで閉じてtriggerへfocusを返す", async () => {
+  it("open中の1279pxと1280px crossingをclosedへ収束させ反対surfaceを自動openしない", async () => {
     const setWidth = installMatchMedia(1279);
     const user = userEvent.setup();
     render(workspaceElement(completedThread()));
-
     const trigger = sourcesTrigger();
-    expect(trigger).toHaveAttribute("aria-expanded", "false");
-    expect(
-      screen.queryByRole("complementary", { name: "ソース" }),
-    ).not.toBeInTheDocument();
-    expect(screen.queryByRole("dialog", { name: "ソース" })).toBeNull();
 
     await user.click(trigger);
-    const dialog = screen.getByRole("dialog", { name: "ソース" });
-    expect(dialog).toHaveAttribute("aria-modal", "true");
-    expect(dialog).toHaveClass("right-0", "border-l");
-    expect(
-      screen.queryByRole("complementary", { name: "ソース" }),
-    ).not.toBeInTheDocument();
-
+    const sheetId = sourcesDialog().id;
+    expect(trigger).toHaveAttribute("aria-controls", sheetId);
     act(() => setWidth(1280));
-    expect(screen.queryByRole("dialog", { name: "ソース" })).toBeNull();
-    expect(sourcesAside()).toBeInTheDocument();
+    await waitFor(expectSourcesClosed);
 
+    await user.click(trigger);
+    const inlineId = sourcesAside().id;
+    expect(inlineId).not.toBe(sheetId);
+    expect(trigger).toHaveAttribute("aria-controls", inlineId);
+    expect(screen.queryByRole("dialog", { name: "ソース" })).toBeNull();
     act(() => setWidth(1279));
+    await waitFor(expectSourcesClosed);
+
+    await user.click(trigger);
+    expect(sourcesDialog().id).toBe(sheetId);
+    expect(trigger).toHaveAttribute("aria-controls", sheetId);
     expect(
       screen.queryByRole("complementary", { name: "ソース" }),
     ).not.toBeInTheDocument();
-    expect(screen.queryByRole("dialog", { name: "ソース" })).toBeNull();
-
-    await user.click(trigger);
-    await user.keyboard("{Escape}");
-    await waitFor(() =>
-      expect(screen.queryByRole("dialog", { name: "ソース" })).toBeNull(),
-    );
-    expect(trigger).toHaveFocus();
-
-    await user.click(trigger);
-    const reopened = screen.getByRole("dialog", { name: "ソース" });
-    await user.click(
-      within(reopened).getByRole("button", {
-        name: /ソースを閉じる|閉じる|Close/,
-      }),
-    );
-    await waitFor(() =>
-      expect(screen.queryByRole("dialog", { name: "ソース" })).toBeNull(),
-    );
-    expect(trigger).toHaveFocus();
+    act(() => setWidth(1280));
+    await waitFor(expectSourcesClosed);
   });
 
-  it("API sourcesを回答順に重複保持し全kindとlong fieldを安全に表示し、0件ではdisabled empty stateにする", () => {
+  it.each([
+    ["wide", 1280],
+    ["compact", 1279],
+  ] as const)("%sの0 sourcesからpositiveへの更新はbuttonだけをenableにする", async (_label, width) => {
+    installMatchMedia(width);
+    const user = userEvent.setup();
+    const view = render(workspaceElement(emptySourceThread()));
+    const trigger = sourcesTrigger();
+
+    expect(trigger).toBeDisabled();
+    expect(trigger).toHaveTextContent("0");
+    expectSourcesClosed();
+    await user.click(trigger);
+    expectSourcesClosed();
+
+    view.rerender(workspaceElement(completedThread()));
+    expect(sourcesTrigger()).toBe(trigger);
+    expect(trigger).toBeEnabled();
+    expect(trigger).toHaveTextContent("4");
+    expectSourcesClosed();
+  });
+
+  it("DB assistant sourcesを回答単位で重複保持し全kindと長文を安全に表示する", async () => {
     installMatchMedia(1280);
-    const view = render(workspaceElement(completedThread()));
+    const user = userEvent.setup();
+    render(workspaceElement(completedThread()));
+    await user.click(sourcesTrigger());
     const aside = sourcesAside();
     const firstGroup = within(aside).getByText("回答 1");
     const secondGroup = within(aside).getByText("回答 2");
@@ -485,16 +594,9 @@ describe("S3R Research workspace sources", () => {
     for (const element of within(aside).getAllByText(LONG_EVIDENCE)) {
       expectOverflowSafe(element);
     }
-
-    view.rerender(workspaceElement(emptySourceThread()));
-    expect(sourcesTrigger()).toBeDisabled();
-    expect(sourcesTrigger()).toHaveTextContent("0");
-    const emptyAside = sourcesAside();
-    expect(emptyAside).toHaveTextContent("表示できるソースはありません");
-    expect(within(emptyAside).queryByRole("link")).toBeNull();
   });
 
-  it("sources open/closeとlive deltaでtextarea・answer scroll・slot・EventSource・single announcerを維持する", async () => {
+  it("same-threadのsource/status更新で選択状態と主要DOM identityを維持しlive draftをsourcesへ混ぜない", async () => {
     installMatchMedia(1280);
     const user = userEvent.setup();
     const view = render(workspaceElement(activeThread()));
@@ -503,40 +605,98 @@ describe("S3R Research workspace sources", () => {
     fireEvent.change(textarea, { target: { value: "保持する入力" } });
     const scroller = answerScroller();
     scroller.scrollTop = 123;
-    const answerSlot = screen.getAllByTestId("research-answer-slot").at(-1);
-    const source = FakeEventSource.instances[0];
-    if (answerSlot === undefined) throw new Error("answer slot is missing");
-    if (source === undefined) throw new Error("EventSource is missing");
+    const stableAnswerSlot = screen.getAllByTestId("research-answer-slot")[0];
+    const eventSource = FakeEventSource.instances[0];
+    if (stableAnswerSlot === undefined)
+      throw new Error("answer slot is missing");
+    if (eventSource === undefined) throw new Error("EventSource is missing");
     const announcer = onlyLiveAnnouncer(view.container);
+    expectSourcesClosed();
 
     await user.click(trigger);
-    await user.click(trigger);
+    const aside = sourcesAside();
+    const sourceScroll = scrollOwner(aside);
+    sourceScroll.scrollTop = 77;
+    trigger.focus();
 
+    view.rerender(
+      workspaceElement(activeThread([externalSource, internalSource])),
+    );
+    expect(sourcesTrigger()).toBe(trigger);
+    expect(sourcesAside()).toBe(aside);
+    expect(scrollOwner(aside)).toBe(sourceScroll);
+    expect(sourceScroll.scrollTop).toBe(77);
+    expect(trigger).toHaveAttribute("aria-expanded", "true");
+    expect(trigger).toHaveAttribute("aria-controls", aside.id);
     expect(screen.getByRole("textbox", { name: "質問" })).toBe(textarea);
     expect(textarea).toHaveValue("保持する入力");
     expect(answerScroller()).toBe(scroller);
     expect(scroller.scrollTop).toBe(123);
-    expect(screen.getAllByTestId("research-answer-slot").at(-1)).toBe(
-      answerSlot,
+    expect(screen.getAllByTestId("research-answer-slot")[0]).toBe(
+      stableAnswerSlot,
     );
-    expect(FakeEventSource.instances).toEqual([source]);
+    expect(FakeEventSource.instances).toEqual([eventSource]);
     expect(onlyLiveAnnouncer(view.container)).toBe(announcer);
+    expect(trigger).toHaveFocus();
 
     act(() => {
-      source.emit(
+      eventSource.emit(
         "answer.delta",
         { attemptEpoch: 1, generation: 1, text: "sourceへ混ぜないdraft" },
         "1-0",
       );
     });
+    expect(within(aside).queryByText("sourceへ混ぜないdraft")).toBeNull();
+    expect(within(aside).getAllByText(/回答 \d+/)).toHaveLength(1);
+    expect(FakeEventSource.instances).toEqual([eventSource]);
 
-    expect(
-      within(sourcesAside()).queryByText("sourceへ混ぜないdraft"),
-    ).toBeNull();
-    expect(within(sourcesAside()).getAllByText(/回答 \d+/)).toHaveLength(1);
-    expect(FakeEventSource.instances).toEqual([source]);
+    for (const status of [
+      "queued",
+      "running",
+      "completed",
+      "failed",
+    ] as const) {
+      view.rerender(
+        workspaceElement(
+          statusThread(status, [externalSource, internalSource]),
+        ),
+      );
+      expect(sourcesAside()).toBe(aside);
+      expect(scrollOwner(aside)).toBe(sourceScroll);
+      expect(sourceScroll.scrollTop).toBe(77);
+      expect(screen.getByRole("textbox", { name: "質問" })).toBe(textarea);
+      expect(answerScroller()).toBe(scroller);
+      expect(screen.getAllByTestId("research-answer-slot")[0]).toBe(
+        stableAnswerSlot,
+      );
+      expect(onlyLiveAnnouncer(view.container)).toBe(announcer);
+      expect(trigger).toHaveFocus();
+    }
+
+    await user.click(trigger);
+    expectSourcesClosed();
+    view.rerender(workspaceElement(statusThread("running", [externalSource])));
+    expectSourcesClosed();
     expect(screen.getByRole("textbox", { name: "質問" })).toBe(textarea);
+    expect(answerScroller()).toBe(scroller);
     expect(onlyLiveAnnouncer(view.container)).toBe(announcer);
+    expect(trigger).toHaveFocus();
+  });
+
+  it("threadId A→BとB→Aのrerenderを同期的にclosedで開始する", async () => {
+    installMatchMedia(1280);
+    const user = userEvent.setup();
+    const view = render(workspaceElement(completedThread(THREAD_ID)));
+
+    await user.click(sourcesTrigger());
+    expect(sourcesAside()).toBeInTheDocument();
+    view.rerender(workspaceElement(completedThread(THREAD_TWO)));
+    expectSourcesClosed();
+
+    await user.click(sourcesTrigger());
+    expect(sourcesAside()).toBeInTheDocument();
+    view.rerender(workspaceElement(completedThread(THREAD_ID)));
+    expectSourcesClosed();
   });
 
   it("threadなしではtabsもsources trigger/panel/sheetも描画しない", () => {
