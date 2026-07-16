@@ -1,4 +1,4 @@
-import { render, screen, within } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { ResearchComposer } from "./ResearchComposer";
@@ -9,14 +9,16 @@ import {
 
 const mocks = vi.hoisted(() => ({
   push: vi.fn(),
+  refresh: vi.fn(),
   submit: vi.fn(),
   cancel: vi.fn(),
+  toastError: vi.fn(),
 }));
 
 vi.mock("next/navigation", () => ({
   usePathname: () => "/research/current",
   useSearchParams: () => new URLSearchParams(),
-  useRouter: () => ({ push: mocks.push, refresh: vi.fn() }),
+  useRouter: () => ({ push: mocks.push, refresh: mocks.refresh }),
 }));
 
 vi.mock("../api/submit-research-question", () => ({
@@ -25,6 +27,10 @@ vi.mock("../api/submit-research-question", () => ({
 
 vi.mock("../api/cancel-research-run", () => ({
   cancelResearchRun: mocks.cancel,
+}));
+
+vi.mock("@/lib/utils/toast-error", () => ({
+  toastError: mocks.toastError,
 }));
 
 function StartNavigation() {
@@ -88,8 +94,10 @@ function expectTouchTarget(button: HTMLElement): void {
 
 beforeEach(() => {
   mocks.push.mockReset();
+  mocks.refresh.mockReset();
   mocks.submit.mockReset();
   mocks.cancel.mockReset();
+  mocks.toastError.mockReset();
 });
 
 describe("ResearchComposer dock contract", () => {
@@ -223,5 +231,62 @@ describe("ResearchComposer pending regression", () => {
       "current",
     );
     expect(screen.getByRole("button", { name: "停止" })).toBeDisabled();
+  });
+});
+
+describe("ResearchComposer mutation refresh ownership", () => {
+  it("existing threadへのsubmit成功はActionを1回だけ呼んで入力をclearしclient refreshしない", async () => {
+    mocks.submit.mockResolvedValue(undefined);
+    const user = userEvent.setup();
+    renderComposer();
+    const textarea = screen.getByRole<HTMLTextAreaElement>("textbox", {
+      name: "質問",
+    });
+    await user.type(textarea, "市場への影響は？");
+
+    await user.click(screen.getByRole("button", { name: "送信" }));
+
+    await waitFor(() => expect(textarea).toHaveValue(""));
+    expect(mocks.submit).toHaveBeenCalledTimes(1);
+    expect(mocks.submit).toHaveBeenCalledWith("市場への影響は？", "current");
+    expect(mocks.refresh).not.toHaveBeenCalled();
+  });
+
+  it("cancel成功は既存のclient refresh契約を維持する", async () => {
+    mocks.cancel.mockResolvedValue(undefined);
+    const user = userEvent.setup();
+    renderComposer("00000000-0000-4000-a000-000000000099");
+
+    await user.click(screen.getByRole("button", { name: "停止" }));
+
+    await waitFor(() => expect(mocks.refresh).toHaveBeenCalledTimes(1));
+    expect(mocks.cancel).toHaveBeenCalledTimes(1);
+    expect(mocks.cancel).toHaveBeenCalledWith(
+      "00000000-0000-4000-a000-000000000099",
+      "current",
+    );
+  });
+
+  it("submit失敗時は入力を保持する", async () => {
+    const error = new Error("submit failed");
+    mocks.submit.mockRejectedValue(error);
+    const user = userEvent.setup();
+    renderComposer();
+    const textarea = screen.getByRole<HTMLTextAreaElement>("textbox", {
+      name: "質問",
+    });
+    await user.type(textarea, "保持する質問");
+
+    await user.click(screen.getByRole("button", { name: "送信" }));
+
+    await waitFor(() =>
+      expect(mocks.toastError).toHaveBeenCalledWith(
+        error,
+        "質問を送信できませんでした",
+      ),
+    );
+    expect(textarea).toHaveValue("保持する質問");
+    expect(mocks.submit).toHaveBeenCalledTimes(1);
+    expect(mocks.refresh).not.toHaveBeenCalled();
   });
 });

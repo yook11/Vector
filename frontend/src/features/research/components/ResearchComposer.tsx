@@ -35,7 +35,6 @@ export function ResearchComposer({
       try {
         await submitResearchQuestion(nextQuestion, threadId);
         setQuestion("");
-        router.refresh();
       } catch (err) {
         if (isRedirectError(err)) throw err;
         toastError(err, "質問を送信できませんでした");
