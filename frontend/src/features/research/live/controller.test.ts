@@ -34,6 +34,7 @@ type PollRunResult =
   | { kind: "unavailable" };
 
 type PollRun = (runId: string, signal: AbortSignal) => Promise<PollRunResult>;
+type RequestRefresh = () => Promise<void>;
 
 type PollErrorCode = Exclude<
   Extract<PollRunResult, { kind: "run" }>["run"]["errorCode"],
@@ -146,6 +147,7 @@ class FakeVisibility {
 function createHarness(
   pollRun?: ReturnType<typeof vi.fn<PollRun>>,
   initialStatus: "queued" | "running" = "running",
+  requestRefresh?: ReturnType<typeof vi.fn<RequestRefresh>>,
 ) {
   const sources: FakeEventSource[] = [];
   const createEventSource = vi.fn((_url: string) => {
@@ -153,19 +155,26 @@ function createHarness(
     sources.push(source);
     return source as unknown as EventSource;
   });
-  const refresh = vi.fn();
+  const actualRequestRefresh =
+    requestRefresh ?? vi.fn<RequestRefresh>().mockResolvedValue(undefined);
   const visibility = new FakeVisibility();
   const actualPollRun =
     pollRun ?? vi.fn<PollRun>().mockResolvedValue(runResult());
-  const controller = createResearchRunLiveController({
+  const controllerOptions = {
     runId: RUN_ID,
     initialStatus,
     initialStage: null,
     pollRun: actualPollRun,
     createEventSource,
-    refresh,
+    requestRefresh: actualRequestRefresh,
+    refresh: actualRequestRefresh,
     visibility,
-  });
+  };
+  const controller = createResearchRunLiveController(
+    controllerOptions as unknown as Parameters<
+      typeof createResearchRunLiveController
+    >[0],
+  );
   const notify = vi.fn();
   const unsubscribe = controller.subscribe(notify);
 
@@ -173,7 +182,8 @@ function createHarness(
     controller,
     pollRun: actualPollRun,
     createEventSource,
-    refresh,
+    requestRefresh: actualRequestRefresh,
+    refresh: actualRequestRefresh,
     visibility,
     sources,
     source: sources[0] as FakeEventSource,
@@ -720,7 +730,48 @@ describe("createResearchRunLiveController", () => {
       harness.unsubscribe();
     });
 
-    it("refreshes immediately then retries after 2, 4, 8, and capped 10 seconds", async () => {
+    it("waits for each refresh commit ack before retrying and ignores settle after dispose", async () => {
+      const pendingPoll = deferred<PollRunResult>();
+      const pollRun = vi.fn<PollRun>().mockReturnValue(pendingPoll.promise);
+      const firstRefresh = deferred<void>();
+      const secondRefresh = deferred<void>();
+      const requestRefresh = vi
+        .fn<RequestRefresh>()
+        .mockReturnValueOnce(firstRefresh.promise)
+        .mockReturnValueOnce(secondRefresh.promise);
+      const harness = createHarness(pollRun, "running", requestRefresh);
+
+      pendingPoll.resolve(runResult("completed"));
+      harness.source.emit(
+        "terminal",
+        { attemptEpoch: 1, status: "completed" },
+        "1-0",
+      );
+      await flushPromises();
+      harness.visibility.setHidden(true);
+      harness.visibility.setHidden(false);
+
+      expect(requestRefresh).toHaveBeenCalledTimes(1);
+      await vi.advanceTimersByTimeAsync(12_000);
+      expect(requestRefresh).toHaveBeenCalledTimes(1);
+
+      firstRefresh.resolve(undefined);
+      await flushPromises();
+      await vi.advanceTimersByTimeAsync(1_999);
+      expect(requestRefresh).toHaveBeenCalledTimes(1);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(requestRefresh).toHaveBeenCalledTimes(2);
+      await vi.advanceTimersByTimeAsync(10_001);
+      expect(requestRefresh).toHaveBeenCalledTimes(2);
+
+      harness.unsubscribe();
+      secondRefresh.resolve(undefined);
+      await flushPromises();
+      await vi.advanceTimersByTimeAsync(30_000);
+      expect(requestRefresh).toHaveBeenCalledTimes(2);
+    });
+
+    it("retries 2, 4, 8, and capped 10 seconds after each refresh ack", async () => {
       const harness = createHarness();
       harness.source.emit(
         "terminal",
@@ -729,14 +780,19 @@ describe("createResearchRunLiveController", () => {
       );
 
       expect(harness.refresh).toHaveBeenCalledTimes(1);
+      await flushPromises();
       await vi.advanceTimersByTimeAsync(2000);
       expect(harness.refresh).toHaveBeenCalledTimes(2);
+      await flushPromises();
       await vi.advanceTimersByTimeAsync(4000);
       expect(harness.refresh).toHaveBeenCalledTimes(3);
+      await flushPromises();
       await vi.advanceTimersByTimeAsync(8000);
       expect(harness.refresh).toHaveBeenCalledTimes(4);
+      await flushPromises();
       await vi.advanceTimersByTimeAsync(10000);
       expect(harness.refresh).toHaveBeenCalledTimes(5);
+      await flushPromises();
       await vi.advanceTimersByTimeAsync(10000);
       expect(harness.refresh).toHaveBeenCalledTimes(6);
 
@@ -795,21 +851,32 @@ describe("createResearchRunLiveController", () => {
       harness.unsubscribe();
     });
 
-    it("pauses finalization retries while hidden and refreshes immediately when visible", async () => {
-      const harness = createHarness();
+    it("does not schedule a settled refresh while hidden and starts one attempt when visible", async () => {
+      const firstRefresh = deferred<void>();
+      const secondRefresh = deferred<void>();
+      const requestRefresh = vi
+        .fn<RequestRefresh>()
+        .mockReturnValueOnce(firstRefresh.promise)
+        .mockReturnValueOnce(secondRefresh.promise);
+      const harness = createHarness(undefined, "running", requestRefresh);
       harness.source.emit(
         "terminal",
         { attemptEpoch: 1, status: "completed" },
         "1-0",
       );
       harness.visibility.setHidden(true);
+      firstRefresh.resolve(undefined);
+      await flushPromises();
       await vi.advanceTimersByTimeAsync(30000);
-      expect(harness.refresh).toHaveBeenCalledTimes(1);
+      expect(requestRefresh).toHaveBeenCalledTimes(1);
 
       harness.visibility.setHidden(false);
-      expect(harness.refresh).toHaveBeenCalledTimes(2);
+      expect(requestRefresh).toHaveBeenCalledTimes(2);
+      await vi.advanceTimersByTimeAsync(30000);
+      expect(requestRefresh).toHaveBeenCalledTimes(2);
 
       harness.unsubscribe();
+      secondRefresh.resolve(undefined);
     });
 
     it("removes listeners, closes SSE, aborts polling, and ignores old callbacks after cleanup", async () => {

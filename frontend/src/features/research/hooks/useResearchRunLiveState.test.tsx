@@ -1,5 +1,11 @@
-import { renderHook } from "@testing-library/react";
-import { type ReactNode, StrictMode } from "react";
+import {
+  act,
+  render,
+  renderHook,
+  screen,
+  waitFor,
+} from "@testing-library/react";
+import { type ReactNode, StrictMode, Suspense, useState } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createInitialResearchLiveState } from "../live/reducer";
 import { useResearchRunLiveState } from "./useResearchRunLiveState";
@@ -9,6 +15,8 @@ const RUN_TWO = "00000000-0000-4000-a000-000000000020";
 
 interface ControllerOptions {
   runId: string;
+  requestRefresh?: () => Promise<void>;
+  refresh?: () => void;
 }
 
 interface MockController {
@@ -39,6 +47,14 @@ function snapshot() {
 
 function strictMode({ children }: { children: ReactNode }) {
   return <StrictMode>{children}</StrictMode>;
+}
+
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((resolvePromise) => {
+    resolve = resolvePromise;
+  });
+  return { promise, resolve };
 }
 
 describe("useResearchRunLiveState", () => {
@@ -146,5 +162,84 @@ describe("useResearchRunLiveState", () => {
     expect(mocks.createController).toHaveBeenCalledTimes(1);
 
     unmount();
+  });
+
+  it("acknowledges one StrictMode refresh only after its transition commits", async () => {
+    const payloadCommit = deferred<void>();
+    const controllerOptions: ControllerOptions[] = [];
+    let payloadReady = false;
+    let refreshRoutePayload: (() => void) | null = null;
+    mocks.createController.mockImplementation(
+      (options: ControllerOptions): MockController => {
+        controllerOptions.push(options);
+        return {
+          getSnapshot: snapshot,
+          subscribe: () => () => undefined,
+        };
+      },
+    );
+    mocks.refresh.mockImplementation(() => refreshRoutePayload?.());
+
+    function RoutePayload({ version }: { version: number }) {
+      if (version === 1 && !payloadReady) throw payloadCommit.promise;
+      return <span data-testid="route-payload">{version}</span>;
+    }
+
+    function Harness() {
+      const [version, setVersion] = useState(0);
+      refreshRoutePayload = () => setVersion(1);
+      useResearchRunLiveState({
+        runId: RUN_ONE,
+        initialStatus: "running",
+        initialStage: null,
+      });
+      return (
+        <Suspense fallback={<span>loading</span>}>
+          <RoutePayload version={version} />
+        </Suspense>
+      );
+    }
+
+    const view = render(
+      <StrictMode>
+        <Harness />
+      </StrictMode>,
+    );
+    const options = controllerOptions.at(-1);
+    expect(options).toBeDefined();
+    expect(options).not.toHaveProperty("refresh");
+    expect(options?.requestRefresh).toEqual(expect.any(Function));
+    const requestRefresh = options?.requestRefresh;
+    if (requestRefresh === undefined) {
+      throw new Error("requestRefresh port is missing");
+    }
+
+    let acknowledged = false;
+    let firstRequest!: Promise<void>;
+    act(() => {
+      firstRequest = requestRefresh();
+      const duplicateRequest = requestRefresh();
+      void duplicateRequest.catch(() => undefined);
+      void firstRequest.then(() => {
+        acknowledged = true;
+      });
+    });
+
+    expect(mocks.refresh).toHaveBeenCalledTimes(1);
+    expect(screen.getByTestId("route-payload")).toHaveTextContent("0");
+    await act(async () => Promise.resolve());
+    expect(acknowledged).toBe(false);
+
+    payloadReady = true;
+    await act(async () => {
+      payloadCommit.resolve(undefined);
+      await payloadCommit.promise;
+    });
+    await waitFor(() => expect(acknowledged).toBe(true));
+    await firstRequest;
+
+    expect(screen.getByTestId("route-payload")).toHaveTextContent("1");
+    expect(mocks.refresh).toHaveBeenCalledTimes(1);
+    view.unmount();
   });
 });

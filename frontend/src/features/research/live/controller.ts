@@ -71,7 +71,7 @@ export interface CreateResearchRunLiveControllerOptions {
     signal: AbortSignal,
   ) => Promise<ResearchRunLivePollResult>;
   createEventSource?: (url: string) => EventSource;
-  refresh: () => void;
+  requestRefresh: () => Promise<void>;
   visibility?: ResearchRunLiveVisibility;
 }
 
@@ -86,7 +86,7 @@ export function createResearchRunLiveController({
   initialStage,
   pollRun = pollResearchRun,
   createEventSource = (url) => new EventSource(url),
-  refresh,
+  requestRefresh,
   visibility = browserVisibility,
 }: CreateResearchRunLiveControllerOptions): ResearchRunLiveController {
   let snapshot: ResearchRunLiveSnapshot = {
@@ -105,6 +105,7 @@ export function createResearchRunLiveController({
   let visibilityUnsubscribe: (() => void) | null = null;
   let pollingTimer: ReturnType<typeof setTimeout> | null = null;
   let finalizationTimer: ReturnType<typeof setTimeout> | null = null;
+  let finalizationRequest: Promise<void> | null = null;
   let pollingRequest: AbortController | null = null;
   let pollingFailureCount = 0;
   let finalizationRetryIndex = 0;
@@ -132,7 +133,7 @@ export function createResearchRunLiveController({
     );
 
     if (finalizationStarted) {
-      if (!visibility.isHidden()) refreshAndScheduleFinalization(version);
+      startFinalizationRefresh(version);
       return;
     }
 
@@ -366,7 +367,7 @@ export function createResearchRunLiveController({
       liveState,
     });
     finalizationRetryIndex = 0;
-    if (!visibility.isHidden()) refreshAndScheduleFinalization(version);
+    startFinalizationRefresh(version);
   }
 
   function stopPermanentlyForHttpError(version: number): void {
@@ -386,23 +387,47 @@ export function createResearchRunLiveController({
       connectionMode: "polling-only",
       liveState: suppressResearchLiveDraft(snapshot.liveState),
     });
-    refresh();
+    void requestRefresh().catch(() => undefined);
   }
 
-  function refreshAndScheduleFinalization(version: number): void {
-    if (!isCurrent(version) || !finalizationStarted) return;
-    refresh();
+  function startFinalizationRefresh(version: number): void {
+    if (
+      !isCurrent(version) ||
+      !finalizationStarted ||
+      visibility.isHidden() ||
+      finalizationRequest !== null ||
+      finalizationTimer !== null
+    ) {
+      return;
+    }
+
+    const request = requestRefresh();
+    finalizationRequest = request;
+    void request.then(
+      () => settleFinalizationRefresh(request),
+      () => discardFinalizationRefresh(request),
+    );
+  }
+
+  function settleFinalizationRefresh(request: Promise<void>): void {
+    if (finalizationRequest !== request) return;
+    finalizationRequest = null;
+    if (!lifecycleActive || !finalizationStarted) return;
     const delay = Math.min(
       POLLING_SUCCESS_DELAY_MS * 2 ** finalizationRetryIndex,
       MAX_RETRY_DELAY_MS,
     );
     finalizationRetryIndex += 1;
-    clearFinalizationTimer();
     if (visibility.isHidden()) return;
+    const version = lifecycleVersion;
     finalizationTimer = setTimeout(() => {
       finalizationTimer = null;
-      refreshAndScheduleFinalization(version);
+      startFinalizationRefresh(version);
     }, delay);
+  }
+
+  function discardFinalizationRefresh(request: Promise<void>): void {
+    if (finalizationRequest === request) finalizationRequest = null;
   }
 
   function handleVisibilityChange(version: number): void {
@@ -415,7 +440,7 @@ export function createResearchRunLiveController({
       return;
     }
     if (finalizationStarted) {
-      refreshAndScheduleFinalization(version);
+      startFinalizationRefresh(version);
       return;
     }
     startPoll(version);
