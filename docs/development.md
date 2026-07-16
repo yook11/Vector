@@ -68,6 +68,36 @@ make test-integration PYTEST_ARGS='-k "search and quota"'
 
 `uv run pytest` を直接叩くと `.env` 不在時に conftest が dummy DB (`unreachable.invalid`) にフォールバックするため、DB 接続が要るテストは必ず `make test-integration` 経由で回す。終了時は `trap` で `down -v --remove-orphans` するため tmpfs ごと毎回 fresh。
 
+## Backend workerのsource反映
+
+`backend/app`のbind mountが保証するのは、container filesystemから最新sourceを読めることだけである。起動済みの常駐Python processが保持するimport cacheは更新されないため、backend app code・設定・ORM modelを変更した後は、次のResearch runを検証する前に標準経路の`make pipeline-restart`でbackend、全worker、schedulerを再生成する。
+
+再生成前に、Research画面で意図したagent runが`queued`または`running`ではないことを確認する。`make pipeline-status`の`agent` queue深度も併せて確認できるが、workerが取得済みのrunはqueue深度に現れないため、queueが空であることだけを停止可否の根拠にしない。active runは終状態まで待ち、workerの強制停止を見かけ上の修復に使わない。
+
+標準の再生成と確認は次の順で行う。
+
+```bash
+# 再生成前のcontainer IDと開始時刻を記録
+docker inspect --format '{{.Id}} {{.State.StartedAt}}' "$(docker compose ps -q worker-agent)"
+
+make pipeline-restart
+
+# IDまたは開始時刻の更新とrunning状態を確認
+docker inspect --format '{{.Id}} {{.State.StartedAt}}' "$(docker compose ps -q worker-agent)"
+docker compose ps worker-agent
+docker compose logs --since 5m worker-agent
+```
+
+再生成後のlogにFATAL、import error、`ThreadMessageSnapshot`または`missing_aspects`の`AttributeError`がないことを確認する。すでに`failed/internal_error`となったrunはDBで修復せず終状態のまま保持し、必要な質問だけをfresh workerへ同じthreadから再送する。
+
+影響範囲が`worker-agent`だけに限定されると確認済みの調査では、active agent runがないことを確認してから次の限定復旧を使える。ただし、通常のsource変更後の検証経路は`make pipeline-restart`とする。
+
+```bash
+docker compose up -d --force-recreate worker-agent
+docker compose ps worker-agent
+docker compose logs --since 5m worker-agent
+```
+
 ## Type generation
 
 Backend の Pydantic schemas が API contract の正本。変更後は frontend 型を再生成する。

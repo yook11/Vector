@@ -15,9 +15,9 @@
         test-integration-guard test-integration-print-project
 
 # サービス分類（変更する時はここだけ触る）
-WORKERS  := worker-fetch worker-analysis worker-insights scheduler
+WORKERS  := worker-fetch worker-analysis worker-insights worker-agent scheduler
 PIPELINE := backend $(WORKERS)
-QUEUES   := pipeline:metadata pipeline:content pipeline:analysis pipeline:embedding digest briefing
+QUEUES   := pipeline:metadata pipeline:content pipeline:analysis pipeline:embedding digest briefing agent
 
 # 統合テスト専用 Postgres を立てる compose の呼び出し前置詞。
 # project 名を worktree ごとに分離し、dev compose の project 名 (= worktree
@@ -54,7 +54,7 @@ pipeline-up: verify-env  ## 全サービスを起動して状態確認
 	done
 	@$(MAKE) --no-print-directory pipeline-status
 
-pipeline-restart: verify-env  ## 設定/ORM 変更後の再起動（env と ORM を確実に再読込）
+pipeline-restart: verify-env  ## backend app code・設定・ORM 変更後の再生成（fresh process で再読込）
 	docker compose up -d --force-recreate $(PIPELINE)
 	@sleep 15
 	@$(MAKE) --no-print-directory pipeline-status
