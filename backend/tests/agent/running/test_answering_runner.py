@@ -1,4 +1,4 @@
-"""Runner の pure application behavior tests。"""
+"""AnsweringRunner の pure application behavior tests。"""
 
 from __future__ import annotations
 
@@ -35,7 +35,7 @@ from tests.logfire._span_helpers import (
     one_span_named,
 )
 
-RUNNER_MODULE = "app.agent.running.runner"
+ANSWERING_RUNNER_MODULE = "app.agent.running.answering_runner"
 RUN_ID = UUID("019bd239-1ed4-7fbb-a336-04fe3c197645")
 AS_OF = datetime(2026, 7, 16, 9, 30, tzinfo=UTC)
 pytestmark = pytest.mark.usefixtures("capfire")
@@ -152,7 +152,7 @@ class _SpanProbeContextPreparer(_FakeContextPreparer):
         as_of: datetime,
         run_id: UUID,
     ) -> QuestionContextPreparationResult:
-        with logfire.span("runner_prepare_probe"):
+        with logfire.span("answering_runner_prepare_probe"):
             return await super().prepare(
                 question=question,
                 history=history,
@@ -169,7 +169,7 @@ class _SpanProbeHooks(_FakeHooks):
         has_history: bool,
         question_context: QuestionContext,
     ) -> None:
-        with logfire.span("runner_hook_probe"):
+        with logfire.span("answering_runner_hook_probe"):
             await super().on_answering_context_prepared(
                 original_question=original_question,
                 has_history=has_history,
@@ -179,35 +179,41 @@ class _SpanProbeHooks(_FakeHooks):
 
 class _SpanProbeStartingAgent(_FakeStartingAgent):
     async def answer(self, input: AnswerQuestionInput) -> AnswerQuestionResult:
-        with logfire.span("runner_agent_probe"):
+        with logfire.span("answering_runner_agent_probe"):
             return await super().answer(input)
 
 
-def _runner_module() -> ModuleType:
-    missing_runner = False
+def _answering_runner_module() -> ModuleType:
+    missing_answering_runner = False
     try:
-        return importlib.import_module(RUNNER_MODULE)
+        return importlib.import_module(ANSWERING_RUNNER_MODULE)
     except ModuleNotFoundError as exc:
-        if exc.name == RUNNER_MODULE or exc.name.startswith(f"{RUNNER_MODULE}."):
-            missing_runner = True
+        if exc.name == ANSWERING_RUNNER_MODULE or exc.name.startswith(
+            f"{ANSWERING_RUNNER_MODULE}."
+        ):
+            missing_answering_runner = True
         else:
             raise
-    if missing_runner:
+    if missing_answering_runner:
         pytest.fail(
-            "app.agent.running.runner.Runner が未実装です",
+            "app.agent.running.answering_runner.AnsweringRunner が未実装です",
             pytrace=False,
         )
     raise AssertionError("unreachable")
 
 
-def _runner(context_preparer: object) -> Any:
-    runner_type = getattr(_runner_module(), "Runner", None)
-    if runner_type is None:
+def _answering_runner(context_preparer: object) -> Any:
+    answering_runner_type = getattr(
+        _answering_runner_module(),
+        "AnsweringRunner",
+        None,
+    )
+    if answering_runner_type is None:
         pytest.fail(
-            "app.agent.running.runner must define Runner",
+            "app.agent.running.answering_runner must define AnsweringRunner",
             pytrace=False,
         )
-    return runner_type(context_preparer=context_preparer)
+    return answering_runner_type(context_preparer=context_preparer)
 
 
 def _run_context(*, run_id: UUID = RUN_ID, as_of: datetime = AS_OF) -> RunContext:
@@ -247,7 +253,7 @@ async def test_run_forwards_input_once_and_calls_hook_before_agent() -> None:
     agent = _FakeStartingAgent([_answer_result()], events=events)
     run_context = _run_context()
 
-    await _runner(preparer).run(
+    await _answering_runner(preparer).run(
         agent,
         RunInput(question=question, history=history),
         run_context=run_context,
@@ -289,7 +295,7 @@ async def test_run_rejects_legacy_context_keyword_before_side_effects() -> None:
     agent = _FakeStartingAgent([_answer_result()])
 
     with pytest.raises(TypeError):
-        await _runner(preparer).run(
+        await _answering_runner(preparer).run(
             agent,
             RunInput(question="元の質問", history=()),
             context=_run_context(),
@@ -313,7 +319,7 @@ async def test_run_projects_latest_assistant_and_returns_same_output_and_context
     agent = _FakeStartingAgent([final_output])
     run_context = _run_context()
 
-    result = await _runner(preparer).run(
+    result = await _answering_runner(preparer).run(
         agent,
         RunInput(question="元の質問", history=history),
         run_context=run_context,
@@ -347,7 +353,7 @@ async def test_real_context_service_uses_empty_previous_answer_without_assistant
     agent = _FakeStartingAgent([_answer_result()])
     hooks = _FakeHooks()
 
-    result = await _runner(QuestionContextService(generator=None)).run(
+    result = await _answering_runner(QuestionContextService(generator=None)).run(
         agent,
         RunInput(question=question, history=()),
         run_context=_run_context(),
@@ -387,7 +393,7 @@ async def test_preparer_exception_propagates_without_hook_or_agent_call() -> Non
     agent = _FakeStartingAgent([_answer_result()], events=events)
 
     with pytest.raises(RuntimeError) as raised:
-        await _runner(preparer).run(
+        await _answering_runner(preparer).run(
             agent,
             RunInput(question="質問", history=()),
             run_context=_run_context(),
@@ -414,7 +420,7 @@ async def test_hook_exception_propagates_and_prevents_agent_call() -> None:
     agent = _FakeStartingAgent([_answer_result()], events=events)
 
     with pytest.raises(RuntimeError) as raised:
-        await _runner(preparer).run(
+        await _answering_runner(preparer).run(
             agent,
             RunInput(question="元の質問", history=()),
             run_context=_run_context(),
@@ -447,7 +453,7 @@ async def test_agent_exception_propagates_without_retry(error: BaseException) ->
     agent = _FakeStartingAgent([error], events=events)
 
     with pytest.raises(type(error)) as raised:
-        await _runner(preparer).run(
+        await _answering_runner(preparer).run(
             agent,
             RunInput(question="元の質問", history=()),
             run_context=_run_context(),
@@ -473,7 +479,7 @@ async def test_generation_stopped_closes_run_span_without_error(
     agent = _FakeStartingAgent([error])
 
     with pytest.raises(AnswerGenerationStopped) as raised:
-        await _runner(preparer).run(
+        await _answering_runner(preparer).run(
             agent,
             RunInput(question="元の質問", history=()),
             run_context=_run_context(),
@@ -485,7 +491,7 @@ async def test_generation_stopped_closes_run_span_without_error(
     assert span["attributes"].get("logfire.level_num", 0) < 17
 
 
-async def test_same_runner_reprepares_and_builds_fresh_invocation_context() -> None:
+async def test_same_answering_runner_reprepares_and_builds_fresh_context() -> None:
     first_question_context = QuestionContext(standalone_question="最初の整理済み質問")
     second_question_context = QuestionContext(standalone_question="次の整理済み質問")
     preparer = _FakeContextPreparer(
@@ -497,14 +503,14 @@ async def test_same_runner_reprepares_and_builds_fresh_invocation_context() -> N
     agent = _FakeStartingAgent(
         [_answer_result("最初の回答"), _answer_result("次の回答")]
     )
-    runner = _runner(preparer)
+    answering_runner = _answering_runner(preparer)
 
-    first_result = await runner.run(
+    first_result = await answering_runner.run(
         agent,
         RunInput(question="最初の質問", history=()),
         run_context=_run_context(),
     )
-    second_result = await runner.run(
+    second_result = await answering_runner.run(
         agent,
         RunInput(question="次の質問", history=()),
         run_context=_run_context(
@@ -537,15 +543,15 @@ async def test_run_span_wraps_prepare_hook_and_agent_under_current_parent(
     hooks = _SpanProbeHooks(events=events)
     agent = _SpanProbeStartingAgent([_answer_result()], events=events)
 
-    with logfire.span("runner_parent_probe"):
-        await _runner(preparer).run(
+    with logfire.span("answering_runner_parent_probe"):
+        await _answering_runner(preparer).run(
             agent,
             RunInput(question="元の質問", history=()),
             run_context=_run_context(),
             hooks=hooks,
         )
 
-    parent = one_span_named(capfire, "runner_parent_probe")
+    parent = one_span_named(capfire, "answering_runner_parent_probe")
     answering_run = one_span_named(capfire, "agent_answering_run")
     assert (
         answering_run["parent"]["span_id"],
@@ -558,9 +564,9 @@ async def test_run_span_wraps_prepare_hook_and_agent_under_current_parent(
     )
 
     for probe_name in (
-        "runner_prepare_probe",
-        "runner_hook_probe",
-        "runner_agent_probe",
+        "answering_runner_prepare_probe",
+        "answering_runner_hook_probe",
+        "answering_runner_agent_probe",
     ):
         probe = one_span_named(capfire, probe_name)
         assert (
@@ -611,7 +617,7 @@ async def test_run_span_attributes_do_not_include_model_visible_text(
         ),
     )
 
-    await _runner(_FakeContextPreparer([_preparation(question_context)])).run(
+    await _answering_runner(_FakeContextPreparer([_preparation(question_context)])).run(
         _FakeStartingAgent([_answer_result(sentinels["final_answer"])]),
         RunInput(question=sentinels["raw_question"], history=history),
         run_context=_run_context(),

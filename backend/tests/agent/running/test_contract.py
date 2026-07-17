@@ -1,4 +1,4 @@
-"""Runner の public internal contract tests。"""
+"""AnsweringRunner の public internal contract tests。"""
 
 from __future__ import annotations
 
@@ -21,6 +21,7 @@ from app.agent.threads.contracts import ThreadMessageSnapshot
 
 RUNNING_MODULE = "app.agent.running"
 PUBLIC_CONTRACTS = {
+    "AnsweringRunner",
     "AnsweringRunContext",
     "QuestionContextPreparer",
     "RunContext",
@@ -99,8 +100,16 @@ def _run_context() -> object:
 def test_running_package_exports_public_contracts() -> None:
     running = _running_module()
 
-    assert PUBLIC_CONTRACTS <= set(running.__all__) and all(
-        getattr(running, name, None) is not None for name in PUBLIC_CONTRACTS
+    assert (
+        PUBLIC_CONTRACTS <= set(running.__all__),
+        all(getattr(running, name, None) is not None for name in PUBLIC_CONTRACTS),
+        "Runner" not in running.__all__,
+        not hasattr(running, "Runner"),
+    ) == (
+        True,
+        True,
+        True,
+        True,
     )
 
 
