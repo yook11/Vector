@@ -37,7 +37,7 @@ from app.agent.live_updates.stream import (
     AgentRunLiveStreamStageEvent,
     AgentRunLiveStreamTerminalEvent,
 )
-from app.agent.question_context.contract import QuestionContext
+from app.agent.question_context.contract import QuestionContext, QuestionContextDraft
 from app.agent.running import (
     AnsweringRunContext,
     QuestionResolvedRunHooks,
@@ -772,6 +772,102 @@ async def test_run_agent_answer_completes_run_and_persists_assistant_message(
     assert runner.calls[0].input.question == "worker question"
     assert persisted_results == [fake_agent.result]
     assert persisted_results[0] is fake_agent.result
+
+
+@pytest.mark.asyncio
+async def test_real_runner_completes_same_thread_follow_up_with_saved_history(
+    session_factory: async_sessionmaker[AsyncSession],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    first_question = "量子計算市場の現状を教えて"
+    follow_up_question = "前回不足した企業比較を追加して"
+    saved_gap = "主要企業ごとの売上比較"
+    first_answer = "市場の概況は確認できました。"
+    follow_up_answer = "主要企業の比較を追加しました。"
+
+    async with session_factory() as session:
+        thread, _message, follow_up_run = await _create_thread_message_run(
+            session,
+            question=follow_up_question,
+            history=[
+                ("user", first_question),
+                ("assistant", first_answer, [saved_gap]),
+            ],
+        )
+    thread_id = thread.id
+    follow_up_run_id = follow_up_run.id
+
+    context_calls: list[tuple[str, tuple[ThreadMessageSnapshot, ...]]] = []
+
+    async def generate_context(
+        *,
+        question: str,
+        history: list[ThreadMessageSnapshot],
+        as_of: datetime,
+    ) -> QuestionContextDraft:
+        context_calls.append((question, tuple(history)))
+        return QuestionContextDraft(
+            standalone_question="量子計算市場の主要企業を比較して",
+            content_requirements=[saved_gap],
+            relevant_prior_coverage=first_answer,
+        )
+
+    starting_agent = FakeAgent(_direct_result(follow_up_answer))
+    monkeypatch.setattr(
+        composition,
+        "build_question_context_generator",
+        lambda: SimpleNamespace(generate=generate_context),
+    )
+    monkeypatch.setattr(
+        agent_run_tasks,
+        "build_question_answering_starting_agent",
+        lambda **_kwargs: starting_agent,
+    )
+
+    await agent_run_tasks.run_agent_answer(
+        trigger=AgentRunTrigger(run_id=follow_up_run_id),
+        ctx=_ctx(session_factory),
+    )
+
+    async with session_factory() as session:
+        completed = await session.get(AgentRun, follow_up_run_id)
+        assert completed is not None
+        assert completed.assistant_message_id is not None
+        assistant = await session.get(
+            AgentMessage,
+            completed.assistant_message_id,
+        )
+        assert assistant is not None
+
+    assert completed.status == "completed"
+    assert (
+        assistant.thread_id,
+        assistant.seq,
+        assistant.role,
+        assistant.content,
+        assistant.missing_aspects,
+    ) == (thread_id, 4, "assistant", follow_up_answer, [])
+    assert context_calls == [
+        (
+            follow_up_question,
+            (
+                ThreadMessageSnapshot(role="user", content=first_question),
+                ThreadMessageSnapshot(
+                    role="assistant",
+                    content=first_answer,
+                    missing_aspects=(saved_gap,),
+                ),
+            ),
+        )
+    ]
+    assert len(starting_agent.calls) == 1
+    assert (
+        starting_agent.calls[0].context.standalone_question,
+        starting_agent.calls[0].previous_answer,
+    ) == (
+        "量子計算市場の主要企業を比較して",
+        first_answer,
+    )
 
 
 @pytest.mark.asyncio

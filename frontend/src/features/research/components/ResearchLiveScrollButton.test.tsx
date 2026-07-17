@@ -1,27 +1,42 @@
 import { act, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { type RefObject, useRef } from "react";
+import { type ComponentProps, type RefObject, useRef } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ResearchLiveScrollButton } from "./ResearchLiveScrollButton";
 
 interface HarnessProps {
   contentRevision: number;
   stageRevision?: number;
+  failedContractionRevision?: number;
 }
 
-function Harness({ contentRevision, stageRevision = 0 }: HarnessProps) {
+type FailureAwareScrollProps = ComponentProps<
+  typeof ResearchLiveScrollButton
+> & {
+  failedContractionRevision: number;
+};
+
+function Harness({
+  contentRevision,
+  stageRevision = 0,
+  failedContractionRevision = 0,
+}: HarnessProps) {
   const containerRef = useRef<HTMLDivElement>(null);
+  const scrollProps: FailureAwareScrollProps = {
+    containerRef: containerRef as RefObject<HTMLElement | null>,
+    contentRevision,
+    failedContractionRevision,
+  };
   return (
     <>
       <div
         ref={containerRef}
         data-testid="scroll-container"
         data-stage-revision={stageRevision}
-      />
-      <ResearchLiveScrollButton
-        containerRef={containerRef as RefObject<HTMLElement | null>}
-        contentRevision={contentRevision}
-      />
+      >
+        <div data-testid="failed-turn-anchor" data-research-answer-anchor />
+      </div>
+      <ResearchLiveScrollButton {...scrollProps} />
     </>
   );
 }
@@ -54,6 +69,77 @@ function configureContainer(element: HTMLElement, distanceFromBottom: number) {
     value: scrollTo,
   });
   return scrollTo;
+}
+
+function configureMutableContainer(
+  element: HTMLElement,
+  geometry: {
+    scrollHeight: number;
+    clientHeight: number;
+    scrollTop: number;
+  },
+) {
+  let scrollHeight = geometry.scrollHeight;
+  const clientHeight = geometry.clientHeight;
+  let scrollTop = geometry.scrollTop;
+  Object.defineProperties(element, {
+    scrollHeight: {
+      configurable: true,
+      get: () => scrollHeight,
+    },
+    clientHeight: { configurable: true, value: clientHeight },
+    scrollTop: {
+      configurable: true,
+      get: () => scrollTop,
+      set: (value: number) => {
+        scrollTop = Math.min(
+          Math.max(0, value),
+          Math.max(0, scrollHeight - clientHeight),
+        );
+      },
+    },
+  });
+  const scrollTo = vi.fn((options: ScrollToOptions) => {
+    element.scrollTop = Number(options.top ?? element.scrollTop);
+  });
+  Object.defineProperty(element, "scrollTo", {
+    configurable: true,
+    value: scrollTo,
+  });
+  return {
+    scrollTo,
+    setScrollHeight: (value: number) => {
+      scrollHeight = value;
+    },
+  };
+}
+
+function configureFailedTurnAnchor(
+  container: HTMLElement,
+  initialDocumentTop: number,
+) {
+  let documentTop = initialDocumentTop;
+  const anchor = screen.getByTestId("failed-turn-anchor");
+  vi.spyOn(anchor, "getBoundingClientRect").mockImplementation(() => {
+    const top = documentTop - container.scrollTop;
+    return {
+      x: 0,
+      y: top,
+      top,
+      right: 0,
+      bottom: top + 40,
+      left: 0,
+      width: 0,
+      height: 40,
+      toJSON: () => ({}),
+    };
+  });
+  return {
+    anchor,
+    setDocumentTop: (value: number) => {
+      documentTop = value;
+    },
+  };
 }
 
 function setReducedMotion(matches: boolean): void {
@@ -89,6 +175,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  vi.restoreAllMocks();
   vi.unstubAllGlobals();
 });
 
@@ -189,6 +276,88 @@ describe("ResearchLiveScrollButton", () => {
     await user.click(screen.getByRole("button", { name: "最新の回答へ" }));
 
     expect(scrollTo).toHaveBeenLastCalledWith({ top: 1000, behavior: "auto" });
+  });
+
+  it("clamps the old scrollTop after a failed contraction observed at 97px", () => {
+    const view = render(
+      <Harness contentRevision={0} failedContractionRevision={0} />,
+    );
+    const container = screen.getByTestId("scroll-container");
+    const geometry = configureMutableContainer(container, {
+      scrollHeight: 1000,
+      clientHeight: 500,
+      scrollTop: 403,
+    });
+    configureFailedTurnAnchor(container, 704);
+    act(flushAnimationFrames);
+    requestAnimationFrameMock.mockClear();
+    const oldScrollTop = container.scrollTop;
+
+    geometry.setScrollHeight(850);
+    view.rerender(
+      <Harness contentRevision={0} failedContractionRevision={1} />,
+    );
+    expect(requestAnimationFrameMock).toHaveBeenCalledTimes(1);
+    act(flushAnimationFrames);
+
+    const target = Math.min(
+      oldScrollTop,
+      container.scrollHeight - container.clientHeight,
+    );
+    expect(Math.abs(container.scrollTop - target)).toBeLessThanOrEqual(1);
+
+    requestAnimationFrameMock.mockClear();
+    view.rerender(
+      <Harness contentRevision={0} failedContractionRevision={1} />,
+    );
+    expect(requestAnimationFrameMock).not.toHaveBeenCalled();
+    expect(Math.abs(container.scrollTop - target)).toBeLessThanOrEqual(1);
+  });
+
+  it("preserves the failed turn anchor after a contraction observed at 96px", () => {
+    const view = render(
+      <Harness contentRevision={0} failedContractionRevision={0} />,
+    );
+    const container = screen.getByTestId("scroll-container");
+    const geometry = configureMutableContainer(container, {
+      scrollHeight: 1000,
+      clientHeight: 500,
+      scrollTop: 404,
+    });
+    const configuredAnchor = configureFailedTurnAnchor(container, 704);
+    act(flushAnimationFrames);
+    requestAnimationFrameMock.mockClear();
+    const anchorTopBeforeFailure =
+      configuredAnchor.anchor.getBoundingClientRect().top;
+
+    geometry.setScrollHeight(850);
+    configuredAnchor.setDocumentTop(624);
+    view.rerender(
+      <Harness contentRevision={0} failedContractionRevision={1} />,
+    );
+    expect(requestAnimationFrameMock).toHaveBeenCalledTimes(1);
+    act(flushAnimationFrames);
+
+    expect(
+      Math.abs(
+        configuredAnchor.anchor.getBoundingClientRect().top -
+          anchorTopBeforeFailure,
+      ),
+    ).toBeLessThanOrEqual(1);
+    const scrollTopAfterFailure = container.scrollTop;
+
+    requestAnimationFrameMock.mockClear();
+    view.rerender(
+      <Harness contentRevision={0} failedContractionRevision={1} />,
+    );
+    expect(requestAnimationFrameMock).not.toHaveBeenCalled();
+    expect(container.scrollTop).toBe(scrollTopAfterFailure);
+    expect(
+      Math.abs(
+        configuredAnchor.anchor.getBoundingClientRect().top -
+          anchorTopBeforeFailure,
+      ),
+    ).toBeLessThanOrEqual(1);
   });
 
   it("does not move keyboard focus during content updates", () => {

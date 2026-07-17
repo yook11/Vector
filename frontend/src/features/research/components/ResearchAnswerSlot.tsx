@@ -8,6 +8,15 @@ interface ResearchAnswerSlotProps {
   children?: ReactNode;
 }
 
+function keyedMissingAspects(aspects: readonly string[]) {
+  const occurrences = new Map<string, number>();
+  return aspects.map((aspect) => {
+    const occurrence = (occurrences.get(aspect) ?? 0) + 1;
+    occurrences.set(aspect, occurrence);
+    return { aspect, key: `${aspect}\0${occurrence}` };
+  });
+}
+
 export function ResearchAnswerSlot({
   finalAnswer,
   children,
@@ -36,7 +45,16 @@ export function ResearchAnswerSlot({
             </div>
             {finalAnswer.missingAspects.length > 0 ? (
               <div className="mt-3 rounded-md border border-[var(--vector-rule)] bg-[var(--vector-paper)] px-3 py-2 text-xs text-[var(--vector-ink-muted)] break-words [overflow-wrap:anywhere]">
-                {finalAnswer.missingAspects.join(" / ")}
+                <p className="font-semibold text-[var(--vector-ink)]">
+                  確認できなかった点
+                </p>
+                <ul className="mt-1 list-disc space-y-1 pl-4">
+                  {keyedMissingAspects(finalAnswer.missingAspects).map(
+                    ({ aspect, key }) => (
+                      <li key={key}>{aspect}</li>
+                    ),
+                  )}
+                </ul>
               </div>
             ) : null}
           </>

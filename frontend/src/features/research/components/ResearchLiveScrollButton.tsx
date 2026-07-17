@@ -9,6 +9,7 @@ interface ResearchLiveScrollButtonProps {
   containerRef: RefObject<HTMLElement | null>;
   contentRevision: number;
   finalReplacementRevision?: number;
+  failedContractionRevision?: number;
   isActive?: boolean;
 }
 
@@ -23,8 +24,21 @@ function latestAnswerAnchor(container: HTMLElement): HTMLElement | null {
   return anchors.item(anchors.length - 1);
 }
 
+function latestFailedTurnAnchor(container: HTMLElement): HTMLElement | null {
+  const anchors = container.querySelectorAll<HTMLElement>(
+    "[data-research-turn-anchor]",
+  );
+  return anchors.item(anchors.length - 1) ?? latestAnswerAnchor(container);
+}
+
 function answerAnchorTop(container: HTMLElement): number | null {
   const anchor = latestAnswerAnchor(container);
+  if (anchor === null) return null;
+  return anchor.getBoundingClientRect().top;
+}
+
+function failedTurnAnchorTop(container: HTMLElement): number | null {
+  const anchor = latestFailedTurnAnchor(container);
   if (anchor === null) return null;
   return anchor.getBoundingClientRect().top;
 }
@@ -44,19 +58,23 @@ export function ResearchLiveScrollButton({
   containerRef,
   contentRevision,
   finalReplacementRevision = 0,
+  failedContractionRevision = 0,
   isActive = true,
 }: ResearchLiveScrollButtonProps) {
   const [offersLatestAnswer, setOffersLatestAnswer] = useState(false);
   const lastDistance = useRef(0);
   const previousRevision = useRef(contentRevision);
   const previousFinalReplacementRevision = useRef(finalReplacementRevision);
+  const previousFailedContractionRevision = useRef(failedContractionRevision);
   const measurementFrame = useRef<number | null>(null);
   const updateFrame = useRef<number | null>(null);
   const finalReplacementFrame = useRef<number | null>(null);
+  const failedContractionFrame = useRef<number | null>(null);
   const followOnUpdate = useRef(true);
   const hasUnseenUpdate = useRef(false);
   const lastScrollTop = useRef(0);
   const lastAnswerAnchorTop = useRef<number | null>(null);
+  const lastFailedTurnAnchorTop = useRef<number | null>(null);
 
   useEffect(() => {
     const container = containerRef.current;
@@ -66,6 +84,7 @@ export function ResearchLiveScrollButton({
       lastDistance.current = distanceFromBottom(container);
       lastScrollTop.current = container.scrollTop;
       lastAnswerAnchorTop.current = answerAnchorTop(container);
+      lastFailedTurnAnchorTop.current = failedTurnAnchorTop(container);
       if (lastDistance.current <= AUTO_FOLLOW_DISTANCE_PX) {
         setOffersLatestAnswer(false);
       }
@@ -95,6 +114,9 @@ export function ResearchLiveScrollButton({
       if (finalReplacementFrame.current !== null) {
         cancelAnimationFrame(finalReplacementFrame.current);
       }
+      if (failedContractionFrame.current !== null) {
+        cancelAnimationFrame(failedContractionFrame.current);
+      }
     };
   }, [containerRef]);
 
@@ -117,11 +139,13 @@ export function ResearchLiveScrollButton({
         lastDistance.current = 0;
         lastScrollTop.current = container.scrollTop;
         lastAnswerAnchorTop.current = answerAnchorTop(container);
+        lastFailedTurnAnchorTop.current = failedTurnAnchorTop(container);
         setOffersLatestAnswer(false);
         return;
       }
       lastScrollTop.current = container.scrollTop;
       lastAnswerAnchorTop.current = answerAnchorTop(container);
+      lastFailedTurnAnchorTop.current = failedTurnAnchorTop(container);
       setOffersLatestAnswer(true);
     });
   }, [containerRef, contentRevision, isActive]);
@@ -164,8 +188,57 @@ export function ResearchLiveScrollButton({
       lastDistance.current = distanceFromBottom(container);
       lastScrollTop.current = container.scrollTop;
       lastAnswerAnchorTop.current = answerAnchorTop(container);
+      lastFailedTurnAnchorTop.current = failedTurnAnchorTop(container);
     });
   }, [containerRef, finalReplacementRevision, isActive]);
+
+  useEffect(() => {
+    if (
+      previousFailedContractionRevision.current === failedContractionRevision
+    ) {
+      return;
+    }
+    previousFailedContractionRevision.current = failedContractionRevision;
+    if (!isActive) {
+      hasUnseenUpdate.current = true;
+      return;
+    }
+
+    const distanceBeforeFailure = lastDistance.current;
+    const scrollTopBeforeFailure = lastScrollTop.current;
+    const anchorTopBeforeFailure = lastFailedTurnAnchorTop.current;
+    if (updateFrame.current !== null) {
+      cancelAnimationFrame(updateFrame.current);
+      updateFrame.current = null;
+    }
+    if (failedContractionFrame.current !== null) return;
+
+    failedContractionFrame.current = requestAnimationFrame(() => {
+      failedContractionFrame.current = null;
+      const container = containerRef.current;
+      if (container === null) return;
+
+      if (distanceBeforeFailure > AUTO_FOLLOW_DISTANCE_PX) {
+        const maxScrollTop = Math.max(
+          0,
+          container.scrollHeight - container.clientHeight,
+        );
+        container.scrollTop = Math.min(scrollTopBeforeFailure, maxScrollTop);
+        setOffersLatestAnswer(answerAnchorIsOutsideViewport(container));
+      } else if (anchorTopBeforeFailure !== null) {
+        const currentAnchorTop = failedTurnAnchorTop(container);
+        if (currentAnchorTop !== null) {
+          container.scrollTop += currentAnchorTop - anchorTopBeforeFailure;
+        }
+        setOffersLatestAnswer(false);
+      }
+
+      lastDistance.current = distanceFromBottom(container);
+      lastScrollTop.current = container.scrollTop;
+      lastAnswerAnchorTop.current = answerAnchorTop(container);
+      lastFailedTurnAnchorTop.current = failedTurnAnchorTop(container);
+    });
+  }, [containerRef, failedContractionRevision, isActive]);
 
   useEffect(() => {
     if (!isActive || !hasUnseenUpdate.current) return;
@@ -191,6 +264,7 @@ export function ResearchLiveScrollButton({
     lastDistance.current = 0;
     lastScrollTop.current = container.scrollTop;
     lastAnswerAnchorTop.current = answerAnchorTop(container);
+    lastFailedTurnAnchorTop.current = failedTurnAnchorTop(container);
     setOffersLatestAnswer(false);
   };
 

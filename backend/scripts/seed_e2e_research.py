@@ -13,7 +13,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from sqlalchemy import delete, insert, select  # noqa: E402
+from sqlalchemy import delete, insert, or_, select, update  # noqa: E402
 from sqlalchemy.ext.asyncio import AsyncConnection  # noqa: E402
 
 from app.config import settings  # noqa: E402
@@ -64,6 +64,35 @@ class FixtureThread:
     answer: str
     updated_at: dt.datetime
     missing_aspects: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class ContinuitySource:
+    id: int
+    ordinal: int
+    source_ref: str
+    url: str
+    title: str
+    source_name: str
+    evidence_claim: str
+
+
+@dataclass(frozen=True)
+class ContinuityFixture:
+    variant: str
+    thread_id: uuid.UUID
+    completed_user_message_id: uuid.UUID
+    assistant_message_id: uuid.UUID
+    completed_run_id: uuid.UUID
+    active_user_message_id: uuid.UUID
+    active_run_id: uuid.UUID
+    title: str
+    completed_question: str
+    answer: str
+    active_question: str
+    updated_at: dt.datetime
+    missing_aspects: tuple[str, ...]
+    sources: tuple[ContinuitySource, ...]
 
 
 FIXTURE_THREADS = (
@@ -121,7 +150,108 @@ FIXTURE_THREADS = (
     ),
 )
 
-_THREAD_IDS = tuple(thread.thread_id for thread in FIXTURE_THREADS)
+
+def _continuity_answer(variant: str) -> str:
+    return "\n\n".join(
+        (
+            f"Continuity {variant} persisted answer marker",
+            *(
+                f"継続回答セクション {index}: 過去回答と新しい質問の境界を保ったまま、"
+                "市場データ、供給制約、投資計画を同じ時間軸で比較します。"
+                "この固定本文はterminal refresh前後の回答領域とスクロール位置を"
+                f"決定的に検証するための記録です。根拠 {index} を参照します。"
+                for index in range(1, 15)
+            ),
+        )
+    )
+
+
+def _continuity_sources(
+    variant: str,
+    *,
+    id_base: int,
+) -> tuple[ContinuitySource, ...]:
+    prefix = variant.upper()[0]
+    return tuple(
+        ContinuitySource(
+            id=id_base + ordinal,
+            ordinal=ordinal,
+            source_ref=f"{prefix}{ordinal}",
+            url=(
+                f"https://example.com/e2e/research-continuity-{variant}/"
+                f"source-{ordinal}"
+            ),
+            title=(
+                f"Continuity {variant} source {ordinal:02d}: terminal refresh後も"
+                "ソース面の状態とスクロール位置を維持する固定資料"
+            ),
+            source_name=f"Vector E2E Continuity {variant.title()} Monitor",
+            evidence_claim=(
+                "過去回答の根拠として保持される固定引用。"
+                f"continuity {variant} のソース表示確認用資料 {ordinal} です。"
+            ),
+        )
+        for ordinal in range(1, 15)
+    )
+
+
+CONTINUITY_FIXTURES = {
+    "closed": ContinuityFixture(
+        variant="closed",
+        thread_id=uuid.UUID("00000000-0000-4000-a000-00000000e2d4"),
+        completed_user_message_id=uuid.UUID("00000000-0000-4000-a000-00000000d401"),
+        assistant_message_id=uuid.UUID("00000000-0000-4000-a000-00000000d4a1"),
+        completed_run_id=uuid.UUID("00000000-0000-4000-a000-00000000d4f1"),
+        active_user_message_id=uuid.UUID("00000000-0000-4000-a000-00000000d402"),
+        active_run_id=uuid.UUID("00000000-0000-4000-a000-00000000d4f2"),
+        title="E2E Research Continuity Closed",
+        completed_question=(
+            "Continuity closed completed question: "
+            "過去の市場分析と根拠を整理してください。"
+        ),
+        answer=_continuity_answer("closed"),
+        active_question=(
+            "Continuity closed active question: "
+            "同じスレッドで最新動向を追補してください。"
+        ),
+        updated_at=dt.datetime(2026, 7, 11, 1, 30, tzinfo=dt.UTC),
+        missing_aspects=(
+            "非公開の顧客別契約条件は確認できない",
+            "地域別の電力調達時期は追加確認が必要",
+        ),
+        sources=_continuity_sources("closed", id_base=9_100_000_000_000),
+    ),
+    "open": ContinuityFixture(
+        variant="open",
+        thread_id=uuid.UUID("00000000-0000-4000-a000-00000000e2e5"),
+        completed_user_message_id=uuid.UUID("00000000-0000-4000-a000-00000000e501"),
+        assistant_message_id=uuid.UUID("00000000-0000-4000-a000-00000000e5a1"),
+        completed_run_id=uuid.UUID("00000000-0000-4000-a000-00000000e5f1"),
+        active_user_message_id=uuid.UUID("00000000-0000-4000-a000-00000000e502"),
+        active_run_id=uuid.UUID("00000000-0000-4000-a000-00000000e5f2"),
+        title="E2E Research Continuity Open",
+        completed_question=(
+            "Continuity open completed question: "
+            "過去の供給網分析と根拠を整理してください。"
+        ),
+        answer=_continuity_answer("open"),
+        active_question=(
+            "Continuity open active question: "
+            "同じスレッドで最新動向を追補してください。"
+        ),
+        updated_at=dt.datetime(2026, 7, 11, 1, 15, tzinfo=dt.UTC),
+        missing_aspects=(
+            "非公開の供給予約量は確認できない",
+            "次世代製品の量産時期は追加確認が必要",
+        ),
+        sources=_continuity_sources("open", id_base=9_200_000_000_000),
+    ),
+}
+
+_THREAD_IDS = (
+    *(thread.thread_id for thread in FIXTURE_THREADS),
+    *(fixture.thread_id for fixture in CONTINUITY_FIXTURES.values()),
+)
 
 
 def guard_production(environment: str) -> None:
@@ -162,6 +292,19 @@ async def _seed(connection: AsyncConnection) -> None:
         ],
     )
     await connection.execute(
+        insert(AgentThread),
+        [
+            {
+                "id": fixture.thread_id,
+                "user_id": _E2E_USER_ID,
+                "title": fixture.title,
+                "created_at": fixture.updated_at,
+                "updated_at": fixture.updated_at,
+            }
+            for fixture in CONTINUITY_FIXTURES.values()
+        ],
+    )
+    await connection.execute(
         insert(AgentMessage),
         [
             row
@@ -184,6 +327,42 @@ async def _seed(connection: AsyncConnection) -> None:
                     "content": thread.answer,
                     "missing_aspects": list(thread.missing_aspects),
                     "created_at": thread.updated_at,
+                },
+            )
+        ],
+    )
+    await connection.execute(
+        insert(AgentMessage),
+        [
+            row
+            for fixture in CONTINUITY_FIXTURES.values()
+            for row in (
+                {
+                    "id": fixture.completed_user_message_id,
+                    "thread_id": fixture.thread_id,
+                    "seq": 1,
+                    "role": "user",
+                    "content": fixture.completed_question,
+                    "missing_aspects": [],
+                    "created_at": fixture.updated_at,
+                },
+                {
+                    "id": fixture.assistant_message_id,
+                    "thread_id": fixture.thread_id,
+                    "seq": 2,
+                    "role": "assistant",
+                    "content": fixture.answer,
+                    "missing_aspects": list(fixture.missing_aspects),
+                    "created_at": fixture.updated_at,
+                },
+                {
+                    "id": fixture.active_user_message_id,
+                    "thread_id": fixture.thread_id,
+                    "seq": 3,
+                    "role": "user",
+                    "content": fixture.active_question,
+                    "missing_aspects": [],
+                    "created_at": fixture.updated_at,
                 },
             )
         ],
@@ -215,6 +394,26 @@ async def _seed(connection: AsyncConnection) -> None:
         ],
     )
     await connection.execute(
+        insert(AgentMessageSource),
+        [
+            {
+                "id": source.id,
+                "message_id": fixture.assistant_message_id,
+                "ordinal": source.ordinal,
+                "kind": "external_url",
+                "source_ref": source.source_ref,
+                "analyzed_article_id": None,
+                "url": source.url,
+                "title": source.title,
+                "source_name": source.source_name,
+                "published_at": fixture.updated_at - dt.timedelta(days=source.ordinal),
+                "evidence_claim": source.evidence_claim,
+            }
+            for fixture in CONTINUITY_FIXTURES.values()
+            for source in fixture.sources
+        ],
+    )
+    await connection.execute(
         insert(AgentRun),
         [
             {
@@ -232,9 +431,121 @@ async def _seed(connection: AsyncConnection) -> None:
             for thread in FIXTURE_THREADS
         ],
     )
+    active_started_at = dt.datetime.now(dt.UTC)
+    await connection.execute(
+        insert(AgentRun),
+        [
+            row
+            for fixture in CONTINUITY_FIXTURES.values()
+            for row in (
+                {
+                    "id": fixture.completed_run_id,
+                    "thread_id": fixture.thread_id,
+                    "user_message_id": fixture.completed_user_message_id,
+                    "assistant_message_id": fixture.assistant_message_id,
+                    "status": "completed",
+                    "progress_stage": "synthesizing",
+                    "error_code": None,
+                    "created_at": fixture.updated_at,
+                    "started_at": fixture.updated_at,
+                    "attempt_epoch": 1,
+                    "completed_at": fixture.updated_at,
+                },
+                {
+                    "id": fixture.active_run_id,
+                    "thread_id": fixture.thread_id,
+                    "user_message_id": fixture.active_user_message_id,
+                    "assistant_message_id": None,
+                    "status": "running",
+                    "progress_stage": "synthesizing",
+                    "error_code": None,
+                    "created_at": fixture.updated_at,
+                    "started_at": active_started_at,
+                    "attempt_epoch": 1,
+                    "completed_at": None,
+                },
+            )
+        ],
+    )
 
 
-async def run(command: str) -> None:
+def _continuity_fixture(variant: str) -> ContinuityFixture:
+    try:
+        return CONTINUITY_FIXTURES[variant]
+    except KeyError as exc:
+        raise ValueError(f"unknown continuity fixture variant: {variant!r}") from exc
+
+
+async def _reset_continuity_run(
+    connection: AsyncConnection,
+    variant: str,
+    now: dt.datetime,
+) -> None:
+    fixture = _continuity_fixture(variant)
+    result = await connection.execute(
+        update(AgentRun)
+        .where(
+            AgentRun.id == fixture.active_run_id,
+            AgentRun.thread_id == fixture.thread_id,
+            AgentRun.user_message_id == fixture.active_user_message_id,
+            or_(AgentRun.status == "running", AgentRun.status == "failed"),
+        )
+        .values(
+            status="running",
+            progress_stage="synthesizing",
+            error_code=None,
+            assistant_message_id=None,
+            completed_at=None,
+            attempt_epoch=1,
+            started_at=now,
+        )
+        .execution_options(synchronize_session=False)
+    )
+    if result.rowcount != 1:
+        raise RuntimeError(
+            f"continuity {variant} reset expected exactly one row, "
+            f"got {result.rowcount}"
+        )
+
+
+async def _fail_continuity_run(
+    connection: AsyncConnection,
+    variant: str,
+    now: dt.datetime,
+) -> None:
+    fixture = _continuity_fixture(variant)
+    result = await connection.execute(
+        update(AgentRun)
+        .where(
+            AgentRun.id == fixture.active_run_id,
+            AgentRun.thread_id == fixture.thread_id,
+            AgentRun.user_message_id == fixture.active_user_message_id,
+            AgentRun.status == "running",
+        )
+        .values(
+            status="failed",
+            error_code="internal_error",
+            completed_at=now,
+        )
+        .execution_options(synchronize_session=False)
+    )
+    if result.rowcount != 1:
+        raise RuntimeError(
+            f"continuity {variant} fail expected exactly one row, got {result.rowcount}"
+        )
+
+
+async def run(command: str, variant: str | None = None) -> None:
+    if command in ("seed", "cleanup"):
+        if variant is not None:
+            raise ValueError(f"{command} does not accept a continuity variant")
+    elif command in ("reset", "fail"):
+        if variant is None:
+            raise ValueError(f"{command} requires a continuity variant")
+        _continuity_fixture(variant)
+    else:
+        raise ValueError(f"unknown E2E research command: {command!r}")
+
     database_url = settings.migration_database_url or settings.database_url
     engine = create_app_engine(
         database_url,
@@ -242,20 +553,47 @@ async def run(command: str) -> None:
     )
     try:
         async with engine.begin() as connection:
-            if command == "seed":
-                await _seed(connection)
-            else:
-                await _cleanup(connection)
+            match command:
+                case "seed":
+                    await _seed(connection)
+                case "cleanup":
+                    await _cleanup(connection)
+                case "reset" if variant is not None:
+                    await _reset_continuity_run(
+                        connection,
+                        variant,
+                        dt.datetime.now(dt.UTC),
+                    )
+                case "fail" if variant is not None:
+                    await _fail_continuity_run(
+                        connection,
+                        variant,
+                        dt.datetime.now(dt.UTC),
+                    )
+                case _:
+                    raise RuntimeError(
+                        "validated E2E research command was not dispatched"
+                    )
     finally:
         await engine.dispose()
 
 
-def main() -> None:
+def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser()
-    parser.add_argument("command", choices=("seed", "cleanup"))
-    args = parser.parse_args()
+    commands = parser.add_subparsers(dest="command", required=True)
+    commands.add_parser("seed")
+    commands.add_parser("cleanup")
+    variants = tuple(CONTINUITY_FIXTURES)
+    for command in ("reset", "fail"):
+        command_parser = commands.add_parser(command)
+        command_parser.add_argument("variant", choices=variants)
+    return parser
+
+
+def main() -> None:
+    args = build_parser().parse_args()
     guard_production(os.environ.get("ENV", ""))
-    asyncio.run(run(args.command))
+    asyncio.run(run(args.command, getattr(args, "variant", None)))
 
 
 if __name__ == "__main__":

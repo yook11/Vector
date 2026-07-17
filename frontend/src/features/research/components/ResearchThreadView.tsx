@@ -1,7 +1,6 @@
-import { AlertTriangle, MessageSquareText } from "lucide-react";
+import { MessageSquareText } from "lucide-react";
 import type {
   ResearchAssistantMessage,
-  ResearchMessageRun,
   ResearchThreadDetail,
   ResearchUserMessage,
 } from "@/types/types.gen";
@@ -14,10 +13,10 @@ import {
 } from "./ResearchLiveAnnouncer";
 import { ResearchSourcesPanel } from "./ResearchSourcesPanel";
 import {
-  ResearchActiveRunAnswerContent,
   ResearchActiveRunBoundary,
-  ResearchActiveRunStatus,
   ResearchLiveScrollRegion,
+  ResearchRunAnswerSlot,
+  ResearchRunStatusRail,
 } from "./ResearchThreadLiveBoundary";
 
 type ResearchThreadMessage = ResearchUserMessage | ResearchAssistantMessage;
@@ -27,22 +26,6 @@ interface ResearchThreadViewProps {
   withSourcesPanel?: boolean;
 }
 
-function failedRunStatusText(run: ResearchMessageRun): string | null {
-  if (run.status !== "failed") return null;
-  switch (run.errorCode) {
-    case "cancelled":
-      return "キャンセルしました";
-    case "enqueue_failed":
-      return "実行キューに投入できませんでした";
-    case "stale":
-      return "時間切れになりました";
-    case "generation_unavailable":
-      return "回答を生成できませんでした";
-    default:
-      return "回答を生成できませんでした";
-  }
-}
-
 function activeRunId(messages: ResearchThreadMessage[]): string | null {
   const active = messages.findLast(
     (message) =>
@@ -50,6 +33,18 @@ function activeRunId(messages: ResearchThreadMessage[]): string | null {
       (message.run.status === "queued" || message.run.status === "running"),
   );
   return active?.role === "user" ? active.run.runId : null;
+}
+
+function failedAnnouncementRunId(
+  messages: ResearchThreadMessage[],
+): string | null {
+  const latestUserMessage = messages.findLast(
+    (message) => message.role === "user",
+  );
+  return latestUserMessage?.role === "user" &&
+    latestUserMessage.run.status === "failed"
+    ? latestUserMessage.run.runId
+    : null;
 }
 
 function completedRunIds(messages: ResearchThreadMessage[]): string[] {
@@ -68,19 +63,6 @@ function finalAnswerContentKey(messages: ResearchThreadMessage[]): string {
         : [],
     )
     .join("|");
-}
-
-function UserRunStatus({ run }: { run: ResearchMessageRun }) {
-  const statusText = failedRunStatusText(run);
-  if (!statusText) return null;
-  return (
-    <div className="mt-2 flex min-w-0 items-center gap-1.5 text-xs text-[var(--vector-ink-muted)]">
-      <AlertTriangle aria-hidden="true" className="size-3.5 shrink-0" />
-      <span className="min-w-0 break-words [overflow-wrap:anywhere]">
-        {statusText}
-      </span>
-    </div>
-  );
 }
 
 function UserMessage({ message }: { message: ResearchUserMessage }) {
@@ -120,18 +102,22 @@ function ResearchTurn({
       initialStatus={activeStatus}
       initialStage={userMessage.run.progressStage}
     >
-      <div key="turn-presentation" className="flex min-w-0 flex-col">
+      <div
+        key="turn-presentation"
+        data-research-answer-anchor
+        data-research-turn-anchor
+        data-research-run-id={userMessage.run.runId}
+        data-research-persisted-status={userMessage.run.status}
+        className="flex min-w-0 flex-col"
+      >
         <UserMessage message={userMessage} />
-        {isActive ? (
-          <ResearchActiveRunStatus />
-        ) : (
-          <UserRunStatus run={userMessage.run} />
-        )}
-        {isActive || finalAnswer !== null ? (
-          <ResearchAnswerSlot key="answer-slot" finalAnswer={finalAnswer}>
-            {isActive ? <ResearchActiveRunAnswerContent /> : null}
-          </ResearchAnswerSlot>
-        ) : null}
+        <ResearchRunStatusRail run={userMessage.run} isActive={isActive} />
+        <ResearchRunAnswerSlot
+          key="answer-slot"
+          run={userMessage.run}
+          isActive={isActive}
+          finalAnswer={finalAnswer}
+        />
       </div>
     </ResearchActiveRunBoundary>
   );
@@ -142,6 +128,8 @@ export function ResearchThreadView({
   withSourcesPanel = false,
 }: ResearchThreadViewProps) {
   const currentRunId = activeRunId(thread.messages);
+  const announcementRunId =
+    currentRunId ?? failedAnnouncementRunId(thread.messages);
   const completedIds = completedRunIds(thread.messages);
   const finalContentKey = finalAnswerContentKey(thread.messages);
   const answerPanel = (
@@ -208,7 +196,7 @@ export function ResearchThreadView({
       <ResearchLiveAnnouncer
         key="research-live-announcer"
         threadId={thread.threadId}
-        activeRunId={currentRunId}
+        activeRunId={announcementRunId}
         completedRunIds={completedIds}
       />
     </div>
@@ -225,6 +213,7 @@ export function ResearchThreadView({
       <ResearchLiveAnnouncementBoundary threadId={thread.threadId}>
         {withSourcesPanel ? (
           <ResearchSourcesPanel
+            threadId={thread.threadId}
             messages={thread.messages}
             headerLeading={headerLeading}
             headerActions={headerActions}
