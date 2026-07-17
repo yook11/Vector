@@ -1,5 +1,9 @@
 # External search research runner slice 仕様
 
+> 後続設計: `agent-declaration-runner-orchestration-slice.md` は、本sliceのquery生成、検索、選別、
+> failure policyを維持しつつ、最終的なownerを`AnsweringRunner`へ移す。本文の
+> `ExternalSearchResearchRunner` / `ExternalSearchRunResult`は実装当時の移行語彙として読む。
+
 ## 位置付け
 
 `ExternalSearchRunner` の実体である research runner(最大 3 並列の
