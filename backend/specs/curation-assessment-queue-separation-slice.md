@@ -813,7 +813,7 @@ ACL contractとして次を確認する。
 | `Makefile` | queue名更新とoperator adapterを使う手動status |
 | `infra/redis/fly.toml` | collect ACLを初回deployの最終形へ更新 |
 | `docs/architecture.md` | 「論理 queue 分離、shared worker」の topology 説明 |
-| `specs/redis-production-topology.md` | queue namespace、backlog 指標、memory trade-off 更新 |
+| `backend/specs/redis-production-topology.md` | queue namespace、backlog 指標、memory trade-off 更新 |
 | `docker-compose.yml` | topology に関する stale comment だけ更新 |
 
 次は意図的に変更しない。

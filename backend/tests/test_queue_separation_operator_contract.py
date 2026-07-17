@@ -12,7 +12,9 @@ _REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
 _MAKEFILE = _REPOSITORY_ROOT / "Makefile"
 _REDIS_FLY_CONFIG = _REPOSITORY_ROOT / "infra" / "redis" / "fly.toml"
 _ARCHITECTURE_DOC = _REPOSITORY_ROOT / "docs" / "architecture.md"
-_REDIS_TOPOLOGY_SPEC = _REPOSITORY_ROOT / "specs" / "redis-production-topology.md"
+_REDIS_TOPOLOGY_SPEC = (
+    _REPOSITORY_ROOT / "backend" / "specs" / "redis-production-topology.md"
+)
 _COMPOSE_FILE = _REPOSITORY_ROOT / "docker-compose.yml"
 
 
