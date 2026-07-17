@@ -4,6 +4,10 @@
 
 実装状況: Implemented
 
+> 後続設計: `agent-declaration-runner-orchestration-slice.md` は、このsliceで抽出したRunner境界を
+> 維持しつつ、将来のworkflow ownerを`AnsweringRunner`へ移し、役割別AgentとToolを明示する。
+> 本文のOrchestrator / ExternalSearchResearchRunner維持は、この実装slice内の移行制約として読む。
+
 ## 位置付け
 
 現在の Research agent は、Postgres の run lifecycle、thread 履歴読み込み、
