@@ -8,8 +8,8 @@ broker:
   - broker_trend_discovery: rolling 7d Trend Discovery 実行 (cron 駆動)
   - broker_briefing:  週次カテゴリ別 LLM ブリーフィング生成 (cron 駆動、別 queue)
   - broker_agent:     user-facing research agent 非同期 run + stale sweeper
-  - broker_maintenance: back-fill 救済 + retention purge の core 系保守 cron
-    (cron 駆動、collect から分離するため別 queue)
+  - broker_maintenance: back-fill 救済 + retention purge + queue-health 観測の
+    core 系保守 cron (cron 駆動、collect から分離するため別 queue)
 
 Workers: broker ごとに 1 つ (docker-compose.yml / supervisord conf を参照)。
 Scheduler / lifecycle / AI composition の attach は本 module の **末尾の副作用
@@ -37,13 +37,26 @@ from app.config import settings
 logger = structlog.get_logger(__name__)
 
 
-def _make_broker(queue_name: str) -> RedisStreamBroker:
+def _make_broker(
+    queue_name: str,
+    *,
+    additional_streams: dict[str, str | int] | None = None,
+    consumer_group_name: str = "taskiq",
+    consumer_id: str = "$",
+    unacknowledged_batch_size: int = 100,
+    unacknowledged_lock_timeout: float | None = None,
+) -> RedisStreamBroker:
     return (
         RedisStreamBroker(
             url=settings.redis_url,
             idle_timeout=600_000,
             maxlen=10_000,
             queue_name=queue_name,
+            additional_streams=additional_streams,
+            consumer_group_name=consumer_group_name,
+            consumer_id=consumer_id,
+            unacknowledged_batch_size=unacknowledged_batch_size,
+            unacknowledged_lock_timeout=unacknowledged_lock_timeout,
         )
         .with_result_backend(
             RedisAsyncResultBackend(
@@ -79,7 +92,12 @@ def _make_broker(queue_name: str) -> RedisStreamBroker:
 
 broker_metadata = _make_broker("pipeline:metadata")
 broker_content = _make_broker("pipeline:content")
-broker_analysis = _make_broker("pipeline:analysis")
+broker_analysis = _make_broker(
+    "pipeline:curation",
+    additional_streams={"pipeline:assessment": ">"},
+    consumer_id="0-0",
+    unacknowledged_lock_timeout=60,
+)
 broker_embedding = _make_broker("pipeline:embedding")
 broker_trend_discovery = _make_broker("trend_discovery")
 broker_briefing = _make_broker("briefing")

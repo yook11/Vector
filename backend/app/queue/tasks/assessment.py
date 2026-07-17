@@ -35,6 +35,7 @@ logger = structlog.get_logger(__name__)
 
 @broker_analysis.task(
     task_name="assess_content",
+    queue_name="pipeline:assessment",
     timeout=180,
     max_retries=2,
     retry_on_error=True,

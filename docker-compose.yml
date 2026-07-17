@@ -275,8 +275,8 @@ services:
   # red-team C9 対策: maxmemory + allkeys-lru で OOM を構造的に防ぐ。
   # noeviction (default) では maxmemory 到達後に全 write reject となり、taskiq
   # broker / worker が道連れ shutdown する。allkeys-lru は taskiq stream key も
-  # evict 対象になるが、stream backlog は MAXLEN=10_000 で頭打ちされており、
-  # 256mb の予算下で broken な evict は通常発生しない。
+  # evict 対象になる。MAXLEN ~10,000が制限するのはbacklogではなくretained history
+  # (ACK済みを含む保持履歴)であり、256 MBの予算下でもeviction有無は実測で確認する。
   redis:
     image: redis:7-alpine
     command: >
@@ -332,10 +332,10 @@ services:
     command: supervisord -n -c /app/supervisord/fetch.conf
 
   # --- taskiq workers: analysis (curation + assessment) + embedding を 1 container に同居 ---
-  # broker (broker_analysis / broker_embedding) は分離維持し、container 単位で集約。
-  # embedding は related-articles 専用で独立スケール要件が無く、analysis と failure
-  # domain を共有するため同居する: 起動は GEMINI_API_KEY 共有で共倒れ、稼働時も
-  # fail_fast が片 program の FATAL でコンテナごと落とすため同一 failure domain。
+  # broker_analysisの1つの共有worker processがcuration/assessmentの2 Streamを購読する。
+  # broker_embeddingは別broker/processだが同じcontainerに置き、container failure domainを共有。
+  # 起動はGEMINI_API_KEY共有で共倒れし、稼働時もfail_fastが片programのFATALで
+  # containerごと落とすため、process境界があってもcontainer単位の障害分離はない。
   worker-analysis:
     <<: *worker-base
     init: true
