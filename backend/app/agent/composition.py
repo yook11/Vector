@@ -20,7 +20,7 @@ from app.agent.contract import (
 from app.agent.evidence_collection.external_search.tavily import TavilyHttpClient
 from app.agent.question_context.contract import QuestionContextGenerator
 from app.agent.question_context.service import QuestionContextService
-from app.agent.running import Runner
+from app.agent.running import AnsweringRunner
 from app.analysis.ai_provider_errors import (
     AIProviderConfigurationError,
     AIProviderError,
@@ -156,12 +156,12 @@ def build_question_context_generator() -> QuestionContextGenerator:
     return GeminiQuestionContextGenerator()
 
 
-def build_runner() -> Runner:
+def build_answering_runner() -> AnsweringRunner:
     try:
         generator = build_question_context_generator()
     except (AIProviderConfigurationError, AIProviderError):
         generator = None
-    return Runner(
+    return AnsweringRunner(
         context_preparer=QuestionContextService(generator=generator),
     )
 

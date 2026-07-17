@@ -1,4 +1,4 @@
-"""1回の回答処理を進行する application Runner。"""
+"""1回の回答処理を進行する AnsweringRunner。"""
 
 from __future__ import annotations
 
@@ -23,12 +23,12 @@ from app.agent.running.contract import (
 )
 from app.agent.threads.contracts import ThreadMessageSnapshot
 
-__all__ = ["Runner"]
+__all__ = ["AnsweringRunner"]
 
 _SPAN_NAME = "agent_answering_run"
 
 
-class Runner:
+class AnsweringRunner:
     def __init__(
         self,
         *,

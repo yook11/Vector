@@ -16,7 +16,7 @@ from app.agent.contract import (
     AnswerRetrievalSummary,
 )
 from app.agent.question_context import QuestionContext, QuestionContextDraft
-from app.agent.running import RunContext, RunInput, Runner
+from app.agent.running import AnsweringRunner, RunContext, RunInput
 from app.agent.threads.contracts import ThreadMessageSnapshot
 from app.analysis.ai_provider_errors import (
     AIProviderConfigurationError,
@@ -136,10 +136,10 @@ def _answer_input() -> AnswerQuestionInput:
     )
 
 
-async def test_build_runner_uses_built_question_context_generator(
+async def test_build_answering_runner_uses_built_question_context_generator(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    build_runner = _composition_builder("build_runner")
+    build_answering_runner = _composition_builder("build_answering_runner")
     question = "それが投資へ与える影響は？"
     history = (ThreadMessageSnapshot(role="assistant", content="前回の回答"),)
     generator = _FakeQuestionContextGenerator(
@@ -157,15 +157,15 @@ async def test_build_runner_uses_built_question_context_generator(
     final_output = _answer_result()
     starting_agent = _FakeQuestionAnsweringAgent([final_output])
 
-    runner = build_runner()
-    result = await runner.run(
+    answering_runner = build_answering_runner()
+    result = await answering_runner.run(
         starting_agent,
         RunInput(question=question, history=history),
         run_context=RunContext(run_id=RUN_ID, as_of=AS_OF),
     )
 
     assert (
-        isinstance(runner, Runner),
+        isinstance(answering_runner, AnsweringRunner),
         generator_builder_calls,
         generator.calls,
         len(starting_agent.calls),
@@ -190,11 +190,11 @@ async def test_build_runner_uses_built_question_context_generator(
         pytest.param(AIProviderError(), id="provider-error"),
     ],
 )
-async def test_build_runner_falls_back_only_for_known_generator_builder_errors(
+async def test_build_answering_runner_falls_back_for_known_generator_errors(
     monkeypatch: pytest.MonkeyPatch,
     builder_error: AIProviderError,
 ) -> None:
-    build_runner = _composition_builder("build_runner")
+    build_answering_runner = _composition_builder("build_answering_runner")
     builder_calls: list[None] = []
 
     def fail_to_build_generator() -> None:
@@ -210,7 +210,7 @@ async def test_build_runner_falls_back_only_for_known_generator_builder_errors(
     final_output = _answer_result()
     starting_agent = _FakeQuestionAnsweringAgent([final_output])
 
-    result = await build_runner().run(
+    result = await build_answering_runner().run(
         starting_agent,
         RunInput(question=question, history=()),
         run_context=RunContext(run_id=RUN_ID, as_of=AS_OF),
@@ -229,10 +229,10 @@ async def test_build_runner_falls_back_only_for_known_generator_builder_errors(
     ) == ([None], 1, True, question, [question], True)
 
 
-def test_build_runner_propagates_unexpected_generator_builder_error(
+def test_build_answering_runner_propagates_unexpected_generator_error(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    build_runner = _composition_builder("build_runner")
+    build_answering_runner = _composition_builder("build_answering_runner")
     error = RuntimeError("unexpected builder failure")
     builder_calls: list[None] = []
 
@@ -247,7 +247,7 @@ def test_build_runner_propagates_unexpected_generator_builder_error(
     )
 
     with pytest.raises(RuntimeError) as raised:
-        build_runner()
+        build_answering_runner()
 
     assert (raised.value is error, builder_calls) == (True, [None])
 

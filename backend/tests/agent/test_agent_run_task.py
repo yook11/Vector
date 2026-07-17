@@ -96,14 +96,14 @@ class FakeAgent:
 
 
 @dataclass(frozen=True, slots=True)
-class FakeRunnerCall:
+class FakeAnsweringRunnerCall:
     starting_agent: object
     input: RunInput
     run_context: RunContext
     hooks: object | None
 
 
-class FakeRunner:
+class FakeAnsweringRunner:
     def __init__(
         self,
         *,
@@ -112,7 +112,7 @@ class FakeRunner:
     ) -> None:
         self.exc = exc
         self.question_context = question_context
-        self.calls: list[FakeRunnerCall] = []
+        self.calls: list[FakeAnsweringRunnerCall] = []
 
     async def run(
         self,
@@ -123,7 +123,7 @@ class FakeRunner:
         hooks: object | None = None,
     ) -> RunResult:
         self.calls.append(
-            FakeRunnerCall(
+            FakeAnsweringRunnerCall(
                 starting_agent=starting_agent,
                 input=input,
                 run_context=run_context,
@@ -299,13 +299,13 @@ def _patch_worker_execution(
     monkeypatch: pytest.MonkeyPatch,
     starting_agent_builder: object,
     *,
-    runner: FakeRunner | None = None,
-) -> FakeRunner:
-    runner = runner or FakeRunner()
+    answering_runner: FakeAnsweringRunner | None = None,
+) -> FakeAnsweringRunner:
+    answering_runner = answering_runner or FakeAnsweringRunner()
     monkeypatch.setattr(
         agent_run_tasks,
-        "build_runner",
-        lambda: runner,
+        "build_answering_runner",
+        lambda: answering_runner,
         raising=False,
     )
     monkeypatch.setattr(
@@ -314,7 +314,7 @@ def _patch_worker_execution(
         starting_agent_builder,
         raising=False,
     )
-    return runner
+    return answering_runner
 
 
 def _patch_delta_worker(
@@ -483,9 +483,7 @@ def test_worker_imports_generation_stopped_from_shared_agent_contract() -> None:
     assert agent_run_tasks.AnswerGenerationStopped is AnswerGenerationStopped
 
 
-def test_worker_owns_only_runner_boundary_wiring_for_semantic_answer_execution() -> (
-    None
-):
+def test_worker_owns_only_answering_runner_boundary_for_semantic_execution() -> None:
     tree = ast.parse(inspect.getsource(agent_run_tasks))
     imports: dict[str, set[str]] = {}
     for node in ast.walk(tree):
@@ -518,7 +516,7 @@ def test_worker_owns_only_runner_boundary_wiring_for_semantic_answer_execution()
 
     assert (
         {
-            "build_runner",
+            "build_answering_runner",
             "build_question_answering_starting_agent",
         }
         <= imports.get("app.agent.composition", set()),
@@ -728,7 +726,7 @@ async def test_run_agent_answer_completes_run_and_persists_assistant_message(
         persisted_results.append(result)
         return await original_complete(repository, run_id=run_id, result=result)
 
-    runner = _patch_worker_execution(
+    answering_runner = _patch_worker_execution(
         monkeypatch,
         lambda **_kwargs: fake_agent,
     )
@@ -769,13 +767,13 @@ async def test_run_agent_answer_completes_run_and_persists_assistant_message(
         refreshed_thread = await session.get(AgentThread, thread.id)
         assert refreshed_thread is not None
         assert refreshed_thread.updated_at > datetime(2026, 1, 1, tzinfo=UTC)
-    assert runner.calls[0].input.question == "worker question"
+    assert answering_runner.calls[0].input.question == "worker question"
     assert persisted_results == [fake_agent.result]
     assert persisted_results[0] is fake_agent.result
 
 
 @pytest.mark.asyncio
-async def test_real_runner_completes_same_thread_follow_up_with_saved_history(
+async def test_real_answering_runner_completes_follow_up_with_saved_history(
     session_factory: async_sessionmaker[AsyncSession],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -1116,7 +1114,7 @@ async def test_idempotent_skip_does_not_create_or_start_stream_publisher(
 
     monkeypatch.setattr(
         agent_run_tasks,
-        "build_runner",
+        "build_answering_runner",
         forbidden_builder,
         raising=False,
     )
@@ -1166,7 +1164,7 @@ async def test_idempotent_skip_does_not_create_or_start_stream_publisher(
 
 
 @pytest.mark.asyncio
-async def test_run_agent_answer_passes_runner_boundary_and_resolved_hook(
+async def test_run_agent_answer_passes_answering_runner_and_resolved_hook(
     session_factory: async_sessionmaker[AsyncSession],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -1187,7 +1185,7 @@ async def test_run_agent_answer_passes_runner_boundary_and_resolved_hook(
             attempt_epoch=4,
         )
     fake_agent = FakeAgent(_direct_result())
-    runner = FakeRunner(
+    answering_runner = FakeAnsweringRunner(
         question_context=QuestionContext(
             standalone_question="NVIDIA の発表が株価へ与える影響は？",
         )
@@ -1212,14 +1210,14 @@ async def test_run_agent_answer_passes_runner_boundary_and_resolved_hook(
     _patch_worker_execution(
         monkeypatch,
         build_starting_agent,
-        runner=runner,
+        answering_runner=answering_runner,
     )
 
     def fail_if_legacy_semantic_owner_is_called(
         *_args: object,
         **_kwargs: object,
     ) -> None:
-        pytest.fail("workerがRunner境界ではなく旧semantic ownerを呼びました")
+        pytest.fail("workerがAnsweringRunner境界ではなく旧semantic ownerを呼びました")
 
     for legacy_name in (
         "build_question_context_generator",
@@ -1250,14 +1248,14 @@ async def test_run_agent_answer_passes_runner_boundary_and_resolved_hook(
     )
 
     assert FixedDateTime.calls == 1
-    assert len(runner.calls) == 1
-    runner_call = runner.calls[0]
-    assert runner_call.starting_agent is fake_agent
-    assert runner_call.input.question == question
-    assert isinstance(runner_call.input.history, tuple)
+    assert len(answering_runner.calls) == 1
+    answering_runner_call = answering_runner.calls[0]
+    assert answering_runner_call.starting_agent is fake_agent
+    assert answering_runner_call.input.question == question
+    assert isinstance(answering_runner_call.input.history, tuple)
     assert [
         (message.role, message.content, message.missing_aspects)
-        for message in runner_call.input.history
+        for message in answering_runner_call.input.history
     ] == [
         ("assistant", "古い回答 [[0]]", ()),
         ("user", "NVIDIA の発表を説明して", ()),
@@ -1266,14 +1264,14 @@ async def test_run_agent_answer_passes_runner_boundary_and_resolved_hook(
         ("assistant", "前回の回答 [[2]]", ("保存済みの不足",)),
         ("user", "さらに詳しく", ()),
     ]
-    assert runner_call.run_context == RunContext(
+    assert answering_runner_call.run_context == RunContext(
         run_id=run.id,
         as_of=datetime(2026, 7, 16, 9, 30, tzinfo=UTC),
     )
-    assert runner_call.run_context.as_of.utcoffset() == timedelta(0)
-    assert isinstance(runner_call.hooks, QuestionResolvedRunHooks)
+    assert answering_runner_call.run_context.as_of.utcoffset() == timedelta(0)
+    assert isinstance(answering_runner_call.hooks, QuestionResolvedRunHooks)
     assert len(fake_agent.calls) == 1
-    assert fake_agent.calls[0].as_of == runner_call.run_context.as_of
+    assert fake_agent.calls[0].as_of == answering_runner_call.run_context.as_of
     assert len(starting_agent_builder_calls) == 1
     starting_kwargs = starting_agent_builder_calls[0]
     assert starting_kwargs["session_factory"] is session_factory
@@ -2125,12 +2123,12 @@ async def test_run_agent_answer_does_not_publish_echo_or_fallback_question_conte
             history=[("assistant", "前回の回答")],
         )
     fake_agent = FakeAgent(_direct_result())
-    runner = FakeRunner(question_context=question_context)
+    answering_runner = FakeAnsweringRunner(question_context=question_context)
     FakeLiveEventPublisher.instances = []
     _patch_worker_execution(
         monkeypatch,
         lambda **_kwargs: fake_agent,
-        runner=runner,
+        answering_runner=answering_runner,
     )
     monkeypatch.setattr(
         agent_run_tasks,
@@ -2145,7 +2143,7 @@ async def test_run_agent_answer_does_not_publish_echo_or_fallback_question_conte
 
     assert len(fake_agent.calls) == 1
     assert fake_agent.calls[0].context.standalone_question == question
-    assert runner.calls[0].input.history == (
+    assert answering_runner.calls[0].input.history == (
         ThreadMessageSnapshot(role="assistant", content="前回の回答"),
     )
     assert FakeLiveEventPublisher.instances[0].events == []
@@ -2163,14 +2161,14 @@ async def test_initial_question_does_not_publish_resolved_event(
             question=question,
         )
     fake_agent = FakeAgent(_direct_result())
-    runner = FakeRunner(
+    answering_runner = FakeAnsweringRunner(
         question_context=QuestionContext(standalone_question="書き換えた質問")
     )
     FakeLiveEventPublisher.instances = []
     _patch_worker_execution(
         monkeypatch,
         lambda **_kwargs: fake_agent,
-        runner=runner,
+        answering_runner=answering_runner,
     )
     monkeypatch.setattr(
         agent_run_tasks,
@@ -2183,15 +2181,15 @@ async def test_initial_question_does_not_publish_resolved_event(
         ctx=_ctx(session_factory),
     )
 
-    assert len(runner.calls) == 1
-    assert runner.calls[0].input == RunInput(question=question, history=())
+    assert len(answering_runner.calls) == 1
+    assert answering_runner.calls[0].input == RunInput(question=question, history=())
     assert len(fake_agent.calls) == 1
     assert FakeLiveEventPublisher.instances[0].events == []
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("exc", [AIProviderConfigurationError(), AIProviderError()])
-async def test_run_agent_answer_runner_setup_error_marks_generation_unavailable(
+async def test_answering_runner_setup_error_marks_generation_unavailable(
     exc: Exception,
     session_factory: async_sessionmaker[AsyncSession],
     monkeypatch: pytest.MonkeyPatch,
@@ -2204,12 +2202,12 @@ async def test_run_agent_answer_runner_setup_error_marks_generation_unavailable(
             history=[("assistant", "前回の回答")],
         )
     fake_agent = FakeAgent(_direct_result())
-    runner = FakeRunner(exc=exc)
+    answering_runner = FakeAnsweringRunner(exc=exc)
     FakeLiveEventPublisher.instances = []
     _patch_worker_execution(
         monkeypatch,
         lambda **_kwargs: fake_agent,
-        runner=runner,
+        answering_runner=answering_runner,
     )
     monkeypatch.setattr(
         agent_run_tasks,
@@ -2222,7 +2220,7 @@ async def test_run_agent_answer_runner_setup_error_marks_generation_unavailable(
         ctx=_ctx(session_factory),
     )
 
-    assert len(runner.calls) == 1
+    assert len(answering_runner.calls) == 1
     assert fake_agent.calls == []
     async with session_factory() as session:
         failed = await session.get(AgentRun, run.id)
@@ -2390,7 +2388,7 @@ async def test_run_agent_answer_generation_error_preserves_death_progress_stage(
 
 
 @pytest.mark.asyncio
-async def test_runner_pre_answer_failure_does_not_call_starting_agent(
+async def test_answering_runner_failure_does_not_call_starting_agent(
     session_factory: async_sessionmaker[AsyncSession],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -2398,11 +2396,11 @@ async def test_runner_pre_answer_failure_does_not_call_starting_agent(
         _thread, _message, run = await _create_thread_message_run(session)
     fake_agent = FakeAgent(_direct_result())
     error = AIProviderConfigurationError()
-    runner = FakeRunner(exc=error)
+    answering_runner = FakeAnsweringRunner(exc=error)
     _patch_worker_execution(
         monkeypatch,
         lambda **_kwargs: fake_agent,
-        runner=runner,
+        answering_runner=answering_runner,
     )
 
     await agent_run_tasks.run_agent_answer(
@@ -2416,7 +2414,7 @@ async def test_runner_pre_answer_failure_does_not_call_starting_agent(
         assert failed.status == "failed"
         assert failed.error_code == "generation_unavailable"
         assert failed.progress_stage is None
-    assert len(runner.calls) == 1
+    assert len(answering_runner.calls) == 1
     assert fake_agent.calls == []
 
 

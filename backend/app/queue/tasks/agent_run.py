@@ -11,8 +11,8 @@ from taskiq import Context, TaskiqDepends
 
 from app.agent.answering.direct_answer.contract import DirectAnswerInvalidError
 from app.agent.composition import (
+    build_answering_runner,
     build_question_answering_starting_agent,
-    build_runner,
 )
 from app.agent.contract import AnswerGenerationStopped
 from app.agent.live_updates.answer_delta import AgentRunLiveAnswerDeltaReporter
@@ -105,7 +105,7 @@ async def run_agent_answer(
         )
         as_of = datetime.now(UTC)
         history = await _read_history(session_factory, prepared)
-        runner = build_runner()
+        answering_runner = build_answering_runner()
         starting_agent = build_question_answering_starting_agent(
             session_factory=session_factory,
             progress=progress_reporter,
@@ -113,7 +113,7 @@ async def run_agent_answer(
             delta_reporter=delta_reporter,
             continuation=continuation,
         )
-        run_result = await runner.run(
+        run_result = await answering_runner.run(
             starting_agent,
             RunInput(
                 question=prepared.question,
