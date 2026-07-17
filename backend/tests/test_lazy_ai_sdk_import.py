@@ -16,6 +16,7 @@ import)。
 
 from __future__ import annotations
 
+import importlib.util
 import subprocess
 import sys
 import textwrap
@@ -41,7 +42,8 @@ _NON_AI_IMPORT_SURFACES = {
     ),
     # analysis.conf (maintenance program): broker_maintenance backfill retention
     "maintenance": (
-        "import app.queue.brokers, app.queue.tasks.backfill, app.queue.tasks.retention"
+        "import app.queue.brokers, app.queue.tasks.backfill, "
+        "app.queue.tasks.retention, app.queue.tasks.queue_health"
     ),
     # insights.conf (trend program): broker_trend_discovery trend_discovery
     "trend_discovery": "import app.queue.brokers, app.queue.tasks.trend_discovery",
@@ -83,6 +85,12 @@ def test_non_ai_process_import_does_not_load_ai_sdk(surface: str) -> None:
     SDK の import-time ロードを構造的に禁じる。回帰すると当該プロセスが待機中も
     ~133MB の AI SDK を常駐させ OOM 余地を作る。
     """
+    if (
+        surface == "maintenance"
+        and importlib.util.find_spec("app.queue.tasks.queue_health") is None
+    ):
+        pytest.fail("app.queue.tasks.queue_health is not implemented")
+
     loaded = _ai_sdk_modules_loaded_after(_NON_AI_IMPORT_SURFACES[surface])
     assert loaded == set(), (
         f"{surface} の import surface が AI SDK をロードした: {sorted(loaded)}"

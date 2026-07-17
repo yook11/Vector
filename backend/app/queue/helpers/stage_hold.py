@@ -18,6 +18,19 @@ logger = structlog.get_logger(__name__)
 
 _HOLD_TTL_SECONDS = 6 * 60 * 60  # 6h
 
+_REFRESH_RECOVERY_HOLD_SCRIPT = """
+if redis.call("GET", KEYS[1]) == ARGV[1] then
+    return redis.call("EXPIRE", KEYS[1], ARGV[2])
+end
+return 0
+"""
+_RELEASE_RECOVERY_HOLD_SCRIPT = """
+if redis.call("GET", KEYS[1]) == ARGV[1] then
+    return redis.call("DEL", KEYS[1])
+end
+return 0
+"""
+
 StageHoldName = Literal["curation", "assessment", "embedding"]
 
 
@@ -51,6 +64,11 @@ _EMBEDDING_SPEC = _StageHoldSpec(
     set_failed_metric_name="vector.embedding.hold_set_failed",
     log_prefix="embedding",
 )
+
+_RECOVERY_HOLD_SPECS = {
+    _CURATION_SPEC.name: _CURATION_SPEC,
+    _ASSESSMENT_SPEC.name: _ASSESSMENT_SPEC,
+}
 
 _HOLD_SET_COUNTERS = {
     spec.name: logfire.metric_counter(
@@ -90,6 +108,54 @@ async def _is_stage_held(redis: Redis, spec: _StageHoldSpec) -> bool:
     except Exception:  # noqa: BLE001 — Redis 障害は救済を止めない
         logger.warning(f"{spec.log_prefix}_hold_check_failed", exc_info=True)
         return False
+
+
+def _recovery_hold_spec(stage: str) -> _StageHoldSpec:
+    """recovery ownershipを許可するanalysis stageのhold仕様を返す。"""
+    try:
+        return _RECOVERY_HOLD_SPECS[stage]
+    except KeyError:
+        raise ValueError(f"Unsupported recovery hold stage: {stage}") from None
+
+
+async def acquire_recovery_hold(redis: Redis, *, stage: str, token: str) -> bool:
+    """既存holdを上書きせずrecovery tokenの所有権を取得する。"""
+    spec = _recovery_hold_spec(stage)
+    return bool(
+        await redis.set(
+            spec.key,
+            token,
+            nx=True,
+            ex=_HOLD_TTL_SECONDS,
+        )
+    )
+
+
+async def refresh_recovery_hold(redis: Redis, *, stage: str, token: str) -> bool:
+    """所有tokenが一致するrecovery holdだけをatomicに延長する。"""
+    spec = _recovery_hold_spec(stage)
+    return bool(
+        await redis.eval(
+            _REFRESH_RECOVERY_HOLD_SCRIPT,
+            1,
+            spec.key,
+            token,
+            _HOLD_TTL_SECONDS,
+        )
+    )
+
+
+async def release_recovery_hold(redis: Redis, *, stage: str, token: str) -> bool:
+    """所有tokenが一致するrecovery holdだけをatomicに削除する。"""
+    spec = _recovery_hold_spec(stage)
+    return bool(
+        await redis.eval(
+            _RELEASE_RECOVERY_HOLD_SCRIPT,
+            1,
+            spec.key,
+            token,
+        )
+    )
 
 
 async def set_curation_hold(redis: Redis, *, reason: str) -> None:

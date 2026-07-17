@@ -2,6 +2,7 @@
 
 import configparser
 import re
+import shlex
 from pathlib import Path
 from typing import Any
 from unittest.mock import MagicMock, patch
@@ -24,6 +25,32 @@ from app.queue.schedule import CADENCE_CRON
 
 # supervisord の worker 定義 (taskiq worker 起動引数の SSoT)。
 _SUPERVISORD_DIR = Path(__file__).resolve().parent.parent / "supervisord"
+
+
+def _analysis_worker_commands() -> list[list[str]]:
+    """``broker_analysis`` を起動する worker command を token 列で返す。"""
+    parser = configparser.ConfigParser(interpolation=None)
+    parser.read(_SUPERVISORD_DIR / "analysis.conf")
+    return [
+        shlex.split(command)
+        for section in parser.sections()
+        if section.startswith("program:")
+        and "taskiq worker" in (command := parser[section].get("command", ""))
+        and "app.queue.brokers:broker_analysis" in command
+    ]
+
+
+def _maintenance_worker_commands() -> list[list[str]]:
+    """``broker_maintenance`` を起動するworker commandをtoken列で返す。"""
+    parser = configparser.ConfigParser(interpolation=None)
+    parser.read(_SUPERVISORD_DIR / "analysis.conf")
+    return [
+        shlex.split(command)
+        for section in parser.sections()
+        if section.startswith("program:")
+        and "taskiq worker" in (command := parser[section].get("command", ""))
+        and "app.queue.brokers:broker_maintenance" in command
+    ]
 
 
 def _parse_worker_programs() -> dict[str, int | None]:
@@ -50,6 +77,117 @@ def _parse_worker_programs() -> dict[str, int | None]:
                 int(max_match.group(1)) if max_match else None
             )
     return workers
+
+
+def test_analysis_broker_reads_only_stage_specific_streams() -> None:
+    """analysis broker は curation を主 Stream、assessment を追加購読に固定する。"""
+    from app.queue.brokers import broker_analysis
+
+    assert {
+        "queue_name": broker_analysis.queue_name,
+        "additional_streams": broker_analysis.additional_streams,
+        "consumer_group_name": broker_analysis.consumer_group_name,
+        "consumer_id": broker_analysis.consumer_id,
+        "maxlen": broker_analysis.maxlen,
+        "idle_timeout": broker_analysis.idle_timeout,
+        "unacknowledged_batch_size": broker_analysis.unacknowledged_batch_size,
+        "unacknowledged_lock_timeout": broker_analysis.unacknowledged_lock_timeout,
+    } == {
+        "queue_name": "pipeline:curation",
+        "additional_streams": {"pipeline:assessment": ">"},
+        "consumer_group_name": "taskiq",
+        "consumer_id": "0-0",
+        "maxlen": 10_000,
+        "idle_timeout": 600_000,
+        "unacknowledged_batch_size": 100,
+        "unacknowledged_lock_timeout": 60,
+    }
+
+
+@pytest.mark.parametrize(
+    ("task_module", "task_attr", "expected_task_name", "expected_labels"),
+    [
+        (
+            "app.queue.tasks.curation",
+            "curate_content",
+            "curate_content",
+            {
+                "queue_name": "pipeline:curation",
+                "timeout": 180,
+                "max_retries": 1,
+                "retry_on_error": True,
+            },
+        ),
+        (
+            "app.queue.tasks.assessment",
+            "assess_content",
+            "assess_content",
+            {
+                "queue_name": "pipeline:assessment",
+                "timeout": 180,
+                "max_retries": 2,
+                "retry_on_error": True,
+            },
+        ),
+    ],
+    ids=["curation", "assessment"],
+)
+def test_analysis_task_keeps_stage_routing_and_execution_labels(
+    task_module: str,
+    task_attr: str,
+    expected_task_name: str,
+    expected_labels: dict[str, object],
+) -> None:
+    """両 task は共有 broker のまま stage 固有 Stream と既存実行契約を持つ。"""
+    import importlib
+
+    from app.queue.brokers import broker_analysis
+
+    task = getattr(importlib.import_module(task_module), task_attr)
+    assert (task.broker, task.task_name, task.labels) == (
+        broker_analysis,
+        expected_task_name,
+        expected_labels,
+    )
+
+
+def test_analysis_worker_keeps_single_shared_runtime() -> None:
+    """curation / assessment は単一 process と既存 ACK・並列度を共有する。"""
+    assert _analysis_worker_commands() == [
+        [
+            "taskiq",
+            "worker",
+            "--workers",
+            "1",
+            "--max-async-tasks",
+            "10",
+            "app.queue.brokers:broker_analysis",
+            "app.queue.tasks.curation",
+            "app.queue.tasks.assessment",
+            "--ack-type",
+            "when_executed",
+        ]
+    ]
+
+
+def test_maintenance_worker_imports_queue_health_without_runtime_split() -> None:
+    """queue samplerは既存maintenance workerのmoduleとして同じruntimeを使う。"""
+    assert _maintenance_worker_commands() == [
+        [
+            "taskiq",
+            "worker",
+            "--workers",
+            "1",
+            "--max-async-tasks",
+            "10",
+            "app.queue.brokers:broker_maintenance",
+            "app.queue.tasks.backfill",
+            "app.queue.tasks.retention",
+            "app.queue.tasks.queue_health",
+            "--ack-type",
+            "when_executed",
+        ]
+    ]
 
 
 class TestCadenceCronMapping:

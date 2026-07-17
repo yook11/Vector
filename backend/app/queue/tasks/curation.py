@@ -36,6 +36,7 @@ logger = structlog.get_logger(__name__)
 
 @broker_analysis.task(
     task_name="curate_content",
+    queue_name="pipeline:curation",
     timeout=180,
     max_retries=1,
     retry_on_error=True,
