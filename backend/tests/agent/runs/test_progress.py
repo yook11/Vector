@@ -22,6 +22,7 @@ async def _create_run(
     *,
     status: str = "running",
     progress_stage: str | None = None,
+    attempt_epoch: int = 1,
 ) -> AgentRun:
     thread = AgentThread(
         user_id=UUID(TEST_USER_ID),
@@ -58,6 +59,7 @@ async def _create_run(
         status=status,
         progress_stage=progress_stage,
         error_code="internal_error" if status == "failed" else None,
+        attempt_epoch=attempt_epoch,
     )
     session.add(run)
     await session.commit()
@@ -72,15 +74,35 @@ async def test_progress_writer_updates_running_run(
     async with session_factory() as session:
         run = await _create_run(session)
 
-    writer = AgentRunProgressWriter(session_factory, run.id)
+    writer = AgentRunProgressWriter(session_factory, run.id, run.attempt_epoch)
 
     await writer.stage_changed("retrieving")
 
     async with session_factory() as session:
         refreshed = await session.get(AgentRun, run.id)
         assert refreshed is not None
-        assert refreshed.status == "running"
-        assert refreshed.progress_stage == "retrieving"
+        assert (refreshed.status, refreshed.progress_stage) == ("running", "retrieving")
+
+
+@pytest.mark.asyncio
+async def test_progress_writer_does_not_update_newer_attempt(
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    async with session_factory() as session:
+        run = await _create_run(
+            session,
+            progress_stage="planning",
+            attempt_epoch=2,
+        )
+
+    stale_writer = AgentRunProgressWriter(session_factory, run.id, 1)
+
+    await stale_writer.stage_changed("synthesizing")
+
+    async with session_factory() as session:
+        refreshed = await session.get(AgentRun, run.id)
+        assert refreshed is not None
+        assert (refreshed.attempt_epoch, refreshed.progress_stage) == (2, "planning")
 
 
 @pytest.mark.asyncio
@@ -96,15 +118,14 @@ async def test_progress_writer_does_not_update_terminal_runs(
             progress_stage="planning",
         )
 
-    writer = AgentRunProgressWriter(session_factory, run.id)
+    writer = AgentRunProgressWriter(session_factory, run.id, run.attempt_epoch)
 
     await writer.stage_changed("synthesizing")
 
     async with session_factory() as session:
         refreshed = await session.get(AgentRun, run.id)
         assert refreshed is not None
-        assert refreshed.status == status
-        assert refreshed.progress_stage == "planning"
+        assert (refreshed.status, refreshed.progress_stage) == (status, "planning")
 
 
 class ExplodingSession:
@@ -123,7 +144,7 @@ class ExplodingSessionFactory:
 @pytest.mark.asyncio
 async def test_progress_writer_swallows_exceptions_and_logs_pii_free_warning() -> None:
     run_id = UUID("00000000-0000-4000-a000-000000000010")
-    writer = AgentRunProgressWriter(ExplodingSessionFactory(), run_id)  # type: ignore[arg-type]
+    writer = AgentRunProgressWriter(ExplodingSessionFactory(), run_id, 1)  # type: ignore[arg-type]
 
     with capture_logs() as logs:
         await writer.stage_changed("planning")

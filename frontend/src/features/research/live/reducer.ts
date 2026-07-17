@@ -29,6 +29,17 @@ export interface ResearchLiveTransition {
   acceptedTerminal: ResearchLiveTerminal | null;
 }
 
+export type ResearchLivePollProgressMergeKind =
+  | "initial"
+  | "equal"
+  | "higher"
+  | "lower";
+
+export interface ResearchLivePollProgressMerge {
+  state: ResearchLiveState;
+  kind: ResearchLivePollProgressMergeKind;
+}
+
 export function createInitialResearchLiveState(): ResearchLiveState {
   return {
     currentAttemptEpoch: null,
@@ -70,7 +81,13 @@ export function reduceResearchLiveEvent(
     case "attempt.started":
       return unchanged(nextState);
     case "stage":
-      return unchanged({ ...nextState, progressStage: event.stage });
+      return unchanged({
+        ...nextState,
+        progressStage: advanceResearchLiveStage(
+          nextState.progressStage,
+          event.stage,
+        ),
+      });
     case "activity":
       return unchanged({
         ...nextState,
@@ -99,6 +116,42 @@ export function reduceResearchLiveEvent(
   }
 }
 
+export function mergeResearchLivePollProgress(
+  state: ResearchLiveState,
+  attemptEpoch: number,
+  progressStage: ResearchLiveState["progressStage"],
+): ResearchLivePollProgressMerge {
+  if (state.currentAttemptEpoch === null) {
+    return {
+      state: applyProgressStage(
+        resetForAttempt(state, attemptEpoch),
+        progressStage,
+      ),
+      kind: "initial",
+    };
+  }
+  if (attemptEpoch < state.currentAttemptEpoch) {
+    return { state, kind: "lower" };
+  }
+  if (attemptEpoch > state.currentAttemptEpoch) {
+    return {
+      state: applyProgressStage(
+        resetForAttempt(state, attemptEpoch),
+        progressStage,
+      ),
+      kind: "higher",
+    };
+  }
+  return { state: applyProgressStage(state, progressStage), kind: "equal" };
+}
+
+export function advanceResearchLiveStage(
+  current: ResearchLiveState["progressStage"],
+  next: ResearchLiveState["progressStage"],
+): ResearchLiveState["progressStage"] {
+  return stageRank(next) > stageRank(current) ? next : current;
+}
+
 export function suppressResearchLiveDraft(
   state: ResearchLiveState,
 ): ResearchLiveState {
@@ -123,6 +176,32 @@ function resetForAttempt(
     hasAcceptedSseEvent: state.hasAcceptedSseEvent,
     terminal: null,
   };
+}
+
+function applyProgressStage(
+  state: ResearchLiveState,
+  progressStage: ResearchLiveState["progressStage"],
+): ResearchLiveState {
+  const nextProgressStage = advanceResearchLiveStage(
+    state.progressStage,
+    progressStage,
+  );
+  return nextProgressStage === state.progressStage
+    ? state
+    : { ...state, progressStage: nextProgressStage };
+}
+
+function stageRank(stage: ResearchLiveState["progressStage"]): number {
+  switch (stage) {
+    case "planning":
+      return 1;
+    case "retrieving":
+      return 2;
+    case "synthesizing":
+      return 3;
+    case null:
+      return 0;
+  }
 }
 
 function applyDelta(

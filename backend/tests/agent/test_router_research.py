@@ -872,6 +872,7 @@ class TestDeleteResearchThread:
             status="running",
         )
         run_id = run.id
+        expected_attempt_epoch = run.attempt_epoch
 
         response = await client.delete(f"{_THREADS_URL}/{thread.id}")
 
@@ -883,6 +884,7 @@ class TestDeleteResearchThread:
             completed = await AgentRunRepository(db_session).complete_run(
                 run_id=run_id,
                 result=_direct_result(),
+                expected_attempt_epoch=expected_attempt_epoch,
             )
         assert completed is False
         assert await db_session.scalar(select(func.count()).select_from(AgentRun)) == 0
@@ -1189,6 +1191,7 @@ class TestCancelResearchRun:
             status="running",
         )
         run_id = run.id
+        expected_attempt_epoch = run.attempt_epoch
         thread_id = thread.id
 
         response = await client.post(f"/api/v1/research/runs/{run_id}/cancel")
@@ -1201,6 +1204,7 @@ class TestCancelResearchRun:
             completed = await AgentRunRepository(db_session).complete_run(
                 run_id=run_id,
                 result=_direct_result(),
+                expected_attempt_epoch=expected_attempt_epoch,
             )
         refreshed_run = await db_session.get(AgentRun, run_id)
         assert refreshed_run is not None
@@ -1254,6 +1258,7 @@ class TestGetResearchRun:
             user_message_id=running_user.id,
             status="running",
             progress_stage="retrieving",
+            attempt_epoch=3,
         )
         failed_thread = await _create_thread(db_session)
         failed_user = await _create_message(
@@ -1270,6 +1275,7 @@ class TestGetResearchRun:
             status="failed",
             error_code="generation_unavailable",
             progress_stage="synthesizing",
+            attempt_epoch=2,
         )
         completed_thread = await _create_thread(db_session)
         completed_user = await _create_message(
@@ -1292,15 +1298,21 @@ class TestGetResearchRun:
             user_message_id=completed_user.id,
             assistant_message_id=completed_message.id,
             status="completed",
+            attempt_epoch=2,
         )
 
         expected = {
-            queued_run.id: ("queued", None, None),
-            running_run.id: ("running", None, "retrieving"),
-            failed_run.id: ("failed", "generation_unavailable", "synthesizing"),
-            completed_run.id: ("completed", None, None),
+            queued_run.id: ("queued", None, None, 0),
+            running_run.id: ("running", None, "retrieving", 3),
+            failed_run.id: ("failed", "generation_unavailable", "synthesizing", 2),
+            completed_run.id: ("completed", None, None, 2),
         }
-        for run_id, (status_value, error_code, progress_stage) in expected.items():
+        for run_id, (
+            status_value,
+            error_code,
+            progress_stage,
+            attempt_epoch,
+        ) in expected.items():
             response = await client.get(f"/api/v1/research/runs/{run_id}")
             assert response.status_code == 200
             assert response.json() == {
@@ -1309,6 +1321,7 @@ class TestGetResearchRun:
                 "status": status_value,
                 "errorCode": error_code,
                 "progressStage": progress_stage,
+                "attemptEpoch": attempt_epoch,
                 "recentEvents": [],
             }
 
@@ -1480,11 +1493,23 @@ def test_openapi_exposes_thread_ui_contract_and_slim_run_signal() -> None:
         "status",
         "errorCode",
         "progressStage",
+        "attemptEpoch",
         "recentEvents",
     }
+    assert "attemptEpoch" in run_schema["required"]
+    assert run_schema["properties"]["attemptEpoch"]["minimum"] == 0
     assert "result" not in run_schema["properties"]
     assert "cancelled" in str(run_schema["properties"]["errorCode"])
     assert "planning" in str(run_schema["properties"]["progressStage"])
+
+    message_run_schema = schema["components"]["schemas"]["ResearchMessageRun"]
+    assert set(message_run_schema["properties"]) == {
+        "runId",
+        "status",
+        "errorCode",
+        "progressStage",
+    }
+    assert "attemptEpoch" not in message_run_schema["required"]
 
     assistant_schema = schema["components"]["schemas"]["ResearchAssistantMessage"]
     assert "[[1]]" in assistant_schema["properties"]["content"]["description"]

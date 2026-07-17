@@ -100,6 +100,7 @@ async def run_agent_answer(
             AgentRunProgressWriter(
                 session_factory,
                 prepared.run_id,
+                prepared.attempt_epoch,
             ),
             stream_events,
         )
@@ -145,6 +146,7 @@ async def run_agent_answer(
         await _mark_failed(
             session_factory,
             prepared.run_id,
+            prepared.attempt_epoch,
             AgentRunErrorCode.GENERATION_UNAVAILABLE,
             stream_events,
         )
@@ -158,6 +160,7 @@ async def run_agent_answer(
         await _mark_failed(
             session_factory,
             prepared.run_id,
+            prepared.attempt_epoch,
             AgentRunErrorCode.INTERNAL_ERROR,
             stream_events,
         )
@@ -169,6 +172,7 @@ async def run_agent_answer(
                 completed = await AgentRunRepository(session).complete_run(
                     run_id=prepared.run_id,
                     result=result,
+                    expected_attempt_epoch=prepared.attempt_epoch,
                 )
                 if not completed:
                     logger.info(
@@ -192,6 +196,7 @@ async def run_agent_answer(
         await _mark_failed(
             session_factory,
             prepared.run_id,
+            prepared.attempt_epoch,
             AgentRunErrorCode.INTERNAL_ERROR,
             stream_events,
         )
@@ -238,6 +243,7 @@ async def _read_history(
 async def _mark_failed(
     session_factory: async_sessionmaker[AsyncSession],
     run_id: UUID,
+    expected_attempt_epoch: int,
     error_code: AgentRunErrorCode,
     stream_events: AgentRunLiveStreamPublisher,
 ) -> bool:
@@ -245,6 +251,7 @@ async def _mark_failed(
         async with session.begin():
             transitioned = await AgentRunRepository(session).mark_failed(
                 run_id,
+                expected_attempt_epoch=expected_attempt_epoch,
                 error_code=error_code,
             )
     if not transitioned:

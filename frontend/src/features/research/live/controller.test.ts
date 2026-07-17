@@ -20,6 +20,7 @@ type PollRunResult =
       run: {
         status: "queued" | "running" | "completed" | "failed";
         progressStage: "planning" | "retrieving" | "synthesizing" | null;
+        attemptEpoch: unknown;
         recentEvents: readonly unknown[];
         errorCode:
           | "generation_unavailable"
@@ -46,10 +47,11 @@ function runResult(
   progressStage: "planning" | "retrieving" | "synthesizing" | null = null,
   errorCode: PollErrorCode = null,
   recentEvents: readonly unknown[] = [],
+  attemptEpoch: unknown = 1,
 ): PollRunResult {
   return {
     kind: "run",
-    run: { status, progressStage, errorCode, recentEvents },
+    run: { status, progressStage, attemptEpoch, errorCode, recentEvents },
   };
 }
 
@@ -148,6 +150,7 @@ function createHarness(
   pollRun?: ReturnType<typeof vi.fn<PollRun>>,
   initialStatus: "queued" | "running" = "running",
   requestRefresh?: ReturnType<typeof vi.fn<RequestRefresh>>,
+  useRuntimePoll = false,
 ) {
   const sources: FakeEventSource[] = [];
   const createEventSource = vi.fn((_url: string) => {
@@ -164,7 +167,7 @@ function createHarness(
     runId: RUN_ID,
     initialStatus,
     initialStage: null,
-    pollRun: actualPollRun,
+    ...(useRuntimePoll ? {} : { pollRun: actualPollRun }),
     createEventSource,
     requestRefresh: actualRequestRefresh,
     refresh: actualRequestRefresh,
@@ -202,6 +205,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  vi.unstubAllGlobals();
   vi.useRealTimers();
 });
 
@@ -521,11 +525,138 @@ describe("createResearchRunLiveController", () => {
     it.each([
       "live",
       "reconnecting",
-    ] as const)("does not rewind SSE progress from delayed polling while %s", async (mode) => {
+    ] as const)("applies a same-attempt forward poll while %s", async (mode) => {
       const pending = deferred<PollRunResult>();
       const pollRun = vi.fn<PollRun>().mockReturnValue(pending.promise);
       const harness = createHarness(pollRun);
       harness.source.open();
+      harness.source.emit(
+        "stage",
+        { attemptEpoch: 1, stage: "planning" },
+        "1-0",
+      );
+      const sseActivity = {
+        type: "external_search.evidence_selected" as const,
+        taskIndex: 0,
+        evidenceCount: 2,
+      };
+      harness.source.emit(
+        "activity",
+        { attemptEpoch: 1, activity: sseActivity },
+        "2-0",
+      );
+      if (mode === "reconnecting") harness.source.reconnecting();
+
+      pending.resolve(
+        runResult(
+          "running",
+          "retrieving",
+          null,
+          [
+            {
+              type: "external_search.candidates_fetched",
+              ts: "2026-07-13T00:00:00Z",
+              taskIndex: 1,
+              candidateCount: 4,
+            },
+          ],
+          1,
+        ),
+      );
+      await flushPromises();
+
+      expect(harness.controller.getSnapshot().liveState.progressStage).toBe(
+        "retrieving",
+      );
+      expect(
+        harness.controller.getSnapshot().liveState.currentActivity,
+      ).toEqual(sseActivity);
+
+      harness.unsubscribe();
+    });
+
+    it("does not regress SSE progress or derive activity from a rejected polling stage", async () => {
+      const pending = deferred<PollRunResult>();
+      const pollRun = vi.fn<PollRun>().mockReturnValue(pending.promise);
+      const harness = createHarness(pollRun);
+      harness.source.emit(
+        "stage",
+        { attemptEpoch: 1, stage: "synthesizing" },
+        "1-0",
+      );
+      harness.source.closed();
+
+      pending.resolve(
+        runResult(
+          "running",
+          "retrieving",
+          null,
+          [
+            {
+              type: "external_search.evidence_selected",
+              ts: "2026-07-13T00:00:00Z",
+              taskIndex: 0,
+              evidenceCount: 4,
+            },
+          ],
+          1,
+        ),
+      );
+      await flushPromises();
+
+      expect(harness.controller.getSnapshot().liveState).toMatchObject({
+        progressStage: "synthesizing",
+        currentActivity: null,
+      });
+
+      harness.unsubscribe();
+    });
+
+    it("keeps polling synthesizing after a delayed same-attempt SSE retrieving event", async () => {
+      const pollRun = vi
+        .fn<PollRun>()
+        .mockResolvedValue(runResult("running", "synthesizing", null, [], 1));
+      const harness = createHarness(pollRun);
+
+      await flushPromises();
+      harness.source.emit(
+        "stage",
+        { attemptEpoch: 1, stage: "retrieving" },
+        "1-0",
+      );
+
+      expect(harness.controller.getSnapshot().liveState).toMatchObject({
+        progressStage: "synthesizing",
+        lastProcessedEventId: {
+          raw: "1-0",
+          milliseconds: 1n,
+          sequence: 0n,
+        },
+      });
+
+      harness.unsubscribe();
+    });
+
+    it("adopts a valid polling epoch when no SSE attempt has been observed", async () => {
+      const pollRun = vi
+        .fn<PollRun>()
+        .mockResolvedValue(runResult("running", "retrieving", null, [], 2));
+      const harness = createHarness(pollRun);
+
+      await flushPromises();
+
+      expect(harness.controller.getSnapshot().liveState).toMatchObject({
+        currentAttemptEpoch: 2,
+        progressStage: "retrieving",
+      });
+
+      harness.unsubscribe();
+    });
+
+    it("resets for a higher polling epoch without applying its List activity and rejects old SSE", async () => {
+      const pending = deferred<PollRunResult>();
+      const pollRun = vi.fn<PollRun>().mockReturnValue(pending.promise);
+      const harness = createHarness(pollRun);
       harness.source.emit(
         "stage",
         { attemptEpoch: 1, stage: "synthesizing" },
@@ -538,34 +669,243 @@ describe("createResearchRunLiveController", () => {
           activity: {
             type: "external_search.evidence_selected",
             taskIndex: 0,
-            evidenceCount: 4,
+            evidenceCount: 2,
           },
         },
         "2-0",
       );
-      if (mode === "reconnecting") harness.source.reconnecting();
+      harness.source.emit(
+        "answer.delta",
+        { attemptEpoch: 1, generation: 2, text: "old draft" },
+        "3-0",
+      );
 
       pending.resolve(
-        runResult("running", "retrieving", null, [
-          {
-            type: "question.resolved",
-            ts: "2026-07-13T00:00:00Z",
-            standaloneQuestion: "古いpolling activity",
-          },
-        ]),
+        runResult(
+          "running",
+          "planning",
+          null,
+          [
+            {
+              type: "question.resolved",
+              ts: "2026-07-13T00:00:00Z",
+              standaloneQuestion: "List activity must not cross attempts",
+            },
+          ],
+          2,
+        ),
+      );
+      await flushPromises();
+      harness.source.emit(
+        "stage",
+        { attemptEpoch: 1, stage: "synthesizing" },
+        "4-0",
+      );
+
+      expect(harness.controller.getSnapshot().liveState).toMatchObject({
+        currentAttemptEpoch: 2,
+        currentGeneration: null,
+        progressStage: "planning",
+        currentActivity: null,
+        draftText: "",
+        draftMode: "empty",
+        lastProcessedEventId: {
+          raw: "4-0",
+          milliseconds: 4n,
+          sequence: 0n,
+        },
+      });
+
+      harness.unsubscribe();
+    });
+
+    it("ignores lower-epoch polling stage and activity", async () => {
+      const pending = deferred<PollRunResult>();
+      const pollRun = vi.fn<PollRun>().mockReturnValue(pending.promise);
+      const harness = createHarness(pollRun);
+      const currentActivity = {
+        type: "external_search.candidates_fetched" as const,
+        taskIndex: 1,
+        candidateCount: 3,
+      };
+      harness.source.emit(
+        "stage",
+        { attemptEpoch: 2, stage: "retrieving" },
+        "1-0",
+      );
+      harness.source.emit(
+        "activity",
+        { attemptEpoch: 2, activity: currentActivity },
+        "2-0",
+      );
+
+      pending.resolve(
+        runResult(
+          "running",
+          "synthesizing",
+          null,
+          [
+            {
+              type: "question.resolved",
+              ts: "2026-07-13T00:00:00Z",
+              standaloneQuestion: "stale polling activity",
+            },
+          ],
+          1,
+        ),
       );
       await flushPromises();
 
-      expect(harness.controller.getSnapshot().liveState.progressStage).toBe(
-        "synthesizing",
-      );
-      expect(
-        harness.controller.getSnapshot().liveState.currentActivity,
-      ).toEqual({
-        type: "external_search.evidence_selected",
-        taskIndex: 0,
-        evidenceCount: 4,
+      expect(harness.controller.getSnapshot().liveState).toMatchObject({
+        currentAttemptEpoch: 2,
+        progressStage: "retrieving",
+        currentActivity,
       });
+
+      harness.unsubscribe();
+    });
+
+    it("keeps active run status monotonic when polling stage cannot be merged", async () => {
+      const pollRun = vi
+        .fn<PollRun>()
+        .mockResolvedValueOnce(
+          runResult("running", "synthesizing", null, [], 0),
+        )
+        .mockResolvedValueOnce(runResult("queued", "planning", null, [], 0));
+      const harness = createHarness(pollRun, "queued");
+
+      await flushPromises();
+      await vi.advanceTimersByTimeAsync(2_000);
+      await flushPromises();
+
+      expect(harness.controller.getSnapshot()).toMatchObject({
+        runStatus: "running",
+        liveState: { progressStage: null, currentAttemptEpoch: null },
+      });
+
+      harness.unsubscribe();
+    });
+
+    it.each([
+      ["missing", {}],
+      ["null", { attemptEpoch: null }],
+      ["zero", { attemptEpoch: 0 }],
+      ["negative", { attemptEpoch: -1 }],
+      ["fraction", { attemptEpoch: 1.5 }],
+      ["string", { attemptEpoch: "1" }],
+      ["boolean", { attemptEpoch: true }],
+      ["unsafe", { attemptEpoch: Number.MAX_SAFE_INTEGER + 1 }],
+    ] as const)("does not merge stage or activity from a %s epoch in the runtime poll parser", async (_label, epochField) => {
+      const fetchMock = vi.fn().mockResolvedValue(
+        new Response(
+          JSON.stringify({
+            status: "running",
+            progressStage: "synthesizing",
+            errorCode: null,
+            recentEvents: [
+              {
+                type: "external_search.evidence_selected",
+                ts: "2026-07-13T00:00:00Z",
+                taskIndex: 0,
+                evidenceCount: 4,
+              },
+            ],
+            ...epochField,
+          }),
+          { status: 200 },
+        ),
+      );
+      vi.stubGlobal("fetch", fetchMock);
+      const harness = createHarness(undefined, "queued", undefined, true);
+      const currentActivity = {
+        type: "internal_search.started" as const,
+        queryCount: 2,
+      };
+      harness.source.emit(
+        "stage",
+        { attemptEpoch: 1, stage: "planning" },
+        "1-0",
+      );
+      harness.source.emit(
+        "activity",
+        { attemptEpoch: 1, activity: currentActivity },
+        "2-0",
+      );
+
+      await flushPromises();
+
+      expect(harness.controller.getSnapshot()).toMatchObject({
+        runStatus: "running",
+        liveState: {
+          currentAttemptEpoch: 1,
+          progressStage: "planning",
+          currentActivity,
+        },
+      });
+      expect(fetchMock).toHaveBeenCalledWith(
+        `/api/research/runs/${RUN_ID}`,
+        expect.objectContaining({ cache: "no-store" }),
+      );
+
+      harness.unsubscribe();
+    });
+
+    it("finalizes a polling terminal even when its epoch cannot merge progress", async () => {
+      const fetchMock = vi.fn().mockResolvedValue(
+        new Response(
+          JSON.stringify({
+            status: "completed",
+            progressStage: "synthesizing",
+            errorCode: null,
+            attemptEpoch: 0,
+            recentEvents: [],
+          }),
+          { status: 200 },
+        ),
+      );
+      vi.stubGlobal("fetch", fetchMock);
+      const harness = createHarness(undefined, "queued", undefined, true);
+
+      await vi.waitFor(() => {
+        expect(harness.controller.getSnapshot()).toMatchObject({
+          runStatus: "completed",
+          connectionMode: "finalizing",
+          liveState: { terminal: { status: "completed" } },
+        });
+      });
+
+      harness.unsubscribe();
+    });
+
+    it("recovers stage from polling after a new attempt begins with an activity event", async () => {
+      const pending = deferred<PollRunResult>();
+      const pollRun = vi.fn<PollRun>().mockReturnValue(pending.promise);
+      const harness = createHarness(pollRun);
+      harness.source.emit(
+        "stage",
+        { attemptEpoch: 1, stage: "synthesizing" },
+        "1-0",
+      );
+      harness.source.emit(
+        "activity",
+        {
+          attemptEpoch: 2,
+          activity: { type: "internal_search.started", queryCount: 1 },
+        },
+        "2-0",
+      );
+
+      expect(harness.controller.getSnapshot().liveState).toMatchObject({
+        currentAttemptEpoch: 2,
+        progressStage: null,
+      });
+
+      pending.resolve(runResult("running", "retrieving", null, [], 2));
+      await flushPromises();
+
+      expect(harness.controller.getSnapshot().liveState.progressStage).toBe(
+        "retrieving",
+      );
 
       harness.unsubscribe();
     });
