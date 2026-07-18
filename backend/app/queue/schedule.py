@@ -38,7 +38,7 @@ from app.collection.sources.fetch_cadence import FetchCadence
 # 1 分間隔 — article_completion stage の DB 駆動 poll / lease sweep
 CRON_HTML_FETCH = "* * * * *"
 
-# 1 分間隔 — curation / assessment Redis Stream health の継続観測
+# 1 分間隔 — acquisition / completion / curation / assessment Stream health の継続観測
 CRON_PIPELINE_QUEUE_HEALTH = "* * * * *"
 
 # 30 分間隔 — curation back-fill (Stage 3 救済、:00 / :30 起動)

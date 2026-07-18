@@ -15,6 +15,9 @@
   - ``status='running' AND leased_until <= NOW`` のみ ``open`` に戻る
   - active lease (``leased_until > NOW``) と非 running 状態は不変
   - 二重起動 idempotent (1 度戻したものは 2 度目で 0 件)
+- accepted risk:
+  - claim → sweep → reclaim 後に起動した古い ID-only message は current attempt を
+    Ready に採用し、Service 実行へ進む
 
 テスト方針 (持続可能性):
 - pending を直接 INSERT し、Fetcher / NewsSource / ArticleAcquisitionService 経由しない
@@ -33,6 +36,7 @@ from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.collection.article_acquisition.repository import IncompleteArticleRepository
+from app.collection.article_completion.repository import ArticleCompletionRepository
 from app.collection.domain.canonical_article_url import CanonicalArticleUrl
 from app.collection.domain.observed_article import (
     ObservedArticle,
@@ -46,6 +50,7 @@ from app.models.news_source import NewsSource
 from app.queue.tasks import completion as dispatch_module
 from app.queue.tasks.completion import (
     dispatch_html_fetch_jobs,
+    scrape_html_body,
     sweep_expired_leases,
 )
 from app.shared.security.safe_url import SafeUrl
@@ -421,3 +426,86 @@ async def test_idempotent_when_called_twice(
 
     assert first == {"swept_count": 1}
     assert second == {"swept_count": 0}
+
+
+@pytest.mark.asyncio
+async def test_old_id_only_message_adopts_current_attempt_after_reclaim(
+    session_factory: async_sessionmaker[AsyncSession],
+    db_session: AsyncSession,
+    sample_hn_source: NewsSource,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """sweep後に起動した古いID-only messageはreclaim済みattempt=2で実行へ進む。"""
+    reclaim_at = datetime.now(UTC)
+    incomplete_article_id = await _make_pending(
+        db_session,
+        sample_hn_source,
+        url="https://example.com/sweep/old-message-adopts-current-attempt",
+        status="open",
+        ready_at=reclaim_at - timedelta(minutes=10),
+    )
+    repository = ArticleCompletionRepository(db_session)
+
+    first_claim = await repository.claim_ready_batch(
+        limit=1,
+        now=reclaim_at - timedelta(minutes=6),
+        leased_until=reclaim_at - timedelta(minutes=1),
+    )
+    await db_session.commit()
+    after_first_claim = await _select_pending(db_session, incomplete_article_id)
+    first_snapshot = (after_first_claim.status, after_first_claim.attempt_count)
+    old_transport_payload = incomplete_article_id
+
+    swept_count = await repository.sweep_expired_leases(now=reclaim_at)
+    await db_session.commit()
+    after_sweep = await _select_pending(db_session, incomplete_article_id)
+    sweep_snapshot = (
+        after_sweep.status,
+        after_sweep.attempt_count,
+        after_sweep.ready_at,
+    )
+
+    second_claim = await repository.claim_ready_batch(
+        limit=1,
+        now=reclaim_at,
+        leased_until=reclaim_at + timedelta(minutes=5),
+    )
+    await db_session.commit()
+    after_second_claim = await _select_pending(db_session, incomplete_article_id)
+    second_snapshot = (
+        after_second_claim.status,
+        after_second_claim.attempt_count,
+    )
+
+    execute = AsyncMock(return_value=None)
+    monkeypatch.setattr(
+        "app.queue.tasks.completion.ArticleCompletionService.execute", execute
+    )
+    result = await scrape_html_body(
+        incomplete_article_id=old_transport_payload,
+        ctx=_ctx(session_factory),
+    )
+    assert execute.await_count == 1
+    adopted_ready = execute.await_args.args[0]
+
+    assert (
+        first_claim,
+        first_snapshot,
+        swept_count,
+        sweep_snapshot,
+        second_claim,
+        second_snapshot,
+        result,
+        adopted_ready.incomplete_article_id,
+        adopted_ready.attempt_count,
+    ) == (
+        [incomplete_article_id],
+        ("running", 1),
+        1,
+        ("open", 1, reclaim_at),
+        [incomplete_article_id],
+        ("running", 2),
+        None,
+        incomplete_article_id,
+        2,
+    )

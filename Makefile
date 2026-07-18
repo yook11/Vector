@@ -17,7 +17,6 @@
 # サービス分類（変更する時はここだけ触る）
 WORKERS  := worker-fetch worker-analysis worker-insights worker-agent scheduler
 PIPELINE := backend $(WORKERS)
-QUEUES   := pipeline:metadata pipeline:content pipeline:curation pipeline:assessment pipeline:embedding digest briefing agent
 
 # 統合テスト専用 Postgres を立てる compose の呼び出し前置詞。
 # project 名を worktree ごとに分離し、dev compose の project 名 (= worktree
@@ -62,11 +61,11 @@ pipeline-restart: verify-env  ## backend app code・設定・ORM 変更後の再
 pipeline-down:  ## パイプライン停止（DB/Redis は残す → データ保持）
 	docker compose stop $(PIPELINE)
 
-pipeline-status:  ## サービス状態とanalysis Stream観測
+pipeline-status:  ## サービス状態と4-stage pipeline Stream観測
 	@echo "=== Containers ==="
 	@docker compose ps --format 'table {{.Name}}\t{{.State}}\t{{.Status}}'
 	@echo
-	@echo "=== Curation / assessment Stream status ==="
+	@echo "=== 4-stage pipeline Stream status ==="
 	@docker compose exec -T backend python scripts/pipeline_queue_status.py \
 	  || echo "pipeline Stream status unavailable"
 	@echo

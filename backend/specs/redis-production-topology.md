@@ -1,6 +1,6 @@
 # Redis production topology
 
-> 日付: 2026-07-17
+> 日付: 2026-07-18
 >
 > ステータス: 初回公開前の確定構成
 
@@ -18,37 +18,57 @@ broker RedisのSSoTは`infra/redis/fly.toml`である。`noeviction`はtask entr
 追い出さない一方、`maxmemory`到達後はwriteを拒否する。このためmemory capacityは公開前gateとし、
 write rejectionを正常なbackpressureとして扱わない。
 
-## Greenfield analysis Stream topology
+## Greenfield 4-stage Stream topology
 
-現在は非公開・未デプロイで、productionの旧Redis volume、in-flight task、legacy Streamを
-引き継がない。初回deployでliveなanalysis Streamとして作るのは次の2本だけである。
+現在は非公開・未デプロイのgreenfieldで、productionの旧Redis volume、in-flight task、
+legacy Streamを引き継がない。初回deployでliveにするpipeline stage Streamは次の4本である。
 
 | Stage | Stream | Group | Consumer | `MAXLEN` |
 |---|---|---|---|---|
+| acquisition | `pipeline:acquisition` | `taskiq` | `broker_content` | approximate `~10,000` |
+| completion | `pipeline:completion` | `taskiq` | `broker_content` | approximate `~10,000` |
 | curation | `pipeline:curation` | `taskiq` | `broker_analysis` | approximate `~10,000` |
 | assessment | `pipeline:assessment` | `taskiq` | `broker_analysis` | approximate `~10,000` |
 
-旧`pipeline:analysis`はproductionに存在しない構成とし、dual-read、3 Stream互換期間、
-legacy migrationは不要であり、migrationを行わない。旧volumeを再利用する必要が生じた場合は
-このgreenfield前提を適用せず、producer停止、drain、ACL、rollbackを含む別migrationを定義する。
+`pipeline:metadata`は記事データの処理stageではなく、source dispatch、completion poller、
+lease sweepを実行するcontrol Streamである。本sliceではこの名前を維持し、後続rename sliceで
+`pipeline:dispatch`へ全面改名する。
 
-`pipeline:curation`と`pipeline:assessment`は論理的には分離されるが、1つの
-`broker_analysis`と1つのTaskiq worker process、共有concurrency 10でconsumeする。
-したがってstage別concurrency、優先度、backpressure、process failure isolationはまだ分離しない。
+legacy `pipeline:content`はproductionに作成せず、entryやgroupを引き継がない。dual-readや
+migrationを行わない。旧volumeを再利用する必要が生じた場合は、このgreenfield前提を適用せず、
+producer停止、drain、ACL、rollbackを含む別migrationを定義する。
+
+旧`pipeline:analysis`もproductionに存在しない構成とし、dual-read、3 Stream互換期間、
+legacy migrationは不要であり、migrationを行わない。
+
+collectionの2 Streamは1つの`broker_content`と1つのTaskiq worker process、共有concurrency 5で
+consumeする。analysisの2 Streamも1つの`broker_analysis`と1つのTaskiq worker process、
+共有concurrency 10でconsumeする。Stream、consumer group state、retention、lag / pending / ageは
+stage別に分かれるが、stage別concurrency、DB pool、backpressure、process failure isolationは
+分離しない。
 
 ## ACL boundary
 
 Redis ACLはapp境界に合わせる。
 
 - `core`: `~* &* +@all`を維持する。
-- `collect`: `pipeline:metadata` / `pipeline:content`の既存権限に加え、
-  `pipeline:curation`へのproducer権限だけを持つ。
-- `collect`には`pipeline:assessment`、assessment用autoclaim lock、embedding、maintenance、
-  hold / budget keyを公開しない。
-- result backendの`taskiq:*`とmetadata/content用autoclaim lockは既存どおり維持する。
+- `collect`の許可key patternは次のexact setとする。
+  - `~pipeline:metadata`
+  - `~pipeline:acquisition`
+  - `~pipeline:completion`
+  - `~pipeline:curation`
+  - `~autoclaim:taskiq:pipeline:metadata`
+  - `~autoclaim:taskiq:pipeline:acquisition`
+  - `~autoclaim:taskiq:pipeline:completion`
+  - `~taskiq:*`
+- `collect`のcommand surfaceは`resetchannels +@connection +@read +@write +@stream
+  +@scripting -@dangerous`を維持する。
+- `collect`にはlegacy `pipeline:content`、`pipeline:assessment`、`pipeline:embedding`、
+  `pipeline:maintenance`と、それらのautoclaim lockを許可しない。hold / budget / rate-limit keyも
+  公開しない。
 
-初回公開時の拒否側確認には`ACL DRYRUN`を使う。形式不正なraw `XADD`をproduction Streamへ
-書き込む検証は行わない。
+このrepository変更はlive ACL mutationやdeployを行わない。初回公開時の許可・拒否確認には
+`ACL DRYRUN`を使い、形式不正なraw `XADD`をproduction Streamへ書き込む検証は行わない。
 
 ## Stream healthの用語
 
@@ -75,7 +95,12 @@ retained history budgetを持つ。2026-07-17のlocal実測を線形換算した
 2 Stream合計約9.84 MBで、旧1 Stream約4.92 MBとの比較では約4.92 MB増である。
 これはstageごとに履歴とtrim budgetを分離するためのmemory trade-offである。
 
-この値はhard upper boundではない。理由は次のとおり。
+collectionは1 → 2 Streamへ分割され、retained history budgetが約10,000から合計約20,000
+entriesになる。2026-07-18のlocal `pipeline:content`実測5,108,644 bytesを基準にすると、
+追加1 Stream分は約4.9 MiBのplanning estimateである。completion payloadはint単体のため、
+実値は各新Streamの`MEMORY USAGE`で補正する。
+
+これらの値はhard upper boundではない。理由は次のとおり。
 
 - `MAXLEN`はapproximate trimであり、entry数が一時的に指定値を超え得る。
 - `queue_name` labelやpayload size、allocator、consumer group metadataの大きさが一定ではない。
@@ -97,7 +122,8 @@ production broker Redisは256 MB / `noeviction`である。公開前とdeploy後
 
 `used_memory / maxmemory >= 80%`なら公開を止め、operatorがcapacity対応を判断する。このsliceは
 Redis memoryの継続exporterを追加しないため、80%はdeploy時と手動diagnosticのcapacity gateであり、
-継続alertではない。
+継続alertではない。初回releaseはmetadata rename slice 後にだけ行い、deploy前後のworker RSSと
+上記Redis値を最終名のtopologyで比較する。
 
 ## Developmentとのfailure semantics差
 
@@ -110,10 +136,11 @@ devの`redis-rl`は64 MB / `volatile-ttl`で、broker Redisとは物理分離す
 
 ## Monitoring / operator contract
 
-`observe_pipeline_queue_health`はmaintenance workerから毎分、curation / assessmentを独立して読む。
-full snapshot成功時だけretained entries、lag、pending、3種類のenqueue age、
-`observation_up=1`、Redis TIME由来の`observation_timestamp`を記録する。失敗時は該当stageの
-`observation_up=0`だけを更新し、直前のdata gaugeとtimestampを現在値として上書きしない。
+`observe_pipeline_queue_health`はmaintenance workerから毎分、4-stageのacquisition / completion /
+curation / assessmentを独立して読む。full snapshot成功時だけretained entries、lag、pending、
+3種類のenqueue age、`observation_up=1`、Redis TIME由来の`observation_timestamp`を記録する。
+失敗時は該当stageの`observation_up=0`だけを更新し、直前のdata gaugeとtimestampを現在値として
+上書きしない。Stream / group欠落やRedis接続失敗を0件として扱わない。
 
 productionのLogfireでは`service.name=vector-worker-maintenance`、
 `deployment.environment.name=production`、stageで絞り、次を監視する。
@@ -122,25 +149,77 @@ productionのLogfireでは`service.name=vector-worker-maintenance`、
 2. `observation_up=0`が記録される。
 3. successful `observation_timestamp`が3分間更新されない。
 
-business queue ageのthresholdはbaseline取得後に決める。これらのLogfire alert作成とproduction export確認は
-初回公開のexternal acceptance gateであり、このrepository変更だけでは作成済みとみなさない。
+completionはDB claim時にattemptを加算し、lease 300秒より遅れて実行されると未実行でもretry budgetを
+消費し得る。このため`oldest_outstanding_enqueue_age >= 120`秒をwarning、`>= 300`秒をcriticalとする。
+`vector.completion.lease_swept > 0`もlease失効が実際に起きたcritical signalである。acquisitionのageは
+leaseと結合しないworker競合指標として扱い、curation / assessmentのbusiness thresholdはbaseline取得後に
+決める。
+
+これらのLogfire alert作成とproduction export確認は初回公開のexternal acceptance gateであり、
+このrepository変更だけでは作成済みとみなさない。
 
 手動診断は`make pipeline-status`から`backend/scripts/pipeline_queue_status.py`を呼び、periodic samplerと
 同じsnapshot helperを使う。通常診断はPEL全体を走査し得る`XPENDING ... IDLE`を実行しない。
 pending停滞時だけ`--check-idle`を明示し、idle 600秒以上のentryが少なくとも1件あるかを確認する。
 これはmaximum idle値ではない。
 
+## Admin manual fetch
+
+`POST /api/v1/admin/pipeline/fetch`のsource ID指定経路はbest-effortであり、inactive sourceの意図的な
+単発fetchを許可する。`202 Accepted`と`dispatchedCount`はenqueue受付のみで、実行、完了、耐久性を
+保証しない。inactive sourceはcronで自動再投入されないため、operatorはrequest時刻とsource IDに対応する
+実行証跡を確認し、queue滞留の解消後も証跡がなければ再実行する。
+
+durable rowはdedupされるが、再実行時の外部HTTP取得と新規記事のAI処理は再発し得る。multi-sourceの
+enqueueは非atomicなループで、一部だけenqueue済みになり得る。durable job ID / statusの永続化が
+必要になった場合は別sliceで設計する。
+
+## Handoff loss
+
+acquisition / completionはDB commit後に`curate_content.kiq()`を呼ぶため、そのhandoffが失われても
+元taskのtransport replayでは救済されない。回復経路は`backfill_curations`だが、無条件ではない。
+
+- `curation:hold`中はrun全体をskipする。
+- `backfill_curations_enabled` kill switchがoffなら実行しない。
+- 日次予算が残る場合だけ再投入する。
+- 対象は作成から30分より古く、7日より新しいchild-NULL記事に限る。
+
+## Collection group recovery
+
+collection group欠落時はretained historyを無条件にreplayしない。`acquire_source`は過去結果の再生ではなく
+live feed再取得であり、最大約10,000 retained entriesのacquisition replayは外部HTTP burstと、その時点で
+新しく見つかった記事のAI処理を発生させる。completionもDB precondition / CASで最終状態は守るが、
+古いmessageによる重複HTTP実行は防げない。
+
+復旧は次の順序で行う。
+
+1. schedulerとworker-fetch containerを停止する。metadata / content両programを止め、復旧中のadmin fetchを
+   禁止する。
+2. acquisition / completion両Streamのretained entries、PEL、DBのopen / running状態を確認する。
+3. live feed再取得、HTTP burst、重複実行、新規記事のAI costを明示し、replayを受容するかoperatorが承認する。
+4. worker-fetchを再起動し、lag / pending / completion lease sweep / 外部fetch失敗を監視する。
+5. 安定後にschedulerを再開し、最後に admin fetchを解禁する。
+
+復旧のために未処理entryへ`DEL`や`XTRIM`を使わない。supervisorが先に再起動した場合は、既に一部replay
+済みとして残状態を再確認する。
+
 ## 運用境界
 
 - 本文書変更はdeploy、live ACL mutation、legacy key削除、Logfire alert作成を実行しない。
 - group欠落はself-healではなくAI quota / costを伴い得るincidentとして扱う。
-- replay / stale PEL recoveryの詳細は
-  `backend/specs/curation-assessment-queue-separation-slice.md`の§8に従う。
-- 初回公開後に戻せるのは、final ACL、2 Stream routing、multi-stream consumerを維持するrevisionだけである。
+- analysis replay / stale PEL recoveryの詳細は
+  `backend/specs/curation-assessment-queue-separation-slice.md`の§8、collection固有条件は上記runbookに従う。
+- `pipeline:metadata`から`pipeline:dispatch`へのrename sliceを完了するまで初回production deployを行わない。
+- release acceptanceはrename slice後の最終topologyで、ACL DRYRUN、collect credentials smoke、4-stage
+  sampler freshness、capacity / worker RSS gateを確認してから公開する。
+- ACL cutover後のrollbackはfinal Streamを読める互換imageに限定し、そのdigestより前はforward-fixとする。
 
 ## 非目標
 
 - DB schema、API response、認証・認可の変更
-- curation / assessment worker、VM、containerの分割
+- collectionまたはcuration / assessment worker、VM、containerの分割
+- completion payloadへのattempt token追加やclaim / lease / attempt semanticsの変更
+- admin manual fetchのdurable job ID / status永続化
+- 本slice内での`pipeline:metadata` rename
 - docker-composeから`redis-rl`を削除すること
-- local legacy Streamの自動削除
+- local legacy Streamの自動`DEL` / `XTRIM`

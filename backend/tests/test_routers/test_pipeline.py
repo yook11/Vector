@@ -1,5 +1,9 @@
 """/api/v1/admin/pipeline ルーターエンドポイントのテスト。"""
 
+from __future__ import annotations
+
+import unicodedata
+from typing import Any
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -9,6 +13,25 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.main import app
 from app.models.news_source import NewsSource, SourceType
 from app.queue.messages.collection import AcquireSourceTaskInput
+
+_FETCH_PATH = "/api/v1/admin/pipeline/fetch"
+
+
+def _fetch_openapi_operation() -> dict[str, Any]:
+    app.openapi_schema = None
+    return app.openapi()["paths"][_FETCH_PATH]["post"]
+
+
+def _normalized(text: str) -> str:
+    return unicodedata.normalize("NFKC", text).casefold().replace("`", "")
+
+
+def _contains_any(text: str, choices: tuple[str, ...]) -> bool:
+    return any(choice in text for choice in choices)
+
+
+def _contains_all(text: str, terms: tuple[str, ...]) -> bool:
+    return all(term in text for term in terms)
 
 
 @pytest.mark.asyncio
@@ -78,6 +101,39 @@ class TestFetchNews:
             assert isinstance(arg, AcquireSourceTaskInput)
             assert arg.id in source_ids
             assert arg.name in {"VentureBeat", "TechCrunch"}
+
+    async def test_fetch_with_source_ids_can_enqueue_an_inactive_source(
+        self,
+        admin_client: AsyncClient,
+        db_session: AsyncSession,
+    ) -> None:
+        """inactive sourceの意図的な単発fetch用途を維持する。"""
+        source = NewsSource(
+            name="InactiveManualFetch",
+            source_type=SourceType.RSS,
+            site_url="https://inactive-manual-fetch.example.com",
+            endpoint_url="https://inactive-manual-fetch.example.com/feed/",
+            is_active=False,
+        )
+        db_session.add(source)
+        await db_session.commit()
+        await db_session.refresh(source)
+
+        with patch("app.queue.tasks.acquisition.acquire_source") as mock_task:
+            mock_task.kiq = AsyncMock()
+            response = await admin_client.post(
+                _FETCH_PATH,
+                json={"sourceIds": [source.id]},
+            )
+
+        assert (
+            response.status_code,
+            response.json()["message"],
+            response.json()["dispatchedCount"],
+        ) == (202, "Fetch tasks submitted", 1)
+        mock_task.kiq.assert_awaited_once_with(
+            AcquireSourceTaskInput(id=source.id, name=str(source.name))
+        )
 
     async def test_fetch_with_source_ids_at_max_length(
         self, admin_client: AsyncClient
@@ -156,6 +212,67 @@ def test_fetch_request_openapi_declares_postgresql_integer_item_range() -> None:
         "minimum": array_schema["items"].get("minimum"),
         "maximum": array_schema["items"].get("maximum"),
     } == {"minimum": 1, "maximum": 2_147_483_647}
+
+
+def test_fetch_openapi_preserves_accepted_response_schema() -> None:
+    operation = _fetch_openapi_operation()
+    response_ref = operation["responses"]["202"]["content"]["application/json"][
+        "schema"
+    ]["$ref"]
+    schema = app.openapi()["components"]["schemas"]["FetchResponse"]
+
+    assert response_ref == "#/components/schemas/FetchResponse"
+    assert set(schema["properties"]) == {"message", "dispatchedCount", "jobId"}
+    assert schema["required"] == ["message"]
+
+
+def test_fetch_openapi_documents_the_complete_best_effort_contract() -> None:
+    description = _normalized(_fetch_openapi_operation()["description"])
+
+    acceptance_only = (
+        _contains_any(description, ("best-effort", "best effort"))
+        and _contains_all(
+            description,
+            ("202", "dispatchedcount", "enqueue", "実行", "完了", "耐久"),
+        )
+        and _contains_any(description, ("保証しない", "保証されない"))
+    )
+    inactive_manual_recovery = _contains_all(
+        description,
+        (
+            "inactive",
+            "cron",
+            "operator",
+            "request",
+            "source id",
+            "実行証跡",
+            "滞留",
+            "再実行",
+        ),
+    ) and _contains_any(
+        description,
+        ("自動再投入されない", "自動再投入しない", "自動では再投入されない"),
+    )
+    retry_cost = _contains_all(
+        description,
+        ("durable", "dedup", "http", "ai"),
+    ) and _contains_any(description, ("再発", "再び", "繰り返"))
+    partial_enqueue = _contains_all(
+        description,
+        ("atomic", "一部", "enqueue"),
+    ) and _contains_any(description, ("非 atomic", "非atomic", "non-atomic"))
+    durable_status_non_goal = _contains_all(
+        description,
+        ("job id", "status", "永続", "別 slice"),
+    )
+
+    assert (
+        acceptance_only,
+        inactive_manual_recovery,
+        retry_cost,
+        partial_enqueue,
+        durable_status_non_goal,
+    ) == (True, True, True, True, True)
 
 
 @pytest.mark.asyncio

@@ -5,7 +5,7 @@ from __future__ import annotations
 import importlib
 from dataclasses import fields
 from types import ModuleType
-from typing import Any
+from typing import Any, get_args
 
 import pytest
 from redis.exceptions import ConnectionError as RedisConnectionError
@@ -171,15 +171,23 @@ class _RecordingRedis:
         return self.idle_result
 
 
-def test_pipeline_queue_targets_are_the_fixed_two_stage_contracts() -> None:
+def test_pipeline_queue_targets_and_stage_vocabulary_are_fixed() -> None:
     module = _health_module()
 
-    assert tuple(
-        (target.stage, target.stream, target.group)
-        for target in module.PIPELINE_QUEUE_TARGETS
+    assert (
+        get_args(module.StreamHealthStage),
+        tuple(
+            (target.stage, target.stream, target.group)
+            for target in module.PIPELINE_QUEUE_TARGETS
+        ),
     ) == (
-        ("curation", "pipeline:curation", "taskiq"),
-        ("assessment", "pipeline:assessment", "taskiq"),
+        ("acquisition", "completion", "curation", "assessment"),
+        (
+            ("acquisition", "pipeline:acquisition", "taskiq"),
+            ("completion", "pipeline:completion", "taskiq"),
+            ("curation", "pipeline:curation", "taskiq"),
+            ("assessment", "pipeline:assessment", "taskiq"),
+        ),
     )
 
 

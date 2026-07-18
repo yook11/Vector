@@ -1,4 +1,6 @@
-"""curation / assessment Redis Stream のread-only health snapshot。"""
+"""acquisition / completion / curation / assessment の4 stageを読む
+Redis Stream health snapshot。
+"""
 
 from __future__ import annotations
 
@@ -9,7 +11,12 @@ from typing import Literal, NoReturn
 from redis.asyncio import Redis
 from redis.exceptions import RedisError, ResponseError
 
-StreamHealthStage = Literal["curation", "assessment"]
+StreamHealthStage = Literal[
+    "acquisition",
+    "completion",
+    "curation",
+    "assessment",
+]
 StreamHealthFailureReason = Literal[
     "stream_missing",
     "group_missing",
@@ -58,6 +65,16 @@ class StreamHealthError(RuntimeError):
 
 
 PIPELINE_QUEUE_TARGETS = (
+    StreamHealthTarget(
+        stage="acquisition",
+        stream="pipeline:acquisition",
+        group="taskiq",
+    ),
+    StreamHealthTarget(
+        stage="completion",
+        stream="pipeline:completion",
+        group="taskiq",
+    ),
     StreamHealthTarget(
         stage="curation",
         stream="pipeline:curation",

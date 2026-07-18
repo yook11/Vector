@@ -519,3 +519,50 @@ async def test_state_transitions_ignore_stale_attempt(
     row = await _select_pending(db_session, incomplete_article_id)
     assert row.status == "running"
     assert row.attempt_count == target.attempt_count + 1
+
+
+@pytest.mark.asyncio
+async def test_schedule_retry_ignores_stale_attempt(
+    db_session: AsyncSession, sample_source: NewsSource
+) -> None:
+    """古い Ready は current running attempt の retry 時刻を変更できない。"""
+    incomplete_article_id = await _enqueue(
+        db_session,
+        source_id=sample_source.id,
+        source_name=sample_source.name,
+        url="https://example.com/p/stale-retry",
+        ready_at=datetime.now(UTC) - timedelta(seconds=1),
+    )
+    await db_session.commit()
+    stale_ready = await _claim_one(db_session, incomplete_article_id)
+    await db_session.execute(
+        update(IncompleteArticleORM)
+        .where(IncompleteArticleORM.id == incomplete_article_id)
+        .values(attempt_count=stale_ready.attempt_count + 1)
+    )
+    await db_session.commit()
+    current = await _select_pending(db_session, incomplete_article_id)
+    current_ready_at = current.ready_at
+    current_leased_until = current.leased_until
+
+    updated = await _repo(db_session).schedule_retry(
+        stale_ready,
+        ready_at=datetime.now(UTC) + timedelta(minutes=15),
+        now=datetime.now(UTC),
+    )
+    await db_session.commit()
+
+    row = await _select_pending(db_session, incomplete_article_id)
+    assert (
+        updated,
+        row.status,
+        row.attempt_count,
+        row.ready_at,
+        row.leased_until,
+    ) == (
+        False,
+        "running",
+        stale_ready.attempt_count + 1,
+        current_ready_at,
+        current_leased_until,
+    )

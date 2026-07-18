@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import ast
 import re
 import shlex
 import tomllib
@@ -16,6 +17,9 @@ _REDIS_TOPOLOGY_SPEC = (
     _REPOSITORY_ROOT / "backend" / "specs" / "redis-production-topology.md"
 )
 _COMPOSE_FILE = _REPOSITORY_ROOT / "docker-compose.yml"
+_FLY_COLLECT_CONFIG = _REPOSITORY_ROOT / "backend" / "fly.collect.toml"
+_FETCH_SUPERVISOR_CONFIG = _REPOSITORY_ROOT / "backend" / "supervisord" / "fetch.conf"
+_BROKERS_MODULE = _REPOSITORY_ROOT / "backend" / "app" / "queue" / "brokers.py"
 
 
 def _required_text(path: Path) -> str:
@@ -25,24 +29,6 @@ def _required_text(path: Path) -> str:
 
 def _normalized(text: str) -> str:
     return unicodedata.normalize("NFKC", text).casefold()
-
-
-def _makefile_words(variable: str) -> set[str]:
-    lines = _required_text(_MAKEFILE).splitlines()
-    for index, line in enumerate(lines):
-        match = re.match(rf"^{re.escape(variable)}\s*:?=\s*(?P<value>.*)$", line)
-        if match is None:
-            continue
-
-        value_parts = [match.group("value")]
-        while value_parts[-1].rstrip().endswith("\\"):
-            value_parts[-1] = value_parts[-1].rstrip()[:-1]
-            index += 1
-            assert index < len(lines), f"Makefile variable {variable} is incomplete"
-            value_parts.append(lines[index].strip())
-        return set(shlex.split(" ".join(value_parts)))
-
-    raise AssertionError(f"Makefile variable {variable} is missing")
 
 
 def _make_target(target: str) -> str:
@@ -102,6 +88,42 @@ def _contains_any(text: str, choices: tuple[str, ...]) -> bool:
     return any(choice in text for choice in choices)
 
 
+def _comment_text(path: Path) -> str:
+    return "\n".join(
+        line.lstrip()[1:].strip()
+        for line in _required_text(path).splitlines()
+        if line.lstrip().startswith("#")
+    )
+
+
+def _module_docstring(path: Path) -> str:
+    docstring = ast.get_docstring(ast.parse(_required_text(path)))
+    assert docstring is not None, f"module docstring is missing: {path}"
+    return docstring
+
+
+def _markdown_row_containing(text: str, token: str) -> str:
+    row = next(
+        (
+            line
+            for line in text.splitlines()
+            if line.lstrip().startswith("|") and token in line
+        ),
+        None,
+    )
+    assert row is not None, f"markdown topology row is missing: {token}"
+    return _normalized(row)
+
+
+def _paragraph_containing(text: str, token: str) -> str:
+    paragraph = next(
+        (paragraph for paragraph in re.split(r"\n\s*\n", text) if token in paragraph),
+        None,
+    )
+    assert paragraph is not None, f"markdown paragraph is missing: {token}"
+    return _normalized(paragraph)
+
+
 def _compose_comment_text() -> str:
     return "\n".join(
         line.lstrip()[1:].strip()
@@ -124,13 +146,10 @@ def _worker_analysis_comment_context() -> str:
     return "\n".join(lines[max(0, service_line - 12) : service_line])
 
 
-def test_makefile_observes_split_analysis_streams_without_legacy_stream() -> None:
-    queues = _makefile_words("QUEUES")
+def test_makefile_does_not_keep_dead_queues_variable() -> None:
+    makefile = _required_text(_MAKEFILE)
 
-    assert {
-        "pipeline:curation",
-        "pipeline:assessment",
-    }.issubset(queues) and "pipeline:analysis" not in queues
+    assert re.search(r"(?m)^\s*QUEUES\s*(?::=|\?=|\+=|=)", makefile) is None
 
 
 def test_pipeline_status_delegates_queue_semantics_to_backend_adapter() -> None:
@@ -160,6 +179,21 @@ def test_pipeline_status_does_not_call_retained_entries_queue_depth() -> None:
     assert not _contains_any(target, ("queue depth", "backlog", "キュー深度"))
 
 
+def test_pipeline_status_names_the_full_four_stage_pipeline() -> None:
+    target = _normalized(_make_target("pipeline-status"))
+
+    assert (
+        "analysis stream観測" not in target
+        and "curation / assessment stream status" not in target
+        and "pipeline" in target
+        and "stream" in target
+        and _contains_any(
+            target,
+            ("4-stage", "4 stage", "4段", "四段", "4ステージ", "全4"),
+        )
+    )
+
+
 def test_collect_redis_acl_has_only_required_queue_and_taskiq_key_surfaces() -> None:
     key_patterns = {
         token for token in _redis_acl_tokens("collect") if token.startswith("~")
@@ -167,10 +201,12 @@ def test_collect_redis_acl_has_only_required_queue_and_taskiq_key_surfaces() -> 
 
     assert key_patterns == {
         "~pipeline:metadata",
-        "~pipeline:content",
+        "~pipeline:acquisition",
+        "~pipeline:completion",
         "~pipeline:curation",
         "~autoclaim:taskiq:pipeline:metadata",
-        "~autoclaim:taskiq:pipeline:content",
+        "~autoclaim:taskiq:pipeline:acquisition",
+        "~autoclaim:taskiq:pipeline:completion",
         "~taskiq:*",
     }
 
@@ -235,6 +271,60 @@ def test_architecture_states_visibility_and_shared_resource_boundaries() -> None
     )
 
 
+def test_architecture_describes_collection_control_and_multistream_worker() -> None:
+    section = _normalized(
+        _markdown_section(_required_text(_ARCHITECTURE_DOC), "非同期パイプライン")
+    )
+
+    assert (
+        all(
+            term in section
+            for term in (
+                "pipeline:metadata",
+                "pipeline:acquisition",
+                "pipeline:completion",
+                "broker_content",
+                "taskiq",
+                "dispatch",
+                "acquisition",
+                "completion",
+                "concurrency 5",
+            )
+        )
+        and _contains_any(section, ("control", "制御", "sweep"))
+        and _contains_any(section, ("共有 worker", "共有worker", "shared worker"))
+        and _contains_any(section, ("1 process", "1プロセス", "1つの process"))
+    )
+
+
+def test_architecture_separates_collection_visibility_but_shares_capacity() -> None:
+    section = _normalized(
+        _markdown_section(_required_text(_ARCHITECTURE_DOC), "非同期パイプライン")
+    )
+
+    assert (
+        all(
+            term in section
+            for term in (
+                "pipeline:acquisition",
+                "pipeline:completion",
+                "stream",
+                "group",
+                "age",
+                "db pool",
+                "backpressure",
+            )
+        )
+        and _contains_any(section, ("retention", "retained", "保持", "maxlen"))
+        and _contains_any(section, ("worker slot", "worker の slot"))
+        and _contains_any(
+            section,
+            ("failure domain", "failure isolation", "障害境界", "障害分離"),
+        )
+        and _contains_any(section, ("共有する", "共有した", "共有の", "shared"))
+    )
+
+
 def test_redis_topology_spec_names_greenfield_two_stream_live_topology() -> None:
     spec = _normalized(_required_text(_REDIS_TOPOLOGY_SPEC))
 
@@ -256,6 +346,110 @@ def test_redis_topology_spec_names_greenfield_two_stream_live_topology() -> None
                 "移行不要",
                 "移行を行わない",
             ),
+        )
+    )
+
+
+def test_redis_topology_spec_records_all_four_stage_stream_rows() -> None:
+    spec = _required_text(_REDIS_TOPOLOGY_SPEC)
+    expected_consumers = {
+        "pipeline:acquisition": "broker_content",
+        "pipeline:completion": "broker_content",
+        "pipeline:curation": "broker_analysis",
+        "pipeline:assessment": "broker_analysis",
+    }
+
+    rows = {
+        stream: _markdown_row_containing(spec, stream) for stream in expected_consumers
+    }
+
+    assert {
+        stream: (
+            "taskiq" in row,
+            "10,000" in row,
+            expected_consumers[stream] in row,
+        )
+        for stream, row in rows.items()
+    } == {stream: (True, True, True) for stream in expected_consumers}
+
+
+def test_redis_topology_spec_records_metadata_control_and_greenfield_legacy() -> None:
+    spec = _required_text(_REDIS_TOPOLOGY_SPEC)
+    metadata = _paragraph_containing(spec, "pipeline:metadata")
+    legacy_content = _paragraph_containing(spec, "pipeline:content")
+
+    assert (
+        "dispatch" in metadata
+        and _contains_any(metadata, ("control", "制御", "sweep"))
+        and _contains_any(legacy_content, ("legacy", "旧stream", "旧 stream"))
+        and _contains_any(
+            legacy_content,
+            ("作らない", "作成しない", "存在しない", "引き継がない"),
+        )
+        and _contains_any(
+            legacy_content,
+            ("migrationを行わない", "migration は行わない", "移行しない"),
+        )
+    )
+
+
+def test_redis_topology_spec_records_final_collect_acl_boundary() -> None:
+    section = _normalized(
+        _markdown_section(_required_text(_REDIS_TOPOLOGY_SPEC), "ACL boundary")
+    )
+    allowed = (
+        "~pipeline:metadata",
+        "~pipeline:acquisition",
+        "~pipeline:completion",
+        "~pipeline:curation",
+        "~autoclaim:taskiq:pipeline:metadata",
+        "~autoclaim:taskiq:pipeline:acquisition",
+        "~autoclaim:taskiq:pipeline:completion",
+        "~taskiq:*",
+    )
+
+    assert (
+        all(pattern in section for pattern in allowed)
+        and all(
+            stream in section
+            for stream in (
+                "pipeline:content",
+                "pipeline:assessment",
+                "pipeline:embedding",
+                "pipeline:maintenance",
+            )
+        )
+        and _contains_any(section, ("拒否", "許可しない", "公開しない", "削除"))
+        and all(term in section for term in ("core", "~*", "&*", "+@all"))
+    )
+
+
+def test_topology_spec_records_four_stage_freshness_and_completion_alerts() -> None:
+    section = _normalized(
+        _markdown_section(
+            _required_text(_REDIS_TOPOLOGY_SPEC),
+            "Monitoring / operator contract",
+        )
+    )
+
+    assert (
+        all(
+            stage in section
+            for stage in ("acquisition", "completion", "curation", "assessment")
+        )
+        and _contains_any(section, ("4-stage", "4 stage", "4段", "4ステージ"))
+        and _contains_any(section, ("3分", "3 分", "3 minutes"))
+        and all(
+            term in section
+            for term in (
+                "observation_up",
+                "observation_timestamp",
+                "120",
+                "300",
+                "warning",
+                "critical",
+                "vector.completion.lease_swept",
+            )
         )
     )
 
@@ -302,6 +496,88 @@ def test_redis_topology_spec_explains_approximate_maxlen_and_ghost_pel() -> None
     )
 
 
+def test_redis_topology_spec_records_collection_replay_safety_runbook() -> None:
+    spec = _normalized(_required_text(_REDIS_TOPOLOGY_SPEC))
+
+    stop_boundary = (
+        all(
+            term in spec
+            for term in ("scheduler", "worker-fetch", "metadata", "content")
+        )
+        and _contains_any(spec, ("停止", "stop"))
+        and all(term in spec for term in ("admin", "fetch", "禁止"))
+    )
+    state_and_cost_gate = (
+        all(
+            term in spec
+            for term in (
+                "retained",
+                "pel",
+                "db",
+                "10,000",
+                "acquisition",
+                "http",
+                "ai",
+            )
+        )
+        and _contains_any(spec, ("live feed", "live 再取得", "live feed 再取得"))
+        and _contains_any(spec, ("重複", "duplicate"))
+        and _contains_any(spec, ("承認", "受容", "approve"))
+    )
+    restart_order_and_non_destructive_recovery = (
+        _contains_any(
+            spec,
+            ("worker-fetch を再起動", "worker-fetchを再起動", "restart worker-fetch"),
+        )
+        and _contains_any(spec, ("scheduler を再開", "schedulerを再開"))
+        and _contains_any(spec, ("最後に admin", "admin fetch を最後", "adminを最後"))
+        and all(term in spec for term in ("del", "xtrim"))
+        and _contains_any(spec, ("使わない", "使用しない", "禁止"))
+    )
+
+    assert (
+        stop_boundary,
+        state_and_cost_gate,
+        restart_order_and_non_destructive_recovery,
+    ) == (True, True, True)
+
+
+def test_redis_topology_spec_records_collection_capacity_and_release_gate() -> None:
+    spec = _normalized(_required_text(_REDIS_TOPOLOGY_SPEC))
+
+    assert (
+        "collection" in spec
+        and _contains_any(
+            spec,
+            (
+                "1 → 2 stream",
+                "1→2 stream",
+                "1本→2本",
+                "1 本 → 2 本",
+                "1本から2本",
+                "1 本から 2 本",
+            ),
+        )
+        and all(term in spec for term in ("4.9", "planning estimate", "noeviction"))
+        and _contains_any(spec, ("approximate", "近似"))
+        and "ghost pel" in spec
+        and all(
+            term in spec
+            for term in (
+                "80%",
+                "used_memory",
+                "used_memory_peak",
+                "memory usage",
+                "worker rss",
+                "rename slice",
+                "release",
+            )
+        )
+        and _contains_any(spec, ("公開を止め", "公開停止", "stop release"))
+        and _contains_any(spec, ("rename slice 後", "rename slice完了後"))
+    )
+
+
 def test_compose_comment_calls_maxlen_retained_history_not_backlog() -> None:
     comments = _normalized(_compose_comment_text())
 
@@ -330,4 +606,70 @@ def test_compose_comment_describes_analysis_broker_as_shared_stream_consumer() -
         and "assessment" in context
         and _contains_any(context, ("共有 worker", "共有worker", "shared worker"))
         and _contains_any(context, ("consume", "consumer", "購読", "読み取"))
+    )
+
+
+def test_fetch_deployment_comments_match_control_and_multistream_roles() -> None:
+    fly_comments = _normalized(_comment_text(_FLY_COLLECT_CONFIG))
+    supervisor_comments = _normalized(_comment_text(_FETCH_SUPERVISOR_CONFIG))
+
+    role_terms = (
+        "metadata",
+        "dispatch",
+        "pipeline:acquisition",
+        "pipeline:completion",
+        "broker_content",
+    )
+    shared_consumer_terms = (
+        "2 stream",
+        "2つの stream",
+        "両 stream",
+        "multi-stream",
+    )
+
+    assert (
+        all(term in fly_comments for term in role_terms)
+        and _contains_any(fly_comments, ("control", "制御", "sweep"))
+        and _contains_any(fly_comments, shared_consumer_terms)
+        and _contains_any(
+            fly_comments, ("共有 consumer", "共有consumer", "shared consumer")
+        )
+        and "broker_metadata=acquisition+dispatch" not in fly_comments
+        and "broker_content=completion" not in fly_comments
+    )
+    assert (
+        all(term in supervisor_comments for term in role_terms)
+        and _contains_any(supervisor_comments, ("control", "制御", "sweep"))
+        and _contains_any(supervisor_comments, shared_consumer_terms)
+        and _contains_any(
+            supervisor_comments,
+            ("共有 consumer", "共有consumer", "shared consumer"),
+        )
+    )
+
+
+def test_broker_module_docstring_matches_control_and_multistream_roles() -> None:
+    docstring = _normalized(_module_docstring(_BROKERS_MODULE))
+
+    assert (
+        all(
+            term in docstring
+            for term in (
+                "broker_metadata",
+                "dispatch",
+                "broker_content",
+                "acquisition",
+                "completion",
+            )
+        )
+        and _contains_any(docstring, ("control", "制御", "sweep"))
+        and _contains_any(
+            docstring,
+            ("2 stream", "2つの stream", "両 stream", "multi-stream"),
+        )
+        and _contains_any(
+            docstring, ("共有 consumer", "共有consumer", "shared consumer")
+        )
+        and "rss/hn メタデータ取得 + dispatch" not in docstring
+        and "記事単位のコンテンツ抽出" not in docstring
     )

@@ -1,8 +1,8 @@
 """taskiq broker 定義。
 
 broker:
-  - broker_metadata:  RSS/HN メタデータ取得 + dispatch
-  - broker_content:   記事単位のコンテンツ抽出
+  - broker_metadata:  dispatch / sweep control task
+  - broker_content:   acquisition / completion の2 Stream共有 consumer
   - broker_analysis:  AI 分析
   - broker_embedding: ベクトル埋め込み生成
   - broker_trend_discovery: rolling 7d Trend Discovery 実行 (cron 駆動)
@@ -91,7 +91,12 @@ def _make_broker(
 
 
 broker_metadata = _make_broker("pipeline:metadata")
-broker_content = _make_broker("pipeline:content")
+broker_content = _make_broker(
+    "pipeline:acquisition",
+    additional_streams={"pipeline:completion": ">"},
+    consumer_id="0-0",
+    unacknowledged_lock_timeout=60,
+)
 broker_analysis = _make_broker(
     "pipeline:curation",
     additional_streams={"pipeline:assessment": ">"},

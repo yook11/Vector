@@ -1,10 +1,12 @@
 """brokers.py の composition root と worker runtime 設定に関するテスト。"""
 
 import configparser
+import importlib
+import inspect
 import re
 import shlex
 from pathlib import Path
-from typing import Any
+from typing import Any, get_type_hints
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -21,6 +23,7 @@ from app.queue.lifecycle import (
     build_worker_engine,
     worker_service_name,
 )
+from app.queue.messages.collection import AcquireSourceTaskInput
 from app.queue.schedule import CADENCE_CRON
 
 # supervisord の worker 定義 (taskiq worker 起動引数の SSoT)。
@@ -51,6 +54,18 @@ def _maintenance_worker_commands() -> list[list[str]]:
         and "taskiq worker" in (command := parser[section].get("command", ""))
         and "app.queue.brokers:broker_maintenance" in command
     ]
+
+
+def _fetch_worker_commands() -> dict[str, list[str]]:
+    """fetch container の worker program を program 名から command token 列へ写す。"""
+    parser = configparser.ConfigParser(interpolation=None)
+    parser.read(_SUPERVISORD_DIR / "fetch.conf")
+    return {
+        section.removeprefix("program:"): shlex.split(command)
+        for section in parser.sections()
+        if section.startswith("program:")
+        and "taskiq worker" in (command := parser[section].get("command", ""))
+    }
 
 
 def _parse_worker_programs() -> dict[str, int | None]:
@@ -102,6 +117,173 @@ def test_analysis_broker_reads_only_stage_specific_streams() -> None:
         "unacknowledged_batch_size": 100,
         "unacknowledged_lock_timeout": 60,
     }
+
+
+def test_collection_broker_reads_only_stage_specific_streams() -> None:
+    """content broker は acquisition を主 Stream、completion だけを追加購読する。"""
+    from app.queue.brokers import broker_content
+
+    assert {
+        "queue_name": broker_content.queue_name,
+        "additional_streams": broker_content.additional_streams,
+        "consumer_group_name": broker_content.consumer_group_name,
+        "consumer_id": broker_content.consumer_id,
+        "maxlen": broker_content.maxlen,
+        "unacknowledged_batch_size": broker_content.unacknowledged_batch_size,
+        "unacknowledged_lock_timeout": broker_content.unacknowledged_lock_timeout,
+    } == {
+        "queue_name": "pipeline:acquisition",
+        "additional_streams": {"pipeline:completion": ">"},
+        "consumer_group_name": "taskiq",
+        "consumer_id": "0-0",
+        "maxlen": 10_000,
+        "unacknowledged_batch_size": 100,
+        "unacknowledged_lock_timeout": 60,
+    }
+
+
+@pytest.mark.parametrize(
+    (
+        "task_module",
+        "task_attr",
+        "expected_task_name",
+        "expected_labels",
+        "expected_payload",
+    ),
+    [
+        (
+            "app.queue.tasks.acquisition",
+            "acquire_source",
+            "acquire_source",
+            {
+                "queue_name": "pipeline:acquisition",
+                "timeout": 300,
+                "max_retries": 0,
+                "retry_on_error": False,
+            },
+            (("arg", AcquireSourceTaskInput),),
+        ),
+        (
+            "app.queue.tasks.completion",
+            "scrape_html_body",
+            "scrape_html_body",
+            {
+                "queue_name": "pipeline:completion",
+                "timeout": 60,
+                "max_retries": 0,
+                "retry_on_error": False,
+            },
+            (("incomplete_article_id", int),),
+        ),
+    ],
+    ids=["acquisition", "completion"],
+)
+def test_collection_task_keeps_stage_routing_execution_and_payload_contract(
+    task_module: str,
+    task_attr: str,
+    expected_task_name: str,
+    expected_labels: dict[str, object],
+    expected_payload: tuple[tuple[str, type[object]], ...],
+) -> None:
+    """両 task は stage 固有 Stream と既存 task name・payload・実行契約を持つ。"""
+    from app.queue.brokers import broker_content
+
+    task = getattr(importlib.import_module(task_module), task_attr)
+    signature = inspect.signature(task.original_func)
+    hints = get_type_hints(task.original_func)
+    payload = tuple(
+        (name, hints[name]) for name in signature.parameters if name != "ctx"
+    )
+    assert (task.broker, task.task_name, task.labels, payload) == (
+        broker_content,
+        expected_task_name,
+        expected_labels,
+        expected_payload,
+    )
+
+
+@pytest.mark.parametrize(
+    ("task_module", "task_attr", "expected_labels"),
+    [
+        (
+            "app.queue.tasks.acquisition",
+            "dispatch_high",
+            {
+                "timeout": 60,
+                "max_retries": 1,
+                "retry_on_error": True,
+                "schedule": [{"cron": "*/15 * * * *"}],
+            },
+        ),
+        (
+            "app.queue.tasks.acquisition",
+            "dispatch_medium",
+            {
+                "timeout": 60,
+                "max_retries": 1,
+                "retry_on_error": True,
+                "schedule": [{"cron": "0 * * * *"}],
+            },
+        ),
+        (
+            "app.queue.tasks.acquisition",
+            "dispatch_low",
+            {
+                "timeout": 60,
+                "max_retries": 1,
+                "retry_on_error": True,
+                "schedule": [{"cron": "0 */6 * * *"}],
+            },
+        ),
+        (
+            "app.queue.tasks.acquisition",
+            "dispatch_sources",
+            {"timeout": 60, "max_retries": 1, "retry_on_error": True},
+        ),
+        (
+            "app.queue.tasks.completion",
+            "dispatch_html_fetch_jobs",
+            {
+                "timeout": 30,
+                "max_retries": 1,
+                "retry_on_error": True,
+                "schedule": [{"cron": "* * * * *"}],
+            },
+        ),
+        (
+            "app.queue.tasks.completion",
+            "sweep_expired_leases",
+            {
+                "timeout": 30,
+                "max_retries": 1,
+                "retry_on_error": True,
+                "schedule": [{"cron": "* * * * *"}],
+            },
+        ),
+    ],
+    ids=[
+        "dispatch-high",
+        "dispatch-medium",
+        "dispatch-low",
+        "dispatch-sources",
+        "dispatch-completion",
+        "sweep-completion",
+    ],
+)
+def test_collection_control_task_keeps_metadata_routing_and_execution_contract(
+    task_module: str,
+    task_attr: str,
+    expected_labels: dict[str, object],
+) -> None:
+    """dispatch / sweep は metadata broker と既存 task name・labels を維持する。"""
+    from app.queue.brokers import broker_metadata
+
+    task = getattr(importlib.import_module(task_module), task_attr)
+    assert (task.broker, task.task_name, task.labels) == (
+        broker_metadata,
+        task_attr,
+        expected_labels,
+    )
 
 
 @pytest.mark.parametrize(
@@ -168,6 +350,67 @@ def test_analysis_worker_keeps_single_shared_runtime() -> None:
             "when_executed",
         ]
     ]
+
+
+def test_collection_workers_keep_two_program_shared_runtime() -> None:
+    """collection は metadata / content の2 processと既存並列度を維持する。"""
+    assert _fetch_worker_commands() == {
+        "metadata": [
+            "taskiq",
+            "worker",
+            "--workers",
+            "1",
+            "--max-async-tasks",
+            "10",
+            "app.queue.brokers:broker_metadata",
+            "app.queue.tasks.acquisition",
+            "app.queue.tasks.completion",
+            "--ack-type",
+            "when_executed",
+        ],
+        "content": [
+            "taskiq",
+            "worker",
+            "--workers",
+            "1",
+            "--max-async-tasks",
+            "5",
+            "app.queue.brokers:broker_content",
+            "app.queue.tasks.acquisition",
+            "app.queue.tasks.completion",
+            "--ack-type",
+            "when_executed",
+        ],
+    }
+
+
+def test_collection_lifecycle_keeps_pool_and_scheduler_boundary() -> None:
+    """metadata/content poolは各5/5で、collection schedulerはmetadataだけを使う。"""
+    from app.queue.brokers import broker_content, broker_metadata
+    from app.queue.schedulers import (
+        scheduler_agent,
+        scheduler_briefing,
+        scheduler_maintenance,
+        scheduler_metadata,
+        scheduler_trend_discovery,
+    )
+
+    scheduler_brokers = tuple(
+        scheduler.broker
+        for scheduler in (
+            scheduler_metadata,
+            scheduler_trend_discovery,
+            scheduler_agent,
+            scheduler_briefing,
+            scheduler_maintenance,
+        )
+    )
+    assert (
+        WORKER_POOL_SIZING["metadata"],
+        WORKER_POOL_SIZING["content"],
+        scheduler_metadata.broker,
+        broker_content in scheduler_brokers,
+    ) == ((5, 5), (5, 5), broker_metadata, False)
 
 
 def test_maintenance_worker_imports_queue_health_without_runtime_split() -> None:

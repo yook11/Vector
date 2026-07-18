@@ -14,8 +14,9 @@ primary_region = 'nrt'
 [build]
 
 # inbound を一切持たない: [[services]] を宣言せず public IP も割り当てない。
-# worker-fetch は Redis stream を pull し外部 web へ egress するのみ
-# (broker_metadata=acquisition+dispatch / broker_content=completion)。
+# worker-fetch はRedis Streamをpullし外部webへegressするのみ。broker_metadataは
+# pipeline:metadataのdispatch / sweep control、broker_contentはpipeline:acquisitionと
+# pipeline:completionの2 Streamを購読する共有consumerである。
 # HTTP を listen しないため [[checks]] も置かない。永続バグは supervisord の
 # fail_fast eventlistener が FATAL → container exit させ、Fly が restart loop で
 # 可視化する (fetch.conf 参照)。
@@ -42,8 +43,9 @@ primary_region = 'nrt'
   # 公開 URL 設定すら漏らさない、というより単に不要)。
   FRONTEND_URL = "http://vector-collect-unused.invalid"
 
-# worker-fetch のみ。fetch.conf は broker_metadata (acquisition+completion dispatch)
-# と broker_content (completion) を 1 container で消化する。back-fill / retention は
+# worker-fetchのみ。fetch.confはbroker_metadataのdispatch/sweep制御と、broker_contentが
+# pipeline:acquisition / pipeline:completionの両Streamを読む共有consumerを1 containerに
+# 同居させる。back-fill / retention は
 # broker_maintenance に分離済で core 側 (worker-analysis) が担うため本 app には無い。
 [processes]
   worker-fetch = "supervisord -n -c /app/supervisord/fetch.conf"

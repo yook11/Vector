@@ -103,10 +103,6 @@ def test_worker_agent_is_in_every_default_worker_target(
     )
 
 
-def test_agent_queue_is_observed_by_pipeline_status() -> None:
-    assert "agent" in _makefile_words("QUEUES")
-
-
 def test_pipeline_restart_force_recreates_backend_and_every_runtime_worker() -> None:
     commands = _commands_starting_with(
         "pipeline-restart",

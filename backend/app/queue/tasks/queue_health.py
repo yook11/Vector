@@ -1,4 +1,4 @@
-"""curation / assessment Redis Stream health の毎分sampler。"""
+"""acquisition / completion / curation / assessment Stream health の毎分sampler。"""
 
 from __future__ import annotations
 
@@ -100,7 +100,7 @@ def _record_success(snapshot: StreamHealthSnapshot) -> None:
     schedule=[{"cron": CRON_PIPELINE_QUEUE_HEALTH}],
 )
 async def observe_pipeline_queue_health() -> None:
-    """固定2stageのsnapshotを独立して取得しLogfireへ記録する。"""
+    """固定4stageのsnapshotを独立して取得しLogfireへ記録する。"""
     redis = get_redis()
     for target in PIPELINE_QUEUE_TARGETS:
         try:
