@@ -147,7 +147,6 @@ def build_question_answering_agent(
         planner=QuestionPlanningService(
             agent=QUESTION_PLANNER_AGENT,
             runtime_scope_factory=activate_planner_runtime,
-            audit_recorder=None,
         ),
         evidence_collector=EvidenceCollectionService(
             internal_search=internal_search,
@@ -156,13 +155,11 @@ def build_question_answering_agent(
         ),
         evidence_answerer=EvidenceAnswerFlow(
             generator=GeminiEvidenceAnswerDraftGenerator(),
-            audit_recorder=None,
             delta_reporter=delta_reporter,
             continuation=continuation,
         ),
         direct_answerer=DirectAnswerFlow(
             generator=GeminiDirectAnswerGenerator(),
-            audit_recorder=None,
             delta_reporter=delta_reporter,
             continuation=continuation,
         ),

@@ -10,12 +10,6 @@ from typing import Any
 import pytest
 from logfire.testing import CaptureLogfire
 
-from app.agent.answering.audit import (
-    DirectAnswerAttemptFailureEvent,
-    DirectAnswerFinalEvent,
-    DirectAnswerOutcomeCode,
-    RequestRetryDisposition,
-)
 from app.agent.answering.contract import AnsweringRequest
 from app.agent.answering.direct_answer.contract import (
     DirectAnswerDraft,
@@ -24,9 +18,21 @@ from app.agent.answering.direct_answer.contract import (
 from app.agent.answering.direct_answer.flow import DirectAnswerFlow
 from app.agent.question_context.contract import AnswerRequirement, QuestionContext
 from app.analysis.ai_provider_errors import AIProviderError, AIProviderNetworkError
-from tests.logfire._metric_helpers import collected_metrics, sum_counter_for_result
+from tests.logfire._metric_helpers import collected_metrics
 
 _DIRECT_ANSWER_OUTCOME_METRIC = "vector.agent.direct_answer.outcome"
+
+
+def _metric_attributes(
+    metrics: list[dict[str, Any]],
+    metric_name: str,
+) -> list[dict[str, Any]]:
+    metric = next((item for item in metrics if item["name"] == metric_name), None)
+    if metric is None:
+        return []
+    return [
+        data_point.get("attributes", {}) for data_point in metric["data"]["data_points"]
+    ]
 
 
 def _as_of() -> datetime:
@@ -171,42 +177,14 @@ def test_answer_generation_stopped_is_shared_identity_compatible_reexport() -> N
     assert direct_type is shared_type
 
 
-class FakeDirectAnswerAuditRecorder:
-    def __init__(self) -> None:
-        self.attempt_failures: list[DirectAnswerAttemptFailureEvent] = []
-        self.final_events: list[DirectAnswerFinalEvent] = []
-
-    async def record_attempt_failure(
-        self,
-        event: DirectAnswerAttemptFailureEvent,
-    ) -> None:
-        self.attempt_failures.append(event)
-
-    async def record_final_event(self, event: DirectAnswerFinalEvent) -> None:
-        self.final_events.append(event)
-
-
-class RaisingDirectAnswerAuditRecorder:
-    async def record_attempt_failure(
-        self,
-        event: DirectAnswerAttemptFailureEvent,
-    ) -> None:
-        raise RuntimeError("audit recorder down")
-
-    async def record_final_event(self, event: DirectAnswerFinalEvent) -> None:
-        raise RuntimeError("audit recorder down")
-
-
 async def _answer(
     generator: FakeDirectAnswerGenerator,
     *,
-    recorder: FakeDirectAnswerAuditRecorder | RaisingDirectAnswerAuditRecorder | None,
     delta_reporter: RecordingDeltaReporter | None = None,
     continuation: SequenceContinuation | None = None,
 ) -> DirectAnswerDraft:
     return await DirectAnswerFlow(
         generator=generator,
-        audit_recorder=recorder,
         delta_reporter=delta_reporter,
         continuation=continuation,
     ).answer(
@@ -220,30 +198,25 @@ async def test_valid_text_returns_direct_draft_without_retry(
     capfire: CaptureLogfire,
 ) -> None:
     generator = FakeDirectAnswerGenerator(["検索なしで回答できます。"])
-    recorder = FakeDirectAnswerAuditRecorder()
     reporter = RecordingDeltaReporter()
 
-    draft = await _answer(generator, recorder=recorder, delta_reporter=reporter)
+    draft = await _answer(generator, delta_reporter=reporter)
 
     assert draft == DirectAnswerDraft(answer="検索なしで回答できます。")
     assert len(generator.calls) == 1
     assert generator.calls[0]["previous_error"] is None
-    assert recorder.attempt_failures == []
     assert reporter.finished == [1]
     assert reporter.aborted == []
     assert generator.streams[0].closed is True
-    assert len(recorder.final_events) == 1
-    final = recorder.final_events[0]
-    assert final.outcome_code is DirectAnswerOutcomeCode.ANSWERED
-    assert final.attempt_count == 1
-    assert final.retry_used is False
-    assert final.ai_model == "fake-direct-model"
-    assert final.prompt_version == "direct0001"
 
     metrics = collected_metrics(capfire)
-    assert (
-        sum_counter_for_result(metrics, _DIRECT_ANSWER_OUTCOME_METRIC, "answered") == 1
-    )
+    assert _metric_attributes(metrics, _DIRECT_ANSWER_OUTCOME_METRIC) == [
+        {
+            "result": "answered",
+            "retry_used": False,
+            "failure_code": "none",
+        }
+    ]
 
 
 @pytest.mark.asyncio
@@ -294,26 +267,26 @@ async def test_direct_answer_removes_inline_citation_markers_after_generation() 
 
 
 @pytest.mark.asyncio
-async def test_blank_then_valid_retries_once_with_previous_error() -> None:
+async def test_blank_then_valid_retries_once_with_previous_error(
+    capfire: CaptureLogfire,
+) -> None:
     generator = FakeDirectAnswerGenerator([" \n\t", "再試行後の回答です。"])
-    recorder = FakeDirectAnswerAuditRecorder()
 
-    draft = await _answer(generator, recorder=recorder)
+    draft = await _answer(generator)
 
     assert draft.answer == "再試行後の回答です。"
     assert [call["previous_error"] for call in generator.calls] == [
         None,
         "direct_answer_blank_response",
     ]
-    assert [event.attempt_number for event in recorder.attempt_failures] == [1]
-    attempt = recorder.attempt_failures[0]
-    assert attempt.failure_kind == "ai_response_invalid"
-    assert attempt.request_retry_disposition is RequestRetryDisposition.RETRY_IN_REQUEST
-    assert len(recorder.final_events) == 1
-    final = recorder.final_events[0]
-    assert final.outcome_code is DirectAnswerOutcomeCode.ANSWERED
-    assert final.attempt_count == 2
-    assert final.retry_used is True
+    metrics = collected_metrics(capfire)
+    assert _metric_attributes(metrics, _DIRECT_ANSWER_OUTCOME_METRIC) == [
+        {
+            "result": "answered",
+            "retry_used": True,
+            "failure_code": "none",
+        }
+    ]
 
 
 @pytest.mark.asyncio
@@ -321,59 +294,51 @@ async def test_blank_twice_raises_invalid_after_observation(
     capfire: CaptureLogfire,
 ) -> None:
     generator = FakeDirectAnswerGenerator(["", " \n"])
-    recorder = FakeDirectAnswerAuditRecorder()
     reporter = RecordingDeltaReporter()
 
     with pytest.raises(DirectAnswerInvalidError):
-        await _answer(generator, recorder=recorder, delta_reporter=reporter)
+        await _answer(generator, delta_reporter=reporter)
 
     assert len(generator.calls) == 2
     assert reporter.appended == []
     assert reporter.finished == []
     assert reporter.aborted == [1, 2]
     assert all(stream.closed for stream in generator.streams)
-    assert [event.attempt_number for event in recorder.attempt_failures] == [1, 2]
-    assert {event.request_retry_disposition for event in recorder.attempt_failures} == {
-        RequestRetryDisposition.RETRY_IN_REQUEST
-    }
-    assert len(recorder.final_events) == 1
-    final = recorder.final_events[0]
-    assert final.outcome_code is DirectAnswerOutcomeCode.FAILED
-    assert final.attempt_count == 2
-    assert final.retry_used is True
-    assert final.failure_kind == "ai_response_invalid"
-    assert final.code == "direct_answer_blank_response"
 
     metrics = collected_metrics(capfire)
-    assert sum_counter_for_result(metrics, _DIRECT_ANSWER_OUTCOME_METRIC, "failed") == 1
+    assert _metric_attributes(metrics, _DIRECT_ANSWER_OUTCOME_METRIC) == [
+        {
+            "result": "failed",
+            "retry_used": True,
+            "failure_code": "direct_answer_blank_response",
+        }
+    ]
 
 
 @pytest.mark.asyncio
-async def test_ai_provider_error_propagates_unwrapped_without_retry() -> None:
+async def test_ai_provider_error_propagates_unwrapped_without_retry(
+    capfire: CaptureLogfire,
+) -> None:
     provider_exc = AIProviderNetworkError()
     generator = FakeDirectAnswerGenerator([provider_exc])
-    recorder = FakeDirectAnswerAuditRecorder()
     reporter = RecordingDeltaReporter()
 
     with pytest.raises(AIProviderNetworkError) as exc_info:
-        await _answer(generator, recorder=recorder, delta_reporter=reporter)
+        await _answer(generator, delta_reporter=reporter)
 
     assert exc_info.value is provider_exc
     assert len(generator.calls) == 1
     assert reporter.aborted == [1]
     assert generator.streams[0].closed is True
-    assert [event.attempt_number for event in recorder.attempt_failures] == [1]
-    attempt = recorder.attempt_failures[0]
-    assert attempt.request_retry_disposition is (
-        RequestRetryDisposition.DO_NOT_RETRY_IN_REQUEST
-    )
-    assert attempt.failure_kind == provider_exc.FAILURE_MODE.value
-    assert attempt.code == provider_exc.CODE
-    assert len(recorder.final_events) == 1
-    final = recorder.final_events[0]
-    assert final.outcome_code is DirectAnswerOutcomeCode.FAILED
-    assert final.retry_used is False
-    assert final.failure_kind == provider_exc.FAILURE_MODE.value
+
+    metrics = collected_metrics(capfire)
+    assert _metric_attributes(metrics, _DIRECT_ANSWER_OUTCOME_METRIC) == [
+        {
+            "result": "failed",
+            "retry_used": False,
+            "failure_code": "ai_error_network",
+        }
+    ]
 
 
 @pytest.mark.asyncio
@@ -382,43 +347,17 @@ async def test_unexpected_exception_propagates_without_observation(
 ) -> None:
     unexpected = RuntimeError("boom")
     generator = FakeDirectAnswerGenerator([unexpected])
-    recorder = FakeDirectAnswerAuditRecorder()
     reporter = RecordingDeltaReporter()
 
     with pytest.raises(RuntimeError) as exc_info:
-        await _answer(generator, recorder=recorder, delta_reporter=reporter)
+        await _answer(generator, delta_reporter=reporter)
 
     assert exc_info.value is unexpected
     assert len(generator.calls) == 1
     assert reporter.aborted == [1]
     assert generator.streams[0].closed is True
-    assert recorder.attempt_failures == []
-    assert recorder.final_events == []
     metrics = collected_metrics(capfire)
-    assert (
-        sum_counter_for_result(metrics, _DIRECT_ANSWER_OUTCOME_METRIC, "answered") == 0
-    )
-    assert sum_counter_for_result(metrics, _DIRECT_ANSWER_OUTCOME_METRIC, "failed") == 0
-
-
-@pytest.mark.asyncio
-async def test_audit_recorder_failure_does_not_mask_success() -> None:
-    generator = FakeDirectAnswerGenerator(["監査が落ちても回答は返します。"])
-
-    draft = await _answer(generator, recorder=RaisingDirectAnswerAuditRecorder())
-
-    assert draft.answer == "監査が落ちても回答は返します。"
-
-
-@pytest.mark.asyncio
-async def test_audit_recorder_failure_does_not_mask_typed_failure() -> None:
-    provider_exc = AIProviderNetworkError()
-    generator = FakeDirectAnswerGenerator([provider_exc])
-
-    with pytest.raises(AIProviderNetworkError) as exc_info:
-        await _answer(generator, recorder=RaisingDirectAnswerAuditRecorder())
-
-    assert exc_info.value is provider_exc
+    assert _metric_attributes(metrics, _DIRECT_ANSWER_OUTCOME_METRIC) == []
 
 
 @pytest.mark.asyncio
@@ -430,7 +369,6 @@ async def test_incremental_fragments_reconstruct_existing_final_answer() -> None
 
     draft = await _answer(
         generator,
-        recorder=None,
         delta_reporter=reporter,
     )
 
@@ -453,7 +391,6 @@ async def test_marker_only_blank_generation_retries_without_visible_reset() -> N
 
     draft = await _answer(
         generator,
-        recorder=FakeDirectAnswerAuditRecorder(),
         delta_reporter=reporter,
     )
 
@@ -479,7 +416,6 @@ async def test_reporter_failure_does_not_change_success(
 
     draft = await _answer(
         generator,
-        recorder=None,
         delta_reporter=reporter,
     )
 
@@ -495,7 +431,6 @@ async def test_reporter_abort_failure_does_not_mask_provider_error() -> None:
     with pytest.raises(AIProviderNetworkError) as exc_info:
         await _answer(
             generator,
-            recorder=FakeDirectAnswerAuditRecorder(),
             delta_reporter=reporter,
         )
 
@@ -514,7 +449,6 @@ async def test_continuation_false_before_provider_start_is_routine_stop() -> Non
     with pytest.raises(stopped_type):
         await _answer(
             generator,
-            recorder=FakeDirectAnswerAuditRecorder(),
             delta_reporter=reporter,
             continuation=SequenceContinuation([False]),
         )
@@ -538,7 +472,6 @@ async def test_continuation_false_mid_stream_aborts_iterator_and_pending_report(
     with pytest.raises(stopped_type):
         await _answer(
             generator,
-            recorder=FakeDirectAnswerAuditRecorder(),
             delta_reporter=reporter,
             continuation=continuation,
         )
@@ -551,17 +484,17 @@ async def test_continuation_false_mid_stream_aborts_iterator_and_pending_report(
 
 
 @pytest.mark.asyncio
-async def test_continuation_false_at_normal_stream_end_aborts_before_finish() -> None:
+async def test_continuation_false_at_normal_stream_end_aborts_before_finish(
+    capfire: CaptureLogfire,
+) -> None:
     stopped_type = _answer_generation_stopped_type()
     generator = FakeDirectAnswerGenerator([["表示済み本文"]])
     reporter = RecordingDeltaReporter()
-    recorder = FakeDirectAnswerAuditRecorder()
     continuation = SequenceContinuation([True, True, False])
 
     with pytest.raises(stopped_type):
         await _answer(
             generator,
-            recorder=recorder,
             delta_reporter=reporter,
             continuation=continuation,
         )
@@ -570,6 +503,6 @@ async def test_continuation_false_at_normal_stream_end_aborts_before_finish() ->
     assert reporter.appended == [(1, "表示済み本文")]
     assert reporter.aborted == [1]
     assert reporter.finished == []
-    assert recorder.attempt_failures == []
-    assert recorder.final_events == []
     assert generator.streams[0].closed is True
+    metrics = collected_metrics(capfire)
+    assert _metric_attributes(metrics, _DIRECT_ANSWER_OUTCOME_METRIC) == []
