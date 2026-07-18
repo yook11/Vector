@@ -1,6 +1,6 @@
 # Internal Retrieval Query Embedding Spec
 
-Status: Draft
+Status: Implemented
 Created: 2026-06-29
 Scope: Planner の `internal_queries` を内部検索用 embedding に変換する境界
 
