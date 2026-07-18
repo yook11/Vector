@@ -11,13 +11,6 @@ from typing import Any
 import pytest
 from logfire.testing import CaptureLogfire
 
-from app.agent.answering.audit import (
-    AnswerSynthesisAttemptFailureEvent,
-    AnswerSynthesisDefectEvent,
-    AnswerSynthesisFinalEvent,
-    AnswerSynthesisOutcomeCode,
-    RequestRetryDisposition,
-)
 from app.agent.answering.contract import AnsweringRequest
 from app.agent.answering.evidence_answer.contract import (
     EvidenceAnswerDraft,
@@ -32,7 +25,6 @@ from app.analysis.ai_provider_errors import AIProviderError, AIProviderNetworkEr
 from tests.logfire._metric_helpers import collected_metrics, sum_counter_for_result
 
 _SYNTHESIS_OUTCOME_METRIC = "vector.agent.answer_synthesis.outcome"
-_DEFECT_CITED_REFS_RECOMPUTED = "cited_refs_recomputed_from_markers"
 
 
 def _as_of() -> datetime:
@@ -230,54 +222,15 @@ def _answer_generation_stopped_type() -> type[BaseException]:
     return stopped_type
 
 
-class FakeAnswerSynthesisAuditRecorder:
-    def __init__(self) -> None:
-        self.attempt_failures: list[AnswerSynthesisAttemptFailureEvent] = []
-        self.defect_events: list[AnswerSynthesisDefectEvent] = []
-        self.final_events: list[AnswerSynthesisFinalEvent] = []
-
-    async def record_attempt_failure(
-        self,
-        event: AnswerSynthesisAttemptFailureEvent,
-    ) -> None:
-        self.attempt_failures.append(event)
-
-    async def record_defect(self, event: AnswerSynthesisDefectEvent) -> None:
-        self.defect_events.append(event)
-
-    async def record_final_event(self, event: AnswerSynthesisFinalEvent) -> None:
-        self.final_events.append(event)
-
-
-class RaisingAnswerSynthesisAuditRecorder:
-    async def record_attempt_failure(
-        self,
-        event: AnswerSynthesisAttemptFailureEvent,
-    ) -> None:
-        raise RuntimeError("audit recorder down")
-
-    async def record_defect(self, event: AnswerSynthesisDefectEvent) -> None:
-        raise RuntimeError("audit recorder down")
-
-    async def record_final_event(self, event: AnswerSynthesisFinalEvent) -> None:
-        raise RuntimeError("audit recorder down")
-
-
 async def _answer(
     generator: FakeGenerator,
     *,
-    recorder: (
-        FakeAnswerSynthesisAuditRecorder | RaisingAnswerSynthesisAuditRecorder | None
-    ) = None,
     evidence: list[AnswerEvidenceItem] | None = None,
     delta_reporter: RecordingDeltaReporter | None = None,
     continuation: SequenceContinuation | None = None,
     request: AnsweringRequest | None = None,
 ) -> EvidenceAnswerDraft:
-    flow_kwargs: dict[str, Any] = {
-        "generator": generator,
-        "audit_recorder": recorder,
-    }
+    flow_kwargs: dict[str, Any] = {"generator": generator}
     if delta_reporter is not None:
         flow_kwargs["delta_reporter"] = delta_reporter
     if continuation is not None:
@@ -304,9 +257,8 @@ def _metric_attributes(
 @pytest.mark.asyncio
 async def test_valid_raw_draft_passes_through_unchanged() -> None:
     generator = FakeGenerator([_raw(cited_refs=["1"])])
-    recorder = FakeAnswerSynthesisAuditRecorder()
 
-    draft = await _answer(generator, recorder=recorder)
+    draft = await _answer(generator)
 
     assert draft == EvidenceAnswerDraft(
         sufficiency="answered",
@@ -314,17 +266,6 @@ async def test_valid_raw_draft_passes_through_unchanged() -> None:
         cited_refs=["1"],
     )
     assert generator.calls[0]["previous_error"] is None
-    assert recorder.attempt_failures == []
-    assert recorder.defect_events == []
-    assert len(recorder.final_events) == 1
-    final = recorder.final_events[0]
-    assert final.outcome_code is AnswerSynthesisOutcomeCode.SYNTHESIZED
-    assert final.status == "answered"
-    assert final.retry_used is False
-    assert final.fallback_used is False
-    assert final.defect_count == 0
-    assert final.ai_model == "fake-answer-model"
-    assert final.prompt_version == "fake0001"
 
 
 @pytest.mark.asyncio
@@ -352,53 +293,48 @@ async def test_flow_applies_context_requirement_ids_as_canonical_allowlist() -> 
             )
         ]
     )
-    recorder = FakeAnswerSynthesisAuditRecorder()
 
-    draft = await _answer(
-        generator,
-        recorder=recorder,
-        request=request,
-    )
+    draft = await _answer(generator, request=request)
 
-    assert (
-        draft.unfulfilled_requirement_ids,
-        [event.defect_code for event in recorder.defect_events],
-        recorder.final_events[0].defect_count,
-    ) == (
-        ["c2", "c1", "p2", "p1"],
-        ["unknown_unfulfilled_requirement_ids_removed"],
-        1,
-    )
+    assert draft.unfulfilled_requirement_ids == ["c2", "c1", "p2", "p1"]
 
 
 @pytest.mark.asyncio
-async def test_requirement_gap_caps_synthesized_audit_without_mutating_draft() -> None:
+async def test_requirement_gap_caps_synthesized_status_without_mutating_draft(
+    capfire: CaptureLogfire,
+) -> None:
     canonical_unfulfilled_ids = ["c1", "p1"]
     generator = FakeGenerator(
         [_raw(unfulfilled_requirement_ids=list(reversed(canonical_unfulfilled_ids)))]
     )
-    recorder = FakeAnswerSynthesisAuditRecorder()
 
-    draft = await _answer(generator, recorder=recorder)
+    draft = await _answer(generator)
 
-    final = recorder.final_events[0]
     assert (
         draft.sufficiency,
         draft.missing_aspects,
         draft.unfulfilled_requirement_ids,
-        final.status,
-        final.missing_aspect_count,
     ) == (
         "answered",
         [],
         canonical_unfulfilled_ids,
-        "insufficient",
-        len(canonical_unfulfilled_ids),
     )
+    metrics = collected_metrics(capfire)
+    assert _metric_attributes(metrics, _SYNTHESIS_OUTCOME_METRIC) == [
+        {
+            "result": "synthesized",
+            "retry_used": False,
+            "status": "insufficient",
+            "fallback_used": False,
+            "failure_code": "none",
+        }
+    ]
 
 
 @pytest.mark.asyncio
-async def test_synthesized_audit_adds_missing_aspects_and_requirement_gaps() -> None:
+async def test_insufficient_draft_keeps_missing_aspects_and_canonical_id_order() -> (
+    None
+):
     missing_aspects = ["PRIVATE_EVIDENCE_GAP"]
     canonical_unfulfilled_ids = ["c1", "p1"]
     generator = FakeGenerator(
@@ -410,28 +346,22 @@ async def test_synthesized_audit_adds_missing_aspects_and_requirement_gaps() -> 
             )
         ]
     )
-    recorder = FakeAnswerSynthesisAuditRecorder()
 
-    draft = await _answer(generator, recorder=recorder)
+    draft = await _answer(generator)
 
-    final = recorder.final_events[0]
     assert (
         draft.sufficiency,
         draft.missing_aspects,
         draft.unfulfilled_requirement_ids,
-        final.status,
-        final.missing_aspect_count,
     ) == (
         "insufficient",
         missing_aspects,
         canonical_unfulfilled_ids,
-        "insufficient",
-        len(missing_aspects) + len(canonical_unfulfilled_ids),
     )
 
 
 @pytest.mark.asyncio
-async def test_derives_refs_from_markers_and_records_mismatch_defect() -> None:
+async def test_derives_cited_refs_from_answer_markers() -> None:
     generator = FakeGenerator(
         [
             _raw(
@@ -440,17 +370,12 @@ async def test_derives_refs_from_markers_and_records_mismatch_defect() -> None:
             )
         ]
     )
-    recorder = FakeAnswerSynthesisAuditRecorder()
 
-    draft = await _answer(generator, recorder=recorder)
+    draft = await _answer(generator)
 
     assert draft.cited_refs == ["1"]
     assert draft.answer == "根拠 1 から確認できます。[[1]]"
     assert generator.calls[0]["previous_error"] is None
-    assert recorder.attempt_failures == []
-    assert [event.defect_code for event in recorder.defect_events] == [
-        _DEFECT_CITED_REFS_RECOMPUTED
-    ]
 
 
 @pytest.mark.asyncio
@@ -463,22 +388,17 @@ async def test_extra_declared_cited_refs_are_replaced_by_answer_markers() -> Non
             )
         ]
     )
-    recorder = FakeAnswerSynthesisAuditRecorder()
 
     draft = await _answer(
         generator,
-        recorder=recorder,
         evidence=[_evidence("1"), _evidence("2")],
     )
 
     assert draft.cited_refs == ["1"]
-    assert [event.defect_code for event in recorder.defect_events] == [
-        _DEFECT_CITED_REFS_RECOMPUTED
-    ]
 
 
 @pytest.mark.asyncio
-async def test_completes_insufficient_missing_aspects_and_records_defect() -> None:
+async def test_completes_insufficient_missing_aspects_without_retry() -> None:
     generator = FakeGenerator(
         [
             _raw(
@@ -489,17 +409,14 @@ async def test_completes_insufficient_missing_aspects_and_records_defect() -> No
             )
         ]
     )
-    recorder = FakeAnswerSynthesisAuditRecorder()
 
-    draft = await _answer(generator, recorder=recorder)
+    draft = await _answer(generator)
 
     assert draft.sufficiency == "insufficient"
     assert draft.answer == "根拠の範囲では断定できません。[[1]]"
     assert draft.cited_refs == ["1"]
     assert draft.missing_aspects
     assert len(generator.calls) == 1
-    assert len(recorder.defect_events) == 1
-    assert recorder.final_events[0].defect_count == 1
 
 
 @pytest.mark.asyncio
@@ -514,18 +431,17 @@ async def test_removes_blank_and_duplicate_refs_and_missing_aspects() -> None:
             )
         ]
     )
-    recorder = FakeAnswerSynthesisAuditRecorder()
 
-    draft = await _answer(generator, recorder=recorder)
+    draft = await _answer(generator)
 
     assert draft.cited_refs == ["1"]
     assert draft.missing_aspects == ["会社側の一次情報"]
-    assert recorder.defect_events
-    assert recorder.final_events[0].defect_count == len(recorder.defect_events)
 
 
 @pytest.mark.asyncio
-async def test_answered_without_marker_retries_once_with_previous_error() -> None:
+async def test_answered_without_marker_retries_once_with_previous_error(
+    capfire: CaptureLogfire,
+) -> None:
     repaired = _raw(
         sufficiency="answered",
         answer="修正後は根拠を引用しています。[[1]]",
@@ -541,16 +457,22 @@ async def test_answered_without_marker_retries_once_with_previous_error() -> Non
             repaired,
         ]
     )
-    recorder = FakeAnswerSynthesisAuditRecorder()
 
-    draft = await _answer(generator, recorder=recorder)
+    draft = await _answer(generator)
 
     assert draft.answer == "修正後は根拠を引用しています。[[1]]"
     assert [call["previous_error"] for call in generator.calls][0] is None
     assert "citation marker" in generator.calls[1]["previous_error"]
-    assert [event.attempt_number for event in recorder.attempt_failures] == [1]
-    assert recorder.final_events[0].attempt_count == 2
-    assert recorder.final_events[0].retry_used is True
+    metrics = collected_metrics(capfire)
+    assert _metric_attributes(metrics, _SYNTHESIS_OUTCOME_METRIC) == [
+        {
+            "result": "synthesized",
+            "retry_used": True,
+            "status": "answered",
+            "fallback_used": False,
+            "failure_code": "none",
+        }
+    ]
 
 
 @pytest.mark.asyncio
@@ -567,9 +489,8 @@ async def test_persistent_noncompletable_defect_falls_back_to_valid_insufficient
             ),
         ]
     )
-    recorder = FakeAnswerSynthesisAuditRecorder()
 
-    draft = await _answer(generator, recorder=recorder)
+    draft = await _answer(generator)
 
     assert draft.sufficiency == "insufficient"
     assert draft.answer
@@ -577,15 +498,17 @@ async def test_persistent_noncompletable_defect_falls_back_to_valid_insufficient
     assert draft.missing_aspects
     assert [call["previous_error"] for call in generator.calls][0] is None
     assert generator.calls[1]["previous_error"]
-    assert [event.attempt_number for event in recorder.attempt_failures] == [1, 2]
-    final = recorder.final_events[0]
-    assert final.outcome_code is AnswerSynthesisOutcomeCode.FALLBACK_USED
-    assert final.status == "insufficient"
-    assert final.fallback_used is True
-    assert final.retry_used is True
 
     metrics = collected_metrics(capfire)
-    assert sum_counter_for_result(metrics, _SYNTHESIS_OUTCOME_METRIC, "fallback") == 1
+    assert _metric_attributes(metrics, _SYNTHESIS_OUTCOME_METRIC) == [
+        {
+            "result": "fallback",
+            "retry_used": True,
+            "status": "insufficient",
+            "fallback_used": True,
+            "failure_code": "answer_synthesis_draft_invalid",
+        }
+    ]
 
 
 @pytest.mark.asyncio
@@ -604,13 +527,11 @@ async def test_unknown_citation_ref_is_detected_inside_synthesis_and_retried() -
             ),
         ]
     )
-    recorder = FakeAnswerSynthesisAuditRecorder()
 
-    draft = await _answer(generator, recorder=recorder)
+    draft = await _answer(generator)
 
     assert draft.cited_refs == ["1"]
     assert "[[2]]" in generator.calls[1]["previous_error"]
-    assert recorder.attempt_failures[0].failure_kind == "ai_response_invalid"
 
 
 @pytest.mark.asyncio
@@ -699,20 +620,17 @@ async def test_marker_parse_boundaries_use_double_bracket_digits_only() -> None:
             )
         ]
     )
-    recorder = FakeAnswerSynthesisAuditRecorder()
 
     draft = await _answer(
         generator,
-        recorder=recorder,
         evidence=[_evidence("1"), _evidence("2")],
     )
 
     assert draft.cited_refs == ["1", "2"]
-    assert recorder.defect_events == []
 
 
 @pytest.mark.asyncio
-async def test_repeated_markers_are_deduplicated_without_defect() -> None:
+async def test_repeated_markers_are_deduplicated() -> None:
     generator = FakeGenerator(
         [
             _raw(
@@ -721,12 +639,10 @@ async def test_repeated_markers_are_deduplicated_without_defect() -> None:
             )
         ]
     )
-    recorder = FakeAnswerSynthesisAuditRecorder()
 
-    draft = await _answer(generator, recorder=recorder)
+    draft = await _answer(generator)
 
     assert draft.cited_refs == ["1"]
-    assert recorder.defect_events == []
 
 
 @pytest.mark.asyncio
@@ -741,48 +657,60 @@ async def test_insufficient_with_marker_keeps_partial_citations() -> None:
             )
         ]
     )
-    recorder = FakeAnswerSynthesisAuditRecorder()
 
-    draft = await _answer(generator, recorder=recorder)
+    draft = await _answer(generator)
 
     assert draft.sufficiency == "insufficient"
     assert draft.cited_refs == ["1"]
     assert draft.missing_aspects == ["会社側の一次情報"]
-    assert [event.defect_code for event in recorder.defect_events] == [
-        _DEFECT_CITED_REFS_RECOMPUTED
+
+
+@pytest.mark.asyncio
+async def test_provider_error_falls_back_without_retry(
+    capfire: CaptureLogfire,
+) -> None:
+    generator = FakeGenerator([AIProviderNetworkError()])
+
+    draft = await _answer(generator)
+
+    assert draft.sufficiency == "insufficient"
+    assert len(generator.calls) == 1
+    metrics = collected_metrics(capfire)
+    assert _metric_attributes(metrics, _SYNTHESIS_OUTCOME_METRIC) == [
+        {
+            "result": "fallback",
+            "retry_used": False,
+            "status": "insufficient",
+            "fallback_used": True,
+            "failure_code": "ai_error_network",
+        }
     ]
 
 
 @pytest.mark.asyncio
-async def test_provider_error_falls_back_without_retry() -> None:
-    generator = FakeGenerator([AIProviderNetworkError()])
-    recorder = FakeAnswerSynthesisAuditRecorder()
-
-    draft = await _answer(generator, recorder=recorder)
-
-    assert draft.sufficiency == "insufficient"
-    assert len(generator.calls) == 1
-    assert recorder.attempt_failures[0].request_retry_disposition is (
-        RequestRetryDisposition.DO_NOT_RETRY_IN_REQUEST
-    )
-    assert recorder.final_events[0].retry_used is False
-
-
-@pytest.mark.asyncio
-async def test_response_envelope_error_retries_once_with_previous_error() -> None:
+async def test_response_envelope_error_retries_once_with_previous_error(
+    capfire: CaptureLogfire,
+) -> None:
     invalid = EvidenceAnswerDraftGenerationInvalidError("response_not_json")
     generator = FakeGenerator([invalid, _raw(cited_refs=["1"])])
-    recorder = FakeAnswerSynthesisAuditRecorder()
 
-    draft = await _answer(generator, recorder=recorder)
+    draft = await _answer(generator)
 
     assert draft.sufficiency == "answered"
     assert [call["previous_error"] for call in generator.calls] == [
         None,
         "response_not_json",
     ]
-    assert recorder.attempt_failures[0].code == "response_not_json"
-    assert recorder.final_events[0].retry_used is True
+    metrics = collected_metrics(capfire)
+    assert _metric_attributes(metrics, _SYNTHESIS_OUTCOME_METRIC) == [
+        {
+            "result": "synthesized",
+            "retry_used": True,
+            "status": "answered",
+            "fallback_used": False,
+            "failure_code": "none",
+        }
+    ]
 
 
 @pytest.mark.asyncio
@@ -790,41 +718,13 @@ async def test_unexpected_exception_propagates_without_fallback(
     capfire: CaptureLogfire,
 ) -> None:
     generator = FakeGenerator([RuntimeError("bug in generator")])
-    recorder = FakeAnswerSynthesisAuditRecorder()
 
     with pytest.raises(RuntimeError, match="bug in generator"):
-        await _answer(generator, recorder=recorder)
+        await _answer(generator)
 
     assert len(generator.calls) == 1
-    assert recorder.final_events == []
     metrics = collected_metrics(capfire)
     assert _metric_attributes(metrics, _SYNTHESIS_OUTCOME_METRIC) == []
-
-
-@pytest.mark.asyncio
-async def test_recorder_errors_do_not_stop_synthesis() -> None:
-    generator = FakeGenerator(
-        [
-            _raw(
-                sufficiency="insufficient",
-                answer="一部だけ確認できます。[[1]]",
-                cited_refs=["1"],
-                missing_aspects=[],
-            )
-        ]
-    )
-
-    draft = await EvidenceAnswerFlow(
-        generator=generator,
-        audit_recorder=RaisingAnswerSynthesisAuditRecorder(),
-    ).answer(
-        request=_request(),
-        evidence=[_evidence()],
-        target_time_window="今日",
-    )
-
-    assert draft.sufficiency == "insufficient"
-    assert draft.missing_aspects
 
 
 @pytest.mark.asyncio
@@ -848,6 +748,7 @@ async def test_outcome_metric_records_synthesized_once(
             "retry_used": False,
             "status": "answered",
             "fallback_used": False,
+            "failure_code": "none",
         }
     ]
 
@@ -864,19 +765,12 @@ async def test_requirement_gap_metric_records_low_cardinality_insufficient(
         "根拠から確認できます",
     )
     generator = FakeGenerator([_raw(unfulfilled_requirement_ids=raw_unfulfilled_ids)])
-    recorder = FakeAnswerSynthesisAuditRecorder()
 
-    await _answer(generator, recorder=recorder)
+    await _answer(generator)
 
     metrics = collected_metrics(capfire)
     attrs = _metric_attributes(metrics, _SYNTHESIS_OUTCOME_METRIC)
-    telemetry_dump = json.dumps(
-        {
-            "final_event": recorder.final_events[0].model_dump(mode="json"),
-            "metric_attributes": attrs,
-        },
-        ensure_ascii=False,
-    )
+    telemetry_dump = json.dumps({"metric_attributes": attrs}, ensure_ascii=False)
     raw_ids_absent = all(
         requirement_id not in telemetry_dump for requirement_id in raw_unfulfilled_ids
     )
@@ -894,6 +788,7 @@ async def test_requirement_gap_metric_records_low_cardinality_insufficient(
                 "retry_used": False,
                 "status": "insufficient",
                 "fallback_used": False,
+                "failure_code": "none",
             }
         ],
         True,
@@ -968,44 +863,46 @@ async def test_insufficient_root_answer_is_streamed_normally() -> None:
 
 
 @pytest.mark.parametrize(
-    "invalid_json",
+    ("invalid_json", "expected_failure_code"),
     [
-        "not json",
-        "[]",
+        ("not json", "evidence_answer_response_gemini_not_json"),
+        ("[]", "evidence_answer_response_gemini_not_object"),
         (
             '{"sufficiency":"answered","answer":"first",'
-            '"answer":"second","cited_refs":["1"],"missing_aspects":[]}'
+            '"answer":"second","cited_refs":["1"],"missing_aspects":[]}',
+            "evidence_answer_response_duplicate_top_level_key",
         ),
         (
             '{"sufficiency":"answered","answer":"schema invalid",'
-            '"cited_refs":"1","missing_aspects":[]}'
+            '"cited_refs":"1","missing_aspects":[]}',
+            "answer_synthesis_pydantic_validation_failed",
         ),
     ],
     ids=["invalid-json", "non-object", "duplicate-top-level-key", "schema"],
 )
 @pytest.mark.asyncio
-async def test_final_json_boundary_retries_then_falls_back_with_typed_audit(
+async def test_final_json_boundary_retries_then_falls_back_with_failure_code(
     invalid_json: str,
+    expected_failure_code: str,
+    capfire: CaptureLogfire,
 ) -> None:
     generator = FakeGenerator([invalid_json, invalid_json])
-    recorder = FakeAnswerSynthesisAuditRecorder()
 
-    draft = await _answer(generator, recorder=recorder)
+    draft = await _answer(generator)
 
     assert draft.sufficiency == "insufficient"
     assert len(generator.calls) == 2
     assert all(stream.closed for stream in generator.streams)
-    assert [event.attempt_number for event in recorder.attempt_failures] == [1, 2]
-    assert all(
-        event.failure_kind == "ai_response_invalid"
-        for event in recorder.attempt_failures
-    )
-    assert {event.request_retry_disposition for event in recorder.attempt_failures} == {
-        RequestRetryDisposition.RETRY_IN_REQUEST
-    }
-    assert recorder.final_events[0].outcome_code is (
-        AnswerSynthesisOutcomeCode.FALLBACK_USED
-    )
+    metrics = collected_metrics(capfire)
+    assert _metric_attributes(metrics, _SYNTHESIS_OUTCOME_METRIC) == [
+        {
+            "result": "fallback",
+            "retry_used": True,
+            "status": "insufficient",
+            "fallback_used": True,
+            "failure_code": expected_failure_code,
+        }
+    ]
 
 
 @pytest.mark.asyncio
@@ -1016,14 +913,9 @@ async def test_retry_aborts_then_resets_before_generation_two_delta() -> None:
             _raw(answer="修正後は引用します。[[1]]", cited_refs=["1"]),
         ]
     )
-    recorder = FakeAnswerSynthesisAuditRecorder()
     reporter = RecordingDeltaReporter()
 
-    draft = await _answer(
-        generator,
-        recorder=recorder,
-        delta_reporter=reporter,
-    )
+    draft = await _answer(generator, delta_reporter=reporter)
 
     assert draft.answer == "修正後は引用します。[[1]]"
     assert reporter.aborted == [1]
@@ -1035,8 +927,6 @@ async def test_retry_aborts_then_resets_before_generation_two_delta() -> None:
     assert operations.index(("reset", 2)) < first_generation_two_append
     assert "citation marker" in generator.calls[1]["previous_error"]
     assert all(stream.closed for stream in generator.streams)
-    assert recorder.final_events[0].attempt_count == 2
-    assert recorder.final_events[0].retry_used is True
 
 
 @pytest.mark.asyncio
@@ -1059,16 +949,13 @@ async def test_retry_resets_even_when_failed_generation_had_no_visible_delta() -
 
 
 @pytest.mark.asyncio
-async def test_two_retryable_failures_reset_to_generation_three_fallback() -> None:
+async def test_two_retryable_failures_reset_to_generation_three_fallback(
+    capfire: CaptureLogfire,
+) -> None:
     generator = FakeGenerator(["not json", "still not json"])
-    recorder = FakeAnswerSynthesisAuditRecorder()
     reporter = RecordingDeltaReporter()
 
-    draft = await _answer(
-        generator,
-        recorder=recorder,
-        delta_reporter=reporter,
-    )
+    draft = await _answer(generator, delta_reporter=reporter)
 
     assert draft.sufficiency == "insufficient"
     assert reporter.aborted == [1, 2]
@@ -1083,8 +970,8 @@ async def test_two_retryable_failures_reset_to_generation_three_fallback() -> No
     assert operations.index(("abort", 1)) < operations.index(("reset", 2))
     assert operations.index(("abort", 2)) < operations.index(("reset", 3))
     assert operations.index(("reset", 3)) < operations.index(("append", 3))
-    assert recorder.final_events[0].fallback_used is True
-    assert recorder.final_events[0].retry_used is True
+    metrics = collected_metrics(capfire)
+    assert sum_counter_for_result(metrics, _SYNTHESIS_OUTCOME_METRIC, "fallback") == 1
 
 
 @pytest.mark.asyncio
@@ -1151,17 +1038,17 @@ async def test_reporter_is_not_part_of_final_draft_correctness(
 
 
 @pytest.mark.asyncio
-async def test_continuation_false_before_provider_start_is_routine_stop() -> None:
+async def test_continuation_false_before_provider_start_is_routine_stop(
+    capfire: CaptureLogfire,
+) -> None:
     stopped_type = _answer_generation_stopped_type()
     assert not issubclass(stopped_type, AIProviderError)
     generator = FakeGenerator([_raw()])
-    recorder = FakeAnswerSynthesisAuditRecorder()
     reporter = RecordingDeltaReporter()
 
     with pytest.raises(stopped_type):
         await _answer(
             generator,
-            recorder=recorder,
             delta_reporter=reporter,
             continuation=SequenceContinuation([False]),
         )
@@ -1171,24 +1058,24 @@ async def test_continuation_false_before_provider_start_is_routine_stop() -> Non
     assert reporter.aborted == [1]
     assert reporter.appended == []
     assert reporter.finished == []
-    assert recorder.attempt_failures == []
-    assert recorder.final_events == []
+    metrics = collected_metrics(capfire)
+    assert _metric_attributes(metrics, _SYNTHESIS_OUTCOME_METRIC) == []
 
 
 @pytest.mark.asyncio
-async def test_continuation_false_mid_stream_closes_and_aborts() -> None:
+async def test_continuation_false_mid_stream_closes_and_aborts(
+    capfire: CaptureLogfire,
+) -> None:
     stopped_type = _answer_generation_stopped_type()
     raw_json = _raw_json(_raw(answer="表示済み本文と非表示本文。[[1]]"))
     answer_start = raw_json.index("表示済み本文") + len("表示済み本文")
     generator = FakeGenerator([[raw_json[:answer_start], raw_json[answer_start:]]])
-    recorder = FakeAnswerSynthesisAuditRecorder()
     reporter = RecordingDeltaReporter()
     continuation = SequenceContinuation([True, True, False])
 
     with pytest.raises(stopped_type):
         await _answer(
             generator,
-            recorder=recorder,
             delta_reporter=reporter,
             continuation=continuation,
         )
@@ -1197,21 +1084,22 @@ async def test_continuation_false_mid_stream_closes_and_aborts() -> None:
     assert reporter.aborted == [1]
     assert reporter.finished == []
     assert generator.streams[0].closed is True
-    assert recorder.final_events == []
+    metrics = collected_metrics(capfire)
+    assert _metric_attributes(metrics, _SYNTHESIS_OUTCOME_METRIC) == []
 
 
 @pytest.mark.asyncio
-async def test_continuation_false_at_eof_stops_before_final_parse_and_audit() -> None:
+async def test_continuation_false_at_eof_stops_before_final_parse_and_metric(
+    capfire: CaptureLogfire,
+) -> None:
     stopped_type = _answer_generation_stopped_type()
     generator = FakeGenerator([_raw()])
-    recorder = FakeAnswerSynthesisAuditRecorder()
     reporter = RecordingDeltaReporter()
     continuation = SequenceContinuation([True, True, False])
 
     with pytest.raises(stopped_type):
         await _answer(
             generator,
-            recorder=recorder,
             delta_reporter=reporter,
             continuation=continuation,
         )
@@ -1220,21 +1108,21 @@ async def test_continuation_false_at_eof_stops_before_final_parse_and_audit() ->
     assert reporter.finished == []
     assert reporter.reset_generations == []
     assert generator.streams[0].closed is True
-    assert recorder.attempt_failures == []
-    assert recorder.final_events == []
+    metrics = collected_metrics(capfire)
+    assert _metric_attributes(metrics, _SYNTHESIS_OUTCOME_METRIC) == []
 
 
 @pytest.mark.asyncio
-async def test_continuation_false_after_provider_error_stops_before_fallback() -> None:
+async def test_continuation_false_after_provider_error_stops_before_fallback(
+    capfire: CaptureLogfire,
+) -> None:
     stopped_type = _answer_generation_stopped_type()
     generator = FakeGenerator([AIProviderNetworkError()])
-    recorder = FakeAnswerSynthesisAuditRecorder()
     reporter = RecordingDeltaReporter()
 
     with pytest.raises(stopped_type):
         await _answer(
             generator,
-            recorder=recorder,
             delta_reporter=reporter,
             continuation=SequenceContinuation([True, False]),
         )
@@ -1244,4 +1132,5 @@ async def test_continuation_false_after_provider_error_stops_before_fallback() -
     assert reporter.reset_generations == []
     assert reporter.appended == []
     assert reporter.finished == []
-    assert recorder.final_events == []
+    metrics = collected_metrics(capfire)
+    assert _metric_attributes(metrics, _SYNTHESIS_OUTCOME_METRIC) == []

@@ -69,6 +69,7 @@ class GeminiAgentRuntime:
         span_attributes = {
             "agent_name": agent.name,
             "attempt_number": attempt_number,
+            "prompt_version": agent.prompt.version,
             GEN_AI_OPERATION_NAME: "generate_content",
             GEN_AI_PROVIDER_NAME: "gcp.gemini",
             GEN_AI_REQUEST_MODEL: agent.model.name,

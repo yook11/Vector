@@ -105,7 +105,6 @@ def test_planning_service_declares_agent_and_runtime_scope_dependencies() -> Non
         "self",
         "agent",
         "runtime_scope_factory",
-        "audit_recorder",
     )
     assert hints["agent"] == Agent[PlanningAttemptInput, QuestionPlanDraft]
     assert hints["runtime_scope_factory"] is AgentRuntimeScopeFactory

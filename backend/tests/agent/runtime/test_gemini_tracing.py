@@ -47,7 +47,6 @@ _STANDARD_ATTRIBUTE_KEYS = {
 _DEFAULT_MODEL_VISIBLE_SENTINELS = (
     "SYSTEM_INSTRUCTIONS_SENTINEL_5f21",
     "TASK_CONTENTS_SENTINEL_8a43",
-    "prompt-version-sentinel-v1",
 )
 
 
@@ -139,16 +138,17 @@ async def test_success_span_is_client_with_allowlisted_attributes_and_no_text(
     assert _application_attribute_keys(span) == {
         "agent_name",
         "attempt_number",
+        "prompt_version",
         "result",
     }
     assert attributes["agent_name"] == "trace_agent"
     assert attributes["attempt_number"] == 2
+    assert attributes["prompt_version"] == "prompt-version-sentinel-v1"
     assert attributes["result"] == "succeeded"
     assert attributes["gen_ai.operation.name"] == "generate_content"
     assert attributes["gen_ai.provider.name"] == "gcp.gemini"
     assert attributes["gen_ai.request.model"] == "gemini-trace-model"
     assert attributes["gen_ai.response.model"] == "gemini-trace-model"
-    assert "prompt-version-sentinel-v1" not in _span_text(span)
     assert "SYSTEM_INSTRUCTIONS_SENTINEL_TRACE_e96b" not in _span_text(span)
     assert "TASK_CONTENTS_SENTINEL_TRACE_19a2" not in _span_text(span)
     assert "INPUT_OBJECT_SENTINEL_648a" not in _span_text(span)
@@ -229,6 +229,7 @@ async def test_blocked_response_records_usage_and_classified_error_span(
     assert _application_attribute_keys(span) == {
         "agent_name",
         "attempt_number",
+        "prompt_version",
         "result",
     }
     _assert_no_model_visible_text(span, "MODEL_OUTPUT_SENTINEL_BLOCKED_31d9")
@@ -269,6 +270,7 @@ async def test_invalid_response_records_usage_before_classification(
     assert _application_attribute_keys(span) == {
         "agent_name",
         "attempt_number",
+        "prompt_version",
         "result",
     }
     _assert_no_model_visible_text(span, "MODEL_OUTPUT_SENTINEL_INVALID_JSON_041b")
@@ -318,6 +320,7 @@ async def test_output_schema_mismatch_records_usage_and_safe_classified_span(
     assert _application_attribute_keys(span) == {
         "agent_name",
         "attempt_number",
+        "prompt_version",
         "result",
     }
     _assert_no_model_visible_text(
@@ -352,6 +355,7 @@ async def test_classified_provider_error_has_no_usage_or_exception_event(
     assert _application_attribute_keys(span) == {
         "agent_name",
         "attempt_number",
+        "prompt_version",
         "result",
     }
     _assert_no_model_visible_text(span, "PROVIDER_ERROR_SENTINEL_267e")
@@ -382,7 +386,11 @@ async def test_unclassified_error_keeps_redacted_exception_event_without_result(
     assert events[0].attributes["exception.stacktrace"] == "[redacted]"
     assert span.status.status_code is StatusCode.ERROR
     assert span.status.description == "[redacted]"
-    assert _application_attribute_keys(span) == {"agent_name", "attempt_number"}
+    assert _application_attribute_keys(span) == {
+        "agent_name",
+        "attempt_number",
+        "prompt_version",
+    }
     _assert_no_model_visible_text(span, "UNCLASSIFIED_EXCEPTION_SENTINEL_a17f")
 
 
