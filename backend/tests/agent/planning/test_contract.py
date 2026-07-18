@@ -10,6 +10,8 @@ from typing import get_type_hints
 import pytest
 from pydantic import ValidationError
 
+from app.agent.agent import Agent
+from app.agent.planning import contract as planning_contract
 from app.agent.planning.contract import (
     EXTERNAL_RESEARCH_TASK_LIMIT,
     MAX_INTERNAL_QUERIES,
@@ -18,14 +20,15 @@ from app.agent.planning.contract import (
     InternalAndExternalPlan,
     InternalRetrievalPlan,
     NoRetrievalPlan,
+    PlanningAttemptInput,
     QuestionPlanDraft,
-    QuestionPlanDraftGenerator,
     QuestionPlanner,
     plan_from_draft,
     safe_fallback_plan,
 )
 from app.agent.planning.service import QuestionPlanningService
 from app.agent.question_context.contract import QuestionContext
+from app.agent.runtime.contract import AgentRuntimeScopeFactory
 
 
 def _external_task(
@@ -82,20 +85,64 @@ def test_planning_request_is_a_frozen_context_consumer_wrapper() -> None:
 
 def test_planning_boundaries_accept_planning_request() -> None:
     assert (
-        tuple(inspect.signature(QuestionPlanDraftGenerator.plan).parameters),
         tuple(inspect.signature(QuestionPlanner.plan).parameters),
         tuple(inspect.signature(QuestionPlanningService.plan).parameters),
-        _first_input_annotation(QuestionPlanDraftGenerator.plan),
         _first_input_annotation(QuestionPlanner.plan),
         _first_input_annotation(QuestionPlanningService.plan),
     ) == (
-        ("self", "request", "previous_error"),
         ("self", "request"),
         ("self", "request"),
-        _request_type("app.agent.planning.contract", "PlanningRequest"),
         _request_type("app.agent.planning.contract", "PlanningRequest"),
         _request_type("app.agent.planning.contract", "PlanningRequest"),
     )
+
+
+def test_planning_service_declares_agent_and_runtime_scope_dependencies() -> None:
+    signature = inspect.signature(QuestionPlanningService.__init__)
+    hints = get_type_hints(QuestionPlanningService.__init__)
+
+    assert tuple(signature.parameters) == (
+        "self",
+        "agent",
+        "runtime_scope_factory",
+        "audit_recorder",
+    )
+    assert hints["agent"] == Agent[PlanningAttemptInput, QuestionPlanDraft]
+    assert hints["runtime_scope_factory"] is AgentRuntimeScopeFactory
+
+
+def test_legacy_planner_draft_boundary_and_error_are_not_exported() -> None:
+    assert not hasattr(planning_contract, "QuestionPlanDraftGenerator")
+    assert not hasattr(planning_contract, "QuestionPlannerResponseInvalidError")
+
+    legacy_names = {
+        "GeminiQuestionPlanner",
+        "GeminiQuestionPlannerResponseDefect",
+        "GeminiQuestionPlannerSpec",
+        "GeminiQuestionPlannerPrompt",
+        "QuestionPlanDraftGenerator",
+        "QuestionPlannerResponseInvalidError",
+    }
+    for package_name in (
+        "app.agent",
+        "app.agent.planning",
+        "app.agent.planning.ai",
+    ):
+        package = importlib.import_module(package_name)
+        assert all(not hasattr(package, name) for name in legacy_names)
+
+    for module_name, class_name in (
+        ("app.agent.planning.ai.gemini", "GeminiQuestionPlanner"),
+        ("app.agent.planning.ai.gemini_spec", "GeminiQuestionPlannerSpec"),
+        ("app.agent.planning.ai.gemini_prompt", "GeminiQuestionPlannerPrompt"),
+    ):
+        try:
+            legacy_module = importlib.import_module(module_name)
+        except ModuleNotFoundError as exc:
+            if exc.name != module_name:
+                raise
+        else:
+            assert not hasattr(legacy_module, class_name)
 
 
 class TestExternalResearchTask:

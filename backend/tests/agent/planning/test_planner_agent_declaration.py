@@ -393,6 +393,9 @@ def test_planner_input_renderer_is_deterministic_sanitized_task_contents_only() 
     for fixed_rule in (
         "あなたの仕事は回答生成ではありません",
         "形式・文体・簡潔さだけを理由に retrieval を増やさない",
+        "最大3件までにする",
+        "# external_collection_goals",
+        "その調査で何を確認したいか",
         "同じ question について schema に合う JSON だけを返してください。",
     ):
         assert fixed_rule in instructions

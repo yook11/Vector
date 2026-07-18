@@ -2,12 +2,7 @@
 
 from __future__ import annotations
 
-from pydantic import ValidationError
-
-from app.agent.planning.ai.gemini import (
-    GeminiQuestionPlannerResponseDefect,
-    QuestionPlannerResponseInvalidError,
-)
+from app.agent.planning import audit as planner_audit
 from app.agent.planning.audit import (
     PlannerAttemptFailureEvent,
     PlannerDraftReceivedEvent,
@@ -16,16 +11,11 @@ from app.agent.planning.audit import (
     RequestRetryDisposition,
     classify_planner_failure,
 )
-from app.agent.planning.contract import QuestionPlanDraft
+from app.agent.runtime.contract import (
+    AgentResponseDefect,
+    AgentResponseInvalidError,
+)
 from app.analysis.ai_provider_errors import AIProviderNetworkError
-
-
-def _validation_error() -> ValidationError:
-    try:
-        QuestionPlanDraft(retrieval_mode="none", reason="")
-    except ValidationError as exc:
-        return exc
-    raise AssertionError("expected validation error")
 
 
 def test_provider_error_maps_to_request_local_do_not_retry() -> None:
@@ -43,36 +33,43 @@ def test_provider_error_maps_to_request_local_do_not_retry() -> None:
     assert "Terminal" not in str(dumped)
 
 
-def test_response_invalid_maps_defect_to_failure_reason() -> None:
-    attrs = classify_planner_failure(
-        QuestionPlannerResponseInvalidError(
-            GeminiQuestionPlannerResponseDefect.NOT_JSON
+def test_each_response_defect_maps_to_shared_invalid_response_contract() -> None:
+    for defect in AgentResponseDefect:
+        attrs = classify_planner_failure(
+            AgentResponseInvalidError(
+                defect,
+                repair_hint="REPAIR_HINT_MUST_NOT_ENTER_AUDIT_2a91",
+            )
         )
-    )
 
-    assert attrs.code == GeminiQuestionPlannerResponseDefect.NOT_JSON.value
-    assert attrs.failure_kind == "ai_response_invalid"
-    assert attrs.failure_reason == "question_planner_response_gemini_not_json"
-    assert attrs.request_retry_disposition is RequestRetryDisposition.RETRY_IN_REQUEST
+        assert attrs.code == defect.value
+        assert attrs.failure_kind == "ai_response_invalid"
+        assert attrs.failure_reason == defect.value
+        assert (
+            attrs.request_retry_disposition is RequestRetryDisposition.RETRY_IN_REQUEST
+        )
+        assert "REPAIR_HINT_MUST_NOT_ENTER_AUDIT_2a91" not in str(
+            attrs.model_dump(mode="json")
+        )
 
 
-def test_pydantic_validation_error_maps_to_response_invalid() -> None:
-    attrs = classify_planner_failure(_validation_error())
+def test_unknown_error_is_not_treated_as_response_invalid() -> None:
+    attrs = classify_planner_failure(ValueError("arbitrary validation-like failure"))
 
-    assert attrs.code == "question_planner_response_pydantic_validation_failed"
-    assert attrs.failure_kind == "ai_response_invalid"
-    assert (
-        attrs.failure_reason == "question_planner_response_pydantic_validation_failed"
-    )
-    assert attrs.request_retry_disposition is RequestRetryDisposition.RETRY_IN_REQUEST
+    assert attrs.code == "unexpected_error"
+    assert attrs.failure_kind == "unknown"
+    assert attrs.failure_reason is None
+    assert attrs.request_retry_disposition is RequestRetryDisposition.UNKNOWN
+    assert not hasattr(planner_audit, "PYDANTIC_VALIDATION_FAILED")
 
 
 def test_attempt_failure_event_has_no_raw_question_prompt_or_response() -> None:
     event = PlannerAttemptFailureEvent.from_failure(
         attempt_number=1,
         failure=classify_planner_failure(
-            QuestionPlannerResponseInvalidError(
-                GeminiQuestionPlannerResponseDefect.NOT_OBJECT
+            AgentResponseInvalidError(
+                AgentResponseDefect.RESPONSE_NOT_OBJECT,
+                repair_hint="REPAIR_HINT_SENTINEL_29af",
             )
         ),
         ai_model="gemini-2.5-flash",
@@ -84,9 +81,15 @@ def test_attempt_failure_event_has_no_raw_question_prompt_or_response() -> None:
     assert payload["kind"] == "agent_planner"
     assert payload["attempt_number"] == 1
     assert payload["failure_kind"] == "ai_response_invalid"
-    assert payload["failure_reason"] == "question_planner_response_gemini_not_object"
+    assert payload["failure_reason"] == "response_not_object"
     dumped = str(payload)
-    for needle in ("ユーザー質問", "prompt text", "raw_response", "NVIDIA latest"):
+    for needle in (
+        "ユーザー質問",
+        "prompt text",
+        "raw_response",
+        "NVIDIA latest",
+        "REPAIR_HINT_SENTINEL_29af",
+    ):
         assert needle not in dumped
 
 

@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
+import asyncio
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from types import TracebackType
 from typing import Any
 from uuid import UUID
 
 import pytest
+from pydantic import SecretStr
 
 from app.agent import composition
 from app.agent.contract import (
@@ -15,8 +18,13 @@ from app.agent.contract import (
     AnswerQuestionResult,
     AnswerRetrievalSummary,
 )
+from app.agent.planning.agent import QUESTION_PLANNER_AGENT
 from app.agent.question_context import QuestionContext, QuestionContextDraft
 from app.agent.running import AnsweringRunner, RunContext, RunInput
+from app.agent.runtime.contract import (
+    AgentResponseDefect,
+    AgentResponseInvalidError,
+)
 from app.agent.threads.contracts import ThreadMessageSnapshot
 from app.analysis.ai_provider_errors import (
     AIProviderConfigurationError,
@@ -476,3 +484,266 @@ def test_starting_agent_factory_rejects_public_client_injection(
             session_factory=object(),
             **{unexpected_argument: object()},
         )
+
+
+class _FakeGeminiAsyncClient:
+    def __init__(self, invocation: int) -> None:
+        self.invocation = invocation
+
+
+class _FakeGeminiAsyncClientContext:
+    def __init__(
+        self,
+        *,
+        client: _FakeGeminiAsyncClient,
+        lifecycle: list[str],
+    ) -> None:
+        self._client = client
+        self._lifecycle = lifecycle
+
+    async def __aenter__(self) -> _FakeGeminiAsyncClient:
+        self._lifecycle.append(f"gemini {self._client.invocation} enter")
+        return self._client
+
+    async def __aexit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc: BaseException | None,
+        traceback: TracebackType | None,
+    ) -> bool:
+        self._lifecycle.append(f"gemini {self._client.invocation} exit")
+        return False
+
+
+class _FakeGeminiSdkClient:
+    def __init__(
+        self,
+        *,
+        client: _FakeGeminiAsyncClient,
+        lifecycle: list[str],
+    ) -> None:
+        self.aio = _FakeGeminiAsyncClientContext(
+            client=client,
+            lifecycle=lifecycle,
+        )
+
+
+class _FakeGeminiSdkClientFactory:
+    def __init__(self, lifecycle: list[str]) -> None:
+        self._lifecycle = lifecycle
+        self.calls: list[dict[str, object]] = []
+        self.async_clients: list[_FakeGeminiAsyncClient] = []
+
+    def __call__(self, **kwargs: object) -> _FakeGeminiSdkClient:
+        self.calls.append(kwargs)
+        client = _FakeGeminiAsyncClient(len(self.async_clients) + 1)
+        self.async_clients.append(client)
+        self._lifecycle.append(f"gemini {client.invocation} create")
+        return _FakeGeminiSdkClient(client=client, lifecycle=self._lifecycle)
+
+
+class _FakePlannerRuntime:
+    constructed: list[_FakePlannerRuntime] = []
+    construction_error: BaseException | None = None
+
+    def __init__(self, *, client: _FakeGeminiAsyncClient) -> None:
+        if self.construction_error is not None:
+            raise self.construction_error
+        self.client = client
+        self.constructed.append(self)
+
+
+def _install_planner_runtime_fakes(
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    lifecycle: list[str],
+    construction_error: BaseException | None = None,
+) -> _FakeGeminiSdkClientFactory:
+    from google import genai as genai_module
+
+    from app.agent.runtime import gemini as runtime_gemini
+
+    client_factory = _FakeGeminiSdkClientFactory(lifecycle)
+    _FakePlannerRuntime.constructed = []
+    _FakePlannerRuntime.construction_error = construction_error
+    monkeypatch.setattr(genai_module, "Client", client_factory)
+    monkeypatch.setattr(runtime_gemini, "GeminiAgentRuntime", _FakePlannerRuntime)
+    monkeypatch.setattr(
+        composition.settings,
+        "gemini_api_key",
+        SecretStr("planner-gemini-api-key-sentinel"),
+    )
+    return client_factory
+
+
+async def test_planner_runtime_scope_is_lazy_closes_once_and_uses_sdk_defaults(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    activate_planner_runtime = _composition_builder("activate_planner_runtime")
+    lifecycle: list[str] = []
+    client_factory = _install_planner_runtime_fakes(
+        monkeypatch,
+        lifecycle=lifecycle,
+    )
+
+    scope = activate_planner_runtime()
+    assert (client_factory.calls, lifecycle, _FakePlannerRuntime.constructed) == (
+        [],
+        [],
+        [],
+    )
+
+    async with scope as runtime:
+        assert runtime is _FakePlannerRuntime.constructed[0]
+        assert runtime.client is client_factory.async_clients[0]
+        assert lifecycle == ["gemini 1 create", "gemini 1 enter"]
+
+    assert lifecycle == ["gemini 1 create", "gemini 1 enter", "gemini 1 exit"]
+    assert client_factory.calls == [{"api_key": "planner-gemini-api-key-sentinel"}]
+
+
+@pytest.mark.parametrize(
+    "body_error",
+    [
+        pytest.param(AIProviderError(), id="provider-error"),
+        pytest.param(
+            AgentResponseInvalidError(AgentResponseDefect.RESPONSE_NOT_JSON),
+            id="response-error",
+        ),
+        pytest.param(RuntimeError("planner body failed"), id="body-error"),
+        pytest.param(asyncio.CancelledError(), id="cancellation"),
+    ],
+)
+async def test_planner_runtime_scope_closes_once_when_body_exits_abnormally(
+    monkeypatch: pytest.MonkeyPatch,
+    body_error: BaseException,
+) -> None:
+    activate_planner_runtime = _composition_builder("activate_planner_runtime")
+    lifecycle: list[str] = []
+    _install_planner_runtime_fakes(monkeypatch, lifecycle=lifecycle)
+
+    with pytest.raises(type(body_error)) as raised:
+        async with activate_planner_runtime():
+            raise body_error
+
+    assert raised.value is body_error
+    assert lifecycle == ["gemini 1 create", "gemini 1 enter", "gemini 1 exit"]
+
+
+async def test_planner_runtime_scope_closes_when_runtime_construction_fails(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    activate_planner_runtime = _composition_builder("activate_planner_runtime")
+    lifecycle: list[str] = []
+    error = RuntimeError("runtime construction failed")
+    _install_planner_runtime_fakes(
+        monkeypatch,
+        lifecycle=lifecycle,
+        construction_error=error,
+    )
+
+    with pytest.raises(RuntimeError) as raised:
+        async with activate_planner_runtime():
+            raise AssertionError("scope body must not start")
+
+    assert raised.value is error
+    assert lifecycle == ["gemini 1 create", "gemini 1 enter", "gemini 1 exit"]
+
+
+async def test_planner_runtime_scope_creates_fresh_client_and_runtime_each_time(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    activate_planner_runtime = _composition_builder("activate_planner_runtime")
+    lifecycle: list[str] = []
+    client_factory = _install_planner_runtime_fakes(
+        monkeypatch,
+        lifecycle=lifecycle,
+    )
+
+    async with activate_planner_runtime() as first_runtime:
+        pass
+    async with activate_planner_runtime() as second_runtime:
+        pass
+
+    assert len(client_factory.async_clients) == 2
+    assert client_factory.async_clients[0] is not client_factory.async_clients[1]
+    assert first_runtime is not second_runtime
+    assert first_runtime.client is client_factory.async_clients[0]
+    assert second_runtime.client is client_factory.async_clients[1]
+    assert lifecycle == [
+        "gemini 1 create",
+        "gemini 1 enter",
+        "gemini 1 exit",
+        "gemini 2 create",
+        "gemini 2 enter",
+        "gemini 2 exit",
+    ]
+
+
+class _KeywordObject:
+    def __init__(self, *args: object, **kwargs: object) -> None:
+        self.args = args
+        self.kwargs = kwargs
+
+
+def test_build_question_answering_agent_wires_declared_planner_and_runtime_scope(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.agent.answering import orchestration
+    from app.agent.answering.direct_answer import flow as direct_flow
+    from app.agent.answering.direct_answer.ai import gemini as direct_gemini
+    from app.agent.answering.evidence_answer import flow as evidence_flow
+    from app.agent.answering.evidence_answer.ai import gemini as evidence_gemini
+    from app.agent.evidence_collection import service as evidence_service
+    from app.agent.evidence_collection.internal_search import (
+        article_search,
+    )
+    from app.agent.evidence_collection.internal_search import (
+        service as internal_service,
+    )
+    from app.agent.evidence_collection.internal_search.ai import (
+        gemini as embedding_gemini,
+    )
+    from app.agent.planning import service as planning_service
+
+    planner_calls: list[dict[str, object]] = []
+
+    class _PlannerSpy(_KeywordObject):
+        def __init__(self, **kwargs: object) -> None:
+            planner_calls.append(kwargs)
+            super().__init__(**kwargs)
+
+    monkeypatch.setattr(
+        composition,
+        "ensure_question_answering_agent_configured",
+        lambda: None,
+    )
+    monkeypatch.setattr(
+        composition, "_build_external_search", lambda *_a, **_k: object()
+    )
+    monkeypatch.setattr(planning_service, "QuestionPlanningService", _PlannerSpy)
+    for module, name in (
+        (direct_gemini, "GeminiDirectAnswerGenerator"),
+        (direct_flow, "DirectAnswerFlow"),
+        (evidence_gemini, "GeminiEvidenceAnswerDraftGenerator"),
+        (evidence_flow, "EvidenceAnswerFlow"),
+        (orchestration, "QuestionAnsweringOrchestrator"),
+        (evidence_service, "EvidenceCollectionService"),
+        (embedding_gemini, "GeminiQueryEmbedder"),
+        (article_search, "PgVectorArticleSearchRepository"),
+        (internal_service, "InternalSearchService"),
+    ):
+        monkeypatch.setattr(module, name, _KeywordObject)
+
+    composition.build_question_answering_agent(
+        session_factory=object(),
+        tavily_client=object(),
+    )
+
+    assert planner_calls == [
+        {
+            "agent": QUESTION_PLANNER_AGENT,
+            "runtime_scope_factory": _composition_builder("activate_planner_runtime"),
+            "audit_recorder": None,
+        }
+    ]

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import json
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from inspect import signature
 from types import SimpleNamespace
 
@@ -28,6 +28,12 @@ from tests.agent.runtime._helpers import (
 )
 
 
+@dataclass(frozen=True, slots=True)
+class DataclassRuntimeOutput:
+    result: str
+    tags: list[str]
+
+
 async def test_constructor_accepts_only_borrowed_async_client() -> None:
     client = FakeGeminiClient([success_response()])
     gemini_runtime_type = runtime_type()
@@ -48,6 +54,16 @@ async def test_invoke_calls_provider_once_and_returns_validated_output_directly(
     assert client.models.generate_content.await_count == 1
     client.close.assert_not_awaited()
     client.aclose.assert_not_awaited()
+
+
+async def test_invoke_validates_a_declared_dataclass_output_type() -> None:
+    client = FakeGeminiClient([success_response(result="dataclass")])
+    runtime = runtime_type()(client=client)
+    agent = replace(make_agent(), output_type=DataclassRuntimeOutput)
+
+    output = await runtime.invoke(agent, "typed input", attempt_number=1)
+
+    assert output == DataclassRuntimeOutput(result="dataclass", tags=["runtime"])
 
 
 async def test_request_separates_instructions_contents_and_thaws_schema() -> None:
@@ -151,6 +167,8 @@ async def test_invalid_response_shape_maps_to_provider_neutral_defect(
     assert exc_info.value.defect is getattr(defect_type, defect_name)
     assert "MODEL_OUTPUT_SENTINEL" not in str(exc_info.value)
     assert "MODEL_OUTPUT_SENTINEL" not in (exc_info.value.repair_hint or "")
+    assert exc_info.value.__context__ is None
+    assert exc_info.value.__cause__ is None
     assert client.models.generate_content.await_count == 1
 
 
@@ -188,6 +206,8 @@ async def test_output_validation_error_exposes_only_safe_repair_fields() -> None
     assert "ARBITRARY_CTX_SENTINEL_7c62" not in safe_error_text
     assert "Input should be" not in safe_error_text
     assert "errors.pydantic.dev" not in safe_error_text
+    assert error.__context__ is None
+    assert error.__cause__ is None
 
 
 async def test_unknown_extra_field_location_is_collapsed_to_fixed_placeholder() -> None:

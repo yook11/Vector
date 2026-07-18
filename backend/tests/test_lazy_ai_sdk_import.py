@@ -95,3 +95,31 @@ def test_non_ai_process_import_does_not_load_ai_sdk(surface: str) -> None:
     assert loaded == set(), (
         f"{surface} の import surface が AI SDK をロードした: {sorted(loaded)}"
     )
+
+
+def test_planner_runtime_scope_construction_keeps_provider_imports_lazy() -> None:
+    """Planner scopeはenterされるまでGemini具象RuntimeとSDKをloadしない。"""
+    code = textwrap.dedent(
+        """
+        import sys
+        from app.agent.composition import activate_planner_runtime
+
+        activate_planner_runtime()
+        forbidden = sorted(
+            module
+            for module in sys.modules
+            if module == "app.agent.runtime.gemini"
+            or module == "google.genai"
+            or module.startswith("google.genai.")
+        )
+        print("\\n".join(forbidden))
+        """
+    )
+    result = subprocess.run(  # noqa: S603  (sys.executable + 固定code)
+        [sys.executable, "-c", code],
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == ""

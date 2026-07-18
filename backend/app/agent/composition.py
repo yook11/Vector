@@ -6,6 +6,9 @@ call the builder when they actually execute an agent run.
 
 from __future__ import annotations
 
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
+
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.agent.contract import (
@@ -18,9 +21,11 @@ from app.agent.contract import (
     QuestionAnsweringAgent,
 )
 from app.agent.evidence_collection.external_search.tavily import TavilyHttpClient
+from app.agent.planning.agent import QUESTION_PLANNER_AGENT
 from app.agent.question_context.contract import QuestionContextGenerator
 from app.agent.question_context.service import QuestionContextService
 from app.agent.running import AnsweringRunner
+from app.agent.runtime.contract import AgentRuntime
 from app.analysis.ai_provider_errors import (
     AIProviderConfigurationError,
     AIProviderError,
@@ -35,6 +40,23 @@ def ensure_question_answering_agent_configured() -> None:
         and settings.tavily_api_key.get_secret_value()
     ):
         raise AIProviderConfigurationError()
+
+
+@asynccontextmanager
+async def activate_planner_runtime() -> AsyncIterator[AgentRuntime]:
+    api_key = settings.gemini_api_key.get_secret_value()
+    if not api_key:
+        from app.analysis.gemini_error_translator import GeminiStateReason
+
+        raise AIProviderConfigurationError(reason=GeminiStateReason.NOT_CONFIGURED)
+
+    from google import genai
+
+    from app.agent.runtime.gemini import GeminiAgentRuntime
+
+    async with genai.Client(api_key=api_key).aio as client:
+        runtime = GeminiAgentRuntime(client=client)
+        yield runtime
 
 
 class _DeferredQuestionAnsweringAgent:
@@ -113,7 +135,6 @@ def build_question_answering_agent(
     from app.agent.evidence_collection.internal_search.service import (
         InternalSearchService,
     )
-    from app.agent.planning.ai.gemini import GeminiQuestionPlanner
     from app.agent.planning.service import QuestionPlanningService
 
     external_search = _build_external_search(tavily_client, events=events)
@@ -124,7 +145,8 @@ def build_question_answering_agent(
     )
     return QuestionAnsweringOrchestrator(
         planner=QuestionPlanningService(
-            planner=GeminiQuestionPlanner(),
+            agent=QUESTION_PLANNER_AGENT,
+            runtime_scope_factory=activate_planner_runtime,
             audit_recorder=None,
         ),
         evidence_collector=EvidenceCollectionService(

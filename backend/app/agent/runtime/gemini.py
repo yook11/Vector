@@ -19,7 +19,7 @@ from opentelemetry.semconv._incubating.attributes.gen_ai_attributes import (
 )
 from opentelemetry.semconv.attributes.error_attributes import ERROR_TYPE
 from opentelemetry.trace import SpanKind, StatusCode
-from pydantic import BaseModel, ValidationError
+from pydantic import BaseModel, TypeAdapter, ValidationError
 
 from app.agent.agent import Agent
 from app.agent.runtime.contract import (
@@ -181,25 +181,23 @@ def _parse_output[InputT, OutputT](
     try:
         payload = json.loads(text)
     except json.JSONDecodeError:
-        raise AgentResponseInvalidError(
-            AgentResponseDefect.RESPONSE_NOT_JSON,
-            repair_hint="response must be valid JSON",
-        ) from None
-    if not isinstance(payload, dict):
-        raise AgentResponseInvalidError(
-            AgentResponseDefect.RESPONSE_NOT_OBJECT,
-            repair_hint="response root must be a JSON object",
-        )
-    try:
-        return agent.output_type.model_validate(payload)
-    except ValidationError as exc:
-        raise AgentResponseInvalidError(
-            AgentResponseDefect.OUTPUT_SCHEMA_MISMATCH,
-            repair_hint=_validation_repair_hint(
-                exc,
-                allowed_locations=_declared_location_names(agent.output_type),
-            ),
-        ) from None
+        defect = AgentResponseDefect.RESPONSE_NOT_JSON
+        repair_hint = "response must be valid JSON"
+    else:
+        if not isinstance(payload, dict):
+            defect = AgentResponseDefect.RESPONSE_NOT_OBJECT
+            repair_hint = "response root must be a JSON object"
+        else:
+            try:
+                return TypeAdapter(agent.output_type).validate_python(payload)
+            except ValidationError as exc:
+                defect = AgentResponseDefect.OUTPUT_SCHEMA_MISMATCH
+                repair_hint = _validation_repair_hint(
+                    exc,
+                    allowed_locations=_declared_location_names(agent.output_type),
+                )
+
+    raise AgentResponseInvalidError(defect, repair_hint=repair_hint)
 
 
 def _validation_repair_hint(
