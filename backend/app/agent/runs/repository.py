@@ -101,6 +101,7 @@ class AgentRunRepository:
         self,
         run_id: uuid_mod.UUID,
         *,
+        expected_attempt_epoch: int,
         error_code: AgentRunErrorCode,
         now: datetime | None = None,
     ) -> bool:
@@ -110,6 +111,7 @@ class AgentRunRepository:
             .where(
                 AgentRun.id == run_id,
                 AgentRun.status.in_(_ACTIVE_STATUSES),
+                AgentRun.attempt_epoch == expected_attempt_epoch,
             )
             .values(
                 status=AgentRunStatus.FAILED.value,
@@ -171,6 +173,7 @@ class AgentRunRepository:
                 status=AgentRunStatus.RUNNING.value,
                 started_at=now,
                 attempt_epoch=AgentRun.attempt_epoch + 1,
+                progress_stage=None,
             )
             .returning(AgentRun.attempt_epoch)
             .execution_options(synchronize_session=False)
@@ -211,6 +214,7 @@ class AgentRunRepository:
         *,
         run_id: uuid_mod.UUID,
         result: AnswerQuestionResult,
+        expected_attempt_epoch: int,
         now: datetime | None = None,
     ) -> bool:
         now = now or datetime.now(UTC)
@@ -248,6 +252,7 @@ class AgentRunRepository:
             .where(
                 AgentRun.id == run_id,
                 AgentRun.status == AgentRunStatus.RUNNING.value,
+                AgentRun.attempt_epoch == expected_attempt_epoch,
             )
             .values(
                 status=AgentRunStatus.COMPLETED.value,

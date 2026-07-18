@@ -394,6 +394,7 @@ describe("ResearchThreadView live integration", () => {
             status: "queued",
             errorCode: null,
             progressStage: null,
+            attemptEpoch: 0,
             recentEvents: [],
           }),
           { status: 200, headers: { "Content-Type": "application/json" } },
@@ -433,6 +434,7 @@ describe("ResearchThreadView live integration", () => {
             status: "running",
             errorCode: null,
             progressStage: "planning",
+            attemptEpoch: 1,
             recentEvents: [
               {
                 type: "question.resolved",
@@ -913,6 +915,7 @@ describe("ResearchThreadView live integration", () => {
           JSON.stringify({
             status: "failed",
             progressStage: "synthesizing",
+            attemptEpoch: 1,
             recentEvents: [],
             errorCode: "stale",
           }),
@@ -995,6 +998,7 @@ describe("ResearchThreadView live integration", () => {
             status: "completed",
             errorCode: null,
             progressStage: null,
+            attemptEpoch: 1,
             recentEvents: [],
           }),
           { status: 200, headers: { "Content-Type": "application/json" } },

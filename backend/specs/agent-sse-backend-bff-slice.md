@@ -61,8 +61,8 @@ Redis StreamとSSEは再構築可能な補助経路であり、障害をrun fail
 - workerはrun取得直後に `attempt.started` をpublishするが、現時点でstream publisherを
   agent coreへ注入していない。実際に発火するstream eventは `attempt.started` だけである。
 - `AgentRunRepository.read_run_for_user()` はrunとthread ownerをjoinし、他ユーザーと
-  不在runを同じ `None` に収束できる。ただし公開用 `ResearchRunResponse` は
-  `attempt_epoch` を返さないため、SSE内部用の所有run contextが別途必要である。
+  不在runを同じ `None` に収束できる。本slice設計時は公開用`ResearchRunResponse`が
+  `attempt_epoch`を返さなかったため、SSE内部用の所有run contextが別途必要である。
 - FastAPIの既存research endpointは `get_current_user` によりBFF JWTを検証する。
 - frontendの既存run Route HandlerはJSON responseを返し、generated SDK経由のfetchは
   15秒timeoutを持つ。SSE upstreamへこのfetch経路を再利用できない。
@@ -701,7 +701,10 @@ SSE独自のfallback通知は作らず、200 streamのclose後は同じEventSour
 ## API compatibility
 
 - additiveなGET endpoint追加であり、既存APIの破壊的変更ではない。
-- 既存 `ResearchRunResponse` にSSE内部情報を追加しない。
+- 本slice後の progress forward-merge slice は、既存run polling responseの`ResearchRunResponse`へ
+  `attemptEpoch`（integer、minimum 0）をadditiveに追加した。これはpolling合成用のDB状態であり、
+  SSE内部contextやthread detail responseへfieldを追加するものではない。
+- SSE event data、SSE endpoint、BFF endpointの契約はこの後続field追加で変更しない。
 - SSE event dataはDB modelやRedis raw envelopeを直接公開せず、型付きeventから投影する。
 - FastAPI endpoint追加でOpenAPI outputが変わるため、実装sliceでは `/gen-types` を実行する。
 - generated SDKがSSEの長時間streamingに適さない場合、BFFは専用fetchを使う。generated

@@ -30,6 +30,7 @@ def build_research_run_response(*, run: AgentRun) -> ResearchRunResponse:
         status=_run_status_value(run.status),
         error_code=_run_error_code_value(run.error_code),
         progress_stage=_run_progress_stage_value(run.progress_stage),
+        attempt_epoch=run.attempt_epoch,
     )
 
 

@@ -863,6 +863,10 @@ export type ResearchRunResponse = {
      */
     progressStage: 'planning' | 'retrieving' | 'synthesizing' | null;
     /**
+     * Attemptepoch
+     */
+    attemptEpoch: number;
+    /**
      * Recentevents
      */
     recentEvents?: Array<ResearchRunInternalSearchStartedEvent | ResearchRunInternalSearchCompletedEvent | ResearchRunExternalSearchQueriesGeneratedEvent | ResearchRunExternalSearchCandidatesFetchedEvent | ResearchRunExternalSearchEvidenceSelectedEvent | ResearchRunQuestionResolvedEvent>;

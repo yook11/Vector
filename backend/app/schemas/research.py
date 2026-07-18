@@ -119,6 +119,7 @@ class ResearchRunResponse(_CamelBase):
     status: ResearchRunStatus
     error_code: ResearchRunErrorCode | None
     progress_stage: ResearchProgressStage | None
+    attempt_epoch: int = Field(ge=0)
     recent_events: list[ResearchRunEvent] = Field(default_factory=list)
 
 

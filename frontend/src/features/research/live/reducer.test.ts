@@ -282,6 +282,27 @@ describe("research live reducer", () => {
     });
   });
 
+  describe("same-attempt stage monotonicity", () => {
+    it("keeps synthesizing after delayed lower stages while accepting a direct skip", () => {
+      let state = createInitialResearchLiveState();
+      state = apply(state, marker("1-0", 1));
+      state = apply(state, stage("2-0", 1, "planning"));
+      state = apply(state, stage("3-0", 1, "synthesizing"));
+      state = apply(state, stage("4-0", 1, "retrieving"));
+
+      expect(state).toMatchObject({
+        progressStage: "synthesizing",
+        lastProcessedEventId: streamId("4-0"),
+      });
+
+      const skipped = apply(
+        apply(createInitialResearchLiveState(), marker("1-0", 2)),
+        stage("2-0", 2, "synthesizing"),
+      );
+      expect(skipped.progressStage).toBe("synthesizing");
+    });
+  });
+
   describe("generation boundaries", () => {
     it("clears the old draft on an explicit higher-generation reset", () => {
       const transition = reduceResearchLiveEvent(

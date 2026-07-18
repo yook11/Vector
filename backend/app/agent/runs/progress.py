@@ -20,9 +20,11 @@ class AgentRunProgressWriter:
         self,
         session_factory: async_sessionmaker[AsyncSession],
         run_id: UUID,
+        attempt_epoch: int,
     ) -> None:
         self._session_factory = session_factory
         self._run_id = run_id
+        self._attempt_epoch = attempt_epoch
 
     async def stage_changed(self, stage: AnswerProgressStage) -> None:
         try:
@@ -34,6 +36,7 @@ class AgentRunProgressWriter:
                         .where(
                             AgentRun.id == self._run_id,
                             AgentRun.status == AgentRunStatus.RUNNING.value,
+                            AgentRun.attempt_epoch == self._attempt_epoch,
                         )
                         .values(progress_stage=progress_stage)
                         .execution_options(synchronize_session=False)

@@ -6,6 +6,7 @@ import {
 } from "./events";
 import {
   createInitialResearchLiveState,
+  mergeResearchLivePollProgress,
   type ResearchLiveState,
   type ResearchLiveTerminal,
   reduceResearchLiveEvent,
@@ -44,6 +45,7 @@ export type ResearchRunLivePollResult =
       run: {
         status: ResearchRunLiveStatus;
         progressStage: ResearchLiveState["progressStage"];
+        attemptEpoch: number | null;
         recentEvents: readonly unknown[];
         errorCode: ResearchLiveErrorCode | null;
       };
@@ -302,24 +304,44 @@ export function createResearchRunLiveController({
       return;
     }
 
-    if (shouldApplyPollingProgress()) {
-      updateSnapshot({
-        ...snapshot,
-        runStatus: result.run.status,
-        liveState: {
-          ...snapshot.liveState,
-          progressStage: result.run.progressStage,
+    const runStatus = mergeActiveRunStatus(
+      snapshot.runStatus,
+      result.run.status,
+    );
+    let liveState = snapshot.liveState;
+    if (isUsableAttemptEpoch(result.run.attemptEpoch)) {
+      const progressMerge = mergeResearchLivePollProgress(
+        liveState,
+        result.run.attemptEpoch,
+        result.run.progressStage,
+      );
+      liveState = progressMerge.state;
+      if (
+        (progressMerge.kind === "initial" &&
+          shouldApplyInitialPollingActivity()) ||
+        (progressMerge.kind === "equal" &&
+          snapshot.connectionMode === "polling-only")
+      ) {
+        liveState = {
+          ...liveState,
           currentActivity: latestRelevantPollingActivity(
-            result.run.progressStage,
+            liveState.progressStage,
             result.run.recentEvents,
           ),
-        },
+        };
+      }
+    }
+    if (runStatus !== snapshot.runStatus || liveState !== snapshot.liveState) {
+      updateSnapshot({
+        ...snapshot,
+        runStatus,
+        liveState,
       });
     }
     schedulePoll(POLLING_SUCCESS_DELAY_MS, version);
   }
 
-  function shouldApplyPollingProgress(): boolean {
+  function shouldApplyInitialPollingActivity(): boolean {
     return (
       snapshot.connectionMode === "polling-only" ||
       (snapshot.connectionMode === "connecting" &&
@@ -515,7 +537,16 @@ function parsePollRun(
         return activity === null ? [] : [activity];
       })
     : [];
-  return { status: value.status, progressStage, recentEvents, errorCode };
+  const attemptEpoch = isUsableAttemptEpoch(value.attemptEpoch)
+    ? value.attemptEpoch
+    : null;
+  return {
+    status: value.status,
+    progressStage,
+    attemptEpoch,
+    recentEvents,
+    errorCode,
+  };
 }
 
 function latestRelevantPollingActivity(
@@ -572,6 +603,18 @@ function isErrorCode(
     value === "stale" ||
     value === "cancelled"
   );
+}
+
+function mergeActiveRunStatus(
+  current: ResearchRunLiveStatus,
+  incoming: "queued" | "running",
+): ResearchRunLiveStatus {
+  if (current === "completed" || current === "failed") return current;
+  return current === "running" || incoming === "running" ? "running" : "queued";
+}
+
+function isUsableAttemptEpoch(value: unknown): value is number {
+  return typeof value === "number" && Number.isSafeInteger(value) && value >= 1;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
