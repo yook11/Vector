@@ -1,6 +1,6 @@
 # Question Planner / Routing Spec
 
-Status: Draft
+Status: Implemented
 Created: 2026-06-28
 Scope: LLM planner が検索要否と検索先を判断する仕様
 

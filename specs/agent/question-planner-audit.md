@@ -1,6 +1,6 @@
 # Question Planner Audit Spec
 
-Status: Draft
+Status: Implemented
 Created: 2026-06-29
 Scope: question planner の失敗分類・監査・メトリクス設計
 

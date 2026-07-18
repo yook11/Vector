@@ -1,6 +1,6 @@
 # Internal Retrieval Structure Spec
 
-Status: Draft
+Status: Implemented
 Created: 2026-07-02
 Scope: internal retrieval の責務名と配置を読みやすくする小整理
 
