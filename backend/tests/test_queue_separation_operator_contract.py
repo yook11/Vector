@@ -200,11 +200,11 @@ def test_collect_redis_acl_has_only_required_queue_and_taskiq_key_surfaces() -> 
     }
 
     assert key_patterns == {
-        "~pipeline:metadata",
+        "~pipeline:dispatch",
         "~pipeline:acquisition",
         "~pipeline:completion",
         "~pipeline:curation",
-        "~autoclaim:taskiq:pipeline:metadata",
+        "~autoclaim:taskiq:pipeline:dispatch",
         "~autoclaim:taskiq:pipeline:acquisition",
         "~autoclaim:taskiq:pipeline:completion",
         "~taskiq:*",
@@ -280,10 +280,10 @@ def test_architecture_describes_collection_control_and_multistream_worker() -> N
         all(
             term in section
             for term in (
-                "pipeline:metadata",
+                "pipeline:dispatch",
                 "pipeline:acquisition",
                 "pipeline:completion",
-                "broker_content",
+                "broker_collection",
                 "taskiq",
                 "dispatch",
                 "acquisition",
@@ -353,8 +353,8 @@ def test_redis_topology_spec_names_greenfield_two_stream_live_topology() -> None
 def test_redis_topology_spec_records_all_four_stage_stream_rows() -> None:
     spec = _required_text(_REDIS_TOPOLOGY_SPEC)
     expected_consumers = {
-        "pipeline:acquisition": "broker_content",
-        "pipeline:completion": "broker_content",
+        "pipeline:acquisition": "broker_collection",
+        "pipeline:completion": "broker_collection",
         "pipeline:curation": "broker_analysis",
         "pipeline:assessment": "broker_analysis",
     }
@@ -373,14 +373,13 @@ def test_redis_topology_spec_records_all_four_stage_stream_rows() -> None:
     } == {stream: (True, True, True) for stream in expected_consumers}
 
 
-def test_redis_topology_spec_records_metadata_control_and_greenfield_legacy() -> None:
+def test_redis_topology_spec_records_dispatch_control_and_greenfield_legacy() -> None:
     spec = _required_text(_REDIS_TOPOLOGY_SPEC)
-    metadata = _paragraph_containing(spec, "pipeline:metadata")
+    dispatch = _paragraph_containing(spec, "pipeline:dispatch")
     legacy_content = _paragraph_containing(spec, "pipeline:content")
 
     assert (
-        "dispatch" in metadata
-        and _contains_any(metadata, ("control", "制御", "sweep"))
+        _contains_any(dispatch, ("control", "制御", "sweep"))
         and _contains_any(legacy_content, ("legacy", "旧stream", "旧 stream"))
         and _contains_any(
             legacy_content,
@@ -390,6 +389,7 @@ def test_redis_topology_spec_records_metadata_control_and_greenfield_legacy() ->
             legacy_content,
             ("migrationを行わない", "migration は行わない", "移行しない"),
         )
+        and "pipeline:metadata" not in spec
     )
 
 
@@ -398,11 +398,11 @@ def test_redis_topology_spec_records_final_collect_acl_boundary() -> None:
         _markdown_section(_required_text(_REDIS_TOPOLOGY_SPEC), "ACL boundary")
     )
     allowed = (
-        "~pipeline:metadata",
+        "~pipeline:dispatch",
         "~pipeline:acquisition",
         "~pipeline:completion",
         "~pipeline:curation",
-        "~autoclaim:taskiq:pipeline:metadata",
+        "~autoclaim:taskiq:pipeline:dispatch",
         "~autoclaim:taskiq:pipeline:acquisition",
         "~autoclaim:taskiq:pipeline:completion",
         "~taskiq:*",
@@ -502,7 +502,7 @@ def test_redis_topology_spec_records_collection_replay_safety_runbook() -> None:
     stop_boundary = (
         all(
             term in spec
-            for term in ("scheduler", "worker-fetch", "metadata", "content")
+            for term in ("scheduler", "worker-fetch", "dispatch", "collection")
         )
         and _contains_any(spec, ("停止", "stop"))
         and all(term in spec for term in ("admin", "fetch", "禁止"))
@@ -569,12 +569,12 @@ def test_redis_topology_spec_records_collection_capacity_and_release_gate() -> N
                 "used_memory_peak",
                 "memory usage",
                 "worker rss",
-                "rename slice",
+                "pipeline:dispatch",
                 "release",
             )
         )
         and _contains_any(spec, ("公開を止め", "公開停止", "stop release"))
-        and _contains_any(spec, ("rename slice 後", "rename slice完了後"))
+        and _contains_any(spec, ("最終topology", "final topology"))
     )
 
 
@@ -613,12 +613,22 @@ def test_fetch_deployment_comments_match_control_and_multistream_roles() -> None
     fly_comments = _normalized(_comment_text(_FLY_COLLECT_CONFIG))
     supervisor_comments = _normalized(_comment_text(_FETCH_SUPERVISOR_CONFIG))
 
-    role_terms = (
-        "metadata",
+    fly_role_terms = (
         "dispatch",
+        "collection",
+        "pipeline:dispatch",
         "pipeline:acquisition",
         "pipeline:completion",
-        "broker_content",
+        "broker_dispatch",
+        "broker_collection",
+    )
+    supervisor_role_terms = (
+        "dispatch",
+        "collection",
+        "pipeline:dispatch",
+        "pipeline:acquisition",
+        "pipeline:completion",
+        "broker_collection",
     )
     shared_consumer_terms = (
         "2 stream",
@@ -628,17 +638,17 @@ def test_fetch_deployment_comments_match_control_and_multistream_roles() -> None
     )
 
     assert (
-        all(term in fly_comments for term in role_terms)
+        all(term in fly_comments for term in fly_role_terms)
         and _contains_any(fly_comments, ("control", "制御", "sweep"))
         and _contains_any(fly_comments, shared_consumer_terms)
         and _contains_any(
             fly_comments, ("共有 consumer", "共有consumer", "shared consumer")
         )
-        and "broker_metadata=acquisition+dispatch" not in fly_comments
-        and "broker_content=completion" not in fly_comments
+        and "broker_metadata" not in fly_comments
+        and "broker_content" not in fly_comments
     )
     assert (
-        all(term in supervisor_comments for term in role_terms)
+        all(term in supervisor_comments for term in supervisor_role_terms)
         and _contains_any(supervisor_comments, ("control", "制御", "sweep"))
         and _contains_any(supervisor_comments, shared_consumer_terms)
         and _contains_any(
@@ -655,9 +665,9 @@ def test_broker_module_docstring_matches_control_and_multistream_roles() -> None
         all(
             term in docstring
             for term in (
-                "broker_metadata",
+                "broker_dispatch",
                 "dispatch",
-                "broker_content",
+                "broker_collection",
                 "acquisition",
                 "completion",
             )
@@ -670,6 +680,8 @@ def test_broker_module_docstring_matches_control_and_multistream_roles() -> None
         and _contains_any(
             docstring, ("共有 consumer", "共有consumer", "shared consumer")
         )
+        and "broker_metadata" not in docstring
+        and "broker_content" not in docstring
         and "rss/hn メタデータ取得 + dispatch" not in docstring
         and "記事単位のコンテンツ抽出" not in docstring
     )

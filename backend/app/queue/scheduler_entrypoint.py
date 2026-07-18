@@ -26,8 +26,8 @@ from app.logfire.setup import setup_logfire
 from app.queue.schedulers import (
     scheduler_agent,
     scheduler_briefing,
+    scheduler_dispatch,
     scheduler_maintenance,
-    scheduler_metadata,
     scheduler_trend_discovery,
 )
 
@@ -36,7 +36,7 @@ logger = structlog.get_logger(__name__)
 _UPDATE_INTERVAL = timedelta(seconds=60)
 _LOOP_INTERVAL = timedelta(seconds=1)
 _SCHEDULERS: tuple[TaskiqScheduler, ...] = (
-    scheduler_metadata,
+    scheduler_dispatch,
     scheduler_trend_discovery,
     scheduler_agent,
     scheduler_briefing,

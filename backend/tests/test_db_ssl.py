@@ -223,10 +223,10 @@ class TestCreateAppEngine:
 
         monkeypatch.setattr(db_ssl, "create_async_engine", _spy)
         create_app_engine(
-            f"{_NEON}?sslmode=require", application_name="vector-worker-content"
+            f"{_NEON}?sslmode=require", application_name="vector-worker-collection"
         )
         server_settings = captured["connect_args"]["server_settings"]
-        assert server_settings["application_name"] == "vector-worker-content"
+        assert server_settings["application_name"] == "vector-worker-collection"
         assert "ssl" in captured["connect_args"]
 
     def test_no_application_name_leaves_server_settings_absent(
@@ -254,7 +254,7 @@ class TestCreateAppEngine:
         monkeypatch.setattr(db_ssl, "create_async_engine", _spy)
         create_app_engine(
             f"{_NEON}?sslmode=require",
-            application_name="vector-worker-content",
+            application_name="vector-worker-collection",
             connect_args={
                 "server_settings": {
                     "timezone": "UTC",
@@ -264,7 +264,7 @@ class TestCreateAppEngine:
         )
         assert captured["connect_args"]["server_settings"] == {
             "timezone": "UTC",
-            "application_name": "vector-worker-content",
+            "application_name": "vector-worker-collection",
         }
 
 

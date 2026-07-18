@@ -7,7 +7,7 @@ import re
 import shlex
 from pathlib import Path
 from typing import Any, get_type_hints
-from unittest.mock import MagicMock, patch
+from unittest.mock import ANY, AsyncMock, MagicMock, patch
 
 import pytest
 from pydantic import SecretStr
@@ -119,24 +119,51 @@ def test_analysis_broker_reads_only_stage_specific_streams() -> None:
     }
 
 
-def test_collection_broker_reads_only_stage_specific_streams() -> None:
-    """content broker は acquisition を主 Stream、completion だけを追加購読する。"""
-    from app.queue.brokers import broker_content
+def test_dispatch_broker_keeps_control_stream_runtime_contract() -> None:
+    """dispatch broker は制御 Stream と既存 transport 設定を維持する。"""
+    from app.queue.brokers import broker_dispatch
 
     assert {
-        "queue_name": broker_content.queue_name,
-        "additional_streams": broker_content.additional_streams,
-        "consumer_group_name": broker_content.consumer_group_name,
-        "consumer_id": broker_content.consumer_id,
-        "maxlen": broker_content.maxlen,
-        "unacknowledged_batch_size": broker_content.unacknowledged_batch_size,
-        "unacknowledged_lock_timeout": broker_content.unacknowledged_lock_timeout,
+        "queue_name": broker_dispatch.queue_name,
+        "additional_streams": broker_dispatch.additional_streams,
+        "consumer_group_name": broker_dispatch.consumer_group_name,
+        "consumer_id": broker_dispatch.consumer_id,
+        "maxlen": broker_dispatch.maxlen,
+        "idle_timeout": broker_dispatch.idle_timeout,
+        "unacknowledged_batch_size": broker_dispatch.unacknowledged_batch_size,
+        "unacknowledged_lock_timeout": broker_dispatch.unacknowledged_lock_timeout,
+    } == {
+        "queue_name": "pipeline:dispatch",
+        "additional_streams": {},
+        "consumer_group_name": "taskiq",
+        "consumer_id": "$",
+        "maxlen": 10_000,
+        "idle_timeout": 600_000,
+        "unacknowledged_batch_size": 100,
+        "unacknowledged_lock_timeout": None,
+    }
+
+
+def test_collection_broker_reads_only_stage_specific_streams() -> None:
+    """collection broker は acquisition を主 Stream、completion だけを追加購読する。"""
+    from app.queue.brokers import broker_collection
+
+    assert {
+        "queue_name": broker_collection.queue_name,
+        "additional_streams": broker_collection.additional_streams,
+        "consumer_group_name": broker_collection.consumer_group_name,
+        "consumer_id": broker_collection.consumer_id,
+        "maxlen": broker_collection.maxlen,
+        "idle_timeout": broker_collection.idle_timeout,
+        "unacknowledged_batch_size": broker_collection.unacknowledged_batch_size,
+        "unacknowledged_lock_timeout": broker_collection.unacknowledged_lock_timeout,
     } == {
         "queue_name": "pipeline:acquisition",
         "additional_streams": {"pipeline:completion": ">"},
         "consumer_group_name": "taskiq",
         "consumer_id": "0-0",
         "maxlen": 10_000,
+        "idle_timeout": 600_000,
         "unacknowledged_batch_size": 100,
         "unacknowledged_lock_timeout": 60,
     }
@@ -186,7 +213,7 @@ def test_collection_task_keeps_stage_routing_execution_and_payload_contract(
     expected_payload: tuple[tuple[str, type[object]], ...],
 ) -> None:
     """両 task は stage 固有 Stream と既存 task name・payload・実行契約を持つ。"""
-    from app.queue.brokers import broker_content
+    from app.queue.brokers import broker_collection
 
     task = getattr(importlib.import_module(task_module), task_attr)
     signature = inspect.signature(task.original_func)
@@ -195,7 +222,7 @@ def test_collection_task_keeps_stage_routing_execution_and_payload_contract(
         (name, hints[name]) for name in signature.parameters if name != "ctx"
     )
     assert (task.broker, task.task_name, task.labels, payload) == (
-        broker_content,
+        broker_collection,
         expected_task_name,
         expected_labels,
         expected_payload,
@@ -270,17 +297,17 @@ def test_collection_task_keeps_stage_routing_execution_and_payload_contract(
         "sweep-completion",
     ],
 )
-def test_collection_control_task_keeps_metadata_routing_and_execution_contract(
+def test_collection_control_task_keeps_dispatch_routing_and_execution_contract(
     task_module: str,
     task_attr: str,
     expected_labels: dict[str, object],
 ) -> None:
-    """dispatch / sweep は metadata broker と既存 task name・labels を維持する。"""
-    from app.queue.brokers import broker_metadata
+    """dispatch / sweep は dispatch broker と既存 task name・labels を維持する。"""
+    from app.queue.brokers import broker_dispatch
 
     task = getattr(importlib.import_module(task_module), task_attr)
     assert (task.broker, task.task_name, task.labels) == (
-        broker_metadata,
+        broker_dispatch,
         task_attr,
         expected_labels,
     )
@@ -353,29 +380,29 @@ def test_analysis_worker_keeps_single_shared_runtime() -> None:
 
 
 def test_collection_workers_keep_two_program_shared_runtime() -> None:
-    """collection は metadata / content の2 processと既存並列度を維持する。"""
+    """collection は dispatch / collection の2 processと既存並列度を維持する。"""
     assert _fetch_worker_commands() == {
-        "metadata": [
+        "dispatch": [
             "taskiq",
             "worker",
             "--workers",
             "1",
             "--max-async-tasks",
             "10",
-            "app.queue.brokers:broker_metadata",
+            "app.queue.brokers:broker_dispatch",
             "app.queue.tasks.acquisition",
             "app.queue.tasks.completion",
             "--ack-type",
             "when_executed",
         ],
-        "content": [
+        "collection": [
             "taskiq",
             "worker",
             "--workers",
             "1",
             "--max-async-tasks",
             "5",
-            "app.queue.brokers:broker_content",
+            "app.queue.brokers:broker_collection",
             "app.queue.tasks.acquisition",
             "app.queue.tasks.completion",
             "--ack-type",
@@ -385,20 +412,20 @@ def test_collection_workers_keep_two_program_shared_runtime() -> None:
 
 
 def test_collection_lifecycle_keeps_pool_and_scheduler_boundary() -> None:
-    """metadata/content poolは各5/5で、collection schedulerはmetadataだけを使う。"""
-    from app.queue.brokers import broker_content, broker_metadata
+    """dispatch/collection poolは各5/5で、schedulerはdispatchだけを使う。"""
+    from app.queue.brokers import broker_collection, broker_dispatch
     from app.queue.schedulers import (
         scheduler_agent,
         scheduler_briefing,
+        scheduler_dispatch,
         scheduler_maintenance,
-        scheduler_metadata,
         scheduler_trend_discovery,
     )
 
     scheduler_brokers = tuple(
         scheduler.broker
         for scheduler in (
-            scheduler_metadata,
+            scheduler_dispatch,
             scheduler_trend_discovery,
             scheduler_agent,
             scheduler_briefing,
@@ -406,11 +433,96 @@ def test_collection_lifecycle_keeps_pool_and_scheduler_boundary() -> None:
         )
     )
     assert (
-        WORKER_POOL_SIZING["metadata"],
-        WORKER_POOL_SIZING["content"],
-        scheduler_metadata.broker,
-        broker_content in scheduler_brokers,
-    ) == ((5, 5), (5, 5), broker_metadata, False)
+        WORKER_POOL_SIZING["dispatch"],
+        WORKER_POOL_SIZING["collection"],
+        scheduler_dispatch.broker,
+        broker_collection in scheduler_brokers,
+    ) == ((5, 5), (5, 5), broker_dispatch, False)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("broker_name", "label", "startup_event", "shutdown_event"),
+    [
+        (
+            "broker_dispatch",
+            "dispatch",
+            "dispatch_worker_startup",
+            "dispatch_worker_shutdown",
+        ),
+        (
+            "broker_collection",
+            "collection",
+            "collection_worker_startup",
+            "collection_worker_shutdown",
+        ),
+    ],
+    ids=["dispatch", "collection"],
+)
+async def test_collection_worker_lifecycle_uses_renamed_runtime_identity(
+    broker_name: str,
+    label: str,
+    startup_event: str,
+    shutdown_event: str,
+) -> None:
+    """worker hook は新 label を service・DB・startup/shutdown event へ反映する。"""
+    from app.queue import brokers
+
+    broker = getattr(brokers, broker_name)
+    engine = MagicMock()
+    engine.dispose = AsyncMock()
+    state = TaskiqState()
+    service_name = f"vector-worker-{label}"
+
+    with (
+        patch("app.queue.lifecycle.setup_logfire") as setup_logfire,
+        patch(
+            "app.queue.lifecycle.create_app_engine", return_value=engine
+        ) as create_engine,
+        patch("app.queue.lifecycle.logfire.instrument_sqlalchemy"),
+        patch("app.queue.lifecycle.log_pool_initialized") as log_pool_initialized,
+        patch("app.queue.lifecycle.register_pool_metrics"),
+        capture_logs() as logs,
+    ):
+        for handler in broker.event_handlers[TaskiqEvents.WORKER_STARTUP]:
+            await handler(state)
+        for handler in broker.event_handlers[TaskiqEvents.WORKER_SHUTDOWN]:
+            await handler(state)
+
+    setup_logfire.assert_called_once_with(service_name)
+    create_engine.assert_called_once_with(
+        ANY,
+        application_name=service_name,
+        echo=False,
+        pool_size=5,
+        max_overflow=5,
+        pool_recycle=WORKER_POOL_RECYCLE_SECONDS,
+    )
+    log_pool_initialized.assert_called_once()
+    assert log_pool_initialized.call_args.kwargs["service_name"] == service_name
+    engine.dispose.assert_awaited_once_with()
+    assert state.engine is engine
+    events = {log["event"] for log in logs}
+    assert startup_event in events
+    assert shutdown_event in events
+
+
+@pytest.mark.asyncio
+async def test_dispatch_scheduler_lifecycle_uses_renamed_events() -> None:
+    """dispatch scheduler hook は新 startup/shutdown event だけを記録する。"""
+    from app.queue.brokers import broker_dispatch
+
+    state = TaskiqState()
+
+    with capture_logs() as logs:
+        for handler in broker_dispatch.event_handlers[TaskiqEvents.CLIENT_STARTUP]:
+            await handler(state)
+        for handler in broker_dispatch.event_handlers[TaskiqEvents.CLIENT_SHUTDOWN]:
+            await handler(state)
+
+    events = {log["event"] for log in logs}
+    assert "dispatch_scheduler_startup" in events
+    assert "dispatch_scheduler_shutdown" in events
 
 
 def test_maintenance_worker_imports_queue_health_without_runtime_split() -> None:
@@ -504,7 +616,8 @@ class TestWorkerMaxAsyncTasksCeiling:
 
     def test_max_async_tasks_within_pool_cap(self) -> None:
         # 各 worker の同時実行が pool cap (pool_size + max_overflow) を超えない。
-        # 境界: content=5<=10, trend_discovery=2<=4 (cap を下げると当該 worker が落ちる)
+        # 境界: collection=5<=10, trend_discovery=2<=4。
+        # cap を下げると当該 worker が落ちる。
         for label, max_async in _parse_worker_programs().items():
             pool_size, max_overflow = WORKER_POOL_SIZING[label]
             cap = pool_size + max_overflow
@@ -523,7 +636,7 @@ class TestWorkerPoolSizing:
 
     def test_common_worker_pool_sizing(self) -> None:
         # 共通 worker は pool_size=5 / max_overflow=5 (cap 10) の均一小型
-        pool = build_worker_engine("content").sync_engine.pool
+        pool = build_worker_engine("collection").sync_engine.pool
         assert (pool.size(), pool._max_overflow) == (5, 5)
 
     def test_trend_discovery_pool_sizing(self) -> None:
@@ -533,7 +646,7 @@ class TestWorkerPoolSizing:
 
     def test_worker_recycle_overrides_factory_default(self) -> None:
         # worker は recycle=240 で factory 既定 (3600) を override (autosuspend 手前)
-        pool = build_worker_engine("content").sync_engine.pool
+        pool = build_worker_engine("collection").sync_engine.pool
         assert pool._recycle == WORKER_POOL_RECYCLE_SECONDS == 240
 
 
@@ -550,9 +663,9 @@ class TestWorkerApplicationName:
             return _real_create_async_engine(clean_url, **kw)
 
         monkeypatch.setattr(db_ssl, "create_async_engine", _spy)
-        build_worker_engine("content")
+        build_worker_engine("collection")
         server_settings = captured["connect_args"]["server_settings"]
-        assert server_settings["application_name"] == worker_service_name("content")
+        assert server_settings["application_name"] == worker_service_name("collection")
 
 
 @pytest.mark.asyncio

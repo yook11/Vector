@@ -14,7 +14,7 @@ from app.queue.lifecycle import worker_service_name
 async def test_application_name_reaches_postgres_current_setting(
     test_database_url: str,
 ) -> None:
-    service_name = worker_service_name("content")
+    service_name = worker_service_name("collection")
     engine = create_app_engine(test_database_url, application_name=service_name)
     try:
         async with engine.connect() as conn:

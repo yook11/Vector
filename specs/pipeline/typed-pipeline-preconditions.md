@@ -320,7 +320,12 @@ async def execute(self, ready: ReadyForClassification, classifier):
 
 すべての Task は `int` (article_id / source_id / discovered_article_id) を受け渡し、Service 側で session を開いて Repository から Entity を再取得する形。**Ready 型化後は Task → Task 間で Ready 型自体を `kiq` する**ため、Stage 境界での DB 再 fetch が削減される。
 
-### 5.2 入口 task (cron) は 2 つだけ
+### 5.2 入口 task (2026-04-28 時点の設計案 — superseded)
+
+本節の task 数・cron・routing は現行 runtime の契約ではない。現行の正本は
+`backend/app/queue/schedule.py` と各 task decorator であり、Stage A は
+`dispatch_high` / `dispatch_medium` / `dispatch_low` が cron、`dispatch_sources` は
+admin 手動実行である。
 
 - `dispatch_sources` (Stage A 起動、`broker_metadata`、cron `0 * * * *`)
 - `generate_weekly_snapshot` (Stage F 起動、`broker_digest`、cron `5 15 * * 0` UTC = JST 月曜 00:05)

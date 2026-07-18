@@ -348,7 +348,7 @@ def test_instrument_system_metrics_called_with_memory_config_when_token_present(
     )
     monkeypatch.setattr(logfire_setup_module.settings, "env", "production")
 
-    setup_logfire("vector-worker-content")
+    setup_logfire("vector-worker-collection")
 
     assert mock_instrument_system_metrics.call_count == 1
     args, kwargs = mock_instrument_system_metrics.call_args

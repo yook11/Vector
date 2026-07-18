@@ -37,7 +37,7 @@ from app.collection.article_completion.ready import (
 from app.collection.article_completion.repository import ArticleCompletionRepository
 from app.collection.article_completion.service import ArticleCompletionService
 from app.logfire.stage_span import pipeline_stage_span
-from app.queue.brokers import broker_content, broker_metadata
+from app.queue.brokers import broker_collection, broker_dispatch
 from app.queue.messages.curation import CurationTrigger
 from app.queue.schedule import CRON_HTML_FETCH
 from app.queue.tasks.curation import curate_content
@@ -49,7 +49,7 @@ _LEASE_MINUTES = 5
 _DISPATCH_BATCH_LIMIT = 100
 
 
-@broker_metadata.task(
+@broker_dispatch.task(
     task_name="dispatch_html_fetch_jobs",
     timeout=30,
     max_retries=1,
@@ -78,7 +78,7 @@ async def dispatch_html_fetch_jobs(ctx: Context = TaskiqDepends()) -> dict:
     return result
 
 
-@broker_metadata.task(
+@broker_dispatch.task(
     task_name="sweep_expired_leases",
     timeout=30,
     max_retries=1,
@@ -101,7 +101,7 @@ async def sweep_expired_leases(ctx: Context = TaskiqDepends()) -> dict:
     return result
 
 
-@broker_content.task(
+@broker_collection.task(
     task_name="scrape_html_body",
     queue_name="pipeline:completion",
     timeout=60,
