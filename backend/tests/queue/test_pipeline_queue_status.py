@@ -12,6 +12,12 @@ from unittest.mock import AsyncMock, call
 import pytest
 
 _SCRIPT_PATH = Path(__file__).resolve().parents[2] / "scripts/pipeline_queue_status.py"
+_STAGE_SPECS = (
+    ("acquisition", "pipeline:acquisition"),
+    ("completion", "pipeline:completion"),
+    ("curation", "pipeline:curation"),
+    ("assessment", "pipeline:assessment"),
+)
 
 
 def _cli_module() -> ModuleType:
@@ -33,12 +39,10 @@ def _cli_module() -> ModuleType:
     return module
 
 
-def _targets() -> tuple[SimpleNamespace, SimpleNamespace]:
-    return (
-        SimpleNamespace(stage="curation", stream="pipeline:curation", group="taskiq"),
-        SimpleNamespace(
-            stage="assessment", stream="pipeline:assessment", group="taskiq"
-        ),
+def _targets() -> tuple[SimpleNamespace, ...]:
+    return tuple(
+        SimpleNamespace(stage=stage, stream=stream, group="taskiq")
+        for stage, stream in _STAGE_SPECS
     )
 
 
@@ -78,6 +82,14 @@ def _normalized_header(output: str) -> str:
     return re.sub(r"[^a-z]+", "_", first_line).strip("_")
 
 
+def test_cli_module_docstring_names_all_four_pipeline_stages() -> None:
+    module = _cli_module()
+    docstring = (module.__doc__ or "").casefold()
+
+    assert all(stage in docstring for stage, _ in _STAGE_SPECS)
+    assert not docstring.startswith("curation / assessment")
+
+
 @pytest.mark.asyncio
 async def test_cli_uses_shared_snapshot_targets_and_empty_age_marker(
     monkeypatch: pytest.MonkeyPatch,
@@ -85,9 +97,7 @@ async def test_cli_uses_shared_snapshot_targets_and_empty_age_marker(
     module = _cli_module()
     targets = _targets()
     redis = _NoDirectRedisCommands()
-    read_health = AsyncMock(
-        side_effect=[_snapshot("curation"), _snapshot("assessment")]
-    )
+    read_health = AsyncMock(side_effect=[_snapshot(stage) for stage, _ in _STAGE_SPECS])
     idle_check = AsyncMock()
     monkeypatch.setattr(module, "PIPELINE_QUEUE_TARGETS", targets)
     monkeypatch.setattr(module, "read_stream_health", read_health)
@@ -95,9 +105,7 @@ async def test_cli_uses_shared_snapshot_targets_and_empty_age_marker(
 
     output = await module.render_pipeline_queue_status(redis)
     header = _normalized_header(output)
-    curation_row = next(
-        line for line in output.splitlines() if "pipeline:curation" in line
-    )
+    stage_rows = [line for line in output.splitlines() if line.startswith("pipeline:")]
 
     assert (
         read_health.await_args_list,
@@ -115,14 +123,14 @@ async def test_cli_uses_shared_snapshot_targets_and_empty_age_marker(
                 "status",
             )
         ),
-        curation_row.split(),
+        [row.split() for row in stage_rows],
         "backlog" in output.lower(),
         "queue depth" in output.lower(),
     ) == (
-        [call(redis, targets[0]), call(redis, targets[1])],
+        [call(redis, target) for target in targets],
         0,
         True,
-        ["pipeline:curation", "0", "0", "0", "-", "-", "-", "ok"],
+        [[stream, "0", "0", "0", "-", "-", "-", "ok"] for _, stream in _STAGE_SPECS],
         False,
         False,
     )
@@ -139,8 +147,10 @@ async def test_cli_maps_missing_and_unknown_to_nonzero_statuses(
     redis = _NoDirectRedisCommands()
     read_health = AsyncMock(
         side_effect=[
-            module.StreamHealthError(stage="curation", reason=missing_reason),
-            module.StreamHealthError(stage="assessment", reason="lag_unknown"),
+            module.StreamHealthError(stage="acquisition", reason=missing_reason),
+            module.StreamHealthError(stage="completion", reason="group_missing"),
+            module.StreamHealthError(stage="curation", reason="lag_unknown"),
+            _snapshot("assessment"),
         ]
     )
     monkeypatch.setattr(module, "PIPELINE_QUEUE_TARGETS", targets)
@@ -154,8 +164,26 @@ async def test_cli_maps_missing_and_unknown_to_nonzero_statuses(
     }
 
     assert rows == {
-        "pipeline:curation": ["-", "-", "-", "-", "-", "-", "unavailable"],
-        "pipeline:assessment": ["-", "-", "-", "-", "-", "-", "unknown"],
+        "pipeline:acquisition": [
+            "-",
+            "-",
+            "-",
+            "-",
+            "-",
+            "-",
+            "unavailable",
+        ],
+        "pipeline:completion": [
+            "-",
+            "-",
+            "-",
+            "-",
+            "-",
+            "-",
+            "unavailable",
+        ],
+        "pipeline:curation": ["-", "-", "-", "-", "-", "-", "unknown"],
+        "pipeline:assessment": ["0", "0", "0", "-", "-", "-", "ok"],
     }
 
 
@@ -177,6 +205,10 @@ async def test_cli_maps_redis_and_snapshot_inconsistency_to_failure(
     redis = _NoDirectRedisCommands()
     read_health = AsyncMock(
         side_effect=[
+            module.StreamHealthError(stage="acquisition", reason="redis_unavailable"),
+            module.StreamHealthError(
+                stage="completion", reason="inconsistent_snapshot"
+            ),
             module.StreamHealthError(stage="curation", reason="redis_unavailable"),
             module.StreamHealthError(
                 stage="assessment", reason="inconsistent_snapshot"
@@ -192,6 +224,8 @@ async def test_cli_maps_redis_and_snapshot_inconsistency_to_failure(
     ]
 
     assert failure_rows == [
+        ["pipeline:acquisition", "-", "-", "-", "-", "-", "-", "failure"],
+        ["pipeline:completion", "-", "-", "-", "-", "-", "-", "failure"],
         ["pipeline:curation", "-", "-", "-", "-", "-", "-", "failure"],
         ["pipeline:assessment", "-", "-", "-", "-", "-", "-", "failure"],
     ]
@@ -204,10 +238,8 @@ async def test_cli_idle_diagnostic_is_opt_in_existence_not_maximum(
     module = _cli_module()
     targets = _targets()
     redis = _NoDirectRedisCommands()
-    read_health = AsyncMock(
-        side_effect=[_snapshot("curation"), _snapshot("assessment")]
-    )
-    idle_check = AsyncMock(side_effect=[True, False])
+    read_health = AsyncMock(side_effect=[_snapshot(stage) for stage, _ in _STAGE_SPECS])
+    idle_check = AsyncMock(side_effect=[True, False, True, False])
     monkeypatch.setattr(module, "PIPELINE_QUEUE_TARGETS", targets)
     monkeypatch.setattr(module, "read_stream_health", read_health)
     monkeypatch.setattr(module, "has_idle_pending", idle_check)
@@ -220,10 +252,7 @@ async def test_cli_idle_diagnostic_is_opt_in_existence_not_maximum(
         "maximum idle" in output.lower(),
         "max idle" in output.lower(),
     ) == (
-        [
-            call(redis, targets[0], idle_ms=600_000),
-            call(redis, targets[1], idle_ms=600_000),
-        ],
+        [call(redis, target, idle_ms=600_000) for target in targets],
         True,
         False,
         False,

@@ -27,6 +27,7 @@ from app.audit.error_fields import exception_fqn
 from app.audit.metrics import record_audit_dropped
 from app.audit.stages.completion import ArticleCompletionAuditRepository
 from app.collection.article_completion.metrics import (
+    record_completion_lease_swept,
     record_completion_processing_outcome,
 )
 from app.collection.article_completion.ready import (
@@ -94,6 +95,7 @@ async def sweep_expired_leases(ctx: Context = TaskiqDepends()) -> dict:
         )
         await session.commit()
 
+    record_completion_lease_swept(swept_count)
     result = {"swept_count": swept_count}
     logger.info("sweep_expired_leases_completed", **result)
     return result
@@ -101,6 +103,7 @@ async def sweep_expired_leases(ctx: Context = TaskiqDepends()) -> dict:
 
 @broker_content.task(
     task_name="scrape_html_body",
+    queue_name="pipeline:completion",
     timeout=60,
     max_retries=0,
     retry_on_error=False,

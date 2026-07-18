@@ -17,7 +17,19 @@ _processing_outcome_counter = logfire.metric_counter(
     ),
 )
 
+_lease_swept_counter = logfire.metric_counter(
+    "vector.completion.lease_swept",
+    unit="1",
+    description="lease 失効により open へ戻した completion 件数。",
+)
+
 
 def record_completion_processing_outcome(result: CompletionProcessingOutcome) -> None:
     """completion 処理試行の結末を counter に 1 件記録する。"""
     _processing_outcome_counter.add(1, attributes={"result": result})
+
+
+def record_completion_lease_swept(swept_count: int) -> None:
+    """lease sweep が open へ戻した正数件数だけを記録する。"""
+    if swept_count > 0:
+        _lease_swept_counter.add(swept_count)

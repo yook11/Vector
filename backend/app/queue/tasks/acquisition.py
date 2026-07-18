@@ -401,6 +401,7 @@ async def dispatch_sources(
 
 @broker_content.task(
     task_name="acquire_source",
+    queue_name="pipeline:acquisition",
     timeout=300,
     max_retries=0,
     retry_on_error=False,
@@ -416,8 +417,9 @@ async def acquire_source(
     本文未取得の記事は後段 ``scrape_html_body`` task へ進む。
 
     失敗ハンドリング: taskiq inline retry を持たず (``max_retries=0``)、捕捉した
-    例外は ``ArticleAcquisitionFailureHandler`` に委譲する。次の cron tick で再 dispatch
-    される。
+    例外は ``ArticleAcquisitionFailureHandler`` に委譲する。active な cron dispatch
+    対象は次の tick で再 dispatch されるが、inactive source の manual fetch は
+    operator が再実行する。
     """
     source_id = arg.id
     with pipeline_stage_span(

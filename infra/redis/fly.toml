@@ -7,12 +7,12 @@
 #
 # 認証は Redis ACL で 2 user に分離する (v1 shared-password は廃止):
 # - core   = 全 stream / 全 key / 全 command (crown-jewel 側、信頼)。
-# - collect = 自分が触る stream (pipeline:metadata/content/curation) と
-#   metadata/content用autoclaim lock / result key のみ。assessment/embedding/
-#   maintenance/trend/briefing stream・assessment用autoclaim lock・
+# - collect = 自分が触る stream (pipeline:metadata/acquisition/completion/curation) と
+#   metadata/acquisition/completion用autoclaim lock / result key のみ。legacy content、
+#   assessment/embedding/maintenance/trend/briefing stream・各拒否Stream用autoclaim lock・
 #   *:hold / backfill:budget:* / ratelimit:* は **不可視**。FLUSHALL/CONFIG/KEYS 等の
 #   @dangerous も拒否。これで collect 侵害時の Redis blast radius を自 stream に限定。
-#   残留リスク: collect は自 3 stream への XADD/EVAL を持つため自 stream の flood/削除と
+#   残留リスク: collect は許可された4 StreamへのXADD/EVALを持つため、その範囲のflood/削除と
 #   共有 result key (taskiq:*) の読取は可能。前者は retained historyのmaxlen=10_000 + 各stageのDB
 #   precondition 再検証、後者は result が記事派生データ (秘密無) であることで受容。
 #
@@ -35,7 +35,7 @@
 # autoclaim lock の実発行コマンドから導出 (XADD/XREADGROUP/XACK/XAUTOCLAIM/XGROUP
 # = @stream, result SET/GET/EXISTS = @read/@write, lock SET/EVAL = @write/@scripting,
 # AUTH/HELLO = @connection)。**deploy 前に dev で collect user creds に絞り
-# collection→completion→curation 橋渡しが通ることを必ず検証する** (redis-py が接続時に
+# acquisition→completion→curation の橋渡しが通ることを必ず検証する** (redis-py が接続時に
 # 発行する周辺コマンドの取りこぼしはここで顕在化する)。
 #
 # See https://fly.io/docs/reference/configuration/
@@ -61,7 +61,7 @@ primary_region = 'nrt'
 #   ghost PELとgroup metadataを含むmemoryのhard upper boundではない。
 # - bind :: : 6PN (IPv6) で listen する。
 [processes]
-  redis = "sh -c 'umask 077; { echo \"user default off\"; echo \"user core on >$REDIS_CORE_PASSWORD ~* &* +@all\"; echo \"user collect on >$REDIS_COLLECT_PASSWORD resetchannels ~pipeline:metadata ~pipeline:content ~pipeline:curation ~autoclaim:taskiq:pipeline:metadata ~autoclaim:taskiq:pipeline:content ~taskiq:* +@connection +@read +@write +@stream +@scripting -@dangerous\"; } > /tmp/users.acl; exec redis-server --aclfile /tmp/users.acl --appendonly yes --dir /data --maxmemory 256mb --maxmemory-policy noeviction --bind ::'"
+  redis = "sh -c 'umask 077; { echo \"user default off\"; echo \"user core on >$REDIS_CORE_PASSWORD ~* &* +@all\"; echo \"user collect on >$REDIS_COLLECT_PASSWORD resetchannels ~pipeline:metadata ~pipeline:acquisition ~pipeline:completion ~pipeline:curation ~autoclaim:taskiq:pipeline:metadata ~autoclaim:taskiq:pipeline:acquisition ~autoclaim:taskiq:pipeline:completion ~taskiq:* +@connection +@read +@write +@stream +@scripting -@dangerous\"; } > /tmp/users.acl; exec redis-server --aclfile /tmp/users.acl --appendonly yes --dir /data --maxmemory 256mb --maxmemory-policy noeviction --bind ::'"
 
 [mounts]
   source = "vector_redis_data"

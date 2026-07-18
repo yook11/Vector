@@ -1,4 +1,6 @@
-"""curation / assessment Redis Stream のoperator向けstatusを表示する。"""
+"""acquisition / completion / curation / assessment の4 stageを表示する
+operator向けRedis Stream status。
+"""
 
 from __future__ import annotations
 
