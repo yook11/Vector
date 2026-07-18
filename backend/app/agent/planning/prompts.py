@@ -116,6 +116,8 @@ previous_error: {previous_error}
 def render_planning_input(input: PlanningAttemptInput) -> str:
     """Planner attempt inputをmodel-visibleなtask dataへ変換する。"""
     request = input.request
+    # HTMLではないLLM promptであり、外部入力は境界用sanitizerを通す。
+    # nosemgrep: python.django.security.injection.raw-html-format.raw-html-format  # noqa: E501
     task_input = _PLANNER_INPUT_TEMPLATE.format(
         question=sanitize_for_untrusted_block(request.context.standalone_question),
         as_of=request.as_of.isoformat(),
