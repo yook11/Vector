@@ -1,6 +1,7 @@
 """External search の境界型・port 契約・構造 cap 定数。
 
-runner / service / adapter が共有する frozen model と Protocol をここで保証する。
+Agent / runner / service / provider adapter が共有する frozen model と
+Protocol をここで保証する。
 自由記述欄の clamp は from_raw factory で行い、model validator は
 「factory を通れば違反しない」不変条件として保持する。
 """
@@ -8,10 +9,17 @@ runner / service / adapter が共有する frozen model と Protocol をここ�
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
 from datetime import datetime
 from typing import Literal, Protocol
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    field_validator,
+    model_validator,
+)
 
 from app.agent.planning.contract import ExternalResearchTask
 from app.shared.security.safe_url import SafeUrl
@@ -28,10 +36,13 @@ __all__ = [
     "EXTERNAL_SEARCH_MISSING_LIMIT_PER_TASK",
     "EXTERNAL_TASK_QUERY_LIMIT",
     "EvidenceSelection",
+    "EvidenceSelectionDraft",
     "EvidenceSelectionResult",
-    "EvidenceSelector",
-    "ExternalEvidenceSelectorError",
-    "ExternalQueryGenerationError",
+    "ExternalEvidenceCandidateInput",
+    "ExternalEvidenceSelectionDraft",
+    "ExternalEvidenceSelectionInput",
+    "ExternalQueryDraft",
+    "ExternalQueryGenerationInput",
     "ExternalSearchCandidate",
     "ExternalSearchEvidence",
     "ExternalSearchOutcome",
@@ -40,7 +51,6 @@ __all__ = [
     "ExternalSearchRunResult",
     "ExternalSearchRunner",
     "MISSING_ITEM_MAX_CHARS",
-    "QueryGenerator",
     "ResearchTaskReport",
     "ResearchTaskStatus",
     "SearchProvider",
@@ -66,28 +76,8 @@ ResearchTaskStatus = Literal[
 ]
 
 
-class ExternalQueryGenerationError(Exception):
-    """Query generator adapter が分類済み失敗として raise する境界 error。"""
-
-    reason: str | None
-
-    def __init__(self, message: str = "", *, reason: str | None = None) -> None:
-        super().__init__(message or reason or "")
-        self.reason = reason
-
-
 class ExternalSearchProviderError(Exception):
     """Search provider adapter が分類済み失敗として raise する境界 error。"""
-
-
-class ExternalEvidenceSelectorError(Exception):
-    """Evidence selector adapter が分類済み失敗として raise する境界 error。"""
-
-    reason: str | None
-
-    def __init__(self, message: str = "", *, reason: str | None = None) -> None:
-        super().__init__(message or reason or "")
-        self.reason = reason
 
 
 class ExternalSearchCandidate(BaseModel):
@@ -102,14 +92,67 @@ class ExternalSearchCandidate(BaseModel):
     source_name: str | None = None
 
 
-class QueryGenerator(Protocol):
-    async def generate(
-        self,
-        *,
-        task: ExternalResearchTask,
-        as_of: datetime,
-        target_time_window: str | None,
-    ) -> list[str]: ...
+@dataclass(frozen=True, slots=True)
+class ExternalQueryGenerationInput:
+    """External Query Agent の1 attempt入力。"""
+
+    task: ExternalResearchTask
+    as_of: datetime
+    target_time_window: str | None
+
+
+class ExternalQueryDraft(BaseModel):
+    """External Query Agent が返す未正規化query。"""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    queries: list[str]
+
+    @field_validator("queries", mode="before")
+    @classmethod
+    def _keep_string_queries(cls, value: object) -> object:
+        if isinstance(value, list):
+            return [query for query in value if isinstance(query, str)]
+        return value
+
+
+@dataclass(frozen=True, slots=True)
+class ExternalEvidenceCandidateInput:
+    """Selectorへ渡すURLなしcandidate projection。"""
+
+    index: int
+    title: str
+    source_name: str | None
+    published_at: datetime | None
+    snippet: str | None
+
+
+@dataclass(frozen=True, slots=True)
+class ExternalEvidenceSelectionInput:
+    """External Evidence Selector Agent の1 attempt入力。"""
+
+    task: ExternalResearchTask
+    candidates: tuple[ExternalEvidenceCandidateInput, ...]
+    as_of: datetime
+
+
+class EvidenceSelectionDraft(BaseModel):
+    """Selectorがcandidate indexを参照して返すdraft 1件。"""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    candidate_index: int = Field(ge=0)
+    claim: str
+    why_selected: str
+
+
+class ExternalEvidenceSelectionDraft(BaseModel):
+    """Selectorが返すsource情報を持たない選別draft。"""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    selections: list[EvidenceSelectionDraft]
+    missing: list[str]
 
 
 class SearchProvider(Protocol):
@@ -176,16 +219,6 @@ class EvidenceSelectionResult(BaseModel):
         if any(len(item) > MISSING_ITEM_MAX_CHARS for item in self.missing):
             raise ValueError("missing item exceeds max length")
         return self
-
-
-class EvidenceSelector(Protocol):
-    async def select(
-        self,
-        *,
-        task: ExternalResearchTask,
-        candidates: list[ExternalSearchCandidate],
-        as_of: datetime,
-    ) -> EvidenceSelectionResult: ...
 
 
 class ResearchTaskReport(BaseModel):

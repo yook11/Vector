@@ -9,6 +9,8 @@ from collections.abc import Sequence
 from datetime import UTC, datetime
 from pathlib import Path
 
+from openai import AsyncOpenAI
+
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from app.agent.answering.audit import (
@@ -39,9 +41,13 @@ from app.agent.evidence_collection.external_search import (
     ResearchTaskReport,
     TavilySearchProvider,
 )
-from app.agent.evidence_collection.external_search.ai import (
-    DeepSeekEvidenceSelector,
-    DeepSeekQueryGenerator,
+from app.agent.evidence_collection.external_search.agent import (
+    EXTERNAL_EVIDENCE_SELECTOR_AGENT,
+    EXTERNAL_QUERY_AGENT,
+)
+from app.agent.evidence_collection.external_search.deepseek_binding import (
+    EXTERNAL_EVIDENCE_SELECTOR_DEEPSEEK_BINDING,
+    EXTERNAL_QUERY_DEEPSEEK_BINDING,
 )
 from app.agent.evidence_collection.internal_search import InternalSearchQueries
 from app.agent.evidence_collection.internal_search.article_search import (
@@ -52,6 +58,11 @@ from app.agent.planning.contract import (
     ExternalSearchPlan,
     NoRetrievalPlan,
     RetrievalPlan,
+)
+from app.agent.runtime.deepseek import (
+    DEEPSEEK_BASE_URL,
+    DEEPSEEK_CLIENT_TIMEOUT_SECONDS,
+    DeepSeekAgentRuntime,
 )
 from app.config import settings
 from app.shared.security.safe_http import make_safe_async_client
@@ -243,6 +254,7 @@ async def _probe_external(
     as_of = datetime.now(UTC)
     plan = _build_external_plan(goals, target_time_window=target_time_window)
     synthesis_audit = _ProbeSynthesisAuditRecorder()
+    deepseek_api_key = settings.deepseek_api_key.get_secret_value()
 
     async with make_safe_async_client() as client:
         provider = TavilySearchProvider(
@@ -250,9 +262,25 @@ async def _probe_external(
             client=client,
         )
         runner = ExternalSearchResearchRunner(
-            query_generator=DeepSeekQueryGenerator(),
+            query_agent=EXTERNAL_QUERY_AGENT,
+            query_runtime=DeepSeekAgentRuntime(
+                client=AsyncOpenAI(
+                    api_key=deepseek_api_key,
+                    base_url=DEEPSEEK_BASE_URL,
+                    timeout=DEEPSEEK_CLIENT_TIMEOUT_SECONDS,
+                ),
+                binding=EXTERNAL_QUERY_DEEPSEEK_BINDING,
+            ),
             search_provider=provider,
-            evidence_selector=DeepSeekEvidenceSelector(),
+            selector_agent=EXTERNAL_EVIDENCE_SELECTOR_AGENT,
+            selector_runtime=DeepSeekAgentRuntime(
+                client=AsyncOpenAI(
+                    api_key=deepseek_api_key,
+                    base_url=DEEPSEEK_BASE_URL,
+                    timeout=DEEPSEEK_CLIENT_TIMEOUT_SECONDS,
+                ),
+                binding=EXTERNAL_EVIDENCE_SELECTOR_DEEPSEEK_BINDING,
+            ),
         )
         evidence_collector = _RecordingEvidenceCollector(
             EvidenceCollectionService(

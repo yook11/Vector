@@ -8,8 +8,16 @@ worker が捕捉するのは分類済み境界 error と TimeoutError のみで�
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Iterator
+from contextlib import contextmanager
 from datetime import datetime
+from enum import StrEnum
 
+import logfire
+from opentelemetry.trace import StatusCode
+from pydantic import ValidationError
+
+from app.agent.agent import Agent
 from app.agent.contract import (
     AnswerEventReporter,
     AnswerProgressEvent,
@@ -24,20 +32,27 @@ from app.agent.evidence_collection.external_search.contract import (
     EXTERNAL_SEARCH_EVIDENCE_LIMIT_PER_TASK,
     EXTERNAL_TASK_QUERY_LIMIT,
     EvidenceSelectionResult,
-    EvidenceSelector,
-    ExternalEvidenceSelectorError,
-    ExternalQueryGenerationError,
+    ExternalEvidenceCandidateInput,
+    ExternalEvidenceSelectionDraft,
+    ExternalEvidenceSelectionInput,
+    ExternalQueryDraft,
+    ExternalQueryGenerationInput,
     ExternalSearchCandidate,
     ExternalSearchEvidence,
     ExternalSearchProviderError,
     ExternalSearchRequest,
     ExternalSearchRunResult,
-    QueryGenerator,
     ResearchTaskReport,
     ResearchTaskStatus,
     SearchProvider,
 )
 from app.agent.planning.contract import ExternalResearchTask
+from app.agent.runtime.contract import (
+    AgentResponseDefect,
+    AgentResponseInvalidError,
+    AgentRuntime,
+)
+from app.analysis.ai_provider_errors import AIProviderError
 
 __all__ = [
     "EVIDENCE_SELECT_TIMEOUT_SECONDS",
@@ -51,6 +66,9 @@ PROVIDER_SEARCH_TIMEOUT_SECONDS = 15
 EVIDENCE_SELECT_TIMEOUT_SECONDS = 30
 SELECTOR_TIMEOUT_REASON = "selector_timeout"
 SELECTOR_ERROR_REASON = "selector_error"
+_PHASE_SPAN_NAME = "agent_phase"
+_QUERY_PHASE = "external_query"
+_SELECTOR_PHASE = "external_selector"
 
 
 class ExternalSearchResearchRunner:
@@ -59,14 +77,21 @@ class ExternalSearchResearchRunner:
     def __init__(
         self,
         *,
-        query_generator: QueryGenerator,
+        query_agent: Agent[ExternalQueryGenerationInput, ExternalQueryDraft],
+        query_runtime: AgentRuntime,
         search_provider: SearchProvider,
-        evidence_selector: EvidenceSelector,
+        selector_agent: Agent[
+            ExternalEvidenceSelectionInput,
+            ExternalEvidenceSelectionDraft,
+        ],
+        selector_runtime: AgentRuntime,
         events: AnswerEventReporter | None = None,
     ) -> None:
-        self._query_generator = query_generator
+        self._query_agent = query_agent
+        self._query_runtime = query_runtime
         self._search_provider = search_provider
-        self._evidence_selector = evidence_selector
+        self._selector_agent = selector_agent
+        self._selector_runtime = selector_runtime
         self._events = events
 
     async def search(self, request: ExternalSearchRequest) -> ExternalSearchRunResult:
@@ -106,23 +131,33 @@ class ExternalSearchResearchRunner:
         task_index: int,
         task: ExternalResearchTask,
     ) -> tuple[list[ExternalSearchEvidence], ResearchTaskReport]:
-        try:
-            generated_queries = await asyncio.wait_for(
-                self._query_generator.generate(
+        query_input = ExternalQueryGenerationInput(
+            task=task,
+            as_of=request.as_of,
+            target_time_window=request.target_time_window,
+        )
+        with _external_agent_phase(
+            phase=_QUERY_PHASE,
+            agent_name=self._query_agent.name,
+            task_index=task_index,
+        ):
+            try:
+                query_draft = await asyncio.wait_for(
+                    self._query_runtime.invoke(
+                        self._query_agent,
+                        query_input,
+                        attempt_number=1,
+                    ),
+                    timeout=QUERY_GENERATE_TIMEOUT_SECONDS,
+                )
+            except (AgentResponseInvalidError, AIProviderError, TimeoutError):
+                return [], self._task_report(
+                    task_index=task_index,
                     task=task,
-                    as_of=request.as_of,
-                    target_time_window=request.target_time_window,
-                ),
-                timeout=QUERY_GENERATE_TIMEOUT_SECONDS,
-            )
-        except (ExternalQueryGenerationError, TimeoutError):
-            return [], self._task_report(
-                task_index=task_index,
-                task=task,
-                status="query_generation_failed",
-            )
+                    status="query_generation_failed",
+                )
 
-        queries = _clean_generated_queries(generated_queries)
+        queries = _clean_generated_queries(query_draft.queries)
         if not queries:
             return [], self._task_report(
                 task_index=task_index,
@@ -178,6 +213,7 @@ class ExternalSearchResearchRunner:
             task=task,
             candidates=pool,
             as_of=request.as_of,
+            task_index=task_index,
         )
         if selection_result is None:
             return [], self._task_report(
@@ -235,25 +271,56 @@ class ExternalSearchResearchRunner:
         task: ExternalResearchTask,
         candidates: list[ExternalSearchCandidate],
         as_of: datetime,
+        task_index: int,
     ) -> tuple[EvidenceSelectionResult | None, str | None]:
+        selector_input = ExternalEvidenceSelectionInput(
+            task=task,
+            candidates=tuple(
+                ExternalEvidenceCandidateInput(
+                    index=index,
+                    title=candidate.title,
+                    source_name=candidate.source_name,
+                    published_at=candidate.published_at,
+                    snippet=candidate.snippet,
+                )
+                for index, candidate in enumerate(candidates)
+            ),
+            as_of=as_of,
+        )
         selector_failure_reason: str | None = None
-        for _ in range(2):
-            try:
-                return (
-                    await asyncio.wait_for(
-                        self._evidence_selector.select(
-                            task=task,
-                            candidates=candidates,
-                            as_of=as_of,
+        with _external_agent_phase(
+            phase=_SELECTOR_PHASE,
+            agent_name=self._selector_agent.name,
+            task_index=task_index,
+        ):
+            for attempt_number in range(1, 3):
+                try:
+                    draft = await asyncio.wait_for(
+                        self._selector_runtime.invoke(
+                            self._selector_agent,
+                            selector_input,
+                            attempt_number=attempt_number,
                         ),
                         timeout=EVIDENCE_SELECT_TIMEOUT_SECONDS,
-                    ),
-                    None,
-                )
-            except ExternalEvidenceSelectorError as exc:
-                selector_failure_reason = _selector_failure_reason(exc)
-            except TimeoutError:
-                selector_failure_reason = SELECTOR_TIMEOUT_REASON
+                    )
+                except AgentResponseInvalidError as exc:
+                    selector_failure_reason = exc.defect.value
+                    continue
+                except AIProviderError as exc:
+                    selector_failure_reason = _provider_failure_reason(exc)
+                    continue
+                except TimeoutError:
+                    selector_failure_reason = SELECTOR_TIMEOUT_REASON
+                    continue
+
+                try:
+                    selection_result = _finalize_selection_draft(draft)
+                except ValidationError:
+                    selector_failure_reason = (
+                        AgentResponseDefect.OUTPUT_SCHEMA_MISMATCH.value
+                    )
+                    continue
+                return selection_result, None
         return None, selector_failure_reason
 
     def _task_report(
@@ -305,10 +372,46 @@ def _clean_generated_queries(raw_queries: list[str]) -> list[str]:
     return queries
 
 
-def _selector_failure_reason(exc: ExternalEvidenceSelectorError) -> str:
-    if exc.reason:
-        return str(exc.reason)
+def _provider_failure_reason(exc: AIProviderError) -> str:
+    reason = getattr(exc, "reason", None)
+    if isinstance(reason, StrEnum):
+        return reason.value
+    code = getattr(exc, "CODE", None)
+    if isinstance(code, str):
+        return code
     return SELECTOR_ERROR_REASON
+
+
+def _finalize_selection_draft(
+    draft: ExternalEvidenceSelectionDraft,
+) -> EvidenceSelectionResult:
+    return EvidenceSelectionResult.from_raw(
+        selections=[selection.model_dump() for selection in draft.selections],
+        missing=draft.missing,
+    )
+
+
+@contextmanager
+def _external_agent_phase(
+    *,
+    phase: str,
+    agent_name: str,
+    task_index: int,
+) -> Iterator[None]:
+    """External task単位のAgent policy spanを作る。"""
+    if task_index < 0:
+        raise ValueError("task_index must be non-negative")
+    with logfire.span(
+        _PHASE_SPAN_NAME,
+        phase=phase,
+        agent_name=agent_name,
+        task_index=task_index,
+    ) as span:
+        try:
+            yield
+        except BaseException:
+            span.set_status(StatusCode.ERROR, "unclassified agent phase error")
+            raise
 
 
 def _build_candidate_pool(

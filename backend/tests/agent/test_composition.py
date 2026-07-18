@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from types import TracebackType
 from typing import Any
+from unittest.mock import AsyncMock
 from uuid import UUID
 
 import pytest
@@ -116,6 +117,23 @@ class _SafeClientFactory:
         client = _FakeTavilyClient(invocation=len(self.clients) + 1)
         self.clients.append(client)
         return _TrackedClientContext(client=client, lifecycle=self._lifecycle)
+
+
+class _FakeDeepSeekClient:
+    def __init__(self, **kwargs: object) -> None:
+        self.kwargs = kwargs
+        self.aclose = AsyncMock()
+        self.close = AsyncMock()
+
+
+class _FakeDeepSeekClientFactory:
+    def __init__(self) -> None:
+        self.clients: list[_FakeDeepSeekClient] = []
+
+    def __call__(self, **kwargs: object) -> _FakeDeepSeekClient:
+        client = _FakeDeepSeekClient(**kwargs)
+        self.clients.append(client)
+        return client
 
 
 def _composition_builder(name: str) -> Any:
@@ -280,6 +298,61 @@ def test_starting_agent_factory_does_not_open_client_or_build_graph(
     starting_agent = build_starting_agent(session_factory=object())
 
     assert (construction_calls, callable(starting_agent.answer)) == ([], True)
+
+
+def test_external_search_wiring_creates_distinct_borrowed_deepseek_clients(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import openai
+
+    from app.agent.evidence_collection.external_search.deepseek_binding import (
+        EXTERNAL_EVIDENCE_SELECTOR_DEEPSEEK_BINDING,
+        EXTERNAL_QUERY_DEEPSEEK_BINDING,
+    )
+    from app.agent.runtime.deepseek import (
+        DEEPSEEK_BASE_URL,
+        DEEPSEEK_CLIENT_TIMEOUT_SECONDS,
+        DeepSeekAgentRuntime,
+    )
+
+    client_factory = _FakeDeepSeekClientFactory()
+    monkeypatch.setattr(openai, "AsyncOpenAI", client_factory)
+    monkeypatch.setattr(
+        composition.settings,
+        "deepseek_api_key",
+        SecretStr("deepseek-api-key-sentinel"),
+    )
+    monkeypatch.setattr(
+        composition.settings,
+        "tavily_api_key",
+        SecretStr("tavily-api-key-sentinel"),
+    )
+
+    external_search = composition._build_external_search(object())
+    runner = external_search._runner
+    query_runtime = runner._query_runtime
+    selector_runtime = runner._selector_runtime
+
+    assert len(client_factory.clients) == 2
+    assert client_factory.clients[0] is not client_factory.clients[1]
+    assert all(
+        client.kwargs
+        == {
+            "api_key": "deepseek-api-key-sentinel",
+            "base_url": DEEPSEEK_BASE_URL,
+            "timeout": DEEPSEEK_CLIENT_TIMEOUT_SECONDS,
+        }
+        for client in client_factory.clients
+    )
+    assert isinstance(query_runtime, DeepSeekAgentRuntime)
+    assert isinstance(selector_runtime, DeepSeekAgentRuntime)
+    assert query_runtime._client is client_factory.clients[0]
+    assert selector_runtime._client is client_factory.clients[1]
+    assert query_runtime._binding is EXTERNAL_QUERY_DEEPSEEK_BINDING
+    assert selector_runtime._binding is EXTERNAL_EVIDENCE_SELECTOR_DEEPSEEK_BINDING
+    for client in client_factory.clients:
+        client.aclose.assert_not_awaited()
+        client.close.assert_not_awaited()
 
 
 async def test_deferred_answer_orders_resources_forwards_dependencies_and_result(

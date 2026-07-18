@@ -195,9 +195,15 @@ def _build_external_search(
 ) -> object:
     ensure_question_answering_agent_configured()
 
-    from app.agent.evidence_collection.external_search.ai.deepseek import (
-        DeepSeekEvidenceSelector,
-        DeepSeekQueryGenerator,
+    from openai import AsyncOpenAI
+
+    from app.agent.evidence_collection.external_search.agent import (
+        EXTERNAL_EVIDENCE_SELECTOR_AGENT,
+        EXTERNAL_QUERY_AGENT,
+    )
+    from app.agent.evidence_collection.external_search.deepseek_binding import (
+        EXTERNAL_EVIDENCE_SELECTOR_DEEPSEEK_BINDING,
+        EXTERNAL_QUERY_DEEPSEEK_BINDING,
     )
     from app.agent.evidence_collection.external_search.runner import (
         ExternalSearchResearchRunner,
@@ -208,15 +214,40 @@ def _build_external_search(
     from app.agent.evidence_collection.external_search.tavily import (
         TavilySearchProvider,
     )
+    from app.agent.runtime.deepseek import (
+        DEEPSEEK_BASE_URL,
+        DEEPSEEK_CLIENT_TIMEOUT_SECONDS,
+        DeepSeekAgentRuntime,
+    )
+
+    deepseek_api_key = settings.deepseek_api_key.get_secret_value()
+    query_runtime = DeepSeekAgentRuntime(
+        client=AsyncOpenAI(
+            api_key=deepseek_api_key,
+            base_url=DEEPSEEK_BASE_URL,
+            timeout=DEEPSEEK_CLIENT_TIMEOUT_SECONDS,
+        ),
+        binding=EXTERNAL_QUERY_DEEPSEEK_BINDING,
+    )
+    selector_runtime = DeepSeekAgentRuntime(
+        client=AsyncOpenAI(
+            api_key=deepseek_api_key,
+            base_url=DEEPSEEK_BASE_URL,
+            timeout=DEEPSEEK_CLIENT_TIMEOUT_SECONDS,
+        ),
+        binding=EXTERNAL_EVIDENCE_SELECTOR_DEEPSEEK_BINDING,
+    )
 
     return ExternalSearchService(
         runner=ExternalSearchResearchRunner(
-            query_generator=DeepSeekQueryGenerator(),
+            query_agent=EXTERNAL_QUERY_AGENT,
+            query_runtime=query_runtime,
             search_provider=TavilySearchProvider(
                 api_key=settings.tavily_api_key,
                 client=tavily_client,
             ),
-            evidence_selector=DeepSeekEvidenceSelector(),
+            selector_agent=EXTERNAL_EVIDENCE_SELECTOR_AGENT,
+            selector_runtime=selector_runtime,
             events=events,
         )
     )
