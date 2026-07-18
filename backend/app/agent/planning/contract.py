@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from datetime import datetime
 from enum import StrEnum
 from typing import Annotated, Literal, Protocol, Self, assert_never
@@ -20,6 +21,7 @@ __all__ = [
     "MAX_INTERNAL_QUERIES",
     "NoRetrievalPlan",
     "PlanQuery",
+    "PlanningAttemptInput",
     "PlanningRequest",
     "QuestionPlan",
     "QuestionPlanDraft",
@@ -47,6 +49,14 @@ class PlanningRequest(BaseModel):
 
     context: QuestionContext
     as_of: datetime
+
+
+@dataclass(frozen=True, slots=True)
+class PlanningAttemptInput:
+    """Plannerの1 attemptに渡す実行時input。"""
+
+    request: PlanningRequest
+    previous_error: str | None = None
 
 
 class QuestionPlannerResponseInvalidError(ValueError):
