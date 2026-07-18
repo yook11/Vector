@@ -23,10 +23,10 @@ from app.queue.brokers import (
     broker_agent,
     broker_analysis,
     broker_briefing,
-    broker_content,
+    broker_collection,
+    broker_dispatch,
     broker_embedding,
     broker_maintenance,
-    broker_metadata,
     broker_trend_discovery,
 )
 
@@ -41,8 +41,8 @@ logger = structlog.get_logger(__name__)
 # ready-build 失敗) があり飽和不可能の保証ではない。二重 audit 分は
 # max_overflow + pool_timeout fail-fast で吸収する。
 WORKER_POOL_SIZING: dict[str, tuple[int, int]] = {
-    "metadata": (5, 5),
-    "content": (5, 5),
+    "dispatch": (5, 5),
+    "collection": (5, 5),
     "analysis": (5, 5),
     "embedding": (5, 5),
     "trend_discovery": (2, 2),
@@ -198,18 +198,18 @@ def _register_scheduler_lifecycle(broker: RedisStreamBroker, label: str) -> None
     CLIENT_STARTUP を発火する (taskiq.abc.broker)。API プロセスはそもそも
     ``broker.startup()`` を呼ばず ``.kiq()`` は AsyncKicker による lazy 経路なので、
     CLIENT_STARTUP は **scheduler プロセスでのみ発火する** (no gate required)。
-    cron 駆動を持つ broker (broker_metadata / broker_trend_discovery /
+    cron 駆動を持つ broker (broker_dispatch / broker_trend_discovery /
     broker_briefing / broker_agent / broker_maintenance) のみに本関数を当てる。
-    content / analysis / embedding broker は scheduler が存在しないため不要。
+    collection / analysis / embedding broker は scheduler が存在しないため不要。
 
     Scheduler 自身は DB を触らない (全 cron task は worker 側で実行され、
     state.engine も session_factory も WORKER_STARTUP でしか初期化されない) ため、
     本 hook は startup/shutdown ログのみを担う (engine 生成 / instrument_sqlalchemy は
     意図的に呼ばない)。
 
-    Logfire bootstrap は本 hook では呼ばない。統合後の scheduler は 1 プロセスで 4
+    Logfire bootstrap は本 hook では呼ばない。統合後の scheduler は 1 プロセスで 5
     broker の CLIENT_STARTUP が走るため、hook 内で ``setup_logfire`` を呼ぶと
-    ``logfire.instrument_httpx`` (global patch) が 4 回積み重なり「プロセスごとに 1 度」
+    ``logfire.instrument_httpx`` (global patch) が 5 回積み重なり「プロセスごとに 1 度」
     契約 (test_logfire_setup) を破る。よって ``setup_logfire("vector-scheduler")`` は
     entrypoint (``scheduler_entrypoint._main``) が process 先頭で 1 度だけ呼ぶ
     (API が lifespan で 1 度呼ぶのと同パターン)。enqueue 自体の telemetry は
@@ -226,8 +226,8 @@ def _register_scheduler_lifecycle(broker: RedisStreamBroker, label: str) -> None
         logger.info(f"{label}_scheduler_shutdown")
 
 
-_register_worker_lifecycle(broker_metadata, "metadata")
-_register_worker_lifecycle(broker_content, "content")
+_register_worker_lifecycle(broker_dispatch, "dispatch")
+_register_worker_lifecycle(broker_collection, "collection")
 _register_worker_lifecycle(broker_analysis, "analysis")
 _register_worker_lifecycle(broker_embedding, "embedding")
 _register_worker_lifecycle(broker_trend_discovery, "trend_discovery")
@@ -235,13 +235,13 @@ _register_worker_lifecycle(broker_briefing, "briefing")
 _register_worker_lifecycle(broker_agent, "agent")
 _register_worker_lifecycle(broker_maintenance, "maintenance")
 
-# broker_metadata / broker_trend_discovery / broker_briefing / broker_agent /
+# broker_dispatch / broker_trend_discovery / broker_briefing / broker_agent /
 # broker_maintenance は
 # worker process と scheduler process の両方で同じ broker object を共有するため、
 # _register_worker_lifecycle (WORKER_STARTUP) と _register_scheduler_lifecycle
 # (CLIENT_STARTUP) の両方を呼ぶ。
 # プロセスが違うのでイベント発火が衝突することはない。
-_register_scheduler_lifecycle(broker_metadata, "metadata")
+_register_scheduler_lifecycle(broker_dispatch, "dispatch")
 _register_scheduler_lifecycle(broker_trend_discovery, "trend_discovery")
 _register_scheduler_lifecycle(broker_briefing, "briefing")
 _register_scheduler_lifecycle(broker_agent, "agent")

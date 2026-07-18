@@ -25,14 +25,13 @@ legacy Streamを引き継がない。初回deployでliveにするpipeline stage 
 
 | Stage | Stream | Group | Consumer | `MAXLEN` |
 |---|---|---|---|---|
-| acquisition | `pipeline:acquisition` | `taskiq` | `broker_content` | approximate `~10,000` |
-| completion | `pipeline:completion` | `taskiq` | `broker_content` | approximate `~10,000` |
+| acquisition | `pipeline:acquisition` | `taskiq` | `broker_collection` | approximate `~10,000` |
+| completion | `pipeline:completion` | `taskiq` | `broker_collection` | approximate `~10,000` |
 | curation | `pipeline:curation` | `taskiq` | `broker_analysis` | approximate `~10,000` |
 | assessment | `pipeline:assessment` | `taskiq` | `broker_analysis` | approximate `~10,000` |
 
-`pipeline:metadata`は記事データの処理stageではなく、source dispatch、completion poller、
-lease sweepを実行するcontrol Streamである。本sliceではこの名前を維持し、後続rename sliceで
-`pipeline:dispatch`へ全面改名する。
+`pipeline:dispatch`は記事データの処理stageではなく、source dispatch、completion poller、
+lease sweepを実行するcontrol Streamである。
 
 legacy `pipeline:content`はproductionに作成せず、entryやgroupを引き継がない。dual-readや
 migrationを行わない。旧volumeを再利用する必要が生じた場合は、このgreenfield前提を適用せず、
@@ -41,7 +40,7 @@ producer停止、drain、ACL、rollbackを含む別migrationを定義する。
 旧`pipeline:analysis`もproductionに存在しない構成とし、dual-read、3 Stream互換期間、
 legacy migrationは不要であり、migrationを行わない。
 
-collectionの2 Streamは1つの`broker_content`と1つのTaskiq worker process、共有concurrency 5で
+collectionの2 Streamは1つの`broker_collection`と1つのTaskiq worker process、共有concurrency 5で
 consumeする。analysisの2 Streamも1つの`broker_analysis`と1つのTaskiq worker process、
 共有concurrency 10でconsumeする。Stream、consumer group state、retention、lag / pending / ageは
 stage別に分かれるが、stage別concurrency、DB pool、backpressure、process failure isolationは
@@ -53,11 +52,11 @@ Redis ACLはapp境界に合わせる。
 
 - `core`: `~* &* +@all`を維持する。
 - `collect`の許可key patternは次のexact setとする。
-  - `~pipeline:metadata`
+  - `~pipeline:dispatch`
   - `~pipeline:acquisition`
   - `~pipeline:completion`
   - `~pipeline:curation`
-  - `~autoclaim:taskiq:pipeline:metadata`
+  - `~autoclaim:taskiq:pipeline:dispatch`
   - `~autoclaim:taskiq:pipeline:acquisition`
   - `~autoclaim:taskiq:pipeline:completion`
   - `~taskiq:*`
@@ -122,8 +121,8 @@ production broker Redisは256 MB / `noeviction`である。公開前とdeploy後
 
 `used_memory / maxmemory >= 80%`なら公開を止め、operatorがcapacity対応を判断する。このsliceは
 Redis memoryの継続exporterを追加しないため、80%はdeploy時と手動diagnosticのcapacity gateであり、
-継続alertではない。初回releaseはmetadata rename slice 後にだけ行い、deploy前後のworker RSSと
-上記Redis値を最終名のtopologyで比較する。
+継続alertではない。初回releaseではdeploy前後のworker RSSと上記Redis値を最終名のtopologyで
+比較する。
 
 ## Developmentとのfailure semantics差
 
@@ -193,7 +192,7 @@ live feed再取得であり、最大約10,000 retained entriesのacquisition rep
 
 復旧は次の順序で行う。
 
-1. schedulerとworker-fetch containerを停止する。metadata / content両programを止め、復旧中のadmin fetchを
+1. schedulerとworker-fetch containerを停止する。dispatch / collection両programを止め、復旧中のadmin fetchを
    禁止する。
 2. acquisition / completion両Streamのretained entries、PEL、DBのopen / running状態を確認する。
 3. live feed再取得、HTTP burst、重複実行、新規記事のAI costを明示し、replayを受容するかoperatorが承認する。
@@ -209,8 +208,7 @@ live feed再取得であり、最大約10,000 retained entriesのacquisition rep
 - group欠落はself-healではなくAI quota / costを伴い得るincidentとして扱う。
 - analysis replay / stale PEL recoveryの詳細は
   `backend/specs/curation-assessment-queue-separation-slice.md`の§8、collection固有条件は上記runbookに従う。
-- `pipeline:metadata`から`pipeline:dispatch`へのrename sliceを完了するまで初回production deployを行わない。
-- release acceptanceはrename slice後の最終topologyで、ACL DRYRUN、collect credentials smoke、4-stage
+- release acceptanceは最終topologyで、ACL DRYRUN、collect credentials smoke、4-stage
   sampler freshness、capacity / worker RSS gateを確認してから公開する。
 - ACL cutover後のrollbackはfinal Streamを読める互換imageに限定し、そのdigestより前はforward-fixとする。
 
@@ -220,6 +218,5 @@ live feed再取得であり、最大約10,000 retained entriesのacquisition rep
 - collectionまたはcuration / assessment worker、VM、containerの分割
 - completion payloadへのattempt token追加やclaim / lease / attempt semanticsの変更
 - admin manual fetchのdurable job ID / status永続化
-- 本slice内での`pipeline:metadata` rename
 - docker-composeから`redis-rl`を削除すること
 - local legacy Streamの自動`DEL` / `XTRIM`

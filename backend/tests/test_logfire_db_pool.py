@@ -24,7 +24,7 @@ class TestLogPoolInitialized:
         pool_size, max_overflow = 5, 5
         with capture_logs() as logs:
             log_pool_initialized(
-                service_name="vector-worker-content",
+                service_name="vector-worker-collection",
                 pool_size=pool_size,
                 max_overflow=max_overflow,
                 pool_recycle=240,
@@ -34,7 +34,7 @@ class TestLogPoolInitialized:
             {
                 "event": "db_pool_initialized",
                 "log_level": "info",
-                "service": "vector-worker-content",
+                "service": "vector-worker-collection",
                 "pool_size": pool_size,
                 "max_overflow": max_overflow,
                 "capacity": pool_size + max_overflow,
@@ -48,8 +48,8 @@ class TestPoolMetrics:
     """observable gauge の登録と pool 値読取の不変条件。"""
 
     def test_pool_stats_reads_fresh_pool(self) -> None:
-        pool_size, _ = WORKER_POOL_SIZING["content"]
-        engine = build_worker_engine("content")
+        pool_size, _ = WORKER_POOL_SIZING["collection"]
+        engine = build_worker_engine("collection")
         assert pool_stats(engine) == {"checked_out": 0, "overflow": -pool_size}
 
     def test_registers_three_pool_gauges(self, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -59,8 +59,8 @@ class TestPoolMetrics:
             registered.append(name)
 
         monkeypatch.setattr(logfire, "metric_gauge_callback", _capture)
-        pool_size, max_overflow = WORKER_POOL_SIZING["content"]
-        engine = build_worker_engine("content")
+        pool_size, max_overflow = WORKER_POOL_SIZING["collection"]
+        engine = build_worker_engine("collection")
         register_pool_metrics(engine, pool_size=pool_size, max_overflow=max_overflow)
         assert set(registered) == {
             "vector.db.pool.checked_out",
@@ -77,8 +77,8 @@ class TestPoolMetrics:
             captured[name] = callbacks[0]
 
         monkeypatch.setattr(logfire, "metric_gauge_callback", _capture)
-        pool_size, max_overflow = WORKER_POOL_SIZING["content"]
-        engine = build_worker_engine("content")
+        pool_size, max_overflow = WORKER_POOL_SIZING["collection"]
+        engine = build_worker_engine("collection")
         register_pool_metrics(engine, pool_size=pool_size, max_overflow=max_overflow)
 
         def _value(name: str) -> int:

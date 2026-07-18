@@ -1,6 +1,6 @@
 """TaskiqScheduler 定義 — cron 駆動を持つ broker ごとに 1 つ (計 5)。
 
-  - scheduler_metadata:        収集 dispatch 用 cron
+  - scheduler_dispatch:        収集 dispatch 用 cron
   - scheduler_trend_discovery: Trend Discovery 用 cron
   - scheduler_briefing:        週次 briefing 用 cron
   - scheduler_agent:           agent run stale sweeper 用 cron
@@ -21,14 +21,14 @@ from taskiq.schedule_sources import LabelScheduleSource
 from app.queue.brokers import (
     broker_agent,
     broker_briefing,
+    broker_dispatch,
     broker_maintenance,
-    broker_metadata,
     broker_trend_discovery,
 )
 
-scheduler_metadata = TaskiqScheduler(
-    broker=broker_metadata,
-    sources=[LabelScheduleSource(broker_metadata)],
+scheduler_dispatch = TaskiqScheduler(
+    broker=broker_dispatch,
+    sources=[LabelScheduleSource(broker_dispatch)],
 )
 scheduler_trend_discovery = TaskiqScheduler(
     broker=broker_trend_discovery,

@@ -1,6 +1,6 @@
 """遅延 AI SDK import の構造保証テスト (import-time footprint guard)。
 
-非 AI を実行しない taskiq プロセス (scheduler / collect の metadata・content /
+非 AI を実行しない taskiq プロセス (scheduler / collect の dispatch・collection /
 maintenance / trend_discovery) と API プロセスの module import は、起動時に重い
 AI SDK (``openai`` + ``google.genai``、実測 ~133MB) を import してはならない。
 SDK は AI を実行する worker の WORKER_STARTUP hook (broker_analysis /
@@ -31,10 +31,10 @@ _NON_AI_IMPORT_SURFACES = {
     "api": "import app.main",
     # API route / schema import で app.agent package が読まれても SDK-free に保つ。
     "agent_package": "import app.agent",
-    # scheduler.conf: python -m app.queue.scheduler_entrypoint (4 cron scheduler 統合)。
+    # scheduler.conf: python -m app.queue.scheduler_entrypoint (5 cron scheduler 統合)。
     # entrypoint は schedulers + registry を import するため最広の import surface。
     "scheduler": "import app.queue.scheduler_entrypoint",
-    # fetch.conf: taskiq worker app.queue.brokers:broker_{metadata,content}
+    # fetch.conf: taskiq worker app.queue.brokers:broker_{dispatch,collection}
     #             app.queue.tasks.acquisition app.queue.tasks.completion
     "collect": (
         "import app.queue.brokers, app.queue.tasks.acquisition, "

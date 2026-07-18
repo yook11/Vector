@@ -31,6 +31,7 @@ pytestmark = [
 
 _REPOSITORY_ROOT = Path(__file__).resolve().parents[3]
 _REDIS_FLY_CONFIG = _REPOSITORY_ROOT / "infra" / "redis" / "fly.toml"
+_DISPATCH_STREAM = "pipeline:dispatch"
 _ACQUISITION_STREAM = "pipeline:acquisition"
 _COMPLETION_STREAM = "pipeline:completion"
 _GROUP = "taskiq"
@@ -170,6 +171,7 @@ async def test_collect_acl_allows_required_and_denies_out_of_scope_surfaces(
             "COUNT",
             "1",
         ),
+        ("XADD", _DISPATCH_STREAM, "*", "data", "taskiq-payload"),
         (
             "XREADGROUP",
             "GROUP",
@@ -178,14 +180,14 @@ async def test_collect_acl_allows_required_and_denies_out_of_scope_surfaces(
             "COUNT",
             "1",
             "STREAMS",
-            "pipeline:metadata",
+            _DISPATCH_STREAM,
             ">",
         ),
-        ("XACK", "pipeline:metadata", "taskiq", "0-0"),
+        ("XACK", _DISPATCH_STREAM, "taskiq", "0-0"),
         ("XADD", "pipeline:curation", "*", "data", "taskiq-payload"),
         (
             "SET",
-            "autoclaim:taskiq:pipeline:metadata",
+            f"autoclaim:taskiq:{_DISPATCH_STREAM}",
             "temporary-consumer",
             "PX",
             "60000",
@@ -212,6 +214,7 @@ async def test_collect_acl_allows_required_and_denies_out_of_scope_surfaces(
         ("EXISTS", "taskiq:temporary-result"),
     )
     denied_streams = (
+        "pipeline:metadata",
         "pipeline:content",
         "pipeline:analysis",
         "pipeline:assessment",

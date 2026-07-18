@@ -75,7 +75,7 @@ filter:
   `name=execute/curate_content` の CONSUMER span (Phase 3 で taskiq middleware
   から自動採取) を時刻 filter で抽出 → curation 失敗時の HTTP/SQL/httpx 子 span
   を辿って root cause 解析。
-- **age_deleted spike 時刻** → `service.name=vector-worker-metadata` +
+- **age_deleted spike 時刻** → `service.name=vector-worker-maintenance` +
   `name=execute/backfill_curations` span を filter → 削除対象 article がどの
   cron cycle で出たかを trace で追跡。dashboard 単体では article_id が attribute
   に乗らない (PII 隔離契約) ため、詳細 forensics は pipeline_events DB query

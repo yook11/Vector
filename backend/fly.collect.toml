@@ -14,14 +14,14 @@ primary_region = 'nrt'
 [build]
 
 # inbound を一切持たない: [[services]] を宣言せず public IP も割り当てない。
-# worker-fetch はRedis Streamをpullし外部webへegressするのみ。broker_metadataは
-# pipeline:metadataのdispatch / sweep control、broker_contentはpipeline:acquisitionと
+# worker-fetch はRedis Streamをpullし外部webへegressするのみ。broker_dispatchは
+# pipeline:dispatchのdispatch / sweep control、broker_collectionはpipeline:acquisitionと
 # pipeline:completionの2 Streamを購読する共有consumerである。
 # HTTP を listen しないため [[checks]] も置かない。永続バグは supervisord の
 # fail_fast eventlistener が FATAL → container exit させ、Fly が restart loop で
 # 可視化する (fetch.conf 参照)。
 
-# fetch.conf は metadata + content の 2 program (各 --workers 1) を同居させ、各々が
+# fetch.conf は dispatch + collection の 2 program (各 --workers 1) を同居させ、各々が
 # 親 + worker child を持つ。worker child は untrusted HTML の fetch/parse でヒープが
 # 成長する (実測 122〜152MB と振れる)。512MB だと idle working set ~441MB で空き
 # ~18MB しか無く、大きいページの parse で OOM 余地がある。実測 +74% のヘッドルーム
@@ -43,7 +43,7 @@ primary_region = 'nrt'
   # 公開 URL 設定すら漏らさない、というより単に不要)。
   FRONTEND_URL = "http://vector-collect-unused.invalid"
 
-# worker-fetchのみ。fetch.confはbroker_metadataのdispatch/sweep制御と、broker_contentが
+# worker-fetchのみ。fetch.confはbroker_dispatchのdispatch/sweep制御と、broker_collectionが
 # pipeline:acquisition / pipeline:completionの両Streamを読む共有consumerを1 containerに
 # 同居させる。back-fill / retention は
 # broker_maintenance に分離済で core 側 (worker-analysis) が担うため本 app には無い。

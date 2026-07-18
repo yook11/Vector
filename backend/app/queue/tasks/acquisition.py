@@ -38,7 +38,7 @@ from app.collection.article_acquisition.metrics import (
 from app.collection.sources.dispatch import SourceDispatchService
 from app.collection.sources.fetch_cadence import FetchCadence
 from app.logfire.stage_span import pipeline_stage_span
-from app.queue.brokers import broker_content, broker_metadata
+from app.queue.brokers import broker_collection, broker_dispatch
 from app.queue.messages.collection import AcquireSourceTaskInput
 from app.queue.messages.curation import CurationTrigger
 from app.queue.schedule import CADENCE_CRON
@@ -340,7 +340,7 @@ async def _append_dispatch_run_failed(
     )
 
 
-@broker_metadata.task(
+@broker_dispatch.task(
     task_name="dispatch_high",
     timeout=60,
     max_retries=1,
@@ -352,7 +352,7 @@ async def dispatch_high(ctx: Context = TaskiqDepends()) -> dict:
     return await _dispatch(ctx.state.session_factory, cadence=FetchCadence.HIGH)
 
 
-@broker_metadata.task(
+@broker_dispatch.task(
     task_name="dispatch_medium",
     timeout=60,
     max_retries=1,
@@ -364,7 +364,7 @@ async def dispatch_medium(ctx: Context = TaskiqDepends()) -> dict:
     return await _dispatch(ctx.state.session_factory, cadence=FetchCadence.MEDIUM)
 
 
-@broker_metadata.task(
+@broker_dispatch.task(
     task_name="dispatch_low",
     timeout=60,
     max_retries=1,
@@ -376,7 +376,7 @@ async def dispatch_low(ctx: Context = TaskiqDepends()) -> dict:
     return await _dispatch(ctx.state.session_factory, cadence=FetchCadence.LOW)
 
 
-@broker_metadata.task(
+@broker_dispatch.task(
     task_name="dispatch_sources",
     timeout=60,
     max_retries=1,
@@ -399,7 +399,7 @@ async def dispatch_sources(
 # ---------------------------------------------------------------------------
 
 
-@broker_content.task(
+@broker_collection.task(
     task_name="acquire_source",
     queue_name="pipeline:acquisition",
     timeout=300,

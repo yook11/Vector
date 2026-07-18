@@ -7,8 +7,8 @@
 #
 # 認証は Redis ACL で 2 user に分離する (v1 shared-password は廃止):
 # - core   = 全 stream / 全 key / 全 command (crown-jewel 側、信頼)。
-# - collect = 自分が触る stream (pipeline:metadata/acquisition/completion/curation) と
-#   metadata/acquisition/completion用autoclaim lock / result key のみ。legacy content、
+# - collect = 自分が触る stream (pipeline:dispatch/acquisition/completion/curation) と
+#   dispatch/acquisition/completion用autoclaim lock / result key のみ。legacy content、
 #   assessment/embedding/maintenance/trend/briefing stream・各拒否Stream用autoclaim lock・
 #   *:hold / backfill:budget:* / ratelimit:* は **不可視**。FLUSHALL/CONFIG/KEYS 等の
 #   @dangerous も拒否。これで collect 侵害時の Redis blast radius を自 stream に限定。
@@ -61,7 +61,7 @@ primary_region = 'nrt'
 #   ghost PELとgroup metadataを含むmemoryのhard upper boundではない。
 # - bind :: : 6PN (IPv6) で listen する。
 [processes]
-  redis = "sh -c 'umask 077; { echo \"user default off\"; echo \"user core on >$REDIS_CORE_PASSWORD ~* &* +@all\"; echo \"user collect on >$REDIS_COLLECT_PASSWORD resetchannels ~pipeline:metadata ~pipeline:acquisition ~pipeline:completion ~pipeline:curation ~autoclaim:taskiq:pipeline:metadata ~autoclaim:taskiq:pipeline:acquisition ~autoclaim:taskiq:pipeline:completion ~taskiq:* +@connection +@read +@write +@stream +@scripting -@dangerous\"; } > /tmp/users.acl; exec redis-server --aclfile /tmp/users.acl --appendonly yes --dir /data --maxmemory 256mb --maxmemory-policy noeviction --bind ::'"
+  redis = "sh -c 'umask 077; { echo \"user default off\"; echo \"user core on >$REDIS_CORE_PASSWORD ~* &* +@all\"; echo \"user collect on >$REDIS_COLLECT_PASSWORD resetchannels ~pipeline:dispatch ~pipeline:acquisition ~pipeline:completion ~pipeline:curation ~autoclaim:taskiq:pipeline:dispatch ~autoclaim:taskiq:pipeline:acquisition ~autoclaim:taskiq:pipeline:completion ~taskiq:* +@connection +@read +@write +@stream +@scripting -@dangerous\"; } > /tmp/users.acl; exec redis-server --aclfile /tmp/users.acl --appendonly yes --dir /data --maxmemory 256mb --maxmemory-policy noeviction --bind ::'"
 
 [mounts]
   source = "vector_redis_data"

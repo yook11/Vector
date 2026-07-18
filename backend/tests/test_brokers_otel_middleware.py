@@ -26,24 +26,24 @@ from app.queue.brokers import (
     broker_agent,
     broker_analysis,
     broker_briefing,
-    broker_content,
+    broker_collection,
+    broker_dispatch,
     broker_embedding,
     broker_maintenance,
-    broker_metadata,
     broker_trend_discovery,
 )
 
 # middleware の identity / 順序 unit テスト
 
 _BROKERS_WITH_SCHEDULER = (
-    (broker_metadata, "metadata"),
+    (broker_dispatch, "dispatch"),
     (broker_trend_discovery, "trend_discovery"),
     (broker_briefing, "briefing"),
     (broker_agent, "agent"),
     (broker_maintenance, "maintenance"),
 )
 _BROKERS_WITHOUT_SCHEDULER = (
-    (broker_content, "content"),
+    (broker_collection, "collection"),
     (broker_analysis, "analysis"),
     (broker_embedding, "embedding"),
 )
@@ -76,7 +76,7 @@ def test_otel_middleware_singleton_per_broker() -> None:
 def test_scheduler_lifecycle_registered_for_cron_brokers_only() -> None:
     """CLIENT_STARTUP hook が cron 駆動 5 broker のみに登録される。
 
-    scheduler を持たない broker (content / analysis / embedding) に登録すると、
+    scheduler を持たない broker (collection / analysis / embedding) に登録すると、
     将来「.kiq() の遅延副作用で broker.startup() が走る」変更が入ったときに
     API process で setup_logfire が二重呼出される事故になりうる。
     """

@@ -1,8 +1,8 @@
 """taskiq broker 定義。
 
 broker:
-  - broker_metadata:  dispatch / sweep control task
-  - broker_content:   acquisition / completion の2 Stream共有 consumer
+  - broker_dispatch:   dispatch / sweep control task
+  - broker_collection: acquisition / completion の2 Stream共有 consumer
   - broker_analysis:  AI 分析
   - broker_embedding: ベクトル埋め込み生成
   - broker_trend_discovery: rolling 7d Trend Discovery 実行 (cron 駆動)
@@ -17,7 +17,7 @@ import** で行う。`from app.queue.brokers import broker_X` 1 行で:
   - broker × 8 の生成
   - 各 broker への WORKER_STARTUP / CLIENT_STARTUP hook attach
   - analysis / embedding broker への AI adapter wiring attach
-  - 4 つの TaskiqScheduler の生成
+  - 5 つの TaskiqScheduler の生成
 が全て完了する。順序は循環 import を避けるため厳守。
 """
 
@@ -90,8 +90,8 @@ def _make_broker(
     )
 
 
-broker_metadata = _make_broker("pipeline:metadata")
-broker_content = _make_broker(
+broker_dispatch = _make_broker("pipeline:dispatch")
+broker_collection = _make_broker(
     "pipeline:acquisition",
     additional_streams={"pipeline:completion": ">"},
     consumer_id="0-0",

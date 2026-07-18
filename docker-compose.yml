@@ -321,7 +321,7 @@ services:
       - internal
 
   # --- taskiq workers (broker は分離維持、container 単位で failure domain ごとに集約) ---
-  # 設計判断: broker 名 (broker_metadata 等) は無変更。多 process container は supervisord
+  # 設計判断: broker は役割単位 (broker_dispatch / broker_collection 等) に分離。多 process container は supervisord
   # で管理 (Pattern B: limited self-heal)。一過性故障は autorestart=unexpected +
   # startretries=3 で吸収、永続バグは 3 retries で FATAL → fail_fast eventlistener が
   # supervisord shutdown → container exit → docker / Fly.io が auto-restart loop で visible 化。
@@ -351,7 +351,7 @@ services:
     init: true
     command: supervisord -n -c /app/supervisord/agent.conf
 
-  # --- taskiq scheduler (metadata + trend discovery + briefing + agent cron を 1 container に同居) ---
+  # --- taskiq scheduler (dispatch + trend discovery + briefing + agent + maintenance を 1 container に同居) ---
   scheduler:
     <<: *worker-base
     init: true
