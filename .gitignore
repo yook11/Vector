@@ -129,13 +129,10 @@ agent-failures/
 docs/dev-notes/
 
 # ===========================
-# Specs (議論用、ローカル保持)
+# Private notes
 # ===========================
-# 新規 specs は ignore。既に tracked のファイルは追跡継続 (untrack したい場合は git rm --cached が必要)。
-# specs/ を丸ごと除外すると子の再包含が効かないため specs/* にする (git の仕様)。
-specs/*
-# 例外: specs/history/ は旧 spec を圧縮した「設計の推移」の確定記録。削除する旧 spec の受け皿として追跡する。
-!specs/history/
+# 調査・監査・作業メモ・旧設計はローカル保持し、公開用の実装仕様から分離する。
+/private-notes/
 
 # ===========================
 # Build artifacts
