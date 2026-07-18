@@ -6,15 +6,6 @@ from collections.abc import AsyncIterator
 
 from pydantic import ValidationError
 
-from app.agent.answering.audit import (
-    AnswerSynthesisAttemptFailureEvent,
-    AnswerSynthesisAuditRecorder,
-    AnswerSynthesisDefectEvent,
-    AnswerSynthesisFailureAttributes,
-    AnswerSynthesisFinalEvent,
-    RequestRetryDisposition,
-    classify_answer_synthesis_failure,
-)
 from app.agent.answering.contract import AnsweringRequest
 from app.agent.answering.evidence_answer.contract import (
     EvidenceAnswerDraft,
@@ -31,6 +22,11 @@ from app.agent.answering.evidence_answer.json_answer_extractor import (
 )
 from app.agent.answering.evidence_answer.validation import (
     finalize_evidence_answer_draft,
+)
+from app.agent.answering.failure import (
+    AnswerSynthesisFailureAttributes,
+    RequestRetryDisposition,
+    classify_answer_synthesis_failure,
 )
 from app.agent.answering.live_delivery import (
     BestEffortAnswerDeltaReporter,
@@ -53,7 +49,7 @@ _FALLBACK_ANSWER = (
 )
 _FALLBACK_MISSING_ASPECT = "回答生成に必要な根拠または応答形式が不足しました"
 _MAX_ATTEMPTS = 2
-_EVIDENCE_ANSWER_AUDITED_ERRORS = (
+_EVIDENCE_ANSWER_CLASSIFIED_ERRORS = (
     AIProviderError,
     EvidenceAnswerDraftGenerationInvalidError,
     EvidenceAnswerDraftInvalidError,
@@ -68,12 +64,10 @@ class EvidenceAnswerFlow:
         self,
         *,
         generator: EvidenceAnswerDraftGenerator,
-        audit_recorder: AnswerSynthesisAuditRecorder | None = None,
         delta_reporter: AnswerDeltaReporter | None = None,
         continuation: AnswerGenerationContinuation | None = None,
     ) -> None:
         self._generator = generator
-        self._audit_recorder = audit_recorder
         self._delta = BestEffortAnswerDeltaReporter(delta_reporter)
         self._continuation = continuation
 
@@ -84,63 +78,46 @@ class EvidenceAnswerFlow:
         evidence: list[AnswerEvidenceItem],
         target_time_window: str | None,
     ) -> EvidenceAnswerDraft:
-        """Return a valid draft, retrying audited response-boundary failures."""
+        """Return a valid draft, retrying classified response-boundary failures."""
 
-        ai_model = _generator_attr(self._generator, "model_name")
-        prompt_version = _generator_attr(self._generator, "prompt_version")
         previous_error: str | None = None
-        defect_count = 0
 
         for attempt_number in range(1, _MAX_ATTEMPTS + 1):
             try:
-                draft, defects = await self._generate_strict_draft(
+                draft = await self._generate_strict_draft(
                     request=request,
                     evidence=evidence,
                     target_time_window=target_time_window,
                     previous_error=previous_error,
-                    attempt_number=attempt_number,
                     generation=attempt_number,
-                    ai_model=ai_model,
-                    prompt_version=prompt_version,
                 )
-            except _EVIDENCE_ANSWER_AUDITED_ERRORS as exc:
+            except _EVIDENCE_ANSWER_CLASSIFIED_ERRORS as exc:
                 failure = classify_answer_synthesis_failure(exc)
-                await _record_attempt_failure(
-                    audit_recorder=self._audit_recorder,
-                    attempt_number=attempt_number,
-                    failure=failure,
-                    ai_model=ai_model,
-                    prompt_version=prompt_version,
-                )
                 retriable = (
                     failure.request_retry_disposition
                     is RequestRetryDisposition.RETRY_IN_REQUEST
                     and attempt_number < _MAX_ATTEMPTS
                 )
                 if not retriable:
-                    return await self._fallback_with_audit(
+                    return await self._fallback(
                         generation=attempt_number + 1,
-                        attempt_count=attempt_number,
                         retry_used=attempt_number > 1,
                         failure=failure,
-                        evidence_count=len(evidence),
-                        defect_count=defect_count,
-                        ai_model=ai_model,
-                        prompt_version=prompt_version,
                     )
                 await self._start_revision(generation=attempt_number + 1)
                 previous_error = str(exc)
                 continue
 
-            defect_count += len(defects)
-            await self._record_synthesized(
-                draft=draft,
-                attempt_count=attempt_number,
+            synthesized_status = (
+                "insufficient"
+                if draft.unfulfilled_requirement_ids
+                else draft.sufficiency
+            )
+            record_answer_synthesis_outcome(
+                result="synthesized",
                 retry_used=attempt_number > 1,
-                evidence_count=len(evidence),
-                defect_count=defect_count,
-                ai_model=ai_model,
-                prompt_version=prompt_version,
+                status=synthesized_status,
+                fallback_used=False,
             )
             return draft
 
@@ -153,11 +130,8 @@ class EvidenceAnswerFlow:
         evidence: list[AnswerEvidenceItem],
         target_time_window: str | None,
         previous_error: str | None,
-        attempt_number: int,
         generation: int,
-        ai_model: str | None,
-        prompt_version: str | None,
-    ) -> tuple[EvidenceAnswerDraft, list[str]]:
+    ) -> EvidenceAnswerDraft:
         stream: AsyncIterator[str] | None = None
         extractor = IncrementalJsonAnswerExtractor()
         raw_fragments: list[str] = []
@@ -193,22 +167,14 @@ class EvidenceAnswerFlow:
                     )
                     for requirement in requirements
                 ]
-                draft, defects = finalize_evidence_answer_draft(
+                draft, _defects = finalize_evidence_answer_draft(
                     raw,
                     evidence=evidence,
                     requirement_ids=requirement_ids,
                 )
-                for defect in defects:
-                    await _record_defect(
-                        audit_recorder=self._audit_recorder,
-                        attempt_number=attempt_number,
-                        defect_code=defect,
-                        ai_model=ai_model,
-                        prompt_version=prompt_version,
-                    )
 
                 await live_draft.commit()
-                return draft, defects
+                return draft
         finally:
             await close_answer_stream(stream)
 
@@ -216,53 +182,12 @@ class EvidenceAnswerFlow:
         await ensure_answer_generation_continues(self._continuation)
         await self._delta.reset(generation=generation)
 
-    async def _record_synthesized(
-        self,
-        *,
-        draft: EvidenceAnswerDraft,
-        attempt_count: int,
-        retry_used: bool,
-        evidence_count: int,
-        defect_count: int,
-        ai_model: str | None,
-        prompt_version: str | None,
-    ) -> None:
-        synthesized_status = (
-            "insufficient" if draft.unfulfilled_requirement_ids else draft.sufficiency
-        )
-        synthesized_missing_aspect_count = len(draft.missing_aspects) + len(
-            draft.unfulfilled_requirement_ids
-        )
-        event = AnswerSynthesisFinalEvent.synthesized(
-            attempt_count=attempt_count,
-            retry_used=retry_used,
-            status=synthesized_status,
-            evidence_count=evidence_count,
-            cited_ref_count=len(draft.cited_refs),
-            missing_aspect_count=synthesized_missing_aspect_count,
-            defect_count=defect_count,
-            ai_model=ai_model,
-            prompt_version=prompt_version,
-        )
-        await _record_final_event(self._audit_recorder, event)
-        record_answer_synthesis_outcome(
-            result="synthesized",
-            retry_used=retry_used,
-            status=synthesized_status,
-            fallback_used=False,
-        )
-
-    async def _fallback_with_audit(
+    async def _fallback(
         self,
         *,
         generation: int,
-        attempt_count: int,
         retry_used: bool,
         failure: AnswerSynthesisFailureAttributes,
-        evidence_count: int,
-        defect_count: int,
-        ai_model: str | None,
-        prompt_version: str | None,
     ) -> EvidenceAnswerDraft:
         await self._start_revision(generation=generation)
         fallback = EvidenceAnswerDraft(
@@ -273,84 +198,11 @@ class EvidenceAnswerFlow:
         )
         await self._delta.append(generation=generation, text=fallback.answer)
         await self._delta.finish(generation=generation)
-        event = AnswerSynthesisFinalEvent.fallback(
-            attempt_count=attempt_count,
-            retry_used=retry_used,
-            draft_status=fallback.sufficiency,
-            evidence_count=evidence_count,
-            cited_ref_count=len(fallback.cited_refs),
-            missing_aspect_count=len(fallback.missing_aspects),
-            defect_count=defect_count,
-            failure=failure,
-            ai_model=ai_model,
-            prompt_version=prompt_version,
-        )
-        await _record_final_event(self._audit_recorder, event)
         record_answer_synthesis_outcome(
             result="fallback",
             retry_used=retry_used,
             status=fallback.sufficiency,
             fallback_used=True,
+            failure_code=failure.code,
         )
         return fallback
-
-
-def _generator_attr(generator: EvidenceAnswerDraftGenerator, name: str) -> str | None:
-    value = getattr(generator, name, None)
-    return value if isinstance(value, str) else None
-
-
-async def _record_attempt_failure(
-    *,
-    audit_recorder: AnswerSynthesisAuditRecorder | None,
-    attempt_number: int,
-    failure: AnswerSynthesisFailureAttributes,
-    ai_model: str | None,
-    prompt_version: str | None,
-) -> None:
-    if audit_recorder is None:
-        return
-    event = AnswerSynthesisAttemptFailureEvent.from_failure(
-        attempt_number=attempt_number,
-        failure=failure,
-        ai_model=ai_model,
-        prompt_version=prompt_version,
-    )
-    try:
-        await audit_recorder.record_attempt_failure(event)
-    except Exception:
-        return
-
-
-async def _record_defect(
-    *,
-    audit_recorder: AnswerSynthesisAuditRecorder | None,
-    attempt_number: int,
-    defect_code: str,
-    ai_model: str | None,
-    prompt_version: str | None,
-) -> None:
-    if audit_recorder is None:
-        return
-    event = AnswerSynthesisDefectEvent(
-        attempt_number=attempt_number,
-        defect_code=defect_code,
-        ai_model=ai_model,
-        prompt_version=prompt_version,
-    )
-    try:
-        await audit_recorder.record_defect(event)
-    except Exception:
-        return
-
-
-async def _record_final_event(
-    audit_recorder: AnswerSynthesisAuditRecorder | None,
-    event: AnswerSynthesisFinalEvent,
-) -> None:
-    if audit_recorder is None:
-        return
-    try:
-        await audit_recorder.record_final_event(event)
-    except Exception:
-        return

@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 from collections.abc import Sequence
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from types import TracebackType
 from typing import Any
@@ -15,19 +15,11 @@ import pytest
 from logfire.testing import CaptureLogfire
 from opentelemetry.trace import StatusCode
 
-from app.agent.agent import Agent, ModelTarget
+from app.agent.agent import Agent
 from app.agent.contract import RetrievalMode
 from app.agent.planning.agent import QUESTION_PLANNER_AGENT
-from app.agent.planning.audit import (
-    PlannerAttemptFailureEvent,
-    PlannerDraftReceivedEvent,
-    PlannerFinalEvent,
-    PlannerOutcomeCode,
-    RequestRetryDisposition,
-)
 from app.agent.planning.contract import (
     ExternalResearchTask,
-    InternalRetrievalPlan,
     PlanningAttemptInput,
     PlanningRequest,
     QuestionPlanDraft,
@@ -203,63 +195,16 @@ class FakeRuntimeScopeFactory:
         return _RuntimeScope(self, runtime)
 
 
-class FakePlannerAuditRecorder:
-    def __init__(self) -> None:
-        self.attempt_failures: list[PlannerAttemptFailureEvent] = []
-        self.draft_events: list[PlannerDraftReceivedEvent] = []
-        self.final_events: list[PlannerFinalEvent] = []
-        self.events: list[
-            PlannerAttemptFailureEvent | PlannerDraftReceivedEvent | PlannerFinalEvent
-        ] = []
-
-    async def record_draft_received(
-        self,
-        event: PlannerDraftReceivedEvent,
-    ) -> None:
-        self.draft_events.append(event)
-        self.events.append(event)
-
-    async def record_attempt_failure(
-        self,
-        event: PlannerAttemptFailureEvent,
-    ) -> None:
-        self.attempt_failures.append(event)
-        self.events.append(event)
-
-    async def record_final_event(self, event: PlannerFinalEvent) -> None:
-        self.final_events.append(event)
-        self.events.append(event)
-
-
-class RaisingPlannerAuditRecorder:
-    async def record_draft_received(
-        self,
-        event: PlannerDraftReceivedEvent,
-    ) -> None:
-        raise RuntimeError("audit recorder down")
-
-    async def record_attempt_failure(
-        self,
-        event: PlannerAttemptFailureEvent,
-    ) -> None:
-        raise RuntimeError("audit recorder down")
-
-    async def record_final_event(self, event: PlannerFinalEvent) -> None:
-        raise RuntimeError("audit recorder down")
-
-
 def _service(
     runtime: FakeRuntime,
     *,
     agent: Agent[PlanningAttemptInput, QuestionPlanDraft] = QUESTION_PLANNER_AGENT,
-    audit_recorder: object | None = None,
 ) -> tuple[QuestionPlanningService, FakeRuntimeScopeFactory]:
     factory = FakeRuntimeScopeFactory([runtime])
     return (
         QuestionPlanningService(
             agent=agent,
             runtime_scope_factory=factory,
-            audit_recorder=audit_recorder,
         ),
         factory,
     )
@@ -362,35 +307,38 @@ async def test_two_response_defects_fall_back_after_exactly_two_attempts() -> No
 
 
 @pytest.mark.parametrize(
-    "error",
+    ("error", "expected_failure_code"),
     [
-        pytest.param(AIProviderNetworkError(), id="provider-error"),
+        pytest.param(AIProviderNetworkError(), "ai_error_network", id="provider-error"),
         pytest.param(
             AIProviderOutputBlockedError(reason=GeminiContentRejectionReason.SAFETY),
+            "ai_error_output_blocked",
             id="blocked-output",
         ),
     ],
 )
 async def test_classified_non_response_error_falls_back_without_retry(
     error: BaseException,
+    expected_failure_code: str,
+    capfire: CaptureLogfire,
 ) -> None:
     runtime = FakeRuntime([error])
-    recorder = FakePlannerAuditRecorder()
-    service, factory = _service(runtime, audit_recorder=recorder)
+    service, factory = _service(runtime)
 
     plan = await service.plan(_input("保存済み記事で見て"))
 
     assert plan == safe_fallback_plan(fallback_query="保存済み記事で見て")
     assert [call.attempt_number for call in runtime.calls] == [1]
     assert len(factory.exits) == 1
-    assert len(recorder.attempt_failures) == 1
-    assert (
-        recorder.attempt_failures[0].request_retry_disposition
-        is RequestRetryDisposition.DO_NOT_RETRY_IN_REQUEST
-    )
-    assert recorder.draft_events == []
-    assert len(recorder.final_events) == 1
-    assert recorder.final_events[0].outcome_code is PlannerOutcomeCode.FALLBACK_USED
+    metrics = collected_metrics(capfire)
+    assert _metric_attributes(metrics, _PLANNER_OUTCOME_METRIC) == [
+        {
+            "result": "fallback",
+            "retry_used": False,
+            "planned_retrieval_mode": plan.retrieval_mode,
+            "failure_code": expected_failure_code,
+        }
+    ]
 
 
 @pytest.mark.parametrize(
@@ -405,8 +353,7 @@ async def test_unknown_error_and_cancellation_propagate_by_identity(
     capfire: CaptureLogfire,
 ) -> None:
     runtime = FakeRuntime([error])
-    recorder = FakePlannerAuditRecorder()
-    service, factory = _service(runtime, audit_recorder=recorder)
+    service, factory = _service(runtime)
 
     with pytest.raises(type(error)) as raised:
         await service.plan(_input())
@@ -415,7 +362,6 @@ async def test_unknown_error_and_cancellation_propagate_by_identity(
     assert [call.attempt_number for call in runtime.calls] == [1]
     assert len(factory.exits) == 1
     assert factory.exits[0][2] is error
-    assert recorder.events == []
     assert _metric_attributes(collected_metrics(capfire), _PLANNER_OUTCOME_METRIC) == []
 
 
@@ -440,152 +386,71 @@ async def test_two_plan_calls_activate_fresh_runtime_scopes() -> None:
     assert first_runtime is not second_runtime
 
 
-async def test_retry_success_audit_uses_agent_metadata_without_runtime_attributes() -> (
-    None
-):
-    agent = replace(
-        QUESTION_PLANNER_AGENT,
-        model=ModelTarget(provider="gemini", name="planner-model-sentinel"),
-        prompt=replace(
-            QUESTION_PLANNER_AGENT.prompt,
-            version="planner-prompt-version-sentinel",
-        ),
-    )
+async def test_retry_success_metric_reports_no_failure_and_no_repair_detail(
+    capfire: CaptureLogfire,
+) -> None:
     invalid = _response_invalid(
         AgentResponseDefect.RESPONSE_NOT_JSON,
-        repair_hint="REPAIR_HINT_MUST_NOT_ENTER_AUDIT_4d7f",
+        repair_hint="REPAIR_HINT_MUST_NOT_ENTER_METRICS_4d7f",
     )
     runtime = FakeRuntime(
         [invalid, _draft("internal", internal_queries=["NVIDIA AI GPU"])]
     )
-    recorder = FakePlannerAuditRecorder()
-    service, _factory = _service(
-        runtime,
-        agent=agent,
-        audit_recorder=recorder,
-    )
+    service, _factory = _service(runtime)
 
     plan = await service.plan(_input())
 
     assert plan.retrieval_mode == "internal"
-    assert [event.attempt_number for event in recorder.attempt_failures] == [1]
-    assert recorder.attempt_failures[0].code == invalid.defect.value
-    assert (
-        recorder.attempt_failures[0].request_retry_disposition
-        is RequestRetryDisposition.RETRY_IN_REQUEST
+    metrics = collected_metrics(capfire)
+    assert _metric_attributes(metrics, _PLANNER_OUTCOME_METRIC) == [
+        {
+            "result": "planned",
+            "retry_used": True,
+            "planned_retrieval_mode": "internal",
+            "failure_code": "none",
+        }
+    ]
+    assert "REPAIR_HINT_MUST_NOT_ENTER_METRICS_4d7f" not in json.dumps(
+        metrics, default=str, ensure_ascii=False
     )
-    assert len(recorder.draft_events) == 1
-    assert len(recorder.final_events) == 1
-    for event in recorder.events:
-        assert (event.ai_model, event.prompt_version) == (
-            "planner-model-sentinel",
-            "planner-prompt-version-sentinel",
-        )
-    dumped = json.dumps(
-        [event.model_dump(mode="json") for event in recorder.events],
-        ensure_ascii=False,
-    )
-    assert "REPAIR_HINT_MUST_NOT_ENTER_AUDIT_4d7f" not in dumped
 
 
-async def test_plan_created_audit_records_counts_not_query_text() -> None:
-    runtime = FakeRuntime(
-        [
-            _draft(
-                "internal",
-                internal_queries=[
-                    "  NVIDIA AI GPU  ",
-                    "nvidia ai gpu",
-                    "   ",
-                    "OpenAI",
-                    "Apple",
-                ],
-            )
-        ]
-    )
-    recorder = FakePlannerAuditRecorder()
-    service, _factory = _service(runtime, audit_recorder=recorder)
-
-    plan = await service.plan(_input())
-
-    assert isinstance(plan, InternalRetrievalPlan)
-    assert plan.internal_queries == ["NVIDIA AI GPU", "OpenAI", "Apple"]
-    draft = recorder.draft_events[0]
-    final = recorder.final_events[0]
-    assert (
-        draft.attempt_number,
-        draft.draft_internal_query_count,
-        draft.draft_external_query_count,
-        final.internal_query_count,
-        final.external_query_count,
-        recorder.events,
-    ) == (1, 5, 0, 3, 0, [draft, final])
-    dumped = json.dumps(
-        [event.model_dump(mode="json") for event in recorder.events],
-        ensure_ascii=False,
-    )
-    for query_text in ("NVIDIA AI GPU", "nvidia ai gpu", "OpenAI", "Apple"):
-        assert query_text not in dumped
-
-
-async def test_fallback_after_retry_failure_records_two_attempts() -> None:
+async def test_fallback_after_retry_failure_records_final_failure_code(
+    capfire: CaptureLogfire,
+) -> None:
     runtime = FakeRuntime(
         [
             _response_invalid(AgentResponseDefect.RESPONSE_NOT_JSON),
             _response_invalid(AgentResponseDefect.OUTPUT_SCHEMA_MISMATCH),
         ]
     )
-    recorder = FakePlannerAuditRecorder()
-    service, _factory = _service(runtime, audit_recorder=recorder)
+    service, _factory = _service(runtime)
 
     plan = await service.plan(_input())
 
     assert plan == safe_fallback_plan(
         fallback_query=_input().context.standalone_question
     )
-    assert [event.attempt_number for event in recorder.attempt_failures] == [1, 2]
-    assert recorder.draft_events == []
-    final = recorder.final_events[0]
-    assert (
-        final.outcome_code,
-        final.attempt_count,
-        final.retry_used,
-        final.fallback_used,
-    ) == (PlannerOutcomeCode.FALLBACK_USED, 2, True, True)
-
-
-async def test_audit_recorder_errors_do_not_stop_planning_or_fallback() -> None:
-    retry_runtime = FakeRuntime(
-        [
-            _response_invalid(),
-            _draft("internal", internal_queries=["NVIDIA AI GPU"]),
-        ]
-    )
-    retry_service, _factory = _service(
-        retry_runtime,
-        audit_recorder=RaisingPlannerAuditRecorder(),
-    )
-
-    plan = await retry_service.plan(_input())
-
-    assert plan.retrieval_mode == "internal"
-    fallback_runtime = FakeRuntime([AIProviderNetworkError()])
-    fallback_service, _factory = _service(
-        fallback_runtime,
-        audit_recorder=RaisingPlannerAuditRecorder(),
-    )
-    fallback = await fallback_service.plan(_input("保存済み記事で見て"))
-    assert fallback == safe_fallback_plan(fallback_query="保存済み記事で見て")
+    metrics = collected_metrics(capfire)
+    assert _metric_attributes(metrics, _PLANNER_OUTCOME_METRIC) == [
+        {
+            "result": "fallback",
+            "retry_used": True,
+            "planned_retrieval_mode": plan.retrieval_mode,
+            "failure_code": AgentResponseDefect.OUTPUT_SCHEMA_MISMATCH.value,
+        }
+    ]
 
 
 @pytest.mark.parametrize(
-    ("outcomes", "result", "retry_used", "mode"),
+    ("outcomes", "result", "retry_used", "mode", "failure_code"),
     [
         pytest.param(
             [_draft("internal", internal_queries=["NVIDIA"])],
             "planned",
             False,
             "internal",
+            "none",
             id="planned",
         ),
         pytest.param(
@@ -599,6 +464,7 @@ async def test_audit_recorder_errors_do_not_stop_planning_or_fallback() -> None:
             "planned",
             True,
             "external",
+            "none",
             id="retry-success",
         ),
         pytest.param(
@@ -606,6 +472,7 @@ async def test_audit_recorder_errors_do_not_stop_planning_or_fallback() -> None:
             "fallback",
             False,
             "internal",
+            "ai_error_network",
             id="fallback",
         ),
     ],
@@ -615,6 +482,7 @@ async def test_outcome_metric_records_once_without_model_visible_text(
     result: str,
     retry_used: bool,
     mode: RetrievalMode,
+    failure_code: str,
     capfire: CaptureLogfire,
 ) -> None:
     runtime = FakeRuntime(outcomes)
@@ -629,6 +497,7 @@ async def test_outcome_metric_records_once_without_model_visible_text(
             "result": result,
             "retry_used": retry_used,
             "planned_retrieval_mode": mode,
+            "failure_code": failure_code,
         }
     ]
     assert "MODEL_VISIBLE_QUESTION_SENTINEL_86ba" not in json.dumps(

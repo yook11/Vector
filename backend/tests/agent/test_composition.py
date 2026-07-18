@@ -744,6 +744,5 @@ def test_build_question_answering_agent_wires_declared_planner_and_runtime_scope
         {
             "agent": QUESTION_PLANNER_AGENT,
             "runtime_scope_factory": _composition_builder("activate_planner_runtime"),
-            "audit_recorder": None,
         }
     ]
