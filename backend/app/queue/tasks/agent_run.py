@@ -152,7 +152,7 @@ async def run_agent_answer(
         )
         return
     except Exception as exc:
-        logger.exception(
+        logger.error(
             "agent_run_unexpected_error",
             run_id=str(prepared.run_id),
             error_type=exc.__class__.__name__,

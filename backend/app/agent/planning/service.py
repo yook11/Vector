@@ -2,10 +2,14 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterator
+from contextlib import contextmanager
 from typing import assert_never
 
-from pydantic import ValidationError
+import logfire
+from opentelemetry.trace import StatusCode
 
+from app.agent.agent import Agent
 from app.agent.planning.audit import (
     PlannerAttemptFailureEvent,
     PlannerAuditRecorder,
@@ -20,23 +24,26 @@ from app.agent.planning.contract import (
     InternalAndExternalPlan,
     InternalRetrievalPlan,
     NoRetrievalPlan,
+    PlanningAttemptInput,
     PlanningRequest,
     QuestionPlan,
     QuestionPlanDraft,
-    QuestionPlanDraftGenerator,
-    QuestionPlannerResponseInvalidError,
     plan_from_draft,
     safe_fallback_plan,
 )
 from app.agent.planning.metrics import record_question_planner_outcome
+from app.agent.runtime.contract import (
+    AgentResponseInvalidError,
+    AgentRuntimeScopeFactory,
+)
 from app.analysis.ai_provider_errors import AIProviderError
 
 _PLANNER_AUDITED_ERRORS = (
     AIProviderError,
-    QuestionPlannerResponseInvalidError,
-    ValidationError,
+    AgentResponseInvalidError,
 )
 _MAX_ATTEMPTS = 2
+_PHASE_SPAN_NAME = "agent_phase"
 
 
 class QuestionPlanningService:
@@ -45,84 +52,102 @@ class QuestionPlanningService:
     def __init__(
         self,
         *,
-        planner: QuestionPlanDraftGenerator,
+        agent: Agent[PlanningAttemptInput, QuestionPlanDraft],
+        runtime_scope_factory: AgentRuntimeScopeFactory,
         audit_recorder: PlannerAuditRecorder | None = None,
     ) -> None:
-        self._planner = planner
+        self._agent = agent
+        self._runtime_scope_factory = runtime_scope_factory
         self._audit_recorder = audit_recorder
 
     async def plan(self, request: PlanningRequest) -> QuestionPlan:
         """Return a completed plan, retrying only response-shape failures."""
 
-        ai_model = _planner_attr(self._planner, "model_name")
-        prompt_version = _planner_attr(self._planner, "prompt_version")
+        ai_model = self._agent.model.name
+        prompt_version = self._agent.prompt.version
         previous_error: str | None = None
 
-        for attempt_number in range(1, _MAX_ATTEMPTS + 1):
-            try:
-                draft = await self._planner.plan(
-                    request,
-                    previous_error=previous_error,
-                )
-            except _PLANNER_AUDITED_ERRORS as exc:
-                failure = classify_planner_failure(exc)
-                await _record_attempt_failure(
-                    audit_recorder=self._audit_recorder,
-                    attempt_number=attempt_number,
-                    failure=failure,
-                    ai_model=ai_model,
-                    prompt_version=prompt_version,
-                )
-                retriable = (
-                    failure.request_retry_disposition
-                    is RequestRetryDisposition.RETRY_IN_REQUEST
-                    and attempt_number < _MAX_ATTEMPTS
-                )
-                if retriable:
-                    previous_error = str(exc)
-                    continue
-                return await _fallback_with_audit(
-                    request=request,
-                    audit_recorder=self._audit_recorder,
-                    attempt_count=attempt_number,
-                    retry_used=attempt_number > 1,
-                    failure=failure,
-                    ai_model=ai_model,
-                    prompt_version=prompt_version,
-                )
+        with _planning_phase(self._agent.name):
+            async with self._runtime_scope_factory() as runtime:
+                for attempt_number in range(1, _MAX_ATTEMPTS + 1):
+                    try:
+                        draft = await runtime.invoke(
+                            self._agent,
+                            PlanningAttemptInput(
+                                request=request,
+                                previous_error=previous_error,
+                            ),
+                            attempt_number=attempt_number,
+                        )
+                    except _PLANNER_AUDITED_ERRORS as exc:
+                        failure = classify_planner_failure(exc)
+                        await _record_attempt_failure(
+                            audit_recorder=self._audit_recorder,
+                            attempt_number=attempt_number,
+                            failure=failure,
+                            ai_model=ai_model,
+                            prompt_version=prompt_version,
+                        )
+                        retriable = (
+                            failure.request_retry_disposition
+                            is RequestRetryDisposition.RETRY_IN_REQUEST
+                            and attempt_number < _MAX_ATTEMPTS
+                        )
+                        if retriable:
+                            previous_error = str(exc)
+                            continue
+                        return await _fallback_with_audit(
+                            request=request,
+                            audit_recorder=self._audit_recorder,
+                            attempt_count=attempt_number,
+                            retry_used=attempt_number > 1,
+                            failure=failure,
+                            ai_model=ai_model,
+                            prompt_version=prompt_version,
+                        )
 
-            await _record_draft_received(
-                audit_recorder=self._audit_recorder,
-                draft=draft,
-                attempt_number=attempt_number,
-                ai_model=ai_model,
-                prompt_version=prompt_version,
-            )
-            plan = plan_from_draft(
-                draft,
-                fallback_query=request.context.standalone_question,
-            )
-            await _record_plan_created(
-                audit_recorder=self._audit_recorder,
-                plan=plan,
-                attempt_count=attempt_number,
-                retry_used=attempt_number > 1,
-                ai_model=ai_model,
-                prompt_version=prompt_version,
-            )
-            record_question_planner_outcome(
-                result="planned",
-                retry_used=attempt_number > 1,
-                planned_retrieval_mode=plan.retrieval_mode,
-            )
-            return plan
+                    await _record_draft_received(
+                        audit_recorder=self._audit_recorder,
+                        draft=draft,
+                        attempt_number=attempt_number,
+                        ai_model=ai_model,
+                        prompt_version=prompt_version,
+                    )
+                    plan = plan_from_draft(
+                        draft,
+                        fallback_query=request.context.standalone_question,
+                    )
+                    await _record_plan_created(
+                        audit_recorder=self._audit_recorder,
+                        plan=plan,
+                        attempt_count=attempt_number,
+                        retry_used=attempt_number > 1,
+                        ai_model=ai_model,
+                        prompt_version=prompt_version,
+                    )
+                    record_question_planner_outcome(
+                        result="planned",
+                        retry_used=attempt_number > 1,
+                        planned_retrieval_mode=plan.retrieval_mode,
+                    )
+                    return plan
 
-        raise AssertionError("unreachable: planning loop must return or raise")
+                raise AssertionError("unreachable: planning loop must return or raise")
 
 
-def _planner_attr(planner: QuestionPlanDraftGenerator, name: str) -> str | None:
-    value = getattr(planner, name, None)
-    return value if isinstance(value, str) else None
+@contextmanager
+def _planning_phase(agent_name: str) -> Iterator[None]:
+    """Planner policy spanへ分類不能な終了だけをerrorとして残す。"""
+    with logfire.span(
+        _PHASE_SPAN_NAME,
+        phase="question_planning",
+        agent_name=agent_name,
+    ) as span:
+        try:
+            yield
+        except BaseException:
+            span.set_status(StatusCode.ERROR, "unclassified agent phase error")
+            raise
 
 
 async def _record_draft_received(

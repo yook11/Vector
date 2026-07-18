@@ -5,13 +5,11 @@ from __future__ import annotations
 from enum import StrEnum
 from typing import Literal, Protocol
 
-from pydantic import BaseModel, ConfigDict, Field, ValidationError
+from pydantic import BaseModel, ConfigDict, Field
 
 from app.agent.contract import RetrievalMode
-from app.agent.planning.contract import QuestionPlannerResponseInvalidError
+from app.agent.runtime.contract import AgentResponseInvalidError
 from app.analysis.ai_provider_errors import AIProviderError
-
-PYDANTIC_VALIDATION_FAILED = "question_planner_response_pydantic_validation_failed"
 
 
 class RequestRetryDisposition(StrEnum):
@@ -193,18 +191,11 @@ def classify_planner_failure(exc: BaseException) -> PlannerFailureAttributes:
             failure_reason=reason.value if reason is not None else None,
             request_retry_disposition=(RequestRetryDisposition.DO_NOT_RETRY_IN_REQUEST),
         )
-    if isinstance(exc, QuestionPlannerResponseInvalidError):
+    if isinstance(exc, AgentResponseInvalidError):
         return PlannerFailureAttributes(
             code=exc.defect.value,
             failure_kind="ai_response_invalid",
             failure_reason=exc.defect.value,
-            request_retry_disposition=RequestRetryDisposition.RETRY_IN_REQUEST,
-        )
-    if isinstance(exc, ValidationError):
-        return PlannerFailureAttributes(
-            code=PYDANTIC_VALIDATION_FAILED,
-            failure_kind="ai_response_invalid",
-            failure_reason=PYDANTIC_VALIDATION_FAILED,
             request_retry_disposition=RequestRetryDisposition.RETRY_IN_REQUEST,
         )
     return PlannerFailureAttributes(

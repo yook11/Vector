@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from datetime import datetime
-from enum import StrEnum
 from typing import Annotated, Literal, Protocol, Self, assert_never
 
 from pydantic import BaseModel, ConfigDict, Field, StringConstraints, model_validator
@@ -20,12 +20,11 @@ __all__ = [
     "MAX_INTERNAL_QUERIES",
     "NoRetrievalPlan",
     "PlanQuery",
+    "PlanningAttemptInput",
     "PlanningRequest",
     "QuestionPlan",
     "QuestionPlanDraft",
-    "QuestionPlanDraftGenerator",
     "QuestionPlanner",
-    "QuestionPlannerResponseInvalidError",
     "RetrievalPlan",
     "plan_from_draft",
     "safe_fallback_plan",
@@ -49,12 +48,12 @@ class PlanningRequest(BaseModel):
     as_of: datetime
 
 
-class QuestionPlannerResponseInvalidError(ValueError):
-    """Planner response が ``QuestionPlanDraft`` として消化できない。"""
+@dataclass(frozen=True, slots=True)
+class PlanningAttemptInput:
+    """Plannerの1 attemptに渡す実行時input。"""
 
-    def __init__(self, defect: StrEnum) -> None:
-        self.defect = defect
-        super().__init__(defect.value)
+    request: PlanningRequest
+    previous_error: str | None = None
 
 
 class QuestionPlanDraft(BaseModel):
@@ -67,17 +66,6 @@ class QuestionPlanDraft(BaseModel):
     external_collection_goals: list[str] = Field(default_factory=list)
     target_time_window: str | None = None
     reason: str = Field(min_length=1)
-
-
-class QuestionPlanDraftGenerator(Protocol):
-    """LLM adapter boundary that returns draft plans."""
-
-    async def plan(
-        self,
-        request: PlanningRequest,
-        *,
-        previous_error: str | None = None,
-    ) -> QuestionPlanDraft: ...
 
 
 class ExternalResearchTask(BaseModel):

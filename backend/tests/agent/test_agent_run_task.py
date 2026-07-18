@@ -395,7 +395,6 @@ def test_composition_injects_same_live_controls_into_both_answer_flows(
     import app.agent.answering.orchestration as orchestration_module
     import app.agent.evidence_collection as evidence_collection_module
     import app.agent.evidence_collection.internal_search.ai.gemini as embedder_module
-    import app.agent.planning.ai.gemini as planner_module
     import app.agent.planning.service as planning_service_module
     from app.agent.evidence_collection.internal_search import (
         article_search as article_search_module,
@@ -461,7 +460,6 @@ def test_composition_injects_same_live_controls_into_both_answer_flows(
         "InternalSearchService",
         lambda **_kwargs: object(),
     )
-    monkeypatch.setattr(planner_module, "GeminiQuestionPlanner", lambda: object())
     monkeypatch.setattr(
         planning_service_module,
         "QuestionPlanningService",
@@ -2539,10 +2537,21 @@ async def test_run_agent_answer_unexpected_error_marks_internal_error(
         FakeLiveStreamPublisher,
     )
 
-    await agent_run_tasks.run_agent_answer(
-        trigger=AgentRunTrigger(run_id=run.id),
-        ctx=_ctx(session_factory),
-    )
+    with capture_logs() as logs:
+        await agent_run_tasks.run_agent_answer(
+            trigger=AgentRunTrigger(run_id=run.id),
+            ctx=_ctx(session_factory),
+        )
+
+    unexpected_logs = [
+        entry for entry in logs if entry.get("event") == "agent_run_unexpected_error"
+    ]
+    assert len(unexpected_logs) == 1
+    assert unexpected_logs[0]["log_level"] == "error"
+    assert unexpected_logs[0]["error_type"] == "RuntimeError"
+    assert "exception" not in unexpected_logs[0]
+    assert "exc_info" not in unexpected_logs[0]
+    assert "SHOULD_NOT_LEAK" not in repr(unexpected_logs[0])
 
     async with session_factory() as session:
         failed = await session.get(AgentRun, run.id)
