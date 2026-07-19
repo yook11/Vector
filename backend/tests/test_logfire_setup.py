@@ -260,7 +260,7 @@ def test_setup_logfire_passes_pii_off_kwargs_to_instrument_httpx(
     monkeypatch: pytest.MonkeyPatch,
     patched_configures: tuple[MagicMock, MagicMock, MagicMock],
 ) -> None:
-    """``instrument_httpx`` に PII off の 3 kwargs が **明示的に** 渡される。
+    """``instrument_httpx`` に PII off の 4 kwargs が **明示的に** 渡される。
 
     source default と一致するが、将来 default が変わっても安全側に倒れる
     構造的契約 (feedback_structural_guarantee)。``capture_request_body=True``
@@ -274,6 +274,7 @@ def test_setup_logfire_passes_pii_off_kwargs_to_instrument_httpx(
     setup_logfire("vector-api")
 
     kwargs = mock_instrument_httpx.call_args.kwargs
+    assert kwargs["capture_all"] is False
     assert kwargs["capture_headers"] is False
     assert kwargs["capture_request_body"] is False
     assert kwargs["capture_response_body"] is False

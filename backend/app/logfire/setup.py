@@ -80,6 +80,7 @@ def setup_logfire(service_name: str) -> None:
     # Authorization header を Logfire に載せないため、capture 系 kwargs を
     # 明示的に false に固定する。
     logfire.instrument_httpx(
+        capture_all=False,
         capture_headers=False,
         capture_request_body=False,
         capture_response_body=False,
