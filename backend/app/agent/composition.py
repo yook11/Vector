@@ -24,13 +24,12 @@ from app.agent.evidence_collection.external_search.contract import (
     ExternalResearchRuntimeFactory,
 )
 from app.agent.planning.agent import QUESTION_PLANNER_AGENT
-from app.agent.question_context.contract import QuestionContextGenerator
+from app.agent.question_context.agent import QUESTION_CONTEXT_AGENT
 from app.agent.question_context.service import QuestionContextService
 from app.agent.running import AnsweringPhases, AnsweringRunner
 from app.agent.runtime.contract import AgentRuntime
 from app.analysis.ai_provider_errors import (
     AIProviderConfigurationError,
-    AIProviderError,
 )
 from app.config import settings
 from app.shared.security.safe_http import make_safe_async_client
@@ -50,7 +49,7 @@ def ensure_external_search_configured() -> None:
 
 
 @asynccontextmanager
-async def activate_planner_runtime() -> AsyncIterator[AgentRuntime]:
+async def activate_gemini_agent_runtime() -> AsyncIterator[AgentRuntime]:
     api_key = settings.gemini_api_key.get_secret_value()
     if not api_key:
         from app.analysis.gemini_error_translator import GeminiStateReason
@@ -104,7 +103,7 @@ def _build_answering_phases(
     return AnsweringPhases(
         planner=QuestionPlanningService(
             agent=QUESTION_PLANNER_AGENT,
-            runtime_scope_factory=activate_planner_runtime,
+            runtime_scope_factory=activate_gemini_agent_runtime,
         ),
         evidence_collector=EvidenceCollectionService(
             internal_search=internal_search,
@@ -124,14 +123,6 @@ def _build_answering_phases(
     )
 
 
-def build_question_context_generator() -> QuestionContextGenerator:
-    """Build the worker-owned generator without coupling agent core to history."""
-
-    from app.agent.question_context.ai.gemini import GeminiQuestionContextGenerator
-
-    return GeminiQuestionContextGenerator()
-
-
 def build_answering_runner(
     *,
     session_factory: async_sessionmaker[AsyncSession],
@@ -140,12 +131,16 @@ def build_answering_runner(
     delta_reporter: AnswerDeltaReporter | None = None,
     continuation: AnswerGenerationContinuation | None = None,
 ) -> AnsweringRunner:
-    try:
-        generator = build_question_context_generator()
-    except (AIProviderConfigurationError, AIProviderError):
-        generator = None
+    question_context_runtime_factory = (
+        activate_gemini_agent_runtime
+        if settings.gemini_api_key.get_secret_value()
+        else None
+    )
     return AnsweringRunner(
-        context_preparer=QuestionContextService(generator=generator),
+        context_preparer=QuestionContextService(
+            agent=QUESTION_CONTEXT_AGENT,
+            runtime_scope_factory=question_context_runtime_factory,
+        ),
         phases_factory=lambda: _build_answering_phases(
             session_factory=session_factory,
             events=events,

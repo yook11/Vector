@@ -97,14 +97,14 @@ def test_non_ai_process_import_does_not_load_ai_sdk(surface: str) -> None:
     )
 
 
-def test_planner_runtime_scope_construction_keeps_provider_imports_lazy() -> None:
-    """Planner scopeはenterされるまでGemini具象RuntimeとSDKをloadしない。"""
+def test_gemini_agent_runtime_scope_construction_keeps_provider_imports_lazy() -> None:
+    """共有Gemini scopeはenterされるまで具象RuntimeとSDKをloadしない。"""
     code = textwrap.dedent(
         """
         import sys
-        from app.agent.composition import activate_planner_runtime
+        from app.agent.composition import activate_gemini_agent_runtime
 
-        activate_planner_runtime()
+        activate_gemini_agent_runtime()
         forbidden = sorted(
             module
             for module in sys.modules

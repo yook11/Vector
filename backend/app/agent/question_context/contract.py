@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from datetime import datetime
-from typing import Annotated, Protocol
+from typing import Annotated
 
 from pydantic import (
     BaseModel,
@@ -42,10 +43,6 @@ RelevantPriorCoverage = Annotated[
     str, StringConstraints(max_length=MAX_RELEVANT_PRIOR_COVERAGE_LENGTH)
 ]
 ActiveGoal = Annotated[str, StringConstraints(max_length=MAX_ACTIVE_GOAL_LENGTH)]
-
-
-class QuestionContextResponseInvalidError(ValueError):
-    """Generator output cannot be consumed as a structured draft."""
 
 
 class AnswerRequirement(BaseModel):
@@ -116,6 +113,15 @@ class QuestionContextDraft(BaseModel):
     explicit_feedback_detected: bool = False
 
 
+@dataclass(frozen=True, slots=True)
+class QuestionContextGenerationInput:
+    """Question Context Agentへ渡す、Service投影済みの入力。"""
+
+    question: str
+    history: tuple[ThreadMessageSnapshot, ...]
+    as_of: datetime
+
+
 class QuestionContextTelemetry(BaseModel):
     explicit_feedback_detected: bool = False
     previous_answer_had_missing_aspects: bool = False
@@ -124,18 +130,6 @@ class QuestionContextTelemetry(BaseModel):
 class QuestionContextPreparationResult(BaseModel):
     context: QuestionContext
     telemetry: QuestionContextTelemetry
-
-
-class QuestionContextGenerator(Protocol):
-    """LLM port that derives structured context from a bounded thread window."""
-
-    async def generate(
-        self,
-        *,
-        question: str,
-        history: list[ThreadMessageSnapshot],
-        as_of: datetime,
-    ) -> QuestionContextDraft: ...
 
 
 def question_context_from_draft(draft: QuestionContextDraft) -> QuestionContext:
