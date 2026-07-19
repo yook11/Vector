@@ -528,6 +528,25 @@ def test_worker_owns_only_answering_runner_boundary_for_semantic_execution() -> 
     ) == (True, True, True, True, True)
 
 
+def test_worker_keeps_question_context_history_bounded_to_six_messages() -> None:
+    tree = ast.parse(inspect.getsource(agent_run_tasks._read_history))
+    calls = [node for node in ast.walk(tree) if isinstance(node, ast.Call)]
+    history_reads = [
+        call
+        for call in calls
+        if isinstance(call.func, ast.Attribute)
+        and call.func.attr == "read_recent_messages_before"
+    ]
+
+    assert agent_run_tasks.HISTORY_MESSAGE_LIMIT == 6
+    assert len(history_reads) == 1
+    limit = next(
+        keyword.value for keyword in history_reads[0].keywords if keyword.arg == "limit"
+    )
+    assert isinstance(limit, ast.Name)
+    assert limit.id == "HISTORY_MESSAGE_LIMIT"
+
+
 async def _create_thread_message_run(
     session: AsyncSession,
     *,

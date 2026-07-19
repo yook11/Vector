@@ -30,6 +30,7 @@ from app.agent.question_context import (
     QuestionContextService,
     QuestionContextTelemetry,
 )
+from app.agent.question_context.agent import QUESTION_CONTEXT_AGENT
 from app.agent.running import AnsweringPhases, AnsweringRunner, RunContext, RunInput
 from app.agent.threads.contracts import ThreadMessageSnapshot
 from tests.logfire._span_helpers import (
@@ -448,7 +449,10 @@ async def test_real_context_service_uses_empty_previous_answer_without_assistant
     hooks = _FakeHooks()
 
     result = await _runner(
-        QuestionContextService(generator=None),
+        QuestionContextService(
+            agent=QUESTION_CONTEXT_AGENT,
+            runtime_scope_factory=None,
+        ),
         factory,
     ).run(
         RunInput(question="NVIDIA の直近発表は？", history=()),

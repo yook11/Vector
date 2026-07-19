@@ -14,97 +14,20 @@ import pytest
 from pydantic import SecretStr
 
 from app.agent import composition
-from app.agent.answering.contract import AnsweringRequest
-from app.agent.answering.direct_answer.contract import DirectAnswerDraft
-from app.agent.answering.evidence_answer.contract import EvidenceAnswerDraft
-from app.agent.evidence_collection import EvidenceCollectionOutcome
 from app.agent.planning.agent import QUESTION_PLANNER_AGENT
-from app.agent.planning.contract import (
-    NoRetrievalPlan,
-    PlanningRequest,
-    QuestionPlan,
-    RetrievalPlan,
+from app.agent.question_context.agent import QUESTION_CONTEXT_AGENT
+from app.agent.question_context.contract import (
+    QuestionContextDraft,
+    QuestionContextPreparationResult,
 )
-from app.agent.question_context import QuestionContextDraft
-from app.agent.running import AnsweringPhases, AnsweringRunner, RunContext, RunInput
+from app.agent.question_context.service import QuestionContextService
+from app.agent.running import AnsweringPhases, AnsweringRunner
 from app.agent.runtime.contract import (
     AgentResponseDefect,
     AgentResponseInvalidError,
 )
 from app.agent.threads.contracts import ThreadMessageSnapshot
-from app.analysis.ai_provider_errors import (
-    AIProviderConfigurationError,
-    AIProviderError,
-)
-
-RUN_ID = UUID("019bd239-1ed4-7fbb-a336-04fe3c197645")
-AS_OF = datetime(2026, 7, 16, 9, 30, tzinfo=UTC)
-
-
-class _FakeQuestionContextGenerator:
-    def __init__(self, draft: QuestionContextDraft) -> None:
-        self._draft = draft
-        self.calls: list[dict[str, object]] = []
-
-    async def generate(
-        self,
-        *,
-        question: str,
-        history: list[ThreadMessageSnapshot],
-        as_of: datetime,
-    ) -> QuestionContextDraft:
-        self.calls.append(
-            {
-                "question": question,
-                "history": history,
-                "as_of": as_of,
-            }
-        )
-        return self._draft
-
-
-class _DirectPlanner:
-    async def plan(self, _request: PlanningRequest) -> QuestionPlan:
-        return NoRetrievalPlan(reason="検索不要")
-
-
-class _UnreachableCollector:
-    async def collect(
-        self,
-        _plan: RetrievalPlan,
-        *,
-        as_of: datetime,
-    ) -> EvidenceCollectionOutcome:
-        raise AssertionError(f"collector must not be called: {as_of!r}")
-
-
-class _DirectAnswerer:
-    def __init__(self, answer: str = "最終回答") -> None:
-        self._answer = answer
-        self.calls: list[tuple[AnsweringRequest, str]] = []
-
-    async def answer(
-        self,
-        *,
-        request: AnsweringRequest,
-        previous_answer: str = "",
-    ) -> DirectAnswerDraft:
-        self.calls.append((request, previous_answer))
-        return DirectAnswerDraft(answer=self._answer)
-
-
-class _UnreachableEvidenceAnswerer:
-    async def answer(
-        self,
-        *,
-        request: AnsweringRequest,
-        evidence: list[object],
-        target_time_window: str | None,
-    ) -> EvidenceAnswerDraft:
-        raise AssertionError(
-            f"evidence answerer must not be called: {request!r} {evidence!r} "
-            f"{target_time_window!r}"
-        )
+from app.analysis.ai_provider_errors import AIProviderError
 
 
 @dataclass(frozen=True, slots=True)
@@ -174,142 +97,53 @@ def _composition_builder(name: str) -> Any:
     return builder
 
 
-def _direct_phases(answer: str = "最終回答") -> tuple[AnsweringPhases, _DirectAnswerer]:
-    direct_answerer = _DirectAnswerer(answer)
-    return (
-        AnsweringPhases(
-            planner=_DirectPlanner(),
-            evidence_collector=_UnreachableCollector(),
-            direct_answerer=direct_answerer,
-            evidence_answerer=_UnreachableEvidenceAnswerer(),
-        ),
-        direct_answerer,
-    )
-
-
-async def test_build_answering_runner_uses_built_question_context_generator(
+def test_build_answering_runner_wires_question_context_agent_and_deferred_runtime(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     build_answering_runner = _composition_builder("build_answering_runner")
-    question = "それが投資へ与える影響は？"
-    history = (ThreadMessageSnapshot(role="assistant", content="前回の回答"),)
-    generator = _FakeQuestionContextGenerator(
-        QuestionContextDraft(
-            standalone_question="NVIDIA の発表が投資へ与える影響は？",
-            content_requirements=["株価への影響を含める"],
-        )
-    )
-    generator_builder_calls: list[None] = []
-    monkeypatch.setattr(
-        composition,
-        "build_question_context_generator",
-        lambda: generator_builder_calls.append(None) or generator,
-    )
-    phases, direct_answerer = _direct_phases()
-    phase_builder_calls: list[None] = []
-    monkeypatch.setattr(
-        composition,
-        "_build_answering_phases",
-        lambda **_kwargs: phase_builder_calls.append(None) or phases,
-    )
+    activation_calls: list[None] = []
 
-    answering_runner = build_answering_runner(session_factory=object())
-    result = await answering_runner.run(
-        RunInput(question=question, history=history),
-        run_context=RunContext(run_id=RUN_ID, as_of=AS_OF),
-    )
-
-    assert (
-        isinstance(answering_runner, AnsweringRunner),
-        generator_builder_calls,
-        generator.calls,
-        phase_builder_calls,
-        len(direct_answerer.calls),
-        direct_answerer.calls[0][0].context is result.context.question_context,
-        result.context.question_context.standalone_question,
-        result.final_output.answer,
-    ) == (
-        True,
-        [None],
-        [{"question": question, "history": list(history), "as_of": AS_OF}],
-        [None],
-        1,
-        True,
-        "NVIDIA の発表が投資へ与える影響は？",
-        "最終回答",
-    )
-
-
-@pytest.mark.parametrize(
-    "builder_error",
-    [
-        pytest.param(AIProviderConfigurationError(), id="configuration-error"),
-        pytest.param(AIProviderError(), id="provider-error"),
-    ],
-)
-async def test_build_answering_runner_falls_back_for_known_generator_errors(
-    monkeypatch: pytest.MonkeyPatch,
-    builder_error: AIProviderError,
-) -> None:
-    build_answering_runner = _composition_builder("build_answering_runner")
-    builder_calls: list[None] = []
-
-    def fail_to_build_generator() -> None:
-        builder_calls.append(None)
-        raise builder_error
+    def activate_runtime() -> None:
+        activation_calls.append(None)
+        raise AssertionError("runner construction must not activate the runtime")
 
     monkeypatch.setattr(
-        composition,
-        "build_question_context_generator",
-        fail_to_build_generator,
+        composition.settings,
+        "gemini_api_key",
+        SecretStr("question-context-gemini-key-sentinel"),
     )
-    question = "NVIDIA の直近発表は？"
-    phases, direct_answerer = _direct_phases()
     monkeypatch.setattr(
         composition,
-        "_build_answering_phases",
-        lambda **_kwargs: phases,
+        "activate_gemini_agent_runtime",
+        activate_runtime,
     )
 
-    result = await build_answering_runner(session_factory=object()).run(
-        RunInput(question=question, history=()),
-        run_context=RunContext(run_id=RUN_ID, as_of=AS_OF),
-    )
+    runner = build_answering_runner(session_factory=object())
+    context_preparer = runner._context_preparer
 
-    assert (
-        builder_calls,
-        len(direct_answerer.calls),
-        direct_answerer.calls[0][0].context is result.context.question_context,
-        result.context.question_context.standalone_question,
-        [
-            requirement.description
-            for requirement in result.context.question_context.content_requirements
-        ],
-        result.final_output.answer,
-    ) == ([None], 1, True, question, [question], "最終回答")
+    assert isinstance(runner, AnsweringRunner)
+    assert isinstance(context_preparer, QuestionContextService)
+    assert context_preparer._agent is QUESTION_CONTEXT_AGENT
+    assert context_preparer._runtime_scope_factory is activate_runtime
+    assert activation_calls == []
 
 
-def test_build_answering_runner_propagates_unexpected_generator_error(
+def test_build_answering_runner_injects_no_runtime_when_gemini_is_unconfigured(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     build_answering_runner = _composition_builder("build_answering_runner")
-    error = RuntimeError("unexpected builder failure")
-    builder_calls: list[None] = []
-
-    def fail_to_build_generator() -> None:
-        builder_calls.append(None)
-        raise error
-
     monkeypatch.setattr(
-        composition,
-        "build_question_context_generator",
-        fail_to_build_generator,
+        composition.settings,
+        "gemini_api_key",
+        SecretStr(""),
     )
 
-    with pytest.raises(RuntimeError) as raised:
-        build_answering_runner(session_factory=object())
+    runner = build_answering_runner(session_factory=object())
+    context_preparer = runner._context_preparer
 
-    assert (raised.value is error, builder_calls) == (True, [None])
+    assert isinstance(context_preparer, QuestionContextService)
+    assert context_preparer._agent is QUESTION_CONTEXT_AGENT
+    assert context_preparer._runtime_scope_factory is None
 
 
 def test_external_search_service_builder_does_not_activate_external_runtime(
@@ -416,9 +250,11 @@ class _FakeGeminiSdkClientFactory:
         return _FakeGeminiSdkClient(client=client, lifecycle=self._lifecycle)
 
 
-class _FakePlannerRuntime:
-    constructed: list[_FakePlannerRuntime] = []
+class _FakeGeminiRuntime:
+    constructed: list[_FakeGeminiRuntime] = []
     construction_error: BaseException | None = None
+    outcome: QuestionContextDraft | BaseException | None = None
+    calls: list[tuple[object, object, int]] = []
 
     def __init__(self, *, client: _FakeGeminiAsyncClient) -> None:
         if self.construction_error is not None:
@@ -426,8 +262,23 @@ class _FakePlannerRuntime:
         self.client = client
         self.constructed.append(self)
 
+    async def invoke(
+        self,
+        agent: object,
+        input: object,
+        *,
+        attempt_number: int,
+    ) -> QuestionContextDraft:
+        self.calls.append((agent, input, attempt_number))
+        outcome = self.outcome
+        if isinstance(outcome, BaseException):
+            raise outcome
+        if outcome is None:
+            raise AssertionError("fake runtime outcome is not configured")
+        return outcome
 
-def _install_planner_runtime_fakes(
+
+def _install_gemini_runtime_fakes(
     monkeypatch: pytest.MonkeyPatch,
     *,
     lifecycle: list[str],
@@ -438,42 +289,46 @@ def _install_planner_runtime_fakes(
     from app.agent.runtime import gemini as runtime_gemini
 
     client_factory = _FakeGeminiSdkClientFactory(lifecycle)
-    _FakePlannerRuntime.constructed = []
-    _FakePlannerRuntime.construction_error = construction_error
+    _FakeGeminiRuntime.constructed = []
+    _FakeGeminiRuntime.construction_error = construction_error
+    _FakeGeminiRuntime.outcome = None
+    _FakeGeminiRuntime.calls = []
     monkeypatch.setattr(genai_module, "Client", client_factory)
-    monkeypatch.setattr(runtime_gemini, "GeminiAgentRuntime", _FakePlannerRuntime)
+    monkeypatch.setattr(runtime_gemini, "GeminiAgentRuntime", _FakeGeminiRuntime)
     monkeypatch.setattr(
         composition.settings,
         "gemini_api_key",
-        SecretStr("planner-gemini-api-key-sentinel"),
+        SecretStr("gemini-api-key-sentinel"),
     )
     return client_factory
 
 
-async def test_planner_runtime_scope_is_lazy_closes_once_and_uses_sdk_defaults(
+async def test_gemini_agent_runtime_scope_is_lazy_and_uses_sdk_defaults(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    activate_planner_runtime = _composition_builder("activate_planner_runtime")
+    activate_gemini_agent_runtime = _composition_builder(
+        "activate_gemini_agent_runtime"
+    )
     lifecycle: list[str] = []
-    client_factory = _install_planner_runtime_fakes(
+    client_factory = _install_gemini_runtime_fakes(
         monkeypatch,
         lifecycle=lifecycle,
     )
 
-    scope = activate_planner_runtime()
-    assert (client_factory.calls, lifecycle, _FakePlannerRuntime.constructed) == (
+    scope = activate_gemini_agent_runtime()
+    assert (client_factory.calls, lifecycle, _FakeGeminiRuntime.constructed) == (
         [],
         [],
         [],
     )
 
     async with scope as runtime:
-        assert runtime is _FakePlannerRuntime.constructed[0]
+        assert runtime is _FakeGeminiRuntime.constructed[0]
         assert runtime.client is client_factory.async_clients[0]
         assert lifecycle == ["gemini 1 create", "gemini 1 enter"]
 
     assert lifecycle == ["gemini 1 create", "gemini 1 enter", "gemini 1 exit"]
-    assert client_factory.calls == [{"api_key": "planner-gemini-api-key-sentinel"}]
+    assert client_factory.calls == [{"api_key": "gemini-api-key-sentinel"}]
 
 
 @pytest.mark.parametrize(
@@ -484,59 +339,65 @@ async def test_planner_runtime_scope_is_lazy_closes_once_and_uses_sdk_defaults(
             AgentResponseInvalidError(AgentResponseDefect.RESPONSE_NOT_JSON),
             id="response-error",
         ),
-        pytest.param(RuntimeError("planner body failed"), id="body-error"),
+        pytest.param(RuntimeError("runtime scope body failed"), id="body-error"),
         pytest.param(asyncio.CancelledError(), id="cancellation"),
     ],
 )
-async def test_planner_runtime_scope_closes_once_when_body_exits_abnormally(
+async def test_gemini_agent_runtime_scope_closes_once_on_abnormal_body_exit(
     monkeypatch: pytest.MonkeyPatch,
     body_error: BaseException,
 ) -> None:
-    activate_planner_runtime = _composition_builder("activate_planner_runtime")
+    activate_gemini_agent_runtime = _composition_builder(
+        "activate_gemini_agent_runtime"
+    )
     lifecycle: list[str] = []
-    _install_planner_runtime_fakes(monkeypatch, lifecycle=lifecycle)
+    _install_gemini_runtime_fakes(monkeypatch, lifecycle=lifecycle)
 
     with pytest.raises(type(body_error)) as raised:
-        async with activate_planner_runtime():
+        async with activate_gemini_agent_runtime():
             raise body_error
 
     assert raised.value is body_error
     assert lifecycle == ["gemini 1 create", "gemini 1 enter", "gemini 1 exit"]
 
 
-async def test_planner_runtime_scope_closes_when_runtime_construction_fails(
+async def test_gemini_agent_runtime_scope_closes_when_runtime_construction_fails(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    activate_planner_runtime = _composition_builder("activate_planner_runtime")
+    activate_gemini_agent_runtime = _composition_builder(
+        "activate_gemini_agent_runtime"
+    )
     lifecycle: list[str] = []
     error = RuntimeError("runtime construction failed")
-    _install_planner_runtime_fakes(
+    _install_gemini_runtime_fakes(
         monkeypatch,
         lifecycle=lifecycle,
         construction_error=error,
     )
 
     with pytest.raises(RuntimeError) as raised:
-        async with activate_planner_runtime():
+        async with activate_gemini_agent_runtime():
             raise AssertionError("scope body must not start")
 
     assert raised.value is error
     assert lifecycle == ["gemini 1 create", "gemini 1 enter", "gemini 1 exit"]
 
 
-async def test_planner_runtime_scope_creates_fresh_client_and_runtime_each_time(
+async def test_gemini_agent_runtime_scope_creates_fresh_resources_each_time(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    activate_planner_runtime = _composition_builder("activate_planner_runtime")
+    activate_gemini_agent_runtime = _composition_builder(
+        "activate_gemini_agent_runtime"
+    )
     lifecycle: list[str] = []
-    client_factory = _install_planner_runtime_fakes(
+    client_factory = _install_gemini_runtime_fakes(
         monkeypatch,
         lifecycle=lifecycle,
     )
 
-    async with activate_planner_runtime() as first_runtime:
+    async with activate_gemini_agent_runtime() as first_runtime:
         pass
-    async with activate_planner_runtime() as second_runtime:
+    async with activate_gemini_agent_runtime() as second_runtime:
         pass
 
     assert len(client_factory.async_clients) == 2
@@ -554,13 +415,84 @@ async def test_planner_runtime_scope_creates_fresh_client_and_runtime_each_time(
     ]
 
 
+@pytest.mark.parametrize(
+    ("outcome", "expected_question", "propagates"),
+    [
+        pytest.param(
+            QuestionContextDraft(standalone_question="prepared question"),
+            "prepared question",
+            False,
+            id="success",
+        ),
+        pytest.param(
+            AgentResponseInvalidError(AgentResponseDefect.RESPONSE_NOT_JSON),
+            "original question",
+            False,
+            id="classified-failure",
+        ),
+        pytest.param(
+            QuestionContextDraft(standalone_question="   "),
+            "original question",
+            False,
+            id="finalize-failure",
+        ),
+        pytest.param(
+            RuntimeError("unexpected runtime failure"),
+            None,
+            True,
+            id="unknown-failure",
+        ),
+        pytest.param(
+            asyncio.CancelledError(),
+            None,
+            True,
+            id="cancellation",
+        ),
+    ],
+)
+async def test_question_context_service_closes_production_gemini_scope_once(
+    monkeypatch: pytest.MonkeyPatch,
+    outcome: QuestionContextDraft | BaseException,
+    expected_question: str | None,
+    propagates: bool,
+) -> None:
+    lifecycle: list[str] = []
+    _install_gemini_runtime_fakes(monkeypatch, lifecycle=lifecycle)
+    _FakeGeminiRuntime.outcome = outcome
+    service = QuestionContextService(
+        agent=QUESTION_CONTEXT_AGENT,
+        runtime_scope_factory=composition.activate_gemini_agent_runtime,
+    )
+
+    async def prepare() -> QuestionContextPreparationResult:
+        return await service.prepare(
+            question="original question",
+            history=[ThreadMessageSnapshot(role="user", content="prior question")],
+            as_of=datetime(2026, 7, 19, tzinfo=UTC),
+            run_id=UUID("00000000-0000-4000-a000-000000000020"),
+        )
+
+    if propagates:
+        with pytest.raises(type(outcome)) as raised:
+            await prepare()
+        assert raised.value is outcome
+    else:
+        result = await prepare()
+        assert result.context.standalone_question == expected_question
+
+    assert len(_FakeGeminiRuntime.calls) == 1
+    assert _FakeGeminiRuntime.calls[0][0] is QUESTION_CONTEXT_AGENT
+    assert _FakeGeminiRuntime.calls[0][2] == 1
+    assert lifecycle == ["gemini 1 create", "gemini 1 enter", "gemini 1 exit"]
+
+
 class _KeywordObject:
     def __init__(self, *args: object, **kwargs: object) -> None:
         self.args = args
         self.kwargs = kwargs
 
 
-def test_build_answering_phases_wires_declared_ports_and_planner_runtime_scope(
+def test_build_answering_phases_wires_planner_to_shared_gemini_runtime_scope(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     from app.agent.answering.direct_answer import flow as direct_flow
@@ -615,7 +547,9 @@ def test_build_answering_phases_wires_declared_ports_and_planner_runtime_scope(
     assert planner_calls == [
         {
             "agent": QUESTION_PLANNER_AGENT,
-            "runtime_scope_factory": _composition_builder("activate_planner_runtime"),
+            "runtime_scope_factory": _composition_builder(
+                "activate_gemini_agent_runtime"
+            ),
         }
     ]
 
@@ -631,11 +565,6 @@ def test_build_answering_runner_captures_phase_dependencies_without_building_the
     delta_reporter = object()
     continuation = object()
 
-    monkeypatch.setattr(
-        composition,
-        "build_question_context_generator",
-        lambda: object(),
-    )
     monkeypatch.setattr(
         composition,
         "_build_answering_phases",
