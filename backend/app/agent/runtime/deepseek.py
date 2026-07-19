@@ -75,6 +75,8 @@ class DeepSeekAgentRuntime:
             raise ValueError("attempt_number must be a positive integer")
         if agent.model.provider != "deepseek":
             raise ValueError("DeepSeekAgentRuntime requires a DeepSeek Agent")
+        if agent.response_schema is None:
+            raise ValueError("DeepSeekAgentRuntime requires response_schema")
 
         request = _build_request(agent, input, binding=self._binding)
         classified_error: Exception | None = None
