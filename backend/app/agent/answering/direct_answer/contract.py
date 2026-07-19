@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import AsyncIterator
+from dataclasses import dataclass
 from typing import Protocol
 
 from pydantic import BaseModel, ConfigDict
@@ -12,9 +12,9 @@ from app.agent.contract import AnswerGenerationStopped, NonBlankText
 
 __all__ = [
     "AnswerGenerationStopped",
+    "DirectAnswerInput",
     "DirectAnswerDraft",
     "DirectAnswerer",
-    "DirectAnswerGenerator",
     "DirectAnswerInvalidError",
 ]
 
@@ -37,16 +37,13 @@ class DirectAnswerDraft(BaseModel):
     answer: NonBlankText
 
 
-class DirectAnswerGenerator(Protocol):
-    """LLM adapter boundary that streams unvalidated direct answer text."""
+@dataclass(frozen=True, slots=True)
+class DirectAnswerInput:
+    """Direct Answer Agentへ渡す1 attempt分の入力。"""
 
-    def stream(
-        self,
-        *,
-        request: AnsweringRequest,
-        previous_answer: str = "",
-        previous_error: str | None = None,
-    ) -> AsyncIterator[str]: ...
+    request: AnsweringRequest
+    previous_answer: str
+    previous_error: str | None = None
 
 
 class DirectAnswerer(Protocol):

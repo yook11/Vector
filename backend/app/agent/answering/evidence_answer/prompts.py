@@ -1,14 +1,17 @@
-"""Gemini evidence answer prompt renderer."""
+"""Evidence Answer Agentの固定promptと入力renderer。"""
 
 from __future__ import annotations
 
-from typing import ClassVar
+from typing import Final
 
-from app.agent.answering.contract import AnsweringRequest
+from app.agent.agent import AgentPrompt
+from app.agent.answering.evidence_answer.contract import EvidenceAnswerInput
 from app.agent.answering.evidence_answer.evidence import AnswerEvidenceItem
 from app.analysis.prompt_safety import sanitize_for_untrusted_block
 
-EVIDENCE_ANSWER_PROMPT = """# Role
+EVIDENCE_ANSWER_PROMPT_VERSION: Final[str] = "v1"
+
+EVIDENCE_ANSWER_INSTRUCTIONS: Final[str] = """# Role
 あなたは Vector の evidence-grounded answer synthesizer です。
 
 # Task
@@ -90,15 +93,16 @@ response_requirementsを回答全体の表現制約として扱う。
 
 # Output
 JSON object only:
-{{
+{
   "sufficiency": "answered" | "insufficient",
   "answer": "string",
   "cited_refs": ["source_ref"],
   "missing_aspects": ["string"],
   "unfulfilled_requirement_ids": []
-}}
+}
+"""
 
-# Context
+EVIDENCE_ANSWER_INPUT_TEMPLATE: Final[str] = """# Context
 as_of: {as_of}
 
 <untrusted_input>
@@ -129,7 +133,7 @@ active_goal: {active_goal}
 {evidence}
 """
 
-EVIDENCE_ANSWER_REPAIR_PROMPT = """
+EVIDENCE_ANSWER_REPAIR_TEMPLATE: Final[str] = """
 
 # Repair Context
 前回の出力は回答合成 schema validation に失敗しました。
@@ -140,47 +144,33 @@ EVIDENCE_ANSWER_REPAIR_PROMPT = """
 </untrusted_input>
 """
 
-_NO_EVIDENCE_BLOCK = (
+_NO_EVIDENCE_BLOCK: Final[str] = (
     "引用できる evidence は 0 件です。cited_refs は空にし、"
     "sufficiency は insufficient にしてください。citation marker を書かないでください。"
 )
 
 
-class GeminiEvidenceAnswerPrompt:
-    """Evidence answer prompt for Gemini."""
-
-    TEMPLATE: ClassVar[str] = EVIDENCE_ANSWER_PROMPT
-
-    @classmethod
-    def render(
-        cls,
-        *,
-        request: AnsweringRequest,
-        evidence: list[AnswerEvidenceItem],
-        target_time_window: str | None,
-        previous_error: str | None = None,
-    ) -> str:
-        prompt = cls.TEMPLATE.format(
-            question=sanitize_for_untrusted_block(request.context.standalone_question),
-            evidence=_render_evidence(evidence),
-            as_of=request.as_of.isoformat(),
-            target_time_window=sanitize_for_untrusted_block(target_time_window or ""),
-            content_requirements=_render_requirements(
-                request.context.content_requirements
-            ),
-            response_requirements=_render_requirements(
-                request.context.response_requirements
-            ),
-            relevant_prior_coverage=sanitize_for_untrusted_block(
-                request.context.relevant_prior_coverage
-            ),
-            active_goal=sanitize_for_untrusted_block(request.context.active_goal),
-        )
-        if previous_error is None:
-            return prompt
-        return prompt + EVIDENCE_ANSWER_REPAIR_PROMPT.format(
-            previous_error=sanitize_for_untrusted_block(previous_error)
-        )
+def render_evidence_answer_input(input: EvidenceAnswerInput) -> str:
+    request = input.request
+    rendered = EVIDENCE_ANSWER_INPUT_TEMPLATE.format(
+        question=sanitize_for_untrusted_block(request.context.standalone_question),
+        evidence=_render_evidence(input.evidence),
+        as_of=request.as_of.isoformat(),
+        target_time_window=sanitize_for_untrusted_block(input.target_time_window or ""),
+        content_requirements=_render_requirements(request.context.content_requirements),
+        response_requirements=_render_requirements(
+            request.context.response_requirements
+        ),
+        relevant_prior_coverage=sanitize_for_untrusted_block(
+            request.context.relevant_prior_coverage
+        ),
+        active_goal=sanitize_for_untrusted_block(request.context.active_goal),
+    )
+    if input.previous_error is None:
+        return rendered
+    return rendered + EVIDENCE_ANSWER_REPAIR_TEMPLATE.format(
+        previous_error=sanitize_for_untrusted_block(input.previous_error)
+    )
 
 
 def _render_requirements(requirements: list[object]) -> str:
@@ -197,7 +187,7 @@ def _render_requirements(requirements: list[object]) -> str:
     )
 
 
-def _render_evidence(evidence: list[AnswerEvidenceItem]) -> str:
+def _render_evidence(evidence: tuple[AnswerEvidenceItem, ...]) -> str:
     if not evidence:
         return _NO_EVIDENCE_BLOCK
     return "\n\n".join(_render_evidence_item(item) for item in evidence)
@@ -229,3 +219,10 @@ def _render_evidence_item(item: AnswerEvidenceItem) -> str:
     parts.append(sanitize_for_untrusted_block(item.text))
     parts.append("</untrusted_input>")
     return "\n".join(parts)
+
+
+EVIDENCE_ANSWER_PROMPT: Final[AgentPrompt[EvidenceAnswerInput]] = AgentPrompt(
+    version=EVIDENCE_ANSWER_PROMPT_VERSION,
+    instructions=EVIDENCE_ANSWER_INSTRUCTIONS,
+    input_renderer=render_evidence_answer_input,
+)

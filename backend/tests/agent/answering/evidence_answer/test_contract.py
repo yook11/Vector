@@ -1,6 +1,8 @@
 """Evidence answer contract tests."""
 
 import inspect
+from dataclasses import FrozenInstanceError, fields
+from importlib import import_module
 from typing import get_type_hints
 
 import pytest
@@ -9,7 +11,6 @@ from pydantic import ValidationError
 from app.agent.answering.contract import AnsweringRequest
 from app.agent.answering.evidence_answer.contract import (
     EvidenceAnswerDraft,
-    EvidenceAnswerDraftGenerator,
     EvidenceAnswerer,
     RawEvidenceAnswerDraft,
 )
@@ -23,20 +24,37 @@ def _first_input_annotation(method: object) -> object | None:
 
 def test_evidence_answer_boundaries_accept_request_without_previous_answer() -> None:
     assert (
-        tuple(inspect.signature(EvidenceAnswerDraftGenerator.stream).parameters),
         tuple(inspect.signature(EvidenceAnswerer.answer).parameters),
         tuple(inspect.signature(EvidenceAnswerFlow.answer).parameters),
-        _first_input_annotation(EvidenceAnswerDraftGenerator.stream),
         _first_input_annotation(EvidenceAnswerer.answer),
         _first_input_annotation(EvidenceAnswerFlow.answer),
     ) == (
-        ("self", "request", "evidence", "target_time_window", "previous_error"),
         ("self", "request", "evidence", "target_time_window"),
         ("self", "request", "evidence", "target_time_window"),
-        AnsweringRequest,
         AnsweringRequest,
         AnsweringRequest,
     )
+
+
+def test_evidence_answer_input_is_frozen_and_keeps_attempt_state_together() -> None:
+    contract = import_module("app.agent.answering.evidence_answer.contract")
+    input_type = getattr(contract, "EvidenceAnswerInput", None)
+
+    assert input_type is not None, "EvidenceAnswerInput が未実装です"
+    assert [field.name for field in fields(input_type)] == [
+        "request",
+        "evidence",
+        "target_time_window",
+        "previous_error",
+    ]
+    input = input_type(
+        request=object(),
+        evidence=(),
+        target_time_window=None,
+    )
+    assert input.previous_error is None
+    with pytest.raises(FrozenInstanceError):
+        input.target_time_window = "changed"
 
 
 def test_raw_draft_accepts_lenient_provider_values() -> None:

@@ -382,13 +382,13 @@ def _external_result() -> AnswerQuestionResult:
 def test_composition_injects_same_live_controls_into_both_answer_flows(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    import app.agent.answering.direct_answer.ai.gemini as direct_gemini_module
     import app.agent.answering.direct_answer.flow as direct_flow_module
-    import app.agent.answering.evidence_answer.ai.gemini as evidence_gemini_module
     import app.agent.answering.evidence_answer.flow as evidence_flow_module
     import app.agent.evidence_collection as evidence_collection_module
     import app.agent.evidence_collection.internal_search.ai.gemini as embedder_module
     import app.agent.planning.service as planning_service_module
+    from app.agent.answering.direct_answer.agent import DIRECT_ANSWER_AGENT
+    from app.agent.answering.evidence_answer.agent import EVIDENCE_ANSWER_AGENT
     from app.agent.evidence_collection.internal_search import (
         article_search as article_search_module,
     )
@@ -416,17 +416,7 @@ def test_composition_injects_same_live_controls_into_both_answer_flows(
         "build_external_search_service",
         lambda *_args, **_kwargs: object(),
     )
-    monkeypatch.setattr(
-        direct_gemini_module,
-        "GeminiDirectAnswerGenerator",
-        lambda: object(),
-    )
     monkeypatch.setattr(direct_flow_module, "DirectAnswerFlow", capture_direct)
-    monkeypatch.setattr(
-        evidence_gemini_module,
-        "GeminiEvidenceAnswerDraftGenerator",
-        lambda: object(),
-    )
     monkeypatch.setattr(evidence_flow_module, "EvidenceAnswerFlow", capture_evidence)
     monkeypatch.setattr(
         evidence_collection_module,
@@ -460,8 +450,18 @@ def test_composition_injects_same_live_controls_into_both_answer_flows(
 
     assert captured["direct"]["delta_reporter"] is delta_reporter
     assert captured["direct"]["continuation"] is continuation
+    assert captured["direct"]["agent"] is DIRECT_ANSWER_AGENT
+    assert (
+        captured["direct"]["runtime_scope_factory"]
+        is composition.activate_gemini_agent_runtime
+    )
     assert captured["evidence"]["delta_reporter"] is delta_reporter
     assert captured["evidence"]["continuation"] is continuation
+    assert captured["evidence"]["agent"] is EVIDENCE_ANSWER_AGENT
+    assert (
+        captured["evidence"]["runtime_scope_factory"]
+        is composition.activate_gemini_agent_runtime
+    )
     assert isinstance(phases, AnsweringPhases)
     assert phases.direct_answerer is not None
     assert phases.evidence_answerer is not None

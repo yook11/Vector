@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import AsyncIterator, Sequence
+from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 from importlib import import_module
 from typing import Any
@@ -11,8 +12,10 @@ import pytest
 from logfire.testing import CaptureLogfire
 
 from app.agent.answering.contract import AnsweringRequest
+from app.agent.answering.direct_answer.agent import DIRECT_ANSWER_AGENT
 from app.agent.answering.direct_answer.contract import (
     DirectAnswerDraft,
+    DirectAnswerInput,
     DirectAnswerInvalidError,
 )
 from app.agent.answering.direct_answer.flow import DirectAnswerFlow
@@ -98,25 +101,37 @@ class FakeDirectAnswerGenerator:
         self._outcomes = list(outcomes)
         self.calls: list[dict[str, Any]] = []
         self.streams: list[FakeDirectAnswerStream] = []
+        self.activations = 0
+        self.exits = 0
 
-    def stream(
+    def invoke_stream(
         self,
+        agent: object,
+        input: DirectAnswerInput,
         *,
-        request: AnsweringRequest,
-        previous_answer: str = "",
-        previous_error: str | None = None,
+        attempt_number: int,
     ) -> AsyncIterator[str]:
         self.calls.append(
             {
-                "request": request,
-                "previous_answer": previous_answer,
-                "previous_error": previous_error,
+                "agent": agent,
+                "request": input.request,
+                "previous_answer": input.previous_answer,
+                "previous_error": input.previous_error,
+                "attempt_number": attempt_number,
             }
         )
         outcome = self._outcomes.pop(0)
         stream = FakeDirectAnswerStream(outcome)
         self.streams.append(stream)
         return stream
+
+    @asynccontextmanager
+    async def activate(self) -> AsyncIterator[FakeDirectAnswerGenerator]:
+        self.activations += 1
+        try:
+            yield self
+        finally:
+            self.exits += 1
 
 
 class RecordingDeltaReporter:
@@ -184,7 +199,8 @@ async def _answer(
     continuation: SequenceContinuation | None = None,
 ) -> DirectAnswerDraft:
     return await DirectAnswerFlow(
-        generator=generator,
+        agent=DIRECT_ANSWER_AGENT,
+        runtime_scope_factory=generator.activate,
         delta_reporter=delta_reporter,
         continuation=continuation,
     ).answer(
@@ -225,7 +241,10 @@ async def test_direct_answer_removes_inline_citation_markers_after_generation() 
         ["結論は維持します。[[1]] 詳細は省略します。[[2]]"]
     )
 
-    draft = await DirectAnswerFlow(generator=generator).answer(
+    draft = await DirectAnswerFlow(
+        agent=DIRECT_ANSWER_AGENT,
+        runtime_scope_factory=generator.activate,
+    ).answer(
         request=AnsweringRequest(
             context=QuestionContext(
                 standalone_question="前回の結論だけ",
@@ -279,6 +298,10 @@ async def test_blank_then_valid_retries_once_with_previous_error(
         None,
         "direct_answer_blank_response",
     ]
+    assert [call["attempt_number"] for call in generator.calls] == [1, 2]
+    assert all(call["agent"] is DIRECT_ANSWER_AGENT for call in generator.calls)
+    assert generator.activations == 1
+    assert generator.exits == 1
     metrics = collected_metrics(capfire)
     assert _metric_attributes(metrics, _DIRECT_ANSWER_OUTCOME_METRIC) == [
         {
@@ -358,6 +381,38 @@ async def test_unexpected_exception_propagates_without_observation(
     assert generator.streams[0].closed is True
     metrics = collected_metrics(capfire)
     assert _metric_attributes(metrics, _DIRECT_ANSWER_OUTCOME_METRIC) == []
+
+
+@pytest.mark.asyncio
+async def test_runtime_scope_activation_failure_precedes_attempt_and_observation(
+    capfire: CaptureLogfire,
+) -> None:
+    error = RuntimeError("runtime scope activation failed")
+    reporter = RecordingDeltaReporter()
+
+    @asynccontextmanager
+    async def broken_scope() -> AsyncIterator[Any]:
+        raise error
+        yield  # pragma: no cover
+
+    with pytest.raises(RuntimeError) as exc_info:
+        await DirectAnswerFlow(
+            agent=DIRECT_ANSWER_AGENT,
+            runtime_scope_factory=broken_scope,
+            delta_reporter=reporter,
+        ).answer(request=_request())
+
+    assert exc_info.value is error
+    assert reporter.appended == []
+    assert reporter.finished == []
+    assert reporter.aborted == []
+    assert (
+        _metric_attributes(
+            collected_metrics(capfire),
+            _DIRECT_ANSWER_OUTCOME_METRIC,
+        )
+        == []
+    )
 
 
 @pytest.mark.asyncio

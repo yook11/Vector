@@ -496,9 +496,9 @@ def test_build_answering_phases_wires_planner_to_shared_gemini_runtime_scope(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     from app.agent.answering.direct_answer import flow as direct_flow
-    from app.agent.answering.direct_answer.ai import gemini as direct_gemini
+    from app.agent.answering.direct_answer.agent import DIRECT_ANSWER_AGENT
     from app.agent.answering.evidence_answer import flow as evidence_flow
-    from app.agent.answering.evidence_answer.ai import gemini as evidence_gemini
+    from app.agent.answering.evidence_answer.agent import EVIDENCE_ANSWER_AGENT
     from app.agent.evidence_collection import service as evidence_service
     from app.agent.evidence_collection.internal_search import (
         article_search,
@@ -512,10 +512,22 @@ def test_build_answering_phases_wires_planner_to_shared_gemini_runtime_scope(
     from app.agent.planning import service as planning_service
 
     planner_calls: list[dict[str, object]] = []
+    direct_calls: list[dict[str, object]] = []
+    evidence_calls: list[dict[str, object]] = []
 
     class _PlannerSpy(_KeywordObject):
         def __init__(self, **kwargs: object) -> None:
             planner_calls.append(kwargs)
+            super().__init__(**kwargs)
+
+    class _DirectSpy(_KeywordObject):
+        def __init__(self, **kwargs: object) -> None:
+            direct_calls.append(kwargs)
+            super().__init__(**kwargs)
+
+    class _EvidenceSpy(_KeywordObject):
+        def __init__(self, **kwargs: object) -> None:
+            evidence_calls.append(kwargs)
             super().__init__(**kwargs)
 
     monkeypatch.setattr(
@@ -527,11 +539,9 @@ def test_build_answering_phases_wires_planner_to_shared_gemini_runtime_scope(
         composition, "build_external_search_service", lambda *_a, **_k: object()
     )
     monkeypatch.setattr(planning_service, "QuestionPlanningService", _PlannerSpy)
+    monkeypatch.setattr(direct_flow, "DirectAnswerFlow", _DirectSpy)
+    monkeypatch.setattr(evidence_flow, "EvidenceAnswerFlow", _EvidenceSpy)
     for module, name in (
-        (direct_gemini, "GeminiDirectAnswerGenerator"),
-        (direct_flow, "DirectAnswerFlow"),
-        (evidence_gemini, "GeminiEvidenceAnswerDraftGenerator"),
-        (evidence_flow, "EvidenceAnswerFlow"),
         (evidence_service, "EvidenceCollectionService"),
         (embedding_gemini, "GeminiQueryEmbedder"),
         (article_search, "PgVectorArticleSearchRepository"),
@@ -550,6 +560,26 @@ def test_build_answering_phases_wires_planner_to_shared_gemini_runtime_scope(
             "runtime_scope_factory": _composition_builder(
                 "activate_gemini_agent_runtime"
             ),
+        }
+    ]
+    assert direct_calls == [
+        {
+            "agent": DIRECT_ANSWER_AGENT,
+            "runtime_scope_factory": _composition_builder(
+                "activate_gemini_agent_runtime"
+            ),
+            "delta_reporter": None,
+            "continuation": None,
+        }
+    ]
+    assert evidence_calls == [
+        {
+            "agent": EVIDENCE_ANSWER_AGENT,
+            "runtime_scope_factory": _composition_builder(
+                "activate_gemini_agent_runtime"
+            ),
+            "delta_reporter": None,
+            "continuation": None,
         }
     ]
 

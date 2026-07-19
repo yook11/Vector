@@ -4,9 +4,10 @@ from __future__ import annotations
 
 import json
 
+from pydantic import BaseModel
+
 from app.agent.answering.evidence_answer.contract import (
     EvidenceAnswerDraftGenerationInvalidError,
-    RawEvidenceAnswerDraft,
 )
 
 _NOT_JSON = "evidence_answer_response_gemini_not_json"
@@ -18,8 +19,12 @@ class _JsonObjectPairs(list[tuple[str, object]]):
     pass
 
 
-def parse_evidence_answer_final_json(raw_json: str) -> RawEvidenceAnswerDraft:
-    """root keyの一意性を保った完全JSON parser。"""
+def parse_evidence_answer_final_json[OutputT: BaseModel](
+    raw_json: str,
+    *,
+    output_type: type[OutputT],
+) -> OutputT:
+    """root keyの一意性を保ち、宣言されたoutput typeで検証する。"""
     try:
         parsed = json.loads(raw_json, object_pairs_hook=_JsonObjectPairs)
     except json.JSONDecodeError as exc:
@@ -36,7 +41,7 @@ def parse_evidence_answer_final_json(raw_json: str) -> RawEvidenceAnswerDraft:
         seen_keys.add(key)
         payload[key] = _restore_json_value(value)
 
-    return RawEvidenceAnswerDraft.model_validate(payload)
+    return output_type.model_validate(payload)
 
 
 def _restore_json_value(value: object) -> object:

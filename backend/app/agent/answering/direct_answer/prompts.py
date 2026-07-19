@@ -1,13 +1,16 @@
-"""Gemini direct answer prompt renderer."""
+"""Direct Answer Agentの固定promptと入力renderer。"""
 
 from __future__ import annotations
 
-from typing import ClassVar
+from typing import Final
 
-from app.agent.answering.contract import AnsweringRequest
+from app.agent.agent import AgentPrompt
+from app.agent.answering.direct_answer.contract import DirectAnswerInput
 from app.analysis.prompt_safety import sanitize_for_untrusted_block
 
-DIRECT_ANSWER_PROMPT = """# Role
+DIRECT_ANSWER_PROMPT_VERSION: Final[str] = "v1"
+
+DIRECT_ANSWER_INSTRUCTIONS: Final[str] = """# Role
 あなたは Vector の direct answer assistant です。
 
 # Task
@@ -21,8 +24,9 @@ DIRECT_ANSWER_PROMPT = """# Role
   新しい事実を加えない。
 - context は事実根拠ではない。回答の対象・形式・既出内容・目的を整えるためだけに使う。
 - `[[N]]` 形式の citation marker は出力しない。
+"""
 
-# Context
+DIRECT_ANSWER_INPUT_TEMPLATE: Final[str] = """# Context
 as_of: {as_of}
 
 # User Question
@@ -51,7 +55,7 @@ active_goal: {active_goal}
 </untrusted_input>
 """
 
-DIRECT_ANSWER_REPAIR_PROMPT = """
+DIRECT_ANSWER_REPAIR_TEMPLATE: Final[str] = """
 
 # Repair Context
 前回の direct 回答は空でした。
@@ -63,39 +67,26 @@ DIRECT_ANSWER_REPAIR_PROMPT = """
 """
 
 
-class GeminiDirectAnswerPrompt:
-    """Direct answer prompt for Gemini."""
-
-    TEMPLATE: ClassVar[str] = DIRECT_ANSWER_PROMPT
-
-    @classmethod
-    def render(
-        cls,
-        *,
-        request: AnsweringRequest,
-        previous_answer: str = "",
-        previous_error: str | None = None,
-    ) -> str:
-        prompt = cls.TEMPLATE.format(
-            question=sanitize_for_untrusted_block(request.context.standalone_question),
-            as_of=request.as_of.isoformat(),
-            content_requirements=_render_requirements(
-                request.context.content_requirements
-            ),
-            response_requirements=_render_requirements(
-                request.context.response_requirements
-            ),
-            relevant_prior_coverage=sanitize_for_untrusted_block(
-                request.context.relevant_prior_coverage
-            ),
-            active_goal=sanitize_for_untrusted_block(request.context.active_goal),
-            previous_answer=sanitize_for_untrusted_block(previous_answer),
-        )
-        if previous_error is None:
-            return prompt
-        return prompt + DIRECT_ANSWER_REPAIR_PROMPT.format(
-            previous_error=sanitize_for_untrusted_block(previous_error)
-        )
+def render_direct_answer_input(input: DirectAnswerInput) -> str:
+    request = input.request
+    rendered = DIRECT_ANSWER_INPUT_TEMPLATE.format(
+        question=sanitize_for_untrusted_block(request.context.standalone_question),
+        as_of=request.as_of.isoformat(),
+        content_requirements=_render_requirements(request.context.content_requirements),
+        response_requirements=_render_requirements(
+            request.context.response_requirements
+        ),
+        relevant_prior_coverage=sanitize_for_untrusted_block(
+            request.context.relevant_prior_coverage
+        ),
+        active_goal=sanitize_for_untrusted_block(request.context.active_goal),
+        previous_answer=sanitize_for_untrusted_block(input.previous_answer),
+    )
+    if input.previous_error is None:
+        return rendered
+    return rendered + DIRECT_ANSWER_REPAIR_TEMPLATE.format(
+        previous_error=sanitize_for_untrusted_block(input.previous_error)
+    )
 
 
 def _render_requirements(requirements: list[object]) -> str:
@@ -110,3 +101,10 @@ def _render_requirements(requirements: list[object]) -> str:
         )
         for requirement in requirements
     )
+
+
+DIRECT_ANSWER_PROMPT: Final[AgentPrompt[DirectAnswerInput]] = AgentPrompt(
+    version=DIRECT_ANSWER_PROMPT_VERSION,
+    instructions=DIRECT_ANSWER_INSTRUCTIONS,
+    input_renderer=render_direct_answer_input,
+)

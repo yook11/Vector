@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 from collections import deque
 from collections.abc import AsyncIterator, Sequence
+from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 from uuid import uuid4
 
@@ -12,8 +13,10 @@ import pytest
 import redis.asyncio as aioredis
 
 from app.agent.answering.contract import AnsweringRequest
+from app.agent.answering.direct_answer.agent import DIRECT_ANSWER_AGENT
 from app.agent.answering.direct_answer.contract import DirectAnswerDraft
 from app.agent.answering.direct_answer.flow import DirectAnswerFlow
+from app.agent.answering.evidence_answer.agent import EVIDENCE_ANSWER_AGENT
 from app.agent.answering.evidence_answer.contract import EvidenceAnswerDraft
 from app.agent.answering.evidence_answer.evidence import AnswerEvidenceItem
 from app.agent.answering.evidence_answer.flow import EvidenceAnswerFlow
@@ -50,11 +53,12 @@ class FakeStreamingGenerator:
     def __init__(self, generations: Sequence[Sequence[str]]) -> None:
         self._generations = deque([list(chunks) for chunks in generations])
 
-    def stream(
+    def invoke_stream(
         self,
+        _agent: object,
+        _input: object,
         *,
-        request: AnsweringRequest,
-        **_kwargs: object,
+        attempt_number: int,  # noqa: ARG002
     ) -> AsyncIterator[str]:
         chunks = self._generations.popleft()
 
@@ -63,6 +67,10 @@ class FakeStreamingGenerator:
                 yield chunk
 
         return generate()
+
+    @asynccontextmanager
+    async def activate(self) -> AsyncIterator[FakeStreamingGenerator]:
+        yield self
 
 
 def _answering_request(
@@ -116,7 +124,8 @@ async def _answer(
     reporter: AgentRunLiveAnswerDeltaReporter,
 ) -> DirectAnswerDraft:
     return await DirectAnswerFlow(
-        generator=generator,
+        agent=DIRECT_ANSWER_AGENT,
+        runtime_scope_factory=generator.activate,
         delta_reporter=reporter,
     ).answer(
         request=_answering_request("実Redisへのdelta配信を確認する"),
@@ -130,7 +139,8 @@ async def _evidence_answer(
     request: AnsweringRequest | None = None,
 ) -> EvidenceAnswerDraft:
     return await EvidenceAnswerFlow(
-        generator=generator,
+        agent=EVIDENCE_ANSWER_AGENT,
+        runtime_scope_factory=generator.activate,
         delta_reporter=reporter,
     ).answer(
         request=(
