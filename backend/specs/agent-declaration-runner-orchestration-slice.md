@@ -407,7 +407,8 @@ workflow順序やdomain分岐を実装しない。
 
 compositionが実装して`AnsweringRunner`へ注入するasync context-manager factory port。
 `activate()`は1回答Runのexternal branch専用に、External Search Query / Selector Agentが使う
-`AgentRuntime` bindingとExternal Search Toolをまとめた`ExternalResearchRuntime`を返す。
+Query / Selector用の`AgentRuntime` bindingとExternal Search Toolをまとめた
+`ExternalResearchRuntime`を返す。
 
 `AnsweringRunner`がexternal / mixedのexternal枝でだけscopeを開始し、factoryがclient open後の
 途中構築失敗を含む全経路でcloseする。同じscope内では安全なclientを共有できるが、別の
@@ -664,7 +665,7 @@ async def _collect_external_task(
     external: ExternalResearchRuntime,
 ) -> ExternalTaskCollectionResult:
     query_draft = await self._generate_external_queries(
-        runtime=external.agent_runtime,
+        runtime=external.query_runtime,
         task=task,
         as_of=answering_context.run_context.as_of,
         target_time_window=target_time_window,
@@ -689,7 +690,7 @@ async def _collect_external_task(
         return self._empty_candidate_success(task_index, task, queries, query_outcomes)
 
     selection_outcome = await self._select_external_evidence(
-        runtime=external.agent_runtime,
+        runtime=external.selector_runtime,
         task=task,
         candidates=candidates,
         as_of=answering_context.run_context.as_of,
