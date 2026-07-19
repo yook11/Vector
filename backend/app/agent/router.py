@@ -23,7 +23,7 @@ from fastapi import (
 from fastapi.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.agent.composition import ensure_question_answering_agent_configured
+from app.agent.composition import ensure_external_search_configured
 from app.agent.live_updates.recent_events import AgentRunLiveEventReader
 from app.agent.live_updates.sse import (
     AgentRunQueuedSseConnection,
@@ -135,7 +135,7 @@ async def create_research_response(
     session: Annotated[AsyncSession, Depends(get_agent_persistence_session)],
 ) -> ResearchRunStartResponse:
     try:
-        ensure_question_answering_agent_configured()
+        ensure_external_search_configured()
     except AIProviderError as exc:
         raise _generation_unavailable() from exc
 

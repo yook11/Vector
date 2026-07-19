@@ -14,14 +14,19 @@ import pytest
 from pydantic import SecretStr
 
 from app.agent import composition
-from app.agent.contract import (
-    AnswerQuestionInput,
-    AnswerQuestionResult,
-    AnswerRetrievalSummary,
-)
+from app.agent.answering.contract import AnsweringRequest
+from app.agent.answering.direct_answer.contract import DirectAnswerDraft
+from app.agent.answering.evidence_answer.contract import EvidenceAnswerDraft
+from app.agent.evidence_collection import EvidenceCollectionOutcome
 from app.agent.planning.agent import QUESTION_PLANNER_AGENT
-from app.agent.question_context import QuestionContext, QuestionContextDraft
-from app.agent.running import AnsweringRunner, RunContext, RunInput
+from app.agent.planning.contract import (
+    NoRetrievalPlan,
+    PlanningRequest,
+    QuestionPlan,
+    RetrievalPlan,
+)
+from app.agent.question_context import QuestionContextDraft
+from app.agent.running import AnsweringPhases, AnsweringRunner, RunContext, RunInput
 from app.agent.runtime.contract import (
     AgentResponseDefect,
     AgentResponseInvalidError,
@@ -58,25 +63,48 @@ class _FakeQuestionContextGenerator:
         return self._draft
 
 
-class _FakeQuestionAnsweringAgent:
-    def __init__(
-        self,
-        outcomes: list[AnswerQuestionResult | BaseException],
-        *,
-        lifecycle: list[str] | None = None,
-    ) -> None:
-        self._outcomes = outcomes
-        self._lifecycle = lifecycle
-        self.calls: list[AnswerQuestionInput] = []
+class _DirectPlanner:
+    async def plan(self, _request: PlanningRequest) -> QuestionPlan:
+        return NoRetrievalPlan(reason="検索不要")
 
-    async def answer(self, input: AnswerQuestionInput) -> AnswerQuestionResult:
-        self.calls.append(input)
-        if self._lifecycle is not None:
-            self._lifecycle.append("concrete agent answer")
-        outcome = self._outcomes[len(self.calls) - 1]
-        if isinstance(outcome, BaseException):
-            raise outcome
-        return outcome
+
+class _UnreachableCollector:
+    async def collect(
+        self,
+        _plan: RetrievalPlan,
+        *,
+        as_of: datetime,
+    ) -> EvidenceCollectionOutcome:
+        raise AssertionError(f"collector must not be called: {as_of!r}")
+
+
+class _DirectAnswerer:
+    def __init__(self, answer: str = "最終回答") -> None:
+        self._answer = answer
+        self.calls: list[tuple[AnsweringRequest, str]] = []
+
+    async def answer(
+        self,
+        *,
+        request: AnsweringRequest,
+        previous_answer: str = "",
+    ) -> DirectAnswerDraft:
+        self.calls.append((request, previous_answer))
+        return DirectAnswerDraft(answer=self._answer)
+
+
+class _UnreachableEvidenceAnswerer:
+    async def answer(
+        self,
+        *,
+        request: AnsweringRequest,
+        evidence: list[object],
+        target_time_window: str | None,
+    ) -> EvidenceAnswerDraft:
+        raise AssertionError(
+            f"evidence answerer must not be called: {request!r} {evidence!r} "
+            f"{target_time_window!r}"
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -146,19 +174,16 @@ def _composition_builder(name: str) -> Any:
     return builder
 
 
-def _answer_result(answer: str = "最終回答") -> AnswerQuestionResult:
-    return AnswerQuestionResult(
-        status="answered",
-        answer=answer,
-        retrieval=AnswerRetrievalSummary(planned_mode="none"),
-    )
-
-
-def _answer_input() -> AnswerQuestionInput:
-    return AnswerQuestionInput(
-        context=QuestionContext(standalone_question="整理済みの質問"),
-        as_of=AS_OF,
-        previous_answer="前回の回答",
+def _direct_phases(answer: str = "最終回答") -> tuple[AnsweringPhases, _DirectAnswerer]:
+    direct_answerer = _DirectAnswerer(answer)
+    return (
+        AnsweringPhases(
+            planner=_DirectPlanner(),
+            evidence_collector=_UnreachableCollector(),
+            direct_answerer=direct_answerer,
+            evidence_answerer=_UnreachableEvidenceAnswerer(),
+        ),
+        direct_answerer,
     )
 
 
@@ -180,12 +205,16 @@ async def test_build_answering_runner_uses_built_question_context_generator(
         "build_question_context_generator",
         lambda: generator_builder_calls.append(None) or generator,
     )
-    final_output = _answer_result()
-    starting_agent = _FakeQuestionAnsweringAgent([final_output])
+    phases, direct_answerer = _direct_phases()
+    phase_builder_calls: list[None] = []
+    monkeypatch.setattr(
+        composition,
+        "_build_answering_phases",
+        lambda **_kwargs: phase_builder_calls.append(None) or phases,
+    )
 
-    answering_runner = build_answering_runner()
+    answering_runner = build_answering_runner(session_factory=object())
     result = await answering_runner.run(
-        starting_agent,
         RunInput(question=question, history=history),
         run_context=RunContext(run_id=RUN_ID, as_of=AS_OF),
     )
@@ -194,18 +223,20 @@ async def test_build_answering_runner_uses_built_question_context_generator(
         isinstance(answering_runner, AnsweringRunner),
         generator_builder_calls,
         generator.calls,
-        len(starting_agent.calls),
-        starting_agent.calls[0].context is result.context.question_context,
+        phase_builder_calls,
+        len(direct_answerer.calls),
+        direct_answerer.calls[0][0].context is result.context.question_context,
         result.context.question_context.standalone_question,
-        result.final_output is final_output,
+        result.final_output.answer,
     ) == (
         True,
         [None],
         [{"question": question, "history": list(history), "as_of": AS_OF}],
+        [None],
         1,
         True,
         "NVIDIA の発表が投資へ与える影響は？",
-        True,
+        "最終回答",
     )
 
 
@@ -233,26 +264,29 @@ async def test_build_answering_runner_falls_back_for_known_generator_errors(
         fail_to_build_generator,
     )
     question = "NVIDIA の直近発表は？"
-    final_output = _answer_result()
-    starting_agent = _FakeQuestionAnsweringAgent([final_output])
+    phases, direct_answerer = _direct_phases()
+    monkeypatch.setattr(
+        composition,
+        "_build_answering_phases",
+        lambda **_kwargs: phases,
+    )
 
-    result = await build_answering_runner().run(
-        starting_agent,
+    result = await build_answering_runner(session_factory=object()).run(
         RunInput(question=question, history=()),
         run_context=RunContext(run_id=RUN_ID, as_of=AS_OF),
     )
 
     assert (
         builder_calls,
-        len(starting_agent.calls),
-        starting_agent.calls[0].context is result.context.question_context,
+        len(direct_answerer.calls),
+        direct_answerer.calls[0][0].context is result.context.question_context,
         result.context.question_context.standalone_question,
         [
             requirement.description
             for requirement in result.context.question_context.content_requirements
         ],
-        result.final_output is final_output,
-    ) == ([None], 1, True, question, [question], True)
+        result.final_output.answer,
+    ) == ([None], 1, True, question, [question], "最終回答")
 
 
 def test_build_answering_runner_propagates_unexpected_generator_error(
@@ -273,31 +307,9 @@ def test_build_answering_runner_propagates_unexpected_generator_error(
     )
 
     with pytest.raises(RuntimeError) as raised:
-        build_answering_runner()
+        build_answering_runner(session_factory=object())
 
     assert (raised.value is error, builder_calls) == (True, [None])
-
-
-def test_starting_agent_factory_does_not_open_client_or_build_graph(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    build_starting_agent = _composition_builder(
-        "build_question_answering_starting_agent"
-    )
-    construction_calls: list[str] = []
-
-    def make_client() -> None:
-        construction_calls.append("make client")
-
-    def build_graph(**_kwargs: object) -> None:
-        construction_calls.append("build graph")
-
-    monkeypatch.setattr(composition, "make_safe_async_client", make_client)
-    monkeypatch.setattr(composition, "build_question_answering_agent", build_graph)
-
-    starting_agent = build_starting_agent(session_factory=object())
-
-    assert (construction_calls, callable(starting_agent.answer)) == ([], True)
 
 
 def test_external_search_service_builder_does_not_activate_external_runtime(
@@ -335,56 +347,14 @@ def test_external_search_service_builder_does_not_activate_external_runtime(
     assert (service._runtime_factory is factory, activation_calls) == (True, [])
 
 
-async def test_starting_agent_does_not_own_tavily_client_lifecycle(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    build_starting_agent = _composition_builder(
-        "build_question_answering_starting_agent"
-    )
-    client_factory_calls: list[None] = []
-    final_output = _answer_result()
-    concrete_agent = _FakeQuestionAnsweringAgent([final_output])
-    graph_builder_calls: list[dict[str, object]] = []
-
-    def build_graph(**kwargs: object) -> _FakeQuestionAnsweringAgent:
-        graph_builder_calls.append(kwargs)
-        return concrete_agent
-
-    def make_client() -> None:
-        client_factory_calls.append(None)
-        raise AssertionError("starting agent must not own a Tavily client")
-
-    monkeypatch.setattr(composition, "make_safe_async_client", make_client)
-    monkeypatch.setattr(composition, "build_question_answering_agent", build_graph)
-    starting_agent = build_starting_agent(session_factory=object())
-
-    result = await starting_agent.answer(_answer_input())
-
-    assert (
-        client_factory_calls,
-        len(graph_builder_calls),
-        "tavily_client" in graph_builder_calls[0],
-        result is final_output,
-    ) == (
-        [],
-        1,
-        False,
-        True,
-    )
-
-
 @pytest.mark.parametrize(
     "unexpected_argument", ["tavily_client", "http_client_factory"]
 )
-def test_starting_agent_factory_rejects_public_client_injection(
+def test_answering_runner_builder_rejects_public_client_injection(
     unexpected_argument: str,
 ) -> None:
-    build_starting_agent = _composition_builder(
-        "build_question_answering_starting_agent"
-    )
-
     with pytest.raises(TypeError):
-        build_starting_agent(
+        composition.build_answering_runner(
             session_factory=object(),
             **{unexpected_argument: object()},
         )
@@ -590,10 +560,9 @@ class _KeywordObject:
         self.kwargs = kwargs
 
 
-def test_build_question_answering_agent_wires_declared_planner_and_runtime_scope(
+def test_build_answering_phases_wires_declared_ports_and_planner_runtime_scope(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from app.agent.answering import orchestration
     from app.agent.answering.direct_answer import flow as direct_flow
     from app.agent.answering.direct_answer.ai import gemini as direct_gemini
     from app.agent.answering.evidence_answer import flow as evidence_flow
@@ -619,7 +588,7 @@ def test_build_question_answering_agent_wires_declared_planner_and_runtime_scope
 
     monkeypatch.setattr(
         composition,
-        "ensure_question_answering_agent_configured",
+        "ensure_external_search_configured",
         lambda: None,
     )
     monkeypatch.setattr(
@@ -631,7 +600,6 @@ def test_build_question_answering_agent_wires_declared_planner_and_runtime_scope
         (direct_flow, "DirectAnswerFlow"),
         (evidence_gemini, "GeminiEvidenceAnswerDraftGenerator"),
         (evidence_flow, "EvidenceAnswerFlow"),
-        (orchestration, "QuestionAnsweringOrchestrator"),
         (evidence_service, "EvidenceCollectionService"),
         (embedding_gemini, "GeminiQueryEmbedder"),
         (article_search, "PgVectorArticleSearchRepository"),
@@ -639,13 +607,57 @@ def test_build_question_answering_agent_wires_declared_planner_and_runtime_scope
     ):
         monkeypatch.setattr(module, name, _KeywordObject)
 
-    composition.build_question_answering_agent(
+    phases = composition._build_answering_phases(
         session_factory=object(),
     )
 
+    assert isinstance(phases, AnsweringPhases)
     assert planner_calls == [
         {
             "agent": QUESTION_PLANNER_AGENT,
             "runtime_scope_factory": _composition_builder("activate_planner_runtime"),
+        }
+    ]
+
+
+def test_build_answering_runner_captures_phase_dependencies_without_building_them(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: list[dict[str, object]] = []
+    phase_bundle = object()
+    session_factory = object()
+    progress = object()
+    events = object()
+    delta_reporter = object()
+    continuation = object()
+
+    monkeypatch.setattr(
+        composition,
+        "build_question_context_generator",
+        lambda: object(),
+    )
+    monkeypatch.setattr(
+        composition,
+        "_build_answering_phases",
+        lambda **kwargs: captured.append(kwargs) or phase_bundle,
+        raising=False,
+    )
+
+    runner = composition.build_answering_runner(
+        session_factory=session_factory,
+        progress=progress,
+        events=events,
+        delta_reporter=delta_reporter,
+        continuation=continuation,
+    )
+
+    assert captured == []
+    assert runner._phases_factory() is phase_bundle
+    assert captured == [
+        {
+            "session_factory": session_factory,
+            "events": events,
+            "delta_reporter": delta_reporter,
+            "continuation": continuation,
         }
     ]

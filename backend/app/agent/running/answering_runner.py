@@ -4,16 +4,34 @@ from __future__ import annotations
 
 from collections.abc import Iterator
 from contextlib import contextmanager
+from typing import assert_never
 from uuid import UUID
 
 import logfire
 
+from app.agent.answering.contract import AnsweringRequest
+from app.agent.answering.evidence_answer.evidence import (
+    normalize_answer_evidence,
+)
+from app.agent.answering.result_assembly import assemble_evidence_result
 from app.agent.contract import (
     AnswerGenerationStopped,
-    AnswerQuestionInput,
-    QuestionAnsweringAgent,
+    AnswerProgressReporter,
+    AnswerProgressStage,
+    AnswerQuestionResult,
+    AnswerRetrievalSummary,
+)
+from app.agent.planning.contract import (
+    ExternalSearchPlan,
+    InternalAndExternalPlan,
+    InternalRetrievalPlan,
+    NoRetrievalPlan,
+    PlanningRequest,
+    RetrievalPlan,
 )
 from app.agent.running.contract import (
+    AnsweringPhases,
+    AnsweringPhasesFactory,
     AnsweringRunContext,
     QuestionContextPreparer,
     RunContext,
@@ -33,12 +51,15 @@ class AnsweringRunner:
         self,
         *,
         context_preparer: QuestionContextPreparer,
+        phases_factory: AnsweringPhasesFactory,
+        progress: AnswerProgressReporter | None = None,
     ) -> None:
         self._context_preparer = context_preparer
+        self._phases_factory = phases_factory
+        self._progress = progress
 
     async def run(
         self,
-        starting_agent: QuestionAnsweringAgent,
         input: RunInput,
         *,
         run_context: RunContext,
@@ -62,17 +83,94 @@ class AnsweringRunner:
                     has_history=bool(input.history),
                     question_context=answering_context.question_context,
                 )
-            final_output = await starting_agent.answer(
-                AnswerQuestionInput(
-                    context=answering_context.question_context,
-                    as_of=answering_context.run_context.as_of,
-                    previous_answer=answering_context.previous_answer,
-                )
+            phases = self._phases_factory()
+
+            await self._report_progress("planning")
+            planning_request = PlanningRequest(
+                context=answering_context.question_context,
+                as_of=answering_context.run_context.as_of,
             )
+            answering_request = AnsweringRequest(
+                context=answering_context.question_context,
+                as_of=answering_context.run_context.as_of,
+            )
+            plan = await phases.planner.plan(planning_request)
+            match plan:
+                case NoRetrievalPlan():
+                    final_output = await self._answer_directly(
+                        phases=phases,
+                        request=answering_request,
+                        previous_answer=answering_context.previous_answer,
+                    )
+                case (
+                    InternalRetrievalPlan()
+                    | ExternalSearchPlan()
+                    | InternalAndExternalPlan()
+                ):
+                    final_output = await self._answer_with_evidence(
+                        phases=phases,
+                        request=answering_request,
+                        plan=plan,
+                    )
+                case _ as unreachable:
+                    assert_never(unreachable)
             return RunResult(
                 final_output=final_output,
                 context=answering_context,
             )
+
+    async def _answer_directly(
+        self,
+        *,
+        phases: AnsweringPhases,
+        request: AnsweringRequest,
+        previous_answer: str,
+    ) -> AnswerQuestionResult:
+        await self._report_progress("synthesizing")
+        draft = await phases.direct_answerer.answer(
+            request=request,
+            previous_answer=previous_answer,
+        )
+        return AnswerQuestionResult(
+            status="answered",
+            answer=draft.answer,
+            sources=[],
+            missing_aspects=[],
+            retrieval=AnswerRetrievalSummary(
+                planned_mode="none",
+                collection_failures=[],
+            ),
+        )
+
+    async def _answer_with_evidence(
+        self,
+        *,
+        phases: AnsweringPhases,
+        request: AnsweringRequest,
+        plan: RetrievalPlan,
+    ) -> AnswerQuestionResult:
+        await self._report_progress("retrieving")
+        outcome = await phases.evidence_collector.collect(plan, as_of=request.as_of)
+        evidence = normalize_answer_evidence(outcome)
+
+        await self._report_progress("synthesizing")
+        draft = await phases.evidence_answerer.answer(
+            request=request,
+            evidence=evidence,
+            target_time_window=_plan_target_time_window(plan),
+        )
+        return assemble_evidence_result(
+            context=request.context,
+            plan=plan,
+            outcome=outcome,
+            evidence=evidence,
+            draft=draft,
+        )
+
+    async def _report_progress(self, stage: AnswerProgressStage) -> None:
+        if self._progress is None:
+            return
+        await self._progress.stage_changed(stage)
 
 
 @contextmanager
@@ -99,3 +197,12 @@ def _latest_assistant_answer(
         ),
         "",
     )
+
+
+def _plan_target_time_window(plan: RetrievalPlan) -> str | None:
+    match plan:
+        case ExternalSearchPlan() | InternalAndExternalPlan():
+            return plan.target_time_window
+        case InternalRetrievalPlan():
+            return None
+    assert_never(plan)

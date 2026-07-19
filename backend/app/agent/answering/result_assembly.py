@@ -1,43 +1,25 @@
-"""Question answering use-case orchestration."""
+"""Evidence回答の検証と最終result組み立て。"""
 
 from __future__ import annotations
 
-from datetime import datetime
-from typing import Literal, Protocol, assert_never
+from typing import Literal
 
-from app.agent.answering.contract import AnsweringRequest
-from app.agent.answering.direct_answer.contract import DirectAnswerer
 from app.agent.answering.evidence_answer.contract import (
     EvidenceAnswerDraft,
     EvidenceAnswerDraftInvalidError,
-    EvidenceAnswerer,
 )
-from app.agent.answering.evidence_answer.evidence import (
-    AnswerEvidenceItem,
-    normalize_answer_evidence,
-)
+from app.agent.answering.evidence_answer.evidence import AnswerEvidenceItem
 from app.agent.contract import (
-    AnswerProgressReporter,
-    AnswerProgressStage,
-    AnswerQuestionInput,
     AnswerQuestionResult,
     AnswerRetrievalSummary,
     AnswerSource,
     EvidenceCollectionFailure,
 )
 from app.agent.evidence_collection import EvidenceCollectionOutcome
-from app.agent.planning.contract import (
-    ExternalSearchPlan,
-    InternalAndExternalPlan,
-    InternalRetrievalPlan,
-    NoRetrievalPlan,
-    PlanningRequest,
-    QuestionPlanner,
-    RetrievalPlan,
-)
+from app.agent.planning.contract import RetrievalPlan
 from app.agent.question_context.contract import QuestionContext
 
-__all__ = ["EvidenceCollector", "QuestionAnsweringOrchestrator"]
+__all__ = ["assemble_evidence_result"]
 
 _RETRIEVAL_EMPTY_MISSING = "回答に使える根拠を取得できませんでした"
 _REQUIREMENT_MISSING_PREFIX = "回答要望を満たせませんでした: "
@@ -47,112 +29,29 @@ _COLLECTION_FAILURE_MISSING: dict[EvidenceCollectionFailure, str] = {
 }
 
 
-class EvidenceCollector(Protocol):
-    async def collect(
-        self,
-        plan: RetrievalPlan,
-        *,
-        as_of: datetime,
-    ) -> EvidenceCollectionOutcome: ...
-
-
-class QuestionAnsweringOrchestrator:
-    """Top-level question answering use case."""
-
-    def __init__(
-        self,
-        *,
-        planner: QuestionPlanner,
-        evidence_collector: EvidenceCollector,
-        evidence_answerer: EvidenceAnswerer,
-        direct_answerer: DirectAnswerer,
-        progress: AnswerProgressReporter | None = None,
-    ) -> None:
-        self._planner = planner
-        self._evidence_collector = evidence_collector
-        self._evidence_answerer = evidence_answerer
-        self._direct_answerer = direct_answerer
-        self._progress = progress
-
-    async def answer(self, input: AnswerQuestionInput) -> AnswerQuestionResult:
-        await self._report_progress("planning")
-        planning_request = PlanningRequest(context=input.context, as_of=input.as_of)
-        answering_request = AnsweringRequest(context=input.context, as_of=input.as_of)
-        plan = await self._planner.plan(planning_request)
-        match plan:
-            case NoRetrievalPlan():
-                await self._report_progress("synthesizing")
-                draft = await self._direct_answerer.answer(
-                    request=answering_request,
-                    previous_answer=input.previous_answer,
-                )
-                return AnswerQuestionResult(
-                    status="answered",
-                    answer=draft.answer,
-                    sources=[],
-                    missing_aspects=[],
-                    retrieval=AnswerRetrievalSummary(
-                        planned_mode="none",
-                        collection_failures=[],
-                    ),
-                )
-            case (
-                InternalRetrievalPlan()
-                | ExternalSearchPlan()
-                | InternalAndExternalPlan()
-            ):
-                return await self._answer_with_evidence(
-                    request=answering_request,
-                    plan=plan,
-                )
-        assert_never(plan)
-
-    async def _answer_with_evidence(
-        self,
-        *,
-        request: AnsweringRequest,
-        plan: RetrievalPlan,
-    ) -> AnswerQuestionResult:
-        await self._report_progress("retrieving")
-        outcome = await self._evidence_collector.collect(plan, as_of=request.as_of)
-        evidence = normalize_answer_evidence(outcome)
-
-        await self._report_progress("synthesizing")
-        draft = await self._evidence_answerer.answer(
-            request=request,
-            evidence=evidence,
-            target_time_window=_plan_target_time_window(plan),
-        )
-        _validate_draft_citations(evidence=evidence, draft=draft)
-        requirement_missing_aspects = _unfulfilled_requirement_missing_aspects(
-            context=request.context,
-            requirement_ids=draft.unfulfilled_requirement_ids,
-        )
-        sources = _sources_for_citations(evidence=evidence, cited_refs=draft.cited_refs)
-
-        return _assemble_evidence_result(
-            plan=plan,
-            outcome=outcome,
-            answer=draft.answer,
-            sources=sources,
-            draft_missing_aspects=draft.missing_aspects,
-            requirement_missing_aspects=requirement_missing_aspects,
-            include_retrieval_empty_missing=not evidence,
-        )
-
-    async def _report_progress(self, stage: AnswerProgressStage) -> None:
-        if self._progress is None:
-            return
-        await self._progress.stage_changed(stage)
-
-
-def _plan_target_time_window(plan: RetrievalPlan) -> str | None:
-    match plan:
-        case ExternalSearchPlan() | InternalAndExternalPlan():
-            return plan.target_time_window
-        case InternalRetrievalPlan():
-            return None
-    assert_never(plan)
+def assemble_evidence_result(
+    *,
+    context: QuestionContext,
+    plan: RetrievalPlan,
+    outcome: EvidenceCollectionOutcome,
+    evidence: list[AnswerEvidenceItem],
+    draft: EvidenceAnswerDraft,
+) -> AnswerQuestionResult:
+    _validate_draft_citations(evidence=evidence, draft=draft)
+    requirement_missing_aspects = _unfulfilled_requirement_missing_aspects(
+        context=context,
+        requirement_ids=draft.unfulfilled_requirement_ids,
+    )
+    sources = _sources_for_citations(evidence=evidence, cited_refs=draft.cited_refs)
+    return _assemble_evidence_result(
+        plan=plan,
+        outcome=outcome,
+        answer=draft.answer,
+        sources=sources,
+        draft_missing_aspects=draft.missing_aspects,
+        requirement_missing_aspects=requirement_missing_aspects,
+        include_retrieval_empty_missing=not evidence,
+    )
 
 
 def _validate_draft_citations(

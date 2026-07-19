@@ -1,4 +1,4 @@
-"""Question-answering agent composition.
+"""Question-answering workflow composition.
 
 The API process only performs the lightweight configuration check; worker tasks
 call the builder when they actually execute an agent run.
@@ -18,9 +18,6 @@ from app.agent.contract import (
     AnswerEventReporter,
     AnswerGenerationContinuation,
     AnswerProgressReporter,
-    AnswerQuestionInput,
-    AnswerQuestionResult,
-    QuestionAnsweringAgent,
 )
 from app.agent.evidence_collection.external_search.contract import (
     ExternalResearchRuntime,
@@ -29,7 +26,7 @@ from app.agent.evidence_collection.external_search.contract import (
 from app.agent.planning.agent import QUESTION_PLANNER_AGENT
 from app.agent.question_context.contract import QuestionContextGenerator
 from app.agent.question_context.service import QuestionContextService
-from app.agent.running import AnsweringRunner
+from app.agent.running import AnsweringPhases, AnsweringRunner
 from app.agent.runtime.contract import AgentRuntime
 from app.analysis.ai_provider_errors import (
     AIProviderConfigurationError,
@@ -44,7 +41,7 @@ if TYPE_CHECKING:
     )
 
 
-def ensure_question_answering_agent_configured() -> None:
+def ensure_external_search_configured() -> None:
     if not (
         settings.deepseek_api_key.get_secret_value()
         and settings.tavily_api_key.get_secret_value()
@@ -69,59 +66,14 @@ async def activate_planner_runtime() -> AsyncIterator[AgentRuntime]:
         yield runtime
 
 
-class _DeferredQuestionAnsweringAgent:
-    def __init__(
-        self,
-        *,
-        session_factory: async_sessionmaker[AsyncSession],
-        progress: AnswerProgressReporter | None,
-        events: AnswerEventReporter | None,
-        delta_reporter: AnswerDeltaReporter | None,
-        continuation: AnswerGenerationContinuation | None,
-    ) -> None:
-        self._session_factory = session_factory
-        self._progress = progress
-        self._events = events
-        self._delta_reporter = delta_reporter
-        self._continuation = continuation
-
-    async def answer(self, input: AnswerQuestionInput) -> AnswerQuestionResult:
-        agent = build_question_answering_agent(
-            session_factory=self._session_factory,
-            progress=self._progress,
-            events=self._events,
-            delta_reporter=self._delta_reporter,
-            continuation=self._continuation,
-        )
-        return await agent.answer(input)
-
-
-def build_question_answering_starting_agent(
+def _build_answering_phases(
     *,
     session_factory: async_sessionmaker[AsyncSession],
-    progress: AnswerProgressReporter | None = None,
     events: AnswerEventReporter | None = None,
     delta_reporter: AnswerDeltaReporter | None = None,
     continuation: AnswerGenerationContinuation | None = None,
-) -> QuestionAnsweringAgent:
-    return _DeferredQuestionAnsweringAgent(
-        session_factory=session_factory,
-        progress=progress,
-        events=events,
-        delta_reporter=delta_reporter,
-        continuation=continuation,
-    )
-
-
-def build_question_answering_agent(
-    *,
-    session_factory: async_sessionmaker[AsyncSession],
-    progress: AnswerProgressReporter | None = None,
-    events: AnswerEventReporter | None = None,
-    delta_reporter: AnswerDeltaReporter | None = None,
-    continuation: AnswerGenerationContinuation | None = None,
-) -> QuestionAnsweringAgent:
-    ensure_question_answering_agent_configured()
+) -> AnsweringPhases:
+    ensure_external_search_configured()
 
     from app.agent.answering.direct_answer.ai.gemini import (
         GeminiDirectAnswerGenerator,
@@ -131,7 +83,6 @@ def build_question_answering_agent(
         GeminiEvidenceAnswerDraftGenerator,
     )
     from app.agent.answering.evidence_answer.flow import EvidenceAnswerFlow
-    from app.agent.answering.orchestration import QuestionAnsweringOrchestrator
     from app.agent.evidence_collection import EvidenceCollectionService
     from app.agent.evidence_collection.internal_search.ai.gemini import (
         GeminiQueryEmbedder,
@@ -150,7 +101,7 @@ def build_question_answering_agent(
         article_search_repository=PgVectorArticleSearchRepository(session_factory),
         events=events,
     )
-    return QuestionAnsweringOrchestrator(
+    return AnsweringPhases(
         planner=QuestionPlanningService(
             agent=QUESTION_PLANNER_AGENT,
             runtime_scope_factory=activate_planner_runtime,
@@ -160,17 +111,16 @@ def build_question_answering_agent(
             external_search=external_search,
             requested_external_agent_count=None,
         ),
-        evidence_answerer=EvidenceAnswerFlow(
-            generator=GeminiEvidenceAnswerDraftGenerator(),
-            delta_reporter=delta_reporter,
-            continuation=continuation,
-        ),
         direct_answerer=DirectAnswerFlow(
             generator=GeminiDirectAnswerGenerator(),
             delta_reporter=delta_reporter,
             continuation=continuation,
         ),
-        progress=progress,
+        evidence_answerer=EvidenceAnswerFlow(
+            generator=GeminiEvidenceAnswerDraftGenerator(),
+            delta_reporter=delta_reporter,
+            continuation=continuation,
+        ),
     )
 
 
@@ -182,13 +132,27 @@ def build_question_context_generator() -> QuestionContextGenerator:
     return GeminiQuestionContextGenerator()
 
 
-def build_answering_runner() -> AnsweringRunner:
+def build_answering_runner(
+    *,
+    session_factory: async_sessionmaker[AsyncSession],
+    progress: AnswerProgressReporter | None = None,
+    events: AnswerEventReporter | None = None,
+    delta_reporter: AnswerDeltaReporter | None = None,
+    continuation: AnswerGenerationContinuation | None = None,
+) -> AnsweringRunner:
     try:
         generator = build_question_context_generator()
     except (AIProviderConfigurationError, AIProviderError):
         generator = None
     return AnsweringRunner(
         context_preparer=QuestionContextService(generator=generator),
+        phases_factory=lambda: _build_answering_phases(
+            session_factory=session_factory,
+            events=events,
+            delta_reporter=delta_reporter,
+            continuation=continuation,
+        ),
+        progress=progress,
     )
 
 
@@ -257,7 +221,7 @@ def build_external_search_service(
     *,
     events: AnswerEventReporter | None = None,
 ) -> ExternalSearchService:
-    ensure_question_answering_agent_configured()
+    ensure_external_search_configured()
 
     from app.agent.evidence_collection.external_search.runner import (
         ExternalSearchResearchRunner,

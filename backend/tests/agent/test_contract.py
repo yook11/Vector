@@ -2,13 +2,14 @@
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
-
 import pytest
 from pydantic import ValidationError
 
+import app.agent as agent_package
+import app.agent.answering as answering_package
+import app.agent.composition as composition
+import app.agent.contract as agent_contract
 from app.agent.contract import (
-    AnswerQuestionInput,
     AnswerQuestionResult,
     AnswerRetrievalSummary,
     EvidenceCollectionFailure,
@@ -16,11 +17,6 @@ from app.agent.contract import (
     InternalArticleSource,
     RetrievalMode,
 )
-from app.agent.question_context.contract import QuestionContext
-
-
-def _as_of() -> datetime:
-    return datetime(2026, 6, 27, tzinfo=UTC)
 
 
 def _internal_source() -> InternalArticleSource:
@@ -50,37 +46,16 @@ def _retrieval(
     )
 
 
-class TestAnswerQuestionInput:
-    def test_holds_only_shared_context_execution_time_and_previous_answer(self) -> None:
-        context = QuestionContext(standalone_question="NVIDIA の直近動向は？")
-        input_ = AnswerQuestionInput(
-            context=context,
-            as_of=_as_of(),
-            previous_answer="前回の回答本文",
-        )
-
-        with pytest.raises(ValidationError):
-            input_.previous_answer = "変更不可"
-
-        assert (
-            set(AnswerQuestionInput.model_fields),
-            input_.context is context,
-            input_.as_of,
-            input_.previous_answer,
-        ) == (
-            {"context", "as_of", "previous_answer"},
-            True,
-            _as_of(),
-            "前回の回答本文",
-        )
-
-    def test_rejects_legacy_flat_context_fields(self) -> None:
-        with pytest.raises(ValidationError):
-            AnswerQuestionInput(
-                context=QuestionContext(standalone_question="NVIDIA の直近動向は？"),
-                as_of=_as_of(),
-                question="legacy question",
-            )
+def test_does_not_export_legacy_answering_boundaries() -> None:
+    assert (
+        hasattr(agent_contract, "AnswerQuestionInput"),
+        hasattr(agent_contract, "QuestionAnsweringAgent"),
+        hasattr(answering_package, "QuestionAnsweringOrchestrator"),
+        hasattr(composition, "build_question_answering_starting_agent"),
+        hasattr(composition, "build_question_answering_agent"),
+        hasattr(agent_package, "AnswerQuestionInput"),
+        hasattr(agent_package, "QuestionAnsweringAgent"),
+    ) == (False, False, False, False, False, False, False)
 
 
 class TestAnswerRetrievalSummary:

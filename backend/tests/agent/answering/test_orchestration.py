@@ -1,8 +1,10 @@
-"""Question answering orchestrator tests."""
+"""AnsweringRunner workflowとresult assemblyの回帰テスト。"""
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from datetime import UTC, datetime
+from uuid import UUID
 
 import pytest
 
@@ -12,8 +14,7 @@ from app.agent.answering.evidence_answer.contract import (
     EvidenceAnswerDraft,
     EvidenceAnswerDraftInvalidError,
 )
-from app.agent.answering.orchestration import QuestionAnsweringOrchestrator
-from app.agent.contract import AnswerQuestionInput, ExternalUrlSource
+from app.agent.contract import AnswerQuestionResult, ExternalUrlSource
 from app.agent.evidence_collection import EvidenceCollectionOutcome
 from app.agent.evidence_collection.external_search import (
     ExternalSearchEvidence,
@@ -34,13 +35,27 @@ from app.agent.planning.contract import (
     QuestionPlan,
     RetrievalPlan,
 )
-from app.agent.question_context.contract import AnswerRequirement, QuestionContext
+from app.agent.question_context.contract import (
+    AnswerRequirement,
+    QuestionContext,
+    QuestionContextPreparationResult,
+    QuestionContextTelemetry,
+)
+from app.agent.running import AnsweringPhases, AnsweringRunner, RunContext, RunInput
+from app.agent.threads.contracts import ThreadMessageSnapshot
 from app.analysis.analyzed_article import InScopeAnalyzedArticle
 from app.analysis.assessment.domain.result import InScope, InScopeCategory
 
 
 def _as_of() -> datetime:
     return datetime(2026, 7, 7, 9, 0, tzinfo=UTC)
+
+
+@dataclass(frozen=True, slots=True)
+class _WorkflowInput:
+    context: QuestionContext
+    as_of: datetime
+    previous_answer: str = ""
 
 
 def _input(
@@ -51,8 +66,8 @@ def _input(
     relevant_prior_coverage: str = "",
     active_goal: str = "",
     previous_answer: str = "",
-) -> AnswerQuestionInput:
-    return AnswerQuestionInput(
+) -> _WorkflowInput:
+    return _WorkflowInput(
         context=QuestionContext(
             standalone_question=question,
             content_requirements=[
@@ -219,11 +234,19 @@ def _mixed_outcome() -> EvidenceCollectionOutcome:
 
 
 class FakePlanner:
-    def __init__(self, plan: QuestionPlan | Exception) -> None:
+    def __init__(
+        self,
+        plan: QuestionPlan | Exception,
+        *,
+        timeline: CallTimeline | None = None,
+    ) -> None:
         self._plan = plan
+        self._timeline = timeline
         self.calls: list[PlanningRequest] = []
 
     async def plan(self, request: PlanningRequest) -> QuestionPlan:
+        if self._timeline is not None:
+            self._timeline.record("planner.plan")
         self.calls.append(request)
         if isinstance(self._plan, Exception):
             raise self._plan
@@ -231,8 +254,14 @@ class FakePlanner:
 
 
 class FakeEvidenceCollector:
-    def __init__(self, outcome: EvidenceCollectionOutcome | Exception) -> None:
+    def __init__(
+        self,
+        outcome: EvidenceCollectionOutcome | Exception,
+        *,
+        timeline: CallTimeline | None = None,
+    ) -> None:
         self._outcome = outcome
+        self._timeline = timeline
         self.calls: list[tuple[RetrievalPlan, datetime]] = []
 
     async def collect(
@@ -241,6 +270,8 @@ class FakeEvidenceCollector:
         *,
         as_of: datetime,
     ) -> EvidenceCollectionOutcome:
+        if self._timeline is not None:
+            self._timeline.record("evidence_collector.collect")
         self.calls.append((plan, as_of))
         if isinstance(self._outcome, Exception):
             raise self._outcome
@@ -248,8 +279,14 @@ class FakeEvidenceCollector:
 
 
 class FakeEvidenceAnswerer:
-    def __init__(self, draft: EvidenceAnswerDraft | Exception) -> None:
+    def __init__(
+        self,
+        draft: EvidenceAnswerDraft | Exception,
+        *,
+        timeline: CallTimeline | None = None,
+    ) -> None:
         self._draft = draft
+        self._timeline = timeline
         self.calls: list[dict[str, object]] = []
 
     async def answer(
@@ -259,6 +296,8 @@ class FakeEvidenceAnswerer:
         evidence: list[object],
         target_time_window: str | None,
     ) -> EvidenceAnswerDraft:
+        if self._timeline is not None:
+            self._timeline.record("evidence_answerer.answer")
         self.calls.append(
             {
                 "request": request,
@@ -272,8 +311,14 @@ class FakeEvidenceAnswerer:
 
 
 class FakeDirectAnswerer:
-    def __init__(self, draft: DirectAnswerDraft | Exception) -> None:
+    def __init__(
+        self,
+        draft: DirectAnswerDraft | Exception,
+        *,
+        timeline: CallTimeline | None = None,
+    ) -> None:
         self._draft = draft
+        self._timeline = timeline
         self.calls: list[dict[str, object]] = []
 
     async def answer(
@@ -282,6 +327,8 @@ class FakeDirectAnswerer:
         request: AnsweringRequest,
         previous_answer: str = "",
     ) -> DirectAnswerDraft:
+        if self._timeline is not None:
+            self._timeline.record("direct_answerer.answer")
         self.calls.append(
             {
                 "request": request,
@@ -293,12 +340,73 @@ class FakeDirectAnswerer:
         return self._draft
 
 
-class FakeProgressReporter:
+class CallTimeline:
     def __init__(self) -> None:
+        self.events: list[str] = []
+
+    def record(self, event: str) -> None:
+        self.events.append(event)
+
+
+class FakeProgressReporter:
+    def __init__(self, *, timeline: CallTimeline | None = None) -> None:
+        self._timeline = timeline
         self.stages: list[str] = []
 
     async def stage_changed(self, stage: str) -> None:
+        if self._timeline is not None:
+            self._timeline.record(f"progress:{stage}")
         self.stages.append(stage)
+
+
+class _FixedContextPreparer:
+    def __init__(self, context: QuestionContext) -> None:
+        self._context = context
+
+    async def prepare(self, **_kwargs: object) -> QuestionContextPreparationResult:
+        return QuestionContextPreparationResult(
+            context=self._context,
+            telemetry=QuestionContextTelemetry(),
+        )
+
+
+class _WorkflowHarness:
+    def __init__(
+        self,
+        *,
+        phases: AnsweringPhases,
+        progress: FakeProgressReporter | None,
+    ) -> None:
+        self._phases = phases
+        self._progress = progress
+
+    async def answer(self, input: _WorkflowInput) -> AnswerQuestionResult:
+        history = (
+            (
+                ThreadMessageSnapshot(
+                    role="assistant",
+                    content=input.previous_answer,
+                ),
+            )
+            if input.previous_answer
+            else ()
+        )
+        runner = AnsweringRunner(
+            context_preparer=_FixedContextPreparer(input.context),
+            phases_factory=lambda: self._phases,
+            progress=self._progress,
+        )
+        result = await runner.run(
+            RunInput(
+                question=input.context.standalone_question,
+                history=history,
+            ),
+            run_context=RunContext(
+                run_id=UUID("019bd239-1ed4-7fbb-a336-04fe3c197651"),
+                as_of=input.as_of,
+            ),
+        )
+        return result.final_output
 
 
 def _orchestrator(
@@ -314,28 +422,29 @@ def _orchestrator(
         "direct answerer must not be called"
     ),
     progress: FakeProgressReporter | None = None,
+    timeline: CallTimeline | None = None,
 ) -> tuple[
-    QuestionAnsweringOrchestrator,
+    _WorkflowHarness,
     FakePlanner,
     FakeEvidenceCollector,
     FakeEvidenceAnswerer,
     FakeDirectAnswerer,
 ]:
-    planner = FakePlanner(plan)
-    evidence_collector = FakeEvidenceCollector(outcome)
-    evidence_answerer = FakeEvidenceAnswerer(draft)
-    direct_answerer = FakeDirectAnswerer(direct_draft)
-    kwargs = {}
-    if progress is not None:
-        kwargs["progress"] = progress
-    orchestrator = QuestionAnsweringOrchestrator(
+    planner = FakePlanner(plan, timeline=timeline)
+    evidence_collector = FakeEvidenceCollector(outcome, timeline=timeline)
+    evidence_answerer = FakeEvidenceAnswerer(draft, timeline=timeline)
+    direct_answerer = FakeDirectAnswerer(direct_draft, timeline=timeline)
+    phases = AnsweringPhases(
         planner=planner,
         evidence_collector=evidence_collector,
-        evidence_answerer=evidence_answerer,
         direct_answerer=direct_answerer,
-        **kwargs,
+        evidence_answerer=evidence_answerer,
     )
-    return orchestrator, planner, evidence_collector, evidence_answerer, direct_answerer
+    workflow = _WorkflowHarness(
+        phases=phases,
+        progress=progress,
+    )
+    return workflow, planner, evidence_collector, evidence_answerer, direct_answerer
 
 
 @pytest.mark.asyncio
@@ -377,17 +486,24 @@ async def test_answer_direct_plan_calls_direct_answerer_only() -> None:
 
 
 @pytest.mark.asyncio
-async def test_answer_direct_plan_reports_planning_then_synthesizing() -> None:
-    progress = FakeProgressReporter()
+async def test_answer_direct_plan_orders_progress_and_port_calls() -> None:
+    timeline = CallTimeline()
+    progress = FakeProgressReporter(timeline=timeline)
     orchestrator, _, _, _, _ = _orchestrator(
         plan=NoRetrievalPlan(reason="direct answer"),
         direct_draft=DirectAnswerDraft(answer="直接回答です。"),
         progress=progress,
+        timeline=timeline,
     )
 
     await orchestrator.answer(_input("こんにちは"))
 
-    assert progress.stages == ["planning", "synthesizing"]
+    assert timeline.events == [
+        "progress:planning",
+        "planner.plan",
+        "progress:synthesizing",
+        "direct_answerer.answer",
+    ]
 
 
 @pytest.mark.asyncio
@@ -421,8 +537,9 @@ async def test_answer_retrieval_plan_variants_do_not_call_direct_answerer(
 
 
 @pytest.mark.asyncio
-async def test_answer_evidence_plan_reports_all_progress_stages_in_order() -> None:
-    progress = FakeProgressReporter()
+async def test_answer_evidence_plan_orders_progress_and_port_calls() -> None:
+    timeline = CallTimeline()
+    progress = FakeProgressReporter(timeline=timeline)
     orchestrator, _, _, _, _ = _orchestrator(
         plan=_mixed_plan(),
         outcome=_mixed_outcome(),
@@ -432,11 +549,19 @@ async def test_answer_evidence_plan_reports_all_progress_stages_in_order() -> No
             cited_refs=["1", "2"],
         ),
         progress=progress,
+        timeline=timeline,
     )
 
     await orchestrator.answer(_input())
 
-    assert progress.stages == ["planning", "retrieving", "synthesizing"]
+    assert timeline.events == [
+        "progress:planning",
+        "planner.plan",
+        "progress:retrieving",
+        "evidence_collector.collect",
+        "progress:synthesizing",
+        "evidence_answerer.answer",
+    ]
 
 
 @pytest.mark.asyncio
@@ -892,7 +1017,7 @@ async def test_answer_passes_none_time_window_for_internal_plan() -> None:
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("plan", "outcome", "draft", "message"),
+    ("plan", "outcome", "draft", "message", "expected_timeline"),
     [
         (
             RuntimeError("planner failed"),
@@ -903,6 +1028,10 @@ async def test_answer_passes_none_time_window_for_internal_plan() -> None:
                 cited_refs=["1"],
             ),
             "planner failed",
+            [
+                "progress:planning",
+                "planner.plan",
+            ],
         ),
         (
             _internal_plan(),
@@ -913,33 +1042,67 @@ async def test_answer_passes_none_time_window_for_internal_plan() -> None:
                 cited_refs=["1"],
             ),
             "evidence_collector failed",
+            [
+                "progress:planning",
+                "planner.plan",
+                "progress:retrieving",
+                "evidence_collector.collect",
+            ],
         ),
         (
             _internal_plan(),
             _internal_outcome(1),
             RuntimeError("evidence_answerer failed"),
             "evidence_answerer failed",
+            [
+                "progress:planning",
+                "planner.plan",
+                "progress:retrieving",
+                "evidence_collector.collect",
+                "progress:synthesizing",
+                "evidence_answerer.answer",
+            ],
         ),
     ],
 )
-async def test_answer_propagates_step_exceptions(
+async def test_answer_step_failure_stops_before_later_progress_or_ports(
     plan: QuestionPlan | Exception,
     outcome: EvidenceCollectionOutcome | Exception,
     draft: EvidenceAnswerDraft | Exception,
     message: str,
+    expected_timeline: list[str],
 ) -> None:
-    orchestrator, _, _, _, _ = _orchestrator(plan=plan, outcome=outcome, draft=draft)
+    timeline = CallTimeline()
+    orchestrator, _, _, _, _ = _orchestrator(
+        plan=plan,
+        outcome=outcome,
+        draft=draft,
+        progress=FakeProgressReporter(timeline=timeline),
+        timeline=timeline,
+    )
 
     with pytest.raises(RuntimeError, match=message):
         await orchestrator.answer(_input())
 
+    assert timeline.events == expected_timeline
+
 
 @pytest.mark.asyncio
-async def test_answer_propagates_direct_answerer_exception() -> None:
+async def test_answer_direct_failure_stops_before_later_progress_or_ports() -> None:
+    timeline = CallTimeline()
     orchestrator, _, _, _, _ = _orchestrator(
         plan=NoRetrievalPlan(reason="direct answer"),
         direct_draft=RuntimeError("direct failed"),
+        progress=FakeProgressReporter(timeline=timeline),
+        timeline=timeline,
     )
 
     with pytest.raises(RuntimeError, match="direct failed"):
         await orchestrator.answer(_input("こんにちは"))
+
+    assert timeline.events == [
+        "progress:planning",
+        "planner.plan",
+        "progress:synthesizing",
+        "direct_answerer.answer",
+    ]
