@@ -152,6 +152,8 @@ _NO_EVIDENCE_BLOCK: Final[str] = (
 
 def render_evidence_answer_input(input: EvidenceAnswerInput) -> str:
     request = input.request
+    # HTMLではないLLM promptであり、外部入力は境界用sanitizerを通す。
+    # nosemgrep: python.django.security.injection.raw-html-format.raw-html-format  # noqa: E501
     rendered = EVIDENCE_ANSWER_INPUT_TEMPLATE.format(
         question=sanitize_for_untrusted_block(request.context.standalone_question),
         evidence=_render_evidence(input.evidence),

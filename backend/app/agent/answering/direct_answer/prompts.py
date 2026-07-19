@@ -69,6 +69,8 @@ DIRECT_ANSWER_REPAIR_TEMPLATE: Final[str] = """
 
 def render_direct_answer_input(input: DirectAnswerInput) -> str:
     request = input.request
+    # HTMLではないLLM promptであり、外部入力は境界用sanitizerを通す。
+    # nosemgrep: python.django.security.injection.raw-html-format.raw-html-format  # noqa: E501
     rendered = DIRECT_ANSWER_INPUT_TEMPLATE.format(
         question=sanitize_for_untrusted_block(request.context.standalone_question),
         as_of=request.as_of.isoformat(),
