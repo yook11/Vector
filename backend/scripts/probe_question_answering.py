@@ -44,6 +44,7 @@ from app.agent.planning.contract import (
     PlanningRequest,
     RetrievalPlan,
 )
+from app.agent.question_context.agent import QUESTION_CONTEXT_AGENT
 from app.agent.question_context.service import QuestionContextService
 from app.agent.running import AnsweringPhases, AnsweringRunner, RunContext, RunInput
 from app.config import settings
@@ -210,7 +211,10 @@ async def _probe_external(
         )
     )
     runner = AnsweringRunner(
-        context_preparer=QuestionContextService(generator=None),
+        context_preparer=QuestionContextService(
+            agent=QUESTION_CONTEXT_AGENT,
+            runtime_scope_factory=None,
+        ),
         phases_factory=lambda: AnsweringPhases(
             planner=_FixedExternalPlanner(plan),
             evidence_collector=evidence_collector,
@@ -247,7 +251,10 @@ async def _probe_direct(*, question: str) -> None:
 
     as_of = datetime.now(UTC)
     runner = AnsweringRunner(
-        context_preparer=QuestionContextService(generator=None),
+        context_preparer=QuestionContextService(
+            agent=QUESTION_CONTEXT_AGENT,
+            runtime_scope_factory=None,
+        ),
         phases_factory=lambda: AnsweringPhases(
             planner=_FixedDirectPlanner(NoRetrievalPlan(reason="direct answer probe")),
             evidence_collector=_UnreachableEvidenceCollector(),

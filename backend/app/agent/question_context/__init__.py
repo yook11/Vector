@@ -4,7 +4,7 @@ from app.agent.question_context.contract import (
     AnswerRequirement,
     QuestionContext,
     QuestionContextDraft,
-    QuestionContextGenerator,
+    QuestionContextGenerationInput,
     QuestionContextPreparationResult,
     QuestionContextTelemetry,
 )
@@ -15,7 +15,7 @@ __all__ = [
     "AnswerRequirement",
     "QuestionContext",
     "QuestionContextDraft",
-    "QuestionContextGenerator",
+    "QuestionContextGenerationInput",
     "QuestionContextPreparationResult",
     "QuestionContextTelemetry",
 ]
