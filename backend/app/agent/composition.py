@@ -209,7 +209,7 @@ def _build_external_search(
         ExternalSearchService,
     )
     from app.agent.evidence_collection.external_search.tavily import (
-        TavilySearchProvider,
+        TavilyExternalSearchTool,
     )
     from app.agent.runtime.deepseek import (
         DEEPSEEK_BASE_URL,
@@ -239,7 +239,7 @@ def _build_external_search(
         runner=ExternalSearchResearchRunner(
             query_agent=EXTERNAL_QUERY_AGENT,
             query_runtime=query_runtime,
-            search_provider=TavilySearchProvider(
+            search_tool=TavilyExternalSearchTool(
                 api_key=settings.tavily_api_key,
                 client=tavily_client,
             ),

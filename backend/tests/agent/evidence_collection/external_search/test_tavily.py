@@ -1,10 +1,11 @@
-"""Tavily SearchProvider adapter tests."""
+"""Tavily External Search Tool adapter tests."""
 
 from __future__ import annotations
 
 import json
 from collections.abc import Callable
 from datetime import UTC, datetime, timedelta, timezone
+from typing import Any
 
 import httpx
 import pytest
@@ -16,14 +17,24 @@ from app.agent.evidence_collection.external_search import (
     TAVILY_MAX_RESULTS_LIMIT,
     TAVILY_SEARCH_URL,
     ExternalSearchProviderError,
-    TavilySearchProvider,
 )
 
 TAVILY_TEST_KEY = "tvly-test-secret"
 
 
-def _provider(client: httpx.AsyncClient) -> TavilySearchProvider:
-    return TavilySearchProvider(api_key=SecretStr(TAVILY_TEST_KEY), client=client)
+def _provider(client: httpx.AsyncClient) -> Any:
+    return external_search_module.TavilyExternalSearchTool(
+        api_key=SecretStr(TAVILY_TEST_KEY),
+        client=client,
+    )
+
+
+def _input(*, query: str, limit: int) -> Any:
+    return external_search_module.ExternalSearchToolInput(query=query, limit=limit)
+
+
+async def _invoke(provider: Any, *, query: str, limit: int) -> list[Any]:
+    return await provider.invoke(_input(query=query, limit=limit))
 
 
 def _response(payload: object, *, status_code: int = 200) -> httpx.Response:
@@ -59,8 +70,9 @@ async def test_search_posts_fixed_news_request_with_bearer_header() -> None:
     async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
         provider = _provider(client)
 
-        await provider.search("NVIDIA Blackwell", limit=3)
+        await _invoke(provider, query="NVIDIA Blackwell", limit=3)
 
+    assert provider.name == "external_search"
     assert len(requests) == 1
     request = requests[0]
     assert str(request.url) == TAVILY_SEARCH_URL
@@ -87,7 +99,7 @@ async def test_search_clamps_requested_max_results_to_tavily_limit() -> None:
     async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
         provider = _provider(client)
 
-        await provider.search("NVIDIA Blackwell", limit=30)
+        await _invoke(provider, query="NVIDIA Blackwell", limit=30)
 
     body = json.loads(requests[0].content)
     assert body["max_results"] == TAVILY_MAX_RESULTS_LIMIT
@@ -106,16 +118,18 @@ async def test_search_rejects_non_positive_limit_without_http_call() -> None:
         provider = _provider(client)
 
         with pytest.raises(ValueError, match="limit"):
-            await provider.search("NVIDIA Blackwell", limit=0)
+            await _invoke(provider, query="NVIDIA Blackwell", limit=0)
         with pytest.raises(ValueError, match="limit"):
-            await provider.search("NVIDIA Blackwell", limit=-1)
+            await _invoke(provider, query="NVIDIA Blackwell", limit=-1)
 
     assert calls == 0
 
 
 def test_provider_rejects_empty_api_key() -> None:
     with pytest.raises(ValueError, match="TAVILY_API_KEY"):
-        TavilySearchProvider(api_key=SecretStr(""), client=object())
+        external_search_module.TavilyExternalSearchTool(
+            api_key=SecretStr(""), client=object()
+        )
 
 
 @pytest.mark.asyncio
@@ -142,7 +156,7 @@ async def test_search_maps_results_to_candidates_preserving_rank() -> None:
     ) as client:
         provider = _provider(client)
 
-        candidates = await provider.search("NVIDIA Blackwell", limit=10)
+        candidates = await _invoke(provider, query="NVIDIA Blackwell", limit=10)
 
     assert [str(candidate.url) for candidate in candidates] == [
         "https://www.example.com/news",
@@ -165,6 +179,25 @@ async def test_search_maps_results_to_candidates_preserving_rank() -> None:
 
 
 @pytest.mark.asyncio
+async def test_search_caps_candidates_to_requested_limit() -> None:
+    payload = {
+        "results": [
+            _result(url=f"https://example.com/{index}", title=f"title-{index}")
+            for index in range(3)
+        ]
+    }
+
+    async with httpx.AsyncClient(
+        transport=httpx.MockTransport(lambda _: _response(payload))
+    ) as client:
+        provider = _provider(client)
+
+        candidates = await _invoke(provider, query="NVIDIA Blackwell", limit=2)
+
+    assert [candidate.title for candidate in candidates] == ["title-0", "title-1"]
+
+
+@pytest.mark.asyncio
 async def test_search_truncates_content_to_candidate_snippet_cap() -> None:
     payload = {
         "results": [
@@ -177,7 +210,7 @@ async def test_search_truncates_content_to_candidate_snippet_cap() -> None:
     ) as client:
         provider = _provider(client)
 
-        candidates = await provider.search("NVIDIA Blackwell", limit=10)
+        candidates = await _invoke(provider, query="NVIDIA Blackwell", limit=10)
 
     assert len(candidates) == 1
     assert candidates[0].snippet == "x" * CANDIDATE_SNIPPET_MAX_CHARS
@@ -230,7 +263,7 @@ async def test_search_parses_published_date(
     ) as client:
         provider = _provider(client)
 
-        candidates = await provider.search("NVIDIA Blackwell", limit=10)
+        candidates = await _invoke(provider, query="NVIDIA Blackwell", limit=10)
 
     assert candidates[0].published_at == expected
 
@@ -247,7 +280,7 @@ async def test_search_keeps_candidate_when_published_date_is_unknown(
     ) as client:
         provider = _provider(client)
 
-        candidates = await provider.search("NVIDIA Blackwell", limit=10)
+        candidates = await _invoke(provider, query="NVIDIA Blackwell", limit=10)
 
     assert len(candidates) == 1
     assert candidates[0].published_at is None
@@ -269,7 +302,7 @@ async def test_search_drops_only_result_with_invalid_url_or_empty_title() -> Non
     ) as client:
         provider = _provider(client)
 
-        candidates = await provider.search("NVIDIA Blackwell", limit=10)
+        candidates = await _invoke(provider, query="NVIDIA Blackwell", limit=10)
 
     assert [str(candidate.url) for candidate in candidates] == [
         "https://example.com/valid"
@@ -291,12 +324,13 @@ async def test_search_wraps_non_2xx_without_leaking_response_body_or_key(
         provider = _provider(client)
 
         with pytest.raises(ExternalSearchProviderError) as exc_info:
-            await provider.search("NVIDIA Blackwell", limit=10)
+            await _invoke(provider, query="NVIDIA Blackwell", limit=10)
 
     message = str(exc_info.value)
     assert str(status_code) in message
     assert TAVILY_TEST_KEY not in message
     assert "body mentions" not in message
+    assert exc_info.value.reason == f"tavily_search_http_status_{status_code}"
 
 
 @pytest.mark.parametrize(
@@ -317,9 +351,12 @@ async def test_search_wraps_httpx_transport_errors(
         provider = _provider(client)
 
         with pytest.raises(ExternalSearchProviderError) as exc_info:
-            await provider.search("NVIDIA Blackwell", limit=10)
+            await _invoke(provider, query="NVIDIA Blackwell", limit=10)
 
     assert TAVILY_TEST_KEY not in str(exc_info.value)
+    assert exc_info.value.reason == "tavily_search_http_error"
+    assert exc_info.value.__cause__ is None
+    assert exc_info.value.__context__ is None
 
 
 @pytest.mark.asyncio
@@ -329,8 +366,14 @@ async def test_search_wraps_json_decode_error() -> None:
     ) as client:
         provider = _provider(client)
 
-        with pytest.raises(ExternalSearchProviderError, match="invalid_json"):
-            await provider.search("NVIDIA Blackwell", limit=10)
+        with pytest.raises(
+            ExternalSearchProviderError, match="invalid_json"
+        ) as exc_info:
+            await _invoke(provider, query="NVIDIA Blackwell", limit=10)
+
+    assert exc_info.value.reason == "tavily_search_invalid_json"
+    assert exc_info.value.__cause__ is None
+    assert exc_info.value.__context__ is None
 
 
 @pytest.mark.parametrize("payload", [{}, {"results": None}, {"results": {}}])
@@ -341,8 +384,12 @@ async def test_search_wraps_missing_or_non_list_results(payload: object) -> None
     ) as client:
         provider = _provider(client)
 
-        with pytest.raises(ExternalSearchProviderError, match="invalid_results"):
-            await provider.search("NVIDIA Blackwell", limit=10)
+        with pytest.raises(
+            ExternalSearchProviderError, match="invalid_results"
+        ) as exc_info:
+            await _invoke(provider, query="NVIDIA Blackwell", limit=10)
+
+    assert exc_info.value.reason == "tavily_search_invalid_results"
 
 
 @pytest.mark.asyncio
@@ -352,6 +399,6 @@ async def test_search_returns_empty_list_for_normal_empty_results() -> None:
     ) as client:
         provider = _provider(client)
 
-        candidates = await provider.search("NVIDIA Blackwell", limit=10)
+        candidates = await _invoke(provider, query="NVIDIA Blackwell", limit=10)
 
     assert candidates == []

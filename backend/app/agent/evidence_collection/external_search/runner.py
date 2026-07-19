@@ -42,9 +42,10 @@ from app.agent.evidence_collection.external_search.contract import (
     ExternalSearchProviderError,
     ExternalSearchRequest,
     ExternalSearchRunResult,
+    ExternalSearchTool,
+    ExternalSearchToolInput,
     ResearchTaskReport,
     ResearchTaskStatus,
-    SearchProvider,
 )
 from app.agent.planning.contract import ExternalResearchTask
 from app.agent.runtime.contract import (
@@ -79,7 +80,7 @@ class ExternalSearchResearchRunner:
         *,
         query_agent: Agent[ExternalQueryGenerationInput, ExternalQueryDraft],
         query_runtime: AgentRuntime,
-        search_provider: SearchProvider,
+        search_tool: ExternalSearchTool,
         selector_agent: Agent[
             ExternalEvidenceSelectionInput,
             ExternalEvidenceSelectionDraft,
@@ -89,7 +90,7 @@ class ExternalSearchResearchRunner:
     ) -> None:
         self._query_agent = query_agent
         self._query_runtime = query_runtime
-        self._search_provider = search_provider
+        self._search_tool = search_tool
         self._selector_agent = selector_agent
         self._selector_runtime = selector_runtime
         self._events = events
@@ -255,9 +256,11 @@ class ExternalSearchResearchRunner:
     ) -> tuple[list[ExternalSearchCandidate], bool]:
         try:
             candidates = await asyncio.wait_for(
-                self._search_provider.search(
-                    query,
-                    limit=EXTERNAL_SEARCH_CANDIDATES_PER_QUERY,
+                self._search_tool.invoke(
+                    ExternalSearchToolInput(
+                        query=query,
+                        limit=EXTERNAL_SEARCH_CANDIDATES_PER_QUERY,
+                    )
                 ),
                 timeout=PROVIDER_SEARCH_TIMEOUT_SECONDS,
             )
