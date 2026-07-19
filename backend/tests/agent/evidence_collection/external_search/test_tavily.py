@@ -22,6 +22,17 @@ from app.agent.evidence_collection.external_search import (
 TAVILY_TEST_KEY = "tvly-test-secret"
 
 
+class _CloseTrackingTavilyClient:
+    def __init__(self) -> None:
+        self.close_count = 0
+
+    async def post(self, *args: object, **kwargs: object) -> httpx.Response:
+        return _response({"results": []})
+
+    async def aclose(self) -> None:
+        self.close_count += 1
+
+
 def _provider(client: httpx.AsyncClient) -> Any:
     return external_search_module.TavilyExternalSearchTool(
         api_key=SecretStr(TAVILY_TEST_KEY),
@@ -86,6 +97,19 @@ async def test_search_posts_fixed_news_request_with_bearer_header() -> None:
         "include_answer": False,
         "include_raw_content": False,
     }
+
+
+@pytest.mark.asyncio
+async def test_tool_does_not_close_the_borrowed_tavily_client() -> None:
+    client = _CloseTrackingTavilyClient()
+    provider = external_search_module.TavilyExternalSearchTool(
+        api_key=SecretStr(TAVILY_TEST_KEY),
+        client=client,
+    )
+
+    await _invoke(provider, query="NVIDIA Blackwell", limit=1)
+
+    assert client.close_count == 0
 
 
 @pytest.mark.asyncio

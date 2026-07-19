@@ -8,7 +8,7 @@ worker が捕捉するのは分類済み境界 error と TimeoutError のみで�
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Iterator
+from collections.abc import Awaitable, Iterator
 from contextlib import contextmanager
 from datetime import datetime
 from enum import StrEnum
@@ -17,13 +17,16 @@ import logfire
 from opentelemetry.trace import StatusCode
 from pydantic import ValidationError
 
-from app.agent.agent import Agent
 from app.agent.contract import (
     AnswerEventReporter,
     AnswerProgressEvent,
     ExternalSearchCandidatesFetchedEvent,
     ExternalSearchEvidenceSelectedEvent,
     ExternalSearchQueriesGeneratedEvent,
+)
+from app.agent.evidence_collection.external_search.agent import (
+    EXTERNAL_EVIDENCE_SELECTOR_AGENT,
+    EXTERNAL_QUERY_AGENT,
 )
 from app.agent.evidence_collection.external_search.contract import (
     EXTERNAL_QUERY_MAX_CHARS,
@@ -35,8 +38,8 @@ from app.agent.evidence_collection.external_search.contract import (
     ExternalEvidenceCandidateInput,
     ExternalEvidenceSelectionDraft,
     ExternalEvidenceSelectionInput,
-    ExternalQueryDraft,
     ExternalQueryGenerationInput,
+    ExternalResearchRuntime,
     ExternalSearchCandidate,
     ExternalSearchEvidence,
     ExternalSearchProviderError,
@@ -78,24 +81,16 @@ class ExternalSearchResearchRunner:
     def __init__(
         self,
         *,
-        query_agent: Agent[ExternalQueryGenerationInput, ExternalQueryDraft],
-        query_runtime: AgentRuntime,
-        search_tool: ExternalSearchTool,
-        selector_agent: Agent[
-            ExternalEvidenceSelectionInput,
-            ExternalEvidenceSelectionDraft,
-        ],
-        selector_runtime: AgentRuntime,
         events: AnswerEventReporter | None = None,
     ) -> None:
-        self._query_agent = query_agent
-        self._query_runtime = query_runtime
-        self._search_tool = search_tool
-        self._selector_agent = selector_agent
-        self._selector_runtime = selector_runtime
         self._events = events
 
-    async def search(self, request: ExternalSearchRequest) -> ExternalSearchRunResult:
+    async def search(
+        self,
+        request: ExternalSearchRequest,
+        *,
+        external: ExternalResearchRuntime,
+    ) -> ExternalSearchRunResult:
         if not request.tasks:
             return ExternalSearchRunResult()
 
@@ -110,9 +105,10 @@ class ExternalSearchResearchRunner:
                     request=request,
                     task_index=task_index,
                     task=task,
+                    external=external,
                 )
 
-        results = await asyncio.gather(
+        results = await _gather_cancel_on_error(
             *[
                 run_task(task_index, task)
                 for task_index, task in enumerate(request.tasks)
@@ -131,6 +127,7 @@ class ExternalSearchResearchRunner:
         request: ExternalSearchRequest,
         task_index: int,
         task: ExternalResearchTask,
+        external: ExternalResearchRuntime,
     ) -> tuple[list[ExternalSearchEvidence], ResearchTaskReport]:
         query_input = ExternalQueryGenerationInput(
             task=task,
@@ -139,13 +136,13 @@ class ExternalSearchResearchRunner:
         )
         with _external_agent_phase(
             phase=_QUERY_PHASE,
-            agent_name=self._query_agent.name,
+            agent_name=EXTERNAL_QUERY_AGENT.name,
             task_index=task_index,
         ):
             try:
                 query_draft = await asyncio.wait_for(
-                    self._query_runtime.invoke(
-                        self._query_agent,
+                    external.query_runtime.invoke(
+                        EXTERNAL_QUERY_AGENT,
                         query_input,
                         attempt_number=1,
                     ),
@@ -174,8 +171,11 @@ class ExternalSearchResearchRunner:
 
         query_candidates: list[list[ExternalSearchCandidate]] = []
         provider_failed_query_count = 0
-        provider_results = await asyncio.gather(
-            *[self._search_query(query) for query in queries],
+        provider_results = await _gather_cancel_on_error(
+            *[
+                self._search_query(query, search_tool=external.search_tool)
+                for query in queries
+            ],
         )
         for candidates, failed in provider_results:
             if failed:
@@ -215,6 +215,7 @@ class ExternalSearchResearchRunner:
             candidates=pool,
             as_of=request.as_of,
             task_index=task_index,
+            selector_runtime=external.selector_runtime,
         )
         if selection_result is None:
             return [], self._task_report(
@@ -253,10 +254,12 @@ class ExternalSearchResearchRunner:
     async def _search_query(
         self,
         query: str,
+        *,
+        search_tool: ExternalSearchTool,
     ) -> tuple[list[ExternalSearchCandidate], bool]:
         try:
             candidates = await asyncio.wait_for(
-                self._search_tool.invoke(
+                search_tool.invoke(
                     ExternalSearchToolInput(
                         query=query,
                         limit=EXTERNAL_SEARCH_CANDIDATES_PER_QUERY,
@@ -275,6 +278,7 @@ class ExternalSearchResearchRunner:
         candidates: list[ExternalSearchCandidate],
         as_of: datetime,
         task_index: int,
+        selector_runtime: AgentRuntime,
     ) -> tuple[EvidenceSelectionResult | None, str | None]:
         selector_input = ExternalEvidenceSelectionInput(
             task=task,
@@ -293,14 +297,14 @@ class ExternalSearchResearchRunner:
         selector_failure_reason: str | None = None
         with _external_agent_phase(
             phase=_SELECTOR_PHASE,
-            agent_name=self._selector_agent.name,
+            agent_name=EXTERNAL_EVIDENCE_SELECTOR_AGENT.name,
             task_index=task_index,
         ):
             for attempt_number in range(1, 3):
                 try:
                     draft = await asyncio.wait_for(
-                        self._selector_runtime.invoke(
-                            self._selector_agent,
+                        selector_runtime.invoke(
+                            EXTERNAL_EVIDENCE_SELECTOR_AGENT,
                             selector_input,
                             attempt_number=attempt_number,
                         ),
@@ -357,6 +361,21 @@ class ExternalSearchResearchRunner:
         if self._events is None:
             return
         await self._events.event_occurred(event)
+
+
+async def _gather_cancel_on_error[ResultT](
+    *awaitables: Awaitable[ResultT],
+) -> list[ResultT]:
+    """未分類例外時に兄弟処理をcancelして合流してから元の例外を返す。"""
+    tasks = [asyncio.ensure_future(awaitable) for awaitable in awaitables]
+    try:
+        return list(await asyncio.gather(*tasks))
+    except BaseException:
+        for task in tasks:
+            if not task.done():
+                task.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
+        raise
 
 
 def _clean_generated_queries(raw_queries: list[str]) -> list[str]:

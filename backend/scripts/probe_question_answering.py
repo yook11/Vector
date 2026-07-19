@@ -9,8 +9,6 @@ from collections.abc import Sequence
 from datetime import UTC, datetime
 from pathlib import Path
 
-from openai import AsyncOpenAI
-
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from app.agent.answering.audit import (
@@ -29,6 +27,7 @@ from app.agent.answering.evidence_answer.ai.gemini import (
 )
 from app.agent.answering.evidence_answer.flow import EvidenceAnswerFlow
 from app.agent.answering.orchestration import QuestionAnsweringOrchestrator
+from app.agent.composition import build_external_search_service
 from app.agent.contract import AnswerQuestionInput, AnswerQuestionResult, AnswerSource
 from app.agent.evidence_collection import (
     EvidenceCollectionOutcome,
@@ -37,18 +36,7 @@ from app.agent.evidence_collection import (
 from app.agent.evidence_collection.external_search import (
     ExternalSearchEvidence,
     ExternalSearchOutcome,
-    ExternalSearchResearchRunner,
-    ExternalSearchService,
     ResearchTaskReport,
-    TavilyExternalSearchTool,
-)
-from app.agent.evidence_collection.external_search.agent import (
-    EXTERNAL_EVIDENCE_SELECTOR_AGENT,
-    EXTERNAL_QUERY_AGENT,
-)
-from app.agent.evidence_collection.external_search.deepseek_binding import (
-    EXTERNAL_EVIDENCE_SELECTOR_DEEPSEEK_BINDING,
-    EXTERNAL_QUERY_DEEPSEEK_BINDING,
 )
 from app.agent.evidence_collection.internal_search import InternalSearchQueries
 from app.agent.evidence_collection.internal_search.article_search import (
@@ -60,13 +48,7 @@ from app.agent.planning.contract import (
     NoRetrievalPlan,
     RetrievalPlan,
 )
-from app.agent.runtime.deepseek import (
-    DEEPSEEK_BASE_URL,
-    DEEPSEEK_CLIENT_TIMEOUT_SECONDS,
-    DeepSeekAgentRuntime,
-)
 from app.config import settings
-from app.shared.security.safe_http import make_safe_async_client
 
 DEFAULT_GOAL = "NVIDIA Blackwell AI GPU latest supply and customer demand evidence"
 DEFAULT_QUESTION = "NVIDIA Blackwell の直近の供給と顧客需要は投資判断に重要？"
@@ -255,53 +237,26 @@ async def _probe_external(
     as_of = datetime.now(UTC)
     plan = _build_external_plan(goals, target_time_window=target_time_window)
     synthesis_audit = _ProbeSynthesisAuditRecorder()
-    deepseek_api_key = settings.deepseek_api_key.get_secret_value()
 
-    async with make_safe_async_client() as client:
-        search_tool = TavilyExternalSearchTool(
-            api_key=settings.tavily_api_key,
-            client=client,
+    evidence_collector = _RecordingEvidenceCollector(
+        EvidenceCollectionService(
+            internal_search=_UnreachableInternalSearch(),
+            external_search=build_external_search_service(),
+            requested_external_agent_count=requested_agent_count,
         )
-        runner = ExternalSearchResearchRunner(
-            query_agent=EXTERNAL_QUERY_AGENT,
-            query_runtime=DeepSeekAgentRuntime(
-                client=AsyncOpenAI(
-                    api_key=deepseek_api_key,
-                    base_url=DEEPSEEK_BASE_URL,
-                    timeout=DEEPSEEK_CLIENT_TIMEOUT_SECONDS,
-                ),
-                binding=EXTERNAL_QUERY_DEEPSEEK_BINDING,
-            ),
-            search_tool=search_tool,
-            selector_agent=EXTERNAL_EVIDENCE_SELECTOR_AGENT,
-            selector_runtime=DeepSeekAgentRuntime(
-                client=AsyncOpenAI(
-                    api_key=deepseek_api_key,
-                    base_url=DEEPSEEK_BASE_URL,
-                    timeout=DEEPSEEK_CLIENT_TIMEOUT_SECONDS,
-                ),
-                binding=EXTERNAL_EVIDENCE_SELECTOR_DEEPSEEK_BINDING,
-            ),
-        )
-        evidence_collector = _RecordingEvidenceCollector(
-            EvidenceCollectionService(
-                internal_search=_UnreachableInternalSearch(),
-                external_search=ExternalSearchService(runner=runner),
-                requested_external_agent_count=requested_agent_count,
-            )
-        )
-        orchestrator = QuestionAnsweringOrchestrator(
-            planner=_FixedExternalPlanner(plan),
-            evidence_collector=evidence_collector,
-            evidence_answerer=EvidenceAnswerFlow(
-                generator=GeminiEvidenceAnswerDraftGenerator(),
-                audit_recorder=synthesis_audit,
-            ),
-            direct_answerer=_UnreachableDirectAnswerer(),
-        )
-        result = await orchestrator.answer(
-            AnswerQuestionInput(question=question, as_of=as_of)
-        )
+    )
+    orchestrator = QuestionAnsweringOrchestrator(
+        planner=_FixedExternalPlanner(plan),
+        evidence_collector=evidence_collector,
+        evidence_answerer=EvidenceAnswerFlow(
+            generator=GeminiEvidenceAnswerDraftGenerator(),
+            audit_recorder=synthesis_audit,
+        ),
+        direct_answerer=_UnreachableDirectAnswerer(),
+    )
+    result = await orchestrator.answer(
+        AnswerQuestionInput(question=question, as_of=as_of)
+    )
 
     outcome = evidence_collector.last_outcome
     if outcome is None:

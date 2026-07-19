@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import inspect
 from datetime import UTC, datetime
 from importlib import import_module
 from types import ModuleType
@@ -12,6 +13,7 @@ import pytest
 from pydantic import ValidationError
 
 from app.agent.agent import Agent
+from app.agent.evidence_collection.external_search.service import ExternalSearchService
 from app.agent.planning.contract import ExternalResearchTask
 from app.agent.runtime.contract import (
     AgentResponseDefect,
@@ -161,20 +163,326 @@ class FakeEventReporter:
         self.events.append(event)
 
 
+class _TaskFailureAfterSiblingStartsRuntime:
+    def __init__(self, *, error: BaseException) -> None:
+        self.error = error
+        self.blocking_task_started = asyncio.Event()
+        self.blocking_task_finished = asyncio.Event()
+        self.blocking_task_cancelled = False
+
+    async def invoke[InputT, OutputT](
+        self,
+        agent: Agent[InputT, OutputT],
+        input: InputT,
+        *,
+        attempt_number: int,
+    ) -> OutputT:
+        if input.task.collection_goal == "failing task":
+            await self.blocking_task_started.wait()
+            raise self.error
+        self.blocking_task_started.set()
+        try:
+            await asyncio.Event().wait()
+        except asyncio.CancelledError:
+            self.blocking_task_cancelled = True
+            raise
+        finally:
+            self.blocking_task_finished.set()
+        raise AssertionError("blocking task must be cancelled")
+
+
+class _QueryFailureAfterSiblingStartsTool:
+    def __init__(self, *, error: BaseException) -> None:
+        self.error = error
+        self.blocking_query_started = asyncio.Event()
+        self.blocking_query_finished = asyncio.Event()
+        self.blocking_query_cancelled = False
+
+    @property
+    def name(self) -> str:
+        return "external_search"
+
+    async def invoke(self, input: Any) -> list[Any]:
+        if input.query == "failing query":
+            await self.blocking_query_started.wait()
+            raise self.error
+        self.blocking_query_started.set()
+        try:
+            await asyncio.Event().wait()
+        except asyncio.CancelledError:
+            self.blocking_query_cancelled = True
+            raise
+        finally:
+            self.blocking_query_finished.set()
+        raise AssertionError("blocking query must be cancelled")
+
+
+class _AllTasksBlockingRuntime:
+    def __init__(self, *, task_count: int) -> None:
+        self._task_count = task_count
+        self.all_tasks_started = asyncio.Event()
+        self.started_count = 0
+        self.cancelled_count = 0
+
+    async def invoke[InputT, OutputT](
+        self,
+        agent: Agent[InputT, OutputT],
+        input: InputT,
+        *,
+        attempt_number: int,
+    ) -> OutputT:
+        self.started_count += 1
+        if self.started_count >= self._task_count:
+            self.all_tasks_started.set()
+        try:
+            await asyncio.Event().wait()
+        except asyncio.CancelledError:
+            self.cancelled_count += 1
+            raise
+        raise AssertionError("all task runtime must be cancelled")
+
+
+class _CloseRecordingRuntimeScope:
+    def __init__(
+        self,
+        *,
+        external: object,
+        sibling_finished: asyncio.Event,
+    ) -> None:
+        self._external = external
+        self._sibling_finished = sibling_finished
+        self.closed_before_sibling_finished = False
+
+    async def __aenter__(self) -> object:
+        return self._external
+
+    async def __aexit__(
+        self,
+        exc_type: object,
+        exc: BaseException | None,
+        traceback: object,
+    ) -> bool:
+        self.closed_before_sibling_finished = not self._sibling_finished.is_set()
+        return False
+
+
+class _CloseRecordingRuntimeFactory:
+    def __init__(
+        self,
+        *,
+        external: object,
+        sibling_finished: asyncio.Event,
+    ) -> None:
+        self.scope = _CloseRecordingRuntimeScope(
+            external=external,
+            sibling_finished=sibling_finished,
+        )
+
+    def activate(self) -> _CloseRecordingRuntimeScope:
+        return self.scope
+
+
+class _RunnerHarness:
+    def __init__(self, *, runner: Any, external: Any) -> None:
+        self._runner = runner
+        self._external = external
+
+    async def search(self, request: Any) -> Any:
+        return await self._runner.search(request, external=self._external)
+
+
 def _runner(
     *,
     query_runtime: AgentRuntime,
     search_tool: FakeExternalSearchTool,
     selector_runtime: AgentRuntime,
     events: FakeEventReporter | None = None,
-) -> Any:
-    return _runner_type()(
-        query_agent=_query_agent(),
+) -> _RunnerHarness:
+    external = _required_attribute(_contracts(), "ExternalResearchRuntime")(
         query_runtime=query_runtime,
-        search_tool=search_tool,
-        selector_agent=_selector_agent(),
         selector_runtime=selector_runtime,
-        events=events,
+        search_tool=search_tool,
+    )
+    return _RunnerHarness(
+        runner=_runner_type()(events=events),
+        external=external,
+    )
+
+
+def _external_runtime(
+    *,
+    query_runtime: AgentRuntime,
+    selector_runtime: AgentRuntime,
+    search_tool: FakeExternalSearchTool,
+) -> Any:
+    return _required_attribute(_contracts(), "ExternalResearchRuntime")(
+        query_runtime=query_runtime,
+        selector_runtime=selector_runtime,
+        search_tool=search_tool,
+    )
+
+
+def test_runner_requires_external_bundle_per_call() -> None:
+    runner_signature = inspect.signature(_runner_type())
+    search_signature = inspect.signature(_runner_type().search)
+
+    assert (
+        tuple(runner_signature.parameters),
+        tuple(search_signature.parameters),
+        search_signature.parameters["external"].kind,
+    ) == (
+        ("events",),
+        ("self", "request", "external"),
+        inspect.Parameter.KEYWORD_ONLY,
+    )
+
+
+@pytest.mark.asyncio
+async def test_unclassified_task_failure_joins_sibling_before_scope_exit() -> None:
+    error = RuntimeError("unclassified task failure")
+    query_runtime = _TaskFailureAfterSiblingStartsRuntime(error=error)
+    external = _external_runtime(
+        query_runtime=query_runtime,
+        selector_runtime=ScriptedAgentRuntime([]),
+        search_tool=FakeExternalSearchTool(),
+    )
+    runtime_factory = _CloseRecordingRuntimeFactory(
+        external=external,
+        sibling_finished=query_runtime.blocking_task_finished,
+    )
+    service = ExternalSearchService(
+        runner=_runner_type()(),
+        runtime_factory=runtime_factory,
+    )
+
+    with pytest.raises(RuntimeError) as raised:
+        await service.search(
+            [_task("failing task"), _task("blocking task")],
+            target_time_window=None,
+            as_of=_as_of(),
+        )
+
+    assert (
+        raised.value is error,
+        query_runtime.blocking_task_cancelled,
+        query_runtime.blocking_task_finished.is_set(),
+        runtime_factory.scope.closed_before_sibling_finished,
+    ) == (True, True, True, False)
+
+
+@pytest.mark.asyncio
+async def test_unclassified_query_failure_joins_sibling_before_reraise() -> None:
+    error = RuntimeError("unclassified query failure")
+    search_tool = _QueryFailureAfterSiblingStartsTool(error=error)
+    external = _external_runtime(
+        query_runtime=ScriptedAgentRuntime(
+            [_query_draft(["failing query", "blocking query"])]
+        ),
+        selector_runtime=ScriptedAgentRuntime([]),
+        search_tool=search_tool,
+    )
+    runner = _runner_type()()
+
+    with pytest.raises(RuntimeError) as raised:
+        await runner.search(_request([_task("query siblings")]), external=external)
+
+    assert (
+        raised.value is error,
+        search_tool.blocking_query_cancelled,
+        search_tool.blocking_query_finished.is_set(),
+    ) == (True, True, True)
+
+
+@pytest.mark.asyncio
+async def test_runner_cancellation_cancels_and_joins_all_started_tasks() -> None:
+    tasks = [_task("first blocking task"), _task("second blocking task")]
+    query_runtime = _AllTasksBlockingRuntime(task_count=len(tasks))
+    external = _external_runtime(
+        query_runtime=query_runtime,
+        selector_runtime=ScriptedAgentRuntime([]),
+        search_tool=FakeExternalSearchTool(),
+    )
+    runner = _runner_type()()
+    running = asyncio.create_task(
+        runner.search(
+            _request(tasks, effective_agent_count=len(tasks)), external=external
+        )
+    )
+    await asyncio.wait_for(query_runtime.all_tasks_started.wait(), timeout=1)
+    running.cancel()
+
+    with pytest.raises(asyncio.CancelledError):
+        await running
+
+    assert (query_runtime.started_count, query_runtime.cancelled_count) == (2, 2)
+
+
+@pytest.mark.asyncio
+async def test_runner_reuses_bundle_across_tasks_and_selector_retries() -> None:
+    client = object()
+
+    class _QueryRuntime:
+        def __init__(self) -> None:
+            self.client_ids: list[object] = []
+
+        async def invoke[InputT, OutputT](
+            self,
+            agent: Agent[InputT, OutputT],
+            input: InputT,
+            *,
+            attempt_number: int,
+        ) -> OutputT:
+            self.client_ids.append(client)
+            return _query_draft([input.task.collection_goal])  # type: ignore[return-value]
+
+    class _SelectorRuntime:
+        def __init__(self) -> None:
+            self.client_ids: list[object] = []
+
+        async def invoke[InputT, OutputT](
+            self,
+            agent: Agent[InputT, OutputT],
+            input: InputT,
+            *,
+            attempt_number: int,
+        ) -> OutputT:
+            self.client_ids.append(client)
+            if attempt_number == 1:
+                raise AgentResponseInvalidError(
+                    AgentResponseDefect.OUTPUT_SCHEMA_MISMATCH
+                )
+            return _selection_draft(
+                [{"candidate_index": 0, "claim": "claim", "why_selected": "why"}]
+            )  # type: ignore[return-value]
+
+    tasks = [_task("first query"), _task("second query")]
+    query_runtime = _QueryRuntime()
+    selector_runtime = _SelectorRuntime()
+    external = _external_runtime(
+        query_runtime=query_runtime,
+        selector_runtime=selector_runtime,
+        search_tool=FakeExternalSearchTool(
+            {
+                "first query": [_candidate("https://example.com/first")],
+                "second query": [_candidate("https://example.com/second")],
+            }
+        ),
+    )
+    runner = _runner_type()()
+
+    result = await runner.search(
+        _request(tasks, effective_agent_count=len(tasks)),
+        external=external,
+    )
+
+    assert (
+        query_runtime.client_ids,
+        selector_runtime.client_ids,
+        [report.status for report in result.task_reports],
+    ) == (
+        [client, client],
+        [client, client, client, client],
+        ["succeeded", "succeeded"],
     )
 
 

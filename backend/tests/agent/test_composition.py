@@ -300,23 +300,25 @@ def test_starting_agent_factory_does_not_open_client_or_build_graph(
     assert (construction_calls, callable(starting_agent.answer)) == ([], True)
 
 
-def test_external_search_wiring_creates_distinct_borrowed_deepseek_clients(
+def test_external_search_service_builder_does_not_activate_external_runtime(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    import openai
-
-    from app.agent.evidence_collection.external_search.deepseek_binding import (
-        EXTERNAL_EVIDENCE_SELECTOR_DEEPSEEK_BINDING,
-        EXTERNAL_QUERY_DEEPSEEK_BINDING,
+    build_external_search_service = _composition_builder(
+        "build_external_search_service"
     )
-    from app.agent.runtime.deepseek import (
-        DEEPSEEK_BASE_URL,
-        DEEPSEEK_CLIENT_TIMEOUT_SECONDS,
-        DeepSeekAgentRuntime,
-    )
+    activation_calls: list[None] = []
 
-    client_factory = _FakeDeepSeekClientFactory()
-    monkeypatch.setattr(openai, "AsyncOpenAI", client_factory)
+    class _Factory:
+        def activate(self) -> None:
+            activation_calls.append(None)
+            raise AssertionError("service builder must not activate the runtime")
+
+    factory = _Factory()
+    monkeypatch.setattr(
+        composition,
+        "build_external_research_runtime_factory",
+        lambda: factory,
+    )
     monkeypatch.setattr(
         composition.settings,
         "deepseek_api_key",
@@ -328,216 +330,45 @@ def test_external_search_wiring_creates_distinct_borrowed_deepseek_clients(
         SecretStr("tavily-api-key-sentinel"),
     )
 
-    external_search = composition._build_external_search(object())
-    runner = external_search._runner
-    query_runtime = runner._query_runtime
-    selector_runtime = runner._selector_runtime
+    service = build_external_search_service()
 
-    assert len(client_factory.clients) == 2
-    assert client_factory.clients[0] is not client_factory.clients[1]
-    assert all(
-        client.kwargs
-        == {
-            "api_key": "deepseek-api-key-sentinel",
-            "base_url": DEEPSEEK_BASE_URL,
-            "timeout": DEEPSEEK_CLIENT_TIMEOUT_SECONDS,
-        }
-        for client in client_factory.clients
-    )
-    assert isinstance(query_runtime, DeepSeekAgentRuntime)
-    assert isinstance(selector_runtime, DeepSeekAgentRuntime)
-    assert query_runtime._client is client_factory.clients[0]
-    assert selector_runtime._client is client_factory.clients[1]
-    assert query_runtime._binding is EXTERNAL_QUERY_DEEPSEEK_BINDING
-    assert selector_runtime._binding is EXTERNAL_EVIDENCE_SELECTOR_DEEPSEEK_BINDING
-    for client in client_factory.clients:
-        client.aclose.assert_not_awaited()
-        client.close.assert_not_awaited()
+    assert (service._runtime_factory is factory, activation_calls) == (True, [])
 
 
-async def test_deferred_answer_orders_resources_forwards_dependencies_and_result(
+async def test_starting_agent_does_not_own_tavily_client_lifecycle(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     build_starting_agent = _composition_builder(
         "build_question_answering_starting_agent"
     )
-    lifecycle: list[str] = []
-    client_factory = _SafeClientFactory(lifecycle)
-    monkeypatch.setattr(composition, "make_safe_async_client", client_factory)
+    client_factory_calls: list[None] = []
     final_output = _answer_result()
-    concrete_agent = _FakeQuestionAnsweringAgent(
-        [final_output],
-        lifecycle=lifecycle,
-    )
+    concrete_agent = _FakeQuestionAnsweringAgent([final_output])
     graph_builder_calls: list[dict[str, object]] = []
 
     def build_graph(**kwargs: object) -> _FakeQuestionAnsweringAgent:
-        lifecycle.append("graph build")
         graph_builder_calls.append(kwargs)
         return concrete_agent
 
-    monkeypatch.setattr(composition, "build_question_answering_agent", build_graph)
-    session_factory = object()
-    progress = object()
-    events = object()
-    delta_reporter = object()
-    continuation = object()
-    starting_agent = build_starting_agent(
-        session_factory=session_factory,
-        progress=progress,
-        events=events,
-        delta_reporter=delta_reporter,
-        continuation=continuation,
-    )
-    input_ = _answer_input()
+    def make_client() -> None:
+        client_factory_calls.append(None)
+        raise AssertionError("starting agent must not own a Tavily client")
 
-    result = await starting_agent.answer(input_)
+    monkeypatch.setattr(composition, "make_safe_async_client", make_client)
+    monkeypatch.setattr(composition, "build_question_answering_agent", build_graph)
+    starting_agent = build_starting_agent(session_factory=object())
+
+    result = await starting_agent.answer(_answer_input())
 
     assert (
-        lifecycle,
-        graph_builder_calls,
-        len(concrete_agent.calls),
-        concrete_agent.calls[0] is input_,
+        client_factory_calls,
+        len(graph_builder_calls),
+        "tavily_client" in graph_builder_calls[0],
         result is final_output,
     ) == (
-        ["client 1 enter", "graph build", "concrete agent answer", "client 1 exit"],
-        [
-            {
-                "session_factory": session_factory,
-                "tavily_client": client_factory.clients[0],
-                "progress": progress,
-                "events": events,
-                "delta_reporter": delta_reporter,
-                "continuation": continuation,
-            }
-        ],
+        [],
         1,
-        True,
-        True,
-    )
-
-
-async def test_deferred_answer_releases_client_when_graph_builder_raises(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    build_starting_agent = _composition_builder(
-        "build_question_answering_starting_agent"
-    )
-    lifecycle: list[str] = []
-    client_factory = _SafeClientFactory(lifecycle)
-    monkeypatch.setattr(composition, "make_safe_async_client", client_factory)
-    error = AIProviderConfigurationError()
-
-    def fail_to_build_graph(**_kwargs: object) -> None:
-        lifecycle.append("graph build")
-        raise error
-
-    monkeypatch.setattr(
-        composition,
-        "build_question_answering_agent",
-        fail_to_build_graph,
-    )
-    starting_agent = build_starting_agent(session_factory=object())
-
-    with pytest.raises(AIProviderConfigurationError) as raised:
-        await starting_agent.answer(_answer_input())
-
-    assert (
-        raised.value is error,
-        lifecycle,
-        len(client_factory.clients),
-    ) == (
-        True,
-        ["client 1 enter", "graph build", "client 1 exit"],
-        1,
-    )
-
-
-async def test_deferred_answer_releases_client_when_concrete_agent_raises(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    build_starting_agent = _composition_builder(
-        "build_question_answering_starting_agent"
-    )
-    lifecycle: list[str] = []
-    client_factory = _SafeClientFactory(lifecycle)
-    monkeypatch.setattr(composition, "make_safe_async_client", client_factory)
-    error = RuntimeError("answer failed")
-    concrete_agent = _FakeQuestionAnsweringAgent([error], lifecycle=lifecycle)
-
-    def build_graph(**_kwargs: object) -> _FakeQuestionAnsweringAgent:
-        lifecycle.append("graph build")
-        return concrete_agent
-
-    monkeypatch.setattr(composition, "build_question_answering_agent", build_graph)
-    starting_agent = build_starting_agent(session_factory=object())
-
-    with pytest.raises(RuntimeError) as raised:
-        await starting_agent.answer(_answer_input())
-
-    assert (
-        raised.value is error,
-        lifecycle,
-        len(concrete_agent.calls),
-        len(client_factory.clients),
-    ) == (
-        True,
-        ["client 1 enter", "graph build", "concrete agent answer", "client 1 exit"],
-        1,
-        1,
-    )
-
-
-async def test_deferred_agent_opens_fresh_client_for_each_answer(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    build_starting_agent = _composition_builder(
-        "build_question_answering_starting_agent"
-    )
-    lifecycle: list[str] = []
-    client_factory = _SafeClientFactory(lifecycle)
-    monkeypatch.setattr(composition, "make_safe_async_client", client_factory)
-    first_output = _answer_result("最初の回答")
-    second_output = _answer_result("次の回答")
-    concrete_agents = [
-        _FakeQuestionAnsweringAgent([first_output], lifecycle=lifecycle),
-        _FakeQuestionAnsweringAgent([second_output], lifecycle=lifecycle),
-    ]
-    graph_builder_calls: list[dict[str, object]] = []
-
-    def build_graph(**kwargs: object) -> _FakeQuestionAnsweringAgent:
-        lifecycle.append("graph build")
-        graph_builder_calls.append(kwargs)
-        return concrete_agents[len(graph_builder_calls) - 1]
-
-    monkeypatch.setattr(composition, "build_question_answering_agent", build_graph)
-    starting_agent = build_starting_agent(session_factory=object())
-
-    first_result = await starting_agent.answer(_answer_input())
-    second_result = await starting_agent.answer(_answer_input())
-
-    assert (
-        lifecycle,
-        len(client_factory.clients),
-        client_factory.clients[0] is not client_factory.clients[1],
-        [call["tavily_client"] for call in graph_builder_calls],
-        first_result is first_output,
-        second_result is second_output,
-    ) == (
-        [
-            "client 1 enter",
-            "graph build",
-            "concrete agent answer",
-            "client 1 exit",
-            "client 2 enter",
-            "graph build",
-            "concrete agent answer",
-            "client 2 exit",
-        ],
-        2,
-        True,
-        client_factory.clients,
-        True,
+        False,
         True,
     )
 
@@ -792,7 +623,7 @@ def test_build_question_answering_agent_wires_declared_planner_and_runtime_scope
         lambda: None,
     )
     monkeypatch.setattr(
-        composition, "_build_external_search", lambda *_a, **_k: object()
+        composition, "build_external_search_service", lambda *_a, **_k: object()
     )
     monkeypatch.setattr(planning_service, "QuestionPlanningService", _PlannerSpy)
     for module, name in (
@@ -810,7 +641,6 @@ def test_build_question_answering_agent_wires_declared_planner_and_runtime_scope
 
     composition.build_question_answering_agent(
         session_factory=object(),
-        tavily_client=object(),
     )
 
     assert planner_calls == [

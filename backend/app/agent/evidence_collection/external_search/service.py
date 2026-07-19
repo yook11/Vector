@@ -6,6 +6,7 @@ from datetime import datetime
 
 from app.agent.evidence_collection.external_search.contract import (
     EXTERNAL_SEARCH_AGENT_HARD_LIMIT,
+    ExternalResearchRuntimeFactory,
     ExternalSearchEvidence,
     ExternalSearchOutcome,
     ExternalSearchRequest,
@@ -22,8 +23,14 @@ __all__ = [
 class ExternalSearchService:
     """Plan の external research tasks を最大 3 並列の runner 実行へ丸める。"""
 
-    def __init__(self, *, runner: ExternalSearchRunner) -> None:
+    def __init__(
+        self,
+        *,
+        runner: ExternalSearchRunner,
+        runtime_factory: ExternalResearchRuntimeFactory,
+    ) -> None:
         self._runner = runner
+        self._runtime_factory = runtime_factory
 
     async def search(
         self,
@@ -52,7 +59,8 @@ class ExternalSearchService:
             as_of=as_of,
             target_time_window=target_time_window,
         )
-        run_result = await self._runner.search(request)
+        async with self._runtime_factory.activate() as external:
+            run_result = await self._runner.search(request, external=external)
         evidence, deduplicated_evidence_count = _deduplicate_evidence_by_url(
             run_result.evidence
         )

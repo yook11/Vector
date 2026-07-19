@@ -500,14 +500,16 @@ class TestCreateResearchResponse:
         assert run.error_code is None
         assert "SHOULD_NOT_LEAK" not in response.text
 
+    @pytest.mark.parametrize("missing_key", ["deepseek_api_key", "tavily_api_key"])
     async def test_key_missing_fails_fast_without_persisting_run(
         self,
         research_client: tuple[AsyncClient, FakeEnqueue],
         db_session: AsyncSession,
         monkeypatch: pytest.MonkeyPatch,
+        missing_key: str,
     ) -> None:
         client, fake_enqueue = research_client
-        monkeypatch.setattr(settings, "deepseek_api_key", SecretStr(""))
+        monkeypatch.setattr(settings, missing_key, SecretStr(""))
 
         response = await client.post(_RESPONSES_URL, json={"question": "NVIDIA は？"})
 

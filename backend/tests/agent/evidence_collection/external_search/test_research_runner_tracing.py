@@ -20,6 +20,7 @@ from app.agent.evidence_collection.external_search.agent import (
     EXTERNAL_QUERY_AGENT,
 )
 from app.agent.evidence_collection.external_search.contract import (
+    ExternalResearchRuntime,
     ExternalSearchCandidate,
     ExternalSearchRequest,
     ExternalSearchToolInput,
@@ -116,24 +117,40 @@ class FakeExternalSearchTool:
         ]
 
 
+class _RunnerHarness:
+    def __init__(
+        self,
+        *,
+        runner: ExternalSearchResearchRunner,
+        external: ExternalResearchRuntime,
+    ) -> None:
+        self._runner = runner
+        self._external = external
+
+    async def search(self, request: ExternalSearchRequest) -> object:
+        return await self._runner.search(request, external=self._external)
+
+
 def _runner(
     *,
     query_client: FakeDeepSeekClient,
     selector_client: FakeDeepSeekClient,
     search_tool: FakeExternalSearchTool | None = None,
-) -> ExternalSearchResearchRunner:
-    return ExternalSearchResearchRunner(
-        query_agent=EXTERNAL_QUERY_AGENT,
+) -> _RunnerHarness:
+    external = ExternalResearchRuntime(
         query_runtime=DeepSeekAgentRuntime(
             client=cast(AsyncOpenAI, query_client),
             binding=EXTERNAL_QUERY_DEEPSEEK_BINDING,
         ),
-        search_tool=search_tool or FakeExternalSearchTool(),
-        selector_agent=EXTERNAL_EVIDENCE_SELECTOR_AGENT,
         selector_runtime=DeepSeekAgentRuntime(
             client=cast(AsyncOpenAI, selector_client),
             binding=EXTERNAL_EVIDENCE_SELECTOR_DEEPSEEK_BINDING,
         ),
+        search_tool=search_tool or FakeExternalSearchTool(),
+    )
+    return _RunnerHarness(
+        runner=ExternalSearchResearchRunner(),
+        external=external,
     )
 
 
@@ -230,6 +247,10 @@ async def test_query_and_selector_production_spans_preserve_phase_boundaries(
         _SELECTION_WHY_SENTINEL,
     ):
         assert unsafe not in trace_dump
+    assert (
+        query_client.close.await_count,
+        selector_client.close.await_count,
+    ) == (0, 0)
 
 
 async def test_unknown_query_error_is_redacted_in_production_phase_and_provider(

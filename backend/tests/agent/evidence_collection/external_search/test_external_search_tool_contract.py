@@ -195,13 +195,38 @@ class StaticAsyncByteStream(httpx.AsyncByteStream):
         yield self._content
 
 
-def _runner(*, search_tool: object) -> Any:
-    return _runner_type()(
-        query_agent=_query_agent(),
-        query_runtime=ScriptedAgentRuntime([_query_draft(["  normalized query  "])]),
+class _RunnerHarness:
+    def __init__(self, *, runner: object, external: object) -> None:
+        self._runner = runner
+        self._external = external
+
+    async def search(self, request: object) -> Any:
+        return await self._runner.search(request, external=self._external)
+
+
+def _external_runtime(
+    *,
+    query_runtime: object,
+    selector_runtime: object,
+    search_tool: object,
+) -> Any:
+    return _required_attribute(_contracts(), "ExternalResearchRuntime")(
+        query_runtime=query_runtime,
+        selector_runtime=selector_runtime,
         search_tool=search_tool,
-        selector_agent=_selector_agent(),
-        selector_runtime=ScriptedAgentRuntime([_selection_draft()]),
+    )
+
+
+def _runner(*, search_tool: object) -> Any:
+    return _RunnerHarness(
+        runner=_runner_type()(),
+        external=_external_runtime(
+            query_runtime=ScriptedAgentRuntime(
+                [_query_draft(["  normalized query  "])]
+            ),
+            selector_runtime=ScriptedAgentRuntime([_selection_draft()]),
+            search_tool=search_tool,
+        ),
     )
 
 
@@ -287,15 +312,16 @@ async def test_runner_keeps_query_backstop_around_tool_invocation(
     monkeypatch.setattr(runner_module, "PROVIDER_SEARCH_TIMEOUT_SECONDS", 0.01)
     tool = BlockingExternalSearchTool()
     selector_runtime = ScriptedAgentRuntime([_selection_draft()])
-    runner = _runner_type()(
-        query_agent=_query_agent(),
-        query_runtime=ScriptedAgentRuntime([_query_draft(["normalized query"])]),
-        search_tool=tool,
-        selector_agent=_selector_agent(),
-        selector_runtime=selector_runtime,
-    )
+    runner = _runner_type()()
 
-    result = await runner.search(_request())
+    result = await runner.search(
+        _request(),
+        external=_external_runtime(
+            query_runtime=ScriptedAgentRuntime([_query_draft(["normalized query"])]),
+            selector_runtime=selector_runtime,
+            search_tool=tool,
+        ),
+    )
 
     assert tool.cancelled is True
     assert selector_runtime.calls == []

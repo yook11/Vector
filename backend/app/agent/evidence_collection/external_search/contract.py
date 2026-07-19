@@ -9,6 +9,7 @@ Protocol をここで保証する。
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
+from contextlib import AbstractAsyncContextManager
 from dataclasses import dataclass
 from datetime import datetime
 from enum import StrEnum
@@ -23,6 +24,7 @@ from pydantic import (
 )
 
 from app.agent.planning.contract import ExternalResearchTask
+from app.agent.runtime.contract import AgentRuntime
 from app.shared.security.safe_url import SafeUrl
 
 __all__ = [
@@ -50,6 +52,8 @@ __all__ = [
     "ExternalSearchOutcome",
     "ExternalSearchProviderError",
     "ExternalSearchRequest",
+    "ExternalResearchRuntime",
+    "ExternalResearchRuntimeFactory",
     "ExternalSearchRunResult",
     "ExternalSearchRunner",
     "ExternalSearchTool",
@@ -238,6 +242,23 @@ class ExternalSearchTool(Protocol):
         self,
         input: ExternalSearchToolInput,
     ) -> list[ExternalSearchCandidate]: ...
+
+
+@dataclass(frozen=True, slots=True)
+class ExternalResearchRuntime:
+    """external branchがscope内だけ借りるrole別RuntimeとToolの束。"""
+
+    query_runtime: AgentRuntime
+    selector_runtime: AgentRuntime
+    search_tool: ExternalSearchTool
+
+
+class ExternalResearchRuntimeFactory(Protocol):
+    """external branch単位で資源束を貸し出すcomposition port。"""
+
+    def activate(
+        self,
+    ) -> AbstractAsyncContextManager[ExternalResearchRuntime]: ...
 
 
 class EvidenceSelection(BaseModel):
@@ -447,6 +468,8 @@ class ExternalSearchRunner(Protocol):
     async def search(
         self,
         request: ExternalSearchRequest,
+        *,
+        external: ExternalResearchRuntime,
     ) -> ExternalSearchRunResult: ...
 
 

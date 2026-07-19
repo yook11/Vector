@@ -8,7 +8,9 @@ from __future__ import annotations
 
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from typing import TYPE_CHECKING
 
+from pydantic import SecretStr
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.agent.contract import (
@@ -20,7 +22,10 @@ from app.agent.contract import (
     AnswerQuestionResult,
     QuestionAnsweringAgent,
 )
-from app.agent.evidence_collection.external_search.tavily import TavilyHttpClient
+from app.agent.evidence_collection.external_search.contract import (
+    ExternalResearchRuntime,
+    ExternalResearchRuntimeFactory,
+)
 from app.agent.planning.agent import QUESTION_PLANNER_AGENT
 from app.agent.question_context.contract import QuestionContextGenerator
 from app.agent.question_context.service import QuestionContextService
@@ -32,6 +37,11 @@ from app.analysis.ai_provider_errors import (
 )
 from app.config import settings
 from app.shared.security.safe_http import make_safe_async_client
+
+if TYPE_CHECKING:
+    from app.agent.evidence_collection.external_search.service import (
+        ExternalSearchService,
+    )
 
 
 def ensure_question_answering_agent_configured() -> None:
@@ -76,16 +86,14 @@ class _DeferredQuestionAnsweringAgent:
         self._continuation = continuation
 
     async def answer(self, input: AnswerQuestionInput) -> AnswerQuestionResult:
-        async with make_safe_async_client() as tavily_client:
-            agent = build_question_answering_agent(
-                session_factory=self._session_factory,
-                tavily_client=tavily_client,
-                progress=self._progress,
-                events=self._events,
-                delta_reporter=self._delta_reporter,
-                continuation=self._continuation,
-            )
-            return await agent.answer(input)
+        agent = build_question_answering_agent(
+            session_factory=self._session_factory,
+            progress=self._progress,
+            events=self._events,
+            delta_reporter=self._delta_reporter,
+            continuation=self._continuation,
+        )
+        return await agent.answer(input)
 
 
 def build_question_answering_starting_agent(
@@ -108,7 +116,6 @@ def build_question_answering_starting_agent(
 def build_question_answering_agent(
     *,
     session_factory: async_sessionmaker[AsyncSession],
-    tavily_client: TavilyHttpClient,
     progress: AnswerProgressReporter | None = None,
     events: AnswerEventReporter | None = None,
     delta_reporter: AnswerDeltaReporter | None = None,
@@ -137,7 +144,7 @@ def build_question_answering_agent(
     )
     from app.agent.planning.service import QuestionPlanningService
 
-    external_search = _build_external_search(tavily_client, events=events)
+    external_search = build_external_search_service(events=events)
     internal_search = InternalSearchService(
         embedder=GeminiQueryEmbedder(),
         article_search_repository=PgVectorArticleSearchRepository(session_factory),
@@ -185,66 +192,83 @@ def build_answering_runner() -> AnsweringRunner:
     )
 
 
-def _build_external_search(
-    tavily_client: TavilyHttpClient,
+class _ExternalResearchRuntimeFactory:
+    __slots__ = ("_deepseek_api_key", "_tavily_api_key")
+
+    def __init__(
+        self,
+        *,
+        deepseek_api_key: SecretStr,
+        tavily_api_key: SecretStr,
+    ) -> None:
+        self._deepseek_api_key = deepseek_api_key
+        self._tavily_api_key = tavily_api_key
+
+    @asynccontextmanager
+    async def activate(self) -> AsyncIterator[ExternalResearchRuntime]:
+        from openai import AsyncOpenAI
+
+        from app.agent.evidence_collection.external_search.deepseek_binding import (
+            EXTERNAL_EVIDENCE_SELECTOR_DEEPSEEK_BINDING,
+            EXTERNAL_QUERY_DEEPSEEK_BINDING,
+        )
+        from app.agent.evidence_collection.external_search.tavily import (
+            TavilyExternalSearchTool,
+        )
+        from app.agent.runtime.deepseek import (
+            DEEPSEEK_BASE_URL,
+            DEEPSEEK_CLIENT_TIMEOUT_SECONDS,
+            DeepSeekAgentRuntime,
+        )
+
+        async with AsyncOpenAI(
+            api_key=self._deepseek_api_key.get_secret_value(),
+            base_url=DEEPSEEK_BASE_URL,
+            timeout=DEEPSEEK_CLIENT_TIMEOUT_SECONDS,
+        ) as deepseek_client:
+            query_runtime = DeepSeekAgentRuntime(
+                client=deepseek_client,
+                binding=EXTERNAL_QUERY_DEEPSEEK_BINDING,
+            )
+            selector_runtime = DeepSeekAgentRuntime(
+                client=deepseek_client,
+                binding=EXTERNAL_EVIDENCE_SELECTOR_DEEPSEEK_BINDING,
+            )
+            async with make_safe_async_client() as tavily_client:
+                search_tool = TavilyExternalSearchTool(
+                    api_key=self._tavily_api_key,
+                    client=tavily_client,
+                )
+                yield ExternalResearchRuntime(
+                    query_runtime=query_runtime,
+                    selector_runtime=selector_runtime,
+                    search_tool=search_tool,
+                )
+
+
+def build_external_research_runtime_factory() -> ExternalResearchRuntimeFactory:
+    return _ExternalResearchRuntimeFactory(
+        deepseek_api_key=settings.deepseek_api_key,
+        tavily_api_key=settings.tavily_api_key,
+    )
+
+
+def build_external_search_service(
     *,
     events: AnswerEventReporter | None = None,
-) -> object:
+) -> ExternalSearchService:
     ensure_question_answering_agent_configured()
 
-    from openai import AsyncOpenAI
-
-    from app.agent.evidence_collection.external_search.agent import (
-        EXTERNAL_EVIDENCE_SELECTOR_AGENT,
-        EXTERNAL_QUERY_AGENT,
-    )
-    from app.agent.evidence_collection.external_search.deepseek_binding import (
-        EXTERNAL_EVIDENCE_SELECTOR_DEEPSEEK_BINDING,
-        EXTERNAL_QUERY_DEEPSEEK_BINDING,
-    )
     from app.agent.evidence_collection.external_search.runner import (
         ExternalSearchResearchRunner,
     )
     from app.agent.evidence_collection.external_search.service import (
         ExternalSearchService,
     )
-    from app.agent.evidence_collection.external_search.tavily import (
-        TavilyExternalSearchTool,
-    )
-    from app.agent.runtime.deepseek import (
-        DEEPSEEK_BASE_URL,
-        DEEPSEEK_CLIENT_TIMEOUT_SECONDS,
-        DeepSeekAgentRuntime,
-    )
-
-    deepseek_api_key = settings.deepseek_api_key.get_secret_value()
-    query_runtime = DeepSeekAgentRuntime(
-        client=AsyncOpenAI(
-            api_key=deepseek_api_key,
-            base_url=DEEPSEEK_BASE_URL,
-            timeout=DEEPSEEK_CLIENT_TIMEOUT_SECONDS,
-        ),
-        binding=EXTERNAL_QUERY_DEEPSEEK_BINDING,
-    )
-    selector_runtime = DeepSeekAgentRuntime(
-        client=AsyncOpenAI(
-            api_key=deepseek_api_key,
-            base_url=DEEPSEEK_BASE_URL,
-            timeout=DEEPSEEK_CLIENT_TIMEOUT_SECONDS,
-        ),
-        binding=EXTERNAL_EVIDENCE_SELECTOR_DEEPSEEK_BINDING,
-    )
 
     return ExternalSearchService(
         runner=ExternalSearchResearchRunner(
-            query_agent=EXTERNAL_QUERY_AGENT,
-            query_runtime=query_runtime,
-            search_tool=TavilyExternalSearchTool(
-                api_key=settings.tavily_api_key,
-                client=tavily_client,
-            ),
-            selector_agent=EXTERNAL_EVIDENCE_SELECTOR_AGENT,
-            selector_runtime=selector_runtime,
             events=events,
-        )
+        ),
+        runtime_factory=build_external_research_runtime_factory(),
     )
