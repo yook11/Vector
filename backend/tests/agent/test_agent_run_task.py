@@ -23,7 +23,6 @@ from app.agent.answering.direct_answer.contract import (
 )
 from app.agent.contract import (
     AnswerGenerationStopped,
-    AnswerQuestionInput,
     AnswerQuestionResult,
     AnswerRetrievalSummary,
     ExternalUrlSource,
@@ -37,8 +36,9 @@ from app.agent.live_updates.stream import (
     AgentRunLiveStreamStageEvent,
     AgentRunLiveStreamTerminalEvent,
 )
-from app.agent.question_context.contract import QuestionContext, QuestionContextDraft
+from app.agent.question_context.contract import AnswerRequirement, QuestionContext
 from app.agent.running import (
+    AnsweringPhases,
     AnsweringRunContext,
     QuestionResolvedRunHooks,
     RunContext,
@@ -82,9 +82,9 @@ class FakeAgent:
         self.exc = exc
         self.stage = stage
         self.progress = None
-        self.calls: list[AnswerQuestionInput] = []
+        self.calls: list[AnsweringRunContext] = []
 
-    async def answer(self, input_: AnswerQuestionInput) -> AnswerQuestionResult:
+    async def answer(self, input_: AnsweringRunContext) -> AnswerQuestionResult:
         self.calls.append(input_)
         if self.stage is not None:
             assert self.progress is not None
@@ -97,7 +97,6 @@ class FakeAgent:
 
 @dataclass(frozen=True, slots=True)
 class FakeAnsweringRunnerCall:
-    starting_agent: object
     input: RunInput
     run_context: RunContext
     hooks: object | None
@@ -109,14 +108,16 @@ class FakeAnsweringRunner:
         *,
         exc: BaseException | None = None,
         question_context: QuestionContext | None = None,
+        previous_answer: str = "",
     ) -> None:
         self.exc = exc
         self.question_context = question_context
+        self.previous_answer = previous_answer
+        self.execution: object | None = None
         self.calls: list[FakeAnsweringRunnerCall] = []
 
     async def run(
         self,
-        starting_agent: object,
         input: RunInput,
         *,
         run_context: RunContext,
@@ -124,7 +125,6 @@ class FakeAnsweringRunner:
     ) -> RunResult:
         self.calls.append(
             FakeAnsweringRunnerCall(
-                starting_agent=starting_agent,
                 input=input,
                 run_context=run_context,
                 hooks=hooks,
@@ -138,7 +138,7 @@ class FakeAnsweringRunner:
         answering_context = AnsweringRunContext(
             run_context=run_context,
             question_context=question_context,
-            previous_answer="",
+            previous_answer=self.previous_answer,
         )
         if hooks is not None:
             await cast(Any, hooks).on_answering_context_prepared(
@@ -146,13 +146,8 @@ class FakeAnsweringRunner:
                 has_history=bool(input.history),
                 question_context=question_context,
             )
-        final_output = await cast(Any, starting_agent).answer(
-            AnswerQuestionInput(
-                context=question_context,
-                as_of=run_context.as_of,
-                previous_answer="",
-            )
-        )
+        assert self.execution is not None
+        final_output = await cast(Any, self.execution).answer(answering_context)
         return RunResult(final_output=final_output, context=answering_context)
 
 
@@ -222,7 +217,7 @@ class DeltaReportingAgent:
         self.order = order
         self.delta_reporter: object | None = None
 
-    async def answer(self, _input: AnswerQuestionInput) -> AnswerQuestionResult:
+    async def answer(self, _input: AnsweringRunContext) -> AnswerQuestionResult:
         assert self.delta_reporter is not None
         for fragment in self.fragments:
             await self.delta_reporter.append(generation=1, text=fragment)  # type: ignore[attr-defined]
@@ -243,7 +238,7 @@ class RevisionReportingAgent:
         self.delta_reporter: object | None = None
         self.continuation: object | None = None
 
-    async def answer(self, _input: AnswerQuestionInput) -> AnswerQuestionResult:
+    async def answer(self, _input: AnsweringRunContext) -> AnswerQuestionResult:
         assert self.delta_reporter is not None
         assert self.continuation is not None
         await self.delta_reporter.reset(generation=2)  # type: ignore[attr-defined]
@@ -315,21 +310,20 @@ def _ctx(session_factory: async_sessionmaker[AsyncSession]) -> SimpleNamespace:
 
 def _patch_worker_execution(
     monkeypatch: pytest.MonkeyPatch,
-    starting_agent_builder: object,
+    execution_builder: object,
     *,
     answering_runner: FakeAnsweringRunner | None = None,
 ) -> FakeAnsweringRunner:
     answering_runner = answering_runner or FakeAnsweringRunner()
+
+    def build_runner(**kwargs: object) -> FakeAnsweringRunner:
+        answering_runner.execution = cast(Any, execution_builder)(**kwargs)
+        return answering_runner
+
     monkeypatch.setattr(
         agent_run_tasks,
         "build_answering_runner",
-        lambda: answering_runner,
-        raising=False,
-    )
-    monkeypatch.setattr(
-        agent_run_tasks,
-        "build_question_answering_starting_agent",
-        starting_agent_builder,
+        build_runner,
         raising=False,
     )
     return answering_runner
@@ -392,7 +386,6 @@ def test_composition_injects_same_live_controls_into_both_answer_flows(
     import app.agent.answering.direct_answer.flow as direct_flow_module
     import app.agent.answering.evidence_answer.ai.gemini as evidence_gemini_module
     import app.agent.answering.evidence_answer.flow as evidence_flow_module
-    import app.agent.answering.orchestration as orchestration_module
     import app.agent.evidence_collection as evidence_collection_module
     import app.agent.evidence_collection.internal_search.ai.gemini as embedder_module
     import app.agent.planning.service as planning_service_module
@@ -413,13 +406,9 @@ def test_composition_injects_same_live_controls_into_both_answer_flows(
         captured["evidence"] = kwargs
         return object()
 
-    def capture_orchestrator(**kwargs: object) -> object:
-        captured["orchestrator"] = kwargs
-        return object()
-
     monkeypatch.setattr(
         composition,
-        "ensure_question_answering_agent_configured",
+        "ensure_external_search_configured",
         lambda: None,
     )
     monkeypatch.setattr(
@@ -439,11 +428,6 @@ def test_composition_injects_same_live_controls_into_both_answer_flows(
         lambda: object(),
     )
     monkeypatch.setattr(evidence_flow_module, "EvidenceAnswerFlow", capture_evidence)
-    monkeypatch.setattr(
-        orchestration_module,
-        "QuestionAnsweringOrchestrator",
-        capture_orchestrator,
-    )
     monkeypatch.setattr(
         evidence_collection_module,
         "EvidenceCollectionService",
@@ -468,7 +452,7 @@ def test_composition_injects_same_live_controls_into_both_answer_flows(
     delta_reporter = object()
     continuation = object()
 
-    composition.build_question_answering_agent(
+    phases = composition._build_answering_phases(
         session_factory=cast(async_sessionmaker[AsyncSession], object()),
         delta_reporter=delta_reporter,
         continuation=continuation,
@@ -478,8 +462,9 @@ def test_composition_injects_same_live_controls_into_both_answer_flows(
     assert captured["direct"]["continuation"] is continuation
     assert captured["evidence"]["delta_reporter"] is delta_reporter
     assert captured["evidence"]["continuation"] is continuation
-    assert captured["orchestrator"]["direct_answerer"] is not None
-    assert captured["orchestrator"]["evidence_answerer"] is not None
+    assert isinstance(phases, AnsweringPhases)
+    assert phases.direct_answerer is not None
+    assert phases.evidence_answerer is not None
 
 
 def test_worker_imports_generation_stopped_from_shared_agent_contract() -> None:
@@ -516,12 +501,16 @@ def test_worker_owns_only_answering_runner_boundary_for_semantic_execution() -> 
     }
     old_semantic_owners = {
         "AnswerQuestionInput",
+        "QuestionAnsweringAgent",
+        "QuestionAnsweringOrchestrator",
         "QuestionContextService",
         "QuestionResolvedEvent",
         "_latest_assistant_answer",
+        "build_question_answering_starting_agent",
         "build_question_answering_agent",
         "build_question_context_generator",
         "make_safe_async_client",
+        "starting_agent",
     }
     imported_names = {
         imported_name
@@ -530,11 +519,7 @@ def test_worker_owns_only_answering_runner_boundary_for_semantic_execution() -> 
     }
 
     assert (
-        {
-            "build_answering_runner",
-            "build_question_answering_starting_agent",
-        }
-        <= imports.get("app.agent.composition", set()),
+        {"build_answering_runner"} == imports.get("app.agent.composition", set()),
         {"QuestionResolvedRunHooks", "RunContext", "RunInput"}
         <= imports.get("app.agent.running", set()),
         old_semantic_owners.isdisjoint(imported_names),
@@ -799,7 +784,7 @@ async def test_run_agent_answer_completes_run_and_persists_assistant_message(
 
 
 @pytest.mark.asyncio
-async def test_real_answering_runner_completes_follow_up_with_saved_history(
+async def test_answering_runner_completes_follow_up_with_saved_history(
     session_factory: async_sessionmaker[AsyncSession],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -821,31 +806,21 @@ async def test_real_answering_runner_completes_follow_up_with_saved_history(
     thread_id = thread.id
     follow_up_run_id = follow_up_run.id
 
-    context_calls: list[tuple[str, tuple[ThreadMessageSnapshot, ...]]] = []
-
-    async def generate_context(
-        *,
-        question: str,
-        history: list[ThreadMessageSnapshot],
-        as_of: datetime,
-    ) -> QuestionContextDraft:
-        context_calls.append((question, tuple(history)))
-        return QuestionContextDraft(
+    runner_execution = FakeAgent(_direct_result(follow_up_answer))
+    answering_runner = FakeAnsweringRunner(
+        question_context=QuestionContext(
             standalone_question="量子計算市場の主要企業を比較して",
-            content_requirements=[saved_gap],
+            content_requirements=[
+                AnswerRequirement(requirement_id="c1", description=saved_gap)
+            ],
             relevant_prior_coverage=first_answer,
-        )
-
-    starting_agent = FakeAgent(_direct_result(follow_up_answer))
-    monkeypatch.setattr(
-        composition,
-        "build_question_context_generator",
-        lambda: SimpleNamespace(generate=generate_context),
+        ),
+        previous_answer=first_answer,
     )
-    monkeypatch.setattr(
-        agent_run_tasks,
-        "build_question_answering_starting_agent",
-        lambda **_kwargs: starting_agent,
+    _patch_worker_execution(
+        monkeypatch,
+        lambda **_kwargs: runner_execution,
+        answering_runner=answering_runner,
     )
 
     await agent_run_tasks.run_agent_answer(
@@ -871,23 +846,18 @@ async def test_real_answering_runner_completes_follow_up_with_saved_history(
         assistant.content,
         assistant.missing_aspects,
     ) == (thread_id, 4, "assistant", follow_up_answer, [])
-    assert context_calls == [
-        (
-            follow_up_question,
-            (
-                ThreadMessageSnapshot(role="user", content=first_question),
-                ThreadMessageSnapshot(
-                    role="assistant",
-                    content=first_answer,
-                    missing_aspects=(saved_gap,),
-                ),
-            ),
-        )
-    ]
-    assert len(starting_agent.calls) == 1
+    assert answering_runner.calls[0].input.history == (
+        ThreadMessageSnapshot(role="user", content=first_question),
+        ThreadMessageSnapshot(
+            role="assistant",
+            content=first_answer,
+            missing_aspects=(saved_gap,),
+        ),
+    )
+    assert len(runner_execution.calls) == 1
     assert (
-        starting_agent.calls[0].context.standalone_question,
-        starting_agent.calls[0].previous_answer,
+        runner_execution.calls[0].question_context.standalone_question,
+        runner_execution.calls[0].previous_answer,
     ) == (
         "量子計算市場の主要企業を比較して",
         first_answer,
@@ -1021,7 +991,7 @@ async def test_run_agent_answer_starts_stream_attempt_only_after_acquire(
 
 
 @pytest.mark.asyncio
-async def test_run_agent_answer_binds_attempt_epoch_to_live_and_db_controls_after_acquire(
+async def test_run_agent_answer_binds_attempt_epoch_to_live_and_db_controls(
     session_factory: async_sessionmaker[AsyncSession],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -1158,12 +1128,6 @@ async def test_idempotent_skip_does_not_create_or_start_stream_publisher(
     )
     monkeypatch.setattr(
         agent_run_tasks,
-        "build_question_answering_starting_agent",
-        forbidden_builder,
-        raising=False,
-    )
-    monkeypatch.setattr(
-        agent_run_tasks,
         "get_redis",
         forbidden_builder,
     )
@@ -1222,17 +1186,17 @@ async def test_run_agent_answer_passes_answering_runner_and_resolved_hook(
             ],
             attempt_epoch=4,
         )
-    fake_agent = FakeAgent(_direct_result())
+    runner_execution = FakeAgent(_direct_result())
     answering_runner = FakeAnsweringRunner(
         question_context=QuestionContext(
             standalone_question="NVIDIA の発表が株価へ与える影響は？",
         )
     )
-    starting_agent_builder_calls: list[dict[str, object]] = []
+    runner_builder_calls: list[dict[str, object]] = []
 
-    def build_starting_agent(**kwargs: object) -> FakeAgent:
-        starting_agent_builder_calls.append(kwargs)
-        return fake_agent
+    def build_runner_execution(**kwargs: object) -> FakeAgent:
+        runner_builder_calls.append(kwargs)
+        return runner_execution
 
     class FixedDateTime:
         calls = 0
@@ -1247,7 +1211,7 @@ async def test_run_agent_answer_passes_answering_runner_and_resolved_hook(
     FakeLiveStreamPublisher.instances = []
     _patch_worker_execution(
         monkeypatch,
-        build_starting_agent,
+        build_runner_execution,
         answering_runner=answering_runner,
     )
 
@@ -1260,7 +1224,6 @@ async def test_run_agent_answer_passes_answering_runner_and_resolved_hook(
     for legacy_name in (
         "build_question_context_generator",
         "make_safe_async_client",
-        "build_question_answering_agent",
     ):
         monkeypatch.setattr(
             agent_run_tasks,
@@ -1288,7 +1251,6 @@ async def test_run_agent_answer_passes_answering_runner_and_resolved_hook(
     assert FixedDateTime.calls == 1
     assert len(answering_runner.calls) == 1
     answering_runner_call = answering_runner.calls[0]
-    assert answering_runner_call.starting_agent is fake_agent
     assert answering_runner_call.input.question == question
     assert isinstance(answering_runner_call.input.history, tuple)
     assert [
@@ -1308,15 +1270,17 @@ async def test_run_agent_answer_passes_answering_runner_and_resolved_hook(
     )
     assert answering_runner_call.run_context.as_of.utcoffset() == timedelta(0)
     assert isinstance(answering_runner_call.hooks, QuestionResolvedRunHooks)
-    assert len(fake_agent.calls) == 1
-    assert fake_agent.calls[0].as_of == answering_runner_call.run_context.as_of
-    assert len(starting_agent_builder_calls) == 1
-    starting_kwargs = starting_agent_builder_calls[0]
-    assert starting_kwargs["session_factory"] is session_factory
-    assert isinstance(starting_kwargs["events"], AgentRunLiveActivityReporter)
-    assert starting_kwargs["progress"] is not None
-    assert starting_kwargs["delta_reporter"] is not None
-    assert starting_kwargs["continuation"] is not None
+    assert len(runner_execution.calls) == 1
+    assert runner_execution.calls[0].run_context.as_of == (
+        answering_runner_call.run_context.as_of
+    )
+    assert len(runner_builder_calls) == 1
+    runner_kwargs = runner_builder_calls[0]
+    assert runner_kwargs["session_factory"] is session_factory
+    assert isinstance(runner_kwargs["events"], AgentRunLiveActivityReporter)
+    assert runner_kwargs["progress"] is not None
+    assert runner_kwargs["delta_reporter"] is not None
+    assert runner_kwargs["continuation"] is not None
     publisher = FakeLiveEventPublisher.instances[0]
     assert len(publisher.events) == 1
     assert getattr(publisher.events[0], "type") == "question.resolved"
@@ -1549,7 +1513,7 @@ async def test_epoch_advance_stops_old_worker_through_actual_probe(
         def __init__(self) -> None:
             self.continuation: object | None = None
 
-        async def answer(self, _input: AnswerQuestionInput) -> AnswerQuestionResult:
+        async def answer(self, _input: AnsweringRunContext) -> AnswerQuestionResult:
             assert self.continuation is not None
             assert await self.continuation.should_continue() is True  # type: ignore[attr-defined]
             async with session_factory() as reacquire_session:
@@ -2238,7 +2202,7 @@ async def test_run_agent_answer_does_not_publish_echo_or_fallback_question_conte
     )
 
     assert len(fake_agent.calls) == 1
-    assert fake_agent.calls[0].context.standalone_question == question
+    assert fake_agent.calls[0].question_context.standalone_question == question
     assert answering_runner.calls[0].input.history == (
         ThreadMessageSnapshot(role="assistant", content="前回の回答"),
     )
@@ -2485,7 +2449,7 @@ async def test_run_agent_answer_generation_error_preserves_death_progress_stage(
 
 
 @pytest.mark.asyncio
-async def test_answering_runner_failure_does_not_call_starting_agent(
+async def test_answering_runner_failure_does_not_execute_answering_workflow(
     session_factory: async_sessionmaker[AsyncSession],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -2671,7 +2635,12 @@ async def test_stale_complete_run_loses_epoch_fence_and_rolls_back_artifacts(
     async with session_factory() as session:
         current = await session.get(AgentRun, run.id)
         assert current is not None
-        assert (current.status, current.attempt_epoch, current.assistant_message_id) == (
+        current_state = (
+            current.status,
+            current.attempt_epoch,
+            current.assistant_message_id,
+        )
+        assert current_state == (
             "running",
             2,
             None,
