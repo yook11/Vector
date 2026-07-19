@@ -123,3 +123,32 @@ def test_planner_runtime_scope_construction_keeps_provider_imports_lazy() -> Non
 
     assert result.returncode == 0, result.stderr
     assert result.stdout.strip() == ""
+
+
+def test_external_runtime_factory_scope_construction_keeps_imports_lazy() -> None:
+    """External factoryはscopeへ入るまでOpenAI SDKと具象Runtimeをloadしない。"""
+    code = textwrap.dedent(
+        """
+        import sys
+        from app.agent.composition import build_external_research_runtime_factory
+
+        factory = build_external_research_runtime_factory()
+        factory.activate()
+        forbidden = sorted(
+            module
+            for module in sys.modules
+            if module == "openai"
+            or module.startswith("openai.")
+            or module == "app.agent.runtime.deepseek"
+        )
+        print("\\n".join(forbidden))
+        """
+    )
+    result = subprocess.run(  # noqa: S603  (sys.executable + 固定code)
+        [sys.executable, "-c", code],
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == ""

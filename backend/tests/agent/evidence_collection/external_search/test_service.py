@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from datetime import UTC, datetime
 from typing import Any
 
@@ -15,6 +16,7 @@ from app.agent.evidence_collection.external_search import (
     resolve_external_search_agent_count,
 )
 from app.agent.planning.contract import ExternalResearchTask
+from app.agent.runtime.contract import AgentResponseDefect, AgentResponseInvalidError
 
 
 def _as_of() -> datetime:
@@ -105,12 +107,22 @@ def _run_result(
 
 
 class FakeExternalSearchRunner:
-    def __init__(self, run_result: Any | None = None) -> None:
+    def __init__(
+        self,
+        run_result: Any | None = None,
+        *,
+        error: BaseException | None = None,
+    ) -> None:
         self.requests: list[ExternalSearchRequest] = []
+        self.externals: list[object] = []
         self._run_result = run_result
+        self._error = error
 
-    async def search(self, request: ExternalSearchRequest) -> Any:
+    async def search(self, request: ExternalSearchRequest, *, external: object) -> Any:
         self.requests.append(request)
+        self.externals.append(external)
+        if self._error is not None:
+            raise self._error
         if self._run_result is not None:
             return self._run_result
         return _run_result(
@@ -122,6 +134,36 @@ class FakeExternalSearchRunner:
                 for index, task in enumerate(request.tasks)
             ],
         )
+
+
+class _FakeRuntimeScope:
+    def __init__(self, *, external: object) -> None:
+        self._external = external
+        self.exit_error: BaseException | None = None
+
+    async def __aenter__(self) -> object:
+        return self._external
+
+    async def __aexit__(
+        self,
+        exc_type: object,
+        exc: BaseException | None,
+        traceback: object,
+    ) -> bool:
+        self.exit_error = exc
+        return False
+
+
+class FakeExternalResearchRuntimeFactory:
+    def __init__(self, externals: list[object] | None = None) -> None:
+        self._externals = list(externals or [])
+        self.scopes: list[_FakeRuntimeScope] = []
+
+    def activate(self) -> _FakeRuntimeScope:
+        external = self._externals.pop(0) if self._externals else object()
+        scope = _FakeRuntimeScope(external=external)
+        self.scopes.append(scope)
+        return scope
 
 
 @pytest.mark.parametrize(
@@ -170,7 +212,11 @@ async def test_search_builds_outcome_from_run_result_and_reports() -> None:
     runner = FakeExternalSearchRunner(
         _run_result(evidence=evidence, task_reports=reports)
     )
-    service = ExternalSearchService(runner=runner)
+    runtime_factory = FakeExternalResearchRuntimeFactory()
+    service = ExternalSearchService(
+        runner=runner,
+        runtime_factory=runtime_factory,
+    )
 
     outcome = await service.search(
         tasks,
@@ -179,7 +225,7 @@ async def test_search_builds_outcome_from_run_result_and_reports() -> None:
         requested_agent_count=4,
     )
 
-    assert len(runner.requests) == 1
+    assert len(runner.requests) == len(runtime_factory.scopes) == 1
     request = runner.requests[0]
     assert (
         request.tasks == tasks
@@ -204,7 +250,11 @@ async def test_search_defaults_count_to_task_count_with_cap() -> None:
         _task("データセンターGPU発表の根拠を集める"),
     ]
     runner = FakeExternalSearchRunner()
-    service = ExternalSearchService(runner=runner)
+    runtime_factory = FakeExternalResearchRuntimeFactory()
+    service = ExternalSearchService(
+        runner=runner,
+        runtime_factory=runtime_factory,
+    )
 
     await service.search(
         tasks[:2],
@@ -217,13 +267,25 @@ async def test_search_defaults_count_to_task_count_with_cap() -> None:
         as_of=_as_of(),
     )
 
-    assert [request.effective_agent_count for request in runner.requests] == [2, 3]
+    assert (
+        [request.effective_agent_count for request in runner.requests],
+        runner.externals,
+        [scope._external for scope in runtime_factory.scopes],
+    ) == (
+        [2, 3],
+        [scope._external for scope in runtime_factory.scopes],
+        runner.externals,
+    )
 
 
 @pytest.mark.asyncio
 async def test_search_skips_runner_when_tasks_are_empty() -> None:
     runner = FakeExternalSearchRunner()
-    service = ExternalSearchService(runner=runner)
+    runtime_factory = FakeExternalResearchRuntimeFactory()
+    service = ExternalSearchService(
+        runner=runner,
+        runtime_factory=runtime_factory,
+    )
 
     outcome = await service.search(
         [],
@@ -233,6 +295,7 @@ async def test_search_skips_runner_when_tasks_are_empty() -> None:
 
     assert (
         runner.requests == []
+        and runtime_factory.scopes == []
         and outcome.evidence == []
         and outcome.task_reports == []
         and outcome.effective_agent_count == 0
@@ -272,7 +335,10 @@ async def test_search_deduplicates_cross_task_urls_without_rewriting_refs() -> N
     runner = FakeExternalSearchRunner(
         _run_result(evidence=[first, duplicate, later_unique], task_reports=reports)
     )
-    service = ExternalSearchService(runner=runner)
+    service = ExternalSearchService(
+        runner=runner,
+        runtime_factory=FakeExternalResearchRuntimeFactory(),
+    )
 
     outcome = await service.search(
         tasks,
@@ -286,6 +352,38 @@ async def test_search_deduplicates_cross_task_urls_without_rewriting_refs() -> N
         "external-0-0",
         "external-1-1",
     ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "error",
+    [
+        pytest.param(
+            AgentResponseInvalidError(AgentResponseDefect.RESPONSE_NOT_JSON),
+            id="classified",
+        ),
+        pytest.param(RuntimeError("unexpected runner failure"), id="unexpected"),
+        pytest.param(asyncio.CancelledError(), id="cancellation"),
+    ],
+)
+async def test_search_exits_activated_scope_when_runner_fails(
+    error: BaseException,
+) -> None:
+    runner = FakeExternalSearchRunner(error=error)
+    runtime_factory = FakeExternalResearchRuntimeFactory()
+    service = ExternalSearchService(
+        runner=runner,
+        runtime_factory=runtime_factory,
+    )
+
+    with pytest.raises(type(error)) as raised:
+        await service.search([_task()], target_time_window=None, as_of=_as_of())
+
+    assert (
+        raised.value is error,
+        len(runtime_factory.scopes),
+        runtime_factory.scopes[0].exit_error is error,
+    ) == (True, 1, True)
 
 
 def test_outcome_rejects_task_report_count_mismatch() -> None:

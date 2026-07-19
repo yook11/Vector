@@ -424,7 +424,7 @@ def test_composition_injects_same_live_controls_into_both_answer_flows(
     )
     monkeypatch.setattr(
         composition,
-        "_build_external_search",
+        "build_external_search_service",
         lambda *_args, **_kwargs: object(),
     )
     monkeypatch.setattr(
@@ -470,7 +470,6 @@ def test_composition_injects_same_live_controls_into_both_answer_flows(
 
     composition.build_question_answering_agent(
         session_factory=cast(async_sessionmaker[AsyncSession], object()),
-        tavily_client=cast(Any, object()),
         delta_reporter=delta_reporter,
         continuation=continuation,
     )
