@@ -562,6 +562,41 @@ async def test_consumer_aclose_is_abandonment_without_error_outcome_and_ends_onc
     assert span.end_calls == 1
 
 
+async def test_usage_before_fragment_yield_survives_consumer_abandonment(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    tracer = FakeTracer()
+    monkeypatch.setattr(gemini_runtime_module, "_TRACER", tracer)
+    sdk_stream = FakeSdkStream(
+        [_stream_chunk(text="fragment", usage_metadata=_usage())]
+    )
+    runtime = GeminiAgentRuntime(
+        client=cast(AsyncClient, FakeGeminiClient([], streams=[sdk_stream]))
+    )
+    stream = runtime.invoke_stream(
+        make_agent(response_schema=None),
+        "typed input",
+        attempt_number=1,
+    )
+
+    assert await stream.__anext__() == "fragment"
+
+    span = tracer.spans[0]
+    assert span.attributes["gen_ai.usage.input_tokens"] == 11
+    assert span.attributes["gen_ai.usage.output_tokens"] == 7
+
+    await stream.aclose()
+
+    assert span.attributes["gen_ai.usage.input_tokens"] == 11
+    assert span.attributes["gen_ai.usage.output_tokens"] == 7
+    assert "result" not in span.attributes
+    assert "error.type" not in span.attributes
+    assert span.status_code is StatusCode.UNSET
+    assert span.exception_events == []
+    assert sdk_stream.close_calls == 1
+    assert span.end_calls == 1
+
+
 async def test_cancellation_during_provider_next_closes_span_once_without_outcome(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

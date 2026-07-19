@@ -22,8 +22,14 @@ from app.agent.contract import AnswerGenerationContinuation, AnswerGenerationSto
 from app.agent.question_context.contract import QuestionContext
 from app.agent.runtime.contract import StreamingAgentRuntime
 from app.agent.runtime.gemini import GeminiAgentRuntime
+from app.logfire.redaction import install_exception_redaction
 from tests.agent.runtime._helpers import FakeGeminiClient
-from tests.agent.runtime._tracing_helpers import span_text
+from tests.agent.runtime._tracing_helpers import (
+    application_attribute_keys,
+    exception_events,
+    span_text,
+)
+from tests.logfire._span_helpers import domain_attr_keys
 
 
 class _SdkStream:
@@ -113,6 +119,77 @@ async def test_phase_owns_detached_streaming_attempt_without_model_text(
     observed = f"{span_text(phase)}\n{span_text(attempt)}"
     assert "MODEL_QUESTION_SENTINEL" not in observed
     assert "MODEL_ANSWER_SENTINEL" not in observed
+
+
+async def test_unclassified_stream_error_is_redacted_in_phase_and_attempt(
+    capfire: CaptureLogfire,
+) -> None:
+    """未分類streaming障害はphaseとattempt両方で自由文を秘匿する。"""
+
+    class _FailingSdkStream:
+        def __init__(self, error: RuntimeError) -> None:
+            self._error = error
+            self.close_calls = 0
+
+        def __aiter__(self) -> _FailingSdkStream:
+            return self
+
+        async def __anext__(self) -> object:
+            raise self._error
+
+        async def aclose(self) -> None:
+            self.close_calls += 1
+
+    install_exception_redaction()
+    error_sentinel = "UNCLASSIFIED_STREAM_EXCEPTION_SENTINEL_d51a"
+    error = RuntimeError(error_sentinel)
+    sdk_stream = _FailingSdkStream(error)
+    client = FakeGeminiClient([], streams=[sdk_stream])
+
+    @asynccontextmanager
+    async def runtime_scope() -> AsyncIterator[StreamingAgentRuntime]:
+        yield GeminiAgentRuntime(client=cast(AsyncClient, client))
+
+    with pytest.raises(RuntimeError) as exc_info:
+        await DirectAnswerFlow(
+            agent=DIRECT_ANSWER_AGENT,
+            runtime_scope_factory=runtime_scope,
+        ).answer(request=_request())
+
+    spans = capfire.exporter.exported_spans
+    phase = next(
+        span
+        for span in spans
+        if span.name == "agent_phase"
+        and (span.attributes or {}).get("logfire.span_type") == "span"
+    )
+    attempt = next(
+        span
+        for span in spans
+        if span.name == "agent_provider_call"
+        and (span.attributes or {}).get("logfire.span_type") == "span"
+    )
+    attempt_attributes = dict(attempt.attributes or {})
+
+    assert exc_info.value is error
+    assert sdk_stream.close_calls == 1
+    assert domain_attr_keys(dict(phase.attributes or {})) == {"phase", "agent_name"}
+    assert application_attribute_keys(attempt) == {
+        "agent_name",
+        "attempt_number",
+        "prompt_version",
+    }
+    assert "result" not in attempt_attributes
+    for span in (phase, attempt):
+        events = exception_events(span)
+        assert len(events) == 1
+        assert events[0].attributes["exception.message"] == "[redacted]"
+        assert events[0].attributes["exception.stacktrace"] == "[redacted]"
+        assert span.status.status_code is StatusCode.ERROR
+        assert span.status.description == "[redacted]"
+        observed = span_text(span)
+        assert error_sentinel not in observed
+        assert "MODEL_QUESTION_SENTINEL" not in observed
 
 
 async def test_retry_provider_request_adds_only_rendered_repair_context() -> None:
