@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 from collections.abc import Sequence
-from dataclasses import dataclass, fields, is_dataclass
+from dataclasses import fields, is_dataclass
 from datetime import UTC, datetime
 from importlib import import_module
 from types import ModuleType
@@ -21,6 +21,7 @@ from pydantic import SecretStr
 
 from app.agent.agent import Agent
 from app.agent.planning.contract import ExternalResearchTask
+from tests.agent.runtime._fakes import ScriptedAgentRuntime
 from tests.logfire._span_helpers import domain_attr_keys, one_span_named
 
 _TOOL_SPAN_NAME = "external_search_tool_call"
@@ -110,32 +111,6 @@ def _request() -> Any:
     )
 
 
-@dataclass(frozen=True, slots=True)
-class RuntimeCall:
-    agent: Agent[Any, Any]
-    input: object
-    attempt_number: int
-
-
-class StaticRuntime:
-    def __init__(self, outcomes: Sequence[object | BaseException]) -> None:
-        self._outcomes = list(outcomes)
-        self.calls: list[RuntimeCall] = []
-
-    async def invoke[InputT, OutputT](
-        self,
-        agent: Agent[InputT, OutputT],
-        input: InputT,
-        *,
-        attempt_number: int,
-    ) -> OutputT:
-        self.calls.append(RuntimeCall(agent, input, attempt_number))
-        outcome = self._outcomes.pop(0)
-        if isinstance(outcome, BaseException):
-            raise outcome
-        return outcome  # type: ignore[return-value]
-
-
 class FakeExternalSearchTool:
     def __init__(self, outcomes: Sequence[object | BaseException]) -> None:
         self._outcomes = list(outcomes)
@@ -223,10 +198,10 @@ class StaticAsyncByteStream(httpx.AsyncByteStream):
 def _runner(*, search_tool: object) -> Any:
     return _runner_type()(
         query_agent=_query_agent(),
-        query_runtime=StaticRuntime([_query_draft(["  normalized query  "])]),
+        query_runtime=ScriptedAgentRuntime([_query_draft(["  normalized query  "])]),
         search_tool=search_tool,
         selector_agent=_selector_agent(),
-        selector_runtime=StaticRuntime([_selection_draft()]),
+        selector_runtime=ScriptedAgentRuntime([_selection_draft()]),
     )
 
 
@@ -311,10 +286,10 @@ async def test_runner_keeps_query_backstop_around_tool_invocation(
     assert runner_module.PROVIDER_SEARCH_TIMEOUT_SECONDS == 15
     monkeypatch.setattr(runner_module, "PROVIDER_SEARCH_TIMEOUT_SECONDS", 0.01)
     tool = BlockingExternalSearchTool()
-    selector_runtime = StaticRuntime([_selection_draft()])
+    selector_runtime = ScriptedAgentRuntime([_selection_draft()])
     runner = _runner_type()(
         query_agent=_query_agent(),
-        query_runtime=StaticRuntime([_query_draft(["normalized query"])]),
+        query_runtime=ScriptedAgentRuntime([_query_draft(["normalized query"])]),
         search_tool=tool,
         selector_agent=_selector_agent(),
         selector_runtime=selector_runtime,

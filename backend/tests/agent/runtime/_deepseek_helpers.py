@@ -29,6 +29,8 @@ class DataclassRuntimeOutput:
 
 
 class FakeDeepSeekClient:
+    """外部 I/O 境界だけを差し替え、span は runtime の責務として生成しない。"""
+
     def __init__(self, responses: list[object | BaseException]) -> None:
         self.chat = SimpleNamespace(
             completions=SimpleNamespace(create=AsyncMock(side_effect=responses))

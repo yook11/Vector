@@ -26,6 +26,7 @@ from tests.agent.runtime._deepseek_helpers import (
 
 
 async def test_constructor_accepts_only_borrowed_client_and_output_binding() -> None:
+    """runtime が借用 client と出力 binding だけを受け取る境界を守る。"""
     runtime = runtime_type()
 
     assert list(signature(runtime).parameters) == ["client", "binding"]
@@ -33,6 +34,7 @@ async def test_constructor_accepts_only_borrowed_client_and_output_binding() -> 
 
 
 async def test_invoke_makes_one_forced_strict_function_call_and_returns_draft() -> None:
+    """一試行が厳格な function call と検証済み出力を対応付ける。"""
     client = FakeDeepSeekClient([success_response(result="validated")])
     binding = make_binding()
     runtime = runtime_type()(client=client, binding=binding)
@@ -81,6 +83,7 @@ async def test_invoke_makes_one_forced_strict_function_call_and_returns_draft() 
 
 
 async def test_invoke_validates_declared_dataclass_output() -> None:
+    """宣言された dataclass 出力も runtime 境界で検証する。"""
     client = FakeDeepSeekClient([success_response(result="dataclass")])
     runtime = runtime_type()(client=client, binding=make_binding())
 
@@ -129,6 +132,7 @@ async def test_invalid_structured_output_maps_to_three_safe_neutral_defects(
     response: object,
     defect_name: str,
 ) -> None:
+    """構造化出力の不備を安全な中立 defect に正規化する。"""
     contract = runtime_contract()
     error_type = required_attribute(contract, "AgentResponseInvalidError")
     defect_type = required_attribute(contract, "AgentResponseDefect")
@@ -148,6 +152,7 @@ async def test_invalid_structured_output_maps_to_three_safe_neutral_defects(
 
 
 async def test_negative_index_is_runtime_schema_mismatch() -> None:
+    """ドメイン上無効な負の候補 index を schema mismatch として扱う。"""
     contract = runtime_contract()
     error_type = required_attribute(contract, "AgentResponseInvalidError")
     defect_type = required_attribute(contract, "AgentResponseDefect")
@@ -186,6 +191,7 @@ async def test_negative_index_is_runtime_schema_mismatch() -> None:
 
 
 async def test_known_error_translates_and_unknown_keeps_identity() -> None:
+    """既知障害だけを翻訳し未知例外の同一性を保つ。"""
     known_client = FakeDeepSeekClient([TimeoutError("PROVIDER_MESSAGE_SENTINEL")])
     unknown = RuntimeError("UNCLASSIFIED_SENTINEL")
     unknown_client = FakeDeepSeekClient([unknown])
@@ -209,6 +215,7 @@ async def test_known_error_translates_and_unknown_keeps_identity() -> None:
 async def test_invalid_attempt_number_is_rejected_before_render_or_provider_call(
     attempt_number: int,
 ) -> None:
+    """非正の試行番号では描画・provider 呼出し前に拒否する。"""
     client = FakeDeepSeekClient([success_response()])
 
     with pytest.raises(ValueError):
@@ -220,6 +227,7 @@ async def test_invalid_attempt_number_is_rejected_before_render_or_provider_call
 
 
 async def test_non_deepseek_agent_is_rejected_before_provider_call() -> None:
+    """provider 不一致の agent を外部呼出し前に拒否する。"""
     client = FakeDeepSeekClient([success_response()])
     agent = replace(
         make_agent(),
@@ -235,6 +243,7 @@ async def test_non_deepseek_agent_is_rejected_before_provider_call() -> None:
 
 
 def test_output_binding_contains_only_provider_transport_identity() -> None:
+    """出力 binding を provider transport の識別情報だけに限定する。"""
     binding = make_binding()
 
     assert list(signature(binding_type()).parameters) == [

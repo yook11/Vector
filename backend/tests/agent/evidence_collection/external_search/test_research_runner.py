@@ -3,8 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Sequence
-from dataclasses import dataclass
 from datetime import UTC, datetime
 from importlib import import_module
 from types import ModuleType
@@ -15,9 +13,14 @@ from pydantic import ValidationError
 
 from app.agent.agent import Agent
 from app.agent.planning.contract import ExternalResearchTask
-from app.agent.runtime.contract import AgentResponseDefect, AgentResponseInvalidError
+from app.agent.runtime.contract import (
+    AgentResponseDefect,
+    AgentResponseInvalidError,
+    AgentRuntime,
+)
 from app.analysis.ai_provider_errors import AIProviderNetworkError
 from app.analysis.deepseek_error_translator import DeepSeekStateReason
+from tests.agent.runtime._fakes import AgentRuntimeCall, ScriptedAgentRuntime
 
 
 def _required_module(module_name: str) -> ModuleType:
@@ -104,41 +107,11 @@ def _selection_draft(
     ).model_validate({"selections": selections or [], "missing": missing or []})
 
 
-@dataclass(frozen=True, slots=True)
-class RuntimeCall:
-    agent: Agent[Any, Any]
-    input: object
-    attempt_number: int
-
-
-class FakeRuntime:
-    """1 attempt outcomeだけを返すRuntime fake。retry policyは持たない。"""
-
-    def __init__(self, outcomes: Sequence[object | BaseException]) -> None:
-        self._outcomes = list(outcomes)
-        self.calls: list[RuntimeCall] = []
-
-    async def invoke[InputT, OutputT](
-        self,
-        agent: Agent[InputT, OutputT],
-        input: InputT,
-        *,
-        attempt_number: int,
-    ) -> OutputT:
-        self.calls.append(
-            RuntimeCall(agent=agent, input=input, attempt_number=attempt_number)
-        )
-        outcome = self._outcomes.pop(0)
-        if isinstance(outcome, BaseException):
-            raise outcome
-        return outcome  # type: ignore[return-value]
-
-
 class ParallelQueryRuntime:
     def __init__(self) -> None:
         self.active = 0
         self.peak = 0
-        self.calls: list[RuntimeCall] = []
+        self.calls: list[AgentRuntimeCall] = []
 
     async def invoke[InputT, OutputT](
         self,
@@ -147,7 +120,7 @@ class ParallelQueryRuntime:
         *,
         attempt_number: int,
     ) -> OutputT:
-        self.calls.append(RuntimeCall(agent, input, attempt_number))
+        self.calls.append(AgentRuntimeCall(agent, input, attempt_number))
         self.active += 1
         self.peak = max(self.peak, self.active)
         try:
@@ -190,9 +163,9 @@ class FakeEventReporter:
 
 def _runner(
     *,
-    query_runtime: FakeRuntime,
+    query_runtime: AgentRuntime,
     search_tool: FakeExternalSearchTool,
-    selector_runtime: FakeRuntime,
+    selector_runtime: AgentRuntime,
     events: FakeEventReporter | None = None,
 ) -> Any:
     return _runner_type()(
@@ -209,7 +182,7 @@ def _runner(
 async def test_query_normalization_and_selector_projection() -> None:
     task = _task("NVIDIA の新製品を確認する")
     max_chars = _required_attribute(_contracts(), "EXTERNAL_QUERY_MAX_CHARS")
-    query_runtime = FakeRuntime(
+    query_runtime = ScriptedAgentRuntime(
         [
             _query_draft(
                 [
@@ -223,7 +196,7 @@ async def test_query_normalization_and_selector_projection() -> None:
             )
         ]
     )
-    selector_runtime = FakeRuntime([_selection_draft([])])
+    selector_runtime = ScriptedAgentRuntime([_selection_draft([])])
     search_tool = FakeExternalSearchTool(
         {
             "NVIDIA AI": [_candidate("https://example.com/one")],
@@ -260,7 +233,7 @@ async def test_query_normalization_and_selector_projection() -> None:
         ),
     ]
     assert query_runtime.calls == [
-        RuntimeCall(
+        AgentRuntimeCall(
             agent=_query_agent(),
             input=_required_attribute(_contracts(), "ExternalQueryGenerationInput")(
                 task=task,
@@ -284,10 +257,10 @@ async def test_query_normalization_and_selector_projection() -> None:
 @pytest.mark.asyncio
 async def test_query_classified_failure_short_circuits_search_and_selector() -> None:
     task = _task("query failure")
-    query_runtime = FakeRuntime(
+    query_runtime = ScriptedAgentRuntime(
         [AgentResponseInvalidError(AgentResponseDefect.RESPONSE_NOT_JSON)]
     )
-    selector_runtime = FakeRuntime([_selection_draft([])])
+    selector_runtime = ScriptedAgentRuntime([_selection_draft([])])
     search_tool = FakeExternalSearchTool()
 
     result = await _runner(
@@ -311,8 +284,8 @@ async def test_query_provider_failure_and_timeout_short_circuit_once() -> None:
     ]
 
     for outcome in outcomes:
-        query_runtime = FakeRuntime([outcome])
-        selector_runtime = FakeRuntime([_selection_draft([])])
+        query_runtime = ScriptedAgentRuntime([outcome])
+        selector_runtime = ScriptedAgentRuntime([_selection_draft([])])
         search_tool = FakeExternalSearchTool()
         result = await _runner(
             query_runtime=query_runtime,
@@ -329,13 +302,13 @@ async def test_query_provider_failure_and_timeout_short_circuit_once() -> None:
 @pytest.mark.asyncio
 async def test_query_unclassified_exception_propagates_from_first_attempt() -> None:
     error = RuntimeError("query unclassified")
-    query_runtime = FakeRuntime([error])
+    query_runtime = ScriptedAgentRuntime([error])
 
     with pytest.raises(RuntimeError) as raised:
         await _runner(
             query_runtime=query_runtime,
             search_tool=FakeExternalSearchTool(),
-            selector_runtime=FakeRuntime([_selection_draft([])]),
+            selector_runtime=ScriptedAgentRuntime([_selection_draft([])]),
         ).search(_request([_task("unclassified")]))
 
     assert raised.value is error
@@ -345,8 +318,8 @@ async def test_query_unclassified_exception_propagates_from_first_attempt() -> N
 @pytest.mark.asyncio
 async def test_selector_retries_once_with_same_typed_input_instance() -> None:
     task = _task("selector retry")
-    query_runtime = FakeRuntime([_query_draft(["q"])])
-    selector_runtime = FakeRuntime(
+    query_runtime = ScriptedAgentRuntime([_query_draft(["q"])])
+    selector_runtime = ScriptedAgentRuntime(
         [
             AgentResponseInvalidError(AgentResponseDefect.OUTPUT_SCHEMA_MISMATCH),
             _selection_draft(
@@ -374,7 +347,7 @@ async def test_selector_retries_once_with_same_typed_input_instance() -> None:
 async def test_selector_finalization_invalid_draft_is_schema_mismatch_and_retries() -> (
     None
 ):
-    selector_runtime = FakeRuntime(
+    selector_runtime = ScriptedAgentRuntime(
         [
             _selection_draft(
                 [{"candidate_index": 0, "claim": "", "why_selected": "why"}]
@@ -386,7 +359,7 @@ async def test_selector_finalization_invalid_draft_is_schema_mismatch_and_retrie
     )
 
     result = await _runner(
-        query_runtime=FakeRuntime([_query_draft(["q"])]),
+        query_runtime=ScriptedAgentRuntime([_query_draft(["q"])]),
         search_tool=FakeExternalSearchTool(
             {"q": [_candidate("https://example.com/q")]}
         ),
@@ -410,9 +383,9 @@ async def test_selector_retries_only_classified_provider_or_timeout_failures() -
     ]
 
     for error, expected_reason in retryable:
-        selector_runtime = FakeRuntime([error, error])
+        selector_runtime = ScriptedAgentRuntime([error, error])
         result = await _runner(
-            query_runtime=FakeRuntime([_query_draft(["q"])]),
+            query_runtime=ScriptedAgentRuntime([_query_draft(["q"])]),
             search_tool=FakeExternalSearchTool(
                 {"q": [_candidate("https://example.com/q")]}
             ),
@@ -427,11 +400,11 @@ async def test_selector_retries_only_classified_provider_or_timeout_failures() -
 @pytest.mark.asyncio
 async def test_selector_unclassified_exception_does_not_retry() -> None:
     error = RuntimeError("selector unclassified")
-    selector_runtime = FakeRuntime([error])
+    selector_runtime = ScriptedAgentRuntime([error])
 
     with pytest.raises(RuntimeError) as raised:
         await _runner(
-            query_runtime=FakeRuntime([_query_draft(["q"])]),
+            query_runtime=ScriptedAgentRuntime([_query_draft(["q"])]),
             search_tool=FakeExternalSearchTool(
                 {"q": [_candidate("https://example.com/q")]}
             ),
@@ -448,7 +421,7 @@ async def test_selector_finalization_drops_indexes_and_restores_sources() -> Non
     contracts = _contracts()
     claim_limit = _required_attribute(contracts, "EVIDENCE_CLAIM_MAX_CHARS")
     why_limit = _required_attribute(contracts, "EVIDENCE_WHY_SELECTED_MAX_CHARS")
-    selector_runtime = FakeRuntime(
+    selector_runtime = ScriptedAgentRuntime(
         [
             _selection_draft(
                 [
@@ -467,7 +440,7 @@ async def test_selector_finalization_drops_indexes_and_restores_sources() -> Non
     )
     second = _candidate("https://example.com/second", title="second title")
     result = await _runner(
-        query_runtime=FakeRuntime([_query_draft(["q"])]),
+        query_runtime=ScriptedAgentRuntime([_query_draft(["q"])]),
         search_tool=FakeExternalSearchTool(
             {
                 "q": [
@@ -495,9 +468,9 @@ async def test_selector_finalization_drops_indexes_and_restores_sources() -> Non
 
 @pytest.mark.asyncio
 async def test_empty_pool_skips_selector_and_succeeds() -> None:
-    selector_runtime = FakeRuntime([_selection_draft([])])
+    selector_runtime = ScriptedAgentRuntime([_selection_draft([])])
     result = await _runner(
-        query_runtime=FakeRuntime([_query_draft(["q"])]),
+        query_runtime=ScriptedAgentRuntime([_query_draft(["q"])]),
         search_tool=FakeExternalSearchTool({"q": []}),
         selector_runtime=selector_runtime,
     ).search(_request([_task("empty pool")]))
@@ -517,8 +490,12 @@ async def test_task_order_events_and_partial_provider_failure() -> None:
             _contracts(), "ExternalSearchToolFailureReason"
         ).HTTP_ERROR
     )
-    query_runtime = FakeRuntime([_query_draft(["q1"]), _query_draft(["q2", "q3"])])
-    selector_runtime = FakeRuntime([_selection_draft([]), _selection_draft([])])
+    query_runtime = ScriptedAgentRuntime(
+        [_query_draft(["q1"]), _query_draft(["q2", "q3"])]
+    )
+    selector_runtime = ScriptedAgentRuntime(
+        [_selection_draft([]), _selection_draft([])]
+    )
     result = await _runner(
         query_runtime=query_runtime,
         search_tool=FakeExternalSearchTool(
@@ -544,7 +521,7 @@ async def test_task_order_events_and_partial_provider_failure() -> None:
 async def test_task_parallelism_keeps_all_reports() -> None:
     tasks = [_task("task-0"), _task("task-1"), _task("task-2")]
     query_runtime = ParallelQueryRuntime()
-    selector_runtime = FakeRuntime([_selection_draft([]) for _ in tasks])
+    selector_runtime = ScriptedAgentRuntime([_selection_draft([]) for _ in tasks])
     result = await _runner(
         query_runtime=query_runtime,
         search_tool=FakeExternalSearchTool(
@@ -572,9 +549,9 @@ async def test_all_provider_failures_skip_selector_and_later_progress_events() -
             _contracts(), "ExternalSearchToolFailureReason"
         ).HTTP_ERROR
     )
-    selector_runtime = FakeRuntime([_selection_draft([])])
+    selector_runtime = ScriptedAgentRuntime([_selection_draft([])])
     result = await _runner(
-        query_runtime=FakeRuntime([_query_draft(["q1", "q2"])]),
+        query_runtime=ScriptedAgentRuntime([_query_draft(["q1", "q2"])]),
         search_tool=FakeExternalSearchTool(
             errors_by_query={"q1": provider_error, "q2": provider_error}
         ),
@@ -593,9 +570,9 @@ async def test_all_provider_failures_skip_selector_and_later_progress_events() -
 
 @pytest.mark.asyncio
 async def test_provider_timeout_maps_to_provider_failure_without_selector() -> None:
-    selector_runtime = FakeRuntime([_selection_draft([])])
+    selector_runtime = ScriptedAgentRuntime([_selection_draft([])])
     result = await _runner(
-        query_runtime=FakeRuntime([_query_draft(["q"])]),
+        query_runtime=ScriptedAgentRuntime([_query_draft(["q"])]),
         search_tool=FakeExternalSearchTool(errors_by_query={"q": TimeoutError()}),
         selector_runtime=selector_runtime,
     ).search(_request([_task("provider timeout")]))
@@ -608,7 +585,7 @@ async def test_provider_timeout_maps_to_provider_failure_without_selector() -> N
 async def test_query_failure_on_one_task_keeps_other_task_evidence() -> None:
     failed = _task("failed query")
     succeeded = _task("successful query")
-    selector_runtime = FakeRuntime(
+    selector_runtime = ScriptedAgentRuntime(
         [
             _selection_draft(
                 [{"candidate_index": 0, "claim": "claim", "why_selected": "why"}]
@@ -616,7 +593,7 @@ async def test_query_failure_on_one_task_keeps_other_task_evidence() -> None:
         ]
     )
     result = await _runner(
-        query_runtime=FakeRuntime(
+        query_runtime=ScriptedAgentRuntime(
             [
                 AgentResponseInvalidError(AgentResponseDefect.RESPONSE_NOT_JSON),
                 _query_draft(["q"]),
@@ -642,8 +619,8 @@ async def test_candidate_pool_round_robins_deduplicates_urls_and_applies_pool_ca
     pool_limit = _required_attribute(
         _contracts(), "EXTERNAL_SEARCH_CANDIDATE_POOL_LIMIT_PER_TASK"
     )
-    query_runtime = FakeRuntime([_query_draft(["q1", "q2", "q3"])])
-    selector_runtime = FakeRuntime([_selection_draft([])])
+    query_runtime = ScriptedAgentRuntime([_query_draft(["q1", "q2", "q3"])])
+    selector_runtime = ScriptedAgentRuntime([_selection_draft([])])
     search_tool = FakeExternalSearchTool(
         {
             query: [
@@ -677,9 +654,9 @@ async def test_candidate_pool_round_robins_deduplicates_urls_and_applies_pool_ca
 async def test_candidate_pool_removes_duplicate_urls_before_selector_projection() -> (
     None
 ):
-    selector_runtime = FakeRuntime([_selection_draft([])])
+    selector_runtime = ScriptedAgentRuntime([_selection_draft([])])
     result = await _runner(
-        query_runtime=FakeRuntime([_query_draft(["q1", "q2"])]),
+        query_runtime=ScriptedAgentRuntime([_query_draft(["q1", "q2"])]),
         search_tool=FakeExternalSearchTool(
             {
                 "q1": [
@@ -711,9 +688,9 @@ async def test_provider_result_cap_is_applied_before_candidate_pool() -> None:
     candidate_limit = _required_attribute(
         _contracts(), "EXTERNAL_SEARCH_CANDIDATES_PER_QUERY"
     )
-    selector_runtime = FakeRuntime([_selection_draft([])])
+    selector_runtime = ScriptedAgentRuntime([_selection_draft([])])
     result = await _runner(
-        query_runtime=FakeRuntime([_query_draft(["q"])]),
+        query_runtime=ScriptedAgentRuntime([_query_draft(["q"])]),
         search_tool=FakeExternalSearchTool(
             {
                 "q": [
@@ -745,9 +722,9 @@ async def test_selection_cap_preserves_candidate_index_source_refs() -> None:
         {"candidate_index": index, "claim": f"claim {index}", "why_selected": "why"}
         for index in range(1, evidence_limit + 2)
     ]
-    selector_runtime = FakeRuntime([_selection_draft(selections)])
+    selector_runtime = ScriptedAgentRuntime([_selection_draft(selections)])
     result = await _runner(
-        query_runtime=FakeRuntime([_query_draft(["q"])]),
+        query_runtime=ScriptedAgentRuntime([_query_draft(["q"])]),
         search_tool=FakeExternalSearchTool(
             {
                 "q": [
@@ -776,11 +753,11 @@ async def test_empty_selection_is_successful_and_reports_evidence_selected_event
 ):
     reporter = FakeEventReporter()
     result = await _runner(
-        query_runtime=FakeRuntime([_query_draft(["q"])]),
+        query_runtime=ScriptedAgentRuntime([_query_draft(["q"])]),
         search_tool=FakeExternalSearchTool(
             {"q": [_candidate("https://example.com/q")]}
         ),
-        selector_runtime=FakeRuntime([_selection_draft([])]),
+        selector_runtime=ScriptedAgentRuntime([_selection_draft([])]),
         events=reporter,
     ).search(_request([_task("empty selection")]))
 
