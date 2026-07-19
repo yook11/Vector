@@ -146,24 +146,24 @@ def test_build_answering_runner_injects_no_runtime_when_gemini_is_unconfigured(
     assert context_preparer._runtime_scope_factory is None
 
 
-def test_external_search_service_builder_does_not_activate_external_runtime(
+def test_external_search_service_builder_does_not_build_or_hold_runtime_factory(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     build_external_search_service = _composition_builder(
         "build_external_search_service"
     )
-    activation_calls: list[None] = []
+    factory_builds: list[None] = []
 
-    class _Factory:
-        def activate(self) -> None:
-            activation_calls.append(None)
-            raise AssertionError("service builder must not activate the runtime")
+    def build_factory() -> object:
+        factory_builds.append(None)
+        raise AssertionError(
+            "external service builder must not build the runtime factory"
+        )
 
-    factory = _Factory()
     monkeypatch.setattr(
         composition,
         "build_external_research_runtime_factory",
-        lambda: factory,
+        build_factory,
     )
     monkeypatch.setattr(
         composition.settings,
@@ -178,7 +178,7 @@ def test_external_search_service_builder_does_not_activate_external_runtime(
 
     service = build_external_search_service()
 
-    assert (service._runtime_factory is factory, activation_calls) == (True, [])
+    assert (factory_builds, hasattr(service, "_runtime_factory")) == ([], False)
 
 
 @pytest.mark.parametrize(
@@ -499,7 +499,6 @@ def test_build_answering_phases_wires_planner_to_shared_gemini_runtime_scope(
     from app.agent.answering.direct_answer.agent import DIRECT_ANSWER_AGENT
     from app.agent.answering.evidence_answer import flow as evidence_flow
     from app.agent.answering.evidence_answer.agent import EVIDENCE_ANSWER_AGENT
-    from app.agent.evidence_collection import service as evidence_service
     from app.agent.evidence_collection.internal_search import (
         article_search,
     )
@@ -514,6 +513,9 @@ def test_build_answering_phases_wires_planner_to_shared_gemini_runtime_scope(
     planner_calls: list[dict[str, object]] = []
     direct_calls: list[dict[str, object]] = []
     evidence_calls: list[dict[str, object]] = []
+    external_search = object()
+    external_runtime_factory = object()
+    internal_search = object()
 
     class _PlannerSpy(_KeywordObject):
         def __init__(self, **kwargs: object) -> None:
@@ -536,24 +538,37 @@ def test_build_answering_phases_wires_planner_to_shared_gemini_runtime_scope(
         lambda: None,
     )
     monkeypatch.setattr(
-        composition, "build_external_search_service", lambda *_a, **_k: object()
+        composition,
+        "build_external_search_service",
+        lambda *_a, **_k: external_search,
+    )
+    monkeypatch.setattr(
+        composition,
+        "build_external_research_runtime_factory",
+        lambda: external_runtime_factory,
     )
     monkeypatch.setattr(planning_service, "QuestionPlanningService", _PlannerSpy)
     monkeypatch.setattr(direct_flow, "DirectAnswerFlow", _DirectSpy)
     monkeypatch.setattr(evidence_flow, "EvidenceAnswerFlow", _EvidenceSpy)
     for module, name in (
-        (evidence_service, "EvidenceCollectionService"),
         (embedding_gemini, "GeminiQueryEmbedder"),
         (article_search, "PgVectorArticleSearchRepository"),
-        (internal_service, "InternalSearchService"),
     ):
         monkeypatch.setattr(module, name, _KeywordObject)
+    monkeypatch.setattr(
+        internal_service,
+        "InternalSearchService",
+        lambda **_kwargs: internal_search,
+    )
 
     phases = composition._build_answering_phases(
         session_factory=object(),
     )
 
     assert isinstance(phases, AnsweringPhases)
+    assert phases.internal_search is internal_search
+    assert phases.external_search is external_search
+    assert phases.external_runtime_factory is external_runtime_factory
     assert planner_calls == [
         {
             "agent": QUESTION_PLANNER_AGENT,

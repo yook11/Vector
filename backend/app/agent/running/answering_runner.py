@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Iterator
 from contextlib import contextmanager
+from datetime import datetime
 from typing import assert_never
 from uuid import UUID
 
@@ -21,7 +23,17 @@ from app.agent.contract import (
     AnswerQuestionResult,
     AnswerRetrievalSummary,
 )
+from app.agent.evidence_collection.contract import EvidenceCollectionOutcome
+from app.agent.evidence_collection.external_search import ExternalSearchOutcome
+from app.agent.evidence_collection.internal_search.article_search import (
+    InternalArticleSearchHit,
+)
+from app.agent.evidence_collection.internal_search.contract import InternalSearchError
+from app.agent.evidence_collection.internal_search.query_embedding import (
+    InternalSearchQueries,
+)
 from app.agent.planning.contract import (
+    ExternalResearchTask,
     ExternalSearchPlan,
     InternalAndExternalPlan,
     InternalRetrievalPlan,
@@ -150,7 +162,11 @@ class AnsweringRunner:
         plan: RetrievalPlan,
     ) -> AnswerQuestionResult:
         await self._report_progress("retrieving")
-        outcome = await phases.evidence_collector.collect(plan, as_of=request.as_of)
+        outcome = await self._collect_evidence(
+            phases=phases,
+            plan=plan,
+            as_of=request.as_of,
+        )
         evidence = normalize_answer_evidence(outcome)
 
         await self._report_progress("synthesizing")
@@ -166,6 +182,93 @@ class AnsweringRunner:
             evidence=evidence,
             draft=draft,
         )
+
+    async def _collect_evidence(
+        self,
+        *,
+        phases: AnsweringPhases,
+        plan: RetrievalPlan,
+        as_of: datetime,
+    ) -> EvidenceCollectionOutcome:
+        match plan:
+            case InternalRetrievalPlan(internal_queries=internal_queries):
+                hits, internal_failed = await self._collect_internal(
+                    phases=phases,
+                    queries=InternalSearchQueries(queries=tuple(internal_queries)),
+                )
+                return EvidenceCollectionOutcome(
+                    internal_hits=hits,
+                    collection_failures=(
+                        ["internal_search"] if internal_failed else []
+                    ),
+                )
+            case ExternalSearchPlan(
+                external_research_tasks=external_research_tasks,
+                target_time_window=target_time_window,
+            ):
+                external = await self._collect_external(
+                    phases=phases,
+                    tasks=external_research_tasks,
+                    target_time_window=target_time_window,
+                    as_of=as_of,
+                )
+                return EvidenceCollectionOutcome(external_search=external)
+            case InternalAndExternalPlan(
+                internal_queries=internal_queries,
+                external_research_tasks=external_research_tasks,
+                target_time_window=target_time_window,
+            ):
+                internal_result, external_result = await asyncio.gather(
+                    self._collect_internal(
+                        phases=phases,
+                        queries=InternalSearchQueries(queries=tuple(internal_queries)),
+                    ),
+                    self._collect_external(
+                        phases=phases,
+                        tasks=external_research_tasks,
+                        target_time_window=target_time_window,
+                        as_of=as_of,
+                    ),
+                    return_exceptions=True,
+                )
+                hits, internal_failed = _raise_if_exception(internal_result)
+                external = _raise_if_exception(external_result)
+                return EvidenceCollectionOutcome(
+                    internal_hits=hits,
+                    external_search=external,
+                    collection_failures=(
+                        ["internal_search"] if internal_failed else []
+                    ),
+                )
+            case _ as unreachable:
+                assert_never(unreachable)
+
+    async def _collect_internal(
+        self,
+        *,
+        phases: AnsweringPhases,
+        queries: InternalSearchQueries,
+    ) -> tuple[list[InternalArticleSearchHit], bool]:
+        try:
+            return await phases.internal_search.search_articles(queries), False
+        except InternalSearchError:
+            return [], True
+
+    async def _collect_external(
+        self,
+        *,
+        phases: AnsweringPhases,
+        tasks: list[ExternalResearchTask],
+        target_time_window: str | None,
+        as_of: datetime,
+    ) -> ExternalSearchOutcome:
+        async with phases.external_runtime_factory.activate() as external:
+            return await phases.external_search.search(
+                tasks,
+                target_time_window=target_time_window,
+                as_of=as_of,
+                external=external,
+            )
 
     async def _report_progress(self, stage: AnswerProgressStage) -> None:
         if self._progress is None:
@@ -206,3 +309,9 @@ def _plan_target_time_window(plan: RetrievalPlan) -> str | None:
         case InternalRetrievalPlan():
             return None
     assert_never(plan)
+
+
+def _raise_if_exception[ResultT](result: ResultT | BaseException) -> ResultT:
+    if isinstance(result, BaseException):
+        raise result
+    return result

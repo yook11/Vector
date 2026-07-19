@@ -6,13 +6,26 @@ import importlib
 import inspect
 from dataclasses import FrozenInstanceError, fields, is_dataclass
 from datetime import UTC, datetime
+from pathlib import Path
 from types import ModuleType
 from typing import Any, get_type_hints
 from uuid import UUID
 
 import pytest
 
+from app.agent.answering.direct_answer.contract import DirectAnswerer
+from app.agent.answering.evidence_answer.contract import EvidenceAnswerer
 from app.agent.contract import AnswerQuestionResult
+from app.agent.evidence_collection.contract import (
+    ExternalPlanSearcher,
+    InternalArticleRetriever,
+)
+from app.agent.evidence_collection.external_search import (
+    ExternalResearchRuntime,
+    ExternalResearchRuntimeFactory,
+    ExternalSearchOutcome,
+)
+from app.agent.planning.contract import ExternalResearchTask, QuestionPlanner
 from app.agent.question_context import (
     QuestionContext,
     QuestionContextPreparationResult,
@@ -307,4 +320,74 @@ def test_run_hooks_protocol_exposes_only_resolved_question_projection() -> None:
             ),
             type(None),
         ),
+    )
+
+
+def test_answering_phases_requires_separate_retrieval_capabilities() -> None:
+    phases_type = _contract_type("AnsweringPhases")
+    signature = inspect.signature(phases_type)
+
+    assert (
+        _field_contract(phases_type),
+        tuple(signature.parameters),
+        tuple(
+            parameter.default is inspect.Parameter.empty
+            for parameter in signature.parameters.values()
+        ),
+    ) == (
+        (
+            ("planner", QuestionPlanner),
+            ("internal_search", InternalArticleRetriever),
+            ("external_search", ExternalPlanSearcher),
+            ("external_runtime_factory", ExternalResearchRuntimeFactory),
+            ("direct_answerer", DirectAnswerer),
+            ("evidence_answerer", EvidenceAnswerer),
+        ),
+        (
+            "planner",
+            "internal_search",
+            "external_search",
+            "external_runtime_factory",
+            "direct_answerer",
+            "evidence_answerer",
+        ),
+        (True, True, True, True, True, True),
+    )
+
+
+def test_external_plan_searcher_requires_borrowed_runtime_per_call() -> None:
+    parameters, return_type = _method_contract(ExternalPlanSearcher.search)
+
+    assert (
+        getattr(ExternalPlanSearcher, "_is_protocol", False),
+        parameters,
+        return_type,
+    ) == (
+        True,
+        (
+            ("self", inspect.Parameter.POSITIONAL_OR_KEYWORD, None, True),
+            (
+                "external_research_tasks",
+                inspect.Parameter.POSITIONAL_OR_KEYWORD,
+                list[ExternalResearchTask],
+                True,
+            ),
+            ("target_time_window", inspect.Parameter.KEYWORD_ONLY, str | None, True),
+            ("as_of", inspect.Parameter.KEYWORD_ONLY, datetime, True),
+            ("external", inspect.Parameter.KEYWORD_ONLY, ExternalResearchRuntime, True),
+        ),
+        ExternalSearchOutcome,
+    )
+
+
+def test_evidence_collection_package_has_no_legacy_collector_symbols() -> None:
+    package_root = (
+        Path(__file__).resolve().parents[3] / "app" / "agent" / "evidence_collection"
+    )
+    source = "\n".join(
+        path.read_text(encoding="utf-8") for path in package_root.glob("*.py")
+    )
+
+    assert (
+        "EvidenceCollector" not in source and "EvidenceCollectionService" not in source
     )

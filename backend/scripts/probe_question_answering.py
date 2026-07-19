@@ -22,14 +22,12 @@ from app.agent.answering.evidence_answer.evidence import AnswerEvidenceItem
 from app.agent.answering.evidence_answer.flow import EvidenceAnswerFlow
 from app.agent.composition import (
     activate_gemini_agent_runtime,
+    build_external_research_runtime_factory,
     build_external_search_service,
 )
 from app.agent.contract import AnswerQuestionResult, AnswerSource
-from app.agent.evidence_collection import (
-    EvidenceCollectionOutcome,
-    EvidenceCollectionService,
-)
 from app.agent.evidence_collection.external_search import (
+    ExternalResearchRuntime,
     ExternalSearchEvidence,
     ExternalSearchOutcome,
     ResearchTaskReport,
@@ -43,7 +41,6 @@ from app.agent.planning.contract import (
     ExternalSearchPlan,
     NoRetrievalPlan,
     PlanningRequest,
-    RetrievalPlan,
 )
 from app.agent.question_context.agent import QUESTION_CONTEXT_AGENT
 from app.agent.question_context.service import QuestionContextService
@@ -81,20 +78,48 @@ class _FixedDirectPlanner:
         return self._plan
 
 
-class _RecordingEvidenceCollector:
-    def __init__(self, evidence_collector: EvidenceCollectionService) -> None:
-        self._evidence_collector = evidence_collector
-        self.last_outcome: EvidenceCollectionOutcome | None = None
+class _RecordingExternalSearch:
+    def __init__(self, *, requested_agent_count: int) -> None:
+        self._service = build_external_search_service()
+        self._requested_agent_count = requested_agent_count
+        self.last_outcome: ExternalSearchOutcome | None = None
 
-    async def collect(
+    async def search(
         self,
-        plan: RetrievalPlan,
+        external_research_tasks: list[ExternalResearchTask],
         *,
+        target_time_window: str | None,
         as_of: datetime,
-    ) -> EvidenceCollectionOutcome:
-        outcome = await self._evidence_collector.collect(plan, as_of=as_of)
+        external: ExternalResearchRuntime,
+    ) -> ExternalSearchOutcome:
+        outcome = await _search_with_requested_agent_count(
+            self._service,
+            external_research_tasks,
+            target_time_window=target_time_window,
+            as_of=as_of,
+            external=external,
+            requested_agent_count=self._requested_agent_count,
+        )
         self.last_outcome = outcome
         return outcome
+
+
+async def _search_with_requested_agent_count(
+    service: object,
+    external_research_tasks: list[ExternalResearchTask],
+    *,
+    target_time_window: str | None,
+    as_of: datetime,
+    external: ExternalResearchRuntime,
+    requested_agent_count: int,
+) -> ExternalSearchOutcome:
+    return await service.search(  # type: ignore[union-attr]
+        external_research_tasks,
+        target_time_window=target_time_window,
+        as_of=as_of,
+        external=external,
+        requested_agent_count=requested_agent_count,
+    )
 
 
 class _UnreachableDirectAnswerer:
@@ -110,14 +135,24 @@ class _UnreachableDirectAnswerer:
         )
 
 
-class _UnreachableEvidenceCollector:
-    async def collect(
+class _UnreachableExternalSearch:
+    async def search(
         self,
-        plan: RetrievalPlan,
+        external_research_tasks: list[ExternalResearchTask],
         *,
-        as_of: datetime,  # noqa: ARG002
-    ) -> EvidenceCollectionOutcome:
-        raise AssertionError(f"evidence collector must not be called: {plan!r}")
+        target_time_window: str | None,
+        as_of: datetime,
+        external: ExternalResearchRuntime,
+    ) -> ExternalSearchOutcome:
+        raise AssertionError(
+            "external search must not be called: "
+            f"{external_research_tasks!r} {target_time_window!r} {as_of!r} {external!r}"
+        )
+
+
+class _UnreachableExternalRuntimeFactory:
+    def activate(self) -> object:
+        raise AssertionError("external runtime must not activate")
 
 
 class _UnreachableEvidenceAnswerer:
@@ -204,12 +239,8 @@ async def _probe_external(
 
     as_of = datetime.now(UTC)
     plan = _build_external_plan(goals, target_time_window=target_time_window)
-    evidence_collector = _RecordingEvidenceCollector(
-        EvidenceCollectionService(
-            internal_search=_UnreachableInternalSearch(),
-            external_search=build_external_search_service(),
-            requested_external_agent_count=requested_agent_count,
-        )
+    external_search = _RecordingExternalSearch(
+        requested_agent_count=requested_agent_count,
     )
     runner = AnsweringRunner(
         context_preparer=QuestionContextService(
@@ -218,7 +249,9 @@ async def _probe_external(
         ),
         phases_factory=lambda: AnsweringPhases(
             planner=_FixedExternalPlanner(plan),
-            evidence_collector=evidence_collector,
+            internal_search=_UnreachableInternalSearch(),
+            external_search=external_search,
+            external_runtime_factory=build_external_research_runtime_factory(),
             evidence_answerer=EvidenceAnswerFlow(
                 agent=EVIDENCE_ANSWER_AGENT,
                 runtime_scope_factory=activate_gemini_agent_runtime,
@@ -233,7 +266,7 @@ async def _probe_external(
         )
     ).final_output
 
-    outcome = evidence_collector.last_outcome
+    outcome = external_search.last_outcome
     if outcome is None:
         raise SystemExit("retrieval did not run")
 
@@ -241,8 +274,8 @@ async def _probe_external(
         as_of=as_of,
         plan=plan,
         requested_agent_count=requested_agent_count,
-        outcome=outcome.external_search,
-        collection_failures=outcome.collection_failures,
+        outcome=outcome,
+        collection_failures=result.retrieval.collection_failures,
     )
     print()
     _print_answer_result(result)
@@ -259,7 +292,9 @@ async def _probe_direct(*, question: str) -> None:
         ),
         phases_factory=lambda: AnsweringPhases(
             planner=_FixedDirectPlanner(NoRetrievalPlan(reason="direct answer probe")),
-            evidence_collector=_UnreachableEvidenceCollector(),
+            internal_search=_UnreachableInternalSearch(),
+            external_search=_UnreachableExternalSearch(),
+            external_runtime_factory=_UnreachableExternalRuntimeFactory(),
             evidence_answerer=_UnreachableEvidenceAnswerer(),
             direct_answerer=DirectAnswerFlow(
                 agent=DIRECT_ANSWER_AGENT,

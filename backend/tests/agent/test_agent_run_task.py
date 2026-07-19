@@ -384,7 +384,6 @@ def test_composition_injects_same_live_controls_into_both_answer_flows(
 ) -> None:
     import app.agent.answering.direct_answer.flow as direct_flow_module
     import app.agent.answering.evidence_answer.flow as evidence_flow_module
-    import app.agent.evidence_collection as evidence_collection_module
     import app.agent.evidence_collection.internal_search.ai.gemini as embedder_module
     import app.agent.planning.service as planning_service_module
     from app.agent.answering.direct_answer.agent import DIRECT_ANSWER_AGENT
@@ -397,6 +396,9 @@ def test_composition_injects_same_live_controls_into_both_answer_flows(
     )
 
     captured: dict[str, dict[str, object]] = {}
+    external_search = object()
+    external_runtime_factory = object()
+    internal_search = object()
 
     def capture_direct(**kwargs: object) -> object:
         captured["direct"] = kwargs
@@ -414,15 +416,15 @@ def test_composition_injects_same_live_controls_into_both_answer_flows(
     monkeypatch.setattr(
         composition,
         "build_external_search_service",
-        lambda *_args, **_kwargs: object(),
+        lambda *_args, **_kwargs: external_search,
+    )
+    monkeypatch.setattr(
+        composition,
+        "build_external_research_runtime_factory",
+        lambda: external_runtime_factory,
     )
     monkeypatch.setattr(direct_flow_module, "DirectAnswerFlow", capture_direct)
     monkeypatch.setattr(evidence_flow_module, "EvidenceAnswerFlow", capture_evidence)
-    monkeypatch.setattr(
-        evidence_collection_module,
-        "EvidenceCollectionService",
-        lambda **_kwargs: object(),
-    )
     monkeypatch.setattr(embedder_module, "GeminiQueryEmbedder", lambda: object())
     monkeypatch.setattr(
         article_search_module,
@@ -432,7 +434,7 @@ def test_composition_injects_same_live_controls_into_both_answer_flows(
     monkeypatch.setattr(
         internal_search_module,
         "InternalSearchService",
-        lambda **_kwargs: object(),
+        lambda **_kwargs: internal_search,
     )
     monkeypatch.setattr(
         planning_service_module,
@@ -463,6 +465,9 @@ def test_composition_injects_same_live_controls_into_both_answer_flows(
         is composition.activate_gemini_agent_runtime
     )
     assert isinstance(phases, AnsweringPhases)
+    assert phases.internal_search is internal_search
+    assert phases.external_search is external_search
+    assert phases.external_runtime_factory is external_runtime_factory
     assert phases.direct_answerer is not None
     assert phases.evidence_answerer is not None
 

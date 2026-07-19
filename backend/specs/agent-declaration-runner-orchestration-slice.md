@@ -1173,11 +1173,14 @@ workflow責任を移す対象も読み取れない。最初にこの境界を`An
 
 ### PR8: Retrieval dispatch ownership
 
+- 詳細仕様は`retrieval-dispatch-ownership-slice.md`を正本とし、PR7完了後の実装をbaselineにする。
 - internal / external / mixed分岐と固定2枝の並行policyを`AnsweringRunner`へ移す。
 - external / mixedのexternal枝で`ExternalResearchRuntimeFactory.activate()`を開始するownerも、
   `ExternalSearchService`から`AnsweringRunner`へ移す。
 - mixedの両側完走、未分類例外のinternal優先、partial result、cache / metrics side effectを固定する。
-- Exit gate: `FLOW-04`〜`FLOW-06`、`ERR-07`〜`ERR-10`、`REG-01`〜`REG-03`を通す。
+- production到達不能なexternal未配線seamは削除するが、agent数policyとprobeの`--agents`は維持する。
+- Exit gate: `FLOW-04`〜`FLOW-07`、`ERR-07`〜`ERR-10`、`REG-01`〜`REG-04`、
+  `RES-01`〜`RES-06`、`ARCH-02` / `ARCH-03`を通す。
 - 削除するseam: `EvidenceCollectionService`のdispatch ownerと`ExternalSearchService`のfactory
   activation owner。残すseam: external pipeline adapterとしての`ExternalSearchResearchRunner`。
 

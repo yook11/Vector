@@ -16,12 +16,10 @@ from app.agent.answering.contract import AnsweringRequest
 from app.agent.answering.direct_answer.contract import DirectAnswerDraft
 from app.agent.answering.evidence_answer.contract import EvidenceAnswerDraft
 from app.agent.contract import AnswerGenerationStopped
-from app.agent.evidence_collection import EvidenceCollectionOutcome
 from app.agent.planning.contract import (
     NoRetrievalPlan,
     PlanningRequest,
     QuestionPlan,
-    RetrievalPlan,
 )
 from app.agent.question_context import (
     AnswerRequirement,
@@ -202,14 +200,32 @@ class _FakePlanner:
         return outcome
 
 
-class _UnreachableCollector:
-    async def collect(
+class _UnreachableInternalSearch:
+    async def search_articles(
         self,
-        _plan: RetrievalPlan,
+        _queries: object,
+    ) -> list[object]:
+        raise AssertionError("internal search must not be called")
+
+
+class _UnreachableExternalSearch:
+    async def search(
+        self,
+        _tasks: list[object],
         *,
+        target_time_window: str | None,
         as_of: datetime,
-    ) -> EvidenceCollectionOutcome:
-        raise AssertionError(f"collector must not be called: {as_of!r}")
+        external: object,
+    ) -> object:
+        raise AssertionError(
+            "external search must not be called: "
+            f"{target_time_window!r} {as_of!r} {external!r}"
+        )
+
+
+class _UnreachableExternalRuntimeFactory:
+    def activate(self) -> object:
+        raise AssertionError("external runtime must not activate")
 
 
 class _UnreachableEvidenceAnswerer:
@@ -296,7 +312,9 @@ class _PhasesFactory:
             raise self._error
         phases = AnsweringPhases(
             planner=self._planner,
-            evidence_collector=_UnreachableCollector(),
+            internal_search=_UnreachableInternalSearch(),
+            external_search=_UnreachableExternalSearch(),
+            external_runtime_factory=_UnreachableExternalRuntimeFactory(),
             direct_answerer=self._direct_answerer,
             evidence_answerer=_UnreachableEvidenceAnswerer(),
         )

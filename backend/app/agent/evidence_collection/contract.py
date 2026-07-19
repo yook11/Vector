@@ -8,30 +8,23 @@ from typing import Protocol, Self
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from app.agent.contract import EvidenceCollectionFailure
-from app.agent.evidence_collection.external_search import ExternalSearchOutcome
+from app.agent.evidence_collection.external_search import (
+    ExternalResearchRuntime,
+    ExternalSearchOutcome,
+)
 from app.agent.evidence_collection.internal_search.article_search import (
     InternalArticleSearchHit,
 )
 from app.agent.evidence_collection.internal_search.query_embedding import (
     InternalSearchQueries,
 )
-from app.agent.planning.contract import ExternalResearchTask, RetrievalPlan
+from app.agent.planning.contract import ExternalResearchTask
 
 __all__ = [
-    "EvidenceCollector",
     "EvidenceCollectionOutcome",
     "ExternalPlanSearcher",
     "InternalArticleRetriever",
 ]
-
-
-class EvidenceCollector(Protocol):
-    async def collect(
-        self,
-        plan: RetrievalPlan,
-        *,
-        as_of: datetime,
-    ) -> EvidenceCollectionOutcome: ...
 
 
 class InternalArticleRetriever(Protocol):
@@ -48,7 +41,7 @@ class ExternalPlanSearcher(Protocol):
         *,
         target_time_window: str | None,
         as_of: datetime,
-        requested_agent_count: int | None = None,
+        external: ExternalResearchRuntime,
     ) -> ExternalSearchOutcome: ...
 
 
