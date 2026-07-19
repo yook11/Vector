@@ -1,19 +1,16 @@
-"""Question planning service policy and tracing tests."""
+"""QuestionPlanningService の retry・fallback・metrics policy を検証する。"""
 
 from __future__ import annotations
 
 import asyncio
 import json
 from collections.abc import Sequence
-from dataclasses import dataclass
 from datetime import UTC, datetime
 from types import TracebackType
 from typing import Any
 
-import logfire
 import pytest
 from logfire.testing import CaptureLogfire
-from opentelemetry.trace import StatusCode
 
 from app.agent.agent import Agent
 from app.agent.contract import RetrievalMode
@@ -36,18 +33,10 @@ from app.analysis.ai_provider_errors import (
     AIProviderOutputBlockedError,
 )
 from app.analysis.gemini_error_translator import GeminiContentRejectionReason
-from app.logfire.redaction import install_exception_redaction
+from tests.agent.runtime._fakes import ScriptedAgentRuntime
 from tests.logfire._metric_helpers import collected_metrics, sum_counter_for_result
-from tests.logfire._span_helpers import (
-    domain_attr_keys,
-    exception_event,
-    one_span_named,
-    spans_named,
-)
 
 _PLANNER_OUTCOME_METRIC = "vector.agent.planner.outcome"
-_PHASE_SPAN_NAME = "agent_phase"
-_PROVIDER_SPAN_NAME = "agent_provider_call"
 
 
 def _input(question: str = "今日のNVIDIAの発表は？") -> PlanningRequest:
@@ -86,82 +75,16 @@ def _response_invalid(
     return AgentResponseInvalidError(defect, repair_hint=repair_hint)
 
 
-@dataclass(frozen=True, slots=True)
-class RuntimeInvokeCall:
-    agent: Agent[Any, Any]
-    input: PlanningAttemptInput
-    attempt_number: int
-
-
-class FakeRuntime:
-    """Runtime fake that owns one attempt at a time and no policy."""
-
+class _RecordingPlannerRuntimeScope:
     def __init__(
         self,
-        outcomes: Sequence[QuestionPlanDraft | BaseException],
-        *,
-        trace_attempts: bool = False,
+        factory: RecordingPlannerRuntimeScopeFactory,
+        runtime: ScriptedAgentRuntime,
     ) -> None:
-        self._outcomes = list(outcomes)
-        self._trace_attempts = trace_attempts
-        self.calls: list[RuntimeInvokeCall] = []
-
-    async def invoke[InputT, OutputT](
-        self,
-        agent: Agent[InputT, OutputT],
-        input: InputT,
-        *,
-        attempt_number: int,
-    ) -> OutputT:
-        assert isinstance(input, PlanningAttemptInput)
-        self.calls.append(
-            RuntimeInvokeCall(
-                agent=agent,
-                input=input,
-                attempt_number=attempt_number,
-            )
-        )
-        outcome = self._outcomes.pop(0)
-        if not self._trace_attempts:
-            if isinstance(outcome, BaseException):
-                raise outcome
-            return outcome  # type: ignore[return-value]
-
-        deferred_error: BaseException | None = None
-        with logfire.span(
-            _PROVIDER_SPAN_NAME,
-            agent_name=agent.name,
-            attempt_number=attempt_number,
-        ) as span:
-            if isinstance(outcome, AgentResponseInvalidError):
-                span.set_attribute("result", "invalid_response")
-                span.set_attribute("error.type", outcome.defect.value)
-                span.set_status(StatusCode.ERROR)
-                deferred_error = outcome
-            elif isinstance(
-                outcome,
-                (AIProviderNetworkError, AIProviderOutputBlockedError),
-            ):
-                span.set_attribute("result", "provider_error")
-                span.set_attribute("error.type", outcome.CODE)
-                span.set_status(StatusCode.ERROR)
-                deferred_error = outcome
-            elif isinstance(outcome, BaseException):
-                raise outcome
-            else:
-                span.set_attribute("result", "succeeded")
-                span.set_attribute("gen_ai.usage.input_tokens", 11)
-        if deferred_error is not None:
-            raise deferred_error
-        return outcome  # type: ignore[return-value]
-
-
-class _RuntimeScope:
-    def __init__(self, factory: FakeRuntimeScopeFactory, runtime: FakeRuntime) -> None:
         self._factory = factory
         self._runtime = runtime
 
-    async def __aenter__(self) -> FakeRuntime:
+    async def __aenter__(self) -> ScriptedAgentRuntime:
         self._factory.entered.append(self._runtime)
         return self._runtime
 
@@ -175,32 +98,32 @@ class _RuntimeScope:
         return False
 
 
-class FakeRuntimeScopeFactory:
-    def __init__(self, runtimes: Sequence[FakeRuntime]) -> None:
+class RecordingPlannerRuntimeScopeFactory:
+    def __init__(self, runtimes: Sequence[ScriptedAgentRuntime]) -> None:
         self._runtimes = list(runtimes)
-        self.created: list[FakeRuntime] = []
-        self.entered: list[FakeRuntime] = []
+        self.created: list[ScriptedAgentRuntime] = []
+        self.entered: list[ScriptedAgentRuntime] = []
         self.exits: list[
             tuple[
-                FakeRuntime,
+                ScriptedAgentRuntime,
                 type[BaseException] | None,
                 BaseException | None,
                 TracebackType | None,
             ]
         ] = []
 
-    def __call__(self) -> _RuntimeScope:
+    def __call__(self) -> _RecordingPlannerRuntimeScope:
         runtime = self._runtimes[len(self.created)]
         self.created.append(runtime)
-        return _RuntimeScope(self, runtime)
+        return _RecordingPlannerRuntimeScope(self, runtime)
 
 
 def _service(
-    runtime: FakeRuntime,
+    runtime: ScriptedAgentRuntime,
     *,
     agent: Agent[PlanningAttemptInput, QuestionPlanDraft] = QUESTION_PLANNER_AGENT,
-) -> tuple[QuestionPlanningService, FakeRuntimeScopeFactory]:
-    factory = FakeRuntimeScopeFactory([runtime])
+) -> tuple[QuestionPlanningService, RecordingPlannerRuntimeScopeFactory]:
+    factory = RecordingPlannerRuntimeScopeFactory([runtime])
     return (
         QuestionPlanningService(
             agent=agent,
@@ -224,7 +147,7 @@ def _metric_attributes(
 
 async def test_plan_activates_one_scope_and_invokes_declared_agent_once() -> None:
     request = _input()
-    runtime = FakeRuntime(
+    runtime = ScriptedAgentRuntime(
         [
             _draft(
                 "external",
@@ -258,7 +181,7 @@ async def test_each_response_defect_retries_once_in_the_same_runtime(
     defect: AgentResponseDefect,
 ) -> None:
     first_error = _response_invalid(defect)
-    runtime = FakeRuntime(
+    runtime = ScriptedAgentRuntime(
         [
             first_error,
             _draft(
@@ -289,7 +212,7 @@ async def test_two_response_defects_fall_back_after_exactly_two_attempts() -> No
     request = _input("保存済みの記事からAI半導体ニュースをまとめて")
     first_error = _response_invalid(AgentResponseDefect.RESPONSE_NOT_OBJECT)
     second_error = _response_invalid(AgentResponseDefect.OUTPUT_SCHEMA_MISMATCH)
-    runtime = FakeRuntime([first_error, second_error])
+    runtime = ScriptedAgentRuntime([first_error, second_error])
     service, factory = _service(runtime)
 
     plan = await service.plan(request)
@@ -322,7 +245,7 @@ async def test_classified_non_response_error_falls_back_without_retry(
     expected_failure_code: str,
     capfire: CaptureLogfire,
 ) -> None:
-    runtime = FakeRuntime([error])
+    runtime = ScriptedAgentRuntime([error])
     service, factory = _service(runtime)
 
     plan = await service.plan(_input("保存済み記事で見て"))
@@ -352,7 +275,7 @@ async def test_unknown_error_and_cancellation_propagate_by_identity(
     error: BaseException,
     capfire: CaptureLogfire,
 ) -> None:
-    runtime = FakeRuntime([error])
+    runtime = ScriptedAgentRuntime([error])
     service, factory = _service(runtime)
 
     with pytest.raises(type(error)) as raised:
@@ -366,11 +289,11 @@ async def test_unknown_error_and_cancellation_propagate_by_identity(
 
 
 async def test_two_plan_calls_activate_fresh_runtime_scopes() -> None:
-    first_runtime = FakeRuntime([_draft("none", reason="first")])
-    second_runtime = FakeRuntime(
+    first_runtime = ScriptedAgentRuntime([_draft("none", reason="first")])
+    second_runtime = ScriptedAgentRuntime(
         [_draft("internal", internal_queries=["second query"], reason="second")]
     )
-    factory = FakeRuntimeScopeFactory([first_runtime, second_runtime])
+    factory = RecordingPlannerRuntimeScopeFactory([first_runtime, second_runtime])
     service = QuestionPlanningService(
         agent=QUESTION_PLANNER_AGENT,
         runtime_scope_factory=factory,
@@ -393,7 +316,7 @@ async def test_retry_success_metric_reports_no_failure_and_no_repair_detail(
         AgentResponseDefect.RESPONSE_NOT_JSON,
         repair_hint="REPAIR_HINT_MUST_NOT_ENTER_METRICS_4d7f",
     )
-    runtime = FakeRuntime(
+    runtime = ScriptedAgentRuntime(
         [invalid, _draft("internal", internal_queries=["NVIDIA AI GPU"])]
     )
     service, _factory = _service(runtime)
@@ -418,7 +341,7 @@ async def test_retry_success_metric_reports_no_failure_and_no_repair_detail(
 async def test_fallback_after_retry_failure_records_final_failure_code(
     capfire: CaptureLogfire,
 ) -> None:
-    runtime = FakeRuntime(
+    runtime = ScriptedAgentRuntime(
         [
             _response_invalid(AgentResponseDefect.RESPONSE_NOT_JSON),
             _response_invalid(AgentResponseDefect.OUTPUT_SCHEMA_MISMATCH),
@@ -485,7 +408,7 @@ async def test_outcome_metric_records_once_without_model_visible_text(
     failure_code: str,
     capfire: CaptureLogfire,
 ) -> None:
-    runtime = FakeRuntime(outcomes)
+    runtime = ScriptedAgentRuntime(outcomes)
     service, _factory = _service(runtime)
 
     await service.plan(_input("MODEL_VISIBLE_QUESTION_SENTINEL_86ba"))
@@ -503,94 +426,3 @@ async def test_outcome_metric_records_once_without_model_visible_text(
     assert "MODEL_VISIBLE_QUESTION_SENTINEL_86ba" not in json.dumps(
         metrics, default=str, ensure_ascii=False
     )
-
-
-async def test_success_has_one_phase_with_one_provider_child(
-    capfire: CaptureLogfire,
-) -> None:
-    runtime = FakeRuntime(
-        [_draft("internal", internal_queries=["NVIDIA"])],
-        trace_attempts=True,
-    )
-    service, _factory = _service(runtime)
-
-    await service.plan(_input())
-
-    phase = one_span_named(capfire, _PHASE_SPAN_NAME)
-    provider = one_span_named(capfire, _PROVIDER_SPAN_NAME)
-    assert domain_attr_keys(phase["attributes"]) == {"phase", "agent_name"}
-    assert (
-        phase["attributes"]["phase"],
-        phase["attributes"]["agent_name"],
-        provider["parent"]["span_id"],
-        provider["context"]["trace_id"],
-    ) == (
-        "question_planning",
-        QUESTION_PLANNER_AGENT.name,
-        phase["context"]["span_id"],
-        phase["context"]["trace_id"],
-    )
-    assert not any(key.startswith("gen_ai.usage.") for key in phase["attributes"])
-
-
-async def test_retry_keeps_two_provider_attempts_under_one_phase_without_error_event(
-    capfire: CaptureLogfire,
-) -> None:
-    runtime = FakeRuntime(
-        [
-            _response_invalid(AgentResponseDefect.OUTPUT_SCHEMA_MISMATCH),
-            _draft("none"),
-        ],
-        trace_attempts=True,
-    )
-    service, _factory = _service(runtime)
-
-    await service.plan(_input())
-
-    phase = one_span_named(capfire, _PHASE_SPAN_NAME)
-    providers = spans_named(capfire, _PROVIDER_SPAN_NAME)
-    assert len(providers) == 2
-    assert [span["attributes"]["attempt_number"] for span in providers] == [1, 2]
-    assert all(
-        span["parent"]["span_id"] == phase["context"]["span_id"] for span in providers
-    )
-    assert exception_event(phase) is None
-    assert phase.get("status", {}).get("description") in (None, "")
-
-
-async def test_unknown_error_keeps_redacted_phase_exception_without_sensitive_attrs(
-    capfire: CaptureLogfire,
-) -> None:
-    install_exception_redaction()
-    sentinel = "UNCLASSIFIED_PLANNER_SENTINEL_1f78"
-    error = RuntimeError(sentinel)
-    runtime = FakeRuntime([error], trace_attempts=True)
-    service, _factory = _service(runtime)
-
-    with pytest.raises(RuntimeError) as raised:
-        await service.plan(_input("QUESTION_SENTINEL_ef34"))
-
-    phase = one_span_named(capfire, _PHASE_SPAN_NAME)
-    raw_phases = [
-        span
-        for span in capfire.exporter.exported_spans
-        if span.name == _PHASE_SPAN_NAME
-        and (span.attributes or {}).get("logfire.span_type") == "span"
-    ]
-    event = exception_event(phase)
-    assert raised.value is error
-    assert len(raw_phases) == 1
-    assert event is not None
-    assert event["attributes"]["exception.message"] == "[redacted]"
-    assert event["attributes"]["exception.stacktrace"] == "[redacted]"
-    assert raw_phases[0].status.status_code is StatusCode.ERROR
-    assert raw_phases[0].status.description == "[redacted]"
-    assert domain_attr_keys(phase["attributes"]) == {"phase", "agent_name"}
-    span_dump = json.dumps(phase, default=str, ensure_ascii=False)
-    for unsafe in (
-        sentinel,
-        "QUESTION_SENTINEL_ef34",
-        QUESTION_PLANNER_AGENT.prompt.version,
-        "run_id",
-    ):
-        assert unsafe not in span_dump

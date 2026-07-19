@@ -35,6 +35,7 @@ class DataclassRuntimeOutput:
 
 
 async def test_constructor_accepts_only_borrowed_async_client() -> None:
+    """runtime が借用した非同期 client だけを受け取る境界を守る。"""
     client = FakeGeminiClient([success_response()])
     gemini_runtime_type = runtime_type()
 
@@ -45,6 +46,7 @@ async def test_constructor_accepts_only_borrowed_async_client() -> None:
 async def test_invoke_calls_provider_once_and_returns_validated_output_directly() -> (
     None
 ):
+    """一試行が一度だけ provider を呼び検証済み出力を返す。"""
     client = FakeGeminiClient([success_response(result="validated")])
     runtime = runtime_type()(client=client)
 
@@ -57,6 +59,7 @@ async def test_invoke_calls_provider_once_and_returns_validated_output_directly(
 
 
 async def test_invoke_validates_a_declared_dataclass_output_type() -> None:
+    """宣言された dataclass 出力型を runtime 境界で検証する。"""
     client = FakeGeminiClient([success_response(result="dataclass")])
     runtime = runtime_type()(client=client)
     agent = replace(make_agent(), output_type=DataclassRuntimeOutput)
@@ -67,6 +70,7 @@ async def test_invoke_validates_a_declared_dataclass_output_type() -> None:
 
 
 async def test_request_separates_instructions_contents_and_thaws_schema() -> None:
+    """指示・入力・schema を provider request で独立して保持する。"""
     client = FakeGeminiClient([success_response()])
     runtime = runtime_type()(client=client)
     instructions = "SYSTEM_INSTRUCTIONS_SENTINEL_77ca"
@@ -100,6 +104,7 @@ async def test_request_separates_instructions_contents_and_thaws_schema() -> Non
 async def test_same_runtime_does_not_carry_agent_or_input_state_between_invokes() -> (
     None
 ):
+    """同一 runtime の連続呼出しで agent と入力の状態を持ち越さない。"""
     client = FakeGeminiClient(
         [
             success_response(result="first", tags=["one"]),
@@ -155,6 +160,7 @@ async def test_invalid_response_shape_maps_to_provider_neutral_defect(
     response_text: str,
     defect_name: str,
 ) -> None:
+    """不正な応答形を安全な provider 中立 defect に写像する。"""
     contract_module = runtime_contract()
     error_type = required_attribute(contract_module, "AgentResponseInvalidError")
     defect_type = required_attribute(contract_module, "AgentResponseDefect")
@@ -173,6 +179,7 @@ async def test_invalid_response_shape_maps_to_provider_neutral_defect(
 
 
 async def test_output_validation_error_exposes_only_safe_repair_fields() -> None:
+    """出力検証エラーから安全な修正情報だけを公開する。"""
     contract_module = runtime_contract()
     error_type = required_attribute(contract_module, "AgentResponseInvalidError")
     defect_type = required_attribute(contract_module, "AgentResponseDefect")
@@ -211,6 +218,7 @@ async def test_output_validation_error_exposes_only_safe_repair_fields() -> None
 
 
 async def test_unknown_extra_field_location_is_collapsed_to_fixed_placeholder() -> None:
+    """未知の追加 field 名を固定の安全な表現へ畳み込む。"""
     contract_module = runtime_contract()
     error_type = required_attribute(contract_module, "AgentResponseInvalidError")
     defect_type = required_attribute(contract_module, "AgentResponseDefect")
@@ -263,6 +271,7 @@ async def test_blocked_finish_reason_maps_to_existing_provider_error(
     finish_reason: str,
     expected_reason: GeminiContentRejectionReason,
 ) -> None:
+    """拒否理由を既存の provider エラー語彙へ対応付ける。"""
     client = FakeGeminiClient([blocked_response(finish_reason)])
     runtime = runtime_type()(client=client)
 
@@ -276,6 +285,7 @@ async def test_blocked_finish_reason_maps_to_existing_provider_error(
 
 
 async def test_known_gemini_failure_uses_existing_error_translation() -> None:
+    """既知の Gemini 障害を既存のアプリケーション例外へ翻訳する。"""
     client = FakeGeminiClient([TimeoutError("PROVIDER_SENTINEL_TIMEOUT_79ab")])
     runtime = runtime_type()(client=client)
 
@@ -288,6 +298,7 @@ async def test_known_gemini_failure_uses_existing_error_translation() -> None:
 
 
 async def test_unclassified_exception_propagates_with_identity() -> None:
+    """未分類例外の同一性を失わずに伝播させる。"""
     error = RuntimeError("UNCLASSIFIED_EXCEPTION_SENTINEL_2c5e")
     client = FakeGeminiClient([error])
     runtime = runtime_type()(client=client)
@@ -305,6 +316,7 @@ async def test_unclassified_exception_propagates_with_identity() -> None:
 async def test_non_positive_attempt_number_is_rejected_before_provider_call(
     attempt_number: int,
 ) -> None:
+    """非正の試行番号では provider 呼出し前に拒否する。"""
     client = FakeGeminiClient([success_response()])
     runtime = runtime_type()(client=client)
 
@@ -319,6 +331,7 @@ async def test_non_positive_attempt_number_is_rejected_before_provider_call(
 
 
 async def test_renderer_failure_propagates_without_provider_call() -> None:
+    """入力描画の失敗時に provider を呼び出さない。"""
     error = RuntimeError("RENDERER_FAILURE_SENTINEL_93b0")
     client = FakeGeminiClient([success_response()])
     agent = make_agent()
@@ -340,6 +353,7 @@ async def test_renderer_failure_propagates_without_provider_call() -> None:
 
 
 async def test_config_construction_failure_happens_before_provider_call() -> None:
+    """request config の不備を provider 呼出し前に表面化させる。"""
     client = FakeGeminiClient([success_response()])
     agent = make_agent()
     agent = replace(

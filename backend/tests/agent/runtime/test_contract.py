@@ -15,6 +15,9 @@ def _annotation_name(annotation: object) -> str:
 
 
 def test_agent_runtime_protocol_has_one_attempt_generic_invoke_signature() -> None:
+    """Runtimeがprovider非依存の非同期1-attempt境界として、
+    型付き署名を持つことを検証する。
+    """
     module = runtime_contract()
     runtime_protocol = required_attribute(module, "AgentRuntime")
     invoke = runtime_protocol.invoke
@@ -31,6 +34,7 @@ def test_agent_runtime_protocol_has_one_attempt_generic_invoke_signature() -> No
 
 
 def test_agent_runtime_scope_factory_is_provider_neutral_protocol() -> None:
+    """scope factory が provider 非依存の runtime 境界を返すことを守る。"""
     module = runtime_contract()
     scope_factory = required_attribute(module, "AgentRuntimeScopeFactory")
     call_signature = signature(scope_factory.__call__)
@@ -44,6 +48,7 @@ def test_agent_runtime_scope_factory_is_provider_neutral_protocol() -> None:
 
 
 def test_agent_response_defect_has_only_three_provider_neutral_values() -> None:
+    """応答不備の公開語彙を三つの中立値に限定する。"""
     module = runtime_contract()
     defect_type = required_attribute(module, "AgentResponseDefect")
 
@@ -55,6 +60,7 @@ def test_agent_response_defect_has_only_three_provider_neutral_values() -> None:
 
 
 def test_agent_response_invalid_error_string_uses_defect_and_repair_hint() -> None:
+    """安全な修正情報を defect と repair hint で利用可能にする。"""
     module = runtime_contract()
     defect_type = required_attribute(module, "AgentResponseDefect")
     error_type = required_attribute(module, "AgentResponseInvalidError")
@@ -71,6 +77,7 @@ def test_agent_response_invalid_error_string_uses_defect_and_repair_hint() -> No
 
 
 def test_contract_import_does_not_eagerly_import_gemini_runtime() -> None:
+    """中立 contract の import が Gemini 依存を導入しないことを守る。"""
     backend_dir = Path(__file__).resolve().parents[3]
     script = """
 import sys

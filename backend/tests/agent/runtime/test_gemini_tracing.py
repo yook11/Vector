@@ -1,18 +1,25 @@
-"""GeminiAgentRuntime provider-attempt span contract tests."""
+"""GeminiAgentRuntime provider-attempt span 契約。
+
+SDK I/O だけを fake にし、span 生成と結果分類は production Runtime を通す。
+"""
 
 from __future__ import annotations
 
 import json
 from dataclasses import replace
 from types import SimpleNamespace
-from typing import Any
+from typing import cast
 from unittest.mock import MagicMock
 
 import pytest
+from google.genai.client import AsyncClient
 from logfire.testing import CaptureLogfire
 from opentelemetry.sdk.trace import ReadableSpan
 from opentelemetry.trace import SpanKind, StatusCode
 
+import app.agent.runtime.gemini as gemini_runtime_module
+from app.agent.runtime.contract import AgentResponseDefect, AgentResponseInvalidError
+from app.agent.runtime.gemini import GeminiAgentRuntime
 from app.analysis.ai_provider_errors import (
     AIProviderNetworkError,
     AIProviderOutputBlockedError,
@@ -24,75 +31,29 @@ from tests.agent.runtime._helpers import (
     ValidationProbeOutput,
     blocked_response,
     make_agent,
-    required_attribute,
-    required_module,
-    runtime_contract,
-    runtime_type,
     success_response,
 )
+from tests.agent.runtime._tracing_helpers import (
+    application_attribute_keys,
+    exception_events,
+    one_provider_attempt_span,
+    provider_attempt_spans,
+    span_text,
+)
 
-_SPAN_NAME = "agent_provider_call"
-_FRAMEWORK_PREFIXES = ("logfire.", "code.")
-_STANDARD_ATTRIBUTE_KEYS = {
-    "error.type",
-    "gen_ai.operation.name",
-    "gen_ai.provider.name",
-    "gen_ai.request.model",
-    "gen_ai.response.model",
-    "gen_ai.usage.input_tokens",
-    "gen_ai.usage.output_tokens",
-    "gen_ai.usage.cache_read.input_tokens",
-    "gen_ai.usage.reasoning.output_tokens",
-}
 _DEFAULT_MODEL_VISIBLE_SENTINELS = (
     "SYSTEM_INSTRUCTIONS_SENTINEL_5f21",
     "TASK_CONTENTS_SENTINEL_8a43",
 )
 
 
-def _runtime_spans(capfire: CaptureLogfire) -> list[ReadableSpan]:
-    return [
-        span
-        for span in capfire.exporter.exported_spans
-        if span.name == _SPAN_NAME
-        and (span.attributes or {}).get("logfire.span_type") == "span"
-    ]
-
-
-def _one_runtime_span(capfire: CaptureLogfire) -> ReadableSpan:
-    spans = _runtime_spans(capfire)
-    assert len(spans) == 1, f"expected one {_SPAN_NAME} span, got {len(spans)}"
-    return spans[0]
-
-
-def _application_attribute_keys(span: ReadableSpan) -> set[str]:
-    return {
-        key
-        for key in (span.attributes or {})
-        if not key.startswith(_FRAMEWORK_PREFIXES)
-        and key not in _STANDARD_ATTRIBUTE_KEYS
-    }
-
-
-def _span_text(span: ReadableSpan) -> str:
-    parts = [span.status.description or ""]
-    parts.extend(str(value) for value in (span.attributes or {}).values())
-    for event in span.events:
-        parts.extend(str(value) for value in (event.attributes or {}).values())
-    return "\n".join(parts)
-
-
-def _exception_events(span: ReadableSpan) -> list[Any]:
-    return [event for event in span.events if event.name == "exception"]
-
-
 def _assert_no_model_visible_text(
     span: ReadableSpan,
     *additional_sentinels: str,
 ) -> None:
-    span_text = _span_text(span)
+    observed_text = span_text(span)
     assert all(
-        sentinel not in span_text
+        sentinel not in observed_text
         for sentinel in (*_DEFAULT_MODEL_VISIBLE_SENTINELS, *additional_sentinels)
     )
 
@@ -110,6 +71,7 @@ def _full_usage() -> SimpleNamespace:
 async def test_success_span_is_client_with_allowlisted_attributes_and_no_text(
     capfire: CaptureLogfire,
 ) -> None:
+    """成功 span を許可属性だけの client span として本文を伏せる。"""
     model_output_sentinel = "MODEL_OUTPUT_SENTINEL_SUCCESS_83cd"
     agent = make_agent(
         name="trace_agent",
@@ -126,16 +88,16 @@ async def test_success_span_is_client_with_allowlisted_attributes_and_no_text(
         ]
     )
 
-    await runtime_type()(client=client).invoke(
+    await GeminiAgentRuntime(client=cast(AsyncClient, client)).invoke(
         agent,
         "INPUT_OBJECT_SENTINEL_648a",
         attempt_number=2,
     )
 
-    span = _one_runtime_span(capfire)
+    span = one_provider_attempt_span(capfire)
     attributes = dict(span.attributes or {})
     assert span.kind is SpanKind.CLIENT
-    assert _application_attribute_keys(span) == {
+    assert application_attribute_keys(span) == {
         "agent_name",
         "attempt_number",
         "prompt_version",
@@ -149,25 +111,26 @@ async def test_success_span_is_client_with_allowlisted_attributes_and_no_text(
     assert attributes["gen_ai.provider.name"] == "gcp.gemini"
     assert attributes["gen_ai.request.model"] == "gemini-trace-model"
     assert attributes["gen_ai.response.model"] == "gemini-trace-model"
-    assert "SYSTEM_INSTRUCTIONS_SENTINEL_TRACE_e96b" not in _span_text(span)
-    assert "TASK_CONTENTS_SENTINEL_TRACE_19a2" not in _span_text(span)
-    assert "INPUT_OBJECT_SENTINEL_648a" not in _span_text(span)
-    assert model_output_sentinel not in _span_text(span)
+    assert "SYSTEM_INSTRUCTIONS_SENTINEL_TRACE_e96b" not in span_text(span)
+    assert "TASK_CONTENTS_SENTINEL_TRACE_19a2" not in span_text(span)
+    assert "INPUT_OBJECT_SENTINEL_648a" not in span_text(span)
+    assert model_output_sentinel not in span_text(span)
     assert "run_id" not in attributes
 
 
 async def test_success_span_records_each_present_usage_field_once(
     capfire: CaptureLogfire,
 ) -> None:
+    """存在する各使用量を成功 span に一度ずつ記録する。"""
     client = FakeGeminiClient([success_response(usage_metadata=_full_usage())])
 
-    await runtime_type()(client=client).invoke(
+    await GeminiAgentRuntime(client=cast(AsyncClient, client)).invoke(
         make_agent(),
         "typed input",
         attempt_number=1,
     )
 
-    attributes = dict(_one_runtime_span(capfire).attributes or {})
+    attributes = dict(one_provider_attempt_span(capfire).attributes or {})
     assert attributes["gen_ai.usage.input_tokens"] == 11
     assert attributes["gen_ai.usage.output_tokens"] == 7
     assert attributes["gen_ai.usage.cache_read.input_tokens"] == 3
@@ -179,6 +142,7 @@ async def test_success_span_records_each_present_usage_field_once(
 async def test_missing_usage_fields_are_not_zero_filled(
     capfire: CaptureLogfire,
 ) -> None:
+    """未提供の使用量をゼロで補完せず欠損のまま扱う。"""
     usage = SimpleNamespace(
         prompt_token_count=13,
         candidates_token_count=None,
@@ -188,13 +152,13 @@ async def test_missing_usage_fields_are_not_zero_filled(
     )
     client = FakeGeminiClient([success_response(usage_metadata=usage)])
 
-    await runtime_type()(client=client).invoke(
+    await GeminiAgentRuntime(client=cast(AsyncClient, client)).invoke(
         make_agent(),
         "typed input",
         attempt_number=1,
     )
 
-    attributes = dict(_one_runtime_span(capfire).attributes or {})
+    attributes = dict(one_provider_attempt_span(capfire).attributes or {})
     assert attributes["gen_ai.usage.input_tokens"] == 13
     assert "gen_ai.usage.output_tokens" not in attributes
     assert "gen_ai.usage.cache_read.input_tokens" not in attributes
@@ -204,18 +168,19 @@ async def test_missing_usage_fields_are_not_zero_filled(
 async def test_blocked_response_records_usage_and_classified_error_span(
     capfire: CaptureLogfire,
 ) -> None:
+    """拒否応答でも使用量と分類済み安全 error span を残す。"""
     client = FakeGeminiClient(
         [blocked_response("SAFETY", usage_metadata=_full_usage())]
     )
 
     with pytest.raises(AIProviderOutputBlockedError):
-        await runtime_type()(client=client).invoke(
+        await GeminiAgentRuntime(client=cast(AsyncClient, client)).invoke(
             make_agent(),
             "typed input",
             attempt_number=1,
         )
 
-    span = _one_runtime_span(capfire)
+    span = one_provider_attempt_span(capfire)
     attributes = dict(span.attributes or {})
     assert attributes["result"] == "blocked"
     assert attributes["gen_ai.usage.input_tokens"] == 11
@@ -225,8 +190,8 @@ async def test_blocked_response_records_usage_and_classified_error_span(
     assert isinstance(attributes["error.type"], str)
     assert span.status.status_code is StatusCode.ERROR
     assert span.status.description in (None, "")
-    assert _exception_events(span) == []
-    assert _application_attribute_keys(span) == {
+    assert exception_events(span) == []
+    assert application_attribute_keys(span) == {
         "agent_name",
         "attempt_number",
         "prompt_version",
@@ -238,8 +203,7 @@ async def test_blocked_response_records_usage_and_classified_error_span(
 async def test_invalid_response_records_usage_before_classification(
     capfire: CaptureLogfire,
 ) -> None:
-    contract_module = runtime_contract()
-    error_type = required_attribute(contract_module, "AgentResponseInvalidError")
+    """不正応答でも使用量を安全な分類結果より先に残す。"""
     client = FakeGeminiClient(
         [
             FakeResponse(
@@ -249,14 +213,14 @@ async def test_invalid_response_records_usage_before_classification(
         ]
     )
 
-    with pytest.raises(error_type):
-        await runtime_type()(client=client).invoke(
+    with pytest.raises(AgentResponseInvalidError):
+        await GeminiAgentRuntime(client=cast(AsyncClient, client)).invoke(
             make_agent(),
             "typed input",
             attempt_number=1,
         )
 
-    span = _one_runtime_span(capfire)
+    span = one_provider_attempt_span(capfire)
     attributes = dict(span.attributes or {})
     assert attributes["result"] == "invalid_response"
     assert attributes["gen_ai.usage.input_tokens"] == 11
@@ -266,8 +230,8 @@ async def test_invalid_response_records_usage_before_classification(
     assert isinstance(attributes["error.type"], str)
     assert span.status.status_code is StatusCode.ERROR
     assert span.status.description in (None, "")
-    assert _exception_events(span) == []
-    assert _application_attribute_keys(span) == {
+    assert exception_events(span) == []
+    assert application_attribute_keys(span) == {
         "agent_name",
         "attempt_number",
         "prompt_version",
@@ -279,9 +243,7 @@ async def test_invalid_response_records_usage_before_classification(
 async def test_output_schema_mismatch_records_usage_and_safe_classified_span(
     capfire: CaptureLogfire,
 ) -> None:
-    contract_module = runtime_contract()
-    error_type = required_attribute(contract_module, "AgentResponseInvalidError")
-    defect_type = required_attribute(contract_module, "AgentResponseDefect")
+    """schema mismatch の使用量を残し本文なしの安全な span にする。"""
     model_output_sentinel = "MODEL_OUTPUT_SENTINEL_SCHEMA_MISMATCH_294c"
     payload = {
         "score": 0,
@@ -297,17 +259,17 @@ async def test_output_schema_mismatch_records_usage_and_safe_classified_span(
         ]
     )
 
-    with pytest.raises(error_type) as exc_info:
-        await runtime_type()(client=client).invoke(
+    with pytest.raises(AgentResponseInvalidError) as exc_info:
+        await GeminiAgentRuntime(client=cast(AsyncClient, client)).invoke(
             make_agent(output_type=ValidationProbeOutput),
             "typed input",
             attempt_number=1,
         )
 
-    span = _one_runtime_span(capfire)
+    span = one_provider_attempt_span(capfire)
     attributes = dict(span.attributes or {})
-    span_text = _span_text(span)
-    assert exc_info.value.defect is defect_type.OUTPUT_SCHEMA_MISMATCH
+    observed_span_text = span_text(span)
+    assert exc_info.value.defect is AgentResponseDefect.OUTPUT_SCHEMA_MISMATCH
     assert attributes["result"] == "invalid_response"
     assert isinstance(attributes["error.type"], str)
     assert attributes["gen_ai.usage.input_tokens"] == 11
@@ -316,8 +278,8 @@ async def test_output_schema_mismatch_records_usage_and_safe_classified_span(
     assert attributes["gen_ai.usage.reasoning.output_tokens"] == 2
     assert span.status.status_code is StatusCode.ERROR
     assert span.status.description in (None, "")
-    assert _exception_events(span) == []
-    assert _application_attribute_keys(span) == {
+    assert exception_events(span) == []
+    assert application_attribute_keys(span) == {
         "agent_name",
         "attempt_number",
         "prompt_version",
@@ -328,31 +290,32 @@ async def test_output_schema_mismatch_records_usage_and_safe_classified_span(
         model_output_sentinel,
         "ARBITRARY_CTX_SENTINEL_7c62",
     )
-    assert "Input should be" not in span_text
-    assert "errors.pydantic.dev" not in span_text
+    assert "Input should be" not in observed_span_text
+    assert "errors.pydantic.dev" not in observed_span_text
 
 
 async def test_classified_provider_error_has_no_usage_or_exception_event(
     capfire: CaptureLogfire,
 ) -> None:
+    """分類済み provider 障害では使用量と例外 event を記録しない。"""
     client = FakeGeminiClient([TimeoutError("PROVIDER_ERROR_SENTINEL_267e")])
 
     with pytest.raises(AIProviderNetworkError):
-        await runtime_type()(client=client).invoke(
+        await GeminiAgentRuntime(client=cast(AsyncClient, client)).invoke(
             make_agent(),
             "typed input",
             attempt_number=1,
         )
 
-    span = _one_runtime_span(capfire)
+    span = one_provider_attempt_span(capfire)
     attributes = dict(span.attributes or {})
     assert attributes["result"] == "provider_error"
     assert isinstance(attributes["error.type"], str)
     assert not any(key.startswith("gen_ai.usage.") for key in attributes)
     assert span.status.status_code is StatusCode.ERROR
     assert span.status.description in (None, "")
-    assert _exception_events(span) == []
-    assert _application_attribute_keys(span) == {
+    assert exception_events(span) == []
+    assert application_attribute_keys(span) == {
         "agent_name",
         "attempt_number",
         "prompt_version",
@@ -364,20 +327,21 @@ async def test_classified_provider_error_has_no_usage_or_exception_event(
 async def test_unclassified_error_keeps_redacted_exception_event_without_result(
     capfire: CaptureLogfire,
 ) -> None:
+    """未分類障害は秘匿した例外 event を残し結果を記録しない。"""
     install_exception_redaction()
     error = RuntimeError("UNCLASSIFIED_EXCEPTION_SENTINEL_a17f")
     client = FakeGeminiClient([error])
 
     with pytest.raises(RuntimeError) as exc_info:
-        await runtime_type()(client=client).invoke(
+        await GeminiAgentRuntime(client=cast(AsyncClient, client)).invoke(
             make_agent(),
             "typed input",
             attempt_number=1,
         )
 
-    span = _one_runtime_span(capfire)
+    span = one_provider_attempt_span(capfire)
     attributes = dict(span.attributes or {})
-    events = _exception_events(span)
+    events = exception_events(span)
     assert exc_info.value is error
     assert "result" not in attributes
     assert len(events) == 1
@@ -386,7 +350,7 @@ async def test_unclassified_error_keeps_redacted_exception_event_without_result(
     assert events[0].attributes["exception.stacktrace"] == "[redacted]"
     assert span.status.status_code is StatusCode.ERROR
     assert span.status.description == "[redacted]"
-    assert _application_attribute_keys(span) == {
+    assert application_attribute_keys(span) == {
         "agent_name",
         "attempt_number",
         "prompt_version",
@@ -397,13 +361,14 @@ async def test_unclassified_error_keeps_redacted_exception_event_without_result(
 async def test_sequential_invokes_do_not_carry_usage_between_spans(
     capfire: CaptureLogfire,
 ) -> None:
+    """連続試行の span 間で使用量を持ち越さない。"""
     client = FakeGeminiClient(
         [
             success_response(result="first", usage_metadata=_full_usage()),
             success_response(result="second", usage_metadata=None),
         ]
     )
-    runtime = runtime_type()(client=client)
+    runtime = GeminiAgentRuntime(client=cast(AsyncClient, client))
 
     await runtime.invoke(
         make_agent(name="first_agent", model_name="first-model"),
@@ -416,7 +381,7 @@ async def test_sequential_invokes_do_not_carry_usage_between_spans(
         attempt_number=2,
     )
 
-    spans = _runtime_spans(capfire)
+    spans = provider_attempt_spans(capfire)
     assert len(spans) == 2
     assert (spans[0].attributes or {})["gen_ai.usage.input_tokens"] == 11
     assert not any(
@@ -431,6 +396,7 @@ async def test_sequential_invokes_do_not_carry_usage_between_spans(
 async def test_renderer_failure_creates_no_provider_span(
     capfire: CaptureLogfire,
 ) -> None:
+    """入力描画で失敗した試行は provider span を生成しない。"""
     error = RuntimeError("RENDERER_FAILURE_SENTINEL_7a1d")
     client = FakeGeminiClient([success_response()])
     agent = make_agent()
@@ -444,19 +410,20 @@ async def test_renderer_failure_creates_no_provider_span(
     )
 
     with pytest.raises(RuntimeError):
-        await runtime_type()(client=client).invoke(
+        await GeminiAgentRuntime(client=cast(AsyncClient, client)).invoke(
             agent,
             "typed input",
             attempt_number=1,
         )
 
-    assert _runtime_spans(capfire) == []
+    assert provider_attempt_spans(capfire) == []
     client.models.generate_content.assert_not_awaited()
 
 
 async def test_config_failure_creates_no_provider_span(
     capfire: CaptureLogfire,
 ) -> None:
+    """config 構築で失敗した試行は provider span を生成しない。"""
     client = FakeGeminiClient([success_response()])
     agent = make_agent()
     agent = replace(
@@ -468,13 +435,13 @@ async def test_config_failure_creates_no_provider_span(
     )
 
     with pytest.raises((TypeError, ValueError)):
-        await runtime_type()(client=client).invoke(
+        await GeminiAgentRuntime(client=cast(AsyncClient, client)).invoke(
             agent,
             "typed input",
             attempt_number=1,
         )
 
-    assert _runtime_spans(capfire) == []
+    assert provider_attempt_spans(capfire) == []
     client.models.generate_content.assert_not_awaited()
 
 
@@ -482,12 +449,11 @@ async def test_non_gemini_agent_is_rejected_before_renderer_config_and_span(
     capfire: CaptureLogfire,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    runtime_module = required_module("app.agent.runtime.gemini")
-    gemini_runtime_type = required_attribute(runtime_module, "GeminiAgentRuntime")
+    """provider 不一致の agent は描画・config・span 作成前に拒否する。"""
     config_factory = MagicMock(
         side_effect=AssertionError("config must not be constructed")
     )
-    monkeypatch.setattr(runtime_module, "GenerateContentConfig", config_factory)
+    monkeypatch.setattr(gemini_runtime_module, "GenerateContentConfig", config_factory)
     renderer = MagicMock(return_value="contents must not be rendered")
     client = FakeGeminiClient([success_response()])
     agent = make_agent()
@@ -502,7 +468,7 @@ async def test_non_gemini_agent_is_rejected_before_renderer_config_and_span(
     )
 
     with pytest.raises(ValueError):
-        await gemini_runtime_type(client=client).invoke(
+        await GeminiAgentRuntime(client=cast(AsyncClient, client)).invoke(
             agent,
             "typed input",
             attempt_number=1,
@@ -510,7 +476,7 @@ async def test_non_gemini_agent_is_rejected_before_renderer_config_and_span(
 
     renderer.assert_not_called()
     config_factory.assert_not_called()
-    assert _runtime_spans(capfire) == []
+    assert provider_attempt_spans(capfire) == []
     client.models.generate_content.assert_not_awaited()
 
 
@@ -519,14 +485,15 @@ async def test_invalid_attempt_number_creates_no_provider_span(
     capfire: CaptureLogfire,
     attempt_number: int,
 ) -> None:
+    """非正の試行番号では provider span を生成しない。"""
     client = FakeGeminiClient([success_response()])
 
     with pytest.raises(ValueError):
-        await runtime_type()(client=client).invoke(
+        await GeminiAgentRuntime(client=cast(AsyncClient, client)).invoke(
             make_agent(),
             "typed input",
             attempt_number=attempt_number,
         )
 
-    assert _runtime_spans(capfire) == []
+    assert provider_attempt_spans(capfire) == []
     client.models.generate_content.assert_not_awaited()

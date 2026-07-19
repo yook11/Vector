@@ -214,6 +214,7 @@ class DeepSeekOutputBinding:
   usageをRuntime戻り値、draft、task reportへ同乗させず、phase / run spanへ複写しない。
 - attempt spanの独自attribute、GenAI標準attribute、分類済みresult / error契約はPR1の
   `GeminiAgentRuntime`と同じprovider-neutral規則を使う。
+- attempt spanの`prompt_version`はAgent宣言の固定versionを記録し、phase spanへ複写しない。
 - `ExternalSearchResearchRunner`はtaskごとにQuery / Selectorの`agent_phase`を1本ずつ作る。Query phaseは
   attempt 1を、Selector phaseはretryを含むattempt 1 / 2を同じphaseの子として包み、attemptごとにphaseを
   作り直さない。
@@ -221,8 +222,8 @@ class DeepSeekOutputBinding:
   non-negativeな`task_index`を持つ。`task_index`を`agent_provider_call`へ複写しない。
 - 後続sliceでexternal workflow policyを`AnsweringRunner`へ移すときは、span名、phase名、attribute、
   attemptとの親子関係を含むこのphase span契約もpolicyと一緒に移す。
-- span attribute、event、status descriptionへPrompt、query、candidate text、URL、selection本文、raw response、
-  Prompt versionを記録しない。
+- span attribute、event、status descriptionへPrompt本文、query、candidate text、URL、selection本文、raw responseを
+  記録しない。
 
 ### Non-goals
 
@@ -314,6 +315,7 @@ class DeepSeekOutputBinding:
 - response usageをparse / validation失敗時にもattempt spanへ記録し、他の戻り値・spanへ複写しない。
 - classified errorでは安全なresult / `error.type`だけを記録し、unclassified errorの自由文は既存export
   redactionを維持する。
+- provider attemptだけがAgent宣言の固定`prompt_version`を持ち、phaseへ複写しない。
 - attribute、event、status descriptionを含むspan全面にmodel-visible sentinelが存在しない。
 
 ## 確定した実装境界
