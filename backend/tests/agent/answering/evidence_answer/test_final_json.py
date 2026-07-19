@@ -4,9 +4,9 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from importlib import import_module
-from typing import cast
 
 import pytest
+from pydantic import BaseModel
 
 from app.agent.answering.evidence_answer.contract import (
     EvidenceAnswerDraftGenerationInvalidError,
@@ -18,7 +18,9 @@ _NOT_OBJECT = "evidence_answer_response_gemini_not_object"
 _DUPLICATE_TOP_LEVEL = "evidence_answer_response_duplicate_top_level_key"
 
 
-def _parser() -> Callable[[str], RawEvidenceAnswerDraft]:
+def _parser(
+    output_type: type[BaseModel] = RawEvidenceAnswerDraft,
+) -> Callable[[str], BaseModel]:
     try:
         module = import_module("app.agent.answering.evidence_answer.final_json")
     except ModuleNotFoundError as exc:
@@ -28,7 +30,11 @@ def _parser() -> Callable[[str], RawEvidenceAnswerDraft]:
 
     parser = getattr(module, "parse_evidence_answer_final_json", None)
     assert parser is not None, "parse_evidence_answer_final_json が未実装です"
-    return cast("Callable[[str], RawEvidenceAnswerDraft]", parser)
+
+    def parse(raw_json: str) -> BaseModel:
+        return parser(raw_json, output_type=output_type)
+
+    return parse
 
 
 def test_valid_root_object_becomes_existing_raw_draft() -> None:
@@ -105,3 +111,13 @@ def test_nested_duplicate_keys_are_outside_this_parser_rejection_scope() -> None
         cited_refs=[],
         missing_aspects=["一次情報"],
     )
+
+
+def test_parser_uses_the_declared_output_type_as_validation_target() -> None:
+    class DeclaredOutput(BaseModel):
+        marker: str
+
+    parsed = _parser(DeclaredOutput)('{"marker":"DECLARED_OUTPUT_SENTINEL"}')
+
+    assert type(parsed) is DeclaredOutput
+    assert parsed.marker == "DECLARED_OUTPUT_SENTINEL"

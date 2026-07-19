@@ -13,6 +13,8 @@ from typing import TYPE_CHECKING
 from pydantic import SecretStr
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from app.agent.answering.direct_answer.agent import DIRECT_ANSWER_AGENT
+from app.agent.answering.evidence_answer.agent import EVIDENCE_ANSWER_AGENT
 from app.agent.contract import (
     AnswerDeltaReporter,
     AnswerEventReporter,
@@ -27,7 +29,6 @@ from app.agent.planning.agent import QUESTION_PLANNER_AGENT
 from app.agent.question_context.agent import QUESTION_CONTEXT_AGENT
 from app.agent.question_context.service import QuestionContextService
 from app.agent.running import AnsweringPhases, AnsweringRunner
-from app.agent.runtime.contract import AgentRuntime
 from app.analysis.ai_provider_errors import (
     AIProviderConfigurationError,
 )
@@ -38,6 +39,7 @@ if TYPE_CHECKING:
     from app.agent.evidence_collection.external_search.service import (
         ExternalSearchService,
     )
+    from app.agent.runtime.gemini import GeminiAgentRuntime
 
 
 def ensure_external_search_configured() -> None:
@@ -49,7 +51,7 @@ def ensure_external_search_configured() -> None:
 
 
 @asynccontextmanager
-async def activate_gemini_agent_runtime() -> AsyncIterator[AgentRuntime]:
+async def activate_gemini_agent_runtime() -> AsyncIterator[GeminiAgentRuntime]:
     api_key = settings.gemini_api_key.get_secret_value()
     if not api_key:
         from app.analysis.gemini_error_translator import GeminiStateReason
@@ -74,13 +76,7 @@ def _build_answering_phases(
 ) -> AnsweringPhases:
     ensure_external_search_configured()
 
-    from app.agent.answering.direct_answer.ai.gemini import (
-        GeminiDirectAnswerGenerator,
-    )
     from app.agent.answering.direct_answer.flow import DirectAnswerFlow
-    from app.agent.answering.evidence_answer.ai.gemini import (
-        GeminiEvidenceAnswerDraftGenerator,
-    )
     from app.agent.answering.evidence_answer.flow import EvidenceAnswerFlow
     from app.agent.evidence_collection import EvidenceCollectionService
     from app.agent.evidence_collection.internal_search.ai.gemini import (
@@ -111,12 +107,14 @@ def _build_answering_phases(
             requested_external_agent_count=None,
         ),
         direct_answerer=DirectAnswerFlow(
-            generator=GeminiDirectAnswerGenerator(),
+            agent=DIRECT_ANSWER_AGENT,
+            runtime_scope_factory=activate_gemini_agent_runtime,
             delta_reporter=delta_reporter,
             continuation=continuation,
         ),
         evidence_answerer=EvidenceAnswerFlow(
-            generator=GeminiEvidenceAnswerDraftGenerator(),
+            agent=EVIDENCE_ANSWER_AGENT,
+            runtime_scope_factory=activate_gemini_agent_runtime,
             delta_reporter=delta_reporter,
             continuation=continuation,
         ),

@@ -1,1 +1,0 @@
-"""Direct answer AI adapters."""

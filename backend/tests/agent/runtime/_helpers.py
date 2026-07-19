@@ -3,16 +3,19 @@
 from __future__ import annotations
 
 import json
+from collections.abc import AsyncIterator, Mapping
 from dataclasses import dataclass, field
 from importlib import import_module
 from types import ModuleType, SimpleNamespace
-from typing import Any
+from typing import Any, cast
 from unittest.mock import AsyncMock
 
 import pytest
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from app.agent.agent import Agent, AgentPrompt, ModelSettings, ModelTarget
+
+_DEFAULT_RESPONSE_SCHEMA = object()
 
 
 class RuntimeOutput(BaseModel):
@@ -45,9 +48,15 @@ class FakeResponse:
 class FakeGeminiClient:
     """外部 I/O 境界だけを差し替え、span は runtime の責務として生成しない。"""
 
-    def __init__(self, responses: list[FakeResponse | BaseException]) -> None:
+    def __init__(
+        self,
+        responses: list[FakeResponse | BaseException],
+        *,
+        streams: list[AsyncIterator[object] | BaseException] | None = None,
+    ) -> None:
         self.models = SimpleNamespace(
             generate_content=AsyncMock(side_effect=responses),
+            generate_content_stream=AsyncMock(side_effect=streams or []),
         )
         self.close = AsyncMock()
         self.aclose = AsyncMock()
@@ -84,7 +93,23 @@ def make_agent(
     temperature: float | None = 0.25,
     max_output_tokens: int | None = 321,
     output_type: type[BaseModel] = RuntimeOutput,
+    response_schema: Mapping[str, Any] | None | object = _DEFAULT_RESPONSE_SCHEMA,
 ) -> Agent[Any, Any]:
+    declared_schema = (
+        {
+            "type": "OBJECT",
+            "required": ["result", "tags"],
+            "properties": {
+                "result": {"type": "STRING"},
+                "tags": {
+                    "type": "ARRAY",
+                    "items": {"type": "STRING"},
+                },
+            },
+        }
+        if response_schema is _DEFAULT_RESPONSE_SCHEMA
+        else cast(Mapping[str, Any] | None, response_schema)
+    )
     return Agent(
         name=name,
         prompt=AgentPrompt(
@@ -98,17 +123,7 @@ def make_agent(
             max_output_tokens=max_output_tokens,
         ),
         output_type=output_type,
-        response_schema={
-            "type": "OBJECT",
-            "required": ["result", "tags"],
-            "properties": {
-                "result": {"type": "STRING"},
-                "tags": {
-                    "type": "ARRAY",
-                    "items": {"type": "STRING"},
-                },
-            },
-        },
+        response_schema=declared_schema,
     )
 
 

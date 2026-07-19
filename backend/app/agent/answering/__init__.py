@@ -5,16 +5,16 @@ from app.agent.answering.direct_answer.contract import (
     AnswerGenerationStopped,
     DirectAnswerDraft,
     DirectAnswerer,
-    DirectAnswerGenerator,
+    DirectAnswerInput,
     DirectAnswerInvalidError,
 )
 from app.agent.answering.direct_answer.flow import DirectAnswerFlow
 from app.agent.answering.evidence_answer.contract import (
     EvidenceAnswerDraft,
     EvidenceAnswerDraftGenerationInvalidError,
-    EvidenceAnswerDraftGenerator,
     EvidenceAnswerDraftInvalidError,
     EvidenceAnswerer,
+    EvidenceAnswerInput,
     EvidenceAnswerSufficiency,
     RawEvidenceAnswerDraft,
 )
@@ -30,12 +30,12 @@ __all__ = [
     "AnswerEvidenceItem",
     "DirectAnswerDraft",
     "DirectAnswerer",
-    "DirectAnswerGenerator",
+    "DirectAnswerInput",
     "DirectAnswerInvalidError",
     "DirectAnswerFlow",
     "EvidenceAnswerDraft",
     "EvidenceAnswerDraftGenerationInvalidError",
-    "EvidenceAnswerDraftGenerator",
+    "EvidenceAnswerInput",
     "EvidenceAnswerDraftInvalidError",
     "EvidenceAnswerer",
     "EvidenceAnswerFlow",

@@ -13,16 +13,17 @@ from uuid import uuid4
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from app.agent.answering.contract import AnsweringRequest
-from app.agent.answering.direct_answer.ai.gemini import GeminiDirectAnswerGenerator
+from app.agent.answering.direct_answer.agent import DIRECT_ANSWER_AGENT
 from app.agent.answering.direct_answer.contract import DirectAnswerDraft
 from app.agent.answering.direct_answer.flow import DirectAnswerFlow
-from app.agent.answering.evidence_answer.ai.gemini import (
-    GeminiEvidenceAnswerDraftGenerator,
-)
+from app.agent.answering.evidence_answer.agent import EVIDENCE_ANSWER_AGENT
 from app.agent.answering.evidence_answer.contract import EvidenceAnswerDraft
 from app.agent.answering.evidence_answer.evidence import AnswerEvidenceItem
 from app.agent.answering.evidence_answer.flow import EvidenceAnswerFlow
-from app.agent.composition import build_external_search_service
+from app.agent.composition import (
+    activate_gemini_agent_runtime,
+    build_external_search_service,
+)
 from app.agent.contract import AnswerQuestionResult, AnswerSource
 from app.agent.evidence_collection import (
     EvidenceCollectionOutcome,
@@ -219,7 +220,8 @@ async def _probe_external(
             planner=_FixedExternalPlanner(plan),
             evidence_collector=evidence_collector,
             evidence_answerer=EvidenceAnswerFlow(
-                generator=GeminiEvidenceAnswerDraftGenerator(),
+                agent=EVIDENCE_ANSWER_AGENT,
+                runtime_scope_factory=activate_gemini_agent_runtime,
             ),
             direct_answerer=_UnreachableDirectAnswerer(),
         ),
@@ -260,7 +262,8 @@ async def _probe_direct(*, question: str) -> None:
             evidence_collector=_UnreachableEvidenceCollector(),
             evidence_answerer=_UnreachableEvidenceAnswerer(),
             direct_answerer=DirectAnswerFlow(
-                generator=GeminiDirectAnswerGenerator(),
+                agent=DIRECT_ANSWER_AGENT,
+                runtime_scope_factory=activate_gemini_agent_runtime,
             ),
         ),
     )

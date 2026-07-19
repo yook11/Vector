@@ -5,6 +5,9 @@ from app.agent.runtime.contract import (
     AgentResponseInvalidError,
     AgentRuntime,
     AgentRuntimeScopeFactory,
+    AgentTextStream,
+    StreamingAgentRuntime,
+    StreamingAgentRuntimeScopeFactory,
 )
 
 __all__ = [
@@ -12,4 +15,7 @@ __all__ = [
     "AgentResponseInvalidError",
     "AgentRuntime",
     "AgentRuntimeScopeFactory",
+    "AgentTextStream",
+    "StreamingAgentRuntime",
+    "StreamingAgentRuntimeScopeFactory",
 ]

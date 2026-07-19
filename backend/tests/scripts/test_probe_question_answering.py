@@ -34,6 +34,8 @@ def test_probe_uses_answering_runner_phases_and_composition_service_builder() ->
         "build_question_answering_starting_agent",
         "build_question_answering_agent",
         "starting_agent",
+        "GeminiDirectAnswerGenerator",
+        "GeminiEvidenceAnswerDraftGenerator",
     }
 
     assert (
@@ -62,4 +64,16 @@ def test_probe_uses_answering_runner_phases_and_composition_service_builder() ->
             "TavilyExternalSearchTool",
             "make_safe_async_client",
         }.isdisjoint(imported_names),
-    ) == (True, True, True, True, True)
+        {
+            "DIRECT_ANSWER_AGENT",
+            "EVIDENCE_ANSWER_AGENT",
+            "activate_gemini_agent_runtime",
+        }
+        <= imported_names,
+        {
+            "DIRECT_ANSWER_AGENT",
+            "EVIDENCE_ANSWER_AGENT",
+            "activate_gemini_agent_runtime",
+        }
+        <= loaded_names,
+    ) == (True, True, True, True, True, True, True)

@@ -2,13 +2,12 @@
 
 from __future__ import annotations
 
-from collections.abc import AsyncIterator
-
 from app.agent.contract import (
     AnswerDeltaReporter,
     AnswerGenerationContinuation,
     AnswerGenerationStopped,
 )
+from app.agent.runtime.contract import AgentTextStream
 
 __all__ = [
     "BestEffortAnswerDeltaReporter",
@@ -67,7 +66,7 @@ async def ensure_answer_generation_continues(
         raise AnswerGenerationStopped
 
 
-async def close_answer_stream(stream: AsyncIterator[str] | None) -> None:
+async def close_answer_stream(stream: AgentTextStream | None) -> None:
     """Close a generator stream without letting cleanup failures escape."""
 
     if stream is None:

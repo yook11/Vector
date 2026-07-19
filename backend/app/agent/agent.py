@@ -42,7 +42,7 @@ class Agent[InputT, OutputT]:
     model: ModelTarget
     model_settings: ModelSettings
     output_type: type[OutputT]
-    response_schema: Mapping[str, Any]
+    response_schema: Mapping[str, Any] | None
 
     def __post_init__(self) -> None:
         object.__setattr__(

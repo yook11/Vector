@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from contextlib import AbstractAsyncContextManager
 from enum import StrEnum
-from typing import Protocol
+from typing import Protocol, Self
 
 from app.agent.agent import Agent
 
@@ -13,6 +13,9 @@ __all__ = [
     "AgentResponseInvalidError",
     "AgentRuntime",
     "AgentRuntimeScopeFactory",
+    "AgentTextStream",
+    "StreamingAgentRuntime",
+    "StreamingAgentRuntimeScopeFactory",
 ]
 
 
@@ -32,6 +35,34 @@ class AgentRuntimeScopeFactory(Protocol):
     """Provider resource scopeをRuntimeとして貸し出すfactory。"""
 
     def __call__(self) -> AbstractAsyncContextManager[AgentRuntime]: ...
+
+
+class AgentTextStream(Protocol):
+    """Runtimeが貸し出すclose可能なmodel text fragment列。"""
+
+    def __aiter__(self) -> Self: ...
+
+    async def __anext__(self) -> str: ...
+
+    async def aclose(self) -> None: ...
+
+
+class StreamingAgentRuntime(Protocol):
+    """Agent宣言から1 provider streamを開始できるattempt境界。"""
+
+    def invoke_stream[InputT, OutputT](
+        self,
+        agent: Agent[InputT, OutputT],
+        input: InputT,
+        *,
+        attempt_number: int,
+    ) -> AgentTextStream: ...
+
+
+class StreamingAgentRuntimeScopeFactory(Protocol):
+    """Provider resource scopeをStreaming Runtimeとして貸し出すfactory。"""
+
+    def __call__(self) -> AbstractAsyncContextManager[StreamingAgentRuntime]: ...
 
 
 class AgentResponseDefect(StrEnum):

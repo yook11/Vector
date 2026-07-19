@@ -2,16 +2,22 @@
 
 from __future__ import annotations
 
-from collections.abc import AsyncIterator
+from collections.abc import Iterator
+from contextlib import contextmanager
+from typing import Any
 
+import logfire
+from opentelemetry.trace import StatusCode
 from pydantic import ValidationError
 
+from app.agent.agent import Agent
 from app.agent.answering.contract import AnsweringRequest
 from app.agent.answering.evidence_answer.contract import (
     EvidenceAnswerDraft,
     EvidenceAnswerDraftGenerationInvalidError,
-    EvidenceAnswerDraftGenerator,
     EvidenceAnswerDraftInvalidError,
+    EvidenceAnswerInput,
+    RawEvidenceAnswerDraft,
 )
 from app.agent.answering.evidence_answer.evidence import AnswerEvidenceItem
 from app.agent.answering.evidence_answer.final_json import (
@@ -38,6 +44,12 @@ from app.agent.answering.metrics import record_answer_synthesis_outcome
 from app.agent.contract import (
     AnswerDeltaReporter,
     AnswerGenerationContinuation,
+    AnswerGenerationStopped,
+)
+from app.agent.runtime.contract import (
+    AgentTextStream,
+    StreamingAgentRuntime,
+    StreamingAgentRuntimeScopeFactory,
 )
 from app.analysis.ai_provider_errors import AIProviderError
 
@@ -49,6 +61,7 @@ _FALLBACK_ANSWER = (
 )
 _FALLBACK_MISSING_ASPECT = "回答生成に必要な根拠または応答形式が不足しました"
 _MAX_ATTEMPTS = 2
+_PHASE_SPAN_NAME = "agent_phase"
 _EVIDENCE_ANSWER_CLASSIFIED_ERRORS = (
     AIProviderError,
     EvidenceAnswerDraftGenerationInvalidError,
@@ -63,11 +76,13 @@ class EvidenceAnswerFlow:
     def __init__(
         self,
         *,
-        generator: EvidenceAnswerDraftGenerator,
+        agent: Agent[EvidenceAnswerInput, RawEvidenceAnswerDraft],
+        runtime_scope_factory: StreamingAgentRuntimeScopeFactory,
         delta_reporter: AnswerDeltaReporter | None = None,
         continuation: AnswerGenerationContinuation | None = None,
     ) -> None:
-        self._generator = generator
+        self._agent = agent
+        self._runtime_scope_factory = runtime_scope_factory
         self._delta = BestEffortAnswerDeltaReporter(delta_reporter)
         self._continuation = continuation
 
@@ -80,73 +95,81 @@ class EvidenceAnswerFlow:
     ) -> EvidenceAnswerDraft:
         """Return a valid draft, retrying classified response-boundary failures."""
 
-        previous_error: str | None = None
+        with _evidence_answer_phase(self._agent.name):
+            async with self._runtime_scope_factory() as runtime:
+                previous_error: str | None = None
 
-        for attempt_number in range(1, _MAX_ATTEMPTS + 1):
-            try:
-                draft = await self._generate_strict_draft(
-                    request=request,
-                    evidence=evidence,
-                    target_time_window=target_time_window,
-                    previous_error=previous_error,
-                    generation=attempt_number,
-                )
-            except _EVIDENCE_ANSWER_CLASSIFIED_ERRORS as exc:
-                failure = classify_answer_synthesis_failure(exc)
-                retriable = (
-                    failure.request_retry_disposition
-                    is RequestRetryDisposition.RETRY_IN_REQUEST
-                    and attempt_number < _MAX_ATTEMPTS
-                )
-                if not retriable:
-                    return await self._fallback(
-                        generation=attempt_number + 1,
-                        retry_used=attempt_number > 1,
-                        failure=failure,
+                for attempt_number in range(1, _MAX_ATTEMPTS + 1):
+                    try:
+                        draft = await self._generate_strict_draft(
+                            runtime=runtime,
+                            request=request,
+                            evidence=evidence,
+                            target_time_window=target_time_window,
+                            previous_error=previous_error,
+                            attempt_number=attempt_number,
+                        )
+                    except _EVIDENCE_ANSWER_CLASSIFIED_ERRORS as exc:
+                        failure = classify_answer_synthesis_failure(exc)
+                        retriable = (
+                            failure.request_retry_disposition
+                            is RequestRetryDisposition.RETRY_IN_REQUEST
+                            and attempt_number < _MAX_ATTEMPTS
+                        )
+                        if not retriable:
+                            return await self._fallback(
+                                generation=attempt_number + 1,
+                                retry_used=attempt_number > 1,
+                                failure=failure,
+                            )
+                        await self._start_revision(generation=attempt_number + 1)
+                        previous_error = str(exc)
+                        continue
+
+                    synthesized_status = (
+                        "insufficient"
+                        if draft.unfulfilled_requirement_ids
+                        else draft.sufficiency
                     )
-                await self._start_revision(generation=attempt_number + 1)
-                previous_error = str(exc)
-                continue
-
-            synthesized_status = (
-                "insufficient"
-                if draft.unfulfilled_requirement_ids
-                else draft.sufficiency
-            )
-            record_answer_synthesis_outcome(
-                result="synthesized",
-                retry_used=attempt_number > 1,
-                status=synthesized_status,
-                fallback_used=False,
-            )
-            return draft
+                    record_answer_synthesis_outcome(
+                        result="synthesized",
+                        retry_used=attempt_number > 1,
+                        status=synthesized_status,
+                        fallback_used=False,
+                    )
+                    return draft
 
         raise AssertionError("unreachable: answer loop must return or raise")
 
     async def _generate_strict_draft(
         self,
         *,
+        runtime: StreamingAgentRuntime,
         request: AnsweringRequest,
         evidence: list[AnswerEvidenceItem],
         target_time_window: str | None,
         previous_error: str | None,
-        generation: int,
+        attempt_number: int,
     ) -> EvidenceAnswerDraft:
-        stream: AsyncIterator[str] | None = None
+        stream: AgentTextStream | None = None
         extractor = IncrementalJsonAnswerExtractor()
         raw_fragments: list[str] = []
         try:
             async with LiveAnswerDraftSession(
-                generation=generation,
+                generation=attempt_number,
                 delta_reporter=self._delta,
             ) as live_draft:
                 await ensure_answer_generation_continues(self._continuation)
 
-                stream = self._generator.stream(
-                    request=request,
-                    evidence=evidence,
-                    target_time_window=target_time_window,
-                    previous_error=previous_error,
+                stream = runtime.invoke_stream(
+                    self._agent,
+                    EvidenceAnswerInput(
+                        request=request,
+                        evidence=tuple(evidence),
+                        target_time_window=target_time_window,
+                        previous_error=previous_error,
+                    ),
+                    attempt_number=attempt_number,
                 )
                 async for raw_fragment in stream:
                     await ensure_answer_generation_continues(self._continuation)
@@ -158,7 +181,10 @@ class EvidenceAnswerFlow:
                 await ensure_answer_generation_continues(self._continuation)
                 extractor.finish()
 
-                raw = parse_evidence_answer_final_json("".join(raw_fragments))
+                raw = parse_evidence_answer_final_json(
+                    "".join(raw_fragments),
+                    output_type=self._agent.output_type,
+                )
                 requirement_ids = [
                     requirement.requirement_id
                     for requirements in (
@@ -206,3 +232,26 @@ class EvidenceAnswerFlow:
             failure_code=failure.code,
         )
         return fallback
+
+
+@contextmanager
+def _evidence_answer_phase(agent_name: str) -> Iterator[None]:
+    stopped: AnswerGenerationStopped | None = None
+    with logfire.span(
+        _PHASE_SPAN_NAME,
+        phase="evidence_answer",
+        agent_name=agent_name,
+    ) as span:
+        try:
+            yield
+        except AnswerGenerationStopped as exc:
+            stopped = exc
+        except BaseException:
+            _record_unclassified_phase_error(span)
+            raise
+    if stopped is not None:
+        raise stopped
+
+
+def _record_unclassified_phase_error(span: Any) -> None:
+    span.set_status(StatusCode.ERROR, "unclassified agent phase error")

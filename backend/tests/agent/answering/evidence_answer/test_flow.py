@@ -4,12 +4,15 @@ from __future__ import annotations
 
 import json
 from collections.abc import AsyncIterator, Sequence
+from contextlib import asynccontextmanager
+from dataclasses import replace
 from datetime import UTC, datetime
 from importlib import import_module
-from typing import Any
+from typing import Any, ClassVar
 
 import pytest
 from logfire.testing import CaptureLogfire
+from pydantic import model_validator
 
 from app.agent.answering.contract import AnsweringRequest
 from app.agent.answering.evidence_answer.contract import (
@@ -23,8 +26,14 @@ from app.agent.contract import ExternalUrlSource
 from app.agent.question_context.contract import AnswerRequirement, QuestionContext
 from app.analysis.ai_provider_errors import AIProviderError, AIProviderNetworkError
 from tests.logfire._metric_helpers import collected_metrics, sum_counter_for_result
+from tests.logfire._span_helpers import (
+    domain_attr_keys,
+    exception_event,
+    one_span_named,
+)
 
 _SYNTHESIS_OUTCOME_METRIC = "vector.agent.answer_synthesis.outcome"
+_PHASE_SPAN_NAME = "agent_phase"
 
 
 def _as_of() -> datetime:
@@ -109,7 +118,13 @@ StreamOutcome = RawEvidenceAnswerDraft | str | Sequence[str] | Exception
 
 
 class FakeEvidenceAnswerStream:
-    def __init__(self, outcome: StreamOutcome) -> None:
+    def __init__(
+        self,
+        outcome: StreamOutcome,
+        *,
+        attempt_number: int,
+        events: list[str],
+    ) -> None:
         if isinstance(outcome, Exception):
             self._items: list[str | Exception] = [outcome]
         elif isinstance(outcome, RawEvidenceAnswerDraft):
@@ -120,7 +135,10 @@ class FakeEvidenceAnswerStream:
             self._items = [outcome]
         else:
             self._items = list(outcome)
+        self._attempt_number = attempt_number
+        self._events = events
         self.closed = False
+        self.close_calls = 0
 
     def __aiter__(self) -> FakeEvidenceAnswerStream:
         return self
@@ -134,38 +152,56 @@ class FakeEvidenceAnswerStream:
         return item
 
     async def aclose(self) -> None:
+        self.close_calls += 1
         self.closed = True
+        self._events.append(f"stream_close:{self._attempt_number}")
 
 
 class FakeGenerator:
-    model_name = "fake-answer-model"
-    prompt_version = "fake0001"
-
     def __init__(self, outcomes: Sequence[StreamOutcome]) -> None:
         self._outcomes = list(outcomes)
         self.calls: list[dict[str, Any]] = []
         self.streams: list[FakeEvidenceAnswerStream] = []
+        self.scope_enters = 0
+        self.scope_exits = 0
+        self.events: list[str] = []
 
-    def stream(
+    def invoke_stream(
         self,
+        agent: object,
+        input: object,
         *,
-        request: AnsweringRequest,
-        evidence: list[AnswerEvidenceItem],
-        target_time_window: str | None,
-        previous_error: str | None = None,
+        attempt_number: int,
     ) -> AsyncIterator[str]:
+        self.events.append(f"invoke:{attempt_number}")
         self.calls.append(
             {
-                "request": request,
-                "evidence": evidence,
-                "target_time_window": target_time_window,
-                "previous_error": previous_error,
+                "agent": agent,
+                "request": input.request,
+                "evidence": input.evidence,
+                "target_time_window": input.target_time_window,
+                "previous_error": input.previous_error,
+                "attempt_number": attempt_number,
             }
         )
         outcome = self._outcomes.pop(0)
-        stream = FakeEvidenceAnswerStream(outcome)
+        stream = FakeEvidenceAnswerStream(
+            outcome,
+            attempt_number=attempt_number,
+            events=self.events,
+        )
         self.streams.append(stream)
         return stream
+
+    @asynccontextmanager
+    async def activate(self) -> AsyncIterator[FakeGenerator]:
+        self.scope_enters += 1
+        self.events.append("scope_enter")
+        try:
+            yield self
+        finally:
+            self.scope_exits += 1
+            self.events.append("scope_exit")
 
 
 class RecordingDeltaReporter:
@@ -222,6 +258,13 @@ def _answer_generation_stopped_type() -> type[BaseException]:
     return stopped_type
 
 
+def _evidence_answer_agent() -> object:
+    agent_module = import_module("app.agent.answering.evidence_answer.agent")
+    agent = getattr(agent_module, "EVIDENCE_ANSWER_AGENT", None)
+    assert agent is not None, "EVIDENCE_ANSWER_AGENT が未実装です"
+    return agent
+
+
 async def _answer(
     generator: FakeGenerator,
     *,
@@ -230,7 +273,10 @@ async def _answer(
     continuation: SequenceContinuation | None = None,
     request: AnsweringRequest | None = None,
 ) -> EvidenceAnswerDraft:
-    flow_kwargs: dict[str, Any] = {"generator": generator}
+    flow_kwargs: dict[str, Any] = {
+        "agent": _evidence_answer_agent(),
+        "runtime_scope_factory": generator.activate,
+    }
     if delta_reporter is not None:
         flow_kwargs["delta_reporter"] = delta_reporter
     if continuation is not None:
@@ -255,7 +301,9 @@ def _metric_attributes(
 
 
 @pytest.mark.asyncio
-async def test_valid_raw_draft_passes_through_unchanged() -> None:
+async def test_valid_raw_draft_passes_through_unchanged(
+    capfire: CaptureLogfire,
+) -> None:
     generator = FakeGenerator([_raw(cited_refs=["1"])])
 
     draft = await _answer(generator)
@@ -266,6 +314,51 @@ async def test_valid_raw_draft_passes_through_unchanged() -> None:
         cited_refs=["1"],
     )
     assert generator.calls[0]["previous_error"] is None
+    assert generator.calls[0]["agent"] is _evidence_answer_agent()
+    assert generator.calls[0]["evidence"] == (_evidence(),)
+    assert generator.calls[0]["attempt_number"] == 1
+    assert generator.streams[0].close_calls == 1
+    assert (generator.scope_enters, generator.scope_exits) == (1, 1)
+    assert generator.events == [
+        "scope_enter",
+        "invoke:1",
+        "stream_close:1",
+        "scope_exit",
+    ]
+    phase = one_span_named(capfire, _PHASE_SPAN_NAME)
+    assert domain_attr_keys(phase["attributes"]) == {"phase", "agent_name"}
+    assert phase["attributes"]["phase"] == "evidence_answer"
+    assert phase["attributes"]["agent_name"] == "evidence_answer"
+    assert exception_event(phase) is None
+
+
+@pytest.mark.asyncio
+async def test_flow_uses_agent_output_type_for_final_json_validation() -> None:
+    class DeclaredRawDraft(RawEvidenceAnswerDraft):
+        validation_calls: ClassVar[int] = 0
+
+        @model_validator(mode="after")
+        def _record_declared_validation(self) -> DeclaredRawDraft:
+            type(self).validation_calls += 1
+            return self
+
+    generator = FakeGenerator([_raw()])
+    declared_agent = replace(
+        _evidence_answer_agent(),
+        output_type=DeclaredRawDraft,
+    )
+
+    draft = await EvidenceAnswerFlow(
+        agent=declared_agent,
+        runtime_scope_factory=generator.activate,
+    ).answer(
+        request=_request(),
+        evidence=[_evidence()],
+        target_time_window="今日",
+    )
+
+    assert draft.answer == "根拠から確認できます。[[1]]"
+    assert DeclaredRawDraft.validation_calls == 1
 
 
 @pytest.mark.asyncio
@@ -728,6 +821,41 @@ async def test_unexpected_exception_propagates_without_fallback(
 
 
 @pytest.mark.asyncio
+async def test_runtime_scope_activation_failure_is_not_attempt_fallback(
+    capfire: CaptureLogfire,
+) -> None:
+    failure = RuntimeError("runtime scope unavailable")
+    reporter = RecordingDeltaReporter()
+
+    @asynccontextmanager
+    async def failing_scope() -> AsyncIterator[object]:
+        raise failure
+        yield object()
+
+    flow = EvidenceAnswerFlow(
+        agent=_evidence_answer_agent(),
+        runtime_scope_factory=failing_scope,
+        delta_reporter=reporter,
+    )
+
+    with pytest.raises(RuntimeError) as exc_info:
+        await flow.answer(
+            request=_request(),
+            evidence=[_evidence()],
+            target_time_window="今日",
+        )
+
+    phase = one_span_named(capfire, _PHASE_SPAN_NAME)
+    assert exc_info.value is failure
+    assert reporter.operations == []
+    assert (
+        _metric_attributes(collected_metrics(capfire), _SYNTHESIS_OUTCOME_METRIC) == []
+    )
+    assert exception_event(phase) is not None
+    assert domain_attr_keys(phase["attributes"]) == {"phase", "agent_name"}
+
+
+@pytest.mark.asyncio
 async def test_outcome_metric_records_synthesized_once(
     capfire: CaptureLogfire,
 ) -> None:
@@ -827,10 +955,12 @@ async def test_stream_displays_only_filtered_root_answer_for_generation_one() ->
     assert "missing_aspects" not in visible
     assert generator.calls == [
         {
+            "agent": _evidence_answer_agent(),
             "request": _request(),
-            "evidence": [_evidence()],
+            "evidence": (_evidence(),),
             "target_time_window": "今日",
             "previous_error": None,
+            "attempt_number": 1,
         }
     ]
     assert generator.streams[0].closed is True
@@ -893,6 +1023,7 @@ async def test_final_json_boundary_retries_then_falls_back_with_failure_code(
     assert draft.sufficiency == "insufficient"
     assert len(generator.calls) == 2
     assert all(stream.closed for stream in generator.streams)
+    assert [stream.close_calls for stream in generator.streams] == [1, 1]
     metrics = collected_metrics(capfire)
     assert _metric_attributes(metrics, _SYNTHESIS_OUTCOME_METRIC) == [
         {
@@ -927,6 +1058,9 @@ async def test_retry_aborts_then_resets_before_generation_two_delta() -> None:
     assert operations.index(("reset", 2)) < first_generation_two_append
     assert "citation marker" in generator.calls[1]["previous_error"]
     assert all(stream.closed for stream in generator.streams)
+    assert (generator.scope_enters, generator.scope_exits) == (1, 1)
+    assert generator.events.index("stream_close:1") < generator.events.index("invoke:2")
+    assert generator.events[-2:] == ["stream_close:2", "scope_exit"]
 
 
 @pytest.mark.asyncio
@@ -1060,6 +1194,10 @@ async def test_continuation_false_before_provider_start_is_routine_stop(
     assert reporter.finished == []
     metrics = collected_metrics(capfire)
     assert _metric_attributes(metrics, _SYNTHESIS_OUTCOME_METRIC) == []
+    phase = one_span_named(capfire, _PHASE_SPAN_NAME)
+    assert exception_event(phase) is None
+    assert phase.get("status", {}).get("description") in (None, "")
+    assert (generator.scope_enters, generator.scope_exits) == (1, 1)
 
 
 @pytest.mark.asyncio

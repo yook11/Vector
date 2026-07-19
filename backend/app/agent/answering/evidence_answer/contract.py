@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import AsyncIterator
+from dataclasses import dataclass
 from typing import Literal, Protocol, Self
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
@@ -14,14 +14,24 @@ from app.agent.contract import NonBlankText
 __all__ = [
     "EvidenceAnswerDraft",
     "EvidenceAnswerDraftGenerationInvalidError",
-    "EvidenceAnswerDraftGenerator",
     "EvidenceAnswerDraftInvalidError",
+    "EvidenceAnswerInput",
     "EvidenceAnswerer",
     "EvidenceAnswerSufficiency",
     "RawEvidenceAnswerDraft",
 ]
 
 EvidenceAnswerSufficiency = Literal["answered", "insufficient"]
+
+
+@dataclass(frozen=True, slots=True)
+class EvidenceAnswerInput:
+    """Evidence Answer Agentの1 attempt input。"""
+
+    request: AnsweringRequest
+    evidence: tuple[AnswerEvidenceItem, ...]
+    target_time_window: str | None
+    previous_error: str | None = None
 
 
 class EvidenceAnswerDraftGenerationInvalidError(ValueError):
@@ -65,19 +75,6 @@ class RawEvidenceAnswerDraft(BaseModel):
     cited_refs: list[object] = Field(default_factory=list)
     missing_aspects: list[object] = Field(default_factory=list)
     unfulfilled_requirement_ids: list[object] = Field(default_factory=list)
-
-
-class EvidenceAnswerDraftGenerator(Protocol):
-    """LLM adapter boundary that streams an unvalidated evidence JSON envelope."""
-
-    def stream(
-        self,
-        *,
-        request: AnsweringRequest,
-        evidence: list[AnswerEvidenceItem],
-        target_time_window: str | None,
-        previous_error: str | None = None,
-    ) -> AsyncIterator[str]: ...
 
 
 class EvidenceAnswerer(Protocol):
