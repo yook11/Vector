@@ -7,7 +7,11 @@ from datetime import datetime
 from typing import Protocol
 from uuid import UUID
 
+from app.agent.answering.direct_answer.contract import DirectAnswerer
+from app.agent.answering.evidence_answer.contract import EvidenceAnswerer
 from app.agent.contract import AnswerQuestionResult
+from app.agent.evidence_collection.contract import EvidenceCollector
+from app.agent.planning.contract import QuestionPlanner
 from app.agent.question_context.contract import (
     QuestionContext,
     QuestionContextPreparationResult,
@@ -15,6 +19,8 @@ from app.agent.question_context.contract import (
 from app.agent.threads.contracts import ThreadMessageSnapshot
 
 __all__ = [
+    "AnsweringPhases",
+    "AnsweringPhasesFactory",
     "AnsweringRunContext",
     "QuestionContextPreparer",
     "RunContext",
@@ -22,6 +28,18 @@ __all__ = [
     "RunInput",
     "RunResult",
 ]
+
+
+@dataclass(frozen=True, slots=True)
+class AnsweringPhases:
+    planner: QuestionPlanner
+    evidence_collector: EvidenceCollector
+    direct_answerer: DirectAnswerer
+    evidence_answerer: EvidenceAnswerer
+
+
+class AnsweringPhasesFactory(Protocol):
+    def __call__(self) -> AnsweringPhases: ...
 
 
 @dataclass(frozen=True, slots=True)

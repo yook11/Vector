@@ -15,13 +15,23 @@ from app.agent.evidence_collection.internal_search.article_search import (
 from app.agent.evidence_collection.internal_search.query_embedding import (
     InternalSearchQueries,
 )
-from app.agent.planning.contract import ExternalResearchTask
+from app.agent.planning.contract import ExternalResearchTask, RetrievalPlan
 
 __all__ = [
+    "EvidenceCollector",
     "EvidenceCollectionOutcome",
     "ExternalPlanSearcher",
     "InternalArticleRetriever",
 ]
+
+
+class EvidenceCollector(Protocol):
+    async def collect(
+        self,
+        plan: RetrievalPlan,
+        *,
+        as_of: datetime,
+    ) -> EvidenceCollectionOutcome: ...
 
 
 class InternalArticleRetriever(Protocol):
