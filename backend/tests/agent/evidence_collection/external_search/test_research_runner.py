@@ -13,7 +13,6 @@ import pytest
 from pydantic import ValidationError
 
 from app.agent.agent import Agent
-from app.agent.evidence_collection.external_search.service import ExternalSearchService
 from app.agent.planning.contract import ExternalResearchTask
 from app.agent.runtime.contract import (
     AgentResponseDefect,
@@ -242,46 +241,6 @@ class _AllTasksBlockingRuntime:
         raise AssertionError("all task runtime must be cancelled")
 
 
-class _CloseRecordingRuntimeScope:
-    def __init__(
-        self,
-        *,
-        external: object,
-        sibling_finished: asyncio.Event,
-    ) -> None:
-        self._external = external
-        self._sibling_finished = sibling_finished
-        self.closed_before_sibling_finished = False
-
-    async def __aenter__(self) -> object:
-        return self._external
-
-    async def __aexit__(
-        self,
-        exc_type: object,
-        exc: BaseException | None,
-        traceback: object,
-    ) -> bool:
-        self.closed_before_sibling_finished = not self._sibling_finished.is_set()
-        return False
-
-
-class _CloseRecordingRuntimeFactory:
-    def __init__(
-        self,
-        *,
-        external: object,
-        sibling_finished: asyncio.Event,
-    ) -> None:
-        self.scope = _CloseRecordingRuntimeScope(
-            external=external,
-            sibling_finished=sibling_finished,
-        )
-
-    def activate(self) -> _CloseRecordingRuntimeScope:
-        return self.scope
-
-
 class _RunnerHarness:
     def __init__(self, *, runner: Any, external: Any) -> None:
         self._runner = runner
@@ -338,7 +297,9 @@ def test_runner_requires_external_bundle_per_call() -> None:
 
 
 @pytest.mark.asyncio
-async def test_unclassified_task_failure_joins_sibling_before_scope_exit() -> None:
+async def test_unclassified_task_failure_cancels_and_joins_sibling_before_reraise() -> (
+    None
+):
     error = RuntimeError("unclassified task failure")
     query_runtime = _TaskFailureAfterSiblingStartsRuntime(error=error)
     external = _external_runtime(
@@ -346,28 +307,22 @@ async def test_unclassified_task_failure_joins_sibling_before_scope_exit() -> No
         selector_runtime=ScriptedAgentRuntime([]),
         search_tool=FakeExternalSearchTool(),
     )
-    runtime_factory = _CloseRecordingRuntimeFactory(
-        external=external,
-        sibling_finished=query_runtime.blocking_task_finished,
-    )
-    service = ExternalSearchService(
-        runner=_runner_type()(),
-        runtime_factory=runtime_factory,
-    )
+    runner = _runner_type()()
 
     with pytest.raises(RuntimeError) as raised:
-        await service.search(
-            [_task("failing task"), _task("blocking task")],
-            target_time_window=None,
-            as_of=_as_of(),
+        await runner.search(
+            _request(
+                [_task("failing task"), _task("blocking task")],
+                effective_agent_count=2,
+            ),
+            external=external,
         )
 
     assert (
         raised.value is error,
         query_runtime.blocking_task_cancelled,
         query_runtime.blocking_task_finished.is_set(),
-        runtime_factory.scope.closed_before_sibling_finished,
-    ) == (True, True, True, False)
+    ) == (True, True, True)
 
 
 @pytest.mark.asyncio

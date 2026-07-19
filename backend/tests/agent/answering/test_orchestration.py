@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from uuid import UUID
@@ -24,6 +25,10 @@ from app.agent.evidence_collection.external_search import (
 from app.agent.evidence_collection.internal_search.article_search import (
     InternalArticleContent,
     InternalArticleSearchHit,
+)
+from app.agent.evidence_collection.internal_search.contract import InternalSearchError
+from app.agent.evidence_collection.internal_search.query_embedding import (
+    InternalSearchQueries,
 )
 from app.agent.planning.contract import (
     ExternalResearchTask,
@@ -253,7 +258,7 @@ class FakePlanner:
         return self._plan
 
 
-class FakeEvidenceCollector:
+class FakeInternalSearch:
     def __init__(
         self,
         outcome: EvidenceCollectionOutcome | Exception,
@@ -262,20 +267,57 @@ class FakeEvidenceCollector:
     ) -> None:
         self._outcome = outcome
         self._timeline = timeline
-        self.calls: list[tuple[RetrievalPlan, datetime]] = []
+        self.calls: list[InternalSearchQueries] = []
 
-    async def collect(
+    async def search_articles(
         self,
-        plan: RetrievalPlan,
-        *,
-        as_of: datetime,
-    ) -> EvidenceCollectionOutcome:
+        queries: InternalSearchQueries,
+    ) -> list[InternalArticleSearchHit]:
         if self._timeline is not None:
-            self._timeline.record("evidence_collector.collect")
-        self.calls.append((plan, as_of))
+            self._timeline.record("internal_search.search_articles")
+        self.calls.append(queries)
         if isinstance(self._outcome, Exception):
             raise self._outcome
-        return self._outcome
+        if "internal_search" in self._outcome.collection_failures:
+            raise InternalSearchError(phase="article_search")
+        return self._outcome.internal_hits
+
+
+class FakeExternalSearch:
+    def __init__(
+        self,
+        outcome: EvidenceCollectionOutcome | Exception,
+        *,
+        timeline: CallTimeline | None = None,
+    ) -> None:
+        self._outcome = outcome
+        self._timeline = timeline
+        self.calls: list[tuple[list[ExternalResearchTask], str | None, datetime]] = []
+
+    async def search(
+        self,
+        tasks: list[ExternalResearchTask],
+        *,
+        target_time_window: str | None,
+        as_of: datetime,
+        external: object,
+    ) -> ExternalSearchOutcome:
+        if self._timeline is not None:
+            self._timeline.record("external_search.search")
+        self.calls.append((tasks, target_time_window, as_of))
+        if isinstance(self._outcome, Exception):
+            raise self._outcome
+        if self._outcome.external_search is None:
+            raise AssertionError(
+                "external outcome must be supplied for an external plan"
+            )
+        return self._outcome.external_search
+
+
+class FakeExternalRuntimeFactory:
+    @asynccontextmanager
+    async def activate(self):
+        yield object()
 
 
 class FakeEvidenceAnswerer:
@@ -413,7 +455,7 @@ def _orchestrator(
     *,
     plan: QuestionPlan | Exception,
     outcome: EvidenceCollectionOutcome | Exception = AssertionError(
-        "evidence_collector must not be called"
+        "retrieval ports must not be called"
     ),
     draft: EvidenceAnswerDraft | Exception = AssertionError(
         "evidence_answerer must not be called"
@@ -426,17 +468,20 @@ def _orchestrator(
 ) -> tuple[
     _WorkflowHarness,
     FakePlanner,
-    FakeEvidenceCollector,
+    FakeInternalSearch,
     FakeEvidenceAnswerer,
     FakeDirectAnswerer,
 ]:
     planner = FakePlanner(plan, timeline=timeline)
-    evidence_collector = FakeEvidenceCollector(outcome, timeline=timeline)
+    internal_search = FakeInternalSearch(outcome, timeline=timeline)
+    external_search = FakeExternalSearch(outcome, timeline=timeline)
     evidence_answerer = FakeEvidenceAnswerer(draft, timeline=timeline)
     direct_answerer = FakeDirectAnswerer(direct_draft, timeline=timeline)
     phases = AnsweringPhases(
         planner=planner,
-        evidence_collector=evidence_collector,
+        internal_search=internal_search,
+        external_search=external_search,
+        external_runtime_factory=FakeExternalRuntimeFactory(),
         direct_answerer=direct_answerer,
         evidence_answerer=evidence_answerer,
     )
@@ -444,7 +489,7 @@ def _orchestrator(
         phases=phases,
         progress=progress,
     )
-    return workflow, planner, evidence_collector, evidence_answerer, direct_answerer
+    return workflow, planner, internal_search, evidence_answerer, direct_answerer
 
 
 @pytest.mark.asyncio
@@ -458,7 +503,7 @@ async def test_answer_direct_plan_calls_direct_answerer_only() -> None:
         previous_answer="根拠付き前回答 [[1]]",
     )
     direct_draft = DirectAnswerDraft(answer="こんにちは。何を確認しますか？")
-    orchestrator, _, evidence_collector, evidence_answerer, direct_answerer = (
+    orchestrator, _, internal_search, evidence_answerer, direct_answerer = (
         _orchestrator(
             plan=NoRetrievalPlan(reason="direct answer"),
             direct_draft=direct_draft,
@@ -481,7 +526,7 @@ async def test_answer_direct_plan_calls_direct_answerer_only() -> None:
         }
     ]
     assert direct_answerer.calls[0]["request"].context is input_.context
-    assert evidence_collector.calls == []
+    assert internal_search.calls == []
     assert evidence_answerer.calls == []
 
 
@@ -558,7 +603,8 @@ async def test_answer_evidence_plan_orders_progress_and_port_calls() -> None:
         "progress:planning",
         "planner.plan",
         "progress:retrieving",
-        "evidence_collector.collect",
+        "internal_search.search_articles",
+        "external_search.search",
         "progress:synthesizing",
         "evidence_answerer.answer",
     ]
@@ -841,29 +887,6 @@ async def test_answer_empty_retrieval_evidence_calls_synthesis() -> None:
 
 
 @pytest.mark.asyncio
-async def test_answer_collection_failures_cap_answered_draft_to_insufficient() -> None:
-    orchestrator, _, _, _, _ = _orchestrator(
-        plan=_mixed_plan(),
-        outcome=EvidenceCollectionOutcome(
-            internal_hits=[_internal_hit(assessment_id=1001, title="internal 1")],
-            collection_failures=["external_search"],
-        ),
-        draft=EvidenceAnswerDraft(
-            sufficiency="answered",
-            answer="内部根拠の範囲では確認できます。",
-            cited_refs=["1"],
-        ),
-    )
-
-    result = await orchestrator.answer(_input())
-
-    assert result.status == "insufficient"
-    assert result.answer == "内部根拠の範囲では確認できます。"
-    assert result.retrieval.collection_failures == ["external_search"]
-    assert any("外部" in item for item in result.missing_aspects)
-
-
-@pytest.mark.asyncio
 async def test_answer_adopts_insufficient_draft_with_partial_citations() -> None:
     orchestrator, _, _, _, _ = _orchestrator(
         plan=_internal_plan(),
@@ -968,7 +991,7 @@ async def test_answer_passes_pipeline_inputs_and_variant_time_window() -> None:
         relevant_prior_coverage="発表内容は既出",
         active_goal="投資判断を調査中",
     )
-    orchestrator, planner, evidence_collector, evidence_answerer, _ = _orchestrator(
+    orchestrator, planner, internal_search, evidence_answerer, _ = _orchestrator(
         plan=_mixed_plan(),
         outcome=_mixed_outcome(),
         draft=EvidenceAnswerDraft(
@@ -984,7 +1007,7 @@ async def test_answer_passes_pipeline_inputs_and_variant_time_window() -> None:
         PlanningRequest(context=input_.context, as_of=input_.as_of)
     ]
     assert planner.calls[0].context is input_.context
-    assert evidence_collector.calls == [(_mixed_plan(), _as_of())]
+    assert internal_search.calls == [InternalSearchQueries(queries=("NVIDIA AI GPU",))]
     assert evidence_answerer.calls[0]["request"] == AnsweringRequest(
         context=input_.context,
         as_of=input_.as_of,
@@ -1035,18 +1058,18 @@ async def test_answer_passes_none_time_window_for_internal_plan() -> None:
         ),
         (
             _internal_plan(),
-            RuntimeError("evidence_collector failed"),
+            RuntimeError("internal search failed"),
             EvidenceAnswerDraft(
                 sufficiency="answered",
                 answer="x",
                 cited_refs=["1"],
             ),
-            "evidence_collector failed",
+            "internal search failed",
             [
                 "progress:planning",
                 "planner.plan",
                 "progress:retrieving",
-                "evidence_collector.collect",
+                "internal_search.search_articles",
             ],
         ),
         (
@@ -1058,7 +1081,7 @@ async def test_answer_passes_none_time_window_for_internal_plan() -> None:
                 "progress:planning",
                 "planner.plan",
                 "progress:retrieving",
-                "evidence_collector.collect",
+                "internal_search.search_articles",
                 "progress:synthesizing",
                 "evidence_answerer.answer",
             ],

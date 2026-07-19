@@ -10,13 +10,15 @@ import pytest
 from app.agent.answering.contract import AnsweringRequest
 from app.agent.answering.direct_answer.contract import DirectAnswerDraft
 from app.agent.answering.evidence_answer.contract import EvidenceAnswerDraft
-from app.agent.evidence_collection import EvidenceCollectionOutcome
+from app.agent.evidence_collection.external_search import ExternalSearchOutcome
+from app.agent.evidence_collection.internal_search.query_embedding import (
+    InternalSearchQueries,
+)
 from app.agent.planning.contract import (
     InternalRetrievalPlan,
     NoRetrievalPlan,
     PlanningRequest,
     QuestionPlan,
-    RetrievalPlan,
 )
 from app.agent.question_context import (
     QuestionContext,
@@ -77,20 +79,38 @@ class _Planner:
         return self._plan
 
 
-class _Collector:
+class _InternalSearch:
     def __init__(self, timeline: list[str]) -> None:
         self._timeline = timeline
-        self.calls: list[tuple[RetrievalPlan, datetime]] = []
+        self.calls: list[InternalSearchQueries] = []
 
-    async def collect(
+    async def search_articles(
         self,
-        plan: RetrievalPlan,
+        queries: InternalSearchQueries,
+    ) -> list[object]:
+        self._timeline.append("internal_search")
+        self.calls.append(queries)
+        return []
+
+
+class _UnreachableExternalSearch:
+    async def search(
+        self,
+        _tasks: list[object],
         *,
+        target_time_window: str | None,
         as_of: datetime,
-    ) -> EvidenceCollectionOutcome:
-        self._timeline.append("collector")
-        self.calls.append((plan, as_of))
-        return EvidenceCollectionOutcome()
+        external: object,
+    ) -> ExternalSearchOutcome:
+        raise AssertionError(
+            "external search must not run: "
+            f"{target_time_window!r} {as_of!r} {external!r}"
+        )
+
+
+class _UnreachableExternalRuntimeFactory:
+    def activate(self) -> object:
+        raise AssertionError("external runtime must not activate")
 
 
 class _DirectAnswerer:
@@ -150,9 +170,15 @@ def _runner(
     timeline: list[str],
     context: QuestionContext,
     prepare_error: BaseException | None = None,
-) -> tuple[AnsweringRunner, _Planner, _Collector, _DirectAnswerer, _EvidenceAnswerer]:
+) -> tuple[
+    AnsweringRunner,
+    _Planner,
+    _InternalSearch,
+    _DirectAnswerer,
+    _EvidenceAnswerer,
+]:
     planner = _Planner(plan, timeline)
-    collector = _Collector(timeline)
+    internal_search = _InternalSearch(timeline)
     direct_answerer = _DirectAnswerer(timeline)
     evidence_answerer = _EvidenceAnswerer(timeline)
 
@@ -160,7 +186,9 @@ def _runner(
         timeline.append("phases_factory")
         return AnsweringPhases(
             planner=planner,
-            evidence_collector=collector,
+            internal_search=internal_search,
+            external_search=_UnreachableExternalSearch(),
+            external_runtime_factory=_UnreachableExternalRuntimeFactory(),
             direct_answerer=direct_answerer,
             evidence_answerer=evidence_answerer,
         )
@@ -172,7 +200,7 @@ def _runner(
             progress=_Progress(timeline),
         ),
         planner,
-        collector,
+        internal_search,
         direct_answerer,
         evidence_answerer,
     )
@@ -181,7 +209,7 @@ def _runner(
 async def test_direct_workflow_order_and_context_identity() -> None:
     timeline: list[str] = []
     context = QuestionContext(standalone_question="整理済みの質問")
-    runner, planner, collector, direct_answerer, evidence_answerer = _runner(
+    runner, planner, internal_search, direct_answerer, evidence_answerer = _runner(
         plan=NoRetrievalPlan(reason="検索不要"),
         timeline=timeline,
         context=context,
@@ -205,7 +233,7 @@ async def test_direct_workflow_order_and_context_identity() -> None:
     assert planner.calls[0].context is context
     assert direct_answerer.calls[0][0].context is context
     assert result.context.question_context is context
-    assert collector.calls == []
+    assert internal_search.calls == []
     assert evidence_answerer.calls == []
 
 
@@ -216,7 +244,7 @@ async def test_retrieval_workflow_order_and_non_selected_port() -> None:
         internal_queries=["検索語"],
         reason="内部根拠が必要",
     )
-    runner, planner, collector, direct_answerer, evidence_answerer = _runner(
+    runner, planner, internal_search, direct_answerer, evidence_answerer = _runner(
         plan=plan,
         timeline=timeline,
         context=context,
@@ -235,12 +263,12 @@ async def test_retrieval_workflow_order_and_non_selected_port() -> None:
         "progress:planning",
         "planner",
         "progress:retrieving",
-        "collector",
+        "internal_search",
         "progress:synthesizing",
         "evidence_answerer",
     ]
     assert planner.calls[0].context is context
-    assert collector.calls == [(plan, AS_OF)]
+    assert internal_search.calls == [InternalSearchQueries(queries=("検索語",))]
     assert evidence_answerer.calls[0]["request"].context is context
     assert direct_answerer.calls == []
     assert result.final_output.status == "insufficient"

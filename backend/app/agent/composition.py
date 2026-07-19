@@ -78,7 +78,6 @@ def _build_answering_phases(
 
     from app.agent.answering.direct_answer.flow import DirectAnswerFlow
     from app.agent.answering.evidence_answer.flow import EvidenceAnswerFlow
-    from app.agent.evidence_collection import EvidenceCollectionService
     from app.agent.evidence_collection.internal_search.ai.gemini import (
         GeminiQueryEmbedder,
     )
@@ -91,6 +90,7 @@ def _build_answering_phases(
     from app.agent.planning.service import QuestionPlanningService
 
     external_search = build_external_search_service(events=events)
+    external_runtime_factory = build_external_research_runtime_factory()
     internal_search = InternalSearchService(
         embedder=GeminiQueryEmbedder(),
         article_search_repository=PgVectorArticleSearchRepository(session_factory),
@@ -101,11 +101,9 @@ def _build_answering_phases(
             agent=QUESTION_PLANNER_AGENT,
             runtime_scope_factory=activate_gemini_agent_runtime,
         ),
-        evidence_collector=EvidenceCollectionService(
-            internal_search=internal_search,
-            external_search=external_search,
-            requested_external_agent_count=None,
-        ),
+        internal_search=internal_search,
+        external_search=external_search,
+        external_runtime_factory=external_runtime_factory,
         direct_answerer=DirectAnswerFlow(
             agent=DIRECT_ANSWER_AGENT,
             runtime_scope_factory=activate_gemini_agent_runtime,
@@ -227,5 +225,4 @@ def build_external_search_service(
         runner=ExternalSearchResearchRunner(
             events=events,
         ),
-        runtime_factory=build_external_research_runtime_factory(),
     )

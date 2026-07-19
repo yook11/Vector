@@ -136,36 +136,6 @@ class FakeExternalSearchRunner:
         )
 
 
-class _FakeRuntimeScope:
-    def __init__(self, *, external: object) -> None:
-        self._external = external
-        self.exit_error: BaseException | None = None
-
-    async def __aenter__(self) -> object:
-        return self._external
-
-    async def __aexit__(
-        self,
-        exc_type: object,
-        exc: BaseException | None,
-        traceback: object,
-    ) -> bool:
-        self.exit_error = exc
-        return False
-
-
-class FakeExternalResearchRuntimeFactory:
-    def __init__(self, externals: list[object] | None = None) -> None:
-        self._externals = list(externals or [])
-        self.scopes: list[_FakeRuntimeScope] = []
-
-    def activate(self) -> _FakeRuntimeScope:
-        external = self._externals.pop(0) if self._externals else object()
-        scope = _FakeRuntimeScope(external=external)
-        self.scopes.append(scope)
-        return scope
-
-
 @pytest.mark.parametrize(
     ("task_count", "requested", "expected"),
     [
@@ -212,20 +182,18 @@ async def test_search_builds_outcome_from_run_result_and_reports() -> None:
     runner = FakeExternalSearchRunner(
         _run_result(evidence=evidence, task_reports=reports)
     )
-    runtime_factory = FakeExternalResearchRuntimeFactory()
-    service = ExternalSearchService(
-        runner=runner,
-        runtime_factory=runtime_factory,
-    )
+    external = object()
+    service = ExternalSearchService(runner=runner)
 
     outcome = await service.search(
         tasks,
         target_time_window="直近24時間",
         as_of=_as_of(),
+        external=external,
         requested_agent_count=4,
     )
 
-    assert len(runner.requests) == len(runtime_factory.scopes) == 1
+    assert (len(runner.requests), runner.externals) == (1, [external])
     request = runner.requests[0]
     assert (
         request.tasks == tasks
@@ -250,52 +218,45 @@ async def test_search_defaults_count_to_task_count_with_cap() -> None:
         _task("データセンターGPU発表の根拠を集める"),
     ]
     runner = FakeExternalSearchRunner()
-    runtime_factory = FakeExternalResearchRuntimeFactory()
-    service = ExternalSearchService(
-        runner=runner,
-        runtime_factory=runtime_factory,
-    )
+    external = object()
+    service = ExternalSearchService(runner=runner)
 
     await service.search(
         tasks[:2],
         target_time_window=None,
         as_of=_as_of(),
+        external=external,
     )
     await service.search(
         tasks,
         target_time_window=None,
         as_of=_as_of(),
+        external=external,
     )
 
     assert (
         [request.effective_agent_count for request in runner.requests],
         runner.externals,
-        [scope._external for scope in runtime_factory.scopes],
     ) == (
         [2, 3],
-        [scope._external for scope in runtime_factory.scopes],
-        runner.externals,
+        [external, external],
     )
 
 
 @pytest.mark.asyncio
 async def test_search_skips_runner_when_tasks_are_empty() -> None:
     runner = FakeExternalSearchRunner()
-    runtime_factory = FakeExternalResearchRuntimeFactory()
-    service = ExternalSearchService(
-        runner=runner,
-        runtime_factory=runtime_factory,
-    )
+    service = ExternalSearchService(runner=runner)
 
     outcome = await service.search(
         [],
         target_time_window=None,
         as_of=_as_of(),
+        external=object(),
     )
 
     assert (
         runner.requests == []
-        and runtime_factory.scopes == []
         and outcome.evidence == []
         and outcome.task_reports == []
         and outcome.effective_agent_count == 0
@@ -335,15 +296,13 @@ async def test_search_deduplicates_cross_task_urls_without_rewriting_refs() -> N
     runner = FakeExternalSearchRunner(
         _run_result(evidence=[first, duplicate, later_unique], task_reports=reports)
     )
-    service = ExternalSearchService(
-        runner=runner,
-        runtime_factory=FakeExternalResearchRuntimeFactory(),
-    )
+    service = ExternalSearchService(runner=runner)
 
     outcome = await service.search(
         tasks,
         target_time_window="直近24時間",
         as_of=_as_of(),
+        external=object(),
     )
 
     assert outcome.evidence == [first, later_unique]
@@ -366,24 +325,25 @@ async def test_search_deduplicates_cross_task_urls_without_rewriting_refs() -> N
         pytest.param(asyncio.CancelledError(), id="cancellation"),
     ],
 )
-async def test_search_exits_activated_scope_when_runner_fails(
+async def test_search_propagates_runner_failure_by_identity(
     error: BaseException,
 ) -> None:
     runner = FakeExternalSearchRunner(error=error)
-    runtime_factory = FakeExternalResearchRuntimeFactory()
-    service = ExternalSearchService(
-        runner=runner,
-        runtime_factory=runtime_factory,
-    )
+    external = object()
+    service = ExternalSearchService(runner=runner)
 
     with pytest.raises(type(error)) as raised:
-        await service.search([_task()], target_time_window=None, as_of=_as_of())
+        await service.search(
+            [_task()],
+            target_time_window=None,
+            as_of=_as_of(),
+            external=external,
+        )
 
     assert (
         raised.value is error,
-        len(runtime_factory.scopes),
-        runtime_factory.scopes[0].exit_error is error,
-    ) == (True, 1, True)
+        runner.externals,
+    ) == (True, [external])
 
 
 def test_outcome_rejects_task_report_count_mismatch() -> None:
