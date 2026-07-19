@@ -16,14 +16,12 @@ from pydantic import (
     model_validator,
 )
 
-from app.agent.question_context.contract import QuestionContext
 from app.shared.security.safe_url import SafeUrl
 
 __all__ = [
     "AnswerDeltaReporter",
     "AnswerGenerationContinuation",
     "AnswerGenerationStopped",
-    "AnswerQuestionInput",
     "AnswerProgressReporter",
     "AnswerProgressEvent",
     "AnswerProgressStage",
@@ -39,7 +37,6 @@ __all__ = [
     "InternalSearchStartedEvent",
     "InternalArticleSource",
     "NonBlankText",
-    "QuestionAnsweringAgent",
     "QuestionResolvedEvent",
     "RetrievalMode",
     "EvidenceCollectionFailure",
@@ -52,16 +49,6 @@ NonBlankText = Annotated[
     str,
     StringConstraints(strip_whitespace=True, min_length=1),
 ]
-
-
-class AnswerQuestionInput(BaseModel):
-    """ユーザー質問と実行基準時刻を agent core に渡す入力。"""
-
-    model_config = ConfigDict(frozen=True, extra="forbid")
-
-    context: QuestionContext
-    as_of: datetime
-    previous_answer: str = ""
 
 
 class AnswerRetrievalSummary(BaseModel):
@@ -192,12 +179,6 @@ class AnswerQuestionResult(BaseModel):
         if self.retrieval.planned_mode == "none" and self.sources:
             raise ValueError("direct planned result cannot include sources")
         return self
-
-
-class QuestionAnsweringAgent(Protocol):
-    """agent core の最小呼び出し口。"""
-
-    async def answer(self, input: AnswerQuestionInput) -> AnswerQuestionResult: ...
 
 
 class AnswerGenerationStopped(Exception):

@@ -6,7 +6,7 @@ import ast
 from pathlib import Path
 
 
-def test_probe_routes_external_research_through_composition_service_builder() -> None:
+def test_probe_uses_answering_runner_phases_and_composition_service_builder() -> None:
     probe_path = (
         Path(__file__).resolve().parents[2] / "scripts" / "probe_question_answering.py"
     )
@@ -22,10 +22,39 @@ def test_probe_routes_external_research_through_composition_service_builder() ->
         for node in ast.walk(tree)
         if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
     }
+    loaded_names = {
+        node.id
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Load)
+    }
+    legacy_boundaries = {
+        "AnswerQuestionInput",
+        "QuestionAnsweringAgent",
+        "QuestionAnsweringOrchestrator",
+        "build_question_answering_starting_agent",
+        "build_question_answering_agent",
+        "starting_agent",
+    }
 
     assert (
-        "build_external_search_service" in imported_names,
-        "build_external_search_service" in called_names,
+        {
+            "AnsweringPhases",
+            "AnsweringRunner",
+            "RunContext",
+            "RunInput",
+            "build_external_search_service",
+        }
+        <= imported_names,
+        {
+            "AnsweringPhases",
+            "AnsweringRunner",
+            "RunContext",
+            "RunInput",
+            "build_external_search_service",
+        }
+        <= called_names,
+        legacy_boundaries.isdisjoint(imported_names),
+        legacy_boundaries.isdisjoint(loaded_names),
         {
             "AsyncOpenAI",
             "DeepSeekAgentRuntime",
@@ -33,4 +62,4 @@ def test_probe_routes_external_research_through_composition_service_builder() ->
             "TavilyExternalSearchTool",
             "make_safe_async_client",
         }.isdisjoint(imported_names),
-    ) == (True, True, True)
+    ) == (True, True, True, True, True)

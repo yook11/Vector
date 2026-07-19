@@ -1,14 +1,12 @@
 """Agent core package."""
 
 from app.agent.contract import (
-    AnswerQuestionInput,
     AnswerQuestionResult,
     AnswerRetrievalSummary,
     AnswerSource,
     EvidenceCollectionFailure,
     ExternalUrlSource,
     InternalArticleSource,
-    QuestionAnsweringAgent,
     RetrievalMode,
 )
 from app.agent.planning.contract import (
@@ -26,7 +24,6 @@ from app.agent.planning.contract import (
 from app.agent.planning.service import QuestionPlanningService
 
 __all__ = [
-    "AnswerQuestionInput",
     "AnswerQuestionResult",
     "AnswerRetrievalSummary",
     "AnswerSource",
@@ -38,7 +35,6 @@ __all__ = [
     "InternalArticleSource",
     "InternalRetrievalPlan",
     "NoRetrievalPlan",
-    "QuestionAnsweringAgent",
     "QuestionPlan",
     "QuestionPlanDraft",
     "QuestionPlanningService",
