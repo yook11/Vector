@@ -488,7 +488,7 @@ factoryは呼び出されるまでclientを作らず、SDKのasync context manag
 
 ```python
 @asynccontextmanager
-async def activate_planner_runtime() -> AsyncIterator[AgentRuntime]:
+async def activate_gemini_agent_runtime() -> AsyncIterator[AgentRuntime]:
     async with genai.Client(api_key=...).aio as client:
         yield GeminiAgentRuntime(client=client)
 ```
