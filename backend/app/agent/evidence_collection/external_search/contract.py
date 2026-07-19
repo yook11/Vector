@@ -11,7 +11,8 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Literal, Protocol
+from enum import StrEnum
+from typing import Final, Literal, Protocol
 
 from pydantic import (
     BaseModel,
@@ -34,6 +35,7 @@ __all__ = [
     "EXTERNAL_SEARCH_CANDIDATE_POOL_LIMIT_PER_TASK",
     "EXTERNAL_SEARCH_EVIDENCE_LIMIT_PER_TASK",
     "EXTERNAL_SEARCH_MISSING_LIMIT_PER_TASK",
+    "EXTERNAL_SEARCH_TOOL_NAME",
     "EXTERNAL_TASK_QUERY_LIMIT",
     "EvidenceSelection",
     "EvidenceSelectionDraft",
@@ -50,10 +52,13 @@ __all__ = [
     "ExternalSearchRequest",
     "ExternalSearchRunResult",
     "ExternalSearchRunner",
+    "ExternalSearchTool",
+    "ExternalSearchToolFailureReason",
+    "ExternalSearchToolInput",
+    "ExternalSearchToolName",
     "MISSING_ITEM_MAX_CHARS",
     "ResearchTaskReport",
     "ResearchTaskStatus",
-    "SearchProvider",
 ]
 
 EXTERNAL_SEARCH_AGENT_HARD_LIMIT = 3
@@ -76,8 +81,70 @@ ResearchTaskStatus = Literal[
 ]
 
 
+ExternalSearchToolName = Literal["external_search"]
+EXTERNAL_SEARCH_TOOL_NAME: Final[ExternalSearchToolName] = "external_search"
+
+
+class ExternalSearchToolFailureReason(StrEnum):
+    """External Search Toolが公開できるprovider failureの分類。"""
+
+    HTTP_ERROR = "tavily_search_http_error"
+    HTTP_STATUS = "tavily_search_http_status"
+    INVALID_JSON = "tavily_search_invalid_json"
+    INVALID_RESULTS = "tavily_search_invalid_results"
+
+
 class ExternalSearchProviderError(Exception):
-    """Search provider adapter が分類済み失敗として raise する境界 error。"""
+    """External Search Toolが安全なreasonだけを公開する分類済みerror。"""
+
+    __slots__ = ("reason",)
+
+    def __init__(
+        self,
+        *,
+        reason: ExternalSearchToolFailureReason | str,
+        status_code: int | None = None,
+    ) -> None:
+        if isinstance(reason, ExternalSearchToolFailureReason):
+            reason_kind = reason
+        elif isinstance(reason, str):
+            if status_code is not None:
+                raise ValueError("status_code requires a typed HTTP_STATUS reason")
+            static_reasons = {
+                ExternalSearchToolFailureReason.HTTP_ERROR.value,
+                ExternalSearchToolFailureReason.INVALID_JSON.value,
+                ExternalSearchToolFailureReason.INVALID_RESULTS.value,
+            }
+            status_prefix = f"{ExternalSearchToolFailureReason.HTTP_STATUS.value}_"
+            status_suffix = reason.removeprefix(status_prefix)
+            if reason in static_reasons or (
+                reason.startswith(status_prefix)
+                and len(status_suffix) == 3
+                and status_suffix.isascii()
+                and status_suffix.isdigit()
+                and 100 <= int(status_suffix) <= 599
+            ):
+                self.reason = reason
+                super().__init__(reason)
+                return
+            raise ValueError("unsupported external search provider failure reason")
+        else:
+            raise TypeError("reason must be a failure reason or safe reason code")
+
+        if reason_kind is ExternalSearchToolFailureReason.HTTP_STATUS:
+            if (
+                not isinstance(status_code, int)
+                or isinstance(status_code, bool)
+                or not 100 <= status_code <= 599
+            ):
+                raise ValueError("HTTP_STATUS requires an HTTP status code")
+            safe_reason = f"{reason_kind.value}_{status_code}"
+        else:
+            if status_code is not None:
+                raise ValueError("status_code is only valid for HTTP_STATUS")
+            safe_reason = reason_kind.value
+        self.reason = safe_reason
+        super().__init__(safe_reason)
 
 
 class ExternalSearchCandidate(BaseModel):
@@ -90,6 +157,14 @@ class ExternalSearchCandidate(BaseModel):
     snippet: str | None = Field(default=None, max_length=CANDIDATE_SNIPPET_MAX_CHARS)
     published_at: datetime | None = None
     source_name: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class ExternalSearchToolInput:
+    """External Search Toolへ渡す完成済みqueryと取得上限。"""
+
+    query: str
+    limit: int
 
 
 @dataclass(frozen=True, slots=True)
@@ -155,12 +230,13 @@ class ExternalEvidenceSelectionDraft(BaseModel):
     missing: list[str]
 
 
-class SearchProvider(Protocol):
-    async def search(
+class ExternalSearchTool(Protocol):
+    @property
+    def name(self) -> ExternalSearchToolName: ...
+
+    async def invoke(
         self,
-        query: str,
-        *,
-        limit: int,
+        input: ExternalSearchToolInput,
     ) -> list[ExternalSearchCandidate]: ...
 
 
@@ -366,7 +442,7 @@ class ExternalSearchOutcome(BaseModel):
 
 
 class ExternalSearchRunner(Protocol):
-    """DeepSeek / search provider 実装の手前に置く runner 境界。"""
+    """DeepSeek / External Search Toolの手前に置くrunner境界。"""
 
     async def search(
         self,

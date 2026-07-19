@@ -20,6 +20,7 @@ from app.agent.answering.audit import (
     DirectAnswerAttemptFailureEvent,
     DirectAnswerFinalEvent,
 )
+
 from app.agent.answering.direct_answer.ai.gemini import GeminiDirectAnswerGenerator
 from app.agent.answering.direct_answer.contract import DirectAnswerDraft
 from app.agent.answering.direct_answer.flow import DirectAnswerFlow
@@ -39,7 +40,7 @@ from app.agent.evidence_collection.external_search import (
     ExternalSearchResearchRunner,
     ExternalSearchService,
     ResearchTaskReport,
-    TavilySearchProvider,
+    TavilyExternalSearchTool,
 )
 from app.agent.evidence_collection.external_search.agent import (
     EXTERNAL_EVIDENCE_SELECTOR_AGENT,
@@ -257,7 +258,7 @@ async def _probe_external(
     deepseek_api_key = settings.deepseek_api_key.get_secret_value()
 
     async with make_safe_async_client() as client:
-        provider = TavilySearchProvider(
+        search_tool = TavilyExternalSearchTool(
             api_key=settings.tavily_api_key,
             client=client,
         )
@@ -271,7 +272,7 @@ async def _probe_external(
                 ),
                 binding=EXTERNAL_QUERY_DEEPSEEK_BINDING,
             ),
-            search_provider=provider,
+            search_tool=search_tool,
             selector_agent=EXTERNAL_EVIDENCE_SELECTOR_AGENT,
             selector_runtime=DeepSeekAgentRuntime(
                 client=AsyncOpenAI(

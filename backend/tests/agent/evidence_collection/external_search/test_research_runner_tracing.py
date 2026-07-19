@@ -65,7 +65,7 @@ def _runner(
     return runner_type(
         query_agent=_query_agent(),
         query_runtime=query_runtime,
-        search_provider=FakeSearchProvider(),
+        search_tool=FakeExternalSearchTool(),
         selector_agent=_selector_agent(),
         selector_runtime=selector_runtime,
     )
@@ -99,8 +99,12 @@ def _selector_draft() -> Any:
     )
 
 
-class FakeSearchProvider:
-    async def search(self, query: str, *, limit: int) -> list[Any]:
+class FakeExternalSearchTool:
+    @property
+    def name(self) -> str:
+        return "external_search"
+
+    async def invoke(self, input: object) -> list[Any]:
         candidate_type = _required_attribute(_contracts(), "ExternalSearchCandidate")
         return [
             candidate_type(

@@ -157,7 +157,7 @@ class ParallelQueryRuntime:
             self.active -= 1
 
 
-class FakeSearchProvider:
+class FakeExternalSearchTool:
     def __init__(
         self,
         results_by_query: dict[str, list[Any]] | None = None,
@@ -166,10 +166,15 @@ class FakeSearchProvider:
     ) -> None:
         self._results_by_query = results_by_query or {}
         self._errors_by_query = errors_by_query or {}
-        self.calls: list[tuple[str, int]] = []
+        self.calls: list[object] = []
 
-    async def search(self, query: str, *, limit: int) -> list[Any]:
-        self.calls.append((query, limit))
+    @property
+    def name(self) -> str:
+        return "external_search"
+
+    async def invoke(self, input: object) -> list[Any]:
+        query = input.query  # type: ignore[union-attr]
+        self.calls.append(input)
         if query in self._errors_by_query:
             raise self._errors_by_query[query]
         return list(self._results_by_query.get(query, []))
@@ -186,14 +191,14 @@ class FakeEventReporter:
 def _runner(
     *,
     query_runtime: FakeRuntime,
-    search_provider: FakeSearchProvider,
+    search_tool: FakeExternalSearchTool,
     selector_runtime: FakeRuntime,
     events: FakeEventReporter | None = None,
 ) -> Any:
     return _runner_type()(
         query_agent=_query_agent(),
         query_runtime=query_runtime,
-        search_provider=search_provider,
+        search_tool=search_tool,
         selector_agent=_selector_agent(),
         selector_runtime=selector_runtime,
         events=events,
@@ -219,7 +224,7 @@ async def test_query_normalization_and_selector_projection() -> None:
         ]
     )
     selector_runtime = FakeRuntime([_selection_draft([])])
-    search_provider = FakeSearchProvider(
+    search_tool = FakeExternalSearchTool(
         {
             "NVIDIA AI": [_candidate("https://example.com/one")],
             "x" * max_chars: [_candidate("https://example.com/two")],
@@ -228,16 +233,31 @@ async def test_query_normalization_and_selector_projection() -> None:
     )
     runner = _runner(
         query_runtime=query_runtime,
-        search_provider=search_provider,
+        search_tool=search_tool,
         selector_runtime=selector_runtime,
     )
 
     result = await runner.search(_request([task]))
 
-    assert [query for query, _ in search_provider.calls] == [
-        "NVIDIA AI",
-        "x" * max_chars,
-        "Blackwell supply chain",
+    assert search_tool.calls == [
+        _required_attribute(_contracts(), "ExternalSearchToolInput")(
+            query="NVIDIA AI",
+            limit=_required_attribute(
+                _contracts(), "EXTERNAL_SEARCH_CANDIDATES_PER_QUERY"
+            ),
+        ),
+        _required_attribute(_contracts(), "ExternalSearchToolInput")(
+            query="x" * max_chars,
+            limit=_required_attribute(
+                _contracts(), "EXTERNAL_SEARCH_CANDIDATES_PER_QUERY"
+            ),
+        ),
+        _required_attribute(_contracts(), "ExternalSearchToolInput")(
+            query="Blackwell supply chain",
+            limit=_required_attribute(
+                _contracts(), "EXTERNAL_SEARCH_CANDIDATES_PER_QUERY"
+            ),
+        ),
     ]
     assert query_runtime.calls == [
         RuntimeCall(
@@ -268,16 +288,16 @@ async def test_query_classified_failure_short_circuits_search_and_selector() -> 
         [AgentResponseInvalidError(AgentResponseDefect.RESPONSE_NOT_JSON)]
     )
     selector_runtime = FakeRuntime([_selection_draft([])])
-    search_provider = FakeSearchProvider()
+    search_tool = FakeExternalSearchTool()
 
     result = await _runner(
         query_runtime=query_runtime,
-        search_provider=search_provider,
+        search_tool=search_tool,
         selector_runtime=selector_runtime,
     ).search(_request([task]))
 
     assert len(query_runtime.calls) == 1
-    assert search_provider.calls == []
+    assert search_tool.calls == []
     assert selector_runtime.calls == []
     assert result.task_reports[0].status == "query_generation_failed"
 
@@ -293,15 +313,15 @@ async def test_query_provider_failure_and_timeout_short_circuit_once() -> None:
     for outcome in outcomes:
         query_runtime = FakeRuntime([outcome])
         selector_runtime = FakeRuntime([_selection_draft([])])
-        search_provider = FakeSearchProvider()
+        search_tool = FakeExternalSearchTool()
         result = await _runner(
             query_runtime=query_runtime,
-            search_provider=search_provider,
+            search_tool=search_tool,
             selector_runtime=selector_runtime,
         ).search(_request([task]))
 
         assert len(query_runtime.calls) == 1
-        assert search_provider.calls == []
+        assert search_tool.calls == []
         assert selector_runtime.calls == []
         assert result.task_reports[0].status == "query_generation_failed"
 
@@ -314,7 +334,7 @@ async def test_query_unclassified_exception_propagates_from_first_attempt() -> N
     with pytest.raises(RuntimeError) as raised:
         await _runner(
             query_runtime=query_runtime,
-            search_provider=FakeSearchProvider(),
+            search_tool=FakeExternalSearchTool(),
             selector_runtime=FakeRuntime([_selection_draft([])]),
         ).search(_request([_task("unclassified")]))
 
@@ -336,7 +356,7 @@ async def test_selector_retries_once_with_same_typed_input_instance() -> None:
     )
     runner = _runner(
         query_runtime=query_runtime,
-        search_provider=FakeSearchProvider(
+        search_tool=FakeExternalSearchTool(
             {"q": [_candidate("https://example.com/q")]}
         ),
         selector_runtime=selector_runtime,
@@ -367,7 +387,7 @@ async def test_selector_finalization_invalid_draft_is_schema_mismatch_and_retrie
 
     result = await _runner(
         query_runtime=FakeRuntime([_query_draft(["q"])]),
-        search_provider=FakeSearchProvider(
+        search_tool=FakeExternalSearchTool(
             {"q": [_candidate("https://example.com/q")]}
         ),
         selector_runtime=selector_runtime,
@@ -393,7 +413,7 @@ async def test_selector_retries_only_classified_provider_or_timeout_failures() -
         selector_runtime = FakeRuntime([error, error])
         result = await _runner(
             query_runtime=FakeRuntime([_query_draft(["q"])]),
-            search_provider=FakeSearchProvider(
+            search_tool=FakeExternalSearchTool(
                 {"q": [_candidate("https://example.com/q")]}
             ),
             selector_runtime=selector_runtime,
@@ -412,7 +432,7 @@ async def test_selector_unclassified_exception_does_not_retry() -> None:
     with pytest.raises(RuntimeError) as raised:
         await _runner(
             query_runtime=FakeRuntime([_query_draft(["q"])]),
-            search_provider=FakeSearchProvider(
+            search_tool=FakeExternalSearchTool(
                 {"q": [_candidate("https://example.com/q")]}
             ),
             selector_runtime=selector_runtime,
@@ -448,7 +468,7 @@ async def test_selector_finalization_drops_indexes_and_restores_sources() -> Non
     second = _candidate("https://example.com/second", title="second title")
     result = await _runner(
         query_runtime=FakeRuntime([_query_draft(["q"])]),
-        search_provider=FakeSearchProvider(
+        search_tool=FakeExternalSearchTool(
             {
                 "q": [
                     _candidate("https://example.com/first", title="first title"),
@@ -478,7 +498,7 @@ async def test_empty_pool_skips_selector_and_succeeds() -> None:
     selector_runtime = FakeRuntime([_selection_draft([])])
     result = await _runner(
         query_runtime=FakeRuntime([_query_draft(["q"])]),
-        search_provider=FakeSearchProvider({"q": []}),
+        search_tool=FakeExternalSearchTool({"q": []}),
         selector_runtime=selector_runtime,
     ).search(_request([_task("empty pool")]))
 
@@ -493,13 +513,15 @@ async def test_task_order_events_and_partial_provider_failure() -> None:
     tasks = [_task("first"), _task("second")]
     reporter = FakeEventReporter()
     provider_error = _required_attribute(_contracts(), "ExternalSearchProviderError")(
-        "provider failure"
+        reason=_required_attribute(
+            _contracts(), "ExternalSearchToolFailureReason"
+        ).HTTP_ERROR
     )
     query_runtime = FakeRuntime([_query_draft(["q1"]), _query_draft(["q2", "q3"])])
     selector_runtime = FakeRuntime([_selection_draft([]), _selection_draft([])])
     result = await _runner(
         query_runtime=query_runtime,
-        search_provider=FakeSearchProvider(
+        search_tool=FakeExternalSearchTool(
             {
                 "q1": [_candidate("https://example.com/q1")],
                 "q2": [_candidate("https://example.com/q2")],
@@ -525,7 +547,7 @@ async def test_task_parallelism_keeps_all_reports() -> None:
     selector_runtime = FakeRuntime([_selection_draft([]) for _ in tasks])
     result = await _runner(
         query_runtime=query_runtime,
-        search_provider=FakeSearchProvider(
+        search_tool=FakeExternalSearchTool(
             {
                 task.collection_goal: [
                     _candidate(f"https://example.com/{task.collection_goal}")
@@ -546,12 +568,14 @@ async def test_task_parallelism_keeps_all_reports() -> None:
 async def test_all_provider_failures_skip_selector_and_later_progress_events() -> None:
     reporter = FakeEventReporter()
     provider_error = _required_attribute(_contracts(), "ExternalSearchProviderError")(
-        "provider failure"
+        reason=_required_attribute(
+            _contracts(), "ExternalSearchToolFailureReason"
+        ).HTTP_ERROR
     )
     selector_runtime = FakeRuntime([_selection_draft([])])
     result = await _runner(
         query_runtime=FakeRuntime([_query_draft(["q1", "q2"])]),
-        search_provider=FakeSearchProvider(
+        search_tool=FakeExternalSearchTool(
             errors_by_query={"q1": provider_error, "q2": provider_error}
         ),
         selector_runtime=selector_runtime,
@@ -572,7 +596,7 @@ async def test_provider_timeout_maps_to_provider_failure_without_selector() -> N
     selector_runtime = FakeRuntime([_selection_draft([])])
     result = await _runner(
         query_runtime=FakeRuntime([_query_draft(["q"])]),
-        search_provider=FakeSearchProvider(errors_by_query={"q": TimeoutError()}),
+        search_tool=FakeExternalSearchTool(errors_by_query={"q": TimeoutError()}),
         selector_runtime=selector_runtime,
     ).search(_request([_task("provider timeout")]))
 
@@ -598,7 +622,7 @@ async def test_query_failure_on_one_task_keeps_other_task_evidence() -> None:
                 _query_draft(["q"]),
             ]
         ),
-        search_provider=FakeSearchProvider(
+        search_tool=FakeExternalSearchTool(
             {"q": [_candidate("https://example.com/q")]}
         ),
         selector_runtime=selector_runtime,
@@ -620,7 +644,7 @@ async def test_candidate_pool_round_robins_deduplicates_urls_and_applies_pool_ca
     )
     query_runtime = FakeRuntime([_query_draft(["q1", "q2", "q3"])])
     selector_runtime = FakeRuntime([_selection_draft([])])
-    search_provider = FakeSearchProvider(
+    search_tool = FakeExternalSearchTool(
         {
             query: [
                 _candidate(f"https://example.com/{query}-{index}")
@@ -631,7 +655,7 @@ async def test_candidate_pool_round_robins_deduplicates_urls_and_applies_pool_ca
     )
     result = await _runner(
         query_runtime=query_runtime,
-        search_provider=search_provider,
+        search_tool=search_tool,
         selector_runtime=selector_runtime,
     ).search(_request([_task("pool")]))
 
@@ -656,7 +680,7 @@ async def test_candidate_pool_removes_duplicate_urls_before_selector_projection(
     selector_runtime = FakeRuntime([_selection_draft([])])
     result = await _runner(
         query_runtime=FakeRuntime([_query_draft(["q1", "q2"])]),
-        search_provider=FakeSearchProvider(
+        search_tool=FakeExternalSearchTool(
             {
                 "q1": [
                     _candidate("https://example.com/q1-0"),
@@ -690,7 +714,7 @@ async def test_provider_result_cap_is_applied_before_candidate_pool() -> None:
     selector_runtime = FakeRuntime([_selection_draft([])])
     result = await _runner(
         query_runtime=FakeRuntime([_query_draft(["q"])]),
-        search_provider=FakeSearchProvider(
+        search_tool=FakeExternalSearchTool(
             {
                 "q": [
                     _candidate(f"https://example.com/candidate-{index}")
@@ -724,7 +748,7 @@ async def test_selection_cap_preserves_candidate_index_source_refs() -> None:
     selector_runtime = FakeRuntime([_selection_draft(selections)])
     result = await _runner(
         query_runtime=FakeRuntime([_query_draft(["q"])]),
-        search_provider=FakeSearchProvider(
+        search_tool=FakeExternalSearchTool(
             {
                 "q": [
                     _candidate(f"https://example.com/candidate-{index}")
@@ -753,7 +777,7 @@ async def test_empty_selection_is_successful_and_reports_evidence_selected_event
     reporter = FakeEventReporter()
     result = await _runner(
         query_runtime=FakeRuntime([_query_draft(["q"])]),
-        search_provider=FakeSearchProvider(
+        search_tool=FakeExternalSearchTool(
             {"q": [_candidate("https://example.com/q")]}
         ),
         selector_runtime=FakeRuntime([_selection_draft([])]),
