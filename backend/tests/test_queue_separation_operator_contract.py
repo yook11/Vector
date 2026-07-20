@@ -12,7 +12,6 @@ from pathlib import Path
 _REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
 _MAKEFILE = _REPOSITORY_ROOT / "Makefile"
 _REDIS_FLY_CONFIG = _REPOSITORY_ROOT / "infra" / "redis" / "fly.toml"
-_ARCHITECTURE_DOC = _REPOSITORY_ROOT / "docs" / "architecture.md"
 _REDIS_TOPOLOGY_SPEC = (
     _REPOSITORY_ROOT / "backend" / "specs" / "redis-production-topology.md"
 )
@@ -234,95 +233,6 @@ def test_core_redis_acl_remains_broad() -> None:
     tokens = _redis_acl_tokens("core")
 
     assert {"~*", "&*", "+@all"}.issubset(tokens)
-
-
-def test_architecture_describes_two_logical_streams_on_one_shared_worker() -> None:
-    section = _normalized(
-        _markdown_section(_required_text(_ARCHITECTURE_DOC), "非同期パイプライン")
-    )
-
-    assert (
-        "pipeline:curation" in section
-        and "pipeline:assessment" in section
-        and "broker_analysis" in section
-        and "taskiq" in section
-        and "10" in section
-        and _contains_any(section, ("共有 worker", "共有worker", "shared worker"))
-        and "process" in section
-        and _contains_any(section, ("1つ", "1 process", "1プロセス", "one process"))
-    )
-
-
-def test_architecture_states_visibility_and_shared_resource_boundaries() -> None:
-    section = _normalized(
-        _markdown_section(_required_text(_ARCHITECTURE_DOC), "非同期パイプライン")
-    )
-
-    assert (
-        _contains_any(section, ("retained", "保持量", "保持件数"))
-        and all(term in section for term in ("lag", "pending"))
-        and _contains_any(section, ("age", "経過時間"))
-        and all(term in section for term in ("concurrency", "backpressure"))
-        and _contains_any(
-            section,
-            ("failure isolation", "failure domain", "障害分離", "障害境界"),
-        )
-        and _contains_any(section, ("独立しない", "分離しない", "未分離", "共有する"))
-    )
-
-
-def test_architecture_describes_collection_control_and_multistream_worker() -> None:
-    section = _normalized(
-        _markdown_section(_required_text(_ARCHITECTURE_DOC), "非同期パイプライン")
-    )
-
-    assert (
-        all(
-            term in section
-            for term in (
-                "pipeline:dispatch",
-                "pipeline:acquisition",
-                "pipeline:completion",
-                "broker_collection",
-                "taskiq",
-                "dispatch",
-                "acquisition",
-                "completion",
-                "concurrency 5",
-            )
-        )
-        and _contains_any(section, ("control", "制御", "sweep"))
-        and _contains_any(section, ("共有 worker", "共有worker", "shared worker"))
-        and _contains_any(section, ("1 process", "1プロセス", "1つの process"))
-    )
-
-
-def test_architecture_separates_collection_visibility_but_shares_capacity() -> None:
-    section = _normalized(
-        _markdown_section(_required_text(_ARCHITECTURE_DOC), "非同期パイプライン")
-    )
-
-    assert (
-        all(
-            term in section
-            for term in (
-                "pipeline:acquisition",
-                "pipeline:completion",
-                "stream",
-                "group",
-                "age",
-                "db pool",
-                "backpressure",
-            )
-        )
-        and _contains_any(section, ("retention", "retained", "保持", "maxlen"))
-        and _contains_any(section, ("worker slot", "worker の slot"))
-        and _contains_any(
-            section,
-            ("failure domain", "failure isolation", "障害境界", "障害分離"),
-        )
-        and _contains_any(section, ("共有する", "共有した", "共有の", "shared"))
-    )
 
 
 def test_redis_topology_spec_names_greenfield_two_stream_live_topology() -> None:

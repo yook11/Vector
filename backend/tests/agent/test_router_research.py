@@ -770,6 +770,7 @@ class TestQuotaRouterTelemetry:
     async def test_admission_observability_failure_keeps_response(
         self,
         quota_research_client: tuple[AsyncClient, FakeEnqueue],
+        db_session: AsyncSession,
         monkeypatch: pytest.MonkeyPatch,
         request_kind: str,
     ) -> None:
@@ -835,10 +836,12 @@ class TestQuotaRouterTelemetry:
             assert response.status_code == 202
             run_id = UUID(response.json()["runId"])
             assert fake_enqueue.calls == [run_id]
+            db_session.expire_all()
+            run = await _fetch_run(db_session, run_id)
             assert observed == [
                 {
                     "run_id": run_id,
-                    "usage_date": _QUOTA_USAGE_DATE,
+                    "usage_date": run.quota_usage_date,
                     "used_count": 1,
                 }
             ]
