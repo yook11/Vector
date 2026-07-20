@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import AsyncGenerator
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime, timedelta, timezone
 from typing import Any
 from uuid import UUID
 
@@ -18,6 +18,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 import app.agent.router as research_router_module
 from app.agent.contract import AnswerQuestionResult, AnswerRetrievalSummary
 from app.agent.live_updates.stream import AgentRunLiveStreamTerminalEvent
+from app.agent.runs.contracts import DailyRequestLimitExceededError
 from app.agent.runs.repository import AgentRunRepository
 from app.config import settings
 from app.dependencies import get_redis_client
@@ -25,10 +26,18 @@ from app.main import app
 from app.models.agent_message import AgentMessage, AgentMessageSource
 from app.models.agent_run import AgentRun
 from app.models.agent_thread import AgentThread
+from app.models.agent_user_daily_quota import AgentUserDailyQuota
 from tests.conftest import TEST_ADMIN_ID, TEST_USER_ID
 
 _RESPONSES_URL = "/api/v1/research/responses"
 _THREADS_URL = "/api/v1/research/threads"
+_QUOTA_USAGE_DATE = date(2026, 7, 20)
+_QUOTA_RESET_AT = datetime(
+    2026,
+    7,
+    21,
+    tzinfo=timezone(timedelta(hours=9)),
+)
 
 
 class FakeEnqueue:
@@ -101,6 +110,31 @@ async def research_client(
     monkeypatch.setattr(research_router_module, "enqueue_agent_run", fake_enqueue)
     async with AsyncClient(
         transport=ASGITransport(app=app),
+        base_url="http://test",
+        headers=auth_headers,
+    ) as client:
+        yield client, fake_enqueue
+    app.dependency_overrides.clear()
+
+
+@pytest.fixture
+async def quota_research_client(
+    auth_headers: dict[str, str],
+    db_session: AsyncSession,
+    monkeypatch: pytest.MonkeyPatch,
+) -> AsyncGenerator[tuple[AsyncClient, FakeEnqueue]]:
+    async def override_history_session() -> AsyncGenerator[AsyncSession]:
+        if db_session.in_transaction():
+            await db_session.commit()
+        yield db_session
+
+    fake_enqueue = FakeEnqueue()
+    app.dependency_overrides[research_router_module.get_agent_persistence_session] = (
+        override_history_session
+    )
+    monkeypatch.setattr(research_router_module, "enqueue_agent_run", fake_enqueue)
+    async with AsyncClient(
+        transport=ASGITransport(app=app, raise_app_exceptions=False),
         base_url="http://test",
         headers=auth_headers,
     ) as client:
@@ -544,6 +578,131 @@ class TestCreateResearchResponse:
 
         assert response.status_code == 422
         assert fake_enqueue.calls == []
+
+    @pytest.mark.parametrize(
+        ("decided_at", "expected_retry_after"),
+        [
+            (datetime(2026, 7, 20, 14, 59, 59, 100_000, tzinfo=UTC), "1"),
+            (datetime(2026, 7, 20, 15, 0, 0, 100_000, tzinfo=UTC), "0"),
+        ],
+    )
+    async def test_daily_limit_error_is_flat_typed_429_after_transaction_rollback(
+        self,
+        quota_research_client: tuple[AsyncClient, FakeEnqueue],
+        db_session: AsyncSession,
+        monkeypatch: pytest.MonkeyPatch,
+        decided_at: datetime,
+        expected_retry_after: str,
+    ) -> None:
+        client, fake_enqueue = quota_research_client
+        db_session.add(
+            AgentUserDailyQuota(
+                user_id=UUID(TEST_USER_ID),
+                usage_date=_QUOTA_USAGE_DATE,
+                used_count=10,
+            )
+        )
+        await db_session.commit()
+
+        async def reject_with_fixed_clock(
+            _repository: AgentRunRepository,
+            *,
+            user_id: UUID,
+            question: str,
+            thread_id: UUID | None,
+            now: datetime | None = None,
+        ) -> object:
+            assert (user_id, question, thread_id, now) == (
+                UUID(TEST_USER_ID),
+                "quota rejected",
+                None,
+                None,
+            )
+            await db_session.execute(
+                update(AgentUserDailyQuota)
+                .where(
+                    AgentUserDailyQuota.user_id == user_id,
+                    AgentUserDailyQuota.usage_date == _QUOTA_USAGE_DATE,
+                )
+                .values(used_count=9)
+            )
+            db_session.add(AgentThread(user_id=user_id, title="must roll back"))
+            await db_session.flush()
+            raise DailyRequestLimitExceededError(
+                usage_date=_QUOTA_USAGE_DATE,
+                observed_at=decided_at - timedelta(seconds=5),
+                decided_at=decided_at,
+                limit=10,
+            )
+
+        monkeypatch.setattr(
+            AgentRunRepository,
+            "create_user_run",
+            reject_with_fixed_clock,
+        )
+
+        response = await client.post(
+            _RESPONSES_URL,
+            json={"question": "quota rejected"},
+        )
+
+        counter = await db_session.scalar(
+            select(AgentUserDailyQuota.used_count).where(
+                AgentUserDailyQuota.user_id == UUID(TEST_USER_ID),
+                AgentUserDailyQuota.usage_date == _QUOTA_USAGE_DATE,
+            )
+        )
+        assert counter == 10
+        assert (
+            await db_session.scalar(select(func.count()).select_from(AgentThread)) == 0
+        )
+        assert (
+            await db_session.scalar(select(func.count()).select_from(AgentMessage)) == 0
+        )
+        assert await db_session.scalar(select(func.count()).select_from(AgentRun)) == 0
+        assert fake_enqueue.calls == []
+        assert response.status_code == 429
+        assert response.json() == {
+            "detail": "Daily research request limit exceeded",
+            "code": "research_daily_request_limit_exceeded",
+            "limit": 10,
+            "resetAt": _QUOTA_RESET_AT.isoformat(),
+        }
+        assert response.headers["retry-after"] == expected_retry_after
+        assert response.headers["cache-control"] == "no-store"
+
+    async def test_tenth_request_is_accepted_and_eleventh_is_typed_429_without_writes(
+        self,
+        quota_research_client: tuple[AsyncClient, FakeEnqueue],
+        db_session: AsyncSession,
+    ) -> None:
+        client, fake_enqueue = quota_research_client
+
+        responses = [
+            await client.post(
+                _RESPONSES_URL,
+                json={"question": f"quota request {index}"},
+            )
+            for index in range(1, 12)
+        ]
+
+        assert (
+            await db_session.scalar(select(func.count()).select_from(AgentThread)) == 10
+        )
+        assert (
+            await db_session.scalar(select(func.count()).select_from(AgentMessage))
+            == 10
+        )
+        assert await db_session.scalar(select(func.count()).select_from(AgentRun)) == 10
+        quota_rows = (
+            (await db_session.execute(select(AgentUserDailyQuota))).scalars().all()
+        )
+        assert len(quota_rows) == 1
+        assert quota_rows[0].used_count == 10
+        assert len(fake_enqueue.calls) == 10
+        assert [response.status_code for response in responses] == [202] * 10 + [429]
+        assert responses[-1].json()["code"] == "research_daily_request_limit_exceeded"
+        assert responses[-1].headers["cache-control"] == "no-store"
 
 
 @pytest.mark.asyncio
@@ -1452,6 +1611,48 @@ def test_openapi_exposes_async_contract_and_question_shape() -> None:
     assert "threadId" in request_schema["properties"]
     assert set(accepted_schema["properties"]) == {"threadId", "runId"}
     assert "404" in operation["responses"]
+
+
+@pytest.mark.integration
+def test_openapi_exposes_flat_typed_daily_limit_without_persistent_error_code() -> None:
+    app.openapi_schema = None
+    schema = app.openapi()
+    operation = schema["paths"][_RESPONSES_URL]["post"]
+    quota_response = operation["responses"]["429"]
+    quota_schema = _resolve_ref(
+        schema,
+        quota_response["content"]["application/json"]["schema"]["$ref"],
+    )
+
+    assert set(quota_schema["properties"]) == {
+        "detail",
+        "code",
+        "limit",
+        "resetAt",
+    }
+    assert set(quota_schema["required"]) == {
+        "detail",
+        "code",
+        "limit",
+        "resetAt",
+    }
+    assert quota_schema["properties"]["detail"]["const"] == (
+        "Daily research request limit exceeded"
+    )
+    assert quota_schema["properties"]["code"]["const"] == (
+        "research_daily_request_limit_exceeded"
+    )
+    assert quota_schema["properties"]["limit"]["const"] == 10
+    assert quota_schema["properties"]["resetAt"]["format"] == "date-time"
+
+    persistent_run_schema = schema["components"]["schemas"]["ResearchRunResponse"]
+    assert "research_daily_request_limit_exceeded" not in str(
+        persistent_run_schema["properties"]["errorCode"]
+    )
+    generic_sse_429 = schema["paths"]["/api/v1/research/runs/{run_id}/events"]["get"][
+        "responses"
+    ]["429"]
+    assert "ResearchDailyRequestLimitExceededResponse" not in str(generic_sse_429)
 
 
 def test_openapi_exposes_thread_ui_contract_and_slim_run_signal() -> None:

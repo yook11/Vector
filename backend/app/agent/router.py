@@ -3,10 +3,13 @@
 from __future__ import annotations
 
 import asyncio
+import math
 import time
 from collections.abc import AsyncGenerator
+from datetime import datetime, timedelta
 from typing import Annotated
 from uuid import UUID
+from zoneinfo import ZoneInfo
 
 import redis.asyncio as aioredis
 import structlog
@@ -20,7 +23,7 @@ from fastapi import (
     Response,
     status,
 )
-from fastapi.responses import StreamingResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.agent.composition import ensure_external_search_configured
@@ -44,6 +47,7 @@ from app.agent.live_updates.stream import (
 from app.agent.runs.contracts import (
     ActiveRunConflictError,
     CancelRunOutcome,
+    DailyRequestLimitExceededError,
     OwnedAgentRunLiveContext,
     ThreadNotFoundError,
 )
@@ -55,6 +59,7 @@ from app.db import engine
 from app.dependencies import CurrentUser, get_current_user, get_redis_client
 from app.schemas.research import (
     PaginatedResearchThreadResponse,
+    ResearchDailyRequestLimitExceededResponse,
     ResearchQuestionRequest,
     ResearchRunResponse,
     ResearchRunStartResponse,
@@ -73,6 +78,7 @@ _THREAD_NOT_FOUND_DETAIL = "Research thread not found"
 _RUN_NOT_FOUND_DETAIL = "Research run not found"
 _SSE_RETRY_AFTER_SECONDS = 5
 _SSE_CAPACITY_STATE_KEY = "agent_run_sse_capacity"
+_JST = ZoneInfo("Asia/Tokyo")
 
 
 async def get_agent_persistence_session() -> AsyncGenerator[AsyncSession]:
@@ -127,13 +133,17 @@ def get_agent_run_sse_timing() -> AgentRunSseTiming:
         },
         status.HTTP_409_CONFLICT: {"description": _ACTIVE_RUN_DETAIL},
         status.HTTP_404_NOT_FOUND: {"description": _THREAD_NOT_FOUND_DETAIL},
+        status.HTTP_429_TOO_MANY_REQUESTS: {
+            "description": "Daily research request limit exceeded",
+            "model": ResearchDailyRequestLimitExceededResponse,
+        },
     },
 )
 async def create_research_response(
     body: ResearchQuestionRequest,
     user: Annotated[CurrentUser, Depends(get_current_user)],
     session: Annotated[AsyncSession, Depends(get_agent_persistence_session)],
-) -> ResearchRunStartResponse:
+) -> ResearchRunStartResponse | JSONResponse:
     try:
         ensure_external_search_configured()
     except AIProviderError as exc:
@@ -154,6 +164,30 @@ async def create_research_response(
             status_code=status.HTTP_409_CONFLICT,
             detail=_ACTIVE_RUN_DETAIL,
         ) from exc
+    except DailyRequestLimitExceededError as exc:
+        reset_at = datetime.combine(
+            exc.usage_date + timedelta(days=1),
+            datetime.min.time(),
+            tzinfo=_JST,
+        )
+        retry_after = max(
+            0,
+            math.ceil((reset_at - exc.decided_at).total_seconds()),
+        )
+        response = ResearchDailyRequestLimitExceededResponse(
+            detail="Daily research request limit exceeded",
+            code="research_daily_request_limit_exceeded",
+            limit=exc.limit,
+            reset_at=reset_at,
+        )
+        return JSONResponse(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            content=response.model_dump(mode="json", by_alias=True),
+            headers={
+                "Retry-After": str(retry_after),
+                "Cache-Control": "no-store",
+            },
+        )
 
     try:
         await enqueue_agent_run(created.run_id)

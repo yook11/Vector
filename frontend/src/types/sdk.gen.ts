@@ -202,10 +202,20 @@ export const getSourceHealth = <ThrowOnError extends boolean = false>(options?: 
 /**
  * Fetch News
  *
- * ニュース取得タスクをキュー投入する。
+ * ニュース取得タスクを best-effort でキュー投入する。
  *
- * source_ids 指定時はソースごとに個別タスクを dispatch、
- * 未指定時は dispatch_sources で全アクティブソースを dispatch。
+ * `source_ids` 指定時はソースごとに個別 task を dispatch し、未指定時は
+ * `dispatch_sources` で全 active source を dispatch する。`202 Accepted` と
+ * `dispatchedCount` は enqueue の受付のみを表し、実行・完了・耐久性を保証しない。
+ *
+ * - inactive source は cron で自動再投入されない。operator は request 時刻と
+ * source ID に対応する実行証跡を確認し、queue 滞留の解消後も証跡がなければ
+ * 再実行する。
+ * - 再実行時も durable row の dedup は維持されるが、外部 HTTP 取得と新規記事の
+ * AI 処理は再発し得る。
+ * - multi-source の enqueue は非 atomic なループであり、失敗時は一部だけ
+ * enqueue 済みになり得る。
+ * - durable job ID / status の永続化は別 slice で扱う。
  */
 export const fetchNews = <ThrowOnError extends boolean = false>(options?: Options<FetchNewsData, ThrowOnError>): RequestResult<FetchNewsResponses, FetchNewsErrors, ThrowOnError> => (options?.client ?? client).post<FetchNewsResponses, FetchNewsErrors, ThrowOnError>({
     url: '/api/v1/admin/pipeline/fetch',
