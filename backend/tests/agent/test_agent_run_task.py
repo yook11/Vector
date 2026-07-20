@@ -3164,6 +3164,80 @@ async def test_sweep_task_does_not_observe_quota_results_when_transaction_rolls_
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "failing_sink",
+    ["total_log", "quota_log", "queued_metric", "running_metric"],
+)
+async def test_sweep_task_telemetry_sink_failure_keeps_committed_sweep_and_other_sinks(
+    session_factory: async_sessionmaker[AsyncSession],
+    monkeypatch: pytest.MonkeyPatch,
+    failing_sink: str,
+) -> None:
+    now = datetime.now(UTC)
+    usage_date = date(2026, 7, 20)
+    async with session_factory() as setup_session:
+        _queued_thread, _queued_message, queued = await _create_thread_message_run(
+            setup_session,
+            question="queued stale telemetry isolation",
+            created_at=now - timedelta(minutes=21),
+            quota_usage_date=usage_date,
+        )
+        _running_thread, _running_message, running = await _create_thread_message_run(
+            setup_session,
+            question="running stale telemetry isolation",
+            status="running",
+            created_at=now - timedelta(minutes=30),
+            started_at=now - timedelta(minutes=21),
+            quota_usage_date=usage_date,
+        )
+    attempts: list[str] = []
+
+    def record_total_log(event: str, **_kwargs: object) -> None:
+        if event == "agent_runs_stale_swept":
+            attempts.append("total_log")
+            if failing_sink == "total_log":
+                raise RuntimeError("total stale log sink unavailable")
+
+    def record_quota_log(event: str, **_kwargs: object) -> None:
+        if event == "agent_user_daily_quota_stale_reservations_retained":
+            attempts.append("quota_log")
+            if failing_sink == "quota_log":
+                raise RuntimeError("quota stale log sink unavailable")
+
+    def record_stale_reservation(*, previous_status: str, count: int = 1) -> None:
+        assert count == 1
+        attempts.append(f"{previous_status}_metric")
+        if failing_sink == f"{previous_status}_metric":
+            raise RuntimeError("quota stale metric sink unavailable")
+
+    monkeypatch.setattr(agent_run_tasks.logger, "info", record_total_log)
+    monkeypatch.setattr(agent_run_tasks.logger, "warning", record_quota_log)
+    monkeypatch.setattr(
+        agent_run_tasks,
+        "record_daily_quota_stale_reservation",
+        record_stale_reservation,
+    )
+
+    await agent_run_tasks.sweep_stale_agent_runs(ctx=_ctx(session_factory))
+
+    assert set(attempts) == {
+        "total_log",
+        "quota_log",
+        "queued_metric",
+        "running_metric",
+    }
+    async with session_factory() as verification:
+        persisted = [
+            await verification.get(AgentRun, run_id)
+            for run_id in (queued.id, running.id)
+        ]
+    assert [run.status if run is not None else None for run in persisted] == [
+        "failed",
+        "failed",
+    ]
+
+
+@pytest.mark.asyncio
 async def test_ten_quota_queued_stale_runs_keep_counter_and_aggregate_all(
     session_factory: async_sessionmaker[AsyncSession],
 ) -> None:

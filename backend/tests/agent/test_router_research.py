@@ -501,6 +501,55 @@ class TestCreateResearchResponse:
         assert run.error_code == "enqueue_failed"
         assert "SHOULD_NOT_LEAK" not in response.text
 
+    async def test_enqueue_failure_rollback_keeps_initial_quota_reservation(
+        self,
+        quota_research_client: tuple[AsyncClient, FakeEnqueue],
+        db_session: AsyncSession,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        client, fake_enqueue = quota_research_client
+        fake_enqueue.exc = RuntimeError("queue unavailable")
+        original_mark_enqueue_failed = AgentRunRepository.mark_enqueue_failed
+
+        async def update_then_fail(
+            repository: AgentRunRepository,
+            run_id: UUID,
+            *,
+            now: datetime | None = None,
+        ) -> bool:
+            assert await original_mark_enqueue_failed(repository, run_id, now=now)
+            raise RuntimeError("mark failed transaction aborted")
+
+        monkeypatch.setattr(
+            AgentRunRepository,
+            "mark_enqueue_failed",
+            update_then_fail,
+        )
+
+        response = await client.post(
+            _RESPONSES_URL,
+            json={"question": "第2トランザクションが失敗する質問"},
+        )
+
+        assert response.status_code == 503
+        assert response.json() == {"detail": "Failed to enqueue research run"}
+        assert len(fake_enqueue.calls) == 1
+        db_session.expire_all()
+        runs = (await db_session.execute(select(AgentRun))).scalars().all()
+        messages = (await db_session.execute(select(AgentMessage))).scalars().all()
+        threads = (await db_session.execute(select(AgentThread))).scalars().all()
+        quotas = (await db_session.execute(select(AgentUserDailyQuota))).scalars().all()
+        assert len(runs) == 1
+        assert (runs[0].status, runs[0].error_code) == ("queued", None)
+        assert len(messages) == 1
+        assert messages[0].id == runs[0].user_message_id
+        assert len(threads) == 1
+        assert threads[0].id == runs[0].thread_id
+        quota_values = [
+            (quota.user_id, quota.usage_date, quota.used_count) for quota in quotas
+        ]
+        assert quota_values == [(UUID(TEST_USER_ID), runs[0].quota_usage_date, 1)]
+
     async def test_enqueue_failure_does_not_fail_run_that_already_started(
         self,
         auth_headers: dict[str, str],
@@ -714,6 +763,231 @@ class TestCreateResearchResponse:
 
 @pytest.mark.asyncio
 class TestQuotaRouterTelemetry:
+    @pytest.mark.parametrize(
+        ("request_kind", "failing_sink"),
+        [
+            ("accepted", "log"),
+            ("accepted", "metric"),
+            ("rejected", "log"),
+            ("rejected", "metric"),
+        ],
+    )
+    async def test_admission_telemetry_sink_failure_keeps_response_and_other_sink(
+        self,
+        quota_research_client: tuple[AsyncClient, FakeEnqueue],
+        monkeypatch: pytest.MonkeyPatch,
+        request_kind: str,
+        failing_sink: str,
+    ) -> None:
+        client, fake_enqueue = quota_research_client
+        log_events: list[str] = []
+        metric_results: list[str] = []
+
+        def record_quota_log(event: str, **_kwargs: object) -> None:
+            log_events.append(event)
+            if failing_sink == "log":
+                raise RuntimeError("quota log sink unavailable")
+
+        def record_admission(*, result: str) -> None:
+            metric_results.append(result)
+            if failing_sink == "metric":
+                raise RuntimeError("quota metric sink unavailable")
+
+        monkeypatch.setattr(research_router_module.logger, "info", record_quota_log)
+        monkeypatch.setattr(
+            research_router_module,
+            "record_daily_quota_admission",
+            record_admission,
+        )
+        if request_kind == "rejected":
+
+            async def reject_with_fixed_clock(
+                _repository: AgentRunRepository,
+                **_kwargs: object,
+            ) -> object:
+                raise DailyRequestLimitExceededError(
+                    usage_date=_QUOTA_USAGE_DATE,
+                    observed_at=datetime(2026, 7, 20, 14, 59, tzinfo=UTC),
+                    decided_at=datetime(2026, 7, 20, 14, 59, 59, tzinfo=UTC),
+                    limit=10,
+                )
+
+            monkeypatch.setattr(
+                AgentRunRepository,
+                "create_user_run",
+                reject_with_fixed_clock,
+            )
+
+        response = await client.post(
+            _RESPONSES_URL,
+            json={"question": f"{request_kind} telemetry failure"},
+        )
+
+        expected_event = {
+            "accepted": "agent_user_daily_quota_reserved",
+            "rejected": "agent_user_daily_quota_rejected",
+        }[request_kind]
+        expected_result = "accepted" if request_kind == "accepted" else "rejected"
+        assert log_events == [expected_event]
+        assert metric_results == [expected_result]
+        if request_kind == "accepted":
+            assert response.status_code == 202
+            assert fake_enqueue.calls == [UUID(response.json()["runId"])]
+        else:
+            assert response.status_code == 429
+            assert response.json() == {
+                "detail": "Daily research request limit exceeded",
+                "code": "research_daily_request_limit_exceeded",
+                "limit": 10,
+                "resetAt": "2026-07-21T00:00:00+09:00",
+            }
+            assert response.headers["retry-after"] == "1"
+
+    @pytest.mark.parametrize("failing_sink", ["log", "metric"])
+    async def test_queued_release_telemetry_sink_failure_keeps_cancelled_response(
+        self,
+        quota_research_client: tuple[AsyncClient, FakeEnqueue],
+        db_session: AsyncSession,
+        monkeypatch: pytest.MonkeyPatch,
+        failing_sink: str,
+    ) -> None:
+        client, _fake_enqueue = quota_research_client
+        thread = await _create_thread(db_session)
+        message = await _create_message(
+            db_session,
+            thread_id=thread.id,
+            seq=1,
+            role="user",
+            content="queued quota release",
+        )
+        run = await _create_run(
+            db_session,
+            thread_id=thread.id,
+            user_message_id=message.id,
+        )
+        run_id = run.id
+        run.quota_usage_date = _QUOTA_USAGE_DATE
+        db_session.add(
+            AgentUserDailyQuota(
+                user_id=UUID(TEST_USER_ID),
+                usage_date=_QUOTA_USAGE_DATE,
+                used_count=1,
+            )
+        )
+        await db_session.commit()
+        log_events: list[str] = []
+        metric_results: list[str] = []
+
+        def record_quota_log(event: str, **_kwargs: object) -> None:
+            log_events.append(event)
+            if failing_sink == "log":
+                raise RuntimeError("quota log sink unavailable")
+
+        def record_release(*, result: str) -> None:
+            metric_results.append(result)
+            if failing_sink == "metric":
+                raise RuntimeError("quota metric sink unavailable")
+
+        monkeypatch.setattr(research_router_module.logger, "info", record_quota_log)
+        monkeypatch.setattr(
+            research_router_module,
+            "record_daily_quota_release",
+            record_release,
+        )
+
+        response = await client.post(f"/api/v1/research/runs/{run_id}/cancel")
+
+        assert response.status_code == 204
+        assert log_events == ["agent_user_daily_quota_released"]
+        assert metric_results == ["released"]
+        db_session.expire_all()
+        persisted = await _fetch_run(db_session, run_id)
+        assert (persisted.status, persisted.error_code) == ("failed", "cancelled")
+        assert (
+            await db_session.scalar(
+                select(AgentUserDailyQuota.used_count).where(
+                    AgentUserDailyQuota.user_id == UUID(TEST_USER_ID),
+                    AgentUserDailyQuota.usage_date == _QUOTA_USAGE_DATE,
+                )
+            )
+            == 0
+        )
+
+    async def test_running_not_eligible_metric_failure_keeps_terminal_publish(
+        self,
+        quota_research_client: tuple[AsyncClient, FakeEnqueue],
+        db_session: AsyncSession,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        client, _fake_enqueue = quota_research_client
+        thread = await _create_thread(db_session)
+        message = await _create_message(
+            db_session,
+            thread_id=thread.id,
+            seq=1,
+            role="user",
+            content="running quota not eligible",
+        )
+        run = await _create_run(
+            db_session,
+            thread_id=thread.id,
+            user_message_id=message.id,
+            status="running",
+            attempt_epoch=3,
+        )
+        run_id = run.id
+        run.quota_usage_date = _QUOTA_USAGE_DATE
+        db_session.add(
+            AgentUserDailyQuota(
+                user_id=UUID(TEST_USER_ID),
+                usage_date=_QUOTA_USAGE_DATE,
+                used_count=1,
+            )
+        )
+        await db_session.commit()
+        metric_results: list[str] = []
+        FakeCancelStreamPublisher.instances = []
+
+        def fail_record_release(*, result: str) -> None:
+            metric_results.append(result)
+            raise RuntimeError("quota metric sink unavailable")
+
+        monkeypatch.setattr(
+            research_router_module,
+            "record_daily_quota_release",
+            fail_record_release,
+        )
+        monkeypatch.setattr(
+            research_router_module,
+            "AgentRunLiveStreamPublisher",
+            FakeCancelStreamPublisher,
+        )
+        app.dependency_overrides[get_redis_client] = lambda: FakeRunEventsRedis()
+
+        response = await client.post(f"/api/v1/research/runs/{run_id}/cancel")
+
+        assert response.status_code == 204
+        assert metric_results == ["not_eligible"]
+        assert len(FakeCancelStreamPublisher.instances) == 1
+        assert FakeCancelStreamPublisher.instances[0].published == [
+            AgentRunLiveStreamTerminalEvent(
+                status="failed",
+                errorCode="cancelled",
+            )
+        ]
+        db_session.expire_all()
+        persisted = await _fetch_run(db_session, run_id)
+        assert (persisted.status, persisted.error_code) == ("failed", "cancelled")
+        assert (
+            await db_session.scalar(
+                select(AgentUserDailyQuota.used_count).where(
+                    AgentUserDailyQuota.user_id == UUID(TEST_USER_ID),
+                    AgentUserDailyQuota.usage_date == _QUOTA_USAGE_DATE,
+                )
+            )
+            == 1
+        )
+
     async def test_accepted_request_records_safe_quota_admission_after_commit(
         self,
         quota_research_client: tuple[AsyncClient, FakeEnqueue],

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from contextlib import suppress
 from datetime import UTC, datetime
 from uuid import UUID
 
@@ -210,21 +211,25 @@ async def sweep_stale_agent_runs(ctx: Context = TaskiqDepends()) -> None:
     async with session_factory() as session:
         async with session.begin():
             result = await AgentRunRepository(session).sweep_stale_runs()
-    logger.info("agent_runs_stale_swept", count=result.total_count)
+    with suppress(Exception):
+        logger.info("agent_runs_stale_swept", count=result.total_count)
     if result.quota_queued_count + result.quota_running_count > 0:
-        logger.warning(
-            "agent_user_daily_quota_stale_reservations_retained",
-            queued_count=result.quota_queued_count,
-            running_count=result.quota_running_count,
-        )
-        record_daily_quota_stale_reservation(
-            previous_status="queued",
-            count=result.quota_queued_count,
-        )
-        record_daily_quota_stale_reservation(
-            previous_status="running",
-            count=result.quota_running_count,
-        )
+        with suppress(Exception):
+            logger.warning(
+                "agent_user_daily_quota_stale_reservations_retained",
+                queued_count=result.quota_queued_count,
+                running_count=result.quota_running_count,
+            )
+        with suppress(Exception):
+            record_daily_quota_stale_reservation(
+                previous_status="queued",
+                count=result.quota_queued_count,
+            )
+        with suppress(Exception):
+            record_daily_quota_stale_reservation(
+                previous_status="running",
+                count=result.quota_running_count,
+            )
 
 
 async def _acquire_run(

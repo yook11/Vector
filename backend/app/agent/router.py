@@ -6,6 +6,7 @@ import asyncio
 import math
 import time
 from collections.abc import AsyncGenerator
+from contextlib import suppress
 from datetime import date, datetime, timedelta
 from typing import Annotated, cast
 from uuid import UUID
@@ -172,12 +173,14 @@ async def create_research_response(
             detail=_ACTIVE_RUN_DETAIL,
         ) from exc
     except DailyRequestLimitExceededError as exc:
-        logger.info(
-            "agent_user_daily_quota_rejected",
-            usage_date=exc.usage_date.isoformat(),
-            limit=_DAILY_REQUEST_LIMIT,
-        )
-        record_daily_quota_admission(result="rejected")
+        with suppress(Exception):
+            logger.info(
+                "agent_user_daily_quota_rejected",
+                usage_date=exc.usage_date.isoformat(),
+                limit=_DAILY_REQUEST_LIMIT,
+            )
+        with suppress(Exception):
+            record_daily_quota_admission(result="rejected")
         reset_at = datetime.combine(
             exc.usage_date + timedelta(days=1),
             datetime.min.time(),
@@ -202,14 +205,16 @@ async def create_research_response(
             },
         )
 
-    logger.info(
-        "agent_user_daily_quota_reserved",
-        run_id=str(created.run_id),
-        usage_date=created.usage_date.isoformat(),
-        used_count=created.used_count,
-        limit=_DAILY_REQUEST_LIMIT,
-    )
-    record_daily_quota_admission(result="accepted")
+    with suppress(Exception):
+        logger.info(
+            "agent_user_daily_quota_reserved",
+            run_id=str(created.run_id),
+            usage_date=created.usage_date.isoformat(),
+            used_count=created.used_count,
+            limit=_DAILY_REQUEST_LIMIT,
+        )
+    with suppress(Exception):
+        record_daily_quota_admission(result="accepted")
 
     try:
         await enqueue_agent_run(created.run_id)
@@ -348,24 +353,29 @@ def _observe_daily_quota_release(*, run_id: UUID, result: CancelRunResult) -> No
 
     release_outcome = result.quota_release_outcome
     if release_outcome is DailyQuotaReleaseOutcome.RELEASED:
-        record_daily_quota_release(result="released")
-        logger.info(
-            "agent_user_daily_quota_released",
-            run_id=str(run_id),
-            usage_date=cast(date, result.quota_usage_date).isoformat(),
-            used_count=cast(int, result.quota_used_count),
-            limit=_DAILY_REQUEST_LIMIT,
-        )
+        with suppress(Exception):
+            record_daily_quota_release(result="released")
+        with suppress(Exception):
+            logger.info(
+                "agent_user_daily_quota_released",
+                run_id=str(run_id),
+                usage_date=cast(date, result.quota_usage_date).isoformat(),
+                used_count=cast(int, result.quota_used_count),
+                limit=_DAILY_REQUEST_LIMIT,
+            )
     elif release_outcome is DailyQuotaReleaseOutcome.INCONSISTENT:
-        record_daily_quota_release(result="inconsistent")
-        logger.error(
-            "agent_user_daily_quota_release_inconsistent",
-            run_id=str(run_id),
-            usage_date=cast(date, result.quota_usage_date).isoformat(),
-            limit=_DAILY_REQUEST_LIMIT,
-        )
+        with suppress(Exception):
+            record_daily_quota_release(result="inconsistent")
+        with suppress(Exception):
+            logger.error(
+                "agent_user_daily_quota_release_inconsistent",
+                run_id=str(run_id),
+                usage_date=cast(date, result.quota_usage_date).isoformat(),
+                limit=_DAILY_REQUEST_LIMIT,
+            )
     elif release_outcome is DailyQuotaReleaseOutcome.NOT_ELIGIBLE:
-        record_daily_quota_release(result="not_eligible")
+        with suppress(Exception):
+            record_daily_quota_release(result="not_eligible")
 
 
 async def _publish_cancel_terminal(
