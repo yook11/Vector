@@ -9,6 +9,7 @@ from typing import Any
 from uuid import UUID
 
 import pytest
+from logfire.testing import CaptureLogfire
 
 from app.agent.answering.contract import AnsweringRequest
 from app.agent.answering.direct_answer.contract import DirectAnswerDraft
@@ -33,6 +34,7 @@ from app.agent.planning.contract import (
     InternalRetrievalPlan,
     PlanningRequest,
     QuestionPlan,
+    TargetTimeWindow,
 )
 from app.agent.question_context import (
     QuestionContext,
@@ -44,11 +46,13 @@ from app.agent.running import answering_runner as answering_runner_module
 from app.analysis.analyzed_article import InScopeAnalyzedArticle
 from app.analysis.assessment.domain.result import InScope, InScopeCategory
 from tests.agent.runtime._fakes import ScriptedAgentRuntime
+from tests.logfire._metric_helpers import collected_metrics
 
 RUN_CONTEXT = RunContext(
     run_id=UUID("019bd239-1ed4-7fbb-a336-04fe3c197652"),
     as_of=datetime(2026, 7, 20, 9, 30, tzinfo=UTC),
 )
+_TARGET_TIME_WINDOW = TargetTimeWindow(kind="last_n_days", days=1)
 
 
 def _task(goal: str = "NVIDIA の供給を確認する") -> ExternalResearchTask:
@@ -381,7 +385,7 @@ class _EvidenceAnswerer:
         *,
         request: AnsweringRequest,
         evidence: list[object],
-        target_time_window: str | None,
+        target_time_window: TargetTimeWindow | None,
     ) -> EvidenceAnswerDraft:
         del request, target_time_window
         self._timeline.append("answerer.start")
@@ -487,7 +491,7 @@ def _capture_external_outcome(
 def _external_plan(*tasks: ExternalResearchTask) -> ExternalSearchPlan:
     return ExternalSearchPlan(
         external_research_tasks=list(tasks or (_task(),)),
-        target_time_window="直近24時間",
+        target_time_window=_TARGET_TIME_WINDOW,
         reason="external",
     )
 
@@ -496,7 +500,7 @@ def _mixed_plan(*tasks: ExternalResearchTask) -> InternalAndExternalPlan:
     return InternalAndExternalPlan(
         internal_queries=["NVIDIA", "Blackwell"],
         external_research_tasks=list(tasks or (_task(),)),
-        target_time_window="直近24時間",
+        target_time_window=_TARGET_TIME_WINDOW,
         reason="mixed",
     )
 
@@ -508,7 +512,7 @@ async def test_external_scope_exits_before_evidence_answering_starts() -> None:
     runner = _runner(
         plan=ExternalSearchPlan(
             external_research_tasks=[_task()],
-            target_time_window="直近24時間",
+            target_time_window=_TARGET_TIME_WINDOW,
             reason="external",
         ),
         internal=_InternalSearch(),
@@ -534,7 +538,7 @@ async def test_mixed_external_scope_closes_while_internal_branch_is_pending() ->
         plan=InternalAndExternalPlan(
             internal_queries=["NVIDIA"],
             external_research_tasks=[_task()],
-            target_time_window="直近24時間",
+            target_time_window=_TARGET_TIME_WINDOW,
             reason="mixed",
         ),
         internal=internal,
@@ -631,7 +635,9 @@ async def test_outer_cancellation_joins_external_query_before_scope_close() -> N
 
 
 @pytest.mark.asyncio
-async def test_internal_plan_never_activates_external_scope() -> None:
+async def test_internal_plan_never_activates_external_scope_or_time_filter_metric(
+    capfire: CaptureLogfire,
+) -> None:
     timeline: list[str] = []
     factory = _Factory([], timeline)
     runner = _runner(
@@ -645,8 +651,16 @@ async def test_internal_plan_never_activates_external_scope() -> None:
     )
 
     await _run(runner)
+    metrics = collected_metrics(capfire)
 
-    assert factory.scopes == []
+    assert (
+        factory.scopes,
+        [
+            metric
+            for metric in metrics
+            if metric["name"] == "external_search_time_filter_resolution_total"
+        ],
+    ) == ([], [])
 
 
 @pytest.mark.asyncio
@@ -759,7 +773,7 @@ async def test_runner_passes_external_plan_values_to_query_input(
         query_input.as_of,
         query_input.target_time_window,
         captured[0].external_search.tasks,
-    ) == (task, RUN_CONTEXT.as_of, "直近24時間", [task])
+    ) == (task, RUN_CONTEXT.as_of, _TARGET_TIME_WINDOW, [task])
 
 
 @pytest.mark.asyncio

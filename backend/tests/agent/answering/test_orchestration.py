@@ -43,6 +43,7 @@ from app.agent.planning.contract import (
     PlanningRequest,
     QuestionPlan,
     RetrievalPlan,
+    TargetTimeWindow,
 )
 from app.agent.question_context.contract import (
     AnswerRequirement,
@@ -107,7 +108,7 @@ def _internal_plan() -> InternalRetrievalPlan:
 def _external_plan() -> ExternalSearchPlan:
     return ExternalSearchPlan(
         external_research_tasks=[_task(0)],
-        target_time_window="今日",
+        target_time_window=TargetTimeWindow(kind="today"),
         reason="external evidence required",
     )
 
@@ -116,7 +117,7 @@ def _mixed_plan() -> InternalAndExternalPlan:
     return InternalAndExternalPlan(
         internal_queries=["NVIDIA AI GPU"],
         external_research_tasks=[_task(0), _task(1)],
-        target_time_window="直近24時間",
+        target_time_window=TargetTimeWindow(kind="last_n_days", days=1),
         reason="both evidence types required",
     )
 
@@ -422,7 +423,7 @@ class FakeEvidenceAnswerer:
         *,
         request: AnsweringRequest,
         evidence: list[object],
-        target_time_window: str | None,
+        target_time_window: TargetTimeWindow | None,
     ) -> EvidenceAnswerDraft:
         if self._timeline is not None:
             self._timeline.record("evidence_answerer.answer")
@@ -1106,7 +1107,9 @@ async def test_answer_passes_pipeline_inputs_and_variant_time_window() -> None:
         as_of=input_.as_of,
     )
     assert evidence_answerer.calls[0]["request"].context is input_.context
-    assert evidence_answerer.calls[0]["target_time_window"] == "直近24時間"
+    assert evidence_answerer.calls[0]["target_time_window"] == TargetTimeWindow(
+        kind="last_n_days", days=1
+    )
     assert set(evidence_answerer.calls[0]) == {
         "request",
         "evidence",

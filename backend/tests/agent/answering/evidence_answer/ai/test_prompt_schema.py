@@ -24,6 +24,7 @@ from app.agent.answering.evidence_answer.prompts import (
     render_evidence_answer_input,
 )
 from app.agent.contract import ExternalUrlSource, InternalArticleSource
+from app.agent.planning.contract import TargetTimeWindow
 from app.agent.question_context.contract import AnswerRequirement, QuestionContext
 
 
@@ -67,7 +68,7 @@ def _render(
     *,
     request: AnsweringRequest | None = None,
     evidence: tuple[AnswerEvidenceItem, ...] = (),
-    target_time_window: str | None = None,
+    target_time_window: TargetTimeWindow | None = None,
     previous_error: str | None = None,
 ) -> str:
     return render_evidence_answer_input(
@@ -100,7 +101,7 @@ def test_renderer_sanitizes_all_untrusted_boundaries() -> None:
             active_goal=attack,
         ),
         evidence=(_evidence(),),
-        target_time_window=attack,
+        target_time_window=TargetTimeWindow(kind="today"),
         previous_error=attack,
     )
 
@@ -132,13 +133,25 @@ def test_renderer_keeps_variant_specific_evidence_fields() -> None:
 
     rendered = _render(
         evidence=(internal, external),
-        target_time_window="今日",
+        target_time_window=TargetTimeWindow(kind="today"),
     )
 
     assert "article_id: 101" in rendered
     assert "source_name: Example News" in rendered
     assert "claim: external selected claim" in rendered
     assert "provider snippet stays in text" in rendered
+
+
+def test_renderer_displays_typed_window_and_none_with_the_shared_prompt_value() -> None:
+    typed_rendered = _render(
+        target_time_window=TargetTimeWindow(kind="last_n_days", days=7),
+    )
+    none_rendered = _render(target_time_window=None)
+
+    assert (
+        "target_time_window: 直近7日" in typed_rendered,
+        "target_time_window: 未指定" in none_rendered,
+    ) == (True, True)
 
 
 def test_no_evidence_and_repair_paths_remain_model_visible_input() -> None:

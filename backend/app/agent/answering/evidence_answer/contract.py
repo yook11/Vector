@@ -10,6 +10,7 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 from app.agent.answering.contract import AnsweringRequest
 from app.agent.answering.evidence_answer.evidence import AnswerEvidenceItem
 from app.agent.contract import NonBlankText
+from app.agent.planning.contract import TargetTimeWindow
 
 __all__ = [
     "EvidenceAnswerDraft",
@@ -30,7 +31,7 @@ class EvidenceAnswerInput:
 
     request: AnsweringRequest
     evidence: tuple[AnswerEvidenceItem, ...]
-    target_time_window: str | None
+    target_time_window: TargetTimeWindow | None
     previous_error: str | None = None
 
 
@@ -87,7 +88,7 @@ class EvidenceAnswerer(Protocol):
         *,
         request: AnsweringRequest,
         evidence: list[AnswerEvidenceItem],
-        target_time_window: str | None,
+        target_time_window: TargetTimeWindow | None,
     ) -> EvidenceAnswerDraft: ...
 
 

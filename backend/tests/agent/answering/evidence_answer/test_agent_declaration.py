@@ -18,6 +18,7 @@ from app.agent.answering.evidence_answer.contract import (
 )
 from app.agent.answering.evidence_answer.evidence import AnswerEvidenceItem
 from app.agent.contract import ExternalUrlSource
+from app.agent.planning.contract import TargetTimeWindow
 from app.agent.question_context.contract import AnswerRequirement, QuestionContext
 from app.agent.runtime.gemini import GeminiAgentRuntime
 from tests.agent.runtime._helpers import FakeGeminiClient
@@ -129,7 +130,7 @@ def test_fixed_instructions_and_rendered_input_are_separated() -> None:
     input = input_type(
         request=_request(),
         evidence=(_evidence(),),
-        target_time_window="TIME_WINDOW_SENTINEL",
+        target_time_window=TargetTimeWindow(kind="last_n_days", days=7),
         previous_error="PREVIOUS_ERROR_SENTINEL",
     )
 
@@ -146,11 +147,11 @@ def test_fixed_instructions_and_rendered_input_are_separated() -> None:
         "EVIDENCE_TITLE_SENTINEL",
         "EVIDENCE_CLAIM_SENTINEL",
         "EVIDENCE_TEXT_SENTINEL",
-        "TIME_WINDOW_SENTINEL",
         "PREVIOUS_ERROR_SENTINEL",
     ):
         assert sentinel in rendered
         assert sentinel not in agent.prompt.instructions
+    assert "target_time_window: 直近7日" in rendered
 
 
 async def test_runtime_request_keeps_fixed_and_dynamic_text_separate() -> None:
@@ -159,7 +160,7 @@ async def test_runtime_request_keeps_fixed_and_dynamic_text_separate() -> None:
     input = EvidenceAnswerInput(
         request=_request(),
         evidence=(_evidence(),),
-        target_time_window="TIME_WINDOW_SENTINEL",
+        target_time_window=TargetTimeWindow(kind="last_n_days", days=7),
         previous_error="PREVIOUS_ERROR_SENTINEL",
     )
     stream = GeminiAgentRuntime(client=cast(AsyncClient, client)).invoke_stream(

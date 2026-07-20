@@ -34,6 +34,7 @@ from app.agent.planning.contract import (
     ExternalResearchTask,
     ExternalSearchPlan,
     PlanningRequest,
+    TargetTimeWindow,
 )
 from app.agent.question_context import (
     QuestionContext,
@@ -104,7 +105,11 @@ class _Planner:
             external_research_tasks=[
                 ExternalResearchTask(collection_goal="GOAL_SENTINEL_3cc7")
             ],
-            target_time_window="WINDOW_SENTINEL_9b28",
+            target_time_window=TargetTimeWindow(
+                kind="calendar_month",
+                year=1998,
+                month=2,
+            ),
             reason="trace external pipeline",
         )
 
@@ -129,7 +134,7 @@ class _EvidenceAnswerer:
         *,
         request: AnsweringRequest,
         evidence: list[Any],
-        target_time_window: str | None,
+        target_time_window: TargetTimeWindow | None,
     ) -> EvidenceAnswerDraft:
         del request, target_time_window
         return EvidenceAnswerDraft(
@@ -293,7 +298,7 @@ async def test_external_phase_spans_keep_attributes_parentage_and_no_sensitive_t
     assert all(exception_event(phase) is None for phase in phases)
     for unsafe in (
         "GOAL_SENTINEL_3cc7",
-        "WINDOW_SENTINEL_9b28",
+        "1998年2月",
         "TRACE_URL_SENTINEL_63df",
         "CANDIDATE_TITLE_SENTINEL_4cab",
         "CANDIDATE_SNIPPET_SENTINEL_00f4",

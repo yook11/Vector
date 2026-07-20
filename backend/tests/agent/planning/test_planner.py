@@ -7,7 +7,7 @@ import json
 from collections.abc import Sequence
 from datetime import UTC, datetime
 from types import TracebackType
-from typing import Any
+from typing import Any, cast
 
 import pytest
 from logfire.testing import CaptureLogfire
@@ -51,14 +51,27 @@ def _draft(
     *,
     internal_queries: list[str] | None = None,
     external_collection_goals: list[str] | None = None,
+    target_time_window: object | None = None,
     reason: str = "test reason",
 ) -> QuestionPlanDraft:
     return QuestionPlanDraft(
         retrieval_mode=mode,
         internal_queries=internal_queries or [],
         external_collection_goals=external_collection_goals or [],
+        target_time_window=target_time_window,
         reason=reason,
     )
+
+
+def _target_time_window(**payload: object) -> object:
+    target_time_window_type = getattr(
+        __import__("app.agent.planning.contract", fromlist=["TargetTimeWindow"]),
+        "TargetTimeWindow",
+        None,
+    )
+    if target_time_window_type is None:
+        pytest.fail("app.agent.planning.contract must define TargetTimeWindow")
+    return cast(type[object], target_time_window_type).model_validate(payload)
 
 
 def _external_task(
@@ -174,6 +187,28 @@ async def test_plan_activates_one_scope_and_invokes_declared_agent_once() -> Non
         call.input.request is request,
         call.input.previous_error,
     ) == (True, 1, True, None)
+
+
+@pytest.mark.parametrize("mode", ["external", "internal_and_external"])
+async def test_planner_service_keeps_typed_time_window_on_completed_external_plan(
+    mode: RetrievalMode,
+) -> None:
+    target_time_window = _target_time_window(kind="last_n_days", days=7)
+    runtime = ScriptedAgentRuntime(
+        [
+            _draft(
+                mode,
+                internal_queries=["NVIDIA"],
+                external_collection_goals=["NVIDIA の直近発表を確認する"],
+                target_time_window=target_time_window,
+            )
+        ]
+    )
+    service, _factory = _service(runtime)
+
+    plan = await service.plan(_input())
+
+    assert plan.target_time_window == target_time_window
 
 
 @pytest.mark.parametrize("defect", list(AgentResponseDefect))

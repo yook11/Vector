@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Callable
-from datetime import UTC, datetime, timedelta, timezone
+from datetime import UTC, date, datetime, timedelta, timezone
 from typing import Any
 
 import httpx
@@ -40,12 +40,24 @@ def _provider(client: httpx.AsyncClient) -> Any:
     )
 
 
-def _input(*, query: str, limit: int) -> Any:
-    return external_search_module.ExternalSearchToolInput(query=query, limit=limit)
+def _input(*, query: str, limit: int, date_filter: Any | None = None) -> Any:
+    return external_search_module.ExternalSearchToolInput(
+        query=query,
+        limit=limit,
+        date_filter=date_filter,
+    )
 
 
-async def _invoke(provider: Any, *, query: str, limit: int) -> list[Any]:
-    return await provider.invoke(_input(query=query, limit=limit))
+async def _invoke(
+    provider: Any,
+    *,
+    query: str,
+    limit: int,
+    date_filter: Any | None = None,
+) -> list[Any]:
+    return await provider.invoke(
+        _input(query=query, limit=limit, date_filter=date_filter)
+    )
 
 
 def _response(payload: object, *, status_code: int = 200) -> httpx.Response:
@@ -96,6 +108,64 @@ async def test_search_posts_fixed_news_request_with_bearer_header() -> None:
         "max_results": 3,
         "include_answer": False,
         "include_raw_content": False,
+    }
+
+
+@pytest.mark.parametrize(
+    ("date_filter", "expected_start_date", "expected_end_date"),
+    [
+        pytest.param(
+            external_search_module.ExternalSearchDateFilter(
+                start_date=date(2026, 6, 1),
+                end_date=date(2026, 6, 16),
+            ),
+            "2026-05-31",
+            "2026-06-16",
+            id="ordinary-range",
+        ),
+        pytest.param(
+            external_search_module.ExternalSearchDateFilter(
+                start_date=date(2026, 1, 1),
+                end_date=date(2026, 2, 1),
+            ),
+            "2025-12-31",
+            "2026-02-01",
+            id="year-boundary",
+        ),
+    ],
+)
+@pytest.mark.asyncio
+async def test_search_maps_half_open_filter_to_conservative_tavily_dates(
+    date_filter: Any,
+    expected_start_date: str,
+    expected_end_date: str,
+) -> None:
+    requests: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return _response({"results": []})
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        provider = _provider(client)
+
+        await _invoke(
+            provider,
+            query="NVIDIA Blackwell",
+            limit=3,
+            date_filter=date_filter,
+        )
+
+    body = json.loads(requests[0].content)
+    assert body == {
+        "query": "NVIDIA Blackwell",
+        "topic": "news",
+        "search_depth": "basic",
+        "max_results": 3,
+        "include_answer": False,
+        "include_raw_content": False,
+        "start_date": expected_start_date,
+        "end_date": expected_end_date,
     }
 
 

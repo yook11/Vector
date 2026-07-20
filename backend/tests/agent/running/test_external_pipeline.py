@@ -6,11 +6,13 @@ import asyncio
 import inspect
 from collections.abc import Sequence
 from contextlib import AbstractAsyncContextManager
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from typing import Any
 from uuid import UUID
 
 import pytest
+from logfire.testing import CaptureLogfire
+from structlog.testing import capture_logs
 
 from app.agent.answering.contract import AnsweringRequest
 from app.agent.answering.direct_answer.contract import DirectAnswerDraft
@@ -18,6 +20,7 @@ from app.agent.answering.evidence_answer.contract import EvidenceAnswerDraft
 from app.agent.evidence_collection.external_search import (
     ExternalResearchRuntime,
     ExternalSearchCandidate,
+    ExternalSearchDateFilter,
     ExternalSearchProviderError,
 )
 from app.agent.evidence_collection.external_search.contract import (
@@ -27,6 +30,7 @@ from app.agent.planning.contract import (
     ExternalResearchTask,
     ExternalSearchPlan,
     PlanningRequest,
+    TargetTimeWindow,
 )
 from app.agent.question_context import (
     QuestionContext,
@@ -39,19 +43,26 @@ from app.agent.runtime.contract import AgentResponseDefect, AgentResponseInvalid
 from app.analysis.ai_provider_errors import AIProviderError, AIProviderNetworkError
 from app.analysis.deepseek_error_translator import DeepSeekStateReason
 from tests.agent.runtime._fakes import ScriptedAgentRuntime
+from tests.logfire._metric_helpers import collected_metrics
 
 RUN_ID = UUID("019bd239-1ed4-7fbb-a336-04fe3c197652")
 AS_OF = datetime(2026, 7, 20, 9, 30, tzinfo=UTC)
+_DEFAULT_TARGET_TIME_WINDOW = TargetTimeWindow(kind="last_n_days", days=1)
+_TIME_FILTER_METRIC = "external_search_time_filter_resolution_total"
 
 
 def _task(goal: str) -> ExternalResearchTask:
     return ExternalResearchTask(collection_goal=goal)
 
 
-def _plan(tasks: list[ExternalResearchTask]) -> ExternalSearchPlan:
+def _plan(
+    tasks: list[ExternalResearchTask],
+    *,
+    target_time_window: TargetTimeWindow | None = _DEFAULT_TARGET_TIME_WINDOW,
+) -> ExternalSearchPlan:
     return ExternalSearchPlan(
         external_research_tasks=tasks,
-        target_time_window="直近24時間",
+        target_time_window=target_time_window,
         reason="external evidence is required",
     )
 
@@ -129,7 +140,7 @@ class _EvidenceAnswerer:
         *,
         request: AnsweringRequest,
         evidence: list[Any],
-        target_time_window: str | None,
+        target_time_window: TargetTimeWindow | None,
     ) -> EvidenceAnswerDraft:
         del request, target_time_window
         self.calls.append(list(evidence))
@@ -366,11 +377,14 @@ def _runner(
     events: _Events | None = None,
     requested_agent_count: int | None = None,
     timeline: list[str] | None = None,
+    target_time_window: TargetTimeWindow | None = _DEFAULT_TARGET_TIME_WINDOW,
 ) -> tuple[AnsweringRunner, _EvidenceAnswerer, _Factory]:
     answerer = _EvidenceAnswerer()
     factory = _Factory([runtime], timeline=timeline)
     phases = AnsweringPhases(
-        planner=_Planner(_plan(tasks)),
+        planner=_Planner(
+            _plan(tasks, target_time_window=target_time_window),
+        ),
         internal_search=_UnreachableInternalSearch(),
         external_runtime_factory=factory,
         direct_answerer=_UnreachableDirectAnswerer(),
@@ -388,10 +402,10 @@ def _runner(
     )
 
 
-async def _run(runner: AnsweringRunner) -> Any:
+async def _run(runner: AnsweringRunner, *, as_of: datetime = AS_OF) -> Any:
     return await runner.run(
         RunInput(question="NVIDIA の見通しは？", history=()),
-        run_context=RunContext(run_id=RUN_ID, as_of=AS_OF),
+        run_context=RunContext(run_id=RUN_ID, as_of=as_of),
     )
 
 
@@ -405,6 +419,21 @@ def _capture_external_outcome(monkeypatch: pytest.MonkeyPatch) -> list[Any]:
 
     monkeypatch.setattr(answering_runner_module, "normalize_answer_evidence", capture)
     return captured
+
+
+def _time_filter_metric_points(
+    metrics: list[dict[str, Any]],
+) -> list[tuple[int, dict[str, Any]]]:
+    metric = next(
+        (item for item in metrics if item["name"] == _TIME_FILTER_METRIC),
+        None,
+    )
+    if metric is None:
+        return []
+    return [
+        (int(point["value"]), point.get("attributes", {}))
+        for point in metric["data"]["data_points"]
+    ]
 
 
 def _record_and_shorten_pipeline_timeouts(
@@ -489,6 +518,388 @@ async def test_external_pipeline_normalizes_queries_and_hides_urls_from_selector
         [(item.source.title, item.source.evidence_claim) for item in answerer.calls[0]],
         result.final_output.status,
     ) == ([("second", "claim")], "answered")
+
+
+@pytest.mark.asyncio
+async def test_external_pipeline_passes_resolved_filter_to_every_tool_call() -> None:
+    target_time_window = TargetTimeWindow(kind="last_n_days", days=7)
+    query_runtime = ScriptedAgentRuntime(
+        [_query_draft(["first"]), _query_draft(["second"])]
+    )
+    tool = _Tool(
+        {
+            "first": [_candidate("https://example.com/first")],
+            "second": [_candidate("https://example.com/second")],
+        }
+    )
+    runner, _, _ = _runner(
+        tasks=[_task("first task"), _task("second task")],
+        runtime=_runtime(
+            query_runtime=query_runtime,
+            selector_runtime=ScriptedAgentRuntime(
+                [_selection_draft([]), _selection_draft([])]
+            ),
+            tool=tool,
+        ),
+        target_time_window=target_time_window,
+    )
+
+    await _run(runner)
+
+    assert (
+        [call.date_filter for call in tool.calls],
+        [call.input.target_time_window for call in query_runtime.calls],
+    ) == (
+        [
+            ExternalSearchDateFilter(
+                start_date=datetime(2026, 7, 13, tzinfo=UTC).date(),
+                end_date=datetime(2026, 7, 21, tzinfo=UTC).date(),
+            ),
+            ExternalSearchDateFilter(
+                start_date=datetime(2026, 7, 13, tzinfo=UTC).date(),
+                end_date=datetime(2026, 7, 21, tzinfo=UTC).date(),
+            ),
+        ],
+        [target_time_window, target_time_window],
+    )
+
+
+@pytest.mark.asyncio
+async def test_external_pipeline_passes_explicit_none_filter_to_tool() -> None:
+    tool = _Tool({"query": [_candidate("https://example.com/no-filter")]})
+    runner, _, _ = _runner(
+        tasks=[_task("no publication filter")],
+        runtime=_runtime(
+            query_runtime=ScriptedAgentRuntime([_query_draft(["query"])]),
+            selector_runtime=ScriptedAgentRuntime([_selection_draft([])]),
+            tool=tool,
+        ),
+        target_time_window=None,
+    )
+
+    await _run(runner)
+
+    assert [call.date_filter for call in tool.calls] == [None]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("target_time_window", "expected_tool_call_count"),
+    [
+        pytest.param(None, 4, id="not-requested"),
+        pytest.param(
+            TargetTimeWindow(kind="last_n_days", days=1),
+            4,
+            id="resolved",
+        ),
+        pytest.param(
+            TargetTimeWindow(kind="unsupported_explicit_window"),
+            0,
+            id="resolution-failed",
+        ),
+    ],
+)
+async def test_external_runner_resolves_target_time_window_once_per_branch(
+    monkeypatch: pytest.MonkeyPatch,
+    target_time_window: TargetTimeWindow | None,
+    expected_tool_call_count: int,
+) -> None:
+    original_resolver = answering_runner_module.resolve_external_search_date_filter
+    resolver_calls: list[tuple[TargetTimeWindow | None, datetime]] = []
+
+    def spy(
+        target: TargetTimeWindow | None,
+        *,
+        as_of: datetime,
+    ) -> ExternalSearchDateFilter | None:
+        resolver_calls.append((target, as_of))
+        return original_resolver(target, as_of=as_of)
+
+    monkeypatch.setattr(
+        answering_runner_module,
+        "resolve_external_search_date_filter",
+        spy,
+    )
+    tasks = [_task("first period task"), _task("second period task")]
+    tool = _Tool()
+    runner, _, _ = _runner(
+        tasks=tasks,
+        runtime=_runtime(
+            query_runtime=ScriptedAgentRuntime(
+                [
+                    _query_draft(["first-1", "first-2"]),
+                    _query_draft(["second-1", "second-2"]),
+                ]
+            ),
+            selector_runtime=ScriptedAgentRuntime([]),
+            tool=tool,
+        ),
+        target_time_window=target_time_window,
+    )
+
+    await _run(runner)
+
+    assert (
+        resolver_calls,
+        len(tasks),
+        len(tool.calls),
+    ) == (
+        [(target_time_window, AS_OF)],
+        2,
+        expected_tool_call_count,
+    )
+
+
+@pytest.mark.asyncio
+async def test_naive_as_of_propagates_before_external_activity_or_observability(
+    capfire: CaptureLogfire,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    original_resolver = answering_runner_module.resolve_external_search_date_filter
+    resolver_calls: list[tuple[TargetTimeWindow | None, datetime]] = []
+    naive_as_of = datetime(2026, 7, 20, 9, 30)
+
+    def spy(
+        target: TargetTimeWindow | None,
+        *,
+        as_of: datetime,
+    ) -> ExternalSearchDateFilter | None:
+        resolver_calls.append((target, as_of))
+        return original_resolver(target, as_of=as_of)
+
+    monkeypatch.setattr(
+        answering_runner_module,
+        "resolve_external_search_date_filter",
+        spy,
+    )
+    captured = _capture_external_outcome(monkeypatch)
+    events = _Events()
+    query_runtime = ScriptedAgentRuntime([])
+    selector_runtime = ScriptedAgentRuntime([])
+    tool = _Tool()
+    runner, answerer, factory = _runner(
+        tasks=[_task("naive as_of は分類しない")],
+        runtime=_runtime(
+            query_runtime=query_runtime,
+            selector_runtime=selector_runtime,
+            tool=tool,
+        ),
+        events=events,
+    )
+
+    with capture_logs() as logs, pytest.raises(ValueError):
+        await _run(runner, as_of=naive_as_of)
+    metrics = collected_metrics(capfire)
+
+    assert (
+        resolver_calls,
+        factory.scopes,
+        query_runtime.calls,
+        selector_runtime.calls,
+        tool.calls,
+        events.events,
+        answerer.calls,
+        captured,
+        _time_filter_metric_points(metrics),
+        [
+            entry
+            for entry in logs
+            if entry.get("event") == "external_search_time_filter_failed"
+        ],
+    ) == (
+        [(_DEFAULT_TARGET_TIME_WINDOW, naive_as_of)],
+        [],
+        [],
+        [],
+        [],
+        [],
+        [],
+        [],
+        [],
+        [],
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("target_time_window", "expected_result"),
+    [
+        pytest.param(None, "not_requested", id="not-requested"),
+        pytest.param(
+            TargetTimeWindow(kind="last_n_days", days=1),
+            "resolved",
+            id="resolved",
+        ),
+    ],
+)
+async def test_external_branch_records_one_nonfailed_time_filter_resolution_metric(
+    capfire: CaptureLogfire,
+    target_time_window: TargetTimeWindow | None,
+    expected_result: str,
+) -> None:
+    tool = _Tool()
+    runner, _, factory = _runner(
+        tasks=[_task("期間計測")],
+        runtime=_runtime(
+            query_runtime=ScriptedAgentRuntime([_query_draft(["metric query"])]),
+            selector_runtime=ScriptedAgentRuntime([]),
+            tool=tool,
+        ),
+        target_time_window=target_time_window,
+    )
+
+    with capture_logs() as logs:
+        await _run(runner)
+    metrics = collected_metrics(capfire)
+
+    assert (
+        _time_filter_metric_points(metrics),
+        [
+            entry
+            for entry in logs
+            if entry.get("event") == "external_search_time_filter_failed"
+        ],
+        len(factory.scopes),
+    ) == (
+        [(1, {"result": expected_result, "reason": "none"})],
+        [],
+        1,
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("target_time_window", "expected_reason"),
+    [
+        pytest.param(
+            TargetTimeWindow(kind="unsupported_explicit_window"),
+            "unsupported_explicit_window",
+            id="unsupported-explicit-window",
+        ),
+        pytest.param(
+            TargetTimeWindow(kind="calendar_month", year=2026, month=8),
+            "future_calendar_month",
+            id="future-calendar-month",
+        ),
+        pytest.param(
+            TargetTimeWindow(
+                kind="date_range",
+                start_date=date(2026, 7, 21),
+                end_date_inclusive=date(2026, 7, 21),
+            ),
+            "future_date_range",
+            id="future-date-range",
+        ),
+        pytest.param(
+            TargetTimeWindow(
+                kind="date_range",
+                start_date=date.min,
+                end_date_inclusive=date.min,
+            ),
+            "unexpandable_start_date",
+            id="unexpandable-start-date",
+        ),
+    ],
+)
+async def test_time_filter_resolution_failure_closes_external_branch_before_activity(
+    capfire: CaptureLogfire,
+    monkeypatch: pytest.MonkeyPatch,
+    target_time_window: TargetTimeWindow,
+    expected_reason: str,
+) -> None:
+    captured = _capture_external_outcome(monkeypatch)
+    events = _Events()
+    query_runtime = ScriptedAgentRuntime([])
+    selector_runtime = ScriptedAgentRuntime([])
+    tool = _Tool()
+    tasks = [_task("first closed task"), _task("second closed task")]
+    runner, answerer, factory = _runner(
+        tasks=tasks,
+        runtime=_runtime(
+            query_runtime=query_runtime,
+            selector_runtime=selector_runtime,
+            tool=tool,
+        ),
+        events=events,
+        target_time_window=target_time_window,
+    )
+
+    with capture_logs() as logs:
+        await _run(runner)
+    metrics = collected_metrics(capfire)
+    reports = captured[0].external_search.task_reports
+
+    assert (
+        factory.scopes,
+        query_runtime.calls,
+        selector_runtime.calls,
+        tool.calls,
+        events.events,
+        answerer.calls,
+        [
+            (
+                report.task_index,
+                report.status,
+                report.time_filter_failure_reason,
+                report.generated_queries,
+                report.provider_failed_query_count,
+                report.candidate_count,
+                report.evidence_count,
+                report.dropped_selection_count,
+                report.selector_failure_reason,
+                report.missing,
+            )
+            for report in reports
+        ],
+        _time_filter_metric_points(metrics),
+        [
+            entry
+            for entry in logs
+            if entry.get("event") == "external_search_time_filter_failed"
+        ],
+    ) == (
+        [],
+        [],
+        [],
+        [],
+        [],
+        [[]],
+        [
+            (
+                0,
+                "time_filter_failed",
+                expected_reason,
+                [],
+                0,
+                0,
+                0,
+                0,
+                None,
+                [],
+            ),
+            (
+                1,
+                "time_filter_failed",
+                expected_reason,
+                [],
+                0,
+                0,
+                0,
+                0,
+                None,
+                [],
+            ),
+        ],
+        [(1, {"result": "failed", "reason": expected_reason})],
+        [
+            {
+                "reason": expected_reason,
+                "task_count": 2,
+                "event": "external_search_time_filter_failed",
+                "log_level": "warning",
+            }
+        ],
+    )
 
 
 @pytest.mark.asyncio

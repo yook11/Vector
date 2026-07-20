@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from email.utils import parsedate_to_datetime
 from typing import Any, Final, Protocol, cast
 from urllib.parse import urlparse
@@ -18,6 +18,7 @@ from app.agent.evidence_collection.external_search.contract import (
     CANDIDATE_SNIPPET_MAX_CHARS,
     EXTERNAL_SEARCH_TOOL_NAME,
     ExternalSearchCandidate,
+    ExternalSearchDateFilter,
     ExternalSearchProviderError,
     ExternalSearchToolFailureReason,
     ExternalSearchToolInput,
@@ -98,7 +99,11 @@ class TavilyExternalSearchTool:
         self,
         input: ExternalSearchToolInput,
     ) -> list[ExternalSearchCandidate]:
-        response = await self._post_search(query=input.query, limit=input.limit)
+        response = await self._post_search(
+            query=input.query,
+            limit=input.limit,
+            date_filter=input.date_filter,
+        )
         data = _response_json(response)
         results = data.get("results")
         if not isinstance(results, list):
@@ -113,8 +118,14 @@ class TavilyExternalSearchTool:
                 candidates.append(candidate)
         return candidates[: input.limit]
 
-    async def _post_search(self, *, query: str, limit: int) -> httpx.Response:
-        body = {
+    async def _post_search(
+        self,
+        *,
+        query: str,
+        limit: int,
+        date_filter: ExternalSearchDateFilter | None,
+    ) -> httpx.Response:
+        body: dict[str, object] = {
             "query": query,
             "topic": "news",
             "search_depth": "basic",
@@ -122,6 +133,10 @@ class TavilyExternalSearchTool:
             "include_answer": False,
             "include_raw_content": False,
         }
+        if date_filter is not None:
+            provider_start_date = date_filter.start_date - timedelta(days=1)
+            body["start_date"] = provider_start_date.isoformat()
+            body["end_date"] = date_filter.end_date.isoformat()
         try:
             response = await self._client.post(
                 TAVILY_SEARCH_URL,

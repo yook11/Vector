@@ -20,6 +20,7 @@ from app.agent.planning.contract import (
     NoRetrievalPlan,
     PlanningRequest,
     QuestionPlan,
+    TargetTimeWindow,
 )
 from app.agent.question_context import (
     AnswerRequirement,
@@ -213,7 +214,7 @@ class _UnreachableExternalSearch:
         self,
         _tasks: list[object],
         *,
-        target_time_window: str | None,
+        target_time_window: TargetTimeWindow | None,
         as_of: datetime,
         external: object,
     ) -> object:
@@ -234,7 +235,7 @@ class _UnreachableEvidenceAnswerer:
         *,
         request: AnsweringRequest,
         evidence: list[object],
-        target_time_window: str | None,
+        target_time_window: TargetTimeWindow | None,
     ) -> EvidenceAnswerDraft:
         raise AssertionError(
             f"evidence answerer must not be called: {request!r} {evidence!r} "

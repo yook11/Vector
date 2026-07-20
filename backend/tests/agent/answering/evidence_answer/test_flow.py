@@ -23,6 +23,7 @@ from app.agent.answering.evidence_answer.contract import (
 from app.agent.answering.evidence_answer.evidence import AnswerEvidenceItem
 from app.agent.answering.evidence_answer.flow import EvidenceAnswerFlow
 from app.agent.contract import ExternalUrlSource
+from app.agent.planning.contract import TargetTimeWindow
 from app.agent.question_context.contract import AnswerRequirement, QuestionContext
 from app.analysis.ai_provider_errors import AIProviderError, AIProviderNetworkError
 from tests.logfire._metric_helpers import collected_metrics, sum_counter_for_result
@@ -284,7 +285,7 @@ async def _answer(
     return await EvidenceAnswerFlow(**flow_kwargs).answer(
         request=_request() if request is None else request,
         evidence=[_evidence()] if evidence is None else evidence,
-        target_time_window="今日",
+        target_time_window=TargetTimeWindow(kind="today"),
     )
 
 
@@ -354,7 +355,7 @@ async def test_flow_uses_agent_output_type_for_final_json_validation() -> None:
     ).answer(
         request=_request(),
         evidence=[_evidence()],
-        target_time_window="今日",
+        target_time_window=TargetTimeWindow(kind="today"),
     )
 
     assert draft.answer == "根拠から確認できます。[[1]]"
@@ -842,7 +843,7 @@ async def test_runtime_scope_activation_failure_is_not_attempt_fallback(
         await flow.answer(
             request=_request(),
             evidence=[_evidence()],
-            target_time_window="今日",
+            target_time_window=TargetTimeWindow(kind="today"),
         )
 
     phase = one_span_named(capfire, _PHASE_SPAN_NAME)
@@ -958,7 +959,7 @@ async def test_stream_displays_only_filtered_root_answer_for_generation_one() ->
             "agent": _evidence_answer_agent(),
             "request": _request(),
             "evidence": (_evidence(),),
-            "target_time_window": "今日",
+            "target_time_window": TargetTimeWindow(kind="today"),
             "previous_error": None,
             "attempt_number": 1,
         }

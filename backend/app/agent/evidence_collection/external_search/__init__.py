@@ -24,6 +24,7 @@ from app.agent.evidence_collection.external_search.contract import (
     ExternalResearchRuntime,
     ExternalResearchRuntimeFactory,
     ExternalSearchCandidate,
+    ExternalSearchDateFilter,
     ExternalSearchEvidence,
     ExternalSearchOutcome,
     ExternalSearchProviderError,
@@ -33,6 +34,7 @@ from app.agent.evidence_collection.external_search.contract import (
     ExternalSearchToolName,
     ResearchTaskReport,
     ResearchTaskStatus,
+    TimeFilterFailureReason,
 )
 from app.agent.evidence_collection.external_search.policy import (
     EVIDENCE_SELECT_TIMEOUT_SECONDS,
@@ -45,6 +47,10 @@ from app.agent.evidence_collection.external_search.tavily import (
     TAVILY_REQUEST_TIMEOUT_SECONDS,
     TAVILY_SEARCH_URL,
     TavilyExternalSearchTool,
+)
+from app.agent.evidence_collection.external_search.time_filter import (
+    ExternalSearchDateFilterResolutionError,
+    resolve_external_search_date_filter,
 )
 
 __all__ = [
@@ -69,6 +75,7 @@ __all__ = [
     "ExternalQueryDraft",
     "ExternalQueryGenerationInput",
     "ExternalSearchCandidate",
+    "ExternalSearchDateFilter",
     "ExternalSearchEvidence",
     "ExternalSearchOutcome",
     "ExternalSearchProviderError",
@@ -87,5 +94,8 @@ __all__ = [
     "TAVILY_REQUEST_TIMEOUT_SECONDS",
     "TAVILY_SEARCH_URL",
     "TavilyExternalSearchTool",
+    "TimeFilterFailureReason",
+    "ExternalSearchDateFilterResolutionError",
+    "resolve_external_search_date_filter",
     "resolve_external_search_agent_count",
 ]

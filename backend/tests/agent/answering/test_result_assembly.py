@@ -7,11 +7,73 @@ from app.agent.answering.evidence_answer.evidence import AnswerEvidenceItem
 from app.agent.answering.result_assembly import assemble_evidence_result
 from app.agent.contract import InternalArticleSource
 from app.agent.evidence_collection import EvidenceCollectionOutcome
+from app.agent.evidence_collection.external_search import (
+    ExternalSearchOutcome,
+    ResearchTaskReport,
+)
 from app.agent.planning.contract import (
     ExternalResearchTask,
+    ExternalSearchPlan,
     InternalAndExternalPlan,
+    TargetTimeWindow,
 )
-from app.agent.question_context import QuestionContext
+from app.agent.question_context import AnswerRequirement, QuestionContext
+
+_TIME_FILTER_MISSING = "指定された公開期間を外部検索へ適用できませんでした"
+
+
+def _task(goal: str) -> ExternalResearchTask:
+    return ExternalResearchTask(collection_goal=goal)
+
+
+def _time_filter_outcome(
+    tasks: list[ExternalResearchTask],
+) -> ExternalSearchOutcome:
+    return ExternalSearchOutcome(
+        tasks=tasks,
+        task_reports=[
+            ResearchTaskReport(
+                task_index=index,
+                collection_goal=task.collection_goal,
+                status="time_filter_failed",
+                time_filter_failure_reason=(
+                    "future_calendar_month"
+                    if index == 0
+                    else "unsupported_explicit_window"
+                ),
+            )
+            for index, task in enumerate(tasks)
+        ],
+    )
+
+
+def _context(
+    *,
+    content_requirements: list[str] | None = None,
+    response_requirements: list[str] | None = None,
+) -> QuestionContext:
+    return QuestionContext(
+        standalone_question="NVIDIA の見通しは？",
+        content_requirements=[
+            AnswerRequirement(requirement_id=f"c{index}", description=value)
+            for index, value in enumerate(content_requirements or [], start=1)
+        ],
+        response_requirements=[
+            AnswerRequirement(requirement_id=f"p{index}", description=value)
+            for index, value in enumerate(response_requirements or [], start=1)
+        ],
+    )
+
+
+def _internal_evidence() -> AnswerEvidenceItem:
+    return AnswerEvidenceItem(
+        source=InternalArticleSource(
+            source_ref="internal-1",
+            article_id=1001,
+            title="internal evidence",
+        ),
+        text="internal evidence",
+    )
 
 
 def test_assembly_caps_answered_draft_for_historical_external_failure() -> None:
@@ -21,7 +83,7 @@ def test_assembly_caps_answered_draft_for_historical_external_failure() -> None:
         external_research_tasks=[
             ExternalResearchTask(collection_goal="供給を確認する")
         ],
-        target_time_window="直近24時間",
+        target_time_window=TargetTimeWindow(kind="last_n_days", days=1),
         reason="both evidence sources are required",
     )
     evidence = [
@@ -58,3 +120,191 @@ def test_assembly_caps_answered_draft_for_historical_external_failure() -> None:
         ["external_search"],
         ["外部検索を完了できませんでした"],
     )
+
+
+def test_external_only_time_filter_failure_keeps_one_missing_and_requirements() -> None:
+    tasks = [
+        _task("Tavily 2027-08 の公開期間を確認する"),
+        _task("provider 原典の公開期間を確認する"),
+    ]
+    result = assemble_evidence_result(
+        context=_context(
+            content_requirements=["投資判断への影響"],
+            response_requirements=["初心者向けの説明"],
+        ),
+        plan=ExternalSearchPlan(
+            external_research_tasks=tasks,
+            target_time_window=TargetTimeWindow(kind="last_n_days", days=1),
+            reason="external evidence is required",
+        ),
+        outcome=EvidenceCollectionOutcome(
+            external_search=_time_filter_outcome(tasks),
+        ),
+        evidence=[],
+        draft=EvidenceAnswerDraft(
+            sufficiency="insufficient",
+            answer="外部根拠は取得できませんでした。",
+            missing_aspects=["一般的な根拠不足"],
+            unfulfilled_requirement_ids=["p1", "c1"],
+        ),
+    )
+
+    assert (result.status, result.missing_aspects) == (
+        "insufficient",
+        [
+            _TIME_FILTER_MISSING,
+            "回答要望を満たせませんでした: 投資判断への影響",
+            "回答要望を満たせませんでした: 初心者向けの説明",
+        ],
+    )
+
+
+def test_mixed_time_filter_failure_keeps_independent_draft_and_requirements() -> None:
+    tasks = [_task("直近の外部発表を確認する")]
+    evidence = [_internal_evidence()]
+    result = assemble_evidence_result(
+        context=_context(
+            content_requirements=["投資判断への影響"],
+            response_requirements=["初心者向けの説明"],
+        ),
+        plan=InternalAndExternalPlan(
+            internal_queries=["NVIDIA"],
+            external_research_tasks=tasks,
+            target_time_window=TargetTimeWindow(kind="last_n_days", days=1),
+            reason="both evidence sources are required",
+        ),
+        outcome=EvidenceCollectionOutcome(
+            external_search=_time_filter_outcome(tasks),
+        ),
+        evidence=evidence,
+        draft=EvidenceAnswerDraft(
+            sufficiency="insufficient",
+            answer="内部根拠から確認できた範囲を回答します。",
+            cited_refs=["internal-1"],
+            missing_aspects=["内部根拠からは確認できない市場反応"],
+            unfulfilled_requirement_ids=["c1", "p1"],
+        ),
+    )
+
+    assert (result.status, result.missing_aspects) == (
+        "insufficient",
+        [
+            _TIME_FILTER_MISSING,
+            "内部根拠からは確認できない市場反応",
+            "回答要望を満たせませんでした: 投資判断への影響",
+            "回答要望を満たせませんでした: 初心者向けの説明",
+        ],
+    )
+
+
+def test_empty_mixed_evidence_keeps_retrieval_missing_with_time_filter_missing() -> (
+    None
+):
+    tasks = [_task("直近の外部発表を確認する")]
+    result = assemble_evidence_result(
+        context=_context(content_requirements=["投資判断への影響"]),
+        plan=InternalAndExternalPlan(
+            internal_queries=["NVIDIA"],
+            external_research_tasks=tasks,
+            target_time_window=TargetTimeWindow(kind="last_n_days", days=1),
+            reason="both evidence sources are required",
+        ),
+        outcome=EvidenceCollectionOutcome(
+            external_search=_time_filter_outcome(tasks),
+        ),
+        evidence=[],
+        draft=EvidenceAnswerDraft(
+            sufficiency="insufficient",
+            answer="根拠を十分に取得できませんでした。",
+            missing_aspects=["一般的な根拠不足"],
+            unfulfilled_requirement_ids=["c1"],
+        ),
+    )
+
+    assert (result.status, result.missing_aspects) == (
+        "insufficient",
+        [
+            "回答に使える根拠を取得できませんでした",
+            _TIME_FILTER_MISSING,
+            "回答要望を満たせませんでした: 投資判断への影響",
+        ],
+    )
+
+
+def test_empty_mixed_evidence_keeps_internal_failure_and_time_filter_missing() -> None:
+    tasks = [_task("直近の外部発表を確認する")]
+    result = assemble_evidence_result(
+        context=_context(content_requirements=["投資判断への影響"]),
+        plan=InternalAndExternalPlan(
+            internal_queries=["NVIDIA"],
+            external_research_tasks=tasks,
+            target_time_window=TargetTimeWindow(kind="last_n_days", days=1),
+            reason="both evidence sources are required",
+        ),
+        outcome=EvidenceCollectionOutcome(
+            external_search=_time_filter_outcome(tasks),
+            collection_failures=["internal_search"],
+        ),
+        evidence=[],
+        draft=EvidenceAnswerDraft(
+            sufficiency="insufficient",
+            answer="根拠を十分に取得できませんでした。",
+            missing_aspects=["一般的な根拠不足"],
+            unfulfilled_requirement_ids=["c1"],
+        ),
+    )
+
+    assert (result.status, result.missing_aspects) == (
+        "insufficient",
+        [
+            "回答に使える根拠を取得できませんでした",
+            "内部記事検索を完了できませんでした",
+            _TIME_FILTER_MISSING,
+            "回答要望を満たせませんでした: 投資判断への影響",
+        ],
+    )
+
+
+def test_non_time_filter_report_missing_keeps_existing_canonical_deduplication() -> (
+    None
+):
+    tasks = [_task("既存のexternal task")]
+    result = assemble_evidence_result(
+        context=_context(),
+        plan=InternalAndExternalPlan(
+            internal_queries=["NVIDIA"],
+            external_research_tasks=tasks,
+            target_time_window=None,
+            reason="both evidence sources are required",
+        ),
+        outcome=EvidenceCollectionOutcome(
+            external_search=ExternalSearchOutcome(
+                tasks=tasks,
+                task_reports=[
+                    ResearchTaskReport(
+                        task_index=0,
+                        collection_goal=tasks[0].collection_goal,
+                        status="provider_failed",
+                        missing=[
+                            "既存の外部不足",
+                            "内部記事検索を完了できませんでした",
+                        ],
+                    )
+                ],
+            ),
+            collection_failures=["internal_search"],
+        ),
+        evidence=[],
+        draft=EvidenceAnswerDraft(
+            sufficiency="insufficient",
+            answer="根拠が不足しています。",
+            missing_aspects=["既存の外部不足", "draft固有の不足"],
+        ),
+    )
+
+    assert result.missing_aspects == [
+        "回答に使える根拠を取得できませんでした",
+        "内部記事検索を完了できませんでした",
+        "既存の外部不足",
+        "draft固有の不足",
+    ]

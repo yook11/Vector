@@ -7,7 +7,7 @@ from typing import Final
 from app.agent.planning.contract import PlanningAttemptInput
 from app.analysis.prompt_safety import sanitize_for_untrusted_block
 
-PLANNER_PROMPT_VERSION: Final[str] = "v1"
+PLANNER_PROMPT_VERSION: Final[str] = "v2"
 
 PLANNER_INSTRUCTIONS: Final[str] = """\
 あなたは Vector の質問検索 planner です。
@@ -73,8 +73,29 @@ external_collection_goals:
 - retrieval_mode=internal_and_external:
   internal_queries と external_collection_goals の両方を原則 1 件以上
 
-target_time_window は「今日」「直近24時間」「今週」「2026年6月」など、
-質問内の時間軸を抽出できる場合だけ入れる。
+target_time_window は外部根拠の公開・更新期間だけを表す。質問が扱う将来時点や
+業績対象年度をpublication期間として扱わない。
+
+- 公開期間を意図的に絞らない場合は null。
+- 今日 / 昨日 / 今週 / 先週 / 今月は today / yesterday / this_week /
+  last_week / this_month。
+- 「直近24時間」「直近7日」「直近30日」「最新」「最近」は重複kindを作らず、
+  last_n_days の days=1 / 7 / 30 / 7 / 60へ正規化する。
+- 明示された相対日数は1〜60日の場合だけlast_n_daysにする。
+- 具体月はcalendar_monthとし、yearとmonthを必ず入れる。
+- 開始日と終了日を一意に確定できる連続期間はdate_rangeとし、start_dateと
+  end_date_inclusiveをYYYY-MM-DDで入れる。「まで」の終了日は含む。
+- 両端の年が省略された範囲は、会話文脈で年が一意か、as_ofのJST年を補って
+  過去または当日までの範囲が一意になる場合だけdate_rangeにする。年またぎ、片側だけの
+  年省略、未来日、複数解釈がある場合は推測しない。
+- 前四半期、年度内の公開、61日以上の相対期間、6月頃、6月と8月のように
+  対応kindまたは一意なdate_rangeへ変換できない明示publication期間は
+  unsupported_explicit_windowにする。nullや近似期間へ丸めない。
+- calendar_monthだけyear/month、last_n_daysだけdays、date_rangeだけ両日付を持ち、
+  その他のfieldはnullにする。
+
+例: 「2027年のAI市場予測」の2027年は質問対象時期なのでtarget_time_window=nullとし、
+2027年という語はcollection goalへ残す。
 reason は短い日本語で、なぜその retrieval_mode と調査目的にしたかを説明する。
 
 # 前回出力の修正
