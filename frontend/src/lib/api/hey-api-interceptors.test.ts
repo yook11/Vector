@@ -92,7 +92,7 @@ describe("hey-api error interceptor — ApiError 正規化", () => {
       status: 404,
       detail: "Article not found",
     });
-    expect((error as ApiError).body).toBe(body);
+    expect((error as ApiError).body).toBeUndefined();
     expect((error as ApiError).retryAfter).toBeNull();
     expect(mocks.logServerEvent).not.toHaveBeenCalled();
   });
@@ -103,7 +103,7 @@ describe("hey-api error interceptor — ApiError 正規化", () => {
 
     const response = new Response(null, { status: 422 });
 
-    await expect(
+    const error = await (
       fn(
         {
           detail: [
@@ -116,12 +116,15 @@ describe("hey-api error interceptor — ApiError 正規化", () => {
         },
         response,
         {} as never,
-      ),
-    ).rejects.toMatchObject({
+      ) as Promise<unknown>
+    ).catch((e: unknown) => e);
+
+    expect(error).toMatchObject({
       name: "ApiError",
       status: 422,
       detail: "articleId: must be positive",
     });
+    expect((error as ApiError).body).toBeUndefined();
   });
 
   it("解析不能 body は statusText fallback で ApiError(status, statusText)", async () => {
@@ -133,13 +136,15 @@ describe("hey-api error interceptor — ApiError 正規化", () => {
       statusText: "Internal Server Error",
     });
 
+    const rawBody = { diagnostic: "RAW_500_BODY_SENTINEL" };
     const error = await (
-      fn("oops not json", response, {} as never) as Promise<unknown>
+      fn(rawBody, response, {} as never) as Promise<unknown>
     ).catch((e: unknown) => e);
 
     expect(error).toBeInstanceOf(ApiError);
     expect((error as ApiError).status).toBe(500);
     expect((error as ApiError).detail).toBe("Internal Server Error");
+    expect((error as ApiError).body).toBeUndefined();
   });
 
   it("response 不在 (network error) は status 0 + 'HTTP 0' fallback", async () => {
@@ -226,6 +231,7 @@ describe("hey-api error interceptor — ApiError 正規化", () => {
       code: "research_daily_request_limit_exceeded",
       limit: 10,
       resetAt: "2026-07-21T00:00:00+09:00",
+      diagnostic: "RAW_QUOTA_BODY_SENTINEL",
     };
     const response = new Response(null, {
       status: 429,
@@ -251,7 +257,12 @@ describe("hey-api error interceptor — ApiError 正規化", () => {
         status: 429,
       },
     });
-    expect((error as ApiError).body).toBe(body);
+    expect((error as ApiError).body).toEqual({
+      code: "research_daily_request_limit_exceeded",
+      limit: 10,
+      resetAt: "2026-07-21T00:00:00+09:00",
+    });
+    expect((error as ApiError).body).not.toBe(body);
     expect((error as ApiError).retryAfter).toBe("37");
     expect(mocks.logServerEvent).toHaveBeenCalledWith(
       "warn",

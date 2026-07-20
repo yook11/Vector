@@ -1,3 +1,4 @@
+import { inspect } from "node:util";
 import { describe, expect, it } from "vitest";
 import { ApiError, InternalFetchError, normalizeErrorDetail } from "./error";
 
@@ -22,6 +23,24 @@ describe("ApiError", () => {
       method: "GET",
       path: "/api/v1/articles",
     });
+  });
+
+  it("keeps response diagnostics readable without exposing them through enumeration", () => {
+    const rawBody = { secret: "RAW_API_ERROR_BODY_SENTINEL" };
+    const err = new ApiError(
+      429,
+      "Too many requests",
+      undefined,
+      rawBody,
+      "60",
+    );
+
+    expect(err.body).toBe(rawBody);
+    expect(err.retryAfter).toBe("60");
+    expect(Object.keys(err)).not.toContain("body");
+    expect(Object.keys(err)).not.toContain("retryAfter");
+    expect(JSON.stringify(err)).not.toContain("RAW_API_ERROR_BODY_SENTINEL");
+    expect(inspect(err)).not.toContain("RAW_API_ERROR_BODY_SENTINEL");
   });
 });
 
