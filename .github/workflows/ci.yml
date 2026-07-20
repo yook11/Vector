@@ -221,6 +221,22 @@ jobs:
         run: uv sync --frozen
         working-directory: backend
 
+      # migration contract testは本番と同じ前提でvector_appへのGRANTを検証する。
+      # runtime接続試験ではないため、cluster-wideなNOLOGIN roleだけ用意する。
+      - name: Create quota migration prerequisite role
+        env:
+          PGPASSWORD: vector
+        run: |
+          psql -v ON_ERROR_STOP=1 -h localhost -U vector -d vector <<'SQL'
+          DO $$
+          BEGIN
+            IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'vector_app') THEN
+              CREATE ROLE vector_app NOLOGIN;
+            END IF;
+          END
+          $$;
+          SQL
+
       - name: Run integration tests
         run: >-
           uv run pytest tests/ -m integration -n 2 --dist loadgroup
