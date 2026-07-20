@@ -106,6 +106,27 @@ class CancelRunResult:
 
 
 @dataclass(frozen=True, slots=True)
+class StaleRunSweepResult:
+    total_count: int
+    quota_queued_count: int
+    quota_running_count: int
+
+    def __post_init__(self) -> None:
+        counts = (
+            self.total_count,
+            self.quota_queued_count,
+            self.quota_running_count,
+        )
+        if any(
+            not isinstance(count, int) or isinstance(count, bool) or count < 0
+            for count in counts
+        ):
+            raise ValueError("stale run sweep counts must be non-negative integers")
+        if self.quota_queued_count + self.quota_running_count > self.total_count:
+            raise ValueError("quota stale run counts cannot exceed total count")
+
+
+@dataclass(frozen=True, slots=True)
 class CreatedAgentRun:
     thread_id: UUID
     run_id: UUID

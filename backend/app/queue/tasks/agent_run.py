@@ -33,6 +33,7 @@ from app.agent.runs.contracts import (
     RunTransitionLostError,
 )
 from app.agent.runs.execution_probe import AgentRunExecutionProbe
+from app.agent.runs.metrics import record_daily_quota_stale_reservation
 from app.agent.runs.progress import AgentRunProgressWriter
 from app.agent.runs.repository import AgentRunRepository
 from app.agent.runs.types import AgentRunErrorCode
@@ -208,8 +209,22 @@ async def sweep_stale_agent_runs(ctx: Context = TaskiqDepends()) -> None:
     session_factory = ctx.state.session_factory
     async with session_factory() as session:
         async with session.begin():
-            count = await AgentRunRepository(session).sweep_stale_runs()
-    logger.info("agent_runs_stale_swept", count=count)
+            result = await AgentRunRepository(session).sweep_stale_runs()
+    logger.info("agent_runs_stale_swept", count=result.total_count)
+    if result.quota_queued_count + result.quota_running_count > 0:
+        logger.warning(
+            "agent_user_daily_quota_stale_reservations_retained",
+            queued_count=result.quota_queued_count,
+            running_count=result.quota_running_count,
+        )
+        record_daily_quota_stale_reservation(
+            previous_status="queued",
+            count=result.quota_queued_count,
+        )
+        record_daily_quota_stale_reservation(
+            previous_status="running",
+            count=result.quota_running_count,
+        )
 
 
 async def _acquire_run(

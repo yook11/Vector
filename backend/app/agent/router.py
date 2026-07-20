@@ -6,8 +6,8 @@ import asyncio
 import math
 import time
 from collections.abc import AsyncGenerator
-from datetime import datetime, timedelta
-from typing import Annotated
+from datetime import date, datetime, timedelta
+from typing import Annotated, cast
 from uuid import UUID
 from zoneinfo import ZoneInfo
 
@@ -47,9 +47,15 @@ from app.agent.live_updates.stream import (
 from app.agent.runs.contracts import (
     ActiveRunConflictError,
     CancelRunOutcome,
+    CancelRunResult,
+    DailyQuotaReleaseOutcome,
     DailyRequestLimitExceededError,
     OwnedAgentRunLiveContext,
     ThreadNotFoundError,
+)
+from app.agent.runs.metrics import (
+    record_daily_quota_admission,
+    record_daily_quota_release,
 )
 from app.agent.runs.repository import AgentRunRepository
 from app.agent.runs.types import AgentRunErrorCode, AgentRunStatus
@@ -78,6 +84,7 @@ _THREAD_NOT_FOUND_DETAIL = "Research thread not found"
 _RUN_NOT_FOUND_DETAIL = "Research run not found"
 _SSE_RETRY_AFTER_SECONDS = 5
 _SSE_CAPACITY_STATE_KEY = "agent_run_sse_capacity"
+_DAILY_REQUEST_LIMIT = 10
 _JST = ZoneInfo("Asia/Tokyo")
 
 
@@ -165,6 +172,12 @@ async def create_research_response(
             detail=_ACTIVE_RUN_DETAIL,
         ) from exc
     except DailyRequestLimitExceededError as exc:
+        logger.info(
+            "agent_user_daily_quota_rejected",
+            usage_date=exc.usage_date.isoformat(),
+            limit=_DAILY_REQUEST_LIMIT,
+        )
+        record_daily_quota_admission(result="rejected")
         reset_at = datetime.combine(
             exc.usage_date + timedelta(days=1),
             datetime.min.time(),
@@ -188,6 +201,15 @@ async def create_research_response(
                 "Cache-Control": "no-store",
             },
         )
+
+    logger.info(
+        "agent_user_daily_quota_reserved",
+        run_id=str(created.run_id),
+        usage_date=created.usage_date.isoformat(),
+        used_count=created.used_count,
+        limit=_DAILY_REQUEST_LIMIT,
+    )
+    record_daily_quota_admission(result="accepted")
 
     try:
         await enqueue_agent_run(created.run_id)
@@ -298,6 +320,8 @@ async def cancel_research_run(
     repo = AgentRunRepository(session)
     async with session.begin():
         outcome = await repo.cancel_run_for_user(run_id=run_id, user_id=user.id)
+    if outcome is not None:
+        _observe_daily_quota_release(run_id=run_id, result=outcome)
     if outcome is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND)
     if outcome.outcome is CancelRunOutcome.ALREADY_COMPLETED:
@@ -316,6 +340,32 @@ async def cancel_research_run(
             attempt_epoch=outcome.attempt_epoch,
         )
     return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+def _observe_daily_quota_release(*, run_id: UUID, result: CancelRunResult) -> None:
+    if result.outcome is not CancelRunOutcome.CANCELLED:
+        return
+
+    release_outcome = result.quota_release_outcome
+    if release_outcome is DailyQuotaReleaseOutcome.RELEASED:
+        record_daily_quota_release(result="released")
+        logger.info(
+            "agent_user_daily_quota_released",
+            run_id=str(run_id),
+            usage_date=cast(date, result.quota_usage_date).isoformat(),
+            used_count=cast(int, result.quota_used_count),
+            limit=_DAILY_REQUEST_LIMIT,
+        )
+    elif release_outcome is DailyQuotaReleaseOutcome.INCONSISTENT:
+        record_daily_quota_release(result="inconsistent")
+        logger.error(
+            "agent_user_daily_quota_release_inconsistent",
+            run_id=str(run_id),
+            usage_date=cast(date, result.quota_usage_date).isoformat(),
+            limit=_DAILY_REQUEST_LIMIT,
+        )
+    elif release_outcome is DailyQuotaReleaseOutcome.NOT_ELIGIBLE:
+        record_daily_quota_release(result="not_eligible")
 
 
 async def _publish_cancel_terminal(

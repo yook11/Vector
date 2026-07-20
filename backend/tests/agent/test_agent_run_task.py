@@ -6,12 +6,14 @@ import ast
 import asyncio
 import inspect
 from dataclasses import dataclass
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 from types import SimpleNamespace
 from typing import Any, cast
 from uuid import UUID
 
 import pytest
+from logfire.testing import CaptureLogfire
+from sqlalchemy import event as sa_event
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from structlog.testing import capture_logs
@@ -64,9 +66,11 @@ from app.analysis.ai_provider_errors import (
 from app.models.agent_message import AgentMessage, AgentMessageSource
 from app.models.agent_run import AgentRun
 from app.models.agent_thread import AgentThread
+from app.models.agent_user_daily_quota import AgentUserDailyQuota
 from app.queue.messages.agent_run import AgentRunTrigger
 from app.shared.security.safe_url import SafeUrl
 from tests.conftest import TEST_ADMIN_ID, TEST_USER_ID
+from tests.logfire._metric_helpers import collected_metrics
 
 
 class FakeAgent:
@@ -304,6 +308,20 @@ class ForbiddenConstruction:
 
 def _ctx(session_factory: async_sessionmaker[AsyncSession]) -> SimpleNamespace:
     return SimpleNamespace(state=SimpleNamespace(session_factory=session_factory))
+
+
+def _quota_stale_metric_points(capfire: CaptureLogfire) -> list[dict[str, Any]]:
+    metric = next(
+        (
+            item
+            for item in collected_metrics(capfire)
+            if item["name"] == "agent_user_daily_quota_stale_reservations_total"
+        ),
+        None,
+    )
+    if metric is None:
+        return []
+    return list(metric["data"]["data_points"])
 
 
 def _patch_worker_execution(
@@ -555,6 +573,7 @@ async def _create_thread_message_run(
     progress_stage: str | None = None,
     error_code: str | None = None,
     user_id: str = TEST_USER_ID,
+    quota_usage_date: date | None = None,
 ) -> tuple[AgentThread, AgentMessage, AgentRun]:
     thread = AgentThread(
         user_id=UUID(user_id),
@@ -592,6 +611,7 @@ async def _create_thread_message_run(
         started_at=started_at,
         progress_stage=progress_stage,
         error_code=error_code,
+        quota_usage_date=quota_usage_date,
     )
     if attempt_epoch is not None:
         run.attempt_epoch = attempt_epoch
@@ -2907,7 +2927,9 @@ async def test_sweep_stale_agent_runs_marks_only_old_active_runs(
     now = datetime(2026, 7, 9, 12, 0, tzinfo=UTC)
     async with session_factory() as session:
         _t1, _m1, old_queued = await _create_thread_message_run(
-            session, created_at=now - timedelta(minutes=21)
+            session,
+            created_at=now - timedelta(minutes=21),
+            quota_usage_date=date(2026, 7, 9),
         )
         _t2, _m2, old_running = await _create_thread_message_run(
             session,
@@ -2915,33 +2937,288 @@ async def test_sweep_stale_agent_runs_marks_only_old_active_runs(
             created_at=now - timedelta(minutes=30),
             started_at=now - timedelta(minutes=21),
             attempt_epoch=7,
+            quota_usage_date=date(2026, 7, 9),
         )
-        _t3, _m3, fresh = await _create_thread_message_run(
+        _t3, _m3, old_legacy = await _create_thread_message_run(
+            session,
+            created_at=now - timedelta(minutes=22),
+        )
+        _t4, _m4, fresh = await _create_thread_message_run(
             session, created_at=now - timedelta(minutes=19)
         )
-        _t4, _m4, terminal = await _create_thread_message_run(
+        _t5, _m5, terminal = await _create_thread_message_run(
             session,
             status="failed",
             created_at=now - timedelta(minutes=30),
             error_code="internal_error",
         )
-        count = await AgentRunRepository(session).sweep_stale_runs(now=now)
+        result = await AgentRunRepository(session).sweep_stale_runs(now=now)
         await session.commit()
-        assert count == 2
+        assert (
+            result.total_count,
+            result.quota_queued_count,
+            result.quota_running_count,
+        ) == (3, 1, 1)
 
     async with session_factory() as session:
         swept_queued = await session.get(AgentRun, old_queued.id)
         swept_running = await session.get(AgentRun, old_running.id)
+        swept_legacy = await session.get(AgentRun, old_legacy.id)
         untouched_fresh = await session.get(AgentRun, fresh.id)
         untouched_terminal = await session.get(AgentRun, terminal.id)
         assert swept_queued is not None
         assert swept_running is not None
+        assert swept_legacy is not None
         assert untouched_fresh is not None
         assert untouched_terminal is not None
         assert swept_queued.status == "failed"
         assert (swept_running.attempt_epoch, swept_running.error_code) == (7, "stale")
+        assert swept_legacy.status == "failed"
         assert untouched_fresh.status == "queued"
         assert untouched_terminal.error_code == "internal_error"
+
+
+@pytest.mark.asyncio
+async def test_sweep_task_observes_quota_stale_runs_only_after_commit(
+    session_factory: async_sessionmaker[AsyncSession],
+    capfire: CaptureLogfire,
+) -> None:
+    now = datetime.now(UTC)
+    usage_date = date(2026, 7, 20)
+    async with session_factory() as session:
+        _t1, _m1, old_queued = await _create_thread_message_run(
+            session,
+            question="sensitive queued question",
+            created_at=now - timedelta(minutes=21),
+            quota_usage_date=usage_date,
+        )
+        _t2, _m2, old_running = await _create_thread_message_run(
+            session,
+            question="sensitive running question",
+            status="running",
+            created_at=now - timedelta(minutes=30),
+            started_at=now - timedelta(minutes=21),
+            quota_usage_date=usage_date,
+        )
+        _t3, _m3, old_legacy = await _create_thread_message_run(
+            session,
+            question="sensitive legacy question",
+            created_at=now - timedelta(minutes=22),
+        )
+
+    with capture_logs() as logs:
+        await agent_run_tasks.sweep_stale_agent_runs(ctx=_ctx(session_factory))
+
+    assert [
+        entry for entry in logs if entry.get("event") == "agent_runs_stale_swept"
+    ] == [{"count": 3, "event": "agent_runs_stale_swept", "log_level": "info"}]
+    assert [
+        entry
+        for entry in logs
+        if entry.get("event") == "agent_user_daily_quota_stale_reservations_retained"
+    ] == [
+        {
+            "queued_count": 1,
+            "running_count": 1,
+            "event": "agent_user_daily_quota_stale_reservations_retained",
+            "log_level": "warning",
+        }
+    ]
+    assert {
+        (point["value"], frozenset(point.get("attributes", {}).items()))
+        for point in _quota_stale_metric_points(capfire)
+    } == {
+        (1, frozenset({("previous_status", "queued")})),
+        (1, frozenset({("previous_status", "running")})),
+    }
+
+    async with session_factory() as session:
+        statuses = [
+            await session.get(AgentRun, run_id)
+            for run_id in (old_queued.id, old_running.id, old_legacy.id)
+        ]
+    assert [run.status if run is not None else None for run in statuses] == [
+        "failed",
+        "failed",
+        "failed",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_sweep_task_legacy_stale_batch_emits_no_quota_alert_or_metric(
+    session_factory: async_sessionmaker[AsyncSession],
+    capfire: CaptureLogfire,
+) -> None:
+    async with session_factory() as session:
+        _thread, _message, legacy = await _create_thread_message_run(
+            session,
+            question="sensitive legacy-only question",
+            created_at=datetime.now(UTC) - timedelta(minutes=21),
+        )
+
+    with capture_logs() as logs:
+        await agent_run_tasks.sweep_stale_agent_runs(ctx=_ctx(session_factory))
+
+    assert [
+        entry for entry in logs if entry.get("event") == "agent_runs_stale_swept"
+    ] == [{"count": 1, "event": "agent_runs_stale_swept", "log_level": "info"}]
+    assert not [
+        entry
+        for entry in logs
+        if entry.get("event") == "agent_user_daily_quota_stale_reservations_retained"
+    ]
+    assert _quota_stale_metric_points(capfire) == []
+
+    async with session_factory() as session:
+        swept = await session.get(AgentRun, legacy.id)
+    assert swept is not None and swept.status == "failed"
+
+
+@pytest.mark.asyncio
+async def test_empty_sweep_emits_total_only_without_quota_alert_or_metric(
+    session_factory: async_sessionmaker[AsyncSession],
+    capfire: CaptureLogfire,
+) -> None:
+    with capture_logs() as logs:
+        await agent_run_tasks.sweep_stale_agent_runs(ctx=_ctx(session_factory))
+
+    assert [
+        entry for entry in logs if entry.get("event") == "agent_runs_stale_swept"
+    ] == [{"count": 0, "event": "agent_runs_stale_swept", "log_level": "info"}]
+    assert not [
+        entry
+        for entry in logs
+        if entry.get("event") == "agent_user_daily_quota_stale_reservations_retained"
+    ]
+    assert _quota_stale_metric_points(capfire) == []
+
+
+@pytest.mark.asyncio
+async def test_sweep_task_does_not_observe_quota_results_when_transaction_rolls_back(
+    session_factory: async_sessionmaker[AsyncSession],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async with session_factory() as setup_session:
+        _thread, _message, stale_run = await _create_thread_message_run(
+            setup_session,
+            created_at=datetime.now(UTC) - timedelta(minutes=21),
+            quota_usage_date=date(2026, 7, 20),
+        )
+
+    calls: list[tuple[str, int]] = []
+    commit_attempted = False
+
+    def record_stale_reservation(*, previous_status: str, count: int = 1) -> None:
+        calls.append((previous_status, count))
+
+    def fail_commit(_session: object) -> None:
+        nonlocal commit_attempted
+        commit_attempted = True
+        raise RuntimeError("sweep commit failure")
+
+    monkeypatch.setattr(
+        agent_run_tasks,
+        "record_daily_quota_stale_reservation",
+        record_stale_reservation,
+    )
+    failing_session = session_factory()
+    sa_event.listen(
+        failing_session.sync_session,
+        "before_commit",
+        fail_commit,
+        once=True,
+    )
+
+    def failing_session_factory() -> AsyncSession:
+        return failing_session
+
+    with (
+        capture_logs() as logs,
+        pytest.raises(RuntimeError, match="sweep commit failure"),
+    ):
+        await agent_run_tasks.sweep_stale_agent_runs(
+            ctx=_ctx(
+                cast(
+                    async_sessionmaker[AsyncSession],
+                    failing_session_factory,
+                )
+            )
+        )
+
+    assert commit_attempted is True
+    assert calls == []
+    assert not [
+        entry
+        for entry in logs
+        if entry.get("event")
+        in {
+            "agent_runs_stale_swept",
+            "agent_user_daily_quota_stale_reservations_retained",
+        }
+    ]
+
+    async with session_factory() as verification:
+        persisted = await verification.get(AgentRun, stale_run.id)
+    assert persisted is not None
+    assert (persisted.status, persisted.error_code) == ("queued", None)
+
+
+@pytest.mark.asyncio
+async def test_ten_quota_queued_stale_runs_keep_counter_and_aggregate_all(
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    now = datetime(2026, 7, 20, 12, 0, tzinfo=UTC)
+    usage_date = date(2026, 7, 20)
+    async with session_factory() as setup_session:
+        setup_session.add(
+            AgentUserDailyQuota(
+                user_id=UUID(TEST_USER_ID),
+                usage_date=usage_date,
+                used_count=10,
+            )
+        )
+        await setup_session.commit()
+        runs = [
+            (
+                await _create_thread_message_run(
+                    setup_session,
+                    question=f"stale quota question {index}",
+                    created_at=now - timedelta(minutes=21),
+                    quota_usage_date=usage_date,
+                )
+            )[2]
+            for index in range(10)
+        ]
+
+    async with session_factory() as sweep_session:
+        async with sweep_session.begin():
+            result = await AgentRunRepository(sweep_session).sweep_stale_runs(now=now)
+
+    assert (
+        result.total_count,
+        result.quota_queued_count,
+        result.quota_running_count,
+    ) == (10, 10, 0)
+    async with session_factory() as verification:
+        counter = await verification.scalar(
+            select(AgentUserDailyQuota.used_count).where(
+                AgentUserDailyQuota.user_id == UUID(TEST_USER_ID),
+                AgentUserDailyQuota.usage_date == usage_date,
+            )
+        )
+        persisted_statuses = (
+            (
+                await verification.execute(
+                    select(AgentRun.status)
+                    .where(AgentRun.id.in_([run.id for run in runs]))
+                    .order_by(AgentRun.id)
+                )
+            )
+            .scalars()
+            .all()
+        )
+    assert counter == 10
+    assert persisted_statuses == ["failed"] * 10
 
 
 def test_source_mapper_rejects_user_message() -> None:

@@ -35,6 +35,7 @@ from app.agent.runs.contracts import (
     OwnedAgentRunLiveContext,
     PreparedAgentRun,
     RunTransitionLostError,
+    StaleRunSweepResult,
     ThreadNotFoundError,
 )
 from app.agent.runs.projection import build_research_run_response
@@ -530,23 +531,71 @@ class AgentRunRepository:
         self,
         *,
         now: datetime | None = None,
-    ) -> int:
+    ) -> StaleRunSweepResult:
         now = now or datetime.now(UTC)
         cutoff = now - _STALE_AFTER
-        result = await self._session.execute(
-            update(AgentRun)
-            .where(
-                AgentRun.status.in_(_ACTIVE_STATUSES),
-                func.coalesce(AgentRun.started_at, AgentRun.created_at) < cutoff,
+        candidate_rows = (
+            (
+                await self._session.execute(
+                    select(
+                        AgentRun.id,
+                        AgentRun.status,
+                        AgentRun.quota_usage_date,
+                    )
+                    .where(
+                        AgentRun.status.in_(_ACTIVE_STATUSES),
+                        func.coalesce(AgentRun.started_at, AgentRun.created_at)
+                        < cutoff,
+                    )
+                    .order_by(AgentRun.id)
+                    .with_for_update()
+                )
             )
-            .values(
-                status=AgentRunStatus.FAILED.value,
-                error_code=AgentRunErrorCode.STALE.value,
-                completed_at=now,
-            )
-            .execution_options(synchronize_session=False)
+            .tuples()
+            .all()
         )
-        return result.rowcount or 0
+        if not candidate_rows:
+            return StaleRunSweepResult(
+                total_count=0,
+                quota_queued_count=0,
+                quota_running_count=0,
+            )
+
+        candidate_ids = [run_id for run_id, _status, _quota_date in candidate_rows]
+        updated_ids = set(
+            (
+                await self._session.execute(
+                    update(AgentRun)
+                    .where(
+                        AgentRun.id.in_(candidate_ids),
+                        AgentRun.status.in_(_ACTIVE_STATUSES),
+                    )
+                    .values(
+                        status=AgentRunStatus.FAILED.value,
+                        error_code=AgentRunErrorCode.STALE.value,
+                        completed_at=now,
+                    )
+                    .returning(AgentRun.id)
+                    .execution_options(synchronize_session=False)
+                )
+            )
+            .scalars()
+            .all()
+        )
+        if updated_ids != set(candidate_ids):
+            raise RuntimeError("stale run sweep lost a locked candidate")
+
+        return StaleRunSweepResult(
+            total_count=len(updated_ids),
+            quota_queued_count=sum(
+                status == AgentRunStatus.QUEUED.value and quota_date is not None
+                for _run_id, status, quota_date in candidate_rows
+            ),
+            quota_running_count=sum(
+                status == AgentRunStatus.RUNNING.value and quota_date is not None
+                for _run_id, status, quota_date in candidate_rows
+            ),
+        )
 
     async def _has_active_run(self, thread_id: uuid_mod.UUID) -> bool:
         return (

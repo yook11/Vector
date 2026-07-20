@@ -629,6 +629,100 @@ async def test_cancel_waiting_on_run_lock_uses_winning_status_update_for_release
     )
 
 
+@pytest.mark.parametrize("winner", ["cancel", "acquire"])
+@pytest.mark.asyncio
+async def test_waiting_stale_sweep_rechecks_cancel_or_acquire_winner(
+    session_factory: async_sessionmaker[AsyncSession],
+    winner: str,
+) -> None:
+    seeded = await _seed_run(
+        session_factory,
+        created_at=_NOW - timedelta(minutes=21),
+    )
+
+    async with (
+        session_factory() as winner_session,
+        session_factory() as sweep_session,
+        session_factory() as observer,
+    ):
+        sweep_task = None
+        try:
+            await winner_session.begin()
+            if winner == "cancel":
+                cancel_result = await AgentRunRepository(
+                    winner_session
+                ).cancel_run_for_user(
+                    run_id=seeded.run_id,
+                    user_id=_USER_ID,
+                    now=_NOW,
+                )
+                _assert_cancelled_release(
+                    cancel_result,
+                    release_outcome="RELEASED",
+                    usage_date=_USAGE_DATE,
+                    used_count=0,
+                )
+            else:
+                prepared = await AgentRunRepository(
+                    winner_session
+                ).acquire_for_execution(
+                    seeded.run_id,
+                    now=_NOW,
+                )
+                assert prepared is not None and prepared.attempt_epoch == 1
+
+            await sweep_session.begin()
+            sweep_pid = await sweep_session.scalar(text("SELECT pg_backend_pid()"))
+            assert isinstance(sweep_pid, int)
+            sweep_task = asyncio.create_task(
+                AgentRunRepository(sweep_session).sweep_stale_runs(now=_NOW)
+            )
+            await _wait_until_blocked(observer, sweep_pid)
+
+            await winner_session.commit()
+            sweep_result = await asyncio.wait_for(sweep_task, timeout=5)
+            await sweep_session.commit()
+        finally:
+            if sweep_task is not None:
+                if not sweep_task.done():
+                    sweep_task.cancel()
+                await asyncio.gather(sweep_task, return_exceptions=True)
+            for session in (winner_session, sweep_session, observer):
+                if session.in_transaction():
+                    await session.rollback()
+
+    assert (
+        sweep_result.total_count,
+        sweep_result.quota_queued_count,
+        sweep_result.quota_running_count,
+    ) == (0, 0, 0)
+    async with session_factory() as verification:
+        run = await verification.get(AgentRun, seeded.run_id)
+        assert run is not None
+        if winner == "cancel":
+            assert (run.status, run.error_code, run.attempt_epoch) == (
+                "failed",
+                "cancelled",
+                0,
+            )
+            expected_counter = 0
+        else:
+            assert (run.status, run.error_code, run.attempt_epoch) == (
+                "running",
+                None,
+                1,
+            )
+            expected_counter = 1
+    assert (
+        await _read_counter(
+            session_factory,
+            user_id=_USER_ID,
+            usage_date=_USAGE_DATE,
+        )
+        == expected_counter
+    )
+
+
 @pytest.mark.asyncio
 async def test_mark_failed_never_refunds(
     session_factory: async_sessionmaker[AsyncSession],
@@ -714,7 +808,12 @@ async def test_competing_terminal_transition_wins_without_refund(
                     now=_NOW,
                 )
             elif transition == "stale":
-                assert await repository.sweep_stale_runs(now=_NOW) == 1
+                stale_result = await repository.sweep_stale_runs(now=_NOW)
+                assert (
+                    stale_result.total_count,
+                    stale_result.quota_queued_count,
+                    stale_result.quota_running_count,
+                ) == (1, 1, 0)
             else:
                 assert await repository.complete_run(
                     run_id=seeded.run_id,

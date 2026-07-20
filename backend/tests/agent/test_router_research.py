@@ -12,13 +12,20 @@ import pytest
 from httpx import ASGITransport, AsyncClient
 from pydantic import SecretStr
 from redis.exceptions import ConnectionError as RedisConnectionError
+from sqlalchemy import event as sa_event
 from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
+from structlog.testing import capture_logs
 
 import app.agent.router as research_router_module
 from app.agent.contract import AnswerQuestionResult, AnswerRetrievalSummary
 from app.agent.live_updates.stream import AgentRunLiveStreamTerminalEvent
-from app.agent.runs.contracts import DailyRequestLimitExceededError
+from app.agent.runs.contracts import (
+    CancelRunOutcome,
+    CancelRunResult,
+    DailyQuotaReleaseOutcome,
+    DailyRequestLimitExceededError,
+)
 from app.agent.runs.repository import AgentRunRepository
 from app.config import settings
 from app.dependencies import get_redis_client
@@ -703,6 +710,404 @@ class TestCreateResearchResponse:
         assert [response.status_code for response in responses] == [202] * 10 + [429]
         assert responses[-1].json()["code"] == "research_daily_request_limit_exceeded"
         assert responses[-1].headers["cache-control"] == "no-store"
+
+
+@pytest.mark.asyncio
+class TestQuotaRouterTelemetry:
+    async def test_accepted_request_records_safe_quota_admission_after_commit(
+        self,
+        quota_research_client: tuple[AsyncClient, FakeEnqueue],
+        db_session: AsyncSession,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        client, _fake_enqueue = quota_research_client
+        calls: list[dict[str, str]] = []
+        sensitive_question = "quota telemetry secret question"
+
+        def record_admission(*, result: str) -> None:
+            calls.append({"result": result})
+
+        monkeypatch.setattr(
+            research_router_module,
+            "record_daily_quota_admission",
+            record_admission,
+            raising=False,
+        )
+
+        with capture_logs() as logs:
+            response = await client.post(
+                _RESPONSES_URL,
+                json={"question": sensitive_question},
+            )
+
+        run_id = UUID(response.json()["runId"])
+        run = await _fetch_run(db_session, run_id)
+        reserved = [
+            entry
+            for entry in logs
+            if entry.get("event") == "agent_user_daily_quota_reserved"
+        ]
+        assert response.status_code == 202
+        assert calls == [{"result": "accepted"}]
+        assert reserved == [
+            {
+                "run_id": str(run_id),
+                "usage_date": run.quota_usage_date.isoformat(),
+                "used_count": 1,
+                "limit": 10,
+                "event": "agent_user_daily_quota_reserved",
+                "log_level": "info",
+            }
+        ]
+        serialized_logs = repr(logs)
+        assert sensitive_question not in serialized_logs
+        assert TEST_USER_ID not in serialized_logs
+
+    async def test_rejected_request_records_safe_quota_admission_after_rollback(
+        self,
+        quota_research_client: tuple[AsyncClient, FakeEnqueue],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        client, _fake_enqueue = quota_research_client
+        calls: list[dict[str, str]] = []
+        sensitive_question = "quota rejection secret question"
+
+        async def reject_with_fixed_clock(
+            _repository: AgentRunRepository,
+            **_kwargs: object,
+        ) -> object:
+            raise DailyRequestLimitExceededError(
+                usage_date=_QUOTA_USAGE_DATE,
+                observed_at=datetime(2026, 7, 20, 14, 59, tzinfo=UTC),
+                decided_at=datetime(2026, 7, 20, 14, 59, 59, tzinfo=UTC),
+                limit=10,
+            )
+
+        def record_admission(*, result: str) -> None:
+            calls.append({"result": result})
+
+        monkeypatch.setattr(
+            AgentRunRepository,
+            "create_user_run",
+            reject_with_fixed_clock,
+        )
+        monkeypatch.setattr(
+            research_router_module,
+            "record_daily_quota_admission",
+            record_admission,
+            raising=False,
+        )
+
+        with capture_logs() as logs:
+            response = await client.post(
+                _RESPONSES_URL,
+                json={"question": sensitive_question},
+            )
+
+        rejected = [
+            entry
+            for entry in logs
+            if entry.get("event") == "agent_user_daily_quota_rejected"
+        ]
+        assert response.status_code == 429
+        assert calls == [{"result": "rejected"}]
+        assert rejected == [
+            {
+                "usage_date": _QUOTA_USAGE_DATE.isoformat(),
+                "limit": 10,
+                "event": "agent_user_daily_quota_rejected",
+                "log_level": "info",
+            }
+        ]
+        serialized_logs = repr(logs)
+        assert sensitive_question not in serialized_logs
+        assert TEST_USER_ID not in serialized_logs
+
+    async def test_create_transaction_failure_does_not_record_quota_admission(
+        self,
+        quota_research_client: tuple[AsyncClient, FakeEnqueue],
+        db_session: AsyncSession,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        client, _fake_enqueue = quota_research_client
+        calls: list[dict[str, str]] = []
+        commit_attempted = False
+
+        def fail_commit(_session: object) -> None:
+            nonlocal commit_attempted
+            commit_attempted = True
+            raise RuntimeError("database commit failure")
+
+        def record_admission(*, result: str) -> None:
+            calls.append({"result": result})
+
+        monkeypatch.setattr(
+            research_router_module,
+            "record_daily_quota_admission",
+            record_admission,
+            raising=False,
+        )
+        sa_event.listen(
+            db_session.sync_session, "before_commit", fail_commit, once=True
+        )
+
+        with capture_logs() as logs:
+            response = await client.post(
+                _RESPONSES_URL,
+                json={"question": "transaction failure"},
+            )
+
+        assert response.status_code == 500
+        assert commit_attempted is True
+        assert calls == []
+        assert not [
+            entry
+            for entry in logs
+            if entry.get("event")
+            in {
+                "agent_user_daily_quota_reserved",
+                "agent_user_daily_quota_rejected",
+            }
+        ]
+        if db_session.in_transaction():
+            await db_session.rollback()
+        assert await db_session.scalar(select(func.count()).select_from(AgentRun)) == 0
+        assert (
+            await db_session.scalar(
+                select(func.count()).select_from(AgentUserDailyQuota)
+            )
+            == 0
+        )
+
+    @pytest.mark.parametrize(
+        ("release_outcome", "quota_usage_date", "quota_used_count", "event"),
+        [
+            (
+                DailyQuotaReleaseOutcome.RELEASED,
+                _QUOTA_USAGE_DATE,
+                0,
+                "agent_user_daily_quota_released",
+            ),
+            (
+                DailyQuotaReleaseOutcome.INCONSISTENT,
+                _QUOTA_USAGE_DATE,
+                None,
+                "agent_user_daily_quota_release_inconsistent",
+            ),
+            (DailyQuotaReleaseOutcome.NOT_ELIGIBLE, None, None, None),
+        ],
+    )
+    async def test_cancel_records_quota_release_result_after_commit(
+        self,
+        research_client: tuple[AsyncClient, FakeEnqueue],
+        monkeypatch: pytest.MonkeyPatch,
+        release_outcome: DailyQuotaReleaseOutcome,
+        quota_usage_date: date | None,
+        quota_used_count: int | None,
+        event: str | None,
+    ) -> None:
+        client, _fake_enqueue = research_client
+        run_id = UUID("00000000-0000-4000-a000-000000000071")
+        calls: list[dict[str, str]] = []
+        outcome = CancelRunResult(
+            outcome=CancelRunOutcome.CANCELLED,
+            attempt_epoch=0,
+            quota_release_outcome=release_outcome,
+            quota_usage_date=quota_usage_date,
+            quota_used_count=quota_used_count,
+        )
+
+        async def cancel_with_fixed_result(
+            _repository: AgentRunRepository,
+            **_kwargs: object,
+        ) -> CancelRunResult:
+            return outcome
+
+        def record_release(*, result: str) -> None:
+            calls.append({"result": result})
+
+        monkeypatch.setattr(
+            AgentRunRepository,
+            "cancel_run_for_user",
+            cancel_with_fixed_result,
+        )
+        monkeypatch.setattr(
+            research_router_module,
+            "record_daily_quota_release",
+            record_release,
+            raising=False,
+        )
+
+        with capture_logs() as logs:
+            response = await client.post(f"/api/v1/research/runs/{run_id}/cancel")
+
+        quota_events = [
+            entry
+            for entry in logs
+            if entry.get("event", "").startswith("agent_user_daily_quota_")
+        ]
+        assert response.status_code == 204
+        assert calls == [{"result": release_outcome.value}]
+        if release_outcome is DailyQuotaReleaseOutcome.RELEASED:
+            assert quota_events == [
+                {
+                    "run_id": str(run_id),
+                    "usage_date": _QUOTA_USAGE_DATE.isoformat(),
+                    "used_count": 0,
+                    "limit": 10,
+                    "event": "agent_user_daily_quota_released",
+                    "log_level": "info",
+                }
+            ]
+        elif release_outcome is DailyQuotaReleaseOutcome.INCONSISTENT:
+            assert quota_events == [
+                {
+                    "run_id": str(run_id),
+                    "usage_date": _QUOTA_USAGE_DATE.isoformat(),
+                    "limit": 10,
+                    "event": "agent_user_daily_quota_release_inconsistent",
+                    "log_level": "error",
+                }
+            ]
+        else:
+            assert event is None
+            assert quota_events == []
+        assert TEST_USER_ID not in repr(logs)
+
+    async def test_cancel_release_commit_failure_records_no_quota_telemetry(
+        self,
+        quota_research_client: tuple[AsyncClient, FakeEnqueue],
+        db_session: AsyncSession,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        client, _fake_enqueue = quota_research_client
+        thread = await _create_thread(db_session)
+        message = await _create_message(
+            db_session,
+            thread_id=thread.id,
+            seq=1,
+            role="user",
+            content="release then commit failure",
+        )
+        run = await _create_run(
+            db_session,
+            thread_id=thread.id,
+            user_message_id=message.id,
+        )
+        run_id = run.id
+        run.quota_usage_date = _QUOTA_USAGE_DATE
+        db_session.add(
+            AgentUserDailyQuota(
+                user_id=UUID(TEST_USER_ID),
+                usage_date=_QUOTA_USAGE_DATE,
+                used_count=1,
+            )
+        )
+        await db_session.commit()
+
+        calls: list[dict[str, str]] = []
+        commit_attempted = False
+
+        def fail_commit(_session: object) -> None:
+            nonlocal commit_attempted
+            commit_attempted = True
+            raise RuntimeError("cancel commit failure")
+
+        def record_release(*, result: str) -> None:
+            calls.append({"result": result})
+
+        monkeypatch.setattr(
+            research_router_module,
+            "record_daily_quota_release",
+            record_release,
+            raising=False,
+        )
+        sa_event.listen(
+            db_session.sync_session, "before_commit", fail_commit, once=True
+        )
+
+        with capture_logs() as logs:
+            response = await client.post(f"/api/v1/research/runs/{run_id}/cancel")
+
+        assert response.status_code == 500
+        assert commit_attempted is True
+        assert calls == []
+        assert not [
+            entry
+            for entry in logs
+            if entry.get("event")
+            in {
+                "agent_user_daily_quota_released",
+                "agent_user_daily_quota_release_inconsistent",
+            }
+        ]
+
+        if db_session.in_transaction():
+            await db_session.rollback()
+        db_session.expire_all()
+        persisted_run = await db_session.get(AgentRun, run_id)
+        assert persisted_run is not None
+        assert (persisted_run.status, persisted_run.error_code) == ("queued", None)
+        assert (
+            await db_session.scalar(
+                select(AgentUserDailyQuota.used_count).where(
+                    AgentUserDailyQuota.user_id == UUID(TEST_USER_ID),
+                    AgentUserDailyQuota.usage_date == _QUOTA_USAGE_DATE,
+                )
+            )
+            == 1
+        )
+
+    @pytest.mark.parametrize(
+        ("outcome", "expected_status"),
+        [
+            (CancelRunOutcome.ALREADY_FAILED, 204),
+            (CancelRunOutcome.ALREADY_COMPLETED, 409),
+        ],
+    )
+    async def test_cancel_terminal_result_does_not_record_quota_release(
+        self,
+        research_client: tuple[AsyncClient, FakeEnqueue],
+        monkeypatch: pytest.MonkeyPatch,
+        outcome: CancelRunOutcome,
+        expected_status: int,
+    ) -> None:
+        client, _fake_enqueue = research_client
+        calls: list[dict[str, str]] = []
+
+        async def cancel_as_terminal(
+            _repository: AgentRunRepository,
+            **_kwargs: object,
+        ) -> CancelRunResult:
+            return CancelRunResult(outcome=outcome)
+
+        def record_release(*, result: str) -> None:
+            calls.append({"result": result})
+
+        monkeypatch.setattr(
+            AgentRunRepository,
+            "cancel_run_for_user",
+            cancel_as_terminal,
+        )
+        monkeypatch.setattr(
+            research_router_module,
+            "record_daily_quota_release",
+            record_release,
+            raising=False,
+        )
+
+        with capture_logs() as logs:
+            response = await client.post(
+                "/api/v1/research/runs/00000000-0000-4000-a000-000000000072/cancel"
+            )
+
+        assert response.status_code == expected_status
+        assert calls == []
+        assert not [
+            entry
+            for entry in logs
+            if entry.get("event", "").startswith("agent_user_daily_quota_")
+        ]
 
 
 @pytest.mark.asyncio
