@@ -313,7 +313,6 @@ class _PhasesFactory:
         phases = AnsweringPhases(
             planner=self._planner,
             internal_search=_UnreachableInternalSearch(),
-            external_search=_UnreachableExternalSearch(),
             external_runtime_factory=_UnreachableExternalRuntimeFactory(),
             direct_answerer=self._direct_answerer,
             evidence_answerer=_UnreachableEvidenceAnswerer(),

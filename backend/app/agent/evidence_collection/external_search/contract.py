@@ -1,7 +1,7 @@
 """External search の境界型・port 契約・構造 cap 定数。
 
-Agent / runner / service / provider adapter が共有する frozen model と
-Protocol をここで保証する。
+Agent / workflow / provider adapter が共有する frozen model と Protocol を
+ここで保証する。
 自由記述欄の clamp は from_raw factory で行い、model validator は
 「factory を通れば違反しない」不変条件として保持する。
 """
@@ -51,11 +51,8 @@ __all__ = [
     "ExternalSearchEvidence",
     "ExternalSearchOutcome",
     "ExternalSearchProviderError",
-    "ExternalSearchRequest",
     "ExternalResearchRuntime",
     "ExternalResearchRuntimeFactory",
-    "ExternalSearchRunResult",
-    "ExternalSearchRunner",
     "ExternalSearchTool",
     "ExternalSearchToolFailureReason",
     "ExternalSearchToolInput",
@@ -380,7 +377,7 @@ class ResearchTaskReport(BaseModel):
 
 
 class ExternalSearchEvidence(BaseModel):
-    """外部検索 runner が main agent へ渡す URL 根拠候補。"""
+    """回答workflowのexternal pipelineが選別したURL根拠候補。"""
 
     model_config = ConfigDict(frozen=True)
 
@@ -396,28 +393,6 @@ class ExternalSearchEvidence(BaseModel):
     snippet: str | None = None
     published_at: datetime | None = None
     source_name: str | None = None
-
-
-class ExternalSearchRunResult(BaseModel):
-    """runner が service へ返す処理結果。集約 policy は含めない。"""
-
-    model_config = ConfigDict(frozen=True)
-
-    evidence: list[ExternalSearchEvidence] = Field(default_factory=list)
-    task_reports: list[ResearchTaskReport] = Field(default_factory=list)
-
-
-class ExternalSearchRequest(BaseModel):
-    """external search runner に渡す実行済み検索計画。"""
-
-    model_config = ConfigDict(frozen=True)
-
-    tasks: list[ExternalResearchTask]
-    requested_agent_count: int | None = None
-    effective_agent_count: int = Field(ge=0)
-    as_of: datetime
-    target_time_window: str | None = None
-    hard_agent_limit: int = Field(default=EXTERNAL_SEARCH_AGENT_HARD_LIMIT, ge=1)
 
 
 class ExternalSearchOutcome(BaseModel):
@@ -460,17 +435,6 @@ class ExternalSearchOutcome(BaseModel):
         ):
             raise ValueError("reported evidence count must match outcome evidence")
         return self
-
-
-class ExternalSearchRunner(Protocol):
-    """DeepSeek / External Search Toolの手前に置くrunner境界。"""
-
-    async def search(
-        self,
-        request: ExternalSearchRequest,
-        *,
-        external: ExternalResearchRuntime,
-    ) -> ExternalSearchRunResult: ...
 
 
 def _clamp_missing(missing: Sequence[str]) -> list[str]:

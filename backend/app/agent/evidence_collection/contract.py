@@ -2,27 +2,21 @@
 
 from __future__ import annotations
 
-from datetime import datetime
 from typing import Protocol, Self
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from app.agent.contract import EvidenceCollectionFailure
-from app.agent.evidence_collection.external_search import (
-    ExternalResearchRuntime,
-    ExternalSearchOutcome,
-)
+from app.agent.evidence_collection.external_search import ExternalSearchOutcome
 from app.agent.evidence_collection.internal_search.article_search import (
     InternalArticleSearchHit,
 )
 from app.agent.evidence_collection.internal_search.query_embedding import (
     InternalSearchQueries,
 )
-from app.agent.planning.contract import ExternalResearchTask
 
 __all__ = [
     "EvidenceCollectionOutcome",
-    "ExternalPlanSearcher",
     "InternalArticleRetriever",
 ]
 
@@ -32,17 +26,6 @@ class InternalArticleRetriever(Protocol):
         self,
         queries: InternalSearchQueries,
     ) -> list[InternalArticleSearchHit]: ...
-
-
-class ExternalPlanSearcher(Protocol):
-    async def search(
-        self,
-        external_research_tasks: list[ExternalResearchTask],
-        *,
-        target_time_window: str | None,
-        as_of: datetime,
-        external: ExternalResearchRuntime,
-    ) -> ExternalSearchOutcome: ...
 
 
 class EvidenceCollectionOutcome(BaseModel):

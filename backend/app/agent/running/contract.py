@@ -10,10 +10,7 @@ from uuid import UUID
 from app.agent.answering.direct_answer.contract import DirectAnswerer
 from app.agent.answering.evidence_answer.contract import EvidenceAnswerer
 from app.agent.contract import AnswerQuestionResult
-from app.agent.evidence_collection.contract import (
-    ExternalPlanSearcher,
-    InternalArticleRetriever,
-)
+from app.agent.evidence_collection.contract import InternalArticleRetriever
 from app.agent.evidence_collection.external_search import (
     ExternalResearchRuntimeFactory,
 )
@@ -40,7 +37,6 @@ __all__ = [
 class AnsweringPhases:
     planner: QuestionPlanner
     internal_search: InternalArticleRetriever
-    external_search: ExternalPlanSearcher
     external_runtime_factory: ExternalResearchRuntimeFactory
     direct_answerer: DirectAnswerer
     evidence_answerer: EvidenceAnswerer
