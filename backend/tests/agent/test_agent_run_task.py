@@ -50,6 +50,7 @@ from app.agent.running import (
 from app.agent.runs.contracts import (
     RunTransitionLostError,
 )
+from app.agent.runs.daily_quota import observability as daily_quota_observability
 from app.agent.runs.repository import AgentRunRepository
 from app.agent.runs.result_mapper import (
     build_assistant_message_for_result,
@@ -2982,6 +2983,7 @@ async def test_sweep_stale_agent_runs_marks_only_old_active_runs(
 async def test_sweep_task_observes_quota_stale_runs_only_after_commit(
     session_factory: async_sessionmaker[AsyncSession],
     capfire: CaptureLogfire,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     now = datetime.now(UTC)
     usage_date = date(2026, 7, 20)
@@ -3005,6 +3007,27 @@ async def test_sweep_task_observes_quota_stale_runs_only_after_commit(
             question="sensitive legacy question",
             created_at=now - timedelta(minutes=22),
         )
+
+    observed: list[dict[str, int]] = []
+    original_observer = daily_quota_observability.observe_stale_reservations
+
+    def observe_stale_reservations(*, queued_count: int, running_count: int) -> None:
+        observed.append(
+            {
+                "queued_count": queued_count,
+                "running_count": running_count,
+            }
+        )
+        original_observer(
+            queued_count=queued_count,
+            running_count=running_count,
+        )
+
+    monkeypatch.setattr(
+        daily_quota_observability,
+        "observe_stale_reservations",
+        observe_stale_reservations,
+    )
 
     with capture_logs() as logs:
         await agent_run_tasks.sweep_stale_agent_runs(ctx=_ctx(session_factory))
@@ -3031,6 +3054,7 @@ async def test_sweep_task_observes_quota_stale_runs_only_after_commit(
         (1, frozenset({("previous_status", "queued")})),
         (1, frozenset({("previous_status", "running")})),
     }
+    assert observed == [{"queued_count": 1, "running_count": 1}]
 
     async with session_factory() as session:
         statuses = [
@@ -3105,11 +3129,16 @@ async def test_sweep_task_does_not_observe_quota_results_when_transaction_rolls_
             quota_usage_date=date(2026, 7, 20),
         )
 
-    calls: list[tuple[str, int]] = []
+    calls: list[dict[str, int]] = []
     commit_attempted = False
 
-    def record_stale_reservation(*, previous_status: str, count: int = 1) -> None:
-        calls.append((previous_status, count))
+    def observe_stale_reservations(*, queued_count: int, running_count: int) -> None:
+        calls.append(
+            {
+                "queued_count": queued_count,
+                "running_count": running_count,
+            }
+        )
 
     def fail_commit(_session: object) -> None:
         nonlocal commit_attempted
@@ -3117,9 +3146,9 @@ async def test_sweep_task_does_not_observe_quota_results_when_transaction_rolls_
         raise RuntimeError("sweep commit failure")
 
     monkeypatch.setattr(
-        agent_run_tasks,
-        "record_daily_quota_stale_reservation",
-        record_stale_reservation,
+        daily_quota_observability,
+        "observe_stale_reservations",
+        observe_stale_reservations,
     )
     failing_session = session_factory()
     sa_event.listen(
@@ -3211,9 +3240,9 @@ async def test_sweep_task_telemetry_sink_failure_keeps_committed_sweep_and_other
             raise RuntimeError("quota stale metric sink unavailable")
 
     monkeypatch.setattr(agent_run_tasks.logger, "info", record_total_log)
-    monkeypatch.setattr(agent_run_tasks.logger, "warning", record_quota_log)
+    monkeypatch.setattr(daily_quota_observability.logger, "warning", record_quota_log)
     monkeypatch.setattr(
-        agent_run_tasks,
+        daily_quota_observability,
         "record_daily_quota_stale_reservation",
         record_stale_reservation,
     )

@@ -21,8 +21,11 @@ import app.agent.router as research_router_module
 from app.agent.contract import AnswerQuestionResult, AnswerRetrievalSummary
 from app.agent.live_updates.stream import AgentRunLiveStreamTerminalEvent
 from app.agent.runs.contracts import (
+    CancelRunCommandOutcome,
     CancelRunOutcome,
-    CancelRunResult,
+)
+from app.agent.runs.daily_quota import observability as daily_quota_observability
+from app.agent.runs.daily_quota.contracts import (
     DailyQuotaReleaseOutcome,
     DailyRequestLimitExceededError,
 )
@@ -763,42 +766,15 @@ class TestCreateResearchResponse:
 
 @pytest.mark.asyncio
 class TestQuotaRouterTelemetry:
-    @pytest.mark.parametrize(
-        ("request_kind", "failing_sink"),
-        [
-            ("accepted", "log"),
-            ("accepted", "metric"),
-            ("rejected", "log"),
-            ("rejected", "metric"),
-        ],
-    )
-    async def test_admission_telemetry_sink_failure_keeps_response_and_other_sink(
+    @pytest.mark.parametrize("request_kind", ["accepted", "rejected"])
+    async def test_admission_observability_failure_keeps_response(
         self,
         quota_research_client: tuple[AsyncClient, FakeEnqueue],
         monkeypatch: pytest.MonkeyPatch,
         request_kind: str,
-        failing_sink: str,
     ) -> None:
         client, fake_enqueue = quota_research_client
-        log_events: list[str] = []
-        metric_results: list[str] = []
-
-        def record_quota_log(event: str, **_kwargs: object) -> None:
-            log_events.append(event)
-            if failing_sink == "log":
-                raise RuntimeError("quota log sink unavailable")
-
-        def record_admission(*, result: str) -> None:
-            metric_results.append(result)
-            if failing_sink == "metric":
-                raise RuntimeError("quota metric sink unavailable")
-
-        monkeypatch.setattr(research_router_module.logger, "info", record_quota_log)
-        monkeypatch.setattr(
-            research_router_module,
-            "record_daily_quota_admission",
-            record_admission,
-        )
+        observed: list[dict[str, object]] = []
         if request_kind == "rejected":
 
             async def reject_with_fixed_clock(
@@ -818,23 +794,57 @@ class TestQuotaRouterTelemetry:
                 reject_with_fixed_clock,
             )
 
+            def fail_observation(*, usage_date: date) -> None:
+                observed.append({"usage_date": usage_date})
+                raise RuntimeError("quota observability unavailable")
+
+            monkeypatch.setattr(
+                daily_quota_observability,
+                "observe_admission_rejected",
+                fail_observation,
+            )
+        else:
+
+            def fail_observation(
+                *,
+                run_id: UUID,
+                usage_date: date,
+                used_count: int,
+            ) -> None:
+                observed.append(
+                    {
+                        "run_id": run_id,
+                        "usage_date": usage_date,
+                        "used_count": used_count,
+                    }
+                )
+                raise RuntimeError("quota observability unavailable")
+
+            monkeypatch.setattr(
+                daily_quota_observability,
+                "observe_admission_accepted",
+                fail_observation,
+            )
+
         response = await client.post(
             _RESPONSES_URL,
             json={"question": f"{request_kind} telemetry failure"},
         )
 
-        expected_event = {
-            "accepted": "agent_user_daily_quota_reserved",
-            "rejected": "agent_user_daily_quota_rejected",
-        }[request_kind]
-        expected_result = "accepted" if request_kind == "accepted" else "rejected"
-        assert log_events == [expected_event]
-        assert metric_results == [expected_result]
         if request_kind == "accepted":
             assert response.status_code == 202
-            assert fake_enqueue.calls == [UUID(response.json()["runId"])]
+            run_id = UUID(response.json()["runId"])
+            assert fake_enqueue.calls == [run_id]
+            assert observed == [
+                {
+                    "run_id": run_id,
+                    "usage_date": _QUOTA_USAGE_DATE,
+                    "used_count": 1,
+                }
+            ]
         else:
             assert response.status_code == 429
+            assert observed == [{"usage_date": _QUOTA_USAGE_DATE}]
             assert response.json() == {
                 "detail": "Daily research request limit exceeded",
                 "code": "research_daily_request_limit_exceeded",
@@ -843,13 +853,11 @@ class TestQuotaRouterTelemetry:
             }
             assert response.headers["retry-after"] == "1"
 
-    @pytest.mark.parametrize("failing_sink", ["log", "metric"])
-    async def test_queued_release_telemetry_sink_failure_keeps_cancelled_response(
+    async def test_queued_release_observability_failure_keeps_cancelled_response(
         self,
         quota_research_client: tuple[AsyncClient, FakeEnqueue],
         db_session: AsyncSession,
         monkeypatch: pytest.MonkeyPatch,
-        failing_sink: str,
     ) -> None:
         client, _fake_enqueue = quota_research_client
         thread = await _create_thread(db_session)
@@ -875,31 +883,28 @@ class TestQuotaRouterTelemetry:
             )
         )
         await db_session.commit()
-        log_events: list[str] = []
-        metric_results: list[str] = []
+        observed: list[dict[str, object]] = []
 
-        def record_quota_log(event: str, **_kwargs: object) -> None:
-            log_events.append(event)
-            if failing_sink == "log":
-                raise RuntimeError("quota log sink unavailable")
+        def fail_observation(
+            *,
+            run_id: UUID,
+            outcome: DailyQuotaReleaseOutcome,
+        ) -> None:
+            observed.append({"run_id": run_id, "outcome": outcome})
+            raise RuntimeError("quota observability unavailable")
 
-        def record_release(*, result: str) -> None:
-            metric_results.append(result)
-            if failing_sink == "metric":
-                raise RuntimeError("quota metric sink unavailable")
-
-        monkeypatch.setattr(research_router_module.logger, "info", record_quota_log)
         monkeypatch.setattr(
-            research_router_module,
-            "record_daily_quota_release",
-            record_release,
+            daily_quota_observability,
+            "observe_release",
+            fail_observation,
         )
 
         response = await client.post(f"/api/v1/research/runs/{run_id}/cancel")
 
         assert response.status_code == 204
-        assert log_events == ["agent_user_daily_quota_released"]
-        assert metric_results == ["released"]
+        assert observed == [
+            {"run_id": run_id, "outcome": DailyQuotaReleaseOutcome.RELEASED}
+        ]
         db_session.expire_all()
         persisted = await _fetch_run(db_session, run_id)
         assert (persisted.status, persisted.error_code) == ("failed", "cancelled")
@@ -913,7 +918,7 @@ class TestQuotaRouterTelemetry:
             == 0
         )
 
-    async def test_running_not_eligible_metric_failure_keeps_terminal_publish(
+    async def test_running_not_eligible_observability_failure_keeps_terminal_publish(
         self,
         quota_research_client: tuple[AsyncClient, FakeEnqueue],
         db_session: AsyncSession,
@@ -945,17 +950,21 @@ class TestQuotaRouterTelemetry:
             )
         )
         await db_session.commit()
-        metric_results: list[str] = []
+        observed: list[dict[str, object]] = []
         FakeCancelStreamPublisher.instances = []
 
-        def fail_record_release(*, result: str) -> None:
-            metric_results.append(result)
-            raise RuntimeError("quota metric sink unavailable")
+        def fail_observation(
+            *,
+            run_id: UUID,
+            outcome: DailyQuotaReleaseOutcome,
+        ) -> None:
+            observed.append({"run_id": run_id, "outcome": outcome})
+            raise RuntimeError("quota observability unavailable")
 
         monkeypatch.setattr(
-            research_router_module,
-            "record_daily_quota_release",
-            fail_record_release,
+            daily_quota_observability,
+            "observe_release",
+            fail_observation,
         )
         monkeypatch.setattr(
             research_router_module,
@@ -967,7 +976,9 @@ class TestQuotaRouterTelemetry:
         response = await client.post(f"/api/v1/research/runs/{run_id}/cancel")
 
         assert response.status_code == 204
-        assert metric_results == ["not_eligible"]
+        assert observed == [
+            {"run_id": run_id, "outcome": DailyQuotaReleaseOutcome.NOT_ELIGIBLE}
+        ]
         assert len(FakeCancelStreamPublisher.instances) == 1
         assert FakeCancelStreamPublisher.instances[0].published == [
             AgentRunLiveStreamTerminalEvent(
@@ -995,17 +1006,33 @@ class TestQuotaRouterTelemetry:
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         client, _fake_enqueue = quota_research_client
-        calls: list[dict[str, str]] = []
+        calls: list[dict[str, object]] = []
         sensitive_question = "quota telemetry secret question"
+        original_observer = daily_quota_observability.observe_admission_accepted
 
-        def record_admission(*, result: str) -> None:
-            calls.append({"result": result})
+        def observe_admission(
+            *,
+            run_id: UUID,
+            usage_date: date,
+            used_count: int,
+        ) -> None:
+            calls.append(
+                {
+                    "run_id": run_id,
+                    "usage_date": usage_date,
+                    "used_count": used_count,
+                }
+            )
+            original_observer(
+                run_id=run_id,
+                usage_date=usage_date,
+                used_count=used_count,
+            )
 
         monkeypatch.setattr(
-            research_router_module,
-            "record_daily_quota_admission",
-            record_admission,
-            raising=False,
+            daily_quota_observability,
+            "observe_admission_accepted",
+            observe_admission,
         )
 
         with capture_logs() as logs:
@@ -1022,7 +1049,13 @@ class TestQuotaRouterTelemetry:
             if entry.get("event") == "agent_user_daily_quota_reserved"
         ]
         assert response.status_code == 202
-        assert calls == [{"result": "accepted"}]
+        assert calls == [
+            {
+                "run_id": run_id,
+                "usage_date": run.quota_usage_date,
+                "used_count": 1,
+            }
+        ]
         assert reserved == [
             {
                 "run_id": str(run_id),
@@ -1043,7 +1076,7 @@ class TestQuotaRouterTelemetry:
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         client, _fake_enqueue = quota_research_client
-        calls: list[dict[str, str]] = []
+        calls: list[dict[str, object]] = []
         sensitive_question = "quota rejection secret question"
 
         async def reject_with_fixed_clock(
@@ -1057,8 +1090,11 @@ class TestQuotaRouterTelemetry:
                 limit=10,
             )
 
-        def record_admission(*, result: str) -> None:
-            calls.append({"result": result})
+        original_observer = daily_quota_observability.observe_admission_rejected
+
+        def observe_admission(*, usage_date: date) -> None:
+            calls.append({"usage_date": usage_date})
+            original_observer(usage_date=usage_date)
 
         monkeypatch.setattr(
             AgentRunRepository,
@@ -1066,10 +1102,9 @@ class TestQuotaRouterTelemetry:
             reject_with_fixed_clock,
         )
         monkeypatch.setattr(
-            research_router_module,
-            "record_daily_quota_admission",
-            record_admission,
-            raising=False,
+            daily_quota_observability,
+            "observe_admission_rejected",
+            observe_admission,
         )
 
         with capture_logs() as logs:
@@ -1084,7 +1119,7 @@ class TestQuotaRouterTelemetry:
             if entry.get("event") == "agent_user_daily_quota_rejected"
         ]
         assert response.status_code == 429
-        assert calls == [{"result": "rejected"}]
+        assert calls == [{"usage_date": _QUOTA_USAGE_DATE}]
         assert rejected == [
             {
                 "usage_date": _QUOTA_USAGE_DATE.isoformat(),
@@ -1104,7 +1139,7 @@ class TestQuotaRouterTelemetry:
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         client, _fake_enqueue = quota_research_client
-        calls: list[dict[str, str]] = []
+        calls: list[dict[str, object]] = []
         commit_attempted = False
 
         def fail_commit(_session: object) -> None:
@@ -1112,14 +1147,13 @@ class TestQuotaRouterTelemetry:
             commit_attempted = True
             raise RuntimeError("database commit failure")
 
-        def record_admission(*, result: str) -> None:
-            calls.append({"result": result})
+        def observe_admission(**kwargs: object) -> None:
+            calls.append(kwargs)
 
         monkeypatch.setattr(
-            research_router_module,
-            "record_daily_quota_admission",
-            record_admission,
-            raising=False,
+            daily_quota_observability,
+            "observe_admission_accepted",
+            observe_admission,
         )
         sa_event.listen(
             db_session.sync_session, "before_commit", fail_commit, once=True
@@ -1154,21 +1188,17 @@ class TestQuotaRouterTelemetry:
         )
 
     @pytest.mark.parametrize(
-        ("release_outcome", "quota_usage_date", "quota_used_count", "event"),
+        ("release_outcome", "event"),
         [
             (
                 DailyQuotaReleaseOutcome.RELEASED,
-                _QUOTA_USAGE_DATE,
-                0,
                 "agent_user_daily_quota_released",
             ),
             (
                 DailyQuotaReleaseOutcome.INCONSISTENT,
-                _QUOTA_USAGE_DATE,
-                None,
                 "agent_user_daily_quota_release_inconsistent",
             ),
-            (DailyQuotaReleaseOutcome.NOT_ELIGIBLE, None, None, None),
+            (DailyQuotaReleaseOutcome.NOT_ELIGIBLE, None),
         ],
     )
     async def test_cancel_records_quota_release_result_after_commit(
@@ -1176,29 +1206,32 @@ class TestQuotaRouterTelemetry:
         research_client: tuple[AsyncClient, FakeEnqueue],
         monkeypatch: pytest.MonkeyPatch,
         release_outcome: DailyQuotaReleaseOutcome,
-        quota_usage_date: date | None,
-        quota_used_count: int | None,
         event: str | None,
     ) -> None:
         client, _fake_enqueue = research_client
         run_id = UUID("00000000-0000-4000-a000-000000000071")
-        calls: list[dict[str, str]] = []
-        outcome = CancelRunResult(
-            outcome=CancelRunOutcome.CANCELLED,
-            attempt_epoch=0,
+        calls: list[dict[str, object]] = []
+        outcome = CancelRunCommandOutcome(
+            cancel_outcome=CancelRunOutcome.CANCELLED,
+            was_running=False,
             quota_release_outcome=release_outcome,
-            quota_usage_date=quota_usage_date,
-            quota_used_count=quota_used_count,
         )
 
         async def cancel_with_fixed_result(
             _repository: AgentRunRepository,
             **_kwargs: object,
-        ) -> CancelRunResult:
+        ) -> CancelRunCommandOutcome:
             return outcome
 
-        def record_release(*, result: str) -> None:
-            calls.append({"result": result})
+        original_observer = daily_quota_observability.observe_release
+
+        def observe_release(
+            *,
+            run_id: UUID,
+            outcome: DailyQuotaReleaseOutcome,
+        ) -> None:
+            calls.append({"run_id": run_id, "outcome": outcome})
+            original_observer(run_id=run_id, outcome=outcome)
 
         monkeypatch.setattr(
             AgentRunRepository,
@@ -1206,10 +1239,9 @@ class TestQuotaRouterTelemetry:
             cancel_with_fixed_result,
         )
         monkeypatch.setattr(
-            research_router_module,
-            "record_daily_quota_release",
-            record_release,
-            raising=False,
+            daily_quota_observability,
+            "observe_release",
+            observe_release,
         )
 
         with capture_logs() as logs:
@@ -1221,13 +1253,11 @@ class TestQuotaRouterTelemetry:
             if entry.get("event", "").startswith("agent_user_daily_quota_")
         ]
         assert response.status_code == 204
-        assert calls == [{"result": release_outcome.value}]
+        assert calls == [{"run_id": run_id, "outcome": release_outcome}]
         if release_outcome is DailyQuotaReleaseOutcome.RELEASED:
             assert quota_events == [
                 {
                     "run_id": str(run_id),
-                    "usage_date": _QUOTA_USAGE_DATE.isoformat(),
-                    "used_count": 0,
                     "limit": 10,
                     "event": "agent_user_daily_quota_released",
                     "log_level": "info",
@@ -1237,7 +1267,6 @@ class TestQuotaRouterTelemetry:
             assert quota_events == [
                 {
                     "run_id": str(run_id),
-                    "usage_date": _QUOTA_USAGE_DATE.isoformat(),
                     "limit": 10,
                     "event": "agent_user_daily_quota_release_inconsistent",
                     "log_level": "error",
@@ -1279,7 +1308,7 @@ class TestQuotaRouterTelemetry:
         )
         await db_session.commit()
 
-        calls: list[dict[str, str]] = []
+        calls: list[dict[str, object]] = []
         commit_attempted = False
 
         def fail_commit(_session: object) -> None:
@@ -1287,14 +1316,13 @@ class TestQuotaRouterTelemetry:
             commit_attempted = True
             raise RuntimeError("cancel commit failure")
 
-        def record_release(*, result: str) -> None:
-            calls.append({"result": result})
+        def observe_release(**kwargs: object) -> None:
+            calls.append(kwargs)
 
         monkeypatch.setattr(
-            research_router_module,
-            "record_daily_quota_release",
-            record_release,
-            raising=False,
+            daily_quota_observability,
+            "observe_release",
+            observe_release,
         )
         sa_event.listen(
             db_session.sync_session, "before_commit", fail_commit, once=True
@@ -1347,16 +1375,16 @@ class TestQuotaRouterTelemetry:
         expected_status: int,
     ) -> None:
         client, _fake_enqueue = research_client
-        calls: list[dict[str, str]] = []
+        calls: list[dict[str, object]] = []
 
         async def cancel_as_terminal(
             _repository: AgentRunRepository,
             **_kwargs: object,
-        ) -> CancelRunResult:
-            return CancelRunResult(outcome=outcome)
+        ) -> CancelRunCommandOutcome:
+            return CancelRunCommandOutcome(cancel_outcome=outcome)
 
-        def record_release(*, result: str) -> None:
-            calls.append({"result": result})
+        def observe_release(**kwargs: object) -> None:
+            calls.append(kwargs)
 
         monkeypatch.setattr(
             AgentRunRepository,
@@ -1364,10 +1392,9 @@ class TestQuotaRouterTelemetry:
             cancel_as_terminal,
         )
         monkeypatch.setattr(
-            research_router_module,
-            "record_daily_quota_release",
-            record_release,
-            raising=False,
+            daily_quota_observability,
+            "observe_release",
+            observe_release,
         )
 
         with capture_logs() as logs:
@@ -1710,6 +1737,7 @@ class TestDeleteResearchThread:
             thread_id=thread.id,
             user_message_id=user_message.id,
             status="running",
+            attempt_epoch=1,
         )
         run_id = run.id
         expected_attempt_epoch = run.attempt_epoch
@@ -1770,6 +1798,7 @@ class TestCancelResearchRun:
             thread_id=thread.id,
             user_message_id=user_message.id,
             status=initial_status,
+            attempt_epoch=1 if initial_status == "running" else 0,
         )
 
         response = await client.post(f"/api/v1/research/runs/{run.id}/cancel")
@@ -1825,7 +1854,7 @@ class TestCancelResearchRun:
             )
         ]
 
-    async def test_cancel_queued_epoch_zero_does_not_create_stream_publisher(
+    async def test_cancel_queued_positive_epoch_does_not_publish(
         self,
         research_client: tuple[AsyncClient, FakeEnqueue],
         db_session: AsyncSession,
@@ -1841,7 +1870,7 @@ class TestCancelResearchRun:
             thread_id=thread.id,
             user_message_id=user_message.id,
             status="queued",
-            attempt_epoch=0,
+            attempt_epoch=7,
         )
         FakeCancelStreamPublisher.instances = []
         monkeypatch.setattr(
@@ -2029,6 +2058,7 @@ class TestCancelResearchRun:
             thread_id=thread.id,
             user_message_id=user_message.id,
             status="running",
+            attempt_epoch=1,
         )
         run_id = run.id
         expected_attempt_epoch = run.attempt_epoch

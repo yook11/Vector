@@ -7,13 +7,14 @@ import inspect
 import uuid
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
+from importlib import import_module
+from types import ModuleType
 
 import pytest
 from sqlalchemy import DateTime, literal, select, text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 import app.agent.runs.contracts as run_contracts
-import app.agent.runs.repository as repository_module
 from app.agent.contract import AnswerQuestionResult, AnswerRetrievalSummary
 from app.agent.runs.contracts import CancelRunOutcome
 from app.agent.runs.repository import AgentRunRepository
@@ -204,8 +205,9 @@ async def _wait_until_blocked(observer: AsyncSession, backend_pid: int) -> None:
 
 
 def _reservation_statement(user_id: uuid.UUID) -> object:
+    persistence = _daily_quota_persistence_module()
     builder = getattr(
-        repository_module,
+        persistence,
         "_build_daily_quota_reservation_statement",
         None,
     )
@@ -226,8 +228,32 @@ def _completed_result() -> AnswerQuestionResult:
     )
 
 
+def _daily_quota_contracts_module() -> ModuleType:
+    try:
+        return import_module("app.agent.runs.daily_quota.contracts")
+    except ModuleNotFoundError as exc:
+        if exc.name in {
+            "app.agent.runs.daily_quota",
+            "app.agent.runs.daily_quota.contracts",
+        }:
+            pytest.fail("app.agent.runs.daily_quota.contracts is not implemented")
+        raise
+
+
+def _daily_quota_persistence_module() -> ModuleType:
+    try:
+        return import_module("app.agent.runs.daily_quota.persistence")
+    except ModuleNotFoundError as exc:
+        if exc.name in {
+            "app.agent.runs.daily_quota",
+            "app.agent.runs.daily_quota.persistence",
+        }:
+            pytest.fail("app.agent.runs.daily_quota.persistence is not implemented")
+        raise
+
+
 def _quota_release_outcome(name: str) -> object:
-    enum = getattr(run_contracts, "DailyQuotaReleaseOutcome", None)
+    enum = getattr(_daily_quota_contracts_module(), "DailyQuotaReleaseOutcome", None)
     assert enum is not None, "DailyQuotaReleaseOutcome is not implemented"
     return getattr(enum, name)
 
@@ -236,32 +262,51 @@ def _assert_cancelled_release(
     result: object,
     *,
     release_outcome: str,
-    usage_date: date | None,
-    used_count: int | None,
+    was_running: bool,
+    running_attempt_epoch: int | None,
 ) -> None:
-    assert getattr(result, "outcome", None) is CancelRunOutcome.CANCELLED
+    assert getattr(result, "cancel_outcome", None) is CancelRunOutcome.CANCELLED
+    assert getattr(result, "was_running", None) is was_running
+    assert getattr(result, "running_attempt_epoch", _MISSING) == running_attempt_epoch
     assert getattr(result, "quota_release_outcome", _MISSING) is _quota_release_outcome(
         release_outcome
     )
-    assert getattr(result, "quota_usage_date", _MISSING) == usage_date
-    assert getattr(result, "quota_used_count", _MISSING) == used_count
+    assert not hasattr(result, "quota_usage_date")
+    assert not hasattr(result, "quota_used_count")
 
 
 def _assert_already_terminal(result: object, outcome: CancelRunOutcome) -> None:
-    assert getattr(result, "outcome", None) is outcome
+    assert getattr(result, "cancel_outcome", None) is outcome
+    assert getattr(result, "was_running", _MISSING) is False
+    assert getattr(result, "running_attempt_epoch", _MISSING) is None
     assert getattr(result, "quota_release_outcome", _MISSING) is None
-    assert getattr(result, "quota_usage_date", _MISSING) is None
-    assert getattr(result, "quota_used_count", _MISSING) is None
+    assert not hasattr(result, "quota_usage_date")
+    assert not hasattr(result, "quota_used_count")
 
 
-def test_cancel_result_validates_quota_release_contract() -> None:
-    parameters = inspect.signature(run_contracts.CancelRunResult).parameters
-    assert {
+def test_cancel_command_outcome_validates_run_and_quota_boundaries() -> None:
+    command_outcome = getattr(run_contracts, "CancelRunCommandOutcome", None)
+    assert command_outcome is not None, "CancelRunCommandOutcome is not implemented"
+    assert not hasattr(run_contracts, "CancelRunResult")
+    parameters = inspect.signature(command_outcome).parameters
+    assert set(parameters) == {
+        "cancel_outcome",
+        "was_running",
+        "running_attempt_epoch",
         "quota_release_outcome",
-        "quota_usage_date",
-        "quota_used_count",
-    } <= parameters.keys()
-    release_enum = getattr(run_contracts, "DailyQuotaReleaseOutcome", None)
+    }
+    assert (
+        not {
+            "quota_usage_date",
+            "quota_used_count",
+        }
+        & parameters.keys()
+    )
+    release_enum = getattr(
+        _daily_quota_contracts_module(),
+        "DailyQuotaReleaseOutcome",
+        None,
+    )
     assert release_enum is not None
     assert {member.value for member in release_enum} == {
         "released",
@@ -270,61 +315,31 @@ def test_cancel_result_validates_quota_release_contract() -> None:
     }
 
     with pytest.raises(ValueError):
-        run_contracts.CancelRunResult(
-            outcome=CancelRunOutcome.CANCELLED,
-            attempt_epoch=0,
+        command_outcome(
+            cancel_outcome=CancelRunOutcome.CANCELLED,
+            was_running=True,
         )
     with pytest.raises(ValueError):
-        run_contracts.CancelRunResult(
-            outcome=CancelRunOutcome.CANCELLED,
-            attempt_epoch=0,
+        command_outcome(
+            cancel_outcome=CancelRunOutcome.CANCELLED,
+            was_running=True,
+            running_attempt_epoch=0,
+        )
+    with pytest.raises(ValueError):
+        command_outcome(
+            cancel_outcome=CancelRunOutcome.CANCELLED,
+            running_attempt_epoch=1,
+        )
+    with pytest.raises(ValueError):
+        command_outcome(
+            cancel_outcome=CancelRunOutcome.ALREADY_FAILED,
+            was_running=True,
+            running_attempt_epoch=1,
+        )
+    with pytest.raises(ValueError):
+        command_outcome(
+            cancel_outcome=CancelRunOutcome.ALREADY_FAILED,
             quota_release_outcome=release_enum.RELEASED,
-            quota_usage_date=_USAGE_DATE,
-            quota_used_count=None,
-        )
-    with pytest.raises(ValueError):
-        run_contracts.CancelRunResult(
-            outcome=CancelRunOutcome.CANCELLED,
-            attempt_epoch=0,
-            quota_release_outcome=release_enum.RELEASED,
-            quota_usage_date=None,
-            quota_used_count=0,
-        )
-    with pytest.raises(ValueError):
-        run_contracts.CancelRunResult(
-            outcome=CancelRunOutcome.CANCELLED,
-            attempt_epoch=0,
-            quota_release_outcome=release_enum.RELEASED,
-            quota_usage_date=_USAGE_DATE,
-            quota_used_count=-1,
-        )
-    with pytest.raises(ValueError):
-        run_contracts.CancelRunResult(
-            outcome=CancelRunOutcome.CANCELLED,
-            attempt_epoch=0,
-            quota_release_outcome=release_enum.INCONSISTENT,
-            quota_usage_date=None,
-            quota_used_count=0,
-        )
-    with pytest.raises(ValueError):
-        run_contracts.CancelRunResult(
-            outcome=CancelRunOutcome.CANCELLED,
-            attempt_epoch=0,
-            quota_release_outcome=release_enum.INCONSISTENT,
-            quota_usage_date=None,
-            quota_used_count=None,
-        )
-    with pytest.raises(ValueError):
-        run_contracts.CancelRunResult(
-            outcome=CancelRunOutcome.CANCELLED,
-            attempt_epoch=0,
-            quota_release_outcome=release_enum.NOT_ELIGIBLE,
-            quota_used_count=0,
-        )
-    with pytest.raises(ValueError):
-        run_contracts.CancelRunResult(
-            outcome=CancelRunOutcome.ALREADY_FAILED,
-            quota_release_outcome=release_enum.NOT_ELIGIBLE,
         )
 
 
@@ -355,8 +370,8 @@ async def test_quota_queued_cancel_releases_to_zero_and_keeps_marker_and_row(
     _assert_cancelled_release(
         result,
         release_outcome="RELEASED",
-        usage_date=_USAGE_DATE,
-        used_count=0,
+        was_running=False,
+        running_attempt_epoch=None,
     )
 
 
@@ -380,17 +395,17 @@ async def test_double_cancel_refunds_once_and_second_result_is_not_release_event
     _assert_cancelled_release(
         first,
         release_outcome="RELEASED",
-        usage_date=_USAGE_DATE,
-        used_count=1,
+        was_running=False,
+        running_attempt_epoch=None,
     )
     _assert_already_terminal(second, CancelRunOutcome.ALREADY_FAILED)
 
 
 @pytest.mark.asyncio
-async def test_running_quota_cancel_is_not_eligible_even_with_epoch_zero(
+async def test_running_quota_cancel_is_not_eligible_and_returns_execution_epoch(
     session_factory: async_sessionmaker[AsyncSession],
 ) -> None:
-    seeded = await _seed_run(session_factory, status="running", attempt_epoch=0)
+    seeded = await _seed_run(session_factory, status="running", attempt_epoch=1)
 
     result = await _cancel(session_factory, seeded)
 
@@ -405,8 +420,8 @@ async def test_running_quota_cancel_is_not_eligible_even_with_epoch_zero(
     _assert_cancelled_release(
         result,
         release_outcome="NOT_ELIGIBLE",
-        usage_date=_USAGE_DATE,
-        used_count=None,
+        was_running=True,
+        running_attempt_epoch=1,
     )
 
 
@@ -425,8 +440,8 @@ async def test_legacy_queued_cancel_is_not_eligible_without_counter(
     _assert_cancelled_release(
         result,
         release_outcome="NOT_ELIGIBLE",
-        usage_date=None,
-        used_count=None,
+        was_running=False,
+        running_attempt_epoch=None,
     )
 
 
@@ -451,8 +466,8 @@ async def test_missing_or_zero_counter_cancels_without_underflow_as_inconsistent
     _assert_cancelled_release(
         result,
         release_outcome="INCONSISTENT",
-        usage_date=_USAGE_DATE,
-        used_count=None,
+        was_running=False,
+        running_attempt_epoch=None,
     )
 
 
@@ -494,8 +509,8 @@ async def test_other_user_cannot_cancel_and_owner_releases_only_original_date(
     _assert_cancelled_release(
         released,
         release_outcome="RELEASED",
-        usage_date=_USAGE_DATE,
-        used_count=1,
+        was_running=False,
+        running_attempt_epoch=None,
     )
 
 
@@ -553,8 +568,8 @@ async def test_cancel_winner_refunds_before_waiting_acquire_loses(
     _assert_cancelled_release(
         cancel_result,
         release_outcome="RELEASED",
-        usage_date=_USAGE_DATE,
-        used_count=0,
+        was_running=False,
+        running_attempt_epoch=None,
     )
 
 
@@ -624,8 +639,8 @@ async def test_cancel_waiting_on_run_lock_uses_winning_status_update_for_release
     _assert_cancelled_release(
         cancel_result,
         release_outcome="NOT_ELIGIBLE",
-        usage_date=_USAGE_DATE,
-        used_count=None,
+        was_running=True,
+        running_attempt_epoch=1,
     )
 
 
@@ -659,8 +674,8 @@ async def test_waiting_stale_sweep_rechecks_cancel_or_acquire_winner(
                 _assert_cancelled_release(
                     cancel_result,
                     release_outcome="RELEASED",
-                    usage_date=_USAGE_DATE,
-                    used_count=0,
+                    was_running=False,
+                    running_attempt_epoch=None,
                 )
             else:
                 prepared = await AgentRunRepository(
@@ -979,6 +994,6 @@ async def test_release_and_reserve_linearize_in_quota_row_lock_order(
     _assert_cancelled_release(
         release_result,
         release_outcome="RELEASED",
-        usage_date=_USAGE_DATE,
-        used_count=9,
+        was_running=False,
+        running_attempt_epoch=None,
     )

@@ -33,8 +33,8 @@ from app.agent.runs.contracts import (
     PreparedAgentRun,
     RunTransitionLostError,
 )
+from app.agent.runs.daily_quota import observability as daily_quota_observability
 from app.agent.runs.execution_probe import AgentRunExecutionProbe
-from app.agent.runs.metrics import record_daily_quota_stale_reservation
 from app.agent.runs.progress import AgentRunProgressWriter
 from app.agent.runs.repository import AgentRunRepository
 from app.agent.runs.types import AgentRunErrorCode
@@ -213,23 +213,11 @@ async def sweep_stale_agent_runs(ctx: Context = TaskiqDepends()) -> None:
             result = await AgentRunRepository(session).sweep_stale_runs()
     with suppress(Exception):
         logger.info("agent_runs_stale_swept", count=result.total_count)
-    if result.quota_queued_count + result.quota_running_count > 0:
-        with suppress(Exception):
-            logger.warning(
-                "agent_user_daily_quota_stale_reservations_retained",
-                queued_count=result.quota_queued_count,
-                running_count=result.quota_running_count,
-            )
-        with suppress(Exception):
-            record_daily_quota_stale_reservation(
-                previous_status="queued",
-                count=result.quota_queued_count,
-            )
-        with suppress(Exception):
-            record_daily_quota_stale_reservation(
-                previous_status="running",
-                count=result.quota_running_count,
-            )
+    with suppress(Exception):
+        daily_quota_observability.observe_stale_reservations(
+            queued_count=result.quota_queued_count,
+            running_count=result.quota_running_count,
+        )
 
 
 async def _acquire_run(

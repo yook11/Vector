@@ -7,14 +7,14 @@ import inspect
 import uuid
 from collections.abc import Callable
 from datetime import UTC, date, datetime
+from importlib import import_module
+from types import ModuleType
 
 import pytest
 from sqlalchemy import DateTime, func, literal, select, text
 from sqlalchemy.exc import DBAPIError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-import app.agent.runs.contracts as run_contracts
-import app.agent.runs.repository as repository_module
 from app.agent.runs.contracts import ActiveRunConflictError, ThreadNotFoundError
 from app.agent.runs.repository import AgentRunRepository
 from app.models.agent_message import AgentMessage
@@ -32,9 +32,45 @@ _AFTER_MIDNIGHT_UTC = datetime(2026, 7, 20, 15, 0, 0, tzinfo=UTC)
 pytestmark = pytest.mark.integration
 
 
+def _daily_quota_contracts_module() -> ModuleType:
+    try:
+        return import_module("app.agent.runs.daily_quota.contracts")
+    except ModuleNotFoundError as exc:
+        if exc.name in {
+            "app.agent.runs.daily_quota",
+            "app.agent.runs.daily_quota.contracts",
+        }:
+            pytest.fail("app.agent.runs.daily_quota.contracts is not implemented")
+        raise
+
+
+def _daily_quota_persistence_module() -> ModuleType:
+    try:
+        return import_module("app.agent.runs.daily_quota.persistence")
+    except ModuleNotFoundError as exc:
+        if exc.name in {
+            "app.agent.runs.daily_quota",
+            "app.agent.runs.daily_quota.persistence",
+        }:
+            pytest.fail("app.agent.runs.daily_quota.persistence is not implemented")
+        raise
+
+
+def _daily_quota_policy_module() -> ModuleType:
+    try:
+        return import_module("app.agent.runs.daily_quota.policy")
+    except ModuleNotFoundError as exc:
+        if exc.name in {
+            "app.agent.runs.daily_quota",
+            "app.agent.runs.daily_quota.policy",
+        }:
+            pytest.fail("app.agent.runs.daily_quota.policy is not implemented")
+        raise
+
+
 def _reservation_statement_builder() -> Callable[..., object]:
     builder = getattr(
-        repository_module,
+        _daily_quota_persistence_module(),
         "_build_daily_quota_reservation_statement",
         None,
     )
@@ -77,7 +113,7 @@ def _patch_reservation_clock(
     )
 
     monkeypatch.setattr(
-        repository_module,
+        _daily_quota_persistence_module(),
         "_build_daily_quota_reservation_statement",
         build_with_fixed_clock,
     )
@@ -167,7 +203,7 @@ async def _seed_active_thread(
 
 
 def _quota_rejection_fields(exc: Exception) -> tuple[date, datetime, datetime, int]:
-    assert type(exc).__module__ == run_contracts.__name__
+    assert type(exc).__module__ == _daily_quota_contracts_module().__name__
     usage_date = getattr(exc, "usage_date", None)
     observed_at = getattr(exc, "observed_at", None)
     decided_at = getattr(exc, "decided_at", None)
@@ -186,6 +222,13 @@ def test_create_user_run_does_not_accept_quota_limit_or_clock_inputs() -> None:
     assert "daily_limit" not in parameters
     assert "clock" not in parameters
     assert "clock_expression" not in parameters
+
+
+def test_daily_quota_policy_owns_shared_runtime_constants() -> None:
+    policy = _daily_quota_policy_module()
+
+    assert getattr(policy, "DAILY_REQUEST_LIMIT", None) == _DAILY_LIMIT
+    assert str(getattr(policy, "DAILY_QUOTA_TIMEZONE", None)) == "Asia/Tokyo"
 
 
 def test_daily_quota_statement_builder_has_private_fixed_clock_seam() -> None:
@@ -473,7 +516,7 @@ async def test_quota_database_error_rolls_back_preflushed_new_thread(
         return select(literal(1) / literal(0))
 
     monkeypatch.setattr(
-        repository_module,
+        _daily_quota_persistence_module(),
         "_build_daily_quota_reservation_statement",
         failing_builder,
         raising=False,

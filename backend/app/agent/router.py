@@ -7,10 +7,9 @@ import math
 import time
 from collections.abc import AsyncGenerator
 from contextlib import suppress
-from datetime import date, datetime, timedelta
-from typing import Annotated, cast
+from datetime import datetime, timedelta
+from typing import Annotated
 from uuid import UUID
-from zoneinfo import ZoneInfo
 
 import redis.asyncio as aioredis
 import structlog
@@ -48,16 +47,12 @@ from app.agent.live_updates.stream import (
 from app.agent.runs.contracts import (
     ActiveRunConflictError,
     CancelRunOutcome,
-    CancelRunResult,
-    DailyQuotaReleaseOutcome,
-    DailyRequestLimitExceededError,
     OwnedAgentRunLiveContext,
     ThreadNotFoundError,
 )
-from app.agent.runs.metrics import (
-    record_daily_quota_admission,
-    record_daily_quota_release,
-)
+from app.agent.runs.daily_quota import observability as daily_quota_observability
+from app.agent.runs.daily_quota.contracts import DailyRequestLimitExceededError
+from app.agent.runs.daily_quota.policy import DAILY_QUOTA_TIMEZONE
 from app.agent.runs.repository import AgentRunRepository
 from app.agent.runs.types import AgentRunErrorCode, AgentRunStatus
 from app.agent.threads.repository import AgentThreadRepository
@@ -85,8 +80,6 @@ _THREAD_NOT_FOUND_DETAIL = "Research thread not found"
 _RUN_NOT_FOUND_DETAIL = "Research run not found"
 _SSE_RETRY_AFTER_SECONDS = 5
 _SSE_CAPACITY_STATE_KEY = "agent_run_sse_capacity"
-_DAILY_REQUEST_LIMIT = 10
-_JST = ZoneInfo("Asia/Tokyo")
 
 
 async def get_agent_persistence_session() -> AsyncGenerator[AsyncSession]:
@@ -174,17 +167,13 @@ async def create_research_response(
         ) from exc
     except DailyRequestLimitExceededError as exc:
         with suppress(Exception):
-            logger.info(
-                "agent_user_daily_quota_rejected",
-                usage_date=exc.usage_date.isoformat(),
-                limit=_DAILY_REQUEST_LIMIT,
+            daily_quota_observability.observe_admission_rejected(
+                usage_date=exc.usage_date,
             )
-        with suppress(Exception):
-            record_daily_quota_admission(result="rejected")
         reset_at = datetime.combine(
             exc.usage_date + timedelta(days=1),
             datetime.min.time(),
-            tzinfo=_JST,
+            tzinfo=DAILY_QUOTA_TIMEZONE,
         )
         retry_after = max(
             0,
@@ -206,15 +195,11 @@ async def create_research_response(
         )
 
     with suppress(Exception):
-        logger.info(
-            "agent_user_daily_quota_reserved",
-            run_id=str(created.run_id),
-            usage_date=created.usage_date.isoformat(),
+        daily_quota_observability.observe_admission_accepted(
+            run_id=created.run_id,
+            usage_date=created.usage_date,
             used_count=created.used_count,
-            limit=_DAILY_REQUEST_LIMIT,
         )
-    with suppress(Exception):
-        record_daily_quota_admission(result="accepted")
 
     try:
         await enqueue_agent_run(created.run_id)
@@ -325,57 +310,32 @@ async def cancel_research_run(
     repo = AgentRunRepository(session)
     async with session.begin():
         outcome = await repo.cancel_run_for_user(run_id=run_id, user_id=user.id)
-    if outcome is not None:
-        _observe_daily_quota_release(run_id=run_id, result=outcome)
     if outcome is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND)
-    if outcome.outcome is CancelRunOutcome.ALREADY_COMPLETED:
+    if outcome.cancel_outcome is CancelRunOutcome.ALREADY_COMPLETED:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail=_RUN_ALREADY_COMPLETED_DETAIL,
         )
-    if (
-        outcome.outcome is CancelRunOutcome.CANCELLED
-        and outcome.attempt_epoch is not None
-        and outcome.attempt_epoch >= 1
-    ):
+    if outcome.cancel_outcome is CancelRunOutcome.CANCELLED:
+        if outcome.quota_release_outcome is not None:
+            with suppress(Exception):
+                daily_quota_observability.observe_release(
+                    run_id=run_id,
+                    outcome=outcome.quota_release_outcome,
+                )
+        running_attempt_epoch = outcome.running_attempt_epoch
+        if outcome.was_running and running_attempt_epoch is None:
+            raise RuntimeError("running cancel outcome is missing its attempt epoch")
+    else:
+        running_attempt_epoch = None
+    if outcome.was_running and running_attempt_epoch is not None:
         await _publish_cancel_terminal(
             redis=redis,
             run_id=run_id,
-            attempt_epoch=outcome.attempt_epoch,
+            attempt_epoch=running_attempt_epoch,
         )
     return Response(status_code=status.HTTP_204_NO_CONTENT)
-
-
-def _observe_daily_quota_release(*, run_id: UUID, result: CancelRunResult) -> None:
-    if result.outcome is not CancelRunOutcome.CANCELLED:
-        return
-
-    release_outcome = result.quota_release_outcome
-    if release_outcome is DailyQuotaReleaseOutcome.RELEASED:
-        with suppress(Exception):
-            record_daily_quota_release(result="released")
-        with suppress(Exception):
-            logger.info(
-                "agent_user_daily_quota_released",
-                run_id=str(run_id),
-                usage_date=cast(date, result.quota_usage_date).isoformat(),
-                used_count=cast(int, result.quota_used_count),
-                limit=_DAILY_REQUEST_LIMIT,
-            )
-    elif release_outcome is DailyQuotaReleaseOutcome.INCONSISTENT:
-        with suppress(Exception):
-            record_daily_quota_release(result="inconsistent")
-        with suppress(Exception):
-            logger.error(
-                "agent_user_daily_quota_release_inconsistent",
-                run_id=str(run_id),
-                usage_date=cast(date, result.quota_usage_date).isoformat(),
-                limit=_DAILY_REQUEST_LIMIT,
-            )
-    elif release_outcome is DailyQuotaReleaseOutcome.NOT_ELIGIBLE:
-        with suppress(Exception):
-            record_daily_quota_release(result="not_eligible")
 
 
 async def _publish_cancel_terminal(

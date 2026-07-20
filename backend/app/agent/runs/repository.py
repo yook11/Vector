@@ -3,40 +3,29 @@
 from __future__ import annotations
 
 import uuid as uuid_mod
-from datetime import UTC, date, datetime, timedelta
+from datetime import UTC, datetime, timedelta
 
 import structlog
-from sqlalchemy import (
-    Date,
-    Integer,
-    Select,
-    bindparam,
-    cast,
-    func,
-    literal,
-    select,
-    true,
-    update,
-)
-from sqlalchemy.dialects.postgresql import UUID as PgUUID
-from sqlalchemy.dialects.postgresql import insert as pg_insert
+from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.sql.elements import ColumnElement
 
 from app.agent.contract import AnswerQuestionResult
 from app.agent.runs.citation_integrity import assess_citation_integrity
 from app.agent.runs.contracts import (
     ActiveRunConflictError,
+    CancelRunCommandOutcome,
     CancelRunOutcome,
-    CancelRunResult,
     CreatedAgentRun,
-    DailyQuotaReleaseOutcome,
-    DailyRequestLimitExceededError,
     OwnedAgentRunLiveContext,
     PreparedAgentRun,
     RunTransitionLostError,
     StaleRunSweepResult,
     ThreadNotFoundError,
+)
+from app.agent.runs.daily_quota.contracts import DailyQuotaReleaseOutcome
+from app.agent.runs.daily_quota.persistence import (
+    release_daily_quota,
+    reserve_daily_quota,
 )
 from app.agent.runs.projection import build_research_run_response
 from app.agent.runs.result_mapper import (
@@ -47,75 +36,12 @@ from app.agent.runs.types import AgentRunErrorCode, AgentRunStatus
 from app.models.agent_message import AgentMessage
 from app.models.agent_run import AgentRun
 from app.models.agent_thread import AgentThread
-from app.models.agent_user_daily_quota import AgentUserDailyQuota
 from app.schemas.research import ResearchRunResponse
 
 _ACTIVE_STATUSES = (AgentRunStatus.QUEUED.value, AgentRunStatus.RUNNING.value)
 _TERMINAL_STATUSES = (AgentRunStatus.COMPLETED.value, AgentRunStatus.FAILED.value)
 _STALE_AFTER = timedelta(minutes=20)
-_DAILY_REQUEST_LIMIT = 10
 logger = structlog.get_logger(__name__)
-
-
-def _build_daily_quota_reservation_statement(
-    *,
-    user_id: uuid_mod.UUID,
-    clock_expression: ColumnElement[datetime] | None = None,
-) -> Select[tuple[datetime, date, datetime, int | None]]:
-    observed_at_expression = (
-        clock_expression if clock_expression is not None else func.statement_timestamp()
-    )
-    quota_clock = (
-        select(observed_at_expression.label("observed_at"))
-        .cte("quota_clock")
-        .prefix_with("MATERIALIZED", dialect="postgresql")
-    )
-    usage_date_expression = cast(
-        quota_clock.c.observed_at.op("AT TIME ZONE")(literal("Asia/Tokyo")),
-        Date(),
-    ).label("usage_date")
-    quota_day = (
-        select(quota_clock.c.observed_at, usage_date_expression)
-        .select_from(quota_clock)
-        .cte("quota_day")
-        .prefix_with("MATERIALIZED", dialect="postgresql")
-    )
-    reservation = (
-        pg_insert(AgentUserDailyQuota)
-        .from_select(
-            ["user_id", "usage_date", "used_count"],
-            select(
-                bindparam("user_id", user_id, type_=PgUUID(as_uuid=True)),
-                quota_day.c.usage_date,
-                literal(1, type_=Integer()),
-            ).select_from(quota_day),
-        )
-        .on_conflict_do_update(
-            index_elements=[
-                AgentUserDailyQuota.user_id,
-                AgentUserDailyQuota.usage_date,
-            ],
-            set_={
-                "used_count": AgentUserDailyQuota.used_count + 1,
-            },
-            where=(
-                AgentUserDailyQuota.used_count
-                < bindparam(
-                    "daily_limit",
-                    _DAILY_REQUEST_LIMIT,
-                    type_=Integer(),
-                )
-            ),
-        )
-        .returning(AgentUserDailyQuota.used_count)
-        .cte("reservation")
-    )
-    return select(
-        quota_day.c.observed_at,
-        quota_day.c.usage_date,
-        func.clock_timestamp().label("decided_at"),
-        reservation.c.used_count,
-    ).select_from(quota_day.outerjoin(reservation, true()))
 
 
 class AgentRunRepository:
@@ -158,24 +84,10 @@ class AgentRunRepository:
             next_seq = await self._next_message_seq(thread.id)
             thread.updated_at = now
 
-        quota_reservation = (
-            (
-                await self._session.execute(
-                    _build_daily_quota_reservation_statement(user_id=user_id)
-                )
-            )
-            .mappings()
-            .one()
+        quota_reservation = await reserve_daily_quota(
+            self._session,
+            user_id=user_id,
         )
-        usage_date = quota_reservation["usage_date"]
-        used_count = quota_reservation["used_count"]
-        if used_count is None:
-            raise DailyRequestLimitExceededError(
-                usage_date=usage_date,
-                observed_at=quota_reservation["observed_at"],
-                decided_at=quota_reservation["decided_at"],
-                limit=_DAILY_REQUEST_LIMIT,
-            )
 
         user_message = AgentMessage(
             thread_id=thread.id,
@@ -191,15 +103,15 @@ class AgentRunRepository:
             thread_id=thread.id,
             user_message_id=user_message.id,
             status=AgentRunStatus.QUEUED.value,
-            quota_usage_date=usage_date,
+            quota_usage_date=quota_reservation.usage_date,
         )
         self._session.add(run)
         await self._session.flush()
         return CreatedAgentRun(
             thread_id=thread.id,
             run_id=run.id,
-            usage_date=usage_date,
-            used_count=used_count,
+            usage_date=quota_reservation.usage_date,
+            used_count=quota_reservation.used_count,
         )
 
     async def mark_failed(
@@ -428,7 +340,7 @@ class AgentRunRepository:
         run_id: uuid_mod.UUID,
         user_id: uuid_mod.UUID,
         now: datetime | None = None,
-    ) -> CancelRunResult | None:
+    ) -> CancelRunCommandOutcome | None:
         now = now or datetime.now(UTC)
         owned_thread_ids = select(AgentThread.id).where(AgentThread.user_id == user_id)
         queued_result = await self._session.execute(
@@ -443,47 +355,19 @@ class AgentRunRepository:
                 error_code=AgentRunErrorCode.CANCELLED.value,
                 completed_at=now,
             )
-            .returning(AgentRun.attempt_epoch, AgentRun.quota_usage_date)
+            .returning(AgentRun.quota_usage_date)
             .execution_options(synchronize_session=False)
         )
         queued_row = queued_result.one_or_none()
         if queued_row is not None:
-            attempt_epoch, quota_usage_date = queued_row
-            if quota_usage_date is None:
-                return CancelRunResult(
-                    outcome=CancelRunOutcome.CANCELLED,
-                    attempt_epoch=attempt_epoch,
-                    quota_release_outcome=DailyQuotaReleaseOutcome.NOT_ELIGIBLE,
-                )
-
-            quota_used_count = (
-                await self._session.execute(
-                    update(AgentUserDailyQuota)
-                    .where(
-                        AgentUserDailyQuota.user_id == user_id,
-                        AgentUserDailyQuota.usage_date == quota_usage_date,
-                        AgentUserDailyQuota.used_count > 0,
-                    )
-                    .values(
-                        used_count=AgentUserDailyQuota.used_count - 1,
-                    )
-                    .returning(AgentUserDailyQuota.used_count)
-                    .execution_options(synchronize_session=False)
-                )
-            ).scalar_one_or_none()
-            if quota_used_count is None:
-                return CancelRunResult(
-                    outcome=CancelRunOutcome.CANCELLED,
-                    attempt_epoch=attempt_epoch,
-                    quota_release_outcome=DailyQuotaReleaseOutcome.INCONSISTENT,
-                    quota_usage_date=quota_usage_date,
-                )
-            return CancelRunResult(
-                outcome=CancelRunOutcome.CANCELLED,
-                attempt_epoch=attempt_epoch,
-                quota_release_outcome=DailyQuotaReleaseOutcome.RELEASED,
-                quota_usage_date=quota_usage_date,
-                quota_used_count=quota_used_count,
+            quota_release_outcome = await release_daily_quota(
+                self._session,
+                user_id=user_id,
+                usage_date=queued_row.quota_usage_date,
+            )
+            return CancelRunCommandOutcome(
+                cancel_outcome=CancelRunOutcome.CANCELLED,
+                quota_release_outcome=quota_release_outcome,
             )
 
         running_result = await self._session.execute(
@@ -498,17 +382,16 @@ class AgentRunRepository:
                 error_code=AgentRunErrorCode.CANCELLED.value,
                 completed_at=now,
             )
-            .returning(AgentRun.attempt_epoch, AgentRun.quota_usage_date)
+            .returning(AgentRun.attempt_epoch)
             .execution_options(synchronize_session=False)
         )
-        running_row = running_result.one_or_none()
-        if running_row is not None:
-            attempt_epoch, quota_usage_date = running_row
-            return CancelRunResult(
-                outcome=CancelRunOutcome.CANCELLED,
-                attempt_epoch=attempt_epoch,
+        running_attempt_epoch = running_result.scalar_one_or_none()
+        if running_attempt_epoch is not None:
+            return CancelRunCommandOutcome(
+                cancel_outcome=CancelRunOutcome.CANCELLED,
+                was_running=True,
+                running_attempt_epoch=running_attempt_epoch,
                 quota_release_outcome=DailyQuotaReleaseOutcome.NOT_ELIGIBLE,
-                quota_usage_date=quota_usage_date,
             )
 
         terminal_status = (
@@ -522,9 +405,9 @@ class AgentRunRepository:
         if terminal_status is None:
             return None
         if AgentRunStatus(terminal_status) is AgentRunStatus.COMPLETED:
-            return CancelRunResult(CancelRunOutcome.ALREADY_COMPLETED)
+            return CancelRunCommandOutcome(CancelRunOutcome.ALREADY_COMPLETED)
         if AgentRunStatus(terminal_status) is AgentRunStatus.FAILED:
-            return CancelRunResult(CancelRunOutcome.ALREADY_FAILED)
+            return CancelRunCommandOutcome(CancelRunOutcome.ALREADY_FAILED)
         return None
 
     async def sweep_stale_runs(

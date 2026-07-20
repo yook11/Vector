@@ -154,6 +154,27 @@ user所有権、queued/running transition、queued時の予約解除を同じcon
 AgentRun repositoryがtable単位ではなくrun lifecycle command単位でtransactional invariantを
 所有する境界を維持する。
 
+daily quota 固有の policy、contract、予約・返却query、observability は
+`app/agent/runs/daily_quota/` が所有する。`AgentRunRepository` は同じ `AsyncSession` を渡して
+これらをrun作成・cancel transactionへ参加させ、daily quota module側ではtransactionを開始・commit
+しない。migration、ORM model、Pydantic schemaはそれぞれ既存のSSoT配置を維持する。
+
+cancel commandは、HTTP結果、running transitionの事実、SSE fencing token、quota返却結果を次の
+1つのcontractで返す。worker開始有無を `attempt_epoch` の値から推測せず、`was_running` で表す。
+`running_attempt_epoch` はrunning cancelのSSE terminal eventに付与する正の実行世代だけを表す。
+
+```python
+@dataclass(frozen=True)
+class CancelRunCommandOutcome:
+    cancel_outcome: CancelRunOutcome
+    was_running: bool = False
+    running_attempt_epoch: int | None = None
+    quota_release_outcome: DailyQuotaReleaseOutcome | None = None
+```
+
+返却後の一時的なcounter値や元の `quota_usage_date` はcommand callerの判断に使用しないため、この
+resultには含めない。`quota_usage_date` は正しいcounterを減算する永続化内部情報としてrunに保持する。
+
 ## 全体フロー
 
 ```text
@@ -395,7 +416,7 @@ SET used_count = used_count - 1
 WHERE user_id = :user_id
   AND usage_date = :quota_usage_date
   AND used_count > 0
-RETURNING used_count;
+RETURNING user_id;
 ```
 
 cancel APIが再送されても、最初のrequestでrunはterminalになっているためqueued限定UPDATEは
@@ -642,9 +663,10 @@ UI contract:
 | `agent_user_daily_quota_release_inconsistent` | error | cancel commit後 |
 | `agent_user_daily_quota_stale_reservations_retained` | warn | stale sweep transaction commit後、quota対象runを1件以上sweepした場合 |
 
-予約・解除logには `run_id`、`usage_date`、更新後件数、limitを含めてよい。rejectedにはrunが
-存在しないためtrace context、`usage_date`、limitだけを含める。通常logに `user_id`、question、
-history、provider名、provider raw errorを追加しない。
+予約logには `run_id`、`usage_date`、予約後件数、limitを含めてよい。解除logには `run_id` と
+limitだけを含め、元の `usage_date` と解除後件数は含めない。rejectedにはrunが存在しないため
+trace context、`usage_date`、limitだけを含める。通常logに `user_id`、question、history、
+provider名、provider raw errorを追加しない。
 
 transaction commit前に成功logを出さない。log書込み失敗をquota transactionへ参加させない。
 
@@ -842,9 +864,9 @@ run単位の長期監査ledgerが必要になった場合は別sliceで扱う。
 ### Backend
 
 - quota table/modelと `agent_runs.quota_usage_date` のAlembic migration。
-- 日次枠の条件付き予約・解除queryとtyped domain result。
+- `app/agent/runs/daily_quota/` の固定policy、typed contract、条件付き予約・解除query、observability。
 - run作成transactionへのquota予約配線。
-- queued/running cancel transitionの分離とqueued時の予約解除。
+- queued/running cancel transitionの分離、明示的なcancel command outcome、queued時の予約解除。
 - 429 Pydantic schema、OpenAPI response、header。
 - structured log、quota対象staleのstatus別集計metric。
 
