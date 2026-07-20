@@ -10,6 +10,7 @@ from app.agent.evidence_collection.external_search.contract import (
     ExternalEvidenceSelectionInput,
     ExternalQueryGenerationInput,
 )
+from app.agent.planning.contract import render_target_time_window
 from app.analysis.prompt_safety import sanitize_for_untrusted_block
 
 EXTERNAL_QUERY_PROMPT_VERSION: Final[str] = "v1"
@@ -81,12 +82,15 @@ candidates:
 
 def render_external_query_input(input: ExternalQueryGenerationInput) -> str:
     """Query Agent inputをmodel-visibleなtask dataへ変換する。"""
+    target_time_window = (
+        render_target_time_window(input.target_time_window)
+        if input.target_time_window is not None
+        else "未指定"
+    )
     return _EXTERNAL_QUERY_INPUT_TEMPLATE.format(
         as_of=input.as_of.isoformat(),
         collection_goal=sanitize_for_untrusted_block(input.task.collection_goal),
-        target_time_window=sanitize_for_untrusted_block(
-            input.target_time_window or "未指定"
-        ),
+        target_time_window=sanitize_for_untrusted_block(target_time_window),
     )
 
 

@@ -7,6 +7,7 @@ from typing import Final
 from app.agent.agent import AgentPrompt
 from app.agent.answering.evidence_answer.contract import EvidenceAnswerInput
 from app.agent.answering.evidence_answer.evidence import AnswerEvidenceItem
+from app.agent.planning.contract import render_target_time_window
 from app.analysis.prompt_safety import sanitize_for_untrusted_block
 
 EVIDENCE_ANSWER_PROMPT_VERSION: Final[str] = "v1"
@@ -152,13 +153,18 @@ _NO_EVIDENCE_BLOCK: Final[str] = (
 
 def render_evidence_answer_input(input: EvidenceAnswerInput) -> str:
     request = input.request
+    target_time_window = (
+        render_target_time_window(input.target_time_window)
+        if input.target_time_window is not None
+        else "未指定"
+    )
     # HTMLではないLLM promptであり、外部入力は境界用sanitizerを通す。
     # nosemgrep: python.django.security.injection.raw-html-format.raw-html-format  # noqa: E501
     rendered = EVIDENCE_ANSWER_INPUT_TEMPLATE.format(
         question=sanitize_for_untrusted_block(request.context.standalone_question),
         evidence=_render_evidence(input.evidence),
         as_of=request.as_of.isoformat(),
-        target_time_window=sanitize_for_untrusted_block(input.target_time_window or ""),
+        target_time_window=sanitize_for_untrusted_block(target_time_window),
         content_requirements=_render_requirements(request.context.content_requirements),
         response_requirements=_render_requirements(
             request.context.response_requirements

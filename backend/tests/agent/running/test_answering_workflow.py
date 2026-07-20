@@ -19,6 +19,7 @@ from app.agent.planning.contract import (
     NoRetrievalPlan,
     PlanningRequest,
     QuestionPlan,
+    TargetTimeWindow,
 )
 from app.agent.question_context import (
     QuestionContext,
@@ -98,7 +99,7 @@ class _UnreachableExternalSearch:
         self,
         _tasks: list[object],
         *,
-        target_time_window: str | None,
+        target_time_window: TargetTimeWindow | None,
         as_of: datetime,
         external: object,
     ) -> ExternalSearchOutcome:
@@ -139,7 +140,7 @@ class _EvidenceAnswerer:
         *,
         request: AnsweringRequest,
         evidence: list[object],
-        target_time_window: str | None,
+        target_time_window: TargetTimeWindow | None,
     ) -> EvidenceAnswerDraft:
         self._timeline.append("evidence_answerer")
         self.calls.append(

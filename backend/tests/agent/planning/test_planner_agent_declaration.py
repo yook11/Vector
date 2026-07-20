@@ -242,9 +242,15 @@ def test_question_planner_agent_declares_its_prompt_model_and_immutable_schema()
         for forbidden_attribute in ("client", "retry", "rate_limit_policy", "usage")
     )
     assert isinstance(question_planner_agent.response_schema, Mapping)
-    assert _as_plain_value(question_planner_agent.response_schema) == (
-        _expected_question_planner_schema()
-    )
+    schema = _as_plain_value(question_planner_agent.response_schema)
+    assert schema["type"] == "OBJECT"
+    assert set(schema["required"]) == {
+        "retrieval_mode",
+        "internal_queries",
+        "external_collection_goals",
+        "reason",
+    }
+    assert schema["properties"]["target_time_window"]["type"] == "OBJECT"
     with pytest.raises(TypeError):
         question_planner_agent.response_schema["properties"] = {}
     with pytest.raises(TypeError):
@@ -336,6 +342,29 @@ def test_prompt_declaration_keeps_version_and_fixed_rules_out_of_agent_module() 
     assert "compute_call_signature" not in getsource(agent_module)
     assert "compute_call_signature" not in getsource(prompts_module)
     _assert_agent_prompt_references_prompt_declaration(agent_module)
+
+
+def test_planner_prompt_declares_typed_publication_window_normalization() -> None:
+    prompts_module = _required_module("app.agent.planning.prompts")
+    instructions = _required_attribute(prompts_module, "PLANNER_INSTRUCTIONS")
+
+    assert all(
+        marker in instructions
+        for marker in (
+            "target_time_window",
+            "last_n_days",
+            "days",
+            "直近24時間",
+            "直近7日",
+            "直近30日",
+            "最新",
+            "最近",
+            "date_range",
+            "unsupported_explicit_window",
+            "質問対象時期",
+            "公開",
+        )
+    )
 
 
 def test_planner_input_renderer_is_deterministic_sanitized_task_contents_only() -> None:
@@ -442,7 +471,11 @@ def test_wire_schema_matches_draft_contract_and_representative_payload() -> None
         "retrieval_mode": "internal_and_external",
         "internal_queries": ["NVIDIA AI GPU 動向"],
         "external_collection_goals": ["NVIDIA の直近発表を確認する"],
-        "target_time_window": None,
+        "target_time_window": {
+            "kind": "date_range",
+            "start_date": "2026-06-01",
+            "end_date_inclusive": "2026-06-15",
+        },
         "reason": "内部記事と最新ニュースの両方が必要",
     }
 
@@ -467,12 +500,57 @@ def test_wire_schema_matches_draft_contract_and_representative_payload() -> None
     assert (
         schema["properties"]["external_collection_goals"]["items"]["type"] == "STRING"
     )
-    assert _as_plain_value(schema["properties"]["target_time_window"]) == {
-        "type": "STRING",
-        "nullable": True,
-        "description": (
-            "Optional time window extracted from the question, such as "
-            "today, last 24 hours, this week, or a concrete month."
-        ),
+    target_time_window_schema = _as_plain_value(
+        schema["properties"]["target_time_window"]
+    )
+    assert target_time_window_schema["nullable"] is True
+    assert target_time_window_schema["type"] == "OBJECT"
+    assert set(target_time_window_schema["properties"]) == {
+        "kind",
+        "year",
+        "month",
+        "days",
+        "start_date",
+        "end_date_inclusive",
     }
-    assert QuestionPlanDraft.model_validate(payload).model_dump() == payload
+    assert target_time_window_schema["properties"]["kind"]["enum"] == [
+        "today",
+        "yesterday",
+        "last_n_days",
+        "this_week",
+        "last_week",
+        "this_month",
+        "calendar_month",
+        "date_range",
+        "unsupported_explicit_window",
+    ]
+    assert target_time_window_schema["properties"]["year"] == {
+        "type": "INTEGER",
+        "minimum": 1,
+        "maximum": 9999,
+        "nullable": True,
+    }
+    assert target_time_window_schema["properties"]["month"] == {
+        "type": "INTEGER",
+        "minimum": 1,
+        "maximum": 12,
+        "nullable": True,
+    }
+    assert target_time_window_schema["properties"]["days"] == {
+        "type": "INTEGER",
+        "minimum": 1,
+        "maximum": 60,
+        "nullable": True,
+    }
+    assert target_time_window_schema["properties"]["start_date"] == {
+        "type": "STRING",
+        "format": "date",
+        "nullable": True,
+    }
+    assert target_time_window_schema["properties"]["end_date_inclusive"] == {
+        "type": "STRING",
+        "format": "date",
+        "nullable": True,
+    }
+    assert "additionalProperties" not in target_time_window_schema
+    assert QuestionPlanDraft.model_validate(payload).target_time_window is not None

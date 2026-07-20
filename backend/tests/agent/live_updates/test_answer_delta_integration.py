@@ -43,6 +43,7 @@ from app.agent.live_updates.stream import (
     agent_run_live_stream_key,
     is_stream_id_before,
 )
+from app.agent.planning.contract import TargetTimeWindow
 from app.agent.question_context.contract import AnswerRequirement, QuestionContext
 from app.config import settings
 
@@ -159,7 +160,7 @@ async def _evidence_answer(
                 text="根拠を確認しました。",
             )
         ],
-        target_time_window="今日",
+        target_time_window=TargetTimeWindow(kind="today"),
     )
 
 

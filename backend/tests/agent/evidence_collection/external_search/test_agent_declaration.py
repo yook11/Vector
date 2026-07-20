@@ -14,7 +14,7 @@ import pytest
 from pydantic import ValidationError
 
 from app.agent.agent import Agent
-from app.agent.planning.contract import ExternalResearchTask
+from app.agent.planning.contract import ExternalResearchTask, TargetTimeWindow
 from app.shared.security.safe_url import SafeUrl
 
 
@@ -65,6 +65,10 @@ def _as_of() -> datetime:
     return datetime(2026, 7, 19, 9, 0, tzinfo=UTC)
 
 
+def _time_window(**payload: object) -> TargetTimeWindow:
+    return TargetTimeWindow.model_validate(payload)
+
+
 def _assert_frozen_slots_dataclass(value: type[object]) -> None:
     assert is_dataclass(value) and value.__dataclass_params__.frozen
     assert hasattr(value, "__slots__") and "__dict__" not in value.__slots__
@@ -112,10 +116,10 @@ def test_typed_inputs_are_immutable_and_candidate_projection_excludes_url() -> N
     query_input = query_input_type(
         task=_task(),
         as_of=_as_of(),
-        target_time_window="直近24時間",
+        target_time_window=_time_window(kind="last_n_days", days=1),
     )
     with pytest.raises(FrozenInstanceError):
-        query_input.target_time_window = "今日"
+        query_input.target_time_window = _time_window(kind="today")
 
 
 def test_query_draft_filters_non_strings_before_workflow_normalization() -> None:
@@ -282,7 +286,7 @@ def test_query_prompt_keeps_fixed_rules_in_system_and_sanitizes_runtime_task_dat
         query_input_type(
             task=_task(boundary_attack),
             as_of=_as_of(),
-            target_time_window=boundary_attack,
+            target_time_window=_time_window(kind="last_n_days", days=1),
         )
     )
 
@@ -292,6 +296,31 @@ def test_query_prompt_keeps_fixed_rules_in_system_and_sanitizes_runtime_task_dat
     assert "QUERY_ATTACK_SENTINEL" in rendered
     assert boundary_attack not in agent.prompt.instructions
     assert "QUERY_ATTACK_SENTINEL" not in agent.prompt.instructions
+
+
+def test_query_prompt_renders_typed_window_or_none_deterministically() -> None:
+    query_input_type = _required_attribute(_contracts(), "ExternalQueryGenerationInput")
+    renderer = _query_agent().prompt.input_renderer
+
+    typed_rendered = renderer(
+        query_input_type(
+            task=_task(),
+            as_of=_as_of(),
+            target_time_window=_time_window(kind="last_n_days", days=7),
+        )
+    )
+    none_rendered = renderer(
+        query_input_type(
+            task=_task(),
+            as_of=_as_of(),
+            target_time_window=None,
+        )
+    )
+
+    assert (
+        "target_time_window:\n直近7日" in typed_rendered,
+        "target_time_window:\n未指定" in none_rendered,
+    ) == (True, True)
 
 
 def test_selector_prompt_renders_only_safe_candidate_projection_and_never_url() -> None:

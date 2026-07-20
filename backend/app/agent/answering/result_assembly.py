@@ -27,6 +27,9 @@ _COLLECTION_FAILURE_MISSING: dict[EvidenceCollectionFailure, str] = {
     "internal_search": "内部記事検索を完了できませんでした",
     "external_search": "外部検索を完了できませんでした",
 }
+_EXTERNAL_TASK_STATUS_MISSING = {
+    "time_filter_failed": "指定された公開期間を外部検索へ適用できませんでした",
+}
 
 
 def assemble_evidence_result(
@@ -43,14 +46,28 @@ def assemble_evidence_result(
         requirement_ids=draft.unfulfilled_requirement_ids,
     )
     sources = _sources_for_citations(evidence=evidence, cited_refs=draft.cited_refs)
+    all_external_tasks_time_filter_failed = _all_external_tasks_time_filter_failed(
+        outcome
+    )
+    suppress_empty_external_failure = (
+        plan.retrieval_mode == "external"
+        and all_external_tasks_time_filter_failed
+        and not outcome.collection_failures
+    )
     return _assemble_evidence_result(
         plan=plan,
         outcome=outcome,
         answer=draft.answer,
         sources=sources,
-        draft_missing_aspects=draft.missing_aspects,
+        draft_missing_aspects=(
+            []
+            if not evidence and all_external_tasks_time_filter_failed
+            else draft.missing_aspects
+        ),
         requirement_missing_aspects=requirement_missing_aspects,
-        include_retrieval_empty_missing=not evidence,
+        include_retrieval_empty_missing=(
+            not evidence and not suppress_empty_external_failure
+        ),
     )
 
 
@@ -175,8 +192,25 @@ def _external_task_missing(outcome: EvidenceCollectionOutcome) -> list[str]:
         outcome.external_search.task_reports,
         key=lambda report: report.task_index,
     ):
+        status_missing = _EXTERNAL_TASK_STATUS_MISSING.get(report.status)
+        if status_missing is not None:
+            missing.append(status_missing)
         missing.extend(report.missing)
     return missing
+
+
+def _all_external_tasks_time_filter_failed(
+    outcome: EvidenceCollectionOutcome,
+) -> bool:
+    external_search = outcome.external_search
+    return (
+        external_search is not None
+        and bool(external_search.task_reports)
+        and all(
+            report.status == "time_filter_failed"
+            for report in external_search.task_reports
+        )
+    )
 
 
 def _deduplicate(values: list[str]) -> list[str]:

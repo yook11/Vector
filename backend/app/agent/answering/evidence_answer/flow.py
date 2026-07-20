@@ -46,6 +46,7 @@ from app.agent.contract import (
     AnswerGenerationContinuation,
     AnswerGenerationStopped,
 )
+from app.agent.planning.contract import TargetTimeWindow
 from app.agent.runtime.contract import (
     AgentTextStream,
     StreamingAgentRuntime,
@@ -91,7 +92,7 @@ class EvidenceAnswerFlow:
         *,
         request: AnsweringRequest,
         evidence: list[AnswerEvidenceItem],
-        target_time_window: str | None,
+        target_time_window: TargetTimeWindow | None,
     ) -> EvidenceAnswerDraft:
         """Return a valid draft, retrying classified response-boundary failures."""
 
@@ -147,7 +148,7 @@ class EvidenceAnswerFlow:
         runtime: StreamingAgentRuntime,
         request: AnsweringRequest,
         evidence: list[AnswerEvidenceItem],
-        target_time_window: str | None,
+        target_time_window: TargetTimeWindow | None,
         previous_error: str | None,
         attempt_number: int,
     ) -> EvidenceAnswerDraft:

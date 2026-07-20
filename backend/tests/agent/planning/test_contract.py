@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import importlib
 import inspect
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from typing import get_type_hints
 
 import pytest
@@ -46,6 +46,21 @@ def _request_type(module_name: str, type_name: str) -> type[object]:
     if request_type is None:
         pytest.fail(f"{module_name} must define {type_name}")
     return request_type
+
+
+def _target_time_window_type() -> type[object]:
+    return _request_type("app.agent.planning.contract", "TargetTimeWindow")
+
+
+def _target_time_window(**payload: object) -> object:
+    return _target_time_window_type().model_validate(payload)
+
+
+def _render_target_time_window(target_time_window: object) -> str:
+    renderer = getattr(planning_contract, "render_target_time_window", None)
+    if renderer is None:
+        pytest.fail("planning contract must define render_target_time_window")
+    return renderer(target_time_window)
 
 
 def _first_input_annotation(method: object) -> object | None:
@@ -255,6 +270,220 @@ class TestQuestionPlanVariants:
             plan.reason = "変更不可"
 
 
+@pytest.mark.parametrize(
+    "payload",
+    [
+        pytest.param({"kind": "today"}, id="today"),
+        pytest.param({"kind": "yesterday"}, id="yesterday"),
+        pytest.param({"kind": "last_n_days", "days": 1}, id="last-n-days"),
+        pytest.param({"kind": "this_week"}, id="this-week"),
+        pytest.param({"kind": "last_week"}, id="last-week"),
+        pytest.param({"kind": "this_month"}, id="this-month"),
+        pytest.param(
+            {"kind": "calendar_month", "year": 2026, "month": 6},
+            id="calendar-month",
+        ),
+        pytest.param(
+            {
+                "kind": "date_range",
+                "start_date": "2026-06-01",
+                "end_date_inclusive": "2026-06-15",
+            },
+            id="date-range",
+        ),
+        pytest.param(
+            {"kind": "unsupported_explicit_window"},
+            id="unsupported-explicit-window",
+        ),
+    ],
+)
+def test_target_time_window_accepts_each_closed_kind(
+    payload: dict[str, object],
+) -> None:
+    target_time_window = _target_time_window(**payload)
+
+    assert target_time_window.model_dump() == {
+        "kind": payload["kind"],
+        "year": payload.get("year"),
+        "month": payload.get("month"),
+        "days": payload.get("days"),
+        "start_date": (
+            date.fromisoformat(payload["start_date"])
+            if "start_date" in payload
+            else None
+        ),
+        "end_date_inclusive": (
+            date.fromisoformat(payload["end_date_inclusive"])
+            if "end_date_inclusive" in payload
+            else None
+        ),
+    }
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        pytest.param({"kind": "unknown"}, id="unknown-kind"),
+        pytest.param({"kind": "today", "extra": "forbidden"}, id="extra-field"),
+        pytest.param({"kind": "calendar_month", "month": 6}, id="missing-year"),
+        pytest.param({"kind": "calendar_month", "year": 2026}, id="missing-month"),
+        pytest.param({"kind": "last_n_days"}, id="missing-days"),
+        pytest.param(
+            {"kind": "date_range", "end_date_inclusive": "2026-06-01"},
+            id="missing-start-date",
+        ),
+        pytest.param(
+            {"kind": "date_range", "start_date": "2026-06-01"}, id="missing-end-date"
+        ),
+        pytest.param(
+            {"kind": "calendar_month", "year": 0, "month": 1}, id="year-underflow"
+        ),
+        pytest.param(
+            {"kind": "calendar_month", "year": 10000, "month": 1}, id="year-overflow"
+        ),
+        pytest.param(
+            {"kind": "calendar_month", "year": 2026, "month": 0}, id="month-underflow"
+        ),
+        pytest.param(
+            {"kind": "calendar_month", "year": 2026, "month": 13}, id="month-overflow"
+        ),
+        pytest.param({"kind": "last_n_days", "days": 0}, id="days-underflow"),
+        pytest.param({"kind": "last_n_days", "days": 61}, id="days-overflow"),
+        pytest.param(
+            {
+                "kind": "date_range",
+                "start_date": "invalid-date",
+                "end_date_inclusive": "2026-06-01",
+            },
+            id="invalid-iso-date",
+        ),
+        pytest.param(
+            {
+                "kind": "date_range",
+                "start_date": "2026/06/01",
+                "end_date_inclusive": "2026-06-01",
+            },
+            id="non-iso-date",
+        ),
+        pytest.param(
+            {
+                "kind": "date_range",
+                "start_date": "2026-06-16",
+                "end_date_inclusive": "2026-06-15",
+            },
+            id="reversed-date-range",
+        ),
+        pytest.param(
+            {
+                "kind": "date_range",
+                "start_date": "9999-12-30",
+                "end_date_inclusive": "9999-12-31",
+            },
+            id="date-max-cannot-form-half-open-range",
+        ),
+    ],
+)
+def test_target_time_window_rejects_values_outside_its_closed_contract(
+    payload: dict[str, object],
+) -> None:
+    with pytest.raises(ValidationError):
+        _target_time_window(**payload)
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        pytest.param({"kind": "today", "year": 2026}, id="year-outside-calendar-month"),
+        pytest.param({"kind": "today", "month": 6}, id="month-outside-calendar-month"),
+        pytest.param({"kind": "today", "days": 7}, id="days-outside-last-n-days"),
+        pytest.param(
+            {"kind": "calendar_month", "year": 2026, "month": 6, "days": 7},
+            id="days-outside-calendar-month",
+        ),
+        pytest.param(
+            {"kind": "last_n_days", "days": 7, "year": 2026},
+            id="year-outside-last-n-days",
+        ),
+        pytest.param(
+            {"kind": "today", "start_date": "2026-06-01"},
+            id="start-date-outside-date-range",
+        ),
+        pytest.param(
+            {"kind": "today", "end_date_inclusive": "2026-06-01"},
+            id="end-date-outside-date-range",
+        ),
+        pytest.param(
+            {
+                "kind": "date_range",
+                "start_date": "2026-06-01",
+                "end_date_inclusive": "2026-06-15",
+                "days": 7,
+            },
+            id="days-outside-date-range",
+        ),
+        pytest.param(
+            {"kind": "unsupported_explicit_window", "days": 7},
+            id="sentinel-cannot-carry-parameters",
+        ),
+    ],
+)
+def test_target_time_window_rejects_kind_dependent_fields_on_other_kinds(
+    payload: dict[str, object],
+) -> None:
+    with pytest.raises(ValidationError):
+        _target_time_window(**payload)
+
+
+def test_target_time_window_is_frozen() -> None:
+    target_time_window = _target_time_window(kind="today")
+
+    with pytest.raises(ValidationError):
+        target_time_window.kind = "yesterday"
+
+
+@pytest.mark.parametrize(
+    ("payload", "expected_display"),
+    [
+        pytest.param({"kind": "today"}, "今日", id="today"),
+        pytest.param({"kind": "yesterday"}, "昨日", id="yesterday"),
+        pytest.param({"kind": "last_n_days", "days": 1}, "直近24時間", id="one-day"),
+        pytest.param({"kind": "last_n_days", "days": 3}, "直近3日", id="three-days"),
+        pytest.param({"kind": "last_n_days", "days": 7}, "直近7日", id="seven-days"),
+        pytest.param({"kind": "last_n_days", "days": 30}, "直近30日", id="thirty-days"),
+        pytest.param({"kind": "last_n_days", "days": 60}, "直近60日", id="sixty-days"),
+        pytest.param({"kind": "this_week"}, "今週", id="this-week"),
+        pytest.param({"kind": "last_week"}, "先週", id="last-week"),
+        pytest.param({"kind": "this_month"}, "今月", id="this-month"),
+        pytest.param(
+            {"kind": "calendar_month", "year": 2026, "month": 6},
+            "2026年6月",
+            id="calendar-month",
+        ),
+        pytest.param(
+            {
+                "kind": "date_range",
+                "start_date": "2026-06-01",
+                "end_date_inclusive": "2026-06-15",
+            },
+            "2026年6月1日から2026年6月15日まで",
+            id="date-range",
+        ),
+        pytest.param(
+            {"kind": "unsupported_explicit_window"},
+            "対応外の明示期間",
+            id="unsupported-explicit-window",
+        ),
+    ],
+)
+def test_target_time_window_display_is_deterministic_for_each_kind(
+    payload: dict[str, object],
+    expected_display: str,
+) -> None:
+    assert (
+        _render_target_time_window(_target_time_window(**payload)) == expected_display
+    )
+
+
 class TestPlanFromDraft:
     def test_none_ignores_queries_and_time_window(self) -> None:
         plan = plan_from_draft(
@@ -262,7 +491,7 @@ class TestPlanFromDraft:
                 retrieval_mode="none",
                 internal_queries=["ignored"],
                 external_collection_goals=["ignored"],
-                target_time_window="直近24時間",
+                target_time_window=_target_time_window(kind="last_n_days", days=1),
                 reason="検索不要",
             ),
             fallback_query="fallback",
@@ -402,6 +631,32 @@ class TestPlanFromDraft:
             ExternalResearchTask(collection_goal="NVIDIA の供給需要を確認する"),
             ExternalResearchTask(collection_goal="NVIDIA の投資影響を確認する"),
         ]
+
+    @pytest.mark.parametrize(
+        "retrieval_mode",
+        ["external", "internal_and_external"],
+    )
+    def test_external_variants_preserve_the_typed_time_window_from_draft(
+        self,
+        retrieval_mode: str,
+    ) -> None:
+        target_time_window = _target_time_window(
+            kind="date_range",
+            start_date="2026-06-01",
+            end_date_inclusive="2026-06-15",
+        )
+        plan = plan_from_draft(
+            QuestionPlanDraft(
+                retrieval_mode=retrieval_mode,
+                internal_queries=["NVIDIA"],
+                external_collection_goals=["NVIDIA の発表を確認する"],
+                target_time_window=target_time_window,
+                reason="外部根拠が必要",
+            ),
+            fallback_query="fallback",
+        )
+
+        assert plan.target_time_window == target_time_window
 
     def test_safe_fallback_defaults_to_internal(self) -> None:
         plan = safe_fallback_plan(fallback_query="こんにちは")

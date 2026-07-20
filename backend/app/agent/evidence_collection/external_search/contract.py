@@ -11,7 +11,7 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from contextlib import AbstractAsyncContextManager
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import date, datetime
 from enum import StrEnum
 from typing import Final, Literal, Protocol
 
@@ -23,7 +23,7 @@ from pydantic import (
     model_validator,
 )
 
-from app.agent.planning.contract import ExternalResearchTask
+from app.agent.planning.contract import ExternalResearchTask, TargetTimeWindow
 from app.agent.runtime.contract import AgentRuntime
 from app.shared.security.safe_url import SafeUrl
 
@@ -48,6 +48,7 @@ __all__ = [
     "ExternalQueryDraft",
     "ExternalQueryGenerationInput",
     "ExternalSearchCandidate",
+    "ExternalSearchDateFilter",
     "ExternalSearchEvidence",
     "ExternalSearchOutcome",
     "ExternalSearchProviderError",
@@ -60,6 +61,7 @@ __all__ = [
     "MISSING_ITEM_MAX_CHARS",
     "ResearchTaskReport",
     "ResearchTaskStatus",
+    "TimeFilterFailureReason",
 ]
 
 EXTERNAL_SEARCH_AGENT_HARD_LIMIT = 3
@@ -79,6 +81,14 @@ ResearchTaskStatus = Literal[
     "query_generation_failed",
     "provider_failed",
     "selector_failed",
+    "time_filter_failed",
+]
+
+TimeFilterFailureReason = Literal[
+    "future_calendar_month",
+    "future_date_range",
+    "unexpandable_start_date",
+    "unsupported_explicit_window",
 ]
 
 
@@ -160,12 +170,30 @@ class ExternalSearchCandidate(BaseModel):
     source_name: str | None = None
 
 
+class ExternalSearchDateFilter(BaseModel):
+    """Provider非依存の半開publication日付範囲。"""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    start_date: date
+    end_date: date
+
+    @model_validator(mode="after")
+    def _validate_order(self) -> ExternalSearchDateFilter:
+        if self.start_date == date.min:
+            raise ValueError("start_date must have a previous calendar day")
+        if self.start_date >= self.end_date:
+            raise ValueError("start_date must be before end_date")
+        return self
+
+
 @dataclass(frozen=True, slots=True)
 class ExternalSearchToolInput:
     """External Search Toolへ渡す完成済みqueryと取得上限。"""
 
     query: str
     limit: int
+    date_filter: ExternalSearchDateFilter | None
 
 
 @dataclass(frozen=True, slots=True)
@@ -174,7 +202,7 @@ class ExternalQueryGenerationInput:
 
     task: ExternalResearchTask
     as_of: datetime
-    target_time_window: str | None
+    target_time_window: TargetTimeWindow | None
 
 
 class ExternalQueryDraft(BaseModel):
@@ -324,6 +352,7 @@ class ResearchTaskReport(BaseModel):
     collection_goal: str = Field(min_length=1)
     generated_queries: list[str] = Field(default_factory=list)
     status: ResearchTaskStatus
+    time_filter_failure_reason: TimeFilterFailureReason | None = None
     provider_failed_query_count: int = Field(default=0, ge=0)
     candidate_count: int = Field(default=0, ge=0)
     evidence_count: int = Field(default=0, ge=0)
@@ -339,6 +368,7 @@ class ResearchTaskReport(BaseModel):
         collection_goal: str,
         generated_queries: list[str] | None = None,
         status: ResearchTaskStatus,
+        time_filter_failure_reason: TimeFilterFailureReason | None = None,
         provider_failed_query_count: int = 0,
         candidate_count: int = 0,
         evidence_count: int = 0,
@@ -351,6 +381,7 @@ class ResearchTaskReport(BaseModel):
             collection_goal=collection_goal,
             generated_queries=generated_queries or [],
             status=status,
+            time_filter_failure_reason=time_filter_failure_reason,
             provider_failed_query_count=provider_failed_query_count,
             candidate_count=candidate_count,
             evidence_count=evidence_count,
@@ -361,6 +392,21 @@ class ResearchTaskReport(BaseModel):
 
     @model_validator(mode="after")
     def _validate_report_caps(self) -> ResearchTaskReport:
+        if self.status == "time_filter_failed":
+            if self.time_filter_failure_reason is None:
+                raise ValueError("time_filter_failed requires a failure reason")
+            if (
+                self.generated_queries
+                or self.provider_failed_query_count != 0
+                or self.candidate_count != 0
+                or self.evidence_count != 0
+                or self.dropped_selection_count != 0
+                or self.selector_failure_reason is not None
+                or self.missing
+            ):
+                raise ValueError("time_filter_failed must keep closed diagnostics")
+        elif self.time_filter_failure_reason is not None:
+            raise ValueError("time filter failure reason requires time_filter_failed")
         if len(self.generated_queries) > EXTERNAL_TASK_QUERY_LIMIT:
             raise ValueError("generated queries exceed external query limit")
         if any(

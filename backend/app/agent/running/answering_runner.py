@@ -44,6 +44,7 @@ from app.agent.evidence_collection.external_search.contract import (
     ExternalQueryGenerationInput,
     ExternalResearchRuntime,
     ExternalSearchCandidate,
+    ExternalSearchDateFilter,
     ExternalSearchEvidence,
     ExternalSearchOutcome,
     ExternalSearchProviderError,
@@ -51,6 +52,10 @@ from app.agent.evidence_collection.external_search.contract import (
     ExternalSearchToolInput,
     ResearchTaskReport,
     ResearchTaskStatus,
+    TimeFilterFailureReason,
+)
+from app.agent.evidence_collection.external_search.observability import (
+    observe_time_filter_resolution,
 )
 from app.agent.evidence_collection.external_search.policy import (
     EVIDENCE_SELECT_TIMEOUT_SECONDS,
@@ -64,6 +69,10 @@ from app.agent.evidence_collection.external_search.policy import (
     finalize_selection_draft,
     resolve_external_search_agent_count,
     resolve_provider_failure_reason,
+)
+from app.agent.evidence_collection.external_search.time_filter import (
+    ExternalSearchDateFilterResolutionError,
+    resolve_external_search_date_filter,
 )
 from app.agent.evidence_collection.internal_search.article_search import (
     InternalArticleSearchHit,
@@ -80,6 +89,7 @@ from app.agent.planning.contract import (
     NoRetrievalPlan,
     PlanningRequest,
     RetrievalPlan,
+    TargetTimeWindow,
 )
 from app.agent.running.contract import (
     AnsweringPhases,
@@ -312,13 +322,48 @@ class AnsweringRunner:
         *,
         phases: AnsweringPhases,
         tasks: list[ExternalResearchTask],
-        target_time_window: str | None,
+        target_time_window: TargetTimeWindow | None,
         as_of: datetime,
     ) -> ExternalSearchOutcome:
+        try:
+            date_filter = resolve_external_search_date_filter(
+                target_time_window,
+                as_of=as_of,
+            )
+        except ExternalSearchDateFilterResolutionError as exc:
+            observe_time_filter_resolution(
+                result="failed",
+                reason=exc.reason,
+                task_count=len(tasks),
+            )
+            effective_agent_count = resolve_external_search_agent_count(
+                task_count=len(tasks),
+                requested_agent_count=self._requested_external_agent_count,
+            )
+            return ExternalSearchOutcome(
+                tasks=tasks,
+                task_reports=[
+                    self._external_task_report(
+                        task_index=task_index,
+                        task=task,
+                        status="time_filter_failed",
+                        time_filter_failure_reason=exc.reason,
+                    )
+                    for task_index, task in enumerate(tasks)
+                ],
+                requested_agent_count=self._requested_external_agent_count,
+                effective_agent_count=effective_agent_count,
+            )
+        observe_time_filter_resolution(
+            result="not_requested" if date_filter is None else "resolved",
+            reason="none",
+            task_count=len(tasks),
+        )
         async with phases.external_runtime_factory.activate() as external:
             return await self._execute_external_pipeline(
                 tasks=tasks,
                 target_time_window=target_time_window,
+                date_filter=date_filter,
                 as_of=as_of,
                 external=external,
             )
@@ -327,7 +372,8 @@ class AnsweringRunner:
         self,
         *,
         tasks: list[ExternalResearchTask],
-        target_time_window: str | None,
+        target_time_window: TargetTimeWindow | None,
+        date_filter: ExternalSearchDateFilter | None,
         as_of: datetime,
         external: ExternalResearchRuntime,
     ) -> ExternalSearchOutcome:
@@ -353,6 +399,7 @@ class AnsweringRunner:
                     task_index=task_index,
                     task=task,
                     target_time_window=target_time_window,
+                    date_filter=date_filter,
                     as_of=as_of,
                     external=external,
                 )
@@ -382,7 +429,8 @@ class AnsweringRunner:
         *,
         task_index: int,
         task: ExternalResearchTask,
-        target_time_window: str | None,
+        target_time_window: TargetTimeWindow | None,
+        date_filter: ExternalSearchDateFilter | None,
         as_of: datetime,
         external: ExternalResearchRuntime,
     ) -> tuple[list[ExternalSearchEvidence], ResearchTaskReport]:
@@ -430,7 +478,11 @@ class AnsweringRunner:
         provider_failed_query_count = 0
         provider_results = await _gather_cancel_on_error(
             *[
-                self._search_external_query(query, search_tool=external.search_tool)
+                self._search_external_query(
+                    query,
+                    search_tool=external.search_tool,
+                    date_filter=date_filter,
+                )
                 for query in queries
             ]
         )
@@ -516,6 +568,7 @@ class AnsweringRunner:
         query: str,
         *,
         search_tool: ExternalSearchTool,
+        date_filter: ExternalSearchDateFilter | None,
     ) -> tuple[list[ExternalSearchCandidate], bool]:
         try:
             candidates = await asyncio.wait_for(
@@ -523,6 +576,7 @@ class AnsweringRunner:
                     ExternalSearchToolInput(
                         query=query,
                         limit=EXTERNAL_SEARCH_CANDIDATES_PER_QUERY,
+                        date_filter=date_filter,
                     )
                 ),
                 timeout=PROVIDER_SEARCH_TIMEOUT_SECONDS,
@@ -596,6 +650,7 @@ class AnsweringRunner:
         task_index: int,
         task: ExternalResearchTask,
         status: ResearchTaskStatus,
+        time_filter_failure_reason: TimeFilterFailureReason | None = None,
         generated_queries: list[str] | None = None,
         provider_failed_query_count: int = 0,
         candidate_count: int = 0,
@@ -609,6 +664,7 @@ class AnsweringRunner:
             collection_goal=task.collection_goal,
             generated_queries=generated_queries,
             status=status,
+            time_filter_failure_reason=time_filter_failure_reason,
             provider_failed_query_count=provider_failed_query_count,
             candidate_count=candidate_count,
             evidence_count=evidence_count,
@@ -702,7 +758,7 @@ def _latest_assistant_answer(
     )
 
 
-def _plan_target_time_window(plan: RetrievalPlan) -> str | None:
+def _plan_target_time_window(plan: RetrievalPlan) -> TargetTimeWindow | None:
     match plan:
         case ExternalSearchPlan() | InternalAndExternalPlan():
             return plan.target_time_window

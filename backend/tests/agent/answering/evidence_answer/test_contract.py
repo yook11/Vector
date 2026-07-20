@@ -15,6 +15,7 @@ from app.agent.answering.evidence_answer.contract import (
     RawEvidenceAnswerDraft,
 )
 from app.agent.answering.evidence_answer.flow import EvidenceAnswerFlow
+from app.agent.planning.contract import TargetTimeWindow
 
 
 def _first_input_annotation(method: object) -> object | None:
@@ -47,6 +48,7 @@ def test_evidence_answer_input_is_frozen_and_keeps_attempt_state_together() -> N
         "target_time_window",
         "previous_error",
     ]
+    assert get_type_hints(input_type)["target_time_window"] == TargetTimeWindow | None
     input = input_type(
         request=object(),
         evidence=(),
@@ -54,7 +56,7 @@ def test_evidence_answer_input_is_frozen_and_keeps_attempt_state_together() -> N
     )
     assert input.previous_error is None
     with pytest.raises(FrozenInstanceError):
-        input.target_time_window = "changed"
+        input.target_time_window = TargetTimeWindow(kind="today")
 
 
 def test_raw_draft_accepts_lenient_provider_values() -> None:

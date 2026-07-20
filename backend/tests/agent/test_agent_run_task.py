@@ -761,6 +761,42 @@ async def test_run_agent_answer_completes_run_and_persists_assistant_message(
 
 
 @pytest.mark.asyncio
+async def test_completed_run_persists_only_fixed_time_filter_missing_aspect(
+    session_factory: async_sessionmaker[AsyncSession],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fixed_missing = "指定された公開期間を外部検索へ適用できませんでした"
+    async with session_factory() as session:
+        _thread, _message, run = await _create_thread_message_run(session)
+    result = AnswerQuestionResult(
+        status="insufficient",
+        answer="指定期間の外部根拠は取得できませんでした。",
+        sources=[],
+        missing_aspects=[fixed_missing],
+        retrieval=AnswerRetrievalSummary(planned_mode="external"),
+    )
+    _patch_worker_execution(monkeypatch, lambda **_kwargs: FakeAgent(result))
+
+    await agent_run_tasks.run_agent_answer(
+        trigger=AgentRunTrigger(run_id=run.id),
+        ctx=_ctx(session_factory),
+    )
+
+    async with session_factory() as session:
+        completed = await session.get(AgentRun, run.id)
+        assert completed is not None
+        assert completed.assistant_message_id is not None
+        assistant = await session.get(AgentMessage, completed.assistant_message_id)
+        assert assistant is not None
+
+    assert (
+        completed.status,
+        assistant.role,
+        assistant.missing_aspects,
+    ) == ("completed", "assistant", [fixed_missing])
+
+
+@pytest.mark.asyncio
 async def test_answering_runner_completes_follow_up_with_saved_history(
     session_factory: async_sessionmaker[AsyncSession],
     monkeypatch: pytest.MonkeyPatch,

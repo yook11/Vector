@@ -49,10 +49,11 @@ def _package() -> ModuleType:
     return _required_module("app.agent.evidence_collection.external_search")
 
 
-def _tool_input(*, query: str, limit: int) -> Any:
+def _tool_input(*, query: str, limit: int, date_filter: object | None = None) -> Any:
     return _required_attribute(_contracts(), "ExternalSearchToolInput")(
         query=query,
         limit=limit,
+        date_filter=date_filter,
     )
 
 
@@ -144,11 +145,20 @@ def test_external_search_tool_port_and_tavily_adapter_are_stably_typed() -> None
     input_type = _required_attribute(contracts, "ExternalSearchToolInput")
     tool_port = _required_attribute(contracts, "ExternalSearchTool")
     candidate_type = _required_attribute(contracts, "ExternalSearchCandidate")
+    date_filter_type = _required_attribute(contracts, "ExternalSearchDateFilter")
     tool_type = _required_attribute(_package(), "TavilyExternalSearchTool")
 
     assert is_dataclass(input_type)
-    assert [field.name for field in fields(input_type)] == ["query", "limit"]
-    assert get_type_hints(input_type) == {"query": str, "limit": int}
+    assert [field.name for field in fields(input_type)] == [
+        "query",
+        "limit",
+        "date_filter",
+    ]
+    assert get_type_hints(input_type) == {
+        "query": str,
+        "limit": int,
+        "date_filter": date_filter_type | None,
+    }
     assert get_type_hints(tool_port.invoke) == {
         "input": input_type,
         "return": list[candidate_type],

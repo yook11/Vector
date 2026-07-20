@@ -13,6 +13,18 @@ _RETRIEVAL_MODE_VALUES = [
     "internal_and_external",
 ]
 
+_TARGET_TIME_WINDOW_KIND_VALUES = [
+    "today",
+    "yesterday",
+    "last_n_days",
+    "this_week",
+    "last_week",
+    "this_month",
+    "calendar_month",
+    "date_range",
+    "unsupported_explicit_window",
+]
+
 QUESTION_PLANNER_GEMINI_SCHEMA: dict[str, Any] = {
     "type": "OBJECT",
     "required": [
@@ -53,12 +65,47 @@ QUESTION_PLANNER_GEMINI_SCHEMA: dict[str, Any] = {
             },
         },
         "target_time_window": {
-            "type": "STRING",
+            "type": "OBJECT",
             "nullable": True,
+            "required": ["kind"],
             "description": (
-                "Optional time window extracted from the question, such as "
-                "today, last 24 hours, this week, or a concrete month."
+                "Optional publication window for external evidence. Null means "
+                "publication date is intentionally unrestricted."
             ),
+            "properties": {
+                "kind": {
+                    "type": "STRING",
+                    "enum": _TARGET_TIME_WINDOW_KIND_VALUES,
+                },
+                "year": {
+                    "type": "INTEGER",
+                    "minimum": 1,
+                    "maximum": 9999,
+                    "nullable": True,
+                },
+                "month": {
+                    "type": "INTEGER",
+                    "minimum": 1,
+                    "maximum": 12,
+                    "nullable": True,
+                },
+                "days": {
+                    "type": "INTEGER",
+                    "minimum": 1,
+                    "maximum": 60,
+                    "nullable": True,
+                },
+                "start_date": {
+                    "type": "STRING",
+                    "format": "date",
+                    "nullable": True,
+                },
+                "end_date_inclusive": {
+                    "type": "STRING",
+                    "format": "date",
+                    "nullable": True,
+                },
+            },
         },
         "reason": {
             "type": "STRING",

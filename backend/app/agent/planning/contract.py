@@ -3,10 +3,17 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import date, datetime
 from typing import Annotated, Literal, Protocol, Self, assert_never
 
-from pydantic import BaseModel, ConfigDict, Field, StringConstraints, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    StringConstraints,
+    field_validator,
+    model_validator,
+)
 
 from app.agent.contract import RetrievalMode
 from app.agent.question_context.contract import QuestionContext
@@ -26,7 +33,10 @@ __all__ = [
     "QuestionPlanDraft",
     "QuestionPlanner",
     "RetrievalPlan",
+    "TargetTimeWindow",
+    "TargetTimeWindowKind",
     "plan_from_draft",
+    "render_target_time_window",
     "safe_fallback_plan",
 ]
 
@@ -37,6 +47,112 @@ PlanQuery = Annotated[
     str,
     StringConstraints(strip_whitespace=True, min_length=1),
 ]
+
+TargetTimeWindowKind = Literal[
+    "today",
+    "yesterday",
+    "last_n_days",
+    "this_week",
+    "last_week",
+    "this_month",
+    "calendar_month",
+    "date_range",
+    "unsupported_explicit_window",
+]
+
+
+class TargetTimeWindow(BaseModel):
+    """外部根拠へ適用するpublication期間の型付きplanner契約。"""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    kind: TargetTimeWindowKind
+    year: int | None = Field(default=None, ge=1, le=9999)
+    month: int | None = Field(default=None, ge=1, le=12)
+    days: int | None = Field(default=None, ge=1, le=60)
+    start_date: date | None = None
+    end_date_inclusive: date | None = None
+
+    @field_validator("start_date", "end_date_inclusive", mode="before")
+    @classmethod
+    def _validate_iso_date(cls, value: object) -> object:
+        if value is None or type(value) is date:
+            return value
+        if isinstance(value, str):
+            try:
+                parsed = date.fromisoformat(value)
+            except ValueError:
+                pass
+            else:
+                if value == parsed.isoformat():
+                    return parsed
+        raise ValueError("explicit dates must use ISO YYYY-MM-DD")
+
+    @model_validator(mode="after")
+    def _validate_kind_parameters(self) -> Self:
+        if self.kind == "calendar_month":
+            if self.year is None or self.month is None:
+                raise ValueError("calendar_month requires year and month")
+        elif self.year is not None or self.month is not None:
+            raise ValueError("year and month are only valid for calendar_month")
+
+        if self.kind == "last_n_days":
+            if self.days is None:
+                raise ValueError("last_n_days requires days")
+        elif self.days is not None:
+            raise ValueError("days is only valid for last_n_days")
+
+        if self.kind == "date_range":
+            if self.start_date is None or self.end_date_inclusive is None:
+                raise ValueError("date_range requires both dates")
+            if self.start_date > self.end_date_inclusive:
+                raise ValueError("date_range start must not exceed end")
+            if self.end_date_inclusive == date.max:
+                raise ValueError("date_range end must have a representable next day")
+        elif self.start_date is not None or self.end_date_inclusive is not None:
+            raise ValueError("explicit dates are only valid for date_range")
+        return self
+
+
+def render_target_time_window(target_time_window: TargetTimeWindow) -> str:
+    """型付きpublication期間をprompt用の決定的な日本語へ変換する。"""
+
+    match target_time_window.kind:
+        case "today":
+            return "今日"
+        case "yesterday":
+            return "昨日"
+        case "last_n_days":
+            days = target_time_window.days
+            if days is None:
+                raise ValueError("last_n_days requires days")
+            if days == 1:
+                return "直近24時間"
+            return f"直近{days}日"
+        case "this_week":
+            return "今週"
+        case "last_week":
+            return "先週"
+        case "this_month":
+            return "今月"
+        case "calendar_month":
+            year = target_time_window.year
+            month = target_time_window.month
+            if year is None or month is None:
+                raise ValueError("calendar_month requires year and month")
+            return f"{year}年{month}月"
+        case "date_range":
+            start = target_time_window.start_date
+            end = target_time_window.end_date_inclusive
+            if start is None or end is None:
+                raise ValueError("date_range requires both dates")
+            return (
+                f"{start.year}年{start.month}月{start.day}日から"
+                f"{end.year}年{end.month}月{end.day}日まで"
+            )
+        case "unsupported_explicit_window":
+            return "対応外の明示期間"
+    assert_never(target_time_window.kind)
 
 
 class PlanningRequest(BaseModel):
@@ -59,12 +175,12 @@ class PlanningAttemptInput:
 class QuestionPlanDraft(BaseModel):
     """Planner-internal draft parsed from structured LLM output."""
 
-    model_config = ConfigDict(frozen=True)
+    model_config = ConfigDict(frozen=True, extra="forbid")
 
     retrieval_mode: RetrievalMode
     internal_queries: list[str] = Field(default_factory=list)
     external_collection_goals: list[str] = Field(default_factory=list)
-    target_time_window: str | None = None
+    target_time_window: TargetTimeWindow | None = None
     reason: str = Field(min_length=1)
 
 
@@ -108,7 +224,7 @@ class ExternalSearchPlan(BaseModel):
         min_length=1,
         max_length=EXTERNAL_RESEARCH_TASK_LIMIT,
     )
-    target_time_window: str | None = None
+    target_time_window: TargetTimeWindow | None = None
     reason: str = Field(min_length=1)
 
     @model_validator(mode="after")
@@ -132,7 +248,7 @@ class InternalAndExternalPlan(BaseModel):
         min_length=1,
         max_length=EXTERNAL_RESEARCH_TASK_LIMIT,
     )
-    target_time_window: str | None = None
+    target_time_window: TargetTimeWindow | None = None
     reason: str = Field(min_length=1)
 
     @model_validator(mode="after")
