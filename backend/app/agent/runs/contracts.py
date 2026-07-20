@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import date, datetime
 from enum import StrEnum
 from uuid import UUID
 
@@ -15,6 +16,24 @@ class ThreadNotFoundError(Exception):
 
 class ActiveRunConflictError(Exception):
     """A queued/running run already exists for the requested thread."""
+
+
+class DailyRequestLimitExceededError(Exception):
+    """The user's daily research request reservation limit was reached."""
+
+    def __init__(
+        self,
+        *,
+        usage_date: date,
+        observed_at: datetime,
+        decided_at: datetime,
+        limit: int,
+    ) -> None:
+        super().__init__("Daily research request limit exceeded")
+        self.usage_date = usage_date
+        self.observed_at = observed_at
+        self.decided_at = decided_at
+        self.limit = limit
 
 
 class RunTransitionLostError(Exception):
@@ -44,6 +63,8 @@ class CancelRunResult:
 class CreatedAgentRun:
     thread_id: UUID
     run_id: UUID
+    usage_date: date
+    used_count: int
 
 
 @dataclass(frozen=True, slots=True)

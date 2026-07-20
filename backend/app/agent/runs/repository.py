@@ -3,11 +3,25 @@
 from __future__ import annotations
 
 import uuid as uuid_mod
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 
 import structlog
-from sqlalchemy import func, select, update
+from sqlalchemy import (
+    Date,
+    Integer,
+    Select,
+    bindparam,
+    cast,
+    func,
+    literal,
+    select,
+    true,
+    update,
+)
+from sqlalchemy.dialects.postgresql import UUID as PgUUID
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.sql.elements import ColumnElement
 
 from app.agent.contract import AnswerQuestionResult
 from app.agent.runs.citation_integrity import assess_citation_integrity
@@ -16,6 +30,7 @@ from app.agent.runs.contracts import (
     CancelRunOutcome,
     CancelRunResult,
     CreatedAgentRun,
+    DailyRequestLimitExceededError,
     OwnedAgentRunLiveContext,
     PreparedAgentRun,
     RunTransitionLostError,
@@ -30,12 +45,75 @@ from app.agent.runs.types import AgentRunErrorCode, AgentRunStatus
 from app.models.agent_message import AgentMessage
 from app.models.agent_run import AgentRun
 from app.models.agent_thread import AgentThread
+from app.models.agent_user_daily_quota import AgentUserDailyQuota
 from app.schemas.research import ResearchRunResponse
 
 _ACTIVE_STATUSES = (AgentRunStatus.QUEUED.value, AgentRunStatus.RUNNING.value)
 _TERMINAL_STATUSES = (AgentRunStatus.COMPLETED.value, AgentRunStatus.FAILED.value)
 _STALE_AFTER = timedelta(minutes=20)
+_DAILY_REQUEST_LIMIT = 10
 logger = structlog.get_logger(__name__)
+
+
+def _build_daily_quota_reservation_statement(
+    *,
+    user_id: uuid_mod.UUID,
+    clock_expression: ColumnElement[datetime] | None = None,
+) -> Select[tuple[datetime, date, datetime, int | None]]:
+    observed_at_expression = (
+        clock_expression if clock_expression is not None else func.statement_timestamp()
+    )
+    quota_clock = (
+        select(observed_at_expression.label("observed_at"))
+        .cte("quota_clock")
+        .prefix_with("MATERIALIZED", dialect="postgresql")
+    )
+    usage_date_expression = cast(
+        quota_clock.c.observed_at.op("AT TIME ZONE")(literal("Asia/Tokyo")),
+        Date(),
+    ).label("usage_date")
+    quota_day = (
+        select(quota_clock.c.observed_at, usage_date_expression)
+        .select_from(quota_clock)
+        .cte("quota_day")
+        .prefix_with("MATERIALIZED", dialect="postgresql")
+    )
+    reservation = (
+        pg_insert(AgentUserDailyQuota)
+        .from_select(
+            ["user_id", "usage_date", "used_count"],
+            select(
+                bindparam("user_id", user_id, type_=PgUUID(as_uuid=True)),
+                quota_day.c.usage_date,
+                literal(1, type_=Integer()),
+            ).select_from(quota_day),
+        )
+        .on_conflict_do_update(
+            index_elements=[
+                AgentUserDailyQuota.user_id,
+                AgentUserDailyQuota.usage_date,
+            ],
+            set_={
+                "used_count": AgentUserDailyQuota.used_count + 1,
+            },
+            where=(
+                AgentUserDailyQuota.used_count
+                < bindparam(
+                    "daily_limit",
+                    _DAILY_REQUEST_LIMIT,
+                    type_=Integer(),
+                )
+            ),
+        )
+        .returning(AgentUserDailyQuota.used_count)
+        .cte("reservation")
+    )
+    return select(
+        quota_day.c.observed_at,
+        quota_day.c.usage_date,
+        func.clock_timestamp().label("decided_at"),
+        reservation.c.used_count,
+    ).select_from(quota_day.outerjoin(reservation, true()))
 
 
 class AgentRunRepository:
@@ -78,6 +156,25 @@ class AgentRunRepository:
             next_seq = await self._next_message_seq(thread.id)
             thread.updated_at = now
 
+        quota_reservation = (
+            (
+                await self._session.execute(
+                    _build_daily_quota_reservation_statement(user_id=user_id)
+                )
+            )
+            .mappings()
+            .one()
+        )
+        usage_date = quota_reservation["usage_date"]
+        used_count = quota_reservation["used_count"]
+        if used_count is None:
+            raise DailyRequestLimitExceededError(
+                usage_date=usage_date,
+                observed_at=quota_reservation["observed_at"],
+                decided_at=quota_reservation["decided_at"],
+                limit=_DAILY_REQUEST_LIMIT,
+            )
+
         user_message = AgentMessage(
             thread_id=thread.id,
             seq=next_seq,
@@ -92,10 +189,16 @@ class AgentRunRepository:
             thread_id=thread.id,
             user_message_id=user_message.id,
             status=AgentRunStatus.QUEUED.value,
+            quota_usage_date=usage_date,
         )
         self._session.add(run)
         await self._session.flush()
-        return CreatedAgentRun(thread_id=thread.id, run_id=run.id)
+        return CreatedAgentRun(
+            thread_id=thread.id,
+            run_id=run.id,
+            usage_date=usage_date,
+            used_count=used_count,
+        )
 
     async def mark_failed(
         self,
