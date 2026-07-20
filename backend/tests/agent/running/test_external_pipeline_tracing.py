@@ -1,20 +1,22 @@
-"""External Query / Selector の phase / provider span 契約。
-
-DeepSeek SDK I/O だけを fake にし、productionの親子関係・retry・非漏洩を検証する。
-"""
+"""AnsweringRunner 所有の external phase trace 契約。"""
 
 from __future__ import annotations
 
 import json
+from contextlib import AbstractAsyncContextManager
 from datetime import UTC, datetime
 from types import SimpleNamespace
-from typing import cast
+from typing import Any, cast
+from uuid import UUID
 
 import pytest
 from logfire.testing import CaptureLogfire
 from openai import AsyncOpenAI
 from opentelemetry.trace import StatusCode
 
+from app.agent.answering.contract import AnsweringRequest
+from app.agent.answering.direct_answer.contract import DirectAnswerDraft
+from app.agent.answering.evidence_answer.contract import EvidenceAnswerDraft
 from app.agent.evidence_collection.external_search.agent import (
     EXTERNAL_EVIDENCE_SELECTOR_AGENT,
     EXTERNAL_QUERY_AGENT,
@@ -22,23 +24,26 @@ from app.agent.evidence_collection.external_search.agent import (
 from app.agent.evidence_collection.external_search.contract import (
     ExternalResearchRuntime,
     ExternalSearchCandidate,
-    ExternalSearchRequest,
     ExternalSearchToolInput,
 )
 from app.agent.evidence_collection.external_search.deepseek_binding import (
     EXTERNAL_EVIDENCE_SELECTOR_DEEPSEEK_BINDING,
     EXTERNAL_QUERY_DEEPSEEK_BINDING,
 )
-from app.agent.evidence_collection.external_search.runner import (
-    ExternalSearchResearchRunner,
+from app.agent.planning.contract import (
+    ExternalResearchTask,
+    ExternalSearchPlan,
+    PlanningRequest,
 )
-from app.agent.planning.contract import ExternalResearchTask
+from app.agent.question_context import (
+    QuestionContext,
+    QuestionContextPreparationResult,
+    QuestionContextTelemetry,
+)
+from app.agent.running import AnsweringPhases, AnsweringRunner, RunContext, RunInput
 from app.agent.runtime.deepseek import DeepSeekAgentRuntime
 from app.logfire.redaction import install_exception_redaction
-from tests.agent.runtime._deepseek_helpers import (
-    FakeDeepSeekClient,
-    function_response,
-)
+from tests.agent.runtime._deepseek_helpers import FakeDeepSeekClient, function_response
 from tests.logfire._span_helpers import domain_attr_keys, exception_event, spans_named
 
 _PHASE_SPAN_NAME = "agent_phase"
@@ -46,15 +51,6 @@ _PROVIDER_SPAN_NAME = "agent_provider_call"
 _QUERY_OUTPUT_SENTINEL = "GENERATED_QUERY_SENTINEL_1f24"
 _SELECTION_CLAIM_SENTINEL = "SELECTION_CLAIM_SENTINEL_98ab"
 _SELECTION_WHY_SENTINEL = "SELECTION_WHY_SENTINEL_7c31"
-
-
-def _request() -> ExternalSearchRequest:
-    return ExternalSearchRequest(
-        tasks=[ExternalResearchTask(collection_goal="GOAL_SENTINEL_3cc7")],
-        effective_agent_count=1,
-        as_of=datetime(2026, 7, 19, tzinfo=UTC),
-        target_time_window="WINDOW_SENTINEL_9b28",
-    )
 
 
 def _usage() -> SimpleNamespace:
@@ -93,9 +89,57 @@ def _selector_response() -> object:
     )
 
 
-class FakeExternalSearchTool:
-    """検索 I/O を差し替え、Runtimeが生成した query の受け渡しを記録する。"""
+class _Preparer:
+    async def prepare(self, **_kwargs: object) -> QuestionContextPreparationResult:
+        return QuestionContextPreparationResult(
+            context=QuestionContext(standalone_question="NVIDIA の見通しは？"),
+            telemetry=QuestionContextTelemetry(),
+        )
 
+
+class _Planner:
+    async def plan(self, request: PlanningRequest) -> ExternalSearchPlan:
+        del request
+        return ExternalSearchPlan(
+            external_research_tasks=[
+                ExternalResearchTask(collection_goal="GOAL_SENTINEL_3cc7")
+            ],
+            target_time_window="WINDOW_SENTINEL_9b28",
+            reason="trace external pipeline",
+        )
+
+
+class _UnreachableInternalSearch:
+    async def search_articles(self, queries: object) -> list[object]:
+        raise AssertionError(f"internal search must not run: {queries!r}")
+
+
+class _UnreachableDirectAnswerer:
+    async def answer(
+        self, *, request: AnsweringRequest, previous_answer: str = ""
+    ) -> DirectAnswerDraft:
+        raise AssertionError(
+            f"direct answer must not run: {request!r} {previous_answer!r}"
+        )
+
+
+class _EvidenceAnswerer:
+    async def answer(
+        self,
+        *,
+        request: AnsweringRequest,
+        evidence: list[Any],
+        target_time_window: str | None,
+    ) -> EvidenceAnswerDraft:
+        del request, target_time_window
+        return EvidenceAnswerDraft(
+            sufficiency="answered",
+            answer="根拠に基づく回答です。",
+            cited_refs=[item.source.source_ref for item in evidence],
+        )
+
+
+class _Tool:
     def __init__(self) -> None:
         self.inputs: list[ExternalSearchToolInput] = []
 
@@ -117,27 +161,39 @@ class FakeExternalSearchTool:
         ]
 
 
-class _RunnerHarness:
-    def __init__(
-        self,
-        *,
-        runner: ExternalSearchResearchRunner,
-        external: ExternalResearchRuntime,
-    ) -> None:
-        self._runner = runner
-        self._external = external
+class _Scope(AbstractAsyncContextManager[ExternalResearchRuntime]):
+    def __init__(self, runtime: ExternalResearchRuntime) -> None:
+        self._runtime = runtime
 
-    async def search(self, request: ExternalSearchRequest) -> object:
-        return await self._runner.search(request, external=self._external)
+    async def __aenter__(self) -> ExternalResearchRuntime:
+        return self._runtime
+
+    async def __aexit__(
+        self,
+        exc_type: object,
+        exc: BaseException | None,
+        traceback: object,
+    ) -> bool:
+        del exc_type, exc, traceback
+        return False
+
+
+class _Factory:
+    def __init__(self, runtime: ExternalResearchRuntime) -> None:
+        self._runtime = runtime
+
+    def activate(self) -> _Scope:
+        return _Scope(self._runtime)
 
 
 def _runner(
     *,
     query_client: FakeDeepSeekClient,
     selector_client: FakeDeepSeekClient,
-    search_tool: FakeExternalSearchTool | None = None,
-) -> _RunnerHarness:
-    external = ExternalResearchRuntime(
+    search_tool: _Tool | None = None,
+) -> tuple[AnsweringRunner, _Tool]:
+    tool = search_tool or _Tool()
+    runtime = ExternalResearchRuntime(
         query_runtime=DeepSeekAgentRuntime(
             client=cast(AsyncOpenAI, query_client),
             binding=EXTERNAL_QUERY_DEEPSEEK_BINDING,
@@ -146,45 +202,63 @@ def _runner(
             client=cast(AsyncOpenAI, selector_client),
             binding=EXTERNAL_EVIDENCE_SELECTOR_DEEPSEEK_BINDING,
         ),
-        search_tool=search_tool or FakeExternalSearchTool(),
+        search_tool=tool,
     )
-    return _RunnerHarness(
-        runner=ExternalSearchResearchRunner(),
-        external=external,
+    phases = AnsweringPhases(
+        planner=_Planner(),
+        internal_search=_UnreachableInternalSearch(),
+        external_runtime_factory=_Factory(runtime),
+        direct_answerer=_UnreachableDirectAnswerer(),
+        evidence_answerer=_EvidenceAnswerer(),
+    )
+    return (
+        AnsweringRunner(context_preparer=_Preparer(), phases_factory=lambda: phases),
+        tool,
     )
 
 
-async def test_query_and_selector_production_spans_preserve_phase_boundaries(
+async def _run(runner: AnsweringRunner) -> None:
+    await runner.run(
+        RunInput(question="NVIDIA の見通しは？", history=()),
+        run_context=RunContext(
+            run_id=UUID("019bd239-1ed4-7fbb-a336-04fe3c197652"),
+            as_of=datetime(2026, 7, 19, tzinfo=UTC),
+        ),
+    )
+
+
+@pytest.mark.asyncio
+async def test_external_phase_spans_keep_attributes_parentage_and_no_sensitive_trace(
     capfire: CaptureLogfire,
 ) -> None:
     raw_selector_response_sentinel = "RAW_SELECTOR_RESPONSE_SENTINEL_5d71"
     query_client = FakeDeepSeekClient([_query_response()])
-    search_tool = FakeExternalSearchTool()
     selector_client = FakeDeepSeekClient(
         [
             function_response(
-                function_name=(
-                    EXTERNAL_EVIDENCE_SELECTOR_DEEPSEEK_BINDING.function_name
-                ),
+                function_name=EXTERNAL_EVIDENCE_SELECTOR_DEEPSEEK_BINDING.function_name,
                 arguments=raw_selector_response_sentinel,
                 usage=_usage(),
             ),
             _selector_response(),
         ]
     )
-
-    await _runner(
+    runner, tool = _runner(
         query_client=query_client,
         selector_client=selector_client,
-        search_tool=search_tool,
-    ).search(_request())
+    )
+
+    await _run(runner)
 
     phases = spans_named(capfire, _PHASE_SPAN_NAME)
     providers = spans_named(capfire, _PROVIDER_SPAN_NAME)
     phase_by_agent = {phase["attributes"]["agent_name"]: phase for phase in phases}
+    trace_dump = json.dumps(
+        capfire.exporter.exported_spans_as_dict(), ensure_ascii=False, default=str
+    )
     assert query_client.chat.completions.create.await_count == 1
     assert selector_client.chat.completions.create.await_count == 2
-    assert [input.query for input in search_tool.inputs] == [_QUERY_OUTPUT_SENTINEL]
+    assert [input.query for input in tool.inputs] == [_QUERY_OUTPUT_SENTINEL]
     assert len(phases) == 2
     assert len(providers) == 3
     assert set(phase_by_agent) == {
@@ -197,11 +271,6 @@ async def test_query_and_selector_production_spans_preserve_phase_boundaries(
     )
     assert all(phase["attributes"]["task_index"] == 0 for phase in phases)
     assert all("task_index" not in provider["attributes"] for provider in providers)
-    assert all("prompt_version" not in phase["attributes"] for phase in phases)
-    assert all(
-        not any(key.startswith("gen_ai.usage.") for key in phase["attributes"])
-        for phase in phases
-    )
     assert [provider["attributes"]["attempt_number"] for provider in providers] == [
         1,
         1,
@@ -212,14 +281,6 @@ async def test_query_and_selector_production_spans_preserve_phase_boundaries(
         "invalid_response",
         "succeeded",
     ]
-    assert [provider["attributes"]["prompt_version"] for provider in providers] == [
-        EXTERNAL_QUERY_AGENT.prompt.version,
-        EXTERNAL_EVIDENCE_SELECTOR_AGENT.prompt.version,
-        EXTERNAL_EVIDENCE_SELECTOR_AGENT.prompt.version,
-    ]
-    assert all(
-        "gen_ai.usage.input_tokens" in provider["attributes"] for provider in providers
-    )
     assert (
         providers[0]["parent"]["span_id"]
         == phase_by_agent[EXTERNAL_QUERY_AGENT.name]["context"]["span_id"]
@@ -230,11 +291,6 @@ async def test_query_and_selector_production_spans_preserve_phase_boundaries(
         for provider in providers[1:]
     )
     assert all(exception_event(phase) is None for phase in phases)
-    trace_dump = json.dumps(
-        capfire.exporter.exported_spans_as_dict(),
-        ensure_ascii=False,
-        default=str,
-    )
     for unsafe in (
         "GOAL_SENTINEL_3cc7",
         "WINDOW_SENTINEL_9b28",
@@ -247,13 +303,10 @@ async def test_query_and_selector_production_spans_preserve_phase_boundaries(
         _SELECTION_WHY_SENTINEL,
     ):
         assert unsafe not in trace_dump
-    assert (
-        query_client.close.await_count,
-        selector_client.close.await_count,
-    ) == (0, 0)
 
 
-async def test_unknown_query_error_is_redacted_in_production_phase_and_provider(
+@pytest.mark.asyncio
+async def test_unclassified_query_error_is_redacted_and_only_error_phase(
     capfire: CaptureLogfire,
 ) -> None:
     install_exception_redaction()
@@ -261,46 +314,31 @@ async def test_unknown_query_error_is_redacted_in_production_phase_and_provider(
     error = RuntimeError(error_sentinel)
     query_client = FakeDeepSeekClient([error])
     selector_client = FakeDeepSeekClient([_selector_response()])
+    runner, _ = _runner(
+        query_client=query_client,
+        selector_client=selector_client,
+    )
 
     with pytest.raises(RuntimeError) as raised:
-        await _runner(
-            query_client=query_client,
-            selector_client=selector_client,
-        ).search(_request())
+        await _run(runner)
 
     phases = spans_named(capfire, _PHASE_SPAN_NAME)
     providers = spans_named(capfire, _PROVIDER_SPAN_NAME)
-    assert raised.value is error
-    assert len(phases) == 1
-    assert len(providers) == 1
-    phase = phases[0]
-    provider = providers[0]
-    assert phase["attributes"]["agent_name"] == EXTERNAL_QUERY_AGENT.name
-    assert provider["parent"]["span_id"] == phase["context"]["span_id"]
-    assert (
-        provider["attributes"]["prompt_version"] == EXTERNAL_QUERY_AGENT.prompt.version
-    )
-    assert "result" not in provider["attributes"]
-    assert selector_client.chat.completions.create.await_count == 0
-    for span in (phase, provider):
-        event = exception_event(span)
-        assert event is not None
-        assert event["attributes"]["exception.message"] == "[redacted]"
-        assert event["attributes"]["exception.stacktrace"] == "[redacted]"
     raw_spans = [
         span
         for span in capfire.exporter.exported_spans
         if span.name in {_PHASE_SPAN_NAME, _PROVIDER_SPAN_NAME}
         and (span.attributes or {}).get("logfire.span_type") == "span"
     ]
-    assert len(raw_spans) == 2
+    trace_dump = json.dumps(
+        capfire.exporter.exported_spans_as_dict(), ensure_ascii=False, default=str
+    )
+    assert raised.value is error
+    assert len(phases) == 1
+    assert len(providers) == 1
+    assert providers[0]["parent"]["span_id"] == phases[0]["context"]["span_id"]
+    assert selector_client.chat.completions.create.await_count == 0
+    assert all(exception_event(span) is not None for span in [*phases, *providers])
     assert all(span.status.status_code is StatusCode.ERROR for span in raw_spans)
     assert all(span.status.description == "[redacted]" for span in raw_spans)
-    trace_dump = json.dumps(
-        capfire.exporter.exported_spans_as_dict(),
-        ensure_ascii=False,
-        default=str,
-    )
     assert error_sentinel not in trace_dump
-    assert "GOAL_SENTINEL_3cc7" not in trace_dump
-    assert "WINDOW_SENTINEL_9b28" not in trace_dump

@@ -146,39 +146,8 @@ def test_build_answering_runner_injects_no_runtime_when_gemini_is_unconfigured(
     assert context_preparer._runtime_scope_factory is None
 
 
-def test_external_search_service_builder_does_not_build_or_hold_runtime_factory(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    build_external_search_service = _composition_builder(
-        "build_external_search_service"
-    )
-    factory_builds: list[None] = []
-
-    def build_factory() -> object:
-        factory_builds.append(None)
-        raise AssertionError(
-            "external service builder must not build the runtime factory"
-        )
-
-    monkeypatch.setattr(
-        composition,
-        "build_external_research_runtime_factory",
-        build_factory,
-    )
-    monkeypatch.setattr(
-        composition.settings,
-        "deepseek_api_key",
-        SecretStr("deepseek-api-key-sentinel"),
-    )
-    monkeypatch.setattr(
-        composition.settings,
-        "tavily_api_key",
-        SecretStr("tavily-api-key-sentinel"),
-    )
-
-    service = build_external_search_service()
-
-    assert (factory_builds, hasattr(service, "_runtime_factory")) == ([], False)
+def test_composition_does_not_export_removed_external_search_service_builder() -> None:
+    assert not hasattr(composition, "build_external_search_service")
 
 
 @pytest.mark.parametrize(
@@ -513,7 +482,6 @@ def test_build_answering_phases_wires_planner_to_shared_gemini_runtime_scope(
     planner_calls: list[dict[str, object]] = []
     direct_calls: list[dict[str, object]] = []
     evidence_calls: list[dict[str, object]] = []
-    external_search = object()
     external_runtime_factory = object()
     internal_search = object()
 
@@ -536,11 +504,6 @@ def test_build_answering_phases_wires_planner_to_shared_gemini_runtime_scope(
         composition,
         "ensure_external_search_configured",
         lambda: None,
-    )
-    monkeypatch.setattr(
-        composition,
-        "build_external_search_service",
-        lambda *_a, **_k: external_search,
     )
     monkeypatch.setattr(
         composition,
@@ -567,7 +530,6 @@ def test_build_answering_phases_wires_planner_to_shared_gemini_runtime_scope(
 
     assert isinstance(phases, AnsweringPhases)
     assert phases.internal_search is internal_search
-    assert phases.external_search is external_search
     assert phases.external_runtime_factory is external_runtime_factory
     assert planner_calls == [
         {

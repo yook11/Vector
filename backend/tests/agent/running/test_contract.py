@@ -16,16 +16,9 @@ import pytest
 from app.agent.answering.direct_answer.contract import DirectAnswerer
 from app.agent.answering.evidence_answer.contract import EvidenceAnswerer
 from app.agent.contract import AnswerQuestionResult
-from app.agent.evidence_collection.contract import (
-    ExternalPlanSearcher,
-    InternalArticleRetriever,
-)
-from app.agent.evidence_collection.external_search import (
-    ExternalResearchRuntime,
-    ExternalResearchRuntimeFactory,
-    ExternalSearchOutcome,
-)
-from app.agent.planning.contract import ExternalResearchTask, QuestionPlanner
+from app.agent.evidence_collection.contract import InternalArticleRetriever
+from app.agent.evidence_collection.external_search import ExternalResearchRuntimeFactory
+from app.agent.planning.contract import QuestionPlanner
 from app.agent.question_context import (
     QuestionContext,
     QuestionContextPreparationResult,
@@ -323,7 +316,7 @@ def test_run_hooks_protocol_exposes_only_resolved_question_projection() -> None:
     )
 
 
-def test_answering_phases_requires_separate_retrieval_capabilities() -> None:
+def test_answering_phases_owns_runtime_without_external_search_port() -> None:
     phases_type = _contract_type("AnsweringPhases")
     signature = inspect.signature(phases_type)
 
@@ -338,7 +331,6 @@ def test_answering_phases_requires_separate_retrieval_capabilities() -> None:
         (
             ("planner", QuestionPlanner),
             ("internal_search", InternalArticleRetriever),
-            ("external_search", ExternalPlanSearcher),
             ("external_runtime_factory", ExternalResearchRuntimeFactory),
             ("direct_answerer", DirectAnswerer),
             ("evidence_answerer", EvidenceAnswerer),
@@ -346,37 +338,30 @@ def test_answering_phases_requires_separate_retrieval_capabilities() -> None:
         (
             "planner",
             "internal_search",
-            "external_search",
             "external_runtime_factory",
             "direct_answerer",
             "evidence_answerer",
         ),
-        (True, True, True, True, True, True),
+        (True, True, True, True, True),
     )
 
 
-def test_external_plan_searcher_requires_borrowed_runtime_per_call() -> None:
-    parameters, return_type = _method_contract(ExternalPlanSearcher.search)
+def test_removed_external_pipeline_symbols_are_absent() -> None:
+    app_root = Path(__file__).resolve().parents[3] / "app" / "agent"
+    forbidden = {
+        "ExternalSearchResearchRunner",
+        "ExternalSearchService",
+        "ExternalSearchRequest",
+        "ExternalSearchRunResult",
+        "ExternalSearchRunner",
+        "ExternalPlanSearcher",
+        "build_external_search_service",
+    }
 
-    assert (
-        getattr(ExternalPlanSearcher, "_is_protocol", False),
-        parameters,
-        return_type,
-    ) == (
-        True,
-        (
-            ("self", inspect.Parameter.POSITIONAL_OR_KEYWORD, None, True),
-            (
-                "external_research_tasks",
-                inspect.Parameter.POSITIONAL_OR_KEYWORD,
-                list[ExternalResearchTask],
-                True,
-            ),
-            ("target_time_window", inspect.Parameter.KEYWORD_ONLY, str | None, True),
-            ("as_of", inspect.Parameter.KEYWORD_ONLY, datetime, True),
-            ("external", inspect.Parameter.KEYWORD_ONLY, ExternalResearchRuntime, True),
-        ),
-        ExternalSearchOutcome,
+    assert all(
+        symbol not in path.read_text(encoding="utf-8")
+        for path in app_root.rglob("*.py")
+        for symbol in forbidden
     )
 
 

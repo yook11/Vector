@@ -23,14 +23,14 @@ from app.agent.answering.evidence_answer.flow import EvidenceAnswerFlow
 from app.agent.composition import (
     activate_gemini_agent_runtime,
     build_external_research_runtime_factory,
-    build_external_search_service,
 )
-from app.agent.contract import AnswerQuestionResult, AnswerSource
-from app.agent.evidence_collection.external_search import (
-    ExternalResearchRuntime,
-    ExternalSearchEvidence,
-    ExternalSearchOutcome,
-    ResearchTaskReport,
+from app.agent.contract import (
+    AnswerProgressEvent,
+    AnswerQuestionResult,
+    AnswerSource,
+    ExternalSearchCandidatesFetchedEvent,
+    ExternalSearchEvidenceSelectedEvent,
+    ExternalSearchQueriesGeneratedEvent,
 )
 from app.agent.evidence_collection.internal_search import InternalSearchQueries
 from app.agent.evidence_collection.internal_search.article_search import (
@@ -51,7 +51,6 @@ DEFAULT_GOAL = "NVIDIA Blackwell AI GPU latest supply and customer demand eviden
 DEFAULT_QUESTION = "NVIDIA Blackwell の直近の供給と顧客需要は投資判断に重要？"
 DEFAULT_DIRECT_QUESTION = "Vector の使い方を短く教えて"
 MAX_EXTERNAL_RESEARCH_TASKS = 3
-SNIPPET_DISPLAY_MAX_CHARS = 240
 
 
 class _UnreachableInternalSearch:
@@ -78,48 +77,12 @@ class _FixedDirectPlanner:
         return self._plan
 
 
-class _RecordingExternalSearch:
-    def __init__(self, *, requested_agent_count: int) -> None:
-        self._service = build_external_search_service()
-        self._requested_agent_count = requested_agent_count
-        self.last_outcome: ExternalSearchOutcome | None = None
+class _RecordingAnswerEvents:
+    def __init__(self) -> None:
+        self.events: list[AnswerProgressEvent] = []
 
-    async def search(
-        self,
-        external_research_tasks: list[ExternalResearchTask],
-        *,
-        target_time_window: str | None,
-        as_of: datetime,
-        external: ExternalResearchRuntime,
-    ) -> ExternalSearchOutcome:
-        outcome = await _search_with_requested_agent_count(
-            self._service,
-            external_research_tasks,
-            target_time_window=target_time_window,
-            as_of=as_of,
-            external=external,
-            requested_agent_count=self._requested_agent_count,
-        )
-        self.last_outcome = outcome
-        return outcome
-
-
-async def _search_with_requested_agent_count(
-    service: object,
-    external_research_tasks: list[ExternalResearchTask],
-    *,
-    target_time_window: str | None,
-    as_of: datetime,
-    external: ExternalResearchRuntime,
-    requested_agent_count: int,
-) -> ExternalSearchOutcome:
-    return await service.search(  # type: ignore[union-attr]
-        external_research_tasks,
-        target_time_window=target_time_window,
-        as_of=as_of,
-        external=external,
-        requested_agent_count=requested_agent_count,
-    )
+    async def event_occurred(self, event: AnswerProgressEvent) -> None:
+        self.events.append(event)
 
 
 class _UnreachableDirectAnswerer:
@@ -132,21 +95,6 @@ class _UnreachableDirectAnswerer:
         raise AssertionError(
             "direct answerer must not be called: "
             f"{request.context.standalone_question!r}"
-        )
-
-
-class _UnreachableExternalSearch:
-    async def search(
-        self,
-        external_research_tasks: list[ExternalResearchTask],
-        *,
-        target_time_window: str | None,
-        as_of: datetime,
-        external: ExternalResearchRuntime,
-    ) -> ExternalSearchOutcome:
-        raise AssertionError(
-            "external search must not be called: "
-            f"{external_research_tasks!r} {target_time_window!r} {as_of!r} {external!r}"
         )
 
 
@@ -239,9 +187,7 @@ async def _probe_external(
 
     as_of = datetime.now(UTC)
     plan = _build_external_plan(goals, target_time_window=target_time_window)
-    external_search = _RecordingExternalSearch(
-        requested_agent_count=requested_agent_count,
-    )
+    events = _RecordingAnswerEvents()
     runner = AnsweringRunner(
         context_preparer=QuestionContextService(
             agent=QUESTION_CONTEXT_AGENT,
@@ -250,7 +196,6 @@ async def _probe_external(
         phases_factory=lambda: AnsweringPhases(
             planner=_FixedExternalPlanner(plan),
             internal_search=_UnreachableInternalSearch(),
-            external_search=external_search,
             external_runtime_factory=build_external_research_runtime_factory(),
             evidence_answerer=EvidenceAnswerFlow(
                 agent=EVIDENCE_ANSWER_AGENT,
@@ -258,6 +203,8 @@ async def _probe_external(
             ),
             direct_answerer=_UnreachableDirectAnswerer(),
         ),
+        events=events,
+        requested_external_agent_count=requested_agent_count,
     )
     result = (
         await runner.run(
@@ -266,15 +213,11 @@ async def _probe_external(
         )
     ).final_output
 
-    outcome = external_search.last_outcome
-    if outcome is None:
-        raise SystemExit("retrieval did not run")
-
     _print_retrieval_summary(
         as_of=as_of,
         plan=plan,
         requested_agent_count=requested_agent_count,
-        outcome=outcome,
+        events=events.events,
         collection_failures=result.retrieval.collection_failures,
     )
     print()
@@ -293,7 +236,6 @@ async def _probe_direct(*, question: str) -> None:
         phases_factory=lambda: AnsweringPhases(
             planner=_FixedDirectPlanner(NoRetrievalPlan(reason="direct answer probe")),
             internal_search=_UnreachableInternalSearch(),
-            external_search=_UnreachableExternalSearch(),
             external_runtime_factory=_UnreachableExternalRuntimeFactory(),
             evidence_answerer=_UnreachableEvidenceAnswerer(),
             direct_answerer=DirectAnswerFlow(
@@ -348,7 +290,7 @@ def _print_retrieval_summary(
     as_of: datetime,
     plan: ExternalSearchPlan,
     requested_agent_count: int,
-    outcome: ExternalSearchOutcome | None,
+    events: Sequence[AnswerProgressEvent],
     collection_failures: Sequence[str],
 ) -> None:
     print("retrieval:")
@@ -358,20 +300,34 @@ def _print_retrieval_summary(
     print(f"  requested_agent_count={requested_agent_count}")
     print(f"  planned_task_count={len(plan.external_research_tasks)}")
     print(f"  collection_failures={list(collection_failures)}")
+    print()
+    _print_external_progress(events)
 
-    if outcome is None:
-        print("  external_search_outcome=None")
+
+def _print_external_progress(events: Sequence[AnswerProgressEvent]) -> None:
+    print("task_progress:")
+    external_events = [
+        event
+        for event in events
+        if isinstance(
+            event,
+            ExternalSearchQueriesGeneratedEvent
+            | ExternalSearchCandidatesFetchedEvent
+            | ExternalSearchEvidenceSelectedEvent,
+        )
+    ]
+    if not external_events:
+        print("  (none)")
         return
 
-    print(f"  effective_agent_count={outcome.effective_agent_count}")
-    print(f"  hard_agent_limit={outcome.hard_agent_limit}")
-    print(f"  outcome_task_count={len(outcome.tasks)}")
-    print(f"  evidence_count={len(outcome.evidence)}")
-    print(f"  deduplicated_evidence_count={outcome.deduplicated_evidence_count}")
-    print()
-    _print_task_reports(outcome.task_reports)
-    print()
-    _print_evidence(outcome.evidence)
+    for event in external_events:
+        match event:
+            case ExternalSearchQueriesGeneratedEvent():
+                print(f"  [{event.task_index}] generated_queries={list(event.queries)}")
+            case ExternalSearchCandidatesFetchedEvent():
+                print(f"  [{event.task_index}] candidate_count={event.candidate_count}")
+            case ExternalSearchEvidenceSelectedEvent():
+                print(f"  [{event.task_index}] evidence_count={event.evidence_count}")
 
 
 def _print_answer_result(result: AnswerQuestionResult) -> None:
@@ -405,67 +361,10 @@ def _print_answer_source(source: AnswerSource) -> None:
         print(f"        evidence_claim={evidence_claim}")
 
 
-def _print_task_reports(reports: Sequence[ResearchTaskReport]) -> None:
-    print("task_reports:")
-    if not reports:
-        print("  (none)")
-        return
-
-    for report in reports:
-        print(
-            "  "
-            f"[{report.task_index}] status={report.status} "
-            f"candidates={report.candidate_count} "
-            f"evidence={report.evidence_count} "
-            f"provider_failed_queries={report.provider_failed_query_count} "
-            f"dropped_selections={report.dropped_selection_count} "
-            f"missing={len(report.missing)}"
-        )
-        print(f"      goal={report.collection_goal}")
-        if report.selector_failure_reason:
-            print(f"      selector_failure_reason={report.selector_failure_reason}")
-        if report.generated_queries:
-            print("      generated_queries:")
-            for query in report.generated_queries:
-                print(f"        - {query}")
-        if report.missing:
-            print("      missing:")
-            for item in report.missing:
-                print(f"        - {item}")
-
-
-def _print_evidence(evidence_items: Sequence[ExternalSearchEvidence]) -> None:
-    print("evidence:")
-    if not evidence_items:
-        print("  (none)")
-        return
-
-    for index, evidence in enumerate(evidence_items, start=1):
-        print(
-            "  "
-            f"[{index}] source_ref={evidence.source_ref} "
-            f"task_index={evidence.task_index}"
-        )
-        print(f"      title={evidence.title}")
-        print(f"      url={evidence.url}")
-        print(f"      source_name={evidence.source_name or ''}")
-        print(f"      published_at={_format_datetime(evidence.published_at)}")
-        print(f"      claim={evidence.claim}")
-        print(f"      why_selected={evidence.why_selected}")
-        if evidence.snippet:
-            print(f"      snippet={_truncate_for_display(evidence.snippet)}")
-
-
 def _format_datetime(value: datetime | None) -> str:
     if value is None:
         return ""
     return value.isoformat()
-
-
-def _truncate_for_display(value: str) -> str:
-    if len(value) <= SNIPPET_DISPLAY_MAX_CHARS:
-        return value
-    return f"{value[:SNIPPET_DISPLAY_MAX_CHARS]}..."
 
 
 def main(argv: Sequence[str] | None = None) -> None:

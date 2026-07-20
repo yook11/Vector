@@ -27,9 +27,6 @@ from app.agent.evidence_collection.external_search.contract import (
     ExternalSearchEvidence,
     ExternalSearchOutcome,
     ExternalSearchProviderError,
-    ExternalSearchRequest,
-    ExternalSearchRunner,
-    ExternalSearchRunResult,
     ExternalSearchTool,
     ExternalSearchToolFailureReason,
     ExternalSearchToolInput,
@@ -37,14 +34,10 @@ from app.agent.evidence_collection.external_search.contract import (
     ResearchTaskReport,
     ResearchTaskStatus,
 )
-from app.agent.evidence_collection.external_search.runner import (
+from app.agent.evidence_collection.external_search.policy import (
     EVIDENCE_SELECT_TIMEOUT_SECONDS,
     PROVIDER_SEARCH_TIMEOUT_SECONDS,
     QUERY_GENERATE_TIMEOUT_SECONDS,
-    ExternalSearchResearchRunner,
-)
-from app.agent.evidence_collection.external_search.service import (
-    ExternalSearchService,
     resolve_external_search_agent_count,
 )
 from app.agent.evidence_collection.external_search.tavily import (
@@ -81,11 +74,6 @@ __all__ = [
     "ExternalSearchProviderError",
     "ExternalResearchRuntime",
     "ExternalResearchRuntimeFactory",
-    "ExternalSearchRequest",
-    "ExternalSearchResearchRunner",
-    "ExternalSearchRunResult",
-    "ExternalSearchRunner",
-    "ExternalSearchService",
     "ExternalSearchTool",
     "ExternalSearchToolFailureReason",
     "ExternalSearchToolInput",

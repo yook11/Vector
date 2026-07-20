@@ -187,7 +187,6 @@ def _runner(
         return AnsweringPhases(
             planner=planner,
             internal_search=internal_search,
-            external_search=_UnreachableExternalSearch(),
             external_runtime_factory=_UnreachableExternalRuntimeFactory(),
             direct_answerer=direct_answerer,
             evidence_answerer=evidence_answerer,

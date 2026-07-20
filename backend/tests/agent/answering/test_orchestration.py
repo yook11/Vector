@@ -18,6 +18,10 @@ from app.agent.answering.evidence_answer.contract import (
 from app.agent.contract import AnswerQuestionResult, ExternalUrlSource
 from app.agent.evidence_collection import EvidenceCollectionOutcome
 from app.agent.evidence_collection.external_search import (
+    ExternalEvidenceSelectionDraft,
+    ExternalQueryDraft,
+    ExternalResearchRuntime,
+    ExternalSearchCandidate,
     ExternalSearchEvidence,
     ExternalSearchOutcome,
     ResearchTaskReport,
@@ -283,41 +287,123 @@ class FakeInternalSearch:
         return self._outcome.internal_hits
 
 
-class FakeExternalSearch:
+class FakeExternalRuntimeFactory:
     def __init__(
         self,
-        outcome: EvidenceCollectionOutcome | Exception,
+        runtime: ExternalResearchRuntime | None = None,
         *,
         timeline: CallTimeline | None = None,
     ) -> None:
-        self._outcome = outcome
+        self._runtime = runtime
         self._timeline = timeline
-        self.calls: list[tuple[list[ExternalResearchTask], str | None, datetime]] = []
 
-    async def search(
-        self,
-        tasks: list[ExternalResearchTask],
-        *,
-        target_time_window: str | None,
-        as_of: datetime,
-        external: object,
-    ) -> ExternalSearchOutcome:
-        if self._timeline is not None:
-            self._timeline.record("external_search.search")
-        self.calls.append((tasks, target_time_window, as_of))
-        if isinstance(self._outcome, Exception):
-            raise self._outcome
-        if self._outcome.external_search is None:
-            raise AssertionError(
-                "external outcome must be supplied for an external plan"
-            )
-        return self._outcome.external_search
-
-
-class FakeExternalRuntimeFactory:
     @asynccontextmanager
     async def activate(self):
-        yield object()
+        if self._timeline is not None:
+            self._timeline.record("external_runtime.activate")
+        if self._runtime is None:
+            raise AssertionError("external runtime must not activate for this plan")
+        yield self._runtime
+
+
+class FakeExternalQueryRuntime:
+    def __init__(self, queries_by_goal: dict[str, str]) -> None:
+        self._queries_by_goal = queries_by_goal
+
+    async def invoke(
+        self, agent: object, input: object, *, attempt_number: int
+    ) -> ExternalQueryDraft:
+        del agent, attempt_number
+        return ExternalQueryDraft(
+            queries=[self._queries_by_goal[input.task.collection_goal]]  # type: ignore[union-attr]
+        )
+
+
+class FakeExternalSelectorRuntime:
+    def __init__(
+        self, drafts_by_goal: dict[str, ExternalEvidenceSelectionDraft]
+    ) -> None:
+        self._drafts_by_goal = drafts_by_goal
+
+    async def invoke(
+        self, agent: object, input: object, *, attempt_number: int
+    ) -> ExternalEvidenceSelectionDraft:
+        del agent, attempt_number
+        return self._drafts_by_goal[input.task.collection_goal]  # type: ignore[union-attr]
+
+
+class FakeExternalTool:
+    def __init__(
+        self, candidates_by_query: dict[str, list[ExternalSearchCandidate]]
+    ) -> None:
+        self._candidates_by_query = candidates_by_query
+
+    @property
+    def name(self) -> str:
+        return "external_search"
+
+    async def invoke(self, input: object) -> list[ExternalSearchCandidate]:
+        return list(self._candidates_by_query[input.query])  # type: ignore[union-attr]
+
+
+def _external_runtime_for(
+    *,
+    plan: ExternalSearchPlan | InternalAndExternalPlan,
+    outcome: EvidenceCollectionOutcome,
+) -> ExternalResearchRuntime:
+    if outcome.external_search is None:
+        raise AssertionError("external outcome must be supplied for an external plan")
+
+    evidence_by_task: dict[int, list[ExternalSearchEvidence]] = {}
+    for evidence in outcome.external_search.evidence:
+        evidence_by_task.setdefault(evidence.task_index, []).append(evidence)
+    reports_by_task = {
+        report.task_index: report for report in outcome.external_search.task_reports
+    }
+    queries_by_goal: dict[str, str] = {}
+    candidates_by_query: dict[str, list[ExternalSearchCandidate]] = {}
+    drafts_by_goal: dict[str, ExternalEvidenceSelectionDraft] = {}
+
+    for task_index, task in enumerate(plan.external_research_tasks):
+        query = f"fixture-query-{task_index}"
+        task_evidence = evidence_by_task.get(task_index, [])
+        candidates = [
+            ExternalSearchCandidate(
+                url=evidence.url,
+                title=evidence.title,
+                snippet=evidence.snippet,
+                published_at=evidence.published_at,
+                source_name=evidence.source_name,
+            )
+            for evidence in task_evidence
+        ]
+        if not candidates:
+            candidates = [
+                ExternalSearchCandidate(
+                    url=f"https://example.com/fixture-{task_index}",
+                    title=f"fixture {task_index}",
+                )
+            ]
+        report = reports_by_task.get(task_index)
+        queries_by_goal[task.collection_goal] = query
+        candidates_by_query[query] = candidates
+        drafts_by_goal[task.collection_goal] = ExternalEvidenceSelectionDraft(
+            selections=[
+                {
+                    "candidate_index": index,
+                    "claim": evidence.claim,
+                    "why_selected": evidence.why_selected,
+                }
+                for index, evidence in enumerate(task_evidence)
+            ],
+            missing=report.missing if report is not None else [],
+        )
+
+    return ExternalResearchRuntime(
+        query_runtime=FakeExternalQueryRuntime(queries_by_goal),  # type: ignore[arg-type]
+        selector_runtime=FakeExternalSelectorRuntime(drafts_by_goal),  # type: ignore[arg-type]
+        search_tool=FakeExternalTool(candidates_by_query),  # type: ignore[arg-type]
+    )
 
 
 class FakeEvidenceAnswerer:
@@ -474,14 +560,21 @@ def _orchestrator(
 ]:
     planner = FakePlanner(plan, timeline=timeline)
     internal_search = FakeInternalSearch(outcome, timeline=timeline)
-    external_search = FakeExternalSearch(outcome, timeline=timeline)
+    external_runtime = (
+        _external_runtime_for(plan=plan, outcome=outcome)
+        if isinstance(plan, (ExternalSearchPlan, InternalAndExternalPlan))
+        and isinstance(outcome, EvidenceCollectionOutcome)
+        else None
+    )
     evidence_answerer = FakeEvidenceAnswerer(draft, timeline=timeline)
     direct_answerer = FakeDirectAnswerer(direct_draft, timeline=timeline)
     phases = AnsweringPhases(
         planner=planner,
         internal_search=internal_search,
-        external_search=external_search,
-        external_runtime_factory=FakeExternalRuntimeFactory(),
+        external_runtime_factory=FakeExternalRuntimeFactory(
+            external_runtime,
+            timeline=timeline,
+        ),
         direct_answerer=direct_answerer,
         evidence_answerer=evidence_answerer,
     )
@@ -604,7 +697,7 @@ async def test_answer_evidence_plan_orders_progress_and_port_calls() -> None:
         "planner.plan",
         "progress:retrieving",
         "internal_search.search_articles",
-        "external_search.search",
+        "external_runtime.activate",
         "progress:synthesizing",
         "evidence_answerer.answer",
     ]

@@ -6,7 +6,6 @@ import asyncio
 import json
 from collections.abc import Sequence
 from dataclasses import fields, is_dataclass
-from datetime import UTC, datetime
 from importlib import import_module
 from types import ModuleType
 from typing import Any, Literal, get_args, get_origin, get_type_hints
@@ -19,9 +18,6 @@ from opentelemetry.sdk.trace import ReadableSpan
 from opentelemetry.trace import SpanKind, StatusCode
 from pydantic import SecretStr
 
-from app.agent.agent import Agent
-from app.agent.planning.contract import ExternalResearchTask
-from tests.agent.runtime._fakes import ScriptedAgentRuntime
 from tests.logfire._span_helpers import domain_attr_keys, one_span_named
 
 _TOOL_SPAN_NAME = "external_search_tool_call"
@@ -53,96 +49,11 @@ def _package() -> ModuleType:
     return _required_module("app.agent.evidence_collection.external_search")
 
 
-def _runner_type() -> type[Any]:
-    return _required_attribute(
-        _required_module("app.agent.evidence_collection.external_search.runner"),
-        "ExternalSearchResearchRunner",
-    )
-
-
-def _query_agent() -> Agent[Any, Any]:
-    return _required_attribute(
-        _required_module("app.agent.evidence_collection.external_search.agent"),
-        "EXTERNAL_QUERY_AGENT",
-    )
-
-
-def _selector_agent() -> Agent[Any, Any]:
-    return _required_attribute(
-        _required_module("app.agent.evidence_collection.external_search.agent"),
-        "EXTERNAL_EVIDENCE_SELECTOR_AGENT",
-    )
-
-
 def _tool_input(*, query: str, limit: int) -> Any:
     return _required_attribute(_contracts(), "ExternalSearchToolInput")(
         query=query,
         limit=limit,
     )
-
-
-def _candidate(*, url: str, title: str, snippet: str) -> Any:
-    return _required_attribute(_contracts(), "ExternalSearchCandidate")(
-        url=url,
-        title=title,
-        snippet=snippet,
-        source_name="SOURCE_NAME_SENTINEL_TOOL_5c8f",
-    )
-
-
-def _query_draft(queries: list[str]) -> Any:
-    return _required_attribute(_contracts(), "ExternalQueryDraft").model_validate(
-        {"queries": queries}
-    )
-
-
-def _selection_draft() -> Any:
-    return _required_attribute(
-        _contracts(), "ExternalEvidenceSelectionDraft"
-    ).model_validate({"selections": [], "missing": []})
-
-
-def _request() -> Any:
-    return _required_attribute(_contracts(), "ExternalSearchRequest")(
-        tasks=[ExternalResearchTask(collection_goal="GOAL_SENTINEL_TOOL_776d")],
-        effective_agent_count=1,
-        as_of=datetime(2026, 7, 19, tzinfo=UTC),
-        target_time_window="WINDOW_SENTINEL_TOOL_1f93",
-    )
-
-
-class FakeExternalSearchTool:
-    def __init__(self, outcomes: Sequence[object | BaseException]) -> None:
-        self._outcomes = list(outcomes)
-        self.calls: list[object] = []
-
-    @property
-    def name(self) -> Literal["external_search"]:
-        return "external_search"
-
-    async def invoke(self, input: object) -> list[Any]:
-        self.calls.append(input)
-        outcome = self._outcomes.pop(0)
-        if isinstance(outcome, BaseException):
-            raise outcome
-        return outcome  # type: ignore[return-value]
-
-
-class BlockingExternalSearchTool:
-    def __init__(self) -> None:
-        self.cancelled = False
-
-    @property
-    def name(self) -> Literal["external_search"]:
-        return "external_search"
-
-    async def invoke(self, input: object) -> list[Any]:
-        try:
-            await asyncio.Event().wait()
-        except asyncio.CancelledError:
-            self.cancelled = True
-            raise
-        raise AssertionError("unreachable")
 
 
 class FakeTavilyHttpClient:
@@ -193,41 +104,6 @@ class StaticAsyncByteStream(httpx.AsyncByteStream):
 
     async def __aiter__(self):
         yield self._content
-
-
-class _RunnerHarness:
-    def __init__(self, *, runner: object, external: object) -> None:
-        self._runner = runner
-        self._external = external
-
-    async def search(self, request: object) -> Any:
-        return await self._runner.search(request, external=self._external)
-
-
-def _external_runtime(
-    *,
-    query_runtime: object,
-    selector_runtime: object,
-    search_tool: object,
-) -> Any:
-    return _required_attribute(_contracts(), "ExternalResearchRuntime")(
-        query_runtime=query_runtime,
-        selector_runtime=selector_runtime,
-        search_tool=search_tool,
-    )
-
-
-def _runner(*, search_tool: object) -> Any:
-    return _RunnerHarness(
-        runner=_runner_type()(),
-        external=_external_runtime(
-            query_runtime=ScriptedAgentRuntime(
-                [_query_draft(["  normalized query  "])]
-            ),
-            selector_runtime=ScriptedAgentRuntime([_selection_draft()]),
-            search_tool=search_tool,
-        ),
-    )
 
 
 def _tavily_tool(client: object, *, api_key: str = "TOOL_SECRET_SENTINEL_d5e1") -> Any:
@@ -284,49 +160,6 @@ def test_external_search_tool_port_and_tavily_adapter_are_stably_typed() -> None
     tool = tool_type(api_key=SecretStr("test-key"), client=object())
     assert tool.name == "external_search"
     assert not hasattr(tool, "search")
-
-
-@pytest.mark.asyncio
-async def test_runner_passes_normalized_queries_and_limit_to_typed_tool_input() -> None:
-    candidate = _candidate(
-        url="https://example.com/TOOL_URL_SENTINEL_203b",
-        title="TOOL_TITLE_SENTINEL_4f74",
-        snippet="TOOL_SNIPPET_SENTINEL_7a92",
-    )
-    tool = FakeExternalSearchTool([[candidate]])
-
-    result = await _runner(search_tool=tool).search(_request())
-
-    assert tool.calls == [_tool_input(query="normalized query", limit=10)]
-    assert result.task_reports[0].candidate_count == 1
-
-
-@pytest.mark.asyncio
-async def test_runner_keeps_query_backstop_around_tool_invocation(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    runner_module = _required_module(
-        "app.agent.evidence_collection.external_search.runner"
-    )
-    assert runner_module.PROVIDER_SEARCH_TIMEOUT_SECONDS == 15
-    monkeypatch.setattr(runner_module, "PROVIDER_SEARCH_TIMEOUT_SECONDS", 0.01)
-    tool = BlockingExternalSearchTool()
-    selector_runtime = ScriptedAgentRuntime([_selection_draft()])
-    runner = _runner_type()()
-
-    result = await runner.search(
-        _request(),
-        external=_external_runtime(
-            query_runtime=ScriptedAgentRuntime([_query_draft(["normalized query"])]),
-            selector_runtime=selector_runtime,
-            search_tool=tool,
-        ),
-    )
-
-    assert tool.cancelled is True
-    assert selector_runtime.calls == []
-    assert result.task_reports[0].status == "provider_failed"
-    assert result.task_reports[0].provider_failed_query_count == 1
 
 
 @pytest.mark.asyncio

@@ -3,13 +3,16 @@
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Iterator
+from collections.abc import Awaitable, Iterator
 from contextlib import contextmanager
 from datetime import datetime
+from enum import StrEnum
 from typing import assert_never
 from uuid import UUID
 
 import logfire
+from opentelemetry.trace import StatusCode
+from pydantic import ValidationError
 
 from app.agent.answering.contract import AnsweringRequest
 from app.agent.answering.evidence_answer.evidence import (
@@ -17,14 +20,51 @@ from app.agent.answering.evidence_answer.evidence import (
 )
 from app.agent.answering.result_assembly import assemble_evidence_result
 from app.agent.contract import (
+    AnswerEventReporter,
     AnswerGenerationStopped,
+    AnswerProgressEvent,
     AnswerProgressReporter,
     AnswerProgressStage,
     AnswerQuestionResult,
     AnswerRetrievalSummary,
+    ExternalSearchCandidatesFetchedEvent,
+    ExternalSearchEvidenceSelectedEvent,
+    ExternalSearchQueriesGeneratedEvent,
 )
 from app.agent.evidence_collection.contract import EvidenceCollectionOutcome
-from app.agent.evidence_collection.external_search import ExternalSearchOutcome
+from app.agent.evidence_collection.external_search.agent import (
+    EXTERNAL_EVIDENCE_SELECTOR_AGENT,
+    EXTERNAL_QUERY_AGENT,
+)
+from app.agent.evidence_collection.external_search.contract import (
+    EXTERNAL_SEARCH_CANDIDATES_PER_QUERY,
+    EvidenceSelectionResult,
+    ExternalEvidenceCandidateInput,
+    ExternalEvidenceSelectionInput,
+    ExternalQueryGenerationInput,
+    ExternalResearchRuntime,
+    ExternalSearchCandidate,
+    ExternalSearchEvidence,
+    ExternalSearchOutcome,
+    ExternalSearchProviderError,
+    ExternalSearchTool,
+    ExternalSearchToolInput,
+    ResearchTaskReport,
+    ResearchTaskStatus,
+)
+from app.agent.evidence_collection.external_search.policy import (
+    EVIDENCE_SELECT_TIMEOUT_SECONDS,
+    PROVIDER_SEARCH_TIMEOUT_SECONDS,
+    QUERY_GENERATE_TIMEOUT_SECONDS,
+    SELECTOR_TIMEOUT_REASON,
+    build_candidate_pool,
+    build_external_evidence,
+    clean_generated_queries,
+    deduplicate_external_evidence_by_url,
+    finalize_selection_draft,
+    resolve_external_search_agent_count,
+    resolve_provider_failure_reason,
+)
 from app.agent.evidence_collection.internal_search.article_search import (
     InternalArticleSearchHit,
 )
@@ -51,11 +91,20 @@ from app.agent.running.contract import (
     RunInput,
     RunResult,
 )
+from app.agent.runtime.contract import (
+    AgentResponseDefect,
+    AgentResponseInvalidError,
+    AgentRuntime,
+)
 from app.agent.threads.contracts import ThreadMessageSnapshot
+from app.analysis.ai_provider_errors import AIProviderError
 
 __all__ = ["AnsweringRunner"]
 
 _SPAN_NAME = "agent_answering_run"
+_EXTERNAL_PHASE_SPAN_NAME = "agent_phase"
+_EXTERNAL_QUERY_PHASE = "external_query"
+_EXTERNAL_SELECTOR_PHASE = "external_selector"
 
 
 class AnsweringRunner:
@@ -65,10 +114,14 @@ class AnsweringRunner:
         context_preparer: QuestionContextPreparer,
         phases_factory: AnsweringPhasesFactory,
         progress: AnswerProgressReporter | None = None,
+        events: AnswerEventReporter | None = None,
+        requested_external_agent_count: int | None = None,
     ) -> None:
         self._context_preparer = context_preparer
         self._phases_factory = phases_factory
         self._progress = progress
+        self._events = events
+        self._requested_external_agent_count = requested_external_agent_count
 
     async def run(
         self,
@@ -263,17 +316,364 @@ class AnsweringRunner:
         as_of: datetime,
     ) -> ExternalSearchOutcome:
         async with phases.external_runtime_factory.activate() as external:
-            return await phases.external_search.search(
-                tasks,
+            return await self._execute_external_pipeline(
+                tasks=tasks,
                 target_time_window=target_time_window,
                 as_of=as_of,
                 external=external,
             )
 
+    async def _execute_external_pipeline(
+        self,
+        *,
+        tasks: list[ExternalResearchTask],
+        target_time_window: str | None,
+        as_of: datetime,
+        external: ExternalResearchRuntime,
+    ) -> ExternalSearchOutcome:
+        effective_agent_count = resolve_external_search_agent_count(
+            task_count=len(tasks),
+            requested_agent_count=self._requested_external_agent_count,
+        )
+        if not tasks:
+            return ExternalSearchOutcome(
+                tasks=tasks,
+                requested_agent_count=self._requested_external_agent_count,
+                effective_agent_count=effective_agent_count,
+            )
+
+        semaphore = asyncio.Semaphore(max(1, effective_agent_count))
+
+        async def run_task(
+            task_index: int,
+            task: ExternalResearchTask,
+        ) -> tuple[list[ExternalSearchEvidence], ResearchTaskReport]:
+            async with semaphore:
+                return await self._search_external_task(
+                    task_index=task_index,
+                    task=task,
+                    target_time_window=target_time_window,
+                    as_of=as_of,
+                    external=external,
+                )
+
+        results = await _gather_cancel_on_error(
+            *[run_task(task_index, task) for task_index, task in enumerate(tasks)]
+        )
+        evidence: list[ExternalSearchEvidence] = []
+        reports: list[ResearchTaskReport] = []
+        for task_evidence, report in results:
+            evidence.extend(task_evidence)
+            reports.append(report)
+        deduplicated_evidence, deduplicated_count = (
+            deduplicate_external_evidence_by_url(evidence)
+        )
+        return ExternalSearchOutcome(
+            tasks=tasks,
+            evidence=deduplicated_evidence,
+            task_reports=reports,
+            deduplicated_evidence_count=deduplicated_count,
+            requested_agent_count=self._requested_external_agent_count,
+            effective_agent_count=effective_agent_count,
+        )
+
+    async def _search_external_task(
+        self,
+        *,
+        task_index: int,
+        task: ExternalResearchTask,
+        target_time_window: str | None,
+        as_of: datetime,
+        external: ExternalResearchRuntime,
+    ) -> tuple[list[ExternalSearchEvidence], ResearchTaskReport]:
+        query_input = ExternalQueryGenerationInput(
+            task=task,
+            as_of=as_of,
+            target_time_window=target_time_window,
+        )
+        with _external_agent_phase(
+            phase=_EXTERNAL_QUERY_PHASE,
+            agent_name=EXTERNAL_QUERY_AGENT.name,
+            task_index=task_index,
+        ):
+            try:
+                query_draft = await asyncio.wait_for(
+                    external.query_runtime.invoke(
+                        EXTERNAL_QUERY_AGENT,
+                        query_input,
+                        attempt_number=1,
+                    ),
+                    timeout=QUERY_GENERATE_TIMEOUT_SECONDS,
+                )
+            except (AgentResponseInvalidError, AIProviderError, TimeoutError):
+                return [], self._external_task_report(
+                    task_index=task_index,
+                    task=task,
+                    status="query_generation_failed",
+                )
+
+        queries = clean_generated_queries(query_draft.queries)
+        if not queries:
+            return [], self._external_task_report(
+                task_index=task_index,
+                task=task,
+                status="query_generation_failed",
+            )
+        await self._report_event(
+            ExternalSearchQueriesGeneratedEvent(
+                task_index=task_index,
+                queries=queries,
+            )
+        )
+
+        query_candidates: list[list[ExternalSearchCandidate]] = []
+        provider_failed_query_count = 0
+        provider_results = await _gather_cancel_on_error(
+            *[
+                self._search_external_query(query, search_tool=external.search_tool)
+                for query in queries
+            ]
+        )
+        for candidates, failed in provider_results:
+            if failed:
+                provider_failed_query_count += 1
+                query_candidates.append([])
+                continue
+            query_candidates.append(candidates)
+
+        if provider_failed_query_count == len(queries):
+            return [], self._external_task_report(
+                task_index=task_index,
+                task=task,
+                status="provider_failed",
+                generated_queries=queries,
+                provider_failed_query_count=provider_failed_query_count,
+            )
+
+        pool = build_candidate_pool(query_candidates)
+        await self._report_event(
+            ExternalSearchCandidatesFetchedEvent(
+                task_index=task_index,
+                candidate_count=len(pool),
+            )
+        )
+        if not pool:
+            return [], self._external_task_report(
+                task_index=task_index,
+                task=task,
+                status="succeeded",
+                generated_queries=queries,
+                provider_failed_query_count=provider_failed_query_count,
+                candidate_count=0,
+            )
+
+        (
+            selection_result,
+            selector_failure_reason,
+        ) = await self._select_external_evidence(
+            task=task,
+            candidates=pool,
+            as_of=as_of,
+            task_index=task_index,
+            selector_runtime=external.selector_runtime,
+        )
+        if selection_result is None:
+            return [], self._external_task_report(
+                task_index=task_index,
+                task=task,
+                status="selector_failed",
+                generated_queries=queries,
+                provider_failed_query_count=provider_failed_query_count,
+                candidate_count=len(pool),
+                selector_failure_reason=selector_failure_reason,
+            )
+
+        evidence, dropped_selection_count = build_external_evidence(
+            task_index=task_index,
+            pool=pool,
+            selection_result=selection_result,
+        )
+        await self._report_event(
+            ExternalSearchEvidenceSelectedEvent(
+                task_index=task_index,
+                evidence_count=len(evidence),
+            )
+        )
+        return evidence, self._external_task_report(
+            task_index=task_index,
+            task=task,
+            status="succeeded",
+            generated_queries=queries,
+            provider_failed_query_count=provider_failed_query_count,
+            candidate_count=len(pool),
+            evidence_count=len(evidence),
+            dropped_selection_count=dropped_selection_count,
+            missing=selection_result.missing,
+        )
+
+    async def _search_external_query(
+        self,
+        query: str,
+        *,
+        search_tool: ExternalSearchTool,
+    ) -> tuple[list[ExternalSearchCandidate], bool]:
+        try:
+            candidates = await asyncio.wait_for(
+                search_tool.invoke(
+                    ExternalSearchToolInput(
+                        query=query,
+                        limit=EXTERNAL_SEARCH_CANDIDATES_PER_QUERY,
+                    )
+                ),
+                timeout=PROVIDER_SEARCH_TIMEOUT_SECONDS,
+            )
+        except (ExternalSearchProviderError, TimeoutError):
+            return [], True
+        return candidates[:EXTERNAL_SEARCH_CANDIDATES_PER_QUERY], False
+
+    async def _select_external_evidence(
+        self,
+        *,
+        task: ExternalResearchTask,
+        candidates: list[ExternalSearchCandidate],
+        as_of: datetime,
+        task_index: int,
+        selector_runtime: AgentRuntime,
+    ) -> tuple[EvidenceSelectionResult | None, str | None]:
+        selector_input = ExternalEvidenceSelectionInput(
+            task=task,
+            candidates=tuple(
+                ExternalEvidenceCandidateInput(
+                    index=index,
+                    title=candidate.title,
+                    source_name=candidate.source_name,
+                    published_at=candidate.published_at,
+                    snippet=candidate.snippet,
+                )
+                for index, candidate in enumerate(candidates)
+            ),
+            as_of=as_of,
+        )
+        selector_failure_reason: str | None = None
+        with _external_agent_phase(
+            phase=_EXTERNAL_SELECTOR_PHASE,
+            agent_name=EXTERNAL_EVIDENCE_SELECTOR_AGENT.name,
+            task_index=task_index,
+        ):
+            for attempt_number in range(1, 3):
+                try:
+                    draft = await asyncio.wait_for(
+                        selector_runtime.invoke(
+                            EXTERNAL_EVIDENCE_SELECTOR_AGENT,
+                            selector_input,
+                            attempt_number=attempt_number,
+                        ),
+                        timeout=EVIDENCE_SELECT_TIMEOUT_SECONDS,
+                    )
+                except AgentResponseInvalidError as exc:
+                    selector_failure_reason = exc.defect.value
+                    continue
+                except AIProviderError as exc:
+                    selector_failure_reason = _provider_failure_reason(exc)
+                    continue
+                except TimeoutError:
+                    selector_failure_reason = SELECTOR_TIMEOUT_REASON
+                    continue
+
+                try:
+                    selection_result = finalize_selection_draft(draft)
+                except ValidationError:
+                    selector_failure_reason = (
+                        AgentResponseDefect.OUTPUT_SCHEMA_MISMATCH.value
+                    )
+                    continue
+                return selection_result, None
+        return None, selector_failure_reason
+
+    @staticmethod
+    def _external_task_report(
+        *,
+        task_index: int,
+        task: ExternalResearchTask,
+        status: ResearchTaskStatus,
+        generated_queries: list[str] | None = None,
+        provider_failed_query_count: int = 0,
+        candidate_count: int = 0,
+        evidence_count: int = 0,
+        dropped_selection_count: int = 0,
+        selector_failure_reason: str | None = None,
+        missing: list[str] | None = None,
+    ) -> ResearchTaskReport:
+        return ResearchTaskReport.from_raw(
+            task_index=task_index,
+            collection_goal=task.collection_goal,
+            generated_queries=generated_queries,
+            status=status,
+            provider_failed_query_count=provider_failed_query_count,
+            candidate_count=candidate_count,
+            evidence_count=evidence_count,
+            dropped_selection_count=dropped_selection_count,
+            selector_failure_reason=selector_failure_reason,
+            missing=missing,
+        )
+
+    async def _report_event(self, event: AnswerProgressEvent) -> None:
+        if self._events is None:
+            return
+        await self._events.event_occurred(event)
+
     async def _report_progress(self, stage: AnswerProgressStage) -> None:
         if self._progress is None:
             return
         await self._progress.stage_changed(stage)
+
+
+async def _gather_cancel_on_error[ResultT](
+    *awaitables: Awaitable[ResultT],
+) -> list[ResultT]:
+    """未分類例外時に兄弟処理をcancelして合流してから元の例外を返す。"""
+    tasks = [asyncio.ensure_future(awaitable) for awaitable in awaitables]
+    try:
+        return list(await asyncio.gather(*tasks))
+    except BaseException:
+        for task in tasks:
+            if not task.done():
+                task.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
+        raise
+
+
+def _provider_failure_reason(exc: AIProviderError) -> str:
+    reason = getattr(exc, "reason", None)
+    reason_value = reason.value if isinstance(reason, StrEnum) else None
+    code = getattr(exc, "CODE", None)
+    return resolve_provider_failure_reason(
+        reason=reason_value,
+        code=code if isinstance(code, str) else None,
+    )
+
+
+@contextmanager
+def _external_agent_phase(
+    *,
+    phase: str,
+    agent_name: str,
+    task_index: int,
+) -> Iterator[None]:
+    """External task単位のAgent policy spanを作る。"""
+    if task_index < 0:
+        raise ValueError("task_index must be non-negative")
+    with logfire.span(
+        _EXTERNAL_PHASE_SPAN_NAME,
+        phase=phase,
+        agent_name=agent_name,
+        task_index=task_index,
+    ) as span:
+        try:
+            yield
+        except BaseException:
+            span.set_status(StatusCode.ERROR, "unclassified agent phase error")
+            raise
 
 
 @contextmanager

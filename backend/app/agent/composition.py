@@ -36,9 +36,6 @@ from app.config import settings
 from app.shared.security.safe_http import make_safe_async_client
 
 if TYPE_CHECKING:
-    from app.agent.evidence_collection.external_search.service import (
-        ExternalSearchService,
-    )
     from app.agent.runtime.gemini import GeminiAgentRuntime
 
 
@@ -89,7 +86,6 @@ def _build_answering_phases(
     )
     from app.agent.planning.service import QuestionPlanningService
 
-    external_search = build_external_search_service(events=events)
     external_runtime_factory = build_external_research_runtime_factory()
     internal_search = InternalSearchService(
         embedder=GeminiQueryEmbedder(),
@@ -102,7 +98,6 @@ def _build_answering_phases(
             runtime_scope_factory=activate_gemini_agent_runtime,
         ),
         internal_search=internal_search,
-        external_search=external_search,
         external_runtime_factory=external_runtime_factory,
         direct_answerer=DirectAnswerFlow(
             agent=DIRECT_ANSWER_AGENT,
@@ -126,6 +121,7 @@ def build_answering_runner(
     events: AnswerEventReporter | None = None,
     delta_reporter: AnswerDeltaReporter | None = None,
     continuation: AnswerGenerationContinuation | None = None,
+    requested_external_agent_count: int | None = None,
 ) -> AnsweringRunner:
     question_context_runtime_factory = (
         activate_gemini_agent_runtime
@@ -144,6 +140,8 @@ def build_answering_runner(
             continuation=continuation,
         ),
         progress=progress,
+        events=events,
+        requested_external_agent_count=requested_external_agent_count,
     )
 
 
@@ -205,24 +203,4 @@ def build_external_research_runtime_factory() -> ExternalResearchRuntimeFactory:
     return _ExternalResearchRuntimeFactory(
         deepseek_api_key=settings.deepseek_api_key,
         tavily_api_key=settings.tavily_api_key,
-    )
-
-
-def build_external_search_service(
-    *,
-    events: AnswerEventReporter | None = None,
-) -> ExternalSearchService:
-    ensure_external_search_configured()
-
-    from app.agent.evidence_collection.external_search.runner import (
-        ExternalSearchResearchRunner,
-    )
-    from app.agent.evidence_collection.external_search.service import (
-        ExternalSearchService,
-    )
-
-    return ExternalSearchService(
-        runner=ExternalSearchResearchRunner(
-            events=events,
-        ),
     )
