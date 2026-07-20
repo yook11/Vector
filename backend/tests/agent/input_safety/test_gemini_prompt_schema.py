@@ -65,11 +65,10 @@ def test_agent_declaration_uses_the_fixed_low_cost_strict_contract() -> None:
     assert thaw_schema(agent.response_schema) == schema
 
 
-def test_gemini_schema_exposes_only_strict_wire_fields_and_agent_reasons() -> None:
+def test_gemini_schema_exposes_only_strict_wire_fields_and_policy_reasons() -> None:
     schema = _schema_attribute("INPUT_SAFETY_GEMINI_SCHEMA")
     agent = _agent_attribute("INPUT_SAFETY_AGENT")
     output_type = _contract_attribute("InputSafetyAgentOutput")
-    agent_reason_type = _contract_attribute("InputSafetyAgentBlockReason")
     declared = thaw_schema(agent.response_schema)
     expected_fields = set(output_type.model_fields)  # type: ignore[union-attr]
 
@@ -78,8 +77,11 @@ def test_gemini_schema_exposes_only_strict_wire_fields_and_agent_reasons() -> No
     assert declared == schema
     assert schema["properties"]["block_reason"]["nullable"] is True  # type: ignore[index]
     assert schema["properties"]["block_reason"]["enum"] == [  # type: ignore[index]
-        reason.value
-        for reason in agent_reason_type  # type: ignore[union-attr]
+        "dangerous_or_illegal_instructions",
+        "credential_or_privacy_abuse",
+        "targeted_hate_or_harassment",
+        "sexual_exploitation",
+        "self_harm_instructions",
     ]
     assert "provider_safety_filter" not in str(schema)
     assert "is_blocked" not in str(schema)

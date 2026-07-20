@@ -90,14 +90,9 @@ class InputSafetyService:
 def _check_result_from_agent_output(
     output: InputSafetyAgentOutput,
 ) -> InputSafetyCheckResult:
-    block_reason = (
-        InputSafetyBlockReason(output.block_reason.value)
-        if output.block_reason is not None
-        else None
-    )
     return InputSafetyCheckResult(
         input_safety_result=output.input_safety_result,
-        block_reason=block_reason,
+        block_reason=output.block_reason,
     )
 
 

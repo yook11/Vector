@@ -17,14 +17,6 @@ class InputSafetyResult(StrEnum):
     BLOCK = "block"
 
 
-class InputSafetyAgentBlockReason(StrEnum):
-    DANGEROUS_OR_ILLEGAL_INSTRUCTIONS = "dangerous_or_illegal_instructions"
-    CREDENTIAL_OR_PRIVACY_ABUSE = "credential_or_privacy_abuse"
-    TARGETED_HATE_OR_HARASSMENT = "targeted_hate_or_harassment"
-    SEXUAL_EXPLOITATION = "sexual_exploitation"
-    SELF_HARM_INSTRUCTIONS = "self_harm_instructions"
-
-
 class InputSafetyBlockReason(StrEnum):
     DANGEROUS_OR_ILLEGAL_INSTRUCTIONS = "dangerous_or_illegal_instructions"
     CREDENTIAL_OR_PRIVACY_ABUSE = "credential_or_privacy_abuse"
@@ -34,17 +26,28 @@ class InputSafetyBlockReason(StrEnum):
     PROVIDER_SAFETY_FILTER = "provider_safety_filter"
 
 
+INPUT_SAFETY_POLICY_BLOCK_REASONS = (
+    InputSafetyBlockReason.DANGEROUS_OR_ILLEGAL_INSTRUCTIONS,
+    InputSafetyBlockReason.CREDENTIAL_OR_PRIVACY_ABUSE,
+    InputSafetyBlockReason.TARGETED_HATE_OR_HARASSMENT,
+    InputSafetyBlockReason.SEXUAL_EXPLOITATION,
+    InputSafetyBlockReason.SELF_HARM_INSTRUCTIONS,
+)
+
+
 class InputSafetyAgentOutput(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     input_safety_result: InputSafetyResult
-    block_reason: InputSafetyAgentBlockReason | None = None
+    block_reason: InputSafetyBlockReason | None = None
 
     @model_validator(mode="after")
     def validate_block_reason(self) -> Self:
         if self.input_safety_result is InputSafetyResult.BLOCK:
             if self.block_reason is None:
                 raise ValueError("block result must include block reason")
+            if self.block_reason not in INPUT_SAFETY_POLICY_BLOCK_REASONS:
+                raise ValueError("agent output must include policy block reason")
         elif self.block_reason is not None:
             raise ValueError("allow result cannot include block reason")
         return self

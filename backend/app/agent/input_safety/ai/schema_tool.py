@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from app.agent.input_safety.contract import InputSafetyAgentBlockReason
+from app.agent.input_safety.contract import INPUT_SAFETY_POLICY_BLOCK_REASONS
 
 INPUT_SAFETY_GEMINI_SCHEMA: dict[str, Any] = {
     "type": "OBJECT",
@@ -16,7 +16,7 @@ INPUT_SAFETY_GEMINI_SCHEMA: dict[str, Any] = {
         },
         "block_reason": {
             "type": "STRING",
-            "enum": [reason.value for reason in InputSafetyAgentBlockReason],
+            "enum": [reason.value for reason in INPUT_SAFETY_POLICY_BLOCK_REASONS],
             "nullable": True,
         },
     },

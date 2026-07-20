@@ -265,25 +265,28 @@ class InputSafetyBlockReason(StrEnum):
     PROVIDER_SAFETY_FILTER = "provider_safety_filter"
 
 
-class InputSafetyAgentBlockReason(StrEnum):
-    DANGEROUS_OR_ILLEGAL_INSTRUCTIONS = "dangerous_or_illegal_instructions"
-    CREDENTIAL_OR_PRIVACY_ABUSE = "credential_or_privacy_abuse"
-    TARGETED_HATE_OR_HARASSMENT = "targeted_hate_or_harassment"
-    SEXUAL_EXPLOITATION = "sexual_exploitation"
-    SELF_HARM_INSTRUCTIONS = "self_harm_instructions"
+INPUT_SAFETY_POLICY_BLOCK_REASONS = (
+    InputSafetyBlockReason.DANGEROUS_OR_ILLEGAL_INSTRUCTIONS,
+    InputSafetyBlockReason.CREDENTIAL_OR_PRIVACY_ABUSE,
+    InputSafetyBlockReason.TARGETED_HATE_OR_HARASSMENT,
+    InputSafetyBlockReason.SEXUAL_EXPLOITATION,
+    InputSafetyBlockReason.SELF_HARM_INSTRUCTIONS,
+)
 
 
 class InputSafetyAgentOutput(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     input_safety_result: InputSafetyResult
-    block_reason: InputSafetyAgentBlockReason | None = None
+    block_reason: InputSafetyBlockReason | None = None
 
     @model_validator(mode="after")
     def validate_block_reason(self) -> Self:
         if self.input_safety_result is InputSafetyResult.BLOCK:
             if self.block_reason is None:
                 raise ValueError("block result must include block reason")
+            if self.block_reason not in INPUT_SAFETY_POLICY_BLOCK_REASONS:
+                raise ValueError("agent output must include policy block reason")
         elif self.block_reason is not None:
             raise ValueError("allow result cannot include block reason")
         return self
@@ -351,10 +354,12 @@ class InputSafetyBlocked(Exception):
 見せる文言には使わない。
 
 `InputSafetyAgentOutput` はmodelが返せるwire contract、`InputSafetyCheckResult` はcheckerが
-Runnerへ返すapplication contractである。両者を同じ型にしない。model-visibleな
-`InputSafetyAgentBlockReason` はapplication policy由来の5理由だけを持ち、provider自身の遮断を表す
-`PROVIDER_SAFETY_FILTER` を含めない。serviceは検証済みAgent出力を同名のapplication reasonへ変換し、
-provider errorから正規化した場合だけ `PROVIDER_SAFETY_FILTER` を生成できる。
+Runnerへ返すapplication contractである。ただし `block_reason` は「なぜblockしたか」を表す同一の
+ドメイン概念なので、両contractで `InputSafetyBlockReason` を共有する。modelが返せる値は
+`INPUT_SAFETY_POLICY_BLOCK_REASONS` の5理由だけに制限し、provider自身の遮断を表す
+`PROVIDER_SAFETY_FILTER` はresponse schemaとAgent output validationの両方で拒否する。
+serviceは検証済みAgent出力のreasonを変換せずに渡し、provider errorから正規化した場合だけ
+`PROVIDER_SAFETY_FILTER` を生成できる。
 
 `input_safety_result` はmodel wire contract上の明示的な主判定である。application側は
 `is_blocked` でその判定を読み、`block_reason` の有無を判定条件にしない。`is_blocked` はPydantic

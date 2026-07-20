@@ -106,18 +106,17 @@ async def test_allow_uses_one_scope_and_one_attempt_without_audit_log(
     assert _outcome_metrics(capfire) == [{"result": "allow", "block_reason": "none"}]
 
 
-async def test_agent_block_maps_to_application_reason_and_emits_only_safe_audit(
+async def test_classifier_block_passes_the_single_reason_through_to_check_result(
     capfire: CaptureLogfire,
 ) -> None:
     output_type = _attribute("contract", "InputSafetyAgentOutput")
-    service, runtime, factory = _service(
-        [
-            output_type(  # type: ignore[operator]
-                input_safety_result="block",
-                block_reason="self_harm_instructions",
-            )
-        ]
+    reason_type = _attribute("contract", "InputSafetyBlockReason")
+    classifier_reason = reason_type.SELF_HARM_INSTRUCTIONS  # type: ignore[union-attr]
+    classifier_output = output_type(  # type: ignore[operator]
+        input_safety_result="block",
+        block_reason=classifier_reason,
     )
+    service, runtime, factory = _service([classifier_output])
     question = "QUESTION_SENTINEL_POLICY_BLOCK_87e2"
     previous_turn_type = _attribute("contract", "InputSafetyPreviousTurn")
     previous_turn = previous_turn_type(  # type: ignore[operator]
@@ -139,6 +138,8 @@ async def test_agent_block_maps_to_application_reason_and_emits_only_safe_audit(
         "input_safety_result": "block",
         "block_reason": "self_harm_instructions",
     }
+    assert classifier_output.block_reason is classifier_reason
+    assert result.block_reason is classifier_reason
     assert [call.attempt_number for call in runtime.calls] == [1]
     assert (factory.created, factory.entered, len(factory.exits)) == (1, 1, 1)
     assert len(blocked_logs) == 1
