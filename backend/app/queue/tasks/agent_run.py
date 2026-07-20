@@ -13,6 +13,7 @@ from taskiq import Context, TaskiqDepends
 from app.agent.answering.direct_answer.contract import DirectAnswerInvalidError
 from app.agent.composition import build_answering_runner
 from app.agent.contract import AnswerGenerationStopped
+from app.agent.input_safety.contract import InputSafetyBlocked
 from app.agent.live_updates.answer_delta import AgentRunLiveAnswerDeltaReporter
 from app.agent.live_updates.recent_events import AgentRunLiveEventPublisher
 from app.agent.live_updates.reporters import (
@@ -38,6 +39,7 @@ from app.agent.runs.execution_probe import AgentRunExecutionProbe
 from app.agent.runs.progress import AgentRunProgressWriter
 from app.agent.runs.repository import AgentRunRepository
 from app.agent.runs.types import AgentRunErrorCode
+from app.agent.runtime.contract import AgentResponseInvalidError
 from app.agent.threads.contracts import ThreadMessageSnapshot
 from app.agent.threads.repository import AgentThreadRepository
 from app.analysis.ai_provider_errors import (
@@ -124,6 +126,14 @@ async def run_agent_answer(
             hooks=QuestionResolvedRunHooks(events=activity_reporter),
         )
         result = run_result.final_output
+    except InputSafetyBlocked:
+        await _mark_policy_blocked(
+            session_factory,
+            prepared.run_id,
+            prepared.attempt_epoch,
+            stream_events,
+        )
+        return
     except AnswerGenerationStopped:
         logger.info(
             "agent_run_generation_stopped",
@@ -133,6 +143,7 @@ async def run_agent_answer(
     except (
         AIProviderConfigurationError,
         AIProviderError,
+        AgentResponseInvalidError,
         DirectAnswerInvalidError,
     ) as exc:
         logger.info(
@@ -266,6 +277,28 @@ async def _mark_failed(
             status="failed",
             errorCode=error_code,
         ),
+    )
+    return True
+
+
+async def _mark_policy_blocked(
+    session_factory: async_sessionmaker[AsyncSession],
+    run_id: UUID,
+    expected_attempt_epoch: int,
+    stream_events: AgentRunLiveStreamPublisher,
+) -> bool:
+    async with session_factory() as session:
+        async with session.begin():
+            transitioned = await AgentRunRepository(session).mark_policy_blocked(
+                run_id,
+                expected_attempt_epoch=expected_attempt_epoch,
+            )
+    if not transitioned:
+        return False
+    await _publish_terminal(
+        stream_events,
+        run_id,
+        AgentRunLiveStreamTerminalEvent(status="policy_blocked"),
     )
     return True
 

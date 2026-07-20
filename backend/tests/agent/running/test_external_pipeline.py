@@ -42,6 +42,7 @@ from app.agent.running import answering_runner as answering_runner_module
 from app.agent.runtime.contract import AgentResponseDefect, AgentResponseInvalidError
 from app.analysis.ai_provider_errors import AIProviderError, AIProviderNetworkError
 from app.analysis.deepseek_error_translator import DeepSeekStateReason
+from tests.agent.running._input_safety import AllowInputSafetyChecker
 from tests.agent.runtime._fakes import ScriptedAgentRuntime
 from tests.logfire._metric_helpers import collected_metrics
 
@@ -392,6 +393,7 @@ def _runner(
     )
     return (
         AnsweringRunner(
+            input_safety_checker=AllowInputSafetyChecker(),
             context_preparer=_Preparer(),
             phases_factory=lambda: phases,
             events=events,
@@ -1521,6 +1523,7 @@ async def test_cross_task_dedupe_keeps_first_and_scope_is_fresh_per_run() -> Non
         evidence_answerer=answerer,
     )
     runner = AnsweringRunner(
+        input_safety_checker=AllowInputSafetyChecker(),
         context_preparer=_Preparer(),
         phases_factory=lambda: phases,
         requested_external_agent_count=1,

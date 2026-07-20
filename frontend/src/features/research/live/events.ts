@@ -81,6 +81,10 @@ export type ResearchLiveEvent =
     })
   | (ResearchLiveEventBase & {
       type: "terminal";
+      status: "policy_blocked";
+    })
+  | (ResearchLiveEventBase & {
+      type: "terminal";
       status: "failed";
       errorCode: ResearchLiveErrorCode;
     });
@@ -189,6 +193,17 @@ export function parseResearchLiveEvent({
             type: "terminal",
             attemptEpoch,
             status: "completed",
+            streamId,
+          },
+        };
+      }
+      if (payload.status === "policy_blocked") {
+        return {
+          kind: "event",
+          event: {
+            type: "terminal",
+            attemptEpoch,
+            status: "policy_blocked",
             streamId,
           },
         };

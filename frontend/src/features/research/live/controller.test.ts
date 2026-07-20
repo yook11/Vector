@@ -37,6 +37,21 @@ type PollRunResult =
 type PollRun = (runId: string, signal: AbortSignal) => Promise<PollRunResult>;
 type RequestRefresh = () => Promise<void>;
 
+type PolicyBlockedPollRunResult = {
+  kind: "run";
+  run: {
+    status: "policy_blocked";
+    progressStage: null;
+    attemptEpoch: number | null;
+    recentEvents: readonly unknown[];
+    errorCode: null;
+  };
+};
+type PolicyBlockedPollRun = (
+  runId: string,
+  signal: AbortSignal,
+) => Promise<PolicyBlockedPollRunResult>;
+
 type PollErrorCode = Exclude<
   Extract<PollRunResult, { kind: "run" }>["run"]["errorCode"],
   undefined
@@ -52,6 +67,21 @@ function runResult(
   return {
     kind: "run",
     run: { status, progressStage, attemptEpoch, errorCode, recentEvents },
+  };
+}
+
+function policyBlockedRunResult(
+  attemptEpoch: number | null = 1,
+): PolicyBlockedPollRunResult {
+  return {
+    kind: "run",
+    run: {
+      status: "policy_blocked",
+      progressStage: null,
+      attemptEpoch,
+      recentEvents: [],
+      errorCode: null,
+    },
   };
 }
 
@@ -964,6 +994,79 @@ describe("createResearchRunLiveController", () => {
   });
 
   describe("terminal and finalization", () => {
+    it("converges an SSE policy_blocked terminal without finalizing or failing", () => {
+      const harness = createHarness();
+      harness.source.emit(
+        "answer.delta",
+        { attemptEpoch: 1, generation: 1, text: "破棄する下書き" },
+        "1-0",
+      );
+      harness.source.emit(
+        "terminal",
+        {
+          attemptEpoch: 1,
+          status: "policy_blocked",
+          blockReason: "provider_safety_filter",
+        },
+        "2-0",
+      );
+
+      expect(harness.controller.getSnapshot()).toMatchObject({
+        connectionMode: "terminal",
+        runStatus: "policy_blocked",
+        liveState: {
+          terminal: { status: "policy_blocked" },
+          draftText: "",
+          draftMode: "suppressed",
+        },
+      });
+      expect(
+        harness.controller.getSnapshot().liveState.terminal,
+      ).not.toHaveProperty("errorCode");
+      expect(harness.source.closeCount).toBe(1);
+      expect(harness.refresh).toHaveBeenCalledTimes(1);
+
+      harness.source.emit(
+        "terminal",
+        { attemptEpoch: 1, status: "policy_blocked" },
+        "3-0",
+      );
+      expect(harness.refresh).toHaveBeenCalledTimes(1);
+
+      harness.unsubscribe();
+    });
+
+    it("converges a polling policy_blocked terminal and suppresses an SSE draft", async () => {
+      const pending = deferred<PolicyBlockedPollRunResult>();
+      const pollRun = vi
+        .fn<PolicyBlockedPollRun>()
+        .mockReturnValue(pending.promise);
+      const harness = createHarness(
+        pollRun as unknown as ReturnType<typeof vi.fn<PollRun>>,
+      );
+      harness.source.emit(
+        "answer.delta",
+        { attemptEpoch: 1, generation: 1, text: "poll前の下書き" },
+        "1-0",
+      );
+
+      pending.resolve(policyBlockedRunResult());
+      await flushPromises();
+
+      expect(harness.controller.getSnapshot()).toMatchObject({
+        connectionMode: "terminal",
+        runStatus: "policy_blocked",
+        liveState: {
+          terminal: { status: "policy_blocked" },
+          draftText: "",
+          draftMode: "suppressed",
+        },
+      });
+      expect(harness.refresh).toHaveBeenCalledTimes(1);
+
+      harness.unsubscribe();
+    });
+
     it.each([
       ["completed", null, { status: "completed" }],
       ["failed", null, { status: "failed", errorCode: "internal_error" }],

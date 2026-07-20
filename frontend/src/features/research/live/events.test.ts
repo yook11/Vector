@@ -103,6 +103,20 @@ describe("parseResearchLiveEvent", () => {
           streamId: streamId(),
         },
       },
+      {
+        eventName: "terminal",
+        data: {
+          attemptEpoch: 7,
+          status: "policy_blocked",
+          internalReason: "provider_safety_filter",
+        },
+        expected: {
+          type: "terminal",
+          attemptEpoch: 7,
+          status: "policy_blocked",
+          streamId: streamId(),
+        },
+      },
     ])("projects $eventName without unknown fields", ({
       eventName,
       data,
@@ -324,6 +338,31 @@ describe("parseResearchLiveEvent", () => {
   });
 
   describe("terminal normalization", () => {
+    it("accepts policy_blocked without requiring or exposing errorCode", () => {
+      const result = parse("terminal", {
+        attemptEpoch: 1,
+        status: "policy_blocked",
+      });
+
+      expect(result).toEqual({
+        kind: "event",
+        event: {
+          type: "terminal",
+          attemptEpoch: 1,
+          status: "policy_blocked",
+          streamId: streamId(),
+        },
+      });
+      if (
+        result.kind !== "event" ||
+        result.event.type !== "terminal" ||
+        result.event.status !== "policy_blocked"
+      ) {
+        throw new Error("policy_blocked terminal was not parsed");
+      }
+      expect(result.event).not.toHaveProperty("errorCode");
+    });
+
     it("drops an unknown terminal status", () => {
       expect(
         parse("terminal", { attemptEpoch: 1, status: "cancelled" }),

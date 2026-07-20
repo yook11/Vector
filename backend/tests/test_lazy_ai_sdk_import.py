@@ -31,6 +31,8 @@ _NON_AI_IMPORT_SURFACES = {
     "api": "import app.main",
     # API route / schema import で app.agent package が読まれても SDK-free に保つ。
     "agent_package": "import app.agent",
+    # AnsweringRunner composition はInput Safety Agentを配線してもSDK-freeに保つ。
+    "agent_composition": "import app.agent.composition",
     # scheduler.conf: python -m app.queue.scheduler_entrypoint (5 cron scheduler 統合)。
     # entrypoint は schedulers + registry を import するため最広の import surface。
     "scheduler": "import app.queue.scheduler_entrypoint",

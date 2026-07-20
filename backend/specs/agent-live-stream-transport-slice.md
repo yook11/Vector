@@ -6,6 +6,9 @@
 
 後続の前提更新: `agent-attempt-epoch-fencing-token-slice.md`。
 
+後続契約更新: `agent-input-safety-gate-slice.md` はterminal statusへ `policy_blocked` を追加する。
+Input Safety実装後のstatus unionとfrontend収束は同仕様をSSoTとする。
+
 本 slice は、回答下書き・進捗・terminal event を将来 SSE で届けるための、
 **Redis Stream の保存・再開基盤だけ**を作る。HTTP endpoint、Next.js BFF、
 browser、Gemini のstreaming化は後続sliceの責務である。

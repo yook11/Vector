@@ -800,6 +800,72 @@ async def test_real_redis_passes_events_after_terminal() -> None:
         await redis.aclose()
 
 
+@pytest.mark.asyncio
+async def test_policy_blocked_terminal_replays_without_an_error_code() -> None:
+    redis = MemoryRedis()
+    publisher = AgentRunLiveStreamPublisher(redis, RUN_ID, EPOCH_1)
+
+    await publisher.begin_attempt()
+    await publisher.publish(AgentRunLiveStreamTerminalEvent(status="policy_blocked"))
+    result = await AgentRunLiveStreamReader(redis).read_after(RUN_ID, EPOCH_1, None)
+
+    assert result.status is AgentRunLiveStreamReadStatus.EVENTS
+    assert result.events[-1].event == AgentRunLiveStreamTerminalEvent(
+        status="policy_blocked"
+    )
+
+
+@pytest.mark.parametrize(
+    ("payload", "expected"),
+    [
+        ({"status": "completed"}, {"status": "completed"}),
+        ({"status": "policy_blocked"}, {"status": "policy_blocked"}),
+        (
+            {"status": "failed", "errorCode": "internal_error"},
+            {"status": "failed", "errorCode": "internal_error"},
+        ),
+    ],
+)
+def test_terminal_event_valid_forms_round_trip(
+    payload: dict[str, str],
+    expected: dict[str, str],
+) -> None:
+    event = AgentRunLiveStreamTerminalEvent.model_validate(payload)
+
+    encoded = event.model_dump(mode="json", by_alias=True, exclude_none=True)
+
+    assert encoded == {"type": "terminal", **expected}
+    assert AgentRunLiveStreamTerminalEvent.model_validate(encoded) == event
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {"status": "completed", "errorCode": "internal_error"},
+        {"status": "policy_blocked", "errorCode": "internal_error"},
+        {"status": "failed", "errorCode": None},
+    ],
+)
+def test_terminal_event_rejects_status_error_code_mismatch(
+    payload: dict[str, str | None],
+) -> None:
+    with pytest.raises(ValidationError):
+        AgentRunLiveStreamTerminalEvent.model_validate(payload)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("status", ["completed", "policy_blocked"])
+async def test_non_error_terminal_encoding_omits_error_code_key(status: str) -> None:
+    redis = MemoryRedis()
+    publisher = AgentRunLiveStreamPublisher(redis, RUN_ID, EPOCH_1)
+
+    await publisher.begin_attempt()
+    await publisher.publish(AgentRunLiveStreamTerminalEvent(status=status))  # type: ignore[arg-type]
+
+    payload = json.loads(redis.entries[-1][1]["payload"])
+    assert payload == {"status": status}
+
+
 def _envelope(
     epoch: int,
     *,

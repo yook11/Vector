@@ -1,5 +1,8 @@
 # Agent Research live UI slice 仕様
 
+> 後続契約更新: `backend/specs/agent-input-safety-gate-slice.md` はterminal statusへ
+> `policy_blocked`を追加し、assistant messageではないpolicy noticeへ収束させる。
+
 Status: Implemented — 2026-07-13
 
 親仕様: `../../backend/specs/agent-answer-streaming-sse.md`

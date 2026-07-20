@@ -27,6 +27,7 @@ class CancelRunOutcome(StrEnum):
     CANCELLED = "cancelled"
     ALREADY_FAILED = "already_failed"
     ALREADY_COMPLETED = "already_completed"
+    ALREADY_POLICY_BLOCKED = "already_policy_blocked"
 
 
 @dataclass(frozen=True, slots=True)

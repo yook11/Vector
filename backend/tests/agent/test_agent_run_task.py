@@ -30,6 +30,10 @@ from app.agent.contract import (
     ExternalUrlSource,
     InternalArticleSource,
 )
+from app.agent.input_safety.contract import (
+    InputSafetyBlocked,
+    InputSafetyBlockReason,
+)
 from app.agent.live_updates.reporters import AgentRunLiveActivityReporter
 from app.agent.live_updates.stream import (
     AgentRunLiveStreamActivityEvent,
@@ -57,6 +61,7 @@ from app.agent.runs.result_mapper import (
     build_source_rows_for_message,
 )
 from app.agent.runs.types import AgentRunStatus
+from app.agent.runtime.contract import AgentResponseDefect, AgentResponseInvalidError
 from app.agent.threads.contracts import ThreadMessageSnapshot
 from app.agent.threads.projection import build_research_assistant_message
 from app.agent.threads.repository import AgentThreadRepository
@@ -1407,6 +1412,147 @@ async def test_run_agent_answer_publishes_failed_terminal_after_commit(
 
 
 @pytest.mark.asyncio
+async def test_input_safety_block_commits_policy_terminal_before_publishing(
+    session_factory: async_sessionmaker[AsyncSession],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async with session_factory() as session:
+        _thread, _message, run = await _create_thread_message_run(session)
+    safety_block = InputSafetyBlocked(
+        block_reason=InputSafetyBlockReason.SELF_HARM_INSTRUCTIONS,
+    )
+    answering_runner = FakeAnsweringRunner(exc=safety_block)
+    execution = FakeAgent(_direct_result())
+    FakeLiveEventPublisher.instances = []
+    FakeLiveStreamPublisher.instances = []
+
+    class CommitCheckingPublisher(FakeLiveStreamPublisher):
+        async def publish(self, event: object) -> str | None:
+            if isinstance(event, AgentRunLiveStreamTerminalEvent):
+                async with session_factory() as session:
+                    persisted = await session.get(AgentRun, run.id)
+                    assert persisted is not None
+                    assert persisted.status == "policy_blocked"
+                    assert persisted.assistant_message_id is None
+                    assert persisted.error_code is None
+                    assert persisted.progress_stage is None
+            return await super().publish(event)
+
+    async def forbidden_mark_failed(*_args: object, **_kwargs: object) -> bool:
+        pytest.fail("policy block must not be converted to a failed run")
+
+    _patch_worker_execution(
+        monkeypatch,
+        lambda **_kwargs: execution,
+        answering_runner=answering_runner,
+    )
+    monkeypatch.setattr(
+        agent_run_tasks,
+        "AgentRunLiveEventPublisher",
+        FakeLiveEventPublisher,
+    )
+    monkeypatch.setattr(
+        agent_run_tasks,
+        "AgentRunLiveStreamPublisher",
+        CommitCheckingPublisher,
+    )
+    monkeypatch.setattr(AgentRunRepository, "mark_failed", forbidden_mark_failed)
+
+    await agent_run_tasks.run_agent_answer(
+        trigger=AgentRunTrigger(run_id=run.id),
+        ctx=_ctx(session_factory),
+    )
+
+    stream = FakeLiveStreamPublisher.instances[0]
+    assert len(answering_runner.calls) == 1
+    assert execution.calls == []
+    assert FakeLiveEventPublisher.instances[0].events == []
+    assert stream.published == [
+        AgentRunLiveStreamTerminalEvent(status="policy_blocked")
+    ]
+    async with session_factory() as session:
+        persisted = await session.get(AgentRun, run.id)
+        messages = (
+            (
+                await session.execute(
+                    select(AgentMessage.role).where(
+                        AgentMessage.thread_id == run.thread_id
+                    )
+                )
+            )
+            .scalars()
+            .all()
+        )
+
+    assert persisted is not None
+    assert persisted.status == "policy_blocked"
+    assert messages == ["user"]
+
+
+@pytest.mark.asyncio
+async def test_input_safety_block_lost_transition_has_no_terminal(
+    session_factory: async_sessionmaker[AsyncSession],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async with session_factory() as session:
+        _thread, _message, run = await _create_thread_message_run(session)
+    answering_runner = FakeAnsweringRunner(
+        exc=InputSafetyBlocked(
+            block_reason=InputSafetyBlockReason.PROVIDER_SAFETY_FILTER,
+        )
+    )
+    execution = FakeAgent(_direct_result())
+    FakeLiveEventPublisher.instances = []
+    FakeLiveStreamPublisher.instances = []
+
+    async def lose_policy_blocked_transition(
+        _repository: AgentRunRepository,
+        run_id: UUID,
+        *,
+        expected_attempt_epoch: int,
+    ) -> bool:
+        assert (run_id, expected_attempt_epoch) == (run.id, 1)
+        return False
+
+    async def forbidden_mark_failed(*_args: object, **_kwargs: object) -> bool:
+        pytest.fail("policy block race must not fall through to failed")
+
+    _patch_worker_execution(
+        monkeypatch,
+        lambda **_kwargs: execution,
+        answering_runner=answering_runner,
+    )
+    monkeypatch.setattr(
+        agent_run_tasks,
+        "AgentRunLiveEventPublisher",
+        FakeLiveEventPublisher,
+    )
+    monkeypatch.setattr(
+        agent_run_tasks,
+        "AgentRunLiveStreamPublisher",
+        FakeLiveStreamPublisher,
+    )
+    monkeypatch.setattr(
+        AgentRunRepository,
+        "mark_policy_blocked",
+        lose_policy_blocked_transition,
+    )
+    monkeypatch.setattr(AgentRunRepository, "mark_failed", forbidden_mark_failed)
+
+    await agent_run_tasks.run_agent_answer(
+        trigger=AgentRunTrigger(run_id=run.id),
+        ctx=_ctx(session_factory),
+    )
+
+    assert FakeLiveStreamPublisher.instances[0].published == []
+    async with session_factory() as session:
+        persisted = await session.get(AgentRun, run.id)
+
+    assert persisted is not None
+    assert persisted.status == "running"
+
+
+@pytest.mark.asyncio
 async def test_generation_stopped_is_routine_return_without_run_transition(
     session_factory: async_sessionmaker[AsyncSession],
     monkeypatch: pytest.MonkeyPatch,
@@ -2396,8 +2542,9 @@ async def test_complete_run_warns_on_citation_source_mismatch_without_failing_ru
         AIProviderConfigurationError(),
         AIProviderError("SHOULD_NOT_LEAK"),
         DirectAnswerInvalidError(),
+        AgentResponseInvalidError(AgentResponseDefect.OUTPUT_SCHEMA_MISMATCH),
     ],
-    ids=("configuration", "provider", "direct-draft"),
+    ids=("configuration", "provider", "direct-draft", "invalid-agent-output"),
 )
 async def test_run_agent_answer_generation_error_marks_failed_without_leaking_message(
     session_factory: async_sessionmaker[AsyncSession],

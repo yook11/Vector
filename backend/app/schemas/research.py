@@ -59,7 +59,13 @@ class ResearchDailyRequestLimitExceededResponse(_CamelBase):
     reset_at: AwareDatetime
 
 
-ResearchRunStatus = Literal["queued", "running", "completed", "failed"]
+ResearchRunStatus = Literal[
+    "queued",
+    "running",
+    "completed",
+    "policy_blocked",
+    "failed",
+]
 ResearchRunErrorCode = Literal[
     "generation_unavailable",
     "internal_error",

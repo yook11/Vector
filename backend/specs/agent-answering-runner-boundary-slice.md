@@ -1,12 +1,13 @@
 # Agent answering Runner 境界抽出 slice 仕様
 
-更新日: 2026-07-16
+更新日: 2026-07-20
 
 実装状況: Implemented
 
 > 後続設計: `agent-declaration-runner-orchestration-slice.md` は、このsliceで抽出したRunner境界を
 > 維持しつつ、将来のworkflow ownerを`AnsweringRunner`へ移し、役割別AgentとToolを明示する。
 > 本文のOrchestrator / ExternalSearchResearchRunner維持は、この実装slice内の移行制約として読む。
+> Input safetyの最終配置は`agent-input-safety-gate-slice.md`をSSoTとし、本仕様§12の更新を適用する。
 
 ## 位置付け
 
@@ -754,21 +755,25 @@ Redis publisher の具象型を `running` package へ渡さない。
 
 ### 12. input safety の allow 後に起動できる境界を維持する
 
-`agent-input-safety-gate-slice.md` は、`allow` 確定前に `QuestionContextGenerator`、Tavily client、
-Planner、retrieval、answer generator を構築・呼び出ししないことを要求する。
+`agent-input-safety-gate-slice.md` は、`allow` 確定前にQuestion Context以降のprovider runtime、
+Tavily client、Planner、retrieval、answer Agentを起動しないことを要求する。
 
-本 slice の Runner は「safety 判定後の通常回答フロー」の境界とする。
-input safety 実装後の順序は次である。
+2026-07-20のAgent / Runner責務移行により、将来配置は
+`agent-input-safety-gate-slice.md`の更新仕様が本節を上書きする。Input Safety Agentは
+`AnsweringRunner.run()`の明示的な先頭phaseとし、workerはsemantic phaseの順序を所有しない。
+input safety実装後の順序は次である。
 
 ```text
-acquire -> history -> input safety
-  ├─ block  -> fixed refusal persistence -> completed
-  ├─ failed -> failed(generation_unavailable)
-  └─ allow  -> build Runner/starting_agent -> Runner.run()
+acquire -> history -> build AnsweringRunner -> Runner.run
+  ├─ input safety block  -> raise InputSafetyBlocked
+  │                         -> worker marks run policy_blocked -> terminal
+  ├─ input safety failed -> failed(generation_unavailable)
+  └─ input safety allow  -> question context -> planning -> retrieval -> answer
 ```
 
-input safety を `Runner` 内の middleware に移さない。これにより、block で通常 agent の
-具象依存を作らないという先行仕様の短絡境界を保つ。
+input safetyをmiddlewareへ隠さず、Runnerの主制御から最初の工程として読める形にする。
+RunnerとimmutableなAgent宣言はsafety前に構築できるが、allow確定前にQuestion Context以降の
+provider runtime、Tool client、answering phasesをactivateしない。
 
 ### 13. OpenAI Agents SDK の全引数を複製しない
 

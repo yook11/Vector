@@ -7,7 +7,7 @@ import json
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from enum import StrEnum
-from typing import Annotated, Any, Literal
+from typing import Annotated, Any, Literal, Self
 from uuid import UUID
 
 import redis.asyncio as aioredis
@@ -19,6 +19,7 @@ from pydantic import (
     TypeAdapter,
     ValidationError,
     field_validator,
+    model_validator,
 )
 
 from app.agent.contract import AnswerProgressEvent
@@ -63,8 +64,17 @@ class AgentRunLiveStreamAnswerResetEvent(_StreamEventBase):
 
 class AgentRunLiveStreamTerminalEvent(_StreamEventBase):
     type: Literal["terminal"] = "terminal"
-    status: Literal["completed", "failed"]
+    status: Literal["completed", "policy_blocked", "failed"]
     error_code: AgentRunErrorCode | None = Field(default=None, alias="errorCode")
+
+    @model_validator(mode="after")
+    def validate_error_code(self) -> Self:
+        if self.status == "failed":
+            if self.error_code is None:
+                raise ValueError("failed terminal requires error code")
+        elif self.error_code is not None:
+            raise ValueError("non-error terminal cannot include error code")
+        return self
 
 
 AgentRunLiveStreamEvent = Annotated[
@@ -322,7 +332,7 @@ def _encode_envelope(
     event: AgentRunLiveStreamEvent,
     attempt_epoch: int,
 ) -> dict[str, str]:
-    payload = event.model_dump(mode="json", by_alias=True)
+    payload = event.model_dump(mode="json", by_alias=True, exclude_none=True)
     event_type = payload.pop("type")
     return {
         "type": event_type,

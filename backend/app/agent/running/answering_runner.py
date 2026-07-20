@@ -81,6 +81,12 @@ from app.agent.evidence_collection.internal_search.contract import InternalSearc
 from app.agent.evidence_collection.internal_search.query_embedding import (
     InternalSearchQueries,
 )
+from app.agent.input_safety.contract import (
+    INPUT_SAFETY_TEXT_CHAR_CAP,
+    InputSafetyBlocked,
+    InputSafetyChecker,
+    InputSafetyPreviousTurn,
+)
 from app.agent.planning.contract import (
     ExternalResearchTask,
     ExternalSearchPlan,
@@ -121,12 +127,14 @@ class AnsweringRunner:
     def __init__(
         self,
         *,
+        input_safety_checker: InputSafetyChecker,
         context_preparer: QuestionContextPreparer,
         phases_factory: AnsweringPhasesFactory,
         progress: AnswerProgressReporter | None = None,
         events: AnswerEventReporter | None = None,
         requested_external_agent_count: int | None = None,
     ) -> None:
+        self._input_safety_checker = input_safety_checker
         self._context_preparer = context_preparer
         self._phases_factory = phases_factory
         self._progress = progress
@@ -141,6 +149,15 @@ class AnsweringRunner:
         hooks: RunHooks | None = None,
     ) -> RunResult:
         with _answering_run_span(run_id=run_context.run_id):
+            safety_check = await self._input_safety_checker.check(
+                question=input.question[:INPUT_SAFETY_TEXT_CHAR_CAP],
+                previous_turn=_previous_turn(input.history),
+                run_id=run_context.run_id,
+            )
+            if safety_check.is_blocked:
+                assert safety_check.block_reason is not None  # noqa: S101
+                raise InputSafetyBlocked(block_reason=safety_check.block_reason)
+
             preparation = await self._context_preparer.prepare(
                 question=input.question,
                 history=list(input.history),
@@ -735,14 +752,33 @@ def _external_agent_phase(
 @contextmanager
 def _answering_run_span(*, run_id: UUID) -> Iterator[None]:
     """正常な停止制御を error にせず、同じ例外を span 終了後に再送出する。"""
-    stopped: AnswerGenerationStopped | None = None
+    stopped: AnswerGenerationStopped | InputSafetyBlocked | None = None
     with logfire.span(_SPAN_NAME, run_id=str(run_id)):
         try:
             yield
-        except AnswerGenerationStopped as exc:
+        except (AnswerGenerationStopped, InputSafetyBlocked) as exc:
             stopped = exc
     if stopped is not None:
         raise stopped
+
+
+def _previous_turn(
+    history: tuple[ThreadMessageSnapshot, ...],
+) -> InputSafetyPreviousTurn | None:
+    for index in range(len(history) - 1, -1, -1):
+        message = history[index]
+        if message.role != "user":
+            continue
+        assistant_answer: str | None = None
+        if index + 1 < len(history):
+            next_message = history[index + 1]
+            if next_message.role == "assistant" and next_message.content:
+                assistant_answer = next_message.content[:INPUT_SAFETY_TEXT_CHAR_CAP]
+        return InputSafetyPreviousTurn(
+            user_question=message.content[:INPUT_SAFETY_TEXT_CHAR_CAP],
+            assistant_answer=assistant_answer,
+        )
+    return None
 
 
 def _latest_assistant_answer(

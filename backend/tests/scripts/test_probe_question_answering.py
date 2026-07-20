@@ -65,6 +65,8 @@ def test_probe_uses_answering_runner_without_removed_external_pipeline_seams() -
         {
             "AnsweringPhases",
             "AnsweringRunner",
+            "INPUT_SAFETY_AGENT",
+            "InputSafetyService",
             "RunContext",
             "RunInput",
             "build_external_research_runtime_factory",
@@ -109,6 +111,7 @@ def test_external_probe_injects_requested_count_and_events_into_runner() -> None
     ) == (
         1,
         {
+            "input_safety_checker",
             "context_preparer",
             "phases_factory",
             "events",
@@ -116,6 +119,40 @@ def test_external_probe_injects_requested_count_and_events_into_runner() -> None
         },
         True,
     )
+
+
+def test_both_probe_paths_construct_runner_with_input_safety_service() -> None:
+    tree = _probe_tree()
+
+    for function_name in ("_probe_direct", "_probe_external"):
+        runner_calls = [
+            node
+            for node in ast.walk(_function(tree, function_name))
+            if isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Name)
+            and node.func.id == "AnsweringRunner"
+        ]
+
+        assert len(runner_calls) == 1
+        input_safety_keyword = next(
+            keyword
+            for keyword in runner_calls[0].keywords
+            if keyword.arg == "input_safety_checker"
+        )
+        assert isinstance(input_safety_keyword.value, ast.Call)
+        assert isinstance(input_safety_keyword.value.func, ast.Name)
+        assert input_safety_keyword.value.func.id == "InputSafetyService"
+        assert {keyword.arg for keyword in input_safety_keyword.value.keywords} == {
+            "agent",
+            "runtime_scope_factory",
+        }
+        agent_keyword = next(
+            keyword
+            for keyword in input_safety_keyword.value.keywords
+            if keyword.arg == "agent"
+        )
+        assert isinstance(agent_keyword.value, ast.Name)
+        assert agent_keyword.value.id == "INPUT_SAFETY_AGENT"
 
 
 def test_probe_summary_uses_final_result_and_event_progress_not_internal_outcome() -> (

@@ -10,6 +10,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type {
   ResearchAssistantMessage,
   ResearchMessageRun,
+  ResearchRunResponse,
   ResearchThreadDetail,
   ResearchUserMessage,
 } from "@/types/types.gen";
@@ -19,6 +20,13 @@ const THREAD_ONE = "00000000-0000-4000-a000-000000000001";
 const THREAD_TWO = "00000000-0000-4000-a000-000000000002";
 const RUN_ONE = "00000000-0000-4000-a000-000000000010";
 const RUN_TWO = "00000000-0000-4000-a000-000000000020";
+const POLICY_BLOCKED_NOTICE =
+  "この依頼は安全上のポリシーにより処理されませんでした。";
+
+const GENERATED_POLICY_BLOCKED_STATUSES: [
+  Extract<ResearchMessageRun["status"], "policy_blocked">,
+  Extract<ResearchRunResponse["status"], "policy_blocked">,
+] = ["policy_blocked", "policy_blocked"];
 
 interface ScrollCapture {
   containerRef: { readonly current: HTMLElement | null };
@@ -132,6 +140,15 @@ function run(
     errorCode,
     progressStage: status === "running" ? "planning" : null,
   };
+}
+
+function policyBlockedRun(runId = RUN_ONE): ResearchMessageRun {
+  return {
+    runId,
+    status: "policy_blocked",
+    errorCode: null,
+    progressStage: null,
+  } as unknown as ResearchMessageRun;
 }
 
 function userMessage(
@@ -520,6 +537,51 @@ describe("ResearchThreadView live integration", () => {
     onlyLiveAnnouncer(view.container);
   });
 
+  it("renders a persisted policy_blocked run as one accessible notice, never an answer", () => {
+    const view = render(
+      <ResearchThreadView thread={thread([userMessage(policyBlockedRun())])} />,
+    );
+    const question = screen.getByText("このニュースの影響は？");
+    const questionArticle = question.closest("article");
+    const notice = screen.getByRole("status", {
+      name: POLICY_BLOCKED_NOTICE,
+    });
+
+    expect(GENERATED_POLICY_BLOCKED_STATUSES).toEqual([
+      "policy_blocked",
+      "policy_blocked",
+    ]);
+    expect(onlyVisibleText(POLICY_BLOCKED_NOTICE)).toBe(notice);
+    expect(
+      screen.getAllByRole("status", { name: POLICY_BLOCKED_NOTICE }),
+    ).toHaveLength(1);
+    expect(questionArticle).not.toBeNull();
+    if (questionArticle === null || questionArticle.parentElement === null) {
+      throw new Error("question turn is missing");
+    }
+    const noticeRail = directChildContaining(
+      questionArticle.parentElement,
+      notice,
+    );
+    expect(questionArticle.nextElementSibling).toBe(noticeRail);
+    expect(notice.closest('[data-testid="research-answer-slot"]')).toBeNull();
+    expect(
+      screen.queryByTestId("research-answer-slot"),
+    ).not.toBeInTheDocument();
+    expect(screen.queryByText("回答を生成中…")).not.toBeInTheDocument();
+    expect(screen.queryByText("回答を確定しています…")).not.toBeInTheDocument();
+    expect(
+      screen.queryByText("回答を生成できませんでした"),
+    ).not.toBeInTheDocument();
+    expect(screen.queryByText("確認できなかった点")).not.toBeInTheDocument();
+    expect(screen.queryByText("回答が完了しました")).not.toBeInTheDocument();
+    const announcer = view.container.querySelector<HTMLElement>(
+      ".sr-only[role='status']",
+    );
+    expect(announcer).not.toBeNull();
+    expect(announcer).toBeEmptyDOMElement();
+  });
+
   it("connects the scroll container and changes content revision only for answer content", () => {
     const view = render(<ResearchThreadView thread={activeThread()} />);
     const questionArticle = screen
@@ -773,6 +835,56 @@ describe("ResearchThreadView live integration", () => {
     expect(
       screen.queryByText("INTERNAL_PAYLOAD_SHOULD_NOT_LEAK"),
     ).not.toBeInTheDocument();
+  });
+
+  it("replaces a live draft with one policy notice without failure or completion semantics", () => {
+    const view = render(<ResearchThreadView thread={activeThread()} />);
+    const source = currentSource();
+    const announcer = onlyLiveAnnouncer(view.container);
+
+    act(() => {
+      source.emit(
+        "answer.delta",
+        { attemptEpoch: 1, generation: 1, text: "破棄する下書き" },
+        "1-0",
+      );
+      source.emit(
+        "terminal",
+        {
+          attemptEpoch: 1,
+          status: "policy_blocked",
+          blockReason: "provider_safety_filter",
+        },
+        "2-0",
+      );
+      source.emit(
+        "terminal",
+        { attemptEpoch: 1, status: "policy_blocked" },
+        "3-0",
+      );
+    });
+
+    expect(screen.queryByText("破棄する下書き")).not.toBeInTheDocument();
+    expect(
+      screen.queryByTestId("research-answer-slot"),
+    ).not.toBeInTheDocument();
+    expect(onlyVisibleText(POLICY_BLOCKED_NOTICE)).toBe(
+      screen.getByRole("status", { name: POLICY_BLOCKED_NOTICE }),
+    );
+    expect(
+      screen.getAllByRole("status", { name: POLICY_BLOCKED_NOTICE }),
+    ).toHaveLength(1);
+    expect(screen.queryByText("回答を生成中…")).not.toBeInTheDocument();
+    expect(screen.queryByText("回答を確定しています…")).not.toBeInTheDocument();
+    expect(
+      screen.queryByText("回答を生成できませんでした"),
+    ).not.toBeInTheDocument();
+    expect(screen.queryByText("回答が完了しました")).not.toBeInTheDocument();
+    expect(announcer).toBeEmptyDOMElement();
+    expect(
+      screen.queryByText("provider_safety_filter"),
+    ).not.toBeInTheDocument();
+    expect(mocks.refresh).toHaveBeenCalledTimes(1);
   });
 
   it("keeps one failed turn, failure rail, focus, and announcement across live-to-persisted convergence", () => {

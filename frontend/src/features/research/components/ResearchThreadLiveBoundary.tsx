@@ -31,6 +31,8 @@ const FailedContractionRevisionContext = createContext<(() => void) | null>(
 const ActiveRunSnapshotContext = createContext<ResearchRunLiveSnapshot | null>(
   null,
 );
+const POLICY_BLOCKED_NOTICE =
+  "この依頼は安全上のポリシーにより処理されませんでした。";
 
 interface ResearchLiveScrollRegionProps {
   finalContentKey: string;
@@ -170,6 +172,8 @@ export function ResearchActiveRunBoundary({
       announcement = failureText(
         terminal?.status === "failed" ? terminal.errorCode : null,
       );
+    } else if (snapshot.runStatus === "policy_blocked") {
+      announcement = "";
     } else if (snapshot.runStatus === "completed") {
       announcement = "回答を確定しています…";
     } else if (
@@ -220,6 +224,10 @@ export function ResearchRunStatusRail({
     snapshot.liveState.terminal?.status === "failed"
       ? snapshot.liveState.terminal
       : null;
+  const isPolicyBlocked =
+    run.status === "policy_blocked" ||
+    snapshot?.runStatus === "policy_blocked" ||
+    snapshot?.liveState.terminal?.status === "policy_blocked";
   const isFailed = run.status === "failed" || liveFailure !== null;
   const previousIsFailed = useRef(isFailed);
 
@@ -230,6 +238,17 @@ export function ResearchRunStatusRail({
     previousIsFailed.current = isFailed;
   }, [isFailed, markFailedContraction]);
 
+  if (isPolicyBlocked) {
+    return (
+      <div
+        role="status"
+        aria-label={POLICY_BLOCKED_NOTICE}
+        className="mt-2 min-w-0 text-xs text-[var(--vector-ink-muted)]"
+      >
+        {POLICY_BLOCKED_NOTICE}
+      </div>
+    );
+  }
   if (isFailed) {
     return (
       <div
@@ -269,7 +288,12 @@ export function ResearchRunAnswerSlot({
   finalAnswer,
 }: ResearchRunAnswerSlotProps) {
   const snapshot = useContext(ActiveRunSnapshotContext);
+  const isPolicyBlocked =
+    run.status === "policy_blocked" ||
+    snapshot?.runStatus === "policy_blocked" ||
+    snapshot?.liveState.terminal?.status === "policy_blocked";
   const isFailed = run.status === "failed" || snapshot?.runStatus === "failed";
+  if (isPolicyBlocked) return null;
   if (isFailed) return null;
 
   if (finalAnswer !== null) {

@@ -25,6 +25,8 @@ from app.agent.evidence_collection.external_search.contract import (
     ExternalResearchRuntime,
     ExternalResearchRuntimeFactory,
 )
+from app.agent.input_safety.agent import INPUT_SAFETY_AGENT
+from app.agent.input_safety.service import InputSafetyService
 from app.agent.planning.agent import QUESTION_PLANNER_AGENT
 from app.agent.question_context.agent import QUESTION_CONTEXT_AGENT
 from app.agent.question_context.service import QuestionContextService
@@ -129,6 +131,10 @@ def build_answering_runner(
         else None
     )
     return AnsweringRunner(
+        input_safety_checker=InputSafetyService(
+            agent=INPUT_SAFETY_AGENT,
+            runtime_scope_factory=activate_gemini_agent_runtime,
+        ),
         context_preparer=QuestionContextService(
             agent=QUESTION_CONTEXT_AGENT,
             runtime_scope_factory=question_context_runtime_factory,

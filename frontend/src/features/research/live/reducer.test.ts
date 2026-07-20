@@ -124,6 +124,18 @@ function failed(raw: string, attemptEpoch: number): ResearchLiveTerminalEvent {
   };
 }
 
+function policyBlocked(
+  raw: string,
+  attemptEpoch: number,
+): ResearchLiveTerminalEvent {
+  return {
+    type: "terminal",
+    attemptEpoch,
+    status: "policy_blocked",
+    streamId: streamId(raw),
+  } as unknown as ResearchLiveTerminalEvent;
+}
+
 function apply(
   state: ReturnType<typeof createInitialResearchLiveState>,
   event: ResearchLiveEvent,
@@ -426,6 +438,25 @@ describe("research live reducer", () => {
   });
 
   describe("terminal acceptance and absorption", () => {
+    it("accepts policy_blocked as an absorbing terminal that clears the draft", () => {
+      const transition = reduceResearchLiveEvent(
+        populatedAttemptOne(),
+        policyBlocked("5-0", 1),
+      );
+
+      expect(transition).toMatchObject({
+        acceptedTerminal: { status: "policy_blocked" },
+        state: {
+          terminal: { status: "policy_blocked" },
+          draftText: "",
+          draftMode: "suppressed",
+        },
+      });
+      expect(
+        reduceResearchLiveEvent(transition.state, policyBlocked("6-0", 1)),
+      ).toEqual({ state: transition.state, acceptedTerminal: null });
+    });
+
     it.each([
       completed("5-0", 1),
       failed("5-0", 1),

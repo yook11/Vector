@@ -12,7 +12,13 @@ from app.agent.runs.types import (
 from app.models.agent_run import AgentRun
 from app.schemas.research import ResearchMessageRun, ResearchRunResponse
 
-ResearchRunStatusValue = Literal["queued", "running", "completed", "failed"]
+ResearchRunStatusValue = Literal[
+    "queued",
+    "running",
+    "completed",
+    "policy_blocked",
+    "failed",
+]
 ResearchRunErrorCodeValue = Literal[
     "generation_unavailable",
     "internal_error",
@@ -51,6 +57,8 @@ def _run_status_value(value: str) -> ResearchRunStatusValue:
             return "running"
         case AgentRunStatus.COMPLETED:
             return "completed"
+        case AgentRunStatus.POLICY_BLOCKED:
+            return "policy_blocked"
         case AgentRunStatus.FAILED:
             return "failed"
 

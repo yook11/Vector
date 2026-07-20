@@ -1410,6 +1410,43 @@ class TestQuotaRouterTelemetry:
             if entry.get("event", "").startswith("agent_user_daily_quota_")
         ]
 
+    async def test_cancel_policy_blocked_is_204_without_quota_release(
+        self,
+        research_client: tuple[AsyncClient, FakeEnqueue],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        client, _fake_enqueue = research_client
+        policy_blocked = getattr(CancelRunOutcome, "ALREADY_POLICY_BLOCKED", None)
+        assert policy_blocked is not None, "policy_blocked cancel outcome is required"
+        calls: list[dict[str, object]] = []
+
+        async def cancel_as_policy_blocked(
+            _repository: AgentRunRepository,
+            **_kwargs: object,
+        ) -> CancelRunCommandOutcome:
+            return CancelRunCommandOutcome(cancel_outcome=policy_blocked)
+
+        def observe_release(**kwargs: object) -> None:
+            calls.append(kwargs)
+
+        monkeypatch.setattr(
+            AgentRunRepository,
+            "cancel_run_for_user",
+            cancel_as_policy_blocked,
+        )
+        monkeypatch.setattr(
+            daily_quota_observability,
+            "observe_release",
+            observe_release,
+        )
+
+        response = await client.post(
+            "/api/v1/research/runs/00000000-0000-4000-a000-000000000073/cancel"
+        )
+
+        assert response.status_code == 204
+        assert calls == []
+
 
 @pytest.mark.asyncio
 class TestListResearchThreads:
@@ -2195,6 +2232,104 @@ class TestGetResearchRun:
                 "recentEvents": [],
             }
 
+    async def test_policy_blocked_run_has_no_error_progress_or_assistant_message(
+        self,
+        research_client: tuple[AsyncClient, FakeEnqueue],
+        db_session: AsyncSession,
+    ) -> None:
+        client, _fake_enqueue = research_client
+        thread = await _create_thread(db_session)
+        user_message = await _create_message(
+            db_session,
+            thread_id=thread.id,
+            seq=1,
+            role="user",
+            content="blocked request",
+        )
+        run = AgentRun(
+            thread_id=thread.id,
+            user_message_id=user_message.id,
+            status="policy_blocked",
+            attempt_epoch=2,
+            completed_at=datetime(2026, 7, 20, 12, tzinfo=UTC),
+        )
+        db_session.add(run)
+        await db_session.commit()
+        await db_session.refresh(run)
+
+        run_response = await client.get(f"/api/v1/research/runs/{run.id}")
+        thread_response = await client.get(f"{_THREADS_URL}/{thread.id}")
+
+        assert run_response.status_code == 200
+        assert run_response.json() == {
+            "runId": str(run.id),
+            "threadId": str(thread.id),
+            "status": "policy_blocked",
+            "errorCode": None,
+            "progressStage": None,
+            "attemptEpoch": 2,
+            "recentEvents": [],
+        }
+        assert thread_response.status_code == 200
+        assert [message["role"] for message in thread_response.json()["messages"]] == [
+            "user"
+        ]
+        assert thread_response.json()["messages"][0]["run"] == {
+            "runId": str(run.id),
+            "status": "policy_blocked",
+            "errorCode": None,
+            "progressStage": None,
+        }
+
+    async def test_policy_blocked_run_does_not_read_residual_live_events(
+        self,
+        research_client: tuple[AsyncClient, FakeEnqueue],
+        db_session: AsyncSession,
+    ) -> None:
+        client, _fake_enqueue = research_client
+        thread = await _create_thread(db_session)
+        user_message = await _create_message(
+            db_session,
+            thread_id=thread.id,
+            seq=1,
+            role="user",
+            content="blocked request",
+        )
+        run = await _create_run(
+            db_session,
+            thread_id=thread.id,
+            user_message_id=user_message.id,
+            status="policy_blocked",
+            attempt_epoch=2,
+        )
+        redis = FakeRunEventsRedis(
+            [
+                json.dumps(
+                    {
+                        "type": "question.resolved",
+                        "ts": "2026-07-20T01:00:00+00:00",
+                        "standalone_question": "OLD_RESOLVED_QUESTION_SENTINEL",
+                    }
+                ),
+                json.dumps(
+                    {
+                        "type": "external_search.queries_generated",
+                        "ts": "2026-07-20T01:01:00+00:00",
+                        "task_index": 0,
+                        "queries": ["OLD_QUERY_SENTINEL"],
+                    }
+                ),
+            ]
+        )
+        app.dependency_overrides[get_redis_client] = lambda: redis
+
+        response = await client.get(f"/api/v1/research/runs/{run.id}")
+
+        assert response.status_code == 200
+        assert response.json()["status"] == "policy_blocked"
+        assert response.json()["recentEvents"] == []
+        assert redis.calls == []
+
     async def test_returns_recent_events_for_owned_run(
         self,
         research_client: tuple[AsyncClient, FakeEnqueue],
@@ -2411,6 +2546,7 @@ def test_openapi_exposes_thread_ui_contract_and_slim_run_signal() -> None:
     assert "attemptEpoch" in run_schema["required"]
     assert run_schema["properties"]["attemptEpoch"]["minimum"] == 0
     assert "result" not in run_schema["properties"]
+    assert "policy_blocked" in str(run_schema["properties"]["status"])
     assert "cancelled" in str(run_schema["properties"]["errorCode"])
     assert "planning" in str(run_schema["properties"]["progressStage"])
 
@@ -2422,6 +2558,7 @@ def test_openapi_exposes_thread_ui_contract_and_slim_run_signal() -> None:
         "progressStage",
     }
     assert "attemptEpoch" not in message_run_schema["required"]
+    assert "policy_blocked" in str(message_run_schema["properties"]["status"])
 
     assistant_schema = schema["components"]["schemas"]["ResearchAssistantMessage"]
     assert "[[1]]" in assistant_schema["properties"]["content"]["description"]

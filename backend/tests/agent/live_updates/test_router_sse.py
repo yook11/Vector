@@ -165,6 +165,26 @@ async def test_endpoint_returns_204_for_terminal_run_without_redis(
 
 
 @pytest.mark.asyncio
+async def test_endpoint_returns_204_for_policy_blocked_run_without_redis(
+    sse_client: tuple[AsyncClient, FakeRedis],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client, redis = sse_client
+    policy_blocked = getattr(AgentRunStatus, "POLICY_BLOCKED", None)
+    assert policy_blocked is not None, "policy_blocked must be a terminal run status"
+
+    async def context(**_kwargs: object) -> OwnedAgentRunLiveContext:
+        return _context(policy_blocked, epoch=1)
+
+    monkeypatch.setattr(router_module, "read_agent_run_live_context", context)
+
+    response = await client.get(URL)
+
+    assert response.status_code == 204
+    assert redis.exists_calls == 0
+
+
+@pytest.mark.asyncio
 async def test_queued_missing_stream_starts_200_then_closes_on_db_terminal(
     sse_client: tuple[AsyncClient, FakeRedis],
     monkeypatch: pytest.MonkeyPatch,
@@ -192,6 +212,43 @@ async def test_queued_missing_stream_starts_200_then_closes_on_db_terminal(
 
     assert response.status_code == 200
     assert response.content == b"retry: 1000\n\n"
+    assert redis.exists_calls == 1
+
+
+@pytest.mark.asyncio
+async def test_queued_connection_rechecks_policy_blocked_as_a_db_terminal(
+    sse_client: tuple[AsyncClient, FakeRedis],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client, redis = sse_client
+    policy_blocked = getattr(AgentRunStatus, "POLICY_BLOCKED", None)
+    assert policy_blocked is not None, "policy_blocked must be a terminal run status"
+    contexts = deque(
+        [
+            _context(AgentRunStatus.QUEUED, epoch=0),
+            _context(policy_blocked, epoch=0),
+        ]
+    )
+    context_calls = 0
+
+    async def context(**_kwargs: object) -> OwnedAgentRunLiveContext:
+        nonlocal context_calls
+        context_calls += 1
+        return contexts.popleft()
+
+    monkeypatch.setattr(router_module, "read_agent_run_live_context", context)
+    app.dependency_overrides[router_module.get_agent_run_sse_timing] = lambda: (
+        router_module.AgentRunSseTiming(
+            queued_recheck_interval=0.001,
+            queued_wait_limit=0.01,
+        )
+    )
+
+    response = await client.get(URL)
+
+    assert response.status_code == 200
+    assert response.content == b"retry: 1000\n\n"
+    assert context_calls == 2
     assert redis.exists_calls == 1
 
 

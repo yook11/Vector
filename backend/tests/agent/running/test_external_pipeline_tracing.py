@@ -44,6 +44,7 @@ from app.agent.question_context import (
 from app.agent.running import AnsweringPhases, AnsweringRunner, RunContext, RunInput
 from app.agent.runtime.deepseek import DeepSeekAgentRuntime
 from app.logfire.redaction import install_exception_redaction
+from tests.agent.running._input_safety import AllowInputSafetyChecker
 from tests.agent.runtime._deepseek_helpers import FakeDeepSeekClient, function_response
 from tests.logfire._span_helpers import domain_attr_keys, exception_event, spans_named
 
@@ -217,7 +218,11 @@ def _runner(
         evidence_answerer=_EvidenceAnswerer(),
     )
     return (
-        AnsweringRunner(context_preparer=_Preparer(), phases_factory=lambda: phases),
+        AnsweringRunner(
+            input_safety_checker=AllowInputSafetyChecker(),
+            context_preparer=_Preparer(),
+            phases_factory=lambda: phases,
+        ),
         tool,
     )
 
