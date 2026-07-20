@@ -1,38 +1,36 @@
 "use server";
 
-import "@/lib/api/hey-api-interceptors";
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { requireSessionForAction } from "@/lib/auth/guards";
-import { createResearchResponse as createResearchResponseSdk } from "@/types/sdk.gen";
-import type { ResearchRunStartResponse } from "@/types/types.gen";
 import {
   ResearchQuestionSchema,
   ResearchUuidSchema,
 } from "../schemas/research";
+import {
+  type SubmitResearchQuestionResult,
+  submitResearchQuestionCore,
+} from "./submit-research-question-core";
 
 export async function submitResearchQuestion(
   question: string,
   threadId?: string,
-): Promise<ResearchRunStartResponse> {
+): Promise<SubmitResearchQuestionResult> {
   await requireSessionForAction();
   const parsedQuestion = ResearchQuestionSchema.parse(question);
   const parsedThreadId =
     threadId === undefined ? undefined : ResearchUuidSchema.parse(threadId);
 
-  const { data } = await createResearchResponseSdk({
-    throwOnError: true,
-    cache: "no-store",
-    body: {
-      question: parsedQuestion,
-      ...(parsedThreadId !== undefined ? { threadId: parsedThreadId } : {}),
-    },
+  const result = await submitResearchQuestionCore({
+    question: parsedQuestion,
+    ...(parsedThreadId !== undefined ? { threadId: parsedThreadId } : {}),
   });
+  if (result.kind === "daily-request-limit-exceeded") return result;
 
   revalidatePath("/research");
-  revalidatePath(`/research/${data.threadId}`);
+  revalidatePath(`/research/${result.run.threadId}`);
   if (parsedThreadId === undefined) {
-    redirect(`/research/${data.threadId}`);
+    redirect(`/research/${result.run.threadId}`);
   }
-  return data;
+  return result;
 }

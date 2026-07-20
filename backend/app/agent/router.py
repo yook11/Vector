@@ -3,8 +3,11 @@
 from __future__ import annotations
 
 import asyncio
+import math
 import time
 from collections.abc import AsyncGenerator
+from contextlib import suppress
+from datetime import datetime, timedelta
 from typing import Annotated
 from uuid import UUID
 
@@ -20,7 +23,7 @@ from fastapi import (
     Response,
     status,
 )
-from fastapi.responses import StreamingResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.agent.composition import ensure_external_search_configured
@@ -47,6 +50,9 @@ from app.agent.runs.contracts import (
     OwnedAgentRunLiveContext,
     ThreadNotFoundError,
 )
+from app.agent.runs.daily_quota import observability as daily_quota_observability
+from app.agent.runs.daily_quota.contracts import DailyRequestLimitExceededError
+from app.agent.runs.daily_quota.policy import DAILY_QUOTA_TIMEZONE
 from app.agent.runs.repository import AgentRunRepository
 from app.agent.runs.types import AgentRunErrorCode, AgentRunStatus
 from app.agent.threads.repository import AgentThreadRepository
@@ -55,6 +61,7 @@ from app.db import engine
 from app.dependencies import CurrentUser, get_current_user, get_redis_client
 from app.schemas.research import (
     PaginatedResearchThreadResponse,
+    ResearchDailyRequestLimitExceededResponse,
     ResearchQuestionRequest,
     ResearchRunResponse,
     ResearchRunStartResponse,
@@ -127,13 +134,17 @@ def get_agent_run_sse_timing() -> AgentRunSseTiming:
         },
         status.HTTP_409_CONFLICT: {"description": _ACTIVE_RUN_DETAIL},
         status.HTTP_404_NOT_FOUND: {"description": _THREAD_NOT_FOUND_DETAIL},
+        status.HTTP_429_TOO_MANY_REQUESTS: {
+            "description": "Daily research request limit exceeded",
+            "model": ResearchDailyRequestLimitExceededResponse,
+        },
     },
 )
 async def create_research_response(
     body: ResearchQuestionRequest,
     user: Annotated[CurrentUser, Depends(get_current_user)],
     session: Annotated[AsyncSession, Depends(get_agent_persistence_session)],
-) -> ResearchRunStartResponse:
+) -> ResearchRunStartResponse | JSONResponse:
     try:
         ensure_external_search_configured()
     except AIProviderError as exc:
@@ -154,6 +165,41 @@ async def create_research_response(
             status_code=status.HTTP_409_CONFLICT,
             detail=_ACTIVE_RUN_DETAIL,
         ) from exc
+    except DailyRequestLimitExceededError as exc:
+        with suppress(Exception):
+            daily_quota_observability.observe_admission_rejected(
+                usage_date=exc.usage_date,
+            )
+        reset_at = datetime.combine(
+            exc.usage_date + timedelta(days=1),
+            datetime.min.time(),
+            tzinfo=DAILY_QUOTA_TIMEZONE,
+        )
+        retry_after = max(
+            0,
+            math.ceil((reset_at - exc.decided_at).total_seconds()),
+        )
+        response = ResearchDailyRequestLimitExceededResponse(
+            detail="Daily research request limit exceeded",
+            code="research_daily_request_limit_exceeded",
+            limit=exc.limit,
+            reset_at=reset_at,
+        )
+        return JSONResponse(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            content=response.model_dump(mode="json", by_alias=True),
+            headers={
+                "Retry-After": str(retry_after),
+                "Cache-Control": "no-store",
+            },
+        )
+
+    with suppress(Exception):
+        daily_quota_observability.observe_admission_accepted(
+            run_id=created.run_id,
+            usage_date=created.usage_date,
+            used_count=created.used_count,
+        )
 
     try:
         await enqueue_agent_run(created.run_id)
@@ -266,20 +312,28 @@ async def cancel_research_run(
         outcome = await repo.cancel_run_for_user(run_id=run_id, user_id=user.id)
     if outcome is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND)
-    if outcome.outcome is CancelRunOutcome.ALREADY_COMPLETED:
+    if outcome.cancel_outcome is CancelRunOutcome.ALREADY_COMPLETED:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail=_RUN_ALREADY_COMPLETED_DETAIL,
         )
-    if (
-        outcome.outcome is CancelRunOutcome.CANCELLED
-        and outcome.attempt_epoch is not None
-        and outcome.attempt_epoch >= 1
-    ):
+    if outcome.cancel_outcome is CancelRunOutcome.CANCELLED:
+        if outcome.quota_release_outcome is not None:
+            with suppress(Exception):
+                daily_quota_observability.observe_release(
+                    run_id=run_id,
+                    outcome=outcome.quota_release_outcome,
+                )
+        running_attempt_epoch = outcome.running_attempt_epoch
+        if outcome.was_running and running_attempt_epoch is None:
+            raise RuntimeError("running cancel outcome is missing its attempt epoch")
+    else:
+        running_attempt_epoch = None
+    if outcome.was_running and running_attempt_epoch is not None:
         await _publish_cancel_terminal(
             redis=redis,
             run_id=run_id,
-            attempt_epoch=outcome.attempt_epoch,
+            attempt_epoch=running_attempt_epoch,
         )
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 

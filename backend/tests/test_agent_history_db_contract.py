@@ -19,10 +19,18 @@ work バッファリングを避け、1 insert = 1 SQL 文で境界を壊した 
 from __future__ import annotations
 
 import uuid
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 
 import pytest
-from sqlalchemy import JSON, ForeignKeyConstraint, func, insert, select, text
+from sqlalchemy import (
+    JSON,
+    CheckConstraint,
+    ForeignKeyConstraint,
+    func,
+    insert,
+    select,
+    text,
+)
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -44,6 +52,7 @@ ANALYZED_ARTICLES = Base.metadata.tables["analyzed_articles"]
 CHECK_VIOLATION = "23514"
 UNIQUE_VIOLATION = "23505"
 FOREIGN_KEY_VIOLATION = "23503"
+NOT_NULL_VIOLATION = "23502"
 
 
 # ---------------------------------------------------------------------------
@@ -1314,6 +1323,14 @@ def _index_where(table_name: str, index_name: str) -> str | None:
     raise KeyError(index_name)
 
 
+def _daily_quota_table():
+    table = Base.metadata.tables.get("agent_user_daily_quotas")
+    assert table is not None, (
+        "AgentUserDailyQuota must register agent_user_daily_quotas"
+    )
+    return table
+
+
 def test_agent_threads_user_id_fk_cascades() -> None:
     fk = _fk_constraint("agent_threads", "fk_agent_threads_user_id")
     assert _fk_targets(fk) == ["auth.user.id"]
@@ -1435,3 +1452,122 @@ async def test_agent_run_attempt_epoch_defaults_to_zero(
         )
     ).scalar_one()
     assert attempt_epoch == 0
+
+
+# ---------------------------------------------------------------------------
+# Test 20: user daily request quota persistence contract
+# ---------------------------------------------------------------------------
+
+
+def test_agent_user_daily_quotas_model_contract() -> None:
+    table = _daily_quota_table()
+    user_id = table.c.user_id
+    usage_date = table.c.usage_date
+    used_count = table.c.used_count
+    user_fk = next(
+        fk
+        for fk in table.foreign_key_constraints
+        if fk.column_keys == ["user_id"] and _fk_targets(fk) == ["auth.user.id"]
+    )
+    checks = [
+        constraint
+        for constraint in table.constraints
+        if isinstance(constraint, CheckConstraint)
+        and "used_count" in str(constraint.sqltext)
+    ]
+
+    assert table.name == "agent_user_daily_quotas"
+    assert list(table.primary_key.columns.keys()) == ["user_id", "usage_date"]
+    assert user_id.type.python_type is uuid.UUID
+    assert user_id.nullable is False
+    assert usage_date.type.python_type is date
+    assert usage_date.nullable is False
+    assert used_count.type.python_type is int
+    assert used_count.nullable is False
+    assert user_fk.ondelete == "CASCADE"
+    assert len(checks) == 1
+    assert table.indexes == set()
+
+
+def test_agent_runs_quota_usage_date_model_contract() -> None:
+    quota_usage_date = AGENT_RUNS.c.get("quota_usage_date")
+
+    assert quota_usage_date is not None
+    assert quota_usage_date.type.python_type is date
+    assert quota_usage_date.nullable is True
+    assert quota_usage_date.server_default is None
+
+
+@pytest.mark.asyncio
+async def test_daily_quota_allows_inclusive_used_count_bounds(
+    db_session: AsyncSession,
+) -> None:
+    table = _daily_quota_table()
+    await db_session.execute(
+        insert(table),
+        [
+            {
+                "user_id": TEST_USER_ID,
+                "usage_date": date(2026, 7, 20),
+                "used_count": 0,
+            },
+            {
+                "user_id": TEST_USER_ID,
+                "usage_date": date(2026, 7, 21),
+                "used_count": 10,
+            },
+        ],
+    )
+
+    used_counts = (
+        (
+            await db_session.execute(
+                select(table.c.used_count).order_by(table.c.usage_date)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    assert used_counts == [0, 10]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("used_count", [-1, 11])
+async def test_daily_quota_rejects_used_count_outside_inclusive_bounds(
+    db_session: AsyncSession,
+    used_count: int,
+) -> None:
+    table = _daily_quota_table()
+
+    with pytest.raises(IntegrityError) as exc_info:
+        await db_session.execute(
+            insert(table).values(
+                user_id=TEST_USER_ID,
+                usage_date=date(2026, 7, 20),
+                used_count=used_count,
+            )
+        )
+
+    actual_sqlstate, _ = _integrity_error_detail(exc_info.value)
+    assert actual_sqlstate == CHECK_VIOLATION
+    await db_session.rollback()
+
+
+@pytest.mark.asyncio
+async def test_daily_quota_rejects_missing_used_count(
+    db_session: AsyncSession,
+) -> None:
+    table = _daily_quota_table()
+
+    with pytest.raises(IntegrityError) as exc_info:
+        await db_session.execute(
+            insert(table).values(
+                user_id=TEST_USER_ID,
+                usage_date=date(2026, 7, 20),
+                used_count=None,
+            )
+        )
+
+    actual_sqlstate, _ = _integrity_error_detail(exc_info.value)
+    assert actual_sqlstate == NOT_NULL_VIOLATION
+    await db_session.rollback()

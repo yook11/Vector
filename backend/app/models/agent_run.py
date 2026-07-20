@@ -8,11 +8,12 @@ run は状態機械 (queued → running → completed/failed)。thread / message
 from __future__ import annotations
 
 import uuid as uuid_mod
-from datetime import datetime
+from datetime import date, datetime
 
 from sqlalchemy import (
     BigInteger,
     CheckConstraint,
+    Date,
     DateTime,
     ForeignKey,
     ForeignKeyConstraint,
@@ -114,6 +115,7 @@ class AgentRun(Base):
     attempt_epoch: Mapped[int] = mapped_column(
         BigInteger(), nullable=False, server_default=text("0")
     )
+    quota_usage_date: Mapped[date | None] = mapped_column(Date(), nullable=True)
     completed_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )

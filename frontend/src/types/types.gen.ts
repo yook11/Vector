@@ -626,6 +626,28 @@ export type ResearchAssistantMessage = {
 };
 
 /**
+ * ResearchDailyRequestLimitExceededResponse
+ */
+export type ResearchDailyRequestLimitExceededResponse = {
+    /**
+     * Detail
+     */
+    detail: 'Daily research request limit exceeded';
+    /**
+     * Code
+     */
+    code: 'research_daily_request_limit_exceeded';
+    /**
+     * Limit
+     */
+    limit: 10;
+    /**
+     * Resetat
+     */
+    resetAt: string;
+};
+
+/**
  * ResearchExternalUrlSource
  */
 export type ResearchExternalUrlSource = {
@@ -1779,6 +1801,10 @@ export type CreateResearchResponseErrors = {
      * Validation Error
      */
     422: HttpValidationError;
+    /**
+     * Daily research request limit exceeded
+     */
+    429: ResearchDailyRequestLimitExceededResponse;
     /**
      * Answer generation is temporarily unavailable
      */

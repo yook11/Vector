@@ -7,7 +7,7 @@ from typing import Annotated, Literal
 from uuid import UUID
 
 from fastapi import Query
-from pydantic import Field, StringConstraints
+from pydantic import AwareDatetime, Field, StringConstraints
 
 from app.schemas.base import MAX_PER_PAGE, PaginationParams, _CamelBase
 from app.shared.security.safe_url import SafeUrl
@@ -50,6 +50,13 @@ ResearchSource = Annotated[
 class ResearchRunStartResponse(_CamelBase):
     thread_id: UUID
     run_id: UUID
+
+
+class ResearchDailyRequestLimitExceededResponse(_CamelBase):
+    detail: Literal["Daily research request limit exceeded"]
+    code: Literal["research_daily_request_limit_exceeded"]
+    limit: Literal[10]
+    reset_at: AwareDatetime
 
 
 ResearchRunStatus = Literal["queued", "running", "completed", "failed"]

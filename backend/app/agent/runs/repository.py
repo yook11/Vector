@@ -13,13 +13,19 @@ from app.agent.contract import AnswerQuestionResult
 from app.agent.runs.citation_integrity import assess_citation_integrity
 from app.agent.runs.contracts import (
     ActiveRunConflictError,
+    CancelRunCommandOutcome,
     CancelRunOutcome,
-    CancelRunResult,
     CreatedAgentRun,
     OwnedAgentRunLiveContext,
     PreparedAgentRun,
     RunTransitionLostError,
+    StaleRunSweepResult,
     ThreadNotFoundError,
+)
+from app.agent.runs.daily_quota.contracts import DailyQuotaReleaseOutcome
+from app.agent.runs.daily_quota.persistence import (
+    release_daily_quota,
+    reserve_daily_quota,
 )
 from app.agent.runs.projection import build_research_run_response
 from app.agent.runs.result_mapper import (
@@ -78,6 +84,11 @@ class AgentRunRepository:
             next_seq = await self._next_message_seq(thread.id)
             thread.updated_at = now
 
+        quota_reservation = await reserve_daily_quota(
+            self._session,
+            user_id=user_id,
+        )
+
         user_message = AgentMessage(
             thread_id=thread.id,
             seq=next_seq,
@@ -92,10 +103,16 @@ class AgentRunRepository:
             thread_id=thread.id,
             user_message_id=user_message.id,
             status=AgentRunStatus.QUEUED.value,
+            quota_usage_date=quota_reservation.usage_date,
         )
         self._session.add(run)
         await self._session.flush()
-        return CreatedAgentRun(thread_id=thread.id, run_id=run.id)
+        return CreatedAgentRun(
+            thread_id=thread.id,
+            run_id=run.id,
+            usage_date=quota_reservation.usage_date,
+            used_count=quota_reservation.used_count,
+        )
 
     async def mark_failed(
         self,
@@ -323,34 +340,42 @@ class AgentRunRepository:
         run_id: uuid_mod.UUID,
         user_id: uuid_mod.UUID,
         now: datetime | None = None,
-    ) -> CancelRunResult | None:
+    ) -> CancelRunCommandOutcome | None:
         now = now or datetime.now(UTC)
-        run = (
-            await self._session.execute(
-                select(AgentRun)
-                .join(AgentThread, AgentRun.thread_id == AgentThread.id)
-                .where(
-                    AgentRun.id == run_id,
-                    AgentThread.user_id == user_id,
-                )
-            )
-        ).scalar_one_or_none()
-        if run is None:
-            return None
-        status_value = AgentRunStatus(run.status)
-        if status_value is AgentRunStatus.COMPLETED:
-            return CancelRunResult(CancelRunOutcome.ALREADY_COMPLETED)
-        if status_value is AgentRunStatus.FAILED:
-            return CancelRunResult(CancelRunOutcome.ALREADY_FAILED)
-
-        result = await self._session.execute(
+        owned_thread_ids = select(AgentThread.id).where(AgentThread.user_id == user_id)
+        queued_result = await self._session.execute(
             update(AgentRun)
             .where(
                 AgentRun.id == run_id,
-                AgentRun.status.in_(_ACTIVE_STATUSES),
-                AgentRun.thread_id.in_(
-                    select(AgentThread.id).where(AgentThread.user_id == user_id)
-                ),
+                AgentRun.status == AgentRunStatus.QUEUED.value,
+                AgentRun.thread_id.in_(owned_thread_ids),
+            )
+            .values(
+                status=AgentRunStatus.FAILED.value,
+                error_code=AgentRunErrorCode.CANCELLED.value,
+                completed_at=now,
+            )
+            .returning(AgentRun.quota_usage_date)
+            .execution_options(synchronize_session=False)
+        )
+        queued_row = queued_result.one_or_none()
+        if queued_row is not None:
+            quota_release_outcome = await release_daily_quota(
+                self._session,
+                user_id=user_id,
+                usage_date=queued_row.quota_usage_date,
+            )
+            return CancelRunCommandOutcome(
+                cancel_outcome=CancelRunOutcome.CANCELLED,
+                quota_release_outcome=quota_release_outcome,
+            )
+
+        running_result = await self._session.execute(
+            update(AgentRun)
+            .where(
+                AgentRun.id == run_id,
+                AgentRun.status == AgentRunStatus.RUNNING.value,
+                AgentRun.thread_id.in_(owned_thread_ids),
             )
             .values(
                 status=AgentRunStatus.FAILED.value,
@@ -360,50 +385,100 @@ class AgentRunRepository:
             .returning(AgentRun.attempt_epoch)
             .execution_options(synchronize_session=False)
         )
-        attempt_epoch = result.scalar_one_or_none()
-        if attempt_epoch is not None:
-            return CancelRunResult(
-                outcome=CancelRunOutcome.CANCELLED,
-                attempt_epoch=attempt_epoch,
+        running_attempt_epoch = running_result.scalar_one_or_none()
+        if running_attempt_epoch is not None:
+            return CancelRunCommandOutcome(
+                cancel_outcome=CancelRunOutcome.CANCELLED,
+                was_running=True,
+                running_attempt_epoch=running_attempt_epoch,
+                quota_release_outcome=DailyQuotaReleaseOutcome.NOT_ELIGIBLE,
             )
 
-        refreshed_status = (
+        terminal_status = (
             await self._session.execute(
-                select(AgentRun.status)
-                .join(AgentThread, AgentRun.thread_id == AgentThread.id)
-                .where(
+                select(AgentRun.status).where(
                     AgentRun.id == run_id,
-                    AgentThread.user_id == user_id,
+                    AgentRun.thread_id.in_(owned_thread_ids),
                 )
             )
         ).scalar_one_or_none()
-        if refreshed_status is None:
+        if terminal_status is None:
             return None
-        if AgentRunStatus(refreshed_status) is AgentRunStatus.COMPLETED:
-            return CancelRunResult(CancelRunOutcome.ALREADY_COMPLETED)
-        return CancelRunResult(CancelRunOutcome.ALREADY_FAILED)
+        if AgentRunStatus(terminal_status) is AgentRunStatus.COMPLETED:
+            return CancelRunCommandOutcome(CancelRunOutcome.ALREADY_COMPLETED)
+        if AgentRunStatus(terminal_status) is AgentRunStatus.FAILED:
+            return CancelRunCommandOutcome(CancelRunOutcome.ALREADY_FAILED)
+        return None
 
     async def sweep_stale_runs(
         self,
         *,
         now: datetime | None = None,
-    ) -> int:
+    ) -> StaleRunSweepResult:
         now = now or datetime.now(UTC)
         cutoff = now - _STALE_AFTER
-        result = await self._session.execute(
-            update(AgentRun)
-            .where(
-                AgentRun.status.in_(_ACTIVE_STATUSES),
-                func.coalesce(AgentRun.started_at, AgentRun.created_at) < cutoff,
+        candidate_rows = (
+            (
+                await self._session.execute(
+                    select(
+                        AgentRun.id,
+                        AgentRun.status,
+                        AgentRun.quota_usage_date,
+                    )
+                    .where(
+                        AgentRun.status.in_(_ACTIVE_STATUSES),
+                        func.coalesce(AgentRun.started_at, AgentRun.created_at)
+                        < cutoff,
+                    )
+                    .order_by(AgentRun.id)
+                    .with_for_update()
+                )
             )
-            .values(
-                status=AgentRunStatus.FAILED.value,
-                error_code=AgentRunErrorCode.STALE.value,
-                completed_at=now,
-            )
-            .execution_options(synchronize_session=False)
+            .tuples()
+            .all()
         )
-        return result.rowcount or 0
+        if not candidate_rows:
+            return StaleRunSweepResult(
+                total_count=0,
+                quota_queued_count=0,
+                quota_running_count=0,
+            )
+
+        candidate_ids = [run_id for run_id, _status, _quota_date in candidate_rows]
+        updated_ids = set(
+            (
+                await self._session.execute(
+                    update(AgentRun)
+                    .where(
+                        AgentRun.id.in_(candidate_ids),
+                        AgentRun.status.in_(_ACTIVE_STATUSES),
+                    )
+                    .values(
+                        status=AgentRunStatus.FAILED.value,
+                        error_code=AgentRunErrorCode.STALE.value,
+                        completed_at=now,
+                    )
+                    .returning(AgentRun.id)
+                    .execution_options(synchronize_session=False)
+                )
+            )
+            .scalars()
+            .all()
+        )
+        if updated_ids != set(candidate_ids):
+            raise RuntimeError("stale run sweep lost a locked candidate")
+
+        return StaleRunSweepResult(
+            total_count=len(updated_ids),
+            quota_queued_count=sum(
+                status == AgentRunStatus.QUEUED.value and quota_date is not None
+                for _run_id, status, quota_date in candidate_rows
+            ),
+            quota_running_count=sum(
+                status == AgentRunStatus.RUNNING.value and quota_date is not None
+                for _run_id, status, quota_date in candidate_rows
+            ),
+        )
 
     async def _has_active_run(self, thread_id: uuid_mod.UUID) -> bool:
         return (

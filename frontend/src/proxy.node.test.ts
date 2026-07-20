@@ -173,6 +173,88 @@ describe("proxy — rate-limit tier 結線 (ADR-009)", () => {
   });
 });
 
+function researchActionRequest(
+  pathname: string,
+  nextAction: string,
+): NextRequest {
+  return mockNextRequest(`http://localhost:3000${pathname}`, {
+    method: "POST",
+    headers: {
+      cookie: "better-auth.session_token=AAAA",
+      "x-forwarded-for": "1.2.3.4",
+      "Next-Action": nextAction,
+    },
+  });
+}
+
+describe("proxy — research Server Actionは既存mutation rate limitを共有する", () => {
+  it("submit・cancel・別mutationはいずれもsession 60とIP 300の同一tierで評価する", async () => {
+    mockIsOpenValue = true;
+    mockEval.mockResolvedValue(1);
+
+    await proxy(researchActionRequest("/research", "action-submit"));
+    await proxy(
+      researchActionRequest(
+        "/research/00000000-0000-4000-a000-000000000001",
+        "action-cancel",
+      ),
+    );
+    await proxy(researchActionRequest("/watchlist", "action-watchlist"));
+
+    expect(mockEval).toHaveBeenCalledTimes(3);
+    const calls = mockEval.mock.calls.map(
+      ([, args]) => args as { keys: string[]; arguments: string[] },
+    );
+    const expectedKeys = calls[0]?.keys;
+    expect(expectedKeys).toEqual([
+      expect.stringMatching(/^rl:sess:[0-9a-f]{16}$/),
+      "rl:ip:1.2.3.4",
+    ]);
+    for (const call of calls) {
+      expect(call.keys).toEqual(expectedKeys);
+      expect(call.arguments.slice(3, 5)).toEqual(["60", "300"]);
+      expect(call.arguments.slice(3, 5)).not.toContain("10");
+    }
+  });
+
+  it("mutationがdenyされたらquota情報なしの終端429をCSP付与前に返す", async () => {
+    mockIsOpenValue = true;
+    mockEval.mockResolvedValue(0);
+
+    const response = await proxy(
+      researchActionRequest("/research", "action-submit-denied"),
+    );
+
+    expect(response.status).toBe(429);
+    expect(response.headers.get("Retry-After")).toBe("60");
+    expect(response.headers.get("Content-Security-Policy")).toBeNull();
+    expect(response.headers.get("x-middleware-next")).toBeNull();
+    const body = await response.text();
+    expect(body).toBe("Too Many Requests");
+    expect(body).not.toContain("research_daily_request_limit_exceeded");
+  });
+
+  it("mutationのRedis eval障害はraw errorを記録せずfail-openする", async () => {
+    mockIsOpenValue = true;
+    mockEval.mockRejectedValue(new Error("redis password leaked"));
+
+    const response = await proxy(
+      researchActionRequest("/research", "action-submit-fail-open"),
+    );
+
+    expect(response.status).not.toBe(429);
+    expect(response.headers.get("x-middleware-next")).toBe("1");
+    const event = findLoggedEvent("frontend_rate_limit_redis_fail_open");
+    expect(event).toStrictEqual({
+      event: "frontend_rate_limit_redis_fail_open",
+      level: "warn",
+      requestClass: "mutation",
+      errorType: "eval",
+    });
+    expect(JSON.stringify(event)).not.toContain("redis password leaked");
+  });
+});
+
 describe("proxy — _rsc prefetch tier", () => {
   it("_rsc GET (fly 解決) は rl:rsc:<ip> 600 の寛容 ceiling で count する", async () => {
     mockIsOpenValue = true;

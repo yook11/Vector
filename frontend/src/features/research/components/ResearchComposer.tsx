@@ -3,6 +3,7 @@
 import { Loader2, Send, Square } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { type FormEvent, useState, useTransition } from "react";
+import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { isRedirectError } from "@/lib/utils/redirect-error";
 import { toastError } from "@/lib/utils/toast-error";
@@ -33,7 +34,15 @@ export function ResearchComposer({
 
     startTransition(async () => {
       try {
-        await submitResearchQuestion(nextQuestion, threadId);
+        const result = await submitResearchQuestion(nextQuestion, threadId);
+        if (result.kind === "daily-request-limit-exceeded") {
+          toast.error(
+            result.retryAfterSeconds > 0
+              ? "本日の利用上限（10回）に達しました。未開始のリクエストを停止すると、その分を再度利用できます。利用枠は日本時間の翌日0:00にリセットされます"
+              : "利用枠がリセットされました。もう一度お試しください",
+          );
+          return;
+        }
         setQuestion("");
       } catch (err) {
         if (isRedirectError(err)) throw err;

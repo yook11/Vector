@@ -14,13 +14,32 @@ export interface ApiErrorMeta {
 }
 
 export class ApiError extends Error {
+  declare body: unknown;
+  declare retryAfter: string | null;
+
   constructor(
     public status: number,
     public detail: string,
     public meta?: ApiErrorMeta,
+    body: unknown = undefined,
+    retryAfter: string | null = null,
   ) {
     super(detail);
     this.name = "ApiError";
+    Object.defineProperties(this, {
+      body: {
+        configurable: true,
+        enumerable: false,
+        value: body,
+        writable: true,
+      },
+      retryAfter: {
+        configurable: true,
+        enumerable: false,
+        value: retryAfter,
+        writable: true,
+      },
+    });
   }
 }
 

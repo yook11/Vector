@@ -41,6 +41,31 @@ import { client } from "@/types/client.gen";
 import type { ClientOptions } from "@/types/types.gen";
 
 type RequestOptionsWithMethod = ResolvedRequestOptions & { method?: string };
+type DailyRequestLimitBody = {
+  code: "research_daily_request_limit_exceeded";
+  limit: 10;
+  resetAt: string;
+};
+
+function dailyRequestLimitBody(
+  error: unknown,
+  status: number,
+): DailyRequestLimitBody | undefined {
+  if (status !== 429 || error === null || typeof error !== "object") {
+    return undefined;
+  }
+  if (
+    !("code" in error) ||
+    error.code !== "research_daily_request_limit_exceeded" ||
+    !("limit" in error) ||
+    error.limit !== 10 ||
+    !("resetAt" in error) ||
+    typeof error.resetAt !== "string"
+  ) {
+    return undefined;
+  }
+  return { code: error.code, limit: error.limit, resetAt: error.resetAt };
+}
 
 function requestMetadata(options: ResolvedRequestOptions | undefined): {
   method?: string | undefined;
@@ -74,6 +99,8 @@ const errorInterceptor = async (
   const status = response?.status ?? 0;
   const detail =
     normalizeErrorDetail(error) || response?.statusText || `HTTP ${status}`;
+  const body = dailyRequestLimitBody(error, status);
+  const retryAfter = response?.headers.get("Retry-After") ?? null;
   if (status === 429 || status >= 500) {
     const kind = status === 429 ? "http_429" : "http_5xx";
     logServerEvent(
@@ -87,10 +114,22 @@ const errorInterceptor = async (
         detail,
       },
     );
-    throw new ApiError(status, detail, { kind, method, path, status });
+    throw new ApiError(
+      status,
+      detail,
+      { kind, method, path, status },
+      body,
+      retryAfter,
+    );
   }
 
-  throw new ApiError(status, detail, { method, path, status });
+  throw new ApiError(
+    status,
+    detail,
+    { method, path, status },
+    body,
+    retryAfter,
+  );
 };
 
 if (client.interceptors.request.fns.length === 0) {
