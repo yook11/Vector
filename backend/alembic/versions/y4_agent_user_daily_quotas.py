@@ -24,6 +24,7 @@ MIGRATION_KIND = "contract"
 
 
 def upgrade() -> None:
+    op.execute("SET lock_timeout = '5s';")
     op.create_table(
         "agent_user_daily_quotas",
         sa.Column("user_id", PgUUID(as_uuid=True), nullable=False),
@@ -54,6 +55,7 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
+    op.execute("SET lock_timeout = '5s';")
     op.execute(
         "REVOKE SELECT, INSERT, UPDATE, DELETE "
         "ON TABLE agent_user_daily_quotas FROM vector_app"

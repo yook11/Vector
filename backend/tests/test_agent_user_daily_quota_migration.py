@@ -171,7 +171,12 @@ async def test_daily_quota_migration_preserves_legacy_runs_and_round_trips(
     assert migration.down_revision == "y3_agent_runs_attempt_epoch"
     assert migration.MIGRATION_KIND == "contract"
 
+    await connection.execute(text("SET lock_timeout = '0'"))
     await _invoke_migration(connection, migration, "upgrade")
+    upgrade_lock_timeout = (
+        await connection.execute(text("SHOW lock_timeout"))
+    ).scalar_one()
+    assert upgrade_lock_timeout == "5s"
     quota_columns = [
         await _read_column_contract(
             connection,
@@ -218,7 +223,12 @@ async def test_daily_quota_migration_preserves_legacy_runs_and_round_trips(
     ]
     assert await _has_runtime_dml_grant(connection) is True
 
+    await connection.execute(text("SET lock_timeout = '0'"))
     await _invoke_migration(connection, migration, "downgrade")
+    downgrade_lock_timeout = (
+        await connection.execute(text("SHOW lock_timeout"))
+    ).scalar_one()
+    assert downgrade_lock_timeout == "5s"
 
     assert await _quota_table_exists(connection) is False
     quota_usage_date_exists = (
@@ -238,7 +248,12 @@ async def test_daily_quota_migration_preserves_legacy_runs_and_round_trips(
     ).scalar_one()
     assert quota_usage_date_exists is False
 
+    await connection.execute(text("SET lock_timeout = '0'"))
     await _invoke_migration(connection, migration, "upgrade")
+    reupgrade_lock_timeout = (
+        await connection.execute(text("SHOW lock_timeout"))
+    ).scalar_one()
+    assert reupgrade_lock_timeout == "5s"
 
     assert await _quota_table_exists(connection) is True
     assert await _has_runtime_dml_grant(connection) is True
