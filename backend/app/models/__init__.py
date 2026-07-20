@@ -1,6 +1,7 @@
 from app.models.agent_message import AgentMessage, AgentMessageSource
 from app.models.agent_run import AgentRun
 from app.models.agent_thread import AgentThread
+from app.models.agent_user_daily_quota import AgentUserDailyQuota
 from app.models.analyzable_article_record import AnalyzableArticleRecord
 from app.models.analyzed_article_record import AnalyzedArticleRecord
 from app.models.article_curation import ArticleCuration
@@ -26,6 +27,7 @@ __all__ = [
     "AgentMessageSource",
     "AgentRun",
     "AgentThread",
+    "AgentUserDailyQuota",
     "AnalyzableArticleRecord",
     "ArticleCuration",
     "AssessmentBackfillExclusion",
