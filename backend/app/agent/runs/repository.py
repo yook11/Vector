@@ -30,6 +30,7 @@ from app.agent.runs.contracts import (
     CancelRunOutcome,
     CancelRunResult,
     CreatedAgentRun,
+    DailyQuotaReleaseOutcome,
     DailyRequestLimitExceededError,
     OwnedAgentRunLiveContext,
     PreparedAgentRun,
@@ -428,63 +429,102 @@ class AgentRunRepository:
         now: datetime | None = None,
     ) -> CancelRunResult | None:
         now = now or datetime.now(UTC)
-        run = (
-            await self._session.execute(
-                select(AgentRun)
-                .join(AgentThread, AgentRun.thread_id == AgentThread.id)
-                .where(
-                    AgentRun.id == run_id,
-                    AgentThread.user_id == user_id,
-                )
-            )
-        ).scalar_one_or_none()
-        if run is None:
-            return None
-        status_value = AgentRunStatus(run.status)
-        if status_value is AgentRunStatus.COMPLETED:
-            return CancelRunResult(CancelRunOutcome.ALREADY_COMPLETED)
-        if status_value is AgentRunStatus.FAILED:
-            return CancelRunResult(CancelRunOutcome.ALREADY_FAILED)
-
-        result = await self._session.execute(
+        owned_thread_ids = select(AgentThread.id).where(AgentThread.user_id == user_id)
+        queued_result = await self._session.execute(
             update(AgentRun)
             .where(
                 AgentRun.id == run_id,
-                AgentRun.status.in_(_ACTIVE_STATUSES),
-                AgentRun.thread_id.in_(
-                    select(AgentThread.id).where(AgentThread.user_id == user_id)
-                ),
+                AgentRun.status == AgentRunStatus.QUEUED.value,
+                AgentRun.thread_id.in_(owned_thread_ids),
             )
             .values(
                 status=AgentRunStatus.FAILED.value,
                 error_code=AgentRunErrorCode.CANCELLED.value,
                 completed_at=now,
             )
-            .returning(AgentRun.attempt_epoch)
+            .returning(AgentRun.attempt_epoch, AgentRun.quota_usage_date)
             .execution_options(synchronize_session=False)
         )
-        attempt_epoch = result.scalar_one_or_none()
-        if attempt_epoch is not None:
+        queued_row = queued_result.one_or_none()
+        if queued_row is not None:
+            attempt_epoch, quota_usage_date = queued_row
+            if quota_usage_date is None:
+                return CancelRunResult(
+                    outcome=CancelRunOutcome.CANCELLED,
+                    attempt_epoch=attempt_epoch,
+                    quota_release_outcome=DailyQuotaReleaseOutcome.NOT_ELIGIBLE,
+                )
+
+            quota_used_count = (
+                await self._session.execute(
+                    update(AgentUserDailyQuota)
+                    .where(
+                        AgentUserDailyQuota.user_id == user_id,
+                        AgentUserDailyQuota.usage_date == quota_usage_date,
+                        AgentUserDailyQuota.used_count > 0,
+                    )
+                    .values(
+                        used_count=AgentUserDailyQuota.used_count - 1,
+                    )
+                    .returning(AgentUserDailyQuota.used_count)
+                    .execution_options(synchronize_session=False)
+                )
+            ).scalar_one_or_none()
+            if quota_used_count is None:
+                return CancelRunResult(
+                    outcome=CancelRunOutcome.CANCELLED,
+                    attempt_epoch=attempt_epoch,
+                    quota_release_outcome=DailyQuotaReleaseOutcome.INCONSISTENT,
+                    quota_usage_date=quota_usage_date,
+                )
             return CancelRunResult(
                 outcome=CancelRunOutcome.CANCELLED,
                 attempt_epoch=attempt_epoch,
+                quota_release_outcome=DailyQuotaReleaseOutcome.RELEASED,
+                quota_usage_date=quota_usage_date,
+                quota_used_count=quota_used_count,
             )
 
-        refreshed_status = (
+        running_result = await self._session.execute(
+            update(AgentRun)
+            .where(
+                AgentRun.id == run_id,
+                AgentRun.status == AgentRunStatus.RUNNING.value,
+                AgentRun.thread_id.in_(owned_thread_ids),
+            )
+            .values(
+                status=AgentRunStatus.FAILED.value,
+                error_code=AgentRunErrorCode.CANCELLED.value,
+                completed_at=now,
+            )
+            .returning(AgentRun.attempt_epoch, AgentRun.quota_usage_date)
+            .execution_options(synchronize_session=False)
+        )
+        running_row = running_result.one_or_none()
+        if running_row is not None:
+            attempt_epoch, quota_usage_date = running_row
+            return CancelRunResult(
+                outcome=CancelRunOutcome.CANCELLED,
+                attempt_epoch=attempt_epoch,
+                quota_release_outcome=DailyQuotaReleaseOutcome.NOT_ELIGIBLE,
+                quota_usage_date=quota_usage_date,
+            )
+
+        terminal_status = (
             await self._session.execute(
-                select(AgentRun.status)
-                .join(AgentThread, AgentRun.thread_id == AgentThread.id)
-                .where(
+                select(AgentRun.status).where(
                     AgentRun.id == run_id,
-                    AgentThread.user_id == user_id,
+                    AgentRun.thread_id.in_(owned_thread_ids),
                 )
             )
         ).scalar_one_or_none()
-        if refreshed_status is None:
+        if terminal_status is None:
             return None
-        if AgentRunStatus(refreshed_status) is AgentRunStatus.COMPLETED:
+        if AgentRunStatus(terminal_status) is AgentRunStatus.COMPLETED:
             return CancelRunResult(CancelRunOutcome.ALREADY_COMPLETED)
-        return CancelRunResult(CancelRunOutcome.ALREADY_FAILED)
+        if AgentRunStatus(terminal_status) is AgentRunStatus.FAILED:
+            return CancelRunResult(CancelRunOutcome.ALREADY_FAILED)
+        return None
 
     async def sweep_stale_runs(
         self,

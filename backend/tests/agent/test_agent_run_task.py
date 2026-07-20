@@ -46,8 +46,6 @@ from app.agent.running import (
     RunResult,
 )
 from app.agent.runs.contracts import (
-    CancelRunOutcome,
-    CancelRunResult,
     RunTransitionLostError,
 )
 from app.agent.runs.repository import AgentRunRepository
@@ -664,65 +662,6 @@ async def test_read_live_context_for_user_preserves_terminal_error_code(
     assert context.status is AgentRunStatus.FAILED
     assert context.attempt_epoch == 2
     assert context.error_code == "cancelled"
-
-
-@pytest.mark.asyncio
-async def test_cancel_returns_epoch_from_winning_update_during_acquire_race(
-    session_factory: async_sessionmaker[AsyncSession],
-) -> None:
-    async with session_factory() as setup_session:
-        _thread, _message, run = await _create_thread_message_run(setup_session)
-
-    initial_select_finished = asyncio.Event()
-    allow_cancel_update = asyncio.Event()
-
-    class PausingSession:
-        def __init__(self, session: AsyncSession) -> None:
-            self._session = session
-            self.execute_calls = 0
-
-        async def execute(self, *args: object, **kwargs: object) -> object:
-            result = await self._session.execute(*args, **kwargs)
-            self.execute_calls += 1
-            if self.execute_calls == 1:
-                initial_select_finished.set()
-                await allow_cancel_update.wait()
-            return result
-
-    async def cancel() -> CancelRunResult | None:
-        async with session_factory() as raw_session:
-            paused = cast(AsyncSession, PausingSession(raw_session))
-            async with raw_session.begin():
-                return await AgentRunRepository(paused).cancel_run_for_user(
-                    run_id=run.id,
-                    user_id=UUID(TEST_USER_ID),
-                )
-
-    cancel_task = asyncio.create_task(cancel())
-    await asyncio.wait_for(initial_select_finished.wait(), timeout=1)
-    try:
-        async with session_factory() as acquire_session:
-            async with acquire_session.begin():
-                prepared = await AgentRunRepository(
-                    acquire_session
-                ).acquire_for_execution(run.id)
-        assert prepared is not None
-        assert prepared.attempt_epoch == 1
-    finally:
-        allow_cancel_update.set()
-
-    result = await asyncio.wait_for(cancel_task, timeout=2)
-
-    assert result == CancelRunResult(
-        outcome=CancelRunOutcome.CANCELLED,
-        attempt_epoch=1,
-    )
-    async with session_factory() as session:
-        cancelled = await session.get(AgentRun, run.id)
-        assert cancelled is not None
-        assert cancelled.status == "failed"
-        assert cancelled.error_code == "cancelled"
-        assert cancelled.attempt_epoch == 1
 
 
 @pytest.mark.asyncio

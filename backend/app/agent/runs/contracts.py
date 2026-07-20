@@ -46,17 +46,63 @@ class CancelRunOutcome(StrEnum):
     ALREADY_COMPLETED = "already_completed"
 
 
+class DailyQuotaReleaseOutcome(StrEnum):
+    RELEASED = "released"
+    NOT_ELIGIBLE = "not_eligible"
+    INCONSISTENT = "inconsistent"
+
+
 @dataclass(frozen=True, slots=True)
 class CancelRunResult:
     outcome: CancelRunOutcome
     attempt_epoch: int | None = None
+    quota_release_outcome: DailyQuotaReleaseOutcome | None = None
+    quota_usage_date: date | None = None
+    quota_used_count: int | None = None
 
     def __post_init__(self) -> None:
-        if self.outcome is CancelRunOutcome.CANCELLED:
-            if self.attempt_epoch is None or self.attempt_epoch < 0:
-                raise ValueError("cancelled run requires a non-negative attempt epoch")
-        elif self.attempt_epoch is not None:
-            raise ValueError("attempt epoch is only valid for a cancelled run")
+        if not isinstance(self.outcome, CancelRunOutcome):
+            raise ValueError("invalid cancel run outcome")
+        if self.outcome is not CancelRunOutcome.CANCELLED:
+            if any(
+                value is not None
+                for value in (
+                    self.attempt_epoch,
+                    self.quota_release_outcome,
+                    self.quota_usage_date,
+                    self.quota_used_count,
+                )
+            ):
+                raise ValueError("already terminal run cannot contain cancel details")
+            return
+
+        if self.attempt_epoch is None or self.attempt_epoch < 0:
+            raise ValueError("cancelled run requires a non-negative attempt epoch")
+        if not isinstance(self.quota_release_outcome, DailyQuotaReleaseOutcome):
+            raise ValueError("cancelled run requires a quota release outcome")
+        if self.quota_release_outcome is DailyQuotaReleaseOutcome.RELEASED:
+            if (
+                self.quota_usage_date is None
+                or self.quota_used_count is None
+                or self.quota_used_count < 0
+            ):
+                raise ValueError(
+                    "released quota requires a date and non-negative used count"
+                )
+            return
+        if self.quota_release_outcome is DailyQuotaReleaseOutcome.INCONSISTENT:
+            if self.quota_usage_date is None or self.quota_used_count is not None:
+                raise ValueError(
+                    "inconsistent quota release requires only the quota date"
+                )
+            return
+        if self.quota_release_outcome is DailyQuotaReleaseOutcome.NOT_ELIGIBLE:
+            if self.quota_used_count is not None:
+                raise ValueError(
+                    "not eligible quota release cannot contain a used count"
+                )
+            return
+        raise ValueError("invalid quota release outcome")
 
 
 @dataclass(frozen=True, slots=True)
