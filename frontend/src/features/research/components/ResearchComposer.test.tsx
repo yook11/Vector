@@ -12,6 +12,7 @@ const mocks = vi.hoisted(() => ({
   refresh: vi.fn(),
   submit: vi.fn(),
   cancel: vi.fn(),
+  toast: vi.fn(),
   toastError: vi.fn(),
 }));
 
@@ -32,6 +33,23 @@ vi.mock("../api/cancel-research-run", () => ({
 vi.mock("@/lib/utils/toast-error", () => ({
   toastError: mocks.toastError,
 }));
+
+vi.mock("sonner", () => ({
+  toast: { error: mocks.toast },
+}));
+
+const ACCEPTED_RESULT = {
+  kind: "accepted" as const,
+  run: {
+    threadId: "00000000-0000-4000-a000-000000000001",
+    runId: "00000000-0000-4000-a000-000000000002",
+  },
+};
+
+const DAILY_LIMIT_MESSAGE =
+  "本日の利用上限（10回）に達しました。未開始のリクエストを停止すると、その分を再度利用できます。利用枠は日本時間の翌日0:00にリセットされます";
+const DAILY_LIMIT_RESET_MESSAGE =
+  "利用枠がリセットされました。もう一度お試しください";
 
 function StartNavigation() {
   const { navigate } = useResearchNavigation();
@@ -97,6 +115,7 @@ beforeEach(() => {
   mocks.refresh.mockReset();
   mocks.submit.mockReset();
   mocks.cancel.mockReset();
+  mocks.toast.mockReset();
   mocks.toastError.mockReset();
 });
 
@@ -236,7 +255,7 @@ describe("ResearchComposer pending regression", () => {
 
 describe("ResearchComposer mutation refresh ownership", () => {
   it("existing threadへのsubmit成功はActionを1回だけ呼んで入力をclearしclient refreshしない", async () => {
-    mocks.submit.mockResolvedValue(undefined);
+    mocks.submit.mockResolvedValue(ACCEPTED_RESULT);
     const user = userEvent.setup();
     renderComposer();
     const textarea = screen.getByRole<HTMLTextAreaElement>("textbox", {
@@ -249,6 +268,54 @@ describe("ResearchComposer mutation refresh ownership", () => {
     await waitFor(() => expect(textarea).toHaveValue(""));
     expect(mocks.submit).toHaveBeenCalledTimes(1);
     expect(mocks.submit).toHaveBeenCalledWith("市場への影響は？", "current");
+    expect(mocks.refresh).not.toHaveBeenCalled();
+  });
+
+  it("利用枠が残っている再試行待ち時間では入力を保持して専用案内を表示する", async () => {
+    const question = "利用枠を確認する質問";
+    mocks.submit.mockResolvedValue({
+      kind: "daily-request-limit-exceeded",
+      resetAt: "2026-07-21T00:00:00+09:00",
+      retryAfterSeconds: 37,
+    });
+    const user = userEvent.setup();
+    renderComposer();
+    const textarea = screen.getByRole<HTMLTextAreaElement>("textbox", {
+      name: "質問",
+    });
+    await user.type(textarea, question);
+
+    await user.click(screen.getByRole("button", { name: "送信" }));
+
+    await waitFor(() =>
+      expect(mocks.toast).toHaveBeenCalledWith(DAILY_LIMIT_MESSAGE),
+    );
+    expect(textarea).toHaveValue(question);
+    expect(mocks.toastError).not.toHaveBeenCalled();
+    expect(mocks.refresh).not.toHaveBeenCalled();
+  });
+
+  it("利用枠のリセット時刻を過ぎていれば入力を保持して再試行案内を表示する", async () => {
+    const question = "リセット直後の質問";
+    mocks.submit.mockResolvedValue({
+      kind: "daily-request-limit-exceeded",
+      resetAt: "2026-07-21T00:00:00+09:00",
+      retryAfterSeconds: 0,
+    });
+    const user = userEvent.setup();
+    renderComposer();
+    const textarea = screen.getByRole<HTMLTextAreaElement>("textbox", {
+      name: "質問",
+    });
+    await user.type(textarea, question);
+
+    await user.click(screen.getByRole("button", { name: "送信" }));
+
+    await waitFor(() =>
+      expect(mocks.toast).toHaveBeenCalledWith(DAILY_LIMIT_RESET_MESSAGE),
+    );
+    expect(textarea).toHaveValue(question);
+    expect(mocks.toastError).not.toHaveBeenCalled();
     expect(mocks.refresh).not.toHaveBeenCalled();
   });
 

@@ -77,18 +77,23 @@ describe("hey-api error interceptor — ApiError 正規化", () => {
     const fn = client.interceptors.error.fns[0];
     if (!fn) throw new Error("error interceptor not registered");
 
+    const body = { detail: "Article not found" };
     const response = new Response(null, {
       status: 404,
       statusText: "Not Found",
     });
 
-    await expect(
-      fn({ detail: "Article not found" }, response, {} as never),
-    ).rejects.toMatchObject({
+    const error = await (
+      fn(body, response, {} as never) as Promise<unknown>
+    ).catch((e: unknown) => e);
+
+    expect(error).toMatchObject({
       name: "ApiError",
       status: 404,
       detail: "Article not found",
     });
+    expect((error as ApiError).body).toBe(body);
+    expect((error as ApiError).retryAfter).toBeNull();
     expect(mocks.logServerEvent).not.toHaveBeenCalled();
   });
 
@@ -216,20 +221,29 @@ describe("hey-api error interceptor — ApiError 正規化", () => {
     const fn = client.interceptors.error.fns[0];
     if (!fn) throw new Error("error interceptor not registered");
 
+    const body = {
+      detail: "Daily research request limit exceeded",
+      code: "research_daily_request_limit_exceeded",
+      limit: 10,
+      resetAt: "2026-07-21T00:00:00+09:00",
+    };
     const response = new Response(null, {
       status: 429,
       statusText: "Too Many Requests",
+      headers: { "Retry-After": "37" },
     });
 
-    await expect(
-      fn({ detail: "rate limited" }, response, {
+    const error = await (
+      fn(body, response, {
         method: "GET",
         url: "/api/v1/articles",
-      } as never),
-    ).rejects.toMatchObject({
+      } as never) as Promise<unknown>
+    ).catch((e: unknown) => e);
+
+    expect(error).toMatchObject({
       name: "ApiError",
       status: 429,
-      detail: "rate limited",
+      detail: "Daily research request limit exceeded",
       meta: {
         kind: "http_429",
         method: "GET",
@@ -237,6 +251,8 @@ describe("hey-api error interceptor — ApiError 正規化", () => {
         status: 429,
       },
     });
+    expect((error as ApiError).body).toBe(body);
+    expect((error as ApiError).retryAfter).toBe("37");
     expect(mocks.logServerEvent).toHaveBeenCalledWith(
       "warn",
       "frontend_internal_api_failure",
@@ -245,7 +261,7 @@ describe("hey-api error interceptor — ApiError 正規化", () => {
         method: "GET",
         path: "/api/v1/articles",
         status: 429,
-        detail: "rate limited",
+        detail: "Daily research request limit exceeded",
       },
     );
   });

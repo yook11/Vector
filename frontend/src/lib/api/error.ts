@@ -18,6 +18,8 @@ export class ApiError extends Error {
     public status: number,
     public detail: string,
     public meta?: ApiErrorMeta,
+    public body: unknown = undefined,
+    public retryAfter: string | null = null,
   ) {
     super(detail);
     this.name = "ApiError";

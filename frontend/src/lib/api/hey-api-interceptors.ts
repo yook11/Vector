@@ -74,6 +74,8 @@ const errorInterceptor = async (
   const status = response?.status ?? 0;
   const detail =
     normalizeErrorDetail(error) || response?.statusText || `HTTP ${status}`;
+  const body = response === undefined ? undefined : error;
+  const retryAfter = response?.headers.get("Retry-After") ?? null;
   if (status === 429 || status >= 500) {
     const kind = status === 429 ? "http_429" : "http_5xx";
     logServerEvent(
@@ -87,10 +89,22 @@ const errorInterceptor = async (
         detail,
       },
     );
-    throw new ApiError(status, detail, { kind, method, path, status });
+    throw new ApiError(
+      status,
+      detail,
+      { kind, method, path, status },
+      body,
+      retryAfter,
+    );
   }
 
-  throw new ApiError(status, detail, { method, path, status });
+  throw new ApiError(
+    status,
+    detail,
+    { method, path, status },
+    body,
+    retryAfter,
+  );
 };
 
 if (client.interceptors.request.fns.length === 0) {
