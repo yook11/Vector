@@ -17,13 +17,13 @@ CI では Gitleaks が導入 patch と commit message を別々に検査し、Ha
 
 PR / main push では次の blocking gate が自動実行される。詳細設定は各 workflow が正本。
 
-- [`security-pr.yml`](../.github/workflows/security-pr.yml) — osv-scanner (lockfile SCA) + npm audit (`--audit-level=high`) + Semgrep CE (`p/owasp-top-ten` + `p/security-audit`)
-- [`ci.yml`](../.github/workflows/ci.yml) — Ruff / Biome / tsc + unit / integration test + Playwright E2E smoke
+- [`security-pr.yml`](.github/workflows/security-pr.yml) — osv-scanner (lockfile SCA) + npm audit (`--audit-level=high`) + Semgrep CE (`p/owasp-top-ten` + `p/security-audit`)
+- [`ci.yml`](.github/workflows/ci.yml) — Ruff / Biome / tsc + unit / integration test + Playwright E2E smoke
 
 公開初期は次の高コストな検査を Actions UI から手動実行する。
 
-- [`security-nightly.yml`](../.github/workflows/security-nightly.yml) — Trivy fs / config scan (HIGH+CRITICAL)
-- [`schemathesis-nightly.yml`](../.github/workflows/schemathesis-nightly.yml) — FastAPI `/openapi.json` と実装の適合性 fuzz (Schemathesis)
+- [`security-nightly.yml`](.github/workflows/security-nightly.yml) — Trivy fs / config scan (HIGH+CRITICAL)
+- [`schemathesis-nightly.yml`](.github/workflows/schemathesis-nightly.yml) — FastAPI `/openapi.json` と実装の適合性 fuzz (Schemathesis)
 
 自動 gate の新規 finding は PR を block し、手動検査の finding はその run を fail させる。検出結果は Actions Artifacts に退避する。
 
