@@ -6,7 +6,7 @@ import type { auth } from "@/lib/auth/auth";
 // window.location.href triggers a full reload, which resets module state.
 let signingOut = false;
 
-export const authClient = createAuthClient({
+const authClient = createAuthClient({
   basePath: "/api/auth",
   plugins: [inferAdditionalFields<typeof auth>()],
   fetchOptions: {
@@ -24,4 +24,4 @@ export const authClient = createAuthClient({
   },
 });
 
-export const { signIn, signUp, signOut, useSession } = authClient;
+export const { signIn, signOut, useSession } = authClient;

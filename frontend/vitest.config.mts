@@ -51,7 +51,6 @@ export default defineConfig({
         "src/features/source-health/page-models/source-health.ts",
         "src/app/api/internal/revalidate/route.ts",
         "src/features/auth/components/LoginForm.tsx",
-        "src/features/auth/components/RegisterForm.tsx",
         "src/features/sources/components/SourceTable.tsx",
         "src/features/news/components/SearchBar.tsx",
         "src/features/watchlist/components/WatchlistButton.tsx",
