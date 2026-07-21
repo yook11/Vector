@@ -55,6 +55,7 @@ from app.agent.running import AnsweringPhases, AnsweringRunner, RunContext, RunI
 from app.agent.threads.contracts import ThreadMessageSnapshot
 from app.analysis.analyzed_article import InScopeAnalyzedArticle
 from app.analysis.assessment.domain.result import InScope, InScopeCategory
+from tests.agent.running._input_safety import AllowInputSafetyChecker
 
 
 def _as_of() -> datetime:
@@ -521,6 +522,7 @@ class _WorkflowHarness:
             else ()
         )
         runner = AnsweringRunner(
+            input_safety_checker=AllowInputSafetyChecker(),
             context_preparer=_FixedContextPreparer(input.context),
             phases_factory=lambda: self._phases,
             progress=self._progress,

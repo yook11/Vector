@@ -154,7 +154,8 @@ export function ResearchLiveAnnouncer({
   if (
     activeRunId !== null &&
     reported?.threadId === threadId &&
-    reported.runId === activeRunId
+    reported.runId === activeRunId &&
+    reported.text.length > 0
   ) {
     announcement = `進行状況: ${reported.text}`;
   } else if (

@@ -45,6 +45,7 @@ from app.agent.running import AnsweringPhases, AnsweringRunner, RunContext, RunI
 from app.agent.running import answering_runner as answering_runner_module
 from app.analysis.analyzed_article import InScopeAnalyzedArticle
 from app.analysis.assessment.domain.result import InScope, InScopeCategory
+from tests.agent.running._input_safety import AllowInputSafetyChecker
 from tests.agent.runtime._fakes import ScriptedAgentRuntime
 from tests.logfire._metric_helpers import collected_metrics
 
@@ -459,6 +460,7 @@ def _runner(
         evidence_answerer=_EvidenceAnswerer(error=answer_error, timeline=timeline),
     )
     return AnsweringRunner(
+        input_safety_checker=AllowInputSafetyChecker(),
         context_preparer=_Preparer(),
         phases_factory=lambda: phases,
         progress=progress,
@@ -739,6 +741,7 @@ async def test_runner_preserves_internal_hit_order_into_synthesis() -> None:
         evidence_answerer=answerer,
     )
     runner = AnsweringRunner(
+        input_safety_checker=AllowInputSafetyChecker(),
         context_preparer=_Preparer(),
         phases_factory=lambda: phases,
         events=None,

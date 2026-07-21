@@ -201,6 +201,24 @@ def test_serializer_escapes_protocol_text_into_one_json_data_line() -> None:
     assert json.loads(data_line)["text"] == text
 
 
+def test_policy_blocked_terminal_sse_has_attempt_and_status_without_error_code() -> (
+    None
+):
+    frame = serialize_agent_run_sse_entry(
+        AgentRunLiveStreamEntry(
+            stream_id="1710000000000-0",
+            attempt_epoch=2,
+            event=AgentRunLiveStreamTerminalEvent(status="policy_blocked"),
+        )
+    )
+
+    assert frame is not None
+    assert json.loads(frame.decode().splitlines()[2].removeprefix("data: ")) == {
+        "attemptEpoch": 2,
+        "status": "policy_blocked",
+    }
+
+
 @pytest.mark.parametrize(
     "stream_id",
     [

@@ -30,6 +30,7 @@ from app.agent.runtime._structured_output import (
 )
 from app.agent.runtime.contract import AgentResponseInvalidError, AgentTextStream
 from app.analysis.ai_provider_errors import (
+    AIProviderContentRejectionKind,
     AIProviderError,
     AIProviderInputRejectedError,
     AIProviderNetworkError,
@@ -111,10 +112,11 @@ class GeminiAgentRuntime:
                 )
             else:
                 _record_usage(span, getattr(response, "usage_metadata", None))
-                finish_reason = _finish_reason_name(response)
-                if finish_reason in _BLOCKED_FINISH_REASONS:
-                    classified_error = AIProviderOutputBlockedError(
-                        reason=output_blocked_reason(finish_reason)
+                finish_reason: str | None = None
+                if _has_prompt_block(response):
+                    classified_error = AIProviderInputRejectedError(
+                        reason=GeminiContentRejectionReason.INPUT_BLOCKED,
+                        rejection_kind=AIProviderContentRejectionKind.SAFETY,
                     )
                     _record_classified_error(
                         span,
@@ -122,6 +124,25 @@ class GeminiAgentRuntime:
                         error_type=_provider_error_type(classified_error),
                     )
                 else:
+                    finish_reason = _finish_reason_name(response)
+                if (
+                    classified_error is None
+                    and finish_reason in _BLOCKED_FINISH_REASONS
+                ):
+                    classified_error = AIProviderOutputBlockedError(
+                        reason=output_blocked_reason(finish_reason),
+                        rejection_kind=(
+                            AIProviderContentRejectionKind.SAFETY
+                            if finish_reason == "SAFETY"
+                            else AIProviderContentRejectionKind.OTHER
+                        ),
+                    )
+                    _record_classified_error(
+                        span,
+                        result="blocked",
+                        error_type=_provider_error_type(classified_error),
+                    )
+                elif classified_error is None:
                     try:
                         output = _parse_output(agent, response)
                     except AgentResponseInvalidError as exc:
@@ -213,7 +234,8 @@ class GeminiAgentRuntime:
                     _record_usage(span, getattr(chunk, "usage_metadata", None))
                     if _has_prompt_block(chunk):
                         classified_error = AIProviderInputRejectedError(
-                            reason=GeminiContentRejectionReason.INPUT_BLOCKED
+                            reason=GeminiContentRejectionReason.INPUT_BLOCKED,
+                            rejection_kind=AIProviderContentRejectionKind.SAFETY,
                         )
                         break
 
@@ -228,7 +250,12 @@ class GeminiAgentRuntime:
                     )
                     if blocked_reason_name is not None:
                         classified_error = AIProviderOutputBlockedError(
-                            reason=output_blocked_reason(blocked_reason_name)
+                            reason=output_blocked_reason(blocked_reason_name),
+                            rejection_kind=(
+                                AIProviderContentRejectionKind.SAFETY
+                                if blocked_reason_name == "SAFETY"
+                                else AIProviderContentRejectionKind.OTHER
+                            ),
                         )
                         break
                     terminal_reason_seen = terminal_reason_seen or bool(

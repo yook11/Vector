@@ -14,8 +14,11 @@
 
 from __future__ import annotations
 
+from enum import StrEnum
+
 import pytest
 
+import app.analysis.ai_provider_errors as ai_provider_errors
 from app.analysis.ai_provider_errors import (
     AIProviderConfigurationError,
     AIProviderContentError,
@@ -52,6 +55,16 @@ _CONTENT_LEAVES: tuple[type[AIProviderContentError], ...] = (
     AIProviderInputRejectedError,
     AIProviderOutputBlockedError,
 )
+
+
+def _content_rejection_kind_type() -> type[StrEnum]:
+    kind_type = getattr(
+        ai_provider_errors,
+        "AIProviderContentRejectionKind",
+        None,
+    )
+    assert isinstance(kind_type, type) and issubclass(kind_type, StrEnum)
+    return kind_type
 
 
 def test_failure_mode_has_five_members() -> None:
@@ -163,6 +176,38 @@ def test_content_reason_is_stored(cls: type[AIProviderContentError]) -> None:
     """content error は渡された StrEnum reason を保持する (forensics)。"""
     exc = cls(reason=GeminiContentRejectionReason.RECITATION)
     assert exc.reason is GeminiContentRejectionReason.RECITATION
+
+
+def test_content_rejection_kind_has_provider_neutral_safety_vocabulary() -> None:
+    kind_type = _content_rejection_kind_type()
+
+    assert kind_type.OTHER.value == "other"  # type: ignore[attr-defined]
+    assert kind_type.SAFETY.value == "safety"  # type: ignore[attr-defined]
+
+
+@pytest.mark.parametrize("cls", _CONTENT_LEAVES)
+def test_content_rejection_kind_defaults_to_other(
+    cls: type[AIProviderContentError],
+) -> None:
+    kind_type = _content_rejection_kind_type()
+    error = cls(reason=GeminiContentRejectionReason.RECITATION)
+
+    assert error.rejection_kind is kind_type.OTHER  # type: ignore[attr-defined]
+    assert error.is_safety_rejection is False  # type: ignore[attr-defined]
+
+
+def test_safety_kind_preserves_existing_leaf_inheritance_and_code() -> None:
+    kind_type = _content_rejection_kind_type()
+    error = AIProviderInputRejectedError(
+        reason=GeminiContentRejectionReason.INPUT_BLOCKED,
+        rejection_kind=kind_type.SAFETY,  # type: ignore[attr-defined,call-arg]
+    )
+
+    assert isinstance(error, AIProviderContentError)
+    assert isinstance(error, AIProviderError)
+    assert error.CODE == "ai_error_input_rejected"
+    assert error.rejection_kind is kind_type.SAFETY  # type: ignore[attr-defined]
+    assert error.is_safety_rejection is True  # type: ignore[attr-defined]
 
 
 # -- state reason 契約 (任意 + 型ガード + legacy 互換) --

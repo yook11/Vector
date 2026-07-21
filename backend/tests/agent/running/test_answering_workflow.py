@@ -27,6 +27,7 @@ from app.agent.question_context import (
     QuestionContextTelemetry,
 )
 from app.agent.running import AnsweringPhases, AnsweringRunner, RunContext, RunInput
+from tests.agent.running._input_safety import AllowInputSafetyChecker
 
 RUN_ID = UUID("019bd239-1ed4-7fbb-a336-04fe3c197650")
 AS_OF = datetime(2026, 7, 19, 9, 30, tzinfo=UTC)
@@ -195,6 +196,7 @@ def _runner(
 
     return (
         AnsweringRunner(
+            input_safety_checker=AllowInputSafetyChecker(),
             context_preparer=_Preparer(context, timeline, prepare_error),
             phases_factory=phases_factory,
             progress=_Progress(timeline),

@@ -1,0 +1,1 @@
+"""Input Safety Agentのprovider schema。"""

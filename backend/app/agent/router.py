@@ -409,7 +409,11 @@ async def stream_research_run_events(
                 status_code=status.HTTP_404_NOT_FOUND,
                 headers={"Cache-Control": "no-store"},
             )
-        if context.status in (AgentRunStatus.COMPLETED, AgentRunStatus.FAILED):
+        if context.status in (
+            AgentRunStatus.COMPLETED,
+            AgentRunStatus.POLICY_BLOCKED,
+            AgentRunStatus.FAILED,
+        ):
             await lease.release()
             return Response(
                 status_code=status.HTTP_204_NO_CONTENT,
@@ -501,6 +505,8 @@ async def get_research_run(
     response = await repo.read_run_for_user(run_id=run_id, user_id=user.id)
     if response is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND)
+    if response.status == AgentRunStatus.POLICY_BLOCKED:
+        return response
     recent_events = await AgentRunLiveEventReader(redis).recent_events(run_id)
     return response.model_copy(update={"recent_events": recent_events})
 

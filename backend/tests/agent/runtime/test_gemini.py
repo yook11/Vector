@@ -4,12 +4,15 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass, replace
+from enum import StrEnum
 from inspect import signature
 from types import SimpleNamespace
 
 import pytest
 
+import app.analysis.ai_provider_errors as ai_provider_errors
 from app.analysis.ai_provider_errors import (
+    AIProviderInputRejectedError,
     AIProviderNetworkError,
     AIProviderOutputBlockedError,
 )
@@ -32,6 +35,16 @@ from tests.agent.runtime._helpers import (
 class DataclassRuntimeOutput:
     result: str
     tags: list[str]
+
+
+def _content_rejection_kind_type() -> type[StrEnum]:
+    kind_type = getattr(
+        ai_provider_errors,
+        "AIProviderContentRejectionKind",
+        None,
+    )
+    assert isinstance(kind_type, type) and issubclass(kind_type, StrEnum)
+    return kind_type
 
 
 async def test_constructor_accepts_only_borrowed_async_client() -> None:
@@ -261,15 +274,16 @@ async def test_unknown_extra_field_location_is_collapsed_to_fixed_placeholder() 
 
 
 @pytest.mark.parametrize(
-    ("finish_reason", "expected_reason"),
+    ("finish_reason", "expected_reason", "expected_kind_name"),
     [
-        ("SAFETY", GeminiContentRejectionReason.SAFETY),
-        ("RECITATION", GeminiContentRejectionReason.RECITATION),
+        ("SAFETY", GeminiContentRejectionReason.SAFETY, "SAFETY"),
+        ("RECITATION", GeminiContentRejectionReason.RECITATION, "OTHER"),
     ],
 )
 async def test_blocked_finish_reason_maps_to_existing_provider_error(
     finish_reason: str,
     expected_reason: GeminiContentRejectionReason,
+    expected_kind_name: str,
 ) -> None:
     """拒否理由を既存の provider エラー語彙へ対応付ける。"""
     client = FakeGeminiClient([blocked_response(finish_reason)])
@@ -279,9 +293,38 @@ async def test_blocked_finish_reason_maps_to_existing_provider_error(
         await runtime.invoke(make_agent(), "typed input", attempt_number=1)
 
     assert exc_info.value.reason is expected_reason
+    assert exc_info.value.rejection_kind is getattr(  # type: ignore[attr-defined]
+        _content_rejection_kind_type(),
+        expected_kind_name,
+    )
     assert client.models.generate_content.await_count == 1
     client.close.assert_not_awaited()
     client.aclose.assert_not_awaited()
+
+
+async def test_non_stream_prompt_feedback_precedes_candidate_safety() -> None:
+    response = SimpleNamespace(
+        text='{"result":"must not parse","tags":[]}',
+        candidates=[
+            SimpleNamespace(
+                finish_reason=SimpleNamespace(name="SAFETY"),
+            )
+        ],
+        usage_metadata=None,
+        prompt_feedback=SimpleNamespace(block_reason="SAFETY"),
+    )
+    client = FakeGeminiClient([response])
+    runtime = runtime_type()(client=client)
+
+    with pytest.raises(AIProviderInputRejectedError) as exc_info:
+        await runtime.invoke(make_agent(), "typed input", attempt_number=1)
+
+    assert exc_info.value.reason is GeminiContentRejectionReason.INPUT_BLOCKED
+    assert exc_info.value.rejection_kind is (  # type: ignore[attr-defined]
+        _content_rejection_kind_type().SAFETY  # type: ignore[attr-defined]
+    )
+    assert exc_info.value.is_safety_rejection is True  # type: ignore[attr-defined]
+    assert client.models.generate_content.await_count == 1
 
 
 async def test_known_gemini_failure_uses_existing_error_translation() -> None:

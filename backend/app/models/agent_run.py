@@ -1,7 +1,8 @@
 """1 user message に対する 1 回の非同期実行状態 (ORM)。
 
-run は状態機械 (queued → running → completed/failed)。thread / message との
-同一 thread 整合を composite FK で焼く (設計判断 11)。ORM relationship は
+run は状態機械 (queued → running → completed/policy_blocked/failed)。
+policy_blockedは回答を持たない確定終端である。thread / message との同一thread整合を
+composite FK で焼く (設計判断 11)。ORM relationship は
 消費側 slice で追加する。
 """
 
@@ -57,7 +58,7 @@ class AgentRun(Base):
             "assistant_message_id", name="uq_agent_runs_assistant_message"
         ),
         CheckConstraint(
-            "status IN ('queued', 'running', 'completed', 'failed')",
+            "status IN ('queued', 'running', 'completed', 'policy_blocked', 'failed')",
             name="ck_agent_runs_status",
         ),
         CheckConstraint(

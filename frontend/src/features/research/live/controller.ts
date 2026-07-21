@@ -37,6 +37,7 @@ export type ResearchRunLiveStatus =
   | "queued"
   | "running"
   | "completed"
+  | "policy_blocked"
   | "failed";
 
 export type ResearchRunLivePollResult =
@@ -214,7 +215,11 @@ export function createResearchRunLiveController({
           });
         }
         if (transition.acceptedTerminal !== null) {
-          beginFinalization(transition.acceptedTerminal, version);
+          if (transition.acceptedTerminal.status === "policy_blocked") {
+            beginPolicyBlocked(transition.acceptedTerminal, version);
+          } else {
+            beginFinalization(transition.acceptedTerminal, version);
+          }
         }
       };
       addEventSourceListener(source, eventName, eventListener);
@@ -292,15 +297,25 @@ export function createResearchRunLiveController({
     }
 
     pollingFailureCount = 0;
-    if (result.run.status === "completed" || result.run.status === "failed") {
+    if (
+      result.run.status === "completed" ||
+      result.run.status === "policy_blocked" ||
+      result.run.status === "failed"
+    ) {
       const terminal: ResearchLiveTerminal =
         result.run.status === "completed"
           ? { status: "completed" }
-          : {
-              status: "failed",
-              errorCode: result.run.errorCode ?? "internal_error",
-            };
-      beginFinalization(terminal, version);
+          : result.run.status === "policy_blocked"
+            ? { status: "policy_blocked" }
+            : {
+                status: "failed",
+                errorCode: result.run.errorCode ?? "internal_error",
+              };
+      if (terminal.status === "policy_blocked") {
+        beginPolicyBlocked(terminal, version);
+      } else {
+        beginFinalization(terminal, version);
+      }
       return;
     }
 
@@ -392,6 +407,27 @@ export function createResearchRunLiveController({
     startFinalizationRefresh(version);
   }
 
+  function beginPolicyBlocked(
+    terminal: Extract<ResearchLiveTerminal, { status: "policy_blocked" }>,
+    version: number,
+  ): void {
+    if (!isCurrent(version) || finalizationStarted) return;
+    finalizationStarted = true;
+    permanentlyStopped = true;
+    clearPollingTimer();
+    pollingRequest?.abort();
+    closeEventSource();
+    updateSnapshot({
+      runStatus: terminal.status,
+      connectionMode: "terminal",
+      liveState: {
+        ...suppressResearchLiveDraft(snapshot.liveState),
+        terminal,
+      },
+    });
+    void requestRefresh().catch(() => undefined);
+  }
+
   function stopPermanentlyForHttpError(version: number): void {
     if (!isCurrent(version) || permanentlyStopped) return;
     permanentlyStopped = true;
@@ -454,6 +490,7 @@ export function createResearchRunLiveController({
 
   function handleVisibilityChange(version: number): void {
     if (!isCurrent(version)) return;
+    if (permanentlyStopped) return;
     if (visibility.isHidden()) {
       clearPollingTimer();
       clearFinalizationTimer();
@@ -578,6 +615,7 @@ function isRunStatus(value: unknown): value is ResearchRunLiveStatus {
     value === "queued" ||
     value === "running" ||
     value === "completed" ||
+    value === "policy_blocked" ||
     value === "failed"
   );
 }
@@ -609,7 +647,13 @@ function mergeActiveRunStatus(
   current: ResearchRunLiveStatus,
   incoming: "queued" | "running",
 ): ResearchRunLiveStatus {
-  if (current === "completed" || current === "failed") return current;
+  if (
+    current === "completed" ||
+    current === "policy_blocked" ||
+    current === "failed"
+  ) {
+    return current;
+  }
   return current === "running" || incoming === "running" ? "running" : "queued";
 }
 

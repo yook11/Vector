@@ -39,7 +39,11 @@ from app.models.agent_thread import AgentThread
 from app.schemas.research import ResearchRunResponse
 
 _ACTIVE_STATUSES = (AgentRunStatus.QUEUED.value, AgentRunStatus.RUNNING.value)
-_TERMINAL_STATUSES = (AgentRunStatus.COMPLETED.value, AgentRunStatus.FAILED.value)
+_TERMINAL_STATUSES = (
+    AgentRunStatus.COMPLETED.value,
+    AgentRunStatus.POLICY_BLOCKED.value,
+    AgentRunStatus.FAILED.value,
+)
 _STALE_AFTER = timedelta(minutes=20)
 logger = structlog.get_logger(__name__)
 
@@ -155,6 +159,32 @@ class AgentRunRepository:
             .values(
                 status=AgentRunStatus.FAILED.value,
                 error_code=AgentRunErrorCode.ENQUEUE_FAILED.value,
+                completed_at=now,
+            )
+            .execution_options(synchronize_session=False)
+        )
+        return (result.rowcount or 0) == 1
+
+    async def mark_policy_blocked(
+        self,
+        run_id: uuid_mod.UUID,
+        *,
+        expected_attempt_epoch: int,
+        now: datetime | None = None,
+    ) -> bool:
+        now = now or datetime.now(UTC)
+        result = await self._session.execute(
+            update(AgentRun)
+            .where(
+                AgentRun.id == run_id,
+                AgentRun.status == AgentRunStatus.RUNNING.value,
+                AgentRun.attempt_epoch == expected_attempt_epoch,
+            )
+            .values(
+                status=AgentRunStatus.POLICY_BLOCKED.value,
+                assistant_message_id=None,
+                error_code=None,
+                progress_stage=None,
                 completed_at=now,
             )
             .execution_options(synchronize_session=False)
@@ -408,6 +438,8 @@ class AgentRunRepository:
             return CancelRunCommandOutcome(CancelRunOutcome.ALREADY_COMPLETED)
         if AgentRunStatus(terminal_status) is AgentRunStatus.FAILED:
             return CancelRunCommandOutcome(CancelRunOutcome.ALREADY_FAILED)
+        if AgentRunStatus(terminal_status) is AgentRunStatus.POLICY_BLOCKED:
+            return CancelRunCommandOutcome(CancelRunOutcome.ALREADY_POLICY_BLOCKED)
         return None
 
     async def sweep_stale_runs(

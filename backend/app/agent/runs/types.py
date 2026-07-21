@@ -9,6 +9,7 @@ class AgentRunStatus(StrEnum):
     QUEUED = "queued"
     RUNNING = "running"
     COMPLETED = "completed"
+    POLICY_BLOCKED = "policy_blocked"
     FAILED = "failed"
 
 

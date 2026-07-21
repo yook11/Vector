@@ -78,6 +78,13 @@ class AIProviderFailureMode(StrEnum):
         )
 
 
+class AIProviderContentRejectionKind(StrEnum):
+    """Provider固有reasonとは独立したcontent拒否のapplication分類。"""
+
+    OTHER = "other"
+    SAFETY = "safety"
+
+
 class AIProviderError(VectorDomainError):
     """provider 由来エラーの共通祖先。Stage の処理方針は持たない。
 
@@ -143,13 +150,28 @@ class AIProviderContentError(AIProviderError):
     SAFE_ATTRS: ClassVar[tuple[str, ...]] = ("CODE", "reason")
 
     reason: StrEnum
+    rejection_kind: AIProviderContentRejectionKind
 
-    def __init__(self, *, reason: StrEnum) -> None:
+    def __init__(
+        self,
+        *,
+        reason: StrEnum,
+        rejection_kind: AIProviderContentRejectionKind = (
+            AIProviderContentRejectionKind.OTHER
+        ),
+    ) -> None:
         if not isinstance(reason, StrEnum):
             # PII 境界: 自由文字列 (AI 生成値) を reason に通さない。
             raise TypeError("reason must be a StrEnum member")
+        if not isinstance(rejection_kind, AIProviderContentRejectionKind):
+            raise TypeError("rejection_kind must be an AIProviderContentRejectionKind")
         super().__init__()
         self.reason = reason
+        self.rejection_kind = rejection_kind
+
+    @property
+    def is_safety_rejection(self) -> bool:
+        return self.rejection_kind is AIProviderContentRejectionKind.SAFETY
 
 
 # ---------------------------------------------------------------------------

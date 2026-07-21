@@ -31,6 +31,7 @@ from google.genai import errors as genai_errors
 
 from app.analysis.ai_provider_errors import (
     AIProviderConfigurationError,
+    AIProviderContentRejectionKind,
     AIProviderInputRejectedError,
     AIProviderNetworkError,
     AIProviderRateLimitedError,
@@ -231,7 +232,8 @@ def translate_gemini_error(exc: Exception) -> Exception:
                 )
             if "blocked" in message or "safety" in message:
                 return AIProviderInputRejectedError(
-                    reason=GeminiContentRejectionReason.INPUT_BLOCKED
+                    reason=GeminiContentRejectionReason.INPUT_BLOCKED,
+                    rejection_kind=AIProviderContentRejectionKind.SAFETY,
                 )
             return AIProviderRequestInvalidError(
                 reason=GeminiStateReason.INVALID_ARGUMENT

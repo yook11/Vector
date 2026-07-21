@@ -14,6 +14,8 @@ import pytest
 from pydantic import SecretStr
 
 from app.agent import composition
+from app.agent.input_safety.agent import INPUT_SAFETY_AGENT
+from app.agent.input_safety.service import InputSafetyService
 from app.agent.planning.agent import QUESTION_PLANNER_AGENT
 from app.agent.question_context.agent import QUESTION_CONTEXT_AGENT
 from app.agent.question_context.contract import (
@@ -27,7 +29,10 @@ from app.agent.runtime.contract import (
     AgentResponseInvalidError,
 )
 from app.agent.threads.contracts import ThreadMessageSnapshot
-from app.analysis.ai_provider_errors import AIProviderError
+from app.analysis.ai_provider_errors import (
+    AIProviderConfigurationError,
+    AIProviderError,
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -97,7 +102,7 @@ def _composition_builder(name: str) -> Any:
     return builder
 
 
-def test_build_answering_runner_wires_question_context_agent_and_deferred_runtime(
+def test_build_answering_runner_wires_safety_and_context_agents_to_deferred_runtime(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     build_answering_runner = _composition_builder("build_answering_runner")
@@ -119,16 +124,20 @@ def test_build_answering_runner_wires_question_context_agent_and_deferred_runtim
     )
 
     runner = build_answering_runner(session_factory=object())
+    input_safety_checker = runner._input_safety_checker
     context_preparer = runner._context_preparer
 
     assert isinstance(runner, AnsweringRunner)
+    assert isinstance(input_safety_checker, InputSafetyService)
+    assert input_safety_checker._agent is INPUT_SAFETY_AGENT
+    assert input_safety_checker._runtime_scope_factory is activate_runtime
     assert isinstance(context_preparer, QuestionContextService)
     assert context_preparer._agent is QUESTION_CONTEXT_AGENT
     assert context_preparer._runtime_scope_factory is activate_runtime
     assert activation_calls == []
 
 
-def test_build_answering_runner_injects_no_runtime_when_gemini_is_unconfigured(
+async def test_build_answering_runner_keeps_safety_runtime_when_gemini_is_unconfigured(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     build_answering_runner = _composition_builder("build_answering_runner")
@@ -139,11 +148,25 @@ def test_build_answering_runner_injects_no_runtime_when_gemini_is_unconfigured(
     )
 
     runner = build_answering_runner(session_factory=object())
+    input_safety_checker = runner._input_safety_checker
     context_preparer = runner._context_preparer
 
+    assert isinstance(input_safety_checker, InputSafetyService)
+    assert input_safety_checker._agent is INPUT_SAFETY_AGENT
+    assert (
+        input_safety_checker._runtime_scope_factory
+        is composition.activate_gemini_agent_runtime
+    )
     assert isinstance(context_preparer, QuestionContextService)
     assert context_preparer._agent is QUESTION_CONTEXT_AGENT
     assert context_preparer._runtime_scope_factory is None
+
+    with pytest.raises(AIProviderConfigurationError):
+        await input_safety_checker.check(
+            question="safety input",
+            previous_turn=None,
+            run_id=UUID("019bd239-1ed4-7fbb-a336-04fe3c197645"),
+        )
 
 
 def test_composition_does_not_export_removed_external_search_service_builder() -> None:

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import replace
+from enum import StrEnum
 from inspect import signature
 from types import SimpleNamespace
 from typing import Any, cast
@@ -21,6 +22,7 @@ from opentelemetry.trace import (
 )
 
 import app.agent.runtime.gemini as gemini_runtime_module
+import app.analysis.ai_provider_errors as ai_provider_errors
 from app.agent.runtime.gemini import GeminiAgentRuntime
 from app.analysis.ai_provider_errors import (
     AIProviderInputRejectedError,
@@ -41,6 +43,16 @@ from tests.agent.runtime._deepseek_helpers import (
     success_response as deepseek_success_response,
 )
 from tests.agent.runtime._helpers import FakeGeminiClient, make_agent, success_response
+
+
+def _content_rejection_kind_type() -> type[StrEnum]:
+    kind_type = getattr(
+        ai_provider_errors,
+        "AIProviderContentRejectionKind",
+        None,
+    )
+    assert isinstance(kind_type, type) and issubclass(kind_type, StrEnum)
+    return kind_type
 
 
 class FakeSdkStream:
@@ -406,7 +418,7 @@ async def test_prompt_block_records_usage_then_classified_error_and_closes_once(
         client=cast(AsyncClient, FakeGeminiClient([], streams=[sdk_stream]))
     )
 
-    with pytest.raises(AIProviderInputRejectedError):
+    with pytest.raises(AIProviderInputRejectedError) as exc_info:
         _ = [
             fragment
             async for fragment in runtime.invoke_stream(
@@ -416,6 +428,9 @@ async def test_prompt_block_records_usage_then_classified_error_and_closes_once(
             )
         ]
 
+    assert exc_info.value.rejection_kind is (  # type: ignore[attr-defined]
+        _content_rejection_kind_type().SAFETY  # type: ignore[attr-defined]
+    )
     span = tracer.spans[0]
     assert span.attributes["result"] == "provider_error"
     assert span.attributes["gen_ai.usage.input_tokens"] == 11
@@ -427,17 +442,23 @@ async def test_prompt_block_records_usage_then_classified_error_and_closes_once(
     assert span.end_calls == 1
 
 
+@pytest.mark.parametrize(
+    ("finish_reason", "expected_kind_name"),
+    [("SAFETY", "SAFETY"), ("RECITATION", "OTHER")],
+)
 async def test_blocked_finish_reason_records_blocked_outcome_without_event(
     monkeypatch: pytest.MonkeyPatch,
+    finish_reason: str,
+    expected_kind_name: str,
 ) -> None:
     tracer = FakeTracer()
     monkeypatch.setattr(gemini_runtime_module, "_TRACER", tracer)
-    sdk_stream = FakeSdkStream([_stream_chunk(finish_reason="SAFETY")])
+    sdk_stream = FakeSdkStream([_stream_chunk(finish_reason=finish_reason)])
     runtime = GeminiAgentRuntime(
         client=cast(AsyncClient, FakeGeminiClient([], streams=[sdk_stream]))
     )
 
-    with pytest.raises(AIProviderOutputBlockedError):
+    with pytest.raises(AIProviderOutputBlockedError) as exc_info:
         _ = [
             fragment
             async for fragment in runtime.invoke_stream(
@@ -447,6 +468,10 @@ async def test_blocked_finish_reason_records_blocked_outcome_without_event(
             )
         ]
 
+    assert exc_info.value.rejection_kind is getattr(  # type: ignore[attr-defined]
+        _content_rejection_kind_type(),
+        expected_kind_name,
+    )
     span = tracer.spans[0]
     assert span.attributes["result"] == "blocked"
     assert span.status_code is StatusCode.ERROR

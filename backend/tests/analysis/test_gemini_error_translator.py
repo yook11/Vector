@@ -14,6 +14,7 @@ import httpx
 import pytest
 from google.genai import errors as genai_errors
 
+import app.analysis.ai_provider_errors as ai_provider_errors
 from app.analysis.ai_provider_errors import (
     AIProviderConfigurationError,
     AIProviderInputRejectedError,
@@ -183,6 +184,28 @@ def test_code_400_without_status_3way_branch(message: str, expected: type) -> No
     exc = _client_error(code=400, status="", message=message)
     translated = translate_gemini_error(exc)
     assert isinstance(translated, expected)
+
+
+def test_input_blocked_translation_marks_provider_neutral_safety_kind() -> None:
+    rejection_kind = getattr(
+        ai_provider_errors,
+        "AIProviderContentRejectionKind",
+        None,
+    )
+    assert rejection_kind is not None
+    error = _client_error(
+        code=400,
+        status="INVALID_ARGUMENT",
+        message="request blocked by safety filter",
+    )
+
+    translated = translate_gemini_error(error)
+
+    assert isinstance(translated, AIProviderInputRejectedError)
+    assert translated.CODE == "ai_error_input_rejected"
+    assert translated.reason is GeminiContentRejectionReason.INPUT_BLOCKED
+    assert translated.rejection_kind is rejection_kind.SAFETY
+    assert translated.is_safety_rejection is True
 
 
 # RESOURCE_EXHAUSTED / code=429 → 2-way 分岐 (usage limit vs rate)
