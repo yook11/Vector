@@ -3,7 +3,7 @@
 # =====================================================================
 # Stage 1: deps — package install のみ (依存変更がない場合に build cache が効く)
 # =====================================================================
-FROM node:20-slim AS deps
+FROM node:24-slim AS deps
 WORKDIR /app
 
 COPY package.json package-lock.json ./
@@ -12,7 +12,7 @@ RUN npm ci --include=dev
 # =====================================================================
 # Stage 2: builder — production build (next build で .next/standalone を生成)
 # =====================================================================
-FROM node:20-slim AS builder
+FROM node:24-slim AS builder
 WORKDIR /app
 
 ENV NEXT_TELEMETRY_DISABLED=1
@@ -55,7 +55,7 @@ RUN mkdir -p public \
 # =====================================================================
 # Stage 3: development — 現行挙動 100% 維持 (next dev、compose の volume mount 前提)
 # =====================================================================
-FROM node:20-slim AS development
+FROM node:24-slim AS development
 WORKDIR /app
 
 ENV NODE_ENV=development \
@@ -97,7 +97,7 @@ CMD ["npm", "run", "dev"]
 # =====================================================================
 # Stage 4: production — standalone server を non-root で起動
 # =====================================================================
-FROM node:20-slim AS production
+FROM node:24-slim AS production
 WORKDIR /app
 
 ENV NODE_ENV=production \
@@ -118,7 +118,7 @@ USER nextjs
 EXPOSE 3000
 
 # Next.js standalone build には専用 health route なし、root GET 200 で生存確認。
-# node:20-slim には curl/wget なし、node 内蔵で完結させる。
+# node:24-slim には curl/wget なし、node 内蔵で完結させる。
 # Trivy DS-0026 (HEALTHCHECK 不足) の解消も兼ねる。production stage のみで十分
 # (Trivy は最終 stage を評価、dev stage は外部到達なし)。
 HEALTHCHECK --interval=10s --timeout=5s --start-period=30s --retries=3 \
