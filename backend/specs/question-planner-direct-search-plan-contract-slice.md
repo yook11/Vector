@@ -573,13 +573,16 @@ production codeの変更でFastAPI schema、SQLAlchemy model、Alembic migration
 
 ## Implementation
 
-対応PR: 本PR（URLはPR作成後に追記）
+対応PR: [#47](https://github.com/yook11/Vector/pull/47)
 
 実装commit:
 
 - `b5e2f9b8`: Plannerの最終失敗時にfallbackせず回答runを停止する。
 - `c29676f2`: 外部taskとQuery / Selector promptを`research_goal`語彙へ統一する。
 - `63f7a4a8`: Planner、Runner、結果契約、probe、testをDirect / Searchの2 planへ移行する。
+- `87abb2c8`: 公開仕様と保証台帳をDirect / Searchの現行契約へ更新する。
+- `d6adcb42`: 未分類障害、`PlanType` SSoT、probeの型変換境界を厳密化する。
+- `40fa5f22`: probeの不正な時刻指定を固定エラーへ変換し、入力の再表示を防ぐ。
 
 中間的なhidden modeやfallbackをproductionへ残さず、2値contractと全consumerを同じ変更で
 切り替えた。公開仕様とtest guarantee ledgerは別commitで現行契約へ更新した。
