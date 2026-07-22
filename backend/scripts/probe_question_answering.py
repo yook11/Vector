@@ -1,4 +1,4 @@
-"""Probe question answering retrieval/synthesis and direct answer paths."""
+"""Probe question answering search/synthesis and direct answer paths."""
 
 from __future__ import annotations
 
@@ -11,6 +11,8 @@ from pathlib import Path
 from uuid import uuid4
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from app.agent.answering.contract import AnsweringRequest
 from app.agent.answering.direct_answer.agent import DIRECT_ANSWER_AGENT
@@ -33,21 +35,27 @@ from app.agent.contract import (
     ExternalSearchQueriesGeneratedEvent,
 )
 from app.agent.evidence_collection.internal_search import InternalSearchQueries
+from app.agent.evidence_collection.internal_search.ai.gemini import (
+    GeminiQueryEmbedder,
+)
 from app.agent.evidence_collection.internal_search.article_search import (
     InternalArticleSearchHit,
+    PgVectorArticleSearchRepository,
 )
+from app.agent.evidence_collection.internal_search.service import InternalSearchService
 from app.agent.input_safety.agent import INPUT_SAFETY_AGENT
 from app.agent.input_safety.service import InputSafetyService
 from app.agent.planning.contract import (
+    DirectAnswerPlan,
     ExternalResearchTask,
-    ExternalSearchPlan,
-    NoRetrievalPlan,
     PlanningRequest,
+    SearchPlan,
 )
 from app.agent.question_context.agent import QUESTION_CONTEXT_AGENT
 from app.agent.question_context.service import QuestionContextService
 from app.agent.running import AnsweringPhases, AnsweringRunner, RunContext, RunInput
 from app.config import settings
+from app.db import engine
 
 DEFAULT_GOAL = "NVIDIA Blackwell AI GPU latest supply and customer demand evidence"
 DEFAULT_QUESTION = "NVIDIA Blackwell の直近の供給と顧客需要は投資判断に重要？"
@@ -63,19 +71,19 @@ class _UnreachableInternalSearch:
         raise AssertionError(f"internal search must not be called: {queries!r}")
 
 
-class _FixedExternalPlanner:
-    def __init__(self, plan: ExternalSearchPlan) -> None:
+class _FixedSearchPlanner:
+    def __init__(self, plan: SearchPlan) -> None:
         self._plan = plan
 
-    async def plan(self, request: PlanningRequest) -> ExternalSearchPlan:  # noqa: ARG002
+    async def plan(self, request: PlanningRequest) -> SearchPlan:  # noqa: ARG002
         return self._plan
 
 
 class _FixedDirectPlanner:
-    def __init__(self, plan: NoRetrievalPlan) -> None:
+    def __init__(self, plan: DirectAnswerPlan) -> None:
         self._plan = plan
 
-    async def plan(self, request: PlanningRequest) -> NoRetrievalPlan:  # noqa: ARG002
+    async def plan(self, request: PlanningRequest) -> DirectAnswerPlan:  # noqa: ARG002
         return self._plan
 
 
@@ -121,20 +129,20 @@ class _UnreachableEvidenceAnswerer:
 
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="Probe AnsweringRunner external retrieval or direct answer path."
+        description="Probe AnsweringRunner search or direct answer path."
     )
     parser.add_argument(
         "--mode",
-        choices=("external", "direct"),
-        default="external",
-        help="Probe mode. Defaults to external.",
+        choices=("direct", "search"),
+        default="search",
+        help="Probe mode. Defaults to search.",
     )
     parser.add_argument(
         "goals",
         nargs="*",
         metavar="goal",
         help=(
-            "External research goal for --mode external. Quote each goal "
+            "External research goal for --mode search. Quote each goal "
             "containing spaces. At most 3 goals are accepted."
         ),
     )
@@ -168,7 +176,7 @@ async def _probe(
     if mode == "direct":
         await _probe_direct(question=question)
         return
-    await _probe_external(
+    await _probe_search(
         question=question,
         goals=goals,
         requested_agent_count=requested_agent_count,
@@ -176,7 +184,7 @@ async def _probe(
     )
 
 
-async def _probe_external(
+async def _probe_search(
     *,
     question: str,
     goals: Sequence[str],
@@ -188,8 +196,18 @@ async def _probe_external(
     _require_secret("GEMINI_API_KEY", settings.gemini_api_key.get_secret_value())
 
     as_of = datetime.now(UTC)
-    plan = _build_external_plan(goals, target_time_window=target_time_window)
+    plan = _build_search_plan(
+        question,
+        goals,
+        target_time_window=target_time_window,
+    )
     events = _RecordingAnswerEvents()
+    session_factory = async_sessionmaker(engine, expire_on_commit=False)
+    internal_search = InternalSearchService(
+        embedder=GeminiQueryEmbedder(),
+        article_search_repository=PgVectorArticleSearchRepository(session_factory),
+        events=events,
+    )
     runner = AnsweringRunner(
         input_safety_checker=InputSafetyService(
             agent=INPUT_SAFETY_AGENT,
@@ -200,8 +218,8 @@ async def _probe_external(
             runtime_scope_factory=None,
         ),
         phases_factory=lambda: AnsweringPhases(
-            planner=_FixedExternalPlanner(plan),
-            internal_search=_UnreachableInternalSearch(),
+            planner=_FixedSearchPlanner(plan),
+            internal_search=internal_search,
             external_runtime_factory=build_external_research_runtime_factory(),
             evidence_answerer=EvidenceAnswerFlow(
                 agent=EVIDENCE_ANSWER_AGENT,
@@ -219,12 +237,12 @@ async def _probe_external(
         )
     ).final_output
 
-    _print_retrieval_summary(
+    _print_plan_summary(
         as_of=as_of,
         plan=plan,
         requested_agent_count=requested_agent_count,
         events=events.events,
-        collection_failures=result.retrieval.collection_failures,
+        collection_failures=result.plan_summary.collection_failures,
     )
     print()
     _print_answer_result(result)
@@ -244,7 +262,7 @@ async def _probe_direct(*, question: str) -> None:
             runtime_scope_factory=None,
         ),
         phases_factory=lambda: AnsweringPhases(
-            planner=_FixedDirectPlanner(NoRetrievalPlan(reason="direct answer probe")),
+            planner=_FixedDirectPlanner(DirectAnswerPlan()),
             internal_search=_UnreachableInternalSearch(),
             external_runtime_factory=_UnreachableExternalRuntimeFactory(),
             evidence_answerer=_UnreachableEvidenceAnswerer(),
@@ -263,7 +281,7 @@ async def _probe_direct(*, question: str) -> None:
 
     print("direct:")
     print(f"  as_of={as_of.isoformat()}")
-    print("  planned_mode=none")
+    print("  plan_type=direct_answer")
     print()
     _print_answer_result(result)
 
@@ -273,11 +291,12 @@ def _require_secret(name: str, value: str) -> None:
         raise SystemExit(f"{name} is not configured")
 
 
-def _build_external_plan(
+def _build_search_plan(
+    question: str,
     goals: Sequence[str],
     *,
     target_time_window: str | None,
-) -> ExternalSearchPlan:
+) -> SearchPlan:
     cleaned_goals = [goal.strip() for goal in goals if goal.strip()]
     if not cleaned_goals:
         cleaned_goals = [DEFAULT_GOAL]
@@ -286,26 +305,26 @@ def _build_external_plan(
             f"external research goals must be at most {MAX_EXTERNAL_RESEARCH_TASKS}"
         )
 
-    return ExternalSearchPlan(
+    return SearchPlan(
+        article_search_queries=[question],
         external_research_tasks=[
             ExternalResearchTask(research_goal=goal) for goal in cleaned_goals
         ],
         target_time_window=target_time_window,
-        reason="external retrieval probe",
     )
 
 
-def _print_retrieval_summary(
+def _print_plan_summary(
     *,
     as_of: datetime,
-    plan: ExternalSearchPlan,
+    plan: SearchPlan,
     requested_agent_count: int,
     events: Sequence[AnswerProgressEvent],
     collection_failures: Sequence[str],
 ) -> None:
-    print("retrieval:")
+    print("plan:")
     print(f"  as_of={as_of.isoformat()}")
-    print(f"  planned_mode={plan.retrieval_mode}")
+    print(f"  plan_type={plan.plan_type}")
     print(f"  target_time_window={plan.target_time_window or ''}")
     print(f"  requested_agent_count={requested_agent_count}")
     print(f"  planned_task_count={len(plan.external_research_tasks)}")
@@ -343,9 +362,10 @@ def _print_external_progress(events: Sequence[AnswerProgressEvent]) -> None:
 def _print_answer_result(result: AnswerQuestionResult) -> None:
     print("answer:")
     print(f"  status={result.status}")
+    print(f"  plan_type={result.plan_summary.plan_type}")
     print(f"  answer={result.answer}")
     print(f"  missing_aspects={list(result.missing_aspects)}")
-    print(f"  collection_failures={list(result.retrieval.collection_failures)}")
+    print(f"  collection_failures={list(result.plan_summary.collection_failures)}")
     print("  sources:")
     if not result.sources:
         print("    (none)")

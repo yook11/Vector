@@ -70,6 +70,7 @@ class QuestionPlanningService:
                                 ),
                                 attempt_number=attempt_number,
                             )
+                            completed_plan = plan_from_draft(draft)
                         except _PLANNER_CLASSIFIED_ERRORS as exc:
                             failure = classify_planner_failure(exc)
                             retriable = (
@@ -84,11 +85,6 @@ class QuestionPlanningService:
                             terminal_error = exc
                             terminal_failure_code = failure.code
                             raise
-
-                        completed_plan = plan_from_draft(
-                            draft,
-                            fallback_query=request.context.standalone_question,
-                        )
                         retry_used = attempt_number > 1
                         break
             except _PLANNER_CLASSIFIED_ERRORS as exc:
@@ -96,7 +92,7 @@ class QuestionPlanningService:
                     record_question_planner_outcome(
                         result="failed",
                         retry_used=retry_used,
-                        planned_retrieval_mode="unknown",
+                        plan_type="not_created",
                         failure_code=terminal_failure_code,
                     )
                 raise
@@ -105,7 +101,7 @@ class QuestionPlanningService:
                 record_question_planner_outcome(
                     result="planned",
                     retry_used=retry_used,
-                    planned_retrieval_mode=completed_plan.retrieval_mode,
+                    plan_type=completed_plan.plan_type,
                 )
                 return completed_plan
 

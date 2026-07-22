@@ -15,33 +15,31 @@ from pydantic import (
     model_validator,
 )
 
-from app.agent.contract import RetrievalMode
+from app.agent.contract import PlanType
 from app.agent.question_context.contract import QuestionContext
+from app.agent.runtime.contract import AgentResponseDefect, AgentResponseInvalidError
 
 __all__ = [
     "EXTERNAL_RESEARCH_TASK_LIMIT",
     "ExternalResearchTask",
-    "ExternalSearchPlan",
-    "InternalAndExternalPlan",
-    "InternalRetrievalPlan",
-    "MAX_INTERNAL_QUERIES",
-    "NoRetrievalPlan",
+    "DirectAnswerPlan",
+    "MAX_ARTICLE_SEARCH_QUERIES",
     "PlanQuery",
     "PlanningAttemptInput",
     "PlanningRequest",
     "QuestionPlan",
     "QuestionPlanDraft",
     "QuestionPlanner",
-    "RetrievalPlan",
+    "PlanType",
+    "SearchPlan",
     "TargetTimeWindow",
     "TargetTimeWindowKind",
     "plan_from_draft",
     "render_target_time_window",
-    "safe_fallback_plan",
 ]
 
 EXTERNAL_RESEARCH_TASK_LIMIT = 3
-MAX_INTERNAL_QUERIES = 3
+MAX_ARTICLE_SEARCH_QUERIES = 3
 
 PlanQuery = Annotated[
     str,
@@ -177,11 +175,10 @@ class QuestionPlanDraft(BaseModel):
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
-    retrieval_mode: RetrievalMode
-    internal_queries: list[str] = Field(default_factory=list)
-    external_collection_goals: list[str] = Field(default_factory=list)
+    plan_type: PlanType
+    article_search_queries: list[str]
+    research_goals: list[str]
     target_time_window: TargetTimeWindow | None = None
-    reason: str = Field(min_length=1)
 
 
 class ExternalResearchTask(BaseModel):
@@ -196,77 +193,41 @@ class ExternalResearchTask(BaseModel):
     research_goal: str = Field(min_length=1)
 
 
-class NoRetrievalPlan(BaseModel):
+class DirectAnswerPlan(BaseModel):
     """Completed plan for direct answer without retrieval."""
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
-    retrieval_mode: Literal["none"] = "none"
-    reason: str = Field(min_length=1)
+    plan_type: Literal["direct_answer"] = "direct_answer"
 
 
-class InternalRetrievalPlan(BaseModel):
-    """Completed plan for internal article retrieval."""
-
-    model_config = ConfigDict(frozen=True, extra="forbid")
-
-    retrieval_mode: Literal["internal"] = "internal"
-    internal_queries: list[PlanQuery] = Field(
-        min_length=1,
-        max_length=MAX_INTERNAL_QUERIES,
-    )
-    reason: str = Field(min_length=1)
-
-
-class ExternalSearchPlan(BaseModel):
-    """Completed plan for external search."""
+class SearchPlan(BaseModel):
+    """Completed plan that always collects internal and external evidence."""
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
-    retrieval_mode: Literal["external"] = "external"
-    external_research_tasks: list[ExternalResearchTask] = Field(
+    plan_type: Literal["search"] = "search"
+    article_search_queries: list[PlanQuery] = Field(
         min_length=1,
-        max_length=EXTERNAL_RESEARCH_TASK_LIMIT,
-    )
-    target_time_window: TargetTimeWindow | None = None
-    reason: str = Field(min_length=1)
-
-    @model_validator(mode="after")
-    def _validate_unique_task_goals(self) -> Self:
-        if not _external_task_goals_unique(self.external_research_tasks):
-            raise ValueError("external research task goals must be unique")
-        return self
-
-
-class InternalAndExternalPlan(BaseModel):
-    """Completed plan for internal retrieval plus external search."""
-
-    model_config = ConfigDict(frozen=True, extra="forbid")
-
-    retrieval_mode: Literal["internal_and_external"] = "internal_and_external"
-    internal_queries: list[PlanQuery] = Field(
-        min_length=1,
-        max_length=MAX_INTERNAL_QUERIES,
+        max_length=MAX_ARTICLE_SEARCH_QUERIES,
     )
     external_research_tasks: list[ExternalResearchTask] = Field(
         min_length=1,
         max_length=EXTERNAL_RESEARCH_TASK_LIMIT,
     )
     target_time_window: TargetTimeWindow | None = None
-    reason: str = Field(min_length=1)
 
     @model_validator(mode="after")
-    def _validate_unique_task_goals(self) -> Self:
+    def _validate_unique_inputs(self) -> Self:
+        query_keys = [query.casefold() for query in self.article_search_queries]
+        if len(query_keys) != len(set(query_keys)):
+            raise ValueError("article search queries must be unique")
         if not _external_task_goals_unique(self.external_research_tasks):
             raise ValueError("external research task goals must be unique")
         return self
 
 
-# 回答の根拠を取りに行く plan。取りに行かない NoRetrievalPlan と対をなす。
-type RetrievalPlan = (
-    InternalRetrievalPlan | ExternalSearchPlan | InternalAndExternalPlan
-)
-type QuestionPlan = NoRetrievalPlan | RetrievalPlan
+QuestionPlan = DirectAnswerPlan | SearchPlan
 
 
 class QuestionPlanner(Protocol):
@@ -277,49 +238,25 @@ class QuestionPlanner(Protocol):
 
 def plan_from_draft(
     draft: QuestionPlanDraft,
-    *,
-    fallback_query: str,
 ) -> QuestionPlan:
     """LLM draft を完成済み plan に整える。"""
 
-    match draft.retrieval_mode:
-        case "none":
-            return NoRetrievalPlan(reason=draft.reason)
-        case "internal":
-            return InternalRetrievalPlan(
-                internal_queries=_clean_plan_queries(draft.internal_queries)
-                or [fallback_query],
-                reason=draft.reason,
-            )
-        case "external":
-            return ExternalSearchPlan(
-                external_research_tasks=_clean_external_research_tasks(
-                    draft.external_collection_goals
-                )
-                or [_default_external_research_task(fallback_query)],
-                target_time_window=draft.target_time_window,
-                reason=draft.reason,
-            )
-        case "internal_and_external":
-            return InternalAndExternalPlan(
-                internal_queries=_clean_plan_queries(draft.internal_queries)
-                or [fallback_query],
-                external_research_tasks=_clean_external_research_tasks(
-                    draft.external_collection_goals
-                )
-                or [_default_external_research_task(fallback_query)],
-                target_time_window=draft.target_time_window,
-                reason=draft.reason,
-            )
-    assert_never(draft.retrieval_mode)
-
-
-def safe_fallback_plan(*, fallback_query: str) -> InternalRetrievalPlan:
-    """Planner が使えない時の安全側 fallback plan。"""
-
-    return InternalRetrievalPlan(
-        internal_queries=[fallback_query],
-        reason="planner output invalid; defaulted to internal retrieval",
+    article_search_queries = _clean_plan_queries(draft.article_search_queries)
+    external_research_tasks = _clean_external_research_tasks(draft.research_goals)
+    if draft.plan_type == "direct_answer":
+        if (
+            article_search_queries
+            or external_research_tasks
+            or draft.target_time_window is not None
+        ):
+            raise _response_defect()
+        return DirectAnswerPlan()
+    if not article_search_queries or not external_research_tasks:
+        raise _response_defect()
+    return SearchPlan(
+        article_search_queries=article_search_queries,
+        external_research_tasks=external_research_tasks,
+        target_time_window=draft.target_time_window,
     )
 
 
@@ -335,7 +272,7 @@ def _clean_plan_queries(queries: list[str]) -> list[str]:
             continue
         cleaned_queries.append(cleaned)
         seen_queries.add(key)
-        if len(cleaned_queries) >= MAX_INTERNAL_QUERIES:
+        if len(cleaned_queries) >= MAX_ARTICLE_SEARCH_QUERIES:
             break
     return cleaned_queries
 
@@ -354,10 +291,13 @@ def _clean_external_research_tasks(goals: list[str]) -> list[ExternalResearchTas
     return cleaned_tasks
 
 
-def _default_external_research_task(fallback_query: str) -> ExternalResearchTask:
-    return ExternalResearchTask(research_goal=fallback_query)
-
-
 def _external_task_goals_unique(tasks: list[ExternalResearchTask]) -> bool:
     goals = [task.research_goal for task in tasks]
     return len(goals) == len(set(goals))
+
+
+def _response_defect() -> AgentResponseInvalidError:
+    return AgentResponseInvalidError(
+        AgentResponseDefect.OUTPUT_SCHEMA_MISMATCH,
+        repair_hint="plan fields are inconsistent",
+    )

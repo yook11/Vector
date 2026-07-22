@@ -10,13 +10,13 @@ from app.agent.answering.evidence_answer.contract import (
 )
 from app.agent.answering.evidence_answer.evidence import AnswerEvidenceItem
 from app.agent.contract import (
+    AnswerPlanSummary,
     AnswerQuestionResult,
-    AnswerRetrievalSummary,
     AnswerSource,
     EvidenceCollectionFailure,
 )
 from app.agent.evidence_collection import EvidenceCollectionOutcome
-from app.agent.planning.contract import RetrievalPlan
+from app.agent.planning.contract import SearchPlan
 from app.agent.question_context.contract import QuestionContext
 
 __all__ = ["assemble_evidence_result"]
@@ -35,7 +35,7 @@ _EXTERNAL_TASK_STATUS_MISSING = {
 def assemble_evidence_result(
     *,
     context: QuestionContext,
-    plan: RetrievalPlan,
+    plan: SearchPlan,
     outcome: EvidenceCollectionOutcome,
     evidence: list[AnswerEvidenceItem],
     draft: EvidenceAnswerDraft,
@@ -49,11 +49,6 @@ def assemble_evidence_result(
     all_external_tasks_time_filter_failed = _all_external_tasks_time_filter_failed(
         outcome
     )
-    suppress_empty_external_failure = (
-        plan.retrieval_mode == "external"
-        and all_external_tasks_time_filter_failed
-        and not outcome.collection_failures
-    )
     return _assemble_evidence_result(
         plan=plan,
         outcome=outcome,
@@ -65,9 +60,7 @@ def assemble_evidence_result(
             else draft.missing_aspects
         ),
         requirement_missing_aspects=requirement_missing_aspects,
-        include_retrieval_empty_missing=(
-            not evidence and not suppress_empty_external_failure
-        ),
+        include_retrieval_empty_missing=(not evidence),
     )
 
 
@@ -116,7 +109,7 @@ def _sources_for_citations(
 
 def _assemble_evidence_result(
     *,
-    plan: RetrievalPlan,
+    plan: SearchPlan,
     outcome: EvidenceCollectionOutcome,
     answer: str,
     sources: list[AnswerSource],
@@ -144,8 +137,8 @@ def _assemble_evidence_result(
         answer=answer,
         sources=sources,
         missing_aspects=missing_aspects,
-        retrieval=AnswerRetrievalSummary(
-            planned_mode=plan.retrieval_mode,
+        plan_summary=AnswerPlanSummary(
+            plan_type=plan.plan_type,
             collection_failures=outcome.collection_failures,
         ),
     )
@@ -153,14 +146,14 @@ def _assemble_evidence_result(
 
 def _derive_evidence_status(
     *,
-    plan: RetrievalPlan,
+    plan: SearchPlan,
     sources: list[AnswerSource],
     missing_aspects: list[str],
     outcome: EvidenceCollectionOutcome,
 ) -> Literal["answered", "insufficient"]:
     if outcome.collection_failures or missing_aspects:
         return "insufficient"
-    if plan.retrieval_mode != "none" and not sources:
+    if not sources:
         return "insufficient"
     return "answered"
 

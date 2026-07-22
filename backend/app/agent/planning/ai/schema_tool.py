@@ -4,14 +4,9 @@ from __future__ import annotations
 
 from typing import Any
 
-from app.agent.contract import RetrievalMode
+from app.agent.contract import PlanType
 
-_RETRIEVAL_MODE_VALUES = [
-    "none",
-    "internal",
-    "external",
-    "internal_and_external",
-]
+_PLAN_TYPE_VALUES = ["direct_answer", "search"]
 
 _TARGET_TIME_WINDOW_KIND_VALUES = [
     "today",
@@ -28,32 +23,29 @@ _TARGET_TIME_WINDOW_KIND_VALUES = [
 QUESTION_PLANNER_GEMINI_SCHEMA: dict[str, Any] = {
     "type": "OBJECT",
     "required": [
-        "retrieval_mode",
-        "internal_queries",
-        "external_collection_goals",
-        "reason",
+        "plan_type",
+        "article_search_queries",
+        "research_goals",
     ],
     "properties": {
-        "retrieval_mode": {
+        "plan_type": {
             "type": "STRING",
-            "enum": _RETRIEVAL_MODE_VALUES,
-            "description": (
-                "Needed retrieval: none, internal, external, or internal_and_external."
-            ),
+            "enum": _PLAN_TYPE_VALUES,
+            "description": "Answer plan: direct_answer or search.",
         },
-        "internal_queries": {
+        "article_search_queries": {
             "type": "ARRAY",
             "description": (
-                "Queries to embed for Vector internal article retrieval. "
+                "Queries to embed for Vector analyzed article retrieval. "
                 "Do not simply copy the raw user question. "
                 "Return at most 3 items."
             ),
             "items": {
                 "type": "STRING",
-                "description": "One internal vector-search query.",
+                "description": "One analyzed-article semantic search query.",
             },
         },
-        "external_collection_goals": {
+        "research_goals": {
             "type": "ARRAY",
             "description": (
                 "External research goals describing what evidence to collect. "
@@ -107,20 +99,14 @@ QUESTION_PLANNER_GEMINI_SCHEMA: dict[str, Any] = {
                 },
             },
         },
-        "reason": {
-            "type": "STRING",
-            "description": "Short Japanese routing reason, not shown to users.",
-        },
     },
 }
 
 
-def retrieval_mode_values() -> list[RetrievalMode]:
+def plan_type_values() -> list[PlanType]:
     """Return values to keep tests close to the schema SSoT."""
 
     return [
-        "none",
-        "internal",
-        "external",
-        "internal_and_external",
+        "direct_answer",
+        "search",
     ]

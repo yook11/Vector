@@ -17,8 +17,9 @@ from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from structlog.testing import capture_logs
 
+import app.agent.contract as agent_contract
 import app.agent.router as research_router_module
-from app.agent.contract import AnswerQuestionResult, AnswerRetrievalSummary
+from app.agent.contract import AnswerQuestionResult
 from app.agent.live_updates.stream import AgentRunLiveStreamTerminalEvent
 from app.agent.runs.contracts import (
     CancelRunCommandOutcome,
@@ -252,8 +253,15 @@ def _direct_result(answer: str = "worker answer") -> AnswerQuestionResult:
         answer=answer,
         sources=[],
         missing_aspects=[],
-        retrieval=AnswerRetrievalSummary(planned_mode="none"),
+        plan_summary=_plan_summary("direct_answer"),
     )
+
+
+def _plan_summary(plan_type: str) -> object:
+    summary_type = getattr(agent_contract, "AnswerPlanSummary", None)
+    if summary_type is None:
+        pytest.fail("agent contract must define AnswerPlanSummary")
+    return summary_type(plan_type=plan_type)
 
 
 @pytest.mark.asyncio

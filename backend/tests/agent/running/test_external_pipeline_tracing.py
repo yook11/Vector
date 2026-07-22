@@ -14,6 +14,7 @@ from logfire.testing import CaptureLogfire
 from openai import AsyncOpenAI
 from opentelemetry.trace import StatusCode
 
+import app.agent.planning.contract as planning_contract
 from app.agent.answering.contract import AnsweringRequest
 from app.agent.answering.direct_answer.contract import DirectAnswerDraft
 from app.agent.answering.evidence_answer.contract import EvidenceAnswerDraft
@@ -32,7 +33,6 @@ from app.agent.evidence_collection.external_search.deepseek_binding import (
 )
 from app.agent.planning.contract import (
     ExternalResearchTask,
-    ExternalSearchPlan,
     PlanningRequest,
     TargetTimeWindow,
 )
@@ -100,9 +100,13 @@ class _Preparer:
 
 
 class _Planner:
-    async def plan(self, request: PlanningRequest) -> ExternalSearchPlan:
+    async def plan(self, request: PlanningRequest) -> Any:
         del request
-        return ExternalSearchPlan(
+        plan_type = getattr(planning_contract, "SearchPlan", None)
+        if plan_type is None:
+            pytest.fail("planning contract must define SearchPlan")
+        return plan_type(
+            article_search_queries=["NVIDIA の直近発表"],
             external_research_tasks=[
                 ExternalResearchTask(research_goal="GOAL_SENTINEL_3cc7")
             ],
@@ -111,13 +115,13 @@ class _Planner:
                 year=1998,
                 month=2,
             ),
-            reason="trace external pipeline",
         )
 
 
-class _UnreachableInternalSearch:
+class _EmptyInternalSearch:
     async def search_articles(self, queries: object) -> list[object]:
-        raise AssertionError(f"internal search must not run: {queries!r}")
+        del queries
+        return []
 
 
 class _UnreachableDirectAnswerer:
@@ -212,7 +216,7 @@ def _runner(
     )
     phases = AnsweringPhases(
         planner=_Planner(),
-        internal_search=_UnreachableInternalSearch(),
+        internal_search=_EmptyInternalSearch(),
         external_runtime_factory=_Factory(runtime),
         direct_answerer=_UnreachableDirectAnswerer(),
         evidence_answerer=_EvidenceAnswerer(),

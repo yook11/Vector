@@ -10,7 +10,7 @@ from app.agent.evidence_collection.internal_search.contract import (
     InternalSearchFailurePhase,
 )
 from app.agent.evidence_collection.internal_search.query_embedding import (
-    MAX_INTERNAL_QUERIES,
+    MAX_ARTICLE_SEARCH_QUERIES,
     InternalQueryEmbedder,
     InternalQueryEmbedding,
     InternalSearchQueries,
@@ -24,7 +24,7 @@ from app.agent.evidence_collection.internal_search.service import InternalSearch
 __all__ = [
     "InternalArticleContent",
     "InternalArticleSearchHit",
-    "MAX_INTERNAL_QUERIES",
+    "MAX_ARTICLE_SEARCH_QUERIES",
     "InternalQueryEmbedder",
     "InternalQueryEmbedding",
     "InternalSearchError",

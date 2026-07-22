@@ -11,11 +11,9 @@ import app.agent.composition as composition
 import app.agent.contract as agent_contract
 from app.agent.contract import (
     AnswerQuestionResult,
-    AnswerRetrievalSummary,
     EvidenceCollectionFailure,
     ExternalUrlSource,
     InternalArticleSource,
-    RetrievalMode,
 )
 
 
@@ -36,12 +34,15 @@ def _external_source() -> ExternalUrlSource:
     )
 
 
-def _retrieval(
-    planned_mode: RetrievalMode = "internal",
+def _plan_summary(
+    plan_type: str = "search",
     collection_failures: list[EvidenceCollectionFailure] | None = None,
-) -> AnswerRetrievalSummary:
-    return AnswerRetrievalSummary(
-        planned_mode=planned_mode,
+) -> object:
+    summary_type = getattr(agent_contract, "AnswerPlanSummary", None)
+    if summary_type is None:
+        pytest.fail("agent contract must define AnswerPlanSummary")
+    return summary_type(
+        plan_type=plan_type,
         collection_failures=collection_failures or [],
     )
 
@@ -58,19 +59,26 @@ def test_does_not_export_legacy_answering_boundaries() -> None:
     ) == (False, False, False, False, False, False, False)
 
 
-class TestAnswerRetrievalSummary:
+class TestAnswerPlanSummary:
     @pytest.mark.parametrize("failure", ["internal_search", "external_search"])
-    def test_accepts_planned_mode_and_collection_failures(
+    def test_accepts_search_plan_type_and_collection_failures(
         self,
         failure: EvidenceCollectionFailure,
     ) -> None:
-        summary = AnswerRetrievalSummary(
-            planned_mode="internal_and_external",
+        summary = _plan_summary(
+            plan_type="search",
             collection_failures=[failure],
         )
 
-        assert summary.planned_mode == "internal_and_external"
+        assert summary.plan_type == "search"
         assert summary.collection_failures == [failure]
+
+    def test_rejects_collection_failures_for_direct_answer(self) -> None:
+        with pytest.raises(ValidationError):
+            _plan_summary(
+                plan_type="direct_answer",
+                collection_failures=["internal_search"],
+            )
 
 
 class TestSources:
@@ -106,18 +114,18 @@ class TestAnswerQuestionResult:
         result = AnswerQuestionResult(
             status="answered",
             answer="こんにちは。何を確認しますか？",
-            retrieval=_retrieval("none"),
+            plan_summary=_plan_summary("direct_answer"),
         )
 
         assert result.sources == []
         assert not hasattr(result, "execution")
 
-    def test_accepts_internal_answered_result_with_source(self) -> None:
+    def test_accepts_search_answered_result_with_internal_source(self) -> None:
         result = AnswerQuestionResult(
             status="answered",
             answer="内部記事から確認できました。",
             sources=[_internal_source()],
-            retrieval=_retrieval("internal"),
+            plan_summary=_plan_summary("search"),
         )
 
         assert result.status == "answered"
@@ -127,17 +135,17 @@ class TestAnswerQuestionResult:
             status="insufficient",
             answer="確認できた範囲では断定できません。",
             missing_aspects=["企業側の一次情報"],
-            retrieval=_retrieval("internal"),
+            plan_summary=_plan_summary("search"),
         )
 
         assert result.sources == []
 
-    def test_rejects_non_direct_answered_result_without_sources(self) -> None:
+    def test_rejects_search_answered_result_without_sources(self) -> None:
         with pytest.raises(ValidationError):
             AnswerQuestionResult(
                 status="answered",
                 answer="確認できました。",
-                retrieval=_retrieval("internal"),
+                plan_summary=_plan_summary("search"),
             )
 
     def test_rejects_answered_result_with_missing_aspects(self) -> None:
@@ -147,7 +155,7 @@ class TestAnswerQuestionResult:
                 answer="確認できました。",
                 sources=[_internal_source()],
                 missing_aspects=["企業側の一次情報"],
-                retrieval=_retrieval("internal"),
+                plan_summary=_plan_summary("search"),
             )
 
     def test_rejects_answered_result_with_collection_failures(self) -> None:
@@ -156,16 +164,16 @@ class TestAnswerQuestionResult:
                 status="answered",
                 answer="確認できました。",
                 sources=[_external_source()],
-                retrieval=_retrieval("external", ["external_search"]),
+                plan_summary=_plan_summary("search", ["external_search"]),
             )
 
-    def test_rejects_direct_planned_mode_with_sources(self) -> None:
+    def test_rejects_direct_plan_type_with_sources(self) -> None:
         with pytest.raises(ValidationError):
             AnswerQuestionResult(
                 status="answered",
                 answer="検索なし回答です。",
                 sources=[_internal_source()],
-                retrieval=_retrieval("none"),
+                plan_summary=_plan_summary("direct_answer"),
             )
 
     def test_rejects_insufficient_without_missing_aspects(self) -> None:
@@ -173,7 +181,7 @@ class TestAnswerQuestionResult:
             AnswerQuestionResult(
                 status="insufficient",
                 answer="確認できた範囲では断定できません。",
-                retrieval=_retrieval("internal"),
+                plan_summary=_plan_summary("search"),
             )
 
     @pytest.mark.parametrize("answer", ["", "   ", "\n"])
@@ -183,7 +191,7 @@ class TestAnswerQuestionResult:
                 status="insufficient",
                 answer=answer,
                 missing_aspects=["企業側の一次情報"],
-                retrieval=_retrieval("internal"),
+                plan_summary=_plan_summary("search"),
             )
 
     @pytest.mark.parametrize("missing", ["", "   ", "\n"])
@@ -193,5 +201,5 @@ class TestAnswerQuestionResult:
                 status="insufficient",
                 answer="確認できた範囲では断定できません。",
                 missing_aspects=[missing],
-                retrieval=_retrieval("internal"),
+                plan_summary=_plan_summary("search"),
             )

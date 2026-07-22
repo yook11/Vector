@@ -7,11 +7,11 @@ from typing import Any, Protocol, Self
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
-from app.agent.planning.contract import MAX_INTERNAL_QUERIES
+from app.agent.planning.contract import MAX_ARTICLE_SEARCH_QUERIES
 from app.analysis.embedding.domain.value_objects import EmbeddingVector
 
 __all__ = [
-    "MAX_INTERNAL_QUERIES",
+    "MAX_ARTICLE_SEARCH_QUERIES",
     "InternalQueryEmbedder",
     "InternalQueryEmbedding",
     "InternalSearchQueries",
@@ -37,7 +37,7 @@ class InternalSearchQueries(BaseModel):
 
     @model_validator(mode="after")
     def _validate_queries(self) -> Self:
-        if len(self.queries) > MAX_INTERNAL_QUERIES:
+        if len(self.queries) > MAX_ARTICLE_SEARCH_QUERIES:
             raise ValueError(
                 "internal search queries must be capped before construction"
             )

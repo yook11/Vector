@@ -24,6 +24,7 @@ from taskiq.message import TaskiqMessage
 from taskiq.receiver import Receiver
 
 import app.agent.composition as composition
+import app.agent.contract as agent_contract
 import app.queue.tasks.agent_run as agent_run_tasks
 from app.agent.answering.direct_answer.contract import (
     DirectAnswerInvalidError,
@@ -31,7 +32,6 @@ from app.agent.answering.direct_answer.contract import (
 from app.agent.contract import (
     AnswerGenerationStopped,
     AnswerQuestionResult,
-    AnswerRetrievalSummary,
     ExternalUrlSource,
     InternalArticleSource,
 )
@@ -449,13 +449,20 @@ def _patch_delta_worker(
     )
 
 
+def _plan_summary(plan_type: str) -> object:
+    summary_type = getattr(agent_contract, "AnswerPlanSummary", None)
+    if summary_type is None:
+        pytest.fail("agent contract must define AnswerPlanSummary")
+    return summary_type(plan_type=plan_type)
+
+
 def _direct_result(answer: str = "worker answer") -> AnswerQuestionResult:
     return AnswerQuestionResult(
         status="answered",
         answer=answer,
         sources=[],
         missing_aspects=[],
-        retrieval=AnswerRetrievalSummary(planned_mode="none"),
+        plan_summary=_plan_summary("direct_answer"),
     )
 
 
@@ -473,7 +480,7 @@ def _external_result() -> AnswerQuestionResult:
             )
         ],
         missing_aspects=[],
-        retrieval=AnswerRetrievalSummary(planned_mode="external"),
+        plan_summary=_plan_summary("search"),
     )
 
 
@@ -854,7 +861,7 @@ async def test_completed_run_persists_only_fixed_time_filter_missing_aspect(
         answer="指定期間の外部根拠は取得できませんでした。",
         sources=[],
         missing_aspects=[fixed_missing],
-        retrieval=AnswerRetrievalSummary(planned_mode="external"),
+        plan_summary=_plan_summary("search"),
     )
     _patch_worker_execution(monkeypatch, lambda **_kwargs: FakeAgent(result))
 
@@ -2575,7 +2582,7 @@ async def test_complete_run_warns_on_citation_source_mismatch_without_failing_ru
             )
         ],
         missing_aspects=[],
-        retrieval=AnswerRetrievalSummary(planned_mode="external"),
+        plan_summary=_plan_summary("search"),
     )
 
     with capture_logs() as logs:
@@ -3644,7 +3651,7 @@ def test_source_mapper_structures_internal_and_external_rows() -> None:
             ),
         ],
         missing_aspects=[],
-        retrieval=AnswerRetrievalSummary(planned_mode="internal_and_external"),
+        plan_summary=_plan_summary("search"),
     )
     message = build_assistant_message_for_result(
         thread_id=UUID("00000000-0000-4000-a000-000000000001"),

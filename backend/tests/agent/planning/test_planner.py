@@ -1,32 +1,22 @@
-"""QuestionPlanningService の retry・failure・metrics policy を検証する。"""
+"""QuestionPlanningService の2 plan retry・failure・metric contract。"""
 
 from __future__ import annotations
 
 import asyncio
+import importlib
 import json
 from collections.abc import Callable, Sequence
 from datetime import UTC, datetime
 from types import TracebackType
-from typing import Any, cast
+from typing import Any
 
 import pytest
 from logfire.testing import CaptureLogfire
 
-from app.agent.agent import Agent
-from app.agent.contract import RetrievalMode
 from app.agent.planning.agent import QUESTION_PLANNER_AGENT
-from app.agent.planning.contract import (
-    ExternalResearchTask,
-    PlanningAttemptInput,
-    PlanningRequest,
-    QuestionPlanDraft,
-)
 from app.agent.planning.service import QuestionPlanningService
 from app.agent.question_context.contract import QuestionContext
-from app.agent.runtime.contract import (
-    AgentResponseDefect,
-    AgentResponseInvalidError,
-)
+from app.agent.runtime.contract import AgentResponseDefect, AgentResponseInvalidError
 from app.analysis.ai_provider_errors import (
     AIProviderNetworkError,
     AIProviderOutputBlockedError,
@@ -38,45 +28,37 @@ from tests.logfire._metric_helpers import collected_metrics, sum_counter_for_res
 _PLANNER_OUTCOME_METRIC = "vector.agent.planner.outcome"
 
 
-def _input(question: str = "今日のNVIDIAの発表は？") -> PlanningRequest:
-    return PlanningRequest(
+def _contracts() -> Any:
+    return importlib.import_module("app.agent.planning.contract")
+
+
+def _required_contract(name: str) -> Any:
+    value = getattr(_contracts(), name, None)
+    if value is None:
+        pytest.fail(f"planning contract must define {name}")
+    return value
+
+
+def _input(question: str = "今日のNVIDIAの発表は？") -> Any:
+    return _required_contract("PlanningRequest")(
         context=QuestionContext(standalone_question=question),
-        as_of=datetime(2026, 6, 29, tzinfo=UTC),
+        as_of=datetime(2026, 7, 20, tzinfo=UTC),
     )
 
 
 def _draft(
-    mode: RetrievalMode,
     *,
-    internal_queries: list[str] | None = None,
-    external_collection_goals: list[str] | None = None,
+    plan_type: str,
+    article_search_queries: list[str] | None = None,
+    research_goals: list[str] | None = None,
     target_time_window: object | None = None,
-    reason: str = "test reason",
-) -> QuestionPlanDraft:
-    return QuestionPlanDraft(
-        retrieval_mode=mode,
-        internal_queries=internal_queries or [],
-        external_collection_goals=external_collection_goals or [],
+) -> Any:
+    return _required_contract("QuestionPlanDraft")(
+        plan_type=plan_type,
+        article_search_queries=article_search_queries or [],
+        research_goals=research_goals or [],
         target_time_window=target_time_window,
-        reason=reason,
     )
-
-
-def _target_time_window(**payload: object) -> object:
-    target_time_window_type = getattr(
-        __import__("app.agent.planning.contract", fromlist=["TargetTimeWindow"]),
-        "TargetTimeWindow",
-        None,
-    )
-    if target_time_window_type is None:
-        pytest.fail("app.agent.planning.contract must define TargetTimeWindow")
-    return cast(type[object], target_time_window_type).model_validate(payload)
-
-
-def _external_task(
-    research_goal: str = "外部根拠を確認する",
-) -> ExternalResearchTask:
-    return ExternalResearchTask(research_goal=research_goal)
 
 
 def _response_invalid(
@@ -149,7 +131,6 @@ class RecordingPlannerRuntimeScopeFactory:
 def _service(
     runtime: ScriptedAgentRuntime,
     *,
-    agent: Agent[PlanningAttemptInput, QuestionPlanDraft] = QUESTION_PLANNER_AGENT,
     exit_observer: Callable[[], None] | None = None,
 ) -> tuple[QuestionPlanningService, RecordingPlannerRuntimeScopeFactory]:
     factory = RecordingPlannerRuntimeScopeFactory(
@@ -158,7 +139,7 @@ def _service(
     )
     return (
         QuestionPlanningService(
-            agent=agent,
+            agent=QUESTION_PLANNER_AGENT,
             runtime_scope_factory=factory,
         ),
         factory,
@@ -167,9 +148,11 @@ def _service(
 
 def _metric_attributes(
     metrics: list[dict[str, Any]],
-    metric_name: str,
 ) -> list[dict[str, Any]]:
-    metric = next((item for item in metrics if item["name"] == metric_name), None)
+    metric = next(
+        (item for item in metrics if item["name"] == _PLANNER_OUTCOME_METRIC),
+        None,
+    )
     if metric is None:
         return []
     return [
@@ -177,48 +160,204 @@ def _metric_attributes(
     ]
 
 
-async def test_plan_activates_one_scope_and_invokes_declared_agent_once() -> None:
-    request = _input()
-    runtime = ScriptedAgentRuntime(
-        [
-            _draft(
-                "external",
-                external_collection_goals=["  NVIDIA の直近発表を確認する  "],
-            )
-        ]
+@pytest.mark.parametrize(
+    ("draft", "expected_plan_type"),
+    [
+        pytest.param(
+            lambda: _draft(plan_type="direct_answer"),
+            "direct_answer",
+            id="direct",
+        ),
+        pytest.param(
+            lambda: _draft(
+                plan_type="search",
+                article_search_queries=["NVIDIA AI GPU"],
+                research_goals=["NVIDIA の直近発表を確認する"],
+            ),
+            "search",
+            id="search",
+        ),
+    ],
+)
+async def test_planner_returns_each_completed_two_plan_variant_after_scope_exit(
+    draft: Callable[[], Any],
+    expected_plan_type: str,
+    capfire: CaptureLogfire,
+) -> None:
+    runtime = ScriptedAgentRuntime([draft()])
+    metrics_at_scope_exit: list[dict[str, Any]] = []
+    service, factory = _service(
+        runtime,
+        exit_observer=lambda: metrics_at_scope_exit.extend(
+            _metric_attributes(collected_metrics(capfire))
+        ),
     )
-    service, factory = _service(runtime)
 
-    plan = await service.plan(request)
+    plan = await service.plan(_input())
 
-    assert plan.external_research_tasks == [
-        _external_task("NVIDIA の直近発表を確認する")
-    ]
-    assert (factory.created, factory.entered) == ([runtime], [runtime])
-    assert len(factory.exits) == 1
-    assert factory.exits[0][0] is runtime
-    assert factory.exits[0][1:3] == (None, None)
+    assert plan.plan_type == expected_plan_type
     assert len(runtime.calls) == 1
     call = runtime.calls[0]
     assert (
         call.agent is QUESTION_PLANNER_AGENT,
         call.attempt_number,
-        call.input.request is request,
+        call.input.request.context.standalone_question,
         call.input.previous_error,
-    ) == (True, 1, True, None)
+    ) == (True, 1, "今日のNVIDIAの発表は？", None)
+    assert (factory.created, factory.entered, len(factory.exits)) == (
+        [runtime],
+        [runtime],
+        1,
+    )
+    assert metrics_at_scope_exit == []
+    assert _metric_attributes(collected_metrics(capfire)) == [
+        {
+            "result": "planned",
+            "retry_used": False,
+            "plan_type": expected_plan_type,
+            "failure_code": "none",
+        }
+    ]
 
 
-@pytest.mark.parametrize("mode", ["external", "internal_and_external"])
-async def test_planner_service_keeps_typed_time_window_on_completed_external_plan(
-    mode: RetrievalMode,
+async def test_semantic_response_defect_retries_once_without_leaking_question() -> None:
+    question_sentinel = "RAW_QUESTION_MUST_NOT_REACH_REPAIR_OR_METRIC_8ab4"
+    invalid = _draft(
+        plan_type="direct_answer",
+        article_search_queries=[question_sentinel],
+    )
+    runtime = ScriptedAgentRuntime(
+        [
+            invalid,
+            _draft(
+                plan_type="search",
+                article_search_queries=["NVIDIA AI GPU"],
+                research_goals=["NVIDIA の直近発表を確認する"],
+            ),
+        ]
+    )
+    service, _factory = _service(runtime)
+
+    plan = await service.plan(_input(question_sentinel))
+
+    assert plan.plan_type == "search"
+    assert [call.attempt_number for call in runtime.calls] == [1, 2]
+    assert question_sentinel not in (runtime.calls[1].input.previous_error or "")
+
+
+async def test_two_response_defects_propagate_second_error_and_record_not_created(
+    capfire: CaptureLogfire,
 ) -> None:
-    target_time_window = _target_time_window(kind="last_n_days", days=7)
+    first_error = _response_invalid(AgentResponseDefect.RESPONSE_NOT_OBJECT)
+    terminal_error = _response_invalid(AgentResponseDefect.OUTPUT_SCHEMA_MISMATCH)
+    runtime = ScriptedAgentRuntime([first_error, terminal_error])
+    service, factory = _service(runtime)
+
+    with pytest.raises(AgentResponseInvalidError) as raised:
+        await service.plan(_input())
+
+    assert raised.value is terminal_error
+    assert [call.attempt_number for call in runtime.calls] == [1, 2]
+    assert factory.exits[0][2] is terminal_error
+    metrics = collected_metrics(capfire)
+    assert sum_counter_for_result(metrics, _PLANNER_OUTCOME_METRIC, "failed") == 1
+    assert _metric_attributes(metrics) == [
+        {
+            "result": "failed",
+            "retry_used": True,
+            "plan_type": "not_created",
+            "failure_code": AgentResponseDefect.OUTPUT_SCHEMA_MISMATCH.value,
+        }
+    ]
+
+
+async def test_classified_provider_failure_does_not_retry_and_records_not_created(
+    capfire: CaptureLogfire,
+) -> None:
+    error = AIProviderNetworkError()
+    runtime = ScriptedAgentRuntime([error])
+    service, factory = _service(runtime)
+
+    with pytest.raises(AIProviderNetworkError) as raised:
+        await service.plan(_input())
+
+    assert raised.value is error
+    assert [call.attempt_number for call in runtime.calls] == [1]
+    assert factory.exits[0][2] is error
+    assert _metric_attributes(collected_metrics(capfire)) == [
+        {
+            "result": "failed",
+            "retry_used": False,
+            "plan_type": "not_created",
+            "failure_code": "ai_error_network",
+        }
+    ]
+
+
+@pytest.mark.parametrize(
+    "error",
+    [
+        pytest.param(RuntimeError("unknown planner failure"), id="unknown"),
+        pytest.param(asyncio.CancelledError(), id="cancellation"),
+    ],
+)
+async def test_unclassified_failure_and_cancellation_propagate_without_metric(
+    error: BaseException,
+    capfire: CaptureLogfire,
+) -> None:
+    runtime = ScriptedAgentRuntime([error])
+    service, _factory = _service(runtime)
+
+    with pytest.raises(type(error)) as raised:
+        await service.plan(_input())
+
+    assert raised.value is error
+    assert _metric_attributes(collected_metrics(capfire)) == []
+
+
+@pytest.mark.parametrize("failure_point", ["enter", "exit"])
+async def test_scope_failure_propagates_without_plan_or_metric(
+    failure_point: str,
+    capfire: CaptureLogfire,
+) -> None:
+    error = RuntimeError(f"runtime scope {failure_point} failed")
     runtime = ScriptedAgentRuntime(
         [
             _draft(
-                mode,
-                internal_queries=["NVIDIA"],
-                external_collection_goals=["NVIDIA の直近発表を確認する"],
+                plan_type="search",
+                article_search_queries=["NVIDIA"],
+                research_goals=["NVIDIA の根拠を確認する"],
+            )
+        ]
+    )
+    factory = RecordingPlannerRuntimeScopeFactory(
+        [runtime],
+        enter_error=error if failure_point == "enter" else None,
+        exit_error=error if failure_point == "exit" else None,
+    )
+    service = QuestionPlanningService(
+        agent=QUESTION_PLANNER_AGENT,
+        runtime_scope_factory=factory,
+    )
+
+    with pytest.raises(RuntimeError) as raised:
+        await service.plan(_input())
+
+    assert raised.value is error
+    assert len(runtime.calls) == (0 if failure_point == "enter" else 1)
+    assert _metric_attributes(collected_metrics(capfire)) == []
+
+
+async def test_search_plan_preserves_typed_time_window_through_service() -> None:
+    target_time_window = _required_contract("TargetTimeWindow").model_validate(
+        {"kind": "last_n_days", "days": 7}
+    )
+    runtime = ScriptedAgentRuntime(
+        [
+            _draft(
+                plan_type="search",
+                article_search_queries=["NVIDIA"],
+                research_goals=["NVIDIA の直近発表を確認する"],
                 target_time_window=target_time_window,
             )
         ]
@@ -239,8 +378,9 @@ async def test_each_response_defect_retries_once_in_the_same_runtime(
         [
             first_error,
             _draft(
-                "external",
-                external_collection_goals=["NVIDIA の発表根拠を確認する"],
+                plan_type="search",
+                article_search_queries=["NVIDIA"],
+                research_goals=["NVIDIA の発表根拠を確認する"],
             ),
         ]
     )
@@ -248,7 +388,7 @@ async def test_each_response_defect_retries_once_in_the_same_runtime(
 
     plan = await service.plan(_input())
 
-    assert plan.retrieval_mode == "external"
+    assert plan.plan_type == "search"
     assert (factory.created, factory.entered) == ([runtime], [runtime])
     assert len(factory.exits) == 1
     assert [call.agent for call in runtime.calls] == [
@@ -262,57 +402,7 @@ async def test_each_response_defect_retries_once_in_the_same_runtime(
     ]
 
 
-async def test_two_response_defects_propagate_second_error_after_exactly_two_attempts(
-    capfire: CaptureLogfire,
-) -> None:
-    question_sentinel = "PLANNER_QUESTION_MUST_NOT_ENTER_METRICS_611a"
-    repair_hint_sentinel = "PLANNER_REPAIR_HINT_MUST_NOT_ENTER_METRICS_e2c1"
-    request = _input(question_sentinel)
-    first_error = _response_invalid(
-        AgentResponseDefect.RESPONSE_NOT_OBJECT,
-        repair_hint=repair_hint_sentinel,
-    )
-    second_error = _response_invalid(
-        AgentResponseDefect.OUTPUT_SCHEMA_MISMATCH,
-        repair_hint=repair_hint_sentinel,
-    )
-    runtime = ScriptedAgentRuntime([first_error, second_error])
-    metrics_at_scope_exit: list[dict[str, Any]] = []
-    service, factory = _service(
-        runtime,
-        exit_observer=lambda: metrics_at_scope_exit.extend(
-            _metric_attributes(collected_metrics(capfire), _PLANNER_OUTCOME_METRIC)
-        ),
-    )
-
-    with pytest.raises(AgentResponseInvalidError) as raised:
-        await service.plan(request)
-
-    assert raised.value is second_error
-    assert [call.attempt_number for call in runtime.calls] == [1, 2]
-    assert [call.input.previous_error for call in runtime.calls] == [
-        None,
-        str(first_error),
-    ]
-    assert (factory.created, factory.entered) == ([runtime], [runtime])
-    assert len(factory.exits) == 1
-    assert metrics_at_scope_exit == []
-    metrics = collected_metrics(capfire)
-    assert sum_counter_for_result(metrics, _PLANNER_OUTCOME_METRIC, "failed") == 1
-    assert _metric_attributes(metrics, _PLANNER_OUTCOME_METRIC) == [
-        {
-            "result": "failed",
-            "retry_used": True,
-            "planned_retrieval_mode": "unknown",
-            "failure_code": AgentResponseDefect.OUTPUT_SCHEMA_MISMATCH.value,
-        }
-    ]
-    metric_dump = json.dumps(metrics, default=str, ensure_ascii=False)
-    assert question_sentinel not in metric_dump
-    assert repair_hint_sentinel not in metric_dump
-
-
-async def test_classified_close_error_replaces_terminal_response_defect_without_outcome(
+async def test_close_error_replaces_terminal_response_defect_without_metric(
     capfire: CaptureLogfire,
 ) -> None:
     first_error = _response_invalid(AgentResponseDefect.RESPONSE_NOT_OBJECT)
@@ -340,7 +430,7 @@ async def test_classified_close_error_replaces_terminal_response_defect_without_
         factory.exits[0][2] is terminal_error,
         factory.exits[0][3] is not None,
     ) == (True, True, True, True)
-    assert _metric_attributes(collected_metrics(capfire), _PLANNER_OUTCOME_METRIC) == []
+    assert _metric_attributes(collected_metrics(capfire)) == []
 
 
 @pytest.mark.parametrize(
@@ -369,7 +459,7 @@ async def test_classified_non_response_error_propagates_without_retry(
     service, factory = _service(
         runtime,
         exit_observer=lambda: metrics_at_scope_exit.extend(
-            _metric_attributes(collected_metrics(capfire), _PLANNER_OUTCOME_METRIC)
+            _metric_attributes(collected_metrics(capfire))
         ),
     )
 
@@ -382,11 +472,11 @@ async def test_classified_non_response_error_propagates_without_retry(
     assert metrics_at_scope_exit == []
     metrics = collected_metrics(capfire)
     assert sum_counter_for_result(metrics, _PLANNER_OUTCOME_METRIC, "failed") == 1
-    assert _metric_attributes(metrics, _PLANNER_OUTCOME_METRIC) == [
+    assert _metric_attributes(metrics) == [
         {
             "result": "failed",
             "retry_used": False,
-            "planned_retrieval_mode": "unknown",
+            "plan_type": "not_created",
             "failure_code": expected_failure_code,
         }
     ]
@@ -423,7 +513,7 @@ async def test_unknown_error_and_cancellation_propagate_by_identity(
     assert len(factory.exits) == 1
     assert factory.exits[0][2] is error
     metrics = collected_metrics(capfire)
-    assert _metric_attributes(metrics, _PLANNER_OUTCOME_METRIC) == []
+    assert _metric_attributes(metrics) == []
     metric_dump = json.dumps(metrics, default=str, ensure_ascii=False)
     assert question_sentinel not in metric_dump
     if exception_message is not None:
@@ -449,14 +539,20 @@ async def test_unknown_error_and_cancellation_propagate_by_identity(
         pytest.param("exit", 1, AIProviderNetworkError(), id="classified-exit"),
     ],
 )
-async def test_runtime_scope_failure_propagates_without_plan_or_outcome(
+async def test_all_runtime_scope_failures_propagate_without_plan_or_metric(
     failure_point: str,
     runtime_call_count: int,
     error: BaseException,
     capfire: CaptureLogfire,
 ) -> None:
     runtime = ScriptedAgentRuntime(
-        [_draft("internal", internal_queries=["must not be returned"])]
+        [
+            _draft(
+                plan_type="search",
+                article_search_queries=["must not be returned"],
+                research_goals=["must not be returned"],
+            )
+        ]
     )
     factory = RecordingPlannerRuntimeScopeFactory(
         [runtime],
@@ -473,13 +569,19 @@ async def test_runtime_scope_failure_propagates_without_plan_or_outcome(
 
     assert raised.value is error
     assert len(runtime.calls) == runtime_call_count
-    assert _metric_attributes(collected_metrics(capfire), _PLANNER_OUTCOME_METRIC) == []
+    assert _metric_attributes(collected_metrics(capfire)) == []
 
 
 async def test_two_plan_calls_activate_fresh_runtime_scopes() -> None:
-    first_runtime = ScriptedAgentRuntime([_draft("none", reason="first")])
+    first_runtime = ScriptedAgentRuntime([_draft(plan_type="direct_answer")])
     second_runtime = ScriptedAgentRuntime(
-        [_draft("internal", internal_queries=["second query"], reason="second")]
+        [
+            _draft(
+                plan_type="search",
+                article_search_queries=["second query"],
+                research_goals=["second goal"],
+            )
+        ]
     )
     factory = RecordingPlannerRuntimeScopeFactory([first_runtime, second_runtime])
     service = QuestionPlanningService(
@@ -490,7 +592,7 @@ async def test_two_plan_calls_activate_fresh_runtime_scopes() -> None:
     first = await service.plan(_input("first"))
     second = await service.plan(_input("second"))
 
-    assert (first.retrieval_mode, second.retrieval_mode) == ("none", "internal")
+    assert (first.plan_type, second.plan_type) == ("direct_answer", "search")
     assert factory.created == [first_runtime, second_runtime]
     assert factory.entered == [first_runtime, second_runtime]
     assert len(factory.exits) == 2
@@ -505,27 +607,34 @@ async def test_retry_success_metric_records_after_scope_exit_without_repair_deta
         repair_hint="REPAIR_HINT_MUST_NOT_ENTER_METRICS_4d7f",
     )
     runtime = ScriptedAgentRuntime(
-        [invalid, _draft("internal", internal_queries=["NVIDIA AI GPU"])]
+        [
+            invalid,
+            _draft(
+                plan_type="search",
+                article_search_queries=["NVIDIA AI GPU"],
+                research_goals=["NVIDIA の根拠を確認する"],
+            ),
+        ]
     )
     metrics_at_scope_exit: list[dict[str, Any]] = []
     service, _factory = _service(
         runtime,
         exit_observer=lambda: metrics_at_scope_exit.extend(
-            _metric_attributes(collected_metrics(capfire), _PLANNER_OUTCOME_METRIC)
+            _metric_attributes(collected_metrics(capfire))
         ),
     )
 
     plan = await service.plan(_input())
 
-    assert plan.retrieval_mode == "internal"
+    assert plan.plan_type == "search"
     assert metrics_at_scope_exit == []
     metrics = collected_metrics(capfire)
     assert sum_counter_for_result(metrics, _PLANNER_OUTCOME_METRIC, "planned") == 1
-    assert _metric_attributes(metrics, _PLANNER_OUTCOME_METRIC) == [
+    assert _metric_attributes(metrics) == [
         {
             "result": "planned",
             "retry_used": True,
-            "planned_retrieval_mode": "internal",
+            "plan_type": "search",
             "failure_code": "none",
         }
     ]
@@ -535,46 +644,47 @@ async def test_retry_success_metric_records_after_scope_exit_without_repair_deta
 
 
 @pytest.mark.parametrize(
-    ("outcomes", "retry_used", "mode"),
+    ("outcomes", "retry_used", "plan_type"),
     [
         pytest.param(
-            [_draft("internal", internal_queries=["NVIDIA"])],
+            lambda: [_draft(plan_type="direct_answer")],
             False,
-            "internal",
-            id="planned",
+            "direct_answer",
+            id="direct",
         ),
         pytest.param(
-            [
+            lambda: [
                 _response_invalid(),
                 _draft(
-                    "external",
-                    external_collection_goals=["NVIDIA の外部根拠を確認する"],
+                    plan_type="search",
+                    article_search_queries=["NVIDIA"],
+                    research_goals=["NVIDIA の外部根拠を確認する"],
                 ),
             ],
             True,
-            "external",
-            id="retry-success",
+            "search",
+            id="retry-search",
         ),
     ],
 )
 async def test_outcome_metric_records_once_without_model_visible_text(
-    outcomes: list[QuestionPlanDraft | BaseException],
+    outcomes: Callable[[], list[Any]],
     retry_used: bool,
-    mode: RetrievalMode,
+    plan_type: str,
     capfire: CaptureLogfire,
 ) -> None:
-    runtime = ScriptedAgentRuntime(outcomes)
+    runtime = ScriptedAgentRuntime(outcomes())
     service, _factory = _service(runtime)
 
     await service.plan(_input("MODEL_VISIBLE_QUESTION_SENTINEL_86ba"))
 
     metrics = collected_metrics(capfire)
     assert sum_counter_for_result(metrics, _PLANNER_OUTCOME_METRIC, "planned") == 1
-    assert _metric_attributes(metrics, _PLANNER_OUTCOME_METRIC) == [
+    assert _metric_attributes(metrics) == [
         {
             "result": "planned",
             "retry_used": retry_used,
-            "planned_retrieval_mode": mode,
+            "plan_type": plan_type,
             "failure_code": "none",
         }
     ]

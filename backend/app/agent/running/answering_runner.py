@@ -22,11 +22,11 @@ from app.agent.answering.result_assembly import assemble_evidence_result
 from app.agent.contract import (
     AnswerEventReporter,
     AnswerGenerationStopped,
+    AnswerPlanSummary,
     AnswerProgressEvent,
     AnswerProgressReporter,
     AnswerProgressStage,
     AnswerQuestionResult,
-    AnswerRetrievalSummary,
     ExternalSearchCandidatesFetchedEvent,
     ExternalSearchEvidenceSelectedEvent,
     ExternalSearchQueriesGeneratedEvent,
@@ -88,13 +88,10 @@ from app.agent.input_safety.contract import (
     InputSafetyPreviousTurn,
 )
 from app.agent.planning.contract import (
+    DirectAnswerPlan,
     ExternalResearchTask,
-    ExternalSearchPlan,
-    InternalAndExternalPlan,
-    InternalRetrievalPlan,
-    NoRetrievalPlan,
     PlanningRequest,
-    RetrievalPlan,
+    SearchPlan,
     TargetTimeWindow,
 )
 from app.agent.running.contract import (
@@ -188,17 +185,13 @@ class AnsweringRunner:
             )
             plan = await phases.planner.plan(planning_request)
             match plan:
-                case NoRetrievalPlan():
+                case DirectAnswerPlan():
                     final_output = await self._answer_directly(
                         phases=phases,
                         request=answering_request,
                         previous_answer=answering_context.previous_answer,
                     )
-                case (
-                    InternalRetrievalPlan()
-                    | ExternalSearchPlan()
-                    | InternalAndExternalPlan()
-                ):
+                case SearchPlan():
                     final_output = await self._answer_with_evidence(
                         phases=phases,
                         request=answering_request,
@@ -228,8 +221,8 @@ class AnsweringRunner:
             answer=draft.answer,
             sources=[],
             missing_aspects=[],
-            retrieval=AnswerRetrievalSummary(
-                planned_mode="none",
+            plan_summary=AnswerPlanSummary(
+                plan_type="direct_answer",
                 collection_failures=[],
             ),
         )
@@ -239,7 +232,7 @@ class AnsweringRunner:
         *,
         phases: AnsweringPhases,
         request: AnsweringRequest,
-        plan: RetrievalPlan,
+        plan: SearchPlan,
     ) -> AnswerQuestionResult:
         await self._report_progress("retrieving")
         outcome = await self._collect_evidence(
@@ -267,61 +260,30 @@ class AnsweringRunner:
         self,
         *,
         phases: AnsweringPhases,
-        plan: RetrievalPlan,
+        plan: SearchPlan,
         as_of: datetime,
     ) -> EvidenceCollectionOutcome:
-        match plan:
-            case InternalRetrievalPlan(internal_queries=internal_queries):
-                hits, internal_failed = await self._collect_internal(
-                    phases=phases,
-                    queries=InternalSearchQueries(queries=tuple(internal_queries)),
-                )
-                return EvidenceCollectionOutcome(
-                    internal_hits=hits,
-                    collection_failures=(
-                        ["internal_search"] if internal_failed else []
-                    ),
-                )
-            case ExternalSearchPlan(
-                external_research_tasks=external_research_tasks,
-                target_time_window=target_time_window,
-            ):
-                external = await self._collect_external(
-                    phases=phases,
-                    tasks=external_research_tasks,
-                    target_time_window=target_time_window,
-                    as_of=as_of,
-                )
-                return EvidenceCollectionOutcome(external_search=external)
-            case InternalAndExternalPlan(
-                internal_queries=internal_queries,
-                external_research_tasks=external_research_tasks,
-                target_time_window=target_time_window,
-            ):
-                internal_result, external_result = await asyncio.gather(
-                    self._collect_internal(
-                        phases=phases,
-                        queries=InternalSearchQueries(queries=tuple(internal_queries)),
-                    ),
-                    self._collect_external(
-                        phases=phases,
-                        tasks=external_research_tasks,
-                        target_time_window=target_time_window,
-                        as_of=as_of,
-                    ),
-                    return_exceptions=True,
-                )
-                hits, internal_failed = _raise_if_exception(internal_result)
-                external = _raise_if_exception(external_result)
-                return EvidenceCollectionOutcome(
-                    internal_hits=hits,
-                    external_search=external,
-                    collection_failures=(
-                        ["internal_search"] if internal_failed else []
-                    ),
-                )
-            case _ as unreachable:
-                assert_never(unreachable)
+        internal_result, external_result = await _gather_search_branches(
+            self._collect_internal(
+                phases=phases,
+                queries=InternalSearchQueries(
+                    queries=tuple(plan.article_search_queries)
+                ),
+            ),
+            self._collect_external(
+                phases=phases,
+                tasks=plan.external_research_tasks,
+                target_time_window=plan.target_time_window,
+                as_of=as_of,
+            ),
+        )
+        hits, internal_failed = _raise_if_exception(internal_result)
+        external = _raise_if_exception(external_result)
+        return EvidenceCollectionOutcome(
+            internal_hits=hits,
+            external_search=external,
+            collection_failures=["internal_search"] if internal_failed else [],
+        )
 
     async def _collect_internal(
         self,
@@ -794,16 +756,27 @@ def _latest_assistant_answer(
     )
 
 
-def _plan_target_time_window(plan: RetrievalPlan) -> TargetTimeWindow | None:
-    match plan:
-        case ExternalSearchPlan() | InternalAndExternalPlan():
-            return plan.target_time_window
-        case InternalRetrievalPlan():
-            return None
-    assert_never(plan)
+def _plan_target_time_window(plan: SearchPlan) -> TargetTimeWindow | None:
+    return plan.target_time_window
 
 
 def _raise_if_exception[ResultT](result: ResultT | BaseException) -> ResultT:
     if isinstance(result, BaseException):
         raise result
     return result
+
+
+async def _gather_search_branches[InternalT, ExternalT](
+    internal: Awaitable[InternalT],
+    external: Awaitable[ExternalT],
+) -> tuple[InternalT | BaseException, ExternalT | BaseException]:
+    tasks = [asyncio.create_task(internal), asyncio.create_task(external)]
+    gathered = asyncio.gather(*tasks, return_exceptions=True)
+    try:
+        results = await asyncio.shield(gathered)
+    except asyncio.CancelledError as exc:
+        for task in tasks:
+            task.cancel()
+        await gathered
+        raise exc
+    return results[0], results[1]

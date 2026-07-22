@@ -14,8 +14,9 @@ import pytest
 from sqlalchemy import DateTime, literal, select, text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+import app.agent.contract as agent_contract
 import app.agent.runs.contracts as run_contracts
-from app.agent.contract import AnswerQuestionResult, AnswerRetrievalSummary
+from app.agent.contract import AnswerQuestionResult
 from app.agent.runs.contracts import CancelRunOutcome
 from app.agent.runs.daily_quota.contracts import DailyQuotaReleaseOutcome
 from app.agent.runs.repository import AgentRunRepository
@@ -230,8 +231,15 @@ def _completed_result() -> AnswerQuestionResult:
         answer="completed quota run",
         sources=[],
         missing_aspects=[],
-        retrieval=AnswerRetrievalSummary(planned_mode="none"),
+        plan_summary=_plan_summary("direct_answer"),
     )
+
+
+def _plan_summary(plan_type: str) -> object:
+    summary_type = getattr(agent_contract, "AnswerPlanSummary", None)
+    if summary_type is None:
+        pytest.fail("agent contract must define AnswerPlanSummary")
+    return summary_type(plan_type=plan_type)
 
 
 def _daily_quota_contracts_module() -> ModuleType:
