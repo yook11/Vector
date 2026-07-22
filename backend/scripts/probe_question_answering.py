@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import json
 import sys
 from collections.abc import Sequence
 from datetime import UTC, datetime
@@ -12,6 +13,7 @@ from uuid import uuid4
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+from pydantic import ValidationError
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from app.agent.answering.contract import AnsweringRequest
@@ -50,6 +52,7 @@ from app.agent.planning.contract import (
     ExternalResearchTask,
     PlanningRequest,
     SearchPlan,
+    TargetTimeWindow,
 )
 from app.agent.question_context.agent import QUESTION_CONTEXT_AGENT
 from app.agent.question_context.service import QuestionContextService
@@ -119,7 +122,7 @@ class _UnreachableEvidenceAnswerer:
         *,
         request: AnsweringRequest,
         evidence: list[AnswerEvidenceItem],
-        target_time_window: str | None,  # noqa: ARG002
+        target_time_window: TargetTimeWindow | None,  # noqa: ARG002
     ) -> EvidenceAnswerDraft:
         raise AssertionError(
             "evidence answerer must not be called: "
@@ -154,6 +157,7 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--time-window",
+        type=_parse_target_time_window,
         default=None,
         help="Optional external plan target_time_window value.",
     )
@@ -165,13 +169,22 @@ def _build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def _parse_target_time_window(value: str) -> TargetTimeWindow:
+    try:
+        return TargetTimeWindow.model_validate(json.loads(value))
+    except (json.JSONDecodeError, ValidationError):
+        raise argparse.ArgumentTypeError(
+            "time window must be a valid TargetTimeWindow JSON object"
+        ) from None
+
+
 async def _probe(
     *,
     mode: str,
     question: str,
     goals: Sequence[str],
     requested_agent_count: int,
-    target_time_window: str | None,
+    target_time_window: TargetTimeWindow | None,
 ) -> None:
     if mode == "direct":
         await _probe_direct(question=question)
@@ -189,7 +202,7 @@ async def _probe_search(
     question: str,
     goals: Sequence[str],
     requested_agent_count: int,
-    target_time_window: str | None,
+    target_time_window: TargetTimeWindow | None,
 ) -> None:
     _require_secret("TAVILY_API_KEY", settings.tavily_api_key.get_secret_value())
     _require_secret("DEEPSEEK_API_KEY", settings.deepseek_api_key.get_secret_value())
@@ -295,7 +308,7 @@ def _build_search_plan(
     question: str,
     goals: Sequence[str],
     *,
-    target_time_window: str | None,
+    target_time_window: TargetTimeWindow | None,
 ) -> SearchPlan:
     cleaned_goals = [goal.strip() for goal in goals if goal.strip()]
     if not cleaned_goals:

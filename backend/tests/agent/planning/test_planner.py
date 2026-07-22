@@ -12,12 +12,14 @@ from typing import Any
 
 import pytest
 from logfire.testing import CaptureLogfire
+from opentelemetry.trace import StatusCode
 
 from app.agent.planning.agent import QUESTION_PLANNER_AGENT
 from app.agent.planning.service import QuestionPlanningService
 from app.agent.question_context.contract import QuestionContext
 from app.agent.runtime.contract import AgentResponseDefect, AgentResponseInvalidError
 from app.analysis.ai_provider_errors import (
+    AIProviderError,
     AIProviderNetworkError,
     AIProviderOutputBlockedError,
 )
@@ -292,6 +294,29 @@ async def test_classified_provider_failure_does_not_retry_and_records_not_create
             "failure_code": "ai_error_network",
         }
     ]
+
+
+async def test_bare_provider_error_propagates_as_unclassified_without_outcome_metric(
+    capfire: CaptureLogfire,
+) -> None:
+    error = AIProviderError()
+    runtime = ScriptedAgentRuntime([error])
+    service, factory = _service(runtime)
+
+    with pytest.raises(AIProviderError) as raised:
+        await service.plan(_input())
+
+    phase = next(
+        span
+        for span in capfire.exporter.exported_spans
+        if span.name == "agent_phase"
+        and (span.attributes or {}).get("logfire.span_type") == "span"
+    )
+    assert raised.value is error
+    assert [call.attempt_number for call in runtime.calls] == [1]
+    assert factory.exits[0][2] is error
+    assert _metric_attributes(collected_metrics(capfire)) == []
+    assert phase.status.status_code is StatusCode.ERROR
 
 
 @pytest.mark.parametrize(

@@ -3,7 +3,14 @@
 from __future__ import annotations
 
 import ast
+from importlib.util import module_from_spec, spec_from_file_location
 from pathlib import Path
+from types import ModuleType
+from typing import get_type_hints
+
+import pytest
+
+from app.agent.planning.contract import TargetTimeWindow
 
 
 def _probe_tree() -> ast.Module:
@@ -11,6 +18,17 @@ def _probe_tree() -> ast.Module:
         Path(__file__).resolve().parents[2] / "scripts" / "probe_question_answering.py"
     )
     return ast.parse(path.read_text(encoding="utf-8"))
+
+
+def _probe_module() -> ModuleType:
+    path = (
+        Path(__file__).resolve().parents[2] / "scripts" / "probe_question_answering.py"
+    )
+    spec = spec_from_file_location("probe_question_answering_test", path)
+    assert spec is not None and spec.loader is not None
+    module = module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
 
 
 def _imported_names(tree: ast.Module) -> set[str]:
@@ -96,6 +114,7 @@ def test_probe_uses_answering_runner_without_removed_external_pipeline_seams() -
         "AnsweringRunner",
         "DirectAnswerPlan",
         "SearchPlan",
+        "TargetTimeWindow",
         "GeminiQueryEmbedder",
         "InternalSearchService",
         "PgVectorArticleSearchRepository",
@@ -158,6 +177,77 @@ def test_probe_parser_and_dispatch_support_only_direct_and_search_modes() -> Non
     assert {"_probe_direct", "_probe_search"} <= dispatch_calls
     assert "_probe_external" not in dispatch_calls
     assert 'mode == "external"' not in ast.unparse(dispatch)
+
+
+def test_probe_parser_converts_time_window_json_to_typed_contract_value() -> None:
+    parsed = (
+        _probe_module()
+        ._build_parser()
+        .parse_args(["--time-window", '{"kind":"last_n_days","days":7}'])
+    )
+
+    assert parsed.time_window == TargetTimeWindow(kind="last_n_days", days=7)
+
+
+@pytest.mark.parametrize(
+    "raw_time_window",
+    [
+        pytest.param("not-json", id="not-json"),
+        pytest.param('{"kind":"last_n_days","days":0}', id="invalid-contract"),
+    ],
+)
+def test_probe_parser_rejects_invalid_time_window_values(
+    raw_time_window: str,
+) -> None:
+    with pytest.raises(SystemExit) as raised:
+        _probe_module()._build_parser().parse_args(["--time-window", raw_time_window])
+
+    assert raised.value.code == 2
+
+
+def test_probe_search_path_declares_and_preserves_typed_time_window() -> None:
+    module = _probe_module()
+    target_time_window = TargetTimeWindow(kind="last_n_days", days=7)
+    plan = module._build_search_plan(
+        "NVIDIA の直近発表",
+        ["NVIDIA の直近発表を確認する"],
+        target_time_window=target_time_window,
+    )
+    time_window_hints = {
+        function_name: get_type_hints(getattr(module, function_name))[
+            "target_time_window"
+        ]
+        for function_name in ("_probe", "_probe_search", "_build_search_plan")
+    }
+
+    assert plan.target_time_window is target_time_window
+    assert time_window_hints == {
+        function_name: TargetTimeWindow | None for function_name in time_window_hints
+    }
+
+
+def test_probe_forwards_time_window_through_dispatch_and_search_plan() -> None:
+    tree = _probe_tree()
+
+    for caller_name, callee_name in (
+        ("_probe", "_probe_search"),
+        ("_probe_search", "_build_search_plan"),
+    ):
+        caller = _function(tree, caller_name)
+        calls = _calls(caller, callee_name)
+        assert len(calls) == 1
+        forwarded = _keyword_value(calls[0], "target_time_window")
+        parameter_names = {
+            parameter.arg
+            for parameter in (
+                *caller.args.posonlyargs,
+                *caller.args.args,
+                *caller.args.kwonlyargs,
+            )
+        }
+        assert isinstance(forwarded, ast.Name)
+        assert forwarded.id == "target_time_window"
+        assert forwarded.id in parameter_names
 
 
 def test_search_probe_injects_requested_count_and_events_into_runner() -> None:

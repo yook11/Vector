@@ -26,10 +26,14 @@ from app.agent.runtime.contract import (
     AgentResponseInvalidError,
     AgentRuntimeScopeFactory,
 )
-from app.analysis.ai_provider_errors import AIProviderError
+from app.analysis.ai_provider_errors import (
+    AIProviderContentError,
+    AIProviderStateError,
+)
 
 _PLANNER_CLASSIFIED_ERRORS = (
-    AIProviderError,
+    AIProviderStateError,
+    AIProviderContentError,
     AgentResponseInvalidError,
 )
 _MAX_ATTEMPTS = 2
@@ -53,7 +57,12 @@ class QuestionPlanningService:
 
         previous_error: str | None = None
         completed_plan: QuestionPlan | None = None
-        terminal_error: AIProviderError | AgentResponseInvalidError | None = None
+        terminal_error: (
+            AIProviderStateError
+            | AIProviderContentError
+            | AgentResponseInvalidError
+            | None
+        ) = None
         terminal_failure_code: str | None = None
         retry_used = False
 

@@ -1,6 +1,6 @@
-"""Agent core の最小入出力 contract。
+"""Agent core の共有 contract。
 
-API / UI / graph runtime から独立した final result の型だけをここで保証する。
+API / UI / graph runtime から独立した final result と plan 型をここで保証する。
 """
 
 from __future__ import annotations

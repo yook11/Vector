@@ -2,13 +2,14 @@
 
 from __future__ import annotations
 
+import ast
 from collections.abc import Mapping
 from dataclasses import FrozenInstanceError, fields, is_dataclass
 from datetime import UTC, datetime
 from importlib import import_module
 from inspect import getsource, iscoroutinefunction, signature
 from types import ModuleType
-from typing import Any
+from typing import Any, get_args
 
 import pytest
 
@@ -79,6 +80,48 @@ def _as_plain_value(value: Any) -> Any:
     return value
 
 
+def _dict_expression(mapping: ast.expr, key: str) -> ast.expr:
+    assert isinstance(mapping, ast.Dict)
+    for candidate, value in zip(mapping.keys, mapping.values, strict=True):
+        if isinstance(candidate, ast.Constant) and candidate.value == key:
+            return value
+    raise AssertionError(f"dict expression must define {key}")
+
+
+def _assigned_expression(tree: ast.Module, name: str) -> ast.expr:
+    for node in tree.body:
+        if (
+            isinstance(node, ast.AnnAssign)
+            and isinstance(node.target, ast.Name)
+            and node.target.id == name
+            and node.value is not None
+        ):
+            return node.value
+        if isinstance(node, ast.Assign) and any(
+            isinstance(target, ast.Name) and target.id == name
+            for target in node.targets
+        ):
+            return node.value
+    raise AssertionError(f"module must assign {name}")
+
+
+def _is_list_of_plan_type_args(expression: ast.expr) -> bool:
+    return (
+        isinstance(expression, ast.Call)
+        and isinstance(expression.func, ast.Name)
+        and expression.func.id == "list"
+        and len(expression.args) == 1
+        and not expression.keywords
+        and isinstance(expression.args[0], ast.Call)
+        and isinstance(expression.args[0].func, ast.Name)
+        and expression.args[0].func.id == "get_args"
+        and len(expression.args[0].args) == 1
+        and not expression.args[0].keywords
+        and isinstance(expression.args[0].args[0], ast.Name)
+        and expression.args[0].args[0].id == "PlanType"
+    )
+
+
 def test_planner_agent_declares_v3_two_plan_schema_and_stable_model() -> None:
     contracts = _planning_module()
     agent = _planner_agent()
@@ -108,10 +151,9 @@ def test_manual_schema_requires_only_two_plan_fields_and_rejects_old_vocabulary(
         *schema["required"],
         "target_time_window",
     }
-    assert list(schema["properties"]["plan_type"]["enum"]) == [
-        "direct_answer",
-        "search",
-    ]
+    assert list(schema["properties"]["plan_type"]["enum"]) == list(
+        get_args(_required(_planning_module(), "PlanType"))
+    )
     assert schema["properties"]["article_search_queries"]["type"] == "ARRAY"
     assert schema["properties"]["research_goals"]["type"] == "ARRAY"
     assert schema["properties"]["target_time_window"]["nullable"] is True
@@ -124,6 +166,37 @@ def test_manual_schema_requires_only_two_plan_fields_and_rejects_old_vocabulary(
             "reason",
         )
     )
+
+
+def test_gemini_schema_plan_type_enum_uses_the_shared_plan_type_contract() -> None:
+    schema_tool = import_module("app.agent.planning.ai.schema_tool")
+    expected_values = list(get_args(_required(_planning_module(), "PlanType")))
+    source_tree = ast.parse(getsource(schema_tool))
+    schema_expression = _assigned_expression(
+        source_tree,
+        "QUESTION_PLANNER_GEMINI_SCHEMA",
+    )
+    properties_expression = _dict_expression(schema_expression, "properties")
+    plan_type_expression = _dict_expression(properties_expression, "plan_type")
+    enum_expression = _dict_expression(plan_type_expression, "enum")
+    helper = next(
+        node
+        for node in source_tree.body
+        if isinstance(node, ast.FunctionDef) and node.name == "plan_type_values"
+    )
+    helper_returns = [
+        node.value
+        for node in ast.walk(helper)
+        if isinstance(node, ast.Return) and node.value is not None
+    ]
+
+    assert (
+        list(_planner_agent().response_schema["properties"]["plan_type"]["enum"])
+        == expected_values
+    )
+    assert _is_list_of_plan_type_args(enum_expression)
+    assert len(helper_returns) == 1
+    assert _is_list_of_plan_type_args(helper_returns[0])
 
 
 def test_prompt_instructs_two_plan_and_field_responsibilities() -> None:

@@ -2,11 +2,9 @@
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, get_args
 
 from app.agent.contract import PlanType
-
-_PLAN_TYPE_VALUES = ["direct_answer", "search"]
 
 _TARGET_TIME_WINDOW_KIND_VALUES = [
     "today",
@@ -30,7 +28,7 @@ QUESTION_PLANNER_GEMINI_SCHEMA: dict[str, Any] = {
     "properties": {
         "plan_type": {
             "type": "STRING",
-            "enum": _PLAN_TYPE_VALUES,
+            "enum": list(get_args(PlanType)),
             "description": "Answer plan: direct_answer or search.",
         },
         "article_search_queries": {
@@ -106,7 +104,4 @@ QUESTION_PLANNER_GEMINI_SCHEMA: dict[str, Any] = {
 def plan_type_values() -> list[PlanType]:
     """Return values to keep tests close to the schema SSoT."""
 
-    return [
-        "direct_answer",
-        "search",
-    ]
+    return list(get_args(PlanType))
