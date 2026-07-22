@@ -14,6 +14,8 @@
 //   - schema 非依存の認証モードも runtime との drift を防ぐため object 単位で同期する。
 //   - rateLimit は schema (auth.rateLimit テーブル) に効くため `auth-config.ts`
 //     に集約し runtime と import 共有する (手動同期不要)。
+//   - password policy は schema 非依存だが、runtime / provisioning と長さの契約を
+//     揃えるため `auth-config.ts` から共有する。
 //   - 例外として `advanced.database.generateId` は意図的に異なる値を持つ:
 //       * runtime (auth.ts): `() => uuidv7()` で UUID v7 (時刻順) を生成
 //       * CLI (本ファイル):  `"uuid"` 文字列で Better Auth CLI に uuid 列型
@@ -24,7 +26,7 @@
 import { betterAuth } from "better-auth";
 import type { PoolClient } from "pg";
 import { Pool } from "pg";
-import { authRateLimit } from "@/lib/auth/auth-config";
+import { authRateLimit, passwordPolicy } from "@/lib/auth/auth-config";
 import { poolConfigFromUrl } from "@/lib/auth/pool-ssl";
 import { requireEnv } from "@/lib/env";
 
@@ -42,7 +44,8 @@ export const auth = betterAuth({
   emailAndPassword: {
     enabled: true,
     disableSignUp: true,
-    minPasswordLength: 8,
+    minPasswordLength: passwordPolicy.minLength,
+    maxPasswordLength: passwordPolicy.maxLength,
   },
   user: {
     additionalFields: {

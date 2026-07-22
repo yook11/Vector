@@ -1,7 +1,12 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 type AuthOptions = {
-  emailAndPassword?: unknown;
+  emailAndPassword?: {
+    enabled: boolean;
+    disableSignUp: boolean;
+    minPasswordLength: number;
+    maxPasswordLength: number;
+  };
 };
 
 const mocks = vi.hoisted(() => {
@@ -41,23 +46,29 @@ beforeEach(() => {
 });
 
 describe("Better Auth public signup configuration", () => {
-  it("runtime auth disables public signup while retaining email/password sign-in", async () => {
+  it("runtime auth keeps signup disabled with the shared standard password policy", async () => {
     await import("./auth");
+    const options = capturedOptions();
 
-    expect(capturedOptions().emailAndPassword).toEqual({
+    expect(options.emailAndPassword).toEqual({
       enabled: true,
       disableSignUp: true,
       minPasswordLength: 8,
+      maxPasswordLength: 128,
     });
+    expect(options).not.toHaveProperty("plugins");
   });
 
-  it("CLI auth uses the same email/password signup mode as runtime auth", async () => {
+  it("CLI auth keeps the same signup and standard password policy as runtime", async () => {
     await import("./auth.cli");
+    const options = capturedOptions();
 
-    expect(capturedOptions().emailAndPassword).toEqual({
+    expect(options.emailAndPassword).toEqual({
       enabled: true,
       disableSignUp: true,
       minPasswordLength: 8,
+      maxPasswordLength: 128,
     });
+    expect(options).not.toHaveProperty("plugins");
   });
 });

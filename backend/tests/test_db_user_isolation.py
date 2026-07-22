@@ -67,6 +67,16 @@ async def _require_auth_rate_limit_table(conn: asyncpg.Connection) -> None:
         pytest.skip('Better Auth schema required (auth."rateLimit")')
 
 
+async def _require_auth_provisioning_tables(conn: asyncpg.Connection) -> None:
+    """Better Auth の user/account table が無い環境では schema 契約を skip する。"""
+    table_count = await conn.fetchval(
+        "SELECT count(*) FROM pg_tables "
+        "WHERE schemaname = 'auth' AND tablename IN ('user', 'account')"
+    )
+    if table_count != 2:
+        pytest.skip('Better Auth schema required (auth."user" and auth.account)')
+
+
 @pytest.fixture
 async def auth_conn():
     """vector_auth role での asyncpg 接続を提供する (本番 vector db)。"""
@@ -135,6 +145,74 @@ class TestVectorAuthIsolation:
         result = await auth_conn.execute('DELETE FROM auth."rateLimit" WHERE false')
         assert result == "DELETE 0"
 
+    async def test_auth_tables_match_better_auth_provisioning_schema(
+        self, auth_conn
+    ) -> None:
+        """provisioning が書く Better Auth の必須列・型・nullability を固定する。"""
+        await _require_auth_provisioning_tables(auth_conn)
+        rows = await auth_conn.fetch(
+            "SELECT cls.relname AS table_name, attr.attname AS column_name, "
+            "format_type(attr.atttypid, attr.atttypmod) AS column_type, "
+            "attr.attnotnull AS not_null "
+            "FROM pg_catalog.pg_attribute AS attr "
+            "JOIN pg_catalog.pg_class AS cls ON cls.oid = attr.attrelid "
+            "JOIN pg_catalog.pg_namespace AS ns ON ns.oid = cls.relnamespace "
+            "WHERE ns.nspname = 'auth' "
+            "AND cls.relname IN ('user', 'account') "
+            "AND attr.attnum > 0 "
+            "AND NOT attr.attisdropped"
+        )
+        actual = {
+            (row["table_name"], row["column_name"]): (
+                row["column_type"],
+                row["not_null"],
+            )
+            for row in rows
+        }
+        expected = {
+            ("user", "id"): ("uuid", True),
+            ("user", "name"): ("text", True),
+            ("user", "email"): ("text", True),
+            ("user", "emailVerified"): ("boolean", True),
+            ("user", "createdAt"): ("timestamp with time zone", True),
+            ("user", "updatedAt"): ("timestamp with time zone", True),
+            ("user", "role"): ("text", True),
+            ("account", "id"): ("uuid", True),
+            ("account", "accountId"): ("text", True),
+            ("account", "providerId"): ("text", True),
+            ("account", "userId"): ("uuid", True),
+            ("account", "password"): ("text", False),
+            ("account", "createdAt"): ("timestamp with time zone", True),
+            ("account", "updatedAt"): ("timestamp with time zone", True),
+        }
+
+        assert {key: actual.get(key) for key in expected} == expected
+
+    async def test_auth_user_email_unique_constraint_matches_provisioning_contract(
+        self, auth_conn
+    ) -> None:
+        """duplicate-email 分類の根拠の user_email_key を pg_constraint で固定する。"""
+        await _require_auth_provisioning_tables(auth_conn)
+        row = await auth_conn.fetchrow(
+            "SELECT constraint_def.contype, "
+            "array_agg(attr.attname ORDER BY key_position.ordinality) AS columns "
+            "FROM pg_catalog.pg_constraint AS constraint_def "
+            "JOIN pg_catalog.pg_class AS cls ON cls.oid = constraint_def.conrelid "
+            "JOIN pg_catalog.pg_namespace AS ns ON ns.oid = cls.relnamespace "
+            "JOIN unnest(constraint_def.conkey) WITH ORDINALITY "
+            "AS key_position(attnum, ordinality) ON true "
+            "JOIN pg_catalog.pg_attribute AS attr "
+            "ON attr.attrelid = cls.oid AND attr.attnum = key_position.attnum "
+            "WHERE ns.nspname = 'auth' "
+            "AND cls.relname = 'user' "
+            "AND constraint_def.conname = 'user_email_key' "
+            "GROUP BY constraint_def.contype"
+        )
+
+        assert row is not None
+        assert row["contype"] == "u"
+        assert row["columns"] == ["email"]
+
 
 class TestVectorAppIsolation:
     async def test_cannot_insert_into_auth_user(self, app_conn) -> None:
@@ -146,6 +224,11 @@ class TestVectorAppIsolation:
                 "VALUES ('00000000-0000-0000-0000-000000000999', "
                 "'attacker@example.com', true, now(), now())"
             )
+
+    async def test_cannot_update_auth_user_role(self, app_conn) -> None:
+        """vector_app は auth.user の role を UPDATE できない。"""
+        with pytest.raises(asyncpg.InsufficientPrivilegeError):
+            await app_conn.execute('UPDATE auth."user" SET role = role WHERE false')
 
     async def test_can_select_auth_user_for_fk(self, app_conn) -> None:
         """vector_app は auth.user に SELECT できる (FK 整合性確認に必要)。"""

@@ -293,11 +293,9 @@ jobs:
     runs-on: ubuntu-latest
     needs: changes
     if: needs.changes.outputs.e2e == 'true'
-    # smoke スコープは anon project (login + register、4 ケース)。
-    # - login: seed migration の health check + Better Auth 経路の regression 検出
-    # - register: 新規ユーザ登録 + client-side validation の regression 検出
-    # watchlist / search / weekly-trends / source-admin は seed 状態に依存して
-    # flaky になりうるためローカル only。Phase 4 で個別 CI 化を検討する。
+    # smoke スコープは anon project の login / register と、admin project の
+    # source-admin / admin-user-provisioning。CI DB の seed 済み一般・admin
+    # ユーザーと、各 spec による原状回復 cleanup を前提とする。
     #
     # path-filter で auth/E2E 関連変更のみ実行する (`changes` job 参照)。
     # 無関係な PR では skip され、CI wallclock は backend-integration の 95s
@@ -337,6 +335,8 @@ jobs:
       # frontend (Better Auth + 内部 API プロキシ)。runtime 接続は vector_auth、
       # Better Auth CLI が DDL を流す step だけ vector に override する (下記 step 参照)。
       AUTH_DATABASE_URL: postgresql://vector_auth:ci2222222222222222222222222222222222222222222222222222222222222222@localhost:5432/vector?search_path=auth
+      # 本番DBの認証データを誤操作しないよう、ephemeral CI DBだけでmutation cleanupを明示許可する。
+      E2E_ALLOW_AUTH_DB_MUTATION: "true"
       BETTER_AUTH_URL: http://localhost:3000
       INTERNAL_API_URL: http://localhost:8000/api/v1
       NEXT_PUBLIC_API_URL: http://localhost:8000/api/v1
@@ -565,8 +565,8 @@ jobs:
           cat "${RUNNER_TEMP}/frontend.log" || true
           exit 1
 
-      - name: Run E2E smoke (anon project)
-        run: npx playwright test --project=anon
+      - name: Run E2E smoke (anon + admin projects)
+        run: npx playwright test --project=anon --project=admin
         working-directory: frontend
 
       - name: Upload Playwright report

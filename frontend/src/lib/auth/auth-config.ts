@@ -19,6 +19,13 @@
 //   import するため、server-only を含むと migrate が起動時に落ちる。中身は
 //   秘匿値も server API も持たない純粋な設定オブジェクトなので server-only は不要。
 
+// Better Auth runtime、schema CLI、provisioning input が共有する client-safe な
+// password 長の契約。hash 実装や秘匿値は含めない。
+export const passwordPolicy = {
+  minLength: 8,
+  maxLength: 128,
+} as const;
+
 export const authRateLimit = {
   enabled: true,
   storage: "database" as const,

@@ -1,7 +1,12 @@
 import { betterAuth } from "better-auth";
 import { type MemoryDB, memoryAdapter } from "better-auth/adapters/memory";
 import { parseSetCookieHeader } from "better-auth/cookies";
-import { describe, expect, it } from "vitest";
+import { v7 as uuidv7 } from "uuid";
+import { describe, expect, it, vi } from "vitest";
+
+vi.mock("server-only", () => ({}));
+
+import { hashPassword } from "@/lib/auth/password";
 
 const APP_URL = "https://app.example.com";
 const PASSWORD = "test-password-123";
@@ -39,6 +44,15 @@ function createAuth(
       disableSignUp,
       minPasswordLength: 8,
     },
+    user: {
+      additionalFields: {
+        role: {
+          type: "string",
+          defaultValue: "user",
+          input: false,
+        },
+      },
+    },
     rateLimit: { enabled: false },
     secret: SECRET,
     trustedOrigins: [APP_URL],
@@ -75,6 +89,19 @@ function signInRequest(auth: AuthHandler, email: string): Promise<Response> {
   );
 }
 
+function adminRequest(auth: AuthHandler, path: string): Promise<Response> {
+  return auth.handler(
+    new Request(`${APP_URL}/api/auth/admin/${path}`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        origin: APP_URL,
+      },
+      body: JSON.stringify({}),
+    }),
+  );
+}
+
 function recordCounts(database: TestMemoryDB) {
   return {
     account: database.account.length,
@@ -101,6 +128,19 @@ function cookieHeaderFrom(response: Response): string {
 }
 
 describe("public signup disabled boundary", () => {
+  it("does not expose Better Auth admin user mutation endpoints or change records", async () => {
+    const database = createDatabase();
+    const auth = createAuth(database, true);
+    const before = recordCounts(database);
+
+    for (const path of ["create-user", "set-role"]) {
+      const response = await adminRequest(auth, path);
+
+      expect(response.status).toBe(404);
+      expect(recordCounts(database)).toEqual(before);
+    }
+  });
+
   it("rejects a schema-valid trusted-origin signup with the documented error before creating records", async () => {
     const database = createDatabase();
     const auth = createAuth(database, true);
@@ -171,6 +211,58 @@ describe("public signup disabled boundary", () => {
 
     expect(signInResponse.status).toBe(200);
     expect(recordCounts(database)).toEqual({ account: 1, session: 2, user: 1 });
+  });
+
+  it("signs in a provisioning-shaped credential hashed by the production password export", async () => {
+    const database = createDatabase();
+    const auth = createAuth(database, true);
+    const userId = uuidv7();
+    const accountId = uuidv7();
+    const now = new Date("2026-07-22T00:00:00.000Z");
+    const consoleError = vi
+      .spyOn(console, "error")
+      .mockImplementation(() => {});
+    const consoleWarn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const consoleLog = vi.spyOn(console, "log").mockImplementation(() => {});
+
+    try {
+      const passwordHash = await hashPassword(PASSWORD);
+      database.user.push({
+        id: userId,
+        name: "Provisioned User",
+        email: "provisioned@example.com",
+        emailVerified: false,
+        createdAt: now,
+        updatedAt: now,
+        role: "user",
+      });
+      database.account.push({
+        id: accountId,
+        accountId: userId,
+        providerId: "credential",
+        userId,
+        password: passwordHash,
+        createdAt: now,
+        updatedAt: now,
+      });
+      const before = recordCounts(database);
+
+      const response = await signInRequest(auth, "provisioned@example.com");
+
+      expect(response.status).toBe(200);
+      expect(recordCounts(database)).toEqual({
+        account: before.account,
+        session: before.session + 1,
+        user: before.user,
+      });
+      expect(consoleError).not.toHaveBeenCalled();
+      expect(consoleWarn).not.toHaveBeenCalled();
+      expect(consoleLog).not.toHaveBeenCalled();
+    } finally {
+      consoleError.mockRestore();
+      consoleWarn.mockRestore();
+      consoleLog.mockRestore();
+    }
   });
 
   it("accepts a session issued before signup was disabled", async () => {

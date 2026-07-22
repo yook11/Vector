@@ -1,39 +1,21 @@
 import "server-only";
 
 import { betterAuth } from "better-auth";
-import type { PoolClient } from "pg";
-import { Pool } from "pg";
 import { v7 as uuidv7 } from "uuid";
-import { authRateLimit } from "@/lib/auth/auth-config";
-import { poolConfigFromUrl } from "@/lib/auth/pool-ssl";
+import { authRateLimit, passwordPolicy } from "@/lib/auth/auth-config";
+import { authPool } from "@/lib/auth/auth-db";
 import { requireEnv } from "@/lib/env";
 
 const isProduction = process.env.NODE_ENV === "production";
 
-// Better Auth 用 pg.Pool。Pool 取得待ちと query を 5 秒で止め、
-// request 滞留や接続枯渇の増幅を抑える。
-// max=20 は frontend auth 用に明示し、backend pool と接続上限を分けて扱う。
-const pool = new Pool({
-  // sslmode は pool-ssl.ts で Neon/dev docker に合わせて変換する。
-  ...poolConfigFromUrl(requireEnv("AUTH_DATABASE_URL")),
-  max: 20,
-  connectionTimeoutMillis: 5000,
-  idleTimeoutMillis: 10_000,
-  statement_timeout: 5000,
-});
-
-// Better Auth のクエリは全て 'auth' スキーマに向ける。
-pool.on("connect", (client: PoolClient) => {
-  client.query("SET search_path TO auth, public");
-});
-
 export const auth = betterAuth({
-  database: pool,
+  database: authPool,
   basePath: "/api/auth",
   emailAndPassword: {
     enabled: true,
     disableSignUp: true,
-    minPasswordLength: 8,
+    minPasswordLength: passwordPolicy.minLength,
+    maxPasswordLength: passwordPolicy.maxLength,
   },
   user: {
     additionalFields: {

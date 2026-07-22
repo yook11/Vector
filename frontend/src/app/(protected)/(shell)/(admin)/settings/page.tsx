@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import { Suspense } from "react";
 import { PageContainer } from "@/components/layout/PageContainer";
 import { Skeleton } from "@/components/ui/skeleton";
+import { ProvisionUserLink } from "@/features/auth";
 import { PipelineStatusLink } from "@/features/pipeline-status";
 import { SourceHealthLink } from "@/features/source-health";
 import { getSources, SourceManager } from "@/features/sources";
@@ -47,6 +48,7 @@ export default function SettingsPage() {
           Manage your news sources and application settings.
         </p>
         <div className="mt-3 flex items-center gap-4">
+          <ProvisionUserLink />
           <PipelineStatusLink />
           <SourceHealthLink />
         </div>
