@@ -9,7 +9,9 @@ interface LiveAnswerDraftProps {
   errorCode: ResearchRunResponse["errorCode"];
 }
 
-type LiveAnswerDraftContentProps = LiveAnswerDraftProps;
+interface LiveAnswerDraftContentProps extends LiveAnswerDraftProps {
+  isRecoveryPending: boolean;
+}
 
 export function failureText(
   errorCode: ResearchRunResponse["errorCode"],
@@ -43,9 +45,18 @@ function DraftContent({
   status,
   draftMode,
   draftText,
-}: Pick<LiveAnswerDraftContentProps, "status" | "draftMode" | "draftText">) {
+  isRecoveryPending,
+}: Pick<
+  LiveAnswerDraftContentProps,
+  "status" | "draftMode" | "draftText" | "isRecoveryPending"
+>) {
   const isFinalizing = status === "completed";
   const showsDraft = draftMode === "visible" && draftText.length > 0;
+  const statusText = isFinalizing
+    ? "回答を確定しています…"
+    : isRecoveryPending
+      ? "回答の状態を確認しています…"
+      : "回答を生成中…";
 
   return (
     <>
@@ -54,7 +65,7 @@ function DraftContent({
           aria-hidden="true"
           className="size-3.5 shrink-0 animate-spin motion-reduce:animate-none"
         />
-        <span>{isFinalizing ? "回答を確定しています…" : "回答を生成中…"}</span>
+        <span>{statusText}</span>
       </div>
       {showsDraft ? (
         <p className="whitespace-pre-wrap break-words text-sm leading-7 text-[var(--vector-ink)] [overflow-wrap:anywhere]">
@@ -70,6 +81,7 @@ export function LiveAnswerSlotContent({
   draftMode,
   draftText,
   errorCode,
+  isRecoveryPending,
 }: LiveAnswerDraftContentProps) {
   if (status === "failed") {
     return <FailureContent errorCode={errorCode} />;
@@ -80,6 +92,7 @@ export function LiveAnswerSlotContent({
         status={status}
         draftMode={draftMode}
         draftText={draftText}
+        isRecoveryPending={isRecoveryPending}
       />
     );
   }
@@ -92,7 +105,7 @@ export function LiveAnswerSlotContent({
   }
   return (
     <p className="text-sm leading-6 text-[var(--vector-ink-muted)]">
-      {draftMode === "suppressed"
+      {draftMode === "suppressed" || isRecoveryPending
         ? "回答の状態を確認しています…"
         : "回答を準備しています…"}
     </p>
@@ -136,6 +149,7 @@ export function LiveAnswerDraft({
           status={status}
           draftMode={draftMode}
           draftText={draftText}
+          isRecoveryPending={false}
         />
       </div>
     </article>

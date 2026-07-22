@@ -17,12 +17,18 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 import app.agent.runs.contracts as run_contracts
 from app.agent.contract import AnswerQuestionResult, AnswerRetrievalSummary
 from app.agent.runs.contracts import CancelRunOutcome
+from app.agent.runs.daily_quota.contracts import DailyQuotaReleaseOutcome
 from app.agent.runs.repository import AgentRunRepository
 from app.agent.runs.types import AgentRunErrorCode
 from app.models.agent_message import AgentMessage
 from app.models.agent_run import AgentRun
 from app.models.agent_thread import AgentThread
 from app.models.agent_user_daily_quota import AgentUserDailyQuota
+from tests.agent.runs._acquire_outcomes import (
+    acquired_prepared_run,
+    assert_idempotent_skip,
+    assert_queued_start_deadline_expired,
+)
 from tests.conftest import TEST_ADMIN_ID, TEST_USER_ID
 
 pytestmark = pytest.mark.integration
@@ -545,7 +551,7 @@ async def test_cancel_winner_refunds_before_waiting_acquire_loses(
             await _wait_until_blocked(observer, acquire_pid)
 
             await cancel_session.commit()
-            prepared = await asyncio.wait_for(acquire_task, timeout=5)
+            acquire_result = await asyncio.wait_for(acquire_task, timeout=5)
             await acquire_session.commit()
         finally:
             if acquire_task is not None:
@@ -556,7 +562,7 @@ async def test_cancel_winner_refunds_before_waiting_acquire_loses(
                 if session.in_transaction():
                     await session.rollback()
 
-    assert prepared is None
+    assert_idempotent_skip(acquire_result)
     assert (
         await _read_counter(
             session_factory,
@@ -602,10 +608,9 @@ async def test_cancel_waiting_on_run_lock_uses_winning_status_update_for_release
 
             await _wait_until_blocked(observer, contender_pid)
 
-            prepared = await AgentRunRepository(locker).acquire_for_execution(
-                seeded.run_id
+            prepared = acquired_prepared_run(
+                await AgentRunRepository(locker).acquire_for_execution(seeded.run_id)
             )
-            assert prepared is not None
             assert prepared.attempt_epoch == 1
             await locker.commit()
 
@@ -644,11 +649,11 @@ async def test_cancel_waiting_on_run_lock_uses_winning_status_update_for_release
     )
 
 
-@pytest.mark.parametrize("winner", ["cancel", "acquire"])
+@pytest.mark.parametrize("terminalizer", ["cancel", "expired_acquire"])
 @pytest.mark.asyncio
-async def test_waiting_stale_sweep_rechecks_cancel_or_acquire_winner(
+async def test_waiting_stale_sweep_does_not_overwrite_cancel_or_expired_acquire(
     session_factory: async_sessionmaker[AsyncSession],
-    winner: str,
+    terminalizer: str,
 ) -> None:
     seeded = await _seed_run(
         session_factory,
@@ -663,7 +668,7 @@ async def test_waiting_stale_sweep_rechecks_cancel_or_acquire_winner(
         sweep_task = None
         try:
             await winner_session.begin()
-            if winner == "cancel":
+            if terminalizer == "cancel":
                 cancel_result = await AgentRunRepository(
                     winner_session
                 ).cancel_run_for_user(
@@ -678,13 +683,16 @@ async def test_waiting_stale_sweep_rechecks_cancel_or_acquire_winner(
                     running_attempt_epoch=None,
                 )
             else:
-                prepared = await AgentRunRepository(
+                expiry_result = await AgentRunRepository(
                     winner_session
                 ).acquire_for_execution(
                     seeded.run_id,
                     now=_NOW,
                 )
-                assert prepared is not None and prepared.attempt_epoch == 1
+                assert_queued_start_deadline_expired(
+                    expiry_result,
+                    quota_release_outcome=DailyQuotaReleaseOutcome.RELEASED,
+                )
 
             await sweep_session.begin()
             sweep_pid = await sweep_session.scalar(text("SELECT pg_backend_pid()"))
@@ -706,15 +714,17 @@ async def test_waiting_stale_sweep_rechecks_cancel_or_acquire_winner(
                 if session.in_transaction():
                     await session.rollback()
 
-    assert (
-        sweep_result.total_count,
-        sweep_result.quota_queued_count,
-        sweep_result.quota_running_count,
-    ) == (0, 0, 0)
+    assert sweep_result.queued_terminal_count == 0
+    assert sweep_result.queued_quota_released_count == 0
+    assert sweep_result.queued_quota_not_eligible_count == 0
+    assert sweep_result.queued_quota_inconsistent_count == 0
+    assert sweep_result.running_terminal_runs == ()
+    assert sweep_result.running_quota_reservation_count == 0
+    assert sweep_result.running_without_started_at_count == 0
     async with session_factory() as verification:
         run = await verification.get(AgentRun, seeded.run_id)
         assert run is not None
-        if winner == "cancel":
+        if terminalizer == "cancel":
             assert (run.status, run.error_code, run.attempt_epoch) == (
                 "failed",
                 "cancelled",
@@ -723,11 +733,11 @@ async def test_waiting_stale_sweep_rechecks_cancel_or_acquire_winner(
             expected_counter = 0
         else:
             assert (run.status, run.error_code, run.attempt_epoch) == (
-                "running",
-                None,
-                1,
+                "failed",
+                "stale",
+                0,
             )
-            expected_counter = 1
+            expected_counter = 0
     assert (
         await _read_counter(
             session_factory,
@@ -824,11 +834,13 @@ async def test_competing_terminal_transition_wins_without_refund(
                 )
             elif transition == "stale":
                 stale_result = await repository.sweep_stale_runs(now=_NOW)
-                assert (
-                    stale_result.total_count,
-                    stale_result.quota_queued_count,
-                    stale_result.quota_running_count,
-                ) == (1, 1, 0)
+                assert stale_result.queued_terminal_count == 1
+                assert stale_result.queued_quota_released_count == 1
+                assert stale_result.queued_quota_not_eligible_count == 0
+                assert stale_result.queued_quota_inconsistent_count == 0
+                assert stale_result.running_terminal_runs == ()
+                assert stale_result.running_quota_reservation_count == 0
+                assert stale_result.running_without_started_at_count == 0
             else:
                 assert await repository.complete_run(
                     run_id=seeded.run_id,
@@ -849,13 +861,14 @@ async def test_competing_terminal_transition_wins_without_refund(
                 if session.in_transaction():
                     await session.rollback()
 
+    expected_counter = 0 if transition == "stale" else 1
     assert (
         await _read_counter(
             session_factory,
             user_id=_USER_ID,
             usage_date=_USAGE_DATE,
         )
-        == 1
+        == expected_counter
     )
     _assert_already_terminal(cancel_result, expected_outcome)
 

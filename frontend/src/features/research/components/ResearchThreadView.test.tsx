@@ -22,6 +22,8 @@ const RUN_ONE = "00000000-0000-4000-a000-000000000010";
 const RUN_TWO = "00000000-0000-4000-a000-000000000020";
 const POLICY_BLOCKED_NOTICE =
   "この依頼は安全上のポリシーにより処理されませんでした。";
+const RECOVERY_PENDING_NOTICE =
+  "回答に通常より時間がかかっています。現在の実行状態を確認しています。";
 
 const GENERATED_POLICY_BLOCKED_STATUSES: [
   Extract<ResearchMessageRun["status"], "policy_blocked">,
@@ -154,12 +156,13 @@ function policyBlockedRun(runId = RUN_ONE): ResearchMessageRun {
 function userMessage(
   runValue: ResearchMessageRun,
   content = "このニュースの影響は？",
+  createdAt = "2099-01-01T00:00:00.000Z",
 ): ResearchUserMessage {
   return {
     role: "user",
     seq: 1,
     content,
-    createdAt: "2026-07-13T00:00:00Z",
+    createdAt,
     run: runValue,
   };
 }
@@ -376,6 +379,7 @@ afterEach(() => {
   cleanup();
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
+  vi.useRealTimers();
 });
 
 describe("ResearchThreadView live integration", () => {
@@ -784,6 +788,87 @@ describe("ResearchThreadView live integration", () => {
     expect(screen.getByText("下書き")).toBeInTheDocument();
     expect(source.closeCount).toBe(1);
     expect(mocks.refresh).toHaveBeenCalledTimes(1);
+  });
+
+  it("uses persisted user createdAt to present recovery without retrying or completing a partial draft", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-07-22T12:00:00.000Z"));
+    const view = render(
+      <ResearchThreadView
+        thread={thread([
+          userMessage(
+            run(RUN_ONE),
+            "このニュースの影響は？",
+            "2026-07-22T12:00:00.000Z",
+          ),
+        ])}
+      />,
+    );
+    const source = currentSource();
+
+    act(() => {
+      source.emit(
+        "answer.delta",
+        { attemptEpoch: 1, generation: 1, text: "期限後も下書き" },
+        "1-0",
+      );
+    });
+    expect(screen.getByText("期限後も下書き")).toBeInTheDocument();
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(180_000);
+    });
+
+    expect(screen.getByText(RECOVERY_PENDING_NOTICE)).toBeInTheDocument();
+    expect(screen.queryByText("回答を生成中…")).toBeNull();
+    expect(screen.queryByText("回答を準備しています…")).toBeNull();
+    expect(screen.getByTestId("composer-run-id")).toHaveTextContent(RUN_ONE);
+    expect(screen.queryByText("回答を生成できませんでした")).toBeNull();
+    expect(screen.queryByRole("button", { name: "再試行" })).toBeNull();
+    expect(screen.getByText("期限後も下書き")).toBeInTheDocument();
+    expect(screen.queryByText("DBで確定した回答")).toBeNull();
+
+    act(() => {
+      source.emit("terminal", { attemptEpoch: 1, status: "completed" }, "2-0");
+    });
+    expect(screen.queryByText(RECOVERY_PENDING_NOTICE)).toBeNull();
+    expect(screen.getByText("回答を確定しています…")).toBeInTheDocument();
+
+    view.unmount();
+  });
+
+  it("removes the ordinary preparation copy from a recovery-pending run without a draft", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-07-22T12:00:00.000Z"));
+    const view = render(
+      <ResearchThreadView
+        thread={thread([
+          userMessage(
+            run(RUN_ONE),
+            "このニュースの影響は？",
+            "2026-07-22T12:00:00.000Z",
+          ),
+        ])}
+      />,
+    );
+    const source = currentSource();
+    expect(screen.getByText("回答を準備しています…")).toBeInTheDocument();
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(180_000);
+    });
+
+    expect(screen.getByText(RECOVERY_PENDING_NOTICE)).toBeInTheDocument();
+    expect(screen.queryByText("回答を生成中…")).toBeNull();
+    expect(screen.queryByText("回答を準備しています…")).toBeNull();
+
+    act(() => {
+      source.emit("terminal", { attemptEpoch: 1, status: "completed" }, "1-0");
+    });
+    expect(screen.queryByText(RECOVERY_PENDING_NOTICE)).toBeNull();
+    expect(screen.getByText("回答を確定しています…")).toBeInTheDocument();
+
+    view.unmount();
   });
 
   it.each([

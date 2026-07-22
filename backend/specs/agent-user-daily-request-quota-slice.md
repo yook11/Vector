@@ -1,5 +1,102 @@
 # Agent user daily request quota slice 仕様
 
+Status: Implemented baseline; queued expiry amendment implemented
+
+## 2026-07-22 queued expiry amendment
+
+日次quotaの予約・返却ポリシーの正本は本仕様とする。
+`backend/specs/agent-run-timeout-terminalization-slice.md` は3分・5分の期限とrun状態遷移を所有し、
+本仕様を返却ポリシーとして参照する。本節はprovider開始前のqueued期限切れを返却理由へ追加する。
+本節と後続の2026-07-20 v1本文が矛盾する場合は、本節を優先する。v1本文は実装済みbaselineと
+当時の判断記録として残す。
+
+### Problem
+
+v1はqueued staleでも日次quota予約を維持する。queued回収を5分へ短縮すると、worker停止や配送遅延だけで
+providerを一度も呼んでいないrunがfailedとなり、利用枠だけが当日中残る。これは、受付から3分を超えた
+queuedの初回実行を禁止する新しいtimeout policyと整合しない。
+
+### Agreed policy
+
+- `agent_runs.created_at` から180秒を超えたqueued runは初回実行を開始しない。
+- 3分超過後にworkerへ届いたqueued runは、`failed/stale` へ遷移してquota予約を1件返す。
+- workerへ届かないqueued runは、毎分sweeperがcreated_atから300秒超過で
+  `failed/stale` へ遷移してquota予約を1件返す。
+- queued terminal化とquota返却は同じPostgres transactionで確定する。
+- `queued -> running` が先に成立したrunは、以後のtimeout、stale、cancel、provider失敗でも返却しない。
+- 日次上限10、JST利用日、受付時予約、429 response、frontend quota文言は変更しない。
+- enqueue failureの予約維持policyは変更しない。
+
+### Invariants
+
+- quota返却の根拠は、期限切れ経路自身が `status='queued'` の条件付きterminal UPDATEに成功した事実である。
+- terminal statusまたは `error_code='stale'` を後から再読して、過去のqueuedを推測して返却しない。
+- queued cancel、3分超過取得、5分sweepのうち、queued terminal transitionに勝った経路だけが最大1回返却する。
+- 期限内の `queued -> running` が勝った場合、期限切れ経路はcounterを変更しない。
+- 返却日はrunへ保存済みの `quota_usage_date` とし、terminal日または現在のJST日から再計算しない。
+- `quota_usage_date IS NULL` のlegacy runは返却対象外である。
+- counterを0未満にせず、counter欠損または不足は `inconsistent` として観測する。
+- counter不整合ではrunの期限切れterminal化を優先し、quotaを推測補正しない。
+- DB例外でtransactionがrollbackした場合、run terminal化とquota返却のどちらも確定扱いにしない。
+- running、completed、policy_blocked、provider/generation failure、enqueue failure、thread削除は返却しない。
+
+### Atomic command contract
+
+3分超過queuedをworkerが受け取った場合、acquire commandは同じtransactionで次を行う。
+
+```text
+queued AND created_at < db_now - 180秒
+  -> failed/staleへ条件付きUPDATE
+  -> UPDATE成功かつquota_usage_dateあり
+       -> 元user / usage_dateのused_countを1減算
+  -> commit
+  -> providerを呼ばず終了
+```
+
+5分sweeperは、terminal化に成功したquota対象queuedを `(user_id, usage_date)` ごとに集約し、
+counterをset-basedに減算する。run件数に比例するquota queryのN+1 loopを作らない。同じgroupの
+`used_count` が返却件数より小さい場合はunderflowさせず、そのgroupをinconsistentとして観測する。
+`user_id` はcandidate取得queryで `agent_threads` から同時に解決し、runごとの追加queryを発行しない。
+
+### Race matrix
+
+| winning transition | run result | quota |
+|---|---|---|
+| queued cancel | `failed/cancelled` | 1件返却 |
+| 期限内worker acquire | `running` | 返却なし |
+| 3分超過worker acquire | `failed/stale` | 1件返却 |
+| 5分queued sweep | `failed/stale` | 1件返却 |
+| running sweep / timeout / cancel | terminal | 返却なし |
+
+### Observability amendment
+
+- queued expiry専用の共通metricと `source` labelは追加しない。
+- 3分経路はcommit後に1件の `agent_run_queued_start_deadline_expired` logを出し、
+  `quota_release_result` を `released / not_eligible / inconsistent` で記録する。
+- 5分sweepはcommit後にbatch単位の `agent_runs_queued_stale_swept` logを1件だけ出し、
+  run総数とquota結果別件数を記録する。
+- quota結果の総数は既存の `agent_user_daily_quota_releases_total{result}` へ加算する。
+- 既存metric helperは正のcountを受け取り、5分sweepはresult別件数をまとめて加算する。
+- 既存のstale reservation retained観測では、正常返却したqueuedを「維持」に数えない。
+- running staleのquota予約維持は引き続き観測する。
+- queued counter不整合により返却できなかった件数は、queued retained / inconsistentとしてalert対象にする。
+- 正常な `released / not_eligible` の常設dashboardとalertは追加せず、`inconsistent > 0` だけをalert対象にする。
+- metric labelへuser ID、run ID、usage date、質問、provider responseを含めない。
+
+### Verification amendment
+
+次を既存quota testへ追加する。
+
+1. 3分超過queuedのterminal化とcounter減算が同じtransactionでcommitされる。
+2. 5分sweepで複数queuedをuser / usage dateごとに正しく集約して返却する。
+3. cancel、期限内acquire、期限超過acquire、sweepの競合で返却が最大1回になる。
+4. rolling date境界でも元の `quota_usage_date` だけを減算する。
+5. legacy queued、counter欠損・0、transaction rollbackでunderflowまたは誤返却しない。
+6. running staleとapplication timeoutでは返却しない。
+7. enqueue failureの予約維持を回帰させない。
+8. 3分経路はcommit後に1件のlogとmetricを発行し、rollback時は発行しない。
+9. 5分sweepはbatch logを1件だけ発行し、既存metricへresult別件数をまとめて加算する。
+
 ## 位置付け
 
 Vector の research agent は、認証済みユーザーの質問を user message と queued run として

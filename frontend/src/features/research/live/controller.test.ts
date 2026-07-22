@@ -1,7 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import * as controllerModule from "./controller";
 import { createResearchRunLiveController } from "./controller";
 
 const RUN_ID = "00000000-0000-4000-a000-000000000010";
+const DEFAULT_CREATED_AT = "2099-01-01T00:00:00.000Z";
+const UI_DEADLINE_MS = 180_000;
 const EVENT_SOURCE_CONNECTING = 0;
 const EVENT_SOURCE_OPEN = 1;
 const EVENT_SOURCE_CLOSED = 2;
@@ -181,6 +184,7 @@ function createHarness(
   initialStatus: "queued" | "running" = "running",
   requestRefresh?: ReturnType<typeof vi.fn<RequestRefresh>>,
   useRuntimePoll = false,
+  createdAt = DEFAULT_CREATED_AT,
 ) {
   const sources: FakeEventSource[] = [];
   const createEventSource = vi.fn((_url: string) => {
@@ -195,6 +199,7 @@ function createHarness(
     pollRun ?? vi.fn<PollRun>().mockResolvedValue(runResult());
   const controllerOptions = {
     runId: RUN_ID,
+    createdAt,
     initialStatus,
     initialStage: null,
     ...(useRuntimePoll ? {} : { pollRun: actualPollRun }),
@@ -225,6 +230,10 @@ function createHarness(
   };
 }
 
+function isRecoveryPending(snapshot: unknown): boolean | undefined {
+  return (snapshot as { isRecoveryPending?: boolean }).isRecoveryPending;
+}
+
 async function flushPromises(): Promise<void> {
   await Promise.resolve();
   await Promise.resolve();
@@ -240,6 +249,154 @@ afterEach(() => {
 });
 
 describe("createResearchRunLiveController", () => {
+  describe("UI recovery deadline", () => {
+    it("exports the exact 180-second UI deadline while preserving active server statuses", () => {
+      const deadlineSeconds = (
+        controllerModule as unknown as {
+          RESEARCH_UI_DEADLINE_SECONDS?: unknown;
+        }
+      ).RESEARCH_UI_DEADLINE_SECONDS;
+      const harness = createHarness();
+
+      expect(deadlineSeconds).toBe(180);
+      expect(harness.controller.getSnapshot().runStatus).toBe("running");
+
+      harness.unsubscribe();
+    });
+
+    it("enters recovery-pending exactly at the createdAt-based deadline and keeps polling", async () => {
+      vi.setSystemTime(new Date("2026-07-22T12:00:00.000Z"));
+      const harness = createHarness(
+        undefined,
+        "running",
+        undefined,
+        false,
+        new Date(Date.now()).toISOString(),
+      );
+      await flushPromises();
+
+      expect(isRecoveryPending(harness.controller.getSnapshot())).toBe(false);
+      await vi.advanceTimersByTimeAsync(UI_DEADLINE_MS - 1);
+      expect(isRecoveryPending(harness.controller.getSnapshot())).toBe(false);
+
+      await vi.advanceTimersByTimeAsync(1);
+      expect(isRecoveryPending(harness.controller.getSnapshot())).toBe(true);
+      expect(harness.controller.getSnapshot().runStatus).toBe("running");
+      expect(harness.pollRun.mock.calls.length).toBeGreaterThan(1);
+
+      harness.unsubscribe();
+    });
+
+    it("is recovery-pending on first display when persisted createdAt has already expired", () => {
+      vi.setSystemTime(new Date("2026-07-22T12:00:00.000Z"));
+      const harness = createHarness(
+        undefined,
+        "queued",
+        undefined,
+        false,
+        new Date(Date.now() - UI_DEADLINE_MS - 1).toISOString(),
+      );
+
+      expect(isRecoveryPending(harness.controller.getSnapshot())).toBe(true);
+      expect(harness.controller.getSnapshot().runStatus).toBe("queued");
+
+      harness.unsubscribe();
+    });
+
+    it("does not extend the deadline when SSE reconnects or falls back to polling only", async () => {
+      vi.setSystemTime(new Date("2026-07-22T12:00:00.000Z"));
+      const harness = createHarness(
+        undefined,
+        "running",
+        undefined,
+        false,
+        new Date(Date.now()).toISOString(),
+      );
+      await flushPromises();
+
+      harness.source.reconnecting();
+      await vi.advanceTimersByTimeAsync(60_000);
+      harness.source.closed();
+      expect(harness.controller.getSnapshot().connectionMode).toBe(
+        "polling-only",
+      );
+      await vi.advanceTimersByTimeAsync(UI_DEADLINE_MS - 60_001);
+      expect(isRecoveryPending(harness.controller.getSnapshot())).toBe(false);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(isRecoveryPending(harness.controller.getSnapshot())).toBe(true);
+
+      harness.unsubscribe();
+    });
+
+    it("uses the absolute deadline while hidden and evaluates it immediately on return", async () => {
+      vi.setSystemTime(new Date("2026-07-22T12:00:00.000Z"));
+      const harness = createHarness(
+        undefined,
+        "running",
+        undefined,
+        false,
+        new Date(Date.now()).toISOString(),
+      );
+
+      harness.visibility.setHidden(true);
+      await vi.advanceTimersByTimeAsync(UI_DEADLINE_MS + 1);
+      harness.visibility.setHidden(false);
+
+      expect(isRecoveryPending(harness.controller.getSnapshot())).toBe(true);
+
+      harness.unsubscribe();
+    });
+
+    it("clears recovery at a terminal observation and ignores deadline callbacks after cleanup", async () => {
+      vi.setSystemTime(new Date("2026-07-22T12:00:00.000Z"));
+      const terminalHarness = createHarness(
+        undefined,
+        "running",
+        undefined,
+        false,
+        new Date(Date.now()).toISOString(),
+      );
+      await vi.advanceTimersByTimeAsync(UI_DEADLINE_MS);
+      expect(isRecoveryPending(terminalHarness.controller.getSnapshot())).toBe(
+        true,
+      );
+
+      terminalHarness.source.emit(
+        "terminal",
+        { attemptEpoch: 1, status: "completed" },
+        "1-0",
+      );
+      expect(terminalHarness.controller.getSnapshot()).toMatchObject({
+        runStatus: "completed",
+        isRecoveryPending: false,
+      });
+      await vi.advanceTimersByTimeAsync(UI_DEADLINE_MS);
+      expect(terminalHarness.controller.getSnapshot().runStatus).toBe(
+        "completed",
+      );
+      expect(isRecoveryPending(terminalHarness.controller.getSnapshot())).toBe(
+        false,
+      );
+      terminalHarness.unsubscribe();
+
+      const cleanupHarness = createHarness(
+        undefined,
+        "running",
+        undefined,
+        false,
+        new Date(Date.now()).toISOString(),
+      );
+      const beforeCleanup = cleanupHarness.notify.mock.calls.length;
+      cleanupHarness.unsubscribe();
+      await vi.advanceTimersByTimeAsync(UI_DEADLINE_MS + 1);
+
+      expect(isRecoveryPending(cleanupHarness.controller.getSnapshot())).toBe(
+        false,
+      );
+      expect(cleanupHarness.notify).toHaveBeenCalledTimes(beforeCleanup);
+    });
+  });
+
   describe("polling lifecycle", () => {
     it("polls immediately and schedules success responses every two seconds", async () => {
       const harness = createHarness();

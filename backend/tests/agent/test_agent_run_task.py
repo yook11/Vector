@@ -5,6 +5,8 @@ from __future__ import annotations
 import ast
 import asyncio
 import inspect
+import logging
+import traceback
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
 from types import SimpleNamespace
@@ -17,6 +19,9 @@ from sqlalchemy import event as sa_event
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from structlog.testing import capture_logs
+from taskiq import InMemoryBroker
+from taskiq.message import TaskiqMessage
+from taskiq.receiver import Receiver
 
 import app.agent.composition as composition
 import app.queue.tasks.agent_run as agent_run_tasks
@@ -75,8 +80,79 @@ from app.models.agent_thread import AgentThread
 from app.models.agent_user_daily_quota import AgentUserDailyQuota
 from app.queue.messages.agent_run import AgentRunTrigger
 from app.shared.security.safe_url import SafeUrl
+from tests.agent.runs._acquire_outcomes import (
+    acquired_prepared_run,
+    assert_idempotent_skip,
+)
 from tests.conftest import TEST_ADMIN_ID, TEST_USER_ID
 from tests.logfire._metric_helpers import collected_metrics
+
+SENSITIVE_TASK_BOUNDARY_MARKERS = (
+    TEST_USER_ID,
+    "SECRET_SQL_MARKER",
+    "SECRET_QUESTION_MARKER",
+    "SECRET_ANSWER_MARKER",
+    "SECRET_PROVIDER_RAW_MARKER",
+    "parameters:",
+)
+SENSITIVE_TASK_BOUNDARY_ERROR = (
+    "asyncpg failure SECRET_SQL_MARKER: UPDATE agent_runs "
+    f"parameters: ('{TEST_USER_ID}', 'SECRET_QUESTION_MARKER', "
+    "'SECRET_ANSWER_MARKER', 'SECRET_PROVIDER_RAW_MARKER')"
+)
+
+
+class SensitivePersistenceFailure(RuntimeError):
+    def __init__(self) -> None:
+        super().__init__(SENSITIVE_TASK_BOUNDARY_ERROR)
+        self.params = {
+            "user_id": TEST_USER_ID,
+            "question": "SECRET_QUESTION_MARKER",
+            "answer": "SECRET_ANSWER_MARKER",
+            "provider_raw": "SECRET_PROVIDER_RAW_MARKER",
+        }
+
+
+def _assert_safe_task_boundary_error(
+    error: BaseException,
+    *,
+    expected_message: str,
+) -> None:
+    boundary_error_type = getattr(
+        agent_run_tasks,
+        "AgentRunTaskBoundaryError",
+        None,
+    )
+    rendered_traceback = "".join(
+        traceback.format_exception(type(error), error, error.__traceback__)
+    )
+
+    assert isinstance(boundary_error_type, type)
+    assert error.__class__ is boundary_error_type
+    assert str(error) == expected_message
+    assert error.args == (expected_message,)
+    assert error.__cause__ is None
+    assert error.__context__ is None
+    assert error.__suppress_context__ is True
+    assert not hasattr(error, "params")
+    assert all(marker not in str(error) for marker in SENSITIVE_TASK_BOUNDARY_MARKERS)
+    assert all(
+        marker not in repr(vars(error)) for marker in SENSITIVE_TASK_BOUNDARY_MARKERS
+    )
+    assert all(
+        marker not in rendered_traceback for marker in SENSITIVE_TASK_BOUNDARY_MARKERS
+    )
+    assert all(
+        marker not in repr(error.__cause__)
+        for marker in SENSITIVE_TASK_BOUNDARY_MARKERS
+    )
+
+
+def _assert_sensitive_task_context_not_logged(logs: object) -> None:
+    serialized_logs = repr(logs)
+    assert all(
+        marker not in serialized_logs for marker in SENSITIVE_TASK_BOUNDARY_MARKERS
+    )
 
 
 class FakeAgent:
@@ -1677,10 +1753,11 @@ async def test_epoch_advance_stops_old_worker_through_actual_probe(
             assert await self.continuation.should_continue() is True  # type: ignore[attr-defined]
             async with session_factory() as reacquire_session:
                 async with reacquire_session.begin():
-                    prepared = await AgentRunRepository(
-                        reacquire_session
-                    ).acquire_for_execution(run.id)
-            assert prepared is not None
+                    prepared = acquired_prepared_run(
+                        await AgentRunRepository(
+                            reacquire_session
+                        ).acquire_for_execution(run.id)
+                    )
             assert prepared.attempt_epoch == 2
             clock.now = 2.0
             assert await self.continuation.should_continue() is False  # type: ignore[attr-defined]
@@ -2776,10 +2853,11 @@ async def test_stale_complete_run_loses_epoch_fence_and_rolls_back_artifacts(
 
         async with session_factory() as winner_session:
             async with winner_session.begin():
-                prepared = await AgentRunRepository(
-                    winner_session
-                ).acquire_for_execution(run.id)
-                assert prepared is not None
+                prepared = acquired_prepared_run(
+                    await AgentRunRepository(winner_session).acquire_for_execution(
+                        run.id
+                    )
+                )
                 assert prepared.attempt_epoch == 2
 
         with pytest.raises(RunTransitionLostError):
@@ -2847,8 +2925,9 @@ async def test_stale_mark_failed_does_not_alter_newer_attempt(
 
     async with session_factory() as session:
         async with session.begin():
-            prepared = await AgentRunRepository(session).acquire_for_execution(run.id)
-            assert prepared is not None
+            prepared = acquired_prepared_run(
+                await AgentRunRepository(session).acquire_for_execution(run.id)
+            )
             transitioned = await AgentRunRepository(session).mark_failed(
                 run.id,
                 expected_attempt_epoch=1,
@@ -2888,15 +2967,16 @@ async def test_acquire_for_execution_reexecutes_running_and_skips_terminal_runs(
     async with session_factory() as session:
         async with session.begin():
             repo = AgentRunRepository(session)
-            prepared = await repo.acquire_for_execution(running.id, now=now)
+            prepared = acquired_prepared_run(
+                await repo.acquire_for_execution(running.id, now=now)
+            )
             skipped = await repo.acquire_for_execution(failed.id, now=now)
 
-    assert prepared is not None
     assert prepared.run_id == running.id
     assert prepared.question == "worker question"
     assert prepared.user_message_seq == 1
     assert prepared.attempt_epoch == 2
-    assert skipped is None
+    assert_idempotent_skip(skipped)
     async with session_factory() as session:
         reacquired = await session.get(AgentRun, running.id)
         terminal = await session.get(AgentRun, failed.id)
@@ -2922,11 +3002,12 @@ async def test_acquire_for_execution_allocates_first_attempt_epoch(
 
     async with session_factory() as session:
         async with session.begin():
-            prepared = await AgentRunRepository(session).acquire_for_execution(run.id)
+            prepared = acquired_prepared_run(
+                await AgentRunRepository(session).acquire_for_execution(run.id)
+            )
 
     async with session_factory() as session:
         acquired = await session.get(AgentRun, run.id)
-        assert prepared is not None
         assert acquired is not None
         assert prepared.attempt_epoch == 1
         assert acquired.attempt_epoch == 1
@@ -2940,8 +3021,9 @@ async def test_acquire_for_execution_increment_rolls_back_with_transaction(
         _thread, _message, run = await _create_thread_message_run(setup_session)
 
     async with session_factory() as session:
-        prepared = await AgentRunRepository(session).acquire_for_execution(run.id)
-        assert prepared is not None
+        prepared = acquired_prepared_run(
+            await AgentRunRepository(session).acquire_for_execution(run.id)
+        )
         assert prepared.attempt_epoch == 1
         await session.rollback()
 
@@ -2985,10 +3067,9 @@ async def test_concurrent_acquisitions_receive_distinct_sequence_values(
 
             monkeypatch.setattr(session, "execute", execute_with_barrier)
             async with session.begin():
-                prepared = await AgentRunRepository(session).acquire_for_execution(
-                    run.id
+                prepared = acquired_prepared_run(
+                    await AgentRunRepository(session).acquire_for_execution(run.id)
                 )
-                assert prepared is not None
                 return prepared.attempt_epoch
 
     acquire_tasks = [asyncio.create_task(acquire()), asyncio.create_task(acquire())]
@@ -3006,22 +3087,22 @@ async def test_concurrent_acquisitions_receive_distinct_sequence_values(
 
 
 @pytest.mark.asyncio
-async def test_acquire_for_execution_returns_none_for_missing_run(
+async def test_acquire_for_execution_reports_idempotent_skip_for_missing_run(
     session_factory: async_sessionmaker[AsyncSession],
 ) -> None:
     missing_run_id = UUID("00000000-0000-4000-a000-000000000099")
 
     async with session_factory() as session:
         async with session.begin():
-            prepared = await AgentRunRepository(session).acquire_for_execution(
+            skip_result = await AgentRunRepository(session).acquire_for_execution(
                 missing_run_id
             )
 
-    assert prepared is None
+    assert_idempotent_skip(skip_result)
 
 
 @pytest.mark.asyncio
-async def test_acquire_for_execution_returns_none_when_transition_loses_race(
+async def test_acquire_for_execution_reports_idempotent_skip_when_transition_loses_race(
     session_factory: async_sessionmaker[AsyncSession],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -3061,12 +3142,12 @@ async def test_acquire_for_execution_returns_none_when_transition_loses_race(
                 )
                 assert changed is True
         resume.set()
-        prepared = await acquire_task
+        skip_result = await acquire_task
     finally:
         resume.set()
         await contender.close()
 
-    assert prepared is None
+    assert_idempotent_skip(skip_result)
     async with session_factory() as session:
         failed = await session.get(AgentRun, run.id)
         assert failed is not None
@@ -3128,7 +3209,7 @@ async def test_sweep_stale_agent_runs_marks_only_old_active_runs(
             created_at=now - timedelta(minutes=22),
         )
         _t4, _m4, fresh = await _create_thread_message_run(
-            session, created_at=now - timedelta(minutes=19)
+            session, created_at=now - timedelta(minutes=4)
         )
         _t5, _m5, terminal = await _create_thread_message_run(
             session,
@@ -3138,11 +3219,16 @@ async def test_sweep_stale_agent_runs_marks_only_old_active_runs(
         )
         result = await AgentRunRepository(session).sweep_stale_runs(now=now)
         await session.commit()
-        assert (
-            result.total_count,
-            result.quota_queued_count,
-            result.quota_running_count,
-        ) == (3, 1, 1)
+        assert result.queued_terminal_count == 2
+        assert result.queued_quota_released_count == 0
+        assert result.queued_quota_not_eligible_count == 1
+        assert result.queued_quota_inconsistent_count == 1
+        running_attempts = [
+            (item.run_id, item.attempt_epoch) for item in result.running_terminal_runs
+        ]
+        assert running_attempts == [(old_running.id, 7)]
+        assert result.running_quota_reservation_count == 1
+        assert result.running_without_started_at_count == 0
 
     async with session_factory() as session:
         swept_queued = await session.get(AgentRun, old_queued.id)
@@ -3162,19 +3248,26 @@ async def test_sweep_stale_agent_runs_marks_only_old_active_runs(
         assert untouched_terminal.error_code == "internal_error"
 
 
+@pytest.mark.integration
 @pytest.mark.asyncio
-async def test_sweep_task_observes_quota_stale_runs_only_after_commit(
+async def test_sweep_task_observes_queued_release_and_running_reservation_after_commit(
     session_factory: async_sessionmaker[AsyncSession],
-    capfire: CaptureLogfire,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     now = datetime.now(UTC)
     usage_date = date(2026, 7, 20)
     async with session_factory() as session:
+        session.add(
+            AgentUserDailyQuota(
+                user_id=UUID(TEST_USER_ID),
+                usage_date=usage_date,
+                used_count=1,
+            )
+        )
         _t1, _m1, old_queued = await _create_thread_message_run(
             session,
             question="sensitive queued question",
-            created_at=now - timedelta(minutes=21),
+            created_at=now - timedelta(minutes=6),
             quota_usage_date=usage_date,
         )
         _t2, _m2, old_running = await _create_thread_message_run(
@@ -3182,68 +3275,78 @@ async def test_sweep_task_observes_quota_stale_runs_only_after_commit(
             question="sensitive running question",
             status="running",
             created_at=now - timedelta(minutes=30),
-            started_at=now - timedelta(minutes=21),
+            started_at=now - timedelta(minutes=6),
+            attempt_epoch=2,
             quota_usage_date=usage_date,
         )
         _t3, _m3, old_legacy = await _create_thread_message_run(
             session,
             question="sensitive legacy question",
-            created_at=now - timedelta(minutes=22),
+            created_at=now - timedelta(minutes=6),
         )
 
-    observed: list[dict[str, int]] = []
-    original_observer = daily_quota_observability.observe_stale_reservations
+    release_metrics: list[dict[str, object]] = []
+    reservations: list[dict[str, int]] = []
+
+    def record_release(**kwargs: object) -> None:
+        release_metrics.append(kwargs)
 
     def observe_stale_reservations(*, queued_count: int, running_count: int) -> None:
-        observed.append(
-            {
-                "queued_count": queued_count,
-                "running_count": running_count,
-            }
-        )
-        original_observer(
-            queued_count=queued_count,
-            running_count=running_count,
+        reservations.append(
+            {"queued_count": queued_count, "running_count": running_count}
         )
 
     monkeypatch.setattr(
         daily_quota_observability,
+        "record_daily_quota_release",
+        record_release,
+    )
+    monkeypatch.setattr(
+        daily_quota_observability,
         "observe_stale_reservations",
         observe_stale_reservations,
+    )
+    monkeypatch.setattr(agent_run_tasks, "get_redis", object)
+    monkeypatch.setattr(
+        agent_run_tasks,
+        "AgentRunLiveStreamPublisher",
+        FakeLiveStreamPublisher,
     )
 
     with capture_logs() as logs:
         await agent_run_tasks.sweep_stale_agent_runs(ctx=_ctx(session_factory))
 
     assert [
-        entry for entry in logs if entry.get("event") == "agent_runs_stale_swept"
-    ] == [{"count": 3, "event": "agent_runs_stale_swept", "log_level": "info"}]
-    assert [
-        entry
-        for entry in logs
-        if entry.get("event") == "agent_user_daily_quota_stale_reservations_retained"
+        entry for entry in logs if entry.get("event") == "agent_runs_queued_stale_swept"
     ] == [
         {
-            "queued_count": 1,
-            "running_count": 1,
-            "event": "agent_user_daily_quota_stale_reservations_retained",
-            "log_level": "warning",
+            "event": "agent_runs_queued_stale_swept",
+            "log_level": "info",
+            "run_count": 2,
+            "quota_released_count": 1,
+            "quota_not_eligible_count": 1,
+            "quota_inconsistent_count": 0,
         }
     ]
-    assert {
-        (point["value"], frozenset(point.get("attributes", {}).items()))
-        for point in _quota_stale_metric_points(capfire)
-    } == {
-        (1, frozenset({("previous_status", "queued")})),
-        (1, frozenset({("previous_status", "running")})),
-    }
-    assert observed == [{"queued_count": 1, "running_count": 1}]
+    assert release_metrics == [
+        {"result": "released", "count": 1},
+        {"result": "not_eligible", "count": 1},
+    ]
+    assert reservations == [{"queued_count": 0, "running_count": 1}]
+    assert "sensitive" not in str(logs)
 
     async with session_factory() as session:
+        counter = await session.scalar(
+            select(AgentUserDailyQuota.used_count).where(
+                AgentUserDailyQuota.user_id == UUID(TEST_USER_ID),
+                AgentUserDailyQuota.usage_date == usage_date,
+            )
+        )
         statuses = [
             await session.get(AgentRun, run_id)
             for run_id in (old_queued.id, old_running.id, old_legacy.id)
         ]
+    assert counter == 0
     assert [run.status if run is not None else None for run in statuses] == [
         "failed",
         "failed",
@@ -3326,7 +3429,7 @@ async def test_sweep_task_does_not_observe_quota_results_when_transaction_rolls_
     def fail_commit(_session: object) -> None:
         nonlocal commit_attempted
         commit_attempted = True
-        raise RuntimeError("sweep commit failure")
+        raise SensitivePersistenceFailure
 
     monkeypatch.setattr(
         daily_quota_observability,
@@ -3346,7 +3449,7 @@ async def test_sweep_task_does_not_observe_quota_results_when_transaction_rolls_
 
     with (
         capture_logs() as logs,
-        pytest.raises(RuntimeError, match="sweep commit failure"),
+        pytest.raises(Exception) as exc_info,
     ):
         await agent_run_tasks.sweep_stale_agent_runs(
             ctx=_ctx(
@@ -3357,6 +3460,11 @@ async def test_sweep_task_does_not_observe_quota_results_when_transaction_rolls_
             )
         )
 
+    _assert_safe_task_boundary_error(
+        exc_info.value,
+        expected_message="agent run stale sweep failed",
+    )
+    _assert_sensitive_task_context_not_logged(logs)
     assert commit_attempted is True
     assert calls == []
     assert not [
@@ -3450,7 +3558,7 @@ async def test_sweep_task_telemetry_sink_failure_keeps_committed_sweep_and_other
 
 
 @pytest.mark.asyncio
-async def test_ten_quota_queued_stale_runs_keep_counter_and_aggregate_all(
+async def test_ten_quota_queued_stale_runs_release_counter_with_one_batch_update(
     session_factory: async_sessionmaker[AsyncSession],
 ) -> None:
     now = datetime(2026, 7, 20, 12, 0, tzinfo=UTC)
@@ -3480,11 +3588,13 @@ async def test_ten_quota_queued_stale_runs_keep_counter_and_aggregate_all(
         async with sweep_session.begin():
             result = await AgentRunRepository(sweep_session).sweep_stale_runs(now=now)
 
-    assert (
-        result.total_count,
-        result.quota_queued_count,
-        result.quota_running_count,
-    ) == (10, 10, 0)
+    assert result.queued_terminal_count == 10
+    assert result.queued_quota_released_count == 10
+    assert result.queued_quota_not_eligible_count == 0
+    assert result.queued_quota_inconsistent_count == 0
+    assert result.running_terminal_runs == ()
+    assert result.running_quota_reservation_count == 0
+    assert result.running_without_started_at_count == 0
     async with session_factory() as verification:
         counter = await verification.scalar(
             select(AgentUserDailyQuota.used_count).where(
@@ -3503,7 +3613,7 @@ async def test_ten_quota_queued_stale_runs_keep_counter_and_aggregate_all(
             .scalars()
             .all()
         )
-    assert counter == 10
+    assert counter == 0
     assert persisted_statuses == ["failed"] * 10
 
 
@@ -3559,3 +3669,1024 @@ def test_source_mapper_structures_internal_and_external_rows() -> None:
     assert response.content == "answer [[1]][[2]]"
     assert response.sources[0].kind == "internal_article"
     assert response.sources[1].kind == "external_url"
+
+
+@dataclass
+class _ControlledMonotonicClock:
+    now: float
+
+    def __call__(self) -> float:
+        return self.now
+
+
+class _ControlledApplicationDeadline:
+    def __init__(
+        self,
+        *,
+        deadline: float,
+        clock: _ControlledMonotonicClock,
+        expire_on_cancel: bool,
+    ) -> None:
+        self.deadline = deadline
+        self._clock = clock
+        self._expire_on_cancel = expire_on_cancel
+        self._cancel_converted = False
+        self.active = False
+
+    async def __aenter__(self) -> _ControlledApplicationDeadline:
+        self.active = True
+        return self
+
+    async def __aexit__(
+        self,
+        exc_type: type[BaseException] | None,
+        _exc: BaseException | None,
+        _traceback: object | None,
+    ) -> bool:
+        self.active = False
+        if self._expire_on_cancel and exc_type is asyncio.CancelledError:
+            self._cancel_converted = True
+            raise TimeoutError
+        return False
+
+    def expired(self) -> bool:
+        return self._cancel_converted
+
+
+def _install_application_deadline_boundary(
+    monkeypatch: pytest.MonkeyPatch,
+    clock: _ControlledMonotonicClock,
+    *,
+    expire_on_cancel: bool = False,
+) -> list[_ControlledApplicationDeadline]:
+    task_asyncio = getattr(agent_run_tasks, "asyncio", None)
+    assert task_asyncio is not None, "task must import asyncio for its deadline"
+    task_time = getattr(agent_run_tasks, "time", None)
+    assert task_time is not None, "task must use a monotonic application clock"
+    timeout_at = getattr(task_asyncio, "timeout_at", None)
+    assert callable(timeout_at), "task must own its deadline with asyncio.timeout_at"
+    scopes: list[_ControlledApplicationDeadline] = []
+
+    def controlled_timeout_at(deadline: float) -> _ControlledApplicationDeadline:
+        scope = _ControlledApplicationDeadline(
+            deadline=deadline,
+            clock=clock,
+            expire_on_cancel=expire_on_cancel,
+        )
+        scopes.append(scope)
+        return scope
+
+    monkeypatch.setattr(task_time, "monotonic", clock)
+    monkeypatch.setattr(task_asyncio, "timeout_at", controlled_timeout_at)
+    return scopes
+
+
+def test_run_agent_answer_declares_fixed_application_and_taskiq_deadlines() -> None:
+    tree = ast.parse(inspect.getsource(agent_run_tasks))
+    task = next(
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.AsyncFunctionDef) and node.name == "run_agent_answer"
+    )
+    decorator = next(
+        node
+        for node in task.decorator_list
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+        and node.func.attr == "task"
+    )
+    options = {
+        keyword.arg: keyword.value
+        for keyword in decorator.keywords
+        if keyword.arg is not None
+    }
+
+    assert getattr(agent_run_tasks, "RESEARCH_APPLICATION_TIMEOUT_SECONDS", None) == 150
+    assert getattr(agent_run_tasks, "RESEARCH_TASKIQ_TIMEOUT_SECONDS", None) == 180
+    assert ast.literal_eval(options["task_name"]) == "run_agent_answer"
+    assert isinstance(options["timeout"], ast.Name)
+    assert options["timeout"].id == "RESEARCH_TASKIQ_TIMEOUT_SECONDS"
+    assert ast.literal_eval(options["max_retries"]) == 0
+    assert ast.literal_eval(options["retry_on_error"]) is False
+
+
+@pytest.mark.asyncio
+async def test_taskiq_receiver_result_and_log_expose_only_safe_acquisition_error(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    async def fail_acquire(*_args: object, **_kwargs: object) -> object:
+        raise SensitivePersistenceFailure
+
+    monkeypatch.setattr(agent_run_tasks, "_acquire_run", fail_acquire)
+    broker = InMemoryBroker()
+    broker.state.session_factory = object()
+    receiver = Receiver(
+        broker,
+        max_async_tasks=1,
+        run_startup=False,
+    )
+    message = TaskiqMessage(
+        task_id="safe-boundary-test",
+        task_name="run_agent_answer",
+        labels={},
+        args=[],
+        kwargs={
+            "trigger": AgentRunTrigger(
+                run_id=UUID("00000000-0000-4000-a000-000000000010")
+            )
+        },
+    )
+
+    with caplog.at_level(logging.ERROR, logger="taskiq.receiver.receiver"):
+        result = await receiver.run_task(
+            agent_run_tasks.run_agent_answer.original_func,
+            message,
+        )
+
+    assert result.is_err is True
+    assert result.error is not None
+    _assert_safe_task_boundary_error(
+        result.error,
+        expected_message="agent run acquisition failed",
+    )
+    receiver_output = f"{result!r}\n{caplog.text}"
+    assert all(
+        marker not in receiver_output for marker in SENSITIVE_TASK_BOUNDARY_MARKERS
+    )
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_acquire_commit_failure_raises_sanitized_task_boundary_error(
+    session_factory: async_sessionmaker[AsyncSession],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    usage_date = date(2026, 7, 22)
+    async with session_factory() as setup_session:
+        setup_session.add(
+            AgentUserDailyQuota(
+                user_id=UUID(TEST_USER_ID),
+                usage_date=usage_date,
+                used_count=1,
+            )
+        )
+        _thread, _message, run = await _create_thread_message_run(
+            setup_session,
+            question="SECRET_QUESTION_MARKER",
+            created_at=datetime.now(UTC) - timedelta(minutes=4),
+            quota_usage_date=usage_date,
+        )
+
+    failing_session = session_factory()
+
+    def fail_acquire_commit(_session: object) -> None:
+        raise SensitivePersistenceFailure
+
+    sa_event.listen(
+        failing_session.sync_session,
+        "before_commit",
+        fail_acquire_commit,
+        once=True,
+    )
+
+    def failing_session_factory() -> AsyncSession:
+        return failing_session
+
+    FakeLiveEventPublisher.instances = []
+    FakeLiveStreamPublisher.instances = []
+    monkeypatch.setattr(
+        agent_run_tasks,
+        "AgentRunLiveEventPublisher",
+        FakeLiveEventPublisher,
+    )
+    monkeypatch.setattr(
+        agent_run_tasks,
+        "AgentRunLiveStreamPublisher",
+        FakeLiveStreamPublisher,
+    )
+
+    try:
+        with capture_logs() as logs, pytest.raises(Exception) as exc_info:
+            await agent_run_tasks.run_agent_answer(
+                trigger=AgentRunTrigger(run_id=run.id),
+                ctx=_ctx(
+                    cast(
+                        async_sessionmaker[AsyncSession],
+                        failing_session_factory,
+                    )
+                ),
+            )
+    finally:
+        await failing_session.close()
+
+    _assert_safe_task_boundary_error(
+        exc_info.value,
+        expected_message="agent run acquisition failed",
+    )
+    _assert_sensitive_task_context_not_logged(logs)
+    assert FakeLiveEventPublisher.instances == []
+    assert FakeLiveStreamPublisher.instances == []
+    async with session_factory() as verification:
+        persisted = await verification.get(AgentRun, run.id)
+        quota_count = await verification.scalar(
+            select(AgentUserDailyQuota.used_count).where(
+                AgentUserDailyQuota.user_id == UUID(TEST_USER_ID),
+                AgentUserDailyQuota.usage_date == usage_date,
+            )
+        )
+    assert persisted is not None
+    assert (persisted.status, persisted.error_code, quota_count) == (
+        "queued",
+        None,
+        1,
+    )
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_application_deadline_scope_covers_acquire_live_history_runner_and_result(
+    session_factory: async_sessionmaker[AsyncSession],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    application_timeout = getattr(
+        agent_run_tasks,
+        "RESEARCH_APPLICATION_TIMEOUT_SECONDS",
+        None,
+    )
+    assert application_timeout == 150
+    async with session_factory() as session:
+        _thread, _message, run = await _create_thread_message_run(session)
+    clock = _ControlledMonotonicClock(now=100.0)
+    scopes = _install_application_deadline_boundary(monkeypatch, clock)
+    seen_steps: list[str] = []
+    original_acquire = agent_run_tasks._acquire_run
+    original_history = agent_run_tasks._read_history
+
+    async def acquire_within_deadline(*args: object, **kwargs: object) -> object:
+        assert len(scopes) == 1 and scopes[0].active
+        seen_steps.append("acquire")
+        return await original_acquire(*args, **kwargs)  # type: ignore[arg-type]
+
+    async def history_within_deadline(*args: object, **kwargs: object) -> object:
+        assert scopes[0].active
+        seen_steps.append("history")
+        return await original_history(*args, **kwargs)  # type: ignore[arg-type]
+
+    class ScopeCheckingEvents(FakeLiveEventPublisher):
+        async def reset(self) -> None:
+            assert scopes[0].active
+            seen_steps.append("reset")
+            await super().reset()
+
+    class ScopeCheckingStream(FakeLiveStreamPublisher):
+        async def begin_attempt(self) -> str | None:
+            assert scopes[0].active
+            seen_steps.append("begin_attempt")
+            return await super().begin_attempt()
+
+    class ScopeCheckingAgent(FakeAgent):
+        async def answer(self, input_: AnsweringRunContext) -> AnswerQuestionResult:
+            assert scopes[0].active
+            seen_steps.append("result")
+            return await super().answer(input_)
+
+    class ScopeCheckingRunner(FakeAnsweringRunner):
+        async def run(
+            self,
+            input: RunInput,
+            *,
+            run_context: RunContext,
+            hooks: object | None = None,
+        ) -> RunResult:
+            assert scopes[0].active
+            seen_steps.append("runner")
+            return await super().run(input, run_context=run_context, hooks=hooks)
+
+    agent = ScopeCheckingAgent(_direct_result())
+    runner = ScopeCheckingRunner()
+
+    def build_runner(**kwargs: object) -> ScopeCheckingRunner:
+        assert scopes[0].active
+        seen_steps.append("build")
+        runner.execution = agent
+        return runner
+
+    monkeypatch.setattr(agent_run_tasks, "_acquire_run", acquire_within_deadline)
+    monkeypatch.setattr(agent_run_tasks, "_read_history", history_within_deadline)
+    monkeypatch.setattr(agent_run_tasks, "get_redis", object)
+    monkeypatch.setattr(
+        agent_run_tasks, "AgentRunLiveEventPublisher", ScopeCheckingEvents
+    )
+    monkeypatch.setattr(
+        agent_run_tasks, "AgentRunLiveStreamPublisher", ScopeCheckingStream
+    )
+    monkeypatch.setattr(agent_run_tasks, "build_answering_runner", build_runner)
+
+    await agent_run_tasks.run_agent_answer(
+        trigger=AgentRunTrigger(run_id=run.id),
+        ctx=_ctx(session_factory),
+    )
+
+    assert [scope.deadline for scope in scopes] == [100.0 + application_timeout]
+    assert seen_steps == [
+        "acquire",
+        "begin_attempt",
+        "reset",
+        "history",
+        "build",
+        "runner",
+        "result",
+    ]
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_acquire_after_application_deadline_skips_execution_and_terminalizes(
+    session_factory: async_sessionmaker[AsyncSession],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async with session_factory() as session:
+        _thread, _message, run = await _create_thread_message_run(session)
+    application_timeout = getattr(
+        agent_run_tasks,
+        "RESEARCH_APPLICATION_TIMEOUT_SECONDS",
+        None,
+    )
+    assert application_timeout == 150
+    clock = _ControlledMonotonicClock(now=100.0)
+    scopes = _install_application_deadline_boundary(monkeypatch, clock)
+    original_acquire = agent_run_tasks._acquire_run
+    original_mark_failed = AgentRunRepository.mark_failed
+    FakeLiveStreamPublisher.instances = []
+
+    async def acquire_then_expire(*args: object, **kwargs: object) -> object:
+        assert scopes[0].active
+        result = await original_acquire(*args, **kwargs)  # type: ignore[arg-type]
+        clock.now = 100.0 + application_timeout + 1
+        assert scopes[0].expired() is False
+        return result
+
+    async def cleanup_outside_deadline(
+        repository: AgentRunRepository,
+        *args: object,
+        **kwargs: object,
+    ) -> bool:
+        assert scopes[0].active is False
+        return await original_mark_failed(repository, *args, **kwargs)  # type: ignore[arg-type]
+
+    class CommitCheckingPublisher(FakeLiveStreamPublisher):
+        async def publish(self, event: object) -> str | None:
+            if isinstance(event, AgentRunLiveStreamTerminalEvent):
+                async with session_factory() as verification:
+                    persisted = await verification.get(AgentRun, run.id)
+                    assert persisted is not None
+                    assert (
+                        persisted.status,
+                        persisted.error_code,
+                        persisted.attempt_epoch,
+                    ) == ("failed", "generation_unavailable", 1)
+            return await super().publish(event)
+
+    def forbidden_runner(*_args: object, **_kwargs: object) -> None:
+        pytest.fail("acquire後にdeadline超過したrunはrunnerを開始してはいけません")
+
+    monkeypatch.setattr(agent_run_tasks, "_acquire_run", acquire_then_expire)
+    monkeypatch.setattr(AgentRunRepository, "mark_failed", cleanup_outside_deadline)
+    monkeypatch.setattr(agent_run_tasks, "get_redis", object)
+    FakeLiveEventPublisher.instances = []
+    monkeypatch.setattr(
+        agent_run_tasks,
+        "AgentRunLiveEventPublisher",
+        FakeLiveEventPublisher,
+    )
+    monkeypatch.setattr(
+        agent_run_tasks,
+        "AgentRunLiveStreamPublisher",
+        CommitCheckingPublisher,
+    )
+    monkeypatch.setattr(agent_run_tasks, "build_answering_runner", forbidden_runner)
+    monkeypatch.setattr(agent_run_tasks, "_read_history", forbidden_runner)
+
+    await agent_run_tasks.run_agent_answer(
+        trigger=AgentRunTrigger(run_id=run.id),
+        ctx=_ctx(session_factory),
+    )
+
+    terminal = [
+        event
+        for event in FakeLiveStreamPublisher.instances[0].published
+        if isinstance(event, AgentRunLiveStreamTerminalEvent)
+    ]
+    assert terminal == [
+        AgentRunLiveStreamTerminalEvent(
+            status="failed",
+            errorCode="generation_unavailable",
+        )
+    ]
+    assert all(
+        publisher.reset_calls == 0 for publisher in FakeLiveEventPublisher.instances
+    )
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_application_timeout_commits_current_attempt_before_terminal_publish(
+    session_factory: async_sessionmaker[AsyncSession],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    usage_date = date(2026, 7, 22)
+    async with session_factory() as session:
+        _thread, _message, run = await _create_thread_message_run(
+            session,
+            quota_usage_date=usage_date,
+        )
+        session.add(
+            AgentUserDailyQuota(
+                user_id=UUID(TEST_USER_ID),
+                usage_date=usage_date,
+                used_count=1,
+            )
+        )
+        await session.commit()
+    clock = _ControlledMonotonicClock(now=100.0)
+    scopes = _install_application_deadline_boundary(
+        monkeypatch,
+        clock,
+        expire_on_cancel=True,
+    )
+    original_mark_failed = AgentRunRepository.mark_failed
+    FakeLiveStreamPublisher.instances = []
+
+    async def cleanup_outside_deadline(
+        repository: AgentRunRepository,
+        *args: object,
+        **kwargs: object,
+    ) -> bool:
+        assert scopes[0].active is False
+        return await original_mark_failed(repository, *args, **kwargs)  # type: ignore[arg-type]
+
+    class CommitCheckingPublisher(FakeLiveStreamPublisher):
+        async def publish(self, event: object) -> str | None:
+            if isinstance(event, AgentRunLiveStreamTerminalEvent):
+                async with session_factory() as verification:
+                    persisted = await verification.get(AgentRun, run.id)
+                    assert persisted is not None
+                    assert (persisted.status, persisted.error_code) == (
+                        "failed",
+                        "generation_unavailable",
+                    )
+            return await super().publish(event)
+
+    _patch_worker_execution(
+        monkeypatch,
+        lambda **_kwargs: FakeAgent(exc=asyncio.CancelledError()),
+    )
+    monkeypatch.setattr(AgentRunRepository, "mark_failed", cleanup_outside_deadline)
+    monkeypatch.setattr(agent_run_tasks, "get_redis", object)
+    monkeypatch.setattr(
+        agent_run_tasks, "AgentRunLiveEventPublisher", FakeLiveEventPublisher
+    )
+    monkeypatch.setattr(
+        agent_run_tasks,
+        "AgentRunLiveStreamPublisher",
+        CommitCheckingPublisher,
+    )
+
+    await agent_run_tasks.run_agent_answer(
+        trigger=AgentRunTrigger(run_id=run.id),
+        ctx=_ctx(session_factory),
+    )
+
+    assert scopes[0].expired() is True
+    terminal = [
+        event
+        for event in FakeLiveStreamPublisher.instances[0].published
+        if isinstance(event, AgentRunLiveStreamTerminalEvent)
+    ]
+    assert terminal == [
+        AgentRunLiveStreamTerminalEvent(
+            status="failed",
+            errorCode="generation_unavailable",
+        )
+    ]
+    async with session_factory() as verification:
+        counter = await verification.scalar(
+            select(AgentUserDailyQuota.used_count).where(
+                AgentUserDailyQuota.user_id == UUID(TEST_USER_ID),
+                AgentUserDailyQuota.usage_date == usage_date,
+            )
+        )
+    assert counter == 1
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_application_timeout_publish_failure_keeps_committed_failed_run(
+    session_factory: async_sessionmaker[AsyncSession],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async with session_factory() as session:
+        _thread, _message, run = await _create_thread_message_run(session)
+    clock = _ControlledMonotonicClock(now=100.0)
+    _install_application_deadline_boundary(
+        monkeypatch,
+        clock,
+        expire_on_cancel=True,
+    )
+    FakeLiveStreamPublisher.instances = []
+    monkeypatch.setattr(FakeLiveStreamPublisher, "raise_on_publish", True)
+    _patch_worker_execution(
+        monkeypatch,
+        lambda **_kwargs: FakeAgent(exc=asyncio.CancelledError()),
+    )
+    monkeypatch.setattr(agent_run_tasks, "get_redis", object)
+    monkeypatch.setattr(
+        agent_run_tasks, "AgentRunLiveEventPublisher", FakeLiveEventPublisher
+    )
+    monkeypatch.setattr(
+        agent_run_tasks,
+        "AgentRunLiveStreamPublisher",
+        FakeLiveStreamPublisher,
+    )
+
+    await agent_run_tasks.run_agent_answer(
+        trigger=AgentRunTrigger(run_id=run.id),
+        ctx=_ctx(session_factory),
+    )
+
+    async with session_factory() as verification:
+        persisted = await verification.get(AgentRun, run.id)
+    assert persisted is not None
+    assert (persisted.status, persisted.error_code) == (
+        "failed",
+        "generation_unavailable",
+    )
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_timed_out_old_attempt_cannot_terminalize_newer_attempt_or_publish(
+    session_factory: async_sessionmaker[AsyncSession],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async with session_factory() as session:
+        _thread, _message, run = await _create_thread_message_run(session)
+    clock = _ControlledMonotonicClock(now=100.0)
+    _install_application_deadline_boundary(
+        monkeypatch,
+        clock,
+        expire_on_cancel=True,
+    )
+    FakeLiveStreamPublisher.instances = []
+
+    class EpochAdvancingThenCancelledAgent:
+        async def answer(self, _input: AnsweringRunContext) -> AnswerQuestionResult:
+            async with session_factory() as session:
+                async with session.begin():
+                    newer = acquired_prepared_run(
+                        await AgentRunRepository(session).acquire_for_execution(run.id)
+                    )
+            assert newer.attempt_epoch == 2
+            raise asyncio.CancelledError
+
+    _patch_worker_execution(
+        monkeypatch,
+        lambda **_kwargs: EpochAdvancingThenCancelledAgent(),
+    )
+    monkeypatch.setattr(agent_run_tasks, "get_redis", object)
+    monkeypatch.setattr(
+        agent_run_tasks, "AgentRunLiveEventPublisher", FakeLiveEventPublisher
+    )
+    monkeypatch.setattr(
+        agent_run_tasks,
+        "AgentRunLiveStreamPublisher",
+        FakeLiveStreamPublisher,
+    )
+
+    await agent_run_tasks.run_agent_answer(
+        trigger=AgentRunTrigger(run_id=run.id),
+        ctx=_ctx(session_factory),
+    )
+
+    terminal = [
+        event
+        for event in FakeLiveStreamPublisher.instances[0].published
+        if isinstance(event, AgentRunLiveStreamTerminalEvent)
+    ]
+    assert terminal == []
+    async with session_factory() as verification:
+        persisted = await verification.get(AgentRun, run.id)
+    assert persisted is not None
+    assert (persisted.status, persisted.error_code, persisted.attempt_epoch) == (
+        "running",
+        None,
+        2,
+    )
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_application_timeout_cleanup_commit_failure_propagates_without_terminal(
+    session_factory: async_sessionmaker[AsyncSession],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async with session_factory() as setup_session:
+        _thread, _message, run = await _create_thread_message_run(setup_session)
+    clock = _ControlledMonotonicClock(now=100.0)
+    _install_application_deadline_boundary(
+        monkeypatch,
+        clock,
+        expire_on_cancel=True,
+    )
+    FakeLiveStreamPublisher.instances = []
+    acquire_session = session_factory()
+    history_session = session_factory()
+    cleanup_session = session_factory()
+
+    def fail_cleanup_commit(_session: object) -> None:
+        raise SensitivePersistenceFailure
+
+    sa_event.listen(
+        cleanup_session.sync_session,
+        "before_commit",
+        fail_cleanup_commit,
+        once=True,
+    )
+    sessions = iter([acquire_session, history_session, cleanup_session])
+
+    def controlled_session_factory() -> AsyncSession:
+        return next(sessions)
+
+    _patch_worker_execution(
+        monkeypatch,
+        lambda **_kwargs: FakeAgent(exc=asyncio.CancelledError()),
+    )
+    monkeypatch.setattr(agent_run_tasks, "get_redis", object)
+    monkeypatch.setattr(
+        agent_run_tasks, "AgentRunLiveEventPublisher", FakeLiveEventPublisher
+    )
+    monkeypatch.setattr(
+        agent_run_tasks,
+        "AgentRunLiveStreamPublisher",
+        FakeLiveStreamPublisher,
+    )
+    try:
+        with capture_logs() as logs, pytest.raises(Exception) as exc_info:
+            await agent_run_tasks.run_agent_answer(
+                trigger=AgentRunTrigger(run_id=run.id),
+                ctx=_ctx(
+                    cast(
+                        async_sessionmaker[AsyncSession],
+                        controlled_session_factory,
+                    )
+                ),
+            )
+    finally:
+        await acquire_session.close()
+        await history_session.close()
+        await cleanup_session.close()
+
+    _assert_safe_task_boundary_error(
+        exc_info.value,
+        expected_message="agent run timeout terminalization failed",
+    )
+    _assert_sensitive_task_context_not_logged(logs)
+    assert FakeLiveStreamPublisher.instances[0].published == []
+    async with session_factory() as verification:
+        persisted = await verification.get(AgentRun, run.id)
+    assert persisted is not None
+    assert (persisted.status, persisted.error_code, persisted.attempt_epoch) == (
+        "running",
+        None,
+        1,
+    )
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_lower_timeout_error_follows_existing_unexpected_error_path(
+    session_factory: async_sessionmaker[AsyncSession],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async with session_factory() as session:
+        _thread, _message, run = await _create_thread_message_run(session)
+    clock = _ControlledMonotonicClock(now=100.0)
+    scopes = _install_application_deadline_boundary(monkeypatch, clock)
+    FakeLiveStreamPublisher.instances = []
+    _patch_worker_execution(
+        monkeypatch,
+        lambda **_kwargs: FakeAgent(exc=TimeoutError("provider timeout")),
+    )
+    monkeypatch.setattr(agent_run_tasks, "get_redis", object)
+    monkeypatch.setattr(
+        agent_run_tasks, "AgentRunLiveEventPublisher", FakeLiveEventPublisher
+    )
+    monkeypatch.setattr(
+        agent_run_tasks,
+        "AgentRunLiveStreamPublisher",
+        FakeLiveStreamPublisher,
+    )
+
+    await agent_run_tasks.run_agent_answer(
+        trigger=AgentRunTrigger(run_id=run.id),
+        ctx=_ctx(session_factory),
+    )
+
+    async with session_factory() as verification:
+        persisted = await verification.get(AgentRun, run.id)
+    assert persisted is not None
+    assert (persisted.status, persisted.error_code) == ("failed", "internal_error")
+    terminal = [
+        event
+        for event in FakeLiveStreamPublisher.instances[0].published
+        if isinstance(event, AgentRunLiveStreamTerminalEvent)
+    ]
+    assert terminal == [
+        AgentRunLiveStreamTerminalEvent(status="failed", errorCode="internal_error")
+    ]
+    assert scopes[0].expired() is False
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_sweep_task_batches_queued_quota_observability_after_commit(
+    session_factory: async_sessionmaker[AsyncSession],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    usage_date = date(2026, 7, 22)
+    missing_counter_date = date(2026, 7, 21)
+    stale_at = datetime.now(UTC) - timedelta(minutes=6)
+    async with session_factory() as session:
+        session.add(
+            AgentUserDailyQuota(
+                user_id=UUID(TEST_USER_ID),
+                usage_date=usage_date,
+                used_count=2,
+            )
+        )
+        released_runs = [
+            (
+                await _create_thread_message_run(
+                    session,
+                    question=f"sensitive released queued {index}",
+                    created_at=stale_at,
+                    quota_usage_date=usage_date,
+                )
+            )[2]
+            for index in range(2)
+        ]
+        legacy = (
+            await _create_thread_message_run(
+                session,
+                question="sensitive legacy queued",
+                created_at=stale_at,
+            )
+        )[2]
+        inconsistent = (
+            await _create_thread_message_run(
+                session,
+                question="sensitive inconsistent queued",
+                created_at=stale_at,
+                quota_usage_date=missing_counter_date,
+            )
+        )[2]
+
+    metric_calls: list[dict[str, object]] = []
+
+    def record_release(**kwargs: object) -> None:
+        metric_calls.append(kwargs)
+
+    monkeypatch.setattr(
+        daily_quota_observability,
+        "record_daily_quota_release",
+        record_release,
+    )
+    FakeLiveStreamPublisher.instances = []
+    monkeypatch.setattr(agent_run_tasks, "get_redis", object)
+    monkeypatch.setattr(
+        agent_run_tasks,
+        "AgentRunLiveStreamPublisher",
+        FakeLiveStreamPublisher,
+    )
+
+    with capture_logs() as logs:
+        await agent_run_tasks.sweep_stale_agent_runs(ctx=_ctx(session_factory))
+
+    batch_logs = [
+        entry for entry in logs if entry.get("event") == "agent_runs_queued_stale_swept"
+    ]
+    assert batch_logs == [
+        {
+            "event": "agent_runs_queued_stale_swept",
+            "log_level": "info",
+            "run_count": 4,
+            "quota_released_count": 2,
+            "quota_not_eligible_count": 1,
+            "quota_inconsistent_count": 1,
+        }
+    ]
+    assert metric_calls == [
+        {"result": "released", "count": 2},
+        {"result": "not_eligible", "count": 1},
+        {"result": "inconsistent", "count": 1},
+    ]
+    assert FakeLiveStreamPublisher.instances == []
+    assert "sensitive" not in str(logs)
+    async with session_factory() as session:
+        counter = await session.scalar(
+            select(AgentUserDailyQuota.used_count).where(
+                AgentUserDailyQuota.user_id == UUID(TEST_USER_ID),
+                AgentUserDailyQuota.usage_date == usage_date,
+            )
+        )
+        statuses = [
+            await session.get(AgentRun, run_id)
+            for run_id in (
+                *(run.id for run in released_runs),
+                legacy.id,
+                inconsistent.id,
+            )
+        ]
+    assert counter == 0
+    assert [
+        (run.status, run.error_code) if run is not None else None for run in statuses
+    ] == [("failed", "stale")] * 4
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_sweep_task_publishes_each_committed_running_attempt_despite_failure(
+    session_factory: async_sessionmaker[AsyncSession],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    stale_at = datetime.now(UTC) - timedelta(minutes=6)
+    async with session_factory() as session:
+        normal = (
+            await _create_thread_message_run(
+                session,
+                status="running",
+                question="sensitive normal running",
+                created_at=stale_at - timedelta(minutes=1),
+                started_at=stale_at,
+                attempt_epoch=2,
+            )
+        )[2]
+        missing_started = (
+            await _create_thread_message_run(
+                session,
+                status="running",
+                question="sensitive missing started",
+                created_at=stale_at,
+                attempt_epoch=3,
+            )
+        )[2]
+
+    class CommitCheckingPublisher(FakeLiveStreamPublisher):
+        async def publish(self, event: object) -> str | None:
+            async with session_factory() as verification:
+                persisted = await verification.get(AgentRun, self.run_id)
+            assert persisted is not None
+            assert (persisted.status, persisted.error_code) == ("failed", "stale")
+            return await super().publish(event)
+
+    FakeLiveStreamPublisher.instances = []
+    CommitCheckingPublisher.publish_outcomes = [RuntimeError("redis unavailable"), None]
+    monkeypatch.setattr(agent_run_tasks, "get_redis", object)
+    monkeypatch.setattr(
+        agent_run_tasks,
+        "AgentRunLiveStreamPublisher",
+        CommitCheckingPublisher,
+    )
+
+    with capture_logs() as logs:
+        await agent_run_tasks.sweep_stale_agent_runs(ctx=_ctx(session_factory))
+
+    assert {
+        (publisher.run_id, publisher.attempt_epoch)
+        for publisher in FakeLiveStreamPublisher.instances
+    } == {(normal.id, 2), (missing_started.id, 3)}
+    assert [
+        event
+        for publisher in FakeLiveStreamPublisher.instances
+        for event in publisher.published
+    ] == [
+        AgentRunLiveStreamTerminalEvent(status="failed", errorCode="stale"),
+        AgentRunLiveStreamTerminalEvent(status="failed", errorCode="stale"),
+    ]
+    assert [
+        entry for entry in logs if entry.get("event") == "running_timeout_swept"
+    ] == [{"count": 2, "event": "running_timeout_swept", "log_level": "info"}]
+    assert [
+        entry for entry in logs if entry.get("event") == "running_without_started_at"
+    ] == [{"count": 1, "event": "running_without_started_at", "log_level": "warning"}]
+    assert (
+        len(
+            [
+                entry
+                for entry in logs
+                if entry.get("event") == "agent_run_live_stream_terminal_publish_failed"
+            ]
+        )
+        == 1
+    )
+    assert "sensitive" not in str(logs)
+    assert await _status_for_sweep_test(session_factory, normal.id) == (
+        "failed",
+        "stale",
+    )
+    assert await _status_for_sweep_test(session_factory, missing_started.id) == (
+        "failed",
+        "stale",
+    )
+
+
+async def _status_for_sweep_test(
+    session_factory: async_sessionmaker[AsyncSession], run_id: UUID
+) -> tuple[str, str | None]:
+    async with session_factory() as session:
+        run = await session.get(AgentRun, run_id)
+    assert run is not None
+    return run.status, run.error_code
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_sweep_task_emits_no_queued_result_or_event_when_commit_rolls_back(
+    session_factory: async_sessionmaker[AsyncSession],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    usage_date = date(2026, 7, 22)
+    async with session_factory() as setup_session:
+        _thread, _message, run = await _create_thread_message_run(
+            setup_session,
+            question="sensitive rollback queued",
+            created_at=datetime.now(UTC) - timedelta(minutes=6),
+            quota_usage_date=usage_date,
+        )
+        setup_session.add(
+            AgentUserDailyQuota(
+                user_id=UUID(TEST_USER_ID),
+                usage_date=usage_date,
+                used_count=1,
+            )
+        )
+        await setup_session.commit()
+
+    metric_calls: list[dict[str, object]] = []
+    failing_session = session_factory()
+
+    def fail_commit(_session: object) -> None:
+        raise SensitivePersistenceFailure
+
+    def record_release(**kwargs: object) -> None:
+        metric_calls.append(kwargs)
+
+    sa_event.listen(
+        failing_session.sync_session,
+        "before_commit",
+        fail_commit,
+        once=True,
+    )
+    monkeypatch.setattr(
+        daily_quota_observability,
+        "record_daily_quota_release",
+        record_release,
+    )
+
+    def failing_session_factory() -> AsyncSession:
+        return failing_session
+
+    try:
+        with (
+            capture_logs() as logs,
+            pytest.raises(Exception) as exc_info,
+        ):
+            await agent_run_tasks.sweep_stale_agent_runs(
+                ctx=_ctx(
+                    cast(
+                        async_sessionmaker[AsyncSession],
+                        failing_session_factory,
+                    )
+                )
+            )
+    finally:
+        await failing_session.close()
+
+    _assert_safe_task_boundary_error(
+        exc_info.value,
+        expected_message="agent run stale sweep failed",
+    )
+    _assert_sensitive_task_context_not_logged(logs)
+    assert metric_calls == []
+    assert not [
+        entry
+        for entry in logs
+        if entry.get("event")
+        in {
+            "agent_runs_queued_stale_swept",
+            "running_timeout_swept",
+            "running_without_started_at",
+        }
+    ]
+    assert await _status_for_sweep_test(session_factory, run.id) == ("queued", None)

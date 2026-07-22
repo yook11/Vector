@@ -19,6 +19,7 @@ from app.agent.runs.repository import AgentRunRepository
 from app.models.agent_message import AgentMessage
 from app.models.agent_run import AgentRun
 from app.models.agent_thread import AgentThread
+from tests.agent.runs._acquire_outcomes import acquired_prepared_run
 from tests.conftest import TEST_USER_ID
 from tests.logfire._metric_helpers import collected_metrics
 
@@ -482,10 +483,9 @@ async def test_actual_reacquire_makes_old_epoch_probe_false_after_two_seconds(
 
     async with session_factory() as acquire_session:
         async with acquire_session.begin():
-            prepared = await AgentRunRepository(acquire_session).acquire_for_execution(
-                run.id
+            prepared = acquired_prepared_run(
+                await AgentRunRepository(acquire_session).acquire_for_execution(run.id)
             )
-    assert prepared is not None
     assert prepared.attempt_epoch == 2
     clock.advance(2.0)
 
