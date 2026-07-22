@@ -42,7 +42,6 @@ from app.agent.planning.contract import (
     NoRetrievalPlan,
     PlanningRequest,
     QuestionPlan,
-    RetrievalPlan,
     TargetTimeWindow,
 )
 from app.agent.question_context.contract import (
@@ -124,7 +123,7 @@ def _mixed_plan() -> InternalAndExternalPlan:
 
 
 def _task(index: int, goal: str | None = None) -> ExternalResearchTask:
-    return ExternalResearchTask(collection_goal=goal or f"外部根拠 {index} を確認する")
+    return ExternalResearchTask(research_goal=goal or f"外部根拠 {index} を確認する")
 
 
 def _internal_hit(
@@ -176,7 +175,7 @@ def _report(
 ) -> ResearchTaskReport:
     return ResearchTaskReport(
         task_index=task_index,
-        collection_goal=f"外部根拠 {task_index} を確認する",
+        research_goal=f"外部根拠 {task_index} を確認する",
         status="succeeded",
         evidence_count=evidence_count,
         missing=missing or [],
@@ -317,7 +316,7 @@ class FakeExternalQueryRuntime:
     ) -> ExternalQueryDraft:
         del agent, attempt_number
         return ExternalQueryDraft(
-            queries=[self._queries_by_goal[input.task.collection_goal]]  # type: ignore[union-attr]
+            queries=[self._queries_by_goal[input.task.research_goal]]  # type: ignore[union-attr]
         )
 
 
@@ -331,7 +330,7 @@ class FakeExternalSelectorRuntime:
         self, agent: object, input: object, *, attempt_number: int
     ) -> ExternalEvidenceSelectionDraft:
         del agent, attempt_number
-        return self._drafts_by_goal[input.task.collection_goal]  # type: ignore[union-attr]
+        return self._drafts_by_goal[input.task.research_goal]  # type: ignore[union-attr]
 
 
 class FakeExternalTool:
@@ -387,9 +386,9 @@ def _external_runtime_for(
                 )
             ]
         report = reports_by_task.get(task_index)
-        queries_by_goal[task.collection_goal] = query
+        queries_by_goal[task.research_goal] = query
         candidates_by_query[query] = candidates
-        drafts_by_goal[task.collection_goal] = ExternalEvidenceSelectionDraft(
+        drafts_by_goal[task.research_goal] = ExternalEvidenceSelectionDraft(
             selections=[
                 {
                     "candidate_index": index,
@@ -649,18 +648,26 @@ async def test_answer_direct_plan_orders_progress_and_port_calls() -> None:
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("plan", "outcome", "cited_refs"),
+    ("variant", "cited_refs"),
     [
-        (_internal_plan(), _internal_outcome(1), ["1"]),
-        (_external_plan(), _external_outcome_only(), ["1"]),
-        (_mixed_plan(), _mixed_outcome(), ["1", "2"]),
+        pytest.param("internal", ["1"], id="internal"),
+        pytest.param("external", ["1"], id="external"),
+        pytest.param("mixed", ["1", "2"], id="mixed"),
     ],
 )
 async def test_answer_retrieval_plan_variants_do_not_call_direct_answerer(
-    plan: RetrievalPlan,
-    outcome: EvidenceCollectionOutcome,
+    variant: str,
     cited_refs: list[str],
 ) -> None:
+    if variant == "internal":
+        plan = _internal_plan()
+        outcome = _internal_outcome(1)
+    elif variant == "external":
+        plan = _external_plan()
+        outcome = _external_outcome_only()
+    else:
+        plan = _mixed_plan()
+        outcome = _mixed_outcome()
     orchestrator, _, _, _, direct_answerer = _orchestrator(
         plan=plan,
         outcome=outcome,

@@ -14,13 +14,13 @@ from app.agent.planning.contract import ExternalResearchTask
 
 
 def _task(goal: str) -> ExternalResearchTask:
-    return ExternalResearchTask(collection_goal=goal)
+    return ExternalResearchTask(research_goal=goal)
 
 
 def _report(*, task_index: int, evidence_count: int = 0) -> Any:
     return external_search.ResearchTaskReport(
         task_index=task_index,
-        collection_goal=f"task {task_index}",
+        research_goal=f"task {task_index}",
         status="succeeded",
         evidence_count=evidence_count,
     )
@@ -29,7 +29,7 @@ def _report(*, task_index: int, evidence_count: int = 0) -> Any:
 def _time_filter_failed_report(**changes: object) -> Any:
     values: dict[str, object] = {
         "task_index": 0,
-        "collection_goal": "指定期間の根拠を確認する",
+        "research_goal": "指定期間の根拠を確認する",
         "status": "time_filter_failed",
         "time_filter_failure_reason": "future_calendar_month",
     }
@@ -111,7 +111,7 @@ def test_time_filter_failed_report_keeps_only_closed_diagnostics() -> None:
 
     assert report.model_dump() == {
         "task_index": 0,
-        "collection_goal": "指定期間の根拠を確認する",
+        "research_goal": "指定期間の根拠を確認する",
         "generated_queries": [],
         "status": "time_filter_failed",
         "time_filter_failure_reason": "future_calendar_month",
@@ -157,9 +157,21 @@ def test_non_time_filter_report_rejects_time_filter_failure_reason(status: str) 
     with pytest.raises(ValidationError):
         external_search.ResearchTaskReport(
             task_index=0,
-            collection_goal="通常の外部検索task",
+            research_goal="通常の外部検索task",
             status=status,
             time_filter_failure_reason="future_date_range",
+        )
+
+
+def test_research_task_report_rejects_legacy_collection_goal_as_extra() -> None:
+    with pytest.raises(ValidationError):
+        external_search.ResearchTaskReport.model_validate(
+            {
+                "task_index": 0,
+                "research_goal": "NVIDIA の根拠を確認する",
+                "collection_goal": "legacy field must not be accepted",
+                "status": "succeeded",
+            }
         )
 
 
@@ -188,16 +200,18 @@ def test_external_query_generation_input_uses_typed_time_window() -> None:
 
 
 @pytest.mark.parametrize(
-    "reports",
+    "report_indexes",
     [
-        [_report(task_index=0)],
-        [_report(task_index=0), _report(task_index=0)],
-        [_report(task_index=0), _report(task_index=2)],
+        pytest.param([0], id="short"),
+        pytest.param([0, 0], id="duplicate"),
+        pytest.param([0, 2], id="missing"),
     ],
 )
 def test_outcome_rejects_report_count_duplicate_and_missing_task_indexes(
-    reports: list[Any],
+    report_indexes: list[int],
 ) -> None:
+    reports = [_report(task_index=index) for index in report_indexes]
+
     with pytest.raises(ValidationError):
         external_search.ExternalSearchOutcome(
             tasks=[_task("first"), _task("second")],

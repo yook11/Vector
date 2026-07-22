@@ -678,7 +678,7 @@ class AnsweringRunner:
     ) -> ResearchTaskReport:
         return ResearchTaskReport.from_raw(
             task_index=task_index,
-            collection_goal=task.collection_goal,
+            research_goal=task.research_goal,
             generated_queries=generated_queries,
             status=status,
             time_filter_failure_reason=time_filter_failure_reason,

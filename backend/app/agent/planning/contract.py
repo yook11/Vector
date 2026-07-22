@@ -187,9 +187,13 @@ class QuestionPlanDraft(BaseModel):
 class ExternalResearchTask(BaseModel):
     """外部リサーチの実行単位。planner は調査目的だけを言語化する。"""
 
-    model_config = ConfigDict(frozen=True, str_strip_whitespace=True)
+    model_config = ConfigDict(
+        frozen=True,
+        extra="forbid",
+        str_strip_whitespace=True,
+    )
 
-    collection_goal: str = Field(min_length=1)
+    research_goal: str = Field(min_length=1)
 
 
 class NoRetrievalPlan(BaseModel):
@@ -340,20 +344,20 @@ def _clean_external_research_tasks(goals: list[str]) -> list[ExternalResearchTas
     cleaned_tasks: list[ExternalResearchTask] = []
     seen_goals: set[str] = set()
     for goal in goals:
-        collection_goal = goal.strip()
-        if not collection_goal or collection_goal in seen_goals:
+        research_goal = goal.strip()
+        if not research_goal or research_goal in seen_goals:
             continue
-        cleaned_tasks.append(ExternalResearchTask(collection_goal=collection_goal))
-        seen_goals.add(collection_goal)
+        cleaned_tasks.append(ExternalResearchTask(research_goal=research_goal))
+        seen_goals.add(research_goal)
         if len(cleaned_tasks) >= EXTERNAL_RESEARCH_TASK_LIMIT:
             break
     return cleaned_tasks
 
 
 def _default_external_research_task(fallback_query: str) -> ExternalResearchTask:
-    return ExternalResearchTask(collection_goal=fallback_query)
+    return ExternalResearchTask(research_goal=fallback_query)
 
 
 def _external_task_goals_unique(tasks: list[ExternalResearchTask]) -> bool:
-    goals = [task.collection_goal for task in tasks]
+    goals = [task.research_goal for task in tasks]
     return len(goals) == len(set(goals))

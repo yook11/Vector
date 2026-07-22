@@ -32,9 +32,9 @@ from app.agent.runtime.contract import AgentRuntimeScopeFactory
 
 
 def _external_task(
-    collection_goal: str = "NVIDIA の最新発表を確認する",
+    research_goal: str = "NVIDIA の最新発表を確認する",
 ) -> ExternalResearchTask:
-    return ExternalResearchTask(collection_goal=collection_goal)
+    return ExternalResearchTask(research_goal=research_goal)
 
 
 def _request_type(module_name: str, type_name: str) -> type[object]:
@@ -160,19 +160,28 @@ def test_legacy_planner_draft_boundary_and_error_are_not_exported() -> None:
 
 
 class TestExternalResearchTask:
-    def test_has_collection_goal_only(self) -> None:
-        assert set(ExternalResearchTask.model_fields) == {"collection_goal"}
+    def test_has_research_goal_only(self) -> None:
+        assert set(ExternalResearchTask.model_fields) == {"research_goal"}
 
-    def test_strips_collection_goal(self) -> None:
+    def test_strips_research_goal(self) -> None:
         task = ExternalResearchTask(
-            collection_goal="  NVIDIA の外部根拠を集める  ",
+            research_goal="  NVIDIA の外部根拠を集める  ",
         )
 
-        assert task.collection_goal == "NVIDIA の外部根拠を集める"
+        assert task.research_goal == "NVIDIA の外部根拠を集める"
 
-    def test_rejects_blank_collection_goal(self) -> None:
+    def test_rejects_blank_research_goal(self) -> None:
         with pytest.raises(ValidationError):
-            ExternalResearchTask(collection_goal="   ")
+            ExternalResearchTask(research_goal="   ")
+
+    def test_rejects_legacy_collection_goal_as_extra(self) -> None:
+        with pytest.raises(ValidationError):
+            ExternalResearchTask.model_validate(
+                {
+                    "research_goal": "NVIDIA の根拠を確認する",
+                    "collection_goal": "legacy field must not be accepted",
+                }
+            )
 
 
 class TestQuestionPlanVariants:
@@ -556,7 +565,7 @@ class TestPlanFromDraft:
 
         assert isinstance(plan, ExternalSearchPlan)
         assert plan.external_research_tasks == [
-            ExternalResearchTask(collection_goal="今日のNVIDIAの発表は？")
+            ExternalResearchTask(research_goal="今日のNVIDIAの発表は？")
         ]
         assert "internal_queries" not in type(plan).model_fields
 
@@ -579,9 +588,9 @@ class TestPlanFromDraft:
 
         assert isinstance(plan, ExternalSearchPlan)
         assert plan.external_research_tasks == [
-            ExternalResearchTask(collection_goal="NVIDIA の直近発表を確認する"),
-            ExternalResearchTask(collection_goal="NVIDIA の供給需要を確認する"),
-            ExternalResearchTask(collection_goal="NVIDIA の投資影響を確認する"),
+            ExternalResearchTask(research_goal="NVIDIA の直近発表を確認する"),
+            ExternalResearchTask(research_goal="NVIDIA の供給需要を確認する"),
+            ExternalResearchTask(research_goal="NVIDIA の投資影響を確認する"),
         ]
 
     def test_internal_and_external_fills_both_queries(self) -> None:
@@ -597,7 +606,7 @@ class TestPlanFromDraft:
         assert plan.internal_queries == ["内部記事と最新ニュースを合わせて整理して"]
         assert plan.external_research_tasks == [
             ExternalResearchTask(
-                collection_goal="内部記事と最新ニュースを合わせて整理して",
+                research_goal="内部記事と最新ニュースを合わせて整理して",
             )
         ]
 
@@ -627,9 +636,9 @@ class TestPlanFromDraft:
         assert isinstance(plan, InternalAndExternalPlan)
         assert plan.internal_queries == ["NVIDIA", "OpenAI", "Apple"]
         assert plan.external_research_tasks == [
-            ExternalResearchTask(collection_goal="NVIDIA の直近発表を確認する"),
-            ExternalResearchTask(collection_goal="NVIDIA の供給需要を確認する"),
-            ExternalResearchTask(collection_goal="NVIDIA の投資影響を確認する"),
+            ExternalResearchTask(research_goal="NVIDIA の直近発表を確認する"),
+            ExternalResearchTask(research_goal="NVIDIA の供給需要を確認する"),
+            ExternalResearchTask(research_goal="NVIDIA の投資影響を確認する"),
         ]
 
     @pytest.mark.parametrize(

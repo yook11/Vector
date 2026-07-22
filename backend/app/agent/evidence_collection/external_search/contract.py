@@ -13,12 +13,13 @@ from contextlib import AbstractAsyncContextManager
 from dataclasses import dataclass
 from datetime import date, datetime
 from enum import StrEnum
-from typing import Final, Literal, Protocol
+from typing import Annotated, Final, Literal, Protocol
 
 from pydantic import (
     BaseModel,
     ConfigDict,
     Field,
+    StringConstraints,
     field_validator,
     model_validator,
 )
@@ -346,10 +347,13 @@ class EvidenceSelectionResult(BaseModel):
 class ResearchTaskReport(BaseModel):
     """task 単位の検索実行内容と失敗分類。"""
 
-    model_config = ConfigDict(frozen=True)
+    model_config = ConfigDict(frozen=True, extra="forbid")
 
     task_index: int = Field(ge=0)
-    collection_goal: str = Field(min_length=1)
+    research_goal: Annotated[
+        str,
+        StringConstraints(strip_whitespace=True, min_length=1),
+    ]
     generated_queries: list[str] = Field(default_factory=list)
     status: ResearchTaskStatus
     time_filter_failure_reason: TimeFilterFailureReason | None = None
@@ -365,7 +369,7 @@ class ResearchTaskReport(BaseModel):
         cls,
         *,
         task_index: int,
-        collection_goal: str,
+        research_goal: str,
         generated_queries: list[str] | None = None,
         status: ResearchTaskStatus,
         time_filter_failure_reason: TimeFilterFailureReason | None = None,
@@ -378,7 +382,7 @@ class ResearchTaskReport(BaseModel):
     ) -> ResearchTaskReport:
         return cls(
             task_index=task_index,
-            collection_goal=collection_goal,
+            research_goal=research_goal,
             generated_queries=generated_queries or [],
             status=status,
             time_filter_failure_reason=time_filter_failure_reason,

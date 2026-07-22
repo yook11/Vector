@@ -74,9 +74,9 @@ def _target_time_window(**payload: object) -> object:
 
 
 def _external_task(
-    collection_goal: str = "外部根拠を確認する",
+    research_goal: str = "外部根拠を確認する",
 ) -> ExternalResearchTask:
-    return ExternalResearchTask(collection_goal=collection_goal)
+    return ExternalResearchTask(research_goal=research_goal)
 
 
 def _response_invalid(

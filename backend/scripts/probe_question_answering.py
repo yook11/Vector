@@ -134,7 +134,7 @@ def _build_parser() -> argparse.ArgumentParser:
         nargs="*",
         metavar="goal",
         help=(
-            "External research collection_goal for --mode external. Quote each goal "
+            "External research goal for --mode external. Quote each goal "
             "containing spaces. At most 3 goals are accepted."
         ),
     )
@@ -288,7 +288,7 @@ def _build_external_plan(
 
     return ExternalSearchPlan(
         external_research_tasks=[
-            ExternalResearchTask(collection_goal=goal) for goal in cleaned_goals
+            ExternalResearchTask(research_goal=goal) for goal in cleaned_goals
         ],
         target_time_window=target_time_window,
         reason="external retrieval probe",

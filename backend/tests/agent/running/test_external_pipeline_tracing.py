@@ -104,7 +104,7 @@ class _Planner:
         del request
         return ExternalSearchPlan(
             external_research_tasks=[
-                ExternalResearchTask(collection_goal="GOAL_SENTINEL_3cc7")
+                ExternalResearchTask(research_goal="GOAL_SENTINEL_3cc7")
             ],
             target_time_window=TargetTimeWindow(
                 kind="calendar_month",

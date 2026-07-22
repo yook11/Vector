@@ -57,7 +57,7 @@ _TARGET_TIME_WINDOW = TargetTimeWindow(kind="last_n_days", days=1)
 
 
 def _task(goal: str = "NVIDIA の供給を確認する") -> ExternalResearchTask:
-    return ExternalResearchTask(collection_goal=goal)
+    return ExternalResearchTask(research_goal=goal)
 
 
 def _query_draft() -> Any:
@@ -280,7 +280,7 @@ class _TaskFailureAfterSiblingStartsRuntime:
 
     async def invoke(self, agent: object, input: Any, *, attempt_number: int) -> object:
         del agent, attempt_number
-        if input.task.collection_goal == "failing":
+        if input.task.research_goal == "failing":
             await self.sibling_started.wait()
             raise self._error
         self.sibling_started.set()
@@ -667,23 +667,32 @@ async def test_internal_plan_never_activates_external_scope_or_time_filter_metri
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("plan", "expect_internal", "expect_external"),
+    ("variant", "expect_internal", "expect_external"),
     [
         pytest.param(
-            InternalRetrievalPlan(internal_queries=["NVIDIA"], reason="internal"),
+            "internal",
             1,
             0,
             id="internal",
         ),
-        pytest.param(_external_plan(), 0, 1, id="external"),
-        pytest.param(_mixed_plan(), 1, 1, id="mixed"),
+        pytest.param("external", 0, 1, id="external"),
+        pytest.param("mixed", 1, 1, id="mixed"),
     ],
 )
 async def test_runner_selects_only_retrieval_dependencies_for_plan_variant(
-    plan: QuestionPlan,
+    variant: str,
     expect_internal: int,
     expect_external: int,
 ) -> None:
+    if variant == "internal":
+        plan: QuestionPlan = InternalRetrievalPlan(
+            internal_queries=["NVIDIA"],
+            reason="internal",
+        )
+    elif variant == "external":
+        plan = _external_plan()
+    else:
+        plan = _mixed_plan()
     timeline: list[str] = []
     internal = _InternalSearch()
     factory = _Factory(

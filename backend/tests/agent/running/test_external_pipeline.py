@@ -53,7 +53,7 @@ _TIME_FILTER_METRIC = "external_search_time_filter_resolution_total"
 
 
 def _task(goal: str) -> ExternalResearchTask:
-    return ExternalResearchTask(collection_goal=goal)
+    return ExternalResearchTask(research_goal=goal)
 
 
 def _plan(
@@ -260,7 +260,7 @@ class _ParallelQueryRuntime:
             self.two_started.set()
         try:
             await self._release.wait()
-            return _query_draft([input.task.collection_goal])
+            return _query_draft([input.task.research_goal])
         finally:
             self.active -= 1
 
@@ -321,7 +321,7 @@ class _TaskFailureAfterSiblingStartsRuntime:
 
     async def invoke(self, agent: object, input: Any, *, attempt_number: int) -> Any:
         del agent, attempt_number
-        if input.task.collection_goal == "failing":
+        if input.task.research_goal == "failing":
             await self.sibling_started.wait()
             raise self._error
         self.sibling_started.set()
