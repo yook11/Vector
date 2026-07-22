@@ -194,7 +194,7 @@ class TestVectorAuthIsolation:
         """duplicate-email 分類の根拠の user_email_key を pg_constraint で固定する。"""
         await _require_auth_provisioning_tables(auth_conn)
         row = await auth_conn.fetchrow(
-            "SELECT constraint_def.contype, "
+            "SELECT constraint_def.contype::text AS contype, "
             "array_agg(attr.attname ORDER BY key_position.ordinality) AS columns "
             "FROM pg_catalog.pg_constraint AS constraint_def "
             "JOIN pg_catalog.pg_class AS cls ON cls.oid = constraint_def.conrelid "
