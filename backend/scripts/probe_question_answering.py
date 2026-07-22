@@ -13,7 +13,6 @@ from uuid import uuid4
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from pydantic import ValidationError
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from app.agent.answering.contract import AnsweringRequest
@@ -172,7 +171,7 @@ def _build_parser() -> argparse.ArgumentParser:
 def _parse_target_time_window(value: str) -> TargetTimeWindow:
     try:
         return TargetTimeWindow.model_validate(json.loads(value))
-    except (json.JSONDecodeError, ValidationError):
+    except ValueError:
         raise argparse.ArgumentTypeError(
             "time window must be a valid TargetTimeWindow JSON object"
         ) from None

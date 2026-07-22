@@ -12,6 +12,14 @@ import pytest
 
 from app.agent.planning.contract import TargetTimeWindow
 
+_OVERSIZED_INTEGER_SENTINEL = "91827364554637281928374655463728"
+_OVERSIZED_INTEGER_DIGITS = _OVERSIZED_INTEGER_SENTINEL + "7" * (
+    5_000 - len(_OVERSIZED_INTEGER_SENTINEL)
+)
+_OVERSIZED_TIME_WINDOW = (
+    '{"kind":"last_n_days","days":' + _OVERSIZED_INTEGER_DIGITS + "}"
+)
+
 
 def _probe_tree() -> ast.Module:
     path = (
@@ -190,19 +198,34 @@ def test_probe_parser_converts_time_window_json_to_typed_contract_value() -> Non
 
 
 @pytest.mark.parametrize(
-    "raw_time_window",
+    ("raw_time_window", "sensitive_fragment"),
     [
-        pytest.param("not-json", id="not-json"),
-        pytest.param('{"kind":"last_n_days","days":0}', id="invalid-contract"),
+        pytest.param("not-json", "not-json", id="not-json"),
+        pytest.param(
+            '{"kind":"last_n_days","days":0}',
+            '"days":0',
+            id="invalid-contract",
+        ),
+        pytest.param(
+            _OVERSIZED_TIME_WINDOW,
+            _OVERSIZED_INTEGER_SENTINEL,
+            id="oversized-integer",
+        ),
     ],
 )
-def test_probe_parser_rejects_invalid_time_window_values(
+def test_probe_parser_rejects_invalid_time_window_without_echoing_input(
     raw_time_window: str,
+    sensitive_fragment: str,
+    capsys: pytest.CaptureFixture[str],
 ) -> None:
     with pytest.raises(SystemExit) as raised:
         _probe_module()._build_parser().parse_args(["--time-window", raw_time_window])
 
+    stderr = capsys.readouterr().err
     assert raised.value.code == 2
+    assert "time window must be a valid TargetTimeWindow JSON object" in stderr
+    assert raw_time_window not in stderr
+    assert sensitive_fragment not in stderr
 
 
 def test_probe_search_path_declares_and_preserves_typed_time_window() -> None:
