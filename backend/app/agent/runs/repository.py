@@ -6,12 +6,14 @@ import uuid as uuid_mod
 from datetime import UTC, datetime, timedelta
 
 import structlog
-from sqlalchemy import func, select, update
+from sqlalchemy import Integer, column, func, literal, select, update, values
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.agent.contract import AnswerQuestionResult
 from app.agent.runs.citation_integrity import assess_citation_integrity
 from app.agent.runs.contracts import (
+    AcquireForExecutionCommandOutcome,
+    AcquireForExecutionOutcome,
     ActiveRunConflictError,
     CancelRunCommandOutcome,
     CancelRunOutcome,
@@ -19,6 +21,7 @@ from app.agent.runs.contracts import (
     OwnedAgentRunLiveContext,
     PreparedAgentRun,
     RunTransitionLostError,
+    StaleRunningRun,
     StaleRunSweepResult,
     ThreadNotFoundError,
 )
@@ -36,6 +39,7 @@ from app.agent.runs.types import AgentRunErrorCode, AgentRunStatus
 from app.models.agent_message import AgentMessage
 from app.models.agent_run import AgentRun
 from app.models.agent_thread import AgentThread
+from app.models.agent_user_daily_quota import AgentUserDailyQuota
 from app.schemas.research import ResearchRunResponse
 
 _ACTIVE_STATUSES = (AgentRunStatus.QUEUED.value, AgentRunStatus.RUNNING.value)
@@ -44,7 +48,9 @@ _TERMINAL_STATUSES = (
     AgentRunStatus.POLICY_BLOCKED.value,
     AgentRunStatus.FAILED.value,
 )
-_STALE_AFTER = timedelta(minutes=20)
+RESEARCH_QUEUED_START_DEADLINE_SECONDS = 180
+RESEARCH_RUNNING_STALE_AFTER_SECONDS = 180
+RESEARCH_QUEUED_STALE_AFTER_SECONDS = 300
 logger = structlog.get_logger(__name__)
 
 
@@ -196,20 +202,80 @@ class AgentRunRepository:
         run_id: uuid_mod.UUID,
         *,
         now: datetime | None = None,
-    ) -> PreparedAgentRun | None:
-        now = now or datetime.now(UTC)
+    ) -> AcquireForExecutionCommandOutcome:
+        transaction_now = (
+            literal(now) if now is not None else func.statement_timestamp()
+        ).label("transaction_now")
         row = (
             await self._session.execute(
-                select(AgentRun, AgentMessage.content, AgentMessage.seq)
+                select(
+                    AgentRun,
+                    AgentMessage.content,
+                    AgentMessage.seq,
+                    AgentThread.user_id,
+                    transaction_now,
+                )
                 .join(AgentMessage, AgentRun.user_message_id == AgentMessage.id)
+                .join(AgentThread, AgentRun.thread_id == AgentThread.id)
                 .where(AgentRun.id == run_id)
             )
         ).one_or_none()
         if row is None:
-            return None
-        run, question, user_message_seq = row
+            return AcquireForExecutionCommandOutcome(
+                acquire_outcome=AcquireForExecutionOutcome.IDEMPOTENT_SKIP,
+                prepared_run=None,
+                quota_release_outcome=None,
+            )
+        run, question, user_message_seq, user_id, transaction_now = row
         if run.status in _TERMINAL_STATUSES:
-            return None
+            return AcquireForExecutionCommandOutcome(
+                acquire_outcome=AcquireForExecutionOutcome.IDEMPOTENT_SKIP,
+                prepared_run=None,
+                quota_release_outcome=None,
+            )
+
+        if (
+            run.status == AgentRunStatus.QUEUED.value
+            and run.created_at
+            < transaction_now
+            - timedelta(seconds=RESEARCH_QUEUED_START_DEADLINE_SECONDS)
+        ):
+            expired_result = await self._session.execute(
+                update(AgentRun)
+                .where(
+                    AgentRun.id == run_id,
+                    AgentRun.status == AgentRunStatus.QUEUED.value,
+                )
+                .values(
+                    status=AgentRunStatus.FAILED.value,
+                    error_code=AgentRunErrorCode.STALE.value,
+                    completed_at=transaction_now,
+                )
+                .returning(AgentRun.id, AgentRun.quota_usage_date)
+                .execution_options(synchronize_session=False)
+            )
+            expired_row = expired_result.one_or_none()
+            if expired_row is None:
+                return AcquireForExecutionCommandOutcome(
+                    acquire_outcome=AcquireForExecutionOutcome.IDEMPOTENT_SKIP,
+                    prepared_run=None,
+                    quota_release_outcome=None,
+                )
+            _expired_run_id, quota_usage_date = expired_row
+            quota_release_outcome = await release_daily_quota(
+                self._session,
+                user_id=user_id,
+                usage_date=quota_usage_date,
+            )
+            return AcquireForExecutionCommandOutcome(
+                acquire_outcome=(
+                    AcquireForExecutionOutcome.QUEUED_START_DEADLINE_EXPIRED
+                ),
+                prepared_run=None,
+                quota_release_outcome=quota_release_outcome,
+            )
+
+        now = transaction_now
         result = await self._session.execute(
             update(AgentRun)
             .where(
@@ -227,13 +293,21 @@ class AgentRunRepository:
         )
         attempt_epoch = result.scalar_one_or_none()
         if attempt_epoch is None:
-            return None
-        return PreparedAgentRun(
-            run_id=run.id,
-            thread_id=run.thread_id,
-            question=question,
-            user_message_seq=user_message_seq,
-            attempt_epoch=attempt_epoch,
+            return AcquireForExecutionCommandOutcome(
+                acquire_outcome=AcquireForExecutionOutcome.IDEMPOTENT_SKIP,
+                prepared_run=None,
+                quota_release_outcome=None,
+            )
+        return AcquireForExecutionCommandOutcome(
+            acquire_outcome=AcquireForExecutionOutcome.ACQUIRED,
+            prepared_run=PreparedAgentRun(
+                run_id=run.id,
+                thread_id=run.thread_id,
+                question=question,
+                user_message_seq=user_message_seq,
+                attempt_epoch=attempt_epoch,
+            ),
+            quota_release_outcome=None,
         )
 
     async def is_execution_current(
@@ -447,20 +521,44 @@ class AgentRunRepository:
         *,
         now: datetime | None = None,
     ) -> StaleRunSweepResult:
-        now = now or datetime.now(UTC)
-        cutoff = now - _STALE_AFTER
+        transaction_now_expression = (
+            literal(now) if now is not None else func.statement_timestamp()
+        ).label("transaction_now")
         candidate_rows = (
             (
                 await self._session.execute(
                     select(
                         AgentRun.id,
                         AgentRun.status,
+                        AgentRun.attempt_epoch,
                         AgentRun.quota_usage_date,
+                        AgentThread.user_id,
+                        AgentRun.started_at,
+                        transaction_now_expression,
                     )
+                    .join(AgentThread, AgentRun.thread_id == AgentThread.id)
                     .where(
-                        AgentRun.status.in_(_ACTIVE_STATUSES),
-                        func.coalesce(AgentRun.started_at, AgentRun.created_at)
-                        < cutoff,
+                        (
+                            (AgentRun.status == AgentRunStatus.QUEUED.value)
+                            & (
+                                AgentRun.created_at
+                                < transaction_now_expression
+                                - timedelta(seconds=RESEARCH_QUEUED_STALE_AFTER_SECONDS)
+                            )
+                        )
+                        | (
+                            (AgentRun.status == AgentRunStatus.RUNNING.value)
+                            & (
+                                func.coalesce(
+                                    AgentRun.started_at,
+                                    AgentRun.created_at,
+                                )
+                                < transaction_now_expression
+                                - timedelta(
+                                    seconds=RESEARCH_RUNNING_STALE_AFTER_SECONDS
+                                )
+                            )
+                        ),
                     )
                     .order_by(AgentRun.id)
                     .with_for_update()
@@ -471,13 +569,19 @@ class AgentRunRepository:
         )
         if not candidate_rows:
             return StaleRunSweepResult(
-                total_count=0,
-                quota_queued_count=0,
-                quota_running_count=0,
+                queued_terminal_count=0,
+                queued_quota_released_count=0,
+                queued_quota_not_eligible_count=0,
+                queued_quota_inconsistent_count=0,
+                running_terminal_runs=(),
+                running_quota_reservation_count=0,
+                running_without_started_at_count=0,
             )
 
-        candidate_ids = [run_id for run_id, _status, _quota_date in candidate_rows]
-        updated_ids = set(
+        transaction_now = candidate_rows[0][-1]
+        candidate_ids = [row[0] for row in candidate_rows]
+        candidate_by_id = {row[0]: row for row in candidate_rows}
+        updated_rows = (
             (
                 await self._session.execute(
                     update(AgentRun)
@@ -488,27 +592,113 @@ class AgentRunRepository:
                     .values(
                         status=AgentRunStatus.FAILED.value,
                         error_code=AgentRunErrorCode.STALE.value,
-                        completed_at=now,
+                        completed_at=transaction_now,
                     )
-                    .returning(AgentRun.id)
+                    .returning(
+                        AgentRun.id,
+                        AgentRun.status,
+                        AgentRun.attempt_epoch,
+                        AgentRun.quota_usage_date,
+                    )
                     .execution_options(synchronize_session=False)
                 )
             )
-            .scalars()
+            .tuples()
             .all()
         )
+        updated_ids = {row[0] for row in updated_rows}
         if updated_ids != set(candidate_ids):
             raise RuntimeError("stale run sweep lost a locked candidate")
 
+        queued_rows = [
+            row
+            for row in updated_rows
+            if candidate_by_id[row[0]][1] == AgentRunStatus.QUEUED.value
+        ]
+        queued_release_groups: dict[tuple[uuid_mod.UUID, object], int] = {}
+        for run_id, _status, _attempt_epoch, quota_usage_date in queued_rows:
+            if quota_usage_date is None:
+                continue
+            user_id = candidate_by_id[run_id][4]
+            group = (user_id, quota_usage_date)
+            queued_release_groups[group] = queued_release_groups.get(group, 0) + 1
+
+        released_groups: set[tuple[uuid_mod.UUID, object]] = set()
+        if queued_release_groups:
+            quota_releases = values(
+                column("user_id", AgentUserDailyQuota.user_id.type),
+                column("usage_date", AgentUserDailyQuota.usage_date.type),
+                column("release_count", Integer),
+                name="queued_stale_quota_releases",
+            ).data(
+                [
+                    (user_id, usage_date, count)
+                    for (user_id, usage_date), count in queued_release_groups.items()
+                ]
+            )
+            released_groups = set(
+                (
+                    await self._session.execute(
+                        update(AgentUserDailyQuota)
+                        .where(
+                            AgentUserDailyQuota.user_id == quota_releases.c.user_id,
+                            AgentUserDailyQuota.usage_date
+                            == quota_releases.c.usage_date,
+                            AgentUserDailyQuota.used_count
+                            >= quota_releases.c.release_count,
+                        )
+                        .values(
+                            used_count=(
+                                AgentUserDailyQuota.used_count
+                                - quota_releases.c.release_count
+                            )
+                        )
+                        .returning(
+                            AgentUserDailyQuota.user_id,
+                            AgentUserDailyQuota.usage_date,
+                        )
+                        .execution_options(synchronize_session=False)
+                    )
+                )
+                .tuples()
+                .all()
+            )
+
+        queued_quota_released_count = sum(
+            count
+            for group, count in queued_release_groups.items()
+            if group in released_groups
+        )
+        queued_quota_inconsistent_count = sum(
+            count
+            for group, count in queued_release_groups.items()
+            if group not in released_groups
+        )
+        running_rows = [
+            row
+            for row in updated_rows
+            if candidate_by_id[row[0]][1] == AgentRunStatus.RUNNING.value
+        ]
         return StaleRunSweepResult(
-            total_count=len(updated_ids),
-            quota_queued_count=sum(
-                status == AgentRunStatus.QUEUED.value and quota_date is not None
-                for _run_id, status, quota_date in candidate_rows
+            queued_terminal_count=len(queued_rows),
+            queued_quota_released_count=queued_quota_released_count,
+            queued_quota_not_eligible_count=sum(
+                quota_usage_date is None
+                for _run_id, _status, _attempt_epoch, quota_usage_date in queued_rows
             ),
-            quota_running_count=sum(
-                status == AgentRunStatus.RUNNING.value and quota_date is not None
-                for _run_id, status, quota_date in candidate_rows
+            queued_quota_inconsistent_count=queued_quota_inconsistent_count,
+            running_terminal_runs=tuple(
+                StaleRunningRun(run_id=run_id, attempt_epoch=attempt_epoch)
+                for run_id, _status, attempt_epoch, _quota_usage_date in running_rows
+                if attempt_epoch > 0
+            ),
+            running_quota_reservation_count=sum(
+                quota_usage_date is not None
+                for _run_id, _status, _attempt_epoch, quota_usage_date in running_rows
+            ),
+            running_without_started_at_count=sum(
+                candidate_by_id[run_id][5] is None
+                for run_id, _status, _attempt_epoch, _quota_usage_date in running_rows
             ),
         )
 

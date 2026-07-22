@@ -12,9 +12,12 @@ import { useResearchRunLiveState } from "./useResearchRunLiveState";
 
 const RUN_ONE = "00000000-0000-4000-a000-000000000010";
 const RUN_TWO = "00000000-0000-4000-a000-000000000020";
+const CREATED_AT_ONE = "2026-07-22T12:00:00.000Z";
+const CREATED_AT_TWO = "2026-07-22T12:00:01.000Z";
 
 interface ControllerOptions {
   runId: string;
+  createdAt?: string;
   requestRefresh?: () => Promise<void>;
   refresh?: () => void;
 }
@@ -43,6 +46,15 @@ function snapshot() {
     connectionMode: "connecting" as const,
     liveState: createInitialResearchLiveState(),
   };
+}
+
+function liveStateInput(runId: string, createdAt = CREATED_AT_ONE) {
+  return {
+    runId,
+    createdAt,
+    initialStatus: "running" as const,
+    initialStage: null,
+  } as unknown as Parameters<typeof useResearchRunLiveState>[0];
 }
 
 function strictMode({ children }: { children: ReactNode }) {
@@ -82,12 +94,7 @@ describe("useResearchRunLiveState", () => {
     );
 
     const { unmount } = renderHook(
-      () =>
-        useResearchRunLiveState({
-          runId: RUN_ONE,
-          initialStatus: "running",
-          initialStage: null,
-        }),
+      () => useResearchRunLiveState(liveStateInput(RUN_ONE)),
       { wrapper: strictMode },
     );
 
@@ -98,13 +105,13 @@ describe("useResearchRunLiveState", () => {
     expect(activeSubscriptions).toBe(0);
   });
 
-  it("preserves the controller for the same run and replaces it for a new run", () => {
+  it("uses runId and persisted createdAt as controller identity", () => {
     let activeSubscriptions = 0;
     let maximumActiveSubscriptions = 0;
-    const createdRunIds: string[] = [];
+    const createdIdentities: string[] = [];
     mocks.createController.mockImplementation(
       (options: ControllerOptions): MockController => {
-        createdRunIds.push(options.runId);
+        createdIdentities.push(`${options.runId}:${options.createdAt}`);
         return {
           getSnapshot: snapshot,
           subscribe: () => {
@@ -122,20 +129,27 @@ describe("useResearchRunLiveState", () => {
     );
 
     const { rerender, unmount } = renderHook(
-      ({ runId }) =>
-        useResearchRunLiveState({
-          runId,
-          initialStatus: "running",
-          initialStage: null,
-        }),
-      { initialProps: { runId: RUN_ONE } },
+      ({ runId, createdAt }) =>
+        useResearchRunLiveState(liveStateInput(runId, createdAt)),
+      { initialProps: { runId: RUN_ONE, createdAt: CREATED_AT_ONE } },
     );
 
-    rerender({ runId: RUN_ONE });
-    expect(createdRunIds).toEqual([RUN_ONE]);
+    rerender({ runId: RUN_ONE, createdAt: CREATED_AT_ONE });
+    expect(createdIdentities).toEqual([`${RUN_ONE}:${CREATED_AT_ONE}`]);
 
-    rerender({ runId: RUN_TWO });
-    expect(createdRunIds).toEqual([RUN_ONE, RUN_TWO]);
+    rerender({ runId: RUN_ONE, createdAt: CREATED_AT_TWO });
+    expect(createdIdentities).toEqual([
+      `${RUN_ONE}:${CREATED_AT_ONE}`,
+      `${RUN_ONE}:${CREATED_AT_TWO}`,
+    ]);
+    expect(activeSubscriptions).toBe(1);
+
+    rerender({ runId: RUN_TWO, createdAt: CREATED_AT_TWO });
+    expect(createdIdentities).toEqual([
+      `${RUN_ONE}:${CREATED_AT_ONE}`,
+      `${RUN_ONE}:${CREATED_AT_TWO}`,
+      `${RUN_TWO}:${CREATED_AT_TWO}`,
+    ]);
     expect(maximumActiveSubscriptions).toBe(1);
     expect(activeSubscriptions).toBe(1);
 
@@ -151,11 +165,7 @@ describe("useResearchRunLiveState", () => {
     } satisfies MockController);
 
     const { result, unmount } = renderHook(() =>
-      useResearchRunLiveState({
-        runId: RUN_ONE,
-        initialStatus: "running",
-        initialStage: null,
-      }),
+      useResearchRunLiveState(liveStateInput(RUN_ONE)),
     );
 
     expect(result.current).toBe(current);
@@ -188,11 +198,7 @@ describe("useResearchRunLiveState", () => {
     function Harness() {
       const [version, setVersion] = useState(0);
       refreshRoutePayload = () => setVersion(1);
-      useResearchRunLiveState({
-        runId: RUN_ONE,
-        initialStatus: "running",
-        initialStage: null,
-      });
+      useResearchRunLiveState(liveStateInput(RUN_ONE));
       return (
         <Suspense fallback={<span>loading</span>}>
           <RoutePayload version={version} />

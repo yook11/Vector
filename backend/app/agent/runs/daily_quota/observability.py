@@ -41,9 +41,12 @@ def record_daily_quota_admission(*, result: DailyQuotaAdmissionResult) -> None:
     _daily_quota_admissions_counter.add(1, attributes={"result": result})
 
 
-def record_daily_quota_release(*, result: DailyQuotaReleaseResult) -> None:
-    """日次利用枠の解放結果を1件記録する。"""
-    _daily_quota_releases_counter.add(1, attributes={"result": result})
+def record_daily_quota_release(
+    *, result: DailyQuotaReleaseResult, count: int = 1
+) -> None:
+    """日次利用枠の解放結果を正数件だけ記録する。"""
+    if count > 0:
+        _daily_quota_releases_counter.add(count, attributes={"result": result})
 
 
 def record_daily_quota_stale_reservation(

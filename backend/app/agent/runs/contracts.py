@@ -23,6 +23,41 @@ class RunTransitionLostError(Exception):
     """Another actor moved the run before this transition could commit."""
 
 
+class AcquireForExecutionOutcome(StrEnum):
+    ACQUIRED = "acquired"
+    QUEUED_START_DEADLINE_EXPIRED = "queued_start_deadline_expired"
+    IDEMPOTENT_SKIP = "idempotent_skip"
+
+
+@dataclass(frozen=True, slots=True)
+class AcquireForExecutionCommandOutcome:
+    acquire_outcome: AcquireForExecutionOutcome
+    prepared_run: PreparedAgentRun | None
+    quota_release_outcome: DailyQuotaReleaseOutcome | None
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.acquire_outcome, AcquireForExecutionOutcome):
+            raise ValueError("invalid acquire for execution outcome")
+        if self.acquire_outcome is AcquireForExecutionOutcome.ACQUIRED:
+            if (
+                not isinstance(self.prepared_run, PreparedAgentRun)
+                or self.quota_release_outcome is not None
+            ):
+                raise ValueError("acquired run requires only a prepared run")
+            return
+        if (
+            self.acquire_outcome
+            is AcquireForExecutionOutcome.QUEUED_START_DEADLINE_EXPIRED
+        ):
+            if self.prepared_run is not None or not isinstance(
+                self.quota_release_outcome, DailyQuotaReleaseOutcome
+            ):
+                raise ValueError("expired queued run requires only a quota outcome")
+            return
+        if self.prepared_run is not None or self.quota_release_outcome is not None:
+            raise ValueError("idempotent skip cannot contain acquire details")
+
+
 class CancelRunOutcome(StrEnum):
     CANCELLED = "cancelled"
     ALREADY_FAILED = "already_failed"
@@ -65,24 +100,58 @@ class CancelRunCommandOutcome:
 
 
 @dataclass(frozen=True, slots=True)
+class StaleRunningRun:
+    run_id: UUID
+    attempt_epoch: int
+
+    def __post_init__(self) -> None:
+        if (
+            not isinstance(self.attempt_epoch, int)
+            or isinstance(self.attempt_epoch, bool)
+            or self.attempt_epoch < 1
+        ):
+            raise ValueError("stale running run requires a positive attempt epoch")
+
+
+@dataclass(frozen=True, slots=True)
 class StaleRunSweepResult:
-    total_count: int
-    quota_queued_count: int
-    quota_running_count: int
+    queued_terminal_count: int
+    queued_quota_released_count: int
+    queued_quota_not_eligible_count: int
+    queued_quota_inconsistent_count: int
+    running_terminal_runs: tuple[StaleRunningRun, ...]
+    running_quota_reservation_count: int
+    running_without_started_at_count: int
 
     def __post_init__(self) -> None:
         counts = (
-            self.total_count,
-            self.quota_queued_count,
-            self.quota_running_count,
+            self.queued_terminal_count,
+            self.queued_quota_released_count,
+            self.queued_quota_not_eligible_count,
+            self.queued_quota_inconsistent_count,
+            self.running_quota_reservation_count,
+            self.running_without_started_at_count,
         )
         if any(
             not isinstance(count, int) or isinstance(count, bool) or count < 0
             for count in counts
         ):
             raise ValueError("stale run sweep counts must be non-negative integers")
-        if self.quota_queued_count + self.quota_running_count > self.total_count:
-            raise ValueError("quota stale run counts cannot exceed total count")
+        if (
+            self.queued_quota_released_count
+            + self.queued_quota_not_eligible_count
+            + self.queued_quota_inconsistent_count
+            != self.queued_terminal_count
+        ):
+            raise ValueError("queued quota outcomes must equal terminal count")
+        if not all(
+            isinstance(run, StaleRunningRun) for run in self.running_terminal_runs
+        ):
+            raise ValueError("running terminal runs must be stale running runs")
+
+    @property
+    def total_count(self) -> int:
+        return self.queued_terminal_count + len(self.running_terminal_runs)
 
 
 @dataclass(frozen=True, slots=True)

@@ -24,6 +24,11 @@ const PUBLIC_EVENT_NAMES = [
 const POLLING_SUCCESS_DELAY_MS = 2_000;
 const MAX_RETRY_DELAY_MS = 10_000;
 const EVENT_SOURCE_CLOSED = 2;
+const MAX_TIMEOUT_DELAY_MS = 2_147_483_647;
+
+export const RESEARCH_UI_DEADLINE_SECONDS = 180;
+
+const RESEARCH_UI_DEADLINE_MS = RESEARCH_UI_DEADLINE_SECONDS * 1_000;
 
 export type ResearchRunLiveConnectionMode =
   | "connecting"
@@ -58,6 +63,7 @@ export interface ResearchRunLiveSnapshot {
   runStatus: ResearchRunLiveStatus;
   connectionMode: ResearchRunLiveConnectionMode;
   liveState: ResearchLiveState;
+  isRecoveryPending: boolean;
 }
 
 export interface ResearchRunLiveVisibility {
@@ -67,6 +73,7 @@ export interface ResearchRunLiveVisibility {
 
 export interface CreateResearchRunLiveControllerOptions {
   runId: string;
+  createdAt: string;
   initialStatus: "queued" | "running";
   initialStage: ResearchLiveState["progressStage"];
   pollRun?: (
@@ -85,6 +92,7 @@ export interface ResearchRunLiveController {
 
 export function createResearchRunLiveController({
   runId,
+  createdAt,
   initialStatus,
   initialStage,
   pollRun = pollResearchRun,
@@ -92,6 +100,12 @@ export function createResearchRunLiveController({
   requestRefresh,
   visibility = browserVisibility,
 }: CreateResearchRunLiveControllerOptions): ResearchRunLiveController {
+  const initialRecoveryRemainingMs = Math.max(
+    0,
+    Date.parse(createdAt) + RESEARCH_UI_DEADLINE_MS - Date.now(),
+  );
+  const recoveryDeadlineMonotonicMs =
+    performance.now() + initialRecoveryRemainingMs;
   let snapshot: ResearchRunLiveSnapshot = {
     runStatus: initialStatus,
     connectionMode: "connecting",
@@ -99,6 +113,7 @@ export function createResearchRunLiveController({
       ...createInitialResearchLiveState(),
       progressStage: initialStage,
     },
+    isRecoveryPending: initialRecoveryRemainingMs === 0,
   };
   const listeners = new Set<() => void>();
   let lifecycleVersion = 0;
@@ -107,6 +122,7 @@ export function createResearchRunLiveController({
   let eventSourceListeners: Array<readonly [string, EventListener]> = [];
   let visibilityUnsubscribe: (() => void) | null = null;
   let pollingTimer: ReturnType<typeof setTimeout> | null = null;
+  let recoveryDeadlineTimer: ReturnType<typeof setTimeout> | null = null;
   let finalizationTimer: ReturnType<typeof setTimeout> | null = null;
   let finalizationRequest: Promise<void> | null = null;
   let pollingRequest: AbortController | null = null;
@@ -140,6 +156,7 @@ export function createResearchRunLiveController({
       return;
     }
 
+    evaluateRecoveryDeadline(version);
     if (snapshot.connectionMode !== "polling-only") {
       openEventSource(version);
     }
@@ -151,6 +168,7 @@ export function createResearchRunLiveController({
     lifecycleActive = false;
     lifecycleVersion += 1;
     clearPollingTimer();
+    clearRecoveryDeadlineTimer();
     clearFinalizationTimer();
     pollingRequest?.abort();
     pollingRequest = null;
@@ -384,6 +402,31 @@ export function createResearchRunLiveController({
     }, delay);
   }
 
+  function evaluateRecoveryDeadline(version: number): void {
+    if (
+      !isCurrent(version) ||
+      finalizationStarted ||
+      snapshot.isRecoveryPending
+    ) {
+      return;
+    }
+    const remainingMs = recoveryDeadlineMonotonicMs - performance.now();
+    if (!Number.isFinite(remainingMs)) return;
+    if (remainingMs <= 0) {
+      clearRecoveryDeadlineTimer();
+      updateSnapshot({ ...snapshot, isRecoveryPending: true });
+      return;
+    }
+    if (recoveryDeadlineTimer !== null) return;
+    recoveryDeadlineTimer = setTimeout(
+      () => {
+        recoveryDeadlineTimer = null;
+        evaluateRecoveryDeadline(version);
+      },
+      Math.min(remainingMs, MAX_TIMEOUT_DELAY_MS),
+    );
+  }
+
   function beginFinalization(
     terminal: ResearchLiveTerminal,
     version: number,
@@ -391,6 +434,7 @@ export function createResearchRunLiveController({
     if (!isCurrent(version) || finalizationStarted) return;
     finalizationStarted = true;
     clearPollingTimer();
+    clearRecoveryDeadlineTimer();
     pollingRequest?.abort();
     closeEventSource();
     const terminalLiveState =
@@ -402,6 +446,7 @@ export function createResearchRunLiveController({
       runStatus: terminal.status,
       connectionMode: "finalizing",
       liveState,
+      isRecoveryPending: false,
     });
     finalizationRetryIndex = 0;
     startFinalizationRefresh(version);
@@ -415,6 +460,7 @@ export function createResearchRunLiveController({
     finalizationStarted = true;
     permanentlyStopped = true;
     clearPollingTimer();
+    clearRecoveryDeadlineTimer();
     pollingRequest?.abort();
     closeEventSource();
     updateSnapshot({
@@ -424,6 +470,7 @@ export function createResearchRunLiveController({
         ...suppressResearchLiveDraft(snapshot.liveState),
         terminal,
       },
+      isRecoveryPending: false,
     });
     void requestRefresh().catch(() => undefined);
   }
@@ -434,6 +481,7 @@ export function createResearchRunLiveController({
     lifecycleActive = false;
     lifecycleVersion += 1;
     clearPollingTimer();
+    clearRecoveryDeadlineTimer();
     clearFinalizationTimer();
     pollingRequest?.abort();
     pollingRequest = null;
@@ -502,6 +550,7 @@ export function createResearchRunLiveController({
       startFinalizationRefresh(version);
       return;
     }
+    evaluateRecoveryDeadline(version);
     startPoll(version);
   }
 
@@ -509,6 +558,12 @@ export function createResearchRunLiveController({
     if (pollingTimer === null) return;
     clearTimeout(pollingTimer);
     pollingTimer = null;
+  }
+
+  function clearRecoveryDeadlineTimer(): void {
+    if (recoveryDeadlineTimer === null) return;
+    clearTimeout(recoveryDeadlineTimer);
+    recoveryDeadlineTimer = null;
   }
 
   function clearFinalizationTimer(): void {

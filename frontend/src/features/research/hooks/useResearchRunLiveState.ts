@@ -18,12 +18,14 @@ import type { ResearchLiveStage } from "../live/events";
 
 interface UseResearchRunLiveStateInput {
   runId: string;
+  createdAt: string;
   initialStatus: Extract<ResearchRunLiveStatus, "queued" | "running">;
   initialStage: ResearchLiveStage | null;
 }
 
 interface ControllerEntry {
   runId: string;
+  createdAt: string;
   subscribe: ResearchRunLiveController["subscribe"];
   getSnapshot: ResearchRunLiveController["getSnapshot"];
 }
@@ -36,6 +38,7 @@ interface RefreshCommitRequest {
 
 export function useResearchRunLiveState({
   runId,
+  createdAt,
   initialStatus,
   initialStage,
 }: UseResearchRunLiveStateInput): ResearchRunLiveSnapshot {
@@ -78,9 +81,13 @@ export function useResearchRunLiveState({
     return promise;
   }, []);
 
-  if (controllerRef.current?.runId !== runId) {
+  if (
+    controllerRef.current?.runId !== runId ||
+    controllerRef.current.createdAt !== createdAt
+  ) {
     const controller = createResearchRunLiveController({
       runId,
+      createdAt,
       initialStatus,
       initialStage,
       requestRefresh,
@@ -88,6 +95,7 @@ export function useResearchRunLiveState({
     let cachedSnapshot = controller.getSnapshot();
     controllerRef.current = {
       runId,
+      createdAt,
       getSnapshot: () => cachedSnapshot,
       subscribe: (listener) =>
         controller.subscribe(() => {
