@@ -1,7 +1,7 @@
 import { LoginForm } from "@/features/auth";
 
 export const metadata = {
-  title: "Login - Vector",
+  title: "ログイン - Vector",
 };
 
 export default function LoginPage() {

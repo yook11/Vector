@@ -1,31 +1,26 @@
 import { expect, test } from "@playwright/test";
 
-test.describe("Register flow (UI 経由)", () => {
-  test("新規ユーザ登録 → ダッシュボード遷移", async ({ page }) => {
-    const uniqueEmail = `e2e+${Date.now()}@e2e.local`;
-
+test.describe("Register page", () => {
+  test("招待制の案内とログイン導線だけを表示する", async ({ page }) => {
     await page.goto("/auth/register");
-    await page.getByLabel("Display Name").fill("E2E Test User");
-    await page.getByLabel("Email").fill(uniqueEmail);
-    await page.getByLabel("Password").fill("Password123!");
-    await page.getByRole("button", { name: "Create account" }).click();
 
-    await expect(page).toHaveURL("/");
+    await expect(page.getByText("招待制で運用しています")).toBeVisible();
     await expect(
-      page.getByRole("link", { name: "Vector ニュースへ" }),
+      page.getByText("現在、一般向けの新規登録は受け付けていません。"),
     ).toBeVisible();
-  });
-
-  test("password 8 文字未満で client-side validation 失敗", async ({
-    page,
-  }) => {
-    await page.goto("/auth/register");
-    await page.getByLabel("Display Name").fill("E2E");
-    await page.getByLabel("Email").fill(`e2e+${Date.now()}@e2e.local`);
-    await page.getByLabel("Password").fill("short");
-    await page.getByRole("button", { name: "Create account" }).click();
-
-    await expect(page.getByRole("alert")).toBeVisible();
-    await expect(page).toHaveURL(/\/auth\/register/);
+    await expect(
+      page.getByText("アカウントをお持ちの方はログインしてください。"),
+    ).toBeVisible();
+    await expect(page.getByRole("link", { name: "ログイン" })).toHaveAttribute(
+      "href",
+      "/auth/login",
+    );
+    await expect(page.locator("form")).toHaveCount(0);
+    await expect(page.getByRole("textbox")).toHaveCount(0);
+    await expect(page.locator('input[type="email"]')).toHaveCount(0);
+    await expect(page.locator('input[type="password"]')).toHaveCount(0);
+    await expect(
+      page.getByRole("button", { name: "アカウントを作成" }),
+    ).toHaveCount(0);
   });
 });

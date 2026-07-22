@@ -1,9 +1,9 @@
 "use client";
 
-import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useActionState, useEffect, useRef } from "react";
+import { useActionState, useEffect, useRef, useState } from "react";
 import { z } from "zod";
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import {
   Card,
@@ -15,6 +15,7 @@ import {
 } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Spinner } from "@/components/ui/spinner";
 import { signIn } from "@/lib/auth/auth-client";
 import { LoginSchema } from "../schemas/auth";
 
@@ -50,7 +51,7 @@ async function action(
     return {
       status: "error",
       fieldErrors: {},
-      formError: "Invalid email or password",
+      formError: "メールアドレスまたはパスワードが正しくありません。",
     };
   }
   return { status: "ok" };
@@ -60,6 +61,8 @@ export function LoginForm() {
   const router = useRouter();
   const [state, formAction, pending] = useActionState(action, INITIAL_STATE);
   const emailRef = useRef<HTMLInputElement>(null);
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
 
   useEffect(() => {
     if (state.status === "ok") {
@@ -90,11 +93,21 @@ export function LoginForm() {
   return (
     <Card className="w-full max-w-sm">
       <CardHeader>
-        <CardTitle className="text-2xl">Login</CardTitle>
-        <CardDescription>Sign in to your Vector account</CardDescription>
+        <CardTitle>
+          <h1>ログイン</h1>
+        </CardTitle>
+        <CardDescription>
+          登録済みのアカウントでログインしてください
+        </CardDescription>
       </CardHeader>
-      <form action={formAction}>
-        <CardContent className="space-y-4">
+      <form action={formAction} aria-busy={pending}>
+        <CardContent className="flex flex-col gap-4">
+          <Alert role="note">
+            <AlertTitle>招待制で運用しています</AlertTitle>
+            <AlertDescription>
+              現在、一般向けの新規登録は受け付けていません。
+            </AlertDescription>
+          </Alert>
           {formError && (
             <div
               id="login-form-error"
@@ -105,8 +118,8 @@ export function LoginForm() {
               {formError}
             </div>
           )}
-          <div className="space-y-2">
-            <Label htmlFor="email">Email</Label>
+          <div className="flex flex-col gap-2">
+            <Label htmlFor="email">メールアドレス</Label>
             <Input
               ref={emailRef}
               id="email"
@@ -116,6 +129,9 @@ export function LoginForm() {
               autoComplete="email"
               spellCheck={false}
               required
+              disabled={pending}
+              value={email}
+              onChange={(event) => setEmail(event.target.value)}
               aria-invalid={emailInvalid || undefined}
               aria-describedby={emailDescribedBy}
             />
@@ -129,14 +145,17 @@ export function LoginForm() {
               </p>
             )}
           </div>
-          <div className="space-y-2">
-            <Label htmlFor="password">Password</Label>
+          <div className="flex flex-col gap-2">
+            <Label htmlFor="password">パスワード</Label>
             <Input
               id="password"
               name="password"
               type="password"
               autoComplete="current-password"
               required
+              disabled={pending}
+              value={password}
+              onChange={(event) => setPassword(event.target.value)}
               aria-invalid={passwordInvalid || undefined}
               aria-describedby={passwordDescribedBy}
             />
@@ -153,17 +172,17 @@ export function LoginForm() {
         </CardContent>
         <CardFooter className="flex flex-col gap-2">
           <Button type="submit" className="w-full" disabled={pending}>
-            {pending ? "Signing in…" : "Sign in"}
+            {pending ? (
+              <>
+                <Spinner data-icon="inline-start" aria-hidden="true" />
+                <span role="status" aria-live="polite" aria-atomic="true">
+                  ログイン中…
+                </span>
+              </>
+            ) : (
+              "ログイン"
+            )}
           </Button>
-          <p className="text-sm text-muted-foreground">
-            Don’t have an account?{" "}
-            <Link
-              href="/auth/register"
-              className="underline hover:text-foreground"
-            >
-              Register
-            </Link>
-          </p>
         </CardFooter>
       </form>
     </Card>

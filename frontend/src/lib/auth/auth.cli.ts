@@ -11,6 +11,7 @@
 //   - 本ファイルの betterAuth(...) 引数は schema に効く範囲で `./auth.ts` と
 //     一致させること。具体的には: database / emailAndPassword /
 //     user.additionalFields / session の各フィールド。
+//   - schema 非依存の認証モードも runtime との drift を防ぐため object 単位で同期する。
 //   - rateLimit は schema (auth.rateLimit テーブル) に効くため `auth-config.ts`
 //     に集約し runtime と import 共有する (手動同期不要)。
 //   - 例外として `advanced.database.generateId` は意図的に異なる値を持つ:
@@ -40,6 +41,7 @@ export const auth = betterAuth({
   basePath: "/api/auth",
   emailAndPassword: {
     enabled: true,
+    disableSignUp: true,
     minPasswordLength: 8,
   },
   user: {

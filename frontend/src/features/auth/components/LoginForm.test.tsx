@@ -43,16 +43,27 @@ const fillForm = async (
   email: string,
   password: string,
 ) => {
-  await user.type(screen.getByLabelText("Email"), email);
-  await user.type(screen.getByLabelText("Password"), password);
+  await user.type(screen.getByLabelText("メールアドレス"), email);
+  await user.type(screen.getByLabelText("パスワード"), password);
 };
 
 describe("LoginForm — 初期表示", () => {
-  it("error 表示なし、submit ボタン enabled", () => {
-    render(<LoginForm />);
+  it("日本語のログインフォームと招待制の案内を表示し、公開登録へのリンクを出さない", () => {
+    const { container } = render(<LoginForm />);
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
-    const button = screen.getByRole("button", { name: "Sign in" });
+    expect(screen.getByRole("heading", { name: "ログイン" })).toBeVisible();
+    expect(
+      screen.getByText("登録済みのアカウントでログインしてください"),
+    ).toBeVisible();
+    expect(screen.getByLabelText("メールアドレス")).toBeVisible();
+    expect(screen.getByLabelText("パスワード")).toBeVisible();
+    const button = screen.getByRole("button", { name: "ログイン" });
     expect(button).not.toBeDisabled();
+    expect(screen.getByText("招待制で運用しています")).toBeVisible();
+    expect(
+      screen.getByText("現在、一般向けの新規登録は受け付けていません。"),
+    ).toBeVisible();
+    expect(container.querySelector('a[href="/auth/register"]')).toBeNull();
   });
 });
 
@@ -63,14 +74,14 @@ describe("LoginForm — schema fail (field-level error)", () => {
     // useActionState の action に到達させ、zod 経由の field error を観察する。
     render(<LoginForm />);
     const form = screen
-      .getByRole("button", { name: "Sign in" })
+      .getByRole("button", { name: "ログイン" })
       .closest("form");
     expect(form).not.toBeNull();
     if (form) fireEvent.submit(form);
 
     // 両 field に個別の field-level error が出る (旧実装の generic 文言ではない)
-    const emailInput = screen.getByLabelText("Email");
-    const passwordInput = screen.getByLabelText("Password");
+    const emailInput = screen.getByLabelText("メールアドレス");
+    const passwordInput = screen.getByLabelText("パスワード");
 
     await waitFor(() => {
       expect(emailInput).toHaveAttribute("aria-invalid", "true");
@@ -80,8 +91,10 @@ describe("LoginForm — schema fail (field-level error)", () => {
     // 両 field に個別の <p role="alert"> が出る
     const alerts = screen.getAllByRole("alert");
     expect(alerts.length).toBe(2);
-    expect(alerts[0]).toHaveTextContent("Please enter a valid email address");
-    expect(alerts[1]).toHaveTextContent("Password is required");
+    expect(alerts[0]).toHaveTextContent(
+      "有効なメールアドレスを入力してください。",
+    );
+    expect(alerts[1]).toHaveTextContent("パスワードを入力してください。");
 
     // signIn は呼ばれない
     expect(mocks.signInEmail).not.toHaveBeenCalled();
@@ -94,18 +107,18 @@ describe("LoginForm — schema fail (field-level error)", () => {
     // zod email validator のみが弾く形にする。
     await fillForm(user, "user@bad", "anypw");
     const form = screen
-      .getByRole("button", { name: "Sign in" })
+      .getByRole("button", { name: "ログイン" })
       .closest("form");
     if (form) fireEvent.submit(form);
 
     await waitFor(() => {
-      expect(screen.getByLabelText("Email")).toHaveAttribute(
+      expect(screen.getByLabelText("メールアドレス")).toHaveAttribute(
         "aria-invalid",
         "true",
       );
     });
     // password は invalid にならない (field-level a11y の意図)
-    expect(screen.getByLabelText("Password")).not.toHaveAttribute(
+    expect(screen.getByLabelText("パスワード")).not.toHaveAttribute(
       "aria-invalid",
       "true",
     );
@@ -114,7 +127,7 @@ describe("LoginForm — schema fail (field-level error)", () => {
 });
 
 describe("LoginForm — signIn 戻り値", () => {
-  it("authError があれば formError 表示 + 両 input が aria-invalid + email focus", async () => {
+  it("authError があれば日本語の認証エラーを表示し、入力値を保持する", async () => {
     mocks.signInEmail.mockResolvedValue({
       data: null,
       error: { message: "ignored", code: "INVALID_CREDENTIALS" },
@@ -123,20 +136,20 @@ describe("LoginForm — signIn 戻り値", () => {
     const user = userEvent.setup();
     render(<LoginForm />);
     await fillForm(user, "user@example.com", "secret");
-    await user.click(screen.getByRole("button", { name: "Sign in" }));
+    const emailInput = screen.getByLabelText("メールアドレス");
+    const passwordInput = screen.getByLabelText("パスワード");
+    await user.click(screen.getByRole("button", { name: "ログイン" }));
 
     const alert = await screen.findByRole("alert");
-    expect(alert).toHaveTextContent("Invalid email or password");
+    expect(alert).toHaveTextContent(
+      "メールアドレスまたはパスワードが正しくありません。",
+    );
     // formError は credential 全体不正の意味なので両 input を invalid にする
-    expect(screen.getByLabelText("Email")).toHaveAttribute(
-      "aria-invalid",
-      "true",
-    );
-    expect(screen.getByLabelText("Password")).toHaveAttribute(
-      "aria-invalid",
-      "true",
-    );
-    expect(screen.getByLabelText("Email")).toHaveFocus();
+    expect(emailInput).toHaveAttribute("aria-invalid", "true");
+    expect(passwordInput).toHaveAttribute("aria-invalid", "true");
+    expect(emailInput).toHaveValue("user@example.com");
+    expect(passwordInput).toHaveValue("secret");
+    expect(emailInput).toHaveFocus();
     expect(mocks.signInEmail).toHaveBeenCalledWith({
       email: "user@example.com",
       password: "secret",
@@ -154,7 +167,7 @@ describe("LoginForm — signIn 戻り値", () => {
     const user = userEvent.setup();
     render(<LoginForm />);
     await fillForm(user, "user@example.com", "secret");
-    await user.click(screen.getByRole("button", { name: "Sign in" }));
+    await user.click(screen.getByRole("button", { name: "ログイン" }));
 
     await waitFor(() => {
       expect(mocks.router.push).toHaveBeenCalledWith("/");
@@ -168,7 +181,7 @@ describe("LoginForm — signIn 戻り値", () => {
 });
 
 describe("LoginForm — pending state", () => {
-  it("signIn 解決前は button disabled + label 'Signing in…'", async () => {
+  it("signIn 解決前はログイン中の状態を伝え、入力値を保持して再送信できない", async () => {
     let resolveSign!: (v: { data: null; error: null }) => void;
     mocks.signInEmail.mockImplementation(
       () =>
@@ -180,13 +193,26 @@ describe("LoginForm — pending state", () => {
     const user = userEvent.setup();
     render(<LoginForm />);
     await fillForm(user, "user@example.com", "secret");
-    await user.click(screen.getByRole("button", { name: "Sign in" }));
+    const emailInput = screen.getByLabelText("メールアドレス");
+    const passwordInput = screen.getByLabelText("パスワード");
+    await user.click(screen.getByRole("button", { name: "ログイン" }));
 
-    await waitFor(() => {
-      expect(
-        screen.getByRole("button", { name: "Signing in…" }),
-      ).toBeDisabled();
+    const pendingButton = await screen.findByRole("button", {
+      name: "ログイン中…",
     });
+    expect(pendingButton).toBeDisabled();
+    expect(screen.getByRole("status")).toHaveTextContent("ログイン中…");
+    expect(emailInput).toBeDisabled();
+    expect(passwordInput).toBeDisabled();
+    expect(emailInput).toHaveValue("user@example.com");
+    expect(passwordInput).toHaveValue("secret");
+    expect(mocks.signInEmail).toHaveBeenCalledTimes(1);
+
+    await user.click(pendingButton);
+    expect(mocks.signInEmail).toHaveBeenCalledTimes(1);
+    expect(
+      pendingButton.querySelector('[data-icon="inline-start"]'),
+    ).toBeInTheDocument();
 
     resolveSign({ data: null, error: null });
   });
