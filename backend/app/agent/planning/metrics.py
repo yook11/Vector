@@ -8,7 +8,7 @@ import logfire
 
 from app.agent.contract import RetrievalMode
 
-PlannerOutcomeResult = Literal["planned", "fallback", "failed"]
+PlannerOutcomeResult = Literal["planned", "failed"]
 
 _planner_outcome_counter = logfire.metric_counter(
     "vector.agent.planner.outcome",

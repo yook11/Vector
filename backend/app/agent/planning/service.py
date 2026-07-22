@@ -16,7 +16,6 @@ from app.agent.planning.contract import (
     QuestionPlan,
     QuestionPlanDraft,
     plan_from_draft,
-    safe_fallback_plan,
 )
 from app.agent.planning.failure import (
     RequestRetryDisposition,
@@ -53,52 +52,64 @@ class QuestionPlanningService:
         """Return a completed plan, retrying only response-shape failures."""
 
         previous_error: str | None = None
+        completed_plan: QuestionPlan | None = None
+        terminal_error: AIProviderError | AgentResponseInvalidError | None = None
+        terminal_failure_code: str | None = None
+        retry_used = False
 
         with _planning_phase(self._agent.name):
-            async with self._runtime_scope_factory() as runtime:
-                for attempt_number in range(1, _MAX_ATTEMPTS + 1):
-                    try:
-                        draft = await runtime.invoke(
-                            self._agent,
-                            PlanningAttemptInput(
-                                request=request,
-                                previous_error=previous_error,
-                            ),
-                            attempt_number=attempt_number,
-                        )
-                    except _PLANNER_CLASSIFIED_ERRORS as exc:
-                        failure = classify_planner_failure(exc)
-                        retriable = (
-                            failure.request_retry_disposition
-                            is RequestRetryDisposition.RETRY_IN_REQUEST
-                            and attempt_number < _MAX_ATTEMPTS
-                        )
-                        if retriable:
-                            previous_error = str(exc)
-                            continue
-                        fallback = safe_fallback_plan(
-                            fallback_query=request.context.standalone_question
-                        )
-                        record_question_planner_outcome(
-                            result="fallback",
-                            retry_used=attempt_number > 1,
-                            planned_retrieval_mode=fallback.retrieval_mode,
-                            failure_code=failure.code,
-                        )
-                        return fallback
+            try:
+                async with self._runtime_scope_factory() as runtime:
+                    for attempt_number in range(1, _MAX_ATTEMPTS + 1):
+                        try:
+                            draft = await runtime.invoke(
+                                self._agent,
+                                PlanningAttemptInput(
+                                    request=request,
+                                    previous_error=previous_error,
+                                ),
+                                attempt_number=attempt_number,
+                            )
+                        except _PLANNER_CLASSIFIED_ERRORS as exc:
+                            failure = classify_planner_failure(exc)
+                            retriable = (
+                                failure.request_retry_disposition
+                                is RequestRetryDisposition.RETRY_IN_REQUEST
+                                and attempt_number < _MAX_ATTEMPTS
+                            )
+                            if retriable:
+                                previous_error = str(exc)
+                                retry_used = True
+                                continue
+                            terminal_error = exc
+                            terminal_failure_code = failure.code
+                            raise
 
-                    plan = plan_from_draft(
-                        draft,
-                        fallback_query=request.context.standalone_question,
-                    )
+                        completed_plan = plan_from_draft(
+                            draft,
+                            fallback_query=request.context.standalone_question,
+                        )
+                        retry_used = attempt_number > 1
+                        break
+            except _PLANNER_CLASSIFIED_ERRORS as exc:
+                if exc is terminal_error:
                     record_question_planner_outcome(
-                        result="planned",
-                        retry_used=attempt_number > 1,
-                        planned_retrieval_mode=plan.retrieval_mode,
+                        result="failed",
+                        retry_used=retry_used,
+                        planned_retrieval_mode="unknown",
+                        failure_code=terminal_failure_code,
                     )
-                    return plan
+                raise
 
-                raise AssertionError("unreachable: planning loop must return or raise")
+            if completed_plan is not None:
+                record_question_planner_outcome(
+                    result="planned",
+                    retry_used=retry_used,
+                    planned_retrieval_mode=completed_plan.retrieval_mode,
+                )
+                return completed_plan
+
+            raise AssertionError("unreachable: planning loop must return or raise")
 
 
 @contextmanager
@@ -111,6 +122,8 @@ def _planning_phase(agent_name: str) -> Iterator[None]:
     ) as span:
         try:
             yield
+        except _PLANNER_CLASSIFIED_ERRORS:
+            raise
         except BaseException:
             _record_unclassified_phase_error(span)
             raise
