@@ -1,6 +1,6 @@
 [← 目次](README.md) ・ 前: [第3幕](03-behavior-into-domain.md)
 
-# 第4幕 — 価値の中核に、設計を集中する
+# 第4幕 — このアプリケーションの価値とは？
 
 第3幕までで、値・振る舞い・構造に意味を持たせるための設計の手段が、少しずつ揃ってきていました。
 
@@ -216,4 +216,4 @@ if article.original_content is not None and article.published_at is not None:
 
 次の第5幕では、失敗の定義と向き合うことになります。
 
-次: [第5幕 — 監査が、責任分離を本物にする](05-audit-makes-separation-real.md)
+次: [第5幕 — 監査ログをきっかけに](05-audit-makes-separation-real.md)
