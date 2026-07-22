@@ -19,7 +19,12 @@
 import type { PoolConfig } from "pg";
 
 export function poolConfigFromUrl(rawUrl: string): PoolConfig {
-  const url = new URL(rawUrl);
+  let url: URL;
+  try {
+    url = new URL(rawUrl);
+  } catch {
+    throw new Error("Invalid database connection URL.");
+  }
   const sslmode = url.searchParams.get("sslmode");
   // pg には sslmode / channel_binding を渡さない (#3355 回避 + 未対応 param 排除)。
   url.searchParams.delete("sslmode");

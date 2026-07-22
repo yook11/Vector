@@ -91,7 +91,9 @@ def _assert_strong_secret(raw: str, name: str) -> None:
 
 
 class Settings(BaseSettings):
-    model_config = SettingsConfigDict(env_file=str(_ENV_FILE), extra="ignore")
+    model_config = SettingsConfigDict(
+        env_file=str(_ENV_FILE), extra="ignore", hide_input_in_errors=True
+    )
 
     # デプロイ環境識別。production では FastAPI 自動 docs を無効化する。
     env: Literal["development", "production"] = "development"

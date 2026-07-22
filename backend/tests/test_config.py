@@ -22,6 +22,7 @@ _VALID_FRONTEND_URL = "https://app.example.com"
 _VALID_INTERNAL_FRONTEND_BASE_URL = "http://frontend:3000"
 _VALID_CROSSREF_CONTACT_EMAIL = "crossref-contact@portfolio.dev"
 _CI_CROSSREF_CONTACT_EMAIL = "crossref-contact@example.invalid"
+_DATABASE_PASSWORD_SENTINEL = "vector_auth-SETTINGS-PASSWORD-MUST-NOT-LEAK"
 
 # 強度テストで parametrize する内部 secret の field 名。
 _NEW_SECRET_FIELD_NAMES = ["bff_jwt_signing_secret", "revalidate_bearer_secret"]
@@ -139,6 +140,24 @@ def test_settings_reject_known_weak_optional_database_urls(
     monkeypatch.setenv(env_name, weak_url)
     with pytest.raises(ValidationError, match=env_name):
         Settings()
+
+
+def test_auth_retention_validation_error_does_not_expose_database_credentials(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """起動時の弱URL拒否でもcredentialをValidationError表示へ出さない。"""
+    raw_url = (
+        f"postgresql+asyncpg://vector_auth:{_DATABASE_PASSWORD_SENTINEL}@db:5432/vector"
+    )
+    monkeypatch.setenv("AUTH_RETENTION_DATABASE_URL", raw_url)
+
+    with pytest.raises(ValidationError) as exc_info:
+        Settings()
+
+    for rendered in (str(exc_info.value), repr(exc_info.value)):
+        assert raw_url not in rendered
+        assert _DATABASE_PASSWORD_SENTINEL not in rendered
+        assert "input_value" not in rendered
 
 
 def test_settings_accept_ci_dummy_database_url(
