@@ -148,3 +148,136 @@ describe("LiveAnswerDraft", () => {
     focusTarget.remove();
   });
 });
+
+describe("LiveAnswerDraft — Markdown rendering contract (draft)", () => {
+  it("renders a shifted heading, a list item, and a code fence as elements", () => {
+    const content = [
+      "## 見出し",
+      "",
+      "- 項目",
+      "",
+      "```",
+      "fenced text",
+      "```",
+    ].join("\n");
+
+    const { container } = render(
+      <LiveAnswerDraft
+        status="running"
+        draftMode="visible"
+        draftText={content}
+        errorCode={null}
+      />,
+    );
+
+    const heading = screen.getByRole("heading", { name: "見出し" });
+    expect(heading.tagName).toBe("H4");
+    expect(screen.getByRole("listitem")).toHaveTextContent("項目");
+    expect(container.querySelector("pre code")?.textContent?.trim()).toBe(
+      "fenced text",
+    );
+  });
+
+  it("closes an unterminated emphasis marker via remend and drops the ** from view", () => {
+    const content = "これは**重要";
+
+    const { container } = render(
+      <LiveAnswerDraft
+        status="running"
+        draftMode="visible"
+        draftText={content}
+        errorCode={null}
+      />,
+    );
+
+    const strong = container.querySelector("strong");
+    expect(strong).not.toBeNull();
+    expect(strong?.textContent).toBe("重要");
+    expect(container.textContent).not.toContain("**");
+  });
+
+  it("renders trailing text after an unclosed code fence as a code block", () => {
+    const content = ["本文の続き", "", "```", "fenced content"].join("\n");
+
+    const { container } = render(
+      <LiveAnswerDraft
+        status="running"
+        draftMode="visible"
+        draftText={content}
+        errorCode={null}
+      />,
+    );
+
+    const codeBlock = container.querySelector("pre code");
+    expect(codeBlock).not.toBeNull();
+    expect(codeBlock?.textContent).toContain("fenced content");
+  });
+
+  it("keeps a complete citation marker and an incomplete fragment as literal text without a badge", () => {
+    const content = "引用[[1]]と断片[[1";
+
+    const { container } = render(
+      <LiveAnswerDraft
+        status="running"
+        draftMode="visible"
+        draftText={content}
+        errorCode={null}
+      />,
+    );
+
+    expect(container.textContent).toContain(content);
+    expect(screen.queryByRole("button")).not.toBeInTheDocument();
+  });
+});
+
+describe("LiveAnswerDraft — security contract (draft)", () => {
+  it("keeps raw HTML tags escaped as visible text", () => {
+    const content = "<script>alert(1)</script>";
+
+    const { container } = render(
+      <LiveAnswerDraft
+        status="running"
+        draftMode="visible"
+        draftText={content}
+        errorCode={null}
+      />,
+    );
+
+    expect(container.querySelector("script")).toBeNull();
+    expect(screen.getByText(content)).toBeInTheDocument();
+  });
+
+  it("does not render a markdown image element and shows only the alt text", () => {
+    const content = "![代替テキスト](https://example.com/x.png)";
+
+    const { container } = render(
+      <LiveAnswerDraft
+        status="running"
+        draftMode="visible"
+        draftText={content}
+        errorCode={null}
+      />,
+    );
+
+    expect(container.querySelector("img")).toBeNull();
+    expect(screen.getByText("代替テキスト")).toBeInTheDocument();
+  });
+
+  it("adds target=_blank and rel=noreferrer to a markdown link", () => {
+    const content = "[外部](https://example.com/x)";
+
+    render(
+      <LiveAnswerDraft
+        status="running"
+        draftMode="visible"
+        draftText={content}
+        errorCode={null}
+      />,
+    );
+
+    const link = screen.getByRole("link", { name: "外部" });
+    expect(link).toHaveAttribute("href", "https://example.com/x");
+    expect(link).toHaveAttribute("target", "_blank");
+    expect(link).toHaveAttribute("rel", "noreferrer");
+  });
+});
