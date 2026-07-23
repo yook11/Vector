@@ -1,6 +1,31 @@
+"use client";
+
 import { AlertTriangle, Bot, Loader2 } from "lucide-react";
+import Markdown from "react-markdown";
+import remend, { type RemendOptions } from "remend";
 import type { ResearchRunResponse } from "@/types/types.gen";
 import type { ResearchLiveDraftMode } from "../live/reducer";
+import { useAnswerMarkdownConfig } from "../markdown/answer-markdown";
+
+/**
+ * draft 表示直前の未終端インライン記法のみを補完する (仕様「方式」の handler 表)。
+ * links / images は引用マーカー断片 `[[1` を壊すため無効化必須 (両方 false でないと無効化されない)。
+ */
+const DRAFT_REMEND_OPTIONS: RemendOptions = {
+  bold: true,
+  boldItalic: true,
+  italic: true,
+  inlineCode: true,
+  strikethrough: true,
+  setextHeadings: true,
+  links: false,
+  images: false,
+  katex: false,
+  inlineKatex: false,
+  singleTilde: false,
+  comparisonOperators: false,
+  htmlTags: false,
+};
 
 interface LiveAnswerDraftProps {
   status: ResearchRunResponse["status"];
@@ -57,6 +82,8 @@ function DraftContent({
     : isRecoveryPending
       ? "回答の状態を確認しています…"
       : "回答を生成中…";
+  const { remarkPlugins, remarkRehypeOptions, components } =
+    useAnswerMarkdownConfig();
 
   return (
     <>
@@ -68,9 +95,15 @@ function DraftContent({
         <span>{statusText}</span>
       </div>
       {showsDraft ? (
-        <p className="whitespace-pre-wrap break-words text-sm leading-7 text-[var(--vector-ink)] [overflow-wrap:anywhere]">
-          {draftText}
-        </p>
+        <div className="break-words text-sm leading-7 text-[var(--vector-ink)] [overflow-wrap:anywhere]">
+          <Markdown
+            remarkPlugins={remarkPlugins}
+            remarkRehypeOptions={remarkRehypeOptions}
+            components={components}
+          >
+            {remend(draftText, DRAFT_REMEND_OPTIONS)}
+          </Markdown>
+        </div>
       ) : null}
     </>
   );
