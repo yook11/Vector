@@ -5,7 +5,10 @@
 # stock redis image を使い、AOF + volume で永続化し、broker message を絶対 evict
 # しない (noeviction)。
 #
-# 認証は Redis ACL で 2 user に分離する (v1 shared-password は廃止):
+# 認証は Redis ACL で用途別 user に分離する (v1 shared-password は廃止):
+# - default = AOF の起動時 replay 専用。認証可能な password を持たせず、
+#   client からの AUTH は常に拒否する。Redis の AOF client が MULTI/EXEC を replay
+#   する際、default user の ACL を再検査するため全 command / key / channel を許可する。
 # - core   = 全 stream / 全 key / 全 command (crown-jewel 側、信頼)。
 # - collect = 自分が触る stream (pipeline:dispatch/acquisition/completion/curation) と
 #   dispatch/acquisition/completion用autoclaim lock / result key のみ。legacy content、
@@ -52,8 +55,10 @@ primary_region = 'nrt'
 #
 # 起動は sh -c 経由: secret の 2 password を展開して ACL file を /tmp に生成し
 # (durable volume には password を置かない)、--aclfile で起動する。設計値:
-# - user 分離 (上のヘッダ参照): default off / core 全権 / collect 最小権限。
-#   default off により no-user / 旧 requirepass 接続を拒否 (fail-closed)。
+# - user 分離 (上のヘッダ参照): default は認証手段のない AOF replay 専用、
+#   core は全権、collect は最小権限。no-user / 旧 requirepass 接続は NOAUTH で拒否する。
+# - core / collect password のどちらかが空なら起動を中止し、空 password での認証を
+#   許可しない。
 # - appendonly yes + --dir /data (volume): restart で in-flight message を失わない
 #   (ACL file は /tmp で揮発し restart 毎に secret から再生成)。
 # - maxmemory-policy noeviction: broker message をevictせず、上限時はwriteを拒否する。
@@ -61,7 +66,7 @@ primary_region = 'nrt'
 #   ghost PELとgroup metadataを含むmemoryのhard upper boundではない。
 # - bind :: : 6PN (IPv6) で listen する。
 [processes]
-  redis = "sh -c 'umask 077; { echo \"user default off\"; echo \"user core on >$REDIS_CORE_PASSWORD ~* &* +@all\"; echo \"user collect on >$REDIS_COLLECT_PASSWORD resetchannels ~pipeline:dispatch ~pipeline:acquisition ~pipeline:completion ~pipeline:curation ~autoclaim:taskiq:pipeline:dispatch ~autoclaim:taskiq:pipeline:acquisition ~autoclaim:taskiq:pipeline:completion ~taskiq:* +@connection +@read +@write +@stream +@scripting -@dangerous\"; } > /tmp/users.acl; exec redis-server --aclfile /tmp/users.acl --appendonly yes --dir /data --maxmemory 256mb --maxmemory-policy noeviction --bind ::'"
+  redis = "sh -c 'test -n \"$REDIS_CORE_PASSWORD\" && test -n \"$REDIS_COLLECT_PASSWORD\" || { echo \"Redis ACL secrets are required\" >&2; exit 1; }; umask 077; { echo \"user default reset on resetpass ~* &* +@all\"; echo \"user core on >$REDIS_CORE_PASSWORD ~* &* +@all\"; echo \"user collect on >$REDIS_COLLECT_PASSWORD resetchannels ~pipeline:dispatch ~pipeline:acquisition ~pipeline:completion ~pipeline:curation ~autoclaim:taskiq:pipeline:dispatch ~autoclaim:taskiq:pipeline:acquisition ~autoclaim:taskiq:pipeline:completion ~taskiq:* +@connection +@read +@write +@stream +@scripting -@dangerous\"; } > /tmp/users.acl; exec redis-server --aclfile /tmp/users.acl --appendonly yes --dir /data --maxmemory 256mb --maxmemory-policy noeviction --bind ::'"
 
 [mounts]
   source = "vector_redis_data"
