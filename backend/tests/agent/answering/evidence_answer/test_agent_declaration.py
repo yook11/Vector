@@ -118,7 +118,7 @@ def test_agent_declares_structured_gemini_role_and_manual_prompt_version() -> No
         "gemini-3.1-flash-lite",
         0.2,
         2048,
-        "v2",
+        "v3",
         RawEvidenceAnswerDraft,
     )
     assert agent.response_schema is not None

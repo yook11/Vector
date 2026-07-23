@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 
+import pytest
+
 from app.agent.answering.contract import AnsweringRequest
 from app.agent.answering.direct_answer.agent import DIRECT_ANSWER_AGENT
 from app.agent.answering.direct_answer.contract import DirectAnswerInput
@@ -132,8 +134,21 @@ def test_agent_declares_plain_text_gemini_role_and_manual_prompt_version() -> No
     assert DIRECT_ANSWER_AGENT.model.name == "gemini-3.1-flash-lite"
     assert DIRECT_ANSWER_AGENT.model_settings.temperature == 0.2
     assert DIRECT_ANSWER_AGENT.model_settings.max_output_tokens == 2048
-    assert DIRECT_ANSWER_AGENT.prompt.version == "v1"
+    assert DIRECT_ANSWER_AGENT.prompt.version == "v2"
     assert DIRECT_ANSWER_AGENT.response_schema is None
+
+
+@pytest.mark.parametrize(
+    "required_rule",
+    [
+        "回答本文はMarkdown(GFM)で構成する",
+        "見出し・段落・箇条書き・表の前後には空行を置く",
+    ],
+)
+def test_fixed_instructions_keep_direct_answer_markdown_rules(
+    required_rule: str,
+) -> None:
+    assert required_rule in DIRECT_ANSWER_AGENT.prompt.instructions
 
 
 def test_fixed_instructions_and_rendered_input_are_separated() -> None:
