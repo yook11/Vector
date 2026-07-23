@@ -16,6 +16,14 @@ primary_region = 'nrt'
   min_machines_running = 1
   processes = ['app']
 
+# root redirectを正常と誤判定しないよう、未認証ログイン画面のSSR成功をrouting条件とする。
+[[http_service.checks]]
+  grace_period = "10s"
+  interval = "15s"
+  method = "GET"
+  timeout = "2s"
+  path = "/auth/login"
+
 [[vm]]
   memory = '1gb'
   cpus = 1
