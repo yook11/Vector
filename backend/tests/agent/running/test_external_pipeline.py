@@ -14,6 +14,7 @@ import pytest
 from logfire.testing import CaptureLogfire
 from structlog.testing import capture_logs
 
+import app.agent.planning.contract as planning_contract
 from app.agent.answering.contract import AnsweringRequest
 from app.agent.answering.direct_answer.contract import DirectAnswerDraft
 from app.agent.answering.evidence_answer.contract import EvidenceAnswerDraft
@@ -28,7 +29,6 @@ from app.agent.evidence_collection.external_search.contract import (
 )
 from app.agent.planning.contract import (
     ExternalResearchTask,
-    ExternalSearchPlan,
     PlanningRequest,
     TargetTimeWindow,
 )
@@ -53,18 +53,21 @@ _TIME_FILTER_METRIC = "external_search_time_filter_resolution_total"
 
 
 def _task(goal: str) -> ExternalResearchTask:
-    return ExternalResearchTask(collection_goal=goal)
+    return ExternalResearchTask(research_goal=goal)
 
 
 def _plan(
     tasks: list[ExternalResearchTask],
     *,
     target_time_window: TargetTimeWindow | None = _DEFAULT_TARGET_TIME_WINDOW,
-) -> ExternalSearchPlan:
-    return ExternalSearchPlan(
+) -> Any:
+    plan_type = getattr(planning_contract, "SearchPlan", None)
+    if plan_type is None:
+        pytest.fail("planning contract must define SearchPlan")
+    return plan_type(
+        article_search_queries=["NVIDIA"],
         external_research_tasks=tasks,
         target_time_window=target_time_window,
-        reason="external evidence is required",
     )
 
 
@@ -109,18 +112,19 @@ class _Preparer:
 
 
 class _Planner:
-    def __init__(self, plan: ExternalSearchPlan) -> None:
+    def __init__(self, plan: Any) -> None:
         self.plan_result = plan
         self.calls: list[PlanningRequest] = []
 
-    async def plan(self, request: PlanningRequest) -> ExternalSearchPlan:
+    async def plan(self, request: PlanningRequest) -> Any:
         self.calls.append(request)
         return self.plan_result
 
 
-class _UnreachableInternalSearch:
+class _EmptyInternalSearch:
     async def search_articles(self, queries: object) -> list[object]:
-        raise AssertionError(f"internal search must not run: {queries!r}")
+        del queries
+        return []
 
 
 class _UnreachableDirectAnswerer:
@@ -260,7 +264,7 @@ class _ParallelQueryRuntime:
             self.two_started.set()
         try:
             await self._release.wait()
-            return _query_draft([input.task.collection_goal])
+            return _query_draft([input.task.research_goal])
         finally:
             self.active -= 1
 
@@ -321,7 +325,7 @@ class _TaskFailureAfterSiblingStartsRuntime:
 
     async def invoke(self, agent: object, input: Any, *, attempt_number: int) -> Any:
         del agent, attempt_number
-        if input.task.collection_goal == "failing":
+        if input.task.research_goal == "failing":
             await self.sibling_started.wait()
             raise self._error
         self.sibling_started.set()
@@ -386,7 +390,7 @@ def _runner(
         planner=_Planner(
             _plan(tasks, target_time_window=target_time_window),
         ),
-        internal_search=_UnreachableInternalSearch(),
+        internal_search=_EmptyInternalSearch(),
         external_runtime_factory=factory,
         direct_answerer=_UnreachableDirectAnswerer(),
         evidence_answerer=answerer,
@@ -962,7 +966,7 @@ async def test_classified_query_failure_never_starts_tool_or_selector() -> None:
         tool.calls,
         selector_runtime.calls,
         answerer.calls,
-        result.final_output.retrieval.collection_failures,
+        result.final_output.plan_summary.collection_failures,
         factory.scopes[0].exit_calls,
     ) == ([], [], [[]], [], 1)
 
@@ -1517,7 +1521,7 @@ async def test_cross_task_dedupe_keeps_first_and_scope_is_fresh_per_run() -> Non
     factory = _Factory([first_runtime, second_runtime])
     phases = AnsweringPhases(
         planner=_Planner(_plan(tasks)),
-        internal_search=_UnreachableInternalSearch(),
+        internal_search=_EmptyInternalSearch(),
         external_runtime_factory=factory,
         direct_answerer=_UnreachableDirectAnswerer(),
         evidence_answerer=answerer,

@@ -11,6 +11,7 @@ from uuid import UUID
 import pytest
 from logfire.testing import CaptureLogfire
 
+import app.agent.planning.contract as planning_contract
 from app.agent.answering.contract import AnsweringRequest
 from app.agent.answering.direct_answer.contract import DirectAnswerDraft
 from app.agent.answering.evidence_answer.contract import EvidenceAnswerDraft
@@ -29,9 +30,6 @@ from app.agent.evidence_collection.internal_search.query_embedding import (
 )
 from app.agent.planning.contract import (
     ExternalResearchTask,
-    ExternalSearchPlan,
-    InternalAndExternalPlan,
-    InternalRetrievalPlan,
     PlanningRequest,
     QuestionPlan,
     TargetTimeWindow,
@@ -57,7 +55,7 @@ _TARGET_TIME_WINDOW = TargetTimeWindow(kind="last_n_days", days=1)
 
 
 def _task(goal: str = "NVIDIA の供給を確認する") -> ExternalResearchTask:
-    return ExternalResearchTask(collection_goal=goal)
+    return ExternalResearchTask(research_goal=goal)
 
 
 def _query_draft() -> Any:
@@ -280,7 +278,7 @@ class _TaskFailureAfterSiblingStartsRuntime:
 
     async def invoke(self, agent: object, input: Any, *, attempt_number: int) -> object:
         del agent, attempt_number
-        if input.task.collection_goal == "failing":
+        if input.task.research_goal == "failing":
             await self.sibling_started.wait()
             raise self._error
         self.sibling_started.set()
@@ -490,20 +488,18 @@ def _capture_external_outcome(
     return captured
 
 
-def _external_plan(*tasks: ExternalResearchTask) -> ExternalSearchPlan:
-    return ExternalSearchPlan(
+def _search_plan(
+    *tasks: ExternalResearchTask,
+    article_search_queries: list[str] | None = None,
+    target_time_window: TargetTimeWindow | None = _TARGET_TIME_WINDOW,
+) -> object:
+    plan_type = getattr(planning_contract, "SearchPlan", None)
+    if plan_type is None:
+        pytest.fail("planning contract must define SearchPlan")
+    return plan_type(
+        article_search_queries=article_search_queries or ["NVIDIA", "Blackwell"],
         external_research_tasks=list(tasks or (_task(),)),
-        target_time_window=_TARGET_TIME_WINDOW,
-        reason="external",
-    )
-
-
-def _mixed_plan(*tasks: ExternalResearchTask) -> InternalAndExternalPlan:
-    return InternalAndExternalPlan(
-        internal_queries=["NVIDIA", "Blackwell"],
-        external_research_tasks=list(tasks or (_task(),)),
-        target_time_window=_TARGET_TIME_WINDOW,
-        reason="mixed",
+        target_time_window=target_time_window,
     )
 
 
@@ -512,11 +508,7 @@ async def test_external_scope_exits_before_evidence_answering_starts() -> None:
     timeline: list[str] = []
     factory = _Factory([_runtime(ScriptedAgentRuntime([_query_draft()]))], timeline)
     runner = _runner(
-        plan=ExternalSearchPlan(
-            external_research_tasks=[_task()],
-            target_time_window=_TARGET_TIME_WINDOW,
-            reason="external",
-        ),
+        plan=_search_plan(),
         internal=_InternalSearch(),
         factory=factory,
         timeline=timeline,
@@ -531,18 +523,13 @@ async def test_external_scope_exits_before_evidence_answering_starts() -> None:
 
 
 @pytest.mark.asyncio
-async def test_mixed_external_scope_closes_while_internal_branch_is_pending() -> None:
+async def test_search_external_scope_closes_while_internal_branch_is_pending() -> None:
     timeline: list[str] = []
     release_internal = asyncio.Event()
     internal = _InternalSearch(release=release_internal)
     factory = _Factory([_runtime(ScriptedAgentRuntime([_query_draft()]))], timeline)
     runner = _runner(
-        plan=InternalAndExternalPlan(
-            internal_queries=["NVIDIA"],
-            external_research_tasks=[_task()],
-            target_time_window=_TARGET_TIME_WINDOW,
-            reason="mixed",
-        ),
+        plan=_search_plan(article_search_queries=["NVIDIA"]),
         internal=internal,
         factory=factory,
         timeline=timeline,
@@ -578,11 +565,7 @@ async def test_answer_failure_closes_fresh_external_scope_each_run() -> None:
     )
     error = RuntimeError("answer failure")
     runner = _runner(
-        plan=ExternalSearchPlan(
-            external_research_tasks=[_task()],
-            target_time_window=None,
-            reason="external",
-        ),
+        plan=_search_plan(target_time_window=None),
         internal=_InternalSearch(),
         factory=factory,
         timeline=timeline,
@@ -613,11 +596,7 @@ async def test_outer_cancellation_joins_external_query_before_scope_close() -> N
     query_runtime = _BlockingQueryRuntime()
     factory = _Factory([_runtime(query_runtime)], timeline)
     runner = _runner(
-        plan=ExternalSearchPlan(
-            external_research_tasks=[_task()],
-            target_time_window=None,
-            reason="external",
-        ),
+        plan=_search_plan(target_time_window=None),
         internal=_InternalSearch(),
         factory=factory,
         timeline=timeline,
@@ -637,16 +616,13 @@ async def test_outer_cancellation_joins_external_query_before_scope_close() -> N
 
 
 @pytest.mark.asyncio
-async def test_internal_plan_never_activates_external_scope_or_time_filter_metric(
+async def test_search_plan_activates_external_scope_and_resolves_time_filter_metric(
     capfire: CaptureLogfire,
 ) -> None:
     timeline: list[str] = []
-    factory = _Factory([], timeline)
+    factory = _Factory([_runtime(ScriptedAgentRuntime([_query_draft()]))], timeline)
     runner = _runner(
-        plan=InternalRetrievalPlan(
-            internal_queries=["NVIDIA"],
-            reason="internal",
-        ),
+        plan=_search_plan(article_search_queries=["NVIDIA"]),
         internal=_InternalSearch(),
         factory=factory,
         timeline=timeline,
@@ -655,50 +631,26 @@ async def test_internal_plan_never_activates_external_scope_or_time_filter_metri
     await _run(runner)
     metrics = collected_metrics(capfire)
 
-    assert (
-        factory.scopes,
-        [
-            metric
-            for metric in metrics
-            if metric["name"] == "external_search_time_filter_resolution_total"
-        ],
-    ) == ([], [])
+    assert len(factory.scopes) == 1
+    assert [
+        metric
+        for metric in metrics
+        if metric["name"] == "external_search_time_filter_resolution_total"
+    ]
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize(
-    ("plan", "expect_internal", "expect_external"),
-    [
-        pytest.param(
-            InternalRetrievalPlan(internal_queries=["NVIDIA"], reason="internal"),
-            1,
-            0,
-            id="internal",
-        ),
-        pytest.param(_external_plan(), 0, 1, id="external"),
-        pytest.param(_mixed_plan(), 1, 1, id="mixed"),
-    ],
-)
-async def test_runner_selects_only_retrieval_dependencies_for_plan_variant(
-    plan: QuestionPlan,
-    expect_internal: int,
-    expect_external: int,
-) -> None:
+async def test_search_plan_selects_both_retrieval_dependencies() -> None:
+    plan = _search_plan()
     timeline: list[str] = []
     internal = _InternalSearch()
-    factory = _Factory(
-        [_runtime(ScriptedAgentRuntime([_query_draft()]))] if expect_external else [],
-        timeline,
-    )
+    factory = _Factory([_runtime(ScriptedAgentRuntime([_query_draft()]))], timeline)
 
     await _run(
         _runner(plan=plan, internal=internal, factory=factory, timeline=timeline)
     )
 
-    assert (len(internal.calls), len(factory.scopes)) == (
-        expect_internal,
-        expect_external,
-    )
+    assert (len(internal.calls), len(factory.scopes)) == (1, 1)
 
 
 @pytest.mark.asyncio
@@ -706,19 +658,16 @@ async def test_runner_preserves_internal_query_order() -> None:
     timeline: list[str] = []
     internal = _InternalSearch()
     runner = _runner(
-        plan=InternalRetrievalPlan(
-            internal_queries=["NVIDIA", "nvidia", "OpenAI"],
-            reason="internal",
-        ),
+        plan=_search_plan(article_search_queries=["NVIDIA", "OpenAI", "Apple"]),
         internal=internal,
-        factory=_Factory([], timeline),
+        factory=_Factory([_runtime(ScriptedAgentRuntime([_query_draft()]))], timeline),
         timeline=timeline,
     )
 
     await _run(runner)
 
     assert internal.calls == [
-        InternalSearchQueries(queries=("NVIDIA", "nvidia", "OpenAI"))
+        InternalSearchQueries(queries=("NVIDIA", "OpenAI", "Apple"))
     ]
 
 
@@ -727,16 +676,16 @@ async def test_runner_preserves_internal_hit_order_into_synthesis() -> None:
     timeline: list[str] = []
     answerer = _EvidenceAnswerer(timeline=timeline)
     phases = AnsweringPhases(
-        planner=_Planner(
-            InternalRetrievalPlan(internal_queries=["NVIDIA"], reason="internal")
-        ),
+        planner=_Planner(_search_plan(article_search_queries=["NVIDIA"])),
         internal_search=_InternalSearch(
             hits=[
                 _hit(assessment_id=1001, title="first"),
                 _hit(assessment_id=1002, title="second"),
             ]
         ),
-        external_runtime_factory=_Factory([], timeline),
+        external_runtime_factory=_Factory(
+            [_runtime(ScriptedAgentRuntime([_query_draft()]))], timeline
+        ),
         direct_answerer=_UnreachableDirectAnswerer(),
         evidence_answerer=answerer,
     )
@@ -754,7 +703,7 @@ async def test_runner_preserves_internal_hit_order_into_synthesis() -> None:
 
 
 @pytest.mark.asyncio
-async def test_runner_passes_external_plan_values_to_query_input(
+async def test_runner_passes_search_plan_values_to_query_input(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     timeline: list[str] = []
@@ -762,7 +711,7 @@ async def test_runner_passes_external_plan_values_to_query_input(
     runtime = ScriptedAgentRuntime([_query_draft()])
     captured = _capture_external_outcome(monkeypatch)
     runner = _runner(
-        plan=_external_plan(task),
+        plan=_search_plan(task),
         internal=_InternalSearch(),
         factory=_Factory([_runtime(runtime)], timeline),
         timeline=timeline,
@@ -786,7 +735,7 @@ async def test_scope_exits_after_unclassified_task_sibling_joins() -> None:
     runtime = _TaskFailureAfterSiblingStartsRuntime(error=error, timeline=timeline)
     factory = _Factory([_runtime(runtime)], timeline)
     runner = _runner(
-        plan=_external_plan(_task("failing"), _task("blocking")),
+        plan=_search_plan(_task("failing"), _task("blocking")),
         internal=_InternalSearch(),
         factory=factory,
         timeline=timeline,
@@ -818,7 +767,7 @@ async def test_pre_dispatch_failure_does_not_activate_external_scope(
         else None
     )
     runner = _runner(
-        plan=_external_plan(),
+        plan=_search_plan(),
         internal=_InternalSearch(),
         factory=factory,
         timeline=timeline,
@@ -858,7 +807,7 @@ async def test_classified_external_failure_is_an_outcome_and_scope_closes_once(
         timeline,
     )
     runner = _runner(
-        plan=_external_plan(),
+        plan=_search_plan(),
         internal=_InternalSearch(),
         factory=factory,
         timeline=timeline,
@@ -881,7 +830,7 @@ async def test_external_unknown_error_closes_scope_before_identity_propagation()
     timeline: list[str] = []
     factory = _Factory([_runtime(ScriptedAgentRuntime([error]))], timeline)
     runner = _runner(
-        plan=_external_plan(),
+        plan=_search_plan(),
         internal=_InternalSearch(),
         factory=factory,
         timeline=timeline,
@@ -898,16 +847,14 @@ async def test_external_unknown_error_closes_scope_before_identity_propagation()
 
 
 @pytest.mark.asyncio
-async def test_mixed_retrieval_starts_internal_and_external_branches_concurrently() -> (
-    None
-):
+async def test_search_starts_internal_and_external_branches_concurrently() -> None:
     timeline: list[str] = []
     internal_release = asyncio.Event()
     internal = _InternalSearch(release=internal_release)
     query = _BlockingQueryRuntime()
     factory = _Factory([_runtime(query)], timeline)
     runner = _runner(
-        plan=_mixed_plan(),
+        plan=_search_plan(),
         internal=internal,
         factory=factory,
         timeline=timeline,
@@ -926,12 +873,12 @@ async def test_mixed_retrieval_starts_internal_and_external_branches_concurrentl
 
 
 @pytest.mark.asyncio
-async def test_runner_converts_only_internal_search_error_to_failure_value() -> None:
+async def test_search_converts_internal_search_error_to_failure_value() -> None:
     timeline: list[str] = []
     runner = _runner(
-        plan=InternalRetrievalPlan(internal_queries=["NVIDIA"], reason="internal"),
+        plan=_search_plan(article_search_queries=["NVIDIA"]),
         internal=_InternalSearch(error=InternalSearchError(phase="article_search")),
-        factory=_Factory([], timeline),
+        factory=_Factory([_runtime(ScriptedAgentRuntime([_query_draft()]))], timeline),
         timeline=timeline,
     )
 
@@ -940,18 +887,18 @@ async def test_runner_converts_only_internal_search_error_to_failure_value() -> 
         run_context=RUN_CONTEXT,
     )
 
-    assert result.final_output.retrieval.collection_failures == ["internal_search"]
+    assert result.final_output.plan_summary.collection_failures == ["internal_search"]
 
 
 @pytest.mark.asyncio
-async def test_mixed_classified_internal_failure_keeps_external_outcome(
+async def test_search_classified_internal_failure_keeps_external_outcome(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     timeline: list[str] = []
     captured = _capture_external_outcome(monkeypatch)
     query = ScriptedAgentRuntime([_query_draft()])
     runner = _runner(
-        plan=_mixed_plan(),
+        plan=_search_plan(),
         internal=_InternalSearch(error=InternalSearchError(phase="article_search")),
         factory=_Factory([_runtime(query)], timeline),
         timeline=timeline,
@@ -963,42 +910,44 @@ async def test_mixed_classified_internal_failure_keeps_external_outcome(
     )
 
     assert (
-        result.final_output.retrieval.collection_failures,
+        result.final_output.plan_summary.collection_failures,
         captured[0].external_search.task_reports[0].status,
     ) == (["internal_search"], "succeeded")
 
 
 @pytest.mark.asyncio
-async def test_zero_internal_hits_remain_successful() -> None:
+async def test_zero_internal_hits_remain_successful_under_search() -> None:
     timeline: list[str] = []
     result = await _runner(
-        plan=InternalRetrievalPlan(internal_queries=["NVIDIA"], reason="internal"),
+        plan=_search_plan(article_search_queries=["NVIDIA"]),
         internal=_InternalSearch(),
-        factory=_Factory([], timeline),
+        factory=_Factory([_runtime(ScriptedAgentRuntime([_query_draft()]))], timeline),
         timeline=timeline,
     ).run(
         RunInput(question="NVIDIA の見通しは？", history=()),
         run_context=RUN_CONTEXT,
     )
 
-    assert result.final_output.retrieval.collection_failures == []
+    assert result.final_output.plan_summary.collection_failures == []
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("mode", ["internal", "external"])
-async def test_unknown_single_branch_error_propagates_by_identity(mode: str) -> None:
-    error = RuntimeError(f"{mode} unknown")
+@pytest.mark.parametrize("branch", ["internal", "external"])
+async def test_unknown_search_branch_error_propagates_by_identity(branch: str) -> None:
+    error = RuntimeError(f"{branch} unknown")
     timeline: list[str] = []
-    plan: QuestionPlan = (
-        InternalRetrievalPlan(internal_queries=["NVIDIA"], reason="internal")
-        if mode == "internal"
-        else _external_plan()
-    )
+    plan = _search_plan(article_search_queries=["NVIDIA"])
     runner = _runner(
         plan=plan,
-        internal=_InternalSearch(error=error if mode == "internal" else None),
+        internal=_InternalSearch(error=error if branch == "internal" else None),
         factory=_Factory(
-            [_runtime(ScriptedAgentRuntime([error]))] if mode == "external" else [],
+            [
+                _runtime(
+                    ScriptedAgentRuntime(
+                        [error if branch == "external" else _query_draft()]
+                    )
+                )
+            ],
             timeline,
         ),
         timeline=timeline,
@@ -1011,7 +960,7 @@ async def test_unknown_single_branch_error_propagates_by_identity(mode: str) -> 
 
 
 @pytest.mark.asyncio
-async def test_mixed_waits_for_internal_before_external_error() -> None:
+async def test_search_waits_for_internal_before_external_error() -> None:
     error = RuntimeError("external unknown")
     timeline: list[str] = []
     internal_release = asyncio.Event()
@@ -1023,7 +972,7 @@ async def test_mixed_waits_for_internal_before_external_error() -> None:
         raised=external_raised,
     )
     runner = _runner(
-        plan=_mixed_plan(),
+        plan=_search_plan(),
         internal=internal,
         factory=_Factory([_runtime(external)], timeline),
         timeline=timeline,
@@ -1040,7 +989,7 @@ async def test_mixed_waits_for_internal_before_external_error() -> None:
 
 
 @pytest.mark.asyncio
-async def test_mixed_waits_for_external_before_internal_error() -> None:
+async def test_search_waits_for_external_before_internal_error() -> None:
     error = RuntimeError("internal unknown")
     timeline: list[str] = []
     external_release = asyncio.Event()
@@ -1052,7 +1001,7 @@ async def test_mixed_waits_for_external_before_internal_error() -> None:
         raised=internal_raised,
     )
     runner = _runner(
-        plan=_mixed_plan(),
+        plan=_search_plan(),
         internal=internal,
         factory=_Factory([_runtime(external)], timeline),
         timeline=timeline,
@@ -1069,14 +1018,14 @@ async def test_mixed_waits_for_external_before_internal_error() -> None:
 
 
 @pytest.mark.asyncio
-async def test_mixed_run_prefers_internal_error_after_both_branches_finish() -> None:
+async def test_search_run_prefers_internal_error_after_both_branches_finish() -> None:
     internal_error = RuntimeError("internal unknown")
     external_error = RuntimeError("external unknown")
     timeline: list[str] = []
     external = _ControlledQueryRuntime(error=external_error)
     internal = _InternalSearch(error=internal_error, release=external.started)
     runner = _runner(
-        plan=_mixed_plan(),
+        plan=_search_plan(),
         internal=internal,
         factory=_Factory([_runtime(external)], timeline),
         timeline=timeline,
@@ -1089,7 +1038,9 @@ async def test_mixed_run_prefers_internal_error_after_both_branches_finish() -> 
 
 
 @pytest.mark.asyncio
-async def test_mixed_activation_failure_waits_for_internal_before_propagation() -> None:
+async def test_search_activation_failure_waits_for_internal_before_propagation() -> (
+    None
+):
     activation_error = RuntimeError("external activation failure")
     activation_reached = asyncio.Event()
     internal_release = asyncio.Event()
@@ -1102,7 +1053,7 @@ async def test_mixed_activation_failure_waits_for_internal_before_propagation() 
         activation_reached=activation_reached,
     )
     runner = _runner(
-        plan=_mixed_plan(),
+        plan=_search_plan(),
         internal=internal,
         factory=factory,
         timeline=timeline,
@@ -1125,7 +1076,7 @@ async def test_mixed_activation_failure_waits_for_internal_before_propagation() 
 
 
 @pytest.mark.asyncio
-async def test_external_only_close_failure_propagates_same_sentinel() -> None:
+async def test_search_close_failure_propagates_same_sentinel() -> None:
     close_error = RuntimeError("external close failure")
     timeline: list[str] = []
     factory = _Factory(
@@ -1134,7 +1085,7 @@ async def test_external_only_close_failure_propagates_same_sentinel() -> None:
         exit_error=close_error,
     )
     runner = _runner(
-        plan=_external_plan(),
+        plan=_search_plan(),
         internal=_InternalSearch(),
         factory=factory,
         timeline=timeline,
@@ -1153,7 +1104,7 @@ async def test_external_only_close_failure_propagates_same_sentinel() -> None:
 
 
 @pytest.mark.asyncio
-async def test_external_only_close_failure_replaces_unknown_body_error() -> None:
+async def test_search_close_failure_replaces_unknown_body_error() -> None:
     body_error = RuntimeError("external body failure")
     close_error = RuntimeError("external close failure")
     timeline: list[str] = []
@@ -1163,7 +1114,7 @@ async def test_external_only_close_failure_replaces_unknown_body_error() -> None
         exit_error=close_error,
     )
     runner = _runner(
-        plan=_external_plan(),
+        plan=_search_plan(),
         internal=_InternalSearch(),
         factory=factory,
         timeline=timeline,
@@ -1184,7 +1135,7 @@ async def test_external_only_close_failure_replaces_unknown_body_error() -> None
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("internal_fails", [False, True])
-async def test_mixed_close_failure_waits_then_applies_internal_priority(
+async def test_search_close_failure_waits_then_applies_internal_priority(
     internal_fails: bool,
 ) -> None:
     close_error = RuntimeError("external close failure")
@@ -1203,7 +1154,7 @@ async def test_mixed_close_failure_waits_then_applies_internal_priority(
         exit_reached=scope_exit_reached,
     )
     runner = _runner(
-        plan=_mixed_plan(),
+        plan=_search_plan(),
         internal=internal,
         factory=factory,
         timeline=timeline,
@@ -1228,7 +1179,7 @@ async def test_mixed_close_failure_waits_then_applies_internal_priority(
 
 
 @pytest.mark.asyncio
-async def test_mixed_outer_cancellation_joins_branches_before_scope_close() -> None:
+async def test_search_outer_cancellation_joins_branches_before_scope_close() -> None:
     timeline: list[str] = []
     internal = _InternalSearch(release=asyncio.Event(), timeline=timeline)
     external = _ControlledQueryRuntime(release=asyncio.Event(), timeline=timeline)
@@ -1239,7 +1190,7 @@ async def test_mixed_outer_cancellation_joins_branches_before_scope_close() -> N
         exit_reached=scope_exit_reached,
     )
     runner = _runner(
-        plan=_mixed_plan(),
+        plan=_search_plan(),
         internal=internal,
         factory=factory,
         timeline=timeline,
@@ -1268,7 +1219,7 @@ async def test_mixed_outer_cancellation_joins_branches_before_scope_close() -> N
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("first_failure", ["internal", "external"])
-async def test_mixed_outer_cancellation_wins_over_completed_unknown_failure(
+async def test_search_outer_cancellation_wins_over_completed_unknown_failure(
     first_failure: str,
 ) -> None:
     first_error = RuntimeError(f"{first_failure} unknown")
@@ -1298,7 +1249,7 @@ async def test_mixed_outer_cancellation_wins_over_completed_unknown_failure(
         exit_reached=scope_exit_reached,
     )
     runner = _runner(
-        plan=_mixed_plan(),
+        plan=_search_plan(),
         internal=internal,
         factory=factory,
         timeline=timeline,
@@ -1325,8 +1276,8 @@ async def test_mixed_outer_cancellation_wins_over_completed_unknown_failure(
 
 
 @pytest.mark.asyncio
-async def test_external_close_failure_replaces_body_cancellation() -> None:
-    close_error = RuntimeError("close failed during cancellation")
+async def test_search_outer_cancellation_drains_external_close() -> None:
+    close_error = RuntimeError("close failed during search cancellation")
     timeline: list[str] = []
     external = _ControlledQueryRuntime(release=asyncio.Event(), timeline=timeline)
     scope_exit_reached = asyncio.Event()
@@ -1337,7 +1288,7 @@ async def test_external_close_failure_replaces_body_cancellation() -> None:
         exit_reached=scope_exit_reached,
     )
     runner = _runner(
-        plan=_external_plan(),
+        plan=_search_plan(),
         internal=_InternalSearch(),
         factory=factory,
         timeline=timeline,
@@ -1346,25 +1297,26 @@ async def test_external_close_failure_replaces_body_cancellation() -> None:
 
     await asyncio.wait_for(external.started.wait(), timeout=0.5)
     running.cancel()
-    with pytest.raises(RuntimeError) as raised:
+    with pytest.raises(asyncio.CancelledError) as raised:
         await asyncio.wait_for(running, timeout=0.5)
 
     scope = factory.scopes[0]
     assert (
-        raised.value is close_error,
+        isinstance(raised.value, asyncio.CancelledError),
         external.cancelled_error is not None,
-        raised.value.__context__ is external.cancelled_error,
         scope.body_exception is external.cancelled_error,
+        close_error.__context__ is external.cancelled_error,
         external.finished.is_set(),
         scope_exit_reached.is_set(),
         scope.exit_calls,
+        scope.close_succeeded,
         timeline.index("external.finished") < timeline.index("scope.exit"),
-    ) == (True, True, True, True, True, True, 1, True)
+    ) == (True, True, True, True, True, True, 1, False, True)
 
 
 @pytest.mark.asyncio
-async def test_mixed_outer_cancellation_drains_close_and_query_child_failure() -> None:
-    close_error = RuntimeError("close failed during mixed cancellation")
+async def test_search_outer_cancellation_drains_close_and_query_child_failure() -> None:
+    close_error = RuntimeError("close failed during search cancellation")
     timeline: list[str] = []
     internal = _InternalSearch(release=asyncio.Event(), timeline=timeline)
     external = _ControlledQueryRuntime(release=asyncio.Event(), timeline=timeline)
@@ -1376,7 +1328,7 @@ async def test_mixed_outer_cancellation_drains_close_and_query_child_failure() -
         exit_reached=scope_exit_reached,
     )
     runner = _runner(
-        plan=_mixed_plan(),
+        plan=_search_plan(),
         internal=internal,
         factory=factory,
         timeline=timeline,

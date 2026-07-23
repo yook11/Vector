@@ -1,6 +1,6 @@
-"""Agent core の最小入出力 contract。
+"""Agent core の共有 contract。
 
-API / UI / graph runtime から独立した final result の型だけをここで保証する。
+API / UI / graph runtime から独立した final result と plan 型をここで保証する。
 """
 
 from __future__ import annotations
@@ -26,7 +26,7 @@ __all__ = [
     "AnswerProgressEvent",
     "AnswerProgressStage",
     "AnswerQuestionResult",
-    "AnswerRetrievalSummary",
+    "AnswerPlanSummary",
     "AnswerEventReporter",
     "ExternalSearchCandidatesFetchedEvent",
     "ExternalSearchEvidenceSelectedEvent",
@@ -38,11 +38,11 @@ __all__ = [
     "InternalArticleSource",
     "NonBlankText",
     "QuestionResolvedEvent",
-    "RetrievalMode",
+    "PlanType",
     "EvidenceCollectionFailure",
 ]
 
-RetrievalMode = Literal["none", "internal", "external", "internal_and_external"]
+PlanType = Literal["direct_answer", "search"]
 EvidenceCollectionFailure = Literal["internal_search", "external_search"]
 AnswerProgressStage = Literal["planning", "retrieving", "synthesizing"]
 NonBlankText = Annotated[
@@ -51,13 +51,19 @@ NonBlankText = Annotated[
 ]
 
 
-class AnswerRetrievalSummary(BaseModel):
+class AnswerPlanSummary(BaseModel):
     """planner が必要と判断した情報取得と、失敗した収集経路。"""
 
-    model_config = ConfigDict(frozen=True)
+    model_config = ConfigDict(frozen=True, extra="forbid")
 
-    planned_mode: RetrievalMode
+    plan_type: PlanType
     collection_failures: list[EvidenceCollectionFailure] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def _validate_direct_answer_failures(self) -> Self:
+        if self.plan_type == "direct_answer" and self.collection_failures:
+            raise ValueError("direct answer cannot have collection failures")
+        return self
 
 
 class InternalArticleSource(BaseModel):
@@ -157,26 +163,26 @@ AnswerProgressEvent = Annotated[
 class AnswerQuestionResult(BaseModel):
     """chat UI に変換される agent core の final result。"""
 
-    model_config = ConfigDict(frozen=True)
+    model_config = ConfigDict(frozen=True, extra="forbid")
 
     status: Literal["answered", "insufficient"]
     answer: NonBlankText
     sources: list[AnswerSource] = Field(default_factory=list)
     missing_aspects: list[NonBlankText] = Field(default_factory=list)
-    retrieval: AnswerRetrievalSummary
+    plan_summary: AnswerPlanSummary
 
     @model_validator(mode="after")
     def _validate_provenance(self) -> Self:
         if self.status == "answered":
-            if self.retrieval.planned_mode != "none" and not self.sources:
+            if self.plan_summary.plan_type == "search" and not self.sources:
                 raise ValueError("non-direct answered result must include a source")
             if self.missing_aspects:
                 raise ValueError("answered result cannot include missing aspects")
-            if self.retrieval.collection_failures:
+            if self.plan_summary.collection_failures:
                 raise ValueError("answered result cannot include collection failures")
         if self.status == "insufficient" and not self.missing_aspects:
             raise ValueError("insufficient result must include missing aspects")
-        if self.retrieval.planned_mode == "none" and self.sources:
+        if self.plan_summary.plan_type == "direct_answer" and self.sources:
             raise ValueError("direct planned result cannot include sources")
         return self
 

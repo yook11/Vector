@@ -1,10 +1,10 @@
 # Question Planner Direct / Search Plan Contract slice 仕様
 
-更新日: 2026-07-20
+更新日: 2026-07-23
 
-Status: Accepted
+Status: Implemented
 
-実装状況: 未実装
+実装状況: 実装済み
 
 ## 位置付け
 
@@ -26,7 +26,7 @@ research goalから生成する。
 
 ### 先行仕様との関係
 
-本sliceは実装完了時に、次の先行契約のうちQuestion Plannerのplan数、名前、fallback、
+本sliceは、次の先行契約のうちQuestion Plannerのplan数、名前、fallback、
 dispatchに関する条項を置き換える。各仕様が定めるAgent Runtime、外部research task、
 並行実行、期間解決の責任境界は、本仕様と矛盾しない範囲で継承する。
 
@@ -37,10 +37,8 @@ dispatchに関する条項を置き換える。各仕様が定めるAgent Runtim
 - `external-search-tavily-date-filter-slice.md`
 - `question-answering-answer-orchestration-slice.md`
 
-本仕様は未実装であるため、現行4 planを記述する`specs/agent`配下のImplemented仕様は
-この時点では変更しない。実装と検証が完了した変更で、`specs/agent`全体を検索し、
-旧4値・旧field・fallbackを現行契約として記述する仕様を更新または統合する。作成時点で判明している
-対象は次である。公開仕様に旧契約の墓標は残さない。
+実装と検証に合わせて`specs/agent`全体を検索し、旧4値・旧field・fallbackを
+現行契約として記述していた次の公開仕様を更新または統合した。公開仕様に旧契約の墓標は残さない。
 
 - `specs/agent/question-planner-routing.md`
 - `specs/agent/question-plan-variant-types.md`
@@ -575,17 +573,19 @@ production codeの変更でFastAPI schema、SQLAlchemy model、Alembic migration
 
 ## Implementation
 
-未実装。対応PR / commitは未定。
+対応PR: [#47](https://github.com/yook11/Vector/pull/47)
 
-実装は次の順序で行う。
+実装commit:
 
-1. Planner draft / completed plan、prompt、wire schema、retry停止、metricを2値契約へ変更する。
-2. research goal語彙とQuery / Selector prompt versionを追随し、RunnerをDirect / Searchの2分岐へ
-   変更して旧mixed pathを唯一のsearch pathとして結果契約を追随する。
-3. composition、probe、test、公開仕様を移行し、旧4 planのproduction consumerを除去する。
+- `b5e2f9b8`: Plannerの最終失敗時にfallbackせず回答runを停止する。
+- `c29676f2`: 外部taskとQuery / Selector promptを`research_goal`語彙へ統一する。
+- `63f7a4a8`: Planner、Runner、結果契約、probe、testをDirect / Searchの2 planへ移行する。
+- `87abb2c8`: 公開仕様と保証台帳をDirect / Searchの現行契約へ更新する。
+- `d6adcb42`: 未分類障害、`PlanType` SSoT、probeの型変換境界を厳密化する。
+- `40fa5f22`: probeの不正な時刻指定を固定エラーへ変換し、入力の再表示を防ぐ。
 
-各段階で中間的なhidden modeやfallbackをproductionへ残さない。1つの変更として2値contractと全consumerを
-同時に切り替える。
+中間的なhidden modeやfallbackをproductionへ残さず、2値contractと全consumerを同じ変更で
+切り替えた。公開仕様とtest guarantee ledgerは別commitで現行契約へ更新した。
 
 ## Verification
 
@@ -600,10 +600,10 @@ production codeの変更でFastAPI schema、SQLAlchemy model、Alembic migration
 
 ### 実装完了時
 
-- 対象testを更新・追加し、全件成功させる。
-- `/check` skillに従いlint、format、type check、testを実行する。
-- scoped searchで`retrieval_mode`、旧4値、旧plan variant、`internal_queries`、
-  `external_collection_goals`、`collection_goal`、`AnswerRetrievalSummary`、`planned_mode`、
-  `safe_fallback_plan`のproduction consumerが残っていないことを確認する。
-- `specs/agent`全体を同じ旧語彙で検索し、現行契約として残る記述がないことを確認する。
-- 公開仕様とtest guarantee ledgerを新契約へ更新し、`Status: Implemented`、PR、commit、検証結果を記録する。
+- Planner / Runner / result / probeの対象test: `283 passed`。
+- DB / Redisを起動するintegration suite: `980 passed, 22 skipped`。
+- Ruff、format check、`git diff --check`: 成功。
+- scoped searchで旧plan variant、旧field、fallback、旧summary / metric語彙のproduction consumerが
+  残っていないことを確認した。
+- `specs/agent`の公開仕様とtest guarantee ledgerを現行2 plan契約へ更新した。
+- Gemini、DeepSeek、Tavilyと実DBを使うprobeは、秘密情報と実行環境が必要なため未実行。

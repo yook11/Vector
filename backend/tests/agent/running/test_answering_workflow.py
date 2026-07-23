@@ -2,21 +2,23 @@
 
 from __future__ import annotations
 
+from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 from uuid import UUID
 
 import pytest
 
+import app.agent.planning.contract as planning_contract
 from app.agent.answering.contract import AnsweringRequest
 from app.agent.answering.direct_answer.contract import DirectAnswerDraft
 from app.agent.answering.evidence_answer.contract import EvidenceAnswerDraft
-from app.agent.evidence_collection.external_search import ExternalSearchOutcome
+from app.agent.evidence_collection.external_search import ExternalResearchRuntime
+from app.agent.evidence_collection.external_search.contract import ExternalQueryDraft
 from app.agent.evidence_collection.internal_search.query_embedding import (
     InternalSearchQueries,
 )
 from app.agent.planning.contract import (
-    InternalRetrievalPlan,
-    NoRetrievalPlan,
+    ExternalResearchTask,
     PlanningRequest,
     QuestionPlan,
     TargetTimeWindow,
@@ -95,24 +97,46 @@ class _InternalSearch:
         return []
 
 
-class _UnreachableExternalSearch:
-    async def search(
-        self,
-        _tasks: list[object],
-        *,
-        target_time_window: TargetTimeWindow | None,
-        as_of: datetime,
-        external: object,
-    ) -> ExternalSearchOutcome:
-        raise AssertionError(
-            "external search must not run: "
-            f"{target_time_window!r} {as_of!r} {external!r}"
+def _plan_type(name: str) -> object:
+    value = getattr(planning_contract, name, None)
+    if value is None:
+        pytest.fail(f"planning contract must define {name}")
+    return value
+
+
+def _direct_plan() -> object:
+    return _plan_type("DirectAnswerPlan")()
+
+
+def _search_plan() -> object:
+    return _plan_type("SearchPlan")(
+        article_search_queries=["検索語"],
+        external_research_tasks=[
+            ExternalResearchTask(research_goal="外部根拠を確認する")
+        ],
+    )
+
+
+class _EmptyExternalQueryRuntime:
+    async def invoke(
+        self, agent: object, input: object, *, attempt_number: int
+    ) -> ExternalQueryDraft:
+        del agent, input, attempt_number
+        return ExternalQueryDraft(queries=[])
+
+
+class _EmptyExternalRuntimeFactory:
+    def __init__(self, timeline: list[str]) -> None:
+        self._timeline = timeline
+
+    @asynccontextmanager
+    async def activate(self):
+        self._timeline.append("external_runtime")
+        yield ExternalResearchRuntime(
+            query_runtime=_EmptyExternalQueryRuntime(),  # type: ignore[arg-type]
+            selector_runtime=object(),  # type: ignore[arg-type]
+            search_tool=object(),  # type: ignore[arg-type]
         )
-
-
-class _UnreachableExternalRuntimeFactory:
-    def activate(self) -> object:
-        raise AssertionError("external runtime must not activate")
 
 
 class _DirectAnswerer:
@@ -189,7 +213,7 @@ def _runner(
         return AnsweringPhases(
             planner=planner,
             internal_search=internal_search,
-            external_runtime_factory=_UnreachableExternalRuntimeFactory(),
+            external_runtime_factory=_EmptyExternalRuntimeFactory(timeline),
             direct_answerer=direct_answerer,
             evidence_answerer=evidence_answerer,
         )
@@ -212,7 +236,7 @@ async def test_direct_workflow_order_and_context_identity() -> None:
     timeline: list[str] = []
     context = QuestionContext(standalone_question="整理済みの質問")
     runner, planner, internal_search, direct_answerer, evidence_answerer = _runner(
-        plan=NoRetrievalPlan(reason="検索不要"),
+        plan=_direct_plan(),
         timeline=timeline,
         context=context,
     )
@@ -239,13 +263,10 @@ async def test_direct_workflow_order_and_context_identity() -> None:
     assert evidence_answerer.calls == []
 
 
-async def test_retrieval_workflow_order_and_non_selected_port() -> None:
+async def test_search_workflow_starts_both_retrieval_ports() -> None:
     timeline: list[str] = []
     context = QuestionContext(standalone_question="整理済みの質問")
-    plan = InternalRetrievalPlan(
-        internal_queries=["検索語"],
-        reason="内部根拠が必要",
-    )
+    plan = _search_plan()
     runner, planner, internal_search, direct_answerer, evidence_answerer = _runner(
         plan=plan,
         timeline=timeline,
@@ -258,14 +279,16 @@ async def test_retrieval_workflow_order_and_non_selected_port() -> None:
         hooks=_Hooks(timeline),
     )
 
-    assert timeline == [
+    assert timeline[:6] == [
         "prepare",
         "hook",
         "phases_factory",
         "progress:planning",
         "planner",
         "progress:retrieving",
-        "internal_search",
+    ]
+    assert set(timeline[6:8]) == {"internal_search", "external_runtime"}
+    assert timeline[8:] == [
         "progress:synthesizing",
         "evidence_answerer",
     ]
@@ -284,7 +307,7 @@ async def test_preparation_or_hook_failure_does_not_build_phases(
     error = RuntimeError(f"{failure_point} failed")
     context = QuestionContext(standalone_question="整理済みの質問")
     runner, *_ = _runner(
-        plan=NoRetrievalPlan(reason="検索不要"),
+        plan=_direct_plan(),
         timeline=timeline,
         context=context,
         prepare_error=error if failure_point == "prepare" else None,

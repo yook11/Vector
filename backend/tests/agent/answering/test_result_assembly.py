@@ -2,6 +2,11 @@
 
 from __future__ import annotations
 
+from typing import Any
+
+import pytest
+
+import app.agent.planning.contract as planning_contract
 from app.agent.answering.evidence_answer.contract import EvidenceAnswerDraft
 from app.agent.answering.evidence_answer.evidence import AnswerEvidenceItem
 from app.agent.answering.result_assembly import assemble_evidence_result
@@ -13,8 +18,6 @@ from app.agent.evidence_collection.external_search import (
 )
 from app.agent.planning.contract import (
     ExternalResearchTask,
-    ExternalSearchPlan,
-    InternalAndExternalPlan,
     TargetTimeWindow,
 )
 from app.agent.question_context import AnswerRequirement, QuestionContext
@@ -23,7 +26,14 @@ _TIME_FILTER_MISSING = "指定された公開期間を外部検索へ適用で�
 
 
 def _task(goal: str) -> ExternalResearchTask:
-    return ExternalResearchTask(collection_goal=goal)
+    return ExternalResearchTask(research_goal=goal)
+
+
+def _search_plan(**payload: Any) -> object:
+    plan_type = getattr(planning_contract, "SearchPlan", None)
+    if plan_type is None:
+        pytest.fail("planning contract must define SearchPlan")
+    return plan_type(**payload)
 
 
 def _time_filter_outcome(
@@ -34,7 +44,7 @@ def _time_filter_outcome(
         task_reports=[
             ResearchTaskReport(
                 task_index=index,
-                collection_goal=task.collection_goal,
+                research_goal=task.research_goal,
                 status="time_filter_failed",
                 time_filter_failure_reason=(
                     "future_calendar_month"
@@ -78,13 +88,10 @@ def _internal_evidence() -> AnswerEvidenceItem:
 
 def test_assembly_caps_answered_draft_for_historical_external_failure() -> None:
     context = QuestionContext(standalone_question="NVIDIA の見通しは？")
-    plan = InternalAndExternalPlan(
-        internal_queries=["NVIDIA"],
-        external_research_tasks=[
-            ExternalResearchTask(collection_goal="供給を確認する")
-        ],
+    plan = _search_plan(
+        article_search_queries=["NVIDIA"],
+        external_research_tasks=[ExternalResearchTask(research_goal="供給を確認する")],
         target_time_window=TargetTimeWindow(kind="last_n_days", days=1),
-        reason="both evidence sources are required",
     )
     evidence = [
         AnswerEvidenceItem(
@@ -112,7 +119,7 @@ def test_assembly_caps_answered_draft_for_historical_external_failure() -> None:
     assert (
         result.status,
         result.answer,
-        result.retrieval.collection_failures,
+        result.plan_summary.collection_failures,
         result.missing_aspects,
     ) == (
         "insufficient",
@@ -122,7 +129,7 @@ def test_assembly_caps_answered_draft_for_historical_external_failure() -> None:
     )
 
 
-def test_external_only_time_filter_failure_keeps_one_missing_and_requirements() -> None:
+def test_search_time_filter_failure_keeps_one_missing_and_requirements() -> None:
     tasks = [
         _task("Tavily 2027-08 の公開期間を確認する"),
         _task("provider 原典の公開期間を確認する"),
@@ -132,10 +139,10 @@ def test_external_only_time_filter_failure_keeps_one_missing_and_requirements() 
             content_requirements=["投資判断への影響"],
             response_requirements=["初心者向けの説明"],
         ),
-        plan=ExternalSearchPlan(
+        plan=_search_plan(
+            article_search_queries=["NVIDIA"],
             external_research_tasks=tasks,
             target_time_window=TargetTimeWindow(kind="last_n_days", days=1),
-            reason="external evidence is required",
         ),
         outcome=EvidenceCollectionOutcome(
             external_search=_time_filter_outcome(tasks),
@@ -152,6 +159,7 @@ def test_external_only_time_filter_failure_keeps_one_missing_and_requirements() 
     assert (result.status, result.missing_aspects) == (
         "insufficient",
         [
+            "回答に使える根拠を取得できませんでした",
             _TIME_FILTER_MISSING,
             "回答要望を満たせませんでした: 投資判断への影響",
             "回答要望を満たせませんでした: 初心者向けの説明",
@@ -159,7 +167,7 @@ def test_external_only_time_filter_failure_keeps_one_missing_and_requirements() 
     )
 
 
-def test_mixed_time_filter_failure_keeps_independent_draft_and_requirements() -> None:
+def test_search_time_filter_failure_keeps_independent_draft_and_requirements() -> None:
     tasks = [_task("直近の外部発表を確認する")]
     evidence = [_internal_evidence()]
     result = assemble_evidence_result(
@@ -167,11 +175,10 @@ def test_mixed_time_filter_failure_keeps_independent_draft_and_requirements() ->
             content_requirements=["投資判断への影響"],
             response_requirements=["初心者向けの説明"],
         ),
-        plan=InternalAndExternalPlan(
-            internal_queries=["NVIDIA"],
+        plan=_search_plan(
+            article_search_queries=["NVIDIA"],
             external_research_tasks=tasks,
             target_time_window=TargetTimeWindow(kind="last_n_days", days=1),
-            reason="both evidence sources are required",
         ),
         outcome=EvidenceCollectionOutcome(
             external_search=_time_filter_outcome(tasks),
@@ -197,17 +204,16 @@ def test_mixed_time_filter_failure_keeps_independent_draft_and_requirements() ->
     )
 
 
-def test_empty_mixed_evidence_keeps_retrieval_missing_with_time_filter_missing() -> (
+def test_empty_search_evidence_keeps_retrieval_missing_with_time_filter_missing() -> (
     None
 ):
     tasks = [_task("直近の外部発表を確認する")]
     result = assemble_evidence_result(
         context=_context(content_requirements=["投資判断への影響"]),
-        plan=InternalAndExternalPlan(
-            internal_queries=["NVIDIA"],
+        plan=_search_plan(
+            article_search_queries=["NVIDIA"],
             external_research_tasks=tasks,
             target_time_window=TargetTimeWindow(kind="last_n_days", days=1),
-            reason="both evidence sources are required",
         ),
         outcome=EvidenceCollectionOutcome(
             external_search=_time_filter_outcome(tasks),
@@ -231,15 +237,14 @@ def test_empty_mixed_evidence_keeps_retrieval_missing_with_time_filter_missing()
     )
 
 
-def test_empty_mixed_evidence_keeps_internal_failure_and_time_filter_missing() -> None:
+def test_empty_search_evidence_keeps_internal_failure_and_time_filter_missing() -> None:
     tasks = [_task("直近の外部発表を確認する")]
     result = assemble_evidence_result(
         context=_context(content_requirements=["投資判断への影響"]),
-        plan=InternalAndExternalPlan(
-            internal_queries=["NVIDIA"],
+        plan=_search_plan(
+            article_search_queries=["NVIDIA"],
             external_research_tasks=tasks,
             target_time_window=TargetTimeWindow(kind="last_n_days", days=1),
-            reason="both evidence sources are required",
         ),
         outcome=EvidenceCollectionOutcome(
             external_search=_time_filter_outcome(tasks),
@@ -271,11 +276,10 @@ def test_non_time_filter_report_missing_keeps_existing_canonical_deduplication()
     tasks = [_task("既存のexternal task")]
     result = assemble_evidence_result(
         context=_context(),
-        plan=InternalAndExternalPlan(
-            internal_queries=["NVIDIA"],
+        plan=_search_plan(
+            article_search_queries=["NVIDIA"],
             external_research_tasks=tasks,
             target_time_window=None,
-            reason="both evidence sources are required",
         ),
         outcome=EvidenceCollectionOutcome(
             external_search=ExternalSearchOutcome(
@@ -283,7 +287,7 @@ def test_non_time_filter_report_missing_keeps_existing_canonical_deduplication()
                 task_reports=[
                     ResearchTaskReport(
                         task_index=0,
-                        collection_goal=tasks[0].collection_goal,
+                        research_goal=tasks[0].research_goal,
                         status="provider_failed",
                         missing=[
                             "既存の外部不足",

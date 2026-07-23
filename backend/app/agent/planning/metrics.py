@@ -6,9 +6,9 @@ from typing import Literal
 
 import logfire
 
-from app.agent.contract import RetrievalMode
+from app.agent.contract import PlanType
 
-PlannerOutcomeResult = Literal["planned", "fallback", "failed"]
+PlannerOutcomeResult = Literal["planned", "failed"]
 
 _planner_outcome_counter = logfire.metric_counter(
     "vector.agent.planner.outcome",
@@ -21,7 +21,7 @@ def record_question_planner_outcome(
     *,
     result: PlannerOutcomeResult,
     retry_used: bool,
-    planned_retrieval_mode: RetrievalMode | Literal["unknown"],
+    plan_type: PlanType | Literal["not_created"],
     failure_code: str | None = None,
 ) -> None:
     """Record one final planner outcome with low-cardinality labels.
@@ -34,7 +34,7 @@ def record_question_planner_outcome(
         attributes={
             "result": result,
             "retry_used": retry_used,
-            "planned_retrieval_mode": planned_retrieval_mode,
+            "plan_type": plan_type,
             "failure_code": failure_code if failure_code is not None else "none",
         },
     )

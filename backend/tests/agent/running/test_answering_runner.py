@@ -13,6 +13,7 @@ import pytest
 from logfire.testing import CaptureLogfire
 from opentelemetry.trace import StatusCode
 
+import app.agent.planning.contract as planning_contract
 from app.agent.answering.contract import AnsweringRequest
 from app.agent.answering.direct_answer.contract import DirectAnswerDraft
 from app.agent.answering.evidence_answer.contract import EvidenceAnswerDraft
@@ -25,7 +26,6 @@ from app.agent.input_safety.contract import (
     InputSafetyResult,
 )
 from app.agent.planning.contract import (
-    NoRetrievalPlan,
     PlanningRequest,
     QuestionPlan,
     TargetTimeWindow,
@@ -51,6 +51,13 @@ from tests.logfire._span_helpers import (
 RUN_ID = UUID("019bd239-1ed4-7fbb-a336-04fe3c197645")
 AS_OF = datetime(2026, 7, 16, 9, 30, tzinfo=UTC)
 pytestmark = pytest.mark.usefixtures("capfire")
+
+
+def _direct_plan() -> object:
+    plan_type = getattr(planning_contract, "DirectAnswerPlan", None)
+    if plan_type is None:
+        pytest.fail("planning contract must define DirectAnswerPlan")
+    return plan_type()
 
 
 @dataclass(frozen=True, slots=True)
@@ -427,7 +434,7 @@ def _direct_factory(
     factory_error: BaseException | None = None,
 ) -> tuple[_PhasesFactory, _FakePlanner, _FakeDirectAnswerer]:
     planner = _FakePlanner(
-        [NoRetrievalPlan(reason="検索不要") for _ in answers],
+        [_direct_plan() for _ in answers],
         events=events,
         span_probe=span_probe,
     )

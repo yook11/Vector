@@ -58,19 +58,19 @@ def _internal_hit(
     )
 
 
-def _task(collection_goal: str = "NVIDIA の最新動向を調査する") -> ExternalResearchTask:
-    return ExternalResearchTask(collection_goal=collection_goal)
+def _task(research_goal: str = "NVIDIA の最新動向を調査する") -> ExternalResearchTask:
+    return ExternalResearchTask(research_goal=research_goal)
 
 
 def _report(
     *,
     task_index: int = 0,
     evidence_count: int = 0,
-    collection_goal: str = "NVIDIA の最新動向を調査する",
+    research_goal: str = "NVIDIA の最新動向を調査する",
 ) -> ResearchTaskReport:
     return ResearchTaskReport(
         task_index=task_index,
-        collection_goal=collection_goal,
+        research_goal=research_goal,
         status="succeeded",
         evidence_count=evidence_count,
     )
@@ -110,7 +110,7 @@ def _external_outcome(
         task_reports=[
             _report(
                 task_index=0,
-                collection_goal=task.collection_goal,
+                research_goal=task.research_goal,
                 evidence_count=len(evidence),
             )
         ],

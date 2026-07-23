@@ -9,6 +9,7 @@ from uuid import UUID
 
 import pytest
 
+import app.agent.planning.contract as planning_contract
 from app.agent.answering.contract import AnsweringRequest
 from app.agent.answering.direct_answer.contract import DirectAnswerDraft
 from app.agent.answering.evidence_answer.contract import (
@@ -36,13 +37,8 @@ from app.agent.evidence_collection.internal_search.query_embedding import (
 )
 from app.agent.planning.contract import (
     ExternalResearchTask,
-    ExternalSearchPlan,
-    InternalAndExternalPlan,
-    InternalRetrievalPlan,
-    NoRetrievalPlan,
     PlanningRequest,
     QuestionPlan,
-    RetrievalPlan,
     TargetTimeWindow,
 )
 from app.agent.question_context.contract import (
@@ -99,32 +95,31 @@ def _input(
     )
 
 
-def _internal_plan() -> InternalRetrievalPlan:
-    return InternalRetrievalPlan(
-        internal_queries=["NVIDIA AI GPU"],
-        reason="internal evidence required",
-    )
+def _plan_type(name: str) -> object:
+    value = getattr(planning_contract, name, None)
+    if value is None:
+        pytest.fail(f"planning contract must define {name}")
+    return value
 
 
-def _external_plan() -> ExternalSearchPlan:
-    return ExternalSearchPlan(
-        external_research_tasks=[_task(0)],
-        target_time_window=TargetTimeWindow(kind="today"),
-        reason="external evidence required",
-    )
+def _direct_plan() -> object:
+    return _plan_type("DirectAnswerPlan")()
 
 
-def _mixed_plan() -> InternalAndExternalPlan:
-    return InternalAndExternalPlan(
-        internal_queries=["NVIDIA AI GPU"],
-        external_research_tasks=[_task(0), _task(1)],
-        target_time_window=TargetTimeWindow(kind="last_n_days", days=1),
-        reason="both evidence types required",
+def _search_plan(
+    *,
+    tasks: list[ExternalResearchTask] | None = None,
+    target_time_window: TargetTimeWindow | None = None,
+) -> object:
+    return _plan_type("SearchPlan")(
+        article_search_queries=["NVIDIA AI GPU"],
+        external_research_tasks=tasks or [_task(0)],
+        target_time_window=target_time_window,
     )
 
 
 def _task(index: int, goal: str | None = None) -> ExternalResearchTask:
-    return ExternalResearchTask(collection_goal=goal or f"外部根拠 {index} を確認する")
+    return ExternalResearchTask(research_goal=goal or f"外部根拠 {index} を確認する")
 
 
 def _internal_hit(
@@ -176,7 +171,7 @@ def _report(
 ) -> ResearchTaskReport:
     return ResearchTaskReport(
         task_index=task_index,
-        collection_goal=f"外部根拠 {task_index} を確認する",
+        research_goal=f"外部根拠 {task_index} を確認する",
         status="succeeded",
         evidence_count=evidence_count,
         missing=missing or [],
@@ -211,7 +206,8 @@ def _internal_outcome(count: int = 2) -> EvidenceCollectionOutcome:
         internal_hits=[
             _internal_hit(assessment_id=1000 + index, title=f"internal {index}")
             for index in range(1, count + 1)
-        ]
+        ],
+        external_search=_external_outcome([]),
     )
 
 
@@ -227,7 +223,7 @@ def _external_outcome_only() -> EvidenceCollectionOutcome:
     return EvidenceCollectionOutcome(external_search=_external_outcome(evidence))
 
 
-def _mixed_outcome() -> EvidenceCollectionOutcome:
+def _both_evidence_outcome() -> EvidenceCollectionOutcome:
     return EvidenceCollectionOutcome(
         internal_hits=[_internal_hit(assessment_id=1001, title="internal 1")],
         external_search=_external_outcome(
@@ -317,7 +313,7 @@ class FakeExternalQueryRuntime:
     ) -> ExternalQueryDraft:
         del agent, attempt_number
         return ExternalQueryDraft(
-            queries=[self._queries_by_goal[input.task.collection_goal]]  # type: ignore[union-attr]
+            queries=[self._queries_by_goal[input.task.research_goal]]  # type: ignore[union-attr]
         )
 
 
@@ -331,7 +327,7 @@ class FakeExternalSelectorRuntime:
         self, agent: object, input: object, *, attempt_number: int
     ) -> ExternalEvidenceSelectionDraft:
         del agent, attempt_number
-        return self._drafts_by_goal[input.task.collection_goal]  # type: ignore[union-attr]
+        return self._drafts_by_goal[input.task.research_goal]  # type: ignore[union-attr]
 
 
 class FakeExternalTool:
@@ -350,7 +346,7 @@ class FakeExternalTool:
 
 def _external_runtime_for(
     *,
-    plan: ExternalSearchPlan | InternalAndExternalPlan,
+    plan: object,
     outcome: EvidenceCollectionOutcome,
 ) -> ExternalResearchRuntime:
     if outcome.external_search is None:
@@ -387,9 +383,9 @@ def _external_runtime_for(
                 )
             ]
         report = reports_by_task.get(task_index)
-        queries_by_goal[task.collection_goal] = query
+        queries_by_goal[task.research_goal] = query
         candidates_by_query[query] = candidates
-        drafts_by_goal[task.collection_goal] = ExternalEvidenceSelectionDraft(
+        drafts_by_goal[task.research_goal] = ExternalEvidenceSelectionDraft(
             selections=[
                 {
                     "candidate_index": index,
@@ -552,6 +548,7 @@ def _orchestrator(
     direct_draft: DirectAnswerDraft | Exception = AssertionError(
         "direct answerer must not be called"
     ),
+    internal_error: Exception | None = None,
     progress: FakeProgressReporter | None = None,
     timeline: CallTimeline | None = None,
 ) -> tuple[
@@ -562,10 +559,13 @@ def _orchestrator(
     FakeDirectAnswerer,
 ]:
     planner = FakePlanner(plan, timeline=timeline)
-    internal_search = FakeInternalSearch(outcome, timeline=timeline)
+    internal_search = FakeInternalSearch(
+        internal_error if internal_error is not None else outcome,
+        timeline=timeline,
+    )
     external_runtime = (
         _external_runtime_for(plan=plan, outcome=outcome)
-        if isinstance(plan, (ExternalSearchPlan, InternalAndExternalPlan))
+        if isinstance(plan, _plan_type("SearchPlan"))
         and isinstance(outcome, EvidenceCollectionOutcome)
         else None
     )
@@ -601,7 +601,7 @@ async def test_answer_direct_plan_calls_direct_answerer_only() -> None:
     direct_draft = DirectAnswerDraft(answer="こんにちは。何を確認しますか？")
     orchestrator, _, internal_search, evidence_answerer, direct_answerer = (
         _orchestrator(
-            plan=NoRetrievalPlan(reason="direct answer"),
+            plan=_direct_plan(),
             direct_draft=direct_draft,
         )
     )
@@ -612,8 +612,8 @@ async def test_answer_direct_plan_calls_direct_answerer_only() -> None:
     assert result.answer == direct_draft.answer
     assert result.sources == []
     assert result.missing_aspects == []
-    assert result.retrieval.planned_mode == "none"
-    assert result.retrieval.collection_failures == []
+    assert result.plan_summary.plan_type == "direct_answer"
+    assert result.plan_summary.collection_failures == []
     assert not hasattr(result, "execution")
     assert direct_answerer.calls == [
         {
@@ -631,7 +631,7 @@ async def test_answer_direct_plan_orders_progress_and_port_calls() -> None:
     timeline = CallTimeline()
     progress = FakeProgressReporter(timeline=timeline)
     orchestrator, _, _, _, _ = _orchestrator(
-        plan=NoRetrievalPlan(reason="direct answer"),
+        plan=_direct_plan(),
         direct_draft=DirectAnswerDraft(answer="直接回答です。"),
         progress=progress,
         timeline=timeline,
@@ -649,18 +649,26 @@ async def test_answer_direct_plan_orders_progress_and_port_calls() -> None:
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("plan", "outcome", "cited_refs"),
+    ("evidence_shape", "cited_refs"),
     [
-        (_internal_plan(), _internal_outcome(1), ["1"]),
-        (_external_plan(), _external_outcome_only(), ["1"]),
-        (_mixed_plan(), _mixed_outcome(), ["1", "2"]),
+        pytest.param("internal", ["1"], id="internal-evidence"),
+        pytest.param("external", ["1"], id="external-evidence"),
+        pytest.param("both", ["1", "2"], id="both-evidence"),
     ],
 )
-async def test_answer_retrieval_plan_variants_do_not_call_direct_answerer(
-    plan: RetrievalPlan,
-    outcome: EvidenceCollectionOutcome,
+async def test_answer_search_plan_never_calls_direct_answerer(
+    evidence_shape: str,
     cited_refs: list[str],
 ) -> None:
+    if evidence_shape == "internal":
+        plan = _search_plan()
+        outcome = _internal_outcome(1)
+    elif evidence_shape == "external":
+        plan = _search_plan()
+        outcome = _external_outcome_only()
+    else:
+        plan = _search_plan()
+        outcome = _both_evidence_outcome()
     orchestrator, _, _, _, direct_answerer = _orchestrator(
         plan=plan,
         outcome=outcome,
@@ -682,8 +690,8 @@ async def test_answer_evidence_plan_orders_progress_and_port_calls() -> None:
     timeline = CallTimeline()
     progress = FakeProgressReporter(timeline=timeline)
     orchestrator, _, _, _, _ = _orchestrator(
-        plan=_mixed_plan(),
-        outcome=_mixed_outcome(),
+        plan=_search_plan(),
+        outcome=_both_evidence_outcome(),
         draft=EvidenceAnswerDraft(
             sufficiency="answered",
             answer="根拠から確認できます。",
@@ -695,12 +703,16 @@ async def test_answer_evidence_plan_orders_progress_and_port_calls() -> None:
 
     await orchestrator.answer(_input())
 
-    assert timeline.events == [
+    assert timeline.events[:3] == [
         "progress:planning",
         "planner.plan",
         "progress:retrieving",
+    ]
+    assert set(timeline.events[3:5]) == {
         "internal_search.search_articles",
         "external_runtime.activate",
+    }
+    assert timeline.events[5:] == [
         "progress:synthesizing",
         "evidence_answerer.answer",
     ]
@@ -709,7 +721,7 @@ async def test_answer_evidence_plan_orders_progress_and_port_calls() -> None:
 @pytest.mark.asyncio
 async def test_answer_internal_sources_and_status_from_citations() -> None:
     orchestrator, _, _, _, _ = _orchestrator(
-        plan=_internal_plan(),
+        plan=_search_plan(),
         outcome=_internal_outcome(2),
         draft=EvidenceAnswerDraft(
             sufficiency="answered",
@@ -721,7 +733,7 @@ async def test_answer_internal_sources_and_status_from_citations() -> None:
     result = await orchestrator.answer(_input())
 
     assert result.status == "answered"
-    assert result.retrieval.planned_mode == "internal"
+    assert result.plan_summary.plan_type == "search"
     assert [source.source_ref for source in result.sources] == ["1", "2"]
     assert [source.title for source in result.sources] == ["internal 1", "internal 2"]
     assert result.missing_aspects == []
@@ -731,7 +743,7 @@ async def test_answer_internal_sources_and_status_from_citations() -> None:
 async def test_answered_evidence_draft_with_no_unfulfilled_ids_stays_answered() -> None:
     answer = "内部根拠から確認できます。[[1]]"
     orchestrator, _, _, _, _ = _orchestrator(
-        plan=_internal_plan(),
+        plan=_search_plan(),
         outcome=_internal_outcome(1),
         draft=EvidenceAnswerDraft(
             sufficiency="answered",
@@ -775,7 +787,7 @@ async def test_unfulfilled_requirement_caps_status_and_preserves_answer_sources(
 ) -> None:
     answer = "確認できた範囲を回答します。[[1]]"
     orchestrator, _, _, _, _ = _orchestrator(
-        plan=_internal_plan(),
+        plan=_search_plan(),
         outcome=_internal_outcome(1),
         draft=EvidenceAnswerDraft(
             sufficiency="answered",
@@ -820,7 +832,7 @@ async def test_requirement_missing_follows_existing_missing_in_context_order() -
         collection_failures=["internal_search"],
     )
     orchestrator, _, _, _, _ = _orchestrator(
-        plan=_mixed_plan(),
+        plan=_search_plan(tasks=tasks),
         outcome=outcome,
         draft=EvidenceAnswerDraft(
             sufficiency="insufficient",
@@ -855,7 +867,7 @@ async def test_requirement_missing_follows_existing_missing_in_context_order() -
 async def test_requirement_missing_is_deduplicated_against_existing_missing() -> None:
     duplicate = "回答要望を満たせませんでした: 重複する要望"
     orchestrator, _, _, _, _ = _orchestrator(
-        plan=_internal_plan(),
+        plan=_search_plan(),
         outcome=_internal_outcome(1),
         draft=EvidenceAnswerDraft(
             sufficiency="insufficient",
@@ -879,7 +891,7 @@ async def test_requirement_missing_is_deduplicated_against_existing_missing() ->
 @pytest.mark.asyncio
 async def test_answer_rejects_unknown_unfulfilled_requirement_id() -> None:
     orchestrator, _, _, _, _ = _orchestrator(
-        plan=_internal_plan(),
+        plan=_search_plan(),
         outcome=_internal_outcome(1),
         draft=EvidenceAnswerDraft(
             sufficiency="answered",
@@ -898,7 +910,7 @@ async def test_answer_rejects_unknown_unfulfilled_requirement_id() -> None:
 @pytest.mark.asyncio
 async def test_answer_external_source_is_cited_source_only() -> None:
     orchestrator, _, _, _, _ = _orchestrator(
-        plan=_external_plan(),
+        plan=_search_plan(),
         outcome=_external_outcome_only(),
         draft=EvidenceAnswerDraft(
             sufficiency="answered",
@@ -910,16 +922,16 @@ async def test_answer_external_source_is_cited_source_only() -> None:
     result = await orchestrator.answer(_input())
 
     assert result.status == "answered"
-    assert result.retrieval.planned_mode == "external"
+    assert result.plan_summary.plan_type == "search"
     assert len(result.sources) == 1
     assert isinstance(result.sources[0], ExternalUrlSource)
 
 
 @pytest.mark.asyncio
-async def test_answer_mixed_plan_with_both_evidence_types_cited() -> None:
+async def test_answer_search_plan_with_both_evidence_types_cited() -> None:
     orchestrator, _, _, _, _ = _orchestrator(
-        plan=_mixed_plan(),
-        outcome=_mixed_outcome(),
+        plan=_search_plan(),
+        outcome=_both_evidence_outcome(),
         draft=EvidenceAnswerDraft(
             sufficiency="answered",
             answer="内部根拠と外部根拠から確認できます。",
@@ -930,15 +942,15 @@ async def test_answer_mixed_plan_with_both_evidence_types_cited() -> None:
     result = await orchestrator.answer(_input())
 
     assert result.status == "answered"
-    assert result.retrieval.planned_mode == "internal_and_external"
+    assert result.plan_summary.plan_type == "search"
     assert [source.source_ref for source in result.sources] == ["1", "2"]
 
 
 @pytest.mark.asyncio
-async def test_answer_mixed_plan_omits_unused_external_source() -> None:
+async def test_answer_search_plan_omits_unused_external_source() -> None:
     orchestrator, _, _, _, _ = _orchestrator(
-        plan=_mixed_plan(),
-        outcome=_mixed_outcome(),
+        plan=_search_plan(),
+        outcome=_both_evidence_outcome(),
         draft=EvidenceAnswerDraft(
             sufficiency="answered",
             answer="内部根拠だけで確認できます。",
@@ -949,7 +961,7 @@ async def test_answer_mixed_plan_omits_unused_external_source() -> None:
     result = await orchestrator.answer(_input())
 
     assert result.status == "answered"
-    assert result.retrieval.planned_mode == "internal_and_external"
+    assert result.plan_summary.plan_type == "search"
     assert [source.source_ref for source in result.sources] == ["1"]
     assert all(not isinstance(source, ExternalUrlSource) for source in result.sources)
 
@@ -966,8 +978,8 @@ async def test_answer_empty_retrieval_evidence_calls_synthesis() -> None:
         missing_aspects=["引用できる検索根拠"],
     )
     orchestrator, _, _, evidence_answerer, _ = _orchestrator(
-        plan=_internal_plan(),
-        outcome=EvidenceCollectionOutcome(),
+        plan=_search_plan(),
+        outcome=_internal_outcome(0),
         draft=draft,
     )
 
@@ -985,7 +997,7 @@ async def test_answer_empty_retrieval_evidence_calls_synthesis() -> None:
 @pytest.mark.asyncio
 async def test_answer_adopts_insufficient_draft_with_partial_citations() -> None:
     orchestrator, _, _, _, _ = _orchestrator(
-        plan=_internal_plan(),
+        plan=_search_plan(),
         outcome=_internal_outcome(1),
         draft=EvidenceAnswerDraft(
             sufficiency="insufficient",
@@ -1011,7 +1023,7 @@ async def test_answer_missing_aspects_are_ordered_and_deduplicated() -> None:
         _report(task_index=0, missing=["市場予想値", "実績値"], evidence_count=1),
     ]
     orchestrator, _, _, _, _ = _orchestrator(
-        plan=_mixed_plan(),
+        plan=_search_plan(tasks=tasks),
         outcome=EvidenceCollectionOutcome(
             external_search=_external_outcome(
                 [
@@ -1049,7 +1061,7 @@ async def test_answer_missing_aspects_are_ordered_and_deduplicated() -> None:
 @pytest.mark.asyncio
 async def test_answer_rejects_unknown_citation_ref() -> None:
     orchestrator, _, _, _, _ = _orchestrator(
-        plan=_internal_plan(),
+        plan=_search_plan(),
         outcome=_internal_outcome(1),
         draft=EvidenceAnswerDraft(
             sufficiency="answered",
@@ -1065,7 +1077,7 @@ async def test_answer_rejects_unknown_citation_ref() -> None:
 @pytest.mark.asyncio
 async def test_answer_deduplicates_repeated_citation_refs_in_source_order() -> None:
     orchestrator, _, _, _, _ = _orchestrator(
-        plan=_internal_plan(),
+        plan=_search_plan(),
         outcome=_internal_outcome(2),
         draft=EvidenceAnswerDraft(
             sufficiency="answered",
@@ -1088,8 +1100,11 @@ async def test_answer_passes_pipeline_inputs_and_variant_time_window() -> None:
         active_goal="投資判断を調査中",
     )
     orchestrator, planner, internal_search, evidence_answerer, _ = _orchestrator(
-        plan=_mixed_plan(),
-        outcome=_mixed_outcome(),
+        plan=_search_plan(
+            tasks=[_task(0), _task(1)],
+            target_time_window=TargetTimeWindow(kind="last_n_days", days=1),
+        ),
+        outcome=_both_evidence_outcome(),
         draft=EvidenceAnswerDraft(
             sufficiency="answered",
             answer="確認できます。",
@@ -1120,9 +1135,9 @@ async def test_answer_passes_pipeline_inputs_and_variant_time_window() -> None:
 
 
 @pytest.mark.asyncio
-async def test_answer_passes_none_time_window_for_internal_plan() -> None:
+async def test_answer_passes_none_time_window_for_search_plan() -> None:
     orchestrator, _, _, evidence_answerer, _ = _orchestrator(
-        plan=_internal_plan(),
+        plan=_search_plan(),
         outcome=_internal_outcome(1),
         draft=EvidenceAnswerDraft(
             sufficiency="answered",
@@ -1138,11 +1153,19 @@ async def test_answer_passes_none_time_window_for_internal_plan() -> None:
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("plan", "outcome", "draft", "message", "expected_timeline"),
+    (
+        "plan",
+        "outcome",
+        "internal_error",
+        "draft",
+        "message",
+        "expected_planner_timeline",
+    ),
     [
         (
             RuntimeError("planner failed"),
             EvidenceCollectionOutcome(),
+            None,
             EvidenceAnswerDraft(
                 sufficiency="answered",
                 answer="x",
@@ -1155,7 +1178,8 @@ async def test_answer_passes_none_time_window_for_internal_plan() -> None:
             ],
         ),
         (
-            _internal_plan(),
+            lambda: _search_plan(),
+            _internal_outcome(0),
             RuntimeError("internal search failed"),
             EvidenceAnswerDraft(
                 sufficiency="answered",
@@ -1163,41 +1187,33 @@ async def test_answer_passes_none_time_window_for_internal_plan() -> None:
                 cited_refs=["1"],
             ),
             "internal search failed",
-            [
-                "progress:planning",
-                "planner.plan",
-                "progress:retrieving",
-                "internal_search.search_articles",
-            ],
+            None,
         ),
         (
-            _internal_plan(),
+            lambda: _search_plan(),
             _internal_outcome(1),
+            None,
             RuntimeError("evidence_answerer failed"),
             "evidence_answerer failed",
-            [
-                "progress:planning",
-                "planner.plan",
-                "progress:retrieving",
-                "internal_search.search_articles",
-                "progress:synthesizing",
-                "evidence_answerer.answer",
-            ],
+            None,
         ),
     ],
 )
 async def test_answer_step_failure_stops_before_later_progress_or_ports(
-    plan: QuestionPlan | Exception,
+    plan: QuestionPlan | Exception | object,
     outcome: EvidenceCollectionOutcome | Exception,
+    internal_error: Exception | None,
     draft: EvidenceAnswerDraft | Exception,
     message: str,
-    expected_timeline: list[str],
+    expected_planner_timeline: list[str] | None,
 ) -> None:
     timeline = CallTimeline()
+    resolved_plan = plan() if callable(plan) else plan
     orchestrator, _, _, _, _ = _orchestrator(
-        plan=plan,
+        plan=resolved_plan,
         outcome=outcome,
         draft=draft,
+        internal_error=internal_error,
         progress=FakeProgressReporter(timeline=timeline),
         timeline=timeline,
     )
@@ -1205,14 +1221,34 @@ async def test_answer_step_failure_stops_before_later_progress_or_ports(
     with pytest.raises(RuntimeError, match=message):
         await orchestrator.answer(_input())
 
-    assert timeline.events == expected_timeline
+    if expected_planner_timeline is not None:
+        assert timeline.events == expected_planner_timeline
+        return
+
+    retrieving_index = timeline.events.index("progress:retrieving")
+    branch_start_indices = {
+        event: timeline.events.index(event)
+        for event in (
+            "internal_search.search_articles",
+            "external_runtime.activate",
+        )
+    }
+    assert all(index > retrieving_index for index in branch_start_indices.values())
+    if internal_error is not None:
+        assert "progress:synthesizing" not in timeline.events
+        assert "evidence_answerer.answer" not in timeline.events
+        return
+
+    synthesizing_index = timeline.events.index("progress:synthesizing")
+    assert all(index < synthesizing_index for index in branch_start_indices.values())
+    assert timeline.events.index("evidence_answerer.answer") > synthesizing_index
 
 
 @pytest.mark.asyncio
 async def test_answer_direct_failure_stops_before_later_progress_or_ports() -> None:
     timeline = CallTimeline()
     orchestrator, _, _, _, _ = _orchestrator(
-        plan=NoRetrievalPlan(reason="direct answer"),
+        plan=_direct_plan(),
         direct_draft=RuntimeError("direct failed"),
         progress=FakeProgressReporter(timeline=timeline),
         timeline=timeline,

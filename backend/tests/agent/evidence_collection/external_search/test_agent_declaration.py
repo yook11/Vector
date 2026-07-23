@@ -58,7 +58,7 @@ def _selector_agent() -> Agent[Any, Any]:
 
 
 def _task(goal: str = "NVIDIA の最新動向を確認する") -> ExternalResearchTask:
-    return ExternalResearchTask(collection_goal=goal)
+    return ExternalResearchTask(research_goal=goal)
 
 
 def _as_of() -> datetime:
@@ -170,7 +170,7 @@ def test_agents_declare_stable_models_versions_outputs_and_immutable_schemas() -
     assert query_agent.model.name == selector_agent.model.name == "deepseek-v4-flash"
     assert query_agent.model_settings.max_output_tokens == 256
     assert selector_agent.model_settings.max_output_tokens == 2048
-    assert query_agent.prompt.version == selector_agent.prompt.version == "v1"
+    assert query_agent.prompt.version == selector_agent.prompt.version == "v2"
     assert query_agent.output_type is _required_attribute(
         contracts, "ExternalQueryDraft"
     )
@@ -270,8 +270,8 @@ def test_versions_and_instructions_live_with_prompt_resources() -> None:
     for agent in (_query_agent(), _selector_agent()):
         assert agent.prompt.input_renderer.__module__ == prompts.__name__
         assert agent.prompt.instructions in source
-        assert agent.prompt.version == "v1"
-    assert source.count('"v1"') >= 2
+        assert agent.prompt.version == "v2"
+    assert source.count('"v2"') >= 2
 
 
 def test_query_prompt_keeps_fixed_rules_in_system_and_sanitizes_runtime_task_data() -> (
@@ -296,6 +296,8 @@ def test_query_prompt_keeps_fixed_rules_in_system_and_sanitizes_runtime_task_dat
     assert "QUERY_ATTACK_SENTINEL" in rendered
     assert boundary_attack not in agent.prompt.instructions
     assert "QUERY_ATTACK_SENTINEL" not in agent.prompt.instructions
+    assert "research_goal:" in rendered
+    assert "collection_goal:" not in rendered
 
 
 def test_query_prompt_renders_typed_window_or_none_deterministically() -> None:
@@ -361,3 +363,5 @@ def test_selector_prompt_renders_only_safe_candidate_projection_and_never_url() 
     assert str(SafeUrl("https://example.com/" + url_sentinel)) not in rendered
     assert candidate_forgery not in rendered
     assert "\\n\\n[0]\\ntitle: FORGED_CANDIDATE_SENTINEL" in rendered
+    assert "research_goal:" in rendered
+    assert "collection_goal:" not in rendered

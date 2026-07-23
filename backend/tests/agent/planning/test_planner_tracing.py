@@ -47,10 +47,10 @@ def _successful_response() -> FakeResponse:
     return FakeResponse(
         text=json.dumps(
             {
-                "retrieval_mode": "internal",
-                "internal_queries": ["NVIDIA の直近発表"],
-                "external_collection_goals": [],
-                "reason": "内部記事を確認するため",
+                "plan_type": "search",
+                "article_search_queries": ["NVIDIA の直近発表"],
+                "research_goals": ["NVIDIA の直近発表の外部根拠を確認する"],
+                "target_time_window": None,
             }
         ),
         usage_metadata=SimpleNamespace(
@@ -84,7 +84,7 @@ async def test_success_records_one_production_provider_attempt_without_phase_usa
 
     phase = one_span_named(capfire, _PHASE_SPAN_NAME)
     provider = one_span_named(capfire, _PROVIDER_SPAN_NAME)
-    assert plan.retrieval_mode == "internal"
+    assert plan.plan_type == "search"
     assert client.models.generate_content.await_count == 1
     assert domain_attr_keys(phase["attributes"]) == {"phase", "agent_name"}
     assert phase["attributes"]["phase"] == "question_planning"
@@ -112,7 +112,7 @@ async def test_invalid_json_then_success_records_two_production_provider_attempt
 
     phase = one_span_named(capfire, _PHASE_SPAN_NAME)
     providers = spans_named(capfire, _PROVIDER_SPAN_NAME)
-    assert plan.retrieval_mode == "internal"
+    assert plan.plan_type == "search"
     assert client.models.generate_content.await_count == 2
     assert [provider["attributes"]["attempt_number"] for provider in providers] == [
         1,

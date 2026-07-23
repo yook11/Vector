@@ -13,7 +13,7 @@ from app.agent.evidence_collection.external_search.contract import (
 from app.agent.planning.contract import render_target_time_window
 from app.analysis.prompt_safety import sanitize_for_untrusted_block
 
-EXTERNAL_QUERY_PROMPT_VERSION: Final[str] = "v1"
+EXTERNAL_QUERY_PROMPT_VERSION: Final[str] = "v2"
 
 EXTERNAL_QUERY_INSTRUCTIONS: Final[str] = """\
 あなたは Vector の外部ニュース検索Query Agentです。
@@ -37,15 +37,15 @@ _EXTERNAL_QUERY_INPUT_TEMPLATE: Final[str] = """\
 as_of: {as_of}
 
 <untrusted_input>
-collection_goal:
-{collection_goal}
+research_goal:
+{research_goal}
 
 target_time_window:
 {target_time_window}
 </untrusted_input>
 """
 
-EXTERNAL_EVIDENCE_SELECTOR_PROMPT_VERSION: Final[str] = "v1"
+EXTERNAL_EVIDENCE_SELECTOR_PROMPT_VERSION: Final[str] = "v2"
 
 EXTERNAL_EVIDENCE_SELECTOR_INSTRUCTIONS: Final[str] = """\
 あなたは Vector のExternal Evidence Selector Agentです。
@@ -71,8 +71,8 @@ _EXTERNAL_EVIDENCE_SELECTOR_INPUT_TEMPLATE: Final[str] = """\
 as_of: {as_of}
 
 <untrusted_input>
-collection_goal:
-{collection_goal}
+research_goal:
+{research_goal}
 
 candidates:
 {candidates}
@@ -89,7 +89,7 @@ def render_external_query_input(input: ExternalQueryGenerationInput) -> str:
     )
     return _EXTERNAL_QUERY_INPUT_TEMPLATE.format(
         as_of=input.as_of.isoformat(),
-        collection_goal=sanitize_for_untrusted_block(input.task.collection_goal),
+        research_goal=sanitize_for_untrusted_block(input.task.research_goal),
         target_time_window=sanitize_for_untrusted_block(target_time_window),
     )
 
@@ -100,7 +100,7 @@ def render_external_evidence_selection_input(
     """Selector Agent inputをURLなしのmodel-visible projectionへ変換する。"""
     return _EXTERNAL_EVIDENCE_SELECTOR_INPUT_TEMPLATE.format(
         as_of=input.as_of.isoformat(),
-        collection_goal=sanitize_for_untrusted_block(input.task.collection_goal),
+        research_goal=sanitize_for_untrusted_block(input.task.research_goal),
         candidates=_render_candidates(input.candidates),
     )
 

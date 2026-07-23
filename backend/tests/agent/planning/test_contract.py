@@ -1,65 +1,57 @@
-"""Question planning contract tests."""
+"""Question Planner の2 plan domain contract。"""
 
 from __future__ import annotations
 
 import importlib
 import inspect
-from datetime import UTC, date, datetime
-from typing import get_type_hints
+from datetime import date, datetime
+from typing import Any, get_args, get_type_hints
 
 import pytest
 from pydantic import ValidationError
 
 from app.agent.agent import Agent
-from app.agent.planning import contract as planning_contract
-from app.agent.planning.contract import (
-    EXTERNAL_RESEARCH_TASK_LIMIT,
-    MAX_INTERNAL_QUERIES,
-    ExternalResearchTask,
-    ExternalSearchPlan,
-    InternalAndExternalPlan,
-    InternalRetrievalPlan,
-    NoRetrievalPlan,
-    PlanningAttemptInput,
-    QuestionPlanDraft,
-    QuestionPlanner,
-    plan_from_draft,
-    safe_fallback_plan,
-)
 from app.agent.planning.service import QuestionPlanningService
 from app.agent.question_context.contract import QuestionContext
-from app.agent.runtime.contract import AgentRuntimeScopeFactory
+from app.agent.runtime.contract import (
+    AgentResponseDefect,
+    AgentResponseInvalidError,
+    AgentRuntimeScopeFactory,
+)
 
 
-def _external_task(
-    collection_goal: str = "NVIDIA の最新発表を確認する",
-) -> ExternalResearchTask:
-    return ExternalResearchTask(collection_goal=collection_goal)
+def _contracts() -> Any:
+    return importlib.import_module("app.agent.planning.contract")
 
 
-def _request_type(module_name: str, type_name: str) -> type[object]:
-    try:
-        module = importlib.import_module(module_name)
-    except ModuleNotFoundError as exc:
-        pytest.fail(f"{module_name} must define {type_name}: {exc}")
-    request_type = getattr(module, type_name, None)
-    if request_type is None:
-        pytest.fail(f"{module_name} must define {type_name}")
-    return request_type
+def _required_contract(name: str) -> Any:
+    value = getattr(_contracts(), name, None)
+    if value is None:
+        pytest.fail(f"planning contract must define {name}")
+    return value
 
 
-def _target_time_window_type() -> type[object]:
-    return _request_type("app.agent.planning.contract", "TargetTimeWindow")
+def _draft(
+    *,
+    plan_type: str = "search",
+    article_search_queries: list[str] | None = None,
+    research_goals: list[str] | None = None,
+    target_time_window: object | None = None,
+) -> Any:
+    return _required_contract("QuestionPlanDraft")(
+        plan_type=plan_type,
+        article_search_queries=article_search_queries or [],
+        research_goals=research_goals or [],
+        target_time_window=target_time_window,
+    )
 
 
-def _target_time_window(**payload: object) -> object:
-    return _target_time_window_type().model_validate(payload)
+def _time_window(**payload: object) -> Any:
+    return _required_contract("TargetTimeWindow").model_validate(payload)
 
 
-def _render_target_time_window(target_time_window: object) -> str:
-    renderer = getattr(planning_contract, "render_target_time_window", None)
-    if renderer is None:
-        pytest.fail("planning contract must define render_target_time_window")
+def _render_time_window(target_time_window: object) -> str:
+    renderer = _required_contract("render_target_time_window")
     return renderer(target_time_window)
 
 
@@ -68,14 +60,301 @@ def _first_input_annotation(method: object) -> object | None:
     return get_type_hints(method).get(parameter_names[1])
 
 
+def test_contract_exports_only_direct_and_search_plan_vocabulary() -> None:
+    contracts = _contracts()
+
+    assert set(get_args(_required_contract("PlanType"))) == {
+        "direct_answer",
+        "search",
+    }
+    assert {
+        "PlanType",
+        "QuestionPlan",
+        "QuestionPlanDraft",
+        "DirectAnswerPlan",
+        "SearchPlan",
+        "plan_from_draft",
+    } <= set(vars(contracts))
+    assert not any(
+        hasattr(contracts, legacy_name)
+        for legacy_name in (
+            "RetrievalMode",
+            "RetrievalPlan",
+            "NoRetrievalPlan",
+            "InternalRetrievalPlan",
+            "ExternalSearchPlan",
+            "InternalAndExternalPlan",
+            "safe_fallback_plan",
+        )
+    )
+
+
+def test_question_plan_union_contains_exactly_direct_and_search_variants() -> None:
+    assert set(get_args(_required_contract("QuestionPlan"))) == {
+        _required_contract("DirectAnswerPlan"),
+        _required_contract("SearchPlan"),
+    }
+
+
+def test_draft_has_exact_new_fields_and_forbids_old_fields() -> None:
+    draft_type = _required_contract("QuestionPlanDraft")
+
+    assert set(draft_type.model_fields) == {
+        "plan_type",
+        "article_search_queries",
+        "research_goals",
+        "target_time_window",
+    }
+    assert all(
+        draft_type.model_fields[field_name].is_required()
+        for field_name in (
+            "plan_type",
+            "article_search_queries",
+            "research_goals",
+        )
+    )
+    assert not draft_type.model_fields["target_time_window"].is_required()
+
+    with pytest.raises(ValidationError):
+        draft_type.model_validate(
+            {
+                "plan_type": "search",
+                "article_search_queries": ["NVIDIA AI GPU"],
+                "research_goals": ["NVIDIA の根拠を確認する"],
+                "reason": "legacy explanation",
+            }
+        )
+    with pytest.raises(ValidationError):
+        draft_type.model_validate(
+            {
+                "plan_type": "search",
+                "article_search_queries": ["NVIDIA AI GPU"],
+                "research_goals": ["NVIDIA の根拠を確認する"],
+                "retrieval_mode": "internal_and_external",
+                "internal_queries": ["legacy"],
+                "external_collection_goals": ["legacy"],
+            }
+        )
+
+
+@pytest.mark.parametrize(
+    "legacy_plan_type",
+    ["none", "internal", "external", "internal_and_external"],
+)
+def test_draft_rejects_each_legacy_plan_type(legacy_plan_type: str) -> None:
+    with pytest.raises(ValidationError):
+        _required_contract("QuestionPlanDraft").model_validate(
+            {
+                "plan_type": legacy_plan_type,
+                "article_search_queries": ["NVIDIA AI GPU"],
+                "research_goals": ["NVIDIA の根拠を確認する"],
+            }
+        )
+
+
+def test_direct_plan_has_no_search_fields_and_rejects_them_as_extra() -> None:
+    direct_plan_type = _required_contract("DirectAnswerPlan")
+
+    assert set(direct_plan_type.model_fields) == {"plan_type"}
+    assert direct_plan_type().plan_type == "direct_answer"
+    with pytest.raises(ValidationError):
+        direct_plan_type(
+            article_search_queries=["NVIDIA"],
+            external_research_tasks=[],
+        )
+
+
+def test_search_plan_requires_both_branches_and_rejects_duplicate_inputs() -> None:
+    search_plan_type = _required_contract("SearchPlan")
+    task_type = _required_contract("ExternalResearchTask")
+
+    for article_search_queries, external_research_tasks in (
+        ([], [task_type(research_goal="NVIDIA の根拠を確認する")]),
+        (["NVIDIA AI GPU"], []),
+    ):
+        with pytest.raises(ValidationError):
+            search_plan_type(
+                article_search_queries=article_search_queries,
+                external_research_tasks=external_research_tasks,
+            )
+
+    with pytest.raises(ValidationError):
+        search_plan_type(
+            article_search_queries=["NVIDIA", "nvidia"],
+            external_research_tasks=[
+                task_type(research_goal="NVIDIA の根拠を確認する")
+            ],
+        )
+    with pytest.raises(ValidationError):
+        search_plan_type(
+            article_search_queries=["NVIDIA"],
+            external_research_tasks=[
+                task_type(research_goal="NVIDIA の根拠を確認する"),
+                task_type(research_goal="NVIDIA の根拠を確認する"),
+            ],
+        )
+
+
+def test_search_plan_has_exact_fields_and_forbids_legacy_extra() -> None:
+    search_plan_type = _required_contract("SearchPlan")
+    task_type = _required_contract("ExternalResearchTask")
+
+    assert set(search_plan_type.model_fields) == {
+        "plan_type",
+        "article_search_queries",
+        "external_research_tasks",
+        "target_time_window",
+    }
+    with pytest.raises(ValidationError):
+        search_plan_type(
+            article_search_queries=["NVIDIA"],
+            external_research_tasks=[
+                task_type(research_goal="NVIDIA の根拠を確認する")
+            ],
+            reason="legacy explanation",
+        )
+
+
+@pytest.mark.parametrize(
+    ("article_search_queries", "external_research_tasks"),
+    [
+        pytest.param(
+            [f"query {index}" for index in range(4)],
+            ["NVIDIA の根拠を確認する"],
+            id="four-queries",
+        ),
+        pytest.param(
+            ["NVIDIA"],
+            [f"research goal {index}" for index in range(4)],
+            id="four-tasks",
+        ),
+    ],
+)
+def test_search_plan_rejects_more_than_three_queries_or_tasks(
+    article_search_queries: list[str],
+    external_research_tasks: list[str],
+) -> None:
+    task_type = _required_contract("ExternalResearchTask")
+
+    with pytest.raises(ValidationError):
+        _required_contract("SearchPlan")(
+            article_search_queries=article_search_queries,
+            external_research_tasks=[
+                task_type(research_goal=research_goal)
+                for research_goal in external_research_tasks
+            ],
+        )
+
+
+def test_plan_from_draft_normalizes_search_inputs_without_question_fallback() -> None:
+    plan_from_draft = _required_contract("plan_from_draft")
+    draft = _draft(
+        article_search_queries=[
+            "  NVIDIA AI GPU  ",
+            "nvidia ai gpu",
+            "OpenAI",
+            "Apple",
+        ],
+        research_goals=[
+            "  NVIDIA の根拠を確認する  ",
+            "NVIDIA の根拠を確認する",
+            "供給需要を確認する",
+            "投資影響を確認する",
+        ],
+        target_time_window=_time_window(kind="last_n_days", days=7),
+    )
+
+    plan = plan_from_draft(draft)
+
+    assert plan.plan_type == "search"
+    assert plan.article_search_queries == ["NVIDIA AI GPU", "OpenAI", "Apple"]
+    assert [task.research_goal for task in plan.external_research_tasks] == [
+        "NVIDIA の根拠を確認する",
+        "供給需要を確認する",
+        "投資影響を確認する",
+    ]
+    assert plan.target_time_window == _time_window(kind="last_n_days", days=7)
+    assert "fallback_query" not in inspect.signature(plan_from_draft).parameters
+
+
+@pytest.mark.parametrize(
+    "draft",
+    [
+        pytest.param(
+            lambda: _draft(
+                plan_type="direct_answer",
+                article_search_queries=["RAW_QUESTION_MUST_NOT_BE_FALLBACK_34a1"],
+            ),
+            id="direct-with-query",
+        ),
+        pytest.param(
+            lambda: _draft(
+                plan_type="direct_answer",
+                research_goals=["外部根拠を確認する"],
+            ),
+            id="direct-with-goal",
+        ),
+        pytest.param(
+            lambda: _draft(
+                plan_type="direct_answer",
+                target_time_window=_time_window(kind="today"),
+            ),
+            id="direct-with-window",
+        ),
+        pytest.param(
+            lambda: _draft(article_search_queries=["NVIDIA"], research_goals=[]),
+            id="search-without-goal",
+        ),
+        pytest.param(
+            lambda: _draft(
+                article_search_queries=[], research_goals=["根拠を確認する"]
+            ),
+            id="search-without-query",
+        ),
+    ],
+)
+def test_plan_from_draft_turns_semantic_inconsistency_into_safe_response_defect(
+    draft: Any,
+) -> None:
+    plan_from_draft = _required_contract("plan_from_draft")
+
+    with pytest.raises(AgentResponseInvalidError) as raised:
+        plan_from_draft(draft())
+
+    assert raised.value.defect is AgentResponseDefect.OUTPUT_SCHEMA_MISMATCH
+    assert "RAW_QUESTION_MUST_NOT_BE_FALLBACK_34a1" not in str(raised.value)
+
+
+def test_direct_draft_creates_direct_answer_plan_only() -> None:
+    plan = _required_contract("plan_from_draft")(_draft(plan_type="direct_answer"))
+
+    assert plan.plan_type == "direct_answer"
+    assert set(type(plan).model_fields) == {"plan_type"}
+
+
+def test_direct_and_search_plans_are_frozen() -> None:
+    direct = _required_contract("DirectAnswerPlan")()
+    search = _required_contract("SearchPlan")(
+        article_search_queries=["NVIDIA"],
+        external_research_tasks=[
+            _required_contract("ExternalResearchTask")(research_goal="根拠を確認する")
+        ],
+    )
+
+    with pytest.raises(ValidationError):
+        direct.plan_type = "search"
+    with pytest.raises(ValidationError):
+        search.article_search_queries = ["OpenAI"]
+
+
 def test_planning_request_is_a_frozen_context_consumer_wrapper() -> None:
-    request_type = _request_type("app.agent.planning.contract", "PlanningRequest")
+    request_type = _required_contract("PlanningRequest")
     context = QuestionContext(standalone_question="NVIDIA の直近発表は？")
-    as_of = datetime(2026, 7, 10, tzinfo=UTC)
+    as_of = datetime(2026, 7, 10)
     request = request_type(context=context, as_of=as_of)
 
     with pytest.raises(ValidationError):
-        request.as_of = datetime(2026, 7, 11, tzinfo=UTC)
+        request.as_of = datetime(2026, 7, 11)
     with pytest.raises(ValidationError):
         request_type(context=context, as_of=as_of, telemetry=object())
 
@@ -84,7 +363,6 @@ def test_planning_request_is_a_frozen_context_consumer_wrapper() -> None:
         request_type.model_fields["context"].annotation,
         request_type.model_fields["as_of"].annotation,
         request.context is context,
-        request.context,
         request.as_of,
         "as_of" not in QuestionContext.model_fields,
     ) == (
@@ -92,23 +370,25 @@ def test_planning_request_is_a_frozen_context_consumer_wrapper() -> None:
         QuestionContext,
         datetime,
         True,
-        context,
         as_of,
         True,
     )
 
 
 def test_planning_boundaries_accept_planning_request() -> None:
+    planner_type = _required_contract("QuestionPlanner")
+    request_type = _required_contract("PlanningRequest")
+
     assert (
-        tuple(inspect.signature(QuestionPlanner.plan).parameters),
+        tuple(inspect.signature(planner_type.plan).parameters),
         tuple(inspect.signature(QuestionPlanningService.plan).parameters),
-        _first_input_annotation(QuestionPlanner.plan),
+        _first_input_annotation(planner_type.plan),
         _first_input_annotation(QuestionPlanningService.plan),
     ) == (
         ("self", "request"),
         ("self", "request"),
-        _request_type("app.agent.planning.contract", "PlanningRequest"),
-        _request_type("app.agent.planning.contract", "PlanningRequest"),
+        request_type,
+        request_type,
     )
 
 
@@ -121,13 +401,20 @@ def test_planning_service_declares_agent_and_runtime_scope_dependencies() -> Non
         "agent",
         "runtime_scope_factory",
     )
-    assert hints["agent"] == Agent[PlanningAttemptInput, QuestionPlanDraft]
+    assert (
+        hints["agent"]
+        == Agent[
+            _required_contract("PlanningAttemptInput"),
+            _required_contract("QuestionPlanDraft"),
+        ]
+    )
     assert hints["runtime_scope_factory"] is AgentRuntimeScopeFactory
 
 
-def test_legacy_planner_draft_boundary_and_error_are_not_exported() -> None:
-    assert not hasattr(planning_contract, "QuestionPlanDraftGenerator")
-    assert not hasattr(planning_contract, "QuestionPlannerResponseInvalidError")
+def test_legacy_planner_draft_boundaries_are_not_exported() -> None:
+    contracts = _contracts()
+    assert not hasattr(contracts, "QuestionPlanDraftGenerator")
+    assert not hasattr(contracts, "QuestionPlannerResponseInvalidError")
 
     legacy_names = {
         "GeminiQuestionPlanner",
@@ -145,129 +432,32 @@ def test_legacy_planner_draft_boundary_and_error_are_not_exported() -> None:
         package = importlib.import_module(package_name)
         assert all(not hasattr(package, name) for name in legacy_names)
 
-    for module_name, class_name in (
-        ("app.agent.planning.ai.gemini", "GeminiQuestionPlanner"),
-        ("app.agent.planning.ai.gemini_spec", "GeminiQuestionPlannerSpec"),
-        ("app.agent.planning.ai.gemini_prompt", "GeminiQuestionPlannerPrompt"),
-    ):
-        try:
-            legacy_module = importlib.import_module(module_name)
-        except ModuleNotFoundError as exc:
-            if exc.name != module_name:
-                raise
-        else:
-            assert not hasattr(legacy_module, class_name)
-
 
 class TestExternalResearchTask:
-    def test_has_collection_goal_only(self) -> None:
-        assert set(ExternalResearchTask.model_fields) == {"collection_goal"}
+    def test_has_research_goal_only(self) -> None:
+        assert set(_required_contract("ExternalResearchTask").model_fields) == {
+            "research_goal"
+        }
 
-    def test_strips_collection_goal(self) -> None:
-        task = ExternalResearchTask(
-            collection_goal="  NVIDIA の外部根拠を集める  ",
+    def test_strips_research_goal(self) -> None:
+        task = _required_contract("ExternalResearchTask")(
+            research_goal="  NVIDIA の外部根拠を集める  "
         )
 
-        assert task.collection_goal == "NVIDIA の外部根拠を集める"
+        assert task.research_goal == "NVIDIA の外部根拠を集める"
 
-    def test_rejects_blank_collection_goal(self) -> None:
+    def test_rejects_blank_research_goal(self) -> None:
         with pytest.raises(ValidationError):
-            ExternalResearchTask(collection_goal="   ")
+            _required_contract("ExternalResearchTask")(research_goal="   ")
 
-
-class TestQuestionPlanVariants:
-    def test_no_retrieval_plan_rejects_retrieval_fields(self) -> None:
+    def test_rejects_legacy_collection_goal_as_extra(self) -> None:
         with pytest.raises(ValidationError):
-            NoRetrievalPlan(
-                internal_queries=["ignored"],
-                reason="検索不要",
+            _required_contract("ExternalResearchTask").model_validate(
+                {
+                    "research_goal": "NVIDIA の根拠を確認する",
+                    "collection_goal": "legacy field must not be accepted",
+                }
             )
-
-    def test_internal_plan_strips_queries(self) -> None:
-        plan = InternalRetrievalPlan(
-            internal_queries=["  NVIDIA  "],
-            reason="内部記事が必要",
-        )
-
-        assert plan.retrieval_mode == "internal"
-        assert plan.internal_queries == ["NVIDIA"]
-
-    def test_internal_plan_rejects_empty_or_blank_queries(self) -> None:
-        with pytest.raises(ValidationError):
-            InternalRetrievalPlan(internal_queries=[], reason="内部記事が必要")
-        with pytest.raises(ValidationError):
-            InternalRetrievalPlan(internal_queries=["   "], reason="内部記事が必要")
-
-    def test_internal_plan_rejects_queries_over_limit(self) -> None:
-        InternalRetrievalPlan(
-            internal_queries=[
-                f"内部検索 {index}" for index in range(MAX_INTERNAL_QUERIES)
-            ],
-            reason="内部記事が必要",
-        )
-
-        with pytest.raises(ValidationError):
-            InternalRetrievalPlan(
-                internal_queries=[
-                    f"内部検索 {index}" for index in range(MAX_INTERNAL_QUERIES + 1)
-                ],
-                reason="内部記事が必要",
-            )
-
-    def test_internal_plan_rejects_external_fields(self) -> None:
-        with pytest.raises(ValidationError):
-            InternalRetrievalPlan(
-                internal_queries=["NVIDIA"],
-                external_research_tasks=[_external_task()],
-                reason="内部記事が必要",
-            )
-
-    def test_external_plan_rejects_empty_tasks(self) -> None:
-        with pytest.raises(ValidationError):
-            ExternalSearchPlan(
-                external_research_tasks=[],
-                reason="外部ニュースが必要",
-            )
-
-    def test_external_plan_rejects_duplicate_task_goals(self) -> None:
-        with pytest.raises(ValidationError):
-            ExternalSearchPlan(
-                external_research_tasks=[
-                    _external_task("NVIDIA の発表を確認する"),
-                    _external_task("NVIDIA の発表を確認する"),
-                ],
-                reason="外部ニュースが必要",
-            )
-
-    def test_external_plan_rejects_tasks_over_limit(self) -> None:
-        with pytest.raises(ValidationError):
-            ExternalSearchPlan(
-                external_research_tasks=[
-                    _external_task(f"外部根拠を確認する {index}")
-                    for index in range(EXTERNAL_RESEARCH_TASK_LIMIT + 1)
-                ],
-                reason="外部ニュースが必要",
-            )
-
-    def test_internal_and_external_plan_requires_both_inputs(self) -> None:
-        with pytest.raises(ValidationError):
-            InternalAndExternalPlan(
-                internal_queries=[],
-                external_research_tasks=[_external_task()],
-                reason="両方必要",
-            )
-        with pytest.raises(ValidationError):
-            InternalAndExternalPlan(
-                internal_queries=["NVIDIA"],
-                external_research_tasks=[],
-                reason="両方必要",
-            )
-
-    def test_variants_are_frozen(self) -> None:
-        plan = NoRetrievalPlan(reason="検索不要")
-
-        with pytest.raises(ValidationError):
-            plan.reason = "変更不可"
 
 
 @pytest.mark.parametrize(
@@ -300,7 +490,7 @@ class TestQuestionPlanVariants:
 def test_target_time_window_accepts_each_closed_kind(
     payload: dict[str, object],
 ) -> None:
-    target_time_window = _target_time_window(**payload)
+    target_time_window = _time_window(**payload)
 
     assert target_time_window.model_dump() == {
         "kind": payload["kind"],
@@ -333,19 +523,24 @@ def test_target_time_window_accepts_each_closed_kind(
             id="missing-start-date",
         ),
         pytest.param(
-            {"kind": "date_range", "start_date": "2026-06-01"}, id="missing-end-date"
+            {"kind": "date_range", "start_date": "2026-06-01"},
+            id="missing-end-date",
         ),
         pytest.param(
-            {"kind": "calendar_month", "year": 0, "month": 1}, id="year-underflow"
+            {"kind": "calendar_month", "year": 0, "month": 1},
+            id="year-underflow",
         ),
         pytest.param(
-            {"kind": "calendar_month", "year": 10000, "month": 1}, id="year-overflow"
+            {"kind": "calendar_month", "year": 10000, "month": 1},
+            id="year-overflow",
         ),
         pytest.param(
-            {"kind": "calendar_month", "year": 2026, "month": 0}, id="month-underflow"
+            {"kind": "calendar_month", "year": 2026, "month": 0},
+            id="month-underflow",
         ),
         pytest.param(
-            {"kind": "calendar_month", "year": 2026, "month": 13}, id="month-overflow"
+            {"kind": "calendar_month", "year": 2026, "month": 13},
+            id="month-overflow",
         ),
         pytest.param({"kind": "last_n_days", "days": 0}, id="days-underflow"),
         pytest.param({"kind": "last_n_days", "days": 61}, id="days-overflow"),
@@ -387,7 +582,7 @@ def test_target_time_window_rejects_values_outside_its_closed_contract(
     payload: dict[str, object],
 ) -> None:
     with pytest.raises(ValidationError):
-        _target_time_window(**payload)
+        _time_window(**payload)
 
 
 @pytest.mark.parametrize(
@@ -431,11 +626,11 @@ def test_target_time_window_rejects_kind_dependent_fields_on_other_kinds(
     payload: dict[str, object],
 ) -> None:
     with pytest.raises(ValidationError):
-        _target_time_window(**payload)
+        _time_window(**payload)
 
 
 def test_target_time_window_is_frozen() -> None:
-    target_time_window = _target_time_window(kind="today")
+    target_time_window = _time_window(kind="today")
 
     with pytest.raises(ValidationError):
         target_time_window.kind = "yesterday"
@@ -479,199 +674,4 @@ def test_target_time_window_display_is_deterministic_for_each_kind(
     payload: dict[str, object],
     expected_display: str,
 ) -> None:
-    assert (
-        _render_target_time_window(_target_time_window(**payload)) == expected_display
-    )
-
-
-class TestPlanFromDraft:
-    def test_none_ignores_queries_and_time_window(self) -> None:
-        plan = plan_from_draft(
-            QuestionPlanDraft(
-                retrieval_mode="none",
-                internal_queries=["ignored"],
-                external_collection_goals=["ignored"],
-                target_time_window=_target_time_window(kind="last_n_days", days=1),
-                reason="検索不要",
-            ),
-            fallback_query="fallback",
-        )
-
-        assert isinstance(plan, NoRetrievalPlan)
-        assert "internal_queries" not in type(plan).model_fields
-        assert "external_research_tasks" not in type(plan).model_fields
-        assert "target_time_window" not in type(plan).model_fields
-
-    def test_internal_uses_fallback_when_query_missing(self) -> None:
-        plan = plan_from_draft(
-            QuestionPlanDraft(
-                retrieval_mode="internal",
-                internal_queries=["  "],
-                external_collection_goals=["ignored"],
-                reason="内部記事が必要",
-            ),
-            fallback_query="保存済みの記事からAI半導体ニュースをまとめて",
-        )
-
-        assert isinstance(plan, InternalRetrievalPlan)
-        assert plan.internal_queries == ["保存済みの記事からAI半導体ニュースをまとめて"]
-        assert "external_research_tasks" not in type(plan).model_fields
-
-    def test_internal_queries_drop_blanks_deduplicate_and_clamp(
-        self,
-    ) -> None:
-        plan = plan_from_draft(
-            QuestionPlanDraft(
-                retrieval_mode="internal",
-                internal_queries=[
-                    "  NVIDIA AI GPU  ",
-                    "  ",
-                    "nvidia ai gpu",
-                    "Blackwell supply chain",
-                    "OpenAI",
-                    "Apple",
-                ],
-                reason="内部記事が必要",
-            ),
-            fallback_query="fallback",
-        )
-
-        assert isinstance(plan, InternalRetrievalPlan)
-        assert plan.internal_queries == [
-            "NVIDIA AI GPU",
-            "Blackwell supply chain",
-            "OpenAI",
-        ]
-
-    def test_external_uses_fallback_when_goal_missing(self) -> None:
-        plan = plan_from_draft(
-            QuestionPlanDraft(
-                retrieval_mode="external",
-                internal_queries=["ignored"],
-                external_collection_goals=["  "],
-                reason="外部ニュースが必要",
-            ),
-            fallback_query="今日のNVIDIAの発表は？",
-        )
-
-        assert isinstance(plan, ExternalSearchPlan)
-        assert plan.external_research_tasks == [
-            ExternalResearchTask(collection_goal="今日のNVIDIAの発表は？")
-        ]
-        assert "internal_queries" not in type(plan).model_fields
-
-    def test_external_goals_drop_blanks_deduplicate_and_clamp(self) -> None:
-        plan = plan_from_draft(
-            QuestionPlanDraft(
-                retrieval_mode="external",
-                external_collection_goals=[
-                    "  ",
-                    "  NVIDIA の直近発表を確認する  ",
-                    "NVIDIA の直近発表を確認する",
-                    "NVIDIA の供給需要を確認する",
-                    "NVIDIA の投資影響を確認する",
-                    "NVIDIA の規制影響を確認する",
-                ],
-                reason="外部ニュースが必要",
-            ),
-            fallback_query="fallback",
-        )
-
-        assert isinstance(plan, ExternalSearchPlan)
-        assert plan.external_research_tasks == [
-            ExternalResearchTask(collection_goal="NVIDIA の直近発表を確認する"),
-            ExternalResearchTask(collection_goal="NVIDIA の供給需要を確認する"),
-            ExternalResearchTask(collection_goal="NVIDIA の投資影響を確認する"),
-        ]
-
-    def test_internal_and_external_fills_both_queries(self) -> None:
-        plan = plan_from_draft(
-            QuestionPlanDraft(
-                retrieval_mode="internal_and_external",
-                reason="両方必要",
-            ),
-            fallback_query="内部記事と最新ニュースを合わせて整理して",
-        )
-
-        assert isinstance(plan, InternalAndExternalPlan)
-        assert plan.internal_queries == ["内部記事と最新ニュースを合わせて整理して"]
-        assert plan.external_research_tasks == [
-            ExternalResearchTask(
-                collection_goal="内部記事と最新ニュースを合わせて整理して",
-            )
-        ]
-
-    def test_internal_and_external_clamps_internal_and_external_inputs(self) -> None:
-        plan = plan_from_draft(
-            QuestionPlanDraft(
-                retrieval_mode="internal_and_external",
-                internal_queries=[
-                    "  NVIDIA  ",
-                    "nvidia",
-                    "OpenAI",
-                    "Apple",
-                    "Google",
-                ],
-                external_collection_goals=[
-                    "  NVIDIA の直近発表を確認する  ",
-                    "NVIDIA の直近発表を確認する",
-                    "NVIDIA の供給需要を確認する",
-                    "NVIDIA の投資影響を確認する",
-                    "NVIDIA の規制影響を確認する",
-                ],
-                reason="両方必要",
-            ),
-            fallback_query="fallback",
-        )
-
-        assert isinstance(plan, InternalAndExternalPlan)
-        assert plan.internal_queries == ["NVIDIA", "OpenAI", "Apple"]
-        assert plan.external_research_tasks == [
-            ExternalResearchTask(collection_goal="NVIDIA の直近発表を確認する"),
-            ExternalResearchTask(collection_goal="NVIDIA の供給需要を確認する"),
-            ExternalResearchTask(collection_goal="NVIDIA の投資影響を確認する"),
-        ]
-
-    @pytest.mark.parametrize(
-        "retrieval_mode",
-        ["external", "internal_and_external"],
-    )
-    def test_external_variants_preserve_the_typed_time_window_from_draft(
-        self,
-        retrieval_mode: str,
-    ) -> None:
-        target_time_window = _target_time_window(
-            kind="date_range",
-            start_date="2026-06-01",
-            end_date_inclusive="2026-06-15",
-        )
-        plan = plan_from_draft(
-            QuestionPlanDraft(
-                retrieval_mode=retrieval_mode,
-                internal_queries=["NVIDIA"],
-                external_collection_goals=["NVIDIA の発表を確認する"],
-                target_time_window=target_time_window,
-                reason="外部根拠が必要",
-            ),
-            fallback_query="fallback",
-        )
-
-        assert plan.target_time_window == target_time_window
-
-    def test_safe_fallback_defaults_to_internal(self) -> None:
-        plan = safe_fallback_plan(fallback_query="こんにちは")
-
-        assert isinstance(plan, InternalRetrievalPlan)
-        assert plan.retrieval_mode == "internal"
-        assert plan.internal_queries == ["こんにちは"]
-
-    def test_from_draft_rejects_unreachable_retrieval_mode(self) -> None:
-        draft = QuestionPlanDraft.model_construct(
-            retrieval_mode="invalid",
-            internal_queries=[],
-            external_collection_goals=[],
-            reason="invalid",
-        )
-
-        with pytest.raises(AssertionError):
-            plan_from_draft(draft, fallback_query="fallback")
+    assert _render_time_window(_time_window(**payload)) == expected_display
