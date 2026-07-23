@@ -118,7 +118,7 @@ def test_agent_declares_structured_gemini_role_and_manual_prompt_version() -> No
         "gemini-3.1-flash-lite",
         0.2,
         2048,
-        "v1",
+        "v2",
         RawEvidenceAnswerDraft,
     )
     assert agent.response_schema is not None
@@ -126,7 +126,7 @@ def test_agent_declares_structured_gemini_role_and_manual_prompt_version() -> No
 
 def test_fixed_instructions_and_rendered_input_are_separated() -> None:
     agent, input_type = _declaration()
-    fixed = "あなたは Vector の evidence-grounded answer synthesizer です。"
+    fixed = "ユーザーが知りたいことへ直接答えることです。"
     input = input_type(
         request=_request(),
         evidence=(_evidence(),),
@@ -184,7 +184,10 @@ async def test_runtime_request_keeps_fixed_and_dynamic_text_separate() -> None:
     assert provider_config.response_mime_type == "application/json"
     assert provider_config.response_schema is not None
     assert "QUESTION_CONTENTS_SENTINEL" not in provider_config.system_instruction
-    assert "evidence-grounded answer synthesizer" not in provider_request["contents"]
+    assert (
+        "ユーザーが知りたいことへ直接答えることです。"
+        not in provider_request["contents"]
+    )
 
 
 def test_response_schema_matches_lenient_raw_draft_representative_payload() -> None:

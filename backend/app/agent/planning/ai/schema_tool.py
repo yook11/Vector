@@ -5,18 +5,13 @@ from __future__ import annotations
 from typing import Any, get_args
 
 from app.agent.contract import PlanType
+from app.agent.planning.contract import (
+    EXTERNAL_RESEARCH_TASK_LIMIT,
+    MAX_ARTICLE_SEARCH_QUERIES,
+    TargetTimeWindowKind,
+)
 
-_TARGET_TIME_WINDOW_KIND_VALUES = [
-    "today",
-    "yesterday",
-    "last_n_days",
-    "this_week",
-    "last_week",
-    "this_month",
-    "calendar_month",
-    "date_range",
-    "unsupported_explicit_window",
-]
+_TARGET_TIME_WINDOW_KIND_VALUES = list(get_args(TargetTimeWindowKind))
 
 QUESTION_PLANNER_GEMINI_SCHEMA: dict[str, Any] = {
     "type": "OBJECT",
@@ -33,11 +28,8 @@ QUESTION_PLANNER_GEMINI_SCHEMA: dict[str, Any] = {
         },
         "article_search_queries": {
             "type": "ARRAY",
-            "description": (
-                "Queries to embed for Vector analyzed article retrieval. "
-                "Do not simply copy the raw user question. "
-                "Return at most 3 items."
-            ),
+            "maxItems": MAX_ARTICLE_SEARCH_QUERIES,
+            "description": "Queries for Vector analyzed article retrieval.",
             "items": {
                 "type": "STRING",
                 "description": "One analyzed-article semantic search query.",
@@ -45,10 +37,8 @@ QUESTION_PLANNER_GEMINI_SCHEMA: dict[str, Any] = {
         },
         "research_goals": {
             "type": "ARRAY",
-            "description": (
-                "External research goals describing what evidence to collect. "
-                "Short Japanese sentences. Return at most 3 items."
-            ),
+            "maxItems": EXTERNAL_RESEARCH_TASK_LIMIT,
+            "description": "External research goals for evidence collection.",
             "items": {
                 "type": "STRING",
                 "description": "One research goal for external news search.",

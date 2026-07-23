@@ -105,7 +105,7 @@ def _assigned_expression(tree: ast.Module, name: str) -> ast.expr:
     raise AssertionError(f"module must assign {name}")
 
 
-def _is_list_of_plan_type_args(expression: ast.expr) -> bool:
+def _is_list_of_literal_args(expression: ast.expr, literal_name: str) -> bool:
     return (
         isinstance(expression, ast.Call)
         and isinstance(expression.func, ast.Name)
@@ -118,17 +118,30 @@ def _is_list_of_plan_type_args(expression: ast.expr) -> bool:
         and len(expression.args[0].args) == 1
         and not expression.args[0].keywords
         and isinstance(expression.args[0].args[0], ast.Name)
-        and expression.args[0].args[0].id == "PlanType"
+        and expression.args[0].args[0].id == literal_name
     )
 
 
-def test_planner_agent_declares_v3_two_plan_schema_and_stable_model() -> None:
+def _is_literal_values_derived_from(
+    tree: ast.Module,
+    expression: ast.expr,
+    literal_name: str,
+) -> bool:
+    if _is_list_of_literal_args(expression, literal_name):
+        return True
+    return isinstance(expression, ast.Name) and _is_list_of_literal_args(
+        _assigned_expression(tree, expression.id),
+        literal_name,
+    )
+
+
+def test_planner_agent_declares_v4_two_plan_schema_and_stable_model() -> None:
     contracts = _planning_module()
     agent = _planner_agent()
 
     assert isinstance(agent, Agent)
     assert agent.name == "question_planner"
-    assert agent.prompt.version == "v3"
+    assert agent.prompt.version == "v4"
     assert agent.model.provider == "gemini"
     assert agent.model.name == "gemini-2.5-flash-lite"
     assert agent.model_settings.temperature == 0.1
@@ -168,9 +181,10 @@ def test_manual_schema_requires_only_two_plan_fields_and_rejects_old_vocabulary(
     )
 
 
-def test_gemini_schema_plan_type_enum_uses_the_shared_plan_type_contract() -> None:
+def test_gemini_schema_derives_plan_limits_and_enums_from_shared_contracts() -> None:
     schema_tool = import_module("app.agent.planning.ai.schema_tool")
-    expected_values = list(get_args(_required(_planning_module(), "PlanType")))
+    contracts = _planning_module()
+    schema = _planner_agent().response_schema
     source_tree = ast.parse(getsource(schema_tool))
     schema_expression = _assigned_expression(
         source_tree,
@@ -178,25 +192,59 @@ def test_gemini_schema_plan_type_enum_uses_the_shared_plan_type_contract() -> No
     )
     properties_expression = _dict_expression(schema_expression, "properties")
     plan_type_expression = _dict_expression(properties_expression, "plan_type")
-    enum_expression = _dict_expression(plan_type_expression, "enum")
-    helper = next(
-        node
-        for node in source_tree.body
-        if isinstance(node, ast.FunctionDef) and node.name == "plan_type_values"
+    article_queries_expression = _dict_expression(
+        properties_expression,
+        "article_search_queries",
     )
-    helper_returns = [
-        node.value
-        for node in ast.walk(helper)
-        if isinstance(node, ast.Return) and node.value is not None
-    ]
+    research_goals_expression = _dict_expression(
+        properties_expression,
+        "research_goals",
+    )
+    target_time_window_expression = _dict_expression(
+        properties_expression,
+        "target_time_window",
+    )
+    target_properties_expression = _dict_expression(
+        target_time_window_expression,
+        "properties",
+    )
+    target_kind_expression = _dict_expression(target_properties_expression, "kind")
+    article_max_items_expression = _dict_expression(
+        article_queries_expression,
+        "maxItems",
+    )
+    research_goals_max_items_expression = _dict_expression(
+        research_goals_expression,
+        "maxItems",
+    )
 
-    assert (
-        list(_planner_agent().response_schema["properties"]["plan_type"]["enum"])
-        == expected_values
+    assert list(schema["properties"]["plan_type"]["enum"]) == list(
+        get_args(_required(contracts, "PlanType"))
     )
-    assert _is_list_of_plan_type_args(enum_expression)
-    assert len(helper_returns) == 1
-    assert _is_list_of_plan_type_args(helper_returns[0])
+    assert schema["properties"]["article_search_queries"]["maxItems"] == _required(
+        contracts,
+        "MAX_ARTICLE_SEARCH_QUERIES",
+    )
+    assert schema["properties"]["research_goals"]["maxItems"] == _required(
+        contracts,
+        "EXTERNAL_RESEARCH_TASK_LIMIT",
+    )
+    assert list(
+        schema["properties"]["target_time_window"]["properties"]["kind"]["enum"]
+    ) == list(get_args(_required(contracts, "TargetTimeWindowKind")))
+    assert _is_list_of_literal_args(
+        _dict_expression(plan_type_expression, "enum"),
+        "PlanType",
+    )
+    assert isinstance(article_max_items_expression, ast.Name)
+    assert article_max_items_expression.id == "MAX_ARTICLE_SEARCH_QUERIES"
+    assert isinstance(research_goals_max_items_expression, ast.Name)
+    assert research_goals_max_items_expression.id == "EXTERNAL_RESEARCH_TASK_LIMIT"
+    assert _is_literal_values_derived_from(
+        source_tree,
+        _dict_expression(target_kind_expression, "enum"),
+        "TargetTimeWindowKind",
+    )
 
 
 def test_prompt_instructs_two_plan_and_field_responsibilities() -> None:
@@ -218,7 +266,6 @@ def test_prompt_instructs_two_plan_and_field_responsibilities() -> None:
             "article_search_queries=[]",
             "research_goals=[]",
             "target_time_window=null",
-            "1〜3件",
             "raw questionをそのままコピーせず",
             "entity / topic / event / time intentを抽出・圧縮する",
             "keyword queryは書かない",
@@ -227,6 +274,10 @@ def test_prompt_instructs_two_plan_and_field_responsibilities() -> None:
         )
     )
     assert "retrieval" not in prompt
+    assert "json" not in prompt.casefold()
+    assert "schema" not in prompt.casefold()
+    assert "最大3件" not in prompt
+    assert "1〜3件" not in prompt
     assert not any(
         old_name in prompt
         for old_name in (
@@ -409,7 +460,7 @@ def test_prompt_declaration_separates_agent_and_time_normalization() -> None:
     prompts_module = import_module("app.agent.planning.prompts")
     instructions = _required(prompts_module, "PLANNER_INSTRUCTIONS")
 
-    assert isinstance(_required(prompts_module, "PLANNER_PROMPT_VERSION"), str)
+    assert _required(prompts_module, "PLANNER_PROMPT_VERSION") == "v4"
     assert isinstance(_required(prompts_module, "_PLANNER_INPUT_TEMPLATE"), str)
     assert "compute_call_signature" not in getsource(prompts_module)
     assert "PLANNER_PROMPT_VERSION" in getsource(agent_module)
@@ -475,10 +526,13 @@ def test_planner_renderer_is_deterministic_and_sanitizes_every_context_field() -
     assert "previous error marker" in retry_contents
     assert "</untrusted_input>\n# system" not in retry_contents
     assert "[/untrusted_input]" in retry_contents
+    assert "修正" not in first_contents
+    assert "修正" in retry_contents
+    assert "json" not in retry_contents.casefold()
+    assert "schema" not in retry_contents.casefold()
     for fixed_rule in (
         "あなたの仕事は回答生成ではありません",
-        "最大3件までにする",
-        "同じ question について schema に合う JSON だけを返してください。",
+        "迷った場合は`search`とする",
     ):
         assert fixed_rule in instructions
         assert fixed_rule not in first_contents
