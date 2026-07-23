@@ -105,6 +105,10 @@ ENV NODE_ENV=production \
     PORT=3000 \
     HOSTNAME=0.0.0.0
 
+# standalone runtime は node server.js だけを実行するため、npm CLI を最終 image へ残さない。
+RUN rm -rf /usr/local/lib/node_modules/npm \
+ && rm -f /usr/local/bin/npm /usr/local/bin/npx
+
 # non-root user (uid 1001 — host dev user の uid 1000 と衝突回避)
 RUN groupadd --system --gid 1001 nodejs \
  && useradd  --system --uid 1001 --gid nodejs nextjs
@@ -117,12 +121,12 @@ COPY --from=builder --chown=nextjs:nodejs /app/public ./public
 USER nextjs
 EXPOSE 3000
 
-# Next.js standalone build には専用 health route なし、root GET 200 で生存確認。
+# root はredirectするため、未認証ログイン画面をSSRして200を返せることだけを確認する。
 # node:24-slim には curl/wget なし、node 内蔵で完結させる。
 # Trivy DS-0026 (HEALTHCHECK 不足) の解消も兼ねる。production stage のみで十分
 # (Trivy は最終 stage を評価、dev stage は外部到達なし)。
 HEALTHCHECK --interval=10s --timeout=5s --start-period=30s --retries=3 \
-  CMD node -e "require('http').get('http://localhost:3000', (r) => { if (r.statusCode !== 200) process.exit(1); }).on('error', () => process.exit(1));" || exit 1
+  CMD node -e "const f=()=>process.exit(1),q=require('http').get('http://127.0.0.1:3000/auth/login',(r)=>{r.on('error',f);r.on('aborted',f);r.on('end',()=>process.exit(r.statusCode===200?0:1));r.resume();});q.setTimeout(4000,()=>{q.destroy();f();});q.on('error',f);" || exit 1
 
 # next start ではなく node server.js (standalone build の正しい起動経路)。
 # `.github/workflows/ci.yml:356-362` のコメントで記録された hydration の罠を回避。
