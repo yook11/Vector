@@ -879,7 +879,8 @@ jobs:
         working-directory: backend
 
   # ---- 本番デプロイ (main merge → git SHA tag で build once → core/collect/frontend) ----
-  # 業界標準の核: Build once / immutable artifact = git SHA / tested artifact を deploy。
+  # source identity はgit SHA、artifact identityはregistry digestとし、build後に
+  # digestで確定した同一artifactだけをreleaseする。
   # 1 job で step を順序実行し backend (core→collect 同一 image) → frontend の順に release。
   # ci-gate の success だけを gate にするので個別テスト結果には依存しない。
   deploy-production:
@@ -939,6 +940,8 @@ jobs:
         with:
           persist-credentials: false
       - uses: superfly/flyctl-actions/setup-flyctl@ed8efb33836e8b2096c7fd3ba1c8afe303ebbff1  # v1.6
+        with:
+          version: 0.4.70
 
       # ---- backend を先に: build once → core / collect を同一 image で release ----
       - name: Verify production deploy secrets
@@ -952,8 +955,8 @@ jobs:
           done
           exit "$missing"
 
-      # --build-only --push で build + registry push のみ (release しない)。image-label に
-      # git SHA を焼くと ref は registry.fly.io/<app>:<SHA> に確定する。
+      # --build-only --push で build + registry push のみ (release しない)。git SHA tagを
+      # registryからdigestへ解決し、releaseはimmutable refだけを受け取る。
       - name: Build & push backend image once (label = SHA)
         if: ${{ needs.changes.outputs.backend == 'true' }}
         working-directory: backend
@@ -961,12 +964,38 @@ jobs:
           flyctl deploy -c fly.core.toml -a "$FLY_CORE_APP" \
             --remote-only --build-only --push --image-label "${{ github.sha }}"
 
+      - name: Resolve backend image digest
+        id: resolve-backend-image
+        if: ${{ needs.changes.outputs.backend == 'true' }}
+        env:
+          IMAGE_TAG: registry.fly.io/${{ secrets.FLY_CORE_APP }}:${{ github.sha }}
+        run: |
+          flyctl auth docker
+          digest=""
+          platform=""
+          for attempt in {1..12}; do
+            manifest="$(docker manifest inspect --verbose "$IMAGE_TAG" 2>/dev/null || true)"
+            digest="$(jq -r '.Descriptor.digest // empty' <<< "$manifest")"
+            platform="$(jq -r '.Descriptor.platform | "\(.os)/\(.architecture)"' <<< "$manifest")"
+            if [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ && "$platform" == "linux/amd64" ]]; then
+              break
+            fi
+            echo "Waiting for backend image manifest ($attempt/12)"
+            sleep 5
+          done
+          if [[ ! "$digest" =~ ^sha256:[0-9a-f]{64}$ || "$platform" != "linux/amd64" ]]; then
+            echo "::error::backend image digest or platform could not be verified"
+            exit 1
+          fi
+          echo "digest=$digest" >> "$GITHUB_OUTPUT"
+          echo "- backend image: \`$digest\` ($platform)" >> "$GITHUB_STEP_SUMMARY"
+
       - name: Release vector-core (prebuilt image)
         if: ${{ needs.changes.outputs.backend == 'true' }}
         working-directory: backend
         run: |
           flyctl deploy -c fly.core.toml -a "$FLY_CORE_APP" \
-            --image "registry.fly.io/${FLY_CORE_APP}:${{ github.sha }}" \
+            --image "registry.fly.io/${FLY_CORE_APP}@${{ steps.resolve-backend-image.outputs.digest }}" \
             --env FRONTEND_URL="$FRONTEND_URL" \
             --env INTERNAL_FRONTEND_BASE_URL="$INTERNAL_FRONTEND_BASE_URL"
 
@@ -975,18 +1004,51 @@ jobs:
         working-directory: backend
         run: |
           flyctl deploy -c fly.collect.toml -a "$FLY_COLLECT_APP" \
-            --image "registry.fly.io/${FLY_CORE_APP}:${{ github.sha }}" \
+            --image "registry.fly.io/${FLY_CORE_APP}@${{ steps.resolve-backend-image.outputs.digest }}" \
             --env FRONTEND_URL="$FRONTEND_URL" \
             --env INTERNAL_FRONTEND_BASE_URL="$INTERNAL_FRONTEND_BASE_URL"
 
-      # ---- frontend を後に: build + release (こちらは共有しないので通常 deploy) ----
-      - name: Deploy frontend (build + release, label = SHA)
+      # ---- frontend を後に: build → digest解決 → release ----
+      - name: Build & push frontend image (label = SHA)
         if: ${{ needs.changes.outputs.frontend == 'true' }}
         working-directory: frontend
         run: |
           flyctl deploy -c fly.toml -a "$FLY_FRONTEND_APP" \
-            --remote-only --image-label "${{ github.sha }}" \
+            --remote-only --build-only --push --image-label "${{ github.sha }}" \
             --build-arg INTERNAL_API_URL="$INTERNAL_API_URL" \
-            --build-arg BETTER_AUTH_URL="$BETTER_AUTH_URL" \
+            --build-arg BETTER_AUTH_URL="$BETTER_AUTH_URL"
+
+      - name: Resolve frontend image digest
+        id: resolve-frontend-image
+        if: ${{ needs.changes.outputs.frontend == 'true' }}
+        env:
+          IMAGE_TAG: registry.fly.io/${{ secrets.FLY_FRONTEND_APP }}:${{ github.sha }}
+        run: |
+          flyctl auth docker
+          digest=""
+          platform=""
+          for attempt in {1..12}; do
+            manifest="$(docker manifest inspect --verbose "$IMAGE_TAG" 2>/dev/null || true)"
+            digest="$(jq -r '.Descriptor.digest // empty' <<< "$manifest")"
+            platform="$(jq -r '.Descriptor.platform | "\(.os)/\(.architecture)"' <<< "$manifest")"
+            if [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ && "$platform" == "linux/amd64" ]]; then
+              break
+            fi
+            echo "Waiting for frontend image manifest ($attempt/12)"
+            sleep 5
+          done
+          if [[ ! "$digest" =~ ^sha256:[0-9a-f]{64}$ || "$platform" != "linux/amd64" ]]; then
+            echo "::error::frontend image digest or platform could not be verified"
+            exit 1
+          fi
+          echo "digest=$digest" >> "$GITHUB_OUTPUT"
+          echo "- frontend image: \`$digest\` ($platform)" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Release frontend (prebuilt image)
+        if: ${{ needs.changes.outputs.frontend == 'true' }}
+        working-directory: frontend
+        run: |
+          flyctl deploy -c fly.toml -a "$FLY_FRONTEND_APP" \
+            --image "registry.fly.io/${FLY_FRONTEND_APP}@${{ steps.resolve-frontend-image.outputs.digest }}" \
             --env INTERNAL_API_URL="$INTERNAL_API_URL" \
             --env BETTER_AUTH_URL="$BETTER_AUTH_URL"
