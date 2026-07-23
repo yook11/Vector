@@ -223,7 +223,7 @@ export function CitedAnswerContent({
   return (
     <Markdown
       remarkPlugins={[
-        remarkGfm,
+        [remarkGfm, { singleTilde: false }],
         remarkBreaks,
         [remarkCitationMarkers, { matchableRefs }],
       ]}

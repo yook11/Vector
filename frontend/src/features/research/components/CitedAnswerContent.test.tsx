@@ -320,6 +320,29 @@ describe("CitedAnswerContent — Markdown rendering contract", () => {
     expect(link.textContent).not.toContain("[[1]]");
     expect(within(link).queryByRole("button")).not.toBeInTheDocument();
   });
+
+  it("keeps a single-tilde numeric range as literal text instead of strikethrough", () => {
+    const { container } = render(
+      <CitedAnswerContent
+        content="価格は100~200円、容量は50~100GBです。"
+        sources={[]}
+      />,
+    );
+
+    expect(container.querySelector("del")).toBeNull();
+    expect(container.textContent).toContain("100~200円");
+    expect(container.textContent).toContain("50~100GB");
+  });
+
+  it("renders double-tilde text as strikethrough", () => {
+    const { container } = render(
+      <CitedAnswerContent content="~~取り消し~~" sources={[]} />,
+    );
+
+    const strikethrough = container.querySelector("del");
+    expect(strikethrough).not.toBeNull();
+    expect(strikethrough?.textContent).toBe("取り消し");
+  });
 });
 
 describe("CitedAnswerContent — security contract", () => {

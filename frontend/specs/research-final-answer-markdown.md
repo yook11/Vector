@@ -135,6 +135,9 @@ Markdown 描画は `ResearchAnswerSlot` の確定回答分岐（`finalAnswer.con
   書かれており、evidence prompt も見出しの独立行配置を指示しているため、CommonMark 既定の
   「単一改行を空白へ畳む」挙動では旧回答の視覚同等性を守れない。段落（空行区切り）は通常の
   段落として描画する。
+- strikethrough は `~~` 2連のみ有効とする（remark-gfm に `singleTilde: false` を指定）。既定
+  （single tilde 有効）では `価格は100~200円、容量は50~100GB` のような範囲表記の間が
+  打ち消し線に化けることを実測で確認した（2026-07-23）。
 - remark-gfm により footnote 構文も有効になる。プロンプトは footnote を指示しないが、構文が
   有効である以上、同一ページに複数回答を描画するスレッドでは footnote の DOM id / anchor が
   回答間で衝突し得る。`remarkRehypeOptions` の `clobberPrefix` に回答単位の識別子（message
@@ -250,6 +253,8 @@ vitest / Next.js での解決は実装時に `/check` で確認する。
 13. 回答内見出しの要素が `h3`〜`h6` へシフト・クランプされる。
 14. footnote のページ内 fragment リンク（`href` が `#` で始まる anchor）に `target="_blank"` が
     付かない。
+15. `~` 1個の範囲表記（`100~200円` 等）が打ち消し線にならず原文のまま表示され、
+    `~~text~~` は打ち消し線として描画される。
 
 ### 実データ確認
 
@@ -292,3 +297,6 @@ dev 環境の既存 thread（evidence / direct 双方の保存済み回答）を
 6. 2026-07-23 の実装時判断2件を反映する: link 内除去の機構は `ignore` ではなく
    `RegExpMatchObject.stack` の祖先判定（`ignore` はスキャンをスキップするため除去を実現
    できない）、ページ内 fragment リンクには `target` / `rel` を付与しない。
+7. 2026-07-23 追加合意: remark-gfm に `singleTilde: false` を指定し、打ち消し線は `~~` 2連
+   のみ有効とする（範囲表記の誤打ち消し線防止。第2段の draft 共有 config にも同一指定を
+   適用する）。
