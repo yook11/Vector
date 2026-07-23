@@ -28,7 +28,7 @@ primary_region = 'nrt'
   processes = ['api']
   auto_stop_machines = 'stop'
   auto_start_machines = true
-  min_machines_running = 0
+  min_machines_running = 1
 
   [[services.ports]]
     port = 8000
