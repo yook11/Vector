@@ -37,7 +37,7 @@ export function ResearchAnswerSlot({
           children
         ) : (
           <>
-            <div className="whitespace-pre-wrap break-words text-sm leading-7 text-[var(--vector-ink)] [overflow-wrap:anywhere]">
+            <div className="break-words text-sm leading-7 text-[var(--vector-ink)] [overflow-wrap:anywhere]">
               <CitedAnswerContent
                 content={finalAnswer.content}
                 sources={finalAnswer.sources}
