@@ -1,6 +1,7 @@
 "use client";
 
 import { ErrorMessage } from "@/components/feedback/ErrorMessage";
+import { PageNavigationReset } from "@/components/layout/PageNavigation";
 import type { ErrorPageProps } from "@/lib/types/error-page";
 
 export default function NewsDetailError({
@@ -8,11 +9,14 @@ export default function NewsDetailError({
   unstable_retry,
 }: ErrorPageProps) {
   return (
-    <ErrorMessage
-      title="記事の取得に失敗しました"
-      description="記事が一時的に表示できません。再試行するか、一覧に戻ってください"
-      error={error}
-      unstable_retry={unstable_retry}
-    />
+    <>
+      <PageNavigationReset />
+      <ErrorMessage
+        title="記事の取得に失敗しました"
+        description="記事が一時的に表示できません。再試行するか、一覧に戻ってください"
+        error={error}
+        unstable_retry={unstable_retry}
+      />
+    </>
   );
 }

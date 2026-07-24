@@ -7,6 +7,7 @@ import {
   NAV_ICONS,
   type ProtectedNavItem,
 } from "@/components/layout/nav-items";
+import { PendingAwareLink } from "@/components/layout/PageNavigation";
 import type { ArticleQuery } from "@/types";
 import type { CategoryDetail } from "@/types/types.gen";
 import { buildDashboardCategoryHref } from "./paper-hrefs";
@@ -59,7 +60,7 @@ export function DashboardMasthead({
                     className="mx-[clamp(12px,1.8vw,20px)] h-[18px] w-px bg-[var(--vector-line)]"
                   />
                 )}
-                <Link
+                <PendingAwareLink
                   href={item.href}
                   aria-current={active ? "page" : undefined}
                   className={
@@ -86,7 +87,7 @@ export function DashboardMasthead({
                   >
                     {item.label}
                   </span>
-                </Link>
+                </PendingAwareLink>
               </Fragment>
             );
           })}
@@ -107,7 +108,7 @@ export function DashboardMasthead({
 
       <div className="flex items-center justify-center gap-4 py-5 sm:gap-6">
         <span className="h-px flex-1 bg-[color-mix(in_oklab,var(--vector-ink)_20%,transparent)]" />
-        <Link
+        <PendingAwareLink
           href="/"
           className="inline-flex items-center gap-3 sm:gap-4"
           aria-label="Vector ニュースへ"
@@ -129,7 +130,7 @@ export function DashboardMasthead({
           >
             VECTOR
           </span>
-        </Link>
+        </PendingAwareLink>
         <span className="h-px flex-1 bg-[color-mix(in_oklab,var(--vector-ink)_20%,transparent)]" />
       </div>
 

@@ -22,20 +22,33 @@ async function SourceManagerAsync() {
 
 function SourceManagerSkeleton() {
   return (
-    <div className="space-y-4" aria-hidden="true">
-      <div className="flex items-center justify-between">
-        <div className="space-y-2">
-          <Skeleton className="h-5 w-32" />
-          <Skeleton className="h-3 w-64" />
+    <>
+      <p
+        role="status"
+        aria-live="polite"
+        aria-atomic="true"
+        className="text-sm font-medium text-muted-foreground"
+      >
+        設定を読み込み中…
+      </p>
+      <div
+        className="space-y-4 motion-reduce:animate-none motion-reduce:[&_[data-slot=skeleton]]:animate-none"
+        aria-hidden="true"
+      >
+        <div className="flex items-center justify-between">
+          <div className="space-y-2">
+            <Skeleton className="h-5 w-32" />
+            <Skeleton className="h-3 w-64" />
+          </div>
+          <Skeleton className="h-9 w-28" />
         </div>
-        <Skeleton className="h-9 w-28" />
+        <div className="space-y-2">
+          {[0, 1, 2, 3].map((i) => (
+            <Skeleton key={i} className="h-12" />
+          ))}
+        </div>
       </div>
-      <div className="space-y-2">
-        {[0, 1, 2, 3].map((i) => (
-          <Skeleton key={i} className="h-12" />
-        ))}
-      </div>
-    </div>
+    </>
   );
 }
 

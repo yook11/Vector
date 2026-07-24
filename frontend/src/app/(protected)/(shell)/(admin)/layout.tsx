@@ -1,4 +1,5 @@
 import { Header } from "@/components/layout/Header";
+import { PageNavigationContent } from "@/components/layout/PageNavigation";
 import { requireAdmin } from "@/lib/auth/guards";
 
 // admin role を持つユーザのみ通す route segment。
@@ -19,7 +20,9 @@ export default async function AdminLayout({
   return (
     <>
       <Header />
-      <div className="mt-11 h-[calc(100dvh-2.75rem)]">{children}</div>
+      <PageNavigationContent className="mt-11 h-[calc(100dvh-2.75rem)]">
+        {children}
+      </PageNavigationContent>
     </>
   );
 }

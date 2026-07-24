@@ -1,3 +1,4 @@
+import { PageNavigationContent } from "@/components/layout/PageNavigation";
 import { ShellMasthead } from "@/components/layout/ShellMasthead";
 import { PaperSurface, PaperTexture } from "@/components/paper";
 
@@ -19,7 +20,7 @@ export default function ShellMainLayout({
       <ShellMasthead />
       <div className="relative min-h-dvh w-full overflow-hidden">
         <PaperTexture />
-        {children}
+        <PageNavigationContent>{children}</PageNavigationContent>
       </div>
     </PaperSurface>
   );
