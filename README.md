@@ -109,7 +109,7 @@ flowchart TB
 
 この構成を採用した背景や、Redis Streams による再配送、重複実行から DB の整合性を守る仕組みは、Zenn の記事にまとめています。ぜひご覧ください。
 
-[ニュースの収集とAI分析を支える非同期パイプラインの設計]
+[ニュースの収集とAI分析を支える非同期パイプラインの設計](https://zenn.dev/yook/articles/redis-streams-async-pipeline-recovery)
 
 
 ## Getting Started
