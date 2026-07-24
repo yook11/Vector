@@ -9,7 +9,9 @@ import { isRedirectError } from "@/lib/utils/redirect-error";
 import { toastError } from "@/lib/utils/toast-error";
 import { cancelResearchRun } from "../api/cancel-research-run";
 import { submitResearchQuestion } from "../api/submit-research-question";
+import { ResearchUuidSchema } from "../schemas/research";
 import { useResearchNavigation } from "./ResearchNavigationBoundary";
+import { useResearchSubmission } from "./ResearchSubmissionBoundary";
 
 interface ResearchComposerProps {
   threadId?: string;
@@ -21,21 +23,30 @@ export function ResearchComposer({
   activeRunId,
 }: ResearchComposerProps) {
   const { isNavigationPending } = useResearchNavigation();
+  const {
+    acceptSubmission,
+    beginSubmission,
+    finishSubmission,
+    isSubmissionPending,
+  } = useResearchSubmission();
   const router = useRouter();
   const [question, setQuestion] = useState("");
   const [pending, startTransition] = useTransition();
-  const disabled = pending || activeRunId !== null || isNavigationPending;
+  const submitDisabled =
+    isSubmissionPending || activeRunId !== null || isNavigationPending;
 
   function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (disabled) return;
+    if (submitDisabled) return;
     const nextQuestion = question.trim();
     if (!nextQuestion) return;
+    if (!beginSubmission()) return;
 
     startTransition(async () => {
       try {
         const result = await submitResearchQuestion(nextQuestion, threadId);
         if (result.kind === "daily-request-limit-exceeded") {
+          finishSubmission();
           toast.error(
             result.retryAfterSeconds > 0
               ? "本日の利用上限（10回）に達しました。未開始のリクエストを停止すると、その分を再度利用できます。利用枠は日本時間の翌日0:00にリセットされます"
@@ -43,10 +54,22 @@ export function ResearchComposer({
           );
           return;
         }
+        const nextThreadId =
+          threadId === undefined
+            ? ResearchUuidSchema.parse(result.run.threadId)
+            : null;
+        acceptSubmission(
+          result.run,
+          nextThreadId === null ? undefined : `/research/${nextThreadId}`,
+        );
         setQuestion("");
+        if (nextThreadId === null) {
+          router.refresh();
+        }
       } catch (err) {
         if (isRedirectError(err)) throw err;
         toastError(err, "質問を送信できませんでした");
+        finishSubmission();
       }
     });
   }
@@ -67,6 +90,7 @@ export function ResearchComposer({
   return (
     <form
       onSubmit={handleSubmit}
+      aria-busy={isSubmissionPending}
       className="min-w-0 shrink-0 border-t border-[var(--vector-rule)] bg-[var(--vector-surface)]/92 px-3 pt-3 pb-[calc(0.75rem+env(safe-area-inset-bottom))] shadow-[0_-10px_30px_rgba(34,28,22,0.05)]"
     >
       <div className="mx-auto flex w-full max-w-[860px] min-w-0 items-end gap-2">
@@ -83,7 +107,7 @@ export function ResearchComposer({
               ? "回答を生成しています"
               : "市場・技術・企業動向について質問"
           }
-          disabled={disabled}
+          disabled={submitDisabled}
           rows={2}
           maxLength={1000}
           className="min-h-16 min-w-0 flex-1 resize-none rounded-md border border-[var(--vector-line)] bg-[var(--vector-paper)] px-3 py-2 text-base leading-6 text-[var(--vector-ink)] outline-none transition focus:border-[var(--vector-accent)] focus:ring-2 focus:ring-[var(--vector-accent)]/20 disabled:cursor-not-allowed disabled:opacity-60"
@@ -97,7 +121,10 @@ export function ResearchComposer({
             disabled={pending || isNavigationPending}
           >
             {pending ? (
-              <Loader2 aria-hidden="true" className="animate-spin" />
+              <Loader2
+                aria-hidden="true"
+                className="animate-spin motion-reduce:animate-none"
+              />
             ) : (
               <Square aria-hidden="true" />
             )}
@@ -107,14 +134,17 @@ export function ResearchComposer({
           <Button
             type="submit"
             className="h-16 bg-[var(--vector-accent)] text-[var(--vector-on-accent)] hover:bg-[var(--vector-accent-ink)]"
-            disabled={disabled || !question.trim()}
+            disabled={submitDisabled || !question.trim()}
           >
-            {pending ? (
-              <Loader2 aria-hidden="true" className="animate-spin" />
+            {isSubmissionPending ? (
+              <Loader2
+                aria-hidden="true"
+                className="animate-spin motion-reduce:animate-none"
+              />
             ) : (
               <Send aria-hidden="true" />
             )}
-            送信
+            {isSubmissionPending ? "送信中…" : "送信"}
           </Button>
         )}
       </div>

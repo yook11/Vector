@@ -1,9 +1,11 @@
 import { MessageSquareText } from "lucide-react";
+import type { ReactNode } from "react";
 import type {
   ResearchAssistantMessage,
   ResearchThreadDetail,
   ResearchUserMessage,
 } from "@/types/types.gen";
+import { selectActiveResearchRunId } from "../selectors/research-runs";
 import { DeleteThreadButton } from "./DeleteThreadButton";
 import { ResearchAnswerSlot } from "./ResearchAnswerSlot";
 import { ResearchComposer } from "./ResearchComposer";
@@ -12,6 +14,7 @@ import {
   ResearchLiveAnnouncer,
 } from "./ResearchLiveAnnouncer";
 import { ResearchSourcesPanel } from "./ResearchSourcesPanel";
+import { ResearchSubmissionStatus } from "./ResearchSubmissionStatus";
 import {
   ResearchActiveRunBoundary,
   ResearchLiveScrollRegion,
@@ -24,15 +27,6 @@ type ResearchThreadMessage = ResearchUserMessage | ResearchAssistantMessage;
 interface ResearchThreadViewProps {
   thread: ResearchThreadDetail;
   withSourcesPanel?: boolean;
-}
-
-function activeRunId(messages: ResearchThreadMessage[]): string | null {
-  const active = messages.findLast(
-    (message) =>
-      message.role === "user" &&
-      (message.run.status === "queued" || message.run.status === "running"),
-  );
-  return active?.role === "user" ? active.run.runId : null;
 }
 
 function failedAnnouncementRunId(
@@ -124,16 +118,46 @@ function ResearchTurn({
   );
 }
 
-export function ResearchThreadView({
+function EmptyAnswerPanel() {
+  return (
+    <div className="flex flex-1 items-center justify-center px-5 py-10">
+      <div className="w-full max-w-md text-center">
+        <div className="mx-auto max-w-md">
+          <div className="mx-auto flex size-12 items-center justify-center rounded-md bg-[var(--vector-accent-tint)] text-[var(--vector-accent-ink)]">
+            <MessageSquareText aria-hidden="true" className="size-5" />
+          </div>
+          <h2 className="mt-4 text-xl font-semibold text-[var(--vector-ink)]">
+            リサーチを開始
+          </h2>
+          <p className="mt-2 text-sm leading-6 text-[var(--vector-ink-muted)]">
+            企業、技術、市場の動向について質問できます。
+          </p>
+        </div>
+        <div className="mt-6">
+          <ResearchSubmissionStatus />
+        </div>
+      </div>
+    </div>
+  );
+}
+
+export function ResearchWorkspacePanel({
+  composer,
   thread,
-  withSourcesPanel = false,
-}: ResearchThreadViewProps) {
-  const currentRunId = activeRunId(thread.messages);
+  withSourcesPanel = true,
+}: {
+  composer: ReactNode;
+  thread: ResearchThreadDetail | null;
+  withSourcesPanel?: boolean;
+}) {
+  const threadId = thread?.threadId ?? "new";
+  const messages = thread?.messages ?? [];
+  const currentRunId = thread ? selectActiveResearchRunId(messages) : null;
   const announcementRunId =
-    currentRunId ?? failedAnnouncementRunId(thread.messages);
-  const completedIds = completedRunIds(thread.messages);
-  const finalContentKey = finalAnswerContentKey(thread.messages);
-  const answerPanel = (
+    currentRunId ?? (thread ? failedAnnouncementRunId(messages) : null);
+  const completedIds = thread ? completedRunIds(messages) : [];
+  const finalContentKey = thread ? finalAnswerContentKey(messages) : "";
+  const answerPanel = thread ? (
     <ResearchLiveScrollRegion
       key="research-answer-panel"
       finalContentKey={finalContentKey}
@@ -142,7 +166,7 @@ export function ResearchThreadView({
         key="research-answer-list"
         className="mx-auto flex max-w-[860px] min-w-0 flex-col gap-5"
       >
-        {thread.messages.flatMap((message, index, messages) => {
+        {messages.flatMap((message, index) => {
           if (message.role === "user") {
             const nextMessage = messages[index + 1];
             const finalAnswer =
@@ -164,8 +188,11 @@ export function ResearchThreadView({
             />,
           ];
         })}
+        <ResearchSubmissionStatus />
       </div>
     </ResearchLiveScrollRegion>
+  ) : (
+    <EmptyAnswerPanel />
   );
   const headerLeading = (
     <div key="research-header-leading" className="min-w-0 flex-1">
@@ -180,11 +207,11 @@ export function ResearchThreadView({
         key="research-header-title"
         className="truncate text-lg font-semibold text-[var(--vector-ink)]"
       >
-        {thread.title}
+        {thread?.title ?? "新しいリサーチ"}
       </h2>
     </div>
   );
-  const headerActions = (
+  const headerActions = thread ? (
     <div
       key="research-header-actions"
       className="flex shrink-0 items-center gap-2"
@@ -201,37 +228,51 @@ export function ResearchThreadView({
         completedRunIds={completedIds}
       />
     </div>
+  ) : null;
+
+  return (
+    <ResearchLiveAnnouncementBoundary threadId={threadId}>
+      {withSourcesPanel ? (
+        <ResearchSourcesPanel
+          threadId={threadId}
+          messages={messages}
+          headerLeading={headerLeading}
+          headerActions={headerActions}
+          answerPanel={answerPanel}
+          composer={composer}
+          showSourcesControl={thread !== null}
+        />
+      ) : (
+        <>
+          <header className="flex items-center justify-between gap-3 border-b border-[var(--vector-rule)] bg-[var(--vector-surface)]/92 py-3 pr-4 pl-16">
+            {headerLeading}
+            {headerActions}
+          </header>
+          {answerPanel}
+          {composer}
+        </>
+      )}
+    </ResearchLiveAnnouncementBoundary>
   );
-  const composer = (
-    <ResearchComposer
-      key="research-composer"
-      threadId={thread.threadId}
-      activeRunId={currentRunId}
-    />
-  );
+}
+
+export function ResearchThreadView({
+  thread,
+  withSourcesPanel = false,
+}: ResearchThreadViewProps) {
+  const currentRunId = selectActiveResearchRunId(thread.messages);
   return (
     <section className="flex min-h-0 min-w-0 flex-1 flex-col bg-[var(--vector-surface-2)]">
-      <ResearchLiveAnnouncementBoundary threadId={thread.threadId}>
-        {withSourcesPanel ? (
-          <ResearchSourcesPanel
+      <ResearchWorkspacePanel
+        thread={thread}
+        composer={
+          <ResearchComposer
             threadId={thread.threadId}
-            messages={thread.messages}
-            headerLeading={headerLeading}
-            headerActions={headerActions}
-            answerPanel={answerPanel}
-            composer={composer}
+            activeRunId={currentRunId}
           />
-        ) : (
-          <>
-            <header className="flex items-center justify-between gap-3 border-b border-[var(--vector-rule)] bg-[var(--vector-surface)]/92 py-3 pr-4 pl-16">
-              {headerLeading}
-              {headerActions}
-            </header>
-            {answerPanel}
-            {composer}
-          </>
-        )}
-      </ResearchLiveAnnouncementBoundary>
+        }
+        withSourcesPanel={withSourcesPanel}
+      />
     </section>
   );
 }
@@ -251,16 +292,21 @@ export function ResearchEmptyView() {
         </h2>
       </header>
       <div className="flex flex-1 items-center justify-center px-5 py-10">
-        <div className="max-w-md text-center">
-          <div className="mx-auto flex size-12 items-center justify-center rounded-md bg-[var(--vector-accent-tint)] text-[var(--vector-accent-ink)]">
-            <MessageSquareText aria-hidden="true" className="size-5" />
+        <div className="w-full max-w-md text-center">
+          <div className="mx-auto max-w-md">
+            <div className="mx-auto flex size-12 items-center justify-center rounded-md bg-[var(--vector-accent-tint)] text-[var(--vector-accent-ink)]">
+              <MessageSquareText aria-hidden="true" className="size-5" />
+            </div>
+            <h2 className="mt-4 text-xl font-semibold text-[var(--vector-ink)]">
+              リサーチを開始
+            </h2>
+            <p className="mt-2 text-sm leading-6 text-[var(--vector-ink-muted)]">
+              企業、技術、市場の動向について質問できます。
+            </p>
           </div>
-          <h2 className="mt-4 text-xl font-semibold text-[var(--vector-ink)]">
-            リサーチを開始
-          </h2>
-          <p className="mt-2 text-sm leading-6 text-[var(--vector-ink-muted)]">
-            企業、技術、市場の動向について質問できます。
-          </p>
+          <div className="mt-6">
+            <ResearchSubmissionStatus />
+          </div>
         </div>
       </div>
       <ResearchComposer activeRunId={null} />

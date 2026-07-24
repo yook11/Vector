@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import { notFound } from "next/navigation";
 import { Suspense } from "react";
+import { PageNavigationContent } from "@/components/layout/PageNavigation";
 import { ShellMasthead } from "@/components/layout/ShellMasthead";
 import { PaperSurface, PaperTexture } from "@/components/paper";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -11,7 +12,6 @@ import {
   RelatedArticles,
 } from "@/features/news";
 import { getWatchlistIds } from "@/features/watchlist";
-import { ApiError } from "@/lib/api/error";
 import { getCurrentSession, requireSession } from "@/lib/auth/guards";
 import { PositiveIdParamSchema } from "@/lib/validation/id";
 import type {
@@ -46,16 +46,15 @@ export async function generateMetadata({
     // するが、Next.js 16 の cache hit で実 backend hit は 1 回に収束する
     // (https://nextjs.org/docs/app/api-reference/functions/generate-metadata)。
     const article = await getArticleById(parsed.data);
+    if (article === null) {
+      return { title: "Article Not Found | Vector" };
+    }
     return {
       title: `${article.translatedTitle} | Vector`,
     };
-  } catch (err) {
-    // 404/410 は Page 本体の `notFound()` 経路に流すため metadata 側でも
-    // 専用タイトル。それ以外 (5xx 含む) は error.tsx が UI を受け持つので
-    // metadata は generic に留め、誤って 5xx を "Not Found" と誤認させない。
-    if (err instanceof ApiError && (err.status === 404 || err.status === 410)) {
-      return { title: "Article Not Found | Vector" };
-    }
+  } catch {
+    // 5xx / network failure は Page の error.tsx が受け持つため、metadata は
+    // generic に留めて not-found と誤認させない。
     return { title: "Vector" };
   }
 }
@@ -82,6 +81,45 @@ async function RelatedArticlesAsync({
   return <RelatedArticles articles={articles} watchedIds={watchedIds} />;
 }
 
+function NewsDetailSkeleton() {
+  const bar =
+    "animate-pulse motion-reduce:animate-none rounded-sm bg-[color-mix(in_oklab,var(--vector-ink)_10%,transparent)]";
+
+  return (
+    <main className="relative z-10 mx-auto max-w-[1180px] px-5 pb-20 sm:px-8 lg:px-10">
+      <p
+        role="status"
+        aria-live="polite"
+        aria-atomic="true"
+        className="mb-7 text-sm font-medium text-[var(--vector-ink-soft)]"
+      >
+        記事を読み込み中…
+      </p>
+      <div aria-hidden="true">
+        <div className={`mb-7 h-4 w-32 ${bar}`} />
+        <div className={`mb-4 h-11 w-4/5 ${bar}`} />
+        <div className={`mb-6 h-5 w-2/3 ${bar}`} />
+        <div className={`mb-9 h-14 w-full ${bar}`} />
+        <div className="max-w-[860px] space-y-4">
+          <div className={`h-5 w-full ${bar}`} />
+          <div className={`h-5 w-full ${bar}`} />
+          <div className={`h-5 w-5/6 ${bar}`} />
+          <div className={`h-5 w-full ${bar}`} />
+          <div className={`h-5 w-3/4 ${bar}`} />
+        </div>
+        <section className="mt-14 space-y-4">
+          <div className={`h-7 w-28 ${bar}`} />
+          <div className="grid grid-cols-1 gap-x-10 gap-y-8 md:grid-cols-2">
+            {[0, 1].map((item) => (
+              <div key={item} className={`h-28 ${bar}`} />
+            ))}
+          </div>
+        </section>
+      </div>
+    </main>
+  );
+}
+
 function RelatedArticlesSkeleton() {
   return (
     <section className="mt-14 space-y-4" aria-hidden="true">
@@ -92,6 +130,34 @@ function RelatedArticlesSkeleton() {
         ))}
       </div>
     </section>
+  );
+}
+
+async function NewsDetailContent({
+  articlePromise,
+  similarPromise,
+  watchedIdsPromise,
+}: {
+  articlePromise: Promise<ArticleDetailData | null>;
+  similarPromise: Promise<ArticleBrief[]>;
+  watchedIdsPromise: Promise<Set<number>>;
+}) {
+  const article = await articlePromise;
+  if (article === null) {
+    notFound();
+  }
+  const watchedIds = await watchedIdsPromise;
+
+  return (
+    <main className="relative z-10 mx-auto max-w-[1180px] px-5 pb-20 sm:px-8 lg:px-10">
+      <NewsDetail article={article} isWatched={watchedIds.has(article.id)} />
+      <Suspense fallback={<RelatedArticlesSkeleton />}>
+        <RelatedArticlesAsync
+          articlesPromise={similarPromise}
+          watchedIds={watchedIds}
+        />
+      </Suspense>
+    </main>
   );
 }
 
@@ -117,34 +183,20 @@ export default async function NewsPage({ params }: NewsPageProps) {
   const similarPromise = getSimilarArticles(articleId, 5);
   const watchedIdsPromise = getWatchlistIds();
 
-  let article: ArticleDetailData;
-  try {
-    article = await articlePromise;
-  } catch (err) {
-    if (err instanceof ApiError && err.status === 404) {
-      notFound();
-    }
-    throw err;
-  }
-  const watchedIds = await watchedIdsPromise;
-
   return (
     <PaperSurface>
       <ShellMasthead />
       <div className="relative">
         <PaperTexture />
-        <main className="relative z-10 mx-auto max-w-[1180px] px-5 pb-20 sm:px-8 lg:px-10">
-          <NewsDetail
-            article={article}
-            isWatched={watchedIds.has(article.id)}
-          />
-          <Suspense fallback={<RelatedArticlesSkeleton />}>
-            <RelatedArticlesAsync
-              articlesPromise={similarPromise}
-              watchedIds={watchedIds}
+        <PageNavigationContent>
+          <Suspense fallback={<NewsDetailSkeleton />}>
+            <NewsDetailContent
+              articlePromise={articlePromise}
+              similarPromise={similarPromise}
+              watchedIdsPromise={watchedIdsPromise}
             />
           </Suspense>
-        </main>
+        </PageNavigationContent>
       </div>
     </PaperSurface>
   );

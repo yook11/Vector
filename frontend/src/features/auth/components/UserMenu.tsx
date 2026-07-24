@@ -66,7 +66,10 @@ export function UserMenu({
         {isSigningOut ? (
           <Loader2Icon
             aria-hidden="true"
-            className={cn("size-4 animate-spin", !compact && "mr-1")}
+            className={cn(
+              "size-4 animate-spin motion-reduce:animate-none",
+              !compact && "mr-1",
+            )}
           />
         ) : (
           <LogOut

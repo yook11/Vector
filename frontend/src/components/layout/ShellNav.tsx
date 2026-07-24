@@ -1,9 +1,9 @@
 "use client";
 
-import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { NavPendingDot } from "@/components/layout/NavPendingDot";
 import { NAV_ICONS } from "@/components/layout/nav-items";
+import { PendingAwareLink } from "@/components/layout/PageNavigation";
 import { useProtectedNavItems } from "@/components/layout/useProtectedNavItems";
 
 /**
@@ -27,10 +27,15 @@ export function ShellNav() {
             ? pathname === "/"
             : pathname === item.href || pathname?.startsWith(`${item.href}/`);
         const Icon = NAV_ICONS[item.icon];
+        const isResearchSection =
+          item.href === "/research" && pathname?.startsWith("/research");
         return (
-          <Link
+          <PendingAwareLink
             key={item.href}
             href={item.href}
+            onClick={
+              isResearchSection ? (event) => event.preventDefault() : undefined
+            }
             aria-current={active ? "page" : undefined}
             className={
               active
@@ -48,7 +53,7 @@ export function ShellNav() {
             />
             {item.label}
             <NavPendingDot />
-          </Link>
+          </PendingAwareLink>
         );
       })}
     </nav>

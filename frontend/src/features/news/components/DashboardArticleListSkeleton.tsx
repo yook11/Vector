@@ -7,12 +7,21 @@ const bar =
  * カテゴリ・並び替えの再取得中に出すプレースホルダ。
  * DashboardPaperArticleList と同じ 2 カラムグリッドで PaperArticleCard の骨格を写す。
  */
-export function DashboardArticleListSkeleton() {
+export function DashboardArticleListSkeleton({
+  label = "記事を更新中…",
+}: {
+  label?: string;
+}) {
   return (
     <div>
-      <span role="status" aria-live="polite" className="sr-only">
-        記事を読み込み中
-      </span>
+      <p
+        role="status"
+        aria-live="polite"
+        aria-atomic="true"
+        className="mb-5 text-sm font-medium text-[var(--vector-ink-soft)]"
+      >
+        {label}
+      </p>
       <div
         aria-hidden="true"
         className="grid grid-cols-1 gap-x-12 gap-y-[30px] md:grid-cols-2"
@@ -21,7 +30,7 @@ export function DashboardArticleListSkeleton() {
           <div
             // biome-ignore lint/suspicious/noArrayIndexKey: static skeleton list
             key={index}
-            className="flex animate-pulse flex-col border-b border-[color-mix(in_oklab,var(--vector-ink)_14%,transparent)] pb-6"
+            className="flex animate-pulse motion-reduce:animate-none flex-col border-b border-[color-mix(in_oklab,var(--vector-ink)_14%,transparent)] pb-6"
           >
             <div className={`mb-3.5 h-3 w-24 ${bar}`} />
             <div className="mb-3.5 space-y-2.5">

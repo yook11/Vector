@@ -1,11 +1,12 @@
 import {
   act,
   cleanup,
-  render,
   screen,
+  render as testingLibraryRender,
   waitFor,
   within,
 } from "@testing-library/react";
+import type { ReactElement, ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type {
   ResearchAssistantMessage,
@@ -14,6 +15,8 @@ import type {
   ResearchThreadDetail,
   ResearchUserMessage,
 } from "@/types/types.gen";
+import { ResearchOperationProvider } from "./ResearchOperationBoundary";
+import { ResearchSubmissionProvider } from "./ResearchSubmissionBoundary";
 import { ResearchThreadView } from "./ResearchThreadView";
 
 const THREAD_ONE = "00000000-0000-4000-a000-000000000001";
@@ -29,6 +32,18 @@ const GENERATED_POLICY_BLOCKED_STATUSES: [
   Extract<ResearchMessageRun["status"], "policy_blocked">,
   Extract<ResearchRunResponse["status"], "policy_blocked">,
 ] = ["policy_blocked", "policy_blocked"];
+
+function ResearchThreadViewContract({ children }: { children: ReactNode }) {
+  return (
+    <ResearchOperationProvider>
+      <ResearchSubmissionProvider>{children}</ResearchSubmissionProvider>
+    </ResearchOperationProvider>
+  );
+}
+
+function render(element: ReactElement) {
+  return testingLibraryRender(element, { wrapper: ResearchThreadViewContract });
+}
 
 interface ScrollCapture {
   containerRef: { readonly current: HTMLElement | null };

@@ -1,13 +1,7 @@
 "use client";
 
-import { Loader2Icon } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
-
-// unstable_retry は内部で別 transition を張って refetch するため、呼び出し側の
-// useTransition では押下中フィードバックを保持できない (isPending が refetch を跨がない)。
-// 押下が受理されたことを最低限可視化するための固定窓。
-const RETRY_FEEDBACK_MS = 600;
 
 interface ErrorMessageProps {
   title: string;
@@ -23,26 +17,14 @@ export function ErrorMessage({
   error,
   unstable_retry,
 }: ErrorMessageProps) {
-  const [isRetrying, setIsRetrying] = useState(false);
-  const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const [retryAccepted, setRetryAccepted] = useState(false);
 
   useEffect(() => {
     console.error(error);
   }, [error]);
 
-  useEffect(
-    () => () => {
-      if (timerRef.current) clearTimeout(timerRef.current);
-    },
-    [],
-  );
-
   const handleRetry = () => {
-    setIsRetrying(true);
-    timerRef.current = setTimeout(
-      () => setIsRetrying(false),
-      RETRY_FEEDBACK_MS,
-    );
+    setRetryAccepted(true);
     unstable_retry();
   };
 
@@ -55,14 +37,20 @@ export function ErrorMessage({
           variant="outline"
           size="sm"
           onClick={handleRetry}
-          disabled={isRetrying}
-          aria-busy={isRetrying}
+          aria-busy={false}
         >
-          {isRetrying && (
-            <Loader2Icon aria-hidden="true" className="animate-spin" />
-          )}
-          {isRetrying ? "再試行中…" : "再試行"}
+          再試行
         </Button>
+        {retryAccepted && (
+          <p
+            role="status"
+            aria-label="再試行を開始しました"
+            aria-live="polite"
+            aria-atomic="true"
+          >
+            再試行を開始しました
+          </p>
+        )}
       </div>
     </main>
   );

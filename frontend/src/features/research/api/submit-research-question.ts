@@ -1,7 +1,5 @@
 "use server";
 
-import { revalidatePath } from "next/cache";
-import { redirect } from "next/navigation";
 import { requireSessionForAction } from "@/lib/auth/guards";
 import {
   ResearchQuestionSchema,
@@ -27,10 +25,5 @@ export async function submitResearchQuestion(
   });
   if (result.kind === "daily-request-limit-exceeded") return result;
 
-  revalidatePath("/research");
-  revalidatePath(`/research/${result.run.threadId}`);
-  if (parsedThreadId === undefined) {
-    redirect(`/research/${result.run.threadId}`);
-  }
   return result;
 }

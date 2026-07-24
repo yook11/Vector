@@ -1,8 +1,8 @@
-import Link from "next/link";
 import { MobileNav } from "@/components/layout/MobileNav";
 import { NavLink } from "@/components/layout/NavLink";
 import { NavPendingDot } from "@/components/layout/NavPendingDot";
 import { getProtectedNavItems, NAV_ICONS } from "@/components/layout/nav-items";
+import { PendingAwareLink } from "@/components/layout/PageNavigation";
 import { ThemeToggle } from "@/components/layout/ThemeToggle";
 import { UserMenu } from "@/features/auth";
 import { getCurrentSession } from "@/lib/auth/guards";
@@ -17,12 +17,12 @@ export async function Header() {
     <header className="fixed top-0 z-50 w-full bg-background/70 backdrop-blur-xl">
       <div className="mx-auto grid h-11 grid-cols-[1fr_auto_1fr] items-center px-5 sm:px-8">
         <div className="flex items-center">
-          <Link
+          <PendingAwareLink
             href="/"
             className="text-sm font-semibold tracking-tight opacity-90 transition-opacity hover:opacity-100"
           >
             Vector
-          </Link>
+          </PendingAwareLink>
         </div>
 
         <nav className="hidden sm:flex items-center gap-7">
@@ -32,6 +32,7 @@ export async function Header() {
               <NavLink
                 key={item.href}
                 href={item.href}
+                pendingAware
                 className="inline-flex items-center gap-1.5 text-xs text-foreground/60 transition-colors duration-300 hover:text-foreground"
               >
                 <Icon aria-hidden="true" className="size-3.5" />

@@ -1,7 +1,6 @@
 "use client";
 
 import { ExternalLink, FileText, Library, X } from "lucide-react";
-import Link from "next/link";
 import {
   type ReactNode,
   useEffect,
@@ -10,6 +9,7 @@ import {
   useState,
   useSyncExternalStore,
 } from "react";
+import { PendingAwareLink } from "@/components/layout/PageNavigation";
 import { Button } from "@/components/ui/button";
 import {
   Sheet,
@@ -81,9 +81,12 @@ function SourceTitle({ source }: { source: ResearchSource }) {
   }
   if (source.articleId !== null) {
     return (
-      <Link href={`/news/${source.articleId}`} className={className}>
+      <PendingAwareLink
+        href={`/news/${source.articleId}`}
+        className={className}
+      >
         {source.title}
-      </Link>
+      </PendingAwareLink>
     );
   }
   return <p className={className}>{source.title}</p>;
@@ -187,6 +190,7 @@ interface ResearchSourcesPanelProps {
   headerActions: ReactNode;
   answerPanel: ReactNode;
   composer: ReactNode;
+  showSourcesControl?: boolean;
 }
 
 export function ResearchSourcesPanel({
@@ -196,6 +200,7 @@ export function ResearchSourcesPanel({
   headerActions,
   answerPanel,
   composer,
+  showSourcesControl = true,
 }: ResearchSourcesPanelProps) {
   const isWide = useWideSourcesViewport();
   const { pendingTarget } = useResearchNavigation();
@@ -301,23 +306,25 @@ export function ResearchSourcesPanel({
       <header className="flex shrink-0 items-center justify-between gap-3 border-b border-[var(--vector-rule)] bg-[var(--vector-surface)]/92 py-3 pr-4 pl-16">
         {headerLeading}
         <div className="flex shrink-0 items-center gap-2">
-          <Button
-            ref={triggerRef}
-            type="button"
-            variant="outline"
-            size="sm"
-            aria-expanded={surface !== "closed"}
-            aria-controls={controlledId}
-            disabled={!hasSources}
-            onClick={toggleSources}
-            className="border-[var(--vector-rule)] bg-[var(--vector-paper)] shadow-none"
-          >
-            <Library aria-hidden="true" className="size-3.5" />
-            <span>ソース</span>
-            <span className="rounded-sm bg-[var(--vector-accent-tint)] px-1.5 text-[11px] text-[var(--vector-accent-ink)]">
-              {sourceCount}
-            </span>
-          </Button>
+          {showSourcesControl ? (
+            <Button
+              ref={triggerRef}
+              type="button"
+              variant="outline"
+              size="sm"
+              aria-expanded={surface !== "closed"}
+              aria-controls={controlledId}
+              disabled={!hasSources}
+              onClick={toggleSources}
+              className="border-[var(--vector-rule)] bg-[var(--vector-paper)] shadow-none"
+            >
+              <Library aria-hidden="true" className="size-3.5" />
+              <span>ソース</span>
+              <span className="rounded-sm bg-[var(--vector-accent-tint)] px-1.5 text-[11px] text-[var(--vector-accent-ink)]">
+                {sourceCount}
+              </span>
+            </Button>
+          ) : null}
           {headerActions}
         </div>
       </header>

@@ -41,7 +41,7 @@ export function PaperNewsPagination({
         <Loader2Icon
           aria-hidden="true"
           className={cn(
-            "size-3 shrink-0 animate-spin transition-opacity duration-200",
+            "size-3 shrink-0 animate-spin motion-reduce:animate-none transition-opacity duration-200",
             isPending ? "opacity-100" : "opacity-0",
           )}
         />

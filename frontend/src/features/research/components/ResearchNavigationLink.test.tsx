@@ -4,6 +4,14 @@ import { type ComponentProps, createElement } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { ResearchNavigationBoundary } from "./ResearchNavigationBoundary";
 import { ResearchNavigationLink } from "./ResearchNavigationLink";
+import {
+  ResearchOperationProvider,
+  useResearchOperation,
+} from "./ResearchOperationBoundary";
+import {
+  ResearchSubmissionProvider,
+  useResearchSubmission,
+} from "./ResearchSubmissionBoundary";
 
 const mocks = vi.hoisted(() => ({
   pathname: "/research/00000000-0000-4000-a000-000000000001",
@@ -88,11 +96,35 @@ function ThreadLinks() {
   );
 }
 
+function StartSubmission() {
+  const { beginSubmission } = useResearchSubmission();
+  return (
+    <button type="button" onClick={() => beginSubmission()}>
+      submission開始
+    </button>
+  );
+}
+
+function StartDelete() {
+  const { claimOperation } = useResearchOperation();
+  return (
+    <button type="button" onClick={() => claimOperation("delete")}>
+      delete開始
+    </button>
+  );
+}
+
 function renderLinks() {
   return render(
-    <ResearchNavigationBoundary sidebar={<ThreadLinks />}>
-      <p>旧本文</p>
-    </ResearchNavigationBoundary>,
+    <ResearchOperationProvider>
+      <ResearchSubmissionProvider>
+        <ResearchNavigationBoundary sidebar={<ThreadLinks />}>
+          <StartSubmission />
+          <StartDelete />
+          <p>旧本文</p>
+        </ResearchNavigationBoundary>
+      </ResearchSubmissionProvider>
+    </ResearchOperationProvider>,
   );
 }
 
@@ -162,6 +194,48 @@ describe("ResearchNavigationLink", () => {
     await user.click(screen.getByRole("link", { name: /Thread B/ }));
     await user.click(screen.getByRole("link", { name: /さらに表示/ }));
     expect(mocks.push).toHaveBeenCalledTimes(1);
+  });
+
+  it("submission pending中はthread/new/moreすべてをaria-disabledにしてnavigationを拒否する", async () => {
+    const user = userEvent.setup();
+    renderLinks();
+
+    await user.click(screen.getByRole("button", { name: "submission開始" }));
+
+    const links = [
+      screen.getByRole("link", { name: /Thread A/ }),
+      screen.getByRole("link", { name: /Thread B/ }),
+      screen.getByRole("link", { name: "新しいスレッド" }),
+      screen.getByRole("link", { name: /さらに表示/ }),
+    ];
+    for (const link of links) {
+      expect(link).toHaveAttribute("aria-disabled", "true");
+      expect(link).toHaveAttribute("href");
+    }
+
+    await user.click(links[1] as HTMLElement);
+    await user.click(links[2] as HTMLElement);
+    await user.click(links[3] as HTMLElement);
+    expect(mocks.push).not.toHaveBeenCalled();
+  });
+
+  it("delete claim中はinternal linkのhrefを保ったまま全activationを拒否する", async () => {
+    const user = userEvent.setup();
+    renderLinks();
+    await user.click(screen.getByRole("button", { name: "delete開始" }));
+
+    const links = [
+      screen.getByRole("link", { name: /Thread B/ }),
+      screen.getByRole("link", { name: "新しいスレッド" }),
+      screen.getByRole("link", { name: /さらに表示/ }),
+    ];
+    for (const link of links) {
+      expect(link).toHaveAttribute("aria-disabled", "true");
+      expect(link).toHaveAttribute("href");
+      await user.click(link);
+    }
+
+    expect(mocks.push).not.toHaveBeenCalled();
   });
 
   it("modifierとmiddle clickをpreventしない", () => {
