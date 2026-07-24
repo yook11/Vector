@@ -1,7 +1,7 @@
 "use client";
 
-import { Trash2 } from "lucide-react";
-import { useTransition } from "react";
+import { Loader2, Trash2 } from "lucide-react";
+import { useEffect, useRef, useState, useTransition } from "react";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -18,6 +18,7 @@ import { isRedirectError } from "@/lib/utils/redirect-error";
 import { toastError } from "@/lib/utils/toast-error";
 import { deleteResearchThread } from "../api/delete-research-thread";
 import { useResearchNavigation } from "./ResearchNavigationBoundary";
+import { useResearchOperation } from "./ResearchOperationBoundary";
 
 interface DeleteThreadButtonProps {
   threadId: string;
@@ -29,23 +30,46 @@ export function DeleteThreadButton({
   title,
 }: DeleteThreadButtonProps) {
   const { isNavigationPending } = useResearchNavigation();
-  const [pending, startTransition] = useTransition();
-  const disabled = pending || isNavigationPending;
+  const { claimOperation, operation, releaseOperation } =
+    useResearchOperation();
+  const [isOpen, setIsOpen] = useState(false);
+  const [isDeleting, setIsDeleting] = useState(false);
+  const [, startTransition] = useTransition();
+  const deletionLockRef = useRef(false);
+  const disabled = isDeleting || isNavigationPending || operation !== null;
 
   function handleDelete() {
-    if (disabled) return;
+    if (disabled || deletionLockRef.current) return;
+    if (!claimOperation("delete")) return;
+    deletionLockRef.current = true;
+    setIsDeleting(true);
     startTransition(async () => {
       try {
         await deleteResearchThread(threadId);
       } catch (err) {
         if (isRedirectError(err)) throw err;
+        deletionLockRef.current = false;
+        setIsDeleting(false);
+        releaseOperation("delete");
         toastError(err, "スレッドを削除できませんでした");
       }
     });
   }
 
+  useEffect(
+    () => () => {
+      releaseOperation("delete");
+    },
+    [releaseOperation],
+  );
+
   return (
-    <AlertDialog>
+    <AlertDialog
+      open={isOpen}
+      onOpenChange={(nextOpen) => {
+        if (!disabled) setIsOpen(nextOpen);
+      }}
+    >
       <AlertDialogTrigger asChild>
         <Button
           type="button"
@@ -71,9 +95,19 @@ export function DeleteThreadButton({
           <AlertDialogAction
             variant="destructive"
             disabled={disabled}
-            onClick={handleDelete}
+            aria-busy={isDeleting}
+            onClick={(event) => {
+              event.preventDefault();
+              handleDelete();
+            }}
           >
-            削除
+            {isDeleting && (
+              <Loader2
+                aria-hidden="true"
+                className="animate-spin motion-reduce:animate-none"
+              />
+            )}
+            {isDeleting ? "削除中…" : "削除"}
           </AlertDialogAction>
         </AlertDialogFooter>
       </AlertDialogContent>

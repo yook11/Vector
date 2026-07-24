@@ -1,4 +1,4 @@
-import { act, fireEvent, render, screen } from "@testing-library/react";
+import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ErrorMessage } from "./ErrorMessage";
@@ -68,37 +68,32 @@ describe("ErrorMessage", () => {
     expect(button).toHaveAttribute("aria-busy", "false");
   });
 
-  // unstable_retry は内部 transition で refetch するため、押下受理は local の最小可視窓で表す。
-  it("押下中は disabled + aria-busy + 「再試行中…」、最小可視時間後に解除される", () => {
+  it("retry受付をpendingへ偽装せず単一live statusで通知する", async () => {
     vi.spyOn(console, "error").mockImplementation(() => {});
-    vi.useFakeTimers();
-    try {
-      render(
-        <ErrorMessage
-          title="エラー"
-          description="説明"
-          error={testError}
-          unstable_retry={vi.fn()}
-        />,
-      );
+    const retry = vi.fn();
+    const user = userEvent.setup();
 
-      act(() => {
-        fireEvent.click(screen.getByRole("button", { name: "再試行" }));
-      });
+    render(
+      <ErrorMessage
+        title="エラー"
+        description="説明"
+        error={testError}
+        unstable_retry={retry}
+      />,
+    );
 
-      const pending = screen.getByRole("button", { name: "再試行中…" });
-      expect(pending).toBeDisabled();
-      expect(pending).toHaveAttribute("aria-busy", "true");
+    await user.click(screen.getByRole("button", { name: "再試行" }));
 
-      act(() => {
-        vi.advanceTimersByTime(600);
-      });
-
-      const restored = screen.getByRole("button", { name: "再試行" });
-      expect(restored).toBeEnabled();
-      expect(restored).toHaveAttribute("aria-busy", "false");
-    } finally {
-      vi.useRealTimers();
-    }
+    const button = screen.getByRole("button", { name: "再試行" });
+    const notices = screen.getAllByRole("status", {
+      name: "再試行を開始しました",
+    });
+    expect(retry).toHaveBeenCalledTimes(1);
+    expect(button).toBeEnabled();
+    expect(button).not.toHaveAttribute("aria-busy", "true");
+    expect(screen.queryByRole("button", { name: "再試行中…" })).toBeNull();
+    expect(notices).toHaveLength(1);
+    expect(notices[0]).toHaveAttribute("aria-live", "polite");
+    expect(notices[0]).toHaveAttribute("aria-atomic", "true");
   });
 });

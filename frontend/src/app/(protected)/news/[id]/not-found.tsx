@@ -1,5 +1,11 @@
 import { NotFoundMessage } from "@/components/feedback/NotFoundMessage";
+import { PageNavigationReset } from "@/components/layout/PageNavigation";
 
 export default function NewsNotFound() {
-  return <NotFoundMessage message="Article not found." />;
+  return (
+    <>
+      <PageNavigationReset />
+      <NotFoundMessage message="Article not found." />
+    </>
+  );
 }

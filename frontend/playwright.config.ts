@@ -44,6 +44,7 @@ export default defineConfig({
         /register\.spec\.ts$/,
         /source-admin\.spec\.ts$/,
         /admin-user-provisioning\.spec\.ts$/,
+        /feature-data-admin-loading\.spec\.ts$/,
         // 認証境界 spec は専用 auth-boundary project 専属。user は testMatch を
         // 持たず denylist 方式なので、除外しないと認証済み storageState で二重
         // 実行され anon redirect 期待が壊れる。
@@ -61,6 +62,7 @@ export default defineConfig({
       testMatch: [
         /source-admin\.spec\.ts$/,
         /admin-user-provisioning\.spec\.ts$/,
+        /feature-data-admin-loading\.spec\.ts$/,
       ],
     },
     {

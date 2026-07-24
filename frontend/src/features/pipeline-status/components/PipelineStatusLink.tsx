@@ -1,4 +1,4 @@
-import Link from "next/link";
+import { PendingAwareLink } from "@/components/layout/PageNavigation";
 
 /**
  * Pipeline Status 画面 (/admin/pipeline-status) への admin 専用導線リンク。
@@ -9,11 +9,11 @@ import Link from "next/link";
  */
 export function PipelineStatusLink() {
   return (
-    <Link
+    <PendingAwareLink
       href="/admin/pipeline-status"
       className="inline-block text-xs text-muted-foreground underline underline-offset-4 hover:text-foreground"
     >
       Pipeline Status
-    </Link>
+    </PendingAwareLink>
   );
 }

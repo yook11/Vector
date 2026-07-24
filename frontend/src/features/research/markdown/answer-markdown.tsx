@@ -1,7 +1,7 @@
 "use client";
 
 import type { JSX } from "react";
-import { createElement, useId } from "react";
+import { createElement, useId, useMemo } from "react";
 import type {
   Components,
   ExtraProps,
@@ -210,9 +210,12 @@ export function useAnswerMarkdownConfig(): AnswerMarkdownConfig {
   const clobberPrefix = `user-content-${instanceId}-`;
   const footnoteLabelId = `${clobberPrefix}footnote-label`;
 
-  return {
-    remarkPlugins: [[remarkGfm, { singleTilde: false }], remarkBreaks],
-    remarkRehypeOptions: { clobberPrefix },
-    components: createAnswerMarkdownComponents(footnoteLabelId),
-  };
+  return useMemo(
+    () => ({
+      remarkPlugins: [[remarkGfm, { singleTilde: false }], remarkBreaks],
+      remarkRehypeOptions: { clobberPrefix },
+      components: createAnswerMarkdownComponents(footnoteLabelId),
+    }),
+    [clobberPrefix, footnoteLabelId],
+  );
 }

@@ -2,9 +2,12 @@ import type {
   PaginatedResearchThreadResponse,
   ResearchThreadDetail,
 } from "@/types/types.gen";
+import { selectActiveResearchRunId } from "../selectors/research-runs";
+import { ResearchComposer } from "./ResearchComposer";
+import { ResearchModelCommitReporter } from "./ResearchModelCommitReporter";
 import { ResearchNavigationBoundary } from "./ResearchNavigationBoundary";
 import { ResearchSidebar } from "./ResearchSidebar";
-import { ResearchEmptyView, ResearchThreadView } from "./ResearchThreadView";
+import { ResearchWorkspacePanel } from "./ResearchThreadView";
 
 interface ResearchWorkspaceProps {
   threads: PaginatedResearchThreadResponse;
@@ -17,6 +20,8 @@ export function ResearchWorkspace({
   thread,
   limit,
 }: ResearchWorkspaceProps) {
+  const currentRunId = selectActiveResearchRunId(thread?.messages ?? []);
+
   return (
     <ResearchNavigationBoundary
       sidebar={
@@ -27,11 +32,18 @@ export function ResearchWorkspace({
         />
       }
     >
-      {thread ? (
-        <ResearchThreadView thread={thread} withSourcesPanel />
-      ) : (
-        <ResearchEmptyView />
-      )}
+      <ResearchModelCommitReporter thread={thread} />
+      <section className="flex min-h-0 min-w-0 flex-1 flex-col bg-[var(--vector-surface-2)]">
+        <ResearchWorkspacePanel
+          thread={thread}
+          composer={
+            <ResearchComposer
+              threadId={thread?.threadId}
+              activeRunId={currentRunId}
+            />
+          }
+        />
+      </section>
     </ResearchNavigationBoundary>
   );
 }

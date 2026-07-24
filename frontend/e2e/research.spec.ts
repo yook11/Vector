@@ -1,4 +1,11 @@
-import { expect, type Locator, type Page, test } from "@playwright/test";
+import { randomUUID } from "node:crypto";
+import {
+  expect,
+  type Locator,
+  type Page,
+  type Route,
+  test,
+} from "@playwright/test";
 import {
   RESEARCH_CONTINUITY,
   RESEARCH_EXPANDED_HISTORY_LIMIT,
@@ -16,8 +23,11 @@ import {
   type ResearchContinuityRect,
 } from "./fixtures/research-continuity";
 import {
+  completeResearchContinuity,
   failResearchContinuity,
+  failResearchSubmission,
   resetResearchContinuity,
+  resetResearchDailyQuota,
   resetResearchRateLimits,
 } from "./fixtures/research-runtime";
 
@@ -33,6 +43,48 @@ const REQUIRED_VIEWPORTS = [
   { width: 1024, height: 768 },
   { width: 1440, height: 900 },
 ] as const;
+
+interface NewSubmissionRect {
+  width: number;
+  height: number;
+}
+
+interface NewSubmissionPaintSample {
+  timestamp: number;
+  documentToken: string;
+  paperConnected: boolean;
+  mastheadConnected: boolean;
+  mainConnected: boolean;
+  workspaceConnected: boolean;
+  composerConnected: boolean;
+  samePaper: boolean;
+  sameMasthead: boolean;
+  sameMain: boolean;
+  sameWorkspace: boolean;
+  sameComposer: boolean;
+  paperRect: NewSubmissionRect;
+  mastheadRect: NewSubmissionRect;
+  mainRect: NewSubmissionRect;
+  workspaceRect: NewSubmissionRect;
+  composerRect: NewSubmissionRect;
+  composerBusy: string | null;
+  submissionStatusCount: number;
+  researchSkeletonCount: number;
+  pageNavigationOverlayCount: number;
+  researchNavigationOverlayCount: number;
+  bootstrapLoadingCount: number;
+  newsLoadingCount: number;
+}
+
+interface NewSubmissionSamplerBridge {
+  documentToken: string;
+  samples: NewSubmissionPaintSample[];
+  stop: () => void;
+}
+
+type NewSubmissionWindow = Window & {
+  __researchNewSubmissionSampler?: NewSubmissionSamplerBridge;
+};
 
 function alphaPath(limit = RESEARCH_HISTORY_LIMIT, legacyView = false) {
   const view = legacyView ? "&view=sources" : "";
@@ -136,6 +188,341 @@ async function expectSourcesClosed(page: Page): Promise<void> {
     0,
   );
   await expect(page.getByRole("dialog", { name: "ソース" })).toHaveCount(0);
+}
+
+async function installNewSubmissionSampler(
+  page: Page,
+): Promise<NewSubmissionPaintSample> {
+  return page.evaluate(() => {
+    const main = document.querySelector<HTMLElement>("main");
+    const masthead = document.querySelector<HTMLElement>("header");
+    const textarea =
+      document.querySelector<HTMLTextAreaElement>("#research-question");
+    const composer = textarea?.closest<HTMLFormElement>("form") ?? null;
+    const workspace = composer?.closest<HTMLElement>("section") ?? null;
+    const paper =
+      masthead?.parentElement instanceof HTMLElement
+        ? masthead.parentElement
+        : null;
+    if (
+      paper === null ||
+      masthead === null ||
+      main === null ||
+      workspace === null ||
+      composer === null
+    ) {
+      throw new Error("New submission sampler target is missing");
+    }
+    const initialPaper = paper;
+    const initialMasthead = masthead;
+    const initialMain = main;
+    const initialWorkspace = workspace;
+    const initialComposer = composer;
+
+    const documentToken = crypto.randomUUID();
+    const samples: NewSubmissionPaintSample[] = [];
+    let stopped = false;
+    let animationFrame = 0;
+
+    function rect(element: Element): NewSubmissionRect {
+      const box = element.getBoundingClientRect();
+      return { width: box.width, height: box.height };
+    }
+
+    function isVisible(element: Element): boolean {
+      const box = element.getBoundingClientRect();
+      const style = getComputedStyle(element);
+      return (
+        box.width > 0 &&
+        box.height > 0 &&
+        style.display !== "none" &&
+        style.visibility !== "hidden"
+      );
+    }
+
+    function visibleCount(selector: string): number {
+      return Array.from(document.querySelectorAll(selector)).filter(isVisible)
+        .length;
+    }
+
+    function visibleTextCount(selector: string, text: string): number {
+      return Array.from(document.querySelectorAll(selector)).filter(
+        (element) =>
+          isVisible(element) && element.textContent?.includes(text) === true,
+      ).length;
+    }
+
+    function currentTargets() {
+      const currentMain = document.querySelector<HTMLElement>("main");
+      const currentTextarea =
+        document.querySelector<HTMLTextAreaElement>("#research-question");
+      const currentComposer =
+        currentTextarea?.closest<HTMLFormElement>("form") ?? null;
+      const currentWorkspace =
+        currentComposer?.closest<HTMLElement>("section") ?? null;
+      const currentMasthead = document.querySelector<HTMLElement>("header");
+      const currentPaper =
+        currentMasthead?.parentElement instanceof HTMLElement
+          ? currentMasthead.parentElement
+          : null;
+      return {
+        currentPaper,
+        currentMasthead,
+        currentMain,
+        currentWorkspace,
+        currentComposer,
+      };
+    }
+
+    function record(): void {
+      const {
+        currentPaper,
+        currentMasthead,
+        currentMain,
+        currentWorkspace,
+        currentComposer,
+      } = currentTargets();
+      samples.push({
+        timestamp: performance.now(),
+        documentToken,
+        paperConnected: initialPaper.isConnected,
+        mastheadConnected: initialMasthead.isConnected,
+        mainConnected: initialMain.isConnected,
+        workspaceConnected: initialWorkspace.isConnected,
+        composerConnected: initialComposer.isConnected,
+        samePaper: currentPaper === initialPaper,
+        sameMasthead: currentMasthead === initialMasthead,
+        sameMain: currentMain === initialMain,
+        sameWorkspace: currentWorkspace === initialWorkspace,
+        sameComposer: currentComposer === initialComposer,
+        paperRect: rect(initialPaper),
+        mastheadRect: rect(initialMasthead),
+        mainRect: rect(initialMain),
+        workspaceRect: rect(initialWorkspace),
+        composerRect: rect(initialComposer),
+        composerBusy: currentComposer?.getAttribute("aria-busy") ?? null,
+        submissionStatusCount: visibleCount(
+          '[role="status"][aria-label="質問を送信しています…"]',
+        ),
+        researchSkeletonCount: visibleCount(
+          '[role="status"][aria-label="Researchを読み込み中…"]',
+        ),
+        pageNavigationOverlayCount: visibleCount(
+          '[data-testid="page-navigation-overlay"]',
+        ),
+        researchNavigationOverlayCount: visibleCount(
+          '[data-testid="research-navigation-overlay"]',
+        ),
+        bootstrapLoadingCount: visibleTextCount(
+          '[role="status"]',
+          "画面を準備しています…",
+        ),
+        newsLoadingCount: visibleTextCount(
+          '[role="status"]',
+          "記事を読み込み中…",
+        ),
+      });
+    }
+
+    function sampleNextPaint(): void {
+      if (stopped) return;
+      animationFrame = requestAnimationFrame(() => {
+        record();
+        sampleNextPaint();
+      });
+    }
+
+    const bridge: NewSubmissionSamplerBridge = {
+      documentToken,
+      samples,
+      stop: () => {
+        stopped = true;
+        cancelAnimationFrame(animationFrame);
+      },
+    };
+    (window as NewSubmissionWindow).__researchNewSubmissionSampler = bridge;
+    record();
+    sampleNextPaint();
+    return samples[0] as NewSubmissionPaintSample;
+  });
+}
+
+async function newSubmissionSamples(
+  page: Page,
+): Promise<NewSubmissionPaintSample[]> {
+  return page.evaluate(() => {
+    const bridge = (window as NewSubmissionWindow)
+      .__researchNewSubmissionSampler;
+    if (bridge === undefined) {
+      throw new Error("New submission sampler document was replaced");
+    }
+    return bridge.samples;
+  });
+}
+
+async function stopNewSubmissionSampler(page: Page): Promise<void> {
+  await page.evaluate(() => {
+    const bridge = (window as NewSubmissionWindow)
+      .__researchNewSubmissionSampler;
+    if (bridge === undefined) {
+      throw new Error("New submission sampler document was replaced");
+    }
+    bridge.stop();
+  });
+}
+
+function expectNewSubmissionSamples(
+  samples: readonly NewSubmissionPaintSample[],
+  baseline: NewSubmissionPaintSample,
+): void {
+  expect(samples.length).toBeGreaterThanOrEqual(3);
+  expect(
+    samples.some(
+      (sample) =>
+        sample.composerBusy === "true" && sample.submissionStatusCount === 1,
+    ),
+  ).toBe(true);
+  expect(samples.at(-1)?.composerBusy).toBe("false");
+  expect(samples.at(-1)?.submissionStatusCount).toBe(0);
+
+  const persistentTargets = [
+    {
+      label: "paper",
+      valid: (sample: NewSubmissionPaintSample) =>
+        sample.paperConnected &&
+        sample.samePaper &&
+        sample.paperRect.width > 0 &&
+        sample.paperRect.height > 0,
+    },
+    {
+      label: "masthead",
+      valid: (sample: NewSubmissionPaintSample) =>
+        sample.mastheadConnected &&
+        sample.sameMasthead &&
+        sample.mastheadRect.width > 0 &&
+        sample.mastheadRect.height > 0,
+    },
+    {
+      label: "main",
+      valid: (sample: NewSubmissionPaintSample) =>
+        sample.mainConnected &&
+        sample.sameMain &&
+        sample.mainRect.width > 0 &&
+        sample.mainRect.height > 0,
+    },
+    {
+      label: "workspace",
+      valid: (sample: NewSubmissionPaintSample) =>
+        sample.workspaceConnected &&
+        sample.sameWorkspace &&
+        sample.workspaceRect.width > 0 &&
+        sample.workspaceRect.height > 0,
+    },
+    {
+      label: "composer",
+      valid: (sample: NewSubmissionPaintSample) =>
+        sample.composerConnected &&
+        sample.sameComposer &&
+        sample.composerRect.width > 0 &&
+        sample.composerRect.height > 0,
+    },
+  ] as const;
+  for (const target of persistentTargets) {
+    const failingIndex = samples.findIndex((sample) => !target.valid(sample));
+    const failedSample =
+      failingIndex === -1 ? undefined : samples[failingIndex];
+    expect
+      .soft(
+        failingIndex,
+        `${target.label} persistence first failed sample: ${JSON.stringify(failedSample)}`,
+      )
+      .toBe(-1);
+  }
+  expect
+    .soft(
+      samples.findIndex(
+        (sample) => sample.documentToken !== baseline.documentToken,
+      ),
+      "document token changed",
+    )
+    .toBe(-1);
+  expect
+    .soft(
+      samples.findIndex((sample) => sample.submissionStatusCount > 1),
+      "submission status duplicated",
+    )
+    .toBe(-1);
+  expect
+    .soft(
+      samples.findIndex(
+        (sample) =>
+          sample.researchSkeletonCount > 0 ||
+          sample.pageNavigationOverlayCount > 0 ||
+          sample.researchNavigationOverlayCount > 0 ||
+          sample.bootstrapLoadingCount > 0 ||
+          sample.newsLoadingCount > 0,
+      ),
+      "protected fallback or global overlay appeared",
+    )
+    .toBe(-1);
+}
+
+async function deleteCurrentResearchThreadThroughUi(page: Page): Promise<void> {
+  const pathname = new URL(page.url()).pathname;
+  if (!/^\/research\/[0-9a-f-]{36}$/.test(pathname)) return;
+
+  const deleteButton = page.getByRole("button", {
+    name: "スレッドを削除",
+  });
+  await expect(deleteButton).toBeVisible();
+  await deleteButton.click();
+  const dialog = page.getByRole("alertdialog");
+  await expect(dialog).toBeVisible();
+  const deleteResponse = page.waitForResponse(
+    (response) => {
+      const request = response.request();
+      return (
+        request.method() === "POST" &&
+        new URL(request.url()).pathname === pathname &&
+        request.headers()["next-action"] !== undefined
+      );
+    },
+    { timeout: 30_000 },
+  );
+  await dialog.getByRole("button", { name: "削除", exact: true }).click();
+  expect((await deleteResponse).status()).toBeLessThan(400);
+  await page.goto("/research");
+  await expect(
+    page.getByRole("heading", { name: "新しいリサーチ" }),
+  ).toBeVisible();
+  await expect(page.locator(`a[href="${pathname}"]`)).toHaveCount(0);
+}
+
+type AcceptedResearchTarget = {
+  path: string;
+  runId: string;
+  threadId: string;
+};
+
+function acceptedResearchTargetFromActionResponse(
+  body: string,
+): AcceptedResearchTarget {
+  const threadMatch = body.match(
+    /"threadId"\s*:\s*"([0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12})"/i,
+  );
+  const runMatch = body.match(
+    /"runId"\s*:\s*"([0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12})"/i,
+  );
+  if (threadMatch?.[1] === undefined || runMatch?.[1] === undefined) {
+    throw new Error(
+      "Accepted Research action response is missing committed run identity",
+    );
+  }
+  return {
+    path: `/research/${threadMatch[1]}`,
+    runId: runMatch[1],
+    threadId: threadMatch[1],
+  };
 }
 
 async function setDistanceFromAnswerBottom(
@@ -279,6 +666,52 @@ function expectContinuitySamples(
   ).toBeLessThanOrEqual(1);
 }
 
+function expectCompletedContinuitySamples(
+  samples: readonly ResearchContinuityPaintSample[],
+  baseline: ResearchContinuityPaintSample,
+): void {
+  expect(samples.length).toBeGreaterThanOrEqual(3);
+  expect(samples.some((sample) => sample.persistedStatus === "running")).toBe(
+    true,
+  );
+  expect(samples.at(-1)?.persistedStatus).toBe("completed");
+
+  for (const [index, sample] of samples.entries()) {
+    expect.soft(sample.draftCount, `slot ${index}`).toBe(1);
+    expect.soft(sample.failureCount, `failure ${index}`).toBe(0);
+    expect.soft(sample.protectedLoadingCount, `loading ${index}`).toBe(0);
+    expect.soft(sample.announcerCount, `announcer ${index}`).toBe(1);
+    expect.soft(sample.sameTurn, `turn identity ${index}`).toBe(true);
+    expect.soft(sample.sameThreadPanel, `main identity ${index}`).toBe(true);
+    expect.soft(sample.sameComposer, `composer identity ${index}`).toBe(true);
+    expect
+      .soft(sample.sameAnswerScroller, `scroller identity ${index}`)
+      .toBe(true);
+    expect.soft(sample.sameAnswerSlot, `slot identity ${index}`).toBe(true);
+    expect
+      .soft(sample.documentToken, `document ${index}`)
+      .toBe(baseline.documentToken);
+    expectRectWithin(
+      sample.turnRect,
+      baseline.turnRect,
+      ["x", "width"],
+      `turn ${index}`,
+    );
+    expectRectWithin(
+      sample.threadPanelRect,
+      baseline.threadPanelRect,
+      ["x", "y", "width", "height"],
+      `main ${index}`,
+    );
+    expectRectWithin(
+      sample.composerRect,
+      baseline.composerRect,
+      ["x", "y", "width", "height"],
+      `composer ${index}`,
+    );
+  }
+}
+
 async function runFailedTerminalContinuity({
   page,
   variant,
@@ -359,6 +792,329 @@ async function runFailedTerminalContinuity({
   expectContinuitySamples(samples, baseline, expectedSurface);
   return { baseline, samples };
 }
+
+test("new research submitはServer Action response commitとclient navigation中も同じworkspaceを維持する", async ({
+  page,
+}) => {
+  test.slow();
+  const errors = collectPageErrors(page);
+  const actionRelease = Promise.withResolvers<void>();
+  const upstreamCompleted = Promise.withResolvers<void>();
+  const handlerSettled = Promise.withResolvers<void>();
+  const actionPattern = "**/research";
+  const question = `E2E action response continuity ${randomUUID()}`;
+  let actionRequests = 0;
+  let actionWasFetched = false;
+  let acceptedPath: string | null = null;
+  let samplerStarted = false;
+  let samplerStopped = false;
+
+  const actionHandler = async (route: Route) => {
+    const request = route.request();
+    const url = new URL(request.url());
+    if (
+      request.method() !== "POST" ||
+      url.pathname !== "/research" ||
+      request.headers()["next-action"] === undefined
+    ) {
+      await route.continue();
+      return;
+    }
+
+    actionRequests += 1;
+    try {
+      const response = await route.fetch({
+        maxRedirects: 0,
+        timeout: 30_000,
+      });
+      const responseBody = await response.body();
+      actionWasFetched = true;
+      acceptedPath = acceptedResearchTargetFromActionResponse(
+        responseBody.toString("utf8"),
+      ).path;
+      upstreamCompleted.resolve();
+      await actionRelease.promise;
+      await route.fulfill({ response, body: responseBody });
+      handlerSettled.resolve();
+    } catch (error) {
+      upstreamCompleted.reject(error);
+      handlerSettled.reject(error);
+      await route.abort("failed");
+    }
+  };
+
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await resetResearchDailyQuota();
+  await page.goto("/research");
+  await expect(
+    page.getByRole("heading", { name: "新しいリサーチ" }),
+  ).toBeVisible();
+  await page.route(actionPattern, actionHandler);
+
+  try {
+    const main = page.getByRole("main");
+    const form = composer(page);
+    const workspace = form.locator("xpath=ancestor::section[1]");
+    const masthead = page.getByRole("banner");
+    const paperSurface = masthead.locator("xpath=..");
+    await expect(paperSurface).toBeVisible();
+    await expect(masthead).toBeVisible();
+    await expect(main).toBeVisible();
+    await expect(workspace).toBeVisible();
+    await expect(form).toBeVisible();
+
+    const baseline = await installNewSubmissionSampler(page);
+    samplerStarted = true;
+
+    await page.getByRole("textbox", { name: "質問" }).fill(question);
+    await page.getByRole("button", { name: "送信", exact: true }).click();
+    await upstreamCompleted.promise;
+
+    const submissionStatus = page.locator(
+      '[role="status"][aria-label="質問を送信しています…"]:visible',
+    );
+    expect(actionRequests).toBe(1);
+    await expect(main).toHaveAttribute("aria-busy", "true");
+    await expect(form).toHaveAttribute("aria-busy", "true");
+    await expect(page.getByRole("button", { name: "送信中…" })).toBeDisabled();
+    await expect(submissionStatus).toHaveCount(1);
+    await expect(paperSurface).toBeVisible();
+    await expect(masthead).toBeVisible();
+    await expect(main).toBeVisible();
+    await expect(workspace).toBeVisible();
+    await expect(form).toBeVisible();
+    await expect(
+      page.locator('[data-testid="page-navigation-overlay"]:visible'),
+    ).toHaveCount(0);
+    await expect(
+      page.locator('[data-testid="research-navigation-overlay"]:visible'),
+    ).toHaveCount(0);
+    await expect(
+      page.locator(
+        '[role="status"][aria-label="Researchを読み込み中…"]:visible',
+      ),
+    ).toHaveCount(0);
+    await expect(
+      page.getByText("画面を準備しています…", { exact: true }),
+    ).toHaveCount(0);
+    await expect(
+      page.getByText("記事を読み込み中…", { exact: true }),
+    ).toHaveCount(0);
+
+    await expect
+      .poll(async () =>
+        (await newSubmissionSamples(page)).some(
+          (sample) =>
+            sample.composerBusy === "true" &&
+            sample.submissionStatusCount === 1,
+        ),
+      )
+      .toBe(true);
+
+    actionRelease.resolve();
+    await handlerSettled.promise;
+    const expectedThreadPath = acceptedPath;
+    if (expectedThreadPath === null) {
+      throw new Error("Accepted Research path was not captured");
+    }
+    await expect
+      .poll(() => new URL(page.url()).pathname)
+      .toBe(expectedThreadPath);
+    const activeTurn = page.locator(
+      '[data-research-run-id][data-research-persisted-status="queued"], [data-research-run-id][data-research-persisted-status="running"]',
+    );
+    await expect(activeTurn).toHaveCount(1);
+    await expect(page.getByRole("button", { name: "停止" })).toBeVisible();
+    await expect(main).toHaveAttribute("aria-busy", "false");
+    await expect(form).toHaveAttribute("aria-busy", "false");
+    await expect(submissionStatus).toHaveCount(0);
+    await expect(paperSurface).toBeVisible();
+    await expect(masthead).toBeVisible();
+    await expect(main).toBeVisible();
+    await expect(workspace).toBeVisible();
+    await expect(form).toBeVisible();
+
+    await page.evaluate(
+      () =>
+        new Promise<void>((resolve) => {
+          requestAnimationFrame(() => resolve());
+        }),
+    );
+    await stopNewSubmissionSampler(page);
+    samplerStopped = true;
+    expectNewSubmissionSamples(await newSubmissionSamples(page), baseline);
+    expect(errors).toEqual([]);
+  } finally {
+    actionRelease.resolve();
+    if (actionWasFetched) {
+      await handlerSettled.promise.catch(() => undefined);
+      if (
+        acceptedPath !== null &&
+        new URL(page.url()).pathname !== acceptedPath
+      ) {
+        await page.goto(acceptedPath);
+      }
+      if (acceptedPath !== null) {
+        await deleteCurrentResearchThreadThroughUi(page);
+      }
+    }
+    if (samplerStarted && !samplerStopped) {
+      await stopNewSubmissionSampler(page).catch(() => undefined);
+    }
+    await page.unroute(actionPattern, actionHandler);
+  }
+});
+
+test("new research submitのfirst committed modelがfailedでもsubmission lockを解除する", async ({
+  page,
+}) => {
+  test.slow();
+  const errors = collectPageErrors(page);
+  const actionRelease = Promise.withResolvers<void>();
+  const acceptedTarget = Promise.withResolvers<AcceptedResearchTarget>();
+  const handlerSettled = Promise.withResolvers<void>();
+  const actionPattern = "**/research";
+  const question = `E2E first model terminal ${randomUUID()}`;
+  let createdTarget: AcceptedResearchTarget | null = null;
+  let actionWasFetched = false;
+  let samplerStarted = false;
+  let samplerStopped = false;
+
+  const actionHandler = async (route: Route) => {
+    const request = route.request();
+    const url = new URL(request.url());
+    if (
+      request.method() !== "POST" ||
+      url.pathname !== "/research" ||
+      request.headers()["next-action"] === undefined
+    ) {
+      await route.continue();
+      return;
+    }
+
+    try {
+      const response = await route.fetch({
+        maxRedirects: 0,
+        timeout: 30_000,
+      });
+      const responseBody = await response.body();
+      actionWasFetched = true;
+      createdTarget = acceptedResearchTargetFromActionResponse(
+        responseBody.toString("utf8"),
+      );
+      acceptedTarget.resolve(createdTarget);
+      await actionRelease.promise;
+      await route.fulfill({ response, body: responseBody });
+      handlerSettled.resolve();
+    } catch (error) {
+      acceptedTarget.reject(error);
+      handlerSettled.reject(error);
+      await route.abort("failed");
+    }
+  };
+
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await resetResearchDailyQuota();
+  await page.goto("/research");
+  await expect(
+    page.getByRole("heading", { name: "新しいリサーチ" }),
+  ).toBeVisible();
+  await page.route(actionPattern, actionHandler);
+
+  try {
+    const main = page.getByRole("main");
+    const form = composer(page);
+    const workspace = form.locator("xpath=ancestor::section[1]");
+    const masthead = page.getByRole("banner");
+    const paperSurface = masthead.locator("xpath=..");
+    const baseline = await installNewSubmissionSampler(page);
+    samplerStarted = true;
+
+    await page.getByRole("textbox", { name: "質問" }).fill(question);
+    await page.getByRole("button", { name: "送信", exact: true }).click();
+    const target = await acceptedTarget.promise;
+    createdTarget = target;
+
+    await expect(main).toHaveAttribute("aria-busy", "true");
+    await expect(form).toHaveAttribute("aria-busy", "true");
+    await expect(
+      page.locator(
+        '[role="status"][aria-label="質問を送信しています…"]:visible',
+      ),
+    ).toHaveCount(1);
+
+    await failResearchSubmission(target.runId);
+    actionRelease.resolve();
+    await handlerSettled.promise;
+    await expect.poll(() => new URL(page.url()).pathname).toBe(target.path);
+
+    const failedTurn = page.locator(
+      `[data-research-run-id="${target.runId}"][data-research-persisted-status="failed"]`,
+    );
+    await expect(failedTurn).toHaveCount(1);
+    await expect(
+      failedTurn.locator("[data-research-failure-rail]"),
+    ).toHaveCount(1);
+    await expect(main).toHaveAttribute("aria-busy", "false");
+    await expect(form).toHaveAttribute("aria-busy", "false");
+    await expect(
+      page.locator(
+        '[role="status"][aria-label="質問を送信しています…"]:visible',
+      ),
+    ).toHaveCount(0);
+    await expect(
+      page.getByRole("button", { name: "スレッドを削除" }),
+    ).toBeEnabled();
+    await expect(
+      page.getByRole("link", { name: "新しいスレッド" }),
+    ).not.toHaveAttribute("aria-disabled", "true");
+    await expect(paperSurface).toBeVisible();
+    await expect(masthead).toBeVisible();
+    await expect(main).toBeVisible();
+    await expect(workspace).toBeVisible();
+    await expect(form).toBeVisible();
+    await expect(
+      page.locator('[data-testid="page-navigation-overlay"]:visible'),
+    ).toHaveCount(0);
+    await expect(
+      page.locator('[data-testid="research-navigation-overlay"]:visible'),
+    ).toHaveCount(0);
+    await expect(
+      page.locator(
+        '[role="status"][aria-label="Researchを読み込み中…"]:visible',
+      ),
+    ).toHaveCount(0);
+
+    await page.evaluate(
+      () =>
+        new Promise<void>((resolve) => {
+          requestAnimationFrame(() => resolve());
+        }),
+    );
+    await stopNewSubmissionSampler(page);
+    samplerStopped = true;
+    expectNewSubmissionSamples(await newSubmissionSamples(page), baseline);
+    expect(errors).toEqual([]);
+  } finally {
+    actionRelease.resolve();
+    if (actionWasFetched) {
+      await handlerSettled.promise.catch(() => undefined);
+      if (
+        createdTarget !== null &&
+        new URL(page.url()).pathname !== createdTarget.path
+      ) {
+        await page.goto(createdTarget.path);
+      }
+      if (createdTarget !== null) {
+        await deleteCurrentResearchThreadThroughUi(page);
+      }
+    }
+    if (samplerStarted && !samplerStopped) {
+      await stopNewSubmissionSampler(page).catch(() => undefined);
+    }
+    await page.unroute(actionPattern, actionHandler);
+  }
+});
 
 test("closed fixtureはnavigationからterminal RSCまで全幅とfailureを維持する", async ({
   page,
@@ -470,6 +1226,87 @@ test("open fixtureはexplicit inline stateをterminal RSC後も維持する", as
       ),
     ).toBeLessThanOrEqual(1);
     await expect(sourceLink).toBeFocused();
+  } finally {
+    await harness.cleanup();
+  }
+
+  expect((await harness.stats()).terminalRscRequests).toBe(1);
+  expect(errors).toEqual([]);
+});
+
+test("completed terminalはRSC gate中もdraftとworkspaceを維持しfinalへ同じslotで収束する", async ({
+  page,
+}) => {
+  test.slow();
+  const fixture = RESEARCH_CONTINUITY.closed;
+  const errors = collectPageErrors(page);
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await resetResearchContinuity("closed");
+  const harness = await installResearchContinuityBrowserHarness(page, fixture, {
+    terminalStatus: "completed",
+  });
+  const turn = page.locator(`[data-research-run-id="${fixture.activeRunId}"]`);
+
+  try {
+    await page.goto(continuityPath(fixture));
+    await expect(
+      page.getByRole("heading", { name: fixture.title }),
+    ).toBeVisible();
+    await harness.emitDraft();
+    await expect(
+      turn.getByText("E2E continuity live draft marker 1", { exact: false }),
+    ).toBeVisible();
+    const baseline = await harness.startSampler();
+    harness.armTerminalRefreshGate();
+
+    await completeResearchContinuity("closed");
+    await harness.emitCompletedTerminal();
+    await harness.waitForTerminalRefresh();
+
+    await expect(turn).toHaveAttribute(
+      "data-research-persisted-status",
+      "running",
+    );
+    await expect(
+      turn.getByText("E2E continuity live draft marker 1", { exact: false }),
+    ).toBeVisible();
+    await expect(turn.getByText("回答を確定しています…")).toBeVisible();
+    await expect(page.getByRole("main")).toBeVisible();
+    await expect(composer(page)).toBeVisible();
+    await expect(answerPanel(page)).toBeVisible();
+    await expect(turn.getByTestId("research-answer-slot")).toHaveCount(1);
+    await expect(
+      page.getByText("Researchを読み込み中…", { exact: true }),
+    ).toHaveCount(0);
+    await expect(
+      page.locator('[data-testid="research-navigation-overlay"]:visible'),
+    ).toHaveCount(0);
+
+    const heldStats = await harness.stats();
+    expect(heldStats.terminalRscRequests).toBe(1);
+    expect(heldStats.terminalMainFrameNavigations).toBe(0);
+    expect(heldStats.eventSourcesCreated).toBe(1);
+    expect(heldStats.eventSourcesClosed).toBe(1);
+
+    harness.releaseTerminalRefresh();
+    await harness.waitForPersistedSample();
+    await expect(turn).toHaveAttribute(
+      "data-research-persisted-status",
+      "completed",
+    );
+    await expect(
+      turn.getByText(fixture.completedActiveAnswerMarker),
+    ).toBeVisible();
+    await expect(
+      turn.getByText("E2E continuity live draft marker 1", { exact: false }),
+    ).toHaveCount(0);
+    await expect(turn.getByTestId("research-answer-slot")).toHaveCount(1);
+    await expect(
+      page.locator('[role="status"][aria-live="polite"][aria-atomic="true"]'),
+    ).toHaveText("回答が完了しました");
+
+    const samples = await harness.samples();
+    expectCompletedContinuitySamples(samples, baseline);
   } finally {
     await harness.cleanup();
   }

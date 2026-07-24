@@ -1,6 +1,7 @@
 "use client";
 
 import { ErrorMessage } from "@/components/feedback/ErrorMessage";
+import { PageNavigationReset } from "@/components/layout/PageNavigation";
 import type { ErrorPageProps } from "@/lib/types/error-page";
 
 export default function BriefingError({
@@ -8,11 +9,14 @@ export default function BriefingError({
   unstable_retry,
 }: ErrorPageProps) {
   return (
-    <ErrorMessage
-      title="ブリーフィング"
-      description="ブリーフィングの取得に失敗しました"
-      error={error}
-      unstable_retry={unstable_retry}
-    />
+    <>
+      <PageNavigationReset />
+      <ErrorMessage
+        title="ブリーフィング"
+        description="ブリーフィングの取得に失敗しました"
+        error={error}
+        unstable_retry={unstable_retry}
+      />
+    </>
   );
 }

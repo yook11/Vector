@@ -1,13 +1,11 @@
 import type { Metadata } from "next";
 import { notFound } from "next/navigation";
-import { ShellMasthead } from "@/components/layout/ShellMasthead";
-import { PaperSurface, PaperTexture } from "@/components/paper";
 import {
   loadResearchThreadPage,
   parseResearchLimit,
   ResearchUuidSchema,
-  ResearchWorkspace,
 } from "@/features/research";
+import { ResearchRouteModelCommit } from "@/features/research-client";
 import { requireSession } from "@/lib/auth/guards";
 import type { SearchParams } from "@/lib/types/route";
 
@@ -40,16 +38,10 @@ export default async function ResearchThreadPage({
   }
 
   return (
-    <PaperSurface className="flex h-dvh min-h-0 flex-col overflow-hidden [&>header]:shrink-0">
-      <ShellMasthead />
-      <div className="relative flex min-h-0 w-full flex-1 overflow-hidden">
-        <PaperTexture />
-        <ResearchWorkspace
-          threads={model.threads}
-          thread={model.thread}
-          limit={limit}
-        />
-      </div>
-    </PaperSurface>
+    <ResearchRouteModelCommit
+      threads={model.threads}
+      thread={model.thread}
+      limit={limit}
+    />
   );
 }

@@ -35,6 +35,7 @@ export interface ResearchContinuityPaintSample {
   sameThreadPanel: boolean;
   sameComposer: boolean;
   sameAnswerScroller: boolean;
+  sameAnswerSlot: boolean | null;
   sameSourceScroller: boolean | null;
   turnRect: ResearchContinuityRect;
   threadPanelRect: ResearchContinuityRect;
@@ -67,7 +68,7 @@ interface BrowserEventSourceStats {
 interface BrowserContinuityBridge {
   documentToken: string;
   emitDraft: () => void;
-  emitFailure: () => void;
+  emitTerminal: (status: "failed" | "completed") => void;
   getEventSourceStats: () => BrowserEventSourceStats;
   sampler?: {
     done: boolean;
@@ -84,12 +85,17 @@ export interface ResearchContinuityBrowserHarness {
   startSampler: () => Promise<ResearchContinuityPaintSample>;
   armTerminalRefreshGate: () => void;
   emitFailedTerminal: () => Promise<void>;
+  emitCompletedTerminal: () => Promise<void>;
   waitForTerminalRefresh: () => Promise<void>;
   releaseTerminalRefresh: () => void;
   waitForPersistedSample: () => Promise<void>;
   samples: () => Promise<ResearchContinuityPaintSample[]>;
   stats: () => Promise<ResearchContinuityHarnessStats>;
   cleanup: () => Promise<void>;
+}
+
+interface ResearchContinuityHarnessOptions {
+  terminalStatus?: "failed" | "completed";
 }
 
 function isTargetGet(route: Route, pathname: string): boolean {
@@ -111,6 +117,7 @@ function isPrefetch(headers: Record<string, string>): boolean {
 export async function installResearchContinuityBrowserHarness(
   page: Page,
   fixture: ResearchContinuityFixture,
+  { terminalStatus = "failed" }: ResearchContinuityHarnessOptions = {},
 ): Promise<ResearchContinuityBrowserHarness> {
   const eventPath = `/api/research/runs/${fixture.activeRunId}/events`;
   const pollPath = `/api/research/runs/${fixture.activeRunId}`;
@@ -210,7 +217,7 @@ export async function installResearchContinuityBrowserHarness(
           );
           draftEventsSent += 1;
         },
-        emitFailure: () => {
+        emitTerminal: (status: "failed" | "completed") => {
           if (currentSource === null) {
             throw new Error("Target research EventSource is not connected");
           }
@@ -219,8 +226,8 @@ export async function installResearchContinuityBrowserHarness(
             "terminal",
             {
               attemptEpoch: 1,
-              status: "failed",
-              errorCode: "internal_error",
+              status,
+              errorCode: status === "failed" ? "internal_error" : null,
             },
             "4-0",
           );
@@ -335,227 +342,254 @@ export async function installResearchContinuityBrowserHarness(
     await page.evaluate(() => {
       const bridge = (window as ContinuityWindow).__researchContinuity;
       if (bridge === undefined) throw new Error("Continuity bridge is missing");
-      bridge.emitFailure();
+      bridge.emitTerminal("failed");
+    });
+  }
+
+  async function emitCompletedTerminal(): Promise<void> {
+    await page.evaluate(() => {
+      const bridge = (window as ContinuityWindow).__researchContinuity;
+      if (bridge === undefined) throw new Error("Continuity bridge is missing");
+      bridge.emitTerminal("completed");
     });
   }
 
   async function startSampler(): Promise<ResearchContinuityPaintSample> {
-    return page.evaluate((runId) => {
-      const continuityWindow = window as ContinuityWindow;
-      const bridge = continuityWindow.__researchContinuity;
-      if (bridge === undefined) throw new Error("Continuity bridge is missing");
-      const installedBridge = bridge;
-      const selector = `[data-research-run-id="${CSS.escape(runId)}"]`;
-      const initialTurn = activeTurn();
-      const initialThreadPanel =
-        initialTurn?.closest<HTMLElement>("main") ?? null;
-      const initialComposer = activeComposer(initialThreadPanel);
-      const initialAnswerScroller =
-        initialThreadPanel?.querySelector<HTMLElement>(
-          "[data-research-answer-scroll-region]",
-        ) ?? null;
-      if (
-        initialTurn === null ||
-        initialThreadPanel === null ||
-        initialComposer === undefined ||
-        initialComposer === null ||
-        initialAnswerScroller === null
-      ) {
-        throw new Error("Continuity sampler target is missing");
-      }
-      const initialFocus = document.activeElement;
-      const initialSourceTrigger = sourceTrigger(initialThreadPanel);
-      const initialSourceScroller = sourceScroller(initialSourceTrigger);
-      let failureRail: Element | null = null;
-      let done = false;
-      let mutationObserved = true;
-      const samples: ResearchContinuityPaintSample[] = [];
-
-      function rect(element: Element): ResearchContinuityRect {
-        const box = element.getBoundingClientRect();
-        return {
-          x: box.x,
-          y: box.y,
-          width: box.width,
-          height: box.height,
-        };
-      }
-
-      function activeTurn(): HTMLElement | null {
-        const candidates = Array.from(
-          document.querySelectorAll<HTMLElement>(selector),
-        ).filter((candidate) => {
-          const panel = candidate.closest<HTMLElement>("main");
-          return (
-            candidate.getClientRects().length > 0 &&
-            panel !== null &&
-            panel.getClientRects().length > 0
-          );
-        });
-        return candidates.length === 1 ? (candidates[0] ?? null) : null;
-      }
-
-      function sourceSurface(
-        trigger: HTMLButtonElement | null,
-      ): HTMLElement | null {
-        const controlledId = trigger?.getAttribute("aria-controls");
-        if (controlledId === undefined || controlledId === null) return null;
-        const owner = trigger?.closest<HTMLElement>("main");
-        const ownedSurface = owner?.querySelector<HTMLElement>(
-          `#${CSS.escape(controlledId)}`,
-        );
-        if (ownedSurface?.getClientRects().length) return ownedSurface;
-        const visibleSurfaces = Array.from(
-          document.querySelectorAll<HTMLElement>(
-            `#${CSS.escape(controlledId)}`,
-          ),
-        ).filter((surface) => surface.getClientRects().length > 0);
-        return visibleSurfaces.length === 1
-          ? (visibleSurfaces[0] ?? null)
-          : null;
-      }
-
-      function sourceScroller(
-        trigger: HTMLButtonElement | null,
-      ): HTMLElement | null {
-        const surface = sourceSurface(trigger);
-        return surface?.lastElementChild instanceof HTMLElement
-          ? surface.lastElementChild
-          : null;
-      }
-
-      function sourceTrigger(panel: HTMLElement): HTMLButtonElement | null {
-        return (
-          Array.from(
-            panel.querySelectorAll<HTMLButtonElement>("button[aria-expanded]"),
-          ).find((button) => button.textContent?.includes("ソース") === true) ??
-          null
-        );
-      }
-
-      function activeComposer(
-        panel: HTMLElement | null,
-      ): HTMLFormElement | null {
-        if (panel === null) return null;
-        const textarea = Array.from(
-          panel.querySelectorAll<HTMLElement>("#research-question"),
-        ).find((element) => element.getClientRects().length > 0);
-        return textarea?.closest<HTMLFormElement>("form") ?? null;
-      }
-
-      function record(): void {
-        if (done) return;
-        const turn = activeTurn();
-        const threadPanel = turn?.closest<HTMLElement>("main") ?? null;
-        const composer = activeComposer(threadPanel);
-        const answerScroller =
-          threadPanel?.querySelector<HTMLElement>(
+    return page.evaluate(
+      ({ runId, terminalStatus }) => {
+        const continuityWindow = window as ContinuityWindow;
+        const bridge = continuityWindow.__researchContinuity;
+        if (bridge === undefined)
+          throw new Error("Continuity bridge is missing");
+        const installedBridge = bridge;
+        const selector = `[data-research-run-id="${CSS.escape(runId)}"]`;
+        const initialTurn = activeTurn();
+        const initialThreadPanel =
+          initialTurn?.closest<HTMLElement>("main") ?? null;
+        const initialComposer = activeComposer(initialThreadPanel);
+        const initialAnswerScroller =
+          initialThreadPanel?.querySelector<HTMLElement>(
             "[data-research-answer-scroll-region]",
           ) ?? null;
         if (
-          turn === null ||
-          threadPanel === null ||
-          composer === undefined ||
-          composer === null ||
-          answerScroller === null
+          initialTurn === null ||
+          initialThreadPanel === null ||
+          initialComposer === undefined ||
+          initialComposer === null ||
+          initialAnswerScroller === null
         ) {
-          throw new Error("Continuity sampler target disappeared");
+          throw new Error("Continuity sampler target is missing");
         }
-        const failureRails = turn.querySelectorAll(
-          "[data-research-failure-rail]",
+        const initialFocus = document.activeElement;
+        const initialAnswerSlot = initialTurn.querySelector<HTMLElement>(
+          '[data-testid="research-answer-slot"]',
         );
-        if (failureRail === null && failureRails.length === 1) {
-          failureRail = failureRails.item(0);
+        const initialSourceTrigger = sourceTrigger(initialThreadPanel);
+        const initialSourceScroller = sourceScroller(initialSourceTrigger);
+        let failureRail: Element | null = null;
+        let done = false;
+        let mutationObserved = true;
+        const samples: ResearchContinuityPaintSample[] = [];
+
+        function rect(element: Element): ResearchContinuityRect {
+          const box = element.getBoundingClientRect();
+          return {
+            x: box.x,
+            y: box.y,
+            width: box.width,
+            height: box.height,
+          };
         }
-        const trigger = sourceTrigger(threadPanel);
-        const currentSourceSurface = sourceSurface(trigger);
-        const currentSourceScroller = sourceScroller(trigger);
-        const activeElement = document.activeElement;
-        const protectedRootLoadingCount = Array.from(
-          threadPanel.querySelectorAll('[role="status"]'),
-        ).filter(
-          (element) =>
-            element.textContent?.includes("記事を読み込み中") &&
-            element.getClientRects().length > 0,
-        ).length;
-        const sample: ResearchContinuityPaintSample = {
-          timestamp: performance.now(),
-          mutationObserved,
-          documentToken: installedBridge.documentToken,
-          persistedStatus: turn.getAttribute("data-research-persisted-status"),
-          draftCount: turn.querySelectorAll(
-            '[data-testid="research-answer-slot"]',
-          ).length,
-          failureCount: failureRails.length,
-          protectedLoadingCount:
+
+        function activeTurn(): HTMLElement | null {
+          const candidates = Array.from(
+            document.querySelectorAll<HTMLElement>(selector),
+          ).filter((candidate) => {
+            const panel = candidate.closest<HTMLElement>("main");
+            return (
+              candidate.getClientRects().length > 0 &&
+              panel !== null &&
+              panel.getClientRects().length > 0
+            );
+          });
+          return candidates.length === 1 ? (candidates[0] ?? null) : null;
+        }
+
+        function sourceSurface(
+          trigger: HTMLButtonElement | null,
+        ): HTMLElement | null {
+          const controlledId = trigger?.getAttribute("aria-controls");
+          if (controlledId === undefined || controlledId === null) return null;
+          const owner = trigger?.closest<HTMLElement>("main");
+          const ownedSurface = owner?.querySelector<HTMLElement>(
+            `#${CSS.escape(controlledId)}`,
+          );
+          if (ownedSurface?.getClientRects().length) return ownedSurface;
+          const visibleSurfaces = Array.from(
+            document.querySelectorAll<HTMLElement>(
+              `#${CSS.escape(controlledId)}`,
+            ),
+          ).filter((surface) => surface.getClientRects().length > 0);
+          return visibleSurfaces.length === 1
+            ? (visibleSurfaces[0] ?? null)
+            : null;
+        }
+
+        function sourceScroller(
+          trigger: HTMLButtonElement | null,
+        ): HTMLElement | null {
+          const surface = sourceSurface(trigger);
+          return surface?.lastElementChild instanceof HTMLElement
+            ? surface.lastElementChild
+            : null;
+        }
+
+        function sourceTrigger(panel: HTMLElement): HTMLButtonElement | null {
+          return (
             Array.from(
-              threadPanel.querySelectorAll(
-                '[data-testid="research-navigation-overlay"]',
+              panel.querySelectorAll<HTMLButtonElement>(
+                "button[aria-expanded]",
               ),
-            ).filter((element) => element.getClientRects().length > 0).length +
-            protectedRootLoadingCount,
-          announcerCount: threadPanel.querySelectorAll(
-            '[role="status"][aria-live="polite"][aria-atomic="true"]',
-          ).length,
-          sourceSurfaceCount: currentSourceSurface === null ? 0 : 1,
-          sourcesExpanded: trigger?.getAttribute("aria-expanded") ?? null,
-          sourcesControls: trigger?.getAttribute("aria-controls") ?? null,
-          sourceScrollTop: currentSourceScroller?.scrollTop ?? null,
-          focusedHref:
-            activeElement instanceof HTMLAnchorElement
-              ? activeElement.getAttribute("href")
-              : null,
-          sameFocus: activeElement === initialFocus,
-          sameTurn: turn === initialTurn,
-          sameFailureRail:
-            failureRail === null
-              ? null
-              : failureRails.length === 1 &&
-                failureRails.item(0) === failureRail,
-          sameThreadPanel: threadPanel === initialThreadPanel,
-          sameComposer: composer === initialComposer,
-          sameAnswerScroller: answerScroller === initialAnswerScroller,
-          sameSourceScroller:
-            initialSourceScroller === null
-              ? currentSourceScroller === null
-              : currentSourceScroller === initialSourceScroller,
-          turnRect: rect(turn),
-          threadPanelRect: rect(threadPanel),
-          composerRect: rect(composer),
-          answerScrollTop: answerScroller.scrollTop,
-          answerScrollHeight: answerScroller.scrollHeight,
-          answerClientHeight: answerScroller.clientHeight,
-        };
-        mutationObserved = false;
-        samples.push(sample);
-        if (sample.persistedStatus === "failed") {
-          done = true;
-          observer.disconnect();
-          installedBridge.sampler = { done: true, samples };
+            ).find(
+              (button) => button.textContent?.includes("ソース") === true,
+            ) ?? null
+          );
         }
-      }
 
-      function sampleNextPaint(): void {
-        if (done) return;
-        requestAnimationFrame(() => {
-          record();
-          sampleNextPaint();
+        function activeComposer(
+          panel: HTMLElement | null,
+        ): HTMLFormElement | null {
+          if (panel === null) return null;
+          const textarea = Array.from(
+            panel.querySelectorAll<HTMLElement>("#research-question"),
+          ).find((element) => element.getClientRects().length > 0);
+          return textarea?.closest<HTMLFormElement>("form") ?? null;
+        }
+
+        function record(): void {
+          if (done) return;
+          const turn = activeTurn();
+          const threadPanel = turn?.closest<HTMLElement>("main") ?? null;
+          const composer = activeComposer(threadPanel);
+          const answerScroller =
+            threadPanel?.querySelector<HTMLElement>(
+              "[data-research-answer-scroll-region]",
+            ) ?? null;
+          if (
+            turn === null ||
+            threadPanel === null ||
+            composer === undefined ||
+            composer === null ||
+            answerScroller === null
+          ) {
+            throw new Error("Continuity sampler target disappeared");
+          }
+          const answerSlot = turn.querySelector<HTMLElement>(
+            '[data-testid="research-answer-slot"]',
+          );
+          const failureRails = turn.querySelectorAll(
+            "[data-research-failure-rail]",
+          );
+          if (failureRail === null && failureRails.length === 1) {
+            failureRail = failureRails.item(0);
+          }
+          const trigger = sourceTrigger(threadPanel);
+          const currentSourceSurface = sourceSurface(trigger);
+          const currentSourceScroller = sourceScroller(trigger);
+          const activeElement = document.activeElement;
+          const protectedRootLoadingCount = Array.from(
+            threadPanel.querySelectorAll('[role="status"]'),
+          ).filter(
+            (element) =>
+              element.textContent?.includes("記事を読み込み中") &&
+              element.getClientRects().length > 0,
+          ).length;
+          const sample: ResearchContinuityPaintSample = {
+            timestamp: performance.now(),
+            mutationObserved,
+            documentToken: installedBridge.documentToken,
+            persistedStatus: turn.getAttribute(
+              "data-research-persisted-status",
+            ),
+            draftCount: turn.querySelectorAll(
+              '[data-testid="research-answer-slot"]',
+            ).length,
+            failureCount: failureRails.length,
+            protectedLoadingCount:
+              Array.from(
+                threadPanel.querySelectorAll(
+                  '[data-testid="research-navigation-overlay"]',
+                ),
+              ).filter((element) => element.getClientRects().length > 0)
+                .length + protectedRootLoadingCount,
+            announcerCount: threadPanel.querySelectorAll(
+              '[role="status"][aria-live="polite"][aria-atomic="true"]',
+            ).length,
+            sourceSurfaceCount: currentSourceSurface === null ? 0 : 1,
+            sourcesExpanded: trigger?.getAttribute("aria-expanded") ?? null,
+            sourcesControls: trigger?.getAttribute("aria-controls") ?? null,
+            sourceScrollTop: currentSourceScroller?.scrollTop ?? null,
+            focusedHref:
+              activeElement instanceof HTMLAnchorElement
+                ? activeElement.getAttribute("href")
+                : null,
+            sameFocus: activeElement === initialFocus,
+            sameTurn: turn === initialTurn,
+            sameFailureRail:
+              failureRail === null
+                ? null
+                : failureRails.length === 1 &&
+                  failureRails.item(0) === failureRail,
+            sameThreadPanel: threadPanel === initialThreadPanel,
+            sameComposer: composer === initialComposer,
+            sameAnswerScroller: answerScroller === initialAnswerScroller,
+            sameAnswerSlot:
+              initialAnswerSlot === null || answerSlot === null
+                ? null
+                : answerSlot === initialAnswerSlot,
+            sameSourceScroller:
+              initialSourceScroller === null
+                ? currentSourceScroller === null
+                : currentSourceScroller === initialSourceScroller,
+            turnRect: rect(turn),
+            threadPanelRect: rect(threadPanel),
+            composerRect: rect(composer),
+            answerScrollTop: answerScroller.scrollTop,
+            answerScrollHeight: answerScroller.scrollHeight,
+            answerClientHeight: answerScroller.clientHeight,
+          };
+          mutationObserved = false;
+          samples.push(sample);
+          if (sample.persistedStatus === terminalStatus) {
+            done = true;
+            observer.disconnect();
+            installedBridge.sampler = { done: true, samples };
+          }
+        }
+
+        function sampleNextPaint(): void {
+          if (done) return;
+          requestAnimationFrame(() => {
+            record();
+            sampleNextPaint();
+          });
+        }
+
+        const observer = new MutationObserver(() => {
+          mutationObserved = true;
         });
-      }
-
-      const observer = new MutationObserver(() => {
-        mutationObserved = true;
-      });
-      observer.observe(document.body, {
-        attributes: true,
-        childList: true,
-        subtree: true,
-      });
-      record();
-      sampleNextPaint();
-      installedBridge.sampler = { done, samples };
-      return samples[0] as ResearchContinuityPaintSample;
-    }, fixture.activeRunId);
+        observer.observe(document.body, {
+          attributes: true,
+          childList: true,
+          subtree: true,
+        });
+        record();
+        sampleNextPaint();
+        installedBridge.sampler = { done, samples };
+        return samples[0] as ResearchContinuityPaintSample;
+      },
+      { runId: fixture.activeRunId, terminalStatus },
+    );
   }
 
   async function waitForPersistedSample(): Promise<void> {
@@ -607,6 +641,7 @@ export async function installResearchContinuityBrowserHarness(
     startSampler,
     armTerminalRefreshGate,
     emitFailedTerminal,
+    emitCompletedTerminal,
     waitForTerminalRefresh: () => gateRequest,
     releaseTerminalRefresh,
     waitForPersistedSample,

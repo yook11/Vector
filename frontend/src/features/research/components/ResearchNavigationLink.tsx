@@ -9,6 +9,7 @@ import {
   type ResearchNavigationTarget,
   useResearchNavigation,
 } from "./ResearchNavigationBoundary";
+import { useResearchOperation } from "./ResearchOperationBoundary";
 
 type ThreadNavigationLinkProps = {
   variant: "thread";
@@ -43,18 +44,16 @@ function sameTarget(
 
 export function ResearchNavigationLink(props: ResearchNavigationLinkProps) {
   const pathname = usePathname();
-  const {
-    isNavigationPending,
-    pendingTarget,
-    navigate,
-    dismissHistoryAfterSelection,
-  } = useResearchNavigation();
+  const { operation } = useResearchOperation();
+  const { pendingTarget, navigate, dismissHistoryAfterSelection } =
+    useResearchNavigation();
   const target = props.target;
   const targetPending = sameTarget(pendingTarget, target);
   const active = props.variant === "thread" && props.active;
+  const isInteractionDisabled = operation !== null;
 
   function handleNavigate(event: { preventDefault: () => void }) {
-    if (isNavigationPending) {
+    if (isInteractionDisabled) {
       event.preventDefault();
       return;
     }
@@ -69,7 +68,7 @@ export function ResearchNavigationLink(props: ResearchNavigationLinkProps) {
 
   const navigationAria = {
     "aria-busy": targetPending || undefined,
-    "aria-disabled": isNavigationPending || undefined,
+    "aria-disabled": isInteractionDisabled || undefined,
   } as const;
 
   if (props.variant === "new") {
@@ -82,7 +81,7 @@ export function ResearchNavigationLink(props: ResearchNavigationLinkProps) {
         className={cn(
           buttonVariants({ variant: "outline", size: "icon-sm" }),
           "border-[var(--vector-rule)] bg-[var(--vector-paper)]",
-          isNavigationPending &&
+          isInteractionDisabled &&
             !targetPending &&
             "cursor-not-allowed opacity-45",
           targetPending &&
@@ -110,7 +109,7 @@ export function ResearchNavigationLink(props: ResearchNavigationLinkProps) {
         className={cn(
           buttonVariants({ variant: "outline" }),
           "w-full border-[var(--vector-rule)] bg-[var(--vector-paper)]",
-          isNavigationPending &&
+          isInteractionDisabled &&
             !targetPending &&
             "cursor-not-allowed opacity-45",
           targetPending &&
@@ -122,8 +121,9 @@ export function ResearchNavigationLink(props: ResearchNavigationLinkProps) {
           data-icon="inline-start"
           aria-hidden="true"
           className={cn(
-            "opacity-0 motion-reduce:animate-none",
-            targetPending && "animate-spin opacity-100",
+            "opacity-0",
+            targetPending &&
+              "animate-spin motion-reduce:animate-none opacity-100",
           )}
         />
         {targetPending ? "読み込み中…" : "さらに表示"}
@@ -141,7 +141,7 @@ export function ResearchNavigationLink(props: ResearchNavigationLinkProps) {
         props.active
           ? "border-[var(--vector-accent)]/35 bg-[var(--vector-accent-tint)] text-[var(--vector-ink)]"
           : "text-[var(--vector-ink-soft)] hover:border-[var(--vector-line)] hover:bg-[var(--vector-paper)]",
-        isNavigationPending &&
+        isInteractionDisabled &&
           !targetPending &&
           "cursor-not-allowed opacity-45",
         targetPending &&
@@ -168,7 +168,10 @@ export function ResearchNavigationLink(props: ResearchNavigationLinkProps) {
             className="animate-spin motion-reduce:animate-none"
           />
         ) : props.hasActiveRun ? (
-          <Loader2 aria-label="実行中" className="animate-spin" />
+          <Loader2
+            aria-label="実行中"
+            className="animate-spin motion-reduce:animate-none"
+          />
         ) : null}
       </span>
     </Link>

@@ -18,6 +18,8 @@ import type {
   ResearchThreadDetail,
   ResearchUserMessage,
 } from "@/types/types.gen";
+import { ResearchOperationProvider } from "./ResearchOperationBoundary";
+import { ResearchSubmissionProvider } from "./ResearchSubmissionBoundary";
 import { ResearchWorkspace } from "./ResearchWorkspace";
 
 vi.mock("../api/cancel-research-run", () => ({
@@ -33,13 +35,14 @@ vi.mock("../api/get-research-run", () => ({
 }));
 
 vi.mock("../api/submit-research-question", () => ({
-  submitResearchQuestion: vi.fn(),
+  submitResearchQuestion: mocks.submit,
 }));
 
 const THREAD_ID = "00000000-0000-4000-a000-000000000001";
 const THREAD_TWO = "00000000-0000-4000-a000-000000000002";
 const RUN_ONE = "00000000-0000-4000-a000-000000000011";
 const RUN_TWO = "00000000-0000-4000-a000-000000000012";
+const SUBMITTED_RUN = "00000000-0000-4000-a000-000000000013";
 const LONG_EXTERNAL_TITLE =
   "VeryLongExternalSourceTitleWithoutNaturalWhitespaceForOverflowVerification";
 const LONG_SOURCE_NAME =
@@ -50,14 +53,31 @@ const LONG_INTERNAL_TITLE =
   "VeryLongInternalArticleTitleWithoutNaturalWhitespaceForOverflowVerification";
 
 const mocks = vi.hoisted(() => ({
+  pathname: "/research/00000000-0000-4000-a000-000000000001",
   push: vi.fn(),
+  replace: vi.fn(),
   refresh: vi.fn(),
+  submit: vi.fn(),
+  toast: vi.fn(),
+  toastError: vi.fn(),
+}));
+
+vi.mock("@/lib/utils/toast-error", () => ({
+  toastError: mocks.toastError,
+}));
+
+vi.mock("sonner", () => ({
+  toast: { error: mocks.toast },
 }));
 
 vi.mock("next/navigation", () => ({
-  usePathname: () => `/research/${THREAD_ID}`,
+  usePathname: () => mocks.pathname,
   useSearchParams: () => new URLSearchParams(window.location.search),
-  useRouter: () => ({ push: mocks.push, refresh: mocks.refresh }),
+  useRouter: () => ({
+    push: mocks.push,
+    replace: mocks.replace,
+    refresh: mocks.refresh,
+  }),
 }));
 
 vi.mock("next/link", () => ({
@@ -242,6 +262,37 @@ function activeThread(
   };
 }
 
+function threadWithActiveRun(
+  runId: string,
+  threadId = THREAD_ID,
+): ResearchThreadDetail {
+  return {
+    threadId,
+    title: "Sources contract",
+    messages: [
+      userMessage(1, run(RUN_ONE, "completed")),
+      assistantMessage(2, 1, [externalSource, internalSource]),
+      userMessage(3, run(runId, "running")),
+    ],
+  };
+}
+
+function threadWithFinalRun(
+  runId: string,
+  threadId = THREAD_ID,
+): ResearchThreadDetail {
+  return {
+    threadId,
+    title: "Sources contract",
+    messages: [
+      userMessage(1, run(RUN_ONE, "completed")),
+      assistantMessage(2, 1, [externalSource, internalSource]),
+      userMessage(3, run(runId, "completed")),
+      assistantMessage(4, 2, [{ ...externalSource }, deletedInternalSource]),
+    ],
+  };
+}
+
 function statusThread(
   status: ResearchMessageRun["status"],
   sources: ResearchAssistantMessage["sources"] = [externalSource],
@@ -268,7 +319,11 @@ const WorkspaceUnderContract =
 
 function workspaceElement(thread: ResearchThreadDetail | null) {
   return (
-    <WorkspaceUnderContract threads={THREADS} thread={thread} limit={20} />
+    <ResearchOperationProvider>
+      <ResearchSubmissionProvider>
+        <WorkspaceUnderContract threads={THREADS} thread={thread} limit={20} />
+      </ResearchSubmissionProvider>
+    </ResearchOperationProvider>
   );
 }
 
@@ -384,6 +439,28 @@ function answerScroller(): HTMLElement {
   return candidate;
 }
 
+function latestAnswerSlot(): HTMLElement {
+  const slot = screen.getAllByTestId("research-answer-slot").at(-1);
+  if (slot === undefined) throw new Error("latest answer slot is missing");
+  return slot;
+}
+
+type Deferred<T> = {
+  promise: Promise<T>;
+  resolve: (value: T) => void;
+};
+
+function createDeferred<T>(): Deferred<T> {
+  let resolvePromise: ((value: T) => void) | undefined;
+  const promise = new Promise<T>((resolve) => {
+    resolvePromise = resolve;
+  });
+  return {
+    promise,
+    resolve: (value) => resolvePromise?.(value),
+  };
+}
+
 function expectOverflowSafe(element: HTMLElement): void {
   let candidate: HTMLElement | null = element;
   while (candidate !== null) {
@@ -410,9 +487,14 @@ function onlyLiveAnnouncer(container: HTMLElement): HTMLElement {
 }
 
 beforeEach(() => {
+  mocks.pathname = `/research/${THREAD_ID}`;
   window.history.replaceState(null, "", `/research/${THREAD_ID}`);
   mocks.push.mockReset();
+  mocks.replace.mockReset();
   mocks.refresh.mockReset();
+  mocks.submit.mockReset();
+  mocks.toast.mockReset();
+  mocks.toastError.mockReset();
   FakeEventSource.instances.length = 0;
   vi.stubGlobal("EventSource", FakeEventSource);
   vi.stubGlobal(
@@ -709,5 +791,259 @@ describe("Research workspace sources disclosure", () => {
     expect(screen.queryByRole("button", { name: /ソース/ })).toBeNull();
     expect(screen.queryByRole("complementary", { name: "ソース" })).toBeNull();
     expect(screen.queryByRole("dialog", { name: "ソース" })).toBeNull();
+  });
+});
+
+describe("Research workspace submission feedback", () => {
+  async function beginSubmission(
+    user: ReturnType<typeof userEvent.setup>,
+    question: string,
+  ): Promise<{ form: HTMLFormElement; textarea: HTMLTextAreaElement }> {
+    const textarea = screen.getByRole<HTMLTextAreaElement>("textbox", {
+      name: "質問",
+    });
+    const form = textarea.closest("form");
+    if (!(form instanceof HTMLFormElement)) {
+      throw new Error("composer form is missing");
+    }
+
+    await user.type(textarea, question);
+    await user.click(screen.getByRole("button", { name: "送信" }));
+    return { form, textarea };
+  }
+
+  function expectVisibleSubmissionStatus(main: HTMLElement): void {
+    const statuses = within(main).getAllByRole("status", {
+      name: "質問を送信しています…",
+    });
+    expect(statuses).toHaveLength(1);
+    expect(statuses[0]).toBeVisible();
+    expect(statuses[0]).not.toHaveClass("sr-only");
+  }
+
+  it("unresolved submit中も既存answerを保ったmain内に進行statusを一つだけ表示する", async () => {
+    installMatchMedia(1280);
+    mocks.submit.mockReturnValue(new Promise(() => undefined));
+    const user = userEvent.setup();
+    render(workspaceElement(completedThread()));
+    const main = screen.getByRole("main");
+    expect(within(main).getByText(/回答本文1/)).toBeInTheDocument();
+
+    const { form } = await beginSubmission(user, "市場への影響は？");
+
+    expect(mocks.submit).toHaveBeenCalledWith("市場への影響は？", THREAD_ID);
+    expect(form).toHaveAttribute("aria-busy", "true");
+    expect(
+      within(form).getByRole("button", { name: "送信中…" }),
+    ).toBeDisabled();
+    expectVisibleSubmissionStatus(main);
+    expect(within(main).getByText(/回答本文1/)).toBeInTheDocument();
+    expect(screen.queryByTestId("page-navigation-overlay")).toBeNull();
+  });
+
+  it("empty workspaceでもmain内にvisibleなsubmit statusを表示する", async () => {
+    installMatchMedia(1280);
+    mocks.submit.mockReturnValue(new Promise(() => undefined));
+    const user = userEvent.setup();
+    render(workspaceElement(null));
+    const main = screen.getByRole("main");
+
+    const { form } = await beginSubmission(user, "新しい質問");
+
+    expect(form).toHaveAttribute("aria-busy", "true");
+    expectVisibleSubmissionStatus(main);
+    expect(screen.queryByTestId("page-navigation-overlay")).toBeNull();
+  });
+
+  it("submit失敗後はstatusを消して入力とidle controlsを戻す", async () => {
+    installMatchMedia(1280);
+    const error = new Error("submit failed");
+    mocks.submit.mockRejectedValue(error);
+    const user = userEvent.setup();
+    render(workspaceElement(completedThread()));
+    const main = screen.getByRole("main");
+
+    const { form, textarea } = await beginSubmission(user, "保持する質問");
+
+    await waitFor(() =>
+      expect(mocks.toastError).toHaveBeenCalledWith(
+        error,
+        "質問を送信できませんでした",
+      ),
+    );
+    await waitFor(() =>
+      expect(within(form).getByRole("button", { name: "送信" })).toBeEnabled(),
+    );
+    expect(form).not.toHaveAttribute("aria-busy", "true");
+    expect(
+      within(main).queryByRole("status", { name: "質問を送信しています…" }),
+    ).toBeNull();
+    expect(textarea).toHaveValue("保持する質問");
+    expect(screen.queryByTestId("page-navigation-overlay")).toBeNull();
+  });
+});
+
+describe("Research workspace model-commit continuity", () => {
+  async function beginSubmission(
+    user: ReturnType<typeof userEvent.setup>,
+    question: string,
+  ): Promise<HTMLFormElement> {
+    const textarea = screen.getByRole<HTMLTextAreaElement>("textbox", {
+      name: "質問",
+    });
+    const form = textarea.closest("form");
+    if (!(form instanceof HTMLFormElement)) {
+      throw new Error("composer form is missing");
+    }
+
+    await user.type(textarea, question);
+    await user.click(screen.getByRole("button", { name: "送信" }));
+    return form;
+  }
+
+  function expectVisibleSubmissionStatus(main: HTMLElement): void {
+    const statuses = within(main).getAllByRole("status", {
+      name: "質問を送信しています…",
+    });
+    expect(statuses).toHaveLength(1);
+    expect(statuses[0]).toBeVisible();
+    expect(statuses[0]).not.toHaveClass("sr-only");
+  }
+
+  it("accepted submitは同threadの対象runがmodelへcommitするまでbusy/statusを保つ", async () => {
+    installMatchMedia(1280);
+    const accepted = createDeferred<{
+      kind: "accepted";
+      run: { threadId: string; runId: string };
+    }>();
+    mocks.submit.mockReturnValue(accepted.promise);
+    const user = userEvent.setup();
+    const view = render(workspaceElement(completedThread()));
+    const main = screen.getByRole("main");
+
+    const form = await beginSubmission(user, "commitを待つ質問");
+    await act(async () => {
+      accepted.resolve({
+        kind: "accepted",
+        run: { threadId: THREAD_ID, runId: SUBMITTED_RUN },
+      });
+      await Promise.resolve();
+    });
+
+    expect(form).toHaveAttribute("aria-busy", "true");
+    expect(
+      within(form).getByRole("button", { name: "送信中…" }),
+    ).toBeDisabled();
+    expectVisibleSubmissionStatus(main);
+
+    view.rerender(workspaceElement(threadWithActiveRun(RUN_TWO)));
+
+    expect(form).toHaveAttribute("aria-busy", "true");
+    expectVisibleSubmissionStatus(main);
+
+    view.rerender(workspaceElement(threadWithActiveRun(SUBMITTED_RUN)));
+
+    await waitFor(() => expect(form).toHaveAttribute("aria-busy", "false"));
+    expect(
+      within(main).queryByRole("status", { name: "質問を送信しています…" }),
+    ).toBeNull();
+  });
+
+  it("new thread accepted後もclient navigationと対象model commitまでempty workspaceのpendingを保つ", async () => {
+    installMatchMedia(1280);
+    mocks.submit.mockResolvedValue({
+      kind: "accepted",
+      run: { threadId: THREAD_TWO, runId: SUBMITTED_RUN },
+    });
+    const user = userEvent.setup();
+    const view = render(workspaceElement(null));
+    const main = screen.getByRole("main");
+    const frame = main;
+    const form = await beginSubmission(user, "新規threadへの質問");
+
+    await waitFor(() => expect(mocks.submit).toHaveBeenCalledTimes(1));
+    await waitFor(() =>
+      expect(mocks.replace).toHaveBeenCalledWith(`/research/${THREAD_TWO}`),
+    );
+    expect(mocks.replace).toHaveBeenCalledTimes(1);
+    expect(mocks.refresh).not.toHaveBeenCalled();
+    expect(mocks.toastError).not.toHaveBeenCalled();
+    expect(form).toHaveAttribute("aria-busy", "true");
+    expectVisibleSubmissionStatus(main);
+    expect(screen.getByRole("main")).toBe(frame);
+    expect(screen.queryByTestId("page-navigation-overlay")).toBeNull();
+
+    mocks.pathname = `/research/${THREAD_TWO}`;
+    window.history.replaceState(null, "", mocks.pathname);
+    view.rerender(
+      workspaceElement(threadWithActiveRun(SUBMITTED_RUN, THREAD_TWO)),
+    );
+
+    await waitFor(() =>
+      expect(screen.getByRole("main")).toHaveAttribute("aria-busy", "false"),
+    );
+    expect(
+      within(main).queryByRole("status", { name: "質問を送信しています…" }),
+    ).toBeNull();
+  });
+
+  it("emptyからactive thread modelへcommitしてもworkspace frameとcomposerを置換しない", () => {
+    installMatchMedia(1280);
+    const view = render(workspaceElement(null));
+    const frame = screen.getByRole("main");
+    const composer = screen
+      .getByRole("textbox", { name: "質問" })
+      .closest("form");
+    if (!(composer instanceof HTMLFormElement)) {
+      throw new Error("composer form is missing");
+    }
+
+    view.rerender(workspaceElement(threadWithActiveRun(SUBMITTED_RUN)));
+
+    expect(screen.getByRole("main")).toBe(frame);
+    expect(screen.getByRole("textbox", { name: "質問" }).closest("form")).toBe(
+      composer,
+    );
+    expect(
+      screen.queryByRole("status", { name: "Researchを読み込み中…" }),
+    ).toBeNull();
+    expect(screen.queryByTestId("page-navigation-overlay")).toBeNull();
+  });
+
+  it("outer workspace model commitでもtarget slot/scrollerを保ちdraftからfinalへ排他的に置換する", () => {
+    installMatchMedia(1280);
+    const view = render(workspaceElement(threadWithActiveRun(SUBMITTED_RUN)));
+    const source = FakeEventSource.instances.at(-1);
+    if (source === undefined) throw new Error("EventSource is missing");
+    const scroller = answerScroller();
+    const slot = latestAnswerSlot();
+
+    act(() => {
+      source.emit(
+        "answer.delta",
+        { attemptEpoch: 1, generation: 1, text: "外側commit前の下書き" },
+        "1-0",
+      );
+    });
+    expect(slot).toContainElement(screen.getByText("外側commit前の下書き"));
+    expect(within(slot).queryByText("回答本文2")).toBeNull();
+    expect(slot.textContent?.trim().length).toBeGreaterThan(0);
+
+    act(() => {
+      source.emit("terminal", { attemptEpoch: 1, status: "completed" }, "2-0");
+    });
+    expect(latestAnswerSlot()).toBe(slot);
+    expect(slot).toHaveTextContent("外側commit前の下書き");
+    expect(slot).toHaveTextContent("回答を確定しています…");
+    expect(within(slot).queryByText("回答本文2")).toBeNull();
+
+    view.rerender(workspaceElement(threadWithFinalRun(SUBMITTED_RUN)));
+
+    expect(answerScroller()).toBe(scroller);
+    expect(latestAnswerSlot()).toBe(slot);
+    expect(within(slot).queryByText("外側commit前の下書き")).toBeNull();
+    expect(within(slot).getByText(/回答本文2/)).toBeInTheDocument();
+    expect(slot).not.toHaveTextContent("回答を確定しています…");
+    expect(slot.textContent?.trim().length).toBeGreaterThan(0);
   });
 });

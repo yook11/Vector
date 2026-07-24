@@ -1,5 +1,6 @@
 import { ArrowUpRight, ChevronLeft, Sparkles } from "lucide-react";
 import Link from "next/link";
+import { PendingAwareLink } from "@/components/layout/PageNavigation";
 import {
   formatPaperDate,
   formatPaperTime,
@@ -36,14 +37,14 @@ export function NewsDetail({ article, isWatched }: NewsDetailProps) {
   return (
     <article className="pt-7 pb-4">
       <div className="mb-7">
-        <Link
+        <PendingAwareLink
           href="/"
           className="inline-flex items-center gap-1.5 text-[12.5px] tracking-[0.04em] text-[var(--vector-ink-muted)] transition-colors hover:text-[var(--vector-ink)]"
           style={{ fontFamily: "var(--font-vector-maru)" }}
         >
           <ChevronLeft aria-hidden="true" className="size-3.5" />
           ダッシュボードに戻る
-        </Link>
+        </PendingAwareLink>
       </div>
 
       {/* 見出し帯: 全幅。翻訳タイトル → 原題 (deck) の階層を罫線と書体で示す。 */}

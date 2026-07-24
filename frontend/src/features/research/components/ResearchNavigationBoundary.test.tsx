@@ -1,11 +1,20 @@
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { useState } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   ResearchNavigationBoundary,
   type ResearchNavigationTarget,
   useResearchNavigation,
 } from "./ResearchNavigationBoundary";
+import {
+  ResearchOperationProvider,
+  useResearchOperation,
+} from "./ResearchOperationBoundary";
+import {
+  ResearchSubmissionProvider,
+  useResearchSubmission,
+} from "./ResearchSubmissionBoundary";
 
 const mocks = vi.hoisted(() => ({
   pathname: "/research/00000000-0000-4000-a000-000000000001",
@@ -35,10 +44,27 @@ const TARGET_B: ResearchNavigationTarget = {
 
 function NavigationProbe() {
   const { navigate } = useResearchNavigation();
+  const { beginSubmission } = useResearchSubmission();
+  const { claimOperation } = useResearchOperation();
+  const [navigationResult, setNavigationResult] = useState<boolean | null>(
+    null,
+  );
   return (
     <>
+      <button type="button" onClick={() => beginSubmission()}>
+        submission開始
+      </button>
+      <button type="button" onClick={() => claimOperation("delete")}>
+        delete開始
+      </button>
       <button type="button" onClick={() => navigate(TARGET_B)}>
         Bへ移動
+      </button>
+      <button
+        type="button"
+        onClick={() => setNavigationResult(navigate(TARGET_B))}
+      >
+        Bへ移動結果
       </button>
       <button
         type="button"
@@ -49,18 +75,25 @@ function NavigationProbe() {
       >
         二重移動
       </button>
+      <span data-testid="navigation-result">
+        {navigationResult === null ? "未実行" : String(navigationResult)}
+      </span>
     </>
   );
 }
 
 function renderBoundary() {
   return render(
-    <ResearchNavigationBoundary sidebar={<aside>スレッド一覧</aside>}>
-      <section>
-        <p>旧Thread A本文</p>
-        <NavigationProbe />
-      </section>
-    </ResearchNavigationBoundary>,
+    <ResearchOperationProvider>
+      <ResearchSubmissionProvider>
+        <ResearchNavigationBoundary sidebar={<aside>スレッド一覧</aside>}>
+          <section>
+            <p>旧Thread A本文</p>
+            <NavigationProbe />
+          </section>
+        </ResearchNavigationBoundary>
+      </ResearchSubmissionProvider>
+    </ResearchOperationProvider>,
   );
 }
 
@@ -104,6 +137,7 @@ describe("ResearchNavigationBoundary", () => {
     expect(
       screen.getByText("「Thread B」を読み込み中…", { selector: "p" }),
     ).toBeInTheDocument();
+    expect(screen.queryByText("Researchを読み込み中…")).toBeNull();
   });
 
   it("同一tickの後続navigationを拒否する", async () => {
@@ -119,6 +153,33 @@ describe("ResearchNavigationBoundary", () => {
     );
   });
 
+  it("submission pending中はnavigateをfalseで拒否してrouterを呼ばない", async () => {
+    const user = userEvent.setup();
+    renderBoundary();
+
+    await user.click(screen.getByRole("button", { name: "submission開始" }));
+    await waitFor(() =>
+      expect(screen.getByRole("main")).toHaveAttribute("aria-busy", "true"),
+    );
+    await user.click(screen.getByRole("button", { name: "Bへ移動結果" }));
+
+    expect(screen.getByTestId("navigation-result")).toHaveTextContent("false");
+    expect(mocks.push).not.toHaveBeenCalled();
+    expect(screen.queryByTestId("research-navigation-overlay")).toBeNull();
+  });
+
+  it("delete claim中はnavigateをfalseで拒否してrouterを呼ばない", async () => {
+    const user = userEvent.setup();
+    renderBoundary();
+
+    await user.click(screen.getByRole("button", { name: "delete開始" }));
+    await user.click(screen.getByRole("button", { name: "Bへ移動結果" }));
+
+    expect(screen.getByTestId("navigation-result")).toHaveTextContent("false");
+    expect(mocks.push).not.toHaveBeenCalled();
+    expect(screen.queryByTestId("research-navigation-overlay")).toBeNull();
+  });
+
   it("target URLのcommit後にbusy stateを解除する", async () => {
     const user = userEvent.setup();
     const view = renderBoundary();
@@ -126,12 +187,16 @@ describe("ResearchNavigationBoundary", () => {
 
     mocks.pathname = "/research/00000000-0000-4000-a000-000000000002";
     view.rerender(
-      <ResearchNavigationBoundary sidebar={<aside>スレッド一覧</aside>}>
-        <section>
-          <p>Thread B本文</p>
-          <NavigationProbe />
-        </section>
-      </ResearchNavigationBoundary>,
+      <ResearchOperationProvider>
+        <ResearchSubmissionProvider>
+          <ResearchNavigationBoundary sidebar={<aside>スレッド一覧</aside>}>
+            <section>
+              <p>Thread B本文</p>
+              <NavigationProbe />
+            </section>
+          </ResearchNavigationBoundary>
+        </ResearchSubmissionProvider>
+      </ResearchOperationProvider>,
     );
 
     await waitFor(() =>

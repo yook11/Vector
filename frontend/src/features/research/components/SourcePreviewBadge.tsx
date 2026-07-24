@@ -1,9 +1,9 @@
 "use client";
 
 import { ExternalLink, FileText } from "lucide-react";
-import Link from "next/link";
 import type { PointerEvent } from "react";
 import { useEffect, useRef, useState } from "react";
+import { PendingAwareLink } from "@/components/layout/PageNavigation";
 import { Badge } from "@/components/ui/badge";
 import {
   Popover,
@@ -44,13 +44,13 @@ function SourceTitle({ source }: { source: ResearchCitationSource }) {
 
   if (source.articleId !== null) {
     return (
-      <Link
+      <PendingAwareLink
         href={`/news/${source.articleId}`}
         className="inline-flex max-w-full min-w-0 items-center gap-1 text-sm font-semibold text-popover-foreground underline-offset-4 hover:underline"
       >
         <span className="min-w-0 line-clamp-2">{source.title}</span>
         <FileText aria-hidden="true" className="mt-0.5 size-3.5 shrink-0" />
-      </Link>
+      </PendingAwareLink>
     );
   }
 

@@ -1,5 +1,5 @@
 import { ArrowUpRight } from "lucide-react";
-import Link from "next/link";
+import { PendingAwareLink } from "@/components/layout/PageNavigation";
 import {
   formatPaperDate,
   getCategoryKicker,
@@ -20,7 +20,7 @@ export function BriefingBandCard({
   const kicker = getCategoryKicker(card.category.slug);
 
   return (
-    <Link
+    <PendingAwareLink
       href={`/briefing/${card.category.slug}`}
       className="group block no-underline overflow-hidden rounded-[3px_3px_12px_12px] border border-[var(--vector-line)] bg-[var(--vector-surface)] border-t-[3px] border-t-[var(--kc-hue)] dark:border-t-[var(--kc-hue-dark)] transition-[transform,box-shadow,border-color] duration-150 ease-out hover:-translate-y-0.5 hover:border-[var(--vector-ink-muted)] hover:shadow-[0_18px_44px_-30px_rgba(20,16,10,0.55)]"
       style={kickerCssVars(kicker)}
@@ -92,6 +92,6 @@ export function BriefingBandCard({
           </span>
         </div>
       </div>
-    </Link>
+    </PendingAwareLink>
   );
 }

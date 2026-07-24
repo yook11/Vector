@@ -3,6 +3,18 @@
 
 @custom-variant dark (&:is(.dark *));
 
+@media (prefers-reduced-motion: reduce) {
+  .animate-spin,
+  .animate-pulse {
+    animation: none;
+  }
+}
+
+[data-research-route-host]:has([data-research-route-rejected])
+  > :is([data-research-route-initial], [data-research-route-retained]) {
+  display: none;
+}
+
 :root {
   /* Apple-inspired light theme
    * Background: #fbfbfd — cool-tinted off-white

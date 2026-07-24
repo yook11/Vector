@@ -22,13 +22,18 @@ vi.mock("@/features/research", () => ({
   ResearchUuidSchema: {
     safeParse: (value: string) => ({ success: true, data: value }),
   },
-  ResearchWorkspace: (props: Record<string, unknown>) => {
+}));
+
+vi.mock("@/features/research-client", () => ({
+  ResearchRouteModelCommit: (props: Record<string, unknown>) => {
     mocks.workspaceProps.push(props);
     return (
       <section data-testid="research-workspace">通常の回答workspace</section>
     );
   },
 }));
+
+vi.mock("server-only", () => ({}));
 
 vi.mock("@/components/layout/ShellMasthead", () => ({
   ShellMasthead: () => <header />,

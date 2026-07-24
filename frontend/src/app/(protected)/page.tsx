@@ -1,5 +1,6 @@
 import { Suspense } from "react";
 import { getProtectedNavItems } from "@/components/layout/nav-items";
+import { PageNavigationContent } from "@/components/layout/PageNavigation";
 import { ThemeToggle } from "@/components/layout/ThemeToggle";
 import {
   formatPaperMastheadDate,
@@ -38,43 +39,128 @@ export default async function DashboardPage({
   const session = await requireSession();
   const isAdmin = narrowRole(session.user.role) === "admin";
   const navItems = getProtectedNavItems(isAdmin);
-  const categoriesData = await getCategories();
 
-  // 記事取得は子の Suspense へ閉じ込め、フィルタ変更のたびに key で再マウントして
-  // skeleton を出す。これにより切り替え中であることがコンテンツ領域で伝わる。
-  const sectionKey = `${filters.category ?? "all"}|${filters.sortOrder ?? "desc"}|${filters.perPage ?? ""}|${filters.page ?? 1}`;
-
-  // EOP 下で undefined を optional prop に明示代入できないため、
-  // 条件付き spread で「未指定 or 値あり」を表現する。
-  const categoryProps =
-    filters.category !== undefined ? { activeCategory: filters.category } : {};
+  // 独立した request は最初にまとめて開始し、カテゴリ待ちで外枠を止めない。
+  const categoriesPromise = getCategories();
+  const articlesPromise = getArticles(filters);
+  const watchedIdsPromise = getWatchlistIds();
 
   return (
     <PaperSurface>
       <div className="relative min-h-dvh w-full overflow-hidden">
         <PaperTexture />
-        <DashboardMasthead
-          categories={categoriesData.items}
-          currentQuery={filters}
-          dateSlot={
-            <Suspense fallback={null}>
-              <MastheadDate filters={filters} />
-            </Suspense>
-          }
-          navItems={navItems}
-          themeSlot={<ThemeToggle />}
-          userMenuSlot={
-            <UserMenu
-              compact
-              buttonClassName="rounded-none text-[var(--vector-ink-muted)] hover:bg-transparent hover:text-[var(--vector-accent)]"
-              emailClassName="text-[var(--vector-ink-muted)]"
-            />
-          }
-          {...categoryProps}
-        />
+        <Suspense fallback={<DashboardInitialSkeleton />}>
+          <DashboardContent
+            articlesPromise={articlesPromise}
+            categoriesPromise={categoriesPromise}
+            filters={filters}
+            navItems={navItems}
+            watchedIdsPromise={watchedIdsPromise}
+          />
+        </Suspense>
+      </div>
+    </PaperSurface>
+  );
+}
 
+function DashboardInitialSkeleton() {
+  const bar =
+    "animate-pulse motion-reduce:animate-none rounded-sm bg-[color-mix(in_oklab,var(--vector-ink)_10%,transparent)]";
+
+  return (
+    <>
+      <div aria-hidden="true" className="relative z-10 px-5 sm:px-8 lg:px-10">
+        <div className="grid grid-cols-[1fr_auto_1fr] items-center gap-4 pt-5 pb-3">
+          <div className={`h-4 w-24 ${bar}`} />
+          <div className={`h-5 w-56 ${bar}`} />
+          <div className={`h-4 w-32 justify-self-end ${bar}`} />
+        </div>
+        <div className="flex items-center justify-center gap-4 py-5 sm:gap-6">
+          <div className={`h-px flex-1 ${bar}`} />
+          <div className={`h-14 w-48 ${bar}`} />
+          <div className={`h-px flex-1 ${bar}`} />
+        </div>
+        <div className="mb-3 border-t-[3px] border-double border-[var(--vector-ink)]" />
+        <div className="flex gap-2 overflow-hidden pb-5">
+          {[0, 1, 2, 3].map((item) => (
+            <div key={item} className={`h-9 w-20 shrink-0 ${bar}`} />
+          ))}
+        </div>
+      </div>
+      <section
+        aria-hidden="true"
+        className="relative z-10 mx-5 mb-7 flex items-center justify-between border-b border-[var(--vector-ink)] pb-3.5 sm:mx-8 lg:mx-10"
+      >
+        <div className={`h-5 w-36 ${bar}`} />
+        <div className={`h-9 w-28 ${bar}`} />
+      </section>
+      <main className="relative z-10 px-5 pb-14 sm:px-8 lg:px-10">
+        <DashboardArticleListSkeleton label="記事を更新中…" />
+      </main>
+    </>
+  );
+}
+
+async function DashboardContent({
+  articlesPromise,
+  categoriesPromise,
+  filters,
+  navItems,
+  watchedIdsPromise,
+}: {
+  articlesPromise: ReturnType<typeof getArticles>;
+  categoriesPromise: ReturnType<typeof getCategories>;
+  filters: ArticleQuery;
+  navItems: ReturnType<typeof getProtectedNavItems>;
+  watchedIdsPromise: ReturnType<typeof getWatchlistIds>;
+}) {
+  const categoriesData = await categoriesPromise;
+
+  // フィルタ変更のたびに key で再マウントして、記事領域だけで再取得を伝える。
+  const sectionKey = `${filters.category ?? "all"}|${filters.sortOrder ?? "desc"}|${filters.perPage ?? ""}|${filters.page ?? 1}`;
+  const categoryProps =
+    filters.category !== undefined ? { activeCategory: filters.category } : {};
+
+  return (
+    <>
+      <DashboardMasthead
+        categories={categoriesData.items}
+        currentQuery={filters}
+        dateSlot={
+          <Suspense
+            fallback={
+              <span
+                aria-hidden="true"
+                className="hidden h-4 w-32 rounded-sm bg-[color-mix(in_oklab,var(--vector-ink)_10%,transparent)] sm:inline-block"
+              />
+            }
+          >
+            <MastheadDate articlesPromise={articlesPromise} />
+          </Suspense>
+        }
+        navItems={navItems}
+        themeSlot={<ThemeToggle />}
+        userMenuSlot={
+          <UserMenu
+            compact
+            buttonClassName="rounded-none text-[var(--vector-ink-muted)] hover:bg-transparent hover:text-[var(--vector-accent)]"
+            emailClassName="text-[var(--vector-ink-muted)]"
+          />
+        }
+        {...categoryProps}
+      />
+
+      <PageNavigationContent>
         <section className="relative z-10 mx-5 mb-7 flex flex-wrap items-center justify-between gap-3 border-b border-[var(--vector-ink)] pb-3.5 sm:mx-8 lg:mx-10">
-          <Suspense key={sectionKey} fallback={<span className="h-5" />}>
+          <Suspense
+            key={sectionKey}
+            fallback={
+              <span
+                aria-hidden="true"
+                className="h-5 w-36 rounded-sm bg-[color-mix(in_oklab,var(--vector-ink)_10%,transparent)]"
+              />
+            }
+          >
             <PaperNewsResultSummary
               filters={filters}
               categories={categoriesData.items}
@@ -87,18 +173,25 @@ export default async function DashboardPage({
         <main className="relative z-10 px-5 pb-14 sm:px-8 lg:px-10">
           <Suspense
             key={sectionKey}
-            fallback={<DashboardArticleListSkeleton />}
+            fallback={<DashboardArticleListSkeleton label="記事を更新中…" />}
           >
-            <DashboardArticleSection filters={filters} />
+            <DashboardArticleSection
+              articlesPromise={articlesPromise}
+              watchedIdsPromise={watchedIdsPromise}
+            />
           </Suspense>
         </main>
-      </div>
-    </PaperSurface>
+      </PageNavigationContent>
+    </>
   );
 }
 
-async function MastheadDate({ filters }: { filters: ArticleQuery }) {
-  const data = await getArticles(filters);
+async function MastheadDate({
+  articlesPromise,
+}: {
+  articlesPromise: ReturnType<typeof getArticles>;
+}) {
+  const data = await articlesPromise;
   return (
     <span
       className="hidden shrink-0 text-[12.5px] italic tracking-[0.04em] text-[var(--vector-ink-muted)] sm:inline"
@@ -109,10 +202,16 @@ async function MastheadDate({ filters }: { filters: ArticleQuery }) {
   );
 }
 
-async function DashboardArticleSection({ filters }: { filters: ArticleQuery }) {
+async function DashboardArticleSection({
+  articlesPromise,
+  watchedIdsPromise,
+}: {
+  articlesPromise: ReturnType<typeof getArticles>;
+  watchedIdsPromise: ReturnType<typeof getWatchlistIds>;
+}) {
   const [newsData, watchedIds] = await Promise.all([
-    getArticles(filters),
-    getWatchlistIds(),
+    articlesPromise,
+    watchedIdsPromise,
   ]);
   return (
     <>

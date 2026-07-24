@@ -38,12 +38,25 @@ async function SourceHealthContent({
 
 function SourceHealthSkeleton() {
   return (
-    <div className="space-y-2" aria-hidden="true">
-      {Array.from({ length: 6 }).map((_, i) => (
-        // biome-ignore lint/suspicious/noArrayIndexKey: static skeleton list
-        <Skeleton key={i} className="h-14 w-full" />
-      ))}
-    </div>
+    <>
+      <p
+        role="status"
+        aria-live="polite"
+        aria-atomic="true"
+        className="text-sm font-medium text-muted-foreground"
+      >
+        ソース健全性を読み込み中…
+      </p>
+      <div
+        className="space-y-2 motion-reduce:animate-none motion-reduce:[&_[data-slot=skeleton]]:animate-none"
+        aria-hidden="true"
+      >
+        {Array.from({ length: 6 }).map((_, i) => (
+          // biome-ignore lint/suspicious/noArrayIndexKey: static skeleton list
+          <Skeleton key={i} className="h-14 w-full" />
+        ))}
+      </div>
+    </>
   );
 }
 

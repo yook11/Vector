@@ -6,9 +6,15 @@ import {
   ResearchNavigationBoundary,
   useResearchNavigation,
 } from "./ResearchNavigationBoundary";
+import {
+  ResearchOperationProvider,
+  useResearchOperation,
+} from "./ResearchOperationBoundary";
+import { ResearchSubmissionProvider } from "./ResearchSubmissionBoundary";
 
 const mocks = vi.hoisted(() => ({
   push: vi.fn(),
+  replace: vi.fn(),
   refresh: vi.fn(),
   submit: vi.fn(),
   cancel: vi.fn(),
@@ -19,7 +25,11 @@ const mocks = vi.hoisted(() => ({
 vi.mock("next/navigation", () => ({
   usePathname: () => "/research/current",
   useSearchParams: () => new URLSearchParams(),
-  useRouter: () => ({ push: mocks.push, refresh: mocks.refresh }),
+  useRouter: () => ({
+    push: mocks.push,
+    replace: mocks.replace,
+    refresh: mocks.refresh,
+  }),
 }));
 
 vi.mock("../api/submit-research-question", () => ({
@@ -70,15 +80,30 @@ function StartNavigation() {
   );
 }
 
+function StartDelete() {
+  const { claimOperation } = useResearchOperation();
+  return (
+    <button type="button" onClick={() => claimOperation("delete")}>
+      delete開始
+    </button>
+  );
+}
+
 function renderComposer(
   activeRunId: string | null = null,
-  threadId: string | undefined = "current",
+  ...threadIds: [threadId?: string]
 ) {
+  const threadId = threadIds.length === 0 ? "current" : threadIds[0];
   return render(
-    <ResearchNavigationBoundary sidebar={<aside>一覧</aside>}>
-      <StartNavigation />
-      <ResearchComposer threadId={threadId} activeRunId={activeRunId} />
-    </ResearchNavigationBoundary>,
+    <ResearchOperationProvider>
+      <ResearchSubmissionProvider>
+        <ResearchNavigationBoundary sidebar={<aside>一覧</aside>}>
+          <StartNavigation />
+          <StartDelete />
+          <ResearchComposer threadId={threadId} activeRunId={activeRunId} />
+        </ResearchNavigationBoundary>
+      </ResearchSubmissionProvider>
+    </ResearchOperationProvider>,
   );
 }
 
@@ -112,6 +137,7 @@ function expectTouchTarget(button: HTMLElement): void {
 
 beforeEach(() => {
   mocks.push.mockReset();
+  mocks.replace.mockReset();
   mocks.refresh.mockReset();
   mocks.submit.mockReset();
   mocks.cancel.mockReset();
@@ -200,6 +226,20 @@ describe("ResearchComposer dock contract", () => {
 });
 
 describe("ResearchComposer pending regression", () => {
+  it("delete claim中は同一tickのcomposer submitを開始しない", async () => {
+    const user = userEvent.setup();
+    renderComposer();
+    const textarea = screen.getByRole("textbox", { name: "質問" });
+    await user.type(textarea, "delete中に送信しない質問");
+
+    await user.click(screen.getByRole("button", { name: "delete開始" }));
+    await user.click(screen.getByRole("button", { name: "送信" }));
+
+    expect(mocks.submit).not.toHaveBeenCalled();
+    expect(textarea).toHaveValue("delete中に送信しない質問");
+    expect(composerForm()).toHaveAttribute("aria-busy", "false");
+  });
+
   it("navigation pendingでtextareaとsendをdisabledにする", async () => {
     const user = userEvent.setup();
     renderComposer();
@@ -230,12 +270,31 @@ describe("ResearchComposer pending regression", () => {
     renderComposer();
     const textarea = screen.getByRole("textbox", { name: "質問" });
     await user.type(textarea, "市場への影響は？");
+    const sendButton = screen.getByRole("button", { name: "送信" });
 
-    await user.click(screen.getByRole("button", { name: "送信" }));
+    await user.click(sendButton);
 
     expect(mocks.submit).toHaveBeenCalledWith("市場への影響は？", "current");
     expect(textarea).toBeDisabled();
-    expect(screen.getByRole("button", { name: "送信" })).toBeDisabled();
+    expect(sendButton).toBeDisabled();
+  });
+
+  it("submit pending中はformとbuttonが同じsourceで進行状態を表す", async () => {
+    mocks.submit.mockReturnValue(new Promise(() => undefined));
+    const user = userEvent.setup();
+    renderComposer();
+    const textarea = screen.getByRole("textbox", { name: "質問" });
+    await user.type(textarea, "市場への影響は？");
+
+    await user.click(screen.getByRole("button", { name: "送信" }));
+
+    const form = composerForm();
+    const button = screen.getByRole("button", { name: "送信中…" });
+    const spinner = button.querySelector<SVGElement>('svg[aria-hidden="true"]');
+    expect(form).toHaveAttribute("aria-busy", "true");
+    expect(button).toBeDisabled();
+    expect(spinner).toBeInTheDocument();
+    expect(spinner).toHaveClass("animate-spin", "motion-reduce:animate-none");
   });
 
   it("cancel pending中はstopをdisabledにする", async () => {
@@ -254,7 +313,7 @@ describe("ResearchComposer pending regression", () => {
 });
 
 describe("ResearchComposer mutation refresh ownership", () => {
-  it("existing threadへのsubmit成功はActionを1回だけ呼んで入力をclearしclient refreshしない", async () => {
+  it("existing threadへのsubmit成功はActionを1回だけ呼んで入力をclearしclient refreshする", async () => {
     mocks.submit.mockResolvedValue(ACCEPTED_RESULT);
     const user = userEvent.setup();
     renderComposer();
@@ -268,7 +327,52 @@ describe("ResearchComposer mutation refresh ownership", () => {
     await waitFor(() => expect(textarea).toHaveValue(""));
     expect(mocks.submit).toHaveBeenCalledTimes(1);
     expect(mocks.submit).toHaveBeenCalledWith("市場への影響は？", "current");
+    expect(mocks.refresh).toHaveBeenCalledTimes(1);
+    expect(mocks.replace).not.toHaveBeenCalled();
+  });
+
+  it("new threadへのaccepted結果は検証済みUUIDのexact pathをproviderへ予約する", async () => {
+    mocks.submit.mockResolvedValue(ACCEPTED_RESULT);
+    const user = userEvent.setup();
+    renderComposer(null, undefined);
+    const textarea = screen.getByRole<HTMLTextAreaElement>("textbox", {
+      name: "質問",
+    });
+    await user.type(textarea, "新しいthreadへの質問");
+
+    await user.click(screen.getByRole("button", { name: "送信" }));
+
+    await waitFor(() =>
+      expect(mocks.replace).toHaveBeenCalledWith(
+        `/research/${ACCEPTED_RESULT.run.threadId}`,
+      ),
+    );
+    expect(mocks.replace).toHaveBeenCalledTimes(1);
     expect(mocks.refresh).not.toHaveBeenCalled();
+    expect(textarea).toHaveValue("");
+    expect(composerForm()).toHaveAttribute("aria-busy", "true");
+  });
+
+  it("new threadのaccepted結果がUUIDでなければ遷移せずerrorとしてsettleする", async () => {
+    const invalidAccepted = {
+      kind: "accepted" as const,
+      run: { ...ACCEPTED_RESULT.run, threadId: "not-a-uuid" },
+    };
+    mocks.submit.mockResolvedValue(invalidAccepted);
+    const user = userEvent.setup();
+    renderComposer(null, undefined);
+    const textarea = screen.getByRole<HTMLTextAreaElement>("textbox", {
+      name: "質問",
+    });
+    await user.type(textarea, "不正なthread IDを拒否する質問");
+
+    await user.click(screen.getByRole("button", { name: "送信" }));
+
+    await waitFor(() => expect(mocks.toastError).toHaveBeenCalledTimes(1));
+    expect(mocks.replace).not.toHaveBeenCalled();
+    expect(mocks.refresh).not.toHaveBeenCalled();
+    expect(textarea).toHaveValue("不正なthread IDを拒否する質問");
+    expect(composerForm()).toHaveAttribute("aria-busy", "false");
   });
 
   it("利用枠が残っている再試行待ち時間では入力を保持して専用案内を表示する", async () => {
@@ -293,6 +397,10 @@ describe("ResearchComposer mutation refresh ownership", () => {
     expect(textarea).toHaveValue(question);
     expect(mocks.toastError).not.toHaveBeenCalled();
     expect(mocks.refresh).not.toHaveBeenCalled();
+    expect(composerForm()).not.toHaveAttribute("aria-busy", "true");
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: "送信" })).toBeEnabled(),
+    );
   });
 
   it("利用枠のリセット時刻を過ぎていれば入力を保持して再試行案内を表示する", async () => {
@@ -317,6 +425,10 @@ describe("ResearchComposer mutation refresh ownership", () => {
     expect(textarea).toHaveValue(question);
     expect(mocks.toastError).not.toHaveBeenCalled();
     expect(mocks.refresh).not.toHaveBeenCalled();
+    expect(composerForm()).not.toHaveAttribute("aria-busy", "true");
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: "送信" })).toBeEnabled(),
+    );
   });
 
   it("cancel成功は既存のclient refresh契約を維持する", async () => {
@@ -355,5 +467,31 @@ describe("ResearchComposer mutation refresh ownership", () => {
     expect(textarea).toHaveValue("保持する質問");
     expect(mocks.submit).toHaveBeenCalledTimes(1);
     expect(mocks.refresh).not.toHaveBeenCalled();
+    expect(composerForm()).not.toHaveAttribute("aria-busy", "true");
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: "送信" })).toBeEnabled(),
+    );
+  });
+
+  it("認証NEXT_REDIRECTはtoastせずauth navigation commitまでsubmit pendingを維持する", async () => {
+    const redirectError = Object.assign(new Error("NEXT_REDIRECT"), {
+      digest: "NEXT_REDIRECT;replace;/auth/login;303;",
+    });
+    mocks.submit.mockRejectedValue(redirectError);
+    const user = userEvent.setup();
+    renderComposer(null, undefined);
+    const textarea = screen.getByRole<HTMLTextAreaElement>("textbox", {
+      name: "質問",
+    });
+    const form = composerForm();
+    await user.type(textarea, "再認証が必要な質問");
+    await user.click(screen.getByRole("button", { name: "送信" }));
+
+    await waitFor(() => expect(mocks.submit).toHaveBeenCalledTimes(1));
+    expect(mocks.toastError).not.toHaveBeenCalled();
+    expect(mocks.replace).not.toHaveBeenCalled();
+    expect(mocks.refresh).not.toHaveBeenCalled();
+    expect(form).toHaveAttribute("aria-busy", "true");
+    expect(screen.getByRole("button", { name: "送信中…" })).toBeDisabled();
   });
 });

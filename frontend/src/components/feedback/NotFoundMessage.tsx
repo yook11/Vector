@@ -1,4 +1,4 @@
-import Link from "next/link";
+import { PendingAwareLink } from "@/components/layout/PageNavigation";
 import { Button } from "@/components/ui/button";
 
 export function NotFoundMessage({ message }: { message: string }) {
@@ -7,7 +7,7 @@ export function NotFoundMessage({ message }: { message: string }) {
       <h1 className="text-4xl font-bold">404</h1>
       <p className="text-muted-foreground">{message}</p>
       <Button asChild>
-        <Link href="/">Back to Dashboard</Link>
+        <PendingAwareLink href="/">Back to Dashboard</PendingAwareLink>
       </Button>
     </main>
   );

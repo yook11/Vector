@@ -1,17 +1,11 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
-  redirect: vi.fn((href: string): never => {
-    throw new Error(`redirect:${href}`);
-  }),
   requireSessionForAction: vi.fn(),
-  revalidatePath: vi.fn(),
   createResearchResponse: vi.fn(),
   submitResearchQuestionCore: vi.fn(),
 }));
 
-vi.mock("next/cache", () => ({ revalidatePath: mocks.revalidatePath }));
-vi.mock("next/navigation", () => ({ redirect: mocks.redirect }));
 vi.mock("server-only", () => ({}));
 vi.mock("@/lib/api/hey-api-interceptors", () => ({}));
 vi.mock("@/types/sdk.gen", () => ({
@@ -45,7 +39,7 @@ beforeEach(() => {
 });
 
 describe("submitResearchQuestion", () => {
-  it("利用上限結果はそのまま返し、再検証もリダイレクトもしない", async () => {
+  it("利用上限結果はそのまま返す", async () => {
     mocks.submitResearchQuestionCore.mockResolvedValue(QUOTA_RESULT);
 
     await expect(submitResearchQuestion(QUESTION, THREAD_ID)).resolves.toEqual(
@@ -53,11 +47,9 @@ describe("submitResearchQuestion", () => {
     );
 
     expect(mocks.requireSessionForAction).toHaveBeenCalledOnce();
-    expect(mocks.revalidatePath).not.toHaveBeenCalled();
-    expect(mocks.redirect).not.toHaveBeenCalled();
   });
 
-  it("既存threadのaccepted結果では検証済み入力をcoreへ渡して再検証する", async () => {
+  it("既存threadのaccepted結果は検証済み入力をcoreへ渡してそのまま返す", async () => {
     const accepted = { kind: "accepted" as const, run: RUN };
     mocks.submitResearchQuestionCore.mockResolvedValue(accepted);
 
@@ -69,30 +61,33 @@ describe("submitResearchQuestion", () => {
       question: PARSED_QUESTION,
       threadId: THREAD_ID,
     });
-    expect(mocks.revalidatePath).toHaveBeenNthCalledWith(1, "/research");
-    expect(mocks.revalidatePath).toHaveBeenNthCalledWith(
-      2,
-      `/research/${THREAD_ID}`,
-    );
-    expect(mocks.redirect).not.toHaveBeenCalled();
   });
 
-  it("新規threadのaccepted結果では再検証後にthread画面へリダイレクトする", async () => {
+  it("新規threadのaccepted結果は検証済み入力をcoreへ渡してそのまま返す", async () => {
     const accepted = { kind: "accepted" as const, run: RUN };
     mocks.submitResearchQuestionCore.mockResolvedValue(accepted);
 
-    await expect(submitResearchQuestion(QUESTION)).rejects.toThrow(
-      `redirect:/research/${THREAD_ID}`,
-    );
+    await expect(submitResearchQuestion(QUESTION)).resolves.toEqual(accepted);
 
     expect(mocks.submitResearchQuestionCore).toHaveBeenCalledWith({
       question: PARSED_QUESTION,
     });
-    expect(mocks.revalidatePath).toHaveBeenNthCalledWith(1, "/research");
-    expect(mocks.revalidatePath).toHaveBeenNthCalledWith(
-      2,
-      `/research/${THREAD_ID}`,
-    );
-    expect(mocks.redirect).toHaveBeenCalledWith(`/research/${THREAD_ID}`);
+  });
+
+  it("認証redirectはschema検証とAPI呼び出しより前にそのまま伝播する", async () => {
+    const authRedirect = Object.assign(new Error("NEXT_REDIRECT"), {
+      digest: "NEXT_REDIRECT;replace;/auth/login;303;",
+    });
+    mocks.requireSessionForAction.mockRejectedValue(authRedirect);
+
+    await expect(submitResearchQuestion(QUESTION)).rejects.toBe(authRedirect);
+
+    expect(mocks.submitResearchQuestionCore).not.toHaveBeenCalled();
+  });
+
+  it("schema違反はAPI呼び出し前にrejectする", async () => {
+    await expect(submitResearchQuestion("   ")).rejects.toThrow();
+
+    expect(mocks.submitResearchQuestionCore).not.toHaveBeenCalled();
   });
 });

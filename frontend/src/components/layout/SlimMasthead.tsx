@@ -1,6 +1,6 @@
 import Image from "next/image";
-import Link from "next/link";
 import type { ReactNode } from "react";
+import { PendingAwareLink } from "@/components/layout/PageNavigation";
 
 interface SlimMastheadProps {
   navSlot: ReactNode;
@@ -21,7 +21,7 @@ export function SlimMasthead({
   return (
     <header className="sticky top-0 z-50 border-b border-[var(--vector-line)] bg-[color-mix(in_oklab,var(--vector-paper)_86%,transparent)] backdrop-blur-[10px]">
       <div className="mx-auto flex h-[58px] max-w-[1180px] items-center gap-6 px-5 sm:px-8 lg:px-10">
-        <Link
+        <PendingAwareLink
           href="/"
           aria-label="Vector ニュースへ"
           className="flex shrink-0 items-center gap-2.5"
@@ -41,7 +41,7 @@ export function SlimMasthead({
           >
             VECTOR
           </span>
-        </Link>
+        </PendingAwareLink>
 
         {navSlot}
 

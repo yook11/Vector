@@ -11,7 +11,9 @@ import { type ComponentProps, createElement } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { PaginatedResearchThreadResponse } from "@/types/types.gen";
 import { ResearchNavigationBoundary } from "./ResearchNavigationBoundary";
+import { ResearchOperationProvider } from "./ResearchOperationBoundary";
 import { ResearchSidebar } from "./ResearchSidebar";
+import { ResearchSubmissionProvider } from "./ResearchSubmissionBoundary";
 
 const mocks = vi.hoisted(() => ({
   pathname: "/research/00000000-0000-4000-a000-000000000001",
@@ -171,15 +173,23 @@ function installMatchMedia(initialWidth: number): MatchMediaController {
 
 function renderHistory() {
   return render(
-    <ResearchNavigationBoundary
-      sidebar={
-        <ResearchSidebar threads={THREADS} activeThreadId={A_ID} limit={2} />
-      }
-    >
-      <section>
-        <h2>Thread A 本文</h2>
-      </section>
-    </ResearchNavigationBoundary>,
+    <ResearchOperationProvider>
+      <ResearchSubmissionProvider>
+        <ResearchNavigationBoundary
+          sidebar={
+            <ResearchSidebar
+              threads={THREADS}
+              activeThreadId={A_ID}
+              limit={2}
+            />
+          }
+        >
+          <section>
+            <h2>Thread A 本文</h2>
+          </section>
+        </ResearchNavigationBoundary>
+      </ResearchSubmissionProvider>
+    </ResearchOperationProvider>,
   );
 }
 

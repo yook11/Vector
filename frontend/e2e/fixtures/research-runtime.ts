@@ -18,9 +18,11 @@ const variantArguments: Record<ResearchContinuityVariant, string> = {
   closed: "closed",
   open: "open",
 };
+const researchUuidPattern =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 function runResearchContinuityCommand(
-  command: "reset" | "fail",
+  command: "reset" | "fail" | "complete",
   variant: ResearchContinuityVariant,
 ): Promise<void> {
   const variantArgument = variantArguments[variant];
@@ -94,9 +96,47 @@ export function failResearchContinuity(
   return runResearchContinuityCommand("fail", variant);
 }
 
+export function completeResearchContinuity(
+  variant: ResearchContinuityVariant,
+): Promise<void> {
+  return runResearchContinuityCommand("complete", variant);
+}
+
 export function resetResearchRateLimits(): Promise<void> {
   return runDockerComposeCommand(
     ["redis-rl", "redis-cli", "--raw", "EVAL", resetRateLimitsScript, "0"],
     "Research E2E rate-limit reset",
+  );
+}
+
+export function resetResearchDailyQuota(): Promise<void> {
+  return runDockerComposeCommand(
+    [
+      "-e",
+      "CROSSREF_CONTACT_EMAIL=crossref-contact@example.invalid",
+      "backend",
+      "python",
+      "scripts/seed_e2e_research.py",
+      "reset-quota",
+    ],
+    "Research E2E user daily quota reset",
+  );
+}
+
+export function failResearchSubmission(runId: string): Promise<void> {
+  if (!researchUuidPattern.test(runId)) {
+    return Promise.reject(new Error(`Invalid Research run ID: ${runId}`));
+  }
+  return runDockerComposeCommand(
+    [
+      "-e",
+      "CROSSREF_CONTACT_EMAIL=crossref-contact@example.invalid",
+      "backend",
+      "python",
+      "scripts/seed_e2e_research.py",
+      "fail-submission",
+      runId,
+    ],
+    "Research E2E submission terminal transition",
   );
 }

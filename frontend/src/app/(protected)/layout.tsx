@@ -1,3 +1,4 @@
+import { PageNavigationProvider } from "@/components/layout/PageNavigation";
 import { requireSession } from "@/lib/auth/guards";
 
 export default async function ProtectedLayout({
@@ -6,5 +7,5 @@ export default async function ProtectedLayout({
   children: React.ReactNode;
 }) {
   await requireSession();
-  return children;
+  return <PageNavigationProvider>{children}</PageNavigationProvider>;
 }

@@ -27,23 +27,36 @@ async function PipelineStatusContent() {
 
 function PipelineStatusSkeleton() {
   return (
-    <div className="flex flex-col gap-8" aria-hidden="true">
-      <div className="grid grid-cols-2 gap-x-6 gap-y-3 sm:grid-cols-3">
-        {Array.from({ length: 7 }).map((_, i) => (
-          // biome-ignore lint/suspicious/noArrayIndexKey: static skeleton list
-          <div key={i} className="flex flex-col gap-1">
-            <Skeleton className="h-3 w-20" />
-            <Skeleton className="h-4 w-16" />
-          </div>
-        ))}
+    <>
+      <p
+        role="status"
+        aria-live="polite"
+        aria-atomic="true"
+        className="text-sm font-medium text-muted-foreground"
+      >
+        パイプライン状況を読み込み中…
+      </p>
+      <div
+        className="flex flex-col gap-8 motion-reduce:animate-none motion-reduce:[&_[data-slot=skeleton]]:animate-none"
+        aria-hidden="true"
+      >
+        <div className="grid grid-cols-2 gap-x-6 gap-y-3 sm:grid-cols-3">
+          {Array.from({ length: 7 }).map((_, i) => (
+            // biome-ignore lint/suspicious/noArrayIndexKey: static skeleton list
+            <div key={i} className="flex flex-col gap-1">
+              <Skeleton className="h-3 w-20" />
+              <Skeleton className="h-4 w-16" />
+            </div>
+          ))}
+        </div>
+        <div className="space-y-2">
+          {Array.from({ length: 11 }).map((_, i) => (
+            // biome-ignore lint/suspicious/noArrayIndexKey: static skeleton list
+            <Skeleton key={i} className="h-10 w-full" />
+          ))}
+        </div>
       </div>
-      <div className="space-y-2">
-        {Array.from({ length: 11 }).map((_, i) => (
-          // biome-ignore lint/suspicious/noArrayIndexKey: static skeleton list
-          <Skeleton key={i} className="h-10 w-full" />
-        ))}
-      </div>
-    </div>
+    </>
   );
 }
 

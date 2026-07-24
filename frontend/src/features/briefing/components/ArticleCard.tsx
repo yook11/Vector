@@ -1,5 +1,5 @@
 import { ArrowUpRight } from "lucide-react";
-import Link from "next/link";
+import { PendingAwareLink } from "@/components/layout/PageNavigation";
 import { PaperByline } from "@/components/paper";
 import type { BriefingArticleEmbedParsed } from "../schemas/briefing";
 
@@ -12,7 +12,7 @@ export function ArticleCard({ article }: ArticleCardProps) {
   return (
     <div className="flex flex-col gap-2.5">
       {/* タイトルクリックは内部詳細画面へ */}
-      <Link
+      <PendingAwareLink
         href={`/news/${article.id}`}
         className="group inline-block text-[var(--vector-ink)] transition-colors hover:text-[var(--vector-accent-ink)]"
       >
@@ -22,7 +22,7 @@ export function ArticleCard({ article }: ArticleCardProps) {
         >
           {article.translatedTitle}
         </span>
-      </Link>
+      </PendingAwareLink>
 
       <PaperByline
         sourceName={article.source.name}
