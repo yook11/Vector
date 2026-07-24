@@ -61,7 +61,8 @@ Redis ACLはapp境界に合わせる。
   - `~autoclaim:taskiq:pipeline:completion`
   - `~taskiq:*`
 - `collect`のcommand surfaceは`resetchannels +@connection +@read +@write +@stream
-  +@scripting -@dangerous`を維持する。
+  +@scripting +multi +exec -@dangerous`とする。`multi` / `exec`はTaskiqのautoclaim
+  pipelineを囲むためだけに許可し、transaction内のcommandとkey patternは個別ACLで制限する。
 - `collect`にはlegacy `pipeline:content`、`pipeline:assessment`、`pipeline:embedding`、
   `pipeline:maintenance`と、それらのautoclaim lockを許可しない。hold / budget / rate-limit keyも
   公開しない。
