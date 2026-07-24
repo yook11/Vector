@@ -12,6 +12,7 @@ from scripts import seed_e2e_research as seed_script
 
 FIXTURE_THREADS = seed_script.FIXTURE_THREADS
 guard_production = seed_script.guard_production
+_SUBMISSION_RUN_ID = UUID("00000000-0000-4000-a000-00000000f001")
 
 _CONTINUITY_IDS = {
     "closed": {
@@ -21,6 +22,7 @@ _CONTINUITY_IDS = {
         "completed_run_id": UUID("00000000-0000-4000-a000-00000000d4f1"),
         "active_user_message_id": UUID("00000000-0000-4000-a000-00000000d402"),
         "active_run_id": UUID("00000000-0000-4000-a000-00000000d4f2"),
+        "active_assistant_message_id": UUID("00000000-0000-4000-a000-00000000d4a2"),
     },
     "open": {
         "thread_id": UUID("00000000-0000-4000-a000-00000000e2e5"),
@@ -29,6 +31,7 @@ _CONTINUITY_IDS = {
         "completed_run_id": UUID("00000000-0000-4000-a000-00000000e5f1"),
         "active_user_message_id": UUID("00000000-0000-4000-a000-00000000e502"),
         "active_run_id": UUID("00000000-0000-4000-a000-00000000e5f2"),
+        "active_assistant_message_id": UUID("00000000-0000-4000-a000-00000000e5a2"),
     },
 }
 
@@ -115,7 +118,7 @@ def test_continuity_fixtures_have_fixed_disjoint_ids_and_order() -> None:
         for expected_ids in _CONTINUITY_IDS.values()
         for fixture_id in expected_ids.values()
     }
-    assert len(continuity_ids) == 12
+    assert len(continuity_ids) == 14
     assert existing_ids.isdisjoint(continuity_ids)
 
     beta = next(thread for thread in FIXTURE_THREADS if thread.label == "B")
@@ -134,8 +137,10 @@ def test_continuity_fixtures_have_completed_context_and_scrollable_sources() -> 
         assert _fixture_value(fixture, "completed_question")
         assert _fixture_value(fixture, "answer")
         assert _fixture_value(fixture, "active_question")
+        assert _fixture_value(fixture, "active_answer")
         assert _fixture_value(fixture, "missing_aspects")
         assert len(_fixture_value(fixture, "sources")) >= 8
+        assert len(_fixture_value(fixture, "active_sources")) == 1
 
 
 @pytest.mark.asyncio
@@ -154,6 +159,7 @@ async def test_seed_inserts_completed_and_running_continuity_turns() -> None:
         completed_user_id = _fixture_value(fixture, "completed_user_message_id")
         assistant_id = _fixture_value(fixture, "assistant_message_id")
         active_user_id = _fixture_value(fixture, "active_user_message_id")
+        active_assistant_id = _fixture_value(fixture, "active_assistant_message_id")
         completed_run_id = _fixture_value(fixture, "completed_run_id")
         active_run_id = _fixture_value(fixture, "active_run_id")
 
@@ -187,6 +193,7 @@ async def test_seed_inserts_completed_and_running_continuity_turns() -> None:
         assert rows_by_id[active_user_id]["content"] == _fixture_value(
             fixture, "active_question"
         )
+        assert active_assistant_id not in rows_by_id
 
         completed_run = rows_by_id[completed_run_id]
         assert completed_run["thread_id"] == thread_id
@@ -230,28 +237,59 @@ async def test_cleanup_is_limited_to_fixture_and_continuity_threads() -> None:
     assert set(bound_collections[0]) == expected_thread_ids
 
 
+@pytest.mark.asyncio
+async def test_quota_reset_deletes_only_the_e2e_user_daily_quota_rows() -> None:
+    execute = AsyncMock()
+
+    await seed_script._reset_e2e_user_daily_quota(SimpleNamespace(execute=execute))
+
+    statement = execute.await_args.args[0]
+    sql = str(statement)
+    params = statement.compile().params
+    assert "DELETE FROM agent_user_daily_quotas" in sql
+    assert "agent_user_daily_quotas.user_id" in sql
+    assert seed_script._E2E_USER_ID in params.values()
+    assert "agent_threads" not in sql
+    assert "agent_runs" not in sql
+
+
 def test_cli_parser_accepts_only_fixed_commands_and_variants() -> None:
     parser = seed_script.build_parser()
     accepted = {
         ("seed",): ("seed", None),
         ("cleanup",): ("cleanup", None),
+        ("reset-quota",): ("reset-quota", None),
         ("reset", "closed"): ("reset", "closed"),
         ("reset", "open"): ("reset", "open"),
         ("fail", "closed"): ("fail", "closed"),
         ("fail", "open"): ("fail", "open"),
+        ("complete", "closed"): ("complete", "closed"),
+        ("complete", "open"): ("complete", "open"),
     }
     for argv, expected in accepted.items():
         args = parser.parse_args(argv)
         assert (args.command, getattr(args, "variant", None)) == expected
 
+    fail_submission = parser.parse_args(("fail-submission", str(_SUBMISSION_RUN_ID)))
+    assert (fail_submission.command, fail_submission.run_id) == (
+        "fail-submission",
+        _SUBMISSION_RUN_ID,
+    )
+
     rejected = (
         ("unknown",),
         ("reset",),
         ("fail",),
+        ("complete",),
         ("reset", "other"),
         ("fail", "00000000-0000-4000-a000-00000000d4f2"),
+        ("complete", "other"),
         ("seed", "closed"),
         ("cleanup", "open"),
+        ("reset-quota", "open"),
+        ("fail-submission",),
+        ("fail-submission", "not-a-uuid"),
+        ("fail-submission", str(_SUBMISSION_RUN_ID), "extra"),
         ("DROP TABLE agent_runs",),
     )
     for argv in rejected:
@@ -278,10 +316,14 @@ def test_every_cli_command_runs_production_guard_before_async_database_access(
     for argv in (
         ("seed",),
         ("cleanup",),
+        ("reset-quota",),
+        ("fail-submission", str(_SUBMISSION_RUN_ID)),
         ("reset", "closed"),
         ("reset", "open"),
         ("fail", "closed"),
         ("fail", "open"),
+        ("complete", "closed"),
+        ("complete", "open"),
     ):
         monkeypatch.setattr(seed_script.sys, "argv", ["seed_e2e_research.py", *argv])
         with pytest.raises(SystemExit) as exc_info:
@@ -312,32 +354,66 @@ async def test_run_dispatches_each_fixed_command(
     )
     seed = AsyncMock()
     cleanup = AsyncMock()
+    reset_quota = AsyncMock()
     reset = AsyncMock()
     fail = AsyncMock()
+    fail_submission = AsyncMock()
+    complete = AsyncMock()
     monkeypatch.setattr(
         seed_script, "create_app_engine", lambda *_args, **_kwargs: engine
     )
     monkeypatch.setattr(seed_script, "_seed", seed)
     monkeypatch.setattr(seed_script, "_cleanup", cleanup)
+    monkeypatch.setattr(seed_script, "_reset_e2e_user_daily_quota", reset_quota)
     monkeypatch.setattr(seed_script, "_reset_continuity_run", reset)
     monkeypatch.setattr(seed_script, "_fail_continuity_run", fail)
+    monkeypatch.setattr(seed_script, "_fail_e2e_submission", fail_submission)
+    monkeypatch.setattr(seed_script, "_complete_continuity_run", complete)
 
     await seed_script.run("seed")
     await seed_script.run("cleanup")
+    await seed_script.run("reset-quota")
     await seed_script.run("reset", "closed")
     await seed_script.run("fail", "open")
+    await seed_script.run("fail-submission", str(_SUBMISSION_RUN_ID))
+    await seed_script.run("complete", "closed")
 
     seed.assert_awaited_once_with(connection)
     cleanup.assert_awaited_once_with(connection)
+    reset_quota.assert_awaited_once_with(connection)
     assert connection in (*reset.await_args.args, *reset.await_args.kwargs.values())
     assert "closed" in (*reset.await_args.args, *reset.await_args.kwargs.values())
     assert connection in (*fail.await_args.args, *fail.await_args.kwargs.values())
     assert "open" in (*fail.await_args.args, *fail.await_args.kwargs.values())
-    assert engine.dispose.await_count == 4
+    fail_submission.assert_awaited_once()
+    assert connection in (
+        *fail_submission.await_args.args,
+        *fail_submission.await_args.kwargs.values(),
+    )
+    assert _SUBMISSION_RUN_ID in (
+        *fail_submission.await_args.args,
+        *fail_submission.await_args.kwargs.values(),
+    )
+    assert connection in (
+        *complete.await_args.args,
+        *complete.await_args.kwargs.values(),
+    )
+    assert "closed" in (*complete.await_args.args, *complete.await_args.kwargs.values())
+    assert engine.dispose.await_count == 7
 
 
-def _compiled_update(execute: AsyncMock) -> tuple[str, dict[str, Any]]:
-    statement = execute.await_args.args[0]
+def _compiled_statement(
+    execute: AsyncMock,
+    *,
+    operation: str,
+    occurrence: int = 0,
+) -> tuple[str, dict[str, Any]]:
+    statements = [
+        await_call.args[0]
+        for await_call in execute.await_args_list
+        if operation in str(await_call.args[0])
+    ]
+    statement = statements[occurrence]
     return str(statement), statement.compile().params
 
 
@@ -353,15 +429,15 @@ async def test_reset_restores_only_the_variant_active_run(
         SimpleNamespace(execute=execute), variant, reset_at
     )
 
-    sql, params = _compiled_update(execute)
+    sql, params = _compiled_statement(execute, operation="UPDATE agent_runs")
     assert "UPDATE agent_runs" in sql
     assert "WHERE agent_runs.id" in sql
     assert _CONTINUITY_IDS[variant]["active_run_id"] in params.values()
-    assert not {
-        ids["active_run_id"]
+    assert all(
+        ids["active_run_id"] not in params.values()
         for other_variant, ids in _CONTINUITY_IDS.items()
         if other_variant != variant
-    }.intersection(params.values())
+    )
     assert {
         "status": "running",
         "progress_stage": "synthesizing",
@@ -371,6 +447,26 @@ async def test_reset_restores_only_the_variant_active_run(
         "attempt_epoch": 1,
         "started_at": reset_at,
     }.items() <= params.items()
+
+    source_sql, source_params = _compiled_statement(
+        execute,
+        operation="DELETE FROM agent_message_sources",
+    )
+    assert "WHERE agent_message_sources.message_id" in source_sql
+    assert (
+        _CONTINUITY_IDS[variant]["active_assistant_message_id"]
+        in source_params.values()
+    )
+
+    message_sql, message_params = _compiled_statement(
+        execute,
+        operation="DELETE FROM agent_messages",
+    )
+    assert "agent_messages.thread_id" in message_sql
+    assert (
+        _CONTINUITY_IDS[variant]["active_assistant_message_id"]
+        in message_params.values()
+    )
 
 
 @pytest.mark.asyncio
@@ -385,7 +481,7 @@ async def test_fail_transitions_only_a_running_variant_active_run(
         SimpleNamespace(execute=execute), variant, failed_at
     )
 
-    sql, params = _compiled_update(execute)
+    sql, params = _compiled_statement(execute, operation="UPDATE agent_runs")
     assert "UPDATE agent_runs" in sql
     assert "WHERE agent_runs.id" in sql
     assert "agent_runs.status" in sql
@@ -399,6 +495,95 @@ async def test_fail_transitions_only_a_running_variant_active_run(
 
 
 @pytest.mark.asyncio
+async def test_fail_submission_targets_one_run_owned_by_the_e2e_user() -> None:
+    failed_at = dt.datetime(2026, 7, 24, 3, 45, tzinfo=dt.UTC)
+    execute = AsyncMock(return_value=SimpleNamespace(rowcount=1))
+
+    await seed_script._fail_e2e_submission(
+        SimpleNamespace(execute=execute),
+        _SUBMISSION_RUN_ID,
+        failed_at,
+    )
+
+    sql, params = _compiled_statement(execute, operation="UPDATE agent_runs")
+    assert "agent_runs.id" in sql
+    assert "agent_runs.thread_id IN" in sql
+    assert "agent_threads.user_id" in sql
+    assert "agent_runs.status IN" in sql
+    assert _SUBMISSION_RUN_ID in params.values()
+    assert seed_script._E2E_USER_ID in params.values()
+    assert any(
+        set(value) == {"queued", "running"}
+        for value in params.values()
+        if isinstance(value, list)
+    )
+    assert {
+        "status": "failed",
+        "error_code": "enqueue_failed",
+        "completed_at": failed_at,
+    }.items() <= params.items()
+
+
+@pytest.mark.asyncio
+async def test_fail_submission_requires_exactly_one_owned_pending_run() -> None:
+    execute = AsyncMock(return_value=SimpleNamespace(rowcount=0))
+
+    with pytest.raises(RuntimeError):
+        await seed_script._fail_e2e_submission(
+            SimpleNamespace(execute=execute),
+            _SUBMISSION_RUN_ID,
+            dt.datetime.now(dt.UTC),
+        )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("variant", ("closed", "open"))
+async def test_complete_inserts_the_fixed_final_answer_then_completes_only_active_run(
+    variant: str,
+) -> None:
+    completed_at = dt.datetime(2026, 7, 16, 12, 56, 7, tzinfo=dt.UTC)
+    execute = AsyncMock(return_value=SimpleNamespace(rowcount=1))
+
+    await seed_script._complete_continuity_run(
+        SimpleNamespace(execute=execute), variant, completed_at
+    )
+
+    fixture = _continuity_fixtures()[variant]
+    rows = _batched_rows(execute)
+    answer = next(
+        row
+        for row in rows
+        if row.get("id") == _CONTINUITY_IDS[variant]["active_assistant_message_id"]
+    )
+    assert (answer["seq"], answer["role"]) == (4, "assistant")
+    assert answer["content"] == _fixture_value(fixture, "active_answer")
+
+    source = next(
+        row
+        for row in rows
+        if row.get("message_id")
+        == _CONTINUITY_IDS[variant]["active_assistant_message_id"]
+    )
+    assert (
+        source["source_ref"] == _fixture_value(fixture, "active_sources")[0].source_ref
+    )
+
+    run_sql, run_params = _compiled_statement(execute, operation="UPDATE agent_runs")
+    assert "agent_runs.thread_id" in run_sql
+    assert "agent_runs.user_message_id" in run_sql
+    assert "agent_runs.status" in run_sql
+    assert _CONTINUITY_IDS[variant]["active_run_id"] in run_params.values()
+    assert (
+        _CONTINUITY_IDS[variant]["active_assistant_message_id"] in run_params.values()
+    )
+    assert {
+        "status": "completed",
+        "error_code": None,
+        "completed_at": completed_at,
+    }.items() <= run_params.items()
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     "operation_name,variant,rowcount",
     (
@@ -406,6 +591,8 @@ async def test_fail_transitions_only_a_running_variant_active_run(
         ("_reset_continuity_run", "open", 2),
         ("_fail_continuity_run", "closed", 2),
         ("_fail_continuity_run", "open", 0),
+        ("_complete_continuity_run", "closed", 0),
+        ("_complete_continuity_run", "open", 2),
     ),
 )
 async def test_continuity_mutations_require_exactly_one_updated_row(

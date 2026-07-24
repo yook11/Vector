@@ -21,6 +21,8 @@ export const RESEARCH_CONTINUITY = {
     threadId: "00000000-0000-4000-a000-00000000e2d4",
     activeRunId: "00000000-0000-4000-a000-00000000d4f2",
     title: "E2E Research Continuity Closed",
+    completedActiveAnswerMarker:
+      "Continuity closed completed active answer marker",
     sourceCount: 14,
     sourceHref: "https://example.com/e2e/research-continuity-closed/source-1",
   },
@@ -28,6 +30,8 @@ export const RESEARCH_CONTINUITY = {
     threadId: "00000000-0000-4000-a000-00000000e2e5",
     activeRunId: "00000000-0000-4000-a000-00000000e5f2",
     title: "E2E Research Continuity Open",
+    completedActiveAnswerMarker:
+      "Continuity open completed active answer marker",
     sourceCount: 14,
     sourceHref: "https://example.com/e2e/research-continuity-open/source-1",
   },
