@@ -37,7 +37,7 @@ async function runAdminFeatureDataScenario(
       page.getByRole("heading", { name: scenario.heading }),
     ).toBeVisible();
     await expect(
-      page.getByRole("status", { name: scenario.status }),
+      page.getByRole("status").filter({ hasText: scenario.status }),
     ).toBeVisible();
     await expect(page.getByTestId("page-navigation-overlay")).toHaveCount(0);
   } finally {
