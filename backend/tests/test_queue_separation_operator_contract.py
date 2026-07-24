@@ -210,7 +210,7 @@ def test_collect_redis_acl_has_only_required_queue_and_taskiq_key_surfaces() -> 
     }
 
 
-def test_collect_redis_acl_preserves_existing_command_surface() -> None:
+def test_collect_redis_acl_has_only_required_command_surface() -> None:
     tokens = _redis_acl_tokens("collect")
     command_rules = {
         token
@@ -225,6 +225,8 @@ def test_collect_redis_acl_preserves_existing_command_surface() -> None:
         "+@write",
         "+@stream",
         "+@scripting",
+        "+multi",
+        "+exec",
         "-@dangerous",
     }
 

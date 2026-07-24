@@ -125,6 +125,8 @@ async def test_collect_acl_allows_required_and_denies_out_of_scope_surfaces(
     redis = temporary_collect_acl_user.admin
     username = temporary_collect_acl_user.username
     allowed_commands = (
+        ("MULTI",),
+        ("EXEC",),
         ("XADD", "pipeline:acquisition", "*", "data", "taskiq-payload"),
         (
             "XREADGROUP",
@@ -254,10 +256,10 @@ async def test_collect_acl_allows_required_and_denies_out_of_scope_surfaces(
     )
 
 
-async def test_collect_credentials_run_broker_stream_lock_and_result_smoke(
+async def test_collect_credentials_run_broker_autoclaim_recovery_and_result_smoke(
     temporary_collect_acl_user: TemporaryCollectUser,
 ) -> None:
-    """collect AUTHで両source Streamをconsume/ACKし、補助keyも実操作する。"""
+    """collect AUTHで通常配達後のauto-claim回収/ACKと補助keyを実操作する。"""
     case_id = uuid4().hex
     result_id = f"acl-smoke-{case_id}"
     result_key = f"taskiq:{result_id}"
@@ -297,7 +299,34 @@ async def test_collect_credentials_run_broker_stream_lock_and_result_smoke(
         assert await collect.ping()
         await broker.startup()
 
-        expected_ids: set[str] = set()
+        expected_stale_ids: set[str] = set()
+        for stream in (_ACQUISITION_STREAM, _COMPLETION_STREAM):
+            stale = TaskiqMessage(
+                task_id=f"{case_id}-stale-{stream.rsplit(':', 1)[-1]}",
+                task_name="collect_acl_smoke",
+                labels={"queue_name": stream},
+                args=[],
+                kwargs={},
+            )
+            expected_stale_ids.add(stale.task_id)
+            await broker.kick(broker.formatter.dumps(stale))
+            delivered = await collect.xreadgroup(
+                _GROUP,
+                f"stale-{case_id}",
+                {stream: ">"},
+                count=1,
+            )
+            stale_message_id = delivered[0][1][0][0]
+            await collect.xclaim(
+                stream,
+                _GROUP,
+                f"stale-{case_id}",
+                min_idle_time=0,
+                message_ids=[stale_message_id],
+                idle=1_000,
+            )
+
+        expected_normal_ids: set[str] = set()
         for stream in (_ACQUISITION_STREAM, _COMPLETION_STREAM):
             message = TaskiqMessage(
                 task_id=f"{case_id}-{stream.rsplit(':', 1)[-1]}",
@@ -306,15 +335,21 @@ async def test_collect_credentials_run_broker_stream_lock_and_result_smoke(
                 args=[],
                 kwargs={},
             )
-            expected_ids.add(message.task_id)
+            expected_normal_ids.add(message.task_id)
             await broker.kick(broker.formatter.dumps(message))
 
-        received_ids: set[str] = set()
+        received_normal_ids: set[str] = set()
+        recovered_stale_ids: set[str] = set()
         async with aclosing(broker.listen()) as listener:
             for _ in range(2):
                 delivery = await asyncio.wait_for(anext(listener), timeout=2)
                 received = broker.formatter.loads(delivery.data)
-                received_ids.add(received.task_id)
+                received_normal_ids.add(received.task_id)
+                await delivery.ack()
+            for _ in range(2):
+                delivery = await asyncio.wait_for(anext(listener), timeout=2)
+                recovered = broker.formatter.loads(delivery.data)
+                recovered_stale_ids.add(recovered.task_id)
                 await delivery.ack()
 
         for lock_key in locks:
@@ -331,12 +366,20 @@ async def test_collect_credentials_run_broker_stream_lock_and_result_smoke(
         stored_result = await result_backend.get_result(result_id)
 
         assert (
-            received_ids,
+            received_normal_ids,
+            recovered_stale_ids,
             int((await collect.xpending(_ACQUISITION_STREAM, _GROUP))["pending"]),
             int((await collect.xpending(_COMPLETION_STREAM, _GROUP))["pending"]),
             await result_backend.is_result_ready(result_id),
             stored_result.return_value,
-        ) == (expected_ids, 0, 0, True, {"credential": "collect"})
+        ) == (
+            expected_normal_ids,
+            expected_stale_ids,
+            0,
+            0,
+            True,
+            {"credential": "collect"},
+        )
     finally:
         try:
             await broker.shutdown()
