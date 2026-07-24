@@ -147,6 +147,31 @@ describe("LiveAnswerDraft", () => {
     expect(document.activeElement).toBe(focusTarget);
     focusTarget.remove();
   });
+
+  it("draftTextだけを追記しても既存Markdown paragraphのDOM nodeを維持する", () => {
+    const initialText = ["既存の先頭段落", "", "続く段落"].join("\n");
+    const { rerender } = render(
+      <LiveAnswerDraft
+        status="running"
+        draftMode="visible"
+        draftText={initialText}
+        errorCode={null}
+      />,
+    );
+    const existingParagraph = screen.getByText("既存の先頭段落");
+
+    rerender(
+      <LiveAnswerDraft
+        status="running"
+        draftMode="visible"
+        draftText={`${initialText}\n\n追記された段落`}
+        errorCode={null}
+      />,
+    );
+
+    expect(screen.getByText("既存の先頭段落")).toBe(existingParagraph);
+    expect(screen.getByText("追記された段落")).toBeInTheDocument();
+  });
 });
 
 describe("LiveAnswerDraft — Markdown rendering contract (draft)", () => {

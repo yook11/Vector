@@ -5,14 +5,10 @@ const mocks = vi.hoisted(() => ({
   fetch: vi.fn(),
   getCurrentSession: vi.fn(),
   logServerEvent: vi.fn(),
-  redirect: vi.fn(),
   requireSessionForAction: vi.fn(),
-  revalidatePath: vi.fn(),
 }));
 
 vi.mock("server-only", () => ({}));
-vi.mock("next/cache", () => ({ revalidatePath: mocks.revalidatePath }));
-vi.mock("next/navigation", () => ({ redirect: mocks.redirect }));
 vi.mock("@/lib/auth/guards", () => ({
   getCurrentSession: mocks.getCurrentSession,
   requireSessionForAction: mocks.requireSessionForAction,
@@ -77,8 +73,6 @@ describe("submitResearchQuestion — BFF typed quota 429 integration", () => {
     });
 
     expect(mocks.fetch).toHaveBeenCalledOnce();
-    expect(mocks.revalidatePath).not.toHaveBeenCalled();
-    expect(mocks.redirect).not.toHaveBeenCalled();
     expect(mocks.logServerEvent).toHaveBeenCalledWith(
       "warn",
       "frontend_internal_api_failure",

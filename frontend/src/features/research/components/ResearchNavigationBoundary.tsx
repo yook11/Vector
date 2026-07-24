@@ -26,6 +26,7 @@ import {
   SheetTrigger,
 } from "@/components/ui/sheet";
 import { ResearchLiveAnnouncementOwner } from "./ResearchLiveAnnouncer";
+import { useResearchOperation } from "./ResearchOperationBoundary";
 
 const DESKTOP_HISTORY_QUERY = "(min-width: 64rem)";
 
@@ -138,6 +139,17 @@ export function ResearchNavigationBoundary({
   sidebar,
   children,
 }: ResearchNavigationBoundaryProps) {
+  return (
+    <ResearchNavigationBoundaryContent sidebar={sidebar}>
+      {children}
+    </ResearchNavigationBoundaryContent>
+  );
+}
+
+function ResearchNavigationBoundaryContent({
+  sidebar,
+  children,
+}: ResearchNavigationBoundaryProps) {
   const router = useRouter();
   const pathname = usePathname();
   const searchParams = useSearchParams();
@@ -148,10 +160,10 @@ export function ResearchNavigationBoundary({
   const [desktopHistoryOpen, setDesktopHistoryOpen] = useState(true);
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [researchAnnouncement, setResearchAnnouncement] = useState("");
+  const { claimOperation, operation, releaseOperation } =
+    useResearchOperation();
   const historyToggleRef = useRef<HTMLButtonElement>(null);
   const drawerCloseRef = useRef<HTMLButtonElement>(null);
-  const navigationLockRef = useRef(false);
-  const disconnectedRef = useRef(false);
   const query = searchParams.toString();
   const currentHref = query ? `${pathname}?${query}` : pathname;
   const pendingPathname =
@@ -164,23 +176,18 @@ export function ResearchNavigationBoundary({
       ? currentHref === pendingTarget.href
       : pathname === pendingPathname);
 
-  // Next route cacheから復帰したinstanceに旧navigation lockを残さない。
-  useEffect(() => {
-    if (disconnectedRef.current) {
-      navigationLockRef.current = false;
-      setPendingTarget(null);
-    }
-    disconnectedRef.current = false;
-    return () => {
-      disconnectedRef.current = true;
-    };
-  }, []);
-
   useEffect(() => {
     if (!routeCommitted) return;
-    navigationLockRef.current = false;
+    releaseOperation("navigation");
     setPendingTarget(null);
-  }, [routeCommitted]);
+  }, [releaseOperation, routeCommitted]);
+
+  useEffect(
+    () => () => {
+      releaseOperation("navigation");
+    },
+    [releaseOperation],
+  );
 
   useEffect(() => {
     if (isDesktop) setDrawerOpen(false);
@@ -201,7 +208,7 @@ export function ResearchNavigationBoundary({
           ? browserHref === target.href
           : window.location.pathname === targetPathname;
       if (committed) {
-        navigationLockRef.current = false;
+        releaseOperation("navigation");
         setPendingTarget(null);
         return;
       }
@@ -210,19 +217,24 @@ export function ResearchNavigationBoundary({
 
     animationFrame = window.requestAnimationFrame(clearAfterBrowserCommit);
     return () => window.cancelAnimationFrame(animationFrame);
-  }, [pendingTarget]);
+  }, [pendingTarget, releaseOperation]);
 
   const navigate = useCallback(
     (target: ResearchNavigationTarget) => {
-      if (navigationLockRef.current) return false;
-      navigationLockRef.current = true;
+      if (!claimOperation("navigation")) return false;
       setPendingTarget(target);
-      startTransition(() => {
-        router.push(target.href);
-      });
+      try {
+        startTransition(() => {
+          router.push(target.href);
+        });
+      } catch (error) {
+        setPendingTarget(null);
+        releaseOperation("navigation");
+        throw error;
+      }
       return true;
     },
-    [router],
+    [claimOperation, releaseOperation, router],
   );
 
   const dismissHistoryAfterSelection = useCallback(
@@ -233,13 +245,13 @@ export function ResearchNavigationBoundary({
   );
 
   const isNavigationPending = pendingTarget !== null;
+  const isResearchOperationPending = operation !== null;
   const status = pendingTarget === null ? "" : pendingStatus(pendingTarget);
   const reportResearchAnnouncement = useCallback((announcement: string) => {
     setResearchAnnouncement((current) =>
       current === announcement ? current : announcement,
     );
   }, []);
-
   return (
     <ResearchNavigationContext.Provider
       value={{
@@ -251,7 +263,7 @@ export function ResearchNavigationBoundary({
     >
       <ResearchLiveAnnouncementOwner report={reportResearchAnnouncement}>
         <main
-          aria-busy={isNavigationPending}
+          aria-busy={isResearchOperationPending}
           className="relative z-10 flex h-full min-h-0 w-full min-w-0 flex-col overflow-hidden border-x border-b border-[var(--vector-rule)] bg-[var(--vector-surface)] md:flex-row"
         >
           {isDesktop && desktopHistoryOpen ? (
