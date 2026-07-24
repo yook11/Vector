@@ -898,6 +898,7 @@ jobs:
             && (needs.changes.outputs.backend == 'true' || needs.changes.outputs.frontend == 'true')
             && (needs.changes.outputs.migrations != 'true' || needs.migrate-production.result == 'success') }}
     runs-on: ubuntu-latest
+    environment: production
     # Fly の health check 待ち等で release が stuck したとき、main は直列化されるため
     # 後続 deploy が無限に待たされる。45 分で打ち切り (前 run を手動 cancel 不要に)。
     timeout-minutes: 45
