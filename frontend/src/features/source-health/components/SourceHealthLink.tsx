@@ -1,4 +1,4 @@
-import Link from "next/link";
+import { PendingAwareLink } from "@/components/layout/PageNavigation";
 
 /**
  * Source Health 画面 (/admin/source-health) への admin 専用導線リンク。
@@ -8,11 +8,11 @@ import Link from "next/link";
  */
 export function SourceHealthLink() {
   return (
-    <Link
+    <PendingAwareLink
       href="/admin/source-health"
       className="inline-block text-xs text-muted-foreground underline underline-offset-4 hover:text-foreground"
     >
       Source Health
-    </Link>
+    </PendingAwareLink>
   );
 }

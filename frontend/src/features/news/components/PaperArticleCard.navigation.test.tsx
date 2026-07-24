@@ -1,6 +1,9 @@
 import { render, screen, waitFor } from "@testing-library/react";
 import type { AnchorHTMLAttributes, ReactNode } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { PageNavigationProvider } from "@/components/layout/PageNavigation";
+import type { ArticleBrief } from "@/types/types.gen";
+import { PaperArticleCard } from "./PaperArticleCard";
 
 const mocks = vi.hoisted(() => ({
   pendingByHref: new Map<string, boolean>(),
@@ -42,47 +45,50 @@ vi.mock("next/link", async () => {
 });
 
 vi.mock("next/navigation", () => ({
-  usePathname: () => "/settings",
+  usePathname: () => "/",
   useSearchParams: () => new URLSearchParams(),
 }));
 
-import { PageNavigationProvider } from "@/components/layout/PageNavigation";
-import { SourceHealthLink } from "./SourceHealthLink";
+const article = {
+  id: 101,
+  translatedTitle: "カードから開く記事",
+  keyPoints: [],
+  summaryPreview: "記事の概要",
+  category: { name: "AI", slug: "ai" },
+  source: { attributionLabel: "Vector", name: "Vector" },
+  publishedAt: "2026-07-24T00:00:00Z",
+} as unknown as ArticleBrief;
 
-describe("SourceHealthLink", () => {
+describe("PaperArticleCard navigation lifecycle", () => {
   beforeEach(() => {
     mocks.pendingByHref.clear();
   });
 
-  it("/admin/source-health への link を表示する", () => {
-    render(<SourceHealthLink />);
-    const link = screen.getByRole("link", { name: /source health/i });
-    expect(link).toHaveAttribute("href", "/admin/source-health");
-  });
-
-  it("遷移中はglobal pendingを開始し、settleで解除する", async () => {
+  it("記事detailへの遷移中はglobal pendingを開始し、settleで解除する", async () => {
     const tree = () => (
       <PageNavigationProvider>
-        <SourceHealthLink />
+        <PaperArticleCard article={article} />
       </PageNavigationProvider>
     );
     const view = render(tree());
 
-    mocks.pendingByHref.set("/admin/source-health", true);
+    expect(
+      screen.getByRole("link", { name: "カードから開く記事" }),
+    ).toHaveAttribute("href", "/news/101");
+
+    mocks.pendingByHref.set("/news/101", true);
     view.rerender(tree());
     await waitFor(() =>
       expect(
-        screen.getByRole("status", { name: "Source Healthを読み込み中…" }),
+        screen.getByRole("status", { name: "記事を読み込み中…" }),
       ).toBeVisible(),
     );
 
-    mocks.pendingByHref.set("/admin/source-health", false);
+    mocks.pendingByHref.set("/news/101", false);
     view.rerender(tree());
     await waitFor(() =>
       expect(
-        screen.queryByRole("status", {
-          name: "Source Healthを読み込み中…",
-        }),
+        screen.queryByRole("status", { name: "記事を読み込み中…" }),
       ).toBeNull(),
     );
   });

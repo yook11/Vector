@@ -8,6 +8,7 @@ import {
   Zen_Maru_Gothic,
 } from "next/font/google";
 import { Suspense } from "react";
+import { AppBootstrapLoading } from "@/components/layout/AppBootstrapLoading";
 import { ClientGlobals } from "@/components/layout/ClientGlobals";
 import { NonceThemeProvider } from "@/components/layout/NonceThemeProvider";
 import "./globals.css";
@@ -155,7 +156,7 @@ export default function RootLayout({
       <body
         className={`${plusJakartaSans.variable} ${vectorWordmark.variable} ${vectorSerif.variable} ${vectorSans.variable} ${vectorMaru.variable} ${vectorDisplay.variable} font-sans bg-background text-foreground`}
       >
-        <Suspense>
+        <Suspense fallback={<AppBootstrapLoading />}>
           <NonceThemeProvider>
             {children}
             <ClientGlobals />

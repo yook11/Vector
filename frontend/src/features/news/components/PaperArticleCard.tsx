@@ -1,5 +1,5 @@
-import Link from "next/link";
 import type { ReactNode } from "react";
+import { PendingAwareLink } from "@/components/layout/PageNavigation";
 import {
   formatPaperDate,
   getCategoryKicker,
@@ -34,14 +34,14 @@ export function PaperArticleCard({
         {actionSlot && <div className="-mr-1 shrink-0">{actionSlot}</div>}
       </div>
 
-      <Link href={`/news/${article.id}`} className="group block">
+      <PendingAwareLink href={`/news/${article.id}`} className="group block">
         <h2
           className="mb-3.5 line-clamp-3 text-[20.5px] font-bold leading-[1.44] tracking-[0.005em] text-[var(--vector-ink)] transition-colors group-hover:text-[var(--vector-accent-ink)]"
           style={{ fontFamily: "var(--font-vector-serif)" }}
         >
           {article.translatedTitle}
         </h2>
-      </Link>
+      </PendingAwareLink>
 
       <span
         aria-hidden="true"

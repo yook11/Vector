@@ -1,10 +1,15 @@
-import { render, screen } from "@testing-library/react";
-import type { AnchorHTMLAttributes, ReactNode } from "react";
+import { fireEvent, render, screen } from "@testing-library/react";
+import type {
+  AnchorHTMLAttributes,
+  MouseEvent as ReactMouseEvent,
+  ReactNode,
+} from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const useSessionMock = vi.fn();
 const usePathnameMock = vi.fn();
 const useLinkStatusMock = vi.fn();
+const linkNavigationMock = vi.fn();
 
 // Link は href / aria-current / className を ShellNav から受けるため全 props を <a> へ forward する。
 // useLinkStatus は NavPendingDot が読むため可変モックにする。
@@ -12,15 +17,30 @@ vi.mock("next/link", () => ({
   default: ({
     children,
     href,
+    onClick,
+    onNavigate,
     ...rest
   }: {
     children: ReactNode;
     href: string;
-  } & AnchorHTMLAttributes<HTMLAnchorElement>) => (
-    <a href={href} {...rest}>
-      {children}
-    </a>
-  ),
+    onNavigate?: (event: { preventDefault: () => void }) => void;
+  } & AnchorHTMLAttributes<HTMLAnchorElement>) => {
+    function handleClick(event: ReactMouseEvent<HTMLAnchorElement>) {
+      onClick?.(event);
+      if (!event.defaultPrevented && onNavigate !== undefined) {
+        onNavigate({ preventDefault: () => event.preventDefault() });
+      }
+      if (!event.defaultPrevented) linkNavigationMock(href);
+      // JSDOM は実document navigationを実装しないため、このmock境界で止める。
+      event.preventDefault();
+    }
+
+    return (
+      <a href={href} onClick={handleClick} {...rest}>
+        {children}
+      </a>
+    );
+  },
   useLinkStatus: () => useLinkStatusMock(),
 }));
 vi.mock("next/navigation", () => ({
@@ -37,6 +57,7 @@ describe("ShellNav", () => {
     useSessionMock.mockReset();
     usePathnameMock.mockReset();
     useLinkStatusMock.mockReset();
+    linkNavigationMock.mockReset();
     useLinkStatusMock.mockReturnValue({ pending: false });
   });
 
@@ -65,6 +86,18 @@ describe("ShellNav", () => {
     useSessionMock.mockReturnValue({ data: { user: { role: "admin" } } });
     rerender(<ShellNav />);
     expect(screen.getByRole("link", { name: "Settings" })).toBeInTheDocument();
+  });
+
+  it("Research sectionではcurrent itemをno-opにしてglobal navigationを始めない", () => {
+    useSessionMock.mockReturnValue({ data: null });
+    usePathnameMock.mockReturnValue("/research/thread-1");
+    render(<ShellNav />);
+
+    const research = screen.getByRole("link", { name: "Research" });
+    expect(research).toHaveAttribute("href", "/research");
+    fireEvent.click(research);
+    expect(linkNavigationMock).not.toHaveBeenCalled();
+    expect(screen.queryByText("Researchを読み込み中…")).toBeNull();
   });
 
   describe("NavPendingDot の展開", () => {

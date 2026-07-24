@@ -1,6 +1,9 @@
 import { render, screen, waitFor } from "@testing-library/react";
 import type { AnchorHTMLAttributes, ReactNode } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { PageNavigationProvider } from "@/components/layout/PageNavigation";
+import type { ReadyBriefingCard } from "../page-models/briefing-list";
+import { BriefingBandCard } from "./BriefingBandCard";
 
 const mocks = vi.hoisted(() => ({
   pendingByHref: new Map<string, boolean>(),
@@ -42,47 +45,48 @@ vi.mock("next/link", async () => {
 });
 
 vi.mock("next/navigation", () => ({
-  usePathname: () => "/settings",
+  usePathname: () => "/briefing",
   useSearchParams: () => new URLSearchParams(),
 }));
 
-import { PageNavigationProvider } from "@/components/layout/PageNavigation";
-import { SourceHealthLink } from "./SourceHealthLink";
+const card: ReadyBriefingCard = {
+  category: { slug: "ai", name: "AI" },
+  weekStart: "2026-07-21",
+  headline: "Briefing カード",
+  summary: "カテゴリ別の要約",
+  inputArticleCount: 3,
+};
 
-describe("SourceHealthLink", () => {
+describe("BriefingBandCard navigation lifecycle", () => {
   beforeEach(() => {
     mocks.pendingByHref.clear();
   });
 
-  it("/admin/source-health への link を表示する", () => {
-    render(<SourceHealthLink />);
-    const link = screen.getByRole("link", { name: /source health/i });
-    expect(link).toHaveAttribute("href", "/admin/source-health");
-  });
-
-  it("遷移中はglobal pendingを開始し、settleで解除する", async () => {
+  it("detailへの遷移中はglobal pendingを開始し、settleで解除する", async () => {
     const tree = () => (
       <PageNavigationProvider>
-        <SourceHealthLink />
+        <BriefingBandCard card={card} currentWeekStart={card.weekStart} />
       </PageNavigationProvider>
     );
     const view = render(tree());
 
-    mocks.pendingByHref.set("/admin/source-health", true);
+    expect(
+      screen.getByRole("link", { name: /Briefing カード/ }),
+    ).toHaveAttribute("href", "/briefing/ai");
+
+    mocks.pendingByHref.set("/briefing/ai", true);
     view.rerender(tree());
     await waitFor(() =>
       expect(
-        screen.getByRole("status", { name: "Source Healthを読み込み中…" }),
+        screen.getByRole("status", { name: "Briefingを読み込み中…" }),
       ).toBeVisible(),
     );
 
-    mocks.pendingByHref.set("/admin/source-health", false);
+    mocks.pendingByHref.set("/briefing/ai", false);
     view.rerender(tree());
     await waitFor(() =>
       expect(
-        screen.queryByRole("status", {
-          name: "Source Healthを読み込み中…",
-        }),
+        screen.queryByRole("status", { name: "Briefingを読み込み中…" }),
       ).toBeNull(),
     );
   });
