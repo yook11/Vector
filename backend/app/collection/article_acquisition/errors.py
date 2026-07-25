@@ -17,11 +17,12 @@ class AcquisitionConversionDefect(StrEnum):
     """acquisition がスコープ所有する変換棄却理由 (自己記述コード)。
 
     value はそのまま audit の ``outcome_code`` に焼かれる (analysis BC の
-    ``AnalyzableArticleDefect`` と同形)。URL 不正は責任元 ``CanonicalArticleUrl``
-    の ``SafeUrlInvalidReason`` を直接運ぶため、ここには載らない。本 enum は
-    収集側固有の理由 (title 欠落 / precondition 通過後の想定外バグ) のみを持つ。
+    ``AnalyzableArticleDefect`` と同形)。URL 欠落は acquisition の取得不成立、
+    非空 URL の不正は責任元 ``CanonicalArticleUrl`` の不変条件違反として分ける。
+    後者は ``SafeUrlInvalidReason`` を直接運ぶため、ここには載らない。
     """
 
+    URL_MISSING = "acquisition_conversion_url_missing"
     TITLE_MISSING = "acquisition_conversion_title_missing"
     UNEXPECTED_ERROR = "acquisition_conversion_unexpected_error"
 

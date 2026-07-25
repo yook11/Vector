@@ -22,8 +22,9 @@
 passport 業務不変条件 (at_least_one / 型許容 / 主経路型 / 永続化) は
 parametrized ``test_non_rss_adapters_invariants.py`` [MDPI*] が 系統A
 シートベルトとして所有 (scope 述語が旧 ``mdpi_items`` の Cat A 除外を byte
-不変に再現するため自然生存)。degenerate の棄却 *理由* (``url_empty`` 等) は
-converter 層 (``test_fetched_article_converter.py``) が機構非依存 SSoT として
+不変に再現するため自然生存)。degenerate の棄却 *理由*
+(``acquisition_conversion_url_missing`` 等) は converter 層
+(``test_fetched_article_converter.py``) が機構非依存 SSoT として
 所有し、本ファイルは理由を再検証せず「MDPI 写像が total で可視化に到達する」
 リンクのみ pin する。旧 ``test_*_dropped`` (``assert items == []``) /
 ``count == 1`` / ``yields_passports_from_fixture`` は spec が意図的に壊す

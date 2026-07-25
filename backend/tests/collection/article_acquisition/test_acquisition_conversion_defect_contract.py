@@ -2,8 +2,8 @@
 
 domain ``test_analyzable_article_defect_code_contract.py`` と同形: enum.value が
 そのまま audit に焼かれる自己記述コードであることを構造的に保証する。acquisition
-固有の棄却理由 (title 欠落 / 想定外バグ) は acquisition がスコープ所有するため
-prefix は ``acquisition_conversion_``。語順例外メンバーは無い。
+固有の棄却理由 (URL/title 欠落 / 想定外バグ) は acquisition がスコープ所有する
+ため prefix は ``acquisition_conversion_``。語順例外メンバーは無い。
 """
 
 from __future__ import annotations

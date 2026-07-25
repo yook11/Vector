@@ -75,6 +75,13 @@ def _url_rejection_fetched(url: str = "http://127.0.0.1/secret") -> FetchedArtic
     )
 
 
+def _missing_url_fetched() -> FetchedArticle:
+    """real convert → URL 欠落の ``AcquisitionConversionRejection``。"""
+    return FetchedArticle(
+        title="Has Title", url="", body="x" * 42, published_at=_PUBLISHED
+    )
+
+
 def _bug_fetched(url: str) -> FetchedArticle:
     """convert を monkeypatch で raise させる対象 entry (URL で識別)。"""
     return FetchedArticle(
@@ -431,6 +438,34 @@ async def test_conversion_rejection_writes_rejected_event_in_separate_tx(
     assert row.payload["conversion_has_title"] is True
     assert row.payload["conversion_body_length"] == 42
     assert row.payload["conversion_has_published_at"] is False
+
+
+@pytest.mark.asyncio
+async def test_missing_url_rejection_burns_acquisition_defect_without_cause(
+    session_factory: async_sessionmaker[AsyncSession],
+    db_session: AsyncSession,
+    vb_source: NewsSource,
+) -> None:
+    """URL 欠落は acquisition 固有 reason で監査し、URL VO 例外を持たない。"""
+    svc = ArticleAcquisitionService(
+        session_factory,
+        _StubSource([_missing_url_fetched()]),
+    )
+
+    await svc.execute(vb_source.id)
+
+    row = (
+        (
+            await db_session.execute(
+                select(PipelineEvent).where(PipelineEvent.event_type == "rejected")
+            )
+        )
+        .scalars()
+        .one()
+    )
+    assert row.outcome_code == "acquisition_conversion_url_missing"
+    assert row.error_class is None
+    assert row.payload["conversion_has_title"] is True
 
 
 @pytest.mark.asyncio

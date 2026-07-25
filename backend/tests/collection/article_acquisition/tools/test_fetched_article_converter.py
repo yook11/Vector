@@ -166,12 +166,13 @@ def test_trims_title_whitespace_and_caps_500_chars() -> None:
     assert result.title == "a" * 500
 
 
-def test_rejects_empty_url_as_url_empty() -> None:
-    """空 URL は SafeUrl の ``url_empty`` を verbatim で運ぶ (責任元 = URL VO)。"""
-    result = _call(url="")
+@pytest.mark.parametrize("url", ["", "   ", "\n\t  "])
+def test_rejects_missing_url_as_acquisition_defect(url: str) -> None:
+    """空 URL は取得不成立として acquisition 固有の reason で棄却する。"""
+    result = _call(url=url)
     assert isinstance(result, AcquisitionConversionRejection)
-    assert result.outcome_code == "url_empty"
-    assert isinstance(result.cause, CanonicalArticleUrlInvalidError)
+    assert result.outcome_code == "acquisition_conversion_url_missing"
+    assert result.cause is None
 
 
 def test_rejects_private_ip_url_as_host_not_public_ip() -> None:
@@ -206,10 +207,17 @@ def test_rejection_carries_structured_observation_fields() -> None:
     assert result.has_published_at is True
 
 
-def test_empty_url_rejection_reports_absent_raw_url() -> None:
-    result = _call(url="")
+@pytest.mark.parametrize("url", ["", "   ", "\n\t  "])
+def test_missing_url_rejection_reports_absent_raw_url(url: str) -> None:
+    result = _call(url=url)
     assert isinstance(result, AcquisitionConversionRejection)
     assert result.raw_url is None
+
+
+def test_missing_url_takes_precedence_over_missing_title() -> None:
+    result = _call(url="", title="")
+    assert isinstance(result, AcquisitionConversionRejection)
+    assert result.outcome_code == "acquisition_conversion_url_missing"
 
 
 def test_invalid_url_rejection_carries_url_invalid_cause() -> None:
