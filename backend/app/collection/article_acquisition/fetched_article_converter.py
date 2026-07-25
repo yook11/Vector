@@ -39,11 +39,12 @@ class AcquisitionConversionRejection:
     """stream 境界で変換不能 entry を表す値。
 
     per-entry raise だと source stream 全体が止まるため、棄却を値に落として
-    継続させる。``outcome_code`` は責任元 VO の reason を verbatim で運び (URL=
-    ``SafeUrlInvalidReason`` / title 欠落・想定外=``AcquisitionConversionDefect``)、
-    監査は再分類せずそれを焼くだけ。``cause`` は原因例外を保持し監査が FQN / chain
-    を辿れる (URL=``CanonicalArticleUrlInvalidError`` / 想定外=本当のバグ / title
-    欠落=None)。``raw_url`` は素の値で、redact は監査側の責務。
+    継続させる。``outcome_code`` は責任元の reason を verbatim で運び (URL 欠落 /
+    title 欠落・想定外=``AcquisitionConversionDefect``、非空 URL 不正=
+    ``SafeUrlInvalidReason``)、監査は再分類せずそれを焼くだけ。``cause`` は原因例外
+    を保持し監査が FQN / chain を辿れる (非空 URL 不正=
+    ``CanonicalArticleUrlInvalidError`` / 想定外=本当のバグ / 欠落=None)。
+    ``raw_url`` は非空なら素の値、欠落なら ``None`` で、redact は監査側の責務。
     """
 
     outcome_code: str
@@ -66,7 +67,7 @@ def _reject(
     has_title = bool(fetched.title)
     body_length = len(fetched.body) if fetched.body is not None else None
     has_published_at = fetched.published_at is not None
-    raw_url = fetched.url or None
+    raw_url = fetched.url if fetched.url.strip() else None
 
     logger.info(
         "article_conversion_rejected",
@@ -125,9 +126,9 @@ def convert_fetched_article(
 ) -> AnalyzableArticle | ObservedArticle | AcquisitionConversionRejection:
     """1 ``FetchedArticle`` を「何ができたか」に変換する (想定内に total)。
 
-    URL / title は獲得型の土台 (identity)。不在 / 不正なら獲得型は成立し得ない
-    ため、Phase 0 で precondition として棄却する。残りの正規化と Ready /
-    Observed の構築はこの precondition 通過を前提に進む。
+    URL は後続アクセス、title は Observed として受け付けるための最低条件。
+    不在 / 不正なら獲得型は成立し得ないため、Phase 0 で precondition として
+    棄却する。残りの正規化と Ready / Observed の構築はこの通過を前提に進む。
 
     Returns:
         ``AnalyzableArticle`` — body + published_at が揃い品質ゲート通過。
@@ -138,6 +139,13 @@ def convert_fetched_article(
     """
     source_name = source.name
     origin = source.observed_origin
+
+    if not fetched.url.strip():
+        return _reject(
+            outcome_code=AcquisitionConversionDefect.URL_MISSING.value,
+            fetched=fetched,
+            source_name=source_name,
+        )
 
     title = fetched.title.strip()[:ARTICLE_TITLE_MAX_LENGTH]
     if not title:
