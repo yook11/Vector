@@ -345,25 +345,7 @@ class AssessmentCategoryMissingError(AssessmentTerminalError):
 
 しかし、AI応答のカテゴリは手前のパース段階で Enum の値であることが保証されており、「AIがカタログ外を返す」というパスは構造上あり得ませんでした。
 
-たとえば、当時実際に追加した `mobility` カテゴリを題材にすると、この違いがよく分かります。
-AIが `category="mobility"` を返すと、パース処理はまず `ValidCategory("mobility")` を構築し、さらに `InScopeCategory` へ変換していました。
-
-```python
-category = ValidCategory(category_raw)
-
-return InScope(
-    category=InScopeCategory(category.value),
-    ...
-)
-```
-
-`"automotive"` のような Enum に存在しない値であれば、`ValidCategory` の構築時に `CATEGORY_UNKNOWN_VALUE` として弾かれるため、DBへの照合処理まで到達しません。
-
-一方、`mobility` は Enum の正規な値なので、このパースを通過します。
-それにもかかわらず、後続の `SELECT ... WHERE slug = 'mobility'` でカテゴリが見つからないとすれば、原因はAIの応答ではありません。
-アプリケーションへ `MOBILITY = "mobility"` を追加した一方で、DBマスタへ `mobility` を追加する migration を作り忘れた、または適用できていない状態です。
-
-つまり、DBへの照合に失敗する原因は、「AIがカタログ外の値を返したこと」ではなく、EnumとDBマスタが同期されていないことにありました。
+実際には、AIはアプリが定義した Enum 通りに返しているにもかかわらず、「アプリ側に新しい Enum を追加したのに、DBマスタへの登録（seed）を忘れていた」という enum ↔ DB 間の不整合（100%システム側のバグ） だったのです。
 
 この部分は、最初から原因のラベル付けが丸ごと誤っていました。
 
