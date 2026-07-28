@@ -21,8 +21,13 @@ output "data_subnet_ids" {
   value       = [for subnet in aws_subnet.data : subnet.id]
 }
 
-output "egress_subnet_id" {
-  value = aws_subnet.public_egress.id
+output "proxy_subnet_id" {
+  value = aws_subnet.proxy.id
+}
+
+output "egress_public_ip" {
+  description = "外向き通信の送信元 IP。外部ベンダーの allowlist 登録に使う。"
+  value       = aws_eip.nat.public_ip
 }
 
 output "task_role_arns" {

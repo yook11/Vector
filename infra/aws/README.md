@@ -5,13 +5,21 @@ egress proxy を宣言する。bootstrap スタック (`bootstrap/`) が先に�
 
 ## この層が主張していること
 
-権限を「設定で守る」から「構造で守る」に置き換える。3 つの層を混ぜない。
+権限を「設定で守る」から「構造で守る」に置き換える。道具は強さで 2 種類に分かれ、
+それぞれの層を混ぜない。
 
-| 層 | 決めること | 単位 |
-|---|---|---|
-| ルートテーブル | VPC の外に出られるか | subnet |
-| egress proxy の allowlist | 外のどのホストに出られるか | subnet (送信元 IP) |
-| security group | VPC の中で誰に届くか | SG 参照 |
+| | 道具 | 決めること | 単位 |
+|---|---|---|---|
+| **不在** | public IP を持たない | 外から宛先に指定できるか | task |
+| **不在** | ルートテーブルの `0.0.0.0/0` | VPC の外に出られるか | subnet |
+| 設定 | security group | VPC の中で誰に届くか | SG 参照 |
+| 設定 | egress proxy の allowlist | 外のどのホストに出られるか | subnet (送信元 IP) |
+| 設定 | VPC endpoint policy | AWS サービスの何に触れるか | endpoint |
+
+**上 2 つと下 3 つでは守っているものの種類が違う。** 設定による防御は何枚重ねても
+「正しく書かれている限り」という条件が付き、退行しうる。存在しないものは退行しない。
+さらに設定は攻撃対象領域を減らさない — パケットは届き、プロセスがそれをパースする。
+アドレスの不在は届く前に止める。
 
 **subnet が権限の単位になる。** proxy が識別できるのは送信元 IP だけで security
 group は見えないため、allowlist を分けたい粒度で subnet を分ける必要がある。
@@ -19,9 +27,18 @@ subnet 自体は無料なので段ごとに 1:1 で切る。
 
 ## 守っている不変条件
 
-- **app subnet のルートテーブルに `0.0.0.0/0` が無い。** NAT Gateway を置かず、
-  VPC の外へ出る経路を egress proxy 1 本に限定する。設定でうっかり外に出るのでは
-  なく、経路が存在しない。
+- **インターネットにアドレスを持つのは AWS マネージドの ALB と NAT Gateway だけ。**
+  自前コンポーネントは 1 つも public IP を持たない (`grep assign_public_ip *.tf` が
+  全て `false`)。SG や Squid の src ACL は「入ってきたものを拒否する」防御で、
+  正しく書かれている限りという条件が付く。アドレスの不在は「入ってこられない」
+  防御で、設定の退行では戻らない。**ACL 評価はリクエストのパース後**なので、
+  パーサ段の脆弱性は ACL では守れない点も差になる。
+- **app subnet のルートテーブルに `0.0.0.0/0` が無い。** VPC の外へ出る経路を
+  egress proxy 1 本に限定する。設定でうっかり外に出るのではなく、経路が存在しない。
+  **強制力の担い手は NAT の不在ではなく、`rt-app` に経路が無いこと。** だから NAT は
+  proxy の後ろに経路装置として置いてよい。引けるのは `rt-proxy` だけで、NAT Gateway
+  自体もルートテーブル経由の転送しかしない (private IP を直接宛先に指定しても
+  応答しない) ため、app から proxy を迂回する経路は生まれない。
 - **frontend の外向き経路は ECR のレイヤー取得だけ。** Logfire も外部 API も
   呼ばないため proxy への接続を許さない。ただし image pull のために S3 への 443 は
   全段で開ける必要があり、SG だけでは「リージョンの S3 全域」になってしまう
@@ -31,9 +48,8 @@ subnet 自体は無料なので段ごとに 1:1 で切る。
   この前提は Better Auth がメール送信も social provider も持たないこと (招待制、
   検証済み) に依存する。計測 SDK を足すと壊れるが、静かに漏れるのではなく
   接続失敗で明確に壊れる。
-- **境界の道具は 4 つある。** ルートテーブル / proxy allowlist / security group に
-  加えて、**VPC endpoint policy**。SG が「どのサービスに出られるか」までしか絞れない
-  ところで、endpoint policy が「そのサービスの何に触れるか」を絞る。
+- **`VPC endpoint policy` が最後の 1 枚。** SG が「どのサービスに出られるか」までしか
+  絞れないところで、endpoint policy が「そのサービスの何に触れるか」を絞る。
 - **backend への到達は frontend からのみ。** transport 層の defense in depth で、
   application 層の `BFF_JWT_SIGNING_SECRET` 検証と合わせて 2 層。
 - **security group は egress も明示する。** 規則を書かなければ全拒否になるので、
@@ -106,9 +122,12 @@ subnet 自体は無料なので段ごとに 1:1 で切る。
 
 ## egress proxy の残余
 
-- **SG が唯一の防壁。** proxy は public IP を持つので、3128 の inbound を app SG
-  参照だけに絞っている一点でオープンプロキシ化を防いでいる。ここを CIDR で
-  緩めると即座に第三者が使える proxy になる。
+- **オープンプロキシ化はアドレスの不在が防いでいる。** proxy は private subnet に
+  public IP 無しで置く。仮に 3128 の inbound SG を CIDR で緩めても、インターネット
+  からこの task を宛先に指定する手段が無い。SG (app SG 参照のみ) と squid.conf の
+  `src` ACL + 末尾の `deny all` は、その内側に残る自前設定 2 枚。
+- **外向きの送信元 IP は EIP で固定される。** `terraform output egress_public_ip`。
+  proxy を再デプロイしても変わらないので、外部ベンダー側の allowlist に登録できる。
 - **非公開レンジの正本は app 側の 1 ファイル** (`backend/app/shared/security/
   non_public_ranges.json`)。Terraform は `jsondecode(file(...))` で読んで
   squid.conf を生成し、app は実行時の判定に使う。**ポリシーの持ち主はアプリで、
@@ -156,9 +175,11 @@ subnet 自体は無料なので段ごとに 1:1 で切る。
 
 - **S3 endpoint policy の bucket が足りるか。** `prod-<region>-starport-layer-bucket`
   以外に必要な bucket が無いかは実測で 403 を見て確かめる。
-- **`private_v4_ranges` の parity テスト** (上記の 2 件の不一致を app 側で塞ぐ)。
-- **`ProxyError` → 政策拒否の分類枝** を `external_fetch_error_mapping.py` に足す。
-  Squid の拒否は `RequestError` 枝で `FetchNetworkError` に落ちてしまう。
+- **agent 側の `ProxyError` 分類。** `tavily.py` の `except httpx.RequestError` は
+  collection 用の写像を通らないため、allowlist の設定ミスが run report 上
+  `status="provider_failed"` (= Tavily 障害) に化ける。
+- **proxy image を ECR に置く CI。** repository は Terraform が作るが image は無い。
+  proxy が起動しないと全 egress が止まるので、初回は apply → proxy push → app push。
 
 ## Terraform の外にあるもの
 

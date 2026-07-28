@@ -14,7 +14,7 @@ resource "aws_vpc_endpoint" "s3" {
   vpc_id            = aws_vpc.main.id
   service_name      = "com.amazonaws.${var.region}.s3"
   vpc_endpoint_type = "Gateway"
-  route_table_ids   = [aws_route_table.app.id]
+  route_table_ids   = [aws_route_table.app.id, aws_route_table.proxy.id]
 
   policy = jsonencode({
     Version = "2012-10-17"

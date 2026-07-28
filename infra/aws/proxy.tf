@@ -178,12 +178,12 @@ resource "aws_ecs_service" "proxy" {
   desired_count   = 1
   launch_type     = "FARGATE"
 
-  # 唯一 public subnet に置き、public IP を持つ task。
-  # inbound は SG が VPC 内の app SG からだけに絞る。
+  # 自前 task に public IP は与えない。外へは rt-proxy → NAT → IGW で出る。
+  # インターネットからこの task を宛先に指定する手段が存在しない状態にする。
   network_configuration {
-    subnets          = [aws_subnet.public_egress.id]
+    subnets          = [aws_subnet.proxy.id]
     security_groups  = [aws_security_group.proxy.id]
-    assign_public_ip = true
+    assign_public_ip = false
   }
 
   # 並走して困らないので新旧を重ねて切れ目をゼロにする
