@@ -18,7 +18,6 @@ from app.agent.evidence_collection.internal_search.query_embedding import (
     InternalSearchQueries,
 )
 from app.agent.planning.contract import (
-    ExternalResearchTask,
     PlanningRequest,
     QuestionPlan,
     TargetTimeWindow,
@@ -110,9 +109,11 @@ def _direct_plan() -> object:
 
 def _search_plan() -> object:
     return _plan_type("SearchPlan")(
-        article_search_queries=["検索語"],
-        external_research_tasks=[
-            ExternalResearchTask(research_goal="外部根拠を確認する")
+        research_tasks=[
+            _plan_type("ResearchTask")(
+                research_goal="外部根拠を確認する",
+                article_search_queries=["検索語"],
+            )
         ],
     )
 

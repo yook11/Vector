@@ -34,15 +34,27 @@ def _required_contract(name: str) -> Any:
 def _draft(
     *,
     plan_type: str = "search",
-    article_search_queries: list[str] | None = None,
-    research_goals: list[str] | None = None,
+    research_tasks: list[Any] | None = None,
     target_time_window: object | None = None,
 ) -> Any:
     return _required_contract("QuestionPlanDraft")(
         plan_type=plan_type,
-        article_search_queries=article_search_queries or [],
-        research_goals=research_goals or [],
+        research_tasks=research_tasks or [],
         target_time_window=target_time_window,
+    )
+
+
+def _task_draft(research_goal: str, article_search_queries: list[str]) -> Any:
+    return _required_contract("ResearchTaskDraft")(
+        research_goal=research_goal,
+        article_search_queries=article_search_queries,
+    )
+
+
+def _research_task(research_goal: str, article_search_queries: list[str]) -> Any:
+    return _required_contract("ResearchTask")(
+        research_goal=research_goal,
+        article_search_queries=article_search_queries,
     )
 
 
@@ -101,16 +113,14 @@ def test_draft_has_exact_new_fields_and_forbids_old_fields() -> None:
 
     assert set(draft_type.model_fields) == {
         "plan_type",
-        "article_search_queries",
-        "research_goals",
+        "research_tasks",
         "target_time_window",
     }
     assert all(
         draft_type.model_fields[field_name].is_required()
         for field_name in (
             "plan_type",
-            "article_search_queries",
-            "research_goals",
+            "research_tasks",
         )
     )
     assert not draft_type.model_fields["target_time_window"].is_required()
@@ -119,8 +129,12 @@ def test_draft_has_exact_new_fields_and_forbids_old_fields() -> None:
         draft_type.model_validate(
             {
                 "plan_type": "search",
-                "article_search_queries": ["NVIDIA AI GPU"],
-                "research_goals": ["NVIDIA の根拠を確認する"],
+                "research_tasks": [
+                    {
+                        "research_goal": "NVIDIA の根拠を確認する",
+                        "article_search_queries": ["NVIDIA AI GPU"],
+                    }
+                ],
                 "reason": "legacy explanation",
             }
         )
@@ -128,11 +142,17 @@ def test_draft_has_exact_new_fields_and_forbids_old_fields() -> None:
         draft_type.model_validate(
             {
                 "plan_type": "search",
-                "article_search_queries": ["NVIDIA AI GPU"],
-                "research_goals": ["NVIDIA の根拠を確認する"],
+                "research_tasks": [
+                    {
+                        "research_goal": "NVIDIA の根拠を確認する",
+                        "article_search_queries": ["NVIDIA AI GPU"],
+                    }
+                ],
                 "retrieval_mode": "internal_and_external",
                 "internal_queries": ["legacy"],
                 "external_collection_goals": ["legacy"],
+                "article_search_queries": ["legacy top level"],
+                "research_goals": ["legacy top level"],
             }
         )
 
@@ -146,8 +166,12 @@ def test_draft_rejects_each_legacy_plan_type(legacy_plan_type: str) -> None:
         _required_contract("QuestionPlanDraft").model_validate(
             {
                 "plan_type": legacy_plan_type,
-                "article_search_queries": ["NVIDIA AI GPU"],
-                "research_goals": ["NVIDIA の根拠を確認する"],
+                "research_tasks": [
+                    {
+                        "research_goal": "NVIDIA の根拠を確認する",
+                        "article_search_queries": ["NVIDIA AI GPU"],
+                    }
+                ],
             }
         )
 
@@ -158,108 +182,119 @@ def test_direct_plan_has_no_search_fields_and_rejects_them_as_extra() -> None:
     assert set(direct_plan_type.model_fields) == {"plan_type"}
     assert direct_plan_type().plan_type == "direct_answer"
     with pytest.raises(ValidationError):
-        direct_plan_type(
-            article_search_queries=["NVIDIA"],
-            external_research_tasks=[],
-        )
+        direct_plan_type(research_tasks=[])
 
 
-def test_search_plan_requires_both_branches_and_rejects_duplicate_inputs() -> None:
+def test_search_plan_rejects_research_tasks_outside_closed_bounds() -> None:
+    """research_tasksの件数境界(下限1・上限RESEARCH_TASK_LIMIT)を構造的に拒否する。"""
     search_plan_type = _required_contract("SearchPlan")
-    task_type = _required_contract("ExternalResearchTask")
-
-    for article_search_queries, external_research_tasks in (
-        ([], [task_type(research_goal="NVIDIA の根拠を確認する")]),
-        (["NVIDIA AI GPU"], []),
-    ):
-        with pytest.raises(ValidationError):
-            search_plan_type(
-                article_search_queries=article_search_queries,
-                external_research_tasks=external_research_tasks,
-            )
+    task_limit = _required_contract("RESEARCH_TASK_LIMIT")
 
     with pytest.raises(ValidationError):
+        search_plan_type(research_tasks=[])
+    with pytest.raises(ValidationError):
         search_plan_type(
-            article_search_queries=["NVIDIA", "nvidia"],
-            external_research_tasks=[
-                task_type(research_goal="NVIDIA の根拠を確認する")
-            ],
+            research_tasks=[
+                _research_task(f"goal {index}", [f"query {index}"])
+                for index in range(task_limit + 1)
+            ]
         )
+
+
+def test_search_plan_rejects_duplicate_research_goals() -> None:
+    search_plan_type = _required_contract("SearchPlan")
+
     with pytest.raises(ValidationError):
         search_plan_type(
-            article_search_queries=["NVIDIA"],
-            external_research_tasks=[
-                task_type(research_goal="NVIDIA の根拠を確認する"),
-                task_type(research_goal="NVIDIA の根拠を確認する"),
-            ],
+            research_tasks=[
+                _research_task("NVIDIA の根拠を確認する", ["NVIDIA"]),
+                _research_task("NVIDIA の根拠を確認する", ["Blackwell"]),
+            ]
+        )
+
+
+def test_search_plan_allows_the_same_query_text_in_different_tasks() -> None:
+    """task間のquery重複は禁じない(task内のcasefold一意はResearchTaskが持つ)。"""
+    search_plan_type = _required_contract("SearchPlan")
+
+    plan = search_plan_type(
+        research_tasks=[
+            _research_task("第一の調査目的", ["共有クエリ"]),
+            _research_task("第二の調査目的", ["共有クエリ"]),
+        ]
+    )
+
+    assert [task.article_search_queries for task in plan.research_tasks] == [
+        ["共有クエリ"],
+        ["共有クエリ"],
+    ]
+
+
+def test_search_plan_rejects_query_total_over_budget_across_tasks() -> None:
+    """MAX_ARTICLE_SEARCH_QUERIESはtask個別の上限ではなくrun全体の合計予算。"""
+    search_plan_type = _required_contract("SearchPlan")
+    query_budget = _required_contract("MAX_ARTICLE_SEARCH_QUERIES")
+
+    accepted = search_plan_type(
+        research_tasks=[
+            _research_task("第一の調査目的", ["q1", "q2"]),
+            _research_task("第二の調査目的", ["q3"]),
+        ]
+    )
+    assert (
+        sum(len(task.article_search_queries) for task in accepted.research_tasks)
+        == query_budget
+    )
+
+    with pytest.raises(ValidationError):
+        search_plan_type(
+            research_tasks=[
+                _research_task("第一の調査目的", ["q1", "q2"]),
+                _research_task("第二の調査目的", ["q3", "q4"]),
+            ]
         )
 
 
 def test_search_plan_has_exact_fields_and_forbids_legacy_extra() -> None:
     search_plan_type = _required_contract("SearchPlan")
-    task_type = _required_contract("ExternalResearchTask")
 
     assert set(search_plan_type.model_fields) == {
         "plan_type",
-        "article_search_queries",
-        "external_research_tasks",
+        "research_tasks",
         "target_time_window",
     }
     with pytest.raises(ValidationError):
         search_plan_type(
-            article_search_queries=["NVIDIA"],
-            external_research_tasks=[
-                task_type(research_goal="NVIDIA の根拠を確認する")
+            research_tasks=[
+                _research_task("NVIDIA の根拠を確認する", ["NVIDIA"]),
             ],
             reason="legacy explanation",
         )
-
-
-@pytest.mark.parametrize(
-    ("article_search_queries", "external_research_tasks"),
-    [
-        pytest.param(
-            [f"query {index}" for index in range(4)],
-            ["NVIDIA の根拠を確認する"],
-            id="four-queries",
-        ),
-        pytest.param(
-            ["NVIDIA"],
-            [f"research goal {index}" for index in range(4)],
-            id="four-tasks",
-        ),
-    ],
-)
-def test_search_plan_rejects_more_than_three_queries_or_tasks(
-    article_search_queries: list[str],
-    external_research_tasks: list[str],
-) -> None:
-    task_type = _required_contract("ExternalResearchTask")
-
     with pytest.raises(ValidationError):
-        _required_contract("SearchPlan")(
-            article_search_queries=article_search_queries,
-            external_research_tasks=[
-                task_type(research_goal=research_goal)
-                for research_goal in external_research_tasks
+        search_plan_type(
+            research_tasks=[
+                _research_task("NVIDIA の根拠を確認する", ["NVIDIA"]),
             ],
+            article_search_queries=["legacy top level"],
         )
 
 
-def test_plan_from_draft_normalizes_search_inputs_without_question_fallback() -> None:
+def test_plan_from_draft_normalizes_tasks_and_keeps_typed_time_window() -> None:
+    """research_goalの重複排除・task内queryのstrip/casefold重複排除・task上限3を検証する。"""
     plan_from_draft = _required_contract("plan_from_draft")
     draft = _draft(
-        article_search_queries=[
-            "  NVIDIA AI GPU  ",
-            "nvidia ai gpu",
-            "OpenAI",
-            "Apple",
-        ],
-        research_goals=[
-            "  NVIDIA の根拠を確認する  ",
-            "NVIDIA の根拠を確認する",
-            "供給需要を確認する",
-            "投資影響を確認する",
+        research_tasks=[
+            _task_draft(
+                "  NVIDIA の根拠を確認する  ",
+                ["  NVIDIA AI GPU  ", "nvidia ai gpu", "   "],
+            ),
+            _task_draft(
+                "NVIDIA の根拠を確認する",  # 1件目と完全一致goal(先勝ちでskip)
+                ["must not appear"],
+            ),
+            _task_draft("供給需要を確認する", ["半導体供給"]),
+            _task_draft("投資影響を確認する", ["投資判断"]),
+            _task_draft("4task目は上限で切られる", ["切られるquery"]),
         ],
         target_time_window=_time_window(kind="last_n_days", days=7),
     )
@@ -267,14 +302,81 @@ def test_plan_from_draft_normalizes_search_inputs_without_question_fallback() ->
     plan = plan_from_draft(draft)
 
     assert plan.plan_type == "search"
-    assert plan.article_search_queries == ["NVIDIA AI GPU", "OpenAI", "Apple"]
-    assert [task.research_goal for task in plan.external_research_tasks] == [
+    assert [task.research_goal for task in plan.research_tasks] == [
         "NVIDIA の根拠を確認する",
         "供給需要を確認する",
         "投資影響を確認する",
     ]
+    assert [task.article_search_queries for task in plan.research_tasks] == [
+        ["NVIDIA AI GPU"],
+        ["半導体供給"],
+        ["投資判断"],
+    ]
+    assert "must not appear" not in plan.article_search_queries
     assert plan.target_time_window == _time_window(kind="last_n_days", days=7)
     assert "fallback_query" not in inspect.signature(plan_from_draft).parameters
+
+
+@pytest.mark.parametrize(
+    ("task_queries", "expected_task_queries"),
+    [
+        pytest.param(
+            [["a", "b"], ["c", "d"]],
+            [["a", "b"], ["c"]],
+            id="two-tasks-first-task-keeps-two",
+        ),
+        pytest.param(
+            [["a", "b", "c"], ["d"]],
+            [["a", "b"], ["d"]],
+            id="two-tasks-uneven-lengths",
+        ),
+        pytest.param(
+            [["a"], ["b", "c"], ["d", "e"]],
+            [["a"], ["b"], ["d"]],
+            id="three-tasks-each-keeps-its-first",
+        ),
+    ],
+)
+def test_plan_from_draft_trims_query_budget_by_position_major_round_robin(
+    task_queries: list[list[str]],
+    expected_task_queries: list[list[str]],
+) -> None:
+    """予算超過時、query位置ごとにtask順で走査し採用3件で打ち切る決定的trimを検証する。"""
+    plan_from_draft = _required_contract("plan_from_draft")
+    draft = _draft(
+        research_tasks=[
+            _task_draft(f"goal {index}", queries)
+            for index, queries in enumerate(task_queries)
+        ],
+    )
+
+    plan = plan_from_draft(draft)
+
+    assert [
+        task.article_search_queries for task in plan.research_tasks
+    ] == expected_task_queries
+    assert all(len(task.article_search_queries) >= 1 for task in plan.research_tasks)
+    assert sum(
+        len(task.article_search_queries) for task in plan.research_tasks
+    ) == _required_contract("MAX_ARTICLE_SEARCH_QUERIES")
+
+
+def test_plan_from_draft_keeps_duplicate_query_text_present_in_multiple_tasks() -> None:
+    """task間の重複queryはdefectにならず両taskに残る(run単位一意性からの緩和)。"""
+    plan_from_draft = _required_contract("plan_from_draft")
+    draft = _draft(
+        research_tasks=[
+            _task_draft("第一の調査目的", ["共通クエリ"]),
+            _task_draft("第二の調査目的", ["共通クエリ"]),
+        ],
+    )
+
+    plan = plan_from_draft(draft)
+
+    assert [task.article_search_queries for task in plan.research_tasks] == [
+        ["共通クエリ"],
+        ["共通クエリ"],
+    ]
 
 
 @pytest.mark.parametrize(
@@ -283,16 +385,14 @@ def test_plan_from_draft_normalizes_search_inputs_without_question_fallback() ->
         pytest.param(
             lambda: _draft(
                 plan_type="direct_answer",
-                article_search_queries=["RAW_QUESTION_MUST_NOT_BE_FALLBACK_34a1"],
+                research_tasks=[
+                    _task_draft(
+                        "NVIDIA 概要",
+                        ["RAW_QUESTION_MUST_NOT_BE_FALLBACK_34a1"],
+                    )
+                ],
             ),
-            id="direct-with-query",
-        ),
-        pytest.param(
-            lambda: _draft(
-                plan_type="direct_answer",
-                research_goals=["外部根拠を確認する"],
-            ),
-            id="direct-with-goal",
+            id="direct-with-task",
         ),
         pytest.param(
             lambda: _draft(
@@ -302,14 +402,12 @@ def test_plan_from_draft_normalizes_search_inputs_without_question_fallback() ->
             id="direct-with-window",
         ),
         pytest.param(
-            lambda: _draft(article_search_queries=["NVIDIA"], research_goals=[]),
-            id="search-without-goal",
+            lambda: _draft(research_tasks=[]),
+            id="search-without-any-task",
         ),
         pytest.param(
-            lambda: _draft(
-                article_search_queries=[], research_goals=["根拠を確認する"]
-            ),
-            id="search-without-query",
+            lambda: _draft(research_tasks=[_task_draft("根拠を確認する", ["   ", ""])]),
+            id="search-with-empty-task-queries",
         ),
     ],
 )
@@ -335,16 +433,50 @@ def test_direct_draft_creates_direct_answer_plan_only() -> None:
 def test_direct_and_search_plans_are_frozen() -> None:
     direct = _required_contract("DirectAnswerPlan")()
     search = _required_contract("SearchPlan")(
-        article_search_queries=["NVIDIA"],
-        external_research_tasks=[
-            _required_contract("ExternalResearchTask")(research_goal="根拠を確認する")
-        ],
+        research_tasks=[_research_task("根拠を確認する", ["NVIDIA"])],
     )
 
     with pytest.raises(ValidationError):
         direct.plan_type = "search"
     with pytest.raises(ValidationError):
-        search.article_search_queries = ["OpenAI"]
+        search.research_tasks = []
+
+
+def test_search_plan_projects_flattened_queries_with_casefold_dedup() -> None:
+    """旧consumer(answering_runner.py)用の平坦化射影。task順を保ちつつcasefold先勝ちで重複を除く
+    (旧SearchPlanのrun単位一意性を射影側で保つ)。research_tasks自体の重複は保持されたままになる。
+    """
+    plan = _required_contract("SearchPlan")(
+        research_tasks=[
+            _research_task("第一の目的", ["共有クエリ", "NVIDIA GPU"]),
+            _research_task("第二の目的", ["nvidia gpu"]),
+        ],
+    )
+
+    assert plan.article_search_queries == ["共有クエリ", "NVIDIA GPU"]
+    assert [task.article_search_queries for task in plan.research_tasks] == [
+        ["共有クエリ", "NVIDIA GPU"],
+        ["nvidia gpu"],
+    ]
+
+
+def test_search_plan_projects_external_tasks_in_task_order() -> None:
+    """旧consumer(answering_runner.py)用のExternalResearchTask射影。task順を保つ。"""
+    external_task_type = _required_contract("ExternalResearchTask")
+    plan = _required_contract("SearchPlan")(
+        research_tasks=[
+            _research_task("第一の目的", ["q1"]),
+            _research_task("第二の目的", ["q2"]),
+        ],
+    )
+
+    assert plan.external_research_tasks == [
+        external_task_type(research_goal="第一の目的"),
+        external_task_type(research_goal="第二の目的"),
+    ]
+    assert all(
+        isinstance(task, external_task_type) for task in plan.external_research_tasks
+    )
 
 
 def test_planning_request_is_a_frozen_context_consumer_wrapper() -> None:
@@ -458,6 +590,40 @@ class TestExternalResearchTask:
                     "collection_goal": "legacy field must not be accepted",
                 }
             )
+
+
+class TestResearchTask:
+    def test_has_research_goal_and_article_search_queries_only(self) -> None:
+        assert set(_required_contract("ResearchTask").model_fields) == {
+            "research_goal",
+            "article_search_queries",
+        }
+
+    def test_strips_research_goal(self) -> None:
+        task = _research_task("  NVIDIA の内部検索目的  ", ["NVIDIA"])
+
+        assert task.research_goal == "NVIDIA の内部検索目的"
+
+    def test_rejects_blank_research_goal(self) -> None:
+        with pytest.raises(ValidationError):
+            _research_task("   ", ["NVIDIA"])
+
+    def test_rejects_empty_query_list(self) -> None:
+        with pytest.raises(ValidationError):
+            _research_task("NVIDIA の内部検索目的", [])
+
+    def test_rejects_more_than_max_article_search_queries(self) -> None:
+        query_budget = _required_contract("MAX_ARTICLE_SEARCH_QUERIES")
+
+        with pytest.raises(ValidationError):
+            _research_task(
+                "NVIDIA の内部検索目的",
+                [f"query {index}" for index in range(query_budget + 1)],
+            )
+
+    def test_rejects_casefold_duplicate_queries_within_task(self) -> None:
+        with pytest.raises(ValidationError):
+            _research_task("NVIDIA の内部検索目的", ["NVIDIA", "nvidia"])
 
 
 @pytest.mark.parametrize(

@@ -135,13 +135,13 @@ def _is_literal_values_derived_from(
     )
 
 
-def test_planner_agent_declares_v4_two_plan_schema_and_stable_model() -> None:
+def test_planner_agent_declares_v5_two_plan_schema_and_stable_model() -> None:
     contracts = _planning_module()
     agent = _planner_agent()
 
     assert isinstance(agent, Agent)
     assert agent.name == "question_planner"
-    assert agent.prompt.version == "v4"
+    assert agent.prompt.version == "v5"
     assert agent.model.provider == "gemini"
     assert agent.model.name == "gemini-2.5-flash-lite"
     assert agent.model_settings.temperature == 0.1
@@ -149,16 +149,13 @@ def test_planner_agent_declares_v4_two_plan_schema_and_stable_model() -> None:
     assert agent.output_type is _required(contracts, "QuestionPlanDraft")
 
 
-def test_manual_schema_requires_only_two_plan_fields_and_rejects_old_vocabulary() -> (
-    None
-):
+def test_manual_schema_requires_plan_type_and_research_tasks_only() -> None:
     schema = _planner_agent().response_schema
 
     assert schema["type"] == "OBJECT"
     assert list(schema["required"]) == [
         "plan_type",
-        "article_search_queries",
-        "research_goals",
+        "research_tasks",
     ]
     assert set(schema["properties"]) == {
         *schema["required"],
@@ -167,8 +164,16 @@ def test_manual_schema_requires_only_two_plan_fields_and_rejects_old_vocabulary(
     assert list(schema["properties"]["plan_type"]["enum"]) == list(
         get_args(_required(_planning_module(), "PlanType"))
     )
-    assert schema["properties"]["article_search_queries"]["type"] == "ARRAY"
-    assert schema["properties"]["research_goals"]["type"] == "ARRAY"
+    research_tasks_schema = schema["properties"]["research_tasks"]
+    assert research_tasks_schema["type"] == "ARRAY"
+    task_item_schema = research_tasks_schema["items"]
+    assert task_item_schema["type"] == "OBJECT"
+    assert set(task_item_schema["required"]) == {
+        "research_goal",
+        "article_search_queries",
+    }
+    assert task_item_schema["properties"]["research_goal"]["type"] == "STRING"
+    assert task_item_schema["properties"]["article_search_queries"]["type"] == "ARRAY"
     assert schema["properties"]["target_time_window"]["nullable"] is True
     assert not any(
         old_name in schema["properties"]
@@ -177,6 +182,8 @@ def test_manual_schema_requires_only_two_plan_fields_and_rejects_old_vocabulary(
             "internal_queries",
             "external_collection_goals",
             "reason",
+            "article_search_queries",
+            "research_goals",
         )
     )
 
@@ -192,13 +199,22 @@ def test_gemini_schema_derives_plan_limits_and_enums_from_shared_contracts() -> 
     )
     properties_expression = _dict_expression(schema_expression, "properties")
     plan_type_expression = _dict_expression(properties_expression, "plan_type")
+    research_tasks_expression = _dict_expression(
+        properties_expression, "research_tasks"
+    )
+    research_tasks_max_items_expression = _dict_expression(
+        research_tasks_expression,
+        "maxItems",
+    )
+    task_item_expression = _dict_expression(research_tasks_expression, "items")
+    task_properties_expression = _dict_expression(task_item_expression, "properties")
     article_queries_expression = _dict_expression(
-        properties_expression,
+        task_properties_expression,
         "article_search_queries",
     )
-    research_goals_expression = _dict_expression(
-        properties_expression,
-        "research_goals",
+    article_max_items_expression = _dict_expression(
+        article_queries_expression,
+        "maxItems",
     )
     target_time_window_expression = _dict_expression(
         properties_expression,
@@ -209,26 +225,17 @@ def test_gemini_schema_derives_plan_limits_and_enums_from_shared_contracts() -> 
         "properties",
     )
     target_kind_expression = _dict_expression(target_properties_expression, "kind")
-    article_max_items_expression = _dict_expression(
-        article_queries_expression,
-        "maxItems",
-    )
-    research_goals_max_items_expression = _dict_expression(
-        research_goals_expression,
-        "maxItems",
-    )
 
     assert list(schema["properties"]["plan_type"]["enum"]) == list(
         get_args(_required(contracts, "PlanType"))
     )
-    assert schema["properties"]["article_search_queries"]["maxItems"] == _required(
+    assert schema["properties"]["research_tasks"]["maxItems"] == _required(
         contracts,
-        "MAX_ARTICLE_SEARCH_QUERIES",
+        "RESEARCH_TASK_LIMIT",
     )
-    assert schema["properties"]["research_goals"]["maxItems"] == _required(
-        contracts,
-        "EXTERNAL_RESEARCH_TASK_LIMIT",
-    )
+    assert schema["properties"]["research_tasks"]["items"]["properties"][
+        "article_search_queries"
+    ]["maxItems"] == _required(contracts, "MAX_ARTICLE_SEARCH_QUERIES")
     assert list(
         schema["properties"]["target_time_window"]["properties"]["kind"]["enum"]
     ) == list(get_args(_required(contracts, "TargetTimeWindowKind")))
@@ -236,10 +243,10 @@ def test_gemini_schema_derives_plan_limits_and_enums_from_shared_contracts() -> 
         _dict_expression(plan_type_expression, "enum"),
         "PlanType",
     )
+    assert isinstance(research_tasks_max_items_expression, ast.Name)
+    assert research_tasks_max_items_expression.id == "RESEARCH_TASK_LIMIT"
     assert isinstance(article_max_items_expression, ast.Name)
     assert article_max_items_expression.id == "MAX_ARTICLE_SEARCH_QUERIES"
-    assert isinstance(research_goals_max_items_expression, ast.Name)
-    assert research_goals_max_items_expression.id == "EXTERNAL_RESEARCH_TASK_LIMIT"
     assert _is_literal_values_derived_from(
         source_tree,
         _dict_expression(target_kind_expression, "enum"),
@@ -253,7 +260,8 @@ def test_prompt_instructs_two_plan_and_field_responsibilities() -> None:
     assert "direct_answer" in prompt
     assert "search" in prompt
     assert "article_search_queries" in prompt
-    assert "research_goals" in prompt
+    assert "research_tasks" in prompt
+    assert "research_goal" in prompt
     assert "target_time_window" in prompt
     assert "分析済み記事" in prompt
     assert "外部" in prompt
@@ -263,14 +271,15 @@ def test_prompt_instructs_two_plan_and_field_responsibilities() -> None:
         for rule in (
             "迷った場合は`search`とする",
             "形式・文体・簡潔さだけを理由に検索を増減させない。",
-            "article_search_queries=[]",
-            "research_goals=[]",
+            "research_tasks=[]",
             "target_time_window=null",
             "raw questionをそのままコピーせず",
             "entity / topic / event / time intentを抽出・圧縮する",
             "keyword queryは書かない",
             "外部根拠の公開・更新期間",
             "内部記事へ同じ期間保証があるように表現しない",
+            "合計3件",
+            "同じ角度の言い換えを並べない",
         )
     )
     assert "retrieval" not in prompt
@@ -460,7 +469,7 @@ def test_prompt_declaration_separates_agent_and_time_normalization() -> None:
     prompts_module = import_module("app.agent.planning.prompts")
     instructions = _required(prompts_module, "PLANNER_INSTRUCTIONS")
 
-    assert _required(prompts_module, "PLANNER_PROMPT_VERSION") == "v4"
+    assert _required(prompts_module, "PLANNER_PROMPT_VERSION") == "v5"
     assert isinstance(_required(prompts_module, "_PLANNER_INPUT_TEMPLATE"), str)
     assert "compute_call_signature" not in getsource(prompts_module)
     assert "PLANNER_PROMPT_VERSION" in getsource(agent_module)
@@ -571,8 +580,12 @@ def test_wire_schema_matches_draft_contract_and_validates_representative_payload
     schema = _planner_agent().response_schema
     payload = {
         "plan_type": "search",
-        "article_search_queries": ["NVIDIA AI GPU 動向"],
-        "research_goals": ["NVIDIA の直近発表を確認する"],
+        "research_tasks": [
+            {
+                "research_goal": "NVIDIA の直近発表を確認する",
+                "article_search_queries": ["NVIDIA AI GPU 動向"],
+            },
+        ],
         "target_time_window": {
             "kind": "date_range",
             "start_date": "2026-06-01",
@@ -583,8 +596,7 @@ def test_wire_schema_matches_draft_contract_and_validates_representative_payload
     assert set(schema["properties"]) == set(draft_type.model_fields)
     assert set(schema["required"]) == {
         "plan_type",
-        "article_search_queries",
-        "research_goals",
+        "research_tasks",
     }
     assert {
         field_name
@@ -592,15 +604,18 @@ def test_wire_schema_matches_draft_contract_and_validates_representative_payload
         if field.is_required()
     } == {
         "plan_type",
-        "article_search_queries",
-        "research_goals",
+        "research_tasks",
     }
     assert list(schema["properties"]["plan_type"]["enum"]) == [
         "direct_answer",
         "search",
     ]
-    assert schema["properties"]["article_search_queries"]["items"]["type"] == "STRING"
-    assert schema["properties"]["research_goals"]["items"]["type"] == "STRING"
+    task_item_schema = schema["properties"]["research_tasks"]["items"]
+    assert task_item_schema["properties"]["research_goal"]["type"] == "STRING"
+    assert (
+        task_item_schema["properties"]["article_search_queries"]["items"]["type"]
+        == "STRING"
+    )
     target_time_window_schema = _as_plain_value(
         schema["properties"]["target_time_window"]
     )

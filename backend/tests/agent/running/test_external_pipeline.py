@@ -62,11 +62,17 @@ def _plan(
     target_time_window: TargetTimeWindow | None = _DEFAULT_TARGET_TIME_WINDOW,
 ) -> Any:
     plan_type = getattr(planning_contract, "SearchPlan", None)
-    if plan_type is None:
-        pytest.fail("planning contract must define SearchPlan")
+    research_task_type = getattr(planning_contract, "ResearchTask", None)
+    if plan_type is None or research_task_type is None:
+        pytest.fail("planning contract must define SearchPlan and ResearchTask")
     return plan_type(
-        article_search_queries=["NVIDIA"],
-        external_research_tasks=tasks,
+        research_tasks=[
+            research_task_type(
+                research_goal=task.research_goal,
+                article_search_queries=["NVIDIA"],
+            )
+            for task in tasks
+        ],
         target_time_window=target_time_window,
     )
 

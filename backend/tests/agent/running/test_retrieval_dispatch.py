@@ -493,12 +493,29 @@ def _search_plan(
     article_search_queries: list[str] | None = None,
     target_time_window: TargetTimeWindow | None = _TARGET_TIME_WINDOW,
 ) -> object:
+    """先頭taskへ全query、追加taskへ1件ずつ割り当てる(合計は予算内)。
+
+    article_search_queriesはtask単位ではなくrun全体の検索文だったため、
+    最も情報量の多い先頭queryのtaskへ集約し、他taskはgoalだけを保つ。
+    """
     plan_type = getattr(planning_contract, "SearchPlan", None)
-    if plan_type is None:
-        pytest.fail("planning contract must define SearchPlan")
+    research_task_type = getattr(planning_contract, "ResearchTask", None)
+    if plan_type is None or research_task_type is None:
+        pytest.fail("planning contract must define SearchPlan and ResearchTask")
+    resolved_tasks = list(tasks or (_task(),))
+    first_task_queries = article_search_queries or ["NVIDIA", "Blackwell"]
     return plan_type(
-        article_search_queries=article_search_queries or ["NVIDIA", "Blackwell"],
-        external_research_tasks=list(tasks or (_task(),)),
+        research_tasks=[
+            research_task_type(
+                research_goal=task.research_goal,
+                article_search_queries=(
+                    first_task_queries
+                    if index == 0
+                    else [f"{task.research_goal} query"]
+                ),
+            )
+            for index, task in enumerate(resolved_tasks)
+        ],
         target_time_window=target_time_window,
     )
 

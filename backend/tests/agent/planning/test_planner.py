@@ -51,15 +51,20 @@ def _input(question: str = "今日のNVIDIAの発表は？") -> Any:
 def _draft(
     *,
     plan_type: str,
-    article_search_queries: list[str] | None = None,
-    research_goals: list[str] | None = None,
+    research_tasks: list[Any] | None = None,
     target_time_window: object | None = None,
 ) -> Any:
     return _required_contract("QuestionPlanDraft")(
         plan_type=plan_type,
-        article_search_queries=article_search_queries or [],
-        research_goals=research_goals or [],
+        research_tasks=research_tasks or [],
         target_time_window=target_time_window,
+    )
+
+
+def _task_draft(research_goal: str, article_search_queries: list[str]) -> Any:
+    return _required_contract("ResearchTaskDraft")(
+        research_goal=research_goal,
+        article_search_queries=article_search_queries,
     )
 
 
@@ -173,8 +178,9 @@ def _metric_attributes(
         pytest.param(
             lambda: _draft(
                 plan_type="search",
-                article_search_queries=["NVIDIA AI GPU"],
-                research_goals=["NVIDIA の直近発表を確認する"],
+                research_tasks=[
+                    _task_draft("NVIDIA の直近発表を確認する", ["NVIDIA AI GPU"])
+                ],
             ),
             "search",
             id="search",
@@ -226,15 +232,16 @@ async def test_semantic_response_defect_retries_once_without_leaking_question() 
     question_sentinel = "RAW_QUESTION_MUST_NOT_REACH_REPAIR_OR_METRIC_8ab4"
     invalid = _draft(
         plan_type="direct_answer",
-        article_search_queries=[question_sentinel],
+        research_tasks=[_task_draft("goal", [question_sentinel])],
     )
     runtime = ScriptedAgentRuntime(
         [
             invalid,
             _draft(
                 plan_type="search",
-                article_search_queries=["NVIDIA AI GPU"],
-                research_goals=["NVIDIA の直近発表を確認する"],
+                research_tasks=[
+                    _task_draft("NVIDIA の直近発表を確認する", ["NVIDIA AI GPU"])
+                ],
             ),
         ]
     )
@@ -350,8 +357,7 @@ async def test_scope_failure_propagates_without_plan_or_metric(
         [
             _draft(
                 plan_type="search",
-                article_search_queries=["NVIDIA"],
-                research_goals=["NVIDIA の根拠を確認する"],
+                research_tasks=[_task_draft("NVIDIA の根拠を確認する", ["NVIDIA"])],
             )
         ]
     )
@@ -381,8 +387,7 @@ async def test_search_plan_preserves_typed_time_window_through_service() -> None
         [
             _draft(
                 plan_type="search",
-                article_search_queries=["NVIDIA"],
-                research_goals=["NVIDIA の直近発表を確認する"],
+                research_tasks=[_task_draft("NVIDIA の直近発表を確認する", ["NVIDIA"])],
                 target_time_window=target_time_window,
             )
         ]
@@ -404,8 +409,7 @@ async def test_each_response_defect_retries_once_in_the_same_runtime(
             first_error,
             _draft(
                 plan_type="search",
-                article_search_queries=["NVIDIA"],
-                research_goals=["NVIDIA の発表根拠を確認する"],
+                research_tasks=[_task_draft("NVIDIA の発表根拠を確認する", ["NVIDIA"])],
             ),
         ]
     )
@@ -574,8 +578,9 @@ async def test_all_runtime_scope_failures_propagate_without_plan_or_metric(
         [
             _draft(
                 plan_type="search",
-                article_search_queries=["must not be returned"],
-                research_goals=["must not be returned"],
+                research_tasks=[
+                    _task_draft("must not be returned", ["must not be returned"])
+                ],
             )
         ]
     )
@@ -603,8 +608,7 @@ async def test_two_plan_calls_activate_fresh_runtime_scopes() -> None:
         [
             _draft(
                 plan_type="search",
-                article_search_queries=["second query"],
-                research_goals=["second goal"],
+                research_tasks=[_task_draft("second goal", ["second query"])],
             )
         ]
     )
@@ -636,8 +640,9 @@ async def test_retry_success_metric_records_after_scope_exit_without_repair_deta
             invalid,
             _draft(
                 plan_type="search",
-                article_search_queries=["NVIDIA AI GPU"],
-                research_goals=["NVIDIA の根拠を確認する"],
+                research_tasks=[
+                    _task_draft("NVIDIA の根拠を確認する", ["NVIDIA AI GPU"])
+                ],
             ),
         ]
     )
@@ -682,8 +687,9 @@ async def test_retry_success_metric_records_after_scope_exit_without_repair_deta
                 _response_invalid(),
                 _draft(
                     plan_type="search",
-                    article_search_queries=["NVIDIA"],
-                    research_goals=["NVIDIA の外部根拠を確認する"],
+                    research_tasks=[
+                        _task_draft("NVIDIA の外部根拠を確認する", ["NVIDIA"])
+                    ],
                 ),
             ],
             True,
