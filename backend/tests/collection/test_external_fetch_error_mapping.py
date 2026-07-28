@@ -24,6 +24,7 @@ from app.collection.external_fetch_error_mapping import (
 )
 from app.collection.external_fetch_errors import (
     FetchAccessDeniedError,
+    FetchEgressBlockedError,
     FetchGatewayError,
     FetchLegalBlockError,
     FetchNetworkError,
@@ -238,3 +239,43 @@ def test_translate_unknown_exception_falls_back_to_network() -> None:
     """呼出側 except が広すぎて未知例外が来ても翻訳自体は落ちない。"""
     err = external_fetch_error_from_exception(ValueError("surprise"), target_label="S")
     assert isinstance(err, FetchNetworkError)
+
+
+class TestProxyRefusal:
+    """egress proxy の CONNECT 拒否を政策拒否として分類することを固定する。
+
+    ``httpcore`` は CONNECT の **非 2xx 全部** を ``ProxyError`` に畳む
+    (``http_proxy.py`` の ``"%d %s" % (status, reason)``)。403 (allowlist /
+    private-deny) と 5xx (proxy が上流に到達できない) が同じ型で来るため、
+    status を見ないと「政策で恒久的に塞がれている」と「一時的な障害」が
+    混ざる。retryable の向きが逆になるので、ここで分ける。
+    """
+
+    def test_403_is_egress_blocked_and_terminal(self) -> None:
+        err = external_fetch_error_from_exception(
+            httpx.ProxyError("403 Forbidden"), target_label="feed"
+        )
+        assert isinstance(err, FetchEgressBlockedError)
+        assert err.retryable is False
+
+    @pytest.mark.parametrize("msg", ["502 Bad Gateway", "503 Service Unavailable"])
+    def test_upstream_failure_stays_network_and_retryable(self, msg: str) -> None:
+        err = external_fetch_error_from_exception(
+            httpx.ProxyError(msg), target_label="feed"
+        )
+        assert isinstance(err, FetchNetworkError)
+        assert err.retryable is True
+
+    def test_unparsable_message_falls_back_to_network(self) -> None:
+        """status を読めないときは retryable 側 (現行の挙動) に倒す。"""
+        err = external_fetch_error_from_exception(
+            httpx.ProxyError("connection closed"), target_label="feed"
+        )
+        assert isinstance(err, FetchNetworkError)
+
+    def test_plain_transport_error_is_unaffected(self) -> None:
+        """ProxyError 以外の RequestError の分類を変えていないこと。"""
+        err = external_fetch_error_from_exception(
+            httpx.ConnectError("refused"), target_label="feed"
+        )
+        assert isinstance(err, FetchNetworkError)
