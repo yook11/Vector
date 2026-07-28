@@ -241,6 +241,19 @@ resource "aws_vpc_security_group_ingress_rule" "endpoints_from_app" {
   referenced_security_group_id = aws_security_group.app[each.value].id
 }
 
+# proxy も image pull と log 送信で endpoint を使う。private DNS は VPC 全域に
+# 効くので、proxy をどの subnet に置いても ecr.api / logs は endpoint の ENI に
+# 解決される。ここを開けないと proxy task 自体が起動しない。
+# (S3 のレイヤー実体は gateway endpoint 経由なのでこの規則の対象外。)
+resource "aws_vpc_security_group_ingress_rule" "endpoints_from_proxy" {
+  security_group_id            = aws_security_group.endpoints.id
+  description                  = "proxy"
+  ip_protocol                  = "tcp"
+  from_port                    = 443
+  to_port                      = 443
+  referenced_security_group_id = aws_security_group.proxy.id
+}
+
 resource "aws_vpc_security_group_egress_rule" "app_to_endpoints" {
   for_each = local.all_stages
 
