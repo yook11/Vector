@@ -4,12 +4,14 @@ PublicIpAddress (構造的検証) と ensure_host_is_public (DNS 解決検証) �
 ポリシーを直接検証する。
 """
 
+import ipaddress
 import socket
 from unittest.mock import AsyncMock, patch
 
 import pytest
 
 from app.shared.security.ssrf_guard import (
+    NON_PUBLIC_RANGES,
     HostBlockedError,
     HostResolutionError,
     NotAnIpAddressError,
@@ -186,3 +188,71 @@ class TestEnsureHostIsPublic:
         with _patch_resolver(socket.gaierror("Name or service not known")):
             with pytest.raises(HostResolutionError, match="DNS resolution failed"):
                 await ensure_host_is_public("nonexistent.invalid")
+
+
+class TestNonPublicRangeParity:
+    """レンジ正本と ``PublicIpAddress`` の判定が一致することを固定する。
+
+    同じ「公開ではない宛先」の定義が app (本 VO) と egress proxy (Squid の
+    ``acl to_private``) の 2 箇所で使われる。Squid はレンジの明示列挙しか
+    書けないため、正本を ``non_public_ranges.json`` に置いて双方が読む。
+
+    ここで守る不変条件は **proxy が拒否するものは app も必ず拒否する** こと。
+    逆向き (app の方が厳しい) は許す: app が先に落とすので外へ出ず、
+    proxy の 403 が ``ProxyError`` として通信障害に誤分類される事故が起きない。
+    """
+
+    @staticmethod
+    def _representatives(cidr: str) -> list[str]:
+        """レンジの下端と上端を返す。境界のずれを検出するため両端を見る。"""
+        net = ipaddress.ip_network(cidr)
+        if net.num_addresses == 1:
+            return [str(net[0])]
+        return [str(net[0]), str(net[-1])]
+
+    def test_ranges_file_is_loadable(self) -> None:
+        assert NON_PUBLIC_RANGES.v4
+        assert NON_PUBLIC_RANGES.v6
+
+    def test_every_declared_range_is_rejected(self) -> None:
+        """正本の全レンジについて、両端が public として通らないこと。"""
+        leaked: list[str] = []
+        for cidr in [*NON_PUBLIC_RANGES.v4, *NON_PUBLIC_RANGES.v6]:
+            for addr in self._representatives(cidr):
+                try:
+                    PublicIpAddress(addr)
+                except NotAPublicIpError:
+                    continue
+                leaked.append(f"{cidr} -> {addr}")
+        assert not leaked, (
+            "proxy が拒否するのに app が public として通すレンジがある "
+            f"(proxy の deny ⊆ app の deny が破れている): {leaked}"
+        )
+
+    @pytest.mark.parametrize(
+        "addr",
+        [
+            # フラグが埋め込み v4 の意味論で拾う分 (Python 3.12.4 以降の挙動)。
+            "::ffff:10.0.0.1",
+            "::ffff:127.0.0.1",
+            "::ffff:169.254.169.254",
+            # フラグが拾わず、正本のレンジでしか塞げない分。
+            "::ffff:100.64.0.1",
+            "::ffff:192.88.99.1",
+        ],
+    )
+    def test_rejects_ipv4_mapped_form(self, addr: str) -> None:
+        """v4-mapped 形式でも同じ判定になること。
+
+        正本の v6 リストから ``::ffff:0:0/96`` を意図的に外している
+        (Squid は v4 として扱うので v4 レンジが覆う) ため、app 側は
+        埋め込み v4 を取り出して v4 レンジと突き合わせる必要がある。
+        外すと ``https://[::ffff:100.64.0.1]/`` のような URL literal が素通りする。
+        """
+        with pytest.raises(NotAPublicIpError):
+            PublicIpAddress(addr)
+
+    def test_public_addresses_still_pass(self) -> None:
+        """レンジを足しすぎて正当な宛先を塞いでいないこと。"""
+        for addr in ("8.8.8.8", "1.1.1.1", "93.184.215.14", "2606:4700:4700::1111"):
+            assert str(PublicIpAddress(addr)) == str(ipaddress.ip_address(addr))
