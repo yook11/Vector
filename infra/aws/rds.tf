@@ -71,6 +71,13 @@ resource "aws_db_instance" "this" {
 
   auto_minor_version_upgrade = true
 
+  # postgres 自身のログを CloudWatch へ出す。IAM が通っても GRANT や
+  # rds.force_ssl の verify-full で落ちる経路があり、そこは app 側のログに
+  # 何も出ない (接続が確立しないため)。切り分けの唯一の材料になる。
+  # log group はここで作って retention を効かせる。RDS 任せだと
+  # 「無期限保持」で作られ、消えないログが積み上がる。
+  enabled_cloudwatch_logs_exports = ["postgresql"]
+
   # 検証後に destroy する前提。定常運用に移すなら db_deletion_protection だけ
   # 反転させれば両方切り替わる。
   #
@@ -87,4 +94,15 @@ resource "aws_db_instance" "this" {
   parameter_group_name = aws_db_parameter_group.this.name
 
   tags = { Name = "${var.name_prefix}-db" }
+}
+
+# RDS が作る前に log group を先に置いて retention を効かせる。名前は
+# `/aws/rds/instance/<identifier>/<log type>` 固定で、RDS 側は既存があれば
+# それを使う。identifier から組み立てるため instance には依存させない
+# (依存させると destroy 時に log group が先に消えて RDS が書けなくなる)。
+resource "aws_cloudwatch_log_group" "rds_postgresql" {
+  name              = "/aws/rds/instance/${var.name_prefix}-db/postgresql"
+  retention_in_days = var.log_retention_days
+
+  tags = { Name = "${var.name_prefix}-db-postgresql" }
 }
