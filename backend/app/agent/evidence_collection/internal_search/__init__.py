@@ -1,13 +1,17 @@
-"""Internal search package."""
+"""Internal search package。公開名は package root から import する。"""
 
 from app.agent.evidence_collection.internal_search.article_search import (
-    InternalArticleContent,
-    InternalArticleSearchHit,
     PgVectorArticleSearchRepository,
 )
 from app.agent.evidence_collection.internal_search.contract import (
+    INTERNAL_SEARCH_TOOL_NAME,
+    InternalArticleContent,
+    InternalArticleSearchHit,
     InternalSearchError,
     InternalSearchFailurePhase,
+    InternalSearchTool,
+    InternalSearchToolInput,
+    InternalSearchToolName,
 )
 from app.agent.evidence_collection.internal_search.query_embedding import (
     MAX_ARTICLE_SEARCH_QUERIES,
@@ -22,6 +26,7 @@ from app.agent.evidence_collection.internal_search.query_embedding_cache import 
 from app.agent.evidence_collection.internal_search.service import InternalSearchService
 
 __all__ = [
+    "INTERNAL_SEARCH_TOOL_NAME",
     "InternalArticleContent",
     "InternalArticleSearchHit",
     "MAX_ARTICLE_SEARCH_QUERIES",
@@ -31,6 +36,9 @@ __all__ = [
     "InternalSearchFailurePhase",
     "InternalSearchQueries",
     "InternalSearchService",
+    "InternalSearchTool",
+    "InternalSearchToolInput",
+    "InternalSearchToolName",
     "PgVectorArticleSearchRepository",
     "QueryEmbeddingCacheRepository",
     "TransactionalQueryEmbeddingCache",
