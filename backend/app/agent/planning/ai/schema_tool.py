@@ -6,8 +6,8 @@ from typing import Any, get_args
 
 from app.agent.contract import PlanType
 from app.agent.planning.contract import (
-    EXTERNAL_RESEARCH_TASK_LIMIT,
     MAX_ARTICLE_SEARCH_QUERIES,
+    RESEARCH_TASK_LIMIT,
     TargetTimeWindowKind,
 )
 
@@ -17,8 +17,7 @@ QUESTION_PLANNER_GEMINI_SCHEMA: dict[str, Any] = {
     "type": "OBJECT",
     "required": [
         "plan_type",
-        "article_search_queries",
-        "research_goals",
+        "research_tasks",
     ],
     "properties": {
         "plan_type": {
@@ -26,22 +25,39 @@ QUESTION_PLANNER_GEMINI_SCHEMA: dict[str, Any] = {
             "enum": list(get_args(PlanType)),
             "description": "Answer plan: direct_answer or search.",
         },
-        "article_search_queries": {
+        "research_tasks": {
             "type": "ARRAY",
-            "maxItems": MAX_ARTICLE_SEARCH_QUERIES,
-            "description": "Queries for Vector analyzed article retrieval.",
+            "maxItems": RESEARCH_TASK_LIMIT,
+            "description": (
+                "Research tasks, each pairing one research goal with the "
+                "internal search queries scoped to it."
+            ),
             "items": {
-                "type": "STRING",
-                "description": "One analyzed-article semantic search query.",
-            },
-        },
-        "research_goals": {
-            "type": "ARRAY",
-            "maxItems": EXTERNAL_RESEARCH_TASK_LIMIT,
-            "description": "External research goals for evidence collection.",
-            "items": {
-                "type": "STRING",
-                "description": "One research goal for external news search.",
+                "type": "OBJECT",
+                "required": [
+                    "research_goal",
+                    "article_search_queries",
+                ],
+                "properties": {
+                    "research_goal": {
+                        "type": "STRING",
+                        "description": "One research goal for external news search.",
+                    },
+                    "article_search_queries": {
+                        "type": "ARRAY",
+                        "maxItems": MAX_ARTICLE_SEARCH_QUERIES,
+                        "description": (
+                            "Queries for Vector analyzed article retrieval, "
+                            "scoped to this research task."
+                        ),
+                        "items": {
+                            "type": "STRING",
+                            "description": (
+                                "One analyzed-article semantic search query."
+                            ),
+                        },
+                    },
+                },
             },
         },
         "target_time_window": {

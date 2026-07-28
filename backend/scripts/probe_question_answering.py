@@ -48,8 +48,8 @@ from app.agent.input_safety.agent import INPUT_SAFETY_AGENT
 from app.agent.input_safety.service import InputSafetyService
 from app.agent.planning.contract import (
     DirectAnswerPlan,
-    ExternalResearchTask,
     PlanningRequest,
+    ResearchTask,
     SearchPlan,
     TargetTimeWindow,
 )
@@ -318,9 +318,9 @@ def _build_search_plan(
         )
 
     return SearchPlan(
-        article_search_queries=[question],
-        external_research_tasks=[
-            ExternalResearchTask(research_goal=goal) for goal in cleaned_goals
+        research_tasks=[
+            ResearchTask(research_goal=goal, article_search_queries=[question])
+            for goal in cleaned_goals
         ],
         target_time_window=target_time_window,
     )
