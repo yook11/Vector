@@ -311,13 +311,12 @@ def test_search_probe_passes_actual_internal_and_external_dependencies_to_phases
     internal_service = internal_service_calls[0]
     embedder = _keyword_value(internal_service, "embedder")
     repository = _keyword_value(internal_service, "article_search_repository")
-    events = _keyword_value(internal_service, "events")
     assert isinstance(embedder, ast.Call)
     assert _call_name(embedder) == "GeminiQueryEmbedder"
     assert isinstance(repository, ast.Call)
     assert _call_name(repository) == "PgVectorArticleSearchRepository"
-    assert isinstance(events, ast.Name)
-    assert events.id == "events"
+    # Internal Search ToolはSSEのprogress reporterを知らない (段2契約)。
+    assert "events" not in {keyword.arg for keyword in internal_service.keywords}
 
     session_factory_targets = {
         target.id

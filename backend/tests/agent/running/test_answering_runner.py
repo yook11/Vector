@@ -123,6 +123,14 @@ class _FakeProgressReporter:
         self.calls.append(stage)
 
 
+class _FakeEventReporter:
+    def __init__(self) -> None:
+        self.events: list[object] = []
+
+    async def event_occurred(self, event: object) -> None:
+        self.events.append(event)
+
+
 class _FakeContextPreparer:
     def __init__(
         self,
@@ -267,11 +275,12 @@ class _FakePlanner:
 
 
 class _UnreachableInternalSearch:
-    async def search_articles(
-        self,
-        _queries: object,
-    ) -> list[object]:
-        raise AssertionError("internal search must not be called")
+    @property
+    def name(self) -> str:
+        return "internal_search"
+
+    async def invoke(self, input: object) -> list[object]:
+        raise AssertionError(f"internal search must not be called: {input!r}")
 
 
 class _UnreachableExternalSearch:
@@ -514,6 +523,20 @@ async def test_run_forwards_input_and_orders_hook_before_lazy_phases() -> None:
     assert result.final_output.answer == "最終回答"
     assert result.context.run_context is run_context
     assert result.context.question_context is context
+
+
+async def test_direct_path_reports_no_internal_or_external_search_events() -> None:
+    reporter = _FakeEventReporter()
+    context = QuestionContext(standalone_question="整理済みの質問")
+    preparer = _FakeContextPreparer([_preparation(context)])
+    factory, _, _ = _direct_factory(answers=["最終回答"])
+
+    await _runner(preparer, factory, events=reporter).run(
+        RunInput(question="元の質問", history=()),
+        run_context=_run_context(),
+    )
+
+    assert reporter.events == []
 
 
 async def test_run_checks_safety_first_with_only_the_bounded_immediate_turn() -> None:

@@ -128,8 +128,12 @@ class _Planner:
 
 
 class _EmptyInternalSearch:
-    async def search_articles(self, queries: object) -> list[object]:
-        del queries
+    @property
+    def name(self) -> str:
+        return "internal_search"
+
+    async def invoke(self, input: object) -> list[object]:
+        del input
         return []
 
 
@@ -253,6 +257,12 @@ class _Events:
 
     async def event_occurred(self, event: Any) -> None:
         self.events.append(event)
+
+
+def _external_search_events(events: list[Any]) -> list[Any]:
+    """同じreporterへ並走発火するinternal_search.*を除きexternal枝のeventだけ残す。"""
+
+    return [event for event in events if event.type.startswith("external_search.")]
 
 
 class _ParallelQueryRuntime:
@@ -709,7 +719,7 @@ async def test_naive_as_of_propagates_before_external_activity_or_observability(
         query_runtime.calls,
         selector_runtime.calls,
         tool.calls,
-        events.events,
+        _external_search_events(events.events),
         answerer.calls,
         captured,
         _time_filter_metric_points(metrics),
@@ -846,7 +856,7 @@ async def test_time_filter_resolution_failure_closes_external_branch_before_acti
         query_runtime.calls,
         selector_runtime.calls,
         tool.calls,
-        events.events,
+        _external_search_events(events.events),
         answerer.calls,
         [
             (
@@ -1278,7 +1288,7 @@ async def test_events_are_per_task_causal_with_their_contract_payloads() -> None
 
     await _run(runner)
 
-    assert [event.model_dump() for event in events.events] == [
+    assert [event.model_dump() for event in _external_search_events(events.events)] == [
         {
             "type": "external_search.queries_generated",
             "task_index": 0,

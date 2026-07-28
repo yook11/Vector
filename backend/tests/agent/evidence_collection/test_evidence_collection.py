@@ -7,7 +7,7 @@ from pydantic import ValidationError
 
 from app.agent.evidence_collection import EvidenceCollectionOutcome
 from app.agent.evidence_collection.external_search import ExternalSearchOutcome
-from app.agent.evidence_collection.internal_search.article_search import (
+from app.agent.evidence_collection.internal_search import (
     InternalArticleContent,
     InternalArticleSearchHit,
 )

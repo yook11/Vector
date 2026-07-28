@@ -17,9 +17,11 @@ from sqlalchemy.exc import (
 )
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from app.agent.evidence_collection.internal_search.article_search import (
+from app.agent.evidence_collection.internal_search import (
     InternalArticleContent,
     InternalArticleSearchHit,
+)
+from app.agent.evidence_collection.internal_search.article_search import (
     PgVectorArticleSearchRepository,
 )
 from app.agent.evidence_collection.internal_search.contract import InternalSearchError

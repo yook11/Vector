@@ -12,7 +12,7 @@ from app.agent.evidence_collection.external_search import (
     ExternalSearchOutcome,
     ResearchTaskReport,
 )
-from app.agent.evidence_collection.internal_search.article_search import (
+from app.agent.evidence_collection.internal_search import (
     InternalArticleContent,
     InternalArticleSearchHit,
 )
