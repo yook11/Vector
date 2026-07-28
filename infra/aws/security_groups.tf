@@ -36,7 +36,7 @@ resource "aws_security_group" "valkey_rl" {
 
 resource "aws_security_group" "proxy" {
   name        = "${var.name_prefix}-proxy"
-  description = "Egress proxy. Replaces the NAT Gateway."
+  description = "Egress proxy. Sole path out of the app subnets."
   vpc_id      = aws_vpc.main.id
 }
 

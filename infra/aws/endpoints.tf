@@ -1,6 +1,6 @@
-# NAT を置かない構成では、ECS が task を起動するために使う経路 (image pull /
-# secret 注入 / log 送信) を別に確保しないと task が起動しない。これらは task の
-# HTTPS_PROXY を経由せず ECS 側が行うため、proxy では代替できない。
+# app subnet が VPC の外に出られない構成では、ECS が task を起動するために使う経路
+# (image pull / secret 注入 / log 送信) を別に確保しないと task が起動しない。
+# これらは task の HTTPS_PROXY を経由せず ECS 側が行うため、proxy では代替できない。
 
 # 無料。ECR のレイヤーは S3 から来るのでデータ転送費も減る。
 # interface endpoint と違い、ルートテーブルに entry を持つのはこれだけ。

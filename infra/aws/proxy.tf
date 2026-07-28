@@ -1,7 +1,7 @@
-# egress proxy。NAT Gateway の代わりに、VPC の外へ出る唯一の経路になる。
+# egress proxy。app 段が VPC の外へ出る唯一の経路になる。
 #
 # **stages の表には入れない。** proxy は「アプリの段」ではなく「経路の装置」で、
-# public subnet に置き / 別 SG を持ち / allowlist の対象ではなく適用する側で /
+# 専用 subnet を持ち / 別 SG を持ち / allowlist の対象ではなく適用する側で /
 # DB にも Valkey にも繋がない。表に入れると全列に例外が入り、表の意味が薄まる。
 
 locals {
