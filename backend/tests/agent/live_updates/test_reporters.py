@@ -144,8 +144,8 @@ async def test_stage_reporter_uses_stream_publishers_attempt_epoch() -> None:
 
 
 KNOWN_ACTIVITIES = [
-    InternalSearchStartedEvent(query_count=2),
-    InternalSearchCompletedEvent(hit_count=3),
+    InternalSearchStartedEvent(task_index=0, query_count=2),
+    InternalSearchCompletedEvent(task_index=0, hit_count=3),
     ExternalSearchQueriesGeneratedEvent(
         task_index=1,
         queries=["semiconductor outlook"],
@@ -180,7 +180,7 @@ async def test_activity_reporter_fans_out_each_known_event(
 
 @pytest.mark.asyncio
 async def test_activity_reporter_attempts_stream_when_list_publisher_raises() -> None:
-    activity = InternalSearchStartedEvent(query_count=2)
+    activity = InternalSearchStartedEvent(task_index=0, query_count=2)
     list_publisher = AsyncMock()
     list_publisher.event_occurred.side_effect = RuntimeError("list unavailable")
     stream_publisher = AsyncMock()
@@ -195,7 +195,7 @@ async def test_activity_reporter_attempts_stream_when_list_publisher_raises() ->
 
 @pytest.mark.asyncio
 async def test_activity_reporter_attempts_list_when_stream_publisher_raises() -> None:
-    activity = InternalSearchCompletedEvent(hit_count=3)
+    activity = InternalSearchCompletedEvent(task_index=0, hit_count=3)
     list_publisher = AsyncMock()
     stream_publisher = AsyncMock()
     stream_publisher.publish.side_effect = RuntimeError("stream unavailable")

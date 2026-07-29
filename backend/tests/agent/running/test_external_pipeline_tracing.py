@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Callable
 from contextlib import AbstractAsyncContextManager
 from datetime import UTC, datetime
 from types import SimpleNamespace
@@ -18,6 +19,7 @@ import app.agent.planning.contract as planning_contract
 from app.agent.answering.contract import AnsweringRequest
 from app.agent.answering.direct_answer.contract import DirectAnswerDraft
 from app.agent.answering.evidence_answer.contract import EvidenceAnswerDraft
+from app.agent.evidence_collection import Researcher
 from app.agent.evidence_collection.external_search.agent import (
     EXTERNAL_EVIDENCE_SELECTOR_AGENT,
     EXTERNAL_QUERY_AGENT,
@@ -31,8 +33,16 @@ from app.agent.evidence_collection.external_search.deepseek_binding import (
     EXTERNAL_EVIDENCE_SELECTOR_DEEPSEEK_BINDING,
     EXTERNAL_QUERY_DEEPSEEK_BINDING,
 )
+from app.agent.evidence_collection.internal_search import (
+    InternalArticleContent,
+    InternalArticleSearchHit,
+    InternalSearchError,
+)
 from app.agent.planning.contract import (
+    DirectAnswerPlan,
     PlanningRequest,
+    ResearchTask,
+    SearchPlan,
     TargetTimeWindow,
 )
 from app.agent.question_context import (
@@ -41,14 +51,24 @@ from app.agent.question_context import (
     QuestionContextTelemetry,
 )
 from app.agent.running import AnsweringPhases, AnsweringRunner, RunContext, RunInput
+from app.agent.runtime.contract import AgentResponseDefect, AgentResponseInvalidError
 from app.agent.runtime.deepseek import DeepSeekAgentRuntime
+from app.analysis.analyzed_article import InScopeAnalyzedArticle
+from app.analysis.assessment.domain.result import InScope, InScopeCategory
 from app.logfire.redaction import install_exception_redaction
 from tests.agent.running._input_safety import AllowInputSafetyChecker
 from tests.agent.runtime._deepseek_helpers import FakeDeepSeekClient, function_response
-from tests.logfire._span_helpers import domain_attr_keys, exception_event, spans_named
+from tests.agent.runtime._fakes import ScriptedAgentRuntime
+from tests.logfire._span_helpers import (
+    domain_attr_keys,
+    exception_event,
+    one_span_named,
+    spans_named,
+)
 
 _PHASE_SPAN_NAME = "agent_phase"
 _PROVIDER_SPAN_NAME = "agent_provider_call"
+_RUN_SPAN_NAME = "agent_answering_run"
 _QUERY_OUTPUT_SENTINEL = "GENERATED_QUERY_SENTINEL_1f24"
 _SELECTION_CLAIM_SENTINEL = "SELECTION_CLAIM_SENTINEL_98ab"
 _SELECTION_WHY_SENTINEL = "SELECTION_WHY_SENTINEL_7c31"
@@ -207,6 +227,8 @@ def _runner(
     query_client: FakeDeepSeekClient,
     selector_client: FakeDeepSeekClient,
     search_tool: _Tool | None = None,
+    internal_search: object | None = None,
+    evidence_answerer: object | None = None,
 ) -> tuple[AnsweringRunner, _Tool]:
     tool = search_tool or _Tool()
     runtime = ExternalResearchRuntime(
@@ -222,10 +244,12 @@ def _runner(
     )
     phases = AnsweringPhases(
         planner=_Planner(),
-        internal_search=_EmptyInternalSearch(),
+        researcher=Researcher(
+            internal_search=internal_search or _EmptyInternalSearch()
+        ),
         external_runtime_factory=_Factory(runtime),
         direct_answerer=_UnreachableDirectAnswerer(),
-        evidence_answerer=_EvidenceAnswerer(),
+        evidence_answerer=evidence_answerer or _EvidenceAnswerer(),
     )
     return (
         AnsweringRunner(
@@ -362,3 +386,364 @@ async def test_unclassified_query_error_is_redacted_and_only_error_phase(
     assert all(span.status.status_code is StatusCode.ERROR for span in raw_spans)
     assert all(span.status.description == "[redacted]" for span in raw_spans)
     assert error_sentinel not in trace_dump
+
+
+def _internal_hit(
+    *,
+    assessment_id: int,
+    title: str,
+    curation_id: int | None = None,
+) -> InternalArticleSearchHit:
+    article = InScopeAnalyzedArticle(
+        curation_id=curation_id if curation_id is not None else assessment_id - 1000,
+        title=title,
+        summary=f"{title} summary",
+        assessment_result=InScope(
+            category=InScopeCategory.AI,
+            investor_take="投資家視点",
+            key_points=[],
+        ),
+    )
+    return InternalArticleSearchHit(
+        assessment_id=assessment_id,
+        article=article,
+        content=InternalArticleContent.from_article(article, published_at=None),
+        distance=0.1,
+    )
+
+
+class _TwoInternalHitsSearch:
+    """span 採用数テスト用に、curation_id の異なる internal hit を2件返す。"""
+
+    @property
+    def name(self) -> str:
+        return "internal_search"
+
+    async def invoke(self, input: object) -> list[InternalArticleSearchHit]:
+        del input
+        return [
+            _internal_hit(assessment_id=2001, title="INTERNAL_HIT_TITLE_SENTINEL_bf12"),
+            _internal_hit(assessment_id=2002, title="INTERNAL_HIT_TITLE_SENTINEL_9a04"),
+        ]
+
+
+class _SelectiveEvidenceAnswerer:
+    """cited_refs を evidence 入力から選ぶ関数で決める、
+    span採用数テスト用の draft answerer。
+    """
+
+    def __init__(self, select: Callable[[list[Any]], list[str]]) -> None:
+        self._select = select
+
+    async def answer(
+        self,
+        *,
+        request: AnsweringRequest,
+        evidence: list[Any],
+        target_time_window: TargetTimeWindow | None,
+    ) -> EvidenceAnswerDraft:
+        del request, target_time_window
+        return EvidenceAnswerDraft(
+            sufficiency="answered",
+            answer="根拠に基づく回答です。",
+            cited_refs=self._select(evidence),
+        )
+
+
+class _DirectPlanner:
+    async def plan(self, request: PlanningRequest) -> Any:
+        del request
+        return DirectAnswerPlan()
+
+
+class _DirectAnswerer:
+    async def answer(
+        self, *, request: AnsweringRequest, previous_answer: str = ""
+    ) -> DirectAnswerDraft:
+        del request, previous_answer
+        return DirectAnswerDraft(answer="直接回答です。")
+
+
+class _UnreachableEvidenceAnswerer:
+    async def answer(
+        self,
+        *,
+        request: AnsweringRequest,
+        evidence: list[Any],
+        target_time_window: TargetTimeWindow | None,
+    ) -> EvidenceAnswerDraft:
+        raise AssertionError(
+            f"evidence answerer must not run on direct path: {request!r} "
+            f"{evidence!r} {target_time_window!r}"
+        )
+
+
+class _UnreachableExternalFactory:
+    def activate(self) -> AbstractAsyncContextManager[ExternalResearchRuntime]:
+        raise AssertionError("external runtime scope must not activate on direct path")
+
+
+class _PerQueryInternalHitsSearch:
+    """queryごとに固定hitを返す、内部合流dedup統計テスト用のfake。"""
+
+    def __init__(
+        self, hits_by_query: dict[str, list[InternalArticleSearchHit]]
+    ) -> None:
+        self._hits_by_query = hits_by_query
+
+    @property
+    def name(self) -> str:
+        return "internal_search"
+
+    async def invoke(self, input: Any) -> list[InternalArticleSearchHit]:
+        query = input.queries.queries[0]
+        return list(self._hits_by_query[query])
+
+
+class _PerQueryFailableInternalSearch:
+    """queryごとに成功/InternalSearchError失敗を切り替える、失敗task数テスト用fake。"""
+
+    def __init__(self, *, failing_queries: set[str]) -> None:
+        self._failing_queries = failing_queries
+        self._next_assessment_id = 5001
+
+    @property
+    def name(self) -> str:
+        return "internal_search"
+
+    async def invoke(self, input: Any) -> list[InternalArticleSearchHit]:
+        query = input.queries.queries[0]
+        if query in self._failing_queries:
+            raise InternalSearchError(phase="article_search")
+        hit = _internal_hit(assessment_id=self._next_assessment_id, title=query)
+        self._next_assessment_id += 1
+        return [hit]
+
+
+class _TwoTaskPlanner:
+    def __init__(self, plan: SearchPlan) -> None:
+        self._plan = plan
+
+    async def plan(self, request: PlanningRequest) -> Any:
+        del request
+        return self._plan
+
+
+def _two_task_plan(*, task_queries: tuple[list[str], list[str]]) -> SearchPlan:
+    return SearchPlan(
+        research_tasks=[
+            ResearchTask(research_goal=f"goal-{index}", article_search_queries=queries)
+            for index, queries in enumerate(task_queries)
+        ],
+        target_time_window=TargetTimeWindow(kind="calendar_month", year=1998, month=2),
+    )
+
+
+def _two_task_query_failing_runtime() -> ExternalResearchRuntime:
+    """外部query生成を2 task分とも失敗させ、外部候補を空に保つ(内部統計だけに絞る)。"""
+    query_failure = AgentResponseInvalidError(AgentResponseDefect.RESPONSE_NOT_JSON)
+    return ExternalResearchRuntime(
+        query_runtime=ScriptedAgentRuntime([query_failure, query_failure]),
+        selector_runtime=ScriptedAgentRuntime([]),
+        search_tool=_Tool(),
+    )
+
+
+@pytest.mark.asyncio
+async def test_evidence_run_span_reports_internal_external_counts_and_citations(
+    capfire: CaptureLogfire,
+) -> None:
+    """内部hit2件・外部evidence1件のうち内部1・外部1が引用された場合の採用数/引用数を検証する。"""
+    query_client = FakeDeepSeekClient([_query_response()])
+    selector_client = FakeDeepSeekClient([_selector_response()])
+    runner, _ = _runner(
+        query_client=query_client,
+        selector_client=selector_client,
+        internal_search=_TwoInternalHitsSearch(),
+        evidence_answerer=_SelectiveEvidenceAnswerer(
+            lambda evidence: [
+                evidence[0].source.source_ref,
+                evidence[-1].source.source_ref,
+            ]
+        ),
+    )
+
+    await _run(runner)
+
+    attributes = one_span_named(capfire, _RUN_SPAN_NAME)["attributes"]
+    attributes_dump = json.dumps(attributes, ensure_ascii=False, default=str)
+    assert (
+        attributes.get("internal_evidence_count"),
+        attributes.get("external_evidence_count"),
+        attributes.get("internal_cited_count"),
+        attributes.get("external_cited_count"),
+    ) == (2, 1, 1, 1)
+    for unsafe in (
+        "INTERNAL_HIT_TITLE_SENTINEL_bf12",
+        "INTERNAL_HIT_TITLE_SENTINEL_9a04",
+        "TRACE_URL_SENTINEL_63df",
+        "CANDIDATE_TITLE_SENTINEL_4cab",
+    ):
+        assert unsafe not in attributes_dump
+
+
+@pytest.mark.asyncio
+async def test_direct_path_run_span_has_no_evidence_count_attributes(
+    capfire: CaptureLogfire,
+) -> None:
+    """direct path では内部・外部の採用数・引用数属性が付かない。"""
+    phases = AnsweringPhases(
+        planner=_DirectPlanner(),
+        researcher=Researcher(internal_search=_EmptyInternalSearch()),
+        external_runtime_factory=_UnreachableExternalFactory(),
+        direct_answerer=_DirectAnswerer(),
+        evidence_answerer=_UnreachableEvidenceAnswerer(),
+    )
+    runner = AnsweringRunner(
+        input_safety_checker=AllowInputSafetyChecker(),
+        context_preparer=_Preparer(),
+        phases_factory=lambda: phases,
+    )
+
+    await _run(runner)
+
+    attributes = one_span_named(capfire, _RUN_SPAN_NAME)["attributes"]
+    assert domain_attr_keys(attributes).isdisjoint(
+        {
+            "internal_evidence_count",
+            "external_evidence_count",
+            "internal_cited_count",
+            "external_cited_count",
+            "internal_deduplicated_count",
+            "internal_collection_failed_task_count",
+        }
+    )
+
+
+@pytest.mark.asyncio
+async def test_evidence_run_span_marks_zero_cited_explicitly_when_uncited(
+    capfire: CaptureLogfire,
+) -> None:
+    """内部hitが1件も引用されない境界で、
+    internal_cited_count が不在ではなく明示的な0で付く。
+    """
+    query_client = FakeDeepSeekClient([_query_response()])
+    selector_client = FakeDeepSeekClient([_selector_response()])
+    runner, _ = _runner(
+        query_client=query_client,
+        selector_client=selector_client,
+        internal_search=_TwoInternalHitsSearch(),
+        evidence_answerer=_SelectiveEvidenceAnswerer(
+            lambda evidence: [evidence[-1].source.source_ref]
+        ),
+    )
+
+    await _run(runner)
+
+    attributes = one_span_named(capfire, _RUN_SPAN_NAME)["attributes"]
+    assert "internal_cited_count" in attributes
+    assert (
+        attributes.get("internal_evidence_count"),
+        attributes.get("internal_cited_count"),
+        attributes.get("external_evidence_count"),
+        attributes.get("external_cited_count"),
+    ) == (2, 0, 1, 1)
+
+
+@pytest.mark.asyncio
+async def test_evidence_run_span_reports_internal_dedup_count_and_post_dedup_total(
+    capfire: CaptureLogfire,
+) -> None:
+    """2taskが同じcuration_idの内部hitを返すとき、
+    internal_deduplicated_countが落ちた件数、internal_evidence_countがdedup後件数になる。
+    """
+    hits_by_query = {
+        "task0 query": [
+            _internal_hit(assessment_id=3001, title="task0-shared", curation_id=4200),
+            _internal_hit(assessment_id=3002, title="task0-unique", curation_id=4201),
+        ],
+        "task1 query": [
+            _internal_hit(
+                assessment_id=3003, title="task1-shared-dup", curation_id=4200
+            ),
+            _internal_hit(assessment_id=3004, title="task1-unique", curation_id=4202),
+        ],
+    }
+    phases = AnsweringPhases(
+        planner=_TwoTaskPlanner(
+            _two_task_plan(task_queries=(["task0 query"], ["task1 query"]))
+        ),
+        researcher=Researcher(
+            internal_search=_PerQueryInternalHitsSearch(hits_by_query)
+        ),
+        external_runtime_factory=_Factory(_two_task_query_failing_runtime()),
+        direct_answerer=_UnreachableDirectAnswerer(),
+        evidence_answerer=_EvidenceAnswerer(),
+    )
+    runner = AnsweringRunner(
+        input_safety_checker=AllowInputSafetyChecker(),
+        context_preparer=_Preparer(),
+        phases_factory=lambda: phases,
+    )
+
+    await _run(runner)
+
+    raw_hit_count = sum(len(hits) for hits in hits_by_query.values())
+    distinct_curation_ids = {
+        hit.article.curation_id for hits in hits_by_query.values() for hit in hits
+    }
+    attributes = one_span_named(capfire, _RUN_SPAN_NAME)["attributes"]
+    assert (
+        attributes.get("internal_deduplicated_count"),
+        attributes.get("internal_evidence_count"),
+    ) == (
+        raw_hit_count - len(distinct_curation_ids),
+        len(distinct_curation_ids),
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "failing_queries",
+    [
+        pytest.param({"task0 query"}, id="one-of-two-tasks-fails"),
+        pytest.param(set(), id="all-tasks-succeed"),
+    ],
+)
+async def test_evidence_run_span_reports_internal_collection_failed_task_count(
+    capfire: CaptureLogfire,
+    failing_queries: set[str],
+) -> None:
+    """内部収集が失敗したtask数がinternal_collection_failed_task_countに一致し、
+    全task成功時は0になる。
+    """
+    task_queries = ("task0 query", "task1 query")
+    phases = AnsweringPhases(
+        planner=_TwoTaskPlanner(
+            _two_task_plan(
+                task_queries=([task_queries[0]], [task_queries[1]]),
+            )
+        ),
+        researcher=Researcher(
+            internal_search=_PerQueryFailableInternalSearch(
+                failing_queries=failing_queries
+            )
+        ),
+        external_runtime_factory=_Factory(_two_task_query_failing_runtime()),
+        direct_answerer=_UnreachableDirectAnswerer(),
+        evidence_answerer=_EvidenceAnswerer(),
+    )
+    runner = AnsweringRunner(
+        input_safety_checker=AllowInputSafetyChecker(),
+        context_preparer=_Preparer(),
+        phases_factory=lambda: phases,
+    )
+
+    await _run(runner)
+
+    expected_failed_task_count = len(failing_queries & set(task_queries))
+    attributes = one_span_named(capfire, _RUN_SPAN_NAME)["attributes"]
+    assert (
+        attributes.get("internal_collection_failed_task_count")
+        == expected_failed_task_count
+    )

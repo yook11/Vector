@@ -312,7 +312,9 @@ def test_plan_from_draft_normalizes_tasks_and_keeps_typed_time_window() -> None:
         ["半導体供給"],
         ["投資判断"],
     ]
-    assert "must not appear" not in plan.article_search_queries
+    assert "must not appear" not in [
+        query for task in plan.research_tasks for query in task.article_search_queries
+    ]
     assert plan.target_time_window == _time_window(kind="last_n_days", days=7)
     assert "fallback_query" not in inspect.signature(plan_from_draft).parameters
 
@@ -442,41 +444,23 @@ def test_direct_and_search_plans_are_frozen() -> None:
         search.research_tasks = []
 
 
-def test_search_plan_projects_flattened_queries_with_casefold_dedup() -> None:
-    """旧consumer(answering_runner.py)用の平坦化射影。task順を保ちつつcasefold先勝ちで重複を除く
-    (旧SearchPlanのrun単位一意性を射影側で保つ)。research_tasks自体の重複は保持されたままになる。
+def test_search_plan_has_no_flattening_projection_properties() -> None:
+    """保証するテスト条件 19。
+
+    段3でResearcherがtask単位で収集するため、旧consumer向けの平坦化射影
+    (article_search_queries / external_research_tasks)は消える(seam終了)。
     """
-    plan = _required_contract("SearchPlan")(
-        research_tasks=[
-            _research_task("第一の目的", ["共有クエリ", "NVIDIA GPU"]),
-            _research_task("第二の目的", ["nvidia gpu"]),
-        ],
+    search_plan_type = _required_contract("SearchPlan")
+    plan = search_plan_type(
+        research_tasks=[_research_task("根拠を確認する", ["NVIDIA"])],
     )
 
-    assert plan.article_search_queries == ["共有クエリ", "NVIDIA GPU"]
-    assert [task.article_search_queries for task in plan.research_tasks] == [
-        ["共有クエリ", "NVIDIA GPU"],
-        ["nvidia gpu"],
-    ]
-
-
-def test_search_plan_projects_external_tasks_in_task_order() -> None:
-    """旧consumer(answering_runner.py)用のExternalResearchTask射影。task順を保つ。"""
-    external_task_type = _required_contract("ExternalResearchTask")
-    plan = _required_contract("SearchPlan")(
-        research_tasks=[
-            _research_task("第一の目的", ["q1"]),
-            _research_task("第二の目的", ["q2"]),
-        ],
-    )
-
-    assert plan.external_research_tasks == [
-        external_task_type(research_goal="第一の目的"),
-        external_task_type(research_goal="第二の目的"),
-    ]
-    assert all(
-        isinstance(task, external_task_type) for task in plan.external_research_tasks
-    )
+    assert (
+        hasattr(search_plan_type, "article_search_queries"),
+        hasattr(search_plan_type, "external_research_tasks"),
+        hasattr(plan, "article_search_queries"),
+        hasattr(plan, "external_research_tasks"),
+    ) == (False, False, False, False)
 
 
 def test_planning_request_is_a_frozen_context_consumer_wrapper() -> None:
