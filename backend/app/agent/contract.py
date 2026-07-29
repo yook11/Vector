@@ -39,11 +39,9 @@ __all__ = [
     "NonBlankText",
     "QuestionResolvedEvent",
     "PlanType",
-    "EvidenceCollectionFailure",
 ]
 
 PlanType = Literal["direct_answer", "search"]
-EvidenceCollectionFailure = Literal["internal_search", "external_search"]
 AnswerProgressStage = Literal["planning", "retrieving", "synthesizing"]
 NonBlankText = Annotated[
     str,
@@ -52,18 +50,11 @@ NonBlankText = Annotated[
 
 
 class AnswerPlanSummary(BaseModel):
-    """planner が必要と判断した情報取得と、失敗した収集経路。"""
+    """planner が必要と判断した情報取得の種類。"""
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     plan_type: PlanType
-    collection_failures: list[EvidenceCollectionFailure] = Field(default_factory=list)
-
-    @model_validator(mode="after")
-    def _validate_direct_answer_failures(self) -> Self:
-        if self.plan_type == "direct_answer" and self.collection_failures:
-            raise ValueError("direct answer cannot have collection failures")
-        return self
 
 
 class InternalArticleSource(BaseModel):
@@ -180,8 +171,6 @@ class AnswerQuestionResult(BaseModel):
                 raise ValueError("non-direct answered result must include a source")
             if self.missing_aspects:
                 raise ValueError("answered result cannot include missing aspects")
-            if self.plan_summary.collection_failures:
-                raise ValueError("answered result cannot include collection failures")
         if self.status == "insufficient" and not self.missing_aspects:
             raise ValueError("insufficient result must include missing aspects")
         if self.plan_summary.plan_type == "direct_answer" and self.sources:

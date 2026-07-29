@@ -11,6 +11,7 @@ from app.agent.answering.direct_answer.contract import DirectAnswerer
 from app.agent.answering.evidence_answer.contract import EvidenceAnswerer
 from app.agent.contract import AnswerQuestionResult
 from app.agent.evidence_collection import Researcher
+from app.agent.evidence_collection.evidence_review import EvidenceReviewer
 from app.agent.evidence_collection.external_search import (
     ExternalResearchRuntimeFactory,
 )
@@ -40,6 +41,7 @@ class AnsweringPhases:
     external_runtime_factory: ExternalResearchRuntimeFactory
     direct_answerer: DirectAnswerer
     evidence_answerer: EvidenceAnswerer
+    reviewer: EvidenceReviewer
 
 
 class AnsweringPhasesFactory(Protocol):
