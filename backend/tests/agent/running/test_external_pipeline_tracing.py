@@ -20,17 +20,18 @@ from app.agent.answering.contract import AnsweringRequest
 from app.agent.answering.direct_answer.contract import DirectAnswerDraft
 from app.agent.answering.evidence_answer.contract import EvidenceAnswerDraft
 from app.agent.evidence_collection import Researcher
-from app.agent.evidence_collection.external_search.agent import (
-    EXTERNAL_EVIDENCE_SELECTOR_AGENT,
-    EXTERNAL_QUERY_AGENT,
+from app.agent.evidence_collection.evidence_review import EvidenceReviewer
+from app.agent.evidence_collection.evidence_review.agent import EVIDENCE_REVIEWER_AGENT
+from app.agent.evidence_collection.evidence_review.deepseek_binding import (
+    EVIDENCE_REVIEWER_DEEPSEEK_BINDING,
 )
+from app.agent.evidence_collection.external_search.agent import EXTERNAL_QUERY_AGENT
 from app.agent.evidence_collection.external_search.contract import (
     ExternalResearchRuntime,
     ExternalSearchCandidate,
     ExternalSearchToolInput,
 )
 from app.agent.evidence_collection.external_search.deepseek_binding import (
-    EXTERNAL_EVIDENCE_SELECTOR_DEEPSEEK_BINDING,
     EXTERNAL_QUERY_DEEPSEEK_BINDING,
 )
 from app.agent.evidence_collection.internal_search import (
@@ -91,17 +92,23 @@ def _query_response() -> object:
     )
 
 
-def _selector_response() -> object:
+def _reviewer_response(*, candidate_indexes: list[int] | None = None) -> object:
+    """D4-S1: 内外統合index空間で選ぶcandidate_indexを呼び出し側が指定する。
+
+    既定の[0]は、internal候補が空(_EmptyInternalSearch)のtaskで唯一の外部候補
+    (index 0)を選ぶ後方互換値。internal候補があるtaskは呼び出し側が明示する。
+    """
     return function_response(
-        function_name=EXTERNAL_EVIDENCE_SELECTOR_DEEPSEEK_BINDING.function_name,
+        function_name=EVIDENCE_REVIEWER_DEEPSEEK_BINDING.function_name,
         arguments=json.dumps(
             {
                 "selections": [
                     {
-                        "candidate_index": 0,
-                        "claim": _SELECTION_CLAIM_SENTINEL,
+                        "candidate_index": index,
+                        "claim": f"{_SELECTION_CLAIM_SENTINEL}_{index}",
                         "why_selected": _SELECTION_WHY_SENTINEL,
                     }
+                    for index in (candidate_indexes or [0])
                 ],
                 "missing": [],
             }
@@ -225,7 +232,7 @@ class _Factory:
 def _runner(
     *,
     query_client: FakeDeepSeekClient,
-    selector_client: FakeDeepSeekClient,
+    reviewer_client: FakeDeepSeekClient,
     search_tool: _Tool | None = None,
     internal_search: object | None = None,
     evidence_answerer: object | None = None,
@@ -236,9 +243,9 @@ def _runner(
             client=cast(AsyncOpenAI, query_client),
             binding=EXTERNAL_QUERY_DEEPSEEK_BINDING,
         ),
-        selector_runtime=DeepSeekAgentRuntime(
-            client=cast(AsyncOpenAI, selector_client),
-            binding=EXTERNAL_EVIDENCE_SELECTOR_DEEPSEEK_BINDING,
+        reviewer_runtime=DeepSeekAgentRuntime(
+            client=cast(AsyncOpenAI, reviewer_client),
+            binding=EVIDENCE_REVIEWER_DEEPSEEK_BINDING,
         ),
         search_tool=tool,
     )
@@ -250,6 +257,7 @@ def _runner(
         external_runtime_factory=_Factory(runtime),
         direct_answerer=_UnreachableDirectAnswerer(),
         evidence_answerer=evidence_answerer or _EvidenceAnswerer(),
+        reviewer=EvidenceReviewer(),
     )
     return (
         AnsweringRunner(
@@ -277,19 +285,19 @@ async def test_external_phase_spans_keep_attributes_parentage_and_no_sensitive_t
 ) -> None:
     raw_selector_response_sentinel = "RAW_SELECTOR_RESPONSE_SENTINEL_5d71"
     query_client = FakeDeepSeekClient([_query_response()])
-    selector_client = FakeDeepSeekClient(
+    reviewer_client = FakeDeepSeekClient(
         [
             function_response(
-                function_name=EXTERNAL_EVIDENCE_SELECTOR_DEEPSEEK_BINDING.function_name,
+                function_name=EVIDENCE_REVIEWER_DEEPSEEK_BINDING.function_name,
                 arguments=raw_selector_response_sentinel,
                 usage=_usage(),
             ),
-            _selector_response(),
+            _reviewer_response(),
         ]
     )
     runner, tool = _runner(
         query_client=query_client,
-        selector_client=selector_client,
+        reviewer_client=reviewer_client,
     )
 
     await _run(runner)
@@ -301,13 +309,13 @@ async def test_external_phase_spans_keep_attributes_parentage_and_no_sensitive_t
         capfire.exporter.exported_spans_as_dict(), ensure_ascii=False, default=str
     )
     assert query_client.chat.completions.create.await_count == 1
-    assert selector_client.chat.completions.create.await_count == 2
+    assert reviewer_client.chat.completions.create.await_count == 2
     assert [input.query for input in tool.inputs] == [_QUERY_OUTPUT_SENTINEL]
     assert len(phases) == 2
     assert len(providers) == 3
     assert set(phase_by_agent) == {
         EXTERNAL_QUERY_AGENT.name,
-        EXTERNAL_EVIDENCE_SELECTOR_AGENT.name,
+        EVIDENCE_REVIEWER_AGENT.name,
     }
     assert all(
         domain_attr_keys(phase["attributes"]) == {"phase", "agent_name", "task_index"}
@@ -331,7 +339,7 @@ async def test_external_phase_spans_keep_attributes_parentage_and_no_sensitive_t
     )
     assert all(
         provider["parent"]["span_id"]
-        == phase_by_agent[EXTERNAL_EVIDENCE_SELECTOR_AGENT.name]["context"]["span_id"]
+        == phase_by_agent[EVIDENCE_REVIEWER_AGENT.name]["context"]["span_id"]
         for provider in providers[1:]
     )
     assert all(exception_event(phase) is None for phase in phases)
@@ -357,10 +365,10 @@ async def test_unclassified_query_error_is_redacted_and_only_error_phase(
     error_sentinel = "UNCLASSIFIED_QUERY_ERROR_SENTINEL_4ea2"
     error = RuntimeError(error_sentinel)
     query_client = FakeDeepSeekClient([error])
-    selector_client = FakeDeepSeekClient([_selector_response()])
+    reviewer_client = FakeDeepSeekClient([_reviewer_response()])
     runner, _ = _runner(
         query_client=query_client,
-        selector_client=selector_client,
+        reviewer_client=reviewer_client,
     )
 
     with pytest.raises(RuntimeError) as raised:
@@ -381,7 +389,7 @@ async def test_unclassified_query_error_is_redacted_and_only_error_phase(
     assert len(phases) == 1
     assert len(providers) == 1
     assert providers[0]["parent"]["span_id"] == phases[0]["context"]["span_id"]
-    assert selector_client.chat.completions.create.await_count == 0
+    assert reviewer_client.chat.completions.create.await_count == 0
     assert all(exception_event(span) is not None for span in [*phases, *providers])
     assert all(span.status.status_code is StatusCode.ERROR for span in raw_spans)
     assert all(span.status.description == "[redacted]" for span in raw_spans)
@@ -539,12 +547,46 @@ def _two_task_plan(*, task_queries: tuple[list[str], list[str]]) -> SearchPlan:
     )
 
 
+def _review_draft_selecting_all_offered_candidates() -> Any:
+    """D4-S1: 統合index空間の候補(最大2件)を全て採用するdraft。
+
+    候補が1件のtaskではindex 1が範囲外dropとなるだけで安全に使い回せる
+    (このモジュールのinternal-onlyな内部統計テスト専用の軽量fake)。
+    """
+    from app.agent.evidence_collection.evidence_review import EvidenceReviewDraft
+
+    return EvidenceReviewDraft.model_validate(
+        {
+            "selections": [
+                {
+                    "candidate_index": index,
+                    "claim": f"claim-{index}",
+                    "why_selected": "w",
+                }
+                for index in (0, 1)
+            ],
+            "missing": [],
+        }
+    )
+
+
 def _two_task_query_failing_runtime() -> ExternalResearchRuntime:
-    """外部query生成を2 task分とも失敗させ、外部候補を空に保つ(内部統計だけに絞る)。"""
+    """外部query生成を2 task分とも失敗させ、外部候補を空に保つ(内部統計だけに絞る)。
+
+    D4-S1: internal候補が非空なら候補ゼロtaskではないためreviewerが起動する。
+    このmoduleのinternal統計テストは最大2 taskなので、2件分を用意しておけば
+    実際の呼び出し回数(0〜2)に関わらず安全に使い回せる
+    (ScriptedAgentRuntimeは未消費のoutcomeを許容する)。
+    """
     query_failure = AgentResponseInvalidError(AgentResponseDefect.RESPONSE_NOT_JSON)
     return ExternalResearchRuntime(
         query_runtime=ScriptedAgentRuntime([query_failure, query_failure]),
-        selector_runtime=ScriptedAgentRuntime([]),
+        reviewer_runtime=ScriptedAgentRuntime(
+            [
+                _review_draft_selecting_all_offered_candidates(),
+                _review_draft_selecting_all_offered_candidates(),
+            ]
+        ),
         search_tool=_Tool(),
     )
 
@@ -553,12 +595,18 @@ def _two_task_query_failing_runtime() -> ExternalResearchRuntime:
 async def test_evidence_run_span_reports_internal_external_counts_and_citations(
     capfire: CaptureLogfire,
 ) -> None:
-    """内部hit2件・外部evidence1件のうち内部1・外部1が引用された場合の採用数/引用数を検証する。"""
+    """内部hit2件・外部evidence1件のうち内部1・外部1が引用された場合の採用数/引用数を検証する。
+
+    D4-S1: internal_evidence_countはreviewerが精査採用した件数になるため、
+    統合index空間(内部0,1・外部2)の全候補を採用するreviewer応答を使う。
+    """
     query_client = FakeDeepSeekClient([_query_response()])
-    selector_client = FakeDeepSeekClient([_selector_response()])
+    reviewer_client = FakeDeepSeekClient(
+        [_reviewer_response(candidate_indexes=[0, 1, 2])]
+    )
     runner, _ = _runner(
         query_client=query_client,
-        selector_client=selector_client,
+        reviewer_client=reviewer_client,
         internal_search=_TwoInternalHitsSearch(),
         evidence_answerer=_SelectiveEvidenceAnswerer(
             lambda evidence: [
@@ -598,6 +646,7 @@ async def test_direct_path_run_span_has_no_evidence_count_attributes(
         external_runtime_factory=_UnreachableExternalFactory(),
         direct_answerer=_DirectAnswerer(),
         evidence_answerer=_UnreachableEvidenceAnswerer(),
+        reviewer=EvidenceReviewer(),
     )
     runner = AnsweringRunner(
         input_safety_checker=AllowInputSafetyChecker(),
@@ -628,10 +677,12 @@ async def test_evidence_run_span_marks_zero_cited_explicitly_when_uncited(
     internal_cited_count が不在ではなく明示的な0で付く。
     """
     query_client = FakeDeepSeekClient([_query_response()])
-    selector_client = FakeDeepSeekClient([_selector_response()])
+    reviewer_client = FakeDeepSeekClient(
+        [_reviewer_response(candidate_indexes=[0, 1, 2])]
+    )
     runner, _ = _runner(
         query_client=query_client,
-        selector_client=selector_client,
+        reviewer_client=reviewer_client,
         internal_search=_TwoInternalHitsSearch(),
         evidence_answerer=_SelectiveEvidenceAnswerer(
             lambda evidence: [evidence[-1].source.source_ref]
@@ -679,6 +730,7 @@ async def test_evidence_run_span_reports_internal_dedup_count_and_post_dedup_tot
         external_runtime_factory=_Factory(_two_task_query_failing_runtime()),
         direct_answerer=_UnreachableDirectAnswerer(),
         evidence_answerer=_EvidenceAnswerer(),
+        reviewer=EvidenceReviewer(),
     )
     runner = AnsweringRunner(
         input_safety_checker=AllowInputSafetyChecker(),
@@ -732,6 +784,7 @@ async def test_evidence_run_span_reports_internal_collection_failed_task_count(
         external_runtime_factory=_Factory(_two_task_query_failing_runtime()),
         direct_answerer=_UnreachableDirectAnswerer(),
         evidence_answerer=_EvidenceAnswerer(),
+        reviewer=EvidenceReviewer(),
     )
     runner = AnsweringRunner(
         input_safety_checker=AllowInputSafetyChecker(),

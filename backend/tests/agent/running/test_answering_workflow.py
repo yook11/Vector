@@ -13,6 +13,7 @@ from app.agent.answering.contract import AnsweringRequest
 from app.agent.answering.direct_answer.contract import DirectAnswerDraft
 from app.agent.answering.evidence_answer.contract import EvidenceAnswerDraft
 from app.agent.evidence_collection import Researcher
+from app.agent.evidence_collection.evidence_review import EvidenceReviewer
 from app.agent.evidence_collection.external_search import ExternalResearchRuntime
 from app.agent.evidence_collection.external_search.contract import ExternalQueryDraft
 from app.agent.evidence_collection.internal_search.query_embedding import (
@@ -137,7 +138,7 @@ class _EmptyExternalRuntimeFactory:
         self._timeline.append("external_runtime")
         yield ExternalResearchRuntime(
             query_runtime=_EmptyExternalQueryRuntime(),  # type: ignore[arg-type]
-            selector_runtime=object(),  # type: ignore[arg-type]
+            reviewer_runtime=object(),  # type: ignore[arg-type]
             search_tool=object(),  # type: ignore[arg-type]
         )
 
@@ -219,6 +220,7 @@ def _runner(
             external_runtime_factory=_EmptyExternalRuntimeFactory(timeline),
             direct_answerer=direct_answerer,
             evidence_answerer=evidence_answerer,
+            reviewer=EvidenceReviewer(),
         )
 
     return (
