@@ -7,7 +7,7 @@ from typing import Final
 from app.agent.planning.contract import PlanningAttemptInput
 from app.analysis.prompt_safety import sanitize_for_untrusted_block
 
-PLANNER_PROMPT_VERSION: Final[str] = "v4"
+PLANNER_PROMPT_VERSION: Final[str] = "v5"
 
 PLANNER_INSTRUCTIONS: Final[str] = """\
 あなたは Vector の質問検索 planner です。
@@ -39,17 +39,23 @@ context は事実根拠ではない。
 
 # 検索内容
 
+research_tasks は調査目的ごとの調査単位のリスト。1つのtaskが、外部ニュース検索で
+確認したい調査目的(research_goal)と、それを内部記事から確認するための検索文
+(article_search_queries)を対にする。
+
+research_goal は、その調査で何を確認したいか、何が根拠として有用かを短い日本語で書く。
+keyword queryは書かない。外部ニュース検索のqueryは実行時にリサーチャーが生成する。
+
 article_search_queries は分析済み記事のベクトル検索で embedding する検索文のリスト。
 raw questionをそのままコピーせず、内部記事を探すために必要な entity / topic / event / \
 time intentを抽出・圧縮する。検索に強い自然文にする。
 
-research_goals は外部ニュース検索で確認したい調査目的のリスト。
-その調査で何を確認したいか、何が根拠として有用かを短い日本語で書く。
-keyword queryは書かない。query は実行時にリサーチャーが生成する。
+article_search_queries はrun全体で合計3件までの予算であり、taskへ配分する。
+同じ角度の言い換えを並べない。角度が1つしかなければ1件でよい。水増ししない。
 
-- plan_type=direct_answer: article_search_queries=[], research_goals=[],
-  target_time_window=null
-- plan_type=search: article_search_queries と research_goals をそれぞれ1件以上作る
+- plan_type=direct_answer: research_tasks=[], target_time_window=null
+- plan_type=search: research_tasksを1件以上作り、各taskにresearch_goalと
+  article_search_queriesを1件以上対応づける
 
 # 公開期間
 

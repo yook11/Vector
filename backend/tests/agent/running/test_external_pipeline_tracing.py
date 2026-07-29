@@ -32,7 +32,6 @@ from app.agent.evidence_collection.external_search.deepseek_binding import (
     EXTERNAL_QUERY_DEEPSEEK_BINDING,
 )
 from app.agent.planning.contract import (
-    ExternalResearchTask,
     PlanningRequest,
     TargetTimeWindow,
 )
@@ -103,12 +102,15 @@ class _Planner:
     async def plan(self, request: PlanningRequest) -> Any:
         del request
         plan_type = getattr(planning_contract, "SearchPlan", None)
-        if plan_type is None:
-            pytest.fail("planning contract must define SearchPlan")
+        research_task_type = getattr(planning_contract, "ResearchTask", None)
+        if plan_type is None or research_task_type is None:
+            pytest.fail("planning contract must define SearchPlan and ResearchTask")
         return plan_type(
-            article_search_queries=["NVIDIA の直近発表"],
-            external_research_tasks=[
-                ExternalResearchTask(research_goal="GOAL_SENTINEL_3cc7")
+            research_tasks=[
+                research_task_type(
+                    research_goal="GOAL_SENTINEL_3cc7",
+                    article_search_queries=["NVIDIA の直近発表"],
+                )
             ],
             target_time_window=TargetTimeWindow(
                 kind="calendar_month",

@@ -111,9 +111,16 @@ def _search_plan(
     tasks: list[ExternalResearchTask] | None = None,
     target_time_window: TargetTimeWindow | None = None,
 ) -> object:
+    """各taskへ同一query("NVIDIA AI GPU")を配分する(query内容はこのtestでは非対象)。"""
+    research_task_type = _plan_type("ResearchTask")
     return _plan_type("SearchPlan")(
-        article_search_queries=["NVIDIA AI GPU"],
-        external_research_tasks=tasks or [_task(0)],
+        research_tasks=[
+            research_task_type(
+                research_goal=task.research_goal,
+                article_search_queries=["NVIDIA AI GPU"],
+            )
+            for task in (tasks or [_task(0)])
+        ],
         target_time_window=target_time_window,
     )
 
@@ -1101,7 +1108,8 @@ async def test_answer_passes_pipeline_inputs_and_variant_time_window() -> None:
     )
     orchestrator, planner, internal_search, evidence_answerer, _ = _orchestrator(
         plan=_search_plan(
-            tasks=[_task(0), _task(1)],
+            # _both_evidence_outcome()はtask_index=0のみを表現するため1 taskに揃える。
+            tasks=[_task(0)],
             target_time_window=TargetTimeWindow(kind="last_n_days", days=1),
         ),
         outcome=_both_evidence_outcome(),

@@ -48,8 +48,12 @@ def _successful_response() -> FakeResponse:
         text=json.dumps(
             {
                 "plan_type": "search",
-                "article_search_queries": ["NVIDIA の直近発表"],
-                "research_goals": ["NVIDIA の直近発表の外部根拠を確認する"],
+                "research_tasks": [
+                    {
+                        "research_goal": "NVIDIA の直近発表の外部根拠を確認する",
+                        "article_search_queries": ["NVIDIA の直近発表"],
+                    }
+                ],
                 "target_time_window": None,
             }
         ),

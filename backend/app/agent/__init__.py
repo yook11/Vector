@@ -10,7 +10,7 @@ from app.agent.contract import (
     PlanType,
 )
 from app.agent.planning.contract import (
-    EXTERNAL_RESEARCH_TASK_LIMIT,
+    RESEARCH_TASK_LIMIT,
     DirectAnswerPlan,
     ExternalResearchTask,
     QuestionPlan,
@@ -24,7 +24,7 @@ __all__ = [
     "AnswerQuestionResult",
     "AnswerPlanSummary",
     "AnswerSource",
-    "EXTERNAL_RESEARCH_TASK_LIMIT",
+    "RESEARCH_TASK_LIMIT",
     "ExternalResearchTask",
     "ExternalUrlSource",
     "InternalArticleSource",

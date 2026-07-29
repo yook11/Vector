@@ -20,7 +20,6 @@ from app.agent.question_context.contract import QuestionContext
 from app.agent.runtime.contract import AgentResponseDefect, AgentResponseInvalidError
 
 __all__ = [
-    "EXTERNAL_RESEARCH_TASK_LIMIT",
     "ExternalResearchTask",
     "DirectAnswerPlan",
     "MAX_ARTICLE_SEARCH_QUERIES",
@@ -31,6 +30,9 @@ __all__ = [
     "QuestionPlanDraft",
     "QuestionPlanner",
     "PlanType",
+    "RESEARCH_TASK_LIMIT",
+    "ResearchTask",
+    "ResearchTaskDraft",
     "SearchPlan",
     "TargetTimeWindow",
     "TargetTimeWindowKind",
@@ -38,8 +40,10 @@ __all__ = [
     "render_target_time_window",
 ]
 
-EXTERNAL_RESEARCH_TASK_LIMIT = 3
+RESEARCH_TASK_LIMIT = 3
 MAX_ARTICLE_SEARCH_QUERIES = 3
+# round-robin trimが各taskの先頭queryを必ず残せるのは、
+# RESEARCH_TASK_LIMIT <= MAX_ARTICLE_SEARCH_QUERIESが前提。
 
 PlanQuery = Annotated[
     str,
@@ -170,14 +174,22 @@ class PlanningAttemptInput:
     previous_error: str | None = None
 
 
+class ResearchTaskDraft(BaseModel):
+    """LLM構造化出力から素朴にparseされたtask draft(正規化前は無制約)。"""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    research_goal: str
+    article_search_queries: list[str]
+
+
 class QuestionPlanDraft(BaseModel):
     """Planner-internal draft parsed from structured LLM output."""
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     plan_type: PlanType
-    article_search_queries: list[str]
-    research_goals: list[str]
+    research_tasks: list[ResearchTaskDraft]
     target_time_window: TargetTimeWindow | None = None
 
 
@@ -191,6 +203,31 @@ class ExternalResearchTask(BaseModel):
     )
 
     research_goal: str = Field(min_length=1)
+
+
+class ResearchTask(BaseModel):
+    """1つの調査目的に内部検索queryを関連づける実行単位。"""
+
+    model_config = ConfigDict(
+        frozen=True,
+        extra="forbid",
+        str_strip_whitespace=True,
+    )
+
+    research_goal: str = Field(min_length=1)
+    # 予算の正本はSearchPlanのvalidatorであり、これはrun全体予算に従う上限。
+    article_search_queries: list[PlanQuery] = Field(
+        min_length=1,
+        max_length=MAX_ARTICLE_SEARCH_QUERIES,
+    )
+
+    @field_validator("article_search_queries")
+    @classmethod
+    def _validate_unique_queries_within_task(cls, value: list[str]) -> list[str]:
+        query_keys = [query.casefold() for query in value]
+        if len(query_keys) != len(set(query_keys)):
+            raise ValueError("article search queries must be unique within a task")
+        return value
 
 
 class DirectAnswerPlan(BaseModel):
@@ -207,24 +244,49 @@ class SearchPlan(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     plan_type: Literal["search"] = "search"
-    article_search_queries: list[PlanQuery] = Field(
+    research_tasks: list[ResearchTask] = Field(
         min_length=1,
-        max_length=MAX_ARTICLE_SEARCH_QUERIES,
-    )
-    external_research_tasks: list[ExternalResearchTask] = Field(
-        min_length=1,
-        max_length=EXTERNAL_RESEARCH_TASK_LIMIT,
+        max_length=RESEARCH_TASK_LIMIT,
     )
     target_time_window: TargetTimeWindow | None = None
 
     @model_validator(mode="after")
-    def _validate_unique_inputs(self) -> Self:
-        query_keys = [query.casefold() for query in self.article_search_queries]
-        if len(query_keys) != len(set(query_keys)):
-            raise ValueError("article search queries must be unique")
-        if not _external_task_goals_unique(self.external_research_tasks):
-            raise ValueError("external research task goals must be unique")
+    def _validate_research_tasks(self) -> Self:
+        goals = [task.research_goal for task in self.research_tasks]
+        if len(goals) != len(set(goals)):
+            raise ValueError("research task goals must be unique")
+        total_queries = sum(
+            len(task.article_search_queries) for task in self.research_tasks
+        )
+        if total_queries > MAX_ARTICLE_SEARCH_QUERIES:
+            raise ValueError("article search query total exceeds budget")
         return self
+
+    @property
+    def article_search_queries(self) -> list[str]:
+        """Researcherがtask単位で収集するようになったら消える射影であり、
+        旧`SearchPlan`のrun単位casefold一意性を先勝ちdedupで保つ。
+        """
+        cleaned_queries: list[str] = []
+        seen_queries: set[str] = set()
+        for task in self.research_tasks:
+            for query in task.article_search_queries:
+                key = query.casefold()
+                if key in seen_queries:
+                    continue
+                cleaned_queries.append(query)
+                seen_queries.add(key)
+        return cleaned_queries
+
+    @property
+    def external_research_tasks(self) -> list[ExternalResearchTask]:
+        """Researcherがtask単位で収集するようになったら消える、
+        external pipeline consumer向けの射影。
+        """
+        return [
+            ExternalResearchTask(research_goal=task.research_goal)
+            for task in self.research_tasks
+        ]
 
 
 QuestionPlan = DirectAnswerPlan | SearchPlan
@@ -241,26 +303,42 @@ def plan_from_draft(
 ) -> QuestionPlan:
     """LLM draft を完成済み plan に整える。"""
 
-    article_search_queries = _clean_plan_queries(draft.article_search_queries)
-    external_research_tasks = _clean_external_research_tasks(draft.research_goals)
+    cleaned_tasks = _clean_research_tasks(draft.research_tasks)
     if draft.plan_type == "direct_answer":
-        if (
-            article_search_queries
-            or external_research_tasks
-            or draft.target_time_window is not None
-        ):
+        if cleaned_tasks or draft.target_time_window is not None:
             raise _response_defect()
         return DirectAnswerPlan()
-    if not article_search_queries or not external_research_tasks:
+    if not cleaned_tasks or any(not queries for _, queries in cleaned_tasks):
         raise _response_defect()
+    trimmed_tasks = _trim_query_budget(cleaned_tasks)
     return SearchPlan(
-        article_search_queries=article_search_queries,
-        external_research_tasks=external_research_tasks,
+        research_tasks=[
+            ResearchTask(research_goal=goal, article_search_queries=queries)
+            for goal, queries in trimmed_tasks
+        ],
         target_time_window=draft.target_time_window,
     )
 
 
-def _clean_plan_queries(queries: list[str]) -> list[str]:
+def _clean_research_tasks(
+    tasks: list[ResearchTaskDraft],
+) -> list[tuple[str, list[str]]]:
+    cleaned_tasks: list[tuple[str, list[str]]] = []
+    seen_goals: set[str] = set()
+    for task in tasks:
+        research_goal = task.research_goal.strip()
+        if not research_goal or research_goal in seen_goals:
+            continue
+        cleaned_tasks.append(
+            (research_goal, _clean_task_queries(task.article_search_queries))
+        )
+        seen_goals.add(research_goal)
+        if len(cleaned_tasks) >= RESEARCH_TASK_LIMIT:
+            break
+    return cleaned_tasks
+
+
+def _clean_task_queries(queries: list[str]) -> list[str]:
     cleaned_queries: list[str] = []
     seen_queries: set[str] = set()
     for query in queries:
@@ -272,28 +350,32 @@ def _clean_plan_queries(queries: list[str]) -> list[str]:
             continue
         cleaned_queries.append(cleaned)
         seen_queries.add(key)
-        if len(cleaned_queries) >= MAX_ARTICLE_SEARCH_QUERIES:
-            break
     return cleaned_queries
 
 
-def _clean_external_research_tasks(goals: list[str]) -> list[ExternalResearchTask]:
-    cleaned_tasks: list[ExternalResearchTask] = []
-    seen_goals: set[str] = set()
-    for goal in goals:
-        research_goal = goal.strip()
-        if not research_goal or research_goal in seen_goals:
-            continue
-        cleaned_tasks.append(ExternalResearchTask(research_goal=research_goal))
-        seen_goals.add(research_goal)
-        if len(cleaned_tasks) >= EXTERNAL_RESEARCH_TASK_LIMIT:
-            break
-    return cleaned_tasks
-
-
-def _external_task_goals_unique(tasks: list[ExternalResearchTask]) -> bool:
-    goals = [task.research_goal for task in tasks]
-    return len(goals) == len(set(goals))
+def _trim_query_budget(
+    tasks: list[tuple[str, list[str]]],
+) -> list[tuple[str, list[str]]]:
+    """予算超過時のみ、query位置ごとにtask順で走査し予算件数で決定的に打ち切る。"""
+    total = sum(len(queries) for _, queries in tasks)
+    if total <= MAX_ARTICLE_SEARCH_QUERIES:
+        return tasks
+    trimmed_queries: list[list[str]] = [[] for _ in tasks]
+    selected = 0
+    max_task_length = max((len(queries) for _, queries in tasks), default=0)
+    position = 0
+    while position < max_task_length and selected < MAX_ARTICLE_SEARCH_QUERIES:
+        for task_index, (_, queries) in enumerate(tasks):
+            if selected >= MAX_ARTICLE_SEARCH_QUERIES:
+                break
+            if position < len(queries):
+                trimmed_queries[task_index].append(queries[position])
+                selected += 1
+        position += 1
+    return [
+        (goal, queries)
+        for (goal, _), queries in zip(tasks, trimmed_queries, strict=True)
+    ]
 
 
 def _response_defect() -> AgentResponseInvalidError:
