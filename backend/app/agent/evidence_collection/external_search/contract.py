@@ -8,21 +8,13 @@ Agent / workflow / provider adapter が共有する frozen model と Protocol �
 
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
 from contextlib import AbstractAsyncContextManager
 from dataclasses import dataclass
 from datetime import date, datetime
 from enum import StrEnum
-from typing import Annotated, Final, Literal, Protocol
+from typing import Final, Literal, Protocol
 
-from pydantic import (
-    BaseModel,
-    ConfigDict,
-    Field,
-    StringConstraints,
-    field_validator,
-    model_validator,
-)
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from app.agent.planning.contract import ExternalResearchTask, TargetTimeWindow
 from app.agent.runtime.contract import AgentRuntime
@@ -36,16 +28,8 @@ __all__ = [
     "EXTERNAL_SEARCH_AGENT_HARD_LIMIT",
     "EXTERNAL_SEARCH_CANDIDATES_PER_QUERY",
     "EXTERNAL_SEARCH_CANDIDATE_POOL_LIMIT_PER_TASK",
-    "EXTERNAL_SEARCH_EVIDENCE_LIMIT_PER_TASK",
-    "EXTERNAL_SEARCH_MISSING_LIMIT_PER_TASK",
     "EXTERNAL_SEARCH_TOOL_NAME",
     "EXTERNAL_TASK_QUERY_LIMIT",
-    "EvidenceSelection",
-    "EvidenceSelectionDraft",
-    "EvidenceSelectionResult",
-    "ExternalEvidenceCandidateInput",
-    "ExternalEvidenceSelectionDraft",
-    "ExternalEvidenceSelectionInput",
     "ExternalQueryDraft",
     "ExternalQueryGenerationInput",
     "ExternalSearchCandidate",
@@ -60,8 +44,6 @@ __all__ = [
     "ExternalSearchToolInput",
     "ExternalSearchToolName",
     "MISSING_ITEM_MAX_CHARS",
-    "ResearchTaskReport",
-    "ResearchTaskStatus",
     "TimeFilterFailureReason",
 ]
 
@@ -70,20 +52,10 @@ EXTERNAL_TASK_QUERY_LIMIT = 3
 EXTERNAL_QUERY_MAX_CHARS = 200
 EXTERNAL_SEARCH_CANDIDATES_PER_QUERY = 10
 EXTERNAL_SEARCH_CANDIDATE_POOL_LIMIT_PER_TASK = 20
-EXTERNAL_SEARCH_EVIDENCE_LIMIT_PER_TASK = 5
-EXTERNAL_SEARCH_MISSING_LIMIT_PER_TASK = 5
 CANDIDATE_SNIPPET_MAX_CHARS = 500
 EVIDENCE_CLAIM_MAX_CHARS = 300
 EVIDENCE_WHY_SELECTED_MAX_CHARS = 300
 MISSING_ITEM_MAX_CHARS = 200
-
-ResearchTaskStatus = Literal[
-    "succeeded",
-    "query_generation_failed",
-    "provider_failed",
-    "selector_failed",
-    "time_filter_failed",
-]
 
 TimeFilterFailureReason = Literal[
     "future_calendar_month",
@@ -221,45 +193,6 @@ class ExternalQueryDraft(BaseModel):
         return value
 
 
-@dataclass(frozen=True, slots=True)
-class ExternalEvidenceCandidateInput:
-    """Selectorへ渡すURLなしcandidate projection。"""
-
-    index: int
-    title: str
-    source_name: str | None
-    published_at: datetime | None
-    snippet: str | None
-
-
-@dataclass(frozen=True, slots=True)
-class ExternalEvidenceSelectionInput:
-    """External Evidence Selector Agent の1 attempt入力。"""
-
-    task: ExternalResearchTask
-    candidates: tuple[ExternalEvidenceCandidateInput, ...]
-    as_of: datetime
-
-
-class EvidenceSelectionDraft(BaseModel):
-    """Selectorがcandidate indexを参照して返すdraft 1件。"""
-
-    model_config = ConfigDict(frozen=True, extra="forbid")
-
-    candidate_index: int = Field(ge=0)
-    claim: str
-    why_selected: str
-
-
-class ExternalEvidenceSelectionDraft(BaseModel):
-    """Selectorが返すsource情報を持たない選別draft。"""
-
-    model_config = ConfigDict(frozen=True, extra="forbid")
-
-    selections: list[EvidenceSelectionDraft]
-    missing: list[str]
-
-
 class ExternalSearchTool(Protocol):
     @property
     def name(self) -> ExternalSearchToolName: ...
@@ -275,7 +208,7 @@ class ExternalResearchRuntime:
     """external branchがscope内だけ借りるrole別RuntimeとToolの束。"""
 
     query_runtime: AgentRuntime
-    selector_runtime: AgentRuntime
+    reviewer_runtime: AgentRuntime
     search_tool: ExternalSearchTool
 
 
@@ -285,145 +218,6 @@ class ExternalResearchRuntimeFactory(Protocol):
     def activate(
         self,
     ) -> AbstractAsyncContextManager[ExternalResearchRuntime]: ...
-
-
-class EvidenceSelection(BaseModel):
-    """selector が返す選別 1 件。URL は返さず index で pool を参照する。"""
-
-    model_config = ConfigDict(frozen=True)
-
-    candidate_index: int = Field(ge=0)
-    claim: str = Field(min_length=1, max_length=EVIDENCE_CLAIM_MAX_CHARS)
-    why_selected: str = Field(
-        min_length=1,
-        max_length=EVIDENCE_WHY_SELECTED_MAX_CHARS,
-    )
-
-
-class EvidenceSelectionResult(BaseModel):
-    """selector が返す選別結果。自由記述欄の cap は factory で丸める。"""
-
-    model_config = ConfigDict(frozen=True)
-
-    selections: list[EvidenceSelection] = Field(default_factory=list)
-    missing: list[str] = Field(default_factory=list)
-
-    @classmethod
-    def from_raw(
-        cls,
-        *,
-        selections: Sequence[EvidenceSelection | Mapping[str, object]],
-        missing: Sequence[str],
-    ) -> EvidenceSelectionResult:
-        clamped_selections: list[EvidenceSelection] = []
-        for selection in selections:
-            if isinstance(selection, EvidenceSelection):
-                clamped_selections.append(selection)
-                continue
-            item = dict(selection)
-            if "claim" in item:
-                item["claim"] = _truncate_text(item["claim"], EVIDENCE_CLAIM_MAX_CHARS)
-            if "why_selected" in item:
-                item["why_selected"] = _truncate_text(
-                    item["why_selected"],
-                    EVIDENCE_WHY_SELECTED_MAX_CHARS,
-                )
-            clamped_selections.append(EvidenceSelection.model_validate(item))
-
-        return cls(
-            selections=clamped_selections,
-            missing=_clamp_missing(missing),
-        )
-
-    @model_validator(mode="after")
-    def _validate_missing_caps(self) -> EvidenceSelectionResult:
-        if len(self.missing) > EXTERNAL_SEARCH_MISSING_LIMIT_PER_TASK:
-            raise ValueError("missing exceeds external search missing limit")
-        if any(len(item) > MISSING_ITEM_MAX_CHARS for item in self.missing):
-            raise ValueError("missing item exceeds max length")
-        return self
-
-
-class ResearchTaskReport(BaseModel):
-    """task 単位の検索実行内容と失敗分類。"""
-
-    model_config = ConfigDict(frozen=True, extra="forbid")
-
-    task_index: int = Field(ge=0)
-    research_goal: Annotated[
-        str,
-        StringConstraints(strip_whitespace=True, min_length=1),
-    ]
-    generated_queries: list[str] = Field(default_factory=list)
-    status: ResearchTaskStatus
-    time_filter_failure_reason: TimeFilterFailureReason | None = None
-    provider_failed_query_count: int = Field(default=0, ge=0)
-    candidate_count: int = Field(default=0, ge=0)
-    evidence_count: int = Field(default=0, ge=0)
-    dropped_selection_count: int = Field(default=0, ge=0)
-    selector_failure_reason: str | None = None
-    missing: list[str] = Field(default_factory=list)
-
-    @classmethod
-    def from_raw(
-        cls,
-        *,
-        task_index: int,
-        research_goal: str,
-        generated_queries: list[str] | None = None,
-        status: ResearchTaskStatus,
-        time_filter_failure_reason: TimeFilterFailureReason | None = None,
-        provider_failed_query_count: int = 0,
-        candidate_count: int = 0,
-        evidence_count: int = 0,
-        dropped_selection_count: int = 0,
-        selector_failure_reason: str | None = None,
-        missing: list[str] | None = None,
-    ) -> ResearchTaskReport:
-        return cls(
-            task_index=task_index,
-            research_goal=research_goal,
-            generated_queries=generated_queries or [],
-            status=status,
-            time_filter_failure_reason=time_filter_failure_reason,
-            provider_failed_query_count=provider_failed_query_count,
-            candidate_count=candidate_count,
-            evidence_count=evidence_count,
-            dropped_selection_count=dropped_selection_count,
-            selector_failure_reason=selector_failure_reason,
-            missing=_clamp_missing(missing or []),
-        )
-
-    @model_validator(mode="after")
-    def _validate_report_caps(self) -> ResearchTaskReport:
-        if self.status == "time_filter_failed":
-            if self.time_filter_failure_reason is None:
-                raise ValueError("time_filter_failed requires a failure reason")
-            if (
-                self.generated_queries
-                or self.provider_failed_query_count != 0
-                or self.candidate_count != 0
-                or self.evidence_count != 0
-                or self.dropped_selection_count != 0
-                or self.selector_failure_reason is not None
-                or self.missing
-            ):
-                raise ValueError("time_filter_failed must keep closed diagnostics")
-        elif self.time_filter_failure_reason is not None:
-            raise ValueError("time filter failure reason requires time_filter_failed")
-        if len(self.generated_queries) > EXTERNAL_TASK_QUERY_LIMIT:
-            raise ValueError("generated queries exceed external query limit")
-        if any(
-            len(query) > EXTERNAL_QUERY_MAX_CHARS for query in self.generated_queries
-        ):
-            raise ValueError("generated query exceeds max length")
-        if len(self.missing) > EXTERNAL_SEARCH_MISSING_LIMIT_PER_TASK:
-            raise ValueError("missing exceeds external search missing limit")
-        if any(len(item) > MISSING_ITEM_MAX_CHARS for item in self.missing):
-            raise ValueError("missing item exceeds max length")
-        if self.evidence_count > EXTERNAL_SEARCH_EVIDENCE_LIMIT_PER_TASK:
-            raise ValueError("evidence count exceeds external evidence limit")
-        return self
 
 
 class ExternalSearchEvidence(BaseModel):
@@ -446,53 +240,19 @@ class ExternalSearchEvidence(BaseModel):
 
 
 class ExternalSearchOutcome(BaseModel):
-    """外部検索の実行結果と、丸め後の実行ポリシー。"""
+    """外部検索が選別した根拠と、丸め後の実行ポリシー。"""
 
     model_config = ConfigDict(frozen=True)
 
-    tasks: list[ExternalResearchTask] = Field(default_factory=list)
     evidence: list[ExternalSearchEvidence] = Field(default_factory=list)
-    task_reports: list[ResearchTaskReport] = Field(default_factory=list)
     deduplicated_evidence_count: int = Field(default=0, ge=0)
     requested_agent_count: int | None = None
     effective_agent_count: int = Field(default=0, ge=0)
     hard_agent_limit: int = Field(default=EXTERNAL_SEARCH_AGENT_HARD_LIMIT, ge=1)
 
     @model_validator(mode="after")
-    def _validate_task_correspondence(self) -> ExternalSearchOutcome:
-        task_count = len(self.tasks)
-        report_indexes = [report.task_index for report in self.task_reports]
-        if len(report_indexes) != task_count:
-            raise ValueError("task report count must match task count")
-        if set(report_indexes) != set(range(task_count)):
-            raise ValueError("task reports must cover each task exactly once")
-
-        if any(
-            evidence.task_index < 0 or evidence.task_index >= task_count
-            for evidence in self.evidence
-        ):
-            raise ValueError("evidence task_index must reference an existing task")
-
+    def _validate_source_ref_uniqueness(self) -> ExternalSearchOutcome:
         source_refs = [evidence.source_ref for evidence in self.evidence]
         if len(source_refs) != len(set(source_refs)):
             raise ValueError("external evidence source_ref must be unique")
-
-        reported_evidence_count = sum(
-            report.evidence_count for report in self.task_reports
-        )
-        if reported_evidence_count != (
-            len(self.evidence) + self.deduplicated_evidence_count
-        ):
-            raise ValueError("reported evidence count must match outcome evidence")
         return self
-
-
-def _clamp_missing(missing: Sequence[str]) -> list[str]:
-    return [
-        _truncate_text(item, MISSING_ITEM_MAX_CHARS)
-        for item in missing[:EXTERNAL_SEARCH_MISSING_LIMIT_PER_TASK]
-    ]
-
-
-def _truncate_text(value: object, max_chars: int) -> str:
-    return str(value)[:max_chars]

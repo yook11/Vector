@@ -1,4 +1,11 @@
-"""External search outcome の永続契約。"""
+"""External search outcome の永続契約(D4-S2)。
+
+`ResearchTaskReport` は evidence_collection 側の contract へ移設された
+(正本: tests/agent/evidence_collection/test_contract.py)。ここには
+date filter / tool input など query-collection に閉じた契約と、
+trim された `ExternalSearchOutcome`(evidence + agent counts +
+deduplicated_evidence_count のみ)の契約だけを残す。
+"""
 
 from __future__ import annotations
 
@@ -10,31 +17,6 @@ from pydantic import ValidationError
 
 import app.agent.evidence_collection.external_search as external_search
 from app.agent.planning import contract as planning_contract
-from app.agent.planning.contract import ExternalResearchTask
-
-
-def _task(goal: str) -> ExternalResearchTask:
-    return ExternalResearchTask(research_goal=goal)
-
-
-def _report(*, task_index: int, evidence_count: int = 0) -> Any:
-    return external_search.ResearchTaskReport(
-        task_index=task_index,
-        research_goal=f"task {task_index}",
-        status="succeeded",
-        evidence_count=evidence_count,
-    )
-
-
-def _time_filter_failed_report(**changes: object) -> Any:
-    values: dict[str, object] = {
-        "task_index": 0,
-        "research_goal": "指定期間の根拠を確認する",
-        "status": "time_filter_failed",
-        "time_filter_failure_reason": "future_calendar_month",
-    }
-    values.update(changes)
-    return external_search.ResearchTaskReport(**values)
 
 
 def _unsafe_evidence(*, task_index: int, source_ref: str) -> Any:
@@ -106,75 +88,6 @@ def test_external_search_date_filter_rejects_start_that_cannot_expand_one_day() 
         )
 
 
-def test_time_filter_failed_report_keeps_only_closed_diagnostics() -> None:
-    report = _time_filter_failed_report()
-
-    assert report.model_dump() == {
-        "task_index": 0,
-        "research_goal": "指定期間の根拠を確認する",
-        "generated_queries": [],
-        "status": "time_filter_failed",
-        "time_filter_failure_reason": "future_calendar_month",
-        "provider_failed_query_count": 0,
-        "candidate_count": 0,
-        "evidence_count": 0,
-        "dropped_selection_count": 0,
-        "selector_failure_reason": None,
-        "missing": [],
-    }
-
-
-@pytest.mark.parametrize(
-    "changes",
-    [
-        pytest.param({"time_filter_failure_reason": None}, id="missing-reason"),
-        pytest.param({"generated_queries": ["raw query"]}, id="generated-query"),
-        pytest.param({"provider_failed_query_count": 1}, id="provider-failure"),
-        pytest.param({"candidate_count": 1}, id="candidate"),
-        pytest.param({"evidence_count": 1}, id="evidence"),
-        pytest.param({"dropped_selection_count": 1}, id="dropped-selection"),
-        pytest.param({"selector_failure_reason": "timeout"}, id="selector-reason"),
-        pytest.param({"missing": ["表示用の不足理由"]}, id="missing"),
-    ],
-)
-def test_time_filter_failed_report_rejects_non_closed_diagnostics(
-    changes: dict[str, object],
-) -> None:
-    with pytest.raises(ValidationError):
-        _time_filter_failed_report(**changes)
-
-
-@pytest.mark.parametrize(
-    "status",
-    [
-        pytest.param("succeeded"),
-        pytest.param("query_generation_failed"),
-        pytest.param("provider_failed"),
-        pytest.param("selector_failed"),
-    ],
-)
-def test_non_time_filter_report_rejects_time_filter_failure_reason(status: str) -> None:
-    with pytest.raises(ValidationError):
-        external_search.ResearchTaskReport(
-            task_index=0,
-            research_goal="通常の外部検索task",
-            status=status,
-            time_filter_failure_reason="future_date_range",
-        )
-
-
-def test_research_task_report_rejects_legacy_collection_goal_as_extra() -> None:
-    with pytest.raises(ValidationError):
-        external_search.ResearchTaskReport.model_validate(
-            {
-                "task_index": 0,
-                "research_goal": "NVIDIA の根拠を確認する",
-                "collection_goal": "legacy field must not be accepted",
-                "status": "succeeded",
-            }
-        )
-
-
 def test_external_search_tool_input_carries_only_resolved_date_filter() -> None:
     date_filter_type = _required_external_search_attribute("ExternalSearchDateFilter")
     date_filter = date_filter_type(
@@ -199,56 +112,29 @@ def test_external_query_generation_input_uses_typed_time_window() -> None:
     assert hints["target_time_window"] == target_time_window_type | None
 
 
-@pytest.mark.parametrize(
-    "report_indexes",
-    [
-        pytest.param([0], id="short"),
-        pytest.param([0, 0], id="duplicate"),
-        pytest.param([0, 2], id="missing"),
-    ],
-)
-def test_outcome_rejects_report_count_duplicate_and_missing_task_indexes(
-    report_indexes: list[int],
-) -> None:
-    reports = [_report(task_index=index) for index in report_indexes]
+def test_outcome_rejects_duplicate_source_ref() -> None:
+    """D4-S2: ExternalSearchOutcome は evidence + agent counts +
 
+    deduplicated_evidence_count のみを保持する(task_reports/tasksは
+    EvidenceCollectionOutcome側へ移設され、正本は
+    tests/agent/evidence_collection/test_evidence_collection.py)。
+    ここに残るのはevidence自身のsource_ref一意性という自己完結した契約のみ。
+    """
     with pytest.raises(ValidationError):
         external_search.ExternalSearchOutcome(
-            tasks=[_task("first"), _task("second")],
-            task_reports=reports,
-            effective_agent_count=2,
-        )
-
-
-def test_outcome_rejects_evidence_outside_task_range_and_duplicate_source_ref() -> None:
-    with pytest.raises(ValidationError):
-        external_search.ExternalSearchOutcome(
-            tasks=[_task("first")],
-            evidence=[_unsafe_evidence(task_index=1, source_ref="external-1-0")],
-            task_reports=[_report(task_index=0)],
-            effective_agent_count=1,
-        )
-
-    with pytest.raises(ValidationError):
-        external_search.ExternalSearchOutcome(
-            tasks=[_task("first"), _task("second")],
             evidence=[
-                _unsafe_evidence(task_index=0, source_ref="external-0-0"),
-                _unsafe_evidence(task_index=1, source_ref="external-0-0"),
+                _unsafe_evidence(task_index=0, source_ref="0-0"),
+                _unsafe_evidence(task_index=1, source_ref="0-0"),
             ],
-            task_reports=[_report(task_index=0), _report(task_index=1)],
             effective_agent_count=2,
         )
 
 
-def test_outcome_rejects_evidence_count_that_cannot_be_explained_by_deduplication() -> (
-    None
-):
-    with pytest.raises(ValidationError):
-        external_search.ExternalSearchOutcome(
-            tasks=[_task("first")],
-            evidence=[_unsafe_evidence(task_index=0, source_ref="external-0-0")],
-            task_reports=[_report(task_index=0, evidence_count=2)],
-            deduplicated_evidence_count=0,
-            effective_agent_count=1,
-        )
+def test_outcome_has_no_task_reports_or_tasks_field() -> None:
+    """保証するテスト条件 1(旧語彙不在)。task_reports/tasksはtrimされる。"""
+    outcome = external_search.ExternalSearchOutcome(
+        evidence=[], effective_agent_count=1
+    )
+
+    assert not hasattr(outcome, "task_reports")
+    assert not hasattr(outcome, "tasks")

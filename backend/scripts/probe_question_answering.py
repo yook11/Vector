@@ -36,13 +36,16 @@ from app.agent.contract import (
     ExternalSearchQueriesGeneratedEvent,
 )
 from app.agent.evidence_collection import Researcher
+from app.agent.evidence_collection.evidence_review import EvidenceReviewer
 from app.agent.evidence_collection.internal_search.ai.gemini import (
     GeminiQueryEmbedder,
 )
 from app.agent.evidence_collection.internal_search.article_search import (
     PgVectorArticleSearchRepository,
 )
-from app.agent.evidence_collection.internal_search.service import InternalSearchService
+from app.agent.evidence_collection.internal_search.tool import (
+    PgVectorInternalSearchTool,
+)
 from app.agent.input_safety.agent import INPUT_SAFETY_AGENT
 from app.agent.input_safety.service import InputSafetyService
 from app.agent.planning.contract import (
@@ -215,7 +218,7 @@ async def _probe_search(
     )
     events = _RecordingAnswerEvents()
     session_factory = async_sessionmaker(engine, expire_on_commit=False)
-    internal_search = InternalSearchService(
+    internal_search = PgVectorInternalSearchTool(
         embedder=GeminiQueryEmbedder(),
         article_search_repository=PgVectorArticleSearchRepository(session_factory),
     )
@@ -231,6 +234,7 @@ async def _probe_search(
         phases_factory=lambda: AnsweringPhases(
             planner=_FixedSearchPlanner(plan),
             researcher=Researcher(internal_search=internal_search, events=events),
+            reviewer=EvidenceReviewer(),
             external_runtime_factory=build_external_research_runtime_factory(),
             evidence_answerer=EvidenceAnswerFlow(
                 agent=EVIDENCE_ANSWER_AGENT,
@@ -251,9 +255,9 @@ async def _probe_search(
     _print_plan_summary(
         as_of=as_of,
         plan=plan,
+        plan_type=result.plan_summary.plan_type,
         requested_agent_count=requested_agent_count,
         events=events.events,
-        collection_failures=result.plan_summary.collection_failures,
     )
     print()
     _print_answer_result(result)
@@ -275,6 +279,7 @@ async def _probe_direct(*, question: str) -> None:
         phases_factory=lambda: AnsweringPhases(
             planner=_FixedDirectPlanner(DirectAnswerPlan()),
             researcher=Researcher(internal_search=_UnreachableInternalSearch()),
+            reviewer=EvidenceReviewer(),
             external_runtime_factory=_UnreachableExternalRuntimeFactory(),
             evidence_answerer=_UnreachableEvidenceAnswerer(),
             direct_answerer=DirectAnswerFlow(
@@ -329,17 +334,16 @@ def _print_plan_summary(
     *,
     as_of: datetime,
     plan: SearchPlan,
+    plan_type: str,
     requested_agent_count: int,
     events: Sequence[AnswerProgressEvent],
-    collection_failures: Sequence[str],
 ) -> None:
     print("plan:")
     print(f"  as_of={as_of.isoformat()}")
-    print(f"  plan_type={plan.plan_type}")
+    print(f"  plan_type={plan_type}")
     print(f"  target_time_window={plan.target_time_window or ''}")
     print(f"  requested_agent_count={requested_agent_count}")
     print(f"  planned_task_count={len(plan.research_tasks)}")
-    print(f"  collection_failures={list(collection_failures)}")
     print()
     _print_external_progress(events)
 
@@ -376,7 +380,6 @@ def _print_answer_result(result: AnswerQuestionResult) -> None:
     print(f"  plan_type={result.plan_summary.plan_type}")
     print(f"  answer={result.answer}")
     print(f"  missing_aspects={list(result.missing_aspects)}")
-    print(f"  collection_failures={list(result.plan_summary.collection_failures)}")
     print("  sources:")
     if not result.sources:
         print("    (none)")
