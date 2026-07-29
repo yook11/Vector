@@ -262,32 +262,6 @@ class SearchPlan(BaseModel):
             raise ValueError("article search query total exceeds budget")
         return self
 
-    @property
-    def article_search_queries(self) -> list[str]:
-        """Researcherがtask単位で収集するようになったら消える射影であり、
-        旧`SearchPlan`のrun単位casefold一意性を先勝ちdedupで保つ。
-        """
-        cleaned_queries: list[str] = []
-        seen_queries: set[str] = set()
-        for task in self.research_tasks:
-            for query in task.article_search_queries:
-                key = query.casefold()
-                if key in seen_queries:
-                    continue
-                cleaned_queries.append(query)
-                seen_queries.add(key)
-        return cleaned_queries
-
-    @property
-    def external_research_tasks(self) -> list[ExternalResearchTask]:
-        """Researcherがtask単位で収集するようになったら消える、
-        external pipeline consumer向けの射影。
-        """
-        return [
-            ExternalResearchTask(research_goal=task.research_goal)
-            for task in self.research_tasks
-        ]
-
 
 QuestionPlan = DirectAnswerPlan | SearchPlan
 

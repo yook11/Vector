@@ -3,15 +3,16 @@
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Awaitable, Iterator
+from collections.abc import Iterator
 from contextlib import contextmanager
+from dataclasses import dataclass
 from datetime import datetime
 from enum import StrEnum
 from typing import assert_never
 from uuid import UUID
 
 import logfire
-from opentelemetry.trace import StatusCode
+from logfire import LogfireSpan
 from pydantic import ValidationError
 
 from app.agent.answering.contract import AnsweringRequest
@@ -19,6 +20,7 @@ from app.agent.answering.evidence_answer.evidence import (
     normalize_answer_evidence,
 )
 from app.agent.answering.result_assembly import assemble_evidence_result
+from app.agent.concurrency import gather_cancel_on_error
 from app.agent.contract import (
     AnswerEventReporter,
     AnswerGenerationStopped,
@@ -27,31 +29,26 @@ from app.agent.contract import (
     AnswerProgressReporter,
     AnswerProgressStage,
     AnswerQuestionResult,
-    ExternalSearchCandidatesFetchedEvent,
+    AnswerSource,
     ExternalSearchEvidenceSelectedEvent,
-    ExternalSearchQueriesGeneratedEvent,
-    InternalSearchCompletedEvent,
-    InternalSearchStartedEvent,
+)
+from app.agent.evidence_collection import (
+    ExternalCollectionStatus,
+    ResearchTaskCandidates,
 )
 from app.agent.evidence_collection.contract import EvidenceCollectionOutcome
 from app.agent.evidence_collection.external_search.agent import (
     EXTERNAL_EVIDENCE_SELECTOR_AGENT,
-    EXTERNAL_QUERY_AGENT,
 )
 from app.agent.evidence_collection.external_search.contract import (
-    EXTERNAL_SEARCH_CANDIDATES_PER_QUERY,
     EvidenceSelectionResult,
     ExternalEvidenceCandidateInput,
     ExternalEvidenceSelectionInput,
-    ExternalQueryGenerationInput,
     ExternalResearchRuntime,
     ExternalSearchCandidate,
     ExternalSearchDateFilter,
     ExternalSearchEvidence,
     ExternalSearchOutcome,
-    ExternalSearchProviderError,
-    ExternalSearchTool,
-    ExternalSearchToolInput,
     ResearchTaskReport,
     ResearchTaskStatus,
     TimeFilterFailureReason,
@@ -61,12 +58,8 @@ from app.agent.evidence_collection.external_search.observability import (
 )
 from app.agent.evidence_collection.external_search.policy import (
     EVIDENCE_SELECT_TIMEOUT_SECONDS,
-    PROVIDER_SEARCH_TIMEOUT_SECONDS,
-    QUERY_GENERATE_TIMEOUT_SECONDS,
     SELECTOR_TIMEOUT_REASON,
-    build_candidate_pool,
     build_external_evidence,
-    clean_generated_queries,
     deduplicate_external_evidence_by_url,
     finalize_selection_draft,
     resolve_external_search_agent_count,
@@ -78,11 +71,6 @@ from app.agent.evidence_collection.external_search.time_filter import (
 )
 from app.agent.evidence_collection.internal_search.contract import (
     InternalArticleSearchHit,
-    InternalSearchError,
-    InternalSearchToolInput,
-)
-from app.agent.evidence_collection.internal_search.query_embedding import (
-    InternalSearchQueries,
 )
 from app.agent.input_safety.contract import (
     INPUT_SAFETY_TEXT_CHAR_CAP,
@@ -90,10 +78,12 @@ from app.agent.input_safety.contract import (
     InputSafetyChecker,
     InputSafetyPreviousTurn,
 )
+from app.agent.phase_span import agent_phase
 from app.agent.planning.contract import (
     DirectAnswerPlan,
     ExternalResearchTask,
     PlanningRequest,
+    ResearchTask,
     SearchPlan,
     TargetTimeWindow,
 )
@@ -118,9 +108,46 @@ from app.analysis.ai_provider_errors import AIProviderError
 __all__ = ["AnsweringRunner"]
 
 _SPAN_NAME = "agent_answering_run"
-_EXTERNAL_PHASE_SPAN_NAME = "agent_phase"
-_EXTERNAL_QUERY_PHASE = "external_query"
 _EXTERNAL_SELECTOR_PHASE = "external_selector"
+
+
+@dataclass(frozen=True, slots=True)
+class _TaskResult:
+    """1 taskのResearcher収集+選別結果。合流前の中間値。"""
+
+    internal_hits: list[InternalArticleSearchHit]
+    internal_failed: bool
+    evidence: list[ExternalSearchEvidence]
+    report: ResearchTaskReport
+
+
+@dataclass(frozen=True, slots=True)
+class _ExternalCollectionAvailable:
+    """plan単位のtarget_time_window解決に成功し、外部runtimeが使える状態。"""
+
+    runtime: ExternalResearchRuntime
+    date_filter: ExternalSearchDateFilter | None
+
+
+@dataclass(frozen=True, slots=True)
+class _ExternalCollectionUnavailable:
+    """plan単位のtarget_time_window解決に失敗し、外部収集を行えない状態。"""
+
+    reason: TimeFilterFailureReason
+
+
+type _ExternalCollectionPlan = (
+    _ExternalCollectionAvailable | _ExternalCollectionUnavailable
+)
+
+
+@dataclass(frozen=True, slots=True)
+class _EvidenceCollectionResult:
+    """evidence収集の結果と、span報告用の内部合流統計。"""
+
+    outcome: EvidenceCollectionOutcome
+    internal_deduplicated_count: int
+    internal_collection_failed_task_count: int
 
 
 class AnsweringRunner:
@@ -148,7 +175,7 @@ class AnsweringRunner:
         run_context: RunContext,
         hooks: RunHooks | None = None,
     ) -> RunResult:
-        with _answering_run_span(run_id=run_context.run_id):
+        with _answering_run_span(run_id=run_context.run_id) as run_span:
             safety_check = await self._input_safety_checker.check(
                 question=input.question[:INPUT_SAFETY_TEXT_CHAR_CAP],
                 previous_turn=_previous_turn(input.history),
@@ -199,6 +226,7 @@ class AnsweringRunner:
                         phases=phases,
                         request=answering_request,
                         plan=plan,
+                        run_span=run_span,
                     )
                 case _ as unreachable:
                     assert_never(unreachable)
@@ -236,13 +264,15 @@ class AnsweringRunner:
         phases: AnsweringPhases,
         request: AnsweringRequest,
         plan: SearchPlan,
+        run_span: LogfireSpan,
     ) -> AnswerQuestionResult:
         await self._report_progress("retrieving")
-        outcome = await self._collect_evidence(
+        collection_result = await self._collect_evidence(
             phases=phases,
             plan=plan,
             as_of=request.as_of,
         )
+        outcome = collection_result.outcome
         evidence = normalize_answer_evidence(outcome)
 
         await self._report_progress("synthesizing")
@@ -251,13 +281,23 @@ class AnsweringRunner:
             evidence=evidence,
             target_time_window=_plan_target_time_window(plan),
         )
-        return assemble_evidence_result(
+        result = assemble_evidence_result(
             context=request.context,
             plan=plan,
             outcome=outcome,
             evidence=evidence,
             draft=draft,
         )
+        _record_evidence_span_attributes(
+            run_span,
+            outcome=outcome,
+            sources=result.sources,
+            internal_deduplicated_count=collection_result.internal_deduplicated_count,
+            internal_collection_failed_task_count=(
+                collection_result.internal_collection_failed_task_count
+            ),
+        )
+        return result
 
     async def _collect_evidence(
         self,
@@ -265,58 +305,11 @@ class AnsweringRunner:
         phases: AnsweringPhases,
         plan: SearchPlan,
         as_of: datetime,
-    ) -> EvidenceCollectionOutcome:
-        internal_result, external_result = await _gather_search_branches(
-            self._collect_internal(
-                phases=phases,
-                queries=InternalSearchQueries(
-                    queries=tuple(plan.article_search_queries)
-                ),
-            ),
-            self._collect_external(
-                phases=phases,
-                tasks=plan.external_research_tasks,
-                target_time_window=plan.target_time_window,
-                as_of=as_of,
-            ),
-        )
-        hits, internal_failed = _raise_if_exception(internal_result)
-        external = _raise_if_exception(external_result)
-        return EvidenceCollectionOutcome(
-            internal_hits=hits,
-            external_search=external,
-            collection_failures=["internal_search"] if internal_failed else [],
-        )
-
-    async def _collect_internal(
-        self,
-        *,
-        phases: AnsweringPhases,
-        queries: InternalSearchQueries,
-    ) -> tuple[list[InternalArticleSearchHit], bool]:
-        await self._report_event(
-            InternalSearchStartedEvent(query_count=len(queries.queries))
-        )
-        try:
-            hits = await phases.internal_search.invoke(
-                InternalSearchToolInput(queries=queries)
-            )
-        except InternalSearchError:
-            return [], True
-        await self._report_event(InternalSearchCompletedEvent(hit_count=len(hits)))
-        return hits, False
-
-    async def _collect_external(
-        self,
-        *,
-        phases: AnsweringPhases,
-        tasks: list[ExternalResearchTask],
-        target_time_window: TargetTimeWindow | None,
-        as_of: datetime,
-    ) -> ExternalSearchOutcome:
+    ) -> _EvidenceCollectionResult:
+        tasks = plan.research_tasks
         try:
             date_filter = resolve_external_search_date_filter(
-                target_time_window,
+                plan.target_time_window,
                 as_of=as_of,
             )
         except ExternalSearchDateFilterResolutionError as exc:
@@ -325,186 +318,225 @@ class AnsweringRunner:
                 reason=exc.reason,
                 task_count=len(tasks),
             )
-            effective_agent_count = resolve_external_search_agent_count(
-                task_count=len(tasks),
-                requested_agent_count=self._requested_external_agent_count,
-            )
-            return ExternalSearchOutcome(
+            return await self._fan_out_tasks(
+                phases=phases,
+                plan=plan,
                 tasks=tasks,
-                task_reports=[
-                    self._external_task_report(
-                        task_index=task_index,
-                        task=task,
-                        status="time_filter_failed",
-                        time_filter_failure_reason=exc.reason,
-                    )
-                    for task_index, task in enumerate(tasks)
-                ],
-                requested_agent_count=self._requested_external_agent_count,
-                effective_agent_count=effective_agent_count,
+                external_collection=_ExternalCollectionUnavailable(reason=exc.reason),
+                as_of=as_of,
             )
+
         observe_time_filter_resolution(
             result="not_requested" if date_filter is None else "resolved",
             reason="none",
             task_count=len(tasks),
         )
         async with phases.external_runtime_factory.activate() as external:
-            return await self._execute_external_pipeline(
+            return await self._fan_out_tasks(
+                phases=phases,
+                plan=plan,
                 tasks=tasks,
-                target_time_window=target_time_window,
-                date_filter=date_filter,
+                external_collection=_ExternalCollectionAvailable(
+                    runtime=external,
+                    date_filter=date_filter,
+                ),
                 as_of=as_of,
-                external=external,
             )
 
-    async def _execute_external_pipeline(
+    async def _fan_out_tasks(
         self,
         *,
-        tasks: list[ExternalResearchTask],
-        target_time_window: TargetTimeWindow | None,
-        date_filter: ExternalSearchDateFilter | None,
+        phases: AnsweringPhases,
+        plan: SearchPlan,
+        tasks: list[ResearchTask],
+        external_collection: _ExternalCollectionPlan,
         as_of: datetime,
-        external: ExternalResearchRuntime,
-    ) -> ExternalSearchOutcome:
+    ) -> _EvidenceCollectionResult:
         effective_agent_count = resolve_external_search_agent_count(
             task_count=len(tasks),
             requested_agent_count=self._requested_external_agent_count,
         )
-        if not tasks:
-            return ExternalSearchOutcome(
-                tasks=tasks,
-                requested_agent_count=self._requested_external_agent_count,
-                effective_agent_count=effective_agent_count,
-            )
-
         semaphore = asyncio.Semaphore(max(1, effective_agent_count))
 
-        async def run_task(
-            task_index: int,
-            task: ExternalResearchTask,
-        ) -> tuple[list[ExternalSearchEvidence], ResearchTaskReport]:
+        async def run_task(task_index: int, task: ResearchTask) -> _TaskResult:
             async with semaphore:
-                return await self._search_external_task(
+                return await self._collect_and_select(
+                    phases=phases,
                     task_index=task_index,
                     task=task,
-                    target_time_window=target_time_window,
-                    date_filter=date_filter,
+                    external_collection=external_collection,
+                    target_time_window=plan.target_time_window,
                     as_of=as_of,
-                    external=external,
                 )
 
-        results = await _gather_cancel_on_error(
+        results = await gather_cancel_on_error(
             *[run_task(task_index, task) for task_index, task in enumerate(tasks)]
         )
-        evidence: list[ExternalSearchEvidence] = []
+
+        internal_hits: list[InternalArticleSearchHit] = []
+        external_evidence: list[ExternalSearchEvidence] = []
         reports: list[ResearchTaskReport] = []
-        for task_evidence, report in results:
-            evidence.extend(task_evidence)
-            reports.append(report)
-        deduplicated_evidence, deduplicated_count = (
-            deduplicate_external_evidence_by_url(evidence)
+        internal_collection_failed_task_count = 0
+        for result in results:
+            internal_hits.extend(result.internal_hits)
+            external_evidence.extend(result.evidence)
+            reports.append(result.report)
+            if result.internal_failed:
+                internal_collection_failed_task_count += 1
+
+        deduplicated_internal_hits, internal_deduplicated_count = (
+            _deduplicate_internal_hits_by_curation_id(internal_hits)
         )
-        return ExternalSearchOutcome(
-            tasks=tasks,
+        deduplicated_evidence, deduplicated_count = (
+            deduplicate_external_evidence_by_url(external_evidence)
+        )
+        outcome = ExternalSearchOutcome(
+            tasks=[
+                ExternalResearchTask(research_goal=task.research_goal) for task in tasks
+            ],
             evidence=deduplicated_evidence,
             task_reports=reports,
             deduplicated_evidence_count=deduplicated_count,
             requested_agent_count=self._requested_external_agent_count,
             effective_agent_count=effective_agent_count,
         )
+        return _EvidenceCollectionResult(
+            outcome=EvidenceCollectionOutcome(
+                internal_hits=deduplicated_internal_hits,
+                external_search=outcome,
+                collection_failures=(
+                    ["internal_search"]
+                    if internal_collection_failed_task_count == len(results)
+                    else []
+                ),
+            ),
+            internal_deduplicated_count=internal_deduplicated_count,
+            internal_collection_failed_task_count=(
+                internal_collection_failed_task_count
+            ),
+        )
 
-    async def _search_external_task(
+    async def _collect_and_select(
+        self,
+        *,
+        phases: AnsweringPhases,
+        task_index: int,
+        task: ResearchTask,
+        external_collection: _ExternalCollectionPlan,
+        target_time_window: TargetTimeWindow | None,
+        as_of: datetime,
+    ) -> _TaskResult:
+        external_runtime, external_date_filter = _resolve_external_arguments(
+            external_collection
+        )
+        collected = await phases.researcher.collect(
+            task_index=task_index,
+            task=task,
+            external=external_runtime,
+            date_filter=external_date_filter,
+            target_time_window=target_time_window,
+            as_of=as_of,
+        )
+        evidence, report = await self._build_task_result(
+            task_index=task_index,
+            task=task,
+            collected=collected,
+            external_collection=external_collection,
+            as_of=as_of,
+        )
+        return _TaskResult(
+            internal_hits=collected.internal_hits,
+            internal_failed=collected.internal_failed,
+            evidence=evidence,
+            report=report,
+        )
+
+    async def _build_task_result(
         self,
         *,
         task_index: int,
-        task: ExternalResearchTask,
-        target_time_window: TargetTimeWindow | None,
-        date_filter: ExternalSearchDateFilter | None,
+        task: ResearchTask,
+        collected: ResearchTaskCandidates,
+        external_collection: _ExternalCollectionPlan,
         as_of: datetime,
-        external: ExternalResearchRuntime,
     ) -> tuple[list[ExternalSearchEvidence], ResearchTaskReport]:
-        query_input = ExternalQueryGenerationInput(
-            task=task,
-            as_of=as_of,
-            target_time_window=target_time_window,
-        )
-        with _external_agent_phase(
-            phase=_EXTERNAL_QUERY_PHASE,
-            agent_name=EXTERNAL_QUERY_AGENT.name,
-            task_index=task_index,
-        ):
-            try:
-                query_draft = await asyncio.wait_for(
-                    external.query_runtime.invoke(
-                        EXTERNAL_QUERY_AGENT,
-                        query_input,
-                        attempt_number=1,
-                    ),
-                    timeout=QUERY_GENERATE_TIMEOUT_SECONDS,
-                )
-            except (AgentResponseInvalidError, AIProviderError, TimeoutError):
+        external_task = ExternalResearchTask(research_goal=task.research_goal)
+        match external_collection:
+            case _ExternalCollectionUnavailable(reason=reason):
                 return [], self._external_task_report(
                     task_index=task_index,
-                    task=task,
+                    task=external_task,
+                    status="time_filter_failed",
+                    time_filter_failure_reason=reason,
+                )
+            case _ExternalCollectionAvailable(runtime=runtime):
+                # 外部runtimeが利用可能な経路では、Researcherは必ずstatusを返す。
+                external_status = collected.external_status
+                assert external_status is not None  # noqa: S101
+                return await self._build_status_task_result(
+                    task_index=task_index,
+                    external_task=external_task,
+                    collected=collected,
+                    external_status=external_status,
+                    selector_runtime=runtime.selector_runtime,
+                    as_of=as_of,
+                )
+            case _ as unreachable:
+                assert_never(unreachable)
+
+    async def _build_status_task_result(
+        self,
+        *,
+        task_index: int,
+        external_task: ExternalResearchTask,
+        collected: ResearchTaskCandidates,
+        external_status: ExternalCollectionStatus,
+        selector_runtime: AgentRuntime,
+        as_of: datetime,
+    ) -> tuple[list[ExternalSearchEvidence], ResearchTaskReport]:
+        match external_status:
+            case "query_generation_failed":
+                return [], self._external_task_report(
+                    task_index=task_index,
+                    task=external_task,
                     status="query_generation_failed",
                 )
-
-        queries = clean_generated_queries(query_draft.queries)
-        if not queries:
-            return [], self._external_task_report(
-                task_index=task_index,
-                task=task,
-                status="query_generation_failed",
-            )
-        await self._report_event(
-            ExternalSearchQueriesGeneratedEvent(
-                task_index=task_index,
-                queries=queries,
-            )
-        )
-
-        query_candidates: list[list[ExternalSearchCandidate]] = []
-        provider_failed_query_count = 0
-        provider_results = await _gather_cancel_on_error(
-            *[
-                self._search_external_query(
-                    query,
-                    search_tool=external.search_tool,
-                    date_filter=date_filter,
+            case "provider_failed":
+                return [], self._external_task_report(
+                    task_index=task_index,
+                    task=external_task,
+                    status="provider_failed",
+                    generated_queries=collected.generated_queries,
+                    provider_failed_query_count=collected.provider_failed_query_count,
                 )
-                for query in queries
-            ]
-        )
-        for candidates, failed in provider_results:
-            if failed:
-                provider_failed_query_count += 1
-                query_candidates.append([])
-                continue
-            query_candidates.append(candidates)
+            case "succeeded":
+                return await self._build_succeeded_task_result(
+                    task_index=task_index,
+                    external_task=external_task,
+                    collected=collected,
+                    selector_runtime=selector_runtime,
+                    as_of=as_of,
+                )
+            case _ as unreachable:
+                assert_never(unreachable)
 
-        if provider_failed_query_count == len(queries):
-            return [], self._external_task_report(
-                task_index=task_index,
-                task=task,
-                status="provider_failed",
-                generated_queries=queries,
-                provider_failed_query_count=provider_failed_query_count,
-            )
-
-        pool = build_candidate_pool(query_candidates)
-        await self._report_event(
-            ExternalSearchCandidatesFetchedEvent(
-                task_index=task_index,
-                candidate_count=len(pool),
-            )
-        )
+    async def _build_succeeded_task_result(
+        self,
+        *,
+        task_index: int,
+        external_task: ExternalResearchTask,
+        collected: ResearchTaskCandidates,
+        selector_runtime: AgentRuntime,
+        as_of: datetime,
+    ) -> tuple[list[ExternalSearchEvidence], ResearchTaskReport]:
+        pool = collected.candidate_pool
         if not pool:
             return [], self._external_task_report(
                 task_index=task_index,
-                task=task,
+                task=external_task,
                 status="succeeded",
-                generated_queries=queries,
-                provider_failed_query_count=provider_failed_query_count,
+                generated_queries=collected.generated_queries,
+                provider_failed_query_count=collected.provider_failed_query_count,
                 candidate_count=0,
             )
 
@@ -512,19 +544,19 @@ class AnsweringRunner:
             selection_result,
             selector_failure_reason,
         ) = await self._select_external_evidence(
-            task=task,
+            task=external_task,
             candidates=pool,
             as_of=as_of,
             task_index=task_index,
-            selector_runtime=external.selector_runtime,
+            selector_runtime=selector_runtime,
         )
         if selection_result is None:
             return [], self._external_task_report(
                 task_index=task_index,
-                task=task,
+                task=external_task,
                 status="selector_failed",
-                generated_queries=queries,
-                provider_failed_query_count=provider_failed_query_count,
+                generated_queries=collected.generated_queries,
+                provider_failed_query_count=collected.provider_failed_query_count,
                 candidate_count=len(pool),
                 selector_failure_reason=selector_failure_reason,
             )
@@ -542,37 +574,15 @@ class AnsweringRunner:
         )
         return evidence, self._external_task_report(
             task_index=task_index,
-            task=task,
+            task=external_task,
             status="succeeded",
-            generated_queries=queries,
-            provider_failed_query_count=provider_failed_query_count,
+            generated_queries=collected.generated_queries,
+            provider_failed_query_count=collected.provider_failed_query_count,
             candidate_count=len(pool),
             evidence_count=len(evidence),
             dropped_selection_count=dropped_selection_count,
             missing=selection_result.missing,
         )
-
-    async def _search_external_query(
-        self,
-        query: str,
-        *,
-        search_tool: ExternalSearchTool,
-        date_filter: ExternalSearchDateFilter | None,
-    ) -> tuple[list[ExternalSearchCandidate], bool]:
-        try:
-            candidates = await asyncio.wait_for(
-                search_tool.invoke(
-                    ExternalSearchToolInput(
-                        query=query,
-                        limit=EXTERNAL_SEARCH_CANDIDATES_PER_QUERY,
-                        date_filter=date_filter,
-                    )
-                ),
-                timeout=PROVIDER_SEARCH_TIMEOUT_SECONDS,
-            )
-        except (ExternalSearchProviderError, TimeoutError):
-            return [], True
-        return candidates[:EXTERNAL_SEARCH_CANDIDATES_PER_QUERY], False
 
     async def _select_external_evidence(
         self,
@@ -598,7 +608,7 @@ class AnsweringRunner:
             as_of=as_of,
         )
         selector_failure_reason: str | None = None
-        with _external_agent_phase(
+        with agent_phase(
             phase=_EXTERNAL_SELECTOR_PHASE,
             agent_name=EXTERNAL_EVIDENCE_SELECTOR_AGENT.name,
             task_index=task_index,
@@ -673,19 +683,65 @@ class AnsweringRunner:
         await self._progress.stage_changed(stage)
 
 
-async def _gather_cancel_on_error[ResultT](
-    *awaitables: Awaitable[ResultT],
-) -> list[ResultT]:
-    """未分類例外時に兄弟処理をcancelして合流してから元の例外を返す。"""
-    tasks = [asyncio.ensure_future(awaitable) for awaitable in awaitables]
-    try:
-        return list(await asyncio.gather(*tasks))
-    except BaseException:
-        for task in tasks:
-            if not task.done():
-                task.cancel()
-        await asyncio.gather(*tasks, return_exceptions=True)
-        raise
+def _resolve_external_arguments(
+    external_collection: _ExternalCollectionPlan,
+) -> tuple[ExternalResearchRuntime | None, ExternalSearchDateFilter | None]:
+    """Researcher.collect()へ渡す2引数を、外部収集可否の型から一箇所で導出する。"""
+    match external_collection:
+        case _ExternalCollectionAvailable(runtime=runtime, date_filter=date_filter):
+            return runtime, date_filter
+        case _ExternalCollectionUnavailable():
+            return None, None
+        case _ as unreachable:
+            assert_never(unreachable)
+
+
+def _deduplicate_internal_hits_by_curation_id(
+    hits: list[InternalArticleSearchHit],
+) -> tuple[list[InternalArticleSearchHit], int]:
+    """内部記事識別子(curation_id)の先勝ちでrun単位の重複を除く。"""
+    deduplicated: list[InternalArticleSearchHit] = []
+    seen_curation_ids: set[int] = set()
+    dropped_count = 0
+    for hit in hits:
+        curation_id = hit.article.curation_id
+        if curation_id in seen_curation_ids:
+            dropped_count += 1
+            continue
+        deduplicated.append(hit)
+        seen_curation_ids.add(curation_id)
+    return deduplicated, dropped_count
+
+
+def _record_evidence_span_attributes(
+    span: LogfireSpan,
+    *,
+    outcome: EvidenceCollectionOutcome,
+    sources: list[AnswerSource],
+    internal_deduplicated_count: int,
+    internal_collection_failed_task_count: int,
+) -> None:
+    """内部・外部別の採用数と引用数、内部合流の統計を件数のみでspanへ焼く。"""
+    external_evidence_count = (
+        len(outcome.external_search.evidence)
+        if outcome.external_search is not None
+        else 0
+    )
+    span.set_attribute("internal_evidence_count", len(outcome.internal_hits))
+    span.set_attribute("external_evidence_count", external_evidence_count)
+    span.set_attribute(
+        "internal_cited_count",
+        sum(1 for source in sources if source.kind == "internal_article"),
+    )
+    span.set_attribute(
+        "external_cited_count",
+        sum(1 for source in sources if source.kind == "external_url"),
+    )
+    span.set_attribute("internal_deduplicated_count", internal_deduplicated_count)
+    span.set_attribute(
+        "internal_collection_failed_task_count",
+        internal_collection_failed_task_count,
+    )
 
 
 def _provider_failure_reason(exc: AIProviderError) -> str:
@@ -699,35 +755,12 @@ def _provider_failure_reason(exc: AIProviderError) -> str:
 
 
 @contextmanager
-def _external_agent_phase(
-    *,
-    phase: str,
-    agent_name: str,
-    task_index: int,
-) -> Iterator[None]:
-    """External task単位のAgent policy spanを作る。"""
-    if task_index < 0:
-        raise ValueError("task_index must be non-negative")
-    with logfire.span(
-        _EXTERNAL_PHASE_SPAN_NAME,
-        phase=phase,
-        agent_name=agent_name,
-        task_index=task_index,
-    ) as span:
-        try:
-            yield
-        except BaseException:
-            span.set_status(StatusCode.ERROR, "unclassified agent phase error")
-            raise
-
-
-@contextmanager
-def _answering_run_span(*, run_id: UUID) -> Iterator[None]:
+def _answering_run_span(*, run_id: UUID) -> Iterator[LogfireSpan]:
     """正常な停止制御を error にせず、同じ例外を span 終了後に再送出する。"""
     stopped: AnswerGenerationStopped | InputSafetyBlocked | None = None
-    with logfire.span(_SPAN_NAME, run_id=str(run_id)):
+    with logfire.span(_SPAN_NAME, run_id=str(run_id)) as span:
         try:
-            yield
+            yield span
         except (AnswerGenerationStopped, InputSafetyBlocked) as exc:
             stopped = exc
     if stopped is not None:
@@ -768,25 +801,3 @@ def _latest_assistant_answer(
 
 def _plan_target_time_window(plan: SearchPlan) -> TargetTimeWindow | None:
     return plan.target_time_window
-
-
-def _raise_if_exception[ResultT](result: ResultT | BaseException) -> ResultT:
-    if isinstance(result, BaseException):
-        raise result
-    return result
-
-
-async def _gather_search_branches[InternalT, ExternalT](
-    internal: Awaitable[InternalT],
-    external: Awaitable[ExternalT],
-) -> tuple[InternalT | BaseException, ExternalT | BaseException]:
-    tasks = [asyncio.create_task(internal), asyncio.create_task(external)]
-    gathered = asyncio.gather(*tasks, return_exceptions=True)
-    try:
-        results = await asyncio.shield(gathered)
-    except asyncio.CancelledError as exc:
-        for task in tasks:
-            task.cancel()
-        await gathered
-        raise exc
-    return results[0], results[1]
