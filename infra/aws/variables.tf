@@ -83,8 +83,11 @@ variable "frontend_domain" {
 variable "internal_namespace" {
   description = <<-EOT
     Cloud Map の private DNS namespace。
-    backend / frontend の起動時ガードが許す接尾辞をこれに合わせる
-    (`.flycast` からの差し替え。ガード自体は外さない)。
+    backend / frontend の起動時ガードがこの値を接尾辞として許す
+    (`.flycast` との union。ガード自体は外さない)。
+    app 側と共有する契約なので、変えるなら次の定数も同時に変える。
+      backend  app/config.py       _ALLOWED_INTERNAL_FRONTEND_HOST_SUFFIXES
+      frontend lib/api/internal-config.ts _ALLOWED_INTERNAL_API_HOST_SUFFIXES
   EOT
   type        = string
   default     = "vector.internal"

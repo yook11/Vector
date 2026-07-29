@@ -51,9 +51,18 @@ _DATABASE_URL_ENV_NAMES = {
 # notifier (FrontendRevalidateNotifier) は SSRF guard をバイパスして
 # REVALIDATE_BEARER_SECRET を Bearer 送信するため、宛先が攻撃者制御に向くと
 # secret 持ち出し経路になる。env 値が攻撃者ホストに向かないことを起動時に構造検証する。
-# global allowlist は全環境共通、本番は *.flycast に絞る (production narrowing)。
+# global allowlist は全環境共通、本番は内部 namespace に絞る (production narrowing)。
 _ALLOWED_INTERNAL_FRONTEND_HOSTS = frozenset({"localhost", "127.0.0.1", "frontend"})
-_ALLOWED_INTERNAL_FRONTEND_HOST_SUFFIX = ".flycast"
+# 実行基盤が持つ内部 DNS namespace。先頭 dot が境界なので evilvector.internal は
+# マッチしない。`.internal` は ICANN が private-use 用に予約した TLD で公開 DNS に
+# 委任されないため、AWS 分を足しても外部ホストへの到達手段は増えない
+# (`.flycast` は Fly が内部 resolver で名乗るだけで、予約の裏付けは無い)。
+# 値は Terraform の `internal_namespace` と共有する契約 (infra/aws/variables.tf)。
+_ALLOWED_INTERNAL_FRONTEND_HOST_SUFFIXES = (".flycast", ".vector.internal")
+# error message 用の表示形。suffix を足したときに message だけ古くなるのを防ぐ。
+_INTERNAL_NAMESPACE_GLOBS = " / ".join(
+    f"*{suffix}" for suffix in _ALLOWED_INTERNAL_FRONTEND_HOST_SUFFIXES
+)
 
 # production で DB 接続文字列に要求する TLS sslmode。Neon は public internet
 # 越しのため平文 (disable / allow / prefer / 未指定) を起動時に拒否する。
@@ -214,9 +223,9 @@ class Settings(BaseSettings):
 
         notifier は SSRF guard をバイパスして REVALIDATE_BEARER_SECRET を Bearer
         送信するため、env 値が攻撃者制御のホストに向くと secret 持ち出し経路になる。
-        全環境共通の global allowlist (localhost / 127.0.0.1 / frontend / *.flycast) で
-        任意ホストへの送信を構造遮断する。本番のみの絞り込みは
-        ``_enforce_flycast_in_production`` が担う。
+        全環境共通の global allowlist (localhost / 127.0.0.1 / frontend / 実行基盤の
+        内部 namespace) で任意ホストへの送信を構造遮断する。本番のみの絞り込みは
+        ``_enforce_internal_namespace_in_production`` が担う。
         """
         scheme = urlparse(v).scheme
         if scheme not in ("http", "https"):
@@ -228,13 +237,13 @@ class Settings(BaseSettings):
         if host is None:
             raise ValueError("INTERNAL_FRONTEND_BASE_URL must include a host")
         if host in _ALLOWED_INTERNAL_FRONTEND_HOSTS or host.endswith(
-            _ALLOWED_INTERNAL_FRONTEND_HOST_SUFFIX
+            _ALLOWED_INTERNAL_FRONTEND_HOST_SUFFIXES
         ):
             return v
         raise ValueError(
             f"INTERNAL_FRONTEND_BASE_URL host {host!r} is not an allowed internal "
-            "destination; expected localhost / 127.0.0.1 / frontend (compose) or a "
-            "*.flycast host (Fly private network)"
+            "destination; expected localhost / 127.0.0.1 / frontend (compose) or an "
+            f"internal namespace host ({_INTERNAL_NAMESPACE_GLOBS})"
         )
 
     @field_validator("logfire_token")
@@ -307,22 +316,22 @@ class Settings(BaseSettings):
         return self
 
     @model_validator(mode="after")
-    def _enforce_flycast_in_production(self) -> Self:
-        """production では revalidate 宛先を *.flycast に限定する (narrowing)。
+    def _enforce_internal_namespace_in_production(self) -> Self:
+        """production では revalidate 宛先を実行基盤の内部 namespace に限定する。
 
         dev host (localhost / 127.0.0.1 / frontend) は本番では到達できず silent fail に
-        なるため、起動時に弾いて「本番は Fly private network の flycast」を構造的契約に
-        する。dev / CI / test は env="development" のためこの絞り込みは効かない。
+        なるため、起動時に弾いて「本番の宛先は内部 namespace」を構造的契約にする。
+        dev / CI / test は env="development" のためこの絞り込みは効かない。
         host format 自体は ``_validate_internal_frontend_base_url`` が保証済で、
         ここは env 条件の narrowing のみ。
         """
         if self.env != "production":
             return self
         host = _internal_frontend_host(self.internal_frontend_base_url)
-        if host is None or not host.endswith(_ALLOWED_INTERNAL_FRONTEND_HOST_SUFFIX):
+        if host is None or not host.endswith(_ALLOWED_INTERNAL_FRONTEND_HOST_SUFFIXES):
             raise ValueError(
-                "in production INTERNAL_FRONTEND_BASE_URL must be a *.flycast host "
-                f"(Fly private network), got host {host!r}"
+                "in production INTERNAL_FRONTEND_BASE_URL must be an internal "
+                f"namespace host ({_INTERNAL_NAMESPACE_GLOBS}), got host {host!r}"
             )
         return self
 

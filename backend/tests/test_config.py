@@ -235,6 +235,13 @@ def test_reject_when_secrets_equal() -> None:
 
 _VALID_FLYCAST_URL = "http://your-vector-frontend-app.flycast:3000"
 
+# 実行基盤の内部 namespace。Fly と AWS の両方を同じ allowlist が受理する。
+# frontend 側 (internal-config.test.ts) が同じ 2 つを同形で固定している。
+_INTERNAL_NAMESPACE_URLS = [
+    _VALID_FLYCAST_URL,
+    "http://frontend.vector.internal:3000",
+]
+
 # 本番では reject されるが development では許可される dev host 群。
 _DEV_HOST_URLS = [
     "http://localhost:3000",
@@ -253,6 +260,11 @@ _DEV_HOST_URLS = [
         "http://xflycast:3000",  # suffix の前に dot が無い
         # flycast suffix がホスト末尾でない。
         "http://your-vector-frontend-app.flycast.attacker.com:3000",
+        "http://evilvector.internal:3000",  # suffix の前に dot が無い (AWS 側)
+        # namespace suffix がホスト末尾でない。
+        "http://frontend.vector.internal.attacker.com:3000",
+        # .internal だが自分の namespace ではない (許すのは TLD 全体ではない)。
+        "http://frontend.attacker.internal:3000",
     ],
 )
 def test_internal_frontend_base_url_rejects_external_host(bad_url: str) -> None:
@@ -268,10 +280,13 @@ def test_internal_frontend_base_url_rejects_non_http_scheme(bad_url: str) -> Non
         Settings(internal_frontend_base_url=bad_url)
 
 
-def test_internal_frontend_base_url_accepts_flycast_in_development() -> None:
-    """development でも *.flycast は global allowlist で許可される。"""
-    s = Settings(internal_frontend_base_url=_VALID_FLYCAST_URL)
-    assert s.internal_frontend_base_url == _VALID_FLYCAST_URL
+@pytest.mark.parametrize("namespace_url", _INTERNAL_NAMESPACE_URLS)
+def test_internal_frontend_base_url_accepts_internal_namespace_in_development(
+    namespace_url: str,
+) -> None:
+    """development でも内部 namespace は global allowlist で許可される。"""
+    s = Settings(internal_frontend_base_url=namespace_url)
+    assert s.internal_frontend_base_url == namespace_url
 
 
 @pytest.mark.parametrize("dev_host_url", _DEV_HOST_URLS)
@@ -287,15 +302,18 @@ def test_internal_frontend_base_url_accepts_dev_host_in_development(
 def test_internal_frontend_base_url_rejects_dev_host_in_production(
     dev_host_url: str,
 ) -> None:
-    """production では dev host は ValidationError (*.flycast のみ許可)。"""
+    """production では dev host は ValidationError (内部 namespace のみ許可)。"""
     with pytest.raises(ValidationError, match="production"):
         Settings(env="production", internal_frontend_base_url=dev_host_url)
 
 
-def test_internal_frontend_base_url_accepts_flycast_in_production() -> None:
-    """production で *.flycast は許可される。"""
-    s = Settings(env="production", internal_frontend_base_url=_VALID_FLYCAST_URL)
-    assert s.internal_frontend_base_url == _VALID_FLYCAST_URL
+@pytest.mark.parametrize("namespace_url", _INTERNAL_NAMESPACE_URLS)
+def test_internal_frontend_base_url_accepts_internal_namespace_in_production(
+    namespace_url: str,
+) -> None:
+    """production で内部 namespace は許可される。"""
+    s = Settings(env="production", internal_frontend_base_url=namespace_url)
+    assert s.internal_frontend_base_url == namespace_url
 
 
 # Neon は public internet 越しの接続のため、production では DB 接続文字列に TLS
