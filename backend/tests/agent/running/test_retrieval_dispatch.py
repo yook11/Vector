@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from contextlib import AbstractAsyncContextManager
 from datetime import UTC, datetime
 from typing import Any
@@ -20,7 +21,7 @@ from app.agent.evidence_collection.external_search import (
     ExternalResearchRuntime,
     ExternalSearchCandidate,
 )
-from app.agent.evidence_collection.internal_search.article_search import (
+from app.agent.evidence_collection.internal_search import (
     InternalArticleContent,
     InternalArticleSearchHit,
 )
@@ -140,10 +141,12 @@ class _InternalSearch:
         self.completed = False
         self.cancelled_error: asyncio.CancelledError | None = None
 
-    async def search_articles(
-        self, queries: InternalSearchQueries
-    ) -> list[InternalArticleSearchHit]:
-        self.calls.append(queries)
+    @property
+    def name(self) -> str:
+        return "internal_search"
+
+    async def invoke(self, input: Any) -> list[InternalArticleSearchHit]:
+        self.calls.append(input.queries)
         self.started.set()
         try:
             if self._release is not None:
@@ -414,6 +417,20 @@ class _Progress:
         self._timeline.append(f"progress.{stage}")
         if stage == self._error_stage and self._error is not None:
             raise self._error
+
+
+class _Events:
+    def __init__(self) -> None:
+        self.events: list[Any] = []
+
+    async def event_occurred(self, event: Any) -> None:
+        self.events.append(event)
+
+
+def _internal_search_events(events: list[Any]) -> list[Any]:
+    """同じreporterへ並走発火するexternal_search.*を除き内部枝のeventだけ残す。"""
+
+    return [event for event in events if event.type.startswith("internal_search.")]
 
 
 class _UnreachableDirectAnswerer:
@@ -946,6 +963,72 @@ async def test_zero_internal_hits_remain_successful_under_search() -> None:
     )
 
     assert result.final_output.plan_summary.collection_failures == []
+
+
+@pytest.mark.asyncio
+async def test_internal_search_success_reports_started_then_completed_with_counts() -> (
+    None
+):
+    timeline: list[str] = []
+    events = _Events()
+    hits = [
+        _hit(assessment_id=1001, title="first"),
+        _hit(assessment_id=1002, title="second"),
+    ]
+    runner = _runner(
+        plan=_search_plan(article_search_queries=["NVIDIA", "OpenAI"]),
+        internal=_InternalSearch(hits=hits),
+        factory=_Factory([_runtime(ScriptedAgentRuntime([_query_draft()]))], timeline),
+        timeline=timeline,
+        events=events,
+    )
+
+    await _run(runner)
+
+    internal_events = _internal_search_events(events.events)
+    assert [event.model_dump() for event in internal_events] == [
+        {"type": "internal_search.started", "query_count": 2},
+        {"type": "internal_search.completed", "hit_count": 2},
+    ]
+
+
+@pytest.mark.asyncio
+async def test_internal_search_failure_reports_started_without_completed() -> None:
+    timeline: list[str] = []
+    events = _Events()
+    runner = _runner(
+        plan=_search_plan(article_search_queries=["NVIDIA"]),
+        internal=_InternalSearch(error=InternalSearchError(phase="article_search")),
+        factory=_Factory([_runtime(ScriptedAgentRuntime([_query_draft()]))], timeline),
+        timeline=timeline,
+        events=events,
+    )
+
+    await _run(runner)
+
+    internal_events = _internal_search_events(events.events)
+    assert [event.type for event in internal_events] == ["internal_search.started"]
+
+
+@pytest.mark.asyncio
+async def test_internal_search_events_do_not_expose_query_text() -> None:
+    timeline: list[str] = []
+    events = _Events()
+    runner = _runner(
+        plan=_search_plan(article_search_queries=["SECRET raw user question"]),
+        internal=_InternalSearch(hits=[_hit(assessment_id=1001, title="hit")]),
+        factory=_Factory([_runtime(ScriptedAgentRuntime([_query_draft()]))], timeline),
+        timeline=timeline,
+        events=events,
+    )
+
+    await _run(runner)
+
+    serialized = json.dumps(
+        [event.model_dump(mode="json") for event in events.events],
+        ensure_ascii=False,
+    )
+    assert "SECRET raw user question" not in serialized
 
 
 @pytest.mark.asyncio

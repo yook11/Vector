@@ -2,30 +2,17 @@
 
 from __future__ import annotations
 
-from typing import Protocol, Self
+from typing import Self
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from app.agent.contract import EvidenceCollectionFailure
 from app.agent.evidence_collection.external_search import ExternalSearchOutcome
-from app.agent.evidence_collection.internal_search.article_search import (
-    InternalArticleSearchHit,
-)
-from app.agent.evidence_collection.internal_search.query_embedding import (
-    InternalSearchQueries,
-)
+from app.agent.evidence_collection.internal_search import InternalArticleSearchHit
 
 __all__ = [
     "EvidenceCollectionOutcome",
-    "InternalArticleRetriever",
 ]
-
-
-class InternalArticleRetriever(Protocol):
-    async def search_articles(
-        self,
-        queries: InternalSearchQueries,
-    ) -> list[InternalArticleSearchHit]: ...
 
 
 class EvidenceCollectionOutcome(BaseModel):

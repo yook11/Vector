@@ -2,16 +2,17 @@
 
 from __future__ import annotations
 
-from datetime import datetime
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict, Field, ValidationError
+from pydantic import ValidationError
 from sqlalchemy import select
 from sqlalchemy.exc import InterfaceError, OperationalError
 from sqlalchemy.exc import TimeoutError as SQLAlchemyTimeoutError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.agent.evidence_collection.internal_search.contract import (
+    InternalArticleContent,
+    InternalArticleSearchHit,
     InternalSearchError,
 )
 from app.agent.evidence_collection.internal_search.query_embedding import (
@@ -24,60 +25,8 @@ from app.models.article_curation import ArticleCuration
 from app.models.category import Category
 
 __all__ = [
-    "InternalArticleContent",
-    "InternalArticleSearchHit",
     "PgVectorArticleSearchRepository",
 ]
-
-
-class InternalArticleContent(BaseModel):
-    """Answer-generation projection of an in-scope analyzed article."""
-
-    model_config = ConfigDict(frozen=True)
-
-    title: str = Field(min_length=1)
-    summary: str = Field(min_length=1)
-    key_points: list[str] = Field(default_factory=list)
-    mentions: list[str] = Field(default_factory=list)
-    published_at: datetime | None = None
-
-    @classmethod
-    def from_article(
-        cls,
-        article: InScopeAnalyzedArticle,
-        *,
-        published_at: datetime | None,
-    ) -> InternalArticleContent:
-        mention_surfaces: list[str] = []
-        seen_mentions: set[str] = set()
-        for key_point in article.assessment_result.key_points:
-            for mention in key_point.mentions:
-                key = mention.surface.casefold()
-                if key in seen_mentions:
-                    continue
-                seen_mentions.add(key)
-                mention_surfaces.append(mention.surface)
-
-        return cls(
-            title=article.title,
-            summary=article.summary,
-            key_points=[
-                key_point.content for key_point in article.assessment_result.key_points
-            ],
-            mentions=mention_surfaces,
-            published_at=published_at,
-        )
-
-
-class InternalArticleSearchHit(BaseModel):
-    """Internal vector search hit with the public /news article id."""
-
-    model_config = ConfigDict(frozen=True)
-
-    assessment_id: int = Field(gt=0)
-    article: InScopeAnalyzedArticle
-    content: InternalArticleContent
-    distance: float = Field(ge=0)
 
 
 class PgVectorArticleSearchRepository:

@@ -2,19 +2,25 @@
 
 from __future__ import annotations
 
+import importlib
 import json
-from typing import Any
+from dataclasses import fields, is_dataclass
+from types import ModuleType
+from typing import Any, Literal, get_args, get_origin, get_type_hints
 from unittest.mock import Mock
 
 import pytest
 from logfire.testing import CaptureLogfire
 
 import app.agent.evidence_collection.internal_search.service as service_module
-from app.agent.evidence_collection.internal_search.article_search import (
+from app.agent.evidence_collection.internal_search import (
     InternalArticleContent,
     InternalArticleSearchHit,
 )
-from app.agent.evidence_collection.internal_search.contract import InternalSearchError
+from app.agent.evidence_collection.internal_search.contract import (
+    InternalSearchError,
+    InternalSearchToolInput,
+)
 from app.agent.evidence_collection.internal_search.query_embedding import (
     InternalQueryEmbedding,
     InternalSearchQueries,
@@ -31,6 +37,21 @@ from tests.logfire._metric_helpers import collected_metrics, sum_counter_for_res
 
 _METRIC = "vector.agent.internal_retrieval.outcome"
 _CACHE_METRIC = "vector.agent.internal_retrieval.query_embedding_cache"
+
+
+def _internal_search_contract_module() -> ModuleType:
+    return importlib.import_module(
+        "app.agent.evidence_collection.internal_search.contract"
+    )
+
+
+def _required_attribute(module: ModuleType, name: str) -> Any:
+    if not hasattr(module, name):
+        pytest.fail(
+            f"internal search tool contract is missing: {module.__name__}.{name}",
+            pytrace=False,
+        )
+    return getattr(module, name)
 
 
 def _vector(value: float = 0.1) -> EmbeddingVector:
@@ -146,14 +167,6 @@ class FakeQueryEmbeddingCache:
         self.store_calls.append(embedding)
         if self.store_error is not None:
             raise self.store_error
-
-
-class FakeEventReporter:
-    def __init__(self) -> None:
-        self.events: list[Any] = []
-
-    async def event_occurred(self, event: Any) -> None:
-        self.events.append(event)
 
 
 def _metric_attributes(
@@ -306,16 +319,15 @@ class TestInternalSearchService:
             article_search_repository=search_repo,
         )
 
-        hits = await service.search_articles(
-            _queries("NVIDIA", "OpenAI"),
-            per_query_limit=4,
-            limit=5,
+        hits = await service.invoke(
+            InternalSearchToolInput(queries=_queries("NVIDIA", "OpenAI"))
         )
 
         assert [hit.article.title for hit in hits] == ["NVIDIA記事", "OpenAI記事"]
+        # invoke()は既定のper_query_limit(5)を使う。
         assert [(call.query, limit) for call, limit in search_repo.calls] == [
-            ("NVIDIA", 4),
-            ("OpenAI", 4),
+            ("NVIDIA", 5),
+            ("OpenAI", 5),
         ]
         assert _metric_attributes(collected_metrics(capfire), _METRIC) == [
             {"result": "succeeded", "query_count": 2}
@@ -330,7 +342,7 @@ class TestInternalSearchService:
             article_search_repository=FakeArticleVectorSearchRepository({}),
         )
 
-        hits = await service.search_articles(_queries("NVIDIA"))
+        hits = await service.invoke(InternalSearchToolInput(queries=_queries("NVIDIA")))
 
         assert hits == []
         assert _metric_attributes(collected_metrics(capfire), _METRIC) == [
@@ -351,7 +363,9 @@ class TestInternalSearchService:
         )
 
         with pytest.raises(InternalSearchError) as captured:
-            await service.search_articles(_queries("SECRET raw user question"))
+            await service.invoke(
+                InternalSearchToolInput(queries=_queries("SECRET raw user question"))
+            )
 
         assert captured.value.phase == "query_embedding"
         assert captured.value.__cause__ is provider_error
@@ -386,7 +400,9 @@ class TestInternalSearchService:
         )
 
         with pytest.raises(InternalSearchError) as captured:
-            await service.search_articles(_queries("SECRET raw user question"))
+            await service.invoke(
+                InternalSearchToolInput(queries=_queries("SECRET raw user question"))
+            )
 
         assert captured.value is repository_error
         assert _metric_attributes(collected_metrics(capfire), _METRIC) == [
@@ -409,7 +425,9 @@ class TestInternalSearchService:
         )
 
         with pytest.raises(RuntimeError, match="repository bug"):
-            await service.search_articles(_queries("SECRET raw user question"))
+            await service.invoke(
+                InternalSearchToolInput(queries=_queries("SECRET raw user question"))
+            )
 
         assert _metric_attributes(collected_metrics(capfire), _METRIC) == [
             {
@@ -419,12 +437,16 @@ class TestInternalSearchService:
             }
         ]
 
-    async def test_search_articles_reports_counts_without_query_text(self) -> None:
-        reporter = FakeEventReporter()
+    async def test_invoke_returns_hits_through_tool_port_without_event_reporter(
+        self,
+    ) -> None:
+        input_type = _required_attribute(
+            _internal_search_contract_module(), "InternalSearchToolInput"
+        )
         embedder = FakeInternalQueryEmbedder()
         search_repo = FakeArticleVectorSearchRepository(
             {
-                "SECRET raw user question": [
+                "NVIDIA": [
                     _article_hit(curation_id=1, title="NVIDIA記事", distance=0.1)
                 ],
             }
@@ -432,61 +454,78 @@ class TestInternalSearchService:
         service = InternalSearchService(
             embedder=embedder,
             article_search_repository=search_repo,
-            events=reporter,
         )
 
-        await service.search_articles(_queries("SECRET raw user question"))
+        hits = await service.invoke(input_type(queries=_queries("NVIDIA")))
 
-        assert [event.type for event in reporter.events] == [
-            "internal_search.started",
-            "internal_search.completed",
-        ]
-        assert reporter.events[0].query_count == 1
-        assert reporter.events[1].hit_count == 1
-        serialized = json.dumps(
-            [event.model_dump(mode="json") for event in reporter.events],
-            ensure_ascii=False,
-        )
-        assert "SECRET raw user question" not in serialized
+        assert [hit.article.title for hit in hits] == ["NVIDIA記事"]
 
     @pytest.mark.parametrize("kwargs", [{"limit": 0}, {"per_query_limit": 0}])
-    async def test_search_articles_limit_guard_returns_without_events(
+    async def test_search_articles_limit_guard_returns_empty_without_calling_repository(
         self,
         kwargs: dict[str, int],
     ) -> None:
-        reporter = FakeEventReporter()
+        """limit/per_query_limitはinvoke()から到達不能な実装policyのため直接検証する。"""
         search_repo = FakeArticleVectorSearchRepository({})
         service = InternalSearchService(
             embedder=FakeInternalQueryEmbedder(),
             article_search_repository=search_repo,
-            events=reporter,
         )
 
-        hits = await service.search_articles(_queries("NVIDIA"), **kwargs)
+        hits = await service._search_articles(_queries("NVIDIA"), **kwargs)
 
         assert hits == []
         assert search_repo.calls == []
-        assert reporter.events == []
 
-    async def test_search_articles_reports_zero_hits_when_embeddings_are_empty(
+    async def test_search_articles_returns_empty_hits_when_embeddings_are_empty(
         self,
     ) -> None:
-        reporter = FakeEventReporter()
         service = InternalSearchService(
             embedder=FakeInternalQueryEmbedder(empty_result=True),
             article_search_repository=FakeArticleVectorSearchRepository({}),
-            events=reporter,
         )
 
-        hits = await service.search_articles(_queries("SECRET fallback question"))
+        hits = await service.invoke(
+            InternalSearchToolInput(queries=_queries("SECRET fallback question"))
+        )
 
         assert hits == []
-        assert [event.type for event in reporter.events] == [
-            "internal_search.started",
-            "internal_search.completed",
-        ]
-        assert reporter.events[0].query_count == 1
-        assert reporter.events[1].hit_count == 0
+
+    def test_service_has_no_progress_event_reporter_field(self) -> None:
+        assert "events" not in {field.name for field in fields(InternalSearchService)}
+        with pytest.raises(TypeError):
+            InternalSearchService(  # type: ignore[call-arg]
+                embedder=FakeInternalQueryEmbedder(),
+                events=object(),
+            )
+
+    def test_internal_search_tool_is_stably_typed_like_external_search_tool(
+        self,
+    ) -> None:
+        contract_module = _internal_search_contract_module()
+        input_type = _required_attribute(contract_module, "InternalSearchToolInput")
+        tool_port = _required_attribute(contract_module, "InternalSearchTool")
+        tool_name_const = _required_attribute(
+            contract_module, "INTERNAL_SEARCH_TOOL_NAME"
+        )
+
+        assert is_dataclass(input_type)
+        assert input_type.__dataclass_params__.frozen
+        assert "__slots__" in input_type.__dict__
+        assert [field.name for field in fields(input_type)] == ["queries"]
+        assert get_type_hints(input_type) == {"queries": InternalSearchQueries}
+        assert get_type_hints(tool_port.invoke) == {
+            "input": input_type,
+            "return": list[InternalArticleSearchHit],
+        }
+        name_property = tool_port.__dict__["name"]
+        name_type = get_type_hints(name_property.fget)["return"]
+        assert get_origin(name_type) is Literal
+        assert get_args(name_type) == ("internal_search",)
+        assert tool_name_const == "internal_search"
+
+        service = InternalSearchService(embedder=FakeInternalQueryEmbedder())
+        assert service.name == "internal_search"
 
     async def test_search_articles_dedupes_by_curation_id_with_min_distance(
         self,
@@ -508,9 +547,9 @@ class TestInternalSearchService:
             article_search_repository=search_repo,
         )
 
-        hits = await service.search_articles(
-            _queries("NVIDIA", "OpenAI"),
-            limit=10,
+        # dedup後は2件のみのため既定limit(5)に収まり、invoke()経由で検証できる。
+        hits = await service.invoke(
+            InternalSearchToolInput(queries=_queries("NVIDIA", "OpenAI"))
         )
 
         assert [(hit.article.curation_id, hit.article.title) for hit in hits] == [

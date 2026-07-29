@@ -5,6 +5,7 @@ from __future__ import annotations
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from typing import Any
 from uuid import UUID
 
 import pytest
@@ -27,7 +28,7 @@ from app.agent.evidence_collection.external_search import (
     ExternalSearchOutcome,
     ResearchTaskReport,
 )
-from app.agent.evidence_collection.internal_search.article_search import (
+from app.agent.evidence_collection.internal_search import (
     InternalArticleContent,
     InternalArticleSearchHit,
 )
@@ -278,13 +279,14 @@ class FakeInternalSearch:
         self._timeline = timeline
         self.calls: list[InternalSearchQueries] = []
 
-    async def search_articles(
-        self,
-        queries: InternalSearchQueries,
-    ) -> list[InternalArticleSearchHit]:
+    @property
+    def name(self) -> str:
+        return "internal_search"
+
+    async def invoke(self, input: Any) -> list[InternalArticleSearchHit]:
         if self._timeline is not None:
             self._timeline.record("internal_search.search_articles")
-        self.calls.append(queries)
+        self.calls.append(input.queries)
         if isinstance(self._outcome, Exception):
             raise self._outcome
         if "internal_search" in self._outcome.collection_failures:

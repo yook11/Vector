@@ -121,8 +121,12 @@ class _Planner:
 
 
 class _EmptyInternalSearch:
-    async def search_articles(self, queries: object) -> list[object]:
-        del queries
+    @property
+    def name(self) -> str:
+        return "internal_search"
+
+    async def invoke(self, input: object) -> list[object]:
+        del input
         return []
 
 

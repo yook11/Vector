@@ -30,6 +30,8 @@ from app.agent.contract import (
     ExternalSearchCandidatesFetchedEvent,
     ExternalSearchEvidenceSelectedEvent,
     ExternalSearchQueriesGeneratedEvent,
+    InternalSearchCompletedEvent,
+    InternalSearchStartedEvent,
 )
 from app.agent.evidence_collection.contract import EvidenceCollectionOutcome
 from app.agent.evidence_collection.external_search.agent import (
@@ -74,10 +76,11 @@ from app.agent.evidence_collection.external_search.time_filter import (
     ExternalSearchDateFilterResolutionError,
     resolve_external_search_date_filter,
 )
-from app.agent.evidence_collection.internal_search.article_search import (
+from app.agent.evidence_collection.internal_search.contract import (
     InternalArticleSearchHit,
+    InternalSearchError,
+    InternalSearchToolInput,
 )
-from app.agent.evidence_collection.internal_search.contract import InternalSearchError
 from app.agent.evidence_collection.internal_search.query_embedding import (
     InternalSearchQueries,
 )
@@ -291,10 +294,17 @@ class AnsweringRunner:
         phases: AnsweringPhases,
         queries: InternalSearchQueries,
     ) -> tuple[list[InternalArticleSearchHit], bool]:
+        await self._report_event(
+            InternalSearchStartedEvent(query_count=len(queries.queries))
+        )
         try:
-            return await phases.internal_search.search_articles(queries), False
+            hits = await phases.internal_search.invoke(
+                InternalSearchToolInput(queries=queries)
+            )
         except InternalSearchError:
             return [], True
+        await self._report_event(InternalSearchCompletedEvent(hit_count=len(hits)))
+        return hits, False
 
     async def _collect_external(
         self,

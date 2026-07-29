@@ -541,10 +541,11 @@ def test_build_answering_phases_wires_planner_to_shared_gemini_runtime_scope(
         (article_search, "PgVectorArticleSearchRepository"),
     ):
         monkeypatch.setattr(module, name, _KeywordObject)
+    internal_search_calls: list[dict[str, object]] = []
     monkeypatch.setattr(
         internal_service,
         "InternalSearchService",
-        lambda **_kwargs: internal_search,
+        lambda **kwargs: internal_search_calls.append(kwargs) or internal_search,
     )
 
     phases = composition._build_answering_phases(
@@ -554,6 +555,10 @@ def test_build_answering_phases_wires_planner_to_shared_gemini_runtime_scope(
     assert isinstance(phases, AnsweringPhases)
     assert phases.internal_search is internal_search
     assert phases.external_runtime_factory is external_runtime_factory
+    assert set(internal_search_calls[0]) == {
+        "embedder",
+        "article_search_repository",
+    }
     assert planner_calls == [
         {
             "agent": QUESTION_PLANNER_AGENT,
@@ -615,7 +620,6 @@ def test_build_answering_runner_captures_phase_dependencies_without_building_the
     assert captured == [
         {
             "session_factory": session_factory,
-            "events": events,
             "delta_reporter": delta_reporter,
             "continuation": continuation,
         }

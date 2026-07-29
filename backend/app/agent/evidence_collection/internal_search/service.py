@@ -7,17 +7,12 @@ from typing import Protocol
 
 import structlog
 
-from app.agent.contract import (
-    AnswerEventReporter,
-    AnswerProgressEvent,
-    InternalSearchCompletedEvent,
-    InternalSearchStartedEvent,
-)
-from app.agent.evidence_collection.internal_search.article_search import (
-    InternalArticleSearchHit,
-)
 from app.agent.evidence_collection.internal_search.contract import (
+    INTERNAL_SEARCH_TOOL_NAME,
+    InternalArticleSearchHit,
     InternalSearchError,
+    InternalSearchToolInput,
+    InternalSearchToolName,
 )
 from app.agent.evidence_collection.internal_search.metrics import (
     record_internal_retrieval_outcome,
@@ -59,12 +54,21 @@ class InternalQueryEmbeddingCache(Protocol):
 
 @dataclass(frozen=True, slots=True)
 class InternalSearchService:
-    """Agent-facing internal search entrypoint for this query-embedding slice."""
+    """Internal Search Tool contract (`InternalSearchTool`) の実装。"""
 
     embedder: InternalQueryEmbedder
     article_search_repository: ArticleVectorSearchRepository | None = None
     query_embedding_cache: InternalQueryEmbeddingCache | None = None
-    events: AnswerEventReporter | None = None
+
+    @property
+    def name(self) -> InternalSearchToolName:
+        return INTERNAL_SEARCH_TOOL_NAME
+
+    async def invoke(
+        self,
+        input: InternalSearchToolInput,
+    ) -> list[InternalArticleSearchHit]:
+        return await self._search_articles(input.queries)
 
     async def embed_queries(
         self,
@@ -101,7 +105,7 @@ class InternalSearchService:
         ]
         return embeddings
 
-    async def search_articles(
+    async def _search_articles(
         self,
         queries: InternalSearchQueries,
         *,
@@ -113,9 +117,6 @@ class InternalSearchService:
         if self.article_search_repository is None:
             raise RuntimeError("article_search_repository is required")
 
-        await self._report_event(
-            InternalSearchStartedEvent(query_count=len(queries.queries))
-        )
         try:
             embeddings = await self.embed_queries(queries)
             best_by_curation_id: dict[int, InternalArticleSearchHit] = {}
@@ -154,7 +155,6 @@ class InternalSearchService:
             result="succeeded" if hits else "empty",
             query_count=len(queries.queries),
         )
-        await self._report_event(InternalSearchCompletedEvent(hit_count=len(hits)))
         return hits
 
     async def _fetch_cached_query_vectors(
@@ -186,8 +186,3 @@ class InternalSearchService:
                     result="save_failed",
                     query_count=1,
                 )
-
-    async def _report_event(self, event: AnswerProgressEvent) -> None:
-        if self.events is None:
-            return
-        await self.events.event_occurred(event)

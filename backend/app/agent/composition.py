@@ -69,7 +69,6 @@ async def activate_gemini_agent_runtime() -> AsyncIterator[GeminiAgentRuntime]:
 def _build_answering_phases(
     *,
     session_factory: async_sessionmaker[AsyncSession],
-    events: AnswerEventReporter | None = None,
     delta_reporter: AnswerDeltaReporter | None = None,
     continuation: AnswerGenerationContinuation | None = None,
 ) -> AnsweringPhases:
@@ -92,7 +91,6 @@ def _build_answering_phases(
     internal_search = InternalSearchService(
         embedder=GeminiQueryEmbedder(),
         article_search_repository=PgVectorArticleSearchRepository(session_factory),
-        events=events,
     )
     return AnsweringPhases(
         planner=QuestionPlanningService(
@@ -141,7 +139,6 @@ def build_answering_runner(
         ),
         phases_factory=lambda: _build_answering_phases(
             session_factory=session_factory,
-            events=events,
             delta_reporter=delta_reporter,
             continuation=continuation,
         ),
