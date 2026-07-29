@@ -819,6 +819,10 @@ export type ResearchRunInternalSearchCompletedEvent = {
      */
     ts: string;
     /**
+     * Taskindex
+     */
+    taskIndex: number;
+    /**
      * Hitcount
      */
     hitCount: number;
@@ -836,6 +840,10 @@ export type ResearchRunInternalSearchStartedEvent = {
      * Ts
      */
     ts: string;
+    /**
+     * Taskindex
+     */
+    taskIndex: number;
     /**
      * Querycount
      */
