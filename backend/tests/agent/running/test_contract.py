@@ -16,6 +16,7 @@ import pytest
 from app.agent.answering.direct_answer.contract import DirectAnswerer
 from app.agent.answering.evidence_answer.contract import EvidenceAnswerer
 from app.agent.contract import AnswerQuestionResult
+from app.agent.evidence_collection import Researcher
 from app.agent.evidence_collection.external_search import ExternalResearchRuntimeFactory
 from app.agent.planning.contract import QuestionPlanner
 from app.agent.question_context import (
@@ -92,15 +93,6 @@ def _method_contract(
         for parameter in signature.parameters.values()
     )
     return parameters, type_hints["return"]
-
-
-def _internal_search_tool_type() -> type[Any]:
-    module_name = "app.agent.evidence_collection.internal_search.contract"
-    module = importlib.import_module(module_name)
-    tool_type = getattr(module, "InternalSearchTool", None)
-    if tool_type is None:
-        pytest.fail(f"{module_name} must define InternalSearchTool", pytrace=False)
-    return tool_type
 
 
 def _run_context() -> object:
@@ -324,10 +316,10 @@ def test_run_hooks_protocol_exposes_only_resolved_question_projection() -> None:
     )
 
 
-def test_answering_phases_owns_runtime_without_external_search_port() -> None:
+def test_answering_phases_owns_researcher_without_internal_search_port() -> None:
+    """保証するテスト条件 18: AnsweringPhasesはresearcher fieldでtask単位収集を持つ。"""
     phases_type = _contract_type("AnsweringPhases")
     signature = inspect.signature(phases_type)
-    internal_search_tool_type = _internal_search_tool_type()
 
     assert (
         _field_contract(phases_type),
@@ -339,14 +331,14 @@ def test_answering_phases_owns_runtime_without_external_search_port() -> None:
     ) == (
         (
             ("planner", QuestionPlanner),
-            ("internal_search", internal_search_tool_type),
+            ("researcher", Researcher),
             ("external_runtime_factory", ExternalResearchRuntimeFactory),
             ("direct_answerer", DirectAnswerer),
             ("evidence_answerer", EvidenceAnswerer),
         ),
         (
             "planner",
-            "internal_search",
+            "researcher",
             "external_runtime_factory",
             "direct_answerer",
             "evidence_answerer",

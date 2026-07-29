@@ -35,6 +35,7 @@ from app.agent.contract import (
     ExternalSearchEvidenceSelectedEvent,
     ExternalSearchQueriesGeneratedEvent,
 )
+from app.agent.evidence_collection import Researcher
 from app.agent.evidence_collection.internal_search.ai.gemini import (
     GeminiQueryEmbedder,
 )
@@ -229,7 +230,7 @@ async def _probe_search(
         ),
         phases_factory=lambda: AnsweringPhases(
             planner=_FixedSearchPlanner(plan),
-            internal_search=internal_search,
+            researcher=Researcher(internal_search=internal_search, events=events),
             external_runtime_factory=build_external_research_runtime_factory(),
             evidence_answerer=EvidenceAnswerFlow(
                 agent=EVIDENCE_ANSWER_AGENT,
@@ -273,7 +274,7 @@ async def _probe_direct(*, question: str) -> None:
         ),
         phases_factory=lambda: AnsweringPhases(
             planner=_FixedDirectPlanner(DirectAnswerPlan()),
-            internal_search=_UnreachableInternalSearch(),
+            researcher=Researcher(internal_search=_UnreachableInternalSearch()),
             external_runtime_factory=_UnreachableExternalRuntimeFactory(),
             evidence_answerer=_UnreachableEvidenceAnswerer(),
             direct_answerer=DirectAnswerFlow(
@@ -337,7 +338,7 @@ def _print_plan_summary(
     print(f"  plan_type={plan.plan_type}")
     print(f"  target_time_window={plan.target_time_window or ''}")
     print(f"  requested_agent_count={requested_agent_count}")
-    print(f"  planned_task_count={len(plan.external_research_tasks)}")
+    print(f"  planned_task_count={len(plan.research_tasks)}")
     print(f"  collection_failures={list(collection_failures)}")
     print()
     _print_external_progress(events)

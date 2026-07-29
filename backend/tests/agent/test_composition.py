@@ -507,6 +507,7 @@ def test_build_answering_phases_wires_planner_to_shared_gemini_runtime_scope(
     evidence_calls: list[dict[str, object]] = []
     external_runtime_factory = object()
     internal_search = object()
+    events = object()
 
     class _PlannerSpy(_KeywordObject):
         def __init__(self, **kwargs: object) -> None:
@@ -550,10 +551,14 @@ def test_build_answering_phases_wires_planner_to_shared_gemini_runtime_scope(
 
     phases = composition._build_answering_phases(
         session_factory=object(),
+        events=events,
     )
 
     assert isinstance(phases, AnsweringPhases)
-    assert phases.internal_search is internal_search
+    # Researcherがinternal_search Toolを包み、events(段2でserviceに渡さないと
+    # した進捗reporter)はここで初めてResearcherへ渡る。
+    assert phases.researcher.internal_search is internal_search
+    assert phases.researcher.events is events
     assert phases.external_runtime_factory is external_runtime_factory
     assert set(internal_search_calls[0]) == {
         "embedder",
@@ -620,6 +625,7 @@ def test_build_answering_runner_captures_phase_dependencies_without_building_the
     assert captured == [
         {
             "session_factory": session_factory,
+            "events": events,
             "delta_reporter": delta_reporter,
             "continuation": continuation,
         }

@@ -21,6 +21,7 @@ from app.agent.contract import (
     AnswerGenerationContinuation,
     AnswerProgressReporter,
 )
+from app.agent.evidence_collection import Researcher
 from app.agent.evidence_collection.external_search.contract import (
     ExternalResearchRuntime,
     ExternalResearchRuntimeFactory,
@@ -69,6 +70,7 @@ async def activate_gemini_agent_runtime() -> AsyncIterator[GeminiAgentRuntime]:
 def _build_answering_phases(
     *,
     session_factory: async_sessionmaker[AsyncSession],
+    events: AnswerEventReporter | None = None,
     delta_reporter: AnswerDeltaReporter | None = None,
     continuation: AnswerGenerationContinuation | None = None,
 ) -> AnsweringPhases:
@@ -97,7 +99,7 @@ def _build_answering_phases(
             agent=QUESTION_PLANNER_AGENT,
             runtime_scope_factory=activate_gemini_agent_runtime,
         ),
-        internal_search=internal_search,
+        researcher=Researcher(internal_search=internal_search, events=events),
         external_runtime_factory=external_runtime_factory,
         direct_answerer=DirectAnswerFlow(
             agent=DIRECT_ANSWER_AGENT,
@@ -139,6 +141,7 @@ def build_answering_runner(
         ),
         phases_factory=lambda: _build_answering_phases(
             session_factory=session_factory,
+            events=events,
             delta_reporter=delta_reporter,
             continuation=continuation,
         ),

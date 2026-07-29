@@ -154,8 +154,8 @@ async def test_all_contract_event_types_round_trip_through_api_schema() -> None:
         publisher = AgentRunLiveEventPublisher(redis, run_id)
         reader = AgentRunLiveEventReader(redis)
         events = [
-            InternalSearchStartedEvent(query_count=2),
-            InternalSearchCompletedEvent(hit_count=3),
+            InternalSearchStartedEvent(task_index=0, query_count=2),
+            InternalSearchCompletedEvent(task_index=0, hit_count=3),
             ExternalSearchQueriesGeneratedEvent(
                 task_index=0,
                 queries=["NVIDIA AI"],
@@ -186,7 +186,9 @@ async def test_all_contract_event_types_round_trip_through_api_schema() -> None:
             "external_search.evidence_selected",
             "question.resolved",
         ]
+        assert recent_events[0].task_index == 0
         assert recent_events[0].query_count == 2
+        assert recent_events[1].task_index == 0
         assert recent_events[1].hit_count == 3
         assert recent_events[2].queries == ["NVIDIA AI"]
         assert recent_events[3].candidate_count == 8
@@ -292,6 +294,7 @@ async def test_reader_returns_oldest_first_and_skips_bad_entries() -> None:
     older = {
         "type": "internal_search.completed",
         "ts": "2026-07-09T01:00:00+00:00",
+        "task_index": 0,
         "hit_count": 4,
     }
     newer = {
@@ -321,6 +324,7 @@ async def test_reader_returns_oldest_first_and_skips_bad_entries() -> None:
         "external_search.queries_generated",
     ]
     assert events[0].ts == datetime(2026, 7, 9, 1, 0, tzinfo=UTC)
+    assert events[0].task_index == 0
     assert events[1].task_index == 0
     assert events[1].queries == ["NVIDIA AI"]
 

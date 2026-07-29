@@ -18,7 +18,7 @@ from app.agent.answering.evidence_answer.contract import (
     EvidenceAnswerDraftInvalidError,
 )
 from app.agent.contract import AnswerQuestionResult, ExternalUrlSource
-from app.agent.evidence_collection import EvidenceCollectionOutcome
+from app.agent.evidence_collection import EvidenceCollectionOutcome, Researcher
 from app.agent.evidence_collection.external_search import (
     ExternalEvidenceSelectionDraft,
     ExternalQueryDraft,
@@ -371,7 +371,7 @@ def _external_runtime_for(
     candidates_by_query: dict[str, list[ExternalSearchCandidate]] = {}
     drafts_by_goal: dict[str, ExternalEvidenceSelectionDraft] = {}
 
-    for task_index, task in enumerate(plan.external_research_tasks):
+    for task_index, task in enumerate(plan.research_tasks):
         query = f"fixture-query-{task_index}"
         task_evidence = evidence_by_task.get(task_index, [])
         candidates = [
@@ -582,7 +582,7 @@ def _orchestrator(
     direct_answerer = FakeDirectAnswerer(direct_draft, timeline=timeline)
     phases = AnsweringPhases(
         planner=planner,
-        internal_search=internal_search,
+        researcher=Researcher(internal_search=internal_search),
         external_runtime_factory=FakeExternalRuntimeFactory(
             external_runtime,
             timeline=timeline,

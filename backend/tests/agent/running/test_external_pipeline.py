@@ -18,6 +18,7 @@ import app.agent.planning.contract as planning_contract
 from app.agent.answering.contract import AnsweringRequest
 from app.agent.answering.direct_answer.contract import DirectAnswerDraft
 from app.agent.answering.evidence_answer.contract import EvidenceAnswerDraft
+from app.agent.evidence_collection import Researcher
 from app.agent.evidence_collection.external_search import (
     ExternalResearchRuntime,
     ExternalSearchCandidate,
@@ -406,7 +407,7 @@ def _runner(
         planner=_Planner(
             _plan(tasks, target_time_window=target_time_window),
         ),
-        internal_search=_EmptyInternalSearch(),
+        researcher=Researcher(internal_search=_EmptyInternalSearch(), events=events),
         external_runtime_factory=factory,
         direct_answerer=_UnreachableDirectAnswerer(),
         evidence_answerer=answerer,
@@ -486,9 +487,10 @@ def test_answering_runner_accepts_external_event_and_requested_count_dependencie
 
 
 def test_answering_phases_owns_runtime_factory_without_external_search_port() -> None:
+    """保証するテスト条件 18(重複所有): field名のみのraw dataclass field確認。"""
     assert tuple(AnsweringPhases.__dataclass_fields__) == (
         "planner",
-        "internal_search",
+        "researcher",
         "external_runtime_factory",
         "direct_answerer",
         "evidence_answerer",
@@ -1537,7 +1539,7 @@ async def test_cross_task_dedupe_keeps_first_and_scope_is_fresh_per_run() -> Non
     factory = _Factory([first_runtime, second_runtime])
     phases = AnsweringPhases(
         planner=_Planner(_plan(tasks)),
-        internal_search=_EmptyInternalSearch(),
+        researcher=Researcher(internal_search=_EmptyInternalSearch()),
         external_runtime_factory=factory,
         direct_answerer=_UnreachableDirectAnswerer(),
         evidence_answerer=answerer,
