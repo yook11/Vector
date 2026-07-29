@@ -495,7 +495,7 @@ def test_build_answering_phases_wires_planner_to_shared_gemini_runtime_scope(
         article_search,
     )
     from app.agent.evidence_collection.internal_search import (
-        service as internal_service,
+        tool as internal_tool,
     )
     from app.agent.evidence_collection.internal_search.ai import (
         gemini as embedding_gemini,
@@ -544,8 +544,8 @@ def test_build_answering_phases_wires_planner_to_shared_gemini_runtime_scope(
         monkeypatch.setattr(module, name, _KeywordObject)
     internal_search_calls: list[dict[str, object]] = []
     monkeypatch.setattr(
-        internal_service,
-        "InternalSearchService",
+        internal_tool,
+        "PgVectorInternalSearchTool",
         lambda **kwargs: internal_search_calls.append(kwargs) or internal_search,
     )
 

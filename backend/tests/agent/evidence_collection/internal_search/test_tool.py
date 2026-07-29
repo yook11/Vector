@@ -1,4 +1,4 @@
-"""Internal search service query embedding tests."""
+"""Internal search tool query embedding tests."""
 
 from __future__ import annotations
 
@@ -12,7 +12,7 @@ from unittest.mock import Mock
 import pytest
 from logfire.testing import CaptureLogfire
 
-import app.agent.evidence_collection.internal_search.service as service_module
+import app.agent.evidence_collection.internal_search.tool as tool_module
 from app.agent.evidence_collection.internal_search import (
     InternalArticleContent,
     InternalArticleSearchHit,
@@ -25,7 +25,9 @@ from app.agent.evidence_collection.internal_search.query_embedding import (
     InternalQueryEmbedding,
     InternalSearchQueries,
 )
-from app.agent.evidence_collection.internal_search.service import InternalSearchService
+from app.agent.evidence_collection.internal_search.tool import (
+    PgVectorInternalSearchTool,
+)
 from app.analysis.ai_provider_errors import AIProviderError
 from app.analysis.analyzed_article import InScopeAnalyzedArticle
 from app.analysis.assessment.domain.result import InScope, InScopeCategory
@@ -181,13 +183,13 @@ def _metric_attributes(
     ]
 
 
-class TestInternalSearchService:
+class TestPgVectorInternalSearchTool:
     async def test_embed_queries_embeds_normalized_queries(
         self,
         capfire: CaptureLogfire,
     ) -> None:
         embedder = FakeInternalQueryEmbedder()
-        service = InternalSearchService(embedder=embedder)
+        service = PgVectorInternalSearchTool(embedder=embedder)
 
         embeddings = await service.embed_queries(_queries("NVIDIA", "OpenAI", "Apple"))
 
@@ -209,7 +211,7 @@ class TestInternalSearchService:
         capfire: CaptureLogfire,
     ) -> None:
         embedder = FakeInternalQueryEmbedder(empty_result=True)
-        service = InternalSearchService(embedder=embedder)
+        service = PgVectorInternalSearchTool(embedder=embedder)
 
         embeddings = await service.embed_queries(_queries("NVIDIA"))
 
@@ -221,7 +223,7 @@ class TestInternalSearchService:
         capfire: CaptureLogfire,
     ) -> None:
         embedder = FakeInternalQueryEmbedder(error=RuntimeError("embedder down"))
-        service = InternalSearchService(embedder=embedder)
+        service = PgVectorInternalSearchTool(embedder=embedder)
 
         with pytest.raises(RuntimeError, match="embedder down"):
             await service.embed_queries(_queries("NVIDIA secret query"))
@@ -234,7 +236,7 @@ class TestInternalSearchService:
     async def test_embed_queries_uses_cache_hit_without_embedder(self) -> None:
         embedder = FakeInternalQueryEmbedder()
         cache = FakeQueryEmbeddingCache(cached={"NVIDIA": _vector(0.8)})
-        service = InternalSearchService(
+        service = PgVectorInternalSearchTool(
             embedder=embedder,
             query_embedding_cache=cache,
         )
@@ -252,7 +254,7 @@ class TestInternalSearchService:
     ) -> None:
         embedder = FakeInternalQueryEmbedder()
         cache = FakeQueryEmbeddingCache(cached={"NVIDIA": _vector(0.8)})
-        service = InternalSearchService(
+        service = PgVectorInternalSearchTool(
             embedder=embedder,
             query_embedding_cache=cache,
         )
@@ -269,7 +271,7 @@ class TestInternalSearchService:
     ) -> None:
         embedder = FakeInternalQueryEmbedder()
         cache = FakeQueryEmbeddingCache(fetch_error=RuntimeError("db down"))
-        service = InternalSearchService(
+        service = PgVectorInternalSearchTool(
             embedder=embedder,
             query_embedding_cache=cache,
         )
@@ -287,7 +289,7 @@ class TestInternalSearchService:
     ) -> None:
         embedder = FakeInternalQueryEmbedder()
         cache = FakeQueryEmbeddingCache(store_error=RuntimeError("db down"))
-        service = InternalSearchService(
+        service = PgVectorInternalSearchTool(
             embedder=embedder,
             query_embedding_cache=cache,
         )
@@ -314,7 +316,7 @@ class TestInternalSearchService:
                 ],
             }
         )
-        service = InternalSearchService(
+        service = PgVectorInternalSearchTool(
             embedder=embedder,
             article_search_repository=search_repo,
         )
@@ -337,7 +339,7 @@ class TestInternalSearchService:
         self,
         capfire: CaptureLogfire,
     ) -> None:
-        service = InternalSearchService(
+        service = PgVectorInternalSearchTool(
             embedder=FakeInternalQueryEmbedder(),
             article_search_repository=FakeArticleVectorSearchRepository({}),
         )
@@ -355,9 +357,9 @@ class TestInternalSearchService:
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         warning = Mock()
-        monkeypatch.setattr(service_module.logger, "warning", warning)
+        monkeypatch.setattr(tool_module.logger, "warning", warning)
         provider_error = AIProviderError("SECRET provider message")
-        service = InternalSearchService(
+        service = PgVectorInternalSearchTool(
             embedder=FakeInternalQueryEmbedder(error=provider_error),
             article_search_repository=FakeArticleVectorSearchRepository({}),
         )
@@ -392,7 +394,7 @@ class TestInternalSearchService:
         capfire: CaptureLogfire,
     ) -> None:
         repository_error = InternalSearchError(phase="article_search")
-        service = InternalSearchService(
+        service = PgVectorInternalSearchTool(
             embedder=FakeInternalQueryEmbedder(),
             article_search_repository=FakeArticleVectorSearchRepository(
                 {}, error=repository_error
@@ -417,7 +419,7 @@ class TestInternalSearchService:
         self,
         capfire: CaptureLogfire,
     ) -> None:
-        service = InternalSearchService(
+        service = PgVectorInternalSearchTool(
             embedder=FakeInternalQueryEmbedder(),
             article_search_repository=FakeArticleVectorSearchRepository(
                 {}, error=RuntimeError("repository bug")
@@ -451,7 +453,7 @@ class TestInternalSearchService:
                 ],
             }
         )
-        service = InternalSearchService(
+        service = PgVectorInternalSearchTool(
             embedder=embedder,
             article_search_repository=search_repo,
         )
@@ -467,7 +469,7 @@ class TestInternalSearchService:
     ) -> None:
         """limit/per_query_limitはinvoke()から到達不能な実装policyのため直接検証する。"""
         search_repo = FakeArticleVectorSearchRepository({})
-        service = InternalSearchService(
+        service = PgVectorInternalSearchTool(
             embedder=FakeInternalQueryEmbedder(),
             article_search_repository=search_repo,
         )
@@ -480,7 +482,7 @@ class TestInternalSearchService:
     async def test_search_articles_returns_empty_hits_when_embeddings_are_empty(
         self,
     ) -> None:
-        service = InternalSearchService(
+        service = PgVectorInternalSearchTool(
             embedder=FakeInternalQueryEmbedder(empty_result=True),
             article_search_repository=FakeArticleVectorSearchRepository({}),
         )
@@ -492,9 +494,11 @@ class TestInternalSearchService:
         assert hits == []
 
     def test_service_has_no_progress_event_reporter_field(self) -> None:
-        assert "events" not in {field.name for field in fields(InternalSearchService)}
+        assert "events" not in {
+            field.name for field in fields(PgVectorInternalSearchTool)
+        }
         with pytest.raises(TypeError):
-            InternalSearchService(  # type: ignore[call-arg]
+            PgVectorInternalSearchTool(  # type: ignore[call-arg]
                 embedder=FakeInternalQueryEmbedder(),
                 events=object(),
             )
@@ -524,7 +528,7 @@ class TestInternalSearchService:
         assert get_args(name_type) == ("internal_search",)
         assert tool_name_const == "internal_search"
 
-        service = InternalSearchService(embedder=FakeInternalQueryEmbedder())
+        service = PgVectorInternalSearchTool(embedder=FakeInternalQueryEmbedder())
         assert service.name == "internal_search"
 
     async def test_search_articles_dedupes_by_curation_id_with_min_distance(
@@ -542,7 +546,7 @@ class TestInternalSearchService:
                 ],
             }
         )
-        service = InternalSearchService(
+        service = PgVectorInternalSearchTool(
             embedder=embedder,
             article_search_repository=search_repo,
         )
