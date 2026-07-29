@@ -102,6 +102,7 @@ class InternalSearchStartedEvent(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     type: Literal["internal_search.started"] = "internal_search.started"
+    task_index: int = Field(ge=0)
     query_count: int = Field(ge=0)
 
 
@@ -109,6 +110,7 @@ class InternalSearchCompletedEvent(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     type: Literal["internal_search.completed"] = "internal_search.completed"
+    task_index: int = Field(ge=0)
     hit_count: int = Field(ge=0)
 
 

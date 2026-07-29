@@ -79,12 +79,14 @@ ResearchProgressStage = Literal["planning", "retrieving", "synthesizing"]
 class ResearchRunInternalSearchStartedEvent(_CamelBase):
     type: Literal["internal_search.started"]
     ts: datetime
+    task_index: int = Field(ge=0)
     query_count: int = Field(ge=0)
 
 
 class ResearchRunInternalSearchCompletedEvent(_CamelBase):
     type: Literal["internal_search.completed"]
     ts: datetime
+    task_index: int = Field(ge=0)
     hit_count: int = Field(ge=0)
 
 
