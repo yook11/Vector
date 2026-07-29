@@ -1,0 +1,15 @@
+# cp terraform.tfvars.example terraform.tfvars して埋める。
+# account ID は書かない (data.aws_caller_identity から取る)。
+
+github_owner = "your-github-owner"
+github_repo  = "your-repo-name"
+
+# terraform apply を許す GitHub Environment。
+# この Environment に required reviewer を設定しないと、承認の意味が無い。
+# deploy_environment = "production"
+
+# region = "ap-northeast-1"
+
+# レジストラで取得済みのドメイン。hosted zone をここで作り、
+# 出力される NS 4 本をレジストラ側に設定して委任する。
+root_domain = "example.com"
