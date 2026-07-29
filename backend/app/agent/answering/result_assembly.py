@@ -13,7 +13,6 @@ from app.agent.contract import (
     AnswerPlanSummary,
     AnswerQuestionResult,
     AnswerSource,
-    EvidenceCollectionFailure,
 )
 from app.agent.evidence_collection import EvidenceCollectionOutcome
 from app.agent.planning.contract import SearchPlan
@@ -23,10 +22,7 @@ __all__ = ["assemble_evidence_result"]
 
 _RETRIEVAL_EMPTY_MISSING = "回答に使える根拠を取得できませんでした"
 _REQUIREMENT_MISSING_PREFIX = "回答要望を満たせませんでした: "
-_COLLECTION_FAILURE_MISSING: dict[EvidenceCollectionFailure, str] = {
-    "internal_search": "内部記事検索を完了できませんでした",
-    "external_search": "外部検索を完了できませんでした",
-}
+_INCOMPLETE_TASK_MISSING = "完了できなかった調査があります"
 _EXTERNAL_TASK_STATUS_MISSING = {
     "time_filter_failed": "指定された公開期間を外部検索へ適用できませんでした",
 }
@@ -123,35 +119,23 @@ def _assemble_evidence_result(
         requirement_missing_aspects=requirement_missing_aspects,
         include_retrieval_empty_missing=include_retrieval_empty_missing,
     )
-    status = _derive_evidence_status(
-        plan=plan,
-        sources=sources,
-        missing_aspects=missing_aspects,
-        outcome=outcome,
-    )
-    if status == "answered":
-        missing_aspects = []
+    status = _derive_evidence_status(sources=sources, missing_aspects=missing_aspects)
 
     return AnswerQuestionResult(
         status=status,
         answer=answer,
         sources=sources,
         missing_aspects=missing_aspects,
-        plan_summary=AnswerPlanSummary(
-            plan_type=plan.plan_type,
-            collection_failures=outcome.collection_failures,
-        ),
+        plan_summary=AnswerPlanSummary(plan_type=plan.plan_type),
     )
 
 
 def _derive_evidence_status(
     *,
-    plan: SearchPlan,
     sources: list[AnswerSource],
     missing_aspects: list[str],
-    outcome: EvidenceCollectionOutcome,
 ) -> Literal["answered", "insufficient"]:
-    if outcome.collection_failures or missing_aspects:
+    if missing_aspects:
         return "insufficient"
     if not sources:
         return "insufficient"
@@ -168,24 +152,27 @@ def _missing_aspects(
     values: list[str] = []
     if include_retrieval_empty_missing:
         values.append(_RETRIEVAL_EMPTY_MISSING)
-    values.extend(
-        _COLLECTION_FAILURE_MISSING[failure] for failure in outcome.collection_failures
-    )
+    if _has_incomplete_task(outcome):
+        values.append(_INCOMPLETE_TASK_MISSING)
     values.extend(_external_task_missing(outcome))
     values.extend(draft_missing_aspects)
     values.extend(requirement_missing_aspects)
     return _deduplicate(values)
 
 
+def _has_incomplete_task(outcome: EvidenceCollectionOutcome) -> bool:
+    return any(
+        report.review in ("failed", "skipped_empty") for report in outcome.task_reports
+    )
+
+
 def _external_task_missing(outcome: EvidenceCollectionOutcome) -> list[str]:
-    if outcome.external_search is None:
-        return []
     missing: list[str] = []
     for report in sorted(
-        outcome.external_search.task_reports,
+        outcome.task_reports,
         key=lambda report: report.task_index,
     ):
-        status_missing = _EXTERNAL_TASK_STATUS_MISSING.get(report.status)
+        status_missing = _EXTERNAL_TASK_STATUS_MISSING.get(report.external_collection)
         if status_missing is not None:
             missing.append(status_missing)
         missing.extend(report.missing)
@@ -195,14 +182,9 @@ def _external_task_missing(outcome: EvidenceCollectionOutcome) -> list[str]:
 def _all_external_tasks_time_filter_failed(
     outcome: EvidenceCollectionOutcome,
 ) -> bool:
-    external_search = outcome.external_search
-    return (
-        external_search is not None
-        and bool(external_search.task_reports)
-        and all(
-            report.status == "time_filter_failed"
-            for report in external_search.task_reports
-        )
+    return bool(outcome.task_reports) and all(
+        report.external_collection == "time_filter_failed"
+        for report in outcome.task_reports
     )
 
 
