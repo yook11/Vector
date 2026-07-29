@@ -13,6 +13,11 @@ DNS pin は ``_PinnedDnsTransport`` が送信直前に host を resolve し、�
 検証したうえで最初の IP へ TCP 接続先を固定する。Host header と TLS SNI は元 host
 を保持するため、validate と connect の間で DNS 応答が変わっても TOCTOU が成立しない。
 
+egress proxy 経由の構成 (``proxy=...``) では接続先を書き換えず、host 名のまま proxy へ
+渡す。httpcore が CONNECT トンネルに ``sni_hostname`` を渡さないため、書き換えると
+証明書の hostname 検証が壊れるからで、その構成では rebind 防御を proxy 側の非公開宛先
+deny が担う。public 検証は経路によらず必ず通すので、この移譲で緩むのは pin だけ。
+
 transport の ``HostBlockedError`` / ``HostResolutionError`` は httpx に wrap されず
 呼び出し側へ伝播する。
 """
@@ -48,12 +53,42 @@ _TRANSPORT_KEYS: tuple[str, ...] = (
 )
 
 
+def _pin_connection_to_address(
+    request: httpx.Request, address: PublicIpAddress, original_host: str
+) -> None:
+    """TCP 接続先だけを検証済 IP に差し替える。
+
+    ``address`` の型が「public 検証を通った」ことを表すので、検証を経ていない値を
+    ここに渡す手段が存在しない。
+    """
+    # Host header は元 host:port を保持 (HTTP routing / virtual host 用)。
+    # netloc は IDNA encoded ASCII bytes で、port が default なら host のみ。
+    original_host_header = request.url.netloc.decode("ascii")
+    request.url = request.url.copy_with(host=str(address))
+    request.headers["Host"] = original_host_header
+    # httpcore 1.x の sni_hostname extension で TLS server_hostname を
+    # 元 host に固定 → IP に書換えても証明書の hostname verify が通る。
+    request.extensions = {
+        **request.extensions,
+        "sni_hostname": original_host,
+    }
+
+
 class _PinnedDnsTransport(httpx.AsyncHTTPTransport):
     """ssrf_guard で validate した IP に TCP 接続を pin する Transport。
 
     送信直前に DNS を解決して全 IP が public であることを検証し、TCP 接続先だけを
     検証済 IP に差し替える。Host header と TLS SNI は元 host に固定する。
+
+    proxy 経由の構成では書き換えを行わない (module docstring 参照)。検証は経路に
+    よらず必ず通す。
     """
+
+    def __init__(self, **kwargs: Any) -> None:
+        super().__init__(**kwargs)
+        # 経路が proxy かどうかは構築時に確定するので、ここで一度だけ導出する。
+        # フラグを外から受け取らないのは、設定と実際の経路がずれる余地を残さないため。
+        self._pins_connection = kwargs.get("proxy") is None
 
     async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
         original_host = request.url.host
@@ -75,21 +110,10 @@ class _PinnedDnsTransport(httpx.AsyncHTTPTransport):
             return await super().handle_async_request(request)
 
         addrs = await ensure_host_is_public(original_host)
-        # 最初の resolved IP に pin。multi-A / dual-stack でも全件 public 検証
-        # 済なので 1 個目を選んで安全。
-        pinned_ip = str(addrs[0])
-
-        # Host header は元 host:port を保持 (HTTP routing / virtual host 用)。
-        # netloc は IDNA encoded ASCII bytes で、port が default なら host のみ。
-        original_host_header = request.url.netloc.decode("ascii")
-        request.url = request.url.copy_with(host=pinned_ip)
-        request.headers["Host"] = original_host_header
-        # httpcore 1.x の sni_hostname extension で TLS server_hostname を
-        # 元 host に固定 → IP に書換えても証明書の hostname verify が通る。
-        request.extensions = {
-            **request.extensions,
-            "sni_hostname": original_host,
-        }
+        if self._pins_connection:
+            # 最初の resolved IP に pin。multi-A / dual-stack でも全件 public 検証
+            # 済なので 1 個目を選んで安全。
+            _pin_connection_to_address(request, addrs[0], original_host)
         return await super().handle_async_request(request)
 
 

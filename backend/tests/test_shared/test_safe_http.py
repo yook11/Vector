@@ -205,6 +205,61 @@ class TestDnsRebindResistance:
         assert captured_requests[0].headers["Host"] == "example.com:8443"
 
 
+# egress proxy 経由の経路
+class TestEgressProxyRouting:
+    """proxy を通す構成では接続先を書き換えない。
+
+    httpcore は CONNECT トンネルに ``sni_hostname`` を渡さないため、host を IP へ
+    書き換えると証明書の hostname 検証が壊れる。DNS rebind に対する防御はこの構成
+    でだけ proxy 側の非公開宛先 deny に移る。公開性の検証そのものは常に通す。
+    proxy 無し構成の pin は ``TestDnsRebindResistance`` が所有する。
+    """
+
+    _PROXY = "http://proxy.internal:3128"
+
+    @pytest.mark.asyncio
+    async def test_keeps_original_host_when_routed_through_proxy(
+        self, captured_requests: list[httpx.Request]
+    ) -> None:
+        with _patch_resolver("8.8.8.8"):
+            async with make_safe_async_client(proxy=self._PROXY) as client:
+                await client.get("https://example.com/path?x=1")
+        url = captured_requests[0].url
+        assert url.host == "example.com"
+        assert url.path == "/path"
+        assert url.query == b"x=1"
+
+    @pytest.mark.asyncio
+    async def test_omits_sni_hostname_when_routed_through_proxy(
+        self, captured_requests: list[httpx.Request]
+    ) -> None:
+        """host を書き換えないので SNI の上書きも不要 (CONNECT で無視される)。"""
+        with _patch_resolver("8.8.8.8"):
+            async with make_safe_async_client(proxy=self._PROXY) as client:
+                await client.get("https://example.com/")
+        assert "sni_hostname" not in captured_requests[0].extensions
+
+    @pytest.mark.asyncio
+    async def test_still_blocks_private_host_when_routed_through_proxy(
+        self, captured_requests: list[httpx.Request]
+    ) -> None:
+        """公開性の検証は proxy 構成でも通る (proxy の deny に到達する前に落とす)。"""
+        with _patch_resolver("10.0.0.1"):
+            async with make_safe_async_client(proxy=self._PROXY) as client:
+                with pytest.raises(HostBlockedError):
+                    await client.get("http://internal.example/")
+        assert captured_requests == []
+
+    @pytest.mark.asyncio
+    async def test_still_blocks_private_ip_literal_when_routed_through_proxy(
+        self, captured_requests: list[httpx.Request]
+    ) -> None:
+        async with make_safe_async_client(proxy=self._PROXY) as client:
+            with pytest.raises(HostBlockedError):
+                await client.get("http://10.0.0.1/")
+        assert captured_requests == []
+
+
 # follow_redirects の default 動作
 class TestFollowRedirectsDefault:
     @pytest.mark.asyncio
