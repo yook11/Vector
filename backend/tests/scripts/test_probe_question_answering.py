@@ -133,20 +133,21 @@ def test_probe_uses_answering_runner_without_removed_external_pipeline_seams() -
         "async_sessionmaker",
         "build_external_research_runtime_factory",
         "engine",
+        "Researcher",
     } <= imported
     assert removed.isdisjoint(imported)
     assert removed.isdisjoint(loaded)
     assert phase_keyword_sets == [
         {
             "planner",
-            "internal_search",
+            "researcher",
             "external_runtime_factory",
             "direct_answerer",
             "evidence_answerer",
         },
         {
             "planner",
-            "internal_search",
+            "researcher",
             "external_runtime_factory",
             "direct_answerer",
             "evidence_answerer",
@@ -338,9 +339,24 @@ def test_search_probe_passes_actual_internal_and_external_dependencies_to_phases
         for target in assignment.targets
         if isinstance(target, ast.Name)
     }
-    phase_internal_search = _keyword_value(phase, "internal_search")
-    assert isinstance(phase_internal_search, ast.Name)
-    assert phase_internal_search.id in service_targets
+    events_targets = {
+        target.id
+        for assignment in ast.walk(search)
+        if isinstance(assignment, ast.Assign)
+        and isinstance(assignment.value, ast.Call)
+        and _call_name(assignment.value) == "_RecordingAnswerEvents"
+        for target in assignment.targets
+        if isinstance(target, ast.Name)
+    }
+    phase_researcher = _keyword_value(phase, "researcher")
+    assert isinstance(phase_researcher, ast.Call)
+    assert _call_name(phase_researcher) == "Researcher"
+    researcher_internal_search = _keyword_value(phase_researcher, "internal_search")
+    assert isinstance(researcher_internal_search, ast.Name)
+    assert researcher_internal_search.id in service_targets
+    researcher_events = _keyword_value(phase_researcher, "events")
+    assert isinstance(researcher_events, ast.Name)
+    assert researcher_events.id in events_targets
     external_runtime_factory = _keyword_value(phase, "external_runtime_factory")
     assert isinstance(external_runtime_factory, ast.Call)
     assert (
@@ -403,10 +419,13 @@ def test_direct_probe_keeps_dependencies_unreachable_and_uses_plan_summary() -> 
     assert "result.plan_summary" in result_printer
     assert "result.plan_summary.plan_type" in result_printer
 
-    internal_search = _keyword_value(phase, "internal_search")
+    researcher = _keyword_value(phase, "researcher")
     external_runtime_factory = _keyword_value(phase, "external_runtime_factory")
     evidence_answerer = _keyword_value(phase, "evidence_answerer")
     direct_answerer = _keyword_value(phase, "direct_answerer")
+    assert isinstance(researcher, ast.Call)
+    assert _call_name(researcher) == "Researcher"
+    internal_search = _keyword_value(researcher, "internal_search")
     assert isinstance(internal_search, ast.Call)
     assert _call_name(internal_search) == "_UnreachableInternalSearch"
     assert isinstance(external_runtime_factory, ast.Call)
