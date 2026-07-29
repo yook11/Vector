@@ -23,7 +23,9 @@ from app.agent.evidence_collection.internal_search.query_embedding_cache import 
     QueryEmbeddingCacheRepository,
     TransactionalQueryEmbeddingCache,
 )
-from app.agent.evidence_collection.internal_search.service import InternalSearchService
+from app.agent.evidence_collection.internal_search.tool import (
+    PgVectorInternalSearchTool,
+)
 
 __all__ = [
     "INTERNAL_SEARCH_TOOL_NAME",
@@ -35,11 +37,11 @@ __all__ = [
     "InternalSearchError",
     "InternalSearchFailurePhase",
     "InternalSearchQueries",
-    "InternalSearchService",
     "InternalSearchTool",
     "InternalSearchToolInput",
     "InternalSearchToolName",
     "PgVectorArticleSearchRepository",
+    "PgVectorInternalSearchTool",
     "QueryEmbeddingCacheRepository",
     "TransactionalQueryEmbeddingCache",
 ]

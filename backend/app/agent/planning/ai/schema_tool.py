@@ -105,9 +105,3 @@ QUESTION_PLANNER_GEMINI_SCHEMA: dict[str, Any] = {
         },
     },
 }
-
-
-def plan_type_values() -> list[PlanType]:
-    """Return values to keep tests close to the schema SSoT."""
-
-    return list(get_args(PlanType))
