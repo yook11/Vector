@@ -138,7 +138,7 @@ def _external_runtime(
 ) -> ExternalResearchRuntime:
     return ExternalResearchRuntime(
         query_runtime=query_runtime,  # type: ignore[arg-type]
-        selector_runtime=ScriptedAgentRuntime([]),  # type: ignore[arg-type]
+        reviewer_runtime=ScriptedAgentRuntime([]),  # type: ignore[arg-type]
         search_tool=(tool or _ExternalTool()),  # type: ignore[arg-type]
     )
 

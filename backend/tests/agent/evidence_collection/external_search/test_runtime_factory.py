@@ -205,6 +205,26 @@ def _install_factory_dependencies(
     return deepseek, tavily, runtime, tool
 
 
+def _evidence_reviewer_binding() -> Any:
+    """selector 一式は evidence_review package へ改名移設された(D4-S1)。"""
+    try:
+        binding_module = __import__(
+            "app.agent.evidence_collection.evidence_review.deepseek_binding",
+            fromlist=["EVIDENCE_REVIEWER_DEEPSEEK_BINDING"],
+        )
+    except ModuleNotFoundError as exc:
+        pytest.fail(
+            f"D4-S1 evidence_review.deepseek_binding module is missing ({exc.name})"
+        )
+    binding = getattr(binding_module, "EVIDENCE_REVIEWER_DEEPSEEK_BINDING", None)
+    if binding is None:
+        pytest.fail(
+            "evidence_review.deepseek_binding must export "
+            "EVIDENCE_REVIEWER_DEEPSEEK_BINDING"
+        )
+    return binding
+
+
 def test_external_research_runtime_contract_declares_only_borrowed_resources() -> None:
     from app.agent.evidence_collection.external_search.contract import (
         ExternalResearchRuntime,
@@ -216,7 +236,7 @@ def test_external_research_runtime_contract_declares_only_borrowed_resources() -
         ExternalResearchRuntime.__dataclass_params__.frozen,
         tuple(field.name for field in fields(ExternalResearchRuntime)),
         callable(getattr(ExternalResearchRuntimeFactory, "activate", None)),
-    ) == (True, True, ("query_runtime", "selector_runtime", "search_tool"), True)
+    ) == (True, True, ("query_runtime", "reviewer_runtime", "search_tool"), True)
 
 
 @pytest.mark.asyncio
@@ -224,7 +244,6 @@ async def test_runtime_factory_is_lazy_shares_deepseek_and_closes_each_client_on
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     from app.agent.evidence_collection.external_search.deepseek_binding import (
-        EXTERNAL_EVIDENCE_SELECTOR_DEEPSEEK_BINDING,
         EXTERNAL_QUERY_DEEPSEEK_BINDING,
     )
     from app.agent.runtime.deepseek import (
@@ -232,6 +251,7 @@ async def test_runtime_factory_is_lazy_shares_deepseek_and_closes_each_client_on
         DEEPSEEK_CLIENT_TIMEOUT_SECONDS,
     )
 
+    evidence_reviewer_binding = _evidence_reviewer_binding()
     deepseek, tavily, runtime, tool = _install_factory_dependencies(monkeypatch)
     factory = _factory_builder()()
     scope = factory.activate()
@@ -249,10 +269,9 @@ async def test_runtime_factory_is_lazy_shares_deepseek_and_closes_each_client_on
             len(tavily.clients),
             deepseek.clients[0].kwargs,
             external.query_runtime.client is deepseek.clients[0],
-            external.selector_runtime.client is deepseek.clients[0],
+            external.reviewer_runtime.client is deepseek.clients[0],
             external.query_runtime.binding is EXTERNAL_QUERY_DEEPSEEK_BINDING,
-            external.selector_runtime.binding
-            is EXTERNAL_EVIDENCE_SELECTOR_DEEPSEEK_BINDING,
+            external.reviewer_runtime.binding is evidence_reviewer_binding,
             external.search_tool.client is tavily.clients[0],
         ) == (
             1,
@@ -309,7 +328,7 @@ async def test_runtime_factory_closes_acquired_clients_for_every_scope_exit(
     ("stage", "expected_deepseek_closes", "expected_tavily_closes"),
     [
         pytest.param("query-runtime", 1, 0, id="query-runtime"),
-        pytest.param("selector-runtime", 1, 0, id="selector-runtime"),
+        pytest.param("reviewer-runtime", 1, 0, id="reviewer-runtime"),
         pytest.param("tavily-entry", 1, 0, id="tavily-entry"),
         pytest.param("tool", 1, 1, id="tool"),
     ],
@@ -321,7 +340,7 @@ async def test_runtime_factory_closes_only_acquired_clients_when_construction_fa
     expected_tavily_closes: int,
 ) -> None:
     runtime = _RuntimeSpyFactory(
-        fail_on_construction={"query-runtime": 1, "selector-runtime": 2}.get(stage)
+        fail_on_construction={"query-runtime": 1, "reviewer-runtime": 2}.get(stage)
     )
     tavily = _TrackedTavilyClientFactory(
         entry_error=RuntimeError("tavily entry failed")

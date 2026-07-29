@@ -156,12 +156,12 @@ async def test_negative_index_is_runtime_schema_mismatch() -> None:
     contract = runtime_contract()
     error_type = required_attribute(contract, "AgentResponseInvalidError")
     defect_type = required_attribute(contract, "AgentResponseDefect")
-    selector_contract = import_module(
-        "app.agent.evidence_collection.external_search.contract"
+    # D4-S1: 負の candidate_index を持つ具体例として evidence_review の draft を使う
+    # (旧 external_search.ExternalEvidenceSelectionDraft から改名移設)。
+    review_contract = import_module(
+        "app.agent.evidence_collection.evidence_review.contract"
     )
-    selector_draft = required_attribute(
-        selector_contract, "ExternalEvidenceSelectionDraft"
-    )
+    selector_draft = required_attribute(review_contract, "EvidenceReviewDraft")
     client = FakeDeepSeekClient(
         [
             function_response(

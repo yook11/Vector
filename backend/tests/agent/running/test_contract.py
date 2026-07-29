@@ -17,6 +17,7 @@ from app.agent.answering.direct_answer.contract import DirectAnswerer
 from app.agent.answering.evidence_answer.contract import EvidenceAnswerer
 from app.agent.contract import AnswerQuestionResult
 from app.agent.evidence_collection import Researcher
+from app.agent.evidence_collection.evidence_review import EvidenceReviewer
 from app.agent.evidence_collection.external_search import ExternalResearchRuntimeFactory
 from app.agent.planning.contract import QuestionPlanner
 from app.agent.question_context import (
@@ -317,7 +318,11 @@ def test_run_hooks_protocol_exposes_only_resolved_question_projection() -> None:
 
 
 def test_answering_phases_owns_researcher_without_internal_search_port() -> None:
-    """保証するテスト条件 18: AnsweringPhasesはresearcher fieldでtask単位収集を持つ。"""
+    """保証するテスト条件 18: AnsweringPhasesはresearcher fieldでtask単位収集を持つ。
+
+    D4-T3: 精査は EvidenceReviewer が起動するため、reviewer field を追加で持つ
+    (他のphase roleと同様、明示的な配線を要求するためdefaultは持たない)。
+    """
     phases_type = _contract_type("AnsweringPhases")
     signature = inspect.signature(phases_type)
 
@@ -335,6 +340,7 @@ def test_answering_phases_owns_researcher_without_internal_search_port() -> None
             ("external_runtime_factory", ExternalResearchRuntimeFactory),
             ("direct_answerer", DirectAnswerer),
             ("evidence_answerer", EvidenceAnswerer),
+            ("reviewer", EvidenceReviewer),
         ),
         (
             "planner",
@@ -342,8 +348,9 @@ def test_answering_phases_owns_researcher_without_internal_search_port() -> None
             "external_runtime_factory",
             "direct_answerer",
             "evidence_answerer",
+            "reviewer",
         ),
-        (True, True, True, True, True),
+        (True, True, True, True, True, True),
     )
 
 

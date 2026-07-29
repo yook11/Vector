@@ -11,7 +11,6 @@ import app.agent.composition as composition
 import app.agent.contract as agent_contract
 from app.agent.contract import (
     AnswerQuestionResult,
-    EvidenceCollectionFailure,
     ExternalUrlSource,
     InternalArticleSource,
 )
@@ -25,26 +24,11 @@ def _internal_source() -> InternalArticleSource:
     )
 
 
-def _external_source() -> ExternalUrlSource:
-    return ExternalUrlSource(
-        source_ref="source_2",
-        url="https://example.com/news",
-        title="外部記事",
-        evidence_claim="外部記事が支える主張",
-    )
-
-
-def _plan_summary(
-    plan_type: str = "search",
-    collection_failures: list[EvidenceCollectionFailure] | None = None,
-) -> object:
+def _plan_summary(plan_type: str = "search") -> object:
     summary_type = getattr(agent_contract, "AnswerPlanSummary", None)
     if summary_type is None:
         pytest.fail("agent contract must define AnswerPlanSummary")
-    return summary_type(
-        plan_type=plan_type,
-        collection_failures=collection_failures or [],
-    )
+    return summary_type(plan_type=plan_type)
 
 
 def test_does_not_export_legacy_answering_boundaries() -> None:
@@ -60,25 +44,20 @@ def test_does_not_export_legacy_answering_boundaries() -> None:
 
 
 class TestAnswerPlanSummary:
-    @pytest.mark.parametrize("failure", ["internal_search", "external_search"])
-    def test_accepts_search_plan_type_and_collection_failures(
-        self,
-        failure: EvidenceCollectionFailure,
-    ) -> None:
-        summary = _plan_summary(
-            plan_type="search",
-            collection_failures=[failure],
-        )
+    """D4-S2: collection_failures は run単位の失敗表現として廃止される。"""
+
+    def test_has_only_plan_type_field(self) -> None:
+        summary = _plan_summary("search")
 
         assert summary.plan_type == "search"
-        assert summary.collection_failures == [failure]
+        assert not hasattr(summary, "collection_failures")
 
-    def test_rejects_collection_failures_for_direct_answer(self) -> None:
+    def test_rejects_legacy_collection_failures_kwarg(self) -> None:
+        summary_type = getattr(agent_contract, "AnswerPlanSummary", None)
+        if summary_type is None:
+            pytest.fail("agent contract must define AnswerPlanSummary")
         with pytest.raises(ValidationError):
-            _plan_summary(
-                plan_type="direct_answer",
-                collection_failures=["internal_search"],
-            )
+            summary_type(plan_type="search", collection_failures=["internal_search"])
 
 
 class TestSources:
@@ -156,15 +135,6 @@ class TestAnswerQuestionResult:
                 sources=[_internal_source()],
                 missing_aspects=["企業側の一次情報"],
                 plan_summary=_plan_summary("search"),
-            )
-
-    def test_rejects_answered_result_with_collection_failures(self) -> None:
-        with pytest.raises(ValidationError):
-            AnswerQuestionResult(
-                status="answered",
-                answer="確認できました。",
-                sources=[_external_source()],
-                plan_summary=_plan_summary("search", ["external_search"]),
             )
 
     def test_rejects_direct_plan_type_with_sources(self) -> None:

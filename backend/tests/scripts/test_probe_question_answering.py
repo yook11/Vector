@@ -141,6 +141,7 @@ def test_probe_uses_answering_runner_without_removed_external_pipeline_seams() -
         {
             "planner",
             "researcher",
+            "reviewer",
             "external_runtime_factory",
             "direct_answerer",
             "evidence_answerer",
@@ -148,6 +149,7 @@ def test_probe_uses_answering_runner_without_removed_external_pipeline_seams() -
         {
             "planner",
             "researcher",
+            "reviewer",
             "external_runtime_factory",
             "direct_answerer",
             "evidence_answerer",
