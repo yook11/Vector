@@ -85,13 +85,13 @@ def _build_answering_phases(
     from app.agent.evidence_collection.internal_search.article_search import (
         PgVectorArticleSearchRepository,
     )
-    from app.agent.evidence_collection.internal_search.service import (
-        InternalSearchService,
+    from app.agent.evidence_collection.internal_search.tool import (
+        PgVectorInternalSearchTool,
     )
     from app.agent.planning.service import QuestionPlanningService
 
     external_runtime_factory = build_external_research_runtime_factory()
-    internal_search = InternalSearchService(
+    internal_search = PgVectorInternalSearchTool(
         embedder=GeminiQueryEmbedder(),
         article_search_repository=PgVectorArticleSearchRepository(session_factory),
     )

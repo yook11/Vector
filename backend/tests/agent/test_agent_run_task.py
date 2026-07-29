@@ -497,7 +497,7 @@ def test_composition_injects_same_live_controls_into_both_answer_flows(
         article_search as article_search_module,
     )
     from app.agent.evidence_collection.internal_search import (
-        service as internal_search_module,
+        tool as internal_search_module,
     )
 
     captured: dict[str, dict[str, object]] = {}
@@ -532,7 +532,7 @@ def test_composition_injects_same_live_controls_into_both_answer_flows(
     )
     monkeypatch.setattr(
         internal_search_module,
-        "InternalSearchService",
+        "PgVectorInternalSearchTool",
         lambda **_kwargs: internal_search,
     )
     monkeypatch.setattr(

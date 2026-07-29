@@ -43,7 +43,9 @@ from app.agent.evidence_collection.internal_search.ai.gemini import (
 from app.agent.evidence_collection.internal_search.article_search import (
     PgVectorArticleSearchRepository,
 )
-from app.agent.evidence_collection.internal_search.service import InternalSearchService
+from app.agent.evidence_collection.internal_search.tool import (
+    PgVectorInternalSearchTool,
+)
 from app.agent.input_safety.agent import INPUT_SAFETY_AGENT
 from app.agent.input_safety.service import InputSafetyService
 from app.agent.planning.contract import (
@@ -216,7 +218,7 @@ async def _probe_search(
     )
     events = _RecordingAnswerEvents()
     session_factory = async_sessionmaker(engine, expire_on_commit=False)
-    internal_search = InternalSearchService(
+    internal_search = PgVectorInternalSearchTool(
         embedder=GeminiQueryEmbedder(),
         article_search_repository=PgVectorArticleSearchRepository(session_factory),
     )
