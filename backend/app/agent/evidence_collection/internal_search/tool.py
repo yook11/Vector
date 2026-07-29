@@ -26,7 +26,7 @@ from app.agent.evidence_collection.internal_search.query_embedding import (
 from app.analysis.ai_provider_errors import AIProviderError
 from app.analysis.embedding.domain.value_objects import EmbeddingVector
 
-__all__ = ["InternalSearchService"]
+__all__ = ["PgVectorInternalSearchTool"]
 
 logger = structlog.get_logger(__name__)
 
@@ -53,7 +53,7 @@ class InternalQueryEmbeddingCache(Protocol):
 
 
 @dataclass(frozen=True, slots=True)
-class InternalSearchService:
+class PgVectorInternalSearchTool:
     """Internal Search Tool contract (`InternalSearchTool`) の実装。"""
 
     embedder: InternalQueryEmbedder
