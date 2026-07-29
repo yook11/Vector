@@ -328,6 +328,26 @@ class FetchSsrfBlockedError(ExternalFetchError):
     retryable: ClassVar[bool] = False
 
 
+class FetchEgressBlockedError(ExternalFetchError):
+    """egress proxy が宛先への接続を拒否した (CONNECT 403)。
+
+    ``FetchSsrfBlockedError`` は app 内の SSRF guard が事前に落とした場合。
+    こちらは **経路側の政策**で止まった場合で、原因は 2 つある。
+
+    - allowlist に無い宛先 (設定漏れ。段に allowlist がある場合)
+    - private 宛先 (app 側の事前検証をすり抜けた = rebind 窓)
+
+    どちらかは監査の stage で読み分ける (allowlist を持つ段か否か)。
+    proxy がどの ACL で落としたかは proxy 側の access log が持つ。
+
+    通常経路では app 側の ``ensure_host_is_public`` が先に落とすため、
+    この code が出ること自体が「設定漏れか稀な事象」の信号になる。
+    """
+
+    CODE: ClassVar[str] = "fetch_egress_blocked"
+    retryable: ClassVar[bool] = False
+
+
 class FetchRobotsDisallowedError(ExternalFetchError):
     """robots.txt の明示的な Disallow により対象 URL の取得が許可されなかった。"""
 

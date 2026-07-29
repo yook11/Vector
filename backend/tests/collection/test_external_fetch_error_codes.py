@@ -4,7 +4,7 @@
 ではなく機械的に強制する:
 
 - 全 concrete subclass を再帰的に辿り、CODE が 非空・一意・``fetch_`` prefix・
-  計 19 種であることを assert (subclass 追加時の重複 / 未定義 / prefix ズレを
+  計 20 種であることを assert (subclass 追加時の重複 / 未定義 / prefix ズレを
   deploy 前に検知する)。
 - 多くの subclass が ``message: str = ""`` 既定を持つため、message 空でも
   ``str(exc)`` が非空であることを各 subclass で assert (wrap 経路の監査 / ログ
@@ -26,6 +26,7 @@ from app.collection.external_fetch_errors import (
     ExternalFetchError,
     FetchAccessDeniedError,
     FetchContentTypeMismatchError,
+    FetchEgressBlockedError,
     FetchGatewayError,
     FetchLegalBlockError,
     FetchNetworkError,
@@ -45,7 +46,7 @@ from app.collection.external_fetch_errors import (
     FetchUnexpectedServerStatusError,
 )
 
-_EXPECTED_CODE_COUNT = 19
+_EXPECTED_CODE_COUNT = 20
 
 # 各 concrete subclass を「message 空」で構築するための必須 kwargs 表。
 # 新 subclass を追加して本表に登録し忘れると ``test_construction_table_covers_
@@ -53,6 +54,7 @@ _EXPECTED_CODE_COUNT = 19
 _CONSTRUCTION: dict[type[ExternalFetchError], dict[str, object]] = {
     FetchAccessDeniedError: {"status_code": 403, "reason": "forbidden"},
     FetchLegalBlockError: {},
+    FetchEgressBlockedError: {},
     FetchResourceNotFoundError: {"status_code": 404, "reason": "not_found"},
     FetchRateLimitedError: {},
     FetchOriginServerError: {"status_code": 500, "reason": "internal_error"},
@@ -86,7 +88,7 @@ def _concrete_subclasses(root: type) -> set[type]:
 
 
 def test_code_contract_nonempty_unique_prefixed_and_count() -> None:
-    """全 concrete subclass の CODE: 非空・``fetch_`` prefix・一意・計 19 種。"""
+    """全 concrete subclass の CODE: 非空・``fetch_`` prefix・一意・計 20 種。"""
     subclasses = _concrete_subclasses(ExternalFetchError)
     codes = [getattr(cls, "CODE", None) for cls in subclasses]
 
@@ -133,7 +135,7 @@ def test_explicit_message_takes_precedence(
 
 
 # ``retryable`` SSoT 契約 (CODE 文字列で pin する spec)。再実行で結果が変わりうる
-# CODE (8) と、再実行しても同じ結果になる CODE (11) で family 19 を過不足なく分割
+# CODE (8) と、再実行しても同じ結果になる CODE (12) で family 20 を過不足なく分割
 # する。class ではなく CODE 集合で固定する: CODE は outcome_code に焼かれる外部契約で
 # class rename に不変、分類 drift でのみ落ちる自己記述的 oracle。
 _RETRYABLE_CODES = frozenset(
@@ -154,6 +156,8 @@ _TERMINAL_CODES = frozenset(
         "fetch_legal_block",
         "fetch_resource_not_found",
         "fetch_ssrf_blocked",
+        # egress proxy が経路側で拒否した (CONNECT 403)。政策なので再実行不可。
+        "fetch_egress_blocked",
         "fetch_robots_disallowed",
         "fetch_robots_unavailable",
         "fetch_redirect_blocked",
