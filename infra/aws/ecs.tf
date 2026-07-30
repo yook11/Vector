@@ -12,14 +12,12 @@ resource "aws_ecs_cluster" "this" {
 locals {
   db_endpoint = "${aws_db_instance.this.address}:${aws_db_instance.this.port}"
 
-  # IAM DB auth の可視的な帰結: **URL から password の項が消える**。
+  # IAM auth の可視的な帰結: **URL から password の項が消える**。
   # 消えたので URL 自体が秘密でなくなり、SSM ではなく environment に置ける。
   #
   # 規準: **URL に secret が含まれるなら URL ごと SSM、含まれないなら env。**
-  # DATABASE は password が消えたので env、Valkey は RBAC password が残る
-  # (IAM 認証を見送った) ので REDIS_URL ごと SSM。
-  # 帰結として Valkey の endpoint が変わると SSM の値を手で更新する必要がある
-  # (Terraform は endpoint を知っているのに配れない)。runbook に載せる。
+  # DATABASE も Valkey も IAM 認証で password が消えたので env。endpoint は
+  # Terraform が知っているので、変わっても URL が追従する (手動更新の余地が無い)。
   #
   # `sslmode=require` は db_ssl.py が verify-full に格上げする。
   backend_db_url = {
@@ -27,12 +25,27 @@ locals {
     user => "postgresql+asyncpg://${user}@${local.db_endpoint}/${aws_db_instance.this.db_name}?sslmode=require"
   }
 
+  broker_endpoint     = "${aws_elasticache_replication_group.broker.primary_endpoint_address}:${aws_elasticache_replication_group.broker.port}"
+  rate_limit_endpoint = "${aws_elasticache_replication_group.rate_limit.primary_endpoint_address}:${aws_elasticache_replication_group.rate_limit.port}"
+
+  # rediss は transit_encryption_enabled = true の帰結。username が IAM user を
+  # 名指しし、token は app が接続ごとに SigV4 署名で生成するので password 項は無い。
+  broker_redis_url = {
+    for s in local.broker_stages :
+    s => "rediss://${var.name_prefix}-${s}@${local.broker_endpoint}/0"
+  }
+  rate_limit_redis_url = "rediss://${var.name_prefix}-frontend@${local.rate_limit_endpoint}/0"
+
   common_environment = {
     ENV        = "production"
     AWS_REGION = var.region
     # IAM モードは明示フラグで入る。「password が無いから IAM」という推測にすると、
     # password の設定漏れが黙って IAM モードとして動いてしまう。
-    DB_IAM_AUTH                = "true"
+    DB_IAM_AUTH    = "true"
+    REDIS_IAM_AUTH = "true"
+    # token 署名の host は DNS endpoint ではなく cache 名 (URL から導出できない)。
+    # 値は broker ノードの名前なので、rate-limit ノードに繋ぐ側はこれを読まない。
+    REDIS_IAM_CACHE_NAME       = aws_elasticache_replication_group.broker.replication_group_id
     INTERNAL_FRONTEND_BASE_URL = local.internal_frontend_url
     # proxy を通さない宛先。ECS の credential endpoint を入れないと SDK の
     # 資格情報取得が proxy に迂回して死ぬ。内部 DNS を入れないと revalidate と
@@ -80,10 +93,15 @@ locals {
       INTERNAL_API_URL    = local.internal_api_url
       BETTER_AUTH_URL     = "https://${var.frontend_domain}"
       AUTH_DATABASE_URL   = "postgresql://vector_auth@${local.db_endpoint}/${aws_db_instance.this.db_name}?search_path=auth&sslmode=require"
+      REDIS_URL_RL        = local.rate_limit_redis_url
+      # rate-limit ノード用の署名 host (common の REDIS_IAM_CACHE_NAME は broker の
+      # 名前なので frontend はそちらを読まない)。
+      REDIS_IAM_CACHE_NAME_RL = aws_elasticache_replication_group.rate_limit.replication_group_id
     }
     api = {
       FRONTEND_URL = "https://${var.frontend_domain}"
       DATABASE_URL = local.backend_db_url["vector_app"]
+      REDIS_URL    = local.broker_redis_url["api"]
     }
     # scheduler は engine を作らないが、config.py の `database_url: str` が
     # 必須設定なので値が無いと Settings の構築で落ちる。
@@ -91,22 +109,27 @@ locals {
     # **IAM の境界が設定の契約より狭い**状態で、権限としては正しい。
     scheduler = {
       DATABASE_URL = local.backend_db_url["vector_app"]
+      REDIS_URL    = local.broker_redis_url["scheduler"]
     }
     fetch = {
       DATABASE_URL = local.backend_db_url["vector_collect"]
+      REDIS_URL    = local.broker_redis_url["fetch"]
     }
     analysis = {
       DATABASE_URL                = local.backend_db_url["vector_app"]
       AUTH_RETENTION_DATABASE_URL = local.backend_db_url["vector_auth"]
+      REDIS_URL                   = local.broker_redis_url["analysis"]
       # 本番では明示的に有効化する (config.py の default は両方 false)。
       BACKFILL_ASSESSMENTS_ENABLED = "true"
       BACKFILL_EMBEDDINGS_ENABLED  = "true"
     }
     insights = {
       DATABASE_URL = local.backend_db_url["vector_app"]
+      REDIS_URL    = local.broker_redis_url["insights"]
     }
     agent = {
       DATABASE_URL = local.backend_db_url["vector_app"]
+      REDIS_URL    = local.broker_redis_url["agent"]
     }
   }
 }

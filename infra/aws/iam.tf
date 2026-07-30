@@ -8,6 +8,23 @@ data "aws_caller_identity" "current" {}
 
 locals {
   account_id = data.aws_caller_identity.current.account_id
+
+  # 段 -> その段が Connect してよい [cache ARN, user ARN]。
+  # broker に繋ぐ段は自分の user のみ、frontend は rate-limit ノードのみ。
+  valkey_connect_arns = merge(
+    {
+      for s in local.broker_stages : s => [
+        aws_elasticache_replication_group.broker.arn,
+        aws_elasticache_user.broker[s].arn,
+      ]
+    },
+    {
+      frontend = [
+        aws_elasticache_replication_group.rate_limit.arn,
+        aws_elasticache_user.frontend.arn,
+      ]
+    },
+  )
 }
 
 # ECS が task を起動するときに引き受ける。confused deputy 対策として
@@ -43,8 +60,8 @@ data "aws_iam_policy_document" "ecs_tasks_trust" {
 # --- task role ------------------------------------------------------------
 #
 # このアプリは実行時に AWS の API を呼ばない。LLM は外部 SaaS、キューは Valkey、
-# ログは Logfire、ストレージ無し。よって task role に載るのは IAM DB auth の
-# 1 アクションだけになる。
+# ログは Logfire、ストレージ無し。よって task role に載るのは IAM auth の入口
+# 2 アクション (rds-db:connect / elasticache:Connect) だけになる。
 #
 # これは偶然ではなくキュー選定の帰結。SQS を採っていれば段ごとに
 # sqs:SendMessage / ReceiveMessage / DeleteMessage が載り、IAM が主戦場のままだった。
@@ -58,8 +75,8 @@ resource "aws_iam_role" "task" {
   permissions_boundary = var.permissions_boundary_arn
 }
 
-# scheduler には policy を付けない。cron を発火するだけで DB に触らないため、
-# **権限がゼロの task role** になる。空であること自体が棚卸しの結論。
+# scheduler には DB の policy を付けない。cron を発火するだけで DB engine を
+# 作らないため、持つのは下の elasticache:Connect だけになる。
 resource "aws_iam_role_policy" "task" {
   for_each = local.db_stages
 
@@ -82,6 +99,28 @@ resource "aws_iam_role_policy" "task" {
           for user in local.stages[each.value].db_users :
           "arn:aws:rds-db:${var.region}:${local.account_id}:dbuser:${aws_db_instance.this.resource_id}/${user}"
         ]
+      },
+    ]
+  })
+}
+
+# rds-db:connect と同型の入口権限。Connect は接続先 cache と接続 user の
+# **両方の ARN** に対して評価されるため、片方だけでは認証が通らない。
+# 入った後に何ができるかは valkey.tf の access_string が全部決める。
+resource "aws_iam_role_policy" "valkey" {
+  for_each = local.valkey_connect_arns
+
+  name = "elasticache-iam-auth"
+  role = aws_iam_role.task[each.key].id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Sid      = "ElastiCacheIamAuth"
+        Effect   = "Allow"
+        Action   = "elasticache:Connect"
+        Resource = each.value
       },
     ]
   })

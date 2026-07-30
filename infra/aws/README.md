@@ -95,10 +95,7 @@ subnet 自体は無料なので段ごとに 1:1 で切る。
    service-linked role / hosted zone)。
 2. **レジストラの NS をこの hosted zone に向ける。** 委任が伝播するまで ACM の
    DNS 検証が完了せず、ALB も作れない。
-3. **Valkey の user を CLI で 7 つ作る** (`aws elasticache create-user`)。
-   `aws_elasticache_user_group` は存在する user ID しか受け付けない。
-   password を state に載せないため Terraform では管理しない。
-4. **SSM parameter に実値を入れる** (`aws ssm put-parameter --type SecureString`)。
+3. **SSM parameter に実値を入れる** (`aws ssm put-parameter --type SecureString`)。
    `aws_ssm_parameter` の `value` は computed で refresh のたびに state に載るため、
    箱ごと Terraform の管理外に置いている。path は `terraform output` で出る。
 
@@ -110,8 +107,11 @@ subnet 自体は無料なので段ごとに 1:1 で切る。
   Terraform はそれを巻き戻さない。帰結として **Terraform 側で env / secrets /
   サイズを変えても service は旧 revision のまま**動く (新 revision は作られるが
   反映されない)。infra 起因の変更は「apply 後に app-deploy を再実行」が正規手順。
-- **Valkey の endpoint が変わったら SSM の `redis-url` を手で直す。** RBAC password を
-  含むため URL ごと SSM に置いており、Terraform は endpoint を知っていても配れない。
+- **Valkey の ACL ミスは二重に静か。** worker 側は taskiq が XGROUP CREATE の
+  NOPERM を debug で握り潰し、後段の XREADGROUP が NOGROUP で落ちて初めて発現する。
+  frontend 側は fail-open で rate limit が黙って無効化され、60 秒ごとの
+  `frontend_rate_limit_redis_fail_open` warn しか出ない。apply 後は
+  (a) worker ログに NOGROUP が無いこと、(b) この warn が無いこと、を明示的に見る。
 - **SSE は ALB の idle timeout (既定 60 秒) を跨がない。** backend の
   `sse.py` が `heartbeat_interval = 10.0` 秒でハートビートを流すので 6 倍の余裕がある。
   **不変条件: keepalive 間隔 < ALB の idle timeout。** 片方を変えるならもう片方も見る。
@@ -183,9 +183,11 @@ subnet 自体は無料なので段ごとに 1:1 で切る。
 
 ## Terraform の外にあるもの
 
-- Valkey の user (access string と password) — CLI
 - SSM parameter の値 — CLI
-- app 側の変更 (IAM トークン生成 / ガードの接尾辞 / proxy の明示注入 / pool 縮小)
+- app 側の変更 (backend / frontend 両方の IAM トークン生成 / ガードの接尾辞 /
+  proxy の明示注入 / pool 縮小)。node-redis は password が無いと AUTH を省略して
+  default user で繋ぐため、frontend の実装が入るまで rate limit は fail-open で
+  静かに無効のまま
 
 ## 使い方
 
