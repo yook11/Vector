@@ -347,14 +347,16 @@ class FakeExternalQueryRuntime:
 
 
 class FakeEvidenceReviewerRuntime:
-    def __init__(self, drafts_by_goal: dict[str, EvidenceReviewDraft]) -> None:
-        self._drafts_by_goal = drafts_by_goal
+    """S1: reviewerはRun単位で1回だけ呼ばれるため、goal別ではなく単一draftを返す。"""
+
+    def __init__(self, draft: EvidenceReviewDraft) -> None:
+        self._draft = draft
 
     async def invoke(
         self, agent: object, input: object, *, attempt_number: int
     ) -> EvidenceReviewDraft:
-        del agent, attempt_number
-        return self._drafts_by_goal[input.research_goal]  # type: ignore[union-attr]
+        del agent, input, attempt_number
+        return self._draft
 
 
 class FakeExternalTool:
@@ -377,7 +379,9 @@ def _external_runtime_for(
     outcome: _RetrievalFixture,
     internal_hits: list[InternalArticleSearchHit] | None = None,
 ) -> ExternalResearchRuntime:
-    """D4-S1: reviewerが統合index空間(内部先・外部後)の全候補を採用するfixtureを組む。
+    """S1: reviewerがRun全体の統合index空間(task_index昇順、group内は内部先・
+
+    外部後)の全候補を採用する単一draftを組む(仕様「候補の渡し方」)。
 
     internal_hitsはtask_index 0にのみ帰属させる(このmoduleのfixtureは
     複数taskへの内部候補配分を表現しないため、既存の単一task想定を維持する)。
@@ -394,7 +398,9 @@ def _external_runtime_for(
     }
     queries_by_goal: dict[str, str] = {}
     candidates_by_query: dict[str, list[ExternalSearchCandidate]] = {}
-    drafts_by_goal: dict[str, EvidenceReviewDraft] = {}
+    selections: list[dict[str, object]] = []
+    missing: list[str] = []
+    next_index = 0
 
     for task_index, task in enumerate(plan.research_tasks):
         query = f"fixture-query-{task_index}"
@@ -420,32 +426,34 @@ def _external_runtime_for(
         report = reports_by_task.get(task_index)
         queries_by_goal[task.research_goal] = query
         candidates_by_query[query] = candidates
+        group_offset = next_index
         internal_offset = len(task_internal_hits)
-        drafts_by_goal[task.research_goal] = EvidenceReviewDraft.model_validate(
+        selections.extend(
             {
-                "selections": [
-                    {
-                        "candidate_index": index,
-                        "claim": "internal claim",
-                        "why_selected": "internal reviewer explanation",
-                    }
-                    for index in range(len(task_internal_hits))
-                ]
-                + [
-                    {
-                        "candidate_index": internal_offset + index,
-                        "claim": evidence.claim,
-                        "why_selected": evidence.why_selected,
-                    }
-                    for index, evidence in enumerate(task_evidence)
-                ],
-                "missing": report.missing if report is not None else [],
+                "candidate_index": group_offset + index,
+                "claim": "internal claim",
+                "why_selected": "internal reviewer explanation",
             }
+            for index in range(len(task_internal_hits))
         )
+        selections.extend(
+            {
+                "candidate_index": group_offset + internal_offset + index,
+                "claim": evidence.claim,
+                "why_selected": evidence.why_selected,
+            }
+            for index, evidence in enumerate(task_evidence)
+        )
+        next_index = group_offset + internal_offset + len(candidates)
+        if report is not None:
+            missing.extend(report.missing)
 
+    draft = EvidenceReviewDraft.model_validate(
+        {"selections": selections, "missing": missing}
+    )
     return ExternalResearchRuntime(
         query_runtime=FakeExternalQueryRuntime(queries_by_goal),  # type: ignore[arg-type]
-        reviewer_runtime=FakeEvidenceReviewerRuntime(drafts_by_goal),  # type: ignore[arg-type]
+        reviewer_runtime=FakeEvidenceReviewerRuntime(draft),  # type: ignore[arg-type]
         search_tool=FakeExternalTool(candidates_by_query),  # type: ignore[arg-type]
     )
 

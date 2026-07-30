@@ -19,26 +19,32 @@ from app.agent.evidence_collection.external_search.contract import (
     EVIDENCE_CLAIM_MAX_CHARS,
     EVIDENCE_WHY_SELECTED_MAX_CHARS,
     MISSING_ITEM_MAX_CHARS,
+    ExternalSearchCandidate,
     ExternalSearchEvidence,
+)
+from app.agent.evidence_collection.internal_search.contract import (
+    InternalArticleSearchHit,
 )
 
 __all__ = [
-    "EVIDENCE_REVIEW_ADOPTION_LIMIT_PER_TASK",
-    "EVIDENCE_REVIEW_MISSING_LIMIT_PER_TASK",
+    "EVIDENCE_REVIEW_ADOPTION_LIMIT",
+    "EVIDENCE_REVIEW_MISSING_LIMIT",
     "EvidenceCandidateInput",
     "EvidenceReviewDraft",
     "EvidenceReviewInput",
     "EvidenceReviewOutcome",
     "EvidenceReviewResult",
+    "EvidenceReviewTaskGroup",
     "InternalArticleEvidence",
     "ReviewSelection",
     "ReviewSelectionDraft",
+    "ReviewTaskCandidates",
 ]
 
-# task 単位で reviewer が採用できる根拠の上限(内外合算)。
-EVIDENCE_REVIEW_ADOPTION_LIMIT_PER_TASK: Final[int] = 5
-# task 単位で reviewer が報告できる missing 件数の上限。
-EVIDENCE_REVIEW_MISSING_LIMIT_PER_TASK: Final[int] = 5
+# Run 単位で reviewer が採用できる根拠の上限(内外合算)。
+EVIDENCE_REVIEW_ADOPTION_LIMIT: Final[int] = 15
+# Run 単位で reviewer が報告できる missing 件数の上限。
+EVIDENCE_REVIEW_MISSING_LIMIT: Final[int] = 8
 
 
 @dataclass(frozen=True, slots=True)
@@ -53,11 +59,29 @@ class EvidenceCandidateInput:
 
 
 @dataclass(frozen=True, slots=True)
-class EvidenceReviewInput:
-    """Evidence Reviewer Agentの1 attempt入力。"""
+class ReviewTaskCandidates:
+    """1 taskの精査前候補。EvidenceReviewer.review()がtask単位で受け取る入力。"""
 
+    task_index: int
+    research_goal: str
+    internal_hits: list[InternalArticleSearchHit]
+    external_candidates: list[ExternalSearchCandidate]
+
+
+@dataclass(frozen=True, slots=True)
+class EvidenceReviewTaskGroup:
+    """Reviewerへ渡す、1 task分のgoalとcandidate projection。"""
+
+    task_index: int
     research_goal: str
     candidates: tuple[EvidenceCandidateInput, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class EvidenceReviewInput:
+    """Evidence Reviewer AgentのRun単位1 attempt入力。"""
+
+    task_groups: tuple[EvidenceReviewTaskGroup, ...]
     content_requirements: tuple[str, ...]
     as_of: datetime
 
@@ -131,7 +155,7 @@ class EvidenceReviewResult(BaseModel):
 
     @model_validator(mode="after")
     def _validate_missing_caps(self) -> EvidenceReviewResult:
-        if len(self.missing) > EVIDENCE_REVIEW_MISSING_LIMIT_PER_TASK:
+        if len(self.missing) > EVIDENCE_REVIEW_MISSING_LIMIT:
             raise ValueError("missing exceeds evidence review missing limit")
         if any(len(item) > MISSING_ITEM_MAX_CHARS for item in self.missing):
             raise ValueError("missing item exceeds max length")
@@ -160,7 +184,7 @@ class InternalArticleEvidence(BaseModel):
 
 @dataclass(frozen=True, slots=True)
 class EvidenceReviewOutcome:
-    """EvidenceReviewer.review()が返す1 taskの精査結果。合流前の中間値。"""
+    """EvidenceReviewer.review()が返すRun全体の精査結果。合流前の中間値。"""
 
     internal_evidence: list[InternalArticleEvidence]
     external_evidence: list[ExternalSearchEvidence]
@@ -172,7 +196,7 @@ class EvidenceReviewOutcome:
 def _clamp_missing(missing: Sequence[str]) -> list[str]:
     return [
         _truncate_text(item, MISSING_ITEM_MAX_CHARS)
-        for item in missing[:EVIDENCE_REVIEW_MISSING_LIMIT_PER_TASK]
+        for item in missing[:EVIDENCE_REVIEW_MISSING_LIMIT]
     ]
 
 

@@ -575,7 +575,10 @@ async def test_external_pipeline_normalizes_queries_and_hides_urls_from_reviewer
         "third",
     ]
     assert all(call.limit == 10 for call in tool.calls)
-    assert all(not hasattr(candidate, "url") for candidate in reviewer_input.candidates)
+    assert all(
+        not hasattr(candidate, "url")
+        for candidate in reviewer_input.task_groups[0].candidates
+    )
     assert (
         [(item.source.title, item.source.evidence_claim) for item in answerer.calls[0]],
         result.final_output.status,
@@ -914,15 +917,19 @@ async def test_time_filter_resolution_failure_closes_external_branch_before_acti
                 report.provider_failed_query_count,
                 report.internal_candidate_count,
                 report.external_candidate_count,
-                report.review,
-                report.internal_evidence_count,
-                report.external_evidence_count,
-                report.dropped_selection_count,
-                report.review_failure_reason,
-                report.missing,
             )
             for report in reports
         ],
+        # S1: reviewはtask単位のfieldではなくEvidenceCollectionOutcome.reviewへ
+        # 移動した(両taskとも候補ゼロのためRun全体がskipped_emptyで1本になる)。
+        (
+            captured[0].review.review,
+            captured[0].review.internal_evidence_count,
+            captured[0].review.external_evidence_count,
+            captured[0].review.dropped_selection_count,
+            captured[0].review.review_failure_reason,
+            captured[0].review.missing,
+        ),
         _time_filter_metric_points(metrics),
         [
             entry
@@ -948,12 +955,6 @@ async def test_time_filter_resolution_failure_closes_external_branch_before_acti
                 0,
                 0,
                 0,
-                "skipped_empty",
-                0,
-                0,
-                0,
-                None,
-                [],
             ),
             (
                 1,
@@ -964,14 +965,9 @@ async def test_time_filter_resolution_failure_closes_external_branch_before_acti
                 0,
                 0,
                 0,
-                "skipped_empty",
-                0,
-                0,
-                0,
-                None,
-                [],
             ),
         ],
+        ("skipped_empty", 0, 0, 0, None, []),
         [(1, {"result": "failed", "reason": expected_reason})],
         [
             {
@@ -1008,7 +1004,7 @@ async def test_provider_result_cap_is_applied_before_candidate_pool(
 
     await _run(runner)
 
-    candidates = reviewer_runtime.calls[0].input.candidates
+    candidates = reviewer_runtime.calls[0].input.task_groups[0].candidates
     assert (
         len(candidates),
         candidates[-1].title,
@@ -1082,18 +1078,21 @@ async def test_partial_provider_failure_continues_but_all_failure_skips_reviewer
                 report.external_collection,
                 report.provider_failed_query_count,
                 report.external_candidate_count,
-                report.review,
             )
             for report in captured[0].task_reports
         ],
+        # S1: reviewはtask単位のfieldではなくEvidenceCollectionOutcome.reviewへ
+        # 移動した。task0に候補が残るためRun全体としてreviewerが起動しsucceededになる。
+        captured[0].review.review,
     ) == (
         ["good", "bad", "bad"],
         1,
         [[]],
         [
-            ("succeeded", 1, 1, "succeeded"),
-            ("provider_failed", 1, 0, "skipped_empty"),
+            ("succeeded", 1, 1),
+            ("provider_failed", 1, 0),
         ],
+        "succeeded",
     )
 
 
@@ -1142,12 +1141,13 @@ async def test_reviewer_failure_after_two_attempts_becomes_failed_review_report(
     await _run(runner)
 
     report = captured[0].task_reports[0]
+    review = captured[0].review
     assert (
         report.external_collection,
-        report.review,
-        report.review_failure_reason,
-        report.internal_evidence_count,
-        report.external_evidence_count,
+        review.review,
+        review.review_failure_reason,
+        review.internal_evidence_count,
+        review.external_evidence_count,
         [call.attempt_number for call in reviewer_runtime.calls],
         answerer.calls,
     ) == ("succeeded", "failed", "response_not_json", 0, 0, [1, 2], [[]])
@@ -1165,6 +1165,9 @@ async def test_workflow_constructs_task_ordered_external_outcome_before_answerin
             query_runtime=ScriptedAgentRuntime(
                 [_query_draft(["q1"]), _query_draft(["q2"])]
             ),
+            # S1: reviewerはRun単位1回。統合index空間(仮定: task昇順)ではtask0の
+            # 唯一の候補が0、task1の唯一の候補が1になる。task単位で呼ぶ旧経路が
+            # 残っていても2件目のcallがscript枯渇crashにならないよう空draftを足す。
             reviewer_runtime=ScriptedAgentRuntime(
                 [
                     _review_draft(
@@ -1173,18 +1176,15 @@ async def test_workflow_constructs_task_ordered_external_outcome_before_answerin
                                 "candidate_index": 0,
                                 "claim": "first claim",
                                 "why_selected": "why",
-                            }
-                        ]
-                    ),
-                    _review_draft(
-                        [
+                            },
                             {
-                                "candidate_index": 0,
+                                "candidate_index": 1,
                                 "claim": "second claim",
                                 "why_selected": "why",
-                            }
+                            },
                         ]
                     ),
+                    _review_draft([]),
                 ]
             ),
             tool=_Tool(
@@ -1201,6 +1201,7 @@ async def test_workflow_constructs_task_ordered_external_outcome_before_answerin
 
     outcome = captured[0].external_search
     reports = captured[0].task_reports
+    review = captured[0].review
     assert (
         [report.research_goal for report in reports],
         outcome.requested_agent_count,
@@ -1212,30 +1213,46 @@ async def test_workflow_constructs_task_ordered_external_outcome_before_answerin
                 report.external_collection,
                 report.generated_queries,
                 report.external_candidate_count,
-                report.internal_evidence_count,
-                report.external_evidence_count,
-                report.dropped_selection_count,
             )
             for report in reports
         ],
+        # S1(合流と重複排除): 外部根拠のURL重複排除は廃止されたため、taskが
+        # 違えば同じURLが両方とも根拠として残る(deduplicated_evidence_count==0)。
+        # 採用件数(internal_evidence_count/external_evidence_count)はtask単位の
+        # fieldではなくEvidenceCollectionOutcome.reviewへ移動した。
         [item.source_ref for item in outcome.evidence],
         outcome.deduplicated_evidence_count,
+        (review.review, review.internal_evidence_count, review.external_evidence_count),
     ) == (
         [task.research_goal for task in tasks],
         4,
         2,
         3,
         [
-            (0, "succeeded", ["q1"], 1, 0, 1, 0),
-            (1, "succeeded", ["q2"], 1, 0, 1, 0),
+            (0, "succeeded", ["q1"], 1),
+            (1, "succeeded", ["q2"], 1),
         ],
-        ["0-0"],
-        1,
+        ["0-0", "1-1"],
+        0,
+        ("succeeded", 0, 2),
     )
 
 
 @pytest.mark.asyncio
-async def test_events_are_per_task_causal_with_their_contract_payloads() -> None:
+async def test_collection_events_are_per_task_causal_with_their_contract_payloads() -> (
+    None
+):
+    """収集event(queries_generated → candidates_fetched)がtaskごとに正しい
+
+    順序・payloadで出ることを保証する(不変条件ごとに所有テストを決める)。
+    S1でreviewerはRun単位1回になり、全taskの収集完了を待ってから走るため、
+    evidence_selectedは両task分がまとめて精査成功後にしか発火しない
+    (task0が完結してからtask1が始まる、というper-task逐次因果は成立しない)。
+    evidence_selectedの発火順序・件数は
+    tests/agent/running/test_evidence_review_run_scope.py::
+    test_progress_events_fire_ascending_by_task_index_after_review_succeeds が
+    正本のため、ここでは重複して主張しない。
+    """
     events = _Events()
     query_runtime = ScriptedAgentRuntime([_query_draft(["q1"]), _query_draft(["q2"])])
     reviewer_runtime = ScriptedAgentRuntime([_review_draft([]), _review_draft([])])
@@ -1257,7 +1274,16 @@ async def test_events_are_per_task_causal_with_their_contract_payloads() -> None
 
     await _run(runner)
 
-    assert [event.model_dump() for event in _external_search_events(events.events)] == [
+    collection_events = [
+        event.model_dump()
+        for event in _external_search_events(events.events)
+        if event.type
+        in {
+            "external_search.queries_generated",
+            "external_search.candidates_fetched",
+        }
+    ]
+    assert collection_events == [
         {
             "type": "external_search.queries_generated",
             "task_index": 0,
@@ -1269,11 +1295,6 @@ async def test_events_are_per_task_causal_with_their_contract_payloads() -> None
             "candidate_count": 1,
         },
         {
-            "type": "external_search.evidence_selected",
-            "task_index": 0,
-            "evidence_count": 0,
-        },
-        {
             "type": "external_search.queries_generated",
             "task_index": 1,
             "queries": ["q2"],
@@ -1282,11 +1303,6 @@ async def test_events_are_per_task_causal_with_their_contract_payloads() -> None
             "type": "external_search.candidates_fetched",
             "task_index": 1,
             "candidate_count": 1,
-        },
-        {
-            "type": "external_search.evidence_selected",
-            "task_index": 1,
-            "evidence_count": 0,
         },
     ]
 
@@ -1522,49 +1538,54 @@ async def test_unclassified_query_failure_joins_sibling_before_reraise() -> None
 
 
 @pytest.mark.asyncio
-async def test_cross_task_dedupe_keeps_first_and_scope_is_fresh_per_run() -> None:
+async def test_cross_task_same_url_both_kept_and_scope_is_fresh_per_run() -> None:
+    """S1(合流と重複排除): 外部根拠のURL重複排除は廃止されたため、taskが違えば
+
+    同じURLが両方とも根拠として残る(旧: URL先勝ちdedupで片方だけが残っていた)。
+    reviewerはRun単位1回のため、統合index空間(仮定: task昇順)の0,1を1つの
+    draftで選ばせる(task単位で呼ぶ旧経路が残っていても2件目のcallが
+    script枯渇crashにならないよう空draftを足す)。
+    """
     tasks = [_task("first"), _task("second")]
-    first_runtime = _runtime(
-        query_runtime=ScriptedAgentRuntime(
-            [_query_draft(["q1"]), _query_draft(["q2"])]
-        ),
-        reviewer_runtime=ScriptedAgentRuntime(
+
+    def _reviewer_runtime() -> ScriptedAgentRuntime:
+        return ScriptedAgentRuntime(
             [
                 _review_draft(
-                    [{"candidate_index": 0, "claim": "first", "why_selected": "why"}]
+                    [
+                        {"candidate_index": 0, "claim": "first", "why_selected": "why"},
+                        {
+                            "candidate_index": 1,
+                            "claim": "second",
+                            "why_selected": "why",
+                        },
+                    ]
                 ),
-                _review_draft(
-                    [{"candidate_index": 0, "claim": "second", "why_selected": "why"}]
-                ),
+                _review_draft([]),
             ]
-        ),
-        tool=_Tool(
+        )
+
+    def _tool() -> _Tool:
+        return _Tool(
             {
                 "q1": [_candidate("https://example.com/shared", title="first")],
                 "q2": [_candidate("https://example.com/shared", title="second")],
             }
+        )
+
+    first_runtime = _runtime(
+        query_runtime=ScriptedAgentRuntime(
+            [_query_draft(["q1"]), _query_draft(["q2"])]
         ),
+        reviewer_runtime=_reviewer_runtime(),
+        tool=_tool(),
     )
     second_runtime = _runtime(
         query_runtime=ScriptedAgentRuntime(
             [_query_draft(["q1"]), _query_draft(["q2"])]
         ),
-        reviewer_runtime=ScriptedAgentRuntime(
-            [
-                _review_draft(
-                    [{"candidate_index": 0, "claim": "first", "why_selected": "why"}]
-                ),
-                _review_draft(
-                    [{"candidate_index": 0, "claim": "second", "why_selected": "why"}]
-                ),
-            ]
-        ),
-        tool=_Tool(
-            {
-                "q1": [_candidate("https://example.com/shared", title="first")],
-                "q2": [_candidate("https://example.com/shared", title="second")],
-            }
-        ),
+        reviewer_runtime=_reviewer_runtime(),
+        tool=_tool(),
     )
     answerer = _EvidenceAnswerer()
     factory = _Factory([first_runtime, second_runtime])
@@ -1587,11 +1608,11 @@ async def test_cross_task_dedupe_keeps_first_and_scope_is_fresh_per_run() -> Non
     await _run(runner)
 
     assert (
-        [[item.source.title for item in evidence] for evidence in answerer.calls],
+        [sorted(item.source.title for item in evidence) for evidence in answerer.calls],
         len(factory.scopes),
         factory.scopes[0] is not factory.scopes[1],
         [scope.exit_calls for scope in factory.scopes],
-    ) == ([["first"], ["first"]], 2, True, [1, 1])
+    ) == ([["first", "second"], ["first", "second"]], 2, True, [1, 1])
 
 
 @pytest.mark.asyncio
@@ -1635,7 +1656,8 @@ async def test_query_timeout_backstop_cancels_the_runtime_and_reports_failure(
     assert (
         query_runtime.cancelled,
         report.external_collection,
-        report.review,
+        # S1: reviewはtask単位のfieldではなくoutcome.reviewへ移動した。
+        captured[0].review.review,
         report.generated_queries,
         observed_timeouts.count(30),
     ) == (True, "query_generation_failed", "skipped_empty", [], 1)
@@ -1667,7 +1689,8 @@ async def test_provider_timeout_backstop_cancels_tool_and_skips_reviewer(
         tool.cancelled,
         reviewer_runtime.calls,
         report.external_collection,
-        report.review,
+        # S1: reviewはtask単位のfieldではなくoutcome.reviewへ移動した。
+        captured[0].review.review,
         report.provider_failed_query_count,
         observed_timeouts.count(15),
     ) == (True, True, [], "provider_failed", "skipped_empty", 1, 1)

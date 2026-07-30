@@ -1,18 +1,20 @@
 """Evidence Reviewer が共有する純粋なドメイン規則。
 
-内部・外部統合candidate列を対象とする候補projectionの構築と、
-選別結果からの出典再構築を持つ。
+Run内の全taskの候補をtask_index昇順・通しindexでグループ化したprojectionの
+構築と、選別結果からの出典再構築を持つ。
 """
 
 from __future__ import annotations
 
 from app.agent.evidence_collection.evidence_review.contract import (
-    EVIDENCE_REVIEW_ADOPTION_LIMIT_PER_TASK,
+    EVIDENCE_REVIEW_ADOPTION_LIMIT,
     EvidenceCandidateInput,
     EvidenceReviewDraft,
     EvidenceReviewResult,
+    EvidenceReviewTaskGroup,
     InternalArticleEvidence,
     ReviewSelection,
+    ReviewTaskCandidates,
 )
 from app.agent.evidence_collection.external_search.contract import (
     CANDIDATE_SNIPPET_MAX_CHARS,
@@ -27,8 +29,8 @@ __all__ = [
     "EVIDENCE_REVIEW_TIMEOUT_SECONDS",
     "REVIEWER_ERROR_REASON",
     "REVIEWER_TIMEOUT_REASON",
-    "build_review_candidate_projection",
     "build_review_evidence",
+    "build_review_task_groups",
     "finalize_review_draft",
     "resolve_reviewer_failure_reason",
 ]
@@ -38,23 +40,45 @@ REVIEWER_TIMEOUT_REASON = "reviewer_timeout"
 REVIEWER_ERROR_REASON = "reviewer_error"
 
 
-def build_review_candidate_projection(
+def build_review_task_groups(
+    tasks: list[ReviewTaskCandidates],
+) -> tuple[EvidenceReviewTaskGroup, ...]:
+    """Run内の全taskをtask_index昇順に並べ、通しindexのcandidate群でグループ化する。
+
+    候補が内外ともゼロのtaskも欠番にせず空groupとして残す。
+    """
+    ordered_tasks = sorted(tasks, key=lambda task: task.task_index)
+    groups: list[EvidenceReviewTaskGroup] = []
+    next_index = 0
+    for task in ordered_tasks:
+        candidates, next_index = _build_group_candidates(task, start_index=next_index)
+        groups.append(
+            EvidenceReviewTaskGroup(
+                task_index=task.task_index,
+                research_goal=task.research_goal,
+                candidates=candidates,
+            )
+        )
+    return tuple(groups)
+
+
+def _build_group_candidates(
+    task: ReviewTaskCandidates,
     *,
-    internal_hits: list[InternalArticleSearchHit],
-    external_candidates: list[ExternalSearchCandidate],
-) -> tuple[EvidenceCandidateInput, ...]:
-    """内部候補を先・外部候補を後にした単一index空間のprojectionを作る。"""
+    start_index: int,
+) -> tuple[tuple[EvidenceCandidateInput, ...], int]:
+    """内部候補を先・外部候補を後にした、通しindexのgroup内candidate列を作る。"""
     projection = [
         EvidenceCandidateInput(
-            index=index,
+            index=start_index + index,
             title=hit.content.title,
             source_name=None,
             published_at=hit.content.published_at,
             snippet=_internal_candidate_snippet(hit),
         )
-        for index, hit in enumerate(internal_hits)
+        for index, hit in enumerate(task.internal_hits)
     ]
-    offset = len(internal_hits)
+    offset = start_index + len(task.internal_hits)
     projection.extend(
         EvidenceCandidateInput(
             index=offset + position,
@@ -63,9 +87,10 @@ def build_review_candidate_projection(
             published_at=candidate.published_at,
             snippet=candidate.snippet,
         )
-        for position, candidate in enumerate(external_candidates)
+        for position, candidate in enumerate(task.external_candidates)
     )
-    return tuple(projection)
+    next_index = offset + len(task.external_candidates)
+    return tuple(projection), next_index
 
 
 def _internal_candidate_snippet(hit: InternalArticleSearchHit) -> str:
@@ -80,18 +105,19 @@ def _internal_candidate_snippet(hit: InternalArticleSearchHit) -> str:
 
 def build_review_evidence(
     *,
-    task_index: int,
-    internal_hits: list[InternalArticleSearchHit],
-    external_candidates: list[ExternalSearchCandidate],
+    tasks: list[ReviewTaskCandidates],
     selection_result: EvidenceReviewResult,
 ) -> tuple[list[InternalArticleEvidence], list[ExternalSearchEvidence], int]:
-    """統合index空間のselectionから、範囲外/重複/上限超過をdropしつつ出典を復元する。"""
+    """Run全体の通しindexのselectionから、範囲外/重複/Run単位上限超過を
+
+    dropしつつ出典と所属taskを復元する。
+    """
+    index_map = _build_index_map(tasks)
     internal_evidence: list[InternalArticleEvidence] = []
     external_evidence: list[ExternalSearchEvidence] = []
     selected_indexes: set[int] = set()
     dropped_selection_count = 0
-    internal_count = len(internal_hits)
-    total_count = internal_count + len(external_candidates)
+    total_count = len(index_map)
 
     for selection in selection_result.selections:
         index = selection.candidate_index
@@ -99,26 +125,28 @@ def build_review_evidence(
             index >= total_count
             or index in selected_indexes
             or len(internal_evidence) + len(external_evidence)
-            >= EVIDENCE_REVIEW_ADOPTION_LIMIT_PER_TASK
+            >= EVIDENCE_REVIEW_ADOPTION_LIMIT
         ):
             dropped_selection_count += 1
             continue
 
         selected_indexes.add(index)
+        task_index, hit, candidate = index_map[index]
         source_ref = f"{task_index}-{index}"
-        if index < internal_count:
+        if hit is not None:
             internal_evidence.append(
                 _build_internal_evidence(
-                    hit=internal_hits[index],
+                    hit=hit,
                     selection=selection,
                     source_ref=source_ref,
                     task_index=task_index,
                 )
             )
         else:
+            assert candidate is not None  # noqa: S101
             external_evidence.append(
                 _build_external_evidence(
-                    candidate=external_candidates[index - internal_count],
+                    candidate=candidate,
                     selection=selection,
                     source_ref=source_ref,
                     task_index=task_index,
@@ -126,6 +154,22 @@ def build_review_evidence(
             )
 
     return internal_evidence, external_evidence, dropped_selection_count
+
+
+type _IndexMapEntry = tuple[
+    int, InternalArticleSearchHit | None, ExternalSearchCandidate | None
+]
+
+
+def _build_index_map(tasks: list[ReviewTaskCandidates]) -> list[_IndexMapEntry]:
+    """build_review_task_groupsと同じ並びで、通しindex→(task_index, 候補)を作る。"""
+    index_map: list[_IndexMapEntry] = []
+    for task in sorted(tasks, key=lambda task: task.task_index):
+        for hit in task.internal_hits:
+            index_map.append((task.task_index, hit, None))
+        for candidate in task.external_candidates:
+            index_map.append((task.task_index, None, candidate))
+    return index_map
 
 
 def _build_internal_evidence(

@@ -317,11 +317,15 @@ async def test_external_phase_spans_keep_attributes_parentage_and_no_sensitive_t
         EXTERNAL_QUERY_AGENT.name,
         EVIDENCE_REVIEWER_AGENT.name,
     }
-    assert all(
-        domain_attr_keys(phase["attributes"]) == {"phase", "agent_name", "task_index"}
-        for phase in phases
-    )
-    assert all(phase["attributes"]["task_index"] == 0 for phase in phases)
+    # S1: evidence_review のphase spanはRun全体を覆うため task_index を持たない
+    # (仕様「観測と失敗分類」)。task単位のexternal_query phaseは維持する。
+    assert domain_attr_keys(
+        phase_by_agent[EXTERNAL_QUERY_AGENT.name]["attributes"]
+    ) == {"phase", "agent_name", "task_index"}
+    assert phase_by_agent[EXTERNAL_QUERY_AGENT.name]["attributes"]["task_index"] == 0
+    assert domain_attr_keys(
+        phase_by_agent[EVIDENCE_REVIEWER_AGENT.name]["attributes"]
+    ) == {"phase", "agent_name"}
     assert all("task_index" not in provider["attributes"] for provider in providers)
     assert [provider["attributes"]["attempt_number"] for provider in providers] == [
         1,
@@ -548,10 +552,14 @@ def _two_task_plan(*, task_queries: tuple[list[str], list[str]]) -> SearchPlan:
 
 
 def _review_draft_selecting_all_offered_candidates() -> Any:
-    """D4-S1: 統合index空間の候補(最大2件)を全て採用するdraft。
+    """S1: 統合index空間の候補(最大4件、2 task×内部2件)を全て採用するdraft。
 
-    候補が1件のtaskではindex 1が範囲外dropとなるだけで安全に使い回せる
-    (このモジュールのinternal-onlyな内部統計テスト専用の軽量fake)。
+    reviewerはRun単位1回のため、この1つのdraftだけで両taskの候補が
+    Run全体の通しindexで選ばれる必要がある(旧: taskごとに(0,1)を別々の
+    callで選ぶ前提だったが、Run単位1回ではそれだと2個目のtaskの候補に
+    通しindexで到達できない)。候補がそれより少ないtask構成では超過indexが
+    範囲外dropとなるだけで安全に使い回せる
+    (このモジュールの複数taskにまたがる内部統計テスト専用の軽量fake)。
     """
     from app.agent.evidence_collection.evidence_review import EvidenceReviewDraft
 
@@ -563,7 +571,7 @@ def _review_draft_selecting_all_offered_candidates() -> Any:
                     "claim": f"claim-{index}",
                     "why_selected": "w",
                 }
-                for index in (0, 1)
+                for index in range(4)
             ],
             "missing": [],
         }
@@ -574,8 +582,8 @@ def _two_task_query_failing_runtime() -> ExternalResearchRuntime:
     """外部query生成を2 task分とも失敗させ、外部候補を空に保つ(内部統計だけに絞る)。
 
     D4-S1: internal候補が非空なら候補ゼロtaskではないためreviewerが起動する。
-    このmoduleのinternal統計テストは最大2 taskなので、2件分を用意しておけば
-    実際の呼び出し回数(0〜2)に関わらず安全に使い回せる
+    S1: reviewerはRun単位1回のため実際に消費されるのは1つだけだが、
+    taskごとに呼ぶ旧経路が残っていても安全に使い回せるよう2件分用意する
     (ScriptedAgentRuntimeは未消費のoutcomeを許容する)。
     """
     query_failure = AgentResponseInvalidError(AgentResponseDefect.RESPONSE_NOT_JSON)

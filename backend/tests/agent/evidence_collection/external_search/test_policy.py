@@ -3,8 +3,9 @@
 selector 一式(build_external_evidence / finalize_selection_draft /
 EVIDENCE_SELECT_TIMEOUT_SECONDS 等)は `evidence_review.policy` へ改名移設
 された(tests/agent/evidence_collection/evidence_review/test_policy.py が
-新契約の正本)。ここには外部候補pool構築・外部URL dedupなど、query/candidate
-収集に閉じた関数だけを残す。
+新契約の正本)。ここには外部候補pool構築など、query/candidate収集に閉じた
+関数だけを残す。外部URL dedup(deduplicate_external_evidence_by_url)は
+S1(仕様「合流と重複排除」)で廃止された。
 """
 
 from __future__ import annotations
@@ -18,7 +19,6 @@ import pytest
 
 from app.agent.evidence_collection.external_search.contract import (
     ExternalSearchCandidate,
-    ExternalSearchEvidence,
 )
 
 
@@ -50,17 +50,6 @@ def _candidate(url: str, *, title: str | None = None) -> ExternalSearchCandidate
     )
 
 
-def _evidence(*, task_index: int, source_ref: str, url: str) -> ExternalSearchEvidence:
-    return ExternalSearchEvidence(
-        source_ref=source_ref,
-        task_index=task_index,
-        claim="claim",
-        why_selected="why",
-        url=url,
-        title=source_ref,
-    )
-
-
 def test_policy_exports_the_public_domain_functions_and_timeout_constants() -> None:
     policy = _policy()
 
@@ -68,13 +57,23 @@ def test_policy_exports_the_public_domain_functions_and_timeout_constants() -> N
         {
             "clean_generated_queries",
             "build_candidate_pool",
-            "deduplicate_external_evidence_by_url",
             "resolve_external_search_agent_count",
         }
         <= set(dir(policy)),
         policy.QUERY_GENERATE_TIMEOUT_SECONDS,
         policy.PROVIDER_SEARCH_TIMEOUT_SECONDS,
     ) == (True, 30, 15)
+
+
+def test_url_deduplication_is_removed_from_policy() -> None:
+    """S1(合流と重複排除)。外部根拠のURL重複排除は廃止され、taskが違えば
+
+    同じURLが別の観点の根拠として並ぶことを許容する
+    (deduplicate_external_evidence_by_url()とその整合validatorを削除する)。
+    """
+    policy = _policy()
+
+    assert not hasattr(policy, "deduplicate_external_evidence_by_url")
 
 
 def test_clean_generated_queries_strips_caps_deduplicates_and_limits_to_three() -> None:
@@ -120,29 +119,6 @@ def test_build_candidate_pool_round_robins_urls_and_stops_at_twenty() -> None:
         "left-3",
     ]
     assert len(pool) == 20
-
-
-def test_deduplicate_external_evidence_by_url_keeps_first_source_ref() -> None:
-    deduplicate = _function("deduplicate_external_evidence_by_url")
-    first = _evidence(
-        task_index=0,
-        source_ref="0-0",
-        url="https://example.com/shared",
-    )
-    duplicate = _evidence(
-        task_index=1,
-        source_ref="1-0",
-        url="https://example.com/shared",
-    )
-    unique = _evidence(
-        task_index=1,
-        source_ref="1-1",
-        url="https://example.com/unique",
-    )
-
-    evidence, dropped = deduplicate([first, duplicate, unique])
-
-    assert (evidence, dropped) == ([first, unique], 1)
 
 
 def test_external_agent_count_is_bounded_by_task_count_and_hard_limit() -> None:

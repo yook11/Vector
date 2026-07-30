@@ -154,19 +154,28 @@ def _missing_aspects(
         values.append(_RETRIEVAL_EMPTY_MISSING)
     if _has_incomplete_task(outcome):
         values.append(_INCOMPLETE_TASK_MISSING)
-    values.extend(_external_task_missing(outcome))
+    values.extend(_external_task_status_missing(outcome))
+    values.extend(outcome.review.missing)
     values.extend(draft_missing_aspects)
     values.extend(requirement_missing_aspects)
     return _deduplicate(values)
 
 
 def _has_incomplete_task(outcome: EvidenceCollectionOutcome) -> bool:
+    if outcome.review.review == "failed":
+        return True
     return any(
-        report.review in ("failed", "skipped_empty") for report in outcome.task_reports
+        report.internal_candidate_count == 0 and report.external_candidate_count == 0
+        for report in outcome.task_reports
     )
 
 
-def _external_task_missing(outcome: EvidenceCollectionOutcome) -> list[str]:
+def _external_task_status_missing(outcome: EvidenceCollectionOutcome) -> list[str]:
+    """収集の失敗表明(time filter文言)だけをtask単位で連結する。
+
+    Run全体の不足(missing)はreviewerがRun単位で1本返すため、
+    ここでtask別に連結しない(仕様「何ができていないかの表明」)。
+    """
     missing: list[str] = []
     for report in sorted(
         outcome.task_reports,
@@ -175,7 +184,6 @@ def _external_task_missing(outcome: EvidenceCollectionOutcome) -> list[str]:
         status_missing = _EXTERNAL_TASK_STATUS_MISSING.get(report.external_collection)
         if status_missing is not None:
             missing.append(status_missing)
-        missing.extend(report.missing)
     return missing
 
 

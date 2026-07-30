@@ -32,19 +32,23 @@ from app.agent.contract import (
 )
 from app.agent.evidence_collection import (
     EvidenceCollectionOutcome,
+    EvidenceReviewReport,
     ResearchTaskCandidates,
     ResearchTaskReport,
 )
 from app.agent.evidence_collection.contract import (
     TaskExternalCollectionStatus,
     TaskInternalCollectionStatus,
-    TaskReviewStatus,
 )
-from app.agent.evidence_collection.evidence_review import InternalArticleEvidence
+from app.agent.evidence_collection.evidence_review import (
+    EvidenceReviewOutcome,
+    InternalArticleEvidence,
+    ReviewTaskCandidates,
+)
 from app.agent.evidence_collection.external_search.contract import (
     ExternalResearchRuntime,
+    ExternalSearchCandidate,
     ExternalSearchDateFilter,
-    ExternalSearchEvidence,
     ExternalSearchOutcome,
     TimeFilterFailureReason,
 )
@@ -52,12 +56,14 @@ from app.agent.evidence_collection.external_search.observability import (
     observe_time_filter_resolution,
 )
 from app.agent.evidence_collection.external_search.policy import (
-    deduplicate_external_evidence_by_url,
     resolve_external_search_agent_count,
 )
 from app.agent.evidence_collection.external_search.time_filter import (
     ExternalSearchDateFilterResolutionError,
     resolve_external_search_date_filter,
+)
+from app.agent.evidence_collection.internal_search.contract import (
+    InternalArticleSearchHit,
 )
 from app.agent.input_safety.contract import (
     INPUT_SAFETY_TEXT_CHAR_CAP,
@@ -90,11 +96,13 @@ _SPAN_NAME = "agent_answering_run"
 
 
 @dataclass(frozen=True, slots=True)
-class _TaskResult:
-    """1 taskのResearcher収集+Reviewer精査結果。合流前の中間値。"""
+class _TaskCollection:
+    """1 taskのResearcher収集結果と収集onlyのreport。精査はRun単位で別途行う。"""
 
-    internal_evidence: list[InternalArticleEvidence]
-    external_evidence: list[ExternalSearchEvidence]
+    task_index: int
+    research_goal: str
+    internal_hits: list[InternalArticleSearchHit]
+    external_candidates: list[ExternalSearchCandidate]
     report: ResearchTaskReport
 
 
@@ -275,7 +283,7 @@ class AnsweringRunner:
         # reviewerがLLM runtimeを必要とするため、time filter失敗時も含め常にscopeを
         # activateする(外部query/HTTP検索だけをtask単位でskipする)。
         async with phases.external_runtime_factory.activate() as external:
-            return await self._fan_out_tasks(
+            return await self._collect_and_review_all_tasks(
                 phases=phases,
                 plan=plan,
                 tasks=tasks,
@@ -286,7 +294,7 @@ class AnsweringRunner:
                 as_of=as_of,
             )
 
-    async def _fan_out_tasks(
+    async def _collect_and_review_all_tasks(
         self,
         *,
         phases: AnsweringPhases,
@@ -304,9 +312,9 @@ class AnsweringRunner:
         )
         semaphore = asyncio.Semaphore(max(1, effective_agent_count))
 
-        async def run_task(task_index: int, task: ResearchTask) -> _TaskResult:
+        async def run_task(task_index: int, task: ResearchTask) -> _TaskCollection:
             async with semaphore:
-                return await self._collect_and_review(
+                return await self._collect_task(
                     phases=phases,
                     task_index=task_index,
                     task=task,
@@ -314,41 +322,99 @@ class AnsweringRunner:
                     date_filter=date_filter,
                     time_filter_failure=time_filter_failure,
                     target_time_window=plan.target_time_window,
-                    content_requirements=content_requirements,
                     as_of=as_of,
                 )
 
-        results = await gather_cancel_on_error(
+        collected_tasks = await gather_cancel_on_error(
             *[run_task(task_index, task) for task_index, task in enumerate(tasks)]
         )
 
-        internal_evidence: list[InternalArticleEvidence] = []
-        external_evidence: list[ExternalSearchEvidence] = []
-        reports: list[ResearchTaskReport] = []
-        for result in results:
-            internal_evidence.extend(result.internal_evidence)
-            external_evidence.extend(result.external_evidence)
-            reports.append(result.report)
+        task_reports = [collected.report for collected in collected_tasks]
+        review_candidates = [
+            ReviewTaskCandidates(
+                task_index=collected.task_index,
+                research_goal=collected.research_goal,
+                internal_hits=collected.internal_hits,
+                external_candidates=collected.external_candidates,
+            )
+            for collected in collected_tasks
+        ]
+
+        # 全taskの収集が完了してから、Run全体を1回の入力として精査する
+        # (収集は並列を維持したまま、精査だけがRun単位1回になる)。
+        if not any(
+            candidates.internal_hits or candidates.external_candidates
+            for candidates in review_candidates
+        ):
+            return self._closed_evidence_outcome(
+                review=EvidenceReviewReport(review="skipped_empty"),
+                task_reports=task_reports,
+                effective_agent_count=effective_agent_count,
+            )
+
+        outcome = await phases.reviewer.review(
+            tasks=review_candidates,
+            content_requirements=content_requirements,
+            as_of=as_of,
+            reviewer_runtime=external.reviewer_runtime,
+        )
+
+        if outcome.failure_reason is not None:
+            return self._closed_evidence_outcome(
+                review=EvidenceReviewReport(
+                    review="failed",
+                    review_failure_reason=outcome.failure_reason,
+                ),
+                task_reports=task_reports,
+                effective_agent_count=effective_agent_count,
+            )
+
+        await self._report_selected_evidence_events(
+            outcome=outcome, review_candidates=review_candidates
+        )
 
         deduplicated_internal_evidence, internal_deduplicated_count = (
-            _deduplicate_internal_evidence_by_curation_id(internal_evidence)
-        )
-        deduplicated_evidence, deduplicated_count = (
-            deduplicate_external_evidence_by_url(external_evidence)
+            _deduplicate_internal_evidence_by_curation_id(outcome.internal_evidence)
         )
         return EvidenceCollectionOutcome(
             internal_evidence=deduplicated_internal_evidence,
             internal_deduplicated_count=internal_deduplicated_count,
             external_search=ExternalSearchOutcome(
-                evidence=deduplicated_evidence,
-                deduplicated_evidence_count=deduplicated_count,
+                evidence=outcome.external_evidence,
                 requested_agent_count=self._requested_external_agent_count,
                 effective_agent_count=effective_agent_count,
             ),
-            task_reports=reports,
+            task_reports=task_reports,
+            review=EvidenceReviewReport(
+                review="succeeded",
+                internal_evidence_count=len(outcome.internal_evidence),
+                external_evidence_count=len(outcome.external_evidence),
+                dropped_selection_count=outcome.dropped_selection_count,
+                missing=outcome.missing,
+            ),
         )
 
-    async def _collect_and_review(
+    def _closed_evidence_outcome(
+        self,
+        *,
+        review: EvidenceReviewReport,
+        task_reports: list[ResearchTaskReport],
+        effective_agent_count: int,
+    ) -> EvidenceCollectionOutcome:
+        """精査を呼ばなかった/失敗したRunを根拠ゼロで閉じる。"""
+        return EvidenceCollectionOutcome(
+            internal_evidence=[],
+            internal_deduplicated_count=0,
+            external_search=ExternalSearchOutcome(
+                evidence=[],
+                requested_agent_count=self._requested_external_agent_count,
+                effective_agent_count=effective_agent_count,
+            ),
+            task_reports=task_reports,
+            review=review,
+        )
+
+    async def _collect_task(
         self,
         *,
         phases: AnsweringPhases,
@@ -358,9 +424,8 @@ class AnsweringRunner:
         date_filter: ExternalSearchDateFilter | None,
         time_filter_failure: TimeFilterFailureReason | None,
         target_time_window: TargetTimeWindow | None,
-        content_requirements: tuple[str, ...],
         as_of: datetime,
-    ) -> _TaskResult:
+    ) -> _TaskCollection:
         # time filter失敗taskは外部収集自体を行わない(scopeは開いたまま)。
         collected = await phases.researcher.collect(
             task_index=task_index,
@@ -370,36 +435,6 @@ class AnsweringRunner:
             target_time_window=target_time_window,
             as_of=as_of,
         )
-        internal_evidence, external_evidence, report = await self._build_task_result(
-            phases=phases,
-            task_index=task_index,
-            task=task,
-            collected=collected,
-            external=external,
-            time_filter_failure=time_filter_failure,
-            content_requirements=content_requirements,
-            as_of=as_of,
-        )
-        return _TaskResult(
-            internal_evidence=internal_evidence,
-            external_evidence=external_evidence,
-            report=report,
-        )
-
-    async def _build_task_result(
-        self,
-        *,
-        phases: AnsweringPhases,
-        task_index: int,
-        task: ResearchTask,
-        collected: ResearchTaskCandidates,
-        external: ExternalResearchRuntime,
-        time_filter_failure: TimeFilterFailureReason | None,
-        content_requirements: tuple[str, ...],
-        as_of: datetime,
-    ) -> tuple[
-        list[InternalArticleEvidence], list[ExternalSearchEvidence], ResearchTaskReport
-    ]:
         internal_collection: TaskInternalCollectionStatus = (
             "failed" if collected.internal_failed else "succeeded"
         )
@@ -409,11 +444,7 @@ class AnsweringRunner:
                 time_filter_failure=time_filter_failure,
             )
         )
-        internal_hits = collected.internal_hits
-        external_candidates = collected.candidate_pool
-        internal_candidate_count = len(internal_hits)
-        external_candidate_count = len(external_candidates)
-        collection = _CollectionReportFields(
+        report = ResearchTaskReport(
             task_index=task_index,
             research_goal=task.research_goal,
             internal_collection=internal_collection,
@@ -421,50 +452,40 @@ class AnsweringRunner:
             time_filter_failure_reason=time_filter_failure,
             generated_queries=generated_queries,
             provider_failed_query_count=provider_failed_query_count,
+            internal_candidate_count=len(collected.internal_hits),
+            external_candidate_count=len(collected.candidate_pool),
         )
-
-        if internal_candidate_count == 0 and external_candidate_count == 0:
-            return [], [], _build_task_report(collection, review="skipped_empty")
-
-        outcome = await phases.reviewer.review(
+        return _TaskCollection(
             task_index=task_index,
-            task=task,
-            content_requirements=content_requirements,
-            internal_hits=internal_hits,
-            external_candidates=external_candidates,
-            as_of=as_of,
-            reviewer_runtime=external.reviewer_runtime,
+            research_goal=task.research_goal,
+            internal_hits=collected.internal_hits,
+            external_candidates=collected.candidate_pool,
+            report=report,
         )
 
-        if outcome.failure_reason is not None:
-            report = _build_task_report(
-                collection,
-                review="failed",
-                internal_candidate_count=internal_candidate_count,
-                external_candidate_count=external_candidate_count,
-                review_failure_reason=outcome.failure_reason,
+    async def _report_selected_evidence_events(
+        self,
+        *,
+        outcome: EvidenceReviewOutcome,
+        review_candidates: list[ReviewTaskCandidates],
+    ) -> None:
+        """精査成功後、候補があったtaskについてtask_index昇順で1回ずつ発火する。"""
+        counts = {
+            candidates.task_index: 0
+            for candidates in review_candidates
+            if candidates.internal_hits or candidates.external_candidates
+        }
+        for item in outcome.internal_evidence:
+            counts[item.task_index] += 1
+        for item in outcome.external_evidence:
+            counts[item.task_index] += 1
+        for task_index in sorted(counts):
+            await self._report_event(
+                ExternalSearchEvidenceSelectedEvent(
+                    task_index=task_index,
+                    evidence_count=counts[task_index],
+                )
             )
-            return [], [], report
-
-        await self._report_event(
-            ExternalSearchEvidenceSelectedEvent(
-                task_index=task_index,
-                # 精査は内外統合のため、frontend表示が過少にならないよう合算する。
-                evidence_count=len(outcome.internal_evidence)
-                + len(outcome.external_evidence),
-            )
-        )
-        report = _build_task_report(
-            collection,
-            review="succeeded",
-            internal_candidate_count=internal_candidate_count,
-            external_candidate_count=external_candidate_count,
-            internal_evidence_count=len(outcome.internal_evidence),
-            external_evidence_count=len(outcome.external_evidence),
-            dropped_selection_count=outcome.dropped_selection_count,
-            missing=outcome.missing,
-        )
-        return outcome.internal_evidence, outcome.external_evidence, report
 
     async def _report_event(self, event: AnswerProgressEvent) -> None:
         if self._events is None:
@@ -492,51 +513,6 @@ def _external_collection_fields(
         external_status,
         collected.generated_queries,
         collected.provider_failed_query_count,
-    )
-
-
-@dataclass(frozen=True, slots=True)
-class _CollectionReportFields:
-    """review分岐(skipped_empty/failed/succeeded)に共通する収集側diagnostics。"""
-
-    task_index: int
-    research_goal: str
-    internal_collection: TaskInternalCollectionStatus
-    external_collection: TaskExternalCollectionStatus
-    time_filter_failure_reason: TimeFilterFailureReason | None
-    generated_queries: list[str]
-    provider_failed_query_count: int
-
-
-def _build_task_report(
-    collection: _CollectionReportFields,
-    *,
-    review: TaskReviewStatus,
-    internal_candidate_count: int = 0,
-    external_candidate_count: int = 0,
-    review_failure_reason: str | None = None,
-    internal_evidence_count: int = 0,
-    external_evidence_count: int = 0,
-    dropped_selection_count: int = 0,
-    missing: list[str] | None = None,
-) -> ResearchTaskReport:
-    """review分岐を1箇所でResearchTaskReportへ写像する(validatorの閉包と1対1)。"""
-    return ResearchTaskReport(
-        task_index=collection.task_index,
-        research_goal=collection.research_goal,
-        internal_collection=collection.internal_collection,
-        external_collection=collection.external_collection,
-        time_filter_failure_reason=collection.time_filter_failure_reason,
-        generated_queries=collection.generated_queries,
-        provider_failed_query_count=collection.provider_failed_query_count,
-        internal_candidate_count=internal_candidate_count,
-        external_candidate_count=external_candidate_count,
-        review=review,
-        review_failure_reason=review_failure_reason,
-        internal_evidence_count=internal_evidence_count,
-        external_evidence_count=external_evidence_count,
-        dropped_selection_count=dropped_selection_count,
-        missing=missing or [],
     )
 
 

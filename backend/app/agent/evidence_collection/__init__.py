@@ -2,6 +2,7 @@
 
 from app.agent.evidence_collection.contract import (
     EvidenceCollectionOutcome,
+    EvidenceReviewReport,
     ResearchTaskReport,
 )
 from app.agent.evidence_collection.researcher import (
@@ -12,6 +13,7 @@ from app.agent.evidence_collection.researcher import (
 
 __all__ = [
     "EvidenceCollectionOutcome",
+    "EvidenceReviewReport",
     "ExternalCollectionStatus",
     "Researcher",
     "ResearchTaskCandidates",

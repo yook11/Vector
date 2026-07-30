@@ -1070,8 +1070,11 @@ async def test_internal_search_events_are_emitted_per_task_with_task_index() -> 
             del input
             return next(hits_by_call)
 
+    # S1: reviewerはRun単位1回。統合index空間(仮定: task昇順)ではtask0の2件が
+    # 0,1、task1の1件が2になる。task単位で呼ぶ旧経路が残っていても2件目の
+    # callがscript枯渇crashにならないよう空draftを1件足す。
     reviewer_runtime = ScriptedAgentRuntime(
-        [_review_draft_selecting([0, 1]), _review_draft_selecting([0, 1])]
+        [_review_draft_selecting([0, 1, 2]), _review_draft_selecting([])]
     )
     runner = _runner(
         plan=_search_plan(
@@ -1602,9 +1605,9 @@ async def test_time_filter_failure_still_collects_internal_hits_for_every_task(
         ("goal1", ["task1 query"]),
         target_time_window=TargetTimeWindow(kind="unsupported_explicit_window"),
     )
-    reviewer_runtime = ScriptedAgentRuntime(
-        [_review_draft_selecting([0]), _review_draft_selecting([0])]
-    )
+    # S1: reviewerはRun単位1回。統合index空間(仮定: task昇順)ではtask0の唯一の
+    # 内部候補が0、task1の唯一の内部候補が1。
+    reviewer_runtime = ScriptedAgentRuntime([_review_draft_selecting([0, 1])])
     factory = _Factory(
         [_runtime(ScriptedAgentRuntime([]), reviewer_runtime=reviewer_runtime)], []
     )
@@ -1617,13 +1620,14 @@ async def test_time_filter_failure_still_collects_internal_hits_for_every_task(
         factory.activate_calls,
         sorted(report.external_collection for report in reports),
         # 保証するテスト条件 6: time filter失敗でも内部精査が成功していれば
-        # taskはreview="succeeded"で完了扱いになる。
-        sorted(report.review for report in reports),
+        # Run全体としてreview="succeeded"で完了扱いになる(review関連field
+        # はResearchTaskReportからEvidenceCollectionOutcome.reviewへ移動)。
+        captured[0].review.review,
         {item.title for item in captured[0].internal_evidence},
     ) == (
         1,
         ["time_filter_failed", "time_filter_failed"],
-        ["succeeded", "succeeded"],
+        "succeeded",
         {"task0-hit", "task1-hit"},
     )
 
@@ -1748,8 +1752,12 @@ async def test_internal_hits_merge_by_task_index_order_with_first_win_dedup(
         ("goal1", ["task1 query"]),
         target_time_window=TargetTimeWindow(kind="unsupported_explicit_window"),
     )
+    # S1: reviewerはRun単位1回。統合index空間(仮定: task昇順)ではtask0の2件が
+    # 0,1(task0-shared, task0-unique)、task1の2件が2,3(task1-shared, task1-unique)。
+    # task単位で呼ぶ旧経路が残っていても2件目のcallがscript枯渇crashにならない
+    # よう空draftを1件足す。
     reviewer_runtime = ScriptedAgentRuntime(
-        [_review_draft_selecting([0, 1]), _review_draft_selecting([0, 1])]
+        [_review_draft_selecting([0, 1, 2, 3]), _review_draft_selecting([])]
     )
     runner = _runner(
         plan=plan,
@@ -1813,7 +1821,9 @@ async def test_all_tasks_incomplete_adds_the_fixed_incomplete_phrase_once(
     assert {report.internal_collection for report in captured[0].task_reports} == {
         "failed"
     }
-    assert {report.review for report in captured[0].task_reports} == {"skipped_empty"}
+    # S1: reviewはtask単位のfieldではなくEvidenceCollectionOutcome.reviewへ
+    # 移動した(全taskの候補がゼロのためRun全体がskipped_empty)。
+    assert captured[0].review.review == "skipped_empty"
 
 
 @pytest.mark.asyncio
@@ -1848,12 +1858,9 @@ async def test_some_tasks_incomplete_keeps_the_phrase_to_one_line_and_keeps_sour
 
     reports = {report.task_index: report for report in captured[0].task_reports}
     assert not hasattr(captured[0], "collection_failures")
-    assert (reports[0].internal_collection, reports[0].review) == (
-        "failed",
-        "skipped_empty",
-    )
-    assert (reports[1].internal_collection, reports[1].review) == (
-        "succeeded",
-        "succeeded",
-    )
+    # S1: reviewはtask単位のfieldではなくEvidenceCollectionOutcome.reviewへ移動した。
+    # task1に候補が残るためRun全体としてreviewerが起動しsucceededになる。
+    assert reports[0].internal_collection == "failed"
+    assert reports[1].internal_collection == "succeeded"
+    assert captured[0].review.review == "succeeded"
     assert [item.title for item in captured[0].internal_evidence] == ["survivor"]

@@ -8,8 +8,8 @@ from pydantic import BaseModel, ConfigDict, Field, StringConstraints, model_vali
 
 from app.agent.evidence_collection.evidence_review import InternalArticleEvidence
 from app.agent.evidence_collection.evidence_review.contract import (
-    EVIDENCE_REVIEW_ADOPTION_LIMIT_PER_TASK,
-    EVIDENCE_REVIEW_MISSING_LIMIT_PER_TASK,
+    EVIDENCE_REVIEW_ADOPTION_LIMIT,
+    EVIDENCE_REVIEW_MISSING_LIMIT,
 )
 from app.agent.evidence_collection.external_search import ExternalSearchOutcome
 from app.agent.evidence_collection.external_search.contract import (
@@ -21,10 +21,11 @@ from app.agent.evidence_collection.external_search.contract import (
 
 __all__ = [
     "EvidenceCollectionOutcome",
+    "EvidenceReviewReport",
+    "EvidenceReviewStatus",
     "ResearchTaskReport",
     "TaskExternalCollectionStatus",
     "TaskInternalCollectionStatus",
-    "TaskReviewStatus",
 ]
 
 # 同名の app.agent.evidence_collection.researcher.ExternalCollectionStatus は
@@ -37,11 +38,14 @@ TaskExternalCollectionStatus = Literal[
     "provider_failed",
     "time_filter_failed",
 ]
-TaskReviewStatus = Literal["succeeded", "failed", "skipped_empty"]
+EvidenceReviewStatus = Literal["succeeded", "failed", "skipped_empty"]
 
 
 class ResearchTaskReport(BaseModel):
-    """task 単位の収集(内部/外部)と選別の実行内容・失敗分類。"""
+    """task 単位の収集(内部/外部)の実行内容・失敗分類。
+
+    精査結果はEvidenceReviewReportへ分離した。
+    """
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
@@ -57,12 +61,6 @@ class ResearchTaskReport(BaseModel):
     provider_failed_query_count: int = Field(default=0, ge=0)
     internal_candidate_count: int = Field(default=0, ge=0)
     external_candidate_count: int = Field(default=0, ge=0)
-    review: TaskReviewStatus
-    review_failure_reason: str | None = None
-    internal_evidence_count: int = Field(default=0, ge=0)
-    external_evidence_count: int = Field(default=0, ge=0)
-    dropped_selection_count: int = Field(default=0, ge=0)
-    missing: list[str] = Field(default_factory=list)
 
     @model_validator(mode="after")
     def _validate_report(self) -> Self:
@@ -105,13 +103,29 @@ class ResearchTaskReport(BaseModel):
         ):
             raise ValueError("generated query exceeds max length")
 
+        return self
+
+
+class EvidenceReviewReport(BaseModel):
+    """Run 単位の精査(採用/不足)の実行内容・失敗分類。"""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    review: EvidenceReviewStatus
+    review_failure_reason: str | None = None
+    internal_evidence_count: int = Field(default=0, ge=0)
+    external_evidence_count: int = Field(default=0, ge=0)
+    dropped_selection_count: int = Field(default=0, ge=0)
+    missing: list[str] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def _validate_review_report(self) -> Self:
         if self.review == "skipped_empty" and (
-            self.internal_candidate_count != 0
-            or self.external_candidate_count != 0
-            or self.internal_evidence_count != 0
+            self.internal_evidence_count != 0
             or self.external_evidence_count != 0
             or self.dropped_selection_count != 0
             or self.missing
+            or self.review_failure_reason is not None
         ):
             raise ValueError("skipped_empty review must keep diagnostics closed")
 
@@ -123,20 +137,20 @@ class ResearchTaskReport(BaseModel):
         elif self.review_failure_reason is not None:
             raise ValueError("review_failure_reason is only valid when review failed")
 
-        if len(self.missing) > EVIDENCE_REVIEW_MISSING_LIMIT_PER_TASK:
+        if len(self.missing) > EVIDENCE_REVIEW_MISSING_LIMIT:
             raise ValueError("missing exceeds missing limit")
         if any(len(item) > MISSING_ITEM_MAX_CHARS for item in self.missing):
             raise ValueError("missing item exceeds max length")
         if (
             self.internal_evidence_count + self.external_evidence_count
-            > EVIDENCE_REVIEW_ADOPTION_LIMIT_PER_TASK
+            > EVIDENCE_REVIEW_ADOPTION_LIMIT
         ):
-            raise ValueError("evidence count exceeds task cap")
+            raise ValueError("evidence count exceeds adoption cap")
         return self
 
 
 class EvidenceCollectionOutcome(BaseModel):
-    """plan 実行の純粋な結果。task 単位 report と精査済み根拠データを持つ。"""
+    """plan 実行の純粋な結果。task 単位の収集reportとRun単位の精査reportを持つ。"""
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
@@ -144,6 +158,7 @@ class EvidenceCollectionOutcome(BaseModel):
     internal_deduplicated_count: int = Field(default=0, ge=0)
     external_search: ExternalSearchOutcome | None = None
     task_reports: list[ResearchTaskReport] = Field(min_length=1)
+    review: EvidenceReviewReport
 
     @model_validator(mode="after")
     def _validate_task_reports(self) -> Self:
@@ -172,22 +187,16 @@ class EvidenceCollectionOutcome(BaseModel):
             if self.external_search is not None
             else 0
         )
-        reported_internal_count = sum(
-            report.internal_evidence_count for report in self.task_reports
-        )
-        reported_external_count = sum(
-            report.external_evidence_count for report in self.task_reports
-        )
-        if reported_internal_count != (
+        if self.review.internal_evidence_count != (
             len(self.internal_evidence) + self.internal_deduplicated_count
         ):
             raise ValueError(
-                "reported internal evidence count must match outcome evidence"
+                "review internal evidence count must match outcome evidence"
             )
-        if reported_external_count != (
+        if self.review.external_evidence_count != (
             len(external_evidence) + external_deduplicated_count
         ):
             raise ValueError(
-                "reported external evidence count must match outcome evidence"
+                "review external evidence count must match outcome evidence"
             )
         return self
