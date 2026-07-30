@@ -58,10 +58,12 @@ _ALLOWED_INTERNAL_FRONTEND_HOSTS = frozenset({"localhost", "127.0.0.1", "fronten
 # 委任されないため、AWS 分を足しても外部ホストへの到達手段は増えない
 # (`.flycast` は Fly が内部 resolver で名乗るだけで、予約の裏付けは無い)。
 # 値は Terraform の `internal_namespace` と共有する契約 (infra/aws/variables.tf)。
-_ALLOWED_INTERNAL_FRONTEND_HOST_SUFFIXES = (".flycast", ".vector.internal")
+# egress_proxy_url も同じ suffix で縛る。proxy は全 task の外向き通信の経路なので、
+# 攻撃者ホストに向いた場合の射程は revalidate 宛先より広い。
+_ALLOWED_INTERNAL_HOST_SUFFIXES = (".flycast", ".vector.internal")
 # error message 用の表示形。suffix を足したときに message だけ古くなるのを防ぐ。
 _INTERNAL_NAMESPACE_GLOBS = " / ".join(
-    f"*{suffix}" for suffix in _ALLOWED_INTERNAL_FRONTEND_HOST_SUFFIXES
+    f"*{suffix}" for suffix in _ALLOWED_INTERNAL_HOST_SUFFIXES
 )
 
 # production で DB 接続文字列に要求する TLS sslmode。Neon は public internet
@@ -76,8 +78,8 @@ _PRODUCTION_REQUIRED_SSLMODES = frozenset({"require", "verify-ca", "verify-full"
 _LOGFIRE_TOKEN_PATTERN = re.compile(r"\Apylf_v1_[a-z]{2}_[A-Za-z0-9]+\Z")
 
 
-def _internal_frontend_host(url: str) -> str | None:
-    """internal_frontend_base_url から host を取り出す (小文字化・port 除去済)。"""
+def _internal_host(url: str) -> str | None:
+    """内部宛先 URL から host を取り出す (小文字化・port 除去済)。"""
     return urlparse(url).hostname
 
 
@@ -171,6 +173,12 @@ class Settings(BaseSettings):
     frontend_url: str
     internal_frontend_base_url: str
 
+    # 外向き通信の経路。設定されていれば ``make_safe_async_client`` が全 client に
+    # proxy として差し込む。未設定なら直接接続 (Fly / compose の既定)。
+    # httpx は transport を明示すると env の proxy を読まないため、HTTPS_PROXY だけでは
+    # この経路に効かない。SDK 経路 (env を読む) と渡し方が 2 系統に分かれる。
+    egress_proxy_url: str | None = None
+
     # タスクキュー
     redis_url: str = "redis://localhost:6379/0"
 
@@ -206,6 +214,8 @@ class Settings(BaseSettings):
         """
         if v is None:
             return v
+        if info.field_name is None:
+            raise ValueError("internal error: missing field name in validator info")
         env_name = _DATABASE_URL_ENV_NAMES[info.field_name]
         for pattern in _KNOWN_WEAK_DATABASE_URL_PATTERNS:
             if pattern in v:
@@ -233,11 +243,11 @@ class Settings(BaseSettings):
                 "INTERNAL_FRONTEND_BASE_URL must use http or https scheme, "
                 f"got {scheme!r}"
             )
-        host = _internal_frontend_host(v)
+        host = _internal_host(v)
         if host is None:
             raise ValueError("INTERNAL_FRONTEND_BASE_URL must include a host")
         if host in _ALLOWED_INTERNAL_FRONTEND_HOSTS or host.endswith(
-            _ALLOWED_INTERNAL_FRONTEND_HOST_SUFFIXES
+            _ALLOWED_INTERNAL_HOST_SUFFIXES
         ):
             return v
         raise ValueError(
@@ -245,6 +255,32 @@ class Settings(BaseSettings):
             "destination; expected localhost / 127.0.0.1 / frontend (compose) or an "
             f"internal namespace host ({_INTERNAL_NAMESPACE_GLOBS})"
         )
+
+    @field_validator("egress_proxy_url")
+    @classmethod
+    def _validate_egress_proxy_url(cls, v: str | None) -> str | None:
+        """外向き通信の経路を内部 namespace のホストに限定する (起動時 fail-fast)。
+
+        この値は全 task の全外向き通信が通る経路なので、攻撃者ホストに向いた場合の
+        射程は revalidate 宛先より広い (平文 http の上流では header ごと渡る)。
+        dev host は許さない: proxy が居るのは AWS だけで、他環境では未設定が正しい。
+        """
+        if v is None:
+            return v
+        scheme = urlparse(v).scheme
+        if scheme not in ("http", "https"):
+            raise ValueError(
+                f"EGRESS_PROXY_URL must use http or https scheme, got {scheme!r}"
+            )
+        host = _internal_host(v)
+        if host is None:
+            raise ValueError("EGRESS_PROXY_URL must include a host")
+        if not host.endswith(_ALLOWED_INTERNAL_HOST_SUFFIXES):
+            raise ValueError(
+                f"EGRESS_PROXY_URL host {host!r} is not an internal namespace host "
+                f"({_INTERNAL_NAMESPACE_GLOBS})"
+            )
+        return v
 
     @field_validator("logfire_token")
     @classmethod
@@ -327,8 +363,8 @@ class Settings(BaseSettings):
         """
         if self.env != "production":
             return self
-        host = _internal_frontend_host(self.internal_frontend_base_url)
-        if host is None or not host.endswith(_ALLOWED_INTERNAL_FRONTEND_HOST_SUFFIXES):
+        host = _internal_host(self.internal_frontend_base_url)
+        if host is None or not host.endswith(_ALLOWED_INTERNAL_HOST_SUFFIXES):
             raise ValueError(
                 "in production INTERNAL_FRONTEND_BASE_URL must be an internal "
                 f"namespace host ({_INTERNAL_NAMESPACE_GLOBS}), got host {host!r}"

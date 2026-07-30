@@ -86,7 +86,7 @@ variable "internal_namespace" {
     backend / frontend の起動時ガードがこの値を接尾辞として許す
     (`.flycast` との union。ガード自体は外さない)。
     app 側と共有する契約なので、変えるなら次の定数も同時に変える。
-      backend  app/config.py       _ALLOWED_INTERNAL_FRONTEND_HOST_SUFFIXES
+      backend  app/config.py       _ALLOWED_INTERNAL_HOST_SUFFIXES
       frontend lib/api/internal-config.ts _ALLOWED_INTERNAL_API_HOST_SUFFIXES
   EOT
   type        = string

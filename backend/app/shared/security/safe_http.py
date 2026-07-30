@@ -13,10 +13,15 @@ DNS pin は ``_PinnedDnsTransport`` が送信直前に host を resolve し、�
 検証したうえで最初の IP へ TCP 接続先を固定する。Host header と TLS SNI は元 host
 を保持するため、validate と connect の間で DNS 応答が変わっても TOCTOU が成立しない。
 
-egress proxy 経由の構成 (``proxy=...``) では接続先を書き換えず、host 名のまま proxy へ
-渡す。httpcore が CONNECT トンネルに ``sni_hostname`` を渡さないため、書き換えると
-証明書の hostname 検証が壊れるからで、その構成では rebind 防御を proxy 側の非公開宛先
-deny が担う。public 検証は経路によらず必ず通すので、この移譲で緩むのは pin だけ。
+egress proxy を経由する構成 (``settings.egress_proxy_url``) では接続先を書き換えず、
+host 名のまま proxy へ渡す。httpcore が CONNECT トンネルに ``sni_hostname`` を渡さない
+ため、書き換えると証明書の hostname 検証が壊れるからで、その構成では rebind 防御を
+proxy 側の非公開宛先 deny が担う。public 検証は経路によらず必ず通すので、この移譲で
+緩むのは pin だけ。
+
+経路は settings だけが決め、呼び出し側の ``proxy`` は受け付けない。httpx は transport を
+明示すると env の proxy を読まない (``allow_env_proxies = trust_env and transport is
+None``) ため、``HTTPS_PROXY`` を置くだけではこの経路に効かない点にも注意。
 
 transport の ``HostBlockedError`` / ``HostResolutionError`` は httpx に wrap されず
 呼び出し側へ伝播する。
@@ -28,6 +33,7 @@ from typing import Any
 
 import httpx
 
+from app.config import settings
 from app.shared.security.ssrf_guard import (
     HostBlockedError,
     NotAnIpAddressError,
@@ -128,8 +134,14 @@ def make_safe_async_client(**kwargs: Any) -> httpx.AsyncClient:
       ``retries`` / ``socket_options``) は transport コンストラクタに振分
     - 残りの kwargs (``headers`` / ``timeout`` / ``follow_redirects`` 等) は
       ``httpx.AsyncClient`` にそのまま委譲する
+    - egress 経路は ``settings.egress_proxy_url`` だけが決める (``proxy`` は
+      呼び出し側から受け取らない)
     """
     kwargs.setdefault("follow_redirects", False)
+    # 出口をどこに置くかは呼び出し側ではなく実行環境が決めるので、ここで一括して
+    # 差し込む。呼び出し側の指定を尊重しないのは、経路の穴を 1 箇所も作らないため。
+    # 未設定なら None = 直接接続で、httpx の既定と同じ。
+    kwargs["proxy"] = settings.egress_proxy_url
 
     transport_kwargs = {k: kwargs.pop(k) for k in _TRANSPORT_KEYS if k in kwargs}
     transport = _PinnedDnsTransport(**transport_kwargs)

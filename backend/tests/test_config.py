@@ -316,6 +316,59 @@ def test_internal_frontend_base_url_accepts_internal_namespace_in_production(
     assert s.internal_frontend_base_url == namespace_url
 
 
+# egress proxy の宛先。この値は全 task の全外向き通信の経路になるため、攻撃者ホストに
+# 向いた場合の射程は revalidate 宛先より広い (平文 http の上流では header ごと通る)。
+# dev host を許さない点だけが internal_frontend_base_url と違う: proxy は AWS にしか
+# 存在せず、他環境では未設定が正しい状態。
+
+_VALID_EGRESS_PROXY_URLS = [
+    "http://proxy.vector.internal:3128",
+    "http://proxy.your-vector-app.flycast:3128",
+]
+
+
+def test_egress_proxy_url_defaults_to_none() -> None:
+    """未設定なら None (直接接続のまま = Fly / compose の既定)。"""
+    assert Settings().egress_proxy_url is None
+
+
+@pytest.mark.parametrize("proxy_url", _VALID_EGRESS_PROXY_URLS)
+def test_egress_proxy_url_accepts_internal_namespace(proxy_url: str) -> None:
+    s = Settings(egress_proxy_url=proxy_url)
+    assert s.egress_proxy_url == proxy_url
+
+
+@pytest.mark.parametrize(
+    "bad_url",
+    [
+        "http://attacker.example.com:3128",
+        "https://evil.com",
+        "http://169.254.169.254:3128",
+        "http://evilvector.internal:3128",  # suffix の前に dot が無い
+        "http://proxy.vector.internal.attacker.com:3128",  # 末尾でない
+        "http://proxy.attacker.internal:3128",  # 別 namespace
+    ],
+)
+def test_egress_proxy_url_rejects_non_internal_host(bad_url: str) -> None:
+    with pytest.raises(ValidationError, match="EGRESS_PROXY_URL"):
+        Settings(egress_proxy_url=bad_url)
+
+
+@pytest.mark.parametrize("dev_url", ["http://localhost:3128", "http://127.0.0.1:3128"])
+def test_egress_proxy_url_rejects_dev_host(dev_url: str) -> None:
+    """dev host は全環境で拒否 (proxy を使う環境は AWS だけ)。"""
+    with pytest.raises(ValidationError, match="EGRESS_PROXY_URL"):
+        Settings(egress_proxy_url=dev_url)
+
+
+@pytest.mark.parametrize(
+    "bad_url", ["socks5://proxy.vector.internal:1080", "file:///x"]
+)
+def test_egress_proxy_url_rejects_non_http_scheme(bad_url: str) -> None:
+    with pytest.raises(ValidationError, match="EGRESS_PROXY_URL"):
+        Settings(egress_proxy_url=bad_url)
+
+
 # Neon は public internet 越しの接続のため、production では DB 接続文字列に TLS
 # sslmode (require / verify-ca / verify-full) を要求する。dev は docker 同一
 # network の平文で良いので何も強制しない。
