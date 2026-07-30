@@ -8,7 +8,6 @@ from app.agent.evidence_collection.external_search.contract import (
     EXTERNAL_SEARCH_CANDIDATE_POOL_LIMIT_PER_TASK,
     EXTERNAL_TASK_QUERY_LIMIT,
     ExternalSearchCandidate,
-    ExternalSearchEvidence,
 )
 
 __all__ = [
@@ -16,7 +15,6 @@ __all__ = [
     "QUERY_GENERATE_TIMEOUT_SECONDS",
     "build_candidate_pool",
     "clean_generated_queries",
-    "deduplicate_external_evidence_by_url",
     "resolve_external_search_agent_count",
 ]
 
@@ -62,22 +60,6 @@ def build_candidate_pool(
             if len(pool) >= EXTERNAL_SEARCH_CANDIDATE_POOL_LIMIT_PER_TASK:
                 return pool
     return pool
-
-
-def deduplicate_external_evidence_by_url(
-    evidence: list[ExternalSearchEvidence],
-) -> tuple[list[ExternalSearchEvidence], int]:
-    deduplicated: list[ExternalSearchEvidence] = []
-    seen_urls: set[str] = set()
-    dropped_count = 0
-    for item in evidence:
-        url = str(item.url)
-        if url in seen_urls:
-            dropped_count += 1
-            continue
-        deduplicated.append(item)
-        seen_urls.add(url)
-    return deduplicated, dropped_count
 
 
 def resolve_external_search_agent_count(

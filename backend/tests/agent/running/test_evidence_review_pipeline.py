@@ -408,7 +408,13 @@ async def test_task_with_both_candidates_empty_skips_review() -> None:
 
 @pytest.mark.asyncio
 async def test_merge_dedupes_same_internal_article_by_curation_id_first_win() -> None:
-    """保証するテスト条件 9。同じ内部記事を複数taskが採用したときcuration_id先勝ち。"""
+    """保証するテスト条件 9(S1 C3: この不変条件はRun単位化でも変更されない)。
+
+    同じ内部記事を複数taskが採用したときcuration_id先勝ち。S1でreviewer呼び出しが
+    Run単位1回になっても、統合index空間で両taskの候補を選ばせれば同じ結果になる
+    必要があるため、1回の呼び出しを前提にscriptを組む(taskごと呼び出しが残る間は
+    余剰callへ空draftを充ててcrashを避ける)。
+    """
     shared_curation_id = 42
     internal_tool = _InternalTool(
         [
@@ -428,14 +434,20 @@ async def test_merge_dedupes_same_internal_article_by_curation_id_first_win() ->
             ],
         ]
     )
+    # 統合index空間(仮定: task昇順で結合): task0の唯一の候補が0、task1が1。
     reviewer_runtime = ScriptedAgentRuntime(
         [
             _review_draft(
-                [{"candidate_index": 0, "claim": "first claim", "why_selected": "w"}]
+                [
+                    {"candidate_index": 0, "claim": "first claim", "why_selected": "w"},
+                    {
+                        "candidate_index": 1,
+                        "claim": "second claim",
+                        "why_selected": "w",
+                    },
+                ]
             ),
-            _review_draft(
-                [{"candidate_index": 0, "claim": "second claim", "why_selected": "w"}]
-            ),
+            _review_draft([]),
         ]
     )
     runner, answerer, _factory = _runner(
@@ -487,10 +499,19 @@ async def test_time_filter_failure_still_activates_external_scope_for_review() -
 
 
 @pytest.mark.asyncio
-async def test_reviewer_failure_after_two_attempts_does_not_affect_sibling_task() -> (
-    None
-):
-    """選別のtest contract 8番目。2 attempt失敗taskが根拠ゼロでも兄弟taskは根拠を返す"""
+async def test_reviewer_failure_after_two_attempts_empties_the_whole_run() -> None:
+    """S1 E1(旧: 選別のtest contract 8番目を上書き)。
+
+    段4時点はreviewerがtask単位だったため、片方が2 attempt失敗しても兄弟taskは
+    根拠を返せた。S1でreviewerの呼び出しがRun単位1回になったため、精査の失敗は
+    Run全体に及び、いずれのtaskも根拠を返さない
+    (仕様「何ができていないかの表明」: 精査を通っていない候補を出典として提示しない)。
+
+    scriptは[失敗, 失敗, 成功draft](REVISE 1)。Run単位1回なら2 attemptで打ち切られ
+    成功draftへ届かないが、per-task実装ならtask0の2失敗を消費した後にtask1が
+    新しいattempt列として成功draftを消費し根拠を返してしまうため、
+    [失敗]*Nのように常に失敗するscriptでは区別できない不変条件を判別できる。
+    """
     internal_tool = _InternalTool(
         [
             [
@@ -502,15 +523,10 @@ async def test_reviewer_failure_after_two_attempts_does_not_affect_sibling_task(
         ]
     )
     failure = AgentResponseInvalidError(AgentResponseDefect.OUTPUT_SCHEMA_MISMATCH)
-    reviewer_runtime = ScriptedAgentRuntime(
-        [
-            failure,
-            failure,
-            _review_draft(
-                [{"candidate_index": 0, "claim": "claim", "why_selected": "w"}]
-            ),
-        ]
+    success_draft = _review_draft(
+        [{"candidate_index": 0, "claim": "claim", "why_selected": "w"}]
     )
+    reviewer_runtime = ScriptedAgentRuntime([failure, failure, success_draft])
     runner, answerer, _factory = _runner(
         goals=["failing task", "succeeding task"],
         query_runtime=ScriptedAgentRuntime([_query_draft([]), _query_draft([])]),
@@ -521,4 +537,4 @@ async def test_reviewer_failure_after_two_attempts_does_not_affect_sibling_task(
 
     await _run(runner)
 
-    assert [item.source.title for item in answerer.calls[0]] == ["succeeding hit"]
+    assert answerer.calls == [[]]

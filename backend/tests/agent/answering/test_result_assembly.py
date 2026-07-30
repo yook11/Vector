@@ -1,8 +1,16 @@
-"""Result assembly が task 単位の新 report shape を解釈する契約(D4-S2)。
+"""Result assembly が収集/精査分離後の新report shapeを解釈する契約(S1)。
 
-`ResearchTaskReport` は evidence_collection 側の contract へ再配置される想定
-(置き場は実装者が決めるため facade 経由で参照する)。production 未実装のため
-新 shape を使う fixture 構築自体が red になる(ValidationError / AttributeError)。
+`ResearchTaskReport`(収集系)と`EvidenceReviewReport`(Run単位の精査系)は
+evidence_collection側のcontractへ再配置される想定(置き場は実装者が決めるため
+facade経由で参照する)。production未実装のため新shapeを使うfixture構築自体が
+red になる(ValidationError / AttributeError)。
+
+不足の表明(D2)の発火条件は、現行のper-task review in (failed, skipped_empty)
+と等価になるよう収集側から導出される: 任意のtaskでinternal_candidate_count==0
+かつexternal_candidate_count==0(現行のskipped_empty相当)、または
+outcome.review.review == "failed"(現行のper-task failed相当がRun全体へ移った
+もの)。provider_failedのように候補ゼロでも収集自体は失敗していない外部分類は、
+内部候補が残っていればincompleteにならない(仕様「不足の表明」訂正)。
 """
 
 from __future__ import annotations
@@ -62,9 +70,20 @@ def _report_type() -> Any:
     report_type = getattr(evidence_collection_package, "ResearchTaskReport", None)
     if report_type is None:
         pytest.fail(
-            "D4-S2: app.agent.evidence_collection facade must export ResearchTaskReport"
+            "S1: app.agent.evidence_collection facade must export ResearchTaskReport"
         )
     return report_type
+
+
+def _review_report_type() -> Any:
+    review_report_type = getattr(
+        evidence_collection_package, "EvidenceReviewReport", None
+    )
+    if review_report_type is None:
+        pytest.fail(
+            "S1: app.agent.evidence_collection facade must export EvidenceReviewReport"
+        )
+    return review_report_type
 
 
 def _report(
@@ -78,17 +97,11 @@ def _report(
     provider_failed_query_count: int = 0,
     internal_candidate_count: int = 0,
     external_candidate_count: int = 0,
-    review: str = "succeeded",
-    review_failure_reason: str | None = None,
-    internal_evidence_count: int = 0,
-    external_evidence_count: int = 0,
-    dropped_selection_count: int = 0,
-    missing: list[str] | None = None,
 ) -> Any:
-    """D4-S2 の新 ResearchTaskReport shape を組む(evidence_countは既定0で、
+    """S1: ResearchTaskReportは収集系だけを持つ(review関連はEvidenceReviewReportへ)。
 
     このfileはmissing_aspects/statusの導出だけを対象にし、
-    EvidenceCollectionOutcomeのΣ evidence_count整合はcontract testの責務とする)。
+    EvidenceCollectionOutcomeのΣ evidence_count整合はcontract testの責務とする。
     """
     report_type = _report_type()
     return report_type(
@@ -101,6 +114,20 @@ def _report(
         provider_failed_query_count=provider_failed_query_count,
         internal_candidate_count=internal_candidate_count,
         external_candidate_count=external_candidate_count,
+    )
+
+
+def _review_report(
+    *,
+    review: str = "succeeded",
+    review_failure_reason: str | None = None,
+    internal_evidence_count: int = 0,
+    external_evidence_count: int = 0,
+    dropped_selection_count: int = 0,
+    missing: list[str] | None = None,
+) -> Any:
+    review_report_type = _review_report_type()
+    return review_report_type(
         review=review,
         review_failure_reason=review_failure_reason,
         internal_evidence_count=internal_evidence_count,
@@ -113,21 +140,23 @@ def _report(
 def _time_filter_failed_report(
     *, task_index: int, research_goal: str, reason: str
 ) -> Any:
-    """内部候補も無く、reviewerが未起動(skipped_empty)なtime filter失敗task。"""
+    """内部候補も無いtime filter失敗task(Run全体としてはskipped_empty相当)。"""
     return _report(
         task_index=task_index,
         research_goal=research_goal,
         internal_collection="succeeded",
         external_collection="time_filter_failed",
         time_filter_failure_reason=reason,
-        review="skipped_empty",
     )
 
 
-def _outcome(*, task_reports: list[Any]) -> EvidenceCollectionOutcome:
+def _outcome(
+    *, task_reports: list[Any], review: Any | None = None
+) -> EvidenceCollectionOutcome:
     return EvidenceCollectionOutcome(
         task_reports=task_reports,
         external_search=ExternalSearchOutcome(),
+        review=review if review is not None else _review_report(),
     )
 
 
@@ -168,7 +197,9 @@ def test_task_completes_via_internal_evidence_despite_external_provider_failure(
     None
 ):
     """保証するテスト条件 7。外部収集が失敗しても内部候補で精査が完了すれば
-    経路名文言も固定文言も出ない。
+
+    経路名文言も固定文言も出ない(内部候補が残るためincomplete条件に
+    当たらない。仕様「不足の表明」訂正)。
     """
     context = QuestionContext(standalone_question="NVIDIA の見通しは？")
     plan = _search_plan(
@@ -197,9 +228,9 @@ def test_task_completes_via_internal_evidence_despite_external_provider_failure(
                 generated_queries=["NVIDIA 供給"],
                 provider_failed_query_count=1,
                 internal_candidate_count=1,
-                review="succeeded",
             )
-        ]
+        ],
+        review=_review_report(review="succeeded"),
     )
 
     result = assemble_evidence_result(
@@ -225,7 +256,10 @@ def test_task_completes_via_internal_evidence_despite_external_provider_failure(
 def test_all_tasks_time_filter_failed_add_incomplete_and_time_filter_missing_once() -> (
     None
 ):
-    """保証するテスト条件 2。複数taskが未完了でも固定文言は1行に畳まれる。"""
+    """保証するテスト条件 2。複数taskが未完了でも固定文言は1行に畳まれる
+
+    (両taskとも内部候補ゼロのためRun全体はskipped_empty相当)。
+    """
     tasks = [
         _task("Tavily 2027-08 の公開期間を確認する"),
         _task("provider 原典の公開期間を確認する"),
@@ -242,7 +276,8 @@ def test_all_tasks_time_filter_failed_add_incomplete_and_time_filter_missing_onc
                 ),
             )
             for index, task in enumerate(tasks)
-        ]
+        ],
+        review=_review_report(review="skipped_empty"),
     )
 
     result = assemble_evidence_result(
@@ -284,7 +319,8 @@ def test_time_filter_failure_task_incomplete_with_separate_evidence() -> None:
                 research_goal=tasks[0].research_goal,
                 reason="future_calendar_month",
             )
-        ]
+        ],
+        review=_review_report(review="skipped_empty"),
     )
 
     result = assemble_evidence_result(
@@ -326,7 +362,8 @@ def test_empty_evidence_time_filter_failure_adds_incomplete_and_retrieval() -> N
                 research_goal=tasks[0].research_goal,
                 reason="future_calendar_month",
             )
-        ]
+        ],
+        review=_review_report(review="skipped_empty"),
     )
 
     result = assemble_evidence_result(
@@ -355,7 +392,11 @@ def test_empty_evidence_time_filter_failure_adds_incomplete_and_retrieval() -> N
 
 
 def test_internal_collection_failure_never_adds_a_route_name_phrase() -> None:
-    """保証するテスト条件 4。internal_collection=failedでも経路名文言は出ない。"""
+    """保証するテスト条件 4。internal_collection=failedでも経路名文言は出ない
+
+    (候補ゼロ(internal_candidate_count==0 かつ external_candidate_count==0)
+    がRun全体のincomplete条件を導く)。
+    """
     tasks = [_task("直近の外部発表を確認する")]
     outcome = _outcome(
         task_reports=[
@@ -365,9 +406,9 @@ def test_internal_collection_failure_never_adds_a_route_name_phrase() -> None:
                 internal_collection="failed",
                 external_collection="time_filter_failed",
                 time_filter_failure_reason="future_calendar_month",
-                review="skipped_empty",
             )
-        ]
+        ],
+        review=_review_report(review="skipped_empty"),
     )
 
     result = assemble_evidence_result(
@@ -398,8 +439,10 @@ def test_internal_collection_failure_never_adds_a_route_name_phrase() -> None:
 
 
 def test_time_filter_failed_task_with_internal_evidence_stays_complete() -> None:
-    """保証するテスト条件 6。time filter文言は独立に出るが、内部精査が成功して
-    いれば完了扱いになり固定文言は出ない。
+    """保証するテスト条件 6。time filter文言は独立に出るが、内部候補が
+
+    残っていれば(internal_candidate_count>0)incomplete条件に当たらず
+    固定文言は出ない。
     """
     tasks = [_task("直近の外部発表を確認する")]
     evidence = [_internal_evidence()]
@@ -412,9 +455,9 @@ def test_time_filter_failed_task_with_internal_evidence_stays_complete() -> None
                 external_collection="time_filter_failed",
                 time_filter_failure_reason="future_calendar_month",
                 internal_candidate_count=1,
-                review="succeeded",
             )
-        ]
+        ],
+        review=_review_report(review="succeeded"),
     )
 
     result = assemble_evidence_result(
@@ -445,6 +488,12 @@ def test_time_filter_failed_task_with_internal_evidence_stays_complete() -> None
 
 
 def test_report_missing_deduplicates_against_draft_missing_aspects() -> None:
+    """S1(不足の表明)。missingはRun単位のreview.missingから1本だけ流れる
+
+    (旧: task別missingの連結・重複排除)。この task は provider_failed で
+    候補ゼロだが、外部収集の失敗であり internal_candidate_count も 0 のため
+    incomplete条件(0/0)にも当たる。
+    """
     tasks = [_task("既存のexternal task")]
     shared_text = "共有される不足理由"
     outcome = _outcome(
@@ -455,10 +504,11 @@ def test_report_missing_deduplicates_against_draft_missing_aspects() -> None:
                 external_collection="provider_failed",
                 generated_queries=["既存のexternal task"],
                 provider_failed_query_count=1,
-                review="succeeded",
-                missing=[shared_text, "report固有の不足"],
             )
-        ]
+        ],
+        review=_review_report(
+            review="succeeded", missing=[shared_text, "report固有の不足"]
+        ),
     )
 
     result = assemble_evidence_result(
@@ -476,7 +526,8 @@ def test_report_missing_deduplicates_against_draft_missing_aspects() -> None:
         ),
     )
 
-    assert result.missing_aspects == [
+    assert result.missing_aspects.count(_INCOMPLETE_TASK_MISSING) == 1
+    assert _without_incomplete_phrase(result.missing_aspects) == [
         "回答に使える根拠を取得できませんでした",
         shared_text,
         "report固有の不足",

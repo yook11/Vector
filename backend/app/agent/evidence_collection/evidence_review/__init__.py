@@ -6,9 +6,11 @@ from app.agent.evidence_collection.evidence_review.contract import (
     EvidenceReviewInput,
     EvidenceReviewOutcome,
     EvidenceReviewResult,
+    EvidenceReviewTaskGroup,
     InternalArticleEvidence,
     ReviewSelection,
     ReviewSelectionDraft,
+    ReviewTaskCandidates,
 )
 from app.agent.evidence_collection.evidence_review.reviewer import EvidenceReviewer
 
@@ -18,8 +20,10 @@ __all__ = [
     "EvidenceReviewInput",
     "EvidenceReviewOutcome",
     "EvidenceReviewResult",
+    "EvidenceReviewTaskGroup",
     "EvidenceReviewer",
     "InternalArticleEvidence",
     "ReviewSelection",
     "ReviewSelectionDraft",
+    "ReviewTaskCandidates",
 ]

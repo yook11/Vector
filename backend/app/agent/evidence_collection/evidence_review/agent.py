@@ -6,8 +6,8 @@ from typing import Any, Final
 
 from app.agent.agent import Agent, AgentPrompt, ModelSettings, ModelTarget
 from app.agent.evidence_collection.evidence_review.contract import (
-    EVIDENCE_REVIEW_ADOPTION_LIMIT_PER_TASK,
-    EVIDENCE_REVIEW_MISSING_LIMIT_PER_TASK,
+    EVIDENCE_REVIEW_ADOPTION_LIMIT,
+    EVIDENCE_REVIEW_MISSING_LIMIT,
     EvidenceReviewDraft,
     EvidenceReviewInput,
 )
@@ -26,7 +26,7 @@ EVIDENCE_REVIEWER_RESPONSE_SCHEMA: Final[dict[str, Any]] = {
             "type": "array",
             "description": (
                 "Useful candidates only, at most "
-                f"{EVIDENCE_REVIEW_ADOPTION_LIMIT_PER_TASK}. "
+                f"{EVIDENCE_REVIEW_ADOPTION_LIMIT}. "
                 "Empty if none are useful."
             ),
             "items": {
@@ -43,7 +43,7 @@ EVIDENCE_REVIEWER_RESPONSE_SCHEMA: Final[dict[str, Any]] = {
         "missing": {
             "type": "array",
             "description": (
-                f"At most {EVIDENCE_REVIEW_MISSING_LIMIT_PER_TASK} short "
+                f"At most {EVIDENCE_REVIEW_MISSING_LIMIT} short "
                 "Japanese notes on what could not be confirmed."
             ),
             "items": {"type": "string"},
@@ -61,7 +61,7 @@ EVIDENCE_REVIEWER_AGENT: Final[Agent[EvidenceReviewInput, EvidenceReviewDraft]] 
     name="evidence_reviewer",
     prompt=EVIDENCE_REVIEWER_PROMPT,
     model=ModelTarget(provider="deepseek", name="deepseek-v4-flash"),
-    model_settings=ModelSettings(max_output_tokens=2048),
+    model_settings=ModelSettings(max_output_tokens=16384),
     output_type=EvidenceReviewDraft,
     response_schema=EVIDENCE_REVIEWER_RESPONSE_SCHEMA,
 )

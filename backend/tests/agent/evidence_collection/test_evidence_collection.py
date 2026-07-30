@@ -1,8 +1,9 @@
-"""EvidenceCollectionOutcome の DTO 不変条件テスト(D4-S2)。
+"""EvidenceCollectionOutcome の DTO 不変条件テスト(S1)。
 
-task_reports が ExternalSearchOutcome から EvidenceCollectionOutcome へ
-引き上げられ、collection_failures が廃止された新契約を検証する。
-InternalArticleEvidence / ResearchTaskReport は production 未実装のため
+仕様「観測と失敗分類」により、Σ整合はtask_reports(収集系)の総和ではなく
+review report(Run単位の精査系)と突き合わせる。task_reports自体は
+0..n-1に完全対応する既存不変条件を維持する。ResearchTaskReport /
+EvidenceReviewReport / InternalArticleEvidence は production 未実装のため
 getattr ガードで参照する。
 """
 
@@ -24,7 +25,7 @@ from app.agent.evidence_collection.external_search import (
 
 def _required_attribute(module: ModuleType, name: str) -> Any:
     if not hasattr(module, name):
-        pytest.fail(f"D4-S2: {module.__name__} must define {name}")
+        pytest.fail(f"S1: {module.__name__} must define {name}")
     return getattr(module, name)
 
 
@@ -34,7 +35,7 @@ def _internal_article_evidence_type() -> Any:
             "app.agent.evidence_collection.evidence_review.contract"
         )
     except ModuleNotFoundError as exc:
-        pytest.fail(f"D4-S1 evidence_review.contract module is missing ({exc.name})")
+        pytest.fail(f"evidence_review.contract module is missing ({exc.name})")
     return _required_attribute(contracts, "InternalArticleEvidence")
 
 
@@ -44,7 +45,14 @@ def _report_type() -> Any:
     return _required_attribute(evidence_collection_package, "ResearchTaskReport")
 
 
+def _review_report_type() -> Any:
+    import app.agent.evidence_collection as evidence_collection_package
+
+    return _required_attribute(evidence_collection_package, "EvidenceReviewReport")
+
+
 def _report(**overrides: object) -> Any:
+    """S1: ResearchTaskReportは収集系だけを持つ(review関連はEvidenceReviewReportへ)。"""
     values: dict[str, object] = {
         "task_index": 0,
         "research_goal": "NVIDIA の供給を確認する",
@@ -55,6 +63,13 @@ def _report(**overrides: object) -> Any:
         "provider_failed_query_count": 0,
         "internal_candidate_count": 0,
         "external_candidate_count": 0,
+    }
+    values.update(overrides)
+    return _report_type()(**values)
+
+
+def _review_report(**overrides: object) -> Any:
+    values: dict[str, object] = {
         "review": "succeeded",
         "review_failure_reason": None,
         "internal_evidence_count": 0,
@@ -63,7 +78,7 @@ def _report(**overrides: object) -> Any:
         "missing": [],
     }
     values.update(overrides)
-    return _report_type()(**values)
+    return _review_report_type()(**values)
 
 
 def _external_outcome(
@@ -105,16 +120,30 @@ def _external_evidence(*, task_index: int, source_ref: str) -> ExternalSearchEvi
     )
 
 
+def _outcome(
+    *, task_reports: list[Any], review: Any | None = None, **kwargs: object
+) -> Any:
+    return EvidenceCollectionOutcome(
+        task_reports=task_reports,
+        review=review if review is not None else _review_report(),
+        **kwargs,
+    )
+
+
 def test_outcome_has_no_collection_failures_field() -> None:
     """保証するテスト条件 4。run単位のcollection_failuresが廃止される。"""
-    outcome = EvidenceCollectionOutcome(task_reports=[_report(task_index=0)])
+    outcome = _outcome(task_reports=[_report(task_index=0)])
 
     assert not hasattr(outcome, "collection_failures")
 
 
 def test_outcome_rejects_legacy_collection_failures_kwarg() -> None:
     with pytest.raises(ValidationError):
-        EvidenceCollectionOutcome(collection_failures=["internal_search"])
+        EvidenceCollectionOutcome(
+            task_reports=[_report(task_index=0)],
+            review=_review_report(),
+            collection_failures=["internal_search"],
+        )
 
 
 @pytest.mark.parametrize(
@@ -132,40 +161,39 @@ def test_outcome_rejects_task_reports_that_do_not_cover_0_to_n_1(
 ) -> None:
     """保証するテスト条件 1。task_reports は 0..n-1 に完全対応する。"""
     with pytest.raises(ValidationError):
-        EvidenceCollectionOutcome(
-            task_reports=[_report(task_index=index) for index in task_indexes]
-        )
+        _outcome(task_reports=[_report(task_index=index) for index in task_indexes])
 
 
 def test_outcome_accepts_task_reports_covering_every_index_exactly_once() -> None:
-    outcome = EvidenceCollectionOutcome(
-        task_reports=[_report(task_index=0), _report(task_index=1)]
-    )
+    outcome = _outcome(task_reports=[_report(task_index=0), _report(task_index=1)])
 
     assert {report.task_index for report in outcome.task_reports} == {0, 1}
 
 
 def test_outcome_rejects_internal_evidence_count_sum_that_ignores_dedup() -> None:
-    """保証するテスト条件 2・5。Σ report.internal_evidence_count は
+    """S1(観測と失敗分類)。Σはreview.internal_evidence_countと
 
-    internal_evidence / 内部dedup件数の合計と一致しなければならない。
+    internal_evidence / 内部dedup件数の合計の突き合わせに変わる
+    (task_reportsの総和ではない)。
     """
     with pytest.raises(ValidationError):
-        EvidenceCollectionOutcome(
-            task_reports=[_report(task_index=0, internal_evidence_count=3)],
+        _outcome(
+            task_reports=[_report(task_index=0)],
+            review=_review_report(internal_evidence_count=3),
             internal_evidence=[_internal_evidence(task_index=0)],
             internal_deduplicated_count=0,
         )
 
 
 def test_outcome_rejects_external_evidence_count_sum_that_ignores_dedup() -> None:
-    """保証するテスト条件 2・5。Σ report.external_evidence_count は
+    """S1(観測と失敗分類)。Σはreview.external_evidence_countと
 
-    external.evidence / 外部dedup件数の合計と一致しなければならない。
+    external.evidence / 外部dedup件数の合計の突き合わせに変わる。
     """
     with pytest.raises(ValidationError):
-        EvidenceCollectionOutcome(
-            task_reports=[_report(task_index=0, external_evidence_count=3)],
+        _outcome(
+            task_reports=[_report(task_index=0)],
+            review=_review_report(external_evidence_count=3),
             external_search=_external_outcome(
                 [_external_evidence(task_index=0, source_ref="0-0")],
                 deduplicated_evidence_count=0,
@@ -174,12 +202,13 @@ def test_outcome_rejects_external_evidence_count_sum_that_ignores_dedup() -> Non
 
 
 def test_outcome_accepts_split_evidence_sums_including_dedup() -> None:
-    """保証するテスト条件 2・5。内部Σ・外部Σはそれぞれ独立にdedup件数を含む。"""
-    outcome = EvidenceCollectionOutcome(
-        task_reports=[
-            _report(task_index=0, internal_evidence_count=2, external_evidence_count=0),
-            _report(task_index=1, internal_evidence_count=0, external_evidence_count=1),
-        ],
+    """review.internal_evidence_count・review.external_evidence_countは
+
+    それぞれ独立にdedup件数を含む(Run単位、task_reportsを合算しない)。
+    """
+    outcome = _outcome(
+        task_reports=[_report(task_index=0), _report(task_index=1)],
+        review=_review_report(internal_evidence_count=2, external_evidence_count=1),
         internal_evidence=[_internal_evidence(task_index=0)],
         internal_deduplicated_count=1,
         external_search=_external_outcome(
@@ -189,10 +218,10 @@ def test_outcome_accepts_split_evidence_sums_including_dedup() -> None:
     )
 
     assert outcome.internal_deduplicated_count == 1
-    assert sum(report.internal_evidence_count for report in outcome.task_reports) == (
+    assert outcome.review.internal_evidence_count == (
         len(outcome.internal_evidence) + outcome.internal_deduplicated_count
     )
-    assert sum(report.external_evidence_count for report in outcome.task_reports) == (
+    assert outcome.review.external_evidence_count == (
         len(outcome.external_search.evidence)
         + outcome.external_search.deduplicated_evidence_count
     )
@@ -201,13 +230,14 @@ def test_outcome_accepts_split_evidence_sums_including_dedup() -> None:
 def test_outcome_rejects_empty_task_reports() -> None:
     """保証するテスト条件 3。task_reportsは最低1件を要求する(min_length=1)。"""
     with pytest.raises(ValidationError):
-        EvidenceCollectionOutcome(task_reports=[])
+        _outcome(task_reports=[])
 
 
 def test_outcome_has_no_unconditional_internal_hits_field() -> None:
     """段3の internal_hits(無条件採用)語彙が消えている(段4以降も維持)。"""
-    outcome = EvidenceCollectionOutcome(
-        task_reports=[_report(task_index=0, internal_evidence_count=1)],
+    outcome = _outcome(
+        task_reports=[_report(task_index=0)],
+        review=_review_report(internal_evidence_count=1),
         internal_evidence=[_internal_evidence()],
     )
 

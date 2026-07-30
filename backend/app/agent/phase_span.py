@@ -14,16 +14,16 @@ _PHASE_SPAN_NAME = "agent_phase"
 
 
 @contextmanager
-def agent_phase(*, phase: str, agent_name: str, task_index: int) -> Iterator[None]:
-    """Task単位のAgent policy spanを作る。"""
-    if task_index < 0:
+def agent_phase(
+    *, phase: str, agent_name: str, task_index: int | None = None
+) -> Iterator[None]:
+    """Agent policy spanを作る。task_indexを渡すとtask単位のspanになる。"""
+    if task_index is not None and task_index < 0:
         raise ValueError("task_index must be non-negative")
-    with logfire.span(
-        _PHASE_SPAN_NAME,
-        phase=phase,
-        agent_name=agent_name,
-        task_index=task_index,
-    ) as span:
+    attributes = {"phase": phase, "agent_name": agent_name}
+    if task_index is not None:
+        attributes["task_index"] = task_index
+    with logfire.span(_PHASE_SPAN_NAME, **attributes) as span:
         try:
             yield
         except BaseException:

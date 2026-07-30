@@ -1,8 +1,9 @@
-"""ResearchTaskReport の新 shape の永続契約(D4-S2)。
+"""ResearchTaskReport(収集系)とEvidenceReviewReport(Run単位の精査系)の永続契約(S1)。
 
-collection(内部/外部)と選別(review)を別 field で表現し、旧
-ResearchTaskStatus / status field / selector_failure_reason を廃止した
-report を検証する。置き場は実装者が決めるため
+仕様「観測と失敗分類」により、旧ResearchTaskReportが一体で持っていた
+review関連field(review / review_failure_reason / internal_evidence_count /
+external_evidence_count / dropped_selection_count / missing)はRun単位の
+EvidenceReviewReportへ分離される。置き場は実装者が決めるため
 `app.agent.evidence_collection` facade 経由で参照する
 (production 未実装のため getattr ガードで参照する)。
 """
@@ -19,16 +20,9 @@ from pydantic import ValidationError
 import app.agent.evidence_collection as evidence_collection_package
 
 
-def _required_module(module_name: str) -> ModuleType:
-    try:
-        return import_module(module_name)
-    except ModuleNotFoundError as exc:
-        pytest.fail(f"D4-S2 module is missing: {module_name} ({exc.name})")
-
-
 def _required_attribute(module: ModuleType, name: str) -> Any:
     if not hasattr(module, name):
-        pytest.fail(f"D4-S2: {module.__name__} must define {name}")
+        pytest.fail(f"S1: {module.__name__} must define {name}")
     return getattr(module, name)
 
 
@@ -37,6 +31,7 @@ def _report_type() -> Any:
 
 
 def _report(**overrides: object) -> Any:
+    """S1: ResearchTaskReportは収集系だけを持つ(review関連はEvidenceReviewReportへ)。"""
     values: dict[str, object] = {
         "task_index": 0,
         "research_goal": "NVIDIA の供給を確認する",
@@ -47,12 +42,6 @@ def _report(**overrides: object) -> Any:
         "provider_failed_query_count": 0,
         "internal_candidate_count": 0,
         "external_candidate_count": 0,
-        "review": "succeeded",
-        "review_failure_reason": None,
-        "internal_evidence_count": 0,
-        "external_evidence_count": 0,
-        "dropped_selection_count": 0,
-        "missing": [],
     }
     values.update(overrides)
     return _report_type()(**values)
@@ -62,7 +51,6 @@ def _time_filter_failed_report(**overrides: object) -> Any:
     values: dict[str, object] = {
         "external_collection": "time_filter_failed",
         "time_filter_failure_reason": "future_calendar_month",
-        "review": "skipped_empty",
     }
     values.update(overrides)
     return _report(**values)
@@ -85,28 +73,40 @@ def _provider_failed_report(**overrides: object) -> Any:
     return _report(**values)
 
 
-def test_report_accepts_the_documented_succeeded_shape() -> None:
+def _review_report_type() -> Any:
+    return _required_attribute(evidence_collection_package, "EvidenceReviewReport")
+
+
+def _review_report(**overrides: object) -> Any:
+    values: dict[str, object] = {
+        "review": "succeeded",
+        "review_failure_reason": None,
+        "internal_evidence_count": 0,
+        "external_evidence_count": 0,
+        "dropped_selection_count": 0,
+        "missing": [],
+    }
+    values.update(overrides)
+    return _review_report_type()(**values)
+
+
+# --- ResearchTaskReport(収集系) ---------------------------------------------
+
+
+def test_report_accepts_the_documented_collection_shape() -> None:
     report = _report(
         internal_collection="succeeded",
         external_collection="succeeded",
         internal_candidate_count=2,
         external_candidate_count=3,
-        review="succeeded",
-        internal_evidence_count=2,
-        external_evidence_count=2,
-        dropped_selection_count=1,
-        missing=["公式発表が見つからない"],
     )
 
     assert (
         report.internal_collection,
         report.external_collection,
-        report.review,
-        report.internal_evidence_count,
-        report.external_evidence_count,
-        report.dropped_selection_count,
-        report.missing,
-    ) == ("succeeded", "succeeded", "succeeded", 2, 2, 1, ["公式発表が見つからない"])
+        report.internal_candidate_count,
+        report.external_candidate_count,
+    ) == ("succeeded", "succeeded", 2, 3)
 
 
 @pytest.mark.parametrize(
@@ -131,8 +131,6 @@ def test_time_filter_failed_allows_internal_diagnostics_to_vary() -> None:
     report = _time_filter_failed_report(
         internal_collection="succeeded",
         internal_candidate_count=2,
-        review="succeeded",
-        internal_evidence_count=1,
     )
 
     assert (report.external_collection, report.internal_candidate_count) == (
@@ -153,110 +151,6 @@ def test_non_time_filter_report_rejects_time_filter_failure_reason(
             external_collection=external_collection,
             time_filter_failure_reason="future_date_range",
         )
-
-
-@pytest.mark.parametrize(
-    "changes",
-    [
-        pytest.param({"internal_candidate_count": 1}, id="internal-candidate"),
-        pytest.param({"external_candidate_count": 1}, id="external-candidate"),
-        pytest.param({"internal_evidence_count": 1}, id="internal-evidence"),
-        pytest.param({"external_evidence_count": 1}, id="external-evidence"),
-        pytest.param({"dropped_selection_count": 1}, id="dropped-selection"),
-        pytest.param({"missing": ["表示用の不足理由"]}, id="missing"),
-        pytest.param({"review_failure_reason": "reviewer_timeout"}, id="reason"),
-    ],
-)
-def test_review_skipped_empty_requires_fully_closed_diagnostics(
-    changes: dict[str, object],
-) -> None:
-    """保証するテスト条件 1。review=skipped_empty は両candidate/内外evidence/missing/
-
-    reasonが全て閉じる(両候補ゼロでreviewer未起動を表す)。
-    """
-    with pytest.raises(ValidationError):
-        _report(review="skipped_empty", **changes)
-
-
-def test_review_skipped_empty_accepts_the_closed_shape() -> None:
-    report = _report(
-        internal_collection="succeeded",
-        external_collection="succeeded",
-        internal_candidate_count=0,
-        external_candidate_count=0,
-        review="skipped_empty",
-    )
-
-    assert report.review == "skipped_empty"
-    assert (
-        report.internal_evidence_count,
-        report.external_evidence_count,
-        report.dropped_selection_count,
-        report.missing,
-    ) == (0, 0, 0, [])
-
-
-@pytest.mark.parametrize(
-    "changes",
-    [
-        pytest.param({"internal_evidence_count": 1}, id="internal-evidence"),
-        pytest.param({"external_evidence_count": 1}, id="external-evidence"),
-    ],
-)
-def test_review_failed_requires_zero_evidence_count(changes: dict[str, object]) -> None:
-    """保証するテスト条件 1。review=failed は内外双方のevidence_count=0を強制する。"""
-    with pytest.raises(ValidationError):
-        _report(
-            internal_candidate_count=1,
-            review="failed",
-            review_failure_reason="reviewer_timeout",
-            **changes,
-        )
-
-
-def test_review_failed_requires_a_failure_reason() -> None:
-    with pytest.raises(ValidationError):
-        _report(
-            internal_candidate_count=1,
-            review="failed",
-            review_failure_reason=None,
-        )
-
-
-@pytest.mark.parametrize("review", ["succeeded", "skipped_empty"])
-def test_non_failed_review_rejects_a_failure_reason(review: str) -> None:
-    """review_failure_reason は review=failed のときだけ許される。"""
-    overrides: dict[str, object] = {"review_failure_reason": "reviewer_timeout"}
-    if review == "succeeded":
-        overrides["internal_candidate_count"] = 1
-    with pytest.raises(ValidationError):
-        _report(review=review, **overrides)
-
-
-def test_report_rejects_evidence_count_above_the_task_cap() -> None:
-    """保証するテスト条件 2。internal_evidence_countとexternal_evidence_countの
-
-    合算がtaskあたりの上限を超えると拒否する。
-    """
-    with pytest.raises(ValidationError):
-        _report(
-            internal_candidate_count=6,
-            review="succeeded",
-            internal_evidence_count=3,
-            external_evidence_count=3,
-        )
-
-
-def test_report_accepts_evidence_count_sum_at_the_task_cap() -> None:
-    """保証するテスト条件 2。内外合算がちょうど上限のときは受理する境界値。"""
-    report = _report(
-        internal_candidate_count=6,
-        review="succeeded",
-        internal_evidence_count=2,
-        external_evidence_count=3,
-    )
-
-    assert report.internal_evidence_count + report.external_evidence_count == 5
 
 
 @pytest.mark.parametrize(
@@ -330,22 +224,27 @@ def test_report_rejects_legacy_extra_field() -> None:
                 "research_goal": "NVIDIA の根拠を確認する",
                 "internal_collection": "succeeded",
                 "external_collection": "succeeded",
-                "review": "succeeded",
                 "collection_goal": "legacy field must not be accepted",
             }
         )
 
 
-def test_legacy_status_vocabulary_is_removed_from_app() -> None:
-    """保証するテスト条件 1(旧語彙不在)。旧ResearchTaskStatus/status/
-
-    selector_failure_reasonがapp/から消えている。
-    """
+def test_report_has_no_review_related_or_legacy_fields() -> None:
+    """S1(観測と失敗分類)。review関連fieldはEvidenceReviewReportへ移動した。"""
     report = _report()
 
-    assert not hasattr(report, "status")
-    assert not hasattr(report, "selector_failure_reason")
-    assert not hasattr(report, "candidate_count")
+    for legacy_field in (
+        "review",
+        "review_failure_reason",
+        "internal_evidence_count",
+        "external_evidence_count",
+        "dropped_selection_count",
+        "missing",
+        "status",
+        "selector_failure_reason",
+        "candidate_count",
+    ):
+        assert not hasattr(report, legacy_field)
     for package_name in (
         "app.agent.evidence_collection",
         "app.agent.evidence_collection.external_search",
@@ -353,3 +252,107 @@ def test_legacy_status_vocabulary_is_removed_from_app() -> None:
     ):
         package = import_module(package_name)
         assert not hasattr(package, "ResearchTaskStatus")
+
+
+# --- EvidenceReviewReport(Run単位の精査系) -----------------------------------
+
+
+def test_review_report_accepts_the_documented_succeeded_shape() -> None:
+    report = _review_report(
+        review="succeeded",
+        internal_evidence_count=2,
+        external_evidence_count=2,
+        dropped_selection_count=1,
+        missing=["公式発表が見つからない"],
+    )
+
+    assert (
+        report.review,
+        report.internal_evidence_count,
+        report.external_evidence_count,
+        report.dropped_selection_count,
+        report.missing,
+    ) == ("succeeded", 2, 2, 1, ["公式発表が見つからない"])
+
+
+@pytest.mark.parametrize(
+    "changes",
+    [
+        pytest.param({"internal_evidence_count": 1}, id="internal-evidence"),
+        pytest.param({"external_evidence_count": 1}, id="external-evidence"),
+        pytest.param({"dropped_selection_count": 1}, id="dropped-selection"),
+        pytest.param({"missing": ["表示用の不足理由"]}, id="missing"),
+        pytest.param({"review_failure_reason": "reviewer_timeout"}, id="reason"),
+    ],
+)
+def test_review_skipped_empty_requires_fully_closed_diagnostics(
+    changes: dict[str, object],
+) -> None:
+    """review=skipped_emptyは内外evidence/missing/reasonが全て閉じる
+
+    (Run全体で両候補ゼロ、reviewer未起動を表す)。
+    """
+    with pytest.raises(ValidationError):
+        _review_report(review="skipped_empty", **changes)
+
+
+def test_review_skipped_empty_accepts_the_closed_shape() -> None:
+    report = _review_report(review="skipped_empty")
+
+    assert report.review == "skipped_empty"
+    assert (
+        report.internal_evidence_count,
+        report.external_evidence_count,
+        report.dropped_selection_count,
+        report.missing,
+    ) == (0, 0, 0, [])
+
+
+@pytest.mark.parametrize(
+    "changes",
+    [
+        pytest.param({"internal_evidence_count": 1}, id="internal-evidence"),
+        pytest.param({"external_evidence_count": 1}, id="external-evidence"),
+    ],
+)
+def test_review_failed_requires_zero_evidence_count(changes: dict[str, object]) -> None:
+    """review=failedは内外双方のevidence_count=0を強制する(Run全体が根拠ゼロ)。"""
+    with pytest.raises(ValidationError):
+        _review_report(
+            review="failed",
+            review_failure_reason="reviewer_timeout",
+            **changes,
+        )
+
+
+def test_review_failed_requires_a_failure_reason() -> None:
+    with pytest.raises(ValidationError):
+        _review_report(review="failed", review_failure_reason=None)
+
+
+@pytest.mark.parametrize("review", ["succeeded", "skipped_empty"])
+def test_non_failed_review_rejects_a_failure_reason(review: str) -> None:
+    """review_failure_reason は review=failed のときだけ許される。"""
+    with pytest.raises(ValidationError):
+        _review_report(review=review, review_failure_reason="reviewer_timeout")
+
+
+def test_review_report_rejects_evidence_count_above_the_adoption_cap() -> None:
+    """内外合算がRun単位の採用上限(S2で15)を超えると拒否する。"""
+    with pytest.raises(ValidationError):
+        _review_report(
+            review="succeeded",
+            internal_evidence_count=8,
+            external_evidence_count=8,
+        )
+
+
+def test_review_report_accepts_evidence_count_sum_at_the_adoption_cap() -> None:
+    """内外合算がちょうど上限のときは受理する境界値。"""
+    report = _review_report(
+        review="succeeded",
+        internal_evidence_count=7,
+        external_evidence_count=8,
+    )
+
+    assert report.internal_evidence_count + report.external_evidence_count == 15

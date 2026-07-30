@@ -10,6 +10,7 @@ getattr ガードで参照し、欠落時は pytest.fail で理由を明示す�
 from __future__ import annotations
 
 import inspect
+import re
 from collections.abc import Mapping
 from dataclasses import FrozenInstanceError, fields, is_dataclass
 from datetime import UTC, datetime
@@ -99,6 +100,21 @@ def _candidate_input(
     )
 
 
+def _task_group(
+    contracts: ModuleType,
+    *,
+    task_index: int = 0,
+    goal: str = "NVIDIA の最新動向を確認する",
+    candidates: tuple[Any, ...] = (),
+) -> Any:
+    task_group_type = _required_attribute(contracts, "EvidenceReviewTaskGroup")
+    return task_group_type(
+        task_index=task_index,
+        research_goal=goal,
+        candidates=candidates,
+    )
+
+
 def _review_input(
     contracts: ModuleType,
     *,
@@ -106,11 +122,17 @@ def _review_input(
     candidates: tuple[Any, ...] = (),
     content_requirements: tuple[str, ...] = (),
     as_of: datetime | None = None,
+    task_groups: tuple[Any, ...] | None = None,
 ) -> Any:
+    """S1: 単一groupのEvidenceReviewInputを組む(呼び出し側の既存引数は維持)。
+
+    候補の渡し方がRun全体のtask_groups(通しindex空間)へ変わったため、
+    goal/candidatesは1個のEvidenceReviewTaskGroupへラップする。
+    """
     review_input_type = _required_attribute(contracts, "EvidenceReviewInput")
     return review_input_type(
-        research_goal=goal,
-        candidates=candidates,
+        task_groups=task_groups
+        or (_task_group(contracts, goal=goal, candidates=candidates),),
         content_requirements=content_requirements,
         as_of=as_of or _as_of(),
     )
@@ -137,28 +159,17 @@ def test_candidate_projection_is_unified_and_excludes_source_metadata() -> None:
     assert not (field_names & forbidden)
 
 
-def test_review_input_carries_only_goal_candidates_content_requirements_and_as_of() -> (
-    None
-):
-    """保証するテスト条件 2。QuestionContext 全体(standalone_question 等)を持たない。"""
+def test_review_input_carries_only_task_groups_content_requirements_and_as_of() -> None:
+    """S1(候補の渡し方)。QuestionContext 全体(standalone_question 等)を持たず、
+
+    research_goal/candidatesは直下ではなくtask_groups経由でしか持てない。
+    """
     contracts = _contracts()
     review_input_type = _required_attribute(contracts, "EvidenceReviewInput")
 
     _assert_frozen_slots_dataclass(review_input_type)
     field_names = [field.name for field in fields(review_input_type)]
-    assert set(field_names) == {
-        "research_goal",
-        "candidates",
-        "content_requirements",
-        "as_of",
-    }
-
-    # research_goal は str 直値で持ち、標準の QuestionContext field
-    # (standalone_question 等)を型として持ち込めない。
-    research_goal_field = next(
-        field for field in fields(review_input_type) if field.name == "research_goal"
-    )
-    assert research_goal_field.type in (str, "str")
+    assert set(field_names) == {"task_groups", "content_requirements", "as_of"}
 
     review_input = _review_input(contracts, content_requirements=("要件A",))
     with pytest.raises(FrozenInstanceError):
@@ -168,6 +179,28 @@ def test_review_input_carries_only_goal_candidates_content_requirements_and_as_o
     assert not hasattr(review_input, "relevant_prior_coverage")
     assert not hasattr(review_input, "active_goal")
     assert not hasattr(review_input, "requirement_id")
+    assert not hasattr(review_input, "research_goal")
+    assert not hasattr(review_input, "candidates")
+
+
+def test_task_group_carries_task_index_research_goal_and_candidates_only() -> None:
+    """S1(候補の渡し方)。グループはtask_index/research_goal/candidatesだけを持つ。"""
+    contracts = _contracts()
+    task_group_type = _required_attribute(contracts, "EvidenceReviewTaskGroup")
+
+    _assert_frozen_slots_dataclass(task_group_type)
+    field_names = {field.name for field in fields(task_group_type)}
+    assert field_names == {"task_index", "research_goal", "candidates"}
+
+    # research_goal は str 直値で持ち、標準の QuestionContext field
+    # (standalone_question 等)を型として持ち込めない。
+    research_goal_field = next(
+        field for field in fields(task_group_type) if field.name == "research_goal"
+    )
+    assert research_goal_field.type in (str, "str")
+
+    with pytest.raises(FrozenInstanceError):
+        _task_group(contracts, goal="goal-A").research_goal = "goal-B"
 
 
 def test_review_input_accepts_empty_content_requirements() -> None:
@@ -207,8 +240,13 @@ def test_agent_declares_stable_model_version_output_and_immutable_schema() -> No
     assert reviewer_agent.name == "evidence_reviewer"
     assert reviewer_agent.model.provider == "deepseek"
     assert reviewer_agent.model.name == "deepseek-v4-flash"
-    assert reviewer_agent.model_settings.max_output_tokens == 2048
-    assert reviewer_agent.prompt.version == "v1"
+    # S2: 採用15件×(claim/why_selected各300字+JSON構文) + missing 8件×200字の
+    # 概算11,400字を保守側1.0 token/字で見積り、約1.4倍の余裕を取った値
+    # (仕様「選別結果の復元」、deepseek-v4-flashの最大出力384K tokenと非競合)。
+    assert reviewer_agent.model_settings.max_output_tokens == 16384
+    # S3: claim/why_selectedの役割定義をinstructionsへ追記したためv2へ上がる
+    # (仕様「採用の言語化」)。
+    assert reviewer_agent.prompt.version == "v2"
     assert reviewer_agent.output_type is _required_attribute(
         contracts, "EvidenceReviewDraft"
     )
@@ -238,7 +276,7 @@ def test_agent_holds_the_complete_model_visible_response_schema() -> None:
             "selections": {
                 "type": "array",
                 "description": (
-                    "Useful candidates only, at most 5. Empty if none are useful."
+                    "Useful candidates only, at most 15. Empty if none are useful."
                 ),
                 "items": {
                     "type": "object",
@@ -254,7 +292,7 @@ def test_agent_holds_the_complete_model_visible_response_schema() -> None:
             "missing": {
                 "type": "array",
                 "description": (
-                    "At most 5 short Japanese notes on what could not be confirmed."
+                    "At most 8 short Japanese notes on what could not be confirmed."
                 ),
                 "items": {"type": "string"},
             },
@@ -272,10 +310,10 @@ def test_deepseek_binding_keeps_only_stable_transport_identity() -> None:
 
 
 def test_version_and_instructions_live_with_prompt_resources() -> None:
-    """保証するテスト条件 10。旧 prompt version count('"v2"' >= 2)を新契約へ追随。
+    """保証するテスト条件 10。version/instructionsはprompt resource moduleの
 
-    evidence_review package は agent を1つしか宣言しないため、'"v1"' の出現数は
-    1回以上でよい(旧テストの>=2は2 agentが同じversion文字列を共有していたため)。
+    リテラルであり、呼び出し側で組み立てられていない。evidence_review package は
+    agent を1つしか宣言しないため、'"v2"' の出現数は1回以上でよい。
     """
     prompts = _prompts()
     source = inspect.getsource(prompts)
@@ -283,8 +321,31 @@ def test_version_and_instructions_live_with_prompt_resources() -> None:
 
     assert reviewer_agent.prompt.input_renderer.__module__ == prompts.__name__
     assert reviewer_agent.prompt.instructions in source
-    assert reviewer_agent.prompt.version == "v1"
-    assert source.count('"v1"') >= 1
+    # S3: claim/why_selectedの役割定義追記に伴いv2へ上げる(仕様「採用の言語化」)。
+    assert reviewer_agent.prompt.version == "v2"
+    assert source.count('"v2"') >= 1
+
+
+def test_instructions_define_claim_and_why_selected_roles_distinctly() -> None:
+    """S3(採用の言語化)。claim と why_selected の役割がinstructionsで別々に
+
+    定義される(現行は「日本語で書く」しか指示がなく、2欄の違いをfield名だけが
+    担っている)。文言の完全一致は推敲で壊れるため、このinstructions全体が
+    一貫して使う定義文のスタイル(既存のresearch_goal/content_requirementsの
+    定義と同じ「Xは、」という導入)がclaim/why_selectedそれぞれに独立して
+    現れることで、役割定義の存在を確認する。
+    """
+    reviewer_agent = _reviewer_agent()
+    instructions = reviewer_agent.prompt.instructions
+
+    claim_definition = re.search(r"claim\s*は、", instructions)
+    why_selected_definition = re.search(r"why_selected\s*は、", instructions)
+
+    assert claim_definition is not None
+    assert why_selected_definition is not None
+    # 同じ導入句の使い回しではなく、claimとwhy_selectedそれぞれに
+    # 独立した定義文が書かれていることを確認する。
+    assert claim_definition.start() != why_selected_definition.start()
 
 
 def test_prompt_keeps_fixed_rules_in_system_and_sanitizes_runtime_task_data() -> None:
@@ -307,6 +368,25 @@ def test_prompt_keeps_fixed_rules_in_system_and_sanitizes_runtime_task_data() ->
     assert boundary_attack not in reviewer_agent.prompt.instructions
     assert "REVIEW_ATTACK_SENTINEL" not in reviewer_agent.prompt.instructions
     assert "research_goal:" in rendered
+
+
+def test_prompt_does_not_render_the_task_group_index() -> None:
+    """S1(候補の渡し方)。task_indexはグループが持つがpromptへレンダリングしない
+
+    (indexからグループは一意に決まり、モデルに返させる識別子を増やさないため)。
+    """
+    contracts = _contracts()
+    reviewer_agent = _reviewer_agent()
+
+    rendered = reviewer_agent.prompt.input_renderer(
+        _review_input(
+            contracts,
+            task_groups=(_task_group(contracts, task_index=7, goal="goal-A"),),
+        )
+    )
+
+    assert "goal-A" in rendered
+    assert "task_index" not in rendered
 
 
 def test_prompt_renders_content_requirement_descriptions_without_requirement_id() -> (

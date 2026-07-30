@@ -1,4 +1,4 @@
-"""1つの ResearchTask について、内部候補と外部候補を精査し根拠を見極める
+"""Run内の全taskの候補を1回で精査し、Run全体の根拠と不足を見極める
 EvidenceReviewer。
 
 DB / Redis / HTTP client の生成は composition が所有し、Reviewer は渡された
@@ -18,23 +18,17 @@ from app.agent.evidence_collection.evidence_review.agent import EVIDENCE_REVIEWE
 from app.agent.evidence_collection.evidence_review.contract import (
     EvidenceReviewInput,
     EvidenceReviewOutcome,
+    ReviewTaskCandidates,
 )
 from app.agent.evidence_collection.evidence_review.policy import (
     EVIDENCE_REVIEW_TIMEOUT_SECONDS,
     REVIEWER_TIMEOUT_REASON,
-    build_review_candidate_projection,
     build_review_evidence,
+    build_review_task_groups,
     finalize_review_draft,
     resolve_reviewer_failure_reason,
 )
-from app.agent.evidence_collection.external_search.contract import (
-    ExternalSearchCandidate,
-)
-from app.agent.evidence_collection.internal_search.contract import (
-    InternalArticleSearchHit,
-)
 from app.agent.phase_span import agent_phase
-from app.agent.planning.contract import ResearchTask
 from app.agent.runtime.contract import (
     AgentResponseDefect,
     AgentResponseInvalidError,
@@ -49,25 +43,18 @@ _EVIDENCE_REVIEW_PHASE = "evidence_review"
 
 @dataclass(frozen=True, slots=True)
 class EvidenceReviewer:
-    """1つのResearchTaskについて内部・外部候補を精査する。収集と回答生成は持たない。"""
+    """Run内の全taskの候補を1回の入力で精査する。収集と回答生成は持たない。"""
 
     async def review(
         self,
         *,
-        task_index: int,
-        task: ResearchTask,
+        tasks: list[ReviewTaskCandidates],
         content_requirements: tuple[str, ...],
-        internal_hits: list[InternalArticleSearchHit],
-        external_candidates: list[ExternalSearchCandidate],
         as_of: datetime,
         reviewer_runtime: AgentRuntime,
     ) -> EvidenceReviewOutcome:
         review_input = EvidenceReviewInput(
-            research_goal=task.research_goal,
-            candidates=build_review_candidate_projection(
-                internal_hits=internal_hits,
-                external_candidates=external_candidates,
-            ),
+            task_groups=build_review_task_groups(tasks),
             content_requirements=content_requirements,
             as_of=as_of,
         )
@@ -75,7 +62,6 @@ class EvidenceReviewer:
         with agent_phase(
             phase=_EVIDENCE_REVIEW_PHASE,
             agent_name=EVIDENCE_REVIEWER_AGENT.name,
-            task_index=task_index,
         ):
             for attempt_number in range(1, 3):
                 try:
@@ -104,9 +90,7 @@ class EvidenceReviewer:
                     continue
 
                 internal_evidence, external_evidence, dropped = build_review_evidence(
-                    task_index=task_index,
-                    internal_hits=internal_hits,
-                    external_candidates=external_candidates,
+                    tasks=tasks,
                     selection_result=selection_result,
                 )
                 return EvidenceReviewOutcome(

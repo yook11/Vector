@@ -1,7 +1,8 @@
-"""EvidenceReviewer.review() の単体契約テスト(D4-S1)。
+"""EvidenceReviewer.review() の単体契約テスト(S1: Run単位1回)。
 
-現行 AnsweringRunner._select_external_evidence と同じ attempt / timeout /
-失敗分類規則を、統合candidate列を受け取る新契約として検証する。
+reviewerはRun内の全taskの候補を1回の入力で受け取り、Run全体としての採用と
+不足を1つの出力で返す(仕様「Run単位で精査する」)。attempt/timeout/失敗分類の
+規則は段4時点から変わらないが、適用範囲がtaskからRunへ広がる。
 production 未実装のため getattr ガードで参照する。
 """
 
@@ -22,7 +23,6 @@ from app.agent.evidence_collection.internal_search.contract import (
     InternalArticleContent,
     InternalArticleSearchHit,
 )
-from app.agent.planning.contract import ResearchTask
 from app.agent.runtime.contract import AgentResponseDefect, AgentResponseInvalidError
 from app.analysis.ai_provider_errors import AIProviderError, AIProviderNetworkError
 from app.analysis.analyzed_article import InScopeAnalyzedArticle
@@ -37,16 +37,12 @@ def _required_module(module_name: str) -> ModuleType:
     try:
         return import_module(module_name)
     except ModuleNotFoundError as exc:
-        pytest.fail(
-            f"D4-S1 evidence_review module is missing: {module_name} ({exc.name})"
-        )
+        pytest.fail(f"S1 evidence_review module is missing: {module_name} ({exc.name})")
 
 
 def _required_attribute(module: ModuleType, name: str) -> Any:
     if not hasattr(module, name):
-        pytest.fail(
-            f"D4-S1 evidence_review contract is missing: {module.__name__}.{name}"
-        )
+        pytest.fail(f"S1 evidence_review contract is missing: {module.__name__}.{name}")
     return getattr(module, name)
 
 
@@ -63,8 +59,23 @@ def _reviewer() -> Any:
     return reviewer_type()
 
 
-def _task(goal: str = "NVIDIA の最新動向を確認する") -> ResearchTask:
-    return ResearchTask(research_goal=goal, article_search_queries=["query"])
+def _task_candidates_type() -> Any:
+    return _required_attribute(_contracts(), "ReviewTaskCandidates")
+
+
+def _task_candidates(
+    *,
+    task_index: int,
+    research_goal: str = "NVIDIA の最新動向を確認する",
+    internal_hits: list[InternalArticleSearchHit] | None = None,
+    external_candidates: list[ExternalSearchCandidate] | None = None,
+) -> Any:
+    return _task_candidates_type()(
+        task_index=task_index,
+        research_goal=research_goal,
+        internal_hits=internal_hits or [],
+        external_candidates=external_candidates or [],
+    )
 
 
 def _internal_hit(
@@ -117,31 +128,39 @@ def _draft(
 
 async def _review(
     *,
-    task_index: int = 0,
-    task: ResearchTask | None = None,
+    tasks: list[Any],
     content_requirements: tuple[str, ...] = (),
-    internal_hits: list[InternalArticleSearchHit] | None = None,
-    external_candidates: list[ExternalSearchCandidate] | None = None,
     as_of: datetime = _AS_OF,
     reviewer_runtime: Any,
 ) -> Any:
     reviewer = _reviewer()
     return await reviewer.review(
-        task_index=task_index,
-        task=task or _task(),
+        tasks=tasks,
         content_requirements=content_requirements,
-        internal_hits=internal_hits or [],
-        external_candidates=external_candidates or [],
         as_of=as_of,
         reviewer_runtime=reviewer_runtime,
     )
 
 
 @pytest.mark.asyncio
-async def test_successful_review_returns_claimed_evidence_and_no_failure_reason() -> (
-    None
-):
-    """保証するテスト条件 6。選別された内部根拠がclaimを持つ。"""
+async def test_review_is_called_exactly_once_for_a_multi_task_run() -> None:
+    """S1 A1。複数taskがあってもreviewer_runtime.invokeは1 attemptにつき1回。"""
+    runtime = ScriptedAgentRuntime(
+        [_draft([{"candidate_index": 0, "claim": "claim", "why_selected": "w"}])]
+    )
+    tasks = [
+        _task_candidates(task_index=0, internal_hits=[_internal_hit()]),
+        _task_candidates(task_index=1, external_candidates=[_external_candidate()]),
+    ]
+
+    await _review(tasks=tasks, reviewer_runtime=runtime)
+
+    assert len(runtime.calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_successful_review_resolves_the_originating_task_index() -> None:
+    """S1: 採用された根拠のtask_indexは、その候補が属するtaskの値になる。"""
     runtime = ScriptedAgentRuntime(
         [
             _draft(
@@ -151,58 +170,186 @@ async def test_successful_review_returns_claimed_evidence_and_no_failure_reason(
     )
 
     outcome = await _review(
-        internal_hits=[_internal_hit()],
+        tasks=[_task_candidates(task_index=3, internal_hits=[_internal_hit()])],
         reviewer_runtime=runtime,
     )
 
     assert outcome.failure_reason is None
     assert len(outcome.internal_evidence) == 1
     assert outcome.internal_evidence[0].claim == "internal claim"
+    assert outcome.internal_evidence[0].task_index == 3
     assert outcome.external_evidence == []
 
 
 @pytest.mark.asyncio
-async def test_review_completes_with_only_internal_candidates() -> None:
-    """保証するテスト条件 7(内部のみ)。外部候補ゼロでも精査が完了する。"""
-    runtime = ScriptedAgentRuntime(
-        [_draft([{"candidate_index": 0, "claim": "claim", "why_selected": "w"}])]
-    )
+async def test_review_groups_candidates_by_task_in_ascending_task_index_order() -> None:
+    """S1(候補の渡し方)。research_goalごとにグループ化しtask_index昇順で並べる。"""
+    runtime = ScriptedAgentRuntime([_draft([])])
+    tasks = [
+        _task_candidates(
+            task_index=0,
+            research_goal="goal-A",
+            internal_hits=[_internal_hit(title="A-int")],
+        ),
+        _task_candidates(
+            task_index=1,
+            research_goal="goal-B",
+            external_candidates=[_external_candidate(title="B-ext")],
+        ),
+    ]
 
-    outcome = await _review(
-        internal_hits=[_internal_hit()],
-        external_candidates=[],
-        reviewer_runtime=runtime,
-    )
+    await _review(tasks=tasks, reviewer_runtime=runtime)
 
-    assert outcome.failure_reason is None
-    assert len(outcome.internal_evidence) == 1
+    review_input = runtime.calls[0].input
+    assert [group.task_index for group in review_input.task_groups] == [0, 1]
+    assert [group.research_goal for group in review_input.task_groups] == [
+        "goal-A",
+        "goal-B",
+    ]
 
 
 @pytest.mark.asyncio
-async def test_review_completes_with_only_external_candidates() -> None:
-    """保証するテスト条件 7(外部のみ)。内部候補ゼロでも精査が完了する。"""
-    runtime = ScriptedAgentRuntime(
-        [_draft([{"candidate_index": 0, "claim": "claim", "why_selected": "w"}])]
-    )
+async def test_review_assigns_a_run_wide_index_internal_before_external_per_group() -> (
+    None
+):
+    """S1(候補の渡し方)。indexはグループをまたぐ通し番号、group内は内部→外部。"""
+    runtime = ScriptedAgentRuntime([_draft([])])
+    tasks = [
+        _task_candidates(
+            task_index=0,
+            internal_hits=[
+                _internal_hit(assessment_id=1001, curation_id=1, title="A-int-1"),
+                _internal_hit(assessment_id=1002, curation_id=2, title="A-int-2"),
+            ],
+            external_candidates=[_external_candidate(title="A-ext-1")],
+        ),
+        _task_candidates(
+            task_index=1,
+            internal_hits=[
+                _internal_hit(assessment_id=1003, curation_id=3, title="B-int-1")
+            ],
+        ),
+    ]
 
-    outcome = await _review(
-        internal_hits=[],
-        external_candidates=[_external_candidate()],
+    await _review(tasks=tasks, reviewer_runtime=runtime)
+
+    review_input = runtime.calls[0].input
+    ordered = [
+        (candidate.index, candidate.title)
+        for group in review_input.task_groups
+        for candidate in group.candidates
+    ]
+    assert ordered == [
+        (0, "A-int-1"),
+        (1, "A-int-2"),
+        (2, "A-ext-1"),
+        (3, "B-int-1"),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_content_requirements_are_carried_once_outside_task_groups() -> None:
+    """S1(候補の渡し方)。content_requirementsはグループの外に1つだけ置かれる。"""
+    runtime = ScriptedAgentRuntime([_draft([])])
+    tasks = [_task_candidates(task_index=0), _task_candidates(task_index=1)]
+
+    await _review(
+        tasks=tasks,
+        content_requirements=("要件A", "要件B"),
         reviewer_runtime=runtime,
     )
 
+    review_input = runtime.calls[0].input
+    assert review_input.content_requirements == ("要件A", "要件B")
+    assert not hasattr(review_input.task_groups[0], "content_requirements")
+
+
+@pytest.mark.asyncio
+async def test_selection_restores_candidate_and_task_from_a_cross_task_index() -> None:
+    """S1(選別結果の復元)。グループをまたいだindexから候補と所属taskが復元される。"""
+    tasks = [
+        _task_candidates(
+            task_index=0,
+            internal_hits=[
+                _internal_hit(assessment_id=1001, curation_id=1, title="A-int-1"),
+                _internal_hit(assessment_id=1002, curation_id=2, title="A-int-2"),
+            ],
+        ),
+        _task_candidates(
+            task_index=1,
+            external_candidates=[
+                _external_candidate("https://example.com/b1", title="B-ext-1"),
+                _external_candidate("https://example.com/b2", title="B-ext-2"),
+            ],
+        ),
+    ]
+    runtime = ScriptedAgentRuntime(
+        [
+            _draft(
+                [
+                    {
+                        "candidate_index": 1,
+                        "claim": "A-int-2 claim",
+                        "why_selected": "w",
+                    },
+                    {
+                        "candidate_index": 3,
+                        "claim": "B-ext-2 claim",
+                        "why_selected": "w",
+                    },
+                ]
+            )
+        ]
+    )
+
+    outcome = await _review(tasks=tasks, reviewer_runtime=runtime)
+
+    assert [(item.title, item.task_index) for item in outcome.internal_evidence] == [
+        ("A-int-2", 0)
+    ]
+    assert [(item.title, item.task_index) for item in outcome.external_evidence] == [
+        ("B-ext-2", 1)
+    ]
+    assert outcome.internal_evidence[0].source_ref == "0-1"
+    assert outcome.external_evidence[0].source_ref == "1-3"
+
+
+@pytest.mark.asyncio
+async def test_review_completes_when_only_some_tasks_have_candidates() -> None:
+    """S1 A1系。候補ゼロのtaskがあってもRun全体としての精査は1回で完了する。"""
+    runtime = ScriptedAgentRuntime(
+        [_draft([{"candidate_index": 0, "claim": "claim", "why_selected": "w"}])]
+    )
+    tasks = [
+        _task_candidates(task_index=0, internal_hits=[_internal_hit()]),
+        _task_candidates(task_index=1),
+    ]
+
+    outcome = await _review(tasks=tasks, reviewer_runtime=runtime)
+
     assert outcome.failure_reason is None
-    assert len(outcome.external_evidence) == 1
-    assert outcome.internal_evidence == []
+    assert len(runtime.calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_review_propagates_missing_as_a_single_run_level_list() -> None:
+    """S1(何ができていないかの表明)。missingはRun全体で1本として返る。"""
+    runtime = ScriptedAgentRuntime([_draft([], missing=["run全体の不足"])])
+
+    outcome = await _review(
+        tasks=[_task_candidates(task_index=0, internal_hits=[_internal_hit()])],
+        reviewer_runtime=runtime,
+    )
+
+    assert outcome.missing == ["run全体の不足"]
 
 
 @pytest.mark.asyncio
 async def test_review_completes_with_empty_content_requirements() -> None:
-    """content_requirementsが空でもresearch_goalだけで精査が完了する。"""
     runtime = ScriptedAgentRuntime([_draft([])])
 
     outcome = await _review(
-        internal_hits=[_internal_hit()],
+        tasks=[_task_candidates(task_index=0, internal_hits=[_internal_hit()])],
         content_requirements=(),
         reviewer_runtime=runtime,
     )
@@ -211,12 +358,31 @@ async def test_review_completes_with_empty_content_requirements() -> None:
 
 
 @pytest.mark.asyncio
-async def test_review_propagates_missing_from_draft() -> None:
-    runtime = ScriptedAgentRuntime([_draft([], missing=["公式発表が見つからない"])])
+async def test_review_drops_out_of_range_duplicate_and_over_cap_selections() -> None:
+    """S1(選別結果の復元)。範囲外/重複/採用上限超過をRun単位で決定的にdropする。
 
-    outcome = await _review(internal_hits=[_internal_hit()], reviewer_runtime=runtime)
+    S2でcap値がRun単位の15になったため、16件目で上限超過が起きることを検証する。
+    """
+    tasks = [
+        _task_candidates(
+            task_index=0,
+            internal_hits=[
+                _internal_hit(assessment_id=1000 + i, curation_id=i + 1, title=f"c{i}")
+                for i in range(16)
+            ],
+        )
+    ]
+    selections = [
+        {"candidate_index": index, "claim": f"claim-{index}", "why_selected": "w"}
+        for index in [0, 0, *range(1, 16), 99]
+    ]
+    runtime = ScriptedAgentRuntime([_draft(selections)])
 
-    assert outcome.missing == ["公式発表が見つからない"]
+    outcome = await _review(tasks=tasks, reviewer_runtime=runtime)
+
+    assert len(outcome.internal_evidence) == 15
+    # dup(index 0)・上限超過(16件目のindex 15)・範囲外(index 99)の3件がdropされる。
+    assert outcome.dropped_selection_count == 3
 
 
 @pytest.mark.asyncio
@@ -229,7 +395,7 @@ async def test_review_retries_at_most_twice_with_the_same_typed_input() -> None:
     )
 
     outcome = await _review(
-        internal_hits=[_internal_hit()],
+        tasks=[_task_candidates(task_index=0, internal_hits=[_internal_hit()])],
         reviewer_runtime=runtime,
     )
 
@@ -263,14 +429,18 @@ async def test_review_classifies_failure_reason_after_two_exhausted_attempts(
     failure: BaseException,
     expected_reason: str,
 ) -> None:
-    """保証するテスト条件 5。2 attempt尽きたtaskが根拠ゼロで終わり例外を投げない。"""
-    runtime = ScriptedAgentRuntime([failure, failure])
+    """S1(精査の失敗)。2 attempt尽きるとRun全体が根拠ゼロで終わり例外を投げない。
 
-    outcome = await _review(
-        internal_hits=[_internal_hit()],
-        external_candidates=[_external_candidate()],
-        reviewer_runtime=runtime,
-    )
+    2 taskに候補があっても、reviewerの呼び出しはRunにつき1回(最大2 attempt)
+    であり、taskごとに新しいattempt列は発生しない。
+    """
+    runtime = ScriptedAgentRuntime([failure, failure])
+    tasks = [
+        _task_candidates(task_index=0, internal_hits=[_internal_hit()]),
+        _task_candidates(task_index=1, external_candidates=[_external_candidate()]),
+    ]
+
+    outcome = await _review(tasks=tasks, reviewer_runtime=runtime)
 
     assert [call.attempt_number for call in runtime.calls] == [1, 2]
     assert outcome.internal_evidence == []
@@ -283,10 +453,8 @@ async def test_review_classifies_failure_reason_after_two_exhausted_attempts(
 async def test_review_retries_after_invalid_draft_and_drops_invalid_selections() -> (
     None
 ):
-    """D4-S1-T2対応表: 旧
-    test_invalid_selector_draft_retries_without_invalid_evidence の移設先。
+    """claimが空のselectionはfinalize_review_draft()でValidationErrorとなり
 
-    claimが空のselectionはfinalize_review_draft()でValidationErrorとなり
     attempt 1が失敗として扱われる(schema自体は妥当なのでruntimeは例外を
     投げない)。attempt 2で重複/範囲外がdropされつつ有効な選択だけが残る。
     """
@@ -304,7 +472,9 @@ async def test_review_retries_after_invalid_draft_and_drops_invalid_selections()
     )
 
     outcome = await _review(
-        external_candidates=[_external_candidate()],
+        tasks=[
+            _task_candidates(task_index=0, external_candidates=[_external_candidate()])
+        ],
         reviewer_runtime=runtime,
     )
 
@@ -316,16 +486,15 @@ async def test_review_retries_after_invalid_draft_and_drops_invalid_selections()
 
 @pytest.mark.asyncio
 async def test_review_propagates_unclassified_exception_without_retry() -> None:
-    """D4-S1-T2対応表: 旧
-    test_selector_unclassified_exception_does_not_retry_or_become_report の移設先。
-
-    分類対象外の例外はreview()が握りつぶさず、即座に呼び出し元へ伝播する。
-    """
+    """分類対象外の例外はreview()が握りつぶさず、即座に呼び出し元へ伝播する。"""
     error = RuntimeError("unclassified reviewer error")
     runtime = ScriptedAgentRuntime([error])
 
     with pytest.raises(RuntimeError) as raised:
-        await _review(internal_hits=[_internal_hit()], reviewer_runtime=runtime)
+        await _review(
+            tasks=[_task_candidates(task_index=0, internal_hits=[_internal_hit()])],
+            reviewer_runtime=runtime,
+        )
 
     assert raised.value is error
     assert [call.attempt_number for call in runtime.calls] == [1]
@@ -367,10 +536,8 @@ def _shorten_review_timeout(monkeypatch: pytest.MonkeyPatch) -> list[float]:
 async def test_review_timeout_backstop_cancels_the_runtime_and_retries_twice(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """D4-S1-T2対応表: 旧
-    test_selector_timeout_backstop_retries_twice_with_timeout_reason の移設先。
+    """asyncio.wait_for(timeout=EVIDENCE_REVIEW_TIMEOUT_SECONDS)の実配線を検証する
 
-    asyncio.wait_for(timeout=EVIDENCE_REVIEW_TIMEOUT_SECONDS)の実配線を検証する
     (TimeoutErrorを直接注入するだけの分類テストとは別に、実際にcancelされる
     ことを確かめる)。
     """
@@ -378,7 +545,10 @@ async def test_review_timeout_backstop_cancels_the_runtime_and_retries_twice(
     runtime = _NeverCompletingRuntime()
 
     outcome = await asyncio.wait_for(
-        _review(internal_hits=[_internal_hit()], reviewer_runtime=runtime),
+        _review(
+            tasks=[_task_candidates(task_index=0, internal_hits=[_internal_hit()])],
+            reviewer_runtime=runtime,
+        ),
         timeout=0.5,
     )
 
@@ -386,31 +556,3 @@ async def test_review_timeout_backstop_cancels_the_runtime_and_retries_twice(
     assert runtime.attempt_numbers == [1, 2]
     assert outcome.failure_reason == "reviewer_timeout"
     assert observed_timeouts.count(30) == 2
-
-
-@pytest.mark.asyncio
-async def test_review_drops_invalid_selections_before_returning_evidence() -> None:
-    """保証するテスト条件 4。範囲外/重複indexをdropしdropped_selection_countへ計上。"""
-    runtime = ScriptedAgentRuntime(
-        [
-            _draft(
-                [
-                    {"candidate_index": 0, "claim": "first", "why_selected": "w"},
-                    {"candidate_index": 0, "claim": "duplicate", "why_selected": "w"},
-                    {
-                        "candidate_index": 99,
-                        "claim": "out of range",
-                        "why_selected": "w",
-                    },
-                ]
-            )
-        ]
-    )
-
-    outcome = await _review(
-        internal_hits=[_internal_hit()],
-        reviewer_runtime=runtime,
-    )
-
-    assert len(outcome.internal_evidence) == 1
-    assert outcome.dropped_selection_count == 2
