@@ -137,6 +137,9 @@ class TavilyExternalSearchTool:
             provider_start_date = date_filter.start_date - timedelta(days=1)
             body["start_date"] = provider_start_date.isoformat()
             body["end_date"] = date_filter.end_date.isoformat()
+        # ProxyError は RequestError の subclass なので先に判定する。まとめて受けると
+        # egress の設定ミスが provider 障害として記録され、切り分けが逆を向く。
+        transport_failure: ExternalSearchToolFailureReason | None = None
         try:
             response = await self._client.post(
                 TAVILY_SEARCH_URL,
@@ -146,13 +149,13 @@ class TavilyExternalSearchTool:
                 json=body,
                 timeout=TAVILY_REQUEST_TIMEOUT_SECONDS,
             )
+        except httpx.ProxyError:
+            transport_failure = ExternalSearchToolFailureReason.PROXY_ERROR
         except httpx.RequestError:
-            response = None
+            transport_failure = ExternalSearchToolFailureReason.HTTP_ERROR
 
-        if response is None:
-            raise ExternalSearchProviderError(
-                reason=ExternalSearchToolFailureReason.HTTP_ERROR
-            )
+        if transport_failure is not None:
+            raise ExternalSearchProviderError(reason=transport_failure)
 
         if not 200 <= response.status_code < 300:
             raise ExternalSearchProviderError(

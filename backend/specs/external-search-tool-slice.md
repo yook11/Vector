@@ -36,6 +36,7 @@ PR2でDeepSeek function callingを「実行されないstructured-output transpo
   `tavily_search_http_error`、非2xxは`tavily_search_http_status_{code}`、JSON不正は
   `tavily_search_invalid_json`、results非listは`tavily_search_invalid_results`として
   `ExternalSearchProviderError`へ分類される。
+  proxy経由の拒否は`tavily_search_proxy_error`として分類する(provider障害と区別する)。
 - 正規化はadapter内で完結する: title必須(strip後空はdrop)、URLは`SafeUrl`検証(失敗candidateはdrop)、
   snippetはstrip + `CANDIDATE_SNIPPET_MAX_CHARS`(500) cap、published_atはISO / RFC2822 parse +
   naiveはUTC付与、source_nameはhostのwww.除去。返却は`candidates[:limit]`。
@@ -86,7 +87,8 @@ class ExternalSearchTool(Protocol):
   既存workflow vocabularyとして本sliceでは残し、実行能力のport名としてだけ`SearchProvider`を削除する。
 - `ExternalSearchProviderError.reason`はadapterが所有する閉じた安全なcodeとし、
   `tavily_search_http_error`、`tavily_search_http_status_{status}`、`tavily_search_invalid_json`、
-  `tavily_search_invalid_results`だけを許す。任意の例外文字列やcauseをreasonへ採用しない。
+  `tavily_search_invalid_results`、`tavily_search_proxy_error`だけを許す。
+  任意の例外文字列やcauseをreasonへ採用しない。
 - 分類済みerrorはtransport requestやprovider responseを持つ元例外を`__cause__` / `__context__`に
   保持せず、公開する例外objectからsecretや本文へ到達できないこと。
 - Tool stable nameは`external_search`とする。provider名(tavily)はadapter実装の詳細であり、

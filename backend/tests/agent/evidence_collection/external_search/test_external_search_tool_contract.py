@@ -291,6 +291,23 @@ async def test_classified_tool_failure_uses_closed_reason_without_exception_even
     assert all(sentinel not in trace_dump for sentinel in sentinels.values())
 
 
+def test_classified_tool_error_accepts_every_static_reason_code() -> None:
+    """status を伴わない全 reason が str 経路でも通ること。
+
+    受理集合を手書きで並べると enum に member を足したときに黙って落ちる。
+    HTTP_STATUS だけが status 付きで、それ以外は静的という契約を固定する。
+    """
+    contracts = _contracts()
+    error_type = _required_attribute(contracts, "ExternalSearchProviderError")
+    reason_enum = _required_attribute(contracts, "ExternalSearchToolFailureReason")
+
+    static_members = [m for m in reason_enum if m is not reason_enum.HTTP_STATUS]
+    assert static_members  # 列挙が空なら以下の assert が空虚になる
+
+    for member in static_members:
+        assert error_type(reason=member.value).reason == member.value
+
+
 def test_classified_tool_error_rejects_arbitrary_reason_values() -> None:
     error_type = _required_attribute(_contracts(), "ExternalSearchProviderError")
     error = error_type(reason="tavily_search_http_error")
