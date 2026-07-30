@@ -47,6 +47,10 @@ locals {
     # `make_safe_async_client` を通る経路 (Tavily / RSS) は明示 transport を
     # 渡すため httpx が env proxy を無視するので、settings 経由で proxy= に
     # 注入する必要がある。**渡し方が 2 系統ある。**
+    #
+    # common なので frontend にも入るが、frontend は proxy への SG egress を持たない。
+    # Node は既定でこの env を読まないため現状は不活性で、読むライブラリが入ると
+    # frontend だけ到達不能で詰まる。その時は stage_environment 側へ移す。
     HTTPS_PROXY = local.proxy_url
     HTTP_PROXY  = local.proxy_url
     # 2 系統のうち settings 側。config.py の egress_proxy_url がこれを受け、

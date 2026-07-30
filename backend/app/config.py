@@ -119,6 +119,11 @@ class Settings(BaseSettings):
     # migration は migrator role の password 認証を続ける。
     db_iam_auth: bool = False
 
+    # token 署名に使う AWS region。botocore が region に読む env は AWS_DEFAULT_REGION
+    # だけで、ECS が注入する AWS_REGION は見ない。解決規則に任せると本番の全 task が
+    # engine 生成で NoRegionError になるため、ここで受けて明示的に渡す。
+    aws_region: str | None = None
+
     # データベース (migration role)
     # alembic / pytest fixture / vector_test 作成など admin 系の作業では
     # ``vector`` (table owner) で接続する。``database_url`` と分離することで、
@@ -402,6 +407,21 @@ class Settings(BaseSettings):
         return self
 
     @model_validator(mode="after")
+    def _require_region_when_iam_auth(self) -> Self:
+        """IAM 認証には region が要る (起動時 fail-fast)。
+
+        token は region ごとに署名するため、region が解決できないと botocore が
+        ``NoRegionError`` を投げて engine が作れない。api では ``app/db.py`` の import
+        時点で落ちるので、起動時に理由の読める形で弾く。
+        """
+        if self.db_iam_auth and self.aws_region is None:
+            raise ValueError(
+                "DB_IAM_AUTH is enabled but AWS_REGION is not set; "
+                "the IAM auth token is signed per region"
+            )
+        return self
+
+    @model_validator(mode="after")
     def _require_ssl_in_production(self) -> Self:
         """production では DB 接続文字列に TLS sslmode を強制する (起動時 fail-fast)。
 
@@ -441,4 +461,6 @@ class Settings(BaseSettings):
         return self
 
 
+# required field は env / .env から埋まるため、静的には「引数不足」に見える。
+# この ignore は引数不足だけを黙らせる (他の型エラーは通す)。
 settings = Settings()  # type: ignore[call-arg]

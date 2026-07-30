@@ -46,6 +46,8 @@ def _isolate_env(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
     monkeypatch.setenv("BFF_JWT_SIGNING_SECRET", _VALID_BFF_SECRET)
     monkeypatch.setenv("REVALIDATE_BEARER_SECRET", _VALID_REVALIDATE_SECRET)
     monkeypatch.setenv("CROSSREF_CONTACT_EMAIL", _VALID_CROSSREF_CONTACT_EMAIL)
+    # host の AWS_REGION を遮断する (IAM 認証の要求検証を host 環境に依存させない)。
+    monkeypatch.delenv("AWS_REGION", raising=False)
 
 
 def test_settings_construct_with_all_required_env() -> None:
@@ -391,7 +393,26 @@ def test_db_iam_auth_accepts_passwordless_runtime_url(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setenv("DATABASE_URL", _IAM_RUNTIME_URL)
+    monkeypatch.setenv("AWS_REGION", "ap-northeast-1")
     assert Settings(db_iam_auth=True).db_iam_auth is True
+
+
+def test_db_iam_auth_requires_region(monkeypatch: pytest.MonkeyPatch) -> None:
+    """region 無しに token は署名できない。
+
+    botocore が region に使う env は AWS_DEFAULT_REGION だけで、ECS が注入する
+    AWS_REGION は読まない。解決規則に任せると本番の全 task が engine 生成で
+    NoRegionError になるため、settings で受けて起動時に要求する。
+    """
+    monkeypatch.setenv("DATABASE_URL", _IAM_RUNTIME_URL)
+    monkeypatch.delenv("AWS_REGION", raising=False)
+    with pytest.raises(ValidationError, match="AWS_REGION"):
+        Settings(db_iam_auth=True)
+
+
+def test_aws_region_defaults_to_none() -> None:
+    """IAM 認証を使わない環境 (Fly / dev) では未設定が正しい。"""
+    assert Settings().aws_region is None
 
 
 @pytest.mark.parametrize("env_name", ["DATABASE_URL", "AUTH_RETENTION_DATABASE_URL"])
@@ -399,6 +420,7 @@ def test_db_iam_auth_rejects_password_in_runtime_url(
     monkeypatch: pytest.MonkeyPatch, env_name: str
 ) -> None:
     """password が残っていると「IAM のつもりで password 認証」を疑えなくなる。"""
+    monkeypatch.setenv("AWS_REGION", "ap-northeast-1")
     monkeypatch.setenv("DATABASE_URL", _IAM_RUNTIME_URL)
     monkeypatch.setenv(
         env_name, _IAM_RUNTIME_URL.replace("vector_app@", "vector_app:leftover@")
@@ -411,6 +433,7 @@ def test_db_iam_auth_allows_password_in_migration_url(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """migration は射程外。migrator role は password 認証を続ける。"""
+    monkeypatch.setenv("AWS_REGION", "ap-northeast-1")
     monkeypatch.setenv("DATABASE_URL", _IAM_RUNTIME_URL)
     monkeypatch.setenv(
         "MIGRATION_DATABASE_URL",
