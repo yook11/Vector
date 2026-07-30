@@ -76,6 +76,9 @@ class ExternalSearchToolFailureReason(StrEnum):
     HTTP_STATUS = "tavily_search_http_status"
     INVALID_JSON = "tavily_search_invalid_json"
     INVALID_RESULTS = "tavily_search_invalid_results"
+    # egress proxy 段で失敗した (provider 障害ではない)。AWS では allowlist の設定ミスが
+    # ここに来る。実際の status と拒否された宛先は proxy の access log 側にある。
+    PROXY_ERROR = "tavily_search_proxy_error"
 
 
 class ExternalSearchProviderError(Exception):
@@ -94,10 +97,12 @@ class ExternalSearchProviderError(Exception):
         elif isinstance(reason, str):
             if status_code is not None:
                 raise ValueError("status_code requires a typed HTTP_STATUS reason")
+            # 手書きで並べると enum に member を足したときに黙って落ちる。
+            # HTTP_STATUS だけが status 付きで、それ以外は静的という契約から導く。
             static_reasons = {
-                ExternalSearchToolFailureReason.HTTP_ERROR.value,
-                ExternalSearchToolFailureReason.INVALID_JSON.value,
-                ExternalSearchToolFailureReason.INVALID_RESULTS.value,
+                member.value
+                for member in ExternalSearchToolFailureReason
+                if member is not ExternalSearchToolFailureReason.HTTP_STATUS
             }
             status_prefix = f"{ExternalSearchToolFailureReason.HTTP_STATUS.value}_"
             status_suffix = reason.removeprefix(status_prefix)

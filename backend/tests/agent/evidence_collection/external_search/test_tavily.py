@@ -454,6 +454,32 @@ async def test_search_wraps_httpx_transport_errors(
 
 
 @pytest.mark.asyncio
+async def test_search_separates_egress_proxy_failures_from_provider_failures() -> None:
+    """egress proxy 段の失敗を Tavily 障害と同じ分類に落とさない。
+
+    AWS では allowlist の設定ミスが proxy の CONNECT 拒否として来る。``ProxyError``
+    は ``RequestError`` の subclass なので、素朴に受けると http_error に丸まって
+    span 上「Tavily が落ちた」と読めてしまい、切り分けが逆を向く。
+
+    403 と 5xx は分けない。retry の判断に使う消費者が居らず (runner は reason を
+    捨てる)、実際の status と拒否された宛先は Squid の access log 側にある。
+    ここで名乗るのは「どの段で失敗したか」まで。
+    """
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise httpx.ProxyError("403 Forbidden", request=request)
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        provider = _provider(client)
+
+        with pytest.raises(ExternalSearchProviderError) as exc_info:
+            await _invoke(provider, query="NVIDIA Blackwell", limit=10)
+
+    assert exc_info.value.reason == "tavily_search_proxy_error"
+    assert TAVILY_TEST_KEY not in str(exc_info.value)
+
+
+@pytest.mark.asyncio
 async def test_search_wraps_json_decode_error() -> None:
     async with httpx.AsyncClient(
         transport=httpx.MockTransport(lambda _: httpx.Response(200, content=b"{"))
