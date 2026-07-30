@@ -214,9 +214,11 @@ class Settings(BaseSettings):
         """
         if v is None:
             return v
-        if info.field_name is None:
+        # 型チェッカは property の narrowing をしないため、ローカルに束縛して判定する。
+        field_name = info.field_name
+        if field_name is None:
             raise ValueError("internal error: missing field name in validator info")
-        env_name = _DATABASE_URL_ENV_NAMES[info.field_name]
+        env_name = _DATABASE_URL_ENV_NAMES[field_name]
         for pattern in _KNOWN_WEAK_DATABASE_URL_PATTERNS:
             if pattern in v:
                 raise ValueError(
@@ -411,4 +413,4 @@ class Settings(BaseSettings):
         return self
 
 
-settings = Settings()
+settings = Settings()  # type: ignore[call-arg]
