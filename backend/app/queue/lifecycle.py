@@ -16,7 +16,8 @@ from taskiq import TaskiqEvents, TaskiqState
 from taskiq_redis import RedisStreamBroker
 
 from app.config import settings
-from app.db_ssl import DEFAULT_POOL_TIMEOUT, create_app_engine
+from app.db_iam_auth import create_runtime_engine
+from app.db_ssl import DEFAULT_POOL_TIMEOUT
 from app.logfire.db_pool import log_pool_initialized, register_pool_metrics
 from app.logfire.setup import setup_logfire
 from app.queue.brokers import (
@@ -71,7 +72,7 @@ def build_worker_engine(label: str) -> AsyncEngine:
     sslmode から導く。
     """
     pool_size, max_overflow = WORKER_POOL_SIZING[label]
-    return create_app_engine(
+    return create_runtime_engine(
         settings.database_url,
         application_name=worker_service_name(label),
         echo=False,
@@ -94,7 +95,7 @@ def build_auth_retention_engine() -> AsyncEngine:
     """
     if settings.auth_retention_database_url is None:
         raise RuntimeError("AUTH_RETENTION_DATABASE_URL is not configured")
-    return create_app_engine(
+    return create_runtime_engine(
         settings.auth_retention_database_url,
         application_name=auth_retention_service_name(),
         echo=False,

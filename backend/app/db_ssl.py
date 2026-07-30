@@ -11,7 +11,8 @@ backend (SQLAlchemy + asyncpg) を Neon 等の managed Postgres に verify-full
   param を取り除き、SSL は ``connect_args={"ssl": SSLContext}`` に正規化する。
 - ``ssl.create_default_context`` は ``CERT_REQUIRED`` + ``check_hostname=True``
   (= verify-full 相当)。CA は ``certifi`` バンドルを明示する
-  (asyncpg 0.31 は ``sslrootcert=system`` 非対応)。
+  (asyncpg 0.31 は ``sslrootcert=system`` 非対応)。RDS の CA は certifi に無い
+  private root なので、certifi に**足す** (置き換えない)。
 - ``sslmode=require`` でも verify-full に格上げする。Fly.io → Neon は public
   internet を通るため検証は必須で、Neon は require でも TLS のため実害なし。
   **平文にしたいのは ``sslmode=disable`` のときだけ**。TLS-without-verification
@@ -28,12 +29,26 @@ factory を import しても設定副作用も循環依存も起きない。
 from __future__ import annotations
 
 import ssl
+from collections.abc import Awaitable, Callable
+from pathlib import Path
 from typing import Any
 
 import certifi
 from sqlalchemy.engine import make_url
 from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
 from sqlalchemy.pool import NullPool
+
+# RDS の CA は自己署名の private root で certifi に含まれない。sslmode=require でも
+# verify-full に格上げするため、足さないと AWS では接続そのものが成立しない。
+#
+# 使うリージョンの 3 root (RSA2048 / RSA4096 / ECC384) だけを入れる。global bundle は
+# 全リージョン 108 root を無条件に信頼することになるので採らない。リージョンを
+# 変えるならこのファイルも差し替える。
+#   取得元 https://truststore.pki.rds.amazonaws.com/ap-northeast-1/ap-northeast-1-bundle.pem
+#
+# docker の build context が backend / frontend に分かれるため frontend にも同じ
+# 内容を置いている。一致は test_db_ssl の TestVerifyFullTrustAnchors が固定する。
+_RDS_CA_BUNDLE = Path(__file__).parent / "rds-ca-ap-northeast-1.pem"
 
 # libpq 互換の sslmode allowlist。allowlist 外 (typo) は ValueError で弾く。
 _VALID_SSLMODES = frozenset(
@@ -160,7 +175,11 @@ def _merge_server_settings(
 
 
 def create_app_engine(
-    url: str, *, application_name: str | None = None, **engine_kwargs: Any
+    url: str,
+    *,
+    application_name: str | None = None,
+    password_provider: Callable[[], Awaitable[str]] | None = None,
+    **engine_kwargs: Any,
 ) -> AsyncEngine:
     """SSL と application_name を一元注入する唯一の engine 生成入口。
 
@@ -169,6 +188,10 @@ def create_app_engine(
     構造的に一元化するため、呼び出し側が ``connect_args["ssl"]`` を渡したら
     ``ValueError`` で fail-fast する (ssl 以外の connect_args はマージ保持)。
     ``application_name`` は asyncpg の ``server_settings`` に焼く。
+
+    ``password_provider`` を渡すと接続確立ごとにそれが呼ばれる (asyncpg の callable
+    password)。RDS IAM 認証の token は 15 分で失効するため、値ではなく生成器を渡す。
+    未指定なら URL の password が使われる。
     """
     clean_url, ssl_connect_args = split_ssl_from_url(url)
 
@@ -179,8 +202,16 @@ def create_app_engine(
             "SSL is derived from the connection string's sslmode (single source "
             "of truth). Use `?sslmode=require` instead."
         )
+    if "password" in caller_connect_args:
+        raise ValueError(
+            "connect_args['password'] must not be passed to create_app_engine; "
+            "pass password_provider= for IAM auth, or keep the password in the "
+            "connection string."
+        )
     merged_connect_args = {**caller_connect_args, **ssl_connect_args}
     merged_connect_args = _merge_server_settings(merged_connect_args, application_name)
+    if password_provider is not None:
+        merged_connect_args["password"] = password_provider
 
     # Neon scale-to-zero (autosuspend) で idle 接続が切られるため、全 engine に
     # stale-connection resilience を既定付与する (呼び出し側が明示すれば override)。
@@ -206,5 +237,11 @@ def _verify_full_context() -> ssl.SSLContext:
     state を共有させないため (engine は WORKER_STARTUP = fork 後生成だが、
     module-level singleton を避けて親で先に作られる経路自体を排除する)。
     engine 生成はプロセス毎に数回のみで CA 読み込みコストは無視できる。
+
+    RDS の root は certifi の集合に**足す**。引かないので Neon 側の検証経路は
+    変わらない。条件分岐を持たないので Fly でもこの 3 root を信頼するが、
+    この CA は RDS のエンドポイントにしか証明書を発行しない。
     """
-    return ssl.create_default_context(cafile=certifi.where())
+    context = ssl.create_default_context(cafile=certifi.where())
+    context.load_verify_locations(cafile=_RDS_CA_BUNDLE)
+    return context

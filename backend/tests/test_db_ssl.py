@@ -8,6 +8,7 @@ frontend の ``frontend/src/lib/auth/pool-ssl.test.ts`` 5 ケースを backend �
 from __future__ import annotations
 
 import ssl
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -268,6 +269,53 @@ class TestCreateAppEngine:
         }
 
 
+class TestPasswordProvider:
+    """接続ごとの認証情報注入 (RDS IAM 認証)。
+
+    token は 15 分で失効するので engine 生成時に 1 度作るのでは足りない。asyncpg の
+    callable password は接続確立ごとに呼ばれ、awaitable なら await される
+    (``connect_utils.py``) ため、非同期の provider をそのまま載せられる。
+    """
+
+    @staticmethod
+    def _captured_connect_args(
+        monkeypatch: pytest.MonkeyPatch, **factory_kwargs: Any
+    ) -> dict[str, Any]:
+        captured: dict[str, Any] = {}
+
+        def _spy(clean_url: str, **kw: Any) -> Any:
+            captured.update(kw)
+            return _real_create_async_engine(clean_url, **kw)
+
+        monkeypatch.setattr(db_ssl, "create_async_engine", _spy)
+        create_app_engine(f"{_NEON}?sslmode=require", **factory_kwargs)
+        return captured["connect_args"]
+
+    def test_provider_becomes_connect_arg_password(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        async def provide() -> str:
+            return "token"
+
+        connect_args = self._captured_connect_args(
+            monkeypatch, password_provider=provide
+        )
+        assert connect_args["password"] is provide
+
+    def test_absent_provider_leaves_password_to_the_url(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """未指定なら URL の password がそのまま使われる (Fly の経路)。"""
+        assert "password" not in self._captured_connect_args(monkeypatch)
+
+    def test_caller_passed_password_raises(self) -> None:
+        """password の決定権も ssl と同じく factory に一元化する。"""
+        with pytest.raises(ValueError, match="connect_args"):
+            create_app_engine(
+                f"{_NEON}?sslmode=require", connect_args={"password": "x"}
+            )
+
+
 class TestEngineResilienceDefaults:
     """factory が全 engine に Neon scale-to-zero resilience を既定付与する不変条件。
 
@@ -293,3 +341,65 @@ class TestEngineResilienceDefaults:
     def test_caller_override_wins(self) -> None:
         engine = create_app_engine(f"{_NEON}?sslmode=require", pool_recycle=60)
         assert engine.sync_engine.pool._recycle == 60
+
+
+# 東京リージョンの RDS root 3 本 (RSA2048 / RSA4096 / ECC384)。いずれも自己署名で
+# certifi に無いため、足さないと verify-full が通らず AWS では接続が成立しない。
+_RDS_REGIONAL_ROOT_CNS = (
+    "Amazon RDS ap-northeast-1 Root CA RSA2048 G1",
+    "Amazon RDS ap-northeast-1 Root CA RSA4096 G1",
+    "Amazon RDS ap-northeast-1 Root CA ECC384 G1",
+)
+# Neon の証明書チェーンの root (Let's Encrypt)。certifi 由来。
+_PUBLIC_ROOT_CN = "ISRG Root X1"
+
+_BACKEND_RDS_CA = Path(db_ssl.__file__).parent / "rds-ca-ap-northeast-1.pem"
+_FRONTEND_RDS_CA = Path(__file__).parents[2] / "frontend" / "rds-ca-ap-northeast-1.pem"
+
+
+def _trusted_root_cns() -> set[str]:
+    """verify-full の SSLContext が信頼している root の commonName 集合。"""
+    _, connect_args = split_ssl_from_url(f"{_NEON}?sslmode=require")
+    context: ssl.SSLContext = connect_args["ssl"]
+    return {
+        value
+        for cert in context.get_ca_certs()
+        for rdn in cert["subject"]
+        for key, value in rdn
+        if key == "commonName"
+    }
+
+
+class TestVerifyFullTrustAnchors:
+    """verify-full の信頼集合。RDS の private root を certifi に **足す** 形を固定する。
+
+    RDS の CA は自己署名の private root で certifi に含まれない。この app は
+    ``sslmode=require`` でも verify-full に格上げするため、足さないと AWS では
+    接続そのものが成立しない。一方 certifi を置き換えると Neon (Let's Encrypt)
+    が検証できず Fly が壊れる。**両方向を見ることで「追加であって置換でない」
+    ことが固定される。**
+    """
+
+    @pytest.mark.parametrize("common_name", _RDS_REGIONAL_ROOT_CNS)
+    def test_trusts_rds_regional_root(self, common_name: str) -> None:
+        assert common_name in _trusted_root_cns()
+
+    def test_keeps_public_roots(self) -> None:
+        """certifi を置き換えていないこと (Neon の検証経路が今日と同じ)。"""
+        assert _PUBLIC_ROOT_CN in _trusted_root_cns()
+
+    def test_trusts_only_the_region_in_use(self) -> None:
+        """global bundle ではなく使うリージョンだけ。他リージョンの root は入らない。"""
+        other_region_roots = {
+            cn
+            for cn in _trusted_root_cns()
+            if cn.startswith("Amazon RDS ") and "ap-northeast-1" not in cn
+        }
+        assert other_region_roots == set()
+
+    def test_frontend_bundle_is_byte_identical(self) -> None:
+        """docker build context が backend / frontend に分かれるため 2 部持つ。
+
+        ずれると片方だけ接続できなくなり、原因が TLS 層に隠れて分かりにくい。
+        """
+        assert _BACKEND_RDS_CA.read_bytes() == _FRONTEND_RDS_CA.read_bytes()

@@ -11,9 +11,10 @@
 - raise すると task retry → 生成 (LLM 呼出等) の重複で害が大きい
 - 「降格」であって「握り潰し」ではない (warn ログで運用に見える)
 
-通信先は compose 内部 DNS (``http://frontend:3000``) や Fly private network
-(``*.flycast``) を想定するため、SSRF guard 入りの ``make_safe_async_client``
-(private IP を弾く) は使わず、``httpx.AsyncClient`` を直接構築する。internal 通信専用。
+通信先は compose 内部 DNS (``http://frontend:3000``) や実行基盤の内部 namespace
+(``*.flycast`` / ``*.vector.internal``) を想定するため、SSRF guard 入りの
+``make_safe_async_client`` (private IP を弾く) は使わず、``httpx.AsyncClient`` を
+直接構築する。internal 通信専用。
 
 宛先 host は config 層の ``internal_frontend_base_url`` validator
 (``app/config.py``) で allowlist 制約済 = ここに渡る時点で宛先は定義上 internal。

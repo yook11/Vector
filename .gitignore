@@ -21,6 +21,11 @@
 credentials*.json
 service-account*.json
 
+# RDS の public CA bundle。秘密鍵ではなく、image に無いと verify-full が通らない。
+# docker の build context が分かれるため backend / frontend に 2 部ある。
+!backend/app/rds-ca-ap-northeast-1.pem
+!frontend/rds-ca-ap-northeast-1.pem
+
 # ===========================
 # Database backups / dumps
 # ===========================

@@ -28,6 +28,11 @@ dependencies = [
     "logfire[fastapi,httpx,sqlalchemy,system-metrics]>=4.37.0",
     "psutil>=7.2.2",
     "certifi>=2026.6.17",
+    # RDS IAM 認証の auth token 署名のみに使う。ローカル署名で I/O が無く、呼び出しも
+    # 接続ごとの低頻度なので、非同期化は asyncio.to_thread で足りる。aiobotocore は
+    # botocore を狭い範囲に pin して更新を律速するため、AWS API を非同期で多数呼ぶ
+    # 要件が出てから採る。
+    "botocore>=1.43,<2",
 ]
 
 # uv の dev group は `uv sync` (no flags) でも default で install され、

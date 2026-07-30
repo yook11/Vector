@@ -46,6 +46,8 @@ def _isolate_env(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
     monkeypatch.setenv("BFF_JWT_SIGNING_SECRET", _VALID_BFF_SECRET)
     monkeypatch.setenv("REVALIDATE_BEARER_SECRET", _VALID_REVALIDATE_SECRET)
     monkeypatch.setenv("CROSSREF_CONTACT_EMAIL", _VALID_CROSSREF_CONTACT_EMAIL)
+    # host の AWS_REGION を遮断する (IAM 認証の要求検証を host 環境に依存させない)。
+    monkeypatch.delenv("AWS_REGION", raising=False)
 
 
 def test_settings_construct_with_all_required_env() -> None:
@@ -235,6 +237,13 @@ def test_reject_when_secrets_equal() -> None:
 
 _VALID_FLYCAST_URL = "http://your-vector-frontend-app.flycast:3000"
 
+# 実行基盤の内部 namespace。Fly と AWS の両方を同じ allowlist が受理する。
+# frontend 側 (internal-config.test.ts) が同じ 2 つを同形で固定している。
+_INTERNAL_NAMESPACE_URLS = [
+    _VALID_FLYCAST_URL,
+    "http://frontend.vector.internal:3000",
+]
+
 # 本番では reject されるが development では許可される dev host 群。
 _DEV_HOST_URLS = [
     "http://localhost:3000",
@@ -253,6 +262,11 @@ _DEV_HOST_URLS = [
         "http://xflycast:3000",  # suffix の前に dot が無い
         # flycast suffix がホスト末尾でない。
         "http://your-vector-frontend-app.flycast.attacker.com:3000",
+        "http://evilvector.internal:3000",  # suffix の前に dot が無い (AWS 側)
+        # namespace suffix がホスト末尾でない。
+        "http://frontend.vector.internal.attacker.com:3000",
+        # .internal だが自分の namespace ではない (許すのは TLD 全体ではない)。
+        "http://frontend.attacker.internal:3000",
     ],
 )
 def test_internal_frontend_base_url_rejects_external_host(bad_url: str) -> None:
@@ -268,10 +282,13 @@ def test_internal_frontend_base_url_rejects_non_http_scheme(bad_url: str) -> Non
         Settings(internal_frontend_base_url=bad_url)
 
 
-def test_internal_frontend_base_url_accepts_flycast_in_development() -> None:
-    """development でも *.flycast は global allowlist で許可される。"""
-    s = Settings(internal_frontend_base_url=_VALID_FLYCAST_URL)
-    assert s.internal_frontend_base_url == _VALID_FLYCAST_URL
+@pytest.mark.parametrize("namespace_url", _INTERNAL_NAMESPACE_URLS)
+def test_internal_frontend_base_url_accepts_internal_namespace_in_development(
+    namespace_url: str,
+) -> None:
+    """development でも内部 namespace は global allowlist で許可される。"""
+    s = Settings(internal_frontend_base_url=namespace_url)
+    assert s.internal_frontend_base_url == namespace_url
 
 
 @pytest.mark.parametrize("dev_host_url", _DEV_HOST_URLS)
@@ -287,15 +304,142 @@ def test_internal_frontend_base_url_accepts_dev_host_in_development(
 def test_internal_frontend_base_url_rejects_dev_host_in_production(
     dev_host_url: str,
 ) -> None:
-    """production では dev host は ValidationError (*.flycast のみ許可)。"""
+    """production では dev host は ValidationError (内部 namespace のみ許可)。"""
     with pytest.raises(ValidationError, match="production"):
         Settings(env="production", internal_frontend_base_url=dev_host_url)
 
 
-def test_internal_frontend_base_url_accepts_flycast_in_production() -> None:
-    """production で *.flycast は許可される。"""
-    s = Settings(env="production", internal_frontend_base_url=_VALID_FLYCAST_URL)
-    assert s.internal_frontend_base_url == _VALID_FLYCAST_URL
+@pytest.mark.parametrize("namespace_url", _INTERNAL_NAMESPACE_URLS)
+def test_internal_frontend_base_url_accepts_internal_namespace_in_production(
+    namespace_url: str,
+) -> None:
+    """production で内部 namespace は許可される。"""
+    s = Settings(env="production", internal_frontend_base_url=namespace_url)
+    assert s.internal_frontend_base_url == namespace_url
+
+
+# egress proxy の宛先。この値は全 task の全外向き通信の経路になるため、攻撃者ホストに
+# 向いた場合の射程は revalidate 宛先より広い (平文 http の上流では header ごと通る)。
+# dev host を許さない点だけが internal_frontend_base_url と違う: proxy は AWS にしか
+# 存在せず、他環境では未設定が正しい状態。
+
+_VALID_EGRESS_PROXY_URLS = [
+    # Terraform が実際に注入する値 (locals.tf の proxy_url =
+    # "http://proxy.${internal_namespace}:${proxy_port}")。両者がずれたら
+    # task が起動できなくなるので、実値をそのまま受理側で固定する。
+    "http://proxy.vector.internal:3128",
+    "http://proxy.your-vector-app.flycast:3128",
+]
+
+
+def test_egress_proxy_url_defaults_to_none() -> None:
+    """未設定なら None (直接接続のまま = Fly / compose の既定)。"""
+    assert Settings().egress_proxy_url is None
+
+
+@pytest.mark.parametrize("proxy_url", _VALID_EGRESS_PROXY_URLS)
+def test_egress_proxy_url_accepts_internal_namespace(proxy_url: str) -> None:
+    s = Settings(egress_proxy_url=proxy_url)
+    assert s.egress_proxy_url == proxy_url
+
+
+@pytest.mark.parametrize(
+    "bad_url",
+    [
+        "http://attacker.example.com:3128",
+        "https://evil.com",
+        "http://169.254.169.254:3128",
+        "http://evilvector.internal:3128",  # suffix の前に dot が無い
+        "http://proxy.vector.internal.attacker.com:3128",  # 末尾でない
+        "http://proxy.attacker.internal:3128",  # 別 namespace
+    ],
+)
+def test_egress_proxy_url_rejects_non_internal_host(bad_url: str) -> None:
+    with pytest.raises(ValidationError, match="EGRESS_PROXY_URL"):
+        Settings(egress_proxy_url=bad_url)
+
+
+@pytest.mark.parametrize("dev_url", ["http://localhost:3128", "http://127.0.0.1:3128"])
+def test_egress_proxy_url_rejects_dev_host(dev_url: str) -> None:
+    """dev host は全環境で拒否 (proxy を使う環境は AWS だけ)。"""
+    with pytest.raises(ValidationError, match="EGRESS_PROXY_URL"):
+        Settings(egress_proxy_url=dev_url)
+
+
+@pytest.mark.parametrize(
+    "bad_url", ["socks5://proxy.vector.internal:1080", "file:///x"]
+)
+def test_egress_proxy_url_rejects_non_http_scheme(bad_url: str) -> None:
+    with pytest.raises(ValidationError, match="EGRESS_PROXY_URL"):
+        Settings(egress_proxy_url=bad_url)
+
+
+# RDS IAM 認証。射程は app runtime の接続だけで、migration は migrator role の
+# password 認証のまま (master は break-glass 専用という以前の決定と整合)。
+# 有効時に URL の password は provider に上書きされて黙って無視されるので起動時に弾く。
+
+_IAM_RUNTIME_URL = (
+    "postgresql+asyncpg://vector_app@"
+    "vector-db.abc.ap-northeast-1.rds.amazonaws.com:5432/vector?sslmode=require"
+)
+
+
+def test_db_iam_auth_defaults_to_false() -> None:
+    """既定は無効。Fly は URL の password で繋ぐ。"""
+    assert Settings().db_iam_auth is False
+
+
+def test_db_iam_auth_accepts_passwordless_runtime_url(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("DATABASE_URL", _IAM_RUNTIME_URL)
+    monkeypatch.setenv("AWS_REGION", "ap-northeast-1")
+    assert Settings(db_iam_auth=True).db_iam_auth is True
+
+
+def test_db_iam_auth_requires_region(monkeypatch: pytest.MonkeyPatch) -> None:
+    """region 無しに token は署名できない。
+
+    botocore が region に使う env は AWS_DEFAULT_REGION だけで、ECS が注入する
+    AWS_REGION は読まない。解決規則に任せると本番の全 task が engine 生成で
+    NoRegionError になるため、settings で受けて起動時に要求する。
+    """
+    monkeypatch.setenv("DATABASE_URL", _IAM_RUNTIME_URL)
+    monkeypatch.delenv("AWS_REGION", raising=False)
+    with pytest.raises(ValidationError, match="AWS_REGION"):
+        Settings(db_iam_auth=True)
+
+
+def test_aws_region_defaults_to_none() -> None:
+    """IAM 認証を使わない環境 (Fly / dev) では未設定が正しい。"""
+    assert Settings().aws_region is None
+
+
+@pytest.mark.parametrize("env_name", ["DATABASE_URL", "AUTH_RETENTION_DATABASE_URL"])
+def test_db_iam_auth_rejects_password_in_runtime_url(
+    monkeypatch: pytest.MonkeyPatch, env_name: str
+) -> None:
+    """password が残っていると「IAM のつもりで password 認証」を疑えなくなる。"""
+    monkeypatch.setenv("AWS_REGION", "ap-northeast-1")
+    monkeypatch.setenv("DATABASE_URL", _IAM_RUNTIME_URL)
+    monkeypatch.setenv(
+        env_name, _IAM_RUNTIME_URL.replace("vector_app@", "vector_app:leftover@")
+    )
+    with pytest.raises(ValidationError, match="DB_IAM_AUTH"):
+        Settings(db_iam_auth=True)
+
+
+def test_db_iam_auth_allows_password_in_migration_url(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """migration は射程外。migrator role は password 認証を続ける。"""
+    monkeypatch.setenv("AWS_REGION", "ap-northeast-1")
+    monkeypatch.setenv("DATABASE_URL", _IAM_RUNTIME_URL)
+    monkeypatch.setenv(
+        "MIGRATION_DATABASE_URL",
+        "postgresql+asyncpg://vector:migratorsecret@db:5432/vector?sslmode=require",
+    )
+    assert Settings(db_iam_auth=True).migration_database_url is not None
 
 
 # Neon は public internet 越しの接続のため、production では DB 接続文字列に TLS

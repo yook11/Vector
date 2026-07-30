@@ -24,17 +24,36 @@ const _ALLOWED_INTERNAL_API_HOSTS = new Set([
   "127.0.0.1",
   "backend",
 ]);
-const _ALLOWED_INTERNAL_API_HOST_SUFFIX = ".flycast";
+// 実行基盤が持つ内部 DNS namespace。先頭 dot が境界なので evilvector.internal は
+// マッチしない。`.internal` は ICANN が private-use 用に予約した TLD で公開 DNS に
+// 委任されないため、AWS 分を足しても外部ホストへの到達手段は増えない
+// (`.flycast` は Fly が内部 resolver で名乗るだけで、予約の裏付けは無い)。
+// 値は Terraform の `internal_namespace` と共有する契約 (infra/aws/variables.tf)。
+const _ALLOWED_INTERNAL_API_HOST_SUFFIXES = [
+  ".flycast",
+  ".vector.internal",
+] as const;
+
+// error message 用の表示形。suffix を足したときに message だけ古くなるのを防ぐ。
+const _INTERNAL_NAMESPACE_GLOBS = _ALLOWED_INTERNAL_API_HOST_SUFFIXES
+  .map((suffix) => `*${suffix}`)
+  .join(" / ");
+
+function isInternalNamespaceHost(host: string): boolean {
+  return _ALLOWED_INTERNAL_API_HOST_SUFFIXES.some((suffix) =>
+    host.endsWith(suffix),
+  );
+}
 
 /**
  * INTERNAL_API_URL の host を全環境 allowlist + production narrowing で検証する。
  *
  * 全環境共通 (global allowlist): localhost / 127.0.0.1 / backend (compose DNS)
- * または *.flycast (Fly private network) を許可。
+ * または実行基盤の内部 namespace (*.flycast / *.vector.internal) を許可。
  *
  * production narrowing (NODE_ENV="production"): dev host は本番で到達不能なため
- * *.flycast 以外を fail-closed で拒否する (backend の
- * _enforce_flycast_in_production と対称)。
+ * 内部 namespace 以外を fail-closed で拒否する (backend の
+ * _enforce_internal_namespace_in_production と対称)。
  *
  * `nodeEnv` を引数化することでテストでは env を tampering せず純粋関数として
  * 検証できる (default は `process.env.NODE_ENV`)。
@@ -56,20 +75,16 @@ export function assertAllowedInternalApiUrl(
   }
   const host = parsed.hostname;
   const isAllowed =
-    _ALLOWED_INTERNAL_API_HOSTS.has(host) ||
-    host.endsWith(_ALLOWED_INTERNAL_API_HOST_SUFFIX);
+    _ALLOWED_INTERNAL_API_HOSTS.has(host) || isInternalNamespaceHost(host);
   if (!isAllowed) {
     throw new Error(
       `INTERNAL_API_URL host "${host}" is not an allowed internal destination; ` +
-        "expected localhost / 127.0.0.1 / backend (compose) or a *.flycast host (Fly private network)",
+        `expected localhost / 127.0.0.1 / backend (compose) or an internal namespace host (${_INTERNAL_NAMESPACE_GLOBS})`,
     );
   }
-  if (
-    nodeEnv === "production" &&
-    !host.endsWith(_ALLOWED_INTERNAL_API_HOST_SUFFIX)
-  ) {
+  if (nodeEnv === "production" && !isInternalNamespaceHost(host)) {
     throw new Error(
-      `in production INTERNAL_API_URL must be a *.flycast host (Fly private network), got host "${host}"`,
+      `in production INTERNAL_API_URL must be an internal namespace host (${_INTERNAL_NAMESPACE_GLOBS}), got host "${host}"`,
     );
   }
 }

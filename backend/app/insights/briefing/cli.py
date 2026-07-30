@@ -37,7 +37,7 @@ from sqlalchemy.ext.asyncio import (
 )
 
 from app.config import settings
-from app.db_ssl import create_app_engine
+from app.db_iam_auth import create_runtime_engine
 from app.insights.briefing.domain.ready import ReadyForBriefing
 from app.insights.briefing.domain.week import latest_completed_week_start, now_in_jst
 from app.insights.briefing.llm import DeepSeekBriefingGenerator
@@ -141,7 +141,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     async def _bootstrap() -> int:
-        engine = create_app_engine(
+        engine = create_runtime_engine(
             settings.database_url,
             application_name="vector-cli-generate-briefing",
             echo=False,

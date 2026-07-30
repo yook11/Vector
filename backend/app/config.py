@@ -51,9 +51,20 @@ _DATABASE_URL_ENV_NAMES = {
 # notifier (FrontendRevalidateNotifier) は SSRF guard をバイパスして
 # REVALIDATE_BEARER_SECRET を Bearer 送信するため、宛先が攻撃者制御に向くと
 # secret 持ち出し経路になる。env 値が攻撃者ホストに向かないことを起動時に構造検証する。
-# global allowlist は全環境共通、本番は *.flycast に絞る (production narrowing)。
+# global allowlist は全環境共通、本番は内部 namespace に絞る (production narrowing)。
 _ALLOWED_INTERNAL_FRONTEND_HOSTS = frozenset({"localhost", "127.0.0.1", "frontend"})
-_ALLOWED_INTERNAL_FRONTEND_HOST_SUFFIX = ".flycast"
+# 実行基盤が持つ内部 DNS namespace。先頭 dot が境界なので evilvector.internal は
+# マッチしない。`.internal` は ICANN が private-use 用に予約した TLD で公開 DNS に
+# 委任されないため、AWS 分を足しても外部ホストへの到達手段は増えない
+# (`.flycast` は Fly が内部 resolver で名乗るだけで、予約の裏付けは無い)。
+# 値は Terraform の `internal_namespace` と共有する契約 (infra/aws/variables.tf)。
+# egress_proxy_url も同じ suffix で縛る。proxy は全 task の外向き通信の経路なので、
+# 攻撃者ホストに向いた場合の射程は revalidate 宛先より広い。
+_ALLOWED_INTERNAL_HOST_SUFFIXES = (".flycast", ".vector.internal")
+# error message 用の表示形。suffix を足したときに message だけ古くなるのを防ぐ。
+_INTERNAL_NAMESPACE_GLOBS = " / ".join(
+    f"*{suffix}" for suffix in _ALLOWED_INTERNAL_HOST_SUFFIXES
+)
 
 # production で DB 接続文字列に要求する TLS sslmode。Neon は public internet
 # 越しのため平文 (disable / allow / prefer / 未指定) を起動時に拒否する。
@@ -67,8 +78,8 @@ _PRODUCTION_REQUIRED_SSLMODES = frozenset({"require", "verify-ca", "verify-full"
 _LOGFIRE_TOKEN_PATTERN = re.compile(r"\Apylf_v1_[a-z]{2}_[A-Za-z0-9]+\Z")
 
 
-def _internal_frontend_host(url: str) -> str | None:
-    """internal_frontend_base_url から host を取り出す (小文字化・port 除去済)。"""
+def _internal_host(url: str) -> str | None:
+    """内部宛先 URL から host を取り出す (小文字化・port 除去済)。"""
     return urlparse(url).hostname
 
 
@@ -102,6 +113,16 @@ class Settings(BaseSettings):
     # application runtime は最小権限 role で接続する。env 必須化と弱秘密拒否で
     # production への dev fallback 混入を防ぐ。
     database_url: str
+
+    # RDS IAM 認証。有効時は URL に password を持たせず、接続ごとに IAM の auth token
+    # を作って認証する (``app/db_iam_auth.py``)。**射程は app runtime の接続だけ**で、
+    # migration は migrator role の password 認証を続ける。
+    db_iam_auth: bool = False
+
+    # token 署名に使う AWS region。botocore が region に読む env は AWS_DEFAULT_REGION
+    # だけで、ECS が注入する AWS_REGION は見ない。解決規則に任せると本番の全 task が
+    # engine 生成で NoRegionError になるため、ここで受けて明示的に渡す。
+    aws_region: str | None = None
 
     # データベース (migration role)
     # alembic / pytest fixture / vector_test 作成など admin 系の作業では
@@ -162,6 +183,12 @@ class Settings(BaseSettings):
     frontend_url: str
     internal_frontend_base_url: str
 
+    # 外向き通信の経路。設定されていれば ``make_safe_async_client`` が全 client に
+    # proxy として差し込む。未設定なら直接接続 (Fly / compose の既定)。
+    # httpx は transport を明示すると env の proxy を読まないため、HTTPS_PROXY だけでは
+    # この経路に効かない。SDK 経路 (env を読む) と渡し方が 2 系統に分かれる。
+    egress_proxy_url: str | None = None
+
     # タスクキュー
     redis_url: str = "redis://localhost:6379/0"
 
@@ -197,7 +224,11 @@ class Settings(BaseSettings):
         """
         if v is None:
             return v
-        env_name = _DATABASE_URL_ENV_NAMES[info.field_name]
+        # 型チェッカは property の narrowing をしないため、ローカルに束縛して判定する。
+        field_name = info.field_name
+        if field_name is None:
+            raise ValueError("internal error: missing field name in validator info")
+        env_name = _DATABASE_URL_ENV_NAMES[field_name]
         for pattern in _KNOWN_WEAK_DATABASE_URL_PATTERNS:
             if pattern in v:
                 raise ValueError(
@@ -214,9 +245,9 @@ class Settings(BaseSettings):
 
         notifier は SSRF guard をバイパスして REVALIDATE_BEARER_SECRET を Bearer
         送信するため、env 値が攻撃者制御のホストに向くと secret 持ち出し経路になる。
-        全環境共通の global allowlist (localhost / 127.0.0.1 / frontend / *.flycast) で
-        任意ホストへの送信を構造遮断する。本番のみの絞り込みは
-        ``_enforce_flycast_in_production`` が担う。
+        全環境共通の global allowlist (localhost / 127.0.0.1 / frontend / 実行基盤の
+        内部 namespace) で任意ホストへの送信を構造遮断する。本番のみの絞り込みは
+        ``_enforce_internal_namespace_in_production`` が担う。
         """
         scheme = urlparse(v).scheme
         if scheme not in ("http", "https"):
@@ -224,18 +255,44 @@ class Settings(BaseSettings):
                 "INTERNAL_FRONTEND_BASE_URL must use http or https scheme, "
                 f"got {scheme!r}"
             )
-        host = _internal_frontend_host(v)
+        host = _internal_host(v)
         if host is None:
             raise ValueError("INTERNAL_FRONTEND_BASE_URL must include a host")
         if host in _ALLOWED_INTERNAL_FRONTEND_HOSTS or host.endswith(
-            _ALLOWED_INTERNAL_FRONTEND_HOST_SUFFIX
+            _ALLOWED_INTERNAL_HOST_SUFFIXES
         ):
             return v
         raise ValueError(
             f"INTERNAL_FRONTEND_BASE_URL host {host!r} is not an allowed internal "
-            "destination; expected localhost / 127.0.0.1 / frontend (compose) or a "
-            "*.flycast host (Fly private network)"
+            "destination; expected localhost / 127.0.0.1 / frontend (compose) or an "
+            f"internal namespace host ({_INTERNAL_NAMESPACE_GLOBS})"
         )
+
+    @field_validator("egress_proxy_url")
+    @classmethod
+    def _validate_egress_proxy_url(cls, v: str | None) -> str | None:
+        """外向き通信の経路を内部 namespace のホストに限定する (起動時 fail-fast)。
+
+        この値は全 task の全外向き通信が通る経路なので、攻撃者ホストに向いた場合の
+        射程は revalidate 宛先より広い (平文 http の上流では header ごと渡る)。
+        dev host は許さない: proxy が居るのは AWS だけで、他環境では未設定が正しい。
+        """
+        if v is None:
+            return v
+        scheme = urlparse(v).scheme
+        if scheme not in ("http", "https"):
+            raise ValueError(
+                f"EGRESS_PROXY_URL must use http or https scheme, got {scheme!r}"
+            )
+        host = _internal_host(v)
+        if host is None:
+            raise ValueError("EGRESS_PROXY_URL must include a host")
+        if not host.endswith(_ALLOWED_INTERNAL_HOST_SUFFIXES):
+            raise ValueError(
+                f"EGRESS_PROXY_URL host {host!r} is not an internal namespace host "
+                f"({_INTERNAL_NAMESPACE_GLOBS})"
+            )
+        return v
 
     @field_validator("logfire_token")
     @classmethod
@@ -307,22 +364,60 @@ class Settings(BaseSettings):
         return self
 
     @model_validator(mode="after")
-    def _enforce_flycast_in_production(self) -> Self:
-        """production では revalidate 宛先を *.flycast に限定する (narrowing)。
+    def _enforce_internal_namespace_in_production(self) -> Self:
+        """production では revalidate 宛先を実行基盤の内部 namespace に限定する。
 
         dev host (localhost / 127.0.0.1 / frontend) は本番では到達できず silent fail に
-        なるため、起動時に弾いて「本番は Fly private network の flycast」を構造的契約に
-        する。dev / CI / test は env="development" のためこの絞り込みは効かない。
+        なるため、起動時に弾いて「本番の宛先は内部 namespace」を構造的契約にする。
+        dev / CI / test は env="development" のためこの絞り込みは効かない。
         host format 自体は ``_validate_internal_frontend_base_url`` が保証済で、
         ここは env 条件の narrowing のみ。
         """
         if self.env != "production":
             return self
-        host = _internal_frontend_host(self.internal_frontend_base_url)
-        if host is None or not host.endswith(_ALLOWED_INTERNAL_FRONTEND_HOST_SUFFIX):
+        host = _internal_host(self.internal_frontend_base_url)
+        if host is None or not host.endswith(_ALLOWED_INTERNAL_HOST_SUFFIXES):
             raise ValueError(
-                "in production INTERNAL_FRONTEND_BASE_URL must be a *.flycast host "
-                f"(Fly private network), got host {host!r}"
+                "in production INTERNAL_FRONTEND_BASE_URL must be an internal "
+                f"namespace host ({_INTERNAL_NAMESPACE_GLOBS}), got host {host!r}"
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _reject_password_when_iam_auth(self) -> Self:
+        """IAM 認証時に runtime URL の password を拒否する (起動時 fail-fast)。
+
+        provider が ``connect_args`` で password を上書きするため、URL 側の password は
+        黙って無視される。「IAM のつもりで password 認証している」と疑えない状態を
+        作らないために弾く。``migration_database_url`` は射程外
+        (migrator role は password 認証を続ける)。
+        """
+        if not self.db_iam_auth:
+            return self
+        for field_name in ("database_url", "auth_retention_database_url"):
+            raw: str | None = getattr(self, field_name)
+            if raw is None:
+                continue
+            if urlparse(raw).password is not None:
+                env_name = _DATABASE_URL_ENV_NAMES[field_name]
+                raise ValueError(
+                    f"DB_IAM_AUTH is enabled but {env_name} contains a password; "
+                    "remove it (the IAM auth token replaces it)"
+                )
+        return self
+
+    @model_validator(mode="after")
+    def _require_region_when_iam_auth(self) -> Self:
+        """IAM 認証には region が要る (起動時 fail-fast)。
+
+        token は region ごとに署名するため、region が解決できないと botocore が
+        ``NoRegionError`` を投げて engine が作れない。api では ``app/db.py`` の import
+        時点で落ちるので、起動時に理由の読める形で弾く。
+        """
+        if self.db_iam_auth and self.aws_region is None:
+            raise ValueError(
+                "DB_IAM_AUTH is enabled but AWS_REGION is not set; "
+                "the IAM auth token is signed per region"
             )
         return self
 
@@ -366,4 +461,6 @@ class Settings(BaseSettings):
         return self
 
 
-settings = Settings()
+# required field は env / .env から埋まるため、静的には「引数不足」に見える。
+# この ignore は引数不足だけを黙らせる (他の型エラーは通す)。
+settings = Settings()  # type: ignore[call-arg]

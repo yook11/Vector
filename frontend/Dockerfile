@@ -118,6 +118,11 @@ COPY --from=builder --chown=nextjs:nodejs /app/.next/standalone ./
 COPY --from=builder --chown=nextjs:nodejs /app/.next/static ./.next/static
 COPY --from=builder --chown=nextjs:nodejs /app/public ./public
 
+# RDS の CA。pg は Node 内蔵の trust store を使うので NODE_EXTRA_CA_CERTS で足す。
+# ENV はここに置かない。env を渡す環境 (AWS) でだけ有効にして、Fly では信頼集合を
+# 触らないため。Terraform 側で path を渡す。
+COPY --chown=nextjs:nodejs rds-ca-ap-northeast-1.pem ./rds-ca-ap-northeast-1.pem
+
 USER nextjs
 EXPOSE 3000
 

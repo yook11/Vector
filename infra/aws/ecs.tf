@@ -47,8 +47,23 @@ locals {
     # `make_safe_async_client` を通る経路 (Tavily / RSS) は明示 transport を
     # 渡すため httpx が env proxy を無視するので、settings 経由で proxy= に
     # 注入する必要がある。**渡し方が 2 系統ある。**
+    #
+    # common なので frontend にも入るが、frontend は proxy への SG egress を持たない。
+    # Node は既定でこの env を読まないため現状は不活性で、読むライブラリが入ると
+    # frontend だけ到達不能で詰まる。その時は stage_environment 側へ移す。
     HTTPS_PROXY = local.proxy_url
     HTTP_PROXY  = local.proxy_url
+    # 2 系統のうち settings 側。config.py の egress_proxy_url がこれを受け、
+    # make_safe_async_client が全 client に proxy として差し込む。
+    #
+    # 上の NO_PROXY はこちらには効かない (env を読まない経路なので)。factory の
+    # 呼び出し先が RSS / スクレイプ / Tavily と全て外部宛先で、内部宛先を叩く
+    # revalidate は raw httpx 側に居るから成立している。内部宛先を factory 経由で
+    # 呼ぶ経路を作ると、proxy の private 宛先拒否で静かに失敗する。
+    #
+    # common に置くので frontend にも入るが、frontend は Node の image で
+    # この値を読まない (Python の Settings field)。
+    EGRESS_PROXY_URL = local.proxy_url
   }
 
   # 段ごとの追加 env。
@@ -59,9 +74,12 @@ locals {
   # 「1 task = 1 DB user」を仮定した形では表現できない。
   stage_environment = {
     frontend = {
-      INTERNAL_API_URL  = local.internal_api_url
-      BETTER_AUTH_URL   = "https://${var.frontend_domain}"
-      AUTH_DATABASE_URL = "postgresql://vector_auth@${local.db_endpoint}/${aws_db_instance.this.db_name}?search_path=auth&sslmode=require"
+      # RDS の CA は Node 内蔵 store に無い private root。pg は内蔵 store を使うので
+      # ここで足す (追加であって置換ではない)。path は Dockerfile の COPY 先。
+      NODE_EXTRA_CA_CERTS = "/app/rds-ca-ap-northeast-1.pem"
+      INTERNAL_API_URL    = local.internal_api_url
+      BETTER_AUTH_URL     = "https://${var.frontend_domain}"
+      AUTH_DATABASE_URL   = "postgresql://vector_auth@${local.db_endpoint}/${aws_db_instance.this.db_name}?search_path=auth&sslmode=require"
     }
     api = {
       FRONTEND_URL = "https://${var.frontend_domain}"
