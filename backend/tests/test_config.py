@@ -322,6 +322,9 @@ def test_internal_frontend_base_url_accepts_internal_namespace_in_production(
 # 存在せず、他環境では未設定が正しい状態。
 
 _VALID_EGRESS_PROXY_URLS = [
+    # Terraform が実際に注入する値 (locals.tf の proxy_url =
+    # "http://proxy.${internal_namespace}:${proxy_port}")。両者がずれたら
+    # task が起動できなくなるので、実値をそのまま受理側で固定する。
     "http://proxy.vector.internal:3128",
     "http://proxy.your-vector-app.flycast:3128",
 ]

@@ -49,6 +49,17 @@ locals {
     # 注入する必要がある。**渡し方が 2 系統ある。**
     HTTPS_PROXY = local.proxy_url
     HTTP_PROXY  = local.proxy_url
+    # 2 系統のうち settings 側。config.py の egress_proxy_url がこれを受け、
+    # make_safe_async_client が全 client に proxy として差し込む。
+    #
+    # 上の NO_PROXY はこちらには効かない (env を読まない経路なので)。factory の
+    # 呼び出し先が RSS / スクレイプ / Tavily と全て外部宛先で、内部宛先を叩く
+    # revalidate は raw httpx 側に居るから成立している。内部宛先を factory 経由で
+    # 呼ぶ経路を作ると、proxy の private 宛先拒否で静かに失敗する。
+    #
+    # common に置くので frontend にも入るが、frontend は Node の image で
+    # この値を読まない (Python の Settings field)。
+    EGRESS_PROXY_URL = local.proxy_url
   }
 
   # 段ごとの追加 env。
