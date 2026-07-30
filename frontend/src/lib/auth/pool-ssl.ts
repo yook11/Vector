@@ -11,7 +11,11 @@
 //
 // SSL を使う場合は verify-full 相当 (CA + ホスト名検証) を rejectUnauthorized
 // で強制し MITM を防ぐ。Fly.io → Neon は public internet を通るため検証は必須。
-// Neon の証明書は標準 CA (Let's Encrypt) なので追加 root 証明書は要らない。
+//
+// CA はここでは指定せず Node 内蔵の trust store に任せる。Neon の証明書は標準 CA
+// (Let's Encrypt) なのでそれで足りる。RDS の CA は certifi/Node に無い private
+// root なので、image に置いた PEM を NODE_EXTRA_CA_CERTS で足す (Terraform が
+// path を渡す)。`ca` を書くと内蔵ストアを置き換えてしまい Neon が壊れる。
 //
 // runtime (auth.ts) からも CLI (auth.cli.ts) からも import されるため、
 // `server-only` guard は持たせない (pg の型のみに依存する純粋関数)。

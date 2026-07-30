@@ -70,9 +70,12 @@ locals {
   # 「1 task = 1 DB user」を仮定した形では表現できない。
   stage_environment = {
     frontend = {
-      INTERNAL_API_URL  = local.internal_api_url
-      BETTER_AUTH_URL   = "https://${var.frontend_domain}"
-      AUTH_DATABASE_URL = "postgresql://vector_auth@${local.db_endpoint}/${aws_db_instance.this.db_name}?search_path=auth&sslmode=require"
+      # RDS の CA は Node 内蔵 store に無い private root。pg は内蔵 store を使うので
+      # ここで足す (追加であって置換ではない)。path は Dockerfile の COPY 先。
+      NODE_EXTRA_CA_CERTS = "/app/rds-ca-ap-northeast-1.pem"
+      INTERNAL_API_URL    = local.internal_api_url
+      BETTER_AUTH_URL     = "https://${var.frontend_domain}"
+      AUTH_DATABASE_URL   = "postgresql://vector_auth@${local.db_endpoint}/${aws_db_instance.this.db_name}?search_path=auth&sslmode=require"
     }
     api = {
       FRONTEND_URL = "https://${var.frontend_domain}"

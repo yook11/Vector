@@ -11,7 +11,8 @@ backend (SQLAlchemy + asyncpg) を Neon 等の managed Postgres に verify-full
   param を取り除き、SSL は ``connect_args={"ssl": SSLContext}`` に正規化する。
 - ``ssl.create_default_context`` は ``CERT_REQUIRED`` + ``check_hostname=True``
   (= verify-full 相当)。CA は ``certifi`` バンドルを明示する
-  (asyncpg 0.31 は ``sslrootcert=system`` 非対応)。
+  (asyncpg 0.31 は ``sslrootcert=system`` 非対応)。RDS の CA は certifi に無い
+  private root なので、certifi に**足す** (置き換えない)。
 - ``sslmode=require`` でも verify-full に格上げする。Fly.io → Neon は public
   internet を通るため検証は必須で、Neon は require でも TLS のため実害なし。
   **平文にしたいのは ``sslmode=disable`` のときだけ**。TLS-without-verification
@@ -28,12 +29,25 @@ factory を import しても設定副作用も循環依存も起きない。
 from __future__ import annotations
 
 import ssl
+from pathlib import Path
 from typing import Any
 
 import certifi
 from sqlalchemy.engine import make_url
 from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
 from sqlalchemy.pool import NullPool
+
+# RDS の CA は自己署名の private root で certifi に含まれない。sslmode=require でも
+# verify-full に格上げするため、足さないと AWS では接続そのものが成立しない。
+#
+# 使うリージョンの 3 root (RSA2048 / RSA4096 / ECC384) だけを入れる。global bundle は
+# 全リージョン 108 root を無条件に信頼することになるので採らない。リージョンを
+# 変えるならこのファイルも差し替える。
+#   取得元 https://truststore.pki.rds.amazonaws.com/ap-northeast-1/ap-northeast-1-bundle.pem
+#
+# docker の build context が backend / frontend に分かれるため frontend にも同じ
+# 内容を置いている。一致は test_db_ssl の TestVerifyFullTrustAnchors が固定する。
+_RDS_CA_BUNDLE = Path(__file__).parent / "rds-ca-ap-northeast-1.pem"
 
 # libpq 互換の sslmode allowlist。allowlist 外 (typo) は ValueError で弾く。
 _VALID_SSLMODES = frozenset(
@@ -206,5 +220,11 @@ def _verify_full_context() -> ssl.SSLContext:
     state を共有させないため (engine は WORKER_STARTUP = fork 後生成だが、
     module-level singleton を避けて親で先に作られる経路自体を排除する)。
     engine 生成はプロセス毎に数回のみで CA 読み込みコストは無視できる。
+
+    RDS の root は certifi の集合に**足す**。引かないので Neon 側の検証経路は
+    変わらない。条件分岐を持たないので Fly でもこの 3 root を信頼するが、
+    この CA は RDS のエンドポイントにしか証明書を発行しない。
     """
-    return ssl.create_default_context(cafile=certifi.where())
+    context = ssl.create_default_context(cafile=certifi.where())
+    context.load_verify_locations(cafile=_RDS_CA_BUNDLE)
+    return context
