@@ -24,9 +24,12 @@ jobs:
     # task definition が ARM64 なので native arm64 runner で焼く (public repo は無料)。
     # QEMU を挟むと build が数倍に伸びる。label が使えない場合だけ QEMU に落とす。
     runs-on: ubuntu-24.04-arm
+    timeout-minutes: 30
 
     steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
+        with:
+          persist-credentials: false
 
       # region / repository 名 / tag の正本は Terraform 側。ここで持つと 2 箇所目に
       # なるので読み出す。読めなければ黙って既定に落ちず失敗させる。
@@ -47,7 +50,7 @@ jobs:
             echo "$name=$value" >> "$GITHUB_OUTPUT"
           done
 
-      - uses: aws-actions/configure-aws-credentials@e6de054238d6b7531b4efff3b6587d9aade6a06c # v6.2.3
+      - uses: aws-actions/configure-aws-credentials@e6de054238d6b7531b4efff3b6587d9aade6a06c  # v6.2.3
         with:
           role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
           aws-region: ${{ steps.tf.outputs.region }}
@@ -72,15 +75,16 @@ jobs:
       # repository は IMMUTABLE なので、tag を上げ忘れた push はここで赤くなる。
       # 上書きできないことが「動いている image が入れ替わらない」保証になっている。
       - name: Build and push
+        # 値は run: 本文へ直接補間せず env: 経由で渡す。IMAGE_REF を別に持つのは、
+        # IMAGE が registry (= account id) を含んでログに出せないため。
         env:
           IMAGE: >-
             ${{ steps.ecr.outputs.registry }}/${{ steps.tf.outputs.name_prefix }}/proxy:${{ steps.tf.outputs.proxy_image_tag }}
+          IMAGE_REF: ${{ steps.tf.outputs.name_prefix }}/proxy:${{ steps.tf.outputs.proxy_image_tag }}
         run: |
           set -euo pipefail
           # provenance を切る。attestation manifest は untagged image として ECR に増え、
           # lifecycle policy が tagStatus: any で数えるので保持世代を食う。
           docker build --provenance=false -t "$IMAGE" infra/squid
           docker push "$IMAGE"
-          # summary にも registry を書かない (account id を含む)。
-          echo "pushed \`${{ steps.tf.outputs.name_prefix }}/proxy:${{ steps.tf.outputs.proxy_image_tag }}\`" \
-            >> "$GITHUB_STEP_SUMMARY"
+          echo "pushed \`$IMAGE_REF\`" >> "$GITHUB_STEP_SUMMARY"

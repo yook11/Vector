@@ -26,6 +26,7 @@ jobs:
   push:
     # task definition が ARM64 なので native arm64 runner で焼く (public repo は無料)。
     runs-on: ubuntu-24.04-arm
+    timeout-minutes: 30
 
     strategy:
       # 片方が落ちてももう片方は焼き切る。proxy と違い app は 2 image 揃って初めて
@@ -40,7 +41,9 @@ jobs:
             context: frontend
 
     steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
+        with:
+          persist-credentials: false
 
       # region / repository 名の正本は Terraform 側。ここで持つと 2 箇所目になる。
       - id: tf
@@ -60,7 +63,7 @@ jobs:
             echo "$name=$value" >> "$GITHUB_OUTPUT"
           done
 
-      - uses: aws-actions/configure-aws-credentials@e6de054238d6b7531b4efff3b6587d9aade6a06c # v6.2.3
+      - uses: aws-actions/configure-aws-credentials@e6de054238d6b7531b4efff3b6587d9aade6a06c  # v6.2.3
         with:
           role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
           aws-region: ${{ steps.tf.outputs.region }}
@@ -83,18 +86,22 @@ jobs:
       # frontend の build ARG は全て placeholder default 付きで、runtime の env が
       # 上書きする。build 引数を渡さないので、secret が image に焼かれる経路が無い。
       - name: Build and push
+        # 値は run: 本文へ直接補間せず env: 経由で渡す。IMAGE_REF を別に持つのは、
+        # IMAGE が registry (= account id) を含んでログに出せないため。
         env:
           IMAGE: >-
             ${{ steps.ecr.outputs.registry }}/${{ steps.tf.outputs.name_prefix }}/${{ matrix.image }}:${{ github.sha }}
+          IMAGE_REF: ${{ steps.tf.outputs.name_prefix }}/${{ matrix.image }}:${{ github.sha }}
+          BUILD_CONTEXT: ${{ matrix.context }}
+          IMAGE_TAG: ${{ github.sha }}
         run: |
           set -euo pipefail
           # provenance を切る。attestation manifest は untagged image として ECR に増え、
           # lifecycle policy が tagStatus: any で数えるので保持世代を食う。
-          docker build --provenance=false -t "$IMAGE" "${{ matrix.context }}"
+          docker build --provenance=false -t "$IMAGE" "$BUILD_CONTEXT"
           docker push "$IMAGE"
-          # summary にも registry を書かない (account id を含む)。
           {
-            echo "pushed \`${{ steps.tf.outputs.name_prefix }}/${{ matrix.image }}:${{ github.sha }}\`"
+            echo "pushed \`$IMAGE_REF\`"
             echo ""
-            echo "apply 側は \`terraform apply -var image_tag=${{ github.sha }}\` で受ける。"
+            echo "apply 側は \`terraform apply -var image_tag=$IMAGE_TAG\` で受ける。"
           } >> "$GITHUB_STEP_SUMMARY"
