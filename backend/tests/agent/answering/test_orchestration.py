@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from contextlib import asynccontextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any
 from uuid import UUID
@@ -18,21 +18,21 @@ from app.agent.answering.evidence_answer.contract import (
     EvidenceAnswerDraftInvalidError,
 )
 from app.agent.contract import AnswerQuestionResult, ExternalUrlSource
-from app.agent.evidence_collection import EvidenceCollectionOutcome
+from app.agent.evidence_collection import Researcher
+from app.agent.evidence_collection.evidence_review import (
+    EvidenceReviewDraft,
+    EvidenceReviewer,
+)
 from app.agent.evidence_collection.external_search import (
-    ExternalEvidenceSelectionDraft,
     ExternalQueryDraft,
     ExternalResearchRuntime,
     ExternalSearchCandidate,
     ExternalSearchEvidence,
-    ExternalSearchOutcome,
-    ResearchTaskReport,
 )
 from app.agent.evidence_collection.internal_search import (
     InternalArticleContent,
     InternalArticleSearchHit,
 )
-from app.agent.evidence_collection.internal_search.contract import InternalSearchError
 from app.agent.evidence_collection.internal_search.query_embedding import (
     InternalSearchQueries,
 )
@@ -162,13 +162,26 @@ def _external_evidence(
     claim: str,
 ) -> ExternalSearchEvidence:
     return ExternalSearchEvidence(
-        source_ref=f"external-{task_index}-0",
+        source_ref=f"{task_index}-0",
         task_index=task_index,
         claim=claim,
-        why_selected="selector explanation",
+        why_selected="reviewer explanation",
         url=url,
         title=title,
     )
+
+
+@dataclass(frozen=True, slots=True)
+class _FixtureTaskMissing:
+    """_external_runtime_for が reviewer draft の missing を組むための内部 fixture
+
+    (production ResearchTaskReport ではない。D4-S2 で report shape が再設計
+    されるため、このファイルは production 型を経由せず reviewer 応答の
+    missing 伝搬だけを表現する)。
+    """
+
+    task_index: int
+    missing: list[str] = field(default_factory=list)
 
 
 def _report(
@@ -176,41 +189,50 @@ def _report(
     task_index: int,
     missing: list[str] | None = None,
     evidence_count: int = 0,
-) -> ResearchTaskReport:
-    return ResearchTaskReport(
-        task_index=task_index,
-        research_goal=f"外部根拠 {task_index} を確認する",
-        status="succeeded",
-        evidence_count=evidence_count,
-        missing=missing or [],
-    )
+) -> _FixtureTaskMissing:
+    del evidence_count  # D4-S2: evidence_countはreviewer draft組み立てに使わない。
+    return _FixtureTaskMissing(task_index=task_index, missing=missing or [])
+
+
+@dataclass(frozen=True, slots=True)
+class _FixtureExternalOutcome:
+    """_external_runtime_for がtask別evidence/missingを引くための内部fixture。"""
+
+    evidence: list[ExternalSearchEvidence] = field(default_factory=list)
+    task_reports: list[_FixtureTaskMissing] = field(default_factory=list)
 
 
 def _external_outcome(
     evidence: list[ExternalSearchEvidence],
     *,
-    reports: list[ResearchTaskReport] | None = None,
+    reports: list[_FixtureTaskMissing] | None = None,
     tasks: list[ExternalResearchTask] | None = None,
-) -> ExternalSearchOutcome:
+) -> _FixtureExternalOutcome:
     tasks = tasks or [_task(0)]
     if reports is None:
-        reports = [
-            _report(
-                task_index=index,
-                evidence_count=sum(1 for item in evidence if item.task_index == index),
-            )
-            for index in range(len(tasks))
-        ]
-    return ExternalSearchOutcome(
-        tasks=tasks,
-        evidence=evidence,
-        task_reports=reports,
-        effective_agent_count=len(tasks),
-    )
+        reports = [_FixtureTaskMissing(task_index=index) for index in range(len(tasks))]
+    return _FixtureExternalOutcome(evidence=evidence, task_reports=reports)
 
 
-def _internal_outcome(count: int = 2) -> EvidenceCollectionOutcome:
-    return EvidenceCollectionOutcome(
+@dataclass(frozen=True, slots=True)
+class _RetrievalFixture:
+    """workflow harness用の意図記述DTO(production EvidenceCollectionOutcomeとは別物)。
+
+    internal_hitsはreviewer精査前のraw hit(FakeInternalSearchが返す値)であり、
+    production側のinternal_evidence(精査後、claim付き)とは型が違う。
+    このfixtureのinternal_hits/external_searchは「reviewerが全候補を採用した
+    場合に到達してほしい最終形」を表し、_external_runtime_forがそれに対応する
+    reviewer draft(統合index空間で内部→外部の順に全採用)を組み立てる。
+    D4-S2: run単位のcollection_failuresは廃止されたため、このfixtureも持たない
+    (internal検索を失敗させたい場合は_orchestrator()のinternal_errorを使う)。
+    """
+
+    internal_hits: list[InternalArticleSearchHit] = field(default_factory=list)
+    external_search: _FixtureExternalOutcome | None = None
+
+
+def _internal_outcome(count: int = 2) -> _RetrievalFixture:
+    return _RetrievalFixture(
         internal_hits=[
             _internal_hit(assessment_id=1000 + index, title=f"internal {index}")
             for index in range(1, count + 1)
@@ -219,7 +241,7 @@ def _internal_outcome(count: int = 2) -> EvidenceCollectionOutcome:
     )
 
 
-def _external_outcome_only() -> EvidenceCollectionOutcome:
+def _external_outcome_only() -> _RetrievalFixture:
     evidence = [
         _external_evidence(
             task_index=0,
@@ -228,11 +250,11 @@ def _external_outcome_only() -> EvidenceCollectionOutcome:
             claim="external claim",
         )
     ]
-    return EvidenceCollectionOutcome(external_search=_external_outcome(evidence))
+    return _RetrievalFixture(external_search=_external_outcome(evidence))
 
 
-def _both_evidence_outcome() -> EvidenceCollectionOutcome:
-    return EvidenceCollectionOutcome(
+def _both_evidence_outcome() -> _RetrievalFixture:
+    return _RetrievalFixture(
         internal_hits=[_internal_hit(assessment_id=1001, title="internal 1")],
         external_search=_external_outcome(
             [
@@ -271,7 +293,7 @@ class FakePlanner:
 class FakeInternalSearch:
     def __init__(
         self,
-        outcome: EvidenceCollectionOutcome | Exception,
+        outcome: _RetrievalFixture | Exception,
         *,
         timeline: CallTimeline | None = None,
     ) -> None:
@@ -289,8 +311,6 @@ class FakeInternalSearch:
         self.calls.append(input.queries)
         if isinstance(self._outcome, Exception):
             raise self._outcome
-        if "internal_search" in self._outcome.collection_failures:
-            raise InternalSearchError(phase="article_search")
         return self._outcome.internal_hits
 
 
@@ -326,17 +346,15 @@ class FakeExternalQueryRuntime:
         )
 
 
-class FakeExternalSelectorRuntime:
-    def __init__(
-        self, drafts_by_goal: dict[str, ExternalEvidenceSelectionDraft]
-    ) -> None:
+class FakeEvidenceReviewerRuntime:
+    def __init__(self, drafts_by_goal: dict[str, EvidenceReviewDraft]) -> None:
         self._drafts_by_goal = drafts_by_goal
 
     async def invoke(
         self, agent: object, input: object, *, attempt_number: int
-    ) -> ExternalEvidenceSelectionDraft:
+    ) -> EvidenceReviewDraft:
         del agent, attempt_number
-        return self._drafts_by_goal[input.task.research_goal]  # type: ignore[union-attr]
+        return self._drafts_by_goal[input.research_goal]  # type: ignore[union-attr]
 
 
 class FakeExternalTool:
@@ -356,11 +374,18 @@ class FakeExternalTool:
 def _external_runtime_for(
     *,
     plan: object,
-    outcome: EvidenceCollectionOutcome,
+    outcome: _RetrievalFixture,
+    internal_hits: list[InternalArticleSearchHit] | None = None,
 ) -> ExternalResearchRuntime:
+    """D4-S1: reviewerが統合index空間(内部先・外部後)の全候補を採用するfixtureを組む。
+
+    internal_hitsはtask_index 0にのみ帰属させる(このmoduleのfixtureは
+    複数taskへの内部候補配分を表現しないため、既存の単一task想定を維持する)。
+    """
     if outcome.external_search is None:
         raise AssertionError("external outcome must be supplied for an external plan")
 
+    task0_internal_hits = internal_hits or []
     evidence_by_task: dict[int, list[ExternalSearchEvidence]] = {}
     for evidence in outcome.external_search.evidence:
         evidence_by_task.setdefault(evidence.task_index, []).append(evidence)
@@ -369,10 +394,11 @@ def _external_runtime_for(
     }
     queries_by_goal: dict[str, str] = {}
     candidates_by_query: dict[str, list[ExternalSearchCandidate]] = {}
-    drafts_by_goal: dict[str, ExternalEvidenceSelectionDraft] = {}
+    drafts_by_goal: dict[str, EvidenceReviewDraft] = {}
 
-    for task_index, task in enumerate(plan.external_research_tasks):
+    for task_index, task in enumerate(plan.research_tasks):
         query = f"fixture-query-{task_index}"
+        task_internal_hits = task0_internal_hits if task_index == 0 else []
         task_evidence = evidence_by_task.get(task_index, [])
         candidates = [
             ExternalSearchCandidate(
@@ -394,21 +420,32 @@ def _external_runtime_for(
         report = reports_by_task.get(task_index)
         queries_by_goal[task.research_goal] = query
         candidates_by_query[query] = candidates
-        drafts_by_goal[task.research_goal] = ExternalEvidenceSelectionDraft(
-            selections=[
-                {
-                    "candidate_index": index,
-                    "claim": evidence.claim,
-                    "why_selected": evidence.why_selected,
-                }
-                for index, evidence in enumerate(task_evidence)
-            ],
-            missing=report.missing if report is not None else [],
+        internal_offset = len(task_internal_hits)
+        drafts_by_goal[task.research_goal] = EvidenceReviewDraft.model_validate(
+            {
+                "selections": [
+                    {
+                        "candidate_index": index,
+                        "claim": "internal claim",
+                        "why_selected": "internal reviewer explanation",
+                    }
+                    for index in range(len(task_internal_hits))
+                ]
+                + [
+                    {
+                        "candidate_index": internal_offset + index,
+                        "claim": evidence.claim,
+                        "why_selected": evidence.why_selected,
+                    }
+                    for index, evidence in enumerate(task_evidence)
+                ],
+                "missing": report.missing if report is not None else [],
+            }
         )
 
     return ExternalResearchRuntime(
         query_runtime=FakeExternalQueryRuntime(queries_by_goal),  # type: ignore[arg-type]
-        selector_runtime=FakeExternalSelectorRuntime(drafts_by_goal),  # type: ignore[arg-type]
+        reviewer_runtime=FakeEvidenceReviewerRuntime(drafts_by_goal),  # type: ignore[arg-type]
         search_tool=FakeExternalTool(candidates_by_query),  # type: ignore[arg-type]
     )
 
@@ -548,7 +585,7 @@ class _WorkflowHarness:
 def _orchestrator(
     *,
     plan: QuestionPlan | Exception,
-    outcome: EvidenceCollectionOutcome | Exception = AssertionError(
+    outcome: _RetrievalFixture | Exception = AssertionError(
         "retrieval ports must not be called"
     ),
     draft: EvidenceAnswerDraft | Exception = AssertionError(
@@ -573,22 +610,25 @@ def _orchestrator(
         timeline=timeline,
     )
     external_runtime = (
-        _external_runtime_for(plan=plan, outcome=outcome)
+        _external_runtime_for(
+            plan=plan, outcome=outcome, internal_hits=outcome.internal_hits
+        )
         if isinstance(plan, _plan_type("SearchPlan"))
-        and isinstance(outcome, EvidenceCollectionOutcome)
+        and isinstance(outcome, _RetrievalFixture)
         else None
     )
     evidence_answerer = FakeEvidenceAnswerer(draft, timeline=timeline)
     direct_answerer = FakeDirectAnswerer(direct_draft, timeline=timeline)
     phases = AnsweringPhases(
         planner=planner,
-        internal_search=internal_search,
+        researcher=Researcher(internal_search=internal_search),
         external_runtime_factory=FakeExternalRuntimeFactory(
             external_runtime,
             timeline=timeline,
         ),
         direct_answerer=direct_answerer,
         evidence_answerer=evidence_answerer,
+        reviewer=EvidenceReviewer(),
     )
     workflow = _WorkflowHarness(
         phases=phases,
@@ -622,7 +662,7 @@ async def test_answer_direct_plan_calls_direct_answerer_only() -> None:
     assert result.sources == []
     assert result.missing_aspects == []
     assert result.plan_summary.plan_type == "direct_answer"
-    assert result.plan_summary.collection_failures == []
+    assert not hasattr(result.plan_summary, "collection_failures")
     assert not hasattr(result, "execution")
     assert direct_answerer.calls == [
         {
@@ -828,8 +868,13 @@ async def test_unfulfilled_requirement_caps_status_and_preserves_answer_sources(
 
 @pytest.mark.asyncio
 async def test_requirement_missing_follows_existing_missing_in_context_order() -> None:
+    """D4-S2: run単位のcollection_failures文言は廃止されたため、task別missingの
+
+    ordering(task_index順)からdraft/requirement missingへ続く並びだけを検証する
+    (経路名文言の不在自体はtest_result_assembly.pyが正本)。
+    """
     tasks = [_task(0), _task(1)]
-    outcome = EvidenceCollectionOutcome(
+    outcome = _RetrievalFixture(
         external_search=_external_outcome(
             [],
             reports=[
@@ -838,7 +883,6 @@ async def test_requirement_missing_follows_existing_missing_in_context_order() -
             ],
             tasks=tasks,
         ),
-        collection_failures=["internal_search"],
     )
     orchestrator, _, _, _, _ = _orchestrator(
         plan=_search_plan(tasks=tasks),
@@ -861,7 +905,6 @@ async def test_requirement_missing_follows_existing_missing_in_context_order() -
 
     assert result.missing_aspects == [
         "回答に使える根拠を取得できませんでした",
-        "内部記事検索を完了できませんでした",
         "外部タスク0の不足",
         "外部タスク1の不足",
         "draftの不足",
@@ -1026,14 +1069,15 @@ async def test_answer_adopts_insufficient_draft_with_partial_citations() -> None
 
 @pytest.mark.asyncio
 async def test_answer_missing_aspects_are_ordered_and_deduplicated() -> None:
+    """D4-S2: task別missingのtask_index順連結とdraft missingとの重複排除を検証する。"""
     tasks = [_task(0), _task(1)]
     reports = [
         _report(task_index=1, missing=["市場予想値", "会社側コメント"]),
-        _report(task_index=0, missing=["市場予想値", "実績値"], evidence_count=1),
+        _report(task_index=0, missing=["市場予想値", "実績値"]),
     ]
     orchestrator, _, _, _, _ = _orchestrator(
         plan=_search_plan(tasks=tasks),
-        outcome=EvidenceCollectionOutcome(
+        outcome=_RetrievalFixture(
             external_search=_external_outcome(
                 [
                     _external_evidence(
@@ -1046,7 +1090,6 @@ async def test_answer_missing_aspects_are_ordered_and_deduplicated() -> None:
                 reports=reports,
                 tasks=tasks,
             ),
-            collection_failures=["internal_search"],
         ),
         draft=EvidenceAnswerDraft(
             sufficiency="insufficient",
@@ -1058,8 +1101,7 @@ async def test_answer_missing_aspects_are_ordered_and_deduplicated() -> None:
 
     result = await orchestrator.answer(_input())
 
-    assert "内部" in result.missing_aspects[0]
-    assert result.missing_aspects[1:] == [
+    assert result.missing_aspects == [
         "市場予想値",
         "実績値",
         "会社側コメント",
@@ -1174,7 +1216,7 @@ async def test_answer_passes_none_time_window_for_search_plan() -> None:
     [
         (
             RuntimeError("planner failed"),
-            EvidenceCollectionOutcome(),
+            _RetrievalFixture(),
             None,
             EvidenceAnswerDraft(
                 sufficiency="answered",
@@ -1211,7 +1253,7 @@ async def test_answer_passes_none_time_window_for_search_plan() -> None:
 )
 async def test_answer_step_failure_stops_before_later_progress_or_ports(
     plan: QuestionPlan | Exception | object,
-    outcome: EvidenceCollectionOutcome | Exception,
+    outcome: _RetrievalFixture | Exception,
     internal_error: Exception | None,
     draft: EvidenceAnswerDraft | Exception,
     message: str,

@@ -21,6 +21,8 @@ from app.agent.contract import (
     AnswerGenerationContinuation,
     AnswerProgressReporter,
 )
+from app.agent.evidence_collection import Researcher
+from app.agent.evidence_collection.evidence_review import EvidenceReviewer
 from app.agent.evidence_collection.external_search.contract import (
     ExternalResearchRuntime,
     ExternalResearchRuntimeFactory,
@@ -69,6 +71,7 @@ async def activate_gemini_agent_runtime() -> AsyncIterator[GeminiAgentRuntime]:
 def _build_answering_phases(
     *,
     session_factory: async_sessionmaker[AsyncSession],
+    events: AnswerEventReporter | None = None,
     delta_reporter: AnswerDeltaReporter | None = None,
     continuation: AnswerGenerationContinuation | None = None,
 ) -> AnsweringPhases:
@@ -82,13 +85,13 @@ def _build_answering_phases(
     from app.agent.evidence_collection.internal_search.article_search import (
         PgVectorArticleSearchRepository,
     )
-    from app.agent.evidence_collection.internal_search.service import (
-        InternalSearchService,
+    from app.agent.evidence_collection.internal_search.tool import (
+        PgVectorInternalSearchTool,
     )
     from app.agent.planning.service import QuestionPlanningService
 
     external_runtime_factory = build_external_research_runtime_factory()
-    internal_search = InternalSearchService(
+    internal_search = PgVectorInternalSearchTool(
         embedder=GeminiQueryEmbedder(),
         article_search_repository=PgVectorArticleSearchRepository(session_factory),
     )
@@ -97,7 +100,8 @@ def _build_answering_phases(
             agent=QUESTION_PLANNER_AGENT,
             runtime_scope_factory=activate_gemini_agent_runtime,
         ),
-        internal_search=internal_search,
+        researcher=Researcher(internal_search=internal_search, events=events),
+        reviewer=EvidenceReviewer(),
         external_runtime_factory=external_runtime_factory,
         direct_answerer=DirectAnswerFlow(
             agent=DIRECT_ANSWER_AGENT,
@@ -139,6 +143,7 @@ def build_answering_runner(
         ),
         phases_factory=lambda: _build_answering_phases(
             session_factory=session_factory,
+            events=events,
             delta_reporter=delta_reporter,
             continuation=continuation,
         ),
@@ -164,8 +169,10 @@ class _ExternalResearchRuntimeFactory:
     async def activate(self) -> AsyncIterator[ExternalResearchRuntime]:
         from openai import AsyncOpenAI
 
+        from app.agent.evidence_collection.evidence_review.deepseek_binding import (
+            EVIDENCE_REVIEWER_DEEPSEEK_BINDING,
+        )
         from app.agent.evidence_collection.external_search.deepseek_binding import (
-            EXTERNAL_EVIDENCE_SELECTOR_DEEPSEEK_BINDING,
             EXTERNAL_QUERY_DEEPSEEK_BINDING,
         )
         from app.agent.evidence_collection.external_search.tavily import (
@@ -186,9 +193,9 @@ class _ExternalResearchRuntimeFactory:
                 client=deepseek_client,
                 binding=EXTERNAL_QUERY_DEEPSEEK_BINDING,
             )
-            selector_runtime = DeepSeekAgentRuntime(
+            reviewer_runtime = DeepSeekAgentRuntime(
                 client=deepseek_client,
-                binding=EXTERNAL_EVIDENCE_SELECTOR_DEEPSEEK_BINDING,
+                binding=EVIDENCE_REVIEWER_DEEPSEEK_BINDING,
             )
             async with make_safe_async_client() as tavily_client:
                 search_tool = TavilyExternalSearchTool(
@@ -197,7 +204,7 @@ class _ExternalResearchRuntimeFactory:
                 )
                 yield ExternalResearchRuntime(
                     query_runtime=query_runtime,
-                    selector_runtime=selector_runtime,
+                    reviewer_runtime=reviewer_runtime,
                     search_tool=search_tool,
                 )
 

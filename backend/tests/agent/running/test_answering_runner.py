@@ -18,6 +18,8 @@ from app.agent.answering.contract import AnsweringRequest
 from app.agent.answering.direct_answer.contract import DirectAnswerDraft
 from app.agent.answering.evidence_answer.contract import EvidenceAnswerDraft
 from app.agent.contract import AnswerGenerationStopped
+from app.agent.evidence_collection import Researcher
+from app.agent.evidence_collection.evidence_review import EvidenceReviewer
 from app.agent.input_safety.contract import (
     InputSafetyBlocked,
     InputSafetyBlockReason,
@@ -387,10 +389,11 @@ class _PhasesFactory:
             raise self._error
         phases = AnsweringPhases(
             planner=self._planner,
-            internal_search=_UnreachableInternalSearch(),
+            researcher=Researcher(internal_search=_UnreachableInternalSearch()),
             external_runtime_factory=_UnreachableExternalRuntimeFactory(),
             direct_answerer=self._direct_answerer,
             evidence_answerer=_UnreachableEvidenceAnswerer(),
+            reviewer=EvidenceReviewer(),
         )
         self.created.append(phases)
         return phases

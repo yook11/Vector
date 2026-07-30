@@ -4,7 +4,6 @@ from app.agent.contract import (
     AnswerPlanSummary,
     AnswerQuestionResult,
     AnswerSource,
-    EvidenceCollectionFailure,
     ExternalUrlSource,
     InternalArticleSource,
     PlanType,
@@ -35,5 +34,4 @@ __all__ = [
     "QuestionPlanner",
     "PlanType",
     "SearchPlan",
-    "EvidenceCollectionFailure",
 ]

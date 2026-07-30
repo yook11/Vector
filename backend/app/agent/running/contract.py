@@ -10,10 +10,11 @@ from uuid import UUID
 from app.agent.answering.direct_answer.contract import DirectAnswerer
 from app.agent.answering.evidence_answer.contract import EvidenceAnswerer
 from app.agent.contract import AnswerQuestionResult
+from app.agent.evidence_collection import Researcher
+from app.agent.evidence_collection.evidence_review import EvidenceReviewer
 from app.agent.evidence_collection.external_search import (
     ExternalResearchRuntimeFactory,
 )
-from app.agent.evidence_collection.internal_search import InternalSearchTool
 from app.agent.planning.contract import QuestionPlanner
 from app.agent.question_context.contract import (
     QuestionContext,
@@ -36,10 +37,11 @@ __all__ = [
 @dataclass(frozen=True, slots=True)
 class AnsweringPhases:
     planner: QuestionPlanner
-    internal_search: InternalSearchTool
+    researcher: Researcher
     external_runtime_factory: ExternalResearchRuntimeFactory
     direct_answerer: DirectAnswerer
     evidence_answerer: EvidenceAnswerer
+    reviewer: EvidenceReviewer
 
 
 class AnsweringPhasesFactory(Protocol):

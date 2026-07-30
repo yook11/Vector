@@ -244,7 +244,9 @@ workflow ownership、retrieval dispatch、external pipeline統合)は実装済�
   (成功したtaskがあるのに全体が失敗したと読める)も「全部落ちたときだけ立てる」(部分失敗が消える)も
   実態と合わない。
 - `collection_failures`の廃止に伴い、経路名を出す文言(「内部記事検索を完了できませんでした」
-  「外部検索を完了できませんでした」)を廃止する。どちらの経路が落ちたかは運用者の関心であり、
+  「外部検索を完了できませんでした」)を廃止する。time filter失敗の文言
+  (「指定された公開期間を外部検索へ適用できませんでした」)は収集経路の失敗ではなく
+  期間指定を適用できなかった事実の表明であり、廃止対象に含めず維持する。どちらの経路が落ちたかは運用者の関心であり、
   metricとspanで観測する。ユーザーへは「完了できなかった調査がある」という事実だけを伝える。
   新設計では片方の収集が落ちても他方の候補で精査を続けるため、経路名の情報価値はさらに下がる。
 - `AnswerQuestionResult`のうち永続化されるのは`answer`(message content)、`missing_aspects`、
@@ -259,7 +261,12 @@ workflow ownership、retrieval dispatch、external pipeline統合)は実装済�
   Tool call spanの追加は本sliceで行わない。
 - 回答Runのspan属性へ、内部・外部別の根拠採用数と、`cited_refs`との突き合わせによる引用数を出す。
   内部候補が無条件で根拠になる段3のうちに仕込み、段4の採用規則の変更が内部引用へ与える影響を
-  測る分母にする。載せるのは件数のみとし、本文非露出の制約を守る。
+  測る分母にする。あわせて内部合流dedupで落ちた件数と、内部収集が失敗したtask数もspan属性で出す
+  (内部側の報告がtask reportへ構造化される段4までの穴埋め)。載せるのは件数のみとし、
+  本文非露出の制約を守る。
+- 内部eventの`task_index`はrequiredとする。deploy窓ではRedisに残る旧形(内部event)が
+  decodeで落ち、live UIの直近event表示が一時的に欠けるが、fail-softかつTTLで自然治癒するため
+  許容する。
 - `task_index`は、1回のRunで並列に走るresearch taskを区別する番号である。planの`research_tasks`
   における位置(0始まり)をそのまま使う。
 - 番号は実行中だけでなく結果にも付いて回る。これにより次が成立する。
@@ -363,6 +370,15 @@ AnsweringRunner.run
 - 合流の重複排除で落ちた側の`claim`の統合。task reportに残るため、失われて困る事例が観測されて
   から判断する。
 - `external_search.*` event名の出所非依存化(親仕様PR10のnaming cleanup)。
+- task並列度まわりの内部名(`resolve_external_search_agent_count` / `requested_external_agent_count` /
+  `ExternalSearchOutcome.effective_agent_count`等)の出所非依存化。段3以降、この並列度は内部収集を
+  含むtask全体を縛るが、名前とreport上の置き場が外部検索専用のまま残っている。report再設計と
+  同時でないと半端な改名になるため、段4以降で扱う。
+- 精査済み根拠の置き場の平坦化。`EvidenceCollectionOutcome.internal_evidence`(平坦)と
+  `external_search.evidence`(`ExternalSearchOutcome`内、Optional)は同じ「精査済み根拠」だが
+  形と置き場が非対称で、正規化とΣ整合validatorに分岐を強いている。外部evidenceの引き上げと
+  `ExternalSearchOutcome`の並列度policyへの縮退、および`ExternalResearchRuntime`(reviewer runtime
+  を含む束)の名前の見直しを、上記の並列度改名と同じタスクで扱う。
 - Tool call spanの新設とusage観測の完成(親仕様PR10)。
 
 ## Test contract

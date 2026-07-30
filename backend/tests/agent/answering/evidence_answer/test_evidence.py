@@ -1,8 +1,17 @@
-"""Answer evidence normalization tests."""
+"""Answer evidence normalization tests(D4-S1)。
+
+内部根拠は精査済み InternalArticleEvidence(claim付き)へ置換された。
+InternalArticleEvidence は production 未実装のため getattr ガードで参照する。
+"""
 
 from __future__ import annotations
 
 from datetime import UTC, datetime
+from importlib import import_module
+from types import ModuleType
+from typing import Any
+
+import pytest
 
 from app.agent.answering.evidence_answer.evidence import normalize_answer_evidence
 from app.agent.contract import ExternalUrlSource
@@ -10,69 +19,76 @@ from app.agent.evidence_collection import EvidenceCollectionOutcome
 from app.agent.evidence_collection.external_search import (
     ExternalSearchEvidence,
     ExternalSearchOutcome,
-    ResearchTaskReport,
 )
-from app.agent.evidence_collection.internal_search import (
-    InternalArticleContent,
-    InternalArticleSearchHit,
-)
-from app.agent.planning.contract import ExternalResearchTask
-from app.analysis.analyzed_article import InScopeAnalyzedArticle
-from app.analysis.assessment.domain.result import InScope, InScopeCategory
+
+
+def _required_attribute(module: ModuleType, name: str) -> Any:
+    if not hasattr(module, name):
+        pytest.fail(
+            f"D4-S1 evidence_review contract is missing: {module.__name__}.{name}"
+        )
+    return getattr(module, name)
+
+
+def _internal_article_evidence_type() -> Any:
+    try:
+        contracts = import_module(
+            "app.agent.evidence_collection.evidence_review.contract"
+        )
+    except ModuleNotFoundError as exc:
+        pytest.fail(f"D4-S1 evidence_review.contract module is missing ({exc.name})")
+    return _required_attribute(contracts, "InternalArticleEvidence")
+
+
+def _report_type() -> Any:
+    evidence_collection_package = import_module("app.agent.evidence_collection")
+    return _required_attribute(evidence_collection_package, "ResearchTaskReport")
+
+
+def _report(
+    *, internal_evidence_count: int = 0, external_evidence_count: int = 0
+) -> Any:
+    """全testがtask_index=0のevidenceのみを使うため、単一taskの最小reportで足りる。"""
+    report_type = _report_type()
+    return report_type(
+        task_index=0,
+        research_goal="NVIDIA の根拠を確認する",
+        internal_collection="succeeded",
+        external_collection="succeeded",
+        review="succeeded",
+        internal_evidence_count=internal_evidence_count,
+        external_evidence_count=external_evidence_count,
+    )
 
 
 def _published_at(day: int) -> datetime:
     return datetime(2026, 7, day, 9, 0, tzinfo=UTC)
 
 
-def _internal_hit(
+def _internal_evidence(
     *,
+    task_index: int = 0,
+    source_ref: str = "0-0",
     assessment_id: int,
     curation_id: int,
     title: str,
+    claim: str = "内部claim",
     summary: str,
     key_points: list[str] | None = None,
     published_at: datetime | None = None,
-    distance: float = 0.1,
-) -> InternalArticleSearchHit:
-    article = InScopeAnalyzedArticle(
+) -> Any:
+    evidence_type = _internal_article_evidence_type()
+    return evidence_type(
+        source_ref=source_ref,
+        task_index=task_index,
+        claim=claim,
+        why_selected="selection explanation not used for synthesis text",
+        assessment_id=assessment_id,
         curation_id=curation_id,
         title=title,
         summary=summary,
-        assessment_result=InScope(
-            category=InScopeCategory.AI,
-            investor_take="投資家視点",
-            key_points=[
-                {"content": point, "mentions": []} for point in key_points or []
-            ],
-        ),
-    )
-    return InternalArticleSearchHit(
-        assessment_id=assessment_id,
-        article=article,
-        content=InternalArticleContent.from_article(
-            article,
-            published_at=published_at,
-        ),
-        distance=distance,
-    )
-
-
-def _task(research_goal: str = "NVIDIA の最新動向を調査する") -> ExternalResearchTask:
-    return ExternalResearchTask(research_goal=research_goal)
-
-
-def _report(
-    *,
-    task_index: int = 0,
-    evidence_count: int = 0,
-    research_goal: str = "NVIDIA の最新動向を調査する",
-) -> ResearchTaskReport:
-    return ResearchTaskReport(
-        task_index=task_index,
-        research_goal=research_goal,
-        status="succeeded",
-        evidence_count=evidence_count,
+        key_points=key_points or [],
+        published_at=published_at,
     )
 
 
@@ -103,32 +119,26 @@ def _external_evidence(
 def _external_outcome(
     evidence: list[ExternalSearchEvidence],
 ) -> ExternalSearchOutcome:
-    task = _task()
-    return ExternalSearchOutcome(
-        tasks=[task],
-        evidence=evidence,
-        task_reports=[
-            _report(
-                task_index=0,
-                research_goal=task.research_goal,
-                evidence_count=len(evidence),
-            )
-        ],
-        effective_agent_count=1,
-    )
+    """D4-S2: ExternalSearchOutcome は evidence + agent counts のみを持つため、
+
+    normalize_answer_evidence()の対象外であるtask_reports/tasksは組み立てない。
+    """
+    return ExternalSearchOutcome(evidence=evidence, effective_agent_count=1)
 
 
 def test_normalize_maps_all_internal_and_external_evidence_with_sequential_refs() -> (
     None
 ):
-    internal_hits = [
-        _internal_hit(
+    internal_evidence = [
+        _internal_evidence(
+            source_ref="0-0",
             assessment_id=101,
             curation_id=1,
             title="OpenAI 半導体提携",
             summary="OpenAI が半導体供給網を強化した。",
         ),
-        _internal_hit(
+        _internal_evidence(
+            source_ref="0-1",
             assessment_id=102,
             curation_id=2,
             title="NVIDIA GPU 需要",
@@ -137,27 +147,28 @@ def test_normalize_maps_all_internal_and_external_evidence_with_sequential_refs(
     ]
     external = [
         _external_evidence(
-            source_ref="external-9-9",
+            source_ref="9-9",
             url="https://example.com/nvidia-1",
             title="NVIDIA official",
             claim="NVIDIA announced a new GPU platform.",
         ),
         _external_evidence(
-            source_ref="external-1-0",
+            source_ref="1-0",
             url="https://example.com/nvidia-2",
             title="Supplier update",
             claim="A supplier reported higher AI demand.",
         ),
         _external_evidence(
-            source_ref="external-1-1",
+            source_ref="1-1",
             url="https://example.com/nvidia-3",
             title="Cloud capex",
             claim="Cloud providers increased AI capex.",
         ),
     ]
     outcome = EvidenceCollectionOutcome(
-        internal_hits=internal_hits,
+        internal_evidence=internal_evidence,
         external_search=_external_outcome(external),
+        task_reports=[_report(internal_evidence_count=2, external_evidence_count=3)],
     )
 
     items = normalize_answer_evidence(outcome)
@@ -174,14 +185,16 @@ def test_normalize_maps_all_internal_and_external_evidence_with_sequential_refs(
 
 
 def test_normalize_preserves_internal_then_external_input_order() -> None:
-    internal_hits = [
-        _internal_hit(
+    internal_evidence = [
+        _internal_evidence(
+            source_ref="0-0",
             assessment_id=101,
             curation_id=1,
             title="internal first",
             summary="first summary",
         ),
-        _internal_hit(
+        _internal_evidence(
+            source_ref="0-2",
             assessment_id=102,
             curation_id=2,
             title="internal second",
@@ -190,13 +203,13 @@ def test_normalize_preserves_internal_then_external_input_order() -> None:
     ]
     external = [
         _external_evidence(
-            source_ref="external-0-3",
+            source_ref="0-3",
             url="https://example.com/first",
             title="external first",
             claim="first claim",
         ),
         _external_evidence(
-            source_ref="external-0-1",
+            source_ref="0-1",
             url="https://example.com/second",
             title="external second",
             claim="second claim",
@@ -205,8 +218,11 @@ def test_normalize_preserves_internal_then_external_input_order() -> None:
 
     items = normalize_answer_evidence(
         EvidenceCollectionOutcome(
-            internal_hits=internal_hits,
+            internal_evidence=internal_evidence,
             external_search=_external_outcome(external),
+            task_reports=[
+                _report(internal_evidence_count=2, external_evidence_count=2)
+            ],
         )
     )
 
@@ -223,7 +239,7 @@ def test_normalize_preserves_external_provenance_and_uses_claim_as_evidence_clai
 ):
     published_at = _published_at(4)
     evidence = _external_evidence(
-        source_ref="external-9-9",
+        source_ref="9-9",
         url="https://example.com/nvidia",
         title="NVIDIA source",
         claim="NVIDIA introduced a new accelerator.",
@@ -233,7 +249,10 @@ def test_normalize_preserves_external_provenance_and_uses_claim_as_evidence_clai
     )
 
     item = normalize_answer_evidence(
-        EvidenceCollectionOutcome(external_search=_external_outcome([evidence]))
+        EvidenceCollectionOutcome(
+            external_search=_external_outcome([evidence]),
+            task_reports=[_report(external_evidence_count=1)],
+        )
     )[0]
 
     assert isinstance(item.source, ExternalUrlSource)
@@ -246,7 +265,7 @@ def test_normalize_preserves_external_provenance_and_uses_claim_as_evidence_clai
 
 def test_normalize_preserves_internal_provenance_with_public_article_id() -> None:
     published_at = _published_at(5)
-    hit = _internal_hit(
+    evidence = _internal_evidence(
         assessment_id=301,
         curation_id=77,
         title="内部 NVIDIA 記事",
@@ -254,7 +273,12 @@ def test_normalize_preserves_internal_provenance_with_public_article_id() -> Non
         published_at=published_at,
     )
 
-    item = normalize_answer_evidence(EvidenceCollectionOutcome(internal_hits=[hit]))[0]
+    item = normalize_answer_evidence(
+        EvidenceCollectionOutcome(
+            internal_evidence=[evidence],
+            task_reports=[_report(internal_evidence_count=1)],
+        )
+    )[0]
 
     assert item.source.kind == "internal_article"
     assert item.source.article_id == 301
@@ -265,29 +289,36 @@ def test_normalize_preserves_internal_provenance_with_public_article_id() -> Non
     assert not hasattr(item.source, "source_name")
 
 
-def test_normalize_builds_kind_independent_text_deterministically() -> None:
-    internal_with_points = _internal_hit(
+def test_normalize_builds_internal_text_from_claim_then_summary_and_key_points() -> (
+    None
+):
+    """保証するテスト条件 6。内部本文が claim + summary(+key_points) になる。"""
+    internal_with_points = _internal_evidence(
+        source_ref="0-2",
         assessment_id=401,
         curation_id=1,
         title="internal rich",
+        claim="内部claim。",
         summary="内部要約。",
         key_points=["需要が増えた。", "供給制約が残る。"],
     )
-    internal_without_points = _internal_hit(
+    internal_without_points = _internal_evidence(
+        source_ref="0-3",
         assessment_id=402,
         curation_id=2,
         title="internal plain",
+        claim="内部claimのみ。",
         summary="内部要約のみ。",
     )
     external_with_snippet = _external_evidence(
-        source_ref="external-0-0",
+        source_ref="0-0",
         url="https://example.com/with-snippet",
         title="external rich",
         claim="外部主張。",
         snippet="外部スニペット。",
     )
     external_without_snippet = _external_evidence(
-        source_ref="external-0-1",
+        source_ref="0-1",
         url="https://example.com/no-snippet",
         title="external plain",
         claim="外部主張のみ。",
@@ -295,16 +326,19 @@ def test_normalize_builds_kind_independent_text_deterministically() -> None:
 
     items = normalize_answer_evidence(
         EvidenceCollectionOutcome(
-            internal_hits=[internal_with_points, internal_without_points],
+            internal_evidence=[internal_with_points, internal_without_points],
             external_search=_external_outcome(
                 [external_with_snippet, external_without_snippet]
             ),
+            task_reports=[
+                _report(internal_evidence_count=2, external_evidence_count=2)
+            ],
         )
     )
 
     assert [item.text for item in items] == [
-        "内部要約。\n- 需要が増えた。\n- 供給制約が残る。",
-        "内部要約のみ。",
+        "内部claim。\n内部要約。\n- 需要が増えた。\n- 供給制約が残る。",
+        "内部claimのみ。\n内部要約のみ。",
         "外部主張。\n外部スニペット。",
         "外部主張のみ。",
     ]
@@ -312,14 +346,36 @@ def test_normalize_builds_kind_independent_text_deterministically() -> None:
 
 def test_normalize_ignores_external_local_source_ref() -> None:
     evidence = _external_evidence(
-        source_ref="external-9-9",
+        source_ref="9-9",
         url="https://example.com/ref",
         title="external",
         claim="external claim",
     )
 
     item = normalize_answer_evidence(
-        EvidenceCollectionOutcome(external_search=_external_outcome([evidence]))
+        EvidenceCollectionOutcome(
+            external_search=_external_outcome([evidence]),
+            task_reports=[_report(external_evidence_count=1)],
+        )
+    )[0]
+
+    assert item.source.source_ref == "1"
+
+
+def test_normalize_ignores_internal_local_source_ref() -> None:
+    evidence = _internal_evidence(
+        source_ref="9-9",
+        assessment_id=501,
+        curation_id=1,
+        title="internal",
+        summary="summary",
+    )
+
+    item = normalize_answer_evidence(
+        EvidenceCollectionOutcome(
+            internal_evidence=[evidence],
+            task_reports=[_report(internal_evidence_count=1)],
+        )
     )[0]
 
     assert item.source.source_ref == "1"
@@ -327,7 +383,7 @@ def test_normalize_ignores_external_local_source_ref() -> None:
 
 def test_normalize_omits_empty_external_snippet_from_text() -> None:
     evidence = _external_evidence(
-        source_ref="external-0-0",
+        source_ref="0-0",
         url="https://example.com/empty-snippet",
         title="external",
         claim="external claim",
@@ -335,7 +391,10 @@ def test_normalize_omits_empty_external_snippet_from_text() -> None:
     )
 
     item = normalize_answer_evidence(
-        EvidenceCollectionOutcome(external_search=_external_outcome([evidence]))
+        EvidenceCollectionOutcome(
+            external_search=_external_outcome([evidence]),
+            task_reports=[_report(external_evidence_count=1)],
+        )
     )[0]
 
     assert item.text == "external claim"
@@ -343,8 +402,9 @@ def test_normalize_omits_empty_external_snippet_from_text() -> None:
 
 def test_normalize_is_deterministic_for_same_input() -> None:
     outcome = EvidenceCollectionOutcome(
-        internal_hits=[
-            _internal_hit(
+        internal_evidence=[
+            _internal_evidence(
+                source_ref="0-1",
                 assessment_id=501,
                 curation_id=1,
                 title="internal",
@@ -354,48 +414,54 @@ def test_normalize_is_deterministic_for_same_input() -> None:
         external_search=_external_outcome(
             [
                 _external_evidence(
-                    source_ref="external-0-0",
+                    source_ref="0-0",
                     url="https://example.com/deterministic",
                     title="external",
                     claim="claim",
                 )
             ]
         ),
+        task_reports=[_report(internal_evidence_count=1, external_evidence_count=1)],
     )
 
     assert normalize_answer_evidence(outcome) == normalize_answer_evidence(outcome)
 
 
 def test_normalize_accepts_empty_and_partial_retrieval_outcomes() -> None:
-    internal_hit = _internal_hit(
+    internal_evidence = _internal_evidence(
         assessment_id=601,
         curation_id=1,
         title="internal only",
         summary="summary",
     )
-    empty_external = ExternalSearchOutcome(
-        tasks=[],
-        evidence=[],
-        task_reports=[],
-        effective_agent_count=0,
-    )
+    empty_external = ExternalSearchOutcome(evidence=[], effective_agent_count=0)
 
-    assert normalize_answer_evidence(EvidenceCollectionOutcome()) == []
-    assert [
-        item.source.source_ref
-        for item in normalize_answer_evidence(
-            EvidenceCollectionOutcome(internal_hits=[internal_hit])
-        )
-    ] == ["1"]
     assert (
-        normalize_answer_evidence(EvidenceCollectionOutcome(external_search=None)) == []
+        normalize_answer_evidence(EvidenceCollectionOutcome(task_reports=[_report()]))
+        == []
     )
     assert [
         item.source.source_ref
         for item in normalize_answer_evidence(
             EvidenceCollectionOutcome(
-                internal_hits=[internal_hit],
+                internal_evidence=[internal_evidence],
+                task_reports=[_report(internal_evidence_count=1)],
+            )
+        )
+    ] == ["1"]
+    assert (
+        normalize_answer_evidence(
+            EvidenceCollectionOutcome(external_search=None, task_reports=[_report()])
+        )
+        == []
+    )
+    assert [
+        item.source.source_ref
+        for item in normalize_answer_evidence(
+            EvidenceCollectionOutcome(
+                internal_evidence=[internal_evidence],
                 external_search=empty_external,
+                task_reports=[_report(internal_evidence_count=1)],
             )
         )
     ] == ["1"]

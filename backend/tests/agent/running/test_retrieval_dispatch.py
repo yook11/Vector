@@ -17,9 +17,12 @@ from app.agent.answering.contract import AnsweringRequest
 from app.agent.answering.direct_answer.contract import DirectAnswerDraft
 from app.agent.answering.evidence_answer.contract import EvidenceAnswerDraft
 from app.agent.contract import AnswerProgressStage
+from app.agent.evidence_collection import Researcher
+from app.agent.evidence_collection.evidence_review import EvidenceReviewer
 from app.agent.evidence_collection.external_search import (
     ExternalResearchRuntime,
     ExternalSearchCandidate,
+    ExternalSearchProviderError,
 )
 from app.agent.evidence_collection.internal_search import (
     InternalArticleContent,
@@ -67,21 +70,42 @@ def _query_draft() -> Any:
     return ExternalQueryDraft(queries=["NVIDIA supply"])
 
 
-def _selection_draft() -> Any:
-    from app.agent.evidence_collection.external_search.contract import (
-        ExternalEvidenceSelectionDraft,
-    )
+def _review_draft_selecting(indexes: list[int]) -> Any:
+    """D4-S1: 統合index空間の指定indexを採用するreviewer draft。
 
-    return ExternalEvidenceSelectionDraft(selections=[], missing=[])
+    候補数より大きいindexは範囲外dropとなるだけで安全なため、実際の候補数を
+    問わず[0, 1]等を渡して「提示された候補を全て採用させる」用途に使える。
+    """
+    from app.agent.evidence_collection.evidence_review import EvidenceReviewDraft
+
+    return EvidenceReviewDraft.model_validate(
+        {
+            "selections": [
+                {
+                    "candidate_index": index,
+                    "claim": f"claim-{index}",
+                    "why_selected": "w",
+                }
+                for index in indexes
+            ],
+            "missing": [],
+        }
+    )
 
 
 def _candidate(url: str, *, title: str) -> ExternalSearchCandidate:
     return ExternalSearchCandidate(url=url, title=title, snippet="snippet")
 
 
-def _hit(*, assessment_id: int, title: str) -> InternalArticleSearchHit:
+def _hit(
+    *,
+    assessment_id: int,
+    title: str,
+    curation_id: int | None = None,
+    distance: float = 0.1,
+) -> InternalArticleSearchHit:
     article = InScopeAnalyzedArticle(
-        curation_id=assessment_id - 1000,
+        curation_id=curation_id if curation_id is not None else assessment_id - 1000,
         title=title,
         summary=f"{title} summary",
         assessment_result=InScope(
@@ -94,7 +118,7 @@ def _hit(*, assessment_id: int, title: str) -> InternalArticleSearchHit:
         assessment_id=assessment_id,
         article=article,
         content=InternalArticleContent.from_article(article, published_at=None),
-        distance=0.1,
+        distance=distance,
     )
 
 
@@ -184,6 +208,7 @@ class _Tool:
         self.calls: list[Any] = []
         self.completed = False
         self.cancelled_error: asyncio.CancelledError | None = None
+        self.finished = asyncio.Event()
 
     @property
     def name(self) -> str:
@@ -206,6 +231,7 @@ class _Tool:
         finally:
             if self._timeline is not None:
                 self._timeline.append("external.finished")
+            self.finished.set()
 
 
 class _BlockingQueryRuntime:
@@ -445,12 +471,12 @@ class _UnreachableDirectAnswerer:
 def _runtime(
     query_runtime: object,
     *,
-    selector_runtime: object | None = None,
+    reviewer_runtime: object | None = None,
     tool: _Tool | None = None,
 ) -> ExternalResearchRuntime:
     return ExternalResearchRuntime(
         query_runtime=query_runtime,  # type: ignore[arg-type]
-        selector_runtime=(selector_runtime or ScriptedAgentRuntime([])),  # type: ignore[arg-type]
+        reviewer_runtime=(reviewer_runtime or ScriptedAgentRuntime([])),  # type: ignore[arg-type]
         search_tool=(tool or _Tool()),  # type: ignore[arg-type]
     )
 
@@ -469,10 +495,11 @@ def _runner(
 ) -> AnsweringRunner:
     phases = AnsweringPhases(
         planner=_Planner(plan, error=planner_error),
-        internal_search=internal,
+        researcher=Researcher(internal_search=internal, events=events),
         external_runtime_factory=factory,
         direct_answerer=_UnreachableDirectAnswerer(),
         evidence_answerer=_EvidenceAnswerer(error=answer_error, timeline=timeline),
+        reviewer=EvidenceReviewer(),
     )
     return AnsweringRunner(
         input_safety_checker=AllowInputSafetyChecker(),
@@ -537,6 +564,24 @@ def _search_plan(
     )
 
 
+def _plan_with_tasks(
+    *goals_and_queries: tuple[str, list[str]],
+    target_time_window: TargetTimeWindow | None = _TARGET_TIME_WINDOW,
+) -> object:
+    """段3のtask単位収集テスト用に、taskごとのqueryを直接指定してplanを組む。"""
+    plan_type = getattr(planning_contract, "SearchPlan", None)
+    research_task_type = getattr(planning_contract, "ResearchTask", None)
+    if plan_type is None or research_task_type is None:
+        pytest.fail("planning contract must define SearchPlan and ResearchTask")
+    return plan_type(
+        research_tasks=[
+            research_task_type(research_goal=goal, article_search_queries=queries)
+            for goal, queries in goals_and_queries
+        ],
+        target_time_window=target_time_window,
+    )
+
+
 @pytest.mark.asyncio
 async def test_external_scope_exits_before_evidence_answering_starts() -> None:
     timeline: list[str] = []
@@ -557,11 +602,18 @@ async def test_external_scope_exits_before_evidence_answering_starts() -> None:
 
 
 @pytest.mark.asyncio
-async def test_search_external_scope_closes_while_internal_branch_is_pending() -> None:
+async def test_scope_stays_open_until_pending_internal_branch_settles() -> None:
+    """R1: 内部収集はscope内のtask fan-outに含まれるため、
+    pending中はexternal scopeが閉じない。
+    """
     timeline: list[str] = []
     release_internal = asyncio.Event()
-    internal = _InternalSearch(release=release_internal)
-    factory = _Factory([_runtime(ScriptedAgentRuntime([_query_draft()]))], timeline)
+    internal = _InternalSearch(release=release_internal, timeline=timeline)
+    tool = _Tool({"NVIDIA supply": []}, timeline=timeline)
+    factory = _Factory(
+        [_runtime(ScriptedAgentRuntime([_query_draft()]), tool=tool)],
+        timeline,
+    )
     runner = _runner(
         plan=_search_plan(article_search_queries=["NVIDIA"]),
         internal=internal,
@@ -571,20 +623,17 @@ async def test_search_external_scope_closes_while_internal_branch_is_pending() -
     running = asyncio.create_task(_run(runner))
 
     try:
-        await asyncio.wait_for(factory.activated.wait(), timeout=0.5)
-        await asyncio.wait_for(factory.scopes[0].exited.wait(), timeout=0.5)
-        assert (
-            internal.started.is_set(),
-            internal.finished.is_set(),
-            running.done(),
-        ) == (
-            True,
+        await asyncio.wait_for(internal.started.wait(), timeout=0.5)
+        await asyncio.wait_for(tool.finished.wait(), timeout=0.5)
+        assert (internal.finished.is_set(), factory.scopes[0].exited.is_set()) == (
             False,
             False,
         )
     finally:
         release_internal.set()
         await asyncio.wait_for(running, timeout=0.5)
+
+    assert timeline.index("internal.finished") < timeline.index("scope.exit")
 
 
 @pytest.mark.asyncio
@@ -707,21 +756,32 @@ async def test_runner_preserves_internal_query_order() -> None:
 
 @pytest.mark.asyncio
 async def test_runner_preserves_internal_hit_order_into_synthesis() -> None:
+    """D4-S1: reviewerが両方の内部候補を採用する前提でindex順を検証する。"""
     timeline: list[str] = []
     answerer = _EvidenceAnswerer(timeline=timeline)
+    reviewer_runtime = ScriptedAgentRuntime([_review_draft_selecting([0, 1])])
     phases = AnsweringPhases(
         planner=_Planner(_search_plan(article_search_queries=["NVIDIA"])),
-        internal_search=_InternalSearch(
-            hits=[
-                _hit(assessment_id=1001, title="first"),
-                _hit(assessment_id=1002, title="second"),
-            ]
+        researcher=Researcher(
+            internal_search=_InternalSearch(
+                hits=[
+                    _hit(assessment_id=1001, title="first"),
+                    _hit(assessment_id=1002, title="second"),
+                ]
+            )
         ),
         external_runtime_factory=_Factory(
-            [_runtime(ScriptedAgentRuntime([_query_draft()]))], timeline
+            [
+                _runtime(
+                    ScriptedAgentRuntime([_query_draft()]),
+                    reviewer_runtime=reviewer_runtime,
+                )
+            ],
+            timeline,
         ),
         direct_answerer=_UnreachableDirectAnswerer(),
         evidence_answerer=answerer,
+        reviewer=EvidenceReviewer(),
     )
     runner = AnsweringRunner(
         input_safety_checker=AllowInputSafetyChecker(),
@@ -737,13 +797,15 @@ async def test_runner_preserves_internal_hit_order_into_synthesis() -> None:
 
 
 @pytest.mark.asyncio
-async def test_runner_passes_search_plan_values_to_query_input(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+async def test_runner_passes_search_plan_values_to_query_input() -> None:
+    """D4-S2: ExternalSearchOutcomeはtasks fieldを持たないtrim済みshapeのため、
+
+    planのgoal/time windowが伝わったことはquery agentへの実際の入力
+    (runtime.calls)だけで検証する。
+    """
     timeline: list[str] = []
     task = _task("verify typed input")
     runtime = ScriptedAgentRuntime([_query_draft()])
-    captured = _capture_external_outcome(monkeypatch)
     runner = _runner(
         plan=_search_plan(task),
         internal=_InternalSearch(),
@@ -758,12 +820,14 @@ async def test_runner_passes_search_plan_values_to_query_input(
         query_input.task,
         query_input.as_of,
         query_input.target_time_window,
-        captured[0].external_search.tasks,
-    ) == (task, RUN_CONTEXT.as_of, _TARGET_TIME_WINDOW, [task])
+    ) == (task, RUN_CONTEXT.as_of, _TARGET_TIME_WINDOW)
 
 
 @pytest.mark.asyncio
 async def test_scope_exits_after_unclassified_task_sibling_joins() -> None:
+    """R3: task内の未分類例外で兄弟taskがcancelされ合流した後にscopeが閉じ、
+    元例外がidentityで送出される。
+    """
     error = RuntimeError("task failure")
     timeline: list[str] = []
     runtime = _TaskFailureAfterSiblingStartsRuntime(error=error, timeline=timeline)
@@ -850,7 +914,7 @@ async def test_classified_external_failure_is_an_outcome_and_scope_closes_once(
     await _run(runner)
 
     assert (
-        captured[0].external_search.task_reports[0].status,
+        captured[0].task_reports[0].external_collection,
         factory.scopes[0].exit_calls,
         factory.scopes[0].close_succeeded,
     ) == ("query_generation_failed", 1, True)
@@ -907,8 +971,15 @@ async def test_search_starts_internal_and_external_branches_concurrently() -> No
 
 
 @pytest.mark.asyncio
-async def test_search_converts_internal_search_error_to_failure_value() -> None:
+async def test_search_converts_internal_search_error_to_failed_report_value(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """D4-S2: run単位のcollection_failuresは廃止され、task reportの
+
+    internal_collection="failed"へ一本化される。
+    """
     timeline: list[str] = []
+    captured = _capture_external_outcome(monkeypatch)
     runner = _runner(
         plan=_search_plan(article_search_queries=["NVIDIA"]),
         internal=_InternalSearch(error=InternalSearchError(phase="article_search")),
@@ -916,12 +987,12 @@ async def test_search_converts_internal_search_error_to_failure_value() -> None:
         timeline=timeline,
     )
 
-    result = await runner.run(
+    await runner.run(
         RunInput(question="NVIDIA の見通しは？", history=()),
         run_context=RUN_CONTEXT,
     )
 
-    assert result.final_output.plan_summary.collection_failures == ["internal_search"]
+    assert captured[0].task_reports[0].internal_collection == "failed"
 
 
 @pytest.mark.asyncio
@@ -943,15 +1014,24 @@ async def test_search_classified_internal_failure_keeps_external_outcome(
         run_context=RUN_CONTEXT,
     )
 
-    assert (
-        result.final_output.plan_summary.collection_failures,
-        captured[0].external_search.task_reports[0].status,
-    ) == (["internal_search"], "succeeded")
+    report = captured[0].task_reports[0]
+    assert not hasattr(result.final_output.plan_summary, "collection_failures")
+    assert (report.internal_collection, report.external_collection) == (
+        "failed",
+        "succeeded",
+    )
 
 
 @pytest.mark.asyncio
-async def test_zero_internal_hits_remain_successful_under_search() -> None:
+async def test_zero_internal_hits_remain_successful_under_search(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """D4-S2: internal候補ゼロはinternal_collection="failed"にならない
+
+    (InternalSearchErrorだけがfailedを表す)。
+    """
     timeline: list[str] = []
+    captured = _capture_external_outcome(monkeypatch)
     result = await _runner(
         plan=_search_plan(article_search_queries=["NVIDIA"]),
         internal=_InternalSearch(),
@@ -962,38 +1042,74 @@ async def test_zero_internal_hits_remain_successful_under_search() -> None:
         run_context=RUN_CONTEXT,
     )
 
-    assert result.final_output.plan_summary.collection_failures == []
+    assert not hasattr(result.final_output.plan_summary, "collection_failures")
+    assert captured[0].task_reports[0].internal_collection == "succeeded"
 
 
 @pytest.mark.asyncio
-async def test_internal_search_success_reports_started_then_completed_with_counts() -> (
-    None
-):
+async def test_internal_search_events_are_emitted_per_task_with_task_index() -> None:
+    """保証するテスト条件 10。"""
     timeline: list[str] = []
     events = _Events()
-    hits = [
-        _hit(assessment_id=1001, title="first"),
-        _hit(assessment_id=1002, title="second"),
-    ]
+    hits_by_call = iter(
+        [
+            [
+                _hit(assessment_id=1001, title="first"),
+                _hit(assessment_id=1002, title="second"),
+            ],
+            [_hit(assessment_id=1003, title="third")],
+        ]
+    )
+
+    class _PerCallInternalSearch:
+        @property
+        def name(self) -> str:
+            return "internal_search"
+
+        async def invoke(self, input: Any) -> list[InternalArticleSearchHit]:
+            del input
+            return next(hits_by_call)
+
+    reviewer_runtime = ScriptedAgentRuntime(
+        [_review_draft_selecting([0, 1]), _review_draft_selecting([0, 1])]
+    )
     runner = _runner(
-        plan=_search_plan(article_search_queries=["NVIDIA", "OpenAI"]),
-        internal=_InternalSearch(hits=hits),
-        factory=_Factory([_runtime(ScriptedAgentRuntime([_query_draft()]))], timeline),
+        plan=_search_plan(
+            _task("first task"),
+            _task("second task"),
+            article_search_queries=["NVIDIA", "OpenAI"],
+        ),
+        internal=_PerCallInternalSearch(),
+        factory=_Factory(
+            [
+                _runtime(
+                    ScriptedAgentRuntime([_query_draft(), _query_draft()]),
+                    reviewer_runtime=reviewer_runtime,
+                )
+            ],
+            timeline,
+        ),
         timeline=timeline,
         events=events,
+        requested_agent_count=1,
     )
 
     await _run(runner)
 
-    internal_events = _internal_search_events(events.events)
-    assert [event.model_dump() for event in internal_events] == [
-        {"type": "internal_search.started", "query_count": 2},
-        {"type": "internal_search.completed", "hit_count": 2},
+    internal_events = [
+        event.model_dump() for event in _internal_search_events(events.events)
+    ]
+    assert internal_events == [
+        {"type": "internal_search.started", "task_index": 0, "query_count": 2},
+        {"type": "internal_search.completed", "task_index": 0, "hit_count": 2},
+        {"type": "internal_search.started", "task_index": 1, "query_count": 1},
+        {"type": "internal_search.completed", "task_index": 1, "hit_count": 1},
     ]
 
 
 @pytest.mark.asyncio
 async def test_internal_search_failure_reports_started_without_completed() -> None:
+    """保証するテスト条件 11。"""
     timeline: list[str] = []
     events = _Events()
     runner = _runner(
@@ -1006,18 +1122,31 @@ async def test_internal_search_failure_reports_started_without_completed() -> No
 
     await _run(runner)
 
-    internal_events = _internal_search_events(events.events)
-    assert [event.type for event in internal_events] == ["internal_search.started"]
+    internal_events = [
+        event.model_dump() for event in _internal_search_events(events.events)
+    ]
+    assert internal_events == [
+        {"type": "internal_search.started", "task_index": 0, "query_count": 1}
+    ]
 
 
 @pytest.mark.asyncio
 async def test_internal_search_events_do_not_expose_query_text() -> None:
     timeline: list[str] = []
     events = _Events()
+    reviewer_runtime = ScriptedAgentRuntime([_review_draft_selecting([0])])
     runner = _runner(
         plan=_search_plan(article_search_queries=["SECRET raw user question"]),
         internal=_InternalSearch(hits=[_hit(assessment_id=1001, title="hit")]),
-        factory=_Factory([_runtime(ScriptedAgentRuntime([_query_draft()]))], timeline),
+        factory=_Factory(
+            [
+                _runtime(
+                    ScriptedAgentRuntime([_query_draft()]),
+                    reviewer_runtime=reviewer_runtime,
+                )
+            ],
+            timeline,
+        ),
         timeline=timeline,
         events=events,
     )
@@ -1138,44 +1267,6 @@ async def test_search_run_prefers_internal_error_after_both_branches_finish() ->
 
 
 @pytest.mark.asyncio
-async def test_search_activation_failure_waits_for_internal_before_propagation() -> (
-    None
-):
-    activation_error = RuntimeError("external activation failure")
-    activation_reached = asyncio.Event()
-    internal_release = asyncio.Event()
-    timeline: list[str] = []
-    internal = _InternalSearch(release=internal_release)
-    factory = _Factory(
-        [],
-        timeline,
-        activation_error=activation_error,
-        activation_reached=activation_reached,
-    )
-    runner = _runner(
-        plan=_search_plan(),
-        internal=internal,
-        factory=factory,
-        timeline=timeline,
-    )
-    running = asyncio.create_task(_run(runner))
-
-    await asyncio.wait_for(internal.started.wait(), timeout=0.5)
-    await asyncio.wait_for(activation_reached.wait(), timeout=0.5)
-    assert running.done() is False
-    internal_release.set()
-    with pytest.raises(RuntimeError) as raised:
-        await asyncio.wait_for(running, timeout=0.5)
-
-    assert (
-        raised.value is activation_error,
-        internal.completed,
-        factory.activate_calls,
-        factory.scopes,
-    ) == (True, True, 1, [])
-
-
-@pytest.mark.asyncio
 async def test_search_close_failure_propagates_same_sentinel() -> None:
     close_error = RuntimeError("external close failure")
     timeline: list[str] = []
@@ -1234,52 +1325,10 @@ async def test_search_close_failure_replaces_unknown_body_error() -> None:
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("internal_fails", [False, True])
-async def test_search_close_failure_waits_then_applies_internal_priority(
-    internal_fails: bool,
-) -> None:
-    close_error = RuntimeError("external close failure")
-    internal_error = RuntimeError("internal unknown")
-    internal_release = asyncio.Event()
-    scope_exit_reached = asyncio.Event()
-    timeline: list[str] = []
-    internal = _InternalSearch(
-        error=internal_error if internal_fails else None,
-        release=internal_release,
-    )
-    factory = _Factory(
-        [_runtime(ScriptedAgentRuntime([_query_draft()]))],
-        timeline,
-        exit_error=close_error,
-        exit_reached=scope_exit_reached,
-    )
-    runner = _runner(
-        plan=_search_plan(),
-        internal=internal,
-        factory=factory,
-        timeline=timeline,
-    )
-    running = asyncio.create_task(_run(runner))
-
-    await asyncio.wait_for(internal.started.wait(), timeout=0.5)
-    await asyncio.wait_for(scope_exit_reached.wait(), timeout=0.5)
-    assert running.done() is False
-    internal_release.set()
-    with pytest.raises(RuntimeError) as raised:
-        await asyncio.wait_for(running, timeout=0.5)
-
-    scope = factory.scopes[0]
-    assert (
-        raised.value is (internal_error if internal_fails else close_error),
-        internal.finished.is_set(),
-        scope.exit_calls,
-        scope.close_succeeded,
-        scope.body_exception,
-    ) == (True, True, 1, False, None)
-
-
-@pytest.mark.asyncio
-async def test_search_outer_cancellation_joins_branches_before_scope_close() -> None:
+async def test_outer_cancellation_joins_task_before_scope_close_then_raises() -> None:
+    """R2: 外側cancelで実行中taskの内部・外部枝がcancelされ合流した後にscopeが閉じ、
+    その後で呼び出し元へ届くのと同じCancelledErrorが送出される。
+    """
     timeline: list[str] = []
     internal = _InternalSearch(release=asyncio.Event(), timeline=timeline)
     external = _ControlledQueryRuntime(release=asyncio.Event(), timeline=timeline)
@@ -1300,7 +1349,7 @@ async def test_search_outer_cancellation_joins_branches_before_scope_close() -> 
     await asyncio.wait_for(internal.started.wait(), timeout=0.5)
     await asyncio.wait_for(external.started.wait(), timeout=0.5)
     running.cancel()
-    with pytest.raises(asyncio.CancelledError):
+    with pytest.raises(asyncio.CancelledError) as raised:
         await asyncio.wait_for(running, timeout=0.5)
 
     scope = factory.scopes[0]
@@ -1312,9 +1361,10 @@ async def test_search_outer_cancellation_joins_branches_before_scope_close() -> 
         scope_exit_reached.is_set(),
         scope.exit_calls,
         scope.close_succeeded,
-        scope.body_exception is external.cancelled_error,
+        scope.body_exception is raised.value,
+        timeline.index("internal.finished") < timeline.index("scope.exit"),
         timeline.index("external.finished") < timeline.index("scope.exit"),
-    ) == (True, True, True, True, True, 1, True, True, True)
+    ) == (True, True, True, True, True, 1, True, True, True, True)
 
 
 @pytest.mark.asyncio
@@ -1376,80 +1426,434 @@ async def test_search_outer_cancellation_wins_over_completed_unknown_failure(
 
 
 @pytest.mark.asyncio
-async def test_search_outer_cancellation_drains_external_close() -> None:
-    close_error = RuntimeError("close failed during search cancellation")
+async def test_scope_closes_after_reviewer_failure_exhausts_attempts() -> None:
+    """R4: 選別が2 attempt尽きて失敗しても収集全体は継続し、
+    external scopeが正常に解放される
+    (収集失敗・想定外例外・cancelの解放経路は他テストが既に覆う)。
+    """
+    from app.agent.runtime.contract import (
+        AgentResponseDefect,
+        AgentResponseInvalidError,
+    )
+
     timeline: list[str] = []
-    external = _ControlledQueryRuntime(release=asyncio.Event(), timeline=timeline)
-    scope_exit_reached = asyncio.Event()
+    reviewer_error = AgentResponseInvalidError(AgentResponseDefect.RESPONSE_NOT_JSON)
+    reviewer_runtime = ScriptedAgentRuntime([reviewer_error, reviewer_error])
+    tool = _Tool(
+        {"NVIDIA supply": [_candidate("https://example.com/ext", title="ext title")]}
+    )
     factory = _Factory(
-        [_runtime(external)],
+        [
+            _runtime(
+                ScriptedAgentRuntime([_query_draft()]),
+                reviewer_runtime=reviewer_runtime,
+                tool=tool,
+            )
+        ],
         timeline,
-        exit_error=close_error,
-        exit_reached=scope_exit_reached,
     )
     runner = _runner(
-        plan=_search_plan(),
+        plan=_search_plan(article_search_queries=["NVIDIA"]),
         internal=_InternalSearch(),
         factory=factory,
         timeline=timeline,
     )
-    running = asyncio.create_task(_run(runner))
 
-    await asyncio.wait_for(external.started.wait(), timeout=0.5)
-    running.cancel()
-    with pytest.raises(asyncio.CancelledError) as raised:
-        await asyncio.wait_for(running, timeout=0.5)
+    await _run(runner)
 
     scope = factory.scopes[0]
-    assert (
-        isinstance(raised.value, asyncio.CancelledError),
-        external.cancelled_error is not None,
-        scope.body_exception is external.cancelled_error,
-        close_error.__context__ is external.cancelled_error,
-        external.finished.is_set(),
-        scope_exit_reached.is_set(),
-        scope.exit_calls,
-        scope.close_succeeded,
-        timeline.index("external.finished") < timeline.index("scope.exit"),
-    ) == (True, True, True, True, True, True, 1, False, True)
+    assert (scope.exit_calls, scope.close_succeeded) == (1, True)
+
+
+class _KeyedFailingInternalSearch:
+    """queryごとに成否/hitsを切り替えるtask単位分離検証用fake。"""
+
+    def __init__(
+        self,
+        *,
+        failing_queries: set[str],
+        hits_by_query: dict[str, list[InternalArticleSearchHit]] | None = None,
+    ) -> None:
+        self._failing_queries = failing_queries
+        self._hits_by_query = hits_by_query or {}
+        self.calls: list[InternalSearchQueries] = []
+
+    @property
+    def name(self) -> str:
+        return "internal_search"
+
+    async def invoke(self, input: Any) -> list[InternalArticleSearchHit]:
+        self.calls.append(input.queries)
+        query = input.queries.queries[0]
+        if query in self._failing_queries:
+            raise InternalSearchError(phase="article_search")
+        return list(self._hits_by_query.get(query, []))
 
 
 @pytest.mark.asyncio
-async def test_search_outer_cancellation_drains_close_and_query_child_failure() -> None:
-    close_error = RuntimeError("close failed during search cancellation")
+async def test_internal_failure_still_reaches_reviewer_and_produces_evidence() -> None:
+    """保証するテスト条件 1(runner経由)。"""
     timeline: list[str] = []
-    internal = _InternalSearch(release=asyncio.Event(), timeline=timeline)
-    external = _ControlledQueryRuntime(release=asyncio.Event(), timeline=timeline)
-    scope_exit_reached = asyncio.Event()
+    events = _Events()
+    answerer = _EvidenceAnswerer(timeline=timeline)
+    query_runtime = ScriptedAgentRuntime([_query_draft()])
+    reviewer_runtime = ScriptedAgentRuntime([_review_draft_selecting([0])])
+    tool = _Tool(
+        {"NVIDIA supply": [_candidate("https://example.com/ext", title="ext title")]}
+    )
     factory = _Factory(
-        [_runtime(external)],
+        [_runtime(query_runtime, reviewer_runtime=reviewer_runtime, tool=tool)],
         timeline,
-        exit_error=close_error,
-        exit_reached=scope_exit_reached,
+    )
+    phases = AnsweringPhases(
+        planner=_Planner(_plan_with_tasks(("goal0", ["NVIDIA"]))),
+        researcher=Researcher(
+            internal_search=_InternalSearch(
+                error=InternalSearchError(phase="article_search")
+            ),
+            events=events,
+        ),
+        external_runtime_factory=factory,
+        direct_answerer=_UnreachableDirectAnswerer(),
+        evidence_answerer=answerer,
+        reviewer=EvidenceReviewer(),
+    )
+    runner = AnsweringRunner(
+        input_safety_checker=AllowInputSafetyChecker(),
+        context_preparer=_Preparer(),
+        phases_factory=lambda: phases,
+        events=events,
+    )
+
+    await _run(runner)
+
+    internal_events = [event.type for event in _internal_search_events(events.events)]
+    assert (
+        [item.source.title for item in answerer.calls[0]],
+        internal_events,
+    ) == (["ext title"], ["internal_search.started"])
+
+
+@pytest.mark.asyncio
+async def test_external_provider_failure_keeps_internal_hits_in_final_evidence() -> (
+    None
+):
+    """保証するテスト条件 2(runner経由)。
+
+    D4-S1: 内部hitは無条件採用ではなくreviewerの精査を経て根拠になる
+    (統合index空間で外部候補が空のため、内部候補はindex 0から始まる)。
+    """
+    timeline: list[str] = []
+    answerer = _EvidenceAnswerer(timeline=timeline)
+    query_runtime = ScriptedAgentRuntime([_query_draft()])
+    reviewer_runtime = ScriptedAgentRuntime([_review_draft_selecting([0])])
+    tool = _Tool(
+        errors={
+            "NVIDIA": ExternalSearchProviderError(reason="tavily_search_http_error")
+        }
+    )
+    factory = _Factory(
+        [_runtime(query_runtime, reviewer_runtime=reviewer_runtime, tool=tool)],
+        timeline,
+    )
+    phases = AnsweringPhases(
+        planner=_Planner(_plan_with_tasks(("goal0", ["NVIDIA"]))),
+        researcher=Researcher(
+            internal_search=_InternalSearch(
+                hits=[_hit(assessment_id=1001, title="kept-hit")]
+            )
+        ),
+        external_runtime_factory=factory,
+        direct_answerer=_UnreachableDirectAnswerer(),
+        evidence_answerer=answerer,
+        reviewer=EvidenceReviewer(),
+    )
+    runner = AnsweringRunner(
+        input_safety_checker=AllowInputSafetyChecker(),
+        context_preparer=_Preparer(),
+        phases_factory=lambda: phases,
+    )
+
+    await _run(runner)
+
+    assert [item.source.title for item in answerer.calls[0]] == ["kept-hit"]
+
+
+@pytest.mark.asyncio
+async def test_time_filter_failure_still_collects_internal_hits_for_every_task(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """保証するテスト条件 3(runner経由、全task)。
+
+    D4-S1: reviewerのLLM runtimeを使えるようscopeは常にactivateされる
+    (外部query/HTTP検索だけがtime filter失敗でskipされる)。内部候補は
+    reviewerの精査を経て根拠になる。
+    """
+    captured = _capture_external_outcome(monkeypatch)
+    internal = _KeyedFailingInternalSearch(
+        failing_queries=set(),
+        hits_by_query={
+            "task0 query": [_hit(assessment_id=1001, title="task0-hit")],
+            "task1 query": [_hit(assessment_id=1002, title="task1-hit")],
+        },
+    )
+    plan = _plan_with_tasks(
+        ("goal0", ["task0 query"]),
+        ("goal1", ["task1 query"]),
+        target_time_window=TargetTimeWindow(kind="unsupported_explicit_window"),
+    )
+    reviewer_runtime = ScriptedAgentRuntime(
+        [_review_draft_selecting([0]), _review_draft_selecting([0])]
+    )
+    factory = _Factory(
+        [_runtime(ScriptedAgentRuntime([]), reviewer_runtime=reviewer_runtime)], []
+    )
+    runner = _runner(plan=plan, internal=internal, factory=factory, timeline=[])
+
+    await _run(runner)
+
+    reports = captured[0].task_reports
+    assert (
+        factory.activate_calls,
+        sorted(report.external_collection for report in reports),
+        # 保証するテスト条件 6: time filter失敗でも内部精査が成功していれば
+        # taskはreview="succeeded"で完了扱いになる。
+        sorted(report.review for report in reports),
+        {item.title for item in captured[0].internal_evidence},
+    ) == (
+        1,
+        ["time_filter_failed", "time_filter_failed"],
+        ["succeeded", "succeeded"],
+        {"task0-hit", "task1-hit"},
+    )
+
+
+@pytest.mark.asyncio
+async def test_runner_routes_each_tasks_queries_to_only_that_tasks_search() -> None:
+    """保証するテスト条件 4(runner経由)。
+
+    D4-S1: scopeは常にactivateされるが、内部・外部候補とも空
+    (internalはhits無し、externalはtime filter失敗でskip)のためreviewerは
+    起動しない。
+    """
+    internal = _InternalSearch()
+    plan = _plan_with_tasks(
+        ("goal0", ["q-a", "q-b"]),
+        ("goal1", ["q-c"]),
+        target_time_window=TargetTimeWindow(kind="unsupported_explicit_window"),
     )
     runner = _runner(
-        plan=_search_plan(),
+        plan=plan,
         internal=internal,
-        factory=factory,
-        timeline=timeline,
+        factory=_Factory([_runtime(ScriptedAgentRuntime([]))], []),
+        timeline=[],
     )
-    running = asyncio.create_task(_run(runner))
 
-    await asyncio.wait_for(internal.started.wait(), timeout=0.5)
-    await asyncio.wait_for(external.started.wait(), timeout=0.5)
-    running.cancel()
-    with pytest.raises(asyncio.CancelledError):
-        await asyncio.wait_for(running, timeout=0.5)
+    await _run(runner)
 
-    scope = factory.scopes[0]
+    assert sorted(call.queries for call in internal.calls) == [
+        ("q-a", "q-b"),
+        ("q-c",),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_runner_isolates_one_tasks_total_failure_from_sibling_evidence() -> None:
+    """保証するテスト条件 5(runner経由)。
+
+    D4-S1: failing taskは内部・外部とも候補ゼロでreviewer未起動のまま
+    time_filter_failedとして閉じる。succeeding taskは内部候補がreviewerの
+    精査を経て根拠になる。
+    """
+    timeline: list[str] = []
+    answerer = _EvidenceAnswerer(timeline=timeline)
+    internal = _KeyedFailingInternalSearch(
+        failing_queries={"failing query"},
+        hits_by_query={
+            "succeeding query": [_hit(assessment_id=1001, title="sibling-hit")]
+        },
+    )
+    plan = _plan_with_tasks(
+        ("failing goal", ["failing query"]),
+        ("succeeding goal", ["succeeding query"]),
+        target_time_window=TargetTimeWindow(kind="unsupported_explicit_window"),
+    )
+    reviewer_runtime = ScriptedAgentRuntime([_review_draft_selecting([0])])
+    phases = AnsweringPhases(
+        planner=_Planner(plan),
+        researcher=Researcher(internal_search=internal),
+        external_runtime_factory=_Factory(
+            [_runtime(ScriptedAgentRuntime([]), reviewer_runtime=reviewer_runtime)], []
+        ),
+        direct_answerer=_UnreachableDirectAnswerer(),
+        evidence_answerer=answerer,
+        reviewer=EvidenceReviewer(),
+    )
+    runner = AnsweringRunner(
+        input_safety_checker=AllowInputSafetyChecker(),
+        context_preparer=_Preparer(),
+        phases_factory=lambda: phases,
+    )
+
+    await _run(runner)
+
+    assert [item.source.title for item in answerer.calls[0]] == ["sibling-hit"]
+
+
+@pytest.mark.asyncio
+async def test_internal_hits_merge_by_task_index_order_with_first_win_dedup(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """保証するテスト条件 7・9。task_index昇順連結+curation_id先勝ちdedup。
+
+    D4-S1: 各taskが提示する2件の内部候補をreviewerが両方採用する前提で、
+    合流(task_index昇順連結+curation_id先勝ちdedup)を検証する。
+    """
+    captured = _capture_external_outcome(monkeypatch)
+    shared_curation_id = 4242
+    completion_order: list[str] = []
+
+    class _RaceControlledInternalSearch:
+        @property
+        def name(self) -> str:
+            return "internal_search"
+
+        async def invoke(self, input: Any) -> list[InternalArticleSearchHit]:
+            query = input.queries.queries[0]
+            if query == "task0 query":
+                await asyncio.sleep(0.05)
+                completion_order.append("task0")
+                return [
+                    _hit(
+                        assessment_id=1000,
+                        title="task0-shared",
+                        curation_id=shared_curation_id,
+                        distance=0.9,
+                    ),
+                    _hit(assessment_id=1001, title="task0-unique", curation_id=100),
+                ]
+            completion_order.append("task1")
+            return [
+                _hit(
+                    assessment_id=2000,
+                    title="task1-shared",
+                    curation_id=shared_curation_id,
+                    distance=0.1,
+                ),
+                _hit(assessment_id=2001, title="task1-unique", curation_id=200),
+            ]
+
+    plan = _plan_with_tasks(
+        ("goal0", ["task0 query"]),
+        ("goal1", ["task1 query"]),
+        target_time_window=TargetTimeWindow(kind="unsupported_explicit_window"),
+    )
+    reviewer_runtime = ScriptedAgentRuntime(
+        [_review_draft_selecting([0, 1]), _review_draft_selecting([0, 1])]
+    )
+    runner = _runner(
+        plan=plan,
+        internal=_RaceControlledInternalSearch(),
+        factory=_Factory(
+            [_runtime(ScriptedAgentRuntime([]), reviewer_runtime=reviewer_runtime)], []
+        ),
+        timeline=[],
+    )
+
+    await asyncio.wait_for(_run(runner), timeout=1.0)
+
     assert (
-        internal.cancelled_error is not None,
-        external.cancelled_error is not None,
-        internal.finished.is_set(),
-        external.finished.is_set(),
-        scope_exit_reached.is_set(),
-        scope.exit_calls,
-        scope.close_succeeded,
-        close_error.__context__ is scope.body_exception,
-        timeline.index("external.finished") < timeline.index("scope.exit"),
-    ) == (True, True, True, True, True, 1, False, True, True)
+        completion_order,
+        [item.title for item in captured[0].internal_evidence],
+    ) == (
+        ["task1", "task0"],
+        ["task0-shared", "task0-unique", "task1-unique"],
+    )
+
+
+@pytest.mark.asyncio
+async def test_all_tasks_incomplete_adds_the_fixed_incomplete_phrase_once(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """保証するテスト条件 2・4。run単位のcollection_failuresは廃止され、
+
+    task reportのinternal_collection="failed"・review="skipped_empty"へ
+    一本化される。経路名文言ではなく固定文言「完了できなかった調査があります」
+    が出る(taskが複数落ちても1行)。
+    """
+    captured = _capture_external_outcome(monkeypatch)
+    internal = _KeyedFailingInternalSearch(
+        failing_queries={"task0 query", "task1 query"},
+    )
+    plan = _plan_with_tasks(
+        ("goal0", ["task0 query"]),
+        ("goal1", ["task1 query"]),
+        target_time_window=TargetTimeWindow(kind="unsupported_explicit_window"),
+    )
+    runner = _runner(
+        plan=plan,
+        internal=internal,
+        factory=_Factory([_runtime(ScriptedAgentRuntime([]))], []),
+        timeline=[],
+    )
+
+    result = await runner.run(
+        RunInput(question="NVIDIA の見通しは？", history=()),
+        run_context=RUN_CONTEXT,
+    )
+
+    assert not hasattr(result.final_output.plan_summary, "collection_failures")
+    assert result.final_output.status == "insufficient"
+    assert (
+        "内部記事検索を完了できませんでした" not in result.final_output.missing_aspects
+    )
+    assert (
+        result.final_output.missing_aspects.count("完了できなかった調査があります") == 1
+    )
+    assert {report.internal_collection for report in captured[0].task_reports} == {
+        "failed"
+    }
+    assert {report.review for report in captured[0].task_reports} == {"skipped_empty"}
+
+
+@pytest.mark.asyncio
+async def test_some_tasks_incomplete_keeps_the_phrase_to_one_line_and_keeps_sources(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """保証するテスト条件 2・7。一部taskだけ未完了でも固定文言は1行、
+
+    生き残ったtaskの内部根拠(reviewer精査済み)は維持される。
+    """
+    captured = _capture_external_outcome(monkeypatch)
+    internal = _KeyedFailingInternalSearch(
+        failing_queries={"task0 query"},
+        hits_by_query={"task1 query": [_hit(assessment_id=1001, title="survivor")]},
+    )
+    plan = _plan_with_tasks(
+        ("goal0", ["task0 query"]),
+        ("goal1", ["task1 query"]),
+        target_time_window=TargetTimeWindow(kind="unsupported_explicit_window"),
+    )
+    reviewer_runtime = ScriptedAgentRuntime([_review_draft_selecting([0])])
+    runner = _runner(
+        plan=plan,
+        internal=internal,
+        factory=_Factory(
+            [_runtime(ScriptedAgentRuntime([]), reviewer_runtime=reviewer_runtime)], []
+        ),
+        timeline=[],
+    )
+
+    await _run(runner)
+
+    reports = {report.task_index: report for report in captured[0].task_reports}
+    assert not hasattr(captured[0], "collection_failures")
+    assert (reports[0].internal_collection, reports[0].review) == (
+        "failed",
+        "skipped_empty",
+    )
+    assert (reports[1].internal_collection, reports[1].review) == (
+        "succeeded",
+        "succeeded",
+    )
+    assert [item.title for item in captured[0].internal_evidence] == ["survivor"]

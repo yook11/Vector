@@ -1,4 +1,4 @@
-"""AnsweringRunner が所有する external Query -> Tool -> Selector 契約。"""
+"""AnsweringRunner が所有する external Query -> Tool -> Evidence Reviewer 契約。"""
 
 from __future__ import annotations
 
@@ -18,6 +18,8 @@ import app.agent.planning.contract as planning_contract
 from app.agent.answering.contract import AnsweringRequest
 from app.agent.answering.direct_answer.contract import DirectAnswerDraft
 from app.agent.answering.evidence_answer.contract import EvidenceAnswerDraft
+from app.agent.evidence_collection import Researcher
+from app.agent.evidence_collection.evidence_review import EvidenceReviewer
 from app.agent.evidence_collection.external_search import (
     ExternalResearchRuntime,
     ExternalSearchCandidate,
@@ -26,6 +28,10 @@ from app.agent.evidence_collection.external_search import (
 )
 from app.agent.evidence_collection.external_search.contract import (
     EXTERNAL_SEARCH_CANDIDATES_PER_QUERY,
+)
+from app.agent.evidence_collection.internal_search import (
+    InternalArticleContent,
+    InternalArticleSearchHit,
 )
 from app.agent.planning.contract import (
     ExternalResearchTask,
@@ -40,7 +46,9 @@ from app.agent.question_context import (
 from app.agent.running import AnsweringPhases, AnsweringRunner, RunContext, RunInput
 from app.agent.running import answering_runner as answering_runner_module
 from app.agent.runtime.contract import AgentResponseDefect, AgentResponseInvalidError
-from app.analysis.ai_provider_errors import AIProviderError, AIProviderNetworkError
+from app.analysis.ai_provider_errors import AIProviderNetworkError
+from app.analysis.analyzed_article import InScopeAnalyzedArticle
+from app.analysis.assessment.domain.result import InScope, InScopeCategory
 from app.analysis.deepseek_error_translator import DeepSeekStateReason
 from tests.agent.running._input_safety import AllowInputSafetyChecker
 from tests.agent.runtime._fakes import ScriptedAgentRuntime
@@ -85,16 +93,14 @@ def _query_draft(queries: object) -> Any:
     return ExternalQueryDraft.model_validate({"queries": queries})
 
 
-def _selection_draft(
+def _review_draft(
     selections: list[dict[str, Any]] | None = None,
     *,
     missing: list[str] | None = None,
 ) -> Any:
-    from app.agent.evidence_collection.external_search.contract import (
-        ExternalEvidenceSelectionDraft,
-    )
+    from app.agent.evidence_collection.evidence_review import EvidenceReviewDraft
 
-    return ExternalEvidenceSelectionDraft.model_validate(
+    return EvidenceReviewDraft.model_validate(
         {"selections": selections or [], "missing": missing or []}
     )
 
@@ -135,6 +141,37 @@ class _EmptyInternalSearch:
     async def invoke(self, input: object) -> list[object]:
         del input
         return []
+
+
+def _internal_hit(*, assessment_id: int, title: str) -> InternalArticleSearchHit:
+    article = InScopeAnalyzedArticle(
+        curation_id=assessment_id - 1000,
+        title=title,
+        summary=f"{title} summary",
+        assessment_result=InScope(
+            category=InScopeCategory.AI,
+            investor_take="投資家視点",
+            key_points=[],
+        ),
+    )
+    return InternalArticleSearchHit(
+        assessment_id=assessment_id,
+        article=article,
+        content=InternalArticleContent.from_article(article, published_at=None),
+        distance=0.1,
+    )
+
+
+class _OneInternalHitSearch:
+    """internal+externalの合算件数を確かめるため、内部hitを1件返す。"""
+
+    @property
+    def name(self) -> str:
+        return "internal_search"
+
+    async def invoke(self, input: object) -> list[InternalArticleSearchHit]:
+        del input
+        return [_internal_hit(assessment_id=2001, title="internal hit")]
 
 
 class _UnreachableDirectAnswerer:
@@ -381,12 +418,12 @@ class _QueryFailureAfterSiblingStartsTool(_Tool):
 def _runtime(
     *,
     query_runtime: object,
-    selector_runtime: object,
+    reviewer_runtime: object,
     tool: object,
 ) -> ExternalResearchRuntime:
     return ExternalResearchRuntime(
         query_runtime=query_runtime,  # type: ignore[arg-type]
-        selector_runtime=selector_runtime,  # type: ignore[arg-type]
+        reviewer_runtime=reviewer_runtime,  # type: ignore[arg-type]
         search_tool=tool,  # type: ignore[arg-type]
     )
 
@@ -406,10 +443,11 @@ def _runner(
         planner=_Planner(
             _plan(tasks, target_time_window=target_time_window),
         ),
-        internal_search=_EmptyInternalSearch(),
+        researcher=Researcher(internal_search=_EmptyInternalSearch(), events=events),
         external_runtime_factory=factory,
         direct_answerer=_UnreachableDirectAnswerer(),
         evidence_answerer=answerer,
+        reviewer=EvidenceReviewer(),
     )
     return (
         AnsweringRunner(
@@ -486,26 +524,28 @@ def test_answering_runner_accepts_external_event_and_requested_count_dependencie
 
 
 def test_answering_phases_owns_runtime_factory_without_external_search_port() -> None:
+    """保証するテスト条件 18(重複所有): field名のみのraw dataclass field確認。"""
     assert tuple(AnsweringPhases.__dataclass_fields__) == (
         "planner",
-        "internal_search",
+        "researcher",
         "external_runtime_factory",
         "direct_answerer",
         "evidence_answerer",
+        "reviewer",
     )
 
 
 @pytest.mark.asyncio
-async def test_external_pipeline_normalizes_queries_and_hides_urls_from_selector() -> (
+async def test_external_pipeline_normalizes_queries_and_hides_urls_from_reviewer() -> (
     None
 ):
     long_query = "x" * 205
     query_runtime = ScriptedAgentRuntime(
         [_query_draft(["  normalized  ", "normalized", long_query, "third", "fourth"])]
     )
-    selector_runtime = ScriptedAgentRuntime(
+    reviewer_runtime = ScriptedAgentRuntime(
         [
-            _selection_draft(
+            _review_draft(
                 [{"candidate_index": 1, "claim": "claim", "why_selected": "why"}]
             )
         ]
@@ -521,13 +561,13 @@ async def test_external_pipeline_normalizes_queries_and_hides_urls_from_selector
         tasks=[_task("collect evidence")],
         runtime=_runtime(
             query_runtime=query_runtime,
-            selector_runtime=selector_runtime,
+            reviewer_runtime=reviewer_runtime,
             tool=tool,
         ),
     )
 
     result = await _run(runner)
-    selector_input = selector_runtime.calls[0].input
+    reviewer_input = reviewer_runtime.calls[0].input
 
     assert [call.query for call in tool.calls] == [
         "normalized",
@@ -535,7 +575,7 @@ async def test_external_pipeline_normalizes_queries_and_hides_urls_from_selector
         "third",
     ]
     assert all(call.limit == 10 for call in tool.calls)
-    assert all(not hasattr(candidate, "url") for candidate in selector_input.candidates)
+    assert all(not hasattr(candidate, "url") for candidate in reviewer_input.candidates)
     assert (
         [(item.source.title, item.source.evidence_claim) for item in answerer.calls[0]],
         result.final_output.status,
@@ -558,8 +598,8 @@ async def test_external_pipeline_passes_resolved_filter_to_every_tool_call() -> 
         tasks=[_task("first task"), _task("second task")],
         runtime=_runtime(
             query_runtime=query_runtime,
-            selector_runtime=ScriptedAgentRuntime(
-                [_selection_draft([]), _selection_draft([])]
+            reviewer_runtime=ScriptedAgentRuntime(
+                [_review_draft([]), _review_draft([])]
             ),
             tool=tool,
         ),
@@ -593,7 +633,7 @@ async def test_external_pipeline_passes_explicit_none_filter_to_tool() -> None:
         tasks=[_task("no publication filter")],
         runtime=_runtime(
             query_runtime=ScriptedAgentRuntime([_query_draft(["query"])]),
-            selector_runtime=ScriptedAgentRuntime([_selection_draft([])]),
+            reviewer_runtime=ScriptedAgentRuntime([_review_draft([])]),
             tool=tool,
         ),
         target_time_window=None,
@@ -653,7 +693,7 @@ async def test_external_runner_resolves_target_time_window_once_per_branch(
                     _query_draft(["second-1", "second-2"]),
                 ]
             ),
-            selector_runtime=ScriptedAgentRuntime([]),
+            reviewer_runtime=ScriptedAgentRuntime([]),
             tool=tool,
         ),
         target_time_window=target_time_window,
@@ -697,13 +737,13 @@ async def test_naive_as_of_propagates_before_external_activity_or_observability(
     captured = _capture_external_outcome(monkeypatch)
     events = _Events()
     query_runtime = ScriptedAgentRuntime([])
-    selector_runtime = ScriptedAgentRuntime([])
+    reviewer_runtime = ScriptedAgentRuntime([])
     tool = _Tool()
     runner, answerer, factory = _runner(
         tasks=[_task("naive as_of は分類しない")],
         runtime=_runtime(
             query_runtime=query_runtime,
-            selector_runtime=selector_runtime,
+            reviewer_runtime=reviewer_runtime,
             tool=tool,
         ),
         events=events,
@@ -717,7 +757,7 @@ async def test_naive_as_of_propagates_before_external_activity_or_observability(
         resolver_calls,
         factory.scopes,
         query_runtime.calls,
-        selector_runtime.calls,
+        reviewer_runtime.calls,
         tool.calls,
         _external_search_events(events.events),
         answerer.calls,
@@ -764,7 +804,7 @@ async def test_external_branch_records_one_nonfailed_time_filter_resolution_metr
         tasks=[_task("期間計測")],
         runtime=_runtime(
             query_runtime=ScriptedAgentRuntime([_query_draft(["metric query"])]),
-            selector_runtime=ScriptedAgentRuntime([]),
+            reviewer_runtime=ScriptedAgentRuntime([]),
             tool=tool,
         ),
         target_time_window=target_time_window,
@@ -832,14 +872,14 @@ async def test_time_filter_resolution_failure_closes_external_branch_before_acti
     captured = _capture_external_outcome(monkeypatch)
     events = _Events()
     query_runtime = ScriptedAgentRuntime([])
-    selector_runtime = ScriptedAgentRuntime([])
+    reviewer_runtime = ScriptedAgentRuntime([])
     tool = _Tool()
     tasks = [_task("first closed task"), _task("second closed task")]
     runner, answerer, factory = _runner(
         tasks=tasks,
         runtime=_runtime(
             query_runtime=query_runtime,
-            selector_runtime=selector_runtime,
+            reviewer_runtime=reviewer_runtime,
             tool=tool,
         ),
         events=events,
@@ -849,26 +889,36 @@ async def test_time_filter_resolution_failure_closes_external_branch_before_acti
     with capture_logs() as logs:
         await _run(runner)
     metrics = collected_metrics(capfire)
-    reports = captured[0].external_search.task_reports
+    reports = captured[0].task_reports
 
     assert (
-        factory.scopes,
+        # D4-S1: reviewerがLLM runtimeを必要とするため、time filter失敗でも
+        # external runtime scopeは常にactivateされる(外部query/HTTP検索だけを
+        # skipする)。ただしinternal候補も空(_EmptyInternalSearch)のため両方
+        # 候補ゼロとなりreviewer自体は呼ばれない(D4-S2: review=skipped_empty)。
+        len(factory.scopes),
+        factory.scopes[0].entered,
+        factory.scopes[0].exit_calls,
         query_runtime.calls,
-        selector_runtime.calls,
+        reviewer_runtime.calls,
         tool.calls,
         _external_search_events(events.events),
         answerer.calls,
         [
             (
                 report.task_index,
-                report.status,
+                report.internal_collection,
+                report.external_collection,
                 report.time_filter_failure_reason,
                 report.generated_queries,
                 report.provider_failed_query_count,
-                report.candidate_count,
-                report.evidence_count,
+                report.internal_candidate_count,
+                report.external_candidate_count,
+                report.review,
+                report.internal_evidence_count,
+                report.external_evidence_count,
                 report.dropped_selection_count,
-                report.selector_failure_reason,
+                report.review_failure_reason,
                 report.missing,
             )
             for report in reports
@@ -880,7 +930,9 @@ async def test_time_filter_resolution_failure_closes_external_branch_before_acti
             if entry.get("event") == "external_search_time_filter_failed"
         ],
     ) == (
-        [],
+        1,
+        True,
+        1,
         [],
         [],
         [],
@@ -889,10 +941,14 @@ async def test_time_filter_resolution_failure_closes_external_branch_before_acti
         [
             (
                 0,
+                "succeeded",
                 "time_filter_failed",
                 expected_reason,
                 [],
                 0,
+                0,
+                0,
+                "skipped_empty",
                 0,
                 0,
                 0,
@@ -901,10 +957,14 @@ async def test_time_filter_resolution_failure_closes_external_branch_before_acti
             ),
             (
                 1,
+                "succeeded",
                 "time_filter_failed",
                 expected_reason,
                 [],
                 0,
+                0,
+                0,
+                "skipped_empty",
                 0,
                 0,
                 0,
@@ -929,12 +989,12 @@ async def test_provider_result_cap_is_applied_before_candidate_pool(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     captured = _capture_external_outcome(monkeypatch)
-    selector_runtime = ScriptedAgentRuntime([_selection_draft([])])
+    reviewer_runtime = ScriptedAgentRuntime([_review_draft([])])
     runner, _, _ = _runner(
         tasks=[_task("provider result cap")],
         runtime=_runtime(
             query_runtime=ScriptedAgentRuntime([_query_draft(["q"])]),
-            selector_runtime=selector_runtime,
+            reviewer_runtime=reviewer_runtime,
             tool=_Tool(
                 {
                     "q": [
@@ -948,11 +1008,11 @@ async def test_provider_result_cap_is_applied_before_candidate_pool(
 
     await _run(runner)
 
-    candidates = selector_runtime.calls[0].input.candidates
+    candidates = reviewer_runtime.calls[0].input.candidates
     assert (
         len(candidates),
         candidates[-1].title,
-        captured[0].external_search.task_reports[0].candidate_count,
+        captured[0].task_reports[0].external_candidate_count,
     ) == (
         EXTERNAL_SEARCH_CANDIDATES_PER_QUERY,
         f"candidate-{EXTERNAL_SEARCH_CANDIDATES_PER_QUERY - 1}",
@@ -961,17 +1021,17 @@ async def test_provider_result_cap_is_applied_before_candidate_pool(
 
 
 @pytest.mark.asyncio
-async def test_classified_query_failure_never_starts_tool_or_selector() -> None:
+async def test_classified_query_failure_never_starts_tool_or_reviewer() -> None:
     query_runtime = ScriptedAgentRuntime(
         [AgentResponseInvalidError(AgentResponseDefect.RESPONSE_NOT_JSON)]
     )
-    selector_runtime = ScriptedAgentRuntime([])
+    reviewer_runtime = ScriptedAgentRuntime([])
     tool = _Tool()
     runner, answerer, factory = _runner(
         tasks=[_task("invalid query")],
         runtime=_runtime(
             query_runtime=query_runtime,
-            selector_runtime=selector_runtime,
+            reviewer_runtime=reviewer_runtime,
             tool=tool,
         ),
     )
@@ -980,15 +1040,15 @@ async def test_classified_query_failure_never_starts_tool_or_selector() -> None:
 
     assert (
         tool.calls,
-        selector_runtime.calls,
+        reviewer_runtime.calls,
         answerer.calls,
-        result.final_output.plan_summary.collection_failures,
         factory.scopes[0].exit_calls,
-    ) == ([], [], [[]], [], 1)
+    ) == ([], [], [[]], 1)
+    assert not hasattr(result.final_output.plan_summary, "collection_failures")
 
 
 @pytest.mark.asyncio
-async def test_partial_provider_failure_continues_but_all_failure_skips_selector(
+async def test_partial_provider_failure_continues_but_all_failure_skips_reviewer(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     captured = _capture_external_outcome(monkeypatch)
@@ -996,7 +1056,7 @@ async def test_partial_provider_failure_continues_but_all_failure_skips_selector
     query_runtime = ScriptedAgentRuntime(
         [_query_draft(["good", "bad"]), _query_draft(["bad"])]
     )
-    selector_runtime = ScriptedAgentRuntime([_selection_draft([])])
+    reviewer_runtime = ScriptedAgentRuntime([_review_draft([])])
     tool = _Tool(
         {"good": [_candidate("https://example.com/good")]},
         errors_by_query={"bad": provider_error},
@@ -1005,7 +1065,7 @@ async def test_partial_provider_failure_continues_but_all_failure_skips_selector
         tasks=[_task("partial failure"), _task("complete failure")],
         runtime=_runtime(
             query_runtime=query_runtime,
-            selector_runtime=selector_runtime,
+            reviewer_runtime=reviewer_runtime,
             tool=tool,
         ),
         requested_agent_count=1,
@@ -1015,39 +1075,43 @@ async def test_partial_provider_failure_continues_but_all_failure_skips_selector
 
     assert (
         [call.query for call in tool.calls],
-        len(selector_runtime.calls),
+        len(reviewer_runtime.calls),
         answerer.calls,
         [
             (
-                report.status,
+                report.external_collection,
                 report.provider_failed_query_count,
-                report.candidate_count,
+                report.external_candidate_count,
+                report.review,
             )
-            for report in captured[0].external_search.task_reports
+            for report in captured[0].task_reports
         ],
     ) == (
         ["good", "bad", "bad"],
         1,
         [[]],
-        [("succeeded", 1, 1), ("provider_failed", 1, 0)],
+        [
+            ("succeeded", 1, 1, "succeeded"),
+            ("provider_failed", 1, 0, "skipped_empty"),
+        ],
     )
 
 
 @pytest.mark.asyncio
-async def test_empty_candidate_pool_skips_selector() -> None:
-    selector_runtime = ScriptedAgentRuntime([])
+async def test_empty_candidate_pool_skips_reviewer() -> None:
+    reviewer_runtime = ScriptedAgentRuntime([])
     runner, answerer, _ = _runner(
         tasks=[_task("empty pool")],
         runtime=_runtime(
             query_runtime=ScriptedAgentRuntime([_query_draft(["q"])]),
-            selector_runtime=selector_runtime,
+            reviewer_runtime=reviewer_runtime,
             tool=_Tool({"q": []}),
         ),
     )
 
     result = await _run(runner)
 
-    assert (selector_runtime.calls, answerer.calls, result.final_output.status) == (
+    assert (reviewer_runtime.calls, answerer.calls, result.final_output.status) == (
         [],
         [[]],
         "insufficient",
@@ -1055,133 +1119,38 @@ async def test_empty_candidate_pool_skips_selector() -> None:
 
 
 @pytest.mark.asyncio
-async def test_selector_retries_at_most_twice_with_the_same_typed_input() -> None:
-    selector_runtime = ScriptedAgentRuntime(
-        [
-            AgentResponseInvalidError(AgentResponseDefect.OUTPUT_SCHEMA_MISMATCH),
-            _selection_draft(
-                [{"candidate_index": 0, "claim": "claim", "why_selected": "why"}]
-            ),
-        ]
-    )
-    runner, answerer, _ = _runner(
-        tasks=[_task("selector retry")],
-        runtime=_runtime(
-            query_runtime=ScriptedAgentRuntime([_query_draft(["q"])]),
-            selector_runtime=selector_runtime,
-            tool=_Tool({"q": [_candidate("https://example.com/q")]}),
-        ),
-    )
-
-    await _run(runner)
-
-    assert (
-        [call.attempt_number for call in selector_runtime.calls],
-        selector_runtime.calls[0].input is selector_runtime.calls[1].input,
-        len(answerer.calls[0]),
-    ) == ([1, 2], True, 1)
-
-
-@pytest.mark.asyncio
-async def test_invalid_selector_draft_retries_without_invalid_evidence() -> None:
-    selector_runtime = ScriptedAgentRuntime(
-        [
-            _selection_draft(
-                [{"candidate_index": 0, "claim": "", "why_selected": "why"}]
-            ),
-            _selection_draft(
-                [
-                    {"candidate_index": 0, "claim": "first", "why_selected": "why"},
-                    {"candidate_index": 0, "claim": "duplicate", "why_selected": "why"},
-                    {"candidate_index": 99, "claim": "out", "why_selected": "why"},
-                ]
-            ),
-        ]
-    )
-    runner, answerer, _ = _runner(
-        tasks=[_task("selection validation")],
-        runtime=_runtime(
-            query_runtime=ScriptedAgentRuntime([_query_draft(["q"])]),
-            selector_runtime=selector_runtime,
-            tool=_Tool({"q": [_candidate("https://example.com/q")]}),
-        ),
-    )
-
-    await _run(runner)
-
-    assert (
-        [call.attempt_number for call in selector_runtime.calls],
-        [(item.source.title, item.source.evidence_claim) for item in answerer.calls[0]],
-    ) == ([1, 2], [("q", "first")])
-
-
-@pytest.mark.asyncio
-async def test_selector_unclassified_exception_does_not_retry_or_become_report() -> (
-    None
-):
-    error = RuntimeError("selector unclassified")
-    selector_runtime = ScriptedAgentRuntime([error])
-    runner, answerer, factory = _runner(
-        tasks=[_task("selector unclassified")],
-        runtime=_runtime(
-            query_runtime=ScriptedAgentRuntime([_query_draft(["q"])]),
-            selector_runtime=selector_runtime,
-            tool=_Tool({"q": [_candidate("https://example.com/q")]}),
-        ),
-    )
-
-    with pytest.raises(RuntimeError) as raised:
-        await _run(runner)
-
-    assert (
-        raised.value is error,
-        [call.attempt_number for call in selector_runtime.calls],
-        answerer.calls,
-        factory.scopes[0].exit_calls,
-    ) == (True, [1], [], 1)
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize(
-    ("failure", "expected_reason"),
-    [
-        pytest.param(
-            AgentResponseInvalidError(AgentResponseDefect.RESPONSE_NOT_JSON),
-            "response_not_json",
-            id="runtime-defect",
-        ),
-        pytest.param(
-            AIProviderNetworkError(reason=DeepSeekStateReason.TIMEOUT),
-            "timeout",
-            id="provider-reason",
-        ),
-        pytest.param(AIProviderError(), "selector_error", id="provider-fallback"),
-    ],
-)
-async def test_selector_failure_reason_is_preserved_after_two_attempts(
+async def test_reviewer_failure_after_two_attempts_becomes_failed_review_report(
     monkeypatch: pytest.MonkeyPatch,
-    failure: BaseException,
-    expected_reason: str,
 ) -> None:
+    """runnerがreviewer失敗をreview=failed reportへ写す結線を保証する。
+
+    attempt/timeout/失敗分類の詳細な組み合わせは
+    tests/agent/evidence_collection/evidence_review/test_reviewer.py が正本。
+    """
     captured = _capture_external_outcome(monkeypatch)
-    selector_runtime = ScriptedAgentRuntime([failure, failure])
-    runner, _, _ = _runner(
-        tasks=[_task("selector failure")],
+    failure = AgentResponseInvalidError(AgentResponseDefect.RESPONSE_NOT_JSON)
+    reviewer_runtime = ScriptedAgentRuntime([failure, failure])
+    runner, answerer, _ = _runner(
+        tasks=[_task("reviewer failure")],
         runtime=_runtime(
             query_runtime=ScriptedAgentRuntime([_query_draft(["q"])]),
-            selector_runtime=selector_runtime,
+            reviewer_runtime=reviewer_runtime,
             tool=_Tool({"q": [_candidate("https://example.com/q")]}),
         ),
     )
 
     await _run(runner)
 
-    report = captured[0].external_search.task_reports[0]
+    report = captured[0].task_reports[0]
     assert (
-        report.status,
-        report.selector_failure_reason,
-        [call.attempt_number for call in selector_runtime.calls],
-    ) == ("selector_failed", expected_reason, [1, 2])
+        report.external_collection,
+        report.review,
+        report.review_failure_reason,
+        report.internal_evidence_count,
+        report.external_evidence_count,
+        [call.attempt_number for call in reviewer_runtime.calls],
+        answerer.calls,
+    ) == ("succeeded", "failed", "response_not_json", 0, 0, [1, 2], [[]])
 
 
 @pytest.mark.asyncio
@@ -1196,9 +1165,9 @@ async def test_workflow_constructs_task_ordered_external_outcome_before_answerin
             query_runtime=ScriptedAgentRuntime(
                 [_query_draft(["q1"]), _query_draft(["q2"])]
             ),
-            selector_runtime=ScriptedAgentRuntime(
+            reviewer_runtime=ScriptedAgentRuntime(
                 [
-                    _selection_draft(
+                    _review_draft(
                         [
                             {
                                 "candidate_index": 0,
@@ -1207,7 +1176,7 @@ async def test_workflow_constructs_task_ordered_external_outcome_before_answerin
                             }
                         ]
                     ),
-                    _selection_draft(
+                    _review_draft(
                         [
                             {
                                 "candidate_index": 0,
@@ -1231,34 +1200,36 @@ async def test_workflow_constructs_task_ordered_external_outcome_before_answerin
     await _run(runner)
 
     outcome = captured[0].external_search
+    reports = captured[0].task_reports
     assert (
-        outcome.tasks,
+        [report.research_goal for report in reports],
         outcome.requested_agent_count,
         outcome.effective_agent_count,
         outcome.hard_agent_limit,
         [
             (
                 report.task_index,
-                report.status,
+                report.external_collection,
                 report.generated_queries,
-                report.candidate_count,
-                report.evidence_count,
+                report.external_candidate_count,
+                report.internal_evidence_count,
+                report.external_evidence_count,
                 report.dropped_selection_count,
             )
-            for report in outcome.task_reports
+            for report in reports
         ],
         [item.source_ref for item in outcome.evidence],
         outcome.deduplicated_evidence_count,
     ) == (
-        tasks,
+        [task.research_goal for task in tasks],
         4,
         2,
         3,
         [
-            (0, "succeeded", ["q1"], 1, 1, 0),
-            (1, "succeeded", ["q2"], 1, 1, 0),
+            (0, "succeeded", ["q1"], 1, 0, 1, 0),
+            (1, "succeeded", ["q2"], 1, 0, 1, 0),
         ],
-        ["external-0-0"],
+        ["0-0"],
         1,
     )
 
@@ -1267,14 +1238,12 @@ async def test_workflow_constructs_task_ordered_external_outcome_before_answerin
 async def test_events_are_per_task_causal_with_their_contract_payloads() -> None:
     events = _Events()
     query_runtime = ScriptedAgentRuntime([_query_draft(["q1"]), _query_draft(["q2"])])
-    selector_runtime = ScriptedAgentRuntime(
-        [_selection_draft([]), _selection_draft([])]
-    )
+    reviewer_runtime = ScriptedAgentRuntime([_review_draft([]), _review_draft([])])
     runner, _, _ = _runner(
         tasks=[_task("first"), _task("second")],
         runtime=_runtime(
             query_runtime=query_runtime,
-            selector_runtime=selector_runtime,
+            reviewer_runtime=reviewer_runtime,
             tool=_Tool(
                 {
                     "q1": [_candidate("https://example.com/q1")],
@@ -1323,12 +1292,76 @@ async def test_events_are_per_task_causal_with_their_contract_payloads() -> None
 
 
 @pytest.mark.asyncio
+async def test_evidence_selected_event_count_is_internal_plus_external() -> None:
+    """evidence_selected.evidence_countは内部採用数と外部採用数の合算であることを保証する。"""
+    events = _Events()
+    query_runtime = ScriptedAgentRuntime([_query_draft(["q1"])])
+    reviewer_runtime = ScriptedAgentRuntime(
+        [
+            _review_draft(
+                [
+                    {
+                        "candidate_index": 0,
+                        "claim": "internal claim",
+                        "why_selected": "why",
+                    },
+                    {
+                        "candidate_index": 1,
+                        "claim": "external claim",
+                        "why_selected": "why",
+                    },
+                ]
+            )
+        ]
+    )
+    answerer = _EvidenceAnswerer()
+    factory = _Factory(
+        [
+            _runtime(
+                query_runtime=query_runtime,
+                reviewer_runtime=reviewer_runtime,
+                tool=_Tool({"q1": [_candidate("https://example.com/q1")]}),
+            )
+        ]
+    )
+    phases = AnsweringPhases(
+        planner=_Planner(_plan([_task("combined evidence")])),
+        researcher=Researcher(internal_search=_OneInternalHitSearch(), events=events),
+        external_runtime_factory=factory,
+        direct_answerer=_UnreachableDirectAnswerer(),
+        evidence_answerer=answerer,
+        reviewer=EvidenceReviewer(),
+    )
+    runner = AnsweringRunner(
+        input_safety_checker=AllowInputSafetyChecker(),
+        context_preparer=_Preparer(),
+        phases_factory=lambda: phases,
+        events=events,
+    )
+
+    await _run(runner)
+
+    selected_events = [
+        event.model_dump()
+        for event in _external_search_events(events.events)
+        if event.type == "external_search.evidence_selected"
+    ]
+    assert selected_events == [
+        {
+            "type": "external_search.evidence_selected",
+            "task_index": 0,
+            "evidence_count": 2,
+        }
+    ]
+
+
+@pytest.mark.asyncio
 async def test_external_pipeline_is_a_noop_for_events_when_reporter_is_none() -> None:
     runner, answerer, _ = _runner(
         tasks=[_task("no reporter")],
         runtime=_runtime(
             query_runtime=ScriptedAgentRuntime([_query_draft(["q"])]),
-            selector_runtime=ScriptedAgentRuntime([_selection_draft([])]),
+            reviewer_runtime=ScriptedAgentRuntime([_review_draft([])]),
             tool=_Tool({"q": [_candidate("https://example.com/q")]}),
         ),
         events=None,
@@ -1347,7 +1380,7 @@ async def test_requested_count_limits_only_external_task_parallelism() -> None:
         tasks=[_task("first"), _task("second"), _task("third")],
         runtime=_runtime(
             query_runtime=query_runtime,
-            selector_runtime=ScriptedAgentRuntime([]),
+            reviewer_runtime=ScriptedAgentRuntime([]),
             tool=_Tool(),
         ),
         requested_agent_count=2,
@@ -1376,7 +1409,7 @@ async def test_outer_cancellation_cancels_and_joins_all_started_external_tasks()
         tasks=tasks,
         runtime=_runtime(
             query_runtime=query_runtime,
-            selector_runtime=ScriptedAgentRuntime([]),
+            reviewer_runtime=ScriptedAgentRuntime([]),
             tool=_Tool(),
         ),
         requested_agent_count=len(tasks),
@@ -1410,9 +1443,9 @@ async def test_outer_cancellation_cancels_and_joins_all_started_external_tasks()
 async def test_classified_task_failure_does_not_cancel_its_sibling() -> None:
     failed = AgentResponseInvalidError(AgentResponseDefect.RESPONSE_NOT_JSON)
     query_runtime = ScriptedAgentRuntime([failed, _query_draft(["q"])])
-    selector_runtime = ScriptedAgentRuntime(
+    reviewer_runtime = ScriptedAgentRuntime(
         [
-            _selection_draft(
+            _review_draft(
                 [{"candidate_index": 0, "claim": "claim", "why_selected": "why"}]
             )
         ]
@@ -1421,7 +1454,7 @@ async def test_classified_task_failure_does_not_cancel_its_sibling() -> None:
         tasks=[_task("failed"), _task("succeeds")],
         runtime=_runtime(
             query_runtime=query_runtime,
-            selector_runtime=selector_runtime,
+            reviewer_runtime=reviewer_runtime,
             tool=_Tool({"q": [_candidate("https://example.com/q")]}),
         ),
         requested_agent_count=1,
@@ -1445,7 +1478,7 @@ async def test_unclassified_task_failure_joins_sibling_before_scope_close() -> N
         tasks=[_task("failing"), _task("blocking")],
         runtime=_runtime(
             query_runtime=query_runtime,
-            selector_runtime=ScriptedAgentRuntime([]),
+            reviewer_runtime=ScriptedAgentRuntime([]),
             tool=_Tool(),
         ),
         requested_agent_count=2,
@@ -1472,7 +1505,7 @@ async def test_unclassified_query_failure_joins_sibling_before_reraise() -> None
         tasks=[_task("query siblings")],
         runtime=_runtime(
             query_runtime=ScriptedAgentRuntime([_query_draft(["failing", "blocking"])]),
-            selector_runtime=ScriptedAgentRuntime([]),
+            reviewer_runtime=ScriptedAgentRuntime([]),
             tool=tool,
         ),
     )
@@ -1495,12 +1528,12 @@ async def test_cross_task_dedupe_keeps_first_and_scope_is_fresh_per_run() -> Non
         query_runtime=ScriptedAgentRuntime(
             [_query_draft(["q1"]), _query_draft(["q2"])]
         ),
-        selector_runtime=ScriptedAgentRuntime(
+        reviewer_runtime=ScriptedAgentRuntime(
             [
-                _selection_draft(
+                _review_draft(
                     [{"candidate_index": 0, "claim": "first", "why_selected": "why"}]
                 ),
-                _selection_draft(
+                _review_draft(
                     [{"candidate_index": 0, "claim": "second", "why_selected": "why"}]
                 ),
             ]
@@ -1516,12 +1549,12 @@ async def test_cross_task_dedupe_keeps_first_and_scope_is_fresh_per_run() -> Non
         query_runtime=ScriptedAgentRuntime(
             [_query_draft(["q1"]), _query_draft(["q2"])]
         ),
-        selector_runtime=ScriptedAgentRuntime(
+        reviewer_runtime=ScriptedAgentRuntime(
             [
-                _selection_draft(
+                _review_draft(
                     [{"candidate_index": 0, "claim": "first", "why_selected": "why"}]
                 ),
-                _selection_draft(
+                _review_draft(
                     [{"candidate_index": 0, "claim": "second", "why_selected": "why"}]
                 ),
             ]
@@ -1537,10 +1570,11 @@ async def test_cross_task_dedupe_keeps_first_and_scope_is_fresh_per_run() -> Non
     factory = _Factory([first_runtime, second_runtime])
     phases = AnsweringPhases(
         planner=_Planner(_plan(tasks)),
-        internal_search=_EmptyInternalSearch(),
+        researcher=Researcher(internal_search=_EmptyInternalSearch()),
         external_runtime_factory=factory,
         direct_answerer=_UnreachableDirectAnswerer(),
         evidence_answerer=answerer,
+        reviewer=EvidenceReviewer(),
     )
     runner = AnsweringRunner(
         input_safety_checker=AllowInputSafetyChecker(),
@@ -1561,22 +1595,22 @@ async def test_cross_task_dedupe_keeps_first_and_scope_is_fresh_per_run() -> Non
 
 
 @pytest.mark.asyncio
-async def test_query_timeout_is_classified_without_selector() -> None:
-    selector_runtime = ScriptedAgentRuntime([])
+async def test_query_timeout_is_classified_without_reviewer() -> None:
+    reviewer_runtime = ScriptedAgentRuntime([])
     runner, _, _ = _runner(
         tasks=[_task("timeout")],
         runtime=_runtime(
             query_runtime=ScriptedAgentRuntime(
                 [AIProviderNetworkError(reason=DeepSeekStateReason.TIMEOUT)]
             ),
-            selector_runtime=selector_runtime,
+            reviewer_runtime=reviewer_runtime,
             tool=_Tool(),
         ),
     )
 
     await _run(runner)
 
-    assert selector_runtime.calls == []
+    assert reviewer_runtime.calls == []
 
 
 @pytest.mark.asyncio
@@ -1590,76 +1624,54 @@ async def test_query_timeout_backstop_cancels_the_runtime_and_reports_failure(
         tasks=[_task("query timeout")],
         runtime=_runtime(
             query_runtime=query_runtime,
-            selector_runtime=ScriptedAgentRuntime([]),
+            reviewer_runtime=ScriptedAgentRuntime([]),
             tool=_Tool(),
         ),
     )
 
     await asyncio.wait_for(_run(runner), timeout=0.5)
 
-    report = captured[0].external_search.task_reports[0]
+    report = captured[0].task_reports[0]
     assert (
         query_runtime.cancelled,
-        report.status,
+        report.external_collection,
+        report.review,
         report.generated_queries,
         observed_timeouts.count(30),
-    ) == (True, "query_generation_failed", [], 1)
+    ) == (True, "query_generation_failed", "skipped_empty", [], 1)
 
 
 @pytest.mark.asyncio
-async def test_provider_timeout_backstop_cancels_tool_and_skips_selector(
+async def test_provider_timeout_backstop_cancels_tool_and_skips_reviewer(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     observed_timeouts = _record_and_shorten_pipeline_timeouts(monkeypatch)
     captured = _capture_external_outcome(monkeypatch)
     started = asyncio.Event()
     tool = _Tool(started=started, release=asyncio.Event())
-    selector_runtime = ScriptedAgentRuntime([])
+    reviewer_runtime = ScriptedAgentRuntime([])
     runner, _, _ = _runner(
         tasks=[_task("provider timeout")],
         runtime=_runtime(
             query_runtime=ScriptedAgentRuntime([_query_draft(["q"])]),
-            selector_runtime=selector_runtime,
+            reviewer_runtime=reviewer_runtime,
             tool=tool,
         ),
     )
 
     await asyncio.wait_for(_run(runner), timeout=0.5)
 
-    report = captured[0].external_search.task_reports[0]
+    report = captured[0].task_reports[0]
     assert (
         started.is_set(),
         tool.cancelled,
-        selector_runtime.calls,
-        report.status,
+        reviewer_runtime.calls,
+        report.external_collection,
+        report.review,
         report.provider_failed_query_count,
         observed_timeouts.count(15),
-    ) == (True, True, [], "provider_failed", 1, 1)
+    ) == (True, True, [], "provider_failed", "skipped_empty", 1, 1)
 
 
-@pytest.mark.asyncio
-async def test_selector_timeout_backstop_retries_twice_with_timeout_reason(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    observed_timeouts = _record_and_shorten_pipeline_timeouts(monkeypatch)
-    captured = _capture_external_outcome(monkeypatch)
-    selector_runtime = _NeverCompletingRuntime()
-    runner, _, _ = _runner(
-        tasks=[_task("selector timeout")],
-        runtime=_runtime(
-            query_runtime=ScriptedAgentRuntime([_query_draft(["q"])]),
-            selector_runtime=selector_runtime,
-            tool=_Tool({"q": [_candidate("https://example.com/q")]}),
-        ),
-    )
-
-    await asyncio.wait_for(_run(runner), timeout=0.5)
-
-    report = captured[0].external_search.task_reports[0]
-    assert (
-        selector_runtime.cancelled,
-        selector_runtime.attempt_numbers,
-        report.status,
-        report.selector_failure_reason,
-        observed_timeouts.count(30),
-    ) == (True, [1, 2], "selector_failed", "selector_timeout", 3)
+# reviewerのtimeout backstop attempt/retry契約は
+# tests/agent/evidence_collection/evidence_review/test_reviewer.py が正本。

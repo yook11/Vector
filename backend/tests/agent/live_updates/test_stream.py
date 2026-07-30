@@ -172,7 +172,7 @@ async def test_stream_round_trip_filters_epoch_and_skips_bad_payload() -> None:
     assert (
         await publisher_2.publish(
             AgentRunLiveStreamActivityEvent(
-                activity=InternalSearchStartedEvent(query_count=2)
+                activity=InternalSearchStartedEvent(task_index=0, query_count=2)
             )
         )
         == "4-0"
@@ -246,12 +246,16 @@ async def test_stream_round_trip_filters_epoch_and_skips_bad_payload() -> None:
     assert all(entry.attempt_epoch == EPOCH_2 for entry in result.events)
     assert all("attemptEpoch" in fields for _id, fields in redis.entries)
     assert json.loads(redis.entries[3][1]["payload"]) == {
-        "activity": {"type": "internal_search.started", "query_count": 2}
+        "activity": {
+            "type": "internal_search.started",
+            "task_index": 0,
+            "query_count": 2,
+        }
     }
 
 
 def test_activity_event_contract_rejects_legacy_and_ambiguous_shapes() -> None:
-    activity = InternalSearchStartedEvent(query_count=2)
+    activity = InternalSearchStartedEvent(task_index=0, query_count=2)
 
     event = AgentRunLiveStreamActivityEvent(activity=activity)
 
