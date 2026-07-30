@@ -61,6 +61,9 @@ jobs:
         run: |
           set -euo pipefail
           account=$(aws sts get-caller-identity --query Account --output text)
+          # public repo の workflow ログは誰でも読める。account id は secret ではないが
+          # role 列挙の足がかりになるので、docker push が出す registry 名ごと伏せる。
+          echo "::add-mask::$account"
           registry="${account}.dkr.ecr.${AWS_REGION}.amazonaws.com"
           aws ecr get-login-password \
             | docker login --username AWS --password-stdin "$registry"
@@ -78,4 +81,6 @@ jobs:
           # lifecycle policy が tagStatus: any で数えるので保持世代を食う。
           docker build --provenance=false -t "$IMAGE" infra/squid
           docker push "$IMAGE"
-          echo "pushed \`$IMAGE\`" >> "$GITHUB_STEP_SUMMARY"
+          # summary にも registry を書かない (account id を含む)。
+          echo "pushed \`${{ steps.tf.outputs.name_prefix }}/proxy:${{ steps.tf.outputs.proxy_image_tag }}\`" \
+            >> "$GITHUB_STEP_SUMMARY"
