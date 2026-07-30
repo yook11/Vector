@@ -53,7 +53,7 @@ from app.analysis.curation.cli.recuration_service import (
     RecurationSummary,
 )
 from app.config import settings
-from app.db_ssl import create_app_engine
+from app.db_iam_auth import create_runtime_engine
 from app.models.analyzable_article_record import AnalyzableArticleRecord
 from app.models.article_curation import ArticleCuration
 
@@ -202,7 +202,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     async def _bootstrap() -> int:
-        engine = create_app_engine(
+        engine = create_runtime_engine(
             settings.database_url,
             application_name="vector-cli-re-curate-all",
             echo=False,

@@ -114,6 +114,11 @@ class Settings(BaseSettings):
     # production への dev fallback 混入を防ぐ。
     database_url: str
 
+    # RDS IAM 認証。有効時は URL に password を持たせず、接続ごとに IAM の auth token
+    # を作って認証する (``app/db_iam_auth.py``)。**射程は app runtime の接続だけ**で、
+    # migration は migrator role の password 認証を続ける。
+    db_iam_auth: bool = False
+
     # データベース (migration role)
     # alembic / pytest fixture / vector_test 作成など admin 系の作業では
     # ``vector`` (table owner) で接続する。``database_url`` と分離することで、
@@ -371,6 +376,29 @@ class Settings(BaseSettings):
                 "in production INTERNAL_FRONTEND_BASE_URL must be an internal "
                 f"namespace host ({_INTERNAL_NAMESPACE_GLOBS}), got host {host!r}"
             )
+        return self
+
+    @model_validator(mode="after")
+    def _reject_password_when_iam_auth(self) -> Self:
+        """IAM 認証時に runtime URL の password を拒否する (起動時 fail-fast)。
+
+        provider が ``connect_args`` で password を上書きするため、URL 側の password は
+        黙って無視される。「IAM のつもりで password 認証している」と疑えない状態を
+        作らないために弾く。``migration_database_url`` は射程外
+        (migrator role は password 認証を続ける)。
+        """
+        if not self.db_iam_auth:
+            return self
+        for field_name in ("database_url", "auth_retention_database_url"):
+            raw: str | None = getattr(self, field_name)
+            if raw is None:
+                continue
+            if urlparse(raw).password is not None:
+                env_name = _DATABASE_URL_ENV_NAMES[field_name]
+                raise ValueError(
+                    f"DB_IAM_AUTH is enabled but {env_name} contains a password; "
+                    "remove it (the IAM auth token replaces it)"
+                )
         return self
 
     @model_validator(mode="after")

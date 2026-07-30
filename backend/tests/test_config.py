@@ -372,6 +372,53 @@ def test_egress_proxy_url_rejects_non_http_scheme(bad_url: str) -> None:
         Settings(egress_proxy_url=bad_url)
 
 
+# RDS IAM 認証。射程は app runtime の接続だけで、migration は migrator role の
+# password 認証のまま (master は break-glass 専用という以前の決定と整合)。
+# 有効時に URL の password は provider に上書きされて黙って無視されるので起動時に弾く。
+
+_IAM_RUNTIME_URL = (
+    "postgresql+asyncpg://vector_app@"
+    "vector-db.abc.ap-northeast-1.rds.amazonaws.com:5432/vector?sslmode=require"
+)
+
+
+def test_db_iam_auth_defaults_to_false() -> None:
+    """既定は無効。Fly は URL の password で繋ぐ。"""
+    assert Settings().db_iam_auth is False
+
+
+def test_db_iam_auth_accepts_passwordless_runtime_url(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("DATABASE_URL", _IAM_RUNTIME_URL)
+    assert Settings(db_iam_auth=True).db_iam_auth is True
+
+
+@pytest.mark.parametrize("env_name", ["DATABASE_URL", "AUTH_RETENTION_DATABASE_URL"])
+def test_db_iam_auth_rejects_password_in_runtime_url(
+    monkeypatch: pytest.MonkeyPatch, env_name: str
+) -> None:
+    """password が残っていると「IAM のつもりで password 認証」を疑えなくなる。"""
+    monkeypatch.setenv("DATABASE_URL", _IAM_RUNTIME_URL)
+    monkeypatch.setenv(
+        env_name, _IAM_RUNTIME_URL.replace("vector_app@", "vector_app:leftover@")
+    )
+    with pytest.raises(ValidationError, match="DB_IAM_AUTH"):
+        Settings(db_iam_auth=True)
+
+
+def test_db_iam_auth_allows_password_in_migration_url(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """migration は射程外。migrator role は password 認証を続ける。"""
+    monkeypatch.setenv("DATABASE_URL", _IAM_RUNTIME_URL)
+    monkeypatch.setenv(
+        "MIGRATION_DATABASE_URL",
+        "postgresql+asyncpg://vector:migratorsecret@db:5432/vector?sslmode=require",
+    )
+    assert Settings(db_iam_auth=True).migration_database_url is not None
+
+
 # Neon は public internet 越しの接続のため、production では DB 接続文字列に TLS
 # sslmode (require / verify-ca / verify-full) を要求する。dev は docker 同一
 # network の平文で良いので何も強制しない。

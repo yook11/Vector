@@ -269,6 +269,53 @@ class TestCreateAppEngine:
         }
 
 
+class TestPasswordProvider:
+    """接続ごとの認証情報注入 (RDS IAM 認証)。
+
+    token は 15 分で失効するので engine 生成時に 1 度作るのでは足りない。asyncpg の
+    callable password は接続確立ごとに呼ばれ、awaitable なら await される
+    (``connect_utils.py``) ため、非同期の provider をそのまま載せられる。
+    """
+
+    @staticmethod
+    def _captured_connect_args(
+        monkeypatch: pytest.MonkeyPatch, **factory_kwargs: Any
+    ) -> dict[str, Any]:
+        captured: dict[str, Any] = {}
+
+        def _spy(clean_url: str, **kw: Any) -> Any:
+            captured.update(kw)
+            return _real_create_async_engine(clean_url, **kw)
+
+        monkeypatch.setattr(db_ssl, "create_async_engine", _spy)
+        create_app_engine(f"{_NEON}?sslmode=require", **factory_kwargs)
+        return captured["connect_args"]
+
+    def test_provider_becomes_connect_arg_password(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        async def provide() -> str:
+            return "token"
+
+        connect_args = self._captured_connect_args(
+            monkeypatch, password_provider=provide
+        )
+        assert connect_args["password"] is provide
+
+    def test_absent_provider_leaves_password_to_the_url(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """未指定なら URL の password がそのまま使われる (Fly の経路)。"""
+        assert "password" not in self._captured_connect_args(monkeypatch)
+
+    def test_caller_passed_password_raises(self) -> None:
+        """password の決定権も ssl と同じく factory に一元化する。"""
+        with pytest.raises(ValueError, match="connect_args"):
+            create_app_engine(
+                f"{_NEON}?sslmode=require", connect_args={"password": "x"}
+            )
+
+
 class TestEngineResilienceDefaults:
     """factory が全 engine に Neon scale-to-zero resilience を既定付与する不変条件。
 

@@ -29,6 +29,7 @@ factory を import しても設定副作用も循環依存も起きない。
 from __future__ import annotations
 
 import ssl
+from collections.abc import Awaitable, Callable
 from pathlib import Path
 from typing import Any
 
@@ -174,7 +175,11 @@ def _merge_server_settings(
 
 
 def create_app_engine(
-    url: str, *, application_name: str | None = None, **engine_kwargs: Any
+    url: str,
+    *,
+    application_name: str | None = None,
+    password_provider: Callable[[], Awaitable[str]] | None = None,
+    **engine_kwargs: Any,
 ) -> AsyncEngine:
     """SSL と application_name を一元注入する唯一の engine 生成入口。
 
@@ -183,6 +188,10 @@ def create_app_engine(
     構造的に一元化するため、呼び出し側が ``connect_args["ssl"]`` を渡したら
     ``ValueError`` で fail-fast する (ssl 以外の connect_args はマージ保持)。
     ``application_name`` は asyncpg の ``server_settings`` に焼く。
+
+    ``password_provider`` を渡すと接続確立ごとにそれが呼ばれる (asyncpg の callable
+    password)。RDS IAM 認証の token は 15 分で失効するため、値ではなく生成器を渡す。
+    未指定なら URL の password が使われる。
     """
     clean_url, ssl_connect_args = split_ssl_from_url(url)
 
@@ -193,8 +202,16 @@ def create_app_engine(
             "SSL is derived from the connection string's sslmode (single source "
             "of truth). Use `?sslmode=require` instead."
         )
+    if "password" in caller_connect_args:
+        raise ValueError(
+            "connect_args['password'] must not be passed to create_app_engine; "
+            "pass password_provider= for IAM auth, or keep the password in the "
+            "connection string."
+        )
     merged_connect_args = {**caller_connect_args, **ssl_connect_args}
     merged_connect_args = _merge_server_settings(merged_connect_args, application_name)
+    if password_provider is not None:
+        merged_connect_args["password"] = password_provider
 
     # Neon scale-to-zero (autosuspend) で idle 接続が切られるため、全 engine に
     # stale-connection resilience を既定付与する (呼び出し側が明示すれば override)。

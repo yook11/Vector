@@ -477,7 +477,7 @@ async def test_collection_worker_lifecycle_uses_renamed_runtime_identity(
     with (
         patch("app.queue.lifecycle.setup_logfire") as setup_logfire,
         patch(
-            "app.queue.lifecycle.create_app_engine", return_value=engine
+            "app.queue.lifecycle.create_runtime_engine", return_value=engine
         ) as create_engine,
         patch("app.queue.lifecycle.logfire.instrument_sqlalchemy"),
         patch("app.queue.lifecycle.log_pool_initialized") as log_pool_initialized,
