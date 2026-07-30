@@ -27,7 +27,6 @@ locals {
         BETTER_AUTH_SECRET       = "better-auth-secret"
         BFF_JWT_SIGNING_SECRET   = "bff-jwt-signing-secret"
         REVALIDATE_BEARER_SECRET = "revalidate-bearer-secret"
-        REDIS_URL_RL             = "redis-url-rl"
       }
     }
     api = {
@@ -40,7 +39,6 @@ locals {
         BFF_JWT_SIGNING_SECRET   = "bff-jwt-signing-secret"
         REVALIDATE_BEARER_SECRET = "revalidate-bearer-secret"
         LOGFIRE_TOKEN            = "logfire-token"
-        REDIS_URL                = "redis-url"
       }
     }
     # singleton: 新旧が並走すると cron が二重発火する。Fly の
@@ -53,7 +51,6 @@ locals {
       command        = ["supervisord", "-n", "-c", "/app/supervisord/scheduler.conf"]
       secrets = {
         LOGFIRE_TOKEN = "logfire-token"
-        REDIS_URL     = "redis-url"
       }
     }
     fetch = {
@@ -64,7 +61,6 @@ locals {
       command        = ["supervisord", "-n", "-c", "/app/supervisord/fetch.conf"]
       secrets = {
         LOGFIRE_TOKEN = "logfire-token"
-        REDIS_URL     = "redis-url"
       }
     }
     analysis = {
@@ -77,7 +73,6 @@ locals {
         GEMINI_API_KEY   = "gemini-api-key"
         DEEPSEEK_API_KEY = "deepseek-api-key"
         LOGFIRE_TOKEN    = "logfire-token"
-        REDIS_URL        = "redis-url"
       }
     }
     insights = {
@@ -90,7 +85,6 @@ locals {
         DEEPSEEK_API_KEY         = "deepseek-api-key"
         REVALIDATE_BEARER_SECRET = "revalidate-bearer-secret"
         LOGFIRE_TOKEN            = "logfire-token"
-        REDIS_URL                = "redis-url"
       }
     }
     agent = {
@@ -104,7 +98,6 @@ locals {
         DEEPSEEK_API_KEY = "deepseek-api-key"
         TAVILY_API_KEY   = "tavily-api-key"
         LOGFIRE_TOKEN    = "logfire-token"
-        REDIS_URL        = "redis-url"
       }
     }
   }

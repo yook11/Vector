@@ -563,3 +563,102 @@ def test_tavily_api_key_loaded_as_secretstr(monkeypatch: pytest.MonkeyPatch) -> 
     s = Settings()
     assert isinstance(s.tavily_api_key, SecretStr)
     assert s.tavily_api_key.get_secret_value() == "tvly-test-key"
+
+
+# Redis (ElastiCache) IAM 認証。RDS IAM 認証 (上の _IAM_RUNTIME_URL 節) と同じ理由で
+# URL の password を拒否する。加えて token は user 単位で署名するため、URL に
+# username が無い設定 (RDS 側は host 必須だが Redis 側は user 必須) も矛盾として弾く。
+# cache 名は署名の host で URL (DNS endpoint) からは導出できないため明示必須。
+# IAM 認証は TLS 前提のため、rediss:// (TLS) 以外の scheme も拒否する。
+
+_REDIS_IAM_REGION = "ap-northeast-1"
+_REDIS_IAM_CACHE_NAME = "vector-cache-abc123"
+# happy path は TLS 必須の contract を満たす rediss:// を正本にする。
+_IAM_REDIS_URL = "rediss://vector-app@vector-cache.abc.cache.amazonaws.com:6379/0"
+
+
+def test_redis_iam_auth_defaults_to_false() -> None:
+    """既定は無効。Fly / dev は URL の password で繋ぐ。"""
+    assert Settings().redis_iam_auth is False
+
+
+def test_redis_iam_cache_name_defaults_to_none() -> None:
+    """IAM 認証を使わない環境では未設定が正しい。"""
+    assert Settings().redis_iam_cache_name is None
+
+
+def test_redis_iam_auth_accepts_passwordless_url_with_signing_inputs(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """rediss:// (TLS) + username + region + cache 名が揃えば通る (happy path)。"""
+    monkeypatch.setenv("REDIS_URL", _IAM_REDIS_URL)
+    monkeypatch.setenv("AWS_REGION", _REDIS_IAM_REGION)
+    monkeypatch.setenv("REDIS_IAM_CACHE_NAME", _REDIS_IAM_CACHE_NAME)
+    s = Settings(redis_iam_auth=True)
+    assert s.redis_iam_auth is True
+
+
+def test_redis_iam_auth_rejects_non_tls_scheme(monkeypatch: pytest.MonkeyPatch) -> None:
+    """auth token は平文で流せない。IAM 認証には rediss:// (TLS) を要求する。"""
+    monkeypatch.setenv(
+        "REDIS_URL", "redis://vector-app@vector-cache.abc.cache.amazonaws.com:6379/0"
+    )
+    monkeypatch.setenv("AWS_REGION", _REDIS_IAM_REGION)
+    monkeypatch.setenv("REDIS_IAM_CACHE_NAME", _REDIS_IAM_CACHE_NAME)
+    with pytest.raises(ValidationError, match="REDIS_IAM_AUTH"):
+        Settings(redis_iam_auth=True)
+
+
+def test_redis_iam_auth_rejects_password_in_url(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """password が残っていると「IAM のつもりで password 認証」を疑えなくなる。"""
+    monkeypatch.setenv(
+        "REDIS_URL",
+        "redis://vector-app:leftover@vector-cache.abc.cache.amazonaws.com:6379/0",
+    )
+    monkeypatch.setenv("AWS_REGION", _REDIS_IAM_REGION)
+    monkeypatch.setenv("REDIS_IAM_CACHE_NAME", _REDIS_IAM_CACHE_NAME)
+    with pytest.raises(ValidationError, match="REDIS_IAM_AUTH"):
+        Settings(redis_iam_auth=True)
+
+
+def test_redis_iam_auth_rejects_url_without_username(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """token は user 単位で署名するため、誰として繋ぐか不明な設定は矛盾として弾く。"""
+    monkeypatch.setenv(
+        "REDIS_URL", "redis://vector-cache.abc.cache.amazonaws.com:6379/0"
+    )
+    monkeypatch.setenv("AWS_REGION", _REDIS_IAM_REGION)
+    monkeypatch.setenv("REDIS_IAM_CACHE_NAME", _REDIS_IAM_CACHE_NAME)
+    with pytest.raises(ValidationError, match="REDIS_IAM_AUTH"):
+        Settings(redis_iam_auth=True)
+
+
+def test_redis_iam_auth_requires_region(monkeypatch: pytest.MonkeyPatch) -> None:
+    """region 無しに token は署名できない。"""
+    monkeypatch.setenv("REDIS_URL", _IAM_REDIS_URL)
+    monkeypatch.delenv("AWS_REGION", raising=False)
+    monkeypatch.setenv("REDIS_IAM_CACHE_NAME", _REDIS_IAM_CACHE_NAME)
+    with pytest.raises(ValidationError, match="AWS_REGION"):
+        Settings(redis_iam_auth=True)
+
+
+def test_redis_iam_auth_requires_cache_name(monkeypatch: pytest.MonkeyPatch) -> None:
+    """cache 名は署名の host であり、endpoint の URL からは導出できない。"""
+    monkeypatch.setenv("REDIS_URL", _IAM_REDIS_URL)
+    monkeypatch.setenv("AWS_REGION", _REDIS_IAM_REGION)
+    monkeypatch.delenv("REDIS_IAM_CACHE_NAME", raising=False)
+    with pytest.raises(ValidationError, match="REDIS_IAM_CACHE_NAME"):
+        Settings(redis_iam_auth=True)
+
+
+def test_redis_iam_auth_disabled_allows_password_url(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """無効時は従来通り URL の password で繋げる (Fly / dev の既定)。"""
+    password_url = "redis://:secret@localhost:6379/0"
+    monkeypatch.setenv("REDIS_URL", password_url)
+    s = Settings()
+    assert s.redis_url == password_url

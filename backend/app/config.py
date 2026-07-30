@@ -192,6 +192,15 @@ class Settings(BaseSettings):
     # タスクキュー
     redis_url: str = "redis://localhost:6379/0"
 
+    # ElastiCache IAM 認証。有効時は URL に password を持たせず、接続ごとに SigV4 の
+    # auth token を作って認証する (``app/redis/iam_auth.py``)。どの user で繋ぐかは
+    # ``redis_url`` の username が単一の情報源。
+    redis_iam_auth: bool = False
+
+    # token 署名の host に使う cache 名 (replication group id)。署名対象は DNS
+    # endpoint ではなく cache 名で、URL からは導出できないため明示的に受ける。
+    redis_iam_cache_name: str | None = None
+
     # back-fill (パイプライン保守)
     # curation は救済機構の前提として常時有効。assessments / embeddings は
     # 明示的に有効化する。
@@ -418,6 +427,67 @@ class Settings(BaseSettings):
             raise ValueError(
                 "DB_IAM_AUTH is enabled but AWS_REGION is not set; "
                 "the IAM auth token is signed per region"
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _reject_password_when_redis_iam_auth(self) -> Self:
+        """Redis IAM 認証時に URL の password を拒否し、user を要求する。
+
+        DB 側 (``_reject_password_when_iam_auth``) と同じ理由で、「IAM のつもりで
+        password 認証している」状態を起動時に弾く。加えて token は user ごとに
+        署名するため、URL に username が無い設定も矛盾として弾く。
+        """
+        if not self.redis_iam_auth:
+            return self
+        parsed = urlparse(self.redis_url)
+        if parsed.password is not None:
+            raise ValueError(
+                "REDIS_IAM_AUTH is enabled but REDIS_URL contains a password; "
+                "remove it (the IAM auth token replaces it)"
+            )
+        if parsed.username is None:
+            raise ValueError(
+                "REDIS_IAM_AUTH is enabled but REDIS_URL has no user; "
+                "the IAM auth token is signed per cache user"
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _require_signing_inputs_when_redis_iam_auth(self) -> Self:
+        """Redis IAM 認証には region と cache 名が要る (起動時 fail-fast)。
+
+        region の事情は DB 側と同じ。cache 名は署名の host であり、endpoint の
+        URL からは導出できないため、欠けたまま接続まで進ませない。
+        """
+        if not self.redis_iam_auth:
+            return self
+        if self.aws_region is None:
+            raise ValueError(
+                "REDIS_IAM_AUTH is enabled but AWS_REGION is not set; "
+                "the IAM auth token is signed per region"
+            )
+        if self.redis_iam_cache_name is None:
+            raise ValueError(
+                "REDIS_IAM_AUTH is enabled but REDIS_IAM_CACHE_NAME is not set; "
+                "the token is signed against the cache name, not the endpoint"
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _require_tls_scheme_when_redis_iam_auth(self) -> Self:
+        """Redis IAM 認証には rediss:// (TLS) が要る (起動時 fail-fast)。
+
+        ElastiCache の IAM 認証は転送時暗号化が前提で、平文 scheme のままだと
+        接続時の不透明なプロトコルエラーまで発現が遅れる。平文で auth token を
+        流す構成もここで構造的に排除する。
+        """
+        if not self.redis_iam_auth:
+            return self
+        if urlparse(self.redis_url).scheme != "rediss":
+            raise ValueError(
+                "REDIS_IAM_AUTH is enabled but REDIS_URL is not rediss://; "
+                "IAM auth requires TLS (the auth token must not travel in cleartext)"
             )
         return self
 

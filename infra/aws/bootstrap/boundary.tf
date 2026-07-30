@@ -21,6 +21,17 @@ resource "aws_iam_policy" "boundary" {
         Action   = "rds-db:connect"
         Resource = "arn:aws:rds-db:${var.region}:${data.aws_caller_identity.current.account_id}:dbuser:*/*"
       },
+      # elasticache:Connect は接続先 cache と接続 user の両方の ARN に対して
+      # 評価されるため、片方だけでは段の policy が許しても認証が通らない。
+      {
+        Sid    = "ElastiCacheIamAuth"
+        Effect = "Allow"
+        Action = "elasticache:Connect"
+        Resource = [
+          "arn:aws:elasticache:${var.region}:${data.aws_caller_identity.current.account_id}:replicationgroup:${var.name_prefix}-*",
+          "arn:aws:elasticache:${var.region}:${data.aws_caller_identity.current.account_id}:user:${var.name_prefix}-*",
+        ]
+      },
 
       # --- execution role が要るもの ---
       {

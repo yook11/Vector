@@ -33,8 +33,13 @@ from taskiq.middlewares.opentelemetry_middleware import OpenTelemetryMiddleware
 from taskiq_redis import RedisAsyncResultBackend, RedisStreamBroker
 
 from app.config import settings
+from app.redis.iam_auth import redis_connection_options
 
 logger = structlog.get_logger(__name__)
+
+# IAM 認証時は URL の user が credential_provider へ移る (taskiq-redis は
+# **connection_kwargs を redis-py の ConnectionPool まで素通しする)。
+_redis_url, _redis_iam_kwargs = redis_connection_options(settings.redis_url)
 
 
 def _make_broker(
@@ -48,7 +53,7 @@ def _make_broker(
 ) -> RedisStreamBroker:
     return (
         RedisStreamBroker(
-            url=settings.redis_url,
+            url=_redis_url,
             idle_timeout=600_000,
             maxlen=10_000,
             queue_name=queue_name,
@@ -57,16 +62,18 @@ def _make_broker(
             consumer_id=consumer_id,
             unacknowledged_batch_size=unacknowledged_batch_size,
             unacknowledged_lock_timeout=unacknowledged_lock_timeout,
+            **_redis_iam_kwargs,
         )
         .with_result_backend(
             RedisAsyncResultBackend(
-                redis_url=settings.redis_url,
+                redis_url=_redis_url,
                 result_ex_time=3600,
                 # result key を taskiq:<task_id> に名前空間化する。prefix_str 無しだと
                 # bare uuid となり Redis ACL で stream key と区別できない。collect の
                 # ~taskiq:* grant を実在させ set_result の NOPERM を防ぐ
                 # (infra/redis/fly.toml の ACL と対)。
                 prefix_str="taskiq",
+                **_redis_iam_kwargs,
             )
         )
         # OTel middleware を **最初** に挿す。pre_execute は登録順 (FIFO) ・

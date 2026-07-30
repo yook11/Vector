@@ -39,6 +39,10 @@ repos:
     hooks:
       - id: hadolint-docker
         files: '(^|/)Dockerfile$'
+        # hook 定義の image は tag 無し (= latest) のため、rev の pin だけでは
+        # hadolint 本体が unpinned になり、新 release の新ルールで無関係な PR が
+        # 落ちる。image も rev と同じ version に pin する。
+        entry: ghcr.io/hadolint/hadolint:v2.14.0 hadolint
 
   # ---- ruff / biome: pyproject.toml / biome.json を SSoT として local 呼び出し ----
   # PATH に uv / npx が必要 (Vector の dev 環境前提)。

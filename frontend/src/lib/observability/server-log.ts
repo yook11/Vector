@@ -9,7 +9,8 @@ export type ServerLogEvent =
   | "frontend_rate_limit_missing_ip"
   | "frontend_rate_limit_unknown_write"
   | "frontend_rate_limit_redis_client_error"
-  | "frontend_rate_limit_redis_fail_open";
+  | "frontend_rate_limit_redis_fail_open"
+  | "frontend_rate_limit_redis_misconfigured";
 
 export interface ServerLogFields {
   method?: string | undefined;
