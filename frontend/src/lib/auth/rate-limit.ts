@@ -20,6 +20,10 @@ import { randomUUID } from "node:crypto";
 import { createClient, type RedisClientType } from "redis";
 
 import {
+  type RedisIamConnection,
+  redisIamConnectionOptions,
+} from "@/lib/auth/redis-iam-auth";
+import {
   logServerEvent,
   type ServerLogEvent,
 } from "@/lib/observability/server-log";
@@ -74,7 +78,18 @@ const globalForRedis = globalThis as unknown as {
   __vectorRateLimitErrorLastMs?: number;
   __vectorRateLimitSignalLastMs?: Record<string, number>;
   __vectorRateLimitFailOpenLastMs?: Record<string, number>;
+  __vectorRateLimitMisconfigLogged?: boolean;
 };
+
+// IAM 認証の誤設定は env 由来で不変なので、診断 message はプロセスごとに 1 回だけ
+// 出す (継続的な可視化は checkRateLimit 側の unconfigured warn が担う)。
+function logRedisIamMisconfigOnce(err: unknown): void {
+  if (globalForRedis.__vectorRateLimitMisconfigLogged) return;
+  globalForRedis.__vectorRateLimitMisconfigLogged = true;
+  logServerEvent("warn", "frontend_rate_limit_redis_misconfigured", {
+    detail: err instanceof Error ? err.message : String(err),
+  });
+}
 
 function logRedisClientError(): void {
   const now = Date.now();
@@ -142,7 +157,23 @@ function getRateLimitRedisClient(): RedisClientType | null {
   // 空文字列は未設定と同じ扱いにする。
   const url = process.env.REDIS_URL_RL || process.env.REDIS_URL;
   if (!url) return null;
-  const c = createClient({ url }) as RedisClientType;
+  // IAM 認証の誤設定 (URL に user 無し / cache 名・region 欠落) は URL 未設定と
+  // 同じ fail-open に倒す (呼び出し側の unconfigured warn で 60 秒ごとに可視化)。
+  let connection: RedisIamConnection;
+  try {
+    connection = redisIamConnectionOptions(url);
+  } catch (err) {
+    logRedisIamMisconfigOnce(err);
+    return null;
+  }
+  // credentialsProvider を undefined で渡さない。node-redis は URL の userinfo
+  // からも provider を作るため、undefined の明示上書きは password 認証を壊しうる。
+  const c = createClient({
+    url: connection.url,
+    ...(connection.credentialsProvider
+      ? { credentialsProvider: connection.credentialsProvider }
+      : {}),
+  }) as RedisClientType;
   c.on("error", logRedisClientError);
   globalForRedis.__vectorRateLimitRedis = c;
   return c;

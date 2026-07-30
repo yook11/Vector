@@ -21,8 +21,12 @@
     "generate-types:file": "OPENAPI_INPUT=./openapi.json openapi-ts"
   },
   "dependencies": {
+    "@aws-crypto/sha256-js": "^5.2.0",
+    "@aws-sdk/credential-providers": "^3.1099.0",
     "@aws-sdk/rds-signer": "^3.1098.0",
     "@hey-api/client-next": "0.5.1",
+    "@smithy/protocol-http": "^5.5.16",
+    "@smithy/signature-v4": "^5.6.12",
     "better-auth": "^1.6.23",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",

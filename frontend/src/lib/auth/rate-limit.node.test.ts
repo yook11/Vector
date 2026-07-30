@@ -41,6 +41,7 @@ const g = globalThis as unknown as {
   __vectorRateLimitErrorLastMs?: number;
   __vectorRateLimitSignalLastMs?: Record<string, number>;
   __vectorRateLimitFailOpenLastMs?: Record<string, number>;
+  __vectorRateLimitMisconfigLogged?: boolean;
 };
 
 let warnSpy: MockInstance<typeof console.warn>;
@@ -49,12 +50,29 @@ function plan(...tiers: RateLimitTier[]) {
   return { tiers };
 }
 
+type WarnPayload = Record<string, unknown>;
+
+function warnPayloads(event: string): WarnPayload[] {
+  return warnSpy.mock.calls
+    .map((call) => JSON.parse(call[0] as string) as WarnPayload)
+    .filter((payload) => payload.event === event);
+}
+
+function warnPayload(event: string): WarnPayload {
+  const [payload] = warnPayloads(event);
+  if (!payload) {
+    throw new Error(`no warn payload recorded for event "${event}"`);
+  }
+  return payload;
+}
+
 beforeEach(() => {
   // singleton state を test 間で reset (HMR/test isolation 用に globalThis を採用しているため)
   delete g.__vectorRateLimitRedis;
   delete g.__vectorRateLimitErrorLastMs;
   delete g.__vectorRateLimitSignalLastMs;
   delete g.__vectorRateLimitFailOpenLastMs;
+  delete g.__vectorRateLimitMisconfigLogged;
   mockEval.mockReset();
   mockConnect.mockReset();
   mockOn.mockReset();
@@ -326,6 +344,107 @@ describe("checkRateLimit — REDIS_URL_RL fallback (PR1 C9 対策)", () => {
     mockEval.mockResolvedValue(1);
     await checkRateLimit(plan({ key: "rl:ip:1.2.3.4", limit: 300 }));
     expect(createClient).toHaveBeenCalledWith({ url: "redis://rl:6379/0" });
+  });
+});
+
+describe("checkRateLimit — REDIS_IAM_AUTH 配線 (redis-iam-auth.ts)", () => {
+  it("正しい設定なら createClient に userinfo 無し URL + credentialsProvider を渡す", async () => {
+    vi.stubEnv("REDIS_IAM_AUTH", "true");
+    vi.stubEnv(
+      "REDIS_URL_RL",
+      "rediss://vector_rl@vector-rate-limit.example.apne1.cache.amazonaws.com:6379/0",
+    );
+    vi.stubEnv("REDIS_IAM_CACHE_NAME_RL", "vector-rate-limit");
+    vi.stubEnv("AWS_REGION", "ap-northeast-1");
+    mockIsOpenValue = true;
+    mockEval.mockResolvedValue(1);
+    await checkRateLimit(plan({ key: "rl:ip:1.2.3.4", limit: 300 }));
+    expect(createClient).toHaveBeenCalledWith({
+      url: "rediss://vector-rate-limit.example.apne1.cache.amazonaws.com:6379/0",
+      credentialsProvider: {
+        type: "async-credentials-provider",
+        credentials: expect.any(Function),
+      },
+    });
+  });
+
+  it("URL に username が無い誤設定は null client 扱いになり allow + unconfigured warn (throw を漏らさない)", async () => {
+    vi.stubEnv("REDIS_IAM_AUTH", "true");
+    vi.stubEnv(
+      "REDIS_URL_RL",
+      "rediss://vector-rate-limit.example.apne1.cache.amazonaws.com:6379/0",
+    );
+    vi.stubEnv("REDIS_IAM_CACHE_NAME_RL", "vector-rate-limit");
+    vi.stubEnv("AWS_REGION", "ap-northeast-1");
+    const decision = await checkRateLimit(
+      plan({ key: "rl:ip:1.2.3.4", limit: 300 }),
+    );
+    expect(decision).toEqual({ allowed: true });
+    expect(createClient).not.toHaveBeenCalled();
+    const payload = warnPayload("frontend_rate_limit_redis_fail_open");
+    expect(payload).toMatchObject({
+      requestClass: "read",
+      errorType: "unconfigured",
+    });
+  });
+
+  it("REDIS_IAM_CACHE_NAME_RL 欠落の誤設定も同様に allow + unconfigured warn に倒す", async () => {
+    vi.stubEnv("REDIS_IAM_AUTH", "true");
+    vi.stubEnv(
+      "REDIS_URL_RL",
+      "rediss://vector_rl@vector-rate-limit.example.apne1.cache.amazonaws.com:6379/0",
+    );
+    vi.stubEnv("REDIS_IAM_CACHE_NAME_RL", "");
+    vi.stubEnv("AWS_REGION", "ap-northeast-1");
+    const decision = await checkRateLimit(
+      plan({ key: "rl:ip:1.2.3.4", limit: 300 }),
+    );
+    expect(decision).toEqual({ allowed: true });
+    expect(createClient).not.toHaveBeenCalled();
+    const payload = warnPayload("frontend_rate_limit_redis_fail_open");
+    expect(payload).toMatchObject({ errorType: "unconfigured" });
+  });
+
+  it("AWS_REGION 欠落の誤設定も同様に allow + unconfigured warn に倒す", async () => {
+    vi.stubEnv("REDIS_IAM_AUTH", "true");
+    vi.stubEnv(
+      "REDIS_URL_RL",
+      "rediss://vector_rl@vector-rate-limit.example.apne1.cache.amazonaws.com:6379/0",
+    );
+    vi.stubEnv("REDIS_IAM_CACHE_NAME_RL", "vector-rate-limit");
+    vi.stubEnv("AWS_REGION", "");
+    const decision = await checkRateLimit(
+      plan({ key: "rl:ip:1.2.3.4", limit: 300 }),
+    );
+    expect(decision).toEqual({ allowed: true });
+    expect(createClient).not.toHaveBeenCalled();
+    const payload = warnPayload("frontend_rate_limit_redis_fail_open");
+    expect(payload).toMatchObject({ errorType: "unconfigured" });
+  });
+
+  it("誤設定を2回起こしても misconfigured warn はプロセスごとに1回だけ、detail に診断が入る (unconfigured fail-open warn は従来どおり出続ける)", async () => {
+    vi.stubEnv("REDIS_IAM_AUTH", "true");
+    vi.stubEnv(
+      "REDIS_URL_RL",
+      "rediss://vector_rl@vector-rate-limit.example.apne1.cache.amazonaws.com:6379/0",
+    );
+    vi.stubEnv("REDIS_IAM_CACHE_NAME_RL", "");
+    vi.stubEnv("AWS_REGION", "ap-northeast-1");
+
+    await checkRateLimit(plan({ key: "rl:ip:1.2.3.4", limit: 300 }));
+    await checkRateLimit(plan({ key: "rl:ip:5.6.7.8", limit: 300 }));
+
+    const misconfigured = warnPayloads(
+      "frontend_rate_limit_redis_misconfigured",
+    );
+    expect(misconfigured).toHaveLength(1);
+    expect(String(misconfigured[0]?.detail)).toContain(
+      "REDIS_IAM_CACHE_NAME_RL",
+    );
+
+    const failOpen = warnPayloads("frontend_rate_limit_redis_fail_open");
+    expect(failOpen.length).toBeGreaterThanOrEqual(1);
+    expect(failOpen[0]).toMatchObject({ errorType: "unconfigured" });
   });
 });
 
