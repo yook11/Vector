@@ -2,7 +2,7 @@ import "server-only";
 
 import type { PoolClient } from "pg";
 import { Pool } from "pg";
-import { poolConfigFromUrl } from "@/lib/auth/pool-ssl";
+import { runtimePoolConfigFromUrl } from "@/lib/auth/db-iam-auth";
 import { requireEnv } from "@/lib/env";
 
 // Better Auth 用 pg.Pool。Pool 取得待ちと query を 5 秒で止め、
@@ -10,7 +10,8 @@ import { requireEnv } from "@/lib/env";
 // max=20 は frontend auth 用に明示し、backend pool と接続上限を分けて扱う。
 export const authPool = new Pool({
   // sslmode は pool-ssl.ts で Neon/dev docker に合わせて変換する。
-  ...poolConfigFromUrl(requireEnv("AUTH_DATABASE_URL")),
+  // DB_IAM_AUTH が有効なら password が接続ごとの IAM token 生成器になる。
+  ...runtimePoolConfigFromUrl(requireEnv("AUTH_DATABASE_URL")),
   max: 20,
   connectionTimeoutMillis: 5000,
   idleTimeoutMillis: 10_000,
