@@ -1,0 +1,81 @@
+name: AWS proxy image
+
+# egress proxy の image を ECR に push する。
+#
+# app image と分けているのは proxy が「アプリの段」ではなく「経路の装置」で、tag が
+# squid の version 基準で振られるため (infra/aws/proxy.tf の注記)。初回は
+# apply -> proxy push -> app push の順で、proxy が起動しないと全 egress が止まる。
+#
+# workflow_dispatch のみ。main の push で自動に走らせないのは、AWS 側がまだ検証中で
+# 「image が更新されたら勝手に何かが動く」状態を作らないため。
+
+on:
+  workflow_dispatch:
+
+# app-deploy role の trust は sub が repo:<owner>/<repo>:ref:refs/heads/main の完全一致
+# (infra/aws/bootstrap/oidc.tf)。**job に environment: を付けると sub が
+# environment:<name> に変わって assume が失敗する。**
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  push:
+    # task definition が ARM64 なので native arm64 runner で焼く (public repo は無料)。
+    # QEMU を挟むと build が数倍に伸びる。label が使えない場合だけ QEMU に落とす。
+    runs-on: ubuntu-24.04-arm
+
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      # region / repository 名 / tag の正本は Terraform 側。ここで持つと 2 箇所目に
+      # なるので読み出す。読めなければ黙って既定に落ちず失敗させる。
+      - id: tf
+        name: Read values from Terraform variables
+        run: |
+          set -euo pipefail
+          read_default() {
+            awk "/variable \"$1\"/,/^}/" infra/aws/variables.tf \
+              | sed -n 's/.*default *= *"\(.*\)".*/\1/p' | head -1
+          }
+          for name in region name_prefix proxy_image_tag; do
+            value=$(read_default "$name")
+            if [ -z "$value" ]; then
+              echo "::error::variables.tf の $name の default を読めなかった"
+              exit 1
+            fi
+            echo "$name=$value" >> "$GITHUB_OUTPUT"
+          done
+
+      - uses: aws-actions/configure-aws-credentials@e6de054238d6b7531b4efff3b6587d9aade6a06c # v6.2.3
+        with:
+          role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ steps.tf.outputs.region }}
+
+      # amazon-ecr-login action は使わない。registry は account id から組めるので、
+      # 新しい action を足す理由にならない。
+      - id: ecr
+        name: Log in to ECR
+        env:
+          AWS_REGION: ${{ steps.tf.outputs.region }}
+        run: |
+          set -euo pipefail
+          account=$(aws sts get-caller-identity --query Account --output text)
+          registry="${account}.dkr.ecr.${AWS_REGION}.amazonaws.com"
+          aws ecr get-login-password \
+            | docker login --username AWS --password-stdin "$registry"
+          echo "registry=$registry" >> "$GITHUB_OUTPUT"
+
+      # repository は IMMUTABLE なので、tag を上げ忘れた push はここで赤くなる。
+      # 上書きできないことが「動いている image が入れ替わらない」保証になっている。
+      - name: Build and push
+        env:
+          IMAGE: >-
+            ${{ steps.ecr.outputs.registry }}/${{ steps.tf.outputs.name_prefix }}/proxy:${{ steps.tf.outputs.proxy_image_tag }}
+        run: |
+          set -euo pipefail
+          # provenance を切る。attestation manifest は untagged image として ECR に増え、
+          # lifecycle policy が tagStatus: any で数えるので保持世代を食う。
+          docker build --provenance=false -t "$IMAGE" infra/squid
+          docker push "$IMAGE"
+          echo "pushed \`$IMAGE\`" >> "$GITHUB_STEP_SUMMARY"

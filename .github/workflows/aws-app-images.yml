@@ -1,0 +1,96 @@
+name: AWS app images
+
+# backend / frontend の image を ECR に push する。
+#
+# tag は commit SHA。repository が IMMUTABLE なので latest の上書きができず、deploy は
+# 毎回一意な tag になる (infra/aws/registry.tf の注記)。push した tag は job summary に
+# 出すので、apply 側は `terraform apply -var image_tag=<tag>` で受ける。
+#
+# ECS の rollout はまだ行わない。本番切替の前に「image が更新されたら service が
+# 入れ替わる」状態を作らないため。app-deploy role には EcsRollout があるので、切替を
+# 決めた時点で step を足す。
+#
+# workflow_dispatch のみ。main の push で自動に走らせないのは上と同じ理由。
+
+on:
+  workflow_dispatch:
+
+# app-deploy role の trust は sub が repo:<owner>/<repo>:ref:refs/heads/main の完全一致
+# (infra/aws/bootstrap/oidc.tf)。**job に environment: を付けると sub が
+# environment:<name> に変わって assume が失敗する。**
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  push:
+    # task definition が ARM64 なので native arm64 runner で焼く (public repo は無料)。
+    runs-on: ubuntu-24.04-arm
+
+    strategy:
+      # 片方が落ちてももう片方は焼き切る。proxy と違い app は 2 image 揃って初めて
+      # 意味を持つので、どちらが落ちたかを 1 回の run で見たい。
+      fail-fast: false
+      matrix:
+        include:
+          # backend は 1 image を 6 段が command 違いで起動する。
+          - image: backend
+            context: backend
+          - image: frontend
+            context: frontend
+
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      # region / repository 名の正本は Terraform 側。ここで持つと 2 箇所目になる。
+      - id: tf
+        name: Read values from Terraform variables
+        run: |
+          set -euo pipefail
+          read_default() {
+            awk "/variable \"$1\"/,/^}/" infra/aws/variables.tf \
+              | sed -n 's/.*default *= *"\(.*\)".*/\1/p' | head -1
+          }
+          for name in region name_prefix; do
+            value=$(read_default "$name")
+            if [ -z "$value" ]; then
+              echo "::error::variables.tf の $name の default を読めなかった"
+              exit 1
+            fi
+            echo "$name=$value" >> "$GITHUB_OUTPUT"
+          done
+
+      - uses: aws-actions/configure-aws-credentials@e6de054238d6b7531b4efff3b6587d9aade6a06c # v6.2.3
+        with:
+          role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ steps.tf.outputs.region }}
+
+      - id: ecr
+        name: Log in to ECR
+        env:
+          AWS_REGION: ${{ steps.tf.outputs.region }}
+        run: |
+          set -euo pipefail
+          account=$(aws sts get-caller-identity --query Account --output text)
+          registry="${account}.dkr.ecr.${AWS_REGION}.amazonaws.com"
+          aws ecr get-login-password \
+            | docker login --username AWS --password-stdin "$registry"
+          echo "registry=$registry" >> "$GITHUB_OUTPUT"
+
+      # frontend の build ARG は全て placeholder default 付きで、runtime の env が
+      # 上書きする。build 引数を渡さないので、secret が image に焼かれる経路が無い。
+      - name: Build and push
+        env:
+          IMAGE: >-
+            ${{ steps.ecr.outputs.registry }}/${{ steps.tf.outputs.name_prefix }}/${{ matrix.image }}:${{ github.sha }}
+        run: |
+          set -euo pipefail
+          # provenance を切る。attestation manifest は untagged image として ECR に増え、
+          # lifecycle policy が tagStatus: any で数えるので保持世代を食う。
+          docker build --provenance=false -t "$IMAGE" "${{ matrix.context }}"
+          docker push "$IMAGE"
+          {
+            echo "pushed \`$IMAGE\`"
+            echo ""
+            echo "apply 側は \`terraform apply -var image_tag=${{ github.sha }}\` で受ける。"
+          } >> "$GITHUB_STEP_SUMMARY"
