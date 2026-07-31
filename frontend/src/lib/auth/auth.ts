@@ -5,8 +5,7 @@ import { v7 as uuidv7 } from "uuid";
 import { authRateLimit, passwordPolicy } from "@/lib/auth/auth-config";
 import { authPool } from "@/lib/auth/auth-db";
 import { requireEnv } from "@/lib/env";
-
-const isProduction = process.env.NODE_ENV === "production";
+import { CLIENT_IP_HEADER } from "@/lib/proxy/identifier";
 
 export const auth = betterAuth({
   database: authPool,
@@ -38,16 +37,13 @@ export const auth = betterAuth({
   // customRules の path は normalizePathname で basePath strip 済 (`/api/auth` は含めない)。
   rateLimit: authRateLimit,
   advanced: {
-    // production では Fly Edge が付与する fly-client-ip だけを
-    // trusted source にする。
-    // 欠如時は Better Auth 側の IP rate-limit は skip されるが、
-    // proxy.ts 側でも IP 未解決は identity でなく経路異常として扱う
-    // (read/_rsc は fail-open、anon mutation のみ rl:uwrite:global で縛る / ADR-009)。
-    // dev/test は Fly Edge を経由しないため x-forwarded-for fallback を許可する。
+    // proxy.ts が信頼モード (CLIENT_IP_TRUST) で解決し必ず上書きする内部ヘッダ
+    // のみを読む。生ヘッダを直接読まないのは、解決を identifier.ts に一元化するためと、
+    // Better Auth は trustedProxies 無しだと複数値ヘッダを解決できないため。
+    // 欠如時は Better Auth が共有 per-path bucket へ fallback し、proxy.ts 側の
+    // missing_ip 信号で可視化される (specs/client-ip-trust-mode.md)。
     ipAddress: {
-      ipAddressHeaders: isProduction
-        ? ["fly-client-ip"]
-        : ["fly-client-ip", "x-forwarded-for"],
+      ipAddressHeaders: [CLIENT_IP_HEADER],
       disableIpTracking: false,
     },
     database: {

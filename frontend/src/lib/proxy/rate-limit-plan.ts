@@ -11,13 +11,13 @@
  * - 認証済 request は `rl:sess:<sha256(token)[:16]>` で sub-bucket を作るが、署名検証なしの
  *   session cookie を単独キーにすると偽造で無限バケット化するため、IP が解決できる限り
  *   `rl:ip:<ip>` ceiling を必ず併置する (two-tier-AND の forge-bypass backstop)。
- * - IP 未解決 (production で Fly-Client-IP 欠如) は identity でなく経路異常として扱う。
- *   read/`_rsc` は fail-open、anon mutation のみ最小限 `rl:uwrite:global` で縛る。
+ * - IP の解決は identifier.ts (信頼モード) の責務で、本モジュールは解決済みの
+ *   `clientIp` を受け取るだけ。IP 未解決 (production で信頼できる出所が無い) は
+ *   identity でなく経路異常として扱い、read/`_rsc` は fail-open、anon mutation のみ
+ *   最小限 `rl:uwrite:global` で縛る。
  *
  * 純度: I/O・時刻・乱数を持たない。`Date.now()` は eval 直前に rate-limit.ts が生成する。
  */
-
-import { extractClientIp } from "@/lib/proxy/identifier";
 
 export type RateLimitTier = { key: string; limit: number };
 
@@ -71,9 +71,7 @@ function identityDigest(identity: string): string {
 export type BuildSseRateLimitPlanArgs = {
   sessionIdentity: string | null;
   runId: string;
-  flyClientIp: string | null;
-  forwardedFor: string | null;
-  realIp: string | null;
+  clientIp: string | null;
   isProduction: boolean;
   limits?: SseRateLimitLimits;
 };
@@ -81,13 +79,10 @@ export type BuildSseRateLimitPlanArgs = {
 export function buildSseRateLimitPlan({
   sessionIdentity,
   runId,
-  flyClientIp,
-  forwardedFor,
-  realIp,
+  clientIp: ip,
   isProduction,
   limits = DEFAULT_SSE_LIMITS,
 }: BuildSseRateLimitPlanArgs): RateLimitPlan {
-  const ip = extractClientIp(flyClientIp, forwardedFor, realIp, isProduction);
   const tiers: RateLimitTier[] = [];
   if (sessionIdentity) {
     const identity = identityDigest(sessionIdentity);
@@ -112,6 +107,15 @@ export function isAgentRunSseRoute(pathname: string): boolean {
   return /^\/api\/research\/runs\/[^/]+\/events$/.test(pathname);
 }
 
+/**
+ * LB health checker の判定。health check は XFF 無しの正常経路なので、
+ * missing_ip 信号 (経路異常の検知) を恒常ノイズ化させないために除外する。
+ * rate limit 判定自体には使わない (観測の抑制のみ)。
+ */
+export function isHealthCheckerUserAgent(userAgent: string | null): boolean {
+  return userAgent?.startsWith("ELB-HealthChecker/") ?? false;
+}
+
 function isReadMethod(method: string): boolean {
   return method === "GET" || method === "HEAD" || method === "OPTIONS";
 }
@@ -119,9 +123,7 @@ function isReadMethod(method: string): boolean {
 export type BuildRateLimitPlanArgs = {
   method: string;
   hasRsc: boolean;
-  flyClientIp: string | null;
-  forwardedFor: string | null;
-  realIp: string | null;
+  clientIp: string | null;
   sessionToken: string | null;
   isProduction: boolean;
   limits: RateLimitLimits;
@@ -130,15 +132,12 @@ export type BuildRateLimitPlanArgs = {
 export function buildRateLimitPlan({
   method,
   hasRsc,
-  flyClientIp,
-  forwardedFor,
-  realIp,
+  clientIp: ip,
   sessionToken,
   isProduction,
   limits,
 }: BuildRateLimitPlanArgs): RateLimitPlan {
-  const ip = extractClientIp(flyClientIp, forwardedFor, realIp, isProduction);
-  // production で IP 未解決のときだけ観測信号を出す。dev は Fly Edge 非経由で
+  // production で IP 未解決のときだけ観測信号を出す。dev は trusted proxy 非経由で
   // IP 未解決が常態のため信号を出さない。
   const missingIpSignal: RateLimitSignal | undefined =
     isProduction && ip === null ? "missing_ip" : undefined;
