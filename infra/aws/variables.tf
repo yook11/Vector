@@ -80,6 +80,15 @@ variable "frontend_domain" {
   type        = string
 }
 
+variable "crossref_contact_email" {
+  description = <<-EOT
+    Crossref API の User-Agent に載せる連絡先 (backend Settings の必須項目)。
+    実際に使うのは fetch だけだが、Settings が構築時に全段で要求する。
+    公開 repo に実アドレスを置かないため default を持たず tfvars で渡す。
+  EOT
+  type        = string
+}
+
 variable "internal_namespace" {
   description = <<-EOT
     Cloud Map の private DNS namespace。

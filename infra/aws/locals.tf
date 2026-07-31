@@ -7,6 +7,11 @@ locals {
   #
   # 各列は「その段が実際に使うもの」であって「使いそうなもの」ではない。
   #
+  # 例外: secrets の bff-jwt-signing-secret / revalidate-bearer-secret は backend
+  # 全段に配る。実際に使うのは api / insights だが、Settings が構築時に必須と
+  # する契約のため (scheduler の DATABASE_URL と同じ「設定の契約が実使用より
+  # 広い」枠。Fly でも全段共有 app で同じ配布だった)。
+  #
   # - db_users: IAM DB auth で名乗れる Postgres ロール。**scheduler は空**。
   #   cron を発火するだけで DB engine を作らない (scheduler_entrypoint.py が
   #   is_scheduler_process=True で WORKER_STARTUP を立てず、lifecycle.py の
@@ -50,7 +55,9 @@ locals {
       cpu            = 256, memory = 512, port = null, singleton = true
       command        = ["supervisord", "-n", "-c", "/app/supervisord/scheduler.conf"]
       secrets = {
-        LOGFIRE_TOKEN = "logfire-token"
+        BFF_JWT_SIGNING_SECRET   = "bff-jwt-signing-secret"
+        REVALIDATE_BEARER_SECRET = "revalidate-bearer-secret"
+        LOGFIRE_TOKEN            = "logfire-token"
       }
     }
     fetch = {
@@ -60,7 +67,9 @@ locals {
       cpu            = 256, memory = 1024, port = null, singleton = false
       command        = ["supervisord", "-n", "-c", "/app/supervisord/fetch.conf"]
       secrets = {
-        LOGFIRE_TOKEN = "logfire-token"
+        BFF_JWT_SIGNING_SECRET   = "bff-jwt-signing-secret"
+        REVALIDATE_BEARER_SECRET = "revalidate-bearer-secret"
+        LOGFIRE_TOKEN            = "logfire-token"
       }
     }
     analysis = {
@@ -70,9 +79,11 @@ locals {
       cpu            = 256, memory = 2048, port = null, singleton = false
       command        = ["supervisord", "-n", "-c", "/app/supervisord/analysis.conf"]
       secrets = {
-        GEMINI_API_KEY   = "gemini-api-key"
-        DEEPSEEK_API_KEY = "deepseek-api-key"
-        LOGFIRE_TOKEN    = "logfire-token"
+        GEMINI_API_KEY           = "gemini-api-key"
+        DEEPSEEK_API_KEY         = "deepseek-api-key"
+        BFF_JWT_SIGNING_SECRET   = "bff-jwt-signing-secret"
+        REVALIDATE_BEARER_SECRET = "revalidate-bearer-secret"
+        LOGFIRE_TOKEN            = "logfire-token"
       }
     }
     insights = {
@@ -83,6 +94,7 @@ locals {
       command        = ["supervisord", "-n", "-c", "/app/supervisord/insights.conf"]
       secrets = {
         DEEPSEEK_API_KEY         = "deepseek-api-key"
+        BFF_JWT_SIGNING_SECRET   = "bff-jwt-signing-secret"
         REVALIDATE_BEARER_SECRET = "revalidate-bearer-secret"
         LOGFIRE_TOKEN            = "logfire-token"
       }
@@ -94,10 +106,12 @@ locals {
       cpu            = 256, memory = 1024, port = null, singleton = false
       command        = ["supervisord", "-n", "-c", "/app/supervisord/agent.conf"]
       secrets = {
-        GEMINI_API_KEY   = "gemini-api-key"
-        DEEPSEEK_API_KEY = "deepseek-api-key"
-        TAVILY_API_KEY   = "tavily-api-key"
-        LOGFIRE_TOKEN    = "logfire-token"
+        GEMINI_API_KEY           = "gemini-api-key"
+        DEEPSEEK_API_KEY         = "deepseek-api-key"
+        TAVILY_API_KEY           = "tavily-api-key"
+        BFF_JWT_SIGNING_SECRET   = "bff-jwt-signing-secret"
+        REVALIDATE_BEARER_SECRET = "revalidate-bearer-secret"
+        LOGFIRE_TOKEN            = "logfire-token"
       }
     }
   }
