@@ -3,9 +3,9 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Literal, Protocol, Self
+from typing import Protocol
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field
 
 from app.agent.answering.contract import AnsweringRequest
 from app.agent.answering.evidence_answer.evidence import AnswerEvidenceItem
@@ -14,15 +14,12 @@ from app.agent.planning.contract import TargetTimeWindow
 
 __all__ = [
     "EvidenceAnswerDraft",
-    "EvidenceAnswerDraftGenerationInvalidError",
     "EvidenceAnswerDraftInvalidError",
     "EvidenceAnswerInput",
+    "EvidenceAnswerOutcome",
     "EvidenceAnswerer",
-    "EvidenceAnswerSufficiency",
-    "RawEvidenceAnswerDraft",
+    "EvidenceAnswerUnavailable",
 ]
-
-EvidenceAnswerSufficiency = Literal["answered", "insufficient"]
 
 
 @dataclass(frozen=True, slots=True)
@@ -33,55 +30,35 @@ class EvidenceAnswerInput:
     evidence: tuple[AnswerEvidenceItem, ...]
     target_time_window: TargetTimeWindow | None
     previous_error: str | None = None
-
-
-class EvidenceAnswerDraftGenerationInvalidError(ValueError):
-    """LLM response envelope が raw draft として消化できない。"""
-
-    def __init__(self, defect_code: str) -> None:
-        self.defect_code = defect_code
-        super().__init__(defect_code)
+    previous_output_truncated: bool = False
+    review_missing: tuple[str, ...] = ()
 
 
 class EvidenceAnswerDraft(BaseModel):
-    """Evidence 回答工程 (LLM) の出力 draft。"""
+    """Evidence 回答工程 (LLM) の出力 draft。本文と算出済みcited_refsだけを持つ。"""
 
     model_config = ConfigDict(frozen=True)
 
-    sufficiency: EvidenceAnswerSufficiency
     answer: NonBlankText
     cited_refs: list[str] = Field(default_factory=list)
-    missing_aspects: list[NonBlankText] = Field(default_factory=list)
-    unfulfilled_requirement_ids: list[str] = Field(default_factory=list)
-
-    @model_validator(mode="after")
-    def _validate_sufficiency_contract(self) -> Self:
-        if self.sufficiency == "answered":
-            if self.missing_aspects:
-                raise ValueError("answered draft cannot include missing aspects")
-            if not self.cited_refs:
-                raise ValueError("answered draft requires at least one citation")
-        if self.sufficiency == "insufficient" and not self.missing_aspects:
-            raise ValueError("insufficient draft must include missing aspects")
-        return self
 
 
-class RawEvidenceAnswerDraft(BaseModel):
-    """LLM adapter boundary の lenient evidence answer draft。"""
+class EvidenceAnswerUnavailable(BaseModel):
+    """生成が尽きた結果。回答draftとは別の型で表す。
+
+    ユーザーへ見せる定型本文とmissing_aspectsの1行はresult_assemblyが所有する。
+    """
 
     model_config = ConfigDict(frozen=True)
 
-    sufficiency: object | None = None
-    answer: object | None = None
-    cited_refs: list[object] = Field(default_factory=list)
-    missing_aspects: list[object] = Field(default_factory=list)
-    unfulfilled_requirement_ids: list[object] = Field(default_factory=list)
+    failure_code: NonBlankText
+
+
+EvidenceAnswerOutcome = EvidenceAnswerDraft | EvidenceAnswerUnavailable
 
 
 class EvidenceAnswerer(Protocol):
-    """markerとcited refsが整合し、unfulfilled_requirement_idsが
-    request contextの入力requirement IDの部分集合であるdraftを返す。
-    """
+    """本文とcited refsが整合するdraft、または生成不能を返す。"""
 
     async def answer(
         self,
@@ -89,7 +66,8 @@ class EvidenceAnswerer(Protocol):
         request: AnsweringRequest,
         evidence: list[AnswerEvidenceItem],
         target_time_window: TargetTimeWindow | None,
-    ) -> EvidenceAnswerDraft: ...
+        review_missing: tuple[str, ...],
+    ) -> EvidenceAnswerOutcome: ...
 
 
 class EvidenceAnswerDraftInvalidError(Exception):

@@ -23,11 +23,18 @@ from opentelemetry.trace import (
 
 import app.agent.runtime.gemini as gemini_runtime_module
 import app.analysis.ai_provider_errors as ai_provider_errors
+import app.analysis.gemini_error_translator as gemini_error_translator_module
 from app.agent.runtime.gemini import GeminiAgentRuntime
 from app.analysis.ai_provider_errors import (
+    AIProviderFailureMode,
     AIProviderInputRejectedError,
     AIProviderNetworkError,
     AIProviderOutputBlockedError,
+    AIProviderStateError,
+)
+from app.analysis.gemini_error_translator import (
+    GeminiContentRejectionReason,
+    GeminiStateReason,
 )
 from tests.agent.runtime._deepseek_helpers import (
     FakeDeepSeekClient,
@@ -443,13 +450,24 @@ async def test_prompt_block_records_usage_then_classified_error_and_closes_once(
 
 
 @pytest.mark.parametrize(
-    ("finish_reason", "expected_kind_name"),
-    [("SAFETY", "SAFETY"), ("RECITATION", "OTHER")],
+    ("finish_reason", "expected_kind_name", "expected_reason"),
+    [
+        ("SAFETY", "SAFETY", GeminiContentRejectionReason.SAFETY),
+        ("RECITATION", "OTHER", GeminiContentRejectionReason.RECITATION),
+        ("BLOCKLIST", "OTHER", GeminiContentRejectionReason.BLOCKLIST),
+        (
+            "PROHIBITED_CONTENT",
+            "OTHER",
+            GeminiContentRejectionReason.PROHIBITED_CONTENT,
+        ),
+        ("SPII", "OTHER", GeminiContentRejectionReason.SPII),
+    ],
 )
 async def test_blocked_finish_reason_records_blocked_outcome_without_event(
     monkeypatch: pytest.MonkeyPatch,
     finish_reason: str,
     expected_kind_name: str,
+    expected_reason: GeminiContentRejectionReason,
 ) -> None:
     tracer = FakeTracer()
     monkeypatch.setattr(gemini_runtime_module, "_TRACER", tracer)
@@ -468,6 +486,7 @@ async def test_blocked_finish_reason_records_blocked_outcome_without_event(
             )
         ]
 
+    assert exc_info.value.reason is expected_reason
     assert exc_info.value.rejection_kind is getattr(  # type: ignore[attr-defined]
         _content_rejection_kind_type(),
         expected_kind_name,
@@ -476,6 +495,99 @@ async def test_blocked_finish_reason_records_blocked_outcome_without_event(
     assert span.attributes["result"] == "blocked"
     assert span.status_code is StatusCode.ERROR
     assert span.exception_events == []
+    assert sdk_stream.close_calls == 1
+    assert span.end_calls == 1
+
+
+def test_output_blocked_finish_reasons_matches_content_rejection_mapping_keys() -> None:
+    """blocked-set と finish_reason→reason写像のkeyが構造的に一致する。
+
+    5個の finish_reason 文字列をここへ複製すると、写像側だけを更新した際に
+    テストが検知できず「片方に足すと他方が食い違う」状態を許してしまう。
+    両者を直接比較することで、写像 (``_FINISH_REASON_TO_CONTENT_REASON``) が
+    唯一の SSoT であることを保証する。
+    """
+    blocked_finish_reasons = getattr(
+        gemini_error_translator_module,
+        "OUTPUT_BLOCKED_FINISH_REASONS",
+        None,
+    )
+    assert isinstance(blocked_finish_reasons, frozenset)
+    mapping_keys = frozenset(
+        gemini_error_translator_module._FINISH_REASON_TO_CONTENT_REASON
+    )
+    assert blocked_finish_reasons == mapping_keys
+
+
+async def test_max_tokens_finish_reason_raises_classified_truncation_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    tracer = FakeTracer()
+    monkeypatch.setattr(gemini_runtime_module, "_TRACER", tracer)
+    sdk_stream = FakeSdkStream([_stream_chunk(finish_reason="MAX_TOKENS")])
+    runtime = GeminiAgentRuntime(
+        client=cast(AsyncClient, FakeGeminiClient([], streams=[sdk_stream]))
+    )
+
+    with pytest.raises(AIProviderStateError) as exc_info:
+        _ = [
+            fragment
+            async for fragment in runtime.invoke_stream(
+                make_agent(response_schema=None),
+                "typed input",
+                attempt_number=1,
+            )
+        ]
+
+    error = exc_info.value
+    assert not isinstance(error, AIProviderOutputBlockedError)
+    assert error.CODE == "ai_error_output_truncated"
+    assert error.FAILURE_MODE is AIProviderFailureMode.ATTEMPT_SCOPED
+    assert isinstance(error.reason, GeminiStateReason)
+    assert error.reason.value == "output_token_limit_reached"
+
+    span = tracer.spans[0]
+    assert span.attributes["result"] == "provider_error"
+    assert span.status_code is StatusCode.ERROR
+    assert sdk_stream.close_calls == 1
+    assert span.end_calls == 1
+
+
+async def test_max_tokens_after_partial_fragment_yield_still_raises_classified_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """途中まで fragment を受け取った後でも打ち切りは分類済み error になる。"""
+    tracer = FakeTracer()
+    monkeypatch.setattr(gemini_runtime_module, "_TRACER", tracer)
+    sdk_stream = FakeSdkStream(
+        [
+            _stream_chunk(text="partial answer"),
+            _stream_chunk(text=None, finish_reason="MAX_TOKENS"),
+        ]
+    )
+    runtime = GeminiAgentRuntime(
+        client=cast(AsyncClient, FakeGeminiClient([], streams=[sdk_stream]))
+    )
+
+    fragments: list[str] = []
+    with pytest.raises(AIProviderStateError) as exc_info:
+        async for fragment in runtime.invoke_stream(
+            make_agent(response_schema=None),
+            "typed input",
+            attempt_number=1,
+        ):
+            fragments.append(fragment)
+
+    assert fragments == ["partial answer"]
+    error = exc_info.value
+    assert not isinstance(error, AIProviderOutputBlockedError)
+    assert error.CODE == "ai_error_output_truncated"
+    assert error.FAILURE_MODE is AIProviderFailureMode.ATTEMPT_SCOPED
+    assert isinstance(error.reason, GeminiStateReason)
+    assert error.reason.value == "output_token_limit_reached"
+
+    span = tracer.spans[0]
+    assert span.attributes["result"] == "provider_error"
     assert sdk_stream.close_calls == 1
     assert span.end_calls == 1
 
@@ -490,7 +602,7 @@ async def test_stream_without_terminal_reason_is_truncated_and_closed_once(
         client=cast(AsyncClient, FakeGeminiClient([], streams=[sdk_stream]))
     )
 
-    with pytest.raises(AIProviderNetworkError):
+    with pytest.raises(AIProviderNetworkError) as exc_info:
         _ = [
             fragment
             async for fragment in runtime.invoke_stream(
@@ -500,6 +612,7 @@ async def test_stream_without_terminal_reason_is_truncated_and_closed_once(
             )
         ]
 
+    assert exc_info.value.reason is GeminiStateReason.STREAM_TRUNCATED
     span = tracer.spans[0]
     assert span.attributes["result"] == "provider_error"
     assert span.status_code is StatusCode.ERROR

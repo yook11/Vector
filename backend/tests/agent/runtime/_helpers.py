@@ -155,3 +155,28 @@ def blocked_response(
         ],
         usage_metadata=usage_metadata,
     )
+
+
+def finished_response(
+    finish_reason_name: str,
+    *,
+    result: str = "accepted",
+    tags: list[str] | None = None,
+    usage_metadata: object | None = None,
+) -> FakeResponse:
+    """schemaに完全に妥当なJSONを持ちながら、任意のfinish_reasonで終端したresponse。
+
+    R1: JSONがたまたま妥当でも、finish_reason分類がそれより優先されることを
+    検証するためのfixture (blocked_responseは非JSON本文のため使えない)。
+    """
+    return FakeResponse(
+        text=json.dumps(
+            {"result": result, "tags": ["runtime"] if tags is None else tags}
+        ),
+        candidates=[
+            SimpleNamespace(
+                finish_reason=SimpleNamespace(name=finish_reason_name),
+            )
+        ],
+        usage_metadata=usage_metadata,
+    )

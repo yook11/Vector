@@ -20,6 +20,7 @@ from app.analysis.ai_provider_errors import (
     AIProviderInsufficientBalanceError,
     AIProviderNetworkError,
     AIProviderOutputBlockedError,
+    AIProviderOutputTruncatedError,
     AIProviderRateLimitedError,
     AIProviderRequestInvalidError,
     AIProviderServiceUnavailableError,
@@ -57,6 +58,7 @@ _FAILED_CASES = (
     AIProviderRequestInvalidError,
     AIProviderInputRejectedError,
     AIProviderOutputBlockedError,
+    AIProviderOutputTruncatedError,
 )
 
 

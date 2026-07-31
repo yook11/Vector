@@ -84,6 +84,7 @@ class GeminiStateReason(StrEnum):
     EMPTY_EMBEDDINGS = "empty_embeddings"
     MISSING_VALUES = "missing_values"
     EMBEDDING_COUNT_MISMATCH = "embedding_count_mismatch"
+    OUTPUT_TOKEN_LIMIT_REACHED = "output_token_limit_reached"  # noqa: S105
 
 
 # finish_reason 名 → content 拒否 reason。出力ブロックを検知した adapter が、
@@ -95,6 +96,13 @@ _FINISH_REASON_TO_CONTENT_REASON: dict[str, GeminiContentRejectionReason] = {
     "PROHIBITED_CONTENT": GeminiContentRejectionReason.PROHIBITED_CONTENT,
     "SPII": GeminiContentRejectionReason.SPII,
 }
+
+# 出力ブロックとして扱う finish_reason 名の SSoT。呼び出し側 (adapter) はこの
+# 集合で先に絞ってから ``output_blocked_reason`` を引く。写像の key から導出し、
+# 両者が食い違う状態 (片方だけ更新) を構造的に作れなくする。
+OUTPUT_BLOCKED_FINISH_REASONS: frozenset[str] = frozenset(
+    _FINISH_REASON_TO_CONTENT_REASON
+)
 
 
 # gRPC status → configuration reason。``configuration`` CODE に畳まれる複数状態を

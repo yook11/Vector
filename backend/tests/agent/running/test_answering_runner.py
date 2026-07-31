@@ -312,10 +312,11 @@ class _UnreachableEvidenceAnswerer:
         request: AnsweringRequest,
         evidence: list[object],
         target_time_window: TargetTimeWindow | None,
+        review_missing: tuple[str, ...] = (),
     ) -> EvidenceAnswerDraft:
         raise AssertionError(
             f"evidence answerer must not be called: {request!r} {evidence!r} "
-            f"{target_time_window!r}"
+            f"{target_time_window!r} {review_missing!r}"
         )
 
 

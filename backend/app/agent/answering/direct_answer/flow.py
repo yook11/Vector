@@ -38,7 +38,10 @@ from app.agent.runtime.contract import (
     StreamingAgentRuntime,
     StreamingAgentRuntimeScopeFactory,
 )
-from app.analysis.ai_provider_errors import AIProviderError
+from app.analysis.ai_provider_errors import (
+    AIProviderError,
+    AIProviderOutputTruncatedError,
+)
 
 __all__ = ["DirectAnswerFlow"]
 
@@ -78,6 +81,7 @@ class DirectAnswerFlow:
         with _direct_answer_phase(self._agent.name):
             async with self._runtime_scope_factory() as runtime:
                 previous_error: str | None = None
+                previous_output_truncated = False
 
                 for attempt_number in range(1, _MAX_ATTEMPTS + 1):
                     try:
@@ -86,6 +90,7 @@ class DirectAnswerFlow:
                             request=request,
                             previous_answer=previous_answer,
                             previous_error=previous_error,
+                            previous_output_truncated=previous_output_truncated,
                             attempt_number=attempt_number,
                         )
                     except _DIRECT_ANSWER_FAILURES as exc:
@@ -103,6 +108,9 @@ class DirectAnswerFlow:
                             )
                             raise
                         previous_error = str(exc)
+                        previous_output_truncated = isinstance(
+                            exc, AIProviderOutputTruncatedError
+                        )
                         continue
 
                     record_direct_answer_outcome(
@@ -120,6 +128,7 @@ class DirectAnswerFlow:
         request: AnsweringRequest,
         previous_answer: str,
         previous_error: str | None,
+        previous_output_truncated: bool,
         attempt_number: int,
     ) -> DirectAnswerDraft:
         stream: AgentTextStream | None = None
@@ -137,6 +146,7 @@ class DirectAnswerFlow:
                         request=request,
                         previous_answer=previous_answer,
                         previous_error=previous_error,
+                        previous_output_truncated=previous_output_truncated,
                     ),
                     attempt_number=attempt_number,
                 )

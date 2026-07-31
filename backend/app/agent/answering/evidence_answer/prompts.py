@@ -10,20 +10,20 @@ from app.agent.answering.evidence_answer.evidence import AnswerEvidenceItem
 from app.agent.planning.contract import render_target_time_window
 from app.analysis.prompt_safety import sanitize_for_untrusted_block
 
-EVIDENCE_ANSWER_PROMPT_VERSION: Final[str] = "v3"
+EVIDENCE_ANSWER_PROMPT_VERSION: Final[str] = "v6"
 
 EVIDENCE_ANSWER_INSTRUCTIONS: Final[str] = """# 役割
 
 QuestionContextに記録されたユーザーの質問と要望に、日本語で回答してください。
 回答の目的はevidenceの紹介ではなく、ユーザーが知りたいことへ直接答えることです。
+ここで生成する本文がそのままユーザーへの回答として表示されます。
 
 # 回答方針
 
 - standalone_questionを回答の中心にする。
 - content_requirementsは、回答で扱うべき内容としてすべて確認する。
 - response_requirementsは、文体・構成・形式の指定として回答全体に適用する。
-- requirement IDと内部評価はanswerに表示せず、
-  未達IDはunfulfilled_requirement_idsに記録する。
+- requirement IDや内部評価はanswerに表示しない。
 - 事実は、与えられたevidenceだけを根拠にする。
 - evidenceを情報源ごとに列挙せず、質問に沿って整理・統合する。
 - 確認できる事実と、そこから導く推論や見通しを区別する。
@@ -89,9 +89,26 @@ EVIDENCE_ANSWER_REPAIR_TEMPLATE: Final[str] = """
 </untrusted_input>
 """
 
+# runtimeが観測した機械的事実であり、model出力由来ではないためtrusted (sanitize不要)。
+_TRUNCATION_REPAIR_BLOCK: Final[str] = """
+
+# Output Length
+前回の生成は文字数上限に達して途中で打ち切られました。
+今回は上限内に収まる長さで、要点を絞って最初から結論まで書き切ってください。
+"""
+
+# 精査工程からの生成物であり信頼済みテキストではないため、項目ごとに
+# <untrusted_input>境界の内側へ置く(runtime観測のTRUNCATION_REPAIR_BLOCKとは逆)。
+_REVIEW_MISSING_TEMPLATE: Final[str] = """
+
+# Review Notes
+以下は今回の調査で確認できなかった点です。回答でこの点に触れられる場合は言及してください。
+
+{items}
+"""
+
 _NO_EVIDENCE_BLOCK: Final[str] = (
-    "引用できる evidence は 0 件です。cited_refs は空にし、"
-    "sufficiency は insufficient にしてください。citation marker を書かないでください。"
+    "引用できる evidence は 0 件です。citation marker を書かないでください。"
 )
 
 
@@ -118,10 +135,29 @@ def render_evidence_answer_input(input: EvidenceAnswerInput) -> str:
         ),
         active_goal=sanitize_for_untrusted_block(request.context.active_goal),
     )
-    if input.previous_error is None:
-        return rendered
-    return rendered + EVIDENCE_ANSWER_REPAIR_TEMPLATE.format(
-        previous_error=sanitize_for_untrusted_block(input.previous_error)
+    if input.review_missing:
+        rendered += _REVIEW_MISSING_TEMPLATE.format(
+            items=_render_review_missing(input.review_missing)
+        )
+    if input.previous_output_truncated:
+        rendered += _TRUNCATION_REPAIR_BLOCK
+    if input.previous_error is not None:
+        rendered += EVIDENCE_ANSWER_REPAIR_TEMPLATE.format(
+            previous_error=sanitize_for_untrusted_block(input.previous_error)
+        )
+    return rendered
+
+
+def _render_review_missing(review_missing: tuple[str, ...]) -> str:
+    return "\n".join(
+        "\n".join(
+            [
+                "<untrusted_input>",
+                sanitize_for_untrusted_block(item),
+                "</untrusted_input>",
+            ]
+        )
+        for item in review_missing
     )
 
 

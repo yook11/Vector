@@ -7,6 +7,8 @@ from typing import Literal
 from app.agent.answering.evidence_answer.contract import (
     EvidenceAnswerDraft,
     EvidenceAnswerDraftInvalidError,
+    EvidenceAnswerOutcome,
+    EvidenceAnswerUnavailable,
 )
 from app.agent.answering.evidence_answer.evidence import AnswerEvidenceItem
 from app.agent.contract import (
@@ -16,46 +18,47 @@ from app.agent.contract import (
 )
 from app.agent.evidence_collection import EvidenceCollectionOutcome
 from app.agent.planning.contract import SearchPlan
-from app.agent.question_context.contract import QuestionContext
 
 __all__ = ["assemble_evidence_result"]
 
 _RETRIEVAL_EMPTY_MISSING = "回答に使える根拠を取得できませんでした"
-_REQUIREMENT_MISSING_PREFIX = "回答要望を満たせませんでした: "
 _INCOMPLETE_TASK_MISSING = "完了できなかった調査があります"
 _EXTERNAL_TASK_STATUS_MISSING = {
     "time_filter_failed": "指定された公開期間を外部検索へ適用できませんでした",
 }
+_UNAVAILABLE_ANSWER = (
+    "回答を生成できませんでした。根拠の不足または応答形式の不備により、"
+    "参考回答を安全に構築できませんでした。"
+)
+_UNAVAILABLE_MISSING = "回答生成に必要な根拠または応答形式が不足しました"
 
 
 def assemble_evidence_result(
     *,
-    context: QuestionContext,
     plan: SearchPlan,
     outcome: EvidenceCollectionOutcome,
     evidence: list[AnswerEvidenceItem],
-    draft: EvidenceAnswerDraft,
+    answer_outcome: EvidenceAnswerOutcome,
 ) -> AnswerQuestionResult:
+    if isinstance(answer_outcome, EvidenceAnswerUnavailable):
+        return _assemble_evidence_result(
+            plan=plan,
+            outcome=outcome,
+            answer=_UNAVAILABLE_ANSWER,
+            sources=[],
+            unavailable_missing=[_UNAVAILABLE_MISSING],
+            include_retrieval_empty_missing=(not evidence),
+        )
+
+    draft = answer_outcome
     _validate_draft_citations(evidence=evidence, draft=draft)
-    requirement_missing_aspects = _unfulfilled_requirement_missing_aspects(
-        context=context,
-        requirement_ids=draft.unfulfilled_requirement_ids,
-    )
     sources = _sources_for_citations(evidence=evidence, cited_refs=draft.cited_refs)
-    all_external_tasks_time_filter_failed = _all_external_tasks_time_filter_failed(
-        outcome
-    )
     return _assemble_evidence_result(
         plan=plan,
         outcome=outcome,
         answer=draft.answer,
         sources=sources,
-        draft_missing_aspects=(
-            []
-            if not evidence and all_external_tasks_time_filter_failed
-            else draft.missing_aspects
-        ),
-        requirement_missing_aspects=requirement_missing_aspects,
+        unavailable_missing=[],
         include_retrieval_empty_missing=(not evidence),
     )
 
@@ -73,27 +76,6 @@ def _validate_draft_citations(
         )
 
 
-def _unfulfilled_requirement_missing_aspects(
-    *,
-    context: QuestionContext,
-    requirement_ids: list[str],
-) -> list[str]:
-    requirements = [
-        *context.content_requirements,
-        *context.response_requirements,
-    ]
-    known_ids = {requirement.requirement_id for requirement in requirements}
-    if any(requirement_id not in known_ids for requirement_id in requirement_ids):
-        raise EvidenceAnswerDraftInvalidError("unknown unfulfilled requirement id")
-
-    unfulfilled_ids = set(requirement_ids)
-    return [
-        f"{_REQUIREMENT_MISSING_PREFIX}{requirement.description}"
-        for requirement in requirements
-        if requirement.requirement_id in unfulfilled_ids
-    ]
-
-
 def _sources_for_citations(
     *,
     evidence: list[AnswerEvidenceItem],
@@ -109,14 +91,12 @@ def _assemble_evidence_result(
     outcome: EvidenceCollectionOutcome,
     answer: str,
     sources: list[AnswerSource],
-    draft_missing_aspects: list[str],
-    requirement_missing_aspects: list[str],
+    unavailable_missing: list[str],
     include_retrieval_empty_missing: bool,
 ) -> AnswerQuestionResult:
     missing_aspects = _missing_aspects(
         outcome=outcome,
-        draft_missing_aspects=draft_missing_aspects,
-        requirement_missing_aspects=requirement_missing_aspects,
+        unavailable_missing=unavailable_missing,
         include_retrieval_empty_missing=include_retrieval_empty_missing,
     )
     status = _derive_evidence_status(sources=sources, missing_aspects=missing_aspects)
@@ -145,8 +125,7 @@ def _derive_evidence_status(
 def _missing_aspects(
     *,
     outcome: EvidenceCollectionOutcome,
-    draft_missing_aspects: list[str],
-    requirement_missing_aspects: list[str],
+    unavailable_missing: list[str],
     include_retrieval_empty_missing: bool,
 ) -> list[str]:
     values: list[str] = []
@@ -156,8 +135,7 @@ def _missing_aspects(
         values.append(_INCOMPLETE_TASK_MISSING)
     values.extend(_external_task_status_missing(outcome))
     values.extend(outcome.review.missing)
-    values.extend(draft_missing_aspects)
-    values.extend(requirement_missing_aspects)
+    values.extend(unavailable_missing)
     return _deduplicate(values)
 
 
@@ -185,15 +163,6 @@ def _external_task_status_missing(outcome: EvidenceCollectionOutcome) -> list[st
         if status_missing is not None:
             missing.append(status_missing)
     return missing
-
-
-def _all_external_tasks_time_filter_failed(
-    outcome: EvidenceCollectionOutcome,
-) -> bool:
-    return bool(outcome.task_reports) and all(
-        report.external_collection == "time_filter_failed"
-        for report in outcome.task_reports
-    )
 
 
 def _deduplicate(values: list[str]) -> list[str]:

@@ -17,6 +17,7 @@ from app.analysis.ai_provider_errors import (
     AIProviderInsufficientBalanceError,
     AIProviderNetworkError,
     AIProviderOutputBlockedError,
+    AIProviderOutputTruncatedError,
     AIProviderRateLimitedError,
     AIProviderRequestInvalidError,
     AIProviderServiceUnavailableError,
@@ -38,6 +39,7 @@ _FAILED_PROVIDER_ERRORS: tuple[type[AIProviderError], ...] = (
     AIProviderRequestInvalidError,
     AIProviderInputRejectedError,
     AIProviderOutputBlockedError,
+    AIProviderOutputTruncatedError,
 )
 
 

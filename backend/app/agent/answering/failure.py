@@ -8,6 +8,7 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from app.analysis.ai_provider_errors import (
     AIProviderContentError,
+    AIProviderOutputTruncatedError,
     AIProviderStateError,
 )
 
@@ -51,10 +52,18 @@ def classify_answer_synthesis_failure(
     """Map answer-synthesis-boundary failures to request-local failure attributes."""
 
     from app.agent.answering.evidence_answer.contract import (
-        EvidenceAnswerDraftGenerationInvalidError,
         EvidenceAnswerDraftInvalidError,
     )
 
+    # 打ち切りだけはrequest内でretryする。同じ入力でも書き方次第で収まるため。
+    # AIProviderStateErrorのsubclassなので、下の分岐より先に判定する必要がある。
+    if isinstance(exc, AIProviderOutputTruncatedError):
+        return AnswerSynthesisFailureAttributes(
+            code=exc.CODE,
+            failure_kind=exc.FAILURE_MODE.value,
+            failure_reason=exc.reason.value if exc.reason is not None else None,
+            request_retry_disposition=RequestRetryDisposition.RETRY_IN_REQUEST,
+        )
     # FAILURE_MODE を持つのは State/Content の2系統のみ (裸の基底は unknown へ落とす)。
     if isinstance(exc, AIProviderStateError | AIProviderContentError):
         return AnswerSynthesisFailureAttributes(
@@ -62,13 +71,6 @@ def classify_answer_synthesis_failure(
             failure_kind=exc.FAILURE_MODE.value,
             failure_reason=exc.reason.value if exc.reason is not None else None,
             request_retry_disposition=(RequestRetryDisposition.DO_NOT_RETRY_IN_REQUEST),
-        )
-    if isinstance(exc, EvidenceAnswerDraftGenerationInvalidError):
-        return AnswerSynthesisFailureAttributes(
-            code=exc.defect_code,
-            failure_kind="ai_response_invalid",
-            failure_reason=exc.defect_code,
-            request_retry_disposition=RequestRetryDisposition.RETRY_IN_REQUEST,
         )
     if isinstance(exc, EvidenceAnswerDraftInvalidError):
         return AnswerSynthesisFailureAttributes(
@@ -99,6 +101,15 @@ def classify_direct_answer_failure(
 
     from app.agent.answering.direct_answer.contract import DirectAnswerInvalidError
 
+    # 打ち切りだけはrequest内でretryする。同じ入力でも書き方次第で収まるため。
+    # AIProviderStateErrorのsubclassなので、下の分岐より先に判定する必要がある。
+    if isinstance(exc, AIProviderOutputTruncatedError):
+        return DirectAnswerFailureAttributes(
+            code=exc.CODE,
+            failure_kind=exc.FAILURE_MODE.value,
+            failure_reason=exc.reason.value if exc.reason is not None else None,
+            request_retry_disposition=RequestRetryDisposition.RETRY_IN_REQUEST,
+        )
     # FAILURE_MODE を持つのは State/Content の2系統のみ (裸の基底は unknown へ落とす)。
     if isinstance(exc, AIProviderStateError | AIProviderContentError):
         return DirectAnswerFailureAttributes(

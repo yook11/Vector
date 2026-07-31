@@ -11,7 +11,10 @@ import pytest
 import app.agent.planning.contract as planning_contract
 from app.agent.answering.contract import AnsweringRequest
 from app.agent.answering.direct_answer.contract import DirectAnswerDraft
-from app.agent.answering.evidence_answer.contract import EvidenceAnswerDraft
+from app.agent.answering.evidence_answer.contract import (
+    EvidenceAnswerOutcome,
+    EvidenceAnswerUnavailable,
+)
 from app.agent.evidence_collection import Researcher
 from app.agent.evidence_collection.evidence_review import EvidenceReviewer
 from app.agent.evidence_collection.external_search import ExternalResearchRuntime
@@ -170,7 +173,12 @@ class _EvidenceAnswerer:
         request: AnsweringRequest,
         evidence: list[object],
         target_time_window: TargetTimeWindow | None,
-    ) -> EvidenceAnswerDraft:
+        review_missing: tuple[str, ...] = (),
+    ) -> EvidenceAnswerOutcome:
+        # S5: review_missingの受け渡し検証はtests/agent/running/
+        # test_retrieval_dispatch.pyが正本(条件7)。このfakeはworkflowの
+        # 呼び出し順序を見るためのものであり、既存契約だけを追跡する。
+        del review_missing
         self._timeline.append("evidence_answerer")
         self.calls.append(
             {
@@ -179,11 +187,8 @@ class _EvidenceAnswerer:
                 "target_time_window": target_time_window,
             }
         )
-        return EvidenceAnswerDraft(
-            sufficiency="insufficient",
-            answer="根拠が不足しています",
-            missing_aspects=["根拠不足"],
-        )
+        # evidenceの内容を問わず「回答を作れなかった」を演じる。
+        return EvidenceAnswerUnavailable(failure_code="fake_evidence_unavailable")
 
 
 class _Progress:

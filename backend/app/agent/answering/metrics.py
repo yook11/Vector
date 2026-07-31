@@ -7,7 +7,6 @@ from typing import Literal
 import logfire
 
 AnswerSynthesisOutcomeResult = Literal["synthesized", "fallback", "failed"]
-AnswerSynthesisStatus = Literal["answered", "insufficient", "unknown"]
 DirectAnswerOutcomeResult = Literal["answered", "failed"]
 
 _answer_synthesis_outcome_counter = logfire.metric_counter(
@@ -26,7 +25,6 @@ def record_answer_synthesis_outcome(
     *,
     result: AnswerSynthesisOutcomeResult,
     retry_used: bool,
-    status: AnswerSynthesisStatus,
     fallback_used: bool,
     failure_code: str | None = None,
 ) -> None:
@@ -40,7 +38,6 @@ def record_answer_synthesis_outcome(
         attributes={
             "result": result,
             "retry_used": retry_used,
-            "status": status,
             "fallback_used": fallback_used,
             "failure_code": failure_code if failure_code is not None else "none",
         },

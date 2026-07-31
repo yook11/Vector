@@ -592,7 +592,6 @@ describe("ResearchThreadView live integration", () => {
     expect(
       screen.queryByText("回答を生成できませんでした"),
     ).not.toBeInTheDocument();
-    expect(screen.queryByText("確認できなかった点")).not.toBeInTheDocument();
     expect(screen.queryByText("回答が完了しました")).not.toBeInTheDocument();
     const announcer = view.container.querySelector<HTMLElement>(
       ".sr-only[role='status']",
@@ -1413,11 +1412,10 @@ describe("ResearchThreadView live integration", () => {
       behavior: "auto",
     });
     expect(screen.getByRole("button", { name: "出典 1" })).toBeInTheDocument();
-    expect(screen.getByText("追加確認が必要な論点")).toBeInTheDocument();
     expect(focusTarget).toHaveFocus();
   });
 
-  it("renders final missing aspects inside the answer as a labeled semantic list", () => {
+  it("does not render a missing aspects notice for the final answer even when missingAspects is non-empty", () => {
     render(
       <ResearchThreadView
         thread={thread([
@@ -1431,16 +1429,11 @@ describe("ResearchThreadView live integration", () => {
     );
 
     const slot = answerSlot();
-    const label = within(slot).getByText("確認できなかった点");
-    const list = within(slot).getByRole("list");
-    expect(label).toBeVisible();
-    expect(within(list).getAllByRole("listitem")).toHaveLength(2);
     expect(
-      within(list)
-        .getAllByRole("listitem")
-        .map((item) => item.textContent),
-    ).toEqual(["企業の一次情報", "地域別の内訳"]);
-    expect(slot).not.toHaveTextContent("企業の一次情報 / 地域別の内訳");
+      within(slot).queryByText("確認できなかった点"),
+    ).not.toBeInTheDocument();
+    expect(within(slot).queryByRole("list")).not.toBeInTheDocument();
+    expect(within(slot).getByText("確定した回答")).toBeInTheDocument();
   });
 
   it("cleans the old run before subscribing to another thread and ignores its late event", () => {

@@ -13,8 +13,8 @@ from google.genai.client import AsyncClient
 from app.agent.answering.contract import AnsweringRequest
 from app.agent.answering.evidence_answer.agent import EVIDENCE_ANSWER_AGENT
 from app.agent.answering.evidence_answer.contract import (
+    EvidenceAnswerDraft,
     EvidenceAnswerInput,
-    RawEvidenceAnswerDraft,
 )
 from app.agent.answering.evidence_answer.evidence import AnswerEvidenceItem
 from app.agent.contract import ExternalUrlSource
@@ -29,7 +29,7 @@ class _SdkStream:
         self._chunks = iter(
             [
                 SimpleNamespace(
-                    text="JSON_FRAGMENT_SENTINEL",
+                    text="ANSWER_FRAGMENT_SENTINEL",
                     prompt_feedback=None,
                     candidates=[
                         SimpleNamespace(finish_reason=SimpleNamespace(name="STOP"))
@@ -101,7 +101,10 @@ def _declaration() -> tuple[object, type[object]]:
     return agent, input_type
 
 
-def test_agent_declares_structured_gemini_role_and_manual_prompt_version() -> None:
+def test_agent_declares_plain_text_role_with_wider_output_budget() -> None:
+    """条件1: response_schema=Noneでstructured outputを要求せず、
+    max_output_tokensは8192、output_typeは本文draft型 (Direct Answerと同じ形)。
+    """
     agent, _ = _declaration()
 
     assert (
@@ -112,16 +115,17 @@ def test_agent_declares_structured_gemini_role_and_manual_prompt_version() -> No
         agent.model_settings.max_output_tokens,
         agent.prompt.version,
         agent.output_type,
+        agent.response_schema,
     ) == (
         "evidence_answer",
         "gemini",
         "gemini-3.1-flash-lite",
         0.2,
-        2048,
-        "v3",
-        RawEvidenceAnswerDraft,
+        8192,
+        "v6",
+        EvidenceAnswerDraft,
+        None,
     )
-    assert agent.response_schema is not None
 
 
 def test_fixed_instructions_and_rendered_input_are_separated() -> None:
@@ -155,6 +159,9 @@ def test_fixed_instructions_and_rendered_input_are_separated() -> None:
 
 
 async def test_runtime_request_keeps_fixed_and_dynamic_text_separate() -> None:
+    """条件1: plain text streamのためresponse_mime_type/response_schemaを
+    provider requestへ明示しない (Direct Answerと同じ非structured経路)。
+    """
     sdk_stream = _SdkStream()
     client = FakeGeminiClient([], streams=[sdk_stream])
     input = EvidenceAnswerInput(
@@ -172,8 +179,9 @@ async def test_runtime_request_keeps_fixed_and_dynamic_text_separate() -> None:
     fragments = [fragment async for fragment in cast(AsyncIterator[str], stream)]
     provider_request = client.models.generate_content_stream.await_args.kwargs
     provider_config = provider_request["config"]
+    explicit_config = provider_config.model_dump(exclude_unset=True)
 
-    assert fragments == ["JSON_FRAGMENT_SENTINEL"]
+    assert fragments == ["ANSWER_FRAGMENT_SENTINEL"]
     assert sdk_stream.close_calls == 1
     assert (
         provider_config.system_instruction == EVIDENCE_ANSWER_AGENT.prompt.instructions
@@ -181,34 +189,10 @@ async def test_runtime_request_keeps_fixed_and_dynamic_text_separate() -> None:
     assert provider_request["contents"] == EVIDENCE_ANSWER_AGENT.prompt.input_renderer(
         input
     )
-    assert provider_config.response_mime_type == "application/json"
-    assert provider_config.response_schema is not None
+    assert "response_mime_type" not in explicit_config
+    assert "response_schema" not in explicit_config
     assert "QUESTION_CONTENTS_SENTINEL" not in provider_config.system_instruction
     assert (
         "ユーザーが知りたいことへ直接答えることです。"
         not in provider_request["contents"]
-    )
-
-
-def test_response_schema_matches_lenient_raw_draft_representative_payload() -> None:
-    agent, _ = _declaration()
-    schema = agent.response_schema
-    assert schema is not None
-    assert set(schema["required"]) == set(RawEvidenceAnswerDraft.model_fields)
-    assert set(schema["properties"]) == set(RawEvidenceAnswerDraft.model_fields)
-
-    draft = agent.output_type.model_validate(
-        {
-            "sufficiency": "answered",
-            "answer": "回答です。[[1]]",
-            "cited_refs": ["1"],
-            "missing_aspects": [],
-            "unfulfilled_requirement_ids": [],
-        }
-    )
-
-    assert draft == RawEvidenceAnswerDraft(
-        sufficiency="answered",
-        answer="回答です。[[1]]",
-        cited_refs=["1"],
     )

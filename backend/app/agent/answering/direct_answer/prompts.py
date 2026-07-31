@@ -8,7 +8,7 @@ from app.agent.agent import AgentPrompt
 from app.agent.answering.direct_answer.contract import DirectAnswerInput
 from app.analysis.prompt_safety import sanitize_for_untrusted_block
 
-DIRECT_ANSWER_PROMPT_VERSION: Final[str] = "v2"
+DIRECT_ANSWER_PROMPT_VERSION: Final[str] = "v3"
 
 DIRECT_ANSWER_INSTRUCTIONS: Final[str] = """# Role
 あなたは Vector の direct answer assistant です。
@@ -68,6 +68,16 @@ DIRECT_ANSWER_REPAIR_TEMPLATE: Final[str] = """
 </untrusted_input>
 """
 
+# runtimeが観測した機械的事実であり、model出力由来ではないためtrusted (sanitize不要)。
+# 空回答用のDIRECT_ANSWER_REPAIR_TEMPLATEとは排他 (打ち切りは空回答ではないため、
+# 「前回の direct 回答は空でした」という事実と異なる記述を出さない)。
+_TRUNCATION_REPAIR_BLOCK: Final[str] = """
+
+# Output Length
+前回の生成は文字数上限に達して途中で打ち切られました。
+今回は上限内に収まる長さで、要点を絞って最初から結論まで書き切ってください。
+"""
+
 
 def render_direct_answer_input(input: DirectAnswerInput) -> str:
     request = input.request
@@ -86,6 +96,8 @@ def render_direct_answer_input(input: DirectAnswerInput) -> str:
         active_goal=sanitize_for_untrusted_block(request.context.active_goal),
         previous_answer=sanitize_for_untrusted_block(input.previous_answer),
     )
+    if input.previous_output_truncated:
+        return rendered + _TRUNCATION_REPAIR_BLOCK
     if input.previous_error is None:
         return rendered
     return rendered + DIRECT_ANSWER_REPAIR_TEMPLATE.format(
