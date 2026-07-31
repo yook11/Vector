@@ -29,6 +29,10 @@ resource "aws_service_discovery_service" "this" {
 
   # ECS が task の生死に応じて登録・解除する。Cloud Map 自身の health check は
   # 使わない (課金対象で、ECS の管理と二重になる)。
-  # failure_threshold は AWS 側で常に 1 に固定されたため指定しない。
-  health_check_custom_config {}
+  # failure_threshold は AWS 側で 1 固定だが、空ブロックだと provider が API に
+  # 送らず実体が null になり、毎 plan が replace を要求し続ける。固定値を明示して
+  # round-trip を成立させる。
+  health_check_custom_config {
+    failure_threshold = 1
+  }
 }
