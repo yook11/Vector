@@ -41,6 +41,15 @@ logger = structlog.get_logger(__name__)
 # **connection_kwargs を redis-py の ConnectionPool まで素通しする)。
 _redis_url, _redis_iam_kwargs = redis_connection_options(settings.redis_url)
 
+# 守る関係は「xread_block (2s) + event loop 停止の許容幅 < read timeout」。
+# redis-py 8 の既定 5 秒では worker の同期 import 等の停止で listener の blocking
+# read が期限切れになり、retry も無い (retry_on_timeout=False) ため例外が receiver
+# を貫通して worker プロセスごと落ちる。30 秒超の停止では従来どおり落ちる。
+# broker は API の kiq 経路とも共有のため、Redis 無応答時の API 側の失敗検知が
+# 最大 30 秒に伸びるトレードオフを引き受ける (接続確立は 5 秒で fail-fast を保つ)。
+_SOCKET_READ_TIMEOUT_SECONDS = 30
+_SOCKET_CONNECT_TIMEOUT_SECONDS = 5
+
 
 def _make_broker(
     queue_name: str,
@@ -62,12 +71,16 @@ def _make_broker(
             consumer_id=consumer_id,
             unacknowledged_batch_size=unacknowledged_batch_size,
             unacknowledged_lock_timeout=unacknowledged_lock_timeout,
+            socket_timeout=_SOCKET_READ_TIMEOUT_SECONDS,
+            socket_connect_timeout=_SOCKET_CONNECT_TIMEOUT_SECONDS,
             **_redis_iam_kwargs,
         )
         .with_result_backend(
             RedisAsyncResultBackend(
                 redis_url=_redis_url,
                 result_ex_time=3600,
+                socket_timeout=_SOCKET_READ_TIMEOUT_SECONDS,
+                socket_connect_timeout=_SOCKET_CONNECT_TIMEOUT_SECONDS,
                 # result key を taskiq:<task_id> に名前空間化する。prefix_str 無しだと
                 # bare uuid となり Redis ACL で stream key と区別できない。collect の
                 # ~taskiq:* grant を実在させ set_result の NOPERM を防ぐ

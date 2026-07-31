@@ -33,6 +33,19 @@ _TOKEN_EXPIRES_IN_SECONDS = 900
 
 
 @lru_cache(maxsize=1)
+def _botocore_session() -> Any:
+    """プロセス内で 1 本だけ持つ botocore session。
+
+    RequestSigner は session を強参照せず、session が GC されると event_emitter
+    内の weakref が死んで以後の再接続の token 生成が全て ``ReferenceError`` に
+    なるため、cache で signer と同寿命に生かし続ける。
+    """
+    import botocore.session
+
+    return botocore.session.get_session()
+
+
+@lru_cache(maxsize=1)
 def _request_signer(region: str) -> Any:
     """プロセス内で 1 つだけ持つ signer。
 
@@ -41,11 +54,10 @@ def _request_signer(region: str) -> Any:
     と同じ判断)。botocore の import と credential 解決 (ECS では HTTP) も初回の
     token 要求まで遅れる。
     """
-    import botocore.session
     from botocore.model import ServiceId
     from botocore.signers import RequestSigner
 
-    session = botocore.session.get_session()
+    session = _botocore_session()
     return RequestSigner(
         ServiceId("elasticache"),
         region,

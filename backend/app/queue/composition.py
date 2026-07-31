@@ -5,17 +5,17 @@ Stage 3 (curation) / Stage 4 (assessment) / Stage 5 (embedding) と週次 briefi
 ではなくコード変更 + worker restart。Stage ごとに別の抽象を別の具象クラスに紐付ける
 ため、共有 env による誤切替の余地が構造的に生じない。
 
-本 module は import するだけで broker_analysis / broker_embedding / broker_briefing の
-WORKER_STARTUP に AI adapter 構築 hook を attach する (副作用)。engine 生成や
-Logfire bootstrap などの汎用 lifecycle は ``lifecycle.py`` の責務、本 module は
-AI provider 配線に純化する。
+本 module は import するだけで broker_analysis / broker_embedding / broker_briefing /
+broker_agent の WORKER_STARTUP に AI adapter 構築 hook を attach する (副作用)。
+engine 生成や Logfire bootstrap などの汎用 lifecycle は ``lifecycle.py`` の責務、
+本 module は AI provider 配線に純化する。
 
 具象 adapter (Gemini / DeepSeek SDK) の import は **各 hook の本体内に遅延**させる。
 本 module は brokers.py から全プロセスが import するため、top-level で具象を import
 すると AI を実行しない process (scheduler / collect / maintenance / trend_discovery)
 まで重い SDK (openai + google.genai、実測 ~133MB) を起動時に常駐させてしまう。hook
 本体内 import なら、SDK は当該 hook が実際に走る worker (broker_analysis /
-broker_embedding / broker_briefing) でのみロードされる。本契約は
+broker_embedding / broker_briefing / broker_agent) でのみロードされる。本契約は
 ``tests/test_lazy_ai_sdk_import.py`` の import 隔離 oracle で構造的に pin する。
 """
 
@@ -25,7 +25,12 @@ import structlog
 from taskiq import TaskiqEvents, TaskiqState
 
 from app.analysis.rate_limit import ProviderRateLimitGate
-from app.queue.brokers import broker_analysis, broker_briefing, broker_embedding
+from app.queue.brokers import (
+    broker_agent,
+    broker_analysis,
+    broker_briefing,
+    broker_embedding,
+)
 
 logger = structlog.get_logger(__name__)
 
@@ -76,3 +81,18 @@ async def _wire_briefing_adapter(state: TaskiqState) -> None:
         generator=type(state.briefing_generator).__name__,
         model=state.briefing_generator.MODEL,
     )
+
+
+@broker_agent.on_event(TaskiqEvents.WORKER_STARTUP)
+async def _warm_agent_sdk_imports(state: TaskiqState) -> None:
+    """agent run が使う AI SDK を listener 開始前にロードする。
+
+    run 中の遅延 import は 0.25 vCPU の event loop を数秒塞ぎ、listener の
+    blocking read が socket_timeout を超えて worker ごと落ちるため、run 経路の
+    重い SDK (Gemini / OpenAI 互換 client) をここで済ませる。
+    """
+    # 具象 SDK の import を hook 本体に遅延 (module docstring 参照)。
+    import google.genai  # noqa: F401
+    import openai  # noqa: F401
+
+    logger.info("agent_sdk_imports_warmed")
