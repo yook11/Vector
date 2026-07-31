@@ -105,6 +105,10 @@ locals {
       # Fly secrets の運用値と同値に揃える。
       RATE_LIMIT_SESSION_PER_MIN = "600"
       RATE_LIMIT_IP_PER_MIN      = "3000"
+      # 入口が ALB なので、信頼できる client IP は ALB が XFF 末尾へ追記した値だけ。
+      # 未宣言だと per-IP 制限と Better Auth の login limiter が共有バケツに退化するため、
+      # aws_lb の xff_header_processing_mode = "append" と対で必ず配る。
+      CLIENT_IP_TRUST = "alb-xff-last"
     }
     api = {
       DATABASE_URL = local.backend_db_url["vector_app"]
