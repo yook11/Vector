@@ -2,6 +2,10 @@
 
 > 後続契約更新: `backend/specs/agent-input-safety-gate-slice.md` はterminal statusへ
 > `policy_blocked`を追加し、assistant messageではないpolicy noticeへ収束させる。
+>
+> 後続契約更新: `backend/specs/agent-progress-stage-vocabulary-slice.md` はstage語彙を
+> `planning` / `retrieving` / `synthesizing`の3値から実工程6値へ置き換える。本文中の
+> stage state、rank、activity表示条件、SSE parser契約の3値記述はすべて新語彙が正本となる。
 
 Status: Implemented — 2026-07-13
 
