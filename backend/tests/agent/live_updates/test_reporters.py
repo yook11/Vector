@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import json
-from typing import Literal, cast
+from typing import cast
 from unittest.mock import AsyncMock
 from uuid import UUID
 
@@ -69,9 +69,19 @@ class RecordingRedis:
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("stage", ["planning", "retrieving", "synthesizing"])
+@pytest.mark.parametrize(
+    "stage",
+    [
+        "safety_check",
+        "context_resolution",
+        "planning",
+        "evidence_collection",
+        "evidence_review",
+        "answering",
+    ],
+)
 async def test_stage_reporter_fans_out_each_stage_without_mutation(
-    stage: Literal["planning", "retrieving", "synthesizing"],
+    stage: AnswerProgressStage,
 ) -> None:
     progress_writer = AsyncMock()
     stream_publisher = AsyncMock()
@@ -107,9 +117,9 @@ async def test_stage_reporter_attempts_progress_writer_when_stream_raises() -> N
     stream_publisher.publish.side_effect = RuntimeError("stream unavailable")
     reporter = reporters.AgentRunLiveStageReporter(progress_writer, stream_publisher)
 
-    await reporter.stage_changed("retrieving")
+    await reporter.stage_changed("evidence_collection")
 
-    progress_writer.stage_changed.assert_awaited_once_with("retrieving")
+    progress_writer.stage_changed.assert_awaited_once_with("evidence_collection")
 
 
 @pytest.mark.asyncio
@@ -135,7 +145,7 @@ async def test_stage_reporter_uses_stream_publishers_attempt_epoch() -> None:
     )
     reporter = reporters.AgentRunLiveStageReporter(AsyncMock(), stream_publisher)
 
-    await reporter.stage_changed("synthesizing")
+    await reporter.stage_changed("answering")
 
     assert [entry["attemptEpoch"] for entry in redis.pipeline_instance.entries] == [
         str(ATTEMPT_EPOCH),

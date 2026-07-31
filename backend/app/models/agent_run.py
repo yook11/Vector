@@ -62,7 +62,10 @@ class AgentRun(Base):
             name="ck_agent_runs_status",
         ),
         CheckConstraint(
-            "progress_stage IN ('planning', 'retrieving', 'synthesizing')",
+            "progress_stage IN ("
+            "'safety_check', 'context_resolution', 'planning', "
+            "'evidence_collection', 'evidence_review', 'answering'"
+            ")",
             name="ck_agent_runs_progress_stage",
         ),
         CheckConstraint(

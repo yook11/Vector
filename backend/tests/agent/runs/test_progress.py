@@ -76,12 +76,15 @@ async def test_progress_writer_updates_running_run(
 
     writer = AgentRunProgressWriter(session_factory, run.id, run.attempt_epoch)
 
-    await writer.stage_changed("retrieving")
+    await writer.stage_changed("evidence_collection")
 
     async with session_factory() as session:
         refreshed = await session.get(AgentRun, run.id)
         assert refreshed is not None
-        assert (refreshed.status, refreshed.progress_stage) == ("running", "retrieving")
+        assert (refreshed.status, refreshed.progress_stage) == (
+            "running",
+            "evidence_collection",
+        )
 
 
 @pytest.mark.asyncio
@@ -97,7 +100,7 @@ async def test_progress_writer_does_not_update_newer_attempt(
 
     stale_writer = AgentRunProgressWriter(session_factory, run.id, 1)
 
-    await stale_writer.stage_changed("synthesizing")
+    await stale_writer.stage_changed("answering")
 
     async with session_factory() as session:
         refreshed = await session.get(AgentRun, run.id)
@@ -120,7 +123,7 @@ async def test_progress_writer_does_not_update_terminal_runs(
 
     writer = AgentRunProgressWriter(session_factory, run.id, run.attempt_epoch)
 
-    await writer.stage_changed("synthesizing")
+    await writer.stage_changed("answering")
 
     async with session_factory() as session:
         refreshed = await session.get(AgentRun, run.id)

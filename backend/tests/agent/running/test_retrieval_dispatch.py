@@ -921,7 +921,7 @@ async def test_scope_exits_after_unclassified_task_sibling_joins() -> None:
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("failure_stage", ["planning", "retrieving"])
+@pytest.mark.parametrize("failure_stage", ["planning", "evidence_collection"])
 async def test_pre_dispatch_failure_does_not_activate_external_scope(
     failure_stage: str,
 ) -> None:
@@ -929,8 +929,8 @@ async def test_pre_dispatch_failure_does_not_activate_external_scope(
     timeline: list[str] = []
     factory = _Factory([_runtime(ScriptedAgentRuntime([_query_draft()]))], timeline)
     progress = (
-        _Progress(timeline, error_stage="retrieving", error=error)
-        if failure_stage == "retrieving"
+        _Progress(timeline, error_stage="evidence_collection", error=error)
+        if failure_stage == "evidence_collection"
         else None
     )
     runner = _runner(

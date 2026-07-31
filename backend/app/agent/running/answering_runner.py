@@ -132,6 +132,7 @@ class AnsweringRunner:
         hooks: RunHooks | None = None,
     ) -> RunResult:
         with _answering_run_span(run_id=run_context.run_id) as run_span:
+            await self._report_progress("safety_check")
             safety_check = await self._input_safety_checker.check(
                 question=input.question[:INPUT_SAFETY_TEXT_CHAR_CAP],
                 previous_turn=_previous_turn(input.history),
@@ -141,6 +142,7 @@ class AnsweringRunner:
                 assert safety_check.block_reason is not None  # noqa: S101
                 raise InputSafetyBlocked(block_reason=safety_check.block_reason)
 
+            await self._report_progress("context_resolution")
             preparation = await self._context_preparer.prepare(
                 question=input.question,
                 history=list(input.history),
@@ -198,7 +200,7 @@ class AnsweringRunner:
         request: AnsweringRequest,
         previous_answer: str,
     ) -> AnswerQuestionResult:
-        await self._report_progress("synthesizing")
+        await self._report_progress("answering")
         draft = await phases.direct_answerer.answer(
             request=request,
             previous_answer=previous_answer,
@@ -219,7 +221,7 @@ class AnsweringRunner:
         plan: SearchPlan,
         run_span: LogfireSpan,
     ) -> AnswerQuestionResult:
-        await self._report_progress("retrieving")
+        await self._report_progress("evidence_collection")
         content_requirements = tuple(
             requirement.description
             for requirement in request.context.content_requirements
@@ -232,7 +234,7 @@ class AnsweringRunner:
         )
         evidence = normalize_answer_evidence(outcome)
 
-        await self._report_progress("synthesizing")
+        await self._report_progress("answering")
         answer_outcome = await phases.evidence_answerer.answer(
             request=request,
             evidence=evidence,
@@ -352,6 +354,7 @@ class AnsweringRunner:
                 effective_agent_count=effective_agent_count,
             )
 
+        await self._report_progress("evidence_review")
         outcome = await phases.reviewer.review(
             tasks=review_candidates,
             content_requirements=content_requirements,

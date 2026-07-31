@@ -206,7 +206,7 @@ async def test_seed_inserts_completed_and_running_continuity_turns() -> None:
         assert active_run["user_message_id"] == active_user_id
         assert active_run["assistant_message_id"] is None
         assert active_run["status"] == "running"
-        assert active_run["progress_stage"] == "synthesizing"
+        assert active_run["progress_stage"] == "answering"
         assert active_run["error_code"] is None
         assert active_run["completed_at"] is None
         assert active_run["attempt_epoch"] == 1
@@ -440,7 +440,7 @@ async def test_reset_restores_only_the_variant_active_run(
     )
     assert {
         "status": "running",
-        "progress_stage": "synthesizing",
+        "progress_stage": "answering",
         "error_code": None,
         "assistant_message_id": None,
         "completed_at": None,

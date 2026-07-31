@@ -73,7 +73,14 @@ ResearchRunErrorCode = Literal[
     "stale",
     "cancelled",
 ]
-ResearchProgressStage = Literal["planning", "retrieving", "synthesizing"]
+ResearchProgressStage = Literal[
+    "safety_check",
+    "context_resolution",
+    "planning",
+    "evidence_collection",
+    "evidence_review",
+    "answering",
+]
 
 
 class ResearchRunInternalSearchStartedEvent(_CamelBase):

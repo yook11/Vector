@@ -684,7 +684,9 @@ async def test_real_redis_excludes_zombie_epoch_and_allows_duplicate_marker() ->
         await old_attempt.begin_attempt()
         await old_attempt.publish(AgentRunLiveStreamStageEvent(stage="planning"))
         await current_attempt.begin_attempt()
-        await old_attempt.publish(AgentRunLiveStreamStageEvent(stage="retrieving"))
+        await old_attempt.publish(
+            AgentRunLiveStreamStageEvent(stage="evidence_collection")
+        )
         await AgentRunLiveStreamPublisher(redis, run_id, EPOCH_2).begin_attempt()
 
         result = await AgentRunLiveStreamReader(redis).read_after(run_id, EPOCH_2, None)
@@ -708,7 +710,7 @@ async def test_real_redis_marker_trim_keeps_epoch_filter_and_flags_old_cursor() 
     try:
         publisher = AgentRunLiveStreamPublisher(redis, run_id, EPOCH_2)
         marker_id = await publisher.begin_attempt()
-        await publisher.publish(AgentRunLiveStreamStageEvent(stage="synthesizing"))
+        await publisher.publish(AgentRunLiveStreamStageEvent(stage="answering"))
         assert marker_id is not None
         await redis.xtrim(
             agent_run_live_stream_key(run_id),
@@ -789,7 +791,9 @@ async def test_real_redis_passes_events_after_terminal() -> None:
         publisher = AgentRunLiveStreamPublisher(redis, run_id, EPOCH_1)
         await publisher.begin_attempt()
         await publisher.publish(AgentRunLiveStreamTerminalEvent(status="completed"))
-        await publisher.publish(AgentRunLiveStreamStageEvent(stage="retrieving"))
+        await publisher.publish(
+            AgentRunLiveStreamStageEvent(stage="evidence_collection")
+        )
 
         result = await AgentRunLiveStreamReader(redis).read_after(run_id, EPOCH_1, None)
 

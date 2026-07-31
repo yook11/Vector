@@ -22,7 +22,7 @@ from pydantic import (
     model_validator,
 )
 
-from app.agent.contract import AnswerProgressEvent
+from app.agent.contract import AnswerProgressEvent, AnswerProgressStage
 from app.agent.runs.types import AgentRunErrorCode
 
 AGENT_RUN_LIVE_STREAM_MAXLEN = 4096
@@ -43,7 +43,7 @@ class AgentRunLiveStreamAttemptStartedEvent(_StreamEventBase):
 
 class AgentRunLiveStreamStageEvent(_StreamEventBase):
     type: Literal["stage"] = "stage"
-    stage: Literal["planning", "retrieving", "synthesizing"]
+    stage: AnswerProgressStage
 
 
 class AgentRunLiveStreamActivityEvent(_StreamEventBase):

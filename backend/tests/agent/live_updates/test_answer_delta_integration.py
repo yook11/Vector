@@ -573,7 +573,9 @@ async def test_delta_breaker_does_not_damage_other_stream_or_list_producers() ->
             task_index=2,
             candidate_count=5,
         )
-        await stream_publisher.publish(AgentRunLiveStreamStageEvent(stage="retrieving"))
+        await stream_publisher.publish(
+            AgentRunLiveStreamStageEvent(stage="evidence_collection")
+        )
         await stream_publisher.publish(
             AgentRunLiveStreamActivityEvent(activity=activity)
         )
@@ -600,7 +602,7 @@ async def test_delta_breaker_does_not_damage_other_stream_or_list_producers() ->
         ]
         assert _delta_events(stream_events) == []
         assert isinstance(stream_events[1], AgentRunLiveStreamStageEvent)
-        assert stream_events[1].stage == "retrieving"
+        assert stream_events[1].stage == "evidence_collection"
         assert isinstance(stream_events[2], AgentRunLiveStreamActivityEvent)
         assert stream_events[2].activity == activity
         assert stream_events[3] == AgentRunLiveStreamTerminalEvent(status="completed")
