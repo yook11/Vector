@@ -1,0 +1,158 @@
+# DB への人手作業 (移行・保守) のための一時踏み台。平常時は存在しない
+# (enable_db_bastion = false が既定で、素の apply が撤去を兼ねる)。
+#
+# RDS は public IP もインターネット経路も持たないため、psql / alembic /
+# pg_restore を届ける手段がこの toggle 以外に存在しない。経路は
+# SSM Session Manager の port forwarding で、踏み台は public IP も
+# SSH ポートも持たず、ingress 規則ゼロ (SSM は踏み台側からの外向き接続)。
+#
+# RDS SG / endpoints SG へ開ける穴もこの file の conditional resource なので、
+# toggle を戻せば穴ごと消える。使い方と手順上の罠は README の「DB 踏み台」節。
+
+# 専用 subnet を rt-data (local 経路のみ) に紐づける。app subnet に間借りすると
+# 「subnet = egress proxy の権限単位」の身元が混ざるため分ける。
+resource "aws_subnet" "bastion" {
+  count = var.enable_db_bastion ? 1 : 0
+
+  vpc_id            = aws_vpc.main.id
+  availability_zone = var.az_primary
+  cidr_block        = cidrsubnet(var.vpc_cidr, 8, 31)
+
+  tags = { Name = "${var.name_prefix}-bastion" }
+}
+
+resource "aws_route_table_association" "bastion" {
+  count = var.enable_db_bastion ? 1 : 0
+
+  subnet_id      = aws_subnet.bastion[0].id
+  route_table_id = aws_route_table.data.id
+}
+
+# Session Manager のデータチャネル。常設の 4 本 (endpoints.tf) に無いのは
+# ECS Exec を使わない決定のためで、踏み台が居る間だけここで足す。
+# agent の登録経路は常設の ssm endpoint が担う。
+resource "aws_vpc_endpoint" "ssmmessages" {
+  count = var.enable_db_bastion ? 1 : 0
+
+  vpc_id              = aws_vpc.main.id
+  service_name        = "com.amazonaws.${var.region}.ssmmessages"
+  vpc_endpoint_type   = "Interface"
+  subnet_ids          = [aws_subnet.app["api"].id]
+  security_group_ids  = [aws_security_group.endpoints.id]
+  private_dns_enabled = true
+
+  tags = { Name = "${var.name_prefix}-vpce-ssmmessages" }
+}
+
+resource "aws_security_group" "bastion" {
+  count = var.enable_db_bastion ? 1 : 0
+
+  name        = "${var.name_prefix}-bastion"
+  description = "Temporary DB bastion. No ingress; SSM connects outbound."
+  vpc_id      = aws_vpc.main.id
+}
+
+resource "aws_vpc_security_group_egress_rule" "bastion_to_endpoints" {
+  count = var.enable_db_bastion ? 1 : 0
+
+  security_group_id            = aws_security_group.bastion[0].id
+  description                  = "ssm / ssmmessages"
+  ip_protocol                  = "tcp"
+  from_port                    = 443
+  to_port                      = 443
+  referenced_security_group_id = aws_security_group.endpoints.id
+}
+
+resource "aws_vpc_security_group_egress_rule" "bastion_to_rds" {
+  count = var.enable_db_bastion ? 1 : 0
+
+  security_group_id            = aws_security_group.bastion[0].id
+  description                  = "postgres"
+  ip_protocol                  = "tcp"
+  from_port                    = 5432
+  to_port                      = 5432
+  referenced_security_group_id = aws_security_group.rds.id
+}
+
+# 受け入れ側の扉 2 枚。どちらも toggle の中なので、撤去時に穴ごと消える。
+resource "aws_vpc_security_group_ingress_rule" "endpoints_from_bastion" {
+  count = var.enable_db_bastion ? 1 : 0
+
+  security_group_id            = aws_security_group.endpoints.id
+  description                  = "bastion"
+  ip_protocol                  = "tcp"
+  from_port                    = 443
+  to_port                      = 443
+  referenced_security_group_id = aws_security_group.bastion[0].id
+}
+
+resource "aws_vpc_security_group_ingress_rule" "rds_from_bastion" {
+  count = var.enable_db_bastion ? 1 : 0
+
+  security_group_id            = aws_security_group.rds.id
+  description                  = "bastion"
+  ip_protocol                  = "tcp"
+  from_port                    = 5432
+  to_port                      = 5432
+  referenced_security_group_id = aws_security_group.bastion[0].id
+}
+
+# permissions boundary は付けない。boundary は ssmmessages:* を Deny しており
+# (NoEcsExec)、付けると Session Manager のデータチャネルが死ぬ。踏み台は
+# 手元 admin の手動 apply 専用で、CI が boundary 無しの role を作ろうとすれば
+# DenyRoleCreationWithoutBoundary で明示的に失敗する (fail-closed)。
+resource "aws_iam_role" "bastion" {
+  count = var.enable_db_bastion ? 1 : 0
+
+  name = "${var.name_prefix}-bastion"
+  path = "/${var.name_prefix}-ops/"
+
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Effect    = "Allow"
+        Action    = "sts:AssumeRole"
+        Principal = { Service = "ec2.amazonaws.com" }
+      },
+    ]
+  })
+}
+
+resource "aws_iam_role_policy_attachment" "bastion_ssm" {
+  count = var.enable_db_bastion ? 1 : 0
+
+  role       = aws_iam_role.bastion[0].name
+  policy_arn = "arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore"
+}
+
+resource "aws_iam_instance_profile" "bastion" {
+  count = var.enable_db_bastion ? 1 : 0
+
+  name = "${var.name_prefix}-bastion"
+  role = aws_iam_role.bastion[0].name
+}
+
+data "aws_ssm_parameter" "bastion_ami" {
+  count = var.enable_db_bastion ? 1 : 0
+
+  name = "/aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-arm64"
+}
+
+resource "aws_instance" "bastion" {
+  count = var.enable_db_bastion ? 1 : 0
+
+  ami                    = data.aws_ssm_parameter.bastion_ami[0].value
+  instance_type          = "t4g.nano"
+  subnet_id              = aws_subnet.bastion[0].id
+  vpc_security_group_ids = [aws_security_group.bastion[0].id]
+  iam_instance_profile   = aws_iam_instance_profile.bastion[0].name
+
+  associate_public_ip_address = false
+
+  metadata_options {
+    http_tokens = "required"
+  }
+
+  tags = { Name = "${var.name_prefix}-bastion" }
+}

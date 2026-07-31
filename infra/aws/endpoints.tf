@@ -43,6 +43,7 @@ resource "aws_vpc_endpoint" "s3" {
 # ECS agent 用で、Fargate task には不要 (AWS docs 明記)。
 # ECS Exec を使うと決めた場合は ssmmessages の endpoint がここに 1 本増える
 # (task role の ssmmessages:* とセット)。課金根拠の「4 本」もそこで変わる。
+# DB 踏み台 (bastion.tf) は同じ endpoint を toggle の中で条件付きに持つ。
 resource "aws_vpc_endpoint" "interface" {
   for_each = toset(["ecr.api", "ecr.dkr", "ssm", "logs"])
 
