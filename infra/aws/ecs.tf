@@ -101,6 +101,10 @@ locals {
       # rate-limit ノード用の署名 host (common の REDIS_IAM_CACHE_NAME は broker の
       # 名前なので frontend はそちらを読まない)。
       REDIS_IAM_CACHE_NAME_RL = aws_elasticache_replication_group.rate_limit.replication_group_id
+      # コード default (60/300) は通常閲覧で session bucket が 429 になる実測済み。
+      # Fly secrets の運用値と同値に揃える。
+      RATE_LIMIT_SESSION_PER_MIN = "600"
+      RATE_LIMIT_IP_PER_MIN      = "3000"
     }
     api = {
       DATABASE_URL = local.backend_db_url["vector_app"]
