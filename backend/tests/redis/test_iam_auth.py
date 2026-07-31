@@ -7,6 +7,7 @@ token 生成は SigV4 のローカル署名で完結するため、ここでの�
 
 from __future__ import annotations
 
+import gc
 import urllib.parse
 
 import pytest
@@ -91,6 +92,20 @@ class TestElastiCacheIAMProvider:
     def test_signer_is_shared_within_the_process(self) -> None:
         """DB 側の ``_rds_client`` と同じ判断: 解決を 1 本に共有する。"""
         assert _request_signer(_REGION) is _request_signer(_REGION)
+
+    def test_token_generation_survives_gc_after_first_call(self) -> None:
+        """session を戻り値に含めず signer だけ返すと、1 回目の呼び出し後の
+        ``gc.collect()`` で session が回収され、signer 内部の weakref が死んで
+        以後の token 生成が ``ReferenceError`` になる (本番障害の再現条件)。
+        """
+        provider = _provider()
+        provider.get_credentials()
+        gc.collect()
+
+        user, token = provider.get_credentials()
+
+        assert user == _USER
+        assert "X-Amz-Signature" in _token_params(token)
 
 
 class TestRedisConnectionOptions:

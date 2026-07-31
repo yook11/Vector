@@ -41,6 +41,11 @@ logger = structlog.get_logger(__name__)
 # **connection_kwargs を redis-py の ConnectionPool まで素通しする)。
 _redis_url, _redis_iam_kwargs = redis_connection_options(settings.redis_url)
 
+# redis-py 8 の既定 socket_timeout は 5 秒。worker が同期 import 等で event loop を
+# 数秒塞ぐと listener の XREADGROUP 読みが期限切れになり、例外が receiver を貫通して
+# worker プロセスごと落ちるため、blocking read に耐える余裕を明示する。
+_SOCKET_TIMEOUT_SECONDS = 30
+
 
 def _make_broker(
     queue_name: str,
@@ -62,12 +67,14 @@ def _make_broker(
             consumer_id=consumer_id,
             unacknowledged_batch_size=unacknowledged_batch_size,
             unacknowledged_lock_timeout=unacknowledged_lock_timeout,
+            socket_timeout=_SOCKET_TIMEOUT_SECONDS,
             **_redis_iam_kwargs,
         )
         .with_result_backend(
             RedisAsyncResultBackend(
                 redis_url=_redis_url,
                 result_ex_time=3600,
+                socket_timeout=_SOCKET_TIMEOUT_SECONDS,
                 # result key を taskiq:<task_id> に名前空間化する。prefix_str 無しだと
                 # bare uuid となり Redis ACL で stream key と区別できない。collect の
                 # ~taskiq:* grant を実在させ set_result の NOPERM を防ぐ

@@ -668,6 +668,30 @@ class TestWorkerApplicationName:
         assert server_settings["application_name"] == worker_service_name("collection")
 
 
+class TestSocketTimeout:
+    """redis-py 8 の既定 5 秒 socket_timeout を worker 全 broker で明示的に上書きする。
+
+    listener の blocking read (XREADGROUP) が既定 timeout で切れると worker
+    プロセスごと落ちるため、broker / result backend 双方の接続 kwargs に必ず
+    socket_timeout=30 が乗っている必要がある。
+    """
+
+    def test_broker_connection_pool_has_socket_timeout(self) -> None:
+        from app.queue.brokers import broker_dispatch
+
+        assert broker_dispatch.connection_pool.connection_kwargs["socket_timeout"] == 30
+
+    def test_result_backend_connection_pool_has_socket_timeout(self) -> None:
+        from app.queue.brokers import broker_dispatch
+
+        assert (
+            broker_dispatch.result_backend.redis_pool.connection_kwargs[
+                "socket_timeout"
+            ]
+            == 30
+        )
+
+
 @pytest.mark.asyncio
 async def test_maintenance_startup_logs_auth_engine_failure_without_raising() -> None:
     """auth retention engine 初期化失敗は maintenance worker startup を落とさない。"""
