@@ -1626,7 +1626,7 @@ class TestGetResearchThread:
             user_message_id=answered_user.id,
             assistant_message_id=assistant_message.id,
             status="completed",
-            progress_stage="synthesizing",
+            progress_stage="answering",
         )
         cancelled_user = await _create_message(
             db_session,
@@ -1666,7 +1666,7 @@ class TestGetResearchThread:
             "runId": str(completed_run.id),
             "status": "completed",
             "errorCode": None,
-            "progressStage": "synthesizing",
+            "progressStage": "answering",
         }
         assert data["messages"][2]["content"] == "回答です。[[1]][[2]]"
         assert data["messages"][2]["missingAspects"] == ["未確認の観点"]
@@ -2175,7 +2175,7 @@ class TestGetResearchRun:
             thread_id=running_thread.id,
             user_message_id=running_user.id,
             status="running",
-            progress_stage="retrieving",
+            progress_stage="evidence_collection",
             attempt_epoch=3,
         )
         failed_thread = await _create_thread(db_session)
@@ -2192,7 +2192,7 @@ class TestGetResearchRun:
             user_message_id=failed_user.id,
             status="failed",
             error_code="generation_unavailable",
-            progress_stage="synthesizing",
+            progress_stage="answering",
             attempt_epoch=2,
         )
         completed_thread = await _create_thread(db_session)
@@ -2221,8 +2221,8 @@ class TestGetResearchRun:
 
         expected = {
             queued_run.id: ("queued", None, None, 0),
-            running_run.id: ("running", None, "retrieving", 3),
-            failed_run.id: ("failed", "generation_unavailable", "synthesizing", 2),
+            running_run.id: ("running", None, "evidence_collection", 3),
+            failed_run.id: ("failed", "generation_unavailable", "answering", 2),
             completed_run.id: ("completed", None, None, 2),
         }
         for run_id, (
@@ -2356,7 +2356,7 @@ class TestGetResearchRun:
             thread_id=thread.id,
             user_message_id=user_message.id,
             status="running",
-            progress_stage="retrieving",
+            progress_stage="evidence_collection",
         )
         redis = FakeRunEventsRedis(
             [
@@ -2400,7 +2400,7 @@ class TestGetResearchRun:
             thread_id=thread.id,
             user_message_id=user_message.id,
             status="running",
-            progress_stage="retrieving",
+            progress_stage="evidence_collection",
         )
         redis = FakeRunEventsRedis(exc=RedisConnectionError("redis down"))
         app.dependency_overrides[get_redis_client] = lambda: redis

@@ -100,7 +100,7 @@ async def _seed_running_run(
             thread_id=thread.id,
             user_message_id=current_question.id,
             status="running",
-            progress_stage="retrieving",
+            progress_stage="evidence_collection",
             started_at=_NOW - timedelta(minutes=21),
             attempt_epoch=attempt_epoch,
             quota_usage_date=quota_usage_date,

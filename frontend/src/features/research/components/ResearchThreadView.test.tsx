@@ -612,7 +612,7 @@ describe("ResearchThreadView live integration", () => {
     act(() => {
       currentSource().emit(
         "stage",
-        { attemptEpoch: 1, stage: "retrieving" },
+        { attemptEpoch: 1, stage: "evidence_collection" },
         "1-0",
       );
     });
@@ -692,7 +692,7 @@ describe("ResearchThreadView live integration", () => {
       currentSource().emit("attempt.started", { attemptEpoch: 1 }, "1-0");
       currentSource().emit(
         "stage",
-        { attemptEpoch: 1, stage: "retrieving" },
+        { attemptEpoch: 1, stage: "evidence_collection" },
         "2-0",
       );
     });
@@ -1125,7 +1125,7 @@ describe("ResearchThreadView live integration", () => {
         new Response(
           JSON.stringify({
             status: "failed",
-            progressStage: "synthesizing",
+            progressStage: "answering",
             attemptEpoch: 1,
             recentEvents: [],
             errorCode: "stale",

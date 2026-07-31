@@ -26,7 +26,14 @@ ResearchRunErrorCodeValue = Literal[
     "stale",
     "cancelled",
 ]
-ResearchProgressStageValue = Literal["planning", "retrieving", "synthesizing"]
+ResearchProgressStageValue = Literal[
+    "safety_check",
+    "context_resolution",
+    "planning",
+    "evidence_collection",
+    "evidence_review",
+    "answering",
+]
 
 
 def build_research_run_response(*, run: AgentRun) -> ResearchRunResponse:
@@ -83,9 +90,15 @@ def _run_progress_stage_value(value: str | None) -> ResearchProgressStageValue |
     if value is None:
         return None
     match AgentRunProgressStage(value):
+        case AgentRunProgressStage.SAFETY_CHECK:
+            return "safety_check"
+        case AgentRunProgressStage.CONTEXT_RESOLUTION:
+            return "context_resolution"
         case AgentRunProgressStage.PLANNING:
             return "planning"
-        case AgentRunProgressStage.RETRIEVING:
-            return "retrieving"
-        case AgentRunProgressStage.SYNTHESIZING:
-            return "synthesizing"
+        case AgentRunProgressStage.EVIDENCE_COLLECTION:
+            return "evidence_collection"
+        case AgentRunProgressStage.EVIDENCE_REVIEW:
+            return "evidence_review"
+        case AgentRunProgressStage.ANSWERING:
+            return "answering"

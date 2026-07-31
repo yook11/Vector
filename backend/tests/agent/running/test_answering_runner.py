@@ -691,7 +691,8 @@ async def test_safety_block_short_circuits_without_starting_answering_work() -> 
     assert factory.calls == 0
     assert planner.calls == []
     assert direct_answerer.calls == []
-    assert progress.calls == []
+    # 検証工程には入っているため safety_check だけが報告され、後続工程は報告されない。
+    assert progress.calls == ["safety_check"]
     assert events == ["input_safety"]
 
 

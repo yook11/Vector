@@ -19,18 +19,24 @@ export function activeRunText(
 ): string {
   if (status === "queued") return "待機中";
   switch (stage) {
+    case "safety_check":
+      return "検証中";
+    case "context_resolution":
+      return "コンテキストを整理中";
     case "planning":
       return "計画中";
-    case "retrieving":
+    case "evidence_collection":
       return "情報収集中";
-    case "synthesizing":
+    case "evidence_review":
+      return "情報を選別中";
+    case "answering":
       return "回答作成中";
     default:
       return "生成中";
   }
 }
 
-function retrievalActivityText(activity: ResearchLiveActivity): string | null {
+function evidenceActivityText(activity: ResearchLiveActivity): string | null {
   switch (activity.type) {
     case "internal_search.started":
       return "関連記事を検索中";
@@ -57,13 +63,14 @@ function activityText(
   activity: ResearchLiveActivity | null,
 ): string | null {
   if (status !== "running" || activity === null) return null;
-  if (
-    (stage === null || stage === "planning") &&
-    activity.type === "question.resolved"
-  ) {
-    return `“${activity.standaloneQuestion}”について調査中`;
+  // 根拠の選別は精査工程で発火するため、収集と精査を同じ表示区間として扱う。
+  if (stage === "evidence_collection" || stage === "evidence_review") {
+    return evidenceActivityText(activity);
   }
-  return stage === "retrieving" ? retrievalActivityText(activity) : null;
+  if (stage === "answering") return null;
+  return activity.type === "question.resolved"
+    ? `“${activity.standaloneQuestion}”について調査中`
+    : null;
 }
 
 export function ActiveRunStatus({

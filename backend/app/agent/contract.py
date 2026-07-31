@@ -42,7 +42,14 @@ __all__ = [
 ]
 
 PlanType = Literal["direct_answer", "search"]
-AnswerProgressStage = Literal["planning", "retrieving", "synthesizing"]
+AnswerProgressStage = Literal[
+    "safety_check",
+    "context_resolution",
+    "planning",
+    "evidence_collection",
+    "evidence_review",
+    "answering",
+]
 NonBlankText = Annotated[
     str,
     StringConstraints(strip_whitespace=True, min_length=1),

@@ -22,6 +22,9 @@ class AgentRunErrorCode(StrEnum):
 
 
 class AgentRunProgressStage(StrEnum):
+    SAFETY_CHECK = "safety_check"
+    CONTEXT_RESOLUTION = "context_resolution"
     PLANNING = "planning"
-    RETRIEVING = "retrieving"
-    SYNTHESIZING = "synthesizing"
+    EVIDENCE_COLLECTION = "evidence_collection"
+    EVIDENCE_REVIEW = "evidence_review"
+    ANSWERING = "answering"

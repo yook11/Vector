@@ -119,9 +119,9 @@ async def _collect(connection: AgentRunSseConnection) -> list[bytes]:
             {"attemptEpoch": 2},
         ),
         (
-            AgentRunLiveStreamStageEvent(stage="retrieving"),
+            AgentRunLiveStreamStageEvent(stage="evidence_collection"),
             "stage",
-            {"attemptEpoch": 2, "stage": "retrieving"},
+            {"attemptEpoch": 2, "stage": "evidence_collection"},
         ),
         (
             AgentRunLiveStreamActivityEvent(

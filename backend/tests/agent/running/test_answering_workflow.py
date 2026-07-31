@@ -258,12 +258,14 @@ async def test_direct_workflow_order_and_context_identity() -> None:
     )
 
     assert timeline == [
+        "progress:safety_check",
+        "progress:context_resolution",
         "prepare",
         "hook",
         "phases_factory",
         "progress:planning",
         "planner",
-        "progress:synthesizing",
+        "progress:answering",
         "direct_answerer",
     ]
     assert planner.calls[0].context is context
@@ -289,17 +291,20 @@ async def test_search_workflow_starts_both_retrieval_ports() -> None:
         hooks=_Hooks(timeline),
     )
 
-    assert timeline[:6] == [
+    assert timeline[:8] == [
+        "progress:safety_check",
+        "progress:context_resolution",
         "prepare",
         "hook",
         "phases_factory",
         "progress:planning",
         "planner",
-        "progress:retrieving",
+        "progress:evidence_collection",
     ]
-    assert set(timeline[6:8]) == {"internal_search", "external_runtime"}
-    assert timeline[8:] == [
-        "progress:synthesizing",
+    assert set(timeline[8:10]) == {"internal_search", "external_runtime"}
+    # 候補が内外ともゼロのため精査は呼ばれず、evidence_review は報告されない。
+    assert timeline[10:] == [
+        "progress:answering",
         "evidence_answerer",
     ]
     assert planner.calls[0].context is context
@@ -334,7 +339,10 @@ async def test_preparation_or_hook_failure_does_not_build_phases(
         )
 
     assert raised.value is error
+    reported_stages = ["progress:safety_check", "progress:context_resolution"]
     expected_timeline = (
-        ["prepare"] if failure_point == "prepare" else ["prepare", "hook"]
+        [*reported_stages, "prepare"]
+        if failure_point == "prepare"
+        else [*reported_stages, "prepare", "hook"]
     )
     assert timeline == expected_timeline

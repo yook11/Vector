@@ -972,7 +972,7 @@ async def test_run_agent_answer_completion_preserves_last_progress_stage(
 ) -> None:
     async with session_factory() as session:
         _thread, _message, run = await _create_thread_message_run(session)
-    fake_agent = FakeAgent(_direct_result(), stage="synthesizing")
+    fake_agent = FakeAgent(_direct_result(), stage="answering")
     FakeLiveStreamPublisher.instances = []
 
     def build_agent(**kwargs: object) -> FakeAgent:
@@ -1000,14 +1000,14 @@ async def test_run_agent_answer_completion_preserves_last_progress_stage(
         completed = await session.get(AgentRun, run.id)
         assert completed is not None
         assert completed.status == "completed"
-        assert completed.progress_stage == "synthesizing"
+        assert completed.progress_stage == "answering"
     stream = FakeLiveStreamPublisher.instances[0]
     stages = [
         event
         for event in stream.published
         if isinstance(event, AgentRunLiveStreamStageEvent)
     ]
-    assert [event.stage for event in stages] == ["synthesizing"]
+    assert [event.stage for event in stages] == ["answering"]
 
 
 @pytest.mark.asyncio
@@ -2361,7 +2361,7 @@ async def test_terminal_publish_failure_does_not_revert_completed_run(
 ) -> None:
     async with session_factory() as session:
         _thread, _message, run = await _create_thread_message_run(session)
-    fake_agent = FakeAgent(_direct_result(), stage="synthesizing")
+    fake_agent = FakeAgent(_direct_result(), stage="answering")
     FakeLiveStreamPublisher.instances = []
     monkeypatch.setattr(FakeLiveStreamPublisher, "raise_on_publish", True)
 
@@ -2671,7 +2671,9 @@ async def test_run_agent_answer_generation_error_preserves_death_progress_stage(
 ) -> None:
     async with session_factory() as session:
         _thread, _message, run = await _create_thread_message_run(session)
-    fake_agent = FakeAgent(exc=AIProviderError("SHOULD_NOT_LEAK"), stage="retrieving")
+    fake_agent = FakeAgent(
+        exc=AIProviderError("SHOULD_NOT_LEAK"), stage="evidence_collection"
+    )
 
     def build_agent(**kwargs: object) -> FakeAgent:
         fake_agent.progress = kwargs["progress"]
@@ -2689,7 +2691,7 @@ async def test_run_agent_answer_generation_error_preserves_death_progress_stage(
         assert failed is not None
         assert failed.status == "failed"
         assert failed.error_code == "generation_unavailable"
-        assert failed.progress_stage == "retrieving"
+        assert failed.progress_stage == "evidence_collection"
 
 
 @pytest.mark.asyncio
@@ -2963,7 +2965,7 @@ async def test_acquire_for_execution_reexecutes_running_and_skips_terminal_runs(
             status="running",
             started_at=now - timedelta(minutes=11),
             attempt_epoch=1,
-            progress_stage="synthesizing",
+            progress_stage="answering",
         )
         _terminal_thread, _terminal_message, failed = await _create_thread_message_run(
             setup_session,

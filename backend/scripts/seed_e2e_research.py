@@ -480,7 +480,7 @@ async def _seed(connection: AsyncConnection) -> None:
                 "user_message_id": thread.user_message_id,
                 "assistant_message_id": thread.assistant_message_id,
                 "status": "completed",
-                "progress_stage": "synthesizing",
+                "progress_stage": "answering",
                 "error_code": None,
                 "created_at": thread.updated_at,
                 "started_at": thread.updated_at,
@@ -502,7 +502,7 @@ async def _seed(connection: AsyncConnection) -> None:
                     "user_message_id": fixture.completed_user_message_id,
                     "assistant_message_id": fixture.assistant_message_id,
                     "status": "completed",
-                    "progress_stage": "synthesizing",
+                    "progress_stage": "answering",
                     "error_code": None,
                     "created_at": fixture.updated_at,
                     "started_at": fixture.updated_at,
@@ -515,7 +515,7 @@ async def _seed(connection: AsyncConnection) -> None:
                     "user_message_id": fixture.active_user_message_id,
                     "assistant_message_id": None,
                     "status": "running",
-                    "progress_stage": "synthesizing",
+                    "progress_stage": "answering",
                     "error_code": None,
                     "created_at": fixture.updated_at,
                     "started_at": active_started_at,
@@ -550,7 +550,7 @@ async def _reset_continuity_run(
         )
         .values(
             status="running",
-            progress_stage="synthesizing",
+            progress_stage="answering",
             error_code=None,
             assistant_message_id=None,
             completed_at=None,
@@ -681,7 +681,7 @@ async def _complete_continuity_run(
         )
         .values(
             status="completed",
-            progress_stage="synthesizing",
+            progress_stage="answering",
             error_code=None,
             assistant_message_id=fixture.active_assistant_message_id,
             completed_at=now,

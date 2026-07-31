@@ -223,7 +223,7 @@ async def test_live_reporters_dual_write_and_project_activity_at_sse_boundary() 
         )
 
         await stream_publisher.begin_attempt()
-        await stage_reporter.stage_changed("retrieving")
+        await stage_reporter.stage_changed("evidence_collection")
         await activity_reporter.event_occurred(activity)
         await stream_publisher.publish(
             AgentRunLiveStreamTerminalEvent(status="completed")

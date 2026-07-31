@@ -50,6 +50,7 @@ from app.agent.question_context.contract import (
     QuestionContextTelemetry,
 )
 from app.agent.running import AnsweringPhases, AnsweringRunner, RunContext, RunInput
+from app.agent.runtime.contract import AgentResponseDefect, AgentResponseInvalidError
 from app.agent.threads.contracts import ThreadMessageSnapshot
 from app.analysis.analyzed_article import InScopeAnalyzedArticle
 from app.analysis.assessment.domain.result import InScope, InScopeCategory
@@ -366,14 +367,61 @@ class FakeExternalQueryRuntime:
 class FakeEvidenceReviewerRuntime:
     """S1: reviewerはRun単位で1回だけ呼ばれるため、goal別ではなく単一draftを返す。"""
 
-    def __init__(self, draft: EvidenceReviewDraft) -> None:
+    def __init__(
+        self, draft: EvidenceReviewDraft, *, timeline: CallTimeline | None = None
+    ) -> None:
         self._draft = draft
+        self._timeline = timeline
 
     async def invoke(
         self, agent: object, input: object, *, attempt_number: int
     ) -> EvidenceReviewDraft:
         del agent, input, attempt_number
+        if self._timeline is not None:
+            self._timeline.record("reviewer.review")
         return self._draft
+
+
+class FakeFailingReviewerRuntime:
+    """常に指定した例外で失敗する reviewer runtime(review失敗経路の検証用)。"""
+
+    def __init__(
+        self, error: Exception, *, timeline: CallTimeline | None = None
+    ) -> None:
+        self._error = error
+        self._timeline = timeline
+
+    async def invoke(
+        self, agent: object, input: object, *, attempt_number: int
+    ) -> EvidenceReviewDraft:
+        del agent, input, attempt_number
+        if self._timeline is not None:
+            self._timeline.record("reviewer.review")
+        raise self._error
+
+
+class _ZeroCandidateExternalTool:
+    """全queryに対して常に空候補を返す(全task候補ゼロ経路の検証用)。"""
+
+    @property
+    def name(self) -> str:
+        return "external_search"
+
+    async def invoke(self, input: object) -> list[ExternalSearchCandidate]:
+        del input
+        return []
+
+
+class _UnexpectedReviewerRuntime:
+    """精査を呼ばない経路のテストで、誤って呼ばれたら失敗させる。"""
+
+    async def invoke(
+        self, agent: object, input: object, *, attempt_number: int
+    ) -> EvidenceReviewDraft:
+        del agent, input, attempt_number
+        raise AssertionError(
+            "reviewer must not be called when all tasks have zero candidates"
+        )
 
 
 class FakeExternalTool:
@@ -395,6 +443,8 @@ def _external_runtime_for(
     plan: object,
     outcome: _RetrievalFixture,
     internal_hits: list[InternalArticleSearchHit] | None = None,
+    timeline: CallTimeline | None = None,
+    reviewer_runtime: object | None = None,
 ) -> ExternalResearchRuntime:
     """S1: reviewerがRun全体の統合index空間(task_index昇順、group内は内部先・
 
@@ -470,7 +520,11 @@ def _external_runtime_for(
     )
     return ExternalResearchRuntime(
         query_runtime=FakeExternalQueryRuntime(queries_by_goal),  # type: ignore[arg-type]
-        reviewer_runtime=FakeEvidenceReviewerRuntime(draft),  # type: ignore[arg-type]
+        reviewer_runtime=(
+            reviewer_runtime
+            if reviewer_runtime is not None
+            else FakeEvidenceReviewerRuntime(draft, timeline=timeline)
+        ),  # type: ignore[arg-type]
         search_tool=FakeExternalTool(candidates_by_query),  # type: ignore[arg-type]
     )
 
@@ -562,10 +616,15 @@ class FakeProgressReporter:
 
 
 class _FixedContextPreparer:
-    def __init__(self, context: QuestionContext) -> None:
+    def __init__(
+        self, context: QuestionContext, *, timeline: CallTimeline | None = None
+    ) -> None:
         self._context = context
+        self._timeline = timeline
 
     async def prepare(self, **_kwargs: object) -> QuestionContextPreparationResult:
+        if self._timeline is not None:
+            self._timeline.record("context_preparer.prepare")
         return QuestionContextPreparationResult(
             context=self._context,
             telemetry=QuestionContextTelemetry(),
@@ -578,9 +637,11 @@ class _WorkflowHarness:
         *,
         phases: AnsweringPhases,
         progress: FakeProgressReporter | None,
+        timeline: CallTimeline | None = None,
     ) -> None:
         self._phases = phases
         self._progress = progress
+        self._timeline = timeline
 
     async def answer(self, input: _WorkflowInput) -> AnswerQuestionResult:
         history = (
@@ -594,8 +655,10 @@ class _WorkflowHarness:
             else ()
         )
         runner = AnsweringRunner(
-            input_safety_checker=AllowInputSafetyChecker(),
-            context_preparer=_FixedContextPreparer(input.context),
+            input_safety_checker=AllowInputSafetyChecker(timeline=self._timeline),
+            context_preparer=_FixedContextPreparer(
+                input.context, timeline=self._timeline
+            ),
             phases_factory=lambda: self._phases,
             progress=self._progress,
         )
@@ -627,6 +690,8 @@ def _orchestrator(
     internal_error: Exception | None = None,
     progress: FakeProgressReporter | None = None,
     timeline: CallTimeline | None = None,
+    reviewer_runtime: object | None = None,
+    external_runtime_override: ExternalResearchRuntime | None = None,
 ) -> tuple[
     _WorkflowHarness,
     FakePlanner,
@@ -639,14 +704,21 @@ def _orchestrator(
         internal_error if internal_error is not None else outcome,
         timeline=timeline,
     )
-    external_runtime = (
-        _external_runtime_for(
-            plan=plan, outcome=outcome, internal_hits=outcome.internal_hits
+    if external_runtime_override is not None:
+        external_runtime: ExternalResearchRuntime | None = external_runtime_override
+    else:
+        external_runtime = (
+            _external_runtime_for(
+                plan=plan,
+                outcome=outcome,
+                internal_hits=outcome.internal_hits,
+                timeline=timeline,
+                reviewer_runtime=reviewer_runtime,
+            )
+            if isinstance(plan, _plan_type("SearchPlan"))
+            and isinstance(outcome, _RetrievalFixture)
+            else None
         )
-        if isinstance(plan, _plan_type("SearchPlan"))
-        and isinstance(outcome, _RetrievalFixture)
-        else None
-    )
     evidence_answerer = FakeEvidenceAnswerer(draft, timeline=timeline)
     direct_answerer = FakeDirectAnswerer(direct_draft, timeline=timeline)
     phases = AnsweringPhases(
@@ -663,6 +735,7 @@ def _orchestrator(
     workflow = _WorkflowHarness(
         phases=phases,
         progress=progress,
+        timeline=timeline,
     )
     return workflow, planner, internal_search, evidence_answerer, direct_answerer
 
@@ -707,6 +780,10 @@ async def test_answer_direct_plan_calls_direct_answerer_only() -> None:
 
 @pytest.mark.asyncio
 async def test_answer_direct_plan_orders_progress_and_port_calls() -> None:
+    """direct answer経路はsafety_check→context_resolution→planning→
+
+    answeringの順に報告され、evidence_collectionとevidence_reviewは報告されない。
+    """
     timeline = CallTimeline()
     progress = FakeProgressReporter(timeline=timeline)
     orchestrator, _, _, _, _ = _orchestrator(
@@ -719,9 +796,13 @@ async def test_answer_direct_plan_orders_progress_and_port_calls() -> None:
     await orchestrator.answer(_input("こんにちは"))
 
     assert timeline.events == [
+        "progress:safety_check",
+        "input_safety_checker.check",
+        "progress:context_resolution",
+        "context_preparer.prepare",
         "progress:planning",
         "planner.plan",
-        "progress:synthesizing",
+        "progress:answering",
         "direct_answerer.answer",
     ]
 
@@ -765,6 +846,11 @@ async def test_answer_search_plan_never_calls_direct_answerer(
 
 @pytest.mark.asyncio
 async def test_answer_evidence_plan_orders_progress_and_port_calls() -> None:
+    """evidence経路はsafety_check→context_resolution→planning→
+
+    evidence_collection→evidence_review→answeringの順に報告され、各報告は
+    対応するport呼び出し(check/prepare/plan/collect/review/answer)の直前になる。
+    """
     timeline = CallTimeline()
     progress = FakeProgressReporter(timeline=timeline)
     orchestrator, _, _, _, _ = _orchestrator(
@@ -780,17 +866,129 @@ async def test_answer_evidence_plan_orders_progress_and_port_calls() -> None:
 
     await orchestrator.answer(_input())
 
-    assert timeline.events[:3] == [
+    assert timeline.events[:6] == [
+        "progress:safety_check",
+        "input_safety_checker.check",
+        "progress:context_resolution",
+        "context_preparer.prepare",
         "progress:planning",
         "planner.plan",
-        "progress:retrieving",
     ]
-    assert set(timeline.events[3:5]) == {
+    assert timeline.events[6] == "progress:evidence_collection"
+    assert set(timeline.events[7:9]) == {
         "internal_search.search_articles",
         "external_runtime.activate",
     }
-    assert timeline.events[5:] == [
-        "progress:synthesizing",
+    assert timeline.events[9:] == [
+        "progress:evidence_review",
+        "reviewer.review",
+        "progress:answering",
+        "evidence_answerer.answer",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_answer_evidence_plan_skips_evidence_review_for_zero_candidates() -> None:
+    """全taskの候補が内外ともゼロのRunはreviewerを呼ばずに閉じるため、
+
+    evidence_reviewは報告されず、evidence_collectionの次がansweringになる
+    (answering_runner.py:345-353相当の経路)。
+    """
+    timeline = CallTimeline()
+    progress = FakeProgressReporter(timeline=timeline)
+    task = _task(0)
+    zero_candidate_runtime = ExternalResearchRuntime(
+        query_runtime=FakeExternalQueryRuntime({task.research_goal: "fixture-query"}),
+        reviewer_runtime=_UnexpectedReviewerRuntime(),  # type: ignore[arg-type]
+        search_tool=_ZeroCandidateExternalTool(),  # type: ignore[arg-type]
+    )
+    orchestrator, _, _, evidence_answerer, _ = _orchestrator(
+        plan=_search_plan(tasks=[task]),
+        outcome=_RetrievalFixture(internal_hits=[]),
+        external_runtime_override=zero_candidate_runtime,
+        draft=_draft(
+            answer=(
+                "検索で引用できる根拠は見つかりませんでした。"
+                "一般論としては参考程度に扱ってください。"
+            ),
+            cited_refs=[],
+        ),
+        progress=progress,
+        timeline=timeline,
+    )
+
+    result = await orchestrator.answer(_input())
+
+    assert result.status == "insufficient"
+    assert "progress:evidence_review" not in timeline.events
+    assert timeline.events[:6] == [
+        "progress:safety_check",
+        "input_safety_checker.check",
+        "progress:context_resolution",
+        "context_preparer.prepare",
+        "progress:planning",
+        "planner.plan",
+    ]
+    assert timeline.events[6] == "progress:evidence_collection"
+    assert set(timeline.events[7:9]) == {
+        "internal_search.search_articles",
+        "external_runtime.activate",
+    }
+    assert timeline.events[9:] == [
+        "progress:answering",
+        "evidence_answerer.answer",
+    ]
+    assert len(evidence_answerer.calls) == 1
+    assert evidence_answerer.calls[0]["evidence"] == []
+
+
+@pytest.mark.asyncio
+async def test_answer_evidence_plan_reports_evidence_review_when_review_fails() -> None:
+    """精査が失敗したRunでもevidence_reviewは報告済みであり、answeringへ進む。
+
+    EvidenceReviewerは2attemptとも失敗した後に根拠ゼロでRunを閉じる
+    (retry回数自体はtest_evidence_review_run_scope.pyが正本、ここではreviewer.review
+    呼び出しの前後にどの進捗報告が挟まるかだけを固定する)。
+    """
+    timeline = CallTimeline()
+    progress = FakeProgressReporter(timeline=timeline)
+    failure = AgentResponseInvalidError(AgentResponseDefect.OUTPUT_SCHEMA_MISMATCH)
+    orchestrator, _, _, _, _ = _orchestrator(
+        plan=_search_plan(),
+        outcome=_internal_outcome(1),
+        reviewer_runtime=FakeFailingReviewerRuntime(failure, timeline=timeline),
+        draft=_draft(
+            answer=(
+                "検索で引用できる根拠は見つかりませんでした。"
+                "一般論としては参考程度に扱ってください。"
+            ),
+            cited_refs=[],
+        ),
+        progress=progress,
+        timeline=timeline,
+    )
+
+    result = await orchestrator.answer(_input())
+
+    assert result.status == "insufficient"
+    assert timeline.events[:6] == [
+        "progress:safety_check",
+        "input_safety_checker.check",
+        "progress:context_resolution",
+        "context_preparer.prepare",
+        "progress:planning",
+        "planner.plan",
+    ]
+    assert timeline.events[6] == "progress:evidence_collection"
+    assert set(timeline.events[7:9]) == {
+        "internal_search.search_articles",
+        "external_runtime.activate",
+    }
+    assert timeline.events[9:] == [
+        "progress:evidence_review",
+        "reviewer.review",
+        "reviewer.review",
+        "progress:answering",
         "evidence_answerer.answer",
     ]
 
@@ -1080,6 +1278,10 @@ async def test_answer_passes_none_time_window_for_search_plan() -> None:
             AssertionError("evidence_answerer must not be called"),
             "planner failed",
             [
+                "progress:safety_check",
+                "input_safety_checker.check",
+                "progress:context_resolution",
+                "context_preparer.prepare",
                 "progress:planning",
                 "planner.plan",
             ],
@@ -1128,7 +1330,7 @@ async def test_answer_step_failure_stops_before_later_progress_or_ports(
         assert timeline.events == expected_planner_timeline
         return
 
-    retrieving_index = timeline.events.index("progress:retrieving")
+    evidence_collection_index = timeline.events.index("progress:evidence_collection")
     branch_start_indices = {
         event: timeline.events.index(event)
         for event in (
@@ -1136,15 +1338,18 @@ async def test_answer_step_failure_stops_before_later_progress_or_ports(
             "external_runtime.activate",
         )
     }
-    assert all(index > retrieving_index for index in branch_start_indices.values())
+    assert all(
+        index > evidence_collection_index for index in branch_start_indices.values()
+    )
     if internal_error is not None:
-        assert "progress:synthesizing" not in timeline.events
+        assert "progress:evidence_review" not in timeline.events
+        assert "progress:answering" not in timeline.events
         assert "evidence_answerer.answer" not in timeline.events
         return
 
-    synthesizing_index = timeline.events.index("progress:synthesizing")
-    assert all(index < synthesizing_index for index in branch_start_indices.values())
-    assert timeline.events.index("evidence_answerer.answer") > synthesizing_index
+    answering_index = timeline.events.index("progress:answering")
+    assert all(index < answering_index for index in branch_start_indices.values())
+    assert timeline.events.index("evidence_answerer.answer") > answering_index
 
 
 @pytest.mark.asyncio
@@ -1161,8 +1366,12 @@ async def test_answer_direct_failure_stops_before_later_progress_or_ports() -> N
         await orchestrator.answer(_input("こんにちは"))
 
     assert timeline.events == [
+        "progress:safety_check",
+        "input_safety_checker.check",
+        "progress:context_resolution",
+        "context_preparer.prepare",
         "progress:planning",
         "planner.plan",
-        "progress:synthesizing",
+        "progress:answering",
         "direct_answerer.answer",
     ]
