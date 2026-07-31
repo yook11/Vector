@@ -669,27 +669,28 @@ class TestWorkerApplicationName:
 
 
 class TestSocketTimeout:
-    """redis-py 8 の既定 5 秒 socket_timeout を worker 全 broker で明示的に上書きする。
+    """redis-py 8 の既定 5 秒 socket_timeout の明示上書きを pin する。
 
     listener の blocking read (XREADGROUP) が既定 timeout で切れると worker
-    プロセスごと落ちるため、broker / result backend 双方の接続 kwargs に必ず
-    socket_timeout=30 が乗っている必要がある。
+    プロセスごと落ちるため、read は 30 秒へ広げ、接続確立のみ 5 秒の fail-fast を
+    保つ。全 broker は ``_make_broker`` を経由して同じ kwargs を共有するため、
+    broker_dispatch 1 つを代表として検証する。期待値は production 定数の参照では
+    なくリテラルで pin し、値の変更を意図的な差分として顕在化させる。
     """
 
     def test_broker_connection_pool_has_socket_timeout(self) -> None:
         from app.queue.brokers import broker_dispatch
 
-        assert broker_dispatch.connection_pool.connection_kwargs["socket_timeout"] == 30
+        kwargs = broker_dispatch.connection_pool.connection_kwargs
+        assert kwargs["socket_timeout"] == 30
+        assert kwargs["socket_connect_timeout"] == 5
 
     def test_result_backend_connection_pool_has_socket_timeout(self) -> None:
         from app.queue.brokers import broker_dispatch
 
-        assert (
-            broker_dispatch.result_backend.redis_pool.connection_kwargs[
-                "socket_timeout"
-            ]
-            == 30
-        )
+        kwargs = broker_dispatch.result_backend.redis_pool.connection_kwargs
+        assert kwargs["socket_timeout"] == 30
+        assert kwargs["socket_connect_timeout"] == 5
 
 
 @pytest.mark.asyncio

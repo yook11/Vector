@@ -183,12 +183,6 @@ def _register_worker_lifecycle(broker: RedisStreamBroker, label: str) -> None:
                     session
                 ).assert_category_catalog_covers_enum()
 
-        if label == "agent":
-            # agent は run 実行に必ず Gemini SDK を使う。0.25 vCPU では run 中の
-            # 遅延 import が event loop を数秒塞ぎ、broker read timeout で worker が
-            # 落ちるため、listener 開始前のここで済ませる。
-            import google.genai  # noqa: F401
-
     @broker.on_event(TaskiqEvents.WORKER_SHUTDOWN)
     async def on_shutdown(state: TaskiqState) -> None:
         if hasattr(state, "auth_engine"):

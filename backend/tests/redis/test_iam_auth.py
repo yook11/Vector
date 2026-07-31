@@ -15,6 +15,7 @@ import pytest
 from app.config import settings
 from app.redis.iam_auth import (
     ElastiCacheIAMProvider,
+    _botocore_session,
     _request_signer,
     redis_connection_options,
 )
@@ -27,8 +28,9 @@ _IAM_URL = f"redis://{_USER}@vector-cache.abc.cache.amazonaws.com:6379/3"
 
 @pytest.fixture(autouse=True)
 def isolated_request_signer() -> None:
-    """プロセス共有 signer の cache を test 間で持ち越さない。"""
+    """プロセス共有 signer / session の cache を test 間で持ち越さない。"""
     _request_signer.cache_clear()
+    _botocore_session.cache_clear()
 
 
 @pytest.fixture
@@ -94,7 +96,7 @@ class TestElastiCacheIAMProvider:
         assert _request_signer(_REGION) is _request_signer(_REGION)
 
     def test_token_generation_survives_gc_after_first_call(self) -> None:
-        """session を戻り値に含めず signer だけ返すと、1 回目の呼び出し後の
+        """botocore session を cache で生かさないと、1 回目の呼び出し後の
         ``gc.collect()`` で session が回収され、signer 内部の weakref が死んで
         以後の token 生成が ``ReferenceError`` になる (本番障害の再現条件)。
         """

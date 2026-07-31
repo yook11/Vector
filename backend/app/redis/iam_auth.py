@@ -33,24 +33,32 @@ _TOKEN_EXPIRES_IN_SECONDS = 900
 
 
 @lru_cache(maxsize=1)
+def _botocore_session() -> Any:
+    """プロセス内で 1 本だけ持つ botocore session。
+
+    RequestSigner は session を強参照せず、session が GC されると event_emitter
+    内の weakref が死んで以後の再接続の token 生成が全て ``ReferenceError`` に
+    なるため、cache で signer と同寿命に生かし続ける。
+    """
+    import botocore.session
+
+    return botocore.session.get_session()
+
+
+@lru_cache(maxsize=1)
 def _request_signer(region: str) -> Any:
-    """プロセス内で 1 つだけ持つ signer (session ごと保持する)。
+    """プロセス内で 1 つだけ持つ signer。
 
     session ごとに credential を独立に取得・更新するため、broker × 8 が provider を
     持つ worker でも解決を 1 本に共有する (``app/db_iam_auth.py`` の ``_rds_client``
     と同じ判断)。botocore の import と credential 解決 (ECS では HTTP) も初回の
     token 要求まで遅れる。
-
-    RequestSigner は session を強参照しないため、signer だけ返すと session が GC
-    された時点で event_emitter 内の weakref が死に、以後の再接続の token 生成が
-    全て ``ReferenceError`` になる。session を戻り値に含めて cache で生かし続ける。
     """
-    import botocore.session
     from botocore.model import ServiceId
     from botocore.signers import RequestSigner
 
-    session = botocore.session.get_session()
-    signer = RequestSigner(
+    session = _botocore_session()
+    return RequestSigner(
         ServiceId("elasticache"),
         region,
         "elasticache",
@@ -58,7 +66,6 @@ def _request_signer(region: str) -> Any:
         session.get_credentials(),
         session.get_component("event_emitter"),
     )
-    return signer, session
 
 
 class ElastiCacheIAMProvider(CredentialProvider):
@@ -80,8 +87,7 @@ class ElastiCacheIAMProvider(CredentialProvider):
                 "",
             )
         )
-        signer, _session = _request_signer(self.region)
-        signed: str = signer.generate_presigned_url(
+        signed: str = _request_signer(self.region).generate_presigned_url(
             {"method": "GET", "url": url, "body": {}, "headers": {}, "context": {}},
             operation_name="connect",
             expires_in=_TOKEN_EXPIRES_IN_SECONDS,
