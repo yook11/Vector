@@ -6,6 +6,7 @@
  * 対称な構造で書く。
  */
 
+import { Client } from "pg";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("server-only", () => ({}));
@@ -79,6 +80,12 @@ describe("runtimePoolConfigFromUrl — DB_IAM_AUTH が有効", () => {
     expect(runtimePoolConfigFromUrl(RDS_URL).ssl).toEqual({
       rejectUnauthorized: true,
     });
+  });
+
+  it("pg.Client に渡した後も password は生成器のまま残る (connectionString の再解析で password 関数が消える回帰の検出)", () => {
+    const config = runtimePoolConfigFromUrl(RDS_URL);
+    const client = new Client(config);
+    expect(typeof client.password).toBe("function");
   });
 
   it("user の無い URL は拒否する (token は user 単位で署名する)", () => {
