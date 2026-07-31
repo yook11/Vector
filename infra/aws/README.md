@@ -120,6 +120,34 @@ subnet 自体は無料なので段ごとに 1:1 で切る。
   Fly と同じ判断を引き継いだ既知の受容 (root は redirect するので健全性の指標に
   ならない)。cascade を避けたいなら DB に触らない専用 endpoint が要る。
 
+## DB 踏み台 (enable_db_bastion)
+
+RDS への人手作業 (移行・保守) 用の一時経路。平常時は存在せず、素の apply が
+撤去を兼ねる。SSM Session Manager の port forwarding で、踏み台は public IP も
+SSH ポートも ingress 規則も持たない。
+
+```
+生やす:  terraform apply -var enable_db_bastion=true (image_tag も現行値で渡す)
+繋ぐ:    aws ssm start-session --target <instance-id> \
+           --document-name AWS-StartPortForwardingSessionToRemoteHost \
+           --parameters host=<RDS endpoint>,portNumber=5432,localPortNumber=15432
+消す:    素の terraform apply
+```
+
+instance-id と RDS endpoint は `terraform output bastion_instance_id` /
+`terraform output db_endpoint` で取れる。
+
+- Mac 側に session-manager-plugin が要る (`brew install --cask session-manager-plugin`)。
+- local port は 15432 にする。5432 は dev の docker Postgres と衝突する。
+- `verify-full` はトンネル越しだと CN 不一致で落ちる。libpq の
+  `host=<RDS endpoint> hostaddr=127.0.0.1 port=15432` 分離指定で保てる。
+  IAM auth token の `--hostname` にも localhost ではなく実 endpoint を渡す。
+- **踏み台を使う作業の最中に apply するなら必ず var を付ける。** 素の apply は
+  設計どおり土管ごと撤去する。
+- SSM のデータチャネルは数 MB/s。この DB の規模なら pg_restore に実害はない。
+- `start-session` が TargetNotConnected のときの第一容疑者は endpoints SG
+  (bastion からの 443 ingress は toggle 内の conditional resource)。
+
 ## egress proxy の残余
 
 - **オープンプロキシ化はアドレスの不在が防いでいる。** proxy は private subnet に

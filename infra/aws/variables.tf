@@ -80,6 +80,16 @@ variable "frontend_domain" {
   type        = string
 }
 
+variable "enable_db_bastion" {
+  description = <<-EOT
+    DB への人手作業 (移行・保守) 用の一時踏み台を生やす (bastion.tf)。
+    既定 false = 存在しない。素の apply が撤去を兼ねるため、踏み台を
+    使う作業の最中に apply するときは必ず -var enable_db_bastion=true を付ける。
+  EOT
+  type        = bool
+  default     = false
+}
+
 variable "crossref_contact_email" {
   description = <<-EOT
     Crossref API の User-Agent に載せる連絡先 (backend Settings の必須項目)。
