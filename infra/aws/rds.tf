@@ -14,6 +14,9 @@ resource "aws_db_parameter_group" "this" {
   parameter {
     name  = "rds.force_ssl"
     value = "1"
+    # static parameter のため AWS 側が pending-reboot に固定する。既定の
+    # immediate のままだと毎 plan が同じ in-place 差分を出し続ける。
+    apply_method = "pending-reboot"
   }
 
   lifecycle {

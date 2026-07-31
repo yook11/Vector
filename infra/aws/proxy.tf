@@ -127,7 +127,10 @@ resource "aws_service_discovery_service" "proxy" {
     routing_policy = "MULTIVALUE"
   }
 
-  health_check_custom_config {}
+  # 空ブロックは round-trip しない (service_discovery.tf の注記と同じ)。
+  health_check_custom_config {
+    failure_threshold = 1
+  }
 }
 
 resource "aws_ecs_task_definition" "proxy" {

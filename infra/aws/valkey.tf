@@ -24,63 +24,67 @@ locals {
   # subcommand 追加は ElastiCache の CreateUser が InvalidParameterValue で拒否する。
   valkey_common_acl = "+@connection -@dangerous"
 
+  # AWS は保存時に既定 deny を明示する正規形へ書き換える (selector を持つ user は
+  # root に resetchannels -@all、持たない user は -@all だけ)。config が生の文字列の
+  # ままだと毎 plan で差分になるため、保存後の正規形をそのまま書く。意味は不変
+  # (元から既定 deny に対する additive な allowlist)。
   broker_user_access = {
     api = join(" ", [
-      "on ~pipeline:dispatch ~pipeline:acquisition ~agent +xadd",
+      "on ~pipeline:dispatch ~pipeline:acquisition ~agent resetchannels -@all +xadd",
       "+multi +exec",
       local.valkey_common_acl,
-      "(~agent:run:* +xadd +xrange +xread +exists +expire +lrange)",
+      "(~agent:run:* resetchannels -@all +xadd +xrange +xread +exists +expire +lrange)",
     ])
     scheduler = join(" ", [
-      "on ~pipeline:dispatch ~pipeline:maintenance ~trend_discovery ~briefing ~agent",
+      "on ~pipeline:dispatch ~pipeline:maintenance ~trend_discovery ~briefing ~agent -@all",
       "+xadd +xgroup|create",
       local.valkey_common_acl,
     ])
     fetch = join(" ", [
-      "on ~pipeline:dispatch ~pipeline:acquisition ~pipeline:completion",
+      "on ~pipeline:dispatch ~pipeline:acquisition ~pipeline:completion resetchannels -@all",
       "+xadd +xgroup|create +xreadgroup +xack +xautoclaim",
       "+multi +exec +script|exists +script|load",
       local.valkey_common_acl,
-      "(~pipeline:curation +xadd)",
-      "(~autoclaim:taskiq:pipeline:dispatch ~autoclaim:taskiq:pipeline:acquisition ~autoclaim:taskiq:pipeline:completion +set +get +del +evalsha)",
-      "(~taskiq:* +set)",
+      "(~pipeline:curation resetchannels -@all +xadd)",
+      "(~autoclaim:taskiq:pipeline:dispatch ~autoclaim:taskiq:pipeline:acquisition ~autoclaim:taskiq:pipeline:completion resetchannels -@all +set +get +del +evalsha)",
+      "(~taskiq:* resetchannels -@all +set)",
     ])
     analysis = join(" ", [
-      "on ~pipeline:curation ~pipeline:assessment ~pipeline:embedding ~pipeline:maintenance",
+      "on ~pipeline:curation ~pipeline:assessment ~pipeline:embedding ~pipeline:maintenance resetchannels -@all",
       "+xadd +xgroup|create +xreadgroup +xack +xautoclaim",
       "+multi +exec +time +script|exists +script|load",
       local.valkey_common_acl,
-      "(~autoclaim:taskiq:pipeline:curation ~autoclaim:taskiq:pipeline:assessment ~autoclaim:taskiq:pipeline:embedding ~autoclaim:taskiq:pipeline:maintenance +set +get +del +evalsha)",
-      "(~taskiq:* +set)",
-      "(~ratelimit:* +evalsha +zremrangebyscore +zcard +zadd +zrange +expire)",
-      "(~backfill:budget:* +eval +get +incrby +expire)",
+      "(~autoclaim:taskiq:pipeline:curation ~autoclaim:taskiq:pipeline:assessment ~autoclaim:taskiq:pipeline:embedding ~autoclaim:taskiq:pipeline:maintenance resetchannels -@all +set +get +del +evalsha)",
+      "(~taskiq:* resetchannels -@all +set)",
+      "(~ratelimit:* resetchannels -@all +evalsha +zremrangebyscore +zcard +zadd +zrange +expire)",
+      "(~backfill:budget:* resetchannels -@all +eval +get +incrby +expire)",
       # recovery hold (現状 production 呼び出しゼロ) を有効化するときは
       # +eval +get +del +expire を足す。
-      "(~curation:hold ~assessment:hold ~embedding:hold +set +exists)",
-      "(~pipeline:acquisition ~pipeline:completion ~pipeline:curation ~pipeline:assessment +xlen +xinfo|groups +xpending +xrange)",
+      "(~curation:hold ~assessment:hold ~embedding:hold resetchannels -@all +set +exists)",
+      "(~pipeline:acquisition ~pipeline:completion ~pipeline:curation ~pipeline:assessment resetchannels -@all +xlen +xinfo|groups +xpending +xrange)",
     ])
     insights = join(" ", [
-      "on ~trend_discovery ~briefing",
+      "on ~trend_discovery ~briefing resetchannels -@all",
       "+xgroup|create +xreadgroup +xack +xautoclaim",
       "+multi +exec +script|exists +script|load",
       local.valkey_common_acl,
-      "(~briefing +xadd)",
-      "(~autoclaim:taskiq:trend_discovery ~autoclaim:taskiq:briefing +set +get +del +evalsha)",
-      "(~taskiq:* +set)",
+      "(~briefing resetchannels -@all +xadd)",
+      "(~autoclaim:taskiq:trend_discovery ~autoclaim:taskiq:briefing resetchannels -@all +set +get +del +evalsha)",
+      "(~taskiq:* resetchannels -@all +set)",
     ])
     agent = join(" ", [
-      "on ~agent",
+      "on ~agent resetchannels -@all",
       "+xgroup|create +xreadgroup +xack +xautoclaim",
       "+multi +exec +script|exists +script|load",
       local.valkey_common_acl,
-      "(~agent:run:* +xadd +expire +lpush +ltrim +del)",
-      "(~autoclaim:taskiq:agent +set +get +del +evalsha)",
-      "(~taskiq:* +set)",
+      "(~agent:run:* resetchannels -@all +xadd +expire +lpush +ltrim +del)",
+      "(~autoclaim:taskiq:agent resetchannels -@all +set +get +del +evalsha)",
+      "(~taskiq:* resetchannels -@all +set)",
     ])
   }
 
   frontend_user_access = join(" ", [
-    "on ~rl:* +eval +zremrangebyscore +zcard +zadd +expire",
+    "on ~rl:* -@all +eval +zremrangebyscore +zcard +zadd +expire",
     local.valkey_common_acl,
   ])
 }
