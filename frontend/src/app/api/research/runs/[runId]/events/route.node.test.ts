@@ -110,7 +110,7 @@ describe("GET /api/research/runs/[runId]/events", () => {
     });
 
     const response = await GET(
-      new Request(URL, { headers: { "fly-client-ip": "203.0.113.5" } }),
+      new Request(URL, { headers: { "x-vector-client-ip": "203.0.113.5" } }),
       context(),
     );
 
@@ -128,6 +128,44 @@ describe("GET /api/research/runs/[runId]/events", () => {
     expect(response.headers.get("Retry-After")).toBe("37");
     expect(mocks.getSession).not.toHaveBeenCalled();
     expect(mocks.fetch).not.toHaveBeenCalled();
+  });
+
+  it("passes the internal x-vector-client-ip header as clientIp, ignoring raw fly/xff/real-ip headers", async () => {
+    mocks.fetch.mockResolvedValue(new Response(null, { status: 204 }));
+
+    await GET(
+      new Request(URL, {
+        headers: {
+          "x-vector-client-ip": "203.0.113.9",
+          "fly-client-ip": "9.9.9.9",
+          "x-forwarded-for": "1.2.3.4",
+          "x-real-ip": "5.5.5.5",
+        },
+      }),
+      context(),
+    );
+
+    const args = mocks.buildSseRateLimitPlan.mock.calls[0]?.[0] as Record<
+      string,
+      unknown
+    >;
+    expect(args.clientIp).toBe("203.0.113.9");
+    expect(args).not.toHaveProperty("flyClientIp");
+    expect(args).not.toHaveProperty("forwardedFor");
+    expect(args).not.toHaveProperty("realIp");
+  });
+
+  it("passes null clientIp when x-vector-client-ip is absent, even if raw fly-client-ip is present", async () => {
+    mocks.fetch.mockResolvedValue(new Response(null, { status: 204 }));
+
+    await GET(
+      new Request(URL, { headers: { "fly-client-ip": "203.0.113.9" } }),
+      context(),
+    );
+
+    expect(mocks.buildSseRateLimitPlan).toHaveBeenCalledWith(
+      expect.objectContaining({ clientIp: null }),
+    );
   });
 
   it("normalizes uppercase UUID before rate-limit key and upstream URL", async () => {

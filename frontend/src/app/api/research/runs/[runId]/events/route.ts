@@ -7,6 +7,7 @@ import {
 } from "@/lib/api/internal-config";
 import { auth } from "@/lib/auth/auth";
 import { checkRateLimit, recordRateLimitSignal } from "@/lib/auth/rate-limit";
+import { CLIENT_IP_HEADER } from "@/lib/proxy/identifier";
 import { buildSseRateLimitPlan } from "@/lib/proxy/rate-limit-plan";
 
 const NO_STORE = "no-store, no-transform";
@@ -34,9 +35,8 @@ export async function GET(
   const plan = buildSseRateLimitPlan({
     sessionIdentity: getSessionCookie(request),
     runId: normalizedRunId,
-    flyClientIp: request.headers.get("fly-client-ip"),
-    forwardedFor: request.headers.get("x-forwarded-for"),
-    realIp: request.headers.get("x-real-ip"),
+    // proxy.ts が解決・上書きした内部ヘッダのみを読む (生ヘッダは信頼しない)。
+    clientIp: request.headers.get(CLIENT_IP_HEADER),
     isProduction: process.env.NODE_ENV === "production",
   });
   if (plan.signal) {

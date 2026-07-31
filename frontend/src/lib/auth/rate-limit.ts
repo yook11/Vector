@@ -79,7 +79,23 @@ const globalForRedis = globalThis as unknown as {
   __vectorRateLimitSignalLastMs?: Record<string, number>;
   __vectorRateLimitFailOpenLastMs?: Record<string, number>;
   __vectorRateLimitMisconfigLogged?: boolean;
+  __vectorClientIpTrustUnconfiguredLogged?: boolean;
 };
+
+/**
+ * CLIENT_IP_TRUST の未宣言を記録する。env 由来で不変なのでプロセスごとに 1 回。
+ *
+ * 経路異常 (missing_ip) と分けるのは、fail-closed を選んだ理由が「設定漏れで偽装穴が
+ * 静かに残らない」ことだから。両者が同じ信号だと、運用者は edge 障害か deploy 設定漏れか
+ * 判別できない。生の env 値は載せない。
+ */
+export function recordClientIpTrustUnconfigured(
+  detail: "unset" | "invalid",
+): void {
+  if (globalForRedis.__vectorClientIpTrustUnconfiguredLogged) return;
+  globalForRedis.__vectorClientIpTrustUnconfiguredLogged = true;
+  logServerEvent("warn", "frontend_client_ip_trust_unconfigured", { detail });
+}
 
 // IAM 認証の誤設定は env 由来で不変なので、診断 message はプロセスごとに 1 回だけ
 // 出す (継続的な可視化は checkRateLimit 側の unconfigured warn が担う)。
