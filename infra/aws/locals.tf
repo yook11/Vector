@@ -41,6 +41,10 @@ locals {
       cpu            = 256, memory = 512, port = 8000, singleton = false
       command        = ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
       secrets = {
+        # research 開始 API の設定プリフライトが両 key の存在を要求する。
+        # api は presence check のみで実呼び出しは agent 段が担うため egress は不要。
+        DEEPSEEK_API_KEY         = "deepseek-api-key"
+        TAVILY_API_KEY           = "tavily-api-key"
         BFF_JWT_SIGNING_SECRET   = "bff-jwt-signing-secret"
         REVALIDATE_BEARER_SECRET = "revalidate-bearer-secret"
         LOGFIRE_TOKEN            = "logfire-token"
