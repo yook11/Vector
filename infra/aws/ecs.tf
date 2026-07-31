@@ -39,6 +39,10 @@ locals {
   common_environment = {
     ENV        = "production"
     AWS_REGION = var.region
+    # Settings が構築時に全段で要求する必須項目 (実際に使うのは frontend_url が
+    # api、crossref が fetch)。frontend (Node) は読まないが common で害はない。
+    FRONTEND_URL           = "https://${var.frontend_domain}"
+    CROSSREF_CONTACT_EMAIL = var.crossref_contact_email
     # IAM モードは明示フラグで入る。「password が無いから IAM」という推測にすると、
     # password の設定漏れが黙って IAM モードとして動いてしまう。
     DB_IAM_AUTH    = "true"
@@ -99,7 +103,6 @@ locals {
       REDIS_IAM_CACHE_NAME_RL = aws_elasticache_replication_group.rate_limit.replication_group_id
     }
     api = {
-      FRONTEND_URL = "https://${var.frontend_domain}"
       DATABASE_URL = local.backend_db_url["vector_app"]
       REDIS_URL    = local.broker_redis_url["api"]
     }
