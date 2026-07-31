@@ -31,6 +31,12 @@ resource "aws_route_table_association" "bastion" {
 # Session Manager のデータチャネル。常設の 4 本 (endpoints.tf) に無いのは
 # ECS Exec を使わない決定のためで、踏み台が居る間だけここで足す。
 # agent の登録経路は常設の ssm endpoint が担う。
+#
+# SG は共有の endpoints SG ではなく専用 SG。共有 SG には app 7 段からの 443 を
+# 受け入れる規則が既にあり、相乗りすると toggle on の間だけ app 段 →
+# ssmmessages の経路が生まれる (実害は IAM で塞がっているが、この repo の思想は
+# 「経路が存在しない」)。app 段の egress は共有 SG 宛の SG 参照なので、
+# 専用 SG の ENI には最初から届かず、app 側の規則を触らずに両方向が閉じる。
 resource "aws_vpc_endpoint" "ssmmessages" {
   count = var.enable_db_bastion ? 1 : 0
 
@@ -38,10 +44,29 @@ resource "aws_vpc_endpoint" "ssmmessages" {
   service_name        = "com.amazonaws.${var.region}.ssmmessages"
   vpc_endpoint_type   = "Interface"
   subnet_ids          = [aws_subnet.app["api"].id]
-  security_group_ids  = [aws_security_group.endpoints.id]
+  security_group_ids  = [aws_security_group.ssmmessages_endpoint[0].id]
   private_dns_enabled = true
 
   tags = { Name = "${var.name_prefix}-vpce-ssmmessages" }
+}
+
+resource "aws_security_group" "ssmmessages_endpoint" {
+  count = var.enable_db_bastion ? 1 : 0
+
+  name        = "${var.name_prefix}-vpce-ssmmessages"
+  description = "Session Manager data channel. Reachable only from the bastion."
+  vpc_id      = aws_vpc.main.id
+}
+
+resource "aws_vpc_security_group_ingress_rule" "ssmmessages_from_bastion" {
+  count = var.enable_db_bastion ? 1 : 0
+
+  security_group_id            = aws_security_group.ssmmessages_endpoint[0].id
+  description                  = "bastion"
+  ip_protocol                  = "tcp"
+  from_port                    = 443
+  to_port                      = 443
+  referenced_security_group_id = aws_security_group.bastion[0].id
 }
 
 resource "aws_security_group" "bastion" {
@@ -52,15 +77,27 @@ resource "aws_security_group" "bastion" {
   vpc_id      = aws_vpc.main.id
 }
 
+# agent 登録 (常設の ssm endpoint = 共有 SG) とセッション本体 (専用 SG) の 2 宛先。
 resource "aws_vpc_security_group_egress_rule" "bastion_to_endpoints" {
   count = var.enable_db_bastion ? 1 : 0
 
   security_group_id            = aws_security_group.bastion[0].id
-  description                  = "ssm / ssmmessages"
+  description                  = "ssm (agent registration)"
   ip_protocol                  = "tcp"
   from_port                    = 443
   to_port                      = 443
   referenced_security_group_id = aws_security_group.endpoints.id
+}
+
+resource "aws_vpc_security_group_egress_rule" "bastion_to_ssmmessages" {
+  count = var.enable_db_bastion ? 1 : 0
+
+  security_group_id            = aws_security_group.bastion[0].id
+  description                  = "ssmmessages (session channel)"
+  ip_protocol                  = "tcp"
+  from_port                    = 443
+  to_port                      = 443
+  referenced_security_group_id = aws_security_group.ssmmessages_endpoint[0].id
 }
 
 resource "aws_vpc_security_group_egress_rule" "bastion_to_rds" {
@@ -152,6 +189,16 @@ resource "aws_instance" "bastion" {
 
   metadata_options {
     http_tokens = "required"
+  }
+
+  root_block_device {
+    encrypted = true
+  }
+
+  # 作業期間中に新 AL2023 AMI が出ても踏み台を作り直さない (トンネルが切れ、
+  # instance-id も変わる)。次に toggle off -> on した時点で最新へ追従する。
+  lifecycle {
+    ignore_changes = [ami]
   }
 
   tags = { Name = "${var.name_prefix}-bastion" }

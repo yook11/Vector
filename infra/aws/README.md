@@ -134,6 +134,9 @@ SSH ポートも ingress 規則も持たない。
 消す:    素の terraform apply
 ```
 
+instance-id と RDS endpoint は `terraform output bastion_instance_id` /
+`terraform output db_endpoint` で取れる。
+
 - Mac 側に session-manager-plugin が要る (`brew install --cask session-manager-plugin`)。
 - local port は 15432 にする。5432 は dev の docker Postgres と衝突する。
 - `verify-full` はトンネル越しだと CN 不一致で落ちる。libpq の

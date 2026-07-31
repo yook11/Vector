@@ -44,6 +44,16 @@ output "ecr_repository_urls" {
   value = { for name, repo in aws_ecr_repository.this : name => repo.repository_url }
 }
 
+output "bastion_instance_id" {
+  description = "DB 踏み台の instance ID (enable_db_bastion=false のときは null)。"
+  value       = one(aws_instance.bastion[*].id)
+}
+
+output "db_endpoint" {
+  description = "RDS の endpoint。踏み台の port forward と verify-full の host= に使う。"
+  value       = aws_db_instance.this.address
+}
+
 output "parameter_store_paths" {
   description = <<-EOT
     段ごとに実値を投入する path。Terraform は作らない。
