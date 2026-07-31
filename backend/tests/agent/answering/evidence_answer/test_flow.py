@@ -1,32 +1,36 @@
-"""Evidence answer flow tests."""
+"""Evidence answer flow tests(S4: response_schema=Noneのplain text契約)。"""
 
 from __future__ import annotations
 
 import json
 from collections.abc import AsyncIterator, Sequence
 from contextlib import asynccontextmanager
-from dataclasses import replace
 from datetime import UTC, datetime
 from importlib import import_module
-from typing import Any, ClassVar
+from typing import Any
 
 import pytest
 from logfire.testing import CaptureLogfire
-from pydantic import model_validator
+from pydantic import ValidationError
 
 from app.agent.answering.contract import AnsweringRequest
-from app.agent.answering.evidence_answer.contract import (
-    EvidenceAnswerDraft,
-    EvidenceAnswerDraftGenerationInvalidError,
-    RawEvidenceAnswerDraft,
-)
+from app.agent.answering.evidence_answer.contract import EvidenceAnswerDraft
 from app.agent.answering.evidence_answer.evidence import AnswerEvidenceItem
 from app.agent.answering.evidence_answer.flow import EvidenceAnswerFlow
 from app.agent.contract import ExternalUrlSource
 from app.agent.planning.contract import TargetTimeWindow
 from app.agent.question_context.contract import AnswerRequirement, QuestionContext
-from app.analysis.ai_provider_errors import AIProviderError, AIProviderNetworkError
-from tests.logfire._metric_helpers import collected_metrics, sum_counter_for_result
+from app.analysis.ai_provider_errors import (
+    AIProviderError,
+    AIProviderNetworkError,
+    AIProviderOutputTruncatedError,
+)
+from app.analysis.gemini_error_translator import GeminiStateReason
+from tests.logfire._metric_helpers import (
+    collected_metrics,
+    counter_attribute_key_sets,
+    sum_counter_for_result,
+)
 from tests.logfire._span_helpers import (
     domain_attr_keys,
     exception_event,
@@ -88,34 +92,45 @@ def _evidence(ref: str = "1") -> AnswerEvidenceItem:
     )
 
 
-def _raw(
-    *,
-    sufficiency: str = "answered",
-    answer: object = "根拠から確認できます。[[1]]",
-    cited_refs: list[object] | None = None,
-    missing_aspects: list[object] | None = None,
-    unfulfilled_requirement_ids: list[object] | None = None,
-) -> RawEvidenceAnswerDraft:
-    return RawEvidenceAnswerDraft(
-        sufficiency=sufficiency,
-        answer=answer,
-        cited_refs=["1"] if cited_refs is None else cited_refs,
-        missing_aspects=[] if missing_aspects is None else missing_aspects,
-        unfulfilled_requirement_ids=(
-            [] if unfulfilled_requirement_ids is None else unfulfilled_requirement_ids
-        ),
+def _truncated_error() -> AIProviderOutputTruncatedError:
+    """S1 runtimeが実際に送出する形 (reason付き) を再現する。"""
+    return AIProviderOutputTruncatedError(
+        reason=GeminiStateReason.OUTPUT_TOKEN_LIMIT_REACHED
     )
 
 
-def _raw_json(raw: RawEvidenceAnswerDraft) -> str:
-    return json.dumps(raw.model_dump(mode="json"), ensure_ascii=False)
+def _evidence_answer_unavailable_type() -> Any:
+    contract = import_module("app.agent.answering.evidence_answer.contract")
+    unavailable_type = getattr(contract, "EvidenceAnswerUnavailable", None)
+    if unavailable_type is None:
+        pytest.fail(
+            "S3: app.agent.answering.evidence_answer.contract must define "
+            "EvidenceAnswerUnavailable"
+        )
+    return unavailable_type
+
+
+def _expected_draft(*, answer: str, cited_refs: list[str]) -> Any:
+    """S4: EvidenceAnswerDraftはanswerとcited_refsだけを持つ
+
+    (sufficiency/missing_aspects/unfulfilled_requirement_idsは撤去される)。
+    現行モデルはまだsufficiencyを必須で要求するため、比較用の期待値構築を
+    ガードしてassertion failureのredにする。
+    """
+    try:
+        return EvidenceAnswerDraft(answer=answer, cited_refs=cited_refs)
+    except ValidationError:
+        pytest.fail(
+            "S4: EvidenceAnswerDraft must accept only "
+            "(answer: NonBlankText, cited_refs: list[str])"
+        )
 
 
 def _operation_names(reporter: RecordingDeltaReporter) -> list[tuple[str, int]]:
     return [(name, generation) for name, generation, _ in reporter.operations]
 
 
-StreamOutcome = RawEvidenceAnswerDraft | str | Sequence[str] | Exception
+StreamOutcome = str | Sequence[str] | Exception
 
 
 class FakeEvidenceAnswerStream:
@@ -128,10 +143,6 @@ class FakeEvidenceAnswerStream:
     ) -> None:
         if isinstance(outcome, Exception):
             self._items: list[str | Exception] = [outcome]
-        elif isinstance(outcome, RawEvidenceAnswerDraft):
-            self._items = [
-                json.dumps(outcome.model_dump(mode="json"), ensure_ascii=False)
-            ]
         elif isinstance(outcome, str):
             self._items = [outcome]
         else:
@@ -162,6 +173,7 @@ class FakeGenerator:
     def __init__(self, outcomes: Sequence[StreamOutcome]) -> None:
         self._outcomes = list(outcomes)
         self.calls: list[dict[str, Any]] = []
+        self.inputs: list[Any] = []
         self.streams: list[FakeEvidenceAnswerStream] = []
         self.scope_enters = 0
         self.scope_exits = 0
@@ -175,6 +187,7 @@ class FakeGenerator:
         attempt_number: int,
     ) -> AsyncIterator[str]:
         self.events.append(f"invoke:{attempt_number}")
+        self.inputs.append(input)
         self.calls.append(
             {
                 "agent": agent,
@@ -185,6 +198,13 @@ class FakeGenerator:
                 "attempt_number": attempt_number,
             }
         )
+        if not self._outcomes:
+            pytest.fail(
+                f"S4: unexpected extra attempt (attempt_number={attempt_number}). "
+                "The flow retried more than this test staged fragments for; "
+                "the current implementation may still parse the stream as "
+                "structured JSON instead of plain text."
+            )
         outcome = self._outcomes.pop(0)
         stream = FakeEvidenceAnswerStream(
             outcome,
@@ -273,7 +293,7 @@ async def _answer(
     delta_reporter: RecordingDeltaReporter | None = None,
     continuation: SequenceContinuation | None = None,
     request: AnsweringRequest | None = None,
-) -> EvidenceAnswerDraft:
+) -> Any:
     flow_kwargs: dict[str, Any] = {
         "agent": _evidence_answer_agent(),
         "runtime_scope_factory": generator.activate,
@@ -282,11 +302,18 @@ async def _answer(
         flow_kwargs["delta_reporter"] = delta_reporter
     if continuation is not None:
         flow_kwargs["continuation"] = continuation
-    return await EvidenceAnswerFlow(**flow_kwargs).answer(
-        request=_request() if request is None else request,
-        evidence=[_evidence()] if evidence is None else evidence,
-        target_time_window=TargetTimeWindow(kind="today"),
-    )
+    try:
+        return await EvidenceAnswerFlow(**flow_kwargs).answer(
+            request=_request() if request is None else request,
+            evidence=[_evidence()] if evidence is None else evidence,
+            target_time_window=TargetTimeWindow(kind="today"),
+            review_missing=(),
+        )
+    except TypeError:
+        pytest.fail(
+            "S5追補: EvidenceAnswerFlow.answer must accept a required "
+            "review_missing keyword argument (tuple[str, ...])"
+        )
 
 
 def _metric_attributes(
@@ -302,15 +329,14 @@ def _metric_attributes(
 
 
 @pytest.mark.asyncio
-async def test_valid_raw_draft_passes_through_unchanged(
+async def test_valid_answer_with_marker_returns_draft_without_retry(
     capfire: CaptureLogfire,
 ) -> None:
-    generator = FakeGenerator([_raw(cited_refs=["1"])])
+    generator = FakeGenerator(["根拠から確認できます。[[1]]"])
 
     draft = await _answer(generator)
 
-    assert draft == EvidenceAnswerDraft(
-        sufficiency="answered",
+    assert draft == _expected_draft(
         answer="根拠から確認できます。[[1]]",
         cited_refs=["1"],
     )
@@ -334,271 +360,79 @@ async def test_valid_raw_draft_passes_through_unchanged(
 
 
 @pytest.mark.asyncio
-async def test_flow_uses_agent_output_type_for_final_json_validation() -> None:
-    class DeclaredRawDraft(RawEvidenceAnswerDraft):
-        validation_calls: ClassVar[int] = 0
+async def test_fragments_flow_unchanged_and_concatenate_into_the_answer() -> None:
+    """条件2・11: fragmentが加工されずlive draftへ流れ、連結結果が本文になる。
 
-        @model_validator(mode="after")
-        def _record_declared_validation(self) -> DeclaredRawDraft:
-            type(self).validation_calls += 1
-            return self
+    本文のmarkerは除去されず保持されるが(cited_refsの算出元)、live表示は
+    AnswerVisibleTextFilterにより現行どおりmarkerを除く。
+    """
+    generator = FakeGenerator([["根拠から", "確認できます。", "[[1]]"]])
+    reporter = RecordingDeltaReporter()
 
-    generator = FakeGenerator([_raw()])
-    declared_agent = replace(
-        _evidence_answer_agent(),
-        output_type=DeclaredRawDraft,
-    )
+    draft = await _answer(generator, delta_reporter=reporter)
 
-    draft = await EvidenceAnswerFlow(
-        agent=declared_agent,
-        runtime_scope_factory=generator.activate,
-    ).answer(
-        request=_request(),
-        evidence=[_evidence()],
-        target_time_window=TargetTimeWindow(kind="today"),
-    )
-
-    assert draft.answer == "根拠から確認できます。[[1]]"
-    assert DeclaredRawDraft.validation_calls == 1
-
-
-@pytest.mark.asyncio
-async def test_flow_applies_context_requirement_ids_as_canonical_allowlist() -> None:
-    request = _request(
-        content_requirements=[
-            AnswerRequirement(requirement_id="c2", description="content two"),
-            AnswerRequirement(requirement_id="c1", description="content one"),
-        ],
-        response_requirements=[
-            AnswerRequirement(requirement_id="p2", description="response two"),
-            AnswerRequirement(requirement_id="p1", description="response one"),
-        ],
-    )
-    generator = FakeGenerator(
-        [
-            _raw(
-                unfulfilled_requirement_ids=[
-                    "p1",
-                    "unknown",
-                    "c1",
-                    "p2",
-                    "c2",
-                ]
-            )
-        ]
-    )
-
-    draft = await _answer(generator, request=request)
-
-    assert draft.unfulfilled_requirement_ids == ["c2", "c1", "p2", "p1"]
-
-
-@pytest.mark.asyncio
-async def test_requirement_gap_caps_synthesized_status_without_mutating_draft(
-    capfire: CaptureLogfire,
-) -> None:
-    canonical_unfulfilled_ids = ["c1", "p1"]
-    generator = FakeGenerator(
-        [_raw(unfulfilled_requirement_ids=list(reversed(canonical_unfulfilled_ids)))]
-    )
-
-    draft = await _answer(generator)
-
-    assert (
-        draft.sufficiency,
-        draft.missing_aspects,
-        draft.unfulfilled_requirement_ids,
-    ) == (
-        "answered",
-        [],
-        canonical_unfulfilled_ids,
-    )
-    metrics = collected_metrics(capfire)
-    assert _metric_attributes(metrics, _SYNTHESIS_OUTCOME_METRIC) == [
-        {
-            "result": "synthesized",
-            "retry_used": False,
-            "status": "insufficient",
-            "fallback_used": False,
-            "failure_code": "none",
-        }
-    ]
-
-
-@pytest.mark.asyncio
-async def test_insufficient_draft_keeps_missing_aspects_and_canonical_id_order() -> (
-    None
-):
-    missing_aspects = ["PRIVATE_EVIDENCE_GAP"]
-    canonical_unfulfilled_ids = ["c1", "p1"]
-    generator = FakeGenerator(
-        [
-            _raw(
-                sufficiency="insufficient",
-                missing_aspects=missing_aspects,
-                unfulfilled_requirement_ids=list(reversed(canonical_unfulfilled_ids)),
-            )
-        ]
-    )
-
-    draft = await _answer(generator)
-
-    assert (
-        draft.sufficiency,
-        draft.missing_aspects,
-        draft.unfulfilled_requirement_ids,
-    ) == (
-        "insufficient",
-        missing_aspects,
-        canonical_unfulfilled_ids,
-    )
-
-
-@pytest.mark.asyncio
-async def test_derives_cited_refs_from_answer_markers() -> None:
-    generator = FakeGenerator(
-        [
-            _raw(
-                answer="根拠 1 から確認できます。[[1]]",
-                cited_refs=[],
-            )
-        ]
-    )
-
-    draft = await _answer(generator)
-
-    assert draft.cited_refs == ["1"]
-    assert draft.answer == "根拠 1 から確認できます。[[1]]"
-    assert generator.calls[0]["previous_error"] is None
-
-
-@pytest.mark.asyncio
-async def test_extra_declared_cited_refs_are_replaced_by_answer_markers() -> None:
-    generator = FakeGenerator(
-        [
-            _raw(
-                answer="根拠 1 だけを使っています。[[1]]",
-                cited_refs=["1", "2"],
-            )
-        ]
-    )
-
-    draft = await _answer(
-        generator,
-        evidence=[_evidence("1"), _evidence("2")],
-    )
-
-    assert draft.cited_refs == ["1"]
-
-
-@pytest.mark.asyncio
-async def test_completes_insufficient_missing_aspects_without_retry() -> None:
-    generator = FakeGenerator(
-        [
-            _raw(
-                sufficiency="insufficient",
-                answer="根拠の範囲では断定できません。[[1]]",
-                cited_refs=["1"],
-                missing_aspects=[],
-            )
-        ]
-    )
-
-    draft = await _answer(generator)
-
-    assert draft.sufficiency == "insufficient"
-    assert draft.answer == "根拠の範囲では断定できません。[[1]]"
-    assert draft.cited_refs == ["1"]
-    assert draft.missing_aspects
-    assert len(generator.calls) == 1
-
-
-@pytest.mark.asyncio
-async def test_removes_blank_and_duplicate_refs_and_missing_aspects() -> None:
-    generator = FakeGenerator(
-        [
-            _raw(
-                sufficiency="insufficient",
-                answer="一部だけ確認できます。[[1]]",
-                cited_refs=["1", "", "1", "  ", "1"],
-                missing_aspects=["", "会社側の一次情報", "会社側の一次情報", "\n"],
-            )
-        ]
-    )
-
-    draft = await _answer(generator)
-
-    assert draft.cited_refs == ["1"]
-    assert draft.missing_aspects == ["会社側の一次情報"]
-
-
-@pytest.mark.asyncio
-async def test_answered_without_marker_retries_once_with_previous_error(
-    capfire: CaptureLogfire,
-) -> None:
-    repaired = _raw(
-        sufficiency="answered",
-        answer="修正後は根拠を引用しています。[[1]]",
+    assert draft == _expected_draft(
+        answer="根拠から確認できます。[[1]]",
         cited_refs=["1"],
     )
-    generator = FakeGenerator(
-        [
-            _raw(
-                sufficiency="answered",
-                answer="引用がありません。",
-                cited_refs=["1"],
-            ),
-            repaired,
-        ]
-    )
-
-    draft = await _answer(generator)
-
-    assert draft.answer == "修正後は根拠を引用しています。[[1]]"
-    assert [call["previous_error"] for call in generator.calls][0] is None
-    assert "citation marker" in generator.calls[1]["previous_error"]
-    metrics = collected_metrics(capfire)
-    assert _metric_attributes(metrics, _SYNTHESIS_OUTCOME_METRIC) == [
-        {
-            "result": "synthesized",
-            "retry_used": True,
-            "status": "answered",
-            "fallback_used": False,
-            "failure_code": "none",
-        }
-    ]
+    assert "".join(text for _, text in reporter.appended) == "根拠から確認できます。"
+    assert {generation for generation, _ in reporter.appended} == {1}
+    assert reporter.finished == [1]
+    assert reporter.aborted == []
 
 
 @pytest.mark.asyncio
-async def test_persistent_noncompletable_defect_falls_back_to_valid_insufficient(
-    capfire: CaptureLogfire,
-) -> None:
-    generator = FakeGenerator(
-        [
-            _raw(sufficiency="answered", answer="引用がありません。", cited_refs=["1"]),
-            _raw(
-                sufficiency="answered",
-                answer="まだ引用がありません。",
-                cited_refs=["1"],
-            ),
-        ]
-    )
+async def test_json_shaped_body_is_treated_as_literal_answer_text() -> None:
+    """条件3: JSONを模した本文がそのまま本文として扱われ、field抽出が起きない。"""
+    json_like_answer = '{"answer": "本文", "cited_refs": ["1"]}確認できます。[[1]]'
+    generator = FakeGenerator([json_like_answer])
 
     draft = await _answer(generator)
 
-    assert draft.sufficiency == "insufficient"
-    assert draft.answer
-    assert draft.cited_refs == []
-    assert draft.missing_aspects
-    assert [call["previous_error"] for call in generator.calls][0] is None
-    assert generator.calls[1]["previous_error"]
+    assert draft.answer == json_like_answer
+    assert draft.cited_refs == ["1"]
 
+
+@pytest.mark.asyncio
+async def test_derives_cited_refs_from_answer_markers_in_first_use_order() -> None:
+    """条件5: 本文の[[1]][[2]]からcited_refsが初出順・重複排除で算出される
+    (marker解釈の網羅ケースはtest_validation.pyが正本、ここは配線の確認)。
+    """
+    generator = FakeGenerator(
+        ["根拠 2 と根拠 1 を確認できます。[[2]][[1]] 再度 [[2]]。"]
+    )
+
+    draft = await _answer(generator, evidence=[_evidence("1"), _evidence("2")])
+
+    assert draft.cited_refs == ["2", "1"]
+
+
+@pytest.mark.asyncio
+async def test_unknown_citation_ref_retries_then_falls_back_to_unavailable(
+    capfire: CaptureLogfire,
+) -> None:
+    """条件6: evidenceに存在しないrefを本文が参照したdraftは不正として retry され、
+
+    2回目も解消しなければ生成不能へ落ちる。
+    """
+    generator = FakeGenerator(
+        [
+            "存在しない根拠を引用しています。[[9]]",
+            "まだ存在しない根拠を引用しています。[[9]]",
+        ]
+    )
+
+    outcome = await _answer(generator)
+
+    assert len(generator.calls) == 2
+    assert "[[9]]" in generator.calls[1]["previous_error"]
+    assert isinstance(outcome, _evidence_answer_unavailable_type())
+    assert getattr(outcome, "failure_code", None) == "answer_synthesis_draft_invalid"
     metrics = collected_metrics(capfire)
     assert _metric_attributes(metrics, _SYNTHESIS_OUTCOME_METRIC) == [
         {
             "result": "fallback",
             "retry_used": True,
-            "status": "insufficient",
             "fallback_used": True,
             "failure_code": "answer_synthesis_draft_invalid",
         }
@@ -606,157 +440,83 @@ async def test_persistent_noncompletable_defect_falls_back_to_valid_insufficient
 
 
 @pytest.mark.asyncio
-async def test_unknown_citation_ref_is_detected_inside_synthesis_and_retried() -> None:
-    generator = FakeGenerator(
-        [
-            _raw(
-                sufficiency="answered",
-                answer="存在しない根拠を引用しています。[[2]]",
-                cited_refs=["2"],
-            ),
-            _raw(
-                sufficiency="answered",
-                answer="実在する根拠を引用しています。[[1]]",
-                cited_refs=["1"],
-            ),
-        ]
-    )
+async def test_no_marker_with_evidence_retries_then_falls_back_to_unavailable() -> None:
+    """条件7: evidenceが非空でmarkerが無い本文は不正として retry され、
 
-    draft = await _answer(generator)
+    2回目もmarker無しなら生成不能(EvidenceAnswerUnavailable)へ落ちる。
+    """
+    generator = FakeGenerator(["引用がありません。", "まだ引用がありません。"])
 
-    assert draft.cited_refs == ["1"]
-    assert "[[2]]" in generator.calls[1]["previous_error"]
+    outcome = await _answer(generator)
 
-
-@pytest.mark.asyncio
-async def test_persistent_unknown_marker_falls_back_to_valid_insufficient() -> None:
-    generator = FakeGenerator(
-        [
-            _raw(
-                sufficiency="answered",
-                answer="存在しない根拠を引用しています。[[9]]",
-                cited_refs=["9"],
-            ),
-            _raw(
-                sufficiency="answered",
-                answer="まだ存在しない根拠を引用しています。[[9]]",
-                cited_refs=["9"],
-            ),
-        ]
-    )
-
-    draft = await _answer(generator)
-
-    assert draft.sufficiency == "insufficient"
-    assert draft.cited_refs == []
-    assert draft.missing_aspects
-    assert "[[9]]" in generator.calls[1]["previous_error"]
-
-
-@pytest.mark.asyncio
-async def test_empty_evidence_answered_citation_falls_back_insufficient() -> None:
-    generator = FakeGenerator(
-        [
-            _raw(
-                sufficiency="answered",
-                answer="根拠がないのに引用しています。[[1]]",
-                cited_refs=["1"],
-            ),
-            _raw(
-                sufficiency="answered",
-                answer="まだ根拠がないのに引用しています。[[1]]",
-                cited_refs=["1"],
-            ),
-        ]
-    )
-
-    draft = await _answer(generator, evidence=[])
-
-    assert draft.sufficiency == "insufficient"
-    assert draft.cited_refs == []
-    assert draft.missing_aspects
     assert len(generator.calls) == 2
-    assert "[[1]]" in generator.calls[1]["previous_error"]
+    assert isinstance(outcome, _evidence_answer_unavailable_type())
+    assert getattr(outcome, "failure_code", None) == "answer_synthesis_draft_invalid"
 
 
 @pytest.mark.asyncio
-async def test_empty_evidence_valid_insufficient_is_adopted_without_retry() -> None:
-    generator = FakeGenerator(
-        [
-            _raw(
-                sufficiency="insufficient",
-                answer="検索で引用できる根拠は見つかりませんでした。一般論では参考程度に考えてください。",
-                cited_refs=[],
-                missing_aspects=["引用できる検索根拠"],
-            )
-        ]
+async def test_empty_evidence_without_marker_is_valid_with_empty_cited_refs() -> None:
+    """条件8: evidenceが空でmarkerが無い本文は正常に成立し、cited_refsが空になる
+
+    (sourcesがcited_refsだけから組み立てられるため、これがsources空を担保する)。
+    """
+    answer = (
+        "検索で引用できる根拠は見つかりませんでした。"
+        "一般論では参考程度に考えてください。"
     )
+    generator = FakeGenerator([answer])
 
     draft = await _answer(generator, evidence=[])
 
-    assert draft.sufficiency == "insufficient"
-    assert draft.cited_refs == []
-    assert draft.missing_aspects == ["引用できる検索根拠"]
+    assert draft == _expected_draft(answer=answer, cited_refs=[])
     assert len(generator.calls) == 1
 
 
 @pytest.mark.asyncio
-async def test_marker_parse_boundaries_use_double_bracket_digits_only() -> None:
+async def test_empty_evidence_with_marker_falls_back_to_unavailable() -> None:
+    """条件9: evidenceが空でmarkerがある本文は不正(回帰ガード)。"""
     generator = FakeGenerator(
         [
-            _raw(
-                answer=(
-                    "連続 marker を使います。[[1]][[2]] "
-                    "文中 marker も引用として扱います [[2]]。"
-                    "単括弧 [1] は marker ではありません。"
-                ),
-                cited_refs=["1", "2"],
-            )
+            "根拠がないのに引用しています。[[1]]",
+            "まだ根拠がないのに引用しています。[[1]]",
         ]
     )
 
-    draft = await _answer(
-        generator,
-        evidence=[_evidence("1"), _evidence("2")],
-    )
+    outcome = await _answer(generator, evidence=[])
 
-    assert draft.cited_refs == ["1", "2"]
+    assert len(generator.calls) == 2
+    assert isinstance(outcome, _evidence_answer_unavailable_type())
+    assert "[[1]]" in generator.calls[1]["previous_error"]
 
 
 @pytest.mark.asyncio
-async def test_repeated_markers_are_deduplicated() -> None:
-    generator = FakeGenerator(
-        [
-            _raw(
-                answer="同じ根拠を複数回引用します。[[1]] 別の文でも使います。[[1]]",
-                cited_refs=["1"],
-            )
-        ]
-    )
+async def test_blank_answer_falls_back_with_draft_invalid_not_pydantic_code() -> None:
+    """条件4: 空白のみの本文はdraft不正として扱われ、failure_codeは
 
-    draft = await _answer(generator)
+    answer_synthesis_pydantic_validation_failedではなくdraft不正側になる。
+    """
+    generator = FakeGenerator(["   ", "\n\t"])
 
-    assert draft.cited_refs == ["1"]
+    outcome = await _answer(generator)
+
+    assert len(generator.calls) == 2
+    assert getattr(outcome, "failure_code", None) == "answer_synthesis_draft_invalid"
 
 
 @pytest.mark.asyncio
-async def test_insufficient_with_marker_keeps_partial_citations() -> None:
-    generator = FakeGenerator(
-        [
-            _raw(
-                sufficiency="insufficient",
-                answer="根拠の範囲では需要は強いです。[[1]]",
-                cited_refs=[],
-                missing_aspects=["会社側の一次情報"],
-            )
-        ]
-    )
+async def test_generation_unavailable_is_a_distinct_type_with_only_failure_code() -> (
+    None
+):
+    """生成不能は回答draftと別の型で表し、failure_codeだけを持つ。"""
+    unavailable_type = _evidence_answer_unavailable_type()
+    generator = FakeGenerator([AIProviderNetworkError()])
 
-    draft = await _answer(generator)
+    outcome = await _answer(generator)
 
-    assert draft.sufficiency == "insufficient"
-    assert draft.cited_refs == ["1"]
-    assert draft.missing_aspects == ["会社側の一次情報"]
+    assert isinstance(outcome, unavailable_type)
+    assert not isinstance(outcome, EvidenceAnswerDraft)
+    assert set(type(outcome).model_fields) == {"failure_code"}
+    assert outcome.failure_code == "ai_error_network"
 
 
 @pytest.mark.asyncio
@@ -765,16 +525,15 @@ async def test_provider_error_falls_back_without_retry(
 ) -> None:
     generator = FakeGenerator([AIProviderNetworkError()])
 
-    draft = await _answer(generator)
+    outcome = await _answer(generator)
 
-    assert draft.sufficiency == "insufficient"
+    assert getattr(outcome, "failure_code", None) == "ai_error_network"
     assert len(generator.calls) == 1
     metrics = collected_metrics(capfire)
     assert _metric_attributes(metrics, _SYNTHESIS_OUTCOME_METRIC) == [
         {
             "result": "fallback",
             "retry_used": False,
-            "status": "insufficient",
             "fallback_used": True,
             "failure_code": "ai_error_network",
         }
@@ -782,25 +541,24 @@ async def test_provider_error_falls_back_without_retry(
 
 
 @pytest.mark.asyncio
-async def test_response_envelope_error_retries_once_with_previous_error(
+async def test_blank_response_retries_once_with_previous_error(
     capfire: CaptureLogfire,
 ) -> None:
-    invalid = EvidenceAnswerDraftGenerationInvalidError("response_not_json")
-    generator = FakeGenerator([invalid, _raw(cited_refs=["1"])])
+    generator = FakeGenerator([" \n\t", "修正後は根拠を引用しています。[[1]]"])
 
     draft = await _answer(generator)
 
-    assert draft.sufficiency == "answered"
-    assert [call["previous_error"] for call in generator.calls] == [
-        None,
-        "response_not_json",
-    ]
+    assert draft == _expected_draft(
+        answer="修正後は根拠を引用しています。[[1]]",
+        cited_refs=["1"],
+    )
+    assert [call["previous_error"] for call in generator.calls][0] is None
+    assert generator.calls[1]["previous_error"] is not None
     metrics = collected_metrics(capfire)
     assert _metric_attributes(metrics, _SYNTHESIS_OUTCOME_METRIC) == [
         {
             "result": "synthesized",
             "retry_used": True,
-            "status": "answered",
             "fallback_used": False,
             "failure_code": "none",
         }
@@ -840,11 +598,18 @@ async def test_runtime_scope_activation_failure_is_not_attempt_fallback(
     )
 
     with pytest.raises(RuntimeError) as exc_info:
-        await flow.answer(
-            request=_request(),
-            evidence=[_evidence()],
-            target_time_window=TargetTimeWindow(kind="today"),
-        )
+        try:
+            await flow.answer(
+                request=_request(),
+                evidence=[_evidence()],
+                target_time_window=TargetTimeWindow(kind="today"),
+                review_missing=(),
+            )
+        except TypeError:
+            pytest.fail(
+                "S5追補: EvidenceAnswerFlow.answer must accept a required "
+                "review_missing keyword argument (tuple[str, ...])"
+            )
 
     phase = one_span_named(capfire, _PHASE_SPAN_NAME)
     assert exc_info.value is failure
@@ -860,7 +625,7 @@ async def test_runtime_scope_activation_failure_is_not_attempt_fallback(
 async def test_outcome_metric_records_synthesized_once(
     capfire: CaptureLogfire,
 ) -> None:
-    generator = FakeGenerator([_raw(cited_refs=["1"])])
+    generator = FakeGenerator(["根拠から確認できます。[[1]]"])
 
     await _answer(generator)
 
@@ -875,7 +640,6 @@ async def test_outcome_metric_records_synthesized_once(
         {
             "result": "synthesized",
             "retry_used": False,
-            "status": "answered",
             "fallback_used": False,
             "failure_code": "none",
         }
@@ -883,173 +647,39 @@ async def test_outcome_metric_records_synthesized_once(
 
 
 @pytest.mark.asyncio
-async def test_requirement_gap_metric_records_low_cardinality_insufficient(
+@pytest.mark.parametrize(
+    "outcomes",
+    [
+        ["根拠から確認できます。[[1]]"],
+        [AIProviderNetworkError()],
+    ],
+    ids=["synthesized", "fallback"],
+)
+async def test_synthesis_outcome_metric_key_set_excludes_status(
+    outcomes: Sequence[StreamOutcome],
     capfire: CaptureLogfire,
 ) -> None:
-    raw_unfulfilled_ids = ["p1", "c1"]
-    private_text_values = (
-        "NVIDIA の直近発表",
-        "投資判断への影響を説明する",
-        "根拠付きで詳しく回答する",
-        "根拠から確認できます",
-    )
-    generator = FakeGenerator([_raw(unfulfilled_requirement_ids=raw_unfulfilled_ids)])
+    """statusラベルを廃止し、成功時・生成不能時ともkey集合が固定4つになる。"""
+    generator = FakeGenerator(outcomes)
 
     await _answer(generator)
 
     metrics = collected_metrics(capfire)
-    attrs = _metric_attributes(metrics, _SYNTHESIS_OUTCOME_METRIC)
-    telemetry_dump = json.dumps({"metric_attributes": attrs}, ensure_ascii=False)
-    raw_ids_absent = all(
-        requirement_id not in telemetry_dump for requirement_id in raw_unfulfilled_ids
-    )
-    private_text_absent = all(
-        text not in telemetry_dump for text in private_text_values
-    )
-    assert (
-        attrs,
-        raw_ids_absent,
-        private_text_absent,
-    ) == (
-        [
-            {
-                "result": "synthesized",
-                "retry_used": False,
-                "status": "insufficient",
-                "fallback_used": False,
-                "failure_code": "none",
-            }
-        ],
-        True,
-        True,
-    )
-
-
-@pytest.mark.asyncio
-async def test_stream_displays_only_filtered_root_answer_for_generation_one() -> None:
-    raw_json = (
-        '{"sufficiency":"answered","metadata":{"answer":"NESTED_SECRET"},'
-        '"answer":"  結論 [[1]] と [[x]] は残す。  ",'
-        '"cited_refs":["1"],"missing_aspects":[],'
-        '"unfulfilled_requirement_ids":[]}'
-    )
-    generator = FakeGenerator(
-        [
-            [
-                raw_json[:72],
-                raw_json[72:88],
-                raw_json[88:91],
-                raw_json[91:],
-            ]
-        ]
-    )
-    reporter = RecordingDeltaReporter()
-
-    draft = await _answer(generator, delta_reporter=reporter)
-
-    visible = "".join(text for _, text in reporter.appended)
-    assert visible == "結論  と [[x]] は残す。"
-    assert visible == draft.answer.replace("[[1]]", "").strip()
-    assert "NESTED_SECRET" not in visible
-    assert "sufficiency" not in visible
-    assert "cited_refs" not in visible
-    assert "missing_aspects" not in visible
-    assert generator.calls == [
-        {
-            "agent": _evidence_answer_agent(),
-            "request": _request(),
-            "evidence": (_evidence(),),
-            "target_time_window": TargetTimeWindow(kind="today"),
-            "previous_error": None,
-            "attempt_number": 1,
-        }
-    ]
-    assert generator.streams[0].closed is True
-    assert reporter.finished == [1]
-    assert reporter.aborted == []
-    assert reporter.reset_generations == []
-
-
-@pytest.mark.asyncio
-async def test_insufficient_root_answer_is_streamed_normally() -> None:
-    generator = FakeGenerator(
-        [
-            _raw(
-                sufficiency="insufficient",
-                answer="根拠の範囲では一部だけ確認できます。[[1]]",
-                cited_refs=["1"],
-                missing_aspects=["会社側の一次情報"],
-            )
-        ]
-    )
-    reporter = RecordingDeltaReporter()
-
-    draft = await _answer(generator, delta_reporter=reporter)
-
-    assert draft.sufficiency == "insufficient"
-    assert "".join(text for _, text in reporter.appended) == (
-        "根拠の範囲では一部だけ確認できます。"
-    )
-    assert reporter.finished == [1]
-
-
-@pytest.mark.parametrize(
-    ("invalid_json", "expected_failure_code"),
-    [
-        ("not json", "evidence_answer_response_gemini_not_json"),
-        ("[]", "evidence_answer_response_gemini_not_object"),
-        (
-            '{"sufficiency":"answered","answer":"first",'
-            '"answer":"second","cited_refs":["1"],"missing_aspects":[]}',
-            "evidence_answer_response_duplicate_top_level_key",
-        ),
-        (
-            '{"sufficiency":"answered","answer":"schema invalid",'
-            '"cited_refs":"1","missing_aspects":[]}',
-            "answer_synthesis_pydantic_validation_failed",
-        ),
-    ],
-    ids=["invalid-json", "non-object", "duplicate-top-level-key", "schema"],
-)
-@pytest.mark.asyncio
-async def test_final_json_boundary_retries_then_falls_back_with_failure_code(
-    invalid_json: str,
-    expected_failure_code: str,
-    capfire: CaptureLogfire,
-) -> None:
-    generator = FakeGenerator([invalid_json, invalid_json])
-
-    draft = await _answer(generator)
-
-    assert draft.sufficiency == "insufficient"
-    assert len(generator.calls) == 2
-    assert all(stream.closed for stream in generator.streams)
-    assert [stream.close_calls for stream in generator.streams] == [1, 1]
-    metrics = collected_metrics(capfire)
-    assert _metric_attributes(metrics, _SYNTHESIS_OUTCOME_METRIC) == [
-        {
-            "result": "fallback",
-            "retry_used": True,
-            "status": "insufficient",
-            "fallback_used": True,
-            "failure_code": expected_failure_code,
-        }
-    ]
+    key_sets = counter_attribute_key_sets(metrics, _SYNTHESIS_OUTCOME_METRIC)
+    assert key_sets == [{"result", "retry_used", "fallback_used", "failure_code"}]
 
 
 @pytest.mark.asyncio
 async def test_retry_aborts_then_resets_before_generation_two_delta() -> None:
-    generator = FakeGenerator(
-        [
-            _raw(answer="引用がありません。", cited_refs=["1"]),
-            _raw(answer="修正後は引用します。[[1]]", cited_refs=["1"]),
-        ]
-    )
+    generator = FakeGenerator(["引用がありません。", "修正後は引用します。[[1]]"])
     reporter = RecordingDeltaReporter()
 
     draft = await _answer(generator, delta_reporter=reporter)
 
-    assert draft.answer == "修正後は引用します。[[1]]"
+    assert draft == _expected_draft(
+        answer="修正後は引用します。[[1]]",
+        cited_refs=["1"],
+    )
     assert reporter.aborted == [1]
     assert reporter.reset_generations == [2]
     assert reporter.finished == [2]
@@ -1057,7 +687,7 @@ async def test_retry_aborts_then_resets_before_generation_two_delta() -> None:
     assert operations.index(("abort", 1)) < operations.index(("reset", 2))
     first_generation_two_append = operations.index(("append", 2))
     assert operations.index(("reset", 2)) < first_generation_two_append
-    assert "citation marker" in generator.calls[1]["previous_error"]
+    assert generator.calls[1]["previous_error"] is not None
     assert all(stream.closed for stream in generator.streams)
     assert (generator.scope_enters, generator.scope_exits) == (1, 1)
     assert generator.events.index("stream_close:1") < generator.events.index("invoke:2")
@@ -1065,86 +695,57 @@ async def test_retry_aborts_then_resets_before_generation_two_delta() -> None:
 
 
 @pytest.mark.asyncio
-async def test_retry_resets_even_when_failed_generation_had_no_visible_delta() -> None:
-    generator = FakeGenerator(
-        [
-            "not json",
-            _raw(answer="再試行は引用します。[[1]]", cited_refs=["1"]),
-        ]
-    )
-    reporter = RecordingDeltaReporter()
-
-    draft = await _answer(generator, delta_reporter=reporter)
-
-    assert draft.answer == "再試行は引用します。[[1]]"
-    assert all(generation != 1 for generation, _ in reporter.appended)
-    assert reporter.aborted == [1]
-    assert reporter.reset_generations == [2]
-    assert reporter.finished == [2]
-
-
-@pytest.mark.asyncio
 async def test_two_retryable_failures_reset_to_generation_three_fallback(
     capfire: CaptureLogfire,
 ) -> None:
-    generator = FakeGenerator(["not json", "still not json"])
+    generator = FakeGenerator(["引用がありません。", "まだ引用がありません。"])
     reporter = RecordingDeltaReporter()
 
-    draft = await _answer(generator, delta_reporter=reporter)
+    outcome = await _answer(generator, delta_reporter=reporter)
 
-    assert draft.sufficiency == "insufficient"
+    assert getattr(outcome, "failure_code", None) == "answer_synthesis_draft_invalid"
     assert reporter.aborted == [1, 2]
     assert reporter.reset_generations == [2, 3]
     assert reporter.finished == [3]
-    assert {generation for generation, _ in reporter.appended} == {3}
-    assert (
-        "".join(text for generation, text in reporter.appended if generation == 3)
-        == draft.answer
-    )
+    assert all(generation != 3 for generation, _ in reporter.appended)
     operations = _operation_names(reporter)
     assert operations.index(("abort", 1)) < operations.index(("reset", 2))
     assert operations.index(("abort", 2)) < operations.index(("reset", 3))
-    assert operations.index(("reset", 3)) < operations.index(("append", 3))
     metrics = collected_metrics(capfire)
     assert sum_counter_for_result(metrics, _SYNTHESIS_OUTCOME_METRIC, "fallback") == 1
 
 
 @pytest.mark.asyncio
-async def test_provider_error_resets_once_then_streams_generation_two_fallback() -> (
-    None
-):
+async def test_provider_error_resets_once_then_falls_back_without_live_delta() -> None:
+    """生成不能の定型本文はflow側からlive deltaに流れない(定型化はresult_assembly
+    の責務)。resetとcloseは現行どおり発火する。
+    """
     generator = FakeGenerator([AIProviderNetworkError()])
     reporter = RecordingDeltaReporter()
 
-    draft = await _answer(generator, delta_reporter=reporter)
+    outcome = await _answer(generator, delta_reporter=reporter)
 
-    assert draft.sufficiency == "insufficient"
+    assert getattr(outcome, "failure_code", None) == "ai_error_network"
     assert reporter.aborted == [1]
     assert reporter.reset_generations == [2]
     assert reporter.finished == [2]
-    assert {generation for generation, _ in reporter.appended} == {2}
-    assert (
-        "".join(text for generation, text in reporter.appended if generation == 2)
-        == draft.answer
-    )
+    assert all(generation != 2 for generation, _ in reporter.appended)
     assert generator.streams[0].closed is True
 
 
 @pytest.mark.asyncio
 async def test_all_reporter_failures_do_not_change_retry_result() -> None:
-    generator = FakeGenerator(
-        [
-            _raw(answer="引用がありません。", cited_refs=["1"]),
-            _raw(answer="修正後の回答です。[[1]]", cited_refs=["1"]),
-        ]
-    )
+    generator = FakeGenerator(["引用がありません。", "修正後の回答です。[[1]]"])
     reporter = RecordingDeltaReporter(
         fail_on=frozenset({"append", "finish", "abort", "reset"})
     )
 
     draft = await _answer(generator, delta_reporter=reporter)
 
-    assert draft.answer == "修正後の回答です。[[1]]"
+    assert draft == _expected_draft(
+        answer="修正後の回答です。[[1]]",
+        cited_refs=["1"],
+    )
     assert reporter.aborted == [1]
     assert reporter.reset_generations == [2]
     assert reporter.finished == [2]
@@ -1156,7 +757,7 @@ async def test_all_reporter_failures_do_not_change_retry_result() -> None:
 async def test_reporter_is_not_part_of_final_draft_correctness(
     with_failing_reporter: bool,
 ) -> None:
-    generator = FakeGenerator([_raw(cited_refs=["1"])])
+    generator = FakeGenerator(["根拠から確認できます。[[1]]"])
     reporter = (
         RecordingDeltaReporter(fail_on=frozenset({"append", "finish"}))
         if with_failing_reporter
@@ -1165,8 +766,7 @@ async def test_reporter_is_not_part_of_final_draft_correctness(
 
     draft = await _answer(generator, delta_reporter=reporter)
 
-    assert draft == EvidenceAnswerDraft(
-        sufficiency="answered",
+    assert draft == _expected_draft(
         answer="根拠から確認できます。[[1]]",
         cited_refs=["1"],
     )
@@ -1178,7 +778,7 @@ async def test_continuation_false_before_provider_start_is_routine_stop(
 ) -> None:
     stopped_type = _answer_generation_stopped_type()
     assert not issubclass(stopped_type, AIProviderError)
-    generator = FakeGenerator([_raw()])
+    generator = FakeGenerator(["根拠から確認できます。[[1]]"])
     reporter = RecordingDeltaReporter()
 
     with pytest.raises(stopped_type):
@@ -1206,9 +806,7 @@ async def test_continuation_false_mid_stream_closes_and_aborts(
     capfire: CaptureLogfire,
 ) -> None:
     stopped_type = _answer_generation_stopped_type()
-    raw_json = _raw_json(_raw(answer="表示済み本文と非表示本文。[[1]]"))
-    answer_start = raw_json.index("表示済み本文") + len("表示済み本文")
-    generator = FakeGenerator([[raw_json[:answer_start], raw_json[answer_start:]]])
+    generator = FakeGenerator([["表示済み本文と", "非表示本文。[[1]]"]])
     reporter = RecordingDeltaReporter()
     continuation = SequenceContinuation([True, True, False])
 
@@ -1219,7 +817,7 @@ async def test_continuation_false_mid_stream_closes_and_aborts(
             continuation=continuation,
         )
 
-    assert "".join(text for _, text in reporter.appended) == "表示済み本文"
+    assert "".join(text for _, text in reporter.appended) == "表示済み本文と"
     assert reporter.aborted == [1]
     assert reporter.finished == []
     assert generator.streams[0].closed is True
@@ -1232,7 +830,7 @@ async def test_continuation_false_at_eof_stops_before_final_parse_and_metric(
     capfire: CaptureLogfire,
 ) -> None:
     stopped_type = _answer_generation_stopped_type()
-    generator = FakeGenerator([_raw()])
+    generator = FakeGenerator(["根拠から確認できます。[[1]]"])
     reporter = RecordingDeltaReporter()
     continuation = SequenceContinuation([True, True, False])
 
@@ -1273,3 +871,95 @@ async def test_continuation_false_after_provider_error_stops_before_fallback(
     assert reporter.finished == []
     metrics = collected_metrics(capfire)
     assert _metric_attributes(metrics, _SYNTHESIS_OUTCOME_METRIC) == []
+
+
+@pytest.mark.asyncio
+async def test_truncated_first_attempt_retries_with_trusted_truncation_notice(
+    capfire: CaptureLogfire,
+) -> None:
+    """MAX_TOKENS打ち切りはrequest内でretryされ、通知はtrusted側の入力で運ばれる。"""
+    generator = FakeGenerator([_truncated_error(), "根拠から確認できます。[[1]]"])
+
+    draft = await _answer(generator)
+
+    assert len(generator.calls) == 2
+    assert getattr(generator.inputs[0], "previous_output_truncated", None) is False
+    assert getattr(generator.inputs[1], "previous_output_truncated", None) is True
+    assert draft == _expected_draft(
+        answer="根拠から確認できます。[[1]]",
+        cited_refs=["1"],
+    )
+    metrics = collected_metrics(capfire)
+    assert _metric_attributes(metrics, _SYNTHESIS_OUTCOME_METRIC) == [
+        {
+            "result": "synthesized",
+            "retry_used": True,
+            "fallback_used": False,
+            "failure_code": "none",
+        }
+    ]
+
+
+@pytest.mark.asyncio
+async def test_non_truncation_retry_does_not_carry_truncation_notice() -> None:
+    """打ち切り以外が原因のretryでは打ち切り通知フラグを立てない。"""
+    generator = FakeGenerator(["引用がありません。", "根拠から確認できます。[[1]]"])
+
+    draft = await _answer(generator)
+
+    assert len(generator.calls) == 2
+    assert getattr(generator.inputs[1], "previous_output_truncated", None) is False
+    assert draft == _expected_draft(
+        answer="根拠から確認できます。[[1]]",
+        cited_refs=["1"],
+    )
+
+
+@pytest.mark.asyncio
+async def test_second_truncation_falls_back_with_truncated_failure_code(
+    capfire: CaptureLogfire,
+) -> None:
+    """2回連続のMAX_TOKENSはattempt数2を使い切りfallbackへ落ちる。"""
+    generator = FakeGenerator([_truncated_error(), _truncated_error()])
+
+    await _answer(generator)
+
+    assert len(generator.calls) == 2
+    metrics = collected_metrics(capfire)
+    attrs = _metric_attributes(metrics, _SYNTHESIS_OUTCOME_METRIC)
+    assert len(attrs) == 1
+    assert attrs[0]["retry_used"] is True
+    assert attrs[0]["result"] == "fallback"
+    assert attrs[0]["failure_code"] == "ai_error_output_truncated"
+
+
+@pytest.mark.asyncio
+async def test_truncation_mid_stream_aborts_live_draft_and_resets_generation_two() -> (
+    None
+):
+    """途中までfragmentが流れていても打ち切りはlive draftをabortしてresetする。"""
+    generator = FakeGenerator(
+        [
+            ["打ち切り前に表示された本文。", _truncated_error()],
+            "打ち切り後に修正した回答です。[[1]]",
+        ]
+    )
+    reporter = RecordingDeltaReporter()
+
+    draft = await _answer(generator, delta_reporter=reporter)
+
+    assert len(generator.calls) == 2
+    assert draft == _expected_draft(
+        answer="打ち切り後に修正した回答です。[[1]]",
+        cited_refs=["1"],
+    )
+    visible_before_abort = "".join(
+        text for generation, text in reporter.appended if generation == 1
+    )
+    assert visible_before_abort
+    assert reporter.aborted == [1]
+    assert reporter.reset_generations == [2]
+    assert reporter.finished == [2]
+    operations = _operation_names(reporter)
+    assert operations.index(("abort", 1)) < operations.index(("reset", 2))
+    assert all(stream.closed for stream in generator.streams)

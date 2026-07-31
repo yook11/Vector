@@ -11,6 +11,7 @@ from uuid import uuid4
 
 import pytest
 import redis.asyncio as aioredis
+from pydantic import ValidationError
 
 from app.agent.answering.contract import AnsweringRequest
 from app.agent.answering.direct_answer.agent import DIRECT_ANSWER_AGENT
@@ -139,29 +140,36 @@ async def _evidence_answer(
     *,
     request: AnsweringRequest | None = None,
 ) -> EvidenceAnswerDraft:
-    return await EvidenceAnswerFlow(
-        agent=EVIDENCE_ANSWER_AGENT,
-        runtime_scope_factory=generator.activate,
-        delta_reporter=reporter,
-    ).answer(
-        request=(
-            _answering_request("実RedisへのEvidence revision配信を確認する")
-            if request is None
-            else request
-        ),
-        evidence=[
-            AnswerEvidenceItem(
-                source=ExternalUrlSource(
-                    source_ref="1",
-                    url="https://example.com/evidence-1",
-                    title="Evidence source",
-                    evidence_claim="根拠を確認しました。",
-                ),
-                text="根拠を確認しました。",
-            )
-        ],
-        target_time_window=TargetTimeWindow(kind="today"),
-    )
+    try:
+        return await EvidenceAnswerFlow(
+            agent=EVIDENCE_ANSWER_AGENT,
+            runtime_scope_factory=generator.activate,
+            delta_reporter=reporter,
+        ).answer(
+            request=(
+                _answering_request("実RedisへのEvidence revision配信を確認する")
+                if request is None
+                else request
+            ),
+            evidence=[
+                AnswerEvidenceItem(
+                    source=ExternalUrlSource(
+                        source_ref="1",
+                        url="https://example.com/evidence-1",
+                        title="Evidence source",
+                        evidence_claim="根拠を確認しました。",
+                    ),
+                    text="根拠を確認しました。",
+                )
+            ],
+            target_time_window=TargetTimeWindow(kind="today"),
+            review_missing=(),
+        )
+    except TypeError:
+        pytest.fail(
+            "S5追補: EvidenceAnswerFlow.answer must accept a required "
+            "review_missing keyword argument (tuple[str, ...])"
+        )
 
 
 def _delta_events(
@@ -174,45 +182,42 @@ def _delta_events(
     ]
 
 
+def _expected_evidence_draft(*, answer: str, cited_refs: list[str]) -> object:
+    """S4: EvidenceAnswerDraftはanswerとcited_refsだけを持つ
+
+    (sufficiency/missing_aspects/unfulfilled_requirement_idsは撤去される)。
+    現行モデルはまだsufficiencyを必須で要求するため、比較用の期待値構築を
+    ガードしてassertion failureのredにする。
+    """
+    try:
+        return EvidenceAnswerDraft(answer=answer, cited_refs=cited_refs)
+    except ValidationError:
+        pytest.fail(
+            "S4: EvidenceAnswerDraft must accept only "
+            "(answer: NonBlankText, cited_refs: list[str])"
+        )
+
+
 @pytest.mark.integration
 @pytest.mark.asyncio
-@pytest.mark.parametrize(
-    "assessment_position",
-    ["before-answer", "after-answer"],
-)
-async def test_evidence_assessment_array_does_not_leak_into_answer_delta(
-    assessment_position: str,
-) -> None:
+async def test_evidence_json_shaped_fragment_flows_unchanged_into_answer_delta() -> (
+    None
+):
+    """S4: response_schema=Noneのplain text streamでは、JSONを模した本文が
+
+    field抽出されずそのまま本文になる(条件2・3)。live表示はmarkerだけを除く。
+    """
     redis = aioredis.from_url(settings.redis_url, decode_responses=True)
     run_id = uuid4()
     attempt_epoch = 13
     stream_key = agent_run_live_stream_key(run_id)
-    final_answer = '配信本文\n日本語と"引用"。[[1]]'
-    visible_answer = '配信本文\n日本語と"引用"。'
-    assessment = ["p1", "c1"]
-    common_fields = {
-        "sufficiency": "answered",
-        "cited_refs": ["1"],
-        "missing_aspects": [],
-    }
-    if assessment_position == "before-answer":
-        payload = {
-            "sufficiency": common_fields["sufficiency"],
-            "unfulfilled_requirement_ids": assessment,
-            "answer": final_answer,
-            "cited_refs": common_fields["cited_refs"],
-            "missing_aspects": common_fields["missing_aspects"],
-        }
-    else:
-        payload = {
-            **common_fields,
-            "answer": final_answer,
-            "unfulfilled_requirement_ids": assessment,
-        }
-    raw_json = json.dumps(payload, ensure_ascii=True, separators=(",", ":"))
-    fragments = [raw_json[index : index + 7] for index in range(0, len(raw_json), 7)]
+    final_answer = '{"answer":"本文","cited_refs":["1"]}確認できます。[[1]]'
+    visible_answer = '{"answer":"本文","cited_refs":["1"]}確認できます。'
+    fragments = [
+        final_answer[index : index + 7] for index in range(0, len(final_answer), 7)
+    ]
     request = _answering_request(
-        "assessmentを表示せず回答する",
+        "JSON形状の本文がそのまま扱われるか確認する",
         content_requirements=[
             AnswerRequirement(requirement_id="c1", description="content requirement")
         ],
@@ -242,30 +247,10 @@ async def test_evidence_assessment_array_does_not_leak_into_answer_delta(
 
         deltas = _delta_events([entry.event for entry in result.events])
         visible = "".join(event.text for event in deltas)
-        leak_tokens = (
-            "{",
-            "}",
-            "sufficiency",
-            "answer",
-            "cited_refs",
-            "missing_aspects",
-            "unfulfilled_requirement_ids",
-            "answered",
-            "c1",
-            "p1",
-        )
-        assert (
-            draft.answer,
-            draft.unfulfilled_requirement_ids,
-            visible,
-            {event.generation for event in deltas},
-            [token for token in leak_tokens if token in visible],
-        ) == (
-            final_answer,
-            ["c1", "p1"],
+        assert draft == _expected_evidence_draft(answer=final_answer, cited_refs=["1"])
+        assert (visible, {event.generation for event in deltas}) == (
             visible_answer,
             {1},
-            [],
         )
     finally:
         await redis.delete(stream_key)
@@ -416,11 +401,13 @@ async def test_evidence_retry_round_trip_preserves_reset_delta_and_envelope() ->
         )
         generator = FakeStreamingGenerator(
             [
-                ["not ", "json"],
+                # evidenceに存在しないref([[9]])はunknown citation refとして
+                # 不正になりretryされる。marker全体がAnswerVisibleTextFilterに
+                # 吸収されるため、generation 1にvisible delta自体が発生しない。
+                ["[[9]]"],
                 [
-                    '{"sufficiency":"answered","answer":" 根拠を確認 [[',
-                    '1]] しました。 ","cited_refs":["1"],',
-                    '"missing_aspects":[]}',
+                    "根拠を確認 [[",
+                    "1]] しました。",
                 ],
             ]
         )
@@ -432,8 +419,7 @@ async def test_evidence_retry_round_trip_preserves_reset_delta_and_envelope() ->
             None,
         )
 
-        assert draft == EvidenceAnswerDraft(
-            sufficiency="answered",
+        assert draft == _expected_evidence_draft(
             answer="根拠を確認 [[1]] しました。",
             cited_refs=["1"],
         )
@@ -504,13 +490,13 @@ async def test_evidence_higher_generation_delta_survives_reset_loss() -> None:
         )
         generator = FakeStreamingGenerator(
             [
-                ["not json"],
+                # evidenceに存在しないref([[9]])はunknown citation refとして
+                # 不正になりretryされる。marker全体がAnswerVisibleTextFilterに
+                # 吸収されるため、generation 1にvisible delta自体が発生しない。
+                ["[[9]]"],
                 [
-                    (
-                        '{"sufficiency":"answered","answer":"'
-                        "resetなしでも修正版を表示します。[["
-                    ),
-                    '1]]","cited_refs":["1"],"missing_aspects":[]}',
+                    "resetなしでも修正版を表示します。[[",
+                    "1]]",
                 ],
             ]
         )
@@ -522,8 +508,7 @@ async def test_evidence_higher_generation_delta_survives_reset_loss() -> None:
             None,
         )
 
-        assert draft == EvidenceAnswerDraft(
-            sufficiency="answered",
+        assert draft == _expected_evidence_draft(
             answer="resetなしでも修正版を表示します。[[1]]",
             cited_refs=["1"],
         )

@@ -14,18 +14,12 @@ from app.agent.agent import Agent
 from app.agent.answering.contract import AnsweringRequest
 from app.agent.answering.evidence_answer.contract import (
     EvidenceAnswerDraft,
-    EvidenceAnswerDraftGenerationInvalidError,
     EvidenceAnswerDraftInvalidError,
     EvidenceAnswerInput,
-    RawEvidenceAnswerDraft,
+    EvidenceAnswerOutcome,
+    EvidenceAnswerUnavailable,
 )
 from app.agent.answering.evidence_answer.evidence import AnswerEvidenceItem
-from app.agent.answering.evidence_answer.final_json import (
-    parse_evidence_answer_final_json,
-)
-from app.agent.answering.evidence_answer.json_answer_extractor import (
-    IncrementalJsonAnswerExtractor,
-)
 from app.agent.answering.evidence_answer.validation import (
     finalize_evidence_answer_draft,
 )
@@ -52,32 +46,33 @@ from app.agent.runtime.contract import (
     StreamingAgentRuntime,
     StreamingAgentRuntimeScopeFactory,
 )
-from app.analysis.ai_provider_errors import AIProviderError
+from app.analysis.ai_provider_errors import (
+    AIProviderError,
+    AIProviderOutputTruncatedError,
+)
 
 __all__ = ["EvidenceAnswerFlow"]
 
-_FALLBACK_ANSWER = (
-    "回答を生成できませんでした。根拠の不足または応答形式の不備により、"
-    "参考回答を安全に構築できませんでした。"
-)
-_FALLBACK_MISSING_ASPECT = "回答生成に必要な根拠または応答形式が不足しました"
 _MAX_ATTEMPTS = 2
 _PHASE_SPAN_NAME = "agent_phase"
+# ValidationError(pydantic)は、plain text化後のfinalize_evidence_answer_draft()が
+# 空白判定を先に行うため通常経路では到達しない。classify_answer_synthesis_failure()側の
+# 分類も維持されており、EvidenceAnswerDraftの構築自体が将来pydantic validationで
+# 失敗しうる防御的なゲートとして残すため、caught setからは外さない。
 _EVIDENCE_ANSWER_CLASSIFIED_ERRORS = (
     AIProviderError,
-    EvidenceAnswerDraftGenerationInvalidError,
     EvidenceAnswerDraftInvalidError,
     ValidationError,
 )
 
 
 class EvidenceAnswerFlow:
-    """Create strict evidence answer drafts from lenient LLM drafts."""
+    """Create strict evidence answer drafts from plain text LLM output."""
 
     def __init__(
         self,
         *,
-        agent: Agent[EvidenceAnswerInput, RawEvidenceAnswerDraft],
+        agent: Agent[EvidenceAnswerInput, EvidenceAnswerDraft],
         runtime_scope_factory: StreamingAgentRuntimeScopeFactory,
         delta_reporter: AnswerDeltaReporter | None = None,
         continuation: AnswerGenerationContinuation | None = None,
@@ -93,12 +88,17 @@ class EvidenceAnswerFlow:
         request: AnsweringRequest,
         evidence: list[AnswerEvidenceItem],
         target_time_window: TargetTimeWindow | None,
-    ) -> EvidenceAnswerDraft:
-        """Return a valid draft, retrying classified response-boundary failures."""
+        review_missing: tuple[str, ...],
+    ) -> EvidenceAnswerOutcome:
+        """Return a valid draft or an unavailable outcome.
+
+        Retries classified response-boundary failures within the attempt budget.
+        """
 
         with _evidence_answer_phase(self._agent.name):
             async with self._runtime_scope_factory() as runtime:
                 previous_error: str | None = None
+                previous_output_truncated = False
 
                 for attempt_number in range(1, _MAX_ATTEMPTS + 1):
                     try:
@@ -108,6 +108,8 @@ class EvidenceAnswerFlow:
                             evidence=evidence,
                             target_time_window=target_time_window,
                             previous_error=previous_error,
+                            previous_output_truncated=previous_output_truncated,
+                            review_missing=review_missing,
                             attempt_number=attempt_number,
                         )
                     except _EVIDENCE_ANSWER_CLASSIFIED_ERRORS as exc:
@@ -125,17 +127,14 @@ class EvidenceAnswerFlow:
                             )
                         await self._start_revision(generation=attempt_number + 1)
                         previous_error = str(exc)
+                        previous_output_truncated = isinstance(
+                            exc, AIProviderOutputTruncatedError
+                        )
                         continue
 
-                    synthesized_status = (
-                        "insufficient"
-                        if draft.unfulfilled_requirement_ids
-                        else draft.sufficiency
-                    )
                     record_answer_synthesis_outcome(
                         result="synthesized",
                         retry_used=attempt_number > 1,
-                        status=synthesized_status,
                         fallback_used=False,
                     )
                     return draft
@@ -150,10 +149,11 @@ class EvidenceAnswerFlow:
         evidence: list[AnswerEvidenceItem],
         target_time_window: TargetTimeWindow | None,
         previous_error: str | None,
+        previous_output_truncated: bool,
+        review_missing: tuple[str, ...],
         attempt_number: int,
     ) -> EvidenceAnswerDraft:
         stream: AgentTextStream | None = None
-        extractor = IncrementalJsonAnswerExtractor()
         raw_fragments: list[str] = []
         try:
             async with LiveAnswerDraftSession(
@@ -169,36 +169,19 @@ class EvidenceAnswerFlow:
                         evidence=tuple(evidence),
                         target_time_window=target_time_window,
                         previous_error=previous_error,
+                        previous_output_truncated=previous_output_truncated,
+                        review_missing=review_missing,
                     ),
                     attempt_number=attempt_number,
                 )
-                async for raw_fragment in stream:
+                async for fragment in stream:
                     await ensure_answer_generation_continues(self._continuation)
-                    raw_fragments.append(raw_fragment)
-                    decoded = extractor.append(raw_fragment)
-                    if decoded:
-                        await live_draft.append(decoded)
+                    raw_fragments.append(fragment)
+                    await live_draft.append(fragment)
 
                 await ensure_answer_generation_continues(self._continuation)
-                extractor.finish()
-
-                raw = parse_evidence_answer_final_json(
-                    "".join(raw_fragments),
-                    output_type=self._agent.output_type,
-                )
-                requirement_ids = [
-                    requirement.requirement_id
-                    for requirements in (
-                        request.context.content_requirements,
-                        request.context.response_requirements,
-                    )
-                    for requirement in requirements
-                ]
-                draft, _defects = finalize_evidence_answer_draft(
-                    raw,
-                    evidence=evidence,
-                    requirement_ids=requirement_ids,
-                )
+                answer = "".join(raw_fragments)
+                draft = finalize_evidence_answer_draft(answer, evidence=evidence)
 
                 await live_draft.commit()
                 return draft
@@ -215,24 +198,16 @@ class EvidenceAnswerFlow:
         generation: int,
         retry_used: bool,
         failure: AnswerSynthesisFailureAttributes,
-    ) -> EvidenceAnswerDraft:
+    ) -> EvidenceAnswerUnavailable:
         await self._start_revision(generation=generation)
-        fallback = EvidenceAnswerDraft(
-            sufficiency="insufficient",
-            answer=_FALLBACK_ANSWER,
-            cited_refs=[],
-            missing_aspects=[_FALLBACK_MISSING_ASPECT],
-        )
-        await self._delta.append(generation=generation, text=fallback.answer)
         await self._delta.finish(generation=generation)
         record_answer_synthesis_outcome(
             result="fallback",
             retry_used=retry_used,
-            status=fallback.sufficiency,
             fallback_used=True,
             failure_code=failure.code,
         )
-        return fallback
+        return EvidenceAnswerUnavailable(failure_code=failure.code)
 
 
 @contextmanager

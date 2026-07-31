@@ -44,6 +44,7 @@ class DirectAnswerInput:
     request: AnsweringRequest
     previous_answer: str
     previous_error: str | None = None
+    previous_output_truncated: bool = False
 
 
 class DirectAnswerer(Protocol):

@@ -270,3 +270,10 @@ class AIProviderNetworkError(AIProviderStateError):
 
     CODE: ClassVar[str] = "ai_error_network"
     FAILURE_MODE: ClassVar[AIProviderFailureMode] = AIProviderFailureMode.ATTEMPT_SCOPED
+
+
+class AIProviderOutputTruncatedError(AIProviderStateError):
+    """finish_reason が MAX_TOKENS で出力が打ち切られた。書き方次第で収まりうる。"""
+
+    CODE: ClassVar[str] = "ai_error_output_truncated"
+    FAILURE_MODE: ClassVar[AIProviderFailureMode] = AIProviderFailureMode.ATTEMPT_SCOPED

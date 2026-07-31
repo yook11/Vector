@@ -173,10 +173,10 @@ class _EvidenceAnswerer:
         request: AnsweringRequest,
         evidence: list[Any],
         target_time_window: TargetTimeWindow | None,
+        review_missing: tuple[str, ...] = (),
     ) -> EvidenceAnswerDraft:
-        del request, target_time_window
+        del request, target_time_window, review_missing
         return EvidenceAnswerDraft(
-            sufficiency="answered",
             answer="根拠に基づく回答です。",
             cited_refs=[item.source.source_ref for item in evidence],
         )
@@ -453,10 +453,10 @@ class _SelectiveEvidenceAnswerer:
         request: AnsweringRequest,
         evidence: list[Any],
         target_time_window: TargetTimeWindow | None,
+        review_missing: tuple[str, ...] = (),
     ) -> EvidenceAnswerDraft:
-        del request, target_time_window
+        del request, target_time_window, review_missing
         return EvidenceAnswerDraft(
-            sufficiency="answered",
             answer="根拠に基づく回答です。",
             cited_refs=self._select(evidence),
         )
@@ -483,10 +483,11 @@ class _UnreachableEvidenceAnswerer:
         request: AnsweringRequest,
         evidence: list[Any],
         target_time_window: TargetTimeWindow | None,
+        review_missing: tuple[str, ...] = (),
     ) -> EvidenceAnswerDraft:
         raise AssertionError(
             f"evidence answerer must not run on direct path: {request!r} "
-            f"{evidence!r} {target_time_window!r}"
+            f"{evidence!r} {target_time_window!r} {review_missing!r}"
         )
 
 

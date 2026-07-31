@@ -17,7 +17,11 @@ from structlog.testing import capture_logs
 import app.agent.planning.contract as planning_contract
 from app.agent.answering.contract import AnsweringRequest
 from app.agent.answering.direct_answer.contract import DirectAnswerDraft
-from app.agent.answering.evidence_answer.contract import EvidenceAnswerDraft
+from app.agent.answering.evidence_answer.contract import (
+    EvidenceAnswerDraft,
+    EvidenceAnswerOutcome,
+    EvidenceAnswerUnavailable,
+)
 from app.agent.evidence_collection import Researcher
 from app.agent.evidence_collection.evidence_review import EvidenceReviewer
 from app.agent.evidence_collection.external_search import (
@@ -193,20 +197,18 @@ class _EvidenceAnswerer:
         request: AnsweringRequest,
         evidence: list[Any],
         target_time_window: TargetTimeWindow | None,
-    ) -> EvidenceAnswerDraft:
-        del request, target_time_window
+        review_missing: tuple[str, ...] = (),
+    ) -> EvidenceAnswerOutcome:
+        del request, target_time_window, review_missing
         self.calls.append(list(evidence))
         if evidence:
             return EvidenceAnswerDraft(
-                sufficiency="answered",
                 answer="根拠に基づく回答です。",
                 cited_refs=[item.source.source_ref for item in evidence],
             )
-        return EvidenceAnswerDraft(
-            sufficiency="insufficient",
-            answer="根拠が不足しています。",
-            missing_aspects=["根拠が不足しています"],
-        )
+        # 自己申告でinsufficientを名乗る形は無くなったため、
+        # evidenceが無く回答を作れなかった場合はunavailableで表す。
+        return EvidenceAnswerUnavailable(failure_code="fake_no_evidence")
 
 
 class _Scope(AbstractAsyncContextManager[ExternalResearchRuntime]):

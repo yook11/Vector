@@ -15,7 +15,10 @@ from logfire.testing import CaptureLogfire
 import app.agent.planning.contract as planning_contract
 from app.agent.answering.contract import AnsweringRequest
 from app.agent.answering.direct_answer.contract import DirectAnswerDraft
-from app.agent.answering.evidence_answer.contract import EvidenceAnswerDraft
+from app.agent.answering.evidence_answer.contract import (
+    EvidenceAnswerOutcome,
+    EvidenceAnswerUnavailable,
+)
 from app.agent.contract import AnswerProgressStage
 from app.agent.evidence_collection import Researcher
 from app.agent.evidence_collection.evidence_review import EvidenceReviewer
@@ -89,6 +92,25 @@ def _review_draft_selecting(indexes: list[int]) -> Any:
                 for index in indexes
             ],
             "missing": [],
+        }
+    )
+
+
+def _review_draft_selecting_with_missing(indexes: list[int], missing: list[str]) -> Any:
+    """条件7用: 採用indexに加えてRun単位のmissingを申告するreviewer draft。"""
+    from app.agent.evidence_collection.evidence_review import EvidenceReviewDraft
+
+    return EvidenceReviewDraft.model_validate(
+        {
+            "selections": [
+                {
+                    "candidate_index": index,
+                    "claim": f"claim-{index}",
+                    "why_selected": "w",
+                }
+                for index in indexes
+            ],
+            "missing": missing,
         }
     )
 
@@ -407,6 +429,7 @@ class _EvidenceAnswerer:
         self._error = error
         self._timeline = timeline
         self.calls: list[list[Any]] = []
+        self.review_missing_calls: list[tuple[str, ...]] = []
 
     async def answer(
         self,
@@ -414,17 +437,17 @@ class _EvidenceAnswerer:
         request: AnsweringRequest,
         evidence: list[object],
         target_time_window: TargetTimeWindow | None,
-    ) -> EvidenceAnswerDraft:
+        review_missing: tuple[str, ...] = (),
+    ) -> EvidenceAnswerOutcome:
         del request, target_time_window
         self._timeline.append("answerer.start")
         self.calls.append(list(evidence))
+        self.review_missing_calls.append(review_missing)
         if self._error is not None:
             raise self._error
-        return EvidenceAnswerDraft(
-            sufficiency="insufficient",
-            answer="根拠が不足しています。",
-            missing_aspects=["根拠が不足しています"],
-        )
+        # このfakeはevidenceの内容を問わず「回答を作れなかった」を演じる
+        # (呼び出し側のtestはevidenceがanswererへ届くことだけを検証する)。
+        return EvidenceAnswerUnavailable(failure_code="fake_evidence_unavailable")
 
 
 class _Progress:
@@ -794,6 +817,52 @@ async def test_runner_preserves_internal_hit_order_into_synthesis() -> None:
     await _run(runner)
 
     assert [item.source.title for item in answerer.calls[0]] == ["first", "second"]
+
+
+@pytest.mark.asyncio
+async def test_runner_forwards_review_missing_to_the_evidence_answerer() -> None:
+    """条件7: AnsweringRunnerがoutcome.review.missingを回答Agentへ渡す。
+
+    受け渡しの責務はrunnerにあり、flowがEvidenceCollectionOutcomeから
+    自分で取り出す形にしない。reviewerが申告したmissingが、そのまま
+    tuple(outcome.review.missing)としてevidence_answererへ渡ることを確認する。
+    """
+    timeline: list[str] = []
+    answerer = _EvidenceAnswerer(timeline=timeline)
+    reviewer_runtime = ScriptedAgentRuntime(
+        [_review_draft_selecting_with_missing([0], ["観点Aを確認できませんでした"])]
+    )
+    phases = AnsweringPhases(
+        planner=_Planner(_search_plan(article_search_queries=["NVIDIA"])),
+        researcher=Researcher(
+            internal_search=_InternalSearch(
+                hits=[_hit(assessment_id=1001, title="first")]
+            )
+        ),
+        external_runtime_factory=_Factory(
+            [
+                _runtime(
+                    ScriptedAgentRuntime([_query_draft()]),
+                    reviewer_runtime=reviewer_runtime,
+                )
+            ],
+            timeline,
+        ),
+        direct_answerer=_UnreachableDirectAnswerer(),
+        evidence_answerer=answerer,
+        reviewer=EvidenceReviewer(),
+    )
+    runner = AnsweringRunner(
+        input_safety_checker=AllowInputSafetyChecker(),
+        context_preparer=_Preparer(),
+        phases_factory=lambda: phases,
+        events=None,
+        requested_external_agent_count=None,
+    )
+
+    await _run(runner)
+
+    assert answerer.review_missing_calls[0] == ("観点Aを確認できませんでした",)
 
 
 @pytest.mark.asyncio

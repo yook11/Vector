@@ -35,8 +35,10 @@ from app.analysis.ai_provider_errors import (
     AIProviderInputRejectedError,
     AIProviderNetworkError,
     AIProviderOutputBlockedError,
+    AIProviderOutputTruncatedError,
 )
 from app.analysis.gemini_error_translator import (
+    OUTPUT_BLOCKED_FINISH_REASONS,
     GeminiContentRejectionReason,
     GeminiStateReason,
     output_blocked_reason,
@@ -44,7 +46,6 @@ from app.analysis.gemini_error_translator import (
 )
 
 _SPAN_NAME = "agent_provider_call"
-_BLOCKED_FINISH_REASONS = frozenset({"SAFETY", "RECITATION"})
 _GEN_AI_REASONING_OUTPUT_TOKENS = "gen_ai.usage.reasoning.output_tokens"
 _MISSING_OUTPUT = object()
 _TRACER = trace.get_tracer(__name__)
@@ -127,7 +128,7 @@ class GeminiAgentRuntime:
                     finish_reason = _finish_reason_name(response)
                 if (
                     classified_error is None
-                    and finish_reason in _BLOCKED_FINISH_REASONS
+                    and finish_reason in OUTPUT_BLOCKED_FINISH_REASONS
                 ):
                     classified_error = AIProviderOutputBlockedError(
                         reason=output_blocked_reason(finish_reason),
@@ -140,6 +141,15 @@ class GeminiAgentRuntime:
                     _record_classified_error(
                         span,
                         result="blocked",
+                        error_type=_provider_error_type(classified_error),
+                    )
+                elif classified_error is None and finish_reason == "MAX_TOKENS":
+                    classified_error = AIProviderOutputTruncatedError(
+                        reason=GeminiStateReason.OUTPUT_TOKEN_LIMIT_REACHED
+                    )
+                    _record_classified_error(
+                        span,
+                        result="provider_error",
                         error_type=_provider_error_type(classified_error),
                     )
                 elif classified_error is None:
@@ -244,7 +254,7 @@ class GeminiAgentRuntime:
                         (
                             reason
                             for reason in finish_reason_names
-                            if reason in _BLOCKED_FINISH_REASONS
+                            if reason in OUTPUT_BLOCKED_FINISH_REASONS
                         ),
                         None,
                     )
@@ -256,6 +266,11 @@ class GeminiAgentRuntime:
                                 if blocked_reason_name == "SAFETY"
                                 else AIProviderContentRejectionKind.OTHER
                             ),
+                        )
+                        break
+                    if "MAX_TOKENS" in finish_reason_names:
+                        classified_error = AIProviderOutputTruncatedError(
+                            reason=GeminiStateReason.OUTPUT_TOKEN_LIMIT_REACHED
                         )
                         break
                     terminal_reason_seen = terminal_reason_seen or bool(

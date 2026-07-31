@@ -23,6 +23,7 @@ from app.agent.runtime.gemini import GeminiAgentRuntime
 from app.analysis.ai_provider_errors import (
     AIProviderNetworkError,
     AIProviderOutputBlockedError,
+    AIProviderOutputTruncatedError,
 )
 from app.logfire.redaction import install_exception_redaction
 from tests.agent.runtime._helpers import (
@@ -30,6 +31,7 @@ from tests.agent.runtime._helpers import (
     FakeResponse,
     ValidationProbeOutput,
     blocked_response,
+    finished_response,
     make_agent,
     success_response,
 )
@@ -198,6 +200,47 @@ async def test_blocked_response_records_usage_and_classified_error_span(
         "result",
     }
     _assert_no_model_visible_text(span, "MODEL_OUTPUT_SENTINEL_BLOCKED_31d9")
+
+
+async def test_truncated_response_records_usage_and_is_not_succeeded(
+    capfire: CaptureLogfire,
+) -> None:
+    """R1条件5: MAX_TOKENSはsucceededにならず、他の分類済みerrorと同じ扱いになる。
+
+    stream経路(_stream_fragments)ではAIProviderOutputTruncatedErrorは
+    isinstance(..., AIProviderOutputBlockedError)がFalseのため"provider_error"に
+    分類される(app/agent/runtime/gemini.py L298-303)。non-stream側もこの対称を
+    保つ前提で"provider_error"を期待値にする。
+    """
+    client = FakeGeminiClient(
+        [finished_response("MAX_TOKENS", usage_metadata=_full_usage())]
+    )
+
+    with pytest.raises(AIProviderOutputTruncatedError):
+        await GeminiAgentRuntime(client=cast(AsyncClient, client)).invoke(
+            make_agent(),
+            "typed input",
+            attempt_number=1,
+        )
+
+    span = one_provider_attempt_span(capfire)
+    attributes = dict(span.attributes or {})
+    assert attributes["result"] != "succeeded"
+    assert attributes["result"] == "provider_error"
+    assert attributes["gen_ai.usage.input_tokens"] == 11
+    assert attributes["gen_ai.usage.output_tokens"] == 7
+    assert attributes["gen_ai.usage.cache_read.input_tokens"] == 3
+    assert attributes["gen_ai.usage.reasoning.output_tokens"] == 2
+    assert isinstance(attributes["error.type"], str)
+    assert span.status.status_code is StatusCode.ERROR
+    assert span.status.description in (None, "")
+    assert exception_events(span) == []
+    assert application_attribute_keys(span) == {
+        "agent_name",
+        "attempt_number",
+        "prompt_version",
+        "result",
+    }
 
 
 async def test_invalid_response_records_usage_before_classification(

@@ -1,1 +1,0 @@
-"""Evidence answer AI adapters."""

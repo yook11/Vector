@@ -9,6 +9,7 @@ from typing import Any
 from uuid import UUID
 
 import pytest
+from pydantic import ValidationError
 
 import app.agent.planning.contract as planning_contract
 from app.agent.answering.contract import AnsweringRequest
@@ -57,6 +58,22 @@ from tests.agent.running._input_safety import AllowInputSafetyChecker
 
 def _as_of() -> datetime:
     return datetime(2026, 7, 7, 9, 0, tzinfo=UTC)
+
+
+def _draft(*, answer: str, cited_refs: list[str] | None = None) -> Any:
+    """S4: EvidenceAnswerDraftはanswerとcited_refsだけを持つ
+
+    (sufficiency/missing_aspects/unfulfilled_requirement_idsは撤去される)。
+    現行モデルはまだsufficiencyを必須で要求するため、fixture構築をガードして
+    assertion failureのredにする。
+    """
+    try:
+        return EvidenceAnswerDraft(answer=answer, cited_refs=cited_refs or [])
+    except ValidationError:
+        pytest.fail(
+            "S4: EvidenceAnswerDraft must accept only "
+            "(answer: NonBlankText, cited_refs: list[str])"
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -475,7 +492,12 @@ class FakeEvidenceAnswerer:
         request: AnsweringRequest,
         evidence: list[object],
         target_time_window: TargetTimeWindow | None,
+        review_missing: tuple[str, ...] = (),
     ) -> EvidenceAnswerDraft:
+        # S5: review_missingの受け渡し検証はtests/agent/running/
+        # test_retrieval_dispatch.pyが正本(条件7)。このfakeは既存の
+        # request/evidence/target_time_window契約だけを追跡する。
+        del review_missing
         if self._timeline is not None:
             self._timeline.record("evidence_answerer.answer")
         self.calls.append(
@@ -729,8 +751,7 @@ async def test_answer_search_plan_never_calls_direct_answerer(
     orchestrator, _, _, _, direct_answerer = _orchestrator(
         plan=plan,
         outcome=outcome,
-        draft=EvidenceAnswerDraft(
-            sufficiency="answered",
+        draft=_draft(
             answer="根拠から確認できます。",
             cited_refs=cited_refs,
         ),
@@ -749,8 +770,7 @@ async def test_answer_evidence_plan_orders_progress_and_port_calls() -> None:
     orchestrator, _, _, _, _ = _orchestrator(
         plan=_search_plan(),
         outcome=_both_evidence_outcome(),
-        draft=EvidenceAnswerDraft(
-            sufficiency="answered",
+        draft=_draft(
             answer="根拠から確認できます。",
             cited_refs=["1", "2"],
         ),
@@ -780,8 +800,7 @@ async def test_answer_internal_sources_and_status_from_citations() -> None:
     orchestrator, _, _, _, _ = _orchestrator(
         plan=_search_plan(),
         outcome=_internal_outcome(2),
-        draft=EvidenceAnswerDraft(
-            sufficiency="answered",
+        draft=_draft(
             answer="内部記事 1 と 2 から確認できます。",
             cited_refs=["1", "2"],
         ),
@@ -797,21 +816,25 @@ async def test_answer_internal_sources_and_status_from_citations() -> None:
 
 
 @pytest.mark.asyncio
-async def test_answered_evidence_draft_with_no_unfulfilled_ids_stays_answered() -> None:
-    answer = "内部根拠から確認できます。[[1]]"
+async def test_unfulfilled_requirement_wording_no_longer_appears() -> None:
+    """条件15: 要望由来の文言(回答要望を満たせませんでした: ...)が現れない。
+
+    unfulfilled_requirement_ids自体が撤去されたため、request contextに
+    content/response requirementsがあってもmissing_aspectsへ反映されず、
+    statusはcitationの成否だけで決まる(answeredのまま)。
+    """
+    answer = "確認できた範囲を回答します。[[1]]"
     orchestrator, _, _, _, _ = _orchestrator(
         plan=_search_plan(),
         outcome=_internal_outcome(1),
-        draft=EvidenceAnswerDraft(
-            sufficiency="answered",
-            answer=answer,
-            cited_refs=["1"],
-            unfulfilled_requirement_ids=[],
-        ),
+        draft=_draft(answer=answer, cited_refs=["1"]),
     )
 
     result = await orchestrator.answer(
-        _input(content_requirements=["投資判断への影響を説明する"])
+        _input(
+            content_requirements=["投資判断への影響を説明する"],
+            response_requirements=["初心者向けに説明する"],
+        )
     )
 
     assert (
@@ -820,151 +843,9 @@ async def test_answered_evidence_draft_with_no_unfulfilled_ids_stays_answered() 
         [source.source_ref for source in result.sources],
         result.missing_aspects,
     ) == ("answered", answer, ["1"], [])
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize(
-    (
-        "content_requirements",
-        "response_requirements",
-        "unfulfilled_requirement_id",
-        "description",
-    ),
-    [
-        (["投資判断への影響を説明する"], [], "c1", "投資判断への影響を説明する"),
-        ([], ["初心者向けに説明する"], "p1", "初心者向けに説明する"),
-    ],
-    ids=["content", "response"],
-)
-async def test_unfulfilled_requirement_caps_status_and_preserves_answer_sources(
-    content_requirements: list[str],
-    response_requirements: list[str],
-    unfulfilled_requirement_id: str,
-    description: str,
-) -> None:
-    answer = "確認できた範囲を回答します。[[1]]"
-    orchestrator, _, _, _, _ = _orchestrator(
-        plan=_search_plan(),
-        outcome=_internal_outcome(1),
-        draft=EvidenceAnswerDraft(
-            sufficiency="answered",
-            answer=answer,
-            cited_refs=["1"],
-            unfulfilled_requirement_ids=[unfulfilled_requirement_id],
-        ),
+    assert not any(
+        "回答要望を満たせませんでした" in item for item in result.missing_aspects
     )
-
-    result = await orchestrator.answer(
-        _input(
-            content_requirements=content_requirements,
-            response_requirements=response_requirements,
-        )
-    )
-
-    assert (
-        result.status,
-        result.answer,
-        [source.source_ref for source in result.sources],
-        result.missing_aspects,
-    ) == (
-        "insufficient",
-        answer,
-        ["1"],
-        [f"回答要望を満たせませんでした: {description}"],
-    )
-
-
-@pytest.mark.asyncio
-async def test_requirement_missing_follows_existing_missing_in_context_order() -> None:
-    """D4-S2: run単位のcollection_failures文言は廃止されたため、task別missingの
-
-    ordering(task_index順)からdraft/requirement missingへ続く並びだけを検証する
-    (経路名文言の不在自体はtest_result_assembly.pyが正本)。
-    """
-    tasks = [_task(0), _task(1)]
-    outcome = _RetrievalFixture(
-        external_search=_external_outcome(
-            [],
-            reports=[
-                _report(task_index=1, missing=["外部タスク1の不足"]),
-                _report(task_index=0, missing=["外部タスク0の不足"]),
-            ],
-            tasks=tasks,
-        ),
-    )
-    orchestrator, _, _, _, _ = _orchestrator(
-        plan=_search_plan(tasks=tasks),
-        outcome=outcome,
-        draft=EvidenceAnswerDraft(
-            sufficiency="insufficient",
-            answer="取得できた範囲では断定できません。",
-            cited_refs=[],
-            missing_aspects=["draftの不足"],
-            unfulfilled_requirement_ids=["p2", "c2", "p1", "c1"],
-        ),
-    )
-
-    result = await orchestrator.answer(
-        _input(
-            content_requirements=["content 1", "content 2"],
-            response_requirements=["response 1", "response 2"],
-        )
-    )
-
-    assert result.missing_aspects == [
-        "回答に使える根拠を取得できませんでした",
-        "外部タスク0の不足",
-        "外部タスク1の不足",
-        "draftの不足",
-        "回答要望を満たせませんでした: content 1",
-        "回答要望を満たせませんでした: content 2",
-        "回答要望を満たせませんでした: response 1",
-        "回答要望を満たせませんでした: response 2",
-    ]
-
-
-@pytest.mark.asyncio
-async def test_requirement_missing_is_deduplicated_against_existing_missing() -> None:
-    duplicate = "回答要望を満たせませんでした: 重複する要望"
-    orchestrator, _, _, _, _ = _orchestrator(
-        plan=_search_plan(),
-        outcome=_internal_outcome(1),
-        draft=EvidenceAnswerDraft(
-            sufficiency="insufficient",
-            answer="一部のみ回答します。[[1]]",
-            cited_refs=["1"],
-            missing_aspects=[duplicate],
-            unfulfilled_requirement_ids=["c2", "c1"],
-        ),
-    )
-
-    result = await orchestrator.answer(
-        _input(content_requirements=["重複する要望", "追加の要望"])
-    )
-
-    assert result.missing_aspects == [
-        duplicate,
-        "回答要望を満たせませんでした: 追加の要望",
-    ]
-
-
-@pytest.mark.asyncio
-async def test_answer_rejects_unknown_unfulfilled_requirement_id() -> None:
-    orchestrator, _, _, _, _ = _orchestrator(
-        plan=_search_plan(),
-        outcome=_internal_outcome(1),
-        draft=EvidenceAnswerDraft(
-            sufficiency="answered",
-            answer="内部根拠から確認できます。[[1]]",
-            cited_refs=["1"],
-            unfulfilled_requirement_ids=["unknown"],
-        ),
-    )
-
-    with pytest.raises(EvidenceAnswerDraftInvalidError):
-        await orchestrator.answer(
-            _input(content_requirements=["投資判断への影響を説明する"])
-        )
 
 
 @pytest.mark.asyncio
@@ -972,8 +853,7 @@ async def test_answer_external_source_is_cited_source_only() -> None:
     orchestrator, _, _, _, _ = _orchestrator(
         plan=_search_plan(),
         outcome=_external_outcome_only(),
-        draft=EvidenceAnswerDraft(
-            sufficiency="answered",
+        draft=_draft(
             answer="外部根拠から確認できます。",
             cited_refs=["1"],
         ),
@@ -992,8 +872,7 @@ async def test_answer_search_plan_with_both_evidence_types_cited() -> None:
     orchestrator, _, _, _, _ = _orchestrator(
         plan=_search_plan(),
         outcome=_both_evidence_outcome(),
-        draft=EvidenceAnswerDraft(
-            sufficiency="answered",
+        draft=_draft(
             answer="内部根拠と外部根拠から確認できます。",
             cited_refs=["1", "2"],
         ),
@@ -1011,8 +890,7 @@ async def test_answer_search_plan_omits_unused_external_source() -> None:
     orchestrator, _, _, _, _ = _orchestrator(
         plan=_search_plan(),
         outcome=_both_evidence_outcome(),
-        draft=EvidenceAnswerDraft(
-            sufficiency="answered",
+        draft=_draft(
             answer="内部根拠だけで確認できます。",
             cited_refs=["1"],
         ),
@@ -1028,14 +906,16 @@ async def test_answer_search_plan_omits_unused_external_source() -> None:
 
 @pytest.mark.asyncio
 async def test_answer_empty_retrieval_evidence_calls_synthesis() -> None:
-    draft = EvidenceAnswerDraft(
-        sufficiency="insufficient",
+    """evidence空のRunでもsynthesisは呼ばれ、機構由来のmissing_aspects
+
+    (文言の正本はtest_result_assembly.py)によりstatusはinsufficientになる。
+    """
+    draft = _draft(
         answer=(
             "検索で引用できる根拠は見つかりませんでした。"
             "一般論としては参考程度に扱ってください。"
         ),
         cited_refs=[],
-        missing_aspects=["引用できる検索根拠"],
     )
     orchestrator, _, _, evidence_answerer, _ = _orchestrator(
         plan=_search_plan(),
@@ -1049,35 +929,16 @@ async def test_answer_empty_retrieval_evidence_calls_synthesis() -> None:
     assert result.answer == draft.answer
     assert result.sources == []
     assert result.missing_aspects
-    assert "引用できる検索根拠" in result.missing_aspects
     assert len(evidence_answerer.calls) == 1
     assert evidence_answerer.calls[0]["evidence"] == []
 
 
 @pytest.mark.asyncio
-async def test_answer_adopts_insufficient_draft_with_partial_citations() -> None:
-    orchestrator, _, _, _, _ = _orchestrator(
-        plan=_search_plan(),
-        outcome=_internal_outcome(1),
-        draft=EvidenceAnswerDraft(
-            sufficiency="insufficient",
-            answer="内部根拠では断定できません。[[1]]",
-            cited_refs=["1"],
-            missing_aspects=["会社側の一次情報"],
-        ),
-    )
-
-    result = await orchestrator.answer(_input())
-
-    assert result.status == "insufficient"
-    assert result.answer == "内部根拠では断定できません。[[1]]"
-    assert [source.source_ref for source in result.sources] == ["1"]
-    assert result.missing_aspects == ["会社側の一次情報"]
-
-
-@pytest.mark.asyncio
 async def test_answer_missing_aspects_are_ordered_and_deduplicated() -> None:
-    """D4-S2: task別missingのtask_index順連結とdraft missingとの重複排除を検証する。"""
+    """review.missingのtask_index順連結と重複排除を検証する
+
+    (draftはmissing_aspectsを持たなくなったため、task別missingだけが対象)。
+    """
     tasks = [_task(0), _task(1)]
     reports = [
         _report(task_index=1, missing=["市場予想値", "会社側コメント"]),
@@ -1099,12 +960,7 @@ async def test_answer_missing_aspects_are_ordered_and_deduplicated() -> None:
                 tasks=tasks,
             ),
         ),
-        draft=EvidenceAnswerDraft(
-            sufficiency="insufficient",
-            answer="根拠が不足しています。",
-            cited_refs=["1"],
-            missing_aspects=["会社側コメント", "経営陣の見通し"],
-        ),
+        draft=_draft(answer="根拠が不足しています。", cited_refs=["1"]),
     )
 
     result = await orchestrator.answer(_input())
@@ -1113,7 +969,6 @@ async def test_answer_missing_aspects_are_ordered_and_deduplicated() -> None:
         "市場予想値",
         "実績値",
         "会社側コメント",
-        "経営陣の見通し",
     ]
 
 
@@ -1122,8 +977,7 @@ async def test_answer_rejects_unknown_citation_ref() -> None:
     orchestrator, _, _, _, _ = _orchestrator(
         plan=_search_plan(),
         outcome=_internal_outcome(1),
-        draft=EvidenceAnswerDraft(
-            sufficiency="answered",
+        draft=_draft(
             answer="存在しない根拠を引用しています。",
             cited_refs=["2"],
         ),
@@ -1138,8 +992,7 @@ async def test_answer_deduplicates_repeated_citation_refs_in_source_order() -> N
     orchestrator, _, _, _, _ = _orchestrator(
         plan=_search_plan(),
         outcome=_internal_outcome(2),
-        draft=EvidenceAnswerDraft(
-            sufficiency="answered",
+        draft=_draft(
             answer="重複引用を含みます。",
             cited_refs=["2", "1", "2", "1"],
         ),
@@ -1165,8 +1018,7 @@ async def test_answer_passes_pipeline_inputs_and_variant_time_window() -> None:
             target_time_window=TargetTimeWindow(kind="last_n_days", days=1),
         ),
         outcome=_both_evidence_outcome(),
-        draft=EvidenceAnswerDraft(
-            sufficiency="answered",
+        draft=_draft(
             answer="確認できます。",
             cited_refs=["1", "2"],
         ),
@@ -1199,8 +1051,7 @@ async def test_answer_passes_none_time_window_for_search_plan() -> None:
     orchestrator, _, _, evidence_answerer, _ = _orchestrator(
         plan=_search_plan(),
         outcome=_internal_outcome(1),
-        draft=EvidenceAnswerDraft(
-            sufficiency="answered",
+        draft=_draft(
             answer="確認できます。",
             cited_refs=["1"],
         ),
@@ -1226,11 +1077,7 @@ async def test_answer_passes_none_time_window_for_search_plan() -> None:
             RuntimeError("planner failed"),
             _RetrievalFixture(),
             None,
-            EvidenceAnswerDraft(
-                sufficiency="answered",
-                answer="x",
-                cited_refs=["1"],
-            ),
+            AssertionError("evidence_answerer must not be called"),
             "planner failed",
             [
                 "progress:planning",
@@ -1241,11 +1088,7 @@ async def test_answer_passes_none_time_window_for_search_plan() -> None:
             lambda: _search_plan(),
             _internal_outcome(0),
             RuntimeError("internal search failed"),
-            EvidenceAnswerDraft(
-                sufficiency="answered",
-                answer="x",
-                cited_refs=["1"],
-            ),
+            AssertionError("evidence_answerer must not be called"),
             "internal search failed",
             None,
         ),

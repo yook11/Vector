@@ -233,17 +233,17 @@ class AnsweringRunner:
         evidence = normalize_answer_evidence(outcome)
 
         await self._report_progress("synthesizing")
-        draft = await phases.evidence_answerer.answer(
+        answer_outcome = await phases.evidence_answerer.answer(
             request=request,
             evidence=evidence,
             target_time_window=_plan_target_time_window(plan),
+            review_missing=tuple(outcome.review.missing),
         )
         result = assemble_evidence_result(
-            context=request.context,
             plan=plan,
             outcome=outcome,
             evidence=evidence,
-            draft=draft,
+            answer_outcome=answer_outcome,
         )
         _record_evidence_span_attributes(
             run_span, outcome=outcome, sources=result.sources

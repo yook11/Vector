@@ -12,9 +12,11 @@ import pytest
 
 import app.analysis.ai_provider_errors as ai_provider_errors
 from app.analysis.ai_provider_errors import (
+    AIProviderFailureMode,
     AIProviderInputRejectedError,
     AIProviderNetworkError,
     AIProviderOutputBlockedError,
+    AIProviderOutputTruncatedError,
 )
 from app.analysis.gemini_error_translator import GeminiContentRejectionReason
 from tests.agent.runtime._helpers import (
@@ -23,6 +25,7 @@ from tests.agent.runtime._helpers import (
     RuntimeOutput,
     ValidationProbeOutput,
     blocked_response,
+    finished_response,
     make_agent,
     required_attribute,
     runtime_contract,
@@ -278,6 +281,13 @@ async def test_unknown_extra_field_location_is_collapsed_to_fixed_placeholder() 
     [
         ("SAFETY", GeminiContentRejectionReason.SAFETY, "SAFETY"),
         ("RECITATION", GeminiContentRejectionReason.RECITATION, "OTHER"),
+        ("BLOCKLIST", GeminiContentRejectionReason.BLOCKLIST, "OTHER"),
+        (
+            "PROHIBITED_CONTENT",
+            GeminiContentRejectionReason.PROHIBITED_CONTENT,
+            "OTHER",
+        ),
+        ("SPII", GeminiContentRejectionReason.SPII, "OTHER"),
     ],
 )
 async def test_blocked_finish_reason_maps_to_existing_provider_error(
@@ -300,6 +310,39 @@ async def test_blocked_finish_reason_maps_to_existing_provider_error(
     assert client.models.generate_content.await_count == 1
     client.close.assert_not_awaited()
     client.aclose.assert_not_awaited()
+
+
+async def test_invoke_max_tokens_finish_reason_is_truncated_even_with_valid_json() -> (
+    None
+):
+    """R1条件1・2: MAX_TOKENSはJSONがschemaに完全に妥当でも打ち切りとして分類される。
+
+    finish_reasonの分類をJSONの偶然の妥当性より優先させる(仕様が撤去した
+    「JSONが閉じないことによる偶然の検出への依存」をnon-stream経路でも解消する)。
+    """
+    client = FakeGeminiClient([finished_response("MAX_TOKENS")])
+    runtime = runtime_type()(client=client)
+
+    with pytest.raises(AIProviderOutputTruncatedError) as exc_info:
+        await runtime.invoke(make_agent(), "typed input", attempt_number=1)
+
+    assert exc_info.value.CODE == "ai_error_output_truncated"
+    assert exc_info.value.FAILURE_MODE is AIProviderFailureMode.ATTEMPT_SCOPED
+    assert exc_info.value.reason is not None
+    assert exc_info.value.reason.value == "output_token_limit_reached"
+    assert client.models.generate_content.await_count == 1
+    client.close.assert_not_awaited()
+    client.aclose.assert_not_awaited()
+
+
+async def test_invoke_stop_finish_reason_still_succeeds() -> None:
+    """R1条件3(回帰ガード): finish_reason=STOPは現行どおり正常終了する。"""
+    client = FakeGeminiClient([finished_response("STOP", result="stopped")])
+    runtime = runtime_type()(client=client)
+
+    output = await runtime.invoke(make_agent(), "typed input", attempt_number=1)
+
+    assert output == RuntimeOutput(result="stopped", tags=["runtime"])
 
 
 async def test_non_stream_prompt_feedback_precedes_candidate_safety() -> None:

@@ -60,6 +60,22 @@ def test_instructions_define_context_preparation_rules() -> None:
     assert "source再利用可否" in QUESTION_CONTEXT_INSTRUCTIONS
 
 
+def test_instructions_describe_missing_aspects_as_prior_answer_gaps() -> None:
+    """条件11: missing_aspectsは「満たせなかった要望」ではなく
+
+    「前回の回答で確認できなかったこと・完了しなかった調査」として説明される
+    (spec: agent-answer-self-report-removal-slice.md
+    「精査の不足はagentへの入力として渡す」節 / requirement単位で追跡する
+    機構は設けない)。
+    """
+    assert "満たせなかった保存済みの要望" not in QUESTION_CONTEXT_INSTRUCTIONS
+    assert "対応するrequirementへ昇格する" not in QUESTION_CONTEXT_INSTRUCTIONS
+    assert (
+        "前回の回答で確認できなかったこと・完了しなかった調査"
+        in QUESTION_CONTEXT_INSTRUCTIONS
+    )
+
+
 def test_schema_and_agent_require_every_question_context_draft_field() -> None:
     expected_fields = set(QuestionContextDraft.model_fields)
     declared_schema = thaw_schema(QUESTION_CONTEXT_AGENT.response_schema)

@@ -41,7 +41,7 @@ def test_question_context_agent_declares_role_model_and_output_contract() -> Non
     assert isinstance(agent, Agent)
     assert agent.name == "question_context"
     assert isinstance(agent.prompt, AgentPrompt)
-    assert agent.prompt.version == "v1"
+    assert agent.prompt.version == "v2"
     assert agent.model == ModelTarget(
         provider="gemini",
         name="gemini-2.5-flash-lite",
@@ -58,14 +58,15 @@ def test_question_context_agent_declares_role_model_and_output_contract() -> Non
 
 
 def test_question_context_prompt_version_lives_next_to_fixed_prompt() -> None:
+    """条件11: missing_aspectsの意味変更に伴いprompt versionを上げる (spec: v2)。"""
     prompts = importlib.import_module("app.agent.question_context.prompts")
     agent_module = importlib.import_module("app.agent.question_context.agent")
 
-    assert prompts.QUESTION_CONTEXT_PROMPT_VERSION == "v1"
+    assert prompts.QUESTION_CONTEXT_PROMPT_VERSION == "v2"
     assert agent_module.QUESTION_CONTEXT_PROMPT.version == (
         prompts.QUESTION_CONTEXT_PROMPT_VERSION
     )
-    assert 'version="v1"' not in Path(agent_module.__file__).read_text(encoding="utf-8")
+    assert 'version="v2"' not in Path(agent_module.__file__).read_text(encoding="utf-8")
 
 
 def test_renderer_uses_only_typed_input_and_preserves_untrusted_boundaries() -> None:
