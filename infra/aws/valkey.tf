@@ -19,9 +19,10 @@
 # - autoclaim:taskiq:<stream> は taskiq の再配達 lock。SET NX で取得し、
 #   解放は EVALSHA の Lua が GET + DEL を呼ぶ。
 locals {
-  # redis-py 8 / node-redis 6 は RESP3 既定で HELLO を発行する。CLIENT SETINFO は
-  # 失敗しても握り潰されるが、ACL 拒否ログを常態化させないため許可する。
-  valkey_common_acl = "+@connection +client|setinfo -@dangerous"
+  # redis-py 8 / node-redis 6 は RESP3 既定で HELLO を発行する。CLIENT (SETINFO 含む)
+  # は @connection が丸ごと含むため個別指定しない。全体追加済み command への
+  # subcommand 追加は ElastiCache の CreateUser が InvalidParameterValue で拒否する。
+  valkey_common_acl = "+@connection -@dangerous"
 
   broker_user_access = {
     api = join(" ", [
