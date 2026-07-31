@@ -60,5 +60,18 @@ export function runtimePoolConfigFromUrl(rawUrl: string): PoolConfig {
     return config;
   }
   // URL の妥当性は poolConfigFromUrl が先に検証している (不正なら redact 済で throw)。
-  return { ...config, password: buildAuthTokenProvider(new URL(rawUrl)) };
+  //
+  // pg は Client 生成時に connectionString を再解析し、その結果 (password の無い
+  // URL なら null) で明示指定の password を上書きするため、生成器を生かすには
+  // connectionString を渡さず個別フィールドへ分解する必要がある。search_path 等の
+  // query param はここで落ちる (schema は authPool の on connect が担う)。
+  const url = new URL(rawUrl);
+  return {
+    host: url.hostname,
+    port: url.port ? Number(url.port) : DEFAULT_POSTGRES_PORT,
+    database: decodeURIComponent(url.pathname.slice(1)),
+    user: decodeURIComponent(url.username),
+    ssl: config.ssl,
+    password: buildAuthTokenProvider(url),
+  };
 }
