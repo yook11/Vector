@@ -25,18 +25,6 @@ from sqlalchemy.ext.asyncio import AsyncConnection, AsyncSession
 _VERSIONS_DIR = Path(__file__).parents[1] / "alembic" / "versions"
 _CHECK_VIOLATION_SQLSTATE = "23514"
 
-# migration 前 (現行) の CHECK 制約。app/models/agent_run.py:65 が正本。
-_LEGACY_PROGRESS_STAGE_CHECK = (
-    "progress_stage IN ('planning', 'retrieving', 'synthesizing')"
-)
-# migration 後に期待する CHECK 制約。仕様の 6 値。
-_CURRENT_PROGRESS_STAGE_CHECK = (
-    "progress_stage IN ("
-    "'safety_check', 'context_resolution', 'planning', "
-    "'evidence_collection', 'evidence_review', 'answering'"
-    ")"
-)
-
 
 def _load_migration() -> ModuleType:
     paths = sorted(_VERSIONS_DIR.glob("*progress_stage_vocabulary*.py"))
@@ -64,21 +52,37 @@ async def _invoke_migration(
     await connection.run_sync(invoke)
 
 
-async def _create_agent_runs_table(
-    connection: AsyncConnection, *, check_expression: str
-) -> None:
-    """migration が触る範囲だけを持つ ``agent_runs`` を session-scoped temp table で
-
-    shadow する。
-    """
+async def _create_legacy_agent_runs_table(connection: AsyncConnection) -> None:
+    """migration 前の CHECK 制約を持つ ``agent_runs`` を temp table で shadow する。"""
     await connection.execute(
         text(
-            f"""
+            """
             CREATE TEMPORARY TABLE agent_runs (
                 id UUID PRIMARY KEY,
                 progress_stage VARCHAR(32) NULL,
                 CONSTRAINT ck_agent_runs_progress_stage
-                    CHECK ({check_expression})
+                    CHECK (progress_stage IN (
+                        'planning', 'retrieving', 'synthesizing'
+                    ))
+            ) ON COMMIT PRESERVE ROWS
+            """
+        )
+    )
+
+
+async def _create_current_agent_runs_table(connection: AsyncConnection) -> None:
+    """migration 後の CHECK 制約を持つ ``agent_runs`` を temp table で shadow する。"""
+    await connection.execute(
+        text(
+            """
+            CREATE TEMPORARY TABLE agent_runs (
+                id UUID PRIMARY KEY,
+                progress_stage VARCHAR(32) NULL,
+                CONSTRAINT ck_agent_runs_progress_stage
+                    CHECK (progress_stage IN (
+                        'safety_check', 'context_resolution', 'planning',
+                        'evidence_collection', 'evidence_review', 'answering'
+                    ))
             ) ON COMMIT PRESERVE ROWS
             """
         )
@@ -129,9 +133,7 @@ async def test_upgrade_translates_existing_rows_to_new_vocabulary(
     """
     migration = _load_migration()
     connection = await db_session.connection()
-    await _create_agent_runs_table(
-        connection, check_expression=_LEGACY_PROGRESS_STAGE_CHECK
-    )
+    await _create_legacy_agent_runs_table(connection)
     planning_id = str(uuid4())
     retrieving_id = str(uuid4())
     synthesizing_id = str(uuid4())
@@ -172,9 +174,7 @@ async def test_upgrade_accepts_all_six_new_stage_values(
     """upgrade後、6値すべてがCHECK制約に拒否されずINSERTできる。"""
     migration = _load_migration()
     connection = await db_session.connection()
-    await _create_agent_runs_table(
-        connection, check_expression=_LEGACY_PROGRESS_STAGE_CHECK
-    )
+    await _create_legacy_agent_runs_table(connection)
     await _invoke_migration(connection, migration, "upgrade")
 
     run_id = str(uuid4())
@@ -191,9 +191,7 @@ async def test_upgrade_rejects_legacy_stage_values(
     """upgrade後、旧語彙retrieving/synthesizingがCHECK制約に弾かれる。"""
     migration = _load_migration()
     connection = await db_session.connection()
-    await _create_agent_runs_table(
-        connection, check_expression=_LEGACY_PROGRESS_STAGE_CHECK
-    )
+    await _create_legacy_agent_runs_table(connection)
     await _invoke_migration(connection, migration, "upgrade")
 
     await _assert_progress_stage_rejected(connection, stage=stage)
@@ -223,9 +221,7 @@ async def test_downgrade_translates_new_rows_to_legacy_vocabulary(
     """
     migration = _load_migration()
     connection = await db_session.connection()
-    await _create_agent_runs_table(
-        connection, check_expression=_CURRENT_PROGRESS_STAGE_CHECK
-    )
+    await _create_current_agent_runs_table(connection)
     run_id = str(uuid4())
     await _insert_progress_stage(connection, run_id=run_id, stage=new_stage)
 
@@ -253,9 +249,7 @@ async def test_downgrade_rejects_new_stage_values(
     """downgrade後、新語彙がCHECK制約に弾かれる。"""
     migration = _load_migration()
     connection = await db_session.connection()
-    await _create_agent_runs_table(
-        connection, check_expression=_CURRENT_PROGRESS_STAGE_CHECK
-    )
+    await _create_current_agent_runs_table(connection)
     await _invoke_migration(connection, migration, "downgrade")
 
     await _assert_progress_stage_rejected(connection, stage=stage)
