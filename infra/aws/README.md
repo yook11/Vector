@@ -148,6 +148,42 @@ instance-id と RDS endpoint は `terraform output bastion_instance_id` /
 - `start-session` が TargetNotConnected のときの第一容疑者は endpoints SG
   (bastion からの 443 ingress は toggle 内の conditional resource)。
 
+## DB 初期構築 (RDS)
+
+踏み台の port forward (localhost:15432) 越しに、空の RDS を構築する手順。
+ローカルの PG17 + pgvector で一気通し検証済み (2026-07-31)。
+
+**順序が本質。** alembic の chain は `auth."user"` への FK を持つが、auth の
+テーブルは Better Auth CLI の管轄で alembic は作らない。**CLI を alembic より
+先に**流す (逆だと watchlist_entries の FK 作成で落ちる。統合テストは
+`create_all` で schema を焼くため、この順序依存は migration 経路でしか現れない)。
+
+```
+1. role / 所有権 / extension (master password は Secrets Manager):
+   psql "host=<RDS endpoint> hostaddr=127.0.0.1 port=15432 dbname=vector \
+     user=vector_master sslmode=verify-full" -f db-provision.sql
+2. migration 用 password の設定 (同じ psql 接続で):  \password vector
+3. auth schema (vector で接続して):  CREATE SCHEMA IF NOT EXISTS auth;
+4. Better Auth テーブル (frontend/ から。CLI の版は better-auth 本体と別体系):
+   AUTH_DATABASE_URL='postgres://vector:<pw>@127.0.0.1:15432/vector?sslmode=require' \
+   BETTER_AUTH_URL='https://<frontend_domain>' \
+   npx -y @better-auth/cli@1.4.21 migrate -y --config src/lib/auth/auth.cli.ts
+5. schema + GRANT + seed (backend/ から):
+   DATABASE_URL='postgresql+asyncpg://vector:<pw>@127.0.0.1:15432/vector' \
+   MIGRATION_DATABASE_URL=同上 \
+   ALEMBIC_ALLOW_DESTRUCTIVE=yes-i-know uv run alembic upgrade head
+6. 検証: vector_app で public が読め auth.session が拒否される /
+   vector_auth で auth が読め public が不可視 / news_sources に seed が入っている
+```
+
+- 手順 4 以降の URL は 127.0.0.1 直指定のため証明書の CN 検証はできない
+  (asyncpg / pg は hostaddr 分離を持たない)。経路の認証と暗号化は SSM の
+  トンネル側が担っており、内側の TLS は require で足りる。
+- 手順 5 の destructive gate は b1 の legacy テーブル削除が要求する。空 DB の
+  初回構築では失うものが無いので明示して通す。
+- app role (vector_app / vector_auth / vector_collect) は IAM 認証のため
+  password を持たない。`db-provision.sql` に秘密が登場しないのはこのため。
+
 ## egress proxy の残余
 
 - **オープンプロキシ化はアドレスの不在が防いでいる。** proxy は private subnet に

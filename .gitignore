@@ -161,3 +161,5 @@ frontend/tsconfig.tsbuildinfo
 !*.tfvars.example
 # .terraform.lock.hcl は commit する (provider の version と hash を pin する
 # supply-chain 対策。除外すると別マシン・CI で provider 解決が非再現になる)。
+# 例外: 秘密を含まない provisioning script (dump ではない)
+!infra/aws/db-provision.sql
