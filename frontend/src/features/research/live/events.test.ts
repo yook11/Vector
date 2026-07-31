@@ -31,13 +31,13 @@ describe("parseResearchLiveEvent", () => {
         eventName: "stage",
         data: {
           attemptEpoch: 2,
-          stage: "retrieving",
+          stage: "evidence_collection",
           providerMetadata: { secret: true },
         },
         expected: {
           type: "stage",
           attemptEpoch: 2,
-          stage: "retrieving",
+          stage: "evidence_collection",
           streamId: streamId(),
         },
       },

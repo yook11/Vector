@@ -12,9 +12,12 @@ describe("ActiveRunStatus", () => {
   it.each([
     ["queued", null, "待機中"],
     ["running", null, "生成中"],
+    ["running", "safety_check", "検証中"],
+    ["running", "context_resolution", "コンテキストを整理中"],
     ["running", "planning", "計画中"],
-    ["running", "retrieving", "情報収集中"],
-    ["running", "synthesizing", "回答作成中"],
+    ["running", "evidence_collection", "情報収集中"],
+    ["running", "evidence_review", "情報を選別中"],
+    ["running", "answering", "回答作成中"],
   ] as const)("renders %s / %s as %s", (status, stage, text) => {
     render(<ActiveRunStatus status={status} stage={stage} activity={null} />);
 
@@ -23,17 +26,17 @@ describe("ActiveRunStatus", () => {
 
   it.each([
     [
-      "retrieving",
+      "evidence_collection",
       { type: "internal_search.started", queryCount: 2 },
       "関連記事を検索中",
     ],
     [
-      "retrieving",
+      "evidence_collection",
       { type: "internal_search.completed", hitCount: 8 },
       "関連記事8件を確認",
     ],
     [
-      "retrieving",
+      "evidence_collection",
       {
         type: "external_search.queries_generated",
         taskIndex: 0,
@@ -42,7 +45,7 @@ describe("ActiveRunStatus", () => {
       "“NVIDIA AI” など2件を検索中",
     ],
     [
-      "retrieving",
+      "evidence_collection",
       {
         type: "external_search.candidates_fetched",
         taskIndex: 1,
@@ -51,7 +54,7 @@ describe("ActiveRunStatus", () => {
       "候補12件を取得",
     ],
     [
-      "retrieving",
+      "evidence_review",
       {
         type: "external_search.evidence_selected",
         taskIndex: 1,
@@ -67,8 +70,25 @@ describe("ActiveRunStatus", () => {
       },
       "“NVIDIAの発表は株価へどう影響する？”について調査中",
     ],
+    [
+      "context_resolution",
+      {
+        type: "question.resolved",
+        standaloneQuestion: "NVIDIAの発表は株価へどう影響する？",
+      },
+      "“NVIDIAの発表は株価へどう影響する？”について調査中",
+    ],
   ] satisfies ReadonlyArray<
-    readonly ["planning" | "retrieving", ResearchLiveActivity, string]
+    readonly [
+      (
+        | "planning"
+        | "context_resolution"
+        | "evidence_collection"
+        | "evidence_review"
+      ),
+      ResearchLiveActivity,
+      string,
+    ]
   >)("renders the known $1 activity", (stage, activity, text) => {
     render(
       <ActiveRunStatus status="running" stage={stage} activity={activity} />,
@@ -81,7 +101,7 @@ describe("ActiveRunStatus", () => {
     const { container } = render(
       <ActiveRunStatus
         status="running"
-        stage="retrieving"
+        stage="evidence_collection"
         activity={{
           type: "external_search.candidates_fetched",
           taskIndex: 0,
@@ -100,7 +120,7 @@ describe("ActiveRunStatus", () => {
     render(
       <ActiveRunStatus
         status="running"
-        stage="retrieving"
+        stage="evidence_collection"
         activity={{
           type: "external_search.queries_generated",
           taskIndex: 0,
@@ -123,7 +143,7 @@ describe("ActiveRunStatus", () => {
     render(
       <ActiveRunStatus
         status="running"
-        stage="synthesizing"
+        stage="answering"
         activity={{
           type: "external_search.candidates_fetched",
           taskIndex: 0,

@@ -50,7 +50,7 @@ describe("GET /api/research/runs/[runId]", () => {
       threadId: THREAD_ID,
       status: "running",
       errorCode: null,
-      progressStage: "retrieving",
+      progressStage: "evidence_collection",
       attemptEpoch: 3,
       recentEvents: [],
     };

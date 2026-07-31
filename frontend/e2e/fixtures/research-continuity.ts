@@ -207,7 +207,7 @@ export async function installResearchContinuityBrowserHarness(
           currentSource.emit("attempt.started", { attemptEpoch: 1 }, "1-0");
           currentSource.emit(
             "stage",
-            { attemptEpoch: 1, stage: "synthesizing" },
+            { attemptEpoch: 1, stage: "answering" },
             "2-0",
           );
           currentSource.emit(
@@ -258,7 +258,7 @@ export async function installResearchContinuityBrowserHarness(
       threadId: fixture.threadId,
       status: "running",
       errorCode: null,
-      progressStage: "synthesizing",
+      progressStage: "answering",
       attemptEpoch: 1,
       recentEvents: [],
     } satisfies ResearchRunResponse;

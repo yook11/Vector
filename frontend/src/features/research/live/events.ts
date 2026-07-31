@@ -2,7 +2,14 @@ const REDIS_STREAM_ID_PATTERN = /^(0|[1-9][0-9]*)-(0|[1-9][0-9]*)$/;
 const REDIS_STREAM_ID_MAX_LENGTH = 41;
 const UINT64_MAX = 18_446_744_073_709_551_615n;
 
-const STAGES = ["planning", "retrieving", "synthesizing"] as const;
+const STAGES = [
+  "safety_check",
+  "context_resolution",
+  "planning",
+  "evidence_collection",
+  "evidence_review",
+  "answering",
+] as const;
 const ERROR_CODES = [
   "generation_unavailable",
   "internal_error",

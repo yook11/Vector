@@ -2,9 +2,11 @@ import { describe, expect, it } from "vitest";
 import type {
   ResearchLiveActivity,
   ResearchLiveEvent,
+  ResearchLiveStage,
   ResearchLiveStreamId,
 } from "./events";
 import {
+  advanceResearchLiveStage,
   createInitialResearchLiveState,
   reduceResearchLiveEvent,
   suppressResearchLiveDraft,
@@ -51,7 +53,7 @@ function marker(raw: string, attemptEpoch: number): ResearchLiveEvent {
 function stage(
   raw: string,
   attemptEpoch: number,
-  value: "planning" | "retrieving" | "synthesizing",
+  value: ResearchLiveStage,
 ): ResearchLiveEvent {
   return {
     type: "stage",
@@ -146,7 +148,7 @@ function apply(
 function populatedAttemptOne() {
   let state = createInitialResearchLiveState();
   state = apply(state, marker("1-0", 1));
-  state = apply(state, stage("2-0", 1, "synthesizing"));
+  state = apply(state, stage("2-0", 1, "answering"));
   state = apply(state, activity("3-0", 1, RESOLVED_ACTIVITY));
   state = apply(state, delta("4-0", 1, 1, "古い回答"));
   return state;
@@ -295,23 +297,85 @@ describe("research live reducer", () => {
   });
 
   describe("same-attempt stage monotonicity", () => {
-    it("keeps synthesizing after delayed lower stages while accepting a direct skip", () => {
+    const STAGE_EXECUTION_ORDER: ResearchLiveStage[] = [
+      "safety_check",
+      "context_resolution",
+      "planning",
+      "evidence_collection",
+      "evidence_review",
+      "answering",
+    ];
+
+    it("ranks all six stages in their execution order and advances each forward step", () => {
+      for (let index = 1; index < STAGE_EXECUTION_ORDER.length; index += 1) {
+        const previous = STAGE_EXECUTION_ORDER[index - 1] as ResearchLiveStage;
+        const current = STAGE_EXECUTION_ORDER[index] as ResearchLiveStage;
+        expect(advanceResearchLiveStage(previous, current)).toBe(current);
+      }
+    });
+
+    it("applies a transition from null for every stage", () => {
+      for (const target of STAGE_EXECUTION_ORDER) {
+        expect(advanceResearchLiveStage(null, target)).toBe(target);
+      }
+    });
+
+    it("keeps the current stage when a delayed lower stage arrives out of order", () => {
+      expect(advanceResearchLiveStage("answering", "evidence_collection")).toBe(
+        "answering",
+      );
+      expect(advanceResearchLiveStage("evidence_review", "planning")).toBe(
+        "evidence_review",
+      );
+    });
+
+    it("keeps the current stage when the same stage repeats", () => {
+      expect(
+        advanceResearchLiveStage("evidence_review", "evidence_review"),
+      ).toBe("evidence_review");
+    });
+
+    it("accepts the direct-answer skip from planning straight to answering", () => {
+      expect(advanceResearchLiveStage("planning", "answering")).toBe(
+        "answering",
+      );
+    });
+
+    it("accepts the zero-candidate skip from evidence_collection straight to answering", () => {
+      expect(advanceResearchLiveStage("evidence_collection", "answering")).toBe(
+        "answering",
+      );
+    });
+
+    it("keeps answering after delayed lower stages while accepting a direct skip through the event pipeline", () => {
       let state = createInitialResearchLiveState();
       state = apply(state, marker("1-0", 1));
       state = apply(state, stage("2-0", 1, "planning"));
-      state = apply(state, stage("3-0", 1, "synthesizing"));
-      state = apply(state, stage("4-0", 1, "retrieving"));
+      state = apply(state, stage("3-0", 1, "answering"));
+      state = apply(state, stage("4-0", 1, "evidence_collection"));
 
       expect(state).toMatchObject({
-        progressStage: "synthesizing",
+        progressStage: "answering",
         lastProcessedEventId: streamId("4-0"),
       });
 
-      const skipped = apply(
-        apply(createInitialResearchLiveState(), marker("1-0", 2)),
-        stage("2-0", 2, "synthesizing"),
+      const directAnswerSkip = apply(
+        apply(
+          apply(createInitialResearchLiveState(), marker("1-0", 2)),
+          stage("2-0", 2, "planning"),
+        ),
+        stage("3-0", 2, "answering"),
       );
-      expect(skipped.progressStage).toBe("synthesizing");
+      expect(directAnswerSkip.progressStage).toBe("answering");
+
+      const zeroCandidateSkip = apply(
+        apply(
+          apply(createInitialResearchLiveState(), marker("1-0", 3)),
+          stage("2-0", 3, "evidence_collection"),
+        ),
+        stage("3-0", 3, "answering"),
+      );
+      expect(zeroCandidateSkip.progressStage).toBe("answering");
     });
   });
 
@@ -327,7 +391,7 @@ describe("research live reducer", () => {
         currentGeneration: 2,
         draftText: "",
         draftMode: "empty",
-        progressStage: "synthesizing",
+        progressStage: "answering",
         currentActivity: RESOLVED_ACTIVITY,
         lastProcessedEventId: streamId("5-0"),
       });

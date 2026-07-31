@@ -196,12 +196,18 @@ function applyProgressStage(
 
 function stageRank(stage: ResearchLiveState["progressStage"]): number {
   switch (stage) {
-    case "planning":
+    case "safety_check":
       return 1;
-    case "retrieving":
+    case "context_resolution":
       return 2;
-    case "synthesizing":
+    case "planning":
       return 3;
+    case "evidence_collection":
+      return 4;
+    case "evidence_review":
+      return 5;
+    case "answering":
+      return 6;
     case null:
       return 0;
   }
