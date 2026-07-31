@@ -35,6 +35,9 @@ const g = globalThis as unknown as {
   __vectorRateLimitErrorLastMs?: number;
   __vectorRateLimitSignalLastMs?: Record<string, number>;
   __vectorRateLimitFailOpenLastMs?: Record<string, number>;
+  // CLIENT_IP_TRUST 未宣言 warn の once-flag。既存の
+  // __vectorRateLimitMisconfigLogged と同じ globalThis-once 規約を踏襲する想定。
+  __vectorClientIpTrustUnconfiguredLogged?: boolean;
 };
 
 let warnSpy: MockInstance<typeof console.warn>;
@@ -44,6 +47,7 @@ beforeEach(() => {
   delete g.__vectorRateLimitErrorLastMs;
   delete g.__vectorRateLimitSignalLastMs;
   delete g.__vectorRateLimitFailOpenLastMs;
+  delete g.__vectorClientIpTrustUnconfiguredLogged;
   mockEval.mockReset();
   mockConnect.mockReset();
   mockOn.mockReset();
@@ -80,6 +84,22 @@ function findLoggedEvent(event: string): Record<string, unknown> | undefined {
     }
   }
   return undefined;
+}
+
+/** warnSpy が捕捉した logServerEvent JSON のうち、一致する event 全件を返す (once 回数検証用)。 */
+function findLoggedEvents(event: string): Record<string, unknown>[] {
+  const matches: Record<string, unknown>[] = [];
+  for (const call of warnSpy.mock.calls) {
+    const raw = call[0];
+    if (typeof raw !== "string") continue;
+    try {
+      const parsed = JSON.parse(raw) as Record<string, unknown>;
+      if (parsed.event === event) matches.push(parsed);
+    } catch {
+      // logRedisError は JSON でない warn を出すので無視。
+    }
+  }
+  return matches;
 }
 
 describe("proxy — rate-limit tier 結線 (ADR-009)", () => {
@@ -313,7 +333,7 @@ describe("proxy — identity 解決の dev/prod 分岐", () => {
     expect(args.keys).toEqual(["rl:ip:1.2.3.4"]);
   });
 
-  it("production は fly 欠如時に xff を信頼せず、anon read は fail-open する", async () => {
+  it("production は CLIENT_IP_TRUST 未設定だと xff を信頼せず fail-closed で anon read は fail-open する", async () => {
     vi.stubEnv("NODE_ENV", "production");
     mockIsOpenValue = true;
     mockEval.mockResolvedValue(1);
@@ -323,6 +343,272 @@ describe("proxy — identity 解決の dev/prod 分岐", () => {
     await proxy(req);
     expect(mockEval).not.toHaveBeenCalled();
     expect(findLoggedEvent("frontend_rate_limit_missing_ip")).toBeDefined();
+  });
+});
+
+describe("proxy — CLIENT_IP_TRUST 経由の IP 解決 (production)", () => {
+  it("trust=fly-client-ip は fly-client-ip を信頼して rl:ip tier を組む", async () => {
+    vi.stubEnv("NODE_ENV", "production");
+    vi.stubEnv("CLIENT_IP_TRUST", "fly-client-ip");
+    mockIsOpenValue = true;
+    mockEval.mockResolvedValue(1);
+    const req = mockNextRequest("http://localhost:3000/news", {
+      headers: { "fly-client-ip": "203.0.113.5" },
+    });
+    await proxy(req);
+    const args = mockEval.mock.calls[0]?.[1] as { keys: string[] };
+    expect(args.keys).toEqual(["rl:ip:203.0.113.5"]);
+  });
+
+  it("trust=alb-xff-last は xff 末尾を信頼し、偽装 fly-client-ip を無視する (invariant 1)", async () => {
+    vi.stubEnv("NODE_ENV", "production");
+    vi.stubEnv("CLIENT_IP_TRUST", "alb-xff-last");
+    mockIsOpenValue = true;
+    mockEval.mockResolvedValue(1);
+    const req = mockNextRequest("http://localhost:3000/news", {
+      headers: {
+        "fly-client-ip": "6.6.6.6", // 攻撃者による偽装値
+        "x-forwarded-for": "1.2.3.4, 5.6.7.8",
+      },
+    });
+    await proxy(req);
+    const args = mockEval.mock.calls[0]?.[1] as { keys: string[] };
+    expect(args.keys).toEqual(["rl:ip:5.6.7.8"]);
+  });
+
+  it("trust=alb-xff-last で xff 欠如なら fly-client-ip があっても fail-closed + missing_ip", async () => {
+    vi.stubEnv("NODE_ENV", "production");
+    vi.stubEnv("CLIENT_IP_TRUST", "alb-xff-last");
+    mockIsOpenValue = true;
+    mockEval.mockResolvedValue(1);
+    const req = mockNextRequest("http://localhost:3000/news", {
+      headers: { "fly-client-ip": "203.0.113.5" },
+    });
+    await proxy(req);
+    expect(mockEval).not.toHaveBeenCalled();
+    expect(findLoggedEvent("frontend_rate_limit_missing_ip")).toBeDefined();
+  });
+
+  it("CLIENT_IP_TRUST が未知値なら未設定と同じく fail-closed + missing_ip (invariant 2)", async () => {
+    vi.stubEnv("NODE_ENV", "production");
+    vi.stubEnv("CLIENT_IP_TRUST", "bogus-mode");
+    mockIsOpenValue = true;
+    mockEval.mockResolvedValue(1);
+    const req = mockNextRequest("http://localhost:3000/news", {
+      headers: { "fly-client-ip": "203.0.113.5" },
+    });
+    await proxy(req);
+    expect(mockEval).not.toHaveBeenCalled();
+    expect(findLoggedEvent("frontend_rate_limit_missing_ip")).toBeDefined();
+  });
+
+  it("dev/test は CLIENT_IP_TRUST を無視し、xff 先頭値の現行 fallback を維持する (invariant 4)", async () => {
+    // NODE_ENV=test (beforeEach 既定) のまま CLIENT_IP_TRUST=alb-xff-last を設定しても無視される。
+    vi.stubEnv("CLIENT_IP_TRUST", "alb-xff-last");
+    mockIsOpenValue = true;
+    mockEval.mockResolvedValue(1);
+    const req = mockNextRequest("http://localhost:3000/news", {
+      headers: { "x-forwarded-for": "1.2.3.4, 5.6.7.8" },
+    });
+    await proxy(req);
+    const args = mockEval.mock.calls[0]?.[1] as { keys: string[] };
+    expect(args.keys).toEqual(["rl:ip:1.2.3.4"]); // 先頭値 (末尾ではない)
+  });
+
+  it("trust=alb-xff-last で xff 末尾が非IP (ip:port 形式) なら rl:ip キーを作らず missing_ip を出す (保証3: 解決値の IP 構文検証)", async () => {
+    vi.stubEnv("NODE_ENV", "production");
+    vi.stubEnv("CLIENT_IP_TRUST", "alb-xff-last");
+    mockIsOpenValue = true;
+    mockEval.mockResolvedValue(1);
+    const req = mockNextRequest("http://localhost:3000/news", {
+      headers: { "x-forwarded-for": "1.2.3.4, 203.0.113.7:8080" },
+    });
+    await proxy(req);
+    expect(mockEval).not.toHaveBeenCalled();
+    expect(findLoggedEvent("frontend_rate_limit_missing_ip")).toBeDefined();
+  });
+});
+
+describe("proxy — x-vector-client-ip 内部ヘッダの上書き不変条件 (invariant 3)", () => {
+  function forwardedHeader(res: Response, name: string): string | null {
+    return res.headers.get(`x-middleware-request-${name}`);
+  }
+
+  it("解決できた IP を x-vector-client-ip として下流へ設定する", async () => {
+    vi.stubEnv("NODE_ENV", "production");
+    vi.stubEnv("CLIENT_IP_TRUST", "fly-client-ip");
+    mockIsOpenValue = true;
+    mockEval.mockResolvedValue(1);
+    const req = mockNextRequest("http://localhost:3000/news", {
+      headers: {
+        cookie: "better-auth.session_token=AAAA", // auth-redirect を回避し forwarded headers を観測可能にする
+        "fly-client-ip": "203.0.113.5",
+      },
+    });
+    const res = await proxy(req);
+    expect(forwardedHeader(res, "x-vector-client-ip")).toBe("203.0.113.5");
+  });
+
+  it("外来 x-vector-client-ip の偽装値を解決値で上書きする (attacker preset + trust=alb-xff-last)", async () => {
+    vi.stubEnv("NODE_ENV", "production");
+    vi.stubEnv("CLIENT_IP_TRUST", "alb-xff-last");
+    mockIsOpenValue = true;
+    mockEval.mockResolvedValue(1);
+    const req = mockNextRequest("http://localhost:3000/news", {
+      headers: {
+        cookie: "better-auth.session_token=AAAA", // auth-redirect を回避し forwarded headers を観測可能にする
+        "x-vector-client-ip": "9.9.9.9", // 攻撃者による事前偽装
+        "fly-client-ip": "6.6.6.6", // trust=alb-xff-last では無視される偽装値
+        "x-forwarded-for": "1.2.3.4, 5.6.7.8",
+      },
+    });
+    const res = await proxy(req);
+    expect(forwardedHeader(res, "x-vector-client-ip")).toBe("5.6.7.8");
+  });
+
+  it("IP 未解決 (fail-closed) のときは外来 x-vector-client-ip を削除し、値を残さない", async () => {
+    vi.stubEnv("NODE_ENV", "production");
+    // CLIENT_IP_TRUST 未設定 → fail-closed
+    mockIsOpenValue = true;
+    mockEval.mockResolvedValue(1);
+    const req = mockNextRequest("http://localhost:3000/news", {
+      headers: {
+        cookie: "better-auth.session_token=AAAA", // auth-redirect を回避し forwarded headers を観測可能にする
+        "x-vector-client-ip": "9.9.9.9",
+      },
+    });
+    const res = await proxy(req);
+    expect(forwardedHeader(res, "x-vector-client-ip")).toBeNull();
+    const overrideHeaders =
+      res.headers.get("x-middleware-override-headers") ?? "";
+    expect(overrideHeaders.split(",")).not.toContain("x-vector-client-ip");
+  });
+
+  it("SSE route は rate limit を skip しても x-vector-client-ip の設定は行う", async () => {
+    vi.stubEnv("NODE_ENV", "production");
+    vi.stubEnv("CLIENT_IP_TRUST", "fly-client-ip");
+    mockIsOpenValue = true;
+    mockEval.mockResolvedValue(1);
+    const req = mockNextRequest(
+      "http://localhost:3000/api/research/runs/00000000-0000-4000-a000-000000000010/events",
+      { headers: { "fly-client-ip": "203.0.113.5" } },
+    );
+    const res = await proxy(req);
+    expect(mockEval).not.toHaveBeenCalled();
+    expect(forwardedHeader(res, "x-vector-client-ip")).toBe("203.0.113.5");
+  });
+});
+
+describe("proxy — health checker UA は missing_ip signal を抑制する (invariant 5)", () => {
+  it("ELB-HealthChecker UA では IP 未解決でも missing_ip signal を出さない", async () => {
+    vi.stubEnv("NODE_ENV", "production");
+    // CLIENT_IP_TRUST 未設定 → fail-closed (通常なら missing_ip)
+    mockIsOpenValue = true;
+    mockEval.mockResolvedValue(1);
+    const req = mockNextRequest("http://localhost:3000/news", {
+      headers: { "user-agent": "ELB-HealthChecker/2.0" },
+    });
+    const res = await proxy(req);
+    expect(res.status).not.toBe(429); // rate limit 判定自体は従来どおり fail-open
+    expect(findLoggedEvent("frontend_rate_limit_missing_ip")).toBeUndefined();
+  });
+
+  it("同条件でも health checker UA でなければ missing_ip signal を出す (対照)", async () => {
+    vi.stubEnv("NODE_ENV", "production");
+    mockIsOpenValue = true;
+    mockEval.mockResolvedValue(1);
+    const req = mockNextRequest("http://localhost:3000/news");
+    await proxy(req);
+    expect(findLoggedEvent("frontend_rate_limit_missing_ip")).toBeDefined();
+  });
+
+  it("health checker UA でも rate limit の判定自体はスキップしない (IP 解決時は通常どおり count する)", async () => {
+    vi.stubEnv("NODE_ENV", "production");
+    vi.stubEnv("CLIENT_IP_TRUST", "fly-client-ip");
+    mockIsOpenValue = true;
+    mockEval.mockResolvedValue(1);
+    const req = mockNextRequest("http://localhost:3000/news", {
+      headers: {
+        "user-agent": "ELB-HealthChecker/2.0",
+        "fly-client-ip": "203.0.113.5",
+      },
+    });
+    await proxy(req);
+    const args = mockEval.mock.calls[0]?.[1] as { keys: string[] };
+    expect(args.keys).toEqual(["rl:ip:203.0.113.5"]);
+  });
+
+  it("health checker UA でも unknown_write signal は抑制されない (defect regression: missing_ip 以外まで抑制しない)", async () => {
+    vi.stubEnv("NODE_ENV", "production");
+    // CLIENT_IP_TRUST 未設定 → fail-closed。session 無 & IP 未解決の anon mutation は unknown_write 終端。
+    mockIsOpenValue = true;
+    mockEval.mockResolvedValue(1);
+    const req = mockNextRequest("http://localhost:3000/api/some-mutation", {
+      method: "POST",
+      headers: { "user-agent": "ELB-HealthChecker/2.0" },
+    });
+    await proxy(req);
+    expect(findLoggedEvent("frontend_rate_limit_unknown_write")).toBeDefined();
+  });
+});
+
+describe("proxy — CLIENT_IP_TRUST 未宣言時の専用 warn (設定漏れと経路異常の区別)", () => {
+  it("production で CLIENT_IP_TRUST 未設定なら detail=unset の warn を1回出す", async () => {
+    vi.stubEnv("NODE_ENV", "production");
+    mockIsOpenValue = true;
+    mockEval.mockResolvedValue(1);
+    const req = mockNextRequest("http://localhost:3000/news");
+    await proxy(req);
+    const event = findLoggedEvent("frontend_client_ip_trust_unconfigured");
+    expect(event).toMatchObject({ detail: "unset" });
+  });
+
+  it("production で CLIENT_IP_TRUST が不正値なら detail=invalid の warn を出し、生の値は載せない", async () => {
+    vi.stubEnv("NODE_ENV", "production");
+    vi.stubEnv("CLIENT_IP_TRUST", "bogus-mode");
+    mockIsOpenValue = true;
+    mockEval.mockResolvedValue(1);
+    const req = mockNextRequest("http://localhost:3000/news");
+    await proxy(req);
+    const event = findLoggedEvent("frontend_client_ip_trust_unconfigured");
+    expect(event).toMatchObject({ detail: "invalid" });
+    expect(JSON.stringify(event)).not.toContain("bogus-mode");
+  });
+
+  it("同じ request でも missing_ip 信号は client_ip_trust_unconfigured warn と独立して出る", async () => {
+    vi.stubEnv("NODE_ENV", "production");
+    mockIsOpenValue = true;
+    mockEval.mockResolvedValue(1);
+    const req = mockNextRequest("http://localhost:3000/news");
+    await proxy(req);
+    expect(
+      findLoggedEvent("frontend_client_ip_trust_unconfigured"),
+    ).toBeDefined();
+    expect(findLoggedEvent("frontend_rate_limit_missing_ip")).toBeDefined();
+  });
+
+  it("2回目以降の request では出ない (プロセスごとに1回だけ)", async () => {
+    vi.stubEnv("NODE_ENV", "production");
+    mockIsOpenValue = true;
+    mockEval.mockResolvedValue(1);
+
+    await proxy(mockNextRequest("http://localhost:3000/news"));
+    await proxy(mockNextRequest("http://localhost:3000/watchlist"));
+
+    expect(
+      findLoggedEvents("frontend_client_ip_trust_unconfigured"),
+    ).toHaveLength(1);
+  });
+
+  it("dev/test (非 production) では出ない", async () => {
+    // NODE_ENV=test (beforeEach 既定)、CLIENT_IP_TRUST も未設定のまま。
+    mockIsOpenValue = true;
+    mockEval.mockResolvedValue(1);
+    const req = mockNextRequest("http://localhost:3000/news");
+    await proxy(req);
+    expect(
+      findLoggedEvent("frontend_client_ip_trust_unconfigured"),
+    ).toBeUndefined();
   });
 });
 

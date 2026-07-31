@@ -4,6 +4,7 @@ import { NextResponse } from "next/server";
 import {
   calculateLimits,
   checkRateLimit,
+  recordClientIpTrustUnconfigured,
   recordRateLimitSignal,
 } from "@/lib/auth/rate-limit";
 import { sanitizeCallbackUrl } from "@/lib/proxy/callback-url";
@@ -13,8 +14,14 @@ import {
   generateNonce,
 } from "@/lib/proxy/csp";
 import {
+  CLIENT_IP_HEADER,
+  extractClientIp,
+  parseClientIpTrust,
+} from "@/lib/proxy/identifier";
+import {
   buildRateLimitPlan,
   isAgentRunSseRoute,
+  isHealthCheckerUserAgent,
 } from "@/lib/proxy/rate-limit-plan";
 
 // Next.js 16 の proxy は Node.js runtime 固定。`export const runtime` は使えない。
@@ -36,26 +43,43 @@ export async function proxy(request: NextRequest) {
   // ceiling を別財布で持ち、認証済 request は session sub-bucket + IP ceiling の
   // two-tier-AND で偽造 cookie バイパスを塞ぐ。
   //
-  // production は Fly-Client-IP だけを trusted source とし、欠如 (経路異常) 時は
-  // read/`_rsc` を fail-open、anon mutation のみ共有 global bucket で最低限縛る。
-  // dev/test では XFF/X-Real-IP fallback を許可する。
+  // production の trusted source は CLIENT_IP_TRUST が宣言する (Fly は fly-client-ip、
+  // ALB は XFF 末尾)。未宣言は fail-closed で IP 未解決とし、read/`_rsc` を fail-open、
+  // anon mutation のみ共有 global bucket で最低限縛る。dev/test は fallback を許可する。
   //
   // session token は下段の認証チェックでも再利用するため、ここで一度だけ取得する。
   // CSP nonce 生成や session 検証より前に実行する。
   // Redis 不通・tiers 空時は fail-open し、storage 障害がアプリ全体の停止に直結しない。
   const sessionToken = getSessionCookie(request);
+  const isProduction = process.env.NODE_ENV === "production";
+  const rawTrust = process.env.CLIENT_IP_TRUST;
+  const trust = parseClientIpTrust(rawTrust);
+  if (isProduction && trust === null) {
+    recordClientIpTrustUnconfigured(rawTrust ? "invalid" : "unset");
+  }
+  const clientIp = extractClientIp({
+    trust,
+    flyClientIp: request.headers.get("fly-client-ip"),
+    forwardedFor: request.headers.get("x-forwarded-for"),
+    realIp: request.headers.get("x-real-ip"),
+    isProduction,
+  });
   if (!isAgentRunSseRoute(pathname)) {
     const plan = buildRateLimitPlan({
       method: request.method,
       hasRsc: request.nextUrl.searchParams.has("_rsc"),
-      flyClientIp: request.headers.get("fly-client-ip"),
-      forwardedFor: request.headers.get("x-forwarded-for"),
-      realIp: request.headers.get("x-real-ip"),
+      clientIp,
       sessionToken,
-      isProduction: process.env.NODE_ENV === "production",
+      isProduction,
       limits: calculateLimits(),
     });
-    if (plan.signal) {
+    // health check は XFF 無しの正常経路なので missing_ip を恒常ノイズ化させない。
+    // 抑制は missing_ip 限定: UA は client が偽装できるため、anon mutation flood の
+    // 唯一の兆候である unknown_write まで消せてしまう。
+    const isSuppressedSignal =
+      plan.signal === "missing_ip" &&
+      isHealthCheckerUserAgent(request.headers.get("user-agent"));
+    if (plan.signal && !isSuppressedSignal) {
       recordRateLimitSignal(plan.signal);
     }
     const decision = await checkRateLimit(plan, {
@@ -86,6 +110,12 @@ export async function proxy(request: NextRequest) {
   const requestHeaders = new Headers(request.headers);
   requestHeaders.set("x-nonce", nonce);
   requestHeaders.set("Content-Security-Policy", cspHeader);
+  // 解決済み client IP を下流 (route handler / Better Auth) へ渡す唯一の経路。
+  // 外来の同名ヘッダは必ず削除し、偽装値が下流に到達しない不変条件を保つ。
+  requestHeaders.delete(CLIENT_IP_HEADER);
+  if (clientIp !== null) {
+    requestHeaders.set(CLIENT_IP_HEADER, clientIp);
+  }
 
   const response = NextResponse.next({
     request: { headers: requestHeaders },

@@ -48,6 +48,10 @@ resource "aws_lb" "this" {
 
   drop_invalid_header_fields = true
 
+  # frontend の CLIENT_IP_TRUST=alb-xff-last は「ALB が実測接続元を XFF 末尾に
+  # 追記する」ことに全面依存する。AWS 既定と同値だが、暗黙依存にしないため pin する。
+  xff_header_processing_mode = "append"
+
   tags = { Name = "${var.name_prefix}-alb" }
 }
 
