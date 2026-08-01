@@ -64,6 +64,44 @@ proxy は任意文字列を `rl:ip:<value>` に使えてしまう一方、Better
 弾いて共有バケツへ落ちるため、検証が無いと「proxy 的には解決済みなので missing_ip が
 出ないまま login limiter だけ黙って共有化する」観測不能な劣化が起きる。
 
+### 識別単位の正規化 (IPv6 は /64)
+
+rate limit の per-IP identity は「アドレス」ではなく「回線契約」を単位にする。
+IPv6 は 1 契約に /64 が配られ、OS のプライバシー拡張が下位 64bit を頻繁に
+取り替えるため、アドレスをそのままキーにするとローテーションだけでバケツを
+無限分散でき、per-IP ceiling (forge-bypass backstop) が実効性を失う。
+
+- IPv4: そのまま。
+- IPv4-mapped IPv6 (`::ffff:a.b.c.d`): 埋め込まれた IPv4 に変換する。mapped 空間を
+  /64 で丸めると全 IPv4-mapped client が 1 バケツに畳まれてしまうため、丸めの前に
+  必ず剥がす。
+- IPv6: /64 network 形に正規化する。先頭 4 hextet を実値、残り 4 hextet を 0 とし、
+  全 8 hextet を 0 詰め 4 桁・小文字・`:` 区切りで展開した形にする (`::` 圧縮しない)。
+  例: `2001:DB8::1` → `2001:0db8:0000:0000:0000:0000:0000:0000`。
+
+full-form (非圧縮) を選ぶのは、`::` 圧縮形が zod の妥当性検証で端ケースに落ちうるのに対し
+展開形は確実に妥当なため。
+
+実装は再実装ではなく Better Auth の `normalizeIP` / `isValidIP`
+(`@better-auth/core/utils/ip`) をそのまま流用する。再実装 + corpus ベースの contract test
+は、corpus 外の入力クラス (大文字 `FFFF` の hex-mapped 形) で実装初日から oracle と
+食い違っていたことがレビューで実証されたため採らない。同一実装の流用なら consumer 間
+一致は構造的に成立し、上流の挙動変更も全 consumer へ同時に適用される。
+`@better-auth/core` は direct dependency として better-auth と同版で exact pin する
+(範囲指定だと npm が core だけ先行 patch に解決し、root と better-auth 配下で二重コピー
+= 別実装に分裂する。1.6.25 で実発生を確認)。better-auth を bump する際は core も同版へ
+揃えること。
+
+consumer 間で identity が一致する load-bearing な根拠は、実は同一実装そのものではなく
+**単一の内部ヘッダ `x-vector-client-ip` + Better Auth 側の冪等な再正規化**にある。Better Auth は
+生 IP ではなく正規化済みヘッダを読み、その値は `normalizeIP` の不動点なので、re-normalize しても
+変わらない。よって 3 consumer (proxy / Better Auth / SSE) は同一 /64 を指す。同一実装の流用は
+defense-in-depth であり、仮に version split が起きても不動点性により consumer 間一致は保たれる。
+
+正規化は解決時 (identifier) に行い、内部ヘッダにも正規化後の値を流す。全 consumer
+(proxy rate limit / Better Auth / SSE) の識別単位を 1 箇所で揃えるため。帰結として
+Better Auth の session.ipAddress 記録も /64 粒度になる (追跡は契約単位で成立する)。
+
 ### 内部ヘッダ `x-vector-client-ip`
 
 - proxy.ts が解決済み IP を下流 (route handlers / Better Auth) へ渡す唯一の経路。

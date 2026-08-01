@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { z } from "zod";
 import {
   CLIENT_IP_HEADER,
   type ClientIpTrust,
@@ -271,17 +272,28 @@ describe("extractClientIp — 非 production は trust を無視し現行 fallba
 });
 
 describe("extractClientIp — IP 構文検証", () => {
-  const VALID_IPS = [
-    "203.0.113.7",
-    "0.0.0.0",
-    "255.255.255.255",
-    "2001:db8::1", // 圧縮形
-    "::1", // loopback 圧縮形
-    "0000:0000:0000:0000:0000:0000:0000:0001", // full form
-    "::ffff:192.0.2.1", // IPv4-mapped
+  // 識別単位の正規化 (specs/client-ip-trust-mode.md): IPv4 はそのまま、IPv4-mapped
+  // IPv6 は埋め込み IPv4 に剥がしてから採用、その他の IPv6 は /64 network を
+  // full-form (8 hextet 全展開、下位 4 hextet はゼロ埋め) に丸める。Better Auth の
+  // /64 正規化と文字列一致させるため "::" 圧縮形にはしない。
+  const VALID_IP_NORMALIZATIONS = [
+    ["203.0.113.7", "203.0.113.7"],
+    ["0.0.0.0", "0.0.0.0"],
+    ["255.255.255.255", "255.255.255.255"],
+    // /64 丸めの前に埋め込み IPv4 へ剥がす (丸めると全 mapped client が 1 バケツに畳まれるため)。
+    ["::ffff:192.0.2.1", "192.0.2.1"],
+    ["2001:db8::1", "2001:0db8:0000:0000:0000:0000:0000:0000"], // 圧縮形
+    ["::1", "0000:0000:0000:0000:0000:0000:0000:0000"], // loopback 圧縮形
+    // full form。"::1" と同一 /64 (0000:0000:0000:0000::/64) なので同じ正規化結果になる。
+    [
+      "0000:0000:0000:0000:0000:0000:0000:0001",
+      "0000:0000:0000:0000:0000:0000:0000:0000",
+    ],
   ] as const;
 
-  describe.each(VALID_IPS)("妥当な IP %s はそのまま採用する", (ip) => {
+  describe.each(
+    VALID_IP_NORMALIZATIONS,
+  )("妥当な IP %s は正規化後 %s として採用する", (ip, expected) => {
     it("production, trust=fly-client-ip", () => {
       expect(
         extractClientIp({
@@ -291,7 +303,7 @@ describe("extractClientIp — IP 構文検証", () => {
           realIp: null,
           isProduction: true,
         }),
-      ).toBe(ip);
+      ).toBe(expected);
     });
 
     it("production, trust=alb-xff-last (xff 末尾)", () => {
@@ -303,7 +315,7 @@ describe("extractClientIp — IP 構文検証", () => {
           realIp: null,
           isProduction: true,
         }),
-      ).toBe(ip);
+      ).toBe(expected);
     });
 
     it("非 production fallback (fly-client-ip)", () => {
@@ -315,7 +327,7 @@ describe("extractClientIp — IP 構文検証", () => {
           realIp: null,
           isProduction: false,
         }),
-      ).toBe(ip);
+      ).toBe(expected);
     });
   });
 
@@ -425,5 +437,92 @@ describe("extractClientIp — IP 構文検証", () => {
         isProduction: true,
       }),
     ).toBeNull();
+  });
+});
+
+describe("extractClientIp — IPv6 /64 正規化の不変条件", () => {
+  it("同一 /64 内の異なるアドレス2つは同じ値に正規化される", () => {
+    const a = extractClientIp({
+      trust: "fly-client-ip",
+      flyClientIp: "2001:db8:1:2::aaaa",
+      forwardedFor: null,
+      realIp: null,
+      isProduction: true,
+    });
+    const b = extractClientIp({
+      trust: "fly-client-ip",
+      flyClientIp: "2001:db8:1:2:ffff:eeee:dddd:cccc",
+      forwardedFor: null,
+      realIp: null,
+      isProduction: true,
+    });
+    expect(a).toBe("2001:0db8:0001:0002:0000:0000:0000:0000");
+    expect(b).toBe(a);
+  });
+
+  it("異なる /64 は異なる値になる", () => {
+    const a = extractClientIp({
+      trust: "fly-client-ip",
+      flyClientIp: "2001:db8:1:2::1",
+      forwardedFor: null,
+      realIp: null,
+      isProduction: true,
+    });
+    const b = extractClientIp({
+      trust: "fly-client-ip",
+      flyClientIp: "2001:db8:1:3::1",
+      forwardedFor: null,
+      realIp: null,
+      isProduction: true,
+    });
+    expect(a).not.toBe(b);
+  });
+
+  it.each([
+    ["2001:DB8::1", "2001:0db8:0000:0000:0000:0000:0000:0000"], // 大文字
+    ["2001:db8:0:0:0:0:0:1", "2001:0db8:0000:0000:0000:0000:0000:0000"], // 非圧縮 full form
+    ["2001:db8::0:1", "2001:0db8:0000:0000:0000:0000:0000:0000"], // 部分圧縮
+  ] as const)("表記ゆれ %s は同一 /64 なら同じ正規化結果 %s になる", (ip, expected) => {
+    expect(
+      extractClientIp({
+        trust: "fly-client-ip",
+        flyClientIp: ip,
+        forwardedFor: null,
+        realIp: null,
+        isProduction: true,
+      }),
+    ).toBe(expected);
+  });
+
+  it("正規化後の値も IPv6 として構文妥当 (下流 Better Auth の isValidIP を通る形)", () => {
+    const normalized = extractClientIp({
+      trust: "fly-client-ip",
+      flyClientIp: "2001:db8:aaaa:bbbb:1:2:3:4",
+      forwardedFor: null,
+      realIp: null,
+      isProduction: true,
+    });
+    expect(normalized).toBe("2001:0db8:aaaa:bbbb:0000:0000:0000:0000");
+    expect(z.ipv6().safeParse(normalized).success).toBe(true);
+  });
+
+  it("IPv4-mapped は異なる埋め込み IPv4 ごとに別の値になる (丸め前に剥がすため 1 バケツに畳まれない)", () => {
+    const a = extractClientIp({
+      trust: "fly-client-ip",
+      flyClientIp: "::ffff:192.0.2.1",
+      forwardedFor: null,
+      realIp: null,
+      isProduction: true,
+    });
+    const b = extractClientIp({
+      trust: "fly-client-ip",
+      flyClientIp: "::ffff:198.51.100.5",
+      forwardedFor: null,
+      realIp: null,
+      isProduction: true,
+    });
+    expect(a).toBe("192.0.2.1");
+    expect(b).toBe("198.51.100.5");
+    expect(a).not.toBe(b);
   });
 });
