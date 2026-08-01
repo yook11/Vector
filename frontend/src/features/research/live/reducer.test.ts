@@ -25,11 +25,11 @@ type ResearchLiveStateHasActivityHistory =
 const STATE_HAS_ACTIVITY_HISTORY: ResearchLiveStateHasActivityHistory = false;
 
 const RESOLVED_ACTIVITY: ResearchLiveActivity = {
-  type: "question.resolved",
+  type: "context_resolution.question_resolved",
   standaloneQuestion: "旧attemptの質問",
 };
 const NEW_ACTIVITY: ResearchLiveActivity = {
-  type: "internal_search.started",
+  type: "evidence_collection.internal_search_started",
   queryCount: 2,
 };
 

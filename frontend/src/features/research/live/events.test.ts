@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { parseResearchLiveEvent } from "./events";
+import { parseResearchLiveActivity, parseResearchLiveEvent } from "./events";
 
 const UINT64_MAX = "18446744073709551615";
 
@@ -46,7 +46,7 @@ describe("parseResearchLiveEvent", () => {
         data: {
           attemptEpoch: 3,
           activity: {
-            type: "internal_search.started",
+            type: "evidence_collection.internal_search_started",
             queryCount: 2,
             hidden: "discarded",
           },
@@ -56,7 +56,7 @@ describe("parseResearchLiveEvent", () => {
           type: "activity",
           attemptEpoch: 3,
           activity: {
-            type: "internal_search.started",
+            type: "evidence_collection.internal_search_started",
             queryCount: 2,
           },
           streamId: streamId(),
@@ -151,35 +151,40 @@ describe("parseResearchLiveEvent", () => {
   describe("activity projection", () => {
     it.each([
       {
-        activity: { type: "internal_search.started", queryCount: 3 },
-      },
-      {
-        activity: { type: "internal_search.completed", hitCount: 8 },
+        activity: {
+          type: "evidence_collection.internal_search_started",
+          queryCount: 3,
+        },
       },
       {
         activity: {
-          type: "external_search.queries_generated",
+          type: "evidence_collection.internal_search_completed",
+          hitCount: 8,
+        },
+      },
+      {
+        activity: {
+          type: "evidence_collection.external_search_queries_generated",
           taskIndex: 0,
           queries: ["NVIDIA AI", "半導体需要"],
         },
       },
       {
         activity: {
-          type: "external_search.candidates_fetched",
+          type: "evidence_collection.external_search_candidates_fetched",
           taskIndex: 1,
           candidateCount: 12,
         },
       },
       {
         activity: {
-          type: "external_search.evidence_selected",
-          taskIndex: 2,
+          type: "evidence_review.selected",
           evidenceCount: 4,
         },
       },
       {
         activity: {
-          type: "question.resolved",
+          type: "context_resolution.question_resolved",
           standaloneQuestion: "NVIDIAの発表は株価へどう影響する？",
         },
       },
@@ -196,29 +201,56 @@ describe("parseResearchLiveEvent", () => {
     });
 
     it.each([
-      { type: "internal_search.started", queryCount: -1 },
-      { type: "internal_search.completed", hitCount: 1.5 },
+      { type: "evidence_collection.internal_search_started", queryCount: -1 },
       {
-        type: "external_search.queries_generated",
+        type: "evidence_collection.internal_search_completed",
+        hitCount: 1.5,
+      },
+      {
+        type: "evidence_collection.external_search_queries_generated",
         taskIndex: 0,
         queries: [""],
       },
       {
-        type: "external_search.candidates_fetched",
+        type: "evidence_collection.external_search_candidates_fetched",
         taskIndex: -1,
         candidateCount: 1,
       },
       {
-        type: "external_search.evidence_selected",
-        taskIndex: 0,
+        type: "evidence_review.selected",
         evidenceCount: "4",
       },
-      { type: "question.resolved", standaloneQuestion: "" },
+      { type: "context_resolution.question_resolved", standaloneQuestion: "" },
     ])("rejects invalid fields for $type", (activity) => {
       expect(parse("activity", { attemptEpoch: 1, activity })).toEqual({
         kind: "event-local-invalid",
         reason: "malformed_data",
       });
+    });
+
+    it("drops taskIndex from evidence_review.selected because the review now fires once per Run", () => {
+      const result = parse("activity", {
+        attemptEpoch: 1,
+        activity: {
+          type: "evidence_review.selected",
+          taskIndex: 2,
+          evidenceCount: 4,
+        },
+      });
+
+      expect(result).toEqual({
+        kind: "event",
+        event: {
+          type: "activity",
+          attemptEpoch: 1,
+          activity: { type: "evidence_review.selected", evidenceCount: 4 },
+          streamId: streamId(),
+        },
+      });
+      if (result.kind !== "event" || result.event.type !== "activity") {
+        throw new Error("evidence_review.selected was not parsed");
+      }
+      expect(result.event.activity).not.toHaveProperty("taskIndex");
     });
 
     it("drops unknown activity without retaining its discriminator or payload", () => {
@@ -233,6 +265,38 @@ describe("parseResearchLiveEvent", () => {
       });
       expect(JSON.stringify(result)).not.toContain("private.activity");
       expect(JSON.stringify(result)).not.toContain("sensitive");
+    });
+
+    it.each([
+      { type: "question.resolved", standaloneQuestion: "旧語彙の質問" },
+      { type: "internal_search.started", queryCount: 2 },
+      { type: "internal_search.completed", hitCount: 3 },
+      {
+        type: "external_search.queries_generated",
+        taskIndex: 0,
+        queries: ["旧語彙のクエリ"],
+      },
+      {
+        type: "external_search.candidates_fetched",
+        taskIndex: 0,
+        candidateCount: 1,
+      },
+      {
+        type: "external_search.evidence_selected",
+        taskIndex: 0,
+        evidenceCount: 1,
+      },
+    ])("drops the pre-deploy $type vocabulary left over in Redis as unknown", (legacyActivity) => {
+      const result = parse("activity", {
+        attemptEpoch: 1,
+        activity: legacyActivity,
+      });
+
+      expect(result).toEqual({
+        kind: "event-local-invalid",
+        reason: "unknown_activity",
+      });
+      expect(parseResearchLiveActivity(legacyActivity)).toBeNull();
     });
   });
 

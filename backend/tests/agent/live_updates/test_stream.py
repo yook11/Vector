@@ -247,7 +247,7 @@ async def test_stream_round_trip_filters_epoch_and_skips_bad_payload() -> None:
     assert all("attemptEpoch" in fields for _id, fields in redis.entries)
     assert json.loads(redis.entries[3][1]["payload"]) == {
         "activity": {
-            "type": "internal_search.started",
+            "type": "evidence_collection.internal_search_started",
             "task_index": 0,
             "query_count": 2,
         }
@@ -282,6 +282,41 @@ async def test_reader_skips_legacy_activity_field_without_losing_following_event
                     event_type="activity",
                     payload=(
                         '{"event":{"type":"internal_search.started","query_count":2}}'
+                    ),
+                ),
+            ),
+            ("2-0", _envelope(EPOCH_1, event_type="stage")),
+        ]
+    )
+
+    result = await AgentRunLiveStreamReader(redis).read_after(
+        RUN_ID,
+        EPOCH_1,
+        None,
+    )
+
+    assert result.status is AgentRunLiveStreamReadStatus.EVENTS
+    assert [entry.stream_id for entry in result.events] == ["2-0"]
+    assert result.next_cursor == "2-0"
+
+
+@pytest.mark.asyncio
+async def test_reader_discards_activity_with_pre_migration_legacy_type() -> None:
+    """A: outer envelopeの形は正しくても、内側activityのtypeが旧語彙のままなら
+
+    未知として捨てられる回帰guard。deployをまたいでRedisへ最大15分残る
+    旧typeイベントを想定する。
+    """
+    redis = MemoryRedis(
+        entries=[
+            (
+                "1-0",
+                _envelope(
+                    EPOCH_1,
+                    event_type="activity",
+                    payload=(
+                        '{"activity":{"type":"internal_search.started",'
+                        '"task_index":0,"query_count":2}}'
                     ),
                 ),
             ),

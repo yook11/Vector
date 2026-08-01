@@ -29,30 +29,29 @@ export type ResearchLiveErrorCode = (typeof ERROR_CODES)[number];
 
 export type ResearchLiveActivity =
   | {
-      type: "internal_search.started";
+      type: "evidence_collection.internal_search_started";
       queryCount: number;
     }
   | {
-      type: "internal_search.completed";
+      type: "evidence_collection.internal_search_completed";
       hitCount: number;
     }
   | {
-      type: "external_search.queries_generated";
+      type: "evidence_collection.external_search_queries_generated";
       taskIndex: number;
       queries: string[];
     }
   | {
-      type: "external_search.candidates_fetched";
+      type: "evidence_collection.external_search_candidates_fetched";
       taskIndex: number;
       candidateCount: number;
     }
   | {
-      type: "external_search.evidence_selected";
-      taskIndex: number;
+      type: "evidence_review.selected";
       evidenceCount: number;
     }
   | {
-      type: "question.resolved";
+      type: "context_resolution.question_resolved";
       standaloneQuestion: string;
     };
 
@@ -272,15 +271,15 @@ function parseActivity(
   if (!isRecord(value) || typeof value.type !== "string") return null;
 
   switch (value.type) {
-    case "internal_search.started":
+    case "evidence_collection.internal_search_started":
       return isNonNegativeSafeInteger(value.queryCount)
         ? { type: value.type, queryCount: value.queryCount }
         : null;
-    case "internal_search.completed":
+    case "evidence_collection.internal_search_completed":
       return isNonNegativeSafeInteger(value.hitCount)
         ? { type: value.type, hitCount: value.hitCount }
         : null;
-    case "external_search.queries_generated":
+    case "evidence_collection.external_search_queries_generated":
       return isNonNegativeSafeInteger(value.taskIndex) &&
         isNonBlankStringArray(value.queries)
         ? {
@@ -289,7 +288,7 @@ function parseActivity(
             queries: [...value.queries],
           }
         : null;
-    case "external_search.candidates_fetched":
+    case "evidence_collection.external_search_candidates_fetched":
       return isNonNegativeSafeInteger(value.taskIndex) &&
         isNonNegativeSafeInteger(value.candidateCount)
         ? {
@@ -298,16 +297,11 @@ function parseActivity(
             candidateCount: value.candidateCount,
           }
         : null;
-    case "external_search.evidence_selected":
-      return isNonNegativeSafeInteger(value.taskIndex) &&
-        isNonNegativeSafeInteger(value.evidenceCount)
-        ? {
-            type: value.type,
-            taskIndex: value.taskIndex,
-            evidenceCount: value.evidenceCount,
-          }
+    case "evidence_review.selected":
+      return isNonNegativeSafeInteger(value.evidenceCount)
+        ? { type: value.type, evidenceCount: value.evidenceCount }
         : null;
-    case "question.resolved":
+    case "context_resolution.question_resolved":
       return isNonBlankString(value.standaloneQuestion) &&
         value.standaloneQuestion.length <= 500
         ? { type: value.type, standaloneQuestion: value.standaloneQuestion }

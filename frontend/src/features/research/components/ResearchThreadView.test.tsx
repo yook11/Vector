@@ -473,7 +473,7 @@ describe("ResearchThreadView live integration", () => {
             attemptEpoch: 1,
             recentEvents: [
               {
-                type: "question.resolved",
+                type: "context_resolution.question_resolved",
                 ts: "2026-07-13T00:00:00Z",
                 standaloneQuestion: "AI需要は伸びる？",
               },
@@ -629,7 +629,7 @@ describe("ResearchThreadView live integration", () => {
         {
           attemptEpoch: 1,
           activity: {
-            type: "external_search.candidates_fetched",
+            type: "evidence_collection.external_search_candidates_fetched",
             taskIndex: 0,
             candidateCount: 8,
           },
@@ -706,7 +706,7 @@ describe("ResearchThreadView live integration", () => {
         {
           attemptEpoch: 1,
           activity: {
-            type: "external_search.candidates_fetched",
+            type: "evidence_collection.external_search_candidates_fetched",
             taskIndex: 0,
             candidateCount: 8,
           },

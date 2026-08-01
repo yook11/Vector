@@ -13,8 +13,8 @@ from structlog.testing import capture_logs
 from app.agent.contract import (
     AnswerProgressEvent,
     AnswerProgressStage,
+    EvidenceReviewSelectedEvent,
     ExternalSearchCandidatesFetchedEvent,
-    ExternalSearchEvidenceSelectedEvent,
     ExternalSearchQueriesGeneratedEvent,
     InternalSearchCompletedEvent,
     InternalSearchStartedEvent,
@@ -161,7 +161,7 @@ KNOWN_ACTIVITIES = [
         queries=["semiconductor outlook"],
     ),
     ExternalSearchCandidatesFetchedEvent(task_index=1, candidate_count=4),
-    ExternalSearchEvidenceSelectedEvent(task_index=1, evidence_count=2),
+    EvidenceReviewSelectedEvent(evidence_count=2),
     QuestionResolvedEvent(standalone_question="What changed?"),
 ]
 
@@ -247,7 +247,7 @@ async def test_activity_reporter_preserves_nested_domain_shape() -> None:
     assert published.model_dump(mode="json") == {
         "type": "activity",
         "activity": {
-            "type": "external_search.candidates_fetched",
+            "type": "evidence_collection.external_search_candidates_fetched",
             "task_index": 2,
             "candidate_count": 5,
         },

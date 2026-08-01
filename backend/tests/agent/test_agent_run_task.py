@@ -1384,7 +1384,9 @@ async def test_run_agent_answer_passes_answering_runner_and_resolved_hook(
     assert runner_kwargs["continuation"] is not None
     publisher = FakeLiveEventPublisher.instances[0]
     assert len(publisher.events) == 1
-    assert getattr(publisher.events[0], "type") == "question.resolved"
+    assert (
+        getattr(publisher.events[0], "type") == "context_resolution.question_resolved"
+    )
     assert getattr(publisher.events[0], "standalone_question") == (
         "NVIDIA の発表が株価へ与える影響は？"
     )

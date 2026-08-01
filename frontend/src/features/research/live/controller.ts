@@ -654,10 +654,12 @@ function latestRelevantPollingActivity(
     const activity = parseResearchLiveActivity(recentEvents[index]);
     if (activity === null) continue;
     if (isEvidenceStage) {
-      if (activity.type !== "question.resolved") return activity;
+      if (activity.type !== "context_resolution.question_resolved")
+        return activity;
       continue;
     }
-    if (activity.type === "question.resolved") return activity;
+    if (activity.type === "context_resolution.question_resolved")
+      return activity;
   }
   return null;
 }

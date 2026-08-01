@@ -124,11 +124,19 @@ class _Events:
 
 
 def _internal_events(events: list[Any]) -> list[Any]:
-    return [event for event in events if event.type.startswith("internal_search.")]
+    return [
+        event
+        for event in events
+        if event.type.startswith("evidence_collection.internal_search_")
+    ]
 
 
 def _external_events(events: list[Any]) -> list[Any]:
-    return [event for event in events if event.type.startswith("external_search.")]
+    return [
+        event
+        for event in events
+        if event.type.startswith("evidence_collection.external_search_")
+    ]
 
 
 def _external_runtime(
@@ -191,7 +199,7 @@ async def test_internal_failure_still_collects_external_candidates() -> None:
         True,
         "succeeded",
         ["https://example.com/a"],
-        ["internal_search.started"],
+        ["evidence_collection.internal_search_started"],
     )
 
 
@@ -336,10 +344,26 @@ async def test_internal_events_carry_task_index_and_input_derived_counts() -> No
 
     internal_events = [event.model_dump() for event in _internal_events(events.events)]
     assert internal_events == [
-        {"type": "internal_search.started", "task_index": 0, "query_count": 2},
-        {"type": "internal_search.completed", "task_index": 0, "hit_count": 2},
-        {"type": "internal_search.started", "task_index": 1, "query_count": 1},
-        {"type": "internal_search.completed", "task_index": 1, "hit_count": 1},
+        {
+            "type": "evidence_collection.internal_search_started",
+            "task_index": 0,
+            "query_count": 2,
+        },
+        {
+            "type": "evidence_collection.internal_search_completed",
+            "task_index": 0,
+            "hit_count": 2,
+        },
+        {
+            "type": "evidence_collection.internal_search_started",
+            "task_index": 1,
+            "query_count": 1,
+        },
+        {
+            "type": "evidence_collection.internal_search_completed",
+            "task_index": 1,
+            "hit_count": 1,
+        },
     ]
 
 
@@ -358,7 +382,11 @@ async def test_internal_failure_reports_started_only_with_task_index() -> None:
 
     internal_events = [event.model_dump() for event in _internal_events(events.events)]
     assert internal_events == [
-        {"type": "internal_search.started", "task_index": 2, "query_count": 1}
+        {
+            "type": "evidence_collection.internal_search_started",
+            "task_index": 2,
+            "query_count": 1,
+        }
     ]
 
 
@@ -389,12 +417,12 @@ async def test_external_events_fire_in_order_with_task_index_and_payload() -> No
     external_events = [event.model_dump() for event in _external_events(events.events)]
     assert external_events == [
         {
-            "type": "external_search.queries_generated",
+            "type": "evidence_collection.external_search_queries_generated",
             "task_index": 1,
             "queries": ["good query"],
         },
         {
-            "type": "external_search.candidates_fetched",
+            "type": "evidence_collection.external_search_candidates_fetched",
             "task_index": 1,
             "candidate_count": 2,
         },

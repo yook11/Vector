@@ -29,7 +29,7 @@ __all__ = [
     "AnswerPlanSummary",
     "AnswerEventReporter",
     "ExternalSearchCandidatesFetchedEvent",
-    "ExternalSearchEvidenceSelectedEvent",
+    "EvidenceReviewSelectedEvent",
     "ExternalSearchQueriesGeneratedEvent",
     "AnswerSource",
     "ExternalUrlSource",
@@ -99,7 +99,9 @@ AnswerSource = Annotated[
 class InternalSearchStartedEvent(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
-    type: Literal["internal_search.started"] = "internal_search.started"
+    type: Literal["evidence_collection.internal_search_started"] = (
+        "evidence_collection.internal_search_started"
+    )
     task_index: int = Field(ge=0)
     query_count: int = Field(ge=0)
 
@@ -107,7 +109,9 @@ class InternalSearchStartedEvent(BaseModel):
 class InternalSearchCompletedEvent(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
-    type: Literal["internal_search.completed"] = "internal_search.completed"
+    type: Literal["evidence_collection.internal_search_completed"] = (
+        "evidence_collection.internal_search_completed"
+    )
     task_index: int = Field(ge=0)
     hit_count: int = Field(ge=0)
 
@@ -115,8 +119,8 @@ class InternalSearchCompletedEvent(BaseModel):
 class ExternalSearchQueriesGeneratedEvent(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
-    type: Literal["external_search.queries_generated"] = (
-        "external_search.queries_generated"
+    type: Literal["evidence_collection.external_search_queries_generated"] = (
+        "evidence_collection.external_search_queries_generated"
     )
     task_index: int = Field(ge=0)
     queries: list[NonBlankText] = Field(default_factory=list)
@@ -125,27 +129,28 @@ class ExternalSearchQueriesGeneratedEvent(BaseModel):
 class ExternalSearchCandidatesFetchedEvent(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
-    type: Literal["external_search.candidates_fetched"] = (
-        "external_search.candidates_fetched"
+    type: Literal["evidence_collection.external_search_candidates_fetched"] = (
+        "evidence_collection.external_search_candidates_fetched"
     )
     task_index: int = Field(ge=0)
     candidate_count: int = Field(ge=0)
 
 
-class ExternalSearchEvidenceSelectedEvent(BaseModel):
+class EvidenceReviewSelectedEvent(BaseModel):
+    """精査はRun単位1回のため、採用件数もRun全体で1本だけ報告する。"""
+
     model_config = ConfigDict(frozen=True, extra="forbid")
 
-    type: Literal["external_search.evidence_selected"] = (
-        "external_search.evidence_selected"
-    )
-    task_index: int = Field(ge=0)
+    type: Literal["evidence_review.selected"] = "evidence_review.selected"
     evidence_count: int = Field(ge=0)
 
 
 class QuestionResolvedEvent(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
-    type: Literal["question.resolved"] = "question.resolved"
+    type: Literal["context_resolution.question_resolved"] = (
+        "context_resolution.question_resolved"
+    )
     standalone_question: str = Field(min_length=1, max_length=500)
 
 
@@ -154,7 +159,7 @@ AnswerProgressEvent = Annotated[
     | InternalSearchCompletedEvent
     | ExternalSearchQueriesGeneratedEvent
     | ExternalSearchCandidatesFetchedEvent
-    | ExternalSearchEvidenceSelectedEvent
+    | EvidenceReviewSelectedEvent
     | QuestionResolvedEvent,
     Field(discriminator="type"),
 ]

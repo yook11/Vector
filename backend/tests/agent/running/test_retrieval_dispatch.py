@@ -479,7 +479,11 @@ class _Events:
 def _internal_search_events(events: list[Any]) -> list[Any]:
     """同じreporterへ並走発火するexternal_search.*を除き内部枝のeventだけ残す。"""
 
-    return [event for event in events if event.type.startswith("internal_search.")]
+    return [
+        event
+        for event in events
+        if event.type.startswith("evidence_collection.internal_search_")
+    ]
 
 
 class _UnreachableDirectAnswerer:
@@ -1172,10 +1176,26 @@ async def test_internal_search_events_are_emitted_per_task_with_task_index() -> 
         event.model_dump() for event in _internal_search_events(events.events)
     ]
     assert internal_events == [
-        {"type": "internal_search.started", "task_index": 0, "query_count": 2},
-        {"type": "internal_search.completed", "task_index": 0, "hit_count": 2},
-        {"type": "internal_search.started", "task_index": 1, "query_count": 1},
-        {"type": "internal_search.completed", "task_index": 1, "hit_count": 1},
+        {
+            "type": "evidence_collection.internal_search_started",
+            "task_index": 0,
+            "query_count": 2,
+        },
+        {
+            "type": "evidence_collection.internal_search_completed",
+            "task_index": 0,
+            "hit_count": 2,
+        },
+        {
+            "type": "evidence_collection.internal_search_started",
+            "task_index": 1,
+            "query_count": 1,
+        },
+        {
+            "type": "evidence_collection.internal_search_completed",
+            "task_index": 1,
+            "hit_count": 1,
+        },
     ]
 
 
@@ -1198,7 +1218,11 @@ async def test_internal_search_failure_reports_started_without_completed() -> No
         event.model_dump() for event in _internal_search_events(events.events)
     ]
     assert internal_events == [
-        {"type": "internal_search.started", "task_index": 0, "query_count": 1}
+        {
+            "type": "evidence_collection.internal_search_started",
+            "task_index": 0,
+            "query_count": 1,
+        }
     ]
 
 
@@ -1603,7 +1627,7 @@ async def test_internal_failure_still_reaches_reviewer_and_produces_evidence() -
     assert (
         [item.source.title for item in answerer.calls[0]],
         internal_events,
-    ) == (["ext title"], ["internal_search.started"])
+    ) == (["ext title"], ["evidence_collection.internal_search_started"])
 
 
 @pytest.mark.asyncio

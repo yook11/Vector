@@ -299,9 +299,13 @@ class _Events:
 
 
 def _external_search_events(events: list[Any]) -> list[Any]:
-    """同じreporterへ並走発火するinternal_search.*を除きexternal枝のeventだけ残す。"""
+    """同じreporterへ並走発火するinternal_search系eventを除き、外部検索系+選別eventを残す。"""
 
-    return [event for event in events if event.type.startswith("external_search.")]
+    return [
+        event
+        for event in events
+        if not event.type.startswith("evidence_collection.internal_search_")
+    ]
 
 
 class _ParallelQueryRuntime:
@@ -1248,11 +1252,11 @@ async def test_collection_events_are_per_task_causal_with_their_contract_payload
 
     順序・payloadで出ることを保証する(不変条件ごとに所有テストを決める)。
     S1でreviewerはRun単位1回になり、全taskの収集完了を待ってから走るため、
-    evidence_selectedは両task分がまとめて精査成功後にしか発火しない
-    (task0が完結してからtask1が始まる、というper-task逐次因果は成立しない)。
-    evidence_selectedの発火順序・件数は
+    evidence_review.selectedは両task分がまとめて精査成功後にRun単位1本でしか
+    発火しない(task0が完結してからtask1が始まる、というper-task逐次因果は
+    成立しない)。evidence_review.selectedの発火本数・payload形は
     tests/agent/running/test_evidence_review_run_scope.py::
-    test_progress_events_fire_ascending_by_task_index_after_review_succeeds が
+    test_selected_event_fires_once_for_the_whole_run_without_task_index が
     正本のため、ここでは重複して主張しない。
     """
     events = _Events()
@@ -1281,28 +1285,28 @@ async def test_collection_events_are_per_task_causal_with_their_contract_payload
         for event in _external_search_events(events.events)
         if event.type
         in {
-            "external_search.queries_generated",
-            "external_search.candidates_fetched",
+            "evidence_collection.external_search_queries_generated",
+            "evidence_collection.external_search_candidates_fetched",
         }
     ]
     assert collection_events == [
         {
-            "type": "external_search.queries_generated",
+            "type": "evidence_collection.external_search_queries_generated",
             "task_index": 0,
             "queries": ["q1"],
         },
         {
-            "type": "external_search.candidates_fetched",
+            "type": "evidence_collection.external_search_candidates_fetched",
             "task_index": 0,
             "candidate_count": 1,
         },
         {
-            "type": "external_search.queries_generated",
+            "type": "evidence_collection.external_search_queries_generated",
             "task_index": 1,
             "queries": ["q2"],
         },
         {
-            "type": "external_search.candidates_fetched",
+            "type": "evidence_collection.external_search_candidates_fetched",
             "task_index": 1,
             "candidate_count": 1,
         },
@@ -1311,7 +1315,7 @@ async def test_collection_events_are_per_task_causal_with_their_contract_payload
 
 @pytest.mark.asyncio
 async def test_evidence_selected_event_count_is_internal_plus_external() -> None:
-    """evidence_selected.evidence_countは内部採用数と外部採用数の合算であることを保証する。"""
+    """evidence_review.selected.evidence_countは内部採用数と外部採用数の合算であることを保証する。"""
     events = _Events()
     query_runtime = ScriptedAgentRuntime([_query_draft(["q1"])])
     reviewer_runtime = ScriptedAgentRuntime(
@@ -1362,12 +1366,11 @@ async def test_evidence_selected_event_count_is_internal_plus_external() -> None
     selected_events = [
         event.model_dump()
         for event in _external_search_events(events.events)
-        if event.type == "external_search.evidence_selected"
+        if event.type == "evidence_review.selected"
     ]
     assert selected_events == [
         {
-            "type": "external_search.evidence_selected",
-            "task_index": 0,
+            "type": "evidence_review.selected",
             "evidence_count": 2,
         }
     ]

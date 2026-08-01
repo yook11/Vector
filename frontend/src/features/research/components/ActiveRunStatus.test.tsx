@@ -27,18 +27,24 @@ describe("ActiveRunStatus", () => {
   it.each([
     [
       "evidence_collection",
-      { type: "internal_search.started", queryCount: 2 },
+      {
+        type: "evidence_collection.internal_search_started",
+        queryCount: 2,
+      },
       "関連記事を検索中",
     ],
     [
       "evidence_collection",
-      { type: "internal_search.completed", hitCount: 8 },
+      {
+        type: "evidence_collection.internal_search_completed",
+        hitCount: 8,
+      },
       "関連記事8件を確認",
     ],
     [
       "evidence_collection",
       {
-        type: "external_search.queries_generated",
+        type: "evidence_collection.external_search_queries_generated",
         taskIndex: 0,
         queries: ["NVIDIA AI", "半導体需要"],
       },
@@ -47,7 +53,7 @@ describe("ActiveRunStatus", () => {
     [
       "evidence_collection",
       {
-        type: "external_search.candidates_fetched",
+        type: "evidence_collection.external_search_candidates_fetched",
         taskIndex: 1,
         candidateCount: 12,
       },
@@ -56,8 +62,7 @@ describe("ActiveRunStatus", () => {
     [
       "evidence_review",
       {
-        type: "external_search.evidence_selected",
-        taskIndex: 1,
+        type: "evidence_review.selected",
         evidenceCount: 4,
       },
       "根拠4件を選別",
@@ -65,7 +70,7 @@ describe("ActiveRunStatus", () => {
     [
       "planning",
       {
-        type: "question.resolved",
+        type: "context_resolution.question_resolved",
         standaloneQuestion: "NVIDIAの発表は株価へどう影響する？",
       },
       "“NVIDIAの発表は株価へどう影響する？”について調査中",
@@ -73,7 +78,7 @@ describe("ActiveRunStatus", () => {
     [
       "context_resolution",
       {
-        type: "question.resolved",
+        type: "context_resolution.question_resolved",
         standaloneQuestion: "NVIDIAの発表は株価へどう影響する？",
       },
       "“NVIDIAの発表は株価へどう影響する？”について調査中",
@@ -103,7 +108,7 @@ describe("ActiveRunStatus", () => {
         status="running"
         stage="evidence_collection"
         activity={{
-          type: "external_search.candidates_fetched",
+          type: "evidence_collection.external_search_candidates_fetched",
           taskIndex: 0,
           candidateCount: 8,
         }}
@@ -122,7 +127,7 @@ describe("ActiveRunStatus", () => {
         status="running"
         stage="evidence_collection"
         activity={{
-          type: "external_search.queries_generated",
+          type: "evidence_collection.external_search_queries_generated",
           taskIndex: 0,
           queries: [
             "VeryLongSearchQueryWithoutNaturalWhitespaceForOverflowVerification",
@@ -145,7 +150,7 @@ describe("ActiveRunStatus", () => {
         status="running"
         stage="answering"
         activity={{
-          type: "external_search.candidates_fetched",
+          type: "evidence_collection.external_search_candidates_fetched",
           taskIndex: 0,
           candidateCount: 8,
         }}
