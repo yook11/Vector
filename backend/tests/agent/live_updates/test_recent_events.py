@@ -15,8 +15,8 @@ from redis.exceptions import ConnectionError as RedisConnectionError
 from structlog.testing import capture_logs
 
 from app.agent.contract import (
+    EvidenceReviewSelectedEvent,
     ExternalSearchCandidatesFetchedEvent,
-    ExternalSearchEvidenceSelectedEvent,
     ExternalSearchQueriesGeneratedEvent,
     InternalSearchCompletedEvent,
     InternalSearchStartedEvent,
@@ -132,7 +132,7 @@ async def test_publisher_reader_round_trip_uses_real_redis_semantics() -> None:
         events = await reader.recent_events(run_id)
 
         assert [event.task_index for event in events] == list(range(41, 51))
-        assert events[0].type == "external_search.queries_generated"
+        assert events[0].type == "evidence_collection.external_search_queries_generated"
         assert events[0].queries == ["NVIDIA AI query 41"]
         assert events[-1].queries == ["NVIDIA AI query 50"]
 
@@ -164,8 +164,7 @@ async def test_all_contract_event_types_round_trip_through_api_schema() -> None:
                 task_index=0,
                 candidate_count=8,
             ),
-            ExternalSearchEvidenceSelectedEvent(
-                task_index=0,
+            EvidenceReviewSelectedEvent(
                 evidence_count=2,
             ),
             QuestionResolvedEvent(
@@ -179,12 +178,12 @@ async def test_all_contract_event_types_round_trip_through_api_schema() -> None:
         recent_events = await reader.recent_events(run_id)
 
         assert [event.type for event in recent_events] == [
-            "internal_search.started",
-            "internal_search.completed",
-            "external_search.queries_generated",
-            "external_search.candidates_fetched",
-            "external_search.evidence_selected",
-            "question.resolved",
+            "evidence_collection.internal_search_started",
+            "evidence_collection.internal_search_completed",
+            "evidence_collection.external_search_queries_generated",
+            "evidence_collection.external_search_candidates_fetched",
+            "evidence_review.selected",
+            "context_resolution.question_resolved",
         ]
         assert recent_events[0].task_index == 0
         assert recent_events[0].query_count == 2
@@ -193,6 +192,7 @@ async def test_all_contract_event_types_round_trip_through_api_schema() -> None:
         assert recent_events[2].queries == ["NVIDIA AI"]
         assert recent_events[3].candidate_count == 8
         assert recent_events[4].evidence_count == 2
+        assert "task_index" not in recent_events[4].model_dump()
         assert recent_events[5].standalone_question == (
             "NVIDIA の発表が株価へ与える影響は？"
         )
@@ -239,7 +239,7 @@ async def test_live_reporters_dual_write_and_project_activity_at_sse_boundary() 
         activity_payload = json.loads(stream_entries[2][1]["payload"])
         assert activity_payload == {
             "activity": {
-                "type": "external_search.candidates_fetched",
+                "type": "evidence_collection.external_search_candidates_fetched",
                 "task_index": 2,
                 "candidate_count": 5,
             }
@@ -284,7 +284,9 @@ async def test_publisher_failure_logs_without_event_payload() -> None:
 
     assert logs[0]["event"] == "agent_run_live_event_publish_failed"
     assert logs[0]["run_id"] == str(RUN_ID)
-    assert logs[0]["event_type"] == "external_search.queries_generated"
+    assert logs[0]["event_type"] == (
+        "evidence_collection.external_search_queries_generated"
+    )
     assert "SECRET_QUERY" not in repr(logs)
     assert "redis down" not in repr(logs)
 
@@ -292,13 +294,13 @@ async def test_publisher_failure_logs_without_event_payload() -> None:
 @pytest.mark.asyncio
 async def test_reader_returns_oldest_first_and_skips_bad_entries() -> None:
     older = {
-        "type": "internal_search.completed",
+        "type": "evidence_collection.internal_search_completed",
         "ts": "2026-07-09T01:00:00+00:00",
         "task_index": 0,
         "hit_count": 4,
     }
     newer = {
-        "type": "external_search.queries_generated",
+        "type": "evidence_collection.external_search_queries_generated",
         "ts": "2026-07-09T01:00:02+00:00",
         "task_index": 0,
         "queries": ["NVIDIA AI"],
@@ -320,13 +322,44 @@ async def test_reader_returns_oldest_first_and_skips_bad_entries() -> None:
     events = await reader.recent_events(RUN_ID)
 
     assert [event.type for event in events] == [
-        "internal_search.completed",
-        "external_search.queries_generated",
+        "evidence_collection.internal_search_completed",
+        "evidence_collection.external_search_queries_generated",
     ]
     assert events[0].ts == datetime(2026, 7, 9, 1, 0, tzinfo=UTC)
     assert events[0].task_index == 0
     assert events[1].task_index == 0
     assert events[1].queries == ["NVIDIA AI"]
+
+
+@pytest.mark.asyncio
+async def test_reader_discards_pre_migration_legacy_event_type_payload() -> None:
+    """A: 旧typeのpayloadは新実装で未知として捨てられる回帰guard。
+
+    deployをまたいでRedisへ旧typeのイベントが最大15分残る移行区間を想定し、
+    旧`external_search.evidence_selected`と新`evidence_collection.
+    internal_search_started`が混在するとき、旧typeだけが未知として落ちる
+    ことを保証する。
+    """
+    legacy = {
+        "type": "external_search.evidence_selected",
+        "ts": "2026-07-09T01:00:00+00:00",
+        "task_index": 0,
+        "evidence_count": 2,
+    }
+    current = {
+        "type": "evidence_collection.internal_search_started",
+        "ts": "2026-07-09T01:00:01+00:00",
+        "task_index": 0,
+        "query_count": 2,
+    }
+    redis = StaticRedis([json.dumps(current), json.dumps(legacy)])
+    reader = AgentRunLiveEventReader(redis)
+
+    events = await reader.recent_events(RUN_ID)
+
+    assert [event.type for event in events] == [
+        "evidence_collection.internal_search_started"
+    ]
 
 
 @pytest.mark.asyncio

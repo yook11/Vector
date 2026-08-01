@@ -94,7 +94,7 @@ async def test_history_rewrite_notifies_completed_standalone_question_once() -> 
         None,
         [
             {
-                "type": "question.resolved",
+                "type": "context_resolution.question_resolved",
                 "standalone_question": question_context.standalone_question,
             }
         ],

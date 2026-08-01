@@ -84,42 +84,41 @@ ResearchProgressStage = Literal[
 
 
 class ResearchRunInternalSearchStartedEvent(_CamelBase):
-    type: Literal["internal_search.started"]
+    type: Literal["evidence_collection.internal_search_started"]
     ts: datetime
     task_index: int = Field(ge=0)
     query_count: int = Field(ge=0)
 
 
 class ResearchRunInternalSearchCompletedEvent(_CamelBase):
-    type: Literal["internal_search.completed"]
+    type: Literal["evidence_collection.internal_search_completed"]
     ts: datetime
     task_index: int = Field(ge=0)
     hit_count: int = Field(ge=0)
 
 
 class ResearchRunExternalSearchQueriesGeneratedEvent(_CamelBase):
-    type: Literal["external_search.queries_generated"]
+    type: Literal["evidence_collection.external_search_queries_generated"]
     ts: datetime
     task_index: int = Field(ge=0)
     queries: list[str]
 
 
 class ResearchRunExternalSearchCandidatesFetchedEvent(_CamelBase):
-    type: Literal["external_search.candidates_fetched"]
+    type: Literal["evidence_collection.external_search_candidates_fetched"]
     ts: datetime
     task_index: int = Field(ge=0)
     candidate_count: int = Field(ge=0)
 
 
-class ResearchRunExternalSearchEvidenceSelectedEvent(_CamelBase):
-    type: Literal["external_search.evidence_selected"]
+class ResearchRunEvidenceReviewSelectedEvent(_CamelBase):
+    type: Literal["evidence_review.selected"]
     ts: datetime
-    task_index: int = Field(ge=0)
     evidence_count: int = Field(ge=0)
 
 
 class ResearchRunQuestionResolvedEvent(_CamelBase):
-    type: Literal["question.resolved"]
+    type: Literal["context_resolution.question_resolved"]
     ts: datetime
     standalone_question: str = Field(min_length=1, max_length=500)
 
@@ -129,7 +128,7 @@ ResearchRunEvent = Annotated[
     | ResearchRunInternalSearchCompletedEvent
     | ResearchRunExternalSearchQueriesGeneratedEvent
     | ResearchRunExternalSearchCandidatesFetchedEvent
-    | ResearchRunExternalSearchEvidenceSelectedEvent
+    | ResearchRunEvidenceReviewSelectedEvent
     | ResearchRunQuestionResolvedEvent,
     Field(discriminator="type"),
 ]

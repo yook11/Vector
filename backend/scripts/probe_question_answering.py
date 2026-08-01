@@ -31,8 +31,8 @@ from app.agent.contract import (
     AnswerProgressEvent,
     AnswerQuestionResult,
     AnswerSource,
+    EvidenceReviewSelectedEvent,
     ExternalSearchCandidatesFetchedEvent,
-    ExternalSearchEvidenceSelectedEvent,
     ExternalSearchQueriesGeneratedEvent,
 )
 from app.agent.evidence_collection import Researcher
@@ -345,33 +345,43 @@ def _print_plan_summary(
     print(f"  requested_agent_count={requested_agent_count}")
     print(f"  planned_task_count={len(plan.research_tasks)}")
     print()
-    _print_external_progress(events)
+    _print_collection_progress(events)
+    _print_review_progress(events)
 
 
-def _print_external_progress(events: Sequence[AnswerProgressEvent]) -> None:
+def _print_collection_progress(events: Sequence[AnswerProgressEvent]) -> None:
     print("task_progress:")
-    external_events = [
+    collection_events = [
         event
         for event in events
         if isinstance(
             event,
-            ExternalSearchQueriesGeneratedEvent
-            | ExternalSearchCandidatesFetchedEvent
-            | ExternalSearchEvidenceSelectedEvent,
+            ExternalSearchQueriesGeneratedEvent | ExternalSearchCandidatesFetchedEvent,
         )
     ]
-    if not external_events:
+    if not collection_events:
         print("  (none)")
         return
 
-    for event in external_events:
+    for event in collection_events:
         match event:
             case ExternalSearchQueriesGeneratedEvent():
                 print(f"  [{event.task_index}] generated_queries={list(event.queries)}")
             case ExternalSearchCandidatesFetchedEvent():
                 print(f"  [{event.task_index}] candidate_count={event.candidate_count}")
-            case ExternalSearchEvidenceSelectedEvent():
-                print(f"  [{event.task_index}] evidence_count={event.evidence_count}")
+
+
+def _print_review_progress(events: Sequence[AnswerProgressEvent]) -> None:
+    """精査はRun単位1回のため、task単位の収集とは別区分で出す。"""
+    print("review_progress:")
+    selected = next(
+        (event for event in events if isinstance(event, EvidenceReviewSelectedEvent)),
+        None,
+    )
+    if selected is None:
+        print("  (none)")
+        return
+    print(f"  evidence_count={selected.evidence_count}")
 
 
 def _print_answer_result(result: AnswerQuestionResult) -> None:

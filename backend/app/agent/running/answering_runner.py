@@ -28,7 +28,7 @@ from app.agent.contract import (
     AnswerProgressStage,
     AnswerQuestionResult,
     AnswerSource,
-    ExternalSearchEvidenceSelectedEvent,
+    EvidenceReviewSelectedEvent,
 )
 from app.agent.evidence_collection import (
     EvidenceCollectionOutcome,
@@ -372,9 +372,7 @@ class AnsweringRunner:
                 effective_agent_count=effective_agent_count,
             )
 
-        await self._report_selected_evidence_events(
-            outcome=outcome, review_candidates=review_candidates
-        )
+        await self._report_selected_evidence(outcome=outcome)
 
         deduplicated_internal_evidence, internal_deduplicated_count = (
             _deduplicate_internal_evidence_by_curation_id(outcome.internal_evidence)
@@ -466,29 +464,18 @@ class AnsweringRunner:
             report=report,
         )
 
-    async def _report_selected_evidence_events(
+    async def _report_selected_evidence(
         self,
         *,
         outcome: EvidenceReviewOutcome,
-        review_candidates: list[ReviewTaskCandidates],
     ) -> None:
-        """精査成功後、候補があったtaskについてtask_index昇順で1回ずつ発火する。"""
-        counts = {
-            candidates.task_index: 0
-            for candidates in review_candidates
-            if candidates.internal_hits or candidates.external_candidates
-        }
-        for item in outcome.internal_evidence:
-            counts[item.task_index] += 1
-        for item in outcome.external_evidence:
-            counts[item.task_index] += 1
-        for task_index in sorted(counts):
-            await self._report_event(
-                ExternalSearchEvidenceSelectedEvent(
-                    task_index=task_index,
-                    evidence_count=counts[task_index],
-                )
+        """精査成功後、Run全体の採用件数を1本だけ発火する。"""
+        await self._report_event(
+            EvidenceReviewSelectedEvent(
+                evidence_count=len(outcome.internal_evidence)
+                + len(outcome.external_evidence),
             )
+        )
 
     async def _report_event(self, event: AnswerProgressEvent) -> None:
         if self._events is None:

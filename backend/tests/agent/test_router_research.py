@@ -2317,14 +2317,14 @@ class TestGetResearchRun:
             [
                 json.dumps(
                     {
-                        "type": "question.resolved",
+                        "type": "context_resolution.question_resolved",
                         "ts": "2026-07-20T01:00:00+00:00",
                         "standalone_question": "OLD_RESOLVED_QUESTION_SENTINEL",
                     }
                 ),
                 json.dumps(
                     {
-                        "type": "external_search.queries_generated",
+                        "type": "evidence_collection.external_search_queries_generated",
                         "ts": "2026-07-20T01:01:00+00:00",
                         "task_index": 0,
                         "queries": ["OLD_QUERY_SENTINEL"],
@@ -2362,7 +2362,7 @@ class TestGetResearchRun:
             [
                 json.dumps(
                     {
-                        "type": "external_search.queries_generated",
+                        "type": "evidence_collection.external_search_queries_generated",
                         "ts": "2026-07-09T01:00:00+00:00",
                         "task_index": 0,
                         "queries": ["NVIDIA AI"],
@@ -2377,7 +2377,7 @@ class TestGetResearchRun:
         assert response.status_code == 200
         assert response.json()["recentEvents"] == [
             {
-                "type": "external_search.queries_generated",
+                "type": "evidence_collection.external_search_queries_generated",
                 "ts": "2026-07-09T01:00:00Z",
                 "taskIndex": 0,
                 "queries": ["NVIDIA AI"],

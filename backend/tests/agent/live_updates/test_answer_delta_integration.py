@@ -607,7 +607,10 @@ async def test_delta_breaker_does_not_damage_other_stream_or_list_producers() ->
         assert stream_events[2].activity == activity
         assert stream_events[3] == AgentRunLiveStreamTerminalEvent(status="completed")
         assert len(recent_events) == 1
-        assert recent_events[0].type == "external_search.candidates_fetched"
+        assert (
+            recent_events[0].type
+            == "evidence_collection.external_search_candidates_fetched"
+        )
         assert recent_events[0].task_index == 2
         assert recent_events[0].candidate_count == 5
     finally:

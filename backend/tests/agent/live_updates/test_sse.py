@@ -134,7 +134,7 @@ async def _collect(connection: AgentRunSseConnection) -> list[bytes]:
             {
                 "attemptEpoch": 2,
                 "activity": {
-                    "type": "external_search.candidates_fetched",
+                    "type": "evidence_collection.external_search_candidates_fetched",
                     "taskIndex": 3,
                     "candidateCount": 12,
                 },

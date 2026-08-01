@@ -418,26 +418,35 @@ async def test_review_does_not_start_before_every_tasks_collection_completes() -
 
 @pytest.mark.asyncio
 async def test_review_is_skipped_when_every_task_has_no_candidates() -> None:
-    """S1 A3。全taskの候補が内外ともゼロのとき reviewer を呼ばない。"""
+    """S1 A3。全taskの候補が内外ともゼロのとき reviewer を呼ばず、
+
+    選別eventも発火しない。
+    """
     tasks = [
         _task("goal-A", ["query-a"]),
         _task("goal-B", ["query-b"]),
         _task("goal-C", ["query-c"]),
     ]
     reviewer_runtime = ScriptedAgentRuntime([])
+    events = _Events()
     runner, answerer = _runner(
         plan=_plan(*tasks),
         query_runtime=ScriptedAgentRuntime([_query_draft([]) for _ in tasks]),
         reviewer_runtime=reviewer_runtime,
         external_tool=_ExternalTool(),
         internal_tool=_InternalTool(),
+        events=events,
     )
 
     result = await _run(runner)
 
+    selected = [
+        event for event in events.events if event.type == "evidence_review.selected"
+    ]
     assert reviewer_runtime.calls == []
     assert answerer.calls == [[]]
     assert result.final_output.status == "insufficient"
+    assert selected == []
 
 
 @pytest.mark.asyncio
@@ -940,9 +949,7 @@ async def test_reviewer_failure_after_two_attempts_empties_the_whole_run() -> No
     result = await _run(runner)
 
     selected_events = [
-        event
-        for event in events.events
-        if event.type == "external_search.evidence_selected"
+        event for event in events.events if event.type == "evidence_review.selected"
     ]
     assert answerer.calls == [[]]
     assert result.final_output.sources == []
@@ -957,17 +964,14 @@ async def test_reviewer_failure_after_two_attempts_empties_the_whole_run() -> No
 
 
 @pytest.mark.asyncio
-async def test_progress_events_fire_ascending_by_task_index_after_review_succeeds() -> (
-    None
-):
-    """S1 F1/F2/F3。精査成功後、候補があったtaskについてtask_index昇順で
+async def test_selected_event_fires_once_for_the_whole_run_without_task_index() -> None:
+    """S2。精査成功後、選別eventはRun全体で1本だけ発火する。
 
-    1回ずつ発火し、evidence_countは当該task由来の採用件数と一致する。
-    候補ゼロだったtaskには発火しない。task-Aを遅延させ、完了順(B→A)と
-    task_index順(A→B)を意図的にずらしてorderingの不変条件を検証する。
+    3taskのうち2task(A/B)に採用対象があり、1task(C)は候補ゼロという構成でも
+    本数は1本のまま増えない。evidence_countはtask横断の採用件数の合算になり、
+    payloadはtask_indexを持たない。task単位で数え直す旧実装は
+    「2本発火する」「task_indexが残る」のいずれかで必ず落ちる。
     """
-    gate_a = asyncio.Event()
-    started_a = asyncio.Event()
     internal_tool = _InternalTool(
         hits_by_query={
             "query-a": [
@@ -977,9 +981,7 @@ async def test_progress_events_fire_ascending_by_task_index_after_review_succeed
                 _internal_hit(assessment_id=1002, curation_id=2, title="B-hit")
             ],
             "query-c": [],
-        },
-        gate_by_query={"query-a": gate_a},
-        started_by_query={"query-a": started_a},
+        }
     )
     tasks = [
         _task("goal-A", ["query-a"]),
@@ -996,7 +998,7 @@ async def test_progress_events_fire_ascending_by_task_index_after_review_succeed
                     {"candidate_index": 1, "claim": "B claim", "why_selected": "w"},
                 ]
             ),
-            slots=2,
+            slots=3,
         )
     )
     runner, _answerer = _runner(
@@ -1008,22 +1010,14 @@ async def test_progress_events_fire_ascending_by_task_index_after_review_succeed
         events=events,
     )
 
-    running = asyncio.create_task(_run(runner))
-    await asyncio.wait_for(started_a.wait(), timeout=1.0)
-    # task-B/Cを先に完了させてから、task-Aを最後に解放する。
-    await asyncio.sleep(0.05)
-    gate_a.set()
-    await asyncio.wait_for(running, timeout=1.0)
+    await _run(runner)
 
     selected = [
-        event
-        for event in events.events
-        if event.type == "external_search.evidence_selected"
+        event for event in events.events if event.type == "evidence_review.selected"
     ]
-    assert [(event.task_index, event.evidence_count) for event in selected] == [
-        (0, 1),
-        (1, 1),
-    ]
+    assert len(selected) == 1
+    assert selected[0].evidence_count == 2
+    assert "task_index" not in selected[0].model_dump()
 
 
 # --- G. 非露出 ---------------------------------------------------------------

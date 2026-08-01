@@ -120,6 +120,8 @@ Run単位1本へ畳む。
 - `app/agent/running/answering_runner.py` — `_report_selected_evidence_events()`をRun単位
   1本の発火へ縮小する。task別の数え直しが不要になる
 - `app/schemas/research.py` — 6クラスのtypeとクラス名、選別イベントの`task_index`削除
+- `scripts/probe_question_answering.py` — 収集(task単位)と精査(Run単位)を別の表示区分へ分ける。
+  型を追随させるだけだと、Run単位の精査結果がtask単位の収集の下に並んで読めてしまう
 
 `app/agent/live_updates/`は`AnswerProgressEvent`をそのまま包むため変更しない。
 
@@ -132,7 +134,7 @@ Run単位1本へ畳む。
 
 ### テスト
 
-backend 13ファイル、frontend 4ファイル。多いのは
+backend 12ファイル、frontend 5ファイル。多いのは
 `tests/agent/live_updates/test_recent_events.py` /
 `tests/agent/evidence_collection/test_researcher.py` /
 `tests/agent/running/test_external_pipeline.py` /
