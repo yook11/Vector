@@ -11,7 +11,8 @@ export type ServerLogEvent =
   | "frontend_rate_limit_redis_client_error"
   | "frontend_rate_limit_redis_fail_open"
   | "frontend_rate_limit_redis_misconfigured"
-  | "frontend_client_ip_trust_unconfigured";
+  | "frontend_client_ip_trust_unconfigured"
+  | "frontend_xff_chain_observed";
 
 export interface ServerLogFields {
   method?: string | undefined;
@@ -23,6 +24,8 @@ export interface ServerLogFields {
   hasSession?: boolean | undefined;
   requestClass?: "sse" | "read" | "mutation" | undefined;
   errorType?: "unconfigured" | "connect" | "eval" | undefined;
+  xffRequestCount?: number | undefined;
+  multiValueXffRequestCount?: number | undefined;
 }
 
 function sanitizeFields(fields: ServerLogFields): ServerLogFields {

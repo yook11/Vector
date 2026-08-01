@@ -38,6 +38,9 @@ const g = globalThis as unknown as {
   // CLIENT_IP_TRUST 未宣言 warn の once-flag。既存の
   // __vectorRateLimitMisconfigLogged と同じ globalThis-once 規約を踏襲する想定。
   __vectorClientIpTrustUnconfiguredLogged?: boolean;
+  // XFF chain 観測のウィンドウ集計 (frontend_xff_chain_observed)。他 request 由来の
+  // 蓄積が漏れないよう、他の singleton state と同様に test ごとに reset する。
+  __vectorXffChainWindow?: unknown;
 };
 
 let warnSpy: MockInstance<typeof console.warn>;
@@ -48,6 +51,7 @@ beforeEach(() => {
   delete g.__vectorRateLimitSignalLastMs;
   delete g.__vectorRateLimitFailOpenLastMs;
   delete g.__vectorClientIpTrustUnconfiguredLogged;
+  delete g.__vectorXffChainWindow;
   mockEval.mockReset();
   mockConnect.mockReset();
   mockOn.mockReset();
@@ -61,6 +65,7 @@ beforeEach(() => {
 afterEach(() => {
   vi.unstubAllEnvs();
   warnSpy.mockRestore();
+  vi.useRealTimers();
 });
 
 function mockNextRequest(
@@ -666,5 +671,230 @@ describe("proxy — auth-redirect の挙動", () => {
     );
     const res = await proxy(req);
     expect(res.status).not.toBe(307);
+  });
+});
+
+describe("proxy — XFF chain 観測のゲート (isProduction && trust=alb-xff-last && XFF あり)", () => {
+  it("3条件をすべて満たす単一値 XFF は観測され、multiValueXffRequestCount は増えない", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-01-01T00:00:00.000Z"));
+    vi.stubEnv("NODE_ENV", "production");
+    vi.stubEnv("CLIENT_IP_TRUST", "alb-xff-last");
+    mockIsOpenValue = true;
+    mockEval.mockResolvedValue(1);
+
+    await proxy(
+      mockNextRequest("http://localhost:3000/news", {
+        headers: { "x-forwarded-for": "1.2.3.4" },
+      }),
+    );
+    vi.setSystemTime(new Date("2026-01-01T00:01:00.000Z"));
+    await proxy(
+      mockNextRequest("http://localhost:3000/news", {
+        headers: { "x-forwarded-for": "1.2.3.4" },
+      }),
+    );
+
+    expect(findLoggedEvent("frontend_xff_chain_observed")).toMatchObject({
+      xffRequestCount: 2,
+      multiValueXffRequestCount: 0,
+    });
+  });
+
+  it("XFF が2値なら multiValueXffRequestCount も観測される", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-01-01T00:00:00.000Z"));
+    vi.stubEnv("NODE_ENV", "production");
+    vi.stubEnv("CLIENT_IP_TRUST", "alb-xff-last");
+    mockIsOpenValue = true;
+    mockEval.mockResolvedValue(1);
+
+    await proxy(
+      mockNextRequest("http://localhost:3000/news", {
+        headers: { "x-forwarded-for": "1.2.3.4, 5.6.7.8" },
+      }),
+    );
+    vi.setSystemTime(new Date("2026-01-01T00:01:00.000Z"));
+    await proxy(
+      mockNextRequest("http://localhost:3000/news", {
+        headers: { "x-forwarded-for": "1.2.3.4, 5.6.7.8" },
+      }),
+    );
+
+    expect(findLoggedEvent("frontend_xff_chain_observed")).toMatchObject({
+      xffRequestCount: 2,
+      multiValueXffRequestCount: 2,
+    });
+  });
+
+  it("3値以上でも multiValue として数える (>=2 境界、===2 固定の回帰を防ぐ)", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-01-01T00:00:00.000Z"));
+    vi.stubEnv("NODE_ENV", "production");
+    vi.stubEnv("CLIENT_IP_TRUST", "alb-xff-last");
+    mockIsOpenValue = true;
+    mockEval.mockResolvedValue(1);
+
+    await proxy(
+      mockNextRequest("http://localhost:3000/news", {
+        headers: { "x-forwarded-for": "1.2.3.4, 5.6.7.8, 9.9.9.9" },
+      }),
+    );
+    vi.setSystemTime(new Date("2026-01-01T00:01:00.000Z"));
+    await proxy(
+      mockNextRequest("http://localhost:3000/news", {
+        headers: { "x-forwarded-for": "1.2.3.4, 5.6.7.8, 9.9.9.9" },
+      }),
+    );
+
+    expect(findLoggedEvent("frontend_xff_chain_observed")).toMatchObject({
+      multiValueXffRequestCount: 2,
+    });
+  });
+
+  it("isProduction=false (dev/test) では trust と XFF が揃っても観測されない", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-01-01T00:00:00.000Z"));
+    // NODE_ENV=test (beforeEach 既定) のまま CLIENT_IP_TRUST だけ alb-xff-last にする。
+    vi.stubEnv("CLIENT_IP_TRUST", "alb-xff-last");
+    mockIsOpenValue = true;
+    mockEval.mockResolvedValue(1);
+
+    await proxy(
+      mockNextRequest("http://localhost:3000/news", {
+        headers: { "x-forwarded-for": "1.2.3.4, 5.6.7.8" },
+      }),
+    );
+    vi.setSystemTime(new Date("2026-01-01T00:05:00.000Z"));
+    await proxy(
+      mockNextRequest("http://localhost:3000/news", {
+        headers: { "x-forwarded-for": "1.2.3.4, 5.6.7.8" },
+      }),
+    );
+
+    expect(findLoggedEvent("frontend_xff_chain_observed")).toBeUndefined();
+  });
+
+  it("trust=fly-client-ip では production かつ XFF ありでも観測されない (Fly の XFF は別構造なので混ぜない)", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-01-01T00:00:00.000Z"));
+    vi.stubEnv("NODE_ENV", "production");
+    vi.stubEnv("CLIENT_IP_TRUST", "fly-client-ip");
+    mockIsOpenValue = true;
+    mockEval.mockResolvedValue(1);
+
+    await proxy(
+      mockNextRequest("http://localhost:3000/news", {
+        headers: {
+          "fly-client-ip": "203.0.113.5",
+          "x-forwarded-for": "1.2.3.4, 5.6.7.8",
+        },
+      }),
+    );
+    vi.setSystemTime(new Date("2026-01-01T00:05:00.000Z"));
+    await proxy(
+      mockNextRequest("http://localhost:3000/news", {
+        headers: {
+          "fly-client-ip": "203.0.113.5",
+          "x-forwarded-for": "1.2.3.4, 5.6.7.8",
+        },
+      }),
+    );
+
+    expect(findLoggedEvent("frontend_xff_chain_observed")).toBeUndefined();
+  });
+
+  it("CLIENT_IP_TRUST 未設定/不正値では production かつ XFF ありでも観測されない", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-01-01T00:00:00.000Z"));
+    vi.stubEnv("NODE_ENV", "production");
+    // CLIENT_IP_TRUST を明示的に設定しない → 未宣言
+    mockIsOpenValue = true;
+    mockEval.mockResolvedValue(1);
+
+    await proxy(
+      mockNextRequest("http://localhost:3000/news", {
+        headers: { "x-forwarded-for": "1.2.3.4, 5.6.7.8" },
+      }),
+    );
+    vi.setSystemTime(new Date("2026-01-01T00:05:00.000Z"));
+    await proxy(
+      mockNextRequest("http://localhost:3000/news", {
+        headers: { "x-forwarded-for": "1.2.3.4, 5.6.7.8" },
+      }),
+    );
+
+    expect(findLoggedEvent("frontend_xff_chain_observed")).toBeUndefined();
+  });
+});
+
+describe("proxy — XFF chain 観測: health check / 内部呼び出しは分母に入らない", () => {
+  it("ELB-HealthChecker UA (XFF 無し) は分母に入らない", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-01-01T00:00:00.000Z"));
+    vi.stubEnv("NODE_ENV", "production");
+    vi.stubEnv("CLIENT_IP_TRUST", "alb-xff-last");
+    mockIsOpenValue = true;
+    mockEval.mockResolvedValue(1);
+
+    await proxy(
+      mockNextRequest("http://localhost:3000/news", {
+        headers: { "user-agent": "ELB-HealthChecker/2.0" },
+      }),
+    );
+    vi.setSystemTime(new Date("2026-01-01T00:05:00.000Z"));
+    await proxy(
+      mockNextRequest("http://localhost:3000/news", {
+        headers: { "user-agent": "ELB-HealthChecker/2.0" },
+      }),
+    );
+
+    expect(findLoggedEvent("frontend_xff_chain_observed")).toBeUndefined();
+  });
+
+  it("UA も XFF も無い内部呼び出し (service connect 相当) も分母に入らない", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-01-01T00:00:00.000Z"));
+    vi.stubEnv("NODE_ENV", "production");
+    vi.stubEnv("CLIENT_IP_TRUST", "alb-xff-last");
+    mockIsOpenValue = true;
+    mockEval.mockResolvedValue(1);
+
+    await proxy(mockNextRequest("http://localhost:3000/news"));
+    vi.setSystemTime(new Date("2026-01-01T00:05:00.000Z"));
+    await proxy(mockNextRequest("http://localhost:3000/news"));
+
+    expect(findLoggedEvent("frontend_xff_chain_observed")).toBeUndefined();
+  });
+
+  it("health checker UA でも XFF が付いていれば分母に入る (偽装可能な UA 判定はこの除外に使わない)", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-01-01T00:00:00.000Z"));
+    vi.stubEnv("NODE_ENV", "production");
+    vi.stubEnv("CLIENT_IP_TRUST", "alb-xff-last");
+    mockIsOpenValue = true;
+    mockEval.mockResolvedValue(1);
+
+    await proxy(
+      mockNextRequest("http://localhost:3000/news", {
+        headers: {
+          "user-agent": "ELB-HealthChecker/2.0",
+          "x-forwarded-for": "1.2.3.4",
+        },
+      }),
+    );
+    vi.setSystemTime(new Date("2026-01-01T00:01:00.000Z"));
+    await proxy(
+      mockNextRequest("http://localhost:3000/news", {
+        headers: {
+          "user-agent": "ELB-HealthChecker/2.0",
+          "x-forwarded-for": "1.2.3.4",
+        },
+      }),
+    );
+
+    expect(findLoggedEvent("frontend_xff_chain_observed")).toMatchObject({
+      xffRequestCount: 2,
+    });
   });
 });
