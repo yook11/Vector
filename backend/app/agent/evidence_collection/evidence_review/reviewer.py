@@ -38,8 +38,6 @@ from app.analysis.ai_provider_errors import AIProviderError
 
 __all__ = ["EvidenceReviewer"]
 
-_EVIDENCE_REVIEW_PHASE = "evidence_review"
-
 
 @dataclass(frozen=True, slots=True)
 class EvidenceReviewer:
@@ -60,7 +58,7 @@ class EvidenceReviewer:
         )
         failure_reason: str | None = None
         with agent_phase(
-            phase=_EVIDENCE_REVIEW_PHASE,
+            phase="evidence_review",
             agent_name=EVIDENCE_REVIEWER_AGENT.name,
         ):
             for attempt_number in range(1, 3):

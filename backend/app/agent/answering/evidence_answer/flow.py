@@ -2,12 +2,6 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterator
-from contextlib import contextmanager
-from typing import Any
-
-import logfire
-from opentelemetry.trace import StatusCode
 from pydantic import ValidationError
 
 from app.agent.agent import Agent
@@ -38,8 +32,8 @@ from app.agent.answering.metrics import record_answer_synthesis_outcome
 from app.agent.contract import (
     AnswerDeltaReporter,
     AnswerGenerationContinuation,
-    AnswerGenerationStopped,
 )
+from app.agent.phase_span import agent_phase
 from app.agent.planning.contract import TargetTimeWindow
 from app.agent.runtime.contract import (
     AgentTextStream,
@@ -54,7 +48,6 @@ from app.analysis.ai_provider_errors import (
 __all__ = ["EvidenceAnswerFlow"]
 
 _MAX_ATTEMPTS = 2
-_PHASE_SPAN_NAME = "agent_phase"
 # ValidationError(pydantic)は、plain text化後のfinalize_evidence_answer_draft()が
 # 空白判定を先に行うため通常経路では到達しない。classify_answer_synthesis_failure()側の
 # 分類も維持されており、EvidenceAnswerDraftの構築自体が将来pydantic validationで
@@ -95,7 +88,7 @@ class EvidenceAnswerFlow:
         Retries classified response-boundary failures within the attempt budget.
         """
 
-        with _evidence_answer_phase(self._agent.name):
+        with agent_phase(phase="answering", agent_name=self._agent.name):
             async with self._runtime_scope_factory() as runtime:
                 previous_error: str | None = None
                 previous_output_truncated = False
@@ -208,26 +201,3 @@ class EvidenceAnswerFlow:
             failure_code=failure.code,
         )
         return EvidenceAnswerUnavailable(failure_code=failure.code)
-
-
-@contextmanager
-def _evidence_answer_phase(agent_name: str) -> Iterator[None]:
-    stopped: AnswerGenerationStopped | None = None
-    with logfire.span(
-        _PHASE_SPAN_NAME,
-        phase="evidence_answer",
-        agent_name=agent_name,
-    ) as span:
-        try:
-            yield
-        except AnswerGenerationStopped as exc:
-            stopped = exc
-        except BaseException:
-            _record_unclassified_phase_error(span)
-            raise
-    if stopped is not None:
-        raise stopped
-
-
-def _record_unclassified_phase_error(span: Any) -> None:
-    span.set_status(StatusCode.ERROR, "unclassified agent phase error")

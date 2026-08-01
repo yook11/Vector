@@ -3,12 +3,6 @@
 from __future__ import annotations
 
 import re
-from collections.abc import Iterator
-from contextlib import contextmanager
-from typing import Any
-
-import logfire
-from opentelemetry.trace import StatusCode
 
 from app.agent.agent import Agent
 from app.agent.answering.contract import AnsweringRequest
@@ -31,8 +25,8 @@ from app.agent.answering.metrics import record_direct_answer_outcome
 from app.agent.contract import (
     AnswerDeltaReporter,
     AnswerGenerationContinuation,
-    AnswerGenerationStopped,
 )
+from app.agent.phase_span import agent_phase
 from app.agent.runtime.contract import (
     AgentTextStream,
     StreamingAgentRuntime,
@@ -48,7 +42,6 @@ __all__ = ["DirectAnswerFlow"]
 _DIRECT_ANSWER_FAILURES = (AIProviderError, DirectAnswerInvalidError)
 _MAX_ATTEMPTS = 2
 _CITATION_MARKER_RE = re.compile(r"\[\[[0-9]+\]\]")
-_PHASE_SPAN_NAME = "agent_phase"
 
 
 class DirectAnswerFlow:
@@ -78,7 +71,7 @@ class DirectAnswerFlow:
     ) -> DirectAnswerDraft:
         """Return a valid direct draft, retrying only blank response defects."""
 
-        with _direct_answer_phase(self._agent.name):
+        with agent_phase(phase="answering", agent_name=self._agent.name):
             async with self._runtime_scope_factory() as runtime:
                 previous_error: str | None = None
                 previous_output_truncated = False
@@ -165,26 +158,3 @@ class DirectAnswerFlow:
                 return draft
         finally:
             await close_answer_stream(stream)
-
-
-@contextmanager
-def _direct_answer_phase(agent_name: str) -> Iterator[None]:
-    stopped: AnswerGenerationStopped | None = None
-    with logfire.span(
-        _PHASE_SPAN_NAME,
-        phase="direct_answer",
-        agent_name=agent_name,
-    ) as span:
-        try:
-            yield
-        except AnswerGenerationStopped as exc:
-            stopped = exc
-        except BaseException:
-            _record_unclassified_phase_error(span)
-            raise
-    if stopped is not None:
-        raise stopped
-
-
-def _record_unclassified_phase_error(span: Any) -> None:
-    span.set_status(StatusCode.ERROR, "unclassified agent phase error")

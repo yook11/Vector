@@ -2,16 +2,14 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterator
-from contextlib import contextmanager
 from datetime import datetime
 from uuid import UUID
 
-import logfire
 import structlog
 from pydantic import ValidationError
 
 from app.agent.agent import Agent
+from app.agent.phase_span import agent_phase
 from app.agent.question_context.contract import (
     QuestionContext,
     QuestionContextDraft,
@@ -38,7 +36,6 @@ _RUNTIME_FAILURES = (
     AIProviderError,
     AgentResponseInvalidError,
 )
-_PHASE_SPAN_NAME = "agent_phase"
 _GENERATOR_UNAVAILABLE = "generator_unavailable"
 _CONTEXT_FINALIZE_INVALID = "context_finalize_invalid"
 _PROVIDER_ERROR = "provider_error"
@@ -77,7 +74,7 @@ class QuestionContextService:
                 ai_model=self._agent.model.name,
             )
 
-        with _question_context_phase(self._agent.name):
+        with agent_phase(phase="context_resolution", agent_name=self._agent.name):
             try:
                 async with self._runtime_scope_factory() as runtime:
                     draft = await runtime.invoke(
@@ -190,16 +187,6 @@ def _failure_code(error: Exception) -> str:
     if isinstance(code, str) and code:
         return code
     return _PROVIDER_ERROR
-
-
-@contextmanager
-def _question_context_phase(agent_name: str) -> Iterator[None]:
-    with logfire.span(
-        _PHASE_SPAN_NAME,
-        phase="question_context",
-        agent_name=agent_name,
-    ):
-        yield
 
 
 def _history_for_prompt(

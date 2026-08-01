@@ -59,8 +59,6 @@ from app.analysis.ai_provider_errors import AIProviderError
 
 __all__ = ["ExternalCollectionStatus", "Researcher", "ResearchTaskCandidates"]
 
-_EXTERNAL_QUERY_PHASE = "external_query"
-
 ExternalCollectionStatus = Literal[
     "succeeded", "query_generation_failed", "provider_failed"
 ]
@@ -136,9 +134,11 @@ class Researcher:
             )
         )
         try:
-            hits = await self.internal_search.invoke(
-                InternalSearchToolInput(queries=queries)
-            )
+            # 失敗はspanを貫通させてtraceに残し、外側で縮退へ変える。
+            with agent_phase(phase="evidence_collection", task_index=task_index):
+                hits = await self.internal_search.invoke(
+                    InternalSearchToolInput(queries=queries)
+                )
         except InternalSearchError:
             return [], True
         await self._report_event(
@@ -167,7 +167,7 @@ class Researcher:
             target_time_window=target_time_window,
         )
         with agent_phase(
-            phase=_EXTERNAL_QUERY_PHASE,
+            phase="evidence_collection",
             agent_name=EXTERNAL_QUERY_AGENT.name,
             task_index=task_index,
         ):
