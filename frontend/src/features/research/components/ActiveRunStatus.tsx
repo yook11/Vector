@@ -38,21 +38,21 @@ export function activeRunText(
 
 function evidenceActivityText(activity: ResearchLiveActivity): string | null {
   switch (activity.type) {
-    case "internal_search.started":
+    case "evidence_collection.internal_search_started":
       return "関連記事を検索中";
-    case "internal_search.completed":
+    case "evidence_collection.internal_search_completed":
       return `関連記事${activity.hitCount}件を確認`;
-    case "external_search.queries_generated":
+    case "evidence_collection.external_search_queries_generated":
       if (activity.queries.length === 0) return null;
       if (activity.queries.length === 1) {
         return `“${activity.queries[0]}” を検索中`;
       }
       return `“${activity.queries[0]}” など${activity.queries.length}件を検索中`;
-    case "external_search.candidates_fetched":
+    case "evidence_collection.external_search_candidates_fetched":
       return `候補${activity.candidateCount}件を取得`;
-    case "external_search.evidence_selected":
+    case "evidence_review.selected":
       return `根拠${activity.evidenceCount}件を選別`;
-    case "question.resolved":
+    case "context_resolution.question_resolved":
       return null;
   }
 }
@@ -68,7 +68,7 @@ function activityText(
     return evidenceActivityText(activity);
   }
   if (stage === "answering") return null;
-  return activity.type === "question.resolved"
+  return activity.type === "context_resolution.question_resolved"
     ? `“${activity.standaloneQuestion}”について調査中`
     : null;
 }

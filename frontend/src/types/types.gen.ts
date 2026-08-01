@@ -741,13 +741,31 @@ export type ResearchQuestionRequest = {
 };
 
 /**
+ * ResearchRunEvidenceReviewSelectedEvent
+ */
+export type ResearchRunEvidenceReviewSelectedEvent = {
+    /**
+     * Type
+     */
+    type: 'evidence_review.selected';
+    /**
+     * Ts
+     */
+    ts: string;
+    /**
+     * Evidencecount
+     */
+    evidenceCount: number;
+};
+
+/**
  * ResearchRunExternalSearchCandidatesFetchedEvent
  */
 export type ResearchRunExternalSearchCandidatesFetchedEvent = {
     /**
      * Type
      */
-    type: 'external_search.candidates_fetched';
+    type: 'evidence_collection.external_search_candidates_fetched';
     /**
      * Ts
      */
@@ -763,35 +781,13 @@ export type ResearchRunExternalSearchCandidatesFetchedEvent = {
 };
 
 /**
- * ResearchRunExternalSearchEvidenceSelectedEvent
- */
-export type ResearchRunExternalSearchEvidenceSelectedEvent = {
-    /**
-     * Type
-     */
-    type: 'external_search.evidence_selected';
-    /**
-     * Ts
-     */
-    ts: string;
-    /**
-     * Taskindex
-     */
-    taskIndex: number;
-    /**
-     * Evidencecount
-     */
-    evidenceCount: number;
-};
-
-/**
  * ResearchRunExternalSearchQueriesGeneratedEvent
  */
 export type ResearchRunExternalSearchQueriesGeneratedEvent = {
     /**
      * Type
      */
-    type: 'external_search.queries_generated';
+    type: 'evidence_collection.external_search_queries_generated';
     /**
      * Ts
      */
@@ -813,7 +809,7 @@ export type ResearchRunInternalSearchCompletedEvent = {
     /**
      * Type
      */
-    type: 'internal_search.completed';
+    type: 'evidence_collection.internal_search_completed';
     /**
      * Ts
      */
@@ -835,7 +831,7 @@ export type ResearchRunInternalSearchStartedEvent = {
     /**
      * Type
      */
-    type: 'internal_search.started';
+    type: 'evidence_collection.internal_search_started';
     /**
      * Ts
      */
@@ -857,7 +853,7 @@ export type ResearchRunQuestionResolvedEvent = {
     /**
      * Type
      */
-    type: 'question.resolved';
+    type: 'context_resolution.question_resolved';
     /**
      * Ts
      */
@@ -899,7 +895,7 @@ export type ResearchRunResponse = {
     /**
      * Recentevents
      */
-    recentEvents?: Array<ResearchRunInternalSearchStartedEvent | ResearchRunInternalSearchCompletedEvent | ResearchRunExternalSearchQueriesGeneratedEvent | ResearchRunExternalSearchCandidatesFetchedEvent | ResearchRunExternalSearchEvidenceSelectedEvent | ResearchRunQuestionResolvedEvent>;
+    recentEvents?: Array<ResearchRunInternalSearchStartedEvent | ResearchRunInternalSearchCompletedEvent | ResearchRunExternalSearchQueriesGeneratedEvent | ResearchRunExternalSearchCandidatesFetchedEvent | ResearchRunEvidenceReviewSelectedEvent | ResearchRunQuestionResolvedEvent>;
 };
 
 /**

@@ -629,13 +629,13 @@ describe("createResearchRunLiveController", () => {
       const pollRun = vi.fn<PollRun>().mockResolvedValue(
         runResult("running", "planning", null, [
           {
-            type: "question.resolved",
+            type: "context_resolution.question_resolved",
             ts: "2026-07-13T00:00:00Z",
             standaloneQuestion: "AI需要は伸びる？",
           },
           { type: "unknown.event", answerText: "do not project" },
           {
-            type: "external_search.candidates_fetched",
+            type: "evidence_collection.external_search_candidates_fetched",
             task_index: 0,
             candidate_count: 99,
           },
@@ -647,7 +647,7 @@ describe("createResearchRunLiveController", () => {
       expect(
         harness.controller.getSnapshot().liveState.currentActivity,
       ).toEqual({
-        type: "question.resolved",
+        type: "context_resolution.question_resolved",
         standaloneQuestion: "AI需要は伸びる？",
       });
 
@@ -658,7 +658,7 @@ describe("createResearchRunLiveController", () => {
       const pollRun = vi.fn<PollRun>().mockResolvedValue(
         runResult("running", null, null, [
           {
-            type: "question.resolved",
+            type: "context_resolution.question_resolved",
             ts: "2026-07-13T00:00:00Z",
             standaloneQuestion: "AI需要は伸びる？",
           },
@@ -670,7 +670,7 @@ describe("createResearchRunLiveController", () => {
       expect(
         harness.controller.getSnapshot().liveState.currentActivity,
       ).toEqual({
-        type: "question.resolved",
+        type: "context_resolution.question_resolved",
         standaloneQuestion: "AI需要は伸びる？",
       });
 
@@ -681,7 +681,7 @@ describe("createResearchRunLiveController", () => {
       const pollRun = vi.fn<PollRun>().mockResolvedValue(
         runResult("running", "context_resolution", null, [
           {
-            type: "question.resolved",
+            type: "context_resolution.question_resolved",
             ts: "2026-07-13T00:00:00Z",
             standaloneQuestion: "AI需要は伸びる？",
           },
@@ -693,7 +693,7 @@ describe("createResearchRunLiveController", () => {
       expect(harness.controller.getSnapshot().liveState).toMatchObject({
         progressStage: "context_resolution",
         currentActivity: {
-          type: "question.resolved",
+          type: "context_resolution.question_resolved",
           standaloneQuestion: "AI需要は伸びる？",
         },
       });
@@ -710,7 +710,7 @@ describe("createResearchRunLiveController", () => {
         {
           attemptEpoch: 1,
           activity: {
-            type: "external_search.candidates_fetched",
+            type: "evidence_collection.external_search_candidates_fetched",
             taskIndex: 0,
             candidateCount: 1,
           },
@@ -722,7 +722,7 @@ describe("createResearchRunLiveController", () => {
       pending.resolve(
         runResult("running", "evidence_collection", null, [
           {
-            type: "external_search.candidates_fetched",
+            type: "evidence_collection.external_search_candidates_fetched",
             ts: "2026-07-13T00:00:00Z",
             taskIndex: 1,
             candidateCount: 12,
@@ -735,7 +735,7 @@ describe("createResearchRunLiveController", () => {
       expect(
         harness.controller.getSnapshot().liveState.currentActivity,
       ).toEqual({
-        type: "external_search.candidates_fetched",
+        type: "evidence_collection.external_search_candidates_fetched",
         taskIndex: 1,
         candidateCount: 12,
       });
@@ -744,9 +744,12 @@ describe("createResearchRunLiveController", () => {
     });
 
     it.each([
-      { type: "internal_search.started" as const, queryCount: 2 },
       {
-        type: "external_search.queries_generated" as const,
+        type: "evidence_collection.internal_search_started" as const,
+        queryCount: 2,
+      },
+      {
+        type: "evidence_collection.external_search_queries_generated" as const,
         taskIndex: 0,
         queries: ["NVIDIA AI"],
       },
@@ -768,13 +771,12 @@ describe("createResearchRunLiveController", () => {
       harness.unsubscribe();
     });
 
-    it("selects external_search.evidence_selected while evidence_review (regression guard for the 根拠N件を選別 display)", async () => {
+    it("selects evidence_review.selected while evidence_review (regression guard for the 根拠N件を選別 display)", async () => {
       const pollRun = vi.fn<PollRun>().mockResolvedValue(
         runResult("running", "evidence_review", null, [
           {
-            type: "external_search.evidence_selected",
+            type: "evidence_review.selected",
             ts: "2026-07-13T00:00:00Z",
-            taskIndex: 0,
             evidenceCount: 4,
           },
         ]),
@@ -785,8 +787,7 @@ describe("createResearchRunLiveController", () => {
       expect(
         harness.controller.getSnapshot().liveState.currentActivity,
       ).toEqual({
-        type: "external_search.evidence_selected",
-        taskIndex: 0,
+        type: "evidence_review.selected",
         evidenceCount: 4,
       });
 
@@ -821,8 +822,7 @@ describe("createResearchRunLiveController", () => {
         "1-0",
       );
       const sseActivity = {
-        type: "external_search.evidence_selected" as const,
-        taskIndex: 0,
+        type: "evidence_review.selected" as const,
         evidenceCount: 2,
       };
       harness.source.emit(
@@ -839,7 +839,7 @@ describe("createResearchRunLiveController", () => {
           null,
           [
             {
-              type: "external_search.candidates_fetched",
+              type: "evidence_collection.external_search_candidates_fetched",
               ts: "2026-07-13T00:00:00Z",
               taskIndex: 1,
               candidateCount: 4,
@@ -878,9 +878,8 @@ describe("createResearchRunLiveController", () => {
           null,
           [
             {
-              type: "external_search.evidence_selected",
+              type: "evidence_review.selected",
               ts: "2026-07-13T00:00:00Z",
-              taskIndex: 0,
               evidenceCount: 4,
             },
           ],
@@ -954,8 +953,7 @@ describe("createResearchRunLiveController", () => {
         {
           attemptEpoch: 1,
           activity: {
-            type: "external_search.evidence_selected",
-            taskIndex: 0,
+            type: "evidence_review.selected",
             evidenceCount: 2,
           },
         },
@@ -974,7 +972,7 @@ describe("createResearchRunLiveController", () => {
           null,
           [
             {
-              type: "question.resolved",
+              type: "context_resolution.question_resolved",
               ts: "2026-07-13T00:00:00Z",
               standaloneQuestion: "List activity must not cross attempts",
             },
@@ -1011,7 +1009,7 @@ describe("createResearchRunLiveController", () => {
       const pollRun = vi.fn<PollRun>().mockReturnValue(pending.promise);
       const harness = createHarness(pollRun);
       const currentActivity = {
-        type: "external_search.candidates_fetched" as const,
+        type: "evidence_collection.external_search_candidates_fetched" as const,
         taskIndex: 1,
         candidateCount: 3,
       };
@@ -1033,7 +1031,7 @@ describe("createResearchRunLiveController", () => {
           null,
           [
             {
-              type: "question.resolved",
+              type: "context_resolution.question_resolved",
               ts: "2026-07-13T00:00:00Z",
               standaloneQuestion: "stale polling activity",
             },
@@ -1089,9 +1087,8 @@ describe("createResearchRunLiveController", () => {
             errorCode: null,
             recentEvents: [
               {
-                type: "external_search.evidence_selected",
+                type: "evidence_review.selected",
                 ts: "2026-07-13T00:00:00Z",
-                taskIndex: 0,
                 evidenceCount: 4,
               },
             ],
@@ -1103,7 +1100,7 @@ describe("createResearchRunLiveController", () => {
       vi.stubGlobal("fetch", fetchMock);
       const harness = createHarness(undefined, "queued", undefined, true);
       const currentActivity = {
-        type: "internal_search.started" as const,
+        type: "evidence_collection.internal_search_started" as const,
         queryCount: 2,
       };
       harness.source.emit(
@@ -1175,7 +1172,10 @@ describe("createResearchRunLiveController", () => {
         "activity",
         {
           attemptEpoch: 2,
-          activity: { type: "internal_search.started", queryCount: 1 },
+          activity: {
+            type: "evidence_collection.internal_search_started",
+            queryCount: 1,
+          },
         },
         "2-0",
       );
