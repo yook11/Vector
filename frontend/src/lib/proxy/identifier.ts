@@ -11,7 +11,7 @@
  * 詳細は specs/client-ip-trust-mode.md。
  */
 
-import { z } from "zod";
+import { isValidIP, normalizeIP } from "@better-auth/core/utils/ip";
 
 /** proxy が解決済み IP を下流 (route handler / Better Auth) へ渡す内部ヘッダ。 */
 export const CLIENT_IP_HEADER = "x-vector-client-ip";
@@ -27,16 +27,20 @@ export function parseClientIpTrust(
 }
 
 /**
- * IP literal のみ採用する。非 IP を通すと `rl:ip:<value>` は「解決済み」として
- * 数える一方、Better Auth は自前の検証で弾いて共有バケツへ落ちるため、消費者間で
- * identity 解釈が食い違う (missing_ip も出ない観測不能な劣化)。
+ * IP literal のみ採用し、識別単位 (IPv4 はそのまま、IPv4-mapped は埋め込み IPv4、
+ * IPv6 は /64 network の full form) に正規化する。/64 丸めはアドレスローテーションに
+ * よる per-IP バケツの無限分散を防ぐ (specs/client-ip-trust-mode.md)。
+ *
+ * 検証・正規化とも Better Auth と同一実装 (isValidIP / normalizeIP) を流用し、
+ * 全 consumer (proxy rate limit / Better Auth / SSE) の identity 一致を構造的に
+ * 保証する。ipv6Subnet は auth.ts と同じく無指定 (既定 64) に揃える。
+ * 非 IP を null に倒すのは、proxy 側だけ「解決済み」扱いになると Better Auth は
+ * 自前検証で弾いて共有バケツへ落ち、missing_ip も出ない観測不能な劣化になるため。
  */
 function asClientIp(value: string | null | undefined): string | null {
   const trimmed = value?.trim();
   if (!trimmed) return null;
-  const isIpLiteral =
-    z.ipv4().safeParse(trimmed).success || z.ipv6().safeParse(trimmed).success;
-  return isIpLiteral ? trimmed : null;
+  return isValidIP(trimmed) ? normalizeIP(trimmed) : null;
 }
 
 /**

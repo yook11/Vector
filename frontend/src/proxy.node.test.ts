@@ -449,6 +449,23 @@ describe("proxy — x-vector-client-ip 内部ヘッダの上書き不変条件 (
     expect(forwardedHeader(res, "x-vector-client-ip")).toBe("203.0.113.5");
   });
 
+  it("IPv6 は /64 正規化後の値を x-vector-client-ip に設定する (識別単位の正規化)", async () => {
+    vi.stubEnv("NODE_ENV", "production");
+    vi.stubEnv("CLIENT_IP_TRUST", "fly-client-ip");
+    mockIsOpenValue = true;
+    mockEval.mockResolvedValue(1);
+    const req = mockNextRequest("http://localhost:3000/news", {
+      headers: {
+        cookie: "better-auth.session_token=AAAA", // auth-redirect を回避し forwarded headers を観測可能にする
+        "fly-client-ip": "2001:db8:aaaa:bbbb:1:2:3:4",
+      },
+    });
+    const res = await proxy(req);
+    expect(forwardedHeader(res, "x-vector-client-ip")).toBe(
+      "2001:0db8:aaaa:bbbb:0000:0000:0000:0000",
+    );
+  });
+
   it("外来 x-vector-client-ip の偽装値を解決値で上書きする (attacker preset + trust=alb-xff-last)", async () => {
     vi.stubEnv("NODE_ENV", "production");
     vi.stubEnv("CLIENT_IP_TRUST", "alb-xff-last");
