@@ -80,7 +80,48 @@ const globalForRedis = globalThis as unknown as {
   __vectorRateLimitFailOpenLastMs?: Record<string, number>;
   __vectorRateLimitMisconfigLogged?: boolean;
   __vectorClientIpTrustUnconfiguredLogged?: boolean;
+  __vectorXffChainWindow?: XffChainWindow;
 };
+
+type XffChainWindow = {
+  startedAtMs: number;
+  xffRequestCount: number;
+  multiValueXffRequestCount: number;
+};
+
+/**
+ * XFF chain の観測を蓄積し、ウィンドウごとに件数を出す。
+ *
+ * ALB が XFF の 2 本目を素通しするかは AWS 未文書で、素通しなら末尾 (= 信頼している値)
+ * が client 制御になる。多値 XFF の基底率が分かれば「多値を弾く」対処の巻き添え規模を
+ * 実測値で判断できるため、挙動は変えず件数だけ測る。値そのものは PII になりうるので載せない。
+ *
+ * 分子が 0 でも出すのが recordRateLimitSignal との意図的な差。0 件とデータ無しを
+ * 区別できないと基底率が読めない。率ではなく 2 数を出すのは、プロセス跨ぎ・ウィンドウ跨ぎの
+ * 合算をログ基盤側に残すため。proxy にタイマーは置けないので経過判定は呼び出し時に行う
+ * (無通信だとウィンドウは 60 秒より延びるが、件数対件数なので比は歪まない)。
+ */
+export function recordXffChainObservation(isMultiValue: boolean): void {
+  const now = Date.now();
+  const window: XffChainWindow = globalForRedis.__vectorXffChainWindow ?? {
+    startedAtMs: now,
+    xffRequestCount: 0,
+    multiValueXffRequestCount: 0,
+  };
+  globalForRedis.__vectorXffChainWindow = window;
+  window.xffRequestCount += 1;
+  if (isMultiValue) {
+    window.multiValueXffRequestCount += 1;
+  }
+  if (now - window.startedAtMs < ERROR_LOG_INTERVAL_MS) return;
+  logServerEvent("warn", "frontend_xff_chain_observed", {
+    xffRequestCount: window.xffRequestCount,
+    multiValueXffRequestCount: window.multiValueXffRequestCount,
+  });
+  window.startedAtMs = now;
+  window.xffRequestCount = 0;
+  window.multiValueXffRequestCount = 0;
+}
 
 /**
  * CLIENT_IP_TRUST の未宣言を記録する。env 由来で不変なのでプロセスごとに 1 回。

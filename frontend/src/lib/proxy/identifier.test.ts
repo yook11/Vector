@@ -3,6 +3,7 @@ import { z } from "zod";
 import {
   CLIENT_IP_HEADER,
   type ClientIpTrust,
+  countForwardedForValues,
   extractClientIp,
   parseClientIpTrust,
 } from "./identifier";
@@ -524,5 +525,45 @@ describe("extractClientIp — IPv6 /64 正規化の不変条件", () => {
     expect(a).toBe("192.0.2.1");
     expect(b).toBe("198.51.100.5");
     expect(a).not.toBe(b);
+  });
+});
+
+describe("countForwardedForValues", () => {
+  // XFF chain 観測 (frontend_xff_chain_observed) の分子・分母算出に使う値の個数。
+  // IP としての妥当性は問わず、chain の「形」だけを数える。
+
+  it.each([
+    [null, 0],
+    ["", 0],
+    ["   ", 0],
+    [",", 0],
+    [",,,", 0],
+  ] as const)("値が無い %j は 0 を返す", (forwardedFor, expected) => {
+    expect(countForwardedForValues(forwardedFor)).toBe(expected);
+  });
+
+  it("単一値は 1 を返す", () => {
+    expect(countForwardedForValues("203.0.113.7")).toBe(1);
+  });
+
+  it("複数値はカンマ区切りの個数を返す", () => {
+    expect(countForwardedForValues("1.1.1.1, 203.0.113.9")).toBe(2);
+  });
+
+  it("3値以上でも個数をそのまま返す (2値固定の判定と混同しない)", () => {
+    expect(countForwardedForValues("1.1.1.1, 2.2.2.2, 3.3.3.3")).toBe(3);
+  });
+
+  it.each([
+    ["1.1.1.1,", 1],
+    ["1.1.1.1,,2.2.2.2", 2],
+    [",1.1.1.1", 1],
+    ["1.1.1.1, , 2.2.2.2", 2],
+  ] as const)("空要素 %j は数えず実値のみ数える (期待値 %j)", (forwardedFor, expected) => {
+    expect(countForwardedForValues(forwardedFor)).toBe(expected);
+  });
+
+  it("IP として妥当かは問わない (観測対象は chain の形であって値の妥当性ではない)", () => {
+    expect(countForwardedForValues("garbage, 203.0.113.9")).toBe(2);
   });
 });

@@ -6,6 +6,7 @@ import {
   checkRateLimit,
   recordClientIpTrustUnconfigured,
   recordRateLimitSignal,
+  recordXffChainObservation,
 } from "@/lib/auth/rate-limit";
 import { sanitizeCallbackUrl } from "@/lib/proxy/callback-url";
 import {
@@ -15,6 +16,7 @@ import {
 } from "@/lib/proxy/csp";
 import {
   CLIENT_IP_HEADER,
+  countForwardedForValues,
   extractClientIp,
   parseClientIpTrust,
 } from "@/lib/proxy/identifier";
@@ -57,13 +59,23 @@ export async function proxy(request: NextRequest) {
   if (isProduction && trust === null) {
     recordClientIpTrustUnconfigured(rawTrust ? "invalid" : "unset");
   }
+  const forwardedFor = request.headers.get("x-forwarded-for");
   const clientIp = extractClientIp({
     trust,
     flyClientIp: request.headers.get("fly-client-ip"),
-    forwardedFor: request.headers.get("x-forwarded-for"),
+    forwardedFor,
     realIp: request.headers.get("x-real-ip"),
     isProduction,
   });
+  // ALB は append 固定で必ず 1 値以上を付けるため、XFF の有無が「ALB 経由か」と一致する。
+  // health check と service connect の内部呼び出しは XFF を持たず、分母から自然に落ちる
+  // (偽装可能な UA 判定に依存しない)。Fly は XFF 末尾がアプリ自身の IP で別構造のため測らない。
+  if (isProduction && trust === "alb-xff-last") {
+    const forwardedForValues = countForwardedForValues(forwardedFor);
+    if (forwardedForValues > 0) {
+      recordXffChainObservation(forwardedForValues >= 2);
+    }
+  }
   if (!isAgentRunSseRoute(pathname)) {
     const plan = buildRateLimitPlan({
       method: request.method,

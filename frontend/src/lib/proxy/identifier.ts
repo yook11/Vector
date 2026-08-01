@@ -44,6 +44,19 @@ function asClientIp(value: string | null | undefined): string | null {
 }
 
 /**
+ * XFF chain の値の個数を数える (空要素は除外)。値の IP 妥当性は問わない。
+ *
+ * ALB は append 固定で必ず 1 値以上を付けるため、0 は「ALB を経由していない」、
+ * 2 以上は「client 由来の値が chain に混ざっている」を意味する。後者は末尾が
+ * 攻撃者制御値になりうる経路 (ALB が XFF 2 本目を素通しする場合) の観測点で、
+ * 基底率を測るために使う。chain の解釈を extractClientIp と 1 箇所に閉じる。
+ */
+export function countForwardedForValues(forwardedFor: string | null): number {
+  if (forwardedFor === null) return 0;
+  return forwardedFor.split(",").filter((value) => value.trim() !== "").length;
+}
+
+/**
  * 信頼モードと header 値から client IP を抽出する純関数。
  *
  * - `fly-client-ip`: Fly edge が必ず上書きする値のみ信頼する。
