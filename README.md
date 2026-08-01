@@ -36,7 +36,7 @@ Vector は、最初から明確な設計思想を持って作り始めたアプ�
 その考え方の変化と、現在の設計は目的別に以下へまとめています。
 
 - 設計思想がどう変わってきたか → [docs/design-journey/](docs/design-journey/)
-- 現在のアーキテクチャと主要な設計判断 → [docs/architecture.md](docs/architecture.md)
+- アプリケーションの設計と主要な設計判断 → [docs/architecture.md](docs/architecture.md)
 - AI エージェントとの分担や検証の進め方 → [docs/how-i-build-with-ai.md](docs/how-i-build-with-ai.md)
 
 ## 解決する課題
@@ -61,52 +61,73 @@ Vector は、最初から明確な設計思想を持って作り始めたアプ�
 | フロントエンド | Next.js 16 (App Router / BFF)・React 19・TypeScript・Tailwind CSS v4・shadcn/ui |
 | 認証 | Better Auth (frontend BFF で完結) |
 | バックエンド | Python 3.13・FastAPI・Pydantic / SQLModel・Alembic |
-| 非同期処理 | taskiq (worker / scheduler)・Redis (queue / レート制限) |
-| データ | Neon PostgreSQL・pgvector (768次元ベクトル検索) |
+| 非同期処理 | taskiq (worker / scheduler)・ElastiCache Valkey (queue / レート制限) |
+| データ | Amazon RDS for PostgreSQL・pgvector (768次元ベクトル検索) |
 | AI | Gemini (翻訳・要約・構造化)・DeepSeek (重要度・投資文脈分析) |
-| 基盤・可観測性 | Fly.io (nrt)・Docker Compose・Logfire (OpenTelemetry)・GitHub Actions |
+| 基盤・可観測性 | AWS ECS Fargate (ap-northeast-1)・Terraform・Docker Compose・Logfire (OpenTelemetry)・GitHub Actions |
 
 ## Architecture
 
 Vector は、ブラウザから直接到達できる入口を Next.js BFF に寄せ、backend API と worker 群を内部側に閉じる構成です。
-本番環境では Fly.io の 5 app と Neon PostgreSQL で動作しています。
-公開リポジトリ内の `fly*.toml` は構成を説明するための placeholder 付き設定です。公開 frontend URL を除く実際の app 名、内部 URL、デプロイ手順は private な運用情報として管理しています。
+本番環境は AWS (ap-northeast-1) で動作しています。ALB を唯一の公開入口とし、frontend・API・scheduler・各 worker を ECS Fargate の service として分離、データは RDS PostgreSQL と ElastiCache Valkey に置いています。構成は Terraform (`infra/aws/`) で管理しています。
+
+以前は Fly.io と Neon PostgreSQL で運用しており、現在は停止しています。
 
 ```mermaid
 flowchart TB
     Browser([Browser])
-    News[("外部ニュース源")]
-    Neon[("Neon PostgreSQL<br/>アプリ・分析データ")]
+    Internet[("インターネット<br/>ニュースソース / 外部 AI API")]
 
-    subgraph Fly["Fly.io (nrt) / 内部通信"]
-        subgraph Edge["公開入口（Browser から到達可能）"]
-            direction LR
-            FE["frontend<br/>認証 / proxy / 公開入口"]
-            RL[("redis<br/>レート制限")]
-            FE --- RL
+    subgraph VPC["AWS ap-northeast-1 / VPC"]
+        subgraph PubIn["public subnet — 入口"]
+            ALB["ALB<br/>唯一の公開入口"]
         end
-        subgraph Internal["内部（frontend 経由のみ）"]
-            CORE["core<br/>内部API / AI分析 / cron"]
-            COLLECT["collect worker<br/>外部ニュース取得"]
-            Q[("redis · queue<br/>非同期タスクキュー")]
-            CORE --- Q
-            COLLECT --- Q
+
+        subgraph AppNet["app subnet — public IP を持たない"]
+            FE["frontend<br/>Next.js BFF / 認証"]
+            API["api<br/>FastAPI"]
+            WORKER["worker / scheduler<br/>収集・AI分析・派生処理"]
+        end
+
+        subgraph DataNet["data subnet"]
+            RDS[("RDS PostgreSQL<br/>pgvector")]
+            VK[("ElastiCache Valkey<br/>キュー / レート制限")]
+        end
+
+        subgraph ProxyNet["proxy subnet"]
+            PROXY["egress proxy<br/>許可した宛先だけ通す"]
+        end
+
+        subgraph PubOut["public subnet — 出口"]
+            NAT["NAT Gateway"]
         end
     end
 
-    Browser -->|HTTPS| FE
-    FE -->|内部API 呼び出し| CORE
-    CORE --> Neon
-    COLLECT -->|記事取得| News
+    Browser ==>|HTTPS| ALB
+    ALB ==>|内部へ転送| FE
+    FE -->|内部 API 呼び出し| API
+    FE ~~~ WORKER
+    API --> RDS
+    API --> VK
+    WORKER --> RDS
+    WORKER --> VK
+    WORKER ==>|外向き通信| PROXY
+    PROXY ==>|許可した宛先だけ| NAT
+    NAT ==>|固定 IP で送信| Internet
+
+    linkStyle 0,1 stroke:#10b981,stroke-width:3px
+    linkStyle 8,9,10 stroke:#f59e0b,stroke-width:3px
 
     classDef edge fill:#ecfdf5,stroke:#10b981,color:#111827;
     classDef internal fill:#eef2ff,stroke:#6366f1,color:#111827;
-    class FE,RL edge
-    class CORE,Q,COLLECT internal
+    classDef data fill:#fef3c7,stroke:#f59e0b,color:#111827;
+    class ALB,NAT edge
+    class FE,API,WORKER,PROXY internal
+    class RDS,VK data
 ```
 
 公開入口、内部 API、外部 HTML 取得 worker、DB 権限を分けることで、外部入力を扱う処理の影響範囲を小さくしています。
-詳しい app 分割、DB / Redis / secret の境界、非同期パイプライン、設計判断の背景は [docs/architecture.md](docs/architecture.md) にまとめています。
+この分割の背景と、非同期パイプライン・セキュリティ境界の設計判断は [docs/architecture.md](docs/architecture.md) にまとめています（インフラ構成の記述は Fly.io 運用時のものです）。
 
 
 ## ニュース処理パイプライン
@@ -132,7 +153,7 @@ docker compose up -d --build
 
 ## Docs
 
-- [docs/architecture.md](docs/architecture.md): 本番構成、非同期パイプライン、セキュリティ境界、設計判断
+- [docs/architecture.md](docs/architecture.md): アプリケーション設計、非同期パイプライン、セキュリティ境界、設計判断（インフラ構成は Fly.io 運用時の記述）
 - [docs/design-journey/](docs/design-journey/): 設計に対する考え方が変わっていった記録
 - [docs/how-i-build-with-ai.md](docs/how-i-build-with-ai.md): AI エージェントとの開発プロセス
 
