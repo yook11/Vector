@@ -19,6 +19,7 @@ from opentelemetry.semconv.attributes.error_attributes import ERROR_TYPE
 from opentelemetry.trace import SpanKind, StatusCode
 
 from app.agent.agent import Agent
+from app.agent.error_type import span_error_type
 from app.agent.runtime._structured_output import (
     parse_json_object,
     thaw_schema,
@@ -105,7 +106,7 @@ class DeepSeekAgentRuntime:
                 _record_classified_error(
                     span,
                     result="provider_error",
-                    error_type=_provider_error_type(translated_error),
+                    error_type=span_error_type(translated_error),
                 )
             else:
                 _record_usage(span, getattr(response, "usage", None))
@@ -120,7 +121,7 @@ class DeepSeekAgentRuntime:
                     _record_classified_error(
                         span,
                         result="invalid_response",
-                        error_type=exc.defect.value,
+                        error_type=span_error_type(exc),
                     )
                 else:
                     span.set_attribute("result", "succeeded")
@@ -244,10 +245,3 @@ def _record_classified_error(
     span.set_attribute("result", result)
     span.set_attribute(ERROR_TYPE, error_type)
     span.set_status(StatusCode.ERROR)
-
-
-def _provider_error_type(error: Exception) -> str:
-    code = getattr(error, "CODE", None)
-    if isinstance(code, str):
-        return code
-    return type(error).__name__
