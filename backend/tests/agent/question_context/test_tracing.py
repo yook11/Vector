@@ -101,7 +101,7 @@ async def test_success_keeps_phase_and_attempt_in_the_answering_trace(
     assert phase["parent"]["span_id"] == run["context"]["span_id"]
     assert provider["context"]["trace_id"] == run["context"]["trace_id"]
     assert domain_attr_keys(phase["attributes"]) == {"phase", "agent_name"}
-    assert phase["attributes"]["phase"] == "question_context"
+    assert phase["attributes"]["phase"] == "context_resolution"
     assert phase["attributes"]["agent_name"] == QUESTION_CONTEXT_AGENT.name
     assert provider["attributes"]["attempt_number"] == 1
     assert provider["attributes"]["result"] == "succeeded"

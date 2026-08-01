@@ -91,7 +91,7 @@ async def test_success_records_one_production_provider_attempt_without_phase_usa
     assert plan.plan_type == "search"
     assert client.models.generate_content.await_count == 1
     assert domain_attr_keys(phase["attributes"]) == {"phase", "agent_name"}
-    assert phase["attributes"]["phase"] == "question_planning"
+    assert phase["attributes"]["phase"] == "planning"
     assert phase["attributes"]["agent_name"] == QUESTION_PLANNER_AGENT.name
     assert provider["attributes"]["attempt_number"] == 1
     assert provider["attributes"]["result"] == "succeeded"

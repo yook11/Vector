@@ -103,6 +103,11 @@ async def test_phase_owns_detached_streaming_attempt_without_model_text(
     assert len(attempt_spans) == 1
     phase = phase_spans[0]
     attempt = attempt_spans[0]
+    phase_attributes = dict(phase.attributes or {})
+    # evidence answerと同じphase="answering"を共有し、agent_nameだけで経路を区別する
+    # (specs/agent-phase-span-vocabulary-slice.md Test contract)。
+    assert phase_attributes["phase"] == "answering"
+    assert phase_attributes["agent_name"] == "direct_answer"
     provider_request = client.models.generate_content_stream.await_args.kwargs
     provider_config = provider_request["config"]
     assert attempt.parent is not None

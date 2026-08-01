@@ -2,14 +2,8 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterator
-from contextlib import contextmanager
-from typing import Any
-
-import logfire
-from opentelemetry.trace import StatusCode
-
 from app.agent.agent import Agent
+from app.agent.phase_span import agent_phase
 from app.agent.planning.contract import (
     PlanningAttemptInput,
     PlanningRequest,
@@ -37,7 +31,6 @@ _PLANNER_CLASSIFIED_ERRORS = (
     AgentResponseInvalidError,
 )
 _MAX_ATTEMPTS = 2
-_PHASE_SPAN_NAME = "agent_phase"
 
 
 class QuestionPlanningService:
@@ -66,7 +59,7 @@ class QuestionPlanningService:
         terminal_failure_code: str | None = None
         retry_used = False
 
-        with _planning_phase(self._agent.name):
+        with agent_phase(phase="planning", agent_name=self._agent.name):
             try:
                 async with self._runtime_scope_factory() as runtime:
                     for attempt_number in range(1, _MAX_ATTEMPTS + 1):
@@ -115,25 +108,3 @@ class QuestionPlanningService:
                 return completed_plan
 
             raise AssertionError("unreachable: planning loop must return or raise")
-
-
-@contextmanager
-def _planning_phase(agent_name: str) -> Iterator[None]:
-    """Planner policy spanへ分類不能な終了だけをerrorとして残す。"""
-    with logfire.span(
-        _PHASE_SPAN_NAME,
-        phase="question_planning",
-        agent_name=agent_name,
-    ) as span:
-        try:
-            yield
-        except _PLANNER_CLASSIFIED_ERRORS:
-            raise
-        except BaseException:
-            _record_unclassified_phase_error(span)
-            raise
-
-
-def _record_unclassified_phase_error(span: Any) -> None:
-    """LogfireSpanはOTel委譲(__getattr__)を型から隠すためAnyで受ける。"""
-    span.set_status(StatusCode.ERROR, "unclassified agent phase error")

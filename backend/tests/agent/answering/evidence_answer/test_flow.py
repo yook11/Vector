@@ -354,7 +354,7 @@ async def test_valid_answer_with_marker_returns_draft_without_retry(
     ]
     phase = one_span_named(capfire, _PHASE_SPAN_NAME)
     assert domain_attr_keys(phase["attributes"]) == {"phase", "agent_name"}
-    assert phase["attributes"]["phase"] == "evidence_answer"
+    assert phase["attributes"]["phase"] == "answering"
     assert phase["attributes"]["agent_name"] == "evidence_answer"
     assert exception_event(phase) is None
 
