@@ -34,6 +34,7 @@ import {
   checkRateLimit,
   parseLimit,
   recordRateLimitSignal,
+  recordXffChainObservation,
 } from "./rate-limit";
 
 const g = globalThis as unknown as {
@@ -42,6 +43,7 @@ const g = globalThis as unknown as {
   __vectorRateLimitSignalLastMs?: Record<string, number>;
   __vectorRateLimitFailOpenLastMs?: Record<string, number>;
   __vectorRateLimitMisconfigLogged?: boolean;
+  __vectorXffChainWindow?: unknown;
 };
 
 let warnSpy: MockInstance<typeof console.warn>;
@@ -73,6 +75,7 @@ beforeEach(() => {
   delete g.__vectorRateLimitSignalLastMs;
   delete g.__vectorRateLimitFailOpenLastMs;
   delete g.__vectorRateLimitMisconfigLogged;
+  delete g.__vectorXffChainWindow;
   mockEval.mockReset();
   mockConnect.mockReset();
   mockOn.mockReset();
@@ -485,5 +488,81 @@ describe("recordRateLimitSignal — per-signal throttle", () => {
     recordRateLimitSignal("unknown_write");
     // 種別が独立なので両方 emit される
     expect(warnSpy).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe("recordXffChainObservation — ウィンドウ集計と throttle", () => {
+  it("interval (60000ms) 未満の経過ではまだ出さない (蓄積のみ)", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-01-01T00:00:00.000Z"));
+    recordXffChainObservation(false);
+    vi.setSystemTime(new Date("2026-01-01T00:00:59.999Z"));
+    recordXffChainObservation(true);
+    expect(warnPayloads("frontend_xff_chain_observed")).toHaveLength(0);
+  });
+
+  it("interval 経過後の呼び出しで、蓄積した2数を1行にまとめて出す", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-01-01T00:00:00.000Z"));
+    recordXffChainObservation(false); // single
+    recordXffChainObservation(true); // multi
+    recordXffChainObservation(true); // multi
+    vi.setSystemTime(new Date("2026-01-01T00:01:00.000Z")); // ちょうど60000ms経過
+    recordXffChainObservation(false); // このウィンドウの4件目、かつ flush の契機
+
+    expect(warnPayload("frontend_xff_chain_observed")).toStrictEqual({
+      event: "frontend_xff_chain_observed",
+      level: "warn",
+      xffRequestCount: 4,
+      multiValueXffRequestCount: 2,
+    });
+  });
+
+  it("multiValueXffRequestCount が0でも省略せず出す (0件とデータ無しを区別する、recordRateLimitSignal との意図的な差)", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-01-01T00:00:00.000Z"));
+    recordXffChainObservation(false);
+    recordXffChainObservation(false);
+    vi.setSystemTime(new Date("2026-01-01T00:01:00.000Z"));
+    recordXffChainObservation(false);
+
+    const payload = warnPayload("frontend_xff_chain_observed");
+    expect(payload.xffRequestCount).toBe(3);
+    expect(payload.multiValueXffRequestCount).toBe(0);
+  });
+
+  it("emit 後はカウンタが0にリセットされ、直後の呼び出しでは再度出さない", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-01-01T00:00:00.000Z"));
+    recordXffChainObservation(true);
+    vi.setSystemTime(new Date("2026-01-01T00:01:00.000Z"));
+    recordXffChainObservation(true); // 1回目の flush
+    expect(warnPayloads("frontend_xff_chain_observed")).toHaveLength(1);
+
+    recordXffChainObservation(true); // reset 直後、同時刻の呼び出し
+    expect(warnPayloads("frontend_xff_chain_observed")).toHaveLength(1);
+  });
+
+  it("複数回のウィンドウ境界をまたいでも、毎回リセットされた値だけを集計する", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-01-01T00:00:00.000Z"));
+    recordXffChainObservation(true);
+
+    vi.setSystemTime(new Date("2026-01-01T00:01:00.000Z"));
+    recordXffChainObservation(false); // 1回目の flush (window1: true+false)
+
+    vi.setSystemTime(new Date("2026-01-01T00:02:00.000Z"));
+    recordXffChainObservation(true); // 2回目の flush (window2: true のみ)
+
+    const payloads = warnPayloads("frontend_xff_chain_observed");
+    expect(payloads).toHaveLength(2);
+    expect(payloads[0]).toMatchObject({
+      xffRequestCount: 2,
+      multiValueXffRequestCount: 1,
+    });
+    expect(payloads[1]).toMatchObject({
+      xffRequestCount: 1,
+      multiValueXffRequestCount: 1,
+    });
   });
 });

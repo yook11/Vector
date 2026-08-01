@@ -37,6 +37,10 @@ production の client IP 解決は `Fly-Client-IP` ヘッダだけを信頼す�
   `Headers.get()` はカンマ結合するため末尾が client 制御値になりうる。緩和として
   解決値に IP 構文検証を課す (下記) が、完全な緩和ではない。本番で実測して
   この節を更新すること。
+  2026-08-01 追記: AWS docs が扱う XFF の入力は「無し / 単一値 1 本 / 複数値 1 本」の
+  3 通りのみで、複数ヘッダ行のケースは記載が無いことを確認した。コミュニティの実測報告も
+  見つからない。未文書である以上、実測が緑でも `xff_header_processing_mode` のようには
+  pin できず、AWS 側の無告知変更を排除できない。観測は下記の計測器で継続する。
 - 同 docs: `xff_client_port.enabled` を有効化すると追記値が `ip:port` 形式になる。
   現状は無効 (既定) で、有効化しても構文検証により fail-closed 側に倒れる。
 
@@ -101,6 +105,37 @@ defense-in-depth であり、仮に version split が起きても不動点性に
 正規化は解決時 (identifier) に行い、内部ヘッダにも正規化後の値を流す。全 consumer
 (proxy rate limit / Better Auth / SSE) の識別単位を 1 箇所で揃えるため。帰結として
 Better Auth の session.ipAddress 記録も /64 粒度になる (追跡は契約単位で成立する)。
+
+### 多値 XFF の観測
+
+対処の要否を判断する材料が無いため、挙動は変えずに基底率だけ測る。
+
+- 分母 `xffRequestCount`: XFF が存在する request。ALB は append 固定で必ず 1 値以上を
+  付けるため、XFF の有無が「ALB 経由か」と一致する。health check (XFF 無しの GET) と
+  service connect の内部呼び出しは分母から自然に落ちる。偽装可能な UA 判定はこの除外に
+  使わない。
+- 分子 `multiValueXffRequestCount`: そのうち XFF が 2 値以上だった request。
+- production かつ `CLIENT_IP_TRUST=alb-xff-last` のときだけ数える。Fly は XFF 末尾が
+  アプリ自身の IP で構造が違うため混ぜない。
+- `frontend_xff_chain_observed` として 60 秒ウィンドウごとに 2 数を出す。分子 0 でも出す
+  (0 件とデータ無しを区別できないと基底率が読めない)。率ではなく件数を出すのは、プロセス
+  跨ぎ・ウィンドウ跨ぎの合算をログ基盤側に残すため。XFF の値そのものは載せない。
+
+名前は観測した事実に付ける。「client 由来の値」と名付けると、「ALB は append で前段に
+proxy がいない」という、いま検証しようとしている前提そのものを名前に埋め込むことになる。
+
+実測は XFF を 2 本付けた request を本番へ投げ、`multiValueXffRequestCount` の増分で判定する。
+
+#### 対処の方向
+
+素通しが確認された場合、多値 XFF は **400 で弾く**。IP 未解決へ倒す (fail-closed) は採らない。
+IP 未解決の request は Better Auth では `NO_TRUSTED_IP_KEY` のパス単位共有バケツへ、proxy では
+`rl:uwrite:global` へ落ちる。攻撃者が XFF を 2 本付けて意図的に未解決になれば、sign-in の
+共有バケツ (60 秒 5 回) を枯らして全利用者のログインを止められる。現行の末尾採用では
+攻撃者の IP が必ず解決されるので共有バケツには到達できない。fail-closed はこの可用性
+レバーを新設してしまう。
+
+素通しが確認されなかった場合は末尾採用を維持し、計測器は drift 検知として残す。
 
 ### 内部ヘッダ `x-vector-client-ip`
 
