@@ -17,6 +17,7 @@ from app.agent.input_safety.contract import (
     InputSafetyResult,
 )
 from app.agent.input_safety.metrics import record_input_safety_outcome
+from app.agent.phase_span import agent_phase
 from app.agent.runtime.contract import (
     AgentResponseInvalidError,
     AgentRuntimeScopeFactory,
@@ -47,44 +48,45 @@ class InputSafetyService:
         previous_turn: InputSafetyPreviousTurn | None,
         run_id: UUID,
     ) -> InputSafetyCheckResult:
-        try:
-            async with self._runtime_scope_factory() as runtime:
-                output = await runtime.invoke(
-                    self._agent,
-                    InputSafetyAgentInput(
-                        question=question,
-                        previous_turn=previous_turn,
-                    ),
-                    attempt_number=1,
-                )
-        except Exception as error:
-            provider_block = _provider_safety_block(error)
-            if provider_block is None:
-                _record_failure(
-                    error=error,
-                    run_id=run_id,
-                    agent=self._agent,
-                )
-                raise
-            result = provider_block
-        else:
-            result = _check_result_from_agent_output(output)
+        with agent_phase(phase="safety_check", agent_name=self._agent.name):
+            try:
+                async with self._runtime_scope_factory() as runtime:
+                    output = await runtime.invoke(
+                        self._agent,
+                        InputSafetyAgentInput(
+                            question=question,
+                            previous_turn=previous_turn,
+                        ),
+                        attempt_number=1,
+                    )
+            except Exception as error:
+                provider_block = _provider_safety_block(error)
+                if provider_block is None:
+                    _record_failure(
+                        error=error,
+                        run_id=run_id,
+                        agent=self._agent,
+                    )
+                    raise
+                result = provider_block
+            else:
+                result = _check_result_from_agent_output(output)
 
-        record_input_safety_outcome(
-            result=("block" if result.is_blocked else "allow"),
-            block_reason=result.block_reason,
-        )
-        if result.is_blocked:
-            assert result.block_reason is not None  # noqa: S101
-            logger.info(
-                "agent_input_safety_blocked",
-                run_id=str(run_id),
-                block_reason=result.block_reason.value,
-                ai_model=self._agent.model.name,
-                prompt_version=self._agent.prompt.version,
-                input_length=len(question),
+            record_input_safety_outcome(
+                result=("block" if result.is_blocked else "allow"),
+                block_reason=result.block_reason,
             )
-        return result
+            if result.is_blocked:
+                assert result.block_reason is not None  # noqa: S101
+                logger.info(
+                    "agent_input_safety_blocked",
+                    run_id=str(run_id),
+                    block_reason=result.block_reason.value,
+                    ai_model=self._agent.model.name,
+                    prompt_version=self._agent.prompt.version,
+                    input_length=len(question),
+                )
+            return result
 
 
 def _check_result_from_agent_output(

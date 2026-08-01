@@ -304,19 +304,41 @@ async def test_external_phase_spans_keep_attributes_parentage_and_no_sensitive_t
 
     phases = spans_named(capfire, _PHASE_SPAN_NAME)
     providers = spans_named(capfire, _PROVIDER_SPAN_NAME)
-    phase_by_agent = {phase["attributes"]["agent_name"]: phase for phase in phases}
+    # phase spanはAgent所有2本(external_query / evidence_reviewer、agent_name属性あり)
+    # + 機構所有1本(内部検索、agent_nameを持たない)。内部検索spanの属性契約自体の
+    # 正本は tests/agent/evidence_collection/test_researcher_tracing.py が持つため、
+    # ここでは「同じevidence_collection系統のspanとしてtrace上に並ぶ」ことだけを見る。
+    agent_phases = [
+        phase
+        for phase in phases
+        if "agent_name" in domain_attr_keys(phase["attributes"])
+    ]
+    internal_search_phases = [
+        phase
+        for phase in phases
+        if "agent_name" not in domain_attr_keys(phase["attributes"])
+    ]
+    phase_by_agent = {
+        phase["attributes"]["agent_name"]: phase for phase in agent_phases
+    }
     trace_dump = json.dumps(
         capfire.exporter.exported_spans_as_dict(), ensure_ascii=False, default=str
     )
     assert query_client.chat.completions.create.await_count == 1
     assert reviewer_client.chat.completions.create.await_count == 2
     assert [input.query for input in tool.inputs] == [_QUERY_OUTPUT_SENTINEL]
-    assert len(phases) == 2
+    assert len(phases) == 3
     assert len(providers) == 3
     assert set(phase_by_agent) == {
         EXTERNAL_QUERY_AGENT.name,
         EVIDENCE_REVIEWER_AGENT.name,
     }
+    assert len(internal_search_phases) == 1
+    assert domain_attr_keys(internal_search_phases[0]["attributes"]) == {
+        "phase",
+        "task_index",
+    }
+    assert internal_search_phases[0]["attributes"]["phase"] == "evidence_collection"
     # S1: evidence_review のphase spanはRun全体を覆うため task_index を持たない
     # (仕様「観測と失敗分類」)。task単位のexternal_query phaseは維持する。
     assert domain_attr_keys(
@@ -326,6 +348,16 @@ async def test_external_phase_spans_keep_attributes_parentage_and_no_sensitive_t
     assert domain_attr_keys(
         phase_by_agent[EVIDENCE_REVIEWER_AGENT.name]["attributes"]
     ) == {"phase", "agent_name"}
+    # 外部クエリ生成とevidence reviewは同じevidence_collection/evidence_review系統内で
+    # 工程名が別れる (specs/agent-phase-span-vocabulary-slice.md 工程とspanの対応)。
+    assert (
+        phase_by_agent[EXTERNAL_QUERY_AGENT.name]["attributes"]["phase"]
+        == "evidence_collection"
+    )
+    assert (
+        phase_by_agent[EVIDENCE_REVIEWER_AGENT.name]["attributes"]["phase"]
+        == "evidence_review"
+    )
     assert all("task_index" not in provider["attributes"] for provider in providers)
     assert [provider["attributes"]["attempt_number"] for provider in providers] == [
         1,
@@ -380,23 +412,44 @@ async def test_unclassified_query_error_is_redacted_and_only_error_phase(
 
     phases = spans_named(capfire, _PHASE_SPAN_NAME)
     providers = spans_named(capfire, _PROVIDER_SPAN_NAME)
-    raw_spans = [
-        span
+    # 内部検索は外部クエリ生成と並行実行され、外部クエリの未分類エラーとは無関係に
+    # 成功で完走する(Researcher._gather_two_branchesが両枝をsettleさせてから
+    # 例外を再送出するため)。「エラーになるphaseはひとつだけ」の意図を保つため、
+    # phaseをexception eventの有無で分けて検証する。
+    error_phases = [phase for phase in phases if exception_event(phase) is not None]
+    healthy_phases = [phase for phase in phases if exception_event(phase) is None]
+    raw_spans_by_id = {
+        span.context.span_id: span
         for span in capfire.exporter.exported_spans
         if span.name in {_PHASE_SPAN_NAME, _PROVIDER_SPAN_NAME}
         and (span.attributes or {}).get("logfire.span_type") == "span"
-    ]
+    }
     trace_dump = json.dumps(
         capfire.exporter.exported_spans_as_dict(), ensure_ascii=False, default=str
     )
     assert raised.value is error
-    assert len(phases) == 1
+    assert len(phases) == 2
     assert len(providers) == 1
-    assert providers[0]["parent"]["span_id"] == phases[0]["context"]["span_id"]
+    assert len(error_phases) == 1
+    assert len(healthy_phases) == 1
+    assert "agent_name" not in domain_attr_keys(healthy_phases[0]["attributes"])
+    assert providers[0]["parent"]["span_id"] == error_phases[0]["context"]["span_id"]
     assert reviewer_client.chat.completions.create.await_count == 0
-    assert all(exception_event(span) is not None for span in [*phases, *providers])
-    assert all(span.status.status_code is StatusCode.ERROR for span in raw_spans)
-    assert all(span.status.description == "[redacted]" for span in raw_spans)
+    error_raw_spans = [
+        raw_spans_by_id[phase["context"]["span_id"]] for phase in error_phases
+    ] + [raw_spans_by_id[provider["context"]["span_id"]] for provider in providers]
+    healthy_raw_spans = [
+        raw_spans_by_id[phase["context"]["span_id"]] for phase in healthy_phases
+    ]
+    assert all(
+        exception_event(span) is not None for span in [*error_phases, *providers]
+    )
+    assert all(exception_event(span) is None for span in healthy_phases)
+    assert all(span.status.status_code is StatusCode.ERROR for span in error_raw_spans)
+    assert all(span.status.description == "[redacted]" for span in error_raw_spans)
+    assert all(
+        span.status.status_code is StatusCode.UNSET for span in healthy_raw_spans
+    )
     assert error_sentinel not in trace_dump
 
 
