@@ -129,6 +129,10 @@ flowchart TB
 公開入口、内部 API、外部 HTML 取得 worker、DB 権限を分けることで、外部入力を扱う処理の影響範囲を小さくしています。
 この分割の背景と、非同期パイプライン・セキュリティ境界の設計判断は [docs/architecture.md](docs/architecture.md) にまとめています（インフラ構成の記述は Fly.io 運用時のものです）。
 
+AWS の各サービスをどういう基準で選び、どんなトレードオフを受け入れたのかは、Zenn の記事にまとめています。
+
+[個人開発サービスを Fly.io + Neon から AWS に移行した — 選定の理由とトレードオフ](https://zenn.dev/yook/articles/aws-migration-from-flyio-neon-tradeoffs)
+
 
 ## ニュース処理パイプライン
 
