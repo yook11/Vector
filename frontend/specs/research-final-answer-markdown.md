@@ -82,7 +82,9 @@ Markdown 構文（見出し・リスト・強調・コードなど）が生文�
 1. `[[N]]` マーカー規則を維持する。sources に一致する ref はバッジ化、未対応マーカーは本文から
    除去、出現順序を保持する。この規則は Markdown ブロック構造（段落・リスト項目・テーブル
    セル・見出し）の内側でも成立する。link の内側だけは例外で、バッジ化せず除去する
-   （引用マーカー契約を参照）。
+   （引用マーカー契約を参照）。受理構文はその後
+   `backend/specs/agent-citation-marker-grouped-refs-slice.md` でグループ形
+   `[[1], [5]]` へ加算的に拡張され、1 つのグループは ref の数だけバッジへ展開する。
 2. `SourcePreviewBadge` の hover / click プレビュー、外部リンク（`target="_blank"`
    `rel="noreferrer"`）、内部記事リンク、削除済み記事の非リンク表示を変更しない。
 3. raw HTML を描画しない。`rehype-raw` を導入せず、HTML 断片はエスケープされたテキストとして
@@ -146,7 +148,9 @@ Markdown 描画は `ResearchAnswerSlot` の確定回答分岐（`finalAnswer.con
 - remark プラグイン（`mdast-util-find-and-replace`）で text ノードの `[[N]]` を検出する。
   sources と一致する ref は `hName` / `hProperties`（data 属性に ref を保持）を付けたノードへ
   置換し、`components` mapping で `SourcePreviewBadge` に差し替える。一致しない ref は
-  ノードごと除去する（既存挙動の維持）。
+  ノードごと除去する（既存挙動の維持）。グループ形 `[[1], [5]]` は 1 マッチから複数ノードの
+  配列を返して展開し、区切り文字は本文に残さない
+  （`backend/specs/agent-citation-marker-grouped-refs-slice.md`）。
 - link / linkReference の内側ではバッジ化しない。`SourcePreviewBadge` は button であり、`<a>`
   の内側に置くと interactive 要素のネスト（HTML 仕様違反）になるためである。
   `mdast-util-find-and-replace` の `ignore` は「スキャン自体のスキップ」であり除去を実現でき

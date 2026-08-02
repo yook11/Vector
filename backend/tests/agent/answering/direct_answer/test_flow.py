@@ -303,6 +303,38 @@ async def test_direct_answer_removes_inline_citation_markers_after_generation() 
     assert generator.calls[0]["previous_answer"] == "根拠付き前回答 [[1]]"
 
 
+# --- グループ形 marker 受理 (spec: agent-citation-marker-grouped-refs-slice.md) ---
+# direct answerの除去経路も正準形と同様にグループ形を除去対象とする。
+
+
+@pytest.mark.asyncio
+async def test_direct_answer_removes_group_form_citation_markers_after_generation() -> (
+    None
+):
+    """グループ形 [[1], [2]] も正準形と同様に本文から除去される。"""
+    generator = FakeDirectAnswerGenerator(
+        ["結論は維持します。[[1], [2]] 詳細は省略します。"]
+    )
+
+    draft = await _answer(generator)
+
+    assert draft.answer == "結論は維持します。 詳細は省略します。"
+
+
+@pytest.mark.asyncio
+async def test_group_form_marker_only_generation_retries_then_raises_invalid() -> None:
+    """本文がグループ形markerだけで構成されると除去後は空扱いとなり、
+    通常の空回答と同じretry -> invalid経路をたどってDirectAnswerInvalidErrorになる。"""
+    generator = FakeDirectAnswerGenerator(["[[1], [2]]", "[[1], [3]]"])
+    reporter = RecordingDeltaReporter()
+
+    with pytest.raises(DirectAnswerInvalidError):
+        await _answer(generator, delta_reporter=reporter)
+
+    assert len(generator.calls) == 2
+    assert reporter.aborted == [1, 2]
+
+
 @pytest.mark.asyncio
 async def test_blank_then_valid_retries_once_with_previous_error(
     capfire: CaptureLogfire,

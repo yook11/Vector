@@ -8,6 +8,14 @@ from typing import Protocol, cast
 
 import pytest
 
+from tests.agent.citation_marker_corpus import (
+    BACKEND_ONLY_CASES,
+    CITATION_MARKER_CASES,
+    CitationMarkerCase,
+)
+
+_ALL_CORPUS_CASES = CITATION_MARKER_CASES + BACKEND_ONLY_CASES
+
 
 class _VisibleTextFilter(Protocol):
     def append(self, text: str) -> str: ...
@@ -196,3 +204,71 @@ def test_shared_visible_filter_matches_direct_contract_across_chunk_splits() -> 
 
     assert _shared_visible_text(list(raw)) == "本文"
     assert _shared_visible_text(["前[[", "22]]中[[x]]後 \n"]) == "前中[[x]]後"
+
+
+@pytest.mark.parametrize(
+    "case",
+    _ALL_CORPUS_CASES,
+    ids=[case.label for case in _ALL_CORPUS_CASES],
+)
+def test_shared_filter_visible_text_matches_corpus_for_bulk_input(
+    case: CitationMarkerCase,
+) -> None:
+    assert _shared_visible_text([case.text]) == case.stripped
+
+
+@pytest.mark.parametrize(
+    "case",
+    _ALL_CORPUS_CASES,
+    ids=[case.label for case in _ALL_CORPUS_CASES],
+)
+def test_shared_filter_visible_text_matches_corpus_char_by_char(
+    case: CitationMarkerCase,
+) -> None:
+    assert _shared_visible_text(list(case.text)) == case.stripped
+
+
+@pytest.mark.parametrize(
+    "case",
+    _ALL_CORPUS_CASES,
+    ids=[case.label for case in _ALL_CORPUS_CASES],
+)
+def test_shared_filter_visible_text_matches_corpus_across_two_chunk_splits(
+    case: CitationMarkerCase,
+) -> None:
+    for chunks in _all_two_chunk_splits(case.text):
+        assert _shared_visible_text(chunks) == case.stripped, chunks
+
+
+def test_shared_filter_removes_group_marker_across_every_chunk_partition() -> None:
+    case = next(c for c in CITATION_MARKER_CASES if c.label == "group")
+
+    for chunks in _all_chunk_partitions(case.text):
+        assert _shared_visible_text(chunks) == case.stripped, chunks
+
+
+@pytest.mark.parametrize(
+    ("chunks", "expected"),
+    [
+        (["前[[1],"], "前[[1],"),
+        (["前[[1], "], "前[[1],"),
+    ],
+)
+def test_shared_filter_finish_emits_unterminated_group_candidate_as_literal(
+    chunks: list[str],
+    expected: str,
+) -> None:
+    assert _shared_visible_text(chunks) == expected
+
+
+@pytest.mark.parametrize(
+    "label",
+    ["failed-group-overlapping-single", "failed-group-overlapping-group"],
+)
+def test_shared_filter_recovers_overlapping_marker_after_failed_group(
+    label: str,
+) -> None:
+    case = next(c for c in CITATION_MARKER_CASES if c.label == label)
+
+    for chunks in _all_chunk_partitions(case.text):
+        assert _shared_visible_text(chunks) == case.stripped, chunks

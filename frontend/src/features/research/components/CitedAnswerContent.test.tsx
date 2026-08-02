@@ -509,3 +509,19 @@ describe("CitedAnswerContent — heading level and footnote namespace contract",
     }
   });
 });
+
+describe("CitedAnswerContent — grouped citation marker contract (backend/specs/agent-citation-marker-grouped-refs-slice.md §7)", () => {
+  it("renders a grouped marker as badges in order with no separator characters left between them", () => {
+    const { container } = render(
+      <CitedAnswerContent
+        content="先頭[[1], [2]]末尾"
+        sources={[externalSource, internalSource]}
+      />,
+    );
+
+    expect(badgeAriaLabels()).toEqual(["出典 1", "出典 2"]);
+    expect(container.textContent).not.toMatch(/[,[\]]/);
+    expect(container.textContent).toContain("先頭");
+    expect(container.textContent).toContain("末尾");
+  });
+});

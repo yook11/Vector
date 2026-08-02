@@ -122,7 +122,7 @@ def test_agent_declares_plain_text_role_with_wider_output_budget() -> None:
         "gemini-3.1-flash-lite",
         0.2,
         8192,
-        "v6",
+        "v7",
         EvidenceAnswerDraft,
         None,
     )

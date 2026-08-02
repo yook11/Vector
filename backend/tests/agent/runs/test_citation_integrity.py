@@ -46,3 +46,39 @@ def test_assess_citation_integrity_reports_sources_without_markers() -> None:
     assert report.has_mismatch
     assert report.marker_without_source_refs == ()
     assert report.source_without_marker_refs == ("1",)
+
+
+# --- グループ形 marker 受理 (spec: agent-citation-marker-grouped-refs-slice.md) ---
+# validation.py だけがグループ形を認識しcitation_integrity.pyが認識しないと、
+# cited_refsに載ったrefがsource_without_marker_refsとして偽warningを出し続ける
+# (Invariants)。
+
+
+def test_assess_citation_integrity_accepts_group_marker_matching_all_source_refs() -> (
+    None
+):
+    """グループ形 [[1], [2]] は正準形と同じref集合として扱われ、
+    偽warning (source_without_marker_refs) を出さない(回帰テスト)。"""
+    report = assess_citation_integrity(
+        answer="複数の根拠を示します。[[1], [2]]",
+        source_refs=["1", "2"],
+    )
+
+    assert not report.has_mismatch
+    assert report.marker_without_source_refs == ()
+    assert report.source_without_marker_refs == ()
+
+
+def test_assess_citation_integrity_reports_group_marker_ref_missing_from_sources() -> (
+    None
+):
+    """グループ形のrefのうちsource_refsに無いものがmarker_without_source_refsに
+    出る。"""
+    report = assess_citation_integrity(
+        answer="[[1], [2]] を引用します。",
+        source_refs=["1"],
+    )
+
+    assert report.has_mismatch
+    assert report.marker_without_source_refs == ("2",)
+    assert report.source_without_marker_refs == ()
