@@ -82,8 +82,15 @@ def _build_answering_phases(
     from app.agent.evidence_collection.internal_search.ai.gemini import (
         GeminiQueryEmbedder,
     )
+    from app.agent.evidence_collection.internal_search.ai.gemini_spec import (
+        GEMINI_QUERY_EMBEDDING_SPEC,
+        embedder_identity_of,
+    )
     from app.agent.evidence_collection.internal_search.article_search import (
         PgVectorArticleSearchRepository,
+    )
+    from app.agent.evidence_collection.internal_search.query_embedding_cache import (
+        TransactionalQueryEmbeddingCache,
     )
     from app.agent.evidence_collection.internal_search.tool import (
         PgVectorInternalSearchTool,
@@ -94,6 +101,10 @@ def _build_answering_phases(
     internal_search = PgVectorInternalSearchTool(
         embedder=GeminiQueryEmbedder(),
         article_search_repository=PgVectorArticleSearchRepository(session_factory),
+        query_embedding_cache=TransactionalQueryEmbeddingCache(
+            session_factory=session_factory,
+            embedder_identity=embedder_identity_of(GEMINI_QUERY_EMBEDDING_SPEC),
+        ),
     )
     return AnsweringPhases(
         planner=QuestionPlanningService(
