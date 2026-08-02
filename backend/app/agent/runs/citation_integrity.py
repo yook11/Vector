@@ -2,11 +2,10 @@
 
 from __future__ import annotations
 
-import re
 from collections.abc import Iterable
 from dataclasses import dataclass
 
-_CITATION_MARKER_RE = re.compile(r"\[\[([0-9]+)\]\]")
+from app.agent.citation_markers import parse_citation_refs
 
 
 @dataclass(frozen=True, slots=True)
@@ -24,7 +23,7 @@ def assess_citation_integrity(
     answer: str,
     source_refs: Iterable[str],
 ) -> CitationIntegrityReport:
-    marker_refs = _citation_refs_from_answer(answer)
+    marker_refs = parse_citation_refs(answer)
     source_ref_values = _ordered_unique(source_refs)
     source_ref_set = set(source_ref_values)
     marker_ref_set = set(marker_refs)
@@ -36,12 +35,6 @@ def assess_citation_integrity(
         source_without_marker_refs=tuple(
             ref for ref in source_ref_values if ref not in marker_ref_set
         ),
-    )
-
-
-def _citation_refs_from_answer(answer: str) -> tuple[str, ...]:
-    return _ordered_unique(
-        match.group(1) for match in _CITATION_MARKER_RE.finditer(answer)
     )
 
 

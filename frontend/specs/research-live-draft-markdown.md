@@ -76,9 +76,10 @@ remend（不完全 Markdown 補完の前処理）の一次情報（同日確認�
 ### Invariants
 
 1. draft の citation マーカーは文字のまま表示する。マーカーの定義は第1段仕様
-   `research-final-answer-markdown.md` と同一（`[[` + 数字 + `]]`、正規表現 `\[\[(\d+)\]\]`）
-   とし、断片は「`[[` に数字が続く未完の並び」を指す。バッジ化も除去もしない
-   （citation バッジは確定回答のみ。第1段の合意を維持）。
+   `research-final-answer-markdown.md` と同一とし、断片は「`[[` に数字が続く未完の並び」を
+   指す。バッジ化も除去もしない（citation バッジは確定回答のみ。第1段の合意を維持）。
+   受理構文は `backend/specs/agent-citation-marker-grouped-refs-slice.md` が正本で、
+   `[[1], [5]]` のグループ形も含む。この仕様に正規表現を書き写さない。
 2. セキュリティ契約は確定回答と同一: rehype-raw / skipHtml を導入せず raw HTML はエスケープ
    表示、`defaultUrlTransform` の既定を維持、画像は `<img>` を描画せず alt テキスト表示、
    link は `target="_blank"` `rel="noreferrer"`（ページ内 fragment リンクは除外）。

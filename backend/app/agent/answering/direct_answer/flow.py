@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import re
-
 from app.agent.agent import Agent
 from app.agent.answering.contract import AnsweringRequest
 from app.agent.answering.direct_answer.contract import (
@@ -22,6 +20,7 @@ from app.agent.answering.live_delivery import (
 )
 from app.agent.answering.live_draft import LiveAnswerDraftSession
 from app.agent.answering.metrics import record_direct_answer_outcome
+from app.agent.citation_markers import strip_citation_markers
 from app.agent.contract import (
     AnswerDeltaReporter,
     AnswerGenerationContinuation,
@@ -41,7 +40,6 @@ __all__ = ["DirectAnswerFlow"]
 
 _DIRECT_ANSWER_FAILURES = (AIProviderError, DirectAnswerInvalidError)
 _MAX_ATTEMPTS = 2
-_CITATION_MARKER_RE = re.compile(r"\[\[[0-9]+\]\]")
 
 
 class DirectAnswerFlow:
@@ -149,7 +147,7 @@ class DirectAnswerFlow:
                     await live_draft.append(fragment)
 
                 await ensure_answer_generation_continues(self._continuation)
-                answer = _CITATION_MARKER_RE.sub("", "".join(raw_fragments))
+                answer = strip_citation_markers("".join(raw_fragments))
                 if not answer.strip():
                     raise DirectAnswerInvalidError()
                 draft = self._agent.output_type(answer=answer)

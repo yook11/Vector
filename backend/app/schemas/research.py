@@ -200,7 +200,8 @@ class ResearchAssistantMessage(_CamelBase):
     content: str = Field(
         description=(
             "Generated answer text. Evidence-grounded answers may include inline "
-            "citation markers like [[1]], where the number matches sources[].sourceRef."
+            "citation markers like [[1]] or [[1], [2]], where each number matches "
+            "sources[].sourceRef."
         )
     )
     created_at: datetime

@@ -10,7 +10,7 @@ from app.agent.answering.evidence_answer.evidence import AnswerEvidenceItem
 from app.agent.planning.contract import render_target_time_window
 from app.analysis.prompt_safety import sanitize_for_untrusted_block
 
-EVIDENCE_ANSWER_PROMPT_VERSION: Final[str] = "v6"
+EVIDENCE_ANSWER_PROMPT_VERSION: Final[str] = "v7"
 
 EVIDENCE_ANSWER_INSTRUCTIONS: Final[str] = """# 役割
 
@@ -37,7 +37,6 @@ QuestionContextに記録されたユーザーの質問と要望に、日本語�
 - evidenceに基づく主張の直後に `[[source_ref]]` を付ける。
 - evidenceに存在しないsource_refは使用しない。
 - 複数の出典を引く場合は `[[1]][[2]]` のように連続して書く。
-  `[[1], [2]]` の形式は使わない。
 - SourcesやReferencesの一覧は作らない。
 - citation markerは見出しに付けない。
 

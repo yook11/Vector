@@ -123,3 +123,67 @@ def test_consecutive_markers_are_all_recognized() -> None:
     draft = _finalize(answer, evidence=[_evidence("1"), _evidence("2")])
 
     assert draft.cited_refs == ["1", "2"]
+
+
+# --- グループ形 marker 受理 (spec: agent-citation-marker-grouped-refs-slice.md) ---
+# 正準形 [[N]] に加えて、モデルが自然に出すグループ形 [[1], [2]] を受理する。
+# 正準形の既存挙動は変えない (加算的変更)。
+
+
+def test_group_marker_expands_refs_in_written_order() -> None:
+    """設計判断2: グループ形 [[1], [2]] は書かれた順に ref 列へ展開される。"""
+    answer = "複数の根拠を示します。[[1], [2]]"
+
+    draft = _finalize(answer, evidence=[_evidence("1"), _evidence("2")])
+
+    assert draft.cited_refs == ["1", "2"]
+
+
+def test_group_marker_mixed_with_consecutive_markers_dedupes_in_first_use_order() -> (
+    None
+):
+    """グループ形と連続形が混在しても、全refが初出順・重複排除で算出される。"""
+    answer = "[[2]] 続いてグループ形 [[1], [2]] さらに [[3]]"
+
+    draft = _finalize(
+        answer,
+        evidence=[_evidence("1"), _evidence("2"), _evidence("3")],
+    )
+
+    assert draft.cited_refs == ["2", "1", "3"]
+
+
+def test_duplicate_ref_within_a_single_group_is_deduplicated() -> None:
+    """同一グループ内で同じrefが2回出ても重複排除される。"""
+    answer = "同じ根拠を並べます。[[1], [1]]"
+
+    draft = _finalize(answer, evidence=[_evidence("1")])
+
+    assert draft.cited_refs == ["1"]
+
+
+def test_rejects_answer_when_group_marker_contains_ref_unknown_to_evidence() -> None:
+    """Invariants: グループ内に evidence に存在しない ref が1つでもあれば、
+    グループ単位で握り潰さずdraftを不正として弾く。"""
+    with pytest.raises(EvidenceAnswerDraftInvalidError, match=r"\[\[2\]\]"):
+        _finalize("[[1], [2]]", evidence=[_evidence("1")])
+
+
+def test_group_marker_only_answer_is_not_treated_as_marker_absent() -> None:
+    """本文のmarkerがグループ形だけでも「evidenceがあるのにmarker0件」判定に
+    ならず、正常にcited_refsが算出される。"""
+    answer = "根拠はグループ形だけで示します。[[1], [2]]"
+
+    draft = _finalize(answer, evidence=[_evidence("1"), _evidence("2")])
+
+    assert draft.cited_refs == ["1", "2"]
+
+
+def test_inner_comma_form_is_not_recognized_as_a_marker() -> None:
+    """設計判断3: 内側カンマ形 [[1, 2]] はネスト配列リテラルとの衝突を避けるため
+    受理しない。evidenceがあるのにmarker0件として弾かれる形で固定する。"""
+    with pytest.raises(EvidenceAnswerDraftInvalidError):
+        _finalize(
+            "行列のようです。[[1, 2]]",
+            evidence=[_evidence("1"), _evidence("2")],
+        )

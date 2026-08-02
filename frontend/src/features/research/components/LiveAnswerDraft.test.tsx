@@ -253,6 +253,22 @@ describe("LiveAnswerDraft — Markdown rendering contract (draft)", () => {
     expect(container.textContent).toContain(content);
     expect(screen.queryByRole("button")).not.toBeInTheDocument();
   });
+
+  it("keeps a grouped citation marker as literal text without a badge", () => {
+    const content = "引用[[1], [2]]と本文";
+
+    const { container } = render(
+      <LiveAnswerDraft
+        status="running"
+        draftMode="visible"
+        draftText={content}
+        errorCode={null}
+      />,
+    );
+
+    expect(container.textContent).toContain(content);
+    expect(screen.queryByRole("button")).not.toBeInTheDocument();
+  });
 });
 
 describe("LiveAnswerDraft — security contract (draft)", () => {

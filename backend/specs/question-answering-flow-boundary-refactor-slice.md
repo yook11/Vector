@@ -421,7 +421,9 @@ QuestionAnsweringOrchestrator
 - FastAPI schema / OpenAPI / frontend generated type を変えない。
 - `RetrievalPlan` / `EvidenceCollectionOutcome` の shape を変えない。
 - progress stage / event の値を変えない。
-- citation marker `[[N]]` の形式を変えない。
+- citation marker `[[N]]` の形式を変えない
+  (正準形は不変。受理構文は `agent-citation-marker-grouped-refs-slice.md` で
+  グループ形 `[[1], [5]]` へ加算的に拡張済み)。
 - audit / metrics の外部識別子を変えない。
 
 ### 実装

@@ -35,6 +35,10 @@ marker parse 実装より前に完了させる。
 
 ## 合意済みの設計判断
 
+> 受理構文はその後 `agent-citation-marker-grouped-refs-slice.md` で拡張された。
+> 正準形と配置規則は下記のままだが、`[[1], [5]]` のグループ形も受理する。
+> parse 規則を参照する場合はそちらを正本とする。
+
 1. **自由文 + インライン citation marker**。marker 形式は **`[[N]]`**
    (N は evidence の `source_ref`)。通常の Markdown link `[text](url)` /
    参照リンク `[text][1]` と衝突せず、`\[\[[0-9]+\]\]` で決定的に parse
@@ -123,8 +127,8 @@ marker parse 実装より前に完了させる。
 | cited_refs と marker の不一致 | 補完可能 | marker から cited_refs を再導出 + defect 記録 |
 | evidence 0 件で marker あり | 補完不能 | retry → fallback (不実在 marker と同じ扱いに帰着) |
 
-- marker parse (`\[\[[0-9]+\]\]` 抽出) と cited_refs 導出は
-  `_draft_from_raw` (補完層)。
+- marker parse と cited_refs 導出は `_draft_from_raw` (補完層)。parse 規則の正本は
+  `agent-citation-marker-grouped-refs-slice.md`(当時は `\[\[[0-9]+\]\]` 単体のみ)。
 - 不実在 marker 検証は既存 `_validate_draft_citations` の入力が導出後の
   cited_refs になることでほぼそのまま機能する。
 

@@ -2,17 +2,14 @@
 
 from __future__ import annotations
 
-import re
-
 from app.agent.answering.evidence_answer.contract import (
     EvidenceAnswerDraft,
     EvidenceAnswerDraftInvalidError,
 )
 from app.agent.answering.evidence_answer.evidence import AnswerEvidenceItem
+from app.agent.citation_markers import parse_citation_refs
 
 __all__ = ["finalize_evidence_answer_draft"]
-
-_CITATION_MARKER_RE = re.compile(r"\[\[([0-9]+)\]\]")
 
 
 def finalize_evidence_answer_draft(
@@ -25,7 +22,7 @@ def finalize_evidence_answer_draft(
     if not answer.strip():
         raise EvidenceAnswerDraftInvalidError("answer body must not be blank")
 
-    cited_refs = _citation_refs_from_answer(answer)
+    cited_refs = list(parse_citation_refs(answer))
     if evidence and not cited_refs:
         raise EvidenceAnswerDraftInvalidError(
             "answer requires at least one citation marker when evidence exists"
@@ -34,18 +31,6 @@ def finalize_evidence_answer_draft(
     draft = EvidenceAnswerDraft(answer=answer, cited_refs=cited_refs)
     _validate_draft_citations(evidence=evidence, draft=draft)
     return draft
-
-
-def _citation_refs_from_answer(answer: str) -> list[str]:
-    result: list[str] = []
-    seen: set[str] = set()
-    for match in _CITATION_MARKER_RE.finditer(answer):
-        ref = match.group(1)
-        if ref in seen:
-            continue
-        result.append(ref)
-        seen.add(ref)
-    return result
 
 
 def _validate_draft_citations(

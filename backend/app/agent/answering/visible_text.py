@@ -6,13 +6,17 @@ from enum import Enum, auto
 
 __all__ = ["AnswerVisibleTextFilter"]
 
+# グループ形 `[[1], [5]]` で `,` の直後にだけ許す空白 (改行は区切りに含めない)。
+_REF_SEPARATOR_SPACE = (" ", "\t")
+
 
 class _MarkerState(Enum):
     TEXT = auto()
     OPEN = auto()
-    DOUBLE_OPEN = auto()
+    REF_OPEN = auto()
     DIGITS = auto()
     CLOSE = auto()
+    REF_SEPARATOR = auto()
 
 
 class AnswerVisibleTextFilter:
@@ -47,20 +51,21 @@ class AnswerVisibleTextFilter:
             if self._marker_state is _MarkerState.OPEN:
                 if character == "[":
                     self._marker_candidate += character
-                    self._marker_state = _MarkerState.DOUBLE_OPEN
+                    self._marker_state = _MarkerState.REF_OPEN
                     index += 1
                 else:
                     self._append_literal(self._marker_candidate, visible)
                     self._reset_marker()
                 continue
 
-            if self._marker_state is _MarkerState.DOUBLE_OPEN:
+            if self._marker_state is _MarkerState.REF_OPEN:
                 if _is_ascii_digit(character):
                     self._marker_candidate += character
                     self._marker_state = _MarkerState.DIGITS
                     index += 1
                 else:
-                    self._append_literal("[", visible)
+                    # 末尾の `[` は後続 marker の開き括弧を兼ねうるため候補に残す。
+                    self._append_literal(self._marker_candidate[:-1], visible)
                     self._marker_candidate = "["
                     self._marker_state = _MarkerState.OPEN
                 continue
@@ -78,8 +83,25 @@ class AnswerVisibleTextFilter:
                     self._reset_marker()
                 continue
 
-            if character == "]":
-                self._reset_marker()
+            if self._marker_state is _MarkerState.CLOSE:
+                if character == "]":
+                    self._reset_marker()
+                    index += 1
+                elif character == ",":
+                    self._marker_candidate += character
+                    self._marker_state = _MarkerState.REF_SEPARATOR
+                    index += 1
+                else:
+                    self._append_literal(self._marker_candidate, visible)
+                    self._reset_marker()
+                continue
+
+            if character in _REF_SEPARATOR_SPACE:
+                self._marker_candidate += character
+                index += 1
+            elif character == "[":
+                self._marker_candidate += character
+                self._marker_state = _MarkerState.REF_OPEN
                 index += 1
             else:
                 self._append_literal(self._marker_candidate, visible)
