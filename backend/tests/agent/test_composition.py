@@ -563,6 +563,7 @@ def test_build_answering_phases_wires_planner_to_shared_gemini_runtime_scope(
     assert set(internal_search_calls[0]) == {
         "embedder",
         "article_search_repository",
+        "query_embedding_cache",
     }
     assert planner_calls == [
         {
@@ -592,6 +593,58 @@ def test_build_answering_phases_wires_planner_to_shared_gemini_runtime_scope(
             "continuation": None,
         }
     ]
+
+
+def test_build_answering_phases_wires_query_embedding_cache_to_embedder_identity(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.agent.evidence_collection.internal_search import (
+        article_search,
+    )
+    from app.agent.evidence_collection.internal_search import (
+        tool as internal_tool,
+    )
+    from app.agent.evidence_collection.internal_search.ai import (
+        gemini as embedding_gemini,
+    )
+    from app.agent.evidence_collection.internal_search.ai.gemini_spec import (
+        GEMINI_QUERY_EMBEDDING_SPEC,
+        embedder_identity_of,
+    )
+
+    session_factory = object()
+    internal_search_calls: list[dict[str, object]] = []
+
+    monkeypatch.setattr(
+        composition,
+        "ensure_external_search_configured",
+        lambda: None,
+    )
+    monkeypatch.setattr(
+        composition,
+        "build_external_research_runtime_factory",
+        lambda: object(),
+    )
+    for module, name in (
+        (embedding_gemini, "GeminiQueryEmbedder"),
+        (article_search, "PgVectorArticleSearchRepository"),
+    ):
+        monkeypatch.setattr(module, name, _KeywordObject)
+    monkeypatch.setattr(
+        internal_tool,
+        "PgVectorInternalSearchTool",
+        lambda **kwargs: internal_search_calls.append(kwargs) or object(),
+    )
+
+    composition._build_answering_phases(session_factory=session_factory)
+
+    cache = internal_search_calls[0]["query_embedding_cache"]
+    # embedderが実際に使うspecとキャッシュ空間が一致しないと、別条件で作った
+    # ベクトルをstale hitとして再利用してしまう。
+    assert cache.embedder_identity == embedder_identity_of(
+        GEMINI_QUERY_EMBEDDING_SPEC
+    )
+    assert cache.session_factory is session_factory
 
 
 def test_build_answering_runner_captures_phase_dependencies_without_building_them(
