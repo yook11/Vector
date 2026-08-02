@@ -89,9 +89,12 @@ locals {
   ])
 }
 
+# ElastiCache の subnet group は RDS と違って 2 AZ を要求しない。primary AZ の
+# 1 つだけを渡し、ノードの置き場を候補の時点で 1 AZ に閉じる (secondary を混ぜると
+# 配置は AWS 任せになり、RDS / ECS と別 AZ に落ちて cross-AZ 転送費が乗りうる)。
 resource "aws_elasticache_subnet_group" "this" {
   name       = "${var.name_prefix}-cache"
-  subnet_ids = [for s in aws_subnet.data : s.id]
+  subnet_ids = [aws_subnet.data["primary"].id]
 }
 
 resource "aws_elasticache_parameter_group" "broker" {
