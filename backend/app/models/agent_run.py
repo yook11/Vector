@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import uuid as uuid_mod
 from datetime import date, datetime
+from typing import Any
 
 from sqlalchemy import (
     BigInteger,
@@ -25,6 +26,7 @@ from sqlalchemy import (
     func,
     text,
 )
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.dialects.postgresql import UUID as PgUUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -122,4 +124,9 @@ class AgentRun(Base):
     quota_usage_date: Mapped[date | None] = mapped_column(Date(), nullable=True)
     completed_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
+    )
+    # completedになったRunが実行した外部検索の決定的な記録(ResearchCheckpoint)。
+    # 外部検索を実行しなかったRunや記録失敗ではNULLのまま。
+    research_checkpoint: Mapped[dict[str, Any] | None] = mapped_column(
+        JSONB(), nullable=True
     )

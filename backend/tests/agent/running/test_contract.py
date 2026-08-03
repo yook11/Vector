@@ -21,6 +21,7 @@ from app.agent.evidence_collection.evidence_review import EvidenceReviewer
 from app.agent.evidence_collection.external_search import ExternalResearchRuntimeFactory
 from app.agent.planning.contract import QuestionPlanner
 from app.agent.question_context import QuestionContext
+from app.agent.research_checkpoint import ResearchCheckpoint, ResearchTaskRecord
 from app.agent.threads.contracts import ThreadMessageSnapshot
 
 RUNNING_MODULE = "app.agent.running"
@@ -212,6 +213,11 @@ def test_answering_context_requires_prepared_question_context() -> None:
 
 
 def test_run_result_is_frozen_slotted_output_and_answering_context() -> None:
+    """agent-research-checkpoint-context-slice: RunResultは既存2 fieldに加え、
+    外部検索を実行しなかったRunではNoneのままの`research_checkpoint`
+    (default None)を持つ。フィールド完全一致を固定するcontract testのため、
+    新契約は3 fieldの完全一致で表す。
+    """
     answering_context_type = _contract_type("AnsweringRunContext")
     run_result_type = _contract_type("RunResult")
     answering_context = answering_context_type(
@@ -224,6 +230,22 @@ def test_run_result_is_frozen_slotted_output_and_answering_context() -> None:
         final_output=final_output,
         context=answering_context,
     )
+    checkpoint = ResearchCheckpoint(
+        as_of=datetime(2026, 7, 16, 9, 30, tzinfo=UTC),
+        tasks=(
+            ResearchTaskRecord(
+                research_goal="調査目標",
+                executed_queries=("q",),
+                adopted_claims=(),
+            ),
+        ),
+        unresolved_after_search=(),
+    )
+    run_result_with_checkpoint = run_result_type(
+        final_output=final_output,
+        context=answering_context,
+        research_checkpoint=checkpoint,
+    )
 
     with pytest.raises(FrozenInstanceError):
         run_result.context = answering_context
@@ -233,13 +255,18 @@ def test_run_result_is_frozen_slotted_output_and_answering_context() -> None:
         _is_frozen_and_slotted(run_result),
         run_result.final_output is final_output,
         run_result.context is answering_context,
+        run_result.research_checkpoint,
+        run_result_with_checkpoint.research_checkpoint is checkpoint,
     ) == (
         (
             ("final_output", AnswerQuestionResult),
             ("context", answering_context_type),
+            ("research_checkpoint", ResearchCheckpoint | None),
         ),
         True,
         True,
+        True,
+        None,
         True,
     )
 

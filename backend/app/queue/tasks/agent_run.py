@@ -27,6 +27,7 @@ from app.agent.live_updates.stream import (
     AgentRunLiveStreamTerminalEvent,
 )
 from app.agent.question_context.service import HISTORY_MESSAGE_LIMIT
+from app.agent.research_checkpoint import ResearchCheckpoint
 from app.agent.running import (
     QuestionResolvedRunHooks,
     RunContext,
@@ -79,6 +80,7 @@ async def run_agent_answer(
     prepared: PreparedAgentRun | None = None
     stream_events: AgentRunLiveStreamPublisher | None = None
     result: AnswerQuestionResult | None = None
+    research_checkpoint: ResearchCheckpoint | None = None
     application_deadline_at = time.monotonic() + RESEARCH_APPLICATION_TIMEOUT_SECONDS
     application_deadline = asyncio.timeout_at(application_deadline_at)
     application_deadline_reached_after_acquire = False
@@ -188,6 +190,7 @@ async def run_agent_answer(
                     hooks=QuestionResolvedRunHooks(events=activity_reporter),
                 )
                 result = run_result.final_output
+                research_checkpoint = run_result.research_checkpoint
             except InputSafetyBlocked:
                 await _mark_policy_blocked(
                     session_factory,
@@ -293,6 +296,10 @@ async def run_agent_answer(
     if prepared is None or stream_events is None or result is None:
         raise RuntimeError("completed run is missing its execution context")
 
+    serialized_research_checkpoint = _serialize_research_checkpoint(
+        research_checkpoint,
+        run_id=prepared.run_id,
+    )
     try:
         async with session_factory() as session:
             async with session.begin():
@@ -300,6 +307,7 @@ async def run_agent_answer(
                     run_id=prepared.run_id,
                     result=result,
                     expected_attempt_epoch=prepared.attempt_epoch,
+                    research_checkpoint=serialized_research_checkpoint,
                 )
                 if not completed:
                     logger.info(
@@ -424,6 +432,25 @@ async def _acquire_run(
             return await AgentRunRepository(session).acquire_for_execution(
                 trigger.run_id
             )
+
+
+def _serialize_research_checkpoint(
+    research_checkpoint: ResearchCheckpoint | None,
+    *,
+    run_id: UUID,
+) -> dict[str, object] | None:
+    """checkpointに起因しうる失敗をcomplete_run呼び出し前に完結させる。"""
+    if research_checkpoint is None:
+        return None
+    try:
+        return research_checkpoint.model_dump(mode="json")
+    except Exception:
+        logger.warning(
+            "agent_run_research_checkpoint_serialization_failed",
+            run_id=str(run_id),
+            failure_code="serialization_failed",
+        )
+        return None
 
 
 async def _read_history(

@@ -17,6 +17,7 @@ from app.agent.evidence_collection.external_search import (
 )
 from app.agent.planning.contract import QuestionPlanner
 from app.agent.question_context.contract import QuestionContext
+from app.agent.research_checkpoint import ResearchCheckpoint
 from app.agent.threads.contracts import ThreadMessageSnapshot
 
 __all__ = [
@@ -68,6 +69,8 @@ class AnsweringRunContext:
 class RunResult:
     final_output: AnswerQuestionResult
     context: AnsweringRunContext
+    # 外部検索を実行しなかったRun(direct_answer含む)ではNone。
+    research_checkpoint: ResearchCheckpoint | None = None
 
 
 class QuestionContextPreparer(Protocol):

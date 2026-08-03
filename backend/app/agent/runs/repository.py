@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import uuid as uuid_mod
 from datetime import UTC, datetime, timedelta
+from typing import Any
 
 import structlog
 from sqlalchemy import Integer, column, func, literal, select, update, values
@@ -336,6 +337,7 @@ class AgentRunRepository:
         run_id: uuid_mod.UUID,
         result: AnswerQuestionResult,
         expected_attempt_epoch: int,
+        research_checkpoint: dict[str, Any] | None = None,
         now: datetime | None = None,
     ) -> bool:
         now = now or datetime.now(UTC)
@@ -379,6 +381,7 @@ class AgentRunRepository:
                 status=AgentRunStatus.COMPLETED.value,
                 assistant_message_id=assistant_message.id,
                 completed_at=now,
+                research_checkpoint=research_checkpoint,
             )
             .execution_options(synchronize_session=False)
         )
