@@ -857,6 +857,130 @@ async def test_run_agent_answer_completes_run_and_persists_assistant_message(
     assert persisted_results[0] is fake_agent.result
 
 
+async def _seed_completed_run_with_checkpoint(
+    session: AsyncSession,
+    *,
+    thread_id: UUID,
+    seq: int,
+    research_checkpoint: dict[str, Any],
+    completed_at: datetime,
+) -> AgentRun:
+    user_message = AgentMessage(
+        thread_id=thread_id,
+        seq=seq,
+        role="user",
+        content="past question",
+        missing_aspects=[],
+    )
+    session.add(user_message)
+    await session.flush()
+    assistant_message = AgentMessage(
+        thread_id=thread_id,
+        seq=seq + 1,
+        role="assistant",
+        content="past answer",
+        missing_aspects=[],
+    )
+    session.add(assistant_message)
+    await session.flush()
+    run = AgentRun(
+        thread_id=thread_id,
+        user_message_id=user_message.id,
+        assistant_message_id=assistant_message.id,
+        status="completed",
+        completed_at=completed_at,
+        research_checkpoint=research_checkpoint,
+    )
+    session.add(run)
+    await session.flush()
+    return run
+
+
+@pytest.mark.asyncio
+async def test_run_agent_answer_passes_recalled_prior_research_to_planning_request(
+    session_factory: async_sessionmaker[AsyncSession],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """注入フロー: 同threadの直近completed checkpointがRunInput.prior_researchとして
+
+    次のrunのplannerへ渡る。
+    """
+    checkpoint = ResearchCheckpoint(
+        as_of=datetime(2026, 8, 1, 9, 0, tzinfo=UTC),
+        tasks=(
+            ResearchTaskRecord(
+                research_goal="過去の調査目標",
+                executed_queries=("past query",),
+                adopted_claims=("past claim",),
+            ),
+        ),
+        unresolved_after_search=(),
+    )
+    async with session_factory() as session:
+        thread, current_message, current_run = await _create_thread_message_run(
+            session,
+            question="new question",
+        )
+        await _seed_completed_run_with_checkpoint(
+            session,
+            thread_id=thread.id,
+            seq=current_message.seq + 1,
+            research_checkpoint=checkpoint.model_dump(mode="json"),
+            completed_at=datetime(2026, 8, 1, 9, 0, tzinfo=UTC),
+        )
+        await session.commit()
+
+    answering_runner = _patch_worker_execution(
+        monkeypatch,
+        lambda **_kwargs: FakeAgent(_direct_result()),
+    )
+
+    await agent_run_tasks.run_agent_answer(
+        trigger=AgentRunTrigger(run_id=current_run.id),
+        ctx=_ctx(session_factory),
+    )
+
+    assert len(answering_runner.calls) == 1
+    assert answering_runner.calls[0].input.prior_research == (checkpoint,)
+
+
+@pytest.mark.asyncio
+async def test_run_agent_answer_continues_with_empty_prior_research_when_read_fails(
+    session_factory: async_sessionmaker[AsyncSession],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """読出し失敗はprior_research=()に落として既存workflowを同値継続する。"""
+    async with session_factory() as session:
+        _thread, _message, run = await _create_thread_message_run(session)
+
+    async def failing_read(
+        self: AgentRunRepository, **_kwargs: object
+    ) -> list[dict[str, Any]]:
+        raise RuntimeError("prior research read boundary failure")
+
+    monkeypatch.setattr(
+        AgentRunRepository,
+        "read_recent_research_checkpoints_for_user",
+        failing_read,
+    )
+    answering_runner = _patch_worker_execution(
+        monkeypatch,
+        lambda **_kwargs: FakeAgent(_direct_result()),
+    )
+
+    await agent_run_tasks.run_agent_answer(
+        trigger=AgentRunTrigger(run_id=run.id),
+        ctx=_ctx(session_factory),
+    )
+
+    assert len(answering_runner.calls) == 1
+    assert answering_runner.calls[0].input.prior_research == ()
+    async with session_factory() as session:
+        completed = await session.get(AgentRun, run.id)
+        assert completed is not None
+        assert completed.status == "completed"
+
+
 @pytest.mark.asyncio
 async def test_run_agent_answer_forwards_serialized_checkpoint_to_complete_run(
     session_factory: async_sessionmaker[AsyncSession],

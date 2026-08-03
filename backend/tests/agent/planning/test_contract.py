@@ -506,7 +506,12 @@ def test_search_plan_has_no_flattening_projection_properties() -> None:
 
 
 def test_planning_request_is_a_frozen_context_consumer_wrapper() -> None:
+    """agent-research-checkpoint-context-slice: PlanningRequestは既存2 fieldに加え、
+
+    同threadの直近checkpointを渡す`prior_research`(既定は空tuple)を持つ。
+    """
     request_type = _required_contract("PlanningRequest")
+    checkpoint_type = _required_contract("ResearchCheckpoint")
     context = QuestionContext(standalone_question="NVIDIA の直近発表は？")
     as_of = datetime(2026, 7, 10)
     request = request_type(context=context, as_of=as_of)
@@ -520,15 +525,19 @@ def test_planning_request_is_a_frozen_context_consumer_wrapper() -> None:
         set(request_type.model_fields),
         request_type.model_fields["context"].annotation,
         request_type.model_fields["as_of"].annotation,
+        request_type.model_fields["prior_research"].annotation,
         request.context is context,
         request.as_of,
+        request.prior_research,
         "as_of" not in QuestionContext.model_fields,
     ) == (
-        {"context", "as_of"},
+        {"context", "as_of", "prior_research"},
         QuestionContext,
         datetime,
+        tuple[checkpoint_type, ...],
         True,
         as_of,
+        (),
         True,
     )
 

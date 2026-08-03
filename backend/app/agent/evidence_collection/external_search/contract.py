@@ -16,6 +16,12 @@ from typing import Final, Literal, Protocol
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from app.agent.contract import (
+    EVIDENCE_CLAIM_MAX_CHARS,
+    EXTERNAL_QUERY_MAX_CHARS,
+    EXTERNAL_TASK_QUERY_LIMIT,
+    MISSING_ITEM_MAX_CHARS,
+)
 from app.agent.planning.contract import ExternalResearchTask, TargetTimeWindow
 from app.agent.runtime.contract import AgentRuntime
 from app.shared.security.safe_url import SafeUrl
@@ -48,14 +54,10 @@ __all__ = [
 ]
 
 EXTERNAL_SEARCH_AGENT_HARD_LIMIT = 3
-EXTERNAL_TASK_QUERY_LIMIT = 3
-EXTERNAL_QUERY_MAX_CHARS = 200
 EXTERNAL_SEARCH_CANDIDATES_PER_QUERY = 10
 EXTERNAL_SEARCH_CANDIDATE_POOL_LIMIT_PER_TASK = 20
 CANDIDATE_SNIPPET_MAX_CHARS = 500
-EVIDENCE_CLAIM_MAX_CHARS = 300
 EVIDENCE_WHY_SELECTED_MAX_CHARS = 300
-MISSING_ITEM_MAX_CHARS = 200
 
 TimeFilterFailureReason = Literal[
     "future_calendar_month",

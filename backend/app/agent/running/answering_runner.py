@@ -168,6 +168,7 @@ class AnsweringRunner:
             planning_request = PlanningRequest(
                 context=answering_context.question_context,
                 as_of=answering_context.run_context.as_of,
+                prior_research=input.prior_research,
             )
             answering_request = AnsweringRequest(
                 context=answering_context.question_context,

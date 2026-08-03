@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import date, datetime
-from typing import Annotated, Final, Literal, Protocol, Self, assert_never
+from typing import Annotated, Literal, Protocol, Self, assert_never
 
 from pydantic import (
     BaseModel,
@@ -15,7 +15,13 @@ from pydantic import (
     model_validator,
 )
 
-from app.agent.contract import PlanType
+from app.agent.contract import (
+    MAX_ARTICLE_SEARCH_QUERIES,
+    RESEARCH_GOAL_MAX_CHARS,
+    RESEARCH_TASK_LIMIT,
+    PlanType,
+    ResearchCheckpoint,
+)
 from app.agent.question_context.contract import QuestionContext
 from app.agent.runtime.contract import AgentResponseDefect, AgentResponseInvalidError
 
@@ -40,12 +46,6 @@ __all__ = [
     "plan_from_draft",
     "render_target_time_window",
 ]
-
-RESEARCH_TASK_LIMIT = 3
-MAX_ARTICLE_SEARCH_QUERIES = 3
-RESEARCH_GOAL_MAX_CHARS: Final[int] = 200
-# round-robin trimが各taskの先頭queryを必ず残せるのは、
-# RESEARCH_TASK_LIMIT <= MAX_ARTICLE_SEARCH_QUERIESが前提。
 
 PlanQuery = Annotated[
     str,
@@ -166,6 +166,8 @@ class PlanningRequest(BaseModel):
 
     context: QuestionContext
     as_of: datetime
+    # 同threadの直近checkpoint(新しい順)。読出し・検証失敗時は空。
+    prior_research: tuple[ResearchCheckpoint, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)

@@ -50,6 +50,8 @@ class AnsweringPhasesFactory(Protocol):
 class RunInput:
     question: str
     history: tuple[ThreadMessageSnapshot, ...]
+    # 同threadの直近checkpoint(新しい順)。読出し・検証失敗時は空。
+    prior_research: tuple[ResearchCheckpoint, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)

@@ -128,5 +128,5 @@ class AgentRun(Base):
     # completedになったRunが実行した外部検索の決定的な記録(ResearchCheckpoint)。
     # 外部検索を実行しなかったRunや記録失敗ではNULLのまま。
     research_checkpoint: Mapped[dict[str, Any] | None] = mapped_column(
-        JSONB(), nullable=True
+        JSONB(none_as_null=True), nullable=True
     )

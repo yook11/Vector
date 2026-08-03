@@ -11,10 +11,13 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Final
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from app.agent.contract import (
+    EVIDENCE_REVIEW_ADOPTION_LIMIT,
+    EVIDENCE_REVIEW_MISSING_LIMIT,
+)
 from app.agent.evidence_collection.external_search.contract import (
     EVIDENCE_CLAIM_MAX_CHARS,
     EVIDENCE_WHY_SELECTED_MAX_CHARS,
@@ -40,11 +43,6 @@ __all__ = [
     "ReviewSelectionDraft",
     "ReviewTaskCandidates",
 ]
-
-# Run 単位で reviewer が採用できる根拠の上限(内外合算)。
-EVIDENCE_REVIEW_ADOPTION_LIMIT: Final[int] = 15
-# Run 単位で reviewer が報告できる missing 件数の上限。
-EVIDENCE_REVIEW_MISSING_LIMIT: Final[int] = 8
 
 
 @dataclass(frozen=True, slots=True)

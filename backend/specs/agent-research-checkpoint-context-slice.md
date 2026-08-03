@@ -73,6 +73,11 @@
 `agent_runs.research_checkpoint`へnullable JSONB columnを追加し、Runと1対1で保持する。
 thread、user、message、時刻、statusの検索・所有権は既存relational columnを正本とし、JSONBへ複製しない。
 
+CheckpointはRunning(書き手)とPlanning(読み手)の双方が参照するrun共有の契約であるため、
+モデルとrun横断の上限語彙は、工程モジュールへ依存しない既存の共有契約層
+`app/agent/contract.py`(Agent core の共有 contract)で定義する。
+`app/agent/research_checkpoint/`には工程ロジック(builder・recall)を置く。
+
 ```python
 class ResearchTaskRecord(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
@@ -107,9 +112,10 @@ Checkpoint固有のcap定数を新設せず、正本を参照する。builderは
 | `adopted_claims`件数 / 1件の文字数 | `EVIDENCE_REVIEW_ADOPTION_LIMIT` / `EVIDENCE_CLAIM_MAX_CHARS` |
 | `unresolved_after_search`件数 / 1件の文字数 | `EVIDENCE_REVIEW_MISSING_LIMIT` / `MISSING_ITEM_MAX_CHARS` |
 
-`RESEARCH_GOAL_MAX_CHARS = 200`はplanning contractへ新設し、既存のdraft→plan正規化で
-切り詰めを適用する。report・Checkpointは正規化済みの値を参照のみ行い、Checkpoint側で
-独自の切り詰めを行わない。
+`RESEARCH_GOAL_MAX_CHARS = 200`は本sliceで新設し、既存のdraft→plan正規化で切り詰めを
+適用する。上記の上限定数はrun横断の共有語彙として`app/agent/contract.py`で定義し、
+planning / external_search / evidence_reviewの各contractはre-exportで既存参照を維持する。
+report・Checkpointは正規化済みの値を参照のみ行い、Checkpoint側で独自の切り詰めを行わない。
 
 ## 記録フロー
 
@@ -132,8 +138,10 @@ Checkpoint固有のcap定数を新設せず、正本を参照する。builderは
 2. 新規repository queryで、同thread・同user・`status='completed'`・
    `research_checkpoint IS NOT NULL`のRunを新しい順に最大3件読む(ownership filterはthread joinで強制)。
 3. 各JSONBを`model_validate`し、失敗したCheckpointは候補から除外する(件数とfailure codeのみ記録)。
-4. 新しい順に決定的にrenderし、Planner入力の`planning-only`かつ`untrusted`な独立blockとして注入する。
-   再要約・重複除去は行わない。Checkpointが0件なら現行と同値のPlanner入力とする。
+4. 検証済みCheckpointは`PlanningRequest.prior_research`(`tuple[ResearchCheckpoint, ...]`)として
+   Plannerへ渡し、planner prompts側で新しい順に決定的にrenderして`planning-only`かつ
+   `untrusted`な独立blockとして注入する。再要約・重複除去は行わない。
+   Checkpointが0件なら現行と同値のPlanner入力とする。
 
 ## Planner prompt contract
 

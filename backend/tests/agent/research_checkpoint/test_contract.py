@@ -11,6 +11,7 @@ from datetime import UTC, datetime
 import pytest
 from pydantic import ValidationError
 
+import app.agent.contract as shared_contract
 from app.agent.evidence_collection.evidence_review.contract import (
     EVIDENCE_REVIEW_ADOPTION_LIMIT,
     EVIDENCE_REVIEW_MISSING_LIMIT,
@@ -28,6 +29,23 @@ from app.agent.research_checkpoint.contract import (
 )
 
 _AS_OF = datetime(2026, 8, 3, 9, 0, tzinfo=UTC)
+
+
+def test_legacy_import_sites_re_export_the_same_shared_contract_objects() -> None:
+    """各工程contractのre-exportは複製ではなく、app.agent.contractと同一objectである。"""
+    assert (
+        ResearchCheckpoint is shared_contract.ResearchCheckpoint,
+        ResearchTaskRecord is shared_contract.ResearchTaskRecord,
+        RESEARCH_GOAL_MAX_CHARS is shared_contract.RESEARCH_GOAL_MAX_CHARS,
+        RESEARCH_TASK_LIMIT is shared_contract.RESEARCH_TASK_LIMIT,
+        EXTERNAL_TASK_QUERY_LIMIT is shared_contract.EXTERNAL_TASK_QUERY_LIMIT,
+        EXTERNAL_QUERY_MAX_CHARS is shared_contract.EXTERNAL_QUERY_MAX_CHARS,
+        EVIDENCE_CLAIM_MAX_CHARS is shared_contract.EVIDENCE_CLAIM_MAX_CHARS,
+        MISSING_ITEM_MAX_CHARS is shared_contract.MISSING_ITEM_MAX_CHARS,
+        EVIDENCE_REVIEW_ADOPTION_LIMIT
+        is shared_contract.EVIDENCE_REVIEW_ADOPTION_LIMIT,
+        EVIDENCE_REVIEW_MISSING_LIMIT is shared_contract.EVIDENCE_REVIEW_MISSING_LIMIT,
+    ) == (True,) * 10
 
 
 def _task_record(**overrides: object) -> ResearchTaskRecord:

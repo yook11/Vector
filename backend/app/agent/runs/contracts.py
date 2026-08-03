@@ -166,6 +166,7 @@ class CreatedAgentRun:
 class PreparedAgentRun:
     run_id: UUID
     thread_id: UUID
+    user_id: UUID
     question: str
     user_message_seq: int
     attempt_epoch: int

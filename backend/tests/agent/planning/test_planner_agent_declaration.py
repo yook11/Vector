@@ -124,13 +124,13 @@ def _is_literal_values_derived_from(
     )
 
 
-def test_planner_agent_declares_v6_two_plan_schema_and_stable_model() -> None:
+def test_planner_agent_declares_v7_two_plan_schema_and_stable_model() -> None:
     contracts = _planning_module()
     agent = _planner_agent()
 
     assert isinstance(agent, Agent)
     assert agent.name == "question_planner"
-    assert agent.prompt.version == "v6"
+    assert agent.prompt.version == "v7"
     assert agent.model.provider == "gemini"
     assert agent.model.name == "gemini-2.5-flash-lite"
     assert agent.model_settings.temperature == 0.1
@@ -489,7 +489,7 @@ def test_prompt_declaration_separates_agent_and_time_normalization() -> None:
     prompts_module = import_module("app.agent.planning.prompts")
     instructions = _required(prompts_module, "PLANNER_INSTRUCTIONS")
 
-    assert _required(prompts_module, "PLANNER_PROMPT_VERSION") == "v6"
+    assert _required(prompts_module, "PLANNER_PROMPT_VERSION") == "v7"
     assert isinstance(_required(prompts_module, "_PLANNER_INPUT_TEMPLATE"), str)
     assert "compute_call_signature" not in getsource(prompts_module)
     assert "PLANNER_PROMPT_VERSION" in getsource(agent_module)

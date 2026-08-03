@@ -119,12 +119,32 @@ def test_running_package_exports_public_contracts() -> None:
 
 
 def test_run_input_is_frozen_slotted_question_and_tuple_history() -> None:
+    """agent-research-checkpoint-context-slice: RunInputは既存2 fieldに加え、
+
+    同threadの直近checkpointを渡す`prior_research`(既定は空tuple)を持つ。
+    """
     run_input_type = _contract_type("RunInput")
     history = (
         ThreadMessageSnapshot(role="user", content="前の質問"),
         ThreadMessageSnapshot(role="assistant", content="前の回答"),
     )
+    checkpoint = ResearchCheckpoint(
+        as_of=datetime(2026, 7, 16, 9, 30, tzinfo=UTC),
+        tasks=(
+            ResearchTaskRecord(
+                research_goal="調査目標",
+                executed_queries=("q",),
+                adopted_claims=(),
+            ),
+        ),
+        unresolved_after_search=(),
+    )
     run_input = run_input_type(question="続けて説明して", history=history)
+    run_input_with_prior_research = run_input_type(
+        question="続けて説明して",
+        history=history,
+        prior_research=(checkpoint,),
+    )
 
     with pytest.raises(FrozenInstanceError):
         run_input.question = "変更後の質問"
@@ -134,14 +154,19 @@ def test_run_input_is_frozen_slotted_question_and_tuple_history() -> None:
         _is_frozen_and_slotted(run_input),
         run_input.question,
         run_input.history,
+        run_input.prior_research,
+        run_input_with_prior_research.prior_research,
     ) == (
         (
             ("question", str),
             ("history", tuple[ThreadMessageSnapshot, ...]),
+            ("prior_research", tuple[ResearchCheckpoint, ...]),
         ),
         True,
         "続けて説明して",
         history,
+        (),
+        (checkpoint,),
     )
 
 
