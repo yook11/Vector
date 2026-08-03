@@ -3,21 +3,20 @@ name: AWS app images
 # backend / frontend の image を ECR に push する。
 #
 # tag は commit SHA。repository が IMMUTABLE なので latest の上書きができず、deploy は
-# 毎回一意な tag になる (infra/aws/registry.tf の注記)。push した tag は job summary に
-# 出すので、apply 側は `terraform apply -var image_tag=<tag>` で受ける。
+# 毎回一意な tag になる (infra/aws/registry.tf の注記)。
 #
-# ECS の rollout はまだ行わない。本番切替の前に「image が更新されたら service が
-# 入れ替わる」状態を作らないため。app-deploy role には EcsRollout があるので、切替を
-# 決めた時点で step を足す。
+# push と rollout で role を分けている。build は Dockerfile と依存パッケージのコードが
+# 実際に走る場所なので、そこに本番差し替えの権限を持たせない。焼いた image が本番に
+# 載るには、承認を通る rollout job を必ず経由する。
 #
-# workflow_dispatch のみ。main の push で自動に走らせないのは上と同じ理由。
+# workflow_dispatch のみ。main の push で自動に走らせない。
 
 on:
   workflow_dispatch:
 
-# app-deploy role の trust は sub が repo:<owner>/<repo>:ref:refs/heads/main の完全一致
-# (infra/aws/bootstrap/oidc.tf)。**job に environment: を付けると sub が
-# environment:<name> に変わって assume が失敗する。**
+# **job に environment: を付けると OIDC の sub claim が environment:<name> に変わる。**
+# push job (sub = ref:refs/heads/main) と rollout job (sub = environment:production) で
+# assume できる role が違うのはこのため (infra/aws/bootstrap/oidc.tf)。
 permissions:
   id-token: write
   contents: read
@@ -65,7 +64,7 @@ jobs:
 
       - uses: aws-actions/configure-aws-credentials@e6de054238d6b7531b4efff3b6587d9aade6a06c  # v6.2.3
         with:
-          role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
+          role-to-assume: ${{ vars.AWS_PUSH_ROLE_ARN }}
           aws-region: ${{ steps.tf.outputs.region }}
 
       - id: ecr
@@ -103,5 +102,96 @@ jobs:
           {
             echo "pushed \`$IMAGE_REF\`"
             echo ""
-            echo "apply 側は \`terraform apply -var image_tag=$IMAGE_TAG\` で受ける。"
+            echo "infra を変える場合は \`terraform apply -var image_tag=$IMAGE_TAG\` も要る。"
           } >> "$GITHUB_STEP_SUMMARY"
+
+  rollout:
+    needs: push
+    # 承認ゲートはここ。required reviewer が付いている限り、承認されるまで job が
+    # 起動せず、OIDC token が発行されない。app-rollout を assume する材料が
+    # そもそも存在しないので、ゲートは運用の約束ではなく経路の不在になる。
+    environment: production
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
+        with:
+          persist-credentials: false
+
+      - id: tf
+        name: Read values from Terraform variables
+        run: |
+          set -euo pipefail
+          read_default() {
+            awk "/variable \"$1\"/,/^}/" infra/aws/variables.tf \
+              | sed -n 's/.*default *= *"\(.*\)".*/\1/p' | head -1
+          }
+          for name in region name_prefix; do
+            value=$(read_default "$name")
+            if [ -z "$value" ]; then
+              echo "::error::variables.tf の $name の default を読めなかった"
+              exit 1
+            fi
+            echo "$name=$value" >> "$GITHUB_OUTPUT"
+          done
+
+      - uses: aws-actions/configure-aws-credentials@e6de054238d6b7531b4efff3b6587d9aade6a06c  # v6.2.3
+        with:
+          role-to-assume: ${{ vars.AWS_ROLLOUT_ROLE_ARN }}
+          aws-region: ${{ steps.tf.outputs.region }}
+
+      - name: Roll out services
+        env:
+          CLUSTER: ${{ steps.tf.outputs.name_prefix }}
+          IMAGE_TAG: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+
+          # 入れ替え対象は cluster に問い合わせる。workflow に段の一覧を持つと
+          # locals.tf と 2 箇所になり、段を足したときに黙って漏れる。
+          # proxy だけ外すのは、image も workflow も別系統のため。
+          services=$(
+            aws ecs list-services --cluster "$CLUSTER" --query 'serviceArns[]' --output text \
+              | tr '\t' '\n' | sed 's|.*/||' | grep -vx 'proxy'
+          )
+          if [ -z "$services" ]; then
+            echo "::error::入れ替え対象の service が 0 件だった"
+            exit 1
+          fi
+
+          for svc in $services; do
+            # family の最新 ACTIVE revision を土台にする。service が今指している
+            # revision ではなく family を見るのは、Terraform 由来の env / secrets の
+            # 変更をここで取り込むため (README「apply 後に rollout を再実行」)。
+            family=$(
+              aws ecs describe-services --cluster "$CLUSTER" --services "$svc" \
+                --query 'services[0].taskDefinition' --output text | sed 's|.*/||; s|:.*||'
+            )
+            current=$(
+              aws ecs describe-task-definition --task-definition "$family" \
+                --query 'taskDefinition' --output json
+            )
+            # describe が返す読み取り専用フィールドは register が受け付けないので落とす。
+            # 未知のフィールドが増えたときは register が失敗して気づける (黙って落とさない)。
+            next=$(
+              jq --arg tag "$IMAGE_TAG" '
+                .containerDefinitions |= map(.image |= sub(":[^:/]+$"; ":" + $tag))
+                | del(
+                    .taskDefinitionArn, .revision, .status, .requiresAttributes,
+                    .compatibilities, .registeredAt, .registeredBy, .deregisteredAt
+                  )
+              ' <<<"$current"
+            )
+            arn=$(
+              aws ecs register-task-definition --cli-input-json "$next" \
+                --query 'taskDefinition.taskDefinitionArn' --output text
+            )
+            aws ecs update-service \
+              --cluster "$CLUSTER" --service "$svc" --task-definition "$arn" >/dev/null
+            echo "- \`$svc\` -> \`${arn##*/}\`" >> "$GITHUB_STEP_SUMMARY"
+          done
+
+          # 1 段でも安定しなければ失敗させる。timeout は job 側で切っている。
+          # shellcheck disable=SC2086
+          aws ecs wait services-stable --cluster "$CLUSTER" --services $services

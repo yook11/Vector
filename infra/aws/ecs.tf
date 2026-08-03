@@ -252,7 +252,7 @@ resource "aws_ecs_service" "this" {
     }
   }
 
-  # image tag は app-deploy workflow が更新する。Terraform が巻き戻さない。
+  # image tag は rollout job が更新する。Terraform が巻き戻さない。
   lifecycle {
     ignore_changes = [task_definition]
   }

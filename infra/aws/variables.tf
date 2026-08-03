@@ -115,7 +115,7 @@ variable "internal_namespace" {
 variable "image_tag" {
   description = <<-EOT
     ECR の image tag。repository が IMMUTABLE なので commit SHA など一意な値を使う。
-    実際の更新は app-deploy workflow が行い、Terraform は task_definition を
+    実際の更新は rollout job が行い、Terraform は task_definition を
     ignore_changes で追わない。
   EOT
   type        = string

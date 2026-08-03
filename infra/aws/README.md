@@ -103,10 +103,12 @@ subnet 自体は無料なので段ごとに 1:1 で切る。
 
 - **初回 apply 直後は全 service が起動失敗ループになる。** このスタックが ECR repo を
   作るので、その時点では image が無い。正常系は **apply → push → 安定**。
-- **`ignore_changes = [task_definition]` の代償。** app-deploy が revision を進め、
+- **`ignore_changes = [task_definition]` の代償。** rollout が revision を進め、
   Terraform はそれを巻き戻さない。帰結として **Terraform 側で env / secrets /
   サイズを変えても service は旧 revision のまま**動く (新 revision は作られるが
-  反映されない)。infra 起因の変更は「apply 後に app-deploy を再実行」が正規手順。
+  反映されない)。infra 起因の変更は「apply 後に rollout を再実行」が正規手順。
+  rollout は family の最新 ACTIVE revision を土台に image tag だけ差し替えるので、
+  再実行すると Terraform 由来の変更もそこで取り込まれる。
 - **Valkey の ACL ミスは二重に静か。** worker 側は taskiq が XGROUP CREATE の
   NOPERM を debug で握り潰し、後段の XREADGROUP が NOGROUP で落ちて初めて発現する。
   frontend 側は fail-open で rate limit が黙って無効化され、60 秒ごとの
