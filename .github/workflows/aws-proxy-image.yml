@@ -52,7 +52,8 @@ jobs:
 
       - uses: aws-actions/configure-aws-credentials@e6de054238d6b7531b4efff3b6587d9aade6a06c  # v6.2.3
         with:
-          role-to-assume: ${{ vars.AWS_PUSH_ROLE_ARN }}
+          role-to-assume: ${{ secrets.AWS_PUSH_ROLE_ARN }}
+          mask-aws-account-id: true
           aws-region: ${{ steps.tf.outputs.region }}
 
       # amazon-ecr-login action は使わない。registry は account id から組めるので、
