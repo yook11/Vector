@@ -27,6 +27,10 @@ from app.agent.live_updates.stream import (
     AgentRunLiveStreamTerminalEvent,
 )
 from app.agent.question_context.service import HISTORY_MESSAGE_LIMIT
+from app.agent.research_checkpoint import (
+    ResearchCheckpoint,
+    recall_research_checkpoints,
+)
 from app.agent.running import (
     QuestionResolvedRunHooks,
     RunContext,
@@ -79,6 +83,7 @@ async def run_agent_answer(
     prepared: PreparedAgentRun | None = None
     stream_events: AgentRunLiveStreamPublisher | None = None
     result: AnswerQuestionResult | None = None
+    research_checkpoint: ResearchCheckpoint | None = None
     application_deadline_at = time.monotonic() + RESEARCH_APPLICATION_TIMEOUT_SECONDS
     application_deadline = asyncio.timeout_at(application_deadline_at)
     application_deadline_reached_after_acquire = False
@@ -169,6 +174,7 @@ async def run_agent_answer(
                 )
                 as_of = datetime.now(UTC)
                 history = await _read_history(session_factory, prepared)
+                prior_research = await _read_prior_research(session_factory, prepared)
                 answering_runner = build_answering_runner(
                     session_factory=session_factory,
                     progress=progress_reporter,
@@ -180,6 +186,7 @@ async def run_agent_answer(
                     RunInput(
                         question=prepared.question,
                         history=tuple(history),
+                        prior_research=prior_research,
                     ),
                     run_context=RunContext(
                         run_id=prepared.run_id,
@@ -188,6 +195,7 @@ async def run_agent_answer(
                     hooks=QuestionResolvedRunHooks(events=activity_reporter),
                 )
                 result = run_result.final_output
+                research_checkpoint = run_result.research_checkpoint
             except InputSafetyBlocked:
                 await _mark_policy_blocked(
                     session_factory,
@@ -293,6 +301,10 @@ async def run_agent_answer(
     if prepared is None or stream_events is None or result is None:
         raise RuntimeError("completed run is missing its execution context")
 
+    serialized_research_checkpoint = _serialize_research_checkpoint(
+        research_checkpoint,
+        run_id=prepared.run_id,
+    )
     try:
         async with session_factory() as session:
             async with session.begin():
@@ -300,6 +312,7 @@ async def run_agent_answer(
                     run_id=prepared.run_id,
                     result=result,
                     expected_attempt_epoch=prepared.attempt_epoch,
+                    research_checkpoint=serialized_research_checkpoint,
                 )
                 if not completed:
                     logger.info(
@@ -426,6 +439,25 @@ async def _acquire_run(
             )
 
 
+def _serialize_research_checkpoint(
+    research_checkpoint: ResearchCheckpoint | None,
+    *,
+    run_id: UUID,
+) -> dict[str, object] | None:
+    """checkpointに起因しうる失敗をcomplete_run呼び出し前に完結させる。"""
+    if research_checkpoint is None:
+        return None
+    try:
+        return research_checkpoint.model_dump(mode="json")
+    except Exception:
+        logger.warning(
+            "agent_run_research_checkpoint_serialization_failed",
+            run_id=str(run_id),
+            failure_code="serialization_failed",
+        )
+        return None
+
+
 async def _read_history(
     session_factory: async_sessionmaker[AsyncSession],
     prepared: PreparedAgentRun,
@@ -436,6 +468,30 @@ async def _read_history(
             before_seq=prepared.user_message_seq,
             limit=HISTORY_MESSAGE_LIMIT,
         )
+
+
+async def _read_prior_research(
+    session_factory: async_sessionmaker[AsyncSession],
+    prepared: PreparedAgentRun,
+) -> tuple[ResearchCheckpoint, ...]:
+    """読出し・検証のどの失敗も握って空にし、既存workflowを同値継続する。"""
+    try:
+        async with session_factory() as session:
+            raw_checkpoints = await AgentRunRepository(
+                session
+            ).read_recent_research_checkpoints_for_user(
+                thread_id=prepared.thread_id,
+                user_id=prepared.user_id,
+            )
+        return recall_research_checkpoints(raw_checkpoints)
+    except Exception as exc:
+        logger.warning(
+            "agent_run_prior_research_read_failed",
+            run_id=str(prepared.run_id),
+            error_type=exc.__class__.__name__,
+            failure_code="prior_research_read_failed",
+        )
+        return ()
 
 
 async def _mark_failed(

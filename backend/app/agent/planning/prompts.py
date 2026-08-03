@@ -4,10 +4,11 @@ from __future__ import annotations
 
 from typing import Final
 
+from app.agent.contract import ResearchCheckpoint
 from app.agent.planning.contract import PlanningAttemptInput
 from app.analysis.prompt_safety import sanitize_for_untrusted_block
 
-PLANNER_PROMPT_VERSION: Final[str] = "v6"
+PLANNER_PROMPT_VERSION: Final[str] = "v7"
 
 PLANNER_INSTRUCTIONS: Final[str] = """\
 ユーザーの質問に答えるために必要な情報取得計画を作成してください。
@@ -33,6 +34,17 @@ active_goalはスレッド全体の目的であり、調査の向きを決める
   response schemaのdescriptionに従う。
 - article_search_queriesはrun全体で合計3件までの予算をtaskへ配分する。
   同じ角度の言い換えで水増ししない。角度が1つなら1件でよい。
+
+# Prior Research Contextの使い方
+入力のPrior Research Contextは、同じthreadの過去の調査記録である。
+検索計画の参考にのみ使い、現在回答の事実根拠として使わない。
+
+- 得られたことを前提に、まだ得られていない情報や、質問が求めるより広い・深い情報へ
+  調査を向ける。
+- 実行済みqueryと同じ・同義のqueryは、鮮度の再確認が目的の場合を除き繰り返さない。
+  過去のqueryを踏まえて角度・具体性を改善する。
+- 過去に情報が得られていることだけを理由に、検索を省略したりdirect_answerを
+  選んだりしない。現在の質問に必要な検索は改めて計画する。
 
 # target_time_window
 外部根拠の公開・更新期間だけを表す。質問の対象時期や業績対象年度をpublication期間として
@@ -65,6 +77,15 @@ active_goal: {active_goal}
 </untrusted_input>
 """
 
+_PRIOR_RESEARCH_INPUT_TEMPLATE: Final[str] = """
+# Prior Research Context
+同じthreadの過去の調査記録(新しい順)。
+
+<untrusted_prior_research>
+{records}
+</untrusted_prior_research>
+"""
+
 _PLANNER_REPAIR_INPUT_TEMPLATE: Final[str] = """\
 
 # Repair Context
@@ -88,11 +109,54 @@ def render_planning_input(input: PlanningAttemptInput) -> str:
         answer_requirements=_render_requirements(request.context.answer_requirements),
         active_goal=sanitize_for_untrusted_block(request.context.active_goal),
     )
+    if request.prior_research:
+        # HTMLではないLLM promptであり、外部入力は境界用sanitizerを通す。
+        # nosemgrep: python.django.security.injection.raw-html-format.raw-html-format  # noqa: E501
+        task_input += _PRIOR_RESEARCH_INPUT_TEMPLATE.format(
+            records=_render_prior_research_records(request.prior_research)
+        )
     if input.previous_error is None:
         return task_input
     return task_input + _PLANNER_REPAIR_INPUT_TEMPLATE.format(
         previous_error=sanitize_for_untrusted_block(input.previous_error)
     )
+
+
+def _render_prior_research_records(
+    prior_research: tuple[ResearchCheckpoint, ...],
+) -> str:
+    """checkpointを新しい順のまま、仕様の決定的なrecords記法へrenderする。"""
+    return "\n\n".join(
+        _render_prior_research_record(record) for record in prior_research
+    )
+
+
+def _render_prior_research_record(record: ResearchCheckpoint) -> str:
+    lines = [f"[調査時点: {record.as_of.isoformat()}]"]
+    for task in record.tasks:
+        lines.append(
+            f"research_goal: {sanitize_for_untrusted_block(task.research_goal)}"
+        )
+        lines.append("実行したquery:")
+        lines.extend(
+            f"- {sanitize_for_untrusted_block(query)}"
+            for query in task.executed_queries
+        )
+        lines.append("得られたこと:")
+        if task.adopted_claims:
+            lines.extend(
+                f"- {sanitize_for_untrusted_block(claim)}"
+                for claim in task.adopted_claims
+            )
+        else:
+            lines.append("- 有用な候補は得られなかった")
+    if record.unresolved_after_search:
+        lines.append("未確認のまま残ったこと:")
+        lines.extend(
+            f"- {sanitize_for_untrusted_block(item)}"
+            for item in record.unresolved_after_search
+        )
+    return "\n".join(lines)
 
 
 def _render_requirements(requirements: tuple[str, ...]) -> str:

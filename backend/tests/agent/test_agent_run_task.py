@@ -48,6 +48,7 @@ from app.agent.live_updates.stream import (
     AgentRunLiveStreamTerminalEvent,
 )
 from app.agent.question_context.contract import QuestionContext
+from app.agent.research_checkpoint import ResearchCheckpoint, ResearchTaskRecord
 from app.agent.running import (
     AnsweringPhases,
     AnsweringRunContext,
@@ -193,10 +194,12 @@ class FakeAnsweringRunner:
         exc: BaseException | None = None,
         question_context: QuestionContext | None = None,
         previous_answer: str = "",
+        research_checkpoint: ResearchCheckpoint | None = None,
     ) -> None:
         self.exc = exc
         self.question_context = question_context
         self.previous_answer = previous_answer
+        self.research_checkpoint = research_checkpoint
         self.execution: object | None = None
         self.calls: list[FakeAnsweringRunnerCall] = []
 
@@ -232,7 +235,11 @@ class FakeAnsweringRunner:
             )
         assert self.execution is not None
         final_output = await cast(Any, self.execution).answer(answering_context)
-        return RunResult(final_output=final_output, context=answering_context)
+        return RunResult(
+            final_output=final_output,
+            context=answering_context,
+            research_checkpoint=self.research_checkpoint,
+        )
 
 
 class FakeLiveEventPublisher:
@@ -791,6 +798,7 @@ async def test_run_agent_answer_completes_run_and_persists_assistant_message(
         run_id: UUID,
         result: AnswerQuestionResult,
         expected_attempt_epoch: int,
+        research_checkpoint: dict[str, Any] | None = None,
     ) -> bool:
         persisted_results.append(result)
         completed_epochs.append(expected_attempt_epoch)
@@ -799,6 +807,7 @@ async def test_run_agent_answer_completes_run_and_persists_assistant_message(
             run_id=run_id,
             result=result,
             expected_attempt_epoch=expected_attempt_epoch,
+            research_checkpoint=research_checkpoint,
         )
 
     answering_runner = _patch_worker_execution(
@@ -846,6 +855,324 @@ async def test_run_agent_answer_completes_run_and_persists_assistant_message(
     assert persisted_results == [fake_agent.result]
     assert completed_epochs == [1]
     assert persisted_results[0] is fake_agent.result
+
+
+async def _seed_completed_run_with_checkpoint(
+    session: AsyncSession,
+    *,
+    thread_id: UUID,
+    seq: int,
+    research_checkpoint: dict[str, Any],
+    completed_at: datetime,
+) -> AgentRun:
+    user_message = AgentMessage(
+        thread_id=thread_id,
+        seq=seq,
+        role="user",
+        content="past question",
+        missing_aspects=[],
+    )
+    session.add(user_message)
+    await session.flush()
+    assistant_message = AgentMessage(
+        thread_id=thread_id,
+        seq=seq + 1,
+        role="assistant",
+        content="past answer",
+        missing_aspects=[],
+    )
+    session.add(assistant_message)
+    await session.flush()
+    run = AgentRun(
+        thread_id=thread_id,
+        user_message_id=user_message.id,
+        assistant_message_id=assistant_message.id,
+        status="completed",
+        completed_at=completed_at,
+        research_checkpoint=research_checkpoint,
+    )
+    session.add(run)
+    await session.flush()
+    return run
+
+
+@pytest.mark.asyncio
+async def test_run_agent_answer_passes_recalled_prior_research_to_planning_request(
+    session_factory: async_sessionmaker[AsyncSession],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """注入フロー: 同threadの直近completed checkpointがRunInput.prior_researchとして
+
+    次のrunのplannerへ渡る。
+    """
+    checkpoint = ResearchCheckpoint(
+        as_of=datetime(2026, 8, 1, 9, 0, tzinfo=UTC),
+        tasks=(
+            ResearchTaskRecord(
+                research_goal="過去の調査目標",
+                executed_queries=("past query",),
+                adopted_claims=("past claim",),
+            ),
+        ),
+        unresolved_after_search=(),
+    )
+    async with session_factory() as session:
+        thread, current_message, current_run = await _create_thread_message_run(
+            session,
+            question="new question",
+        )
+        await _seed_completed_run_with_checkpoint(
+            session,
+            thread_id=thread.id,
+            seq=current_message.seq + 1,
+            research_checkpoint=checkpoint.model_dump(mode="json"),
+            completed_at=datetime(2026, 8, 1, 9, 0, tzinfo=UTC),
+        )
+        await session.commit()
+
+    answering_runner = _patch_worker_execution(
+        monkeypatch,
+        lambda **_kwargs: FakeAgent(_direct_result()),
+    )
+
+    await agent_run_tasks.run_agent_answer(
+        trigger=AgentRunTrigger(run_id=current_run.id),
+        ctx=_ctx(session_factory),
+    )
+
+    assert len(answering_runner.calls) == 1
+    assert answering_runner.calls[0].input.prior_research == (checkpoint,)
+
+
+@pytest.mark.asyncio
+async def test_run_agent_answer_continues_with_empty_prior_research_when_read_fails(
+    session_factory: async_sessionmaker[AsyncSession],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """読出し失敗はprior_research=()に落として既存workflowを同値継続する。"""
+    async with session_factory() as session:
+        _thread, _message, run = await _create_thread_message_run(session)
+
+    async def failing_read(
+        self: AgentRunRepository, **_kwargs: object
+    ) -> list[dict[str, Any]]:
+        raise RuntimeError("prior research read boundary failure")
+
+    monkeypatch.setattr(
+        AgentRunRepository,
+        "read_recent_research_checkpoints_for_user",
+        failing_read,
+    )
+    answering_runner = _patch_worker_execution(
+        monkeypatch,
+        lambda **_kwargs: FakeAgent(_direct_result()),
+    )
+
+    await agent_run_tasks.run_agent_answer(
+        trigger=AgentRunTrigger(run_id=run.id),
+        ctx=_ctx(session_factory),
+    )
+
+    assert len(answering_runner.calls) == 1
+    assert answering_runner.calls[0].input.prior_research == ()
+    async with session_factory() as session:
+        completed = await session.get(AgentRun, run.id)
+        assert completed is not None
+        assert completed.status == "completed"
+
+
+@pytest.mark.asyncio
+async def test_run_agent_answer_forwards_serialized_checkpoint_to_complete_run(
+    session_factory: async_sessionmaker[AsyncSession],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """記録フロー5: RunResult.research_checkpointはmodel_dump(mode="json")の
+    dictへ変換されてからcomplete_runへ渡る(agent_runs.research_checkpointの
+    正本はJSON snake_caseであり、pydantic modelそのものはDBへ渡さない)。
+    """
+    async with session_factory() as session:
+        _thread, _message, run = await _create_thread_message_run(session)
+    fake_agent = FakeAgent(_direct_result())
+    checkpoint = ResearchCheckpoint(
+        as_of=datetime(2026, 8, 3, 9, 0, tzinfo=UTC),
+        tasks=(
+            ResearchTaskRecord(
+                research_goal="調査目標",
+                executed_queries=("q-a",),
+                adopted_claims=("claim-a",),
+            ),
+        ),
+        unresolved_after_search=("missing-a",),
+    )
+    expected_checkpoint_json = {
+        "schema_version": 1,
+        "as_of": "2026-08-03T09:00:00Z",
+        "tasks": [
+            {
+                "research_goal": "調査目標",
+                "executed_queries": ["q-a"],
+                "adopted_claims": ["claim-a"],
+            }
+        ],
+        "unresolved_after_search": ["missing-a"],
+    }
+    answering_runner = _patch_worker_execution(
+        monkeypatch,
+        lambda **_kwargs: fake_agent,
+        answering_runner=FakeAnsweringRunner(research_checkpoint=checkpoint),
+    )
+    captured_checkpoints: list[dict[str, Any] | None] = []
+    original_complete = AgentRunRepository.complete_run
+
+    async def capture_checkpoint(
+        repository: AgentRunRepository,
+        *,
+        run_id: UUID,
+        result: AnswerQuestionResult,
+        expected_attempt_epoch: int,
+        research_checkpoint: dict[str, Any] | None = None,
+    ) -> bool:
+        captured_checkpoints.append(research_checkpoint)
+        return await original_complete(
+            repository,
+            run_id=run_id,
+            result=result,
+            expected_attempt_epoch=expected_attempt_epoch,
+            research_checkpoint=research_checkpoint,
+        )
+
+    monkeypatch.setattr(AgentRunRepository, "complete_run", capture_checkpoint)
+
+    await agent_run_tasks.run_agent_answer(
+        trigger=AgentRunTrigger(run_id=run.id),
+        ctx=_ctx(session_factory),
+    )
+
+    assert len(answering_runner.calls) == 1
+    assert captured_checkpoints == [expected_checkpoint_json]
+    async with session_factory() as session:
+        completed = await session.get(AgentRun, run.id)
+        assert completed is not None
+        assert completed.status == "completed"
+        assert completed.research_checkpoint == expected_checkpoint_json
+
+
+@pytest.mark.asyncio
+async def test_run_agent_answer_forwards_none_when_run_result_has_no_checkpoint(
+    session_factory: async_sessionmaker[AsyncSession],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """direct_answer等、RunResult.research_checkpointがNoneのRunはNoneのまま渡る。"""
+    async with session_factory() as session:
+        _thread, _message, run = await _create_thread_message_run(session)
+    fake_agent = FakeAgent(_direct_result())
+    _patch_worker_execution(
+        monkeypatch,
+        lambda **_kwargs: fake_agent,
+        answering_runner=FakeAnsweringRunner(research_checkpoint=None),
+    )
+    captured_checkpoints: list[dict[str, Any] | None] = []
+    original_complete = AgentRunRepository.complete_run
+
+    async def capture_checkpoint(
+        repository: AgentRunRepository,
+        *,
+        run_id: UUID,
+        result: AnswerQuestionResult,
+        expected_attempt_epoch: int,
+        research_checkpoint: dict[str, Any] | None = None,
+    ) -> bool:
+        captured_checkpoints.append(research_checkpoint)
+        return await original_complete(
+            repository,
+            run_id=run_id,
+            result=result,
+            expected_attempt_epoch=expected_attempt_epoch,
+            research_checkpoint=research_checkpoint,
+        )
+
+    monkeypatch.setattr(AgentRunRepository, "complete_run", capture_checkpoint)
+
+    await agent_run_tasks.run_agent_answer(
+        trigger=AgentRunTrigger(run_id=run.id),
+        ctx=_ctx(session_factory),
+    )
+
+    assert captured_checkpoints == [None]
+    async with session_factory() as session:
+        completed = await session.get(AgentRun, run.id)
+        assert completed is not None
+        assert completed.research_checkpoint is None
+
+
+@pytest.mark.asyncio
+async def test_run_agent_answer_treats_checkpoint_serialization_failure_as_none(
+    session_factory: async_sessionmaker[AsyncSession],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """記録フロー4: model_dump失敗はcomplete_run呼び出し前に完結し、Noneとして
+    渡り、taskはfailedにせず正常に完了する。
+    """
+    async with session_factory() as session:
+        _thread, _message, run = await _create_thread_message_run(session)
+    fake_agent = FakeAgent(_direct_result())
+    checkpoint = ResearchCheckpoint(
+        as_of=datetime(2026, 8, 3, 9, 0, tzinfo=UTC),
+        tasks=(
+            ResearchTaskRecord(
+                research_goal="調査目標",
+                executed_queries=("q-a",),
+                adopted_claims=(),
+            ),
+        ),
+        unresolved_after_search=(),
+    )
+
+    def _raise_model_dump_failure(
+        self: ResearchCheckpoint, *_args: object, **_kwargs: object
+    ) -> None:
+        del self
+        raise RuntimeError("model_dump boom")
+
+    monkeypatch.setattr(ResearchCheckpoint, "model_dump", _raise_model_dump_failure)
+    _patch_worker_execution(
+        monkeypatch,
+        lambda **_kwargs: fake_agent,
+        answering_runner=FakeAnsweringRunner(research_checkpoint=checkpoint),
+    )
+    captured_checkpoints: list[dict[str, Any] | None] = []
+    original_complete = AgentRunRepository.complete_run
+
+    async def capture_checkpoint(
+        repository: AgentRunRepository,
+        *,
+        run_id: UUID,
+        result: AnswerQuestionResult,
+        expected_attempt_epoch: int,
+        research_checkpoint: dict[str, Any] | None = None,
+    ) -> bool:
+        captured_checkpoints.append(research_checkpoint)
+        return await original_complete(
+            repository,
+            run_id=run_id,
+            result=result,
+            expected_attempt_epoch=expected_attempt_epoch,
+            research_checkpoint=research_checkpoint,
+        )
+
+    monkeypatch.setattr(AgentRunRepository, "complete_run", capture_checkpoint)
+
+    await agent_run_tasks.run_agent_answer(
+        trigger=AgentRunTrigger(run_id=run.id),
+        ctx=_ctx(session_factory),
+    )
+
+    assert captured_checkpoints == [None]
+    async with session_factory() as session:
+        completed = await session.get(AgentRun, run.id)
+        assert completed is not None
+        assert completed.status == "completed"
+        assert completed.research_checkpoint is None
 
 
 @pytest.mark.asyncio
@@ -1873,6 +2200,7 @@ async def test_delta_finish_precedes_completed_commit_and_terminal(
         run_id: UUID,
         result: AnswerQuestionResult,
         expected_attempt_epoch: int,
+        research_checkpoint: dict[str, Any] | None = None,
     ) -> bool:
         order.append("complete_start")
         assert expected_attempt_epoch == 1
@@ -1881,6 +2209,7 @@ async def test_delta_finish_precedes_completed_commit_and_terminal(
             run_id=run_id,
             result=result,
             expected_attempt_epoch=expected_attempt_epoch,
+            research_checkpoint=research_checkpoint,
         )
 
     _patch_delta_worker(monkeypatch, build_agent)
@@ -2089,6 +2418,7 @@ async def test_completion_loser_with_existing_delta_has_no_terminal_or_assistant
         run_id: UUID,
         result: AnswerQuestionResult,
         expected_attempt_epoch: int,
+        research_checkpoint: dict[str, Any] | None = None,
     ) -> bool:
         assert (run_id, result, expected_attempt_epoch) == (
             run.id,
@@ -2160,6 +2490,7 @@ async def test_completion_failure_uses_failed_terminal_choke_point(
         run_id: UUID,
         result: AnswerQuestionResult,
         expected_attempt_epoch: int,
+        research_checkpoint: dict[str, Any] | None = None,
     ) -> bool:
         assert (run_id, result, expected_attempt_epoch) == (
             run.id,
@@ -2220,6 +2551,7 @@ async def test_completion_transition_loser_does_not_publish_terminal(
         run_id: UUID,
         result: AnswerQuestionResult,
         expected_attempt_epoch: int,
+        research_checkpoint: dict[str, Any] | None = None,
     ) -> bool:
         assert (run_id, result, expected_attempt_epoch) == (
             run.id,
@@ -2270,6 +2602,7 @@ async def test_completion_skip_does_not_publish_terminal(
         run_id: UUID,
         result: AnswerQuestionResult,
         expected_attempt_epoch: int,
+        research_checkpoint: dict[str, Any] | None = None,
     ) -> bool:
         assert (run_id, result, expected_attempt_epoch) == (
             run.id,
@@ -2612,6 +2945,140 @@ async def test_complete_run_warns_on_citation_source_mismatch_without_failing_ru
         assert completed_run is not None
         assert completed_run.status == "completed"
         assert completed_run.assistant_message_id is not None
+
+
+@pytest.mark.asyncio
+async def test_complete_run_persists_research_checkpoint_and_round_trips(
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    """永続化契約: research_checkpointへ渡したJSONBは、読み戻して
+    ResearchCheckpoint.model_validateが通る形でagent_runs.research_checkpointへ
+    そのまま保存される。
+    """
+    async with session_factory() as session:
+        _thread, _message, run = await _create_thread_message_run(
+            session,
+            status="running",
+            started_at=datetime.now(UTC),
+        )
+    checkpoint = ResearchCheckpoint(
+        as_of=datetime(2026, 8, 3, 9, 0, tzinfo=UTC),
+        tasks=(
+            ResearchTaskRecord(
+                research_goal="調査目標",
+                executed_queries=("q-a", "q-b"),
+                adopted_claims=("claim-a",),
+            ),
+        ),
+        unresolved_after_search=("missing-a",),
+    )
+    checkpoint_json = checkpoint.model_dump(mode="json")
+
+    async with session_factory() as session:
+        async with session.begin():
+            completed = await AgentRunRepository(session).complete_run(
+                run_id=run.id,
+                result=_direct_result(),
+                expected_attempt_epoch=run.attempt_epoch,
+                research_checkpoint=checkpoint_json,
+            )
+
+    assert completed is True
+    async with session_factory() as session:
+        persisted = await session.get(AgentRun, run.id)
+        assert persisted is not None
+        assert persisted.status == "completed"
+        assert persisted.research_checkpoint == checkpoint_json
+        round_tripped = ResearchCheckpoint.model_validate(persisted.research_checkpoint)
+        assert round_tripped == checkpoint
+
+
+@pytest.mark.asyncio
+async def test_complete_run_leaves_research_checkpoint_null_when_not_provided(
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    """direct_answer等、research_checkpointを渡さないRunはNULLのまま保存される。"""
+    async with session_factory() as session:
+        _thread, _message, run = await _create_thread_message_run(
+            session,
+            status="running",
+            started_at=datetime.now(UTC),
+        )
+
+    async with session_factory() as session:
+        async with session.begin():
+            completed = await AgentRunRepository(session).complete_run(
+                run_id=run.id,
+                result=_direct_result(),
+                expected_attempt_epoch=run.attempt_epoch,
+            )
+
+    assert completed is True
+    async with session_factory() as session:
+        persisted = await session.get(AgentRun, run.id)
+        assert persisted is not None
+        assert persisted.status == "completed"
+        assert persisted.research_checkpoint is None
+
+
+@pytest.mark.asyncio
+async def test_stale_complete_run_with_checkpoint_does_not_persist_it(
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    """既存guard(attempt_epoch fence)はresearch_checkpoint導入後も変わらない。
+
+    stale attemptがcheckpointを渡しても、epoch fenceに敗れればUPDATEごと
+    ロールバックされ、research_checkpointはNULLのまま残る。
+    """
+    async with session_factory() as setup_session:
+        _thread, _message, run = await _create_thread_message_run(
+            setup_session,
+            status="running",
+            attempt_epoch=1,
+        )
+    checkpoint_json = ResearchCheckpoint(
+        as_of=datetime(2026, 8, 3, 9, 0, tzinfo=UTC),
+        tasks=(
+            ResearchTaskRecord(
+                research_goal="stale攻撃者のcheckpoint",
+                executed_queries=("q",),
+                adopted_claims=(),
+            ),
+        ),
+        unresolved_after_search=(),
+    ).model_dump(mode="json")
+    stale_session = session_factory()
+    try:
+        async with stale_session.begin():
+            stale_run = await stale_session.get(AgentRun, run.id)
+            assert stale_run is not None
+            assert stale_run.attempt_epoch == 1
+
+        async with session_factory() as winner_session:
+            async with winner_session.begin():
+                prepared = acquired_prepared_run(
+                    await AgentRunRepository(winner_session).acquire_for_execution(
+                        run.id
+                    )
+                )
+                assert prepared.attempt_epoch == 2
+
+        with pytest.raises(RunTransitionLostError):
+            async with stale_session.begin():
+                await AgentRunRepository(stale_session).complete_run(
+                    run_id=run.id,
+                    result=_direct_result(),
+                    expected_attempt_epoch=stale_run.attempt_epoch,
+                    research_checkpoint=checkpoint_json,
+                )
+    finally:
+        await stale_session.close()
+
+    async with session_factory() as session:
+        current = await session.get(AgentRun, run.id)
+        assert current is not None
+        assert (current.status, current.attempt_epoch) == ("running", 2)
+        assert current.research_checkpoint is None
 
 
 @pytest.mark.asyncio

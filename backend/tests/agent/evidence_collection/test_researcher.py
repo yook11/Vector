@@ -25,6 +25,7 @@ from app.agent.evidence_collection.internal_search.query_embedding import (
     InternalSearchQueries,
 )
 from app.agent.planning.contract import ResearchTask
+from app.agent.runtime.contract import AgentResponseDefect, AgentResponseInvalidError
 from app.analysis.analyzed_article import InScopeAnalyzedArticle
 from app.analysis.assessment.domain.result import InScope, InScopeCategory
 from tests.agent.runtime._fakes import ScriptedAgentRuntime
@@ -427,6 +428,120 @@ async def test_external_events_fire_in_order_with_task_index_and_payload() -> No
             "candidate_count": 2,
         },
     ]
+
+
+@pytest.mark.asyncio
+async def test_executed_queries_holds_generated_queries_in_order_on_success() -> None:
+    """正本仕様: agent-research-checkpoint-context-slice.md「記録フロー」1。
+
+    provider呼び出しが全件成功する場合、executed_queriesは生成queryの全件を
+    生成順のまま保持する。
+    """
+    tool = _ExternalTool(
+        {
+            "first query": [_candidate("https://example.com/1")],
+            "second query": [_candidate("https://example.com/2")],
+        }
+    )
+    query_runtime = ScriptedAgentRuntime(
+        [_query_draft(["first query", "second query"])]
+    )
+    researcher = Researcher(internal_search=_InternalTool())
+
+    collected = await _collect(
+        researcher,
+        task=_task("goal", "internal query"),
+        external=_external_runtime(query_runtime, tool=tool),
+    )
+
+    assert collected.executed_queries == ("first query", "second query")
+
+
+@pytest.mark.asyncio
+async def test_executed_queries_drops_only_the_failed_query_preserving_order() -> None:
+    """executed_queriesはgenerated_queriesの部分列であり、生成順を保つ。
+
+    3件中2件目のprovider呼び出しだけが失敗した場合、失敗したqueryだけが
+    除かれ、残りの順序は生成順のまま変わらない。
+    """
+    tool = _ExternalTool(
+        {
+            "q1": [_candidate("https://example.com/1")],
+            "q3": [_candidate("https://example.com/3")],
+        },
+        errors_by_query={
+            "q2": ExternalSearchProviderError(reason="tavily_search_http_error")
+        },
+    )
+    query_runtime = ScriptedAgentRuntime([_query_draft(["q1", "q2", "q3"])])
+    researcher = Researcher(internal_search=_InternalTool())
+
+    collected = await _collect(
+        researcher,
+        task=_task("goal", "internal query"),
+        external=_external_runtime(query_runtime, tool=tool),
+    )
+
+    assert collected.generated_queries == ["q1", "q2", "q3"]
+    assert collected.executed_queries == ("q1", "q3")
+    assert collected.external_status == "succeeded"
+
+
+@pytest.mark.asyncio
+async def test_executed_queries_is_empty_when_every_provider_call_fails() -> None:
+    """全queryのprovider呼び出しが失敗する(external_status=provider_failed)と
+
+    記録できるqueryが0件になるため、executed_queriesは空tupleになる。
+    """
+    tool = _ExternalTool(
+        errors_by_query={
+            "q1": ExternalSearchProviderError(reason="tavily_search_http_error"),
+            "q2": ExternalSearchProviderError(reason="tavily_search_http_error"),
+        }
+    )
+    query_runtime = ScriptedAgentRuntime([_query_draft(["q1", "q2"])])
+    researcher = Researcher(internal_search=_InternalTool())
+
+    collected = await _collect(
+        researcher,
+        task=_task("goal", "internal query"),
+        external=_external_runtime(query_runtime, tool=tool),
+    )
+
+    assert collected.external_status == "provider_failed"
+    assert collected.executed_queries == ()
+
+
+@pytest.mark.asyncio
+async def test_executed_queries_is_empty_when_query_generation_fails() -> None:
+    """query生成自体が失敗するとexternal_status=query_generation_failedになり、
+
+    provider呼び出しが一度も起きないためexecuted_queriesは空tupleになる。
+    """
+    query_runtime = ScriptedAgentRuntime(
+        [AgentResponseInvalidError(AgentResponseDefect.OUTPUT_SCHEMA_MISMATCH)]
+    )
+    researcher = Researcher(internal_search=_InternalTool())
+
+    collected = await _collect(
+        researcher,
+        task=_task("goal", "internal query"),
+        external=_external_runtime(query_runtime),
+    )
+
+    assert collected.external_status == "query_generation_failed"
+    assert collected.executed_queries == ()
+
+
+@pytest.mark.asyncio
+async def test_executed_queries_is_empty_when_external_runtime_is_none() -> None:
+    """外部検索を実行しないtask(external=None)ではexecuted_queriesが空tupleになる。"""
+    researcher = Researcher(internal_search=_InternalTool())
+
+    collected = await _collect(researcher, task=_task("goal", "internal query"))
+
+    assert collected.external_status is None
+    assert collected.executed_queries == ()
 
 
 def test_researcher_module_does_not_import_infrastructure_construction() -> None:

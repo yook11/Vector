@@ -78,6 +78,7 @@ from app.agent.planning.contract import (
     SearchPlan,
     TargetTimeWindow,
 )
+from app.agent.research_checkpoint import ResearchCheckpoint, build_research_checkpoint
 from app.agent.running.contract import (
     AnsweringPhases,
     AnsweringPhasesFactory,
@@ -103,6 +104,7 @@ class _TaskCollection:
     research_goal: str
     internal_hits: list[InternalArticleSearchHit]
     external_candidates: list[ExternalSearchCandidate]
+    executed_queries: tuple[str, ...]
     report: ResearchTaskReport
 
 
@@ -166,12 +168,14 @@ class AnsweringRunner:
             planning_request = PlanningRequest(
                 context=answering_context.question_context,
                 as_of=answering_context.run_context.as_of,
+                prior_research=input.prior_research,
             )
             answering_request = AnsweringRequest(
                 context=answering_context.question_context,
                 as_of=answering_context.run_context.as_of,
             )
             plan = await phases.planner.plan(planning_request)
+            research_checkpoint: ResearchCheckpoint | None
             match plan:
                 case DirectAnswerPlan():
                     final_output = await self._answer_directly(
@@ -179,8 +183,12 @@ class AnsweringRunner:
                         request=answering_request,
                         previous_answer=answering_context.previous_answer,
                     )
+                    research_checkpoint = None
                 case SearchPlan():
-                    final_output = await self._answer_with_evidence(
+                    (
+                        final_output,
+                        research_checkpoint,
+                    ) = await self._answer_with_evidence(
                         phases=phases,
                         request=answering_request,
                         plan=plan,
@@ -191,6 +199,7 @@ class AnsweringRunner:
             return RunResult(
                 final_output=final_output,
                 context=answering_context,
+                research_checkpoint=research_checkpoint,
             )
 
     async def _answer_directly(
@@ -220,9 +229,9 @@ class AnsweringRunner:
         request: AnsweringRequest,
         plan: SearchPlan,
         run_span: LogfireSpan,
-    ) -> AnswerQuestionResult:
+    ) -> tuple[AnswerQuestionResult, ResearchCheckpoint | None]:
         await self._report_progress("evidence_collection")
-        outcome = await self._collect_evidence(
+        outcome, research_checkpoint = await self._collect_evidence(
             phases=phases,
             plan=plan,
             as_of=request.as_of,
@@ -245,7 +254,7 @@ class AnsweringRunner:
         _record_evidence_span_attributes(
             run_span, outcome=outcome, sources=result.sources
         )
-        return result
+        return result, research_checkpoint
 
     async def _collect_evidence(
         self,
@@ -253,7 +262,7 @@ class AnsweringRunner:
         phases: AnsweringPhases,
         plan: SearchPlan,
         as_of: datetime,
-    ) -> EvidenceCollectionOutcome:
+    ) -> tuple[EvidenceCollectionOutcome, ResearchCheckpoint | None]:
         tasks = plan.research_tasks
         time_filter_failure: TimeFilterFailureReason | None = None
         try:
@@ -299,7 +308,7 @@ class AnsweringRunner:
         date_filter: ExternalSearchDateFilter | None,
         time_filter_failure: TimeFilterFailureReason | None,
         as_of: datetime,
-    ) -> EvidenceCollectionOutcome:
+    ) -> tuple[EvidenceCollectionOutcome, ResearchCheckpoint | None]:
         effective_agent_count = resolve_external_search_agent_count(
             task_count=len(tasks),
             requested_agent_count=self._requested_external_agent_count,
@@ -340,10 +349,18 @@ class AnsweringRunner:
             candidates.internal_hits or candidates.external_candidates
             for candidates in review_candidates
         ):
-            return self._closed_evidence_outcome(
-                review=EvidenceReviewReport(review="skipped_empty"),
-                task_reports=task_reports,
-                effective_agent_count=effective_agent_count,
+            return (
+                self._closed_evidence_outcome(
+                    review=EvidenceReviewReport(review="skipped_empty"),
+                    task_reports=task_reports,
+                    effective_agent_count=effective_agent_count,
+                ),
+                _build_research_checkpoint(
+                    plan=plan,
+                    collected_tasks=collected_tasks,
+                    review_outcome=None,
+                    as_of=as_of,
+                ),
             )
 
         await self._report_progress("evidence_review")
@@ -354,36 +371,49 @@ class AnsweringRunner:
         )
 
         if outcome.failure_reason is not None:
-            return self._closed_evidence_outcome(
-                review=EvidenceReviewReport(
-                    review="failed",
-                    review_failure_reason=outcome.failure_reason,
+            return (
+                self._closed_evidence_outcome(
+                    review=EvidenceReviewReport(
+                        review="failed",
+                        review_failure_reason=outcome.failure_reason,
+                    ),
+                    task_reports=task_reports,
+                    effective_agent_count=effective_agent_count,
                 ),
-                task_reports=task_reports,
-                effective_agent_count=effective_agent_count,
+                None,
             )
 
         await self._report_selected_evidence(outcome=outcome)
 
+        research_checkpoint = _build_research_checkpoint(
+            plan=plan,
+            collected_tasks=collected_tasks,
+            review_outcome=outcome,
+            as_of=as_of,
+        )
+
         deduplicated_internal_evidence, internal_deduplicated_count = (
             _deduplicate_internal_evidence_by_curation_id(outcome.internal_evidence)
         )
-        return EvidenceCollectionOutcome(
-            internal_evidence=deduplicated_internal_evidence,
-            internal_deduplicated_count=internal_deduplicated_count,
-            external_search=ExternalSearchOutcome(
-                evidence=outcome.external_evidence,
-                requested_agent_count=self._requested_external_agent_count,
-                effective_agent_count=effective_agent_count,
+        return (
+            EvidenceCollectionOutcome(
+                internal_evidence=deduplicated_internal_evidence,
+                internal_deduplicated_count=internal_deduplicated_count,
+                external_search=ExternalSearchOutcome(
+                    evidence=outcome.external_evidence,
+                    requested_agent_count=self._requested_external_agent_count,
+                    effective_agent_count=effective_agent_count,
+                ),
+                task_reports=task_reports,
+                review=EvidenceReviewReport(
+                    review="succeeded",
+                    internal_evidence_count=len(outcome.internal_evidence),
+                    external_evidence_count=len(outcome.external_evidence),
+                    dropped_selection_count=outcome.dropped_selection_count,
+                    missing=outcome.missing,
+                ),
             ),
-            task_reports=task_reports,
-            review=EvidenceReviewReport(
-                review="succeeded",
-                internal_evidence_count=len(outcome.internal_evidence),
-                external_evidence_count=len(outcome.external_evidence),
-                dropped_selection_count=outcome.dropped_selection_count,
-                missing=outcome.missing,
-            ),
+            research_checkpoint,
         )
 
     def _closed_evidence_outcome(
@@ -452,6 +482,7 @@ class AnsweringRunner:
             research_goal=task.research_goal,
             internal_hits=collected.internal_hits,
             external_candidates=collected.candidate_pool,
+            executed_queries=collected.executed_queries,
             report=report,
         )
 
@@ -511,6 +542,30 @@ def _deduplicate_internal_evidence_by_curation_id(
         deduplicated.append(item)
         seen_curation_ids.add(item.curation_id)
     return deduplicated, dropped_count
+
+
+def _build_research_checkpoint(
+    *,
+    plan: SearchPlan,
+    collected_tasks: list[_TaskCollection],
+    review_outcome: EvidenceReviewOutcome | None,
+    as_of: datetime,
+) -> ResearchCheckpoint | None:
+    """組み立て失敗は安定failure codeのみ記録し回答workflowを継続する。"""
+    executed_queries_by_task = {
+        collected.task_index: collected.executed_queries
+        for collected in collected_tasks
+    }
+    try:
+        return build_research_checkpoint(
+            plan=plan,
+            executed_queries_by_task=executed_queries_by_task,
+            review_outcome=review_outcome,
+            as_of=as_of,
+        )
+    except Exception:
+        logfire.warning("research_checkpoint_build_failed", failure_code="build_failed")
+        return None
 
 
 def _record_evidence_span_attributes(

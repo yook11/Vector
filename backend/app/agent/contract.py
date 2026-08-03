@@ -6,9 +6,10 @@ API / UI / graph runtime から独立した final result と plan 型をここ�
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Annotated, Literal, Protocol, Self
+from typing import Annotated, Final, Literal, Protocol, Self
 
 from pydantic import (
+    AwareDatetime,
     BaseModel,
     ConfigDict,
     Field,
@@ -28,6 +29,11 @@ __all__ = [
     "AnswerQuestionResult",
     "AnswerPlanSummary",
     "AnswerEventReporter",
+    "EVIDENCE_CLAIM_MAX_CHARS",
+    "EVIDENCE_REVIEW_ADOPTION_LIMIT",
+    "EVIDENCE_REVIEW_MISSING_LIMIT",
+    "EXTERNAL_QUERY_MAX_CHARS",
+    "EXTERNAL_TASK_QUERY_LIMIT",
     "ExternalSearchCandidatesFetchedEvent",
     "EvidenceReviewSelectedEvent",
     "ExternalSearchQueriesGeneratedEvent",
@@ -36,9 +42,16 @@ __all__ = [
     "InternalSearchCompletedEvent",
     "InternalSearchStartedEvent",
     "InternalArticleSource",
+    "MAX_ARTICLE_SEARCH_QUERIES",
+    "MISSING_ITEM_MAX_CHARS",
     "NonBlankText",
+    "PRIOR_RESEARCH_CHECKPOINT_LIMIT",
     "QuestionResolvedEvent",
     "PlanType",
+    "RESEARCH_GOAL_MAX_CHARS",
+    "RESEARCH_TASK_LIMIT",
+    "ResearchCheckpoint",
+    "ResearchTaskRecord",
 ]
 
 PlanType = Literal["direct_answer", "search"]
@@ -222,3 +235,78 @@ class AnswerEventReporter(Protocol):
     """実装は best-effort とし、送信失敗を呼び出し元へ伝播させない。"""
 
     async def event_occurred(self, event: AnswerProgressEvent) -> None: ...
+
+
+# 工程を跨いで共有される予算・上限の正本。ResearchCheckpointがplanner input
+# projectionとしてこのleafへ集約されたため、参照される側の定数も合わせてここへ
+# 集約する(各工程のcontract.pyはこれをre-exportし、参照元は無変更)。
+RESEARCH_TASK_LIMIT = 3
+MAX_ARTICLE_SEARCH_QUERIES = 3
+RESEARCH_GOAL_MAX_CHARS: Final[int] = 200
+# round-robin trimが各taskの先頭queryを必ず残せるのは、
+# RESEARCH_TASK_LIMIT <= MAX_ARTICLE_SEARCH_QUERIESが前提。
+
+EXTERNAL_TASK_QUERY_LIMIT = 3
+EXTERNAL_QUERY_MAX_CHARS = 200
+EVIDENCE_CLAIM_MAX_CHARS = 300
+MISSING_ITEM_MAX_CHARS = 200
+
+# Run 単位で reviewer が採用できる根拠の上限(内外合算)。
+EVIDENCE_REVIEW_ADOPTION_LIMIT: Final[int] = 15
+# Run 単位で reviewer が報告できる missing 件数の上限。
+EVIDENCE_REVIEW_MISSING_LIMIT: Final[int] = 8
+
+# 後続Runへ注入する直近checkpoint件数の正本(注入フロー2)。
+PRIOR_RESEARCH_CHECKPOINT_LIMIT: Final[int] = 3
+
+_ExecutedQuery = Annotated[
+    str,
+    StringConstraints(min_length=1, max_length=EXTERNAL_QUERY_MAX_CHARS),
+]
+_AdoptedClaim = Annotated[str, StringConstraints(max_length=EVIDENCE_CLAIM_MAX_CHARS)]
+_UnresolvedItem = Annotated[str, StringConstraints(max_length=MISSING_ITEM_MAX_CHARS)]
+
+
+class ResearchTaskRecord(BaseModel):
+    """1 research taskの調査記録。executed_queriesが空になるtaskは記録しない。"""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    research_goal: str = Field(min_length=1, max_length=RESEARCH_GOAL_MAX_CHARS)
+    # provider呼び出しに成功した外部queryのみ。min 1件を型で強制する。
+    executed_queries: tuple[_ExecutedQuery, ...] = Field(
+        min_length=1,
+        max_length=EXTERNAL_TASK_QUERY_LIMIT,
+    )
+    # 外部検索から採用されたclaim。空 = 有用な候補なし。
+    # Run全体(Checkpoint全task合計)の上限はResearchCheckpointのvalidatorが持つ。
+    adopted_claims: tuple[_AdoptedClaim, ...]
+
+
+class ResearchCheckpoint(BaseModel):
+    """Runが実行した外部検索の決定的な記録。"""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    schema_version: Literal[1] = 1
+    as_of: AwareDatetime
+    # min 1件。0件になるRunはcolumnをNULLにする(builderがNoneを返す)。
+    tasks: tuple[ResearchTaskRecord, ...] = Field(
+        min_length=1,
+        max_length=RESEARCH_TASK_LIMIT,
+    )
+    # Evidence Reviewerのmissingのverbatim copy。Run全体で1本。
+    unresolved_after_search: tuple[_UnresolvedItem, ...] = Field(
+        max_length=EVIDENCE_REVIEW_MISSING_LIMIT,
+    )
+
+    @model_validator(mode="after")
+    def _validate_total_adopted_claims(self) -> Self:
+        # adopted_claimsの上限はtask個別ではなくCheckpoint全task合計(reviewer が
+        # Run単位で採用できる根拠の上限と同一)。
+        total_adopted_claims = sum(len(task.adopted_claims) for task in self.tasks)
+        if total_adopted_claims > EVIDENCE_REVIEW_ADOPTION_LIMIT:
+            raise ValueError(
+                "adopted claims across tasks exceed the review adoption limit"
+            )
+        return self

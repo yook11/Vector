@@ -74,6 +74,7 @@ class ResearchTaskCandidates:
     provider_failed_query_count: int
     candidate_pool: list[ExternalSearchCandidate]
     external_status: ExternalCollectionStatus | None
+    executed_queries: tuple[str, ...]
 
 
 @dataclass(frozen=True, slots=True)
@@ -110,6 +111,7 @@ class Researcher:
             provider_failed_query_count,
             candidate_pool,
             external_status,
+            executed_queries,
         ) = _raise_if_exception(external_result)
         return ResearchTaskCandidates(
             internal_hits=hits,
@@ -118,6 +120,7 @@ class Researcher:
             provider_failed_query_count=provider_failed_query_count,
             candidate_pool=candidate_pool,
             external_status=external_status,
+            executed_queries=executed_queries,
         )
 
     async def _collect_internal(
@@ -156,10 +159,14 @@ class Researcher:
         target_time_window: TargetTimeWindow | None,
         as_of: datetime,
     ) -> tuple[
-        list[str], int, list[ExternalSearchCandidate], ExternalCollectionStatus | None
+        list[str],
+        int,
+        list[ExternalSearchCandidate],
+        ExternalCollectionStatus | None,
+        tuple[str, ...],
     ]:
         if external is None:
-            return [], 0, [], None
+            return [], 0, [], None, ()
 
         query_input = ExternalQueryGenerationInput(
             task=ExternalResearchTask(research_goal=task.research_goal),
@@ -181,17 +188,20 @@ class Researcher:
                     timeout=QUERY_GENERATE_TIMEOUT_SECONDS,
                 )
             except (AgentResponseInvalidError, AIProviderError, TimeoutError):
-                return [], 0, [], "query_generation_failed"
+                return [], 0, [], "query_generation_failed", ()
 
         queries = clean_generated_queries(query_draft.queries)
         if not queries:
-            return [], 0, [], "query_generation_failed"
+            return [], 0, [], "query_generation_failed", ()
         await self._report_event(
             ExternalSearchQueriesGeneratedEvent(task_index=task_index, queries=queries)
         )
 
         query_candidates: list[list[ExternalSearchCandidate]] = []
+        executed_queries: list[str] = []
         provider_failed_query_count = 0
+        # gather_cancel_on_errorはasyncio.gatherに委譲しており、結果順は
+        # 完了順でなく渡したawaitablesの順(=queriesの順)と一致する。
         provider_results = await gather_cancel_on_error(
             *[
                 self._search_external_query(
@@ -202,15 +212,16 @@ class Researcher:
                 for query in queries
             ]
         )
-        for candidates, failed in provider_results:
+        for query, (candidates, failed) in zip(queries, provider_results, strict=True):
             if failed:
                 provider_failed_query_count += 1
                 query_candidates.append([])
                 continue
             query_candidates.append(candidates)
+            executed_queries.append(query)
 
         if provider_failed_query_count == len(queries):
-            return queries, provider_failed_query_count, [], "provider_failed"
+            return queries, provider_failed_query_count, [], "provider_failed", ()
 
         pool = build_candidate_pool(query_candidates)
         await self._report_event(
@@ -219,7 +230,13 @@ class Researcher:
                 candidate_count=len(pool),
             )
         )
-        return queries, provider_failed_query_count, pool, "succeeded"
+        return (
+            queries,
+            provider_failed_query_count,
+            pool,
+            "succeeded",
+            tuple(executed_queries),
+        )
 
     async def _search_external_query(
         self,

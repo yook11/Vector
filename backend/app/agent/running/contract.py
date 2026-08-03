@@ -17,6 +17,7 @@ from app.agent.evidence_collection.external_search import (
 )
 from app.agent.planning.contract import QuestionPlanner
 from app.agent.question_context.contract import QuestionContext
+from app.agent.research_checkpoint import ResearchCheckpoint
 from app.agent.threads.contracts import ThreadMessageSnapshot
 
 __all__ = [
@@ -49,6 +50,8 @@ class AnsweringPhasesFactory(Protocol):
 class RunInput:
     question: str
     history: tuple[ThreadMessageSnapshot, ...]
+    # 同threadの直近checkpoint(新しい順)。読出し・検証失敗時は空。
+    prior_research: tuple[ResearchCheckpoint, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -68,6 +71,8 @@ class AnsweringRunContext:
 class RunResult:
     final_output: AnswerQuestionResult
     context: AnsweringRunContext
+    # 外部検索を実行しなかったRun(direct_answer含む)ではNone。
+    research_checkpoint: ResearchCheckpoint | None = None
 
 
 class QuestionContextPreparer(Protocol):

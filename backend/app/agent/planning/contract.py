@@ -15,7 +15,14 @@ from pydantic import (
     model_validator,
 )
 
-from app.agent.contract import PlanType
+from app.agent.contract import (
+    MAX_ARTICLE_SEARCH_QUERIES,
+    PRIOR_RESEARCH_CHECKPOINT_LIMIT,
+    RESEARCH_GOAL_MAX_CHARS,
+    RESEARCH_TASK_LIMIT,
+    PlanType,
+    ResearchCheckpoint,
+)
 from app.agent.question_context.contract import QuestionContext
 from app.agent.runtime.contract import AgentResponseDefect, AgentResponseInvalidError
 
@@ -30,6 +37,7 @@ __all__ = [
     "QuestionPlanDraft",
     "QuestionPlanner",
     "PlanType",
+    "RESEARCH_GOAL_MAX_CHARS",
     "RESEARCH_TASK_LIMIT",
     "ResearchTask",
     "ResearchTaskDraft",
@@ -39,11 +47,6 @@ __all__ = [
     "plan_from_draft",
     "render_target_time_window",
 ]
-
-RESEARCH_TASK_LIMIT = 3
-MAX_ARTICLE_SEARCH_QUERIES = 3
-# round-robin trimが各taskの先頭queryを必ず残せるのは、
-# RESEARCH_TASK_LIMIT <= MAX_ARTICLE_SEARCH_QUERIESが前提。
 
 PlanQuery = Annotated[
     str,
@@ -164,6 +167,11 @@ class PlanningRequest(BaseModel):
 
     context: QuestionContext
     as_of: datetime
+    # 同threadの直近checkpoint(新しい順)。読出し・検証失敗時は空。
+    prior_research: tuple[ResearchCheckpoint, ...] = Field(
+        default=(),
+        max_length=PRIOR_RESEARCH_CHECKPOINT_LIMIT,
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -300,7 +308,7 @@ def _clean_research_tasks(
     cleaned_tasks: list[tuple[str, list[str]]] = []
     seen_goals: set[str] = set()
     for task in tasks:
-        research_goal = task.research_goal.strip()
+        research_goal = task.research_goal.strip()[:RESEARCH_GOAL_MAX_CHARS]
         if not research_goal or research_goal in seen_goals:
             continue
         cleaned_tasks.append(

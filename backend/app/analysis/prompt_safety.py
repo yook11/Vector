@@ -9,6 +9,8 @@
     - 閉じタグ ``</untrusted_input>`` (大小文字 / 内部空白バリアント含む)
       -> ``[/untrusted_input]``
     - 開きタグ ``<untrusted_input>`` (同) -> ``[untrusted_input]``
+    - 閉じタグ ``</untrusted_prior_research>`` (同) -> ``[/untrusted_prior_research]``
+    - 開きタグ ``<untrusted_prior_research>`` (同) -> ``[untrusted_prior_research]``
     - 行頭 ATX マーカ ``^#{1,6}[ \\t　]+`` -> ``#`` と空白の間に ZWSP 挿入
       (Vector の prompt は ``# Step N`` を section 区切りに使うため、同形の
       入力を偽セクションとして解釈させない。タブ・全角空白も捕捉する)
@@ -35,6 +37,17 @@ _BOUNDARY_CLOSE = re.compile(r"<\s*/\s*untrusted_input\s*>", re.IGNORECASE)
 _BOUNDARY_CLOSE_NEUTRAL = "[/untrusted_input]"
 _BOUNDARY_OPEN = re.compile(r"<\s*untrusted_input\s*>", re.IGNORECASE)
 _BOUNDARY_OPEN_NEUTRAL = "[untrusted_input]"
+
+# Prior Research Context block (agent-research-checkpoint-context-slice) も
+# 同じ方式で境界脱出を防ぐ。
+_PRIOR_RESEARCH_BOUNDARY_CLOSE = re.compile(
+    r"<\s*/\s*untrusted_prior_research\s*>", re.IGNORECASE
+)
+_PRIOR_RESEARCH_BOUNDARY_CLOSE_NEUTRAL = "[/untrusted_prior_research]"
+_PRIOR_RESEARCH_BOUNDARY_OPEN = re.compile(
+    r"<\s*untrusted_prior_research\s*>", re.IGNORECASE
+)
+_PRIOR_RESEARCH_BOUNDARY_OPEN_NEUTRAL = "[untrusted_prior_research]"
 
 _ZWSP = "​"
 
@@ -75,6 +88,12 @@ def sanitize_for_untrusted_block(text: str) -> str:
     """
     text = _BOUNDARY_CLOSE.sub(_BOUNDARY_CLOSE_NEUTRAL, text)
     text = _BOUNDARY_OPEN.sub(_BOUNDARY_OPEN_NEUTRAL, text)
+    text = _PRIOR_RESEARCH_BOUNDARY_CLOSE.sub(
+        _PRIOR_RESEARCH_BOUNDARY_CLOSE_NEUTRAL, text
+    )
+    text = _PRIOR_RESEARCH_BOUNDARY_OPEN.sub(
+        _PRIOR_RESEARCH_BOUNDARY_OPEN_NEUTRAL, text
+    )
     text = _ATX_HEADER.sub(rf"\1{_ZWSP} ", text)
     text = _FULLWIDTH_BRACKET_HEADER.sub(rf"【\1{_ZWSP}】", text)
     return text

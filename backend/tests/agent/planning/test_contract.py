@@ -4,13 +4,14 @@ from __future__ import annotations
 
 import importlib
 import inspect
-from datetime import date, datetime
+from datetime import UTC, date, datetime
 from typing import Any, get_args, get_type_hints
 
 import pytest
 from pydantic import ValidationError
 
 from app.agent.agent import Agent
+from app.agent.contract import PRIOR_RESEARCH_CHECKPOINT_LIMIT, ResearchTaskRecord
 from app.agent.planning.service import QuestionPlanningService
 from app.agent.question_context.contract import QuestionContext
 from app.agent.runtime.contract import (
@@ -319,6 +320,48 @@ def test_plan_from_draft_normalizes_tasks_and_keeps_typed_time_window() -> None:
     assert "fallback_query" not in inspect.signature(plan_from_draft).parameters
 
 
+def test_plan_from_draft_truncates_research_goal_after_strip_to_max_chars() -> None:
+    """research_goalはstrip後にRESEARCH_GOAL_MAX_CHARSへ切り詰められる(仕様「上限」節)。"""
+    plan_from_draft = _required_contract("plan_from_draft")
+    max_chars = _required_contract("RESEARCH_GOAL_MAX_CHARS")
+    overflowing_body = "あ" * (max_chars + 10)
+    draft = _draft(
+        research_tasks=[_task_draft(f"  {overflowing_body}  ", ["query"])],
+    )
+
+    plan = plan_from_draft(draft)
+
+    assert plan.research_tasks[0].research_goal == overflowing_body[:max_chars]
+    assert len(plan.research_tasks[0].research_goal) == max_chars
+
+
+def test_plan_from_draft_drops_second_task_on_truncated_goal_collision() -> None:
+    """切り詰め後に一致する2つのtaskは重複として2件目が落ちる(先勝ち)。
+
+    RESEARCH_GOAL_MAX_CHARSより長い共通接頭辞を持ち、上限を超えた位置だけが
+    異なるgoalは、切り詰め後は同一文字列になり2件目が重複として除外される。
+    """
+    plan_from_draft = _required_contract("plan_from_draft")
+    max_chars = _required_contract("RESEARCH_GOAL_MAX_CHARS")
+    shared_overflowing_prefix = "調査目的" * (max_chars // 4 + 5)
+    assert len(shared_overflowing_prefix) > max_chars
+    draft = _draft(
+        research_tasks=[
+            _task_draft(f"{shared_overflowing_prefix}最初の末尾", ["first query"]),
+            _task_draft(f"{shared_overflowing_prefix}二番目の末尾", ["second query"]),
+        ],
+    )
+
+    plan = plan_from_draft(draft)
+
+    assert [task.research_goal for task in plan.research_tasks] == [
+        shared_overflowing_prefix[:max_chars]
+    ]
+    assert [task.article_search_queries for task in plan.research_tasks] == [
+        ["first query"]
+    ]
+
+
 @pytest.mark.parametrize(
     ("task_queries", "expected_task_queries"),
     [
@@ -464,7 +507,12 @@ def test_search_plan_has_no_flattening_projection_properties() -> None:
 
 
 def test_planning_request_is_a_frozen_context_consumer_wrapper() -> None:
+    """agent-research-checkpoint-context-slice: PlanningRequestは既存2 fieldに加え、
+
+    同threadの直近checkpointを渡す`prior_research`(既定は空tuple)を持つ。
+    """
     request_type = _required_contract("PlanningRequest")
+    checkpoint_type = _required_contract("ResearchCheckpoint")
     context = QuestionContext(standalone_question="NVIDIA の直近発表は？")
     as_of = datetime(2026, 7, 10)
     request = request_type(context=context, as_of=as_of)
@@ -478,17 +526,62 @@ def test_planning_request_is_a_frozen_context_consumer_wrapper() -> None:
         set(request_type.model_fields),
         request_type.model_fields["context"].annotation,
         request_type.model_fields["as_of"].annotation,
+        request_type.model_fields["prior_research"].annotation,
         request.context is context,
         request.as_of,
+        request.prior_research,
         "as_of" not in QuestionContext.model_fields,
     ) == (
-        {"context", "as_of"},
+        {"context", "as_of", "prior_research"},
         QuestionContext,
         datetime,
+        tuple[checkpoint_type, ...],
         True,
         as_of,
+        (),
         True,
     )
+
+
+def _prior_research_checkpoint(hour: int) -> Any:
+    checkpoint_type = _required_contract("ResearchCheckpoint")
+    return checkpoint_type(
+        as_of=datetime(2026, 7, 1, hour, tzinfo=UTC),
+        tasks=(
+            ResearchTaskRecord(
+                research_goal="調査目標",
+                executed_queries=("q",),
+                adopted_claims=(),
+            ),
+        ),
+        unresolved_after_search=(),
+    )
+
+
+def test_planning_request_rejects_prior_research_over_the_shared_checkpoint_limit() -> (
+    None
+):
+    """prior_researchの件数上限はPRIOR_RESEARCH_CHECKPOINT_LIMIT(共有契約)を参照する。"""
+    request_type = _required_contract("PlanningRequest")
+    context = QuestionContext(standalone_question="NVIDIA の直近発表は？")
+    as_of = datetime(2026, 7, 10)
+    checkpoints_at_limit = tuple(
+        _prior_research_checkpoint(hour)
+        for hour in range(PRIOR_RESEARCH_CHECKPOINT_LIMIT)
+    )
+    checkpoints_over_limit = checkpoints_at_limit + (
+        _prior_research_checkpoint(PRIOR_RESEARCH_CHECKPOINT_LIMIT),
+    )
+
+    accepted = request_type(
+        context=context, as_of=as_of, prior_research=checkpoints_at_limit
+    )
+
+    assert accepted.prior_research == checkpoints_at_limit
+    with pytest.raises(ValidationError):
+        request_type(
+            context=context, as_of=as_of, prior_research=checkpoints_over_limit
+        )
 
 
 def test_planning_boundaries_accept_planning_request() -> None:
