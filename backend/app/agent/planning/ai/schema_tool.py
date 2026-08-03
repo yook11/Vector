@@ -23,14 +23,13 @@ QUESTION_PLANNER_GEMINI_SCHEMA: dict[str, Any] = {
         "plan_type": {
             "type": "STRING",
             "enum": list(get_args(PlanType)),
-            "description": "Answer plan: direct_answer or search.",
+            "description": "計画の種別。direct_answer または search。",
         },
         "research_tasks": {
             "type": "ARRAY",
             "maxItems": RESEARCH_TASK_LIMIT,
             "description": (
-                "Research tasks, each pairing one research goal with the "
-                "internal search queries scoped to it."
+                "research_goalとarticle_search_queriesを対にした調査単位のリスト。"
             ),
             "items": {
                 "type": "OBJECT",

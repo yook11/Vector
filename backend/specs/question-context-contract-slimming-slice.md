@@ -2,7 +2,7 @@
 
 更新日: 2026-08-03
 
-実装状況: Proposed
+実装状況: Implemented
 
 ## 位置付け
 
@@ -220,6 +220,8 @@ active_goalはスレッド全体の目的であり、調査の向きを決める
     質問をそのままコピーせず、entity / topic / event / time intentを抽出・圧縮する。
   - `target_time_window`: 外部根拠の公開・更新期間の指定(正規化規則は判断手順のため
     instructions が正本。"Null means ..." の意味規則文は description から落とす)。
+  - `plan_type`: 計画の種別。direct_answer または search。
+  - `research_tasks`: research_goalとarticle_search_queriesを対にした調査単位のリスト。
 
 - 現行 v5 から意図的に削除する規則: 役割宣言、response_requirements への言及(無視指示を
   含む)、relevant_prior_coverage への言及、「内部記事へ同じ期間保証があるように表現しない」
@@ -274,7 +276,9 @@ task_groupsは、調査目的(research_goal)ごとにグループ化された候
 - response schema は selections / missing に maxItems(`EVIDENCE_REVIEW_ADOPTION_LIMIT` /
   `EVIDENCE_REVIEW_MISSING_LIMIT` を参照)を追加し、description を 1 行定義へ落とす
   (上限・「日本語で書く」等の規則文を description から削除。上限の実強制は
-  現行どおり Python 側の切り詰め・検証が保証する)。
+  現行どおり Python 側の切り詰め・検証が保証する)。1 行定義は
+  selections =「候補をindexで参照する採用リスト。」/
+  missing =「Run全体で確認できなかった点。」とする。
 - selections / claim / why_selected / candidate index の出力契約の構造、
   Run 単位 1 回の精査構造は変えない。
 

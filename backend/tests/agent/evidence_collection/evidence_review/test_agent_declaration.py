@@ -287,11 +287,6 @@ def test_agent_holds_the_complete_model_visible_response_schema() -> None:
 
     schema = _plain_schema(_reviewer_agent().response_schema)
 
-    assert schema["properties"]["selections"]["maxItems"] == adoption_limit
-    assert schema["properties"]["missing"]["maxItems"] == missing_limit
-    for forbidden in ("15", "8", "Japanese", "japanese"):
-        assert forbidden not in schema["properties"]["selections"]["description"]
-        assert forbidden not in schema["properties"]["missing"]["description"]
     assert schema == {
         "type": "object",
         "additionalProperties": False,
@@ -299,7 +294,7 @@ def test_agent_holds_the_complete_model_visible_response_schema() -> None:
         "properties": {
             "selections": {
                 "type": "array",
-                "description": schema["properties"]["selections"]["description"],
+                "description": "候補をindexで参照する採用リスト。",
                 "maxItems": adoption_limit,
                 "items": {
                     "type": "object",
@@ -314,7 +309,7 @@ def test_agent_holds_the_complete_model_visible_response_schema() -> None:
             },
             "missing": {
                 "type": "array",
-                "description": schema["properties"]["missing"]["description"],
+                "description": "Run全体で確認できなかった点。",
                 "maxItems": missing_limit,
                 "items": {"type": "string"},
             },

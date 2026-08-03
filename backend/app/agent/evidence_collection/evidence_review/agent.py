@@ -24,7 +24,7 @@ EVIDENCE_REVIEWER_RESPONSE_SCHEMA: Final[dict[str, Any]] = {
     "properties": {
         "selections": {
             "type": "array",
-            "description": "Selected candidates referenced by index.",
+            "description": "候補をindexで参照する採用リスト。",
             "maxItems": EVIDENCE_REVIEW_ADOPTION_LIMIT,
             "items": {
                 "type": "object",
@@ -39,7 +39,7 @@ EVIDENCE_REVIEWER_RESPONSE_SCHEMA: Final[dict[str, Any]] = {
         },
         "missing": {
             "type": "array",
-            "description": "Unconfirmed points across the run.",
+            "description": "Run全体で確認できなかった点。",
             "maxItems": EVIDENCE_REVIEW_MISSING_LIMIT,
             "items": {"type": "string"},
         },
