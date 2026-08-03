@@ -319,6 +319,48 @@ def test_plan_from_draft_normalizes_tasks_and_keeps_typed_time_window() -> None:
     assert "fallback_query" not in inspect.signature(plan_from_draft).parameters
 
 
+def test_plan_from_draft_truncates_research_goal_after_strip_to_max_chars() -> None:
+    """research_goalはstrip後にRESEARCH_GOAL_MAX_CHARSへ切り詰められる(仕様「上限」節)。"""
+    plan_from_draft = _required_contract("plan_from_draft")
+    max_chars = _required_contract("RESEARCH_GOAL_MAX_CHARS")
+    overflowing_body = "あ" * (max_chars + 10)
+    draft = _draft(
+        research_tasks=[_task_draft(f"  {overflowing_body}  ", ["query"])],
+    )
+
+    plan = plan_from_draft(draft)
+
+    assert plan.research_tasks[0].research_goal == overflowing_body[:max_chars]
+    assert len(plan.research_tasks[0].research_goal) == max_chars
+
+
+def test_plan_from_draft_drops_second_task_on_truncated_goal_collision() -> None:
+    """切り詰め後に一致する2つのtaskは重複として2件目が落ちる(先勝ち)。
+
+    RESEARCH_GOAL_MAX_CHARSより長い共通接頭辞を持ち、上限を超えた位置だけが
+    異なるgoalは、切り詰め後は同一文字列になり2件目が重複として除外される。
+    """
+    plan_from_draft = _required_contract("plan_from_draft")
+    max_chars = _required_contract("RESEARCH_GOAL_MAX_CHARS")
+    shared_overflowing_prefix = "調査目的" * (max_chars // 4 + 5)
+    assert len(shared_overflowing_prefix) > max_chars
+    draft = _draft(
+        research_tasks=[
+            _task_draft(f"{shared_overflowing_prefix}最初の末尾", ["first query"]),
+            _task_draft(f"{shared_overflowing_prefix}二番目の末尾", ["second query"]),
+        ],
+    )
+
+    plan = plan_from_draft(draft)
+
+    assert [task.research_goal for task in plan.research_tasks] == [
+        shared_overflowing_prefix[:max_chars]
+    ]
+    assert [task.article_search_queries for task in plan.research_tasks] == [
+        ["first query"]
+    ]
+
+
 @pytest.mark.parametrize(
     ("task_queries", "expected_task_queries"),
     [
