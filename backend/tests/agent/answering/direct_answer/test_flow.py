@@ -19,7 +19,7 @@ from app.agent.answering.direct_answer.contract import (
     DirectAnswerInvalidError,
 )
 from app.agent.answering.direct_answer.flow import DirectAnswerFlow
-from app.agent.question_context.contract import AnswerRequirement, QuestionContext
+from app.agent.question_context.contract import QuestionContext
 from app.analysis.ai_provider_errors import (
     AIProviderError,
     AIProviderNetworkError,
@@ -58,18 +58,7 @@ def _request() -> AnsweringRequest:
     return AnsweringRequest(
         context=QuestionContext(
             standalone_question="Vector の使い方を短く教えて",
-            content_requirements=[
-                AnswerRequirement(
-                    requirement_id="c1",
-                    description="Vector の使い方を説明する",
-                )
-            ],
-            response_requirements=[
-                AnswerRequirement(
-                    requirement_id="p1",
-                    description="短く回答する",
-                )
-            ],
+            answer_requirements=("Vector の使い方を説明する", "短く回答する"),
             relevant_prior_coverage="前回は基本操作を説明済み",
             active_goal="Vector を使い始める",
         ),
@@ -266,18 +255,7 @@ async def test_direct_answer_removes_inline_citation_markers_after_generation() 
         request=AnsweringRequest(
             context=QuestionContext(
                 standalone_question="前回の結論だけ",
-                content_requirements=[
-                    AnswerRequirement(
-                        requirement_id="c1",
-                        description="前回の結論を説明する",
-                    )
-                ],
-                response_requirements=[
-                    AnswerRequirement(
-                        requirement_id="p1",
-                        description="結論だけを短く回答する",
-                    )
-                ],
+                answer_requirements=("前回の結論を説明する", "結論だけを短く回答する"),
                 relevant_prior_coverage="根拠は説明済み",
                 active_goal="投資判断を進める",
             ),
@@ -287,13 +265,9 @@ async def test_direct_answer_removes_inline_citation_markers_after_generation() 
     )
 
     assert draft.answer == "結論は維持します。 詳細は省略します。"
-    assert (
-        generator.calls[0]["request"].context.content_requirements[0].description
-        == "前回の結論を説明する"
-    )
-    assert (
-        generator.calls[0]["request"].context.response_requirements[0].description
-        == "結論だけを短く回答する"
+    assert generator.calls[0]["request"].context.answer_requirements == (
+        "前回の結論を説明する",
+        "結論だけを短く回答する",
     )
     assert (
         generator.calls[0]["request"].context.relevant_prior_coverage

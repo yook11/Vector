@@ -43,12 +43,7 @@ from app.agent.planning.contract import (
     QuestionPlan,
     TargetTimeWindow,
 )
-from app.agent.question_context.contract import (
-    AnswerRequirement,
-    QuestionContext,
-    QuestionContextPreparationResult,
-    QuestionContextTelemetry,
-)
+from app.agent.question_context.contract import QuestionContext
 from app.agent.running import AnsweringPhases, AnsweringRunner, RunContext, RunInput
 from app.agent.runtime.contract import AgentResponseDefect, AgentResponseInvalidError
 from app.agent.threads.contracts import ThreadMessageSnapshot
@@ -87,8 +82,7 @@ class _WorkflowInput:
 def _input(
     question: str = "NVIDIA の直近発表は投資判断に重要？",
     *,
-    content_requirements: list[str] | None = None,
-    response_requirements: list[str] | None = None,
+    answer_requirements: list[str] | None = None,
     relevant_prior_coverage: str = "",
     active_goal: str = "",
     previous_answer: str = "",
@@ -96,16 +90,7 @@ def _input(
     return _WorkflowInput(
         context=QuestionContext(
             standalone_question=question,
-            content_requirements=[
-                AnswerRequirement(requirement_id=f"c{index}", description=description)
-                for index, description in enumerate(content_requirements or [], start=1)
-            ],
-            response_requirements=[
-                AnswerRequirement(requirement_id=f"p{index}", description=description)
-                for index, description in enumerate(
-                    response_requirements or [], start=1
-                )
-            ],
+            answer_requirements=tuple(answer_requirements or ()),
             relevant_prior_coverage=relevant_prior_coverage,
             active_goal=active_goal,
         ),
@@ -622,13 +607,10 @@ class _FixedContextPreparer:
         self._context = context
         self._timeline = timeline
 
-    async def prepare(self, **_kwargs: object) -> QuestionContextPreparationResult:
+    async def prepare(self, **_kwargs: object) -> QuestionContext:
         if self._timeline is not None:
             self._timeline.record("context_preparer.prepare")
-        return QuestionContextPreparationResult(
-            context=self._context,
-            telemetry=QuestionContextTelemetry(),
-        )
+        return self._context
 
 
 class _WorkflowHarness:
@@ -744,8 +726,7 @@ def _orchestrator(
 async def test_answer_direct_plan_calls_direct_answerer_only() -> None:
     input_ = _input(
         "前回の結論だけ",
-        content_requirements=["結論を説明する"],
-        response_requirements=["結論だけを短く"],
+        answer_requirements=["結論を説明する", "結論だけを短く"],
         relevant_prior_coverage="前回は根拠を説明済み",
         active_goal="投資判断を調査中",
         previous_answer="根拠付き前回答 [[1]]",
@@ -1018,7 +999,7 @@ async def test_unfulfilled_requirement_wording_no_longer_appears() -> None:
     """条件15: 要望由来の文言(回答要望を満たせませんでした: ...)が現れない。
 
     unfulfilled_requirement_ids自体が撤去されたため、request contextに
-    content/response requirementsがあってもmissing_aspectsへ反映されず、
+    answer_requirementsがあってもmissing_aspectsへ反映されず、
     statusはcitationの成否だけで決まる(answeredのまま)。
     """
     answer = "確認できた範囲を回答します。[[1]]"
@@ -1030,8 +1011,7 @@ async def test_unfulfilled_requirement_wording_no_longer_appears() -> None:
 
     result = await orchestrator.answer(
         _input(
-            content_requirements=["投資判断への影響を説明する"],
-            response_requirements=["初心者向けに説明する"],
+            answer_requirements=["投資判断への影響を説明する", "初心者向けに説明する"],
         )
     )
 
@@ -1204,8 +1184,7 @@ async def test_answer_deduplicates_repeated_citation_refs_in_source_order() -> N
 @pytest.mark.asyncio
 async def test_answer_passes_pipeline_inputs_and_variant_time_window() -> None:
     input_ = _input(
-        content_requirements=["発表後の差分を説明する"],
-        response_requirements=["詳しく説明する"],
+        answer_requirements=["発表後の差分を説明する", "詳しく説明する"],
         relevant_prior_coverage="発表内容は既出",
         active_goal="投資判断を調査中",
     )

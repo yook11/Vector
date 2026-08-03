@@ -23,14 +23,13 @@ QUESTION_PLANNER_GEMINI_SCHEMA: dict[str, Any] = {
         "plan_type": {
             "type": "STRING",
             "enum": list(get_args(PlanType)),
-            "description": "Answer plan: direct_answer or search.",
+            "description": "計画の種別。direct_answer または search。",
         },
         "research_tasks": {
             "type": "ARRAY",
             "maxItems": RESEARCH_TASK_LIMIT,
             "description": (
-                "Research tasks, each pairing one research goal with the "
-                "internal search queries scoped to it."
+                "research_goalとarticle_search_queriesを対にした調査単位のリスト。"
             ),
             "items": {
                 "type": "OBJECT",
@@ -41,20 +40,22 @@ QUESTION_PLANNER_GEMINI_SCHEMA: dict[str, Any] = {
                 "properties": {
                     "research_goal": {
                         "type": "STRING",
-                        "description": "One research goal for external news search.",
+                        "description": (
+                            "その調査で何を確認したいか、何が根拠として有用かを書く"
+                            "短い日本語。keyword queryは書かない。外部検索のqueryは"
+                            "実行時にリサーチャーが生成する。"
+                        ),
                     },
                     "article_search_queries": {
                         "type": "ARRAY",
                         "maxItems": MAX_ARTICLE_SEARCH_QUERIES,
                         "description": (
-                            "Queries for Vector analyzed article retrieval, "
-                            "scoped to this research task."
+                            "内部の分析済み記事をベクトル検索するための自然文。"
+                            "質問をそのままコピーせず、entity / topic / event / "
+                            "time intentを抽出・圧縮する。"
                         ),
                         "items": {
                             "type": "STRING",
-                            "description": (
-                                "One analyzed-article semantic search query."
-                            ),
                         },
                     },
                 },
@@ -64,10 +65,7 @@ QUESTION_PLANNER_GEMINI_SCHEMA: dict[str, Any] = {
             "type": "OBJECT",
             "nullable": True,
             "required": ["kind"],
-            "description": (
-                "Optional publication window for external evidence. Null means "
-                "publication date is intentionally unrestricted."
-            ),
+            "description": "外部根拠の公開・更新期間の指定。",
             "properties": {
                 "kind": {
                     "type": "STRING",

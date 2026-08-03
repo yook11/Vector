@@ -47,13 +47,11 @@ class EvidenceReviewer:
         self,
         *,
         tasks: list[ReviewTaskCandidates],
-        content_requirements: tuple[str, ...],
         as_of: datetime,
         reviewer_runtime: AgentRuntime,
     ) -> EvidenceReviewOutcome:
         review_input = EvidenceReviewInput(
             task_groups=build_review_task_groups(tasks),
-            content_requirements=content_requirements,
             as_of=as_of,
         )
         failure_reason: str | None = None

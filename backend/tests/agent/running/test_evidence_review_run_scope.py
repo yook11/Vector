@@ -56,12 +56,7 @@ from app.agent.evidence_collection.internal_search.contract import (
     InternalSearchError,
 )
 from app.agent.planning.contract import ResearchTask, SearchPlan, TargetTimeWindow
-from app.agent.question_context import (
-    AnswerRequirement,
-    QuestionContext,
-    QuestionContextPreparationResult,
-    QuestionContextTelemetry,
-)
+from app.agent.question_context import QuestionContext
 from app.agent.running import AnsweringPhases, AnsweringRunner, RunContext, RunInput
 from app.agent.runtime.contract import AgentResponseDefect, AgentResponseInvalidError
 from app.analysis.analyzed_article import InScopeAnalyzedArticle
@@ -144,18 +139,13 @@ def _external_candidate(url: str, *, title: str) -> ExternalSearchCandidate:
 
 
 class _Preparer:
-    def __init__(
-        self, *, content_requirements: list[AnswerRequirement] | None = None
-    ) -> None:
-        self._content_requirements = content_requirements or []
+    def __init__(self, *, answer_requirements: tuple[str, ...] | None = None) -> None:
+        self._answer_requirements = answer_requirements or ()
 
-    async def prepare(self, **_kwargs: object) -> QuestionContextPreparationResult:
-        return QuestionContextPreparationResult(
-            context=QuestionContext(
-                standalone_question="NVIDIA の見通しは？",
-                content_requirements=self._content_requirements,
-            ),
-            telemetry=QuestionContextTelemetry(),
+    async def prepare(self, **_kwargs: object) -> QuestionContext:
+        return QuestionContext(
+            standalone_question="NVIDIA の見通しは？",
+            answer_requirements=self._answer_requirements,
         )
 
 
@@ -288,7 +278,7 @@ def _runner(
     external_tool: object,
     internal_tool: object,
     events: object | None = None,
-    content_requirements: list[AnswerRequirement] | None = None,
+    answer_requirements: tuple[str, ...] | None = None,
 ) -> tuple[AnsweringRunner, _EvidenceAnswerer]:
     answerer = _EvidenceAnswerer()
     runtime = ExternalResearchRuntime(
@@ -306,7 +296,7 @@ def _runner(
     )
     runner = AnsweringRunner(
         input_safety_checker=AllowInputSafetyChecker(),
-        context_preparer=_Preparer(content_requirements=content_requirements),
+        context_preparer=_Preparer(answer_requirements=answer_requirements),
         phases_factory=lambda: phases,
         events=events,  # type: ignore[arg-type]
     )
@@ -547,10 +537,12 @@ async def test_single_review_call_input_includes_every_tasks_research_goal() -> 
 
 
 @pytest.mark.asyncio
-async def test_content_requirements_appear_once_not_once_per_task_group() -> None:
-    """S1 B4(仕様「候補の渡し方」)。
+async def test_review_input_never_carries_answer_requirements() -> None:
+    """v3(Evidence Review「Evidence Review(v2 -> v3)」)。
 
-    content_requirementsはグループの外に1つだけ置かれ、goalごとに複写されない。
+    question_contextのanswer_requirementsはevidence_reviewへの配線が撤去され、
+    reviewerはresearch_goalだけで判定する。QuestionContext側に要件があっても
+    reviewer入力・render結果には一切現れない。
     """
     marker = "UNIQUE_REQUIREMENT_MARKER_7f2a"
     tasks = [
@@ -578,21 +570,17 @@ async def test_content_requirements_appear_once_not_once_per_task_group() -> Non
         reviewer_runtime=reviewer_runtime,
         external_tool=_ExternalTool(),
         internal_tool=internal_tool,
-        content_requirements=[
-            AnswerRequirement(requirement_id="c1", description=marker)
-        ],
+        answer_requirements=(marker,),
     )
 
     await _run(runner)
 
-    # calls[0]だけでなく全callを見る: taskごとに別々の入力へ複写されると
-    # 呼び出し回数分だけ出現してしまうため、Run全体でちょうど1回であることを
-    # 検証する必要がある。
+    assert not hasattr(reviewer_runtime.calls[0].input, "answer_requirements")
     combined = "\n".join(
         EVIDENCE_REVIEWER_AGENT.prompt.input_renderer(call.input)
         for call in reviewer_runtime.calls
     )
-    assert combined.count(marker) == 1
+    assert marker not in combined
 
 
 @pytest.mark.asyncio

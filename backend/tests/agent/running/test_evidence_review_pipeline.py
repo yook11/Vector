@@ -46,11 +46,7 @@ from app.agent.planning.contract import (
     SearchPlan,
     TargetTimeWindow,
 )
-from app.agent.question_context import (
-    QuestionContext,
-    QuestionContextPreparationResult,
-    QuestionContextTelemetry,
-)
+from app.agent.question_context import QuestionContext
 from app.agent.running import AnsweringPhases, AnsweringRunner, RunContext, RunInput
 from app.agent.runtime.contract import AgentResponseDefect, AgentResponseInvalidError
 from app.analysis.analyzed_article import InScopeAnalyzedArticle
@@ -182,11 +178,8 @@ def _internal_hit(
 
 
 class _Preparer:
-    async def prepare(self, **_kwargs: object) -> QuestionContextPreparationResult:
-        return QuestionContextPreparationResult(
-            context=QuestionContext(standalone_question="NVIDIA の見通しは？"),
-            telemetry=QuestionContextTelemetry(),
-        )
+    async def prepare(self, **_kwargs: object) -> QuestionContext:
+        return QuestionContext(standalone_question="NVIDIA の見通しは？")
 
 
 class _Planner:

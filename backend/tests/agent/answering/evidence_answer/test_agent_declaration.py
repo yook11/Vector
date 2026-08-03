@@ -19,7 +19,7 @@ from app.agent.answering.evidence_answer.contract import (
 from app.agent.answering.evidence_answer.evidence import AnswerEvidenceItem
 from app.agent.contract import ExternalUrlSource
 from app.agent.planning.contract import TargetTimeWindow
-from app.agent.question_context.contract import AnswerRequirement, QuestionContext
+from app.agent.question_context.contract import QuestionContext
 from app.agent.runtime.gemini import GeminiAgentRuntime
 from tests.agent.runtime._helpers import FakeGeminiClient
 
@@ -57,18 +57,10 @@ def _request(*, question: str = "QUESTION_CONTENTS_SENTINEL") -> AnsweringReques
     return AnsweringRequest(
         context=QuestionContext(
             standalone_question=question,
-            content_requirements=[
-                AnswerRequirement(
-                    requirement_id="c1",
-                    description="CONTENT_REQUIREMENT_SENTINEL",
-                )
-            ],
-            response_requirements=[
-                AnswerRequirement(
-                    requirement_id="p1",
-                    description="RESPONSE_REQUIREMENT_SENTINEL",
-                )
-            ],
+            answer_requirements=(
+                "CONTENT_REQUIREMENT_SENTINEL",
+                "RESPONSE_REQUIREMENT_SENTINEL",
+            ),
             relevant_prior_coverage="PRIOR_COVERAGE_SENTINEL",
             active_goal="ACTIVE_GOAL_SENTINEL",
         ),
@@ -122,7 +114,7 @@ def test_agent_declares_plain_text_role_with_wider_output_budget() -> None:
         "gemini-3.1-flash-lite",
         0.2,
         8192,
-        "v7",
+        "v8",
         EvidenceAnswerDraft,
         None,
     )

@@ -129,14 +129,12 @@ def _draft(
 async def _review(
     *,
     tasks: list[Any],
-    content_requirements: tuple[str, ...] = (),
     as_of: datetime = _AS_OF,
     reviewer_runtime: Any,
 ) -> Any:
     reviewer = _reviewer()
     return await reviewer.review(
         tasks=tasks,
-        content_requirements=content_requirements,
         as_of=as_of,
         reviewer_runtime=reviewer_runtime,
     )
@@ -248,19 +246,18 @@ async def test_review_assigns_a_run_wide_index_internal_before_external_per_grou
 
 
 @pytest.mark.asyncio
-async def test_content_requirements_are_carried_once_outside_task_groups() -> None:
-    """S1(候補の渡し方)。content_requirementsはグループの外に1つだけ置かれる。"""
+async def test_review_builds_an_input_with_only_task_groups_and_as_of() -> None:
+    """v3(判定基準の一本化)。reviewerが組むreview_inputはcontent_requirementsを
+
+    一切持たず、research_goal(task_groups)とas_ofだけで判定材料が決まる。
+    """
     runtime = ScriptedAgentRuntime([_draft([])])
     tasks = [_task_candidates(task_index=0), _task_candidates(task_index=1)]
 
-    await _review(
-        tasks=tasks,
-        content_requirements=("要件A", "要件B"),
-        reviewer_runtime=runtime,
-    )
+    await _review(tasks=tasks, reviewer_runtime=runtime)
 
     review_input = runtime.calls[0].input
-    assert review_input.content_requirements == ("要件A", "要件B")
+    assert not hasattr(review_input, "content_requirements")
     assert not hasattr(review_input.task_groups[0], "content_requirements")
 
 
@@ -342,19 +339,6 @@ async def test_review_propagates_missing_as_a_single_run_level_list() -> None:
     )
 
     assert outcome.missing == ["run全体の不足"]
-
-
-@pytest.mark.asyncio
-async def test_review_completes_with_empty_content_requirements() -> None:
-    runtime = ScriptedAgentRuntime([_draft([])])
-
-    outcome = await _review(
-        tasks=[_task_candidates(task_index=0, internal_hits=[_internal_hit()])],
-        content_requirements=(),
-        reviewer_runtime=runtime,
-    )
-
-    assert outcome.failure_reason is None
 
 
 @pytest.mark.asyncio

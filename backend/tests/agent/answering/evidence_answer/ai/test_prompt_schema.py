@@ -26,7 +26,7 @@ from app.agent.evidence_collection.external_search.contract import (
     MISSING_ITEM_MAX_CHARS,
 )
 from app.agent.planning.contract import TargetTimeWindow
-from app.agent.question_context.contract import AnswerRequirement, QuestionContext
+from app.agent.question_context.contract import QuestionContext
 
 _REMOVED_OUTPUT_FIELDS = (
     "sufficiency",
@@ -39,20 +39,14 @@ _REMOVED_OUTPUT_FIELDS = (
 def _request(
     *,
     standalone_question: str = "NVIDIA の直近発表は？",
-    content_description: str = "NVIDIA の発表内容",
-    response_description: str = "根拠付きで詳しく回答する",
+    answer_requirement_description: str = "NVIDIA の発表内容",
     relevant_prior_coverage: str = "前回は発表内容を説明済み",
     active_goal: str = "投資判断を進める",
 ) -> AnsweringRequest:
     return AnsweringRequest(
         context=QuestionContext(
             standalone_question=standalone_question,
-            content_requirements=[
-                AnswerRequirement(requirement_id="c1", description=content_description)
-            ],
-            response_requirements=[
-                AnswerRequirement(requirement_id="p1", description=response_description)
-            ],
+            answer_requirements=(answer_requirement_description,),
             relevant_prior_coverage=relevant_prior_coverage,
             active_goal=active_goal,
         ),
@@ -105,8 +99,7 @@ def test_renderer_sanitizes_all_untrusted_boundaries() -> None:
     rendered = _render(
         request=_request(
             standalone_question=attack,
-            content_description=attack,
-            response_description=attack,
+            answer_requirement_description=attack,
             relevant_prior_coverage=attack,
             active_goal=attack,
         ),
@@ -406,8 +399,9 @@ def test_prompt_module_does_not_import_collection_or_review_report_types() -> No
     "required_rule",
     [
         "ユーザーが知りたいことへ直接答える",
-        "content_requirementsは、回答で扱うべき内容としてすべて確認する",
-        "response_requirementsは、文体・構成・形式の指定として回答全体に適用する",
+        "answer_requirementsは回答が満たすべき条件である。すべて満たしているか確認する。",
+        "active_goalはスレッド全体の目的である。目的から逸れた網羅はしない。",
+        "relevant_prior_coverageは既回答の要約である。既出内容の繰り返しを避け、",
         "事実は、与えられたevidenceだけを根拠にする",
         "evidenceに基づく主張の直後に `[[source_ref]]` を付ける",
         "複数の出典を引く場合は `[[1]][[2]]` のように連続して書く",
@@ -432,11 +426,11 @@ def test_fixed_instructions_do_not_forbid_grouped_citation_markers() -> None:
 
 
 def test_prompt_version_constant_matches_declared_prompt_version() -> None:
-    """条件10: citation markerの受理構文拡張に伴いinstructionsの禁止行を削除した
+    """v8: QuestionContext 4フィールド契約への再編でinstructions本文が変わった
 
     ため、prompt versionを上げる。EVIDENCE_ANSWER_PROMPT_VERSIONと
     EVIDENCE_ANSWER_PROMPT.versionが乖離すると、片方だけ更新した際に
     audit/metricのversion attributionが黙って食い違う。
     """
-    assert EVIDENCE_ANSWER_PROMPT_VERSION == "v7"
+    assert EVIDENCE_ANSWER_PROMPT_VERSION == "v8"
     assert EVIDENCE_ANSWER_PROMPT.version == EVIDENCE_ANSWER_PROMPT_VERSION

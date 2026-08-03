@@ -41,11 +41,9 @@ def _successful_response() -> FakeResponse:
         text=json.dumps(
             {
                 "standalone_question": "NVIDIA の直近発表は？",
-                "content_requirements": ["発表内容"],
-                "response_requirements": [],
+                "answer_requirements": ["発表内容"],
                 "relevant_prior_coverage": "",
                 "active_goal": "",
-                "explicit_feedback_detected": False,
             }
         ),
         usage_metadata=SimpleNamespace(
@@ -145,7 +143,7 @@ async def test_invalid_response_fallback_keeps_phase_non_error(
 
     phase = one_span_named(capfire, _PHASE_SPAN_NAME)
     provider = one_span_named(capfire, _PROVIDER_SPAN_NAME)
-    assert result.context.standalone_question == "fallback question"
+    assert result.standalone_question == "fallback question"
     assert provider["attributes"]["result"] == "invalid_response"
     assert provider["parent"]["span_id"] == phase["context"]["span_id"]
     assert exception_event(phase) is None

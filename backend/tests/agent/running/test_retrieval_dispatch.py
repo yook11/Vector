@@ -41,11 +41,7 @@ from app.agent.planning.contract import (
     QuestionPlan,
     TargetTimeWindow,
 )
-from app.agent.question_context import (
-    QuestionContext,
-    QuestionContextPreparationResult,
-    QuestionContextTelemetry,
-)
+from app.agent.question_context import QuestionContext
 from app.agent.running import AnsweringPhases, AnsweringRunner, RunContext, RunInput
 from app.agent.running import answering_runner as answering_runner_module
 from app.analysis.analyzed_article import InScopeAnalyzedArticle
@@ -145,11 +141,8 @@ def _hit(
 
 
 class _Preparer:
-    async def prepare(self, **_kwargs: object) -> QuestionContextPreparationResult:
-        return QuestionContextPreparationResult(
-            context=QuestionContext(standalone_question="NVIDIA の見通しは？"),
-            telemetry=QuestionContextTelemetry(),
-        )
+    async def prepare(self, **_kwargs: object) -> QuestionContext:
+        return QuestionContext(standalone_question="NVIDIA の見通しは？")
 
 
 class _Planner:

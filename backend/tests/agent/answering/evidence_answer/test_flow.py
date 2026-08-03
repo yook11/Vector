@@ -19,7 +19,7 @@ from app.agent.answering.evidence_answer.evidence import AnswerEvidenceItem
 from app.agent.answering.evidence_answer.flow import EvidenceAnswerFlow
 from app.agent.contract import ExternalUrlSource
 from app.agent.planning.contract import TargetTimeWindow
-from app.agent.question_context.contract import AnswerRequirement, QuestionContext
+from app.agent.question_context.contract import QuestionContext
 from app.analysis.ai_provider_errors import (
     AIProviderError,
     AIProviderNetworkError,
@@ -47,31 +47,15 @@ def _as_of() -> datetime:
 
 def _request(
     *,
-    content_requirements: list[AnswerRequirement] | None = None,
-    response_requirements: list[AnswerRequirement] | None = None,
+    answer_requirements: tuple[str, ...] | None = None,
 ) -> AnsweringRequest:
     return AnsweringRequest(
         context=QuestionContext(
             standalone_question="NVIDIA の直近発表は投資判断に重要？",
-            content_requirements=(
-                [
-                    AnswerRequirement(
-                        requirement_id="c1",
-                        description="投資判断への影響を説明する",
-                    )
-                ]
-                if content_requirements is None
-                else content_requirements
-            ),
-            response_requirements=(
-                [
-                    AnswerRequirement(
-                        requirement_id="p1",
-                        description="根拠付きで詳しく回答する",
-                    )
-                ]
-                if response_requirements is None
-                else response_requirements
+            answer_requirements=(
+                ("投資判断への影響を説明する", "根拠付きで詳しく回答する")
+                if answer_requirements is None
+                else answer_requirements
             ),
             relevant_prior_coverage="前回は発表内容を説明済み",
             active_goal="投資判断を進める",

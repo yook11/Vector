@@ -135,14 +135,10 @@ def _question_context_outcomes(capfire: CaptureLogfire) -> list[dict[str, Any]]:
 def _base_metric(
     *,
     result: str,
-    explicit_feedback_detected: bool,
-    previous_answer_had_missing_aspects: bool,
     failure_code: str | None = None,
 ) -> dict[str, Any]:
     metric = {
         "result": result,
-        "explicit_feedback_detected": explicit_feedback_detected,
-        "previous_answer_had_missing_aspects": (previous_answer_had_missing_aspects),
         "prompt_version": QUESTION_CONTEXT_AGENT.prompt.version,
         "ai_model": QUESTION_CONTEXT_AGENT.model.name,
     }
@@ -228,11 +224,9 @@ async def test_empty_history_preserves_deterministic_context_correction(
         [
             QuestionContextDraft(
                 standalone_question="書き換えた質問",
-                content_requirements=["NVIDIA の発表内容"],
-                response_requirements=["表形式で回答する"],
+                answer_requirements=["NVIDIA の発表内容"],
                 relevant_prior_coverage="履歴がないため採用しない",
                 active_goal="投資判断をする",
-                explicit_feedback_detected=True,
             )
         ]
     )
@@ -244,31 +238,16 @@ async def test_empty_history_preserves_deterministic_context_correction(
         run_id=_RUN_ID,
     )
 
-    assert result.context.model_dump() == {
+    assert result.model_dump() == {
         "standalone_question": question,
-        "content_requirements": [
-            {"requirement_id": "c1", "description": "NVIDIA の発表内容"}
-        ],
-        "response_requirements": [
-            {"requirement_id": "p1", "description": "表形式で回答する"}
-        ],
+        "answer_requirements": ("NVIDIA の発表内容",),
         "relevant_prior_coverage": "",
         "active_goal": "投資判断をする",
     }
-    assert result.telemetry.model_dump() == {
-        "explicit_feedback_detected": False,
-        "previous_answer_had_missing_aspects": False,
-    }
-    assert _question_context_outcomes(capfire) == [
-        _base_metric(
-            result="prepared",
-            explicit_feedback_detected=False,
-            previous_answer_had_missing_aspects=False,
-        )
-    ]
+    assert _question_context_outcomes(capfire) == [_base_metric(result="prepared")]
 
 
-async def test_history_success_preserves_context_and_telemetry(
+async def test_history_success_preserves_context(
     capfire: CaptureLogfire,
 ) -> None:
     history = [
@@ -282,10 +261,9 @@ async def test_history_success_preserves_context_and_telemetry(
         [
             QuestionContextDraft(
                 standalone_question="NVIDIA の株価への影響は？",
-                content_requirements=["株価への影響"],
+                answer_requirements=["株価への影響"],
                 relevant_prior_coverage="発表内容は説明済み",
                 active_goal="半導体投資を調査する",
-                explicit_feedback_detected=True,
             )
         ]
     )
@@ -297,17 +275,10 @@ async def test_history_success_preserves_context_and_telemetry(
         run_id=_RUN_ID,
     )
 
-    assert result.context.standalone_question == "NVIDIA の株価への影響は？"
-    assert result.context.relevant_prior_coverage == "発表内容は説明済み"
-    assert result.telemetry.explicit_feedback_detected is True
-    assert result.telemetry.previous_answer_had_missing_aspects is True
-    assert _question_context_outcomes(capfire) == [
-        _base_metric(
-            result="prepared",
-            explicit_feedback_detected=True,
-            previous_answer_had_missing_aspects=True,
-        )
-    ]
+    assert result.standalone_question == "NVIDIA の株価への影響は？"
+    assert result.relevant_prior_coverage == "発表内容は説明済み"
+    assert result.answer_requirements == ("株価への影響",)
+    assert _question_context_outcomes(capfire) == [_base_metric(result="prepared")]
 
 
 @pytest.mark.parametrize(
@@ -350,7 +321,7 @@ async def test_classified_failure_falls_back_once_with_stable_failure_code(
             run_id=_RUN_ID,
         )
 
-    assert result.context.standalone_question == question
+    assert result.standalone_question == question
     assert [call.attempt_number for call in runtime.calls] == [1]
     assert len(factory.exits) == 1
     assert logs[0]["failure_type"] == failure_code
@@ -359,8 +330,6 @@ async def test_classified_failure_falls_back_once_with_stable_failure_code(
     assert _question_context_outcomes(capfire) == [
         _base_metric(
             result="failed",
-            explicit_feedback_detected=False,
-            previous_answer_had_missing_aspects=False,
             failure_code=failure_code,
         )
     ]
@@ -387,7 +356,7 @@ async def test_finalize_validation_failure_falls_back_without_leaking_draft(
             run_id=_RUN_ID,
         )
 
-    assert result.context.standalone_question == "安全なfallback質問"
+    assert result.standalone_question == "安全なfallback質問"
     assert [call.attempt_number for call in runtime.calls] == [1]
     assert factory.exits[0][0] is None
     assert logs[0]["failure_type"] == "context_finalize_invalid"
@@ -415,13 +384,11 @@ async def test_unavailable_runtime_skips_scope_and_records_stable_failure(
             run_id=_RUN_ID,
         )
 
-    assert result.context.standalone_question == "NVIDIA の直近発表は？"
+    assert result.standalone_question == "NVIDIA の直近発表は？"
     assert logs[0]["failure_type"] == "generator_unavailable"
     assert _question_context_outcomes(capfire) == [
         _base_metric(
             result="failed",
-            explicit_feedback_detected=False,
-            previous_answer_had_missing_aspects=False,
             failure_code="generator_unavailable",
         )
     ]
@@ -450,7 +417,7 @@ async def test_classified_scope_enter_failure_falls_back_without_attempt(
             run_id=_RUN_ID,
         )
 
-    assert result.context.standalone_question == "fallback question"
+    assert result.standalone_question == "fallback question"
     assert runtime.calls == []
     assert (factory.created, factory.entered, factory.exits) == (1, 1, [])
     assert logs[0]["failure_type"] == "ai_error_network"
@@ -458,8 +425,6 @@ async def test_classified_scope_enter_failure_falls_back_without_attempt(
     assert _question_context_outcomes(capfire) == [
         _base_metric(
             result="failed",
-            explicit_feedback_detected=False,
-            previous_answer_had_missing_aspects=False,
             failure_code="ai_error_network",
         )
     ]

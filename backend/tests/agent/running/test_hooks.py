@@ -9,7 +9,7 @@ from typing import Any
 import pytest
 
 from app.agent.contract import AnswerProgressEvent, QuestionResolvedEvent
-from app.agent.question_context import AnswerRequirement, QuestionContext
+from app.agent.question_context import QuestionContext
 
 HOOKS_MODULE = "app.agent.running.hooks"
 HOOK_TYPE = "QuestionResolvedRunHooks"
@@ -68,12 +68,7 @@ async def test_history_rewrite_notifies_completed_standalone_question_once() -> 
     hook = _hook(reporter)
     question_context = QuestionContext(
         standalone_question="NVIDIA の発表が投資へ与える影響は？",
-        content_requirements=[
-            AnswerRequirement(
-                requirement_id="c1",
-                description="株価への影響を含める",
-            )
-        ],
+        answer_requirements=("株価への影響を含める",),
         relevant_prior_coverage="発表内容は説明済み",
         active_goal="半導体投資を調査する",
     )
@@ -123,12 +118,7 @@ async def test_history_rewrite_notifies_completed_standalone_question_once() -> 
             True,
             QuestionContext(
                 standalone_question="NVIDIA の直近発表は？",
-                content_requirements=[
-                    AnswerRequirement(
-                        requirement_id="c1",
-                        description="NVIDIA の直近発表は？",
-                    )
-                ],
+                answer_requirements=("NVIDIA の直近発表は？",),
             ),
             id="history-safe-fallback",
         ),

@@ -18,10 +18,7 @@ from app.agent.input_safety.agent import INPUT_SAFETY_AGENT
 from app.agent.input_safety.service import InputSafetyService
 from app.agent.planning.agent import QUESTION_PLANNER_AGENT
 from app.agent.question_context.agent import QUESTION_CONTEXT_AGENT
-from app.agent.question_context.contract import (
-    QuestionContextDraft,
-    QuestionContextPreparationResult,
-)
+from app.agent.question_context.contract import QuestionContext, QuestionContextDraft
 from app.agent.question_context.service import QuestionContextService
 from app.agent.running import AnsweringPhases, AnsweringRunner
 from app.agent.runtime.contract import (
@@ -456,7 +453,7 @@ async def test_question_context_service_closes_production_gemini_scope_once(
         runtime_scope_factory=composition.activate_gemini_agent_runtime,
     )
 
-    async def prepare() -> QuestionContextPreparationResult:
+    async def prepare() -> QuestionContext:
         return await service.prepare(
             question="original question",
             history=[ThreadMessageSnapshot(role="user", content="prior question")],
@@ -470,7 +467,7 @@ async def test_question_context_service_closes_production_gemini_scope_once(
         assert raised.value is outcome
     else:
         result = await prepare()
-        assert result.context.standalone_question == expected_question
+        assert result.standalone_question == expected_question
 
     assert len(_FakeGeminiRuntime.calls) == 1
     assert _FakeGeminiRuntime.calls[0][0] is QUESTION_CONTEXT_AGENT
@@ -641,9 +638,7 @@ def test_build_answering_phases_wires_query_embedding_cache_to_embedder_identity
     cache = internal_search_calls[0]["query_embedding_cache"]
     # embedderが実際に使うspecとキャッシュ空間が一致しないと、別条件で作った
     # ベクトルをstale hitとして再利用してしまう。
-    assert cache.embedder_identity == embedder_identity_of(
-        GEMINI_QUERY_EMBEDDING_SPEC
-    )
+    assert cache.embedder_identity == embedder_identity_of(GEMINI_QUERY_EMBEDDING_SPEC)
     assert cache.session_factory is session_factory
 
 

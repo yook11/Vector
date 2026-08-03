@@ -24,11 +24,8 @@ EVIDENCE_REVIEWER_RESPONSE_SCHEMA: Final[dict[str, Any]] = {
     "properties": {
         "selections": {
             "type": "array",
-            "description": (
-                "Useful candidates only, at most "
-                f"{EVIDENCE_REVIEW_ADOPTION_LIMIT}. "
-                "Empty if none are useful."
-            ),
+            "description": "候補をindexで参照する採用リスト。",
+            "maxItems": EVIDENCE_REVIEW_ADOPTION_LIMIT,
             "items": {
                 "type": "object",
                 "additionalProperties": False,
@@ -42,10 +39,8 @@ EVIDENCE_REVIEWER_RESPONSE_SCHEMA: Final[dict[str, Any]] = {
         },
         "missing": {
             "type": "array",
-            "description": (
-                f"At most {EVIDENCE_REVIEW_MISSING_LIMIT} short "
-                "Japanese notes on what could not be confirmed."
-            ),
+            "description": "Run全体で確認できなかった点。",
+            "maxItems": EVIDENCE_REVIEW_MISSING_LIMIT,
             "items": {"type": "string"},
         },
     },
