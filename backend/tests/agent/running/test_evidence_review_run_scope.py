@@ -547,10 +547,12 @@ async def test_single_review_call_input_includes_every_tasks_research_goal() -> 
 
 
 @pytest.mark.asyncio
-async def test_content_requirements_appear_once_not_once_per_task_group() -> None:
-    """S1 B4(仕様「候補の渡し方」)。
+async def test_review_input_never_carries_content_requirements() -> None:
+    """v3(Evidence Review「Evidence Review(v2 -> v3)」)。
 
-    content_requirementsはグループの外に1つだけ置かれ、goalごとに複写されない。
+    question_contextのcontent_requirementsはevidence_reviewへの配線が撤去され、
+    reviewerはresearch_goalだけで判定する。QuestionContext側に要件があっても
+    reviewer入力・render結果には一切現れない。
     """
     marker = "UNIQUE_REQUIREMENT_MARKER_7f2a"
     tasks = [
@@ -585,14 +587,12 @@ async def test_content_requirements_appear_once_not_once_per_task_group() -> Non
 
     await _run(runner)
 
-    # calls[0]だけでなく全callを見る: taskごとに別々の入力へ複写されると
-    # 呼び出し回数分だけ出現してしまうため、Run全体でちょうど1回であることを
-    # 検証する必要がある。
+    assert not hasattr(reviewer_runtime.calls[0].input, "content_requirements")
     combined = "\n".join(
         EVIDENCE_REVIEWER_AGENT.prompt.input_renderer(call.input)
         for call in reviewer_runtime.calls
     )
-    assert combined.count(marker) == 1
+    assert marker not in combined
 
 
 @pytest.mark.asyncio

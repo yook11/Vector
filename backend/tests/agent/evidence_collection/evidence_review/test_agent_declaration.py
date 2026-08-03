@@ -120,7 +120,6 @@ def _review_input(
     *,
     goal: str = "NVIDIA の最新動向を確認する",
     candidates: tuple[Any, ...] = (),
-    content_requirements: tuple[str, ...] = (),
     as_of: datetime | None = None,
     task_groups: tuple[Any, ...] | None = None,
 ) -> Any:
@@ -133,7 +132,6 @@ def _review_input(
     return review_input_type(
         task_groups=task_groups
         or (_task_group(contracts, goal=goal, candidates=candidates),),
-        content_requirements=content_requirements,
         as_of=as_of or _as_of(),
     )
 
@@ -159,21 +157,23 @@ def test_candidate_projection_is_unified_and_excludes_source_metadata() -> None:
     assert not (field_names & forbidden)
 
 
-def test_review_input_carries_only_task_groups_content_requirements_and_as_of() -> None:
-    """S1(候補の渡し方)。QuestionContext 全体(standalone_question 等)を持たず、
+def test_review_input_carries_only_task_groups_and_as_of() -> None:
+    """v3(判定基準の一本化)。QuestionContext 全体(standalone_question 等)も
 
-    research_goal/candidatesは直下ではなくtask_groups経由でしか持てない。
+    content_requirementsも持たず、research_goal(task_groups経由)とas_ofだけで
+    判定する入力になる。
     """
     contracts = _contracts()
     review_input_type = _required_attribute(contracts, "EvidenceReviewInput")
 
     _assert_frozen_slots_dataclass(review_input_type)
     field_names = [field.name for field in fields(review_input_type)]
-    assert set(field_names) == {"task_groups", "content_requirements", "as_of"}
+    assert set(field_names) == {"task_groups", "as_of"}
 
-    review_input = _review_input(contracts, content_requirements=("要件A",))
+    review_input = _review_input(contracts)
     with pytest.raises(FrozenInstanceError):
-        review_input.content_requirements = ("要件B",)
+        review_input.task_groups = ()
+    assert not hasattr(review_input, "content_requirements")
     assert not hasattr(review_input, "standalone_question")
     assert not hasattr(review_input, "response_requirements")
     assert not hasattr(review_input, "relevant_prior_coverage")
@@ -203,13 +203,21 @@ def test_task_group_carries_task_index_research_goal_and_candidates_only() -> No
         _task_group(contracts, goal="goal-A").research_goal = "goal-B"
 
 
-def test_review_input_accepts_empty_content_requirements() -> None:
-    """保証するテスト条件: content_requirements が空でも構築できる。"""
+def test_review_input_rejects_content_requirements_as_a_construction_argument() -> None:
+    """v3(判定基準の一本化)。content_requirementsはフィールドとして廃止され、
+
+    構築時に渡そうとするとTypeErrorになる(研究目的=research_goalのみで
+    判定する契約への回帰guard)。
+    """
     contracts = _contracts()
+    review_input_type = _required_attribute(contracts, "EvidenceReviewInput")
 
-    review_input = _review_input(contracts, content_requirements=())
-
-    assert review_input.content_requirements == ()
+    with pytest.raises(TypeError):
+        review_input_type(
+            task_groups=(_task_group(contracts),),
+            content_requirements=("要件A",),
+            as_of=_as_of(),
+        )
 
 
 def test_review_selection_draft_rejects_negative_index_before_finalization() -> None:
@@ -244,9 +252,9 @@ def test_agent_declares_stable_model_version_output_and_immutable_schema() -> No
     # 概算11,400字を保守側1.0 token/字で見積り、約1.4倍の余裕を取った値
     # (仕様「選別結果の復元」、deepseek-v4-flashの最大出力384K tokenと非競合)。
     assert reviewer_agent.model_settings.max_output_tokens == 16384
-    # S3: claim/why_selectedの役割定義をinstructionsへ追記したためv2へ上がる
-    # (仕様「採用の言語化」)。
-    assert reviewer_agent.prompt.version == "v2"
+    # v3: content_requirementsを廃止しresearch_goalのみで判定する契約へ
+    # 変更したためv2からbumpする(仕様「Evidence Review(v2 -> v3)」)。
+    assert reviewer_agent.prompt.version == "v3"
     assert reviewer_agent.output_type is _required_attribute(
         contracts, "EvidenceReviewDraft"
     )
@@ -268,16 +276,31 @@ def test_agent_declares_stable_model_version_output_and_immutable_schema() -> No
 
 
 def test_agent_holds_the_complete_model_visible_response_schema() -> None:
-    assert _plain_schema(_reviewer_agent().response_schema) == {
+    """v3(instructions/schemaの責任分担)。selections/missingの上限は
+
+    schema の maxItems が構造的に強制し、description は1行定義に留まる
+    (上限・言語規則の文言は description から消える)。
+    """
+    contracts = _contracts()
+    adoption_limit = _required_attribute(contracts, "EVIDENCE_REVIEW_ADOPTION_LIMIT")
+    missing_limit = _required_attribute(contracts, "EVIDENCE_REVIEW_MISSING_LIMIT")
+
+    schema = _plain_schema(_reviewer_agent().response_schema)
+
+    assert schema["properties"]["selections"]["maxItems"] == adoption_limit
+    assert schema["properties"]["missing"]["maxItems"] == missing_limit
+    for forbidden in ("15", "8", "Japanese", "japanese"):
+        assert forbidden not in schema["properties"]["selections"]["description"]
+        assert forbidden not in schema["properties"]["missing"]["description"]
+    assert schema == {
         "type": "object",
         "additionalProperties": False,
         "required": ["selections", "missing"],
         "properties": {
             "selections": {
                 "type": "array",
-                "description": (
-                    "Useful candidates only, at most 15. Empty if none are useful."
-                ),
+                "description": schema["properties"]["selections"]["description"],
+                "maxItems": adoption_limit,
                 "items": {
                     "type": "object",
                     "additionalProperties": False,
@@ -291,9 +314,8 @@ def test_agent_holds_the_complete_model_visible_response_schema() -> None:
             },
             "missing": {
                 "type": "array",
-                "description": (
-                    "At most 8 short Japanese notes on what could not be confirmed."
-                ),
+                "description": schema["properties"]["missing"]["description"],
+                "maxItems": missing_limit,
                 "items": {"type": "string"},
             },
         },
@@ -313,7 +335,7 @@ def test_version_and_instructions_live_with_prompt_resources() -> None:
     """保証するテスト条件 10。version/instructionsはprompt resource moduleの
 
     リテラルであり、呼び出し側で組み立てられていない。evidence_review package は
-    agent を1つしか宣言しないため、'"v2"' の出現数は1回以上でよい。
+    agent を1つしか宣言しないため、'"v3"' の出現数は1回以上でよい。
     """
     prompts = _prompts()
     source = inspect.getsource(prompts)
@@ -321,9 +343,10 @@ def test_version_and_instructions_live_with_prompt_resources() -> None:
 
     assert reviewer_agent.prompt.input_renderer.__module__ == prompts.__name__
     assert reviewer_agent.prompt.instructions in source
-    # S3: claim/why_selectedの役割定義追記に伴いv2へ上げる(仕様「採用の言語化」)。
-    assert reviewer_agent.prompt.version == "v2"
-    assert source.count('"v2"') >= 1
+    # v3: content_requirementsを廃止しresearch_goalのみで判定する契約へ
+    # 変更したためv2からbumpする(仕様「Evidence Review(v2 -> v3)」)。
+    assert reviewer_agent.prompt.version == "v3"
+    assert source.count('"v3"') >= 1
 
 
 def test_instructions_define_claim_and_why_selected_roles_distinctly() -> None:
@@ -354,11 +377,7 @@ def test_prompt_keeps_fixed_rules_in_system_and_sanitizes_runtime_task_data() ->
     reviewer_agent = _reviewer_agent()
 
     rendered = reviewer_agent.prompt.input_renderer(
-        _review_input(
-            contracts,
-            goal=boundary_attack,
-            content_requirements=(f"content requirement {boundary_attack}",),
-        )
+        _review_input(contracts, goal=boundary_attack)
     )
 
     assert "<untrusted_input>" in rendered
@@ -389,34 +408,24 @@ def test_prompt_does_not_render_the_task_group_index() -> None:
     assert "task_index" not in rendered
 
 
-def test_prompt_renders_content_requirement_descriptions_without_requirement_id() -> (
-    None
-):
-    """保証するテスト条件 2。content_requirements の description のみが渡る。"""
-    contracts = _contracts()
-    reviewer_agent = _reviewer_agent()
-    sentinel = "この回答は必ず価格影響に触れること_REQUIREMENT_SENTINEL"
+def test_prompt_never_renders_a_content_requirements_section() -> None:
+    """v3(判定基準の一本化)。content_requirementsはフィールドごと廃止され、
 
-    rendered = reviewer_agent.prompt.input_renderer(
-        _review_input(contracts, content_requirements=(sentinel,))
-    )
-
-    assert sentinel in rendered
-    assert "requirement_id" not in rendered
-    assert '"c1"' not in rendered
-    assert '"p1"' not in rendered
-
-
-def test_prompt_renders_empty_content_requirements_without_error() -> None:
-    """content_requirements が空でも research_goal だけで描画が完了する。"""
+    render結果にsection文字列もrequirement idも現れない。research_goalだけで
+    判定できることを描画結果から確認する。
+    """
     contracts = _contracts()
     reviewer_agent = _reviewer_agent()
 
     rendered = reviewer_agent.prompt.input_renderer(
-        _review_input(contracts, goal="研究目的のみで判断する", content_requirements=())
+        _review_input(contracts, goal="研究目的のみで判断する")
     )
 
     assert "研究目的のみで判断する" in rendered
+    assert "content_requirements" not in rendered
+    assert "requirement_id" not in rendered
+    assert '"c1"' not in rendered
+    assert '"p1"' not in rendered
 
 
 def test_prompt_renders_only_safe_candidate_projection_and_never_url() -> None:

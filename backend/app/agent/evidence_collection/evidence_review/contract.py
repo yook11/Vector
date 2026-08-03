@@ -82,7 +82,6 @@ class EvidenceReviewInput:
     """Evidence Reviewer AgentのRun単位1 attempt入力。"""
 
     task_groups: tuple[EvidenceReviewTaskGroup, ...]
-    content_requirements: tuple[str, ...]
     as_of: datetime
 
 

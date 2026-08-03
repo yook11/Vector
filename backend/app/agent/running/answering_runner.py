@@ -222,14 +222,9 @@ class AnsweringRunner:
         run_span: LogfireSpan,
     ) -> AnswerQuestionResult:
         await self._report_progress("evidence_collection")
-        content_requirements = tuple(
-            requirement.description
-            for requirement in request.context.content_requirements
-        )
         outcome = await self._collect_evidence(
             phases=phases,
             plan=plan,
-            content_requirements=content_requirements,
             as_of=request.as_of,
         )
         evidence = normalize_answer_evidence(outcome)
@@ -257,7 +252,6 @@ class AnsweringRunner:
         *,
         phases: AnsweringPhases,
         plan: SearchPlan,
-        content_requirements: tuple[str, ...],
         as_of: datetime,
     ) -> EvidenceCollectionOutcome:
         tasks = plan.research_tasks
@@ -292,7 +286,6 @@ class AnsweringRunner:
                 external=external,
                 date_filter=date_filter,
                 time_filter_failure=time_filter_failure,
-                content_requirements=content_requirements,
                 as_of=as_of,
             )
 
@@ -305,7 +298,6 @@ class AnsweringRunner:
         external: ExternalResearchRuntime,
         date_filter: ExternalSearchDateFilter | None,
         time_filter_failure: TimeFilterFailureReason | None,
-        content_requirements: tuple[str, ...],
         as_of: datetime,
     ) -> EvidenceCollectionOutcome:
         effective_agent_count = resolve_external_search_agent_count(
@@ -357,7 +349,6 @@ class AnsweringRunner:
         await self._report_progress("evidence_review")
         outcome = await phases.reviewer.review(
             tasks=review_candidates,
-            content_requirements=content_requirements,
             as_of=as_of,
             reviewer_runtime=external.reviewer_runtime,
         )
