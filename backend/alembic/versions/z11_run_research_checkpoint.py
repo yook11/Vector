@@ -23,6 +23,10 @@ down_revision: str | None = "z10_progress_stage_vocabulary"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
+# migration_gate: nullable column の追加のみ
+# (破壊系なし、op.execute は SET lock_timeout のみ)。
+MIGRATION_KIND = "expand"
+
 
 def upgrade() -> None:
     op.execute("SET lock_timeout = '5s';")

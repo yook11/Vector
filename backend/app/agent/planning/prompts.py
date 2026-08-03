@@ -110,6 +110,8 @@ def render_planning_input(input: PlanningAttemptInput) -> str:
         active_goal=sanitize_for_untrusted_block(request.context.active_goal),
     )
     if request.prior_research:
+        # HTMLではないLLM promptであり、外部入力は境界用sanitizerを通す。
+        # nosemgrep: python.django.security.injection.raw-html-format.raw-html-format  # noqa: E501
         task_input += _PRIOR_RESEARCH_INPUT_TEMPLATE.format(
             records=_render_prior_research_records(request.prior_research)
         )
