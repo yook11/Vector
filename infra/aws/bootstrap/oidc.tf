@@ -54,6 +54,15 @@ locals {
     }
   }
 
+  # IAM Identity Center が permission set ごとに member アカウントへ作るロール。
+  # 末尾の接尾辞は割り当てを作り直すたびに変わるため ARN を完全一致で書けない。
+  # path の region 部分は IdC インスタンスのリージョンで、ここでは var.region と一致する。
+  sso_deploy_role_pattern = join("/", [
+    "arn:aws:iam::${local.account_id}:role/aws-reserved/sso.amazonaws.com",
+    var.region,
+    "AWSReservedSSO_${var.deploy_permission_set}_*",
+  ])
+
   # secret の実体を CI が読めないようにする。
   # 「Terraform から SSM の値を読まない」を運用の約束ではなく IAM の Deny にする。
   secret_read_actions = [
@@ -75,12 +84,16 @@ resource "aws_iam_openid_connect_provider" "github" {
   thumbprint_list = null
 }
 
-# sub claim は完全一致で書く。`repo:owner/repo:*` のようなワイルドカードにすると
-# 「どのブランチからでも assume できるロール」になる。
-data "aws_iam_policy_document" "github_trust" {
+# CI ロールの受け入れ名簿。GitHub Actions と、人間が通る permission set の 2 経路。
+# **どちらの経路も同じ CI ロールになる**ので、デプロイで何ができるかの定義は
+# 下の policy 群 1 箇所に留まる。
+data "aws_iam_policy_document" "ci_role_trust" {
   for_each = local.ci_roles
 
+  # sub claim は完全一致で書く。`repo:owner/repo:*` のようなワイルドカードにすると
+  # 「どのブランチからでも assume できるロール」になる。
   statement {
+    sid     = "GitHubActions"
     effect  = "Allow"
     actions = ["sts:AssumeRoleWithWebIdentity"]
 
@@ -101,6 +114,26 @@ data "aws_iam_policy_document" "github_trust" {
       values   = each.value.subs
     }
   }
+
+  # principals に ARN のワイルドカードは書けないため、入口はアカウントにして
+  # 実際の絞り込みを condition で行う (AWS が案内している permission set の書き方)。
+  # 両者は AND なので、実効的に通るのは deploy permission set のロールだけ。
+  statement {
+    sid     = "DeployPermissionSet"
+    effect  = "Allow"
+    actions = ["sts:AssumeRole"]
+
+    principals {
+      type        = "AWS"
+      identifiers = [local.account_id]
+    }
+
+    condition {
+      test     = "ArnLike"
+      variable = "aws:PrincipalArn"
+      values   = [local.sso_deploy_role_pattern]
+    }
+  }
 }
 
 resource "aws_iam_role" "ci" {
@@ -108,7 +141,7 @@ resource "aws_iam_role" "ci" {
 
   name               = "${var.name_prefix}-ci-${each.value.name}"
   path               = "/${var.name_prefix}-ci/"
-  assume_role_policy = data.aws_iam_policy_document.github_trust[each.key].json
+  assume_role_policy = data.aws_iam_policy_document.ci_role_trust[each.key].json
 }
 
 # --- terraform-plan -------------------------------------------------------

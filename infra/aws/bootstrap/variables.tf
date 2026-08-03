@@ -24,6 +24,16 @@ variable "deploy_environment" {
   default     = "production"
 }
 
+variable "deploy_permission_set" {
+  description = <<-EOT
+    人間が CI ロールを assume するときに通る IAM Identity Center の permission set 名。
+    この permission set 自体は sts:AssumeRole しか持たず、実効権限は assume 先の
+    CI ロールが全部決める。
+  EOT
+  type        = string
+  default     = "VectorDeploy"
+}
+
 variable "name_prefix" {
   description = "リソース名の接頭辞。"
   type        = string
