@@ -45,7 +45,7 @@ from app.agent.live_updates.stream import (
     is_stream_id_before,
 )
 from app.agent.planning.contract import TargetTimeWindow
-from app.agent.question_context.contract import AnswerRequirement, QuestionContext
+from app.agent.question_context.contract import QuestionContext
 from app.config import settings
 
 pytestmark = pytest.mark.xdist_group("redis")
@@ -78,14 +78,12 @@ class FakeStreamingGenerator:
 def _answering_request(
     question: str,
     *,
-    content_requirements: list[AnswerRequirement] | None = None,
-    response_requirements: list[AnswerRequirement] | None = None,
+    answer_requirements: tuple[str, ...] | None = None,
 ) -> AnsweringRequest:
     return AnsweringRequest(
         context=QuestionContext(
             standalone_question=question,
-            content_requirements=content_requirements or [],
-            response_requirements=response_requirements or [],
+            answer_requirements=answer_requirements or (),
         ),
         as_of=datetime(2026, 7, 12, tzinfo=UTC),
     )
@@ -218,12 +216,7 @@ async def test_evidence_json_shaped_fragment_flows_unchanged_into_answer_delta()
     ]
     request = _answering_request(
         "JSON形状の本文がそのまま扱われるか確認する",
-        content_requirements=[
-            AnswerRequirement(requirement_id="c1", description="content requirement")
-        ],
-        response_requirements=[
-            AnswerRequirement(requirement_id="p1", description="response requirement")
-        ],
+        answer_requirements=("answer requirement",),
     )
     try:
         stream_publisher = AgentRunLiveStreamPublisher(redis, run_id, attempt_epoch)

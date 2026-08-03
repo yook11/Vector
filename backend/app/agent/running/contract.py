@@ -16,10 +16,7 @@ from app.agent.evidence_collection.external_search import (
     ExternalResearchRuntimeFactory,
 )
 from app.agent.planning.contract import QuestionPlanner
-from app.agent.question_context.contract import (
-    QuestionContext,
-    QuestionContextPreparationResult,
-)
+from app.agent.question_context.contract import QuestionContext
 from app.agent.threads.contracts import ThreadMessageSnapshot
 
 __all__ = [
@@ -81,7 +78,7 @@ class QuestionContextPreparer(Protocol):
         history: list[ThreadMessageSnapshot],
         as_of: datetime,
         run_id: UUID,
-    ) -> QuestionContextPreparationResult: ...
+    ) -> QuestionContext: ...
 
 
 class RunHooks(Protocol):

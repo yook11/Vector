@@ -143,7 +143,7 @@ class AnsweringRunner:
                 raise InputSafetyBlocked(block_reason=safety_check.block_reason)
 
             await self._report_progress("context_resolution")
-            preparation = await self._context_preparer.prepare(
+            question_context = await self._context_preparer.prepare(
                 question=input.question,
                 history=list(input.history),
                 as_of=run_context.as_of,
@@ -151,7 +151,7 @@ class AnsweringRunner:
             )
             answering_context = AnsweringRunContext(
                 run_context=run_context,
-                question_context=preparation.context,
+                question_context=question_context,
                 previous_answer=_latest_assistant_answer(input.history),
             )
             if hooks is not None:

@@ -47,7 +47,7 @@ from app.agent.live_updates.stream import (
     AgentRunLiveStreamStageEvent,
     AgentRunLiveStreamTerminalEvent,
 )
-from app.agent.question_context.contract import AnswerRequirement, QuestionContext
+from app.agent.question_context.contract import QuestionContext
 from app.agent.running import (
     AnsweringPhases,
     AnsweringRunContext,
@@ -911,9 +911,7 @@ async def test_answering_runner_completes_follow_up_with_saved_history(
     answering_runner = FakeAnsweringRunner(
         question_context=QuestionContext(
             standalone_question="量子計算市場の主要企業を比較して",
-            content_requirements=[
-                AnswerRequirement(requirement_id="c1", description=saved_gap)
-            ],
+            answer_requirements=(saved_gap,),
             relevant_prior_coverage=first_answer,
         ),
         previous_answer=first_answer,
@@ -2405,15 +2403,10 @@ async def test_terminal_publish_failure_does_not_revert_completed_run(
         QuestionContext(standalone_question="それの株価への影響は？"),
         QuestionContext(
             standalone_question="それの株価への影響は？",
-            content_requirements=[
-                {
-                    "requirement_id": "c1",
-                    "description": "それの株価への影響は？",
-                }
-            ],
+            answer_requirements=("それの株価への影響は？",),
         ),
     ],
-    ids=("echo", "safe-fallback"),
+    ids=("echo", "requirements-populated"),
 )
 async def test_run_agent_answer_does_not_publish_echo_or_fallback_question_context(
     question_context: QuestionContext,

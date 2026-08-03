@@ -18,18 +18,14 @@ _question_context_outcome_counter = logfire.metric_counter(
 def record_question_context_outcome(
     *,
     result: QuestionContextOutcome,
-    explicit_feedback_detected: bool,
-    previous_answer_had_missing_aspects: bool,
     prompt_version: str,
     ai_model: str,
     failure_code: str | None = None,
 ) -> None:
     """Record the final context outcome without conversation content."""
 
-    attributes: dict[str, str | bool] = {
+    attributes: dict[str, str] = {
         "result": result,
-        "explicit_feedback_detected": explicit_feedback_detected,
-        "previous_answer_had_missing_aspects": previous_answer_had_missing_aspects,
         "prompt_version": prompt_version,
         "ai_model": ai_model,
     }

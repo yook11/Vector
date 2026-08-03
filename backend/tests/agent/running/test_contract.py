@@ -20,10 +20,7 @@ from app.agent.evidence_collection import Researcher
 from app.agent.evidence_collection.evidence_review import EvidenceReviewer
 from app.agent.evidence_collection.external_search import ExternalResearchRuntimeFactory
 from app.agent.planning.contract import QuestionPlanner
-from app.agent.question_context import (
-    QuestionContext,
-    QuestionContextPreparationResult,
-)
+from app.agent.question_context import QuestionContext
 from app.agent.threads.contracts import ThreadMessageSnapshot
 
 RUNNING_MODULE = "app.agent.running"
@@ -275,7 +272,7 @@ def test_question_context_preparer_protocol_has_only_required_inputs() -> None:
                 ("as_of", inspect.Parameter.KEYWORD_ONLY, datetime, True),
                 ("run_id", inspect.Parameter.KEYWORD_ONLY, UUID, True),
             ),
-            QuestionContextPreparationResult,
+            QuestionContext,
         ),
     )
 

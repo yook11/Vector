@@ -27,11 +27,7 @@ from app.agent.planning.contract import (
     QuestionPlan,
     TargetTimeWindow,
 )
-from app.agent.question_context import (
-    QuestionContext,
-    QuestionContextPreparationResult,
-    QuestionContextTelemetry,
-)
+from app.agent.question_context import QuestionContext
 from app.agent.running import AnsweringPhases, AnsweringRunner, RunContext, RunInput
 from tests.agent.running._input_safety import AllowInputSafetyChecker
 
@@ -50,14 +46,11 @@ class _Preparer:
         self._timeline = timeline
         self._error = error
 
-    async def prepare(self, **_kwargs: object) -> QuestionContextPreparationResult:
+    async def prepare(self, **_kwargs: object) -> QuestionContext:
         self._timeline.append("prepare")
         if self._error is not None:
             raise self._error
-        return QuestionContextPreparationResult(
-            context=self._context,
-            telemetry=QuestionContextTelemetry(),
-        )
+        return self._context
 
 
 class _Hooks:
