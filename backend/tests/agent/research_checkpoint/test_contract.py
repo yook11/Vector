@@ -186,19 +186,52 @@ def test_executed_query_rejects_one_char_over_the_max_limit() -> None:
         _task_record(executed_queries=("q" * (EXTERNAL_QUERY_MAX_CHARS + 1),))
 
 
-def test_adopted_claims_accepts_exactly_the_adoption_limit() -> None:
-    claims = tuple(f"claim-{i}" for i in range(EVIDENCE_REVIEW_ADOPTION_LIMIT))
+def test_checkpoint_accepts_adopted_claims_total_at_exactly_the_limit() -> None:
+    """adopted_claimsの上限はtask個別ではなくCheckpoint全task合計で境界になる。"""
+    first_task_claim_count = EVIDENCE_REVIEW_ADOPTION_LIMIT // 2
+    second_task_claim_count = EVIDENCE_REVIEW_ADOPTION_LIMIT - first_task_claim_count
+    tasks = (
+        _task_record(
+            research_goal="goal-a",
+            adopted_claims=tuple(f"claim-a-{i}" for i in range(first_task_claim_count)),
+        ),
+        _task_record(
+            research_goal="goal-b",
+            adopted_claims=tuple(
+                f"claim-b-{i}" for i in range(second_task_claim_count)
+            ),
+        ),
+    )
 
-    task_record = _task_record(adopted_claims=claims)
+    checkpoint = _checkpoint(tasks=tasks)
 
-    assert task_record.adopted_claims == claims
+    assert (
+        sum(len(task.adopted_claims) for task in checkpoint.tasks)
+        == EVIDENCE_REVIEW_ADOPTION_LIMIT
+    )
 
 
-def test_adopted_claims_rejects_one_more_than_the_adoption_limit() -> None:
-    claims = tuple(f"claim-{i}" for i in range(EVIDENCE_REVIEW_ADOPTION_LIMIT + 1))
+def test_checkpoint_rejects_adopted_claims_total_across_tasks_over_the_limit() -> None:
+    """1 taskだけでは上限内でも、複数taskへ分散した合計が超過すれば拒否される。"""
+    first_task_claim_count = EVIDENCE_REVIEW_ADOPTION_LIMIT // 2
+    second_task_claim_count = (
+        EVIDENCE_REVIEW_ADOPTION_LIMIT - first_task_claim_count + 1
+    )
+    tasks = (
+        _task_record(
+            research_goal="goal-a",
+            adopted_claims=tuple(f"claim-a-{i}" for i in range(first_task_claim_count)),
+        ),
+        _task_record(
+            research_goal="goal-b",
+            adopted_claims=tuple(
+                f"claim-b-{i}" for i in range(second_task_claim_count)
+            ),
+        ),
+    )
 
     with pytest.raises(ValidationError):
-        _task_record(adopted_claims=claims)
+        _checkpoint(tasks=tasks)
 
 
 def test_adopted_claim_accepts_exactly_the_max_char_limit() -> None:

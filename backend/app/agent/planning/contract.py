@@ -17,6 +17,7 @@ from pydantic import (
 
 from app.agent.contract import (
     MAX_ARTICLE_SEARCH_QUERIES,
+    PRIOR_RESEARCH_CHECKPOINT_LIMIT,
     RESEARCH_GOAL_MAX_CHARS,
     RESEARCH_TASK_LIMIT,
     PlanType,
@@ -167,7 +168,10 @@ class PlanningRequest(BaseModel):
     context: QuestionContext
     as_of: datetime
     # 同threadの直近checkpoint(新しい順)。読出し・検証失敗時は空。
-    prior_research: tuple[ResearchCheckpoint, ...] = ()
+    prior_research: tuple[ResearchCheckpoint, ...] = Field(
+        default=(),
+        max_length=PRIOR_RESEARCH_CHECKPOINT_LIMIT,
+    )
 
 
 @dataclass(frozen=True, slots=True)

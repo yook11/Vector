@@ -355,7 +355,12 @@ class AnsweringRunner:
                     task_reports=task_reports,
                     effective_agent_count=effective_agent_count,
                 ),
-                None,
+                _build_research_checkpoint(
+                    plan=plan,
+                    collected_tasks=collected_tasks,
+                    review_outcome=None,
+                    as_of=as_of,
+                ),
             )
 
         await self._report_progress("evidence_review")
@@ -543,7 +548,7 @@ def _build_research_checkpoint(
     *,
     plan: SearchPlan,
     collected_tasks: list[_TaskCollection],
-    review_outcome: EvidenceReviewOutcome,
+    review_outcome: EvidenceReviewOutcome | None,
     as_of: datetime,
 ) -> ResearchCheckpoint | None:
     """組み立て失敗は安定failure codeのみ記録し回答workflowを継続する。"""

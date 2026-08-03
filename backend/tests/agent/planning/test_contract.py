@@ -4,13 +4,14 @@ from __future__ import annotations
 
 import importlib
 import inspect
-from datetime import date, datetime
+from datetime import UTC, date, datetime
 from typing import Any, get_args, get_type_hints
 
 import pytest
 from pydantic import ValidationError
 
 from app.agent.agent import Agent
+from app.agent.contract import PRIOR_RESEARCH_CHECKPOINT_LIMIT, ResearchTaskRecord
 from app.agent.planning.service import QuestionPlanningService
 from app.agent.question_context.contract import QuestionContext
 from app.agent.runtime.contract import (
@@ -540,6 +541,47 @@ def test_planning_request_is_a_frozen_context_consumer_wrapper() -> None:
         (),
         True,
     )
+
+
+def _prior_research_checkpoint(hour: int) -> Any:
+    checkpoint_type = _required_contract("ResearchCheckpoint")
+    return checkpoint_type(
+        as_of=datetime(2026, 7, 1, hour, tzinfo=UTC),
+        tasks=(
+            ResearchTaskRecord(
+                research_goal="調査目標",
+                executed_queries=("q",),
+                adopted_claims=(),
+            ),
+        ),
+        unresolved_after_search=(),
+    )
+
+
+def test_planning_request_rejects_prior_research_over_the_shared_checkpoint_limit() -> (
+    None
+):
+    """prior_researchの件数上限はPRIOR_RESEARCH_CHECKPOINT_LIMIT(共有契約)を参照する。"""
+    request_type = _required_contract("PlanningRequest")
+    context = QuestionContext(standalone_question="NVIDIA の直近発表は？")
+    as_of = datetime(2026, 7, 10)
+    checkpoints_at_limit = tuple(
+        _prior_research_checkpoint(hour)
+        for hour in range(PRIOR_RESEARCH_CHECKPOINT_LIMIT)
+    )
+    checkpoints_over_limit = checkpoints_at_limit + (
+        _prior_research_checkpoint(PRIOR_RESEARCH_CHECKPOINT_LIMIT),
+    )
+
+    accepted = request_type(
+        context=context, as_of=as_of, prior_research=checkpoints_at_limit
+    )
+
+    assert accepted.prior_research == checkpoints_at_limit
+    with pytest.raises(ValidationError):
+        request_type(
+            context=context, as_of=as_of, prior_research=checkpoints_over_limit
+        )
 
 
 def test_planning_boundaries_accept_planning_request() -> None:

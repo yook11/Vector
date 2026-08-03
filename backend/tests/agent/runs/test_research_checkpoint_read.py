@@ -164,6 +164,35 @@ async def test_excludes_checkpoints_from_a_thread_owned_by_another_user(
 
 
 @pytest.mark.asyncio
+async def test_excludes_checkpoints_from_a_different_thread_of_the_same_user(
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    """thread scopeは同一userでも独立している(注入フロー2: 同thread・同userの両方)。"""
+    user_id = uuid.UUID(TEST_USER_ID)
+    async with session_factory() as session:
+        other_thread_id = await _seed_thread(session, user_id=user_id)
+        await _seed_run(
+            session,
+            thread_id=other_thread_id,
+            seq=1,
+            completed_at=_BASE_COMPLETED_AT,
+            research_checkpoint=_checkpoint_json("other-thread-goal"),
+        )
+        target_thread_id = await _seed_thread(session, user_id=user_id)
+        await session.commit()
+
+    async with session_factory() as session:
+        raw_checkpoints = await AgentRunRepository(
+            session
+        ).read_recent_research_checkpoints_for_user(
+            thread_id=target_thread_id,
+            user_id=user_id,
+        )
+
+    assert raw_checkpoints == []
+
+
+@pytest.mark.asyncio
 async def test_excludes_non_completed_and_null_checkpoint_runs(
     session_factory: async_sessionmaker[AsyncSession],
 ) -> None:

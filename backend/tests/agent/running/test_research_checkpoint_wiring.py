@@ -313,8 +313,14 @@ async def test_evidence_review_failure_leaves_checkpoint_none() -> None:
     assert result.research_checkpoint is None  # type: ignore[attr-defined]
 
 
-async def test_skipped_empty_review_leaves_checkpoint_none() -> None:
-    """内外候補ともゼロでreviewerが呼ばれない(skipped_empty)場合もNoneのまま。"""
+async def test_skipped_empty_review_records_executed_query_with_no_adopted_claims() -> (
+    None
+):
+    """記録フロー3: 内外候補ともゼロでreviewerが呼ばれない(skipped_empty)場合も、
+
+    provider呼び出しに成功したtaskは空adopted_claims・空unresolved_after_searchで
+    記録される(review失敗経路と異なりNoneにはならない)。
+    """
     tool = _ExternalTool(results_by_query={})
     reviewer_runtime = ScriptedAgentRuntime([])
     runner = _search_runner(
@@ -326,7 +332,15 @@ async def test_skipped_empty_review_leaves_checkpoint_none() -> None:
 
     result = await _run(runner)
 
-    assert result.research_checkpoint is None  # type: ignore[attr-defined]
+    checkpoint = result.research_checkpoint  # type: ignore[attr-defined]
+    assert checkpoint is not None
+    assert len(checkpoint.tasks) == 1
+    assert (
+        checkpoint.tasks[0].research_goal,
+        checkpoint.tasks[0].executed_queries,
+        checkpoint.tasks[0].adopted_claims,
+        checkpoint.unresolved_after_search,
+    ) == ("調査目標", ("q",), (), ())
     assert reviewer_runtime.calls == []
 
 

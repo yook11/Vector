@@ -279,9 +279,8 @@ class ResearchTaskRecord(BaseModel):
         max_length=EXTERNAL_TASK_QUERY_LIMIT,
     )
     # 外部検索から採用されたclaim。空 = 有用な候補なし。
-    adopted_claims: tuple[_AdoptedClaim, ...] = Field(
-        max_length=EVIDENCE_REVIEW_ADOPTION_LIMIT,
-    )
+    # Run全体(Checkpoint全task合計)の上限はResearchCheckpointのvalidatorが持つ。
+    adopted_claims: tuple[_AdoptedClaim, ...]
 
 
 class ResearchCheckpoint(BaseModel):
@@ -300,3 +299,14 @@ class ResearchCheckpoint(BaseModel):
     unresolved_after_search: tuple[_UnresolvedItem, ...] = Field(
         max_length=EVIDENCE_REVIEW_MISSING_LIMIT,
     )
+
+    @model_validator(mode="after")
+    def _validate_total_adopted_claims(self) -> Self:
+        # adopted_claimsの上限はtask個別ではなくCheckpoint全task合計(reviewer が
+        # Run単位で採用できる根拠の上限と同一)。
+        total_adopted_claims = sum(len(task.adopted_claims) for task in self.tasks)
+        if total_adopted_claims > EVIDENCE_REVIEW_ADOPTION_LIMIT:
+            raise ValueError(
+                "adopted claims across tasks exceed the review adoption limit"
+            )
+        return self

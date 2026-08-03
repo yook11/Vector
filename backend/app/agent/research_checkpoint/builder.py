@@ -24,16 +24,22 @@ def build_research_checkpoint(
     *,
     plan: SearchPlan,
     executed_queries_by_task: Mapping[int, tuple[str, ...]],
-    review_outcome: EvidenceReviewOutcome,
+    review_outcome: EvidenceReviewOutcome | None,
     as_of: datetime,
 ) -> ResearchCheckpoint | None:
-    """外部検索を実行できたtaskだけを記録する。記録可能taskが0件ならNone。"""
+    """外部検索を実行できたtaskだけを記録する。記録可能taskが0件ならNone。
+
+    `review_outcome`がNoneなのは、全taskの候補が0件でevidence reviewを
+    実行しなかったRunを表す。この場合adopted_claims・unresolved_after_search
+    は空として組み立てる(採用可否・missingを判断するreviewが走っていないため)。
+    """
 
     adopted_claims_by_task: dict[int, list[str]] = {}
-    for evidence in review_outcome.external_evidence:
-        adopted_claims_by_task.setdefault(evidence.task_index, []).append(
-            evidence.claim
-        )
+    if review_outcome is not None:
+        for evidence in review_outcome.external_evidence:
+            adopted_claims_by_task.setdefault(evidence.task_index, []).append(
+                evidence.claim
+            )
 
     tasks: list[ResearchTaskRecord] = []
     for task_index, task in enumerate(plan.research_tasks):
@@ -51,8 +57,11 @@ def build_research_checkpoint(
     if not tasks:
         return None
 
+    unresolved_after_search = (
+        tuple(review_outcome.missing) if review_outcome is not None else ()
+    )
     return ResearchCheckpoint(
         as_of=as_of,
         tasks=tuple(tasks),
-        unresolved_after_search=tuple(review_outcome.missing),
+        unresolved_after_search=unresolved_after_search,
     )
