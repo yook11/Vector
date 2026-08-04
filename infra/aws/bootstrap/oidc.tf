@@ -73,13 +73,32 @@ locals {
 
   # secret の実体を CI が読めないようにする。
   # 「Terraform から SSM の値を読まない」を運用の約束ではなく IAM の Deny にする。
-  secret_read_actions = [
-    "ssm:GetParameter",
-    "ssm:GetParameters",
-    "ssm:GetParameterHistory",
-    "ssm:GetParametersByPath",
-    "secretsmanager:GetSecretValue",
-    "kms:Decrypt",
+  #
+  # SSM だけ Resource を自アカウント所有の parameter に絞る。AWS が公開する
+  # /aws/service/* (最新 AMI の ID など) は **account 部が空の ARN** で、`*` で
+  # 巻き込むと bastion の AMI 参照が Deny で落ちる。秘密は全て自アカウントの
+  # parameter にあるので、絞っても射程は変わらない。
+  secret_read_statements = [
+    {
+      Sid    = "NoOwnParameterValues"
+      Effect = "Deny"
+      Action = [
+        "ssm:GetParameter",
+        "ssm:GetParameters",
+        "ssm:GetParameterHistory",
+        "ssm:GetParametersByPath",
+      ]
+      Resource = "arn:aws:ssm:*:${local.account_id}:parameter/*"
+    },
+    {
+      Sid    = "NoSecretValues"
+      Effect = "Deny"
+      Action = [
+        "secretsmanager:GetSecretValue",
+        "kms:Decrypt",
+      ]
+      Resource = "*"
+    },
   ]
 }
 
@@ -168,15 +187,8 @@ resource "aws_iam_role_policy" "plan_deny_secret_read" {
   role = aws_iam_role.ci["plan"].id
 
   policy = jsonencode({
-    Version = "2012-10-17"
-    Statement = [
-      {
-        Sid      = "NoSecretValues"
-        Effect   = "Deny"
-        Action   = local.secret_read_actions
-        Resource = "*"
-      },
-    ]
+    Version   = "2012-10-17"
+    Statement = local.secret_read_statements
   })
 }
 
@@ -188,7 +200,7 @@ resource "aws_iam_role_policy" "apply" {
 
   policy = jsonencode({
     Version = "2012-10-17"
-    Statement = [
+    Statement = concat([
       # 本体スタックが触るリージョナルサービス。
       #
       # ここを action 単位で列挙しないのは意図的。greenfield のスタックで
@@ -336,13 +348,7 @@ resource "aws_iam_role_policy" "apply" {
       # computed なので、ignore_changes を付けても refresh で state に載る)。
       # 「値を読まない」を Deny にすることで、data source をうっかり足しても
       # apply が失敗して気づく。
-      {
-        Sid      = "NoSecretValues"
-        Effect   = "Deny"
-        Action   = local.secret_read_actions
-        Resource = "*"
-      },
-    ]
+    ], local.secret_read_statements)
   })
 }
 
@@ -357,7 +363,7 @@ resource "aws_iam_role_policy" "push" {
 
   policy = jsonencode({
     Version = "2012-10-17"
-    Statement = [
+    Statement = concat([
       {
         Sid      = "EcrAuthToken"
         Effect   = "Allow"
@@ -378,13 +384,7 @@ resource "aws_iam_role_policy" "push" {
         ]
         Resource = "arn:aws:ecr:${var.region}:${local.account_id}:repository/${var.name_prefix}/*"
       },
-      {
-        Sid      = "NoSecretValues"
-        Effect   = "Deny"
-        Action   = local.secret_read_actions
-        Resource = "*"
-      },
-    ]
+    ], local.secret_read_statements)
   })
 }
 
@@ -400,7 +400,7 @@ resource "aws_iam_role_policy" "rollout" {
 
   policy = jsonencode({
     Version = "2012-10-17"
-    Statement = [
+    Statement = concat([
       {
         Sid    = "EcsRollout"
         Effect = "Allow"
@@ -429,12 +429,6 @@ resource "aws_iam_role_policy" "rollout" {
           StringEquals = { "iam:PassedToService" = "ecs-tasks.amazonaws.com" }
         }
       },
-      {
-        Sid      = "NoSecretValues"
-        Effect   = "Deny"
-        Action   = local.secret_read_actions
-        Resource = "*"
-      },
-    ]
+    ], local.secret_read_statements)
   })
 }
