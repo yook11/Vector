@@ -4,7 +4,7 @@
 # 6 回 push することになるだけで境界は増えない。
 #
 # IMMUTABLE の帰結: deploy は毎回一意な tag (commit SHA) で push する。
-# latest の上書きができないので、app-deploy workflow 側の契約になる。
+# latest の上書きができないので、push job 側の契約になる。
 resource "aws_ecr_repository" "this" {
   for_each = local.images
 

@@ -200,7 +200,7 @@ resource "aws_ecs_service" "proxy" {
 
   # app 段と違い ignore_changes を付けない。**allowlist は task definition の env に
   # 焼かれている**ので、ignore すると「plan では差分が読めるのに service には
-  # 配送されない」状態になる。app 段でこのパターンが成立するのは app-deploy が
-  # revision を進めるからで、proxy は app-deploy の対象外 (backend / frontend のみ)。
+  # 配送されない」状態になる。app 段でこのパターンが成立するのは rollout job が
+  # revision を進めるからで、proxy は rollout の対象外 (backend / frontend のみ)。
   # proxy の task definition を触るのは Terraform だけなので、理由が当てはまらない。
 }

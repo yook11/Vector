@@ -48,11 +48,28 @@ locals {
       name = "terraform-apply"
       subs = ["repo:${local.repo}:environment:${var.deploy_environment}"]
     }
-    deploy = {
-      name = "app-deploy"
+    # image を焼く工程と本番を入れ替える工程で role を分ける。build は Dockerfile と
+    # 依存パッケージのコードが実際に走る場所なので、そこに本番差し替えの権限を持たせない。
+    push = {
+      name = "app-push"
       subs = ["repo:${local.repo}:ref:refs/heads/main"]
     }
+    # sub を environment 限定にすることで、承認を経ない job には token 自体が
+    # 発行されなくなる。承認ゲートが運用の約束ではなく経路の不在になる。
+    rollout = {
+      name = "app-rollout"
+      subs = ["repo:${local.repo}:environment:${var.deploy_environment}"]
+    }
   }
+
+  # IAM Identity Center が permission set ごとに member アカウントへ作るロール。
+  # 末尾の接尾辞は割り当てを作り直すたびに変わるため ARN を完全一致で書けない。
+  # path の region 部分は IdC インスタンスのリージョンで、ここでは var.region と一致する。
+  sso_deploy_role_pattern = join("/", [
+    "arn:aws:iam::${local.account_id}:role/aws-reserved/sso.amazonaws.com",
+    var.region,
+    "AWSReservedSSO_${var.deploy_permission_set}_*",
+  ])
 
   # secret の実体を CI が読めないようにする。
   # 「Terraform から SSM の値を読まない」を運用の約束ではなく IAM の Deny にする。
@@ -75,12 +92,16 @@ resource "aws_iam_openid_connect_provider" "github" {
   thumbprint_list = null
 }
 
-# sub claim は完全一致で書く。`repo:owner/repo:*` のようなワイルドカードにすると
-# 「どのブランチからでも assume できるロール」になる。
-data "aws_iam_policy_document" "github_trust" {
+# CI ロールの受け入れ名簿。GitHub Actions と、人間が通る permission set の 2 経路。
+# **どちらの経路も同じ CI ロールになる**ので、デプロイで何ができるかの定義は
+# 下の policy 群 1 箇所に留まる。
+data "aws_iam_policy_document" "ci_role_trust" {
   for_each = local.ci_roles
 
+  # sub claim は完全一致で書く。`repo:owner/repo:*` のようなワイルドカードにすると
+  # 「どのブランチからでも assume できるロール」になる。
   statement {
+    sid     = "GitHubActions"
     effect  = "Allow"
     actions = ["sts:AssumeRoleWithWebIdentity"]
 
@@ -101,6 +122,26 @@ data "aws_iam_policy_document" "github_trust" {
       values   = each.value.subs
     }
   }
+
+  # principals に ARN のワイルドカードは書けないため、入口はアカウントにして
+  # 実際の絞り込みを condition で行う (AWS が案内している permission set の書き方)。
+  # 両者は AND なので、実効的に通るのは deploy permission set のロールだけ。
+  statement {
+    sid     = "DeployPermissionSet"
+    effect  = "Allow"
+    actions = ["sts:AssumeRole"]
+
+    principals {
+      type        = "AWS"
+      identifiers = [local.account_id]
+    }
+
+    condition {
+      test     = "ArnLike"
+      variable = "aws:PrincipalArn"
+      values   = [local.sso_deploy_role_pattern]
+    }
+  }
 }
 
 resource "aws_iam_role" "ci" {
@@ -108,7 +149,7 @@ resource "aws_iam_role" "ci" {
 
   name               = "${var.name_prefix}-ci-${each.value.name}"
   path               = "/${var.name_prefix}-ci/"
-  assume_role_policy = data.aws_iam_policy_document.github_trust[each.key].json
+  assume_role_policy = data.aws_iam_policy_document.ci_role_trust[each.key].json
 }
 
 # --- terraform-plan -------------------------------------------------------
@@ -305,15 +346,14 @@ resource "aws_iam_role_policy" "apply" {
   })
 }
 
-# --- app-deploy -----------------------------------------------------------
+# --- app-push -------------------------------------------------------------
 #
-# インフラは触らない。image を push して service を更新するだけ。
-# 本丸は ecs:RegisterTaskDefinition と iam:PassRole で、ここを絞らないと
-# 「強いロールを渡した task definition を登録する」が通る。
+# ECR に image を置くだけ。ECS には一切届かない。この role で焼いた image が
+# 本番に載るには、必ず承認を通る app-rollout が要る。
 
-resource "aws_iam_role_policy" "deploy" {
-  name = "app-deploy"
-  role = aws_iam_role.ci["deploy"].id
+resource "aws_iam_role_policy" "push" {
+  name = "app-push"
+  role = aws_iam_role.ci["push"].id
 
   policy = jsonencode({
     Version = "2012-10-17"
@@ -339,9 +379,35 @@ resource "aws_iam_role_policy" "deploy" {
         Resource = "arn:aws:ecr:${var.region}:${local.account_id}:repository/${var.name_prefix}/*"
       },
       {
+        Sid      = "NoSecretValues"
+        Effect   = "Deny"
+        Action   = local.secret_read_actions
+        Resource = "*"
+      },
+    ]
+  })
+}
+
+# --- app-rollout ----------------------------------------------------------
+#
+# 本番の service を入れ替えるだけ。image は焼かないので ECR への書き込みは持たない。
+# 本丸は ecs:RegisterTaskDefinition と iam:PassRole で、ここを絞らないと
+# 「強いロールを渡した task definition を登録する」が通る。
+
+resource "aws_iam_role_policy" "rollout" {
+  name = "app-rollout"
+  role = aws_iam_role.ci["rollout"].id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
         Sid    = "EcsRollout"
         Effect = "Allow"
         Action = [
+          # 入れ替え対象は cluster に問い合わせて数える。workflow 側に段の一覧を
+          # 持つと locals.tf と 2 箇所になり、段の追加が黙って漏れる。
+          "ecs:ListServices",
           "ecs:DescribeServices",
           "ecs:DescribeTaskDefinition",
           "ecs:DescribeTasks",

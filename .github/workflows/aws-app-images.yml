@@ -3,24 +3,29 @@ name: AWS app images
 # backend / frontend の image を ECR に push する。
 #
 # tag は commit SHA。repository が IMMUTABLE なので latest の上書きができず、deploy は
-# 毎回一意な tag になる (infra/aws/registry.tf の注記)。push した tag は job summary に
-# 出すので、apply 側は `terraform apply -var image_tag=<tag>` で受ける。
+# 毎回一意な tag になる (infra/aws/registry.tf の注記)。
 #
-# ECS の rollout はまだ行わない。本番切替の前に「image が更新されたら service が
-# 入れ替わる」状態を作らないため。app-deploy role には EcsRollout があるので、切替を
-# 決めた時点で step を足す。
+# push と rollout で role を分けている。build は Dockerfile と依存パッケージのコードが
+# 実際に走る場所なので、そこに本番差し替えの権限を持たせない。焼いた image が本番に
+# 載るには、承認を通る rollout job を必ず経由する。
 #
-# workflow_dispatch のみ。main の push で自動に走らせないのは上と同じ理由。
+# workflow_dispatch のみ。main の push で自動に走らせない。
 
 on:
   workflow_dispatch:
 
-# app-deploy role の trust は sub が repo:<owner>/<repo>:ref:refs/heads/main の完全一致
-# (infra/aws/bootstrap/oidc.tf)。**job に environment: を付けると sub が
-# environment:<name> に変わって assume が失敗する。**
+# **job に environment: を付けると OIDC の sub claim が environment:<name> に変わる。**
+# push job (sub = ref:refs/heads/main) と rollout job (sub = environment:production) で
+# assume できる role が違うのはこのため (infra/aws/bootstrap/oidc.tf)。
 permissions:
   id-token: write
   contents: read
+
+# 二重 dispatch で rollout が並走すると、service が互いの revision を追い越しうる。
+# 走行中の run は殺さない (本番の入れ替え途中で止めるほうが危険)。
+concurrency:
+  group: ${{ github.workflow }}
+  cancel-in-progress: false
 
 jobs:
   push:
@@ -63,10 +68,15 @@ jobs:
             echo "$name=$value" >> "$GITHUB_OUTPUT"
           done
 
+      # role ARN は secret で受ける。**with: の値はステップ開始時にログへ出るため、
+      # run: 側の ::add-mask:: では間に合わない** (mask は登録以降の行にしか効かない)。
+      # secrets なら with: の echo も含めて自動で伏せられる。
+      # mask-aws-account-id は action 自身の出力に対する補助で、上の代替にはならない。
       - uses: aws-actions/configure-aws-credentials@e6de054238d6b7531b4efff3b6587d9aade6a06c  # v6.2.3
         with:
-          role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
+          role-to-assume: ${{ secrets.AWS_PUSH_ROLE_ARN }}
           aws-region: ${{ steps.tf.outputs.region }}
+          mask-aws-account-id: true
 
       - id: ecr
         name: Log in to ECR
@@ -83,9 +93,31 @@ jobs:
             | docker login --username AWS --password-stdin "$registry"
           echo "registry=$registry" >> "$GITHUB_OUTPUT"
 
+      # repository が IMMUTABLE なので、同じ SHA を焼き直す push は必ず失敗する。
+      # それだと「apply 後に rollout を再実行」が fresh な dispatch では成立しない
+      # (push で落ちて rollout に届かない)。既に在る tag は焼かずに通す。
+      #
+      # batch-get-image は image が無くても exit 0 で failures に返すため、
+      # exit code では判定できない。images 配列の長さで見る。
+      - id: existing
+        name: Check whether the tag is already pushed
+        env:
+          REPOSITORY: ${{ steps.tf.outputs.name_prefix }}/${{ matrix.image }}
+          IMAGE_TAG: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          count=$(
+            aws ecr batch-get-image \
+              --repository-name "$REPOSITORY" \
+              --image-ids "imageTag=$IMAGE_TAG" \
+              --query 'length(images)' --output text
+          )
+          echo "found=$([ "$count" -gt 0 ] && echo true || echo false)" >> "$GITHUB_OUTPUT"
+
       # frontend の build ARG は全て placeholder default 付きで、runtime の env が
       # 上書きする。build 引数を渡さないので、secret が image に焼かれる経路が無い。
       - name: Build and push
+        if: steps.existing.outputs.found != 'true'
         # 値は run: 本文へ直接補間せず env: 経由で渡す。IMAGE_REF を別に持つのは、
         # IMAGE が registry (= account id) を含んでログに出せないため。
         env:
@@ -103,5 +135,119 @@ jobs:
           {
             echo "pushed \`$IMAGE_REF\`"
             echo ""
-            echo "apply 側は \`terraform apply -var image_tag=$IMAGE_TAG\` で受ける。"
+            echo "infra を変える場合は \`terraform apply -var image_tag=$IMAGE_TAG\` も要る。"
           } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Note the reused image
+        if: steps.existing.outputs.found == 'true'
+        env:
+          IMAGE_REF: ${{ steps.tf.outputs.name_prefix }}/${{ matrix.image }}:${{ github.sha }}
+        run: echo "reused \`$IMAGE_REF\` (同じ tag が既に ECR にある)" >> "$GITHUB_STEP_SUMMARY"
+
+  rollout:
+    needs: push
+    # 承認ゲートはここ。required reviewer が付いている限り、承認されるまで job が
+    # 起動せず、OIDC token が発行されない。app-rollout を assume する材料が
+    # そもそも存在しないので、ゲートは運用の約束ではなく経路の不在になる。
+    environment: production
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
+        with:
+          persist-credentials: false
+
+      - id: tf
+        name: Read values from Terraform variables
+        run: |
+          set -euo pipefail
+          read_default() {
+            awk "/variable \"$1\"/,/^}/" infra/aws/variables.tf \
+              | sed -n 's/.*default *= *"\(.*\)".*/\1/p' | head -1
+          }
+          for name in region name_prefix; do
+            value=$(read_default "$name")
+            if [ -z "$value" ]; then
+              echo "::error::variables.tf の $name の default を読めなかった"
+              exit 1
+            fi
+            echo "$name=$value" >> "$GITHUB_OUTPUT"
+          done
+
+      - uses: aws-actions/configure-aws-credentials@e6de054238d6b7531b4efff3b6587d9aade6a06c  # v6.2.3
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLLOUT_ROLE_ARN }}
+          aws-region: ${{ steps.tf.outputs.region }}
+          mask-aws-account-id: true
+
+      - name: Roll out services
+        env:
+          CLUSTER: ${{ steps.tf.outputs.name_prefix }}
+          IMAGE_TAG: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+
+          # 入れ替え対象は cluster に問い合わせる。workflow に段の一覧を持つと
+          # locals.tf と 2 箇所になり、段を足したときに黙って漏れる。
+          # proxy だけ外すのは、image も workflow も別系統のため。
+          #
+          # AWS 側の失敗をここで落とすために list-services は単独で実行する。
+          # || true を付けてよいのは「proxy しか無い」を許す grep だけ。
+          arns=$(aws ecs list-services --cluster "$CLUSTER" --query 'serviceArns[]' --output text)
+          services=$(tr '\t' '\n' <<<"$arns" | sed 's|.*/||' | grep -vx 'proxy' || true)
+          if [ -z "$services" ]; then
+            echo "::error::入れ替え対象の service が 0 件だった"
+            exit 1
+          fi
+
+          # 1 パス目: 全段の revision を登録するだけ。ここで落ちても本番は無傷。
+          registered=""
+          for svc in $services; do
+            # family の最新 ACTIVE revision を土台にする。service が今指している
+            # revision ではなく family を見るのは、Terraform 由来の env / secrets の
+            # 変更をここで取り込むため (README「apply 後に rollout を再実行」)。
+            family=$(
+              aws ecs describe-services --cluster "$CLUSTER" --services "$svc" \
+                --query 'services[0].taskDefinition' --output text | sed 's|.*/||; s|:.*||'
+            )
+            current=$(
+              aws ecs describe-task-definition --task-definition "$family" \
+                --query 'taskDefinition' --output json
+            )
+            # describe が返す読み取り専用フィールドは register が受け付けないので落とす。
+            # 未知のフィールドが増えたときは register が失敗して気づける (黙って落とさない)。
+            next=$(
+              jq --arg tag "$IMAGE_TAG" '
+                .containerDefinitions |= map(.image |= sub(":[^:/]+$"; ":" + $tag))
+                | del(
+                    .taskDefinitionArn, .revision, .status, .requiresAttributes,
+                    .compatibilities, .registeredAt, .registeredBy, .deregisteredAt
+                  )
+              ' <<<"$current"
+            )
+            arn=$(
+              aws ecs register-task-definition --cli-input-json "$next" \
+                --query 'taskDefinition.taskDefinitionArn' --output text
+            )
+            registered+="$svc $arn"$'\n'
+          done
+
+          # 2 パス目: 実際に本番を入れ替える。1 パス目で全段が揃っているので、
+          # 途中で落ちても「一部だけ新 revision」で終わる窓が短い。
+          while read -r svc arn; do
+            [ -n "$svc" ] || continue
+            aws ecs update-service \
+              --cluster "$CLUSTER" --service "$svc" --task-definition "$arn" >/dev/null
+            echo "- \`$svc\` -> \`${arn##*/}\`" >> "$GITHUB_STEP_SUMMARY"
+          done <<<"$registered"
+
+          # waiter の上限は 15 秒 x 40 回 = 10 分 (botocore 側の固定値で、job の
+          # timeout-minutes より先に効く)。7 段同時の rolling は超えうるので 1 回だけ
+          # 待ち直す。それでも安定しなければ失敗させる。
+          # shellcheck disable=SC2086
+          if ! aws ecs wait services-stable --cluster "$CLUSTER" --services $services; then
+            echo "::warning::10 分で安定しなかった。もう 1 度だけ待つ"
+            # shellcheck disable=SC2086
+            aws ecs wait services-stable --cluster "$CLUSTER" --services $services
+          fi
