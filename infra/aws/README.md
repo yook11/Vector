@@ -124,67 +124,48 @@ subnet 自体は無料なので段ごとに 1:1 で切る。
 
 ## DB 踏み台 (enable_db_bastion)
 
-RDS への人手作業 (移行・保守) 用の一時経路。平常時は存在せず、素の apply が
-撤去を兼ねる。SSM Session Manager の port forwarding で、踏み台は public IP も
-SSH ポートも ingress 規則も持たない。
+RDS への人手作業 (移行・保守) 用の一時経路。**平常時は存在せず、素の apply が
+撤去を兼ねる**。SSM Session Manager の port forwarding で、踏み台は public IP も
+SSH ポートも ingress 規則も持たない。踏み台という言葉が普通に指す「開いている
+入口」は、ここには無い。
 
-```
-生やす:  terraform apply -var enable_db_bastion=true (image_tag も現行値で渡す)
-繋ぐ:    aws ssm start-session --target <instance-id> \
-           --document-name AWS-StartPortForwardingSessionToRemoteHost \
-           --parameters host=<RDS endpoint>,portNumber=5432,localPortNumber=15432
-消す:    素の terraform apply
-```
+具体的なコマンド列は private runbook 側に置く。ここに書くのは境界だけ。
 
-instance-id と RDS endpoint は `terraform output bastion_instance_id` /
-`terraform output db_endpoint` で取れる。
-
-- Mac 側に session-manager-plugin が要る (`brew install --cask session-manager-plugin`)。
-- local port は 15432 にする。5432 は dev の docker Postgres と衝突する。
-- `verify-full` はトンネル越しだと CN 不一致で落ちる。libpq の
-  `host=<RDS endpoint> hostaddr=127.0.0.1 port=15432` 分離指定で保てる。
-  IAM auth token の `--hostname` にも localhost ではなく実 endpoint を渡す。
+- **admin 専用なのは設計であって権限不足ではない。** 踏み台の role は Session
+  Manager を使うため permissions boundary を付けられず (boundary が
+  `ssmmessages:*` を Deny)、boundary 無しの role 作成は `terraform-apply` 側の
+  `DenyRoleCreationWithoutBoundary` が拒否する。`ssm:StartSession` も
+  `terraform-apply` は持たない。**CI 用の経路でこれが通らないのは fail-closed が
+  効いた結果**で、穴を開けて通すものではない (bastion.tf の注記と対)。
+- **トンネル越しに `verify-full` を保つ方法が client で違う。** libpq (psql) は
+  `host` と `hostaddr` を分離指定できるが、**asyncpg / pg にこの分離は無い**。
+  後者は名前解決の側で解く。証明書の検証を落として解決しない — `db_ssl.py` は
+  「検証なし TLS というモードを持たない」と宣言しており、手順書側に抜け道を
+  作るとその宣言が意味を失う。
 - **踏み台を使う作業の最中に apply するなら必ず var を付ける。** 素の apply は
   設計どおり土管ごと撤去する。
 - SSM のデータチャネルは数 MB/s。この DB の規模なら pg_restore に実害はない。
 - `start-session` が TargetNotConnected のときの第一容疑者は endpoints SG
   (bastion からの 443 ingress は toggle 内の conditional resource)。
 
-## DB 初期構築 (RDS)
+## DB の構築と migration が持つ制約
 
-踏み台の port forward (localhost:15432) 越しに、空の RDS を構築する手順。
-ローカルの PG17 + pgvector で一気通し検証済み (2026-07-31)。
+空の RDS を建てる手順と、本番へ migration を当てる手順は private runbook 側に
+置く。ここに書くのは、手順の順番や道具立てを決めている制約のほう。
 
-**順序が本質。** alembic の chain は `auth."user"` への FK を持つが、auth の
-テーブルは Better Auth CLI の管轄で alembic は作らない。**CLI を alembic より
-先に**流す (逆だと watchlist_entries の FK 作成で落ちる。統合テストは
-`create_all` で schema を焼くため、この順序依存は migration 経路でしか現れない)。
-
-```
-1. role / 所有権 / extension (master password は Secrets Manager):
-   psql "host=<RDS endpoint> hostaddr=127.0.0.1 port=15432 dbname=vector \
-     user=vector_master sslmode=verify-full" -f db-provision.sql
-2. migration 用 password の設定 (同じ psql 接続で):  \password vector
-3. auth schema (vector で接続して):  CREATE SCHEMA IF NOT EXISTS auth;
-4. Better Auth テーブル (frontend/ から。CLI の版は better-auth 本体と別体系):
-   AUTH_DATABASE_URL='postgres://vector:<pw>@127.0.0.1:15432/vector?sslmode=require' \
-   BETTER_AUTH_URL='https://<frontend_domain>' \
-   npx -y @better-auth/cli@1.4.21 migrate -y --config src/lib/auth/auth.cli.ts
-5. schema + GRANT + seed (backend/ から):
-   DATABASE_URL='postgresql+asyncpg://vector:<pw>@127.0.0.1:15432/vector' \
-   MIGRATION_DATABASE_URL=同上 \
-   ALEMBIC_ALLOW_DESTRUCTIVE=yes-i-know uv run alembic upgrade head
-6. 検証: vector_app で public が読め auth.session が拒否される /
-   vector_auth で auth が読め public が不可視 / news_sources に seed が入っている
-```
-
-- 手順 4 以降の URL は 127.0.0.1 直指定のため証明書の CN 検証はできない
-  (asyncpg / pg は hostaddr 分離を持たない)。経路の認証と暗号化は SSM の
-  トンネル側が担っており、内側の TLS は require で足りる。
-- 手順 5 の destructive gate は b1 の legacy テーブル削除が要求する。空 DB の
-  初回構築では失うものが無いので明示して通す。
-- app role (vector_app / vector_auth / vector_collect) は IAM 認証のため
-  password を持たない。`db-provision.sql` に秘密が登場しないのはこのため。
+- **schema の作成主体が 2 つに割れている。** alembic の chain は `auth."user"`
+  への FK を持つが、auth のテーブルは Better Auth CLI の管轄で alembic は作らない。
+  **CLI を alembic より先に**流す必要がある (逆だと watchlist_entries の FK 作成で
+  落ちる)。統合テストは `create_all` で schema を焼くため、**この順序依存は
+  migration 経路でしか現れない** — テストが緑でも初期構築は落ちうる。
+- **app role は password を持たない。** `vector_app` / `vector_auth` /
+  `vector_collect` は IAM 認証 (`GRANT rds_iam`) で、`db-provision.sql` に秘密が
+  登場しないのはこのため。password 認証を続けるのは migration owner の `vector`
+  だけで、その値はどこにも保存していない (`db_iam_auth.py` の射程の注記と対)。
+- **contract migration は新コードの後に当てる。** expand は先でよい。判定は各
+  migration の `MIGRATION_KIND` 宣言と `scripts/migration_gate.py` が持つ。
+- **初回構築は destructive gate を明示的に通す。** b1 の legacy テーブル削除が
+  要求する。空 DB では失うものが無いので通してよい、という判断がその都度要る。
 
 ## egress proxy の残余
 
