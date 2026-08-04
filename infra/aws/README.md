@@ -139,11 +139,19 @@ SSH ポートも ingress 規則も持たない。
 instance-id と RDS endpoint は `terraform output bastion_instance_id` /
 `terraform output db_endpoint` で取れる。
 
+- **この 3 つは全て admin の profile で実行する。deploy 用の profile では通らない。**
+  踏み台の role は Session Manager を使うため boundary を付けられず (boundary が
+  `ssmmessages:*` を Deny)、boundary 無しの role 作成は `terraform-apply` 側の
+  `DenyRoleCreationWithoutBoundary` が拒否する。`ssm:StartSession` も
+  `terraform-apply` は持たない。**踏み台が admin 専用なのは設計であって不足ではない**
+  (bastion.tf の注記と対)。通常の infra 変更だけが deploy 用 profile の担当。
 - Mac 側に session-manager-plugin が要る (`brew install --cask session-manager-plugin`)。
 - local port は 15432 にする。5432 は dev の docker Postgres と衝突する。
-- `verify-full` はトンネル越しだと CN 不一致で落ちる。libpq の
-  `host=<RDS endpoint> hostaddr=127.0.0.1 port=15432` 分離指定で保てる。
-  IAM auth token の `--hostname` にも localhost ではなく実 endpoint を渡す。
+- `verify-full` はトンネル越しだと CN 不一致で落ちる。**libpq (psql) は
+  `host=<RDS endpoint> hostaddr=127.0.0.1 port=15432` の分離指定で保てるが、
+  asyncpg / pg にこの分離は無い**ので、そちらは hosts で名前を 127.0.0.1 に
+  向けて解く (「DB 初期構築」節)。IAM auth token の `--hostname` にも
+  localhost ではなく実 endpoint を渡す。
 - **踏み台を使う作業の最中に apply するなら必ず var を付ける。** 素の apply は
   設計どおり土管ごと撤去する。
 - SSM のデータチャネルは数 MB/s。この DB の規模なら pg_restore に実害はない。
@@ -167,20 +175,30 @@ instance-id と RDS endpoint は `terraform output bastion_instance_id` /
 2. migration 用 password の設定 (同じ psql 接続で):  \password vector
 3. auth schema (vector で接続して):  CREATE SCHEMA IF NOT EXISTS auth;
 4. Better Auth テーブル (frontend/ から。CLI の版は better-auth 本体と別体系):
-   AUTH_DATABASE_URL='postgres://vector:<pw>@127.0.0.1:15432/vector?sslmode=require' \
+   AUTH_DATABASE_URL='postgres://vector:<pw>@<RDS endpoint>:15432/vector?sslmode=require' \
    BETTER_AUTH_URL='https://<frontend_domain>' \
    npx -y @better-auth/cli@1.4.21 migrate -y --config src/lib/auth/auth.cli.ts
 5. schema + GRANT + seed (backend/ から):
-   DATABASE_URL='postgresql+asyncpg://vector:<pw>@127.0.0.1:15432/vector' \
+   DATABASE_URL='postgresql+asyncpg://vector:<pw>@<RDS endpoint>:15432/vector?sslmode=require' \
    MIGRATION_DATABASE_URL=同上 \
    ALEMBIC_ALLOW_DESTRUCTIVE=yes-i-know uv run alembic upgrade head
 6. 検証: vector_app で public が読め auth.session が拒否される /
    vector_auth で auth が読め public が不可視 / news_sources に seed が入っている
 ```
 
-- 手順 4 以降の URL は 127.0.0.1 直指定のため証明書の CN 検証はできない
-  (asyncpg / pg は hostaddr 分離を持たない)。経路の認証と暗号化は SSM の
-  トンネル側が担っており、内側の TLS は require で足りる。
+- **手順 4 以降は hosts で RDS のホスト名を 127.0.0.1 へ向けてから実行する。**
+  ポートはトンネルのローカル側 (15432) のまま、名前だけ実 endpoint にする。
+
+  ```
+  足す: echo "127.0.0.1 <RDS endpoint>" | sudo tee -a /etc/hosts
+  消す: sudo sed -i '' '/<RDS endpoint>/d' /etc/hosts   (作業後に必ず)
+  ```
+
+  URL の host を 127.0.0.1 にすると `sslmode=require` が証明書の CN 不一致で落ちる
+  (`db_ssl.py` は require を verify-full に格上げする)。かといって sslmode を省くと
+  asyncpg 既定の `prefer` に落ち、**検証なしの TLS** で繋がってしまう
+  (`rds.force_ssl` は満たすので気づけない)。db_ssl が「検証なし TLS は持たない」と
+  宣言している以上、抜け道ではなく名前解決で解く。
 - 手順 5 の destructive gate は b1 の legacy テーブル削除が要求する。空 DB の
   初回構築では失うものが無いので明示して通す。
 - app role (vector_app / vector_auth / vector_collect) は IAM 認証のため
