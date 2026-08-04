@@ -238,6 +238,18 @@ resource "aws_iam_role_policy" "apply" {
         Action   = ["route53:*"]
         Resource = "*"
       },
+      # AWS が公開する最新 AMI の ID (bastion.tf の data source が読む)。
+      # account 部が空の ARN なので、自アカウントの parameter を落とす Deny とは
+      # 重ならない。秘密を含まない値だけがこの namespace に居る。
+      {
+        Sid    = "PublicServiceParameters"
+        Effect = "Allow"
+        Action = [
+          "ssm:GetParameter",
+          "ssm:GetParameters",
+        ]
+        Resource = "arn:aws:ssm:${var.region}::parameter/aws/service/*"
+      },
       {
         Sid    = "StateBackend"
         Effect = "Allow"
