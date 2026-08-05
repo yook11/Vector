@@ -19,6 +19,10 @@ Vector は、海外の先端テックニュースを自動収集し、AI で日�
 
 https://github.com/user-attachments/assets/9b2a6caa-37ae-4382-b3c8-47964ee52cfb
 
+エージェント機能の構成や各工程の設計上の工夫、今後の課題は、Zenn の記事にまとめています。
+
+[Perplexity風のQ&Aエージェントを自作した——設計の工夫と課題点](https://zenn.dev/yook/articles/qa-agent-six-stage-design-and-scaling)
+
 ## 主な画面
 
 | ニュース詳細 | ブリーフィング詳細 |
