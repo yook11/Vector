@@ -10,8 +10,9 @@ name: AWS terraform plan
 #   secrets はログ全域で自動 mask される。
 # - `-lock=false` で走らせる。native locking は state bucket に lock オブジェクトを
 #   書くため、read-only の plan role では失敗する (versions.tf の注記)。
-# - image_tag は稼働中の tag を ECS から引く。default の bootstrap のままだと
-#   task definition に毎回偽の差分が出て、plan が信号として機能しない。
+# - image_tag は「state が最後に apply された値」を state pull で読んで渡す。
+#   default の bootstrap や稼働中の tag (rollout のたびに state から乖離する) を
+#   渡すと、全 task definition の置換が毎回の plan に混ざり PR の差分が読めない。
 #
 # fork からの PR には OIDC token も secrets も渡らないため、same-repo の PR に限る。
 
@@ -130,13 +131,14 @@ jobs:
             > plan.out 2>&1
           code=$?
           set -e
-          sed -E 's/[0-9]{12}/<ACCOUNT_ID>/g' plan.out
+          sed -E 's/[0-9]{12}/<ACCOUNT_ID>/g' plan.out > plan.masked
+          cat plan.masked
           if [ "$code" -eq 1 ]; then
             echo "::error::terraform plan が失敗した"
             exit 1
           fi
           if [ "$code" -eq 2 ]; then
-            grep -E '^Plan:' plan.out >> "$GITHUB_STEP_SUMMARY" \
+            grep -E '^Plan:' plan.masked >> "$GITHUB_STEP_SUMMARY" \
               || echo "変更あり (詳細は job log)" >> "$GITHUB_STEP_SUMMARY"
           else
             echo "No changes." >> "$GITHUB_STEP_SUMMARY"
