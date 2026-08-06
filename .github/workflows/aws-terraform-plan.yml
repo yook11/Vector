@@ -90,13 +90,20 @@ jobs:
           fi
           echo "tag=$tag" >> "$GITHUB_OUTPUT"
 
-      # terraform は runner image に同梱されないため、HashiCorp 公式 action で入れる。
-      # version はローカルの実行環境と揃える (版差で plan の見え方を変えない)。
-      # wrapper は stdout をラップして redirect と干渉するため切る。
-      - uses: hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e  # v4.0.1
-        with:
-          terraform_version: "1.15.8"
-          terraform_wrapper: false
+      # terraform は runner image に同梱されない。setup-terraform action は使わず
+      # (repo の Actions 許可リスト制に新顔を足さない)、公式 releases から version と
+      # checksum を固定して直接取る。version はローカルの実行環境と揃える。
+      - name: Install Terraform
+        env:
+          TF_VERSION: "1.15.8"
+          TF_SHA256: "d25ce7b6902013ad905db3d2eab0be4cd905887fe88b81a6171b8d5503c31f3d"
+        run: |
+          set -euo pipefail
+          curl -fsSLo "$RUNNER_TEMP/terraform.zip" \
+            "https://releases.hashicorp.com/terraform/${TF_VERSION}/terraform_${TF_VERSION}_linux_amd64.zip"
+          echo "${TF_SHA256}  $RUNNER_TEMP/terraform.zip" | sha256sum -c -
+          unzip -o -q "$RUNNER_TEMP/terraform.zip" -d "$RUNNER_TEMP/tf"
+          echo "$RUNNER_TEMP/tf" >> "$GITHUB_PATH"
 
       - name: Terraform init
         env:
