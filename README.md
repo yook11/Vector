@@ -21,7 +21,8 @@ https://github.com/user-attachments/assets/9b2a6caa-37ae-4382-b3c8-47964ee52cfb
 
 エージェント機能の構成や各工程の設計上の工夫、今後の課題は、Zenn の記事にまとめています。
 
-[Perplexity風のQ&Aエージェントを自作した——設計の工夫と課題点](https://zenn.dev/yook/articles/qa-agent-six-stage-design-and-scaling)
+- [PerplexityライクなQ&Aエージェントを個人開発アプリに組み込んだ——6つの工程に分けた設計の工夫](https://zenn.dev/yook/articles/qa-agent-six-stage-design)
+- [PerplexityライクなQ&Aエージェントを個人開発アプリに組み込んだ——スケール時に実行モデルをどう変えるか](https://zenn.dev/yook/articles/qa-agent-scaling-execution-model)
 
 ## 主な画面
 
