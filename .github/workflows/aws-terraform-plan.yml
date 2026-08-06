@@ -90,6 +90,14 @@ jobs:
           fi
           echo "tag=$tag" >> "$GITHUB_OUTPUT"
 
+      # terraform は runner image に同梱されないため、HashiCorp 公式 action で入れる。
+      # version はローカルの実行環境と揃える (版差で plan の見え方を変えない)。
+      # wrapper は stdout をラップして redirect と干渉するため切る。
+      - uses: hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e  # v4.0.1
+        with:
+          terraform_version: "1.15.8"
+          terraform_wrapper: false
+
       - name: Terraform init
         env:
           TF_STATE_BUCKET: ${{ secrets.AWS_TF_STATE_BUCKET }}
