@@ -45,7 +45,7 @@ jobs:
         with:
           persist-credentials: false
 
-      # region / cluster 名の正本は Terraform 側。ここで持つと 2 箇所目になる。
+      # region の正本は Terraform 側。ここで持つと 2 箇所目になる。
       - id: tf
         name: Read values from Terraform variables
         run: |
@@ -54,7 +54,7 @@ jobs:
             awk "/variable \"$1\"/,/^}/" variables.tf \
               | sed -n 's/.*default *= *"\(.*\)".*/\1/p' | head -1
           }
-          for name in region name_prefix; do
+          for name in region; do
             value=$(read_default "$name")
             if [ -z "$value" ]; then
               echo "::error::variables.tf の $name の default を読めなかった"
@@ -67,28 +67,6 @@ jobs:
         with:
           role-to-assume: ${{ secrets.AWS_PLAN_ROLE_ARN }}
           aws-region: ${{ steps.tf.outputs.region }}
-
-      - id: image
-        name: Resolve running image tag
-        env:
-          CLUSTER: ${{ steps.tf.outputs.name_prefix }}
-        run: |
-          set -euo pipefail
-          # api は常設の段なので、その稼働 revision を「現在の image_tag」の代表とする。
-          taskdef=$(
-            aws ecs describe-services --cluster "$CLUSTER" --services api \
-              --query 'services[0].taskDefinition' --output text
-          )
-          tag=$(
-            aws ecs describe-task-definition --task-definition "${taskdef##*/}" \
-              --query 'taskDefinition.containerDefinitions[0].image' --output text \
-              | sed 's/.*://'
-          )
-          if [ -z "$tag" ]; then
-            echo "::error::稼働中の image tag を解決できなかった"
-            exit 1
-          fi
-          echo "tag=$tag" >> "$GITHUB_OUTPUT"
 
       # terraform は runner image に同梱されない。setup-terraform action は使わず
       # (repo の Actions 許可リスト制に新顔を足さない)、公式 releases から version と
@@ -111,6 +89,30 @@ jobs:
         run: |
           set -euo pipefail
           terraform init -input=false -backend-config="bucket=$TF_STATE_BUCKET"
+
+      - id: image
+        name: Resolve image tag from state
+        run: |
+          set -euo pipefail
+          # 稼働中の tag ではなく「state が最後に apply された」tag を使う。rollout が
+          # 進むたびに稼働 tag は state から乖離し、稼働側を渡すと全 task definition の
+          # 置換が毎回の plan に混ざって PR の差分が読めなくなる。この plan の目的は
+          # PR のコード差分だけを見せることなので、image は state に合わせて固定する。
+          tag=$(
+            terraform state pull \
+              | jq -r '.resources[]
+                  | select(.type == "aws_ecs_task_definition" and .name == "this")
+                  | .instances[]
+                  | select(.index_key == "api")
+                  | .attributes.container_definitions' \
+              | jq -r '.[0].image' \
+              | sed 's/.*://'
+          )
+          if [ -z "$tag" ] || [ "$tag" = "null" ]; then
+            echo "::error::state から image tag を解決できなかった"
+            exit 1
+          fi
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
 
       - name: Terraform plan
         env:
