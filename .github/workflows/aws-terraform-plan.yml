@@ -1,0 +1,145 @@
+name: AWS terraform plan
+
+# infra/aws 本体を変更する PR で「適用したら何が変わるか」を提示する。
+#
+# terraform-plan role (ReadOnlyAccess + secret 値の Deny) を使う。plan の差分は
+# 「コード」と「いま AWS で動いている実物」の突き合わせなので、確認だけでも
+# 読み取り権限が要る (infra/aws/bootstrap/oidc.tf)。
+#
+# - state bucket 名と tfvars の実値は公開 repo に置かないため secrets で渡す。
+#   secrets はログ全域で自動 mask される。
+# - `-lock=false` で走らせる。native locking は state bucket に lock オブジェクトを
+#   書くため、read-only の plan role では失敗する (versions.tf の注記)。
+# - image_tag は「state が最後に apply された値」を state pull で読んで渡す。
+#   default の bootstrap や稼働中の tag (rollout のたびに state から乖離する) を
+#   渡すと、全 task definition の置換が毎回の plan に混ざり PR の差分が読めない。
+#
+# fork からの PR には OIDC token も secrets も渡らないため、same-repo の PR に限る。
+
+on:
+  pull_request:
+    paths:
+      - "infra/aws/**"
+      - ".github/workflows/aws-terraform-plan.yml"
+
+permissions:
+  id-token: write
+  contents: read
+
+# 同一 PR で push が続いたら古い plan は無意味なので置き換える。
+concurrency:
+  group: aws-terraform-plan-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  plan:
+    if: github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+
+    defaults:
+      run:
+        working-directory: infra/aws
+
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
+        with:
+          persist-credentials: false
+
+      # region の正本は Terraform 側。ここで持つと 2 箇所目になる。
+      - id: tf
+        name: Read values from Terraform variables
+        run: |
+          set -euo pipefail
+          read_default() {
+            awk "/variable \"$1\"/,/^}/" variables.tf \
+              | sed -n 's/.*default *= *"\(.*\)".*/\1/p' | head -1
+          }
+          for name in region; do
+            value=$(read_default "$name")
+            if [ -z "$value" ]; then
+              echo "::error::variables.tf の $name の default を読めなかった"
+              exit 1
+            fi
+            echo "$name=$value" >> "$GITHUB_OUTPUT"
+          done
+
+      - uses: aws-actions/configure-aws-credentials@e6de054238d6b7531b4efff3b6587d9aade6a06c  # v6.2.3
+        with:
+          role-to-assume: ${{ secrets.AWS_PLAN_ROLE_ARN }}
+          aws-region: ${{ steps.tf.outputs.region }}
+
+      # terraform は runner image に同梱されない。setup-terraform action は使わず
+      # (repo の Actions 許可リスト制に新顔を足さない)、公式 releases から version と
+      # checksum を固定して直接取る。version はローカルの実行環境と揃える。
+      - name: Install Terraform
+        env:
+          TF_VERSION: "1.15.8"
+          TF_SHA256: "d25ce7b6902013ad905db3d2eab0be4cd905887fe88b81a6171b8d5503c31f3d"
+        run: |
+          set -euo pipefail
+          curl -fsSLo "$RUNNER_TEMP/terraform.zip" \
+            "https://releases.hashicorp.com/terraform/${TF_VERSION}/terraform_${TF_VERSION}_linux_amd64.zip"
+          echo "${TF_SHA256}  $RUNNER_TEMP/terraform.zip" | sha256sum -c -
+          unzip -o -q "$RUNNER_TEMP/terraform.zip" -d "$RUNNER_TEMP/tf"
+          echo "$RUNNER_TEMP/tf" >> "$GITHUB_PATH"
+
+      - name: Terraform init
+        env:
+          TF_STATE_BUCKET: ${{ secrets.AWS_TF_STATE_BUCKET }}
+        run: |
+          set -euo pipefail
+          terraform init -input=false -backend-config="bucket=$TF_STATE_BUCKET"
+
+      - id: image
+        name: Resolve image tag from state
+        run: |
+          set -euo pipefail
+          # 稼働中の tag ではなく「state が最後に apply された」tag を使う。rollout が
+          # 進むたびに稼働 tag は state から乖離し、稼働側を渡すと全 task definition の
+          # 置換が毎回の plan に混ざって PR の差分が読めなくなる。この plan の目的は
+          # PR のコード差分だけを見せることなので、image は state に合わせて固定する。
+          tag=$(
+            terraform state pull \
+              | jq -r '.resources[]
+                  | select(.type == "aws_ecs_task_definition" and .name == "this")
+                  | .instances[]
+                  | select(.index_key == "api")
+                  | .attributes.container_definitions' \
+              | jq -r '.[0].image' \
+              | sed 's/.*://'
+          )
+          if [ -z "$tag" ] || [ "$tag" = "null" ]; then
+            echo "::error::state から image tag を解決できなかった"
+            exit 1
+          fi
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+
+      - name: Terraform plan
+        env:
+          TF_VAR_image_tag: ${{ steps.image.outputs.tag }}
+          TF_VAR_permissions_boundary_arn: ${{ secrets.TF_VAR_PERMISSIONS_BOUNDARY_ARN }}
+          TF_VAR_root_domain: ${{ secrets.TF_VAR_ROOT_DOMAIN }}
+          TF_VAR_frontend_domain: ${{ secrets.TF_VAR_FRONTEND_DOMAIN }}
+          TF_VAR_crossref_contact_email: ${{ secrets.TF_VAR_CROSSREF_CONTACT_EMAIL }}
+        run: |
+          set -euo pipefail
+          # 公開 repo の Actions log は誰でも読める。secrets の mask は完全一致のため、
+          # plan 出力の ARN に現れる素の account id は残る。12 桁をまとめて伏せる。
+          set +e
+          terraform plan -input=false -lock=false -no-color -detailed-exitcode \
+            > plan.out 2>&1
+          code=$?
+          set -e
+          sed -E 's/[0-9]{12}/<ACCOUNT_ID>/g' plan.out > plan.masked
+          cat plan.masked
+          if [ "$code" -eq 1 ]; then
+            echo "::error::terraform plan が失敗した"
+            exit 1
+          fi
+          if [ "$code" -eq 2 ]; then
+            grep -E '^Plan:' plan.masked >> "$GITHUB_STEP_SUMMARY" \
+              || echo "変更あり (詳細は job log)" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "No changes." >> "$GITHUB_STEP_SUMMARY"
+          fi
