@@ -1,0 +1,287 @@
+name: AWS terraform apply
+
+# main に merge された infra/aws の差分を本番へ適用する。PR 段階の plan
+# (aws-terraform-plan.yml) が前半、この workflow が後半。
+#
+# 承認ゲートは production environment の required reviewers。terraform-apply role の
+# trust policy は sub = environment:production しか受け入れないため、承認を経ない job
+# には assume の材料になる OIDC token 自体が発行されない (infra/aws/bootstrap/oidc.tf)。
+#
+# - environment の承認は job 起動前に来るため、判断材料の plan を承認ゲートの外の
+#   plan job で先に見せる。apply job は同じ commit を自分で plan し直してから適用する。
+#   tfplan を artifact で渡さないのは、公開 repo の artifact は誰でも取得でき、
+#   変数の実値が漏れるため。
+# - apply role は state bucket に書けるので、plan と違い lock は通常どおり取る。
+# - image_tag は state が最後に apply された値に固定する (aws-terraform-plan.yml と
+#   同じ理由)。image の前進は rollout (aws-app-images.yml) の仕事で、この workflow は
+#   コード差分だけを適用する。
+# - workflow_dispatch は「新しい commit を積まずに同じ内容を再実行する」ための復旧経路。
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "infra/aws/**"
+      - ".github/workflows/aws-terraform-apply.yml"
+  workflow_dispatch:
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  # 承認者が差分を確認するための plan。terraform-plan role の trust policy は
+  # ref:refs/heads/main の sub も受け入れるため、承認なしで走れる。
+  plan:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    outputs:
+      has_changes: ${{ steps.plan.outputs.has_changes }}
+
+    defaults:
+      run:
+        working-directory: infra/aws
+
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
+        with:
+          persist-credentials: false
+
+      # region の正本は Terraform 側。ここで持つと 2 箇所目になる。
+      - id: tf
+        name: Read values from Terraform variables
+        run: |
+          set -euo pipefail
+          read_default() {
+            awk "/variable \"$1\"/,/^}/" variables.tf \
+              | sed -n 's/.*default *= *"\(.*\)".*/\1/p' | head -1
+          }
+          for name in region; do
+            value=$(read_default "$name")
+            if [ -z "$value" ]; then
+              echo "::error::variables.tf の $name の default を読めなかった"
+              exit 1
+            fi
+            echo "$name=$value" >> "$GITHUB_OUTPUT"
+          done
+
+      - uses: aws-actions/configure-aws-credentials@e6de054238d6b7531b4efff3b6587d9aade6a06c  # v6.2.3
+        with:
+          role-to-assume: ${{ secrets.AWS_PLAN_ROLE_ARN }}
+          aws-region: ${{ steps.tf.outputs.region }}
+
+      # terraform は runner image に同梱されない。setup-terraform action は使わず
+      # (repo の Actions 許可リスト制に新顔を足さない)、公式 releases から version と
+      # checksum を固定して直接取る。version はローカルの実行環境と揃える。
+      - name: Install Terraform
+        env:
+          TF_VERSION: "1.15.8"
+          TF_SHA256: "d25ce7b6902013ad905db3d2eab0be4cd905887fe88b81a6171b8d5503c31f3d"
+        run: |
+          set -euo pipefail
+          curl -fsSLo "$RUNNER_TEMP/terraform.zip" \
+            "https://releases.hashicorp.com/terraform/${TF_VERSION}/terraform_${TF_VERSION}_linux_amd64.zip"
+          echo "${TF_SHA256}  $RUNNER_TEMP/terraform.zip" | sha256sum -c -
+          unzip -o -q "$RUNNER_TEMP/terraform.zip" -d "$RUNNER_TEMP/tf"
+          echo "$RUNNER_TEMP/tf" >> "$GITHUB_PATH"
+
+      - name: Terraform init
+        env:
+          TF_STATE_BUCKET: ${{ secrets.AWS_TF_STATE_BUCKET }}
+        run: |
+          set -euo pipefail
+          terraform init -input=false -backend-config="bucket=$TF_STATE_BUCKET"
+
+      - id: image
+        name: Resolve image tag from state
+        run: |
+          set -euo pipefail
+          tag=$(
+            terraform state pull \
+              | jq -r '.resources[]
+                  | select(.type == "aws_ecs_task_definition" and .name == "this")
+                  | .instances[]
+                  | select(.index_key == "api")
+                  | .attributes.container_definitions' \
+              | jq -r '.[0].image' \
+              | sed 's/.*://'
+          )
+          if [ -z "$tag" ] || [ "$tag" = "null" ]; then
+            echo "::error::state から image tag を解決できなかった"
+            exit 1
+          fi
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+
+      - id: plan
+        name: Terraform plan
+        env:
+          TF_VAR_image_tag: ${{ steps.image.outputs.tag }}
+          TF_VAR_permissions_boundary_arn: ${{ secrets.TF_VAR_PERMISSIONS_BOUNDARY_ARN }}
+          TF_VAR_root_domain: ${{ secrets.TF_VAR_ROOT_DOMAIN }}
+          TF_VAR_frontend_domain: ${{ secrets.TF_VAR_FRONTEND_DOMAIN }}
+          TF_VAR_crossref_contact_email: ${{ secrets.TF_VAR_CROSSREF_CONTACT_EMAIL }}
+        run: |
+          set -euo pipefail
+          # 公開 repo の Actions log は誰でも読める。secrets の mask は完全一致のため、
+          # plan 出力の ARN に現れる素の account id は残る。12 桁をまとめて伏せる。
+          set +e
+          terraform plan -input=false -lock=false -no-color -detailed-exitcode \
+            > plan.out 2>&1
+          code=$?
+          set -e
+          sed -E 's/[0-9]{12}/<ACCOUNT_ID>/g' plan.out
+          if [ "$code" -eq 1 ]; then
+            echo "::error::terraform plan が失敗した"
+            exit 1
+          fi
+          if [ "$code" -eq 2 ]; then
+            echo "has_changes=true" >> "$GITHUB_OUTPUT"
+            grep -E '^Plan:' plan.out >> "$GITHUB_STEP_SUMMARY" \
+              || echo "変更あり (詳細は job log)" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "has_changes=false" >> "$GITHUB_OUTPUT"
+            echo "No changes." >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+  apply:
+    needs: plan
+    # 差分ゼロなら承認を求めない。docs だけの merge で承認依頼が飛ぶのを防ぐ。
+    if: needs.plan.outputs.has_changes == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    environment: production
+
+    # apply は直列。走行中の apply を新しい run が殺すと state が壊れるので
+    # cancel はしない。承認追い越しは下の stale guard が受け止める。
+    concurrency:
+      group: aws-terraform-apply
+      cancel-in-progress: false
+
+    defaults:
+      run:
+        working-directory: infra/aws
+
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
+        with:
+          persist-credentials: false
+
+      # 承認待ちの間に新しい infra 変更が main に積まれた古い run を適用すると、
+      # 新しい変更を巻き戻す。infra に関わる path に差分が無いことを機械的に確認する。
+      - name: Ensure this run still matches the newest infra on main
+        working-directory: .
+        run: |
+          set -euo pipefail
+          git fetch --quiet --depth=1 origin main
+          if ! git diff --quiet HEAD FETCH_HEAD -- \
+              infra/aws .github/workflows/aws-terraform-apply.yml; then
+            echo "::error::main に新しい infra 変更が積まれている。この run は適用せず、最新の run を承認する"
+            exit 1
+          fi
+
+      - name: Verify production environment secrets
+        env:
+          AWS_APPLY_ROLE_ARN: ${{ secrets.AWS_APPLY_ROLE_ARN }}
+        run: |
+          if [ -z "${AWS_APPLY_ROLE_ARN:-}" ]; then
+            echo "::error::AWS_APPLY_ROLE_ARN is not configured in the production environment"
+            exit 1
+          fi
+
+      - id: tf
+        name: Read values from Terraform variables
+        run: |
+          set -euo pipefail
+          read_default() {
+            awk "/variable \"$1\"/,/^}/" variables.tf \
+              | sed -n 's/.*default *= *"\(.*\)".*/\1/p' | head -1
+          }
+          for name in region; do
+            value=$(read_default "$name")
+            if [ -z "$value" ]; then
+              echo "::error::variables.tf の $name の default を読めなかった"
+              exit 1
+            fi
+            echo "$name=$value" >> "$GITHUB_OUTPUT"
+          done
+
+      - uses: aws-actions/configure-aws-credentials@e6de054238d6b7531b4efff3b6587d9aade6a06c  # v6.2.3
+        with:
+          role-to-assume: ${{ secrets.AWS_APPLY_ROLE_ARN }}
+          aws-region: ${{ steps.tf.outputs.region }}
+
+      - name: Install Terraform
+        env:
+          TF_VERSION: "1.15.8"
+          TF_SHA256: "d25ce7b6902013ad905db3d2eab0be4cd905887fe88b81a6171b8d5503c31f3d"
+        run: |
+          set -euo pipefail
+          curl -fsSLo "$RUNNER_TEMP/terraform.zip" \
+            "https://releases.hashicorp.com/terraform/${TF_VERSION}/terraform_${TF_VERSION}_linux_amd64.zip"
+          echo "${TF_SHA256}  $RUNNER_TEMP/terraform.zip" | sha256sum -c -
+          unzip -o -q "$RUNNER_TEMP/terraform.zip" -d "$RUNNER_TEMP/tf"
+          echo "$RUNNER_TEMP/tf" >> "$GITHUB_PATH"
+
+      - name: Terraform init
+        env:
+          TF_STATE_BUCKET: ${{ secrets.AWS_TF_STATE_BUCKET }}
+        run: |
+          set -euo pipefail
+          terraform init -input=false -backend-config="bucket=$TF_STATE_BUCKET"
+
+      - id: image
+        name: Resolve image tag from state
+        run: |
+          set -euo pipefail
+          tag=$(
+            terraform state pull \
+              | jq -r '.resources[]
+                  | select(.type == "aws_ecs_task_definition" and .name == "this")
+                  | .instances[]
+                  | select(.index_key == "api")
+                  | .attributes.container_definitions' \
+              | jq -r '.[0].image' \
+              | sed 's/.*://'
+          )
+          if [ -z "$tag" ] || [ "$tag" = "null" ]; then
+            echo "::error::state から image tag を解決できなかった"
+            exit 1
+          fi
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+
+      # plan → apply を 1 step で行い、tfplan を step 間でも持ち回らない。
+      # 適用されるのは常にこの step 自身が plan した内容になる。
+      - name: Terraform plan and apply
+        env:
+          TF_VAR_image_tag: ${{ steps.image.outputs.tag }}
+          TF_VAR_permissions_boundary_arn: ${{ secrets.TF_VAR_PERMISSIONS_BOUNDARY_ARN }}
+          TF_VAR_root_domain: ${{ secrets.TF_VAR_ROOT_DOMAIN }}
+          TF_VAR_frontend_domain: ${{ secrets.TF_VAR_FRONTEND_DOMAIN }}
+          TF_VAR_crossref_contact_email: ${{ secrets.TF_VAR_CROSSREF_CONTACT_EMAIL }}
+        run: |
+          set -euo pipefail
+          set +e
+          terraform plan -input=false -no-color -detailed-exitcode -out=tfplan \
+            > plan.out 2>&1
+          code=$?
+          set -e
+          sed -E 's/[0-9]{12}/<ACCOUNT_ID>/g' plan.out
+          if [ "$code" -eq 1 ]; then
+            echo "::error::terraform plan が失敗した"
+            exit 1
+          fi
+          if [ "$code" -eq 0 ]; then
+            echo "No changes (plan job の後に差分が消えた)." >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          set +e
+          terraform apply -input=false -no-color tfplan > apply.out 2>&1
+          apply_code=$?
+          set -e
+          sed -E 's/[0-9]{12}/<ACCOUNT_ID>/g' apply.out
+          if [ "$apply_code" -ne 0 ]; then
+            echo "::error::terraform apply が失敗した"
+            exit 1
+          fi
+          grep -E '^Apply complete!' apply.out >> "$GITHUB_STEP_SUMMARY" \
+            || echo "適用完了 (詳細は job log)" >> "$GITHUB_STEP_SUMMARY"
