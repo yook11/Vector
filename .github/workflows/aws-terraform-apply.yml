@@ -129,14 +129,15 @@ jobs:
             > plan.out 2>&1
           code=$?
           set -e
-          sed -E 's/[0-9]{12}/<ACCOUNT_ID>/g' plan.out
+          sed -E 's/[0-9]{12}/<ACCOUNT_ID>/g' plan.out > plan.masked
+          cat plan.masked
           if [ "$code" -eq 1 ]; then
             echo "::error::terraform plan が失敗した"
             exit 1
           fi
           if [ "$code" -eq 2 ]; then
             echo "has_changes=true" >> "$GITHUB_OUTPUT"
-            grep -E '^Plan:' plan.out >> "$GITHUB_STEP_SUMMARY" \
+            grep -E '^Plan:' plan.masked >> "$GITHUB_STEP_SUMMARY" \
               || echo "変更あり (詳細は job log)" >> "$GITHUB_STEP_SUMMARY"
           else
             echo "has_changes=false" >> "$GITHUB_OUTPUT"
@@ -265,7 +266,8 @@ jobs:
             > plan.out 2>&1
           code=$?
           set -e
-          sed -E 's/[0-9]{12}/<ACCOUNT_ID>/g' plan.out
+          sed -E 's/[0-9]{12}/<ACCOUNT_ID>/g' plan.out > plan.masked
+          cat plan.masked
           if [ "$code" -eq 1 ]; then
             echo "::error::terraform plan が失敗した"
             exit 1
@@ -278,10 +280,11 @@ jobs:
           terraform apply -input=false -no-color tfplan > apply.out 2>&1
           apply_code=$?
           set -e
-          sed -E 's/[0-9]{12}/<ACCOUNT_ID>/g' apply.out
+          sed -E 's/[0-9]{12}/<ACCOUNT_ID>/g' apply.out > apply.masked
+          cat apply.masked
           if [ "$apply_code" -ne 0 ]; then
             echo "::error::terraform apply が失敗した"
             exit 1
           fi
-          grep -E '^Apply complete!' apply.out >> "$GITHUB_STEP_SUMMARY" \
+          grep -E '^Apply complete!' apply.masked >> "$GITHUB_STEP_SUMMARY" \
             || echo "適用完了 (詳細は job log)" >> "$GITHUB_STEP_SUMMARY"
