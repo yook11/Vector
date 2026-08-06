@@ -1,0 +1,126 @@
+name: AWS terraform plan
+
+# infra/aws 本体を変更する PR で「適用したら何が変わるか」を提示する。
+#
+# terraform-plan role (ReadOnlyAccess + secret 値の Deny) を使う。plan の差分は
+# 「コード」と「いま AWS で動いている実物」の突き合わせなので、確認だけでも
+# 読み取り権限が要る (infra/aws/bootstrap/oidc.tf)。
+#
+# - state bucket 名と tfvars の実値は公開 repo に置かないため secrets で渡す。
+#   secrets はログ全域で自動 mask される。
+# - `-lock=false` で走らせる。native locking は state bucket に lock オブジェクトを
+#   書くため、read-only の plan role では失敗する (versions.tf の注記)。
+# - image_tag は稼働中の tag を ECS から引く。default の bootstrap のままだと
+#   task definition に毎回偽の差分が出て、plan が信号として機能しない。
+#
+# fork からの PR には OIDC token も secrets も渡らないため、same-repo の PR に限る。
+
+on:
+  pull_request:
+    paths:
+      - "infra/aws/**"
+      - ".github/workflows/aws-terraform-plan.yml"
+
+permissions:
+  id-token: write
+  contents: read
+
+# 同一 PR で push が続いたら古い plan は無意味なので置き換える。
+concurrency:
+  group: aws-terraform-plan-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  plan:
+    if: github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+
+    defaults:
+      run:
+        working-directory: infra/aws
+
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
+        with:
+          persist-credentials: false
+
+      # region / cluster 名の正本は Terraform 側。ここで持つと 2 箇所目になる。
+      - id: tf
+        name: Read values from Terraform variables
+        run: |
+          set -euo pipefail
+          read_default() {
+            awk "/variable \"$1\"/,/^}/" variables.tf \
+              | sed -n 's/.*default *= *"\(.*\)".*/\1/p' | head -1
+          }
+          for name in region name_prefix; do
+            value=$(read_default "$name")
+            if [ -z "$value" ]; then
+              echo "::error::variables.tf の $name の default を読めなかった"
+              exit 1
+            fi
+            echo "$name=$value" >> "$GITHUB_OUTPUT"
+          done
+
+      - uses: aws-actions/configure-aws-credentials@e6de054238d6b7531b4efff3b6587d9aade6a06c  # v6.2.3
+        with:
+          role-to-assume: ${{ secrets.AWS_PLAN_ROLE_ARN }}
+          aws-region: ${{ steps.tf.outputs.region }}
+
+      - id: image
+        name: Resolve running image tag
+        env:
+          CLUSTER: ${{ steps.tf.outputs.name_prefix }}
+        run: |
+          set -euo pipefail
+          # api は常設の段なので、その稼働 revision を「現在の image_tag」の代表とする。
+          taskdef=$(
+            aws ecs describe-services --cluster "$CLUSTER" --services api \
+              --query 'services[0].taskDefinition' --output text
+          )
+          tag=$(
+            aws ecs describe-task-definition --task-definition "${taskdef##*/}" \
+              --query 'taskDefinition.containerDefinitions[0].image' --output text \
+              | sed 's/.*://'
+          )
+          if [ -z "$tag" ]; then
+            echo "::error::稼働中の image tag を解決できなかった"
+            exit 1
+          fi
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+
+      - name: Terraform init
+        env:
+          TF_STATE_BUCKET: ${{ secrets.AWS_TF_STATE_BUCKET }}
+        run: |
+          set -euo pipefail
+          terraform init -input=false -backend-config="bucket=$TF_STATE_BUCKET"
+
+      - name: Terraform plan
+        env:
+          TF_VAR_image_tag: ${{ steps.image.outputs.tag }}
+          TF_VAR_permissions_boundary_arn: ${{ secrets.TF_VAR_PERMISSIONS_BOUNDARY_ARN }}
+          TF_VAR_root_domain: ${{ secrets.TF_VAR_ROOT_DOMAIN }}
+          TF_VAR_frontend_domain: ${{ secrets.TF_VAR_FRONTEND_DOMAIN }}
+          TF_VAR_crossref_contact_email: ${{ secrets.TF_VAR_CROSSREF_CONTACT_EMAIL }}
+        run: |
+          set -euo pipefail
+          # 公開 repo の Actions log は誰でも読める。secrets の mask は完全一致のため、
+          # plan 出力の ARN に現れる素の account id は残る。12 桁をまとめて伏せる。
+          set +e
+          terraform plan -input=false -lock=false -no-color -detailed-exitcode \
+            > plan.out 2>&1
+          code=$?
+          set -e
+          sed -E 's/[0-9]{12}/<ACCOUNT_ID>/g' plan.out
+          if [ "$code" -eq 1 ]; then
+            echo "::error::terraform plan が失敗した"
+            exit 1
+          fi
+          if [ "$code" -eq 2 ]; then
+            grep -E '^Plan:' plan.out >> "$GITHUB_STEP_SUMMARY" \
+              || echo "変更あり (詳細は job log)" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "No changes." >> "$GITHUB_STEP_SUMMARY"
+          fi
