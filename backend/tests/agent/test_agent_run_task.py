@@ -571,7 +571,7 @@ def test_composition_injects_same_live_controls_into_both_answer_flows(
         is composition.activate_gemini_agent_runtime
     )
     assert isinstance(phases, AnsweringPhases)
-    assert phases.researcher.internal_search is internal_search
+    assert phases.collector.researcher.internal_search is internal_search
     assert phases.external_runtime_factory is external_runtime_factory
     assert phases.direct_answerer is not None
     assert phases.evidence_answerer is not None

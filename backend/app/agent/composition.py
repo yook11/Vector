@@ -21,7 +21,7 @@ from app.agent.contract import (
     AnswerGenerationContinuation,
     AnswerProgressReporter,
 )
-from app.agent.evidence_collection import Researcher
+from app.agent.evidence_collection import NewsCollector, Researcher
 from app.agent.evidence_collection.evidence_review import EvidenceReviewer
 from app.agent.evidence_collection.external_search.contract import (
     ExternalResearchRuntime,
@@ -74,6 +74,7 @@ def _build_answering_phases(
     events: AnswerEventReporter | None = None,
     delta_reporter: AnswerDeltaReporter | None = None,
     continuation: AnswerGenerationContinuation | None = None,
+    requested_external_agent_count: int | None = None,
 ) -> AnsweringPhases:
     ensure_external_search_configured()
 
@@ -111,7 +112,10 @@ def _build_answering_phases(
             agent=QUESTION_PLANNER_AGENT,
             runtime_scope_factory=activate_gemini_agent_runtime,
         ),
-        researcher=Researcher(internal_search=internal_search, events=events),
+        collector=NewsCollector(
+            researcher=Researcher(internal_search=internal_search, events=events),
+            requested_agent_count=requested_external_agent_count,
+        ),
         reviewer=EvidenceReviewer(),
         external_runtime_factory=external_runtime_factory,
         direct_answerer=DirectAnswerFlow(
@@ -157,10 +161,10 @@ def build_answering_runner(
             events=events,
             delta_reporter=delta_reporter,
             continuation=continuation,
+            requested_external_agent_count=requested_external_agent_count,
         ),
         progress=progress,
         events=events,
-        requested_external_agent_count=requested_external_agent_count,
     )
 
 

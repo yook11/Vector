@@ -10,6 +10,9 @@ from __future__ import annotations
 from collections.abc import Mapping
 from datetime import datetime
 
+import logfire
+
+from app.agent.evidence_collection.contract import CollectedNews, ReviewedEvidence
 from app.agent.evidence_collection.evidence_review import EvidenceReviewOutcome
 from app.agent.planning.contract import SearchPlan
 from app.agent.research_checkpoint.contract import (
@@ -17,7 +20,29 @@ from app.agent.research_checkpoint.contract import (
     ResearchTaskRecord,
 )
 
-__all__ = ["build_research_checkpoint"]
+__all__ = ["build_research_checkpoint", "build_research_checkpoint_or_none"]
+
+
+def build_research_checkpoint_or_none(
+    *,
+    plan: SearchPlan,
+    collected_news: CollectedNews,
+    reviewed: ReviewedEvidence,
+    as_of: datetime,
+) -> ResearchCheckpoint | None:
+    """精査失敗Runは記録せず、組み立て失敗は握って回答workflowを継続する。"""
+    if reviewed.outcome.review.review == "failed":
+        return None
+    try:
+        return build_research_checkpoint(
+            plan=plan,
+            executed_queries_by_task=collected_news.executed_queries_by_task,
+            review_outcome=reviewed.review_outcome,
+            as_of=as_of,
+        )
+    except Exception:
+        logfire.warning("research_checkpoint_build_failed", failure_code="build_failed")
+        return None
 
 
 def build_research_checkpoint(

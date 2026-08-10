@@ -39,7 +39,7 @@ from app.agent.answering.evidence_answer.contract import (
     EvidenceAnswerOutcome,
     EvidenceAnswerUnavailable,
 )
-from app.agent.evidence_collection import Researcher
+from app.agent.evidence_collection import NewsCollector, Researcher
 from app.agent.evidence_collection.evidence_review import (
     EvidenceReviewDraft,
     EvidenceReviewer,
@@ -288,7 +288,9 @@ def _runner(
     )
     phases = AnsweringPhases(
         planner=_Planner(plan),
-        researcher=Researcher(internal_search=internal_tool, events=events),  # type: ignore[arg-type]
+        collector=NewsCollector(
+            researcher=Researcher(internal_search=internal_tool, events=events),  # type: ignore[arg-type]
+        ),
         reviewer=EvidenceReviewer(),
         external_runtime_factory=_Factory(runtime),
         direct_answerer=_UnreachableDirectAnswerer(),

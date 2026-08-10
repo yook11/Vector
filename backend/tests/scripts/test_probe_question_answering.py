@@ -133,6 +133,7 @@ def test_probe_uses_answering_runner_without_removed_external_pipeline_seams() -
         "async_sessionmaker",
         "build_external_research_runtime_factory",
         "engine",
+        "NewsCollector",
         "Researcher",
     } <= imported
     assert removed.isdisjoint(imported)
@@ -140,7 +141,7 @@ def test_probe_uses_answering_runner_without_removed_external_pipeline_seams() -
     assert phase_keyword_sets == [
         {
             "planner",
-            "researcher",
+            "collector",
             "reviewer",
             "external_runtime_factory",
             "direct_answerer",
@@ -148,7 +149,7 @@ def test_probe_uses_answering_runner_without_removed_external_pipeline_seams() -
         },
         {
             "planner",
-            "researcher",
+            "collector",
             "reviewer",
             "external_runtime_factory",
             "direct_answerer",
@@ -286,7 +287,6 @@ def test_search_probe_injects_requested_count_and_events_into_runner() -> None:
         "context_preparer",
         "phases_factory",
         "events",
-        "requested_external_agent_count",
     }
     assert "requested_agent_count" in _loaded_names(search)
     assert "events" in _loaded_names(search)
@@ -350,7 +350,10 @@ def test_search_probe_passes_actual_internal_and_external_dependencies_to_phases
         for target in assignment.targets
         if isinstance(target, ast.Name)
     }
-    phase_researcher = _keyword_value(phase, "researcher")
+    phase_collector = _keyword_value(phase, "collector")
+    assert isinstance(phase_collector, ast.Call)
+    assert _call_name(phase_collector) == "NewsCollector"
+    phase_researcher = _keyword_value(phase_collector, "researcher")
     assert isinstance(phase_researcher, ast.Call)
     assert _call_name(phase_researcher) == "Researcher"
     researcher_internal_search = _keyword_value(phase_researcher, "internal_search")
@@ -422,7 +425,10 @@ def test_direct_probe_keeps_dependencies_unreachable_and_uses_plan_summary() -> 
     assert "result.plan_summary" in result_printer
     assert "result.plan_summary.plan_type" in result_printer
 
-    researcher = _keyword_value(phase, "researcher")
+    collector = _keyword_value(phase, "collector")
+    assert isinstance(collector, ast.Call)
+    assert _call_name(collector) == "NewsCollector"
+    researcher = _keyword_value(collector, "researcher")
     external_runtime_factory = _keyword_value(phase, "external_runtime_factory")
     evidence_answerer = _keyword_value(phase, "evidence_answerer")
     direct_answerer = _keyword_value(phase, "direct_answerer")

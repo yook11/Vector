@@ -2,11 +2,15 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import Annotated, Literal, Self
 
 from pydantic import BaseModel, ConfigDict, Field, StringConstraints, model_validator
 
-from app.agent.evidence_collection.evidence_review import InternalArticleEvidence
+from app.agent.evidence_collection.evidence_review import (
+    EvidenceReviewOutcome,
+    InternalArticleEvidence,
+)
 from app.agent.evidence_collection.evidence_review.contract import (
     EVIDENCE_REVIEW_ADOPTION_LIMIT,
     EVIDENCE_REVIEW_MISSING_LIMIT,
@@ -16,14 +20,21 @@ from app.agent.evidence_collection.external_search.contract import (
     EXTERNAL_QUERY_MAX_CHARS,
     EXTERNAL_TASK_QUERY_LIMIT,
     MISSING_ITEM_MAX_CHARS,
+    ExternalSearchCandidate,
     TimeFilterFailureReason,
+)
+from app.agent.evidence_collection.internal_search.contract import (
+    InternalArticleSearchHit,
 )
 
 __all__ = [
+    "CollectedNews",
+    "CollectedTask",
     "EvidenceCollectionOutcome",
     "EvidenceReviewReport",
     "EvidenceReviewStatus",
     "ResearchTaskReport",
+    "ReviewedEvidence",
     "TaskExternalCollectionStatus",
     "TaskInternalCollectionStatus",
 ]
@@ -200,3 +211,42 @@ class EvidenceCollectionOutcome(BaseModel):
                 "review external evidence count must match outcome evidence"
             )
         return self
+
+
+@dataclass(frozen=True, slots=True)
+class CollectedTask:
+    """1 taskのResearcher収集結果と収集onlyのreport。精査はRun単位で別途行う。"""
+
+    task_index: int
+    research_goal: str
+    internal_hits: list[InternalArticleSearchHit]
+    external_candidates: list[ExternalSearchCandidate]
+    executed_queries: tuple[str, ...]
+    report: ResearchTaskReport
+
+
+@dataclass(frozen=True, slots=True)
+class CollectedNews:
+    """全task並列収集の結果。Run単位1回の精査(evidence review)の入力になる。"""
+
+    tasks: list[CollectedTask]
+    requested_agent_count: int | None
+    effective_agent_count: int
+
+    @property
+    def has_candidates(self) -> bool:
+        return any(
+            task.internal_hits or task.external_candidates for task in self.tasks
+        )
+
+    @property
+    def executed_queries_by_task(self) -> dict[int, tuple[str, ...]]:
+        return {task.task_index: task.executed_queries for task in self.tasks}
+
+
+@dataclass(frozen=True, slots=True)
+class ReviewedEvidence:
+    """Run単位精査の確定結果。review_outcomeは精査が成功した場合のみ持つ。"""
+
+    outcome: EvidenceCollectionOutcome
+    review_outcome: EvidenceReviewOutcome | None

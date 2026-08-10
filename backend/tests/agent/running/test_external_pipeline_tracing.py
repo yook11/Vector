@@ -19,7 +19,7 @@ import app.agent.planning.contract as planning_contract
 from app.agent.answering.contract import AnsweringRequest
 from app.agent.answering.direct_answer.contract import DirectAnswerDraft
 from app.agent.answering.evidence_answer.contract import EvidenceAnswerDraft
-from app.agent.evidence_collection import Researcher
+from app.agent.evidence_collection import NewsCollector, Researcher
 from app.agent.evidence_collection.evidence_review import EvidenceReviewer
 from app.agent.evidence_collection.evidence_review.agent import EVIDENCE_REVIEWER_AGENT
 from app.agent.evidence_collection.evidence_review.deepseek_binding import (
@@ -244,8 +244,10 @@ def _runner(
     )
     phases = AnsweringPhases(
         planner=_Planner(),
-        researcher=Researcher(
-            internal_search=internal_search or _EmptyInternalSearch()
+        collector=NewsCollector(
+            researcher=Researcher(
+                internal_search=internal_search or _EmptyInternalSearch()
+            )
         ),
         external_runtime_factory=_Factory(runtime),
         direct_answerer=_UnreachableDirectAnswerer(),
@@ -697,7 +699,9 @@ async def test_direct_path_run_span_has_no_evidence_count_attributes(
     """direct path では内部・外部の採用数・引用数属性が付かない。"""
     phases = AnsweringPhases(
         planner=_DirectPlanner(),
-        researcher=Researcher(internal_search=_EmptyInternalSearch()),
+        collector=NewsCollector(
+            researcher=Researcher(internal_search=_EmptyInternalSearch())
+        ),
         external_runtime_factory=_UnreachableExternalFactory(),
         direct_answerer=_DirectAnswerer(),
         evidence_answerer=_UnreachableEvidenceAnswerer(),
@@ -779,8 +783,10 @@ async def test_evidence_run_span_reports_internal_dedup_count_and_post_dedup_tot
         planner=_TwoTaskPlanner(
             _two_task_plan(task_queries=(["task0 query"], ["task1 query"]))
         ),
-        researcher=Researcher(
-            internal_search=_PerQueryInternalHitsSearch(hits_by_query)
+        collector=NewsCollector(
+            researcher=Researcher(
+                internal_search=_PerQueryInternalHitsSearch(hits_by_query)
+            )
         ),
         external_runtime_factory=_Factory(_two_task_query_failing_runtime()),
         direct_answerer=_UnreachableDirectAnswerer(),
@@ -831,9 +837,11 @@ async def test_evidence_run_span_reports_internal_collection_failed_task_count(
                 task_queries=([task_queries[0]], [task_queries[1]]),
             )
         ),
-        researcher=Researcher(
-            internal_search=_PerQueryFailableInternalSearch(
-                failing_queries=failing_queries
+        collector=NewsCollector(
+            researcher=Researcher(
+                internal_search=_PerQueryFailableInternalSearch(
+                    failing_queries=failing_queries
+                )
             )
         ),
         external_runtime_factory=_Factory(_two_task_query_failing_runtime()),
