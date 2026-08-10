@@ -26,7 +26,6 @@ from app.agent.evidence_collection import NewsCollector, Researcher
 from app.agent.evidence_collection import (
     news_collector as news_collector_module,
 )
-from app.agent.evidence_collection.evidence_review import EvidenceReviewer
 from app.agent.evidence_collection.external_search import (
     ExternalResearchRuntime,
     ExternalSearchCandidate,
@@ -40,6 +39,7 @@ from app.agent.evidence_collection.internal_search import (
     InternalArticleContent,
     InternalArticleSearchHit,
 )
+from app.agent.evidence_review import EvidenceReviewer
 from app.agent.planning.contract import (
     ExternalResearchTask,
     PlanningRequest,
@@ -101,7 +101,7 @@ def _review_draft(
     *,
     missing: list[str] | None = None,
 ) -> Any:
-    from app.agent.evidence_collection.evidence_review import EvidenceReviewDraft
+    from app.agent.evidence_review import EvidenceReviewDraft
 
     return EvidenceReviewDraft.model_validate(
         {"selections": selections or [], "missing": missing or []}
@@ -1129,7 +1129,7 @@ async def test_reviewer_failure_after_two_attempts_becomes_failed_review_report(
     """runnerがreviewer失敗をreview=failed reportへ写す結線を保証する。
 
     attempt/timeout/失敗分類の詳細な組み合わせは
-    tests/agent/evidence_collection/evidence_review/test_reviewer.py が正本。
+    tests/agent/evidence_review/test_reviewer.py が正本。
     """
     captured = _capture_external_outcome(monkeypatch)
     failure = AgentResponseInvalidError(AgentResponseDefect.RESPONSE_NOT_JSON)
@@ -1707,4 +1707,4 @@ async def test_provider_timeout_backstop_cancels_tool_and_skips_reviewer(
 
 
 # reviewerのtimeout backstop attempt/retry契約は
-# tests/agent/evidence_collection/evidence_review/test_reviewer.py が正本。
+# tests/agent/evidence_review/test_reviewer.py が正本。

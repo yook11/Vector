@@ -36,7 +36,6 @@ from app.agent.contract import (
     ExternalSearchQueriesGeneratedEvent,
 )
 from app.agent.evidence_collection import NewsCollector, Researcher
-from app.agent.evidence_collection.evidence_review import EvidenceReviewer
 from app.agent.evidence_collection.internal_search.ai.gemini import (
     GeminiQueryEmbedder,
 )
@@ -46,6 +45,7 @@ from app.agent.evidence_collection.internal_search.article_search import (
 from app.agent.evidence_collection.internal_search.tool import (
     PgVectorInternalSearchTool,
 )
+from app.agent.evidence_review import EvidenceReviewer
 from app.agent.input_safety.agent import INPUT_SAFETY_AGENT
 from app.agent.input_safety.service import InputSafetyService
 from app.agent.planning.contract import (

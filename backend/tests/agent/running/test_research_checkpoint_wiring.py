@@ -22,8 +22,6 @@ from app.agent.answering.evidence_answer.contract import (
     EvidenceAnswerOutcome,
 )
 from app.agent.evidence_collection import NewsCollector, Researcher
-from app.agent.evidence_collection.evidence_review import EvidenceReviewer
-from app.agent.evidence_collection.evidence_review.contract import EvidenceReviewDraft
 from app.agent.evidence_collection.external_search.contract import (
     ExternalQueryDraft,
     ExternalResearchRuntime,
@@ -31,6 +29,8 @@ from app.agent.evidence_collection.external_search.contract import (
     ExternalSearchProviderError,
     ExternalSearchToolFailureReason,
 )
+from app.agent.evidence_review import EvidenceReviewer
+from app.agent.evidence_review.contract import EvidenceReviewDraft
 from app.agent.planning.contract import (
     DirectAnswerPlan,
     PlanningRequest,
@@ -280,9 +280,7 @@ async def test_direct_answer_plan_leaves_checkpoint_none() -> None:
     """記録フロー6: 外部検索を実行しないdirect_answer Runはcheckpointを持たない。"""
     phases = AnsweringPhases(
         planner=_Planner(DirectAnswerPlan()),
-        collector=NewsCollector(
-            researcher=Researcher(internal_search=_InternalTool())
-        ),
+        collector=NewsCollector(researcher=Researcher(internal_search=_InternalTool())),
         reviewer=EvidenceReviewer(),
         external_runtime_factory=_UnreachableRuntimeFactory(),
         direct_answerer=_DirectAnswerer(),

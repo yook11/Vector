@@ -209,7 +209,7 @@ def _evidence_reviewer_binding() -> Any:
     """selector 一式は evidence_review package へ改名移設された(D4-S1)。"""
     try:
         binding_module = __import__(
-            "app.agent.evidence_collection.evidence_review.deepseek_binding",
+            "app.agent.evidence_review.deepseek_binding",
             fromlist=["EVIDENCE_REVIEWER_DEEPSEEK_BINDING"],
         )
     except ModuleNotFoundError as exc:

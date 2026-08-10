@@ -22,11 +22,11 @@ from app.agent.contract import (
     AnswerProgressReporter,
 )
 from app.agent.evidence_collection import NewsCollector, Researcher
-from app.agent.evidence_collection.evidence_review import EvidenceReviewer
 from app.agent.evidence_collection.external_search.contract import (
     ExternalResearchRuntime,
     ExternalResearchRuntimeFactory,
 )
+from app.agent.evidence_review import EvidenceReviewer
 from app.agent.input_safety.agent import INPUT_SAFETY_AGENT
 from app.agent.input_safety.service import InputSafetyService
 from app.agent.planning.agent import QUESTION_PLANNER_AGENT
@@ -184,14 +184,14 @@ class _ExternalResearchRuntimeFactory:
     async def activate(self) -> AsyncIterator[ExternalResearchRuntime]:
         from openai import AsyncOpenAI
 
-        from app.agent.evidence_collection.evidence_review.deepseek_binding import (
-            EVIDENCE_REVIEWER_DEEPSEEK_BINDING,
-        )
         from app.agent.evidence_collection.external_search.deepseek_binding import (
             EXTERNAL_QUERY_DEEPSEEK_BINDING,
         )
         from app.agent.evidence_collection.external_search.tavily import (
             TavilyExternalSearchTool,
+        )
+        from app.agent.evidence_review.deepseek_binding import (
+            EVIDENCE_REVIEWER_DEEPSEEK_BINDING,
         )
         from app.agent.runtime.deepseek import (
             DEEPSEEK_BASE_URL,

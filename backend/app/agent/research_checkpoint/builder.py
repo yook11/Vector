@@ -12,8 +12,9 @@ from datetime import datetime
 
 import logfire
 
-from app.agent.evidence_collection.contract import CollectedNews, ReviewedEvidence
-from app.agent.evidence_collection.evidence_review import EvidenceReviewOutcome
+from app.agent.evidence_collection.contract import CollectedNews
+from app.agent.evidence_review import EvidenceReviewOutcome
+from app.agent.evidence_review.contract import ReviewedEvidence
 from app.agent.planning.contract import SearchPlan
 from app.agent.research_checkpoint.contract import (
     ResearchCheckpoint,

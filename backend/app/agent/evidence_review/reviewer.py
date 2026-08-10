@@ -14,13 +14,13 @@ from enum import StrEnum
 
 from pydantic import ValidationError
 
-from app.agent.evidence_collection.evidence_review.agent import EVIDENCE_REVIEWER_AGENT
-from app.agent.evidence_collection.evidence_review.contract import (
+from app.agent.evidence_review.agent import EVIDENCE_REVIEWER_AGENT
+from app.agent.evidence_review.contract import (
     EvidenceReviewInput,
     EvidenceReviewOutcome,
     ReviewTaskCandidates,
 )
-from app.agent.evidence_collection.evidence_review.policy import (
+from app.agent.evidence_review.policy import (
     EVIDENCE_REVIEW_TIMEOUT_SECONDS,
     REVIEWER_TIMEOUT_REASON,
     build_review_evidence,

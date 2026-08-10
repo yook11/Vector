@@ -81,9 +81,7 @@ def _assert_phases_accepts_reviewer() -> None:
 
 
 def _evidence_reviewer() -> Any:
-    reviewer_module = _required_module(
-        "app.agent.evidence_collection.evidence_review.reviewer"
-    )
+    reviewer_module = _required_module("app.agent.evidence_review.reviewer")
     reviewer_type = _required_attribute(reviewer_module, "EvidenceReviewer")
     return reviewer_type()
 
@@ -93,9 +91,7 @@ def _review_draft(
     *,
     missing: list[str] | None = None,
 ) -> Any:
-    contracts = _required_module(
-        "app.agent.evidence_collection.evidence_review.contract"
-    )
+    contracts = _required_module("app.agent.evidence_review.contract")
     draft_type = _required_attribute(contracts, "EvidenceReviewDraft")
     return draft_type.model_validate(
         {"selections": selections or [], "missing": missing or []}
@@ -459,7 +455,7 @@ async def test_merge_dedupes_same_internal_article_by_curation_id_first_win() ->
 
     # source_ref の task間非衝突は f"{task_index}-{candidate_index}" という統合index
     # 空間の形から構造的に保証される(正本:
-    # tests/agent/evidence_collection/evidence_review/test_policy.py の
+    # tests/agent/evidence_review/test_policy.py の
     # test_build_evidence_assigns_task_scoped_source_ref_without_origin_prefix)。
     # ここでは合流のcuration_id先勝ちdedupだけを検証する。
     titles = [item.source.title for item in answerer.calls[0]]

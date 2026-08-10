@@ -1,8 +1,8 @@
 """External Query Agent の宣言・Prompt・typed I/O 契約(D4-S1)。
 
 selector 一式(旧 external_evidence_selector)は
-`app.agent.evidence_collection.evidence_review` package へ改名移設された
-(tests/agent/evidence_collection/evidence_review/test_agent_declaration.py が
+`app.agent.evidence_review` package へ改名移設された
+(tests/agent/evidence_review/test_agent_declaration.py が
 新契約の正本)。ここには query agent と、旧名が app/ から消えていることの
 確認だけを残す。
 """

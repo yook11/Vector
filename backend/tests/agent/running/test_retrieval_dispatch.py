@@ -21,7 +21,6 @@ from app.agent.answering.evidence_answer.contract import (
 )
 from app.agent.contract import AnswerProgressStage
 from app.agent.evidence_collection import NewsCollector, Researcher
-from app.agent.evidence_collection.evidence_review import EvidenceReviewer
 from app.agent.evidence_collection.external_search import (
     ExternalResearchRuntime,
     ExternalSearchCandidate,
@@ -35,6 +34,7 @@ from app.agent.evidence_collection.internal_search.contract import InternalSearc
 from app.agent.evidence_collection.internal_search.query_embedding import (
     InternalSearchQueries,
 )
+from app.agent.evidence_review import EvidenceReviewer
 from app.agent.planning.contract import (
     ExternalResearchTask,
     PlanningRequest,
@@ -75,7 +75,7 @@ def _review_draft_selecting(indexes: list[int]) -> Any:
     候補数より大きいindexは範囲外dropとなるだけで安全なため、実際の候補数を
     問わず[0, 1]等を渡して「提示された候補を全て採用させる」用途に使える。
     """
-    from app.agent.evidence_collection.evidence_review import EvidenceReviewDraft
+    from app.agent.evidence_review import EvidenceReviewDraft
 
     return EvidenceReviewDraft.model_validate(
         {
@@ -94,7 +94,7 @@ def _review_draft_selecting(indexes: list[int]) -> Any:
 
 def _review_draft_selecting_with_missing(indexes: list[int], missing: list[str]) -> Any:
     """条件7用: 採用indexに加えてRun単位のmissingを申告するreviewer draft。"""
-    from app.agent.evidence_collection.evidence_review import EvidenceReviewDraft
+    from app.agent.evidence_review import EvidenceReviewDraft
 
     return EvidenceReviewDraft.model_validate(
         {
@@ -1779,9 +1779,7 @@ async def test_runner_isolates_one_tasks_total_failure_from_sibling_evidence() -
     reviewer_runtime = ScriptedAgentRuntime([_review_draft_selecting([0])])
     phases = AnsweringPhases(
         planner=_Planner(plan),
-        collector=NewsCollector(
-            researcher=Researcher(internal_search=internal)
-        ),
+        collector=NewsCollector(researcher=Researcher(internal_search=internal)),
         external_runtime_factory=_Factory(
             [_runtime(ScriptedAgentRuntime([]), reviewer_runtime=reviewer_runtime)], []
         ),

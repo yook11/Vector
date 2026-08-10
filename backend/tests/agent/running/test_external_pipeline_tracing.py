@@ -20,11 +20,6 @@ from app.agent.answering.contract import AnsweringRequest
 from app.agent.answering.direct_answer.contract import DirectAnswerDraft
 from app.agent.answering.evidence_answer.contract import EvidenceAnswerDraft
 from app.agent.evidence_collection import NewsCollector, Researcher
-from app.agent.evidence_collection.evidence_review import EvidenceReviewer
-from app.agent.evidence_collection.evidence_review.agent import EVIDENCE_REVIEWER_AGENT
-from app.agent.evidence_collection.evidence_review.deepseek_binding import (
-    EVIDENCE_REVIEWER_DEEPSEEK_BINDING,
-)
 from app.agent.evidence_collection.external_search.agent import EXTERNAL_QUERY_AGENT
 from app.agent.evidence_collection.external_search.contract import (
     ExternalResearchRuntime,
@@ -38,6 +33,11 @@ from app.agent.evidence_collection.internal_search import (
     InternalArticleContent,
     InternalArticleSearchHit,
     InternalSearchError,
+)
+from app.agent.evidence_review import EvidenceReviewer
+from app.agent.evidence_review.agent import EVIDENCE_REVIEWER_AGENT
+from app.agent.evidence_review.deepseek_binding import (
+    EVIDENCE_REVIEWER_DEEPSEEK_BINDING,
 )
 from app.agent.planning.contract import (
     DirectAnswerPlan,
@@ -610,7 +610,7 @@ def _review_draft_selecting_all_offered_candidates() -> Any:
     範囲外dropとなるだけで安全に使い回せる
     (このモジュールの複数taskにまたがる内部統計テスト専用の軽量fake)。
     """
-    from app.agent.evidence_collection.evidence_review import EvidenceReviewDraft
+    from app.agent.evidence_review import EvidenceReviewDraft
 
     return EvidenceReviewDraft.model_validate(
         {

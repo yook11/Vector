@@ -15,11 +15,11 @@ import pytest
 
 from app.agent.answering.evidence_answer.evidence import normalize_answer_evidence
 from app.agent.contract import ExternalUrlSource
-from app.agent.evidence_collection import EvidenceCollectionOutcome
 from app.agent.evidence_collection.external_search import (
     ExternalSearchEvidence,
     ExternalSearchOutcome,
 )
+from app.agent.evidence_review import EvidenceCollectionOutcome
 
 
 def _required_attribute(module: ModuleType, name: str) -> Any:
@@ -32,9 +32,7 @@ def _required_attribute(module: ModuleType, name: str) -> Any:
 
 def _internal_article_evidence_type() -> Any:
     try:
-        contracts = import_module(
-            "app.agent.evidence_collection.evidence_review.contract"
-        )
+        contracts = import_module("app.agent.evidence_review.contract")
     except ModuleNotFoundError as exc:
         pytest.fail(f"D4-S1 evidence_review.contract module is missing ({exc.name})")
     return _required_attribute(contracts, "InternalArticleEvidence")
@@ -46,8 +44,8 @@ def _report_type() -> Any:
 
 
 def _review_report_type() -> Any:
-    evidence_collection_package = import_module("app.agent.evidence_collection")
-    return _required_attribute(evidence_collection_package, "EvidenceReviewReport")
+    evidence_review_package = import_module("app.agent.evidence_review")
+    return _required_attribute(evidence_review_package, "EvidenceReviewReport")
 
 
 def _report() -> Any:

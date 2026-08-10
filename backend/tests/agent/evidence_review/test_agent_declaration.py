@@ -43,21 +43,19 @@ def _required_attribute(module: ModuleType, name: str) -> Any:
 
 
 def _contracts() -> ModuleType:
-    return _required_module("app.agent.evidence_collection.evidence_review.contract")
+    return _required_module("app.agent.evidence_review.contract")
 
 
 def _agents() -> ModuleType:
-    return _required_module("app.agent.evidence_collection.evidence_review.agent")
+    return _required_module("app.agent.evidence_review.agent")
 
 
 def _prompts() -> ModuleType:
-    return _required_module("app.agent.evidence_collection.evidence_review.prompts")
+    return _required_module("app.agent.evidence_review.prompts")
 
 
 def _bindings() -> ModuleType:
-    return _required_module(
-        "app.agent.evidence_collection.evidence_review.deepseek_binding"
-    )
+    return _required_module("app.agent.evidence_review.deepseek_binding")
 
 
 def _reviewer_agent() -> Agent[Any, Any]:

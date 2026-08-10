@@ -1,4 +1,4 @@
-"""Evidence collection contract: engine ports と task/run 単位の outcome DTO。"""
+"""Evidence collection contract: 収集の status 分類・task report・Run 収集結果 DTO。"""
 
 from __future__ import annotations
 
@@ -7,19 +7,9 @@ from typing import Annotated, Literal, Self
 
 from pydantic import BaseModel, ConfigDict, Field, StringConstraints, model_validator
 
-from app.agent.evidence_collection.evidence_review import (
-    EvidenceReviewOutcome,
-    InternalArticleEvidence,
-)
-from app.agent.evidence_collection.evidence_review.contract import (
-    EVIDENCE_REVIEW_ADOPTION_LIMIT,
-    EVIDENCE_REVIEW_MISSING_LIMIT,
-)
-from app.agent.evidence_collection.external_search import ExternalSearchOutcome
 from app.agent.evidence_collection.external_search.contract import (
     EXTERNAL_QUERY_MAX_CHARS,
     EXTERNAL_TASK_QUERY_LIMIT,
-    MISSING_ITEM_MAX_CHARS,
     ExternalSearchCandidate,
     TimeFilterFailureReason,
 )
@@ -30,11 +20,7 @@ from app.agent.evidence_collection.internal_search.contract import (
 __all__ = [
     "CollectedNews",
     "CollectedTask",
-    "EvidenceCollectionOutcome",
-    "EvidenceReviewReport",
-    "EvidenceReviewStatus",
     "ResearchTaskReport",
-    "ReviewedEvidence",
     "TaskExternalCollectionStatus",
     "TaskInternalCollectionStatus",
 ]
@@ -49,7 +35,6 @@ TaskExternalCollectionStatus = Literal[
     "provider_failed",
     "time_filter_failed",
 ]
-EvidenceReviewStatus = Literal["succeeded", "failed", "skipped_empty"]
 
 
 class ResearchTaskReport(BaseModel):
@@ -117,102 +102,6 @@ class ResearchTaskReport(BaseModel):
         return self
 
 
-class EvidenceReviewReport(BaseModel):
-    """Run 単位の精査(採用/不足)の実行内容・失敗分類。"""
-
-    model_config = ConfigDict(frozen=True, extra="forbid")
-
-    review: EvidenceReviewStatus
-    review_failure_reason: str | None = None
-    internal_evidence_count: int = Field(default=0, ge=0)
-    external_evidence_count: int = Field(default=0, ge=0)
-    dropped_selection_count: int = Field(default=0, ge=0)
-    missing: list[str] = Field(default_factory=list)
-
-    @model_validator(mode="after")
-    def _validate_review_report(self) -> Self:
-        if self.review == "skipped_empty" and (
-            self.internal_evidence_count != 0
-            or self.external_evidence_count != 0
-            or self.dropped_selection_count != 0
-            or self.missing
-            or self.review_failure_reason is not None
-        ):
-            raise ValueError("skipped_empty review must keep diagnostics closed")
-
-        if self.review == "failed":
-            if self.internal_evidence_count != 0 or self.external_evidence_count != 0:
-                raise ValueError("failed review must report zero evidence")
-            if self.review_failure_reason is None:
-                raise ValueError("failed review requires a failure reason")
-        elif self.review_failure_reason is not None:
-            raise ValueError("review_failure_reason is only valid when review failed")
-
-        if len(self.missing) > EVIDENCE_REVIEW_MISSING_LIMIT:
-            raise ValueError("missing exceeds missing limit")
-        if any(len(item) > MISSING_ITEM_MAX_CHARS for item in self.missing):
-            raise ValueError("missing item exceeds max length")
-        if (
-            self.internal_evidence_count + self.external_evidence_count
-            > EVIDENCE_REVIEW_ADOPTION_LIMIT
-        ):
-            raise ValueError("evidence count exceeds adoption cap")
-        return self
-
-
-class EvidenceCollectionOutcome(BaseModel):
-    """plan 実行の純粋な結果。task 単位の収集reportとRun単位の精査reportを持つ。"""
-
-    model_config = ConfigDict(frozen=True, extra="forbid")
-
-    internal_evidence: list[InternalArticleEvidence] = Field(default_factory=list)
-    internal_deduplicated_count: int = Field(default=0, ge=0)
-    external_search: ExternalSearchOutcome | None = None
-    task_reports: list[ResearchTaskReport] = Field(min_length=1)
-    review: EvidenceReviewReport
-
-    @model_validator(mode="after")
-    def _validate_task_reports(self) -> Self:
-        report_indexes = {report.task_index for report in self.task_reports}
-        if report_indexes != set(range(len(self.task_reports))):
-            raise ValueError("task reports must cover each task index exactly once")
-
-        external_evidence = (
-            self.external_search.evidence if self.external_search is not None else []
-        )
-        evidence_task_indexes = {item.task_index for item in self.internal_evidence}
-        evidence_task_indexes |= {item.task_index for item in external_evidence}
-        if not evidence_task_indexes <= report_indexes:
-            raise ValueError("evidence task_index must reference a reported task")
-
-        source_refs = [item.source_ref for item in self.internal_evidence] + [
-            item.source_ref for item in external_evidence
-        ]
-        if len(source_refs) != len(set(source_refs)):
-            raise ValueError(
-                "evidence source_ref must be unique across internal and external"
-            )
-
-        external_deduplicated_count = (
-            self.external_search.deduplicated_evidence_count
-            if self.external_search is not None
-            else 0
-        )
-        if self.review.internal_evidence_count != (
-            len(self.internal_evidence) + self.internal_deduplicated_count
-        ):
-            raise ValueError(
-                "review internal evidence count must match outcome evidence"
-            )
-        if self.review.external_evidence_count != (
-            len(external_evidence) + external_deduplicated_count
-        ):
-            raise ValueError(
-                "review external evidence count must match outcome evidence"
-            )
-        return self
-
-
 @dataclass(frozen=True, slots=True)
 class CollectedTask:
     """1 taskのResearcher収集結果と収集onlyのreport。精査はRun単位で別途行う。"""
@@ -242,11 +131,3 @@ class CollectedNews:
     @property
     def executed_queries_by_task(self) -> dict[int, tuple[str, ...]]:
         return {task.task_index: task.executed_queries for task in self.tasks}
-
-
-@dataclass(frozen=True, slots=True)
-class ReviewedEvidence:
-    """Run単位精査の確定結果。review_outcomeは精査が成功した場合のみ持つ。"""
-
-    outcome: EvidenceCollectionOutcome
-    review_outcome: EvidenceReviewOutcome | None

@@ -2,7 +2,7 @@
 
 selector 一式(build_external_evidence / finalize_selection_draft /
 EVIDENCE_SELECT_TIMEOUT_SECONDS 等)は `evidence_review.policy` へ改名移設
-された(tests/agent/evidence_collection/evidence_review/test_policy.py が
+された(tests/agent/evidence_review/test_policy.py が
 新契約の正本)。ここには外部候補pool構築など、query/candidate収集に閉じた
 関数だけを残す。外部URL dedup(deduplicate_external_evidence_by_url)は
 S1(仕様「合流と重複排除」)で廃止された。

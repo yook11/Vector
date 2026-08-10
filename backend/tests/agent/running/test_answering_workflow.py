@@ -16,12 +16,12 @@ from app.agent.answering.evidence_answer.contract import (
     EvidenceAnswerUnavailable,
 )
 from app.agent.evidence_collection import NewsCollector, Researcher
-from app.agent.evidence_collection.evidence_review import EvidenceReviewer
 from app.agent.evidence_collection.external_search import ExternalResearchRuntime
 from app.agent.evidence_collection.external_search.contract import ExternalQueryDraft
 from app.agent.evidence_collection.internal_search.query_embedding import (
     InternalSearchQueries,
 )
+from app.agent.evidence_review import EvidenceReviewer
 from app.agent.planning.contract import (
     PlanningRequest,
     QuestionPlan,

@@ -26,9 +26,8 @@ from app.agent.contract import (
     AnswerSource,
     EvidenceReviewSelectedEvent,
 )
-from app.agent.evidence_collection import EvidenceCollectionOutcome
-from app.agent.evidence_collection.evidence_review import EvidenceReviewOutcome
-from app.agent.evidence_collection.run_review import review_collected_news
+from app.agent.evidence_review import EvidenceCollectionOutcome, EvidenceReviewOutcome
+from app.agent.evidence_review.run_review import review_collected_news
 from app.agent.input_safety.contract import (
     INPUT_SAFETY_TEXT_CHAR_CAP,
     InputSafetyBlocked,

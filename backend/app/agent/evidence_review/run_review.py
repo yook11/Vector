@@ -4,22 +4,19 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from app.agent.evidence_collection.contract import (
-    CollectedNews,
-    EvidenceCollectionOutcome,
-    EvidenceReviewReport,
-    ResearchTaskReport,
-    ReviewedEvidence,
-)
-from app.agent.evidence_collection.evidence_review import (
-    EvidenceReviewer,
-    InternalArticleEvidence,
-    ReviewTaskCandidates,
-)
+from app.agent.evidence_collection.contract import CollectedNews, ResearchTaskReport
 from app.agent.evidence_collection.external_search.contract import (
     ExternalResearchRuntime,
     ExternalSearchOutcome,
 )
+from app.agent.evidence_review.contract import (
+    EvidenceCollectionOutcome,
+    EvidenceReviewReport,
+    InternalArticleEvidence,
+    ReviewedEvidence,
+    ReviewTaskCandidates,
+)
+from app.agent.evidence_review.reviewer import EvidenceReviewer
 
 __all__ = ["review_collected_news"]
 
