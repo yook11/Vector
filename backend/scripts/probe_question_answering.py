@@ -35,8 +35,7 @@ from app.agent.contract import (
     ExternalSearchCandidatesFetchedEvent,
     ExternalSearchQueriesGeneratedEvent,
 )
-from app.agent.evidence_collection import Researcher
-from app.agent.evidence_collection.evidence_review import EvidenceReviewer
+from app.agent.evidence_collection import NewsCollector, Researcher
 from app.agent.evidence_collection.internal_search.ai.gemini import (
     GeminiQueryEmbedder,
 )
@@ -46,6 +45,7 @@ from app.agent.evidence_collection.internal_search.article_search import (
 from app.agent.evidence_collection.internal_search.tool import (
     PgVectorInternalSearchTool,
 )
+from app.agent.evidence_review import EvidenceReviewer
 from app.agent.input_safety.agent import INPUT_SAFETY_AGENT
 from app.agent.input_safety.service import InputSafetyService
 from app.agent.planning.contract import (
@@ -233,7 +233,10 @@ async def _probe_search(
         ),
         phases_factory=lambda: AnsweringPhases(
             planner=_FixedSearchPlanner(plan),
-            researcher=Researcher(internal_search=internal_search, events=events),
+            collector=NewsCollector(
+                researcher=Researcher(internal_search=internal_search, events=events),
+                requested_agent_count=requested_agent_count,
+            ),
             reviewer=EvidenceReviewer(),
             external_runtime_factory=build_external_research_runtime_factory(),
             evidence_answerer=EvidenceAnswerFlow(
@@ -243,7 +246,6 @@ async def _probe_search(
             direct_answerer=_UnreachableDirectAnswerer(),
         ),
         events=events,
-        requested_external_agent_count=requested_agent_count,
     )
     result = (
         await runner.run(
@@ -278,7 +280,9 @@ async def _probe_direct(*, question: str) -> None:
         ),
         phases_factory=lambda: AnsweringPhases(
             planner=_FixedDirectPlanner(DirectAnswerPlan()),
-            researcher=Researcher(internal_search=_UnreachableInternalSearch()),
+            collector=NewsCollector(
+                researcher=Researcher(internal_search=_UnreachableInternalSearch()),
+            ),
             reviewer=EvidenceReviewer(),
             external_runtime_factory=_UnreachableExternalRuntimeFactory(),
             evidence_answerer=_UnreachableEvidenceAnswerer(),

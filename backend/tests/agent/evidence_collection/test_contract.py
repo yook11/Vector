@@ -74,7 +74,9 @@ def _provider_failed_report(**overrides: object) -> Any:
 
 
 def _review_report_type() -> Any:
-    return _required_attribute(evidence_collection_package, "EvidenceReviewReport")
+    import app.agent.evidence_review as evidence_review_package
+
+    return _required_attribute(evidence_review_package, "EvidenceReviewReport")
 
 
 def _review_report(**overrides: object) -> Any:

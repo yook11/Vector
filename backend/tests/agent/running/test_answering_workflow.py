@@ -15,13 +15,13 @@ from app.agent.answering.evidence_answer.contract import (
     EvidenceAnswerOutcome,
     EvidenceAnswerUnavailable,
 )
-from app.agent.evidence_collection import Researcher
-from app.agent.evidence_collection.evidence_review import EvidenceReviewer
+from app.agent.evidence_collection import NewsCollector, Researcher
 from app.agent.evidence_collection.external_search import ExternalResearchRuntime
 from app.agent.evidence_collection.external_search.contract import ExternalQueryDraft
 from app.agent.evidence_collection.internal_search.query_embedding import (
     InternalSearchQueries,
 )
+from app.agent.evidence_review import EvidenceReviewer
 from app.agent.planning.contract import (
     PlanningRequest,
     QuestionPlan,
@@ -214,7 +214,9 @@ def _runner(
         timeline.append("phases_factory")
         return AnsweringPhases(
             planner=planner,
-            researcher=Researcher(internal_search=internal_search),
+            collector=NewsCollector(
+                researcher=Researcher(internal_search=internal_search)
+            ),
             external_runtime_factory=_EmptyExternalRuntimeFactory(timeline),
             direct_answerer=direct_answerer,
             evidence_answerer=evidence_answerer,

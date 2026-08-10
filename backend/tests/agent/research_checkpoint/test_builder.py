@@ -10,12 +10,12 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from typing import Any
 
-from app.agent.evidence_collection.evidence_review.contract import (
-    EvidenceReviewOutcome,
-    InternalArticleEvidence,
-)
 from app.agent.evidence_collection.external_search.contract import (
     ExternalSearchEvidence,
+)
+from app.agent.evidence_review.contract import (
+    EvidenceReviewOutcome,
+    InternalArticleEvidence,
 )
 from app.agent.planning.contract import ResearchTask, SearchPlan
 from app.agent.research_checkpoint.builder import build_research_checkpoint

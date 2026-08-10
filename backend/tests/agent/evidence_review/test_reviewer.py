@@ -47,11 +47,11 @@ def _required_attribute(module: ModuleType, name: str) -> Any:
 
 
 def _contracts() -> ModuleType:
-    return _required_module("app.agent.evidence_collection.evidence_review.contract")
+    return _required_module("app.agent.evidence_review.contract")
 
 
 def _reviewer_module() -> ModuleType:
-    return _required_module("app.agent.evidence_collection.evidence_review.reviewer")
+    return _required_module("app.agent.evidence_review.reviewer")
 
 
 def _reviewer() -> Any:

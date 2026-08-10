@@ -19,11 +19,7 @@ from app.agent.answering.evidence_answer.contract import (
     EvidenceAnswerDraftInvalidError,
 )
 from app.agent.contract import AnswerQuestionResult, ExternalUrlSource
-from app.agent.evidence_collection import Researcher
-from app.agent.evidence_collection.evidence_review import (
-    EvidenceReviewDraft,
-    EvidenceReviewer,
-)
+from app.agent.evidence_collection import NewsCollector, Researcher
 from app.agent.evidence_collection.external_search import (
     ExternalQueryDraft,
     ExternalResearchRuntime,
@@ -36,6 +32,10 @@ from app.agent.evidence_collection.internal_search import (
 )
 from app.agent.evidence_collection.internal_search.query_embedding import (
     InternalSearchQueries,
+)
+from app.agent.evidence_review import (
+    EvidenceReviewDraft,
+    EvidenceReviewer,
 )
 from app.agent.planning.contract import (
     ExternalResearchTask,
@@ -705,7 +705,7 @@ def _orchestrator(
     direct_answerer = FakeDirectAnswerer(direct_draft, timeline=timeline)
     phases = AnsweringPhases(
         planner=planner,
-        researcher=Researcher(internal_search=internal_search),
+        collector=NewsCollector(researcher=Researcher(internal_search=internal_search)),
         external_runtime_factory=FakeExternalRuntimeFactory(
             external_runtime,
             timeline=timeline,

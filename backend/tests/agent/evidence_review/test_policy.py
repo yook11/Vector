@@ -31,7 +31,7 @@ _AS_OF = datetime(2026, 7, 20, 9, 30, tzinfo=UTC)
 
 def _policy() -> ModuleType:
     try:
-        return import_module("app.agent.evidence_collection.evidence_review.policy")
+        return import_module("app.agent.evidence_review.policy")
     except ModuleNotFoundError as exc:
         pytest.fail(
             "evidence_review のドメイン純関数は policy module に置く必要が"
@@ -48,7 +48,7 @@ def _function(name: str) -> Any:
 
 
 def _contracts() -> ModuleType:
-    return import_module("app.agent.evidence_collection.evidence_review.contract")
+    return import_module("app.agent.evidence_review.contract")
 
 
 def _task_candidates_type() -> Any:

@@ -1,10 +1,11 @@
 """Evidence collection package。"""
 
 from app.agent.evidence_collection.contract import (
-    EvidenceCollectionOutcome,
-    EvidenceReviewReport,
+    CollectedNews,
+    CollectedTask,
     ResearchTaskReport,
 )
+from app.agent.evidence_collection.news_collector import NewsCollector
 from app.agent.evidence_collection.researcher import (
     ExternalCollectionStatus,
     Researcher,
@@ -12,9 +13,10 @@ from app.agent.evidence_collection.researcher import (
 )
 
 __all__ = [
-    "EvidenceCollectionOutcome",
-    "EvidenceReviewReport",
+    "CollectedNews",
+    "CollectedTask",
     "ExternalCollectionStatus",
+    "NewsCollector",
     "Researcher",
     "ResearchTaskCandidates",
     "ResearchTaskReport",

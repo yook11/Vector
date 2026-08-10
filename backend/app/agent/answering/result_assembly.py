@@ -16,7 +16,7 @@ from app.agent.contract import (
     AnswerQuestionResult,
     AnswerSource,
 )
-from app.agent.evidence_collection import EvidenceCollectionOutcome
+from app.agent.evidence_review import EvidenceCollectionOutcome
 from app.agent.planning.contract import SearchPlan
 
 __all__ = ["assemble_evidence_result"]

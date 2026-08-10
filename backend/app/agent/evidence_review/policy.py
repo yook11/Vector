@@ -6,7 +6,15 @@ Run内の全taskの候補をtask_index昇順・通しindexでグループ化し�
 
 from __future__ import annotations
 
-from app.agent.evidence_collection.evidence_review.contract import (
+from app.agent.evidence_collection.external_search.contract import (
+    CANDIDATE_SNIPPET_MAX_CHARS,
+    ExternalSearchCandidate,
+    ExternalSearchEvidence,
+)
+from app.agent.evidence_collection.internal_search.contract import (
+    InternalArticleSearchHit,
+)
+from app.agent.evidence_review.contract import (
     EVIDENCE_REVIEW_ADOPTION_LIMIT,
     EvidenceCandidateInput,
     EvidenceReviewDraft,
@@ -15,14 +23,6 @@ from app.agent.evidence_collection.evidence_review.contract import (
     InternalArticleEvidence,
     ReviewSelection,
     ReviewTaskCandidates,
-)
-from app.agent.evidence_collection.external_search.contract import (
-    CANDIDATE_SNIPPET_MAX_CHARS,
-    ExternalSearchCandidate,
-    ExternalSearchEvidence,
-)
-from app.agent.evidence_collection.internal_search.contract import (
-    InternalArticleSearchHit,
 )
 
 __all__ = [

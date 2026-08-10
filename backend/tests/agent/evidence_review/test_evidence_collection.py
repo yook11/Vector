@@ -16,11 +16,11 @@ from typing import Any
 import pytest
 from pydantic import ValidationError
 
-from app.agent.evidence_collection import EvidenceCollectionOutcome
 from app.agent.evidence_collection.external_search import (
     ExternalSearchEvidence,
     ExternalSearchOutcome,
 )
+from app.agent.evidence_review import EvidenceCollectionOutcome
 
 
 def _required_attribute(module: ModuleType, name: str) -> Any:
@@ -31,9 +31,7 @@ def _required_attribute(module: ModuleType, name: str) -> Any:
 
 def _internal_article_evidence_type() -> Any:
     try:
-        contracts = import_module(
-            "app.agent.evidence_collection.evidence_review.contract"
-        )
+        contracts = import_module("app.agent.evidence_review.contract")
     except ModuleNotFoundError as exc:
         pytest.fail(f"evidence_review.contract module is missing ({exc.name})")
     return _required_attribute(contracts, "InternalArticleEvidence")
@@ -46,9 +44,9 @@ def _report_type() -> Any:
 
 
 def _review_report_type() -> Any:
-    import app.agent.evidence_collection as evidence_collection_package
+    import app.agent.evidence_review as evidence_review_package
 
-    return _required_attribute(evidence_collection_package, "EvidenceReviewReport")
+    return _required_attribute(evidence_review_package, "EvidenceReviewReport")
 
 
 def _report(**overrides: object) -> Any:

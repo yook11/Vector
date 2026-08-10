@@ -22,8 +22,10 @@ from app.agent.answering.evidence_answer.contract import (
     EvidenceAnswerOutcome,
     EvidenceAnswerUnavailable,
 )
-from app.agent.evidence_collection import Researcher
-from app.agent.evidence_collection.evidence_review import EvidenceReviewer
+from app.agent.evidence_collection import NewsCollector, Researcher
+from app.agent.evidence_collection import (
+    news_collector as news_collector_module,
+)
 from app.agent.evidence_collection.external_search import (
     ExternalResearchRuntime,
     ExternalSearchCandidate,
@@ -37,6 +39,7 @@ from app.agent.evidence_collection.internal_search import (
     InternalArticleContent,
     InternalArticleSearchHit,
 )
+from app.agent.evidence_review import EvidenceReviewer
 from app.agent.planning.contract import (
     ExternalResearchTask,
     PlanningRequest,
@@ -98,7 +101,7 @@ def _review_draft(
     *,
     missing: list[str] | None = None,
 ) -> Any:
-    from app.agent.evidence_collection.evidence_review import EvidenceReviewDraft
+    from app.agent.evidence_review import EvidenceReviewDraft
 
     return EvidenceReviewDraft.model_validate(
         {"selections": selections or [], "missing": missing or []}
@@ -442,7 +445,12 @@ def _runner(
         planner=_Planner(
             _plan(tasks, target_time_window=target_time_window),
         ),
-        researcher=Researcher(internal_search=_EmptyInternalSearch(), events=events),
+        collector=NewsCollector(
+            researcher=Researcher(
+                internal_search=_EmptyInternalSearch(), events=events
+            ),
+            requested_agent_count=requested_agent_count,
+        ),
         external_runtime_factory=factory,
         direct_answerer=_UnreachableDirectAnswerer(),
         evidence_answerer=answerer,
@@ -454,7 +462,6 @@ def _runner(
             context_preparer=_Preparer(),
             phases_factory=lambda: phases,
             events=events,
-            requested_external_agent_count=requested_agent_count,
         ),
         answerer,
         factory,
@@ -510,23 +517,22 @@ def _record_and_shorten_pipeline_timeouts(
     return observed
 
 
-def test_answering_runner_accepts_external_event_and_requested_count_dependencies() -> (
-    None
-):
+def test_runner_accepts_events_and_collector_accepts_requested_count() -> None:
     parameters = inspect.signature(AnsweringRunner).parameters
+    collector_parameters = inspect.signature(NewsCollector).parameters
 
     assert (
-        tuple(parameters)[-2:],
+        tuple(parameters)[-1:],
         parameters["events"].default,
-        parameters["requested_external_agent_count"].default,
-    ) == (("events", "requested_external_agent_count"), None, None)
+        collector_parameters["requested_agent_count"].default,
+    ) == (("events",), None, None)
 
 
 def test_answering_phases_owns_runtime_factory_without_external_search_port() -> None:
     """保証するテスト条件 18(重複所有): field名のみのraw dataclass field確認。"""
     assert tuple(AnsweringPhases.__dataclass_fields__) == (
         "planner",
-        "researcher",
+        "collector",
         "external_runtime_factory",
         "direct_answerer",
         "evidence_answerer",
@@ -668,7 +674,7 @@ async def test_external_runner_resolves_target_time_window_once_per_branch(
     target_time_window: TargetTimeWindow | None,
     expected_tool_call_count: int,
 ) -> None:
-    original_resolver = answering_runner_module.resolve_external_search_date_filter
+    original_resolver = news_collector_module.resolve_external_search_date_filter
     resolver_calls: list[tuple[TargetTimeWindow | None, datetime]] = []
 
     def spy(
@@ -680,7 +686,7 @@ async def test_external_runner_resolves_target_time_window_once_per_branch(
         return original_resolver(target, as_of=as_of)
 
     monkeypatch.setattr(
-        answering_runner_module,
+        news_collector_module,
         "resolve_external_search_date_filter",
         spy,
     )
@@ -719,7 +725,7 @@ async def test_naive_as_of_propagates_before_external_activity_or_observability(
     capfire: CaptureLogfire,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    original_resolver = answering_runner_module.resolve_external_search_date_filter
+    original_resolver = news_collector_module.resolve_external_search_date_filter
     resolver_calls: list[tuple[TargetTimeWindow | None, datetime]] = []
     naive_as_of = datetime(2026, 7, 20, 9, 30)
 
@@ -732,7 +738,7 @@ async def test_naive_as_of_propagates_before_external_activity_or_observability(
         return original_resolver(target, as_of=as_of)
 
     monkeypatch.setattr(
-        answering_runner_module,
+        news_collector_module,
         "resolve_external_search_date_filter",
         spy,
     )
@@ -1123,7 +1129,7 @@ async def test_reviewer_failure_after_two_attempts_becomes_failed_review_report(
     """runnerがreviewer失敗をreview=failed reportへ写す結線を保証する。
 
     attempt/timeout/失敗分類の詳細な組み合わせは
-    tests/agent/evidence_collection/evidence_review/test_reviewer.py が正本。
+    tests/agent/evidence_review/test_reviewer.py が正本。
     """
     captured = _capture_external_outcome(monkeypatch)
     failure = AgentResponseInvalidError(AgentResponseDefect.RESPONSE_NOT_JSON)
@@ -1341,7 +1347,11 @@ async def test_evidence_selected_event_count_is_internal_plus_external() -> None
     )
     phases = AnsweringPhases(
         planner=_Planner(_plan([_task("combined evidence")])),
-        researcher=Researcher(internal_search=_OneInternalHitSearch(), events=events),
+        collector=NewsCollector(
+            researcher=Researcher(
+                internal_search=_OneInternalHitSearch(), events=events
+            )
+        ),
         external_runtime_factory=factory,
         direct_answerer=_UnreachableDirectAnswerer(),
         evidence_answerer=answerer,
@@ -1589,7 +1599,10 @@ async def test_cross_task_same_url_both_kept_and_scope_is_fresh_per_run() -> Non
     factory = _Factory([first_runtime, second_runtime])
     phases = AnsweringPhases(
         planner=_Planner(_plan(tasks)),
-        researcher=Researcher(internal_search=_EmptyInternalSearch()),
+        collector=NewsCollector(
+            researcher=Researcher(internal_search=_EmptyInternalSearch()),
+            requested_agent_count=1,
+        ),
         external_runtime_factory=factory,
         direct_answerer=_UnreachableDirectAnswerer(),
         evidence_answerer=answerer,
@@ -1599,7 +1612,6 @@ async def test_cross_task_same_url_both_kept_and_scope_is_fresh_per_run() -> Non
         input_safety_checker=AllowInputSafetyChecker(),
         context_preparer=_Preparer(),
         phases_factory=lambda: phases,
-        requested_external_agent_count=1,
     )
 
     await _run(runner)
@@ -1695,4 +1707,4 @@ async def test_provider_timeout_backstop_cancels_tool_and_skips_reviewer(
 
 
 # reviewerのtimeout backstop attempt/retry契約は
-# tests/agent/evidence_collection/evidence_review/test_reviewer.py が正本。
+# tests/agent/evidence_review/test_reviewer.py が正本。

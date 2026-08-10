@@ -19,6 +19,8 @@ _ONE_DAY = timedelta(days=1)
 class ExternalSearchDateFilterResolutionError(Exception):
     """利用不能なpublication期間を閉じたreasonで通知する。"""
 
+    reason: TimeFilterFailureReason
+
     def __init__(self, reason: TimeFilterFailureReason) -> None:
         self.reason = reason
         super().__init__(reason)

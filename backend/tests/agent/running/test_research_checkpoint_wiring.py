@@ -21,9 +21,7 @@ from app.agent.answering.evidence_answer.contract import (
     EvidenceAnswerDraft,
     EvidenceAnswerOutcome,
 )
-from app.agent.evidence_collection import Researcher
-from app.agent.evidence_collection.evidence_review import EvidenceReviewer
-from app.agent.evidence_collection.evidence_review.contract import EvidenceReviewDraft
+from app.agent.evidence_collection import NewsCollector, Researcher
 from app.agent.evidence_collection.external_search.contract import (
     ExternalQueryDraft,
     ExternalResearchRuntime,
@@ -31,6 +29,8 @@ from app.agent.evidence_collection.external_search.contract import (
     ExternalSearchProviderError,
     ExternalSearchToolFailureReason,
 )
+from app.agent.evidence_review import EvidenceReviewer
+from app.agent.evidence_review.contract import EvidenceReviewDraft
 from app.agent.planning.contract import (
     DirectAnswerPlan,
     PlanningRequest,
@@ -203,7 +203,10 @@ def _search_runner(
 ) -> AnsweringRunner:
     phases = AnsweringPhases(
         planner=_Planner(plan),
-        researcher=Researcher(internal_search=_InternalTool()),
+        collector=NewsCollector(
+            researcher=Researcher(internal_search=_InternalTool()),
+            requested_agent_count=1,
+        ),
         reviewer=EvidenceReviewer(),
         external_runtime_factory=_RuntimeFactory(
             ExternalResearchRuntime(
@@ -219,7 +222,6 @@ def _search_runner(
         input_safety_checker=AllowInputSafetyChecker(),
         context_preparer=_Preparer(),
         phases_factory=lambda: phases,
-        requested_external_agent_count=1,
     )
 
 
@@ -278,7 +280,7 @@ async def test_direct_answer_plan_leaves_checkpoint_none() -> None:
     """記録フロー6: 外部検索を実行しないdirect_answer Runはcheckpointを持たない。"""
     phases = AnsweringPhases(
         planner=_Planner(DirectAnswerPlan()),
-        researcher=Researcher(internal_search=_InternalTool()),
+        collector=NewsCollector(researcher=Researcher(internal_search=_InternalTool())),
         reviewer=EvidenceReviewer(),
         external_runtime_factory=_UnreachableRuntimeFactory(),
         direct_answerer=_DirectAnswerer(),
@@ -353,7 +355,7 @@ async def test_builder_exception_yields_none_checkpoint_and_continues_answering(
         raise RuntimeError("checkpoint build boom")
 
     monkeypatch.setattr(
-        "app.agent.running.answering_runner.build_research_checkpoint",
+        "app.agent.research_checkpoint.builder.build_research_checkpoint",
         _raise_build_failure,
     )
     tool = _ExternalTool(

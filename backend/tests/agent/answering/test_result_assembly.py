@@ -21,8 +21,8 @@ from app.agent.answering.evidence_answer.contract import EvidenceAnswerDraft
 from app.agent.answering.evidence_answer.evidence import AnswerEvidenceItem
 from app.agent.answering.result_assembly import assemble_evidence_result
 from app.agent.contract import InternalArticleSource
-from app.agent.evidence_collection import EvidenceCollectionOutcome
 from app.agent.evidence_collection.external_search import ExternalSearchOutcome
+from app.agent.evidence_review import EvidenceCollectionOutcome
 from app.agent.planning.contract import ExternalResearchTask, TargetTimeWindow
 
 _TIME_FILTER_MISSING = "指定された公開期間を外部検索へ適用できませんでした"
@@ -68,12 +68,12 @@ def _report_type() -> Any:
 
 
 def _review_report_type() -> Any:
-    review_report_type = getattr(
-        evidence_collection_package, "EvidenceReviewReport", None
-    )
+    import app.agent.evidence_review as evidence_review_package
+
+    review_report_type = getattr(evidence_review_package, "EvidenceReviewReport", None)
     if review_report_type is None:
         pytest.fail(
-            "S1: app.agent.evidence_collection facade must export EvidenceReviewReport"
+            "S1: app.agent.evidence_review facade must export EvidenceReviewReport"
         )
     return review_report_type
 
