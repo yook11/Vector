@@ -16,7 +16,7 @@ from app.agent.contract import (
     AnswerQuestionResult,
     AnswerSource,
 )
-from app.agent.evidence_review import EvidenceCollectionOutcome
+from app.agent.evidence_review import ReviewedEvidence
 from app.agent.planning.contract import SearchPlan
 
 __all__ = ["assemble_evidence_result"]
@@ -36,7 +36,7 @@ _UNAVAILABLE_MISSING = "回答生成に必要な根拠または応答形式が�
 def assemble_evidence_result(
     *,
     plan: SearchPlan,
-    outcome: EvidenceCollectionOutcome,
+    outcome: ReviewedEvidence,
     evidence: list[AnswerEvidenceItem],
     answer_outcome: EvidenceAnswerOutcome,
 ) -> AnswerQuestionResult:
@@ -88,7 +88,7 @@ def _sources_for_citations(
 def _assemble_evidence_result(
     *,
     plan: SearchPlan,
-    outcome: EvidenceCollectionOutcome,
+    outcome: ReviewedEvidence,
     answer: str,
     sources: list[AnswerSource],
     unavailable_missing: list[str],
@@ -124,7 +124,7 @@ def _derive_evidence_status(
 
 def _missing_aspects(
     *,
-    outcome: EvidenceCollectionOutcome,
+    outcome: ReviewedEvidence,
     unavailable_missing: list[str],
     include_retrieval_empty_missing: bool,
 ) -> list[str]:
@@ -139,7 +139,7 @@ def _missing_aspects(
     return _deduplicate(values)
 
 
-def _has_incomplete_task(outcome: EvidenceCollectionOutcome) -> bool:
+def _has_incomplete_task(outcome: ReviewedEvidence) -> bool:
     if outcome.review.review == "failed":
         return True
     return any(
@@ -148,7 +148,7 @@ def _has_incomplete_task(outcome: EvidenceCollectionOutcome) -> bool:
     )
 
 
-def _external_task_status_missing(outcome: EvidenceCollectionOutcome) -> list[str]:
+def _external_task_status_missing(outcome: ReviewedEvidence) -> list[str]:
     """収集の失敗表明(time filter文言)だけをtask単位で連結する。
 
     Run全体の不足(missing)はreviewerがRun単位で1本返すため、

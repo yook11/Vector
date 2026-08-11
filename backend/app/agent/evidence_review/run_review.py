@@ -10,11 +10,10 @@ from app.agent.evidence_collection.external_search.contract import (
     ExternalSearchOutcome,
 )
 from app.agent.evidence_review.contract import (
-    EvidenceCollectionOutcome,
     EvidenceReviewReport,
     InternalArticleEvidence,
     ReviewedEvidence,
-    ReviewTaskCandidates,
+    RunReviewResult,
 )
 from app.agent.evidence_review.reviewer import EvidenceReviewer
 
@@ -27,12 +26,12 @@ async def review_collected_news(
     reviewer: EvidenceReviewer,
     external: ExternalResearchRuntime,
     as_of: datetime,
-) -> ReviewedEvidence:
+) -> RunReviewResult:
     """候補ゼロのRunは精査せず、精査失敗のRunは根拠ゼロで閉じる。"""
     task_reports = [collected.report for collected in collected_news.tasks]
     if not collected_news.has_candidates:
-        return ReviewedEvidence(
-            outcome=_closed_outcome(
+        return RunReviewResult(
+            evidence=_closed_evidence(
                 review=EvidenceReviewReport(review="skipped_empty"),
                 task_reports=task_reports,
                 collected_news=collected_news,
@@ -41,21 +40,13 @@ async def review_collected_news(
         )
 
     outcome = await reviewer.review(
-        tasks=[
-            ReviewTaskCandidates(
-                task_index=collected.task_index,
-                research_goal=collected.research_goal,
-                internal_hits=collected.internal_hits,
-                external_candidates=collected.external_candidates,
-            )
-            for collected in collected_news.tasks
-        ],
+        tasks=collected_news.tasks,
         as_of=as_of,
         reviewer_runtime=external.reviewer_runtime,
     )
     if outcome.failure_reason is not None:
-        return ReviewedEvidence(
-            outcome=_closed_outcome(
+        return RunReviewResult(
+            evidence=_closed_evidence(
                 review=EvidenceReviewReport(
                     review="failed",
                     review_failure_reason=outcome.failure_reason,
@@ -69,8 +60,8 @@ async def review_collected_news(
     deduplicated_internal_evidence, internal_deduplicated_count = (
         _deduplicate_internal_evidence_by_curation_id(outcome.internal_evidence)
     )
-    return ReviewedEvidence(
-        outcome=EvidenceCollectionOutcome(
+    return RunReviewResult(
+        evidence=ReviewedEvidence(
             internal_evidence=deduplicated_internal_evidence,
             internal_deduplicated_count=internal_deduplicated_count,
             external_search=ExternalSearchOutcome(
@@ -91,14 +82,14 @@ async def review_collected_news(
     )
 
 
-def _closed_outcome(
+def _closed_evidence(
     *,
     review: EvidenceReviewReport,
     task_reports: list[ResearchTaskReport],
     collected_news: CollectedNews,
-) -> EvidenceCollectionOutcome:
+) -> ReviewedEvidence:
     """精査を呼ばなかった/失敗したRunを根拠ゼロで閉じる。"""
-    return EvidenceCollectionOutcome(
+    return ReviewedEvidence(
         internal_evidence=[],
         internal_deduplicated_count=0,
         external_search=ExternalSearchOutcome(

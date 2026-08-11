@@ -15,6 +15,7 @@ from typing import Any
 
 import pytest
 
+from app.agent.evidence_collection.contract import CollectedTask, ResearchTaskReport
 from app.agent.evidence_collection.external_search.contract import (
     CANDIDATE_SNIPPET_MAX_CHARS,
     ExternalSearchCandidate,
@@ -51,28 +52,30 @@ def _contracts() -> ModuleType:
     return import_module("app.agent.evidence_review.contract")
 
 
-def _task_candidates_type() -> Any:
-    value = getattr(_contracts(), "ReviewTaskCandidates", None)
-    if value is None:
-        pytest.fail(
-            "evidence_review contract must export ReviewTaskCandidates",
-            pytrace=False,
-        )
-    return value
-
-
-def _task_candidates(
+def _collected_task(
     *,
     task_index: int,
     research_goal: str = "goal",
     internal_hits: list[InternalArticleSearchHit] | None = None,
     external_candidates: list[ExternalSearchCandidate] | None = None,
-) -> Any:
-    return _task_candidates_type()(
+) -> CollectedTask:
+    hits = internal_hits or []
+    candidates = external_candidates or []
+    # report は policy が読まない収集診断のため、成功形の最小値で埋める。
+    return CollectedTask(
         task_index=task_index,
         research_goal=research_goal,
-        internal_hits=internal_hits or [],
-        external_candidates=external_candidates or [],
+        internal_hits=hits,
+        external_candidates=candidates,
+        executed_queries=(),
+        report=ResearchTaskReport(
+            task_index=task_index,
+            research_goal=research_goal,
+            internal_collection="succeeded",
+            external_collection="succeeded",
+            internal_candidate_count=len(hits),
+            external_candidate_count=len(candidates),
+        ),
     )
 
 
@@ -178,8 +181,8 @@ def test_task_groups_are_ordered_by_task_index_regardless_of_input_order() -> No
     """グループの並びがtask_index昇順である(入力順に依存しない)。"""
     build_task_groups = _function("build_review_task_groups")
     tasks = [
-        _task_candidates(task_index=1, research_goal="goal-B"),
-        _task_candidates(task_index=0, research_goal="goal-A"),
+        _collected_task(task_index=1, research_goal="goal-B"),
+        _collected_task(task_index=0, research_goal="goal-A"),
     ]
 
     groups = build_task_groups(tasks)
@@ -192,7 +195,7 @@ def test_task_groups_place_internal_candidates_before_external_within_a_group() 
     """各グループ内は内部候補が先、外部候補が後。"""
     build_task_groups = _function("build_review_task_groups")
     tasks = [
-        _task_candidates(
+        _collected_task(
             task_index=0,
             internal_hits=[
                 _internal_hit(
@@ -233,7 +236,7 @@ def test_task_groups_assign_a_run_wide_index_without_duplication_across_groups()
     """indexがRun全体の通し番号であり、グループをまたいで重複しない。"""
     build_task_groups = _function("build_review_task_groups")
     tasks = [
-        _task_candidates(
+        _collected_task(
             task_index=0,
             internal_hits=[
                 _internal_hit(
@@ -244,7 +247,7 @@ def test_task_groups_assign_a_run_wide_index_without_duplication_across_groups()
                 _external_candidate("https://example.com/a", title="A-ext")
             ],
         ),
-        _task_candidates(
+        _collected_task(
             task_index=1,
             internal_hits=[
                 _internal_hit(
@@ -272,8 +275,8 @@ def test_task_groups_keep_a_task_with_no_candidates_as_an_empty_group() -> None:
     """候補が内外ともゼロのtaskもグループとして残る(欠番を作らない)。"""
     build_task_groups = _function("build_review_task_groups")
     tasks = [
-        _task_candidates(task_index=0, research_goal="goal-A"),
-        _task_candidates(
+        _collected_task(task_index=0, research_goal="goal-A"),
+        _collected_task(
             task_index=1,
             research_goal="goal-B",
             internal_hits=[
@@ -282,7 +285,7 @@ def test_task_groups_keep_a_task_with_no_candidates_as_an_empty_group() -> None:
                 )
             ],
         ),
-        _task_candidates(task_index=2, research_goal="goal-C"),
+        _collected_task(task_index=2, research_goal="goal-C"),
     ]
 
     groups = build_task_groups(tasks)
@@ -305,7 +308,7 @@ def test_task_groups_map_internal_source_name_to_none_and_truncate_snippet() -> 
         key_points=["point-a"],
         published_at=_AS_OF,
     )
-    tasks = [_task_candidates(task_index=0, internal_hits=[hit])]
+    tasks = [_collected_task(task_index=0, internal_hits=[hit])]
 
     groups = build_task_groups(tasks)
 
@@ -329,7 +332,7 @@ def test_build_evidence_drops_out_of_range_index_across_all_tasks() -> None:
     """統合index空間の範囲外(全taskの合計候補数以上)をdrop。"""
     build_evidence = _function("build_review_evidence")
     tasks = [
-        _task_candidates(
+        _collected_task(
             task_index=0,
             internal_hits=[
                 _internal_hit(
@@ -363,7 +366,7 @@ def test_build_evidence_drops_duplicate_index_and_caps_at_the_run_wide_limit() -
     """重複indexと採用上限(現行値15、Run全体で共有)超過をdrop。"""
     build_evidence = _function("build_review_evidence")
     tasks = [
-        _task_candidates(
+        _collected_task(
             task_index=0,
             internal_hits=[
                 _internal_hit(
@@ -404,7 +407,7 @@ def test_build_evidence_caps_selections_shared_across_multiple_tasks() -> None:
     """
     build_evidence = _function("build_review_evidence")
     tasks = [
-        _task_candidates(
+        _collected_task(
             task_index=0,
             internal_hits=[
                 _internal_hit(
@@ -416,7 +419,7 @@ def test_build_evidence_caps_selections_shared_across_multiple_tasks() -> None:
                 for index in range(8)
             ],
         ),
-        _task_candidates(
+        _collected_task(
             task_index=1,
             internal_hits=[
                 _internal_hit(
@@ -446,7 +449,7 @@ def test_build_evidence_restores_task_and_candidate_from_a_cross_task_index() ->
     """通しindexから所属taskと候補が復元され、source_refがf"{task_index}-{index}"になる。"""
     build_evidence = _function("build_review_evidence")
     tasks = [
-        _task_candidates(
+        _collected_task(
             task_index=2,
             internal_hits=[
                 _internal_hit(
@@ -457,7 +460,7 @@ def test_build_evidence_restores_task_and_candidate_from_a_cross_task_index() ->
                 ),
             ],
         ),
-        _task_candidates(
+        _collected_task(
             task_index=5,
             external_candidates=[
                 _external_candidate("https://example.com/b1", title="B-ext-1"),
@@ -495,7 +498,7 @@ def test_build_evidence_uses_task_index_ascending_order_regardless_of_input_orde
     """
     build_evidence = _function("build_review_evidence")
     tasks = [
-        _task_candidates(
+        _collected_task(
             task_index=1,
             internal_hits=[
                 _internal_hit(
@@ -503,7 +506,7 @@ def test_build_evidence_uses_task_index_ascending_order_regardless_of_input_orde
                 )
             ],
         ),
-        _task_candidates(
+        _collected_task(
             task_index=0,
             internal_hits=[
                 _internal_hit(
@@ -532,7 +535,7 @@ def test_build_evidence_keeps_index_alignment_when_a_task_has_no_candidates() ->
     """候補ゼロのtaskが混ざってもindexの対応がずれない。"""
     build_evidence = _function("build_review_evidence")
     tasks = [
-        _task_candidates(
+        _collected_task(
             task_index=0,
             internal_hits=[
                 _internal_hit(
@@ -540,8 +543,8 @@ def test_build_evidence_keeps_index_alignment_when_a_task_has_no_candidates() ->
                 )
             ],
         ),
-        _task_candidates(task_index=1),
-        _task_candidates(
+        _collected_task(task_index=1),
+        _collected_task(
             task_index=2,
             internal_hits=[
                 _internal_hit(
@@ -577,7 +580,7 @@ def test_build_evidence_reconstructs_internal_provenance_and_keeps_claim() -> No
         key_points=["key point one"],
         published_at=_AS_OF,
     )
-    tasks = [_task_candidates(task_index=1, internal_hits=[hit])]
+    tasks = [_collected_task(task_index=1, internal_hits=[hit])]
     result = _review_result(
         _policy(),
         [{"candidate_index": 0, "claim": "見出しの主張", "why_selected": "選定理由"}],

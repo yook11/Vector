@@ -6,6 +6,7 @@ Run内の全taskの候補をtask_index昇順・通しindexでグループ化し�
 
 from __future__ import annotations
 
+from app.agent.evidence_collection.contract import CollectedTask
 from app.agent.evidence_collection.external_search.contract import (
     CANDIDATE_SNIPPET_MAX_CHARS,
     ExternalSearchCandidate,
@@ -16,13 +17,12 @@ from app.agent.evidence_collection.internal_search.contract import (
 )
 from app.agent.evidence_review.contract import (
     EVIDENCE_REVIEW_ADOPTION_LIMIT,
-    EvidenceCandidateInput,
+    EvidenceCandidateProjection,
     EvidenceReviewDraft,
     EvidenceReviewResult,
     EvidenceReviewTaskGroup,
     InternalArticleEvidence,
     ReviewSelection,
-    ReviewTaskCandidates,
 )
 
 __all__ = [
@@ -41,7 +41,7 @@ REVIEWER_ERROR_REASON = "reviewer_error"
 
 
 def build_review_task_groups(
-    tasks: list[ReviewTaskCandidates],
+    tasks: list[CollectedTask],
 ) -> tuple[EvidenceReviewTaskGroup, ...]:
     """Run内の全taskをtask_index昇順に並べ、通しindexのcandidate群でグループ化する。
 
@@ -63,13 +63,13 @@ def build_review_task_groups(
 
 
 def _build_group_candidates(
-    task: ReviewTaskCandidates,
+    task: CollectedTask,
     *,
     start_index: int,
-) -> tuple[tuple[EvidenceCandidateInput, ...], int]:
+) -> tuple[tuple[EvidenceCandidateProjection, ...], int]:
     """内部候補を先・外部候補を後にした、通しindexのgroup内candidate列を作る。"""
     projection = [
-        EvidenceCandidateInput(
+        EvidenceCandidateProjection(
             index=start_index + index,
             title=hit.content.title,
             source_name=None,
@@ -80,7 +80,7 @@ def _build_group_candidates(
     ]
     offset = start_index + len(task.internal_hits)
     projection.extend(
-        EvidenceCandidateInput(
+        EvidenceCandidateProjection(
             index=offset + position,
             title=candidate.title,
             source_name=candidate.source_name,
@@ -105,7 +105,7 @@ def _internal_candidate_snippet(hit: InternalArticleSearchHit) -> str:
 
 def build_review_evidence(
     *,
-    tasks: list[ReviewTaskCandidates],
+    tasks: list[CollectedTask],
     selection_result: EvidenceReviewResult,
 ) -> tuple[list[InternalArticleEvidence], list[ExternalSearchEvidence], int]:
     """Run全体の通しindexのselectionから、範囲外/重複/Run単位上限超過を
@@ -161,7 +161,7 @@ type _IndexMapEntry = tuple[
 ]
 
 
-def _build_index_map(tasks: list[ReviewTaskCandidates]) -> list[_IndexMapEntry]:
+def _build_index_map(tasks: list[CollectedTask]) -> list[_IndexMapEntry]:
     """build_review_task_groupsと同じ並びで、通しindex→(task_index, 候補)を作る。"""
     index_map: list[_IndexMapEntry] = []
     for task in sorted(tasks, key=lambda task: task.task_index):

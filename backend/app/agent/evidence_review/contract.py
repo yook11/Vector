@@ -25,18 +25,13 @@ from app.agent.evidence_collection.external_search.contract import (
     EVIDENCE_CLAIM_MAX_CHARS,
     EVIDENCE_WHY_SELECTED_MAX_CHARS,
     MISSING_ITEM_MAX_CHARS,
-    ExternalSearchCandidate,
     ExternalSearchEvidence,
-)
-from app.agent.evidence_collection.internal_search.contract import (
-    InternalArticleSearchHit,
 )
 
 __all__ = [
     "EVIDENCE_REVIEW_ADOPTION_LIMIT",
     "EVIDENCE_REVIEW_MISSING_LIMIT",
-    "EvidenceCandidateInput",
-    "EvidenceCollectionOutcome",
+    "EvidenceCandidateProjection",
     "EvidenceReviewDraft",
     "EvidenceReviewInput",
     "EvidenceReviewOutcome",
@@ -47,13 +42,13 @@ __all__ = [
     "InternalArticleEvidence",
     "ReviewSelection",
     "ReviewSelectionDraft",
-    "ReviewTaskCandidates",
     "ReviewedEvidence",
+    "RunReviewResult",
 ]
 
 
 @dataclass(frozen=True, slots=True)
-class EvidenceCandidateInput:
+class EvidenceCandidateProjection:
     """Reviewerへ渡す内外統合candidate projection。URLを含まない。"""
 
     index: int
@@ -64,22 +59,12 @@ class EvidenceCandidateInput:
 
 
 @dataclass(frozen=True, slots=True)
-class ReviewTaskCandidates:
-    """1 taskの精査前候補。EvidenceReviewer.review()がtask単位で受け取る入力。"""
-
-    task_index: int
-    research_goal: str
-    internal_hits: list[InternalArticleSearchHit]
-    external_candidates: list[ExternalSearchCandidate]
-
-
-@dataclass(frozen=True, slots=True)
 class EvidenceReviewTaskGroup:
     """Reviewerへ渡す、1 task分のgoalとcandidate projection。"""
 
     task_index: int
     research_goal: str
-    candidates: tuple[EvidenceCandidateInput, ...]
+    candidates: tuple[EvidenceCandidateProjection, ...]
 
 
 @dataclass(frozen=True, slots=True)
@@ -254,8 +239,8 @@ class EvidenceReviewReport(BaseModel):
         return self
 
 
-class EvidenceCollectionOutcome(BaseModel):
-    """plan 実行の純粋な結果。task 単位の収集reportとRun単位の精査reportを持つ。"""
+class ReviewedEvidence(BaseModel):
+    """精査を経て確定した採用根拠。収集/精査それぞれのreportを併せ持つ。"""
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
@@ -308,8 +293,8 @@ class EvidenceCollectionOutcome(BaseModel):
 
 
 @dataclass(frozen=True, slots=True)
-class ReviewedEvidence:
+class RunReviewResult:
     """Run単位精査の確定結果。review_outcomeは精査が成功した場合のみ持つ。"""
 
-    outcome: EvidenceCollectionOutcome
+    evidence: ReviewedEvidence
     review_outcome: EvidenceReviewOutcome | None

@@ -6,7 +6,7 @@ import json
 from typing import Final
 
 from app.agent.evidence_review.contract import (
-    EvidenceCandidateInput,
+    EvidenceCandidateProjection,
     EvidenceReviewInput,
     EvidenceReviewTaskGroup,
 )
@@ -86,7 +86,7 @@ def _render_task_group(group: EvidenceReviewTaskGroup) -> str:
 
 
 def _render_candidates(
-    candidates: tuple[EvidenceCandidateInput, ...],
+    candidates: tuple[EvidenceCandidateProjection, ...],
 ) -> str:
     return json.dumps(
         [_render_candidate(candidate) for candidate in candidates],
@@ -95,7 +95,7 @@ def _render_candidates(
     )
 
 
-def _render_candidate(candidate: EvidenceCandidateInput) -> dict[str, object]:
+def _render_candidate(candidate: EvidenceCandidateProjection) -> dict[str, object]:
     published_at = (
         candidate.published_at.isoformat()
         if candidate.published_at is not None
