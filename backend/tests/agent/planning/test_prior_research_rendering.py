@@ -75,7 +75,7 @@ def test_prior_research_section_appears_between_conversation_and_repair() -> Non
     checkpoint = _checkpoint()
     attempt = PlanningAttemptInput(
         request=_request(prior_research=(checkpoint,)),
-        previous_error="research_tasks is required",
+        repair_context="research_tasks is required",
     )
 
     rendered = render_planning_input(attempt)

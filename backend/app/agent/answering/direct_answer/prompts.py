@@ -67,7 +67,7 @@ DIRECT_ANSWER_REPAIR_TEMPLATE: Final[str] = """
 同じ質問に対して、空でない日本語の回答本文だけを返してください。
 
 <untrusted_input>
-{previous_error}
+{repair_context}
 </untrusted_input>
 """
 
@@ -98,10 +98,10 @@ def render_direct_answer_input(input: DirectAnswerInput) -> str:
     )
     if input.previous_output_truncated:
         return rendered + _TRUNCATION_REPAIR_BLOCK
-    if input.previous_error is None:
+    if input.repair_context is None:
         return rendered
     return rendered + DIRECT_ANSWER_REPAIR_TEMPLATE.format(
-        previous_error=sanitize_for_untrusted_block(input.previous_error)
+        repair_context=sanitize_for_untrusted_block(input.repair_context)
     )
 
 

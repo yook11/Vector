@@ -71,14 +71,14 @@ def _render(
     request: AnsweringRequest | None = None,
     evidence: tuple[AnswerEvidenceItem, ...] = (),
     target_time_window: TargetTimeWindow | None = None,
-    previous_error: str | None = None,
+    repair_context: str | None = None,
     review_missing: tuple[str, ...] | None = None,
 ) -> str:
     input_kwargs: dict[str, object] = {
         "request": _request() if request is None else request,
         "evidence": evidence,
         "target_time_window": target_time_window,
-        "previous_error": previous_error,
+        "repair_context": repair_context,
     }
     # review_missing未指定のtestはS5の新fieldに依存しない既存契約だけを
     # 検証するため、明示指定時だけkwargへ足す(既存testを巻き込まない)。
@@ -105,7 +105,7 @@ def test_renderer_sanitizes_all_untrusted_boundaries() -> None:
         ),
         evidence=(_evidence(),),
         target_time_window=TargetTimeWindow(kind="today"),
-        previous_error=attack,
+        repair_context=attack,
     )
 
     assert "[/untrusted_input]" in rendered
@@ -158,7 +158,7 @@ def test_renderer_displays_typed_window_and_none_with_the_shared_prompt_value() 
 
 
 def test_no_evidence_and_repair_paths_remain_model_visible_input() -> None:
-    rendered = _render(previous_error="unknown citation ref: 9")
+    rendered = _render(repair_context="unknown citation ref: 9")
 
     assert "引用できる evidence は 0 件です" in rendered
     assert "citation marker を書かない" in rendered
@@ -237,7 +237,7 @@ def _input_with_truncation_notice(
             request=_request(),
             evidence=(),
             target_time_window=None,
-            previous_error=None,
+            repair_context=None,
             previous_output_truncated=previous_output_truncated,
         )
     except TypeError:

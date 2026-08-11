@@ -79,7 +79,7 @@ EVIDENCE_ANSWER_REPAIR_TEMPLATE: Final[str] = """
 同じ質問と evidence に対して、次のエラーを修正してください。
 
 <untrusted_input>
-{previous_error}
+{repair_context}
 </untrusted_input>
 """
 
@@ -132,9 +132,9 @@ def render_evidence_answer_input(input: EvidenceAnswerInput) -> str:
         )
     if input.previous_output_truncated:
         rendered += _TRUNCATION_REPAIR_BLOCK
-    if input.previous_error is not None:
+    if input.repair_context is not None:
         rendered += EVIDENCE_ANSWER_REPAIR_TEMPLATE.format(
-            previous_error=sanitize_for_untrusted_block(input.previous_error)
+            repair_context=sanitize_for_untrusted_block(input.repair_context)
         )
     return rendered
 

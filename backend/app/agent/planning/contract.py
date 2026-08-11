@@ -179,7 +179,8 @@ class PlanningAttemptInput:
     """Plannerの1 attemptに渡す実行時input。"""
 
     request: PlanningRequest
-    previous_error: str | None = None
+    # 前attemptが失敗した場合のみ、どこで何が失敗したかが入る(初回attemptはNone)。
+    repair_context: str | None = None
 
 
 class ResearchTaskDraft(BaseModel):

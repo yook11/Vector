@@ -86,6 +86,7 @@ _PRIOR_RESEARCH_INPUT_TEMPLATE: Final[str] = """
 </untrusted_prior_research>
 """
 
+# ラベル "previous_error:" はmodel可視のprompt文字列であり、version維持のため据え置く。
 _PLANNER_REPAIR_INPUT_TEMPLATE: Final[str] = """\
 
 # Repair Context
@@ -93,7 +94,7 @@ _PLANNER_REPAIR_INPUT_TEMPLATE: Final[str] = """\
 同じ質問に対して、次のエラーを修正してください。
 
 <untrusted_input>
-previous_error: {previous_error}
+previous_error: {repair_context}
 </untrusted_input>
 """
 
@@ -115,10 +116,10 @@ def render_planning_input(input: PlanningAttemptInput) -> str:
         task_input += _PRIOR_RESEARCH_INPUT_TEMPLATE.format(
             records=_render_prior_research_records(request.prior_research)
         )
-    if input.previous_error is None:
+    if input.repair_context is None:
         return task_input
     return task_input + _PLANNER_REPAIR_INPUT_TEMPLATE.format(
-        previous_error=sanitize_for_untrusted_block(input.previous_error)
+        repair_context=sanitize_for_untrusted_block(input.repair_context)
     )
 
 

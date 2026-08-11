@@ -67,7 +67,7 @@ def test_evidence_answer_input_is_frozen_and_keeps_attempt_state_together() -> N
         "request",
         "evidence",
         "target_time_window",
-        "previous_error",
+        "repair_context",
         "previous_output_truncated",
         "review_missing",
     ]
@@ -79,7 +79,7 @@ def test_evidence_answer_input_is_frozen_and_keeps_attempt_state_together() -> N
         evidence=(),
         target_time_window=None,
     )
-    assert input.previous_error is None
+    assert input.repair_context is None
     assert input.previous_output_truncated is False
     assert input.review_missing == ()
     with pytest.raises(FrozenInstanceError):
