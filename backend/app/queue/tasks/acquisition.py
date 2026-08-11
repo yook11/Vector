@@ -28,6 +28,7 @@ from app.audit.stages.dispatch import (
     DispatchCadence,
     DispatchOutcomeCode,
 )
+from app.cloudwatch.emf import emit_count
 from app.collection.article_acquisition.failure_handling import (
     ArticleAcquisitionFailureHandler,
 )
@@ -340,6 +341,11 @@ async def _append_dispatch_run_failed(
     )
 
 
+# CloudWatch A1 alarm (供給ハートビート) が消費する契約名。Terraform 側と揃える。
+# cron dispatch の正常完了だけを 1 打点とし、admin 手動の dispatch_sources は数えない。
+_DISPATCH_RUN_METRIC = "dispatch_run"
+
+
 @broker_dispatch.task(
     task_name="dispatch_high",
     timeout=60,
@@ -349,7 +355,9 @@ async def _append_dispatch_run_failed(
 )
 async def dispatch_high(ctx: Context = TaskiqDepends()) -> dict:
     """HIGH tier のソースを dispatch する (15 分間隔)。"""
-    return await _dispatch(ctx.state.session_factory, cadence=FetchCadence.HIGH)
+    result = await _dispatch(ctx.state.session_factory, cadence=FetchCadence.HIGH)
+    emit_count(_DISPATCH_RUN_METRIC, dimensions={"cadence": FetchCadence.HIGH.value})
+    return result
 
 
 @broker_dispatch.task(
@@ -361,7 +369,9 @@ async def dispatch_high(ctx: Context = TaskiqDepends()) -> dict:
 )
 async def dispatch_medium(ctx: Context = TaskiqDepends()) -> dict:
     """MEDIUM tier のソースを dispatch する (1 時間間隔)。"""
-    return await _dispatch(ctx.state.session_factory, cadence=FetchCadence.MEDIUM)
+    result = await _dispatch(ctx.state.session_factory, cadence=FetchCadence.MEDIUM)
+    emit_count(_DISPATCH_RUN_METRIC, dimensions={"cadence": FetchCadence.MEDIUM.value})
+    return result
 
 
 @broker_dispatch.task(
@@ -373,7 +383,9 @@ async def dispatch_medium(ctx: Context = TaskiqDepends()) -> dict:
 )
 async def dispatch_low(ctx: Context = TaskiqDepends()) -> dict:
     """LOW tier のソースを dispatch する (6 時間間隔)。"""
-    return await _dispatch(ctx.state.session_factory, cadence=FetchCadence.LOW)
+    result = await _dispatch(ctx.state.session_factory, cadence=FetchCadence.LOW)
+    emit_count(_DISPATCH_RUN_METRIC, dimensions={"cadence": FetchCadence.LOW.value})
+    return result
 
 
 @broker_dispatch.task(
