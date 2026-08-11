@@ -16,6 +16,7 @@ from typing import Any
 
 import pytest
 
+from app.agent.evidence_collection.contract import CollectedTask, ResearchTaskReport
 from app.agent.evidence_collection.external_search.contract import (
     ExternalSearchCandidate,
 )
@@ -59,22 +60,30 @@ def _reviewer() -> Any:
     return reviewer_type()
 
 
-def _task_candidates_type() -> Any:
-    return _required_attribute(_contracts(), "ReviewTaskCandidates")
-
-
-def _task_candidates(
+def _collected_task(
     *,
     task_index: int,
     research_goal: str = "NVIDIA の最新動向を確認する",
     internal_hits: list[InternalArticleSearchHit] | None = None,
     external_candidates: list[ExternalSearchCandidate] | None = None,
-) -> Any:
-    return _task_candidates_type()(
+) -> CollectedTask:
+    hits = internal_hits or []
+    candidates = external_candidates or []
+    # report は reviewer が読まない収集診断のため、成功形の最小値で埋める。
+    return CollectedTask(
         task_index=task_index,
         research_goal=research_goal,
-        internal_hits=internal_hits or [],
-        external_candidates=external_candidates or [],
+        internal_hits=hits,
+        external_candidates=candidates,
+        executed_queries=(),
+        report=ResearchTaskReport(
+            task_index=task_index,
+            research_goal=research_goal,
+            internal_collection="succeeded",
+            external_collection="succeeded",
+            internal_candidate_count=len(hits),
+            external_candidate_count=len(candidates),
+        ),
     )
 
 
@@ -147,8 +156,8 @@ async def test_review_is_called_exactly_once_for_a_multi_task_run() -> None:
         [_draft([{"candidate_index": 0, "claim": "claim", "why_selected": "w"}])]
     )
     tasks = [
-        _task_candidates(task_index=0, internal_hits=[_internal_hit()]),
-        _task_candidates(task_index=1, external_candidates=[_external_candidate()]),
+        _collected_task(task_index=0, internal_hits=[_internal_hit()]),
+        _collected_task(task_index=1, external_candidates=[_external_candidate()]),
     ]
 
     await _review(tasks=tasks, reviewer_runtime=runtime)
@@ -168,7 +177,7 @@ async def test_successful_review_resolves_the_originating_task_index() -> None:
     )
 
     outcome = await _review(
-        tasks=[_task_candidates(task_index=3, internal_hits=[_internal_hit()])],
+        tasks=[_collected_task(task_index=3, internal_hits=[_internal_hit()])],
         reviewer_runtime=runtime,
     )
 
@@ -184,12 +193,12 @@ async def test_review_groups_candidates_by_task_in_ascending_task_index_order() 
     """S1(候補の渡し方)。research_goalごとにグループ化しtask_index昇順で並べる。"""
     runtime = ScriptedAgentRuntime([_draft([])])
     tasks = [
-        _task_candidates(
+        _collected_task(
             task_index=0,
             research_goal="goal-A",
             internal_hits=[_internal_hit(title="A-int")],
         ),
-        _task_candidates(
+        _collected_task(
             task_index=1,
             research_goal="goal-B",
             external_candidates=[_external_candidate(title="B-ext")],
@@ -213,7 +222,7 @@ async def test_review_assigns_a_run_wide_index_internal_before_external_per_grou
     """S1(候補の渡し方)。indexはグループをまたぐ通し番号、group内は内部→外部。"""
     runtime = ScriptedAgentRuntime([_draft([])])
     tasks = [
-        _task_candidates(
+        _collected_task(
             task_index=0,
             internal_hits=[
                 _internal_hit(assessment_id=1001, curation_id=1, title="A-int-1"),
@@ -221,7 +230,7 @@ async def test_review_assigns_a_run_wide_index_internal_before_external_per_grou
             ],
             external_candidates=[_external_candidate(title="A-ext-1")],
         ),
-        _task_candidates(
+        _collected_task(
             task_index=1,
             internal_hits=[
                 _internal_hit(assessment_id=1003, curation_id=3, title="B-int-1")
@@ -252,7 +261,7 @@ async def test_review_builds_an_input_with_only_task_groups_and_as_of() -> None:
     一切持たず、research_goal(task_groups)とas_ofだけで判定材料が決まる。
     """
     runtime = ScriptedAgentRuntime([_draft([])])
-    tasks = [_task_candidates(task_index=0), _task_candidates(task_index=1)]
+    tasks = [_collected_task(task_index=0), _collected_task(task_index=1)]
 
     await _review(tasks=tasks, reviewer_runtime=runtime)
 
@@ -265,14 +274,14 @@ async def test_review_builds_an_input_with_only_task_groups_and_as_of() -> None:
 async def test_selection_restores_candidate_and_task_from_a_cross_task_index() -> None:
     """S1(選別結果の復元)。グループをまたいだindexから候補と所属taskが復元される。"""
     tasks = [
-        _task_candidates(
+        _collected_task(
             task_index=0,
             internal_hits=[
                 _internal_hit(assessment_id=1001, curation_id=1, title="A-int-1"),
                 _internal_hit(assessment_id=1002, curation_id=2, title="A-int-2"),
             ],
         ),
-        _task_candidates(
+        _collected_task(
             task_index=1,
             external_candidates=[
                 _external_candidate("https://example.com/b1", title="B-ext-1"),
@@ -318,8 +327,8 @@ async def test_review_completes_when_only_some_tasks_have_candidates() -> None:
         [_draft([{"candidate_index": 0, "claim": "claim", "why_selected": "w"}])]
     )
     tasks = [
-        _task_candidates(task_index=0, internal_hits=[_internal_hit()]),
-        _task_candidates(task_index=1),
+        _collected_task(task_index=0, internal_hits=[_internal_hit()]),
+        _collected_task(task_index=1),
     ]
 
     outcome = await _review(tasks=tasks, reviewer_runtime=runtime)
@@ -334,7 +343,7 @@ async def test_review_propagates_missing_as_a_single_run_level_list() -> None:
     runtime = ScriptedAgentRuntime([_draft([], missing=["run全体の不足"])])
 
     outcome = await _review(
-        tasks=[_task_candidates(task_index=0, internal_hits=[_internal_hit()])],
+        tasks=[_collected_task(task_index=0, internal_hits=[_internal_hit()])],
         reviewer_runtime=runtime,
     )
 
@@ -348,7 +357,7 @@ async def test_review_drops_out_of_range_duplicate_and_over_cap_selections() -> 
     S2でcap値がRun単位の15になったため、16件目で上限超過が起きることを検証する。
     """
     tasks = [
-        _task_candidates(
+        _collected_task(
             task_index=0,
             internal_hits=[
                 _internal_hit(assessment_id=1000 + i, curation_id=i + 1, title=f"c{i}")
@@ -379,7 +388,7 @@ async def test_review_retries_at_most_twice_with_the_same_typed_input() -> None:
     )
 
     outcome = await _review(
-        tasks=[_task_candidates(task_index=0, internal_hits=[_internal_hit()])],
+        tasks=[_collected_task(task_index=0, internal_hits=[_internal_hit()])],
         reviewer_runtime=runtime,
     )
 
@@ -420,8 +429,8 @@ async def test_review_classifies_failure_reason_after_two_exhausted_attempts(
     """
     runtime = ScriptedAgentRuntime([failure, failure])
     tasks = [
-        _task_candidates(task_index=0, internal_hits=[_internal_hit()]),
-        _task_candidates(task_index=1, external_candidates=[_external_candidate()]),
+        _collected_task(task_index=0, internal_hits=[_internal_hit()]),
+        _collected_task(task_index=1, external_candidates=[_external_candidate()]),
     ]
 
     outcome = await _review(tasks=tasks, reviewer_runtime=runtime)
@@ -457,7 +466,7 @@ async def test_review_retries_after_invalid_draft_and_drops_invalid_selections()
 
     outcome = await _review(
         tasks=[
-            _task_candidates(task_index=0, external_candidates=[_external_candidate()])
+            _collected_task(task_index=0, external_candidates=[_external_candidate()])
         ],
         reviewer_runtime=runtime,
     )
@@ -476,7 +485,7 @@ async def test_review_propagates_unclassified_exception_without_retry() -> None:
 
     with pytest.raises(RuntimeError) as raised:
         await _review(
-            tasks=[_task_candidates(task_index=0, internal_hits=[_internal_hit()])],
+            tasks=[_collected_task(task_index=0, internal_hits=[_internal_hit()])],
             reviewer_runtime=runtime,
         )
 
@@ -530,7 +539,7 @@ async def test_review_timeout_backstop_cancels_the_runtime_and_retries_twice(
 
     outcome = await asyncio.wait_for(
         _review(
-            tasks=[_task_candidates(task_index=0, internal_hits=[_internal_hit()])],
+            tasks=[_collected_task(task_index=0, internal_hits=[_internal_hit()])],
             reviewer_runtime=runtime,
         ),
         timeout=0.5,

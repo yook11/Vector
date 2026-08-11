@@ -13,7 +13,6 @@ from app.agent.evidence_review.contract import (
     EvidenceReviewReport,
     InternalArticleEvidence,
     ReviewedEvidence,
-    ReviewTaskCandidates,
     RunReviewResult,
 )
 from app.agent.evidence_review.reviewer import EvidenceReviewer
@@ -41,15 +40,7 @@ async def review_collected_news(
         )
 
     outcome = await reviewer.review(
-        tasks=[
-            ReviewTaskCandidates(
-                task_index=collected.task_index,
-                research_goal=collected.research_goal,
-                internal_hits=collected.internal_hits,
-                external_candidates=collected.external_candidates,
-            )
-            for collected in collected_news.tasks
-        ],
+        tasks=collected_news.tasks,
         as_of=as_of,
         reviewer_runtime=external.reviewer_runtime,
     )

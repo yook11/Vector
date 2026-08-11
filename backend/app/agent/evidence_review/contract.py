@@ -25,11 +25,7 @@ from app.agent.evidence_collection.external_search.contract import (
     EVIDENCE_CLAIM_MAX_CHARS,
     EVIDENCE_WHY_SELECTED_MAX_CHARS,
     MISSING_ITEM_MAX_CHARS,
-    ExternalSearchCandidate,
     ExternalSearchEvidence,
-)
-from app.agent.evidence_collection.internal_search.contract import (
-    InternalArticleSearchHit,
 )
 
 __all__ = [
@@ -46,7 +42,6 @@ __all__ = [
     "InternalArticleEvidence",
     "ReviewSelection",
     "ReviewSelectionDraft",
-    "ReviewTaskCandidates",
     "ReviewedEvidence",
     "RunReviewResult",
 ]
@@ -61,16 +56,6 @@ class EvidenceCandidateProjection:
     source_name: str | None
     published_at: datetime | None
     snippet: str | None
-
-
-@dataclass(frozen=True, slots=True)
-class ReviewTaskCandidates:
-    """1 taskの精査前候補。EvidenceReviewer.review()がtask単位で受け取る入力。"""
-
-    task_index: int
-    research_goal: str
-    internal_hits: list[InternalArticleSearchHit]
-    external_candidates: list[ExternalSearchCandidate]
 
 
 @dataclass(frozen=True, slots=True)
