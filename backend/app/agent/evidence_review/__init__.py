@@ -2,7 +2,6 @@
 
 from app.agent.evidence_review.contract import (
     EvidenceCandidateInput,
-    EvidenceCollectionOutcome,
     EvidenceReviewDraft,
     EvidenceReviewInput,
     EvidenceReviewOutcome,
@@ -15,13 +14,14 @@ from app.agent.evidence_review.contract import (
     ReviewSelection,
     ReviewSelectionDraft,
     ReviewTaskCandidates,
+    RunReviewResult,
 )
 from app.agent.evidence_review.reviewer import EvidenceReviewer
 from app.agent.evidence_review.run_review import review_collected_news
 
 __all__ = [
     "EvidenceCandidateInput",
-    "EvidenceCollectionOutcome",
+    "ReviewedEvidence",
     "EvidenceReviewDraft",
     "EvidenceReviewInput",
     "EvidenceReviewOutcome",
@@ -34,6 +34,6 @@ __all__ = [
     "ReviewSelection",
     "ReviewSelectionDraft",
     "ReviewTaskCandidates",
-    "ReviewedEvidence",
+    "RunReviewResult",
     "review_collected_news",
 ]

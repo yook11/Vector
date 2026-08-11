@@ -1,4 +1,4 @@
-"""EvidenceCollectionOutcome の DTO 不変条件テスト(S1)。
+"""ReviewedEvidence の DTO 不変条件テスト(S1)。
 
 仕様「観測と失敗分類」により、Σ整合はtask_reports(収集系)の総和ではなく
 review report(Run単位の精査系)と突き合わせる。task_reports自体は
@@ -20,7 +20,7 @@ from app.agent.evidence_collection.external_search import (
     ExternalSearchEvidence,
     ExternalSearchOutcome,
 )
-from app.agent.evidence_review import EvidenceCollectionOutcome
+from app.agent.evidence_review import ReviewedEvidence
 
 
 def _required_attribute(module: ModuleType, name: str) -> Any:
@@ -121,7 +121,7 @@ def _external_evidence(*, task_index: int, source_ref: str) -> ExternalSearchEvi
 def _outcome(
     *, task_reports: list[Any], review: Any | None = None, **kwargs: object
 ) -> Any:
-    return EvidenceCollectionOutcome(
+    return ReviewedEvidence(
         task_reports=task_reports,
         review=review if review is not None else _review_report(),
         **kwargs,
@@ -137,7 +137,7 @@ def test_outcome_has_no_collection_failures_field() -> None:
 
 def test_outcome_rejects_legacy_collection_failures_kwarg() -> None:
     with pytest.raises(ValidationError):
-        EvidenceCollectionOutcome(
+        ReviewedEvidence(
             task_reports=[_report(task_index=0)],
             review=_review_report(),
             collection_failures=["internal_search"],

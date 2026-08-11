@@ -22,7 +22,7 @@ from app.agent.answering.evidence_answer.evidence import AnswerEvidenceItem
 from app.agent.answering.result_assembly import assemble_evidence_result
 from app.agent.contract import InternalArticleSource
 from app.agent.evidence_collection.external_search import ExternalSearchOutcome
-from app.agent.evidence_review import EvidenceCollectionOutcome
+from app.agent.evidence_review import ReviewedEvidence
 from app.agent.planning.contract import ExternalResearchTask, TargetTimeWindow
 
 _TIME_FILTER_MISSING = "指定された公開期間を外部検索へ適用できませんでした"
@@ -137,10 +137,8 @@ def _time_filter_failed_report(
     )
 
 
-def _outcome(
-    *, task_reports: list[Any], review: Any | None = None
-) -> EvidenceCollectionOutcome:
-    return EvidenceCollectionOutcome(
+def _outcome(*, task_reports: list[Any], review: Any | None = None) -> ReviewedEvidence:
+    return ReviewedEvidence(
         task_reports=task_reports,
         external_search=ExternalSearchOutcome(),
         review=review if review is not None else _review_report(),
@@ -225,7 +223,7 @@ def _draft(*, answer: str, cited_refs: list[str] | None = None) -> Any:
 def _assemble(
     *,
     plan: object,
-    outcome: EvidenceCollectionOutcome,
+    outcome: ReviewedEvidence,
     evidence: list[AnswerEvidenceItem],
     answer_outcome: Any,
 ) -> Any:

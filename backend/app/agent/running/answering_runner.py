@@ -26,7 +26,7 @@ from app.agent.contract import (
     AnswerSource,
     EvidenceReviewSelectedEvent,
 )
-from app.agent.evidence_review import EvidenceCollectionOutcome, EvidenceReviewOutcome
+from app.agent.evidence_review import EvidenceReviewOutcome, ReviewedEvidence
 from app.agent.evidence_review.run_review import review_collected_news
 from app.agent.input_safety.contract import (
     INPUT_SAFETY_TEXT_CHAR_CAP,
@@ -174,7 +174,7 @@ class AnsweringRunner:
                         phases=phases,
                         request=answering_request,
                         plan=plan,
-                        reviewed_evidence=reviewed.outcome,
+                        reviewed_evidence=reviewed.evidence,
                         run_span=run_span,
                     )
                 case _ as unreachable:
@@ -211,7 +211,7 @@ class AnsweringRunner:
         phases: AnsweringPhases,
         request: AnsweringRequest,
         plan: SearchPlan,
-        reviewed_evidence: EvidenceCollectionOutcome,
+        reviewed_evidence: ReviewedEvidence,
         run_span: LogfireSpan,
     ) -> AnswerQuestionResult:
         evidence = normalize_answer_evidence(reviewed_evidence)
@@ -261,7 +261,7 @@ class AnsweringRunner:
 def _record_evidence_span_attributes(
     span: LogfireSpan,
     *,
-    outcome: EvidenceCollectionOutcome,
+    outcome: ReviewedEvidence,
     sources: list[AnswerSource],
 ) -> None:
     """内部・外部別の採用数と引用数、内部合流の統計を件数のみでspanへ焼く。"""

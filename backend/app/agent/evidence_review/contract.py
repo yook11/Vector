@@ -36,7 +36,6 @@ __all__ = [
     "EVIDENCE_REVIEW_ADOPTION_LIMIT",
     "EVIDENCE_REVIEW_MISSING_LIMIT",
     "EvidenceCandidateInput",
-    "EvidenceCollectionOutcome",
     "EvidenceReviewDraft",
     "EvidenceReviewInput",
     "EvidenceReviewOutcome",
@@ -49,6 +48,7 @@ __all__ = [
     "ReviewSelectionDraft",
     "ReviewTaskCandidates",
     "ReviewedEvidence",
+    "RunReviewResult",
 ]
 
 
@@ -254,8 +254,8 @@ class EvidenceReviewReport(BaseModel):
         return self
 
 
-class EvidenceCollectionOutcome(BaseModel):
-    """plan 実行の純粋な結果。task 単位の収集reportとRun単位の精査reportを持つ。"""
+class ReviewedEvidence(BaseModel):
+    """精査を経て確定した採用根拠。収集/精査それぞれのreportを併せ持つ。"""
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
@@ -308,8 +308,8 @@ class EvidenceCollectionOutcome(BaseModel):
 
 
 @dataclass(frozen=True, slots=True)
-class ReviewedEvidence:
+class RunReviewResult:
     """Run単位精査の確定結果。review_outcomeは精査が成功した場合のみ持つ。"""
 
-    outcome: EvidenceCollectionOutcome
+    evidence: ReviewedEvidence
     review_outcome: EvidenceReviewOutcome | None
