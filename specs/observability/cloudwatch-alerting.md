@@ -178,6 +178,7 @@ CloudWatch Embedded Metric Format で stdout に emit する。awslogs 経由で
 - SNS → Amazon Q Developer in chat applications(旧 AWS Chatbot)→ Slack。追加コストなし。Slack workspace の初回 OAuth 承認だけコンソール手動(1 回きり)。
 - Slack workspace ID / channel ID は Terraform variable とし、実値は非コミット tfvars で渡す(公開 repo に焼かない)。
 - chatbot の API endpoint は ap-northeast-1 に存在しない(us-east-2 / us-west-2 / ap-southeast-1 / eu-west-1 のみ)。channel configuration リソースだけ `region = "us-east-2"` を明示する。設定は account 単位で効き、他 region の SNS topic も購読できる。deploy role の IAM 側は region 条件の無い GlobalInfra 文に `chatbot:*` を置く。
+- アカウント初回の channel 設定作成時に service-linked role `AWSServiceRoleForAWSChatbot`(service 名 `management.chatbot.amazonaws.com`)の暗黙作成が走る。CI apply role には SLR 作成権限を渡さず、bootstrap の `service_linked_roles.tf` で事前作成する(既存 ECS / ALB / RDS / ElastiCache と同じパターン)。
 - Terraform リソースは `aws_chatbot_slack_channel_configuration`(hashicorp/aws **v5.61.0 以上**)。`sns_topic_arns` で topic を紐付け、`configuration_name` / `iam_role_arn`(channel 用 role)/ `slack_team_id` / `slack_channel_id` が必須。サービスは Amazon Q Developer へ改名済みだが、API namespace / IAM action(`chatbot:*`)/ Terraform リソース名は旧名のまま。
 - `guardrail_policy_arns` は**未指定だと AWS managed `AdministratorAccess` が適用される**ため、読み取り系へ明示的に絞る(通知用途に書き込み権限は不要)。
 - SNS subscription の raw message delivery は無効のまま使う(有効化すると Q Developer が処理できない)。
