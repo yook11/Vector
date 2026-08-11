@@ -14,11 +14,11 @@ from enum import StrEnum
 
 from pydantic import ValidationError
 
+from app.agent.evidence_collection.contract import CollectedTask
 from app.agent.evidence_review.agent import EVIDENCE_REVIEWER_AGENT
 from app.agent.evidence_review.contract import (
     EvidenceReviewInput,
     EvidenceReviewOutcome,
-    ReviewTaskCandidates,
 )
 from app.agent.evidence_review.policy import (
     EVIDENCE_REVIEW_TIMEOUT_SECONDS,
@@ -46,7 +46,7 @@ class EvidenceReviewer:
     async def review(
         self,
         *,
-        tasks: list[ReviewTaskCandidates],
+        tasks: list[CollectedTask],
         as_of: datetime,
         reviewer_runtime: AgentRuntime,
     ) -> EvidenceReviewOutcome:

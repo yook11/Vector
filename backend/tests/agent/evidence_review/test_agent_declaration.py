@@ -88,7 +88,7 @@ def _candidate_input(
     published_at: datetime | None = None,
     snippet: str | None = None,
 ) -> Any:
-    candidate_input_type = _required_attribute(contracts, "EvidenceCandidateInput")
+    candidate_input_type = _required_attribute(contracts, "EvidenceCandidateProjection")
     return candidate_input_type(
         index=index,
         title=title,
@@ -137,7 +137,7 @@ def _review_input(
 def test_candidate_projection_is_unified_and_excludes_source_metadata() -> None:
     """保証するテスト条件 1。内外で同一 field 構成、出所種別・URL 等を含まない。"""
     contracts = _contracts()
-    candidate_input_type = _required_attribute(contracts, "EvidenceCandidateInput")
+    candidate_input_type = _required_attribute(contracts, "EvidenceCandidateProjection")
 
     _assert_frozen_slots_dataclass(candidate_input_type)
     field_names = {field.name for field in fields(candidate_input_type)}
@@ -443,10 +443,8 @@ def test_prompt_renders_only_safe_candidate_projection_and_never_url() -> None:
         published_at=_as_of(),
         snippet=f"snippet {boundary_attack}",
     )
-    assert "url" not in {
-        field.name
-        for field in fields(_required_attribute(contracts, "EvidenceCandidateInput"))
-    }
+    projection_type = _required_attribute(contracts, "EvidenceCandidateProjection")
+    assert "url" not in {field.name for field in fields(projection_type)}
     assert not hasattr(internal_like_candidate, "url")
     assert url_sentinel not in repr(internal_like_candidate)
 

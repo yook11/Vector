@@ -254,7 +254,7 @@ def test_selector_vocabulary_is_removed_from_external_search_package() -> None:
         "EXTERNAL_EVIDENCE_SELECTOR_DEEPSEEK_BINDING",
         "ExternalEvidenceSelectionDraft",
         "ExternalEvidenceSelectionInput",
-        "ExternalEvidenceCandidateInput",
+        "ExternalEvidenceCandidateProjection",
         "EvidenceSelection",
         "EvidenceSelectionDraft",
         "EvidenceSelectionResult",

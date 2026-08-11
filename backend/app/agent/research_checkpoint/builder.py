@@ -14,7 +14,7 @@ import logfire
 
 from app.agent.evidence_collection.contract import CollectedNews
 from app.agent.evidence_review import EvidenceReviewOutcome
-from app.agent.evidence_review.contract import ReviewedEvidence
+from app.agent.evidence_review.contract import RunReviewResult
 from app.agent.planning.contract import SearchPlan
 from app.agent.research_checkpoint.contract import (
     ResearchCheckpoint,
@@ -28,11 +28,11 @@ def build_research_checkpoint_or_none(
     *,
     plan: SearchPlan,
     collected_news: CollectedNews,
-    reviewed: ReviewedEvidence,
+    reviewed: RunReviewResult,
     as_of: datetime,
 ) -> ResearchCheckpoint | None:
     """精査失敗Runは記録せず、組み立て失敗は握って回答workflowを継続する。"""
-    if reviewed.outcome.review.review == "failed":
+    if reviewed.evidence.review.review == "failed":
         return None
     try:
         return build_research_checkpoint(

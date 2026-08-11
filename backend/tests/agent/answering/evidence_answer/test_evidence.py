@@ -19,7 +19,7 @@ from app.agent.evidence_collection.external_search import (
     ExternalSearchEvidence,
     ExternalSearchOutcome,
 )
-from app.agent.evidence_review import EvidenceCollectionOutcome
+from app.agent.evidence_review import ReviewedEvidence
 
 
 def _required_attribute(module: ModuleType, name: str) -> Any:
@@ -79,9 +79,9 @@ def _outcome(
     external_search: ExternalSearchOutcome | None = None,
     internal_evidence_count: int = 0,
     external_evidence_count: int = 0,
-) -> EvidenceCollectionOutcome:
+) -> ReviewedEvidence:
     """S1: task_reports(収集系)とreview(Run単位の精査系)を分けて組み立てる。"""
-    return EvidenceCollectionOutcome(
+    return ReviewedEvidence(
         internal_evidence=internal_evidence or [],
         external_search=external_search,
         task_reports=[_report()],

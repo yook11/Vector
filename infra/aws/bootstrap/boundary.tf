@@ -83,6 +83,20 @@ resource "aws_iam_policy" "boundary" {
         }
       },
 
+      # --- chatbot channel role が要るもの ---
+      # Slack 通知の alarm グラフ描画に使う読み取り。KMS の例と同じく、
+      # 天井にだけ入れておく (boundary の編集は Deny で封印されているため)。
+      {
+        Sid    = "CloudWatchReadForChatbot"
+        Effect = "Allow"
+        Action = [
+          "cloudwatch:DescribeAlarms",
+          "cloudwatch:GetMetricData",
+          "cloudwatch:GetMetricWidgetImage",
+        ]
+        Resource = "*"
+      },
+
       # --- 天井として明示的に落とすもの ---
       # task role は AWS の API をほぼ呼ばないので、IAM も STS も要らない。
       # ここで落としておけば、段の policy を書き間違えても権限昇格に届かない。
