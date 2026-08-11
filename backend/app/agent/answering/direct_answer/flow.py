@@ -71,7 +71,7 @@ class DirectAnswerFlow:
 
         with agent_phase(phase="answering", agent_name=self._agent.name):
             async with self._runtime_scope_factory() as runtime:
-                previous_error: str | None = None
+                repair_context: str | None = None
                 previous_output_truncated = False
 
                 for attempt_number in range(1, _MAX_ATTEMPTS + 1):
@@ -80,7 +80,7 @@ class DirectAnswerFlow:
                             runtime=runtime,
                             request=request,
                             previous_answer=previous_answer,
-                            previous_error=previous_error,
+                            repair_context=repair_context,
                             previous_output_truncated=previous_output_truncated,
                             attempt_number=attempt_number,
                         )
@@ -98,7 +98,7 @@ class DirectAnswerFlow:
                                 failure_code=failure.code,
                             )
                             raise
-                        previous_error = str(exc)
+                        repair_context = str(exc)
                         previous_output_truncated = isinstance(
                             exc, AIProviderOutputTruncatedError
                         )
@@ -118,7 +118,7 @@ class DirectAnswerFlow:
         runtime: StreamingAgentRuntime,
         request: AnsweringRequest,
         previous_answer: str,
-        previous_error: str | None,
+        repair_context: str | None,
         previous_output_truncated: bool,
         attempt_number: int,
     ) -> DirectAnswerDraft:
@@ -136,7 +136,7 @@ class DirectAnswerFlow:
                     DirectAnswerInput(
                         request=request,
                         previous_answer=previous_answer,
-                        previous_error=previous_error,
+                        repair_context=repair_context,
                         previous_output_truncated=previous_output_truncated,
                     ),
                     attempt_number=attempt_number,

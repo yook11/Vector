@@ -117,7 +117,7 @@ class FakeDirectAnswerGenerator:
                 "agent": agent,
                 "request": input.request,
                 "previous_answer": input.previous_answer,
-                "previous_error": input.previous_error,
+                "repair_context": input.repair_context,
                 # R2: previous_output_truncatedは未実装の間getattrで安全にNoneへ
                 # 落とす(直接attributeアクセスだと全呼び出しがAttributeErrorで
                 # crashし、redがassertion failureにならなくなるため)。
@@ -227,7 +227,7 @@ async def test_valid_text_returns_direct_draft_without_retry(
 
     assert draft == DirectAnswerDraft(answer="検索なしで回答できます。")
     assert len(generator.calls) == 1
-    assert generator.calls[0]["previous_error"] is None
+    assert generator.calls[0]["repair_context"] is None
     assert reporter.finished == [1]
     assert reporter.aborted == []
     assert generator.streams[0].closed is True
@@ -310,7 +310,7 @@ async def test_group_form_marker_only_generation_retries_then_raises_invalid() -
 
 
 @pytest.mark.asyncio
-async def test_blank_then_valid_retries_once_with_previous_error(
+async def test_blank_then_valid_retries_once_with_repair_context(
     capfire: CaptureLogfire,
 ) -> None:
     generator = FakeDirectAnswerGenerator([" \n\t", "再試行後の回答です。"])
@@ -318,7 +318,7 @@ async def test_blank_then_valid_retries_once_with_previous_error(
     draft = await _answer(generator)
 
     assert draft.answer == "再試行後の回答です。"
-    assert [call["previous_error"] for call in generator.calls] == [
+    assert [call["repair_context"] for call in generator.calls] == [
         None,
         "direct_answer_blank_response",
     ]

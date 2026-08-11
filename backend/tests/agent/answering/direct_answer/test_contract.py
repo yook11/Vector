@@ -39,7 +39,7 @@ def test_direct_answer_input_is_frozen_and_keeps_attempt_state_together() -> Non
     assert [field.name for field in fields(DirectAnswerInput)] == [
         "request",
         "previous_answer",
-        "previous_error",
+        "repair_context",
         "previous_output_truncated",
     ]
     type_hints = get_type_hints(DirectAnswerInput)
@@ -48,7 +48,7 @@ def test_direct_answer_input_is_frozen_and_keeps_attempt_state_together() -> Non
         request=object(),  # type: ignore[arg-type]
         previous_answer="previous",
     )
-    assert input.previous_error is None
+    assert input.repair_context is None
     assert input.previous_output_truncated is False
     with pytest.raises(FrozenInstanceError):
         input.previous_answer = "changed"  # type: ignore[misc]

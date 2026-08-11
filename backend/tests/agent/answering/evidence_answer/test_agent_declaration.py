@@ -127,7 +127,7 @@ def test_fixed_instructions_and_rendered_input_are_separated() -> None:
         request=_request(),
         evidence=(_evidence(),),
         target_time_window=TargetTimeWindow(kind="last_n_days", days=7),
-        previous_error="PREVIOUS_ERROR_SENTINEL",
+        repair_context="PREVIOUS_ERROR_SENTINEL",
     )
 
     rendered = agent.prompt.input_renderer(input)
@@ -160,7 +160,7 @@ async def test_runtime_request_keeps_fixed_and_dynamic_text_separate() -> None:
         request=_request(),
         evidence=(_evidence(),),
         target_time_window=TargetTimeWindow(kind="last_n_days", days=7),
-        previous_error="PREVIOUS_ERROR_SENTINEL",
+        repair_context="PREVIOUS_ERROR_SENTINEL",
     )
     stream = GeminiAgentRuntime(client=cast(AsyncClient, client)).invoke_stream(
         EVIDENCE_ANSWER_AGENT,

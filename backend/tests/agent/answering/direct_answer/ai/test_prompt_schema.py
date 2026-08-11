@@ -37,13 +37,13 @@ def _render(
     *,
     request: AnsweringRequest,
     previous_answer: str = "",
-    previous_error: str | None = None,
+    repair_context: str | None = None,
 ) -> str:
     return render_direct_answer_input(
         DirectAnswerInput(
             request=request,
             previous_answer=previous_answer,
-            previous_error=previous_error,
+            repair_context=repair_context,
         )
     )
 
@@ -69,14 +69,14 @@ def _truncation_repair_block() -> str:
 
 def _render_with_truncation_state(
     *,
-    previous_error: str | None,
+    repair_context: str | None,
     previous_output_truncated: bool,
 ) -> str:
     try:
         input = DirectAnswerInput(
             request=_request(),
             previous_answer="",
-            previous_error=previous_error,
+            repair_context=repair_context,
             previous_output_truncated=previous_output_truncated,
         )
     except TypeError:
@@ -123,7 +123,7 @@ def test_prompt_does_not_include_evidence_or_citation_contract() -> None:
     assert "引用できる根拠" not in prompt
 
 
-def test_prompt_includes_repair_context_when_previous_error_exists() -> None:
+def test_prompt_includes_repair_context_when_repair_context_exists() -> None:
     """条件7: 空回答が原因のretryでは、現行どおり空回答用の文言が現れ、
 
     打ち切り用の文言が現れない。
@@ -133,7 +133,7 @@ def test_prompt_includes_repair_context_when_previous_error_exists() -> None:
     prompt = _render(
         request=_request(),
         previous_answer="",
-        previous_error="direct_answer_blank_response",
+        repair_context="direct_answer_blank_response",
     )
 
     assert "前回の direct 回答は空でした" in prompt
@@ -144,14 +144,14 @@ def test_prompt_includes_repair_context_when_previous_error_exists() -> None:
 def test_truncated_retry_shows_truncation_wording_not_blank_response_wording() -> None:
     """条件6: 打ち切りが原因のretryでは、打ち切り用の文言が現れ、空回答用の
 
-    文言が現れない。previous_errorが同時に立っていても(実際のflowは常に
-    previous_error=str(exc)を持つ)、previous_output_truncated=Trueが
+    文言が現れない。repair_contextが同時に立っていても(実際のflowは常に
+    repair_context=str(exc)を持つ)、previous_output_truncated=Trueが
     空回答用の文言を抑止することを確認する。
     """
     truncation_block = _truncation_repair_block()
 
     prompt = _render_with_truncation_state(
-        previous_error="ai_error_output_truncated",
+        repair_context="ai_error_output_truncated",
         previous_output_truncated=True,
     )
 
@@ -167,7 +167,7 @@ def test_truncation_notice_is_trusted_and_outside_untrusted_blocks() -> None:
     truncation_block = _truncation_repair_block()
 
     prompt = _render_with_truncation_state(
-        previous_error="ai_error_output_truncated",
+        repair_context="ai_error_output_truncated",
         previous_output_truncated=True,
     )
 
@@ -184,7 +184,7 @@ def test_first_attempt_shows_neither_repair_wording() -> None:
     truncation_block = _truncation_repair_block()
 
     prompt = _render_with_truncation_state(
-        previous_error=None,
+        repair_context=None,
         previous_output_truncated=False,
     )
 

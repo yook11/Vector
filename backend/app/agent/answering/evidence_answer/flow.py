@@ -90,7 +90,7 @@ class EvidenceAnswerFlow:
 
         with agent_phase(phase="answering", agent_name=self._agent.name):
             async with self._runtime_scope_factory() as runtime:
-                previous_error: str | None = None
+                repair_context: str | None = None
                 previous_output_truncated = False
 
                 for attempt_number in range(1, _MAX_ATTEMPTS + 1):
@@ -100,7 +100,7 @@ class EvidenceAnswerFlow:
                             request=request,
                             evidence=evidence,
                             target_time_window=target_time_window,
-                            previous_error=previous_error,
+                            repair_context=repair_context,
                             previous_output_truncated=previous_output_truncated,
                             review_missing=review_missing,
                             attempt_number=attempt_number,
@@ -119,7 +119,7 @@ class EvidenceAnswerFlow:
                                 failure=failure,
                             )
                         await self._start_revision(generation=attempt_number + 1)
-                        previous_error = str(exc)
+                        repair_context = str(exc)
                         previous_output_truncated = isinstance(
                             exc, AIProviderOutputTruncatedError
                         )
@@ -141,7 +141,7 @@ class EvidenceAnswerFlow:
         request: AnsweringRequest,
         evidence: list[AnswerEvidenceItem],
         target_time_window: TargetTimeWindow | None,
-        previous_error: str | None,
+        repair_context: str | None,
         previous_output_truncated: bool,
         review_missing: tuple[str, ...],
         attempt_number: int,
@@ -161,7 +161,7 @@ class EvidenceAnswerFlow:
                         request=request,
                         evidence=tuple(evidence),
                         target_time_window=target_time_window,
-                        previous_error=previous_error,
+                        repair_context=repair_context,
                         previous_output_truncated=previous_output_truncated,
                         review_missing=review_missing,
                     ),

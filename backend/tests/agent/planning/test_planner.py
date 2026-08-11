@@ -210,7 +210,7 @@ async def test_planner_returns_each_completed_two_plan_variant_after_scope_exit(
         call.agent is QUESTION_PLANNER_AGENT,
         call.attempt_number,
         call.input.request.context.standalone_question,
-        call.input.previous_error,
+        call.input.repair_context,
     ) == (True, 1, "今日のNVIDIAの発表は？", None)
     assert (factory.created, factory.entered, len(factory.exits)) == (
         [runtime],
@@ -251,7 +251,7 @@ async def test_semantic_response_defect_retries_once_without_leaking_question() 
 
     assert plan.plan_type == "search"
     assert [call.attempt_number for call in runtime.calls] == [1, 2]
-    assert question_sentinel not in (runtime.calls[1].input.previous_error or "")
+    assert question_sentinel not in (runtime.calls[1].input.repair_context or "")
 
 
 async def test_two_response_defects_propagate_second_error_and_record_not_created(
@@ -425,7 +425,7 @@ async def test_each_response_defect_retries_once_in_the_same_runtime(
         QUESTION_PLANNER_AGENT,
     ]
     assert [call.attempt_number for call in runtime.calls] == [1, 2]
-    assert [call.input.previous_error for call in runtime.calls] == [
+    assert [call.input.repair_context for call in runtime.calls] == [
         None,
         str(first_error),
     ]

@@ -48,7 +48,7 @@ class QuestionPlanningService:
     async def plan(self, request: PlanningRequest) -> QuestionPlan:
         """Return a completed plan, retrying only response-shape failures."""
 
-        previous_error: str | None = None
+        repair_context: str | None = None
         completed_plan: QuestionPlan | None = None
         terminal_error: (
             AIProviderStateError
@@ -68,7 +68,7 @@ class QuestionPlanningService:
                                 self._agent,
                                 PlanningAttemptInput(
                                     request=request,
-                                    previous_error=previous_error,
+                                    repair_context=repair_context,
                                 ),
                                 attempt_number=attempt_number,
                             )
@@ -81,7 +81,7 @@ class QuestionPlanningService:
                                 and attempt_number < _MAX_ATTEMPTS
                             )
                             if retriable:
-                                previous_error = str(exc)
+                                repair_context = str(exc)
                                 retry_used = True
                                 continue
                             terminal_error = exc
