@@ -174,3 +174,21 @@ variable "ecr_retained_images" {
   type        = number
   default     = 10
 }
+
+variable "slack_team_id" {
+  description = <<-EOT
+    アラート通知先 Slack workspace の ID (例 T0123ABC456)。
+    コンソールの AWS Chatbot > Configured clients > Workspace details から取得する。
+    公開 repo に実値を置かないため default を持たず、tfvars / CI secrets で渡す。
+  EOT
+  type        = string
+}
+
+variable "slack_channel_id" {
+  description = <<-EOT
+    アラート通知先 Slack channel の ID (例 C0123ABC456)。
+    Slack の channel 詳細画面の最下部から取得する。
+    公開 repo に実値を置かないため default を持たず、tfvars / CI secrets で渡す。
+  EOT
+  type        = string
+}
