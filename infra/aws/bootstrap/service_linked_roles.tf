@@ -19,6 +19,9 @@ resource "aws_iam_service_linked_role" "this" {
     "elasticloadbalancing.amazonaws.com",
     "rds.amazonaws.com",
     "elasticache.amazonaws.com",
+    # Chatbot (Amazon Q Developer in chat applications)。SLR の service 名は
+    # channel 設定の API とは別で management.chatbot.amazonaws.com。
+    "management.chatbot.amazonaws.com",
   ])
 
   aws_service_name = each.value
