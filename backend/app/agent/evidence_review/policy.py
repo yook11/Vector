@@ -16,7 +16,7 @@ from app.agent.evidence_collection.internal_search.contract import (
 )
 from app.agent.evidence_review.contract import (
     EVIDENCE_REVIEW_ADOPTION_LIMIT,
-    EvidenceCandidateInput,
+    EvidenceCandidateProjection,
     EvidenceReviewDraft,
     EvidenceReviewResult,
     EvidenceReviewTaskGroup,
@@ -66,10 +66,10 @@ def _build_group_candidates(
     task: ReviewTaskCandidates,
     *,
     start_index: int,
-) -> tuple[tuple[EvidenceCandidateInput, ...], int]:
+) -> tuple[tuple[EvidenceCandidateProjection, ...], int]:
     """内部候補を先・外部候補を後にした、通しindexのgroup内candidate列を作る。"""
     projection = [
-        EvidenceCandidateInput(
+        EvidenceCandidateProjection(
             index=start_index + index,
             title=hit.content.title,
             source_name=None,
@@ -80,7 +80,7 @@ def _build_group_candidates(
     ]
     offset = start_index + len(task.internal_hits)
     projection.extend(
-        EvidenceCandidateInput(
+        EvidenceCandidateProjection(
             index=offset + position,
             title=candidate.title,
             source_name=candidate.source_name,

@@ -35,7 +35,7 @@ from app.agent.evidence_collection.internal_search.contract import (
 __all__ = [
     "EVIDENCE_REVIEW_ADOPTION_LIMIT",
     "EVIDENCE_REVIEW_MISSING_LIMIT",
-    "EvidenceCandidateInput",
+    "EvidenceCandidateProjection",
     "EvidenceReviewDraft",
     "EvidenceReviewInput",
     "EvidenceReviewOutcome",
@@ -53,7 +53,7 @@ __all__ = [
 
 
 @dataclass(frozen=True, slots=True)
-class EvidenceCandidateInput:
+class EvidenceCandidateProjection:
     """Reviewerへ渡す内外統合candidate projection。URLを含まない。"""
 
     index: int
@@ -79,7 +79,7 @@ class EvidenceReviewTaskGroup:
 
     task_index: int
     research_goal: str
-    candidates: tuple[EvidenceCandidateInput, ...]
+    candidates: tuple[EvidenceCandidateProjection, ...]
 
 
 @dataclass(frozen=True, slots=True)

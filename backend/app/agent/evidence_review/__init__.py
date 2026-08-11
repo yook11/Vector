@@ -1,7 +1,7 @@
 """Evidence Review package。公開名は package root から import する。"""
 
 from app.agent.evidence_review.contract import (
-    EvidenceCandidateInput,
+    EvidenceCandidateProjection,
     EvidenceReviewDraft,
     EvidenceReviewInput,
     EvidenceReviewOutcome,
@@ -20,7 +20,7 @@ from app.agent.evidence_review.reviewer import EvidenceReviewer
 from app.agent.evidence_review.run_review import review_collected_news
 
 __all__ = [
-    "EvidenceCandidateInput",
+    "EvidenceCandidateProjection",
     "ReviewedEvidence",
     "EvidenceReviewDraft",
     "EvidenceReviewInput",
