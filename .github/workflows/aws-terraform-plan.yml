@@ -122,6 +122,8 @@ jobs:
           TF_VAR_root_domain: ${{ secrets.TF_VAR_ROOT_DOMAIN }}
           TF_VAR_frontend_domain: ${{ secrets.TF_VAR_FRONTEND_DOMAIN }}
           TF_VAR_crossref_contact_email: ${{ secrets.TF_VAR_CROSSREF_CONTACT_EMAIL }}
+          TF_VAR_slack_team_id: ${{ secrets.TF_VAR_SLACK_TEAM_ID }}
+          TF_VAR_slack_channel_id: ${{ secrets.TF_VAR_SLACK_CHANNEL_ID }}
         run: |
           set -euo pipefail
           # 公開 repo の Actions log は誰でも読める。secrets の mask は完全一致のため、

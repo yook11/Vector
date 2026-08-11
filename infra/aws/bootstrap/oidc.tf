@@ -221,6 +221,10 @@ resource "aws_iam_role_policy" "apply" {
           "servicediscovery:*",
           "acm:*",
           "application-autoscaling:*",
+          # 監視・アラート基盤 (alerting.tf): topic / alarm / rule の管理。
+          "sns:*",
+          "cloudwatch:*",
+          "events:*",
           "ssm:DescribeParameters",
           "secretsmanager:DescribeSecret",
           "kms:DescribeKey",
@@ -232,10 +236,12 @@ resource "aws_iam_role_policy" "apply" {
         }
       },
       # Route 53 はグローバル。region 条件を付けると通らない。
+      # chatbot は API endpoint が限られた region (us-east-2 等) にしか無く、
+      # aws:RequestedRegion が var.region に一致しないためここに置く。
       {
         Sid      = "GlobalInfra"
         Effect   = "Allow"
-        Action   = ["route53:*"]
+        Action   = ["route53:*", "chatbot:*"]
         Resource = "*"
       },
       # AWS が公開する最新 AMI の ID (bastion.tf の data source が読む)。
@@ -338,19 +344,23 @@ resource "aws_iam_role_policy" "apply" {
         Action   = local.iam_write_actions
         Resource = local.ci_scope_arns
       },
-      # 5. ECS 以外への PassRole を拒否する。
+      # 5. 意図したサービス以外への PassRole を拒否する。
+      #    許すのは ECS (task / execution role) と Chatbot (Slack 通知の channel role) だけ。
       #
       # IamWithinManagedPath の `iam:*` が PassRole を含むため、条件付き Allow を
       # 書くだけでは絞れない (Allow は和集合)。explicit Deny が唯一の手段。
       # iam:PassedToService が無い場合も StringNotEquals は true になるので拒否側に倒れる。
       {
-        Sid      = "DenyPassRoleToNonEcs"
+        Sid      = "DenyPassRoleToUnintendedServices"
         Effect   = "Deny"
         Action   = "iam:PassRole"
         Resource = "*"
         Condition = {
           StringNotEquals = {
-            "iam:PassedToService" = "ecs-tasks.amazonaws.com"
+            "iam:PassedToService" = [
+              "ecs-tasks.amazonaws.com",
+              "chatbot.amazonaws.com",
+            ]
           }
         }
       },
