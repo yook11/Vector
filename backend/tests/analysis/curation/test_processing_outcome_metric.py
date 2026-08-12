@@ -11,21 +11,24 @@ setup_logfire は呼ばない。
 
 from __future__ import annotations
 
-import json
+from typing import get_args
 
 import pytest
 from logfire.testing import CaptureLogfire
 
-from app.analysis.curation.metrics import record_curation_processing_outcome
+from app.analysis.curation.metrics import (
+    CurationProcessingOutcome,
+    record_curation_processing_outcome,
+)
 from app.logfire.article_stage import curation_stage_span
 from tests.logfire._metric_helpers import (
+    assert_attribute_contract,
     collected_metrics,
-    counter_attribute_key_sets,
     sum_counter_for_result,
 )
 
 _METRIC = "vector.curation.processing_outcome"
-_ALL_RESULTS = ("signal", "noise", "rejected", "failed", "infra_error")
+_ALL_RESULTS = get_args(CurationProcessingOutcome)
 
 
 # helper 契約: 5 値それぞれを 1 件として記録する
@@ -59,23 +62,13 @@ def test_backstop_failed_does_not_emit_processing_outcome(
         assert sum_counter_for_result(metrics, _METRIC, result) == 0
 
 
-# attribute safety: result のみ、PII 非含有
+# attribute contract: result key のみ、値は宣言された語彙のみ
 
 
-def test_attribute_is_result_only_no_pii(capfire: CaptureLogfire) -> None:
-    """counter の全 data point attribute keys が {"result"} のみで PII を載せない。"""
+def test_attributes_conform_to_declared_vocabulary(capfire: CaptureLogfire) -> None:
+    """counter の attribute が {"result"} key のみで、値は CurationProcessingOutcome
+    の語彙内。
+    """
     record_curation_processing_outcome("signal")
     metrics = collected_metrics(capfire)
-    key_sets = counter_attribute_key_sets(metrics, _METRIC)
-    assert key_sets == [{"result"}], f"unexpected attribute keys: {key_sets}"
-    dumped = json.dumps(metrics, default=str, ensure_ascii=False)
-    for needle in (
-        "article_id",
-        "analyzable_article_id",
-        "source_id",
-        "http://",
-        "https://",
-        "prompt",
-        "raw_response",
-    ):
-        assert needle not in dumped, f"PII 様文字列 {needle!r} が metric dump に混入"
+    assert_attribute_contract(metrics, _METRIC, allowed={"result": _ALL_RESULTS})

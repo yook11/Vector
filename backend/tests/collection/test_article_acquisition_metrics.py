@@ -7,12 +7,11 @@
 - dedup skip (同 URL 既存で continue) は計数しない。
 - ``acquire_source`` task が run 結末を
   ``vector.acquisition.run{result=<succeeded|failed>}`` counter に +1 する。
-- attribute 経路に PII (article_id / URL 様の dynamic 値) が混入しない。
+- attribute 経路の値域が宣言された語彙 (``AcquisitionEntryOutcome``) に収まる。
 """
 
 from __future__ import annotations
 
-import json
 from datetime import UTC, datetime
 from types import SimpleNamespace
 from typing import Any, ClassVar
@@ -24,6 +23,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from app.audit.domain.event import Stage
 from app.collection.article_acquisition.errors import AcquisitionReadError
 from app.collection.article_acquisition.fetched_article import FetchedArticle
+from app.collection.article_acquisition.metrics import AcquisitionEntryOutcome
 from app.collection.article_acquisition.service import ArticleAcquisitionService
 from app.collection.article_acquisition.tools.reader_tools import ReaderTools
 from app.collection.domain.observed_article import ObservedOrigin
@@ -38,8 +38,10 @@ from app.collection.sources.source_name import SourceName
 from app.models.news_source import NewsSource, SourceType
 from app.queue.messages.collection import AcquireSourceTaskInput
 from app.queue.tasks import acquisition as collection_tasks
+from tests.logfire._metric_helpers import assert_attribute_contract
 
 _PUBLISHED = datetime(2026, 4, 30, tzinfo=UTC)
+_ALLOWED_OUTCOME_RESULTS = {outcome.value for outcome in AcquisitionEntryOutcome}
 
 
 # ---------------------------------------------------------------------------
@@ -99,10 +101,6 @@ def _find_metric(metrics: list[dict[str, Any]], name: str) -> dict[str, Any] | N
 
 def _sum_value(metric: dict[str, Any]) -> int:
     return sum(int(dp["value"]) for dp in metric["data"]["data_points"])
-
-
-def _attributes_for(metric: dict[str, Any]) -> list[dict[str, Any]]:
-    return [dp.get("attributes", {}) for dp in metric["data"]["data_points"]]
 
 
 def _sum_for_result(metrics: list[dict[str, Any]], name: str, result: str) -> int:
@@ -276,16 +274,17 @@ async def test_outcome_dedup_url_counts_analyzable_only_once(
 
 
 @pytest.mark.asyncio
-async def test_outcome_attribute_keys_are_result_only_no_pii(
+async def test_outcome_attributes_conform_to_declared_vocabulary(
     session_factory: async_sessionmaker[AsyncSession],
     db_session: AsyncSession,
     vb_source: NewsSource,
     capfire: CaptureLogfire,
 ) -> None:
-    """outcome metric の全 data_point attribute keys が {"result"} のみ、PII 不在。
+    """outcome counter の attribute が {"result"} key のみで、値は
+    AcquisitionEntryOutcome の語彙内。
 
-    dump 全体に article_id / URL 様の dynamic 値が混入しない構造的契約を
-    full-text oracle で検知。
+    article_id / URL 様の dynamic 値が混入する regression を、既知文字列の
+    blocklist ではなく許可値域で構造的に検知する。
     """
     svc = ArticleAcquisitionService(
         session_factory,
@@ -295,19 +294,11 @@ async def test_outcome_attribute_keys_are_result_only_no_pii(
     await svc.execute(vb_source.id)
 
     metrics = capfire.get_collected_metrics()
-    outcome = _find_metric(metrics, "vector.acquisition.outcome")
-    assert outcome is not None, "vector.acquisition.outcome が exporter に届かない"
-    for attrs in _attributes_for(outcome):
-        assert set(attrs.keys()) == {"result"}, (
-            f"outcome attribute に予期しない key: {attrs.keys()}"
-        )
-
-    dumped = json.dumps(metrics, default=str, ensure_ascii=False)
-    forbidden_substrings = ("article_id", "http://", "https://", "source_id")
-    for needle in forbidden_substrings:
-        assert needle not in dumped, (
-            f"acquisition outcome metric dump に PII 様文字列 {needle!r} が混入"
-        )
+    assert_attribute_contract(
+        metrics,
+        "vector.acquisition.outcome",
+        allowed={"result": _ALLOWED_OUTCOME_RESULTS},
+    )
 
 
 class _FailingConversionAuditRepo:
