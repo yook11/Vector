@@ -15,13 +15,18 @@ import time
 PIPELINE_NAMESPACE = "Vector/Pipeline"
 
 
-def emit_count(
+def emit_metric(
     metric_name: str,
     *,
     dimensions: dict[str, str],
-    value: int = 1,
+    value: float,
+    unit: str,
 ) -> None:
-    """count メトリクス 1 打点を EMF 1 行として stdout へ書く。"""
+    """メトリクス 1 打点を EMF 1 行として stdout へ書く。
+
+    count / gauge の区別は EMF には存在しない。どの統計で読むかは受信側
+    (alarm の統計選択) が決め、value の型 (int / float) はそのまま JSON に載る。
+    """
     record: dict[str, object] = {
         "_aws": {
             "Timestamp": int(time.time() * 1000),
@@ -29,7 +34,7 @@ def emit_count(
                 {
                     "Namespace": PIPELINE_NAMESPACE,
                     "Dimensions": [list(dimensions)],
-                    "Metrics": [{"Name": metric_name, "Unit": "Count"}],
+                    "Metrics": [{"Name": metric_name, "Unit": unit}],
                 }
             ],
         },

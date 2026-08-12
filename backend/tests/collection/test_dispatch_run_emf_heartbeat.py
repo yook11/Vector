@@ -65,8 +65,8 @@ def _ctx(*, execute_exc: BaseException | None = None) -> SimpleNamespace:
     return SimpleNamespace(state=SimpleNamespace(session_factory=session_factory))
 
 
-def _emf_lines(captured_stdout: str) -> list[dict[str, Any]]:
-    """stdout から EMF 行 (``_aws`` キーを持つ JSON 行) だけを抽出する。"""
+def _emf_records(captured_stdout: str) -> list[dict[str, Any]]:
+    """stdout から EMF レコードをパースして返す (``_aws`` キーが EMF の定義)。"""
     lines: list[dict[str, Any]] = []
     for line in captured_stdout.splitlines():
         try:
@@ -99,7 +99,7 @@ async def test_dispatch_run_completion_emits_one_emf_line_for_cadence(
     """正常完了した cadence dispatch は ``dispatch_run{cadence}`` を 1 行出す。"""
     await dispatch_task(ctx=_ctx())
 
-    emf_lines = _emf_lines(capsys.readouterr().out)
+    emf_lines = _emf_records(capsys.readouterr().out)
 
     assert len(emf_lines) == 1
     metric_def = emf_lines[0]["_aws"]["CloudWatchMetrics"][0]
@@ -124,7 +124,7 @@ async def test_dispatch_run_failure_emits_no_emf_line(
     with pytest.raises(RuntimeError, match="select failed"):
         await dispatch_task(ctx=_ctx(execute_exc=RuntimeError("select failed")))
 
-    assert _emf_lines(capsys.readouterr().out) == []
+    assert _emf_records(capsys.readouterr().out) == []
 
 
 @pytest.mark.asyncio
@@ -135,4 +135,4 @@ async def test_dispatch_sources_manual_path_emits_no_emf_line(
     result = await collection_tasks.dispatch_sources(ctx=_ctx())
 
     assert result == {"dispatched_count": 0}
-    assert _emf_lines(capsys.readouterr().out) == []
+    assert _emf_records(capsys.readouterr().out) == []

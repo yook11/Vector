@@ -48,17 +48,17 @@ _FAILURE_REASON_BY_STAGE = {
 }
 
 
-def _emf_lines(captured_stdout: str) -> list[dict[str, Any]]:
-    """stdout から EMF 行 (``_aws`` キーを持つ JSON 行) だけを抽出する。"""
-    lines: list[dict[str, Any]] = []
+def _metric_records(captured_stdout: str, metric_name: str) -> list[dict[str, Any]]:
+    """stdout から metric_name を持つ EMF レコード (``_aws`` キー行) を抽出する。"""
+    records: list[dict[str, Any]] = []
     for line in captured_stdout.splitlines():
         try:
             record = json.loads(line)
         except json.JSONDecodeError:
             continue
-        if isinstance(record, dict) and "_aws" in record:
-            lines.append(record)
-    return lines
+        if isinstance(record, dict) and "_aws" in record and metric_name in record:
+            records.append(record)
+    return records
 
 
 def _successful_observation_snapshot(
@@ -105,11 +105,11 @@ async def test_all_stages_success_emit_observation_up_one_per_stage(
     monkeypatch.setattr(module, "read_stream_health", AsyncMock(side_effect=snapshots))
 
     await module.observe_pipeline_queue_health()
-    emf_lines = _emf_lines(capsys.readouterr().out)
+    records = _metric_records(capsys.readouterr().out, _OBSERVATION_UP_METRIC)
 
-    assert [line["stage"] for line in emf_lines] == list(_STAGES)
-    assert [line[_OBSERVATION_UP_METRIC] for line in emf_lines] == [1, 1, 1, 1]
-    metric_def = emf_lines[0]["_aws"]["CloudWatchMetrics"][0]
+    assert [record["stage"] for record in records] == list(_STAGES)
+    assert [record[_OBSERVATION_UP_METRIC] for record in records] == [1, 1, 1, 1]
+    metric_def = records[0]["_aws"]["CloudWatchMetrics"][0]
     assert metric_def["Namespace"] == "Vector/Pipeline"
     assert metric_def["Dimensions"] == [["stage"]]
     assert metric_def["Metrics"] == [{"Name": _OBSERVATION_UP_METRIC, "Unit": "Count"}]
@@ -133,9 +133,9 @@ async def test_one_stage_failure_emits_zero_and_continues_other_stages(
     monkeypatch.setattr(module, "read_stream_health", AsyncMock(side_effect=results))
 
     await module.observe_pipeline_queue_health()
-    emf_lines = _emf_lines(capsys.readouterr().out)
+    records = _metric_records(capsys.readouterr().out, _OBSERVATION_UP_METRIC)
     observation_up_by_stage = {
-        line["stage"]: line[_OBSERVATION_UP_METRIC] for line in emf_lines
+        record["stage"]: record[_OBSERVATION_UP_METRIC] for record in records
     }
 
     assert observation_up_by_stage == {
@@ -154,7 +154,7 @@ async def test_all_stages_failure_emit_four_zero_lines(
     monkeypatch.setattr(module, "read_stream_health", AsyncMock(side_effect=errors))
 
     await module.observe_pipeline_queue_health()
-    emf_lines = _emf_lines(capsys.readouterr().out)
+    records = _metric_records(capsys.readouterr().out, _OBSERVATION_UP_METRIC)
 
-    assert [line["stage"] for line in emf_lines] == list(_STAGES)
-    assert [line[_OBSERVATION_UP_METRIC] for line in emf_lines] == [0, 0, 0, 0]
+    assert [record["stage"] for record in records] == list(_STAGES)
+    assert [record[_OBSERVATION_UP_METRIC] for record in records] == [0, 0, 0, 0]

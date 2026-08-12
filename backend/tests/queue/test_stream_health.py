@@ -172,6 +172,7 @@ class _RecordingRedis:
 
 
 def test_pipeline_queue_targets_and_stage_vocabulary_are_fixed() -> None:
+    """A2 alarm はこの5 stage 分だけ張られるため、系列数と語彙をここで固定する。"""
     module = _health_module()
 
     assert (
@@ -181,12 +182,13 @@ def test_pipeline_queue_targets_and_stage_vocabulary_are_fixed() -> None:
             for target in module.PIPELINE_QUEUE_TARGETS
         ),
     ) == (
-        ("acquisition", "completion", "curation", "assessment"),
+        ("acquisition", "completion", "curation", "assessment", "embedding"),
         (
             ("acquisition", "pipeline:acquisition", "taskiq"),
             ("completion", "pipeline:completion", "taskiq"),
             ("curation", "pipeline:curation", "taskiq"),
             ("assessment", "pipeline:assessment", "taskiq"),
+            ("embedding", "pipeline:embedding", "taskiq"),
         ),
     )
 
