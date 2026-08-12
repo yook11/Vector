@@ -209,32 +209,164 @@ def test_input_blocked_translation_marks_provider_neutral_safety_kind() -> None:
 
 
 # RESOURCE_EXHAUSTED / code=429 → 2-way 分岐 (usage limit vs rate)
+#
+# Gemini の 429 は per-minute バーストでも per-day 枯渇でも message が同一文言
+# (実際のレスポンス例) のため、以下の fixture は全ケースで message を固定し、
+# 構造化 details の quotaId だけが分類を左右することを固定する。
+
+_PER_DAY_QUOTA_ID = "GenerateRequestsPerDayPerProjectPerModel-FreeTier"
+_PER_MINUTE_QUOTA_ID = "GenerateRequestsPerMinutePerProjectPerModel-FreeTier"
+_QUOTA_EXCEEDED_MESSAGE = (
+    "You exceeded your current quota, please check your plan and billing details."
+)
+
+
+def _quota_failure_detail(*quota_ids: str) -> dict:
+    """AIP-193 QuotaFailure 型の details 要素 (violations に quotaId を積む)。"""
+    return {
+        "@type": "type.googleapis.com/google.rpc.QuotaFailure",
+        "violations": [{"quotaId": quota_id} for quota_id in quota_ids],
+    }
+
+
+def _resource_exhausted_error(
+    *,
+    quota_ids: tuple[str, ...] = (),
+    details: list[dict] | None = None,
+    status: str = "RESOURCE_EXHAUSTED",
+    message: str = _QUOTA_EXCEEDED_MESSAGE,
+    flat_envelope: bool = False,
+) -> genai_errors.ClientError:
+    """429 RESOURCE_EXHAUSTED の実レスポンス形を構築する。
+
+    ``quota_ids`` は単一 QuotaFailure の violations として積む簡易 helper。複数
+    QuotaFailure item や RetryInfo 混在等、より複雑な details 形は ``details`` を
+    直接渡す。``flat_envelope=True`` で ``{"error": {...}}`` ではなく flat 形
+    (details 自体が error 相当) を構築する。
+    """
+    if details is None and quota_ids:
+        details = [_quota_failure_detail(*quota_ids)]
+    error_body: dict = {"status": status, "message": message}
+    if details is not None:
+        error_body["details"] = details
+    response_json = error_body if flat_envelope else {"error": error_body}
+    return genai_errors.ClientError(429, response_json)
 
 
 @pytest.mark.parametrize(
-    "message,expected",
+    "quota_ids,expected",
     [
-        ("daily quota exceeded", AIProviderUsageLimitExhaustedError),
-        ("quota for project exceeded", AIProviderUsageLimitExhaustedError),
-        ("rate limit reached", AIProviderRateLimitedError),
-        ("too many requests", AIProviderRateLimitedError),
+        ((), AIProviderRateLimitedError),
+        ((_PER_MINUTE_QUOTA_ID,), AIProviderRateLimitedError),
+        ((_PER_DAY_QUOTA_ID,), AIProviderUsageLimitExhaustedError),
     ],
 )
-def test_resource_exhausted_status_2way_branch(message: str, expected: type) -> None:
-    exc = _client_error(code=429, status="RESOURCE_EXHAUSTED", message=message)
+def test_resource_exhausted_status_2way_branch(
+    quota_ids: tuple[str, ...], expected: type
+) -> None:
+    """同一 message のまま details の quotaId だけで分岐する。"""
+    exc = _resource_exhausted_error(quota_ids=quota_ids)
     translated = translate_gemini_error(exc)
     assert isinstance(translated, expected)
 
 
 def test_code_429_without_status_routes_to_rate_or_quota() -> None:
-    """``status`` 空でも ``code=429`` で同じ 2-way 分岐に入る。"""
-    quota_exc = _client_error(code=429, status="", message="daily quota exceeded")
-    rate_exc = _client_error(code=429, status="", message="rate limit reached")
+    """``status`` 空でも ``code=429`` で同じ details ベース分岐に入る。"""
+    quota_exc = _resource_exhausted_error(status="", quota_ids=(_PER_DAY_QUOTA_ID,))
+    rate_exc = _resource_exhausted_error(status="", quota_ids=())
     assert isinstance(
         translate_gemini_error(quota_exc),
         AIProviderUsageLimitExhaustedError,
     )
     assert isinstance(translate_gemini_error(rate_exc), AIProviderRateLimitedError)
+
+
+# 3e: positive allowlist の詳細契約 — details 構造だけで分類する (message は無関係)
+
+
+def test_resource_exhausted_per_minute_quota_only_classifies_as_rate_limited() -> None:
+    exc = _resource_exhausted_error(quota_ids=(_PER_MINUTE_QUOTA_ID,))
+    translated = translate_gemini_error(exc)
+    assert isinstance(translated, AIProviderRateLimitedError)
+
+
+def test_resource_exhausted_per_day_quota_only_classifies_as_exhausted() -> None:
+    exc = _resource_exhausted_error(quota_ids=(_PER_DAY_QUOTA_ID,))
+    translated = translate_gemini_error(exc)
+    assert isinstance(translated, AIProviderUsageLimitExhaustedError)
+
+
+@pytest.mark.parametrize(
+    "details",
+    [
+        [_quota_failure_detail(_PER_MINUTE_QUOTA_ID, _PER_DAY_QUOTA_ID)],
+        [
+            _quota_failure_detail(_PER_MINUTE_QUOTA_ID),
+            _quota_failure_detail(_PER_DAY_QUOTA_ID),
+        ],
+    ],
+    ids=["single_quota_failure_item", "multiple_quota_failure_items"],
+)
+def test_resource_exhausted_mixed_violations_prioritizes_usage_limit_exhausted(
+    details: list[dict],
+) -> None:
+    """per-day と per-minute が混在しても per-day が 1 件あれば usage limit 優先。"""
+    exc = _resource_exhausted_error(details=details)
+    translated = translate_gemini_error(exc)
+    assert isinstance(translated, AIProviderUsageLimitExhaustedError)
+
+
+def test_resource_exhausted_without_details_classifies_as_rate_limited() -> None:
+    """details 欠損 (SDK が返さない/剥落) は rate limited に倒す。"""
+    exc = _resource_exhausted_error(quota_ids=())
+    translated = translate_gemini_error(exc)
+    assert isinstance(translated, AIProviderRateLimitedError)
+
+
+@pytest.mark.parametrize(
+    "malformed_details",
+    [
+        "not-a-dict",
+        ["not", "a", "dict"],
+        {"error": "not-a-dict"},
+        {"error": {"details": "not-a-list"}},
+        {"error": {"details": {"not": "a-list"}}},
+    ],
+    ids=[
+        "details_not_dict",
+        "details_list_not_singleton",
+        "error_not_dict",
+        "error_details_not_list",
+        "error_details_dict",
+    ],
+)
+def test_resource_exhausted_malformed_details_classifies_as_rate_limited(
+    malformed_details: object,
+) -> None:
+    """details / error.details が不正形なら rate limited に倒す。"""
+    exc = _resource_exhausted_error(quota_ids=())
+    object.__setattr__(exc, "details", malformed_details)
+    translated = translate_gemini_error(exc)
+    assert isinstance(translated, AIProviderRateLimitedError)
+
+
+def test_resource_exhausted_unknown_quota_id_classifies_as_rate_limited() -> None:
+    """per-day を含まない未知 quotaId は rate limited に倒す。"""
+    exc = _resource_exhausted_error(quota_ids=("SomeOtherLimit-FreeTier",))
+    translated = translate_gemini_error(exc)
+    assert isinstance(translated, AIProviderRateLimitedError)
+
+
+@pytest.mark.parametrize("flat_envelope", [False, True], ids=["wrapped", "flat"])
+def test_resource_exhausted_per_day_quota_classifies_regardless_of_envelope_shape(
+    flat_envelope: bool,
+) -> None:
+    """``{"error": {...}}`` 形と flat 形の両方で per-day violation を検出する。"""
+    exc = _resource_exhausted_error(
+        quota_ids=(_PER_DAY_QUOTA_ID,), flat_envelope=flat_envelope
+    )
+    translated = translate_gemini_error(exc)
+    assert isinstance(translated, AIProviderUsageLimitExhaustedError)
 
 
 def test_legacy_api_error_unauthenticated_classifies_as_configuration() -> None:
@@ -331,18 +463,12 @@ def test_legacy_api_error_unauthenticated_classifies_as_configuration() -> None:
             GeminiStateReason.INVALID_ARGUMENT,
         ),
         (
-            _client_error(
-                code=429,
-                status="RESOURCE_EXHAUSTED",
-                message="daily quota exceeded",
-            ),
+            _resource_exhausted_error(quota_ids=(_PER_DAY_QUOTA_ID,)),
             AIProviderUsageLimitExhaustedError,
             GeminiStateReason.QUOTA_EXHAUSTED,
         ),
         (
-            _client_error(
-                code=429, status="RESOURCE_EXHAUSTED", message="rate limit reached"
-            ),
+            _resource_exhausted_error(quota_ids=()),
             AIProviderRateLimitedError,
             GeminiStateReason.RATE_LIMITED,
         ),

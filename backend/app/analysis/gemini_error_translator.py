@@ -163,6 +163,43 @@ def is_context_length_error(exc: Exception) -> bool:
     return any(pat in message for pat in _CONTEXT_LENGTH_PATTERNS)
 
 
+_QUOTA_FAILURE_TYPE = "type.googleapis.com/google.rpc.QuotaFailure"
+
+
+def _has_per_day_quota_violation(exc: genai_errors.APIError) -> bool:
+    """構造化 details の QuotaFailure に per-day quota violation があるか。
+
+    Gemini の 429 は per-minute バーストでも per-day 枯渇でも message が同文言の
+    ため、機械判定は構造化 details (AIP-193) で行う。SDK 2.10.0 の ``details`` は
+    レスポンス全体で、``{"error": {...}}`` と flat の両形状を取りうる。details
+    欠損・不正・未知 quotaId は False (= rate limited 側) に倒し、複数 violation
+    は 1 件でも per-day があれば True。生の details は project ID 等を含みうる
+    ため、この関数からログへ出さない。
+    """
+    details = getattr(exc, "details", None)
+    if not isinstance(details, dict):
+        return False
+    error = details.get("error", details)
+    if not isinstance(error, dict):
+        return False
+    error_details = error.get("details")
+    if not isinstance(error_details, list):
+        return False
+    for item in error_details:
+        if not isinstance(item, dict) or item.get("@type") != _QUOTA_FAILURE_TYPE:
+            continue
+        violations = item.get("violations")
+        if not isinstance(violations, list):
+            continue
+        for violation in violations:
+            if not isinstance(violation, dict):
+                continue
+            quota_id = violation.get("quotaId")
+            if isinstance(quota_id, str) and "perday" in quota_id.lower():
+                return True
+    return False
+
+
 def translate_gemini_error(exc: Exception) -> Exception:
     """Gemini SDK 例外を ``AIProvider*Error`` に分類する。
 
@@ -247,10 +284,12 @@ def translate_gemini_error(exc: Exception) -> Exception:
                 reason=GeminiStateReason.INVALID_ARGUMENT
             )
 
-        # 3e. 429 / RESOURCE_EXHAUSTED。quota/daily message は利用枠 exhausted
-        #     として、rate limit (一時的バースト超過) と区別する。
+        # 3e. 429 / RESOURCE_EXHAUSTED。構造化 details に per-day violation を
+        #     確認できた場合だけ利用枠 exhausted (positive allowlist)。それ以外
+        #     (RPM/TPM バースト・details 欠損/不正/未知) は rate limit に倒し、
+        #     誤った 6h hold と A6 誤発火を避ける。
         if code == 429 or status == "RESOURCE_EXHAUSTED":
-            if "quota" in message or "daily" in message:
+            if _has_per_day_quota_violation(exc):
                 return AIProviderUsageLimitExhaustedError(
                     reason=GeminiStateReason.QUOTA_EXHAUSTED
                 )

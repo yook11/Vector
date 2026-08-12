@@ -19,6 +19,7 @@ from app.analysis.ai_provider_errors import (
     AIProviderContentError,
     AIProviderStateError,
 )
+from app.analysis.ai_provider_exhaustion import record_ai_provider_exhausted
 from app.analysis.curation.ai.base import BaseCurator
 from app.analysis.curation.domain.ready import ReadyForCuration
 from app.analysis.curation.errors import (
@@ -96,6 +97,10 @@ class CurationFailureHandler:
                 return FailureHandlingDecision(reraise=False)
             case CurationTerminalKeepError():
                 record_curation_processing_outcome("failed")
+                record_ai_provider_exhausted(
+                    exc.provider_error,
+                    provider=curator.rate_limit_policy.provider,
+                )
                 await self._audit_failure(ready, exc, curator)
                 return FailureHandlingDecision(
                     reraise=False,
@@ -104,6 +109,10 @@ class CurationFailureHandler:
             case CurationRecoverableError():
                 recoverable = exc
                 record_curation_processing_outcome("failed")
+                record_ai_provider_exhausted(
+                    recoverable.provider_error,
+                    provider=curator.rate_limit_policy.provider,
+                )
                 await self._audit_failure(ready, recoverable, curator)
                 hold_reason = _hold_reason(recoverable) if last_attempt else None
                 return FailureHandlingDecision(

@@ -32,6 +32,7 @@ from app.analysis.ai_provider_errors import (
     AIProviderConfigurationError,
     AIProviderError,
     AIProviderInputRejectedError,
+    AIProviderInsufficientBalanceError,
     AIProviderNetworkError,
     AIProviderRateLimitedError,
     AIProviderServiceUnavailableError,
@@ -45,6 +46,7 @@ from app.models.analyzable_article_record import AnalyzableArticleRecord
 from app.models.article_curation import ArticleCuration
 from app.models.news_source import NewsSource
 from app.models.pipeline_event import PipelineEvent
+from tests.cloudwatch.records import metric_records
 from tests.logfire._metric_helpers import collected_metrics, sum_counter_for_result
 
 _PROCESSING_OUTCOME_METRIC = "vector.assessment.processing_outcome"
@@ -151,6 +153,7 @@ async def test_hold_reason_derived_from_provider_mode(
         exc=exc,
         last_attempt=last_attempt,
         analyzable_article_id=article.id,
+        provider="gemini",
     )
 
     assert decision.stage_hold_reason == expected_hold
@@ -174,6 +177,7 @@ async def test_recoverable_with_retry_budget_returns_true(
         exc=exc,
         last_attempt=False,
         analyzable_article_id=article.id,
+        provider="gemini",
     )
 
     assert decision.reraise is True
@@ -198,6 +202,7 @@ async def test_recoverable_last_attempt_returns_false(
         exc=exc,
         last_attempt=True,
         analyzable_article_id=article.id,
+        provider="gemini",
     )
 
     assert decision.reraise is False
@@ -221,6 +226,7 @@ async def test_terminal_returns_false_without_reraise(
         exc=exc,
         last_attempt=False,
         analyzable_article_id=article.id,
+        provider="gemini",
     )
 
     assert decision.reraise is False
@@ -245,6 +251,7 @@ async def test_terminal_writes_single_failure_audit_row(
         exc=exc,
         last_attempt=False,
         analyzable_article_id=article.id,
+        provider="gemini",
     )
 
     await db_session.rollback()
@@ -276,6 +283,7 @@ async def test_unexpected_with_retry_budget_returns_true(
         exc=ValueError("surprise"),
         last_attempt=False,
         analyzable_article_id=article.id,
+        provider="gemini",
     )
 
     assert decision.reraise is True
@@ -306,6 +314,7 @@ async def test_unexpected_last_attempt_returns_false(
         exc=ValueError("surprise"),
         last_attempt=True,
         analyzable_article_id=article.id,
+        provider="gemini",
     )
 
     assert decision.reraise is False
@@ -347,6 +356,7 @@ async def test_audit_failure_falls_back_to_log_with_secrets_redacted(
             exc=business_exc,
             last_attempt=False,
             analyzable_article_id=article.id,
+            provider="gemini",
         )
 
     assert decision.reraise is False
@@ -399,6 +409,7 @@ async def test_handle_emits_processing_outcome(
         exc=make_exc(),
         last_attempt=False,
         analyzable_article_id=article.id,
+        provider="gemini",
     )
 
     metrics = collected_metrics(capfire)
@@ -442,7 +453,106 @@ async def test_failed_emitted_before_audit_side_effect(
                 exc=exc,
                 last_attempt=False,
                 analyzable_article_id=article.id,
+                provider="gemini",
             )
 
     metrics = collected_metrics(capfire)
     assert sum_counter_for_result(metrics, _PROCESSING_OUTCOME_METRIC, "failed") == 1
+
+
+# ai_provider_exhausted EMF emit (CloudWatch A6) — 枯渇系 provider error だけが打点する
+
+
+_EXHAUSTED_METRIC = "ai_provider_exhausted"
+
+
+@pytest.mark.asyncio
+async def test_terminal_with_exhausted_provider_error_emits_ai_provider_exhausted(
+    db_session: AsyncSession,
+    session_factory: async_sessionmaker[AsyncSession],
+    sample_source: NewsSource,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """InsufficientBalance (OPERATOR_ACTION_REQUIRED) は Terminal 経由で
+    ``ai_provider_exhausted`` を kind=CODE / provider=引数の provider で emit する。"""
+    article = await _make_article(db_session, sample_source)
+    extraction = await _make_extraction(db_session, article)
+    ready = _ready_from(extraction)
+    handler = AssessmentFailureHandler(session_factory)
+    exc = map_provider_to_assessment(AIProviderInsufficientBalanceError())
+
+    await handler.handle(
+        ready=ready,
+        exc=exc,
+        last_attempt=False,
+        analyzable_article_id=article.id,
+        provider="gemini",
+    )
+
+    records = metric_records(capsys.readouterr().out, _EXHAUSTED_METRIC)
+    assert len(records) == 1
+    assert records[0]["kind"] == AIProviderInsufficientBalanceError.CODE
+    assert records[0]["provider"] == "gemini"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("last_attempt", [False, True])
+async def test_recoverable_exhausted_provider_error_emits_regardless_of_last_attempt(
+    db_session: AsyncSession,
+    session_factory: async_sessionmaker[AsyncSession],
+    sample_source: NewsSource,
+    capsys: pytest.CaptureFixture[str],
+    last_attempt: bool,
+) -> None:
+    """UsageLimitExhausted (CONDITION_BASED_RECOVERY) は Recoverable 経路でも
+    last_attempt に依らず発生ごとに 1 打点 emit する (抑制は alarm 側の責務)。"""
+    article = await _make_article(db_session, sample_source)
+    extraction = await _make_extraction(db_session, article)
+    ready = _ready_from(extraction)
+    handler = AssessmentFailureHandler(session_factory)
+    exc = map_provider_to_assessment(AIProviderUsageLimitExhaustedError())
+
+    await handler.handle(
+        ready=ready,
+        exc=exc,
+        last_attempt=last_attempt,
+        analyzable_article_id=article.id,
+        provider="gemini",
+    )
+
+    records = metric_records(capsys.readouterr().out, _EXHAUSTED_METRIC)
+    assert len(records) == 1
+    assert records[0]["kind"] == AIProviderUsageLimitExhaustedError.CODE
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "make_exc",
+    [
+        lambda: map_provider_to_assessment(AIProviderConfigurationError()),
+        lambda: map_provider_to_assessment(AIProviderRateLimitedError()),
+    ],
+    ids=["terminal_non_exhausted", "recoverable_non_exhausted"],
+)
+async def test_non_exhausted_provider_error_does_not_emit_ai_provider_exhausted(
+    db_session: AsyncSession,
+    session_factory: async_sessionmaker[AsyncSession],
+    sample_source: NewsSource,
+    capsys: pytest.CaptureFixture[str],
+    make_exc,
+) -> None:
+    """一時的 rate limit / 設定不正など枯渇以外の provider error は emit しない。"""
+    article = await _make_article(db_session, sample_source)
+    extraction = await _make_extraction(db_session, article)
+    ready = _ready_from(extraction)
+    handler = AssessmentFailureHandler(session_factory)
+
+    await handler.handle(
+        ready=ready,
+        exc=make_exc(),
+        last_attempt=True,
+        analyzable_article_id=article.id,
+        provider="gemini",
+    )
+
+    assert metric_records(capsys.readouterr().out, _EXHAUSTED_METRIC) == []

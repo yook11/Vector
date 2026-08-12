@@ -10,6 +10,7 @@ from types import SimpleNamespace
 from typing import Any, cast
 
 import pytest
+from google.genai import errors as genai_errors
 from google.genai.client import AsyncClient
 from opentelemetry import context as otel_context
 from opentelemetry import trace
@@ -30,7 +31,9 @@ from app.analysis.ai_provider_errors import (
     AIProviderInputRejectedError,
     AIProviderNetworkError,
     AIProviderOutputBlockedError,
+    AIProviderRateLimitedError,
     AIProviderStateError,
+    AIProviderUsageLimitExhaustedError,
 )
 from app.analysis.gemini_error_translator import (
     GeminiContentRejectionReason,
@@ -50,6 +53,7 @@ from tests.agent.runtime._deepseek_helpers import (
     success_response as deepseek_success_response,
 )
 from tests.agent.runtime._helpers import FakeGeminiClient, make_agent, success_response
+from tests.cloudwatch.records import metric_records
 
 
 def _content_rejection_kind_type() -> type[StrEnum]:
@@ -893,3 +897,80 @@ async def test_non_streaming_runtime_rejects_schema_none_before_renderer_and_pro
         await runtime.invoke(agent, object(), attempt_number=1)
 
     provider_call.assert_not_awaited()
+
+
+# ai_provider_exhausted EMF emit (CloudWatch A6) — classified_error 集約 branch でも
+# 枯渇系に翻訳された SDK 例外だけが打点する (invoke() 同様の kind/provider 契約)
+
+
+_EXHAUSTED_METRIC = "ai_provider_exhausted"
+
+
+def _quota_exhausted_sdk_error() -> genai_errors.ClientError:
+    """429 + per-day QuotaFailure details の実レスポンス形 (枯渇に翻訳される)。"""
+    response_json = {
+        "error": {
+            "status": "RESOURCE_EXHAUSTED",
+            "message": "You exceeded your current quota, check your plan and billing.",
+            "details": [
+                {
+                    "@type": "type.googleapis.com/google.rpc.QuotaFailure",
+                    "violations": [
+                        {"quotaId": "GenerateRequestsPerDayPerProjectPerModel-FreeTier"}
+                    ],
+                }
+            ],
+        }
+    }
+    return genai_errors.ClientError(429, response_json)
+
+
+def _rate_limited_sdk_error() -> genai_errors.ClientError:
+    """429 だが details 無し (per-minute バースト等、rate limit に翻訳される)。"""
+    response_json = {
+        "error": {"status": "RESOURCE_EXHAUSTED", "message": "rate limit reached"}
+    }
+    return genai_errors.ClientError(429, response_json)
+
+
+async def test_invoke_stream_quota_exhausted_sdk_error_emits_ai_provider_exhausted(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """quota 超過で中断した stream は provider=gemini で 1 打点 emit する。"""
+    tracer = FakeTracer()
+    monkeypatch.setattr(gemini_runtime_module, "_TRACER", tracer)
+    client = FakeGeminiClient([], streams=[_quota_exhausted_sdk_error()])
+    runtime = GeminiAgentRuntime(client=cast(AsyncClient, client))
+
+    with pytest.raises(AIProviderUsageLimitExhaustedError):
+        await runtime.invoke_stream(
+            make_agent(response_schema=None),
+            "typed input",
+            attempt_number=1,
+        ).__anext__()
+
+    records = metric_records(capsys.readouterr().out, _EXHAUSTED_METRIC)
+    assert len(records) == 1
+    assert records[0]["kind"] == AIProviderUsageLimitExhaustedError.CODE
+    assert records[0]["provider"] == "gemini"
+
+
+async def test_invoke_stream_plain_rate_limited_sdk_error_does_not_emit(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """一時的 rate limit (時間経過で回復) は枯渇ではないため emit しない。"""
+    tracer = FakeTracer()
+    monkeypatch.setattr(gemini_runtime_module, "_TRACER", tracer)
+    client = FakeGeminiClient([], streams=[_rate_limited_sdk_error()])
+    runtime = GeminiAgentRuntime(client=cast(AsyncClient, client))
+
+    with pytest.raises(AIProviderRateLimitedError):
+        await runtime.invoke_stream(
+            make_agent(response_schema=None),
+            "typed input",
+            attempt_number=1,
+        ).__anext__()
+
+    assert metric_records(capsys.readouterr().out, _EXHAUSTED_METRIC) == []

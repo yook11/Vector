@@ -28,6 +28,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from app.analysis.ai_provider_errors import (
     AIProviderConfigurationError,
     AIProviderInputRejectedError,
+    AIProviderInsufficientBalanceError,
     AIProviderNetworkError,
     AIProviderOutputBlockedError,
     AIProviderRateLimitedError,
@@ -45,16 +46,21 @@ from app.collection.persistence.analyzable_article_repository import (
 from app.models.analyzable_article_record import AnalyzableArticleRecord
 from app.models.news_source import NewsSource
 from app.models.pipeline_event import PipelineEvent
+from tests.cloudwatch.records import metric_records
 from tests.logfire._metric_helpers import collected_metrics, sum_counter_for_result
 
 _PROCESSING_OUTCOME_METRIC = "vector.curation.processing_outcome"
 
 
 def _curator_mock() -> MagicMock:
-    """Handler に渡す ``BaseCurator`` mock (model_name / prompt_version のみ)。"""
+    """Handler に渡す ``BaseCurator`` mock (model_name / prompt_version /
+    rate_limit_policy)。rate_limit_policy は record_ai_provider_exhausted が
+    ``.provider`` を EMF dimension 値として JSON へ載せるため、実 spec 値
+    (文字列 provider) を使う。"""
     mock = MagicMock(spec=BaseCurator)
     type(mock).model_name = GEMINI_CURATION_SPEC.model
     type(mock).prompt_version = GEMINI_CURATION_SPEC.version
+    type(mock).rate_limit_policy = GEMINI_CURATION_SPEC.rate_limit_policy
     return mock
 
 
@@ -459,3 +465,95 @@ async def test_drop_arm_emits_failed_even_when_drop_tx_fails(
 
     metrics = collected_metrics(capfire)
     assert sum_counter_for_result(metrics, _PROCESSING_OUTCOME_METRIC, "failed") == 1
+
+
+# ai_provider_exhausted EMF emit (CloudWatch A6) — 枯渇系 provider error だけが打点する
+
+
+_EXHAUSTED_METRIC = "ai_provider_exhausted"
+
+
+@pytest.mark.asyncio
+async def test_terminal_keep_with_exhausted_provider_error_emits_ai_provider_exhausted(
+    db_session: AsyncSession,
+    session_factory: async_sessionmaker[AsyncSession],
+    sample_source: NewsSource,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """InsufficientBalance (OPERATOR_ACTION_REQUIRED) は terminal_keep 経由で
+    ``ai_provider_exhausted`` を kind=CODE / provider=curator provider で emit する。"""
+    article = await _make_article(db_session, sample_source)
+    ready = _ready_from(article)
+    handler = CurationFailureHandler(session_factory)
+    exc = _wrap(AIProviderInsufficientBalanceError())
+
+    await handler.handle(
+        ready=ready,
+        exc=exc,
+        curator=_curator_mock(),
+        last_attempt=False,
+    )
+
+    records = metric_records(capsys.readouterr().out, _EXHAUSTED_METRIC)
+    assert len(records) == 1
+    assert records[0]["kind"] == AIProviderInsufficientBalanceError.CODE
+    assert records[0]["provider"] == GEMINI_CURATION_SPEC.provider
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("last_attempt", [False, True])
+async def test_recoverable_exhausted_provider_error_emits_regardless_of_last_attempt(
+    db_session: AsyncSession,
+    session_factory: async_sessionmaker[AsyncSession],
+    sample_source: NewsSource,
+    capsys: pytest.CaptureFixture[str],
+    last_attempt: bool,
+) -> None:
+    """UsageLimitExhausted (CONDITION_BASED_RECOVERY) は recoverable 経路でも
+    last_attempt に依らず発生ごとに 1 打点 emit する (抑制は alarm 側の責務)。"""
+    article = await _make_article(db_session, sample_source)
+    ready = _ready_from(article)
+    handler = CurationFailureHandler(session_factory)
+    exc = _wrap(AIProviderUsageLimitExhaustedError())
+
+    await handler.handle(
+        ready=ready,
+        exc=exc,
+        curator=_curator_mock(),
+        last_attempt=last_attempt,
+    )
+
+    records = metric_records(capsys.readouterr().out, _EXHAUSTED_METRIC)
+    assert len(records) == 1
+    assert records[0]["kind"] == AIProviderUsageLimitExhaustedError.CODE
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "make_exc",
+    [
+        lambda: _wrap(AIProviderConfigurationError()),
+        lambda: _wrap(AIProviderRateLimitedError()),
+    ],
+    ids=["terminal_keep_non_exhausted", "recoverable_non_exhausted"],
+)
+async def test_non_exhausted_provider_error_does_not_emit_ai_provider_exhausted(
+    db_session: AsyncSession,
+    session_factory: async_sessionmaker[AsyncSession],
+    sample_source: NewsSource,
+    capsys: pytest.CaptureFixture[str],
+    make_exc,
+) -> None:
+    """一時的 rate limit / 設定不正など枯渇以外の provider error は emit しない。"""
+    article = await _make_article(db_session, sample_source)
+    ready = _ready_from(article)
+    handler = CurationFailureHandler(session_factory)
+
+    await handler.handle(
+        ready=ready,
+        exc=make_exc(),
+        curator=_curator_mock(),
+        last_attempt=True,
+    )
+
+    assert metric_records(capsys.readouterr().out, _EXHAUSTED_METRIC) == []

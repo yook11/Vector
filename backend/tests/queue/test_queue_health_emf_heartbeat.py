@@ -9,8 +9,7 @@ stage ごとの成否分岐と構造だけを検証する。
 
 from __future__ import annotations
 
-import json
-from typing import Any, cast
+from typing import cast
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -23,6 +22,7 @@ from app.queue.stream_health import (
     StreamHealthTarget,
 )
 from app.queue.tasks import queue_health as module
+from tests.cloudwatch.records import metric_records
 
 _OBSERVATION_UP_METRIC = "observation_up"
 _STAGE_SPECS = (
@@ -46,19 +46,6 @@ _FAILURE_REASON_BY_STAGE = {
     "curation": "lag_unknown",
     "assessment": "redis_unavailable",
 }
-
-
-def _metric_records(captured_stdout: str, metric_name: str) -> list[dict[str, Any]]:
-    """stdout から metric_name を持つ EMF レコード (``_aws`` キー行) を抽出する。"""
-    records: list[dict[str, Any]] = []
-    for line in captured_stdout.splitlines():
-        try:
-            record = json.loads(line)
-        except json.JSONDecodeError:
-            continue
-        if isinstance(record, dict) and "_aws" in record and metric_name in record:
-            records.append(record)
-    return records
 
 
 def _successful_observation_snapshot(
@@ -105,7 +92,7 @@ async def test_all_stages_success_emit_observation_up_one_per_stage(
     monkeypatch.setattr(module, "read_stream_health", AsyncMock(side_effect=snapshots))
 
     await module.observe_pipeline_queue_health()
-    records = _metric_records(capsys.readouterr().out, _OBSERVATION_UP_METRIC)
+    records = metric_records(capsys.readouterr().out, _OBSERVATION_UP_METRIC)
 
     assert [record["stage"] for record in records] == list(_STAGES)
     assert [record[_OBSERVATION_UP_METRIC] for record in records] == [1, 1, 1, 1]
@@ -133,7 +120,7 @@ async def test_one_stage_failure_emits_zero_and_continues_other_stages(
     monkeypatch.setattr(module, "read_stream_health", AsyncMock(side_effect=results))
 
     await module.observe_pipeline_queue_health()
-    records = _metric_records(capsys.readouterr().out, _OBSERVATION_UP_METRIC)
+    records = metric_records(capsys.readouterr().out, _OBSERVATION_UP_METRIC)
     observation_up_by_stage = {
         record["stage"]: record[_OBSERVATION_UP_METRIC] for record in records
     }
@@ -154,7 +141,7 @@ async def test_all_stages_failure_emit_four_zero_lines(
     monkeypatch.setattr(module, "read_stream_health", AsyncMock(side_effect=errors))
 
     await module.observe_pipeline_queue_health()
-    records = _metric_records(capsys.readouterr().out, _OBSERVATION_UP_METRIC)
+    records = metric_records(capsys.readouterr().out, _OBSERVATION_UP_METRIC)
 
     assert [record["stage"] for record in records] == list(_STAGES)
     assert [record[_OBSERVATION_UP_METRIC] for record in records] == [0, 0, 0, 0]

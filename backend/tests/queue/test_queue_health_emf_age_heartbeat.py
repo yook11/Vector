@@ -15,8 +15,7 @@ Logfire gauge 記録内容自体の正本は ``test_queue_health_task.py``、
 
 from __future__ import annotations
 
-import json
-from typing import Any, cast
+from typing import cast
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -29,6 +28,7 @@ from app.queue.stream_health import (
     StreamHealthTarget,
 )
 from app.queue.tasks import queue_health as module
+from tests.cloudwatch.records import metric_records
 
 _AGE_METRIC = "oldest_outstanding_enqueue_age"
 # embedding は本タスクで PIPELINE_QUEUE_TARGETS に追加された新規観測対象。
@@ -46,19 +46,6 @@ _TARGETS = tuple(
     )
     for stage, stream in _STAGE_SPECS
 )
-
-
-def _metric_records(captured_stdout: str, metric_name: str) -> list[dict[str, Any]]:
-    """stdout から metric_name を持つ EMF レコード (``_aws`` キー行) を抽出する。"""
-    records: list[dict[str, Any]] = []
-    for line in captured_stdout.splitlines():
-        try:
-            record = json.loads(line)
-        except json.JSONDecodeError:
-            continue
-        if isinstance(record, dict) and "_aws" in record and metric_name in record:
-            records.append(record)
-    return records
 
 
 def _snapshot_with_age(
@@ -102,7 +89,7 @@ async def test_success_stages_emit_age_with_snapshot_value_or_zero_for_none(
     monkeypatch.setattr(module, "read_stream_health", AsyncMock(side_effect=snapshots))
 
     await module.observe_pipeline_queue_health()
-    age_records = _metric_records(capsys.readouterr().out, _AGE_METRIC)
+    age_records = metric_records(capsys.readouterr().out, _AGE_METRIC)
 
     assert {record["stage"]: record[_AGE_METRIC] for record in age_records} == {
         "acquisition": 42.5,
@@ -125,7 +112,7 @@ async def test_success_age_line_uses_seconds_unit_and_pipeline_namespace(
     monkeypatch.setattr(module, "read_stream_health", AsyncMock(side_effect=snapshots))
 
     await module.observe_pipeline_queue_health()
-    age_records = _metric_records(capsys.readouterr().out, _AGE_METRIC)
+    age_records = metric_records(capsys.readouterr().out, _AGE_METRIC)
     metric_def = age_records[0]["_aws"]["CloudWatchMetrics"][0]
 
     assert len(age_records) == len(_TARGETS)
@@ -157,7 +144,7 @@ async def test_failing_stage_emits_no_age_line_but_other_stages_still_emit(
     await module.observe_pipeline_queue_health()
     age_stages = {
         record["stage"]
-        for record in _metric_records(capsys.readouterr().out, _AGE_METRIC)
+        for record in metric_records(capsys.readouterr().out, _AGE_METRIC)
     }
 
     assert age_stages == set(_STAGES) - {failing_stage}

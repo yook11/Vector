@@ -50,6 +50,7 @@ Status: Draft (レビュー中 — 途絶 3 層構成・AI 利用枠枯渇まで
 - 一時的 rate limit・自前 gate skip のアラート化(上記 Invariant の通り)。
 - backfill daily budget 枯渇のアラート化(救済経路の意図的な上限。異常な backlog 成長は A2 が拾う)。
 - agent のユーザー向け日次クォータ(回数制限)枯渇のアラート化(意図的なプロダクト上限で、利用者に 429 として直接見える。AI provider の枠枯渇とは別物)。
+- 残高低下の予兆通知(残高が少なくなってきた、の段階)。provider 側の billing alert 設定に委ねる。本 spec が扱うのは枯渇という発生事象のみ。
 - dev 環境のアラート。
 
 ### Done
@@ -122,9 +123,12 @@ Status: Draft (レビュー中 — 途絶 3 層構成・AI 利用枠枯渇まで
 - 症状: AI provider の利用枠が尽き、以後の AI 処理が枠回復まで全て失敗する状態。一時的な rate limit とは区別する(翻訳層が既に区別済み)。
   - `AIProviderInsufficientBalanceError` — DeepSeek 残高切れ。アクション: 残高チャージ。
   - `AIProviderUsageLimitExhaustedError` — Gemini の quota / daily 枠切れ。アクション: 枠リセット待ちか tier 引き上げの判断。
-- Signal: EMF counter `ai_provider_exhausted{kind, provider}`、kind ∈ {insufficient_balance, usage_limit_exhausted}(≤ 4 系列)。emit point はエラー分類が確定する各 stage の failure handling 境界(分類ロジックは翻訳層 1 か所のまま、emit は決定境界の所有者が行う)。
-- 条件: Sum >= 1、period 15min、1 evaluation period。`TreatMissingData = notBreaching`。発生が続く限り ALARM に留まり、枠回復後の成功で OK(復旧通知)が届く。
-- スコープは analysis 3 工程(curation / assessment / embedding)と agent(Q&A)の provider 呼び出しの両方。agent runtime は同じ翻訳層を再利用しているため語彙は共通。emit point は analysis 側 = 各 stage の failure handling 境界、agent 側 = runtime の分類確定境界(`classified_error` 確定点)。
+- Signal: EMF counter `ai_provider_exhausted{kind, provider}`、kind ∈ {ai_error_insufficient_balance, ai_error_usage_limit_exhausted}(≤ 4 系列)。kind は provider error の `CODE` をそのまま使う: stage hold の reason 値・audit の outcome_code と同一語彙になり、アラート後の調査を 1 つの文字列の grep で metric → 監査 → hold まで追える。emit point はエラー分類が確定する各 stage の failure handling 境界(分類ロジックは翻訳層 1 か所のまま、emit は決定境界の所有者が行う)。
+- 条件: Sum >= 1、period 15min、1 evaluation period。`TreatMissingData = notBreaching`(平常時はデータポイントゼロが正常)。
+- 通知は ALARM のみとし、この alarm には ok_actions を付けない。metric は枯渇エラー発生時にしか存在せず、退避機構が再試行自体を止めるため、チャージしなくても alarm は OK へ戻る = OK 復帰は残高回復を意味しない。チャージ(provider 側での対応)を済ませたかは対応した本人が把握しており、復旧通知は誤解を招くだけ。未チャージのまま退避後の再試行が再び枯渇すれば OK→ALARM の遷移が再発し、リマインダーとして再通知される。
+- スコープは analysis 3 工程(curation / assessment / embedding)と agent(Q&A)の provider 呼び出しの両方。agent runtime は同じ翻訳層を再利用しているため語彙は共通。emit point は analysis 側 = 各 stage の failure handling 境界、agent 側 = runtime の分類確定境界(`classified_error` 確定点)+ internal query embedding の翻訳確定点(runtime を経由しない唯一の provider 呼び出し経路のため個別に emit する)。
+- Gemini の 429 は message が per-minute バーストと per-day 枯渇で同文言のため、構造化 details(QuotaFailure)に per-day violation を確認できた場合だけ枯渇に分類する(positive allowlist)。判定不能な envelope(details 欠損・不正・未知 quotaId)は rate limited に倒す非対称方針: 誤ページの回避を優先し、analysis 側の取りこぼしは A2 がバックストップする。agent(Q&A)は A2 の対象外のため、未知形式 envelope の枯渇は取りこぼしが残る — これは設計判断として受け入れる。
+- insights(trend_discovery / briefing)は provider error 翻訳層を通らない実装(SDK 例外を自前 error に包む)のため A6 の対象外。枯渇が分類されない盲点として認識済みで、翻訳層経由へ寄せる改修は別タスク。
 - stage / surface(pipeline・agent 別)の dimension は持たせない: 残高チャージ・枠回復というアクションは provider 単位で同一であり、どこが最初に踏んだかはアクションに影響しない。系列数は {kind, provider} の ≤ 4 のまま。
 - 実測で 1 件発火がノイジーなら閾値を 3/15min へ調整。
 
@@ -150,8 +154,8 @@ Status: Draft (レビュー中 — 途絶 3 層構成・AI 利用枠枯渇まで
 | embedding worker 死 | A2 embedding | 工程名指し |
 | maintenance worker 死 | A3(missing) | 観測と救済が止まった |
 | Valkey(broker)全面障害 | A3(up=0、約 5 分)+ A1 | broker 障害と推定可能 |
-| DeepSeek 残高切れ | A6(insufficient_balance) | チャージが必要 |
-| Gemini 日次 quota 切れ | A6(usage_limit_exhausted) | 枠リセット待ち判断 |
+| DeepSeek 残高切れ | A6(ai_error_insufficient_balance) | チャージが必要 |
+| Gemini 日次 quota 切れ | A6(ai_error_usage_limit_exhausted) | 枠リセット待ち判断 |
 | DeepSeek 不正 JSON 大量失敗(実績) | A4 | 失敗率と工程 |
 | 一時的 rate limit / gate pacing | 鳴らさない(滞留すれば A2) | — |
 | api 停止 | A7(SSR 経由 5XX), A5 | — |
