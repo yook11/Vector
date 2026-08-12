@@ -49,14 +49,14 @@ _FAILURE_REASON_BY_STAGE = {
 
 
 def _emf_lines(captured_stdout: str) -> list[dict[str, Any]]:
-    """stdout から EMF 行 (``_aws`` キーを持つ JSON 行) だけを抽出する。"""
+    """stdout から observation_up の EMF 行だけを抽出する (A2 の age 行と混在する)。"""
     lines: list[dict[str, Any]] = []
     for line in captured_stdout.splitlines():
         try:
             record = json.loads(line)
         except json.JSONDecodeError:
             continue
-        if isinstance(record, dict) and "_aws" in record:
+        if isinstance(record, dict) and _OBSERVATION_UP_METRIC in record:
             lines.append(record)
     return lines
 

@@ -1,11 +1,11 @@
-"""acquisition / completion / curation / assessment Stream health の毎分sampler。"""
+"""pipeline 5 stage (acquisition〜embedding) Stream health の毎分sampler。"""
 
 from __future__ import annotations
 
 import logfire
 import structlog
 
-from app.cloudwatch.emf import emit_count
+from app.cloudwatch.emf import emit_count, emit_gauge
 from app.queue.brokers import broker_maintenance
 from app.queue.schedule import CRON_PIPELINE_QUEUE_HEALTH
 from app.queue.stream_health import (
@@ -86,6 +86,13 @@ def _record_success(snapshot: StreamHealthSnapshot) -> None:
         _age_or_zero(snapshot.oldest_outstanding_enqueue_age),
         attributes=attributes,
     )
+    # CloudWatch A2 alarm (工程別滞留) の二重 sink。契約名は Terraform 側と揃える。
+    emit_gauge(
+        "oldest_outstanding_enqueue_age",
+        dimensions={"stage": snapshot.stage},
+        value=_age_or_zero(snapshot.oldest_outstanding_enqueue_age),
+        unit="Seconds",
+    )
     _observation_up_gauge.set(1, attributes=attributes)
     # CloudWatch A3 alarm (観測死活) が消費する二重 sink。Terraform 側と契約名を揃える。
     emit_count("observation_up", dimensions={"stage": snapshot.stage}, value=1)
@@ -103,7 +110,7 @@ def _record_success(snapshot: StreamHealthSnapshot) -> None:
     schedule=[{"cron": CRON_PIPELINE_QUEUE_HEALTH}],
 )
 async def observe_pipeline_queue_health() -> None:
-    """固定4stageのsnapshotを独立して取得しLogfireへ記録する。"""
+    """固定5stageのsnapshotを独立して取得しLogfireへ記録する。"""
     redis = get_redis()
     for target in PIPELINE_QUEUE_TARGETS:
         try:

@@ -22,6 +22,27 @@ def emit_count(
     value: int = 1,
 ) -> None:
     """count メトリクス 1 打点を EMF 1 行として stdout へ書く。"""
+    _emit(metric_name, dimensions=dimensions, value=value, unit="Count")
+
+
+def emit_gauge(
+    metric_name: str,
+    *,
+    dimensions: dict[str, str],
+    value: float,
+    unit: str,
+) -> None:
+    """gauge 値 1 打点を EMF 1 行として stdout へ書く。"""
+    _emit(metric_name, dimensions=dimensions, value=value, unit=unit)
+
+
+def _emit(
+    metric_name: str,
+    *,
+    dimensions: dict[str, str],
+    value: float,
+    unit: str,
+) -> None:
     record: dict[str, object] = {
         "_aws": {
             "Timestamp": int(time.time() * 1000),
@@ -29,7 +50,7 @@ def emit_count(
                 {
                     "Namespace": PIPELINE_NAMESPACE,
                     "Dimensions": [list(dimensions)],
-                    "Metrics": [{"Name": metric_name, "Unit": "Count"}],
+                    "Metrics": [{"Name": metric_name, "Unit": unit}],
                 }
             ],
         },
