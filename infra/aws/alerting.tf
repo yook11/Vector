@@ -104,6 +104,35 @@ resource "aws_iam_role_policy" "chatbot" {
   })
 }
 
+# --- A1: 収集パイプライン途絶 (供給ハートビート) ----------------------------
+#
+# backend が dispatch task の正常完了時にだけ emit する EMF メトリクス
+# dispatch_run{cadence=high} (app/queue/tasks/acquisition.py) が 2 時間
+# 途絶えたら発火する。TreatMissingData = breaching が本 alarm の核で、
+# scheduler / broker (Valkey) / dispatch worker / DB のどの死でも
+# 「emit が来ない」に収斂する (原因を区別しないのは意図的)。
+# dispatch_high は 15 分間隔なので、正常時は 1h bin に 4 打点入る。
+
+resource "aws_cloudwatch_metric_alarm" "dispatch_run_stalled" {
+  alarm_name          = "${var.name_prefix}-dispatch-run-stalled"
+  alarm_description   = "収集パイプラインの供給が止まっている (dispatch_high の正常完了が 2 時間ゼロ)。ECS の scheduler / fetch サービスのログと、Valkey・DB の状態を確認する。"
+  namespace           = "Vector/Pipeline"
+  metric_name         = "dispatch_run"
+  statistic           = "Sum"
+  period              = 3600
+  evaluation_periods  = 2
+  threshold           = 0
+  comparison_operator = "LessThanOrEqualToThreshold"
+  treat_missing_data  = "breaching"
+
+  dimensions = {
+    cadence = "high"
+  }
+
+  alarm_actions = [aws_sns_topic.alerts.arn]
+  ok_actions    = [aws_sns_topic.alerts.arn]
+}
+
 # --- A7: ユーザー向けエラー (ALB 5XX) --------------------------------------
 #
 # 低トラフィックのため率ではなく絶対数で判定する。ELB_5XX (target 到達不能)
