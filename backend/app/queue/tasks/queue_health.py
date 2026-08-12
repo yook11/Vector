@@ -5,6 +5,7 @@ from __future__ import annotations
 import logfire
 import structlog
 
+from app.cloudwatch.emf import emit_count
 from app.queue.brokers import broker_maintenance
 from app.queue.schedule import CRON_PIPELINE_QUEUE_HEALTH
 from app.queue.stream_health import (
@@ -86,6 +87,8 @@ def _record_success(snapshot: StreamHealthSnapshot) -> None:
         attributes=attributes,
     )
     _observation_up_gauge.set(1, attributes=attributes)
+    # CloudWatch A3 alarm (観測死活) が消費する二重 sink。Terraform 側と契約名を揃える。
+    emit_count("observation_up", dimensions={"stage": snapshot.stage}, value=1)
     _observation_timestamp_gauge.set(
         snapshot.observation_timestamp,
         attributes=attributes,
@@ -107,6 +110,7 @@ async def observe_pipeline_queue_health() -> None:
             snapshot = await read_stream_health(redis, target)
         except StreamHealthError as error:
             _observation_up_gauge.set(0, attributes={"stage": target.stage})
+            emit_count("observation_up", dimensions={"stage": target.stage}, value=0)
             logger.warning(
                 "pipeline_queue_health_observation_failed",
                 stage=target.stage,
