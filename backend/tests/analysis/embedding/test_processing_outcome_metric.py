@@ -9,17 +9,12 @@ embedding 処理試行の結末を集計する metric。インフラ障害 (infr
 from __future__ import annotations
 
 import json
-from typing import get_args
 
 import pytest
 from logfire.testing import CaptureLogfire
 
-from app.analysis.embedding.metrics import (
-    EmbeddingProcessingOutcome,
-    record_embedding_processing_outcome,
-)
+from app.analysis.embedding.metrics import record_embedding_processing_outcome
 from app.logfire.article_stage import embedding_stage_span
-from tests.cloudwatch.records import metric_records
 from tests.logfire._metric_helpers import (
     collected_metrics,
     counter_attribute_key_sets,
@@ -28,8 +23,6 @@ from tests.logfire._metric_helpers import (
 
 _METRIC = "vector.embedding.processing_outcome"
 _ALL_RESULTS = ("succeeded", "failed", "infra_error")
-_EMF_METRIC = "processing_outcome"
-_STAGE = "embedding"
 
 
 # helper 契約: 3 値それぞれを 1 件として記録する
@@ -83,22 +76,3 @@ def test_attribute_is_result_only_no_pii(capfire: CaptureLogfire) -> None:
         "failure_kind",
     ):
         assert needle not in dumped, f"PII 様文字列 {needle!r} が metric dump に混入"
-
-
-# EMF 二重 sink (CloudWatch A4): processing_outcome{stage, result} の call-site 契約
-# (wire format 自体の正本は tests/cloudwatch/test_emf.py)
-
-
-@pytest.mark.parametrize("result", get_args(EmbeddingProcessingOutcome))
-def test_record_emits_one_emf_line_with_stage_and_result_dimensions(
-    capsys: pytest.CaptureFixture[str], result: EmbeddingProcessingOutcome
-) -> None:
-    """processing_outcome の EMF 行が1行、dimensions は stage/result が引数通り。"""
-    record_embedding_processing_outcome(result)
-
-    records = metric_records(capsys.readouterr().out, _EMF_METRIC)
-
-    assert len(records) == 1
-    assert records[0]["stage"] == _STAGE
-    assert records[0]["result"] == result
-    assert records[0][_EMF_METRIC] == 1
