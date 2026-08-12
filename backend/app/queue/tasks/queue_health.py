@@ -5,7 +5,7 @@ from __future__ import annotations
 import logfire
 import structlog
 
-from app.cloudwatch.emf import emit_count, emit_gauge
+from app.cloudwatch.emf import emit_metric
 from app.queue.brokers import broker_maintenance
 from app.queue.schedule import CRON_PIPELINE_QUEUE_HEALTH
 from app.queue.stream_health import (
@@ -87,7 +87,7 @@ def _record_success(snapshot: StreamHealthSnapshot) -> None:
         attributes=attributes,
     )
     # CloudWatch A2 alarm (工程別滞留) の二重 sink。契約名は Terraform 側と揃える。
-    emit_gauge(
+    emit_metric(
         "oldest_outstanding_enqueue_age",
         dimensions={"stage": snapshot.stage},
         value=_age_or_zero(snapshot.oldest_outstanding_enqueue_age),
@@ -95,7 +95,12 @@ def _record_success(snapshot: StreamHealthSnapshot) -> None:
     )
     _observation_up_gauge.set(1, attributes=attributes)
     # CloudWatch A3 alarm (観測死活) が消費する二重 sink。Terraform 側と契約名を揃える。
-    emit_count("observation_up", dimensions={"stage": snapshot.stage}, value=1)
+    emit_metric(
+        "observation_up",
+        dimensions={"stage": snapshot.stage},
+        value=1,
+        unit="Count",
+    )
     _observation_timestamp_gauge.set(
         snapshot.observation_timestamp,
         attributes=attributes,
@@ -117,7 +122,12 @@ async def observe_pipeline_queue_health() -> None:
             snapshot = await read_stream_health(redis, target)
         except StreamHealthError as error:
             _observation_up_gauge.set(0, attributes={"stage": target.stage})
-            emit_count("observation_up", dimensions={"stage": target.stage}, value=0)
+            emit_metric(
+                "observation_up",
+                dimensions={"stage": target.stage},
+                value=0,
+                unit="Count",
+            )
             logger.warning(
                 "pipeline_queue_health_observation_failed",
                 stage=target.stage,

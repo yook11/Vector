@@ -9,7 +9,7 @@
 
 Logfire gauge 記録内容自体の正本は ``test_queue_health_task.py``、
 ``PIPELINE_QUEUE_TARGETS`` への embedding stage 追加自体の正本は
-``test_stream_health.py``。``emit_gauge`` の EMF 構造(Namespace/Unit/float 値)の
+``test_stream_health.py``。``emit_metric`` の EMF 構造(Namespace/Unit/float 値)の
 正本は ``test_emf.py``。本ファイルは age emit の stage ごとの成否分岐だけを検証する。
 """
 

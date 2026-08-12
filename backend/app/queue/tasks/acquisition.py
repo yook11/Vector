@@ -28,7 +28,7 @@ from app.audit.stages.dispatch import (
     DispatchCadence,
     DispatchOutcomeCode,
 )
-from app.cloudwatch.emf import emit_count
+from app.cloudwatch.emf import emit_metric
 from app.collection.article_acquisition.failure_handling import (
     ArticleAcquisitionFailureHandler,
 )
@@ -356,7 +356,12 @@ _DISPATCH_RUN_METRIC = "dispatch_run"
 async def dispatch_high(ctx: Context = TaskiqDepends()) -> dict:
     """HIGH tier のソースを dispatch する (15 分間隔)。"""
     result = await _dispatch(ctx.state.session_factory, cadence=FetchCadence.HIGH)
-    emit_count(_DISPATCH_RUN_METRIC, dimensions={"cadence": FetchCadence.HIGH.value})
+    emit_metric(
+        _DISPATCH_RUN_METRIC,
+        dimensions={"cadence": FetchCadence.HIGH.value},
+        value=1,
+        unit="Count",
+    )
     return result
 
 
@@ -370,7 +375,12 @@ async def dispatch_high(ctx: Context = TaskiqDepends()) -> dict:
 async def dispatch_medium(ctx: Context = TaskiqDepends()) -> dict:
     """MEDIUM tier のソースを dispatch する (1 時間間隔)。"""
     result = await _dispatch(ctx.state.session_factory, cadence=FetchCadence.MEDIUM)
-    emit_count(_DISPATCH_RUN_METRIC, dimensions={"cadence": FetchCadence.MEDIUM.value})
+    emit_metric(
+        _DISPATCH_RUN_METRIC,
+        dimensions={"cadence": FetchCadence.MEDIUM.value},
+        value=1,
+        unit="Count",
+    )
     return result
 
 
@@ -384,7 +394,12 @@ async def dispatch_medium(ctx: Context = TaskiqDepends()) -> dict:
 async def dispatch_low(ctx: Context = TaskiqDepends()) -> dict:
     """LOW tier のソースを dispatch する (6 時間間隔)。"""
     result = await _dispatch(ctx.state.session_factory, cadence=FetchCadence.LOW)
-    emit_count(_DISPATCH_RUN_METRIC, dimensions={"cadence": FetchCadence.LOW.value})
+    emit_metric(
+        _DISPATCH_RUN_METRIC,
+        dimensions={"cadence": FetchCadence.LOW.value},
+        value=1,
+        unit="Count",
+    )
     return result
 
 
