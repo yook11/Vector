@@ -61,7 +61,7 @@ locals {
       # recovery hold (現状 production 呼び出しゼロ) を有効化するときは
       # +eval +get +del +expire を足す。
       "(~curation:hold ~assessment:hold ~embedding:hold resetchannels -@all +set +exists)",
-      "(~pipeline:acquisition ~pipeline:completion ~pipeline:curation ~pipeline:assessment resetchannels -@all +xlen +xinfo|groups +xpending +xrange)",
+      "(~pipeline:acquisition ~pipeline:completion ~pipeline:curation ~pipeline:assessment ~pipeline:embedding resetchannels -@all +xlen +xinfo|groups +xpending +xrange)",
     ])
     insights = join(" ", [
       "on ~trend_discovery ~briefing resetchannels -@all",
