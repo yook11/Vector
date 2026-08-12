@@ -5,8 +5,8 @@
   され、attribute は ``{"reason": <CODE 由来>}`` のみ。
 - ``set_curation_hold`` の Redis SET 失敗時は ``vector.curation.hold_set_failed``
   counter が +1 され、成功 counter は increment されない。
-- attribute 経路に PII (article_id / URL 様の dynamic 値) が混入しない構造的
-  契約を capfire の metric dump 全文検索で oracle 化する。
+- attribute 値域が provider error CODE の閉じた語彙に収まる構造的契約を
+  ホワイトリスト (許可値域) oracle で検証する。
 
 capfire fixture が ``logfire.configure(send_to_logfire=False, ...)`` を呼ぶため
 本テスト内では ``setup_logfire`` を呼ばない。
@@ -14,7 +14,6 @@ capfire fixture が ``logfire.configure(send_to_logfire=False, ...)`` を呼ぶ�
 
 from __future__ import annotations
 
-import json
 from typing import Any
 from unittest.mock import AsyncMock
 
@@ -22,7 +21,27 @@ import pytest
 from logfire.testing import CaptureLogfire
 from redis.exceptions import ConnectionError as RedisConnectionError
 
+from app.analysis.ai_provider_errors import (
+    AIProviderConfigurationError,
+    AIProviderInsufficientBalanceError,
+    AIProviderRequestInvalidError,
+    AIProviderUsageLimitExhaustedError,
+)
 from app.queue.helpers.stage_hold import set_curation_hold
+from tests.logfire._metric_helpers import assert_attribute_contract
+
+# set_curation_hold(reason: str) のシグネチャ自体は closed vocabulary を持たない
+# (curation/assessment/embedding 共有の Redis hold setter で reason は素通し文字列)。
+# 実運用では CurationFailureHandler._hold_reason が provider error の CODE を渡す
+# (app/analysis/ai_provider_errors.py)。stage hold を要する回復クラス
+# (OPERATOR_ACTION_REQUIRED / CONDITION_BASED_RECOVERY) の leaf CODE のみを
+# 許可値域として列挙する (SSoT を持たないための test 側由来コメント付き定数)。
+_ALLOWED_HOLD_REASONS = {
+    AIProviderConfigurationError.CODE,
+    AIProviderRequestInvalidError.CODE,
+    AIProviderInsufficientBalanceError.CODE,
+    AIProviderUsageLimitExhaustedError.CODE,
+}
 
 
 def _find_metric(metrics: list[dict[str, Any]], name: str) -> dict[str, Any] | None:
@@ -118,34 +137,22 @@ async def test_set_curation_hold_failure_does_not_record_success_counter(
         assert _sum_value(success) == 0
 
 
-# PII 非含有 oracle
+# attribute 値域契約 (ホワイトリスト oracle)
 
 
 @pytest.mark.asyncio
-async def test_hold_metrics_attribute_does_not_leak_dynamic_pii(
+async def test_hold_metrics_attributes_conform_to_declared_vocabulary(
     capfire: CaptureLogfire,
 ) -> None:
-    """attribute set に PII 様 dynamic 値が混入しない (capfire 全文検索 oracle)。
+    """attribute が {"reason"} key のみで、値は provider error CODE の許可語彙内。
 
-    将来 ``set_curation_hold`` に article_id / URL 等の引数が追加されて
-    metric attribute に流入する regression を構造的に検知する。
+    将来 ``set_curation_hold`` に article_id / URL 等の dynamic 値が流入する
+    regression を、既知文字列の blocklist ではなく許可値域で構造的に検知する。
     """
-    # reason は SystemConfig 由来の enum-like 値に限定される。
     fake_redis = AsyncMock()
     await set_curation_hold(fake_redis, reason="ai_error_configuration")
 
     metrics = capfire.get_collected_metrics()
-    dumped = json.dumps(metrics, default=str, ensure_ascii=False)
-    # 現状の attribute 経路を pin: reason 1 key のみ
-    hold_set = _find_metric(metrics, "vector.curation.hold_set")
-    assert hold_set is not None
-    for attrs in _attributes_for(hold_set):
-        assert set(attrs.keys()) == {"reason"}, (
-            f"hold_set attribute に予期しない key: {attrs.keys()}"
-        )
-    # 確実な全文検索: article_id / url / url-like 語が dump 全体に出ない
-    forbidden_substrings = ("article_id", "http://", "https://", "raw_url")
-    for needle in forbidden_substrings:
-        assert needle not in dumped, (
-            f"hold metric dump に PII 様文字列 {needle!r} が混入"
-        )
+    assert_attribute_contract(
+        metrics, "vector.curation.hold_set", allowed={"reason": _ALLOWED_HOLD_REASONS}
+    )

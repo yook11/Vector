@@ -6,6 +6,8 @@ from typing import Literal
 
 import logfire
 
+from app.cloudwatch.emf import emit_metric
+
 # 成功率の分母は succeeded+failed。infra_error は emit するが分母外。
 CompletionProcessingOutcome = Literal["succeeded", "failed", "infra_error"]
 
@@ -27,6 +29,13 @@ _lease_swept_counter = logfire.metric_counter(
 def record_completion_processing_outcome(result: CompletionProcessingOutcome) -> None:
     """completion 処理試行の結末を counter に 1 件記録する。"""
     _processing_outcome_counter.add(1, attributes={"result": result})
+    # CloudWatch 失敗率 alarm が消費する二重 sink。Terraform 側と契約名を揃える。
+    emit_metric(
+        "processing_outcome",
+        dimensions={"stage": "completion", "result": result},
+        value=1,
+        unit="Count",
+    )
 
 
 def record_completion_lease_swept(swept_count: int) -> None:
