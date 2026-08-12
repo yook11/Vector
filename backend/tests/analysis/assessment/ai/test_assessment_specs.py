@@ -131,7 +131,7 @@ def test_deepseek_gen_config_is_immutable() -> None:
 
 def test_deepseek_gen_config_has_tuning_fields_only() -> None:
     """gen_config は tuning のみ。機構は structured_output へ分離。"""
-    assert DEEPSEEK_ASSESSMENT_SPEC.gen_config["max_tokens"] == 512
+    assert DEEPSEEK_ASSESSMENT_SPEC.gen_config["max_tokens"] == 1536
     assert "tool_choice" not in DEEPSEEK_ASSESSMENT_SPEC.gen_config
     assert "extra_body" not in DEEPSEEK_ASSESSMENT_SPEC.gen_config
 
@@ -197,7 +197,7 @@ def test_deepseek_tool_choice_matches_tool_name() -> None:
 # この pin が回転を検出する。意図的な prompt / 機構 rotation 時はこの値を更新し、
 # commit メッセージで cutover を明示する (ADR §prompt_version の規律)。
 _GEMINI_PINNED_VERSION = "efe480ff"
-_DEEPSEEK_PINNED_VERSION = "0f0c086c"
+_DEEPSEEK_PINNED_VERSION = "9e715824"
 
 
 def test_gemini_version_is_pinned() -> None:

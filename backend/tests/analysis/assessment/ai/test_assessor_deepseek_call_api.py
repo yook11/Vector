@@ -11,6 +11,8 @@ PR3 で次の流れに rewrite された:
   (provider terminal-skip ではなく recoverable)
 - arguments JSON 不正 → ``AssessmentResponseInvalidError``
 - arguments が dict でない → ``AssessmentResponseInvalidError``
+- finish_reason="length" (出力切り詰め) → ``AIProviderOutputTruncatedError``
+  (tool_call 検査より前に判定し、``ARGUMENTS_NOT_JSON`` には落ちない)
 """
 
 from __future__ import annotations
@@ -22,6 +24,7 @@ import pytest
 from pydantic import SecretStr
 from structlog.testing import capture_logs
 
+from app.analysis.ai_provider_errors import AIProviderOutputTruncatedError
 from app.analysis.assessment.ai.deepseek import (
     DeepSeekAssessor,
     DeepSeekResponseDefect,
@@ -31,6 +34,7 @@ from app.analysis.assessment.ai.parse import AssessmentResponseDefect
 from app.analysis.assessment.ai.spec import DEEPSEEK_ASSESSMENT_SPEC
 from app.analysis.assessment.domain.result import InScope, InScopeCategory, OutOfScope
 from app.analysis.assessment.errors import AssessmentResponseInvalidError
+from app.analysis.deepseek_error_translator import DeepSeekStateReason
 from app.config import settings
 
 
@@ -141,7 +145,7 @@ class TestDeepSeekCallApiSuccess:
             == DEEPSEEK_ASSESSMENT_SPEC.tool_name
         )
         assert kwargs["extra_body"]["thinking"]["type"] == "disabled"
-        assert kwargs["max_tokens"] == 512
+        assert kwargs["max_tokens"] == 1536
 
 
 # tool_call 欠落 / wrong name → AssessmentResponseInvalidError (recoverable)
@@ -240,10 +244,10 @@ class TestDeepSeekInvalidArguments:
         assert exc_info.value.code == DeepSeekResponseDefect.ARGUMENTS_NOT_JSON
 
 
-# truncation 観測ログの不変条件
+# finish_reason="length" (出力切り詰め) の分類 + 観測ログの不変条件
 
 
-def _stub_truncated_response(*, completion_tokens: int = 512) -> MagicMock:
+def _stub_truncated_response(*, completion_tokens: int = 1500) -> MagicMock:
     """finish_reason="length" で JSON が切れた状況の stub。"""
     return _stub_response(
         arguments="not json at all",
@@ -252,105 +256,136 @@ def _stub_truncated_response(*, completion_tokens: int = 512) -> MagicMock:
     )
 
 
-class TestDeepSeekTruncationObservabilityLog:
-    """defect 経路で truncation 観測ログが出る不変条件。
+class TestDeepSeekTruncatedFinishReason:
+    """finish_reason="length" は tool_call / arguments 検査より前に判定される。
 
-    - ログが出ること / 各フィールドが stub した具体値であること
-    - 例外契約(re-raise)が変わっていないこと
-    - 正常系ではログが出ないこと
+    切り詰めは JSON 破損 (``ARGUMENTS_NOT_JSON``) と別分類にする不変条件を pin する。
+    """
+
+    @pytest.mark.asyncio
+    async def test_truncated_raises_output_truncated_error(self) -> None:
+        """arguments が壊れた JSON でも
+        ``AssessmentResponseInvalidError`` にはならない。"""
+        assessor = DeepSeekAssessor()
+        _patch_assessor_call(assessor, _stub_truncated_response())
+
+        with pytest.raises(AIProviderOutputTruncatedError) as exc_info:
+            await assessor._call_api("prompt")
+
+        assert exc_info.value.reason == DeepSeekStateReason.OUTPUT_TOKEN_LIMIT_REACHED
+
+    @pytest.mark.asyncio
+    async def test_truncated_with_valid_json_arguments_still_raises(self) -> None:
+        """arguments が偶然 valid JSON でも finish_reason 判定が parse より先に効く。"""
+        assessor = DeepSeekAssessor()
+        args = json.dumps({"category": "ai", "investor_take": "x", "key_points": []})
+        _patch_assessor_call(
+            assessor,
+            _stub_response(arguments=args, finish_reason="length"),
+        )
+
+        with pytest.raises(AIProviderOutputTruncatedError):
+            await assessor._call_api("prompt")
+
+
+class TestDeepSeekTruncationObservabilityLog:
+    """truncated 経路の観測ログの不変条件。
+
+    - 専用イベント (``assessment_deepseek_output_truncated``) が出ること
+    - 各フィールドが stub した具体値であること
+    - defect イベント (``assessment_deepseek_response_defect``) は出ないこと
+      (tool_call 検査に入る前に return するため)
+    - 正常系では出ないこと
     を 1 テスト = 1 アサーション原則に従い分割して pin する。
     """
 
     @pytest.mark.asyncio
-    async def test_defect_emits_warning_event(self) -> None:
-        """defect 経路で response_defect イベントが 1 件 emit される。"""
+    async def test_truncated_emits_output_truncated_warning_event(self) -> None:
+        """truncated 経路で output_truncated イベントが 1 件 emit される。"""
         assessor = DeepSeekAssessor()
         _patch_assessor_call(assessor, _stub_truncated_response())
 
         with capture_logs() as logs:
-            with pytest.raises(AssessmentResponseInvalidError):
+            with pytest.raises(AIProviderOutputTruncatedError):
                 await assessor._call_api("prompt")
 
-        defect_logs = [
-            e for e in logs if e.get("event") == "assessment_deepseek_response_defect"
+        truncated_logs = [
+            e for e in logs if e.get("event") == "assessment_deepseek_output_truncated"
         ]
-        assert len(defect_logs) == 1
+        assert len(truncated_logs) == 1
 
     @pytest.mark.asyncio
-    async def test_defect_log_carries_finish_reason(self) -> None:
-        """観測ログの finish_reason が stub した値 ``"length"`` であること。"""
-        assessor = DeepSeekAssessor()
-        _patch_assessor_call(assessor, _stub_truncated_response())
-
-        with capture_logs() as logs:
-            with pytest.raises(AssessmentResponseInvalidError):
-                await assessor._call_api("prompt")
-
-        log = next(
-            e for e in logs if e.get("event") == "assessment_deepseek_response_defect"
-        )
-        assert log["finish_reason"] == "length"
-
-    @pytest.mark.asyncio
-    async def test_defect_log_carries_completion_tokens(self) -> None:
-        """観測ログの completion_tokens が stub した具体値 512 であること。
+    async def test_truncated_log_carries_completion_tokens(self) -> None:
+        """観測ログの completion_tokens が stub した具体値であること。
 
         MagicMock のままだと等価比較が通ってしまうため、stub で必ず整数値を設定する。
         production が捕捉をやめたら assert が落ちる非空虚な検証。
         """
         assessor = DeepSeekAssessor()
-        _patch_assessor_call(assessor, _stub_truncated_response(completion_tokens=512))
+        _patch_assessor_call(assessor, _stub_truncated_response(completion_tokens=1500))
 
         with capture_logs() as logs:
-            with pytest.raises(AssessmentResponseInvalidError):
+            with pytest.raises(AIProviderOutputTruncatedError):
                 await assessor._call_api("prompt")
 
         log = next(
-            e for e in logs if e.get("event") == "assessment_deepseek_response_defect"
+            e for e in logs if e.get("event") == "assessment_deepseek_output_truncated"
         )
-        assert log["completion_tokens"] == 512
+        assert log["completion_tokens"] == 1500
 
     @pytest.mark.asyncio
-    async def test_defect_log_carries_max_tokens_from_spec(self) -> None:
+    async def test_truncated_log_carries_max_tokens_from_spec(self) -> None:
         """観測ログの max_tokens が spec 由来の値であること。"""
         assessor = DeepSeekAssessor()
         _patch_assessor_call(assessor, _stub_truncated_response())
 
         with capture_logs() as logs:
-            with pytest.raises(AssessmentResponseInvalidError):
+            with pytest.raises(AIProviderOutputTruncatedError):
                 await assessor._call_api("prompt")
 
         log = next(
-            e for e in logs if e.get("event") == "assessment_deepseek_response_defect"
+            e for e in logs if e.get("event") == "assessment_deepseek_output_truncated"
         )
         assert log["max_tokens"] == DEEPSEEK_ASSESSMENT_SPEC.gen_config["max_tokens"]
 
     @pytest.mark.asyncio
-    async def test_defect_log_carries_code(self) -> None:
-        """観測ログの code が ``ARGUMENTS_NOT_JSON`` であること。"""
+    async def test_truncated_does_not_emit_defect_log(self) -> None:
+        """truncated 経路は tool_call 検査に入らず response_defect ログを出さない。"""
         assessor = DeepSeekAssessor()
         _patch_assessor_call(assessor, _stub_truncated_response())
 
         with capture_logs() as logs:
-            with pytest.raises(AssessmentResponseInvalidError):
+            with pytest.raises(AIProviderOutputTruncatedError):
                 await assessor._call_api("prompt")
 
-        log = next(
+        defect_logs = [
             e for e in logs if e.get("event") == "assessment_deepseek_response_defect"
-        )
-        assert log["code"] == DeepSeekResponseDefect.ARGUMENTS_NOT_JSON
+        ]
+        assert defect_logs == []
 
     @pytest.mark.asyncio
-    async def test_defect_reraises_assessment_response_invalid_error(self) -> None:
-        """ログ追加後も ARGUMENTS_NOT_JSON で re-raise されること。"""
+    async def test_success_does_not_emit_output_truncated_log(self) -> None:
+        """正常系では ``assessment_deepseek_output_truncated`` が emit されないこと。"""
         assessor = DeepSeekAssessor()
-        _patch_assessor_call(assessor, _stub_truncated_response())
+        args = json.dumps(
+            {"category": "ai", "investor_take": "Positive signal.", "key_points": []}
+        )
+        _patch_assessor_call(
+            assessor,
+            _stub_response(
+                arguments=args,
+                finish_reason="tool_calls",
+                completion_tokens=100,
+            ),
+        )
 
-        with capture_logs():
-            with pytest.raises(AssessmentResponseInvalidError) as exc_info:
-                await assessor._call_api("prompt")
+        with capture_logs() as logs:
+            await assessor._call_api("prompt")
 
-        assert exc_info.value.code == DeepSeekResponseDefect.ARGUMENTS_NOT_JSON
+        truncated_logs = [
+            e for e in logs if e.get("event") == "assessment_deepseek_output_truncated"
+        ]
+        assert truncated_logs == []
 
     @pytest.mark.asyncio
     async def test_success_does_not_emit_defect_log(self) -> None:

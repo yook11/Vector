@@ -63,6 +63,7 @@ class DeepSeekStateReason(StrEnum):
     NOT_FOUND = "not_found"
     INSUFFICIENT_BALANCE = "insufficient_balance"
     RATE_LIMITED = "rate_limited"
+    OUTPUT_TOKEN_LIMIT_REACHED = "output_token_limit_reached"  # noqa: S105
     BAD_REQUEST = "bad_request"
     UNPROCESSABLE = "unprocessable"
     SERVER_ERROR = "server_error"

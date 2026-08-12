@@ -18,6 +18,7 @@ from app.analysis.ai_provider_errors import (
     AIProviderInsufficientBalanceError,
     AIProviderNetworkError,
     AIProviderOutputBlockedError,
+    AIProviderOutputTruncatedError,
     AIProviderRateLimitedError,
     AIProviderRequestInvalidError,
     AIProviderServiceUnavailableError,
@@ -43,6 +44,7 @@ _STATE_REASON = GeminiStateReason.TIMEOUT
 # Recoverable、非 retryable (operator_action / target_rejected) は Terminal。
 _LEAF_EXPECTATION: dict[type[AIProviderError], tuple[type[AssessmentError], str]] = {
     AIProviderNetworkError: (AssessmentRecoverableError, "attempt_scoped"),
+    AIProviderOutputTruncatedError: (AssessmentRecoverableError, "attempt_scoped"),
     AIProviderServiceUnavailableError: (
         AssessmentRecoverableError,
         "time_based_recovery",
@@ -135,7 +137,7 @@ class TestMapProviderToAssessment:
         assert result.failure_reason is None  # type: ignore[union-attr]
 
     def test_golden_covers_all_provider_leaves(self) -> None:
-        # 完備性: provider leaf を増やしたら golden 表も更新する運用 (9 種)。
+        # 完備性: provider leaf を増やしたら golden 表も更新する運用 (10 種)。
         expected = frozenset(
             {
                 AIProviderConfigurationError,
@@ -145,6 +147,7 @@ class TestMapProviderToAssessment:
                 AIProviderUsageLimitExhaustedError,
                 AIProviderServiceUnavailableError,
                 AIProviderNetworkError,
+                AIProviderOutputTruncatedError,
                 AIProviderInputRejectedError,
                 AIProviderOutputBlockedError,
             }
