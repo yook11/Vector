@@ -22,6 +22,7 @@ from app.analysis.ai_provider_errors import (
     AIProviderError,
     AIProviderRequestInvalidError,
 )
+from app.analysis.ai_provider_exhaustion import record_ai_provider_exhausted
 from app.analysis.embedding.domain.value_objects import EmbeddingVector
 from app.analysis.gemini_error_translator import (
     GeminiStateReason,
@@ -93,6 +94,7 @@ class GeminiQueryEmbedder:
             translated = self._translate_error(exc)
             if translated is exc:
                 raise
+            record_ai_provider_exhausted(translated, provider=self.SPEC.provider)
             raise translated from exc
 
     async def _call_api(self, queries: InternalSearchQueries) -> list[list[float]]:

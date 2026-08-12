@@ -20,12 +20,14 @@ from app.analysis.ai_provider_errors import (
     AIProviderNetworkError,
     AIProviderRateLimitedError,
     AIProviderRequestInvalidError,
+    AIProviderUsageLimitExhaustedError,
 )
 from app.analysis.embedding.domain.value_objects import (
     EMBEDDING_DIMENSION,
     EmbeddingVector,
 )
 from app.analysis.gemini_error_translator import GeminiStateReason
+from tests.cloudwatch.records import metric_records
 
 
 def _make_embedder() -> GeminiQueryEmbedder:
@@ -169,3 +171,61 @@ async def test_embed_queries_translates_rate_limited_error() -> None:
 
     with pytest.raises(AIProviderRateLimitedError):
         await embedder.embed_queries(InternalSearchQueries(queries=("NVIDIA",)))
+
+
+# ai_provider_exhausted EMF emit (CloudWatch A6) — _embed_once の except 節は
+# runtime を経由しない唯一の provider 呼出し経路なので、枯渇系翻訳の emit を単独で守る。
+
+
+_EXHAUSTED_METRIC = "ai_provider_exhausted"
+_PER_DAY_QUOTA_ID = "GenerateRequestsPerDayPerProjectPerModel-FreeTier"
+_PER_MINUTE_QUOTA_ID = "GenerateRequestsPerMinutePerProjectPerModel-FreeTier"
+
+
+def _resource_exhausted_error(*quota_ids: str) -> genai_errors.ClientError:
+    """429 RESOURCE_EXHAUSTED を構造化 details (QuotaFailure) 付きで構築する。"""
+    error_body: dict = {
+        "status": "RESOURCE_EXHAUSTED",
+        "message": "You exceeded your current quota, check your plan and billing.",
+    }
+    if quota_ids:
+        error_body["details"] = [
+            {
+                "@type": "type.googleapis.com/google.rpc.QuotaFailure",
+                "violations": [{"quotaId": quota_id} for quota_id in quota_ids],
+            }
+        ]
+    return genai_errors.ClientError(429, {"error": error_body})
+
+
+async def test_embed_queries_quota_exhausted_emits_ai_provider_exhausted(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """per-day quota 超過は usage_limit_exhausted 翻訳で provider=gemini を emit。"""
+    embedder = _make_embedder()
+    embedder._client.aio.models.embed_content = AsyncMock(
+        side_effect=_resource_exhausted_error(_PER_DAY_QUOTA_ID)
+    )
+
+    with pytest.raises(AIProviderUsageLimitExhaustedError):
+        await embedder.embed_queries(InternalSearchQueries(queries=("NVIDIA",)))
+
+    records = metric_records(capsys.readouterr().out, _EXHAUSTED_METRIC)
+    assert len(records) == 1
+    assert records[0]["kind"] == AIProviderUsageLimitExhaustedError.CODE
+    assert records[0]["provider"] == "gemini"
+
+
+async def test_embed_queries_per_minute_rate_limited_does_not_emit(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """per-minute バーストは rate limited に翻訳され、枯渇としては emit しない。"""
+    embedder = _make_embedder()
+    embedder._client.aio.models.embed_content = AsyncMock(
+        side_effect=_resource_exhausted_error(_PER_MINUTE_QUOTA_ID)
+    )
+
+    with pytest.raises(AIProviderRateLimitedError):
+        await embedder.embed_queries(InternalSearchQueries(queries=("NVIDIA",)))
+
+    assert metric_records(capsys.readouterr().out, _EXHAUSTED_METRIC) == []

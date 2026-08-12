@@ -907,15 +907,26 @@ _EXHAUSTED_METRIC = "ai_provider_exhausted"
 
 
 def _quota_exhausted_sdk_error() -> genai_errors.ClientError:
-    """429 + quota message の SDK 例外 (translate_gemini_error で枯渇に翻訳される)。"""
+    """429 + per-day QuotaFailure details の実レスポンス形 (枯渇に翻訳される)。"""
     response_json = {
-        "error": {"status": "RESOURCE_EXHAUSTED", "message": "daily quota exceeded"}
+        "error": {
+            "status": "RESOURCE_EXHAUSTED",
+            "message": "You exceeded your current quota, check your plan and billing.",
+            "details": [
+                {
+                    "@type": "type.googleapis.com/google.rpc.QuotaFailure",
+                    "violations": [
+                        {"quotaId": "GenerateRequestsPerDayPerProjectPerModel-FreeTier"}
+                    ],
+                }
+            ],
+        }
     }
     return genai_errors.ClientError(429, response_json)
 
 
 def _rate_limited_sdk_error() -> genai_errors.ClientError:
-    """429 だが quota 言及がない SDK 例外 (一時的 rate limit に翻訳される)。"""
+    """429 だが details 無し (per-minute バースト等、rate limit に翻訳される)。"""
     response_json = {
         "error": {"status": "RESOURCE_EXHAUSTED", "message": "rate limit reached"}
     }
