@@ -6,7 +6,6 @@ import json
 from dataclasses import replace
 from importlib import import_module
 from inspect import signature
-from typing import Any
 
 import httpx
 import pytest
@@ -31,6 +30,7 @@ from tests.agent.runtime._deepseek_helpers import (
     runtime_type,
     success_response,
 )
+from tests.cloudwatch.records import metric_records
 
 
 async def test_constructor_accepts_only_borrowed_client_and_output_binding() -> None:
@@ -267,20 +267,6 @@ def test_output_binding_contains_only_provider_transport_identity() -> None:
 _EXHAUSTED_METRIC = "ai_provider_exhausted"
 
 
-def _ai_provider_exhausted_records(captured_stdout: str) -> list[dict[str, Any]]:
-    """stdout から ``_EXHAUSTED_METRIC`` を持つ EMF 行 (``_aws`` キー) を抽出する。"""
-    records: list[dict[str, Any]] = []
-    for line in captured_stdout.splitlines():
-        try:
-            record = json.loads(line)
-        except json.JSONDecodeError:
-            continue
-        has_metric = isinstance(record, dict) and _EXHAUSTED_METRIC in record
-        if has_metric and "_aws" in record:
-            records.append(record)
-    return records
-
-
 def _make_response(status_code: int) -> httpx.Response:
     request = httpx.Request("POST", "https://api.deepseek.com/beta/chat/completions")
     return httpx.Response(status_code, request=request)
@@ -299,7 +285,7 @@ async def test_invoke_http_402_emits_ai_provider_exhausted(
     with pytest.raises(AIProviderInsufficientBalanceError):
         await runtime.invoke(make_agent(), object(), attempt_number=1)
 
-    records = _ai_provider_exhausted_records(capsys.readouterr().out)
+    records = metric_records(capsys.readouterr().out, _EXHAUSTED_METRIC)
     assert len(records) == 1
     assert records[0]["kind"] == AIProviderInsufficientBalanceError.CODE
     assert records[0]["provider"] == "deepseek"
@@ -316,4 +302,4 @@ async def test_invoke_plain_rate_limited_sdk_error_does_not_emit(
     with pytest.raises(AIProviderRateLimitedError):
         await runtime.invoke(make_agent(), object(), attempt_number=1)
 
-    assert _ai_provider_exhausted_records(capsys.readouterr().out) == []
+    assert metric_records(capsys.readouterr().out, _EXHAUSTED_METRIC) == []

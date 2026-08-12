@@ -9,26 +9,12 @@ count / gauge の区別は EMF に存在しないため API は 1 本で、Unit 
 
 from __future__ import annotations
 
-import json
 import time
-from typing import Any
 
 import pytest
 
 from app.cloudwatch.emf import emit_metric
-
-
-def _emf_records(captured_stdout: str) -> list[dict[str, Any]]:
-    """stdout から EMF レコードをパースして返す (``_aws`` キーが EMF の定義)。"""
-    records: list[dict[str, Any]] = []
-    for line in captured_stdout.splitlines():
-        try:
-            record = json.loads(line)
-        except json.JSONDecodeError:
-            continue
-        if isinstance(record, dict) and "_aws" in record:
-            records.append(record)
-    return records
+from tests.cloudwatch.records import emf_records
 
 
 def test_emit_metric_writes_exactly_one_emf_line(
@@ -37,7 +23,7 @@ def test_emit_metric_writes_exactly_one_emf_line(
     """呼び出し1回につき EMF JSON 行がちょうど 1 行だけ stdout に出る。"""
     emit_metric("dispatch_run", dimensions={"cadence": "high"}, value=1, unit="Count")
 
-    assert len(_emf_records(capsys.readouterr().out)) == 1
+    assert len(emf_records(capsys.readouterr().out)) == 1
 
 
 def test_emit_metric_structure_matches_emf_contract(
@@ -46,7 +32,7 @@ def test_emit_metric_structure_matches_emf_contract(
     """Namespace / Dimensions / Metrics / metric 値 / dimension 値の構造を固定する。"""
     emit_metric("dispatch_run", dimensions={"cadence": "high"}, value=1, unit="Count")
 
-    record = _emf_records(capsys.readouterr().out)[0]
+    record = emf_records(capsys.readouterr().out)[0]
     metric_def = record["_aws"]["CloudWatchMetrics"][0]
 
     assert metric_def["Namespace"] == "Vector/Pipeline"
@@ -64,7 +50,7 @@ def test_emit_metric_timestamp_is_int_epoch_ms_within_call_window(
     emit_metric("dispatch_run", dimensions={"cadence": "high"}, value=1, unit="Count")
     after_ms = int(time.time() * 1000)
 
-    record = _emf_records(capsys.readouterr().out)[0]
+    record = emf_records(capsys.readouterr().out)[0]
     timestamp = record["_aws"]["Timestamp"]
 
     assert isinstance(timestamp, int)
@@ -84,7 +70,7 @@ def test_emit_metric_unit_is_caller_specified(
         unit=unit,
     )
 
-    record = _emf_records(capsys.readouterr().out)[0]
+    record = emf_records(capsys.readouterr().out)[0]
     metric_def = record["_aws"]["CloudWatchMetrics"][0]
 
     assert metric_def["Metrics"] == [
@@ -99,7 +85,7 @@ def test_emit_metric_explicit_value_is_used(
     """渡した value がそのまま root の metric 値として emit される。"""
     emit_metric("dispatch_run", dimensions={"cadence": "high"}, value=3, unit="Count")
 
-    record = _emf_records(capsys.readouterr().out)[0]
+    record = emf_records(capsys.readouterr().out)[0]
     assert record["dispatch_run"] == 3
 
 
@@ -109,7 +95,7 @@ def test_emit_metric_int_value_stays_int(
     """int を渡したときは float 化されず int のまま emit される。"""
     emit_metric("dispatch_run", dimensions={"cadence": "high"}, value=3, unit="Count")
 
-    record = _emf_records(capsys.readouterr().out)[0]
+    record = emf_records(capsys.readouterr().out)[0]
     assert isinstance(record["dispatch_run"], int)
 
 
@@ -124,7 +110,7 @@ def test_emit_metric_float_value_stays_float_even_when_integer_valued(
         unit="Seconds",
     )
 
-    record = _emf_records(capsys.readouterr().out)[0]
+    record = emf_records(capsys.readouterr().out)[0]
     assert isinstance(record["oldest_outstanding_enqueue_age"], float)
     assert record["oldest_outstanding_enqueue_age"] == 0.0
 
@@ -140,7 +126,7 @@ def test_emit_metric_multiple_dimensions_are_ordered_in_dimensions_list(
         unit="Seconds",
     )
 
-    record = _emf_records(capsys.readouterr().out)[0]
+    record = emf_records(capsys.readouterr().out)[0]
     metric_def = record["_aws"]["CloudWatchMetrics"][0]
 
     assert metric_def["Dimensions"] == [["stage", "shard"]]

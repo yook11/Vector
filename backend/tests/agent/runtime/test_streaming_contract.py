@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-import json
 from dataclasses import replace
 from enum import StrEnum
 from inspect import signature
@@ -54,6 +53,7 @@ from tests.agent.runtime._deepseek_helpers import (
     success_response as deepseek_success_response,
 )
 from tests.agent.runtime._helpers import FakeGeminiClient, make_agent, success_response
+from tests.cloudwatch.records import metric_records
 
 
 def _content_rejection_kind_type() -> type[StrEnum]:
@@ -906,20 +906,6 @@ async def test_non_streaming_runtime_rejects_schema_none_before_renderer_and_pro
 _EXHAUSTED_METRIC = "ai_provider_exhausted"
 
 
-def _ai_provider_exhausted_records(captured_stdout: str) -> list[dict[str, Any]]:
-    """stdout から ``_EXHAUSTED_METRIC`` を持つ EMF 行 (``_aws`` キー) を抽出する。"""
-    records: list[dict[str, Any]] = []
-    for line in captured_stdout.splitlines():
-        try:
-            record = json.loads(line)
-        except json.JSONDecodeError:
-            continue
-        has_metric = isinstance(record, dict) and _EXHAUSTED_METRIC in record
-        if has_metric and "_aws" in record:
-            records.append(record)
-    return records
-
-
 def _quota_exhausted_sdk_error() -> genai_errors.ClientError:
     """429 + quota message の SDK 例外 (translate_gemini_error で枯渇に翻訳される)。"""
     response_json = {
@@ -953,7 +939,7 @@ async def test_invoke_stream_quota_exhausted_sdk_error_emits_ai_provider_exhaust
             attempt_number=1,
         ).__anext__()
 
-    records = _ai_provider_exhausted_records(capsys.readouterr().out)
+    records = metric_records(capsys.readouterr().out, _EXHAUSTED_METRIC)
     assert len(records) == 1
     assert records[0]["kind"] == AIProviderUsageLimitExhaustedError.CODE
     assert records[0]["provider"] == "gemini"
@@ -976,4 +962,4 @@ async def test_invoke_stream_plain_rate_limited_sdk_error_does_not_emit(
             attempt_number=1,
         ).__anext__()
 
-    assert _ai_provider_exhausted_records(capsys.readouterr().out) == []
+    assert metric_records(capsys.readouterr().out, _EXHAUSTED_METRIC) == []

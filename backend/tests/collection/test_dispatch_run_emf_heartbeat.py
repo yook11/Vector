@@ -12,7 +12,6 @@ dispatch の分岐配線 (どの source を kiq するか) 自体の正本は
 
 from __future__ import annotations
 
-import json
 from types import SimpleNamespace
 from typing import Any
 
@@ -20,6 +19,7 @@ import pytest
 
 from app.collection.sources.fetch_cadence import FetchCadence
 from app.queue.tasks import acquisition as collection_tasks
+from tests.cloudwatch.records import emf_records
 
 _DISPATCH_RUN_METRIC = "dispatch_run"
 
@@ -65,19 +65,6 @@ def _ctx(*, execute_exc: BaseException | None = None) -> SimpleNamespace:
     return SimpleNamespace(state=SimpleNamespace(session_factory=session_factory))
 
 
-def _emf_records(captured_stdout: str) -> list[dict[str, Any]]:
-    """stdout から EMF レコードをパースして返す (``_aws`` キーが EMF の定義)。"""
-    lines: list[dict[str, Any]] = []
-    for line in captured_stdout.splitlines():
-        try:
-            record = json.loads(line)
-        except json.JSONDecodeError:
-            continue
-        if isinstance(record, dict) and "_aws" in record:
-            lines.append(record)
-    return lines
-
-
 _CADENCE_TASKS = [
     (collection_tasks.dispatch_high, FetchCadence.HIGH),
     (collection_tasks.dispatch_medium, FetchCadence.MEDIUM),
@@ -99,7 +86,7 @@ async def test_dispatch_run_completion_emits_one_emf_line_for_cadence(
     """正常完了した cadence dispatch は ``dispatch_run{cadence}`` を 1 行出す。"""
     await dispatch_task(ctx=_ctx())
 
-    emf_lines = _emf_records(capsys.readouterr().out)
+    emf_lines = emf_records(capsys.readouterr().out)
 
     assert len(emf_lines) == 1
     metric_def = emf_lines[0]["_aws"]["CloudWatchMetrics"][0]
@@ -124,7 +111,7 @@ async def test_dispatch_run_failure_emits_no_emf_line(
     with pytest.raises(RuntimeError, match="select failed"):
         await dispatch_task(ctx=_ctx(execute_exc=RuntimeError("select failed")))
 
-    assert _emf_records(capsys.readouterr().out) == []
+    assert emf_records(capsys.readouterr().out) == []
 
 
 @pytest.mark.asyncio
@@ -135,4 +122,4 @@ async def test_dispatch_sources_manual_path_emits_no_emf_line(
     result = await collection_tasks.dispatch_sources(ctx=_ctx())
 
     assert result == {"dispatched_count": 0}
-    assert _emf_records(capsys.readouterr().out) == []
+    assert emf_records(capsys.readouterr().out) == []

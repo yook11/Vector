@@ -7,7 +7,6 @@ from dataclasses import dataclass, replace
 from enum import StrEnum
 from inspect import signature
 from types import SimpleNamespace
-from typing import Any
 
 import pytest
 from google.genai import errors as genai_errors
@@ -36,6 +35,7 @@ from tests.agent.runtime._helpers import (
     runtime_type,
     success_response,
 )
+from tests.cloudwatch.records import metric_records
 
 
 @dataclass(frozen=True, slots=True)
@@ -467,20 +467,6 @@ async def test_config_construction_failure_happens_before_provider_call() -> Non
 _EXHAUSTED_METRIC = "ai_provider_exhausted"
 
 
-def _ai_provider_exhausted_records(captured_stdout: str) -> list[dict[str, Any]]:
-    """stdout から ``_EXHAUSTED_METRIC`` を持つ EMF 行 (``_aws`` キー) を抽出する。"""
-    records: list[dict[str, Any]] = []
-    for line in captured_stdout.splitlines():
-        try:
-            record = json.loads(line)
-        except json.JSONDecodeError:
-            continue
-        has_metric = isinstance(record, dict) and _EXHAUSTED_METRIC in record
-        if has_metric and "_aws" in record:
-            records.append(record)
-    return records
-
-
 def _quota_exhausted_sdk_error() -> genai_errors.ClientError:
     """429 + quota message の SDK 例外 (translate_gemini_error で枯渇に翻訳される)。"""
     response_json = {
@@ -507,7 +493,7 @@ async def test_invoke_quota_exhausted_sdk_error_emits_ai_provider_exhausted(
     with pytest.raises(AIProviderUsageLimitExhaustedError):
         await runtime.invoke(make_agent(), "typed input", attempt_number=1)
 
-    records = _ai_provider_exhausted_records(capsys.readouterr().out)
+    records = metric_records(capsys.readouterr().out, _EXHAUSTED_METRIC)
     assert len(records) == 1
     assert records[0]["kind"] == AIProviderUsageLimitExhaustedError.CODE
     assert records[0]["provider"] == "gemini"
@@ -523,4 +509,4 @@ async def test_invoke_plain_rate_limited_sdk_error_does_not_emit(
     with pytest.raises(AIProviderRateLimitedError):
         await runtime.invoke(make_agent(), "typed input", attempt_number=1)
 
-    assert _ai_provider_exhausted_records(capsys.readouterr().out) == []
+    assert metric_records(capsys.readouterr().out, _EXHAUSTED_METRIC) == []

@@ -8,9 +8,6 @@ emit し、それ以外 (一時的 rate limit・非 provider error・None) は n
 
 from __future__ import annotations
 
-import json
-from typing import Any
-
 import pytest
 
 from app.analysis.ai_provider_errors import (
@@ -20,21 +17,9 @@ from app.analysis.ai_provider_errors import (
     AIProviderUsageLimitExhaustedError,
 )
 from app.analysis.ai_provider_exhaustion import record_ai_provider_exhausted
+from tests.cloudwatch.records import metric_records
 
 _METRIC = "ai_provider_exhausted"
-
-
-def _ai_provider_exhausted_records(captured_stdout: str) -> list[dict[str, Any]]:
-    """stdout から ``_METRIC`` を持つ EMF レコード (``_aws`` キー行) を抽出する。"""
-    records: list[dict[str, Any]] = []
-    for line in captured_stdout.splitlines():
-        try:
-            record = json.loads(line)
-        except json.JSONDecodeError:
-            continue
-        if isinstance(record, dict) and "_aws" in record and _METRIC in record:
-            records.append(record)
-    return records
 
 
 @pytest.mark.parametrize(
@@ -52,7 +37,7 @@ def test_exhausted_provider_error_emits_metric_with_code_as_kind(
     """枯渇系 2 クラスは CODE を ``kind`` にした 1 打点を Count=1 で emit する。"""
     record_ai_provider_exhausted(exc, provider="gemini")
 
-    records = _ai_provider_exhausted_records(capsys.readouterr().out)
+    records = metric_records(capsys.readouterr().out, _METRIC)
     assert len(records) == 1
     record = records[0]
     metric_def = record["_aws"]["CloudWatchMetrics"][0]
@@ -72,7 +57,7 @@ def test_provider_dimension_is_the_caller_supplied_value(
         AIProviderUsageLimitExhaustedError(), provider="deepseek"
     )
 
-    record = _ai_provider_exhausted_records(capsys.readouterr().out)[0]
+    record = metric_records(capsys.readouterr().out, _METRIC)[0]
     assert record["provider"] == "deepseek"
 
 
@@ -82,7 +67,7 @@ def test_rate_limited_is_recoverable_by_waiting_and_does_not_emit(
     """一時的 rate limit (時間経過で回復) は枯渇ではないため emit しない。"""
     record_ai_provider_exhausted(AIProviderRateLimitedError(), provider="gemini")
 
-    assert _ai_provider_exhausted_records(capsys.readouterr().out) == []
+    assert metric_records(capsys.readouterr().out, _METRIC) == []
 
 
 def test_other_state_error_not_in_exhausted_set_does_not_emit(
@@ -91,7 +76,7 @@ def test_other_state_error_not_in_exhausted_set_does_not_emit(
     """枯渇系以外の ``AIProviderStateError`` (設定不正等) は emit しない。"""
     record_ai_provider_exhausted(AIProviderConfigurationError(), provider="gemini")
 
-    assert _ai_provider_exhausted_records(capsys.readouterr().out) == []
+    assert metric_records(capsys.readouterr().out, _METRIC) == []
 
 
 def test_non_provider_exception_does_not_emit(
@@ -100,11 +85,11 @@ def test_non_provider_exception_does_not_emit(
     """provider error 階層に属さない例外は emit しない。"""
     record_ai_provider_exhausted(ValueError("surprise"), provider="gemini")
 
-    assert _ai_provider_exhausted_records(capsys.readouterr().out) == []
+    assert metric_records(capsys.readouterr().out, _METRIC) == []
 
 
 def test_none_does_not_emit(capsys: pytest.CaptureFixture[str]) -> None:
     """exc が None (未分類 / 対象外境界) のときは emit しない。"""
     record_ai_provider_exhausted(None, provider="gemini")
 
-    assert _ai_provider_exhausted_records(capsys.readouterr().out) == []
+    assert metric_records(capsys.readouterr().out, _METRIC) == []

@@ -18,9 +18,7 @@ marker は production と同じく ``map_provider_to_assessment`` で provider e
 
 from __future__ import annotations
 
-import json
 from datetime import UTC, datetime
-from typing import Any
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -48,6 +46,7 @@ from app.models.analyzable_article_record import AnalyzableArticleRecord
 from app.models.article_curation import ArticleCuration
 from app.models.news_source import NewsSource
 from app.models.pipeline_event import PipelineEvent
+from tests.cloudwatch.records import metric_records
 from tests.logfire._metric_helpers import collected_metrics, sum_counter_for_result
 
 _PROCESSING_OUTCOME_METRIC = "vector.assessment.processing_outcome"
@@ -467,20 +466,6 @@ async def test_failed_emitted_before_audit_side_effect(
 _EXHAUSTED_METRIC = "ai_provider_exhausted"
 
 
-def _ai_provider_exhausted_records(captured_stdout: str) -> list[dict[str, Any]]:
-    """stdout から ``_EXHAUSTED_METRIC`` を持つ EMF 行 (``_aws`` キー) を抽出する。"""
-    records: list[dict[str, Any]] = []
-    for line in captured_stdout.splitlines():
-        try:
-            record = json.loads(line)
-        except json.JSONDecodeError:
-            continue
-        has_metric = isinstance(record, dict) and _EXHAUSTED_METRIC in record
-        if has_metric and "_aws" in record:
-            records.append(record)
-    return records
-
-
 @pytest.mark.asyncio
 async def test_terminal_with_exhausted_provider_error_emits_ai_provider_exhausted(
     db_session: AsyncSession,
@@ -504,7 +489,7 @@ async def test_terminal_with_exhausted_provider_error_emits_ai_provider_exhauste
         provider="gemini",
     )
 
-    records = _ai_provider_exhausted_records(capsys.readouterr().out)
+    records = metric_records(capsys.readouterr().out, _EXHAUSTED_METRIC)
     assert len(records) == 1
     assert records[0]["kind"] == AIProviderInsufficientBalanceError.CODE
     assert records[0]["provider"] == "gemini"
@@ -535,7 +520,7 @@ async def test_recoverable_exhausted_provider_error_emits_regardless_of_last_att
         provider="gemini",
     )
 
-    records = _ai_provider_exhausted_records(capsys.readouterr().out)
+    records = metric_records(capsys.readouterr().out, _EXHAUSTED_METRIC)
     assert len(records) == 1
     assert records[0]["kind"] == AIProviderUsageLimitExhaustedError.CODE
 
@@ -570,4 +555,4 @@ async def test_non_exhausted_provider_error_does_not_emit_ai_provider_exhausted(
         provider="gemini",
     )
 
-    assert _ai_provider_exhausted_records(capsys.readouterr().out) == []
+    assert metric_records(capsys.readouterr().out, _EXHAUSTED_METRIC) == []
