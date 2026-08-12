@@ -133,6 +133,97 @@ resource "aws_cloudwatch_metric_alarm" "dispatch_run_stalled" {
   ok_actions    = [aws_sns_topic.alerts.arn]
 }
 
+# --- A3: 観測の死活 (メタ監視) ---------------------------------------------
+#
+# 毎分の queue_health 観測 (app/queue/tasks/queue_health.py) が stage 別に
+# emit する observation_up{stage} の全系列を監視する。A2 (工程別滞留) は
+# この観測に全面依存するため、先に「監視の目が開いているか」を塞ぐ。
+#
+# FILL で欠損を 0 とみなしてから MIN を取ることで、
+#   値 0 (Valkey / stream の snapshot 失敗) / 特定 stage だけの emit 消失
+#   (観測 task の途中 crash) / 全欠損 (maintenance worker・scheduler 死)
+# の 3 形態が同じ式で落ちる。デプロイ時の 1〜2 分の空白は 5 分連続条件が吸収。
+
+resource "aws_cloudwatch_metric_alarm" "queue_observation_stalled" {
+  alarm_name          = "${var.name_prefix}-queue-observation-stalled"
+  alarm_description   = "パイプライン監視の観測が 5 分間できていない (queue_health)。全 stage 同時なら Valkey か maintenance worker (analysis サービス内) を、単一 stage ならその stream を確認する。"
+  comparison_operator = "LessThanThreshold"
+  threshold           = 1
+  evaluation_periods  = 5
+  datapoints_to_alarm = 5
+  treat_missing_data  = "breaching"
+
+  alarm_actions = [aws_sns_topic.alerts.arn]
+  ok_actions    = [aws_sns_topic.alerts.arn]
+
+  metric_query {
+    id = "obs_acquisition"
+
+    metric {
+      namespace   = "Vector/Pipeline"
+      metric_name = "observation_up"
+      period      = 60
+      stat        = "Minimum"
+
+      dimensions = {
+        stage = "acquisition"
+      }
+    }
+  }
+
+  metric_query {
+    id = "obs_completion"
+
+    metric {
+      namespace   = "Vector/Pipeline"
+      metric_name = "observation_up"
+      period      = 60
+      stat        = "Minimum"
+
+      dimensions = {
+        stage = "completion"
+      }
+    }
+  }
+
+  metric_query {
+    id = "obs_curation"
+
+    metric {
+      namespace   = "Vector/Pipeline"
+      metric_name = "observation_up"
+      period      = 60
+      stat        = "Minimum"
+
+      dimensions = {
+        stage = "curation"
+      }
+    }
+  }
+
+  metric_query {
+    id = "obs_assessment"
+
+    metric {
+      namespace   = "Vector/Pipeline"
+      metric_name = "observation_up"
+      period      = 60
+      stat        = "Minimum"
+
+      dimensions = {
+        stage = "assessment"
+      }
+    }
+  }
+
+  metric_query {
+    id          = "observation_floor"
+    expression  = "MIN([FILL(obs_acquisition, 0), FILL(obs_completion, 0), FILL(obs_curation, 0), FILL(obs_assessment, 0)])"
+    label       = "observation_up floor"
+    return_data = true
+  }
+}
+
 # --- A7: ユーザー向けエラー (ALB 5XX) --------------------------------------
 #
 # 低トラフィックのため率ではなく絶対数で判定する。ELB_5XX (target 到達不能)
