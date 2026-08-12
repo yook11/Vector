@@ -217,11 +217,71 @@ resource "aws_cloudwatch_metric_alarm" "queue_observation_stalled" {
   }
 
   metric_query {
+    id = "obs_embedding"
+
+    metric {
+      namespace   = "Vector/Pipeline"
+      metric_name = "observation_up"
+      period      = 60
+      stat        = "Minimum"
+
+      dimensions = {
+        stage = "embedding"
+      }
+    }
+  }
+
+  metric_query {
     id          = "observation_floor"
-    expression  = "MIN([FILL(obs_acquisition, 0), FILL(obs_completion, 0), FILL(obs_curation, 0), FILL(obs_assessment, 0)])"
+    expression  = "MIN([FILL(obs_acquisition, 0), FILL(obs_completion, 0), FILL(obs_curation, 0), FILL(obs_assessment, 0), FILL(obs_embedding, 0)])"
     label       = "observation_up floor"
     return_data = true
   }
+}
+
+# --- A2: 工程別滞留 -----------------------------------------------------------
+#
+# 「その工程に仕事が積まれたまま閾値以上消化されていない」を stage 名指しで
+# 検知する。シグナルは queue_health が毎分 emit する最古の未処理 entry の
+# 経過秒数。仕事ゼロのときは 0 が emit されるため、量に依存せず
+# 「暇」と「死んでいる」を誤判定しない。missing = notBreaching は
+# 観測死を A3 に委ねる役割分担 (生きていれば正常時に missing は発生しない)。
+# AI 工程の閾値が緩いのは、AI 予算枯渇などの際に再試行を後ろへずらして
+# 対応時間 (残高チャージ等) を稼ぐ退避機構が働くため。60 分は「退避が
+# 猶予を稼いでいる想定内の遅延」と「対応が間に合っていない」の境界であり、
+# 初期値として置き実測で調整する。
+
+locals {
+  # stage → 滞留閾値 (秒) と、対応時に見に行く ECS サービス。
+  pipeline_stall_alarms = {
+    acquisition = { threshold = 1800, service = "fetch" }
+    completion  = { threshold = 1800, service = "fetch" }
+    curation    = { threshold = 3600, service = "analysis" }
+    assessment  = { threshold = 3600, service = "analysis" }
+    embedding   = { threshold = 3600, service = "analysis" }
+  }
+}
+
+resource "aws_cloudwatch_metric_alarm" "pipeline_stage_stalled" {
+  for_each = local.pipeline_stall_alarms
+
+  alarm_name          = "${var.name_prefix}-pipeline-stalled-${each.key}"
+  alarm_description   = "「${each.key}」工程に仕事が積まれたまま ${each.value.threshold / 60} 分以上消化されていない。ECS の ${each.value.service} サービスの worker ログと queue の状態を確認する。"
+  namespace           = "Vector/Pipeline"
+  metric_name         = "oldest_outstanding_enqueue_age"
+  statistic           = "Maximum"
+  period              = 300
+  evaluation_periods  = 1
+  threshold           = each.value.threshold
+  comparison_operator = "GreaterThanOrEqualToThreshold"
+  treat_missing_data  = "notBreaching"
+
+  dimensions = {
+    stage = each.key
+  }
+
+  alarm_actions = [aws_sns_topic.alerts.arn]
+  ok_actions    = [aws_sns_topic.alerts.arn]
 }
 
 # --- A7: ユーザー向けエラー (ALB 5XX) --------------------------------------
