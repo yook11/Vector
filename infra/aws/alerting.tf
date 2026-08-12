@@ -284,6 +284,103 @@ resource "aws_cloudwatch_metric_alarm" "pipeline_stage_stalled" {
   ok_actions    = [aws_sns_topic.alerts.arn]
 }
 
+# --- A6: AI 利用枠の枯渇 ------------------------------------------------------
+#
+# 残高チャージ式運用のため、枯渇 (残高切れ・per-day quota 切れ) は運用者対応が
+# 必須の事象。退避機構 (stage hold 6h) は対応時間を稼ぐだけで回復させない。
+# kind × provider の全系列を FILL で 0 埋めして合算する (平常時は全系列が
+# 存在しないのが正常。現状の翻訳層が生成するのは insufficient_balance×deepseek
+# と usage_limit_exhausted×gemini の 2 組だが、将来の組を黙って見逃さないよう
+# 4 組とも監視する)。
+#
+# ok_actions を意図的に付けない: metric は枯渇発生時にしか存在せず、退避機構が
+# 再試行自体を止めるため、チャージしなくても alarm は OK へ戻る = OK 復帰は
+# 残高回復を意味しない。対応済みかは対応した本人が知っており、復旧通知は
+# 誤解を招くだけ。未チャージのまま hold 明けの再試行が再枯渇すれば OK→ALARM
+# が再発し、リマインダーとして再通知される。
+
+resource "aws_cloudwatch_metric_alarm" "ai_provider_exhausted" {
+  alarm_name          = "${var.name_prefix}-ai-provider-exhausted"
+  alarm_description   = "AI provider の利用枠が枯渇した。insufficient_balance (DeepSeek) は残高チャージ、usage_limit_exhausted (Gemini) は枠リセット待ちか tier 引き上げを判断する。"
+  comparison_operator = "GreaterThanOrEqualToThreshold"
+  threshold           = 1
+  evaluation_periods  = 1
+  treat_missing_data  = "notBreaching"
+
+  alarm_actions = [aws_sns_topic.alerts.arn]
+
+  metric_query {
+    id = "balance_deepseek"
+
+    metric {
+      namespace   = "Vector/Pipeline"
+      metric_name = "ai_provider_exhausted"
+      period      = 900
+      stat        = "Sum"
+
+      dimensions = {
+        kind     = "ai_error_insufficient_balance"
+        provider = "deepseek"
+      }
+    }
+  }
+
+  metric_query {
+    id = "balance_gemini"
+
+    metric {
+      namespace   = "Vector/Pipeline"
+      metric_name = "ai_provider_exhausted"
+      period      = 900
+      stat        = "Sum"
+
+      dimensions = {
+        kind     = "ai_error_insufficient_balance"
+        provider = "gemini"
+      }
+    }
+  }
+
+  metric_query {
+    id = "quota_deepseek"
+
+    metric {
+      namespace   = "Vector/Pipeline"
+      metric_name = "ai_provider_exhausted"
+      period      = 900
+      stat        = "Sum"
+
+      dimensions = {
+        kind     = "ai_error_usage_limit_exhausted"
+        provider = "deepseek"
+      }
+    }
+  }
+
+  metric_query {
+    id = "quota_gemini"
+
+    metric {
+      namespace   = "Vector/Pipeline"
+      metric_name = "ai_provider_exhausted"
+      period      = 900
+      stat        = "Sum"
+
+      dimensions = {
+        kind     = "ai_error_usage_limit_exhausted"
+        provider = "gemini"
+      }
+    }
+  }
+
+  metric_query {
+    id          = "exhausted_total"
+    expression  = "SUM([FILL(balance_deepseek, 0), FILL(balance_gemini, 0), FILL(quota_deepseek, 0), FILL(quota_gemini, 0)])"
+    label       = "ai_provider_exhausted total"
+    return_data = true
+  }
+}
+
 # --- A7: ユーザー向けエラー (ALB 5XX) --------------------------------------
 #
 # 低トラフィックのため率ではなく絶対数で判定する。ELB_5XX (target 到達不能)
