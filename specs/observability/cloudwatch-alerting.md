@@ -95,7 +95,7 @@ Status: Draft (レビュー中 — 途絶 3 層構成・AI 利用枠枯渇まで
 ### A3: 観測の死活(メタ監視)
 
 - 症状: A2 の前提である queue_health 観測が動いていない。Valkey 障害(snapshot 取得失敗 → `observation_up=0`)と、maintenance worker / scheduler 死(emit 消失 → missing)の両方を拾う。
-- 条件: `observation_up{stage}` 全系列の metric math `MIN(...)` < 1、period 5min、1 evaluation period。`TreatMissingData = breaching`。
+- 条件: `observation_up{stage}` 全系列を `FILL(..., 0)` で欠損 0 化してから metric math `MIN(...)` < 1、period 60s × 5/5 evaluation(5 分継続)。`TreatMissingData = breaching`。FILL により「値 0」「特定 stage だけ emit が消える部分欠損(観測 task の途中 crash)」「全欠損」の 3 形態が同じ式で落ちる。デプロイ時の 1〜2 分の観測空白は 5 分連続条件が吸収する。
 - Valkey 全面障害は本 alarm(約 5 分)+ A1 で検知される。単一 stream の異常(group 消失等)は該当 stage のみ 0 になる。
 - maintenance worker は backfill 救済・retention も担うため、この死活は観測だけでなく救済機能の停止シグナルでもある。
 - アクション: `observation_up=0` なら Valkey / stream の状態確認。missing なら maintenance worker / scheduler の生死確認。
