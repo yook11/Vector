@@ -48,25 +48,20 @@ _TARGETS = tuple(
 )
 
 
-def _emf_lines(captured_stdout: str) -> list[dict[str, Any]]:
-    """stdout から EMF 行 (``_aws`` キーを持つ JSON 行) だけを抽出する。"""
-    lines: list[dict[str, Any]] = []
+def _metric_records(captured_stdout: str, metric_name: str) -> list[dict[str, Any]]:
+    """stdout から metric_name を持つ EMF レコード (``_aws`` キー行) を抽出する。"""
+    records: list[dict[str, Any]] = []
     for line in captured_stdout.splitlines():
         try:
             record = json.loads(line)
         except json.JSONDecodeError:
             continue
-        if isinstance(record, dict) and "_aws" in record:
-            lines.append(record)
-    return lines
+        if isinstance(record, dict) and "_aws" in record and metric_name in record:
+            records.append(record)
+    return records
 
 
-def _age_lines(captured_stdout: str) -> list[dict[str, Any]]:
-    """EMF 行のうち age metric だけを抽出する (observation_up 行も同じ tick で出る)。"""
-    return [line for line in _emf_lines(captured_stdout) if _AGE_METRIC in line]
-
-
-def _snapshot(
+def _snapshot_with_age(
     target: StreamHealthTarget,
     *,
     timestamp: float,
@@ -100,16 +95,16 @@ async def test_success_stages_emit_age_with_snapshot_value_or_zero_for_none(
     """成功 stage は snapshot の age を emit し、None の stage は 0.0 になる。"""
     _patch_targets_and_redis(monkeypatch)
     snapshots = [
-        _snapshot(_TARGETS[0], timestamp=1_000.0, outstanding_age=42.5),
-        _snapshot(_TARGETS[1], timestamp=2_000.0, outstanding_age=None),
-        _snapshot(_TARGETS[2], timestamp=3_000.0, outstanding_age=7.25),
+        _snapshot_with_age(_TARGETS[0], timestamp=1_000.0, outstanding_age=42.5),
+        _snapshot_with_age(_TARGETS[1], timestamp=2_000.0, outstanding_age=None),
+        _snapshot_with_age(_TARGETS[2], timestamp=3_000.0, outstanding_age=7.25),
     ]
     monkeypatch.setattr(module, "read_stream_health", AsyncMock(side_effect=snapshots))
 
     await module.observe_pipeline_queue_health()
-    age_lines = _age_lines(capsys.readouterr().out)
+    age_records = _metric_records(capsys.readouterr().out, _AGE_METRIC)
 
-    assert {line["stage"]: line[_AGE_METRIC] for line in age_lines} == {
+    assert {record["stage"]: record[_AGE_METRIC] for record in age_records} == {
         "acquisition": 42.5,
         "completion": 0.0,
         "embedding": 7.25,
@@ -124,15 +119,16 @@ async def test_success_age_line_uses_seconds_unit_and_pipeline_namespace(
     """age EMF 行の Namespace/Dimensions/Unit を固定する (値の型は test_emf.py 側)。"""
     _patch_targets_and_redis(monkeypatch)
     snapshots = [
-        _snapshot(target, timestamp=1_000.0, outstanding_age=5.0) for target in _TARGETS
+        _snapshot_with_age(target, timestamp=1_000.0, outstanding_age=5.0)
+        for target in _TARGETS
     ]
     monkeypatch.setattr(module, "read_stream_health", AsyncMock(side_effect=snapshots))
 
     await module.observe_pipeline_queue_health()
-    age_lines = _age_lines(capsys.readouterr().out)
-    metric_def = age_lines[0]["_aws"]["CloudWatchMetrics"][0]
+    age_records = _metric_records(capsys.readouterr().out, _AGE_METRIC)
+    metric_def = age_records[0]["_aws"]["CloudWatchMetrics"][0]
 
-    assert len(age_lines) == len(_TARGETS)
+    assert len(age_records) == len(_TARGETS)
     assert metric_def["Namespace"] == "Vector/Pipeline"
     assert metric_def["Dimensions"] == [["stage"]]
     assert metric_def["Metrics"] == [{"Name": _AGE_METRIC, "Unit": "Seconds"}]
@@ -153,12 +149,15 @@ async def test_failing_stage_emits_no_age_line_but_other_stages_still_emit(
             reason=cast(StreamHealthFailureReason, "redis_unavailable"),
         )
         if target.stage == failing_stage
-        else _snapshot(target, timestamp=1_000.0, outstanding_age=9.0)
+        else _snapshot_with_age(target, timestamp=1_000.0, outstanding_age=9.0)
         for target in _TARGETS
     ]
     monkeypatch.setattr(module, "read_stream_health", AsyncMock(side_effect=results))
 
     await module.observe_pipeline_queue_health()
-    age_stages = {line["stage"] for line in _age_lines(capsys.readouterr().out)}
+    age_stages = {
+        record["stage"]
+        for record in _metric_records(capsys.readouterr().out, _AGE_METRIC)
+    }
 
     assert age_stages == set(_STAGES) - {failing_stage}
