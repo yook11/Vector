@@ -118,9 +118,11 @@ GEMINI_ASSESSMENT_SPEC: Final[AssessmentCallSpec] = AssessmentCallSpec(
 _DEEPSEEK_MODEL: Final[str] = "deepseek-v4-flash"
 _DEEPSEEK_TOOL_NAME: Final[str] = "assess_article"
 _DEEPSEEK_BASE_URL: Final[str] = "https://api.deepseek.com/beta"
+# 512 は flat 3 フィールド schema 時代の値で、key_points 化後は出力が収まらず
+# 切り詰めが慢性化した (2026-08 実測: 失敗の全件が finish_reason=length)。
 _DEEPSEEK_GEN_CONFIG: Final[Mapping[str, Any]] = MappingProxyType(
     {
-        "max_tokens": 512,
+        "max_tokens": 1536,
     }
 )
 # DeepSeek で構造化出力を強制する機構 (Function Calling + thinking 無効)。

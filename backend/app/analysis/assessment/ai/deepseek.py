@@ -19,7 +19,10 @@ from typing import Final
 import structlog
 from openai import AsyncOpenAI
 
-from app.analysis.ai_provider_errors import AIProviderConfigurationError
+from app.analysis.ai_provider_errors import (
+    AIProviderConfigurationError,
+    AIProviderOutputTruncatedError,
+)
 from app.analysis.assessment.ai.base import BaseAssessor
 from app.analysis.assessment.ai.deepseek_prompt import DeepSeekAssessmentPrompt
 from app.analysis.assessment.ai.envelope import AssessmentCall
@@ -128,10 +131,22 @@ class DeepSeekAssessor(BaseAssessor):
         )
 
         choice = resp.choices[0]
-        # truncation 観測信号 (raw arguments = PII は載せない)。finish_reason="length"
-        # + completion_tokens≈max_tokens なら出力切れで JSON が壊れたと切り分けられる。
         finish_reason = choice.finish_reason
         completion_tokens = resp.usage.completion_tokens if resp.usage else None
+
+        # 切り詰め応答は JSON 破損 (ARGUMENTS_NOT_JSON) と別分類にする。strict な
+        # constrained decoding では不正 JSON の実経路がほぼ切り詰めのみで、混ぜると
+        # 容量問題が「応答不正」に埋もれて観測できない。
+        if finish_reason == "length":
+            logger.warning(
+                "assessment_deepseek_output_truncated",
+                completion_tokens=completion_tokens,
+                max_tokens=self.SPEC.gen_config.get("max_tokens"),
+            )
+            raise AIProviderOutputTruncatedError(
+                reason=DeepSeekStateReason.OUTPUT_TOKEN_LIMIT_REACHED
+            )
+
         try:
             tool_calls = choice.message.tool_calls or []
             # tool_call 構造違反は AI 応答の schema 違反として扱い、terminal な request
@@ -164,7 +179,7 @@ class DeepSeekAssessor(BaseAssessor):
             # を入れない (silent な None / int の文字列化を許さない)。
             result = parse_assessment(payload)
         except AssessmentResponseInvalidError as exc:
-            # 応答が使えない時に truncation 判定材料を残す (失敗の扱いは変えない)。
+            # 応答が使えない時の観測材料 (raw は載せない。失敗の扱いは変えない)。
             logger.warning(
                 "assessment_deepseek_response_defect",
                 code=exc.code,
