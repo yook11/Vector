@@ -61,10 +61,10 @@ def _emf_lines(captured_stdout: str) -> list[dict[str, Any]]:
     return lines
 
 
-def _empty_snapshot(
+def _successful_observation_snapshot(
     target: StreamHealthTarget, timestamp: float
 ) -> StreamHealthSnapshot:
-    """observation_up emit には無関係な残り field を 0/None で埋めた最小 snapshot。"""
+    """観測成功を表す、observation_up emit 用の最小 snapshot。"""
     return StreamHealthSnapshot(
         stage=target.stage,
         stream=target.stream,
@@ -99,7 +99,7 @@ async def test_all_stages_success_emit_observation_up_one_per_stage(
     """全4 stage成功時、stageごとにobservation_up=1のEMF行が1行、計4行出る。"""
     _patch_targets_and_redis(monkeypatch)
     snapshots = [
-        _empty_snapshot(target, 1_000.0 + index)
+        _successful_observation_snapshot(target, 1_000.0 + index)
         for index, target in enumerate(_FOUR_TARGETS)
     ]
     monkeypatch.setattr(module, "read_stream_health", AsyncMock(side_effect=snapshots))
@@ -127,7 +127,7 @@ async def test_one_stage_failure_emits_zero_and_continues_other_stages(
     results: list[StreamHealthSnapshot | StreamHealthError] = [
         _stream_health_error(target)
         if target.stage == failing_stage
-        else _empty_snapshot(target, 1_000.0)
+        else _successful_observation_snapshot(target, 1_000.0)
         for target in _FOUR_TARGETS
     ]
     monkeypatch.setattr(module, "read_stream_health", AsyncMock(side_effect=results))
