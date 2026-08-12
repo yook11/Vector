@@ -284,6 +284,93 @@ resource "aws_cloudwatch_metric_alarm" "pipeline_stage_stalled" {
   ok_actions    = [aws_sns_topic.alerts.arn]
 }
 
+# --- A4: 工程別の失敗率 -------------------------------------------------------
+#
+# 「仕事はしているが失敗が支配的」を工程別に検知する。シグナルは各工程の
+# 分類確定点が emit する processing_outcome{stage, result}。分母は各工程の
+# 既存不変条件を踏襲し infra_error は分母外。最小標本 10 未満の窓は IF で
+# 0 に倒して評価しない (少量時間帯の誤発火防止)。
+#
+# 閾値・窓は 2026-08-12 の 28 日実測ベースライン由来の暫定値 (spec §A4)。
+# completion の 90% は「慢性 54% 失敗 (外部サイトのブロック) が普段の姿」の
+# 上に置いた「ほぼ全滅 = scraper/egress の構造故障」の線。embedding の窓が
+# 12h なのは流量 (~1.2 件/h) では 3h で最小標本に届かないため。
+# acquisition は対象外 (失敗の実体が特定 source の恒久ブロックで、率アラート
+# に固有の守備範囲がない。source_health / A1 の担当)。
+
+locals {
+  # stage → 失敗率閾値・評価窓・分母の result 系列 (failed を含む)。
+  pipeline_failure_rate_alarms = {
+    completion = {
+      threshold   = 0.9
+      period      = 10800
+      denominator = ["succeeded", "failed"]
+    }
+    curation = {
+      threshold   = 0.5
+      period      = 10800
+      denominator = ["signal", "noise", "rejected", "failed"]
+    }
+    assessment = {
+      threshold   = 0.5
+      period      = 10800
+      denominator = ["in_scope", "out_of_scope", "failed"]
+    }
+    embedding = {
+      threshold   = 0.5
+      period      = 43200
+      denominator = ["succeeded", "failed"]
+    }
+  }
+}
+
+resource "aws_cloudwatch_metric_alarm" "pipeline_failure_rate" {
+  for_each = local.pipeline_failure_rate_alarms
+
+  alarm_name          = "${var.name_prefix}-failure-rate-${each.key}"
+  alarm_description   = "「${each.key}」工程の失敗率が ${each.value.period / 3600} 時間窓で ${each.value.threshold * 100}% 以上 (最小標本 10)。worker ログと admin pipeline_health で error_class を確認する。"
+  comparison_operator = "GreaterThanOrEqualToThreshold"
+  threshold           = each.value.threshold
+  evaluation_periods  = 1
+  treat_missing_data  = "notBreaching"
+
+  alarm_actions = [aws_sns_topic.alerts.arn]
+  ok_actions    = [aws_sns_topic.alerts.arn]
+
+  dynamic "metric_query" {
+    for_each = each.value.denominator
+
+    content {
+      id = metric_query.value
+
+      metric {
+        namespace   = "Vector/Pipeline"
+        metric_name = "processing_outcome"
+        period      = each.value.period
+        stat        = "Sum"
+
+        dimensions = {
+          stage  = each.key
+          result = metric_query.value
+        }
+      }
+    }
+  }
+
+  metric_query {
+    id         = "total"
+    expression = join(" + ", [for r in each.value.denominator : "FILL(${r}, 0)"])
+    label      = "attempts"
+  }
+
+  metric_query {
+    id          = "failure_rate"
+    expression  = "IF(total >= 10, FILL(failed, 0) / total, 0)"
+    label       = "failure rate"
+    return_data = true
+  }
+}
+
 # --- A6: AI 利用枠の枯渇 ------------------------------------------------------
 #
 # 残高チャージ式運用のため、枯渇 (残高切れ・per-day quota 切れ) は運用者対応が
