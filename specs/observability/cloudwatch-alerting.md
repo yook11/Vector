@@ -46,7 +46,7 @@ Status: Draft (レビュー中 — 途絶 3 層構成・AI 利用枠枯渇まで
 - CPU / メモリ使用率の閾値アラート。OOM は発生事象(A5)で拾う。
 - Container Insights の有効化。
 - ダッシュボード設計(別 spec。本 spec は「鳴るもの」だけを扱う)。
-- assessment 以外の工程の失敗率アラート(次ステップで工程ごとに分母の扱いを詰めてから拡張する)。
+- acquisition の失敗率アラート(失敗の実体が特定 source の恒久ブロックで、率アラートに固有の守備範囲がない。§A4 参照)。
 - 一時的 rate limit・自前 gate skip のアラート化(上記 Invariant の通り)。
 - backfill daily budget 枯渇のアラート化(救済経路の意図的な上限。異常な backlog 成長は A2 が拾う)。
 - agent のユーザー向け日次クォータ(回数制限)枯渇のアラート化(意図的なプロダクト上限で、利用者に 429 として直接見える。AI provider の枠枯渇とは別物)。
@@ -69,7 +69,7 @@ Status: Draft (レビュー中 — 途絶 3 層構成・AI 利用枠枯渇まで
 | A1 | 収集の供給が止まっている(全体途絶) | EMF `dispatch_run` の不在 | metric alarm |
 | A2 | 特定工程で仕事が消化されていない(工程名指し) | EMF `oldest_outstanding_enqueue_age{stage}` | metric alarm × 5 |
 | A3 | queue 観測自体が死んでいる(Valkey 障害含む) | EMF `observation_up` | metric alarm (math MIN) |
-| A4 | assessment の失敗率が急増 | EMF `assessment_outcome` の failed 率 | metric alarm (math) |
+| A4 | 工程別の失敗率(completion / curation / assessment / embedding) | EMF `processing_outcome{stage, result}` の failed 率 | metric alarm (math) × 4 |
 | A5 | ECS タスクの異常停止(crash / OOM / 起動不能) | EventBridge ECS Task State Change | event 通知 |
 | A6 | AI 利用枠の枯渇(残高切れ・日次 quota 切れ) | EMF `ai_provider_exhausted` | metric alarm |
 | A7 | ユーザーにエラーが見えている | ALB 5XX | metric alarm |
@@ -101,11 +101,22 @@ Status: Draft (レビュー中 — 途絶 3 層構成・AI 利用枠枯渇まで
 - maintenance worker は backfill 救済・retention も担うため、この死活は観測だけでなく救済機能の停止シグナルでもある。
 - アクション: `observation_up=0` なら Valkey / stream の状態確認。missing なら maintenance worker / scheduler の生死確認。
 
-### A4: assessment 失敗率の急増
+### A4: 工程別の失敗率(仕事はしているが失敗が支配的)
 
-- 条件: metric math `IF(total >= 10, failed / total, 0) >= 0.5`、period 1h、2 evaluation periods 連続。`total = succeeded + rejected + failed`(分母の扱いは `logfire-assessment-outcome-metrics.md` の既存不変条件を踏襲し、冪等 skip / infra_error は分母から除外)。`TreatMissingData = notBreaching`(新着ゼロの時間帯は正常)。
-- 根拠: 既知パターン = DeepSeek 不正 JSON で 54% 失敗が数日継続。最小標本 10 で低トラフィック時の誤発火を防ぐ。
-- アクション: analysis worker ログと admin pipeline_health で error_class を確認。
+- Signal: EMF `processing_outcome{stage, result}`。既存 Logfire counter(`record_*_processing_outcome`)と同一の分類確定点からの二重 sink。対象 4 工程 = completion / curation / assessment / embedding。
+- 条件(共通形): metric math `IF(total >= 10, failed / total, 0) >= 閾値`、1 evaluation period、`TreatMissingData = notBreaching`(仕事ゼロ・標本不足の窓は評価しない)。分母は各工程の既存不変条件を踏襲し infra_error は分母外: completion = succeeded+failed / curation = signal+noise+rejected+failed / assessment = in_scope+out_of_scope+failed / embedding = succeeded+failed。
+- 閾値と評価窓(2026-08-12 の 28 日実測ベースライン由来の**暫定値**。運用実測で調整):
+
+| stage | 閾値 | 窓 | ベースライン実測と根拠 |
+|---|---|---|---|
+| completion | 90% | 3h | 慢性 54%(外部サイトのブロックが普段の姿)。90% = ほぼ全滅 = scraper / egress の構造故障だけを拾う |
+| curation | 50% | 3h | 3.7%、最悪日 15%(Gemini 障害日) |
+| assessment | 50% | 3h | 切り詰め修正(#132)後は 0〜5% 見込み(真の応答不正は 30 日 4 件)。既知パターン = 6 月の 54% 失敗を確実に検知 |
+| embedding | 50% | 12h | 0.1%。流量 ~1.2 件/h のため 3h 窓では最小標本 10 に届かない |
+
+- 評価窓を当初案の 1h × 2 期から 3h × 1 期(embedding は 12h)に変更: 実測流量(assessment 6.8 件/h 等)では 1h 窓の大半が最小標本 10 未満で評価不能になり、alarm が実質沈黙する。急性の全停止は A1 / A2 / A5 の担当で、失敗率アラートの役割は慢性・構造故障の検知。
+- acquisition は対象外: 失敗の 95% が特定 source の恒久ブロックで、率は分母(収集量)の変動で 4〜25% に揺れるだけ。source 単位の慢性問題は admin source_health、収集の全停止は A1 の担当で、率アラートに固有の守備範囲がない。
+- アクション: 該当 stage の worker ログと admin pipeline_health で error_class を確認。
 
 ### A5: ECS タスク異常停止(crash / OOM / 起動不能)
 
@@ -171,7 +182,7 @@ CloudWatch Embedded Metric Format で stdout に emit する。awslogs 経由で
 - `dispatch_run` — dimension `cadence` ∈ {high, medium, low}(3 系列)。dispatch task の**正常完了時**に 1。失敗時は emit しない。alarm consumer は high のみ、medium / low は将来の dashboard consumer 前提。
 - `oldest_outstanding_enqueue_age` — dimension `stage` × 5(acquisition / completion / curation / assessment / embedding)。queue_health の毎分観測を Logfire gauge と EMF の二重 sink にする。仕事が無いときは 0 を emit(既存の `_age_or_zero` と同じ)。
 - `observation_up` — dimension `stage` × 5。既存セマンティクス(成功 1 / 失敗 0)のまま二重 sink。
-- `assessment_outcome` — dimension `result`(5 系列)。emit point・分類境界は既存 Logfire metric `vector.assessment.processing_outcome{result}` と同一。分類ロジックは 1 か所、sink が 2 つ。
+- `processing_outcome` — dimension `stage` × `result`(15 系列: completion 3 + curation 5 + assessment 4 + embedding 3)。emit point・分類境界は既存 Logfire metric `vector.{stage}.processing_outcome{result}` と同一(`record_*_processing_outcome` 内の二重 sink)。分類ロジックは 1 か所、sink が 2 つ。stage dimension は `observation_up` / `oldest_outstanding_enqueue_age` と同じパターン。
 - `ai_provider_exhausted` — dimension `kind` × `provider`(≤ 4 系列)。emit point は A6 の通り。
 - 実装方式: EMF は公開安定仕様の JSON 形式なので、依存追加せず stdout へ 1 行 JSON を書く薄い helper を第一候補とする(`aws-embedded-metrics` 採用は依存追加になるため Ask First 対象)。書式は公式仕様で確認済み: root の `_aws.Timestamp`(epoch ミリ秒)+ `_aws.CloudWatchMetrics[]`(Namespace / Dimensions / Metrics)、metric・dimension の値は root 直下に置く。StorageResolution は既定の 60 秒でよい。
 - 抽出経路: PutLogEvents 経由なら特別なヘッダー不要と公式に明記されており、awslogs ドライバは PutLogEvents で配送するため、stdout → 自動抽出が成立する。ただし「ECS + awslogs」の組み合わせを一文で明記した公式ページは無いため、Step 2 のデプロイ後に `AWS/Logs` namespace の EMF エラーメトリクスで実地確認する。
@@ -191,8 +202,8 @@ CloudWatch Embedded Metric Format で stdout に emit する。awslogs 経由で
 
 ## 4. コスト概算
 
-- カスタムメトリクス 約 22 系列(dispatch_run 3 + age 5 + observation_up 5 + assessment_outcome 5 + ai_provider_exhausted 4)≈ $6.6/月
-- alarm 11 本(A1×1, A2×5, A3×1, A4×1, A6×1, A7×1, A8×1)≈ $1.1/月
+- カスタムメトリクス 約 32 系列(dispatch_run 3 + age 5 + observation_up 5 + processing_outcome 15 + ai_provider_exhausted 4)≈ $9.6/月
+- alarm 14 本(A1×1, A2×5, A3×1, A4×4, A6×1, A7×1, A8×1)≈ $1.4/月
 - SNS / Chatbot / EventBridge: 無料枠内
 - 合計 $8/月未満。Logfire 側の削減はなし(trace は残留のため)。
 
@@ -207,8 +218,9 @@ CloudWatch Embedded Metric Format で stdout に emit する。awslogs 経由で
 | 3 | A3 観測死活: observation_up 二重 sink + alarm | backend + Terraform |
 | 4 | A2 工程別滞留: age 二重 sink + embedding target 追加 + alarm × 5 | backend + Terraform |
 | 5 | A6 AI 枠枯渇: ai_provider_exhausted emit(analysis + agent)+ alarm | backend + Terraform |
-| 6 | A4 assessment 失敗率: assessment_outcome emit + alarm | backend + Terraform |
-| 7+ | 失敗率の工程展開(1 工程ずつ分母を確定して追加) | backend + Terraform |
+| 6 | A4 工程別失敗率: processing_outcome emit(4 工程一括)+ alarm × 4(暫定閾値) | backend + Terraform |
+
+失敗率の閾値の決め方(2026-08-12 合意): 工程ごとに普段の失敗率が異なるため、閾値は全工程一律にせず、**工程別に実測ベースラインを算出してから「通常変動では説明できず、工程が壊れていると言える水準」を置く**(A2 の工程別閾値と同じパターン)。anomaly detection(ベースラインからの相対逸脱)は採らない — 低トラフィックでバンドが不安定・緩慢劣化を「普段」として学習してしまう・逸脱自体には行動が紐付かないため。「普段からの逸脱」という観点は、閾値を決める設計時に人間が実測を見て使い、ランタイム判定は固定閾値 + 最小標本で行う。運用の中で問題があれば閾値を見直す。
 
 - A3 を A2 より先にするのは、A2 が観測の生存を前提とするため(メタ監視を先に敷く)。
 - Step 1 / Step 2 の前提事実(Chatbot の Terraform 対応、stopCode 値域とデプロイノイズ除外、EMF 書式)は 2026-08-11 の /research で確定済み(§3・A5・§2 に反映)。
