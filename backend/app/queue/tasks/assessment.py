@@ -126,6 +126,7 @@ async def assess_content(
                 exc=exc,
                 last_attempt=is_last_attempt(ctx),
                 analyzable_article_id=analyzable_article_id,
+                provider=assessor.rate_limit_policy.provider,
             )
             if decision.stage_hold_reason is not None:
                 await set_assessment_hold(

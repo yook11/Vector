@@ -29,6 +29,7 @@ from app.agent.runtime.contract import (
     AgentResponseDefect,
     AgentResponseInvalidError,
 )
+from app.analysis.ai_provider_exhaustion import record_ai_provider_exhausted
 from app.analysis.deepseek_error_translator import translate_deepseek_error
 
 DEEPSEEK_BASE_URL: Final[str] = "https://api.deepseek.com/beta"
@@ -107,6 +108,9 @@ class DeepSeekAgentRuntime:
                     span,
                     result="provider_error",
                     error_type=span_error_type(translated_error),
+                )
+                record_ai_provider_exhausted(
+                    translated_error, provider=agent.model.provider
                 )
             else:
                 _record_usage(span, getattr(response, "usage", None))

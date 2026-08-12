@@ -6,10 +6,18 @@ import json
 from dataclasses import replace
 from importlib import import_module
 from inspect import signature
+from typing import Any
 
+import httpx
 import pytest
+from openai import APIStatusError
+from openai import RateLimitError as OpenAIRateLimitError
 
-from app.analysis.ai_provider_errors import AIProviderNetworkError
+from app.analysis.ai_provider_errors import (
+    AIProviderInsufficientBalanceError,
+    AIProviderNetworkError,
+    AIProviderRateLimitedError,
+)
 from tests.agent.runtime._deepseek_helpers import (
     DataclassRuntimeOutput,
     FakeDeepSeekClient,
@@ -251,3 +259,61 @@ def test_output_binding_contains_only_provider_transport_identity() -> None:
     assert binding.function_name == "runtime_probe_output"
     assert binding.description == "Return the declared output object."
     assert not hasattr(binding, "schema")
+
+
+# ai_provider_exhausted EMF emit (CloudWatch A6) — 枯渇系翻訳のみが打点する
+
+
+_EXHAUSTED_METRIC = "ai_provider_exhausted"
+
+
+def _ai_provider_exhausted_records(captured_stdout: str) -> list[dict[str, Any]]:
+    """stdout から ``_EXHAUSTED_METRIC`` を持つ EMF 行 (``_aws`` キー) を抽出する。"""
+    records: list[dict[str, Any]] = []
+    for line in captured_stdout.splitlines():
+        try:
+            record = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        has_metric = isinstance(record, dict) and _EXHAUSTED_METRIC in record
+        if has_metric and "_aws" in record:
+            records.append(record)
+    return records
+
+
+def _make_response(status_code: int) -> httpx.Response:
+    request = httpx.Request("POST", "https://api.deepseek.com/beta/chat/completions")
+    return httpx.Response(status_code, request=request)
+
+
+async def test_invoke_http_402_emits_ai_provider_exhausted(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """HTTP 402 (insufficient_balance 翻訳) は provider=deepseek で emit する。"""
+    error = APIStatusError(
+        "Insufficient Balance", response=_make_response(402), body=None
+    )
+    client = FakeDeepSeekClient([error])
+    runtime = runtime_type()(client=client, binding=make_binding())
+
+    with pytest.raises(AIProviderInsufficientBalanceError):
+        await runtime.invoke(make_agent(), object(), attempt_number=1)
+
+    records = _ai_provider_exhausted_records(capsys.readouterr().out)
+    assert len(records) == 1
+    assert records[0]["kind"] == AIProviderInsufficientBalanceError.CODE
+    assert records[0]["provider"] == "deepseek"
+
+
+async def test_invoke_plain_rate_limited_sdk_error_does_not_emit(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """一時的 rate limit (時間経過で回復) は枯渇ではないため emit しない。"""
+    error = OpenAIRateLimitError("r", response=_make_response(429), body=None)
+    client = FakeDeepSeekClient([error])
+    runtime = runtime_type()(client=client, binding=make_binding())
+
+    with pytest.raises(AIProviderRateLimitedError):
+        await runtime.invoke(make_agent(), object(), attempt_number=1)
+
+    assert _ai_provider_exhausted_records(capsys.readouterr().out) == []

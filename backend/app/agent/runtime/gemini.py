@@ -38,6 +38,7 @@ from app.analysis.ai_provider_errors import (
     AIProviderOutputBlockedError,
     AIProviderOutputTruncatedError,
 )
+from app.analysis.ai_provider_exhaustion import record_ai_provider_exhausted
 from app.analysis.gemini_error_translator import (
     OUTPUT_BLOCKED_FINISH_REASONS,
     GeminiContentRejectionReason,
@@ -111,6 +112,9 @@ class GeminiAgentRuntime:
                     span,
                     result="provider_error",
                     error_type=span_error_type(translated_error),
+                )
+                record_ai_provider_exhausted(
+                    translated_error, provider=agent.model.provider
                 )
             else:
                 _record_usage(span, getattr(response, "usage_metadata", None))
@@ -315,6 +319,9 @@ class GeminiAgentRuntime:
                     span,
                     result=result,
                     error_type=span_error_type(classified_error),
+                )
+                record_ai_provider_exhausted(
+                    classified_error, provider=agent.model.provider
                 )
             elif unknown_error is not None:
                 span.record_exception(unknown_error)

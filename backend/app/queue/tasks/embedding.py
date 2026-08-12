@@ -119,6 +119,7 @@ async def generate_embedding(
                 exc=exc,
                 last_attempt=is_last_attempt(ctx),
                 analyzable_article_id=analyzable_article_id,
+                provider=embedder.rate_limit_policy.provider,
             )
             if decision.stage_hold_reason is not None:
                 await set_embedding_hold(get_redis(), reason=decision.stage_hold_reason)

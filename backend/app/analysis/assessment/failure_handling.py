@@ -18,6 +18,7 @@ from app.analysis.ai_provider_errors import (
     AIProviderContentError,
     AIProviderStateError,
 )
+from app.analysis.ai_provider_exhaustion import record_ai_provider_exhausted
 from app.analysis.assessment.domain.ready import ReadyForAssessment
 from app.analysis.assessment.errors import (
     AssessmentError,
@@ -69,6 +70,7 @@ class AssessmentFailureHandler:
         exc: BaseException,
         last_attempt: bool,
         analyzable_article_id: int,
+        provider: str,
     ) -> FailureHandlingDecision:
         """marker dispatch を実行する。
 
@@ -82,6 +84,7 @@ class AssessmentFailureHandler:
         match exc:
             case AssessmentTerminalError():
                 record_assessment_processing_outcome("failed")
+                record_ai_provider_exhausted(exc.provider_error, provider=provider)
                 hold_reason = _hold_reason(exc)
                 logger.warning(
                     "assess_content_terminal",
@@ -99,6 +102,9 @@ class AssessmentFailureHandler:
             case AssessmentRecoverableError():
                 record_assessment_processing_outcome("failed")
                 recoverable = exc
+                record_ai_provider_exhausted(
+                    recoverable.provider_error, provider=provider
+                )
                 await self._audit_failure(
                     ready, recoverable, analyzable_article_id=analyzable_article_id
                 )
