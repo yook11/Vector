@@ -21,46 +21,49 @@ StageHoldName = Literal["curation", "assessment", "embedding"]
 _STAGE_HOLD_NAMES: tuple[StageHoldName, ...] = get_args(StageHoldName)
 
 
-def _hold_key(name: StageHoldName) -> str:
-    """stage 共通の hold key ``{stage}:hold`` を返す。"""
-    return f"{name}:hold"
+def _hold_key(stage: StageHoldName) -> str:
+    """hold key ``{stage}:hold`` を返す。
+
+    key pattern は infra/aws/valkey.tf の ACL 許可リストと 1:1。
+    """
+    return f"{stage}:hold"
 
 
 _HOLD_SET_COUNTERS = {
-    name: logfire.metric_counter(
-        f"vector.{name}.hold_set",
+    stage: logfire.metric_counter(
+        f"vector.{stage}.hold_set",
         unit="1",
-        description=f"{name.title()} hold が set された回数",
+        description=f"{stage.title()} hold が set された回数",
     )
-    for name in _STAGE_HOLD_NAMES
+    for stage in _STAGE_HOLD_NAMES
 }
 _HOLD_SET_FAILED_COUNTERS = {
-    name: logfire.metric_counter(
-        f"vector.{name}.hold_set_failed",
+    stage: logfire.metric_counter(
+        f"vector.{stage}.hold_set_failed",
         unit="1",
-        description=f"{name.title()} hold の set が Redis 障害等で失敗した回数",
+        description=f"{stage.title()} hold の set が Redis 障害等で失敗した回数",
     )
-    for name in _STAGE_HOLD_NAMES
+    for stage in _STAGE_HOLD_NAMES
 }
 
 
-async def _set_stage_hold(redis: Redis, name: StageHoldName, *, reason: str) -> None:
+async def _set_stage_hold(redis: Redis, stage: StageHoldName, *, reason: str) -> None:
     """stage-wide failure 検出時に hold を TTL 付きで立てる。"""
     try:
-        await redis.set(_hold_key(name), reason, ex=_HOLD_TTL_SECONDS)
+        await redis.set(_hold_key(stage), reason, ex=_HOLD_TTL_SECONDS)
     except Exception:  # noqa: BLE001 — hold は best-effort
-        _HOLD_SET_FAILED_COUNTERS[name].add(1, attributes={"reason": reason})
-        logger.warning(f"{name}_hold_set_failed", reason=reason, exc_info=True)
+        _HOLD_SET_FAILED_COUNTERS[stage].add(1, attributes={"reason": reason})
+        logger.warning(f"{stage}_hold_set_failed", reason=reason, exc_info=True)
         return
-    _HOLD_SET_COUNTERS[name].add(1, attributes={"reason": reason})
+    _HOLD_SET_COUNTERS[stage].add(1, attributes={"reason": reason})
 
 
-async def _is_stage_held(redis: Redis, name: StageHoldName) -> bool:
+async def _is_stage_held(redis: Redis, stage: StageHoldName) -> bool:
     """hold が立っているかを返す。Redis 障害時は fail-open。"""
     try:
-        return bool(await redis.exists(_hold_key(name)))
+        return bool(await redis.exists(_hold_key(stage)))
     except Exception:  # noqa: BLE001 — Redis 障害は救済を止めない
-        logger.warning(f"{name}_hold_check_failed", exc_info=True)
+        logger.warning(f"{stage}_hold_check_failed", exc_info=True)
         return False
 
 
