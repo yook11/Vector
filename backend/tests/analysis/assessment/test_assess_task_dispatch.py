@@ -38,6 +38,7 @@ from app.analysis.assessment.errors import (
 from app.analysis.assessment.repository import CategoryEnumDatabaseMismatchError
 from app.analysis.failure_handling import FailureHandlingDecision
 from app.analysis.rate_limit import AIModelRateLimitPolicy, RateLimitRule
+from app.audit.domain.event import Stage
 from app.queue.messages.assessment import AssessmentTrigger
 from tests.logfire._metric_helpers import collected_metrics, sum_counter_for_result
 
@@ -129,7 +130,7 @@ async def test_terminal_delegates_to_handler() -> None:
             )
         )
         with patch(
-            "app.queue.tasks.assessment.set_assessment_hold", new=AsyncMock()
+            "app.queue.tasks.assessment.set_stage_hold", new=AsyncMock()
         ) as hold:
             await assess_content(trigger=_trigger(), ctx=ctx)
 
@@ -141,6 +142,7 @@ async def test_terminal_delegates_to_handler() -> None:
     # 監査主語 (元記事 id) が handler にも明示引数で届く
     assert kwargs["analyzable_article_id"] == 7
     hold.assert_awaited_once()
+    assert hold.await_args.args[1] is Stage.ASSESSMENT
     assert hold.await_args.kwargs["reason"] == "ai_error_configuration"
 
 

@@ -23,7 +23,7 @@ from app.audit.ready_build import project_ready_build_failure
 from app.audit.stages.assessment import AssessmentAuditRepository
 from app.logfire.article_stage import assessment_stage_span
 from app.queue.brokers import broker_analysis
-from app.queue.helpers.stage_hold import set_assessment_hold
+from app.queue.helpers.stage_hold import set_stage_hold
 from app.queue.messages.assessment import AssessmentTrigger
 from app.queue.messages.embedding import EmbeddingTrigger
 from app.queue.retry import is_last_attempt
@@ -129,8 +129,8 @@ async def assess_content(
                 provider=assessor.rate_limit_policy.provider,
             )
             if decision.stage_hold_reason is not None:
-                await set_assessment_hold(
-                    get_redis(), reason=decision.stage_hold_reason
+                await set_stage_hold(
+                    get_redis(), Stage.ASSESSMENT, reason=decision.stage_hold_reason
                 )
             stage.set_result("failed")
             if decision.reraise:

@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from collections.abc import Awaitable, Callable
 from typing import Any
 from unittest.mock import AsyncMock
 
@@ -10,9 +9,8 @@ import pytest
 from logfire.testing import CaptureLogfire
 from redis.exceptions import ConnectionError as RedisConnectionError
 
-from app.queue.helpers.stage_hold import set_assessment_hold, set_embedding_hold
-
-SetHold = Callable[..., Awaitable[None]]
+from app.audit.domain.event import Stage
+from app.queue.helpers.stage_hold import HoldableStage, set_stage_hold
 
 
 def _find_metric(metrics: list[dict[str, Any]], name: str) -> dict[str, Any] | None:
@@ -32,21 +30,21 @@ def _attributes_for(metric: dict[str, Any]) -> list[dict[str, Any]]:
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("set_hold", "metric_name"),
+    ("stage", "metric_name"),
     [
-        (set_assessment_hold, "vector.assessment.hold_set"),
-        (set_embedding_hold, "vector.embedding.hold_set"),
+        (Stage.ASSESSMENT, "vector.assessment.hold_set"),
+        (Stage.EMBEDDING, "vector.embedding.hold_set"),
     ],
 )
 async def test_set_hold_increments_success_counter_with_reason_only(
     capfire: CaptureLogfire,
-    set_hold: SetHold,
+    stage: HoldableStage,
     metric_name: str,
 ) -> None:
     """Redis SET 成功時、stage 別 success counter に reason だけ載る。"""
     fake_redis = AsyncMock()
 
-    await set_hold(fake_redis, reason="ai_error_configuration")
+    await set_stage_hold(fake_redis, stage, reason="ai_error_configuration")
 
     metrics = capfire.get_collected_metrics()
     hold_set = _find_metric(metrics, metric_name)
@@ -57,22 +55,22 @@ async def test_set_hold_increments_success_counter_with_reason_only(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("set_hold", "metric_name"),
+    ("stage", "metric_name"),
     [
-        (set_assessment_hold, "vector.assessment.hold_set_failed"),
-        (set_embedding_hold, "vector.embedding.hold_set_failed"),
+        (Stage.ASSESSMENT, "vector.assessment.hold_set_failed"),
+        (Stage.EMBEDDING, "vector.embedding.hold_set_failed"),
     ],
 )
 async def test_set_hold_failure_increments_failed_counter_with_reason_only(
     capfire: CaptureLogfire,
-    set_hold: SetHold,
+    stage: HoldableStage,
     metric_name: str,
 ) -> None:
     """Redis SET 失敗時、stage 別 failed counter に reason だけ載る。"""
     fake_redis = AsyncMock()
     fake_redis.set.side_effect = RedisConnectionError("connection refused")
 
-    await set_hold(fake_redis, reason="ai_error_insufficient_balance")
+    await set_stage_hold(fake_redis, stage, reason="ai_error_insufficient_balance")
 
     metrics = capfire.get_collected_metrics()
     hold_failed = _find_metric(metrics, metric_name)

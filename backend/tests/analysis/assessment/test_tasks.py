@@ -608,7 +608,7 @@ class TestAssessContentStageSpan:
             patch(
                 "app.queue.tasks.assessment.AssessmentFailureHandler"
             ) as mock_handler_cls,
-            patch("app.queue.tasks.assessment.set_assessment_hold", new=AsyncMock()),
+            patch("app.queue.tasks.assessment.set_stage_hold", new=AsyncMock()),
         ):
             mock_svc_cls.return_value.execute = AsyncMock(
                 side_effect=AIProviderRateLimitedError("429")

@@ -58,8 +58,8 @@ locals {
       "(~taskiq:* resetchannels -@all +set)",
       "(~ratelimit:* resetchannels -@all +evalsha +zremrangebyscore +zcard +zadd +zrange +expire)",
       "(~backfill:budget:* resetchannels -@all +eval +get +incrby +expire)",
-      # stage hold は set_*_hold / is_*_held (SET / EXISTS) のみ。key pattern は
-      # backend/app/queue/helpers/stage_hold.py の StageHoldName と 1:1。
+      # stage hold は set_stage_hold / is_stage_held (SET / EXISTS) のみ。key pattern は
+      # backend/app/queue/helpers/stage_hold.py の HoldableStage と 1:1。
       "(~curation:hold ~assessment:hold ~embedding:hold resetchannels -@all +set +exists)",
       "(~pipeline:acquisition ~pipeline:completion ~pipeline:curation ~pipeline:assessment ~pipeline:embedding resetchannels -@all +xlen +xinfo|groups +xpending +xrange)",
     ])
