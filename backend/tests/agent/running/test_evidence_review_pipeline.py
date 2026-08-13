@@ -5,18 +5,12 @@ reviewer未呼び出し)、9 (合流でのcuration_id先勝ちdedupとsource_ref
 11 (time filter失敗でもexternal runtime scopeがactivateされる)、および
 reviewerの2 attempt失敗が兄弟taskの根拠を消さないこと(選別のtest contract
 8番目)を、`AnsweringRunner.run()` を通した黒箱契約として検証する。
-
-production 未実装のため、`AnsweringPhases.reviewer` field と
-`ExternalResearchRuntime.reviewer_runtime` field の存在を getattr で確認して
-から組み立てる(新契約シンボルの getattr ガード方式)。
 """
 
 from __future__ import annotations
 
 from contextlib import AbstractAsyncContextManager
 from datetime import UTC, datetime
-from importlib import import_module
-from types import ModuleType
 from typing import Any
 from uuid import UUID
 
@@ -39,6 +33,8 @@ from app.agent.evidence_collection.internal_search.contract import (
     InternalArticleSearchHit,
     InternalSearchError,
 )
+from app.agent.evidence_review.contract import EvidenceReviewDraft
+from app.agent.evidence_review.reviewer import EvidenceReviewer
 from app.agent.planning.contract import (
     ExternalResearchTask,
     PlanningRequest,
@@ -59,41 +55,12 @@ AS_OF = datetime(2026, 7, 20, 9, 30, tzinfo=UTC)
 _DEFAULT_TARGET_TIME_WINDOW = TargetTimeWindow(kind="last_n_days", days=1)
 
 
-def _required_module(module_name: str) -> ModuleType:
-    try:
-        return import_module(module_name)
-    except ModuleNotFoundError as exc:
-        pytest.fail(f"D4-S1 module is missing: {module_name} ({exc.name})")
-
-
-def _required_attribute(module: ModuleType, name: str) -> Any:
-    if not hasattr(module, name):
-        pytest.fail(f"D4-S1 contract is missing: {module.__name__}.{name}")
-    return getattr(module, name)
-
-
-def _assert_phases_accepts_reviewer() -> None:
-    if "reviewer" not in AnsweringPhases.__dataclass_fields__:
-        pytest.fail(
-            "D4-S1: AnsweringPhases must gain a `reviewer` field wired to "
-            "EvidenceReviewer, mirroring the existing `collector` field."
-        )
-
-
-def _evidence_reviewer() -> Any:
-    reviewer_module = _required_module("app.agent.evidence_review.reviewer")
-    reviewer_type = _required_attribute(reviewer_module, "EvidenceReviewer")
-    return reviewer_type()
-
-
 def _review_draft(
     selections: list[dict[str, Any]] | None = None,
     *,
     missing: list[str] | None = None,
-) -> Any:
-    contracts = _required_module("app.agent.evidence_review.contract")
-    draft_type = _required_attribute(contracts, "EvidenceReviewDraft")
-    return draft_type.model_validate(
+) -> EvidenceReviewDraft:
+    return EvidenceReviewDraft.model_validate(
         {"selections": selections or [], "missing": missing or []}
     )
 
@@ -296,7 +263,6 @@ def _runner(
     internal_tool: _InternalTool,
     target_time_window: TargetTimeWindow | None = _DEFAULT_TARGET_TIME_WINDOW,
 ) -> tuple[AnsweringRunner, _EvidenceAnswerer, _Factory]:
-    _assert_phases_accepts_reviewer()
     answerer = _EvidenceAnswerer()
     runtime = _external_research_runtime(
         query_runtime=query_runtime,
@@ -310,7 +276,7 @@ def _runner(
             researcher=Researcher(internal_search=internal_tool),
             requested_agent_count=1,
         ),
-        reviewer=_evidence_reviewer(),  # type: ignore[call-arg]
+        reviewer=EvidenceReviewer(),
         external_runtime_factory=factory,
         direct_answerer=_UnreachableDirectAnswerer(),
         evidence_answerer=answerer,

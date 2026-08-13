@@ -12,19 +12,24 @@ import pytest
 from logfire.testing import CaptureLogfire
 from structlog.testing import capture_logs
 
-import app.analysis.ai_provider_errors as ai_provider_errors
+import app.agent.input_safety.service as input_safety_service_module
+from app.agent.input_safety.agent import INPUT_SAFETY_AGENT
+from app.agent.input_safety.contract import (
+    InputSafetyAgentInput,
+    InputSafetyAgentOutput,
+    InputSafetyBlockReason,
+    InputSafetyPreviousTurn,
+)
+from app.agent.input_safety.service import InputSafetyService
 from app.agent.runtime.contract import AgentResponseDefect, AgentResponseInvalidError
 from app.analysis.ai_provider_errors import (
     AIProviderContentError,
+    AIProviderContentRejectionKind,
     AIProviderInputRejectedError,
     AIProviderOutputBlockedError,
 )
 from app.analysis.gemini_error_translator import GeminiContentRejectionReason
-from tests.agent.input_safety._helpers import (
-    RecordingRuntimeScopeFactory,
-    required_input_safety_attribute,
-    required_input_safety_module,
-)
+from tests.agent.input_safety._helpers import RecordingRuntimeScopeFactory
 from tests.agent.runtime._fakes import ScriptedAgentRuntime
 from tests.logfire._metric_helpers import collected_metrics
 
@@ -34,12 +39,6 @@ _RUN_ID = UUID("00000000-0000-4000-a000-000000000021")
 
 class _ProviderNeutralContentReason(StrEnum):
     FILTERED = "filtered"
-
-
-def _attribute(module_name: str, name: str) -> object:
-    return required_input_safety_attribute(
-        required_input_safety_module(module_name), name
-    )
 
 
 def _outcome_metrics(capfire: CaptureLogfire) -> list[dict[str, Any]]:
@@ -53,13 +52,11 @@ def _outcome_metrics(capfire: CaptureLogfire) -> list[dict[str, Any]]:
 
 def _service(
     outcomes: list[object | BaseException],
-) -> tuple[object, ScriptedAgentRuntime, RecordingRuntimeScopeFactory]:
-    agent = _attribute("agent", "INPUT_SAFETY_AGENT")
-    service_type = _attribute("service", "InputSafetyService")
+) -> tuple[InputSafetyService, ScriptedAgentRuntime, RecordingRuntimeScopeFactory]:
     runtime = ScriptedAgentRuntime(outcomes)
     factory = RecordingRuntimeScopeFactory(runtime)
     return (
-        service_type(agent=agent, runtime_scope_factory=factory),  # type: ignore[operator]
+        InputSafetyService(agent=INPUT_SAFETY_AGENT, runtime_scope_factory=factory),
         runtime,
         factory,
     )
@@ -68,24 +65,21 @@ def _service(
 async def test_allow_uses_one_scope_and_one_attempt_without_audit_log(
     capfire: CaptureLogfire,
 ) -> None:
-    output_type = _attribute("contract", "InputSafetyAgentOutput")
-    input_type = _attribute("contract", "InputSafetyAgentInput")
-    previous_turn_type = _attribute("contract", "InputSafetyPreviousTurn")
     service, runtime, factory = _service(
         [
-            output_type(  # type: ignore[operator]
+            InputSafetyAgentOutput(
                 input_safety_result="allow",
                 block_reason=None,
             )
         ]
     )
-    previous_turn = previous_turn_type(  # type: ignore[operator]
+    previous_turn = InputSafetyPreviousTurn(
         user_question="previous question",
         assistant_answer="previous answer",
     )
 
     with capture_logs() as logs:
-        result = await service.check(  # type: ignore[attr-defined]
+        result = await service.check(
             question="current question",
             previous_turn=previous_turn,
             run_id=_RUN_ID,
@@ -98,7 +92,7 @@ async def test_allow_uses_one_scope_and_one_attempt_without_audit_log(
     assert (factory.created, factory.entered, len(factory.exits)) == (1, 1, 1)
     assert len(runtime.calls) == 1
     assert runtime.calls[0].attempt_number == 1
-    assert runtime.calls[0].input == input_type(  # type: ignore[operator]
+    assert runtime.calls[0].input == InputSafetyAgentInput(
         question="current question",
         previous_turn=previous_turn,
     )
@@ -109,23 +103,20 @@ async def test_allow_uses_one_scope_and_one_attempt_without_audit_log(
 async def test_classifier_block_passes_the_single_reason_through_to_check_result(
     capfire: CaptureLogfire,
 ) -> None:
-    output_type = _attribute("contract", "InputSafetyAgentOutput")
-    reason_type = _attribute("contract", "InputSafetyBlockReason")
-    classifier_reason = reason_type.SELF_HARM_INSTRUCTIONS  # type: ignore[union-attr]
-    classifier_output = output_type(  # type: ignore[operator]
+    classifier_reason = InputSafetyBlockReason.SELF_HARM_INSTRUCTIONS
+    classifier_output = InputSafetyAgentOutput(
         input_safety_result="block",
         block_reason=classifier_reason,
     )
     service, runtime, factory = _service([classifier_output])
     question = "QUESTION_SENTINEL_POLICY_BLOCK_87e2"
-    previous_turn_type = _attribute("contract", "InputSafetyPreviousTurn")
-    previous_turn = previous_turn_type(  # type: ignore[operator]
+    previous_turn = InputSafetyPreviousTurn(
         user_question="PREVIOUS_SENTINEL_POLICY_BLOCK_b7f1",
         assistant_answer="ASSISTANT_SENTINEL_POLICY_BLOCK_ca21",
     )
 
     with capture_logs() as logs:
-        result = await service.check(  # type: ignore[attr-defined]
+        result = await service.check(
             question=question,
             previous_turn=previous_turn,
             run_id=_RUN_ID,
@@ -156,7 +147,7 @@ async def test_classifier_block_passes_the_single_reason_through_to_check_result
         "run_id": str(_RUN_ID),
         "block_reason": "self_harm_instructions",
         "ai_model": "gemini-2.5-flash-lite",
-        "prompt_version": _attribute("agent", "INPUT_SAFETY_AGENT").prompt.version,
+        "prompt_version": INPUT_SAFETY_AGENT.prompt.version,
         "input_length": len(question),
     }
     assert _outcome_metrics(capfire) == [
@@ -179,19 +170,13 @@ async def test_only_provider_safety_errors_normalize_to_provider_filter_block(
     error_type: type[AIProviderContentError],
     capfire: CaptureLogfire,
 ) -> None:
-    kind_type = getattr(
-        ai_provider_errors,
-        "AIProviderContentRejectionKind",
-        None,
-    )
-    assert kind_type is not None
     error = error_type(
         reason=_ProviderNeutralContentReason.FILTERED,
-        rejection_kind=kind_type.SAFETY,
+        rejection_kind=AIProviderContentRejectionKind.SAFETY,
     )
     service, runtime, _factory = _service([error])
 
-    result = await service.check(  # type: ignore[attr-defined]
+    result = await service.check(
         question="provider safety mapping",
         previous_turn=None,
         run_id=_RUN_ID,
@@ -247,15 +232,14 @@ async def test_non_safety_failures_propagate_once_with_pii_free_operational_log(
 ) -> None:
     service, runtime, factory = _service([error])
     question = "QUESTION_SENTINEL_FAILURE_7df2"
-    previous_turn_type = _attribute("contract", "InputSafetyPreviousTurn")
-    previous_turn = previous_turn_type(  # type: ignore[operator]
+    previous_turn = InputSafetyPreviousTurn(
         user_question="PREVIOUS_SENTINEL_FAILURE_89a1",
         assistant_answer=None,
     )
 
     with capture_logs() as logs:
         with pytest.raises(type(error)) as raised:
-            await service.check(  # type: ignore[attr-defined]
+            await service.check(
                 question=question,
                 previous_turn=previous_turn,
                 run_id=_RUN_ID,
@@ -276,7 +260,7 @@ async def test_non_safety_failures_propagate_once_with_pii_free_operational_log(
 
 
 def test_service_module_does_not_depend_on_gemini_rejection_vocabulary() -> None:
-    source = inspect.getsource(required_input_safety_module("service"))
+    source = inspect.getsource(input_safety_service_module)
 
     assert "gemini_error_translator" not in source
     assert "GeminiContentRejectionReason" not in source

@@ -12,7 +12,6 @@ import pytest
 from logfire.testing import CaptureLogfire
 from opentelemetry.trace import StatusCode
 
-import app.agent.planning.contract as planning_contract
 from app.agent.answering.contract import AnsweringRequest
 from app.agent.answering.direct_answer.contract import DirectAnswerDraft
 from app.agent.answering.evidence_answer.contract import EvidenceAnswerDraft
@@ -27,6 +26,7 @@ from app.agent.input_safety.contract import (
     InputSafetyResult,
 )
 from app.agent.planning.contract import (
+    DirectAnswerPlan,
     PlanningRequest,
     QuestionPlan,
     TargetTimeWindow,
@@ -51,11 +51,8 @@ AS_OF = datetime(2026, 7, 16, 9, 30, tzinfo=UTC)
 pytestmark = pytest.mark.usefixtures("capfire")
 
 
-def _direct_plan() -> object:
-    plan_type = getattr(planning_contract, "DirectAnswerPlan", None)
-    if plan_type is None:
-        pytest.fail("planning contract must define DirectAnswerPlan")
-    return plan_type()
+def _direct_plan() -> DirectAnswerPlan:
+    return DirectAnswerPlan()
 
 
 @dataclass(frozen=True, slots=True)

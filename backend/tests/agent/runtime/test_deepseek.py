@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import json
 from dataclasses import replace
-from importlib import import_module
 from inspect import signature
 
 import httpx
@@ -12,6 +11,9 @@ import pytest
 from openai import APIStatusError
 from openai import RateLimitError as OpenAIRateLimitError
 
+from app.agent.evidence_review.contract import EvidenceReviewDraft
+from app.agent.runtime.contract import AgentResponseDefect, AgentResponseInvalidError
+from app.agent.runtime.deepseek import DeepSeekAgentRuntime, DeepSeekOutputBinding
 from app.analysis.ai_provider_errors import (
     AIProviderInsufficientBalanceError,
     AIProviderNetworkError,
@@ -21,13 +23,9 @@ from tests.agent.runtime._deepseek_helpers import (
     DataclassRuntimeOutput,
     FakeDeepSeekClient,
     RuntimeOutput,
-    binding_type,
     function_response,
     make_agent,
     make_binding,
-    required_attribute,
-    runtime_contract,
-    runtime_type,
     success_response,
 )
 from tests.cloudwatch.records import metric_records
@@ -35,17 +33,17 @@ from tests.cloudwatch.records import metric_records
 
 async def test_constructor_accepts_only_borrowed_client_and_output_binding() -> None:
     """runtime が借用 client と出力 binding だけを受け取る境界を守る。"""
-    runtime = runtime_type()
-
-    assert list(signature(runtime).parameters) == ["client", "binding"]
-    runtime(client=FakeDeepSeekClient([success_response()]), binding=make_binding())
+    assert list(signature(DeepSeekAgentRuntime).parameters) == ["client", "binding"]
+    DeepSeekAgentRuntime(
+        client=FakeDeepSeekClient([success_response()]), binding=make_binding()
+    )
 
 
 async def test_invoke_makes_one_forced_strict_function_call_and_returns_draft() -> None:
     """一試行が厳格な function call と検証済み出力を対応付ける。"""
     client = FakeDeepSeekClient([success_response(result="validated")])
     binding = make_binding()
-    runtime = runtime_type()(client=client, binding=binding)
+    runtime = DeepSeekAgentRuntime(client=client, binding=binding)
     agent = make_agent(max_output_tokens=456)
 
     output = await runtime.invoke(agent, object(), attempt_number=1)
@@ -93,7 +91,7 @@ async def test_invoke_makes_one_forced_strict_function_call_and_returns_draft() 
 async def test_invoke_validates_declared_dataclass_output() -> None:
     """宣言された dataclass 出力も runtime 境界で検証する。"""
     client = FakeDeepSeekClient([success_response(result="dataclass")])
-    runtime = runtime_type()(client=client, binding=make_binding())
+    runtime = DeepSeekAgentRuntime(client=client, binding=make_binding())
 
     output = await runtime.invoke(
         replace(make_agent(), output_type=DataclassRuntimeOutput),
@@ -141,18 +139,15 @@ async def test_invalid_structured_output_maps_to_three_safe_neutral_defects(
     defect_name: str,
 ) -> None:
     """構造化出力の不備を安全な中立 defect に正規化する。"""
-    contract = runtime_contract()
-    error_type = required_attribute(contract, "AgentResponseInvalidError")
-    defect_type = required_attribute(contract, "AgentResponseDefect")
     client = FakeDeepSeekClient([response])
 
-    with pytest.raises(error_type) as raised:
-        await runtime_type()(client=client, binding=make_binding()).invoke(
+    with pytest.raises(AgentResponseInvalidError) as raised:
+        await DeepSeekAgentRuntime(client=client, binding=make_binding()).invoke(
             make_agent(), object(), attempt_number=1
         )
 
     error = raised.value
-    assert error.defect is getattr(defect_type, defect_name)
+    assert error.defect is getattr(AgentResponseDefect, defect_name)
     assert "MODEL_OUTPUT" not in str(error)
     assert "MODEL_OUTPUT" not in (error.repair_hint or "")
     assert error.__context__ is None
@@ -161,13 +156,8 @@ async def test_invalid_structured_output_maps_to_three_safe_neutral_defects(
 
 async def test_negative_index_is_runtime_schema_mismatch() -> None:
     """ドメイン上無効な負の候補 index を schema mismatch として扱う。"""
-    contract = runtime_contract()
-    error_type = required_attribute(contract, "AgentResponseInvalidError")
-    defect_type = required_attribute(contract, "AgentResponseDefect")
     # D4-S1: 負の candidate_index を持つ具体例として evidence_review の draft を使う
     # (旧 external_search.ExternalEvidenceSelectionDraft から改名移設)。
-    review_contract = import_module("app.agent.evidence_review.contract")
-    selector_draft = required_attribute(review_contract, "EvidenceReviewDraft")
     client = FakeDeepSeekClient(
         [
             function_response(
@@ -186,14 +176,14 @@ async def test_negative_index_is_runtime_schema_mismatch() -> None:
             )
         ]
     )
-    agent = replace(make_agent(), output_type=selector_draft)
+    agent = replace(make_agent(), output_type=EvidenceReviewDraft)
 
-    with pytest.raises(error_type) as raised:
-        await runtime_type()(client=client, binding=make_binding()).invoke(
+    with pytest.raises(AgentResponseInvalidError) as raised:
+        await DeepSeekAgentRuntime(client=client, binding=make_binding()).invoke(
             agent, object(), attempt_number=1
         )
 
-    assert raised.value.defect is defect_type.OUTPUT_SCHEMA_MISMATCH
+    assert raised.value.defect is AgentResponseDefect.OUTPUT_SCHEMA_MISMATCH
 
 
 async def test_known_error_translates_and_unknown_keeps_identity() -> None:
@@ -203,13 +193,13 @@ async def test_known_error_translates_and_unknown_keeps_identity() -> None:
     unknown_client = FakeDeepSeekClient([unknown])
 
     with pytest.raises(AIProviderNetworkError) as known_raised:
-        await runtime_type()(client=known_client, binding=make_binding()).invoke(
+        await DeepSeekAgentRuntime(client=known_client, binding=make_binding()).invoke(
             make_agent(), object(), attempt_number=1
         )
     with pytest.raises(RuntimeError) as raised:
-        await runtime_type()(client=unknown_client, binding=make_binding()).invoke(
-            make_agent(), object(), attempt_number=1
-        )
+        await DeepSeekAgentRuntime(
+            client=unknown_client, binding=make_binding()
+        ).invoke(make_agent(), object(), attempt_number=1)
 
     assert known_raised.value.__context__ is None
     assert known_raised.value.__cause__ is None
@@ -225,7 +215,7 @@ async def test_invalid_attempt_number_is_rejected_before_render_or_provider_call
     client = FakeDeepSeekClient([success_response()])
 
     with pytest.raises(ValueError):
-        await runtime_type()(client=client, binding=make_binding()).invoke(
+        await DeepSeekAgentRuntime(client=client, binding=make_binding()).invoke(
             make_agent(), object(), attempt_number=attempt_number
         )
 
@@ -241,7 +231,7 @@ async def test_non_deepseek_agent_is_rejected_before_provider_call() -> None:
     )
 
     with pytest.raises(ValueError):
-        await runtime_type()(client=client, binding=make_binding()).invoke(
+        await DeepSeekAgentRuntime(client=client, binding=make_binding()).invoke(
             agent, object(), attempt_number=1
         )
 
@@ -252,7 +242,7 @@ def test_output_binding_contains_only_provider_transport_identity() -> None:
     """出力 binding を provider transport の識別情報だけに限定する。"""
     binding = make_binding()
 
-    assert list(signature(binding_type()).parameters) == [
+    assert list(signature(DeepSeekOutputBinding).parameters) == [
         "function_name",
         "description",
     ]
@@ -280,7 +270,7 @@ async def test_invoke_http_402_emits_ai_provider_exhausted(
         "Insufficient Balance", response=_make_response(402), body=None
     )
     client = FakeDeepSeekClient([error])
-    runtime = runtime_type()(client=client, binding=make_binding())
+    runtime = DeepSeekAgentRuntime(client=client, binding=make_binding())
 
     with pytest.raises(AIProviderInsufficientBalanceError):
         await runtime.invoke(make_agent(), object(), attempt_number=1)
@@ -297,7 +287,7 @@ async def test_invoke_plain_rate_limited_sdk_error_does_not_emit(
     """一時的 rate limit (時間経過で回復) は枯渇ではないため emit しない。"""
     error = OpenAIRateLimitError("r", response=_make_response(429), body=None)
     client = FakeDeepSeekClient([error])
-    runtime = runtime_type()(client=client, binding=make_binding())
+    runtime = DeepSeekAgentRuntime(client=client, binding=make_binding())
 
     with pytest.raises(AIProviderRateLimitedError):
         await runtime.invoke(make_agent(), object(), attempt_number=1)

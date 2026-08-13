@@ -1,30 +1,10 @@
-"""Input Safety tests の未実装境界とruntime scope double。"""
+"""Input Safety tests のruntime scope double。"""
 
 from __future__ import annotations
 
-from importlib import import_module
-from types import ModuleType, TracebackType
-from typing import Any
-
-import pytest
+from types import TracebackType
 
 from tests.agent.runtime._fakes import ScriptedAgentRuntime
-
-
-def required_input_safety_module(name: str) -> ModuleType:
-    module_name = f"app.agent.input_safety.{name}"
-    try:
-        return import_module(module_name)
-    except ModuleNotFoundError as exc:
-        if exc.name is not None and exc.name.startswith("app.agent.input_safety"):
-            pytest.fail(f"S2 input safety module is not implemented: {module_name}")
-        raise
-
-
-def required_input_safety_attribute(module: ModuleType, name: str) -> Any:
-    if not hasattr(module, name):
-        pytest.fail(f"S2 input safety contract is missing: {module.__name__}.{name}")
-    return getattr(module, name)
 
 
 class RuntimeScope:

@@ -17,9 +17,8 @@ from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from structlog.testing import capture_logs
 
-import app.agent.contract as agent_contract
 import app.agent.router as research_router_module
-from app.agent.contract import AnswerQuestionResult
+from app.agent.contract import AnswerPlanSummary, AnswerQuestionResult
 from app.agent.live_updates.stream import AgentRunLiveStreamTerminalEvent
 from app.agent.runs.contracts import (
     CancelRunCommandOutcome,
@@ -257,11 +256,8 @@ def _direct_result(answer: str = "worker answer") -> AnswerQuestionResult:
     )
 
 
-def _plan_summary(plan_type: str) -> object:
-    summary_type = getattr(agent_contract, "AnswerPlanSummary", None)
-    if summary_type is None:
-        pytest.fail("agent contract must define AnswerPlanSummary")
-    return summary_type(plan_type=plan_type)
+def _plan_summary(plan_type: str) -> AnswerPlanSummary:
+    return AnswerPlanSummary(plan_type=plan_type)
 
 
 @pytest.mark.asyncio
@@ -1427,8 +1423,7 @@ class TestQuotaRouterTelemetry:
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         client, _fake_enqueue = research_client
-        policy_blocked = getattr(CancelRunOutcome, "ALREADY_POLICY_BLOCKED", None)
-        assert policy_blocked is not None, "policy_blocked cancel outcome is required"
+        policy_blocked = CancelRunOutcome.ALREADY_POLICY_BLOCKED
         calls: list[dict[str, object]] = []
 
         async def cancel_as_policy_blocked(

@@ -5,8 +5,8 @@ from __future__ import annotations
 import pytest
 from pydantic import ValidationError
 
-import app.agent.contract as agent_contract
 from app.agent.contract import (
+    AnswerPlanSummary,
     AnswerQuestionResult,
     ExternalUrlSource,
     InternalArticleSource,
@@ -21,11 +21,8 @@ def _internal_source() -> InternalArticleSource:
     )
 
 
-def _plan_summary(plan_type: str = "search") -> object:
-    summary_type = getattr(agent_contract, "AnswerPlanSummary", None)
-    if summary_type is None:
-        pytest.fail("agent contract must define AnswerPlanSummary")
-    return summary_type(plan_type=plan_type)
+def _plan_summary(plan_type: str = "search") -> AnswerPlanSummary:
+    return AnswerPlanSummary(plan_type=plan_type)
 
 
 class TestAnswerPlanSummary:
@@ -38,11 +35,10 @@ class TestAnswerPlanSummary:
         assert not hasattr(summary, "collection_failures")
 
     def test_rejects_legacy_collection_failures_kwarg(self) -> None:
-        summary_type = getattr(agent_contract, "AnswerPlanSummary", None)
-        if summary_type is None:
-            pytest.fail("agent contract must define AnswerPlanSummary")
         with pytest.raises(ValidationError):
-            summary_type(plan_type="search", collection_failures=["internal_search"])
+            AnswerPlanSummary(
+                plan_type="search", collection_failures=["internal_search"]
+            )
 
 
 class TestSources:

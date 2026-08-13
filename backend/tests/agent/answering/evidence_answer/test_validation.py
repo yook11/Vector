@@ -7,8 +7,6 @@ finalize_evidence_answer_draft は plain text の answer 本文だけを受け�
 
 from __future__ import annotations
 
-from typing import Any
-
 import pytest
 
 from app.agent.answering.evidence_answer.contract import (
@@ -34,17 +32,10 @@ def _evidence(source_ref: str = "1") -> AnswerEvidenceItem:
     )
 
 
-def _finalize(answer: str, *, evidence: list[AnswerEvidenceItem]) -> Any:
-    """S4: finalize_evidence_answer_draft(answer, *, evidence) -> EvidenceAnswerDraft
-    (raw JSON入力・requirement_ids・defects listは撤去される)。"""
-    try:
-        return finalize_evidence_answer_draft(answer, evidence=evidence)
-    except TypeError:
-        pytest.fail(
-            "S4: finalize_evidence_answer_draft must accept "
-            "(answer: str, *, evidence: list[AnswerEvidenceItem]) "
-            "-> EvidenceAnswerDraft"
-        )
+def _finalize(
+    answer: str, *, evidence: list[AnswerEvidenceItem]
+) -> EvidenceAnswerDraft:
+    return finalize_evidence_answer_draft(answer, evidence=evidence)
 
 
 def test_finalizes_answer_with_markers_into_first_use_order_deduplicated_refs() -> None:

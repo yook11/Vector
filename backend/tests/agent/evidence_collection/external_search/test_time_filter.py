@@ -3,56 +3,30 @@
 from __future__ import annotations
 
 from datetime import UTC, date, datetime
-from importlib import import_module
-from types import ModuleType
-from typing import Any
 from zoneinfo import ZoneInfo
 
 import pytest
 
-
-def _time_filter_module() -> ModuleType:
-    module_name = "app.agent.evidence_collection.external_search.time_filter"
-    try:
-        return import_module(module_name)
-    except ModuleNotFoundError as exc:
-        if exc.name == module_name:
-            pytest.fail(f"S1 contract module is missing: {module_name}")
-        raise
-
-
-def _required_attribute(module: ModuleType, name: str) -> Any:
-    value = getattr(module, name, None)
-    if value is None:
-        pytest.fail(f"S1 contract is missing: {module.__name__}.{name}")
-    return value
+from app.agent.evidence_collection.external_search.contract import (
+    ExternalSearchDateFilter,
+)
+from app.agent.evidence_collection.external_search.time_filter import (
+    ExternalSearchDateFilterResolutionError,
+    resolve_external_search_date_filter,
+)
+from app.agent.planning.contract import TargetTimeWindow
 
 
-def _target_time_window(**payload: object) -> object:
-    planning_contract = import_module("app.agent.planning.contract")
-    target_time_window_type = getattr(planning_contract, "TargetTimeWindow", None)
-    if target_time_window_type is None:
-        pytest.fail("planning contract must define TargetTimeWindow")
-    return target_time_window_type.model_validate(payload)
+def _target_time_window(**payload: object) -> TargetTimeWindow:
+    return TargetTimeWindow.model_validate(payload)
 
 
 def _resolve(
-    target_time_window: object | None,
+    target_time_window: TargetTimeWindow | None,
     *,
     as_of: datetime,
-) -> object | None:
-    resolver = _required_attribute(
-        _time_filter_module(),
-        "resolve_external_search_date_filter",
-    )
-    return resolver(target_time_window, as_of=as_of)
-
-
-def _resolution_error_type() -> type[Exception]:
-    return _required_attribute(
-        _time_filter_module(),
-        "ExternalSearchDateFilterResolutionError",
-    )
+) -> ExternalSearchDateFilter | None:
+    return resolve_external_search_date_filter(target_time_window, as_of=as_of)
 
 
 _AS_OF = datetime(2026, 7, 12, 0, 30, tzinfo=UTC)
@@ -290,9 +264,7 @@ def test_resolver_fails_closed_with_a_typed_reason_for_unapplicable_windows(
     payload: dict[str, object],
     reason: str,
 ) -> None:
-    resolution_error_type = _resolution_error_type()
-
-    with pytest.raises(resolution_error_type) as raised:
+    with pytest.raises(ExternalSearchDateFilterResolutionError) as raised:
         _resolve(_target_time_window(**payload), as_of=_AS_OF)
 
     assert raised.value.reason == reason
@@ -318,9 +290,7 @@ def test_resolver_fails_closed_with_a_typed_reason_for_unapplicable_windows(
 def test_resolver_fails_closed_when_filter_start_cannot_expand_for_provider(
     payload: dict[str, object],
 ) -> None:
-    resolution_error_type = _resolution_error_type()
-
-    with pytest.raises(resolution_error_type) as raised:
+    with pytest.raises(ExternalSearchDateFilterResolutionError) as raised:
         _resolve(_target_time_window(**payload), as_of=_AS_OF)
 
     assert raised.value.reason == "unexpandable_start_date"
@@ -349,9 +319,7 @@ def test_resolution_error_does_not_expose_window_dates(
     payload: dict[str, object],
     forbidden_fragments: tuple[str, ...],
 ) -> None:
-    resolution_error_type = _resolution_error_type()
-
-    with pytest.raises(resolution_error_type) as raised:
+    with pytest.raises(ExternalSearchDateFilterResolutionError) as raised:
         _resolve(_target_time_window(**payload), as_of=_AS_OF)
 
     serialized_error = " ".join(
@@ -361,12 +329,10 @@ def test_resolution_error_does_not_expose_window_dates(
 
 
 def test_resolver_propagates_naive_as_of_as_a_programming_error() -> None:
-    resolution_error_type = _resolution_error_type()
-
     with pytest.raises(ValueError) as raised:
         _resolve(
             _target_time_window(kind="today"),
             as_of=datetime(2026, 7, 12, 9, 30),
         )
 
-    assert not isinstance(raised.value, resolution_error_type)
+    assert not isinstance(raised.value, ExternalSearchDateFilterResolutionError)

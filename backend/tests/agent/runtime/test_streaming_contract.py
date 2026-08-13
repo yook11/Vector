@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import replace
-from enum import StrEnum
 from types import SimpleNamespace
 from typing import Any, cast
 
@@ -22,10 +21,11 @@ from opentelemetry.trace import (
 )
 
 import app.agent.runtime.gemini as gemini_runtime_module
-import app.analysis.ai_provider_errors as ai_provider_errors
 import app.analysis.gemini_error_translator as gemini_error_translator_module
+from app.agent.runtime.deepseek import DeepSeekAgentRuntime
 from app.agent.runtime.gemini import GeminiAgentRuntime
 from app.analysis.ai_provider_errors import (
+    AIProviderContentRejectionKind,
     AIProviderFailureMode,
     AIProviderInputRejectedError,
     AIProviderNetworkError,
@@ -35,6 +35,7 @@ from app.analysis.ai_provider_errors import (
     AIProviderUsageLimitExhaustedError,
 )
 from app.analysis.gemini_error_translator import (
+    OUTPUT_BLOCKED_FINISH_REASONS,
     GeminiContentRejectionReason,
     GeminiStateReason,
 )
@@ -46,23 +47,10 @@ from tests.agent.runtime._deepseek_helpers import (
     make_agent as make_deepseek_agent,
 )
 from tests.agent.runtime._deepseek_helpers import (
-    runtime_type as deepseek_runtime_type,
-)
-from tests.agent.runtime._deepseek_helpers import (
     success_response as deepseek_success_response,
 )
 from tests.agent.runtime._helpers import FakeGeminiClient, make_agent, success_response
 from tests.cloudwatch.records import metric_records
-
-
-def _content_rejection_kind_type() -> type[StrEnum]:
-    kind_type = getattr(
-        ai_provider_errors,
-        "AIProviderContentRejectionKind",
-        None,
-    )
-    assert isinstance(kind_type, type) and issubclass(kind_type, StrEnum)
-    return kind_type
 
 
 class FakeSdkStream:
@@ -216,7 +204,7 @@ def _phase_span(trace_id: int, span_id: int) -> NonRecordingSpan:
 
 def test_deepseek_runtime_does_not_implement_streaming_contract() -> None:
     """DeepSeek runtimeはstreaming契約(invoke_stream)を実装しない。"""
-    assert not hasattr(deepseek_runtime_type(), "invoke_stream")
+    assert not hasattr(DeepSeekAgentRuntime, "invoke_stream")
 
 
 async def test_unstarted_stream_close_does_not_open_provider_stream_or_span(
@@ -406,9 +394,7 @@ async def test_prompt_block_records_usage_then_classified_error_and_closes_once(
             )
         ]
 
-    assert exc_info.value.rejection_kind is (  # type: ignore[attr-defined]
-        _content_rejection_kind_type().SAFETY  # type: ignore[attr-defined]
-    )
+    assert exc_info.value.rejection_kind is AIProviderContentRejectionKind.SAFETY
     span = tracer.spans[0]
     assert span.attributes["result"] == "provider_error"
     assert span.attributes["gen_ai.usage.input_tokens"] == 11
@@ -458,8 +444,8 @@ async def test_blocked_finish_reason_records_blocked_outcome_without_event(
         ]
 
     assert exc_info.value.reason is expected_reason
-    assert exc_info.value.rejection_kind is getattr(  # type: ignore[attr-defined]
-        _content_rejection_kind_type(),
+    assert exc_info.value.rejection_kind is getattr(
+        AIProviderContentRejectionKind,
         expected_kind_name,
     )
     span = tracer.spans[0]
@@ -478,11 +464,7 @@ def test_output_blocked_finish_reasons_matches_content_rejection_mapping_keys() 
     両者を直接比較することで、写像 (``_FINISH_REASON_TO_CONTENT_REASON``) が
     唯一の SSoT であることを保証する。
     """
-    blocked_finish_reasons = getattr(
-        gemini_error_translator_module,
-        "OUTPUT_BLOCKED_FINISH_REASONS",
-        None,
-    )
+    blocked_finish_reasons = OUTPUT_BLOCKED_FINISH_REASONS
     assert isinstance(blocked_finish_reasons, frozenset)
     mapping_keys = frozenset(
         gemini_error_translator_module._FINISH_REASON_TO_CONTENT_REASON
@@ -848,7 +830,7 @@ async def test_non_streaming_runtime_rejects_schema_none_before_renderer_and_pro
         provider_call = client.models.generate_content
     else:
         client = FakeDeepSeekClient([deepseek_success_response()])
-        runtime = deepseek_runtime_type()(client=client, binding=make_binding())
+        runtime = DeepSeekAgentRuntime(client=client, binding=make_binding())
         agent = replace(make_deepseek_agent(), response_schema=None)
         provider_call = client.chat.completions.create
     assert agent.response_schema is None

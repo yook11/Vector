@@ -6,8 +6,7 @@ from collections import deque
 from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from importlib import import_module
-from typing import Any, Protocol, cast
+from typing import Any, cast
 from uuid import UUID
 
 import pytest
@@ -15,6 +14,7 @@ from logfire.testing import CaptureLogfire
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from structlog.testing import capture_logs
 
+from app.agent.runs.execution_probe import AgentRunExecutionProbe
 from app.agent.runs.repository import AgentRunRepository
 from app.models.agent_message import AgentMessage
 from app.models.agent_run import AgentRun
@@ -27,10 +27,6 @@ RUN_ID = UUID("00000000-0000-4000-a000-000000000011")
 MISSING_RUN_ID = UUID("00000000-0000-4000-a000-000000000099")
 ATTEMPT_EPOCH = 3
 UNAVAILABLE_METRIC = "vector.agent.execution_probe.unavailable"
-
-
-class _ExecutionProbe(Protocol):
-    async def should_continue(self) -> bool: ...
 
 
 @dataclass
@@ -120,24 +116,13 @@ def _new_probe(
     *,
     run_id: UUID = RUN_ID,
     attempt_epoch: int = ATTEMPT_EPOCH,
-) -> _ExecutionProbe:
-    try:
-        module = import_module("app.agent.runs.execution_probe")
-    except ModuleNotFoundError as exc:
-        if exc.name != "app.agent.runs.execution_probe":
-            raise
-        pytest.fail("Agent run execution probe が未実装です", pytrace=False)
-
-    probe_type = getattr(module, "AgentRunExecutionProbe", None)
-    assert probe_type is not None, "AgentRunExecutionProbe が未実装です"
-    return cast(
-        "_ExecutionProbe",
-        probe_type(
-            session_factory,
-            run_id,
-            attempt_epoch,
-            clock=clock,
-        ),
+) -> AgentRunExecutionProbe:
+    return AgentRunExecutionProbe(
+        # fake session factory を渡すための narrowing。構造互換は fake 側で維持する
+        cast("async_sessionmaker[AsyncSession]", session_factory),
+        run_id,
+        attempt_epoch,
+        clock=clock,
     )
 
 
@@ -147,9 +132,9 @@ async def _repository_is_current(
     run_id: UUID,
     attempt_epoch: int,
 ) -> bool:
-    method = getattr(repository, "is_execution_current", None)
-    assert method is not None, "repository の execution存在確認契約が未実装です"
-    return await method(run_id=run_id, attempt_epoch=attempt_epoch)
+    return await repository.is_execution_current(
+        run_id=run_id, attempt_epoch=attempt_epoch
+    )
 
 
 def _metric_points(capfire: CaptureLogfire) -> list[dict[str, Any]]:

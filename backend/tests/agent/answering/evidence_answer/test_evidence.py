@@ -1,60 +1,29 @@
 """Answer evidence normalization tests(D4-S1)。
 
 内部根拠は精査済み InternalArticleEvidence(claim付き)へ置換された。
-InternalArticleEvidence は production 未実装のため getattr ガードで参照する。
 """
 
 from __future__ import annotations
 
 from datetime import UTC, datetime
-from importlib import import_module
-from types import ModuleType
-from typing import Any
-
-import pytest
 
 from app.agent.answering.evidence_answer.evidence import normalize_answer_evidence
 from app.agent.contract import ExternalUrlSource
+from app.agent.evidence_collection import ResearchTaskReport
 from app.agent.evidence_collection.external_search import (
     ExternalSearchEvidence,
     ExternalSearchOutcome,
 )
-from app.agent.evidence_review import ReviewedEvidence
+from app.agent.evidence_review import EvidenceReviewReport, ReviewedEvidence
+from app.agent.evidence_review.contract import InternalArticleEvidence
 
 
-def _required_attribute(module: ModuleType, name: str) -> Any:
-    if not hasattr(module, name):
-        pytest.fail(
-            f"D4-S1 evidence_review contract is missing: {module.__name__}.{name}"
-        )
-    return getattr(module, name)
-
-
-def _internal_article_evidence_type() -> Any:
-    try:
-        contracts = import_module("app.agent.evidence_review.contract")
-    except ModuleNotFoundError as exc:
-        pytest.fail(f"D4-S1 evidence_review.contract module is missing ({exc.name})")
-    return _required_attribute(contracts, "InternalArticleEvidence")
-
-
-def _report_type() -> Any:
-    evidence_collection_package = import_module("app.agent.evidence_collection")
-    return _required_attribute(evidence_collection_package, "ResearchTaskReport")
-
-
-def _review_report_type() -> Any:
-    evidence_review_package = import_module("app.agent.evidence_review")
-    return _required_attribute(evidence_review_package, "EvidenceReviewReport")
-
-
-def _report() -> Any:
+def _report() -> ResearchTaskReport:
     """S1: ResearchTaskReportは収集系だけを持つ(review関連はEvidenceReviewReportへ)。
 
     全testがtask_index=0のevidenceのみを使うため、単一taskの最小reportで足りる。
     """
-    report_type = _report_type()
-    return report_type(
+    return ResearchTaskReport(
         task_index=0,
         research_goal="NVIDIA の根拠を確認する",
         internal_collection="succeeded",
@@ -64,9 +33,8 @@ def _report() -> Any:
 
 def _review_report(
     *, internal_evidence_count: int = 0, external_evidence_count: int = 0
-) -> Any:
-    review_report_type = _review_report_type()
-    return review_report_type(
+) -> EvidenceReviewReport:
+    return EvidenceReviewReport(
         review="succeeded",
         internal_evidence_count=internal_evidence_count,
         external_evidence_count=external_evidence_count,
@@ -75,7 +43,7 @@ def _review_report(
 
 def _outcome(
     *,
-    internal_evidence: list[Any] | None = None,
+    internal_evidence: list[InternalArticleEvidence] | None = None,
     external_search: ExternalSearchOutcome | None = None,
     internal_evidence_count: int = 0,
     external_evidence_count: int = 0,
@@ -107,9 +75,8 @@ def _internal_evidence(
     summary: str,
     key_points: list[str] | None = None,
     published_at: datetime | None = None,
-) -> Any:
-    evidence_type = _internal_article_evidence_type()
-    return evidence_type(
+) -> InternalArticleEvidence:
+    return InternalArticleEvidence(
         source_ref=source_ref,
         task_index=task_index,
         claim=claim,

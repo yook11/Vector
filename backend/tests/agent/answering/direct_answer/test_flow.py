@@ -5,15 +5,17 @@ from __future__ import annotations
 from collections.abc import AsyncIterator, Sequence
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
-from importlib import import_module
 from typing import Any
 
 import pytest
 from logfire.testing import CaptureLogfire
 
+import app.agent.answering.direct_answer.contract as direct_answer_contract
+import app.agent.contract as shared_agent_contract
 from app.agent.answering.contract import AnsweringRequest
 from app.agent.answering.direct_answer.agent import DIRECT_ANSWER_AGENT
 from app.agent.answering.direct_answer.contract import (
+    AnswerGenerationStopped,
     DirectAnswerDraft,
     DirectAnswerInput,
     DirectAnswerInvalidError,
@@ -95,9 +97,6 @@ class FakeDirectAnswerStream:
 
 
 class FakeDirectAnswerGenerator:
-    model_name = "fake-direct-model"
-    prompt_version = "direct0001"
-
     def __init__(self, outcomes: Sequence[StreamOutcome]) -> None:
         self._outcomes = list(outcomes)
         self.calls: list[dict[str, Any]] = []
@@ -118,12 +117,7 @@ class FakeDirectAnswerGenerator:
                 "request": input.request,
                 "previous_answer": input.previous_answer,
                 "repair_context": input.repair_context,
-                # R2: previous_output_truncatedは未実装の間getattrで安全にNoneへ
-                # 落とす(直接attributeアクセスだと全呼び出しがAttributeErrorで
-                # crashし、redがassertion failureにならなくなるため)。
-                "previous_output_truncated": getattr(
-                    input, "previous_output_truncated", None
-                ),
+                "previous_output_truncated": input.previous_output_truncated,
                 "attempt_number": attempt_number,
             }
         )
@@ -180,23 +174,11 @@ class SequenceContinuation:
         return self._results.pop(0)
 
 
-def _answer_generation_stopped_type() -> type[BaseException]:
-    contract = import_module("app.agent.answering.direct_answer.contract")
-    stopped_type = getattr(contract, "AnswerGenerationStopped", None)
-    assert stopped_type is not None, "AnswerGenerationStopped が未実装です"
-    assert isinstance(stopped_type, type) and issubclass(stopped_type, BaseException)
-    return stopped_type
-
-
 def test_answer_generation_stopped_is_shared_identity_compatible_reexport() -> None:
-    shared_contract = import_module("app.agent.contract")
-    direct_contract = import_module("app.agent.answering.direct_answer.contract")
-
-    shared_type = getattr(shared_contract, "AnswerGenerationStopped", None)
-    direct_type = getattr(direct_contract, "AnswerGenerationStopped", None)
-
-    assert shared_type is not None, "shared AnswerGenerationStopped が未実装です"
-    assert direct_type is shared_type
+    assert (
+        direct_answer_contract.AnswerGenerationStopped
+        is shared_agent_contract.AnswerGenerationStopped
+    )
 
 
 async def _answer(
@@ -574,13 +556,12 @@ async def test_reporter_abort_failure_does_not_mask_provider_error() -> None:
 
 @pytest.mark.asyncio
 async def test_continuation_false_before_provider_start_is_routine_stop() -> None:
-    stopped_type = _answer_generation_stopped_type()
-    assert not issubclass(stopped_type, AIProviderError)
-    assert not issubclass(stopped_type, DirectAnswerInvalidError)
+    assert not issubclass(AnswerGenerationStopped, AIProviderError)
+    assert not issubclass(AnswerGenerationStopped, DirectAnswerInvalidError)
     generator = FakeDirectAnswerGenerator(["呼ばれない"])
     reporter = RecordingDeltaReporter()
 
-    with pytest.raises(stopped_type):
+    with pytest.raises(AnswerGenerationStopped):
         await _answer(
             generator,
             delta_reporter=reporter,
@@ -598,12 +579,11 @@ async def test_continuation_false_before_provider_start_is_routine_stop() -> Non
 async def test_continuation_false_mid_stream_aborts_iterator_and_pending_report() -> (
     None
 ):
-    stopped_type = _answer_generation_stopped_type()
     generator = FakeDirectAnswerGenerator([["表示済み", "見せない本文"]])
     reporter = RecordingDeltaReporter()
     continuation = SequenceContinuation([True, True, False])
 
-    with pytest.raises(stopped_type):
+    with pytest.raises(AnswerGenerationStopped):
         await _answer(
             generator,
             delta_reporter=reporter,
@@ -621,12 +601,11 @@ async def test_continuation_false_mid_stream_aborts_iterator_and_pending_report(
 async def test_continuation_false_at_normal_stream_end_aborts_before_finish(
     capfire: CaptureLogfire,
 ) -> None:
-    stopped_type = _answer_generation_stopped_type()
     generator = FakeDirectAnswerGenerator([["表示済み本文"]])
     reporter = RecordingDeltaReporter()
     continuation = SequenceContinuation([True, True, False])
 
-    with pytest.raises(stopped_type):
+    with pytest.raises(AnswerGenerationStopped):
         await _answer(
             generator,
             delta_reporter=reporter,

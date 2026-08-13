@@ -11,7 +11,6 @@ from uuid import uuid4
 
 import pytest
 import redis.asyncio as aioredis
-from pydantic import ValidationError
 
 from app.agent.answering.contract import AnsweringRequest
 from app.agent.answering.direct_answer.agent import DIRECT_ANSWER_AGENT
@@ -138,36 +137,30 @@ async def _evidence_answer(
     *,
     request: AnsweringRequest | None = None,
 ) -> EvidenceAnswerDraft:
-    try:
-        return await EvidenceAnswerFlow(
-            agent=EVIDENCE_ANSWER_AGENT,
-            runtime_scope_factory=generator.activate,
-            delta_reporter=reporter,
-        ).answer(
-            request=(
-                _answering_request("実RedisへのEvidence revision配信を確認する")
-                if request is None
-                else request
-            ),
-            evidence=[
-                AnswerEvidenceItem(
-                    source=ExternalUrlSource(
-                        source_ref="1",
-                        url="https://example.com/evidence-1",
-                        title="Evidence source",
-                        evidence_claim="根拠を確認しました。",
-                    ),
-                    text="根拠を確認しました。",
-                )
-            ],
-            target_time_window=TargetTimeWindow(kind="today"),
-            review_missing=(),
-        )
-    except TypeError:
-        pytest.fail(
-            "S5追補: EvidenceAnswerFlow.answer must accept a required "
-            "review_missing keyword argument (tuple[str, ...])"
-        )
+    return await EvidenceAnswerFlow(
+        agent=EVIDENCE_ANSWER_AGENT,
+        runtime_scope_factory=generator.activate,
+        delta_reporter=reporter,
+    ).answer(
+        request=(
+            _answering_request("実RedisへのEvidence revision配信を確認する")
+            if request is None
+            else request
+        ),
+        evidence=[
+            AnswerEvidenceItem(
+                source=ExternalUrlSource(
+                    source_ref="1",
+                    url="https://example.com/evidence-1",
+                    title="Evidence source",
+                    evidence_claim="根拠を確認しました。",
+                ),
+                text="根拠を確認しました。",
+            )
+        ],
+        target_time_window=TargetTimeWindow(kind="today"),
+        review_missing=(),
+    )
 
 
 def _delta_events(
@@ -180,20 +173,14 @@ def _delta_events(
     ]
 
 
-def _expected_evidence_draft(*, answer: str, cited_refs: list[str]) -> object:
-    """S4: EvidenceAnswerDraftはanswerとcited_refsだけを持つ
+def _expected_evidence_draft(
+    *, answer: str, cited_refs: list[str]
+) -> EvidenceAnswerDraft:
+    """EvidenceAnswerDraftはanswerとcited_refsだけを持つ
 
-    (sufficiency/missing_aspects/unfulfilled_requirement_idsは撤去される)。
-    現行モデルはまだsufficiencyを必須で要求するため、比較用の期待値構築を
-    ガードしてassertion failureのredにする。
+    (sufficiency/missing_aspects/unfulfilled_requirement_idsは撤去済み)。
     """
-    try:
-        return EvidenceAnswerDraft(answer=answer, cited_refs=cited_refs)
-    except ValidationError:
-        pytest.fail(
-            "S4: EvidenceAnswerDraft must accept only "
-            "(answer: NonBlankText, cited_refs: list[str])"
-        )
+    return EvidenceAnswerDraft(answer=answer, cited_refs=cited_refs)
 
 
 @pytest.mark.integration

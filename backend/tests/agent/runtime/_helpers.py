@@ -5,12 +5,10 @@ from __future__ import annotations
 import json
 from collections.abc import AsyncIterator, Mapping
 from dataclasses import dataclass, field
-from importlib import import_module
-from types import ModuleType, SimpleNamespace
+from types import SimpleNamespace
 from typing import Any, cast
 from unittest.mock import AsyncMock
 
-import pytest
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from app.agent.agent import Agent, AgentPrompt, ModelSettings, ModelTarget
@@ -60,28 +58,6 @@ class FakeGeminiClient:
         )
         self.close = AsyncMock()
         self.aclose = AsyncMock()
-
-
-def required_module(module_name: str) -> ModuleType:
-    try:
-        return import_module(module_name)
-    except ModuleNotFoundError as exc:
-        pytest.fail(f"S2 runtime module is missing: {module_name} ({exc.name})")
-
-
-def required_attribute(module: ModuleType, name: str) -> Any:
-    if not hasattr(module, name):
-        pytest.fail(f"S2 runtime contract is missing: {module.__name__}.{name}")
-    return getattr(module, name)
-
-
-def runtime_type() -> type[Any]:
-    module = required_module("app.agent.runtime.gemini")
-    return required_attribute(module, "GeminiAgentRuntime")
-
-
-def runtime_contract() -> ModuleType:
-    return required_module("app.agent.runtime.contract")
 
 
 def make_agent(

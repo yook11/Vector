@@ -170,8 +170,7 @@ async def test_endpoint_returns_204_for_policy_blocked_run_without_redis(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     client, redis = sse_client
-    policy_blocked = getattr(AgentRunStatus, "POLICY_BLOCKED", None)
-    assert policy_blocked is not None, "policy_blocked must be a terminal run status"
+    policy_blocked = AgentRunStatus.POLICY_BLOCKED
 
     async def context(**_kwargs: object) -> OwnedAgentRunLiveContext:
         return _context(policy_blocked, epoch=1)
@@ -221,8 +220,7 @@ async def test_queued_connection_rechecks_policy_blocked_as_a_db_terminal(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     client, redis = sse_client
-    policy_blocked = getattr(AgentRunStatus, "POLICY_BLOCKED", None)
-    assert policy_blocked is not None, "policy_blocked must be a terminal run status"
+    policy_blocked = AgentRunStatus.POLICY_BLOCKED
     contexts = deque(
         [
             _context(AgentRunStatus.QUEUED, epoch=0),

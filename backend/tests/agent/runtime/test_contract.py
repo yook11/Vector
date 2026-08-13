@@ -6,15 +6,12 @@ import subprocess
 import sys
 from pathlib import Path
 
-from tests.agent.runtime._helpers import required_attribute, runtime_contract
+from app.agent.runtime.contract import AgentResponseDefect, AgentResponseInvalidError
 
 
 def test_agent_response_defect_has_only_three_provider_neutral_values() -> None:
     """応答不備の公開語彙を三つの中立値に限定する。"""
-    module = runtime_contract()
-    defect_type = required_attribute(module, "AgentResponseDefect")
-
-    assert [defect.value for defect in defect_type] == [
+    assert [defect.value for defect in AgentResponseDefect] == [
         "response_not_json",
         "response_not_object",
         "output_schema_mismatch",
@@ -23,18 +20,15 @@ def test_agent_response_defect_has_only_three_provider_neutral_values() -> None:
 
 def test_agent_response_invalid_error_string_uses_defect_and_repair_hint() -> None:
     """安全な修正情報を defect と repair hint で利用可能にする。"""
-    module = runtime_contract()
-    defect_type = required_attribute(module, "AgentResponseDefect")
-    error_type = required_attribute(module, "AgentResponseInvalidError")
     repair_hint = "field=score type=greater_than_equal ge=1"
-    error = error_type(
-        defect_type.OUTPUT_SCHEMA_MISMATCH,
+    error = AgentResponseInvalidError(
+        AgentResponseDefect.OUTPUT_SCHEMA_MISMATCH,
         repair_hint=repair_hint,
     )
 
-    assert error.defect is defect_type.OUTPUT_SCHEMA_MISMATCH
+    assert error.defect is AgentResponseDefect.OUTPUT_SCHEMA_MISMATCH
     assert error.repair_hint == repair_hint
-    assert defect_type.OUTPUT_SCHEMA_MISMATCH.value in str(error)
+    assert AgentResponseDefect.OUTPUT_SCHEMA_MISMATCH.value in str(error)
     assert repair_hint in str(error)
 
 

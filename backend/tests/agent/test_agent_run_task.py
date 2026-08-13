@@ -24,13 +24,13 @@ from taskiq.message import TaskiqMessage
 from taskiq.receiver import Receiver
 
 import app.agent.composition as composition
-import app.agent.contract as agent_contract
 import app.queue.tasks.agent_run as agent_run_tasks
 from app.agent.answering.direct_answer.contract import (
     DirectAnswerInvalidError,
 )
 from app.agent.contract import (
     AnswerGenerationStopped,
+    AnswerPlanSummary,
     AnswerQuestionResult,
     ExternalUrlSource,
     InternalArticleSource,
@@ -80,6 +80,7 @@ from app.models.agent_run import AgentRun
 from app.models.agent_thread import AgentThread
 from app.models.agent_user_daily_quota import AgentUserDailyQuota
 from app.queue.messages.agent_run import AgentRunTrigger
+from app.queue.tasks.agent_run import AgentRunTaskBoundaryError
 from app.shared.security.safe_url import SafeUrl
 from tests.agent.runs._acquire_outcomes import (
     acquired_prepared_run,
@@ -119,17 +120,11 @@ def _assert_safe_task_boundary_error(
     *,
     expected_message: str,
 ) -> None:
-    boundary_error_type = getattr(
-        agent_run_tasks,
-        "AgentRunTaskBoundaryError",
-        None,
-    )
     rendered_traceback = "".join(
         traceback.format_exception(type(error), error, error.__traceback__)
     )
 
-    assert isinstance(boundary_error_type, type)
-    assert error.__class__ is boundary_error_type
+    assert error.__class__ is AgentRunTaskBoundaryError
     assert str(error) == expected_message
     assert error.args == (expected_message,)
     assert error.__cause__ is None
@@ -456,11 +451,8 @@ def _patch_delta_worker(
     )
 
 
-def _plan_summary(plan_type: str) -> object:
-    summary_type = getattr(agent_contract, "AnswerPlanSummary", None)
-    if summary_type is None:
-        pytest.fail("agent contract must define AnswerPlanSummary")
-    return summary_type(plan_type=plan_type)
+def _plan_summary(plan_type: str) -> AnswerPlanSummary:
+    return AnswerPlanSummary(plan_type=plan_type)
 
 
 def _direct_result(answer: str = "worker answer") -> AnswerQuestionResult:

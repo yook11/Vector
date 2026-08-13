@@ -7,11 +7,13 @@ from datetime import UTC, datetime
 
 import pytest
 
-import app.agent.answering.direct_answer.prompts as direct_answer_prompts_module
 from app.agent.answering.contract import AnsweringRequest
 from app.agent.answering.direct_answer.agent import DIRECT_ANSWER_AGENT
 from app.agent.answering.direct_answer.contract import DirectAnswerInput
-from app.agent.answering.direct_answer.prompts import render_direct_answer_input
+from app.agent.answering.direct_answer.prompts import (
+    _TRUNCATION_REPAIR_BLOCK,
+    render_direct_answer_input,
+)
 from app.agent.question_context.contract import QuestionContext
 
 
@@ -57,32 +59,17 @@ def _untrusted_spans(rendered: str) -> list[tuple[int, int]]:
     ]
 
 
-def _truncation_repair_block() -> str:
-    block = getattr(direct_answer_prompts_module, "_TRUNCATION_REPAIR_BLOCK", None)
-    if block is None:
-        pytest.fail(
-            "R2 prompt contract is missing: "
-            "app.agent.answering.direct_answer.prompts._TRUNCATION_REPAIR_BLOCK"
-        )
-    return block
-
-
 def _render_with_truncation_state(
     *,
     repair_context: str | None,
     previous_output_truncated: bool,
 ) -> str:
-    try:
-        input = DirectAnswerInput(
-            request=_request(),
-            previous_answer="",
-            repair_context=repair_context,
-            previous_output_truncated=previous_output_truncated,
-        )
-    except TypeError:
-        pytest.fail(
-            "R2: DirectAnswerInput must accept previous_output_truncated: bool = False"
-        )
+    input = DirectAnswerInput(
+        request=_request(),
+        previous_answer="",
+        repair_context=repair_context,
+        previous_output_truncated=previous_output_truncated,
+    )
     return render_direct_answer_input(input)
 
 
@@ -128,7 +115,7 @@ def test_prompt_includes_repair_context_when_repair_context_exists() -> None:
 
     打ち切り用の文言が現れない。
     """
-    truncation_block = _truncation_repair_block()
+    truncation_block = _TRUNCATION_REPAIR_BLOCK
 
     prompt = _render(
         request=_request(),
@@ -148,7 +135,7 @@ def test_truncated_retry_shows_truncation_wording_not_blank_response_wording() -
     repair_context=str(exc)を持つ)、previous_output_truncated=Trueが
     空回答用の文言を抑止することを確認する。
     """
-    truncation_block = _truncation_repair_block()
+    truncation_block = _TRUNCATION_REPAIR_BLOCK
 
     prompt = _render_with_truncation_state(
         repair_context="ai_error_output_truncated",
@@ -164,7 +151,7 @@ def test_truncation_notice_is_trusted_and_outside_untrusted_blocks() -> None:
 
     同じ扱い(runtimeが観測した機械的事実であり、model出力由来ではないため)。
     """
-    truncation_block = _truncation_repair_block()
+    truncation_block = _TRUNCATION_REPAIR_BLOCK
 
     prompt = _render_with_truncation_state(
         repair_context="ai_error_output_truncated",
@@ -181,7 +168,7 @@ def test_truncation_notice_is_trusted_and_outside_untrusted_blocks() -> None:
 
 def test_first_attempt_shows_neither_repair_wording() -> None:
     """条件9: 初回attemptではどちらのrepair文言も現れない。"""
-    truncation_block = _truncation_repair_block()
+    truncation_block = _TRUNCATION_REPAIR_BLOCK
 
     prompt = _render_with_truncation_state(
         repair_context=None,

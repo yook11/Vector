@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from collections.abc import AsyncIterator
 from datetime import UTC, datetime
-from importlib import import_module, util
 from types import SimpleNamespace
 from typing import cast
 
@@ -80,24 +79,11 @@ def _evidence() -> AnswerEvidenceItem:
     )
 
 
-def _declaration() -> tuple[object, type[object]]:
-    assert util.find_spec("app.agent.answering.evidence_answer.agent") is not None, (
-        "Evidence Answer Agent declaration が未実装です"
-    )
-    contract = import_module("app.agent.answering.evidence_answer.contract")
-    input_type = getattr(contract, "EvidenceAnswerInput", None)
-    assert input_type is not None, "EvidenceAnswerInput が未実装です"
-    agent_module = import_module("app.agent.answering.evidence_answer.agent")
-    agent = getattr(agent_module, "EVIDENCE_ANSWER_AGENT", None)
-    assert agent is not None, "EVIDENCE_ANSWER_AGENT が未実装です"
-    return agent, input_type
-
-
 def test_agent_declares_plain_text_role_with_wider_output_budget() -> None:
     """条件1: response_schema=Noneでstructured outputを要求せず、
     max_output_tokensは8192、output_typeは本文draft型 (Direct Answerと同じ形)。
     """
-    agent, _ = _declaration()
+    agent = EVIDENCE_ANSWER_AGENT
 
     assert (
         agent.name,
@@ -121,9 +107,9 @@ def test_agent_declares_plain_text_role_with_wider_output_budget() -> None:
 
 
 def test_fixed_instructions_and_rendered_input_are_separated() -> None:
-    agent, input_type = _declaration()
+    agent = EVIDENCE_ANSWER_AGENT
     fixed = "ユーザーが知りたいことへ直接答えることです。"
-    input = input_type(
+    input = EvidenceAnswerInput(
         request=_request(),
         evidence=(_evidence(),),
         target_time_window=TargetTimeWindow(kind="last_n_days", days=7),

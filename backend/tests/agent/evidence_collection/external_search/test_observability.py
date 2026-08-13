@@ -2,25 +2,16 @@
 
 from __future__ import annotations
 
-import importlib
 from typing import Any
 
 import pytest
 from logfire.testing import CaptureLogfire
 from structlog.testing import capture_logs
 
+import app.agent.evidence_collection.external_search.observability as observability
 from tests.logfire._metric_helpers import collected_metrics
 
 _METRIC_NAME = "external_search_time_filter_resolution_total"
-
-
-def _observability() -> Any:
-    try:
-        return importlib.import_module(
-            "app.agent.evidence_collection.external_search.observability"
-        )
-    except ModuleNotFoundError:
-        pytest.fail("external search time-filter observability module must exist")
 
 
 def _metric_points(metrics: list[dict[str, Any]]) -> list[tuple[int, dict[str, Any]]]:
@@ -67,8 +58,6 @@ def test_time_filter_resolution_observation_records_one_closed_metric_and_warnin
     task_count: int,
     expected_warning: list[dict[str, object]],
 ) -> None:
-    observability = _observability()
-
     with capture_logs() as logs:
         observability.observe_time_filter_resolution(
             result=result,
@@ -103,8 +92,6 @@ def test_time_filter_resolution_observation_rejects_inconsistent_closed_pairs(
     result: str,
     reason: str,
 ) -> None:
-    observability = _observability()
-
     with pytest.raises(ValueError):
         observability.observe_time_filter_resolution(
             result=result,
@@ -118,7 +105,6 @@ def test_time_filter_resolution_observation_isolates_metric_and_warning_sink_fai
     monkeypatch: pytest.MonkeyPatch,
     failing_sink: str,
 ) -> None:
-    observability = _observability()
     attempts: list[str] = []
 
     def record_time_filter_resolution(*, result: str, reason: str) -> None:

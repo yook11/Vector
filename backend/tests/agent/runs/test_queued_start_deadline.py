@@ -17,11 +17,16 @@ from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from structlog.testing import capture_logs
 
-import app.agent.runs.contracts as run_contracts
-import app.agent.runs.repository as run_repository
 import app.queue.tasks.agent_run as agent_run_tasks
+from app.agent.runs.contracts import (
+    AcquireForExecutionCommandOutcome,
+    AcquireForExecutionOutcome,
+)
 from app.agent.runs.daily_quota.contracts import DailyQuotaReleaseOutcome
-from app.agent.runs.repository import AgentRunRepository
+from app.agent.runs.repository import (
+    RESEARCH_QUEUED_START_DEADLINE_SECONDS,
+    AgentRunRepository,
+)
 from app.models.agent_message import AgentMessage
 from app.models.agent_run import AgentRun
 from app.models.agent_thread import AgentThread
@@ -33,7 +38,6 @@ from tests.logfire._metric_helpers import collected_metrics
 _USER_ID = uuid.UUID(TEST_USER_ID)
 _USAGE_DATE = date(2026, 7, 22)
 _DB_NOW = datetime(2026, 7, 22, 12, 0, tzinfo=UTC)
-_MISSING = object()
 _SENSITIVE_ACQUISITION_MARKERS = (
     str(_USER_ID),
     "SECRET_SQL_MARKER",
@@ -139,18 +143,8 @@ async def _read_counter(
         )
 
 
-def _acquire_outcome(name: str) -> object:
-    enum = getattr(run_contracts, "AcquireForExecutionOutcome", None)
-    assert enum is not None, "AcquireForExecutionOutcome is not implemented"
-    return getattr(enum, name)
-
-
 def _queued_start_deadline_seconds() -> int:
-    value = getattr(
-        run_repository,
-        "RESEARCH_QUEUED_START_DEADLINE_SECONDS",
-        None,
-    )
+    value = RESEARCH_QUEUED_START_DEADLINE_SECONDS
     assert value == 180
     return value
 
@@ -162,15 +156,10 @@ def _assert_acquire_result(
     prepared: bool,
     quota_release_outcome: DailyQuotaReleaseOutcome | None,
 ) -> None:
-    command_outcome = getattr(run_contracts, "AcquireForExecutionCommandOutcome", None)
-    assert command_outcome is not None, (
-        "AcquireForExecutionCommandOutcome is not implemented"
-    )
-    assert isinstance(result, command_outcome)
-    assert getattr(result, "acquire_outcome", _MISSING) is _acquire_outcome(outcome)
-    prepared_run = getattr(result, "prepared_run", _MISSING)
-    assert (prepared_run is not None) is prepared
-    assert getattr(result, "quota_release_outcome", _MISSING) is quota_release_outcome
+    assert isinstance(result, AcquireForExecutionCommandOutcome)
+    assert result.acquire_outcome is getattr(AcquireForExecutionOutcome, outcome)
+    assert (result.prepared_run is not None) is prepared
+    assert result.quota_release_outcome is quota_release_outcome
 
 
 def _ctx(session_factory: async_sessionmaker[AsyncSession]) -> SimpleNamespace:
