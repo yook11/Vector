@@ -69,7 +69,7 @@ async def test_gauge_records_true_count_not_capped_by_limit(
     with (
         patch.object(backfill.settings, "backfill_assessments_enabled", True),
         patch(
-            "app.queue.tasks.backfill.is_assessment_held",
+            "app.queue.tasks.backfill.is_stage_held",
             AsyncMock(return_value=False),
         ),
         patch(
@@ -114,7 +114,7 @@ async def test_gauge_records_count_with_stage_attribute(
     with (
         patch.object(backfill.settings, "backfill_assessments_enabled", True),
         patch(
-            "app.queue.tasks.backfill.is_assessment_held",
+            "app.queue.tasks.backfill.is_stage_held",
             AsyncMock(return_value=False),
         ),
         patch(
@@ -160,7 +160,7 @@ async def test_gauge_records_zero_when_empty_backlog(
     with (
         patch.object(backfill.settings, "backfill_assessments_enabled", True),
         patch(
-            "app.queue.tasks.backfill.is_assessment_held",
+            "app.queue.tasks.backfill.is_stage_held",
             AsyncMock(return_value=False),
         ),
         patch(
@@ -200,7 +200,7 @@ async def test_gauge_not_recorded_when_kill_switch_disabled(
 
     with (
         patch.object(backfill.settings, "backfill_assessments_enabled", False),
-        patch("app.queue.tasks.backfill.is_assessment_held", AsyncMock()) as held,
+        patch("app.queue.tasks.backfill.is_stage_held", AsyncMock()) as held,
         patch("app.queue.tasks.backfill.PipelineBacklog") as backlog_cls,
         patch("app.queue.tasks.backfill._append_backfill_run_event", AsyncMock()),
     ):
@@ -240,7 +240,7 @@ async def test_gauge_attributes_do_not_leak_curation_ids(
     with (
         patch.object(backfill.settings, "backfill_assessments_enabled", True),
         patch(
-            "app.queue.tasks.backfill.is_assessment_held",
+            "app.queue.tasks.backfill.is_stage_held",
             AsyncMock(return_value=False),
         ),
         patch(

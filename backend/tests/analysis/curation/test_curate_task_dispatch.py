@@ -45,6 +45,7 @@ from app.analysis.curation.errors import CurationResponseInvalidError
 from app.analysis.failure_handling import FailureHandlingDecision
 from app.analysis.gemini_error_translator import GeminiContentRejectionReason
 from app.analysis.rate_limit import AIModelRateLimitPolicy, RateLimitRule
+from app.audit.domain.event import Stage
 from app.queue.messages.curation import CurationTrigger
 from tests.logfire._metric_helpers import collected_metrics, sum_counter_for_result
 from tests.logfire._span_helpers import stage_attrs
@@ -165,7 +166,7 @@ async def test_keep_article_delegates_to_handler(exc_cls: type[Exception]) -> No
         _patch_try_advance_from(),
         patch("app.queue.tasks.curation.CurationService") as mock_svc_cls,
         patch("app.queue.tasks.curation.CurationFailureHandler") as mock_handler_cls,
-        patch("app.queue.tasks.curation.set_curation_hold", new=AsyncMock()) as hold,
+        patch("app.queue.tasks.curation.set_stage_hold", new=AsyncMock()) as hold,
     ):
         mock_svc_cls.return_value.execute = AsyncMock(side_effect=exc_cls("boom"))
         mock_handler_cls.return_value.handle = AsyncMock(
@@ -180,6 +181,7 @@ async def test_keep_article_delegates_to_handler(exc_cls: type[Exception]) -> No
     handler_handle.assert_awaited_once()
     assert handler_handle.await_args.kwargs["exc"].__class__ is exc_cls
     hold.assert_awaited_once()
+    assert hold.await_args.args[1] is Stage.CURATION
     assert hold.await_args.kwargs["reason"] == "ai_error_configuration"
 
 
@@ -329,7 +331,7 @@ async def test_service_exception_sets_failed_result(
         _patch_try_advance_from(),
         patch("app.queue.tasks.curation.CurationService") as mock_svc_cls,
         patch("app.queue.tasks.curation.CurationFailureHandler") as mock_handler_cls,
-        patch("app.queue.tasks.curation.set_curation_hold", new=AsyncMock()),
+        patch("app.queue.tasks.curation.set_stage_hold", new=AsyncMock()),
     ):
         mock_svc_cls.return_value.execute = AsyncMock(side_effect=exc)
         mock_handler_cls.return_value.handle = AsyncMock(

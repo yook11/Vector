@@ -12,6 +12,7 @@ import pytest
 from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from app.audit.domain.event import Stage
 from app.models.analyzable_article_record import AnalyzableArticleRecord
 from app.models.analyzed_article_record import AnalyzedArticleRecord
 from app.models.article_curation import ArticleCuration
@@ -69,7 +70,7 @@ async def test_curations_disabled_returns_early() -> None:
     ctx = _ctx_with_session_factory()
     with (
         patch.object(tasks.settings, "backfill_curations_enabled", False),
-        patch("app.queue.tasks.backfill.is_curation_held", new=AsyncMock()) as held,
+        patch("app.queue.tasks.backfill.is_stage_held", new=AsyncMock()) as held,
         patch(
             "app.queue.tasks.backfill._delete_aged_out_curations",
             new=AsyncMock(return_value=0),
@@ -93,7 +94,7 @@ async def test_curations_held_skips_entire_run() -> None:
     with (
         patch.object(tasks.settings, "backfill_curations_enabled", True),
         patch(
-            "app.queue.tasks.backfill.is_curation_held",
+            "app.queue.tasks.backfill.is_stage_held",
             new=AsyncMock(return_value=True),
         ),
         patch(
@@ -133,7 +134,7 @@ async def test_curations_empty_does_not_dispatch() -> None:
     with (
         patch.object(tasks.settings, "backfill_curations_enabled", True),
         patch(
-            "app.queue.tasks.backfill.is_curation_held",
+            "app.queue.tasks.backfill.is_stage_held",
             new=AsyncMock(return_value=False),
         ),
         patch(
@@ -175,7 +176,7 @@ async def test_curations_budget_exhausted_skips_dispatch() -> None:
     with (
         patch.object(tasks.settings, "backfill_curations_enabled", True),
         patch(
-            "app.queue.tasks.backfill.is_curation_held",
+            "app.queue.tasks.backfill.is_stage_held",
             new=AsyncMock(return_value=False),
         ),
         patch(
@@ -224,7 +225,7 @@ async def test_curations_dispatches_triggers_for_each_article_id() -> None:
     with (
         patch.object(tasks.settings, "backfill_curations_enabled", True),
         patch(
-            "app.queue.tasks.backfill.is_curation_held",
+            "app.queue.tasks.backfill.is_stage_held",
             new=AsyncMock(return_value=False),
         ),
         patch(
@@ -271,7 +272,7 @@ async def test_curations_continues_when_one_kiq_fails() -> None:
     with (
         patch.object(tasks.settings, "backfill_curations_enabled", True),
         patch(
-            "app.queue.tasks.backfill.is_curation_held",
+            "app.queue.tasks.backfill.is_stage_held",
             new=AsyncMock(return_value=False),
         ),
         patch(
@@ -629,7 +630,7 @@ async def test_assessments_disabled_returns_early() -> None:
     ctx = _ctx_with_session_factory()
     with (
         patch.object(tasks.settings, "backfill_assessments_enabled", False),
-        patch("app.queue.tasks.backfill.is_assessment_held", new=AsyncMock()) as held,
+        patch("app.queue.tasks.backfill.is_stage_held", new=AsyncMock()) as held,
         patch(
             "app.queue.tasks.backfill._exclude_aged_out_assessments",
             new=AsyncMock(return_value=0),
@@ -650,7 +651,7 @@ async def test_embeddings_disabled_returns_early() -> None:
     ctx = _ctx_with_session_factory()
     with (
         patch.object(tasks.settings, "backfill_embeddings_enabled", False),
-        patch("app.queue.tasks.backfill.is_embedding_held", new=AsyncMock()) as held,
+        patch("app.queue.tasks.backfill.is_stage_held", new=AsyncMock()) as held,
         patch(
             "app.queue.tasks.backfill._exclude_aged_out_embeddings",
             new=AsyncMock(return_value=0),
@@ -673,7 +674,7 @@ async def test_assessments_held_skips_entire_run() -> None:
     with (
         patch.object(tasks.settings, "backfill_assessments_enabled", True),
         patch(
-            "app.queue.tasks.backfill.is_assessment_held",
+            "app.queue.tasks.backfill.is_stage_held",
             new=AsyncMock(return_value=True),
         ) as held,
         patch(
@@ -690,6 +691,7 @@ async def test_assessments_held_skips_entire_run() -> None:
         await tasks.backfill_assessments(ctx=ctx)
 
     held.assert_awaited_once()
+    assert held.await_args.args[1] is Stage.ASSESSMENT
     exclude.assert_not_called()
     backlog_cls.assert_not_called()
     budget.assert_not_called()
@@ -705,7 +707,7 @@ async def test_embeddings_held_skips_entire_run() -> None:
     with (
         patch.object(tasks.settings, "backfill_embeddings_enabled", True),
         patch(
-            "app.queue.tasks.backfill.is_embedding_held",
+            "app.queue.tasks.backfill.is_stage_held",
             new=AsyncMock(return_value=True),
         ) as held,
         patch(
@@ -722,6 +724,7 @@ async def test_embeddings_held_skips_entire_run() -> None:
         await tasks.backfill_embeddings(ctx=ctx)
 
     held.assert_awaited_once()
+    assert held.await_args.args[1] is Stage.EMBEDDING
     exclude.assert_not_called()
     backlog_cls.assert_not_called()
     budget.assert_not_called()

@@ -24,7 +24,7 @@ from app.audit.ready_build import project_ready_build_failure
 from app.audit.stages.curation import CurationAuditRepository
 from app.logfire.article_stage import curation_stage_span
 from app.queue.brokers import broker_analysis
-from app.queue.helpers.stage_hold import set_curation_hold
+from app.queue.helpers.stage_hold import set_stage_hold
 from app.queue.messages.assessment import AssessmentTrigger
 from app.queue.messages.curation import CurationTrigger
 from app.queue.retry import is_last_attempt
@@ -125,7 +125,9 @@ async def curate_content(
                 last_attempt=is_last_attempt(ctx),
             )
             if decision.stage_hold_reason is not None:
-                await set_curation_hold(get_redis(), reason=decision.stage_hold_reason)
+                await set_stage_hold(
+                    get_redis(), Stage.CURATION, reason=decision.stage_hold_reason
+                )
             stage.set_result("failed")
             if decision.reraise:
                 raise

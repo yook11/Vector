@@ -29,6 +29,7 @@ from app.analysis.embedding.errors import (
 )
 from app.analysis.failure_handling import FailureHandlingDecision
 from app.analysis.rate_limit import AIModelRateLimitPolicy
+from app.audit.domain.event import Stage
 from app.queue.messages.embedding import EmbeddingTrigger
 from tests.logfire._span_helpers import stage_attrs
 
@@ -82,9 +83,7 @@ def _patch_ready_construction(ready: ReadyForEmbedding | None = None) -> object:
     """``try_advance_from`` を tuple 返却に patch するヘルパ。"""
     return patch(
         "app.queue.tasks.embedding.ReadyForEmbedding.try_advance_from",
-        new=AsyncMock(
-            return_value=(ready if ready is not None else _fixed_ready(), 7)
-        ),
+        new=AsyncMock(return_value=(ready if ready is not None else _fixed_ready(), 7)),
     )
 
 
@@ -114,9 +113,7 @@ async def test_terminal_delegates_to_handler() -> None:
                 stage_hold_reason="ai_error_configuration",
             )
         )
-        with patch(
-            "app.queue.tasks.embedding.set_embedding_hold", new=AsyncMock()
-        ) as hold:
+        with patch("app.queue.tasks.embedding.set_stage_hold", new=AsyncMock()) as hold:
             await generate_embedding(trigger=_trigger(), ctx=ctx)
 
     handler_handle = mock_handler_cls.return_value.handle
@@ -125,6 +122,7 @@ async def test_terminal_delegates_to_handler() -> None:
     assert kwargs["exc"] is exc
     assert kwargs["last_attempt"] is False
     hold.assert_awaited_once()
+    assert hold.await_args.args[1] is Stage.EMBEDDING
     assert hold.await_args.kwargs["reason"] == "ai_error_configuration"
 
 
@@ -260,7 +258,7 @@ async def test_service_exception_sets_failed_result(
         _patch_ready_construction(),
         patch("app.queue.tasks.embedding.EmbeddingService") as mock_svc_cls,
         patch("app.queue.tasks.embedding.EmbeddingFailureHandler") as mock_handler_cls,
-        patch("app.queue.tasks.embedding.set_embedding_hold", new=AsyncMock()),
+        patch("app.queue.tasks.embedding.set_stage_hold", new=AsyncMock()),
     ):
         mock_svc_cls.return_value.execute = AsyncMock(side_effect=exc)
         mock_handler_cls.return_value.handle = AsyncMock(

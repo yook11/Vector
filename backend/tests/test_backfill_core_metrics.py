@@ -28,12 +28,14 @@ class _MetricCase:
     stage: str
     action: str
     enabled_attr: str
-    hold_patch: str
     ageout_patch: str
     queue_task_patch: str
     count_method: str
     target_method: str
 
+
+# hold gate は 3 stage 共通の is_stage_held 1 本なので case ごとに持たせない。
+_HOLD_PATCH = "app.queue.tasks.backfill.is_stage_held"
 
 CASES = [
     _MetricCase(
@@ -42,7 +44,6 @@ CASES = [
         stage="curation",
         action="deleted",
         enabled_attr="backfill_curations_enabled",
-        hold_patch="app.queue.tasks.backfill.is_curation_held",
         ageout_patch="app.queue.tasks.backfill._delete_aged_out_curations",
         queue_task_patch="app.queue.tasks.backfill.curate_content",
         count_method="count_articles_pending_curation",
@@ -54,7 +55,6 @@ CASES = [
         stage="assessment",
         action="excluded",
         enabled_attr="backfill_assessments_enabled",
-        hold_patch="app.queue.tasks.backfill.is_assessment_held",
         ageout_patch="app.queue.tasks.backfill._exclude_aged_out_assessments",
         queue_task_patch="app.queue.tasks.backfill.assess_content",
         count_method="count_curations_pending_assessment",
@@ -66,7 +66,6 @@ CASES = [
         stage="embedding",
         action="excluded",
         enabled_attr="backfill_embeddings_enabled",
-        hold_patch="app.queue.tasks.backfill.is_embedding_held",
         ageout_patch="app.queue.tasks.backfill._exclude_aged_out_embeddings",
         queue_task_patch="app.queue.tasks.backfill.generate_embedding",
         count_method="count_analyzed_articles_pending_embedding",
@@ -135,7 +134,7 @@ async def test_backlog_and_hold_false_are_recorded_for_each_stage(
 
     with (
         patch.object(tasks.settings, case.enabled_attr, True),
-        patch(case.hold_patch, AsyncMock(return_value=False)),
+        patch(_HOLD_PATCH, AsyncMock(return_value=False)),
         patch(case.ageout_patch, AsyncMock(return_value=0)),
         patch("app.queue.tasks.backfill.PipelineBacklog", return_value=backlog),
         patch(
@@ -173,7 +172,7 @@ async def test_empty_backlog_records_zero_for_each_stage(
 
     with (
         patch.object(tasks.settings, case.enabled_attr, True),
-        patch(case.hold_patch, AsyncMock(return_value=False)),
+        patch(_HOLD_PATCH, AsyncMock(return_value=False)),
         patch(case.ageout_patch, AsyncMock(return_value=0)),
         patch("app.queue.tasks.backfill.PipelineBacklog", return_value=backlog),
         patch("app.queue.tasks.backfill._append_backfill_run_event", AsyncMock()),
@@ -196,7 +195,7 @@ async def test_hold_true_records_held_and_skips_backlog_budget_and_kiq(
     """hold 中は held=1 だけを記録し、backlog / budget / kiq に進まない。"""
     with (
         patch.object(tasks.settings, case.enabled_attr, True),
-        patch(case.hold_patch, AsyncMock(return_value=True)),
+        patch(_HOLD_PATCH, AsyncMock(return_value=True)),
         patch(case.ageout_patch, AsyncMock(return_value=0)) as ageout,
         patch("app.queue.tasks.backfill.PipelineBacklog") as backlog_cls,
         patch("app.queue.tasks.backfill.consume_daily_budget", AsyncMock()) as budget,
@@ -224,7 +223,7 @@ async def test_kill_switch_disabled_does_not_record_hold_or_backlog(
     """kill switch off は hold check も metric set も行わない。"""
     with (
         patch.object(tasks.settings, case.enabled_attr, False),
-        patch(case.hold_patch, AsyncMock()) as held,
+        patch(_HOLD_PATCH, AsyncMock()) as held,
         patch("app.queue.tasks.backfill.PipelineBacklog") as backlog_cls,
         patch("app.queue.tasks.backfill._append_backfill_run_event", AsyncMock()),
     ):
@@ -254,7 +253,7 @@ async def test_dispatched_counter_counts_only_successful_kiq(
 
     with (
         patch.object(tasks.settings, case.enabled_attr, True),
-        patch(case.hold_patch, AsyncMock(return_value=False)),
+        patch(_HOLD_PATCH, AsyncMock(return_value=False)),
         patch(case.ageout_patch, AsyncMock(return_value=0)),
         patch("app.queue.tasks.backfill.PipelineBacklog", return_value=backlog),
         patch(
@@ -286,7 +285,7 @@ async def test_aged_out_counter_records_completed_cleanup_count(
 
     with (
         patch.object(tasks.settings, case.enabled_attr, True),
-        patch(case.hold_patch, AsyncMock(return_value=False)),
+        patch(_HOLD_PATCH, AsyncMock(return_value=False)),
         patch(case.ageout_patch, AsyncMock(return_value=4)),
         patch("app.queue.tasks.backfill.PipelineBacklog", return_value=backlog),
         patch("app.queue.tasks.backfill._append_backfill_run_event", AsyncMock()),
@@ -317,7 +316,7 @@ async def test_metric_attributes_do_not_leak_dynamic_target_values(
 
     with (
         patch.object(tasks.settings, case.enabled_attr, True),
-        patch(case.hold_patch, AsyncMock(return_value=False)),
+        patch(_HOLD_PATCH, AsyncMock(return_value=False)),
         patch(case.ageout_patch, AsyncMock(return_value=5)),
         patch("app.queue.tasks.backfill.PipelineBacklog", return_value=backlog),
         patch(

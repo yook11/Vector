@@ -42,11 +42,7 @@ from app.models.out_of_scope_article_record import OutOfScopeArticleRecord
 from app.queue.brokers import broker_maintenance
 from app.queue.helpers.backlog import BackfillTarget, PipelineBacklog
 from app.queue.helpers.budget import consume_daily_budget
-from app.queue.helpers.stage_hold import (
-    is_assessment_held,
-    is_curation_held,
-    is_embedding_held,
-)
+from app.queue.helpers.stage_hold import is_stage_held
 from app.queue.helpers.window import BackfillWindow
 from app.queue.messages.assessment import AssessmentTrigger
 from app.queue.messages.curation import CurationTrigger
@@ -449,7 +445,7 @@ async def backfill_curations(ctx: Context = TaskiqDepends()) -> None:
             return
 
         try:
-            curation_held = await is_curation_held(get_redis())
+            curation_held = await is_stage_held(get_redis(), Stage.CURATION)
             _record_hold_state("curation", held=curation_held)
             if curation_held:
                 # stage hold = 運用ゲート。監査に焼かず log + held gauge で観測する。
@@ -587,7 +583,7 @@ async def backfill_assessments(ctx: Context = TaskiqDepends()) -> None:
             return
 
         try:
-            assessment_held = await is_assessment_held(get_redis())
+            assessment_held = await is_stage_held(get_redis(), Stage.ASSESSMENT)
             _record_hold_state("assessment", held=assessment_held)
             if assessment_held:
                 # stage hold = 運用ゲート。監査に焼かず log + held gauge で観測する。
@@ -727,7 +723,7 @@ async def backfill_embeddings(ctx: Context = TaskiqDepends()) -> None:
             return
 
         try:
-            embedding_held = await is_embedding_held(get_redis())
+            embedding_held = await is_stage_held(get_redis(), Stage.EMBEDDING)
             _record_hold_state("embedding", held=embedding_held)
             if embedding_held:
                 # stage hold = 運用ゲート。監査に焼かず log + held gauge で観測する。

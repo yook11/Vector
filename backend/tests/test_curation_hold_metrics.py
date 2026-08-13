@@ -1,9 +1,9 @@
 """``app/queue/helpers/stage_hold.py`` の curation Logfire metric 記録 oracle。
 
 検証する性質:
-- ``set_curation_hold`` 成功時に ``vector.curation.hold_set`` counter が +1
+- ``set_stage_hold`` 成功時に ``vector.curation.hold_set`` counter が +1
   され、attribute は ``{"reason": <CODE 由来>}`` のみ。
-- ``set_curation_hold`` の Redis SET 失敗時は ``vector.curation.hold_set_failed``
+- ``set_stage_hold`` の Redis SET 失敗時は ``vector.curation.hold_set_failed``
   counter が +1 され、成功 counter は increment されない。
 - attribute 値域が provider error CODE の閉じた語彙に収まる構造的契約を
   ホワイトリスト (許可値域) oracle で検証する。
@@ -27,10 +27,11 @@ from app.analysis.ai_provider_errors import (
     AIProviderRequestInvalidError,
     AIProviderUsageLimitExhaustedError,
 )
-from app.queue.helpers.stage_hold import set_curation_hold
+from app.audit.domain.event import Stage
+from app.queue.helpers.stage_hold import set_stage_hold
 from tests.logfire._metric_helpers import assert_attribute_contract
 
-# set_curation_hold(reason: str) のシグネチャ自体は closed vocabulary を持たない
+# set_stage_hold(reason: str) のシグネチャ自体は closed vocabulary を持たない
 # (curation/assessment/embedding 共有の Redis hold setter で reason は素通し文字列)。
 # 実運用では CurationFailureHandler._hold_reason が provider error の CODE を渡す
 # (app/analysis/ai_provider_errors.py)。stage hold を要する回復クラス
@@ -60,14 +61,14 @@ def _attributes_for(metric: dict[str, Any]) -> list[dict[str, Any]]:
 
 
 @pytest.mark.asyncio
-async def test_set_curation_hold_increments_hold_set_counter(
+async def test_curation_hold_increments_hold_set_counter(
     capfire: CaptureLogfire,
 ) -> None:
     """Redis SET 成功時、``vector.curation.hold_set`` counter が +1。"""
     fake_redis = AsyncMock()
     fake_redis.set.return_value = True
 
-    await set_curation_hold(fake_redis, reason="ai_error_configuration")
+    await set_stage_hold(fake_redis, Stage.CURATION, reason="ai_error_configuration")
 
     metrics = capfire.get_collected_metrics()
     hold_set = _find_metric(metrics, "vector.curation.hold_set")
@@ -76,12 +77,14 @@ async def test_set_curation_hold_increments_hold_set_counter(
 
 
 @pytest.mark.asyncio
-async def test_set_curation_hold_records_reason_attribute(
+async def test_curation_hold_records_reason_attribute(
     capfire: CaptureLogfire,
 ) -> None:
     """成功時 counter の attribute は ``{"reason": "<CODE>"}`` のみ。"""
     fake_redis = AsyncMock()
-    await set_curation_hold(fake_redis, reason="ai_error_insufficient_balance")
+    await set_stage_hold(
+        fake_redis, Stage.CURATION, reason="ai_error_insufficient_balance"
+    )
 
     metrics = capfire.get_collected_metrics()
     hold_set = _find_metric(metrics, "vector.curation.hold_set")
@@ -91,12 +94,12 @@ async def test_set_curation_hold_records_reason_attribute(
 
 
 @pytest.mark.asyncio
-async def test_set_curation_hold_does_not_record_failed_counter_on_success(
+async def test_curation_hold_does_not_record_failed_counter_on_success(
     capfire: CaptureLogfire,
 ) -> None:
     """成功経路では ``vector.curation.hold_set_failed`` を一切 increment しない。"""
     fake_redis = AsyncMock()
-    await set_curation_hold(fake_redis, reason="ai_error_configuration")
+    await set_stage_hold(fake_redis, Stage.CURATION, reason="ai_error_configuration")
 
     metrics = capfire.get_collected_metrics()
     failed = _find_metric(metrics, "vector.curation.hold_set_failed")
@@ -106,15 +109,15 @@ async def test_set_curation_hold_does_not_record_failed_counter_on_success(
 
 
 @pytest.mark.asyncio
-async def test_set_curation_hold_failure_increments_failed_counter(
+async def test_curation_hold_failure_increments_failed_counter(
     capfire: CaptureLogfire,
 ) -> None:
     """Redis SET 例外時、``vector.curation.hold_set_failed`` counter が +1。"""
     fake_redis = AsyncMock()
     fake_redis.set.side_effect = RedisConnectionError("connection refused")
 
-    # set_curation_hold は best-effort で例外を呑む。
-    await set_curation_hold(fake_redis, reason="ai_error_configuration")
+    # set_stage_hold は best-effort で例外を呑む。
+    await set_stage_hold(fake_redis, Stage.CURATION, reason="ai_error_configuration")
 
     metrics = capfire.get_collected_metrics()
     failed = _find_metric(metrics, "vector.curation.hold_set_failed")
@@ -123,13 +126,13 @@ async def test_set_curation_hold_failure_increments_failed_counter(
 
 
 @pytest.mark.asyncio
-async def test_set_curation_hold_failure_does_not_record_success_counter(
+async def test_curation_hold_failure_does_not_record_success_counter(
     capfire: CaptureLogfire,
 ) -> None:
     """失敗経路では ``vector.curation.hold_set`` 成功 counter は increment されない。"""
     fake_redis = AsyncMock()
     fake_redis.set.side_effect = RedisConnectionError("connection refused")
-    await set_curation_hold(fake_redis, reason="ai_error_configuration")
+    await set_stage_hold(fake_redis, Stage.CURATION, reason="ai_error_configuration")
 
     metrics = capfire.get_collected_metrics()
     success = _find_metric(metrics, "vector.curation.hold_set")
@@ -146,11 +149,11 @@ async def test_hold_metrics_attributes_conform_to_declared_vocabulary(
 ) -> None:
     """attribute が {"reason"} key のみで、値は provider error CODE の許可語彙内。
 
-    将来 ``set_curation_hold`` に article_id / URL 等の dynamic 値が流入する
+    将来 ``set_stage_hold`` に article_id / URL 等の dynamic 値が流入する
     regression を、既知文字列の blocklist ではなく許可値域で構造的に検知する。
     """
     fake_redis = AsyncMock()
-    await set_curation_hold(fake_redis, reason="ai_error_configuration")
+    await set_stage_hold(fake_redis, Stage.CURATION, reason="ai_error_configuration")
 
     metrics = capfire.get_collected_metrics()
     assert_attribute_contract(

@@ -23,7 +23,7 @@ from app.audit.ready_build import project_ready_build_failure
 from app.audit.stages.embedding import EmbeddingAuditRepository
 from app.logfire.article_stage import embedding_stage_span
 from app.queue.brokers import broker_embedding
-from app.queue.helpers.stage_hold import set_embedding_hold
+from app.queue.helpers.stage_hold import set_stage_hold
 from app.queue.messages.embedding import EmbeddingTrigger
 from app.queue.retry import is_last_attempt
 from app.redis import get_redis
@@ -122,7 +122,9 @@ async def generate_embedding(
                 provider=embedder.rate_limit_policy.provider,
             )
             if decision.stage_hold_reason is not None:
-                await set_embedding_hold(get_redis(), reason=decision.stage_hold_reason)
+                await set_stage_hold(
+                    get_redis(), Stage.EMBEDDING, reason=decision.stage_hold_reason
+                )
             stage.set_result("failed")
             if decision.reraise:
                 raise
