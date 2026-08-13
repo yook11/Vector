@@ -1,4 +1,7 @@
-"""Redis ZSET スライディングウィンドウ方式のレートリミッターのテスト。"""
+"""Python 側の block 分岐・wait 算術・Lua への引数配線の unit テスト。
+
+Lua スクリプト本体の振る舞いの正本は test_redis_limiter_integration.py。
+"""
 
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -17,12 +20,14 @@ def _make_mock_redis(script_results: list[list]) -> MagicMock:
 
 @pytest.mark.asyncio
 async def test_acquire_succeeds_when_under_limit() -> None:
-    """空きあり: スクリプトが [1, 0, now] を返し acquire が成功する。"""
+    """acquired=1 なら追加の sleep なく return する: スクリプト呼び出しは 1 回きり。"""
     mock_redis = _make_mock_redis([[1, 0, "1000.0"]])
     limiter = SlidingWindowLimiter(
         redis=mock_redis, key="test:rpm", max_requests=10, window_seconds=60
     )
     await limiter.acquire()
+
+    mock_redis.register_script.return_value.assert_awaited_once()
 
 
 @pytest.mark.asyncio
