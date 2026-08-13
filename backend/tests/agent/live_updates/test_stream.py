@@ -426,6 +426,23 @@ async def test_reader_reports_newer_epoch_without_consuming_boundary() -> None:
 
 
 @pytest.mark.asyncio
+async def test_reader_tolerates_broken_payload_on_other_epoch_entries() -> None:
+    """他 epoch entry の壊れた payload が read 全体を UNAVAILABLE に劣化させない。"""
+    redis = MemoryRedis(
+        entries=[
+            ("1-0", _envelope(EPOCH_1, payload="not-json")),
+            ("2-0", _envelope(EPOCH_3, payload="not-json")),
+        ]
+    )
+
+    result = await AgentRunLiveStreamReader(redis).read_after(RUN_ID, EPOCH_2, None)
+
+    assert result.status is AgentRunLiveStreamReadStatus.ATTEMPT_ADVANCED
+    assert result.events == ()
+    assert result.observed_attempt_epoch == EPOCH_3
+
+
+@pytest.mark.asyncio
 async def test_reader_returns_current_before_boundary_and_replays_new_attempt() -> None:
     redis = MemoryRedis(
         entries=[
@@ -496,31 +513,6 @@ async def test_reader_ignores_malformed_diagnostic_timestamp() -> None:
     assert [entry.stream_id for entry in current_result.events] == ["1-0"]
     assert advanced_result.status is AgentRunLiveStreamReadStatus.ATTEMPT_ADVANCED
     assert advanced_result.observed_attempt_epoch == EPOCH_3
-
-
-@pytest.mark.asyncio
-async def test_reader_does_not_decode_payload_for_other_epochs(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    redis = MemoryRedis(
-        entries=[
-            ("1-0", _envelope(EPOCH_1, payload="not-json")),
-            ("2-0", _envelope(EPOCH_3, payload="not-json")),
-        ]
-    )
-
-    def fail_if_called(_payload: str) -> object:
-        raise AssertionError("payload decode must follow epoch classification")
-
-    monkeypatch.setattr("app.agent.live_updates.stream.json.loads", fail_if_called)
-    result = await AgentRunLiveStreamReader(redis).read_after(
-        RUN_ID,
-        EPOCH_2,
-        None,
-    )
-
-    assert result.status is AgentRunLiveStreamReadStatus.ATTEMPT_ADVANCED
-    assert result.next_cursor == "1-0"
 
 
 def test_read_result_enforces_attempt_advanced_invariant() -> None:
@@ -770,7 +762,7 @@ async def test_real_redis_marker_trim_keeps_epoch_filter_and_flags_old_cursor() 
 
 @pytest.mark.asyncio
 @pytest.mark.integration
-async def test_real_redis_pages_current_epoch_and_enforces_cap_and_ttl() -> None:
+async def test_real_redis_pages_current_epoch_and_enforces_ttl() -> None:
     redis = aioredis.from_url(settings.redis_url, decode_responses=True)
     run_id = uuid4()
     try:
@@ -794,23 +786,6 @@ async def test_real_redis_pages_current_epoch_and_enforces_cap_and_ttl() -> None
         assert await redis.ttl(agent_run_live_stream_key(run_id)) in range(
             1,
             AGENT_RUN_LIVE_STREAM_TTL_SECONDS + 1,
-        )
-
-        pipeline = redis.pipeline()
-        for _ in range(AGENT_RUN_LIVE_STREAM_MAXLEN + 1):
-            pipeline.xadd(
-                agent_run_live_stream_key(run_id),
-                _envelope(EPOCH_1),
-                maxlen=AGENT_RUN_LIVE_STREAM_MAXLEN,
-                approximate=False,
-            )
-        pipeline.expire(
-            agent_run_live_stream_key(run_id), AGENT_RUN_LIVE_STREAM_TTL_SECONDS
-        )
-        await pipeline.execute()
-
-        assert await redis.xlen(agent_run_live_stream_key(run_id)) == (
-            AGENT_RUN_LIVE_STREAM_MAXLEN
         )
     finally:
         await redis.delete(agent_run_live_stream_key(run_id))

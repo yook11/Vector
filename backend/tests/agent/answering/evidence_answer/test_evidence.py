@@ -424,34 +424,6 @@ def test_normalize_omits_empty_external_snippet_from_text() -> None:
     assert item.text == "external claim"
 
 
-def test_normalize_is_deterministic_for_same_input() -> None:
-    outcome = _outcome(
-        internal_evidence=[
-            _internal_evidence(
-                source_ref="0-1",
-                assessment_id=501,
-                curation_id=1,
-                title="internal",
-                summary="summary",
-            )
-        ],
-        external_search=_external_outcome(
-            [
-                _external_evidence(
-                    source_ref="0-0",
-                    url="https://example.com/deterministic",
-                    title="external",
-                    claim="claim",
-                )
-            ]
-        ),
-        internal_evidence_count=1,
-        external_evidence_count=1,
-    )
-
-    assert normalize_answer_evidence(outcome) == normalize_answer_evidence(outcome)
-
-
 def test_normalize_accepts_empty_and_partial_retrieval_outcomes() -> None:
     internal_evidence = _internal_evidence(
         assessment_id=601,

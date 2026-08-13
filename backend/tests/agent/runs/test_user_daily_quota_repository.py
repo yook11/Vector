@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-import inspect
 import uuid
 from collections.abc import Callable
 from datetime import UTC, date, datetime
@@ -53,18 +52,6 @@ def _daily_quota_persistence_module() -> ModuleType:
             "app.agent.runs.daily_quota.persistence",
         }:
             pytest.fail("app.agent.runs.daily_quota.persistence is not implemented")
-        raise
-
-
-def _daily_quota_policy_module() -> ModuleType:
-    try:
-        return import_module("app.agent.runs.daily_quota.policy")
-    except ModuleNotFoundError as exc:
-        if exc.name in {
-            "app.agent.runs.daily_quota",
-            "app.agent.runs.daily_quota.policy",
-        }:
-            pytest.fail("app.agent.runs.daily_quota.policy is not implemented")
         raise
 
 
@@ -213,29 +200,6 @@ def _quota_rejection_fields(exc: Exception) -> tuple[date, datetime, datetime, i
     assert isinstance(decided_at, datetime)
     assert isinstance(limit, int)
     return usage_date, observed_at, decided_at, limit
-
-
-def test_create_user_run_does_not_accept_quota_limit_or_clock_inputs() -> None:
-    parameters = inspect.signature(AgentRunRepository.create_user_run).parameters
-
-    assert "limit" not in parameters
-    assert "daily_limit" not in parameters
-    assert "clock" not in parameters
-    assert "clock_expression" not in parameters
-
-
-def test_daily_quota_policy_owns_shared_runtime_constants() -> None:
-    policy = _daily_quota_policy_module()
-
-    assert getattr(policy, "DAILY_REQUEST_LIMIT", None) == _DAILY_LIMIT
-    assert str(getattr(policy, "DAILY_QUOTA_TIMEZONE", None)) == "Asia/Tokyo"
-
-
-def test_daily_quota_statement_builder_has_private_fixed_clock_seam() -> None:
-    parameters = inspect.signature(_reservation_statement_builder()).parameters
-
-    assert list(parameters) == ["user_id", "clock_expression"]
-    assert parameters["clock_expression"].default is None
 
 
 @pytest.mark.asyncio

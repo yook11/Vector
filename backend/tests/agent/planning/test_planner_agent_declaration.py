@@ -387,7 +387,6 @@ def test_planning_attempt_input_is_a_frozen_request_and_repair_contract() -> Non
 
 
 def test_planner_agent_has_immutable_schema_and_no_runtime_state() -> None:
-    agent_module = _agent_module()
     prompts_module = import_module("app.agent.planning.prompts")
     agent = _planner_agent()
     schema = agent.response_schema
@@ -414,7 +413,6 @@ def test_planner_agent_has_immutable_schema_and_no_runtime_state() -> None:
         schema["properties"]["plan_type"]["description"] = "rewritten"
     with pytest.raises(TypeError):
         schema["required"][0] = "rewritten"
-    assert "compute_call_signature" not in getsource(agent_module)
 
 
 def test_agent_response_schema_is_isolated_from_mutable_constructor_aliases() -> None:
@@ -485,16 +483,11 @@ def test_agent_response_schema_rejects_mutable_non_json_leaf() -> None:
 
 
 def test_prompt_declaration_separates_agent_and_time_normalization() -> None:
-    agent_module = _agent_module()
     prompts_module = import_module("app.agent.planning.prompts")
     instructions = _required(prompts_module, "PLANNER_INSTRUCTIONS")
 
     assert _required(prompts_module, "PLANNER_PROMPT_VERSION") == "v7"
     assert isinstance(_required(prompts_module, "_PLANNER_INPUT_TEMPLATE"), str)
-    assert "compute_call_signature" not in getsource(prompts_module)
-    assert "PLANNER_PROMPT_VERSION" in getsource(agent_module)
-    assert "PLANNER_INSTRUCTIONS" in getsource(agent_module)
-    assert "render_planning_input" in getsource(agent_module)
     assert all(
         marker in instructions
         for marker in (

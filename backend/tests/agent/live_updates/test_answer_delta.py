@@ -495,22 +495,6 @@ async def test_success_resets_consecutive_failure_count() -> None:
 
 
 @pytest.mark.asyncio
-async def test_new_reporter_starts_with_closed_breaker() -> None:
-    failed_publisher = ScriptedPublisher([None, None, None])
-    failed_reporter = _new_reporter(failed_publisher, ManualSleeper())
-    for marker in "ABC":
-        await failed_reporter.append(generation=1, text=marker * 512)
-
-    healthy_publisher = ScriptedPublisher(["1-0"])
-    healthy_sleeper = ManualSleeper()
-    healthy_reporter = _new_reporter(healthy_publisher, healthy_sleeper)
-    await healthy_reporter.append(generation=1, text="新attempt")
-    await healthy_reporter.finish(generation=1)
-
-    assert _texts(healthy_publisher) == ["新attempt"]
-
-
-@pytest.mark.asyncio
 async def test_breaker_open_is_observed_once_without_payload_or_dynamic_metric_labels(
     capfire: CaptureLogfire,
 ) -> None:

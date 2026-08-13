@@ -1079,13 +1079,12 @@ async def test_search_classified_internal_failure_keeps_external_outcome(
         timeline=timeline,
     )
 
-    result = await runner.run(
+    await runner.run(
         RunInput(question="NVIDIA の見通しは？", history=()),
         run_context=RUN_CONTEXT,
     )
 
     report = captured[0].task_reports[0]
-    assert not hasattr(result.final_output.plan_summary, "collection_failures")
     assert (report.internal_collection, report.external_collection) == (
         "failed",
         "succeeded",
@@ -1102,7 +1101,7 @@ async def test_zero_internal_hits_remain_successful_under_search(
     """
     timeline: list[str] = []
     captured = _capture_external_outcome(monkeypatch)
-    result = await _runner(
+    await _runner(
         plan=_search_plan(article_search_queries=["NVIDIA"]),
         internal=_InternalSearch(),
         factory=_Factory([_runtime(ScriptedAgentRuntime([_query_draft()]))], timeline),
@@ -1112,7 +1111,6 @@ async def test_zero_internal_hits_remain_successful_under_search(
         run_context=RUN_CONTEXT,
     )
 
-    assert not hasattr(result.final_output.plan_summary, "collection_failures")
     assert captured[0].task_reports[0].internal_collection == "succeeded"
 
 
@@ -1904,7 +1902,6 @@ async def test_all_tasks_incomplete_adds_the_fixed_incomplete_phrase_once(
         run_context=RUN_CONTEXT,
     )
 
-    assert not hasattr(result.final_output.plan_summary, "collection_failures")
     assert result.final_output.status == "insufficient"
     assert (
         "内部記事検索を完了できませんでした" not in result.final_output.missing_aspects
@@ -1951,7 +1948,6 @@ async def test_some_tasks_incomplete_keeps_the_phrase_to_one_line_and_keeps_sour
     await _run(runner)
 
     reports = {report.task_index: report for report in captured[0].task_reports}
-    assert not hasattr(captured[0], "collection_failures")
     # S1: reviewはtask単位のfieldではなくEvidenceCollectionOutcome.reviewへ移動した。
     # task1に候補が残るためRun全体としてreviewerが起動しsucceededになる。
     assert reports[0].internal_collection == "failed"

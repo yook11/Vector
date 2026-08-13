@@ -5,7 +5,6 @@ from __future__ import annotations
 import importlib
 from dataclasses import FrozenInstanceError
 from datetime import UTC, datetime
-from pathlib import Path
 from typing import Any
 
 import pytest
@@ -66,7 +65,6 @@ def test_question_context_prompt_version_lives_next_to_fixed_prompt() -> None:
     assert agent_module.QUESTION_CONTEXT_PROMPT.version == (
         prompts.QUESTION_CONTEXT_PROMPT_VERSION
     )
-    assert 'version="v3"' not in Path(agent_module.__file__).read_text(encoding="utf-8")
 
 
 def test_renderer_uses_only_typed_input_and_preserves_untrusted_boundaries() -> None:
@@ -166,9 +164,3 @@ def test_legacy_question_context_agent_symbols_are_not_available() -> None:
         with pytest.raises(ModuleNotFoundError) as raised:
             importlib.import_module(module_name)
         assert raised.value.name == module_name
-
-
-def test_schema_module_imports_without_loading_removed_adapter() -> None:
-    module = importlib.import_module("app.agent.question_context.ai.schema_tool")
-
-    assert module.QUESTION_CONTEXT_GEMINI_SCHEMA is QUESTION_CONTEXT_GEMINI_SCHEMA

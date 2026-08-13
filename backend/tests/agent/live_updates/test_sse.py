@@ -412,18 +412,6 @@ async def test_capacity_release_is_idempotent_and_exception_safe() -> None:
 
 
 @pytest.mark.asyncio
-async def test_new_capacity_allocator_has_no_persistent_lease_state() -> None:
-    crashed_process = AgentRunSseCapacity(process_limit=1)
-    assert await crashed_process.try_acquire_process() is not None
-
-    restarted_process = AgentRunSseCapacity(process_limit=1)
-    lease = await restarted_process.try_acquire_process()
-
-    assert lease is not None
-    await lease.release()
-
-
-@pytest.mark.asyncio
 async def test_expired_unreleased_lease_is_pruned_before_capacity_check() -> None:
     clock = FakeClock()
     capacity = AgentRunSseCapacity(

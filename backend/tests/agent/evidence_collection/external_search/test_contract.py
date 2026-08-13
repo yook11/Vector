@@ -88,21 +88,6 @@ def test_external_search_date_filter_rejects_start_that_cannot_expand_one_day() 
         )
 
 
-def test_external_search_tool_input_carries_only_resolved_date_filter() -> None:
-    date_filter_type = _required_external_search_attribute("ExternalSearchDateFilter")
-    date_filter = date_filter_type(
-        start_date=date(2026, 6, 1),
-        end_date=date(2026, 6, 2),
-    )
-    tool_input = external_search.ExternalSearchToolInput(
-        query="NVIDIA 発表",
-        limit=3,
-        date_filter=date_filter,
-    )
-
-    assert tool_input.date_filter == date_filter
-
-
 def test_external_query_generation_input_uses_typed_time_window() -> None:
     hints = get_type_hints(external_search.ExternalQueryGenerationInput)
     target_time_window_type = getattr(planning_contract, "TargetTimeWindow", None)

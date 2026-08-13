@@ -5,19 +5,16 @@ from __future__ import annotations
 import importlib
 import inspect
 from datetime import UTC, date, datetime
-from typing import Any, get_args, get_type_hints
+from typing import Any, get_args
 
 import pytest
 from pydantic import ValidationError
 
-from app.agent.agent import Agent
 from app.agent.contract import PRIOR_RESEARCH_CHECKPOINT_LIMIT, ResearchTaskRecord
-from app.agent.planning.service import QuestionPlanningService
 from app.agent.question_context.contract import QuestionContext
 from app.agent.runtime.contract import (
     AgentResponseDefect,
     AgentResponseInvalidError,
-    AgentRuntimeScopeFactory,
 )
 
 
@@ -66,11 +63,6 @@ def _time_window(**payload: object) -> Any:
 def _render_time_window(target_time_window: object) -> str:
     renderer = _required_contract("render_target_time_window")
     return renderer(target_time_window)
-
-
-def _first_input_annotation(method: object) -> object | None:
-    parameter_names = tuple(inspect.signature(method).parameters)
-    return get_type_hints(method).get(parameter_names[1])
 
 
 def test_contract_exports_only_direct_and_search_plan_vocabulary() -> None:
@@ -487,25 +479,6 @@ def test_direct_and_search_plans_are_frozen() -> None:
         search.research_tasks = []
 
 
-def test_search_plan_has_no_flattening_projection_properties() -> None:
-    """保証するテスト条件 19。
-
-    段3でResearcherがtask単位で収集するため、旧consumer向けの平坦化射影
-    (article_search_queries / external_research_tasks)は消える(seam終了)。
-    """
-    search_plan_type = _required_contract("SearchPlan")
-    plan = search_plan_type(
-        research_tasks=[_research_task("根拠を確認する", ["NVIDIA"])],
-    )
-
-    assert (
-        hasattr(search_plan_type, "article_search_queries"),
-        hasattr(search_plan_type, "external_research_tasks"),
-        hasattr(plan, "article_search_queries"),
-        hasattr(plan, "external_research_tasks"),
-    ) == (False, False, False, False)
-
-
 def test_planning_request_is_a_frozen_context_consumer_wrapper() -> None:
     """agent-research-checkpoint-context-slice: PlanningRequestは既存2 fieldに加え、
 
@@ -582,42 +555,6 @@ def test_planning_request_rejects_prior_research_over_the_shared_checkpoint_limi
         request_type(
             context=context, as_of=as_of, prior_research=checkpoints_over_limit
         )
-
-
-def test_planning_boundaries_accept_planning_request() -> None:
-    planner_type = _required_contract("QuestionPlanner")
-    request_type = _required_contract("PlanningRequest")
-
-    assert (
-        tuple(inspect.signature(planner_type.plan).parameters),
-        tuple(inspect.signature(QuestionPlanningService.plan).parameters),
-        _first_input_annotation(planner_type.plan),
-        _first_input_annotation(QuestionPlanningService.plan),
-    ) == (
-        ("self", "request"),
-        ("self", "request"),
-        request_type,
-        request_type,
-    )
-
-
-def test_planning_service_declares_agent_and_runtime_scope_dependencies() -> None:
-    signature = inspect.signature(QuestionPlanningService.__init__)
-    hints = get_type_hints(QuestionPlanningService.__init__)
-
-    assert tuple(signature.parameters) == (
-        "self",
-        "agent",
-        "runtime_scope_factory",
-    )
-    assert (
-        hints["agent"]
-        == Agent[
-            _required_contract("PlanningAttemptInput"),
-            _required_contract("QuestionPlanDraft"),
-        ]
-    )
-    assert hints["runtime_scope_factory"] is AgentRuntimeScopeFactory
 
 
 def test_legacy_planner_draft_boundaries_are_not_exported() -> None:

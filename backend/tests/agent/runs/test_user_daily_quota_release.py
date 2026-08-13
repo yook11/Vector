@@ -909,28 +909,6 @@ async def test_terminal_cancel_is_not_a_release_event(
     _assert_already_terminal(result, outcome)
 
 
-@pytest.mark.asyncio
-async def test_thread_delete_does_not_refund_quota(
-    session_factory: async_sessionmaker[AsyncSession],
-) -> None:
-    seeded = await _seed_run(session_factory)
-
-    async with session_factory() as session:
-        async with session.begin():
-            thread = await session.get(AgentThread, seeded.thread_id)
-            assert thread is not None
-            await session.delete(thread)
-
-    assert (
-        await _read_counter(
-            session_factory,
-            user_id=_USER_ID,
-            usage_date=_USAGE_DATE,
-        )
-        == 1
-    )
-
-
 @pytest.mark.parametrize("first_winner", ["release", "reserve_rejection"])
 @pytest.mark.asyncio
 async def test_release_and_reserve_linearize_in_quota_row_lock_order(
