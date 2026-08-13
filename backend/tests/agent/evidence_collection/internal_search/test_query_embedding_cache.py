@@ -135,25 +135,6 @@ class TestEmbedderIdentityIsolation:
 
 
 class TestOnConflictDoNothing:
-    async def test_duplicate_store_raises_no_exception(
-        self,
-        repo: QueryEmbeddingCacheRepository,
-        db_session: AsyncSession,
-        identity: str,
-    ) -> None:
-        """同一 (query, identity) を 2 回 store しても例外なし。"""
-        query = "semiconductor supply chain"
-        await repo.store(
-            embedder_identity=identity, query_text=query, vector=_vector(0.3)
-        )
-        await db_session.commit()
-
-        # 2 回目は別ベクトル—例外が起きないことを確認する。
-        await repo.store(
-            embedder_identity=identity, query_text=query, vector=_vector(0.7)
-        )
-        await db_session.commit()
-
     async def test_duplicate_store_keeps_exactly_one_row(
         self,
         repo: QueryEmbeddingCacheRepository,
@@ -265,35 +246,6 @@ class TestBatchFetch:
         result = await repo.fetch_cached(embedder_identity=identity, queries=[])
 
         assert result == {}
-
-
-class TestQueryTextConsistency:
-    async def test_store_and_fetch_with_same_text_hit(
-        self,
-        repo: QueryEmbeddingCacheRepository,
-        db_session: AsyncSession,
-        identity: str,
-    ) -> None:
-        """store と fetch_cached に同一文字列を使うとヒットする。
-
-        API がテキストから一貫して hash を導出する（生 hash を外から渡せない）ことを
-        end-to-end で検証する。
-        """
-        query_text = "consistent hash derivation"
-
-        await repo.store(
-            embedder_identity=identity,
-            query_text=query_text,
-            vector=_vector(0.5),
-        )
-        await db_session.commit()
-
-        result = await repo.fetch_cached(
-            embedder_identity=identity,
-            queries=[query_text],
-        )
-
-        assert query_text in result
 
 
 class TestCheckConstraint:

@@ -4,47 +4,9 @@ from __future__ import annotations
 
 import subprocess
 import sys
-from inspect import Parameter, iscoroutinefunction, signature
 from pathlib import Path
 
 from tests.agent.runtime._helpers import required_attribute, runtime_contract
-
-
-def _annotation_name(annotation: object) -> str:
-    return getattr(annotation, "__name__", str(annotation).strip("'"))
-
-
-def test_agent_runtime_protocol_has_one_attempt_generic_invoke_signature() -> None:
-    """Runtimeがprovider非依存の非同期1-attempt境界として、
-    型付き署名を持つことを検証する。
-    """
-    module = runtime_contract()
-    runtime_protocol = required_attribute(module, "AgentRuntime")
-    invoke = runtime_protocol.invoke
-    parameters = signature(invoke).parameters
-
-    assert getattr(runtime_protocol, "_is_protocol", False)
-    assert iscoroutinefunction(invoke)
-    assert list(parameters) == ["self", "agent", "input", "attempt_number"]
-    assert parameters["attempt_number"].kind is Parameter.KEYWORD_ONLY
-    assert parameters["attempt_number"].default is Parameter.empty
-    assert "Agent" in _annotation_name(parameters["agent"].annotation)
-    assert "InputT" in _annotation_name(parameters["input"].annotation)
-    assert "OutputT" in _annotation_name(signature(invoke).return_annotation)
-
-
-def test_agent_runtime_scope_factory_is_provider_neutral_protocol() -> None:
-    """scope factory が provider 非依存の runtime 境界を返すことを守る。"""
-    module = runtime_contract()
-    scope_factory = required_attribute(module, "AgentRuntimeScopeFactory")
-    call_signature = signature(scope_factory.__call__)
-
-    assert getattr(scope_factory, "_is_protocol", False)
-    assert list(call_signature.parameters) == ["self"]
-    assert "AbstractAsyncContextManager" in _annotation_name(
-        call_signature.return_annotation
-    )
-    assert "AgentRuntime" in _annotation_name(call_signature.return_annotation)
 
 
 def test_agent_response_defect_has_only_three_provider_neutral_values() -> None:

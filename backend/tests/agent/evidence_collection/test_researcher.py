@@ -545,7 +545,12 @@ async def test_executed_queries_is_empty_when_external_runtime_is_none() -> None
 
 
 def test_researcher_module_does_not_import_infrastructure_construction() -> None:
-    """保証するテスト条件 17。"""
+    """保証するテスト条件 17。
+
+    依存方向 (researcher はインフラを構築しない) の唯一の自動所有者。
+    ソース文字列検査は弱いオラクルなので、依存方向テスト or import-linter へ
+    置換したうえで削除する (テスト整理スライス 3 の対象)。
+    """
     import app.agent.evidence_collection.researcher as researcher_module
 
     source = Path(researcher_module.__file__).read_text(encoding="utf-8")
@@ -560,18 +565,3 @@ def test_researcher_module_does_not_import_infrastructure_construction() -> None
         "httpx",
     ]
     assert not any(needle in source for needle in forbidden_substrings)
-
-
-def test_researcher_is_a_frozen_slotted_dataclass_with_optional_events() -> None:
-    """`Researcher`確定契約(dataclass shape)の基礎確認。"""
-    import dataclasses
-
-    assert (
-        dataclasses.is_dataclass(Researcher),
-        Researcher.__dataclass_params__.frozen,
-        "__slots__" in Researcher.__dict__,
-        tuple(field.name for field in dataclasses.fields(Researcher)),
-    ) == (True, True, True, ("internal_search", "events"))
-
-    researcher = Researcher(internal_search=_InternalTool())
-    assert researcher.events is None

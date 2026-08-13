@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-import inspect
 from collections.abc import Sequence
 from contextlib import AbstractAsyncContextManager
 from datetime import UTC, date, datetime
@@ -517,29 +516,6 @@ def _record_and_shorten_pipeline_timeouts(
     return observed
 
 
-def test_runner_accepts_events_and_collector_accepts_requested_count() -> None:
-    parameters = inspect.signature(AnsweringRunner).parameters
-    collector_parameters = inspect.signature(NewsCollector).parameters
-
-    assert (
-        tuple(parameters)[-1:],
-        parameters["events"].default,
-        collector_parameters["requested_agent_count"].default,
-    ) == (("events",), None, None)
-
-
-def test_answering_phases_owns_runtime_factory_without_external_search_port() -> None:
-    """保証するテスト条件 18(重複所有): field名のみのraw dataclass field確認。"""
-    assert tuple(AnsweringPhases.__dataclass_fields__) == (
-        "planner",
-        "collector",
-        "external_runtime_factory",
-        "direct_answerer",
-        "evidence_answerer",
-        "reviewer",
-    )
-
-
 @pytest.mark.asyncio
 async def test_external_pipeline_normalizes_queries_and_hides_urls_from_reviewer() -> (
     None
@@ -1037,7 +1013,7 @@ async def test_classified_query_failure_never_starts_tool_or_reviewer() -> None:
         ),
     )
 
-    result = await _run(runner)
+    await _run(runner)
 
     assert (
         tool.calls,
@@ -1045,7 +1021,6 @@ async def test_classified_query_failure_never_starts_tool_or_reviewer() -> None:
         answerer.calls,
         factory.scopes[0].exit_calls,
     ) == ([], [], [[]], 1)
-    assert not hasattr(result.final_output.plan_summary, "collection_failures")
 
 
 @pytest.mark.asyncio

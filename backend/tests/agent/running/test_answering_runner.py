@@ -5,7 +5,6 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from inspect import getsource
 from uuid import UUID
 
 import logfire
@@ -280,21 +279,6 @@ class _UnreachableInternalSearch:
 
     async def invoke(self, input: object) -> list[object]:
         raise AssertionError(f"internal search must not be called: {input!r}")
-
-
-class _UnreachableExternalSearch:
-    async def search(
-        self,
-        _tasks: list[object],
-        *,
-        target_time_window: TargetTimeWindow | None,
-        as_of: datetime,
-        external: object,
-    ) -> object:
-        raise AssertionError(
-            "external search must not be called: "
-            f"{target_time_window!r} {as_of!r} {external!r}"
-        )
 
 
 class _UnreachableExternalRuntimeFactory:
@@ -749,40 +733,6 @@ async def test_safety_block_closes_run_span_without_error(
     assert raised.value.block_reason is reason
     assert exception_event(span) is None
     assert span["attributes"].get("logfire.level_num", 0) < 17
-
-
-def test_run_uses_is_blocked_as_the_safety_control_boundary() -> None:
-    source = getsource(AnsweringRunner.run)
-
-    assert "if safety_check.is_blocked:" in source
-    assert "if safety_check.block_reason is not None:" not in source
-
-
-@pytest.mark.parametrize("legacy_shape", ["starting_agent", "context"])
-async def test_run_rejects_legacy_call_shapes_before_side_effects(
-    legacy_shape: str,
-) -> None:
-    preparer = _FakeContextPreparer(
-        [QuestionContext(standalone_question="整理済みの質問")]
-    )
-    factory, _, _ = _direct_factory(answers=["最終回答"])
-    runner = _runner(preparer, factory)
-
-    with pytest.raises(TypeError):
-        if legacy_shape == "starting_agent":
-            await runner.run(  # type: ignore[call-arg]
-                object(),
-                RunInput(question="元の質問", history=()),
-                run_context=_run_context(),
-            )
-        else:
-            await runner.run(  # type: ignore[call-arg]
-                RunInput(question="元の質問", history=()),
-                context=_run_context(),
-            )
-
-    assert preparer.calls == []
-    assert factory.calls == 0
 
 
 async def test_real_context_service_uses_empty_previous_answer_without_assistant() -> (

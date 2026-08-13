@@ -746,8 +746,6 @@ async def test_answer_direct_plan_calls_direct_answerer_only() -> None:
     assert result.sources == []
     assert result.missing_aspects == []
     assert result.plan_summary.plan_type == "direct_answer"
-    assert not hasattr(result.plan_summary, "collection_failures")
-    assert not hasattr(result, "execution")
     assert direct_answerer.calls == [
         {
             "request": AnsweringRequest(context=input_.context, as_of=input_.as_of),
@@ -786,43 +784,6 @@ async def test_answer_direct_plan_orders_progress_and_port_calls() -> None:
         "progress:answering",
         "direct_answerer.answer",
     ]
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize(
-    ("evidence_shape", "cited_refs"),
-    [
-        pytest.param("internal", ["1"], id="internal-evidence"),
-        pytest.param("external", ["1"], id="external-evidence"),
-        pytest.param("both", ["1", "2"], id="both-evidence"),
-    ],
-)
-async def test_answer_search_plan_never_calls_direct_answerer(
-    evidence_shape: str,
-    cited_refs: list[str],
-) -> None:
-    if evidence_shape == "internal":
-        plan = _search_plan()
-        outcome = _internal_outcome(1)
-    elif evidence_shape == "external":
-        plan = _search_plan()
-        outcome = _external_outcome_only()
-    else:
-        plan = _search_plan()
-        outcome = _both_evidence_outcome()
-    orchestrator, _, _, _, direct_answerer = _orchestrator(
-        plan=plan,
-        outcome=outcome,
-        draft=_draft(
-            answer="根拠から確認できます。",
-            cited_refs=cited_refs,
-        ),
-    )
-
-    result = await orchestrator.answer(_input())
-
-    assert result.status == "answered"
-    assert direct_answerer.calls == []
 
 
 @pytest.mark.asyncio

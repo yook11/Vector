@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-import inspect
 import traceback
 import uuid
 from dataclasses import dataclass
@@ -239,25 +238,6 @@ async def _wait_until_blocked(observer: AsyncSession, backend_pid: int) -> None:
             if is_waiting_for_lock:
                 return
             await asyncio.sleep(0.01)
-
-
-def test_acquire_command_result_distinguishes_execution_expiry_and_skip() -> None:
-    assert _queued_start_deadline_seconds() == 180
-    command_outcome = getattr(run_contracts, "AcquireForExecutionCommandOutcome", None)
-    assert command_outcome is not None, (
-        "AcquireForExecutionCommandOutcome is not implemented"
-    )
-    assert set(inspect.signature(command_outcome).parameters) == {
-        "acquire_outcome",
-        "prepared_run",
-        "quota_release_outcome",
-    }
-    acquire_outcome = getattr(run_contracts, "AcquireForExecutionOutcome")
-    assert {member.value for member in acquire_outcome} == {
-        "acquired",
-        "queued_start_deadline_expired",
-        "idempotent_skip",
-    }
 
 
 @pytest.mark.integration

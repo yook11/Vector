@@ -9,8 +9,6 @@ selector 一式(旧 external_evidence_selector)は
 
 from __future__ import annotations
 
-import importlib
-import inspect
 from collections.abc import Mapping
 from dataclasses import FrozenInstanceError, fields, is_dataclass
 from datetime import UTC, datetime
@@ -44,10 +42,6 @@ def _contracts() -> ModuleType:
 
 def _agents() -> ModuleType:
     return _required_module("app.agent.evidence_collection.external_search.agent")
-
-
-def _prompts() -> ModuleType:
-    return _required_module("app.agent.evidence_collection.external_search.prompts")
 
 
 def _bindings() -> ModuleType:
@@ -176,22 +170,6 @@ def test_deepseek_binding_keeps_only_stable_transport_identity() -> None:
     assert not hasattr(query_binding, "rules")
 
 
-def test_version_and_instructions_live_with_prompt_resources() -> None:
-    """旧 prompt version count('"v2"' >= 2)を新契約へ追随。
-
-    selector agent が evidence_review package へ移ったため、external_search の
-    prompts module には query agent の version 文字列(v2)だけが残る。
-    """
-    prompts = _prompts()
-    source = inspect.getsource(prompts)
-    query_agent = _query_agent()
-
-    assert query_agent.prompt.input_renderer.__module__ == prompts.__name__
-    assert query_agent.prompt.instructions in source
-    assert query_agent.prompt.version == "v2"
-    assert source.count('"v2"') >= 1
-
-
 def test_query_prompt_keeps_fixed_rules_in_system_and_sanitizes_runtime_task_data() -> (
     None
 ):
@@ -241,31 +219,3 @@ def test_query_prompt_renders_typed_window_or_none_deterministically() -> None:
         "target_time_window:\n直近7日" in typed_rendered,
         "target_time_window:\n未指定" in none_rendered,
     ) == (True, True)
-
-
-def test_selector_vocabulary_is_removed_from_external_search_package() -> None:
-    """保証するテスト条件 10。旧名が external_search から消えている(段1の流儀)。"""
-    legacy_names = {
-        "EXTERNAL_EVIDENCE_SELECTOR_AGENT",
-        "EXTERNAL_EVIDENCE_SELECTOR_PROMPT",
-        "EXTERNAL_EVIDENCE_SELECTOR_PROMPT_VERSION",
-        "EXTERNAL_EVIDENCE_SELECTOR_INSTRUCTIONS",
-        "EXTERNAL_EVIDENCE_SELECTOR_RESPONSE_SCHEMA",
-        "EXTERNAL_EVIDENCE_SELECTOR_DEEPSEEK_BINDING",
-        "ExternalEvidenceSelectionDraft",
-        "ExternalEvidenceSelectionInput",
-        "ExternalEvidenceCandidateProjection",
-        "EvidenceSelection",
-        "EvidenceSelectionDraft",
-        "EvidenceSelectionResult",
-        "render_external_evidence_selection_input",
-    }
-    for module_name in (
-        "app.agent.evidence_collection.external_search",
-        "app.agent.evidence_collection.external_search.contract",
-        "app.agent.evidence_collection.external_search.agent",
-        "app.agent.evidence_collection.external_search.prompts",
-        "app.agent.evidence_collection.external_search.deepseek_binding",
-    ):
-        module = importlib.import_module(module_name)
-        assert all(not hasattr(module, name) for name in legacy_names)

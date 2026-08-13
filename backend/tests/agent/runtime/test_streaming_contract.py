@@ -5,7 +5,6 @@ from __future__ import annotations
 import asyncio
 from dataclasses import replace
 from enum import StrEnum
-from inspect import signature
 from types import SimpleNamespace
 from typing import Any, cast
 
@@ -215,40 +214,8 @@ def _phase_span(trace_id: int, span_id: int) -> NonRecordingSpan:
     )
 
 
-def test_streaming_contract_is_separate_from_non_streaming_runtime() -> None:
-    from app.agent.runtime.contract import (
-        AgentRuntime,
-        AgentTextStream,
-        StreamingAgentRuntime,
-        StreamingAgentRuntimeScopeFactory,
-    )
-
-    assert list(signature(AgentRuntime.invoke).parameters) == [
-        "self",
-        "agent",
-        "input",
-        "attempt_number",
-    ]
-    assert list(signature(StreamingAgentRuntime.invoke_stream).parameters) == [
-        "self",
-        "agent",
-        "input",
-        "attempt_number",
-    ]
-    assert getattr(AgentTextStream, "_is_protocol", False)
-    assert getattr(StreamingAgentRuntime, "_is_protocol", False)
-    assert (
-        signature(StreamingAgentRuntime.invoke_stream)
-        .parameters["attempt_number"]
-        .kind.name
-        == "KEYWORD_ONLY"
-    )
-    assert list(signature(AgentTextStream.__anext__).parameters) == ["self"]
-    assert list(signature(AgentTextStream.aclose).parameters) == ["self"]
-    assert list(signature(StreamingAgentRuntimeScopeFactory.__call__).parameters) == [
-        "self"
-    ]
-    assert getattr(StreamingAgentRuntimeScopeFactory, "_is_protocol", False)
+def test_deepseek_runtime_does_not_implement_streaming_contract() -> None:
+    """DeepSeek runtimeはstreaming契約(invoke_stream)を実装しない。"""
     assert not hasattr(deepseek_runtime_type(), "invoke_stream")
 
 

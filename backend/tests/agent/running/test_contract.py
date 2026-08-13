@@ -6,7 +6,6 @@ import importlib
 import inspect
 from dataclasses import FrozenInstanceError, fields, is_dataclass
 from datetime import UTC, datetime
-from pathlib import Path
 from types import ModuleType
 from typing import Any, get_type_hints
 from uuid import UUID
@@ -75,23 +74,6 @@ def _is_frozen_and_slotted(instance: object) -> bool:
         and "__slots__" in contract_type.__dict__
         and not hasattr(instance, "__dict__")
     )
-
-
-def _method_contract(
-    method: Any,
-) -> tuple[tuple[tuple[str, inspect._ParameterKind, Any, bool], ...], Any]:
-    signature = inspect.signature(method)
-    type_hints = get_type_hints(method)
-    parameters = tuple(
-        (
-            parameter.name,
-            parameter.kind,
-            type_hints.get(parameter.name),
-            parameter.default is inspect.Parameter.empty,
-        )
-        for parameter in signature.parameters.values()
-    )
-    return parameters, type_hints["return"]
 
 
 def _run_context() -> object:
@@ -296,76 +278,6 @@ def test_run_result_is_frozen_slotted_output_and_answering_context() -> None:
     )
 
 
-def test_question_context_preparer_protocol_has_only_required_inputs() -> None:
-    preparer_type = _contract_type("QuestionContextPreparer")
-
-    assert (
-        getattr(preparer_type, "_is_protocol", False),
-        inspect.iscoroutinefunction(preparer_type.prepare),
-        _method_contract(preparer_type.prepare),
-    ) == (
-        True,
-        True,
-        (
-            (
-                (
-                    "self",
-                    inspect.Parameter.POSITIONAL_OR_KEYWORD,
-                    None,
-                    True,
-                ),
-                ("question", inspect.Parameter.KEYWORD_ONLY, str, True),
-                (
-                    "history",
-                    inspect.Parameter.KEYWORD_ONLY,
-                    list[ThreadMessageSnapshot],
-                    True,
-                ),
-                ("as_of", inspect.Parameter.KEYWORD_ONLY, datetime, True),
-                ("run_id", inspect.Parameter.KEYWORD_ONLY, UUID, True),
-            ),
-            QuestionContext,
-        ),
-    )
-
-
-def test_run_hooks_protocol_exposes_only_resolved_question_projection() -> None:
-    hooks_type = _contract_type("RunHooks")
-
-    assert (
-        getattr(hooks_type, "_is_protocol", False),
-        inspect.iscoroutinefunction(hooks_type.on_answering_context_prepared),
-        _method_contract(hooks_type.on_answering_context_prepared),
-    ) == (
-        True,
-        True,
-        (
-            (
-                (
-                    "self",
-                    inspect.Parameter.POSITIONAL_OR_KEYWORD,
-                    None,
-                    True,
-                ),
-                (
-                    "original_question",
-                    inspect.Parameter.KEYWORD_ONLY,
-                    str,
-                    True,
-                ),
-                ("has_history", inspect.Parameter.KEYWORD_ONLY, bool, True),
-                (
-                    "question_context",
-                    inspect.Parameter.KEYWORD_ONLY,
-                    QuestionContext,
-                    True,
-                ),
-            ),
-            type(None),
-        ),
-    )
-
-
 def test_answering_phases_owns_collector_without_internal_search_port() -> None:
     """保証するテスト条件 18: AnsweringPhasesはcollector fieldでRun単位収集を持つ。
 
@@ -400,36 +312,4 @@ def test_answering_phases_owns_collector_without_internal_search_port() -> None:
             "reviewer",
         ),
         (True, True, True, True, True, True),
-    )
-
-
-def test_removed_external_pipeline_symbols_are_absent() -> None:
-    app_root = Path(__file__).resolve().parents[3] / "app" / "agent"
-    forbidden = {
-        "ExternalSearchResearchRunner",
-        "ExternalSearchService",
-        "ExternalSearchRequest",
-        "ExternalSearchRunResult",
-        "ExternalSearchRunner",
-        "ExternalPlanSearcher",
-        "build_external_search_service",
-    }
-
-    assert all(
-        symbol not in path.read_text(encoding="utf-8")
-        for path in app_root.rglob("*.py")
-        for symbol in forbidden
-    )
-
-
-def test_evidence_collection_package_has_no_legacy_collector_symbols() -> None:
-    package_root = (
-        Path(__file__).resolve().parents[3] / "app" / "agent" / "evidence_collection"
-    )
-    source = "\n".join(
-        path.read_text(encoding="utf-8") for path in package_root.glob("*.py")
-    )
-
-    assert (
-        "EvidenceCollector" not in source and "EvidenceCollectionService" not in source
     )

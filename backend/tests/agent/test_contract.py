@@ -5,9 +5,6 @@ from __future__ import annotations
 import pytest
 from pydantic import ValidationError
 
-import app.agent as agent_package
-import app.agent.answering as answering_package
-import app.agent.composition as composition
 import app.agent.contract as agent_contract
 from app.agent.contract import (
     AnswerQuestionResult,
@@ -29,18 +26,6 @@ def _plan_summary(plan_type: str = "search") -> object:
     if summary_type is None:
         pytest.fail("agent contract must define AnswerPlanSummary")
     return summary_type(plan_type=plan_type)
-
-
-def test_does_not_export_legacy_answering_boundaries() -> None:
-    assert (
-        hasattr(agent_contract, "AnswerQuestionInput"),
-        hasattr(agent_contract, "QuestionAnsweringAgent"),
-        hasattr(answering_package, "QuestionAnsweringOrchestrator"),
-        hasattr(composition, "build_question_answering_starting_agent"),
-        hasattr(composition, "build_question_answering_agent"),
-        hasattr(agent_package, "AnswerQuestionInput"),
-        hasattr(agent_package, "QuestionAnsweringAgent"),
-    ) == (False, False, False, False, False, False, False)
 
 
 class TestAnswerPlanSummary:

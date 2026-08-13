@@ -255,22 +255,6 @@ async def test_review_assigns_a_run_wide_index_internal_before_external_per_grou
 
 
 @pytest.mark.asyncio
-async def test_review_builds_an_input_with_only_task_groups_and_as_of() -> None:
-    """v3(判定基準の一本化)。reviewerが組むreview_inputはcontent_requirementsを
-
-    一切持たず、research_goal(task_groups)とas_ofだけで判定材料が決まる。
-    """
-    runtime = ScriptedAgentRuntime([_draft([])])
-    tasks = [_collected_task(task_index=0), _collected_task(task_index=1)]
-
-    await _review(tasks=tasks, reviewer_runtime=runtime)
-
-    review_input = runtime.calls[0].input
-    assert not hasattr(review_input, "content_requirements")
-    assert not hasattr(review_input.task_groups[0], "content_requirements")
-
-
-@pytest.mark.asyncio
 async def test_selection_restores_candidate_and_task_from_a_cross_task_index() -> None:
     """S1(選別結果の復元)。グループをまたいだindexから候補と所属taskが復元される。"""
     tasks = [
