@@ -42,6 +42,20 @@ def sum_counter_for_result(
     )
 
 
+def attributes_of(metrics: list[dict[str, Any]], name: str) -> dict[str, Any]:
+    """``name`` metric の唯一の data point が持つ attribute dict を返す。
+
+    呼び出し側が ``== {...}`` で突き合わせると、attribute key 集合の正確さと、
+    recorder へ渡した値が載ったこと (伝播) を 1 つの assert で固定できる。emit を 1 回
+    だけ起こすテスト用で、data point が 0 件 / 複数件なら期待が崩れるため fail する。
+    """
+    metric = _find(metrics, name)
+    assert metric is not None, f"{name} が exporter に届かない"
+    data_points = metric["data"]["data_points"]
+    assert len(data_points) == 1, f"{name} の data point が {len(data_points)} 件"
+    return dict(data_points[0].get("attributes", {}))
+
+
 def counter_attribute_key_sets(
     metrics: list[dict[str, Any]], name: str
 ) -> list[set[str]]:

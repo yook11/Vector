@@ -1,16 +1,17 @@
-"""``app/agent/live_updates/metrics.py`` の emit 契約 oracle (正本)。
+"""agent run の SSE 配信が Logfire に残す観測記録の契約 (正本)。
 
-検証する不変条件:
-- close は宣言された close reason すべてを attribute として通す (語彙の取りこぼしなし)
-- close は件数 (connection_close) と滞留時間 (connection_duration) を同一 reason で
-  同時に記録する。片方だけ落ちると切断分析が件数と時間で食い違う
-- capacity rejection は宣言された scope すべてを通す
-- open / close が active_connections を ±1 で釣り合わせる
-- attribute は宣言語彙のみで、run_id / user_id 等の ID を載せない
+運用者は Logfire だけを見て「今何本繋がっているか」「なぜ切れたか」「どの上限で
+断られたか」を答える (SSE metric を読む CloudWatch alarm は無い)。本ファイルはその
+答えが信用できる状態を固定する。
 
-sibling の ``answer_delta.breaker_open`` / ``execution_probe.unavailable`` は
-``tests/agent/live_updates/test_answer_delta.py`` /
-``tests/agent/runs/test_execution_probe.py`` が正本なので本ファイルでは扱わない。
+対象は 2 つのシーム:
+
+1. recorder が渡された値を attribute としてどう載せるか
+2. 接続の一巡 (取得 → 配信開始 → 解放) で active_connections が釣り合うか
+
+「どの状況でどの close reason を渡すか」は ``test_sse.py`` が recorder を patch して
+所有しているため、ここでは扱わない。capacity の上限判定そのもの (拒否時に返る enum) も
+``test_sse.py`` の所有。
 
 capfire が ``logfire.configure`` を自前で呼ぶため setup_logfire は呼ばない。counter は
 DELTA temporality で二度読みできないため、metric は 1 テスト 1 回だけ読む。
@@ -18,7 +19,8 @@ DELTA temporality で二度読みできないため、metric は 1 テスト 1 �
 
 from __future__ import annotations
 
-from typing import get_args
+from typing import Any, get_args
+from uuid import uuid4
 
 import pytest
 from logfire.testing import CaptureLogfire
@@ -28,13 +30,10 @@ from app.agent.live_updates.metrics import (
     AgentRunSseCloseReason,
     record_agent_run_sse_capacity_rejection,
     record_agent_run_sse_close,
-    record_agent_run_sse_open,
     record_agent_run_sse_projection_drop,
 )
-from tests.logfire._metric_helpers import (
-    assert_attribute_contract,
-    collected_metrics,
-)
+from app.agent.live_updates.sse import AgentRunSseCapacity
+from tests.logfire._metric_helpers import attributes_of, collected_metrics
 
 _ACTIVE_METRIC = "vector.agent.sse.active_connections"
 _CLOSE_METRIC = "vector.agent.sse.connection_close"
@@ -45,123 +44,149 @@ _PROJECTION_DROP_METRIC = "vector.agent.sse.projection_drop"
 _ALL_CLOSE_REASONS = get_args(AgentRunSseCloseReason)
 _ALL_CAPACITY_SCOPES = get_args(AgentRunSseCapacityScope)
 
-# projection drop は allowlist 外イベントという単一原因しか持たないため
-# production が固定値で emit する (metrics.py の record_agent_run_sse_projection_drop)。
-_PROJECTION_DROP_REASON = "unknown_event"
-
 _ANY_DURATION_SECONDS = 1.5
 
 
-# close: 宣言語彙を全数流して attribute 契約を確かめる
-# (値域 oracle は許可語彙を 1 値だけ流すと空虚になるため全数 parametrize する)
+def _sum_values(metrics: list[dict[str, Any]], name: str) -> int:
+    """``name`` metric の全 data point 合計。未収集は期待が崩れるため fail する。"""
+    metric = next((m for m in metrics if m["name"] == name), None)
+    assert metric is not None, f"{name} が exporter に届かない"
+    return sum(int(point["value"]) for point in metric["data"]["data_points"])
+
+
+# 切断の記録 — 「なぜ切れたか」と「どのくらい繋がっていたか」を突き合わせられること
+
+
+def test_close_emits_count_and_duration_with_the_same_reason(
+    capfire: CaptureLogfire,
+) -> None:
+    """1 回の切断が件数と滞留時間を同じ reason で残す。
+
+    片方だけ落ちると reason 別の平均接続時間が出せなくなる。
+    """
+    reason = "client_disconnect"
+
+    record_agent_run_sse_close(
+        duration_seconds=_ANY_DURATION_SECONDS,
+        reason=reason,
+    )
+
+    metrics = collected_metrics(capfire)
+    assert attributes_of(metrics, _CLOSE_METRIC) == {"reason": reason}
+    assert attributes_of(metrics, _DURATION_METRIC) == {"reason": reason}
 
 
 @pytest.mark.parametrize("reason", _ALL_CLOSE_REASONS)
-def test_close_count_attributes_conform_for_every_declared_reason(
+def test_every_declared_close_reason_reaches_the_metric(
     capfire: CaptureLogfire, reason: str
 ) -> None:
-    """connection_close の attribute は reason key のみ、値は宣言語彙内。"""
+    """宣言済みの切断理由はすべて Logfire 側の reason として現れる。
+
+    理由を足したのに metric に出ず、切断の内訳が読めない状態を防ぐ。
+    """
     record_agent_run_sse_close(
         duration_seconds=_ANY_DURATION_SECONDS,
         reason=reason,  # type: ignore[arg-type]
     )
 
-    assert_attribute_contract(
-        collected_metrics(capfire),
-        _CLOSE_METRIC,
-        allowed={"reason": _ALL_CLOSE_REASONS},
-    )
+    assert attributes_of(collected_metrics(capfire), _CLOSE_METRIC) == {
+        "reason": reason
+    }
 
 
-@pytest.mark.parametrize("reason", _ALL_CLOSE_REASONS)
-def test_close_duration_attributes_conform_for_every_declared_reason(
-    capfire: CaptureLogfire, reason: str
-) -> None:
-    """connection_duration の attribute も reason key のみ、値は宣言語彙内。"""
-    record_agent_run_sse_close(
-        duration_seconds=_ANY_DURATION_SECONDS,
-        reason=reason,  # type: ignore[arg-type]
-    )
-
-    assert_attribute_contract(
-        collected_metrics(capfire),
-        _DURATION_METRIC,
-        allowed={"reason": _ALL_CLOSE_REASONS},
-    )
-
-
-def test_close_records_count_and_duration_together(capfire: CaptureLogfire) -> None:
-    """1 回の close で件数と滞留時間が揃って出る (片肺で切断分析が食い違わない)。"""
-    record_agent_run_sse_close(
-        duration_seconds=_ANY_DURATION_SECONDS, reason="terminal"
-    )
-
-    emitted = {metric["name"] for metric in collected_metrics(capfire)}
-    assert {_CLOSE_METRIC, _DURATION_METRIC} <= emitted
-
-
-# capacity rejection: 宣言 scope を全数流す
+# 受け入れ拒否の記録 — 「どの上限に当たったか」が分かること
 
 
 @pytest.mark.parametrize("scope", _ALL_CAPACITY_SCOPES)
-def test_capacity_rejection_attributes_conform_for_every_declared_scope(
+def test_capacity_rejection_reports_which_limit_was_hit(
     capfire: CaptureLogfire, scope: str
 ) -> None:
-    """capacity_rejection の attribute は scope key のみ、値は宣言語彙内。"""
+    """接続を断ったときは run / user / process のどの上限かが残る。"""
     record_agent_run_sse_capacity_rejection(scope=scope)  # type: ignore[arg-type]
 
-    assert_attribute_contract(
-        collected_metrics(capfire),
-        _CAPACITY_METRIC,
-        allowed={"scope": _ALL_CAPACITY_SCOPES},
-    )
+    assert attributes_of(collected_metrics(capfire), _CAPACITY_METRIC) == {
+        "scope": scope
+    }
 
 
-# projection drop: 単一原因の固定 reason
+# 配信漏れの記録 — 原因が allowlist 1 つに限られること
 
 
-def test_projection_drop_attributes_conform_to_fixed_reason(
+def test_projection_drop_reports_the_allowlist_as_the_only_cause(
     capfire: CaptureLogfire,
 ) -> None:
-    """projection_drop の attribute は固定 reason 1 値のみ。"""
+    """公開 allowlist で落としたイベントは単一原因として残る。
+
+    reason 値は production が固定で渡す wire 値 (metrics.py が SSoT)。
+    """
     record_agent_run_sse_projection_drop()
 
-    assert_attribute_contract(
-        collected_metrics(capfire),
-        _PROJECTION_DROP_METRIC,
-        allowed={"reason": {_PROJECTION_DROP_REASON}},
-    )
+    assert attributes_of(collected_metrics(capfire), _PROJECTION_DROP_METRIC) == {
+        "reason": "unknown_event"
+    }
 
 
-# active connections: 接続数の増減と、ID を載せない契約
+# 接続数の釣り合い — active_connections が「今何本繋がっているか」を答えられること
 
 
-def test_open_increments_active_connections(capfire: CaptureLogfire) -> None:
-    """open 1 回で active_connections が +1。"""
-    record_agent_run_sse_open()
-
-    assert _sum_active(collected_metrics(capfire)) == 1
-
-
-def test_close_decrements_active_connections(capfire: CaptureLogfire) -> None:
-    """close 1 回で active_connections が -1 (open と釣り合う)。"""
-    record_agent_run_sse_close(
-        duration_seconds=_ANY_DURATION_SECONDS, reason="terminal"
-    )
-
-    assert _sum_active(collected_metrics(capfire)) == -1
+async def _acquire_streaming_lease(capacity: AgentRunSseCapacity):
+    """配信開始まで進んだ lease を返す (取得 → 所有権 → 配信開始)。"""
+    lease = await capacity.try_acquire_process()
+    assert lease is not None
+    assert await lease.try_acquire_owned(run_id=uuid4(), user_id=uuid4()) is None
+    await lease.mark_stream_started()
+    return lease
 
 
-def test_active_connections_carries_no_attributes(capfire: CaptureLogfire) -> None:
-    """active_connections は attribute を持たない (run_id / user_id を載せない)。"""
-    record_agent_run_sse_open()
+@pytest.mark.asyncio
+async def test_completed_stream_returns_active_connections_to_zero(
+    capfire: CaptureLogfire,
+) -> None:
+    """接続の一巡で active_connections が 0 に戻る。
 
-    assert_attribute_contract(collected_metrics(capfire), _ACTIVE_METRIC, allowed={})
+    解放が漏れると値が単調増加し、接続数として読めなくなる。
+    """
+    capacity = AgentRunSseCapacity()
+    lease = await _acquire_streaming_lease(capacity)
+    lease.mark_close_reason("terminal")
+
+    await lease.release()
+
+    assert _sum_values(collected_metrics(capfire), _ACTIVE_METRIC) == 0
 
 
-def _sum_active(metrics: list[dict[str, object]]) -> int:
-    """active_connections gauge の全 data point 合計。"""
-    metric = next((m for m in metrics if m["name"] == _ACTIVE_METRIC), None)
-    assert metric is not None, f"{_ACTIVE_METRIC} が exporter に届かない"
-    data = metric["data"]  # type: ignore[index]
-    return sum(int(dp["value"]) for dp in data["data_points"])
+@pytest.mark.asyncio
+async def test_lease_released_before_stream_start_records_no_connection(
+    capfire: CaptureLogfire,
+) -> None:
+    """配信が始まらずに終わった lease は接続として数えない。
+
+    上限確保だけして流さずに終わる経路 (前提未充足 / 早期エラー) を接続数に混ぜない。
+    """
+    capacity = AgentRunSseCapacity()
+    lease = await capacity.try_acquire_process()
+    assert lease is not None
+    assert await lease.try_acquire_owned(run_id=uuid4(), user_id=uuid4()) is None
+
+    await lease.release()
+
+    emitted = {metric["name"] for metric in collected_metrics(capfire)}
+    assert {_ACTIVE_METRIC, _CLOSE_METRIC}.isdisjoint(emitted)
+
+
+@pytest.mark.asyncio
+async def test_double_release_records_a_single_close(
+    capfire: CaptureLogfire,
+) -> None:
+    """二重解放でも切断は 1 回しか記録されない。
+
+    TTL 期限切れの掃除と明示解放が競合しても切断件数が水増しされない。
+    """
+    capacity = AgentRunSseCapacity()
+    lease = await _acquire_streaming_lease(capacity)
+    lease.mark_close_reason("terminal")
+
+    await lease.release()
+    await lease.release()
+
+    assert _sum_values(collected_metrics(capfire), _CLOSE_METRIC) == 1
