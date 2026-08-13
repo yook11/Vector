@@ -3,15 +3,12 @@
 reviewerはRun内の全taskの候補を1回の入力で受け取り、Run全体としての採用と
 不足を1つの出力で返す(仕様「Run単位で精査する」)。attempt/timeout/失敗分類の
 規則は段4時点から変わらないが、適用範囲がtaskからRunへ広がる。
-production 未実装のため getattr ガードで参照する。
 """
 
 from __future__ import annotations
 
 import asyncio
 from datetime import UTC, datetime
-from importlib import import_module
-from types import ModuleType
 from typing import Any
 
 import pytest
@@ -24,6 +21,8 @@ from app.agent.evidence_collection.internal_search.contract import (
     InternalArticleContent,
     InternalArticleSearchHit,
 )
+from app.agent.evidence_review.contract import EvidenceReviewDraft
+from app.agent.evidence_review.reviewer import EvidenceReviewer
 from app.agent.runtime.contract import AgentResponseDefect, AgentResponseInvalidError
 from app.analysis.ai_provider_errors import AIProviderError, AIProviderNetworkError
 from app.analysis.analyzed_article import InScopeAnalyzedArticle
@@ -32,32 +31,6 @@ from app.analysis.deepseek_error_translator import DeepSeekStateReason
 from tests.agent.runtime._fakes import ScriptedAgentRuntime
 
 _AS_OF = datetime(2026, 7, 20, 9, 30, tzinfo=UTC)
-
-
-def _required_module(module_name: str) -> ModuleType:
-    try:
-        return import_module(module_name)
-    except ModuleNotFoundError as exc:
-        pytest.fail(f"S1 evidence_review module is missing: {module_name} ({exc.name})")
-
-
-def _required_attribute(module: ModuleType, name: str) -> Any:
-    if not hasattr(module, name):
-        pytest.fail(f"S1 evidence_review contract is missing: {module.__name__}.{name}")
-    return getattr(module, name)
-
-
-def _contracts() -> ModuleType:
-    return _required_module("app.agent.evidence_review.contract")
-
-
-def _reviewer_module() -> ModuleType:
-    return _required_module("app.agent.evidence_review.reviewer")
-
-
-def _reviewer() -> Any:
-    reviewer_type = _required_attribute(_reviewer_module(), "EvidenceReviewer")
-    return reviewer_type()
 
 
 def _collected_task(
@@ -128,9 +101,8 @@ def _draft(
     selections: list[dict[str, Any]] | None = None,
     *,
     missing: list[str] | None = None,
-) -> Any:
-    draft_type = _required_attribute(_contracts(), "EvidenceReviewDraft")
-    return draft_type.model_validate(
+) -> EvidenceReviewDraft:
+    return EvidenceReviewDraft.model_validate(
         {"selections": selections or [], "missing": missing or []}
     )
 
@@ -141,7 +113,7 @@ async def _review(
     as_of: datetime = _AS_OF,
     reviewer_runtime: Any,
 ) -> Any:
-    reviewer = _reviewer()
+    reviewer = EvidenceReviewer()
     return await reviewer.review(
         tasks=tasks,
         as_of=as_of,

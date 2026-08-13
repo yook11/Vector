@@ -3,18 +3,15 @@
 `build_review_task_groups`はRun内の全taskの候補をtask_index昇順のグループ列
 (indexはRun全体の通し番号)へ組み、`build_review_evidence`はその通しindexから
 所属taskと候補を復元しつつ範囲外/重複/上限超過をdropする。
-production 未実装のため getattr ガードで参照する。
 """
 
 from __future__ import annotations
 
 from datetime import UTC, datetime
-from importlib import import_module
-from types import ModuleType
 from typing import Any
 
-import pytest
-
+import app.agent.evidence_review.contract as evidence_review_contract_module
+import app.agent.evidence_review.policy as evidence_review_policy_module
 from app.agent.evidence_collection.contract import CollectedTask, ResearchTaskReport
 from app.agent.evidence_collection.external_search.contract import (
     CANDIDATE_SNIPPET_MAX_CHARS,
@@ -24,32 +21,25 @@ from app.agent.evidence_collection.internal_search.contract import (
     InternalArticleContent,
     InternalArticleSearchHit,
 )
+from app.agent.evidence_review.contract import (
+    EVIDENCE_REVIEW_ADOPTION_LIMIT,
+    EVIDENCE_REVIEW_MISSING_LIMIT,
+    EvidenceReviewDraft,
+    EvidenceReviewResult,
+)
+from app.agent.evidence_review.policy import (
+    EVIDENCE_REVIEW_TIMEOUT_SECONDS,
+    REVIEWER_ERROR_REASON,
+    REVIEWER_TIMEOUT_REASON,
+    build_review_evidence,
+    build_review_task_groups,
+    finalize_review_draft,
+    resolve_reviewer_failure_reason,
+)
 from app.analysis.analyzed_article import InScopeAnalyzedArticle
 from app.analysis.assessment.domain.result import InScope, InScopeCategory
 
 _AS_OF = datetime(2026, 7, 20, 9, 30, tzinfo=UTC)
-
-
-def _policy() -> ModuleType:
-    try:
-        return import_module("app.agent.evidence_review.policy")
-    except ModuleNotFoundError as exc:
-        pytest.fail(
-            "evidence_review のドメイン純関数は policy module に置く必要が"
-            f"あります ({exc.name})",
-            pytrace=False,
-        )
-
-
-def _function(name: str) -> Any:
-    value = getattr(_policy(), name, None)
-    if value is None:
-        pytest.fail(f"evidence_review policy must export {name}", pytrace=False)
-    return value
-
-
-def _contracts() -> ModuleType:
-    return import_module("app.agent.evidence_review.contract")
 
 
 def _collected_task(
@@ -120,23 +110,17 @@ def _external_candidate(
     )
 
 
-def _review_result(policy: ModuleType, selections: list[dict[str, Any]]) -> Any:
-    del policy
-    result_type = getattr(_contracts(), "EvidenceReviewResult", None)
-    if result_type is None:
-        pytest.fail("evidence_review contract must export EvidenceReviewResult")
-    return result_type.from_raw(selections=selections, missing=[])
+def _review_result(selections: list[dict[str, Any]]) -> EvidenceReviewResult:
+    return EvidenceReviewResult.from_raw(selections=selections, missing=[])
 
 
 def test_policy_exports_review_timeout_and_failure_reason_constants() -> None:
     """selector 一式の timeout/reason 定数がここへ改名移設されている。"""
-    policy = _policy()
-
     assert (
-        {"resolve_reviewer_failure_reason"} <= set(dir(policy)),
-        policy.EVIDENCE_REVIEW_TIMEOUT_SECONDS,
-        policy.REVIEWER_TIMEOUT_REASON,
-        policy.REVIEWER_ERROR_REASON,
+        {"resolve_reviewer_failure_reason"} <= set(dir(evidence_review_policy_module)),
+        EVIDENCE_REVIEW_TIMEOUT_SECONDS,
+        REVIEWER_TIMEOUT_REASON,
+        REVIEWER_ERROR_REASON,
     ) == (True, 30, "reviewer_timeout", "reviewer_error")
 
 
@@ -146,26 +130,19 @@ def test_adoption_and_missing_caps_are_run_scoped_values() -> None:
     task単位5件×3 taskの実質上限と同じ15を採用上限に、missing上限は
     それより絞った8にする(仕様「選別結果の復元」)。
     """
-    contracts = _contracts()
-
-    adoption_limit = getattr(contracts, "EVIDENCE_REVIEW_ADOPTION_LIMIT", None)
-    missing_limit = getattr(contracts, "EVIDENCE_REVIEW_MISSING_LIMIT", None)
-    if adoption_limit is None or missing_limit is None:
-        pytest.fail(
-            "evidence_review contract must export "
-            "EVIDENCE_REVIEW_ADOPTION_LIMIT and EVIDENCE_REVIEW_MISSING_LIMIT "
-            "(task単位を表さないRun単位の名前)"
-        )
-
-    assert (adoption_limit, missing_limit) == (15, 8)
-    assert not hasattr(contracts, "EVIDENCE_REVIEW_ADOPTION_LIMIT_PER_TASK")
-    assert not hasattr(contracts, "EVIDENCE_REVIEW_MISSING_LIMIT_PER_TASK")
+    assert (EVIDENCE_REVIEW_ADOPTION_LIMIT, EVIDENCE_REVIEW_MISSING_LIMIT) == (15, 8)
+    assert not hasattr(
+        evidence_review_contract_module, "EVIDENCE_REVIEW_ADOPTION_LIMIT_PER_TASK"
+    )
+    assert not hasattr(
+        evidence_review_contract_module, "EVIDENCE_REVIEW_MISSING_LIMIT_PER_TASK"
+    )
 
 
 def test_resolve_reviewer_failure_reason_prefers_reason_then_code_then_fallback() -> (
     None
 ):
-    resolve_failure_reason = _function("resolve_reviewer_failure_reason")
+    resolve_failure_reason = resolve_reviewer_failure_reason
 
     assert (
         resolve_failure_reason(reason="timeout", code="ai_error_network"),
@@ -179,7 +156,7 @@ def test_resolve_reviewer_failure_reason_prefers_reason_then_code_then_fallback(
 
 def test_task_groups_are_ordered_by_task_index_regardless_of_input_order() -> None:
     """グループの並びがtask_index昇順である(入力順に依存しない)。"""
-    build_task_groups = _function("build_review_task_groups")
+    build_task_groups = build_review_task_groups
     tasks = [
         _collected_task(task_index=1, research_goal="goal-B"),
         _collected_task(task_index=0, research_goal="goal-A"),
@@ -193,7 +170,7 @@ def test_task_groups_are_ordered_by_task_index_regardless_of_input_order() -> No
 
 def test_task_groups_place_internal_candidates_before_external_within_a_group() -> None:
     """各グループ内は内部候補が先、外部候補が後。"""
-    build_task_groups = _function("build_review_task_groups")
+    build_task_groups = build_review_task_groups
     tasks = [
         _collected_task(
             task_index=0,
@@ -234,7 +211,7 @@ def test_task_groups_assign_a_run_wide_index_without_duplication_across_groups()
     None
 ):
     """indexがRun全体の通し番号であり、グループをまたいで重複しない。"""
-    build_task_groups = _function("build_review_task_groups")
+    build_task_groups = build_review_task_groups
     tasks = [
         _collected_task(
             task_index=0,
@@ -273,7 +250,7 @@ def test_task_groups_assign_a_run_wide_index_without_duplication_across_groups()
 
 def test_task_groups_keep_a_task_with_no_candidates_as_an_empty_group() -> None:
     """候補が内外ともゼロのtaskもグループとして残る(欠番を作らない)。"""
-    build_task_groups = _function("build_review_task_groups")
+    build_task_groups = build_review_task_groups
     tasks = [
         _collected_task(task_index=0, research_goal="goal-A"),
         _collected_task(
@@ -298,7 +275,7 @@ def test_task_groups_keep_a_task_with_no_candidates_as_an_empty_group() -> None:
 
 def test_task_groups_map_internal_source_name_to_none_and_truncate_snippet() -> None:
     """内部候補: source_name=None、snippetはsummary+key_points連結をcapでtruncate。"""
-    build_task_groups = _function("build_review_task_groups")
+    build_task_groups = build_review_task_groups
     overlong_summary = "s" * (CANDIDATE_SNIPPET_MAX_CHARS + 50)
     hit = _internal_hit(
         assessment_id=1001,
@@ -320,7 +297,7 @@ def test_task_groups_map_internal_source_name_to_none_and_truncate_snippet() -> 
 
 
 def test_task_groups_is_empty_tuple_when_there_are_no_tasks() -> None:
-    build_task_groups = _function("build_review_task_groups")
+    build_task_groups = build_review_task_groups
 
     assert build_task_groups([]) == ()
 
@@ -330,7 +307,7 @@ def test_task_groups_is_empty_tuple_when_there_are_no_tasks() -> None:
 
 def test_build_evidence_drops_out_of_range_index_across_all_tasks() -> None:
     """統合index空間の範囲外(全taskの合計候補数以上)をdrop。"""
-    build_evidence = _function("build_review_evidence")
+    build_evidence = build_review_evidence
     tasks = [
         _collected_task(
             task_index=0,
@@ -343,7 +320,6 @@ def test_build_evidence_drops_out_of_range_index_across_all_tasks() -> None:
         )
     ]
     result = _review_result(
-        _policy(),
         [
             {"candidate_index": 0, "claim": "internal claim", "why_selected": "why"},
             {"candidate_index": 1, "claim": "external claim", "why_selected": "why"},
@@ -364,7 +340,7 @@ def test_build_evidence_drops_out_of_range_index_across_all_tasks() -> None:
 
 def test_build_evidence_drops_duplicate_index_and_caps_at_the_run_wide_limit() -> None:
     """重複indexと採用上限(現行値15、Run全体で共有)超過をdrop。"""
-    build_evidence = _function("build_review_evidence")
+    build_evidence = build_review_evidence
     tasks = [
         _collected_task(
             task_index=0,
@@ -388,7 +364,7 @@ def test_build_evidence_drops_duplicate_index_and_caps_at_the_run_wide_limit() -
         {"candidate_index": index, "claim": f"claim-{index}", "why_selected": "why"}
         for index in [0, 0, *range(1, 17)]
     ]
-    result = _review_result(_policy(), selections)
+    result = _review_result(selections)
 
     internal_evidence, external_evidence, dropped = build_evidence(
         tasks=tasks, selection_result=result
@@ -405,7 +381,7 @@ def test_build_evidence_caps_selections_shared_across_multiple_tasks() -> None:
 
     (2 task合計16候補を全採用しようとすると1件だけdropされる)。
     """
-    build_evidence = _function("build_review_evidence")
+    build_evidence = build_review_evidence
     tasks = [
         _collected_task(
             task_index=0,
@@ -436,7 +412,7 @@ def test_build_evidence_caps_selections_shared_across_multiple_tasks() -> None:
         {"candidate_index": index, "claim": f"claim-{index}", "why_selected": "why"}
         for index in range(16)
     ]
-    result = _review_result(_policy(), selections)
+    result = _review_result(selections)
 
     internal_evidence, external_evidence, dropped = build_evidence(
         tasks=tasks, selection_result=result
@@ -447,7 +423,7 @@ def test_build_evidence_caps_selections_shared_across_multiple_tasks() -> None:
 
 def test_build_evidence_restores_task_and_candidate_from_a_cross_task_index() -> None:
     """通しindexから所属taskと候補が復元され、source_refがf"{task_index}-{index}"になる。"""
-    build_evidence = _function("build_review_evidence")
+    build_evidence = build_review_evidence
     tasks = [
         _collected_task(
             task_index=2,
@@ -469,7 +445,6 @@ def test_build_evidence_restores_task_and_candidate_from_a_cross_task_index() ->
         ),
     ]
     result = _review_result(
-        _policy(),
         [
             {"candidate_index": 1, "claim": "A-int-2 claim", "why_selected": "why"},
             {"candidate_index": 3, "claim": "B-ext-2 claim", "why_selected": "why"},
@@ -496,7 +471,7 @@ def test_build_evidence_uses_task_index_ascending_order_regardless_of_input_orde
 
     (build_review_task_groupsが作る入力と対応させるため)。
     """
-    build_evidence = _function("build_review_evidence")
+    build_evidence = build_review_evidence
     tasks = [
         _collected_task(
             task_index=1,
@@ -517,7 +492,6 @@ def test_build_evidence_uses_task_index_ascending_order_regardless_of_input_orde
     ]
     # task_index昇順(0, 1)で結合すればindex 0はA-int、1はB-intになるはず。
     result = _review_result(
-        _policy(),
         [{"candidate_index": 0, "claim": "claim", "why_selected": "why"}],
     )
 
@@ -533,7 +507,7 @@ def test_build_evidence_uses_task_index_ascending_order_regardless_of_input_orde
 
 def test_build_evidence_keeps_index_alignment_when_a_task_has_no_candidates() -> None:
     """候補ゼロのtaskが混ざってもindexの対応がずれない。"""
-    build_evidence = _function("build_review_evidence")
+    build_evidence = build_review_evidence
     tasks = [
         _collected_task(
             task_index=0,
@@ -554,7 +528,6 @@ def test_build_evidence_keeps_index_alignment_when_a_task_has_no_candidates() ->
         ),
     ]
     result = _review_result(
-        _policy(),
         [{"candidate_index": 1, "claim": "C-int claim", "why_selected": "why"}],
     )
 
@@ -571,7 +544,7 @@ def test_build_evidence_keeps_index_alignment_when_a_task_has_no_candidates() ->
 
 def test_build_evidence_reconstructs_internal_provenance_and_keeps_claim() -> None:
     """保証するテスト条件 6。内部採用はclaimを持ち、既存provenanceを復元する。"""
-    build_evidence = _function("build_review_evidence")
+    build_evidence = build_review_evidence
     hit = _internal_hit(
         assessment_id=2001,
         curation_id=42,
@@ -582,7 +555,6 @@ def test_build_evidence_reconstructs_internal_provenance_and_keeps_claim() -> No
     )
     tasks = [_collected_task(task_index=1, internal_hits=[hit])]
     result = _review_result(
-        _policy(),
         [{"candidate_index": 0, "claim": "見出しの主張", "why_selected": "選定理由"}],
     )
 
@@ -606,12 +578,7 @@ def test_build_evidence_reconstructs_internal_provenance_and_keeps_claim() -> No
 
 
 def test_finalize_review_draft_clamps_values_to_existing_contract() -> None:
-    contracts = _contracts()
-    draft_type = getattr(contracts, "EvidenceReviewDraft", None)
-    if draft_type is None:
-        pytest.fail("evidence_review contract must export EvidenceReviewDraft")
-    finalize_review_draft = _function("finalize_review_draft")
-    draft = draft_type.model_validate(
+    draft = EvidenceReviewDraft.model_validate(
         {
             "selections": [
                 {
@@ -640,12 +607,7 @@ def test_finalize_review_draft_clamps_missing_item_count_to_the_run_wide_limit()
 
     Run単位のmissing上限(8)へclampされる。
     """
-    contracts = _contracts()
-    draft_type = getattr(contracts, "EvidenceReviewDraft", None)
-    if draft_type is None:
-        pytest.fail("evidence_review contract must export EvidenceReviewDraft")
-    finalize_review_draft = _function("finalize_review_draft")
-    draft = draft_type.model_validate(
+    draft = EvidenceReviewDraft.model_validate(
         {
             "selections": [],
             "missing": [f"missing-{index}" for index in range(9)],

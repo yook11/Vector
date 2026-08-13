@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-import importlib
 import json
 from collections.abc import Callable, Sequence
 from datetime import UTC, datetime
@@ -15,6 +14,12 @@ from logfire.testing import CaptureLogfire
 from opentelemetry.trace import StatusCode
 
 from app.agent.planning.agent import QUESTION_PLANNER_AGENT
+from app.agent.planning.contract import (
+    PlanningRequest,
+    QuestionPlanDraft,
+    ResearchTaskDraft,
+    TargetTimeWindow,
+)
 from app.agent.planning.service import QuestionPlanningService
 from app.agent.question_context.contract import QuestionContext
 from app.agent.runtime.contract import AgentResponseDefect, AgentResponseInvalidError
@@ -30,19 +35,8 @@ from tests.logfire._metric_helpers import collected_metrics, sum_counter_for_res
 _PLANNER_OUTCOME_METRIC = "vector.agent.planner.outcome"
 
 
-def _contracts() -> Any:
-    return importlib.import_module("app.agent.planning.contract")
-
-
-def _required_contract(name: str) -> Any:
-    value = getattr(_contracts(), name, None)
-    if value is None:
-        pytest.fail(f"planning contract must define {name}")
-    return value
-
-
-def _input(question: str = "今日のNVIDIAの発表は？") -> Any:
-    return _required_contract("PlanningRequest")(
+def _input(question: str = "今日のNVIDIAの発表は？") -> PlanningRequest:
+    return PlanningRequest(
         context=QuestionContext(standalone_question=question),
         as_of=datetime(2026, 7, 20, tzinfo=UTC),
     )
@@ -53,16 +47,18 @@ def _draft(
     plan_type: str,
     research_tasks: list[Any] | None = None,
     target_time_window: object | None = None,
-) -> Any:
-    return _required_contract("QuestionPlanDraft")(
+) -> QuestionPlanDraft:
+    return QuestionPlanDraft(
         plan_type=plan_type,
         research_tasks=research_tasks or [],
         target_time_window=target_time_window,
     )
 
 
-def _task_draft(research_goal: str, article_search_queries: list[str]) -> Any:
-    return _required_contract("ResearchTaskDraft")(
+def _task_draft(
+    research_goal: str, article_search_queries: list[str]
+) -> ResearchTaskDraft:
+    return ResearchTaskDraft(
         research_goal=research_goal,
         article_search_queries=article_search_queries,
     )
@@ -380,7 +376,7 @@ async def test_scope_failure_propagates_without_plan_or_metric(
 
 
 async def test_search_plan_preserves_typed_time_window_through_service() -> None:
-    target_time_window = _required_contract("TargetTimeWindow").model_validate(
+    target_time_window = TargetTimeWindow.model_validate(
         {"kind": "last_n_days", "days": 7}
     )
     runtime = ScriptedAgentRuntime(

@@ -291,9 +291,8 @@ async def test_policy_blocked_cancel_is_already_terminal_without_quota_release(
             )
         )
 
-    expected_outcome = getattr(CancelRunOutcome, "ALREADY_POLICY_BLOCKED", None)
-    assert expected_outcome is not None, (
-        "ALREADY_POLICY_BLOCKED must be a cancel outcome"
+    assert (
+        outcome is not None
+        and outcome.cancel_outcome is CancelRunOutcome.ALREADY_POLICY_BLOCKED
     )
-    assert outcome is not None and outcome.cancel_outcome is expected_outcome
     assert used_count == 4

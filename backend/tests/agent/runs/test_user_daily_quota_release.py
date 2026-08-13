@@ -7,18 +7,18 @@ import inspect
 import uuid
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
-from importlib import import_module
-from types import ModuleType
 
 import pytest
-from sqlalchemy import DateTime, literal, select, text
+from sqlalchemy import DateTime, Select, literal, select, text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-import app.agent.contract as agent_contract
 import app.agent.runs.contracts as run_contracts
-from app.agent.contract import AnswerQuestionResult
-from app.agent.runs.contracts import CancelRunOutcome
+from app.agent.contract import AnswerPlanSummary, AnswerQuestionResult
+from app.agent.runs.contracts import CancelRunCommandOutcome, CancelRunOutcome
 from app.agent.runs.daily_quota.contracts import DailyQuotaReleaseOutcome
+from app.agent.runs.daily_quota.persistence import (
+    _build_daily_quota_reservation_statement,
+)
 from app.agent.runs.repository import AgentRunRepository
 from app.agent.runs.types import AgentRunErrorCode
 from app.models.agent_message import AgentMessage
@@ -40,7 +40,6 @@ _USAGE_DATE = date(2026, 7, 19)
 _CURRENT_DATE = date(2026, 7, 20)
 _USAGE_CLOCK = datetime(2026, 7, 19, 3, 0, tzinfo=UTC)
 _NOW = datetime(2026, 7, 20, 12, 0, tzinfo=UTC)
-_MISSING = object()
 
 
 @dataclass(frozen=True, slots=True)
@@ -173,7 +172,7 @@ async def _cancel(
     seeded: _SeededRun,
     *,
     user_id: uuid.UUID | None = None,
-) -> object:
+) -> CancelRunCommandOutcome | None:
     async with session_factory() as session:
         async with session.begin():
             return await AgentRunRepository(session).cancel_run_for_user(
@@ -211,15 +210,10 @@ async def _wait_until_blocked(observer: AsyncSession, backend_pid: int) -> None:
             await asyncio.sleep(0.01)
 
 
-def _reservation_statement(user_id: uuid.UUID) -> object:
-    persistence = _daily_quota_persistence_module()
-    builder = getattr(
-        persistence,
-        "_build_daily_quota_reservation_statement",
-        None,
-    )
-    assert callable(builder)
-    return builder(
+def _reservation_statement(
+    user_id: uuid.UUID,
+) -> Select[tuple[datetime, date, datetime, int | None]]:
+    return _build_daily_quota_reservation_statement(
         user_id=user_id,
         clock_expression=literal(_USAGE_CLOCK, type_=DateTime(timezone=True)),
     )
@@ -231,78 +225,43 @@ def _completed_result() -> AnswerQuestionResult:
         answer="completed quota run",
         sources=[],
         missing_aspects=[],
-        plan_summary=_plan_summary("direct_answer"),
+        plan_summary=AnswerPlanSummary(plan_type="direct_answer"),
     )
 
 
-def _plan_summary(plan_type: str) -> object:
-    summary_type = getattr(agent_contract, "AnswerPlanSummary", None)
-    if summary_type is None:
-        pytest.fail("agent contract must define AnswerPlanSummary")
-    return summary_type(plan_type=plan_type)
-
-
-def _daily_quota_contracts_module() -> ModuleType:
-    try:
-        return import_module("app.agent.runs.daily_quota.contracts")
-    except ModuleNotFoundError as exc:
-        if exc.name in {
-            "app.agent.runs.daily_quota",
-            "app.agent.runs.daily_quota.contracts",
-        }:
-            pytest.fail("app.agent.runs.daily_quota.contracts is not implemented")
-        raise
-
-
-def _daily_quota_persistence_module() -> ModuleType:
-    try:
-        return import_module("app.agent.runs.daily_quota.persistence")
-    except ModuleNotFoundError as exc:
-        if exc.name in {
-            "app.agent.runs.daily_quota",
-            "app.agent.runs.daily_quota.persistence",
-        }:
-            pytest.fail("app.agent.runs.daily_quota.persistence is not implemented")
-        raise
-
-
-def _quota_release_outcome(name: str) -> object:
-    enum = getattr(_daily_quota_contracts_module(), "DailyQuotaReleaseOutcome", None)
-    assert enum is not None, "DailyQuotaReleaseOutcome is not implemented"
-    return getattr(enum, name)
-
-
 def _assert_cancelled_release(
-    result: object,
+    result: CancelRunCommandOutcome | None,
     *,
     release_outcome: str,
     was_running: bool,
     running_attempt_epoch: int | None,
 ) -> None:
-    assert getattr(result, "cancel_outcome", None) is CancelRunOutcome.CANCELLED
-    assert getattr(result, "was_running", None) is was_running
-    assert getattr(result, "running_attempt_epoch", _MISSING) == running_attempt_epoch
-    assert getattr(result, "quota_release_outcome", _MISSING) is _quota_release_outcome(
-        release_outcome
+    assert result is not None
+    assert result.cancel_outcome is CancelRunOutcome.CANCELLED
+    assert result.was_running is was_running
+    assert result.running_attempt_epoch == running_attempt_epoch
+    assert result.quota_release_outcome is getattr(
+        DailyQuotaReleaseOutcome, release_outcome
     )
     assert not hasattr(result, "quota_usage_date")
     assert not hasattr(result, "quota_used_count")
 
 
-def _assert_already_terminal(result: object, outcome: CancelRunOutcome) -> None:
-    assert getattr(result, "cancel_outcome", None) is outcome
-    assert getattr(result, "was_running", _MISSING) is False
-    assert getattr(result, "running_attempt_epoch", _MISSING) is None
-    assert getattr(result, "quota_release_outcome", _MISSING) is None
+def _assert_already_terminal(
+    result: CancelRunCommandOutcome | None, outcome: CancelRunOutcome
+) -> None:
+    assert result is not None
+    assert result.cancel_outcome is outcome
+    assert result.was_running is False
+    assert result.running_attempt_epoch is None
+    assert result.quota_release_outcome is None
     assert not hasattr(result, "quota_usage_date")
     assert not hasattr(result, "quota_used_count")
 
 
 def test_cancel_command_outcome_validates_run_and_quota_boundaries() -> None:
-    command_outcome = getattr(run_contracts, "CancelRunCommandOutcome", None)
-    assert command_outcome is not None, "CancelRunCommandOutcome is not implemented"
     assert not hasattr(run_contracts, "CancelRunResult")
-    parameters = inspect.signature(command_outcome).parameters
+    parameters = inspect.signature(CancelRunCommandOutcome).parameters
     assert set(parameters) == {
         "cancel_outcome",
         "was_running",
@@ -316,44 +275,38 @@ def test_cancel_command_outcome_validates_run_and_quota_boundaries() -> None:
         }
         & parameters.keys()
     )
-    release_enum = getattr(
-        _daily_quota_contracts_module(),
-        "DailyQuotaReleaseOutcome",
-        None,
-    )
-    assert release_enum is not None
-    assert {member.value for member in release_enum} == {
+    assert {member.value for member in DailyQuotaReleaseOutcome} == {
         "released",
         "not_eligible",
         "inconsistent",
     }
 
     with pytest.raises(ValueError):
-        command_outcome(
+        CancelRunCommandOutcome(
             cancel_outcome=CancelRunOutcome.CANCELLED,
             was_running=True,
         )
     with pytest.raises(ValueError):
-        command_outcome(
+        CancelRunCommandOutcome(
             cancel_outcome=CancelRunOutcome.CANCELLED,
             was_running=True,
             running_attempt_epoch=0,
         )
     with pytest.raises(ValueError):
-        command_outcome(
+        CancelRunCommandOutcome(
             cancel_outcome=CancelRunOutcome.CANCELLED,
             running_attempt_epoch=1,
         )
     with pytest.raises(ValueError):
-        command_outcome(
+        CancelRunCommandOutcome(
             cancel_outcome=CancelRunOutcome.ALREADY_FAILED,
             was_running=True,
             running_attempt_epoch=1,
         )
     with pytest.raises(ValueError):
-        command_outcome(
+        CancelRunCommandOutcome(
             cancel_outcome=CancelRunOutcome.ALREADY_FAILED,
-            quota_release_outcome=release_enum.RELEASED,
+            quota_release_outcome=DailyQuotaReleaseOutcome.RELEASED,
         )
 
 

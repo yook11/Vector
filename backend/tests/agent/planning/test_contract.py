@@ -10,7 +10,26 @@ from typing import Any, get_args
 import pytest
 from pydantic import ValidationError
 
+import app.agent.planning.contract as planning_contract_module
 from app.agent.contract import PRIOR_RESEARCH_CHECKPOINT_LIMIT, ResearchTaskRecord
+from app.agent.planning.contract import (
+    MAX_ARTICLE_SEARCH_QUERIES,
+    RESEARCH_GOAL_MAX_CHARS,
+    RESEARCH_TASK_LIMIT,
+    DirectAnswerPlan,
+    ExternalResearchTask,
+    PlanningRequest,
+    PlanType,
+    QuestionPlan,
+    QuestionPlanDraft,
+    ResearchCheckpoint,
+    ResearchTask,
+    ResearchTaskDraft,
+    SearchPlan,
+    TargetTimeWindow,
+    plan_from_draft,
+    render_target_time_window,
+)
 from app.agent.question_context.contract import QuestionContext
 from app.agent.runtime.contract import (
     AgentResponseDefect,
@@ -18,57 +37,49 @@ from app.agent.runtime.contract import (
 )
 
 
-def _contracts() -> Any:
-    return importlib.import_module("app.agent.planning.contract")
-
-
-def _required_contract(name: str) -> Any:
-    value = getattr(_contracts(), name, None)
-    if value is None:
-        pytest.fail(f"planning contract must define {name}")
-    return value
-
-
 def _draft(
     *,
     plan_type: str = "search",
     research_tasks: list[Any] | None = None,
     target_time_window: object | None = None,
-) -> Any:
-    return _required_contract("QuestionPlanDraft")(
+) -> QuestionPlanDraft:
+    return QuestionPlanDraft(
         plan_type=plan_type,
         research_tasks=research_tasks or [],
         target_time_window=target_time_window,
     )
 
 
-def _task_draft(research_goal: str, article_search_queries: list[str]) -> Any:
-    return _required_contract("ResearchTaskDraft")(
+def _task_draft(
+    research_goal: str, article_search_queries: list[str]
+) -> ResearchTaskDraft:
+    return ResearchTaskDraft(
         research_goal=research_goal,
         article_search_queries=article_search_queries,
     )
 
 
-def _research_task(research_goal: str, article_search_queries: list[str]) -> Any:
-    return _required_contract("ResearchTask")(
+def _research_task(
+    research_goal: str, article_search_queries: list[str]
+) -> ResearchTask:
+    return ResearchTask(
         research_goal=research_goal,
         article_search_queries=article_search_queries,
     )
 
 
-def _time_window(**payload: object) -> Any:
-    return _required_contract("TargetTimeWindow").model_validate(payload)
+def _time_window(**payload: object) -> TargetTimeWindow:
+    return TargetTimeWindow.model_validate(payload)
 
 
 def _render_time_window(target_time_window: object) -> str:
-    renderer = _required_contract("render_target_time_window")
-    return renderer(target_time_window)
+    return render_target_time_window(target_time_window)
 
 
 def test_contract_exports_only_direct_and_search_plan_vocabulary() -> None:
-    contracts = _contracts()
+    contracts = planning_contract_module
 
-    assert set(get_args(_required_contract("PlanType"))) == {
+    assert set(get_args(PlanType)) == {
         "direct_answer",
         "search",
     }
@@ -95,14 +106,14 @@ def test_contract_exports_only_direct_and_search_plan_vocabulary() -> None:
 
 
 def test_question_plan_union_contains_exactly_direct_and_search_variants() -> None:
-    assert set(get_args(_required_contract("QuestionPlan"))) == {
-        _required_contract("DirectAnswerPlan"),
-        _required_contract("SearchPlan"),
+    assert set(get_args(QuestionPlan)) == {
+        DirectAnswerPlan,
+        SearchPlan,
     }
 
 
 def test_draft_has_exact_new_fields_and_forbids_old_fields() -> None:
-    draft_type = _required_contract("QuestionPlanDraft")
+    draft_type = QuestionPlanDraft
 
     assert set(draft_type.model_fields) == {
         "plan_type",
@@ -156,7 +167,7 @@ def test_draft_has_exact_new_fields_and_forbids_old_fields() -> None:
 )
 def test_draft_rejects_each_legacy_plan_type(legacy_plan_type: str) -> None:
     with pytest.raises(ValidationError):
-        _required_contract("QuestionPlanDraft").model_validate(
+        QuestionPlanDraft.model_validate(
             {
                 "plan_type": legacy_plan_type,
                 "research_tasks": [
@@ -170,7 +181,7 @@ def test_draft_rejects_each_legacy_plan_type(legacy_plan_type: str) -> None:
 
 
 def test_direct_plan_has_no_search_fields_and_rejects_them_as_extra() -> None:
-    direct_plan_type = _required_contract("DirectAnswerPlan")
+    direct_plan_type = DirectAnswerPlan
 
     assert set(direct_plan_type.model_fields) == {"plan_type"}
     assert direct_plan_type().plan_type == "direct_answer"
@@ -180,8 +191,8 @@ def test_direct_plan_has_no_search_fields_and_rejects_them_as_extra() -> None:
 
 def test_search_plan_rejects_research_tasks_outside_closed_bounds() -> None:
     """research_tasksの件数境界(下限1・上限RESEARCH_TASK_LIMIT)を構造的に拒否する。"""
-    search_plan_type = _required_contract("SearchPlan")
-    task_limit = _required_contract("RESEARCH_TASK_LIMIT")
+    search_plan_type = SearchPlan
+    task_limit = RESEARCH_TASK_LIMIT
 
     with pytest.raises(ValidationError):
         search_plan_type(research_tasks=[])
@@ -195,7 +206,7 @@ def test_search_plan_rejects_research_tasks_outside_closed_bounds() -> None:
 
 
 def test_search_plan_rejects_duplicate_research_goals() -> None:
-    search_plan_type = _required_contract("SearchPlan")
+    search_plan_type = SearchPlan
 
     with pytest.raises(ValidationError):
         search_plan_type(
@@ -208,7 +219,7 @@ def test_search_plan_rejects_duplicate_research_goals() -> None:
 
 def test_search_plan_allows_the_same_query_text_in_different_tasks() -> None:
     """task間のquery重複は禁じない(task内のcasefold一意はResearchTaskが持つ)。"""
-    search_plan_type = _required_contract("SearchPlan")
+    search_plan_type = SearchPlan
 
     plan = search_plan_type(
         research_tasks=[
@@ -225,8 +236,8 @@ def test_search_plan_allows_the_same_query_text_in_different_tasks() -> None:
 
 def test_search_plan_rejects_query_total_over_budget_across_tasks() -> None:
     """MAX_ARTICLE_SEARCH_QUERIESはtask個別の上限ではなくrun全体の合計予算。"""
-    search_plan_type = _required_contract("SearchPlan")
-    query_budget = _required_contract("MAX_ARTICLE_SEARCH_QUERIES")
+    search_plan_type = SearchPlan
+    query_budget = MAX_ARTICLE_SEARCH_QUERIES
 
     accepted = search_plan_type(
         research_tasks=[
@@ -249,7 +260,7 @@ def test_search_plan_rejects_query_total_over_budget_across_tasks() -> None:
 
 
 def test_search_plan_has_exact_fields_and_forbids_legacy_extra() -> None:
-    search_plan_type = _required_contract("SearchPlan")
+    search_plan_type = SearchPlan
 
     assert set(search_plan_type.model_fields) == {
         "plan_type",
@@ -274,7 +285,6 @@ def test_search_plan_has_exact_fields_and_forbids_legacy_extra() -> None:
 
 def test_plan_from_draft_normalizes_tasks_and_keeps_typed_time_window() -> None:
     """research_goalの重複排除・task内queryのstrip/casefold重複排除・task上限3を検証する。"""
-    plan_from_draft = _required_contract("plan_from_draft")
     draft = _draft(
         research_tasks=[
             _task_draft(
@@ -314,8 +324,7 @@ def test_plan_from_draft_normalizes_tasks_and_keeps_typed_time_window() -> None:
 
 def test_plan_from_draft_truncates_research_goal_after_strip_to_max_chars() -> None:
     """research_goalはstrip後にRESEARCH_GOAL_MAX_CHARSへ切り詰められる(仕様「上限」節)。"""
-    plan_from_draft = _required_contract("plan_from_draft")
-    max_chars = _required_contract("RESEARCH_GOAL_MAX_CHARS")
+    max_chars = RESEARCH_GOAL_MAX_CHARS
     overflowing_body = "あ" * (max_chars + 10)
     draft = _draft(
         research_tasks=[_task_draft(f"  {overflowing_body}  ", ["query"])],
@@ -333,8 +342,7 @@ def test_plan_from_draft_drops_second_task_on_truncated_goal_collision() -> None
     RESEARCH_GOAL_MAX_CHARSより長い共通接頭辞を持ち、上限を超えた位置だけが
     異なるgoalは、切り詰め後は同一文字列になり2件目が重複として除外される。
     """
-    plan_from_draft = _required_contract("plan_from_draft")
-    max_chars = _required_contract("RESEARCH_GOAL_MAX_CHARS")
+    max_chars = RESEARCH_GOAL_MAX_CHARS
     shared_overflowing_prefix = "調査目的" * (max_chars // 4 + 5)
     assert len(shared_overflowing_prefix) > max_chars
     draft = _draft(
@@ -379,7 +387,6 @@ def test_plan_from_draft_trims_query_budget_by_position_major_round_robin(
     expected_task_queries: list[list[str]],
 ) -> None:
     """予算超過時、query位置ごとにtask順で走査し採用3件で打ち切る決定的trimを検証する。"""
-    plan_from_draft = _required_contract("plan_from_draft")
     draft = _draft(
         research_tasks=[
             _task_draft(f"goal {index}", queries)
@@ -393,14 +400,14 @@ def test_plan_from_draft_trims_query_budget_by_position_major_round_robin(
         task.article_search_queries for task in plan.research_tasks
     ] == expected_task_queries
     assert all(len(task.article_search_queries) >= 1 for task in plan.research_tasks)
-    assert sum(
-        len(task.article_search_queries) for task in plan.research_tasks
-    ) == _required_contract("MAX_ARTICLE_SEARCH_QUERIES")
+    assert (
+        sum(len(task.article_search_queries) for task in plan.research_tasks)
+        == MAX_ARTICLE_SEARCH_QUERIES
+    )
 
 
 def test_plan_from_draft_keeps_duplicate_query_text_present_in_multiple_tasks() -> None:
     """task間の重複queryはdefectにならず両taskに残る(run単位一意性からの緩和)。"""
-    plan_from_draft = _required_contract("plan_from_draft")
     draft = _draft(
         research_tasks=[
             _task_draft("第一の調査目的", ["共通クエリ"]),
@@ -451,7 +458,6 @@ def test_plan_from_draft_keeps_duplicate_query_text_present_in_multiple_tasks() 
 def test_plan_from_draft_turns_semantic_inconsistency_into_safe_response_defect(
     draft: Any,
 ) -> None:
-    plan_from_draft = _required_contract("plan_from_draft")
 
     with pytest.raises(AgentResponseInvalidError) as raised:
         plan_from_draft(draft())
@@ -461,15 +467,15 @@ def test_plan_from_draft_turns_semantic_inconsistency_into_safe_response_defect(
 
 
 def test_direct_draft_creates_direct_answer_plan_only() -> None:
-    plan = _required_contract("plan_from_draft")(_draft(plan_type="direct_answer"))
+    plan = plan_from_draft(_draft(plan_type="direct_answer"))
 
     assert plan.plan_type == "direct_answer"
     assert set(type(plan).model_fields) == {"plan_type"}
 
 
 def test_direct_and_search_plans_are_frozen() -> None:
-    direct = _required_contract("DirectAnswerPlan")()
-    search = _required_contract("SearchPlan")(
+    direct = DirectAnswerPlan()
+    search = SearchPlan(
         research_tasks=[_research_task("根拠を確認する", ["NVIDIA"])],
     )
 
@@ -484,8 +490,8 @@ def test_planning_request_is_a_frozen_context_consumer_wrapper() -> None:
 
     同threadの直近checkpointを渡す`prior_research`(既定は空tuple)を持つ。
     """
-    request_type = _required_contract("PlanningRequest")
-    checkpoint_type = _required_contract("ResearchCheckpoint")
+    request_type = PlanningRequest
+    checkpoint_type = ResearchCheckpoint
     context = QuestionContext(standalone_question="NVIDIA の直近発表は？")
     as_of = datetime(2026, 7, 10)
     request = request_type(context=context, as_of=as_of)
@@ -517,7 +523,7 @@ def test_planning_request_is_a_frozen_context_consumer_wrapper() -> None:
 
 
 def _prior_research_checkpoint(hour: int) -> Any:
-    checkpoint_type = _required_contract("ResearchCheckpoint")
+    checkpoint_type = ResearchCheckpoint
     return checkpoint_type(
         as_of=datetime(2026, 7, 1, hour, tzinfo=UTC),
         tasks=(
@@ -535,7 +541,7 @@ def test_planning_request_rejects_prior_research_over_the_shared_checkpoint_limi
     None
 ):
     """prior_researchの件数上限はPRIOR_RESEARCH_CHECKPOINT_LIMIT(共有契約)を参照する。"""
-    request_type = _required_contract("PlanningRequest")
+    request_type = PlanningRequest
     context = QuestionContext(standalone_question="NVIDIA の直近発表は？")
     as_of = datetime(2026, 7, 10)
     checkpoints_at_limit = tuple(
@@ -558,9 +564,8 @@ def test_planning_request_rejects_prior_research_over_the_shared_checkpoint_limi
 
 
 def test_legacy_planner_draft_boundaries_are_not_exported() -> None:
-    contracts = _contracts()
-    assert not hasattr(contracts, "QuestionPlanDraftGenerator")
-    assert not hasattr(contracts, "QuestionPlannerResponseInvalidError")
+    assert not hasattr(planning_contract_module, "QuestionPlanDraftGenerator")
+    assert not hasattr(planning_contract_module, "QuestionPlannerResponseInvalidError")
 
     legacy_names = {
         "GeminiQuestionPlanner",
@@ -581,24 +586,20 @@ def test_legacy_planner_draft_boundaries_are_not_exported() -> None:
 
 class TestExternalResearchTask:
     def test_has_research_goal_only(self) -> None:
-        assert set(_required_contract("ExternalResearchTask").model_fields) == {
-            "research_goal"
-        }
+        assert set(ExternalResearchTask.model_fields) == {"research_goal"}
 
     def test_strips_research_goal(self) -> None:
-        task = _required_contract("ExternalResearchTask")(
-            research_goal="  NVIDIA の外部根拠を集める  "
-        )
+        task = ExternalResearchTask(research_goal="  NVIDIA の外部根拠を集める  ")
 
         assert task.research_goal == "NVIDIA の外部根拠を集める"
 
     def test_rejects_blank_research_goal(self) -> None:
         with pytest.raises(ValidationError):
-            _required_contract("ExternalResearchTask")(research_goal="   ")
+            ExternalResearchTask(research_goal="   ")
 
     def test_rejects_legacy_collection_goal_as_extra(self) -> None:
         with pytest.raises(ValidationError):
-            _required_contract("ExternalResearchTask").model_validate(
+            ExternalResearchTask.model_validate(
                 {
                     "research_goal": "NVIDIA の根拠を確認する",
                     "collection_goal": "legacy field must not be accepted",
@@ -608,7 +609,7 @@ class TestExternalResearchTask:
 
 class TestResearchTask:
     def test_has_research_goal_and_article_search_queries_only(self) -> None:
-        assert set(_required_contract("ResearchTask").model_fields) == {
+        assert set(ResearchTask.model_fields) == {
             "research_goal",
             "article_search_queries",
         }
@@ -627,7 +628,7 @@ class TestResearchTask:
             _research_task("NVIDIA の内部検索目的", [])
 
     def test_rejects_more_than_max_article_search_queries(self) -> None:
-        query_budget = _required_contract("MAX_ARTICLE_SEARCH_QUERIES")
+        query_budget = MAX_ARTICLE_SEARCH_QUERIES
 
         with pytest.raises(ValidationError):
             _research_task(

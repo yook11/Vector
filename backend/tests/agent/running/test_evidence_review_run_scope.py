@@ -1,8 +1,7 @@
 """AnsweringRunner: Evidence Reviewer をRun単位1回へ広げる契約(S1)。
 
 backend/specs/evidence-review-run-scope-slice.md の Invariants / Test contract を
-`AnsweringRunner.run()` の黒箱から検証する。production はまだtask単位のまま
-のため、大半はredになる想定(パケットの「期待するredの結果と理由」を参照)。
+`AnsweringRunner.run()` の黒箱から検証する。
 
 新しいグループ化candidate入力・Run全体の通し番号indexは、spec上の field名が
 固定されていないため、この正本テストは以下の安定境界だけを覗く:
@@ -356,11 +355,7 @@ async def test_review_runs_once_for_a_three_task_search_plan() -> None:
 
 @pytest.mark.asyncio
 async def test_review_does_not_start_before_every_tasks_collection_completes() -> None:
-    """S1 A2。最も遅いtaskの収集完了が精査開始の条件になる。
-
-    現行は各taskが自分の収集完了ごとに個別reviewを呼ぶため、task-Aが
-    止まっている間にtask-B/Cのreviewが先に走りred。
-    """
+    """S1 A2。最も遅いtaskの収集完了が精査開始の条件になる。"""
     gate_a = asyncio.Event()
     started_a = asyncio.Event()
     internal_tool = _InternalTool(
@@ -757,8 +752,7 @@ async def test_out_of_range_duplicate_and_over_cap_selections_drop_at_run_level(
 async def test_same_url_selected_from_two_tasks_are_both_kept() -> None:
     """S1 C4。同じURLの外部候補が複数taskで採用されたとき、両方が根拠として残る。
 
-    `deduplicate_external_evidence_by_url()`は仕様上廃止対象(「合流と重複排除」)
-    だが、本sliceではまだ呼ばれ続けるためred。
+    `deduplicate_external_evidence_by_url()`は仕様上廃止済み(「合流と重複排除」)。
     """
     shared_url = "https://example.com/shared-story"
     tasks = [_task("goal-A", ["query-a"]), _task("goal-B", ["query-b"])]
@@ -802,9 +796,8 @@ async def test_same_url_selected_from_two_tasks_are_both_kept() -> None:
 async def test_missing_flows_as_a_single_run_level_list_not_merged_per_task() -> None:
     """S1 D1/D3。reviewerのmissingはRun単位で1本としてmissing_aspectsへ流れ、
 
-    非空ならstatusはinsufficientになる。現行はtaskごとにmissingを集めて
-    連結するため(result_assembly._external_task_missing())、他taskへ充てた
-    poison entryの文言まで混入しred。
+    非空ならstatusはinsufficientになる。他taskへ充てたpoison entryの
+    文言は混入しない。
     """
     tasks = [_task("goal-A", ["query-a"]), _task("goal-B", ["query-b"])]
     internal_tool = _InternalTool(

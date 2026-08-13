@@ -2,54 +2,26 @@
 
 仕様「観測と失敗分類」により、Σ整合はtask_reports(収集系)の総和ではなく
 review report(Run単位の精査系)と突き合わせる。task_reports自体は
-0..n-1に完全対応する既存不変条件を維持する。ResearchTaskReport /
-EvidenceReviewReport / InternalArticleEvidence は production 未実装のため
-getattr ガードで参照する。
+0..n-1に完全対応する既存不変条件を維持する。
 """
 
 from __future__ import annotations
 
-from importlib import import_module
-from types import ModuleType
 from typing import Any
 
 import pytest
 from pydantic import ValidationError
 
+from app.agent.evidence_collection import ResearchTaskReport
 from app.agent.evidence_collection.external_search import (
     ExternalSearchEvidence,
     ExternalSearchOutcome,
 )
-from app.agent.evidence_review import ReviewedEvidence
+from app.agent.evidence_review import EvidenceReviewReport, ReviewedEvidence
+from app.agent.evidence_review.contract import InternalArticleEvidence
 
 
-def _required_attribute(module: ModuleType, name: str) -> Any:
-    if not hasattr(module, name):
-        pytest.fail(f"S1: {module.__name__} must define {name}")
-    return getattr(module, name)
-
-
-def _internal_article_evidence_type() -> Any:
-    try:
-        contracts = import_module("app.agent.evidence_review.contract")
-    except ModuleNotFoundError as exc:
-        pytest.fail(f"evidence_review.contract module is missing ({exc.name})")
-    return _required_attribute(contracts, "InternalArticleEvidence")
-
-
-def _report_type() -> Any:
-    import app.agent.evidence_collection as evidence_collection_package
-
-    return _required_attribute(evidence_collection_package, "ResearchTaskReport")
-
-
-def _review_report_type() -> Any:
-    import app.agent.evidence_review as evidence_review_package
-
-    return _required_attribute(evidence_review_package, "EvidenceReviewReport")
-
-
-def _report(**overrides: object) -> Any:
+def _report(**overrides: object) -> ResearchTaskReport:
     """S1: ResearchTaskReportは収集系だけを持つ(review関連はEvidenceReviewReportへ)。"""
     values: dict[str, object] = {
         "task_index": 0,
@@ -63,10 +35,10 @@ def _report(**overrides: object) -> Any:
         "external_candidate_count": 0,
     }
     values.update(overrides)
-    return _report_type()(**values)
+    return ResearchTaskReport(**values)
 
 
-def _review_report(**overrides: object) -> Any:
+def _review_report(**overrides: object) -> EvidenceReviewReport:
     values: dict[str, object] = {
         "review": "succeeded",
         "review_failure_reason": None,
@@ -76,7 +48,7 @@ def _review_report(**overrides: object) -> Any:
         "missing": [],
     }
     values.update(overrides)
-    return _review_report_type()(**values)
+    return EvidenceReviewReport(**values)
 
 
 def _external_outcome(
@@ -91,9 +63,10 @@ def _external_outcome(
     )
 
 
-def _internal_evidence(*, curation_id: int = 1, task_index: int = 0) -> Any:
-    evidence_type = _internal_article_evidence_type()
-    return evidence_type(
+def _internal_evidence(
+    *, curation_id: int = 1, task_index: int = 0
+) -> InternalArticleEvidence:
+    return InternalArticleEvidence(
         source_ref=f"{task_index}-0",
         task_index=task_index,
         claim="claim",

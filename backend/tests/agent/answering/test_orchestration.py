@@ -9,9 +9,7 @@ from typing import Any
 from uuid import UUID
 
 import pytest
-from pydantic import ValidationError
 
-import app.agent.planning.contract as planning_contract
 from app.agent.answering.contract import AnsweringRequest
 from app.agent.answering.direct_answer.contract import DirectAnswerDraft
 from app.agent.answering.evidence_answer.contract import (
@@ -38,9 +36,12 @@ from app.agent.evidence_review import (
     EvidenceReviewer,
 )
 from app.agent.planning.contract import (
+    DirectAnswerPlan,
     ExternalResearchTask,
     PlanningRequest,
     QuestionPlan,
+    ResearchTask,
+    SearchPlan,
     TargetTimeWindow,
 )
 from app.agent.question_context.contract import QuestionContext
@@ -56,20 +57,12 @@ def _as_of() -> datetime:
     return datetime(2026, 7, 7, 9, 0, tzinfo=UTC)
 
 
-def _draft(*, answer: str, cited_refs: list[str] | None = None) -> Any:
-    """S4: EvidenceAnswerDraftはanswerとcited_refsだけを持つ
+def _draft(*, answer: str, cited_refs: list[str] | None = None) -> EvidenceAnswerDraft:
+    """EvidenceAnswerDraftはanswerとcited_refsだけを持つ
 
-    (sufficiency/missing_aspects/unfulfilled_requirement_idsは撤去される)。
-    現行モデルはまだsufficiencyを必須で要求するため、fixture構築をガードして
-    assertion failureのredにする。
+    (sufficiency/missing_aspects/unfulfilled_requirement_idsは撤去済み)。
     """
-    try:
-        return EvidenceAnswerDraft(answer=answer, cited_refs=cited_refs or [])
-    except ValidationError:
-        pytest.fail(
-            "S4: EvidenceAnswerDraft must accept only "
-            "(answer: NonBlankText, cited_refs: list[str])"
-        )
+    return EvidenceAnswerDraft(answer=answer, cited_refs=cited_refs or [])
 
 
 @dataclass(frozen=True, slots=True)
@@ -99,27 +92,19 @@ def _input(
     )
 
 
-def _plan_type(name: str) -> object:
-    value = getattr(planning_contract, name, None)
-    if value is None:
-        pytest.fail(f"planning contract must define {name}")
-    return value
-
-
-def _direct_plan() -> object:
-    return _plan_type("DirectAnswerPlan")()
+def _direct_plan() -> DirectAnswerPlan:
+    return DirectAnswerPlan()
 
 
 def _search_plan(
     *,
     tasks: list[ExternalResearchTask] | None = None,
     target_time_window: TargetTimeWindow | None = None,
-) -> object:
+) -> SearchPlan:
     """各taskへ同一query("NVIDIA AI GPU")を配分する(query内容はこのtestでは非対象)。"""
-    research_task_type = _plan_type("ResearchTask")
-    return _plan_type("SearchPlan")(
+    return SearchPlan(
         research_tasks=[
-            research_task_type(
+            ResearchTask(
                 research_goal=task.research_goal,
                 article_search_queries=["NVIDIA AI GPU"],
             )
@@ -191,9 +176,7 @@ def _report(
     *,
     task_index: int,
     missing: list[str] | None = None,
-    evidence_count: int = 0,
 ) -> _FixtureTaskMissing:
-    del evidence_count  # D4-S2: evidence_countはreviewer draft組み立てに使わない。
     return _FixtureTaskMissing(task_index=task_index, missing=missing or [])
 
 
@@ -697,8 +680,7 @@ def _orchestrator(
                 timeline=timeline,
                 reviewer_runtime=reviewer_runtime,
             )
-            if isinstance(plan, _plan_type("SearchPlan"))
-            and isinstance(outcome, _RetrievalFixture)
+            if isinstance(plan, SearchPlan) and isinstance(outcome, _RetrievalFixture)
             else None
         )
     evidence_answerer = FakeEvidenceAnswerer(draft, timeline=timeline)

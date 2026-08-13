@@ -8,21 +8,28 @@ review.missing)と生成不能の1行だけで組み立てられ、要望由来�
 
 from __future__ import annotations
 
-from importlib import import_module
 from typing import Any
 
-import pytest
-from pydantic import ValidationError
-
-import app.agent.evidence_collection as evidence_collection_package
-import app.agent.planning.contract as planning_contract
-from app.agent.answering.evidence_answer.contract import EvidenceAnswerDraft
+from app.agent.answering.evidence_answer.contract import (
+    EvidenceAnswerDraft,
+    EvidenceAnswerUnavailable,
+)
 from app.agent.answering.evidence_answer.evidence import AnswerEvidenceItem
-from app.agent.answering.result_assembly import assemble_evidence_result
+from app.agent.answering.result_assembly import (
+    _UNAVAILABLE_ANSWER,
+    _UNAVAILABLE_MISSING,
+    assemble_evidence_result,
+)
 from app.agent.contract import InternalArticleSource
+from app.agent.evidence_collection import ResearchTaskReport
 from app.agent.evidence_collection.external_search import ExternalSearchOutcome
-from app.agent.evidence_review import ReviewedEvidence
-from app.agent.planning.contract import ExternalResearchTask, TargetTimeWindow
+from app.agent.evidence_review import EvidenceReviewReport, ReviewedEvidence
+from app.agent.planning.contract import (
+    ExternalResearchTask,
+    ResearchTask,
+    SearchPlan,
+    TargetTimeWindow,
+)
 
 _TIME_FILTER_MISSING = "指定された公開期間を外部検索へ適用できませんでした"
 _INCOMPLETE_TASK_MISSING = "完了できなかった調査があります"
@@ -32,49 +39,23 @@ def _task(goal: str) -> ExternalResearchTask:
     return ExternalResearchTask(research_goal=goal)
 
 
-def _search_plan(**payload: Any) -> object:
-    plan_type = getattr(planning_contract, "SearchPlan", None)
-    if plan_type is None:
-        pytest.fail("planning contract must define SearchPlan")
-    return plan_type(**payload)
+def _search_plan(**payload: Any) -> SearchPlan:
+    return SearchPlan(**payload)
 
 
 def _research_tasks_from(
     tasks: list[ExternalResearchTask],
     *,
     query: str = "NVIDIA",
-) -> list[Any]:
+) -> list[ResearchTask]:
     """ExternalResearchTask(goalのみ)から、meaningを保ってResearchTaskへ配分する。"""
-    research_task_type = getattr(planning_contract, "ResearchTask", None)
-    if research_task_type is None:
-        pytest.fail("planning contract must define ResearchTask")
     return [
-        research_task_type(
+        ResearchTask(
             research_goal=task.research_goal,
             article_search_queries=[query],
         )
         for task in tasks
     ]
-
-
-def _report_type() -> Any:
-    report_type = getattr(evidence_collection_package, "ResearchTaskReport", None)
-    if report_type is None:
-        pytest.fail(
-            "S1: app.agent.evidence_collection facade must export ResearchTaskReport"
-        )
-    return report_type
-
-
-def _review_report_type() -> Any:
-    import app.agent.evidence_review as evidence_review_package
-
-    review_report_type = getattr(evidence_review_package, "EvidenceReviewReport", None)
-    if review_report_type is None:
-        pytest.fail(
-            "S1: app.agent.evidence_review facade must export EvidenceReviewReport"
-        )
-    return review_report_type
 
 
 def _report(
@@ -88,9 +69,8 @@ def _report(
     provider_failed_query_count: int = 0,
     internal_candidate_count: int = 0,
     external_candidate_count: int = 0,
-) -> Any:
-    report_type = _report_type()
-    return report_type(
+) -> ResearchTaskReport:
+    return ResearchTaskReport(
         task_index=task_index,
         research_goal=research_goal,
         internal_collection=internal_collection,
@@ -111,9 +91,8 @@ def _review_report(
     external_evidence_count: int = 0,
     dropped_selection_count: int = 0,
     missing: list[str] | None = None,
-) -> Any:
-    review_report_type = _review_report_type()
-    return review_report_type(
+) -> EvidenceReviewReport:
+    return EvidenceReviewReport(
         review=review,
         review_failure_reason=review_failure_reason,
         internal_evidence_count=internal_evidence_count,
@@ -159,89 +138,47 @@ def _without_incomplete_phrase(missing_aspects: list[str]) -> list[str]:
     return [item for item in missing_aspects if item != _INCOMPLETE_TASK_MISSING]
 
 
-def _evidence_answer_unavailable_type() -> Any:
-    contract = import_module("app.agent.answering.evidence_answer.contract")
-    unavailable_type = getattr(contract, "EvidenceAnswerUnavailable", None)
-    if unavailable_type is None:
-        pytest.fail(
-            "S3: app.agent.answering.evidence_answer.contract must define "
-            "EvidenceAnswerUnavailable"
-        )
-    return unavailable_type
-
-
-def _unavailable(failure_code: str = "ai_error_network") -> Any:
-    return _evidence_answer_unavailable_type()(failure_code=failure_code)
-
-
-def _result_assembly_constant(name: str) -> str:
-    """S3: result_assembly側のmodule定数を取得する(文言リテラルを複製しない)。"""
-    module = import_module("app.agent.answering.result_assembly")
-    value = getattr(module, name, None)
-    if value is None:
-        pytest.fail(f"S3: app.agent.answering.result_assembly must define {name}")
-    return value
+def _unavailable(failure_code: str = "ai_error_network") -> EvidenceAnswerUnavailable:
+    return EvidenceAnswerUnavailable(failure_code=failure_code)
 
 
 def test_unavailable_wording_is_fixed_literal_text() -> None:
     """R4条件13・14: 生成不能時の定型文言を実値でリテラル固定する。
 
-    他のテストは_result_assembly_constant()経由でこの定数を期待値として
-    再利用しているため、文言そのものを変更しても緑のまま通ってしまい、
-    Invariant「定型本文とmissing_aspectsの文言は現行の値を維持する」の
-    回帰保証になっていなかった(実装ではなくTest Packetの指示が原因、
-    S3時点で確定済みの経緯はコミットログ参照)。ここでだけ実値をリテラルで
-    固定し、値そのものの変更を検知できるようにする。
+    他のテストは_UNAVAILABLE_ANSWER/_UNAVAILABLE_MISSING経由でこの定数を
+    期待値として再利用しているため、文言そのものを変更しても緑のまま通って
+    しまい、Invariant「定型本文とmissing_aspectsの文言は現行の値を維持する」の
+    回帰保証にならない。ここでだけ実値をリテラルで固定し、値そのものの
+    変更を検知できるようにする。
     """
-    assert _result_assembly_constant("_UNAVAILABLE_ANSWER") == (
+    assert _UNAVAILABLE_ANSWER == (
         "回答を生成できませんでした。根拠の不足または応答形式の不備により、"
         "参考回答を安全に構築できませんでした。"
     )
-    assert (
-        _result_assembly_constant("_UNAVAILABLE_MISSING")
-        == "回答生成に必要な根拠または応答形式が不足しました"
-    )
+    assert _UNAVAILABLE_MISSING == "回答生成に必要な根拠または応答形式が不足しました"
 
 
-def _draft(*, answer: str, cited_refs: list[str] | None = None) -> Any:
-    """S4: EvidenceAnswerDraftはanswerとcited_refsだけを持つ
+def _draft(*, answer: str, cited_refs: list[str] | None = None) -> EvidenceAnswerDraft:
+    """EvidenceAnswerDraftはanswerとcited_refsだけを持つ
 
-    (sufficiency/missing_aspects/unfulfilled_requirement_idsは撤去される)。
-    現行モデルはまだsufficiencyを必須で要求するため、fixture構築をガードして
-    assertion failureのredにする。
+    (sufficiency/missing_aspects/unfulfilled_requirement_idsは撤去済み)。
     """
-    try:
-        return EvidenceAnswerDraft(answer=answer, cited_refs=cited_refs or [])
-    except ValidationError:
-        pytest.fail(
-            "S4: EvidenceAnswerDraft must accept only "
-            "(answer: NonBlankText, cited_refs: list[str])"
-        )
+    return EvidenceAnswerDraft(answer=answer, cited_refs=cited_refs or [])
 
 
 def _assemble(
     *,
-    plan: object,
+    plan: SearchPlan,
     outcome: ReviewedEvidence,
     evidence: list[AnswerEvidenceItem],
-    answer_outcome: Any,
+    answer_outcome: EvidenceAnswerDraft | EvidenceAnswerUnavailable,
 ) -> Any:
-    """S4: assemble_evidence_result()はcontext引数を持たない
-
-    (requirement参照が唯一の用途だったため撤去される)。
-    """
-    try:
-        return assemble_evidence_result(
-            plan=plan,
-            outcome=outcome,
-            evidence=evidence,
-            answer_outcome=answer_outcome,
-        )
-    except TypeError:
-        pytest.fail(
-            "S4: assemble_evidence_result must accept "
-            "(plan, outcome, evidence, answer_outcome) without context"
-        )
+    return assemble_evidence_result(
+        plan=plan,
+        outcome=outcome,
+        evidence=evidence,
+        answer_outcome=answer_outcome,
+    )
 
 
 def test_task_completes_via_internal_evidence_despite_external_provider_failure() -> (
@@ -343,7 +280,7 @@ def test_all_tasks_time_filter_failed_add_incomplete_and_time_filter_missing_onc
     assert _without_incomplete_phrase(result.missing_aspects) == [
         "回答に使える根拠を取得できませんでした",
         _TIME_FILTER_MISSING,
-        _result_assembly_constant("_UNAVAILABLE_MISSING"),
+        _UNAVAILABLE_MISSING,
     ]
 
 
@@ -407,7 +344,7 @@ def test_empty_evidence_time_filter_failure_adds_incomplete_and_retrieval() -> N
     assert _without_incomplete_phrase(result.missing_aspects) == [
         "回答に使える根拠を取得できませんでした",
         _TIME_FILTER_MISSING,
-        _result_assembly_constant("_UNAVAILABLE_MISSING"),
+        _UNAVAILABLE_MISSING,
     ]
 
 
@@ -495,7 +432,7 @@ def test_report_missing_deduplicates_against_review_missing() -> None:
     """
     tasks = [_task("既存のexternal task")]
     shared_text = "共有される不足理由"
-    unavailable_missing = _result_assembly_constant("_UNAVAILABLE_MISSING")
+    unavailable_missing = _UNAVAILABLE_MISSING
     outcome = _outcome(
         task_reports=[
             _report(
@@ -535,8 +472,8 @@ def test_unavailable_outcome_with_evidence_builds_insufficient_result() -> None:
 
     文言はresult_assembly側の定数から取られる(文言リテラルは複製しない)。
     """
-    unavailable_answer = _result_assembly_constant("_UNAVAILABLE_ANSWER")
-    unavailable_missing = _result_assembly_constant("_UNAVAILABLE_MISSING")
+    unavailable_answer = _UNAVAILABLE_ANSWER
+    unavailable_missing = _UNAVAILABLE_MISSING
     tasks = [_task("直近の外部発表を確認する")]
     outcome = _outcome(
         task_reports=[
@@ -569,7 +506,7 @@ def test_unavailable_missing_coexists_with_mechanism_missing_in_order() -> None:
 
     review.missing)と生成不能の1行が併存し、現行どおりの順序で並ぶ。
     """
-    unavailable_missing = _result_assembly_constant("_UNAVAILABLE_MISSING")
+    unavailable_missing = _UNAVAILABLE_MISSING
     tasks = [_task("直近の外部発表を確認する")]
     outcome = _outcome(
         task_reports=[
@@ -604,7 +541,7 @@ def test_unavailable_missing_coexists_with_mechanism_missing_in_order() -> None:
 
 def test_unavailable_missing_is_deduplicated_against_mechanism_missing() -> None:
     """生成不能の1行が機構由来のmissingと偶然一致しても重複排除される。"""
-    unavailable_missing = _result_assembly_constant("_UNAVAILABLE_MISSING")
+    unavailable_missing = _UNAVAILABLE_MISSING
     tasks = [_task("既存のexternal task")]
     outcome = _outcome(
         task_reports=[

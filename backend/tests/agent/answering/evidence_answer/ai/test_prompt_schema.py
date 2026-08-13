@@ -13,6 +13,8 @@ from app.agent.answering.contract import AnsweringRequest
 from app.agent.answering.evidence_answer.contract import EvidenceAnswerInput
 from app.agent.answering.evidence_answer.evidence import AnswerEvidenceItem
 from app.agent.answering.evidence_answer.prompts import (
+    _REVIEW_MISSING_TEMPLATE,
+    _TRUNCATION_REPAIR_BLOCK,
     EVIDENCE_ANSWER_INSTRUCTIONS,
     EVIDENCE_ANSWER_PROMPT,
     EVIDENCE_ANSWER_PROMPT_VERSION,
@@ -84,12 +86,7 @@ def _render(
     # 検証するため、明示指定時だけkwargへ足す(既存testを巻き込まない)。
     if review_missing is not None:
         input_kwargs["review_missing"] = review_missing
-    try:
-        input = EvidenceAnswerInput(**input_kwargs)
-    except TypeError:
-        pytest.fail(
-            "S5: EvidenceAnswerInput must accept review_missing: tuple[str, ...]"
-        )
+    input = EvidenceAnswerInput(**input_kwargs)
     return render_evidence_answer_input(input)
 
 
@@ -193,57 +190,30 @@ def _untrusted_spans(rendered: str) -> list[tuple[int, int]]:
     ]
 
 
-def _truncation_repair_block() -> str:
-    block = getattr(evidence_answer_prompts_module, "_TRUNCATION_REPAIR_BLOCK", None)
-    if block is None:
-        pytest.fail(
-            "S2 prompt contract is missing: "
-            "app.agent.answering.evidence_answer.prompts._TRUNCATION_REPAIR_BLOCK"
-        )
-    return block
-
-
-def _review_missing_template() -> str:
-    template = getattr(evidence_answer_prompts_module, "_REVIEW_MISSING_TEMPLATE", None)
-    if template is None:
-        pytest.fail(
-            "S5 prompt contract is missing: "
-            "app.agent.answering.evidence_answer.prompts._REVIEW_MISSING_TEMPLATE"
-        )
-    return template
-
-
 def _review_missing_template_header() -> str:
     """テンプレートのうち、missing項目の展開より前にある固定文字列。
 
     文言そのものは実装担当が決めるため、`{`(str.formatのplaceholder開始)より
     前の固定部分だけを、ブロックの出現/不在を判定するlandmarkとして使う。
     """
-    template = _review_missing_template()
-    header, _, _ = template.partition("{")
-    if not header.strip():
-        pytest.fail(
-            "S5: _REVIEW_MISSING_TEMPLATE must have literal text "
-            "before the missing items are interpolated"
-        )
+    header, _, _ = _REVIEW_MISSING_TEMPLATE.partition("{")
+    assert header.strip(), (
+        "_REVIEW_MISSING_TEMPLATE must have literal text "
+        "before the missing items are interpolated"
+    )
     return header
 
 
 def _input_with_truncation_notice(
     *, previous_output_truncated: bool
 ) -> EvidenceAnswerInput:
-    try:
-        return EvidenceAnswerInput(
-            request=_request(),
-            evidence=(),
-            target_time_window=None,
-            repair_context=None,
-            previous_output_truncated=previous_output_truncated,
-        )
-    except TypeError:
-        pytest.fail(
-            "S2 flow contract is missing: EvidenceAnswerInput.previous_output_truncated"
-        )
+    return EvidenceAnswerInput(
+        request=_request(),
+        evidence=(),
+        target_time_window=None,
+        repair_context=None,
+        previous_output_truncated=previous_output_truncated,
+    )
 
 
 def test_truncation_notice_is_trusted_and_outside_untrusted_blocks() -> None:
@@ -252,15 +222,13 @@ def test_truncation_notice_is_trusted_and_outside_untrusted_blocks() -> None:
     打ち切り通知はruntimeが観測した機械的事実であり、model出力由来の
     <untrusted_input>境界の外側 (trusted側) に置かれる。
     """
-    truncation_block = _truncation_repair_block()
-
     rendered = render_evidence_answer_input(
         _input_with_truncation_notice(previous_output_truncated=True)
     )
 
-    assert truncation_block in rendered
-    block_start = rendered.index(truncation_block)
-    block_end = block_start + len(truncation_block)
+    assert _TRUNCATION_REPAIR_BLOCK in rendered
+    block_start = rendered.index(_TRUNCATION_REPAIR_BLOCK)
+    block_end = block_start + len(_TRUNCATION_REPAIR_BLOCK)
     assert all(
         block_end <= span_start or span_end <= block_start
         for span_start, span_end in _untrusted_spans(rendered)
@@ -268,13 +236,11 @@ def test_truncation_notice_is_trusted_and_outside_untrusted_blocks() -> None:
 
 
 def test_no_truncation_notice_without_the_flag() -> None:
-    truncation_block = _truncation_repair_block()
-
     rendered = render_evidence_answer_input(
         _input_with_truncation_notice(previous_output_truncated=False)
     )
 
-    assert truncation_block not in rendered
+    assert _TRUNCATION_REPAIR_BLOCK not in rendered
 
 
 def test_review_missing_is_included_in_the_rendered_input() -> None:

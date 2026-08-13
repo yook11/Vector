@@ -6,9 +6,7 @@ import asyncio
 import json
 from collections.abc import Sequence
 from dataclasses import fields, is_dataclass
-from importlib import import_module
-from types import ModuleType
-from typing import Any, Literal, get_args, get_origin, get_type_hints
+from typing import Literal, get_args, get_origin, get_type_hints
 
 import httpx
 import logfire
@@ -18,39 +16,25 @@ from opentelemetry.sdk.trace import ReadableSpan
 from opentelemetry.trace import SpanKind, StatusCode
 from pydantic import SecretStr
 
+from app.agent.evidence_collection.external_search import TavilyExternalSearchTool
+from app.agent.evidence_collection.external_search.contract import (
+    ExternalSearchCandidate,
+    ExternalSearchDateFilter,
+    ExternalSearchProviderError,
+    ExternalSearchTool,
+    ExternalSearchToolFailureReason,
+    ExternalSearchToolInput,
+)
 from tests.logfire._span_helpers import domain_attr_keys, one_span_named
 
 _TOOL_SPAN_NAME = "external_search_tool_call"
 _ANSWERING_SPAN_NAME = "agent_answering_run"
 
 
-def _required_module(module_name: str) -> ModuleType:
-    try:
-        return import_module(module_name)
-    except ModuleNotFoundError as exc:
-        pytest.fail(
-            f"PR3 external search tool module is missing: {module_name} ({exc.name})"
-        )
-
-
-def _required_attribute(module: ModuleType, name: str) -> Any:
-    if not hasattr(module, name):
-        pytest.fail(
-            f"PR3 external search tool contract is missing: {module.__name__}.{name}"
-        )
-    return getattr(module, name)
-
-
-def _contracts() -> ModuleType:
-    return _required_module("app.agent.evidence_collection.external_search.contract")
-
-
-def _package() -> ModuleType:
-    return _required_module("app.agent.evidence_collection.external_search")
-
-
-def _tool_input(*, query: str, limit: int, date_filter: object | None = None) -> Any:
-    return _required_attribute(_contracts(), "ExternalSearchToolInput")(
+def _tool_input(
+    *, query: str, limit: int, date_filter: object | None = None
+) -> ExternalSearchToolInput:
+    return ExternalSearchToolInput(
         query=query,
         limit=limit,
         date_filter=date_filter,
@@ -107,8 +91,10 @@ class StaticAsyncByteStream(httpx.AsyncByteStream):
         yield self._content
 
 
-def _tavily_tool(client: object, *, api_key: str = "TOOL_SECRET_SENTINEL_d5e1") -> Any:
-    return _required_attribute(_package(), "TavilyExternalSearchTool")(
+def _tavily_tool(
+    client: object, *, api_key: str = "TOOL_SECRET_SENTINEL_d5e1"
+) -> TavilyExternalSearchTool:
+    return TavilyExternalSearchTool(
         api_key=SecretStr(api_key),
         client=client,
     )
@@ -141,33 +127,26 @@ def _span_text(span: ReadableSpan) -> str:
 
 
 def test_external_search_tool_port_and_tavily_adapter_are_stably_typed() -> None:
-    contracts = _contracts()
-    input_type = _required_attribute(contracts, "ExternalSearchToolInput")
-    tool_port = _required_attribute(contracts, "ExternalSearchTool")
-    candidate_type = _required_attribute(contracts, "ExternalSearchCandidate")
-    date_filter_type = _required_attribute(contracts, "ExternalSearchDateFilter")
-    tool_type = _required_attribute(_package(), "TavilyExternalSearchTool")
-
-    assert is_dataclass(input_type)
-    assert [field.name for field in fields(input_type)] == [
+    assert is_dataclass(ExternalSearchToolInput)
+    assert [field.name for field in fields(ExternalSearchToolInput)] == [
         "query",
         "limit",
         "date_filter",
     ]
-    assert get_type_hints(input_type) == {
+    assert get_type_hints(ExternalSearchToolInput) == {
         "query": str,
         "limit": int,
-        "date_filter": date_filter_type | None,
+        "date_filter": ExternalSearchDateFilter | None,
     }
-    assert get_type_hints(tool_port.invoke) == {
-        "input": input_type,
-        "return": list[candidate_type],
+    assert get_type_hints(ExternalSearchTool.invoke) == {
+        "input": ExternalSearchToolInput,
+        "return": list[ExternalSearchCandidate],
     }
-    name_property = tool_port.__dict__["name"]
+    name_property = ExternalSearchTool.__dict__["name"]
     name_type = get_type_hints(name_property.fget)["return"]
     assert get_origin(name_type) is Literal
     assert get_args(name_type) == ("external_search",)
-    tool = tool_type(api_key=SecretStr("test-key"), client=object())
+    tool = TavilyExternalSearchTool(api_key=SecretStr("test-key"), client=object())
     assert tool.name == "external_search"
     assert not hasattr(tool, "search")
 
@@ -271,9 +250,7 @@ async def test_classified_tool_failure_uses_closed_reason_without_exception_even
         api_key=sentinels["secret"],
     )
 
-    with pytest.raises(
-        _required_attribute(_contracts(), "ExternalSearchProviderError")
-    ) as raised:
+    with pytest.raises(ExternalSearchProviderError) as raised:
         await tool.invoke(_tool_input(query=sentinels["query"], limit=1))
 
     span = _one_tool_span(capfire)
@@ -297,19 +274,19 @@ def test_classified_tool_error_accepts_every_static_reason_code() -> None:
     受理集合を手書きで並べると enum に member を足したときに黙って落ちる。
     HTTP_STATUS だけが status 付きで、それ以外は静的という契約を固定する。
     """
-    contracts = _contracts()
-    error_type = _required_attribute(contracts, "ExternalSearchProviderError")
-    reason_enum = _required_attribute(contracts, "ExternalSearchToolFailureReason")
-
-    static_members = [m for m in reason_enum if m is not reason_enum.HTTP_STATUS]
+    static_members = [
+        member
+        for member in ExternalSearchToolFailureReason
+        if member is not ExternalSearchToolFailureReason.HTTP_STATUS
+    ]
     assert static_members  # 列挙が空なら以下の assert が空虚になる
 
     for member in static_members:
-        assert error_type(reason=member.value).reason == member.value
+        assert ExternalSearchProviderError(reason=member.value).reason == member.value
 
 
 def test_classified_tool_error_rejects_arbitrary_reason_values() -> None:
-    error_type = _required_attribute(_contracts(), "ExternalSearchProviderError")
+    error_type = ExternalSearchProviderError
     error = error_type(reason="tavily_search_http_error")
 
     assert error.reason == "tavily_search_http_error"

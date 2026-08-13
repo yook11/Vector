@@ -11,33 +11,18 @@ S1(仕様「合流と重複排除」)で廃止された。
 from __future__ import annotations
 
 from datetime import UTC, datetime
-from importlib import import_module
-from types import ModuleType
-from typing import Any
 
-import pytest
-
+import app.agent.evidence_collection.external_search.policy as policy_module
 from app.agent.evidence_collection.external_search.contract import (
     ExternalSearchCandidate,
 )
-
-
-def _policy() -> ModuleType:
-    try:
-        return import_module("app.agent.evidence_collection.external_search.policy")
-    except ModuleNotFoundError as exc:
-        pytest.fail(
-            "external search のドメイン純関数は policy module に置く必要があります "
-            f"({exc.name})",
-            pytrace=False,
-        )
-
-
-def _function(name: str) -> Any:
-    value = getattr(_policy(), name, None)
-    if value is None:
-        pytest.fail(f"policy must export {name}", pytrace=False)
-    return value
+from app.agent.evidence_collection.external_search.policy import (
+    PROVIDER_SEARCH_TIMEOUT_SECONDS,
+    QUERY_GENERATE_TIMEOUT_SECONDS,
+    build_candidate_pool,
+    clean_generated_queries,
+    resolve_external_search_agent_count,
+)
 
 
 def _candidate(url: str, *, title: str | None = None) -> ExternalSearchCandidate:
@@ -51,17 +36,15 @@ def _candidate(url: str, *, title: str | None = None) -> ExternalSearchCandidate
 
 
 def test_policy_exports_the_public_domain_functions_and_timeout_constants() -> None:
-    policy = _policy()
-
     assert (
         {
             "clean_generated_queries",
             "build_candidate_pool",
             "resolve_external_search_agent_count",
         }
-        <= set(dir(policy)),
-        policy.QUERY_GENERATE_TIMEOUT_SECONDS,
-        policy.PROVIDER_SEARCH_TIMEOUT_SECONDS,
+        <= set(dir(policy_module)),
+        QUERY_GENERATE_TIMEOUT_SECONDS,
+        PROVIDER_SEARCH_TIMEOUT_SECONDS,
     ) == (True, 30, 15)
 
 
@@ -71,13 +54,10 @@ def test_url_deduplication_is_removed_from_policy() -> None:
     同じURLが別の観点の根拠として並ぶことを許容する
     (deduplicate_external_evidence_by_url()とその整合validatorを削除する)。
     """
-    policy = _policy()
-
-    assert not hasattr(policy, "deduplicate_external_evidence_by_url")
+    assert not hasattr(policy_module, "deduplicate_external_evidence_by_url")
 
 
 def test_clean_generated_queries_strips_caps_deduplicates_and_limits_to_three() -> None:
-    clean_generated_queries = _function("clean_generated_queries")
     overlong = "x" * 205
 
     assert clean_generated_queries(
@@ -90,7 +70,6 @@ def test_clean_generated_queries_strips_caps_deduplicates_and_limits_to_three() 
 
 
 def test_build_candidate_pool_round_robins_urls_and_stops_at_twenty() -> None:
-    build_candidate_pool = _function("build_candidate_pool")
     query_candidates = [
         [
             _candidate("https://example.com/shared", title="first shared"),
@@ -122,10 +101,10 @@ def test_build_candidate_pool_round_robins_urls_and_stops_at_twenty() -> None:
 
 
 def test_external_agent_count_is_bounded_by_task_count_and_hard_limit() -> None:
-    resolve_agent_count = _function("resolve_external_search_agent_count")
-
     assert [
-        resolve_agent_count(task_count=task_count, requested_agent_count=requested)
+        resolve_external_search_agent_count(
+            task_count=task_count, requested_agent_count=requested
+        )
         for task_count, requested in [
             (0, None),
             (1, None),

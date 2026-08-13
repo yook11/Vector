@@ -2,16 +2,15 @@
 
 from __future__ import annotations
 
-import importlib
 import inspect
 from dataclasses import FrozenInstanceError, fields, is_dataclass
 from datetime import UTC, datetime
-from types import ModuleType
 from typing import Any, get_type_hints
 from uuid import UUID
 
 import pytest
 
+import app.agent.running as running_module
 from app.agent.answering.direct_answer.contract import DirectAnswerer
 from app.agent.answering.evidence_answer.contract import EvidenceAnswerer
 from app.agent.contract import AnswerQuestionResult
@@ -21,9 +20,15 @@ from app.agent.evidence_review import EvidenceReviewer
 from app.agent.planning.contract import QuestionPlanner
 from app.agent.question_context import QuestionContext
 from app.agent.research_checkpoint import ResearchCheckpoint, ResearchTaskRecord
+from app.agent.running import (
+    AnsweringPhases,
+    AnsweringRunContext,
+    RunContext,
+    RunInput,
+    RunResult,
+)
 from app.agent.threads.contracts import ThreadMessageSnapshot
 
-RUNNING_MODULE = "app.agent.running"
 PUBLIC_CONTRACTS = {
     "AnsweringRunner",
     "AnsweringRunContext",
@@ -33,30 +38,6 @@ PUBLIC_CONTRACTS = {
     "RunInput",
     "RunResult",
 }
-
-
-def _running_module() -> ModuleType:
-    missing_contract = False
-    try:
-        return importlib.import_module(RUNNING_MODULE)
-    except ModuleNotFoundError as exc:
-        if exc.name == RUNNING_MODULE or exc.name.startswith(f"{RUNNING_MODULE}."):
-            missing_contract = True
-        else:
-            raise
-    if missing_contract:
-        pytest.fail(
-            "app.agent.running の public internal contract が未実装です",
-            pytrace=False,
-        )
-    raise AssertionError("unreachable")
-
-
-def _contract_type(name: str) -> type[Any]:
-    contract_type = getattr(_running_module(), name, None)
-    if contract_type is None:
-        pytest.fail(f"app.agent.running must export {name}", pytrace=False)
-    return contract_type
 
 
 def _field_contract(contract_type: type[Any]) -> tuple[tuple[str, Any], ...]:
@@ -77,7 +58,7 @@ def _is_frozen_and_slotted(instance: object) -> bool:
 
 
 def _run_context() -> object:
-    run_context_type = _contract_type("RunContext")
+    run_context_type = RunContext
     return run_context_type(
         run_id=UUID("019bd239-1ed4-7fbb-a336-04fe3c197645"),
         as_of=datetime(2026, 7, 16, 9, 30, tzinfo=UTC),
@@ -85,7 +66,7 @@ def _run_context() -> object:
 
 
 def test_running_package_exports_public_contracts() -> None:
-    running = _running_module()
+    running = running_module
 
     assert (
         PUBLIC_CONTRACTS <= set(running.__all__),
@@ -105,7 +86,7 @@ def test_run_input_is_frozen_slotted_question_and_tuple_history() -> None:
 
     同threadの直近checkpointを渡す`prior_research`(既定は空tuple)を持つ。
     """
-    run_input_type = _contract_type("RunInput")
+    run_input_type = RunInput
     history = (
         ThreadMessageSnapshot(role="user", content="前の質問"),
         ThreadMessageSnapshot(role="assistant", content="前の回答"),
@@ -153,7 +134,7 @@ def test_run_input_is_frozen_slotted_question_and_tuple_history() -> None:
 
 
 def test_run_context_is_frozen_slotted_run_identity_and_time() -> None:
-    run_context_type = _contract_type("RunContext")
+    run_context_type = RunContext
     run_id = UUID("019bd239-1ed4-7fbb-a336-04fe3c197645")
     as_of = datetime(2026, 7, 16, 9, 30, tzinfo=UTC)
     run_context = run_context_type(run_id=run_id, as_of=as_of)
@@ -175,7 +156,7 @@ def test_run_context_is_frozen_slotted_run_identity_and_time() -> None:
 
 
 def test_answering_context_requires_prepared_question_context() -> None:
-    answering_context_type = _contract_type("AnsweringRunContext")
+    answering_context_type = AnsweringRunContext
     run_context = _run_context()
     question_context = QuestionContext(standalone_question="NVIDIA の直近発表は？")
     answering_context = answering_context_type(
@@ -207,7 +188,7 @@ def test_answering_context_requires_prepared_question_context() -> None:
         answering_context.previous_answer,
     ) == (
         (
-            ("run_context", _contract_type("RunContext")),
+            ("run_context", RunContext),
             ("question_context", QuestionContext),
             ("previous_answer", str),
         ),
@@ -225,8 +206,8 @@ def test_run_result_is_frozen_slotted_output_and_answering_context() -> None:
     (default None)を持つ。フィールド完全一致を固定するcontract testのため、
     新契約は3 fieldの完全一致で表す。
     """
-    answering_context_type = _contract_type("AnsweringRunContext")
-    run_result_type = _contract_type("RunResult")
+    answering_context_type = AnsweringRunContext
+    run_result_type = RunResult
     answering_context = answering_context_type(
         run_context=_run_context(),
         question_context=QuestionContext(standalone_question="NVIDIA の直近発表は？"),
@@ -284,7 +265,7 @@ def test_answering_phases_owns_collector_without_internal_search_port() -> None:
     D4-T3: 精査は EvidenceReviewer が起動するため、reviewer field を追加で持つ
     (他のphase roleと同様、明示的な配線を要求するためdefaultは持たない)。
     """
-    phases_type = _contract_type("AnsweringPhases")
+    phases_type = AnsweringPhases
     signature = inspect.signature(phases_type)
 
     assert (

@@ -5,14 +5,14 @@ from __future__ import annotations
 import asyncio
 from collections import deque
 from collections.abc import Sequence
-from importlib import import_module
-from typing import Any, Protocol, cast
+from typing import Any
 from uuid import UUID
 
 import pytest
 from logfire.testing import CaptureLogfire
 from structlog.testing import capture_logs
 
+from app.agent.live_updates.answer_delta import AgentRunLiveAnswerDeltaReporter
 from app.agent.live_updates.stream import (
     AgentRunLiveStreamAnswerDeltaEvent,
     AgentRunLiveStreamAnswerResetEvent,
@@ -22,16 +22,6 @@ from tests.logfire._metric_helpers import collected_metrics
 RUN_ID = UUID("00000000-0000-4000-a000-000000000011")
 ATTEMPT_EPOCH = 7
 BREAKER_METRIC = "vector.agent.answer_delta.breaker_open"
-
-
-class _AnswerDeltaReporter(Protocol):
-    async def append(self, *, generation: int, text: str) -> None: ...
-
-    async def reset(self, *, generation: int) -> None: ...
-
-    async def finish(self, *, generation: int) -> None: ...
-
-    async def abort(self, *, generation: int) -> None: ...
 
 
 class ManualSleeper:
@@ -107,24 +97,12 @@ class BlockingPublisher(ScriptedPublisher):
 def _new_reporter(
     publisher: ScriptedPublisher,
     sleeper: ManualSleeper,
-) -> _AnswerDeltaReporter:
-    try:
-        module = import_module("app.agent.live_updates.answer_delta")
-    except ModuleNotFoundError as exc:
-        if exc.name != "app.agent.live_updates.answer_delta":
-            raise
-        pytest.fail("Direct answer delta reporter が未実装です", pytrace=False)
-
-    reporter_type = getattr(module, "AgentRunLiveAnswerDeltaReporter", None)
-    assert reporter_type is not None, "AgentRunLiveAnswerDeltaReporter が未実装です"
-    return cast(
-        "_AnswerDeltaReporter",
-        reporter_type(
-            publisher,
-            run_id=RUN_ID,
-            attempt_epoch=ATTEMPT_EPOCH,
-            sleep=sleeper.sleep,
-        ),
+) -> AgentRunLiveAnswerDeltaReporter:
+    return AgentRunLiveAnswerDeltaReporter(
+        publisher,
+        run_id=RUN_ID,
+        attempt_epoch=ATTEMPT_EPOCH,
+        sleep=sleeper.sleep,
     )
 
 

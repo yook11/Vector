@@ -2,10 +2,8 @@
 
 from __future__ import annotations
 
-import importlib
 import json
 from dataclasses import fields, is_dataclass
-from types import ModuleType
 from typing import Any, Literal, get_args, get_origin, get_type_hints
 from unittest.mock import Mock
 
@@ -18,7 +16,9 @@ from app.agent.evidence_collection.internal_search import (
     InternalArticleSearchHit,
 )
 from app.agent.evidence_collection.internal_search.contract import (
+    INTERNAL_SEARCH_TOOL_NAME,
     InternalSearchError,
+    InternalSearchTool,
     InternalSearchToolInput,
 )
 from app.agent.evidence_collection.internal_search.query_embedding import (
@@ -39,21 +39,6 @@ from tests.logfire._metric_helpers import collected_metrics, sum_counter_for_res
 
 _METRIC = "vector.agent.internal_retrieval.outcome"
 _CACHE_METRIC = "vector.agent.internal_retrieval.query_embedding_cache"
-
-
-def _internal_search_contract_module() -> ModuleType:
-    return importlib.import_module(
-        "app.agent.evidence_collection.internal_search.contract"
-    )
-
-
-def _required_attribute(module: ModuleType, name: str) -> Any:
-    if not hasattr(module, name):
-        pytest.fail(
-            f"internal search tool contract is missing: {module.__name__}.{name}",
-            pytrace=False,
-        )
-    return getattr(module, name)
 
 
 def _vector(value: float = 0.1) -> EmbeddingVector:
@@ -442,9 +427,6 @@ class TestPgVectorInternalSearchTool:
     async def test_invoke_returns_hits_through_tool_port_without_event_reporter(
         self,
     ) -> None:
-        input_type = _required_attribute(
-            _internal_search_contract_module(), "InternalSearchToolInput"
-        )
         embedder = FakeInternalQueryEmbedder()
         search_repo = FakeArticleVectorSearchRepository(
             {
@@ -458,7 +440,7 @@ class TestPgVectorInternalSearchTool:
             article_search_repository=search_repo,
         )
 
-        hits = await service.invoke(input_type(queries=_queries("NVIDIA")))
+        hits = await service.invoke(InternalSearchToolInput(queries=_queries("NVIDIA")))
 
         assert [hit.article.title for hit in hits] == ["NVIDIA記事"]
 
@@ -506,27 +488,22 @@ class TestPgVectorInternalSearchTool:
     def test_internal_search_tool_is_stably_typed_like_external_search_tool(
         self,
     ) -> None:
-        contract_module = _internal_search_contract_module()
-        input_type = _required_attribute(contract_module, "InternalSearchToolInput")
-        tool_port = _required_attribute(contract_module, "InternalSearchTool")
-        tool_name_const = _required_attribute(
-            contract_module, "INTERNAL_SEARCH_TOOL_NAME"
-        )
-
-        assert is_dataclass(input_type)
-        assert input_type.__dataclass_params__.frozen
-        assert "__slots__" in input_type.__dict__
-        assert [field.name for field in fields(input_type)] == ["queries"]
-        assert get_type_hints(input_type) == {"queries": InternalSearchQueries}
-        assert get_type_hints(tool_port.invoke) == {
-            "input": input_type,
+        assert is_dataclass(InternalSearchToolInput)
+        assert InternalSearchToolInput.__dataclass_params__.frozen
+        assert "__slots__" in InternalSearchToolInput.__dict__
+        assert [field.name for field in fields(InternalSearchToolInput)] == ["queries"]
+        assert get_type_hints(InternalSearchToolInput) == {
+            "queries": InternalSearchQueries
+        }
+        assert get_type_hints(InternalSearchTool.invoke) == {
+            "input": InternalSearchToolInput,
             "return": list[InternalArticleSearchHit],
         }
-        name_property = tool_port.__dict__["name"]
+        name_property = InternalSearchTool.__dict__["name"]
         name_type = get_type_hints(name_property.fget)["return"]
         assert get_origin(name_type) is Literal
         assert get_args(name_type) == ("internal_search",)
-        assert tool_name_const == "internal_search"
+        assert INTERNAL_SEARCH_TOOL_NAME == "internal_search"
 
         service = PgVectorInternalSearchTool(embedder=FakeInternalQueryEmbedder())
         assert service.name == "internal_search"

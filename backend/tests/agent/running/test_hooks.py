@@ -2,16 +2,13 @@
 
 from __future__ import annotations
 
-import importlib
-from types import ModuleType
-from typing import Any
-
 import pytest
 
+import app.agent.running as running_module
 from app.agent.contract import AnswerProgressEvent, QuestionResolvedEvent
 from app.agent.question_context import QuestionContext
+from app.agent.running.hooks import QuestionResolvedRunHooks
 
-HOOKS_MODULE = "app.agent.running.hooks"
 HOOK_TYPE = "QuestionResolvedRunHooks"
 
 
@@ -23,43 +20,14 @@ class _FakeAnswerEventReporter:
         self.events.append(event)
 
 
-def _hooks_module() -> ModuleType:
-    missing_hooks = False
-    try:
-        return importlib.import_module(HOOKS_MODULE)
-    except ModuleNotFoundError as exc:
-        if exc.name == HOOKS_MODULE or exc.name.startswith(f"{HOOKS_MODULE}."):
-            missing_hooks = True
-        else:
-            raise
-    if missing_hooks:
-        pytest.fail(
-            "app.agent.running.hooks.QuestionResolvedRunHooks が未実装です",
-            pytrace=False,
-        )
-    raise AssertionError("unreachable")
-
-
-def _hook_type() -> type[Any]:
-    hook_type = getattr(_hooks_module(), HOOK_TYPE, None)
-    if hook_type is None:
-        pytest.fail(
-            "app.agent.running.hooks must define QuestionResolvedRunHooks",
-            pytrace=False,
-        )
-    return hook_type
-
-
-def _hook(reporter: _FakeAnswerEventReporter) -> Any:
-    return _hook_type()(events=reporter)
+def _hook(reporter: _FakeAnswerEventReporter) -> QuestionResolvedRunHooks:
+    return QuestionResolvedRunHooks(events=reporter)
 
 
 def test_question_resolved_run_hooks_is_a_public_running_export() -> None:
-    hook_type = _hook_type()
-    running = importlib.import_module("app.agent.running")
-
     assert (
-        getattr(running, HOOK_TYPE, None) is hook_type and HOOK_TYPE in running.__all__
+        getattr(running_module, HOOK_TYPE, None) is QuestionResolvedRunHooks
+        and HOOK_TYPE in running_module.__all__
     )
 
 

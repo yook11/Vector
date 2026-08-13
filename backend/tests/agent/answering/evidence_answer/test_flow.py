@@ -6,18 +6,21 @@ import json
 from collections.abc import AsyncIterator, Sequence
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
-from importlib import import_module
 from typing import Any
 
 import pytest
 from logfire.testing import CaptureLogfire
-from pydantic import ValidationError
 
 from app.agent.answering.contract import AnsweringRequest
-from app.agent.answering.evidence_answer.contract import EvidenceAnswerDraft
+from app.agent.answering.evidence_answer.agent import EVIDENCE_ANSWER_AGENT
+from app.agent.answering.evidence_answer.contract import (
+    EvidenceAnswerDraft,
+    EvidenceAnswerOutcome,
+    EvidenceAnswerUnavailable,
+)
 from app.agent.answering.evidence_answer.evidence import AnswerEvidenceItem
 from app.agent.answering.evidence_answer.flow import EvidenceAnswerFlow
-from app.agent.contract import ExternalUrlSource
+from app.agent.contract import AnswerGenerationStopped, ExternalUrlSource
 from app.agent.planning.contract import TargetTimeWindow
 from app.agent.question_context.contract import QuestionContext
 from app.analysis.ai_provider_errors import (
@@ -83,31 +86,12 @@ def _truncated_error() -> AIProviderOutputTruncatedError:
     )
 
 
-def _evidence_answer_unavailable_type() -> Any:
-    contract = import_module("app.agent.answering.evidence_answer.contract")
-    unavailable_type = getattr(contract, "EvidenceAnswerUnavailable", None)
-    if unavailable_type is None:
-        pytest.fail(
-            "S3: app.agent.answering.evidence_answer.contract must define "
-            "EvidenceAnswerUnavailable"
-        )
-    return unavailable_type
+def _expected_draft(*, answer: str, cited_refs: list[str]) -> EvidenceAnswerDraft:
+    """EvidenceAnswerDraftはanswerとcited_refsだけを持つ
 
-
-def _expected_draft(*, answer: str, cited_refs: list[str]) -> Any:
-    """S4: EvidenceAnswerDraftはanswerとcited_refsだけを持つ
-
-    (sufficiency/missing_aspects/unfulfilled_requirement_idsは撤去される)。
-    現行モデルはまだsufficiencyを必須で要求するため、比較用の期待値構築を
-    ガードしてassertion failureのredにする。
+    (sufficiency/missing_aspects/unfulfilled_requirement_idsは撤去済み)。
     """
-    try:
-        return EvidenceAnswerDraft(answer=answer, cited_refs=cited_refs)
-    except ValidationError:
-        pytest.fail(
-            "S4: EvidenceAnswerDraft must accept only "
-            "(answer: NonBlankText, cited_refs: list[str])"
-        )
+    return EvidenceAnswerDraft(answer=answer, cited_refs=cited_refs)
 
 
 def _operation_names(reporter: RecordingDeltaReporter) -> list[tuple[str, int]]:
@@ -255,21 +239,6 @@ class SequenceContinuation:
         return self._results.pop(0)
 
 
-def _answer_generation_stopped_type() -> type[BaseException]:
-    contract = import_module("app.agent.contract")
-    stopped_type = getattr(contract, "AnswerGenerationStopped", None)
-    assert stopped_type is not None, "shared AnswerGenerationStopped が未実装です"
-    assert isinstance(stopped_type, type) and issubclass(stopped_type, BaseException)
-    return stopped_type
-
-
-def _evidence_answer_agent() -> object:
-    agent_module = import_module("app.agent.answering.evidence_answer.agent")
-    agent = getattr(agent_module, "EVIDENCE_ANSWER_AGENT", None)
-    assert agent is not None, "EVIDENCE_ANSWER_AGENT が未実装です"
-    return agent
-
-
 async def _answer(
     generator: FakeGenerator,
     *,
@@ -277,27 +246,21 @@ async def _answer(
     delta_reporter: RecordingDeltaReporter | None = None,
     continuation: SequenceContinuation | None = None,
     request: AnsweringRequest | None = None,
-) -> Any:
+) -> EvidenceAnswerOutcome:
     flow_kwargs: dict[str, Any] = {
-        "agent": _evidence_answer_agent(),
+        "agent": EVIDENCE_ANSWER_AGENT,
         "runtime_scope_factory": generator.activate,
     }
     if delta_reporter is not None:
         flow_kwargs["delta_reporter"] = delta_reporter
     if continuation is not None:
         flow_kwargs["continuation"] = continuation
-    try:
-        return await EvidenceAnswerFlow(**flow_kwargs).answer(
-            request=_request() if request is None else request,
-            evidence=[_evidence()] if evidence is None else evidence,
-            target_time_window=TargetTimeWindow(kind="today"),
-            review_missing=(),
-        )
-    except TypeError:
-        pytest.fail(
-            "S5追補: EvidenceAnswerFlow.answer must accept a required "
-            "review_missing keyword argument (tuple[str, ...])"
-        )
+    return await EvidenceAnswerFlow(**flow_kwargs).answer(
+        request=_request() if request is None else request,
+        evidence=[_evidence()] if evidence is None else evidence,
+        target_time_window=TargetTimeWindow(kind="today"),
+        review_missing=(),
+    )
 
 
 def _metric_attributes(
@@ -325,7 +288,7 @@ async def test_valid_answer_with_marker_returns_draft_without_retry(
         cited_refs=["1"],
     )
     assert generator.calls[0]["repair_context"] is None
-    assert generator.calls[0]["agent"] is _evidence_answer_agent()
+    assert generator.calls[0]["agent"] is EVIDENCE_ANSWER_AGENT
     assert generator.calls[0]["evidence"] == (_evidence(),)
     assert generator.calls[0]["attempt_number"] == 1
     assert generator.streams[0].close_calls == 1
@@ -410,8 +373,8 @@ async def test_unknown_citation_ref_retries_then_falls_back_to_unavailable(
 
     assert len(generator.calls) == 2
     assert "[[9]]" in generator.calls[1]["repair_context"]
-    assert isinstance(outcome, _evidence_answer_unavailable_type())
-    assert getattr(outcome, "failure_code", None) == "answer_synthesis_draft_invalid"
+    assert isinstance(outcome, EvidenceAnswerUnavailable)
+    assert outcome.failure_code == "answer_synthesis_draft_invalid"
     metrics = collected_metrics(capfire)
     assert _metric_attributes(metrics, _SYNTHESIS_OUTCOME_METRIC) == [
         {
@@ -434,8 +397,8 @@ async def test_no_marker_with_evidence_retries_then_falls_back_to_unavailable() 
     outcome = await _answer(generator)
 
     assert len(generator.calls) == 2
-    assert isinstance(outcome, _evidence_answer_unavailable_type())
-    assert getattr(outcome, "failure_code", None) == "answer_synthesis_draft_invalid"
+    assert isinstance(outcome, EvidenceAnswerUnavailable)
+    assert outcome.failure_code == "answer_synthesis_draft_invalid"
 
 
 @pytest.mark.asyncio
@@ -469,7 +432,7 @@ async def test_empty_evidence_with_marker_falls_back_to_unavailable() -> None:
     outcome = await _answer(generator, evidence=[])
 
     assert len(generator.calls) == 2
-    assert isinstance(outcome, _evidence_answer_unavailable_type())
+    assert isinstance(outcome, EvidenceAnswerUnavailable)
     assert "[[1]]" in generator.calls[1]["repair_context"]
 
 
@@ -492,12 +455,11 @@ async def test_generation_unavailable_is_a_distinct_type_with_only_failure_code(
     None
 ):
     """生成不能は回答draftと別の型で表し、failure_codeだけを持つ。"""
-    unavailable_type = _evidence_answer_unavailable_type()
     generator = FakeGenerator([AIProviderNetworkError()])
 
     outcome = await _answer(generator)
 
-    assert isinstance(outcome, unavailable_type)
+    assert isinstance(outcome, EvidenceAnswerUnavailable)
     assert not isinstance(outcome, EvidenceAnswerDraft)
     assert set(type(outcome).model_fields) == {"failure_code"}
     assert outcome.failure_code == "ai_error_network"
@@ -576,24 +538,18 @@ async def test_runtime_scope_activation_failure_is_not_attempt_fallback(
         yield object()
 
     flow = EvidenceAnswerFlow(
-        agent=_evidence_answer_agent(),
+        agent=EVIDENCE_ANSWER_AGENT,
         runtime_scope_factory=failing_scope,
         delta_reporter=reporter,
     )
 
     with pytest.raises(RuntimeError) as exc_info:
-        try:
-            await flow.answer(
-                request=_request(),
-                evidence=[_evidence()],
-                target_time_window=TargetTimeWindow(kind="today"),
-                review_missing=(),
-            )
-        except TypeError:
-            pytest.fail(
-                "S5追補: EvidenceAnswerFlow.answer must accept a required "
-                "review_missing keyword argument (tuple[str, ...])"
-            )
+        await flow.answer(
+            request=_request(),
+            evidence=[_evidence()],
+            target_time_window=TargetTimeWindow(kind="today"),
+            review_missing=(),
+        )
 
     phase = one_span_named(capfire, _PHASE_SPAN_NAME)
     assert exc_info.value is failure
@@ -760,12 +716,11 @@ async def test_reporter_is_not_part_of_final_draft_correctness(
 async def test_continuation_false_before_provider_start_is_routine_stop(
     capfire: CaptureLogfire,
 ) -> None:
-    stopped_type = _answer_generation_stopped_type()
-    assert not issubclass(stopped_type, AIProviderError)
+    assert not issubclass(AnswerGenerationStopped, AIProviderError)
     generator = FakeGenerator(["根拠から確認できます。[[1]]"])
     reporter = RecordingDeltaReporter()
 
-    with pytest.raises(stopped_type):
+    with pytest.raises(AnswerGenerationStopped):
         await _answer(
             generator,
             delta_reporter=reporter,
@@ -789,12 +744,11 @@ async def test_continuation_false_before_provider_start_is_routine_stop(
 async def test_continuation_false_mid_stream_closes_and_aborts(
     capfire: CaptureLogfire,
 ) -> None:
-    stopped_type = _answer_generation_stopped_type()
     generator = FakeGenerator([["表示済み本文と", "非表示本文。[[1]]"]])
     reporter = RecordingDeltaReporter()
     continuation = SequenceContinuation([True, True, False])
 
-    with pytest.raises(stopped_type):
+    with pytest.raises(AnswerGenerationStopped):
         await _answer(
             generator,
             delta_reporter=reporter,
@@ -813,12 +767,11 @@ async def test_continuation_false_mid_stream_closes_and_aborts(
 async def test_continuation_false_at_eof_stops_before_final_parse_and_metric(
     capfire: CaptureLogfire,
 ) -> None:
-    stopped_type = _answer_generation_stopped_type()
     generator = FakeGenerator(["根拠から確認できます。[[1]]"])
     reporter = RecordingDeltaReporter()
     continuation = SequenceContinuation([True, True, False])
 
-    with pytest.raises(stopped_type):
+    with pytest.raises(AnswerGenerationStopped):
         await _answer(
             generator,
             delta_reporter=reporter,
@@ -837,11 +790,10 @@ async def test_continuation_false_at_eof_stops_before_final_parse_and_metric(
 async def test_continuation_false_after_provider_error_stops_before_fallback(
     capfire: CaptureLogfire,
 ) -> None:
-    stopped_type = _answer_generation_stopped_type()
     generator = FakeGenerator([AIProviderNetworkError()])
     reporter = RecordingDeltaReporter()
 
-    with pytest.raises(stopped_type):
+    with pytest.raises(AnswerGenerationStopped):
         await _answer(
             generator,
             delta_reporter=reporter,
@@ -867,8 +819,8 @@ async def test_truncated_first_attempt_retries_with_trusted_truncation_notice(
     draft = await _answer(generator)
 
     assert len(generator.calls) == 2
-    assert getattr(generator.inputs[0], "previous_output_truncated", None) is False
-    assert getattr(generator.inputs[1], "previous_output_truncated", None) is True
+    assert generator.inputs[0].previous_output_truncated is False
+    assert generator.inputs[1].previous_output_truncated is True
     assert draft == _expected_draft(
         answer="根拠から確認できます。[[1]]",
         cited_refs=["1"],
@@ -892,7 +844,7 @@ async def test_non_truncation_retry_does_not_carry_truncation_notice() -> None:
     draft = await _answer(generator)
 
     assert len(generator.calls) == 2
-    assert getattr(generator.inputs[1], "previous_output_truncated", None) is False
+    assert generator.inputs[1].previous_output_truncated is False
     assert draft == _expected_draft(
         answer="根拠から確認できます。[[1]]",
         cited_refs=["1"],

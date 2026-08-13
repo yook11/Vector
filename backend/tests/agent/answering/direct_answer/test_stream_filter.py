@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 from collections.abc import Iterable, Iterator
-from importlib import import_module
-from typing import Protocol, cast
 
 import pytest
 
+from app.agent.answering.direct_answer.stream_filter import (
+    DirectAnswerVisibleTextFilter,
+)
+from app.agent.answering.visible_text import AnswerVisibleTextFilter
 from tests.agent.citation_marker_corpus import (
     BACKEND_ONLY_CASES,
     CITATION_MARKER_CASES,
@@ -17,38 +19,12 @@ from tests.agent.citation_marker_corpus import (
 _ALL_CORPUS_CASES = CITATION_MARKER_CASES + BACKEND_ONLY_CASES
 
 
-class _VisibleTextFilter(Protocol):
-    def append(self, text: str) -> str: ...
-
-    def finish(self) -> str: ...
+def _new_filter() -> DirectAnswerVisibleTextFilter:
+    return DirectAnswerVisibleTextFilter()
 
 
-def _new_filter() -> _VisibleTextFilter:
-    try:
-        module = import_module("app.agent.answering.direct_answer.stream_filter")
-    except ModuleNotFoundError as exc:
-        if exc.name != "app.agent.answering.direct_answer.stream_filter":
-            raise
-        pytest.fail("Direct answer の増分表示 filter が未実装です", pytrace=False)
-
-    filter_type = getattr(module, "DirectAnswerVisibleTextFilter", None)
-    assert filter_type is not None, (
-        "stream_filter.DirectAnswerVisibleTextFilter が未実装です"
-    )
-    return cast("_VisibleTextFilter", filter_type())
-
-
-def _new_shared_filter() -> _VisibleTextFilter:
-    try:
-        module = import_module("app.agent.answering.visible_text")
-    except ModuleNotFoundError as exc:
-        if exc.name != "app.agent.answering.visible_text":
-            raise
-        pytest.fail("共有の回答表示filterが未実装です", pytrace=False)
-
-    filter_type = getattr(module, "AnswerVisibleTextFilter", None)
-    assert filter_type is not None, "visible_text.AnswerVisibleTextFilter が未実装です"
-    return cast("_VisibleTextFilter", filter_type())
+def _new_shared_filter() -> AnswerVisibleTextFilter:
+    return AnswerVisibleTextFilter()
 
 
 def _visible_fragments(chunks: Iterable[str]) -> list[str]:

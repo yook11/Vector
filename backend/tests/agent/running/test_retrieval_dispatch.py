@@ -12,7 +12,6 @@ from uuid import UUID
 import pytest
 from logfire.testing import CaptureLogfire
 
-import app.agent.planning.contract as planning_contract
 from app.agent.answering.contract import AnsweringRequest
 from app.agent.answering.direct_answer.contract import DirectAnswerDraft
 from app.agent.answering.evidence_answer.contract import (
@@ -39,6 +38,8 @@ from app.agent.planning.contract import (
     ExternalResearchTask,
     PlanningRequest,
     QuestionPlan,
+    ResearchTask,
+    SearchPlan,
     TargetTimeWindow,
 )
 from app.agent.question_context import QuestionContext
@@ -558,21 +559,17 @@ def _search_plan(
     *tasks: ExternalResearchTask,
     article_search_queries: list[str] | None = None,
     target_time_window: TargetTimeWindow | None = _TARGET_TIME_WINDOW,
-) -> object:
+) -> SearchPlan:
     """先頭taskへ全query、追加taskへ1件ずつ割り当てる(合計は予算内)。
 
     article_search_queriesはtask単位ではなくrun全体の検索文だったため、
     最も情報量の多い先頭queryのtaskへ集約し、他taskはgoalだけを保つ。
     """
-    plan_type = getattr(planning_contract, "SearchPlan", None)
-    research_task_type = getattr(planning_contract, "ResearchTask", None)
-    if plan_type is None or research_task_type is None:
-        pytest.fail("planning contract must define SearchPlan and ResearchTask")
     resolved_tasks = list(tasks or (_task(),))
     first_task_queries = article_search_queries or ["NVIDIA", "Blackwell"]
-    return plan_type(
+    return SearchPlan(
         research_tasks=[
-            research_task_type(
+            ResearchTask(
                 research_goal=task.research_goal,
                 article_search_queries=(
                     first_task_queries
@@ -589,15 +586,11 @@ def _search_plan(
 def _plan_with_tasks(
     *goals_and_queries: tuple[str, list[str]],
     target_time_window: TargetTimeWindow | None = _TARGET_TIME_WINDOW,
-) -> object:
+) -> SearchPlan:
     """段3のtask単位収集テスト用に、taskごとのqueryを直接指定してplanを組む。"""
-    plan_type = getattr(planning_contract, "SearchPlan", None)
-    research_task_type = getattr(planning_contract, "ResearchTask", None)
-    if plan_type is None or research_task_type is None:
-        pytest.fail("planning contract must define SearchPlan and ResearchTask")
-    return plan_type(
+    return SearchPlan(
         research_tasks=[
-            research_task_type(research_goal=goal, article_search_queries=queries)
+            ResearchTask(research_goal=goal, article_search_queries=queries)
             for goal, queries in goals_and_queries
         ],
         target_time_window=target_time_window,

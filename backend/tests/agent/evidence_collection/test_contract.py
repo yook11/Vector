@@ -3,34 +3,21 @@
 仕様「観測と失敗分類」により、旧ResearchTaskReportが一体で持っていた
 review関連field(review / review_failure_reason / internal_evidence_count /
 external_evidence_count / dropped_selection_count / missing)はRun単位の
-EvidenceReviewReportへ分離される。置き場は実装者が決めるため
-`app.agent.evidence_collection` facade 経由で参照する
-(production 未実装のため getattr ガードで参照する)。
+EvidenceReviewReportへ分離されている。
 """
 
 from __future__ import annotations
 
 from importlib import import_module
-from types import ModuleType
-from typing import Any
 
 import pytest
 from pydantic import ValidationError
 
-import app.agent.evidence_collection as evidence_collection_package
+from app.agent.evidence_collection import ResearchTaskReport
+from app.agent.evidence_review import EvidenceReviewReport
 
 
-def _required_attribute(module: ModuleType, name: str) -> Any:
-    if not hasattr(module, name):
-        pytest.fail(f"S1: {module.__name__} must define {name}")
-    return getattr(module, name)
-
-
-def _report_type() -> Any:
-    return _required_attribute(evidence_collection_package, "ResearchTaskReport")
-
-
-def _report(**overrides: object) -> Any:
+def _report(**overrides: object) -> ResearchTaskReport:
     """S1: ResearchTaskReportは収集系だけを持つ(review関連はEvidenceReviewReportへ)。"""
     values: dict[str, object] = {
         "task_index": 0,
@@ -44,10 +31,10 @@ def _report(**overrides: object) -> Any:
         "external_candidate_count": 0,
     }
     values.update(overrides)
-    return _report_type()(**values)
+    return ResearchTaskReport(**values)
 
 
-def _time_filter_failed_report(**overrides: object) -> Any:
+def _time_filter_failed_report(**overrides: object) -> ResearchTaskReport:
     values: dict[str, object] = {
         "external_collection": "time_filter_failed",
         "time_filter_failure_reason": "future_calendar_month",
@@ -56,13 +43,13 @@ def _time_filter_failed_report(**overrides: object) -> Any:
     return _report(**values)
 
 
-def _query_generation_failed_report(**overrides: object) -> Any:
+def _query_generation_failed_report(**overrides: object) -> ResearchTaskReport:
     values: dict[str, object] = {"external_collection": "query_generation_failed"}
     values.update(overrides)
     return _report(**values)
 
 
-def _provider_failed_report(**overrides: object) -> Any:
+def _provider_failed_report(**overrides: object) -> ResearchTaskReport:
     values: dict[str, object] = {
         "external_collection": "provider_failed",
         "generated_queries": ["NVIDIA 決算"],
@@ -73,13 +60,7 @@ def _provider_failed_report(**overrides: object) -> Any:
     return _report(**values)
 
 
-def _review_report_type() -> Any:
-    import app.agent.evidence_review as evidence_review_package
-
-    return _required_attribute(evidence_review_package, "EvidenceReviewReport")
-
-
-def _review_report(**overrides: object) -> Any:
+def _review_report(**overrides: object) -> EvidenceReviewReport:
     values: dict[str, object] = {
         "review": "succeeded",
         "review_failure_reason": None,
@@ -89,7 +70,7 @@ def _review_report(**overrides: object) -> Any:
         "missing": [],
     }
     values.update(overrides)
-    return _review_report_type()(**values)
+    return EvidenceReviewReport(**values)
 
 
 # --- ResearchTaskReport(収集系) ---------------------------------------------
@@ -220,7 +201,7 @@ def test_report_rejects_more_than_three_generated_queries() -> None:
 
 def test_report_rejects_legacy_extra_field() -> None:
     with pytest.raises(ValidationError):
-        _report_type().model_validate(
+        ResearchTaskReport.model_validate(
             {
                 "task_index": 0,
                 "research_goal": "NVIDIA の根拠を確認する",

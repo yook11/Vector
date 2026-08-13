@@ -13,7 +13,6 @@ import pytest
 from logfire.testing import CaptureLogfire
 from structlog.testing import capture_logs
 
-import app.agent.planning.contract as planning_contract
 from app.agent.answering.contract import AnsweringRequest
 from app.agent.answering.direct_answer.contract import DirectAnswerDraft
 from app.agent.answering.evidence_answer.contract import (
@@ -42,6 +41,8 @@ from app.agent.evidence_review import EvidenceReviewer
 from app.agent.planning.contract import (
     ExternalResearchTask,
     PlanningRequest,
+    ResearchTask,
+    SearchPlan,
     TargetTimeWindow,
 )
 from app.agent.question_context import QuestionContext
@@ -70,14 +71,10 @@ def _plan(
     tasks: list[ExternalResearchTask],
     *,
     target_time_window: TargetTimeWindow | None = _DEFAULT_TARGET_TIME_WINDOW,
-) -> Any:
-    plan_type = getattr(planning_contract, "SearchPlan", None)
-    research_task_type = getattr(planning_contract, "ResearchTask", None)
-    if plan_type is None or research_task_type is None:
-        pytest.fail("planning contract must define SearchPlan and ResearchTask")
-    return plan_type(
+) -> SearchPlan:
+    return SearchPlan(
         research_tasks=[
-            research_task_type(
+            ResearchTask(
                 research_goal=task.research_goal,
                 article_search_queries=["NVIDIA"],
             )

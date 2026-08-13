@@ -8,7 +8,6 @@ from uuid import UUID
 
 import pytest
 
-import app.agent.planning.contract as planning_contract
 from app.agent.answering.contract import AnsweringRequest
 from app.agent.answering.direct_answer.contract import DirectAnswerDraft
 from app.agent.answering.evidence_answer.contract import (
@@ -23,8 +22,11 @@ from app.agent.evidence_collection.internal_search.query_embedding import (
 )
 from app.agent.evidence_review import EvidenceReviewer
 from app.agent.planning.contract import (
+    DirectAnswerPlan,
     PlanningRequest,
     QuestionPlan,
+    ResearchTask,
+    SearchPlan,
     TargetTimeWindow,
 )
 from app.agent.question_context import QuestionContext
@@ -95,21 +97,14 @@ class _InternalSearch:
         return []
 
 
-def _plan_type(name: str) -> object:
-    value = getattr(planning_contract, name, None)
-    if value is None:
-        pytest.fail(f"planning contract must define {name}")
-    return value
+def _direct_plan() -> DirectAnswerPlan:
+    return DirectAnswerPlan()
 
 
-def _direct_plan() -> object:
-    return _plan_type("DirectAnswerPlan")()
-
-
-def _search_plan() -> object:
-    return _plan_type("SearchPlan")(
+def _search_plan() -> SearchPlan:
+    return SearchPlan(
         research_tasks=[
-            _plan_type("ResearchTask")(
+            ResearchTask(
                 research_goal="外部根拠を確認する",
                 article_search_queries=["検索語"],
             )

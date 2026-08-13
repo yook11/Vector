@@ -6,15 +6,19 @@ import asyncio
 import uuid
 from collections.abc import Callable
 from datetime import UTC, date, datetime
-from importlib import import_module
-from types import ModuleType
 
 import pytest
 from sqlalchemy import DateTime, func, literal, select, text
 from sqlalchemy.exc import DBAPIError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from app.agent.runs.contracts import ActiveRunConflictError, ThreadNotFoundError
+import app.agent.runs.daily_quota.persistence as daily_quota_persistence_module
+from app.agent.runs.contracts import (
+    ActiveRunConflictError,
+    CreatedAgentRun,
+    ThreadNotFoundError,
+)
+from app.agent.runs.daily_quota.contracts import DailyRequestLimitExceededError
 from app.agent.runs.repository import AgentRunRepository
 from app.models.agent_message import AgentMessage
 from app.models.agent_run import AgentRun
@@ -31,40 +35,9 @@ _AFTER_MIDNIGHT_UTC = datetime(2026, 7, 20, 15, 0, 0, tzinfo=UTC)
 pytestmark = pytest.mark.integration
 
 
-def _daily_quota_contracts_module() -> ModuleType:
-    try:
-        return import_module("app.agent.runs.daily_quota.contracts")
-    except ModuleNotFoundError as exc:
-        if exc.name in {
-            "app.agent.runs.daily_quota",
-            "app.agent.runs.daily_quota.contracts",
-        }:
-            pytest.fail("app.agent.runs.daily_quota.contracts is not implemented")
-        raise
-
-
-def _daily_quota_persistence_module() -> ModuleType:
-    try:
-        return import_module("app.agent.runs.daily_quota.persistence")
-    except ModuleNotFoundError as exc:
-        if exc.name in {
-            "app.agent.runs.daily_quota",
-            "app.agent.runs.daily_quota.persistence",
-        }:
-            pytest.fail("app.agent.runs.daily_quota.persistence is not implemented")
-        raise
-
-
 def _reservation_statement_builder() -> Callable[..., object]:
-    builder = getattr(
-        _daily_quota_persistence_module(),
-        "_build_daily_quota_reservation_statement",
-        None,
-    )
-    assert callable(builder), (
-        "private daily quota reservation statement builder is not implemented"
-    )
-    return builder
+    """monkeypatch後の値を拾うため、呼び出しのたびに現在のmodule属性を読む。"""
+    return daily_quota_persistence_module._build_daily_quota_reservation_statement
 
 
 def _fixed_timestamptz_expression(value: datetime) -> object:
@@ -100,7 +73,7 @@ def _patch_reservation_clock(
     )
 
     monkeypatch.setattr(
-        _daily_quota_persistence_module(),
+        daily_quota_persistence_module,
         "_build_daily_quota_reservation_statement",
         build_with_fixed_clock,
     )
@@ -112,7 +85,7 @@ async def _admit_new_thread(
     user_id: uuid.UUID,
     question: str,
     now: datetime | None = None,
-) -> object:
+) -> CreatedAgentRun:
     async with session_factory() as session:
         async with session.begin():
             return await AgentRunRepository(session).create_user_run(
@@ -190,16 +163,8 @@ async def _seed_active_thread(
 
 
 def _quota_rejection_fields(exc: Exception) -> tuple[date, datetime, datetime, int]:
-    assert type(exc).__module__ == _daily_quota_contracts_module().__name__
-    usage_date = getattr(exc, "usage_date", None)
-    observed_at = getattr(exc, "observed_at", None)
-    decided_at = getattr(exc, "decided_at", None)
-    limit = getattr(exc, "limit", None)
-    assert isinstance(usage_date, date)
-    assert isinstance(observed_at, datetime)
-    assert isinstance(decided_at, datetime)
-    assert isinstance(limit, int)
-    return usage_date, observed_at, decided_at, limit
+    assert isinstance(exc, DailyRequestLimitExceededError)
+    return exc.usage_date, exc.observed_at, exc.decided_at, exc.limit
 
 
 @pytest.mark.asyncio
@@ -215,9 +180,9 @@ async def test_create_user_run_reserves_quota_and_persists_same_usage_date(
         question="JST usage date",
         now=datetime(2001, 1, 1, tzinfo=UTC),
     )
-    run_id = getattr(created, "run_id", None)
-    usage_date = getattr(created, "usage_date", None)
-    used_count = getattr(created, "used_count", None)
+    run_id = created.run_id
+    usage_date = created.usage_date
+    used_count = created.used_count
 
     assert usage_date == _JST_DAY_BEFORE_MIDNIGHT
     assert used_count == 1
@@ -458,7 +423,7 @@ async def test_caller_rollback_removes_quota_thread_message_and_run(
                     question="rollback all writes",
                     thread_id=None,
                 )
-                assert getattr(created, "usage_date", None) == _JST_DAY_BEFORE_MIDNIGHT
+                assert created.usage_date == _JST_DAY_BEFORE_MIDNIGHT
                 raise RollBackAdmission()
 
     assert await _admission_state(
@@ -480,7 +445,7 @@ async def test_quota_database_error_rolls_back_preflushed_new_thread(
         return select(literal(1) / literal(0))
 
     monkeypatch.setattr(
-        _daily_quota_persistence_module(),
+        daily_quota_persistence_module,
         "_build_daily_quota_reservation_statement",
         failing_builder,
         raising=False,
@@ -582,9 +547,9 @@ async def test_different_users_and_jst_dates_reserve_independent_counters(
         question="first user next day",
     )
 
-    assert getattr(first, "used_count", None) == 1
-    assert getattr(second, "used_count", None) == 1
-    assert getattr(next_day, "used_count", None) == 1
+    assert first.used_count == 1
+    assert second.used_count == 1
+    assert next_day.used_count == 1
     assert await _admission_state(
         db_session,
         user_id=first_user_id,

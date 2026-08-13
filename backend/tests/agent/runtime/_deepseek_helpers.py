@@ -4,15 +4,14 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass
-from importlib import import_module
-from types import ModuleType, SimpleNamespace
+from types import SimpleNamespace
 from typing import Any
 from unittest.mock import AsyncMock
 
-import pytest
 from pydantic import BaseModel, ConfigDict
 
 from app.agent.agent import Agent, AgentPrompt, ModelSettings, ModelTarget
+from app.agent.runtime.deepseek import DeepSeekOutputBinding
 
 
 class RuntimeOutput(BaseModel):
@@ -39,37 +38,8 @@ class FakeDeepSeekClient:
         self.aclose = AsyncMock()
 
 
-def required_module(module_name: str) -> ModuleType:
-    try:
-        return import_module(module_name)
-    except ModuleNotFoundError as exc:
-        pytest.fail(f"PR2 runtime module is missing: {module_name} ({exc.name})")
-
-
-def required_attribute(module: ModuleType, name: str) -> Any:
-    if not hasattr(module, name):
-        pytest.fail(f"PR2 runtime contract is missing: {module.__name__}.{name}")
-    return getattr(module, name)
-
-
-def runtime_contract() -> ModuleType:
-    return required_module("app.agent.runtime.contract")
-
-
-def runtime_type() -> type[Any]:
-    return required_attribute(
-        required_module("app.agent.runtime.deepseek"), "DeepSeekAgentRuntime"
-    )
-
-
-def binding_type() -> type[Any]:
-    return required_attribute(
-        required_module("app.agent.runtime.deepseek"), "DeepSeekOutputBinding"
-    )
-
-
-def make_binding() -> Any:
-    return binding_type()(
+def make_binding() -> DeepSeekOutputBinding:
+    return DeepSeekOutputBinding(
         function_name="runtime_probe_output",
         description="Return the declared output object.",
     )

@@ -2,7 +2,6 @@
 
 import inspect
 from dataclasses import FrozenInstanceError, fields
-from importlib import import_module
 from typing import get_type_hints
 
 import pytest
@@ -12,6 +11,7 @@ from app.agent.answering.contract import AnsweringRequest
 from app.agent.answering.evidence_answer.contract import (
     EvidenceAnswerDraft,
     EvidenceAnswerer,
+    EvidenceAnswerInput,
 )
 from app.agent.answering.evidence_answer.flow import EvidenceAnswerFlow
 from app.agent.planning.contract import TargetTimeWindow
@@ -59,11 +59,7 @@ def test_review_missing_is_a_required_keyword_argument_on_answer() -> None:
 
 
 def test_evidence_answer_input_is_frozen_and_keeps_attempt_state_together() -> None:
-    contract = import_module("app.agent.answering.evidence_answer.contract")
-    input_type = getattr(contract, "EvidenceAnswerInput", None)
-
-    assert input_type is not None, "EvidenceAnswerInput が未実装です"
-    assert [field.name for field in fields(input_type)] == [
+    assert [field.name for field in fields(EvidenceAnswerInput)] == [
         "request",
         "evidence",
         "target_time_window",
@@ -71,10 +67,10 @@ def test_evidence_answer_input_is_frozen_and_keeps_attempt_state_together() -> N
         "previous_output_truncated",
         "review_missing",
     ]
-    type_hints = get_type_hints(input_type)
+    type_hints = get_type_hints(EvidenceAnswerInput)
     assert type_hints["target_time_window"] == TargetTimeWindow | None
     assert type_hints.get("review_missing") == tuple[str, ...]
-    input = input_type(
+    input = EvidenceAnswerInput(
         request=object(),
         evidence=(),
         target_time_window=None,

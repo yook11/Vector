@@ -9,17 +9,17 @@ from uuid import UUID
 
 import pytest
 
-import app.agent.runs.contracts as run_contracts
 import app.agent.runs.daily_quota.observability as quota_observability
 import app.agent.runs.repository as run_repository
 import app.queue.schedule as schedule
 import app.queue.tasks.agent_run as agent_run_tasks
+from app.agent.runs.contracts import StaleRunningRun
 
 
 def test_stale_sweep_uses_fixed_named_time_policy_and_minute_schedule() -> None:
-    assert getattr(run_repository, "RESEARCH_RUNNING_STALE_AFTER_SECONDS", None) == 180
-    assert getattr(run_repository, "RESEARCH_QUEUED_STALE_AFTER_SECONDS", None) == 300
-    assert getattr(schedule, "RESEARCH_STALE_SWEEP_CRON", None) == "* * * * *"
+    assert run_repository.RESEARCH_RUNNING_STALE_AFTER_SECONDS == 180
+    assert run_repository.RESEARCH_QUEUED_STALE_AFTER_SECONDS == 300
+    assert schedule.RESEARCH_STALE_SWEEP_CRON == "* * * * *"
     assert schedule.CRON_AGENT_RUN_SWEEP == schedule.RESEARCH_STALE_SWEEP_CRON
     assert agent_run_tasks.CRON_AGENT_RUN_SWEEP == schedule.RESEARCH_STALE_SWEEP_CRON
 
@@ -59,11 +59,8 @@ def test_stale_sweep_derives_its_default_cutoff_from_database_time() -> None:
 
 
 def test_stale_sweep_result_rejects_nonpositive_running_attempt_epoch() -> None:
-    running_run_type = getattr(run_contracts, "StaleRunningRun", None)
-    assert running_run_type is not None
-
     with pytest.raises(ValueError, match="positive attempt epoch"):
-        running_run_type(
+        StaleRunningRun(
             run_id=UUID("00000000-0000-4000-a000-000000000802"),
             attempt_epoch=0,
         )

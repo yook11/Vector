@@ -5,13 +5,16 @@ from __future__ import annotations
 import asyncio
 from datetime import UTC, datetime
 from types import TracebackType
-from typing import Any
 from uuid import UUID
 
 import pytest
 from pydantic import SecretStr
 
 from app.agent import composition
+from app.agent.composition import (
+    activate_gemini_agent_runtime,
+    build_answering_runner,
+)
 from app.agent.input_safety.agent import INPUT_SAFETY_AGENT
 from app.agent.input_safety.service import InputSafetyService
 from app.agent.planning.agent import QUESTION_PLANNER_AGENT
@@ -30,20 +33,9 @@ from app.analysis.ai_provider_errors import (
 )
 
 
-def _composition_builder(name: str) -> Any:
-    builder = getattr(composition, name, None)
-    if builder is None:
-        pytest.fail(
-            f"app.agent.composition.{name} が未実装です",
-            pytrace=False,
-        )
-    return builder
-
-
 def test_build_answering_runner_wires_safety_and_context_agents_to_deferred_runtime(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    build_answering_runner = _composition_builder("build_answering_runner")
     activation_calls: list[None] = []
 
     def activate_runtime() -> None:
@@ -78,7 +70,6 @@ def test_build_answering_runner_wires_safety_and_context_agents_to_deferred_runt
 async def test_build_answering_runner_keeps_safety_runtime_when_gemini_is_unconfigured(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    build_answering_runner = _composition_builder("build_answering_runner")
     monkeypatch.setattr(
         composition.settings,
         "gemini_api_key",
@@ -232,9 +223,6 @@ def _install_gemini_runtime_fakes(
 async def test_gemini_agent_runtime_scope_is_lazy_and_uses_sdk_defaults(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    activate_gemini_agent_runtime = _composition_builder(
-        "activate_gemini_agent_runtime"
-    )
     lifecycle: list[str] = []
     client_factory = _install_gemini_runtime_fakes(
         monkeypatch,
@@ -273,9 +261,6 @@ async def test_gemini_agent_runtime_scope_closes_once_on_abnormal_body_exit(
     monkeypatch: pytest.MonkeyPatch,
     body_error: BaseException,
 ) -> None:
-    activate_gemini_agent_runtime = _composition_builder(
-        "activate_gemini_agent_runtime"
-    )
     lifecycle: list[str] = []
     _install_gemini_runtime_fakes(monkeypatch, lifecycle=lifecycle)
 
@@ -290,9 +275,6 @@ async def test_gemini_agent_runtime_scope_closes_once_on_abnormal_body_exit(
 async def test_gemini_agent_runtime_scope_closes_when_runtime_construction_fails(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    activate_gemini_agent_runtime = _composition_builder(
-        "activate_gemini_agent_runtime"
-    )
     lifecycle: list[str] = []
     error = RuntimeError("runtime construction failed")
     _install_gemini_runtime_fakes(
@@ -312,9 +294,6 @@ async def test_gemini_agent_runtime_scope_closes_when_runtime_construction_fails
 async def test_gemini_agent_runtime_scope_creates_fresh_resources_each_time(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    activate_gemini_agent_runtime = _composition_builder(
-        "activate_gemini_agent_runtime"
-    )
     lifecycle: list[str] = []
     client_factory = _install_gemini_runtime_fakes(
         monkeypatch,
@@ -502,17 +481,13 @@ def test_build_answering_phases_wires_planner_to_shared_gemini_runtime_scope(
     assert planner_calls == [
         {
             "agent": QUESTION_PLANNER_AGENT,
-            "runtime_scope_factory": _composition_builder(
-                "activate_gemini_agent_runtime"
-            ),
+            "runtime_scope_factory": activate_gemini_agent_runtime,
         }
     ]
     assert direct_calls == [
         {
             "agent": DIRECT_ANSWER_AGENT,
-            "runtime_scope_factory": _composition_builder(
-                "activate_gemini_agent_runtime"
-            ),
+            "runtime_scope_factory": activate_gemini_agent_runtime,
             "delta_reporter": None,
             "continuation": None,
         }
@@ -520,9 +495,7 @@ def test_build_answering_phases_wires_planner_to_shared_gemini_runtime_scope(
     assert evidence_calls == [
         {
             "agent": EVIDENCE_ANSWER_AGENT,
-            "runtime_scope_factory": _composition_builder(
-                "activate_gemini_agent_runtime"
-            ),
+            "runtime_scope_factory": activate_gemini_agent_runtime,
             "delta_reporter": None,
             "continuation": None,
         }

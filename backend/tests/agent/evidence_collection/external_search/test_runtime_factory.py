@@ -4,12 +4,15 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import fields, is_dataclass
-from typing import Any
 
 import pytest
 from pydantic import SecretStr
 
 from app.agent import composition
+from app.agent.composition import build_external_research_runtime_factory
+from app.agent.evidence_review.deepseek_binding import (
+    EVIDENCE_REVIEWER_DEEPSEEK_BINDING,
+)
 from app.agent.runtime.contract import AgentResponseDefect, AgentResponseInvalidError
 
 
@@ -155,17 +158,6 @@ class _ToolSpyFactory:
         return _ToolSpy(**kwargs)  # type: ignore[arg-type]
 
 
-def _factory_builder() -> Any:
-    builder = getattr(composition, "build_external_research_runtime_factory", None)
-    if builder is None:
-        pytest.fail(
-            "app.agent.composition."
-            "build_external_research_runtime_factory が未実装です",
-            pytrace=False,
-        )
-    return builder
-
-
 def _install_factory_dependencies(
     monkeypatch: pytest.MonkeyPatch,
     *,
@@ -205,26 +197,6 @@ def _install_factory_dependencies(
     return deepseek, tavily, runtime, tool
 
 
-def _evidence_reviewer_binding() -> Any:
-    """selector 一式は evidence_review package へ改名移設された(D4-S1)。"""
-    try:
-        binding_module = __import__(
-            "app.agent.evidence_review.deepseek_binding",
-            fromlist=["EVIDENCE_REVIEWER_DEEPSEEK_BINDING"],
-        )
-    except ModuleNotFoundError as exc:
-        pytest.fail(
-            f"D4-S1 evidence_review.deepseek_binding module is missing ({exc.name})"
-        )
-    binding = getattr(binding_module, "EVIDENCE_REVIEWER_DEEPSEEK_BINDING", None)
-    if binding is None:
-        pytest.fail(
-            "evidence_review.deepseek_binding must export "
-            "EVIDENCE_REVIEWER_DEEPSEEK_BINDING"
-        )
-    return binding
-
-
 def test_external_research_runtime_contract_declares_only_borrowed_resources() -> None:
     from app.agent.evidence_collection.external_search.contract import (
         ExternalResearchRuntime,
@@ -251,9 +223,9 @@ async def test_runtime_factory_is_lazy_shares_deepseek_and_closes_each_client_on
         DEEPSEEK_CLIENT_TIMEOUT_SECONDS,
     )
 
-    evidence_reviewer_binding = _evidence_reviewer_binding()
+    evidence_reviewer_binding = EVIDENCE_REVIEWER_DEEPSEEK_BINDING
     deepseek, tavily, runtime, tool = _install_factory_dependencies(monkeypatch)
-    factory = _factory_builder()()
+    factory = build_external_research_runtime_factory()
     scope = factory.activate()
 
     assert (deepseek.clients, tavily.clients, runtime.calls, tool.calls) == (
@@ -309,7 +281,7 @@ async def test_runtime_factory_closes_acquired_clients_for_every_scope_exit(
     body_error: BaseException | None,
 ) -> None:
     deepseek, tavily, _runtime, _tool = _install_factory_dependencies(monkeypatch)
-    factory = _factory_builder()()
+    factory = build_external_research_runtime_factory()
 
     if body_error is None:
         async with factory.activate():
@@ -354,7 +326,7 @@ async def test_runtime_factory_closes_only_acquired_clients_when_construction_fa
         runtime=runtime,
         tool=_ToolSpyFactory(construction_error=tool_error),
     )
-    factory = _factory_builder()()
+    factory = build_external_research_runtime_factory()
 
     with pytest.raises(RuntimeError):
         async with factory.activate():
@@ -376,7 +348,7 @@ async def test_runtime_factory_attempts_deepseek_close_when_tavily_close_fails(
         monkeypatch,
         tavily=tavily,
     )
-    factory = _factory_builder()()
+    factory = build_external_research_runtime_factory()
 
     with pytest.raises(RuntimeError) as raised:
         async with factory.activate():
@@ -400,7 +372,7 @@ async def test_runtime_factory_allows_close_failure_to_replace_body_error(
         monkeypatch,
         tavily=tavily,
     )
-    factory = _factory_builder()()
+    factory = build_external_research_runtime_factory()
 
     with pytest.raises(RuntimeError) as raised:
         async with factory.activate():
@@ -417,7 +389,7 @@ async def test_runtime_factory_creates_fresh_clients_for_each_activation(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     deepseek, tavily, _runtime, _tool = _install_factory_dependencies(monkeypatch)
-    factory = _factory_builder()()
+    factory = build_external_research_runtime_factory()
 
     async with factory.activate() as first:
         pass
