@@ -246,19 +246,20 @@ resource "aws_cloudwatch_metric_alarm" "queue_observation_stalled" {
 # 経過秒数。仕事ゼロのときは 0 が emit されるため、量に依存せず
 # 「暇」と「死んでいる」を誤判定しない。missing = notBreaching は
 # 観測死を A3 に委ねる役割分担 (生きていれば正常時に missing は発生しない)。
-# AI 工程の閾値が緩いのは、AI 予算枯渇などの際に再試行を後ろへずらして
-# 対応時間 (残高チャージ等) を稼ぐ退避機構が働くため。60 分は「退避が
-# 猶予を稼いでいる想定内の遅延」と「対応が間に合っていない」の境界であり、
-# 初期値として置き実測で調整する。
+# 退避機構 (stage hold / 再試行 backoff / gate skip) は対象メッセージを ack して
+# stream から降ろすため、退避中の滞留はこの age に現れない。よって本 alarm は
+# 全 stage 共通で consumer の生存監視であり、閾値は正常時に entry が stream 内に
+# 留まり得る時間 (バースト掃け切り + gate pacing で 15 分程度) に余裕を掛けた
+# 30 分で統一する。初期値として置き実測で調整する。
 
 locals {
   # stage → 滞留閾値 (秒) と、対応時に見に行く ECS サービス。
   pipeline_stall_alarms = {
     acquisition = { threshold = 1800, service = "fetch" }
     completion  = { threshold = 1800, service = "fetch" }
-    curation    = { threshold = 3600, service = "analysis" }
-    assessment  = { threshold = 3600, service = "analysis" }
-    embedding   = { threshold = 3600, service = "analysis" }
+    curation    = { threshold = 1800, service = "analysis" }
+    assessment  = { threshold = 1800, service = "analysis" }
+    embedding   = { threshold = 1800, service = "analysis" }
   }
 }
 
