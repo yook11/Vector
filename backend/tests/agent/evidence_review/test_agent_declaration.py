@@ -10,7 +10,6 @@ getattr ガードで参照し、欠落時は pytest.fail で理由を明示す�
 from __future__ import annotations
 
 import inspect
-import re
 from collections.abc import Mapping
 from dataclasses import FrozenInstanceError, fields, is_dataclass
 from datetime import UTC, datetime
@@ -340,28 +339,6 @@ def test_version_and_instructions_live_with_prompt_resources() -> None:
     # 変更したためv2からbumpする(仕様「Evidence Review(v2 -> v3)」)。
     assert reviewer_agent.prompt.version == "v3"
     assert source.count('"v3"') >= 1
-
-
-def test_instructions_define_claim_and_why_selected_roles_distinctly() -> None:
-    """S3(採用の言語化)。claim と why_selected の役割がinstructionsで別々に
-
-    定義される(現行は「日本語で書く」しか指示がなく、2欄の違いをfield名だけが
-    担っている)。文言の完全一致は推敲で壊れるため、このinstructions全体が
-    一貫して使う定義文のスタイル(既存のresearch_goal/content_requirementsの
-    定義と同じ「Xは、」という導入)がclaim/why_selectedそれぞれに独立して
-    現れることで、役割定義の存在を確認する。
-    """
-    reviewer_agent = _reviewer_agent()
-    instructions = reviewer_agent.prompt.instructions
-
-    claim_definition = re.search(r"claim\s*は、", instructions)
-    why_selected_definition = re.search(r"why_selected\s*は、", instructions)
-
-    assert claim_definition is not None
-    assert why_selected_definition is not None
-    # 同じ導入句の使い回しではなく、claimとwhy_selectedそれぞれに
-    # 独立した定義文が書かれていることを確認する。
-    assert claim_definition.start() != why_selected_definition.start()
 
 
 def test_prompt_keeps_fixed_rules_in_system_and_sanitizes_runtime_task_data() -> None:

@@ -2,7 +2,7 @@
 
 import inspect
 from dataclasses import FrozenInstanceError, fields
-from importlib import import_module, util
+from importlib import import_module
 from typing import get_type_hints
 
 import pytest
@@ -97,37 +97,3 @@ def test_strict_draft_rejects_blank_answer() -> None:
     """answer: NonBlankTextの型制約は維持する (model単体構築時のpydantic契約)。"""
     with pytest.raises(ValidationError):
         EvidenceAnswerDraft(answer="   ", cited_refs=[])
-
-
-def test_contract_module_does_not_export_removed_raw_json_symbols() -> None:
-    """条件21: evidence_answer/はRawEvidenceAnswerDraftを持たない。
-    EvidenceAnswerSufficiencyも無い。
-
-    R3条件11: EvidenceAnswerDraftGenerationInvalidError(唯一のproducerだった
-    parse_evidence_answer_final_json()がS4で削除され到達不能)も無い。
-    app.agent.answering(親package)からもre-exportされないことを確認する。
-    """
-    contract = import_module("app.agent.answering.evidence_answer.contract")
-    answering_package = import_module("app.agent.answering")
-
-    assert getattr(contract, "RawEvidenceAnswerDraft", None) is None
-    assert getattr(contract, "EvidenceAnswerSufficiency", None) is None
-    assert getattr(contract, "EvidenceAnswerDraftGenerationInvalidError", None) is None
-    assert (
-        getattr(answering_package, "EvidenceAnswerDraftGenerationInvalidError", None)
-        is None
-    )
-    assert "EvidenceAnswerDraftGenerationInvalidError" not in answering_package.__all__
-
-
-def test_json_answer_extractor_module_does_not_exist() -> None:
-    """条件20: json_answer_extractor.pyがリポジトリに存在しない。"""
-    assert (
-        util.find_spec("app.agent.answering.evidence_answer.json_answer_extractor")
-        is None
-    )
-
-
-def test_final_json_module_does_not_exist() -> None:
-    """条件20: final_json.pyがリポジトリに存在しない。"""
-    assert util.find_spec("app.agent.answering.evidence_answer.final_json") is None

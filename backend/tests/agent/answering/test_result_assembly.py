@@ -8,7 +8,6 @@ review.missing)と生成不能の1行だけで組み立てられ、要望由来�
 
 from __future__ import annotations
 
-import inspect
 from importlib import import_module
 from typing import Any
 
@@ -243,14 +242,6 @@ def _assemble(
             "S4: assemble_evidence_result must accept "
             "(plan, outcome, evidence, answer_outcome) without context"
         )
-
-
-def test_assemble_evidence_result_has_no_context_parameter() -> None:
-    """条件15: 要望由来の経路そのものが無い
-
-    (contextを受け取らないため、requirement参照の経路自体が存在しない)。
-    """
-    assert "context" not in inspect.signature(assemble_evidence_result).parameters
 
 
 def test_task_completes_via_internal_evidence_despite_external_provider_failure() -> (

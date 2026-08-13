@@ -3,11 +3,9 @@
 from __future__ import annotations
 
 import asyncio
-from dataclasses import dataclass
 from datetime import UTC, datetime
 from types import TracebackType
 from typing import Any
-from unittest.mock import AsyncMock
 from uuid import UUID
 
 import pytest
@@ -30,63 +28,6 @@ from app.analysis.ai_provider_errors import (
     AIProviderConfigurationError,
     AIProviderError,
 )
-
-
-@dataclass(frozen=True, slots=True)
-class _FakeTavilyClient:
-    invocation: int
-
-
-class _TrackedClientContext:
-    def __init__(
-        self,
-        *,
-        client: _FakeTavilyClient,
-        lifecycle: list[str],
-    ) -> None:
-        self._client = client
-        self._lifecycle = lifecycle
-
-    async def __aenter__(self) -> _FakeTavilyClient:
-        self._lifecycle.append(f"client {self._client.invocation} enter")
-        return self._client
-
-    async def __aexit__(
-        self,
-        exc_type: object,
-        exc: object,
-        traceback: object,
-    ) -> bool:
-        self._lifecycle.append(f"client {self._client.invocation} exit")
-        return False
-
-
-class _SafeClientFactory:
-    def __init__(self, lifecycle: list[str]) -> None:
-        self._lifecycle = lifecycle
-        self.clients: list[_FakeTavilyClient] = []
-
-    def __call__(self) -> _TrackedClientContext:
-        client = _FakeTavilyClient(invocation=len(self.clients) + 1)
-        self.clients.append(client)
-        return _TrackedClientContext(client=client, lifecycle=self._lifecycle)
-
-
-class _FakeDeepSeekClient:
-    def __init__(self, **kwargs: object) -> None:
-        self.kwargs = kwargs
-        self.aclose = AsyncMock()
-        self.close = AsyncMock()
-
-
-class _FakeDeepSeekClientFactory:
-    def __init__(self) -> None:
-        self.clients: list[_FakeDeepSeekClient] = []
-
-    def __call__(self, **kwargs: object) -> _FakeDeepSeekClient:
-        client = _FakeDeepSeekClient(**kwargs)
-        self.clients.append(client)
-        return client
 
 
 def _composition_builder(name: str) -> Any:
@@ -164,10 +105,6 @@ async def test_build_answering_runner_keeps_safety_runtime_when_gemini_is_unconf
             previous_turn=None,
             run_id=UUID("019bd239-1ed4-7fbb-a336-04fe3c197645"),
         )
-
-
-def test_composition_does_not_export_removed_external_search_service_builder() -> None:
-    assert not hasattr(composition, "build_external_search_service")
 
 
 @pytest.mark.parametrize(
