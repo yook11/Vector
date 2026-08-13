@@ -87,7 +87,7 @@ Status: Draft (レビュー中 — 途絶 3 層構成・AI 利用枠枯渇まで
 ### A2: 工程別の滞留(工程を名指し)
 
 - 症状: 「その工程に仕事が積まれたまま、閾値時間を超えて消化されていない」。
-- 条件: `oldest_outstanding_enqueue_age{stage}` の Max、period 5min。閾値の初期値は acquisition / completion = **30 分**、curation / assessment / embedding = **60 分**。AI 工程が緩いのは、AI 予算枯渇などの際に再試行を後ろへずらして対応時間(残高チャージ等)を稼ぐ退避機構が働くため。60 分は「退避が猶予を稼いでいる想定内の遅延」と「対応が間に合っていない」の境界(枯渇そのものの即時通知は A6 が担い、A2 はそのバックストップ)。実測で調整する前提。`TreatMissingData = notBreaching`(観測死は A3 が担当。仕事ゼロのときは age=0 が emit されるので、生きていれば missing にならない)。
+- 条件: `oldest_outstanding_enqueue_age{stage}` の Max、period 5min。閾値の初期値は全 stage 一律 **30 分**。退避機構(stage hold / 再試行 backoff / gate skip)は対象メッセージを ack して stream から降ろし、backfill 再投入で age は 0 に戻るため、退避中の滞留はこの age には現れない。したがってこの alarm は工程によらず consumer の生存監視(worker 死・孤児 PEL)であり、閾値は正常時に entry が stream 内に留まり得る時間(バースト掃け切り+gate pacing で 15 分程度)に余裕を掛けた値として置く。実測で調整する前提。`TreatMissingData = notBreaching`(観測死は A3 が担当。仕事ゼロのときは age=0 が emit されるので、生きていれば missing にならない)。(2026-08-14 変更: 当初 AI 3 stage は退避機構を根拠に 60 分としていたが、退避は ack で stream を離れ age に映らず根拠が成立しないため 30 分へ統一。)
 - alarm は stage ごとに 1 本(計 5 本)。alarm 名と説明文に工程名を焼き、Slack 通知が「assessment 工程が停止しています」とそのまま読めるようにする。
 - 量に依存しない: 新着ゼロの時間帯は age=0 で鳴らず、仕事があるのに consumer が死んでいれば age が線形に伸びて確実に鳴る。工程別の活動量 missing data 検知が持つ「閑散時間帯の誤発火」を原理的に回避する。
 - データ源: 既存の queue_health 観測を EMF に二重 sink する。**embedding stream を `PIPELINE_QUEUE_TARGETS` に追加する**(alarm という consumer が新たにできたため。dispatch stream は追加しない — A1 の担当)。
