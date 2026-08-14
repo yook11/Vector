@@ -141,29 +141,6 @@ async def test_review_is_called_exactly_once_for_a_multi_task_run() -> None:
 
 
 @pytest.mark.asyncio
-async def test_successful_review_resolves_the_originating_task_index() -> None:
-    """S1: 採用された根拠のtask_indexは、その候補が属するtaskの値になる。"""
-    runtime = ScriptedAgentRuntime(
-        [
-            _draft(
-                [{"candidate_index": 0, "claim": "internal claim", "why_selected": "w"}]
-            )
-        ]
-    )
-
-    outcome = await _review(
-        tasks=[_collected_task(task_index=3, internal_hits=[_internal_hit()])],
-        reviewer_runtime=runtime,
-    )
-
-    assert outcome.failure_reason is None
-    assert len(outcome.internal_evidence) == 1
-    assert outcome.internal_evidence[0].claim == "internal claim"
-    assert outcome.internal_evidence[0].task_index == 3
-    assert outcome.external_evidence == []
-
-
-@pytest.mark.asyncio
 async def test_review_passes_the_task_group_projection_and_as_of_unchanged() -> None:
     """reviewer入力はbuild_review_task_groups(tasks)の出力とas_ofそのもの。
 
@@ -193,7 +170,10 @@ async def test_review_passes_the_task_group_projection_and_as_of_unchanged() -> 
 
 @pytest.mark.asyncio
 async def test_selection_restores_candidate_and_task_from_a_cross_task_index() -> None:
-    """S1(選別結果の復元)。グループをまたいだindexから候補と所属taskが復元される。"""
+    """S1(選別結果の復元)。グループをまたいだindexから候補と所属taskが復元される。
+
+    復元規則の正本はtest_policy.py。ここではreview()経由の実配線を確認する。
+    """
     tasks = [
         _collected_task(
             task_index=0,
