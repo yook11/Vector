@@ -2,9 +2,7 @@
 
 from __future__ import annotations
 
-import ast
 import asyncio
-import inspect
 import logging
 import traceback
 from dataclasses import dataclass
@@ -4125,32 +4123,24 @@ def _install_application_deadline_boundary(
 
 
 def test_run_agent_answer_declares_fixed_application_and_taskiq_deadlines() -> None:
-    tree = ast.parse(inspect.getsource(agent_run_tasks))
-    task = next(
-        node
-        for node in ast.walk(tree)
-        if isinstance(node, ast.AsyncFunctionDef) and node.name == "run_agent_answer"
-    )
-    decorator = next(
-        node
-        for node in task.decorator_list
-        if isinstance(node, ast.Call)
-        and isinstance(node.func, ast.Attribute)
-        and node.func.attr == "task"
-    )
-    options = {
-        keyword.arg: keyword.value
-        for keyword in decorator.keywords
-        if keyword.arg is not None
-    }
+    """application deadline が taskiq timeout より先に切れることで、
 
-    assert getattr(agent_run_tasks, "RESEARCH_APPLICATION_TIMEOUT_SECONDS", None) == 150
-    assert getattr(agent_run_tasks, "RESEARCH_TASKIQ_TIMEOUT_SECONDS", None) == 180
-    assert ast.literal_eval(options["task_name"]) == "run_agent_answer"
-    assert isinstance(options["timeout"], ast.Name)
-    assert options["timeout"].id == "RESEARCH_TASKIQ_TIMEOUT_SECONDS"
-    assert ast.literal_eval(options["max_retries"]) == 0
-    assert ast.literal_eval(options["retry_on_error"]) is False
+    graceful な失敗処理 (terminal 化・cleanup) が taskiq の強制 kill より
+    先に走る。retry は attempt_epoch で run 側が管理するため taskiq の
+    自動 retry は常に無効。
+    """
+    task = agent_run_tasks.run_agent_answer
+
+    assert task.task_name == "run_agent_answer"
+    assert task.labels == {
+        "timeout": agent_run_tasks.RESEARCH_TASKIQ_TIMEOUT_SECONDS,
+        "max_retries": 0,
+        "retry_on_error": False,
+    }
+    assert (
+        agent_run_tasks.RESEARCH_APPLICATION_TIMEOUT_SECONDS
+        < agent_run_tasks.RESEARCH_TASKIQ_TIMEOUT_SECONDS
+    )
 
 
 @pytest.mark.asyncio
@@ -4292,12 +4282,7 @@ async def test_application_deadline_scope_covers_acquire_live_history_runner_and
     session_factory: async_sessionmaker[AsyncSession],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    application_timeout = getattr(
-        agent_run_tasks,
-        "RESEARCH_APPLICATION_TIMEOUT_SECONDS",
-        None,
-    )
-    assert application_timeout == 150
+    application_timeout = agent_run_tasks.RESEARCH_APPLICATION_TIMEOUT_SECONDS
     async with session_factory() as session:
         _thread, _message, run = await _create_thread_message_run(session)
     clock = _ControlledMonotonicClock(now=100.0)
@@ -4391,12 +4376,7 @@ async def test_acquire_after_application_deadline_skips_execution_and_terminaliz
 ) -> None:
     async with session_factory() as session:
         _thread, _message, run = await _create_thread_message_run(session)
-    application_timeout = getattr(
-        agent_run_tasks,
-        "RESEARCH_APPLICATION_TIMEOUT_SECONDS",
-        None,
-    )
-    assert application_timeout == 150
+    application_timeout = agent_run_tasks.RESEARCH_APPLICATION_TIMEOUT_SECONDS
     clock = _ControlledMonotonicClock(now=100.0)
     scopes = _install_application_deadline_boundary(monkeypatch, clock)
     original_acquire = agent_run_tasks._acquire_run
