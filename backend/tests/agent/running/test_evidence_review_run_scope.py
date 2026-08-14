@@ -571,7 +571,11 @@ async def test_review_input_never_carries_answer_requirements() -> None:
 
 @pytest.mark.asyncio
 async def test_review_input_excludes_external_urls_across_every_task() -> None:
-    """S1 B5(既存制約の維持)。候補projectionはURLを含まない(統合後の回帰guard)。"""
+    """外部候補のURLは1回のRunを通じてreviewer入力に到達しない。
+
+    LLMはindexで記事を指定して、出典URLはproductionがindexから復元する。
+    投影型にurl fieldが無い構造保証はevidence_review/test_agent_declaration.pyが持つ。
+    """
     tasks = [_task("goal-A", ["query-a"]), _task("goal-B", ["query-b"])]
     secret_url_a = "https://example.com/task-a-secret-7f21"
     secret_url_b = "https://example.com/task-b-secret-8c92"
