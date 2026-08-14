@@ -2,16 +2,15 @@
 
 from __future__ import annotations
 
-import ast
 import json
 from collections.abc import Mapping
 from dataclasses import FrozenInstanceError, fields, is_dataclass
 from datetime import UTC, datetime
-from importlib import import_module
-from inspect import getsource, iscoroutinefunction, signature
+from inspect import iscoroutinefunction, signature
 from typing import Any, get_args
 
 import pytest
+from pydantic import ValidationError
 
 from app.agent.agent import Agent, AgentPrompt, ModelSettings, ModelTarget
 from app.agent.planning.agent import QUESTION_PLANNER_AGENT
@@ -22,6 +21,8 @@ from app.agent.planning.contract import (
     PlanningRequest,
     PlanType,
     QuestionPlanDraft,
+    ResearchTask,
+    SearchPlan,
     TargetTimeWindowKind,
 )
 from app.agent.planning.prompts import (
@@ -62,61 +63,6 @@ def _as_plain_value(value: Any) -> Any:
     if isinstance(value, (list, tuple)):
         return [_as_plain_value(item) for item in value]
     return value
-
-
-def _dict_expression(mapping: ast.expr, key: str) -> ast.expr:
-    assert isinstance(mapping, ast.Dict)
-    for candidate, value in zip(mapping.keys, mapping.values, strict=True):
-        if isinstance(candidate, ast.Constant) and candidate.value == key:
-            return value
-    raise AssertionError(f"dict expression must define {key}")
-
-
-def _assigned_expression(tree: ast.Module, name: str) -> ast.expr:
-    for node in tree.body:
-        if (
-            isinstance(node, ast.AnnAssign)
-            and isinstance(node.target, ast.Name)
-            and node.target.id == name
-            and node.value is not None
-        ):
-            return node.value
-        if isinstance(node, ast.Assign) and any(
-            isinstance(target, ast.Name) and target.id == name
-            for target in node.targets
-        ):
-            return node.value
-    raise AssertionError(f"module must assign {name}")
-
-
-def _is_list_of_literal_args(expression: ast.expr, literal_name: str) -> bool:
-    return (
-        isinstance(expression, ast.Call)
-        and isinstance(expression.func, ast.Name)
-        and expression.func.id == "list"
-        and len(expression.args) == 1
-        and not expression.keywords
-        and isinstance(expression.args[0], ast.Call)
-        and isinstance(expression.args[0].func, ast.Name)
-        and expression.args[0].func.id == "get_args"
-        and len(expression.args[0].args) == 1
-        and not expression.args[0].keywords
-        and isinstance(expression.args[0].args[0], ast.Name)
-        and expression.args[0].args[0].id == literal_name
-    )
-
-
-def _is_literal_values_derived_from(
-    tree: ast.Module,
-    expression: ast.expr,
-    literal_name: str,
-) -> bool:
-    if _is_list_of_literal_args(expression, literal_name):
-        return True
-    return isinstance(expression, ast.Name) and _is_list_of_literal_args(
-        _assigned_expression(tree, expression.id),
-        literal_name,
-    )
 
 
 def test_planner_agent_declares_two_plan_schema_and_stable_model() -> None:
@@ -169,41 +115,7 @@ def test_manual_schema_requires_plan_type_and_research_tasks_only() -> None:
 
 
 def test_gemini_schema_derives_plan_limits_and_enums_from_shared_contracts() -> None:
-    schema_tool = import_module("app.agent.planning.ai.schema_tool")
     schema = QUESTION_PLANNER_AGENT.response_schema
-    source_tree = ast.parse(getsource(schema_tool))
-    schema_expression = _assigned_expression(
-        source_tree,
-        "QUESTION_PLANNER_GEMINI_SCHEMA",
-    )
-    properties_expression = _dict_expression(schema_expression, "properties")
-    plan_type_expression = _dict_expression(properties_expression, "plan_type")
-    research_tasks_expression = _dict_expression(
-        properties_expression, "research_tasks"
-    )
-    research_tasks_max_items_expression = _dict_expression(
-        research_tasks_expression,
-        "maxItems",
-    )
-    task_item_expression = _dict_expression(research_tasks_expression, "items")
-    task_properties_expression = _dict_expression(task_item_expression, "properties")
-    article_queries_expression = _dict_expression(
-        task_properties_expression,
-        "article_search_queries",
-    )
-    article_max_items_expression = _dict_expression(
-        article_queries_expression,
-        "maxItems",
-    )
-    target_time_window_expression = _dict_expression(
-        properties_expression,
-        "target_time_window",
-    )
-    target_properties_expression = _dict_expression(
-        target_time_window_expression,
-        "properties",
-    )
-    target_kind_expression = _dict_expression(target_properties_expression, "kind")
 
     assert list(schema["properties"]["plan_type"]["enum"]) == list(get_args(PlanType))
     assert schema["properties"]["research_tasks"]["maxItems"] == RESEARCH_TASK_LIMIT
@@ -216,19 +128,54 @@ def test_gemini_schema_derives_plan_limits_and_enums_from_shared_contracts() -> 
     assert list(
         schema["properties"]["target_time_window"]["properties"]["kind"]["enum"]
     ) == list(get_args(TargetTimeWindowKind))
-    assert _is_list_of_literal_args(
-        _dict_expression(plan_type_expression, "enum"),
-        "PlanType",
+
+
+def test_schema_max_items_sits_exactly_on_the_domain_rejection_boundary() -> None:
+    """wire schema の maxItems と domain 契約の拒否境界が同じ定数で束ねられている。
+
+    maxItems ちょうどの応答は draft / domain の両方を通り、+1 は domain が
+    拒否する (schema が許すのに parse で落ちる・schema が禁じても素通し、の
+    両方向のズレを検知する)。
+    """
+    max_task_payloads = [
+        {"research_goal": f"goal-{index}", "article_search_queries": ["q"]}
+        for index in range(RESEARCH_TASK_LIMIT)
+    ]
+    max_query_payload = {
+        "research_goal": "goal",
+        "article_search_queries": [
+            f"query-{index}" for index in range(MAX_ARTICLE_SEARCH_QUERIES)
+        ],
+    }
+
+    draft = QuestionPlanDraft.model_validate(
+        {"plan_type": "search", "research_tasks": max_task_payloads}
     )
-    assert isinstance(research_tasks_max_items_expression, ast.Name)
-    assert research_tasks_max_items_expression.id == "RESEARCH_TASK_LIMIT"
-    assert isinstance(article_max_items_expression, ast.Name)
-    assert article_max_items_expression.id == "MAX_ARTICLE_SEARCH_QUERIES"
-    assert _is_literal_values_derived_from(
-        source_tree,
-        _dict_expression(target_kind_expression, "enum"),
-        "TargetTimeWindowKind",
-    )
+    assert len(draft.research_tasks) == RESEARCH_TASK_LIMIT
+    plan = SearchPlan.model_validate({"research_tasks": max_task_payloads})
+    assert len(plan.research_tasks) == RESEARCH_TASK_LIMIT
+    with pytest.raises(ValidationError):
+        SearchPlan.model_validate(
+            {
+                "research_tasks": [
+                    *max_task_payloads,
+                    {"research_goal": "goal-over", "article_search_queries": ["q"]},
+                ]
+            }
+        )
+
+    task = ResearchTask.model_validate(max_query_payload)
+    assert len(task.article_search_queries) == MAX_ARTICLE_SEARCH_QUERIES
+    with pytest.raises(ValidationError):
+        ResearchTask.model_validate(
+            {
+                **max_query_payload,
+                "article_search_queries": [
+                    *max_query_payload["article_search_queries"],
+                    "query-over",
+                ],
+            }
+        )
 
 
 def test_schema_field_descriptions_match_the_confirmed_definitions() -> None:
