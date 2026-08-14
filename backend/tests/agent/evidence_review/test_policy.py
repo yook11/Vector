@@ -306,8 +306,11 @@ def test_task_groups_is_empty_tuple_when_there_are_no_tasks() -> None:
 # --- build_review_evidence ---------------------------------------------------
 
 
-def test_build_evidence_drops_out_of_range_index_across_all_tasks() -> None:
-    """統合index空間の範囲外(全taskの合計候補数以上)をdrop。"""
+def test_build_evidence_drops_nonexistent_index_returned_by_the_reviewer() -> None:
+    """LLMが実在しない候補を指すindexを返しても、その選択だけをdropして処理は続行する。
+
+    実在の判定はRun全体の通しindex空間(全task合計の候補数)で行う。
+    """
     build_evidence = build_review_evidence
     tasks = [
         _collected_task(
@@ -317,14 +320,21 @@ def test_build_evidence_drops_out_of_range_index_across_all_tasks() -> None:
                     assessment_id=1001, curation_id=1, title="internal", summary="s"
                 )
             ],
-            external_candidates=[_external_candidate("https://example.com/only")],
-        )
+        ),
+        _collected_task(
+            task_index=1,
+            external_candidates=[
+                _external_candidate("https://example.com/a"),
+                _external_candidate("https://example.com/b"),
+            ],
+        ),
     ]
+    # 通しindex: 0=task0内部, 1..2=task1外部。実在の上限は全task合計の3。
+    # index 2はtask0だけで数えると範囲外(候補1件)だが、Run全体では実在する。
     result = _review_result(
         [
-            {"candidate_index": 0, "claim": "internal claim", "why_selected": "why"},
-            {"candidate_index": 1, "claim": "external claim", "why_selected": "why"},
-            {"candidate_index": 2, "claim": "out of range", "why_selected": "why"},
+            {"candidate_index": 2, "claim": "adopted", "why_selected": "why"},
+            {"candidate_index": 3, "claim": "nonexistent", "why_selected": "why"},
         ],
     )
 
@@ -336,7 +346,7 @@ def test_build_evidence_drops_out_of_range_index_across_all_tasks() -> None:
         [item.claim for item in internal_evidence],
         [item.claim for item in external_evidence],
         dropped,
-    ) == (["internal claim"], ["external claim"], 1)
+    ) == ([], ["adopted"], 1)
 
 
 def test_build_evidence_drops_duplicate_index_keeping_the_first_selection() -> None:
