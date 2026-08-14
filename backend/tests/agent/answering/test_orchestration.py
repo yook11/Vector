@@ -871,7 +871,7 @@ async def test_answer_evidence_plan_reports_evidence_review_when_review_fails() 
     """精査が失敗したRunでもevidence_reviewは報告済みであり、answeringへ進む。
 
     EvidenceReviewerは2attemptとも失敗した後に根拠ゼロでRunを閉じる
-    (retry回数自体はtest_evidence_review_run_scope.pyが正本、ここではreviewer.review
+    (retry回数自体はtest_evidence_review.pyが正本、ここではreviewer.review
     呼び出しの前後にどの進捗報告が挟まるかだけを固定する)。
     """
     timeline = CallTimeline()

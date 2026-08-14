@@ -23,6 +23,7 @@ from app.agent.evidence_collection.internal_search.contract import (
 )
 from app.agent.evidence_review.agent import EVIDENCE_REVIEWER_AGENT
 from app.agent.evidence_review.contract import EvidenceReviewDraft
+from app.agent.evidence_review.policy import build_review_task_groups
 from app.agent.evidence_review.reviewer import EvidenceReviewer
 from app.agent.runtime.contract import AgentResponseDefect, AgentResponseInvalidError
 from app.analysis.ai_provider_errors import AIProviderError, AIProviderNetworkError
@@ -140,97 +141,39 @@ async def test_review_is_called_exactly_once_for_a_multi_task_run() -> None:
 
 
 @pytest.mark.asyncio
-async def test_successful_review_resolves_the_originating_task_index() -> None:
-    """S1: 採用された根拠のtask_indexは、その候補が属するtaskの値になる。"""
-    runtime = ScriptedAgentRuntime(
-        [
-            _draft(
-                [{"candidate_index": 0, "claim": "internal claim", "why_selected": "w"}]
-            )
-        ]
-    )
+async def test_review_passes_the_task_group_projection_and_as_of_unchanged() -> None:
+    """reviewer入力はbuild_review_task_groups(tasks)の出力とas_ofそのもの。
 
-    outcome = await _review(
-        tasks=[_collected_task(task_index=3, internal_hits=[_internal_hit()])],
-        reviewer_runtime=runtime,
-    )
-
-    assert outcome.failure_reason is None
-    assert len(outcome.internal_evidence) == 1
-    assert outcome.internal_evidence[0].claim == "internal claim"
-    assert outcome.internal_evidence[0].task_index == 3
-    assert outcome.external_evidence == []
-
-
-@pytest.mark.asyncio
-async def test_review_groups_candidates_by_task_in_ascending_task_index_order() -> None:
-    """S1(候補の渡し方)。research_goalごとにグループ化しtask_index昇順で並べる。"""
+    グループ化規則(昇順・通しindex・内部→外部)の正本はtest_policy.pyが持つ。
+    """
     runtime = ScriptedAgentRuntime([_draft([])])
+    # 降順で渡し、等価比較が入力の受け流しでは成立しないようにする。
     tasks = [
-        _collected_task(
-            task_index=0,
-            research_goal="goal-A",
-            internal_hits=[_internal_hit(title="A-int")],
-        ),
         _collected_task(
             task_index=1,
             research_goal="goal-B",
             external_candidates=[_external_candidate(title="B-ext")],
         ),
-    ]
-
-    await _review(tasks=tasks, reviewer_runtime=runtime)
-
-    review_input = runtime.calls[0].input
-    assert [group.task_index for group in review_input.task_groups] == [0, 1]
-    assert [group.research_goal for group in review_input.task_groups] == [
-        "goal-A",
-        "goal-B",
-    ]
-
-
-@pytest.mark.asyncio
-async def test_review_assigns_a_run_wide_index_internal_before_external_per_group() -> (
-    None
-):
-    """S1(候補の渡し方)。indexはグループをまたぐ通し番号、group内は内部→外部。"""
-    runtime = ScriptedAgentRuntime([_draft([])])
-    tasks = [
         _collected_task(
             task_index=0,
-            internal_hits=[
-                _internal_hit(assessment_id=1001, curation_id=1, title="A-int-1"),
-                _internal_hit(assessment_id=1002, curation_id=2, title="A-int-2"),
-            ],
-            external_candidates=[_external_candidate(title="A-ext-1")],
-        ),
-        _collected_task(
-            task_index=1,
-            internal_hits=[
-                _internal_hit(assessment_id=1003, curation_id=3, title="B-int-1")
-            ],
+            research_goal="goal-A",
+            internal_hits=[_internal_hit(title="A-int")],
         ),
     ]
 
     await _review(tasks=tasks, reviewer_runtime=runtime)
 
     review_input = runtime.calls[0].input
-    ordered = [
-        (candidate.index, candidate.title)
-        for group in review_input.task_groups
-        for candidate in group.candidates
-    ]
-    assert ordered == [
-        (0, "A-int-1"),
-        (1, "A-int-2"),
-        (2, "A-ext-1"),
-        (3, "B-int-1"),
-    ]
+    assert review_input.task_groups == build_review_task_groups(tasks)
+    assert review_input.as_of == _AS_OF
 
 
 @pytest.mark.asyncio
 async def test_selection_restores_candidate_and_task_from_a_cross_task_index() -> None:
-    """S1(選別結果の復元)。グループをまたいだindexから候補と所属taskが復元される。"""
+    """S1(選別結果の復元)。グループをまたいだindexから候補と所属taskが復元される。
+
+    復元規則の正本はtest_policy.py。ここではreview()経由の実配線を確認する。
+    """
     tasks = [
         _collected_task(
             task_index=0,
@@ -279,23 +222,6 @@ async def test_selection_restores_candidate_and_task_from_a_cross_task_index() -
 
 
 @pytest.mark.asyncio
-async def test_review_completes_when_only_some_tasks_have_candidates() -> None:
-    """S1 A1系。候補ゼロのtaskがあってもRun全体としての精査は1回で完了する。"""
-    runtime = ScriptedAgentRuntime(
-        [_draft([{"candidate_index": 0, "claim": "claim", "why_selected": "w"}])]
-    )
-    tasks = [
-        _collected_task(task_index=0, internal_hits=[_internal_hit()]),
-        _collected_task(task_index=1),
-    ]
-
-    outcome = await _review(tasks=tasks, reviewer_runtime=runtime)
-
-    assert outcome.failure_reason is None
-    assert len(runtime.calls) == 1
-
-
-@pytest.mark.asyncio
 async def test_review_propagates_missing_as_a_single_run_level_list() -> None:
     """S1(何ができていないかの表明)。missingはRun全体で1本として返る。"""
     runtime = ScriptedAgentRuntime([_draft([], missing=["run全体の不足"])])
@@ -306,34 +232,6 @@ async def test_review_propagates_missing_as_a_single_run_level_list() -> None:
     )
 
     assert outcome.missing == ["run全体の不足"]
-
-
-@pytest.mark.asyncio
-async def test_review_drops_out_of_range_duplicate_and_over_cap_selections() -> None:
-    """S1(選別結果の復元)。範囲外/重複/採用上限超過をRun単位で決定的にdropする。
-
-    S2でcap値がRun単位の15になったため、16件目で上限超過が起きることを検証する。
-    """
-    tasks = [
-        _collected_task(
-            task_index=0,
-            internal_hits=[
-                _internal_hit(assessment_id=1000 + i, curation_id=i + 1, title=f"c{i}")
-                for i in range(16)
-            ],
-        )
-    ]
-    selections = [
-        {"candidate_index": index, "claim": f"claim-{index}", "why_selected": "w"}
-        for index in [0, 0, *range(1, 16), 99]
-    ]
-    runtime = ScriptedAgentRuntime([_draft(selections)])
-
-    outcome = await _review(tasks=tasks, reviewer_runtime=runtime)
-
-    assert len(outcome.internal_evidence) == 15
-    # dup(index 0)・上限超過(16件目のindex 15)・範囲外(index 99)の3件がdropされる。
-    assert outcome.dropped_selection_count == 3
 
 
 @pytest.mark.asyncio

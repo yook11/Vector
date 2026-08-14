@@ -7,19 +7,11 @@ from collections.abc import Sequence
 from contextlib import AbstractAsyncContextManager
 from datetime import UTC, date, datetime
 from typing import Any
-from uuid import UUID
 
 import pytest
 from logfire.testing import CaptureLogfire
 from structlog.testing import capture_logs
 
-from app.agent.answering.contract import AnsweringRequest
-from app.agent.answering.direct_answer.contract import DirectAnswerDraft
-from app.agent.answering.evidence_answer.contract import (
-    EvidenceAnswerDraft,
-    EvidenceAnswerOutcome,
-    EvidenceAnswerUnavailable,
-)
 from app.agent.evidence_collection import NewsCollector, Researcher
 from app.agent.evidence_collection import (
     news_collector as news_collector_module,
@@ -34,7 +26,6 @@ from app.agent.evidence_collection.external_search.contract import (
     EXTERNAL_SEARCH_CANDIDATES_PER_QUERY,
 )
 from app.agent.evidence_collection.internal_search import (
-    InternalArticleContent,
     InternalArticleSearchHit,
 )
 from app.agent.evidence_review import EvidenceReviewer
@@ -45,26 +36,55 @@ from app.agent.planning.contract import (
     SearchPlan,
     TargetTimeWindow,
 )
-from app.agent.question_context import QuestionContext
-from app.agent.running import AnsweringPhases, AnsweringRunner, RunContext, RunInput
-from app.agent.running import answering_runner as answering_runner_module
+from app.agent.running import AnsweringPhases, AnsweringRunner
 from app.agent.runtime.contract import AgentResponseDefect, AgentResponseInvalidError
 from app.analysis.ai_provider_errors import AIProviderNetworkError
-from app.analysis.analyzed_article import InScopeAnalyzedArticle
-from app.analysis.assessment.domain.result import InScope, InScopeCategory
 from app.analysis.deepseek_error_translator import DeepSeekStateReason
+from tests.agent.running._harness import (
+    AS_OF,
+    internal_hit,
+)
+from tests.agent.running._harness import (
+    DEFAULT_TARGET_TIME_WINDOW as _DEFAULT_TARGET_TIME_WINDOW,
+)
+from tests.agent.running._harness import (
+    Events as _Events,
+)
+from tests.agent.running._harness import (
+    EvidenceAnswerer as _EvidenceAnswerer,
+)
+from tests.agent.running._harness import (
+    Preparer as _Preparer,
+)
+from tests.agent.running._harness import (
+    UnreachableDirectAnswerer as _UnreachableDirectAnswerer,
+)
+from tests.agent.running._harness import (
+    capture_external_outcome as _capture_external_outcome,
+)
+from tests.agent.running._harness import (
+    execute_run as _run,
+)
+from tests.agent.running._harness import (
+    external_candidate as _candidate,
+)
+from tests.agent.running._harness import (
+    external_research_runtime as _runtime,
+)
+from tests.agent.running._harness import (
+    external_task as _task,
+)
+from tests.agent.running._harness import (
+    query_draft as _query_draft,
+)
+from tests.agent.running._harness import (
+    review_draft as _review_draft,
+)
 from tests.agent.running._input_safety import AllowInputSafetyChecker
 from tests.agent.runtime._fakes import ScriptedAgentRuntime
 from tests.logfire._metric_helpers import collected_metrics
 
-RUN_ID = UUID("019bd239-1ed4-7fbb-a336-04fe3c197652")
-AS_OF = datetime(2026, 7, 20, 9, 30, tzinfo=UTC)
-_DEFAULT_TARGET_TIME_WINDOW = TargetTimeWindow(kind="last_n_days", days=1)
 _TIME_FILTER_METRIC = "external_search_time_filter_resolution_total"
-
-
-def _task(goal: str) -> ExternalResearchTask:
-    return ExternalResearchTask(research_goal=goal)
 
 
 def _plan(
@@ -82,41 +102,6 @@ def _plan(
         ],
         target_time_window=target_time_window,
     )
-
-
-def _query_draft(queries: object) -> Any:
-    from app.agent.evidence_collection.external_search.contract import (
-        ExternalQueryDraft,
-    )
-
-    return ExternalQueryDraft.model_validate({"queries": queries})
-
-
-def _review_draft(
-    selections: list[dict[str, Any]] | None = None,
-    *,
-    missing: list[str] | None = None,
-) -> Any:
-    from app.agent.evidence_review import EvidenceReviewDraft
-
-    return EvidenceReviewDraft.model_validate(
-        {"selections": selections or [], "missing": missing or []}
-    )
-
-
-def _candidate(url: str, *, title: str | None = None) -> ExternalSearchCandidate:
-    return ExternalSearchCandidate(
-        url=url,
-        title=title or url.rsplit("/", maxsplit=1)[-1],
-        snippet="snippet",
-        source_name="Example",
-        published_at=AS_OF,
-    )
-
-
-class _Preparer:
-    async def prepare(self, **_kwargs: object) -> QuestionContext:
-        return QuestionContext(standalone_question="NVIDIA の見通しは？")
 
 
 class _Planner:
@@ -140,21 +125,11 @@ class _EmptyInternalSearch:
 
 
 def _internal_hit(*, assessment_id: int, title: str) -> InternalArticleSearchHit:
-    article = InScopeAnalyzedArticle(
+    # このファイルのfixture採番: curation_id は assessment_id - 1000 で導出する。
+    return internal_hit(
+        assessment_id=assessment_id,
         curation_id=assessment_id - 1000,
         title=title,
-        summary=f"{title} summary",
-        assessment_result=InScope(
-            category=InScopeCategory.AI,
-            investor_take="投資家視点",
-            key_points=[],
-        ),
-    )
-    return InternalArticleSearchHit(
-        assessment_id=assessment_id,
-        article=article,
-        content=InternalArticleContent.from_article(article, published_at=None),
-        distance=0.1,
     )
 
 
@@ -168,39 +143,6 @@ class _OneInternalHitSearch:
     async def invoke(self, input: object) -> list[InternalArticleSearchHit]:
         del input
         return [_internal_hit(assessment_id=2001, title="internal hit")]
-
-
-class _UnreachableDirectAnswerer:
-    async def answer(
-        self, *, request: AnsweringRequest, previous_answer: str = ""
-    ) -> DirectAnswerDraft:
-        raise AssertionError(
-            f"direct answer must not run: {request!r} {previous_answer!r}"
-        )
-
-
-class _EvidenceAnswerer:
-    def __init__(self) -> None:
-        self.calls: list[list[Any]] = []
-
-    async def answer(
-        self,
-        *,
-        request: AnsweringRequest,
-        evidence: list[Any],
-        target_time_window: TargetTimeWindow | None,
-        review_missing: tuple[str, ...] = (),
-    ) -> EvidenceAnswerOutcome:
-        del request, target_time_window, review_missing
-        self.calls.append(list(evidence))
-        if evidence:
-            return EvidenceAnswerDraft(
-                answer="根拠に基づく回答です。",
-                cited_refs=[item.source.source_ref for item in evidence],
-            )
-        # 自己申告でinsufficientを名乗る形は無くなったため、
-        # evidenceが無く回答を作れなかった場合はunavailableで表す。
-        return EvidenceAnswerUnavailable(failure_code="fake_no_evidence")
 
 
 class _Scope(AbstractAsyncContextManager[ExternalResearchRuntime]):
@@ -280,14 +222,6 @@ class _Tool:
         except asyncio.CancelledError:
             self.cancelled = True
             raise
-
-
-class _Events:
-    def __init__(self) -> None:
-        self.events: list[Any] = []
-
-    async def event_occurred(self, event: Any) -> None:
-        self.events.append(event)
 
 
 def _external_search_events(events: list[Any]) -> list[Any]:
@@ -413,19 +347,6 @@ class _QueryFailureAfterSiblingStartsTool(_Tool):
             self.sibling_finished.set()
 
 
-def _runtime(
-    *,
-    query_runtime: object,
-    reviewer_runtime: object,
-    tool: object,
-) -> ExternalResearchRuntime:
-    return ExternalResearchRuntime(
-        query_runtime=query_runtime,  # type: ignore[arg-type]
-        reviewer_runtime=reviewer_runtime,  # type: ignore[arg-type]
-        search_tool=tool,  # type: ignore[arg-type]
-    )
-
-
 def _runner(
     *,
     tasks: list[ExternalResearchTask],
@@ -464,25 +385,6 @@ def _runner(
     )
 
 
-async def _run(runner: AnsweringRunner, *, as_of: datetime = AS_OF) -> Any:
-    return await runner.run(
-        RunInput(question="NVIDIA の見通しは？", history=()),
-        run_context=RunContext(run_id=RUN_ID, as_of=as_of),
-    )
-
-
-def _capture_external_outcome(monkeypatch: pytest.MonkeyPatch) -> list[Any]:
-    captured: list[Any] = []
-    original = answering_runner_module.normalize_answer_evidence
-
-    def capture(outcome: Any) -> Any:
-        captured.append(outcome)
-        return original(outcome)
-
-    monkeypatch.setattr(answering_runner_module, "normalize_answer_evidence", capture)
-    return captured
-
-
 def _time_filter_metric_points(
     metrics: list[dict[str, Any]],
 ) -> list[tuple[int, dict[str, Any]]]:
@@ -514,9 +416,8 @@ def _record_and_shorten_pipeline_timeouts(
 
 
 @pytest.mark.asyncio
-async def test_external_pipeline_normalizes_queries_and_hides_urls_from_reviewer() -> (
-    None
-):
+async def test_external_pipeline_normalizes_and_caps_generated_queries() -> None:
+    """query正規化・重複除去・件数capの配線。URL非到達の正本はrun_scope B5。"""
     long_query = "x" * 205
     query_runtime = ScriptedAgentRuntime(
         [_query_draft(["  normalized  ", "normalized", long_query, "third", "fourth"])]
@@ -545,7 +446,6 @@ async def test_external_pipeline_normalizes_queries_and_hides_urls_from_reviewer
     )
 
     result = await _run(runner)
-    reviewer_input = reviewer_runtime.calls[0].input
 
     assert [call.query for call in tool.calls] == [
         "normalized",
@@ -553,10 +453,6 @@ async def test_external_pipeline_normalizes_queries_and_hides_urls_from_reviewer
         "third",
     ]
     assert all(call.limit == 10 for call in tool.calls)
-    assert all(
-        not hasattr(candidate, "url")
-        for candidate in reviewer_input.task_groups[0].candidates
-    )
     assert (
         [(item.source.title, item.source.evidence_claim) for item in answerer.calls[0]],
         result.final_output.status,
@@ -1074,63 +970,6 @@ async def test_partial_provider_failure_continues_but_all_failure_skips_reviewer
 
 
 @pytest.mark.asyncio
-async def test_empty_candidate_pool_skips_reviewer() -> None:
-    reviewer_runtime = ScriptedAgentRuntime([])
-    runner, answerer, _ = _runner(
-        tasks=[_task("empty pool")],
-        runtime=_runtime(
-            query_runtime=ScriptedAgentRuntime([_query_draft(["q"])]),
-            reviewer_runtime=reviewer_runtime,
-            tool=_Tool({"q": []}),
-        ),
-    )
-
-    result = await _run(runner)
-
-    assert (reviewer_runtime.calls, answerer.calls, result.final_output.status) == (
-        [],
-        [[]],
-        "insufficient",
-    )
-
-
-@pytest.mark.asyncio
-async def test_reviewer_failure_after_two_attempts_becomes_failed_review_report(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """runnerがreviewer失敗をreview=failed reportへ写す結線を保証する。
-
-    attempt/timeout/失敗分類の詳細な組み合わせは
-    tests/agent/evidence_review/test_reviewer.py が正本。
-    """
-    captured = _capture_external_outcome(monkeypatch)
-    failure = AgentResponseInvalidError(AgentResponseDefect.RESPONSE_NOT_JSON)
-    reviewer_runtime = ScriptedAgentRuntime([failure, failure])
-    runner, answerer, _ = _runner(
-        tasks=[_task("reviewer failure")],
-        runtime=_runtime(
-            query_runtime=ScriptedAgentRuntime([_query_draft(["q"])]),
-            reviewer_runtime=reviewer_runtime,
-            tool=_Tool({"q": [_candidate("https://example.com/q")]}),
-        ),
-    )
-
-    await _run(runner)
-
-    report = captured[0].task_reports[0]
-    review = captured[0].review
-    assert (
-        report.external_collection,
-        review.review,
-        review.review_failure_reason,
-        review.internal_evidence_count,
-        review.external_evidence_count,
-        [call.attempt_number for call in reviewer_runtime.calls],
-        answerer.calls,
-    ) == ("succeeded", "failed", "response_not_json", 0, 0, [1, 2], [[]])
-
-
-@pytest.mark.asyncio
 async def test_workflow_constructs_task_ordered_external_outcome_before_answering(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -1226,7 +1065,7 @@ async def test_collection_events_are_per_task_causal_with_their_contract_payload
     evidence_review.selectedは両task分がまとめて精査成功後にRun単位1本でしか
     発火しない(task0が完結してからtask1が始まる、というper-task逐次因果は
     成立しない)。evidence_review.selectedの発火本数・payload形は
-    tests/agent/running/test_evidence_review_run_scope.py::
+    tests/agent/running/test_evidence_review.py::
     test_selected_event_fires_once_for_the_whole_run_without_task_index が
     正本のため、ここでは重複して主張しない。
     """
@@ -1281,73 +1120,6 @@ async def test_collection_events_are_per_task_causal_with_their_contract_payload
             "task_index": 1,
             "candidate_count": 1,
         },
-    ]
-
-
-@pytest.mark.asyncio
-async def test_evidence_selected_event_count_is_internal_plus_external() -> None:
-    """evidence_review.selected.evidence_countは内部採用数と外部採用数の合算であることを保証する。"""
-    events = _Events()
-    query_runtime = ScriptedAgentRuntime([_query_draft(["q1"])])
-    reviewer_runtime = ScriptedAgentRuntime(
-        [
-            _review_draft(
-                [
-                    {
-                        "candidate_index": 0,
-                        "claim": "internal claim",
-                        "why_selected": "why",
-                    },
-                    {
-                        "candidate_index": 1,
-                        "claim": "external claim",
-                        "why_selected": "why",
-                    },
-                ]
-            )
-        ]
-    )
-    answerer = _EvidenceAnswerer()
-    factory = _Factory(
-        [
-            _runtime(
-                query_runtime=query_runtime,
-                reviewer_runtime=reviewer_runtime,
-                tool=_Tool({"q1": [_candidate("https://example.com/q1")]}),
-            )
-        ]
-    )
-    phases = AnsweringPhases(
-        planner=_Planner(_plan([_task("combined evidence")])),
-        collector=NewsCollector(
-            researcher=Researcher(
-                internal_search=_OneInternalHitSearch(), events=events
-            )
-        ),
-        external_runtime_factory=factory,
-        direct_answerer=_UnreachableDirectAnswerer(),
-        evidence_answerer=answerer,
-        reviewer=EvidenceReviewer(),
-    )
-    runner = AnsweringRunner(
-        input_safety_checker=AllowInputSafetyChecker(),
-        context_preparer=_Preparer(),
-        phases_factory=lambda: phases,
-        events=events,
-    )
-
-    await _run(runner)
-
-    selected_events = [
-        event.model_dump()
-        for event in _external_search_events(events.events)
-        if event.type == "evidence_review.selected"
-    ]
-    assert selected_events == [
-        {
-            "type": "evidence_review.selected",
-            "evidence_count": 2,
-        }
     ]
 
 
@@ -1518,13 +1290,11 @@ async def test_unclassified_query_failure_joins_sibling_before_reraise() -> None
 
 
 @pytest.mark.asyncio
-async def test_cross_task_same_url_both_kept_and_scope_is_fresh_per_run() -> None:
-    """S1(合流と重複排除): 外部根拠のURL重複排除は廃止されたため、taskが違えば
+async def test_external_scope_is_activated_fresh_per_run() -> None:
+    """external runtime scopeはrunごとに新しくactivateされ、終了時に必ずexitする。
 
-    同じURLが両方とも根拠として残る(旧: URL先勝ちdedupで片方だけが残っていた)。
-    reviewerはRun単位1回のため、統合index空間(仮定: task昇順)の0,1を1つの
-    draftで選ばせる(task単位で呼ぶ旧経路が残っていても2件目のcallが
-    script枯渇crashにならないよう空draftを足す)。
+    同URL外部候補が両方残ること(URL重複排除の廃止)の正本は
+    test_evidence_review.py の same_url テストが持つ。
     """
     tasks = [_task("first"), _task("second")]
 
@@ -1540,8 +1310,7 @@ async def test_cross_task_same_url_both_kept_and_scope_is_fresh_per_run() -> Non
                             "why_selected": "why",
                         },
                     ]
-                ),
-                _review_draft([]),
+                )
             ]
         )
 
@@ -1590,11 +1359,11 @@ async def test_cross_task_same_url_both_kept_and_scope_is_fresh_per_run() -> Non
     await _run(runner)
 
     assert (
-        [sorted(item.source.title for item in evidence) for evidence in answerer.calls],
+        len(answerer.calls),
         len(factory.scopes),
         factory.scopes[0] is not factory.scopes[1],
         [scope.exit_calls for scope in factory.scopes],
-    ) == ([["first", "second"], ["first", "second"]], 2, True, [1, 1])
+    ) == (2, 2, True, [1, 1])
 
 
 @pytest.mark.asyncio

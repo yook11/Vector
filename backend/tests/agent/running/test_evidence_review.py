@@ -24,29 +24,16 @@ from __future__ import annotations
 import asyncio
 import json
 from contextlib import AbstractAsyncContextManager
-from datetime import UTC, datetime
 from typing import Any
-from uuid import UUID
 
 import pytest
 from logfire.testing import CaptureLogfire
 
-from app.agent.answering.contract import AnsweringRequest
-from app.agent.answering.direct_answer.contract import DirectAnswerDraft
-from app.agent.answering.evidence_answer.contract import (
-    EvidenceAnswerDraft,
-    EvidenceAnswerOutcome,
-    EvidenceAnswerUnavailable,
-)
-from app.agent.contract import InternalArticleSource
 from app.agent.evidence_collection import NewsCollector, Researcher
 from app.agent.evidence_collection.external_search.contract import (
-    ExternalQueryDraft,
     ExternalResearchRuntime,
-    ExternalSearchCandidate,
 )
 from app.agent.evidence_collection.internal_search.contract import (
-    InternalArticleContent,
     InternalArticleSearchHit,
     InternalSearchError,
 )
@@ -55,33 +42,52 @@ from app.agent.evidence_review import (
     EvidenceReviewer,
 )
 from app.agent.evidence_review.agent import EVIDENCE_REVIEWER_AGENT
-from app.agent.evidence_review.contract import EVIDENCE_REVIEW_ADOPTION_LIMIT
 from app.agent.planning.contract import ResearchTask, SearchPlan, TargetTimeWindow
-from app.agent.question_context import QuestionContext
-from app.agent.running import AnsweringPhases, AnsweringRunner, RunContext, RunInput
+from app.agent.running import AnsweringPhases, AnsweringRunner
 from app.agent.runtime.contract import AgentResponseDefect, AgentResponseInvalidError
-from app.analysis.analyzed_article import InScopeAnalyzedArticle
-from app.analysis.assessment.domain.result import InScope, InScopeCategory
+from tests.agent.running._harness import (
+    DEFAULT_TARGET_TIME_WINDOW as _TARGET_TIME_WINDOW,
+)
+from tests.agent.running._harness import (
+    Events as _Events,
+)
+from tests.agent.running._harness import (
+    EvidenceAnswerer as _EvidenceAnswerer,
+)
+from tests.agent.running._harness import (
+    ExternalSearchTool as _ExternalTool,
+)
+from tests.agent.running._harness import (
+    Planner as _Planner,
+)
+from tests.agent.running._harness import (
+    Preparer as _Preparer,
+)
+from tests.agent.running._harness import (
+    UnreachableDirectAnswerer as _UnreachableDirectAnswerer,
+)
+from tests.agent.running._harness import (
+    capture_external_outcome as _capture_external_outcome,
+)
+from tests.agent.running._harness import (
+    execute_run as _run,
+)
+from tests.agent.running._harness import (
+    external_candidate as _external_candidate,
+)
+from tests.agent.running._harness import (
+    internal_hit as _internal_hit,
+)
+from tests.agent.running._harness import (
+    query_draft as _query_draft,
+)
+from tests.agent.running._harness import (
+    review_draft as _draft,
+)
 from tests.agent.running._input_safety import AllowInputSafetyChecker
 from tests.agent.runtime._fakes import ScriptedAgentRuntime
 
-RUN_ID = UUID("019bd239-1ed4-7fbb-a336-04fe3c197661")
-AS_OF = datetime(2026, 7, 20, 9, 30, tzinfo=UTC)
-_TARGET_TIME_WINDOW = TargetTimeWindow(kind="last_n_days", days=1)
-
 _EMPTY_DRAFT = EvidenceReviewDraft.model_validate({"selections": [], "missing": []})
-
-
-def _draft(
-    selections: list[dict[str, Any]], *, missing: list[str] | None = None
-) -> EvidenceReviewDraft:
-    return EvidenceReviewDraft.model_validate(
-        {"selections": selections, "missing": missing or []}
-    )
-
-
-def _query_draft(queries: list[str]) -> ExternalQueryDraft:
-    return ExternalQueryDraft(queries=queries)
 
 
 def _task(goal: str, queries: list[str]) -> ResearchTask:
@@ -95,112 +101,31 @@ def _plan(
     return SearchPlan(research_tasks=list(tasks), target_time_window=target_time_window)
 
 
-def _internal_hit(
-    *,
-    assessment_id: int,
-    curation_id: int,
-    title: str,
-    summary: str | None = None,
-) -> InternalArticleSearchHit:
-    article = InScopeAnalyzedArticle(
-        curation_id=curation_id,
-        title=title,
-        summary=summary or f"{title} summary",
-        assessment_result=InScope(
-            category=InScopeCategory.AI,
-            investor_take="投資家視点",
-            key_points=[],
-        ),
-    )
-    return InternalArticleSearchHit(
-        assessment_id=assessment_id,
-        article=article,
-        content=InternalArticleContent.from_article(article, published_at=None),
-        distance=0.1,
-    )
-
-
-def _external_candidate(url: str, *, title: str) -> ExternalSearchCandidate:
-    return ExternalSearchCandidate(
-        url=url,
-        title=title,
-        snippet="snippet",
-        source_name="Example",
-        published_at=AS_OF,
-    )
-
-
-class _Preparer:
-    def __init__(self, *, answer_requirements: tuple[str, ...] | None = None) -> None:
-        self._answer_requirements = answer_requirements or ()
-
-    async def prepare(self, **_kwargs: object) -> QuestionContext:
-        return QuestionContext(
-            standalone_question="NVIDIA の見通しは？",
-            answer_requirements=self._answer_requirements,
-        )
-
-
-class _Planner:
-    def __init__(self, plan: SearchPlan) -> None:
-        self._plan = plan
-
-    async def plan(self, request: object) -> SearchPlan:
-        del request
-        return self._plan
-
-
-class _UnreachableDirectAnswerer:
-    async def answer(
-        self, *, request: AnsweringRequest, previous_answer: str = ""
-    ) -> DirectAnswerDraft:
-        raise AssertionError(
-            f"direct answer must not run: {request!r} {previous_answer!r}"
-        )
-
-
-class _EvidenceAnswerer:
-    def __init__(self) -> None:
-        self.calls: list[list[Any]] = []
-
-    async def answer(
-        self,
-        *,
-        request: AnsweringRequest,
-        evidence: list[Any],
-        target_time_window: TargetTimeWindow | None,
-        review_missing: tuple[str, ...] = (),
-    ) -> EvidenceAnswerOutcome:
-        del request, target_time_window, review_missing
-        self.calls.append(list(evidence))
-        if evidence:
-            return EvidenceAnswerDraft(
-                answer="根拠に基づく回答です。",
-                cited_refs=[item.source.source_ref for item in evidence],
-            )
-        # 自己申告でinsufficientを名乗る形は無くなったため、
-        # evidenceが無く回答を作れなかった場合はunavailableで表す。
-        return EvidenceAnswerUnavailable(failure_code="fake_no_evidence")
-
-
 class _Scope(AbstractAsyncContextManager[ExternalResearchRuntime]):
     def __init__(self, runtime: ExternalResearchRuntime) -> None:
         self._runtime = runtime
+        self.entered = False
+        self.exit_calls = 0
 
     async def __aenter__(self) -> ExternalResearchRuntime:
+        self.entered = True
         return self._runtime
 
     async def __aexit__(self, exc_type: object, exc: object, tb: object) -> bool:
         del exc_type, exc, tb
+        self.exit_calls += 1
         return False
 
 
 class _Factory:
     def __init__(self, runtime: ExternalResearchRuntime) -> None:
         self._runtime = runtime
+        self.scopes: list[_Scope] = []
 
     def activate(self) -> _Scope:
-        return _Scope(self._runtime)
+        scope = _Scope(self._runtime)
+        self.scopes.append(scope)
+        return scope
 
 
 class _InternalTool:
@@ -238,30 +163,6 @@ class _InternalTool:
         return list(self._hits_by_query.get(query, []))
 
 
-class _ExternalTool:
-    def __init__(
-        self, results_by_query: dict[str, list[ExternalSearchCandidate]] | None = None
-    ) -> None:
-        self._results = results_by_query or {}
-        self.calls: list[Any] = []
-
-    @property
-    def name(self) -> str:
-        return "external_search"
-
-    async def invoke(self, input: Any) -> list[ExternalSearchCandidate]:
-        self.calls.append(input)
-        return list(self._results.get(input.query, []))
-
-
-class _Events:
-    def __init__(self) -> None:
-        self.events: list[Any] = []
-
-    async def event_occurred(self, event: Any) -> None:
-        self.events.append(event)
-
-
 def _runner(
     *,
     plan: SearchPlan,
@@ -271,20 +172,21 @@ def _runner(
     internal_tool: object,
     events: object | None = None,
     answer_requirements: tuple[str, ...] | None = None,
-) -> tuple[AnsweringRunner, _EvidenceAnswerer]:
+) -> tuple[AnsweringRunner, _EvidenceAnswerer, _Factory]:
     answerer = _EvidenceAnswerer()
     runtime = ExternalResearchRuntime(
         query_runtime=query_runtime,  # type: ignore[arg-type]
         reviewer_runtime=reviewer_runtime,  # type: ignore[arg-type]
         search_tool=external_tool,  # type: ignore[arg-type]
     )
+    factory = _Factory(runtime)
     phases = AnsweringPhases(
         planner=_Planner(plan),
         collector=NewsCollector(
             researcher=Researcher(internal_search=internal_tool, events=events),  # type: ignore[arg-type]
         ),
         reviewer=EvidenceReviewer(),
-        external_runtime_factory=_Factory(runtime),
+        external_runtime_factory=factory,
         direct_answerer=_UnreachableDirectAnswerer(),
         evidence_answerer=answerer,
     )
@@ -294,14 +196,7 @@ def _runner(
         phases_factory=lambda: phases,
         events=events,  # type: ignore[arg-type]
     )
-    return runner, answerer
-
-
-async def _run(runner: AnsweringRunner) -> Any:
-    return await runner.run(
-        RunInput(question="NVIDIA の見通しは？", history=()),
-        run_context=RunContext(run_id=RUN_ID, as_of=AS_OF),
-    )
+    return runner, answerer, factory
 
 
 # --- A. 精査の呼び出し単位 -------------------------------------------------
@@ -331,7 +226,7 @@ async def test_review_runs_once_for_a_three_task_search_plan() -> None:
     reviewer_runtime = ScriptedAgentRuntime(
         [_draft([{"candidate_index": 0, "claim": "c", "why_selected": "w"}])]
     )
-    runner, _answerer = _runner(
+    runner, _answerer, _factory = _runner(
         plan=_plan(*tasks),
         query_runtime=ScriptedAgentRuntime([_query_draft([]) for _ in tasks]),
         reviewer_runtime=reviewer_runtime,
@@ -373,7 +268,7 @@ async def test_review_does_not_start_before_every_tasks_collection_completes() -
     reviewer_runtime = ScriptedAgentRuntime(
         [_draft([{"candidate_index": 0, "claim": "c", "why_selected": "w"}])]
     )
-    runner, _answerer = _runner(
+    runner, _answerer, _factory = _runner(
         plan=_plan(*tasks),
         query_runtime=ScriptedAgentRuntime([_query_draft([]) for _ in tasks]),
         reviewer_runtime=reviewer_runtime,
@@ -406,7 +301,7 @@ async def test_review_is_skipped_when_every_task_has_no_candidates() -> None:
     ]
     reviewer_runtime = ScriptedAgentRuntime([])
     events = _Events()
-    runner, answerer = _runner(
+    runner, answerer, _factory = _runner(
         plan=_plan(*tasks),
         query_runtime=ScriptedAgentRuntime([_query_draft([]) for _ in tasks]),
         reviewer_runtime=reviewer_runtime,
@@ -459,7 +354,7 @@ async def test_review_still_runs_using_the_candidates_that_survive_a_failed_task
             )
         ]
     )
-    runner, answerer = _runner(
+    runner, answerer, _factory = _runner(
         plan=_plan(*tasks),
         query_runtime=ScriptedAgentRuntime([_query_draft([]) for _ in tasks]),
         reviewer_runtime=reviewer_runtime,
@@ -472,6 +367,99 @@ async def test_review_still_runs_using_the_candidates_that_survive_a_failed_task
     assert len(reviewer_runtime.calls) == 1
     titles = {item.source.title for item in answerer.calls[0]}
     assert titles == {"A-hit", "C-hit"}
+
+
+@pytest.mark.asyncio
+async def test_task_with_only_internal_candidates_still_reaches_review() -> None:
+    """保証するテスト条件 7(内部のみ)。外部全滅でも精査へ進み内部根拠を返す。"""
+    internal_tool = _InternalTool(
+        hits_by_query={
+            "query-a": [
+                _internal_hit(assessment_id=1001, curation_id=1, title="internal only")
+            ]
+        }
+    )
+    reviewer_runtime = ScriptedAgentRuntime(
+        [_draft([{"candidate_index": 0, "claim": "claim", "why_selected": "w"}])]
+    )
+    runner, answerer, _factory = _runner(
+        plan=_plan(_task("internal only task", ["query-a"])),
+        query_runtime=ScriptedAgentRuntime([_query_draft([])]),
+        reviewer_runtime=reviewer_runtime,
+        external_tool=_ExternalTool(),
+        internal_tool=internal_tool,
+    )
+
+    result = await _run(runner)
+
+    assert len(reviewer_runtime.calls) == 1
+    assert [item.source.title for item in answerer.calls[0]] == ["internal only"]
+    assert result.final_output.status == "answered"
+
+
+@pytest.mark.asyncio
+async def test_task_with_only_external_candidates_still_reaches_review() -> None:
+    """保証するテスト条件 7(外部のみ)。内部失敗でも精査へ進み外部根拠を返す。"""
+    reviewer_runtime = ScriptedAgentRuntime(
+        [_draft([{"candidate_index": 0, "claim": "claim", "why_selected": "w"}])]
+    )
+    runner, answerer, _factory = _runner(
+        plan=_plan(_task("external only task", ["query-a"])),
+        query_runtime=ScriptedAgentRuntime([_query_draft(["q"])]),
+        reviewer_runtime=reviewer_runtime,
+        external_tool=_ExternalTool(
+            {"q": [_external_candidate("https://example.com/only")]}
+        ),
+        internal_tool=_InternalTool(
+            errors_by_query={"query-a": InternalSearchError(phase="article_search")}
+        ),
+    )
+
+    result = await _run(runner)
+
+    assert len(reviewer_runtime.calls) == 1
+    assert [item.source.title for item in answerer.calls[0]] == ["only"]
+    # D4-S2: run単位のcollection_failuresは廃止された。このtaskはreview=
+    # succeeded(外部候補を精査して採用)で完了扱いになるため、内部収集が
+    # 失敗していてもstatusはansweredになる。
+    assert result.final_output.status == "answered"
+
+
+@pytest.mark.asyncio
+async def test_time_filter_failure_still_activates_external_scope_for_review() -> None:
+    """保証するテスト条件 11。time filter失敗でもreviewerのLLM runtimeが使えるよう
+    external runtime scopeがactivateされる(direct pathの非activateは不変)。
+    """
+    internal_tool = _InternalTool(
+        hits_by_query={
+            "query-a": [
+                _internal_hit(
+                    assessment_id=1001, curation_id=1, title="internal candidate"
+                )
+            ]
+        }
+    )
+    reviewer_runtime = ScriptedAgentRuntime(
+        [_draft([{"candidate_index": 0, "claim": "claim", "why_selected": "w"}])]
+    )
+    runner, answerer, factory = _runner(
+        plan=_plan(
+            _task("closed by time filter", ["query-a"]),
+            target_time_window=TargetTimeWindow(kind="unsupported_explicit_window"),
+        ),
+        query_runtime=ScriptedAgentRuntime([]),
+        reviewer_runtime=reviewer_runtime,
+        external_tool=_ExternalTool(),
+        internal_tool=internal_tool,
+    )
+
+    await _run(runner)
+
+    assert len(factory.scopes) == 1
+    assert factory.scopes[0].entered is True
+    assert factory.scopes[0].exit_calls == 1
+    assert len(reviewer_runtime.calls) == 1
+    assert [item.source.title for item in answerer.calls[0]] == ["internal candidate"]
 
 
 # --- B. 候補の渡し方 ---------------------------------------------------------
@@ -503,7 +491,7 @@ async def test_single_review_call_input_includes_every_tasks_research_goal() -> 
         }
     )
     reviewer_runtime = ScriptedAgentRuntime([_EMPTY_DRAFT])
-    runner, _answerer = _runner(
+    runner, _answerer, _factory = _runner(
         plan=_plan(*tasks),
         query_runtime=ScriptedAgentRuntime([_query_draft([]) for _ in tasks]),
         reviewer_runtime=reviewer_runtime,
@@ -550,7 +538,7 @@ async def test_review_input_never_carries_answer_requirements() -> None:
         }
     )
     reviewer_runtime = ScriptedAgentRuntime([_EMPTY_DRAFT])
-    runner, _answerer = _runner(
+    runner, _answerer, _factory = _runner(
         plan=_plan(*tasks),
         query_runtime=ScriptedAgentRuntime([_query_draft([]) for _ in tasks]),
         reviewer_runtime=reviewer_runtime,
@@ -571,12 +559,16 @@ async def test_review_input_never_carries_answer_requirements() -> None:
 
 @pytest.mark.asyncio
 async def test_review_input_excludes_external_urls_across_every_task() -> None:
-    """S1 B5(既存制約の維持)。候補projectionはURLを含まない(統合後の回帰guard)。"""
+    """外部候補のURLは1回のRunを通じてreviewer入力に到達しない。
+
+    LLMはindexで記事を指定して、出典URLはproductionがindexから復元する。
+    投影型にurl fieldが無い構造保証はevidence_review/test_agent_declaration.pyが持つ。
+    """
     tasks = [_task("goal-A", ["query-a"]), _task("goal-B", ["query-b"])]
     secret_url_a = "https://example.com/task-a-secret-7f21"
     secret_url_b = "https://example.com/task-b-secret-8c92"
     reviewer_runtime = ScriptedAgentRuntime([_EMPTY_DRAFT])
-    runner, _answerer = _runner(
+    runner, _answerer, _factory = _runner(
         plan=_plan(*tasks),
         query_runtime=ScriptedAgentRuntime(
             [_query_draft(["qa"]), _query_draft(["qb"])]
@@ -654,7 +646,7 @@ async def test_selection_restores_the_right_candidate_and_task_across_groups() -
             )
         ]
     )
-    runner, answerer = _runner(
+    runner, answerer, _factory = _runner(
         plan=_plan(*tasks),
         query_runtime=ScriptedAgentRuntime(
             [_query_draft([]), _query_draft(["qb"]), _query_draft(["qc"])]
@@ -681,75 +673,6 @@ async def test_selection_restores_the_right_candidate_and_task_across_groups() -
 
 
 @pytest.mark.asyncio
-async def test_out_of_range_duplicate_and_over_cap_selections_drop_at_run_level() -> (
-    None
-):
-    """S1 C2。範囲外index・重複index・Run採用上限が決定的にdropされる。
-
-    S2でcap値がRun単位の15になったため、16件目以降の超過で検証する。
-    """
-    tasks = [
-        _task("goal-A", ["query-a"]),
-        _task("goal-B", ["query-b"]),
-        _task("goal-C", ["query-c"]),
-    ]
-    internal_tool = _InternalTool(
-        hits_by_query={
-            "query-a": [
-                _internal_hit(
-                    assessment_id=1000 + i, curation_id=100 + i, title=f"cand-{i}"
-                )
-                for i in range(6)
-            ],
-            "query-b": [
-                _internal_hit(
-                    assessment_id=1000 + i, curation_id=100 + i, title=f"cand-{i}"
-                )
-                for i in range(6, 12)
-            ],
-            "query-c": [
-                _internal_hit(
-                    assessment_id=1000 + i, curation_id=100 + i, title=f"cand-{i}"
-                )
-                for i in range(12, 17)
-            ],
-        }
-    )
-    # 統合index空間(仮定): task-A(0-5) task-B(6-11) task-C(12-16)、合計17候補。
-    # 0を重複、99を範囲外、有効17件のうち16件目以降(index 15,16)は
-    # 上限15件超過でdrop。
-    selections = [
-        {"candidate_index": index, "claim": f"claim-{index}", "why_selected": "w"}
-        for index in [0, 0, *range(1, 17), 99]
-    ]
-    reviewer_runtime = ScriptedAgentRuntime([_draft(selections)])
-    runner, answerer = _runner(
-        plan=_plan(*tasks),
-        query_runtime=ScriptedAgentRuntime([_query_draft([]) for _ in tasks]),
-        reviewer_runtime=reviewer_runtime,
-        external_tool=_ExternalTool(),
-        internal_tool=internal_tool,
-    )
-
-    await _run(runner)
-
-    # 重複0と範囲外99がdropされ、有効17件の先頭から上限15件 (cand-0..14) が
-    # 採用順のまま届く。fixture の article_id は 1000 + i。
-    adopted = answerer.calls[0]
-    assert (
-        len(adopted),
-        [
-            source.article_id
-            for source in (item.source for item in adopted)
-            if isinstance(source, InternalArticleSource)
-        ],
-    ) == (
-        EVIDENCE_REVIEW_ADOPTION_LIMIT,
-        [1000 + index for index in range(EVIDENCE_REVIEW_ADOPTION_LIMIT)],
-    )
-
-
-@pytest.mark.asyncio
 async def test_same_url_selected_from_two_tasks_are_both_kept() -> None:
     """S1 C4。同じURLの外部候補が複数taskで採用されたとき、両方が根拠として残る。
 
@@ -767,7 +690,7 @@ async def test_same_url_selected_from_two_tasks_are_both_kept() -> None:
             )
         ]
     )
-    runner, answerer = _runner(
+    runner, answerer, _factory = _runner(
         plan=_plan(*tasks),
         query_runtime=ScriptedAgentRuntime(
             [_query_draft(["qa"]), _query_draft(["qb"])]
@@ -787,6 +710,64 @@ async def test_same_url_selected_from_two_tasks_are_both_kept() -> None:
     kept_titles = [item.source.title for item in answerer.calls[0]]
     assert kept_titles == ["task0 headline", "task1 headline"]
     assert sum(shared_url in str(item.source.url) for item in answerer.calls[0]) == 2
+
+
+@pytest.mark.asyncio
+async def test_merge_dedupes_same_internal_article_by_curation_id_first_win() -> None:
+    """保証するテスト条件 9(S1 C3)。同じ内部記事を複数taskが採用したとき
+    curation_id先勝ちで1件にまとまる。
+
+    source_refのtask間非衝突はf"{task_index}-{index}"という統合index空間の
+    形から構造的に保証される(正本: tests/agent/evidence_review/test_policy.py
+    のtest_build_evidence_restores_original_candidates_from_run_wide_indexes)。
+    ここでは合流のcuration_id先勝ちdedupだけを検証する。
+    """
+    shared_curation_id = 42
+    internal_tool = _InternalTool(
+        hits_by_query={
+            "query-a": [
+                _internal_hit(
+                    assessment_id=1001,
+                    curation_id=shared_curation_id,
+                    title="shared article (task0)",
+                )
+            ],
+            "query-b": [
+                _internal_hit(
+                    assessment_id=1002,
+                    curation_id=shared_curation_id,
+                    title="shared article (task1)",
+                )
+            ],
+        }
+    )
+    # 統合index空間: task昇順で結合し、task0の唯一の候補が0、task1が1。
+    reviewer_runtime = ScriptedAgentRuntime(
+        [
+            _draft(
+                [
+                    {"candidate_index": 0, "claim": "first claim", "why_selected": "w"},
+                    {
+                        "candidate_index": 1,
+                        "claim": "second claim",
+                        "why_selected": "w",
+                    },
+                ]
+            )
+        ]
+    )
+    runner, answerer, _factory = _runner(
+        plan=_plan(_task("first task", ["query-a"]), _task("second task", ["query-b"])),
+        query_runtime=ScriptedAgentRuntime([_query_draft([]), _query_draft([])]),
+        reviewer_runtime=reviewer_runtime,
+        external_tool=_ExternalTool(),
+        internal_tool=internal_tool,
+    )
+
+    await _run(runner)
+
+    titles = [item.source.title for item in answerer.calls[0]]
+    assert titles == ["shared article (task0)"]
 
 
 # --- D. 不足の表明 -----------------------------------------------------------
@@ -819,7 +800,7 @@ async def test_missing_flows_as_a_single_run_level_list_not_merged_per_task() ->
     )
     poison_draft = _draft([], missing=["taskごとに混入してはいけない不足Y"])
     reviewer_runtime = ScriptedAgentRuntime([intended_draft, poison_draft])
-    runner, answerer = _runner(
+    runner, answerer, _factory = _runner(
         plan=_plan(*tasks),
         query_runtime=ScriptedAgentRuntime([_query_draft([]) for _ in tasks]),
         reviewer_runtime=reviewer_runtime,
@@ -868,7 +849,7 @@ async def test_incomplete_task_adds_the_fixed_phrase_exactly_once() -> None:
             )
         ]
     )
-    runner, _answerer = _runner(
+    runner, _answerer, _factory = _runner(
         plan=_plan(*tasks),
         query_runtime=ScriptedAgentRuntime([_query_draft([]) for _ in tasks]),
         reviewer_runtime=reviewer_runtime,
@@ -919,7 +900,7 @@ async def test_reviewer_failure_after_two_attempts_empties_the_whole_run() -> No
     )
     reviewer_runtime = ScriptedAgentRuntime([failure, failure, success_draft])
     events = _Events()
-    runner, answerer = _runner(
+    runner, answerer, _factory = _runner(
         plan=_plan(*tasks),
         query_runtime=ScriptedAgentRuntime([_query_draft([]) for _ in tasks]),
         reviewer_runtime=reviewer_runtime,
@@ -940,6 +921,42 @@ async def test_reviewer_failure_after_two_attempts_empties_the_whole_run() -> No
         "回答に使える根拠を取得できませんでした" in result.final_output.missing_aspects
     )
     assert selected_events == []
+
+
+@pytest.mark.asyncio
+async def test_reviewer_failure_after_two_attempts_becomes_failed_review_report(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """runnerがreviewer失敗をreview=failed reportへ写す結線を保証する。
+
+    attempt/timeout/失敗分類の詳細な組み合わせは
+    tests/agent/evidence_review/test_reviewer.py が正本。
+    """
+    captured = _capture_external_outcome(monkeypatch)
+    failure = AgentResponseInvalidError(AgentResponseDefect.RESPONSE_NOT_JSON)
+    reviewer_runtime = ScriptedAgentRuntime([failure, failure])
+    runner, answerer, _factory = _runner(
+        plan=_plan(_task("reviewer failure", ["query-a"])),
+        query_runtime=ScriptedAgentRuntime([_query_draft(["q"])]),
+        reviewer_runtime=reviewer_runtime,
+        external_tool=_ExternalTool(
+            {"q": [_external_candidate("https://example.com/q")]}
+        ),
+        internal_tool=_InternalTool(),
+    )
+
+    await _run(runner)
+
+    report = captured[0].task_reports[0]
+    review = captured[0].review
+    assert (
+        report.external_collection,
+        review.review,
+        review.review_failure_reason,
+        review.internal_evidence_count,
+        review.external_evidence_count,
+        answerer.calls,
+    ) == ("succeeded", "failed", "response_not_json", 0, 0, [[]])
 
 
 # --- F. 進捗event ------------------------------------------------------------
@@ -982,7 +999,7 @@ async def test_selected_event_fires_once_for_the_whole_run_without_task_index() 
             )
         ]
     )
-    runner, _answerer = _runner(
+    runner, _answerer, _factory = _runner(
         plan=_plan(*tasks),
         query_runtime=ScriptedAgentRuntime([_query_draft([]) for _ in tasks]),
         reviewer_runtime=reviewer_runtime,
@@ -999,6 +1016,63 @@ async def test_selected_event_fires_once_for_the_whole_run_without_task_index() 
     assert len(selected) == 1
     assert selected[0].evidence_count == 2
     assert "task_index" not in selected[0].model_dump()
+
+
+@pytest.mark.asyncio
+async def test_evidence_selected_event_count_is_internal_plus_external() -> None:
+    """selected.evidence_countは内部採用数と外部採用数の合算になる。"""
+    events = _Events()
+    internal_tool = _InternalTool(
+        hits_by_query={
+            "query-a": [
+                _internal_hit(
+                    assessment_id=2001, curation_id=1001, title="internal hit"
+                )
+            ]
+        }
+    )
+    reviewer_runtime = ScriptedAgentRuntime(
+        [
+            _draft(
+                [
+                    {
+                        "candidate_index": 0,
+                        "claim": "internal claim",
+                        "why_selected": "why",
+                    },
+                    {
+                        "candidate_index": 1,
+                        "claim": "external claim",
+                        "why_selected": "why",
+                    },
+                ]
+            )
+        ]
+    )
+    runner, _answerer, _factory = _runner(
+        plan=_plan(_task("combined evidence", ["query-a"])),
+        query_runtime=ScriptedAgentRuntime([_query_draft(["q1"])]),
+        reviewer_runtime=reviewer_runtime,
+        external_tool=_ExternalTool(
+            {"q1": [_external_candidate("https://example.com/q1")]}
+        ),
+        internal_tool=internal_tool,
+        events=events,
+    )
+
+    await _run(runner)
+
+    selected_events = [
+        event.model_dump()
+        for event in events.events
+        if event.type == "evidence_review.selected"
+    ]
+    assert selected_events == [
+        {
+            "type": "evidence_review.selected",
+            "evidence_count": 2,
+        }
+    ]
 
 
 # --- G. 非露出 ---------------------------------------------------------------
@@ -1033,7 +1107,7 @@ async def test_review_spans_and_events_do_not_expose_untrusted_text(
     )
     reviewer_runtime = ScriptedAgentRuntime([_EMPTY_DRAFT])
     events = _Events()
-    runner, _answerer = _runner(
+    runner, _answerer, _factory = _runner(
         plan=_plan(*tasks),
         query_runtime=ScriptedAgentRuntime([_query_draft([]) for _ in tasks]),
         reviewer_runtime=reviewer_runtime,

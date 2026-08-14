@@ -38,6 +38,7 @@ from app.agent.evidence_review.policy import (
 )
 from app.analysis.analyzed_article import InScopeAnalyzedArticle
 from app.analysis.assessment.domain.result import InScope, InScopeCategory
+from app.shared.security.safe_url import SafeUrl
 
 _AS_OF = datetime(2026, 7, 20, 9, 30, tzinfo=UTC)
 
@@ -107,6 +108,28 @@ def _external_candidate(
         snippet="external snippet",
         source_name="Example",
         published_at=_AS_OF,
+    )
+
+
+def _task_with_candidates(
+    *, task_index: int, internal: int = 0, external: int = 0
+) -> CollectedTask:
+    """indexの数勘定だけを扱うテスト用。候補の中身は勘定に影響しない捨て値で埋める。"""
+    return _collected_task(
+        task_index=task_index,
+        internal_hits=[
+            _internal_hit(
+                assessment_id=1000 + task_index * 100 + position,
+                curation_id=task_index * 100 + position + 1,
+                title=f"task{task_index}-internal-{position}",
+                summary="s",
+            )
+            for position in range(internal)
+        ],
+        external_candidates=[
+            _external_candidate(f"https://example.com/task{task_index}/{position}")
+            for position in range(external)
+        ],
     )
 
 
@@ -305,37 +328,34 @@ def test_task_groups_is_empty_tuple_when_there_are_no_tasks() -> None:
 # --- build_review_evidence ---------------------------------------------------
 
 
-def test_build_evidence_drops_out_of_range_index_across_all_tasks() -> None:
-    """統合index空間の範囲外(全taskの合計候補数以上)をdrop。"""
+def test_build_evidence_drops_reviewer_selections_of_nonexistent_candidates() -> None:
+    """reviewerが実在しない候補を指した選択は、evidenceへ組み立てない。
+
+    実在する候補への選択の組み立ては妨げない。実在の判定はRun全体の通しindex空間
+    (全task合計の候補数)で行う。
+    """
     build_evidence = build_review_evidence
     tasks = [
-        _collected_task(
-            task_index=0,
-            internal_hits=[
-                _internal_hit(
-                    assessment_id=1001, curation_id=1, title="internal", summary="s"
-                )
-            ],
-            external_candidates=[_external_candidate("https://example.com/only")],
-        )
+        _task_with_candidates(task_index=0, internal=1),
+        _task_with_candidates(task_index=1, external=2),
     ]
+    # 通しindex: 0=task0内部, 1..2=task1外部。実在の上限は全task合計の3。
+    # index 2はtask0だけで数えると範囲外(候補1件)だが、Run全体では実在する。
     result = _review_result(
         [
-            {"candidate_index": 0, "claim": "internal claim", "why_selected": "why"},
-            {"candidate_index": 1, "claim": "external claim", "why_selected": "why"},
-            {"candidate_index": 2, "claim": "out of range", "why_selected": "why"},
+            {"candidate_index": 2, "claim": "adopted", "why_selected": "why"},
+            {"candidate_index": 3, "claim": "nonexistent", "why_selected": "why"},
         ],
     )
 
-    internal_evidence, external_evidence, dropped = build_evidence(
+    internal_evidence, external_evidence, _dropped = build_evidence(
         tasks=tasks, selection_result=result
     )
 
     assert (
         [item.claim for item in internal_evidence],
         [item.claim for item in external_evidence],
-        dropped,
-    ) == (["internal claim"], ["external claim"], 1)
+    ) == ([], ["adopted"])
 
 
 def test_build_evidence_drops_duplicate_index_keeping_the_first_selection() -> None:
@@ -422,6 +442,43 @@ def test_build_evidence_caps_adoption_at_the_run_wide_limit_in_selection_order()
     )
 
 
+def test_build_evidence_accounts_for_every_selection_as_adopted_or_dropped() -> None:
+    """採用数とdropped件数の合計が、入力された選択の総数と一致する(選択は黙って消えない)。
+
+    drop理由(実在しない/重複/上限超過)のどれでも数えられるよう、入力に3理由を全て含める。
+    """
+    build_evidence = build_review_evidence
+    tasks = [
+        _task_with_candidates(task_index=0, external=EVIDENCE_REVIEW_ADOPTION_LIMIT + 1)
+    ]
+    # 有効な選択を上限+1件(最後の1件が上限超過)、重複1件、実在しない1件。
+    selections = [
+        {"candidate_index": index, "claim": f"claim-{index}", "why_selected": "why"}
+        for index in range(EVIDENCE_REVIEW_ADOPTION_LIMIT + 1)
+    ]
+    selections.insert(
+        1, {"candidate_index": 0, "claim": "duplicate", "why_selected": "why"}
+    )
+    selections.append(
+        {
+            "candidate_index": EVIDENCE_REVIEW_ADOPTION_LIMIT + 1,
+            "claim": "nonexistent",
+            "why_selected": "why",
+        }
+    )
+    result = _review_result(selections)
+
+    internal_evidence, external_evidence, dropped = build_evidence(
+        tasks=tasks, selection_result=result
+    )
+
+    adopted_count = len(internal_evidence) + len(external_evidence)
+    assert (adopted_count, dropped) == (
+        EVIDENCE_REVIEW_ADOPTION_LIMIT,
+        len(selections) - EVIDENCE_REVIEW_ADOPTION_LIMIT,
+    )
+
+
 def test_build_evidence_caps_selections_shared_across_multiple_tasks() -> None:
     """採用上限(現行値15)がRun全体で共有され、単一taskの上限ではない
 
@@ -475,8 +532,12 @@ def test_build_evidence_caps_selections_shared_across_multiple_tasks() -> None:
     )
 
 
-def test_build_evidence_restores_task_and_candidate_from_a_cross_task_index() -> None:
-    """通しindexから所属taskと候補が復元され、source_refがf"{task_index}-{index}"になる。"""
+def test_build_evidence_restores_original_candidates_from_run_wide_indexes() -> None:
+    """選択されたRun全体の通しindexから、元候補とその所属task・出典参照を復元する。
+
+    回答に必要なevidenceの組み立てはmaps_inputs_to_*_evidence_fieldsの2本が持つ。
+    source_refはf"{task_index}-{index}"の形の出典参照になる。
+    """
     build_evidence = build_review_evidence
     tasks = [
         _collected_task(
@@ -596,8 +657,8 @@ def test_build_evidence_keeps_index_alignment_when_a_task_has_no_candidates() ->
     ]
 
 
-def test_build_evidence_reconstructs_internal_provenance_and_keeps_claim() -> None:
-    """保証するテスト条件 6。内部採用はclaimを持ち、既存provenanceを復元する。"""
+def test_build_evidence_maps_inputs_to_internal_evidence_fields() -> None:
+    """内部候補・選択結果・task情報から、InternalArticleEvidenceの各fieldを正しく組み立てる。"""
     build_evidence = build_review_evidence
     hit = _internal_hit(
         assessment_id=2001,
@@ -626,6 +687,39 @@ def test_build_evidence_reconstructs_internal_provenance_and_keeps_claim() -> No
     assert item.title == "internal title"
     assert item.summary == "internal summary"
     assert item.key_points == ["key point one"]
+    assert item.published_at == _AS_OF
+    assert item.task_index == 1
+    assert item.source_ref == "1-0"
+
+
+def test_build_evidence_maps_inputs_to_external_evidence_fields() -> None:
+    """外部候補・選択結果・task情報から、ExternalSearchEvidenceの各fieldを正しく組み立てる。"""
+    build_evidence = build_review_evidence
+    candidate = ExternalSearchCandidate(
+        url=SafeUrl("https://example.com/external-story"),
+        title="external title",
+        snippet="external snippet",
+        source_name="Example News",
+        published_at=_AS_OF,
+    )
+    tasks = [_collected_task(task_index=1, external_candidates=[candidate])]
+    result = _review_result(
+        [{"candidate_index": 0, "claim": "見出しの主張", "why_selected": "選定理由"}],
+    )
+
+    internal_evidence, external_evidence, dropped = build_evidence(
+        tasks=tasks, selection_result=result
+    )
+
+    assert dropped == 0
+    assert internal_evidence == []
+    item = external_evidence[0]
+    assert item.claim == "見出しの主張"
+    assert item.why_selected == "選定理由"
+    assert str(item.url) == "https://example.com/external-story"
+    assert item.title == "external title"
+    assert item.snippet == "external snippet"
+    assert item.source_name == "Example News"
     assert item.published_at == _AS_OF
     assert item.task_index == 1
     assert item.source_ref == "1-0"
