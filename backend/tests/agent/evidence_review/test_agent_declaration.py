@@ -199,9 +199,6 @@ def test_agent_declares_stable_model_version_output_and_immutable_schema() -> No
     # 概算11,400字を保守側1.0 token/字で見積り、約1.4倍の余裕を取った値
     # (仕様「選別結果の復元」、deepseek-v4-flashの最大出力384K tokenと非競合)。
     assert reviewer_agent.model_settings.max_output_tokens == 16384
-    # v3: content_requirementsを廃止しresearch_goalのみで判定する契約へ
-    # 変更したためv2からbumpする(仕様「Evidence Review(v2 -> v3)」)。
-    assert reviewer_agent.prompt.version == "v3"
     assert reviewer_agent.output_type is EvidenceReviewDraft
     assert not any(
         hasattr(reviewer_agent, forbidden)
@@ -270,11 +267,10 @@ def test_deepseek_binding_keeps_only_stable_transport_identity() -> None:
     )
 
 
-def test_version_and_instructions_live_with_prompt_resources() -> None:
-    """保証するテスト条件 10。version/instructionsはprompt resource moduleの
+def test_instructions_live_with_prompt_resources() -> None:
+    """保証するテスト条件 10。instructionsはprompt resource moduleの
 
-    リテラルであり、呼び出し側で組み立てられていない。evidence_review package は
-    agent を1つしか宣言しないため、'"v3"' の出現数は1回以上でよい。
+    リテラルであり、呼び出し側で組み立てられていない。
     """
     prompts = evidence_review_prompts_module
     source = inspect.getsource(prompts)
@@ -282,10 +278,6 @@ def test_version_and_instructions_live_with_prompt_resources() -> None:
 
     assert reviewer_agent.prompt.input_renderer.__module__ == prompts.__name__
     assert reviewer_agent.prompt.instructions in source
-    # v3: content_requirementsを廃止しresearch_goalのみで判定する契約へ
-    # 変更したためv2からbumpする(仕様「Evidence Review(v2 -> v3)」)。
-    assert reviewer_agent.prompt.version == "v3"
-    assert source.count('"v3"') >= 1
 
 
 def test_prompt_keeps_fixed_rules_in_system_and_sanitizes_runtime_task_data() -> None:

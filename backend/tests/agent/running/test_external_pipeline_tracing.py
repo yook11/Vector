@@ -626,18 +626,14 @@ def _two_task_query_failing_runtime() -> ExternalResearchRuntime:
     """外部query生成を2 task分とも失敗させ、外部候補を空に保つ(内部統計だけに絞る)。
 
     D4-S1: internal候補が非空なら候補ゼロtaskではないためreviewerが起動する。
-    S1: reviewerはRun単位1回のため実際に消費されるのは1つだけだが、
-    taskごとに呼ぶ旧経路が残っていても安全に使い回せるよう2件分用意する
-    (ScriptedAgentRuntimeは未消費のoutcomeを許容する)。
+    S1: reviewerはRun単位1回のため script は1件だけ渡す (2回目の呼び出しは
+    枯渇の AssertionError で即 red になる)。
     """
     query_failure = AgentResponseInvalidError(AgentResponseDefect.RESPONSE_NOT_JSON)
     return ExternalResearchRuntime(
         query_runtime=ScriptedAgentRuntime([query_failure, query_failure]),
         reviewer_runtime=ScriptedAgentRuntime(
-            [
-                _review_draft_selecting_all_offered_candidates(),
-                _review_draft_selecting_all_offered_candidates(),
-            ]
+            [_review_draft_selecting_all_offered_candidates()]
         ),
         search_tool=_Tool(),
     )

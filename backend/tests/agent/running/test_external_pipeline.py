@@ -1232,7 +1232,7 @@ async def test_collection_events_are_per_task_causal_with_their_contract_payload
     """
     events = _Events()
     query_runtime = ScriptedAgentRuntime([_query_draft(["q1"]), _query_draft(["q2"])])
-    reviewer_runtime = ScriptedAgentRuntime([_review_draft([]), _review_draft([])])
+    reviewer_runtime = ScriptedAgentRuntime([_review_draft([])])
     runner, _, _ = _runner(
         tasks=[_task("first"), _task("second")],
         runtime=_runtime(

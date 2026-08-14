@@ -186,12 +186,11 @@ class TestPgVectorInternalSearchTool:
         assert [call.queries for call in embedder.calls] == [
             ("NVIDIA", "OpenAI", "Apple")
         ]
-        assert (
-            sum_counter_for_result(collected_metrics(capfire), _METRIC, "succeeded")
-            == 0
-        )
+        # outcome metric の所有者は invoke 境界。embed_queries 単体では
+        # どのラベルでも emit しない (二重計上防止)。
+        assert _metric_attributes(collected_metrics(capfire), _METRIC) == []
 
-    async def test_empty_embedder_result_records_empty_metric(
+    async def test_empty_embedder_result_does_not_emit_outcome_metric(
         self,
         capfire: CaptureLogfire,
     ) -> None:
@@ -201,9 +200,9 @@ class TestPgVectorInternalSearchTool:
         embeddings = await service.embed_queries(_queries("NVIDIA"))
 
         assert embeddings == []
-        assert sum_counter_for_result(collected_metrics(capfire), _METRIC, "empty") == 0
+        assert _metric_attributes(collected_metrics(capfire), _METRIC) == []
 
-    async def test_embedder_failure_records_failed_metric(
+    async def test_embedder_failure_does_not_emit_outcome_metric_or_leak_query(
         self,
         capfire: CaptureLogfire,
     ) -> None:
@@ -214,7 +213,7 @@ class TestPgVectorInternalSearchTool:
             await service.embed_queries(_queries("NVIDIA secret query"))
 
         metrics = collected_metrics(capfire)
-        assert sum_counter_for_result(metrics, _METRIC, "failed") == 0
+        assert _metric_attributes(metrics, _METRIC) == []
         dumped = json.dumps(metrics, default=str, ensure_ascii=False)
         assert "NVIDIA secret query" not in dumped
 

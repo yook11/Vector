@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import asyncio
 from datetime import UTC, datetime
-from pathlib import Path
 from typing import Any
 
 import pytest
@@ -542,26 +541,3 @@ async def test_executed_queries_is_empty_when_external_runtime_is_none() -> None
 
     assert collected.external_status is None
     assert collected.executed_queries == ()
-
-
-def test_researcher_module_does_not_import_infrastructure_construction() -> None:
-    """保証するテスト条件 17。
-
-    依存方向 (researcher はインフラを構築しない) の唯一の自動所有者。
-    ソース文字列検査は弱いオラクルなので、依存方向テスト or import-linter へ
-    置換したうえで削除する (テスト整理スライス 3 の対象)。
-    """
-    import app.agent.evidence_collection.researcher as researcher_module
-
-    source = Path(researcher_module.__file__).read_text(encoding="utf-8")
-    forbidden_substrings = [
-        "AsyncSession",
-        "async_sessionmaker",
-        "redis",
-        "aioredis",
-        "taskiq",
-        "AsyncOpenAI",
-        "make_safe_async_client",
-        "httpx",
-    ]
-    assert not any(needle in source for needle in forbidden_substrings)

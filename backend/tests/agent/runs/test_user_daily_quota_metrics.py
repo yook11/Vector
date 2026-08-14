@@ -65,3 +65,15 @@ def test_quota_recorders_emit_fixed_metrics_with_only_contract_attributes(
         (1, frozenset({("previous_status", "queued")})),
         (1, frozenset({("previous_status", "running")})),
     }
+
+
+def test_zero_count_release_and_stale_reservation_emit_no_data_point(
+    capfire: CaptureLogfire,
+) -> None:
+    """count=0 は「対象なし」であり、値 0 の data point も作らない。"""
+    record_daily_quota_release(result="released", count=0)
+    record_daily_quota_stale_reservation(previous_status="queued", count=0)
+
+    metrics = collected_metrics(capfire)
+    assert _metric_points(metrics, _RELEASES_METRIC) == []
+    assert _metric_points(metrics, _STALE_RESERVATIONS_METRIC) == []
