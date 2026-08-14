@@ -10,6 +10,14 @@ from typing import Any, cast
 import pytest
 from google.genai import errors as genai_errors
 from google.genai.client import AsyncClient
+from google.genai.types import (
+    Candidate,
+    Content,
+    FinishReason,
+    GenerateContentResponse,
+    GenerateContentResponseUsageMetadata,
+    Part,
+)
 from opentelemetry import context as otel_context
 from opentelemetry import trace
 from opentelemetry.trace import (
@@ -255,6 +263,52 @@ async def test_first_iteration_opens_one_stream_and_yields_fragments_unchanged(
     explicit_config = kwargs["config"].model_dump(exclude_unset=True)
     assert "response_mime_type" not in explicit_config
     assert "response_schema" not in explicit_config
+
+
+async def test_real_sdk_response_types_expose_the_streamed_attribute_surface(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """SDK 型カナリア。runtime が chunk から読む属性面 (text /
+
+    candidates[].finish_reason / usage_metadata) が実際の google.genai 型に
+    存在し続けることを固定する。SimpleNamespace fake は SDK の属性改名を
+    検出できないため、この 1 本だけ実型で流す。
+    """
+    delta = GenerateContentResponse(
+        candidates=[
+            Candidate(content=Content(role="model", parts=[Part(text="実型断片")]))
+        ]
+    )
+    terminal = GenerateContentResponse(
+        candidates=[
+            Candidate(
+                finish_reason=FinishReason.STOP,
+                content=Content(role="model", parts=[Part(text="終端断片")]),
+            )
+        ],
+        usage_metadata=GenerateContentResponseUsageMetadata(
+            prompt_token_count=11,
+            candidates_token_count=7,
+        ),
+    )
+    sdk_stream = FakeSdkStream([delta, terminal])
+    client = FakeGeminiClient([], streams=[sdk_stream])
+    runtime = GeminiAgentRuntime(client=cast(AsyncClient, client))
+    tracer = FakeTracer()
+    monkeypatch.setattr(gemini_runtime_module, "_TRACER", tracer)
+
+    stream = runtime.invoke_stream(
+        make_agent(response_schema=None),
+        "typed input",
+        attempt_number=1,
+    )
+    fragments = [fragment async for fragment in stream]
+
+    assert fragments == ["実型断片", "終端断片"]
+    span = tracer.spans[0]
+    assert span.attributes["result"] == "succeeded"
+    assert span.attributes["gen_ai.usage.input_tokens"] == 11
+    assert span.attributes["gen_ai.usage.output_tokens"] == 7
 
 
 async def test_structured_stream_request_keeps_declared_response_schema(
