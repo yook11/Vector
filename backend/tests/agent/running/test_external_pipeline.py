@@ -7,19 +7,11 @@ from collections.abc import Sequence
 from contextlib import AbstractAsyncContextManager
 from datetime import UTC, date, datetime
 from typing import Any
-from uuid import UUID
 
 import pytest
 from logfire.testing import CaptureLogfire
 from structlog.testing import capture_logs
 
-from app.agent.answering.contract import AnsweringRequest
-from app.agent.answering.direct_answer.contract import DirectAnswerDraft
-from app.agent.answering.evidence_answer.contract import (
-    EvidenceAnswerDraft,
-    EvidenceAnswerOutcome,
-    EvidenceAnswerUnavailable,
-)
 from app.agent.evidence_collection import NewsCollector, Researcher
 from app.agent.evidence_collection import (
     news_collector as news_collector_module,
@@ -34,7 +26,6 @@ from app.agent.evidence_collection.external_search.contract import (
     EXTERNAL_SEARCH_CANDIDATES_PER_QUERY,
 )
 from app.agent.evidence_collection.internal_search import (
-    InternalArticleContent,
     InternalArticleSearchHit,
 )
 from app.agent.evidence_review import EvidenceReviewer
@@ -45,26 +36,53 @@ from app.agent.planning.contract import (
     SearchPlan,
     TargetTimeWindow,
 )
-from app.agent.question_context import QuestionContext
-from app.agent.running import AnsweringPhases, AnsweringRunner, RunContext, RunInput
+from app.agent.running import AnsweringPhases, AnsweringRunner
 from app.agent.running import answering_runner as answering_runner_module
 from app.agent.runtime.contract import AgentResponseDefect, AgentResponseInvalidError
 from app.analysis.ai_provider_errors import AIProviderNetworkError
-from app.analysis.analyzed_article import InScopeAnalyzedArticle
-from app.analysis.assessment.domain.result import InScope, InScopeCategory
 from app.analysis.deepseek_error_translator import DeepSeekStateReason
+from tests.agent.running._harness import (
+    AS_OF,
+    internal_hit,
+)
+from tests.agent.running._harness import (
+    DEFAULT_TARGET_TIME_WINDOW as _DEFAULT_TARGET_TIME_WINDOW,
+)
+from tests.agent.running._harness import (
+    Events as _Events,
+)
+from tests.agent.running._harness import (
+    EvidenceAnswerer as _EvidenceAnswerer,
+)
+from tests.agent.running._harness import (
+    Preparer as _Preparer,
+)
+from tests.agent.running._harness import (
+    UnreachableDirectAnswerer as _UnreachableDirectAnswerer,
+)
+from tests.agent.running._harness import (
+    execute_run as _run,
+)
+from tests.agent.running._harness import (
+    external_candidate as _candidate,
+)
+from tests.agent.running._harness import (
+    external_research_runtime as _runtime,
+)
+from tests.agent.running._harness import (
+    external_task as _task,
+)
+from tests.agent.running._harness import (
+    query_draft as _query_draft,
+)
+from tests.agent.running._harness import (
+    review_draft as _review_draft,
+)
 from tests.agent.running._input_safety import AllowInputSafetyChecker
 from tests.agent.runtime._fakes import ScriptedAgentRuntime
 from tests.logfire._metric_helpers import collected_metrics
 
-RUN_ID = UUID("019bd239-1ed4-7fbb-a336-04fe3c197652")
-AS_OF = datetime(2026, 7, 20, 9, 30, tzinfo=UTC)
-_DEFAULT_TARGET_TIME_WINDOW = TargetTimeWindow(kind="last_n_days", days=1)
 _TIME_FILTER_METRIC = "external_search_time_filter_resolution_total"
-
-
-def _task(goal: str) -> ExternalResearchTask:
-    return ExternalResearchTask(research_goal=goal)
 
 
 def _plan(
@@ -82,41 +100,6 @@ def _plan(
         ],
         target_time_window=target_time_window,
     )
-
-
-def _query_draft(queries: object) -> Any:
-    from app.agent.evidence_collection.external_search.contract import (
-        ExternalQueryDraft,
-    )
-
-    return ExternalQueryDraft.model_validate({"queries": queries})
-
-
-def _review_draft(
-    selections: list[dict[str, Any]] | None = None,
-    *,
-    missing: list[str] | None = None,
-) -> Any:
-    from app.agent.evidence_review import EvidenceReviewDraft
-
-    return EvidenceReviewDraft.model_validate(
-        {"selections": selections or [], "missing": missing or []}
-    )
-
-
-def _candidate(url: str, *, title: str | None = None) -> ExternalSearchCandidate:
-    return ExternalSearchCandidate(
-        url=url,
-        title=title or url.rsplit("/", maxsplit=1)[-1],
-        snippet="snippet",
-        source_name="Example",
-        published_at=AS_OF,
-    )
-
-
-class _Preparer:
-    async def prepare(self, **_kwargs: object) -> QuestionContext:
-        return QuestionContext(standalone_question="NVIDIA の見通しは？")
 
 
 class _Planner:
@@ -140,21 +123,11 @@ class _EmptyInternalSearch:
 
 
 def _internal_hit(*, assessment_id: int, title: str) -> InternalArticleSearchHit:
-    article = InScopeAnalyzedArticle(
+    # このファイルのfixture採番: curation_id は assessment_id - 1000 で導出する。
+    return internal_hit(
+        assessment_id=assessment_id,
         curation_id=assessment_id - 1000,
         title=title,
-        summary=f"{title} summary",
-        assessment_result=InScope(
-            category=InScopeCategory.AI,
-            investor_take="投資家視点",
-            key_points=[],
-        ),
-    )
-    return InternalArticleSearchHit(
-        assessment_id=assessment_id,
-        article=article,
-        content=InternalArticleContent.from_article(article, published_at=None),
-        distance=0.1,
     )
 
 
@@ -168,39 +141,6 @@ class _OneInternalHitSearch:
     async def invoke(self, input: object) -> list[InternalArticleSearchHit]:
         del input
         return [_internal_hit(assessment_id=2001, title="internal hit")]
-
-
-class _UnreachableDirectAnswerer:
-    async def answer(
-        self, *, request: AnsweringRequest, previous_answer: str = ""
-    ) -> DirectAnswerDraft:
-        raise AssertionError(
-            f"direct answer must not run: {request!r} {previous_answer!r}"
-        )
-
-
-class _EvidenceAnswerer:
-    def __init__(self) -> None:
-        self.calls: list[list[Any]] = []
-
-    async def answer(
-        self,
-        *,
-        request: AnsweringRequest,
-        evidence: list[Any],
-        target_time_window: TargetTimeWindow | None,
-        review_missing: tuple[str, ...] = (),
-    ) -> EvidenceAnswerOutcome:
-        del request, target_time_window, review_missing
-        self.calls.append(list(evidence))
-        if evidence:
-            return EvidenceAnswerDraft(
-                answer="根拠に基づく回答です。",
-                cited_refs=[item.source.source_ref for item in evidence],
-            )
-        # 自己申告でinsufficientを名乗る形は無くなったため、
-        # evidenceが無く回答を作れなかった場合はunavailableで表す。
-        return EvidenceAnswerUnavailable(failure_code="fake_no_evidence")
 
 
 class _Scope(AbstractAsyncContextManager[ExternalResearchRuntime]):
@@ -280,14 +220,6 @@ class _Tool:
         except asyncio.CancelledError:
             self.cancelled = True
             raise
-
-
-class _Events:
-    def __init__(self) -> None:
-        self.events: list[Any] = []
-
-    async def event_occurred(self, event: Any) -> None:
-        self.events.append(event)
 
 
 def _external_search_events(events: list[Any]) -> list[Any]:
@@ -413,19 +345,6 @@ class _QueryFailureAfterSiblingStartsTool(_Tool):
             self.sibling_finished.set()
 
 
-def _runtime(
-    *,
-    query_runtime: object,
-    reviewer_runtime: object,
-    tool: object,
-) -> ExternalResearchRuntime:
-    return ExternalResearchRuntime(
-        query_runtime=query_runtime,  # type: ignore[arg-type]
-        reviewer_runtime=reviewer_runtime,  # type: ignore[arg-type]
-        search_tool=tool,  # type: ignore[arg-type]
-    )
-
-
 def _runner(
     *,
     tasks: list[ExternalResearchTask],
@@ -461,13 +380,6 @@ def _runner(
         ),
         answerer,
         factory,
-    )
-
-
-async def _run(runner: AnsweringRunner, *, as_of: datetime = AS_OF) -> Any:
-    return await runner.run(
-        RunInput(question="NVIDIA の見通しは？", history=()),
-        run_context=RunContext(run_id=RUN_ID, as_of=as_of),
     )
 
 
