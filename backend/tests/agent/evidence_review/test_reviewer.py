@@ -21,6 +21,7 @@ from app.agent.evidence_collection.internal_search.contract import (
     InternalArticleContent,
     InternalArticleSearchHit,
 )
+from app.agent.evidence_review.agent import EVIDENCE_REVIEWER_AGENT
 from app.agent.evidence_review.contract import EvidenceReviewDraft
 from app.agent.evidence_review.reviewer import EvidenceReviewer
 from app.agent.runtime.contract import AgentResponseDefect, AgentResponseInvalidError
@@ -135,6 +136,7 @@ async def test_review_is_called_exactly_once_for_a_multi_task_run() -> None:
     await _review(tasks=tasks, reviewer_runtime=runtime)
 
     assert len(runtime.calls) == 1
+    assert runtime.calls[0].agent is EVIDENCE_REVIEWER_AGENT
 
 
 @pytest.mark.asyncio
