@@ -15,8 +15,8 @@ backend/specs/evidence-review-run-scope-slice.md の Invariants / Test contract 
 「research_goalごとにグループ化し、グループ内は内部候補が先・外部候補が後、
 グループはtask_index昇順で結合する」という仕様の唯一自然な解釈から
 Run全体の通し番号を入力fixtureのcandidate件数から導出する。
-現行のtask単位呼び出しでも例外にならないよう、余剰callへは空draftを充て
-(`_padded_script`)、意味のある不一致だけがredになるようにしている。
+reviewer の script は「Run 単位で 1 回」ちょうどの 1 件だけ渡す。2 回目の
+呼び出し (task 単位への退行) は script 枯渇の AssertionError で即 red になる。
 """
 
 from __future__ import annotations
@@ -78,15 +78,6 @@ def _draft(
     return EvidenceReviewDraft.model_validate(
         {"selections": selections, "missing": missing or []}
     )
-
-
-def _padded_script(first: Any, *, slots: int) -> list[Any]:
-    """Run単位化後は1回で完結する前提のscript。
-
-    現行のtaskごと呼び出しでも枯渇crashにならないよう、余剰callへは
-    空draftを充てる。
-    """
-    return [first] + [_EMPTY_DRAFT] * (slots - 1)
 
 
 def _query_draft(queries: list[str]) -> ExternalQueryDraft:
@@ -338,9 +329,7 @@ async def test_review_runs_once_for_a_three_task_search_plan() -> None:
         }
     )
     reviewer_runtime = ScriptedAgentRuntime(
-        _padded_script(
-            _draft([{"candidate_index": 0, "claim": "c", "why_selected": "w"}]), slots=3
-        )
+        [_draft([{"candidate_index": 0, "claim": "c", "why_selected": "w"}])]
     )
     runner, _answerer = _runner(
         plan=_plan(*tasks),
@@ -353,6 +342,7 @@ async def test_review_runs_once_for_a_three_task_search_plan() -> None:
     await _run(runner)
 
     assert len(reviewer_runtime.calls) == 1
+    reviewer_runtime.assert_all_outcomes_consumed()
 
 
 @pytest.mark.asyncio
@@ -381,9 +371,7 @@ async def test_review_does_not_start_before_every_tasks_collection_completes() -
         _task("goal-C", ["query-c"]),
     ]
     reviewer_runtime = ScriptedAgentRuntime(
-        _padded_script(
-            _draft([{"candidate_index": 0, "claim": "c", "why_selected": "w"}]), slots=3
-        )
+        [_draft([{"candidate_index": 0, "claim": "c", "why_selected": "w"}])]
     )
     runner, _answerer = _runner(
         plan=_plan(*tasks),
@@ -402,7 +390,7 @@ async def test_review_does_not_start_before_every_tasks_collection_completes() -
         gate_a.set()
         await asyncio.wait_for(running, timeout=1.0)
 
-    assert len(reviewer_runtime.calls) >= 1
+    assert len(reviewer_runtime.calls) == 1
 
 
 @pytest.mark.asyncio
@@ -462,15 +450,14 @@ async def test_review_still_runs_using_the_candidates_that_survive_a_failed_task
     # task-Bの収集が失敗し候補ゼロになる分、統合index空間から外れる
     # (仮定: task昇順で結合。task-A→0、task-C→1)。
     reviewer_runtime = ScriptedAgentRuntime(
-        _padded_script(
+        [
             _draft(
                 [
                     {"candidate_index": 0, "claim": "A claim", "why_selected": "w"},
                     {"candidate_index": 1, "claim": "C claim", "why_selected": "w"},
                 ]
-            ),
-            slots=2,
-        )
+            )
+        ]
     )
     runner, answerer = _runner(
         plan=_plan(*tasks),
@@ -482,7 +469,7 @@ async def test_review_still_runs_using_the_candidates_that_survive_a_failed_task
 
     await _run(runner)
 
-    assert len(reviewer_runtime.calls) >= 1
+    assert len(reviewer_runtime.calls) == 1
     titles = {item.source.title for item in answerer.calls[0]}
     assert titles == {"A-hit", "C-hit"}
 
@@ -515,7 +502,7 @@ async def test_single_review_call_input_includes_every_tasks_research_goal() -> 
             ],
         }
     )
-    reviewer_runtime = ScriptedAgentRuntime(_padded_script(_EMPTY_DRAFT, slots=3))
+    reviewer_runtime = ScriptedAgentRuntime([_EMPTY_DRAFT])
     runner, _answerer = _runner(
         plan=_plan(*tasks),
         query_runtime=ScriptedAgentRuntime([_query_draft([]) for _ in tasks]),
@@ -562,7 +549,7 @@ async def test_review_input_never_carries_answer_requirements() -> None:
             ],
         }
     )
-    reviewer_runtime = ScriptedAgentRuntime(_padded_script(_EMPTY_DRAFT, slots=3))
+    reviewer_runtime = ScriptedAgentRuntime([_EMPTY_DRAFT])
     runner, _answerer = _runner(
         plan=_plan(*tasks),
         query_runtime=ScriptedAgentRuntime([_query_draft([]) for _ in tasks]),
@@ -588,7 +575,7 @@ async def test_review_input_excludes_external_urls_across_every_task() -> None:
     tasks = [_task("goal-A", ["query-a"]), _task("goal-B", ["query-b"])]
     secret_url_a = "https://example.com/task-a-secret-7f21"
     secret_url_b = "https://example.com/task-b-secret-8c92"
-    reviewer_runtime = ScriptedAgentRuntime(_padded_script(_EMPTY_DRAFT, slots=2))
+    reviewer_runtime = ScriptedAgentRuntime([_EMPTY_DRAFT])
     runner, _answerer = _runner(
         plan=_plan(*tasks),
         query_runtime=ScriptedAgentRuntime(
@@ -645,7 +632,7 @@ async def test_selection_restores_the_right_candidate_and_task_across_groups() -
     )
     # 統合index空間(仮定): task-A(0,1) task-B(2内部/3,4外部) task-C(5外部)。
     reviewer_runtime = ScriptedAgentRuntime(
-        _padded_script(
+        [
             _draft(
                 [
                     {
@@ -664,9 +651,8 @@ async def test_selection_restores_the_right_candidate_and_task_across_groups() -
                         "why_selected": "w",
                     },
                 ]
-            ),
-            slots=3,
-        )
+            )
+        ]
     )
     runner, answerer = _runner(
         plan=_plan(*tasks),
@@ -736,7 +722,7 @@ async def test_out_of_range_duplicate_and_over_cap_selections_drop_at_run_level(
         {"candidate_index": index, "claim": f"claim-{index}", "why_selected": "w"}
         for index in [0, 0, *range(1, 17), 99]
     ]
-    reviewer_runtime = ScriptedAgentRuntime(_padded_script(_draft(selections), slots=3))
+    reviewer_runtime = ScriptedAgentRuntime([_draft(selections)])
     runner, answerer = _runner(
         plan=_plan(*tasks),
         query_runtime=ScriptedAgentRuntime([_query_draft([]) for _ in tasks]),
@@ -772,15 +758,14 @@ async def test_same_url_selected_from_two_tasks_are_both_kept() -> None:
     shared_url = "https://example.com/shared-story"
     tasks = [_task("goal-A", ["query-a"]), _task("goal-B", ["query-b"])]
     reviewer_runtime = ScriptedAgentRuntime(
-        _padded_script(
+        [
             _draft(
                 [
                     {"candidate_index": 0, "claim": "task0 view", "why_selected": "w"},
                     {"candidate_index": 1, "claim": "task1 view", "why_selected": "w"},
                 ]
-            ),
-            slots=2,
-        )
+            )
+        ]
     )
     runner, answerer = _runner(
         plan=_plan(*tasks),
@@ -874,15 +859,14 @@ async def test_incomplete_task_adds_the_fixed_phrase_exactly_once() -> None:
     )
     # task-Cは収集失敗で候補ゼロのため統合index空間から外れる(task-A→0、task-B→1)。
     reviewer_runtime = ScriptedAgentRuntime(
-        _padded_script(
+        [
             _draft(
                 [
                     {"candidate_index": 0, "claim": "A claim", "why_selected": "w"},
                     {"candidate_index": 1, "claim": "B claim", "why_selected": "w"},
                 ]
-            ),
-            slots=3,
-        )
+            )
+        ]
     )
     runner, _answerer = _runner(
         plan=_plan(*tasks),
@@ -989,15 +973,14 @@ async def test_selected_event_fires_once_for_the_whole_run_without_task_index() 
     events = _Events()
     # 統合index空間(仮定): task-A(0) task-B(1)。task-Cは候補ゼロで現れない。
     reviewer_runtime = ScriptedAgentRuntime(
-        _padded_script(
+        [
             _draft(
                 [
                     {"candidate_index": 0, "claim": "A claim", "why_selected": "w"},
                     {"candidate_index": 1, "claim": "B claim", "why_selected": "w"},
                 ]
-            ),
-            slots=3,
-        )
+            )
+        ]
     )
     runner, _answerer = _runner(
         plan=_plan(*tasks),
@@ -1048,7 +1031,7 @@ async def test_review_spans_and_events_do_not_expose_untrusted_text(
             ],
         }
     )
-    reviewer_runtime = ScriptedAgentRuntime(_padded_script(_EMPTY_DRAFT, slots=2))
+    reviewer_runtime = ScriptedAgentRuntime([_EMPTY_DRAFT])
     events = _Events()
     runner, _answerer = _runner(
         plan=_plan(*tasks),
