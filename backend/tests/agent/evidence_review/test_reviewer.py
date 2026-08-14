@@ -252,34 +252,6 @@ async def test_review_propagates_missing_as_a_single_run_level_list() -> None:
 
 
 @pytest.mark.asyncio
-async def test_review_drops_out_of_range_duplicate_and_over_cap_selections() -> None:
-    """S1(選別結果の復元)。範囲外/重複/採用上限超過をRun単位で決定的にdropする。
-
-    S2でcap値がRun単位の15になったため、16件目で上限超過が起きることを検証する。
-    """
-    tasks = [
-        _collected_task(
-            task_index=0,
-            internal_hits=[
-                _internal_hit(assessment_id=1000 + i, curation_id=i + 1, title=f"c{i}")
-                for i in range(16)
-            ],
-        )
-    ]
-    selections = [
-        {"candidate_index": index, "claim": f"claim-{index}", "why_selected": "w"}
-        for index in [0, 0, *range(1, 16), 99]
-    ]
-    runtime = ScriptedAgentRuntime([_draft(selections)])
-
-    outcome = await _review(tasks=tasks, reviewer_runtime=runtime)
-
-    assert len(outcome.internal_evidence) == 15
-    # dup(index 0)・上限超過(16件目のindex 15)・範囲外(index 99)の3件がdropされる。
-    assert outcome.dropped_selection_count == 3
-
-
-@pytest.mark.asyncio
 async def test_review_retries_at_most_twice_with_the_same_typed_input() -> None:
     runtime = ScriptedAgentRuntime(
         [

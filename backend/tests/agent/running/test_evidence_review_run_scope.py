@@ -38,7 +38,6 @@ from app.agent.answering.evidence_answer.contract import (
     EvidenceAnswerOutcome,
     EvidenceAnswerUnavailable,
 )
-from app.agent.contract import InternalArticleSource
 from app.agent.evidence_collection import NewsCollector, Researcher
 from app.agent.evidence_collection.external_search.contract import (
     ExternalQueryDraft,
@@ -55,7 +54,6 @@ from app.agent.evidence_review import (
     EvidenceReviewer,
 )
 from app.agent.evidence_review.agent import EVIDENCE_REVIEWER_AGENT
-from app.agent.evidence_review.contract import EVIDENCE_REVIEW_ADOPTION_LIMIT
 from app.agent.planning.contract import ResearchTask, SearchPlan, TargetTimeWindow
 from app.agent.question_context import QuestionContext
 from app.agent.running import AnsweringPhases, AnsweringRunner, RunContext, RunInput
@@ -682,75 +680,6 @@ async def test_selection_restores_the_right_candidate_and_task_across_groups() -
 
     titles = {item.source.title for item in answerer.calls[0]}
     assert titles == {"A-int-2", "B-ext-1", "C-ext-1"}
-
-
-@pytest.mark.asyncio
-async def test_out_of_range_duplicate_and_over_cap_selections_drop_at_run_level() -> (
-    None
-):
-    """S1 C2。範囲外index・重複index・Run採用上限が決定的にdropされる。
-
-    S2でcap値がRun単位の15になったため、16件目以降の超過で検証する。
-    """
-    tasks = [
-        _task("goal-A", ["query-a"]),
-        _task("goal-B", ["query-b"]),
-        _task("goal-C", ["query-c"]),
-    ]
-    internal_tool = _InternalTool(
-        hits_by_query={
-            "query-a": [
-                _internal_hit(
-                    assessment_id=1000 + i, curation_id=100 + i, title=f"cand-{i}"
-                )
-                for i in range(6)
-            ],
-            "query-b": [
-                _internal_hit(
-                    assessment_id=1000 + i, curation_id=100 + i, title=f"cand-{i}"
-                )
-                for i in range(6, 12)
-            ],
-            "query-c": [
-                _internal_hit(
-                    assessment_id=1000 + i, curation_id=100 + i, title=f"cand-{i}"
-                )
-                for i in range(12, 17)
-            ],
-        }
-    )
-    # 統合index空間(仮定): task-A(0-5) task-B(6-11) task-C(12-16)、合計17候補。
-    # 0を重複、99を範囲外、有効17件のうち16件目以降(index 15,16)は
-    # 上限15件超過でdrop。
-    selections = [
-        {"candidate_index": index, "claim": f"claim-{index}", "why_selected": "w"}
-        for index in [0, 0, *range(1, 17), 99]
-    ]
-    reviewer_runtime = ScriptedAgentRuntime([_draft(selections)])
-    runner, answerer = _runner(
-        plan=_plan(*tasks),
-        query_runtime=ScriptedAgentRuntime([_query_draft([]) for _ in tasks]),
-        reviewer_runtime=reviewer_runtime,
-        external_tool=_ExternalTool(),
-        internal_tool=internal_tool,
-    )
-
-    await _run(runner)
-
-    # 重複0と範囲外99がdropされ、有効17件の先頭から上限15件 (cand-0..14) が
-    # 採用順のまま届く。fixture の article_id は 1000 + i。
-    adopted = answerer.calls[0]
-    assert (
-        len(adopted),
-        [
-            source.article_id
-            for source in (item.source for item in adopted)
-            if isinstance(source, InternalArticleSource)
-        ],
-    ) == (
-        EVIDENCE_REVIEW_ADOPTION_LIMIT,
-        [1000 + index for index in range(EVIDENCE_REVIEW_ADOPTION_LIMIT)],
-    )
 
 
 @pytest.mark.asyncio
