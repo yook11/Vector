@@ -11,6 +11,8 @@ from datetime import UTC, datetime
 from typing import Any
 from uuid import UUID
 
+import pytest
+
 from app.agent.answering.contract import AnsweringRequest
 from app.agent.answering.direct_answer.contract import DirectAnswerDraft
 from app.agent.answering.evidence_answer.contract import (
@@ -35,6 +37,7 @@ from app.agent.planning.contract import (
 )
 from app.agent.question_context import QuestionContext
 from app.agent.running import AnsweringRunner, RunContext, RunInput
+from app.agent.running import answering_runner as answering_runner_module
 from app.analysis.analyzed_article import InScopeAnalyzedArticle
 from app.analysis.assessment.domain.result import InScope, InScopeCategory
 
@@ -187,6 +190,19 @@ class ExternalSearchTool:
     async def invoke(self, input: Any) -> list[ExternalSearchCandidate]:
         self.calls.append(input)
         return list(self._results.get(input.query, []))
+
+
+def capture_external_outcome(monkeypatch: pytest.MonkeyPatch) -> list[Any]:
+    """normalize_answer_evidenceへ渡る収集outcomeを横取りして記録する。"""
+    captured: list[Any] = []
+    original = answering_runner_module.normalize_answer_evidence
+
+    def capture(outcome: Any) -> Any:
+        captured.append(outcome)
+        return original(outcome)
+
+    monkeypatch.setattr(answering_runner_module, "normalize_answer_evidence", capture)
+    return captured
 
 
 async def execute_run(runner: AnsweringRunner, *, as_of: datetime = AS_OF) -> Any:

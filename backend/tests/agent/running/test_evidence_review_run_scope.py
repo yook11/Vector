@@ -67,6 +67,9 @@ from tests.agent.running._harness import (
     UnreachableDirectAnswerer as _UnreachableDirectAnswerer,
 )
 from tests.agent.running._harness import (
+    capture_external_outcome as _capture_external_outcome,
+)
+from tests.agent.running._harness import (
     execute_run as _run,
 )
 from tests.agent.running._harness import (
@@ -920,6 +923,42 @@ async def test_reviewer_failure_after_two_attempts_empties_the_whole_run() -> No
     assert selected_events == []
 
 
+@pytest.mark.asyncio
+async def test_reviewer_failure_after_two_attempts_becomes_failed_review_report(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """runnerがreviewer失敗をreview=failed reportへ写す結線を保証する。
+
+    attempt/timeout/失敗分類の詳細な組み合わせは
+    tests/agent/evidence_review/test_reviewer.py が正本。
+    """
+    captured = _capture_external_outcome(monkeypatch)
+    failure = AgentResponseInvalidError(AgentResponseDefect.RESPONSE_NOT_JSON)
+    reviewer_runtime = ScriptedAgentRuntime([failure, failure])
+    runner, answerer, _factory = _runner(
+        plan=_plan(_task("reviewer failure", ["query-a"])),
+        query_runtime=ScriptedAgentRuntime([_query_draft(["q"])]),
+        reviewer_runtime=reviewer_runtime,
+        external_tool=_ExternalTool(
+            {"q": [_external_candidate("https://example.com/q")]}
+        ),
+        internal_tool=_InternalTool(),
+    )
+
+    await _run(runner)
+
+    report = captured[0].task_reports[0]
+    review = captured[0].review
+    assert (
+        report.external_collection,
+        review.review,
+        review.review_failure_reason,
+        review.internal_evidence_count,
+        review.external_evidence_count,
+        answerer.calls,
+    ) == ("succeeded", "failed", "response_not_json", 0, 0, [[]])
+
+
 # --- F. 進捗event ------------------------------------------------------------
 
 
@@ -977,6 +1016,63 @@ async def test_selected_event_fires_once_for_the_whole_run_without_task_index() 
     assert len(selected) == 1
     assert selected[0].evidence_count == 2
     assert "task_index" not in selected[0].model_dump()
+
+
+@pytest.mark.asyncio
+async def test_evidence_selected_event_count_is_internal_plus_external() -> None:
+    """selected.evidence_countは内部採用数と外部採用数の合算になる。"""
+    events = _Events()
+    internal_tool = _InternalTool(
+        hits_by_query={
+            "query-a": [
+                _internal_hit(
+                    assessment_id=2001, curation_id=1001, title="internal hit"
+                )
+            ]
+        }
+    )
+    reviewer_runtime = ScriptedAgentRuntime(
+        [
+            _draft(
+                [
+                    {
+                        "candidate_index": 0,
+                        "claim": "internal claim",
+                        "why_selected": "why",
+                    },
+                    {
+                        "candidate_index": 1,
+                        "claim": "external claim",
+                        "why_selected": "why",
+                    },
+                ]
+            )
+        ]
+    )
+    runner, _answerer, _factory = _runner(
+        plan=_plan(_task("combined evidence", ["query-a"])),
+        query_runtime=ScriptedAgentRuntime([_query_draft(["q1"])]),
+        reviewer_runtime=reviewer_runtime,
+        external_tool=_ExternalTool(
+            {"q1": [_external_candidate("https://example.com/q1")]}
+        ),
+        internal_tool=internal_tool,
+        events=events,
+    )
+
+    await _run(runner)
+
+    selected_events = [
+        event.model_dump()
+        for event in events.events
+        if event.type == "evidence_review.selected"
+    ]
+    assert selected_events == [
+        {
+            "type": "evidence_review.selected",
+            "evidence_count": 2,
+        }
+    ]
 
 
 # --- G. 非露出 ---------------------------------------------------------------

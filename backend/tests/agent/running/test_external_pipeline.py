@@ -37,7 +37,6 @@ from app.agent.planning.contract import (
     TargetTimeWindow,
 )
 from app.agent.running import AnsweringPhases, AnsweringRunner
-from app.agent.running import answering_runner as answering_runner_module
 from app.agent.runtime.contract import AgentResponseDefect, AgentResponseInvalidError
 from app.analysis.ai_provider_errors import AIProviderNetworkError
 from app.analysis.deepseek_error_translator import DeepSeekStateReason
@@ -59,6 +58,9 @@ from tests.agent.running._harness import (
 )
 from tests.agent.running._harness import (
     UnreachableDirectAnswerer as _UnreachableDirectAnswerer,
+)
+from tests.agent.running._harness import (
+    capture_external_outcome as _capture_external_outcome,
 )
 from tests.agent.running._harness import (
     execute_run as _run,
@@ -381,18 +383,6 @@ def _runner(
         answerer,
         factory,
     )
-
-
-def _capture_external_outcome(monkeypatch: pytest.MonkeyPatch) -> list[Any]:
-    captured: list[Any] = []
-    original = answering_runner_module.normalize_answer_evidence
-
-    def capture(outcome: Any) -> Any:
-        captured.append(outcome)
-        return original(outcome)
-
-    monkeypatch.setattr(answering_runner_module, "normalize_answer_evidence", capture)
-    return captured
 
 
 def _time_filter_metric_points(
@@ -980,41 +970,6 @@ async def test_partial_provider_failure_continues_but_all_failure_skips_reviewer
 
 
 @pytest.mark.asyncio
-async def test_reviewer_failure_after_two_attempts_becomes_failed_review_report(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """runnerがreviewer失敗をreview=failed reportへ写す結線を保証する。
-
-    attempt/timeout/失敗分類の詳細な組み合わせは
-    tests/agent/evidence_review/test_reviewer.py が正本。
-    """
-    captured = _capture_external_outcome(monkeypatch)
-    failure = AgentResponseInvalidError(AgentResponseDefect.RESPONSE_NOT_JSON)
-    reviewer_runtime = ScriptedAgentRuntime([failure, failure])
-    runner, answerer, _ = _runner(
-        tasks=[_task("reviewer failure")],
-        runtime=_runtime(
-            query_runtime=ScriptedAgentRuntime([_query_draft(["q"])]),
-            reviewer_runtime=reviewer_runtime,
-            tool=_Tool({"q": [_candidate("https://example.com/q")]}),
-        ),
-    )
-
-    await _run(runner)
-
-    report = captured[0].task_reports[0]
-    review = captured[0].review
-    assert (
-        report.external_collection,
-        review.review,
-        review.review_failure_reason,
-        review.internal_evidence_count,
-        review.external_evidence_count,
-        answerer.calls,
-    ) == ("succeeded", "failed", "response_not_json", 0, 0, [[]])
-
-
-@pytest.mark.asyncio
 async def test_workflow_constructs_task_ordered_external_outcome_before_answering(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -1165,73 +1120,6 @@ async def test_collection_events_are_per_task_causal_with_their_contract_payload
             "task_index": 1,
             "candidate_count": 1,
         },
-    ]
-
-
-@pytest.mark.asyncio
-async def test_evidence_selected_event_count_is_internal_plus_external() -> None:
-    """evidence_review.selected.evidence_countは内部採用数と外部採用数の合算であることを保証する。"""
-    events = _Events()
-    query_runtime = ScriptedAgentRuntime([_query_draft(["q1"])])
-    reviewer_runtime = ScriptedAgentRuntime(
-        [
-            _review_draft(
-                [
-                    {
-                        "candidate_index": 0,
-                        "claim": "internal claim",
-                        "why_selected": "why",
-                    },
-                    {
-                        "candidate_index": 1,
-                        "claim": "external claim",
-                        "why_selected": "why",
-                    },
-                ]
-            )
-        ]
-    )
-    answerer = _EvidenceAnswerer()
-    factory = _Factory(
-        [
-            _runtime(
-                query_runtime=query_runtime,
-                reviewer_runtime=reviewer_runtime,
-                tool=_Tool({"q1": [_candidate("https://example.com/q1")]}),
-            )
-        ]
-    )
-    phases = AnsweringPhases(
-        planner=_Planner(_plan([_task("combined evidence")])),
-        collector=NewsCollector(
-            researcher=Researcher(
-                internal_search=_OneInternalHitSearch(), events=events
-            )
-        ),
-        external_runtime_factory=factory,
-        direct_answerer=_UnreachableDirectAnswerer(),
-        evidence_answerer=answerer,
-        reviewer=EvidenceReviewer(),
-    )
-    runner = AnsweringRunner(
-        input_safety_checker=AllowInputSafetyChecker(),
-        context_preparer=_Preparer(),
-        phases_factory=lambda: phases,
-        events=events,
-    )
-
-    await _run(runner)
-
-    selected_events = [
-        event.model_dump()
-        for event in _external_search_events(events.events)
-        if event.type == "evidence_review.selected"
-    ]
-    assert selected_events == [
-        {
-            "type": "evidence_review.selected",
-            "evidence_count": 2,
-        }
     ]
 
 
@@ -1402,13 +1290,11 @@ async def test_unclassified_query_failure_joins_sibling_before_reraise() -> None
 
 
 @pytest.mark.asyncio
-async def test_cross_task_same_url_both_kept_and_scope_is_fresh_per_run() -> None:
-    """S1(合流と重複排除): 外部根拠のURL重複排除は廃止されたため、taskが違えば
+async def test_external_scope_is_activated_fresh_per_run() -> None:
+    """external runtime scopeはrunごとに新しくactivateされ、終了時に必ずexitする。
 
-    同じURLが両方とも根拠として残る(旧: URL先勝ちdedupで片方だけが残っていた)。
-    reviewerはRun単位1回のため、統合index空間(仮定: task昇順)の0,1を1つの
-    draftで選ばせる(task単位で呼ぶ旧経路が残っていても2件目のcallが
-    script枯渇crashにならないよう空draftを足す)。
+    同URL外部候補が両方残ること(URL重複排除の廃止)の正本は
+    test_evidence_review_run_scope.py の same_url テストが持つ。
     """
     tasks = [_task("first"), _task("second")]
 
@@ -1424,8 +1310,7 @@ async def test_cross_task_same_url_both_kept_and_scope_is_fresh_per_run() -> Non
                             "why_selected": "why",
                         },
                     ]
-                ),
-                _review_draft([]),
+                )
             ]
         )
 
@@ -1474,11 +1359,11 @@ async def test_cross_task_same_url_both_kept_and_scope_is_fresh_per_run() -> Non
     await _run(runner)
 
     assert (
-        [sorted(item.source.title for item in evidence) for evidence in answerer.calls],
+        len(answerer.calls),
         len(factory.scopes),
         factory.scopes[0] is not factory.scopes[1],
         [scope.exit_calls for scope in factory.scopes],
-    ) == ([["first", "second"], ["first", "second"]], 2, True, [1, 1])
+    ) == (2, 2, True, [1, 1])
 
 
 @pytest.mark.asyncio
