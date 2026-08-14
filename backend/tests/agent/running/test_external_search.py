@@ -1065,7 +1065,7 @@ async def test_collection_events_are_per_task_causal_with_their_contract_payload
     evidence_review.selectedは両task分がまとめて精査成功後にRun単位1本でしか
     発火しない(task0が完結してからtask1が始まる、というper-task逐次因果は
     成立しない)。evidence_review.selectedの発火本数・payload形は
-    tests/agent/running/test_evidence_review_run_scope.py::
+    tests/agent/running/test_evidence_review.py::
     test_selected_event_fires_once_for_the_whole_run_without_task_index が
     正本のため、ここでは重複して主張しない。
     """
@@ -1294,7 +1294,7 @@ async def test_external_scope_is_activated_fresh_per_run() -> None:
     """external runtime scopeはrunごとに新しくactivateされ、終了時に必ずexitする。
 
     同URL外部候補が両方残ること(URL重複排除の廃止)の正本は
-    test_evidence_review_run_scope.py の same_url テストが持つ。
+    test_evidence_review.py の same_url テストが持つ。
     """
     tasks = [_task("first"), _task("second")]
 
