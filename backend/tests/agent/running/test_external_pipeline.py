@@ -1104,9 +1104,8 @@ async def test_reviewer_failure_after_two_attempts_becomes_failed_review_report(
         review.review_failure_reason,
         review.internal_evidence_count,
         review.external_evidence_count,
-        [call.attempt_number for call in reviewer_runtime.calls],
         answerer.calls,
-    ) == ("succeeded", "failed", "response_not_json", 0, 0, [1, 2], [[]])
+    ) == ("succeeded", "failed", "response_not_json", 0, 0, [[]])
 
 
 @pytest.mark.asyncio

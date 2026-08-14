@@ -1,10 +1,9 @@
 """AnsweringRunner: 内部+外部候補統合レビューのorchestration契約(D4-S1)。
 
-保証するテスト条件 7 (内部のみ/外部のみでもreviewerへ進む)、8 (両方ゼロで
-reviewer未呼び出し)、9 (合流でのcuration_id先勝ちdedupとsource_ref非衝突)、
-11 (time filter失敗でもexternal runtime scopeがactivateされる)、および
-reviewerの2 attempt失敗が兄弟taskの根拠を消さないこと(選別のtest contract
-8番目)を、`AnsweringRunner.run()` を通した黒箱契約として検証する。
+保証するテスト条件 7 (内部のみ/外部のみでもreviewerへ進む)、9 (合流での
+curation_id先勝ちdedup)、11 (time filter失敗でもexternal runtime scopeが
+activateされる)を `AnsweringRunner.run()` を通した黒箱契約として検証する。
+候補ゼロのskipとreviewer失敗の正本は test_evidence_review_run_scope.py。
 """
 
 from __future__ import annotations
@@ -44,7 +43,6 @@ from app.agent.planning.contract import (
 )
 from app.agent.question_context import QuestionContext
 from app.agent.running import AnsweringPhases, AnsweringRunner, RunContext, RunInput
-from app.agent.runtime.contract import AgentResponseDefect, AgentResponseInvalidError
 from app.analysis.analyzed_article import InScopeAnalyzedArticle
 from app.analysis.assessment.domain.result import InScope, InScopeCategory
 from tests.agent.running._input_safety import AllowInputSafetyChecker
@@ -436,45 +434,3 @@ async def test_time_filter_failure_still_activates_external_scope_for_review() -
     assert factory.scopes[0].exit_calls == 1
     assert len(reviewer_runtime.calls) == 1
     assert [item.source.title for item in answerer.calls[0]] == ["internal candidate"]
-
-
-@pytest.mark.asyncio
-async def test_reviewer_failure_after_two_attempts_empties_the_whole_run() -> None:
-    """S1 E1(旧: 選別のtest contract 8番目を上書き)。
-
-    段4時点はreviewerがtask単位だったため、片方が2 attempt失敗しても兄弟taskは
-    根拠を返せた。S1でreviewerの呼び出しがRun単位1回になったため、精査の失敗は
-    Run全体に及び、いずれのtaskも根拠を返さない
-    (仕様「何ができていないかの表明」: 精査を通っていない候補を出典として提示しない)。
-
-    scriptは[失敗, 失敗, 成功draft](REVISE 1)。Run単位1回なら2 attemptで打ち切られ
-    成功draftへ届かないが、per-task実装ならtask0の2失敗を消費した後にtask1が
-    新しいattempt列として成功draftを消費し根拠を返してしまうため、
-    [失敗]*Nのように常に失敗するscriptでは区別できない不変条件を判別できる。
-    """
-    internal_tool = _InternalTool(
-        [
-            [
-                _internal_hit(
-                    assessment_id=1001, curation_id=1, title="failing task hit"
-                )
-            ],
-            [_internal_hit(assessment_id=1002, curation_id=2, title="succeeding hit")],
-        ]
-    )
-    failure = AgentResponseInvalidError(AgentResponseDefect.OUTPUT_SCHEMA_MISMATCH)
-    success_draft = _review_draft(
-        [{"candidate_index": 0, "claim": "claim", "why_selected": "w"}]
-    )
-    reviewer_runtime = ScriptedAgentRuntime([failure, failure, success_draft])
-    runner, answerer, _factory = _runner(
-        goals=["failing task", "succeeding task"],
-        query_runtime=ScriptedAgentRuntime([_query_draft([]), _query_draft([])]),
-        reviewer_runtime=reviewer_runtime,
-        tool=_ExternalTool(),
-        internal_tool=internal_tool,
-    )
-
-    await _run(runner)
-
-    assert answerer.calls == [[]]
