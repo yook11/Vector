@@ -23,6 +23,7 @@ from app.agent.evidence_collection.internal_search.contract import (
 )
 from app.agent.evidence_review.agent import EVIDENCE_REVIEWER_AGENT
 from app.agent.evidence_review.contract import EvidenceReviewDraft
+from app.agent.evidence_review.policy import build_review_task_groups
 from app.agent.evidence_review.reviewer import EvidenceReviewer
 from app.agent.runtime.contract import AgentResponseDefect, AgentResponseInvalidError
 from app.analysis.ai_provider_errors import AIProviderError, AIProviderNetworkError
@@ -163,69 +164,31 @@ async def test_successful_review_resolves_the_originating_task_index() -> None:
 
 
 @pytest.mark.asyncio
-async def test_review_groups_candidates_by_task_in_ascending_task_index_order() -> None:
-    """S1(候補の渡し方)。research_goalごとにグループ化しtask_index昇順で並べる。"""
+async def test_review_passes_the_task_group_projection_and_as_of_unchanged() -> None:
+    """reviewer入力はbuild_review_task_groups(tasks)の出力とas_ofそのもの。
+
+    グループ化規則(昇順・通しindex・内部→外部)の正本はtest_policy.pyが持つ。
+    """
     runtime = ScriptedAgentRuntime([_draft([])])
+    # 降順で渡し、等価比較が入力の受け流しでは成立しないようにする。
     tasks = [
-        _collected_task(
-            task_index=0,
-            research_goal="goal-A",
-            internal_hits=[_internal_hit(title="A-int")],
-        ),
         _collected_task(
             task_index=1,
             research_goal="goal-B",
             external_candidates=[_external_candidate(title="B-ext")],
         ),
-    ]
-
-    await _review(tasks=tasks, reviewer_runtime=runtime)
-
-    review_input = runtime.calls[0].input
-    assert [group.task_index for group in review_input.task_groups] == [0, 1]
-    assert [group.research_goal for group in review_input.task_groups] == [
-        "goal-A",
-        "goal-B",
-    ]
-
-
-@pytest.mark.asyncio
-async def test_review_assigns_a_run_wide_index_internal_before_external_per_group() -> (
-    None
-):
-    """S1(候補の渡し方)。indexはグループをまたぐ通し番号、group内は内部→外部。"""
-    runtime = ScriptedAgentRuntime([_draft([])])
-    tasks = [
         _collected_task(
             task_index=0,
-            internal_hits=[
-                _internal_hit(assessment_id=1001, curation_id=1, title="A-int-1"),
-                _internal_hit(assessment_id=1002, curation_id=2, title="A-int-2"),
-            ],
-            external_candidates=[_external_candidate(title="A-ext-1")],
-        ),
-        _collected_task(
-            task_index=1,
-            internal_hits=[
-                _internal_hit(assessment_id=1003, curation_id=3, title="B-int-1")
-            ],
+            research_goal="goal-A",
+            internal_hits=[_internal_hit(title="A-int")],
         ),
     ]
 
     await _review(tasks=tasks, reviewer_runtime=runtime)
 
     review_input = runtime.calls[0].input
-    ordered = [
-        (candidate.index, candidate.title)
-        for group in review_input.task_groups
-        for candidate in group.candidates
-    ]
-    assert ordered == [
-        (0, "A-int-1"),
-        (1, "A-int-2"),
-        (2, "A-ext-1"),
-        (3, "B-int-1"),
-    ]
+    assert review_input.task_groups == build_review_task_groups(tasks)
+    assert review_input.as_of == _AS_OF
 
 
 @pytest.mark.asyncio
