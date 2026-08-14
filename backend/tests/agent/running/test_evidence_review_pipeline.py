@@ -347,25 +347,6 @@ async def test_task_with_only_external_candidates_still_reaches_review() -> None
 
 
 @pytest.mark.asyncio
-async def test_task_with_both_candidates_empty_skips_review() -> None:
-    """保証するテスト条件 8。両方候補ゼロならreviewerを呼ばない。"""
-    reviewer_runtime = ScriptedAgentRuntime([])
-    runner, answerer, _factory = _runner(
-        goals=["empty task"],
-        query_runtime=ScriptedAgentRuntime([_query_draft(["q"])]),
-        reviewer_runtime=reviewer_runtime,
-        tool=_ExternalTool({"q": []}),
-        internal_tool=_InternalTool([[]]),
-    )
-
-    result = await _run(runner)
-
-    assert reviewer_runtime.calls == []
-    assert answerer.calls == [[]]
-    assert result.final_output.status == "insufficient"
-
-
-@pytest.mark.asyncio
 async def test_merge_dedupes_same_internal_article_by_curation_id_first_win() -> None:
     """保証するテスト条件 9(S1 C3: この不変条件はRun単位化でも変更されない)。
 

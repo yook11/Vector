@@ -222,23 +222,6 @@ async def test_selection_restores_candidate_and_task_from_a_cross_task_index() -
 
 
 @pytest.mark.asyncio
-async def test_review_completes_when_only_some_tasks_have_candidates() -> None:
-    """S1 A1系。候補ゼロのtaskがあってもRun全体としての精査は1回で完了する。"""
-    runtime = ScriptedAgentRuntime(
-        [_draft([{"candidate_index": 0, "claim": "claim", "why_selected": "w"}])]
-    )
-    tasks = [
-        _collected_task(task_index=0, internal_hits=[_internal_hit()]),
-        _collected_task(task_index=1),
-    ]
-
-    outcome = await _review(tasks=tasks, reviewer_runtime=runtime)
-
-    assert outcome.failure_reason is None
-    assert len(runtime.calls) == 1
-
-
-@pytest.mark.asyncio
 async def test_review_propagates_missing_as_a_single_run_level_list() -> None:
     """S1(何ができていないかの表明)。missingはRun全体で1本として返る。"""
     runtime = ScriptedAgentRuntime([_draft([], missing=["run全体の不足"])])

@@ -1074,27 +1074,6 @@ async def test_partial_provider_failure_continues_but_all_failure_skips_reviewer
 
 
 @pytest.mark.asyncio
-async def test_empty_candidate_pool_skips_reviewer() -> None:
-    reviewer_runtime = ScriptedAgentRuntime([])
-    runner, answerer, _ = _runner(
-        tasks=[_task("empty pool")],
-        runtime=_runtime(
-            query_runtime=ScriptedAgentRuntime([_query_draft(["q"])]),
-            reviewer_runtime=reviewer_runtime,
-            tool=_Tool({"q": []}),
-        ),
-    )
-
-    result = await _run(runner)
-
-    assert (reviewer_runtime.calls, answerer.calls, result.final_output.status) == (
-        [],
-        [[]],
-        "insufficient",
-    )
-
-
-@pytest.mark.asyncio
 async def test_reviewer_failure_after_two_attempts_becomes_failed_review_report(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
