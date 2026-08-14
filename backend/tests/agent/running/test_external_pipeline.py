@@ -514,9 +514,8 @@ def _record_and_shorten_pipeline_timeouts(
 
 
 @pytest.mark.asyncio
-async def test_external_pipeline_normalizes_queries_and_hides_urls_from_reviewer() -> (
-    None
-):
+async def test_external_pipeline_normalizes_and_caps_generated_queries() -> None:
+    """query正規化・重複除去・件数capの配線。URL非到達の正本はrun_scope B5。"""
     long_query = "x" * 205
     query_runtime = ScriptedAgentRuntime(
         [_query_draft(["  normalized  ", "normalized", long_query, "third", "fourth"])]
@@ -545,7 +544,6 @@ async def test_external_pipeline_normalizes_queries_and_hides_urls_from_reviewer
     )
 
     result = await _run(runner)
-    reviewer_input = reviewer_runtime.calls[0].input
 
     assert [call.query for call in tool.calls] == [
         "normalized",
@@ -553,10 +551,6 @@ async def test_external_pipeline_normalizes_queries_and_hides_urls_from_reviewer
         "third",
     ]
     assert all(call.limit == 10 for call in tool.calls)
-    assert all(
-        not hasattr(candidate, "url")
-        for candidate in reviewer_input.task_groups[0].candidates
-    )
     assert (
         [(item.source.title, item.source.evidence_claim) for item in answerer.calls[0]],
         result.final_output.status,
