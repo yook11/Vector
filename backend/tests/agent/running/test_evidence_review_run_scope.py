@@ -38,6 +38,7 @@ from app.agent.answering.evidence_answer.contract import (
     EvidenceAnswerOutcome,
     EvidenceAnswerUnavailable,
 )
+from app.agent.contract import InternalArticleSource
 from app.agent.evidence_collection import NewsCollector, Researcher
 from app.agent.evidence_collection.external_search.contract import (
     ExternalQueryDraft,
@@ -54,6 +55,7 @@ from app.agent.evidence_review import (
     EvidenceReviewer,
 )
 from app.agent.evidence_review.agent import EVIDENCE_REVIEWER_AGENT
+from app.agent.evidence_review.contract import EVIDENCE_REVIEW_ADOPTION_LIMIT
 from app.agent.planning.contract import ResearchTask, SearchPlan, TargetTimeWindow
 from app.agent.question_context import QuestionContext
 from app.agent.running import AnsweringPhases, AnsweringRunner, RunContext, RunInput
@@ -745,7 +747,20 @@ async def test_out_of_range_duplicate_and_over_cap_selections_drop_at_run_level(
 
     await _run(runner)
 
-    assert len(answerer.calls[0]) == 15
+    # 重複0と範囲外99がdropされ、有効17件の先頭から上限15件 (cand-0..14) が
+    # 採用順のまま届く。fixture の article_id は 1000 + i。
+    adopted = answerer.calls[0]
+    assert (
+        len(adopted),
+        [
+            source.article_id
+            for source in (item.source for item in adopted)
+            if isinstance(source, InternalArticleSource)
+        ],
+    ) == (
+        EVIDENCE_REVIEW_ADOPTION_LIMIT,
+        [1000 + index for index in range(EVIDENCE_REVIEW_ADOPTION_LIMIT)],
+    )
 
 
 @pytest.mark.asyncio

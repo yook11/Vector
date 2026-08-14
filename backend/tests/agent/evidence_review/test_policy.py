@@ -338,8 +338,51 @@ def test_build_evidence_drops_out_of_range_index_across_all_tasks() -> None:
     ) == (["internal claim"], ["external claim"], 1)
 
 
-def test_build_evidence_drops_duplicate_index_and_caps_at_the_run_wide_limit() -> None:
-    """重複indexと採用上限(現行値15、Run全体で共有)超過をdrop。"""
+def test_build_evidence_drops_duplicate_index_keeping_the_first_selection() -> None:
+    """同一の通しindexへの重複採用は最初の1件だけが残る。
+
+    内部候補の重複は下流(curation_id重複排除)にも網があるが、外部候補の
+    重複を防ぐ防波堤はここだけのため、外部候補で検証する。
+    """
+    build_evidence = build_review_evidence
+    tasks = [
+        _collected_task(
+            task_index=0,
+            internal_hits=[
+                _internal_hit(
+                    assessment_id=1000, curation_id=1, title="internal-0", summary="s"
+                )
+            ],
+            external_candidates=[
+                _external_candidate("https://example.com/0"),
+                _external_candidate("https://example.com/1"),
+            ],
+        )
+    ]
+    # 統合index空間: 0が内部、1-2が外部の合計3候補。index 1を重複採用する。
+    result = _review_result(
+        [
+            {"candidate_index": 1, "claim": "first-1", "why_selected": "why"},
+            {"candidate_index": 1, "claim": "second-1", "why_selected": "why"},
+            {"candidate_index": 0, "claim": "internal-claim", "why_selected": "why"},
+        ]
+    )
+
+    internal_evidence, external_evidence, dropped = build_evidence(
+        tasks=tasks, selection_result=result
+    )
+
+    assert (
+        [item.claim for item in internal_evidence],
+        [item.claim for item in external_evidence],
+        dropped,
+    ) == (["internal-claim"], ["first-1"], 1)
+
+
+def test_build_evidence_caps_adoption_at_the_run_wide_limit_in_selection_order() -> (
+    None
+):
+    """採用上限(現行値15、Run全体で共有)超過は採用順の後ろから切られる。"""
     build_evidence = build_review_evidence
     tasks = [
         _collected_task(
@@ -359,10 +402,10 @@ def test_build_evidence_drops_duplicate_index_and_caps_at_the_run_wide_limit() -
             ],
         )
     ]
-    # 統合index空間: 0-7が内部、8-16が外部の合計17候補。
+    # 統合index空間: 0-7が内部、8-16が外部の合計17候補を全て有効なまま採用する。
     selections = [
         {"candidate_index": index, "claim": f"claim-{index}", "why_selected": "why"}
-        for index in [0, 0, *range(1, 17)]
+        for index in range(17)
     ]
     result = _review_result(selections)
 
@@ -370,10 +413,13 @@ def test_build_evidence_drops_duplicate_index_and_caps_at_the_run_wide_limit() -
         tasks=tasks, selection_result=result
     )
 
-    assert (
-        len(internal_evidence) + len(external_evidence),
-        dropped,
-    ) == (15, 3)
+    adopted_claims = [item.claim for item in internal_evidence] + [
+        item.claim for item in external_evidence
+    ]
+    assert (adopted_claims, dropped) == (
+        [f"claim-{index}" for index in range(EVIDENCE_REVIEW_ADOPTION_LIMIT)],
+        len(selections) - EVIDENCE_REVIEW_ADOPTION_LIMIT,
+    )
 
 
 def test_build_evidence_caps_selections_shared_across_multiple_tasks() -> None:
@@ -418,7 +464,15 @@ def test_build_evidence_caps_selections_shared_across_multiple_tasks() -> None:
         tasks=tasks, selection_result=result
     )
 
-    assert (len(internal_evidence) + len(external_evidence), dropped) == (15, 1)
+    assert (
+        [item.claim for item in internal_evidence],
+        external_evidence,
+        dropped,
+    ) == (
+        [f"claim-{index}" for index in range(EVIDENCE_REVIEW_ADOPTION_LIMIT)],
+        [],
+        len(selections) - EVIDENCE_REVIEW_ADOPTION_LIMIT,
+    )
 
 
 def test_build_evidence_restores_task_and_candidate_from_a_cross_task_index() -> None:
