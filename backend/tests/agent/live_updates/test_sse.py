@@ -79,6 +79,9 @@ class ScriptedReader:
         attempt_epoch: int,
         cursor: str | None,
     ) -> AgentRunLiveStreamReadResult:
+        # 実 reader (_validate_attempt_epoch) と同じ事前条件。epoch 0 で読んだら即失敗させる。
+        if attempt_epoch < 1:
+            raise ValueError("attempt epoch must be positive")
         self.calls.append((attempt_epoch, cursor))
         if self.results:
             return self.results.popleft()
@@ -975,12 +978,19 @@ async def test_queued_connection_never_reads_epoch_zero_and_moves_to_running() -
     assert await lease.try_acquire_owned(run_id=RUN_1, user_id=USER_1) is None
     contexts = deque(
         [
+            # attempt 開始前 (epoch=0)。この context では stream を読んではいけない。
+            OwnedAgentRunLiveContext(
+                run_id=RUN_1,
+                status=AgentRunStatus.RUNNING,
+                attempt_epoch=0,
+                error_code=None,
+            ),
             OwnedAgentRunLiveContext(
                 run_id=RUN_1,
                 status=AgentRunStatus.RUNNING,
                 attempt_epoch=2,
                 error_code=None,
-            )
+            ),
         ]
     )
 
