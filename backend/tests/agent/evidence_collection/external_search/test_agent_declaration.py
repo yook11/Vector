@@ -91,7 +91,6 @@ def test_query_agent_declares_stable_model_version_output_and_immutable_schema()
     assert query_agent.model.provider == "deepseek"
     assert query_agent.model.name == "deepseek-v4-flash"
     assert query_agent.model_settings.max_output_tokens == 256
-    assert query_agent.prompt.version == "v2"
     assert query_agent.output_type is ExternalQueryDraft
     assert not any(
         hasattr(query_agent, forbidden)

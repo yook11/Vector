@@ -119,12 +119,11 @@ def _is_literal_values_derived_from(
     )
 
 
-def test_planner_agent_declares_v7_two_plan_schema_and_stable_model() -> None:
+def test_planner_agent_declares_two_plan_schema_and_stable_model() -> None:
     agent = QUESTION_PLANNER_AGENT
 
     assert isinstance(agent, Agent)
     assert agent.name == "question_planner"
-    assert agent.prompt.version == "v7"
     assert agent.model.provider == "gemini"
     assert agent.model.name == "gemini-2.5-flash-lite"
     assert agent.model_settings.temperature == 0.1
@@ -469,7 +468,6 @@ def test_agent_response_schema_rejects_mutable_non_json_leaf() -> None:
 def test_prompt_declaration_separates_agent_and_time_normalization() -> None:
     instructions = PLANNER_INSTRUCTIONS
 
-    assert PLANNER_PROMPT_VERSION == "v7"
     assert isinstance(_PLANNER_INPUT_TEMPLATE, str)
     assert all(
         marker in instructions

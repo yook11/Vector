@@ -447,7 +447,8 @@ async def test_blank_answer_falls_back_with_draft_invalid_not_pydantic_code() ->
     outcome = await _answer(generator)
 
     assert len(generator.calls) == 2
-    assert getattr(outcome, "failure_code", None) == "answer_synthesis_draft_invalid"
+    assert isinstance(outcome, EvidenceAnswerUnavailable)
+    assert outcome.failure_code == "answer_synthesis_draft_invalid"
 
 
 @pytest.mark.asyncio
@@ -473,7 +474,8 @@ async def test_provider_error_falls_back_without_retry(
 
     outcome = await _answer(generator)
 
-    assert getattr(outcome, "failure_code", None) == "ai_error_network"
+    assert isinstance(outcome, EvidenceAnswerUnavailable)
+    assert outcome.failure_code == "ai_error_network"
     assert len(generator.calls) == 1
     metrics = collected_metrics(capfire)
     assert _metric_attributes(metrics, _SYNTHESIS_OUTCOME_METRIC) == [
@@ -643,7 +645,8 @@ async def test_two_retryable_failures_reset_to_generation_three_fallback(
 
     outcome = await _answer(generator, delta_reporter=reporter)
 
-    assert getattr(outcome, "failure_code", None) == "answer_synthesis_draft_invalid"
+    assert isinstance(outcome, EvidenceAnswerUnavailable)
+    assert outcome.failure_code == "answer_synthesis_draft_invalid"
     assert reporter.aborted == [1, 2]
     assert reporter.reset_generations == [2, 3]
     assert reporter.finished == [3]
@@ -665,7 +668,8 @@ async def test_provider_error_resets_once_then_falls_back_without_live_delta() -
 
     outcome = await _answer(generator, delta_reporter=reporter)
 
-    assert getattr(outcome, "failure_code", None) == "ai_error_network"
+    assert isinstance(outcome, EvidenceAnswerUnavailable)
+    assert outcome.failure_code == "ai_error_network"
     assert reporter.aborted == [1]
     assert reporter.reset_generations == [2]
     assert reporter.finished == [2]

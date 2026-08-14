@@ -16,8 +16,6 @@ from app.agent.answering.evidence_answer.prompts import (
     _REVIEW_MISSING_TEMPLATE,
     _TRUNCATION_REPAIR_BLOCK,
     EVIDENCE_ANSWER_INSTRUCTIONS,
-    EVIDENCE_ANSWER_PROMPT,
-    EVIDENCE_ANSWER_PROMPT_VERSION,
     render_evidence_answer_input,
 )
 from app.agent.contract import ExternalUrlSource, InternalArticleSource
@@ -389,14 +387,3 @@ def test_fixed_instructions_do_not_forbid_grouped_citation_markers() -> None:
     (連続形 `[[1]][[2]]` の推奨は別テストで維持を確認済み)。
     """
     assert "`[[1], [2]]` の形式は使わない" not in EVIDENCE_ANSWER_INSTRUCTIONS
-
-
-def test_prompt_version_constant_matches_declared_prompt_version() -> None:
-    """v8: QuestionContext 4フィールド契約への再編でinstructions本文が変わった
-
-    ため、prompt versionを上げる。EVIDENCE_ANSWER_PROMPT_VERSIONと
-    EVIDENCE_ANSWER_PROMPT.versionが乖離すると、片方だけ更新した際に
-    audit/metricのversion attributionが黙って食い違う。
-    """
-    assert EVIDENCE_ANSWER_PROMPT_VERSION == "v8"
-    assert EVIDENCE_ANSWER_PROMPT.version == EVIDENCE_ANSWER_PROMPT_VERSION

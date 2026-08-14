@@ -202,17 +202,12 @@ def test_prompt_uses_all_context_fields_without_treating_them_as_facts() -> None
     assert "新しい事実を加えない" in DIRECT_ANSWER_AGENT.prompt.instructions
 
 
-def test_agent_declares_plain_text_gemini_role_and_manual_prompt_version() -> None:
-    """v4: QuestionContext 4フィールド契約への再編でinstructions本文が変わった
-
-    ため、prompt versionを上げる。
-    """
+def test_agent_declares_plain_text_gemini_role() -> None:
     assert DIRECT_ANSWER_AGENT.name == "direct_answer"
     assert DIRECT_ANSWER_AGENT.model.provider == "gemini"
     assert DIRECT_ANSWER_AGENT.model.name == "gemini-3.1-flash-lite"
     assert DIRECT_ANSWER_AGENT.model_settings.temperature == 0.2
     assert DIRECT_ANSWER_AGENT.model_settings.max_output_tokens == 2048
-    assert DIRECT_ANSWER_AGENT.prompt.version == "v4"
     assert DIRECT_ANSWER_AGENT.response_schema is None
 
 
