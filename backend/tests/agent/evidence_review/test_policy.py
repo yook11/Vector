@@ -31,6 +31,7 @@ from app.agent.evidence_review.policy import (
     EVIDENCE_REVIEW_TIMEOUT_SECONDS,
     REVIEWER_ERROR_REASON,
     REVIEWER_TIMEOUT_REASON,
+    EvidenceReviewPreparation,
     build_review_evidence,
     build_review_task_groups,
     finalize_review_draft,
@@ -172,6 +173,65 @@ def test_resolve_reviewer_failure_reason_prefers_reason_then_code_then_fallback(
         resolve_failure_reason(reason=None, code="ai_error_network"),
         resolve_failure_reason(reason=None, code=None),
     ) == ("timeout", "ai_error_network", "reviewer_error")
+
+
+# --- EvidenceReviewPreparation(往復) ---------------------------------------
+
+
+def test_preparation_resolves_shown_indexes_to_their_original_candidates() -> None:
+    """投影で見せた全ての通しindexが、渡した元の候補そのものへ解決される(往復)。
+
+    投影とentryは同一の採番で作られるため、見せた番号と引ける番号はズレない。
+    """
+    internal = [
+        _internal_hit(assessment_id=1001, curation_id=1, title="A-int-1", summary="s"),
+        _internal_hit(assessment_id=1002, curation_id=2, title="A-int-2", summary="s"),
+    ]
+    external = [
+        _external_candidate("https://example.com/b1", title="B-ext-1"),
+        _external_candidate("https://example.com/b2", title="B-ext-2"),
+    ]
+    tasks = [
+        _collected_task(task_index=2, internal_hits=internal),
+        _collected_task(task_index=5, external_candidates=external),
+    ]
+
+    preparation = EvidenceReviewPreparation.from_tasks(tasks)
+
+    resolved = [
+        preparation.resolve_candidate(candidate.index)
+        for group in preparation.task_groups
+        for candidate in group.candidates
+    ]
+    assert [(entry.source, entry.task_index) for entry in resolved if entry] == [
+        (internal[0], 2),
+        (internal[1], 2),
+        (external[0], 5),
+        (external[1], 5),
+    ]
+
+
+def test_preparation_does_not_resolve_an_index_that_was_never_shown() -> None:
+    """投影に載せていない番号は解決できずNoneになる(見せた番号だけが引ける)。
+
+    負の番号もtupleの末尾参照に化けさせず構造的に弾く。
+    """
+    tasks = [
+        _task_with_candidates(task_index=0, internal=1),
+        _task_with_candidates(task_index=1, external=2),
+    ]
+
+    preparation = EvidenceReviewPreparation.from_tasks(tasks)
+
+    shown_indexes = [
+        candidate.index
+        for group in preparation.task_groups
+        for candidate in group.candidates
+    ]
+    assert (
+        preparation.resolve_candidate(max(shown_indexes) + 1),
+        preparation.resolve_candidate(-1),
+    ) == (None, None)
 
 
 # --- build_review_task_groups -----------------------------------------------
