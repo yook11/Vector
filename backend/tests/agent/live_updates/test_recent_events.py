@@ -23,6 +23,7 @@ from app.agent.contract import (
     QuestionResolvedEvent,
 )
 from app.agent.live_updates.recent_events import (
+    AGENT_RUN_LIVE_EVENT_LIST_LIMIT,
     AGENT_RUN_LIVE_EVENT_READ_LIMIT,
     AGENT_RUN_LIVE_EVENT_TTL_SECONDS,
     AgentRunLiveEventPublisher,
@@ -406,4 +407,4 @@ async def test_publisher_reset_and_reader_timeout_quickly() -> None:
 
 
 def test_read_limit_is_smaller_than_storage_cap() -> None:
-    assert AGENT_RUN_LIVE_EVENT_READ_LIMIT == 10
+    assert AGENT_RUN_LIVE_EVENT_READ_LIMIT < AGENT_RUN_LIVE_EVENT_LIST_LIMIT

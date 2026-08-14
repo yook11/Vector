@@ -79,7 +79,7 @@ class ScriptedReader:
         attempt_epoch: int,
         cursor: str | None,
     ) -> AgentRunLiveStreamReadResult:
-        # 実 reader (_validate_attempt_epoch) と同じ事前条件。epoch 0 で読んだら即失敗させる。
+        # 実 reader (_validate_attempt_epoch) と同じ事前条件を写す。
         if attempt_epoch < 1:
             raise ValueError("attempt epoch must be positive")
         self.calls.append((attempt_epoch, cursor))
@@ -285,11 +285,17 @@ async def _process_lease(capacity: AgentRunSseCapacity) -> AgentRunSseCapacityLe
     return lease
 
 
-def test_sse_capacity_defaults_match_the_process_contract() -> None:
-    assert AGENT_RUN_SSE_RUN_CONNECTION_LIMIT == 2
-    assert AGENT_RUN_SSE_USER_CONNECTION_LIMIT == 4
-    assert AGENT_RUN_SSE_PROCESS_CONNECTION_LIMIT == 50
-    assert AGENT_RUN_SSE_LEASE_TTL_SECONDS == 55
+def test_capacity_limits_nest_and_lease_ttl_outlives_connection_max_age() -> None:
+    """capacity は run ≤ user ≤ process の入れ子で、lease TTL は接続の
+
+    最大寿命より長い (存命中の接続の lease が先に失効しない)。
+    """
+    assert (
+        AGENT_RUN_SSE_RUN_CONNECTION_LIMIT
+        <= AGENT_RUN_SSE_USER_CONNECTION_LIMIT
+        <= AGENT_RUN_SSE_PROCESS_CONNECTION_LIMIT
+    )
+    assert AGENT_RUN_SSE_LEASE_TTL_SECONDS > AgentRunSseTiming().connection_max_age
 
 
 @pytest.mark.asyncio
