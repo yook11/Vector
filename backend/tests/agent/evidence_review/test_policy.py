@@ -38,6 +38,7 @@ from app.agent.evidence_review.policy import (
 )
 from app.analysis.analyzed_article import InScopeAnalyzedArticle
 from app.analysis.assessment.domain.result import InScope, InScopeCategory
+from app.shared.security.safe_url import SafeUrl
 
 _AS_OF = datetime(2026, 7, 20, 9, 30, tzinfo=UTC)
 
@@ -475,8 +476,12 @@ def test_build_evidence_caps_selections_shared_across_multiple_tasks() -> None:
     )
 
 
-def test_build_evidence_restores_task_and_candidate_from_a_cross_task_index() -> None:
-    """通しindexから所属taskと候補が復元され、source_refがf"{task_index}-{index}"になる。"""
+def test_build_evidence_restores_original_candidates_from_run_wide_indexes() -> None:
+    """選択されたRun全体の通しindexから、元候補とその所属task・出典参照を復元する。
+
+    回答に必要なevidenceの組み立てはmaps_inputs_to_*_evidence_fieldsの2本が持つ。
+    source_refはf"{task_index}-{index}"の形の出典参照になる。
+    """
     build_evidence = build_review_evidence
     tasks = [
         _collected_task(
@@ -596,8 +601,8 @@ def test_build_evidence_keeps_index_alignment_when_a_task_has_no_candidates() ->
     ]
 
 
-def test_build_evidence_reconstructs_internal_provenance_and_keeps_claim() -> None:
-    """保証するテスト条件 6。内部採用はclaimを持ち、既存provenanceを復元する。"""
+def test_build_evidence_maps_inputs_to_internal_evidence_fields() -> None:
+    """内部候補・選択結果・task情報から、InternalArticleEvidenceの各fieldを正しく組み立てる。"""
     build_evidence = build_review_evidence
     hit = _internal_hit(
         assessment_id=2001,
@@ -626,6 +631,39 @@ def test_build_evidence_reconstructs_internal_provenance_and_keeps_claim() -> No
     assert item.title == "internal title"
     assert item.summary == "internal summary"
     assert item.key_points == ["key point one"]
+    assert item.published_at == _AS_OF
+    assert item.task_index == 1
+    assert item.source_ref == "1-0"
+
+
+def test_build_evidence_maps_inputs_to_external_evidence_fields() -> None:
+    """外部候補・選択結果・task情報から、ExternalSearchEvidenceの各fieldを正しく組み立てる。"""
+    build_evidence = build_review_evidence
+    candidate = ExternalSearchCandidate(
+        url=SafeUrl("https://example.com/external-story"),
+        title="external title",
+        snippet="external snippet",
+        source_name="Example News",
+        published_at=_AS_OF,
+    )
+    tasks = [_collected_task(task_index=1, external_candidates=[candidate])]
+    result = _review_result(
+        [{"candidate_index": 0, "claim": "見出しの主張", "why_selected": "選定理由"}],
+    )
+
+    internal_evidence, external_evidence, dropped = build_evidence(
+        tasks=tasks, selection_result=result
+    )
+
+    assert dropped == 0
+    assert internal_evidence == []
+    item = external_evidence[0]
+    assert item.claim == "見出しの主張"
+    assert item.why_selected == "選定理由"
+    assert str(item.url) == "https://example.com/external-story"
+    assert item.title == "external title"
+    assert item.snippet == "external snippet"
+    assert item.source_name == "Example News"
     assert item.published_at == _AS_OF
     assert item.task_index == 1
     assert item.source_ref == "1-0"
