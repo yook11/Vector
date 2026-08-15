@@ -10,7 +10,6 @@ from __future__ import annotations
 import asyncio
 from dataclasses import dataclass
 from datetime import datetime
-from enum import StrEnum
 
 from pydantic import ValidationError
 
@@ -33,14 +32,16 @@ from app.agent.runtime.contract import (
     AgentResponseInvalidError,
     AgentRuntime,
 )
-from app.analysis.ai_provider_errors import AIProviderError
+from app.analysis.ai_provider_errors import (
+    AIProviderContentError,
+    AIProviderStateError,
+)
 
 __all__ = ["EvidenceReviewer"]
 
 _MAX_REVIEW_ATTEMPTS = 2
 _REVIEW_ATTEMPT_TIMEOUT_SECONDS = 30
 _REVIEW_ATTEMPT_TIMEOUT_REASON = "reviewer_timeout"
-_UNCLASSIFIED_PROVIDER_ERROR_REASON = "reviewer_error"
 
 
 @dataclass(frozen=True, slots=True)
@@ -59,8 +60,7 @@ class EvidenceReviewer:
             task_groups=preparation.task_groups,
             as_of=as_of,
         )
-        # 各attemptが分類済みreasonで上書きするため、初期値は型を締めるためだけに置く。
-        failure_reason = _UNCLASSIFIED_PROVIDER_ERROR_REASON
+        failure_reason: str | None = None
         with agent_phase(
             phase="evidence_review",
             agent_name=EVIDENCE_REVIEWER_AGENT.name,
@@ -78,7 +78,7 @@ class EvidenceReviewer:
                 except AgentResponseInvalidError as exc:
                     failure_reason = exc.defect.value
                     continue
-                except AIProviderError as exc:
+                except (AIProviderStateError, AIProviderContentError) as exc:
                     failure_reason = _provider_failure_reason(exc)
                     continue
                 except TimeoutError:
@@ -99,16 +99,14 @@ class EvidenceReviewer:
                     answer_evidence=answer_evidence,
                     review_missing=reviewer_response.missing,
                 )
+        if failure_reason is None:
+            # attemptは必ず1回以上回り各経路が理由を書くため、ここに来たら分類漏れ。
+            raise RuntimeError("review exhausted attempts without a failure reason")
         return EvidenceRunFailed(failure_reason=failure_reason)
 
 
-def _provider_failure_reason(exc: AIProviderError) -> str:
-    reason = getattr(exc, "reason", None)
-    if isinstance(reason, StrEnum):
-        return reason.value
-
-    code = getattr(exc, "CODE", None)
-    if isinstance(code, str):
-        return code
-
-    return _UNCLASSIFIED_PROVIDER_ERROR_REASON
+def _provider_failure_reason(
+    exc: AIProviderStateError | AIProviderContentError,
+) -> str:
+    # forensics用途では詳細(reason)を優先し、無い場合だけ回復クラスのCODEに落とす。
+    return exc.reason.value if exc.reason is not None else exc.CODE

@@ -285,8 +285,6 @@ async def test_review_retries_at_most_twice_with_the_same_typed_input() -> None:
             "ai_error_network",
             id="provider-code",
         ),
-        # 未分類 provider error の安全な fallback。
-        pytest.param(AIProviderError(), "reviewer_error", id="provider-fallback"),
         # asyncio.wait_for相当のtimeout分類。
         pytest.param(TimeoutError(), "reviewer_timeout", id="timeout"),
     ],
@@ -311,6 +309,18 @@ async def test_review_classifies_failure_reason_after_two_exhausted_attempts(
     assert isinstance(result, EvidenceRunFailed)
     assert [call.attempt_number for call in runtime.calls] == [1, 2]
     assert result.failure_reason == expected_reason
+
+
+@pytest.mark.asyncio
+async def test_review_propagates_unclassified_provider_error() -> None:
+    """回復クラスを宣言しない裸のprovider errorは失敗理由に変換せず伝播する。"""
+    runtime = ScriptedAgentRuntime([AIProviderError()])
+    tasks = [_collected_task(task_index=0, internal_hits=[_internal_hit()])]
+
+    with pytest.raises(AIProviderError):
+        await _review(tasks=tasks, reviewer_runtime=runtime)
+
+    assert [call.attempt_number for call in runtime.calls] == [1]
 
 
 @pytest.mark.asyncio
