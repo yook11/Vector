@@ -11,7 +11,7 @@ import pytest
 import app.agent.answering.evidence_answer.prompts as evidence_answer_prompts_module
 from app.agent.answering.contract import AnsweringRequest
 from app.agent.answering.evidence_answer.contract import EvidenceAnswerInput
-from app.agent.answering.evidence_answer.evidence import AnswerEvidenceItem
+from app.agent.answering.evidence_answer.evidence import AnswerInputEvidence
 from app.agent.answering.evidence_answer.prompts import (
     _REVIEW_MISSING_TEMPLATE,
     _TRUNCATION_REPAIR_BLOCK,
@@ -54,8 +54,8 @@ def _request(
     )
 
 
-def _evidence() -> AnswerEvidenceItem:
-    return AnswerEvidenceItem(
+def _evidence() -> AnswerInputEvidence:
+    return AnswerInputEvidence(
         source=ExternalUrlSource(
             source_ref="1",
             url="https://example.com/source-1",
@@ -69,7 +69,7 @@ def _evidence() -> AnswerEvidenceItem:
 def _render(
     *,
     request: AnsweringRequest | None = None,
-    evidence: tuple[AnswerEvidenceItem, ...] = (),
+    evidence: tuple[AnswerInputEvidence, ...] = (),
     target_time_window: TargetTimeWindow | None = None,
     repair_context: str | None = None,
     review_missing: tuple[str, ...] | None = None,
@@ -109,7 +109,7 @@ def test_renderer_sanitizes_all_untrusted_boundaries() -> None:
 
 
 def test_renderer_keeps_variant_specific_evidence_fields() -> None:
-    internal = AnswerEvidenceItem(
+    internal = AnswerInputEvidence(
         source=InternalArticleSource(
             source_ref="1",
             article_id=101,
@@ -118,7 +118,7 @@ def test_renderer_keeps_variant_specific_evidence_fields() -> None:
         ),
         text="internal summary",
     )
-    external = AnswerEvidenceItem(
+    external = AnswerInputEvidence(
         source=ExternalUrlSource(
             source_ref="2",
             url="https://example.com/source-2",

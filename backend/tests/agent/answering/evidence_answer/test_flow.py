@@ -18,7 +18,7 @@ from app.agent.answering.evidence_answer.contract import (
     EvidenceAnswerOutcome,
     EvidenceAnswerUnavailable,
 )
-from app.agent.answering.evidence_answer.evidence import AnswerEvidenceItem
+from app.agent.answering.evidence_answer.evidence import AnswerInputEvidence
 from app.agent.answering.evidence_answer.flow import EvidenceAnswerFlow
 from app.agent.contract import AnswerGenerationStopped, ExternalUrlSource
 from app.agent.planning.contract import TargetTimeWindow
@@ -67,8 +67,8 @@ def _request(
     )
 
 
-def _evidence(ref: str = "1") -> AnswerEvidenceItem:
-    return AnswerEvidenceItem(
+def _evidence(ref: str = "1") -> AnswerInputEvidence:
+    return AnswerInputEvidence(
         source=ExternalUrlSource(
             source_ref=ref,
             url=f"https://example.com/source-{ref}",
@@ -242,7 +242,7 @@ class SequenceContinuation:
 async def _answer(
     generator: FakeGenerator,
     *,
-    evidence: list[AnswerEvidenceItem] | None = None,
+    evidence: list[AnswerInputEvidence] | None = None,
     delta_reporter: RecordingDeltaReporter | None = None,
     continuation: SequenceContinuation | None = None,
     request: AnsweringRequest | None = None,

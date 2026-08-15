@@ -7,11 +7,10 @@ from datetime import datetime
 from app.agent.evidence_collection.contract import CollectedNews, ResearchTaskReport
 from app.agent.evidence_collection.external_search.contract import (
     ExternalResearchRuntime,
-    ExternalSearchOutcome,
 )
 from app.agent.evidence_review.contract import (
+    AnswerEvidence,
     EvidenceReviewReport,
-    InternalArticleEvidence,
     ReviewedEvidence,
     RunReviewResult,
 )
@@ -57,24 +56,16 @@ async def review_collected_news(
             review_outcome=None,
         )
 
-    deduplicated_internal_evidence, internal_deduplicated_count = (
-        _deduplicate_internal_evidence_by_curation_id(outcome.internal_evidence)
-    )
     return RunReviewResult(
         evidence=ReviewedEvidence(
-            internal_evidence=deduplicated_internal_evidence,
-            internal_deduplicated_count=internal_deduplicated_count,
-            external_search=ExternalSearchOutcome(
-                evidence=outcome.external_evidence,
-                requested_agent_count=collected_news.requested_agent_count,
-                effective_agent_count=collected_news.effective_agent_count,
-            ),
+            answer_evidence=outcome.answer_evidence,
+            requested_external_agent_count=collected_news.requested_agent_count,
+            effective_external_agent_count=collected_news.effective_agent_count,
             task_reports=task_reports,
             review=EvidenceReviewReport(
                 review="succeeded",
-                internal_evidence_count=len(outcome.internal_evidence),
-                external_evidence_count=len(outcome.external_evidence),
-                dropped_selection_count=outcome.dropped_selection_count,
+                internal_evidence_count=len(outcome.answer_evidence.internal_articles),
+                external_evidence_count=len(outcome.answer_evidence.external_sources),
                 missing=outcome.missing,
             ),
         ),
@@ -90,29 +81,9 @@ def _closed_evidence(
 ) -> ReviewedEvidence:
     """精査を呼ばなかった/失敗したRunを根拠ゼロで閉じる。"""
     return ReviewedEvidence(
-        internal_evidence=[],
-        internal_deduplicated_count=0,
-        external_search=ExternalSearchOutcome(
-            evidence=[],
-            requested_agent_count=collected_news.requested_agent_count,
-            effective_agent_count=collected_news.effective_agent_count,
-        ),
+        answer_evidence=AnswerEvidence(),
+        requested_external_agent_count=collected_news.requested_agent_count,
+        effective_external_agent_count=collected_news.effective_agent_count,
         task_reports=task_reports,
         review=review,
     )
-
-
-def _deduplicate_internal_evidence_by_curation_id(
-    evidence: list[InternalArticleEvidence],
-) -> tuple[list[InternalArticleEvidence], int]:
-    """内部記事識別子(curation_id)の先勝ちでrun単位の重複を除く。"""
-    deduplicated: list[InternalArticleEvidence] = []
-    seen_curation_ids: set[int] = set()
-    dropped_count = 0
-    for item in evidence:
-        if item.curation_id in seen_curation_ids:
-            dropped_count += 1
-            continue
-        deduplicated.append(item)
-        seen_curation_ids.add(item.curation_id)
-    return deduplicated, dropped_count

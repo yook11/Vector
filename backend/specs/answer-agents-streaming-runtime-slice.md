@@ -177,7 +177,7 @@ class DirectAnswerInput:
 @dataclass(frozen=True, slots=True)
 class EvidenceAnswerInput:
     request: AnsweringRequest
-    evidence: tuple[AnswerEvidenceItem, ...]
+    evidence: tuple[AnswerInputEvidence, ...]
     target_time_window: str | None
     previous_error: str | None = None
 ```

@@ -35,23 +35,20 @@
 
 ### Evidence
 
-- `EvidenceReviewer.review()`は`task_index` / `task` / `content_requirements` /
-  `internal_hits` / `external_candidates` / `as_of` / `reviewer_runtime`を受け取り、
-  1 taskの`EvidenceReviewOutcome`(internal_evidence / external_evidence / missing /
-  dropped_selection_count / failure_reason)を返す。呼び出しは`AnsweringRunner._build_task_result()`
-  からtaskごとに1回である。
+- `EvidenceReviewer.review()`は全taskの候補をまとめた`EvidenceReviewPreparation`を受け取り、
+  `EvidenceReviewOutcome`(`answer_evidence` / `missing` / `failure_reason`)を返す。
 - `AnsweringRunner._fan_out_tasks()`はtask並列でcollect+reviewを回し、全taskの結果を合流させてから
   内部根拠を`curation_id`、外部根拠をURLで先勝ち重複排除する。重複排除は精査より後にある。
 - `build_review_candidate_projection()`は内部候補を先(index 0..n-1)、外部候補を後(n..)に置いた
   単一index空間を作る。渡すfieldは`index` / `title` / `source_name` / `published_at` /
   `snippet`(500字)のみで、URL、`assessment_id`、`curation_id`、出所種別を含めない。
 - reviewer の出力は`selections[]`(`candidate_index` / `claim` / `why_selected`)と`missing[]`である。
-  出典メタデータは返させず、`build_review_evidence()`が`candidate_index`で候補列を引いて再構築する。
-  範囲外index、重複index、採用上限超過は決定的にdropされ`dropped_selection_count`に計上される。
-- cap は`EVIDENCE_REVIEW_ADOPTION_LIMIT_PER_TASK`(5) /
-  `EVIDENCE_REVIEW_MISSING_LIMIT_PER_TASK`(5) / `claim`と`why_selected`各300字 /
-  `missing`項目200字。いずれもtask単位の上限である。
-- 中間`source_ref`は`f"{task_index}-{index}"`。`normalize_answer_evidence()`が最終的な連番へ
+  出典メタデータは返させず、`AnswerEvidence.from_reviewer_response()`が`candidate_index`で
+  候補列を引いて再構築する。
+  範囲外indexと重複indexは決定的に不採用となる。
+- reviewer response のselection上限は`EVIDENCE_REVIEWER_SELECTION_LIMIT`(15)、回答へ渡す根拠の上限は
+  `ANSWER_EVIDENCE_LIMIT`(15)である。後者は出典identityの重複排除後に適用する。
+- 中間`source_ref`は`f"{task_index}-{index}"`。`build_answer_input_evidence()`が最終的な連番へ
   振り直すため、ユーザーには露出しないRun内部の整理番号である。
 - `EVIDENCE_REVIEWER_AGENT`は`deepseek-v4-flash`、`max_output_tokens=2048`。timeout 30秒、
   最大2 attempt。失敗したtaskは根拠ゼロで終わり、`failure_reason`がtask reportへ残る。
@@ -101,15 +98,15 @@
 
 - reviewer には`candidate_index`だけを返させる。所属グループや`task_index`を返させない。
   index からグループは一意に決まり、モデルに冗長な情報を返させると不整合の余地が増える。
-- index から候補と所属taskを引く逆引きは呼び出し側が持つ。範囲外index、重複index、採用上限超過の
-  dropは呼び出し側が決定的に行い、`dropped_selection_count`に計上する。
-- 採用上限をRun単位15件とする。task単位5件×3 taskの実質上限と同じ値であり、回答Agentへ渡る
-  根拠の総量を変えない。視野の変更だけを本sliceの差分に帰属させる。
+- index から候補と所属taskを引く逆引きは`EvidenceReviewPreparation`が持ち、
+  `AnswerEvidence.from_reviewer_response()`が範囲外indexと重複indexを決定的に不採用とする。
+  不採用件数はproduction contractへ含めない。
+- `AnswerEvidence`は回答に使用できる確定済み根拠の集合であり、内部根拠と外部根拠を一つの契約で
+  保持する。回答上限は出典identityの重複排除後の件数へ適用する。
 - `missing`上限をRun単位8件とする。task単位5件×3 taskの実質上限(15件)より絞る。Run全体の不足の
   表明として、同じ論点の言い換えが並ぶことを避ける。
-- task単位の定数(`EVIDENCE_REVIEW_ADOPTION_LIMIT_PER_TASK` /
-  `EVIDENCE_REVIEW_MISSING_LIMIT_PER_TASK`)をRun単位の概念へ置き換える。名前にtask単位である
-  ことを残さない。
+- reviewer response のselection上限と回答に使用する根拠上限を別の定数で表し、工程上の出力制約と
+  回答入力の制約を混同しない。
 - `claim`と`why_selected`のcap(各300字)、`missing`項目のcap(200字)は変更しない。
 - `max_output_tokens`を16,384へ引き上げる。上限まで採用したときの出力量は
   selections 15件×(300字+300字+JSON構文) + missing 8件×200字 で概算11,400字であり、
@@ -120,7 +117,7 @@
   精査がRun単位になっても値の意味は変わらない。
 - 中間`source_ref`の形(`f"{task_index}-{index}"`)を維持する。index がRun内で一意になるため
   修飾は冗長だが、根拠がどのtaskの収集由来かを中間値から読める利点を残す。この`source_ref`は
-  `normalize_answer_evidence()`が最終的な連番へ振り直すためユーザーには露出しない。
+  `build_answer_input_evidence()`が最終的な連番へ振り直すためユーザーには露出しない。
 
 #### 採用の言語化
 
@@ -158,18 +155,16 @@
 
 #### 合流と重複排除
 
-- 外部根拠のURL重複排除を廃止する。task が違えば同じURLが別の観点の根拠として並ぶことを許容する。
-  `deduplicate_external_evidence_by_url()`とその整合validatorを削除する。
-- 内部根拠の`curation_id`による先勝ち重複排除は精査後の位置で維持する。同じ記事が複数の観点で
-  採用された場合、先に出たものを残し、落ちた側の`claim`をevidenceへ統合しない。
-- 落ちた件数はreportに残し、dedup前の採用件数との整合を取る(現行構造を維持)。
-- 合流後の`AnswerEvidenceItem`への正規化、最終`source_ref`の通し番号採番、回答Agentの入力契約、
+- `AnswerEvidence.from_reviewer_response()`は内部根拠を`curation_id`、外部根拠をURLでRun全体の
+  先勝ち重複排除に通す。同じ出典が複数の観点で選ばれても、回答へ渡す出典は1件とする。
+- 重複で不採用になった側の`claim`をevidenceへ統合せず、不採用件数もreportへ残さない。
+- 合流後の`AnswerInputEvidence`への正規化、最終`source_ref`の通し番号採番、回答Agentの入力契約、
   `cited_refs`の検証は変更しない。
 
 #### 観測と失敗分類
 
 - reportを収集と精査で分ける。収集系(内部/外部の収集status、生成query、provider失敗数、
-  候補件数)はtask単位のまま残す。精査系(精査status、採用件数、drop件数、`missing`)はRun単位へ移す。
+  候補件数)はtask単位のまま残す。精査系(精査status、確定根拠件数、`missing`)はRun単位へ移す。
 - `task_index`はresearch taskの識別子であり、精査の帰属を表す値ではない。精査がRun単位になっても
   意味と用途を変えない。採用根拠、収集側のspan、進捗eventはこれまでと同じように`task_index`を持つ。
 - task別の採用内訳は index の逆引きから算出する。reviewer に返させない。
@@ -199,8 +194,8 @@
 - Evidence Reviewer Agent の呼び出しがRunにつき1回であり、全taskの候補を1回の入力で受け取る。
 - 候補入力が`research_goal`ごとにグループ化され、index がグループをまたいだ通し番号である。
 - `missing`がRun全体の不足として1本で表明され、task単位の連結経路が消えている。
-- 外部根拠のURL重複排除が無く、同じURLが別の観点の根拠として並びうる。
-- 内部根拠の`curation_id`重複排除が精査後の位置で効いている。
+- `AnswerEvidence`が回答に使用する確定済み根拠を表し、内部`curation_id`と外部URLの重複排除が
+  精査後の復元時に効いている。
 - 採用上限15件と`missing`上限8件がRun単位の定数として定義され、`max_output_tokens`が上限まで
   採用しても切れない値になっている。
 - 精査が失敗したRunが根拠ゼロで`insufficient`になり、未精査候補を出典として提示しない。
@@ -221,7 +216,7 @@
 | グループ化した候補列の構築 | - | - | ○ | - | - |
 | 根拠の選別と不足の見極め | - | - | 起動 | 実行 | 配線 |
 | index→出典・task の再構築 | - | - | ○ | - | - |
-| 内部根拠の重複排除 | ○ | - | - | - | - |
+| 出典復元・重複排除・回答上限 | - | - | ○ | - | - |
 | citation検証とfinal assembly | ○ | - | - | - | - |
 
 ## 目標実行順
@@ -271,10 +266,11 @@ reviewer の呼び出し単位とcapの単位が食い違う。回答Agentへ渡
 ### 選別結果の復元
 
 - グループをまたいだ index から、候補と所属taskが正しく引かれる。
-- 範囲外index、重複index、Run採用上限超過が決定的にdropされ、drop件数が計上される。
+- 範囲外indexと重複indexが決定的に不採用となる。
 - 同じ内部記事が複数グループで採用されたとき、`curation_id`の先勝ちで1件が残り、落ちた側の
   `claim`がevidenceへ入らない。
-- 同じURLの外部候補が複数グループで採用されたとき、両方が根拠として残る。
+- 同じURLの外部候補が複数グループで採用されたとき、先勝ちで1件が残る。
+- 重複排除後の確定根拠に`ANSWER_EVIDENCE_LIMIT`が適用される。
 
 ### 不足の表明
 

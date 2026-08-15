@@ -17,14 +17,14 @@ from pydantic import ValidationError
 from app.agent.evidence_collection.contract import CollectedTask
 from app.agent.evidence_review.agent import EVIDENCE_REVIEWER_AGENT
 from app.agent.evidence_review.contract import (
+    AnswerEvidence,
     EvidenceReviewInput,
     EvidenceReviewOutcome,
+    EvidenceReviewPreparation,
 )
 from app.agent.evidence_review.policy import (
     EVIDENCE_REVIEW_TIMEOUT_SECONDS,
     REVIEWER_TIMEOUT_REASON,
-    EvidenceReviewPreparation,
-    build_review_evidence,
     finalize_review_draft,
     resolve_reviewer_failure_reason,
 )
@@ -81,27 +81,23 @@ class EvidenceReviewer:
                     continue
 
                 try:
-                    selection_result = finalize_review_draft(draft)
+                    reviewer_response = finalize_review_draft(draft)
                 except ValidationError:
                     failure_reason = AgentResponseDefect.OUTPUT_SCHEMA_MISMATCH.value
                     continue
 
-                internal_evidence, external_evidence, dropped = build_review_evidence(
+                answer_evidence = AnswerEvidence.from_reviewer_response(
                     preparation=preparation,
-                    selection_result=selection_result,
+                    reviewer_response=reviewer_response,
                 )
                 return EvidenceReviewOutcome(
-                    internal_evidence=internal_evidence,
-                    external_evidence=external_evidence,
-                    missing=selection_result.missing,
-                    dropped_selection_count=dropped,
+                    answer_evidence=answer_evidence,
+                    missing=reviewer_response.missing,
                     failure_reason=None,
                 )
         return EvidenceReviewOutcome(
-            internal_evidence=[],
-            external_evidence=[],
-            missing=[],
-            dropped_selection_count=0,
+            answer_evidence=AnswerEvidence(),
+            missing=(),
             failure_reason=failure_reason,
         )
 

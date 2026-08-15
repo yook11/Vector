@@ -800,7 +800,6 @@ async def test_time_filter_resolution_failure_closes_external_branch_before_acti
             captured[0].review.review,
             captured[0].review.internal_evidence_count,
             captured[0].review.external_evidence_count,
-            captured[0].review.dropped_selection_count,
             captured[0].review.review_failure_reason,
             captured[0].review.missing,
         ),
@@ -841,7 +840,7 @@ async def test_time_filter_resolution_failure_closes_external_branch_before_acti
                 0,
             ),
         ],
-        ("skipped_empty", 0, 0, 0, None, []),
+        ("skipped_empty", 0, 0, None, []),
         [(1, {"result": "failed", "reason": expected_reason})],
         [
             {
@@ -1015,14 +1014,14 @@ async def test_workflow_constructs_task_ordered_external_outcome_before_answerin
 
     await _run(runner)
 
-    outcome = captured[0].external_search
+    outcome = captured[0]
     reports = captured[0].task_reports
     review = captured[0].review
     assert (
         [report.research_goal for report in reports],
-        outcome.requested_agent_count,
-        outcome.effective_agent_count,
-        outcome.hard_agent_limit,
+        outcome.requested_external_agent_count,
+        outcome.effective_external_agent_count,
+        outcome.external_agent_hard_limit,
         [
             (
                 report.task_index,
@@ -1032,12 +1031,8 @@ async def test_workflow_constructs_task_ordered_external_outcome_before_answerin
             )
             for report in reports
         ],
-        # S1(合流と重複排除): 外部根拠のURL重複排除は廃止されたため、taskが
-        # 違えば同じURLが両方とも根拠として残る(deduplicated_evidence_count==0)。
-        # 採用件数(internal_evidence_count/external_evidence_count)はtask単位の
-        # fieldではなくEvidenceCollectionOutcome.reviewへ移動した。
-        [item.source_ref for item in outcome.evidence],
-        outcome.deduplicated_evidence_count,
+        # AnswerEvidenceはtaskを跨いでも同じURLを先勝ちで1件に確定する。
+        [item.source_ref for item in outcome.answer_evidence.external_sources],
         (review.review, review.internal_evidence_count, review.external_evidence_count),
     ) == (
         [task.research_goal for task in tasks],
@@ -1048,9 +1043,8 @@ async def test_workflow_constructs_task_ordered_external_outcome_before_answerin
             (0, "succeeded", ["q1"], 1),
             (1, "succeeded", ["q2"], 1),
         ],
-        ["0-0", "1-1"],
-        0,
-        ("succeeded", 0, 2),
+        ["0-0"],
+        ("succeeded", 0, 1),
     )
 
 

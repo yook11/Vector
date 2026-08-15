@@ -414,7 +414,7 @@ evidence answererは `AnsweringRequest` と経路固有入力を受ける。
 async def answer(
     *,
     request: AnsweringRequest,
-    evidence: list[AnswerEvidenceItem],
+    evidence: list[AnswerInputEvidence],
     target_time_window: str | None,
 ) -> EvidenceAnswerDraft: ...
 ```

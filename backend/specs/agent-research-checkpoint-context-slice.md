@@ -29,7 +29,7 @@
 - 得られた情報の正本はEvidence Reviewerのselections(`claim`)、未確認事項の正本は
   Reviewerの`missing`(Run全体で1本)。
 - 上限の正本は`RESEARCH_TASK_LIMIT`、`EXTERNAL_TASK_QUERY_LIMIT`、`EXTERNAL_QUERY_MAX_CHARS`、
-  `EVIDENCE_REVIEW_ADOPTION_LIMIT`、`EVIDENCE_CLAIM_MAX_CHARS`、`EVIDENCE_REVIEW_MISSING_LIMIT`、
+  `ANSWER_EVIDENCE_LIMIT`、`EVIDENCE_CLAIM_MAX_CHARS`、`EVIDENCE_REVIEW_MISSING_LIMIT`、
   `MISSING_ITEM_MAX_CHARS`。いずれも上流で正規化済みの値を受け取る。
 - `QuestionContext.relevant_prior_coverage`は既回答内容(需要側)を表し、検索記録の契約ではない。
 
@@ -109,7 +109,7 @@ Checkpoint固有のcap定数を新設せず、正本を参照する。builderは
 | `tasks`件数 | `RESEARCH_TASK_LIMIT` |
 | `research_goal`文字数 | `RESEARCH_GOAL_MAX_CHARS`(本sliceで新設) |
 | task内`executed_queries`件数 / 文字数 | `EXTERNAL_TASK_QUERY_LIMIT` / `EXTERNAL_QUERY_MAX_CHARS` |
-| Checkpoint全体の`adopted_claims`合計件数 / 1件の文字数 | `EVIDENCE_REVIEW_ADOPTION_LIMIT` / `EVIDENCE_CLAIM_MAX_CHARS` |
+| Checkpoint全体の`adopted_claims`合計件数 / 1件の文字数 | `ANSWER_EVIDENCE_LIMIT` / `EVIDENCE_CLAIM_MAX_CHARS` |
 | `unresolved_after_search`件数 / 1件の文字数 | `EVIDENCE_REVIEW_MISSING_LIMIT` / `MISSING_ITEM_MAX_CHARS` |
 
 `RESEARCH_GOAL_MAX_CHARS = 200`は本sliceで新設し、既存のdraft→plan正規化で切り詰めを

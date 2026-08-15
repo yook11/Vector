@@ -18,7 +18,7 @@ from app.agent.answering.direct_answer.contract import DirectAnswerDraft
 from app.agent.answering.direct_answer.flow import DirectAnswerFlow
 from app.agent.answering.evidence_answer.agent import EVIDENCE_ANSWER_AGENT
 from app.agent.answering.evidence_answer.contract import EvidenceAnswerDraft
-from app.agent.answering.evidence_answer.evidence import AnswerEvidenceItem
+from app.agent.answering.evidence_answer.evidence import AnswerInputEvidence
 from app.agent.answering.evidence_answer.flow import EvidenceAnswerFlow
 from app.agent.contract import (
     ExternalSearchCandidatesFetchedEvent,
@@ -148,7 +148,7 @@ async def _evidence_answer(
             else request
         ),
         evidence=[
-            AnswerEvidenceItem(
+            AnswerInputEvidence(
                 source=ExternalUrlSource(
                     source_ref="1",
                     url="https://example.com/evidence-1",

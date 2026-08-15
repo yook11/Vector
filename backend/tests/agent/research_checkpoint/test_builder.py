@@ -14,6 +14,7 @@ from app.agent.evidence_collection.external_search.contract import (
     ExternalSearchEvidence,
 )
 from app.agent.evidence_review.contract import (
+    AnswerEvidence,
     EvidenceReviewOutcome,
     InternalArticleEvidence,
 )
@@ -69,10 +70,11 @@ def _outcome(
     missing: list[str] | None = None,
 ) -> EvidenceReviewOutcome:
     return EvidenceReviewOutcome(
-        internal_evidence=internal_evidence or [],
-        external_evidence=external_evidence or [],
+        answer_evidence=AnswerEvidence(
+            internal_articles=tuple(internal_evidence or []),
+            external_sources=tuple(external_evidence or []),
+        ),
         missing=missing or [],
-        dropped_selection_count=0,
         failure_reason=None,
     )
 

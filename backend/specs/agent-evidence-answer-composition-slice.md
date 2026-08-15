@@ -80,7 +80,7 @@ Question context preparation により、planner と answerer は次を共有で
 - `app/agent/answering/evidence_answer/json_answer_extractor.py` は root JSON の `answer` stringだけを
   増分復元するため、root field追加は可能だが、`answer`を`sections[]`へ置換すると既存の
   ライブ回答配信を壊す。
-- `app/agent/answering/evidence_answer/evidence.py::AnswerEvidenceItem` は source と text のみを持ち、
+- `app/agent/answering/evidence_answer/evidence.py::AnswerInputEvidence` は source と text のみを持ち、
   external searchの `task_index` / collection goal / `why_selected` はanswererへ渡らない。
 - `app/agent/answering/orchestration.py::_missing_aspects()` は、retrieval empty、collection failure、
   external task missing、draft missingの順で不足理由を結合し、1件でもあれば最終statusを

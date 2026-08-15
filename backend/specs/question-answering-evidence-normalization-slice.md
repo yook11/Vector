@@ -19,7 +19,7 @@ Q&A エージェントの工程 3。retrieval 結果 (`RetrievalOutcome`) を、
 
 工程 3 の実装形態は class ではなく純関数とする (状態・設定・I/O を持たないため)。
 `AnswerEvidenceNormalizer` は仕様上の工程名で、実装名は
-`normalize_answer_evidence()`。
+`build_answer_input_evidence()`。
 
 ## Problem
 
@@ -76,7 +76,7 @@ DB schema 変更なし (query と境界型のみ)。migration 不要。
 `backend/app/agent/answering/evidence.py` (新規):
 
 ```python
-class AnswerEvidenceItem(BaseModel):
+class AnswerInputEvidence(BaseModel):
     """synthesizer 向け本文と provenance 正本を対で持つ根拠 1 件。"""
 
     model_config = ConfigDict(frozen=True)
@@ -85,9 +85,9 @@ class AnswerEvidenceItem(BaseModel):
     text: str = Field(min_length=1)   # 出どころ非依存の本文
 
 
-def normalize_answer_evidence(
+def build_answer_input_evidence(
     outcome: RetrievalOutcome,
-) -> list[AnswerEvidenceItem]:
+) -> list[AnswerInputEvidence]:
     ...
 ```
 
@@ -237,8 +237,8 @@ hit 構築漏れは実行時に必ず検出される。
 
 ## Done
 
-- `normalize_answer_evidence(outcome)` が Invariants A〜E を満たし、
-  `AnswerEvidenceItem(source, text)` のリストを返す。
+- `build_answer_input_evidence(outcome)` が Invariants A〜E を満たし、
+  `AnswerInputEvidence(source, text)` のリストを返す。
 - `RetrievalOutcome` の整合 validator (F) が入っている。
 - 検索 hit が `assessment_id` (公開 /news id 空間) を運んでいる。
 - 上記テストが green。既存 suite (unit + integration) に regression なし。

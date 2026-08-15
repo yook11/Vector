@@ -54,7 +54,7 @@ answer phase、result assembly、progress発火——を`AnsweringRunner.run()`�
   4. planを`match`し、`NoRetrievalPlan`ではprogress `synthesizing` -> `direct_answerer.answer()`
      (previous_answer付き) -> `status="answered"`・sources空のresultを構築する。
   5. retrieval系planではprogress `retrieving` -> `evidence_collector.collect()` ->
-     `normalize_answer_evidence()` -> progress `synthesizing` -> `evidence_answerer.answer()`
+     `build_answer_input_evidence()` -> progress `synthesizing` -> `evidence_answerer.answer()`
      (target_time_window付き)。
   6. `_validate_draft_citations()`が未知citation refを`EvidenceAnswerDraftInvalidError`にする。
   7. `_unfulfilled_requirement_missing_aspects()`が未知requirement idを同errorにし、

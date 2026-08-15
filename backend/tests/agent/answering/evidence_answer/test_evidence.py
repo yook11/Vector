@@ -7,56 +7,21 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 
-from app.agent.answering.evidence_answer.evidence import normalize_answer_evidence
+from app.agent.answering.evidence_answer.evidence import build_answer_input_evidence
 from app.agent.contract import ExternalUrlSource
-from app.agent.evidence_collection import ResearchTaskReport
-from app.agent.evidence_collection.external_search import (
-    ExternalSearchEvidence,
-    ExternalSearchOutcome,
-)
-from app.agent.evidence_review import EvidenceReviewReport, ReviewedEvidence
+from app.agent.evidence_collection.external_search import ExternalSearchEvidence
+from app.agent.evidence_review import AnswerEvidence
 from app.agent.evidence_review.contract import InternalArticleEvidence
-
-
-def _report() -> ResearchTaskReport:
-    """S1: ResearchTaskReportは収集系だけを持つ(review関連はEvidenceReviewReportへ)。
-
-    全testがtask_index=0のevidenceのみを使うため、単一taskの最小reportで足りる。
-    """
-    return ResearchTaskReport(
-        task_index=0,
-        research_goal="NVIDIA の根拠を確認する",
-        internal_collection="succeeded",
-        external_collection="succeeded",
-    )
-
-
-def _review_report(
-    *, internal_evidence_count: int = 0, external_evidence_count: int = 0
-) -> EvidenceReviewReport:
-    return EvidenceReviewReport(
-        review="succeeded",
-        internal_evidence_count=internal_evidence_count,
-        external_evidence_count=external_evidence_count,
-    )
 
 
 def _outcome(
     *,
     internal_evidence: list[InternalArticleEvidence] | None = None,
-    external_search: ExternalSearchOutcome | None = None,
-    internal_evidence_count: int = 0,
-    external_evidence_count: int = 0,
-) -> ReviewedEvidence:
-    """S1: task_reports(収集系)とreview(Run単位の精査系)を分けて組み立てる。"""
-    return ReviewedEvidence(
-        internal_evidence=internal_evidence or [],
-        external_search=external_search,
-        task_reports=[_report()],
-        review=_review_report(
-            internal_evidence_count=internal_evidence_count,
-            external_evidence_count=external_evidence_count,
-        ),
+    external_evidence: list[ExternalSearchEvidence] | None = None,
+) -> AnswerEvidence:
+    return AnswerEvidence(
+        internal_articles=tuple(internal_evidence or []),
+        external_sources=tuple(external_evidence or []),
     )
 
 
@@ -114,16 +79,6 @@ def _external_evidence(
     )
 
 
-def _external_outcome(
-    evidence: list[ExternalSearchEvidence],
-) -> ExternalSearchOutcome:
-    """D4-S2: ExternalSearchOutcome は evidence + agent counts のみを持つため、
-
-    normalize_answer_evidence()の対象外であるtask_reports/tasksは組み立てない。
-    """
-    return ExternalSearchOutcome(evidence=evidence, effective_agent_count=1)
-
-
 def test_normalize_maps_all_internal_and_external_evidence_with_sequential_refs() -> (
     None
 ):
@@ -165,12 +120,10 @@ def test_normalize_maps_all_internal_and_external_evidence_with_sequential_refs(
     ]
     outcome = _outcome(
         internal_evidence=internal_evidence,
-        external_search=_external_outcome(external),
-        internal_evidence_count=2,
-        external_evidence_count=3,
+        external_evidence=external,
     )
 
-    items = normalize_answer_evidence(outcome)
+    items = build_answer_input_evidence(outcome)
 
     assert len(items) == 5
     assert [item.source.source_ref for item in items] == ["1", "2", "3", "4", "5"]
@@ -215,12 +168,10 @@ def test_normalize_preserves_internal_then_external_input_order() -> None:
         ),
     ]
 
-    items = normalize_answer_evidence(
+    items = build_answer_input_evidence(
         _outcome(
             internal_evidence=internal_evidence,
-            external_search=_external_outcome(external),
-            internal_evidence_count=2,
-            external_evidence_count=2,
+            external_evidence=external,
         )
     )
 
@@ -246,10 +197,9 @@ def test_normalize_preserves_external_provenance_and_uses_claim_as_evidence_clai
         source_name="Example News",
     )
 
-    item = normalize_answer_evidence(
+    item = build_answer_input_evidence(
         _outcome(
-            external_search=_external_outcome([evidence]),
-            external_evidence_count=1,
+            external_evidence=[evidence],
         )
     )[0]
 
@@ -271,9 +221,7 @@ def test_normalize_preserves_internal_provenance_with_public_article_id() -> Non
         published_at=published_at,
     )
 
-    item = normalize_answer_evidence(
-        _outcome(internal_evidence=[evidence], internal_evidence_count=1)
-    )[0]
+    item = build_answer_input_evidence(_outcome(internal_evidence=[evidence]))[0]
 
     assert item.source.kind == "internal_article"
     assert item.source.article_id == 301
@@ -319,14 +267,10 @@ def test_normalize_builds_internal_text_from_claim_then_summary_and_key_points()
         claim="外部主張のみ。",
     )
 
-    items = normalize_answer_evidence(
+    items = build_answer_input_evidence(
         _outcome(
             internal_evidence=[internal_with_points, internal_without_points],
-            external_search=_external_outcome(
-                [external_with_snippet, external_without_snippet]
-            ),
-            internal_evidence_count=2,
-            external_evidence_count=2,
+            external_evidence=[external_with_snippet, external_without_snippet],
         )
     )
 
@@ -346,10 +290,9 @@ def test_normalize_ignores_external_local_source_ref() -> None:
         claim="external claim",
     )
 
-    item = normalize_answer_evidence(
+    item = build_answer_input_evidence(
         _outcome(
-            external_search=_external_outcome([evidence]),
-            external_evidence_count=1,
+            external_evidence=[evidence],
         )
     )[0]
 
@@ -365,9 +308,7 @@ def test_normalize_ignores_internal_local_source_ref() -> None:
         summary="summary",
     )
 
-    item = normalize_answer_evidence(
-        _outcome(internal_evidence=[evidence], internal_evidence_count=1)
-    )[0]
+    item = build_answer_input_evidence(_outcome(internal_evidence=[evidence]))[0]
 
     assert item.source.source_ref == "1"
 
@@ -381,10 +322,9 @@ def test_normalize_omits_empty_external_snippet_from_text() -> None:
         snippet="",
     )
 
-    item = normalize_answer_evidence(
+    item = build_answer_input_evidence(
         _outcome(
-            external_search=_external_outcome([evidence]),
-            external_evidence_count=1,
+            external_evidence=[evidence],
         )
     )[0]
 
@@ -398,26 +338,22 @@ def test_normalize_accepts_empty_and_partial_retrieval_outcomes() -> None:
         title="internal only",
         summary="summary",
     )
-    empty_external = ExternalSearchOutcome(evidence=[], effective_agent_count=0)
-
-    assert normalize_answer_evidence(_outcome()) == []
+    assert build_answer_input_evidence(_outcome()) == []
     assert [
         item.source.source_ref
-        for item in normalize_answer_evidence(
+        for item in build_answer_input_evidence(
             _outcome(
                 internal_evidence=[internal_evidence],
-                internal_evidence_count=1,
             )
         )
     ] == ["1"]
-    assert normalize_answer_evidence(_outcome(external_search=None)) == []
+    assert build_answer_input_evidence(_outcome(external_evidence=None)) == []
     assert [
         item.source.source_ref
-        for item in normalize_answer_evidence(
+        for item in build_answer_input_evidence(
             _outcome(
                 internal_evidence=[internal_evidence],
-                external_search=empty_external,
-                internal_evidence_count=1,
+                external_evidence=[],
             )
         )
     ] == ["1"]

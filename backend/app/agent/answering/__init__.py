@@ -18,15 +18,15 @@ from app.agent.answering.evidence_answer.contract import (
     EvidenceAnswerUnavailable,
 )
 from app.agent.answering.evidence_answer.evidence import (
-    AnswerEvidenceItem,
-    normalize_answer_evidence,
+    AnswerInputEvidence,
+    build_answer_input_evidence,
 )
 from app.agent.answering.evidence_answer.flow import EvidenceAnswerFlow
 
 __all__ = [
     "AnsweringRequest",
     "AnswerGenerationStopped",
-    "AnswerEvidenceItem",
+    "AnswerInputEvidence",
     "DirectAnswerDraft",
     "DirectAnswerer",
     "DirectAnswerInput",
@@ -39,5 +39,5 @@ __all__ = [
     "EvidenceAnswerFlow",
     "EvidenceAnswerOutcome",
     "EvidenceAnswerUnavailable",
-    "normalize_answer_evidence",
+    "build_answer_input_evidence",
 ]

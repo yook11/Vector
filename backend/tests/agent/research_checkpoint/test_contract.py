@@ -19,7 +19,7 @@ from app.agent.evidence_collection.external_search.contract import (
     MISSING_ITEM_MAX_CHARS,
 )
 from app.agent.evidence_review.contract import (
-    EVIDENCE_REVIEW_ADOPTION_LIMIT,
+    ANSWER_EVIDENCE_LIMIT,
     EVIDENCE_REVIEW_MISSING_LIMIT,
 )
 from app.agent.planning.contract import RESEARCH_GOAL_MAX_CHARS, RESEARCH_TASK_LIMIT
@@ -42,8 +42,7 @@ def test_legacy_import_sites_re_export_the_same_shared_contract_objects() -> Non
         EXTERNAL_QUERY_MAX_CHARS is shared_contract.EXTERNAL_QUERY_MAX_CHARS,
         EVIDENCE_CLAIM_MAX_CHARS is shared_contract.EVIDENCE_CLAIM_MAX_CHARS,
         MISSING_ITEM_MAX_CHARS is shared_contract.MISSING_ITEM_MAX_CHARS,
-        EVIDENCE_REVIEW_ADOPTION_LIMIT
-        is shared_contract.EVIDENCE_REVIEW_ADOPTION_LIMIT,
+        ANSWER_EVIDENCE_LIMIT is shared_contract.ANSWER_EVIDENCE_LIMIT,
         EVIDENCE_REVIEW_MISSING_LIMIT is shared_contract.EVIDENCE_REVIEW_MISSING_LIMIT,
     ) == (True,) * 10
 
@@ -188,8 +187,8 @@ def test_executed_query_rejects_one_char_over_the_max_limit() -> None:
 
 def test_checkpoint_accepts_adopted_claims_total_at_exactly_the_limit() -> None:
     """adopted_claimsの上限はtask個別ではなくCheckpoint全task合計で境界になる。"""
-    first_task_claim_count = EVIDENCE_REVIEW_ADOPTION_LIMIT // 2
-    second_task_claim_count = EVIDENCE_REVIEW_ADOPTION_LIMIT - first_task_claim_count
+    first_task_claim_count = ANSWER_EVIDENCE_LIMIT // 2
+    second_task_claim_count = ANSWER_EVIDENCE_LIMIT - first_task_claim_count
     tasks = (
         _task_record(
             research_goal="goal-a",
@@ -207,16 +206,14 @@ def test_checkpoint_accepts_adopted_claims_total_at_exactly_the_limit() -> None:
 
     assert (
         sum(len(task.adopted_claims) for task in checkpoint.tasks)
-        == EVIDENCE_REVIEW_ADOPTION_LIMIT
+        == ANSWER_EVIDENCE_LIMIT
     )
 
 
 def test_checkpoint_rejects_adopted_claims_total_across_tasks_over_the_limit() -> None:
     """1 taskだけでは上限内でも、複数taskへ分散した合計が超過すれば拒否される。"""
-    first_task_claim_count = EVIDENCE_REVIEW_ADOPTION_LIMIT // 2
-    second_task_claim_count = (
-        EVIDENCE_REVIEW_ADOPTION_LIMIT - first_task_claim_count + 1
-    )
+    first_task_claim_count = ANSWER_EVIDENCE_LIMIT // 2
+    second_task_claim_count = ANSWER_EVIDENCE_LIMIT - first_task_claim_count + 1
     tasks = (
         _task_record(
             research_goal="goal-a",

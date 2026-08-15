@@ -273,7 +273,7 @@ task_groupsは、調査目的(research_goal)ごとにグループ化された候
 
 - 現行 v2 から意図的に削除する規則: 役割宣言、content_requirements への言及すべて
   (「空の場合は research_goal だけで判断」という fallback 含む)。
-- response schema は selections / missing に maxItems(`EVIDENCE_REVIEW_ADOPTION_LIMIT` /
+- response schema は selections / missing に maxItems(`EVIDENCE_REVIEWER_SELECTION_LIMIT` /
   `EVIDENCE_REVIEW_MISSING_LIMIT` を参照)を追加し、description を 1 行定義へ落とす
   (上限・「日本語で書く」等の規則文を description から削除。上限の実強制は
   現行どおり Python 側の切り詰め・検証が保証する)。1 行定義は

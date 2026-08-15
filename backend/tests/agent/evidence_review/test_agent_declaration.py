@@ -19,8 +19,8 @@ import app.agent.evidence_review.prompts as evidence_review_prompts_module
 from app.agent.agent import Agent
 from app.agent.evidence_review.agent import EVIDENCE_REVIEWER_AGENT
 from app.agent.evidence_review.contract import (
-    EVIDENCE_REVIEW_ADOPTION_LIMIT,
     EVIDENCE_REVIEW_MISSING_LIMIT,
+    EVIDENCE_REVIEWER_SELECTION_LIMIT,
     EvidenceCandidateProjection,
     EvidenceReviewDraft,
     EvidenceReviewInput,
@@ -222,7 +222,7 @@ def test_agent_holds_the_complete_model_visible_response_schema() -> None:
     schema の maxItems が構造的に強制し、description は1行定義に留まる
     (上限・言語規則の文言は description から消える)。
     """
-    adoption_limit = EVIDENCE_REVIEW_ADOPTION_LIMIT
+    selection_limit = EVIDENCE_REVIEWER_SELECTION_LIMIT
     missing_limit = EVIDENCE_REVIEW_MISSING_LIMIT
 
     schema = _plain_schema(EVIDENCE_REVIEWER_AGENT.response_schema)
@@ -235,7 +235,7 @@ def test_agent_holds_the_complete_model_visible_response_schema() -> None:
             "selections": {
                 "type": "array",
                 "description": "候補をindexで参照する採用リスト。",
-                "maxItems": adoption_limit,
+                "maxItems": selection_limit,
                 "items": {
                     "type": "object",
                     "additionalProperties": False,

@@ -545,13 +545,13 @@ def _capture_external_outcome(
     monkeypatch: pytest.MonkeyPatch,
 ) -> list[Any]:
     captured: list[Any] = []
-    original = answering_runner_module.normalize_answer_evidence
+    original = answering_runner_module.assemble_evidence_result
 
-    def capture(outcome: Any) -> Any:
-        captured.append(outcome)
-        return original(outcome)
+    def capture(**kwargs: Any) -> Any:
+        captured.append(kwargs["outcome"])
+        return original(**kwargs)
 
-    monkeypatch.setattr(answering_runner_module, "normalize_answer_evidence", capture)
+    monkeypatch.setattr(answering_runner_module, "assemble_evidence_result", capture)
     return captured
 
 
@@ -861,11 +861,7 @@ async def test_runner_forwards_review_missing_to_the_evidence_answerer() -> None
 
 @pytest.mark.asyncio
 async def test_runner_passes_search_plan_values_to_query_input() -> None:
-    """D4-S2: ExternalSearchOutcomeはtasks fieldを持たないtrim済みshapeのため、
-
-    planのgoal/time windowが伝わったことはquery agentへの実際の入力
-    (runtime.calls)だけで検証する。
-    """
+    """planのgoal/time windowをquery agentへの実際の入力で検証する。"""
     timeline: list[str] = []
     task = _task("verify typed input")
     runtime = ScriptedAgentRuntime([_query_draft()])
@@ -1708,7 +1704,7 @@ async def test_time_filter_failure_still_collects_internal_hits_for_every_task(
         # Run全体としてreview="succeeded"で完了扱いになる(review関連field
         # はResearchTaskReportからEvidenceCollectionOutcome.reviewへ移動)。
         captured[0].review.review,
-        {item.title for item in captured[0].internal_evidence},
+        {item.title for item in captured[0].answer_evidence.internal_articles},
     ) == (
         1,
         ["time_filter_failed", "time_filter_failed"],
@@ -1857,7 +1853,7 @@ async def test_internal_hits_merge_by_task_index_order_with_first_win_dedup(
 
     assert (
         completion_order,
-        [item.title for item in captured[0].internal_evidence],
+        [item.title for item in captured[0].answer_evidence.internal_articles],
     ) == (
         ["task1", "task0"],
         ["task0-shared", "task0-unique", "task1-unique"],
@@ -1946,4 +1942,6 @@ async def test_some_tasks_incomplete_keeps_the_phrase_to_one_line_and_keeps_sour
     assert reports[0].internal_collection == "failed"
     assert reports[1].internal_collection == "succeeded"
     assert captured[0].review.review == "succeeded"
-    assert [item.title for item in captured[0].internal_evidence] == ["survivor"]
+    assert [item.title for item in captured[0].answer_evidence.internal_articles] == [
+        "survivor"
+    ]

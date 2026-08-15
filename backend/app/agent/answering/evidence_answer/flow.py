@@ -13,7 +13,7 @@ from app.agent.answering.evidence_answer.contract import (
     EvidenceAnswerOutcome,
     EvidenceAnswerUnavailable,
 )
-from app.agent.answering.evidence_answer.evidence import AnswerEvidenceItem
+from app.agent.answering.evidence_answer.evidence import AnswerInputEvidence
 from app.agent.answering.evidence_answer.validation import (
     finalize_evidence_answer_draft,
 )
@@ -79,7 +79,7 @@ class EvidenceAnswerFlow:
         self,
         *,
         request: AnsweringRequest,
-        evidence: list[AnswerEvidenceItem],
+        evidence: list[AnswerInputEvidence],
         target_time_window: TargetTimeWindow | None,
         review_missing: tuple[str, ...],
     ) -> EvidenceAnswerOutcome:
@@ -139,7 +139,7 @@ class EvidenceAnswerFlow:
         *,
         runtime: StreamingAgentRuntime,
         request: AnsweringRequest,
-        evidence: list[AnswerEvidenceItem],
+        evidence: list[AnswerInputEvidence],
         target_time_window: TargetTimeWindow | None,
         repair_context: str | None,
         previous_output_truncated: bool,

@@ -13,15 +13,15 @@ from app.agent.answering.evidence_answer.contract import (
     EvidenceAnswerDraft,
     EvidenceAnswerDraftInvalidError,
 )
-from app.agent.answering.evidence_answer.evidence import AnswerEvidenceItem
+from app.agent.answering.evidence_answer.evidence import AnswerInputEvidence
 from app.agent.answering.evidence_answer.validation import (
     finalize_evidence_answer_draft,
 )
 from app.agent.contract import ExternalUrlSource
 
 
-def _evidence(source_ref: str = "1") -> AnswerEvidenceItem:
-    return AnswerEvidenceItem(
+def _evidence(source_ref: str = "1") -> AnswerInputEvidence:
+    return AnswerInputEvidence(
         source=ExternalUrlSource(
             source_ref=source_ref,
             url="https://example.com/source",
@@ -33,7 +33,7 @@ def _evidence(source_ref: str = "1") -> AnswerEvidenceItem:
 
 
 def _finalize(
-    answer: str, *, evidence: list[AnswerEvidenceItem]
+    answer: str, *, evidence: list[AnswerInputEvidence]
 ) -> EvidenceAnswerDraft:
     return finalize_evidence_answer_draft(answer, evidence=evidence)
 

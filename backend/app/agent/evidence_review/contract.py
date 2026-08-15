@@ -16,31 +16,41 @@ from typing import Literal, Self
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from app.agent.contract import (
-    EVIDENCE_REVIEW_ADOPTION_LIMIT,
+    ANSWER_EVIDENCE_LIMIT,
     EVIDENCE_REVIEW_MISSING_LIMIT,
+    EVIDENCE_REVIEWER_SELECTION_LIMIT,
 )
-from app.agent.evidence_collection.contract import ResearchTaskReport
-from app.agent.evidence_collection.external_search import ExternalSearchOutcome
+from app.agent.evidence_collection.contract import CollectedTask, ResearchTaskReport
 from app.agent.evidence_collection.external_search.contract import (
+    CANDIDATE_SNIPPET_MAX_CHARS,
     EVIDENCE_CLAIM_MAX_CHARS,
     EVIDENCE_WHY_SELECTED_MAX_CHARS,
+    EXTERNAL_SEARCH_AGENT_HARD_LIMIT,
     MISSING_ITEM_MAX_CHARS,
+    ExternalSearchCandidate,
     ExternalSearchEvidence,
+)
+from app.agent.evidence_collection.internal_search.contract import (
+    InternalArticleSearchHit,
 )
 
 __all__ = [
-    "EVIDENCE_REVIEW_ADOPTION_LIMIT",
+    "ANSWER_EVIDENCE_LIMIT",
     "EVIDENCE_REVIEW_MISSING_LIMIT",
+    "EVIDENCE_REVIEWER_SELECTION_LIMIT",
+    "AnswerEvidence",
     "EvidenceCandidateProjection",
     "EvidenceReviewDraft",
     "EvidenceReviewInput",
     "EvidenceReviewOutcome",
+    "EvidenceReviewPreparation",
     "EvidenceReviewReport",
-    "EvidenceReviewResult",
+    "EvidenceReviewerResponse",
     "EvidenceReviewStatus",
     "EvidenceReviewTaskGroup",
     "InternalArticleEvidence",
-    "ReviewSelection",
+    "ReviewCandidateEntry",
+    "EvidenceReviewerSelection",
     "ReviewSelectionDraft",
     "ReviewedEvidence",
     "RunReviewResult",
@@ -75,6 +85,85 @@ class EvidenceReviewInput:
     as_of: datetime
 
 
+@dataclass(frozen=True, slots=True)
+class ReviewCandidateEntry:
+    """通し番号1つに対応する、Reviewerへ見せる前の元候補。"""
+
+    index: int
+    task_index: int
+    source: InternalArticleSearchHit | ExternalSearchCandidate
+
+
+@dataclass(frozen=True, slots=True)
+class EvidenceReviewPreparation:
+    """Reviewerへの候補投影と、番号から元候補を引く控えを同じ採番で保持する。"""
+
+    task_groups: tuple[EvidenceReviewTaskGroup, ...]
+    _candidate_entries: tuple[ReviewCandidateEntry, ...]
+
+    @classmethod
+    def from_tasks(cls, tasks: list[CollectedTask]) -> EvidenceReviewPreparation:
+        """task順・グループ内は内部先で、投影と控えを同時に採番する。"""
+        ordered_tasks = sorted(tasks, key=lambda task: task.task_index)
+        review_tasks: list[EvidenceReviewTaskGroup] = []
+        entries: list[ReviewCandidateEntry] = []
+        for task in ordered_tasks:
+            candidates: list[EvidenceCandidateProjection] = []
+            for hit in task.internal_hits:
+                index = len(entries)
+                candidates.append(
+                    EvidenceCandidateProjection(
+                        index=index,
+                        title=hit.content.title,
+                        source_name=None,
+                        published_at=hit.content.published_at,
+                        snippet=_internal_candidate_snippet(hit),
+                    )
+                )
+                entries.append(
+                    ReviewCandidateEntry(
+                        index=index,
+                        task_index=task.task_index,
+                        source=hit,
+                    )
+                )
+            for candidate in task.external_candidates:
+                index = len(entries)
+                candidates.append(
+                    EvidenceCandidateProjection(
+                        index=index,
+                        title=candidate.title,
+                        source_name=candidate.source_name,
+                        published_at=candidate.published_at,
+                        snippet=candidate.snippet,
+                    )
+                )
+                entries.append(
+                    ReviewCandidateEntry(
+                        index=index,
+                        task_index=task.task_index,
+                        source=candidate,
+                    )
+                )
+            review_tasks.append(
+                EvidenceReviewTaskGroup(
+                    task_index=task.task_index,
+                    research_goal=task.research_goal,
+                    candidates=tuple(candidates),
+                )
+            )
+        return cls(
+            task_groups=tuple(review_tasks),
+            _candidate_entries=tuple(entries),
+        )
+
+    def resolve_candidate(self, candidate_index: int) -> ReviewCandidateEntry | None:
+        """Reviewerへ見せた番号だけを元候補へ解決する。"""
+        if 0 <= candidate_index < len(self._candidate_entries):
+            return self._candidate_entries[candidate_index]
+        return None
+
+
 class ReviewSelectionDraft(BaseModel):
     """Reviewerがcandidate indexを参照して返すdraft 1件。"""
 
@@ -94,8 +183,8 @@ class EvidenceReviewDraft(BaseModel):
     missing: list[str]
 
 
-class ReviewSelection(BaseModel):
-    """Reviewerが返す精査済み選別1件。URLは返さずindexでcandidateを参照する。"""
+class EvidenceReviewerSelection(BaseModel):
+    """Evidence Reviewerが返した、採用確定前の選択1件。"""
 
     model_config = ConfigDict(frozen=True)
 
@@ -107,24 +196,27 @@ class ReviewSelection(BaseModel):
     )
 
 
-class EvidenceReviewResult(BaseModel):
-    """Reviewerの精査結果。自由記述欄のcapはfactoryで丸める。"""
+class EvidenceReviewerResponse(BaseModel):
+    """Evidence Reviewerが返した選択と不足事項。自由記述欄はfactoryで丸める。"""
 
     model_config = ConfigDict(frozen=True)
 
-    selections: list[ReviewSelection] = Field(default_factory=list)
-    missing: list[str] = Field(default_factory=list)
+    selections: tuple[EvidenceReviewerSelection, ...] = Field(
+        default_factory=tuple,
+        max_length=EVIDENCE_REVIEWER_SELECTION_LIMIT,
+    )
+    missing: tuple[str, ...] = ()
 
     @classmethod
     def from_raw(
         cls,
         *,
-        selections: Sequence[ReviewSelection | Mapping[str, object]],
+        selections: Sequence[EvidenceReviewerSelection | Mapping[str, object]],
         missing: Sequence[str],
-    ) -> EvidenceReviewResult:
-        clamped_selections: list[ReviewSelection] = []
+    ) -> EvidenceReviewerResponse:
+        clamped_selections: list[EvidenceReviewerSelection] = []
         for selection in selections:
-            if isinstance(selection, ReviewSelection):
+            if isinstance(selection, EvidenceReviewerSelection):
                 clamped_selections.append(selection)
                 continue
             item = dict(selection)
@@ -135,15 +227,15 @@ class EvidenceReviewResult(BaseModel):
                     item["why_selected"],
                     EVIDENCE_WHY_SELECTED_MAX_CHARS,
                 )
-            clamped_selections.append(ReviewSelection.model_validate(item))
+            clamped_selections.append(EvidenceReviewerSelection.model_validate(item))
 
         return cls(
-            selections=clamped_selections,
+            selections=tuple(clamped_selections),
             missing=_clamp_missing(missing),
         )
 
     @model_validator(mode="after")
-    def _validate_missing_caps(self) -> EvidenceReviewResult:
+    def _validate_missing_caps(self) -> EvidenceReviewerResponse:
         if len(self.missing) > EVIDENCE_REVIEW_MISSING_LIMIT:
             raise ValueError("missing exceeds evidence review missing limit")
         if any(len(item) > MISSING_ITEM_MAX_CHARS for item in self.missing):
@@ -171,22 +263,170 @@ class InternalArticleEvidence(BaseModel):
     published_at: datetime | None = None
 
 
+class AnswerEvidence(BaseModel):
+    """出典を復元し、重複排除と件数制限を終えた回答用Evidence。"""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    internal_articles: tuple[InternalArticleEvidence, ...] = ()
+    external_sources: tuple[ExternalSearchEvidence, ...] = ()
+
+    @classmethod
+    def from_reviewer_response(
+        cls,
+        *,
+        preparation: EvidenceReviewPreparation,
+        reviewer_response: EvidenceReviewerResponse,
+    ) -> AnswerEvidence:
+        """Reviewerの選択から出典を復元し、一意な回答用Evidenceを構築する。"""
+        internal_articles: list[InternalArticleEvidence] = []
+        external_sources: list[ExternalSearchEvidence] = []
+        selected_indexes: set[int] = set()
+        seen_curation_ids: set[int] = set()
+        seen_urls: set[str] = set()
+
+        for selection in reviewer_response.selections:
+            index = selection.candidate_index
+            entry = preparation.resolve_candidate(index)
+            if entry is None or index in selected_indexes:
+                continue
+
+            selected_indexes.add(index)
+            source_ref = f"{entry.task_index}-{index}"
+            if isinstance(entry.source, InternalArticleSearchHit):
+                curation_id = entry.source.article.curation_id
+                if curation_id in seen_curation_ids:
+                    continue
+                seen_curation_ids.add(curation_id)
+                internal_articles.append(
+                    _build_internal_evidence(
+                        hit=entry.source,
+                        selection=selection,
+                        source_ref=source_ref,
+                        task_index=entry.task_index,
+                    )
+                )
+            else:
+                url = str(entry.source.url)
+                if url in seen_urls:
+                    continue
+                seen_urls.add(url)
+                external_sources.append(
+                    _build_external_evidence(
+                        candidate=entry.source,
+                        selection=selection,
+                        source_ref=source_ref,
+                        task_index=entry.task_index,
+                    )
+                )
+
+            if len(internal_articles) + len(external_sources) >= ANSWER_EVIDENCE_LIMIT:
+                break
+
+        return cls(
+            internal_articles=tuple(internal_articles),
+            external_sources=tuple(external_sources),
+        )
+
+    @property
+    def count(self) -> int:
+        return len(self.internal_articles) + len(self.external_sources)
+
+    @model_validator(mode="after")
+    def _validate_answer_evidence(self) -> Self:
+        if self.count > ANSWER_EVIDENCE_LIMIT:
+            raise ValueError("answer evidence exceeds input limit")
+
+        curation_ids = [item.curation_id for item in self.internal_articles]
+        if len(curation_ids) != len(set(curation_ids)):
+            raise ValueError("internal answer evidence curation_id must be unique")
+
+        urls = [str(item.url) for item in self.external_sources]
+        if len(urls) != len(set(urls)):
+            raise ValueError("external answer evidence URL must be unique")
+
+        source_refs = [item.source_ref for item in self.internal_articles] + [
+            item.source_ref for item in self.external_sources
+        ]
+        if len(source_refs) != len(set(source_refs)):
+            raise ValueError("answer evidence source_ref must be unique")
+        return self
+
+
+def _internal_candidate_snippet(hit: InternalArticleSearchHit) -> str:
+    content = hit.content
+    if not content.key_points:
+        combined = content.summary
+    else:
+        key_points = "\n".join(f"- {point}" for point in content.key_points)
+        combined = f"{content.summary}\n{key_points}"
+    return combined[:CANDIDATE_SNIPPET_MAX_CHARS]
+
+
+def _build_internal_evidence(
+    *,
+    hit: InternalArticleSearchHit,
+    selection: EvidenceReviewerSelection,
+    source_ref: str,
+    task_index: int,
+) -> InternalArticleEvidence:
+    return InternalArticleEvidence(
+        source_ref=source_ref,
+        task_index=task_index,
+        claim=selection.claim,
+        why_selected=selection.why_selected,
+        assessment_id=hit.assessment_id,
+        curation_id=hit.article.curation_id,
+        title=hit.content.title,
+        summary=hit.content.summary,
+        key_points=hit.content.key_points,
+        published_at=hit.content.published_at,
+    )
+
+
+def _build_external_evidence(
+    *,
+    candidate: ExternalSearchCandidate,
+    selection: EvidenceReviewerSelection,
+    source_ref: str,
+    task_index: int,
+) -> ExternalSearchEvidence:
+    return ExternalSearchEvidence(
+        source_ref=source_ref,
+        task_index=task_index,
+        claim=selection.claim,
+        why_selected=selection.why_selected,
+        url=candidate.url,
+        title=candidate.title,
+        snippet=candidate.snippet,
+        published_at=candidate.published_at,
+        source_name=candidate.source_name,
+    )
+
+
 @dataclass(frozen=True, slots=True)
 class EvidenceReviewOutcome:
-    """EvidenceReviewer.review()が返すRun全体の精査結果。合流前の中間値。"""
+    """EvidenceReviewer.review()が返す、回答用Evidenceを含むRun全体の精査結果。"""
 
-    internal_evidence: list[InternalArticleEvidence]
-    external_evidence: list[ExternalSearchEvidence]
-    missing: list[str]
-    dropped_selection_count: int
+    answer_evidence: AnswerEvidence
+    missing: tuple[str, ...]
     failure_reason: str | None
 
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "missing", tuple(self.missing))
+        if self.failure_reason is not None and (
+            self.answer_evidence.count > 0 or self.missing
+        ):
+            raise ValueError(
+                "failed review outcome must keep evidence and missing empty"
+            )
 
-def _clamp_missing(missing: Sequence[str]) -> list[str]:
-    return [
+
+def _clamp_missing(missing: Sequence[str]) -> tuple[str, ...]:
+    return tuple(
         _truncate_text(item, MISSING_ITEM_MAX_CHARS)
         for item in missing[:EVIDENCE_REVIEW_MISSING_LIMIT]
-    ]
+    )
 
 
 def _truncate_text(value: object, max_chars: int) -> str:
@@ -205,7 +445,6 @@ class EvidenceReviewReport(BaseModel):
     review_failure_reason: str | None = None
     internal_evidence_count: int = Field(default=0, ge=0)
     external_evidence_count: int = Field(default=0, ge=0)
-    dropped_selection_count: int = Field(default=0, ge=0)
     missing: list[str] = Field(default_factory=list)
 
     @model_validator(mode="after")
@@ -213,7 +452,6 @@ class EvidenceReviewReport(BaseModel):
         if self.review == "skipped_empty" and (
             self.internal_evidence_count != 0
             or self.external_evidence_count != 0
-            or self.dropped_selection_count != 0
             or self.missing
             or self.review_failure_reason is not None
         ):
@@ -233,9 +471,9 @@ class EvidenceReviewReport(BaseModel):
             raise ValueError("missing item exceeds max length")
         if (
             self.internal_evidence_count + self.external_evidence_count
-            > EVIDENCE_REVIEW_ADOPTION_LIMIT
+            > ANSWER_EVIDENCE_LIMIT
         ):
-            raise ValueError("evidence count exceeds adoption cap")
+            raise ValueError("evidence count exceeds answer evidence limit")
         return self
 
 
@@ -244,9 +482,13 @@ class ReviewedEvidence(BaseModel):
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
-    internal_evidence: list[InternalArticleEvidence] = Field(default_factory=list)
-    internal_deduplicated_count: int = Field(default=0, ge=0)
-    external_search: ExternalSearchOutcome | None = None
+    answer_evidence: AnswerEvidence = Field(default_factory=AnswerEvidence)
+    requested_external_agent_count: int | None = None
+    effective_external_agent_count: int = Field(default=0, ge=0)
+    external_agent_hard_limit: int = Field(
+        default=EXTERNAL_SEARCH_AGENT_HARD_LIMIT,
+        ge=1,
+    )
     task_reports: list[ResearchTaskReport] = Field(min_length=1)
     review: EvidenceReviewReport
 
@@ -256,35 +498,23 @@ class ReviewedEvidence(BaseModel):
         if report_indexes != set(range(len(self.task_reports))):
             raise ValueError("task reports must cover each task index exactly once")
 
-        external_evidence = (
-            self.external_search.evidence if self.external_search is not None else []
-        )
-        evidence_task_indexes = {item.task_index for item in self.internal_evidence}
-        evidence_task_indexes |= {item.task_index for item in external_evidence}
+        evidence_task_indexes = {
+            item.task_index for item in self.answer_evidence.internal_articles
+        }
+        evidence_task_indexes |= {
+            item.task_index for item in self.answer_evidence.external_sources
+        }
         if not evidence_task_indexes <= report_indexes:
             raise ValueError("evidence task_index must reference a reported task")
 
-        source_refs = [item.source_ref for item in self.internal_evidence] + [
-            item.source_ref for item in external_evidence
-        ]
-        if len(source_refs) != len(set(source_refs)):
-            raise ValueError(
-                "evidence source_ref must be unique across internal and external"
-            )
-
-        external_deduplicated_count = (
-            self.external_search.deduplicated_evidence_count
-            if self.external_search is not None
-            else 0
-        )
-        if self.review.internal_evidence_count != (
-            len(self.internal_evidence) + self.internal_deduplicated_count
+        if self.review.internal_evidence_count != len(
+            self.answer_evidence.internal_articles
         ):
             raise ValueError(
                 "review internal evidence count must match outcome evidence"
             )
-        if self.review.external_evidence_count != (
-            len(external_evidence) + external_deduplicated_count
+        if self.review.external_evidence_count != len(
+            self.answer_evidence.external_sources
         ):
             raise ValueError(
                 "review external evidence count must match outcome evidence"

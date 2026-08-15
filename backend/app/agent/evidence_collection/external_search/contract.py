@@ -41,7 +41,6 @@ __all__ = [
     "ExternalSearchCandidate",
     "ExternalSearchDateFilter",
     "ExternalSearchEvidence",
-    "ExternalSearchOutcome",
     "ExternalSearchProviderError",
     "ExternalResearchRuntime",
     "ExternalResearchRuntimeFactory",
@@ -244,22 +243,3 @@ class ExternalSearchEvidence(BaseModel):
     snippet: str | None = None
     published_at: datetime | None = None
     source_name: str | None = None
-
-
-class ExternalSearchOutcome(BaseModel):
-    """外部検索が選別した根拠と、丸め後の実行ポリシー。"""
-
-    model_config = ConfigDict(frozen=True)
-
-    evidence: list[ExternalSearchEvidence] = Field(default_factory=list)
-    deduplicated_evidence_count: int = Field(default=0, ge=0)
-    requested_agent_count: int | None = None
-    effective_agent_count: int = Field(default=0, ge=0)
-    hard_agent_limit: int = Field(default=EXTERNAL_SEARCH_AGENT_HARD_LIMIT, ge=1)
-
-    @model_validator(mode="after")
-    def _validate_source_ref_uniqueness(self) -> ExternalSearchOutcome:
-        source_refs = [evidence.source_ref for evidence in self.evidence]
-        if len(source_refs) != len(set(source_refs)):
-            raise ValueError("external evidence source_ref must be unique")
-        return self
