@@ -6,7 +6,6 @@ import pytest
 from pydantic import ValidationError
 
 from app.agent.contract import EVIDENCE_REVIEW_MISSING_LIMIT
-from app.agent.evidence_collection.external_search import ExternalSearchEvidence
 from app.agent.evidence_collection.external_search.contract import (
     MISSING_ITEM_MAX_CHARS,
 )
@@ -14,6 +13,7 @@ from app.agent.evidence_review import (
     AnswerEvidence,
     EvidenceRunCompleted,
     EvidenceRunFailed,
+    ExternalSearchEvidence,
 )
 from app.agent.evidence_review.result import InternalArticleEvidence
 

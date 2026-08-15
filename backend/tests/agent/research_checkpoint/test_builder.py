@@ -12,12 +12,10 @@ from typing import Any
 
 import pytest
 
-from app.agent.evidence_collection.external_search.contract import (
-    ExternalSearchEvidence,
-)
 from app.agent.evidence_review.result import (
     AnswerEvidence,
     EvidenceRunCompleted,
+    ExternalSearchEvidence,
     InternalArticleEvidence,
 )
 from app.agent.planning.contract import ResearchTask, SearchPlan

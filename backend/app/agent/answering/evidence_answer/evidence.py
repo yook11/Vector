@@ -5,8 +5,11 @@ from __future__ import annotations
 from pydantic import BaseModel, ConfigDict, Field
 
 from app.agent.contract import AnswerSource, ExternalUrlSource, InternalArticleSource
-from app.agent.evidence_collection.external_search import ExternalSearchEvidence
-from app.agent.evidence_review import AnswerEvidence, InternalArticleEvidence
+from app.agent.evidence_review import (
+    AnswerEvidence,
+    ExternalSearchEvidence,
+    InternalArticleEvidence,
+)
 
 __all__ = ["AnswerInputEvidence", "build_answer_input_evidence"]
 
