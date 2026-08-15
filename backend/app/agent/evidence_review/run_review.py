@@ -11,7 +11,6 @@ from app.agent.evidence_collection.external_search.contract import (
 from app.agent.evidence_review.result import (
     AnswerEvidence,
     EvidenceRunCompleted,
-    EvidenceRunFailed,
     EvidenceRunResult,
 )
 from app.agent.evidence_review.reviewer import EvidenceReviewer
@@ -26,22 +25,15 @@ async def review_collected_news(
     external: ExternalResearchRuntime,
     as_of: datetime,
 ) -> EvidenceRunResult:
-    """候補ゼロは空の正常完了、精査失敗は専用の失敗結果で返す。"""
+    """候補ゼロはreviewerを呼ばずに空の正常完了で閉じる。"""
     if not collected_news.has_candidates:
         return EvidenceRunCompleted(
             answer_evidence=AnswerEvidence(),
             review_missing=(),
         )
 
-    outcome = await reviewer.review(
+    return await reviewer.review(
         tasks=collected_news.tasks,
         as_of=as_of,
         reviewer_runtime=external.reviewer_runtime,
-    )
-    if outcome.failure_reason is not None:
-        return EvidenceRunFailed(failure_reason=outcome.failure_reason)
-
-    return EvidenceRunCompleted(
-        answer_evidence=outcome.answer_evidence,
-        review_missing=outcome.missing,
     )

@@ -173,7 +173,8 @@ async def test_successful_review_completes_with_restored_evidence() -> None:
 
 
 @pytest.mark.asyncio
-async def test_reviewer_failure_becomes_failed_result_with_safe_reason() -> None:
+async def test_reviewer_failure_is_returned_as_the_run_result() -> None:
+    """精査失敗の分類はreviewerが所有し、ここではその結果をそのまま返すことを見る。"""
     failure = AgentResponseInvalidError(AgentResponseDefect.RESPONSE_NOT_JSON)
     reviewer_runtime = ScriptedAgentRuntime([failure, failure])
 
