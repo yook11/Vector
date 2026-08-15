@@ -3,12 +3,15 @@
 `EvidenceAnswerDraft`はanswerとcited_refsだけを持つようになり、
 `assemble_evidence_result()`からcontext引数(requirement参照が唯一の用途)が
 消える。missing_aspectsは機構(retrieval empty / incomplete task / time filter /
-review.missing)と生成不能の1行だけで組み立てられ、要望由来の文言は無くなる。
+review_missing)と生成不能の1行だけで組み立てられ、要望由来の文言は無くなる。
 """
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import Any
+
+import pytest
 
 from app.agent.answering.evidence_answer.contract import (
     EvidenceAnswerDraft,
@@ -21,8 +24,18 @@ from app.agent.answering.result_assembly import (
     assemble_evidence_result,
 )
 from app.agent.contract import InternalArticleSource
-from app.agent.evidence_collection import ResearchTaskReport
-from app.agent.evidence_review import EvidenceReviewReport, ReviewedEvidence
+from app.agent.evidence_collection import (
+    CollectedNews,
+    CollectedTask,
+    ResearchTaskReport,
+)
+from app.agent.evidence_review import (
+    AnswerEvidence,
+    EvidenceRunCompleted,
+    EvidenceRunFailed,
+    EvidenceRunResult,
+)
+from app.agent.evidence_review.result import InternalArticleEvidence
 from app.agent.planning.contract import (
     ExternalResearchTask,
     ResearchTask,
@@ -82,23 +95,6 @@ def _report(
     )
 
 
-def _review_report(
-    *,
-    review: str = "succeeded",
-    review_failure_reason: str | None = None,
-    internal_evidence_count: int = 0,
-    external_evidence_count: int = 0,
-    missing: list[str] | None = None,
-) -> EvidenceReviewReport:
-    return EvidenceReviewReport(
-        review=review,
-        review_failure_reason=review_failure_reason,
-        internal_evidence_count=internal_evidence_count,
-        external_evidence_count=external_evidence_count,
-        missing=missing or [],
-    )
-
-
 def _time_filter_failed_report(
     *, task_index: int, research_goal: str, reason: str
 ) -> Any:
@@ -112,10 +108,47 @@ def _time_filter_failed_report(
     )
 
 
-def _outcome(*, task_reports: list[Any], review: Any | None = None) -> ReviewedEvidence:
-    return ReviewedEvidence(
-        task_reports=task_reports,
-        review=review if review is not None else _review_report(),
+def _collected_news(*, task_reports: list[ResearchTaskReport]) -> CollectedNews:
+    return CollectedNews(
+        tasks=[
+            CollectedTask(
+                task_index=report.task_index,
+                research_goal=report.research_goal,
+                internal_hits=[],
+                external_candidates=[],
+                executed_queries=(),
+                report=report,
+            )
+            for report in task_reports
+        ],
+        requested_agent_count=None,
+        effective_agent_count=0,
+    )
+
+
+@dataclass(frozen=True)
+class _AssemblyInput:
+    collected_news: CollectedNews
+    evidence_run: EvidenceRunResult
+
+
+def _outcome(
+    *,
+    task_reports: list[ResearchTaskReport],
+    review_missing: list[str] | None = None,
+    failure_reason: str | None = None,
+) -> _AssemblyInput:
+    evidence_run: EvidenceRunResult
+    if failure_reason is None:
+        evidence_run = EvidenceRunCompleted(
+            answer_evidence=AnswerEvidence(),
+            review_missing=tuple(review_missing or []),
+        )
+    else:
+        evidence_run = EvidenceRunFailed(failure_reason=failure_reason)
+    return _AssemblyInput(
+        collected_news=_collected_news(task_reports=task_reports),
+        evidence_run=evidence_run,
     )
 
 
@@ -127,6 +160,19 @@ def _internal_evidence() -> AnswerInputEvidence:
             title="internal evidence",
         ),
         text="internal evidence",
+    )
+
+
+def _reviewed_internal_evidence(*, task_index: int) -> InternalArticleEvidence:
+    return InternalArticleEvidence(
+        source_ref=f"{task_index}-0",
+        task_index=task_index,
+        claim="claim",
+        why_selected="why",
+        assessment_id=1001,
+        curation_id=1,
+        title="internal evidence",
+        summary="summary",
     )
 
 
@@ -165,13 +211,14 @@ def _draft(*, answer: str, cited_refs: list[str] | None = None) -> EvidenceAnswe
 def _assemble(
     *,
     plan: SearchPlan,
-    outcome: ReviewedEvidence,
+    outcome: _AssemblyInput,
     evidence: list[AnswerInputEvidence],
     answer_outcome: EvidenceAnswerDraft | EvidenceAnswerUnavailable,
 ) -> Any:
     return assemble_evidence_result(
         plan=plan,
-        outcome=outcome,
+        collected_news=outcome.collected_news,
+        evidence_run=outcome.evidence_run,
         evidence=evidence,
         answer_outcome=answer_outcome,
     )
@@ -213,7 +260,6 @@ def test_task_completes_via_internal_evidence_despite_external_provider_failure(
                 internal_candidate_count=1,
             )
         ],
-        review=_review_report(review="succeeded"),
     )
 
     result = _assemble(
@@ -258,7 +304,6 @@ def test_all_tasks_time_filter_failed_add_incomplete_and_time_filter_missing_onc
             )
             for index, task in enumerate(tasks)
         ],
-        review=_review_report(review="skipped_empty"),
     )
 
     result = _assemble(
@@ -291,7 +336,6 @@ def test_time_filter_failure_task_incomplete_with_separate_evidence() -> None:
                 reason="future_calendar_month",
             )
         ],
-        review=_review_report(review="succeeded"),
     )
 
     result = _assemble(
@@ -322,7 +366,6 @@ def test_empty_evidence_time_filter_failure_adds_incomplete_and_retrieval() -> N
                 reason="future_calendar_month",
             )
         ],
-        review=_review_report(review="skipped_empty"),
     )
 
     result = _assemble(
@@ -344,6 +387,76 @@ def test_empty_evidence_time_filter_failure_adds_incomplete_and_retrieval() -> N
     ]
 
 
+def test_failed_evidence_run_adds_incomplete_missing_without_leaking_reason() -> None:
+    """技術的な精査失敗は、候補があっても回答を不完全として閉じる。"""
+    tasks = [_task("直近の外部発表を確認する")]
+    outcome = _outcome(
+        task_reports=[
+            _report(
+                task_index=0,
+                research_goal=tasks[0].research_goal,
+                internal_candidate_count=1,
+            )
+        ],
+        failure_reason="response_not_json",
+    )
+
+    result = _assemble(
+        plan=_search_plan(
+            research_tasks=_research_tasks_from(tasks),
+            target_time_window=TargetTimeWindow(kind="last_n_days", days=1),
+        ),
+        outcome=outcome,
+        evidence=[],
+        answer_outcome=_unavailable(),
+    )
+
+    assert (
+        result.status,
+        result.missing_aspects,
+        "response_not_json" in result.missing_aspects,
+    ) == (
+        "insufficient",
+        [
+            "回答に使える根拠を取得できませんでした",
+            _INCOMPLETE_TASK_MISSING,
+            _UNAVAILABLE_MISSING,
+        ],
+        False,
+    )
+
+
+def test_assembly_rejects_completed_evidence_for_an_uncollected_task() -> None:
+    tasks = [_task("直近の外部発表を確認する")]
+    collected_news = _collected_news(
+        task_reports=[
+            _report(
+                task_index=0,
+                research_goal=tasks[0].research_goal,
+                internal_candidate_count=1,
+            )
+        ]
+    )
+    evidence_run = EvidenceRunCompleted(
+        answer_evidence=AnswerEvidence(
+            internal_articles=(_reviewed_internal_evidence(task_index=1),),
+        ),
+        review_missing=(),
+    )
+
+    with pytest.raises(ValueError):
+        assemble_evidence_result(
+            plan=_search_plan(
+                research_tasks=_research_tasks_from(tasks),
+                target_time_window=TargetTimeWindow(kind="last_n_days", days=1),
+            ),
+            collected_news=collected_news,
+            evidence_run=evidence_run,
+            evidence=[],
+            answer_outcome=_unavailable(),
+        )
+
+
 def test_internal_collection_failure_never_adds_a_route_name_phrase() -> None:
     """internal_collection=failedでも経路名文言は出ない
 
@@ -361,7 +474,6 @@ def test_internal_collection_failure_never_adds_a_route_name_phrase() -> None:
                 time_filter_failure_reason="future_calendar_month",
             )
         ],
-        review=_review_report(review="skipped_empty"),
     )
 
     result = _assemble(
@@ -398,7 +510,6 @@ def test_time_filter_failed_task_with_internal_evidence_stays_complete() -> None
                 internal_candidate_count=1,
             )
         ],
-        review=_review_report(review="succeeded"),
     )
 
     result = _assemble(
@@ -420,7 +531,7 @@ def test_time_filter_failed_task_with_internal_evidence_stays_complete() -> None
 
 
 def test_report_missing_deduplicates_against_review_missing() -> None:
-    """missingはRun単位のreview.missingから1本だけ流れ、生成不能の1行と
+    """missingはRun単位のreview_missingから1本だけ流れ、生成不能の1行と
 
     重複排除される(この task は provider_failed で候補ゼロだが、外部収集の
     失敗であり internal_candidate_count も 0 のため incomplete条件(0/0)にも
@@ -439,9 +550,7 @@ def test_report_missing_deduplicates_against_review_missing() -> None:
                 provider_failed_query_count=1,
             )
         ],
-        review=_review_report(
-            review="succeeded", missing=[shared_text, unavailable_missing]
-        ),
+        review_missing=[shared_text, unavailable_missing],
     )
 
     result = _assemble(
@@ -500,7 +609,7 @@ def test_unavailable_outcome_with_evidence_builds_insufficient_result() -> None:
 def test_unavailable_missing_coexists_with_mechanism_missing_in_order() -> None:
     """機構由来のmissing_aspects(evidence空/incomplete task/time filter/
 
-    review.missing)と生成不能の1行が併存し、現行どおりの順序で並ぶ。
+    review_missing)と生成不能の1行が併存し、現行どおりの順序で並ぶ。
     """
     unavailable_missing = _UNAVAILABLE_MISSING
     tasks = [_task("直近の外部発表を確認する")]
@@ -512,7 +621,7 @@ def test_unavailable_missing_coexists_with_mechanism_missing_in_order() -> None:
                 reason="future_calendar_month",
             )
         ],
-        review=_review_report(review="succeeded", missing=["reviewerが申告した不足"]),
+        review_missing=["reviewerが申告した不足"],
     )
 
     result = _assemble(
@@ -549,7 +658,7 @@ def test_unavailable_missing_is_deduplicated_against_mechanism_missing() -> None
                 provider_failed_query_count=1,
             )
         ],
-        review=_review_report(review="succeeded", missing=[unavailable_missing]),
+        review_missing=[unavailable_missing],
     )
 
     result = _assemble(

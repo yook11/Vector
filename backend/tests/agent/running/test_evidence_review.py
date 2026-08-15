@@ -29,6 +29,8 @@ from typing import Any
 import pytest
 from logfire.testing import CaptureLogfire
 
+from app.agent.answering.contract import AnsweringRequest
+from app.agent.answering.evidence_answer.contract import EvidenceAnswerOutcome
 from app.agent.evidence_collection import NewsCollector, Researcher
 from app.agent.evidence_collection.external_search.contract import (
     ExternalResearchRuntime,
@@ -40,6 +42,7 @@ from app.agent.evidence_collection.internal_search.contract import (
 from app.agent.evidence_review import (
     EvidenceReviewDraft,
     EvidenceReviewer,
+    EvidenceRunFailed,
 )
 from app.agent.evidence_review.agent import EVIDENCE_REVIEWER_AGENT
 from app.agent.planning.contract import ResearchTask, SearchPlan, TargetTimeWindow
@@ -86,6 +89,7 @@ from tests.agent.running._harness import (
 )
 from tests.agent.running._input_safety import AllowInputSafetyChecker
 from tests.agent.runtime._fakes import ScriptedAgentRuntime
+from tests.logfire._span_helpers import one_span_named
 
 _EMPTY_DRAFT = EvidenceReviewDraft.model_validate({"selections": [], "missing": []})
 
@@ -172,8 +176,9 @@ def _runner(
     internal_tool: object,
     events: object | None = None,
     answer_requirements: tuple[str, ...] | None = None,
+    answerer: _EvidenceAnswerer | None = None,
 ) -> tuple[AnsweringRunner, _EvidenceAnswerer, _Factory]:
-    answerer = _EvidenceAnswerer()
+    answerer = answerer or _EvidenceAnswerer()
     runtime = ExternalResearchRuntime(
         query_runtime=query_runtime,  # type: ignore[arg-type]
         reviewer_runtime=reviewer_runtime,  # type: ignore[arg-type]
@@ -197,6 +202,28 @@ def _runner(
         events=events,  # type: ignore[arg-type]
     )
     return runner, answerer, factory
+
+
+class _ReviewMissingCapturingAnswerer(_EvidenceAnswerer):
+    def __init__(self) -> None:
+        super().__init__()
+        self.review_missing_calls: list[tuple[str, ...]] = []
+
+    async def answer(
+        self,
+        *,
+        request: AnsweringRequest,
+        evidence: list[Any],
+        target_time_window: TargetTimeWindow | None,
+        review_missing: tuple[str, ...] = (),
+    ) -> EvidenceAnswerOutcome:
+        self.review_missing_calls.append(review_missing)
+        return await super().answer(
+            request=request,
+            evidence=evidence,
+            target_time_window=target_time_window,
+            review_missing=review_missing,
+        )
 
 
 # --- A. 精査の呼び出し単位 -------------------------------------------------
@@ -921,10 +948,10 @@ async def test_reviewer_failure_after_two_attempts_empties_the_whole_run() -> No
 
 
 @pytest.mark.asyncio
-async def test_reviewer_failure_after_two_attempts_becomes_failed_review_report(
+async def test_reviewer_failure_after_two_attempts_becomes_failed_evidence_run(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """runnerがreviewer失敗をreview=failed reportへ写す結線を保証する。
+    """runnerがreviewer失敗をEvidenceRunFailedへ写す結線を保証する。
 
     attempt/timeout/失敗分類の詳細な組み合わせは
     tests/agent/evidence_review/test_reviewer.py が正本。
@@ -944,16 +971,45 @@ async def test_reviewer_failure_after_two_attempts_becomes_failed_review_report(
 
     await _run(runner)
 
-    report = captured[0].task_reports[0]
-    review = captured[0].review
+    report = captured[0].collected_news.tasks[0].report
+    evidence_run = captured[0].evidence_run
     assert (
         report.external_collection,
-        review.review,
-        review.review_failure_reason,
-        review.internal_evidence_count,
-        review.external_evidence_count,
+        isinstance(evidence_run, EvidenceRunFailed),
+        evidence_run.failure_reason,
         answerer.calls,
-    ) == ("succeeded", "failed", "response_not_json", 0, 0, [[]])
+    ) == ("succeeded", True, "response_not_json", [[]])
+
+
+@pytest.mark.asyncio
+async def test_failed_evidence_run_keeps_failure_reason_out_of_answerer_and_in_span(
+    capfire: CaptureLogfire,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured = _capture_external_outcome(monkeypatch)
+    answerer = _ReviewMissingCapturingAnswerer()
+    failure = AgentResponseInvalidError(AgentResponseDefect.RESPONSE_NOT_JSON)
+    runner, _answerer, _factory = _runner(
+        plan=_plan(_task("reviewer failure", ["query-a"])),
+        query_runtime=ScriptedAgentRuntime([_query_draft(["q"])]),
+        reviewer_runtime=ScriptedAgentRuntime([failure, failure]),
+        external_tool=_ExternalTool(
+            {"q": [_external_candidate("https://example.com/q")]}
+        ),
+        internal_tool=_InternalTool(),
+        answerer=answerer,
+    )
+
+    await _run(runner)
+
+    evidence_run = captured[0].evidence_run
+    span = one_span_named(capfire, "agent_answering_run")
+    assert isinstance(evidence_run, EvidenceRunFailed)
+    assert (
+        answerer.review_missing_calls,
+        span["attributes"]["review_failure_reason"],
+        evidence_run.failure_reason,
+    ) == ([()], "response_not_json", "response_not_json")
 
 
 # --- F. 進捗event ------------------------------------------------------------

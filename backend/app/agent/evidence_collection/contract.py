@@ -40,7 +40,7 @@ TaskExternalCollectionStatus = Literal[
 class ResearchTaskReport(BaseModel):
     """task 単位の収集(内部/外部)の実行内容・失敗分類。
 
-    精査結果はEvidenceReviewReportへ分離した。
+    精査結果はEvidence Runの成功/失敗型へ分離した。
     """
 
     model_config = ConfigDict(frozen=True, extra="forbid")
@@ -121,6 +121,13 @@ class CollectedNews:
     tasks: list[CollectedTask]
     requested_agent_count: int | None
     effective_agent_count: int
+
+    def __post_init__(self) -> None:
+        task_indexes = {task.task_index for task in self.tasks}
+        if task_indexes != set(range(len(self.tasks))):
+            raise ValueError("collected tasks must cover each task index exactly once")
+        if any(task.report.task_index != task.task_index for task in self.tasks):
+            raise ValueError("collected task and report task_index must match")
 
     @property
     def has_candidates(self) -> bool:

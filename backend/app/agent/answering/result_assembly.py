@@ -16,7 +16,12 @@ from app.agent.contract import (
     AnswerQuestionResult,
     AnswerSource,
 )
-from app.agent.evidence_review import ReviewedEvidence
+from app.agent.evidence_collection import CollectedNews
+from app.agent.evidence_review import (
+    EvidenceRunCompleted,
+    EvidenceRunFailed,
+    EvidenceRunResult,
+)
 from app.agent.planning.contract import SearchPlan
 
 __all__ = ["assemble_evidence_result"]
@@ -36,14 +41,21 @@ _UNAVAILABLE_MISSING = "回答生成に必要な根拠または応答形式が�
 def assemble_evidence_result(
     *,
     plan: SearchPlan,
-    outcome: ReviewedEvidence,
+    collected_news: CollectedNews,
+    evidence_run: EvidenceRunResult,
     evidence: list[AnswerInputEvidence],
     answer_outcome: EvidenceAnswerOutcome,
 ) -> AnswerQuestionResult:
+    if isinstance(evidence_run, EvidenceRunCompleted):
+        collected_task_indexes = {task.task_index for task in collected_news.tasks}
+        if not evidence_run.answer_evidence.task_indexes <= collected_task_indexes:
+            raise ValueError("answer evidence must reference a collected task")
+
     if isinstance(answer_outcome, EvidenceAnswerUnavailable):
         return _assemble_evidence_result(
             plan=plan,
-            outcome=outcome,
+            collected_news=collected_news,
+            evidence_run=evidence_run,
             answer=_UNAVAILABLE_ANSWER,
             sources=[],
             unavailable_missing=[_UNAVAILABLE_MISSING],
@@ -55,7 +67,8 @@ def assemble_evidence_result(
     sources = _sources_for_citations(evidence=evidence, cited_refs=draft.cited_refs)
     return _assemble_evidence_result(
         plan=plan,
-        outcome=outcome,
+        collected_news=collected_news,
+        evidence_run=evidence_run,
         answer=draft.answer,
         sources=sources,
         unavailable_missing=[],
@@ -88,14 +101,16 @@ def _sources_for_citations(
 def _assemble_evidence_result(
     *,
     plan: SearchPlan,
-    outcome: ReviewedEvidence,
+    collected_news: CollectedNews,
+    evidence_run: EvidenceRunResult,
     answer: str,
     sources: list[AnswerSource],
     unavailable_missing: list[str],
     include_retrieval_empty_missing: bool,
 ) -> AnswerQuestionResult:
     missing_aspects = _missing_aspects(
-        outcome=outcome,
+        collected_news=collected_news,
+        evidence_run=evidence_run,
         unavailable_missing=unavailable_missing,
         include_retrieval_empty_missing=include_retrieval_empty_missing,
     )
@@ -124,31 +139,41 @@ def _derive_evidence_status(
 
 def _missing_aspects(
     *,
-    outcome: ReviewedEvidence,
+    collected_news: CollectedNews,
+    evidence_run: EvidenceRunResult,
     unavailable_missing: list[str],
     include_retrieval_empty_missing: bool,
 ) -> list[str]:
     values: list[str] = []
     if include_retrieval_empty_missing:
         values.append(_RETRIEVAL_EMPTY_MISSING)
-    if _has_incomplete_task(outcome):
+    if _has_incomplete_task(
+        collected_news=collected_news,
+        evidence_run=evidence_run,
+    ):
         values.append(_INCOMPLETE_TASK_MISSING)
-    values.extend(_external_task_status_missing(outcome))
-    values.extend(outcome.review.missing)
+    values.extend(_external_task_status_missing(collected_news))
+    if isinstance(evidence_run, EvidenceRunCompleted):
+        values.extend(evidence_run.review_missing)
     values.extend(unavailable_missing)
     return _deduplicate(values)
 
 
-def _has_incomplete_task(outcome: ReviewedEvidence) -> bool:
-    if outcome.review.review == "failed":
+def _has_incomplete_task(
+    *,
+    collected_news: CollectedNews,
+    evidence_run: EvidenceRunResult,
+) -> bool:
+    if isinstance(evidence_run, EvidenceRunFailed):
         return True
     return any(
-        report.internal_candidate_count == 0 and report.external_candidate_count == 0
-        for report in outcome.task_reports
+        task.report.internal_candidate_count == 0
+        and task.report.external_candidate_count == 0
+        for task in collected_news.tasks
     )
 
 
-def _external_task_status_missing(outcome: ReviewedEvidence) -> list[str]:
+def _external_task_status_missing(collected_news: CollectedNews) -> list[str]:
     """収集の失敗表明(time filter文言)だけをtask単位で連結する。
 
     Run全体の不足(missing)はreviewerがRun単位で1本返すため、
@@ -156,7 +181,7 @@ def _external_task_status_missing(outcome: ReviewedEvidence) -> list[str]:
     """
     missing: list[str] = []
     for report in sorted(
-        outcome.task_reports,
+        (task.report for task in collected_news.tasks),
         key=lambda report: report.task_index,
     ):
         status_missing = _EXTERNAL_TASK_STATUS_MISSING.get(report.external_collection)
