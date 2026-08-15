@@ -9,13 +9,13 @@ from app.agent.contract import (
     EVIDENCE_REVIEW_MISSING_LIMIT,
     EVIDENCE_REVIEWER_SELECTION_LIMIT,
 )
-from app.agent.evidence_review.draft import EvidenceReviewDraft
 from app.agent.evidence_review.preparation import EvidenceReviewInput
 from app.agent.evidence_review.prompts import (
     EVIDENCE_REVIEWER_INSTRUCTIONS,
     EVIDENCE_REVIEWER_PROMPT_VERSION,
     render_evidence_review_input,
 )
+from app.agent.evidence_review.selection import EvidenceReviewDraft
 
 EVIDENCE_REVIEWER_RESPONSE_SCHEMA: Final[dict[str, Any]] = {
     "type": "object",

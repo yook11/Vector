@@ -16,12 +16,12 @@ from app.agent.evidence_collection.external_search.contract import (
 from app.agent.evidence_collection.internal_search.contract import (
     InternalArticleSearchHit,
 )
-from app.agent.evidence_review.draft import EvidenceReviewerResponse
 from app.agent.evidence_review.preparation import EvidenceReviewPreparation
+from app.agent.evidence_review.selection import EvidenceReviewerResponse
 from app.shared.security.safe_url import SafeUrl
 
 if TYPE_CHECKING:
-    from app.agent.evidence_review.draft import EvidenceReviewerSelection
+    from app.agent.evidence_review.selection import EvidenceReviewerSelection
 
 __all__ = [
     "AnswerEvidence",

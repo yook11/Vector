@@ -10,7 +10,7 @@ from datetime import UTC, datetime
 from app.agent.answering.evidence_answer.evidence import build_answer_input_evidence
 from app.agent.contract import ExternalUrlSource
 from app.agent.evidence_review import AnswerEvidence, ExternalSearchEvidence
-from app.agent.evidence_review.result import InternalArticleEvidence
+from app.agent.evidence_review.answer_evidence import InternalArticleEvidence
 
 
 def _outcome(
