@@ -43,7 +43,6 @@ from app.agent.evidence_review.result import (
     AnswerEvidence,
     EvidenceReviewerResponse,
     EvidenceReviewerSelection,
-    EvidenceReviewOutcome,
     ExternalSearchEvidence,
     InternalArticleEvidence,
 )
@@ -238,29 +237,6 @@ def test_reviewer_response_rejects_more_than_the_selection_limit() -> None:
 
     with pytest.raises(ValidationError):
         EvidenceReviewerResponse(selections=selections)
-
-
-def test_failed_review_outcome_rejects_evidence_or_missing() -> None:
-    with pytest.raises(ValueError):
-        EvidenceReviewOutcome(
-            answer_evidence=AnswerEvidence(
-                external_sources=(
-                    _external_evidence(
-                        url="https://example.com/evidence",
-                        source_ref="1",
-                    ),
-                )
-            ),
-            missing=[],
-            failure_reason="reviewer_error",
-        )
-
-    with pytest.raises(ValueError):
-        EvidenceReviewOutcome(
-            answer_evidence=AnswerEvidence(),
-            missing=["missing"],
-            failure_reason="reviewer_error",
-        )
 
 
 # --- EvidenceReviewPreparation(往復) ---------------------------------------

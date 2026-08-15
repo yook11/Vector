@@ -24,6 +24,11 @@ from app.agent.evidence_collection.internal_search.contract import (
 from app.agent.evidence_review.agent import EVIDENCE_REVIEWER_AGENT
 from app.agent.evidence_review.draft import EvidenceReviewDraft
 from app.agent.evidence_review.preparation import EvidenceReviewPreparation
+from app.agent.evidence_review.result import (
+    EvidenceRunCompleted,
+    EvidenceRunFailed,
+    EvidenceRunResult,
+)
 from app.agent.evidence_review.reviewer import EvidenceReviewer
 from app.agent.runtime.contract import AgentResponseDefect, AgentResponseInvalidError
 from app.analysis.ai_provider_errors import AIProviderError, AIProviderNetworkError
@@ -114,7 +119,7 @@ async def _review(
     tasks: list[Any],
     as_of: datetime = _AS_OF,
     reviewer_runtime: Any,
-) -> Any:
+) -> EvidenceRunResult:
     reviewer = EvidenceReviewer()
     return await reviewer.review(
         tasks=tasks,
@@ -212,18 +217,19 @@ async def test_selection_restores_candidate_and_task_from_a_cross_task_index() -
         ]
     )
 
-    outcome = await _review(tasks=tasks, reviewer_runtime=runtime)
+    result = await _review(tasks=tasks, reviewer_runtime=runtime)
 
+    assert isinstance(result, EvidenceRunCompleted)
     assert [
         (item.title, item.task_index)
-        for item in outcome.answer_evidence.internal_articles
+        for item in result.answer_evidence.internal_articles
     ] == [("A-int-2", 0)]
     assert [
         (item.title, item.task_index)
-        for item in outcome.answer_evidence.external_sources
+        for item in result.answer_evidence.external_sources
     ] == [("B-ext-2", 1)]
-    assert outcome.answer_evidence.internal_articles[0].source_ref == "0-1"
-    assert outcome.answer_evidence.external_sources[0].source_ref == "1-3"
+    assert result.answer_evidence.internal_articles[0].source_ref == "0-1"
+    assert result.answer_evidence.external_sources[0].source_ref == "1-3"
 
 
 @pytest.mark.asyncio
@@ -231,12 +237,13 @@ async def test_review_propagates_missing_as_a_single_run_level_value() -> None:
     """S1(何ができていないかの表明)。missingはRun全体で1本として返る。"""
     runtime = ScriptedAgentRuntime([_draft([], missing=["run全体の不足"])])
 
-    outcome = await _review(
+    result = await _review(
         tasks=[_collected_task(task_index=0, internal_hits=[_internal_hit()])],
         reviewer_runtime=runtime,
     )
 
-    assert outcome.missing == ("run全体の不足",)
+    assert isinstance(result, EvidenceRunCompleted)
+    assert result.review_missing == ("run全体の不足",)
 
 
 @pytest.mark.asyncio
@@ -248,15 +255,15 @@ async def test_review_retries_at_most_twice_with_the_same_typed_input() -> None:
         ]
     )
 
-    outcome = await _review(
+    result = await _review(
         tasks=[_collected_task(task_index=0, internal_hits=[_internal_hit()])],
         reviewer_runtime=runtime,
     )
 
+    assert isinstance(result, EvidenceRunCompleted)
     assert [call.attempt_number for call in runtime.calls] == [1, 2]
     assert runtime.calls[0].input is runtime.calls[1].input
-    assert outcome.failure_reason is None
-    assert len(outcome.answer_evidence.internal_articles) == 1
+    assert len(result.answer_evidence.internal_articles) == 1
 
 
 @pytest.mark.asyncio
@@ -288,7 +295,7 @@ async def test_review_classifies_failure_reason_after_two_exhausted_attempts(
     failure: BaseException,
     expected_reason: str,
 ) -> None:
-    """S1(精査の失敗)。2 attempt尽きるとRun全体が根拠ゼロで終わり例外を投げない。
+    """S1(精査の失敗)。2 attempt尽きるとRun全体が失敗結果で終わり例外を投げない。
 
     2 taskに候補があっても、reviewerの呼び出しはRunにつき1回(最大2 attempt)
     であり、taskごとに新しいattempt列は発生しない。
@@ -299,13 +306,11 @@ async def test_review_classifies_failure_reason_after_two_exhausted_attempts(
         _collected_task(task_index=1, external_candidates=[_external_candidate()]),
     ]
 
-    outcome = await _review(tasks=tasks, reviewer_runtime=runtime)
+    result = await _review(tasks=tasks, reviewer_runtime=runtime)
 
+    assert isinstance(result, EvidenceRunFailed)
     assert [call.attempt_number for call in runtime.calls] == [1, 2]
-    assert outcome.answer_evidence.internal_articles == ()
-    assert outcome.answer_evidence.external_sources == ()
-    assert outcome.missing == ()
-    assert outcome.failure_reason == expected_reason
+    assert result.failure_reason == expected_reason
 
 
 @pytest.mark.asyncio
@@ -330,18 +335,16 @@ async def test_review_retries_after_invalid_draft_and_drops_invalid_selections()
         ]
     )
 
-    outcome = await _review(
+    result = await _review(
         tasks=[
             _collected_task(task_index=0, external_candidates=[_external_candidate()])
         ],
         reviewer_runtime=runtime,
     )
 
+    assert isinstance(result, EvidenceRunCompleted)
     assert [call.attempt_number for call in runtime.calls] == [1, 2]
-    assert outcome.failure_reason is None
-    assert [item.claim for item in outcome.answer_evidence.external_sources] == [
-        "first"
-    ]
+    assert [item.claim for item in result.answer_evidence.external_sources] == ["first"]
 
 
 @pytest.mark.asyncio
@@ -404,7 +407,7 @@ async def test_review_timeout_backstop_cancels_the_runtime_and_retries_twice(
     observed_timeouts = _shorten_review_timeout(monkeypatch)
     runtime = _NeverCompletingRuntime()
 
-    outcome = await asyncio.wait_for(
+    result = await asyncio.wait_for(
         _review(
             tasks=[_collected_task(task_index=0, internal_hits=[_internal_hit()])],
             reviewer_runtime=runtime,
@@ -412,7 +415,8 @@ async def test_review_timeout_backstop_cancels_the_runtime_and_retries_twice(
         timeout=0.5,
     )
 
+    assert isinstance(result, EvidenceRunFailed)
     assert runtime.cancelled is True
     assert runtime.attempt_numbers == [1, 2]
-    assert outcome.failure_reason == "reviewer_timeout"
+    assert result.failure_reason == "reviewer_timeout"
     assert observed_timeouts.count(30) == 2

@@ -28,7 +28,9 @@ from app.agent.evidence_review.preparation import (
 from app.agent.evidence_review.result import (
     AnswerEvidence,
     EvidenceReviewerResponse,
-    EvidenceReviewOutcome,
+    EvidenceRunCompleted,
+    EvidenceRunFailed,
+    EvidenceRunResult,
 )
 from app.agent.phase_span import agent_phase
 from app.agent.runtime.contract import (
@@ -51,13 +53,14 @@ class EvidenceReviewer:
         tasks: list[CollectedTask],
         as_of: datetime,
         reviewer_runtime: AgentRuntime,
-    ) -> EvidenceReviewOutcome:
+    ) -> EvidenceRunResult:
         preparation = EvidenceReviewPreparation.from_tasks(tasks)
         review_input = EvidenceReviewInput(
             task_groups=preparation.task_groups,
             as_of=as_of,
         )
-        failure_reason: str | None = None
+        # 各attemptが分類済みreasonで上書きするため、初期値は型を締めるためだけに置く。
+        failure_reason = REVIEWER_ERROR_REASON
         with agent_phase(
             phase="evidence_review",
             agent_name=EVIDENCE_REVIEWER_AGENT.name,
@@ -92,16 +95,11 @@ class EvidenceReviewer:
                     preparation=preparation,
                     reviewer_response=reviewer_response,
                 )
-                return EvidenceReviewOutcome(
+                return EvidenceRunCompleted(
                     answer_evidence=answer_evidence,
-                    missing=reviewer_response.missing,
-                    failure_reason=None,
+                    review_missing=reviewer_response.missing,
                 )
-        return EvidenceReviewOutcome(
-            answer_evidence=AnswerEvidence(),
-            missing=(),
-            failure_reason=failure_reason,
-        )
+        return EvidenceRunFailed(failure_reason=failure_reason)
 
 
 def _provider_failure_reason(exc: AIProviderError) -> str:

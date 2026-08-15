@@ -7,7 +7,6 @@
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
 from datetime import datetime
 from typing import Self
 
@@ -36,7 +35,6 @@ __all__ = [
     "EvidenceRunCompleted",
     "EvidenceRunFailed",
     "EvidenceRunResult",
-    "EvidenceReviewOutcome",
     "EvidenceReviewerResponse",
     "EvidenceReviewerSelection",
     "ExternalSearchEvidence",
@@ -285,24 +283,6 @@ class AnswerEvidence(BaseModel):
         if len(source_refs) != len(set(source_refs)):
             raise ValueError("answer evidence source_ref must be unique")
         return self
-
-
-@dataclass(frozen=True, slots=True)
-class EvidenceReviewOutcome:
-    """EvidenceReviewer.review()が返す、回答用Evidenceを含むRun全体の精査結果。"""
-
-    answer_evidence: AnswerEvidence
-    missing: tuple[str, ...]
-    failure_reason: str | None
-
-    def __post_init__(self) -> None:
-        object.__setattr__(self, "missing", tuple(self.missing))
-        if self.failure_reason is not None and (
-            self.answer_evidence.count > 0 or self.missing
-        ):
-            raise ValueError(
-                "failed review outcome must keep evidence and missing empty"
-            )
 
 
 class EvidenceRunCompleted(BaseModel):
