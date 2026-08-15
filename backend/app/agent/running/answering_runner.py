@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Iterator
 from contextlib import contextmanager
+from datetime import datetime
 from typing import assert_never
 from uuid import UUID
 
@@ -29,6 +30,7 @@ from app.agent.contract import (
 from app.agent.evidence_collection import CollectedNews
 from app.agent.evidence_collection.external_search import (
     EXTERNAL_SEARCH_AGENT_HARD_LIMIT,
+    ExternalResearchRuntime,
 )
 from app.agent.evidence_review import (
     AnswerEvidence,
@@ -36,7 +38,6 @@ from app.agent.evidence_review import (
     EvidenceRunFailed,
     EvidenceRunResult,
 )
-from app.agent.evidence_review.run_review import review_collected_news
 from app.agent.input_safety.contract import (
     INPUT_SAFETY_TEXT_CHAR_CAP,
     InputSafetyBlocked,
@@ -161,20 +162,12 @@ class AnsweringRunner:
                             time_filter_failure=time_filter_failure,
                             as_of=answering_request.as_of,
                         )
-                        if collected_news.has_candidates:
-                            await self._report_progress("evidence_review")
-                        evidence_run = await review_collected_news(
+                        evidence_run = await self._review_evidence(
+                            phases=phases,
                             collected_news=collected_news,
-                            reviewer=phases.reviewer,
                             external=external,
                             as_of=answering_request.as_of,
                         )
-                        if collected_news.has_candidates and isinstance(
-                            evidence_run, EvidenceRunCompleted
-                        ):
-                            await self._report_selected_evidence(
-                                evidence_run=evidence_run
-                            )
                         _record_evidence_run_span_attributes(
                             run_span,
                             collected_news=collected_news,
@@ -221,6 +214,31 @@ class AnsweringRunner:
             missing_aspects=[],
             plan_summary=AnswerPlanSummary(plan_type="direct_answer"),
         )
+
+    async def _review_evidence(
+        self,
+        *,
+        phases: AnsweringPhases,
+        collected_news: CollectedNews,
+        external: ExternalResearchRuntime,
+        as_of: datetime,
+    ) -> EvidenceRunResult:
+        """候補ゼロのRunは精査を開始せず、stageもselected eventにも反映されない。"""
+        if not collected_news.has_candidates:
+            return EvidenceRunCompleted(
+                answer_evidence=AnswerEvidence(),
+                review_missing=(),
+            )
+
+        await self._report_progress("evidence_review")
+        evidence_run = await phases.reviewer.review(
+            tasks=collected_news.tasks,
+            as_of=as_of,
+            reviewer_runtime=external.reviewer_runtime,
+        )
+        if isinstance(evidence_run, EvidenceRunCompleted):
+            await self._report_selected_evidence(evidence_run=evidence_run)
+        return evidence_run
 
     async def _answer_from_evidence(
         self,
