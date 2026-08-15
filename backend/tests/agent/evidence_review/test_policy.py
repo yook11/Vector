@@ -13,6 +13,7 @@ from typing import Any
 import pytest
 from pydantic import ValidationError
 
+import app.agent.evidence_review.draft as evidence_review_draft_module
 import app.agent.evidence_review.policy as evidence_review_policy_module
 import app.agent.evidence_review.result as evidence_review_result_module
 from app.agent.contract import (
@@ -32,7 +33,11 @@ from app.agent.evidence_collection.internal_search.contract import (
     InternalArticleContent,
     InternalArticleSearchHit,
 )
-from app.agent.evidence_review.draft import EvidenceReviewDraft
+from app.agent.evidence_review.draft import (
+    EvidenceReviewDraft,
+    EvidenceReviewerResponse,
+    EvidenceReviewerSelection,
+)
 from app.agent.evidence_review.policy import (
     EVIDENCE_REVIEW_TIMEOUT_SECONDS,
     REVIEWER_ERROR_REASON,
@@ -41,8 +46,6 @@ from app.agent.evidence_review.policy import (
 from app.agent.evidence_review.preparation import EvidenceReviewPreparation
 from app.agent.evidence_review.result import (
     AnswerEvidence,
-    EvidenceReviewerResponse,
-    EvidenceReviewerSelection,
     ExternalSearchEvidence,
     InternalArticleEvidence,
 )
@@ -210,6 +213,23 @@ def test_reviewed_evidence_is_built_on_the_evidence_types() -> None:
     """採用1件のフィールド埋めは各Evidence型のfactoryが所有する。"""
     assert not hasattr(evidence_review_result_module, "_build_internal_evidence")
     assert not hasattr(evidence_review_result_module, "_build_external_evidence")
+
+
+def test_unconfirmed_selection_is_owned_by_draft() -> None:
+    """LLM出力の契約化はdraftが所有し、resultは回答根拠だけを持つ。"""
+    assert (
+        evidence_review_draft_module.EvidenceReviewerResponse
+        is EvidenceReviewerResponse
+    )
+    assert (
+        evidence_review_draft_module.EvidenceReviewerSelection
+        is EvidenceReviewerSelection
+    )
+    assert "EvidenceReviewerResponse" in evidence_review_draft_module.__all__
+    assert "EvidenceReviewerSelection" in evidence_review_draft_module.__all__
+    assert "EvidenceReviewerResponse" not in evidence_review_result_module.__all__
+    assert "EvidenceReviewerSelection" not in evidence_review_result_module.__all__
+    assert not hasattr(evidence_review_result_module, "EvidenceReviewerSelection")
 
 
 def test_answer_evidence_and_missing_caps_are_run_scoped_values() -> None:

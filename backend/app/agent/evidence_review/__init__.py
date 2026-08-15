@@ -2,6 +2,8 @@
 
 from app.agent.evidence_review.draft import (
     EvidenceReviewDraft,
+    EvidenceReviewerResponse,
+    EvidenceReviewerSelection,
     ReviewSelectionDraft,
 )
 from app.agent.evidence_review.preparation import (
@@ -12,8 +14,6 @@ from app.agent.evidence_review.preparation import (
 )
 from app.agent.evidence_review.result import (
     AnswerEvidence,
-    EvidenceReviewerResponse,
-    EvidenceReviewerSelection,
     EvidenceRunCompleted,
     EvidenceRunFailed,
     EvidenceRunResult,
