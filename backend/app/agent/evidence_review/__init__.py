@@ -21,7 +21,6 @@ from app.agent.evidence_review.result import (
     InternalArticleEvidence,
 )
 from app.agent.evidence_review.reviewer import EvidenceReviewer
-from app.agent.evidence_review.run_review import review_collected_news
 
 __all__ = [
     "AnswerEvidence",
@@ -39,5 +38,4 @@ __all__ = [
     "InternalArticleEvidence",
     "EvidenceReviewerSelection",
     "ReviewSelectionDraft",
-    "review_collected_news",
 ]
