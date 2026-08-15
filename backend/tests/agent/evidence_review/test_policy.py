@@ -41,7 +41,6 @@ from app.agent.evidence_review.policy import (
     EVIDENCE_REVIEW_TIMEOUT_SECONDS,
     REVIEWER_ERROR_REASON,
     REVIEWER_TIMEOUT_REASON,
-    resolve_reviewer_failure_reason,
 )
 from app.analysis.analyzed_article import InScopeAnalyzedArticle
 from app.analysis.assessment.domain.result import InScope, InScopeCategory
@@ -176,13 +175,13 @@ def _external_evidence(*, url: str, source_ref: str) -> ExternalSearchEvidence:
 
 
 def test_policy_exports_review_timeout_and_failure_reason_constants() -> None:
-    """selector 一式の timeout/reason 定数がここへ改名移設されている。"""
+    """Reviewerのtimeout/reason定数がpolicyから公開される。"""
     assert (
-        {"resolve_reviewer_failure_reason"} <= set(dir(evidence_review_policy_module)),
         EVIDENCE_REVIEW_TIMEOUT_SECONDS,
         REVIEWER_TIMEOUT_REASON,
         REVIEWER_ERROR_REASON,
-    ) == (True, 30, "reviewer_timeout", "reviewer_error")
+    ) == (30, "reviewer_timeout", "reviewer_error")
+    assert not hasattr(evidence_review_policy_module, "resolve_reviewer_failure_reason")
 
 
 def test_policy_does_not_expose_answer_evidence_construction() -> None:
@@ -245,18 +244,6 @@ def test_failed_review_outcome_rejects_evidence_or_missing() -> None:
             missing=["missing"],
             failure_reason="reviewer_error",
         )
-
-
-def test_resolve_reviewer_failure_reason_prefers_reason_then_code_then_fallback() -> (
-    None
-):
-    resolve_failure_reason = resolve_reviewer_failure_reason
-
-    assert (
-        resolve_failure_reason(reason="timeout", code="ai_error_network"),
-        resolve_failure_reason(reason=None, code="ai_error_network"),
-        resolve_failure_reason(reason=None, code=None),
-    ) == ("timeout", "ai_error_network", "reviewer_error")
 
 
 # --- EvidenceReviewPreparation(往復) ---------------------------------------

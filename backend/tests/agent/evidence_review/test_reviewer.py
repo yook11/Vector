@@ -275,6 +275,11 @@ async def test_review_retries_at_most_twice_with_the_same_typed_input() -> None:
             "timeout",
             id="provider-reason",
         ),
+        pytest.param(
+            AIProviderNetworkError(),
+            "ai_error_network",
+            id="provider-code",
+        ),
         # policy.REVIEWER_ERROR_REASON: 未分類 provider error の安全な fallback。
         pytest.param(AIProviderError(), "reviewer_error", id="provider-fallback"),
         # policy.REVIEWER_TIMEOUT_REASON: asyncio.wait_for相当のtimeout分類。
