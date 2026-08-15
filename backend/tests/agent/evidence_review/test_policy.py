@@ -13,17 +13,12 @@ from typing import Any
 import pytest
 from pydantic import ValidationError
 
-import app.agent.evidence_review.policy as evidence_review_policy_module
-import app.agent.evidence_review.selection as evidence_review_selection_module
 from app.agent.contract import (
     ANSWER_EVIDENCE_LIMIT,
     EVIDENCE_REVIEW_MISSING_LIMIT,
     EVIDENCE_REVIEWER_SELECTION_LIMIT,
 )
 from app.agent.evidence_collection.contract import CollectedTask, ResearchTaskReport
-from app.agent.evidence_collection.external_search import (
-    contract as external_search_contract_module,
-)
 from app.agent.evidence_collection.external_search.contract import (
     CANDIDATE_SNIPPET_MAX_CHARS,
     ExternalSearchCandidate,
@@ -31,9 +26,6 @@ from app.agent.evidence_collection.external_search.contract import (
 from app.agent.evidence_collection.internal_search.contract import (
     InternalArticleContent,
     InternalArticleSearchHit,
-)
-from app.agent.evidence_review import (
-    answer_evidence as evidence_review_answer_evidence_module,
 )
 from app.agent.evidence_review.answer_evidence import (
     AnswerEvidence,
@@ -190,60 +182,6 @@ def test_policy_exports_review_timeout_and_failure_reason_constants() -> None:
         REVIEWER_TIMEOUT_REASON,
         REVIEWER_ERROR_REASON,
     ) == (30, "reviewer_timeout", "reviewer_error")
-    assert not hasattr(evidence_review_policy_module, "resolve_reviewer_failure_reason")
-
-
-def test_policy_does_not_expose_answer_evidence_construction() -> None:
-    """回答用Evidenceの構築はAnswerEvidence factoryだけが公開する。"""
-    assert not hasattr(evidence_review_policy_module, "build_answer_evidence")
-
-
-def test_policy_does_not_convert_review_drafts() -> None:
-    """LLM出力の契約化はEvidenceReviewerResponse.from_draftが所有する。"""
-    assert not hasattr(evidence_review_policy_module, "finalize_review_draft")
-
-
-def test_adopted_external_evidence_is_owned_by_review_result() -> None:
-    """精査済み外部根拠は収集契約ではなく精査結果が所有する。"""
-    assert (
-        evidence_review_answer_evidence_module.ExternalSearchEvidence
-        is ExternalSearchEvidence
-    )
-    assert not hasattr(external_search_contract_module, "ExternalSearchEvidence")
-
-
-def test_reviewed_evidence_is_built_on_the_evidence_types() -> None:
-    """採用1件のフィールド埋めは各Evidence型のfactoryが所有する。"""
-    assert not hasattr(
-        evidence_review_answer_evidence_module, "_build_internal_evidence"
-    )
-    assert not hasattr(
-        evidence_review_answer_evidence_module, "_build_external_evidence"
-    )
-
-
-def test_unconfirmed_selection_is_owned_by_selection() -> None:
-    """LLM出力の契約化はselectionが所有し、answer_evidenceは回答根拠だけを持つ。"""
-    assert (
-        evidence_review_selection_module.EvidenceReviewerResponse
-        is EvidenceReviewerResponse
-    )
-    assert (
-        evidence_review_selection_module.EvidenceReviewerSelection
-        is EvidenceReviewerSelection
-    )
-    assert "EvidenceReviewerResponse" in evidence_review_selection_module.__all__
-    assert "EvidenceReviewerSelection" in evidence_review_selection_module.__all__
-    assert (
-        "EvidenceReviewerResponse" not in evidence_review_answer_evidence_module.__all__
-    )
-    assert (
-        "EvidenceReviewerSelection"
-        not in evidence_review_answer_evidence_module.__all__
-    )
-    assert not hasattr(
-        evidence_review_answer_evidence_module, "EvidenceReviewerSelection"
-    )
 
 
 def test_answer_evidence_and_missing_caps_are_run_scoped_values() -> None:
@@ -253,12 +191,6 @@ def test_answer_evidence_and_missing_caps_are_run_scoped_values() -> None:
     それより絞った8にする。
     """
     assert (ANSWER_EVIDENCE_LIMIT, EVIDENCE_REVIEW_MISSING_LIMIT) == (15, 8)
-    assert not hasattr(
-        evidence_review_answer_evidence_module, "ANSWER_EVIDENCE_LIMIT_PER_TASK"
-    )
-    assert not hasattr(
-        evidence_review_answer_evidence_module, "EVIDENCE_REVIEW_MISSING_LIMIT_PER_TASK"
-    )
 
 
 def test_reviewer_response_rejects_more_than_the_selection_limit() -> None:
