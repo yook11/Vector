@@ -1,9 +1,7 @@
-"""Evidence Reviewer の境界型・port 契約。
+"""精査の出力後。LLM draftの契約化、回答用根拠の復元、Runの確定を置く。
 
-内部候補と外部候補を1つの候補列として受け取り、精査して根拠を見極める
-Evidence Reviewer の入出力型・cap 定数を保証する。自由記述欄の clamp は
-from_raw factory で行い、model validator は「factory を通れば違反しない」
-不変条件として保持する。
+自由記述欄の clamp は from_raw factory で行い、model validator は
+「factory を通れば違反しない」不変条件として保持する。
 """
 
 from __future__ import annotations
@@ -20,9 +18,8 @@ from app.agent.contract import (
     EVIDENCE_REVIEW_MISSING_LIMIT,
     EVIDENCE_REVIEWER_SELECTION_LIMIT,
 )
-from app.agent.evidence_collection.contract import CollectedTask, ResearchTaskReport
+from app.agent.evidence_collection.contract import ResearchTaskReport
 from app.agent.evidence_collection.external_search.contract import (
-    CANDIDATE_SNIPPET_MAX_CHARS,
     EVIDENCE_CLAIM_MAX_CHARS,
     EVIDENCE_WHY_SELECTED_MAX_CHARS,
     EXTERNAL_SEARCH_AGENT_HARD_LIMIT,
@@ -33,154 +30,20 @@ from app.agent.evidence_collection.external_search.contract import (
 from app.agent.evidence_collection.internal_search.contract import (
     InternalArticleSearchHit,
 )
+from app.agent.evidence_review.draft import EvidenceReviewDraft
+from app.agent.evidence_review.preparation import EvidenceReviewPreparation
 
 __all__ = [
-    "ANSWER_EVIDENCE_LIMIT",
-    "EVIDENCE_REVIEW_MISSING_LIMIT",
-    "EVIDENCE_REVIEWER_SELECTION_LIMIT",
     "AnswerEvidence",
-    "EvidenceCandidateProjection",
-    "EvidenceReviewDraft",
-    "EvidenceReviewInput",
     "EvidenceReviewOutcome",
-    "EvidenceReviewPreparation",
     "EvidenceReviewReport",
-    "EvidenceReviewerResponse",
     "EvidenceReviewStatus",
-    "EvidenceReviewTaskGroup",
-    "InternalArticleEvidence",
-    "ReviewCandidateEntry",
+    "EvidenceReviewerResponse",
     "EvidenceReviewerSelection",
-    "ReviewSelectionDraft",
+    "InternalArticleEvidence",
     "ReviewedEvidence",
     "RunReviewResult",
 ]
-
-
-@dataclass(frozen=True, slots=True)
-class EvidenceCandidateProjection:
-    """Reviewerへ渡す内外統合candidate projection。URLを含まない。"""
-
-    index: int
-    title: str
-    source_name: str | None
-    published_at: datetime | None
-    snippet: str | None
-
-
-@dataclass(frozen=True, slots=True)
-class EvidenceReviewTaskGroup:
-    """Reviewerへ渡す、1 task分のgoalとcandidate projection。"""
-
-    task_index: int
-    research_goal: str
-    candidates: tuple[EvidenceCandidateProjection, ...]
-
-
-@dataclass(frozen=True, slots=True)
-class EvidenceReviewInput:
-    """Evidence Reviewer AgentのRun単位1 attempt入力。"""
-
-    task_groups: tuple[EvidenceReviewTaskGroup, ...]
-    as_of: datetime
-
-
-@dataclass(frozen=True, slots=True)
-class ReviewCandidateEntry:
-    """通し番号1つに対応する、Reviewerへ見せる前の元候補。"""
-
-    index: int
-    task_index: int
-    source: InternalArticleSearchHit | ExternalSearchCandidate
-
-
-@dataclass(frozen=True, slots=True)
-class EvidenceReviewPreparation:
-    """Reviewerへの候補投影と、番号から元候補を引く控えを同じ採番で保持する。"""
-
-    task_groups: tuple[EvidenceReviewTaskGroup, ...]
-    _candidate_entries: tuple[ReviewCandidateEntry, ...]
-
-    @classmethod
-    def from_tasks(cls, tasks: list[CollectedTask]) -> EvidenceReviewPreparation:
-        """task順・グループ内は内部先で、投影と控えを同時に採番する。"""
-        ordered_tasks = sorted(tasks, key=lambda task: task.task_index)
-        review_tasks: list[EvidenceReviewTaskGroup] = []
-        entries: list[ReviewCandidateEntry] = []
-        for task in ordered_tasks:
-            candidates: list[EvidenceCandidateProjection] = []
-            for hit in task.internal_hits:
-                index = len(entries)
-                candidates.append(
-                    EvidenceCandidateProjection(
-                        index=index,
-                        title=hit.content.title,
-                        source_name=None,
-                        published_at=hit.content.published_at,
-                        snippet=_internal_candidate_snippet(hit),
-                    )
-                )
-                entries.append(
-                    ReviewCandidateEntry(
-                        index=index,
-                        task_index=task.task_index,
-                        source=hit,
-                    )
-                )
-            for candidate in task.external_candidates:
-                index = len(entries)
-                candidates.append(
-                    EvidenceCandidateProjection(
-                        index=index,
-                        title=candidate.title,
-                        source_name=candidate.source_name,
-                        published_at=candidate.published_at,
-                        snippet=candidate.snippet,
-                    )
-                )
-                entries.append(
-                    ReviewCandidateEntry(
-                        index=index,
-                        task_index=task.task_index,
-                        source=candidate,
-                    )
-                )
-            review_tasks.append(
-                EvidenceReviewTaskGroup(
-                    task_index=task.task_index,
-                    research_goal=task.research_goal,
-                    candidates=tuple(candidates),
-                )
-            )
-        return cls(
-            task_groups=tuple(review_tasks),
-            _candidate_entries=tuple(entries),
-        )
-
-    def resolve_candidate(self, candidate_index: int) -> ReviewCandidateEntry | None:
-        """Reviewerへ見せた番号だけを元候補へ解決する。"""
-        if 0 <= candidate_index < len(self._candidate_entries):
-            return self._candidate_entries[candidate_index]
-        return None
-
-
-class ReviewSelectionDraft(BaseModel):
-    """Reviewerがcandidate indexを参照して返すdraft 1件。"""
-
-    model_config = ConfigDict(frozen=True, extra="forbid")
-
-    candidate_index: int = Field(ge=0)
-    claim: str
-    why_selected: str
-
-
-class EvidenceReviewDraft(BaseModel):
-    """Reviewerが返すsource情報を持たない精査draft。"""
-
-    model_config = ConfigDict(frozen=True, extra="forbid")
-
-    selections: list[ReviewSelectionDraft]
-    missing: list[str]
 
 
 class EvidenceReviewerSelection(BaseModel):
@@ -358,16 +221,6 @@ class AnswerEvidence(BaseModel):
         if len(source_refs) != len(set(source_refs)):
             raise ValueError("answer evidence source_ref must be unique")
         return self
-
-
-def _internal_candidate_snippet(hit: InternalArticleSearchHit) -> str:
-    content = hit.content
-    if not content.key_points:
-        combined = content.summary
-    else:
-        key_points = "\n".join(f"- {point}" for point in content.key_points)
-        combined = f"{content.summary}\n{key_points}"
-    return combined[:CANDIDATE_SNIPPET_MAX_CHARS]
 
 
 def _build_internal_evidence(

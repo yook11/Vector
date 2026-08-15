@@ -30,7 +30,7 @@ from app.agent.evidence_collection.external_search.contract import (
     ExternalSearchToolFailureReason,
 )
 from app.agent.evidence_review import EvidenceReviewer
-from app.agent.evidence_review.contract import EvidenceReviewDraft
+from app.agent.evidence_review.draft import EvidenceReviewDraft
 from app.agent.planning.contract import (
     DirectAnswerPlan,
     PlanningRequest,

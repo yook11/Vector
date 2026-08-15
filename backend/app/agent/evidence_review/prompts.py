@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 from typing import Final
 
-from app.agent.evidence_review.contract import (
+from app.agent.evidence_review.preparation import (
     EvidenceCandidateProjection,
     EvidenceReviewInput,
     EvidenceReviewTaskGroup,

@@ -11,7 +11,7 @@ from app.agent.answering.evidence_answer.evidence import build_answer_input_evid
 from app.agent.contract import ExternalUrlSource
 from app.agent.evidence_collection.external_search import ExternalSearchEvidence
 from app.agent.evidence_review import AnswerEvidence
-from app.agent.evidence_review.contract import InternalArticleEvidence
+from app.agent.evidence_review.result import InternalArticleEvidence
 
 
 def _outcome(

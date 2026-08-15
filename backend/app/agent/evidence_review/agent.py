@@ -5,12 +5,12 @@ from __future__ import annotations
 from typing import Any, Final
 
 from app.agent.agent import Agent, AgentPrompt, ModelSettings, ModelTarget
-from app.agent.evidence_review.contract import (
+from app.agent.contract import (
     EVIDENCE_REVIEW_MISSING_LIMIT,
     EVIDENCE_REVIEWER_SELECTION_LIMIT,
-    EvidenceReviewDraft,
-    EvidenceReviewInput,
 )
+from app.agent.evidence_review.draft import EvidenceReviewDraft
+from app.agent.evidence_review.preparation import EvidenceReviewInput
 from app.agent.evidence_review.prompts import (
     EVIDENCE_REVIEWER_INSTRUCTIONS,
     EVIDENCE_REVIEWER_PROMPT_VERSION,

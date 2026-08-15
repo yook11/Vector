@@ -12,7 +12,7 @@ from app.agent.evidence_review import (
     EvidenceReviewReport,
     ReviewedEvidence,
 )
-from app.agent.evidence_review.contract import InternalArticleEvidence
+from app.agent.evidence_review.result import InternalArticleEvidence
 
 
 def _report(*, task_index: int = 0) -> ResearchTaskReport:
