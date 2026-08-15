@@ -17,18 +17,19 @@ from pydantic import ValidationError
 
 import app.agent.evidence_review.prompts as evidence_review_prompts_module
 from app.agent.agent import Agent
-from app.agent.evidence_review.agent import EVIDENCE_REVIEWER_AGENT
-from app.agent.evidence_review.contract import (
+from app.agent.contract import (
     EVIDENCE_REVIEW_MISSING_LIMIT,
     EVIDENCE_REVIEWER_SELECTION_LIMIT,
-    EvidenceCandidateProjection,
-    EvidenceReviewDraft,
-    EvidenceReviewInput,
-    EvidenceReviewTaskGroup,
-    ReviewSelectionDraft,
 )
+from app.agent.evidence_review.agent import EVIDENCE_REVIEWER_AGENT
 from app.agent.evidence_review.deepseek_binding import (
     EVIDENCE_REVIEWER_DEEPSEEK_BINDING,
+)
+from app.agent.evidence_review.draft import EvidenceReviewDraft, ReviewSelectionDraft
+from app.agent.evidence_review.preparation import (
+    EvidenceCandidateProjection,
+    EvidenceReviewInput,
+    EvidenceReviewTaskGroup,
 )
 
 

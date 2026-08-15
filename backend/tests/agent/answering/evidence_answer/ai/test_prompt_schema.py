@@ -18,12 +18,13 @@ from app.agent.answering.evidence_answer.prompts import (
     EVIDENCE_ANSWER_INSTRUCTIONS,
     render_evidence_answer_input,
 )
-from app.agent.contract import ExternalUrlSource, InternalArticleSource
+from app.agent.contract import (
+    EVIDENCE_REVIEW_MISSING_LIMIT,
+    ExternalUrlSource,
+    InternalArticleSource,
+)
 from app.agent.evidence_collection.external_search.contract import (
     MISSING_ITEM_MAX_CHARS,
-)
-from app.agent.evidence_review.contract import (
-    EVIDENCE_REVIEW_MISSING_LIMIT,
 )
 from app.agent.planning.contract import TargetTimeWindow
 from app.agent.question_context.contract import QuestionContext

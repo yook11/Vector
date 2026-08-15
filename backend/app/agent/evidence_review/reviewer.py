@@ -16,17 +16,19 @@ from pydantic import ValidationError
 
 from app.agent.evidence_collection.contract import CollectedTask
 from app.agent.evidence_review.agent import EVIDENCE_REVIEWER_AGENT
-from app.agent.evidence_review.contract import (
-    AnswerEvidence,
-    EvidenceReviewerResponse,
-    EvidenceReviewInput,
-    EvidenceReviewOutcome,
-    EvidenceReviewPreparation,
-)
 from app.agent.evidence_review.policy import (
     EVIDENCE_REVIEW_TIMEOUT_SECONDS,
     REVIEWER_ERROR_REASON,
     REVIEWER_TIMEOUT_REASON,
+)
+from app.agent.evidence_review.preparation import (
+    EvidenceReviewInput,
+    EvidenceReviewPreparation,
+)
+from app.agent.evidence_review.result import (
+    AnswerEvidence,
+    EvidenceReviewerResponse,
+    EvidenceReviewOutcome,
 )
 from app.agent.phase_span import agent_phase
 from app.agent.runtime.contract import (

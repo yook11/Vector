@@ -13,7 +13,7 @@ from typing import Any
 from app.agent.evidence_collection.external_search.contract import (
     ExternalSearchEvidence,
 )
-from app.agent.evidence_review.contract import (
+from app.agent.evidence_review.result import (
     AnswerEvidence,
     EvidenceReviewOutcome,
     InternalArticleEvidence,

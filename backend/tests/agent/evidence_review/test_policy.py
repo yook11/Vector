@@ -13,8 +13,13 @@ from typing import Any
 import pytest
 from pydantic import ValidationError
 
-import app.agent.evidence_review.contract as evidence_review_contract_module
 import app.agent.evidence_review.policy as evidence_review_policy_module
+import app.agent.evidence_review.result as evidence_review_result_module
+from app.agent.contract import (
+    ANSWER_EVIDENCE_LIMIT,
+    EVIDENCE_REVIEW_MISSING_LIMIT,
+    EVIDENCE_REVIEWER_SELECTION_LIMIT,
+)
 from app.agent.evidence_collection.contract import CollectedTask, ResearchTaskReport
 from app.agent.evidence_collection.external_search.contract import (
     CANDIDATE_SNIPPET_MAX_CHARS,
@@ -25,22 +30,19 @@ from app.agent.evidence_collection.internal_search.contract import (
     InternalArticleContent,
     InternalArticleSearchHit,
 )
-from app.agent.evidence_review.contract import (
-    ANSWER_EVIDENCE_LIMIT,
-    EVIDENCE_REVIEW_MISSING_LIMIT,
-    EVIDENCE_REVIEWER_SELECTION_LIMIT,
-    AnswerEvidence,
-    EvidenceReviewDraft,
-    EvidenceReviewerResponse,
-    EvidenceReviewerSelection,
-    EvidenceReviewOutcome,
-    EvidenceReviewPreparation,
-    InternalArticleEvidence,
-)
+from app.agent.evidence_review.draft import EvidenceReviewDraft
 from app.agent.evidence_review.policy import (
     EVIDENCE_REVIEW_TIMEOUT_SECONDS,
     REVIEWER_ERROR_REASON,
     REVIEWER_TIMEOUT_REASON,
+)
+from app.agent.evidence_review.preparation import EvidenceReviewPreparation
+from app.agent.evidence_review.result import (
+    AnswerEvidence,
+    EvidenceReviewerResponse,
+    EvidenceReviewerSelection,
+    EvidenceReviewOutcome,
+    InternalArticleEvidence,
 )
 from app.analysis.analyzed_article import InScopeAnalyzedArticle
 from app.analysis.assessment.domain.result import InScope, InScopeCategory
@@ -201,11 +203,9 @@ def test_answer_evidence_and_missing_caps_are_run_scoped_values() -> None:
     それより絞った8にする。
     """
     assert (ANSWER_EVIDENCE_LIMIT, EVIDENCE_REVIEW_MISSING_LIMIT) == (15, 8)
+    assert not hasattr(evidence_review_result_module, "ANSWER_EVIDENCE_LIMIT_PER_TASK")
     assert not hasattr(
-        evidence_review_contract_module, "ANSWER_EVIDENCE_LIMIT_PER_TASK"
-    )
-    assert not hasattr(
-        evidence_review_contract_module, "EVIDENCE_REVIEW_MISSING_LIMIT_PER_TASK"
+        evidence_review_result_module, "EVIDENCE_REVIEW_MISSING_LIMIT_PER_TASK"
     )
 
 

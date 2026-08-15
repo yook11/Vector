@@ -29,7 +29,7 @@ from app.agent.evidence_collection.internal_search.contract import (
     InternalArticleContent,
     InternalArticleSearchHit,
 )
-from app.agent.evidence_review.contract import EvidenceReviewDraft
+from app.agent.evidence_review.draft import EvidenceReviewDraft
 from app.agent.planning.contract import (
     ExternalResearchTask,
     SearchPlan,

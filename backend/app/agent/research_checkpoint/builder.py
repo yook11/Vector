@@ -14,7 +14,7 @@ import logfire
 
 from app.agent.evidence_collection.contract import CollectedNews
 from app.agent.evidence_review import EvidenceReviewOutcome
-from app.agent.evidence_review.contract import RunReviewResult
+from app.agent.evidence_review.result import RunReviewResult
 from app.agent.planning.contract import SearchPlan
 from app.agent.research_checkpoint.contract import (
     ResearchCheckpoint,

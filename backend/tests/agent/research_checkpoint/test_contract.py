@@ -12,15 +12,15 @@ import pytest
 from pydantic import ValidationError
 
 import app.agent.contract as shared_contract
+from app.agent.contract import (
+    ANSWER_EVIDENCE_LIMIT,
+    EVIDENCE_REVIEW_MISSING_LIMIT,
+)
 from app.agent.evidence_collection.external_search.contract import (
     EVIDENCE_CLAIM_MAX_CHARS,
     EXTERNAL_QUERY_MAX_CHARS,
     EXTERNAL_TASK_QUERY_LIMIT,
     MISSING_ITEM_MAX_CHARS,
-)
-from app.agent.evidence_review.contract import (
-    ANSWER_EVIDENCE_LIMIT,
-    EVIDENCE_REVIEW_MISSING_LIMIT,
 )
 from app.agent.planning.contract import RESEARCH_GOAL_MAX_CHARS, RESEARCH_TASK_LIMIT
 from app.agent.research_checkpoint.contract import (

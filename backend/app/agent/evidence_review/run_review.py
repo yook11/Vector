@@ -8,7 +8,7 @@ from app.agent.evidence_collection.contract import CollectedNews, ResearchTaskRe
 from app.agent.evidence_collection.external_search.contract import (
     ExternalResearchRuntime,
 )
-from app.agent.evidence_review.contract import (
+from app.agent.evidence_review.result import (
     AnswerEvidence,
     EvidenceReviewReport,
     ReviewedEvidence,
