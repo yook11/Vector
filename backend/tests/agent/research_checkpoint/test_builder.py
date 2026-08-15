@@ -1,7 +1,7 @@
 """build_research_checkpoint() の決定的な詰め替え契約テスト。
 
 LLM呼び出しを追加しない決定的builderであるため、期待値は入力(plan/
-executed_queries_by_task/review_outcome)から導出し、production関数を
+executed_queries_by_task/evidence_run)から導出し、production関数を
 呼んで作らない。
 """
 
@@ -10,12 +10,14 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from typing import Any
 
+import pytest
+
 from app.agent.evidence_collection.external_search.contract import (
     ExternalSearchEvidence,
 )
 from app.agent.evidence_review.result import (
     AnswerEvidence,
-    EvidenceReviewOutcome,
+    EvidenceRunCompleted,
     InternalArticleEvidence,
 )
 from app.agent.planning.contract import ResearchTask, SearchPlan
@@ -68,14 +70,13 @@ def _outcome(
     external_evidence: list[ExternalSearchEvidence] | None = None,
     internal_evidence: list[InternalArticleEvidence] | None = None,
     missing: list[str] | None = None,
-) -> EvidenceReviewOutcome:
-    return EvidenceReviewOutcome(
+) -> EvidenceRunCompleted:
+    return EvidenceRunCompleted(
         answer_evidence=AnswerEvidence(
             internal_articles=tuple(internal_evidence or []),
             external_sources=tuple(external_evidence or []),
         ),
-        missing=missing or [],
-        failure_reason=None,
+        review_missing=tuple(missing or []),
     )
 
 
@@ -83,13 +84,13 @@ def _build(
     *,
     plan: SearchPlan,
     executed_queries_by_task: dict[int, tuple[str, ...]],
-    review_outcome: EvidenceReviewOutcome,
+    evidence_run: EvidenceRunCompleted,
     as_of: datetime = _AS_OF,
 ) -> Any:
     return build_research_checkpoint(
         plan=plan,
         executed_queries_by_task=executed_queries_by_task,
-        review_outcome=review_outcome,
+        evidence_run=evidence_run,
         as_of=as_of,
     )
 
@@ -101,7 +102,7 @@ def test_tasks_are_recorded_in_plan_task_index_order_with_verbatim_queries() -> 
     checkpoint = _build(
         plan=plan,
         executed_queries_by_task=executed_queries_by_task,
-        review_outcome=_outcome(),
+        evidence_run=_outcome(),
     )
 
     assert checkpoint is not None
@@ -112,7 +113,7 @@ def test_tasks_are_recorded_in_plan_task_index_order_with_verbatim_queries() -> 
 
 def test_adopted_claims_include_only_external_evidence_for_the_matching_task() -> None:
     plan = _plan(goals=["goal-A"])
-    review_outcome = _outcome(
+    evidence_run = _outcome(
         external_evidence=[
             _external_evidence(task_index=0, claim="external claim", source_ref="e-0")
         ],
@@ -124,11 +125,27 @@ def test_adopted_claims_include_only_external_evidence_for_the_matching_task() -
     checkpoint = _build(
         plan=plan,
         executed_queries_by_task={0: ("q-a",)},
-        review_outcome=review_outcome,
+        evidence_run=evidence_run,
     )
 
     assert checkpoint is not None
     assert checkpoint.tasks[0].adopted_claims == ("external claim",)
+
+
+def test_checkpoint_rejects_evidence_for_an_unrecorded_task_index() -> None:
+    plan = _plan(goals=["goal-A"])
+    evidence_run = _outcome(
+        external_evidence=[
+            _external_evidence(task_index=1, claim="unrecorded task claim")
+        ]
+    )
+
+    with pytest.raises(ValueError):
+        _build(
+            plan=plan,
+            executed_queries_by_task={0: ("q-a",)},
+            evidence_run=evidence_run,
+        )
 
 
 def test_task_with_no_matching_adopted_claim_is_recorded_with_an_empty_tuple() -> None:
@@ -137,7 +154,7 @@ def test_task_with_no_matching_adopted_claim_is_recorded_with_an_empty_tuple() -
     checkpoint = _build(
         plan=plan,
         executed_queries_by_task={0: ("q-a",)},
-        review_outcome=_outcome(),
+        evidence_run=_outcome(),
     )
 
     assert checkpoint is not None
@@ -151,7 +168,7 @@ def test_task_with_missing_executed_queries_entry_is_not_recorded() -> None:
     checkpoint = _build(
         plan=plan,
         executed_queries_by_task={1: ("q-b",)},
-        review_outcome=_outcome(),
+        evidence_run=_outcome(),
     )
 
     assert checkpoint is not None
@@ -164,7 +181,7 @@ def test_task_with_empty_executed_queries_tuple_is_not_recorded() -> None:
     checkpoint = _build(
         plan=plan,
         executed_queries_by_task={0: (), 1: ("q-b",)},
-        review_outcome=_outcome(),
+        evidence_run=_outcome(),
     )
 
     assert checkpoint is not None
@@ -177,7 +194,7 @@ def test_zero_recordable_tasks_returns_none() -> None:
     checkpoint = _build(
         plan=plan,
         executed_queries_by_task={},
-        review_outcome=_outcome(),
+        evidence_run=_outcome(),
     )
 
     assert checkpoint is None
@@ -190,7 +207,7 @@ def test_unresolved_after_search_is_a_verbatim_ordered_copy_of_review_missing() 
     checkpoint = _build(
         plan=plan,
         executed_queries_by_task={0: ("q-a",)},
-        review_outcome=_outcome(missing=missing),
+        evidence_run=_outcome(missing=missing),
     )
 
     assert checkpoint is not None
@@ -204,7 +221,7 @@ def test_as_of_is_carried_through_unchanged() -> None:
     checkpoint = _build(
         plan=plan,
         executed_queries_by_task={0: ("q-a",)},
-        review_outcome=_outcome(),
+        evidence_run=_outcome(),
         as_of=as_of,
     )
 

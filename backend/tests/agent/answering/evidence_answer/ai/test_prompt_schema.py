@@ -243,7 +243,7 @@ def test_no_truncation_notice_without_the_flag() -> None:
 
 
 def test_review_missing_is_included_in_the_rendered_input() -> None:
-    """条件1: EvidenceReviewReport.missingが回答Agentの入力に含まれる。"""
+    """条件1: EvidenceRunCompleted.review_missingが回答Agentの入力に含まれる。"""
     header = _review_missing_template_header()
 
     rendered = _render(review_missing=("観点Aを確認できませんでした",))
@@ -329,7 +329,7 @@ def test_rendered_input_does_not_leak_operator_facing_collection_diagnostics() -
         "RESEARCH_GOAL_SENTINEL",
         "REVIEW_FAILURE_REASON_SENTINEL",
         "GENERATED_QUERY_SENTINEL",
-        # Task*CollectionStatus / EvidenceReviewStatus のliteral値
+        # Task*CollectionStatus のliteral値
         "succeeded",
         "failed",
         "skipped_empty",
@@ -346,10 +346,10 @@ def test_rendered_input_does_not_leak_operator_facing_collection_diagnostics() -
     assert not any(sentinel in rendered for sentinel in sentinels)
 
 
-def test_prompt_module_does_not_import_collection_or_review_report_types() -> None:
-    """条件12: 回答Agentのpromptがcollection診断・reviewの状態値型をimportしない。
+def test_prompt_module_does_not_import_collection_or_evidence_run_types() -> None:
+    """条件12: 回答Agentのpromptがcollection診断・Evidence Run結果型をimportしない。
 
-    review.missingだけをtuple[str, ...]で受け取るため、収集診断・状態値の
+    review_missingだけをtuple[str, ...]で受け取るため、収集診断・状態値の
     型そのものを参照する経路が無い。sourceテキストにこれらの型名が一切
     現れないことを確認する(import aliasやモジュール越しの参照も含めて
     網羅的に検証できる)。
@@ -357,7 +357,8 @@ def test_prompt_module_does_not_import_collection_or_review_report_types() -> No
     source = inspect.getsource(evidence_answer_prompts_module)
 
     assert "ResearchTaskReport" not in source
-    assert "EvidenceReviewReport" not in source
+    assert "EvidenceRunCompleted" not in source
+    assert "EvidenceRunFailed" not in source
 
 
 @pytest.mark.parametrize(

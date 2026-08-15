@@ -28,7 +28,7 @@ from app.agent.evidence_collection.external_search.contract import (
 from app.agent.evidence_collection.internal_search import (
     InternalArticleSearchHit,
 )
-from app.agent.evidence_review import EvidenceReviewer
+from app.agent.evidence_review import EvidenceReviewer, EvidenceRunCompleted
 from app.agent.planning.contract import (
     ExternalResearchTask,
     PlanningRequest,
@@ -85,6 +85,16 @@ from tests.agent.runtime._fakes import ScriptedAgentRuntime
 from tests.logfire._metric_helpers import collected_metrics
 
 _TIME_FILTER_METRIC = "external_search_time_filter_resolution_total"
+
+
+def _task_reports(captured: Any) -> list[Any]:
+    return [task.report for task in captured.collected_news.tasks]
+
+
+def _completed_evidence_run(captured: Any) -> EvidenceRunCompleted:
+    evidence_run = captured.evidence_run
+    assert isinstance(evidence_run, EvidenceRunCompleted)
+    return evidence_run
 
 
 def _plan(
@@ -766,7 +776,8 @@ async def test_time_filter_resolution_failure_closes_external_branch_before_acti
     with capture_logs() as logs:
         await _run(runner)
     metrics = collected_metrics(capfire)
-    reports = captured[0].task_reports
+    reports = _task_reports(captured[0])
+    evidence_run = _completed_evidence_run(captured[0])
 
     assert (
         # D4-S1: reviewerがLLM runtimeを必要とするため、time filter失敗でも
@@ -794,15 +805,7 @@ async def test_time_filter_resolution_failure_closes_external_branch_before_acti
             )
             for report in reports
         ],
-        # S1: reviewはtask単位のfieldではなくEvidenceCollectionOutcome.reviewへ
-        # 移動した(両taskとも候補ゼロのためRun全体がskipped_emptyで1本になる)。
-        (
-            captured[0].review.review,
-            captured[0].review.internal_evidence_count,
-            captured[0].review.external_evidence_count,
-            captured[0].review.review_failure_reason,
-            captured[0].review.missing,
-        ),
+        (evidence_run.answer_evidence.count, evidence_run.review_missing),
         _time_filter_metric_points(metrics),
         [
             entry
@@ -840,7 +843,7 @@ async def test_time_filter_resolution_failure_closes_external_branch_before_acti
                 0,
             ),
         ],
-        ("skipped_empty", 0, 0, None, []),
+        (0, ()),
         [(1, {"result": "failed", "reason": expected_reason})],
         [
             {
@@ -881,7 +884,7 @@ async def test_provider_result_cap_is_applied_before_candidate_pool(
     assert (
         len(candidates),
         candidates[-1].title,
-        captured[0].task_reports[0].external_candidate_count,
+        _task_reports(captured[0])[0].external_candidate_count,
     ) == (
         EXTERNAL_SEARCH_CANDIDATES_PER_QUERY,
         f"candidate-{EXTERNAL_SEARCH_CANDIDATES_PER_QUERY - 1}",
@@ -951,11 +954,9 @@ async def test_partial_provider_failure_continues_but_all_failure_skips_reviewer
                 report.provider_failed_query_count,
                 report.external_candidate_count,
             )
-            for report in captured[0].task_reports
+            for report in _task_reports(captured[0])
         ],
-        # S1: reviewはtask単位のfieldではなくEvidenceCollectionOutcome.reviewへ
-        # 移動した。task0に候補が残るためRun全体としてreviewerが起動しsucceededになる。
-        captured[0].review.review,
+        isinstance(captured[0].evidence_run, EvidenceRunCompleted),
     ) == (
         ["good", "bad", "bad"],
         1,
@@ -964,7 +965,7 @@ async def test_partial_provider_failure_continues_but_all_failure_skips_reviewer
             ("succeeded", 1, 1),
             ("provider_failed", 1, 0),
         ],
-        "succeeded",
+        True,
     )
 
 
@@ -1015,13 +1016,12 @@ async def test_workflow_constructs_task_ordered_external_outcome_before_answerin
     await _run(runner)
 
     outcome = captured[0]
-    reports = captured[0].task_reports
-    review = captured[0].review
+    reports = _task_reports(outcome)
+    evidence_run = _completed_evidence_run(outcome)
     assert (
         [report.research_goal for report in reports],
-        outcome.requested_external_agent_count,
-        outcome.effective_external_agent_count,
-        outcome.external_agent_hard_limit,
+        outcome.collected_news.requested_agent_count,
+        outcome.collected_news.effective_agent_count,
         [
             (
                 report.task_index,
@@ -1032,19 +1032,18 @@ async def test_workflow_constructs_task_ordered_external_outcome_before_answerin
             for report in reports
         ],
         # AnswerEvidenceはtaskを跨いでも同じURLを先勝ちで1件に確定する。
-        [item.source_ref for item in outcome.answer_evidence.external_sources],
-        (review.review, review.internal_evidence_count, review.external_evidence_count),
+        [item.source_ref for item in evidence_run.answer_evidence.external_sources],
+        evidence_run.review_missing,
     ) == (
         [task.research_goal for task in tasks],
         4,
         2,
-        3,
         [
             (0, "succeeded", ["q1"], 1),
             (1, "succeeded", ["q2"], 1),
         ],
         ["0-0"],
-        ("succeeded", 0, 1),
+        (),
     )
 
 
@@ -1397,15 +1396,14 @@ async def test_query_timeout_backstop_cancels_the_runtime_and_reports_failure(
 
     await asyncio.wait_for(_run(runner), timeout=0.5)
 
-    report = captured[0].task_reports[0]
+    report = _task_reports(captured[0])[0]
     assert (
         query_runtime.cancelled,
         report.external_collection,
-        # S1: reviewはtask単位のfieldではなくoutcome.reviewへ移動した。
-        captured[0].review.review,
+        isinstance(captured[0].evidence_run, EvidenceRunCompleted),
         report.generated_queries,
         observed_timeouts.count(30),
-    ) == (True, "query_generation_failed", "skipped_empty", [], 1)
+    ) == (True, "query_generation_failed", True, [], 1)
 
 
 @pytest.mark.asyncio
@@ -1428,17 +1426,16 @@ async def test_provider_timeout_backstop_cancels_tool_and_skips_reviewer(
 
     await asyncio.wait_for(_run(runner), timeout=0.5)
 
-    report = captured[0].task_reports[0]
+    report = _task_reports(captured[0])[0]
     assert (
         started.is_set(),
         tool.cancelled,
         reviewer_runtime.calls,
         report.external_collection,
-        # S1: reviewはtask単位のfieldではなくoutcome.reviewへ移動した。
-        captured[0].review.review,
+        isinstance(captured[0].evidence_run, EvidenceRunCompleted),
         report.provider_failed_query_count,
         observed_timeouts.count(15),
-    ) == (True, True, [], "provider_failed", "skipped_empty", 1, 1)
+    ) == (True, True, [], "provider_failed", True, 1, 1)
 
 
 # reviewerのtimeout backstop attempt/retry契約は

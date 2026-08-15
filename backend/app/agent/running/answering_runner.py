@@ -26,7 +26,16 @@ from app.agent.contract import (
     AnswerSource,
     EvidenceReviewSelectedEvent,
 )
-from app.agent.evidence_review import EvidenceReviewOutcome, ReviewedEvidence
+from app.agent.evidence_collection import CollectedNews
+from app.agent.evidence_collection.external_search import (
+    EXTERNAL_SEARCH_AGENT_HARD_LIMIT,
+)
+from app.agent.evidence_review import (
+    AnswerEvidence,
+    EvidenceRunCompleted,
+    EvidenceRunFailed,
+    EvidenceRunResult,
+)
 from app.agent.evidence_review.run_review import review_collected_news
 from app.agent.input_safety.contract import (
     INPUT_SAFETY_TEXT_CHAR_CAP,
@@ -154,27 +163,35 @@ class AnsweringRunner:
                         )
                         if collected_news.has_candidates:
                             await self._report_progress("evidence_review")
-                        reviewed = await review_collected_news(
+                        evidence_run = await review_collected_news(
                             collected_news=collected_news,
                             reviewer=phases.reviewer,
                             external=external,
                             as_of=answering_request.as_of,
                         )
-                        if reviewed.review_outcome is not None:
+                        if collected_news.has_candidates and isinstance(
+                            evidence_run, EvidenceRunCompleted
+                        ):
                             await self._report_selected_evidence(
-                                outcome=reviewed.review_outcome
+                                evidence_run=evidence_run
                             )
+                        _record_evidence_run_span_attributes(
+                            run_span,
+                            collected_news=collected_news,
+                            evidence_run=evidence_run,
+                        )
                     research_checkpoint = build_research_checkpoint_or_none(
                         plan=plan,
                         collected_news=collected_news,
-                        reviewed=reviewed,
+                        evidence_run=evidence_run,
                         as_of=answering_request.as_of,
                     )
                     answer = await self._answer_from_evidence(
                         phases=phases,
                         request=answering_request,
                         plan=plan,
-                        reviewed_evidence=reviewed.evidence,
+                        collected_news=collected_news,
+                        evidence_run=evidence_run,
                         run_span=run_span,
                     )
                 case _ as unreachable:
@@ -211,38 +228,44 @@ class AnsweringRunner:
         phases: AnsweringPhases,
         request: AnsweringRequest,
         plan: SearchPlan,
-        reviewed_evidence: ReviewedEvidence,
+        collected_news: CollectedNews,
+        evidence_run: EvidenceRunResult,
         run_span: LogfireSpan,
     ) -> AnswerQuestionResult:
-        evidence = build_answer_input_evidence(reviewed_evidence.answer_evidence)
+        if isinstance(evidence_run, EvidenceRunCompleted):
+            answer_evidence = evidence_run.answer_evidence
+            review_missing = evidence_run.review_missing
+        else:
+            answer_evidence = AnswerEvidence()
+            review_missing = ()
+        evidence = build_answer_input_evidence(answer_evidence)
 
         await self._report_progress("answering")
         answer_outcome = await phases.evidence_answerer.answer(
             request=request,
             evidence=evidence,
             target_time_window=_plan_target_time_window(plan),
-            review_missing=tuple(reviewed_evidence.review.missing),
+            review_missing=review_missing,
         )
         result = assemble_evidence_result(
             plan=plan,
-            outcome=reviewed_evidence,
+            collected_news=collected_news,
+            evidence_run=evidence_run,
             evidence=evidence,
             answer_outcome=answer_outcome,
         )
-        _record_evidence_span_attributes(
-            run_span, outcome=reviewed_evidence, sources=result.sources
-        )
+        _record_citation_span_attributes(run_span, sources=result.sources)
         return result
 
     async def _report_selected_evidence(
         self,
         *,
-        outcome: EvidenceReviewOutcome,
+        evidence_run: EvidenceRunCompleted,
     ) -> None:
         """精査成功後、Run全体の採用件数を1本だけ発火する。"""
         await self._report_event(
             EvidenceReviewSelectedEvent(
-                evidence_count=outcome.answer_evidence.count,
+                evidence_count=evidence_run.answer_evidence.count,
             )
         )
 
@@ -257,21 +280,57 @@ class AnsweringRunner:
         await self._progress.stage_changed(stage)
 
 
-def _record_evidence_span_attributes(
+def _record_evidence_run_span_attributes(
     span: LogfireSpan,
     *,
-    outcome: ReviewedEvidence,
-    sources: list[AnswerSource],
+    collected_news: CollectedNews,
+    evidence_run: EvidenceRunResult,
 ) -> None:
-    """内部・外部別の採用数と引用数を件数のみでspanへ焼く。"""
+    """収集・精査のRun診断を安全な値に限ってspanへ焼く。"""
+    answer_evidence = (
+        evidence_run.answer_evidence
+        if isinstance(evidence_run, EvidenceRunCompleted)
+        else AnswerEvidence()
+    )
     span.set_attribute(
         "internal_evidence_count",
-        len(outcome.answer_evidence.internal_articles),
+        len(answer_evidence.internal_articles),
     )
     span.set_attribute(
         "external_evidence_count",
-        len(outcome.answer_evidence.external_sources),
+        len(answer_evidence.external_sources),
     )
+    span.set_attribute(
+        "internal_collection_failed_task_count",
+        sum(
+            1
+            for task in collected_news.tasks
+            if task.report.internal_collection == "failed"
+        ),
+    )
+    if collected_news.requested_agent_count is not None:
+        span.set_attribute(
+            "requested_external_agent_count",
+            collected_news.requested_agent_count,
+        )
+    span.set_attribute(
+        "effective_external_agent_count",
+        collected_news.effective_agent_count,
+    )
+    span.set_attribute(
+        "external_agent_hard_limit",
+        EXTERNAL_SEARCH_AGENT_HARD_LIMIT,
+    )
+    if isinstance(evidence_run, EvidenceRunFailed):
+        span.set_attribute("review_failure_reason", evidence_run.failure_reason)
+
+
+def _record_citation_span_attributes(
+    span: LogfireSpan,
+    *,
+    sources: list[AnswerSource],
+) -> None:
+    """内部・外部別の引用数をrun spanへ焼く。"""
     span.set_attribute(
         "internal_cited_count",
         sum(1 for source in sources if source.kind == "internal_article"),
@@ -279,14 +338,6 @@ def _record_evidence_span_attributes(
     span.set_attribute(
         "external_cited_count",
         sum(1 for source in sources if source.kind == "external_url"),
-    )
-    span.set_attribute(
-        "internal_collection_failed_task_count",
-        sum(
-            1
-            for report in outcome.task_reports
-            if report.internal_collection == "failed"
-        ),
     )
 
 

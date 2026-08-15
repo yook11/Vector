@@ -15,11 +15,10 @@ from app.agent.evidence_review.result import (
     EvidenceReviewerResponse,
     EvidenceReviewerSelection,
     EvidenceReviewOutcome,
-    EvidenceReviewReport,
-    EvidenceReviewStatus,
+    EvidenceRunCompleted,
+    EvidenceRunFailed,
+    EvidenceRunResult,
     InternalArticleEvidence,
-    ReviewedEvidence,
-    RunReviewResult,
 )
 from app.agent.evidence_review.reviewer import EvidenceReviewer
 from app.agent.evidence_review.run_review import review_collected_news
@@ -27,19 +26,18 @@ from app.agent.evidence_review.run_review import review_collected_news
 __all__ = [
     "AnswerEvidence",
     "EvidenceCandidateProjection",
+    "EvidenceRunCompleted",
+    "EvidenceRunFailed",
+    "EvidenceRunResult",
     "EvidenceReviewDraft",
     "EvidenceReviewInput",
     "EvidenceReviewOutcome",
     "EvidenceReviewPreparation",
-    "EvidenceReviewReport",
     "EvidenceReviewerResponse",
-    "EvidenceReviewStatus",
     "EvidenceReviewTaskGroup",
     "EvidenceReviewer",
     "InternalArticleEvidence",
     "EvidenceReviewerSelection",
     "ReviewSelectionDraft",
-    "ReviewedEvidence",
-    "RunReviewResult",
     "review_collected_news",
 ]

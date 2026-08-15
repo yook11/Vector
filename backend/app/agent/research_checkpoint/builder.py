@@ -13,8 +13,11 @@ from datetime import datetime
 import logfire
 
 from app.agent.evidence_collection.contract import CollectedNews
-from app.agent.evidence_review import EvidenceReviewOutcome
-from app.agent.evidence_review.result import RunReviewResult
+from app.agent.evidence_review import (
+    EvidenceRunCompleted,
+    EvidenceRunFailed,
+    EvidenceRunResult,
+)
 from app.agent.planning.contract import SearchPlan
 from app.agent.research_checkpoint.contract import (
     ResearchCheckpoint,
@@ -28,17 +31,17 @@ def build_research_checkpoint_or_none(
     *,
     plan: SearchPlan,
     collected_news: CollectedNews,
-    reviewed: RunReviewResult,
+    evidence_run: EvidenceRunResult,
     as_of: datetime,
 ) -> ResearchCheckpoint | None:
     """精査失敗Runは記録せず、組み立て失敗は握って回答workflowを継続する。"""
-    if reviewed.evidence.review.review == "failed":
+    if isinstance(evidence_run, EvidenceRunFailed):
         return None
     try:
         return build_research_checkpoint(
             plan=plan,
             executed_queries_by_task=collected_news.executed_queries_by_task,
-            review_outcome=reviewed.review_outcome,
+            evidence_run=evidence_run,
             as_of=as_of,
         )
     except Exception:
@@ -50,22 +53,23 @@ def build_research_checkpoint(
     *,
     plan: SearchPlan,
     executed_queries_by_task: Mapping[int, tuple[str, ...]],
-    review_outcome: EvidenceReviewOutcome | None,
+    evidence_run: EvidenceRunCompleted,
     as_of: datetime,
 ) -> ResearchCheckpoint | None:
     """外部検索を実行できたtaskだけを記録する。記録可能taskが0件ならNone。
 
-    `review_outcome`がNoneなのは、全taskの候補が0件でevidence reviewを
-    実行しなかったRunを表す。この場合adopted_claims・unresolved_after_search
-    は空として組み立てる(採用可否・missingを判断するreviewが走っていないため)。
+    候補ゼロでreviewerを実行しなかったRunも、Evidenceと
+    review_missingが空の正常完了として決定的に組み立てる。
     """
+    plan_task_indexes = set(range(len(plan.research_tasks)))
+    if not evidence_run.answer_evidence.task_indexes <= plan_task_indexes:
+        raise ValueError("answer evidence must reference a planned task")
 
     adopted_claims_by_task: dict[int, list[str]] = {}
-    if review_outcome is not None:
-        for evidence in review_outcome.answer_evidence.external_sources:
-            adopted_claims_by_task.setdefault(evidence.task_index, []).append(
-                evidence.claim
-            )
+    for evidence in evidence_run.answer_evidence.external_sources:
+        adopted_claims_by_task.setdefault(evidence.task_index, []).append(
+            evidence.claim
+        )
 
     tasks: list[ResearchTaskRecord] = []
     for task_index, task in enumerate(plan.research_tasks):
@@ -83,11 +87,8 @@ def build_research_checkpoint(
     if not tasks:
         return None
 
-    unresolved_after_search = (
-        tuple(review_outcome.missing) if review_outcome is not None else ()
-    )
     return ResearchCheckpoint(
         as_of=as_of,
         tasks=tuple(tasks),
-        unresolved_after_search=unresolved_after_search,
+        unresolved_after_search=evidence_run.review_missing,
     )

@@ -9,7 +9,7 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Literal, Self
+from typing import Self
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -18,11 +18,9 @@ from app.agent.contract import (
     EVIDENCE_REVIEW_MISSING_LIMIT,
     EVIDENCE_REVIEWER_SELECTION_LIMIT,
 )
-from app.agent.evidence_collection.contract import ResearchTaskReport
 from app.agent.evidence_collection.external_search.contract import (
     EVIDENCE_CLAIM_MAX_CHARS,
     EVIDENCE_WHY_SELECTED_MAX_CHARS,
-    EXTERNAL_SEARCH_AGENT_HARD_LIMIT,
     MISSING_ITEM_MAX_CHARS,
     ExternalSearchCandidate,
     ExternalSearchEvidence,
@@ -35,14 +33,13 @@ from app.agent.evidence_review.preparation import EvidenceReviewPreparation
 
 __all__ = [
     "AnswerEvidence",
+    "EvidenceRunCompleted",
+    "EvidenceRunFailed",
+    "EvidenceRunResult",
     "EvidenceReviewOutcome",
-    "EvidenceReviewReport",
-    "EvidenceReviewStatus",
     "EvidenceReviewerResponse",
     "EvidenceReviewerSelection",
     "InternalArticleEvidence",
-    "ReviewedEvidence",
-    "RunReviewResult",
 ]
 
 
@@ -106,10 +103,7 @@ class EvidenceReviewerResponse(BaseModel):
 
     @model_validator(mode="after")
     def _validate_missing_caps(self) -> EvidenceReviewerResponse:
-        if len(self.missing) > EVIDENCE_REVIEW_MISSING_LIMIT:
-            raise ValueError("missing exceeds evidence review missing limit")
-        if any(len(item) > MISSING_ITEM_MAX_CHARS for item in self.missing):
-            raise ValueError("missing item exceeds max length")
+        _validate_review_missing(self.missing)
         return self
 
 
@@ -202,6 +196,13 @@ class AnswerEvidence(BaseModel):
     def count(self) -> int:
         return len(self.internal_articles) + len(self.external_sources)
 
+    @property
+    def task_indexes(self) -> set[int]:
+        return {
+            item.task_index
+            for item in (*self.internal_articles, *self.external_sources)
+        }
+
     @model_validator(mode="after")
     def _validate_answer_evidence(self) -> Self:
         if self.count > ANSWER_EVIDENCE_LIMIT:
@@ -282,6 +283,38 @@ class EvidenceReviewOutcome:
             )
 
 
+class EvidenceRunCompleted(BaseModel):
+    """Evidence Runを正常に完了し、回答用結果を確定できた。"""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    answer_evidence: AnswerEvidence
+    review_missing: tuple[str, ...]
+
+    @model_validator(mode="after")
+    def _validate_review_missing_caps(self) -> EvidenceRunCompleted:
+        _validate_review_missing(self.review_missing)
+        return self
+
+
+class EvidenceRunFailed(BaseModel):
+    """Evidence Runを正常に完了できなかった。"""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    failure_reason: str = Field(min_length=1)
+
+
+EvidenceRunResult = EvidenceRunCompleted | EvidenceRunFailed
+
+
+def _validate_review_missing(missing: Sequence[str]) -> None:
+    if len(missing) > EVIDENCE_REVIEW_MISSING_LIMIT:
+        raise ValueError("missing exceeds evidence review missing limit")
+    if any(len(item) > MISSING_ITEM_MAX_CHARS for item in missing):
+        raise ValueError("missing item exceeds max length")
+
+
 def _clamp_missing(missing: Sequence[str]) -> tuple[str, ...]:
     return tuple(
         _truncate_text(item, MISSING_ITEM_MAX_CHARS)
@@ -291,100 +324,3 @@ def _clamp_missing(missing: Sequence[str]) -> tuple[str, ...]:
 
 def _truncate_text(value: object, max_chars: int) -> str:
     return str(value)[:max_chars]
-
-
-EvidenceReviewStatus = Literal["succeeded", "failed", "skipped_empty"]
-
-
-class EvidenceReviewReport(BaseModel):
-    """Run 単位の精査(採用/不足)の実行内容・失敗分類。"""
-
-    model_config = ConfigDict(frozen=True, extra="forbid")
-
-    review: EvidenceReviewStatus
-    review_failure_reason: str | None = None
-    internal_evidence_count: int = Field(default=0, ge=0)
-    external_evidence_count: int = Field(default=0, ge=0)
-    missing: list[str] = Field(default_factory=list)
-
-    @model_validator(mode="after")
-    def _validate_review_report(self) -> Self:
-        if self.review == "skipped_empty" and (
-            self.internal_evidence_count != 0
-            or self.external_evidence_count != 0
-            or self.missing
-            or self.review_failure_reason is not None
-        ):
-            raise ValueError("skipped_empty review must keep diagnostics closed")
-
-        if self.review == "failed":
-            if self.internal_evidence_count != 0 or self.external_evidence_count != 0:
-                raise ValueError("failed review must report zero evidence")
-            if self.review_failure_reason is None:
-                raise ValueError("failed review requires a failure reason")
-        elif self.review_failure_reason is not None:
-            raise ValueError("review_failure_reason is only valid when review failed")
-
-        if len(self.missing) > EVIDENCE_REVIEW_MISSING_LIMIT:
-            raise ValueError("missing exceeds missing limit")
-        if any(len(item) > MISSING_ITEM_MAX_CHARS for item in self.missing):
-            raise ValueError("missing item exceeds max length")
-        if (
-            self.internal_evidence_count + self.external_evidence_count
-            > ANSWER_EVIDENCE_LIMIT
-        ):
-            raise ValueError("evidence count exceeds answer evidence limit")
-        return self
-
-
-class ReviewedEvidence(BaseModel):
-    """精査を経て確定した採用根拠。収集/精査それぞれのreportを併せ持つ。"""
-
-    model_config = ConfigDict(frozen=True, extra="forbid")
-
-    answer_evidence: AnswerEvidence = Field(default_factory=AnswerEvidence)
-    requested_external_agent_count: int | None = None
-    effective_external_agent_count: int = Field(default=0, ge=0)
-    external_agent_hard_limit: int = Field(
-        default=EXTERNAL_SEARCH_AGENT_HARD_LIMIT,
-        ge=1,
-    )
-    task_reports: list[ResearchTaskReport] = Field(min_length=1)
-    review: EvidenceReviewReport
-
-    @model_validator(mode="after")
-    def _validate_task_reports(self) -> Self:
-        report_indexes = {report.task_index for report in self.task_reports}
-        if report_indexes != set(range(len(self.task_reports))):
-            raise ValueError("task reports must cover each task index exactly once")
-
-        evidence_task_indexes = {
-            item.task_index for item in self.answer_evidence.internal_articles
-        }
-        evidence_task_indexes |= {
-            item.task_index for item in self.answer_evidence.external_sources
-        }
-        if not evidence_task_indexes <= report_indexes:
-            raise ValueError("evidence task_index must reference a reported task")
-
-        if self.review.internal_evidence_count != len(
-            self.answer_evidence.internal_articles
-        ):
-            raise ValueError(
-                "review internal evidence count must match outcome evidence"
-            )
-        if self.review.external_evidence_count != len(
-            self.answer_evidence.external_sources
-        ):
-            raise ValueError(
-                "review external evidence count must match outcome evidence"
-            )
-        return self
-
-
-@dataclass(frozen=True, slots=True)
-class RunReviewResult:
-    """Run単位精査の確定結果。review_outcomeは精査が成功した場合のみ持つ。"""
-
-    evidence: ReviewedEvidence
-    review_outcome: EvidenceReviewOutcome | None

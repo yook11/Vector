@@ -1,10 +1,4 @@
-"""ResearchTaskReport(収集系)とEvidenceReviewReport(Run単位の精査系)の永続契約(S1)。
-
-仕様「観測と失敗分類」により、旧ResearchTaskReportが一体で持っていた
-review関連field(review / review_failure_reason / internal_evidence_count /
-external_evidence_count / missing)はRun単位の
-EvidenceReviewReportへ分離されている。
-"""
+"""ResearchTaskReportが収集工程の情報だけを持つ契約テスト。"""
 
 from __future__ import annotations
 
@@ -13,12 +7,15 @@ from importlib import import_module
 import pytest
 from pydantic import ValidationError
 
-from app.agent.evidence_collection import ResearchTaskReport
-from app.agent.evidence_review import EvidenceReviewReport
+from app.agent.evidence_collection import (
+    CollectedNews,
+    CollectedTask,
+    ResearchTaskReport,
+)
 
 
 def _report(**overrides: object) -> ResearchTaskReport:
-    """S1: ResearchTaskReportは収集系だけを持つ(review関連はEvidenceReviewReportへ)。"""
+    """ResearchTaskReportは収集工程だけを表す。"""
     values: dict[str, object] = {
         "task_index": 0,
         "research_goal": "NVIDIA の供給を確認する",
@@ -60,16 +57,22 @@ def _provider_failed_report(**overrides: object) -> ResearchTaskReport:
     return _report(**values)
 
 
-def _review_report(**overrides: object) -> EvidenceReviewReport:
-    values: dict[str, object] = {
-        "review": "succeeded",
-        "review_failure_reason": None,
-        "internal_evidence_count": 0,
-        "external_evidence_count": 0,
-        "missing": [],
-    }
-    values.update(overrides)
-    return EvidenceReviewReport(**values)
+def _collected_task(
+    *,
+    task_index: int,
+    report_task_index: int | None = None,
+) -> CollectedTask:
+    return CollectedTask(
+        task_index=task_index,
+        research_goal=f"goal-{task_index}",
+        internal_hits=[],
+        external_candidates=[],
+        executed_queries=(),
+        report=_report(
+            task_index=task_index if report_task_index is None else report_task_index,
+            research_goal=f"goal-{task_index}",
+        ),
+    )
 
 
 # --- ResearchTaskReport(収集系) ---------------------------------------------
@@ -212,7 +215,7 @@ def test_report_rejects_legacy_extra_field() -> None:
 
 
 def test_report_has_no_review_related_or_legacy_fields() -> None:
-    """S1(観測と失敗分類)。review関連fieldはEvidenceReviewReportへ移動した。"""
+    """収集Reportへ精査結果・失敗理由を混ぜない。"""
     report = _report()
 
     for legacy_field in (
@@ -236,102 +239,42 @@ def test_report_has_no_review_related_or_legacy_fields() -> None:
         assert not hasattr(package, "ResearchTaskStatus")
 
 
-# --- EvidenceReviewReport(Run単位の精査系) -----------------------------------
+# --- CollectedNews (収集Run) -------------------------------------------------
 
 
-def test_review_report_accepts_the_documented_succeeded_shape() -> None:
-    report = _review_report(
-        review="succeeded",
-        internal_evidence_count=2,
-        external_evidence_count=2,
-        missing=["公式発表が見つからない"],
+def test_collected_news_accepts_contiguous_matching_task_indexes() -> None:
+    collected_news = CollectedNews(
+        tasks=[_collected_task(task_index=0), _collected_task(task_index=1)],
+        requested_agent_count=1,
+        effective_agent_count=1,
     )
 
-    assert (
-        report.review,
-        report.internal_evidence_count,
-        report.external_evidence_count,
-        report.missing,
-    ) == ("succeeded", 2, 2, ["公式発表が見つからない"])
-    assert not hasattr(report, "dropped_selection_count")
+    assert [task.task_index for task in collected_news.tasks] == [0, 1]
 
 
 @pytest.mark.parametrize(
-    "changes",
+    "task_indexes",
     [
-        pytest.param({"internal_evidence_count": 1}, id="internal-evidence"),
-        pytest.param({"external_evidence_count": 1}, id="external-evidence"),
-        pytest.param({"missing": ["表示用の不足理由"]}, id="missing"),
-        pytest.param({"review_failure_reason": "reviewer_timeout"}, id="reason"),
+        pytest.param([0, 0], id="duplicate"),
+        pytest.param([0, 2], id="missing"),
+        pytest.param([1], id="does-not-start-at-zero"),
     ],
 )
-def test_review_skipped_empty_requires_fully_closed_diagnostics(
-    changes: dict[str, object],
+def test_collected_news_rejects_non_contiguous_or_duplicate_task_indexes(
+    task_indexes: list[int],
 ) -> None:
-    """review=skipped_emptyは内外evidence/missing/reasonが全て閉じる
-
-    (Run全体で両候補ゼロ、reviewer未起動を表す)。
-    """
-    with pytest.raises(ValidationError):
-        _review_report(review="skipped_empty", **changes)
-
-
-def test_review_skipped_empty_accepts_the_closed_shape() -> None:
-    report = _review_report(review="skipped_empty")
-
-    assert report.review == "skipped_empty"
-    assert (
-        report.internal_evidence_count,
-        report.external_evidence_count,
-        report.missing,
-    ) == (0, 0, [])
-
-
-@pytest.mark.parametrize(
-    "changes",
-    [
-        pytest.param({"internal_evidence_count": 1}, id="internal-evidence"),
-        pytest.param({"external_evidence_count": 1}, id="external-evidence"),
-    ],
-)
-def test_review_failed_requires_zero_evidence_count(changes: dict[str, object]) -> None:
-    """review=failedは内外双方のevidence_count=0を強制する(Run全体が根拠ゼロ)。"""
-    with pytest.raises(ValidationError):
-        _review_report(
-            review="failed",
-            review_failure_reason="reviewer_timeout",
-            **changes,
+    with pytest.raises(ValueError):
+        CollectedNews(
+            tasks=[_collected_task(task_index=index) for index in task_indexes],
+            requested_agent_count=1,
+            effective_agent_count=1,
         )
 
 
-def test_review_failed_requires_a_failure_reason() -> None:
-    with pytest.raises(ValidationError):
-        _review_report(review="failed", review_failure_reason=None)
-
-
-@pytest.mark.parametrize("review", ["succeeded", "skipped_empty"])
-def test_non_failed_review_rejects_a_failure_reason(review: str) -> None:
-    """review_failure_reason は review=failed のときだけ許される。"""
-    with pytest.raises(ValidationError):
-        _review_report(review=review, review_failure_reason="reviewer_timeout")
-
-
-def test_review_report_rejects_evidence_count_above_the_adoption_cap() -> None:
-    """内外合算がRun単位の採用上限(S2で15)を超えると拒否する。"""
-    with pytest.raises(ValidationError):
-        _review_report(
-            review="succeeded",
-            internal_evidence_count=8,
-            external_evidence_count=8,
+def test_collected_news_rejects_task_and_report_index_mismatch() -> None:
+    with pytest.raises(ValueError):
+        CollectedNews(
+            tasks=[_collected_task(task_index=0, report_task_index=1)],
+            requested_agent_count=1,
+            effective_agent_count=1,
         )
-
-
-def test_review_report_accepts_evidence_count_sum_at_the_adoption_cap() -> None:
-    """内外合算がちょうど上限のときは受理する境界値。"""
-    report = _review_report(
-        review="succeeded",
-        internal_evidence_count=7,
-        external_evidence_count=8,
-    )
-
-    assert report.internal_evidence_count + report.external_evidence_count == 15

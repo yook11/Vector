@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 from contextlib import AbstractAsyncContextManager
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
 from uuid import UUID
@@ -19,7 +20,7 @@ from app.agent.answering.evidence_answer.contract import (
     EvidenceAnswerUnavailable,
 )
 from app.agent.contract import AnswerProgressStage
-from app.agent.evidence_collection import NewsCollector, Researcher
+from app.agent.evidence_collection import CollectedNews, NewsCollector, Researcher
 from app.agent.evidence_collection.external_search import (
     ExternalResearchRuntime,
     ExternalSearchCandidate,
@@ -33,7 +34,11 @@ from app.agent.evidence_collection.internal_search.contract import InternalSearc
 from app.agent.evidence_collection.internal_search.query_embedding import (
     InternalSearchQueries,
 )
-from app.agent.evidence_review import EvidenceReviewer
+from app.agent.evidence_review import (
+    EvidenceReviewer,
+    EvidenceRunCompleted,
+    EvidenceRunResult,
+)
 from app.agent.planning.contract import (
     ExternalResearchTask,
     PlanningRequest,
@@ -541,14 +546,37 @@ async def _run(runner: AnsweringRunner) -> None:
     )
 
 
+@dataclass(frozen=True, slots=True)
+class _CapturedEvidenceAssemblyInput:
+    collected_news: CollectedNews
+    evidence_run: EvidenceRunResult
+
+
+def _task_reports(captured: _CapturedEvidenceAssemblyInput) -> list[Any]:
+    return [task.report for task in captured.collected_news.tasks]
+
+
+def _completed_evidence_run(
+    captured: _CapturedEvidenceAssemblyInput,
+) -> EvidenceRunCompleted:
+    evidence_run = captured.evidence_run
+    assert isinstance(evidence_run, EvidenceRunCompleted)
+    return evidence_run
+
+
 def _capture_external_outcome(
     monkeypatch: pytest.MonkeyPatch,
-) -> list[Any]:
-    captured: list[Any] = []
+) -> list[_CapturedEvidenceAssemblyInput]:
+    captured: list[_CapturedEvidenceAssemblyInput] = []
     original = answering_runner_module.assemble_evidence_result
 
     def capture(**kwargs: Any) -> Any:
-        captured.append(kwargs["outcome"])
+        captured.append(
+            _CapturedEvidenceAssemblyInput(
+                collected_news=kwargs["collected_news"],
+                evidence_run=kwargs["evidence_run"],
+            )
+        )
         return original(**kwargs)
 
     monkeypatch.setattr(answering_runner_module, "assemble_evidence_result", capture)
@@ -973,7 +1001,7 @@ async def test_classified_external_failure_is_an_outcome_and_scope_closes_once(
     await _run(runner)
 
     assert (
-        captured[0].task_reports[0].external_collection,
+        _task_reports(captured[0])[0].external_collection,
         factory.scopes[0].exit_calls,
         factory.scopes[0].close_succeeded,
     ) == ("query_generation_failed", 1, True)
@@ -1051,7 +1079,7 @@ async def test_search_converts_internal_search_error_to_failed_report_value(
         run_context=RUN_CONTEXT,
     )
 
-    assert captured[0].task_reports[0].internal_collection == "failed"
+    assert _task_reports(captured[0])[0].internal_collection == "failed"
 
 
 @pytest.mark.asyncio
@@ -1073,7 +1101,7 @@ async def test_search_classified_internal_failure_keeps_external_outcome(
         run_context=RUN_CONTEXT,
     )
 
-    report = captured[0].task_reports[0]
+    report = _task_reports(captured[0])[0]
     assert (report.internal_collection, report.external_collection) == (
         "failed",
         "succeeded",
@@ -1100,7 +1128,7 @@ async def test_zero_internal_hits_remain_successful_under_search(
         run_context=RUN_CONTEXT,
     )
 
-    assert captured[0].task_reports[0].internal_collection == "succeeded"
+    assert _task_reports(captured[0])[0].internal_collection == "succeeded"
 
 
 @pytest.mark.asyncio
@@ -1696,19 +1724,18 @@ async def test_time_filter_failure_still_collects_internal_hits_for_every_task(
 
     await _run(runner)
 
-    reports = captured[0].task_reports
+    reports = _task_reports(captured[0])
+    evidence_run = _completed_evidence_run(captured[0])
     assert (
         factory.activate_calls,
         sorted(report.external_collection for report in reports),
-        # 保証するテスト条件 6: time filter失敗でも内部精査が成功していれば
-        # Run全体としてreview="succeeded"で完了扱いになる(review関連field
-        # はResearchTaskReportからEvidenceCollectionOutcome.reviewへ移動)。
-        captured[0].review.review,
-        {item.title for item in captured[0].answer_evidence.internal_articles},
+        # time filter失敗でも内部精査の完了結果はCompletedになる。
+        isinstance(evidence_run, EvidenceRunCompleted),
+        {item.title for item in evidence_run.answer_evidence.internal_articles},
     ) == (
         1,
         ["time_filter_failed", "time_filter_failed"],
-        "succeeded",
+        True,
         {"task0-hit", "task1-hit"},
     )
 
@@ -1853,7 +1880,12 @@ async def test_internal_hits_merge_by_task_index_order_with_first_win_dedup(
 
     assert (
         completion_order,
-        [item.title for item in captured[0].answer_evidence.internal_articles],
+        [
+            item.title
+            for item in _completed_evidence_run(
+                captured[0]
+            ).answer_evidence.internal_articles
+        ],
     ) == (
         ["task1", "task0"],
         ["task0-shared", "task0-unique", "task1-unique"],
@@ -1898,12 +1930,10 @@ async def test_all_tasks_incomplete_adds_the_fixed_incomplete_phrase_once(
     assert (
         result.final_output.missing_aspects.count("完了できなかった調査があります") == 1
     )
-    assert {report.internal_collection for report in captured[0].task_reports} == {
+    assert {report.internal_collection for report in _task_reports(captured[0])} == {
         "failed"
     }
-    # S1: reviewはtask単位のfieldではなくEvidenceCollectionOutcome.reviewへ
-    # 移動した(全taskの候補がゼロのためRun全体がskipped_empty)。
-    assert captured[0].review.review == "skipped_empty"
+    assert _completed_evidence_run(captured[0]).answer_evidence.count == 0
 
 
 @pytest.mark.asyncio
@@ -1936,12 +1966,10 @@ async def test_some_tasks_incomplete_keeps_the_phrase_to_one_line_and_keeps_sour
 
     await _run(runner)
 
-    reports = {report.task_index: report for report in captured[0].task_reports}
-    # S1: reviewはtask単位のfieldではなくEvidenceCollectionOutcome.reviewへ移動した。
-    # task1に候補が残るためRun全体としてreviewerが起動しsucceededになる。
+    reports = {report.task_index: report for report in _task_reports(captured[0])}
+    evidence_run = _completed_evidence_run(captured[0])
     assert reports[0].internal_collection == "failed"
     assert reports[1].internal_collection == "succeeded"
-    assert captured[0].review.review == "succeeded"
-    assert [item.title for item in captured[0].answer_evidence.internal_articles] == [
+    assert [item.title for item in evidence_run.answer_evidence.internal_articles] == [
         "survivor"
     ]

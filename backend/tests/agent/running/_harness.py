@@ -7,6 +7,7 @@ AnsweringRunnerを組んで実行するという同一契約のfake協力者と�
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
 from uuid import UUID
@@ -20,6 +21,7 @@ from app.agent.answering.evidence_answer.contract import (
     EvidenceAnswerOutcome,
     EvidenceAnswerUnavailable,
 )
+from app.agent.evidence_collection import CollectedNews
 from app.agent.evidence_collection.external_search.contract import (
     ExternalQueryDraft,
     ExternalResearchRuntime,
@@ -30,6 +32,7 @@ from app.agent.evidence_collection.internal_search.contract import (
     InternalArticleSearchHit,
 )
 from app.agent.evidence_review.draft import EvidenceReviewDraft
+from app.agent.evidence_review.result import EvidenceRunResult
 from app.agent.planning.contract import (
     ExternalResearchTask,
     SearchPlan,
@@ -192,13 +195,28 @@ class ExternalSearchTool:
         return list(self._results.get(input.query, []))
 
 
-def capture_external_outcome(monkeypatch: pytest.MonkeyPatch) -> list[Any]:
-    """回答結果の組み立てに渡る精査済みoutcomeを横取りして記録する。"""
-    captured: list[Any] = []
+@dataclass(frozen=True, slots=True)
+class CapturedEvidenceAssemblyInput:
+    """Answerer直前に分離された収集結果とEvidence Run結果。"""
+
+    collected_news: CollectedNews
+    evidence_run: EvidenceRunResult
+
+
+def capture_external_outcome(
+    monkeypatch: pytest.MonkeyPatch,
+) -> list[CapturedEvidenceAssemblyInput]:
+    """回答組み立てへ渡る収集結果とEvidence Run結果を記録する。"""
+    captured: list[CapturedEvidenceAssemblyInput] = []
     original = answering_runner_module.assemble_evidence_result
 
     def capture(**kwargs: Any) -> Any:
-        captured.append(kwargs["outcome"])
+        captured.append(
+            CapturedEvidenceAssemblyInput(
+                collected_news=kwargs["collected_news"],
+                evidence_run=kwargs["evidence_run"],
+            )
+        )
         return original(**kwargs)
 
     monkeypatch.setattr(answering_runner_module, "assemble_evidence_result", capture)
