@@ -309,7 +309,7 @@ async def test_review_classifies_failure_reason_after_two_exhausted_attempts(
 async def test_review_retries_after_invalid_draft_and_drops_invalid_selections() -> (
     None
 ):
-    """claimが空のselectionはfinalize_review_draft()でValidationErrorとなり
+    """claimが空のselectionはfrom_draft()でValidationErrorとなり
 
     attempt 1が失敗として扱われる(schema自体は妥当なのでruntimeは例外を
     投げない)。attempt 2で重複/範囲外を除き、有効な選択だけが残る。
