@@ -356,15 +356,19 @@ def test_task_groups_keep_a_task_with_no_candidates_as_an_empty_group() -> None:
 
 
 def test_task_groups_map_internal_source_name_to_none_and_truncate_snippet() -> None:
-    """内部候補: source_name=None、snippetはsummary+key_points連結をcapでtruncate。"""
+    """内部候補: source_name=None、snippetはsummaryとkey_points連結をcapでtruncate。
+
+    summary単体ではcapに届かない入力で、連結の実施と連結後のtruncateを区別する。
+    """
     from_tasks = EvidenceReviewPreparation.from_tasks
-    overlong_summary = "s" * (CANDIDATE_SNIPPET_MAX_CHARS + 50)
+    summary = "short summary"
+    point = "p" * CANDIDATE_SNIPPET_MAX_CHARS
     hit = _internal_hit(
         assessment_id=1001,
         curation_id=1,
         title="internal",
-        summary=overlong_summary,
-        key_points=["point-a"],
+        summary=summary,
+        key_points=[point],
         published_at=_AS_OF,
     )
     tasks = [_collected_task(task_index=0, internal_hits=[hit])]
@@ -372,10 +376,11 @@ def test_task_groups_map_internal_source_name_to_none_and_truncate_snippet() -> 
     groups = from_tasks(tasks).task_groups
 
     candidate = groups[0].candidates[0]
+    # 連結形式(summaryの次行に"- "付きkey_point)は投影仕様として直書きする。
+    expected_snippet = f"{summary}\n- {point}"[:CANDIDATE_SNIPPET_MAX_CHARS]
     assert candidate.source_name is None
     assert candidate.published_at == _AS_OF
-    assert len(candidate.snippet) == CANDIDATE_SNIPPET_MAX_CHARS
-    assert candidate.snippet == overlong_summary[:CANDIDATE_SNIPPET_MAX_CHARS]
+    assert candidate.snippet == expected_snippet
 
 
 def test_task_groups_is_empty_tuple_when_there_are_no_tasks() -> None:
@@ -463,7 +468,11 @@ def test_build_evidence_drops_duplicate_index_keeping_the_first_selection() -> N
 def test_build_evidence_caps_adoption_at_the_run_wide_limit_in_selection_order() -> (
     None
 ):
-    """採用上限(現行値15、Run全体で共有)超過は採用順の後ろから切られる。"""
+    """採用はRun全体の上限(現行値15)まで選択順の先着で、超過は後ろの選択から切られる。
+
+    非昇順の選択で、切り方が候補index順ではなく選択順であることを区別する。
+    dropped件数の正本はaccounts_for_every_selection_as_adopted_or_dropped。
+    """
     build_evidence = build_review_evidence
     tasks = [
         _collected_task(
@@ -483,24 +492,25 @@ def test_build_evidence_caps_adoption_at_the_run_wide_limit_in_selection_order()
             ],
         )
     ]
-    # 統合index空間: 0-7が内部、8-16が外部の合計17候補を全て有効なまま採用する。
+    # 全17候補(通しindex 0-16)を降順で採用要求する。全て実在し重複もない。
     selections = [
         {"candidate_index": index, "claim": f"claim-{index}", "why_selected": "why"}
-        for index in range(17)
+        for index in reversed(range(17))
     ]
     result = _review_result(selections)
 
-    internal_evidence, external_evidence, dropped = build_evidence(
+    internal_evidence, external_evidence, _dropped = build_evidence(
         preparation=EvidenceReviewPreparation.from_tasks(tasks),
         selection_result=result,
     )
 
-    adopted_claims = [item.claim for item in internal_evidence] + [
-        item.claim for item in external_evidence
-    ]
-    assert (adopted_claims, dropped) == (
-        [f"claim-{index}" for index in range(EVIDENCE_REVIEW_ADOPTION_LIMIT)],
-        len(selections) - EVIDENCE_REVIEW_ADOPTION_LIMIT,
+    adopted_claims = sorted(
+        [item.claim for item in internal_evidence]
+        + [item.claim for item in external_evidence]
+    )
+    assert adopted_claims == sorted(
+        selection["claim"]
+        for selection in selections[:EVIDENCE_REVIEW_ADOPTION_LIMIT]
     )
 
 
