@@ -21,7 +21,7 @@ from app.agent.answering.direct_answer.contract import DirectAnswerDraft
 from app.agent.answering.direct_answer.flow import DirectAnswerFlow
 from app.agent.answering.evidence_answer.agent import EVIDENCE_ANSWER_AGENT
 from app.agent.answering.evidence_answer.contract import EvidenceAnswerDraft
-from app.agent.answering.evidence_answer.evidence import AnswerEvidenceItem
+from app.agent.answering.evidence_answer.evidence import AnswerInputEvidence
 from app.agent.answering.evidence_answer.flow import EvidenceAnswerFlow
 from app.agent.composition import (
     activate_gemini_agent_runtime,
@@ -123,7 +123,7 @@ class _UnreachableEvidenceAnswerer:
         self,
         *,
         request: AnsweringRequest,
-        evidence: list[AnswerEvidenceItem],
+        evidence: list[AnswerInputEvidence],
         target_time_window: TargetTimeWindow | None,  # noqa: ARG002
     ) -> EvidenceAnswerDraft:
         raise AssertionError(
