@@ -27,6 +27,11 @@ from app.agent.evidence_review.answer_evidence import (
     EvidenceRunFailed,
     EvidenceRunResult,
 )
+from app.agent.evidence_review.policy import (
+    EVIDENCE_REVIEW_TIMEOUT_SECONDS,
+    REVIEWER_ERROR_REASON,
+    REVIEWER_TIMEOUT_REASON,
+)
 from app.agent.evidence_review.preparation import EvidenceReviewPreparation
 from app.agent.evidence_review.reviewer import EvidenceReviewer
 from app.agent.evidence_review.selection import EvidenceReviewDraft
@@ -126,6 +131,15 @@ async def _review(
         as_of=as_of,
         reviewer_runtime=reviewer_runtime,
     )
+
+
+def test_policy_exports_review_timeout_and_failure_reason_constants() -> None:
+    """Reviewerのtimeout/reason定数がpolicyから公開される。"""
+    assert (
+        EVIDENCE_REVIEW_TIMEOUT_SECONDS,
+        REVIEWER_TIMEOUT_REASON,
+        REVIEWER_ERROR_REASON,
+    ) == (30, "reviewer_timeout", "reviewer_error")
 
 
 @pytest.mark.asyncio
