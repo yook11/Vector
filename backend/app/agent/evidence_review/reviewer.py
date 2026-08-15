@@ -25,8 +25,8 @@ from app.agent.evidence_review.contract import (
 )
 from app.agent.evidence_review.policy import (
     EVIDENCE_REVIEW_TIMEOUT_SECONDS,
+    REVIEWER_ERROR_REASON,
     REVIEWER_TIMEOUT_REASON,
-    resolve_reviewer_failure_reason,
 )
 from app.agent.phase_span import agent_phase
 from app.agent.runtime.contract import (
@@ -104,9 +104,11 @@ class EvidenceReviewer:
 
 def _provider_failure_reason(exc: AIProviderError) -> str:
     reason = getattr(exc, "reason", None)
-    reason_value = reason.value if isinstance(reason, StrEnum) else None
+    if isinstance(reason, StrEnum):
+        return reason.value
+
     code = getattr(exc, "CODE", None)
-    return resolve_reviewer_failure_reason(
-        reason=reason_value,
-        code=code if isinstance(code, str) else None,
-    )
+    if isinstance(code, str):
+        return code
+
+    return REVIEWER_ERROR_REASON
