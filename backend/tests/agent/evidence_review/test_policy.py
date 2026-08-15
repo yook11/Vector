@@ -21,10 +21,12 @@ from app.agent.contract import (
     EVIDENCE_REVIEWER_SELECTION_LIMIT,
 )
 from app.agent.evidence_collection.contract import CollectedTask, ResearchTaskReport
+from app.agent.evidence_collection.external_search import (
+    contract as external_search_contract_module,
+)
 from app.agent.evidence_collection.external_search.contract import (
     CANDIDATE_SNIPPET_MAX_CHARS,
     ExternalSearchCandidate,
-    ExternalSearchEvidence,
 )
 from app.agent.evidence_collection.internal_search.contract import (
     InternalArticleContent,
@@ -42,6 +44,7 @@ from app.agent.evidence_review.result import (
     EvidenceReviewerResponse,
     EvidenceReviewerSelection,
     EvidenceReviewOutcome,
+    ExternalSearchEvidence,
     InternalArticleEvidence,
 )
 from app.analysis.analyzed_article import InScopeAnalyzedArticle
@@ -194,6 +197,20 @@ def test_policy_does_not_expose_answer_evidence_construction() -> None:
 def test_policy_does_not_convert_review_drafts() -> None:
     """LLM出力の契約化はEvidenceReviewerResponse.from_draftが所有する。"""
     assert not hasattr(evidence_review_policy_module, "finalize_review_draft")
+
+
+def test_adopted_external_evidence_is_owned_by_review_result() -> None:
+    """精査済み外部根拠は収集契約ではなく精査結果が所有する。"""
+    assert (
+        evidence_review_result_module.ExternalSearchEvidence is ExternalSearchEvidence
+    )
+    assert not hasattr(external_search_contract_module, "ExternalSearchEvidence")
+
+
+def test_reviewed_evidence_is_built_on_the_evidence_types() -> None:
+    """採用1件のフィールド埋めは各Evidence型のfactoryが所有する。"""
+    assert not hasattr(evidence_review_result_module, "_build_internal_evidence")
+    assert not hasattr(evidence_review_result_module, "_build_external_evidence")
 
 
 def test_answer_evidence_and_missing_caps_are_run_scoped_values() -> None:

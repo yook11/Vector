@@ -23,13 +23,13 @@ from app.agent.evidence_collection.external_search.contract import (
     EVIDENCE_WHY_SELECTED_MAX_CHARS,
     MISSING_ITEM_MAX_CHARS,
     ExternalSearchCandidate,
-    ExternalSearchEvidence,
 )
 from app.agent.evidence_collection.internal_search.contract import (
     InternalArticleSearchHit,
 )
 from app.agent.evidence_review.draft import EvidenceReviewDraft
 from app.agent.evidence_review.preparation import EvidenceReviewPreparation
+from app.shared.security.safe_url import SafeUrl
 
 __all__ = [
     "AnswerEvidence",
@@ -39,6 +39,7 @@ __all__ = [
     "EvidenceReviewOutcome",
     "EvidenceReviewerResponse",
     "EvidenceReviewerSelection",
+    "ExternalSearchEvidence",
     "InternalArticleEvidence",
 ]
 
@@ -126,6 +127,68 @@ class InternalArticleEvidence(BaseModel):
     key_points: list[str] = Field(default_factory=list)
     published_at: datetime | None = None
 
+    @classmethod
+    def from_reviewed_hit(
+        cls,
+        hit: InternalArticleSearchHit,
+        *,
+        selection: EvidenceReviewerSelection,
+        source_ref: str,
+        task_index: int,
+    ) -> Self:
+        return cls(
+            source_ref=source_ref,
+            task_index=task_index,
+            claim=selection.claim,
+            why_selected=selection.why_selected,
+            assessment_id=hit.assessment_id,
+            curation_id=hit.article.curation_id,
+            title=hit.content.title,
+            summary=hit.content.summary,
+            key_points=hit.content.key_points,
+            published_at=hit.content.published_at,
+        )
+
+
+class ExternalSearchEvidence(BaseModel):
+    """外部URLに対するreviewerの精査済み採用1件。claimを持つ。"""
+
+    model_config = ConfigDict(frozen=True)
+
+    source_ref: str = Field(min_length=1)
+    task_index: int = Field(ge=0)
+    claim: str = Field(min_length=1, max_length=EVIDENCE_CLAIM_MAX_CHARS)
+    why_selected: str = Field(
+        min_length=1,
+        max_length=EVIDENCE_WHY_SELECTED_MAX_CHARS,
+    )
+    url: SafeUrl
+    title: str = Field(min_length=1)
+    snippet: str | None = None
+    published_at: datetime | None = None
+    source_name: str | None = None
+
+    @classmethod
+    def from_reviewed_candidate(
+        cls,
+        candidate: ExternalSearchCandidate,
+        *,
+        selection: EvidenceReviewerSelection,
+        source_ref: str,
+        task_index: int,
+    ) -> Self:
+        return cls(
+            source_ref=source_ref,
+            task_index=task_index,
+            claim=selection.claim,
+            why_selected=selection.why_selected,
+            url=candidate.url,
+            title=candidate.title,
+            snippet=candidate.snippet,
+            published_at=candidate.published_at,
+            source_name=candidate.source_name,
+        )
+
 
 class AnswerEvidence(BaseModel):
     """出典を復元し、重複排除と件数制限を終えた回答用Evidence。"""
@@ -163,8 +226,8 @@ class AnswerEvidence(BaseModel):
                     continue
                 seen_curation_ids.add(curation_id)
                 internal_articles.append(
-                    _build_internal_evidence(
-                        hit=entry.source,
+                    InternalArticleEvidence.from_reviewed_hit(
+                        entry.source,
                         selection=selection,
                         source_ref=source_ref,
                         task_index=entry.task_index,
@@ -176,8 +239,8 @@ class AnswerEvidence(BaseModel):
                     continue
                 seen_urls.add(url)
                 external_sources.append(
-                    _build_external_evidence(
-                        candidate=entry.source,
+                    ExternalSearchEvidence.from_reviewed_candidate(
+                        entry.source,
                         selection=selection,
                         source_ref=source_ref,
                         task_index=entry.task_index,
@@ -222,47 +285,6 @@ class AnswerEvidence(BaseModel):
         if len(source_refs) != len(set(source_refs)):
             raise ValueError("answer evidence source_ref must be unique")
         return self
-
-
-def _build_internal_evidence(
-    *,
-    hit: InternalArticleSearchHit,
-    selection: EvidenceReviewerSelection,
-    source_ref: str,
-    task_index: int,
-) -> InternalArticleEvidence:
-    return InternalArticleEvidence(
-        source_ref=source_ref,
-        task_index=task_index,
-        claim=selection.claim,
-        why_selected=selection.why_selected,
-        assessment_id=hit.assessment_id,
-        curation_id=hit.article.curation_id,
-        title=hit.content.title,
-        summary=hit.content.summary,
-        key_points=hit.content.key_points,
-        published_at=hit.content.published_at,
-    )
-
-
-def _build_external_evidence(
-    *,
-    candidate: ExternalSearchCandidate,
-    selection: EvidenceReviewerSelection,
-    source_ref: str,
-    task_index: int,
-) -> ExternalSearchEvidence:
-    return ExternalSearchEvidence(
-        source_ref=source_ref,
-        task_index=task_index,
-        claim=selection.claim,
-        why_selected=selection.why_selected,
-        url=candidate.url,
-        title=candidate.title,
-        snippet=candidate.snippet,
-        published_at=candidate.published_at,
-        source_name=candidate.source_name,
-    )
 
 
 @dataclass(frozen=True, slots=True)

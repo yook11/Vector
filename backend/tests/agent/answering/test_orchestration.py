@@ -22,7 +22,6 @@ from app.agent.evidence_collection.external_search import (
     ExternalQueryDraft,
     ExternalResearchRuntime,
     ExternalSearchCandidate,
-    ExternalSearchEvidence,
 )
 from app.agent.evidence_collection.internal_search import (
     InternalArticleContent,
@@ -34,6 +33,7 @@ from app.agent.evidence_collection.internal_search.query_embedding import (
 from app.agent.evidence_review import (
     EvidenceReviewDraft,
     EvidenceReviewer,
+    ExternalSearchEvidence,
 )
 from app.agent.planning.contract import (
     DirectAnswerPlan,

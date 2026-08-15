@@ -40,7 +40,6 @@ __all__ = [
     "ExternalQueryGenerationInput",
     "ExternalSearchCandidate",
     "ExternalSearchDateFilter",
-    "ExternalSearchEvidence",
     "ExternalSearchProviderError",
     "ExternalResearchRuntime",
     "ExternalResearchRuntimeFactory",
@@ -224,22 +223,3 @@ class ExternalResearchRuntimeFactory(Protocol):
     def activate(
         self,
     ) -> AbstractAsyncContextManager[ExternalResearchRuntime]: ...
-
-
-class ExternalSearchEvidence(BaseModel):
-    """回答workflowのexternal pipelineが選別したURL根拠候補。"""
-
-    model_config = ConfigDict(frozen=True)
-
-    source_ref: str = Field(min_length=1)
-    task_index: int = Field(ge=0)
-    claim: str = Field(min_length=1, max_length=EVIDENCE_CLAIM_MAX_CHARS)
-    why_selected: str = Field(
-        min_length=1,
-        max_length=EVIDENCE_WHY_SELECTED_MAX_CHARS,
-    )
-    url: SafeUrl
-    title: str = Field(min_length=1)
-    snippet: str | None = None
-    published_at: datetime | None = None
-    source_name: str | None = None
