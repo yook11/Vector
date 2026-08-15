@@ -3,11 +3,15 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import TYPE_CHECKING, Self
+from typing import TYPE_CHECKING, Annotated, Self
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, StringConstraints, model_validator
 
-from app.agent.contract import ANSWER_EVIDENCE_LIMIT
+from app.agent.contract import (
+    ANSWER_EVIDENCE_LIMIT,
+    EVIDENCE_REVIEW_MISSING_LIMIT,
+    MISSING_ITEM_MAX_CHARS,
+)
 from app.agent.evidence_collection.external_search.contract import (
     EVIDENCE_CLAIM_MAX_CHARS,
     EVIDENCE_WHY_SELECTED_MAX_CHARS,
@@ -218,12 +222,10 @@ class EvidenceRunCompleted(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     answer_evidence: AnswerEvidence
-    review_missing: tuple[str, ...]
-
-    @model_validator(mode="after")
-    def _validate_review_missing_caps(self) -> EvidenceRunCompleted:
-        EvidenceReviewerResponse.validate_missing(self.review_missing)
-        return self
+    review_missing: tuple[
+        Annotated[str, StringConstraints(max_length=MISSING_ITEM_MAX_CHARS)],
+        ...,
+    ] = Field(max_length=EVIDENCE_REVIEW_MISSING_LIMIT)
 
 
 class EvidenceRunFailed(BaseModel):

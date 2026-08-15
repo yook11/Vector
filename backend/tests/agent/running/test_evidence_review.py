@@ -742,8 +742,8 @@ async def test_merge_dedupes_same_internal_article_by_curation_id_first_win() ->
     curation_id先勝ちで1件にまとまる。
 
     source_refのtask間非衝突はf"{task_index}-{index}"という統合index空間の
-    形から構造的に保証される(正本: tests/agent/evidence_review/test_policy.py
-    のtest_resolve_selections_restores_original_candidates_from_run_wide_indexes)。
+    形から構造的に保証される(正本: tests/agent/evidence_review/
+    test_preparation.pyのtest_preparation_resolves_shown_indexes_to_their_original_candidates)。
     ここでは合流のcuration_id先勝ちdedupだけを検証する。
     """
     shared_curation_id = 42
