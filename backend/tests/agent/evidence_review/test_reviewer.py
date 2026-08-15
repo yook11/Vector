@@ -27,11 +27,6 @@ from app.agent.evidence_review.answer_evidence import (
     EvidenceRunFailed,
     EvidenceRunResult,
 )
-from app.agent.evidence_review.policy import (
-    EVIDENCE_REVIEW_TIMEOUT_SECONDS,
-    REVIEWER_ERROR_REASON,
-    REVIEWER_TIMEOUT_REASON,
-)
 from app.agent.evidence_review.preparation import EvidenceReviewPreparation
 from app.agent.evidence_review.reviewer import EvidenceReviewer
 from app.agent.evidence_review.selection import EvidenceReviewDraft
@@ -133,15 +128,6 @@ async def _review(
     )
 
 
-def test_policy_exports_review_timeout_and_failure_reason_constants() -> None:
-    """Reviewerのtimeout/reason定数がpolicyから公開される。"""
-    assert (
-        EVIDENCE_REVIEW_TIMEOUT_SECONDS,
-        REVIEWER_TIMEOUT_REASON,
-        REVIEWER_ERROR_REASON,
-    ) == (30, "reviewer_timeout", "reviewer_error")
-
-
 @pytest.mark.asyncio
 async def test_review_is_called_exactly_once_for_a_multi_task_run() -> None:
     """S1 A1。複数taskがあってもreviewer_runtime.invokeは1 attemptにつき1回。"""
@@ -163,7 +149,7 @@ async def test_review_is_called_exactly_once_for_a_multi_task_run() -> None:
 async def test_review_passes_the_task_group_projection_and_as_of_unchanged() -> None:
     """reviewer入力はEvidenceReviewPreparation.from_tasks(tasks)の投影とas_ofそのもの。
 
-    グループ化規則(昇順・通しindex・内部→外部)の正本はtest_policy.pyが持つ。
+    グループ化規則(昇順・通しindex・内部→外部)の正本はtest_preparation.pyが持つ。
     """
     runtime = ScriptedAgentRuntime([_draft([])])
     # 降順で渡し、等価比較が入力の受け流しでは成立しないようにする。
@@ -194,7 +180,7 @@ async def test_review_passes_the_task_group_projection_and_as_of_unchanged() -> 
 async def test_selection_restores_candidate_and_task_from_a_cross_task_index() -> None:
     """S1(選別結果の復元)。グループをまたいだindexから候補と所属taskが復元される。
 
-    復元規則の正本はtest_policy.py。ここではreview()経由の実配線を確認する。
+    復元規則の正本はtest_preparation.py。ここではreview()経由の実配線を確認する。
     """
     tasks = [
         _collected_task(
@@ -299,9 +285,9 @@ async def test_review_retries_at_most_twice_with_the_same_typed_input() -> None:
             "ai_error_network",
             id="provider-code",
         ),
-        # policy.REVIEWER_ERROR_REASON: 未分類 provider error の安全な fallback。
+        # 未分類 provider error の安全な fallback。
         pytest.param(AIProviderError(), "reviewer_error", id="provider-fallback"),
-        # policy.REVIEWER_TIMEOUT_REASON: asyncio.wait_for相当のtimeout分類。
+        # asyncio.wait_for相当のtimeout分類。
         pytest.param(TimeoutError(), "reviewer_timeout", id="timeout"),
     ],
 )
@@ -413,7 +399,7 @@ def _shorten_review_timeout(monkeypatch: pytest.MonkeyPatch) -> list[float]:
 async def test_review_timeout_backstop_cancels_the_runtime_and_retries_twice(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """asyncio.wait_for(timeout=EVIDENCE_REVIEW_TIMEOUT_SECONDS)の実配線を検証する
+    """asyncio.wait_for(timeout=30)の実配線を検証する
 
     (TimeoutErrorを直接注入するだけの分類テストとは別に、実際にcancelされる
     ことを確かめる)。

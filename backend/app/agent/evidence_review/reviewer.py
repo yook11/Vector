@@ -22,11 +22,6 @@ from app.agent.evidence_review.answer_evidence import (
     EvidenceRunFailed,
     EvidenceRunResult,
 )
-from app.agent.evidence_review.policy import (
-    EVIDENCE_REVIEW_TIMEOUT_SECONDS,
-    REVIEWER_ERROR_REASON,
-    REVIEWER_TIMEOUT_REASON,
-)
 from app.agent.evidence_review.preparation import (
     EvidenceReviewInput,
     EvidenceReviewPreparation,
@@ -41,6 +36,11 @@ from app.agent.runtime.contract import (
 from app.analysis.ai_provider_errors import AIProviderError
 
 __all__ = ["EvidenceReviewer"]
+
+_MAX_REVIEW_ATTEMPTS = 2
+_REVIEW_ATTEMPT_TIMEOUT_SECONDS = 30
+_REVIEW_ATTEMPT_TIMEOUT_REASON = "reviewer_timeout"
+_UNCLASSIFIED_PROVIDER_ERROR_REASON = "reviewer_error"
 
 
 @dataclass(frozen=True, slots=True)
@@ -60,12 +60,12 @@ class EvidenceReviewer:
             as_of=as_of,
         )
         # 各attemptが分類済みreasonで上書きするため、初期値は型を締めるためだけに置く。
-        failure_reason = REVIEWER_ERROR_REASON
+        failure_reason = _UNCLASSIFIED_PROVIDER_ERROR_REASON
         with agent_phase(
             phase="evidence_review",
             agent_name=EVIDENCE_REVIEWER_AGENT.name,
         ):
-            for attempt_number in range(1, 3):
+            for attempt_number in range(1, _MAX_REVIEW_ATTEMPTS + 1):
                 try:
                     draft = await asyncio.wait_for(
                         reviewer_runtime.invoke(
@@ -73,7 +73,7 @@ class EvidenceReviewer:
                             review_input,
                             attempt_number=attempt_number,
                         ),
-                        timeout=EVIDENCE_REVIEW_TIMEOUT_SECONDS,
+                        timeout=_REVIEW_ATTEMPT_TIMEOUT_SECONDS,
                     )
                 except AgentResponseInvalidError as exc:
                     failure_reason = exc.defect.value
@@ -82,7 +82,7 @@ class EvidenceReviewer:
                     failure_reason = _provider_failure_reason(exc)
                     continue
                 except TimeoutError:
-                    failure_reason = REVIEWER_TIMEOUT_REASON
+                    failure_reason = _REVIEW_ATTEMPT_TIMEOUT_REASON
                     continue
 
                 try:
@@ -111,4 +111,4 @@ def _provider_failure_reason(exc: AIProviderError) -> str:
     if isinstance(code, str):
         return code
 
-    return REVIEWER_ERROR_REASON
+    return _UNCLASSIFIED_PROVIDER_ERROR_REASON
