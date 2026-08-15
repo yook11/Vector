@@ -23,7 +23,7 @@ from app.agent.evidence_collection.internal_search.contract import (
 )
 from app.agent.evidence_review.agent import EVIDENCE_REVIEWER_AGENT
 from app.agent.evidence_review.contract import EvidenceReviewDraft
-from app.agent.evidence_review.policy import build_review_task_groups
+from app.agent.evidence_review.policy import EvidenceReviewPreparation
 from app.agent.evidence_review.reviewer import EvidenceReviewer
 from app.agent.runtime.contract import AgentResponseDefect, AgentResponseInvalidError
 from app.analysis.ai_provider_errors import AIProviderError, AIProviderNetworkError
@@ -142,7 +142,7 @@ async def test_review_is_called_exactly_once_for_a_multi_task_run() -> None:
 
 @pytest.mark.asyncio
 async def test_review_passes_the_task_group_projection_and_as_of_unchanged() -> None:
-    """reviewer入力はbuild_review_task_groups(tasks)の出力とas_ofそのもの。
+    """reviewer入力はEvidenceReviewPreparation.from_tasks(tasks)の投影とas_ofそのもの。
 
     グループ化規則(昇順・通しindex・内部→外部)の正本はtest_policy.pyが持つ。
     """
@@ -164,7 +164,10 @@ async def test_review_passes_the_task_group_projection_and_as_of_unchanged() -> 
     await _review(tasks=tasks, reviewer_runtime=runtime)
 
     review_input = runtime.calls[0].input
-    assert review_input.task_groups == build_review_task_groups(tasks)
+    assert (
+        review_input.task_groups
+        == EvidenceReviewPreparation.from_tasks(tasks).task_groups
+    )
     assert review_input.as_of == _AS_OF
 
 

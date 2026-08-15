@@ -33,7 +33,6 @@ from app.agent.evidence_review.policy import (
     REVIEWER_TIMEOUT_REASON,
     EvidenceReviewPreparation,
     build_review_evidence,
-    build_review_task_groups,
     finalize_review_draft,
     resolve_reviewer_failure_reason,
 )
@@ -239,13 +238,13 @@ def test_preparation_does_not_resolve_an_index_that_was_never_shown() -> None:
 
 def test_task_groups_are_ordered_by_task_index_regardless_of_input_order() -> None:
     """グループの並びがtask_index昇順である(入力順に依存しない)。"""
-    build_task_groups = build_review_task_groups
+    from_tasks = EvidenceReviewPreparation.from_tasks
     tasks = [
         _collected_task(task_index=1, research_goal="goal-B"),
         _collected_task(task_index=0, research_goal="goal-A"),
     ]
 
-    groups = build_task_groups(tasks)
+    groups = from_tasks(tasks).task_groups
 
     assert [group.task_index for group in groups] == [0, 1]
     assert [group.research_goal for group in groups] == ["goal-A", "goal-B"]
@@ -253,7 +252,7 @@ def test_task_groups_are_ordered_by_task_index_regardless_of_input_order() -> No
 
 def test_task_groups_place_internal_candidates_before_external_within_a_group() -> None:
     """各グループ内は内部候補が先、外部候補が後。"""
-    build_task_groups = build_review_task_groups
+    from_tasks = EvidenceReviewPreparation.from_tasks
     tasks = [
         _collected_task(
             task_index=0,
@@ -278,7 +277,7 @@ def test_task_groups_place_internal_candidates_before_external_within_a_group() 
         )
     ]
 
-    groups = build_task_groups(tasks)
+    groups = from_tasks(tasks).task_groups
 
     assert [
         (candidate.index, candidate.title) for candidate in groups[0].candidates
@@ -294,7 +293,7 @@ def test_task_groups_assign_a_run_wide_index_without_duplication_across_groups()
     None
 ):
     """indexがRun全体の通し番号であり、グループをまたいで重複しない。"""
-    build_task_groups = build_review_task_groups
+    from_tasks = EvidenceReviewPreparation.from_tasks
     tasks = [
         _collected_task(
             task_index=0,
@@ -317,7 +316,7 @@ def test_task_groups_assign_a_run_wide_index_without_duplication_across_groups()
         ),
     ]
 
-    groups = build_task_groups(tasks)
+    groups = from_tasks(tasks).task_groups
 
     ordered = [
         (candidate.index, candidate.title)
@@ -333,7 +332,7 @@ def test_task_groups_assign_a_run_wide_index_without_duplication_across_groups()
 
 def test_task_groups_keep_a_task_with_no_candidates_as_an_empty_group() -> None:
     """候補が内外ともゼロのtaskもグループとして残る(欠番を作らない)。"""
-    build_task_groups = build_review_task_groups
+    from_tasks = EvidenceReviewPreparation.from_tasks
     tasks = [
         _collected_task(task_index=0, research_goal="goal-A"),
         _collected_task(
@@ -348,7 +347,7 @@ def test_task_groups_keep_a_task_with_no_candidates_as_an_empty_group() -> None:
         _collected_task(task_index=2, research_goal="goal-C"),
     ]
 
-    groups = build_task_groups(tasks)
+    groups = from_tasks(tasks).task_groups
 
     assert [group.task_index for group in groups] == [0, 1, 2]
     assert groups[0].candidates == ()
@@ -358,7 +357,7 @@ def test_task_groups_keep_a_task_with_no_candidates_as_an_empty_group() -> None:
 
 def test_task_groups_map_internal_source_name_to_none_and_truncate_snippet() -> None:
     """内部候補: source_name=None、snippetはsummary+key_points連結をcapでtruncate。"""
-    build_task_groups = build_review_task_groups
+    from_tasks = EvidenceReviewPreparation.from_tasks
     overlong_summary = "s" * (CANDIDATE_SNIPPET_MAX_CHARS + 50)
     hit = _internal_hit(
         assessment_id=1001,
@@ -370,7 +369,7 @@ def test_task_groups_map_internal_source_name_to_none_and_truncate_snippet() -> 
     )
     tasks = [_collected_task(task_index=0, internal_hits=[hit])]
 
-    groups = build_task_groups(tasks)
+    groups = from_tasks(tasks).task_groups
 
     candidate = groups[0].candidates[0]
     assert candidate.source_name is None
@@ -380,9 +379,9 @@ def test_task_groups_map_internal_source_name_to_none_and_truncate_snippet() -> 
 
 
 def test_task_groups_is_empty_tuple_when_there_are_no_tasks() -> None:
-    build_task_groups = build_review_task_groups
+    from_tasks = EvidenceReviewPreparation.from_tasks
 
-    assert build_task_groups([]) == ()
+    assert from_tasks([]).task_groups == ()
 
 
 # --- build_review_evidence ---------------------------------------------------
@@ -409,7 +408,8 @@ def test_build_evidence_drops_reviewer_selections_of_nonexistent_candidates() ->
     )
 
     internal_evidence, external_evidence, _dropped = build_evidence(
-        tasks=tasks, selection_result=result
+        preparation=EvidenceReviewPreparation.from_tasks(tasks),
+        selection_result=result,
     )
 
     assert (
@@ -449,7 +449,8 @@ def test_build_evidence_drops_duplicate_index_keeping_the_first_selection() -> N
     )
 
     internal_evidence, external_evidence, dropped = build_evidence(
-        tasks=tasks, selection_result=result
+        preparation=EvidenceReviewPreparation.from_tasks(tasks),
+        selection_result=result,
     )
 
     assert (
@@ -490,7 +491,8 @@ def test_build_evidence_caps_adoption_at_the_run_wide_limit_in_selection_order()
     result = _review_result(selections)
 
     internal_evidence, external_evidence, dropped = build_evidence(
-        tasks=tasks, selection_result=result
+        preparation=EvidenceReviewPreparation.from_tasks(tasks),
+        selection_result=result,
     )
 
     adopted_claims = [item.claim for item in internal_evidence] + [
@@ -529,7 +531,8 @@ def test_build_evidence_accounts_for_every_selection_as_adopted_or_dropped() -> 
     result = _review_result(selections)
 
     internal_evidence, external_evidence, dropped = build_evidence(
-        tasks=tasks, selection_result=result
+        preparation=EvidenceReviewPreparation.from_tasks(tasks),
+        selection_result=result,
     )
 
     adopted_count = len(internal_evidence) + len(external_evidence)
@@ -578,7 +581,8 @@ def test_build_evidence_caps_selections_shared_across_multiple_tasks() -> None:
     result = _review_result(selections)
 
     internal_evidence, external_evidence, dropped = build_evidence(
-        tasks=tasks, selection_result=result
+        preparation=EvidenceReviewPreparation.from_tasks(tasks),
+        selection_result=result,
     )
 
     assert (
@@ -627,7 +631,8 @@ def test_build_evidence_restores_original_candidates_from_run_wide_indexes() -> 
     )
 
     internal_evidence, external_evidence, dropped = build_evidence(
-        tasks=tasks, selection_result=result
+        preparation=EvidenceReviewPreparation.from_tasks(tasks),
+        selection_result=result,
     )
 
     assert dropped == 0
@@ -671,7 +676,8 @@ def test_build_evidence_uses_task_index_ascending_order_regardless_of_input_orde
     )
 
     internal_evidence, _external_evidence, dropped = build_evidence(
-        tasks=tasks, selection_result=result
+        preparation=EvidenceReviewPreparation.from_tasks(tasks),
+        selection_result=result,
     )
 
     assert dropped == 0
@@ -707,7 +713,8 @@ def test_build_evidence_keeps_index_alignment_when_a_task_has_no_candidates() ->
     )
 
     internal_evidence, external_evidence, dropped = build_evidence(
-        tasks=tasks, selection_result=result
+        preparation=EvidenceReviewPreparation.from_tasks(tasks),
+        selection_result=result,
     )
 
     assert dropped == 0
@@ -734,7 +741,8 @@ def test_build_evidence_maps_inputs_to_internal_evidence_fields() -> None:
     )
 
     internal_evidence, external_evidence, dropped = build_evidence(
-        tasks=tasks, selection_result=result
+        preparation=EvidenceReviewPreparation.from_tasks(tasks),
+        selection_result=result,
     )
 
     assert dropped == 0
@@ -768,7 +776,8 @@ def test_build_evidence_maps_inputs_to_external_evidence_fields() -> None:
     )
 
     internal_evidence, external_evidence, dropped = build_evidence(
-        tasks=tasks, selection_result=result
+        preparation=EvidenceReviewPreparation.from_tasks(tasks),
+        selection_result=result,
     )
 
     assert dropped == 0

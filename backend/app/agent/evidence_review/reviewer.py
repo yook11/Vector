@@ -23,8 +23,8 @@ from app.agent.evidence_review.contract import (
 from app.agent.evidence_review.policy import (
     EVIDENCE_REVIEW_TIMEOUT_SECONDS,
     REVIEWER_TIMEOUT_REASON,
+    EvidenceReviewPreparation,
     build_review_evidence,
-    build_review_task_groups,
     finalize_review_draft,
     resolve_reviewer_failure_reason,
 )
@@ -50,8 +50,9 @@ class EvidenceReviewer:
         as_of: datetime,
         reviewer_runtime: AgentRuntime,
     ) -> EvidenceReviewOutcome:
+        preparation = EvidenceReviewPreparation.from_tasks(tasks)
         review_input = EvidenceReviewInput(
-            task_groups=build_review_task_groups(tasks),
+            task_groups=preparation.task_groups,
             as_of=as_of,
         )
         failure_reason: str | None = None
@@ -86,7 +87,7 @@ class EvidenceReviewer:
                     continue
 
                 internal_evidence, external_evidence, dropped = build_review_evidence(
-                    tasks=tasks,
+                    preparation=preparation,
                     selection_result=selection_result,
                 )
                 return EvidenceReviewOutcome(
