@@ -18,6 +18,7 @@ from app.agent.evidence_collection.contract import CollectedTask
 from app.agent.evidence_review.agent import EVIDENCE_REVIEWER_AGENT
 from app.agent.evidence_review.contract import (
     AnswerEvidence,
+    EvidenceReviewerResponse,
     EvidenceReviewInput,
     EvidenceReviewOutcome,
     EvidenceReviewPreparation,
@@ -25,7 +26,6 @@ from app.agent.evidence_review.contract import (
 from app.agent.evidence_review.policy import (
     EVIDENCE_REVIEW_TIMEOUT_SECONDS,
     REVIEWER_TIMEOUT_REASON,
-    finalize_review_draft,
     resolve_reviewer_failure_reason,
 )
 from app.agent.phase_span import agent_phase
@@ -81,7 +81,7 @@ class EvidenceReviewer:
                     continue
 
                 try:
-                    reviewer_response = finalize_review_draft(draft)
+                    reviewer_response = EvidenceReviewerResponse.from_draft(draft)
                 except ValidationError:
                     failure_reason = AgentResponseDefect.OUTPUT_SCHEMA_MISMATCH.value
                     continue

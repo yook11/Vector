@@ -41,7 +41,6 @@ from app.agent.evidence_review.policy import (
     EVIDENCE_REVIEW_TIMEOUT_SECONDS,
     REVIEWER_ERROR_REASON,
     REVIEWER_TIMEOUT_REASON,
-    finalize_review_draft,
     resolve_reviewer_failure_reason,
 )
 from app.analysis.analyzed_article import InScopeAnalyzedArticle
@@ -189,6 +188,11 @@ def test_policy_exports_review_timeout_and_failure_reason_constants() -> None:
 def test_policy_does_not_expose_answer_evidence_construction() -> None:
     """回答用Evidenceの構築はAnswerEvidence factoryだけが公開する。"""
     assert not hasattr(evidence_review_policy_module, "build_answer_evidence")
+
+
+def test_policy_does_not_convert_review_drafts() -> None:
+    """LLM出力の契約化はEvidenceReviewerResponse.from_draftが所有する。"""
+    assert not hasattr(evidence_review_policy_module, "finalize_review_draft")
 
 
 def test_answer_evidence_and_missing_caps_are_run_scoped_values() -> None:
@@ -885,7 +889,7 @@ def test_answer_evidence_factory_maps_inputs_to_external_evidence_fields() -> No
     assert item.source_ref == "1-0"
 
 
-def test_finalize_review_draft_clamps_values_to_existing_contract() -> None:
+def test_from_draft_clamps_values_to_existing_contract() -> None:
     draft = EvidenceReviewDraft.model_validate(
         {
             "selections": [
@@ -899,7 +903,7 @@ def test_finalize_review_draft_clamps_values_to_existing_contract() -> None:
         }
     )
 
-    result = finalize_review_draft(draft)
+    result = EvidenceReviewerResponse.from_draft(draft)
 
     assert (
         len(result.selections[0].claim),
@@ -908,9 +912,7 @@ def test_finalize_review_draft_clamps_values_to_existing_contract() -> None:
     ) == (300, 300, 200)
 
 
-def test_finalize_review_draft_clamps_missing_item_count_to_the_run_wide_limit() -> (
-    None
-):
+def test_from_draft_clamps_missing_item_count_to_the_run_wide_limit() -> None:
     """S2(選別結果の復元)。reviewerが9件以上のmissingを返しても
 
     Run単位のmissing上限(8)へclampされる。
@@ -922,7 +924,7 @@ def test_finalize_review_draft_clamps_missing_item_count_to_the_run_wide_limit()
         }
     )
 
-    result = finalize_review_draft(draft)
+    result = EvidenceReviewerResponse.from_draft(draft)
 
     assert len(result.missing) == 8
     assert result.missing == tuple(f"missing-{index}" for index in range(8))

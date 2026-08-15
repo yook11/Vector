@@ -208,6 +208,13 @@ class EvidenceReviewerResponse(BaseModel):
     missing: tuple[str, ...] = ()
 
     @classmethod
+    def from_draft(cls, draft: EvidenceReviewDraft) -> EvidenceReviewerResponse:
+        return cls.from_raw(
+            selections=[selection.model_dump() for selection in draft.selections],
+            missing=draft.missing,
+        )
+
+    @classmethod
     def from_raw(
         cls,
         *,
