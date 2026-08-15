@@ -11,7 +11,7 @@ import pytest
 from openai import APIStatusError
 from openai import RateLimitError as OpenAIRateLimitError
 
-from app.agent.evidence_review.draft import EvidenceReviewDraft
+from app.agent.evidence_review.selection import EvidenceReviewDraft
 from app.agent.runtime.contract import AgentResponseDefect, AgentResponseInvalidError
 from app.agent.runtime.deepseek import DeepSeekAgentRuntime, DeepSeekOutputBinding
 from app.analysis.ai_provider_errors import (

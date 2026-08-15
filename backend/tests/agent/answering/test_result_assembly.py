@@ -35,7 +35,7 @@ from app.agent.evidence_review import (
     EvidenceRunFailed,
     EvidenceRunResult,
 )
-from app.agent.evidence_review.result import InternalArticleEvidence
+from app.agent.evidence_review.answer_evidence import InternalArticleEvidence
 from app.agent.planning.contract import (
     ExternalResearchTask,
     ResearchTask,

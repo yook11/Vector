@@ -15,7 +15,7 @@ from app.agent.evidence_review import (
     EvidenceRunFailed,
     ExternalSearchEvidence,
 )
-from app.agent.evidence_review.result import InternalArticleEvidence
+from app.agent.evidence_review.answer_evidence import InternalArticleEvidence
 
 
 def _internal_evidence() -> InternalArticleEvidence:

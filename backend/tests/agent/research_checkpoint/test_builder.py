@@ -12,7 +12,7 @@ from typing import Any
 
 import pytest
 
-from app.agent.evidence_review.result import (
+from app.agent.evidence_review.answer_evidence import (
     AnswerEvidence,
     EvidenceRunCompleted,
     ExternalSearchEvidence,
