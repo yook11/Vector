@@ -12,7 +12,7 @@ from logfire import LogfireSpan
 
 from app.agent.answering.contract import AnsweringRequest
 from app.agent.answering.evidence_answer.evidence import (
-    normalize_answer_evidence,
+    build_answer_input_evidence,
 )
 from app.agent.answering.result_assembly import assemble_evidence_result
 from app.agent.contract import (
@@ -214,7 +214,7 @@ class AnsweringRunner:
         reviewed_evidence: ReviewedEvidence,
         run_span: LogfireSpan,
     ) -> AnswerQuestionResult:
-        evidence = normalize_answer_evidence(reviewed_evidence)
+        evidence = build_answer_input_evidence(reviewed_evidence.answer_evidence)
 
         await self._report_progress("answering")
         answer_outcome = await phases.evidence_answerer.answer(
@@ -242,8 +242,7 @@ class AnsweringRunner:
         """精査成功後、Run全体の採用件数を1本だけ発火する。"""
         await self._report_event(
             EvidenceReviewSelectedEvent(
-                evidence_count=len(outcome.internal_evidence)
-                + len(outcome.external_evidence),
+                evidence_count=outcome.answer_evidence.count,
             )
         )
 
@@ -264,14 +263,15 @@ def _record_evidence_span_attributes(
     outcome: ReviewedEvidence,
     sources: list[AnswerSource],
 ) -> None:
-    """内部・外部別の採用数と引用数、内部合流の統計を件数のみでspanへ焼く。"""
-    external_evidence_count = (
-        len(outcome.external_search.evidence)
-        if outcome.external_search is not None
-        else 0
+    """内部・外部別の採用数と引用数を件数のみでspanへ焼く。"""
+    span.set_attribute(
+        "internal_evidence_count",
+        len(outcome.answer_evidence.internal_articles),
     )
-    span.set_attribute("internal_evidence_count", len(outcome.internal_evidence))
-    span.set_attribute("external_evidence_count", external_evidence_count)
+    span.set_attribute(
+        "external_evidence_count",
+        len(outcome.answer_evidence.external_sources),
+    )
     span.set_attribute(
         "internal_cited_count",
         sum(1 for source in sources if source.kind == "internal_article"),
@@ -279,9 +279,6 @@ def _record_evidence_span_attributes(
     span.set_attribute(
         "external_cited_count",
         sum(1 for source in sources if source.kind == "external_url"),
-    )
-    span.set_attribute(
-        "internal_deduplicated_count", outcome.internal_deduplicated_count
     )
     span.set_attribute(
         "internal_collection_failed_task_count",

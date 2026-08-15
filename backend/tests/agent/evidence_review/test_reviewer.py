@@ -22,8 +22,10 @@ from app.agent.evidence_collection.internal_search.contract import (
     InternalArticleSearchHit,
 )
 from app.agent.evidence_review.agent import EVIDENCE_REVIEWER_AGENT
-from app.agent.evidence_review.contract import EvidenceReviewDraft
-from app.agent.evidence_review.policy import build_review_task_groups
+from app.agent.evidence_review.contract import (
+    EvidenceReviewDraft,
+    EvidenceReviewPreparation,
+)
 from app.agent.evidence_review.reviewer import EvidenceReviewer
 from app.agent.runtime.contract import AgentResponseDefect, AgentResponseInvalidError
 from app.analysis.ai_provider_errors import AIProviderError, AIProviderNetworkError
@@ -142,7 +144,7 @@ async def test_review_is_called_exactly_once_for_a_multi_task_run() -> None:
 
 @pytest.mark.asyncio
 async def test_review_passes_the_task_group_projection_and_as_of_unchanged() -> None:
-    """reviewer入力はbuild_review_task_groups(tasks)の出力とas_ofそのもの。
+    """reviewer入力はEvidenceReviewPreparation.from_tasks(tasks)の投影とas_ofそのもの。
 
     グループ化規則(昇順・通しindex・内部→外部)の正本はtest_policy.pyが持つ。
     """
@@ -164,7 +166,10 @@ async def test_review_passes_the_task_group_projection_and_as_of_unchanged() -> 
     await _review(tasks=tasks, reviewer_runtime=runtime)
 
     review_input = runtime.calls[0].input
-    assert review_input.task_groups == build_review_task_groups(tasks)
+    assert (
+        review_input.task_groups
+        == EvidenceReviewPreparation.from_tasks(tasks).task_groups
+    )
     assert review_input.as_of == _AS_OF
 
 
@@ -211,18 +216,20 @@ async def test_selection_restores_candidate_and_task_from_a_cross_task_index() -
 
     outcome = await _review(tasks=tasks, reviewer_runtime=runtime)
 
-    assert [(item.title, item.task_index) for item in outcome.internal_evidence] == [
-        ("A-int-2", 0)
-    ]
-    assert [(item.title, item.task_index) for item in outcome.external_evidence] == [
-        ("B-ext-2", 1)
-    ]
-    assert outcome.internal_evidence[0].source_ref == "0-1"
-    assert outcome.external_evidence[0].source_ref == "1-3"
+    assert [
+        (item.title, item.task_index)
+        for item in outcome.answer_evidence.internal_articles
+    ] == [("A-int-2", 0)]
+    assert [
+        (item.title, item.task_index)
+        for item in outcome.answer_evidence.external_sources
+    ] == [("B-ext-2", 1)]
+    assert outcome.answer_evidence.internal_articles[0].source_ref == "0-1"
+    assert outcome.answer_evidence.external_sources[0].source_ref == "1-3"
 
 
 @pytest.mark.asyncio
-async def test_review_propagates_missing_as_a_single_run_level_list() -> None:
+async def test_review_propagates_missing_as_a_single_run_level_value() -> None:
     """S1(何ができていないかの表明)。missingはRun全体で1本として返る。"""
     runtime = ScriptedAgentRuntime([_draft([], missing=["run全体の不足"])])
 
@@ -231,7 +238,7 @@ async def test_review_propagates_missing_as_a_single_run_level_list() -> None:
         reviewer_runtime=runtime,
     )
 
-    assert outcome.missing == ["run全体の不足"]
+    assert outcome.missing == ("run全体の不足",)
 
 
 @pytest.mark.asyncio
@@ -251,7 +258,7 @@ async def test_review_retries_at_most_twice_with_the_same_typed_input() -> None:
     assert [call.attempt_number for call in runtime.calls] == [1, 2]
     assert runtime.calls[0].input is runtime.calls[1].input
     assert outcome.failure_reason is None
-    assert len(outcome.internal_evidence) == 1
+    assert len(outcome.answer_evidence.internal_articles) == 1
 
 
 @pytest.mark.asyncio
@@ -292,9 +299,9 @@ async def test_review_classifies_failure_reason_after_two_exhausted_attempts(
     outcome = await _review(tasks=tasks, reviewer_runtime=runtime)
 
     assert [call.attempt_number for call in runtime.calls] == [1, 2]
-    assert outcome.internal_evidence == []
-    assert outcome.external_evidence == []
-    assert outcome.missing == []
+    assert outcome.answer_evidence.internal_articles == ()
+    assert outcome.answer_evidence.external_sources == ()
+    assert outcome.missing == ()
     assert outcome.failure_reason == expected_reason
 
 
@@ -305,7 +312,7 @@ async def test_review_retries_after_invalid_draft_and_drops_invalid_selections()
     """claimが空のselectionはfinalize_review_draft()でValidationErrorとなり
 
     attempt 1が失敗として扱われる(schema自体は妥当なのでruntimeは例外を
-    投げない)。attempt 2で重複/範囲外がdropされつつ有効な選択だけが残る。
+    投げない)。attempt 2で重複/範囲外を除き、有効な選択だけが残る。
     """
     runtime = ScriptedAgentRuntime(
         [
@@ -329,8 +336,9 @@ async def test_review_retries_after_invalid_draft_and_drops_invalid_selections()
 
     assert [call.attempt_number for call in runtime.calls] == [1, 2]
     assert outcome.failure_reason is None
-    assert [item.claim for item in outcome.external_evidence] == ["first"]
-    assert outcome.dropped_selection_count == 2
+    assert [item.claim for item in outcome.answer_evidence.external_sources] == [
+        "first"
+    ]
 
 
 @pytest.mark.asyncio

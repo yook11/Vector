@@ -193,15 +193,15 @@ class ExternalSearchTool:
 
 
 def capture_external_outcome(monkeypatch: pytest.MonkeyPatch) -> list[Any]:
-    """normalize_answer_evidenceへ渡る収集outcomeを横取りして記録する。"""
+    """回答結果の組み立てに渡る精査済みoutcomeを横取りして記録する。"""
     captured: list[Any] = []
-    original = answering_runner_module.normalize_answer_evidence
+    original = answering_runner_module.assemble_evidence_result
 
-    def capture(outcome: Any) -> Any:
-        captured.append(outcome)
-        return original(outcome)
+    def capture(**kwargs: Any) -> Any:
+        captured.append(kwargs["outcome"])
+        return original(**kwargs)
 
-    monkeypatch.setattr(answering_runner_module, "normalize_answer_evidence", capture)
+    monkeypatch.setattr(answering_runner_module, "assemble_evidence_result", capture)
     return captured
 
 

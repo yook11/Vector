@@ -29,9 +29,10 @@ __all__ = [
     "AnswerQuestionResult",
     "AnswerPlanSummary",
     "AnswerEventReporter",
+    "ANSWER_EVIDENCE_LIMIT",
     "EVIDENCE_CLAIM_MAX_CHARS",
-    "EVIDENCE_REVIEW_ADOPTION_LIMIT",
     "EVIDENCE_REVIEW_MISSING_LIMIT",
+    "EVIDENCE_REVIEWER_SELECTION_LIMIT",
     "EXTERNAL_QUERY_MAX_CHARS",
     "EXTERNAL_TASK_QUERY_LIMIT",
     "ExternalSearchCandidatesFetchedEvent",
@@ -251,8 +252,9 @@ EXTERNAL_QUERY_MAX_CHARS = 200
 EVIDENCE_CLAIM_MAX_CHARS = 300
 MISSING_ITEM_MAX_CHARS = 200
 
-# Run 単位で reviewer が採用できる根拠の上限(内外合算)。
-EVIDENCE_REVIEW_ADOPTION_LIMIT: Final[int] = 15
+# Run 単位で Reviewer が返せる選択件数と、Answerer に渡せる一意な根拠件数の上限。
+EVIDENCE_REVIEWER_SELECTION_LIMIT: Final[int] = 15
+ANSWER_EVIDENCE_LIMIT: Final[int] = 15
 # Run 単位で reviewer が報告できる missing 件数の上限。
 EVIDENCE_REVIEW_MISSING_LIMIT: Final[int] = 8
 
@@ -302,11 +304,10 @@ class ResearchCheckpoint(BaseModel):
 
     @model_validator(mode="after")
     def _validate_total_adopted_claims(self) -> Self:
-        # adopted_claimsの上限はtask個別ではなくCheckpoint全task合計(reviewer が
-        # Run単位で採用できる根拠の上限と同一)。
+        # adopted_claimsの上限はtask個別ではなくCheckpoint全task合計。
         total_adopted_claims = sum(len(task.adopted_claims) for task in self.tasks)
-        if total_adopted_claims > EVIDENCE_REVIEW_ADOPTION_LIMIT:
+        if total_adopted_claims > ANSWER_EVIDENCE_LIMIT:
             raise ValueError(
-                "adopted claims across tasks exceed the review adoption limit"
+                "adopted claims across tasks exceed the answer evidence limit"
             )
         return self

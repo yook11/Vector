@@ -47,7 +47,7 @@ workflow ownership、retrieval dispatch、external pipeline統合)は実装済�
   `InternalSearchService`自身が発火する(開始時にstarted、成功時のみcompleted、失敗時は
   completedなし)。外部の進捗eventはrunnerが発火する。serviceは併せてresult / failure_phaseの
   metricsを記録する。
-- `normalize_answer_evidence()`は内部hitを先に、外部evidenceを後に並べ、`source_ref`を
+- `build_answer_input_evidence()`は内部hitを先に、外部evidenceを後に並べ、`source_ref`を
   `"1"`から通し番号で振り直す。内部本文は`summary`と`key_points`の連結、外部本文は
   `claim`と`snippet`の連結である。
 - `EXTERNAL_EVIDENCE_SELECTOR_AGENT`の入力は`research_goal`、`as_of`、URLを含まない候補
@@ -59,7 +59,7 @@ workflow ownership、retrieval dispatch、external pipeline統合)は実装済�
   ユーザーに直接見える。
 - 出典メタデータ(URL / title / snippet / published_at / source_name)はselectorの出力に含まれず、
   `build_external_evidence()`が`candidate_index`でpoolを引いて再構築する。範囲外index、重複index、
-  5件超はdropされ`dropped_selection_count`に計上される。
+  範囲外indexと重複indexは決定的に不採用となる。
 - runnerは全taskのevidenceを連結した後、`deduplicate_external_evidence_by_url()`でURL完全一致の
   先勝ち重複排除を行う。`ResearchTaskReport.evidence_count`はdedup前の値であり、dedup後件数と
   dedup件数の和との整合をvalidatorが検証する。内部hitのrun内重複は`InternalSearchService`の
@@ -161,7 +161,7 @@ workflow ownership、retrieval dispatch、external pipeline統合)は実装済�
   - phase名: `external_selector` -> `evidence_review`
   - class: `EvidenceReviewer`
   - 出力型: `ExternalEvidenceSelectionDraft` -> `EvidenceReviewDraft`、
-    `EvidenceSelectionResult` -> `EvidenceReviewResult`(selections + missing)
+    `EvidenceSelectionResult` -> `EvidenceReviewerResponse`(selections + missing)
   span属性`agent_name`とmetric labelの値が変わることを受け入れる。
 - `assessor` / `curator` / `analyst` / `auditor`は採らない。`assessment`(投資判断)、
   `curation`(本文整形)、`analysis`(記事分析)、`audit`(pipeline_events)が既存BCの語彙であり、
@@ -203,12 +203,12 @@ workflow ownership、retrieval dispatch、external pipeline統合)は実装済�
   信頼済みテキストとして扱わない。
 - 選別結果の`claim` / `why_selected` / `missing`のcapは現行値(300字 / 300字 / 5件×200字)を維持する。
   task単位の採用上限も現行値(5件)を維持する。
-- 範囲外index、重複index、上限超過のdropは呼び出し側が決定的に行い、`dropped_selection_count`に
-  計上する。reviewerの出力を無検証で信用しない。
+- 範囲外indexと重複indexは`AnswerEvidence.from_reviewer_response()`が決定的に不採用とする。
+  reviewerの出力を無検証で信用しない。
 - 選別済み根拠の中間`source_ref`は、`external-{task_index}-{candidate_index}`から出所非依存の
   採番へ変える。task内の候補列が内部・外部の統合index空間になり接頭辞が実態と合わなくなるためで
   ある。`task_index`による修飾は維持する。`candidate_index`はtaskごとに0から振られ、修飾しないと
-  task間で衝突する。この`source_ref`は`normalize_answer_evidence()`が最終的な連番へ振り直すため
+  task間で衝突する。この`source_ref`は`build_answer_input_evidence()`が最終的な連番へ振り直すため
   ユーザーには露出せず、Run内部の整理番号として閉じている。
 - reviewerが失敗したtaskは根拠ゼロで終わる。距離順やprovider rank順で根拠を捏造するfallbackを
   設けない。`claim`を持たない根拠を作らない。
@@ -217,9 +217,9 @@ workflow ownership、retrieval dispatch、external pipeline統合)は実装済�
 
 - 全taskの根拠をtask_index昇順で合流し、run単位で重複排除する。外部根拠はURL、内部根拠は
   内部記事の識別子で判定し、先に出たものを残す。
-- 重複で落ちた採用はtask reportにdedup前の値として残し、dedupされた件数を別途計上して整合を取る
-  (現行の外部URL重複排除と同じ構造)。落ちた側の`claim`をevidenceへ統合しない。
-- 合流後の`AnswerEvidenceItem`への正規化、`source_ref`の通し番号採番、回答Agentの入力契約、
+- `AnswerEvidence`には重複排除後の確定根拠だけを保持し、落ちた側の`claim`を統合しない。
+  不採用件数はproduction contractへ含めない。
+- 合流後の`AnswerInputEvidence`への正規化、`source_ref`の通し番号採番、回答Agentの入力契約、
   `cited_refs`の検証は変更しない。`missing_aspects`の組み立ては後述のとおり変更する。
 - 内部根拠の本文は、reviewerが書いた`claim`と既存の`summary`(+`key_points`)を持つ。
   外部根拠の本文は`claim`と`snippet`を持つ。両者が`claim`を持つことで回答Agentが受け取る
@@ -414,7 +414,7 @@ AnsweringRunner.run
 - `content_requirements`が空のRunでも、reviewerが`research_goal`だけで選別を完了する。
 - 内部候補の本文と`content_requirements`が`sanitize_for_untrusted_block()`を通っている。
 - 同じ記事が複数taskの候補に現れたとき、精査前に除かれず、各taskが独立に採用できる。
-- 範囲外index、重複index、上限超過のselectionをdropし`dropped_selection_count`に計上する。
+- 範囲外indexと重複indexのselectionを決定的に不採用とする。
 - reviewerの2 attemptが尽きたtaskが根拠ゼロで終わり、他のtaskの根拠を消さない。
 - 収集または精査が完了しなかったtaskがあるRunで、`missing_aspects`に固定文言が1行だけ加わり、
   `status`が`insufficient`になる。落ちたtaskが複数でも行は1つに畳まれる。
@@ -427,7 +427,7 @@ AnsweringRunner.run
 
 - 複数taskが同じURLの外部候補を選んだとき、task_index昇順で先勝ちの重複排除が働く。
 - 複数taskが同じ内部記事を選んだとき、同じ規則で重複排除が働く。
-- 重複で落ちたtaskのreportにdedup前の採用件数が残り、dedupされた件数との整合が取れる。
+- 重複排除後の件数が`AnswerEvidence`とRun reportで一致する。
 - 合流後の`source_ref`採番、citation検証、`missing_aspects`の組み立てが現行と同じ結果になる。
 
 ### 進捗event

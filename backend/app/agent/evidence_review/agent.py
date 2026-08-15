@@ -6,8 +6,8 @@ from typing import Any, Final
 
 from app.agent.agent import Agent, AgentPrompt, ModelSettings, ModelTarget
 from app.agent.evidence_review.contract import (
-    EVIDENCE_REVIEW_ADOPTION_LIMIT,
     EVIDENCE_REVIEW_MISSING_LIMIT,
+    EVIDENCE_REVIEWER_SELECTION_LIMIT,
     EvidenceReviewDraft,
     EvidenceReviewInput,
 )
@@ -25,7 +25,7 @@ EVIDENCE_REVIEWER_RESPONSE_SCHEMA: Final[dict[str, Any]] = {
         "selections": {
             "type": "array",
             "description": "候補をindexで参照する採用リスト。",
-            "maxItems": EVIDENCE_REVIEW_ADOPTION_LIMIT,
+            "maxItems": EVIDENCE_REVIEWER_SELECTION_LIMIT,
             "items": {
                 "type": "object",
                 "additionalProperties": False,

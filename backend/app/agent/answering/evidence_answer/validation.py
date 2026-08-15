@@ -6,7 +6,7 @@ from app.agent.answering.evidence_answer.contract import (
     EvidenceAnswerDraft,
     EvidenceAnswerDraftInvalidError,
 )
-from app.agent.answering.evidence_answer.evidence import AnswerEvidenceItem
+from app.agent.answering.evidence_answer.evidence import AnswerInputEvidence
 from app.agent.citation_markers import parse_citation_refs
 
 __all__ = ["finalize_evidence_answer_draft"]
@@ -15,7 +15,7 @@ __all__ = ["finalize_evidence_answer_draft"]
 def finalize_evidence_answer_draft(
     answer: str,
     *,
-    evidence: list[AnswerEvidenceItem],
+    evidence: list[AnswerInputEvidence],
 ) -> EvidenceAnswerDraft:
     """plain textの回答本文からcited_refsを決定的に算出し、接地契約を検証する。"""
 
@@ -35,7 +35,7 @@ def finalize_evidence_answer_draft(
 
 def _validate_draft_citations(
     *,
-    evidence: list[AnswerEvidenceItem],
+    evidence: list[AnswerInputEvidence],
     draft: EvidenceAnswerDraft,
 ) -> None:
     existing_refs = {item.source.source_ref for item in evidence}

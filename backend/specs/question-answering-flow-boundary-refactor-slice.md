@@ -52,7 +52,7 @@ DB、認証、provider 設定を変更しない。
     `AnswerSynthesisService`、決定的補正、citation 検証、retry・fallback・
     audit helper を同居させている。
 - `backend/app/agent/answering/evidence.py`
-  - `EvidenceCollectionOutcome` を回答専用の `AnswerEvidenceItem` に変換する。
+  - `EvidenceCollectionOutcome` を回答専用の `AnswerInputEvidence` に変換する。
 - `backend/app/agent/answering/ai/`
   - direct / evidence の adapter、prompt、spec が同じ package に並ぶ。
 - `backend/app/agent/composition.py`
@@ -285,7 +285,7 @@ evidence に存在しない citation ref の検出
 
 ### 9. evidence.py は evidence 回答 package に置く
 
-`AnswerEvidenceItem` と `normalize_answer_evidence()` は
+`AnswerInputEvidence` と `build_answer_input_evidence()` は
 `evidence_answer/evidence.py` へ移す。
 
 これは検索・収集結果そのものの汎用 model ではなく、次を行う回答経路専用の
@@ -387,7 +387,7 @@ QuestionAnsweringOrchestrator
 ```text
 QuestionAnsweringOrchestrator
   -> EvidenceCollector.collect()
-  -> normalize_answer_evidence()
+  -> build_answer_input_evidence()
   -> EvidenceAnswerer.answer()
   -> EvidenceAnswerFlow
   -> EvidenceAnswerDraftGenerator.generate()
@@ -460,7 +460,7 @@ QuestionAnsweringOrchestrator
 4. `DirectAnswerFlow` と `EvidenceAnswerFlow` を `flow.py` へ移す。
 5. evidence port の `synthesize()` を `answer()` に rename し、orchestration
    と fake 実装を同時に更新する。
-6. `AnswerEvidenceItem` と normalization を `evidence_answer/evidence.py` へ
+6. `AnswerInputEvidence` と normalization を `evidence_answer/evidence.py` へ
    移す。
 7. provider adapter / prompt / spec / schema tool を各経路の `ai/` へ移す。
 8. `QuestionAnsweringService` を `QuestionAnsweringOrchestrator` へ rename し、
@@ -598,7 +598,7 @@ queue catch 面の関連 test を実行する。
 - evidence の draft finalization / citation validation が Flow から分離され、
   provider・retry・audit に依存していない。
 - Orchestrator は具象 Flow / Gemini adapter に依存していない。
-- `AnswerEvidenceItem` が evidence 回答専用 projection として配置されている。
+- `AnswerInputEvidence` が evidence 回答専用 projection として配置されている。
 - 旧 module path、旧 `*Service` class、旧 evidence `synthesize()` 呼び出しが
   repository に残っていない。
 - API、DB、認証、prompt、model、retry、fallback、audit / metrics の外部的な

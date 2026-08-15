@@ -14,7 +14,7 @@ from app.agent.answering.evidence_answer.contract import (
     EvidenceAnswerDraft,
     EvidenceAnswerUnavailable,
 )
-from app.agent.answering.evidence_answer.evidence import AnswerEvidenceItem
+from app.agent.answering.evidence_answer.evidence import AnswerInputEvidence
 from app.agent.answering.result_assembly import (
     _UNAVAILABLE_ANSWER,
     _UNAVAILABLE_MISSING,
@@ -22,7 +22,6 @@ from app.agent.answering.result_assembly import (
 )
 from app.agent.contract import InternalArticleSource
 from app.agent.evidence_collection import ResearchTaskReport
-from app.agent.evidence_collection.external_search import ExternalSearchOutcome
 from app.agent.evidence_review import EvidenceReviewReport, ReviewedEvidence
 from app.agent.planning.contract import (
     ExternalResearchTask,
@@ -89,7 +88,6 @@ def _review_report(
     review_failure_reason: str | None = None,
     internal_evidence_count: int = 0,
     external_evidence_count: int = 0,
-    dropped_selection_count: int = 0,
     missing: list[str] | None = None,
 ) -> EvidenceReviewReport:
     return EvidenceReviewReport(
@@ -97,7 +95,6 @@ def _review_report(
         review_failure_reason=review_failure_reason,
         internal_evidence_count=internal_evidence_count,
         external_evidence_count=external_evidence_count,
-        dropped_selection_count=dropped_selection_count,
         missing=missing or [],
     )
 
@@ -118,13 +115,12 @@ def _time_filter_failed_report(
 def _outcome(*, task_reports: list[Any], review: Any | None = None) -> ReviewedEvidence:
     return ReviewedEvidence(
         task_reports=task_reports,
-        external_search=ExternalSearchOutcome(),
         review=review if review is not None else _review_report(),
     )
 
 
-def _internal_evidence() -> AnswerEvidenceItem:
-    return AnswerEvidenceItem(
+def _internal_evidence() -> AnswerInputEvidence:
+    return AnswerInputEvidence(
         source=InternalArticleSource(
             source_ref="internal-1",
             article_id=1001,
@@ -170,7 +166,7 @@ def _assemble(
     *,
     plan: SearchPlan,
     outcome: ReviewedEvidence,
-    evidence: list[AnswerEvidenceItem],
+    evidence: list[AnswerInputEvidence],
     answer_outcome: EvidenceAnswerDraft | EvidenceAnswerUnavailable,
 ) -> Any:
     return assemble_evidence_result(
@@ -196,7 +192,7 @@ def test_task_completes_via_internal_evidence_despite_external_provider_failure(
         target_time_window=TargetTimeWindow(kind="last_n_days", days=1),
     )
     evidence = [
-        AnswerEvidenceItem(
+        AnswerInputEvidence(
             source=InternalArticleSource(
                 source_ref="1",
                 article_id=1001,

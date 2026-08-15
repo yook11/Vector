@@ -71,7 +71,7 @@ Q&A エージェントの最上位ユースケース `QuestionAnsweringService.a
 | ユースケース `answer(input)` | `QuestionAnsweringService` | `answering/service.py` | rev.2 で dispatch 化 |
 | 工程 1: プラン作成 | `QuestionPlanningService` | `planning/` | 実装済み |
 | 工程 2: plan を読んで検索起動 | `QuestionPlanRetrievalService` | `answering/retrieval.py` | rev.2 で入力を `RetrievalPlan` に絞る |
-| 工程 3: evidence 正規化 | `normalize_answer_evidence` | `answering/evidence.py` | 実装済み |
+| 工程 3: evidence 正規化 | `build_answer_input_evidence` | `answering/evidence.py` | 実装済み |
 | 工程 4E: evidence 回答 | `EvidenceAnswerSynthesizer` | `answering/synthesis.py` | rev.2 で rename + validator 強化 |
 | 工程 4D: direct 回答 | `DirectAnswerer` | `answering/direct.py` (新) | **rev.2 で port 新設**、実装は Slice B |
 
@@ -227,7 +227,7 @@ class EvidenceAnswerSynthesizer(Protocol):
         self,
         *,
         question: str,
-        evidence: list[AnswerEvidenceItem],
+        evidence: list[AnswerInputEvidence],
         as_of: datetime,
         target_time_window: str | None,
     ) -> AnswerDraft: ...
@@ -318,7 +318,7 @@ direct 経路:
 
 evidence 経路:
   3. outcome  = retriever.retrieve(plan, as_of=input.as_of)
-  4. evidence = normalize_answer_evidence(outcome)
+  4. evidence = build_answer_input_evidence(outcome)
   5. 決定的前段:
        evidence が空
          -> synthesizer を呼ばず insufficient result を組み立てて返す

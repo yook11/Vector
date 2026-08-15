@@ -62,7 +62,7 @@ def build_research_checkpoint(
 
     adopted_claims_by_task: dict[int, list[str]] = {}
     if review_outcome is not None:
-        for evidence in review_outcome.external_evidence:
+        for evidence in review_outcome.answer_evidence.external_sources:
             adopted_claims_by_task.setdefault(evidence.task_index, []).append(
                 evidence.claim
             )

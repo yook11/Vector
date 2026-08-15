@@ -17,14 +17,14 @@ from pydantic import ValidationError
 from app.agent.evidence_collection.contract import CollectedTask
 from app.agent.evidence_review.agent import EVIDENCE_REVIEWER_AGENT
 from app.agent.evidence_review.contract import (
+    AnswerEvidence,
     EvidenceReviewInput,
     EvidenceReviewOutcome,
+    EvidenceReviewPreparation,
 )
 from app.agent.evidence_review.policy import (
     EVIDENCE_REVIEW_TIMEOUT_SECONDS,
     REVIEWER_TIMEOUT_REASON,
-    build_review_evidence,
-    build_review_task_groups,
     finalize_review_draft,
     resolve_reviewer_failure_reason,
 )
@@ -50,8 +50,9 @@ class EvidenceReviewer:
         as_of: datetime,
         reviewer_runtime: AgentRuntime,
     ) -> EvidenceReviewOutcome:
+        preparation = EvidenceReviewPreparation.from_tasks(tasks)
         review_input = EvidenceReviewInput(
-            task_groups=build_review_task_groups(tasks),
+            task_groups=preparation.task_groups,
             as_of=as_of,
         )
         failure_reason: str | None = None
@@ -80,27 +81,23 @@ class EvidenceReviewer:
                     continue
 
                 try:
-                    selection_result = finalize_review_draft(draft)
+                    reviewer_response = finalize_review_draft(draft)
                 except ValidationError:
                     failure_reason = AgentResponseDefect.OUTPUT_SCHEMA_MISMATCH.value
                     continue
 
-                internal_evidence, external_evidence, dropped = build_review_evidence(
-                    tasks=tasks,
-                    selection_result=selection_result,
+                answer_evidence = AnswerEvidence.from_reviewer_response(
+                    preparation=preparation,
+                    reviewer_response=reviewer_response,
                 )
                 return EvidenceReviewOutcome(
-                    internal_evidence=internal_evidence,
-                    external_evidence=external_evidence,
-                    missing=selection_result.missing,
-                    dropped_selection_count=dropped,
+                    answer_evidence=answer_evidence,
+                    missing=reviewer_response.missing,
                     failure_reason=None,
                 )
         return EvidenceReviewOutcome(
-            internal_evidence=[],
-            external_evidence=[],
-            missing=[],
-            dropped_selection_count=0,
+            answer_evidence=AnswerEvidence(),
+            missing=(),
             failure_reason=failure_reason,
         )
 

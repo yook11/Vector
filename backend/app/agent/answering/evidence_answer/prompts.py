@@ -6,7 +6,7 @@ from typing import Final
 
 from app.agent.agent import AgentPrompt
 from app.agent.answering.evidence_answer.contract import EvidenceAnswerInput
-from app.agent.answering.evidence_answer.evidence import AnswerEvidenceItem
+from app.agent.answering.evidence_answer.evidence import AnswerInputEvidence
 from app.agent.planning.contract import render_target_time_window
 from app.analysis.prompt_safety import sanitize_for_untrusted_block
 
@@ -165,13 +165,13 @@ def _render_requirements(requirements: tuple[str, ...]) -> str:
     )
 
 
-def _render_evidence(evidence: tuple[AnswerEvidenceItem, ...]) -> str:
+def _render_evidence(evidence: tuple[AnswerInputEvidence, ...]) -> str:
     if not evidence:
         return _NO_EVIDENCE_BLOCK
     return "\n\n".join(_render_evidence_item(item) for item in evidence)
 
 
-def _render_evidence_item(item: AnswerEvidenceItem) -> str:
+def _render_evidence_item(item: AnswerInputEvidence) -> str:
     source = item.source
     parts = [
         f"[{sanitize_for_untrusted_block(source.source_ref)}]",

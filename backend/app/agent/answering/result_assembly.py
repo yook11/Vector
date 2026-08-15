@@ -10,7 +10,7 @@ from app.agent.answering.evidence_answer.contract import (
     EvidenceAnswerOutcome,
     EvidenceAnswerUnavailable,
 )
-from app.agent.answering.evidence_answer.evidence import AnswerEvidenceItem
+from app.agent.answering.evidence_answer.evidence import AnswerInputEvidence
 from app.agent.contract import (
     AnswerPlanSummary,
     AnswerQuestionResult,
@@ -37,7 +37,7 @@ def assemble_evidence_result(
     *,
     plan: SearchPlan,
     outcome: ReviewedEvidence,
-    evidence: list[AnswerEvidenceItem],
+    evidence: list[AnswerInputEvidence],
     answer_outcome: EvidenceAnswerOutcome,
 ) -> AnswerQuestionResult:
     if isinstance(answer_outcome, EvidenceAnswerUnavailable):
@@ -65,7 +65,7 @@ def assemble_evidence_result(
 
 def _validate_draft_citations(
     *,
-    evidence: list[AnswerEvidenceItem],
+    evidence: list[AnswerInputEvidence],
     draft: EvidenceAnswerDraft,
 ) -> None:
     existing_refs = {item.source.source_ref for item in evidence}
@@ -78,7 +78,7 @@ def _validate_draft_citations(
 
 def _sources_for_citations(
     *,
-    evidence: list[AnswerEvidenceItem],
+    evidence: list[AnswerInputEvidence],
     cited_refs: list[str],
 ) -> list[AnswerSource]:
     cited_ref_set = set(cited_refs)

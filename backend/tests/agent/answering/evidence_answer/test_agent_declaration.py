@@ -15,7 +15,7 @@ from app.agent.answering.evidence_answer.contract import (
     EvidenceAnswerDraft,
     EvidenceAnswerInput,
 )
-from app.agent.answering.evidence_answer.evidence import AnswerEvidenceItem
+from app.agent.answering.evidence_answer.evidence import AnswerInputEvidence
 from app.agent.contract import ExternalUrlSource
 from app.agent.planning.contract import TargetTimeWindow
 from app.agent.question_context.contract import QuestionContext
@@ -67,8 +67,8 @@ def _request(*, question: str = "QUESTION_CONTENTS_SENTINEL") -> AnsweringReques
     )
 
 
-def _evidence() -> AnswerEvidenceItem:
-    return AnswerEvidenceItem(
+def _evidence() -> AnswerInputEvidence:
+    return AnswerInputEvidence(
         source=ExternalUrlSource(
             source_ref="1",
             url="https://example.com/evidence",

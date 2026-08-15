@@ -752,12 +752,10 @@ async def test_evidence_run_span_marks_zero_cited_explicitly_when_uncited(
 
 
 @pytest.mark.asyncio
-async def test_evidence_run_span_reports_internal_dedup_count_and_post_dedup_total(
+async def test_evidence_run_span_reports_post_dedup_internal_total(
     capfire: CaptureLogfire,
 ) -> None:
-    """2taskが同じcuration_idの内部hitを返すとき、
-    internal_deduplicated_countが落ちた件数、internal_evidence_countがdedup後件数になる。
-    """
+    """2taskが同じcuration_idを返しても採用数は重複排除後の件数になる。"""
     hits_by_query = {
         "task0 query": [
             _internal_hit(assessment_id=3001, title="task0-shared", curation_id=4200),
@@ -792,18 +790,12 @@ async def test_evidence_run_span_reports_internal_dedup_count_and_post_dedup_tot
 
     await _run(runner)
 
-    raw_hit_count = sum(len(hits) for hits in hits_by_query.values())
     distinct_curation_ids = {
         hit.article.curation_id for hits in hits_by_query.values() for hit in hits
     }
     attributes = one_span_named(capfire, _RUN_SPAN_NAME)["attributes"]
-    assert (
-        attributes.get("internal_deduplicated_count"),
-        attributes.get("internal_evidence_count"),
-    ) == (
-        raw_hit_count - len(distinct_curation_ids),
-        len(distinct_curation_ids),
-    )
+    assert attributes.get("internal_evidence_count") == len(distinct_curation_ids)
+    assert "internal_deduplicated_count" not in attributes
 
 
 @pytest.mark.asyncio

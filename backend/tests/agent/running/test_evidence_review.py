@@ -673,11 +673,8 @@ async def test_selection_restores_the_right_candidate_and_task_across_groups() -
 
 
 @pytest.mark.asyncio
-async def test_same_url_selected_from_two_tasks_are_both_kept() -> None:
-    """S1 C4。同じURLの外部候補が複数taskで採用されたとき、両方が根拠として残る。
-
-    `deduplicate_external_evidence_by_url()`は仕様上廃止済み(「合流と重複排除」)。
-    """
+async def test_same_url_selected_from_two_tasks_keeps_the_first() -> None:
+    """同じURLを複数taskが選んでもAnswerEvidenceは先頭の1件に確定する。"""
     shared_url = "https://example.com/shared-story"
     tasks = [_task("goal-A", ["query-a"]), _task("goal-B", ["query-b"])]
     reviewer_runtime = ScriptedAgentRuntime(
@@ -708,8 +705,8 @@ async def test_same_url_selected_from_two_tasks_are_both_kept() -> None:
     await _run(runner)
 
     kept_titles = [item.source.title for item in answerer.calls[0]]
-    assert kept_titles == ["task0 headline", "task1 headline"]
-    assert sum(shared_url in str(item.source.url) for item in answerer.calls[0]) == 2
+    assert kept_titles == ["task0 headline"]
+    assert sum(shared_url in str(item.source.url) for item in answerer.calls[0]) == 1
 
 
 @pytest.mark.asyncio
@@ -719,7 +716,7 @@ async def test_merge_dedupes_same_internal_article_by_curation_id_first_win() ->
 
     source_refのtask間非衝突はf"{task_index}-{index}"という統合index空間の
     形から構造的に保証される(正本: tests/agent/evidence_review/test_policy.py
-    のtest_build_evidence_restores_original_candidates_from_run_wide_indexes)。
+    のtest_resolve_selections_restores_original_candidates_from_run_wide_indexes)。
     ここでは合流のcuration_id先勝ちdedupだけを検証する。
     """
     shared_curation_id = 42

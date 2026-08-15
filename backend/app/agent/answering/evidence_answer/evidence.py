@@ -1,4 +1,4 @@
-"""Evidence answer input normalization."""
+"""AnswerEvidenceをAnswerer入力へ投影する。"""
 
 from __future__ import annotations
 
@@ -6,13 +6,13 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from app.agent.contract import AnswerSource, ExternalUrlSource, InternalArticleSource
 from app.agent.evidence_collection.external_search import ExternalSearchEvidence
-from app.agent.evidence_review import InternalArticleEvidence, ReviewedEvidence
+from app.agent.evidence_review import AnswerEvidence, InternalArticleEvidence
 
-__all__ = ["AnswerEvidenceItem", "normalize_answer_evidence"]
+__all__ = ["AnswerInputEvidence", "build_answer_input_evidence"]
 
 
-class AnswerEvidenceItem(BaseModel):
-    """回答向け本文と provenance 正本を対で持つ根拠 1 件。"""
+class AnswerInputEvidence(BaseModel):
+    """Answererへ渡す本文とprovenanceを対で持つ入力根拠1件。"""
 
     model_config = ConfigDict(frozen=True)
 
@@ -20,22 +20,27 @@ class AnswerEvidenceItem(BaseModel):
     text: str = Field(min_length=1)
 
 
-def normalize_answer_evidence(
-    outcome: ReviewedEvidence,
-) -> list[AnswerEvidenceItem]:
-    items: list[AnswerEvidenceItem] = []
+def build_answer_input_evidence(
+    evidence: AnswerEvidence,
+) -> list[AnswerInputEvidence]:
+    """確定根拠を、回答内citation用の連番を持つ入力projectionへ変換する。"""
+    items: list[AnswerInputEvidence] = []
     next_ref = 1
 
-    for evidence in outcome.internal_evidence:
-        items.append(_normalize_internal_evidence(evidence, source_ref=str(next_ref)))
+    for internal_article in evidence.internal_articles:
+        items.append(
+            _normalize_internal_evidence(
+                internal_article,
+                source_ref=str(next_ref),
+            )
+        )
         next_ref += 1
 
-    if outcome.external_search is not None:
-        for evidence in outcome.external_search.evidence:
-            items.append(
-                _normalize_external_evidence(evidence, source_ref=str(next_ref))
-            )
-            next_ref += 1
+    for external_source in evidence.external_sources:
+        items.append(
+            _normalize_external_evidence(external_source, source_ref=str(next_ref))
+        )
+        next_ref += 1
 
     return items
 
@@ -44,8 +49,8 @@ def _normalize_internal_evidence(
     evidence: InternalArticleEvidence,
     *,
     source_ref: str,
-) -> AnswerEvidenceItem:
-    return AnswerEvidenceItem(
+) -> AnswerInputEvidence:
+    return AnswerInputEvidence(
         source=InternalArticleSource(
             source_ref=source_ref,
             # Internal transport calls the public /news id assessment_id.
@@ -61,8 +66,8 @@ def _normalize_external_evidence(
     evidence: ExternalSearchEvidence,
     *,
     source_ref: str,
-) -> AnswerEvidenceItem:
-    return AnswerEvidenceItem(
+) -> AnswerInputEvidence:
+    return AnswerInputEvidence(
         source=ExternalUrlSource(
             source_ref=source_ref,
             url=evidence.url,

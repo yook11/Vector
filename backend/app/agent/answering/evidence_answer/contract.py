@@ -8,7 +8,7 @@ from typing import Protocol
 from pydantic import BaseModel, ConfigDict, Field
 
 from app.agent.answering.contract import AnsweringRequest
-from app.agent.answering.evidence_answer.evidence import AnswerEvidenceItem
+from app.agent.answering.evidence_answer.evidence import AnswerInputEvidence
 from app.agent.contract import NonBlankText
 from app.agent.planning.contract import TargetTimeWindow
 
@@ -27,7 +27,7 @@ class EvidenceAnswerInput:
     """Evidence Answer Agentの1 attempt input。"""
 
     request: AnsweringRequest
-    evidence: tuple[AnswerEvidenceItem, ...]
+    evidence: tuple[AnswerInputEvidence, ...]
     target_time_window: TargetTimeWindow | None
     # 前attemptが失敗した場合のみ、どこで何が失敗したかが入る(初回attemptはNone)。
     repair_context: str | None = None
@@ -65,7 +65,7 @@ class EvidenceAnswerer(Protocol):
         self,
         *,
         request: AnsweringRequest,
-        evidence: list[AnswerEvidenceItem],
+        evidence: list[AnswerInputEvidence],
         target_time_window: TargetTimeWindow | None,
         review_missing: tuple[str, ...],
     ) -> EvidenceAnswerOutcome: ...

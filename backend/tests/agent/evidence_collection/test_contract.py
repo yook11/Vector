@@ -2,7 +2,7 @@
 
 仕様「観測と失敗分類」により、旧ResearchTaskReportが一体で持っていた
 review関連field(review / review_failure_reason / internal_evidence_count /
-external_evidence_count / dropped_selection_count / missing)はRun単位の
+external_evidence_count / missing)はRun単位の
 EvidenceReviewReportへ分離されている。
 """
 
@@ -66,7 +66,6 @@ def _review_report(**overrides: object) -> EvidenceReviewReport:
         "review_failure_reason": None,
         "internal_evidence_count": 0,
         "external_evidence_count": 0,
-        "dropped_selection_count": 0,
         "missing": [],
     }
     values.update(overrides)
@@ -245,7 +244,6 @@ def test_review_report_accepts_the_documented_succeeded_shape() -> None:
         review="succeeded",
         internal_evidence_count=2,
         external_evidence_count=2,
-        dropped_selection_count=1,
         missing=["公式発表が見つからない"],
     )
 
@@ -253,9 +251,9 @@ def test_review_report_accepts_the_documented_succeeded_shape() -> None:
         report.review,
         report.internal_evidence_count,
         report.external_evidence_count,
-        report.dropped_selection_count,
         report.missing,
-    ) == ("succeeded", 2, 2, 1, ["公式発表が見つからない"])
+    ) == ("succeeded", 2, 2, ["公式発表が見つからない"])
+    assert not hasattr(report, "dropped_selection_count")
 
 
 @pytest.mark.parametrize(
@@ -263,7 +261,6 @@ def test_review_report_accepts_the_documented_succeeded_shape() -> None:
     [
         pytest.param({"internal_evidence_count": 1}, id="internal-evidence"),
         pytest.param({"external_evidence_count": 1}, id="external-evidence"),
-        pytest.param({"dropped_selection_count": 1}, id="dropped-selection"),
         pytest.param({"missing": ["表示用の不足理由"]}, id="missing"),
         pytest.param({"review_failure_reason": "reviewer_timeout"}, id="reason"),
     ],
@@ -286,9 +283,8 @@ def test_review_skipped_empty_accepts_the_closed_shape() -> None:
     assert (
         report.internal_evidence_count,
         report.external_evidence_count,
-        report.dropped_selection_count,
         report.missing,
-    ) == (0, 0, 0, [])
+    ) == (0, 0, [])
 
 
 @pytest.mark.parametrize(
