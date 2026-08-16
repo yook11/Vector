@@ -1,7 +1,7 @@
 """EvidenceReviewPreparation の契約(Run単位の投影と復元)。
 
-Run内の候補をtask_index昇順のグループ列(indexはRun全体の通し番号)へ組み、
-見せた番号から元の候補を引き戻せる往復を保証する。Reviewerへ渡す型が
+Run内の選択肢をtask_index昇順のグループ列(indexはRun全体の通し番号)へ組み、
+見せた番号から元の出所を引き戻せる往復を保証する。Reviewerへ渡す型が
 出所種別やURLを含まないことも、この投影の契約に含まれる。
 """
 
@@ -15,7 +15,7 @@ from app.agent.evidence_collection.external_search.contract import (
     CANDIDATE_SNIPPET_MAX_CHARS,
 )
 from app.agent.evidence_review.preparation import (
-    EvidenceCandidateProjection,
+    EvidenceOption,
     EvidenceReviewInput,
     EvidenceReviewPreparation,
     EvidenceReviewTaskGroup,
@@ -39,10 +39,10 @@ def _assert_frozen_slots_dataclass(value: type[object]) -> None:
 # --- Reviewerへ渡す型の構成 ---------------------------------------------------
 
 
-def test_candidate_projection_is_unified_and_excludes_source_metadata() -> None:
+def test_evidence_option_is_unified_and_excludes_source_metadata() -> None:
     """保証するテスト条件 1。内外で同一 field 構成、出所種別・URL 等を含まない。"""
-    _assert_frozen_slots_dataclass(EvidenceCandidateProjection)
-    field_names = {field.name for field in fields(EvidenceCandidateProjection)}
+    _assert_frozen_slots_dataclass(EvidenceOption)
+    field_names = {field.name for field in fields(EvidenceOption)}
     assert field_names == {"index", "title", "source_name", "published_at", "snippet"}
     forbidden = {
         "url",
@@ -52,7 +52,7 @@ def test_candidate_projection_is_unified_and_excludes_source_metadata() -> None:
         "kind",
         "origin",
         "is_internal",
-        "candidate_type",
+        "option_type",
     }
     assert not (field_names & forbidden)
 
@@ -77,14 +77,14 @@ def test_review_input_carries_only_task_groups_and_as_of() -> None:
     assert not hasattr(prepared_input, "active_goal")
     assert not hasattr(prepared_input, "requirement_id")
     assert not hasattr(prepared_input, "research_goal")
-    assert not hasattr(prepared_input, "candidates")
+    assert not hasattr(prepared_input, "options")
 
 
-def test_task_group_carries_task_index_research_goal_and_candidates_only() -> None:
-    """S1(候補の渡し方)。グループはtask_index/research_goal/candidatesだけを持つ。"""
+def test_task_group_carries_task_index_research_goal_and_options_only() -> None:
+    """S1(選択肢の渡し方)。グループはtask_index/research_goal/optionsだけを持つ。"""
     _assert_frozen_slots_dataclass(EvidenceReviewTaskGroup)
     field_names = {field.name for field in fields(EvidenceReviewTaskGroup)}
-    assert field_names == {"task_index", "research_goal", "candidates"}
+    assert field_names == {"task_index", "research_goal", "options"}
 
     # research_goal は str 直値で持ち、標準の QuestionContext field
     # (standalone_question 等)を型として持ち込めない。
@@ -116,10 +116,10 @@ def test_review_input_rejects_content_requirements_as_a_construction_argument() 
 # --- 投影と復元の往復 ---------------------------------------------------------
 
 
-def test_preparation_resolves_shown_indexes_to_their_original_candidates() -> None:
-    """投影で見せた全ての通しindexが、渡した元の候補そのものへ解決される(往復)。
+def test_preparation_resolves_shown_indexes_to_their_option_origins() -> None:
+    """投影で見せた全ての通しindexが、渡した元の出所そのものへ解決される(往復)。
 
-    投影とentryは同一の採番で作られるため、見せた番号と引ける番号はズレない。
+    投影と出所は同一の採番で作られるため、見せた番号と引ける番号はズレない。
     """
     internal = [
         internal_hit(assessment_id=1001, curation_id=1, title="A-int-1", summary="s"),
@@ -137,11 +137,13 @@ def test_preparation_resolves_shown_indexes_to_their_original_candidates() -> No
     preparation = EvidenceReviewPreparation.from_tasks(tasks)
 
     resolved = [
-        preparation.resolve_candidate(candidate.index)
+        preparation.resolve_option_origin(option.index)
         for group in preparation.task_groups
-        for candidate in group.candidates
+        for option in group.options
     ]
-    assert [(entry.source, entry.task_index) for entry in resolved if entry] == [
+    assert [
+        (origin.search_result, origin.task_index) for origin in resolved if origin
+    ] == [
         (internal[0], 2),
         (internal[1], 2),
         (external[0], 5),
@@ -162,13 +164,11 @@ def test_preparation_does_not_resolve_an_index_that_was_never_shown() -> None:
     preparation = EvidenceReviewPreparation.from_tasks(tasks)
 
     shown_indexes = [
-        candidate.index
-        for group in preparation.task_groups
-        for candidate in group.candidates
+        option.index for group in preparation.task_groups for option in group.options
     ]
     assert (
-        preparation.resolve_candidate(max(shown_indexes) + 1),
-        preparation.resolve_candidate(-1),
+        preparation.resolve_option_origin(max(shown_indexes) + 1),
+        preparation.resolve_option_origin(-1),
     ) == (None, None)
 
 
@@ -189,8 +189,8 @@ def test_task_groups_are_ordered_by_task_index_regardless_of_input_order() -> No
     assert [group.research_goal for group in groups] == ["goal-A", "goal-B"]
 
 
-def test_task_groups_place_internal_candidates_before_external_within_a_group() -> None:
-    """各グループ内は内部候補が先、外部候補が後。"""
+def test_task_groups_place_internal_options_before_external_within_a_group() -> None:
+    """各グループ内は内部の選択肢が先、外部の選択肢が後。"""
     from_tasks = EvidenceReviewPreparation.from_tasks
     tasks = [
         collected_task(
@@ -218,9 +218,7 @@ def test_task_groups_place_internal_candidates_before_external_within_a_group() 
 
     groups = from_tasks(tasks).task_groups
 
-    assert [
-        (candidate.index, candidate.title) for candidate in groups[0].candidates
-    ] == [
+    assert [(option.index, option.title) for option in groups[0].options] == [
         (0, "internal-a"),
         (1, "internal-b"),
         (2, "external-x"),
@@ -258,19 +256,15 @@ def test_task_groups_assign_a_run_wide_index_without_duplication_across_groups()
     groups = from_tasks(tasks).task_groups
 
     ordered = [
-        (candidate.index, candidate.title)
-        for group in groups
-        for candidate in group.candidates
+        (option.index, option.title) for group in groups for option in group.options
     ]
     assert ordered == [(0, "A-int"), (1, "A-ext"), (2, "B-int")]
-    all_indexes = [
-        candidate.index for group in groups for candidate in group.candidates
-    ]
+    all_indexes = [option.index for group in groups for option in group.options]
     assert len(all_indexes) == len(set(all_indexes))
 
 
-def test_task_groups_keep_a_task_with_no_candidates_as_an_empty_group() -> None:
-    """候補が内外ともゼロのtaskもグループとして残る(欠番を作らない)。"""
+def test_task_groups_keep_a_task_with_no_options_as_an_empty_group() -> None:
+    """選択肢が内外ともゼロのtaskもグループとして残る(欠番を作らない)。"""
     from_tasks = EvidenceReviewPreparation.from_tasks
     tasks = [
         collected_task(task_index=0, research_goal="goal-A"),
@@ -289,13 +283,13 @@ def test_task_groups_keep_a_task_with_no_candidates_as_an_empty_group() -> None:
     groups = from_tasks(tasks).task_groups
 
     assert [group.task_index for group in groups] == [0, 1, 2]
-    assert groups[0].candidates == ()
-    assert [candidate.index for candidate in groups[1].candidates] == [0]
-    assert groups[2].candidates == ()
+    assert groups[0].options == ()
+    assert [option.index for option in groups[1].options] == [0]
+    assert groups[2].options == ()
 
 
 def test_task_groups_map_internal_source_name_to_none_and_truncate_snippet() -> None:
-    """内部候補: source_name=None、snippetはsummaryとkey_points連結をcapでtruncate。
+    """内部の選択肢: source_name=None、snippetはsummaryとkey_points連結をcapでtruncate。
 
     summary単体ではcapに届かない入力で、連結の実施と連結後のtruncateを区別する。
     """
@@ -314,12 +308,12 @@ def test_task_groups_map_internal_source_name_to_none_and_truncate_snippet() -> 
 
     groups = from_tasks(tasks).task_groups
 
-    candidate = groups[0].candidates[0]
+    option = groups[0].options[0]
     # 連結形式(summaryの次行に"- "付きkey_point)は投影仕様として直書きする。
     expected_snippet = f"{summary}\n- {point}"[:CANDIDATE_SNIPPET_MAX_CHARS]
-    assert candidate.source_name is None
-    assert candidate.published_at == AS_OF
-    assert candidate.snippet == expected_snippet
+    assert option.source_name is None
+    assert option.published_at == AS_OF
+    assert option.snippet == expected_snippet
 
 
 def test_task_groups_is_empty_tuple_when_there_are_no_tasks() -> None:

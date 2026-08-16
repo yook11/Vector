@@ -142,39 +142,39 @@ class AnswerEvidence(BaseModel):
         seen_external_source_identities: set[tuple[int, str]] = set()
 
         for selection in reviewer_response.selections:
-            index = selection.candidate_index
-            entry = preparation.resolve_candidate(index)
-            if entry is None or index in selected_indexes:
+            index = selection.option_index
+            origin = preparation.resolve_option_origin(index)
+            if origin is None or index in selected_indexes:
                 continue
 
             selected_indexes.add(index)
-            source_ref = f"{entry.task_index}-{index}"
-            if isinstance(entry.source, InternalArticleSearchHit):
-                curation_id = entry.source.article.curation_id
-                source_identity = (entry.task_index, curation_id)
+            source_ref = f"{origin.task_index}-{index}"
+            if isinstance(origin.search_result, InternalArticleSearchHit):
+                curation_id = origin.search_result.article.curation_id
+                source_identity = (origin.task_index, curation_id)
                 if source_identity in seen_internal_source_identities:
                     continue
                 seen_internal_source_identities.add(source_identity)
                 internal_articles.append(
                     InternalArticleEvidence.from_reviewed_hit(
-                        entry.source,
+                        origin.search_result,
                         selection=selection,
                         source_ref=source_ref,
-                        task_index=entry.task_index,
+                        task_index=origin.task_index,
                     )
                 )
             else:
-                url = str(entry.source.url)
-                source_identity = (entry.task_index, url)
+                url = str(origin.search_result.url)
+                source_identity = (origin.task_index, url)
                 if source_identity in seen_external_source_identities:
                     continue
                 seen_external_source_identities.add(source_identity)
                 external_sources.append(
                     ExternalSearchEvidence.from_reviewed_candidate(
-                        entry.source,
+                        origin.search_result,
                         selection=selection,
                         source_ref=source_ref,
-                        task_index=entry.task_index,
+                        task_index=origin.task_index,
                     )
                 )
 

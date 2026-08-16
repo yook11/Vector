@@ -24,14 +24,14 @@ EVIDENCE_REVIEWER_RESPONSE_SCHEMA: Final[dict[str, Any]] = {
     "properties": {
         "selections": {
             "type": "array",
-            "description": "候補をindexで参照する採用リスト。",
+            "description": "選択肢をindexで参照する採用リスト。",
             "maxItems": EVIDENCE_REVIEWER_SELECTION_LIMIT,
             "items": {
                 "type": "object",
                 "additionalProperties": False,
-                "required": ["candidate_index", "claim", "why_selected"],
+                "required": ["option_index", "claim", "why_selected"],
                 "properties": {
-                    "candidate_index": {"type": "integer", "minimum": 0},
+                    "option_index": {"type": "integer", "minimum": 0},
                     "claim": {"type": "string"},
                     "why_selected": {"type": "string"},
                 },

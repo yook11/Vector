@@ -246,7 +246,7 @@ async def test_search_plan_success_populates_checkpoint_from_review_outcome() ->
             _review_draft(
                 [
                     {
-                        "candidate_index": 0,
+                        "option_index": 0,
                         "claim": "採用された事実",
                         "why_selected": "w",
                     }
@@ -362,7 +362,7 @@ async def test_builder_exception_yields_none_checkpoint_and_continues_answering(
         results_by_query={"q": [_external_candidate("https://example.com/a")]}
     )
     reviewer_runtime = ScriptedAgentRuntime(
-        [_review_draft([{"candidate_index": 0, "claim": "claim", "why_selected": "w"}])]
+        [_review_draft([{"option_index": 0, "claim": "claim", "why_selected": "w"}])]
     )
     runner = _search_runner(
         plan=_plan(research_goal="調査目標"),

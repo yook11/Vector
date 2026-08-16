@@ -21,24 +21,24 @@ from app.agent.evidence_review.selection import (
 def test_review_selection_draft_rejects_negative_index_before_finalization() -> None:
     with pytest.raises(ValidationError):
         EvidenceReviewerSelectionDraft(
-            candidate_index=-1, claim="claim", why_selected="why"
+            option_index=-1, claim="claim", why_selected="why"
         )
 
     draft = EvidenceReviewerDraft.model_validate(
         {
             "selections": [
-                {"candidate_index": 1, "claim": "claim", "why_selected": "why"}
+                {"option_index": 1, "claim": "claim", "why_selected": "why"}
             ],
             "missing": ["一次情報が不足"],
         }
     )
-    assert draft.selections[0].candidate_index == 1
+    assert draft.selections[0].option_index == 1
 
 
 def test_reviewer_response_rejects_more_than_the_selection_limit() -> None:
     selections = [
         EvidenceReviewerSelection(
-            candidate_index=index,
+            option_index=index,
             claim=f"claim-{index}",
             why_selected="why",
         )
@@ -54,7 +54,7 @@ def test_from_draft_clamps_values_to_existing_contract() -> None:
         {
             "selections": [
                 {
-                    "candidate_index": 0,
+                    "option_index": 0,
                     "claim": "c" * 350,
                     "why_selected": "w" * 350,
                 }

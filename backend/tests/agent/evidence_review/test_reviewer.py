@@ -120,8 +120,8 @@ async def test_review_passes_as_of_to_the_reviewer_input_unchanged() -> None:
 
 
 @pytest.mark.asyncio
-async def test_selection_restores_candidate_and_task_from_a_cross_task_index() -> None:
-    """S1(選別結果の復元)。グループをまたいだindexから候補と所属taskが復元される。
+async def test_selection_restores_origin_and_task_from_a_cross_task_index() -> None:
+    """S1(選別結果の復元)。グループをまたいだindexから出所と所属taskが復元される。
 
     復元規則の正本はtest_preparation.py。ここではreview()経由の実配線を確認する。
     """
@@ -150,12 +150,12 @@ async def test_selection_restores_candidate_and_task_from_a_cross_task_index() -
             _reviewer_draft(
                 [
                     {
-                        "candidate_index": 1,
+                        "option_index": 1,
                         "claim": "A-int-2 claim",
                         "why_selected": "w",
                     },
                     {
-                        "candidate_index": 3,
+                        "option_index": 3,
                         "claim": "B-ext-2 claim",
                         "why_selected": "w",
                     },
@@ -211,7 +211,7 @@ async def test_review_retries_at_most_twice_with_the_same_typed_input() -> None:
         [
             AgentResponseInvalidError(AgentResponseDefect.OUTPUT_SCHEMA_MISMATCH),
             _reviewer_draft(
-                [{"candidate_index": 0, "claim": "claim", "why_selected": "w"}]
+                [{"option_index": 0, "claim": "claim", "why_selected": "w"}]
             ),
         ]
     )
@@ -332,12 +332,12 @@ async def test_review_retries_after_invalid_draft_and_drops_invalid_selections()
     """
     runtime = ScriptedAgentRuntime(
         [
-            _reviewer_draft([{"candidate_index": 0, "claim": "", "why_selected": "w"}]),
+            _reviewer_draft([{"option_index": 0, "claim": "", "why_selected": "w"}]),
             _reviewer_draft(
                 [
-                    {"candidate_index": 0, "claim": "first", "why_selected": "w"},
-                    {"candidate_index": 0, "claim": "duplicate", "why_selected": "w"},
-                    {"candidate_index": 99, "claim": "out", "why_selected": "w"},
+                    {"option_index": 0, "claim": "first", "why_selected": "w"},
+                    {"option_index": 0, "claim": "duplicate", "why_selected": "w"},
+                    {"option_index": 99, "claim": "out", "why_selected": "w"},
                 ]
             ),
         ]
