@@ -186,7 +186,7 @@ class TestPgVectorInternalSearchTool:
         assert [call.queries for call in embedder.calls] == [
             ("NVIDIA", "OpenAI", "Apple")
         ]
-        # outcome metric の所有者は invoke 境界。embed_queries 単体では
+        # outcome metric の所有者は search 境界。embed_queries 単体では
         # どのラベルでも emit しない (二重計上防止)。
         assert _metric_attributes(collected_metrics(capfire), _METRIC) == []
 
@@ -305,12 +305,12 @@ class TestPgVectorInternalSearchTool:
             article_search_repository=search_repo,
         )
 
-        hits = await service.invoke(
+        hits = await service.search(
             InternalSearchToolInput(queries=_queries("NVIDIA", "OpenAI"))
         )
 
         assert [hit.article.title for hit in hits] == ["NVIDIA記事", "OpenAI記事"]
-        # invoke()は既定のper_query_limit(5)を使う。
+        # search()は既定のper_query_limit(5)を使う。
         assert [(call.query, limit) for call, limit in search_repo.calls] == [
             ("NVIDIA", 5),
             ("OpenAI", 5),
@@ -328,7 +328,7 @@ class TestPgVectorInternalSearchTool:
             article_search_repository=FakeArticleVectorSearchRepository({}),
         )
 
-        hits = await service.invoke(InternalSearchToolInput(queries=_queries("NVIDIA")))
+        hits = await service.search(InternalSearchToolInput(queries=_queries("NVIDIA")))
 
         assert hits == []
         assert _metric_attributes(collected_metrics(capfire), _METRIC) == [
@@ -349,7 +349,7 @@ class TestPgVectorInternalSearchTool:
         )
 
         with pytest.raises(InternalSearchError) as captured:
-            await service.invoke(
+            await service.search(
                 InternalSearchToolInput(queries=_queries("SECRET raw user question"))
             )
 
@@ -386,7 +386,7 @@ class TestPgVectorInternalSearchTool:
         )
 
         with pytest.raises(InternalSearchError) as captured:
-            await service.invoke(
+            await service.search(
                 InternalSearchToolInput(queries=_queries("SECRET raw user question"))
             )
 
@@ -411,7 +411,7 @@ class TestPgVectorInternalSearchTool:
         )
 
         with pytest.raises(RuntimeError, match="repository bug"):
-            await service.invoke(
+            await service.search(
                 InternalSearchToolInput(queries=_queries("SECRET raw user question"))
             )
 
@@ -423,7 +423,7 @@ class TestPgVectorInternalSearchTool:
             }
         ]
 
-    async def test_invoke_returns_hits_through_tool_port_without_event_reporter(
+    async def test_search_returns_hits_through_tool_port_without_event_reporter(
         self,
     ) -> None:
         embedder = FakeInternalQueryEmbedder()
@@ -439,7 +439,7 @@ class TestPgVectorInternalSearchTool:
             article_search_repository=search_repo,
         )
 
-        hits = await service.invoke(InternalSearchToolInput(queries=_queries("NVIDIA")))
+        hits = await service.search(InternalSearchToolInput(queries=_queries("NVIDIA")))
 
         assert [hit.article.title for hit in hits] == ["NVIDIA記事"]
 
@@ -448,7 +448,7 @@ class TestPgVectorInternalSearchTool:
         self,
         kwargs: dict[str, int],
     ) -> None:
-        """limit/per_query_limitはinvoke()から到達不能な実装policyのため直接検証する。"""
+        """limit/per_query_limitはsearch()から到達不能な実装policyのため直接検証する。"""
         search_repo = FakeArticleVectorSearchRepository({})
         service = PgVectorInternalSearchTool(
             embedder=FakeInternalQueryEmbedder(),
@@ -468,7 +468,7 @@ class TestPgVectorInternalSearchTool:
             article_search_repository=FakeArticleVectorSearchRepository({}),
         )
 
-        hits = await service.invoke(
+        hits = await service.search(
             InternalSearchToolInput(queries=_queries("SECRET fallback question"))
         )
 
@@ -494,7 +494,7 @@ class TestPgVectorInternalSearchTool:
         assert get_type_hints(InternalSearchToolInput) == {
             "queries": InternalSearchQueries
         }
-        assert get_type_hints(InternalSearchTool.invoke) == {
+        assert get_type_hints(InternalSearchTool.search) == {
             "input": InternalSearchToolInput,
             "return": list[InternalArticleSearchHit],
         }
@@ -527,8 +527,8 @@ class TestPgVectorInternalSearchTool:
             article_search_repository=search_repo,
         )
 
-        # dedup後は2件のみのため既定limit(5)に収まり、invoke()経由で検証できる。
-        hits = await service.invoke(
+        # dedup後は2件のみのため既定limit(5)に収まり、search()経由で検証できる。
+        hits = await service.search(
             InternalSearchToolInput(queries=_queries("NVIDIA", "OpenAI"))
         )
 

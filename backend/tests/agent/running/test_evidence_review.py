@@ -153,7 +153,7 @@ class _InternalTool:
     def name(self) -> str:
         return "internal_search"
 
-    async def invoke(self, input: Any) -> list[InternalArticleSearchHit]:
+    async def search(self, input: Any) -> list[InternalArticleSearchHit]:
         self.calls.append(input)
         query = input.queries.queries[0]
         started = self._started_by_query.get(query)

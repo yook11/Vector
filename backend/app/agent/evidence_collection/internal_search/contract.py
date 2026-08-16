@@ -100,7 +100,7 @@ class InternalSearchTool(Protocol):
     @property
     def name(self) -> InternalSearchToolName: ...
 
-    async def invoke(
+    async def search(
         self,
         input: InternalSearchToolInput,
     ) -> list[InternalArticleSearchHit]: ...

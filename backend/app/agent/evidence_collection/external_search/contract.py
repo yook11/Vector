@@ -202,7 +202,7 @@ class ExternalSearchTool(Protocol):
     @property
     def name(self) -> ExternalSearchToolName: ...
 
-    async def invoke(
+    async def search(
         self,
         input: ExternalSearchToolInput,
     ) -> list[ExternalSearchCandidate]: ...

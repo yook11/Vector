@@ -86,7 +86,7 @@ class _InternalTool:
     def name(self) -> str:
         return "internal_search"
 
-    async def invoke(self, input: Any) -> list[InternalArticleSearchHit]:
+    async def search(self, input: Any) -> list[InternalArticleSearchHit]:
         self.calls.append(input.queries)
         if self._error is not None:
             raise self._error
@@ -108,7 +108,7 @@ class _ExternalTool:
     def name(self) -> str:
         return "external_search"
 
-    async def invoke(self, input: Any) -> list[ExternalSearchCandidate]:
+    async def search(self, input: Any) -> list[ExternalSearchCandidate]:
         self.calls.append(input)
         if input.query in self._errors:
             raise self._errors[input.query]
@@ -271,7 +271,7 @@ async def test_independent_collect_calls_do_not_leak_failure_between_tasks() -> 
         def name(self) -> str:
             return "internal_search"
 
-        async def invoke(self, input: Any) -> list[InternalArticleSearchHit]:
+        async def search(self, input: Any) -> list[InternalArticleSearchHit]:
             query = input.queries.queries[0]
             if query == "bad":
                 raise InternalSearchError(phase="article_search")
@@ -282,7 +282,7 @@ async def test_independent_collect_calls_do_not_leak_failure_between_tasks() -> 
         def name(self) -> str:
             return "external_search"
 
-        async def invoke(self, input: Any) -> list[ExternalSearchCandidate]:
+        async def search(self, input: Any) -> list[ExternalSearchCandidate]:
             if input.query == "bad":
                 raise ExternalSearchProviderError(reason="tavily_search_http_error")
             return [_candidate("https://example.com/good", title="good")]
@@ -334,7 +334,7 @@ async def test_internal_events_carry_task_index_and_input_derived_counts() -> No
         def name(self) -> str:
             return "internal_search"
 
-        async def invoke(self, input: Any) -> list[InternalArticleSearchHit]:
+        async def search(self, input: Any) -> list[InternalArticleSearchHit]:
             return next(hits_by_call)
 
     researcher = Researcher(internal_search=_PerCallInternalTool(), events=events)

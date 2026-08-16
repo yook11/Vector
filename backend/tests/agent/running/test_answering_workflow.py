@@ -91,7 +91,7 @@ class _InternalSearch:
     def name(self) -> str:
         return "internal_search"
 
-    async def invoke(self, input: object) -> list[object]:
+    async def search(self, input: object) -> list[object]:
         self._timeline.append("internal_search")
         self.calls.append(input.queries)  # type: ignore[attr-defined]
         return []

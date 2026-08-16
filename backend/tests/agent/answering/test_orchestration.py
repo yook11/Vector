@@ -291,7 +291,7 @@ class FakeInternalSearch:
     def name(self) -> str:
         return "internal_search"
 
-    async def invoke(self, input: Any) -> list[InternalArticleSearchHit]:
+    async def search(self, input: Any) -> list[InternalArticleSearchHit]:
         if self._timeline is not None:
             self._timeline.record("internal_search.search_articles")
         self.calls.append(input.queries)
@@ -375,7 +375,7 @@ class _ZeroCandidateExternalTool:
     def name(self) -> str:
         return "external_search"
 
-    async def invoke(self, input: object) -> list[ExternalSearchCandidate]:
+    async def search(self, input: object) -> list[ExternalSearchCandidate]:
         del input
         return []
 
@@ -402,7 +402,7 @@ class FakeExternalTool:
     def name(self) -> str:
         return "external_search"
 
-    async def invoke(self, input: object) -> list[ExternalSearchCandidate]:
+    async def search(self, input: object) -> list[ExternalSearchCandidate]:
         return list(self._candidates_by_query[input.query])  # type: ignore[union-attr]
 
 

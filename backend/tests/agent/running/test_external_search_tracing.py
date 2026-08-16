@@ -140,7 +140,7 @@ class _EmptyInternalSearch:
     def name(self) -> str:
         return "internal_search"
 
-    async def invoke(self, input: object) -> list[object]:
+    async def search(self, input: object) -> list[object]:
         del input
         return []
 
@@ -178,7 +178,7 @@ class _Tool:
     def name(self) -> str:
         return "external_search"
 
-    async def invoke(
+    async def search(
         self, input: ExternalSearchToolInput
     ) -> list[ExternalSearchCandidate]:
         self.inputs.append(input)
@@ -474,7 +474,7 @@ class _TwoInternalHitsSearch:
     def name(self) -> str:
         return "internal_search"
 
-    async def invoke(self, input: object) -> list[InternalArticleSearchHit]:
+    async def search(self, input: object) -> list[InternalArticleSearchHit]:
         del input
         return [
             _internal_hit(assessment_id=2001, title="INTERNAL_HIT_TITLE_SENTINEL_bf12"),
@@ -551,7 +551,7 @@ class _PerQueryInternalHitsSearch:
     def name(self) -> str:
         return "internal_search"
 
-    async def invoke(self, input: Any) -> list[InternalArticleSearchHit]:
+    async def search(self, input: Any) -> list[InternalArticleSearchHit]:
         query = input.queries.queries[0]
         return list(self._hits_by_query[query])
 
@@ -567,7 +567,7 @@ class _PerQueryFailableInternalSearch:
     def name(self) -> str:
         return "internal_search"
 
-    async def invoke(self, input: Any) -> list[InternalArticleSearchHit]:
+    async def search(self, input: Any) -> list[InternalArticleSearchHit]:
         query = input.queries.queries[0]
         if query in self._failing_queries:
             raise InternalSearchError(phase="article_search")
