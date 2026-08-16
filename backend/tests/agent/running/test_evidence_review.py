@@ -8,7 +8,7 @@ backend/specs/evidence-review-run-scope-slice.md の Invariants / Test contract 
 - reviewer呼び出し回数と入力(`ScriptedAgentRuntime.calls`)
 - 入力の可視文字列化(`EVIDENCE_REVIEWER_AGENT.prompt.input_renderer`。
   production未変更のAgent宣言契約が持つ安定した拡張点)
-- reviewerの出力型(`EvidenceReviewDraft`。仕様上変更されない応答契約)
+- reviewerの出力型(`EvidenceReviewerDraft`。仕様上変更されない応答契約)
 - `AnsweringRunner.run()` の最終出力・event(仕様上変更されないSSE/response契約)
 
 複数taskにまたがるcandidate_indexを使うテストでは、
@@ -40,8 +40,8 @@ from app.agent.evidence_collection.internal_search.contract import (
     InternalSearchError,
 )
 from app.agent.evidence_review import (
-    EvidenceReviewDraft,
     EvidenceReviewer,
+    EvidenceReviewerDraft,
     EvidenceRunFailed,
 )
 from app.agent.evidence_review.agent import EVIDENCE_REVIEWER_AGENT
@@ -91,7 +91,7 @@ from tests.agent.running._input_safety import AllowInputSafetyChecker
 from tests.agent.runtime._fakes import ScriptedAgentRuntime
 from tests.logfire._span_helpers import one_span_named
 
-_EMPTY_DRAFT = EvidenceReviewDraft.model_validate({"selections": [], "missing": []})
+_EMPTY_DRAFT = EvidenceReviewerDraft.model_validate({"selections": [], "missing": []})
 
 
 def _task(goal: str, queries: list[str]) -> ResearchTask:

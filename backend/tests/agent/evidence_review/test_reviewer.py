@@ -21,7 +21,7 @@ from app.agent.evidence_review.answer_evidence import (
 )
 from app.agent.evidence_review.preparation import EvidenceReviewInput
 from app.agent.evidence_review.reviewer import EvidenceReviewer
-from app.agent.evidence_review.selection import EvidenceReviewDraft
+from app.agent.evidence_review.selection import EvidenceReviewerDraft
 from app.agent.runtime.contract import AgentResponseDefect, AgentResponseInvalidError
 from app.analysis.ai_provider_errors import AIProviderError, AIProviderNetworkError
 from app.analysis.deepseek_error_translator import DeepSeekStateReason
@@ -34,17 +34,17 @@ from tests.agent.evidence_review._builders import (
 from tests.agent.runtime._fakes import ScriptedAgentRuntime
 
 # 中身を見ないテスト用。空なのはどのtasksでも妥当なため。
-_ANY_REVIEW_DRAFT = EvidenceReviewDraft.model_validate(
+_ANY_REVIEWER_DRAFT = EvidenceReviewerDraft.model_validate(
     {"selections": [], "missing": []}
 )
 
 
-def _review_draft(
+def _reviewer_draft(
     selections: list[dict[str, Any]],
     *,
     missing: list[str] | None = None,
-) -> EvidenceReviewDraft:
-    return EvidenceReviewDraft.model_validate(
+) -> EvidenceReviewerDraft:
+    return EvidenceReviewerDraft.model_validate(
         {"selections": selections, "missing": missing or []}
     )
 
@@ -66,7 +66,7 @@ async def _review(
 @pytest.mark.asyncio
 async def test_review_is_called_exactly_once_for_a_multi_task_run() -> None:
     """S1 A1。複数taskがあってもreviewer_runtime.invokeは1 attemptにつき1回。"""
-    runtime = ScriptedAgentRuntime([_ANY_REVIEW_DRAFT])
+    runtime = ScriptedAgentRuntime([_ANY_REVIEWER_DRAFT])
     tasks = [
         collected_task(
             task_index=0,
@@ -94,7 +94,7 @@ async def test_review_is_called_exactly_once_for_a_multi_task_run() -> None:
 @pytest.mark.asyncio
 async def test_review_passes_evidence_review_input_to_runtime() -> None:
     """runtimeへ渡す入力はEvidenceReviewInputである。"""
-    runtime = ScriptedAgentRuntime([_ANY_REVIEW_DRAFT])
+    runtime = ScriptedAgentRuntime([_ANY_REVIEWER_DRAFT])
 
     await _review(
         tasks=[collected_task(task_index=0)],
@@ -107,7 +107,7 @@ async def test_review_passes_evidence_review_input_to_runtime() -> None:
 @pytest.mark.asyncio
 async def test_review_passes_as_of_to_the_reviewer_input_unchanged() -> None:
     """受け取ったas_ofは別の時刻に置き換えずReviewer入力へ渡す。"""
-    runtime = ScriptedAgentRuntime([_ANY_REVIEW_DRAFT])
+    runtime = ScriptedAgentRuntime([_ANY_REVIEWER_DRAFT])
     as_of = datetime(2030, 1, 2, 3, 4, 5, tzinfo=UTC)
 
     await _review(
@@ -147,7 +147,7 @@ async def test_selection_restores_candidate_and_task_from_a_cross_task_index() -
     ]
     runtime = ScriptedAgentRuntime(
         [
-            _review_draft(
+            _reviewer_draft(
                 [
                     {
                         "candidate_index": 1,
@@ -182,7 +182,7 @@ async def test_selection_restores_candidate_and_task_from_a_cross_task_index() -
 @pytest.mark.asyncio
 async def test_review_propagates_missing_as_a_single_run_level_value() -> None:
     """S1(何ができていないかの表明)。missingはRun全体で1本として返る。"""
-    runtime = ScriptedAgentRuntime([_review_draft([], missing=["run全体の不足"])])
+    runtime = ScriptedAgentRuntime([_reviewer_draft([], missing=["run全体の不足"])])
 
     result = await _review(
         tasks=[
@@ -210,7 +210,7 @@ async def test_review_retries_at_most_twice_with_the_same_typed_input() -> None:
     runtime = ScriptedAgentRuntime(
         [
             AgentResponseInvalidError(AgentResponseDefect.OUTPUT_SCHEMA_MISMATCH),
-            _review_draft(
+            _reviewer_draft(
                 [{"candidate_index": 0, "claim": "claim", "why_selected": "w"}]
             ),
         ]
@@ -332,8 +332,8 @@ async def test_review_retries_after_invalid_draft_and_drops_invalid_selections()
     """
     runtime = ScriptedAgentRuntime(
         [
-            _review_draft([{"candidate_index": 0, "claim": "", "why_selected": "w"}]),
-            _review_draft(
+            _reviewer_draft([{"candidate_index": 0, "claim": "", "why_selected": "w"}]),
+            _reviewer_draft(
                 [
                     {"candidate_index": 0, "claim": "first", "why_selected": "w"},
                     {"candidate_index": 0, "claim": "duplicate", "why_selected": "w"},

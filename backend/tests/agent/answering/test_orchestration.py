@@ -31,8 +31,8 @@ from app.agent.evidence_collection.internal_search.query_embedding import (
     InternalSearchQueries,
 )
 from app.agent.evidence_review import (
-    EvidenceReviewDraft,
     EvidenceReviewer,
+    EvidenceReviewerDraft,
     ExternalSearchEvidence,
 )
 from app.agent.planning.contract import (
@@ -336,14 +336,14 @@ class FakeEvidenceReviewerRuntime:
     """S1: reviewerはRun単位で1回だけ呼ばれるため、goal別ではなく単一draftを返す。"""
 
     def __init__(
-        self, draft: EvidenceReviewDraft, *, timeline: CallTimeline | None = None
+        self, draft: EvidenceReviewerDraft, *, timeline: CallTimeline | None = None
     ) -> None:
         self._draft = draft
         self._timeline = timeline
 
     async def invoke(
         self, agent: object, input: object, *, attempt_number: int
-    ) -> EvidenceReviewDraft:
+    ) -> EvidenceReviewerDraft:
         del agent, input, attempt_number
         if self._timeline is not None:
             self._timeline.record("reviewer.review")
@@ -361,7 +361,7 @@ class FakeFailingReviewerRuntime:
 
     async def invoke(
         self, agent: object, input: object, *, attempt_number: int
-    ) -> EvidenceReviewDraft:
+    ) -> EvidenceReviewerDraft:
         del agent, input, attempt_number
         if self._timeline is not None:
             self._timeline.record("reviewer.review")
@@ -385,7 +385,7 @@ class _UnexpectedReviewerRuntime:
 
     async def invoke(
         self, agent: object, input: object, *, attempt_number: int
-    ) -> EvidenceReviewDraft:
+    ) -> EvidenceReviewerDraft:
         del agent, input, attempt_number
         raise AssertionError(
             "reviewer must not be called when all tasks have zero candidates"
@@ -483,7 +483,7 @@ def _external_runtime_for(
         if report is not None:
             missing.extend(report.missing)
 
-    draft = EvidenceReviewDraft.model_validate(
+    draft = EvidenceReviewerDraft.model_validate(
         {"selections": selections, "missing": missing}
     )
     return ExternalResearchRuntime(

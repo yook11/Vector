@@ -605,9 +605,9 @@ def _review_draft_selecting_all_offered_candidates() -> Any:
     範囲外dropとなるだけで安全に使い回せる
     (このモジュールの複数taskにまたがる内部統計テスト専用の軽量fake)。
     """
-    from app.agent.evidence_review import EvidenceReviewDraft
+    from app.agent.evidence_review import EvidenceReviewerDraft
 
-    return EvidenceReviewDraft.model_validate(
+    return EvidenceReviewerDraft.model_validate(
         {
             "selections": [
                 {

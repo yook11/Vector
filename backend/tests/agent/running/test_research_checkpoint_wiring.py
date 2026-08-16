@@ -30,7 +30,7 @@ from app.agent.evidence_collection.external_search.contract import (
     ExternalSearchToolFailureReason,
 )
 from app.agent.evidence_review import EvidenceReviewer
-from app.agent.evidence_review.selection import EvidenceReviewDraft
+from app.agent.evidence_review.selection import EvidenceReviewerDraft
 from app.agent.planning.contract import (
     DirectAnswerPlan,
     PlanningRequest,
@@ -75,8 +75,8 @@ def _external_candidate(url: str) -> ExternalSearchCandidate:
 
 def _review_draft(
     selections: list[dict[str, object]], *, missing: list[str] | None = None
-) -> EvidenceReviewDraft:
-    return EvidenceReviewDraft.model_validate(
+) -> EvidenceReviewerDraft:
+    return EvidenceReviewerDraft.model_validate(
         {"selections": selections, "missing": missing or []}
     )
 

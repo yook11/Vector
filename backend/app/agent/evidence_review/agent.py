@@ -15,7 +15,7 @@ from app.agent.evidence_review.prompts import (
     EVIDENCE_REVIEWER_PROMPT_VERSION,
     render_evidence_review_input,
 )
-from app.agent.evidence_review.selection import EvidenceReviewDraft
+from app.agent.evidence_review.selection import EvidenceReviewerDraft
 
 EVIDENCE_REVIEWER_RESPONSE_SCHEMA: Final[dict[str, Any]] = {
     "type": "object",
@@ -52,11 +52,13 @@ EVIDENCE_REVIEWER_PROMPT = AgentPrompt[EvidenceReviewInput](
     input_renderer=render_evidence_review_input,
 )
 
-EVIDENCE_REVIEWER_AGENT: Final[Agent[EvidenceReviewInput, EvidenceReviewDraft]] = Agent(
-    name="evidence_reviewer",
-    prompt=EVIDENCE_REVIEWER_PROMPT,
-    model=ModelTarget(provider="deepseek", name="deepseek-v4-flash"),
-    model_settings=ModelSettings(max_output_tokens=16384),
-    output_type=EvidenceReviewDraft,
-    response_schema=EVIDENCE_REVIEWER_RESPONSE_SCHEMA,
+EVIDENCE_REVIEWER_AGENT: Final[Agent[EvidenceReviewInput, EvidenceReviewerDraft]] = (
+    Agent(
+        name="evidence_reviewer",
+        prompt=EVIDENCE_REVIEWER_PROMPT,
+        model=ModelTarget(provider="deepseek", name="deepseek-v4-flash"),
+        model_settings=ModelSettings(max_output_tokens=16384),
+        output_type=EvidenceReviewerDraft,
+        response_schema=EVIDENCE_REVIEWER_RESPONSE_SCHEMA,
+    )
 )

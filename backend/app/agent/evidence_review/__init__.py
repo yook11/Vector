@@ -16,10 +16,10 @@ from app.agent.evidence_review.preparation import (
 )
 from app.agent.evidence_review.reviewer import EvidenceReviewer
 from app.agent.evidence_review.selection import (
-    EvidenceReviewDraft,
+    EvidenceReviewerDraft,
     EvidenceReviewerResponse,
     EvidenceReviewerSelection,
-    ReviewSelectionDraft,
+    EvidenceReviewerSelectionDraft,
 )
 
 __all__ = [
@@ -28,7 +28,7 @@ __all__ = [
     "EvidenceRunCompleted",
     "EvidenceRunFailed",
     "EvidenceRunResult",
-    "EvidenceReviewDraft",
+    "EvidenceReviewerDraft",
     "EvidenceReviewInput",
     "EvidenceReviewPreparation",
     "EvidenceReviewerResponse",
@@ -37,5 +37,5 @@ __all__ = [
     "ExternalSearchEvidence",
     "InternalArticleEvidence",
     "EvidenceReviewerSelection",
-    "ReviewSelectionDraft",
+    "EvidenceReviewerSelectionDraft",
 ]

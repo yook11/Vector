@@ -22,14 +22,14 @@ from app.agent.evidence_collection.external_search.contract import (
 )
 
 __all__ = [
-    "EvidenceReviewDraft",
+    "EvidenceReviewerDraft",
     "EvidenceReviewerResponse",
     "EvidenceReviewerSelection",
-    "ReviewSelectionDraft",
+    "EvidenceReviewerSelectionDraft",
 ]
 
 
-class ReviewSelectionDraft(BaseModel):
+class EvidenceReviewerSelectionDraft(BaseModel):
     """Reviewerがcandidate indexを参照して返すdraft 1件。"""
 
     model_config = ConfigDict(frozen=True, extra="forbid")
@@ -39,17 +39,17 @@ class ReviewSelectionDraft(BaseModel):
     why_selected: str
 
 
-class EvidenceReviewDraft(BaseModel):
-    """Reviewerが返すsource情報を持たない精査draft。"""
+class EvidenceReviewerDraft(BaseModel):
+    """Reviewer Agentの回答内容。検証はresponse schemaのみで契約は未検証。"""
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
-    selections: list[ReviewSelectionDraft]
+    selections: list[EvidenceReviewerSelectionDraft]
     missing: list[str]
 
 
 class EvidenceReviewerSelection(BaseModel):
-    """Evidence Reviewerが返した、採用確定前の選択1件。"""
+    """Reviewer回答に含まれる、出典の復元前の選択1件。"""
 
     model_config = ConfigDict(frozen=True)
 
@@ -62,7 +62,7 @@ class EvidenceReviewerSelection(BaseModel):
 
 
 class EvidenceReviewerResponse(BaseModel):
-    """Evidence Reviewerが返した選択と不足事項。自由記述欄はfactoryで丸める。"""
+    """Draftを検証・整形したReviewer回答。出典の復元前。"""
 
     model_config = ConfigDict(frozen=True)
 
@@ -79,7 +79,7 @@ class EvidenceReviewerResponse(BaseModel):
     )
 
     @classmethod
-    def from_draft(cls, draft: EvidenceReviewDraft) -> EvidenceReviewerResponse:
+    def from_draft(cls, draft: EvidenceReviewerDraft) -> EvidenceReviewerResponse:
         return cls.from_raw(
             selections=[selection.model_dump() for selection in draft.selections],
             missing=draft.missing,

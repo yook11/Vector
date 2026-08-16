@@ -32,7 +32,7 @@ from app.agent.evidence_collection.internal_search.contract import (
     InternalArticleSearchHit,
 )
 from app.agent.evidence_review.answer_evidence import EvidenceRunResult
-from app.agent.evidence_review.selection import EvidenceReviewDraft
+from app.agent.evidence_review.selection import EvidenceReviewerDraft
 from app.agent.planning.contract import (
     ExternalResearchTask,
     SearchPlan,
@@ -53,8 +53,8 @@ def review_draft(
     selections: list[dict[str, Any]] | None = None,
     *,
     missing: list[str] | None = None,
-) -> EvidenceReviewDraft:
-    return EvidenceReviewDraft.model_validate(
+) -> EvidenceReviewerDraft:
+    return EvidenceReviewerDraft.model_validate(
         {"selections": selections or [], "missing": missing or []}
     )
 
