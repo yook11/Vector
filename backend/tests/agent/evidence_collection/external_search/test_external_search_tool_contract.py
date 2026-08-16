@@ -138,7 +138,7 @@ def test_external_search_tool_port_and_tavily_adapter_are_stably_typed() -> None
         "limit": int,
         "date_filter": ExternalSearchDateFilter | None,
     }
-    assert get_type_hints(ExternalSearchTool.invoke) == {
+    assert get_type_hints(ExternalSearchTool.search) == {
         "input": ExternalSearchToolInput,
         "return": list[ExternalSearchCandidate],
     }
@@ -148,7 +148,8 @@ def test_external_search_tool_port_and_tavily_adapter_are_stably_typed() -> None
     assert get_args(name_type) == ("external_search",)
     tool = TavilyExternalSearchTool(api_key=SecretStr("test-key"), client=object())
     assert tool.name == "external_search"
-    assert not hasattr(tool, "search")
+    assert hasattr(tool, "search")
+    assert not hasattr(tool, "invoke")
 
 
 @pytest.mark.asyncio
@@ -203,7 +204,7 @@ async def test_successful_tool_call_has_one_safe_client_span_in_answer_trace(
         )
         tool = _tavily_tool(client, api_key=sentinels["secret"])
         with logfire.span(_ANSWERING_SPAN_NAME):
-            candidates = await tool.invoke(
+            candidates = await tool.search(
                 _tool_input(query=sentinels["query"], limit=1)
             )
 
@@ -251,7 +252,7 @@ async def test_classified_tool_failure_uses_closed_reason_without_exception_even
     )
 
     with pytest.raises(ExternalSearchProviderError) as raised:
-        await tool.invoke(_tool_input(query=sentinels["query"], limit=1))
+        await tool.search(_tool_input(query=sentinels["query"], limit=1))
 
     span = _one_tool_span(capfire)
     attributes = dict(span.attributes or {})
@@ -297,13 +298,13 @@ def test_classified_tool_error_rejects_arbitrary_reason_values() -> None:
 
 
 @pytest.mark.asyncio
-async def test_tool_timeout_cancels_invoke_without_fabricating_span_values(
+async def test_tool_timeout_cancels_search_without_fabricating_span_values(
     capfire: CaptureLogfire,
 ) -> None:
     client = BlockingTavilyHttpClient()
     tool = _tavily_tool(client)
     invocation = asyncio.create_task(
-        tool.invoke(_tool_input(query="TOOL_QUERY_SENTINEL_CANCEL_651e", limit=1))
+        tool.search(_tool_input(query="TOOL_QUERY_SENTINEL_CANCEL_651e", limit=1))
     )
     await client.started.wait()
     invocation.cancel()

@@ -139,7 +139,7 @@ class Researcher:
         try:
             # 失敗はspanを貫通させてtraceに残し、外側で縮退へ変える。
             with agent_phase(phase="evidence_collection", task_index=task_index):
-                hits = await self.internal_search.invoke(
+                hits = await self.internal_search.search(
                     InternalSearchToolInput(queries=queries)
                 )
         except InternalSearchError:
@@ -247,7 +247,7 @@ class Researcher:
     ) -> tuple[list[ExternalSearchCandidate], bool]:
         try:
             candidates = await asyncio.wait_for(
-                search_tool.invoke(
+                search_tool.search(
                     ExternalSearchToolInput(
                         query=query,
                         limit=EXTERNAL_SEARCH_CANDIDATES_PER_QUERY,

@@ -64,7 +64,7 @@ class PgVectorInternalSearchTool:
     def name(self) -> InternalSearchToolName:
         return INTERNAL_SEARCH_TOOL_NAME
 
-    async def invoke(
+    async def search(
         self,
         input: InternalSearchToolInput,
     ) -> list[InternalArticleSearchHit]:

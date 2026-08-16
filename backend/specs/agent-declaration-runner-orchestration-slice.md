@@ -392,7 +392,7 @@ Runnerが明示的に呼ぶ実行能力。ToolはLLM人格やinstructionsを持�
 workflow分岐やmodel判断は所有しない。
 
 Runnerが決定的に呼ぶ初期設計で必要なTool contractは、stable name、typed input / output、
-invoke port、failure contractである。modelへ公開するdescriptionやJSON schema registryは、
+search port、failure contractである。modelへ公開するdescriptionやJSON schema registryは、
 model-driven tool selectionを採用しない限り追加しない。
 
 internal retrievalもRunnerから呼ぶcapabilityではあるが、本仕様だけではTool宣言へ移行することを
@@ -751,9 +751,8 @@ async def _search_query(
 ) -> ExternalSearchQueryOutcome:
     try:
         candidates = await asyncio.wait_for(
-            self._invoke_tool(
-                search_tool,
-                input=ExternalSearchToolInput(
+            search_tool.search(
+                ExternalSearchToolInput(
                     query=query,
                     limit=EXTERNAL_SEARCH_CANDIDATES_PER_QUERY,
                 ),

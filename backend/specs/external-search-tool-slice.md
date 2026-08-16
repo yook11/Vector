@@ -22,7 +22,7 @@ PR2でDeepSeek function callingを「実行されないstructured-output transpo
 ### Problem
 
 - 実行可能な検索能力が`SearchProvider`という旧語彙のままで、親仕様が定義するTool契約
-  (stable name / typed input / typed output / invoke port / failure contract)が型に現れていない。
+  (stable name / typed input / typed output / search port / failure contract)が型に現れていない。
 - PR2でtransport(DeepSeek function calling)とTool(実行能力)を区別したが、Tool側の正式契約が無いため、
   区別が語彙上で完成していない。
 - Tool callの観測spanが無く、query単位の外部検索実行が回答trace上に現れない。
@@ -60,7 +60,7 @@ PR2でDeepSeek function callingを「実行されないstructured-output transpo
 - `ExternalSearchTool`は完成済みqueryを入力に受け、queryを生成・拡張・言い換えしない。
 - Toolは検索結果の回答適合性を判断せず、正規化済みcandidateを返すだけとする。evidence選別は
   Selector Agent、候補pool構築はworkflow ownerの責任のまま。
-- Tool契約はstable name、typed input、typed output、invoke port、failure contractの5点で構成する。
+- Tool契約はstable name、typed input、typed output、search port、failure contractの5点で構成する。
 
 ```python
 ExternalSearchToolName = Literal["external_search"]
@@ -76,7 +76,7 @@ class ExternalSearchTool(Protocol):
     @property
     def name(self) -> ExternalSearchToolName: ...
 
-    async def invoke(
+    async def search(
         self,
         input: ExternalSearchToolInput,
     ) -> list[ExternalSearchCandidate]: ...
@@ -157,7 +157,7 @@ class ExternalSearchTool(Protocol):
 
 ## Test contract
 
-- Tool portのstable name、typed input / output、`invoke(input)` signatureをcontract testで固定する。
+- Tool portのstable name、typed input / output、`search(input)` signatureをcontract testで固定する。
 - Tool 1 invocationにつきTavily POSTが1回で、queryを書き換えずに送信する。
 - `limit`の丸め(min(limit, 20))、`limit <= 0`のValueError、candidate `[:limit]` capを維持する。
 - title欠落・SafeUrl検証失敗のcandidateがdropされ、snippet cap・published_at parse・source_name

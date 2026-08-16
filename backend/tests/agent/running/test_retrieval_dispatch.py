@@ -190,7 +190,7 @@ class _InternalSearch:
     def name(self) -> str:
         return "internal_search"
 
-    async def invoke(self, input: Any) -> list[InternalArticleSearchHit]:
+    async def search(self, input: Any) -> list[InternalArticleSearchHit]:
         self.calls.append(input.queries)
         self.started.set()
         try:
@@ -235,7 +235,7 @@ class _Tool:
     def name(self) -> str:
         return "external_search"
 
-    async def invoke(self, input: Any) -> list[ExternalSearchCandidate]:
+    async def search(self, input: Any) -> list[ExternalSearchCandidate]:
         self.calls.append(input)
         try:
             if self._started is not None:
@@ -1151,7 +1151,7 @@ async def test_internal_search_events_are_emitted_per_task_with_task_index() -> 
         def name(self) -> str:
             return "internal_search"
 
-        async def invoke(self, input: Any) -> list[InternalArticleSearchHit]:
+        async def search(self, input: Any) -> list[InternalArticleSearchHit]:
             del input
             return next(hits_by_call)
 
@@ -1590,7 +1590,7 @@ class _KeyedFailingInternalSearch:
     def name(self) -> str:
         return "internal_search"
 
-    async def invoke(self, input: Any) -> list[InternalArticleSearchHit]:
+    async def search(self, input: Any) -> list[InternalArticleSearchHit]:
         self.calls.append(input.queries)
         query = input.queries.queries[0]
         if query in self._failing_queries:
@@ -1830,7 +1830,7 @@ async def test_internal_hits_are_kept_per_task_when_the_same_article_appears(
         def name(self) -> str:
             return "internal_search"
 
-        async def invoke(self, input: Any) -> list[InternalArticleSearchHit]:
+        async def search(self, input: Any) -> list[InternalArticleSearchHit]:
             query = input.queries.queries[0]
             if query == "task0 query":
                 await asyncio.sleep(0.05)

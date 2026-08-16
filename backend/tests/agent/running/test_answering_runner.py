@@ -274,7 +274,7 @@ class _UnreachableInternalSearch:
     def name(self) -> str:
         return "internal_search"
 
-    async def invoke(self, input: object) -> list[object]:
+    async def search(self, input: object) -> list[object]:
         raise AssertionError(f"internal search must not be called: {input!r}")
 
 

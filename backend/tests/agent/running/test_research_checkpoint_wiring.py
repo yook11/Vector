@@ -153,7 +153,7 @@ class _InternalTool:
     def name(self) -> str:
         return "internal_search"
 
-    async def invoke(self, input: object) -> list[object]:
+    async def search(self, input: object) -> list[object]:
         del input
         return []
 
@@ -175,7 +175,7 @@ class _ExternalTool:
     def name(self) -> str:
         return "external_search"
 
-    async def invoke(self, input: object) -> list[ExternalSearchCandidate]:
+    async def search(self, input: object) -> list[ExternalSearchCandidate]:
         self.calls.append(input)
         query = input.query  # type: ignore[attr-defined]
         if query in self._failing:

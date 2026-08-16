@@ -129,7 +129,7 @@ class _EmptyInternalSearch:
     def name(self) -> str:
         return "internal_search"
 
-    async def invoke(self, input: object) -> list[object]:
+    async def search(self, input: object) -> list[object]:
         del input
         return []
 
@@ -150,7 +150,7 @@ class _OneInternalHitSearch:
     def name(self) -> str:
         return "internal_search"
 
-    async def invoke(self, input: object) -> list[InternalArticleSearchHit]:
+    async def search(self, input: object) -> list[InternalArticleSearchHit]:
         del input
         return [_internal_hit(assessment_id=2001, title="internal hit")]
 
@@ -219,7 +219,7 @@ class _Tool:
     def name(self) -> str:
         return "external_search"
 
-    async def invoke(self, input: Any) -> list[ExternalSearchCandidate]:
+    async def search(self, input: Any) -> list[ExternalSearchCandidate]:
         self.calls.append(input)
         try:
             if self._started is not None:
@@ -342,7 +342,7 @@ class _QueryFailureAfterSiblingStartsTool(_Tool):
         self.sibling_finished = asyncio.Event()
         self.sibling_cancelled = False
 
-    async def invoke(self, input: Any) -> list[ExternalSearchCandidate]:
+    async def search(self, input: Any) -> list[ExternalSearchCandidate]:
         self.calls.append(input)
         if input.query == "failing":
             await self.sibling_started.wait()

@@ -66,7 +66,7 @@ class TavilyExternalSearchTool:
     def name(self) -> ExternalSearchToolName:
         return EXTERNAL_SEARCH_TOOL_NAME
 
-    async def invoke(
+    async def search(
         self,
         input: ExternalSearchToolInput,
     ) -> list[ExternalSearchCandidate]:

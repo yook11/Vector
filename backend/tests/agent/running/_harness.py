@@ -190,7 +190,7 @@ class ExternalSearchTool:
     def name(self) -> str:
         return "external_search"
 
-    async def invoke(self, input: Any) -> list[ExternalSearchCandidate]:
+    async def search(self, input: Any) -> list[ExternalSearchCandidate]:
         self.calls.append(input)
         return list(self._results.get(input.query, []))
 

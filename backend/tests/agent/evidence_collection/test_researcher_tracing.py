@@ -68,7 +68,7 @@ class _InternalTool:
     def name(self) -> str:
         return "internal_search"
 
-    async def invoke(self, input: object) -> list[InternalArticleSearchHit]:
+    async def search(self, input: object) -> list[InternalArticleSearchHit]:
         if self._error is not None:
             raise self._error
         return list(self._hits)
