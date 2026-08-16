@@ -165,7 +165,7 @@ def _internal_evidence() -> AnswerInputEvidence:
 
 def _reviewed_internal_evidence(*, task_index: int) -> InternalArticleEvidence:
     return InternalArticleEvidence(
-        source_ref=f"{task_index}-0",
+        option_index=task_index,
         task_index=task_index,
         claim="claim",
         why_selected="why",

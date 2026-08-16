@@ -150,7 +150,7 @@ def _external_evidence(
     claim: str,
 ) -> ExternalSearchEvidence:
     return ExternalSearchEvidence(
-        source_ref=f"{task_index}-0",
+        option_index=task_index,
         task_index=task_index,
         claim=claim,
         why_selected="reviewer explanation",

@@ -48,8 +48,8 @@
   範囲外indexと重複indexは決定的に不採用となる。
 - reviewer response のselection上限は`EVIDENCE_REVIEWER_SELECTION_LIMIT`(15)、回答へ渡す根拠の上限は
   `ANSWER_EVIDENCE_LIMIT`(15)である。後者は出典identityの重複排除後に適用する。
-- 中間`source_ref`は`f"{task_index}-{index}"`。`build_answer_input_evidence()`が最終的な連番へ
-  振り直すため、ユーザーには露出しないRun内部の整理番号である。
+- 確定根拠は見せた候補の`option_index`を持つ。citation用の`source_ref`文字列は
+  `build_answer_input_evidence()`が連番で振る。
 - `EVIDENCE_REVIEWER_AGENT`は`deepseek-v4-flash`、`max_output_tokens=2048`。timeout 30秒、
   最大2 attempt。失敗したtaskは根拠ゼロで終わり、`failure_reason`がtask reportへ残る。
   候補が内外ともゼロのtaskはLLMを呼ばず`review="skipped_empty"`となる。
@@ -116,9 +116,8 @@
   `deepseek-v4-flash`の最大出力は384K tokenであり、この値はmodel上限と競合しない。
 - 採用された根拠の`task_index`を維持する。`task_index`はresearch taskの識別子であり、
   精査がRun単位になっても値の意味は変わらない。
-- 中間`source_ref`の形(`f"{task_index}-{index}"`)を維持する。index がRun内で一意になるため
-  修飾は冗長だが、根拠がどのtaskの収集由来かを中間値から読める利点を残す。この`source_ref`は
-  `build_answer_input_evidence()`が最終的な連番へ振り直すためユーザーには露出しない。
+- 確定根拠は見せた候補の`option_index`を保持する。citation用の`source_ref`文字列は
+  `build_answer_input_evidence()`が連番で振り、ユーザー向けの引用番号になる。
 
 #### 採用の言語化
 

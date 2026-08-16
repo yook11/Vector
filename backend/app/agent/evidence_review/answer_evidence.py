@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import TYPE_CHECKING, Annotated, Self
+from typing import Annotated, Self
 
 from pydantic import BaseModel, ConfigDict, Field, StringConstraints, model_validator
 
@@ -21,11 +21,11 @@ from app.agent.evidence_collection.internal_search.contract import (
     InternalArticleSearchHit,
 )
 from app.agent.evidence_review.preparation import EvidenceReviewPreparation
-from app.agent.evidence_review.selection import EvidenceReviewerResponse
+from app.agent.evidence_review.selection import (
+    EvidenceReviewerResponse,
+    EvidenceReviewerSelection,
+)
 from app.shared.security.safe_url import SafeUrl
-
-if TYPE_CHECKING:
-    from app.agent.evidence_review.selection import EvidenceReviewerSelection
 
 __all__ = [
     "AnswerEvidence",
@@ -42,7 +42,7 @@ class InternalArticleEvidence(BaseModel):
 
     model_config = ConfigDict(frozen=True)
 
-    source_ref: str = Field(min_length=1)
+    option_index: int = Field(ge=0)
     task_index: int = Field(ge=0)
     claim: str = Field(min_length=1, max_length=EVIDENCE_CLAIM_MAX_CHARS)
     why_selected: str = Field(
@@ -62,11 +62,11 @@ class InternalArticleEvidence(BaseModel):
         hit: InternalArticleSearchHit,
         *,
         selection: EvidenceReviewerSelection,
-        source_ref: str,
+        option_index: int,
         task_index: int,
     ) -> Self:
         return cls(
-            source_ref=source_ref,
+            option_index=option_index,
             task_index=task_index,
             claim=selection.claim,
             why_selected=selection.why_selected,
@@ -84,7 +84,7 @@ class ExternalSearchEvidence(BaseModel):
 
     model_config = ConfigDict(frozen=True)
 
-    source_ref: str = Field(min_length=1)
+    option_index: int = Field(ge=0)
     task_index: int = Field(ge=0)
     claim: str = Field(min_length=1, max_length=EVIDENCE_CLAIM_MAX_CHARS)
     why_selected: str = Field(
@@ -103,11 +103,11 @@ class ExternalSearchEvidence(BaseModel):
         hit: ExternalSearchHit,
         *,
         selection: EvidenceReviewerSelection,
-        source_ref: str,
+        option_index: int,
         task_index: int,
     ) -> Self:
         return cls(
-            source_ref=source_ref,
+            option_index=option_index,
             task_index=task_index,
             claim=selection.claim,
             why_selected=selection.why_selected,
@@ -135,20 +135,30 @@ class AnswerEvidence(BaseModel):
         reviewer_response: EvidenceReviewerResponse,
     ) -> AnswerEvidence:
         """Reviewerの選択から出典を復元し、一意な回答用Evidenceを構築する。"""
+        selection_by_index: dict[int, EvidenceReviewerSelection] = {}
+        unadopted_indexes: set[int] = set()
+        for selection in reviewer_response.selections:
+            index = selection.option_index
+            if preparation.resolve_option_origin(index) is None:
+                continue
+            if index in unadopted_indexes:
+                continue
+            existing_selection = selection_by_index.get(index)
+            if existing_selection is None:
+                selection_by_index[index] = selection
+            elif existing_selection.claim != selection.claim:
+                del selection_by_index[index]
+                unadopted_indexes.add(index)
+
         internal_articles: list[InternalArticleEvidence] = []
         external_sources: list[ExternalSearchEvidence] = []
-        selected_indexes: set[int] = set()
         seen_internal_source_identities: set[tuple[int, int]] = set()
         seen_external_source_identities: set[tuple[int, str]] = set()
 
-        for selection in reviewer_response.selections:
-            index = selection.option_index
+        for index, selection in selection_by_index.items():
             origin = preparation.resolve_option_origin(index)
-            if origin is None or index in selected_indexes:
+            if origin is None:
                 continue
-
-            selected_indexes.add(index)
-            source_ref = f"{origin.task_index}-{index}"
             if isinstance(origin.search_hit, InternalArticleSearchHit):
                 curation_id = origin.search_hit.article.curation_id
                 source_identity = (origin.task_index, curation_id)
@@ -159,7 +169,7 @@ class AnswerEvidence(BaseModel):
                     InternalArticleEvidence.from_reviewed_hit(
                         origin.search_hit,
                         selection=selection,
-                        source_ref=source_ref,
+                        option_index=index,
                         task_index=origin.task_index,
                     )
                 )
@@ -173,7 +183,7 @@ class AnswerEvidence(BaseModel):
                     ExternalSearchEvidence.from_reviewed_hit(
                         origin.search_hit,
                         selection=selection,
-                        source_ref=source_ref,
+                        option_index=index,
                         task_index=origin.task_index,
                     )
                 )
@@ -218,11 +228,11 @@ class AnswerEvidence(BaseModel):
                 "external answer evidence URL must be unique within a task"
             )
 
-        source_refs = [item.source_ref for item in self.internal_articles] + [
-            item.source_ref for item in self.external_sources
+        option_indexes = [item.option_index for item in self.internal_articles] + [
+            item.option_index for item in self.external_sources
         ]
-        if len(source_refs) != len(set(source_refs)):
-            raise ValueError("answer evidence source_ref must be unique")
+        if len(option_indexes) != len(set(option_indexes)):
+            raise ValueError("answer evidence option_index must be unique")
         return self
 
 

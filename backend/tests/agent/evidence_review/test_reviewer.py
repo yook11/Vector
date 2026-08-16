@@ -175,8 +175,8 @@ async def test_selection_restores_origin_and_task_from_a_cross_task_index() -> N
         (item.title, item.task_index)
         for item in result.answer_evidence.external_sources
     ] == [("B-ext-2", 1)]
-    assert result.answer_evidence.internal_articles[0].source_ref == "0-1"
-    assert result.answer_evidence.external_sources[0].source_ref == "1-3"
+    assert result.answer_evidence.internal_articles[0].option_index == 1
+    assert result.answer_evidence.external_sources[0].option_index == 3
 
 
 @pytest.mark.asyncio
@@ -336,7 +336,7 @@ async def test_review_retries_after_invalid_draft_and_drops_invalid_selections()
             _reviewer_draft(
                 [
                     {"option_index": 0, "claim": "first", "why_selected": "w"},
-                    {"option_index": 0, "claim": "duplicate", "why_selected": "w"},
+                    {"option_index": 0, "claim": "first", "why_selected": "w"},
                     {"option_index": 99, "claim": "out", "why_selected": "w"},
                 ]
             ),

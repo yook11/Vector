@@ -31,7 +31,7 @@ def _published_at(day: int) -> datetime:
 def _internal_evidence(
     *,
     task_index: int = 0,
-    source_ref: str = "0-0",
+    option_index: int = 0,
     assessment_id: int,
     curation_id: int,
     title: str,
@@ -41,7 +41,7 @@ def _internal_evidence(
     published_at: datetime | None = None,
 ) -> InternalArticleEvidence:
     return InternalArticleEvidence(
-        source_ref=source_ref,
+        option_index=option_index,
         task_index=task_index,
         claim=claim,
         why_selected="selection explanation not used for synthesis text",
@@ -57,7 +57,7 @@ def _internal_evidence(
 def _external_evidence(
     *,
     task_index: int = 0,
-    source_ref: str,
+    option_index: int,
     url: str,
     title: str,
     claim: str,
@@ -66,7 +66,7 @@ def _external_evidence(
     source_name: str | None = None,
 ) -> ExternalSearchEvidence:
     return ExternalSearchEvidence(
-        source_ref=source_ref,
+        option_index=option_index,
         task_index=task_index,
         claim=claim,
         why_selected="selector explanation not used for synthesis text",
@@ -83,14 +83,14 @@ def test_normalize_maps_all_internal_and_external_evidence_with_sequential_refs(
 ):
     internal_evidence = [
         _internal_evidence(
-            source_ref="0-0",
+            option_index=0,
             assessment_id=101,
             curation_id=1,
             title="OpenAI 半導体提携",
             summary="OpenAI が半導体供給網を強化した。",
         ),
         _internal_evidence(
-            source_ref="0-1",
+            option_index=1,
             assessment_id=102,
             curation_id=2,
             title="NVIDIA GPU 需要",
@@ -99,19 +99,19 @@ def test_normalize_maps_all_internal_and_external_evidence_with_sequential_refs(
     ]
     external = [
         _external_evidence(
-            source_ref="9-9",
+            option_index=99,
             url="https://example.com/nvidia-1",
             title="NVIDIA official",
             claim="NVIDIA announced a new GPU platform.",
         ),
         _external_evidence(
-            source_ref="1-0",
+            option_index=10,
             url="https://example.com/nvidia-2",
             title="Supplier update",
             claim="A supplier reported higher AI demand.",
         ),
         _external_evidence(
-            source_ref="1-1",
+            option_index=11,
             url="https://example.com/nvidia-3",
             title="Cloud capex",
             claim="Cloud providers increased AI capex.",
@@ -138,14 +138,14 @@ def test_normalize_maps_all_internal_and_external_evidence_with_sequential_refs(
 def test_normalize_preserves_internal_then_external_input_order() -> None:
     internal_evidence = [
         _internal_evidence(
-            source_ref="0-0",
+            option_index=0,
             assessment_id=101,
             curation_id=1,
             title="internal first",
             summary="first summary",
         ),
         _internal_evidence(
-            source_ref="0-2",
+            option_index=2,
             assessment_id=102,
             curation_id=2,
             title="internal second",
@@ -154,13 +154,13 @@ def test_normalize_preserves_internal_then_external_input_order() -> None:
     ]
     external = [
         _external_evidence(
-            source_ref="0-3",
+            option_index=3,
             url="https://example.com/first",
             title="external first",
             claim="first claim",
         ),
         _external_evidence(
-            source_ref="0-1",
+            option_index=1,
             url="https://example.com/second",
             title="external second",
             claim="second claim",
@@ -187,7 +187,7 @@ def test_normalize_preserves_external_provenance_and_uses_claim_as_evidence_clai
 ):
     published_at = _published_at(4)
     evidence = _external_evidence(
-        source_ref="9-9",
+        option_index=99,
         url="https://example.com/nvidia",
         title="NVIDIA source",
         claim="NVIDIA introduced a new accelerator.",
@@ -236,7 +236,7 @@ def test_normalize_builds_internal_text_from_claim_then_summary_and_key_points()
 ):
     """保証するテスト条件 6。内部本文が claim + summary(+key_points) になる。"""
     internal_with_points = _internal_evidence(
-        source_ref="0-2",
+        option_index=2,
         assessment_id=401,
         curation_id=1,
         title="internal rich",
@@ -245,7 +245,7 @@ def test_normalize_builds_internal_text_from_claim_then_summary_and_key_points()
         key_points=["需要が増えた。", "供給制約が残る。"],
     )
     internal_without_points = _internal_evidence(
-        source_ref="0-3",
+        option_index=3,
         assessment_id=402,
         curation_id=2,
         title="internal plain",
@@ -253,14 +253,14 @@ def test_normalize_builds_internal_text_from_claim_then_summary_and_key_points()
         summary="内部要約のみ。",
     )
     external_with_snippet = _external_evidence(
-        source_ref="0-0",
+        option_index=0,
         url="https://example.com/with-snippet",
         title="external rich",
         claim="外部主張。",
         snippet="外部スニペット。",
     )
     external_without_snippet = _external_evidence(
-        source_ref="0-1",
+        option_index=1,
         url="https://example.com/no-snippet",
         title="external plain",
         claim="外部主張のみ。",
@@ -283,7 +283,7 @@ def test_normalize_builds_internal_text_from_claim_then_summary_and_key_points()
 
 def test_normalize_ignores_external_local_source_ref() -> None:
     evidence = _external_evidence(
-        source_ref="9-9",
+        option_index=99,
         url="https://example.com/ref",
         title="external",
         claim="external claim",
@@ -300,7 +300,7 @@ def test_normalize_ignores_external_local_source_ref() -> None:
 
 def test_normalize_ignores_internal_local_source_ref() -> None:
     evidence = _internal_evidence(
-        source_ref="9-9",
+        option_index=99,
         assessment_id=501,
         curation_id=1,
         title="internal",
@@ -314,7 +314,7 @@ def test_normalize_ignores_internal_local_source_ref() -> None:
 
 def test_normalize_omits_empty_external_snippet_from_text() -> None:
     evidence = _external_evidence(
-        source_ref="0-0",
+        option_index=0,
         url="https://example.com/empty-snippet",
         title="external",
         claim="external claim",

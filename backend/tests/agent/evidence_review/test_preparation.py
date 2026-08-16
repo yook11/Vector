@@ -26,8 +26,8 @@ from tests.agent.evidence_review._builders import (
     external_hit,
     internal_hit,
     review_input,
+    sample_task,
     task_group,
-    task_with_hits,
 )
 
 
@@ -157,8 +157,8 @@ def test_preparation_does_not_resolve_an_index_that_was_never_shown() -> None:
     負の番号もtupleの末尾参照に化けさせず構造的に弾く。
     """
     tasks = [
-        task_with_hits(task_index=0, internal=1),
-        task_with_hits(task_index=1, external=2),
+        sample_task(task_index=0, internal_count=1),
+        sample_task(task_index=1, external_count=2),
     ]
 
     preparation = EvidenceReviewPreparation.from_tasks(tasks)

@@ -205,11 +205,8 @@ workflow ownership、retrieval dispatch、external pipeline統合)は実装済�
   task単位の採用上限も現行値(5件)を維持する。
 - 範囲外indexと重複indexは`AnswerEvidence.from_reviewer_response()`が決定的に不採用とする。
   reviewerの出力を無検証で信用しない。
-- 選別済み根拠の中間`source_ref`は、`external-{task_index}-{candidate_index}`から出所非依存の
-  採番へ変える。task内の候補列が内部・外部の統合index空間になり接頭辞が実態と合わなくなるためで
-  ある。`task_index`による修飾は維持する。`candidate_index`はtaskごとに0から振られ、修飾しないと
-  task間で衝突する。この`source_ref`は`build_answer_input_evidence()`が最終的な連番へ振り直すため
-  ユーザーには露出せず、Run内部の整理番号として閉じている。
+- 確定根拠は見せた候補の`option_index`を持つ。citation用の`source_ref`文字列は
+  `build_answer_input_evidence()`が連番で振る。中間の`f"{task_index}-{index}"`は持たない。
 - reviewerが失敗したtaskは根拠ゼロで終わる。距離順やprovider rank順で根拠を捏造するfallbackを
   設けない。`claim`を持たない根拠を作らない。
 
