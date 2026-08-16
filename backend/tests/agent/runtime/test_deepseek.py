@@ -11,7 +11,7 @@ import pytest
 from openai import APIStatusError
 from openai import RateLimitError as OpenAIRateLimitError
 
-from app.agent.evidence_review.selection import EvidenceReviewDraft
+from app.agent.evidence_review.selection import EvidenceReviewerDraft
 from app.agent.runtime.contract import AgentResponseDefect, AgentResponseInvalidError
 from app.agent.runtime.deepseek import DeepSeekAgentRuntime, DeepSeekOutputBinding
 from app.analysis.ai_provider_errors import (
@@ -176,7 +176,7 @@ async def test_negative_index_is_runtime_schema_mismatch() -> None:
             )
         ]
     )
-    agent = replace(make_agent(), output_type=EvidenceReviewDraft)
+    agent = replace(make_agent(), output_type=EvidenceReviewerDraft)
 
     with pytest.raises(AgentResponseInvalidError) as raised:
         await DeepSeekAgentRuntime(client=client, binding=make_binding()).invoke(

@@ -11,18 +11,20 @@ from pydantic import ValidationError
 
 from app.agent.contract import EVIDENCE_REVIEWER_SELECTION_LIMIT
 from app.agent.evidence_review.selection import (
-    EvidenceReviewDraft,
+    EvidenceReviewerDraft,
     EvidenceReviewerResponse,
     EvidenceReviewerSelection,
-    ReviewSelectionDraft,
+    EvidenceReviewerSelectionDraft,
 )
 
 
 def test_review_selection_draft_rejects_negative_index_before_finalization() -> None:
     with pytest.raises(ValidationError):
-        ReviewSelectionDraft(candidate_index=-1, claim="claim", why_selected="why")
+        EvidenceReviewerSelectionDraft(
+            candidate_index=-1, claim="claim", why_selected="why"
+        )
 
-    draft = EvidenceReviewDraft.model_validate(
+    draft = EvidenceReviewerDraft.model_validate(
         {
             "selections": [
                 {"candidate_index": 1, "claim": "claim", "why_selected": "why"}
@@ -48,7 +50,7 @@ def test_reviewer_response_rejects_more_than_the_selection_limit() -> None:
 
 
 def test_from_draft_clamps_values_to_existing_contract() -> None:
-    draft = EvidenceReviewDraft.model_validate(
+    draft = EvidenceReviewerDraft.model_validate(
         {
             "selections": [
                 {
@@ -75,7 +77,7 @@ def test_from_draft_clamps_missing_item_count_to_the_run_wide_limit() -> None:
 
     Run単位のmissing上限(8)へclampされる。
     """
-    draft = EvidenceReviewDraft.model_validate(
+    draft = EvidenceReviewerDraft.model_validate(
         {
             "selections": [],
             "missing": [f"missing-{index}" for index in range(9)],

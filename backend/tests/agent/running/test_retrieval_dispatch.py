@@ -81,9 +81,9 @@ def _review_draft_selecting(indexes: list[int]) -> Any:
     候補数より大きいindexは範囲外dropとなるだけで安全なため、実際の候補数を
     問わず[0, 1]等を渡して「提示された候補を全て採用させる」用途に使える。
     """
-    from app.agent.evidence_review import EvidenceReviewDraft
+    from app.agent.evidence_review import EvidenceReviewerDraft
 
-    return EvidenceReviewDraft.model_validate(
+    return EvidenceReviewerDraft.model_validate(
         {
             "selections": [
                 {
@@ -100,9 +100,9 @@ def _review_draft_selecting(indexes: list[int]) -> Any:
 
 def _review_draft_selecting_with_missing(indexes: list[int], missing: list[str]) -> Any:
     """条件7用: 採用indexに加えてRun単位のmissingを申告するreviewer draft。"""
-    from app.agent.evidence_review import EvidenceReviewDraft
+    from app.agent.evidence_review import EvidenceReviewerDraft
 
-    return EvidenceReviewDraft.model_validate(
+    return EvidenceReviewerDraft.model_validate(
         {
             "selections": [
                 {

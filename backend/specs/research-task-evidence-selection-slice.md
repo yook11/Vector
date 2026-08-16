@@ -160,7 +160,7 @@ workflow ownership、retrieval dispatch、external pipeline統合)は実装済�
   - stable name: `external_evidence_selector` -> `evidence_reviewer`
   - phase名: `external_selector` -> `evidence_review`
   - class: `EvidenceReviewer`
-  - 出力型: `ExternalEvidenceSelectionDraft` -> `EvidenceReviewDraft`、
+  - 出力型: `ExternalEvidenceSelectionDraft` -> `EvidenceReviewerDraft`、
     `EvidenceSelectionResult` -> `EvidenceReviewerResponse`(selections + missing)
   span属性`agent_name`とmetric labelの値が変わることを受け入れる。
 - `assessor` / `curator` / `analyst` / `auditor`は採らない。`assessment`(投資判断)、

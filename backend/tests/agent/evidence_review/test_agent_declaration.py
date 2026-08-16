@@ -22,7 +22,7 @@ from app.agent.evidence_review.agent import EVIDENCE_REVIEWER_AGENT
 from app.agent.evidence_review.deepseek_binding import (
     EVIDENCE_REVIEWER_DEEPSEEK_BINDING,
 )
-from app.agent.evidence_review.selection import EvidenceReviewDraft
+from app.agent.evidence_review.selection import EvidenceReviewerDraft
 from tests.agent.evidence_review._builders import (
     AS_OF,
     candidate_input,
@@ -51,7 +51,7 @@ def test_agent_declares_stable_model_version_output_and_immutable_schema() -> No
     # 概算11,400字を保守側1.0 token/字で見積り、約1.4倍の余裕を取った値
     # (仕様「選別結果の復元」、deepseek-v4-flashの最大出力384K tokenと非競合)。
     assert reviewer_agent.model_settings.max_output_tokens == 16384
-    assert reviewer_agent.output_type is EvidenceReviewDraft
+    assert reviewer_agent.output_type is EvidenceReviewerDraft
     assert not any(
         hasattr(reviewer_agent, forbidden)
         for forbidden in (
