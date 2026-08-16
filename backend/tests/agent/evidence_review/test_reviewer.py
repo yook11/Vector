@@ -13,111 +13,46 @@ from typing import Any
 
 import pytest
 
-from app.agent.evidence_collection.contract import CollectedTask, ResearchTaskReport
-from app.agent.evidence_collection.external_search.contract import (
-    ExternalSearchCandidate,
-)
-from app.agent.evidence_collection.internal_search.contract import (
-    InternalArticleContent,
-    InternalArticleSearchHit,
-)
 from app.agent.evidence_review.agent import EVIDENCE_REVIEWER_AGENT
 from app.agent.evidence_review.answer_evidence import (
     EvidenceRunCompleted,
     EvidenceRunFailed,
     EvidenceRunResult,
 )
-from app.agent.evidence_review.preparation import EvidenceReviewPreparation
+from app.agent.evidence_review.preparation import EvidenceReviewInput
 from app.agent.evidence_review.reviewer import EvidenceReviewer
 from app.agent.evidence_review.selection import EvidenceReviewDraft
 from app.agent.runtime.contract import AgentResponseDefect, AgentResponseInvalidError
 from app.analysis.ai_provider_errors import AIProviderError, AIProviderNetworkError
-from app.analysis.analyzed_article import InScopeAnalyzedArticle
-from app.analysis.assessment.domain.result import InScope, InScopeCategory
 from app.analysis.deepseek_error_translator import DeepSeekStateReason
+from tests.agent.evidence_review._builders import (
+    AS_OF,
+    collected_task,
+    external_candidate,
+    internal_hit,
+)
 from tests.agent.runtime._fakes import ScriptedAgentRuntime
 
-_AS_OF = datetime(2026, 7, 20, 9, 30, tzinfo=UTC)
+# 中身を見ないテスト用。空なのはどのtasksでも妥当なため。
+_ANY_REVIEW_DRAFT = EvidenceReviewDraft.model_validate(
+    {"selections": [], "missing": []}
+)
 
 
-def _collected_task(
-    *,
-    task_index: int,
-    research_goal: str = "NVIDIA の最新動向を確認する",
-    internal_hits: list[InternalArticleSearchHit] | None = None,
-    external_candidates: list[ExternalSearchCandidate] | None = None,
-) -> CollectedTask:
-    hits = internal_hits or []
-    candidates = external_candidates or []
-    # report は reviewer が読まない収集診断のため、成功形の最小値で埋める。
-    return CollectedTask(
-        task_index=task_index,
-        research_goal=research_goal,
-        internal_hits=hits,
-        external_candidates=candidates,
-        executed_queries=(),
-        report=ResearchTaskReport(
-            task_index=task_index,
-            research_goal=research_goal,
-            internal_collection="succeeded",
-            external_collection="succeeded",
-            internal_candidate_count=len(hits),
-            external_candidate_count=len(candidates),
-        ),
-    )
-
-
-def _internal_hit(
-    *,
-    assessment_id: int = 1001,
-    curation_id: int = 1,
-    title: str = "internal title",
-    summary: str = "internal summary",
-) -> InternalArticleSearchHit:
-    article = InScopeAnalyzedArticle(
-        curation_id=curation_id,
-        title=title,
-        summary=summary,
-        assessment_result=InScope(
-            category=InScopeCategory.AI,
-            investor_take="投資家視点",
-            key_points=[],
-        ),
-    )
-    return InternalArticleSearchHit(
-        assessment_id=assessment_id,
-        article=article,
-        content=InternalArticleContent.from_article(article, published_at=None),
-        distance=0.1,
-    )
-
-
-def _external_candidate(
-    url: str = "https://example.com/a", *, title: str | None = None
-) -> ExternalSearchCandidate:
-    return ExternalSearchCandidate(
-        url=url,
-        title=title or url,
-        snippet="snippet",
-        source_name="Example",
-        published_at=_AS_OF,
-    )
-
-
-def _draft(
-    selections: list[dict[str, Any]] | None = None,
+def _review_draft(
+    selections: list[dict[str, Any]],
     *,
     missing: list[str] | None = None,
 ) -> EvidenceReviewDraft:
     return EvidenceReviewDraft.model_validate(
-        {"selections": selections or [], "missing": missing or []}
+        {"selections": selections, "missing": missing or []}
     )
 
 
 async def _review(
     *,
     tasks: list[Any],
-    as_of: datetime = _AS_OF,
+    as_of: datetime = AS_OF,
     reviewer_runtime: Any,
 ) -> EvidenceRunResult:
     reviewer = EvidenceReviewer()
@@ -131,12 +66,23 @@ async def _review(
 @pytest.mark.asyncio
 async def test_review_is_called_exactly_once_for_a_multi_task_run() -> None:
     """S1 A1。複数taskがあってもreviewer_runtime.invokeは1 attemptにつき1回。"""
-    runtime = ScriptedAgentRuntime(
-        [_draft([{"candidate_index": 0, "claim": "claim", "why_selected": "w"}])]
-    )
+    runtime = ScriptedAgentRuntime([_ANY_REVIEW_DRAFT])
     tasks = [
-        _collected_task(task_index=0, internal_hits=[_internal_hit()]),
-        _collected_task(task_index=1, external_candidates=[_external_candidate()]),
+        collected_task(
+            task_index=0,
+            internal_hits=[
+                internal_hit(
+                    assessment_id=1001,
+                    curation_id=1,
+                    title="internal title",
+                    summary="s",
+                )
+            ],
+        ),
+        collected_task(
+            task_index=1,
+            external_candidates=[external_candidate("https://example.com/a")],
+        ),
     ]
 
     await _review(tasks=tasks, reviewer_runtime=runtime)
@@ -146,34 +92,31 @@ async def test_review_is_called_exactly_once_for_a_multi_task_run() -> None:
 
 
 @pytest.mark.asyncio
-async def test_review_passes_the_task_group_projection_and_as_of_unchanged() -> None:
-    """reviewer入力はEvidenceReviewPreparation.from_tasks(tasks)の投影とas_ofそのもの。
+async def test_review_passes_evidence_review_input_to_runtime() -> None:
+    """runtimeへ渡す入力はEvidenceReviewInputである。"""
+    runtime = ScriptedAgentRuntime([_ANY_REVIEW_DRAFT])
 
-    グループ化規則(昇順・通しindex・内部→外部)の正本はtest_preparation.pyが持つ。
-    """
-    runtime = ScriptedAgentRuntime([_draft([])])
-    # 降順で渡し、等価比較が入力の受け流しでは成立しないようにする。
-    tasks = [
-        _collected_task(
-            task_index=1,
-            research_goal="goal-B",
-            external_candidates=[_external_candidate(title="B-ext")],
-        ),
-        _collected_task(
-            task_index=0,
-            research_goal="goal-A",
-            internal_hits=[_internal_hit(title="A-int")],
-        ),
-    ]
-
-    await _review(tasks=tasks, reviewer_runtime=runtime)
-
-    review_input = runtime.calls[0].input
-    assert (
-        review_input.task_groups
-        == EvidenceReviewPreparation.from_tasks(tasks).task_groups
+    await _review(
+        tasks=[collected_task(task_index=0)],
+        reviewer_runtime=runtime,
     )
-    assert review_input.as_of == _AS_OF
+
+    assert type(runtime.calls[0].input) is EvidenceReviewInput
+
+
+@pytest.mark.asyncio
+async def test_review_passes_as_of_to_the_reviewer_input_unchanged() -> None:
+    """受け取ったas_ofは別の時刻に置き換えずReviewer入力へ渡す。"""
+    runtime = ScriptedAgentRuntime([_ANY_REVIEW_DRAFT])
+    as_of = datetime(2030, 1, 2, 3, 4, 5, tzinfo=UTC)
+
+    await _review(
+        tasks=[],
+        as_of=as_of,
+        reviewer_runtime=runtime,
+    )
+
+    assert runtime.calls[0].input.as_of == as_of
 
 
 @pytest.mark.asyncio
@@ -183,24 +126,28 @@ async def test_selection_restores_candidate_and_task_from_a_cross_task_index() -
     復元規則の正本はtest_preparation.py。ここではreview()経由の実配線を確認する。
     """
     tasks = [
-        _collected_task(
+        collected_task(
             task_index=0,
             internal_hits=[
-                _internal_hit(assessment_id=1001, curation_id=1, title="A-int-1"),
-                _internal_hit(assessment_id=1002, curation_id=2, title="A-int-2"),
+                internal_hit(
+                    assessment_id=1001, curation_id=1, title="A-int-1", summary="s"
+                ),
+                internal_hit(
+                    assessment_id=1002, curation_id=2, title="A-int-2", summary="s"
+                ),
             ],
         ),
-        _collected_task(
+        collected_task(
             task_index=1,
             external_candidates=[
-                _external_candidate("https://example.com/b1", title="B-ext-1"),
-                _external_candidate("https://example.com/b2", title="B-ext-2"),
+                external_candidate("https://example.com/b1", title="B-ext-1"),
+                external_candidate("https://example.com/b2", title="B-ext-2"),
             ],
         ),
     ]
     runtime = ScriptedAgentRuntime(
         [
-            _draft(
+            _review_draft(
                 [
                     {
                         "candidate_index": 1,
@@ -235,10 +182,22 @@ async def test_selection_restores_candidate_and_task_from_a_cross_task_index() -
 @pytest.mark.asyncio
 async def test_review_propagates_missing_as_a_single_run_level_value() -> None:
     """S1(何ができていないかの表明)。missingはRun全体で1本として返る。"""
-    runtime = ScriptedAgentRuntime([_draft([], missing=["run全体の不足"])])
+    runtime = ScriptedAgentRuntime([_review_draft([], missing=["run全体の不足"])])
 
     result = await _review(
-        tasks=[_collected_task(task_index=0, internal_hits=[_internal_hit()])],
+        tasks=[
+            collected_task(
+                task_index=0,
+                internal_hits=[
+                    internal_hit(
+                        assessment_id=1001,
+                        curation_id=1,
+                        title="internal title",
+                        summary="s",
+                    )
+                ],
+            )
+        ],
         reviewer_runtime=runtime,
     )
 
@@ -251,12 +210,26 @@ async def test_review_retries_at_most_twice_with_the_same_typed_input() -> None:
     runtime = ScriptedAgentRuntime(
         [
             AgentResponseInvalidError(AgentResponseDefect.OUTPUT_SCHEMA_MISMATCH),
-            _draft([{"candidate_index": 0, "claim": "claim", "why_selected": "w"}]),
+            _review_draft(
+                [{"candidate_index": 0, "claim": "claim", "why_selected": "w"}]
+            ),
         ]
     )
 
     result = await _review(
-        tasks=[_collected_task(task_index=0, internal_hits=[_internal_hit()])],
+        tasks=[
+            collected_task(
+                task_index=0,
+                internal_hits=[
+                    internal_hit(
+                        assessment_id=1001,
+                        curation_id=1,
+                        title="internal title",
+                        summary="s",
+                    )
+                ],
+            )
+        ],
         reviewer_runtime=runtime,
     )
 
@@ -300,8 +273,21 @@ async def test_review_classifies_failure_reason_after_two_exhausted_attempts(
     """
     runtime = ScriptedAgentRuntime([failure, failure])
     tasks = [
-        _collected_task(task_index=0, internal_hits=[_internal_hit()]),
-        _collected_task(task_index=1, external_candidates=[_external_candidate()]),
+        collected_task(
+            task_index=0,
+            internal_hits=[
+                internal_hit(
+                    assessment_id=1001,
+                    curation_id=1,
+                    title="internal title",
+                    summary="s",
+                )
+            ],
+        ),
+        collected_task(
+            task_index=1,
+            external_candidates=[external_candidate("https://example.com/a")],
+        ),
     ]
 
     result = await _review(tasks=tasks, reviewer_runtime=runtime)
@@ -315,7 +301,19 @@ async def test_review_classifies_failure_reason_after_two_exhausted_attempts(
 async def test_review_propagates_unclassified_provider_error() -> None:
     """回復クラスを宣言しない裸のprovider errorは失敗理由に変換せず伝播する。"""
     runtime = ScriptedAgentRuntime([AIProviderError()])
-    tasks = [_collected_task(task_index=0, internal_hits=[_internal_hit()])]
+    tasks = [
+        collected_task(
+            task_index=0,
+            internal_hits=[
+                internal_hit(
+                    assessment_id=1001,
+                    curation_id=1,
+                    title="internal title",
+                    summary="s",
+                )
+            ],
+        )
+    ]
 
     with pytest.raises(AIProviderError):
         await _review(tasks=tasks, reviewer_runtime=runtime)
@@ -334,8 +332,8 @@ async def test_review_retries_after_invalid_draft_and_drops_invalid_selections()
     """
     runtime = ScriptedAgentRuntime(
         [
-            _draft([{"candidate_index": 0, "claim": "", "why_selected": "w"}]),
-            _draft(
+            _review_draft([{"candidate_index": 0, "claim": "", "why_selected": "w"}]),
+            _review_draft(
                 [
                     {"candidate_index": 0, "claim": "first", "why_selected": "w"},
                     {"candidate_index": 0, "claim": "duplicate", "why_selected": "w"},
@@ -347,7 +345,10 @@ async def test_review_retries_after_invalid_draft_and_drops_invalid_selections()
 
     result = await _review(
         tasks=[
-            _collected_task(task_index=0, external_candidates=[_external_candidate()])
+            collected_task(
+                task_index=0,
+                external_candidates=[external_candidate("https://example.com/a")],
+            )
         ],
         reviewer_runtime=runtime,
     )
@@ -365,7 +366,19 @@ async def test_review_propagates_unclassified_exception_without_retry() -> None:
 
     with pytest.raises(RuntimeError) as raised:
         await _review(
-            tasks=[_collected_task(task_index=0, internal_hits=[_internal_hit()])],
+            tasks=[
+                collected_task(
+                    task_index=0,
+                    internal_hits=[
+                        internal_hit(
+                            assessment_id=1001,
+                            curation_id=1,
+                            title="internal title",
+                            summary="s",
+                        )
+                    ],
+                )
+            ],
             reviewer_runtime=runtime,
         )
 
@@ -419,7 +432,19 @@ async def test_review_timeout_backstop_cancels_the_runtime_and_retries_twice(
 
     result = await asyncio.wait_for(
         _review(
-            tasks=[_collected_task(task_index=0, internal_hits=[_internal_hit()])],
+            tasks=[
+                collected_task(
+                    task_index=0,
+                    internal_hits=[
+                        internal_hit(
+                            assessment_id=1001,
+                            curation_id=1,
+                            title="internal title",
+                            summary="s",
+                        )
+                    ],
+                )
+            ],
             reviewer_runtime=runtime,
         ),
         timeout=0.5,
