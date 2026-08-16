@@ -16,7 +16,7 @@ from structlog.testing import capture_logs
 
 from app.agent.contract import (
     EvidenceReviewSelectedEvent,
-    ExternalSearchCandidatesFetchedEvent,
+    ExternalSearchHitsFetchedEvent,
     ExternalSearchQueriesGeneratedEvent,
     InternalSearchCompletedEvent,
     InternalSearchStartedEvent,
@@ -161,9 +161,9 @@ async def test_all_contract_event_types_round_trip_through_api_schema() -> None:
                 task_index=0,
                 queries=["NVIDIA AI"],
             ),
-            ExternalSearchCandidatesFetchedEvent(
+            ExternalSearchHitsFetchedEvent(
                 task_index=0,
-                candidate_count=8,
+                hit_count=8,
             ),
             EvidenceReviewSelectedEvent(
                 evidence_count=2,
@@ -182,7 +182,7 @@ async def test_all_contract_event_types_round_trip_through_api_schema() -> None:
             "evidence_collection.internal_search_started",
             "evidence_collection.internal_search_completed",
             "evidence_collection.external_search_queries_generated",
-            "evidence_collection.external_search_candidates_fetched",
+            "evidence_collection.external_search_hits_fetched",
             "evidence_review.selected",
             "context_resolution.question_resolved",
         ]
@@ -191,7 +191,7 @@ async def test_all_contract_event_types_round_trip_through_api_schema() -> None:
         assert recent_events[1].task_index == 0
         assert recent_events[1].hit_count == 3
         assert recent_events[2].queries == ["NVIDIA AI"]
-        assert recent_events[3].candidate_count == 8
+        assert recent_events[3].hit_count == 8
         assert recent_events[4].evidence_count == 2
         assert "task_index" not in recent_events[4].model_dump()
         assert recent_events[5].standalone_question == (
@@ -218,9 +218,9 @@ async def test_live_reporters_dual_write_and_project_activity_at_sse_boundary() 
             list_publisher,
             stream_publisher,
         )
-        activity = ExternalSearchCandidatesFetchedEvent(
+        activity = ExternalSearchHitsFetchedEvent(
             task_index=2,
-            candidate_count=5,
+            hit_count=5,
         )
 
         await stream_publisher.begin_attempt()
@@ -240,9 +240,9 @@ async def test_live_reporters_dual_write_and_project_activity_at_sse_boundary() 
         activity_payload = json.loads(stream_entries[2][1]["payload"])
         assert activity_payload == {
             "activity": {
-                "type": "evidence_collection.external_search_candidates_fetched",
+                "type": "evidence_collection.external_search_hits_fetched",
                 "task_index": 2,
-                "candidate_count": 5,
+                "hit_count": 5,
             }
         }
 
@@ -262,9 +262,9 @@ async def test_live_reporters_dual_write_and_project_activity_at_sse_boundary() 
         frame = serialize_agent_run_sse_entry(activity_entry)
         assert frame is not None
         assert b'"taskIndex":2' in frame
-        assert b'"candidateCount":5' in frame
+        assert b'"hitCount":5' in frame
         assert b"task_index" not in frame
-        assert b"candidate_count" not in frame
+        assert b"hit_count" not in frame
     finally:
         await redis.delete(list_key, stream_key)
         await redis.aclose()

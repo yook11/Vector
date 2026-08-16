@@ -97,7 +97,7 @@ def test_query_agent_declares_stable_model_version_output_and_immutable_schema()
         for forbidden in (
             "client",
             "retry",
-            "candidates",
+            "hits",
             "events",
             "task_report",
             "tools",

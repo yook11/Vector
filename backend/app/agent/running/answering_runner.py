@@ -223,8 +223,8 @@ class AnsweringRunner:
         external: ExternalResearchRuntime,
         as_of: datetime,
     ) -> EvidenceRunResult:
-        """候補ゼロのRunは精査を開始せず、stageもselected eventにも反映されない。"""
-        if not collected_news.has_candidates:
+        """ヒットゼロのRunは精査を開始せず、stageもselected eventにも反映されない。"""
+        if not collected_news.has_hits:
             return EvidenceRunCompleted(
                 answer_evidence=AnswerEvidence(),
                 review_missing=(),

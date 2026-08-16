@@ -79,8 +79,8 @@ def _report(
     time_filter_failure_reason: str | None = None,
     generated_queries: list[str] | None = None,
     provider_failed_query_count: int = 0,
-    internal_candidate_count: int = 0,
-    external_candidate_count: int = 0,
+    internal_hit_count: int = 0,
+    external_hit_count: int = 0,
 ) -> ResearchTaskReport:
     return ResearchTaskReport(
         task_index=task_index,
@@ -90,15 +90,15 @@ def _report(
         time_filter_failure_reason=time_filter_failure_reason,
         generated_queries=generated_queries or [],
         provider_failed_query_count=provider_failed_query_count,
-        internal_candidate_count=internal_candidate_count,
-        external_candidate_count=external_candidate_count,
+        internal_hit_count=internal_hit_count,
+        external_hit_count=external_hit_count,
     )
 
 
 def _time_filter_failed_report(
     *, task_index: int, research_goal: str, reason: str
 ) -> Any:
-    """内部候補も無いtime filter失敗task(Run全体としてはskipped_empty相当)。"""
+    """内部ヒットも無いtime filter失敗task(Run全体としてはskipped_empty相当)。"""
     return _report(
         task_index=task_index,
         research_goal=research_goal,
@@ -115,7 +115,7 @@ def _collected_news(*, task_reports: list[ResearchTaskReport]) -> CollectedNews:
                 task_index=report.task_index,
                 research_goal=report.research_goal,
                 internal_hits=[],
-                external_candidates=[],
+                external_hits=[],
                 executed_queries=(),
                 report=report,
             )
@@ -227,9 +227,9 @@ def _assemble(
 def test_task_completes_via_internal_evidence_despite_external_provider_failure() -> (
     None
 ):
-    """外部収集が失敗しても内部候補で精査が完了すれば
+    """外部収集が失敗しても内部ヒットで精査が完了すれば
 
-    経路名文言も固定文言も出ない(内部候補が残るためincomplete条件に
+    経路名文言も固定文言も出ない(内部ヒットが残るためincomplete条件に
     当たらない。仕様「不足の表明」訂正)。
     """
     plan = _search_plan(
@@ -257,7 +257,7 @@ def test_task_completes_via_internal_evidence_despite_external_provider_failure(
                 external_collection="provider_failed",
                 generated_queries=["NVIDIA 供給"],
                 provider_failed_query_count=1,
-                internal_candidate_count=1,
+                internal_hit_count=1,
             )
         ],
     )
@@ -285,7 +285,7 @@ def test_all_tasks_time_filter_failed_add_incomplete_and_time_filter_missing_onc
 ):
     """複数taskが未完了でも固定文言は1行に畳まれる
 
-    (両taskとも内部候補ゼロのためRun全体はskipped_empty相当)。
+    (両taskとも内部ヒットゼロのためRun全体はskipped_empty相当)。
     """
     tasks = [
         _task("Tavily 2027-08 の公開期間を確認する"),
@@ -388,14 +388,14 @@ def test_empty_evidence_time_filter_failure_adds_incomplete_and_retrieval() -> N
 
 
 def test_failed_evidence_run_adds_incomplete_missing_without_leaking_reason() -> None:
-    """技術的な精査失敗は、候補があっても回答を不完全として閉じる。"""
+    """技術的な精査失敗は、ヒットがあっても回答を不完全として閉じる。"""
     tasks = [_task("直近の外部発表を確認する")]
     outcome = _outcome(
         task_reports=[
             _report(
                 task_index=0,
                 research_goal=tasks[0].research_goal,
-                internal_candidate_count=1,
+                internal_hit_count=1,
             )
         ],
         failure_reason="response_not_json",
@@ -433,7 +433,7 @@ def test_assembly_rejects_completed_evidence_for_an_uncollected_task() -> None:
             _report(
                 task_index=0,
                 research_goal=tasks[0].research_goal,
-                internal_candidate_count=1,
+                internal_hit_count=1,
             )
         ]
     )
@@ -460,7 +460,7 @@ def test_assembly_rejects_completed_evidence_for_an_uncollected_task() -> None:
 def test_internal_collection_failure_never_adds_a_route_name_phrase() -> None:
     """internal_collection=failedでも経路名文言は出ない
 
-    (候補ゼロ(internal_candidate_count==0 かつ external_candidate_count==0)
+    (ヒットゼロ(internal_hit_count==0 かつ external_hit_count==0)
     がRun全体のincomplete条件を導く)。
     """
     tasks = [_task("直近の外部発表を確認する")]
@@ -493,9 +493,9 @@ def test_internal_collection_failure_never_adds_a_route_name_phrase() -> None:
 
 
 def test_time_filter_failed_task_with_internal_evidence_stays_complete() -> None:
-    """time filter文言は独立に出るが、内部候補が残っていれば
+    """time filter文言は独立に出るが、内部ヒットが残っていれば
 
-    (internal_candidate_count>0)incomplete条件に当たらず固定文言は出ない。
+    (internal_hit_count>0)incomplete条件に当たらず固定文言は出ない。
     """
     tasks = [_task("直近の外部発表を確認する")]
     evidence = [_internal_evidence()]
@@ -507,7 +507,7 @@ def test_time_filter_failed_task_with_internal_evidence_stays_complete() -> None
                 internal_collection="succeeded",
                 external_collection="time_filter_failed",
                 time_filter_failure_reason="future_calendar_month",
-                internal_candidate_count=1,
+                internal_hit_count=1,
             )
         ],
     )
@@ -533,8 +533,8 @@ def test_time_filter_failed_task_with_internal_evidence_stays_complete() -> None
 def test_report_missing_deduplicates_against_review_missing() -> None:
     """missingはRun単位のreview_missingから1本だけ流れ、生成不能の1行と
 
-    重複排除される(この task は provider_failed で候補ゼロだが、外部収集の
-    失敗であり internal_candidate_count も 0 のため incomplete条件(0/0)にも
+    重複排除される(この task は provider_failed でヒットゼロだが、外部収集の
+    失敗であり internal_hit_count も 0 のため incomplete条件(0/0)にも
     当たる)。
     """
     tasks = [_task("既存のexternal task")]
@@ -585,7 +585,7 @@ def test_unavailable_outcome_with_evidence_builds_insufficient_result() -> None:
             _report(
                 task_index=0,
                 research_goal=tasks[0].research_goal,
-                internal_candidate_count=1,
+                internal_hit_count=1,
             )
         ],
     )

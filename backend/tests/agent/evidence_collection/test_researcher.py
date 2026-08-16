@@ -12,7 +12,7 @@ from app.agent.evidence_collection import Researcher
 from app.agent.evidence_collection.external_search.contract import (
     ExternalQueryDraft,
     ExternalResearchRuntime,
-    ExternalSearchCandidate,
+    ExternalSearchHit,
     ExternalSearchProviderError,
 )
 from app.agent.evidence_collection.internal_search.contract import (
@@ -63,8 +63,8 @@ def _hit(
     )
 
 
-def _candidate(url: str, *, title: str | None = None) -> ExternalSearchCandidate:
-    return ExternalSearchCandidate(url=url, title=title or url, snippet="snippet")
+def _external_hit(url: str, *, title: str | None = None) -> ExternalSearchHit:
+    return ExternalSearchHit(url=url, title=title or url, snippet="snippet")
 
 
 def _query_draft(queries: list[str]) -> ExternalQueryDraft:
@@ -96,7 +96,7 @@ class _InternalTool:
 class _ExternalTool:
     def __init__(
         self,
-        results_by_query: dict[str, list[ExternalSearchCandidate]] | None = None,
+        results_by_query: dict[str, list[ExternalSearchHit]] | None = None,
         *,
         errors_by_query: dict[str, BaseException] | None = None,
     ) -> None:
@@ -108,7 +108,7 @@ class _ExternalTool:
     def name(self) -> str:
         return "external_search"
 
-    async def search(self, input: Any) -> list[ExternalSearchCandidate]:
+    async def search(self, input: Any) -> list[ExternalSearchHit]:
         self.calls.append(input)
         if input.query in self._errors:
             raise self._errors[input.query]
@@ -170,10 +170,10 @@ async def _collect(
 
 
 @pytest.mark.asyncio
-async def test_internal_failure_still_collects_external_candidates() -> None:
+async def test_internal_failure_still_collects_external_hits() -> None:
     """保証するテスト条件 1。internal_failed=Trueかつcompleted eventが立たない。"""
     events = _Events()
-    tool = _ExternalTool({"nvidia supply": [_candidate("https://example.com/a")]})
+    tool = _ExternalTool({"nvidia supply": [_external_hit("https://example.com/a")]})
     query_runtime = ScriptedAgentRuntime([_query_draft(["nvidia supply"])])
     researcher = Researcher(
         internal_search=_InternalTool(
@@ -192,7 +192,7 @@ async def test_internal_failure_still_collects_external_candidates() -> None:
         collected.internal_hits,
         collected.internal_failed,
         collected.external_status,
-        [str(candidate.url) for candidate in collected.candidate_pool],
+        [str(hit.url) for hit in collected.external_hits],
         [event.type for event in _internal_events(events.events)],
     ) == (
         [],
@@ -225,7 +225,7 @@ async def test_external_provider_failure_keeps_internal_hits() -> None:
         [hit.content.title for hit in collected.internal_hits],
         collected.internal_failed,
         collected.external_status,
-        collected.candidate_pool,
+        collected.external_hits,
         collected.provider_failed_query_count,
     ) == (["kept"], False, "provider_failed", [], 1)
 
@@ -241,7 +241,7 @@ async def test_external_none_skips_external_collection_entirely() -> None:
     assert (
         [hit.content.title for hit in collected.internal_hits],
         collected.external_status,
-        collected.candidate_pool,
+        collected.external_hits,
         collected.generated_queries,
         collected.provider_failed_query_count,
     ) == (["only-internal"], None, [], [], 0)
@@ -282,10 +282,10 @@ async def test_independent_collect_calls_do_not_leak_failure_between_tasks() -> 
         def name(self) -> str:
             return "external_search"
 
-        async def search(self, input: Any) -> list[ExternalSearchCandidate]:
+        async def search(self, input: Any) -> list[ExternalSearchHit]:
             if input.query == "bad":
                 raise ExternalSearchProviderError(reason="tavily_search_http_error")
-            return [_candidate("https://example.com/good", title="good")]
+            return [_external_hit("https://example.com/good", title="good")]
 
     internal_tool = _KeyedInternalTool()
     external_tool = _KeyedExternalTool()
@@ -314,7 +314,7 @@ async def test_independent_collect_calls_do_not_leak_failure_between_tasks() -> 
         failing_result.internal_failed,
         failing_result.external_status,
         [hit.content.title for hit in sibling_result.internal_hits],
-        [candidate.title for candidate in sibling_result.candidate_pool],
+        [hit.title for hit in sibling_result.external_hits],
     ) == (True, "provider_failed", ["sibling-hit"], ["good"])
 
 
@@ -397,8 +397,8 @@ async def test_external_events_fire_in_order_with_task_index_and_payload() -> No
     tool = _ExternalTool(
         {
             "good query": [
-                _candidate("https://example.com/x", title="x"),
-                _candidate("https://example.com/y", title="y"),
+                _external_hit("https://example.com/x", title="x"),
+                _external_hit("https://example.com/y", title="y"),
             ]
         }
     )
@@ -422,9 +422,9 @@ async def test_external_events_fire_in_order_with_task_index_and_payload() -> No
             "queries": ["good query"],
         },
         {
-            "type": "evidence_collection.external_search_candidates_fetched",
+            "type": "evidence_collection.external_search_hits_fetched",
             "task_index": 1,
-            "candidate_count": 2,
+            "hit_count": 2,
         },
     ]
 
@@ -438,8 +438,8 @@ async def test_executed_queries_holds_generated_queries_in_order_on_success() ->
     """
     tool = _ExternalTool(
         {
-            "first query": [_candidate("https://example.com/1")],
-            "second query": [_candidate("https://example.com/2")],
+            "first query": [_external_hit("https://example.com/1")],
+            "second query": [_external_hit("https://example.com/2")],
         }
     )
     query_runtime = ScriptedAgentRuntime(
@@ -465,8 +465,8 @@ async def test_executed_queries_drops_only_the_failed_query_preserving_order() -
     """
     tool = _ExternalTool(
         {
-            "q1": [_candidate("https://example.com/1")],
-            "q3": [_candidate("https://example.com/3")],
+            "q1": [_external_hit("https://example.com/1")],
+            "q3": [_external_hit("https://example.com/3")],
         },
         errors_by_query={
             "q2": ExternalSearchProviderError(reason="tavily_search_http_error")

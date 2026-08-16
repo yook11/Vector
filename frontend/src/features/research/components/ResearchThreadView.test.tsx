@@ -629,9 +629,9 @@ describe("ResearchThreadView live integration", () => {
         {
           attemptEpoch: 1,
           activity: {
-            type: "evidence_collection.external_search_candidates_fetched",
+            type: "evidence_collection.external_search_hits_fetched",
             taskIndex: 0,
-            candidateCount: 8,
+            hitCount: 8,
           },
         },
         "2-0",
@@ -706,9 +706,9 @@ describe("ResearchThreadView live integration", () => {
         {
           attemptEpoch: 1,
           activity: {
-            type: "evidence_collection.external_search_candidates_fetched",
+            type: "evidence_collection.external_search_hits_fetched",
             taskIndex: 0,
-            candidateCount: 8,
+            hitCount: 8,
           },
         },
         "3-0",

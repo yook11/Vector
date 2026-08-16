@@ -21,7 +21,7 @@ from app.agent.answering.evidence_answer.contract import EvidenceAnswerDraft
 from app.agent.answering.evidence_answer.evidence import AnswerInputEvidence
 from app.agent.answering.evidence_answer.flow import EvidenceAnswerFlow
 from app.agent.contract import (
-    ExternalSearchCandidatesFetchedEvent,
+    ExternalSearchHitsFetchedEvent,
     ExternalUrlSource,
 )
 from app.agent.live_updates.answer_delta import AgentRunLiveAnswerDeltaReporter
@@ -549,9 +549,9 @@ async def test_delta_breaker_does_not_damage_other_stream_or_list_producers() ->
             await reporter.append(generation=1, text=marker * 512)
         await reporter.finish(generation=1)
 
-        activity = ExternalSearchCandidatesFetchedEvent(
+        activity = ExternalSearchHitsFetchedEvent(
             task_index=2,
-            candidate_count=5,
+            hit_count=5,
         )
         await stream_publisher.publish(
             AgentRunLiveStreamStageEvent(stage="evidence_collection")
@@ -588,11 +588,10 @@ async def test_delta_breaker_does_not_damage_other_stream_or_list_producers() ->
         assert stream_events[3] == AgentRunLiveStreamTerminalEvent(status="completed")
         assert len(recent_events) == 1
         assert (
-            recent_events[0].type
-            == "evidence_collection.external_search_candidates_fetched"
+            recent_events[0].type == "evidence_collection.external_search_hits_fetched"
         )
         assert recent_events[0].task_index == 2
-        assert recent_events[0].candidate_count == 5
+        assert recent_events[0].hit_count == 5
     finally:
         await redis.delete(stream_key, list_key)
         await redis.aclose()

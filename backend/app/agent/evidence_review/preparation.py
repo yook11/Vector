@@ -7,8 +7,8 @@ from datetime import datetime
 
 from app.agent.evidence_collection.contract import CollectedTask
 from app.agent.evidence_collection.external_search.contract import (
-    CANDIDATE_SNIPPET_MAX_CHARS,
-    ExternalSearchCandidate,
+    OPTION_SNIPPET_MAX_CHARS,
+    ExternalSearchHit,
 )
 from app.agent.evidence_collection.internal_search.contract import (
     InternalArticleSearchHit,
@@ -57,7 +57,7 @@ class EvidenceOptionOrigin:
 
     index: int
     task_index: int
-    search_result: InternalArticleSearchHit | ExternalSearchCandidate
+    search_hit: InternalArticleSearchHit | ExternalSearchHit
 
 
 @dataclass(frozen=True, slots=True)
@@ -90,25 +90,25 @@ class EvidenceReviewPreparation:
                     EvidenceOptionOrigin(
                         index=index,
                         task_index=task.task_index,
-                        search_result=hit,
+                        search_hit=hit,
                     )
                 )
-            for candidate in task.external_candidates:
+            for hit in task.external_hits:
                 index = len(origins)
                 options.append(
                     EvidenceOption(
                         index=index,
-                        title=candidate.title,
-                        source_name=candidate.source_name,
-                        published_at=candidate.published_at,
-                        snippet=candidate.snippet,
+                        title=hit.title,
+                        source_name=hit.source_name,
+                        published_at=hit.published_at,
+                        snippet=hit.snippet,
                     )
                 )
                 origins.append(
                     EvidenceOptionOrigin(
                         index=index,
                         task_index=task.task_index,
-                        search_result=candidate,
+                        search_hit=hit,
                     )
                 )
             review_tasks.append(
@@ -137,4 +137,4 @@ def _internal_option_snippet(hit: InternalArticleSearchHit) -> str:
     else:
         key_points = "\n".join(f"- {point}" for point in content.key_points)
         combined = f"{content.summary}\n{key_points}"
-    return combined[:CANDIDATE_SNIPPET_MAX_CHARS]
+    return combined[:OPTION_SNIPPET_MAX_CHARS]

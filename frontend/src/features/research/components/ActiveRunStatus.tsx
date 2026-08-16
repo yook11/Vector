@@ -48,8 +48,8 @@ function evidenceActivityText(activity: ResearchLiveActivity): string | null {
         return `“${activity.queries[0]}” を検索中`;
       }
       return `“${activity.queries[0]}” など${activity.queries.length}件を検索中`;
-    case "evidence_collection.external_search_candidates_fetched":
-      return `候補${activity.candidateCount}件を取得`;
+    case "evidence_collection.external_search_hits_fetched":
+      return `候補${activity.hitCount}件を取得`;
     case "evidence_review.selected":
       return `根拠${activity.evidenceCount}件を選別`;
     case "context_resolution.question_resolved":

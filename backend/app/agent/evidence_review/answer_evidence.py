@@ -15,7 +15,7 @@ from app.agent.contract import (
 from app.agent.evidence_collection.external_search.contract import (
     EVIDENCE_CLAIM_MAX_CHARS,
     EVIDENCE_WHY_SELECTED_MAX_CHARS,
-    ExternalSearchCandidate,
+    ExternalSearchHit,
 )
 from app.agent.evidence_collection.internal_search.contract import (
     InternalArticleSearchHit,
@@ -98,9 +98,9 @@ class ExternalSearchEvidence(BaseModel):
     source_name: str | None = None
 
     @classmethod
-    def from_reviewed_candidate(
+    def from_reviewed_hit(
         cls,
-        candidate: ExternalSearchCandidate,
+        hit: ExternalSearchHit,
         *,
         selection: EvidenceReviewerSelection,
         source_ref: str,
@@ -111,11 +111,11 @@ class ExternalSearchEvidence(BaseModel):
             task_index=task_index,
             claim=selection.claim,
             why_selected=selection.why_selected,
-            url=candidate.url,
-            title=candidate.title,
-            snippet=candidate.snippet,
-            published_at=candidate.published_at,
-            source_name=candidate.source_name,
+            url=hit.url,
+            title=hit.title,
+            snippet=hit.snippet,
+            published_at=hit.published_at,
+            source_name=hit.source_name,
         )
 
 
@@ -149,29 +149,29 @@ class AnswerEvidence(BaseModel):
 
             selected_indexes.add(index)
             source_ref = f"{origin.task_index}-{index}"
-            if isinstance(origin.search_result, InternalArticleSearchHit):
-                curation_id = origin.search_result.article.curation_id
+            if isinstance(origin.search_hit, InternalArticleSearchHit):
+                curation_id = origin.search_hit.article.curation_id
                 source_identity = (origin.task_index, curation_id)
                 if source_identity in seen_internal_source_identities:
                     continue
                 seen_internal_source_identities.add(source_identity)
                 internal_articles.append(
                     InternalArticleEvidence.from_reviewed_hit(
-                        origin.search_result,
+                        origin.search_hit,
                         selection=selection,
                         source_ref=source_ref,
                         task_index=origin.task_index,
                     )
                 )
             else:
-                url = str(origin.search_result.url)
+                url = str(origin.search_hit.url)
                 source_identity = (origin.task_index, url)
                 if source_identity in seen_external_source_identities:
                     continue
                 seen_external_source_identities.add(source_identity)
                 external_sources.append(
-                    ExternalSearchEvidence.from_reviewed_candidate(
-                        origin.search_result,
+                    ExternalSearchEvidence.from_reviewed_hit(
+                        origin.search_hit,
                         selection=selection,
                         source_ref=source_ref,
                         task_index=origin.task_index,

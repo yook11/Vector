@@ -29,7 +29,7 @@ from app.agent.evidence_collection.external_search.time_filter import (
     ExternalSearchDateFilterResolutionError,
     resolve_external_search_date_filter,
 )
-from app.agent.evidence_collection.researcher import Researcher, ResearchTaskCandidates
+from app.agent.evidence_collection.researcher import Researcher, ResearchTaskHits
 from app.agent.planning.contract import ResearchTask, SearchPlan
 
 __all__ = ["NewsCollector"]
@@ -143,14 +143,14 @@ class NewsCollector:
             time_filter_failure_reason=time_filter_failure,
             generated_queries=generated_queries,
             provider_failed_query_count=provider_failed_query_count,
-            internal_candidate_count=len(collected.internal_hits),
-            external_candidate_count=len(collected.candidate_pool),
+            internal_hit_count=len(collected.internal_hits),
+            external_hit_count=len(collected.external_hits),
         )
         return CollectedTask(
             task_index=task_index,
             research_goal=task.research_goal,
             internal_hits=collected.internal_hits,
-            external_candidates=collected.candidate_pool,
+            external_hits=collected.external_hits,
             executed_queries=collected.executed_queries,
             report=report,
         )
@@ -158,7 +158,7 @@ class NewsCollector:
 
 def _external_collection_fields(
     *,
-    collected: ResearchTaskCandidates,
+    collected: ResearchTaskHits,
     time_filter_failure: TimeFilterFailureReason | None,
 ) -> tuple[TaskExternalCollectionStatus, list[str], int]:
     """time filter失敗を含め、taskのexternal_collection診断3値を1箇所で導出する。"""

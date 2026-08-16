@@ -1,7 +1,7 @@
 """External search のドメイン純関数契約(D4-S1)。
 
-selector 一式は `evidence_review` packageが所有する。ここには外部候補pool構築など、
-query/candidate収集に閉じた関数だけを残す。外部URL dedupは
+selector 一式は `evidence_review` packageが所有する。ここには外部ヒットpool構築など、
+query/hit収集に閉じた関数だけを残す。外部URL dedupは
 S1(仕様「合流と重複排除」)で廃止された。
 """
 
@@ -11,19 +11,19 @@ from datetime import UTC, datetime
 
 import app.agent.evidence_collection.external_search.policy as policy_module
 from app.agent.evidence_collection.external_search.contract import (
-    ExternalSearchCandidate,
+    ExternalSearchHit,
 )
 from app.agent.evidence_collection.external_search.policy import (
     PROVIDER_SEARCH_TIMEOUT_SECONDS,
     QUERY_GENERATE_TIMEOUT_SECONDS,
-    build_candidate_pool,
+    build_hit_pool,
     clean_generated_queries,
     resolve_external_search_agent_count,
 )
 
 
-def _candidate(url: str, *, title: str | None = None) -> ExternalSearchCandidate:
-    return ExternalSearchCandidate(
+def _hit(url: str, *, title: str | None = None) -> ExternalSearchHit:
+    return ExternalSearchHit(
         url=url,
         title=title or url.rsplit("/", maxsplit=1)[-1],
         snippet="snippet",
@@ -36,7 +36,7 @@ def test_policy_exports_the_public_domain_functions_and_timeout_constants() -> N
     assert (
         {
             "clean_generated_queries",
-            "build_candidate_pool",
+            "build_hit_pool",
             "resolve_external_search_agent_count",
         }
         <= set(dir(policy_module)),
@@ -66,27 +66,21 @@ def test_clean_generated_queries_strips_caps_deduplicates_and_limits_to_three() 
     ]
 
 
-def test_build_candidate_pool_round_robins_urls_and_stops_at_twenty() -> None:
-    query_candidates = [
+def test_build_hit_pool_round_robins_urls_and_stops_at_twenty() -> None:
+    hits_by_query = [
         [
-            _candidate("https://example.com/shared", title="first shared"),
-            *[
-                _candidate(f"https://example.com/left-{index}")
-                for index in range(1, 20)
-            ],
+            _hit("https://example.com/shared", title="first shared"),
+            *[_hit(f"https://example.com/left-{index}") for index in range(1, 20)],
         ],
         [
-            _candidate("https://example.com/shared", title="second shared"),
-            *[
-                _candidate(f"https://example.com/right-{index}")
-                for index in range(1, 20)
-            ],
+            _hit("https://example.com/shared", title="second shared"),
+            *[_hit(f"https://example.com/right-{index}") for index in range(1, 20)],
         ],
     ]
 
-    pool = build_candidate_pool(query_candidates)
+    pool = build_hit_pool(hits_by_query)
 
-    assert [candidate.title for candidate in pool[:6]] == [
+    assert [hit.title for hit in pool[:6]] == [
         "first shared",
         "left-1",
         "right-1",

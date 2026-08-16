@@ -5,15 +5,15 @@ from __future__ import annotations
 from app.agent.evidence_collection.external_search.contract import (
     EXTERNAL_QUERY_MAX_CHARS,
     EXTERNAL_SEARCH_AGENT_HARD_LIMIT,
-    EXTERNAL_SEARCH_CANDIDATE_POOL_LIMIT_PER_TASK,
+    EXTERNAL_SEARCH_HIT_POOL_LIMIT_PER_TASK,
     EXTERNAL_TASK_QUERY_LIMIT,
-    ExternalSearchCandidate,
+    ExternalSearchHit,
 )
 
 __all__ = [
     "PROVIDER_SEARCH_TIMEOUT_SECONDS",
     "QUERY_GENERATE_TIMEOUT_SECONDS",
-    "build_candidate_pool",
+    "build_hit_pool",
     "clean_generated_queries",
     "resolve_external_search_agent_count",
 ]
@@ -38,26 +38,26 @@ def clean_generated_queries(raw_queries: list[str]) -> list[str]:
     return queries
 
 
-def build_candidate_pool(
-    query_candidates: list[list[ExternalSearchCandidate]],
-) -> list[ExternalSearchCandidate]:
-    pool: list[ExternalSearchCandidate] = []
+def build_hit_pool(
+    hits_by_query: list[list[ExternalSearchHit]],
+) -> list[ExternalSearchHit]:
+    pool: list[ExternalSearchHit] = []
     seen_urls: set[str] = set()
-    max_candidates = max(
-        (len(candidates) for candidates in query_candidates),
+    max_hits = max(
+        (len(hits) for hits in hits_by_query),
         default=0,
     )
-    for offset in range(max_candidates):
-        for candidates in query_candidates:
-            if offset >= len(candidates):
+    for offset in range(max_hits):
+        for hits in hits_by_query:
+            if offset >= len(hits):
                 continue
-            candidate = candidates[offset]
-            url = str(candidate.url)
+            hit = hits[offset]
+            url = str(hit.url)
             if url in seen_urls:
                 continue
-            pool.append(candidate)
+            pool.append(hit)
             seen_urls.add(url)
-            if len(pool) >= EXTERNAL_SEARCH_CANDIDATE_POOL_LIMIT_PER_TASK:
+            if len(pool) >= EXTERNAL_SEARCH_HIT_POOL_LIMIT_PER_TASK:
                 return pool
     return pool
 

@@ -42,9 +42,9 @@ export type ResearchLiveActivity =
       queries: string[];
     }
   | {
-      type: "evidence_collection.external_search_candidates_fetched";
+      type: "evidence_collection.external_search_hits_fetched";
       taskIndex: number;
-      candidateCount: number;
+      hitCount: number;
     }
   | {
       type: "evidence_review.selected";
@@ -288,13 +288,13 @@ function parseActivity(
             queries: [...value.queries],
           }
         : null;
-    case "evidence_collection.external_search_candidates_fetched":
+    case "evidence_collection.external_search_hits_fetched":
       return isNonNegativeSafeInteger(value.taskIndex) &&
-        isNonNegativeSafeInteger(value.candidateCount)
+        isNonNegativeSafeInteger(value.hitCount)
         ? {
             type: value.type,
             taskIndex: value.taskIndex,
-            candidateCount: value.candidateCount,
+            hitCount: value.hitCount,
           }
         : null;
     case "evidence_review.selected":

@@ -10,7 +10,7 @@ from pydantic import BaseModel, ConfigDict, Field, StringConstraints, model_vali
 from app.agent.evidence_collection.external_search.contract import (
     EXTERNAL_QUERY_MAX_CHARS,
     EXTERNAL_TASK_QUERY_LIMIT,
-    ExternalSearchCandidate,
+    ExternalSearchHit,
     TimeFilterFailureReason,
 )
 from app.agent.evidence_collection.internal_search.contract import (
@@ -55,8 +55,8 @@ class ResearchTaskReport(BaseModel):
     time_filter_failure_reason: TimeFilterFailureReason | None = None
     generated_queries: list[str] = Field(default_factory=list)
     provider_failed_query_count: int = Field(default=0, ge=0)
-    internal_candidate_count: int = Field(default=0, ge=0)
-    external_candidate_count: int = Field(default=0, ge=0)
+    internal_hit_count: int = Field(default=0, ge=0)
+    external_hit_count: int = Field(default=0, ge=0)
 
     @model_validator(mode="after")
     def _validate_report(self) -> Self:
@@ -66,7 +66,7 @@ class ResearchTaskReport(BaseModel):
             if (
                 self.generated_queries
                 or self.provider_failed_query_count != 0
-                or self.external_candidate_count != 0
+                or self.external_hit_count != 0
             ):
                 raise ValueError(
                     "time_filter_failed must keep external diagnostics closed"
@@ -77,7 +77,7 @@ class ResearchTaskReport(BaseModel):
         if self.external_collection == "query_generation_failed" and (
             self.generated_queries
             or self.provider_failed_query_count != 0
-            or self.external_candidate_count != 0
+            or self.external_hit_count != 0
         ):
             raise ValueError(
                 "query_generation_failed must keep external diagnostics closed"
@@ -86,7 +86,7 @@ class ResearchTaskReport(BaseModel):
         if self.external_collection == "provider_failed" and (
             not self.generated_queries
             or self.provider_failed_query_count != len(self.generated_queries)
-            or self.external_candidate_count != 0
+            or self.external_hit_count != 0
         ):
             raise ValueError(
                 "provider_failed requires every generated query to have failed"
@@ -109,7 +109,7 @@ class CollectedTask:
     task_index: int
     research_goal: str
     internal_hits: list[InternalArticleSearchHit]
-    external_candidates: list[ExternalSearchCandidate]
+    external_hits: list[ExternalSearchHit]
     executed_queries: tuple[str, ...]
     report: ResearchTaskReport
 
@@ -130,10 +130,8 @@ class CollectedNews:
             raise ValueError("collected task and report task_index must match")
 
     @property
-    def has_candidates(self) -> bool:
-        return any(
-            task.internal_hits or task.external_candidates for task in self.tasks
-        )
+    def has_hits(self) -> bool:
+        return any(task.internal_hits or task.external_hits for task in self.tasks)
 
     @property
     def executed_queries_by_task(self) -> dict[int, tuple[str, ...]]:

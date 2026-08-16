@@ -21,24 +21,24 @@ from app.agent.contract import (
     EXTERNAL_QUERY_MAX_CHARS,
     EXTERNAL_TASK_QUERY_LIMIT,
     MISSING_ITEM_MAX_CHARS,
+    OPTION_SNIPPET_MAX_CHARS,
 )
 from app.agent.planning.contract import ExternalResearchTask, TargetTimeWindow
 from app.agent.runtime.contract import AgentRuntime
 from app.shared.security.safe_url import SafeUrl
 
 __all__ = [
-    "CANDIDATE_SNIPPET_MAX_CHARS",
     "EVIDENCE_CLAIM_MAX_CHARS",
     "EVIDENCE_WHY_SELECTED_MAX_CHARS",
     "EXTERNAL_QUERY_MAX_CHARS",
     "EXTERNAL_SEARCH_AGENT_HARD_LIMIT",
-    "EXTERNAL_SEARCH_CANDIDATES_PER_QUERY",
-    "EXTERNAL_SEARCH_CANDIDATE_POOL_LIMIT_PER_TASK",
+    "EXTERNAL_SEARCH_HITS_PER_QUERY",
+    "EXTERNAL_SEARCH_HIT_POOL_LIMIT_PER_TASK",
     "EXTERNAL_SEARCH_TOOL_NAME",
     "EXTERNAL_TASK_QUERY_LIMIT",
     "ExternalQueryDraft",
     "ExternalQueryGenerationInput",
-    "ExternalSearchCandidate",
+    "ExternalSearchHit",
     "ExternalSearchDateFilter",
     "ExternalSearchProviderError",
     "ExternalResearchRuntime",
@@ -48,13 +48,13 @@ __all__ = [
     "ExternalSearchToolInput",
     "ExternalSearchToolName",
     "MISSING_ITEM_MAX_CHARS",
+    "OPTION_SNIPPET_MAX_CHARS",
     "TimeFilterFailureReason",
 ]
 
 EXTERNAL_SEARCH_AGENT_HARD_LIMIT = 3
-EXTERNAL_SEARCH_CANDIDATES_PER_QUERY = 10
-EXTERNAL_SEARCH_CANDIDATE_POOL_LIMIT_PER_TASK = 20
-CANDIDATE_SNIPPET_MAX_CHARS = 500
+EXTERNAL_SEARCH_HITS_PER_QUERY = 10
+EXTERNAL_SEARCH_HIT_POOL_LIMIT_PER_TASK = 20
 EVIDENCE_WHY_SELECTED_MAX_CHARS = 300
 
 TimeFilterFailureReason = Literal[
@@ -136,14 +136,14 @@ class ExternalSearchProviderError(Exception):
         super().__init__(safe_reason)
 
 
-class ExternalSearchCandidate(BaseModel):
-    """検索 provider が返す候補 1 件。list 順が provider rank。"""
+class ExternalSearchHit(BaseModel):
+    """検索 provider が返すヒット 1 件。list 順が provider rank。"""
 
     model_config = ConfigDict(frozen=True)
 
     url: SafeUrl
     title: str = Field(min_length=1)
-    snippet: str | None = Field(default=None, max_length=CANDIDATE_SNIPPET_MAX_CHARS)
+    snippet: str | None = Field(default=None, max_length=OPTION_SNIPPET_MAX_CHARS)
     published_at: datetime | None = None
     source_name: str | None = None
 
@@ -205,7 +205,7 @@ class ExternalSearchTool(Protocol):
     async def search(
         self,
         input: ExternalSearchToolInput,
-    ) -> list[ExternalSearchCandidate]: ...
+    ) -> list[ExternalSearchHit]: ...
 
 
 @dataclass(frozen=True, slots=True)

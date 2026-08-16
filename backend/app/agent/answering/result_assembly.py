@@ -167,8 +167,7 @@ def _has_incomplete_task(
     if isinstance(evidence_run, EvidenceRunFailed):
         return True
     return any(
-        task.report.internal_candidate_count == 0
-        and task.report.external_candidate_count == 0
+        task.report.internal_hit_count == 0 and task.report.external_hit_count == 0
         for task in collected_news.tasks
     )
 

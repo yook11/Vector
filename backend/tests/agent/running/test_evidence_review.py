@@ -76,7 +76,7 @@ from tests.agent.running._harness import (
     execute_run as _run,
 )
 from tests.agent.running._harness import (
-    external_candidate as _external_candidate,
+    external_hit as _external_hit,
 )
 from tests.agent.running._harness import (
     internal_hit as _internal_hit,
@@ -316,8 +316,8 @@ async def test_review_does_not_start_before_every_tasks_collection_completes() -
 
 
 @pytest.mark.asyncio
-async def test_review_is_skipped_when_every_task_has_no_candidates() -> None:
-    """S1 A3。全taskの候補が内外ともゼロのとき reviewer を呼ばず、
+async def test_review_is_skipped_when_every_task_has_no_hits() -> None:
+    """S1 A3。全taskのヒットが内外ともゼロのとき reviewer を呼ばず、
 
     選別eventも発火しない。
     """
@@ -349,10 +349,8 @@ async def test_review_is_skipped_when_every_task_has_no_candidates() -> None:
 
 
 @pytest.mark.asyncio
-async def test_review_still_runs_using_the_candidates_that_survive_a_failed_task() -> (
-    None
-):
-    """S1 A4。いずれかのtaskの収集が失敗しても、残った候補で精査が走る。"""
+async def test_review_still_runs_using_the_hits_that_survive_a_failed_task() -> None:
+    """S1 A4。いずれかのtaskの収集が失敗しても、残ったヒットで精査が走る。"""
     tasks = [
         _task("goal-A", ["query-a"]),
         _task("goal-B", ["query-b"]),
@@ -369,7 +367,7 @@ async def test_review_still_runs_using_the_candidates_that_survive_a_failed_task
         },
         errors_by_query={"query-b": InternalSearchError(phase="article_search")},
     )
-    # task-Bの収集が失敗し候補ゼロになる分、統合index空間から外れる
+    # task-Bの収集が失敗しヒットゼロになる分、統合index空間から外れる
     # (仮定: task昇順で結合。task-A→0、task-C→1)。
     reviewer_runtime = ScriptedAgentRuntime(
         [
@@ -397,7 +395,7 @@ async def test_review_still_runs_using_the_candidates_that_survive_a_failed_task
 
 
 @pytest.mark.asyncio
-async def test_task_with_only_internal_candidates_still_reaches_review() -> None:
+async def test_task_with_only_internal_hits_still_reaches_review() -> None:
     """保証するテスト条件 7(内部のみ)。外部全滅でも精査へ進み内部根拠を返す。"""
     internal_tool = _InternalTool(
         hits_by_query={
@@ -425,7 +423,7 @@ async def test_task_with_only_internal_candidates_still_reaches_review() -> None
 
 
 @pytest.mark.asyncio
-async def test_task_with_only_external_candidates_still_reaches_review() -> None:
+async def test_task_with_only_external_hits_still_reaches_review() -> None:
     """保証するテスト条件 7(外部のみ)。内部失敗でも精査へ進み外部根拠を返す。"""
     reviewer_runtime = ScriptedAgentRuntime(
         [_draft([{"option_index": 0, "claim": "claim", "why_selected": "w"}])]
@@ -434,9 +432,7 @@ async def test_task_with_only_external_candidates_still_reaches_review() -> None
         plan=_plan(_task("external only task", ["query-a"])),
         query_runtime=ScriptedAgentRuntime([_query_draft(["q"])]),
         reviewer_runtime=reviewer_runtime,
-        external_tool=_ExternalTool(
-            {"q": [_external_candidate("https://example.com/only")]}
-        ),
+        external_tool=_ExternalTool({"q": [_external_hit("https://example.com/only")]}),
         internal_tool=_InternalTool(
             errors_by_query={"query-a": InternalSearchError(phase="article_search")}
         ),
@@ -447,7 +443,7 @@ async def test_task_with_only_external_candidates_still_reaches_review() -> None
     assert len(reviewer_runtime.calls) == 1
     assert [item.source.title for item in answerer.calls[0]] == ["only"]
     # D4-S2: run単位のcollection_failuresは廃止された。このtaskはreview=
-    # succeeded(外部候補を精査して採用)で完了扱いになるため、内部収集が
+    # succeeded(外部ヒットを精査して採用)で完了扱いになるため、内部収集が
     # 失敗していてもstatusはansweredになる。
     assert result.final_output.status == "answered"
 
@@ -460,9 +456,7 @@ async def test_time_filter_failure_still_activates_external_scope_for_review() -
     internal_tool = _InternalTool(
         hits_by_query={
             "query-a": [
-                _internal_hit(
-                    assessment_id=1001, curation_id=1, title="internal candidate"
-                )
+                _internal_hit(assessment_id=1001, curation_id=1, title="internal hit")
             ]
         }
     )
@@ -486,10 +480,10 @@ async def test_time_filter_failure_still_activates_external_scope_for_review() -
     assert factory.scopes[0].entered is True
     assert factory.scopes[0].exit_calls == 1
     assert len(reviewer_runtime.calls) == 1
-    assert [item.source.title for item in answerer.calls[0]] == ["internal candidate"]
+    assert [item.source.title for item in answerer.calls[0]] == ["internal hit"]
 
 
-# --- B. 候補の渡し方 ---------------------------------------------------------
+# --- B. 選択肢の渡し方 ---------------------------------------------------------
 
 
 @pytest.mark.asyncio
@@ -586,7 +580,7 @@ async def test_review_input_never_carries_answer_requirements() -> None:
 
 @pytest.mark.asyncio
 async def test_review_input_excludes_external_urls_across_every_task() -> None:
-    """外部候補のURLは1回のRunを通じてreviewer入力に到達しない。
+    """外部ヒットのURLは1回のRunを通じてreviewer入力に到達しない。
 
     LLMはindexで記事を指定して、出典URLはproductionがindexから復元する。
     投影型にurl fieldが無い構造保証はevidence_review/test_agent_declaration.pyが持つ。
@@ -603,8 +597,8 @@ async def test_review_input_excludes_external_urls_across_every_task() -> None:
         reviewer_runtime=reviewer_runtime,
         external_tool=_ExternalTool(
             {
-                "qa": [_external_candidate(secret_url_a, title="task-a headline")],
-                "qb": [_external_candidate(secret_url_b, title="task-b headline")],
+                "qa": [_external_hit(secret_url_a, title="task-a headline")],
+                "qb": [_external_hit(secret_url_b, title="task-b headline")],
             }
         ),
         internal_tool=_InternalTool(),
@@ -624,13 +618,13 @@ async def test_review_input_excludes_external_urls_across_every_task() -> None:
 
 
 @pytest.mark.asyncio
-async def test_selection_restores_the_right_candidate_and_task_across_groups() -> None:
-    """S1 C1(B2/B3を包含)。グループをまたいだindexから候補と所属taskが復元される。
+async def test_selection_restores_the_right_hit_and_task_across_groups() -> None:
+    """S1 C1(B2/B3を包含)。グループをまたいだindexから出所と所属taskが復元される。
 
     「research_goalごとにグループ化しtask_index昇順で結合、グループ内は
-    内部候補が先・外部候補が後」という仕様の唯一自然な解釈から、fixtureの
-    候補件数だけを根拠にRun全体の通し番号を導出する
-    (仕様「候補の渡し方」「選別結果の復元」)。
+    内部ヒットが先・外部ヒットが後」という仕様の唯一自然な解釈から、fixtureの
+    選択肢件数だけを根拠にRun全体の通し番号を導出する
+    (仕様「選択肢の渡し方」「選別結果の復元」)。
     """
     tasks = [
         _task("goal-A", ["query-a"]),
@@ -682,12 +676,10 @@ async def test_selection_restores_the_right_candidate_and_task_across_groups() -
         external_tool=_ExternalTool(
             {
                 "qb": [
-                    _external_candidate("https://example.com/b-ext-1", title="B-ext-1"),
-                    _external_candidate("https://example.com/b-ext-2", title="B-ext-2"),
+                    _external_hit("https://example.com/b-ext-1", title="B-ext-1"),
+                    _external_hit("https://example.com/b-ext-2", title="B-ext-2"),
                 ],
-                "qc": [
-                    _external_candidate("https://example.com/c-ext-1", title="C-ext-1")
-                ],
+                "qc": [_external_hit("https://example.com/c-ext-1", title="C-ext-1")],
             }
         ),
         internal_tool=internal_tool,
@@ -722,8 +714,8 @@ async def test_same_url_selected_from_two_tasks_keeps_each_task_evidence() -> No
         reviewer_runtime=reviewer_runtime,
         external_tool=_ExternalTool(
             {
-                "qa": [_external_candidate(shared_url, title="task0 headline")],
-                "qb": [_external_candidate(shared_url, title="task1 headline")],
+                "qa": [_external_hit(shared_url, title="task0 headline")],
+                "qb": [_external_hit(shared_url, title="task1 headline")],
             }
         ),
         internal_tool=_InternalTool(),
@@ -758,7 +750,7 @@ async def test_same_internal_article_from_two_tasks_keeps_each() -> None:
             ],
         }
     )
-    # 統合index空間: task昇順で結合し、task0の唯一の候補が0、task1が1。
+    # 統合index空間: task昇順で結合し、task0の唯一の選択肢が0、task1が1。
     reviewer_runtime = ScriptedAgentRuntime(
         [
             _draft(
@@ -855,7 +847,7 @@ async def test_incomplete_task_adds_the_fixed_phrase_exactly_once() -> None:
         },
         errors_by_query={"query-c": InternalSearchError(phase="article_search")},
     )
-    # task-Cは収集失敗で候補ゼロのため統合index空間から外れる(task-A→0、task-B→1)。
+    # task-Cは収集失敗でヒットゼロのため統合index空間から外れる(task-A→0、task-B→1)。
     reviewer_runtime = ScriptedAgentRuntime(
         [
             _draft(
@@ -954,9 +946,7 @@ async def test_reviewer_failure_after_two_attempts_becomes_failed_evidence_run(
         plan=_plan(_task("reviewer failure", ["query-a"])),
         query_runtime=ScriptedAgentRuntime([_query_draft(["q"])]),
         reviewer_runtime=reviewer_runtime,
-        external_tool=_ExternalTool(
-            {"q": [_external_candidate("https://example.com/q")]}
-        ),
+        external_tool=_ExternalTool({"q": [_external_hit("https://example.com/q")]}),
         internal_tool=_InternalTool(),
     )
 
@@ -984,9 +974,7 @@ async def test_failed_evidence_run_keeps_failure_reason_out_of_answerer_and_in_s
         plan=_plan(_task("reviewer failure", ["query-a"])),
         query_runtime=ScriptedAgentRuntime([_query_draft(["q"])]),
         reviewer_runtime=ScriptedAgentRuntime([failure, failure]),
-        external_tool=_ExternalTool(
-            {"q": [_external_candidate("https://example.com/q")]}
-        ),
+        external_tool=_ExternalTool({"q": [_external_hit("https://example.com/q")]}),
         internal_tool=_InternalTool(),
         answerer=answerer,
     )
@@ -1010,7 +998,7 @@ async def test_failed_evidence_run_keeps_failure_reason_out_of_answerer_and_in_s
 async def test_selected_event_fires_once_for_the_whole_run_without_task_index() -> None:
     """S2。精査成功後、選別eventはRun全体で1本だけ発火する。
 
-    3taskのうち2task(A/B)に採用対象があり、1task(C)は候補ゼロという構成でも
+    3taskのうち2task(A/B)に採用対象があり、1task(C)はヒットゼロという構成でも
     本数は1本のまま増えない。evidence_countはtask横断の採用件数の合算になり、
     payloadはtask_indexを持たない。task単位で数え直す旧実装は
     「2本発火する」「task_indexが残る」のいずれかで必ず落ちる。
@@ -1032,7 +1020,7 @@ async def test_selected_event_fires_once_for_the_whole_run_without_task_index() 
         _task("goal-C", ["query-c"]),
     ]
     events = _Events()
-    # 統合index空間(仮定): task-A(0) task-B(1)。task-Cは候補ゼロで現れない。
+    # 統合index空間(仮定): task-A(0) task-B(1)。task-Cはヒットゼロで現れない。
     reviewer_runtime = ScriptedAgentRuntime(
         [
             _draft(
@@ -1097,9 +1085,7 @@ async def test_evidence_selected_event_count_is_internal_plus_external() -> None
         plan=_plan(_task("combined evidence", ["query-a"])),
         query_runtime=ScriptedAgentRuntime([_query_draft(["q1"])]),
         reviewer_runtime=reviewer_runtime,
-        external_tool=_ExternalTool(
-            {"q1": [_external_candidate("https://example.com/q1")]}
-        ),
+        external_tool=_ExternalTool({"q1": [_external_hit("https://example.com/q1")]}),
         internal_tool=internal_tool,
         events=events,
     )
@@ -1126,7 +1112,7 @@ async def test_evidence_selected_event_count_is_internal_plus_external() -> None
 async def test_review_spans_and_events_do_not_expose_untrusted_text(
     capfire: CaptureLogfire,
 ) -> None:
-    """S1 G1(既存制約の維持)。span属性・eventに候補snippet・研究goalが載らない。
+    """S1 G1(既存制約の維持)。span属性・eventに選択肢のsnippet・研究goalが載らない。
 
     Run単位化で1回のreviewer phase spanへ複数taskの内容が集約されても、
     非露出制約が保たれることを確認する回帰テスト。

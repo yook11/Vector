@@ -14,7 +14,7 @@ from app.agent.contract import (
     AnswerProgressEvent,
     AnswerProgressStage,
     EvidenceReviewSelectedEvent,
-    ExternalSearchCandidatesFetchedEvent,
+    ExternalSearchHitsFetchedEvent,
     ExternalSearchQueriesGeneratedEvent,
     InternalSearchCompletedEvent,
     InternalSearchStartedEvent,
@@ -160,7 +160,7 @@ KNOWN_ACTIVITIES = [
         task_index=1,
         queries=["semiconductor outlook"],
     ),
-    ExternalSearchCandidatesFetchedEvent(task_index=1, candidate_count=4),
+    ExternalSearchHitsFetchedEvent(task_index=1, hit_count=4),
     EvidenceReviewSelectedEvent(evidence_count=2),
     QuestionResolvedEvent(standalone_question="What changed?"),
 ]
@@ -234,9 +234,9 @@ async def test_activity_projection_failure_still_attempts_list_publisher() -> No
 
 @pytest.mark.asyncio
 async def test_activity_reporter_preserves_nested_domain_shape() -> None:
-    activity = ExternalSearchCandidatesFetchedEvent(
+    activity = ExternalSearchHitsFetchedEvent(
         task_index=2,
-        candidate_count=5,
+        hit_count=5,
     )
     stream_publisher = AsyncMock()
     reporter = reporters.AgentRunLiveActivityReporter(AsyncMock(), stream_publisher)
@@ -247,9 +247,9 @@ async def test_activity_reporter_preserves_nested_domain_shape() -> None:
     assert published.model_dump(mode="json") == {
         "type": "activity",
         "activity": {
-            "type": "evidence_collection.external_search_candidates_fetched",
+            "type": "evidence_collection.external_search_hits_fetched",
             "task_index": 2,
-            "candidate_count": 5,
+            "hit_count": 5,
         },
     }
 

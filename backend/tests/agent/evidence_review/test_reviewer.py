@@ -1,6 +1,6 @@
 """EvidenceReviewer.review() の単体契約テスト(S1: Run単位1回)。
 
-reviewerはRun内の全taskの候補を1回の入力で受け取り、Run全体としての採用と
+reviewerはRun内の全taskの選択肢を1回の入力で受け取り、Run全体としての採用と
 不足を1つの出力で返す(仕様「Run単位で精査する」)。attempt/timeout/失敗分類の
 規則は段4時点から変わらないが、適用範囲がtaskからRunへ広がる。
 """
@@ -28,7 +28,7 @@ from app.analysis.deepseek_error_translator import DeepSeekStateReason
 from tests.agent.evidence_review._builders import (
     AS_OF,
     collected_task,
-    external_candidate,
+    external_hit,
     internal_hit,
 )
 from tests.agent.runtime._fakes import ScriptedAgentRuntime
@@ -81,7 +81,7 @@ async def test_review_is_called_exactly_once_for_a_multi_task_run() -> None:
         ),
         collected_task(
             task_index=1,
-            external_candidates=[external_candidate("https://example.com/a")],
+            external_hits=[external_hit("https://example.com/a")],
         ),
     ]
 
@@ -139,9 +139,9 @@ async def test_selection_restores_origin_and_task_from_a_cross_task_index() -> N
         ),
         collected_task(
             task_index=1,
-            external_candidates=[
-                external_candidate("https://example.com/b1", title="B-ext-1"),
-                external_candidate("https://example.com/b2", title="B-ext-2"),
+            external_hits=[
+                external_hit("https://example.com/b1", title="B-ext-1"),
+                external_hit("https://example.com/b2", title="B-ext-2"),
             ],
         ),
     ]
@@ -268,7 +268,7 @@ async def test_review_classifies_failure_reason_after_two_exhausted_attempts(
 ) -> None:
     """S1(精査の失敗)。2 attempt尽きるとRun全体が失敗結果で終わり例外を投げない。
 
-    2 taskに候補があっても、reviewerの呼び出しはRunにつき1回(最大2 attempt)
+    2 taskに選択肢があっても、reviewerの呼び出しはRunにつき1回(最大2 attempt)
     であり、taskごとに新しいattempt列は発生しない。
     """
     runtime = ScriptedAgentRuntime([failure, failure])
@@ -286,7 +286,7 @@ async def test_review_classifies_failure_reason_after_two_exhausted_attempts(
         ),
         collected_task(
             task_index=1,
-            external_candidates=[external_candidate("https://example.com/a")],
+            external_hits=[external_hit("https://example.com/a")],
         ),
     ]
 
@@ -347,7 +347,7 @@ async def test_review_retries_after_invalid_draft_and_drops_invalid_selections()
         tasks=[
             collected_task(
                 task_index=0,
-                external_candidates=[external_candidate("https://example.com/a")],
+                external_hits=[external_hit("https://example.com/a")],
             )
         ],
         reviewer_runtime=runtime,

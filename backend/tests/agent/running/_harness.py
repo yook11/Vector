@@ -25,7 +25,7 @@ from app.agent.evidence_collection import CollectedNews
 from app.agent.evidence_collection.external_search.contract import (
     ExternalQueryDraft,
     ExternalResearchRuntime,
-    ExternalSearchCandidate,
+    ExternalSearchHit,
 )
 from app.agent.evidence_collection.internal_search.contract import (
     InternalArticleContent,
@@ -68,10 +68,8 @@ def external_task(goal: str) -> ExternalResearchTask:
     return ExternalResearchTask(research_goal=goal)
 
 
-def external_candidate(
-    url: str, *, title: str | None = None
-) -> ExternalSearchCandidate:
-    return ExternalSearchCandidate(
+def external_hit(url: str, *, title: str | None = None) -> ExternalSearchHit:
+    return ExternalSearchHit(
         url=url,
         title=title or url.rsplit("/", maxsplit=1)[-1],
         snippet="snippet",
@@ -181,7 +179,7 @@ class Events:
 
 class ExternalSearchTool:
     def __init__(
-        self, results_by_query: dict[str, list[ExternalSearchCandidate]] | None = None
+        self, results_by_query: dict[str, list[ExternalSearchHit]] | None = None
     ) -> None:
         self._results = results_by_query or {}
         self.calls: list[Any] = []
@@ -190,7 +188,7 @@ class ExternalSearchTool:
     def name(self) -> str:
         return "external_search"
 
-    async def search(self, input: Any) -> list[ExternalSearchCandidate]:
+    async def search(self, input: Any) -> list[ExternalSearchHit]:
         self.calls.append(input)
         return list(self._results.get(input.query, []))
 

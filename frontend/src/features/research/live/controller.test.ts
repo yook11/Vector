@@ -635,9 +635,9 @@ describe("createResearchRunLiveController", () => {
           },
           { type: "unknown.event", answerText: "do not project" },
           {
-            type: "evidence_collection.external_search_candidates_fetched",
+            type: "evidence_collection.external_search_hits_fetched",
             task_index: 0,
-            candidate_count: 99,
+            hit_count: 99,
           },
         ]),
       );
@@ -710,9 +710,9 @@ describe("createResearchRunLiveController", () => {
         {
           attemptEpoch: 1,
           activity: {
-            type: "evidence_collection.external_search_candidates_fetched",
+            type: "evidence_collection.external_search_hits_fetched",
             taskIndex: 0,
-            candidateCount: 1,
+            hitCount: 1,
           },
         },
         "1-0",
@@ -722,10 +722,10 @@ describe("createResearchRunLiveController", () => {
       pending.resolve(
         runResult("running", "evidence_collection", null, [
           {
-            type: "evidence_collection.external_search_candidates_fetched",
+            type: "evidence_collection.external_search_hits_fetched",
             ts: "2026-07-13T00:00:00Z",
             taskIndex: 1,
-            candidateCount: 12,
+            hitCount: 12,
           },
           { type: "future.event", secret: "discarded" },
         ]),
@@ -735,9 +735,9 @@ describe("createResearchRunLiveController", () => {
       expect(
         harness.controller.getSnapshot().liveState.currentActivity,
       ).toEqual({
-        type: "evidence_collection.external_search_candidates_fetched",
+        type: "evidence_collection.external_search_hits_fetched",
         taskIndex: 1,
-        candidateCount: 12,
+        hitCount: 12,
       });
 
       harness.unsubscribe();
@@ -839,10 +839,10 @@ describe("createResearchRunLiveController", () => {
           null,
           [
             {
-              type: "evidence_collection.external_search_candidates_fetched",
+              type: "evidence_collection.external_search_hits_fetched",
               ts: "2026-07-13T00:00:00Z",
               taskIndex: 1,
-              candidateCount: 4,
+              hitCount: 4,
             },
           ],
           1,
@@ -1009,9 +1009,9 @@ describe("createResearchRunLiveController", () => {
       const pollRun = vi.fn<PollRun>().mockReturnValue(pending.promise);
       const harness = createHarness(pollRun);
       const currentActivity = {
-        type: "evidence_collection.external_search_candidates_fetched" as const,
+        type: "evidence_collection.external_search_hits_fetched" as const,
         taskIndex: 1,
-        candidateCount: 3,
+        hitCount: 3,
       };
       harness.source.emit(
         "stage",

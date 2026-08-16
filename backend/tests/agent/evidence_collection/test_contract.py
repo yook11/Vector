@@ -24,8 +24,8 @@ def _report(**overrides: object) -> ResearchTaskReport:
         "time_filter_failure_reason": None,
         "generated_queries": [],
         "provider_failed_query_count": 0,
-        "internal_candidate_count": 0,
-        "external_candidate_count": 0,
+        "internal_hit_count": 0,
+        "external_hit_count": 0,
     }
     values.update(overrides)
     return ResearchTaskReport(**values)
@@ -51,7 +51,7 @@ def _provider_failed_report(**overrides: object) -> ResearchTaskReport:
         "external_collection": "provider_failed",
         "generated_queries": ["NVIDIA 決算"],
         "provider_failed_query_count": 1,
-        "external_candidate_count": 0,
+        "external_hit_count": 0,
     }
     values.update(overrides)
     return _report(**values)
@@ -66,7 +66,7 @@ def _collected_task(
         task_index=task_index,
         research_goal=f"goal-{task_index}",
         internal_hits=[],
-        external_candidates=[],
+        external_hits=[],
         executed_queries=(),
         report=_report(
             task_index=task_index if report_task_index is None else report_task_index,
@@ -82,15 +82,15 @@ def test_report_accepts_the_documented_collection_shape() -> None:
     report = _report(
         internal_collection="succeeded",
         external_collection="succeeded",
-        internal_candidate_count=2,
-        external_candidate_count=3,
+        internal_hit_count=2,
+        external_hit_count=3,
     )
 
     assert (
         report.internal_collection,
         report.external_collection,
-        report.internal_candidate_count,
-        report.external_candidate_count,
+        report.internal_hit_count,
+        report.external_hit_count,
     ) == ("succeeded", "succeeded", 2, 3)
 
 
@@ -99,7 +99,7 @@ def test_report_accepts_the_documented_collection_shape() -> None:
     [
         pytest.param({"generated_queries": ["raw query"]}, id="generated-query"),
         pytest.param({"provider_failed_query_count": 1}, id="provider-failure"),
-        pytest.param({"external_candidate_count": 1}, id="external-candidate"),
+        pytest.param({"external_hit_count": 1}, id="external-hit"),
         pytest.param({"time_filter_failure_reason": None}, id="missing-reason"),
     ],
 )
@@ -115,10 +115,10 @@ def test_time_filter_failed_allows_internal_diagnostics_to_vary() -> None:
     """保証するテスト条件 1・6。time_filter_failed でも内部系は自由。"""
     report = _time_filter_failed_report(
         internal_collection="succeeded",
-        internal_candidate_count=2,
+        internal_hit_count=2,
     )
 
-    assert (report.external_collection, report.internal_candidate_count) == (
+    assert (report.external_collection, report.internal_hit_count) == (
         "time_filter_failed",
         2,
     )
@@ -143,7 +143,7 @@ def test_non_time_filter_report_rejects_time_filter_failure_reason(
     [
         pytest.param({"generated_queries": ["raw query"]}, id="generated-query"),
         pytest.param({"provider_failed_query_count": 1}, id="provider-failure"),
-        pytest.param({"external_candidate_count": 1}, id="external-candidate"),
+        pytest.param({"external_hit_count": 1}, id="external-hit"),
     ],
 )
 def test_query_generation_failed_rejects_non_closed_external_diagnostics(
@@ -191,9 +191,9 @@ def test_provider_failed_rejects_partial_failure_count() -> None:
         )
 
 
-def test_provider_failed_rejects_nonzero_external_candidate_count() -> None:
+def test_provider_failed_rejects_nonzero_external_hit_count() -> None:
     with pytest.raises(ValidationError):
-        _provider_failed_report(external_candidate_count=1)
+        _provider_failed_report(external_hit_count=1)
 
 
 def test_report_rejects_more_than_three_generated_queries() -> None:
@@ -227,7 +227,7 @@ def test_report_has_no_review_related_or_legacy_fields() -> None:
         "missing",
         "status",
         "selector_failure_reason",
-        "candidate_count",
+        "hit_count",
     ):
         assert not hasattr(report, legacy_field)
     for package_name in (

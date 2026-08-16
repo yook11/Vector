@@ -1,4 +1,4 @@
-"""1つの ResearchTask に対して内部候補と外部候補を集める Researcher。
+"""1つの ResearchTask に対して内部・外部の検索ヒットを集める Researcher。
 
 DB / Redis / HTTP client の生成は composition が所有し、Researcher は
 渡された Tool と Runtime だけを使う(責任境界: Researcher は infrastructure
@@ -17,18 +17,18 @@ from app.agent.concurrency import gather_cancel_on_error
 from app.agent.contract import (
     AnswerEventReporter,
     AnswerProgressEvent,
-    ExternalSearchCandidatesFetchedEvent,
+    ExternalSearchHitsFetchedEvent,
     ExternalSearchQueriesGeneratedEvent,
     InternalSearchCompletedEvent,
     InternalSearchStartedEvent,
 )
 from app.agent.evidence_collection.external_search.agent import EXTERNAL_QUERY_AGENT
 from app.agent.evidence_collection.external_search.contract import (
-    EXTERNAL_SEARCH_CANDIDATES_PER_QUERY,
+    EXTERNAL_SEARCH_HITS_PER_QUERY,
     ExternalQueryGenerationInput,
     ExternalResearchRuntime,
-    ExternalSearchCandidate,
     ExternalSearchDateFilter,
+    ExternalSearchHit,
     ExternalSearchProviderError,
     ExternalSearchTool,
     ExternalSearchToolInput,
@@ -36,7 +36,7 @@ from app.agent.evidence_collection.external_search.contract import (
 from app.agent.evidence_collection.external_search.policy import (
     PROVIDER_SEARCH_TIMEOUT_SECONDS,
     QUERY_GENERATE_TIMEOUT_SECONDS,
-    build_candidate_pool,
+    build_hit_pool,
     clean_generated_queries,
 )
 from app.agent.evidence_collection.internal_search.contract import (
@@ -57,7 +57,7 @@ from app.agent.planning.contract import (
 from app.agent.runtime.contract import AgentResponseInvalidError
 from app.analysis.ai_provider_errors import AIProviderError
 
-__all__ = ["ExternalCollectionStatus", "Researcher", "ResearchTaskCandidates"]
+__all__ = ["ExternalCollectionStatus", "Researcher", "ResearchTaskHits"]
 
 ExternalCollectionStatus = Literal[
     "succeeded", "query_generation_failed", "provider_failed"
@@ -65,21 +65,21 @@ ExternalCollectionStatus = Literal[
 
 
 @dataclass(frozen=True, slots=True)
-class ResearchTaskCandidates:
-    """1 task分の内部候補と外部候補の収集結果。選別前のraw candidate。"""
+class ResearchTaskHits:
+    """1 task分の内部・外部の検索ヒット。精査前のraw hit。"""
 
     internal_hits: list[InternalArticleSearchHit]
     internal_failed: bool
     generated_queries: list[str]
     provider_failed_query_count: int
-    candidate_pool: list[ExternalSearchCandidate]
+    external_hits: list[ExternalSearchHit]
     external_status: ExternalCollectionStatus | None
     executed_queries: tuple[str, ...]
 
 
 @dataclass(frozen=True, slots=True)
 class Researcher:
-    """1つのResearchTaskについて内部・外部候補を集める。選別と回答生成は持たない。"""
+    """1つのResearchTaskについて内部・外部の検索ヒットを集める。精査と回答生成は持たない。"""
 
     internal_search: InternalSearchTool
     events: AnswerEventReporter | None = None
@@ -93,7 +93,7 @@ class Researcher:
         date_filter: ExternalSearchDateFilter | None,
         as_of: datetime,
         target_time_window: TargetTimeWindow | None = None,
-    ) -> ResearchTaskCandidates:
+    ) -> ResearchTaskHits:
         internal_result, external_result = await _gather_two_branches(
             self._collect_internal(task_index=task_index, task=task),
             self._collect_external(
@@ -109,16 +109,16 @@ class Researcher:
         (
             generated_queries,
             provider_failed_query_count,
-            candidate_pool,
+            external_hits,
             external_status,
             executed_queries,
         ) = _raise_if_exception(external_result)
-        return ResearchTaskCandidates(
+        return ResearchTaskHits(
             internal_hits=hits,
             internal_failed=internal_failed,
             generated_queries=generated_queries,
             provider_failed_query_count=provider_failed_query_count,
-            candidate_pool=candidate_pool,
+            external_hits=external_hits,
             external_status=external_status,
             executed_queries=executed_queries,
         )
@@ -161,7 +161,7 @@ class Researcher:
     ) -> tuple[
         list[str],
         int,
-        list[ExternalSearchCandidate],
+        list[ExternalSearchHit],
         ExternalCollectionStatus | None,
         tuple[str, ...],
     ]:
@@ -197,7 +197,7 @@ class Researcher:
             ExternalSearchQueriesGeneratedEvent(task_index=task_index, queries=queries)
         )
 
-        query_candidates: list[list[ExternalSearchCandidate]] = []
+        hits_by_query: list[list[ExternalSearchHit]] = []
         executed_queries: list[str] = []
         provider_failed_query_count = 0
         # gather_cancel_on_errorはasyncio.gatherに委譲しており、結果順は
@@ -212,22 +212,22 @@ class Researcher:
                 for query in queries
             ]
         )
-        for query, (candidates, failed) in zip(queries, provider_results, strict=True):
+        for query, (hits, failed) in zip(queries, provider_results, strict=True):
             if failed:
                 provider_failed_query_count += 1
-                query_candidates.append([])
+                hits_by_query.append([])
                 continue
-            query_candidates.append(candidates)
+            hits_by_query.append(hits)
             executed_queries.append(query)
 
         if provider_failed_query_count == len(queries):
             return queries, provider_failed_query_count, [], "provider_failed", ()
 
-        pool = build_candidate_pool(query_candidates)
+        pool = build_hit_pool(hits_by_query)
         await self._report_event(
-            ExternalSearchCandidatesFetchedEvent(
+            ExternalSearchHitsFetchedEvent(
                 task_index=task_index,
-                candidate_count=len(pool),
+                hit_count=len(pool),
             )
         )
         return (
@@ -244,13 +244,13 @@ class Researcher:
         *,
         search_tool: ExternalSearchTool,
         date_filter: ExternalSearchDateFilter | None,
-    ) -> tuple[list[ExternalSearchCandidate], bool]:
+    ) -> tuple[list[ExternalSearchHit], bool]:
         try:
-            candidates = await asyncio.wait_for(
+            hits = await asyncio.wait_for(
                 search_tool.search(
                     ExternalSearchToolInput(
                         query=query,
-                        limit=EXTERNAL_SEARCH_CANDIDATES_PER_QUERY,
+                        limit=EXTERNAL_SEARCH_HITS_PER_QUERY,
                         date_filter=date_filter,
                     )
                 ),
@@ -258,7 +258,7 @@ class Researcher:
             )
         except (ExternalSearchProviderError, TimeoutError):
             return [], True
-        return candidates[:EXTERNAL_SEARCH_CANDIDATES_PER_QUERY], False
+        return hits[:EXTERNAL_SEARCH_HITS_PER_QUERY], False
 
     async def _report_event(self, event: AnswerProgressEvent) -> None:
         if self.events is None:

@@ -13,7 +13,7 @@ from pydantic import SecretStr, ValidationError
 
 import app.agent.evidence_collection.external_search as external_search_module
 from app.agent.evidence_collection.external_search import (
-    CANDIDATE_SNIPPET_MAX_CHARS,
+    OPTION_SNIPPET_MAX_CHARS,
     TAVILY_MAX_RESULTS_LIMIT,
     TAVILY_SEARCH_URL,
     ExternalSearchProviderError,
@@ -227,7 +227,7 @@ def test_provider_rejects_empty_api_key() -> None:
 
 
 @pytest.mark.asyncio
-async def test_search_maps_results_to_candidates_preserving_rank() -> None:
+async def test_search_maps_results_to_hits_preserving_rank() -> None:
     payload = {
         "results": [
             _result(
@@ -250,18 +250,18 @@ async def test_search_maps_results_to_candidates_preserving_rank() -> None:
     ) as client:
         provider = _provider(client)
 
-        candidates = await _search(provider, query="NVIDIA Blackwell", limit=10)
+        hits = await _search(provider, query="NVIDIA Blackwell", limit=10)
 
-    assert [str(candidate.url) for candidate in candidates] == [
+    assert [str(hit.url) for hit in hits] == [
         "https://www.example.com/news",
         "https://investor.example.com/second",
     ]
-    assert candidates[0].title == "First title"
-    assert candidates[0].snippet == "First snippet"
-    assert candidates[0].published_at == datetime(2026, 7, 4, 12, 30, tzinfo=UTC)
-    assert candidates[0].source_name == "example.com"
-    assert candidates[1].snippet is None
-    assert candidates[1].published_at == datetime(
+    assert hits[0].title == "First title"
+    assert hits[0].snippet == "First snippet"
+    assert hits[0].published_at == datetime(2026, 7, 4, 12, 30, tzinfo=UTC)
+    assert hits[0].source_name == "example.com"
+    assert hits[1].snippet is None
+    assert hits[1].published_at == datetime(
         2026,
         7,
         4,
@@ -269,11 +269,11 @@ async def test_search_maps_results_to_candidates_preserving_rank() -> None:
         30,
         tzinfo=timezone(timedelta(hours=9)),
     )
-    assert candidates[1].source_name == "investor.example.com"
+    assert hits[1].source_name == "investor.example.com"
 
 
 @pytest.mark.asyncio
-async def test_search_caps_candidates_to_requested_limit() -> None:
+async def test_search_caps_hits_to_requested_limit() -> None:
     payload = {
         "results": [
             _result(url=f"https://example.com/{index}", title=f"title-{index}")
@@ -286,16 +286,16 @@ async def test_search_caps_candidates_to_requested_limit() -> None:
     ) as client:
         provider = _provider(client)
 
-        candidates = await _search(provider, query="NVIDIA Blackwell", limit=2)
+        hits = await _search(provider, query="NVIDIA Blackwell", limit=2)
 
-    assert [candidate.title for candidate in candidates] == ["title-0", "title-1"]
+    assert [hit.title for hit in hits] == ["title-0", "title-1"]
 
 
 @pytest.mark.asyncio
-async def test_search_truncates_content_to_candidate_snippet_cap() -> None:
+async def test_search_truncates_content_to_option_snippet_cap() -> None:
     payload = {
         "results": [
-            _result(content="x" * (CANDIDATE_SNIPPET_MAX_CHARS + 25)),
+            _result(content="x" * (OPTION_SNIPPET_MAX_CHARS + 25)),
         ]
     }
 
@@ -304,18 +304,18 @@ async def test_search_truncates_content_to_candidate_snippet_cap() -> None:
     ) as client:
         provider = _provider(client)
 
-        candidates = await _search(provider, query="NVIDIA Blackwell", limit=10)
+        hits = await _search(provider, query="NVIDIA Blackwell", limit=10)
 
-    assert len(candidates) == 1
-    assert candidates[0].snippet == "x" * CANDIDATE_SNIPPET_MAX_CHARS
+    assert len(hits) == 1
+    assert hits[0].snippet == "x" * OPTION_SNIPPET_MAX_CHARS
 
 
-def test_candidate_rejects_over_cap_snippet_when_constructed_directly() -> None:
+def test_hit_rejects_over_cap_snippet_when_constructed_directly() -> None:
     with pytest.raises(ValidationError):
-        external_search_module.ExternalSearchCandidate(
+        external_search_module.ExternalSearchHit(
             url="https://example.com/news",
             title="Example",
-            snippet="x" * (CANDIDATE_SNIPPET_MAX_CHARS + 1),
+            snippet="x" * (OPTION_SNIPPET_MAX_CHARS + 1),
         )
 
 
@@ -357,14 +357,14 @@ async def test_search_parses_published_date(
     ) as client:
         provider = _provider(client)
 
-        candidates = await _search(provider, query="NVIDIA Blackwell", limit=10)
+        hits = await _search(provider, query="NVIDIA Blackwell", limit=10)
 
-    assert candidates[0].published_at == expected
+    assert hits[0].published_at == expected
 
 
 @pytest.mark.parametrize("published_date", ["not a date", None, 123])
 @pytest.mark.asyncio
-async def test_search_keeps_candidate_when_published_date_is_unknown(
+async def test_search_keeps_hit_when_published_date_is_unknown(
     published_date: object | None,
 ) -> None:
     payload = {"results": [_result(published_date=published_date)]}
@@ -374,10 +374,10 @@ async def test_search_keeps_candidate_when_published_date_is_unknown(
     ) as client:
         provider = _provider(client)
 
-        candidates = await _search(provider, query="NVIDIA Blackwell", limit=10)
+        hits = await _search(provider, query="NVIDIA Blackwell", limit=10)
 
-    assert len(candidates) == 1
-    assert candidates[0].published_at is None
+    assert len(hits) == 1
+    assert hits[0].published_at is None
 
 
 @pytest.mark.asyncio
@@ -396,11 +396,9 @@ async def test_search_drops_only_result_with_invalid_url_or_empty_title() -> Non
     ) as client:
         provider = _provider(client)
 
-        candidates = await _search(provider, query="NVIDIA Blackwell", limit=10)
+        hits = await _search(provider, query="NVIDIA Blackwell", limit=10)
 
-    assert [str(candidate.url) for candidate in candidates] == [
-        "https://example.com/valid"
-    ]
+    assert [str(hit.url) for hit in hits] == ["https://example.com/valid"]
 
 
 @pytest.mark.parametrize("status_code", [401, 429, 500])
@@ -519,6 +517,6 @@ async def test_search_returns_empty_list_for_normal_empty_results() -> None:
     ) as client:
         provider = _provider(client)
 
-        candidates = await _search(provider, query="NVIDIA Blackwell", limit=10)
+        hits = await _search(provider, query="NVIDIA Blackwell", limit=10)
 
-    assert candidates == []
+    assert hits == []

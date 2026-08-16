@@ -171,9 +171,9 @@ describe("parseResearchLiveEvent", () => {
       },
       {
         activity: {
-          type: "evidence_collection.external_search_candidates_fetched",
+          type: "evidence_collection.external_search_hits_fetched",
           taskIndex: 1,
-          candidateCount: 12,
+          hitCount: 12,
         },
       },
       {
@@ -212,9 +212,9 @@ describe("parseResearchLiveEvent", () => {
         queries: [""],
       },
       {
-        type: "evidence_collection.external_search_candidates_fetched",
+        type: "evidence_collection.external_search_hits_fetched",
         taskIndex: -1,
-        candidateCount: 1,
+        hitCount: 1,
       },
       {
         type: "evidence_review.selected",
