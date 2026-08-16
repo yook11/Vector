@@ -98,7 +98,7 @@ run outcomeと会話内容が混同される。blockした事実を再接続後�
   `policy_blocked`を該当turnへ表示できる。
 - `app/agent/agent.py` と `app/agent/runtime/` は、役割別の不変な `Agent` 宣言、手動prompt version、
   provider-neutralな `AgentRuntime`、structured output validationの共通境界を持つ。
-- `GeminiAgentRuntime.invoke()` はcandidate finish reasonの `SAFETY` / `RECITATION` を分類する一方、
+- `GeminiAgentRuntime.call()` はcandidate finish reasonの `SAFETY` / `RECITATION` を分類する一方、
   non-streaming responseの `prompt_feedback.block_reason` はまだ判定していない。
 - agentの差し替え可能なaudit recorder層は2026-07-18に撤去済みで、attempt個票はspan、集計はmetric、
   明示的に必要なblock監査はstructured logで記録する方針である。
@@ -509,7 +509,7 @@ retry: none
 ```
 
 provider call、JSON parse、Pydantic validation、attempt span、usage記録、provider error translationは
-共通 `GeminiAgentRuntime.invoke()` を再利用する。input safety専用Gemini client、adapter、retry、
+共通 `GeminiAgentRuntime.call()` を再利用する。input safety専用Gemini client、adapter、retry、
 call signature機構を追加しない。
 
 schema の required field は `input_safety_result` と `block_reason` の2つとする。
@@ -533,7 +533,7 @@ finish reason `SAFETY` で遮断した場合は、Agent outputを経由せず
 network、authentication、quota、rate limit、timeout、RECITATION は provider error として扱い、
 block structured logを作らない。
 
-この契約を共通runtimeで満たすため、non-streaming `GeminiAgentRuntime.invoke()` はusage記録後、
+この契約を共通runtimeで満たすため、non-streaming `GeminiAgentRuntime.call()` はusage記録後、
 candidate finish reasonより前に `prompt_feedback.block_reason` を確認し、
 `AIProviderInputRejectedError(reason=INPUT_BLOCKED)` へ分類する。Gemini translator / runtimeは
 `INPUT_BLOCKED` とfinish reason `SAFETY` にだけprovider-neutralな

@@ -64,7 +64,7 @@ class QuestionPlanningService:
                 async with self._runtime_scope_factory() as runtime:
                     for attempt_number in range(1, _MAX_ATTEMPTS + 1):
                         try:
-                            draft = await runtime.invoke(
+                            draft = await runtime.call(
                                 self._agent,
                                 PlanningAttemptInput(
                                     request=request,

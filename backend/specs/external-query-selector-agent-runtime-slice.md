@@ -162,7 +162,7 @@ class DeepSeekOutputBinding:
 
 #### Error、retry、timeout
 
-- `DeepSeekAgentRuntime.invoke()`は1回のAgent attemptだけを実行し、workflow retry、fallback、別Agent / Tool
+- `DeepSeekAgentRuntime.call()`は1回のAgent attemptだけを実行し、workflow retry、fallback、別Agent / Tool
   起動を行わない。
 - Query / Selectorのattempt loopとretry条件は、現行どおり`ExternalSearchResearchRunner`が所有する。
   PR2はretry loopをadapterから移す変更ではなく、同Runnerが呼ぶ対象を旧portからAgent / Runtimeへ置き換える。

@@ -68,7 +68,7 @@ class EvidenceReviewer:
             for attempt_number in range(1, _MAX_REVIEW_ATTEMPTS + 1):
                 try:
                     draft = await asyncio.wait_for(
-                        reviewer_runtime.invoke(
+                        reviewer_runtime.call(
                             EVIDENCE_REVIEWER_AGENT,
                             review_input,
                             attempt_number=attempt_number,

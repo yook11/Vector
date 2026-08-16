@@ -90,7 +90,7 @@ async def test_success_span_is_client_with_allowlisted_attributes_and_no_text(
         ]
     )
 
-    await GeminiAgentRuntime(client=cast(AsyncClient, client)).invoke(
+    await GeminiAgentRuntime(client=cast(AsyncClient, client)).call(
         agent,
         "INPUT_OBJECT_SENTINEL_648a",
         attempt_number=2,
@@ -126,7 +126,7 @@ async def test_success_span_records_each_present_usage_field_once(
     """存在する各使用量を成功 span に一度ずつ記録する。"""
     client = FakeGeminiClient([success_response(usage_metadata=_full_usage())])
 
-    await GeminiAgentRuntime(client=cast(AsyncClient, client)).invoke(
+    await GeminiAgentRuntime(client=cast(AsyncClient, client)).call(
         make_agent(),
         "typed input",
         attempt_number=1,
@@ -154,7 +154,7 @@ async def test_missing_usage_fields_are_not_zero_filled(
     )
     client = FakeGeminiClient([success_response(usage_metadata=usage)])
 
-    await GeminiAgentRuntime(client=cast(AsyncClient, client)).invoke(
+    await GeminiAgentRuntime(client=cast(AsyncClient, client)).call(
         make_agent(),
         "typed input",
         attempt_number=1,
@@ -176,7 +176,7 @@ async def test_blocked_response_records_usage_and_classified_error_span(
     )
 
     with pytest.raises(AIProviderOutputBlockedError):
-        await GeminiAgentRuntime(client=cast(AsyncClient, client)).invoke(
+        await GeminiAgentRuntime(client=cast(AsyncClient, client)).call(
             make_agent(),
             "typed input",
             attempt_number=1,
@@ -217,7 +217,7 @@ async def test_truncated_response_records_usage_and_is_not_succeeded(
     )
 
     with pytest.raises(AIProviderOutputTruncatedError):
-        await GeminiAgentRuntime(client=cast(AsyncClient, client)).invoke(
+        await GeminiAgentRuntime(client=cast(AsyncClient, client)).call(
             make_agent(),
             "typed input",
             attempt_number=1,
@@ -257,7 +257,7 @@ async def test_invalid_response_records_usage_before_classification(
     )
 
     with pytest.raises(AgentResponseInvalidError):
-        await GeminiAgentRuntime(client=cast(AsyncClient, client)).invoke(
+        await GeminiAgentRuntime(client=cast(AsyncClient, client)).call(
             make_agent(),
             "typed input",
             attempt_number=1,
@@ -303,7 +303,7 @@ async def test_output_schema_mismatch_records_usage_and_safe_classified_span(
     )
 
     with pytest.raises(AgentResponseInvalidError) as exc_info:
-        await GeminiAgentRuntime(client=cast(AsyncClient, client)).invoke(
+        await GeminiAgentRuntime(client=cast(AsyncClient, client)).call(
             make_agent(output_type=ValidationProbeOutput),
             "typed input",
             attempt_number=1,
@@ -344,7 +344,7 @@ async def test_classified_provider_error_has_no_usage_or_exception_event(
     client = FakeGeminiClient([TimeoutError("PROVIDER_ERROR_SENTINEL_267e")])
 
     with pytest.raises(AIProviderNetworkError):
-        await GeminiAgentRuntime(client=cast(AsyncClient, client)).invoke(
+        await GeminiAgentRuntime(client=cast(AsyncClient, client)).call(
             make_agent(),
             "typed input",
             attempt_number=1,
@@ -376,7 +376,7 @@ async def test_unclassified_error_keeps_redacted_exception_event_without_result(
     client = FakeGeminiClient([error])
 
     with pytest.raises(RuntimeError) as exc_info:
-        await GeminiAgentRuntime(client=cast(AsyncClient, client)).invoke(
+        await GeminiAgentRuntime(client=cast(AsyncClient, client)).call(
             make_agent(),
             "typed input",
             attempt_number=1,
@@ -401,7 +401,7 @@ async def test_unclassified_error_keeps_redacted_exception_event_without_result(
     _assert_no_model_visible_text(span, "UNCLASSIFIED_EXCEPTION_SENTINEL_a17f")
 
 
-async def test_sequential_invokes_do_not_carry_usage_between_spans(
+async def test_sequential_calls_do_not_carry_usage_between_spans(
     capfire: CaptureLogfire,
 ) -> None:
     """連続試行の span 間で使用量を持ち越さない。"""
@@ -413,12 +413,12 @@ async def test_sequential_invokes_do_not_carry_usage_between_spans(
     )
     runtime = GeminiAgentRuntime(client=cast(AsyncClient, client))
 
-    await runtime.invoke(
+    await runtime.call(
         make_agent(name="first_agent", model_name="first-model"),
         "first input",
         attempt_number=1,
     )
-    await runtime.invoke(
+    await runtime.call(
         make_agent(name="second_agent", model_name="second-model"),
         "second input",
         attempt_number=2,
@@ -453,7 +453,7 @@ async def test_renderer_failure_creates_no_provider_span(
     )
 
     with pytest.raises(RuntimeError):
-        await GeminiAgentRuntime(client=cast(AsyncClient, client)).invoke(
+        await GeminiAgentRuntime(client=cast(AsyncClient, client)).call(
             agent,
             "typed input",
             attempt_number=1,
@@ -478,7 +478,7 @@ async def test_config_failure_creates_no_provider_span(
     )
 
     with pytest.raises((TypeError, ValueError)):
-        await GeminiAgentRuntime(client=cast(AsyncClient, client)).invoke(
+        await GeminiAgentRuntime(client=cast(AsyncClient, client)).call(
             agent,
             "typed input",
             attempt_number=1,
@@ -511,7 +511,7 @@ async def test_non_gemini_agent_is_rejected_before_renderer_config_and_span(
     )
 
     with pytest.raises(ValueError):
-        await GeminiAgentRuntime(client=cast(AsyncClient, client)).invoke(
+        await GeminiAgentRuntime(client=cast(AsyncClient, client)).call(
             agent,
             "typed input",
             attempt_number=1,
@@ -532,7 +532,7 @@ async def test_invalid_attempt_number_creates_no_provider_span(
     client = FakeGeminiClient([success_response()])
 
     with pytest.raises(ValueError):
-        await GeminiAgentRuntime(client=cast(AsyncClient, client)).invoke(
+        await GeminiAgentRuntime(client=cast(AsyncClient, client)).call(
             make_agent(),
             "typed input",
             attempt_number=attempt_number,

@@ -192,7 +192,7 @@ provider attempt spanへ`agent.prompt.version`を記録し、phase spanへは複
 
 | ID | 保証条件 | 根拠 | 現production owner | 現test owner | 差し替え境界 | 判定 / 移行後 |
 |---|---|---|---|---|---|---|
-| RT-01 | `AgentRuntime.invoke`のgeneric typed signatureとprovider-neutral scope factory contractを固定する | PR1、`runtime/contract.py` | Runtime contract | `runtime/test_contract.py` | なし | 維持 |
+| RT-01 | `AgentRuntime.call`のgeneric typed signatureとprovider-neutral scope factory contractを固定する | PR1、`runtime/contract.py` | Runtime contract | `runtime/test_contract.py` | なし | 維持 |
 | RT-INVOKE-01 | provider Runtimeは非正attemptをprovider call前に拒否し、1 SDK callからdeclared typeへvalidation済みoutputを返す | PR1/PR2 | Gemini/DeepSeek Runtime | provider別behavior tests | Fake SDK client | 維持。provider共通conformance群 |
 | RT-02 | response defectはnot JSON / not object / schema mismatchの3分類 | PR1/PR2、Runtime contract | Runtime contract | `runtime/test_contract.py` | なし | 維持 |
 | RT-03 | parse/validation errorへraw outputやvalidation自由文を残さずsafe repair情報だけを公開 | `_structured_output.py`、PR1/PR2 | shared structured output | provider別Runtime test内 | なし | 統合。`test_structured_output.py`を正本候補 |

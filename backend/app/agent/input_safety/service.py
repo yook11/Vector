@@ -51,7 +51,7 @@ class InputSafetyService:
         with agent_phase(phase="safety_check", agent_name=self._agent.name):
             try:
                 async with self._runtime_scope_factory() as runtime:
-                    output = await runtime.invoke(
+                    output = await runtime.call(
                         self._agent,
                         InputSafetyAgentInput(
                             question=question,

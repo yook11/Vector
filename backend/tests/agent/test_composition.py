@@ -179,7 +179,7 @@ class _FakeGeminiRuntime:
         self.client = client
         self.constructed.append(self)
 
-    async def invoke(
+    async def call(
         self,
         agent: object,
         input: object,

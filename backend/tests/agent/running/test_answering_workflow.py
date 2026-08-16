@@ -113,7 +113,7 @@ def _search_plan() -> SearchPlan:
 
 
 class _EmptyExternalQueryRuntime:
-    async def invoke(
+    async def call(
         self, agent: object, input: object, *, attempt_number: int
     ) -> ExternalQueryDraft:
         del agent, input, attempt_number

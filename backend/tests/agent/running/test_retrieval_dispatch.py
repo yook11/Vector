@@ -261,7 +261,7 @@ class _BlockingQueryRuntime:
         self.finished = asyncio.Event()
         self.cancelled = False
 
-    async def invoke(
+    async def call(
         self, agent: object, input: object, *, attempt_number: int
     ) -> object:
         del agent, input, attempt_number
@@ -295,7 +295,7 @@ class _ControlledQueryRuntime:
         self.completed = False
         self.cancelled_error: asyncio.CancelledError | None = None
 
-    async def invoke(
+    async def call(
         self, agent: object, input: object, *, attempt_number: int
     ) -> object:
         del agent, input, attempt_number
@@ -326,7 +326,7 @@ class _TaskFailureAfterSiblingStartsRuntime:
         self.sibling_finished = asyncio.Event()
         self.sibling_cancelled = False
 
-    async def invoke(self, agent: object, input: Any, *, attempt_number: int) -> object:
+    async def call(self, agent: object, input: Any, *, attempt_number: int) -> object:
         del agent, attempt_number
         if input.task.research_goal == "failing":
             await self.sibling_started.wait()

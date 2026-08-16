@@ -148,7 +148,7 @@ async def test_runtime_request_keeps_fixed_and_dynamic_text_separate() -> None:
         target_time_window=TargetTimeWindow(kind="last_n_days", days=7),
         repair_context="PREVIOUS_ERROR_SENTINEL",
     )
-    stream = GeminiAgentRuntime(client=cast(AsyncClient, client)).invoke_stream(
+    stream = GeminiAgentRuntime(client=cast(AsyncClient, client)).stream_text(
         EVIDENCE_ANSWER_AGENT,
         input,
         attempt_number=2,

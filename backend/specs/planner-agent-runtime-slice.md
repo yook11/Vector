@@ -58,9 +58,9 @@ Planner内部の宣言と実行だけを整理する。
   model settings、実行時inputの変更ではversionを更新しない。
 - `Agent`はprovider client、user input、retry回数、audit recorder、生成途中の状態を保持しない。
 - `response_schema`はAgent宣言後に書き換えられないimmutable mappingとして保持する。
-- `AgentRuntime.invoke()`は型付きinputを受け、providerを1回だけ呼び、検証済み`OutputT`だけを返す。
+- `AgentRuntime.call()`は型付きinputを受け、providerを1回だけ呼び、検証済み`OutputT`だけを返す。
   usage等を含むresult envelopeは導入しない。
-- `AgentRuntime.invoke()`の呼び出し側は、workflow policyが決めた正の`attempt_number`をkeywordで渡す。
+- `AgentRuntime.call()`の呼び出し側は、workflow policyが決めた正の`attempt_number`をkeywordで渡す。
   Runtimeはretry回数を保持・推測せず、その値をattempt spanの観測にだけ使う。
 - provider attemptのusage / latencyは`AgentRuntime`がattempt spanへ記録し、戻り値、Serviceのdomain output、
   `RunResult`へ含めない。
@@ -71,7 +71,7 @@ Planner内部の宣言と実行だけを整理する。
   `QuestionPlanningService.plan()`の1 phaseにつきscopeを1回だけ開始する。同じscopeのRuntime / clientを
   attempt 1と2で共有し、別のplanning phaseへ再利用しない。
 - compositionはPlanner clientの生成と破棄、Serviceはplanning phaseに合わせたscopeの開始と終了、
-  Runtimeは借りたclientによる1 attemptだけを所有する。Runtimeは`invoke()`内でclientをcloseしない。
+  Runtimeは借りたclientによる1 attemptだけを所有する。Runtimeは`call()`内でclientをcloseしない。
 - composition moduleのimportとPlanner Runtime scope factoryの生成だけでは、`google.genai`とPlanner用
   Gemini具象Runtimeをloadしない。Plannerのprovider依存はRuntime scopeを実際に開始した時点で遅延loadする。
   `AnsweringRunner`や回答graphの構築時に既存の他Gemini工程がSDKをloadすることは本契約の対象外とする。
@@ -139,12 +139,12 @@ Planner内部の宣言と実行だけを整理する。
   `planning/agent.py`はそれらを参照するだけでversion literalを持たない。
 - Gemini requestでは固定instructionsを`system_instruction`、render済みtask inputを`contents`として
   物理的にも分離して渡せる。
-- `QuestionPlanningService`から、1 attemptの実行を`AgentRuntime.invoke()`として呼べる。
-- `AgentRuntime.invoke()`は`QuestionPlanDraft`を直接返し、usage用envelopeを呼び出し側へ要求しない。
+- `QuestionPlanningService`から、1 attemptの実行を`AgentRuntime.call()`として呼べる。
+- `AgentRuntime.call()`は`QuestionPlanDraft`を直接返し、usage用envelopeを呼び出し側へ要求しない。
 - runtimeを2回呼ぶかfallbackするかは、引き続き`QuestionPlanningService`から読み取れる。
 - planning phaseの開始時にGemini client scopeを1回だけactivateし、最大2 attemptで同じasync clientを
   再利用した後、正常・例外・cancelの各終了経路でcloseを1回試行できる。
-- context preparationまたはhookで短絡した場合はPlanner clientを生成せず、Runtime単体の`invoke()`は
+- context preparationまたはhookで短絡した場合はPlanner clientを生成せず、Runtime単体の`call()`は
   借りたclientをcloseしない。
 - completed planのschema / finalization、retry、fallback、metricsの意味を維持する。
   provider-visibleなmessage構造を変えるため、live model outputのbyte同一性、旧audit code、
@@ -182,7 +182,7 @@ compositionは`app.agent.runtime.gemini`から`GeminiAgentRuntime`を明示的�
 
 `GeminiAgentRuntime`のinstanceが保持する実行依存は借りたGemini async clientだけとする。Planner Agent、
 instructions、model、settings、schema、task input、retry state、usage accumulator、Runner / Service参照を
-constructorで保持しない。これらは`invoke()`ごとに渡されたAgent宣言とinputから取得し、同じRuntimeを
+constructorで保持しない。これらは`call()`ごとに渡されたAgent宣言とinputから取得し、同じRuntimeを
 複数のGemini Agentで再利用できるようにする。
 
 ### `Agent`
@@ -292,7 +292,7 @@ instructionsとrender済みinputは責任上だけでなくprovider request上�
 provider-neutralなProtocolは、概念上次の契約を持つ。
 
 ```python
-async def invoke(
+async def call(
     self,
     agent: Agent[InputT, OutputT],
     input: InputT,
@@ -318,7 +318,7 @@ model outputを変えない。
 - provider clientを使って1回だけrequestする。
 - `agent.model.provider`が`"gemini"`でない場合は誤配線として、renderer、config構築、attempt span、
   provider requestより前に拒否する。
-- provider clientは呼び出し側のscopeから借り、成功・失敗にかかわらず`invoke()`内でcloseしない。
+- provider clientは呼び出し側のscopeから借り、成功・失敗にかかわらず`call()`内でcloseしない。
 - 固定instructionsとrender済みtask inputをprovider固有のmessage構造へ変換する。
 - `ModelSettings`をprovider SDK設定へ変換し、`None`のfieldをrequestから除外する。
 - Geminiの`response_mime_type`等、structured outputを実現するprovider固有設定を適用する。
@@ -559,7 +559,7 @@ class QuestionPlanningService:
 ```
 
 `plan()`はagent phase内で`async with self._runtime_scope_factory() as runtime`を1回だけ開始し、
-attempt実行を`runtime.invoke(self._agent, attempt_input, attempt_number=n)`とする。attempt 2へretryしても
+attempt実行を`runtime.call(self._agent, attempt_input, attempt_number=n)`とする。attempt 2へretryしても
 scopeを開き直さず、同じRuntime / clientを使う。auditへ記録するmodelとPrompt versionはそれぞれ
 `self._agent.model.name`、`self._agent.prompt.version`から直接取得し、旧Planner adapterの
 `model_name` / `prompt_version` propertyや`getattr` fallbackは残さない。
@@ -585,7 +585,7 @@ QuestionPlanningService.plan(request)
    └─ async with runtime_scope_factory()  # planning phaseで1 scope
       └─ attempt loop（最大2回、同じRuntime / client）
          ├─ PlanningAttemptInput(request, previous_error)を作る
-         ├─ AgentRuntime.invoke(planner_agent, input, attempt_number=n)  # 1 provider attempt
+         ├─ AgentRuntime.call(planner_agent, input, attempt_number=n)  # 1 provider attempt
          │  ├─ agent.prompt.input_renderer(input)でmodel-visibleなtask inputを作る
          │  ├─ agent_provider_call CLIENT spanを1本開く
          │  ├─ instructionsとtask inputをproviderの別message fieldへ渡す
@@ -640,11 +640,11 @@ AnsweringRunner
   async client identityを使う。
 - provider / response failure、想定外例外、task cancellation、client取得後のRuntime構築失敗で、
   closeが正常終了するfake async clientを1回だけcloseし、元の終了経路を抑止しない。
-- `GeminiAgentRuntime.invoke()`を単体で呼んでも借りたclientをcloseせず、close ownerがcompositionの
+- `GeminiAgentRuntime.call()`を単体で呼んでも借りたclientをcloseせず、close ownerがcompositionの
   scope factoryだけである。
 - context preparationまたはhookで短絡した既存上位flowではPlanner Runtime scopeをactivateしない。
 - Gemini clientへ独自のconnection pool上限、keep-alive tuning、回答Run間の共有を追加しない。
-- 同じ`GeminiAgentRuntime`へ異なるAgent宣言を順番に渡しても、各invokeが渡されたAgent Promptのinstructions、
+- 同じ`GeminiAgentRuntime`へ異なるAgent宣言を順番に渡しても、各callが渡されたAgent Promptのinstructions、
   model settings、schemaだけを使い、前回の宣言・input・usageを引き継がない。
 - runtime 1 invocationにつきprovider callは1回である。
 - 呼び出し側が`attempt_number`を明示し、Runtimeがその番号からretry policyや状態を推測しない。

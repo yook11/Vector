@@ -191,7 +191,7 @@ def test_history_for_prompt_caps_content_and_normalizes_saved_missing_aspects() 
     ]
 
 
-async def test_prepare_activates_one_scope_and_invokes_agent_once() -> None:
+async def test_prepare_activates_one_scope_and_calls_agent_once() -> None:
     history = [ThreadMessageSnapshot(role="user", content="前の質問")]
     service, runtime, factory = _service(
         [QuestionContextDraft(standalone_question="整理済みの質問")]

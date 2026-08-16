@@ -26,7 +26,7 @@ role固有`prompts.py`へ置き、Agent組み立て側は参照するだけと�
 固定instructions、固定input template、`response_schema`のmodel-visibleな内容を変えるときに更新する。
 model指定を`ModelTarget` /
 `ModelSettings`、出力境界を`output_type` / `response_schema`とする。固定instructionsと実行時task inputは
-provider request上でも分離する。non-streamingの`AgentRuntime.invoke()`は検証済み`OutputT`だけを返し、
+provider request上でも分離する。non-streamingの`AgentRuntime.call()`は検証済み`OutputT`だけを返し、
 PR7で別capabilityとして追加するstreaming runtimeはclose可能なtext fragment列を返す。streamingの最終parse /
 validation / finalizeはFlowが`agent.output_type`を正本として行う。usageはruntimeがattempt spanへ記録し、
 戻り値へ含めない。旧prompt call signature機構は持ち込まず、rate limit policyは
@@ -300,8 +300,8 @@ safe fallback、draft finalizationを適用し、0回以上のAgent attemptを�
 永続状態やconversationを新規作成しない。
 
 Agent attemptは、1つの`Agent`宣言と型付きinputをruntimeへ渡す1回のprovider request単位である。
-non-streamingでは`AgentRuntime.invoke()`からschema parse済みdraftを受け取り、streamingでは
-`StreamingAgentRuntime.invoke_stream()`からclose可能なtext fragment列を受け取ってFlowが最終parse /
+non-streamingでは`AgentRuntime.call()`からschema parse済みdraftを受け取り、streamingでは
+`StreamingAgentRuntime.stream_text()`からclose可能なtext fragment列を受け取ってFlowが最終parse /
 validation / finalizeを行う。streaming responseも開始からcloseまでを1 attemptと数える。
 
 ### `Agent`
@@ -342,16 +342,16 @@ Agent組み立てmoduleは定数を参照するだけとする。rate limit poli
 
 `output_type`はPython側parse契約、`response_schema`はmodel向けwire契約であり、一方から他方を
 自動生成しない。両者の整合性はcontract testで守る。PR7では`response_schema`をoptionalへ広げ、`None`を
-Gemini streamingの非構造化text roleだけで使用する。non-streamingのstructured invokeとDeepSeek runtimeは
+Gemini streamingの非構造化text roleだけで使用する。non-streamingのstructured callとDeepSeek runtimeは
 `None`をprovider requestより前に拒否する。
 
 ### `AgentRuntime`
 
 `Agent`宣言と型付きinputを1回のprovider callへ変換する共通実行境界。Runnerはrole phaseから
-`AgentRuntime.invoke(agent, input, attempt_number=n)`を必要回数だけ呼ぶ。`attempt_number`はphase policy
+`AgentRuntime.call(agent, input, attempt_number=n)`を必要回数だけ呼ぶ。`attempt_number`はphase policy
 ownerが正の整数として明示し、runtimeはretry stateを保持・推測しない。non-streaming runtimeはattempt単位の
 provider error translation、schema parse、attempt spanを所有し、成功時は検証済み`OutputT`だけを返す。
-PR7ではstreamingを別Protocolの`StreamingAgentRuntime.invoke_stream()`として追加し、DeepSeek Runtimeや
+PR7ではstreamingを別Protocolの`StreamingAgentRuntime.stream_text()`として追加し、DeepSeek Runtimeや
 non-streaming fakeへstreaming methodを要求しない。streaming runtimeはprovider streamの分類・cleanup・
 attempt spanを所有し、Flowがclose可能なtext fragment列を消費して`agent.output_type`で最終検証する。
 provider responseにusageがあれば、blocked / parse / validation判定より前にattempt spanへ記録する。
@@ -367,7 +367,7 @@ role固有の複数attempt retry、safe fallback、draft finalizationは`AgentRu
 provider-neutral portは`backend/app/agent/runtime/contract.py`の`AgentRuntime`、Gemini-backed実装は
 `backend/app/agent/runtime/gemini.py`の`GeminiAgentRuntime`とする。`GeminiAgentRuntime` instanceが保持する
 実行依存は借りたGemini async clientだけで、Agent宣言、task input、retry state、usage accumulator、
-Runner / Service参照を保持せず、`invoke()`内でclientをcloseしない。provider-neutralな
+Runner / Service参照を保持せず、`call()`内でclientをcloseしない。provider-neutralな
 `AgentRuntimeScopeFactory`もruntime contractに置き、その実装だけをcompositionが所有する。
 PR7ではclose可能なstreamを型で保証する`StreamingAgentRuntime` / `StreamingAgentRuntimeScopeFactory`を
 別Protocolとして同じcontract moduleへ追加する。Gemini Runtimeは両runtime Protocolを満たすが、DeepSeek
@@ -1053,7 +1053,7 @@ workflow責任を移す対象も読み取れない。最初にこの境界を`An
 
 - 詳細仕様: `backend/specs/planner-agent-runtime-slice.md`
 - immutable `Agent`と、1 provider attemptだけを実行するnon-streaming
-  `AgentRuntime.invoke(agent, input, attempt_number=n)`を、最初の実consumerであるPlanner Agentと同時に導入する。
+  `AgentRuntime.call(agent, input, attempt_number=n)`を、最初の実consumerであるPlanner Agentと同時に導入する。
 - `Agent` / model value objectを`agent/agent.py`、provider-neutral portを`agent/runtime/contract.py`、
   clientだけを保持する`GeminiAgentRuntime`を`agent/runtime/gemini.py`、Planner宣言を
   `agent/planning/agent.py`へ置く。
@@ -1065,7 +1065,7 @@ workflow責任を移す対象も読み取れない。最初にこの境界を`An
 - `response_schema`のmodel-visibleな構造、enum、required、descriptionを変更するときはPrompt versionも
   明示的に更新する。`output_type`だけの変更、model、model settings、実行時inputの変更では更新しない。
 - 固定instructionsをGemini `system_instruction`、render済みtask inputを`contents`へ分離する。
-- `AgentRuntime.invoke()`は`QuestionPlanDraft`を直接返し、responseにusageがあればattempt spanへ記録する。
+- `AgentRuntime.call()`は`QuestionPlanDraft`を直接返し、responseにusageがあればattempt spanへ記録する。
   usage用result envelopeとphase / run集約は追加しない。
 - 旧prompt call signature / hash機構は移行せず、audit記録側は`agent.prompt.version`を直接参照する。
   旧version値 / audit codeとの連続性は要求せず、rate limit policyをこのsliceで新規適用しない。
@@ -1155,8 +1155,8 @@ workflow責任を移す対象も読み取れない。最初にこの境界を`An
 ### PR7: Direct and Evidence Answer Agents
 
 - Direct Answer、Evidence Answerのinstructions、model、output schemaをAgent宣言へ移す。
-- non-streamingの`AgentRuntime.invoke`を変えず、close可能なfragment列を返す
-  `StreamingAgentRuntime.invoke_stream` capabilityを実consumerと同時に追加する。Flowをphase policy ownerとして
+- non-streamingの`AgentRuntime.call`を変えず、close可能なfragment列を返す
+  `StreamingAgentRuntime.stream_text` capabilityを実consumerと同時に追加する。Flowをphase policy ownerとして
   残し、safe fallback、retry、stream delta、continuation、validation、audit、二層stream cleanupを維持する。
 - Exit gate: `REG-01`〜`REG-03`、`RES-07`と既存answer / delta / continuation regressionを通す。
 - 削除するseam: Direct / Evidence Answer固有のgenerator adapter、call spec、generator protocol、重複設定。

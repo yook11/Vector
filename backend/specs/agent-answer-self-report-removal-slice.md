@@ -74,7 +74,7 @@ Direct Answer Agentは既に`response_schema=None`のplain text streamで本文�
 - `EVIDENCE_ANSWER_AGENT`は`max_output_tokens=2048` / `temperature=0.2`。
   `EVIDENCE_REVIEWER_AGENT`は`max_output_tokens=16384`。
 - `DIRECT_ANSWER_AGENT`は`output_type=DirectAnswerDraft`(`answer`のみ) / `response_schema=None`で
-  宣言され、`GeminiAgentRuntime.invoke_stream()`は`agent.response_schema is not None`で
+  宣言され、`GeminiAgentRuntime.stream_text()`は`agent.response_schema is not None`で
   structured要求を切り替える。`DirectAnswerFlow._generate_draft()`はfragmentをそのまま
   live draftへ流し、連結後に`self._agent.output_type(answer=answer)`でdraftを構築する。
 - `AnswerVisibleTextFilter`は表示から`[[N]]`を除く。Direct Answerは表示に加えて本文からも
