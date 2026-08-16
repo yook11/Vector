@@ -34,10 +34,10 @@ def _plan(*, goals: list[str]) -> SearchPlan:
 
 
 def _external_evidence(
-    *, task_index: int, claim: str, source_ref: str = "ext-0"
+    *, task_index: int, claim: str, option_index: int = 0
 ) -> ExternalSearchEvidence:
     return ExternalSearchEvidence(
-        source_ref=source_ref,
+        option_index=option_index,
         task_index=task_index,
         claim=claim,
         why_selected="why",
@@ -47,10 +47,10 @@ def _external_evidence(
 
 
 def _internal_evidence(
-    *, task_index: int, claim: str, source_ref: str = "int-0"
+    *, task_index: int, claim: str, option_index: int = 0
 ) -> InternalArticleEvidence:
     return InternalArticleEvidence(
-        source_ref=source_ref,
+        option_index=option_index,
         task_index=task_index,
         claim=claim,
         why_selected="why",
@@ -113,10 +113,10 @@ def test_adopted_claims_include_only_external_evidence_for_the_matching_task() -
     plan = _plan(goals=["goal-A"])
     evidence_run = _outcome(
         external_evidence=[
-            _external_evidence(task_index=0, claim="external claim", source_ref="e-0")
+            _external_evidence(task_index=0, claim="external claim", option_index=0)
         ],
         internal_evidence=[
-            _internal_evidence(task_index=0, claim="internal claim", source_ref="i-0")
+            _internal_evidence(task_index=0, claim="internal claim", option_index=1)
         ],
     )
 

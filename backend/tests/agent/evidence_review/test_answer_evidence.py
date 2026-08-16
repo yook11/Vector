@@ -30,6 +30,7 @@ from tests.agent.evidence_review._builders import (
     collected_task,
     external_hit,
     internal_hit,
+    sample_task,
 )
 
 
@@ -37,11 +38,25 @@ def _reviewer_response(selections: list[dict[str, object]]) -> EvidenceReviewerR
     return EvidenceReviewerResponse.from_raw(selections=selections, missing=[])
 
 
+def _preparation(
+    *, internal_count: int = 0, external_count: int = 0
+) -> EvidenceReviewPreparation:
+    return EvidenceReviewPreparation.from_tasks(
+        [
+            sample_task(
+                task_index=0,
+                internal_count=internal_count,
+                external_count=external_count,
+            )
+        ]
+    )
+
+
 def _internal_article_evidence(
-    *, curation_id: int, source_ref: str
+    *, curation_id: int, option_index: int
 ) -> InternalArticleEvidence:
     return InternalArticleEvidence(
-        source_ref=source_ref,
+        option_index=option_index,
         task_index=0,
         claim="claim",
         why_selected="why",
@@ -54,9 +69,9 @@ def _internal_article_evidence(
     )
 
 
-def _external_evidence(*, url: str, source_ref: str) -> ExternalSearchEvidence:
+def _external_evidence(*, url: str, option_index: int) -> ExternalSearchEvidence:
     return ExternalSearchEvidence(
-        source_ref=source_ref,
+        option_index=option_index,
         task_index=0,
         claim="claim",
         why_selected="why",
@@ -71,69 +86,61 @@ def _external_evidence(*, url: str, source_ref: str) -> ExternalSearchEvidence:
 # --- AnswerEvidence.from_reviewer_response -------------------------------------
 
 
-def test_answer_evidence_factory_excludes_nonexistent_reviewer_selections() -> None:
-    """見せていないoption_indexは回答用Evidenceへ復元しない。"""
-    tasks = [
-        collected_task(
-            task_index=0,
-            external_hits=[
-                external_hit("https://example.com/shown-0"),
-                external_hit("https://example.com/shown-1"),
-            ],
-        )
-    ]
-    # 見せた番号は0と1。2は列に無い。
+def test_answer_evidence_factory_drops_a_selection_of_an_index_never_shown() -> None:
+    """解決できない番号の選択は、他の採用を巻き込まずに落とす。"""
     evidence = AnswerEvidence.from_reviewer_response(
-        preparation=EvidenceReviewPreparation.from_tasks(tasks),
+        preparation=_preparation(internal_count=1, external_count=1),
         reviewer_response=_reviewer_response(
             [
-                {"option_index": 1, "claim": "shown", "why_selected": "why"},
-                {"option_index": 2, "claim": "not-shown", "why_selected": "why"},
+                {"option_index": 0, "claim": "claim", "why_selected": "why"},
+                {"option_index": 1, "claim": "claim", "why_selected": "why"},
+                {"option_index": 2, "claim": "claim", "why_selected": "why"},
             ]
         ),
     )
 
-    assert [(item.claim, str(item.url)) for item in evidence.external_sources] == [
-        ("shown", "https://example.com/shown-1")
-    ]
+    assert len(evidence.internal_articles) == 1
+    assert len(evidence.external_sources) == 1
+    assert evidence.internal_articles[0].option_index == 0
+    assert evidence.external_sources[0].option_index == 1
 
 
-def test_answer_evidence_factory_keeps_the_first_reviewer_selection_for_an_index() -> (
-    None
-):
-    """同じoption_indexを複数回選んでも、先に選んだ1件だけを回答に渡す。"""
-    tasks = [
-        collected_task(
-            task_index=0,
-            internal_hits=[
-                internal_hit(
-                    assessment_id=1000, curation_id=1, title="internal-0", summary="s"
-                )
-            ],
-            external_hits=[
-                external_hit("https://example.com/0"),
-                external_hit("https://example.com/1"),
-            ],
-        )
-    ]
-    # 統合index空間: 0が内部、1-2が外部の合計3選択肢。index 1を重複採用する。
-    result = _reviewer_response(
-        [
-            {"option_index": 1, "claim": "first-1", "why_selected": "why"},
-            {"option_index": 1, "claim": "second-1", "why_selected": "why"},
-            {"option_index": 0, "claim": "internal-claim", "why_selected": "why"},
-        ]
-    )
-
+def test_answer_evidence_factory_keeps_the_first_when_claims_repeat() -> None:
+    """同じoption_indexに同じclaimが続いたときは、先の1件だけを残す。"""
     evidence = AnswerEvidence.from_reviewer_response(
-        preparation=EvidenceReviewPreparation.from_tasks(tasks),
-        reviewer_response=result,
+        preparation=_preparation(internal_count=1, external_count=1),
+        reviewer_response=_reviewer_response(
+            [
+                {"option_index": 0, "claim": "same", "why_selected": "internal-first"},
+                {"option_index": 0, "claim": "same", "why_selected": "internal-second"},
+                {"option_index": 1, "claim": "same", "why_selected": "external-first"},
+                {"option_index": 1, "claim": "same", "why_selected": "external-second"},
+            ]
+        ),
     )
 
-    assert (
-        [item.claim for item in evidence.internal_articles],
-        [item.claim for item in evidence.external_sources],
-    ) == (["internal-claim"], ["first-1"])
+    assert len(evidence.internal_articles) == 1
+    assert len(evidence.external_sources) == 1
+    assert evidence.internal_articles[0].why_selected == "internal-first"
+    assert evidence.external_sources[0].why_selected == "external-first"
+
+
+def test_answer_evidence_factory_drops_an_index_when_its_claims_conflict() -> None:
+    """同じoption_indexに異なるclaimが付いたときは、そのoptionを採用しない。"""
+    evidence = AnswerEvidence.from_reviewer_response(
+        preparation=_preparation(internal_count=1, external_count=1),
+        reviewer_response=_reviewer_response(
+            [
+                {"option_index": 0, "claim": "first", "why_selected": "why"},
+                {"option_index": 0, "claim": "second", "why_selected": "why"},
+                {"option_index": 1, "claim": "other", "why_selected": "why"},
+            ]
+        ),
+    )
+
+    assert len(evidence.internal_articles) == 0
+    assert len(evidence.external_sources) == 1
+    assert evidence.external_sources[0].claim == "other"
 
 
 def test_answer_evidence_rejects_more_than_the_answerer_input_limit() -> None:
@@ -142,7 +149,7 @@ def test_answer_evidence_rejects_more_than_the_answerer_input_limit() -> None:
         AnswerEvidence(
             external_sources=[
                 _external_evidence(
-                    url=f"https://example.com/{index}", source_ref=f"0-{index}"
+                    url=f"https://example.com/{index}", option_index=index
                 )
                 for index in range(ANSWER_EVIDENCE_LIMIT + 1)
             ]
@@ -156,8 +163,8 @@ def test_answer_evidence_rejects_duplicate_internal_source_identity_within_task(
     with pytest.raises(ValidationError):
         AnswerEvidence(
             internal_articles=[
-                _internal_article_evidence(curation_id=1, source_ref="0-0"),
-                _internal_article_evidence(curation_id=1, source_ref="0-1"),
+                _internal_article_evidence(curation_id=1, option_index=0),
+                _internal_article_evidence(curation_id=1, option_index=1),
             ]
         )
 
@@ -169,25 +176,21 @@ def test_answer_evidence_rejects_duplicate_external_source_identity_within_task(
     with pytest.raises(ValidationError):
         AnswerEvidence(
             external_sources=[
-                _external_evidence(
-                    url="https://example.com/duplicate", source_ref="0-0"
-                ),
-                _external_evidence(
-                    url="https://example.com/duplicate", source_ref="0-1"
-                ),
+                _external_evidence(url="https://example.com/duplicate", option_index=0),
+                _external_evidence(url="https://example.com/duplicate", option_index=1),
             ]
         )
 
 
-def test_answer_evidence_rejects_duplicate_source_ref_across_source_types() -> None:
-    """内外を問わずsource_refは回答内で一意に保つ。"""
+def test_answer_evidence_rejects_duplicate_option_index_across_source_types() -> None:
+    """同じoption_indexを内外に同時に載せられない。"""
     with pytest.raises(ValidationError):
         AnswerEvidence(
             internal_articles=[
-                _internal_article_evidence(curation_id=1, source_ref="0-0")
+                _internal_article_evidence(curation_id=1, option_index=0)
             ],
             external_sources=[
-                _external_evidence(url="https://example.com/external", source_ref="0-0")
+                _external_evidence(url="https://example.com/external", option_index=0)
             ],
         )
 
@@ -403,13 +406,13 @@ def test_answer_evidence_factory_restores_option_origins_from_indexes() -> None:
     )
 
     assert [
-        (item.title, item.task_index, item.source_ref)
+        (item.title, item.task_index, item.option_index)
         for item in evidence.internal_articles
-    ] == [("A-int-2", 2, "2-1")]
+    ] == [("A-int-2", 2, 1)]
     assert [
-        (item.title, item.task_index, item.source_ref)
+        (item.title, item.task_index, item.option_index)
         for item in evidence.external_sources
-    ] == [("B-ext-2", 5, "5-3")]
+    ] == [("B-ext-2", 5, 3)]
 
 
 def test_answer_evidence_factory_resolves_indexes_in_task_index_order() -> None:
@@ -517,7 +520,7 @@ def test_answer_evidence_factory_maps_inputs_to_internal_evidence_fields() -> No
     assert item.key_points == ["key point one"]
     assert item.published_at == AS_OF
     assert item.task_index == 1
-    assert item.source_ref == "1-0"
+    assert item.option_index == 0
 
 
 def test_answer_evidence_factory_maps_inputs_to_external_evidence_fields() -> None:
@@ -549,7 +552,7 @@ def test_answer_evidence_factory_maps_inputs_to_external_evidence_fields() -> No
     assert item.source_name == "Example News"
     assert item.published_at == AS_OF
     assert item.task_index == 1
-    assert item.source_ref == "1-0"
+    assert item.option_index == 0
 
 
 # --- Evidence Runの確定結果 ----------------------------------------------------
@@ -557,11 +560,9 @@ def test_answer_evidence_factory_maps_inputs_to_external_evidence_fields() -> No
 
 def test_completed_accepts_evidence_and_reviewer_missing() -> None:
     answer_evidence = AnswerEvidence(
-        internal_articles=(
-            _internal_article_evidence(curation_id=1, source_ref="0-0"),
-        ),
+        internal_articles=(_internal_article_evidence(curation_id=1, option_index=0),),
         external_sources=(
-            _external_evidence(url="https://example.com/evidence", source_ref="0-1"),
+            _external_evidence(url="https://example.com/evidence", option_index=1),
         ),
     )
 

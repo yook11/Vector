@@ -31,8 +31,8 @@ __all__ = [
     "external_hit",
     "internal_hit",
     "review_input",
+    "sample_task",
     "task_group",
-    "task_with_hits",
 ]
 
 AS_OF = datetime(2026, 7, 20, 9, 30, tzinfo=UTC)
@@ -104,10 +104,10 @@ def external_hit(url: str, *, title: str | None = None) -> ExternalSearchHit:
     )
 
 
-def task_with_hits(
-    *, task_index: int, internal: int = 0, external: int = 0
+def sample_task(
+    *, task_index: int, internal_count: int = 0, external_count: int = 0
 ) -> CollectedTask:
-    """indexの数勘定だけを扱うテスト用。ヒットの中身は勘定に影響しない捨て値で埋める。"""
+    """サンプルのtaskを1件用意する。各ヒットは出典として互いに区別できる値を持つ。"""
     return collected_task(
         task_index=task_index,
         internal_hits=[
@@ -117,11 +117,11 @@ def task_with_hits(
                 title=f"task{task_index}-internal-{position}",
                 summary="s",
             )
-            for position in range(internal)
+            for position in range(internal_count)
         ],
         external_hits=[
             external_hit(f"https://example.com/task{task_index}/{position}")
-            for position in range(external)
+            for position in range(external_count)
         ],
     )
 
