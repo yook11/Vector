@@ -155,8 +155,8 @@ async def test_invalid_structured_output_maps_to_three_safe_neutral_defects(
 
 
 async def test_negative_index_is_runtime_schema_mismatch() -> None:
-    """ドメイン上無効な負の候補 index を schema mismatch として扱う。"""
-    # D4-S1: 負の candidate_index を持つ具体例として evidence_review の draft を使う
+    """ドメイン上無効な負の選択肢 index を schema mismatch として扱う。"""
+    # D4-S1: 負の option_index を持つ具体例として evidence_review の draft を使う
     # (旧 external_search.ExternalEvidenceSelectionDraft から改名移設)。
     client = FakeDeepSeekClient(
         [
@@ -165,7 +165,7 @@ async def test_negative_index_is_runtime_schema_mismatch() -> None:
                     {
                         "selections": [
                             {
-                                "candidate_index": -1,
+                                "option_index": -1,
                                 "claim": "claim",
                                 "why_selected": "why",
                             }

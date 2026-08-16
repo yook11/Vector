@@ -91,8 +91,8 @@ def test_answer_evidence_factory_excludes_nonexistent_reviewer_selections() -> N
     # index 2はtask0だけで数えると範囲外(候補1件)だが、Run全体では実在する。
     result = _reviewer_response(
         [
-            {"candidate_index": 2, "claim": "adopted", "why_selected": "why"},
-            {"candidate_index": 3, "claim": "nonexistent", "why_selected": "why"},
+            {"option_index": 2, "claim": "adopted", "why_selected": "why"},
+            {"option_index": 3, "claim": "nonexistent", "why_selected": "why"},
         ],
     )
 
@@ -129,9 +129,9 @@ def test_answer_evidence_factory_keeps_the_first_reviewer_selection_for_an_index
     # 統合index空間: 0が内部、1-2が外部の合計3候補。index 1を重複採用する。
     result = _reviewer_response(
         [
-            {"candidate_index": 1, "claim": "first-1", "why_selected": "why"},
-            {"candidate_index": 1, "claim": "second-1", "why_selected": "why"},
-            {"candidate_index": 0, "claim": "internal-claim", "why_selected": "why"},
+            {"option_index": 1, "claim": "first-1", "why_selected": "why"},
+            {"option_index": 1, "claim": "second-1", "why_selected": "why"},
+            {"option_index": 0, "claim": "internal-claim", "why_selected": "why"},
         ]
     )
 
@@ -218,12 +218,12 @@ def test_factory_keeps_first_selection_for_duplicate_url_within_task() -> None:
         reviewer_response=_reviewer_response(
             [
                 {
-                    "candidate_index": 1,
+                    "option_index": 1,
                     "claim": "selected-first",
                     "why_selected": "why",
                 },
                 {
-                    "candidate_index": 0,
+                    "option_index": 0,
                     "claim": "selected-later",
                     "why_selected": "why",
                 },
@@ -256,12 +256,12 @@ def test_factory_does_not_deduplicate_same_url_across_tasks() -> None:
         reviewer_response=_reviewer_response(
             [
                 {
-                    "candidate_index": 0,
+                    "option_index": 0,
                     "claim": "claim-for-goal-A",
                     "why_selected": "why",
                 },
                 {
-                    "candidate_index": 1,
+                    "option_index": 1,
                     "claim": "claim-for-goal-B",
                     "why_selected": "why",
                 },
@@ -304,12 +304,12 @@ def test_factory_keeps_first_selection_for_duplicate_curation_id_within_task() -
         reviewer_response=_reviewer_response(
             [
                 {
-                    "candidate_index": 1,
+                    "option_index": 1,
                     "claim": "selected-first",
                     "why_selected": "why",
                 },
                 {
-                    "candidate_index": 0,
+                    "option_index": 0,
                     "claim": "selected-later",
                     "why_selected": "why",
                 },
@@ -356,12 +356,12 @@ def test_factory_does_not_deduplicate_same_curation_id_across_tasks() -> None:
         reviewer_response=_reviewer_response(
             [
                 {
-                    "candidate_index": 0,
+                    "option_index": 0,
                     "claim": "claim-for-goal-A",
                     "why_selected": "why",
                 },
                 {
-                    "candidate_index": 1,
+                    "option_index": 1,
                     "claim": "claim-for-goal-B",
                     "why_selected": "why",
                 },
@@ -378,8 +378,8 @@ def test_factory_does_not_deduplicate_same_curation_id_across_tasks() -> None:
     }
 
 
-def test_answer_evidence_factory_restores_original_candidates_from_indexes() -> None:
-    """選択indexから、元候補のtask・出典情報を回答用Evidenceへ復元する。"""
+def test_answer_evidence_factory_restores_option_origins_from_indexes() -> None:
+    """選択indexから、出所のtask・出典情報を回答用Evidenceへ復元する。"""
     tasks = [
         collected_task(
             task_index=2,
@@ -402,8 +402,8 @@ def test_answer_evidence_factory_restores_original_candidates_from_indexes() -> 
     ]
     result = _reviewer_response(
         [
-            {"candidate_index": 1, "claim": "A-int-2 claim", "why_selected": "why"},
-            {"candidate_index": 3, "claim": "B-ext-2 claim", "why_selected": "why"},
+            {"option_index": 1, "claim": "A-int-2 claim", "why_selected": "why"},
+            {"option_index": 3, "claim": "B-ext-2 claim", "why_selected": "why"},
         ],
     )
 
@@ -447,7 +447,7 @@ def test_answer_evidence_factory_resolves_indexes_in_task_index_order() -> None:
     ]
     # task_index昇順(0, 1)で結合すればindex 0はA-int、1はB-intになるはず。
     result = _reviewer_response(
-        [{"candidate_index": 0, "claim": "claim", "why_selected": "why"}],
+        [{"option_index": 0, "claim": "claim", "why_selected": "why"}],
     )
 
     evidence = AnswerEvidence.from_reviewer_response(
@@ -482,7 +482,7 @@ def test_answer_evidence_factory_preserves_indexes_around_an_empty_task() -> Non
         ),
     ]
     result = _reviewer_response(
-        [{"candidate_index": 1, "claim": "C-int claim", "why_selected": "why"}],
+        [{"option_index": 1, "claim": "C-int claim", "why_selected": "why"}],
     )
 
     evidence = AnswerEvidence.from_reviewer_response(
@@ -508,7 +508,7 @@ def test_answer_evidence_factory_maps_inputs_to_internal_evidence_fields() -> No
     )
     tasks = [collected_task(task_index=1, internal_hits=[hit])]
     result = _reviewer_response(
-        [{"candidate_index": 0, "claim": "見出しの主張", "why_selected": "選定理由"}],
+        [{"option_index": 0, "claim": "見出しの主張", "why_selected": "選定理由"}],
     )
 
     evidence = AnswerEvidence.from_reviewer_response(
@@ -541,7 +541,7 @@ def test_answer_evidence_factory_maps_inputs_to_external_evidence_fields() -> No
     )
     tasks = [collected_task(task_index=1, external_candidates=[candidate])]
     result = _reviewer_response(
-        [{"candidate_index": 0, "claim": "見出しの主張", "why_selected": "選定理由"}],
+        [{"option_index": 0, "claim": "見出しの主張", "why_selected": "選定理由"}],
     )
 
     evidence = AnswerEvidence.from_reviewer_response(

@@ -17,7 +17,7 @@ from app.agent.evidence_collection.internal_search.contract import (
     InternalArticleSearchHit,
 )
 from app.agent.evidence_review.preparation import (
-    EvidenceCandidateProjection,
+    EvidenceOption,
     EvidenceReviewInput,
     EvidenceReviewTaskGroup,
 )
@@ -26,8 +26,8 @@ from app.analysis.assessment.domain.result import InScope, InScopeCategory
 
 __all__ = [
     "AS_OF",
-    "candidate_input",
     "collected_task",
+    "evidence_option",
     "external_candidate",
     "internal_hit",
     "review_input",
@@ -128,15 +128,15 @@ def task_with_candidates(
     )
 
 
-def candidate_input(
+def evidence_option(
     *,
     index: int,
     title: str,
     source_name: str | None = None,
     published_at: datetime | None = None,
     snippet: str | None = None,
-) -> EvidenceCandidateProjection:
-    return EvidenceCandidateProjection(
+) -> EvidenceOption:
+    return EvidenceOption(
         index=index,
         title=title,
         source_name=source_name,
@@ -149,28 +149,28 @@ def task_group(
     *,
     task_index: int = 0,
     goal: str = "NVIDIA の最新動向を確認する",
-    candidates: tuple[EvidenceCandidateProjection, ...] = (),
+    options: tuple[EvidenceOption, ...] = (),
 ) -> EvidenceReviewTaskGroup:
     return EvidenceReviewTaskGroup(
         task_index=task_index,
         research_goal=goal,
-        candidates=candidates,
+        options=options,
     )
 
 
 def review_input(
     *,
     goal: str = "NVIDIA の最新動向を確認する",
-    candidates: tuple[EvidenceCandidateProjection, ...] = (),
+    options: tuple[EvidenceOption, ...] = (),
     as_of: datetime | None = None,
     task_groups: tuple[EvidenceReviewTaskGroup, ...] | None = None,
 ) -> EvidenceReviewInput:
     """単一groupのEvidenceReviewInputを組む。
 
-    候補の渡し方はRun全体のtask_groups(通しindex空間)のため、
-    goal/candidatesは1個のEvidenceReviewTaskGroupへラップする。
+    選択肢の渡し方はRun全体のtask_groups(通しindex空間)のため、
+    goal/optionsは1個のEvidenceReviewTaskGroupへラップする。
     """
     return EvidenceReviewInput(
-        task_groups=task_groups or (task_group(goal=goal, candidates=candidates),),
+        task_groups=task_groups or (task_group(goal=goal, options=options),),
         as_of=as_of or AS_OF,
     )

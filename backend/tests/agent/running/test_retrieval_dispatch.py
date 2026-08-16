@@ -87,7 +87,7 @@ def _review_draft_selecting(indexes: list[int]) -> Any:
         {
             "selections": [
                 {
-                    "candidate_index": index,
+                    "option_index": index,
                     "claim": f"claim-{index}",
                     "why_selected": "w",
                 }
@@ -106,7 +106,7 @@ def _review_draft_selecting_with_missing(indexes: list[int], missing: list[str])
         {
             "selections": [
                 {
-                    "candidate_index": index,
+                    "option_index": index,
                     "claim": f"claim-{index}",
                     "why_selected": "w",
                 }

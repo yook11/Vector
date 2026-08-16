@@ -9,7 +9,7 @@ from app.agent.evidence_review.answer_evidence import (
     InternalArticleEvidence,
 )
 from app.agent.evidence_review.preparation import (
-    EvidenceCandidateProjection,
+    EvidenceOption,
     EvidenceReviewInput,
     EvidenceReviewPreparation,
     EvidenceReviewTaskGroup,
@@ -24,7 +24,7 @@ from app.agent.evidence_review.selection import (
 
 __all__ = [
     "AnswerEvidence",
-    "EvidenceCandidateProjection",
+    "EvidenceOption",
     "EvidenceRunCompleted",
     "EvidenceRunFailed",
     "EvidenceRunResult",

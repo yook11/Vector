@@ -1,7 +1,4 @@
-"""LLMに渡す前の候補投影と控え。
-
-Reviewerへ見せる列と、番号から元候補を引く控えを同じ採番で保持する。
-"""
+"""LLMに渡す前の選択肢投影と、番号から元の検索結果を引く控え。同じ採番で保持する。"""
 
 from __future__ import annotations
 
@@ -18,17 +15,17 @@ from app.agent.evidence_collection.internal_search.contract import (
 )
 
 __all__ = [
-    "EvidenceCandidateProjection",
+    "EvidenceOption",
+    "EvidenceOptionOrigin",
     "EvidenceReviewInput",
     "EvidenceReviewPreparation",
     "EvidenceReviewTaskGroup",
-    "ReviewCandidateEntry",
 ]
 
 
 @dataclass(frozen=True, slots=True)
-class EvidenceCandidateProjection:
-    """Reviewerへ渡す内外統合candidate projection。URLを含まない。"""
+class EvidenceOption:
+    """Reviewerへ見せる1件。内部記事と外部検索の記事を区別せず、URLを持たない。"""
 
     index: int
     title: str
@@ -39,67 +36,67 @@ class EvidenceCandidateProjection:
 
 @dataclass(frozen=True, slots=True)
 class EvidenceReviewTaskGroup:
-    """Reviewerへ渡す、1 task分のgoalとcandidate projection。"""
+    """1 task分のgoalと、そのtaskに属する選択肢。"""
 
     task_index: int
     research_goal: str
-    candidates: tuple[EvidenceCandidateProjection, ...]
+    options: tuple[EvidenceOption, ...]
 
 
 @dataclass(frozen=True, slots=True)
 class EvidenceReviewInput:
-    """Evidence Reviewer AgentのRun単位1 attempt入力。"""
+    """Reviewer 1 attemptの入力。"""
 
     task_groups: tuple[EvidenceReviewTaskGroup, ...]
     as_of: datetime
 
 
 @dataclass(frozen=True, slots=True)
-class ReviewCandidateEntry:
-    """通し番号1つに対応する、Reviewerへ見せる前の元候補。"""
+class EvidenceOptionOrigin:
+    """レビュアーに見せた番号に対応する元の検索結果。URLを含むため復元専用。"""
 
     index: int
     task_index: int
-    source: InternalArticleSearchHit | ExternalSearchCandidate
+    search_result: InternalArticleSearchHit | ExternalSearchCandidate
 
 
 @dataclass(frozen=True, slots=True)
 class EvidenceReviewPreparation:
-    """Reviewerへの候補投影と、番号から元候補を引く控えを同じ採番で保持する。"""
+    """見せた列と控えを同じ採番で持つ。"""
 
     task_groups: tuple[EvidenceReviewTaskGroup, ...]
-    _candidate_entries: tuple[ReviewCandidateEntry, ...]
+    _option_origins: tuple[EvidenceOptionOrigin, ...]
 
     @classmethod
     def from_tasks(cls, tasks: list[CollectedTask]) -> EvidenceReviewPreparation:
-        """task順・グループ内は内部先で、投影と控えを同時に採番する。"""
+        """task_index順、グループ内は内部記事を先に、選択肢と元の検索結果を同時に採番する。"""
         ordered_tasks = sorted(tasks, key=lambda task: task.task_index)
         review_tasks: list[EvidenceReviewTaskGroup] = []
-        entries: list[ReviewCandidateEntry] = []
+        origins: list[EvidenceOptionOrigin] = []
         for task in ordered_tasks:
-            candidates: list[EvidenceCandidateProjection] = []
+            options: list[EvidenceOption] = []
             for hit in task.internal_hits:
-                index = len(entries)
-                candidates.append(
-                    EvidenceCandidateProjection(
+                index = len(origins)
+                options.append(
+                    EvidenceOption(
                         index=index,
                         title=hit.content.title,
                         source_name=None,
                         published_at=hit.content.published_at,
-                        snippet=_internal_candidate_snippet(hit),
+                        snippet=_internal_option_snippet(hit),
                     )
                 )
-                entries.append(
-                    ReviewCandidateEntry(
+                origins.append(
+                    EvidenceOptionOrigin(
                         index=index,
                         task_index=task.task_index,
-                        source=hit,
+                        search_result=hit,
                     )
                 )
             for candidate in task.external_candidates:
-                index = len(entries)
-                candidates.append(
-                    EvidenceCandidateProjection(
+                index = len(origins)
+                options.append(
+                    EvidenceOption(
                         index=index,
                         title=candidate.title,
                         source_name=candidate.source_name,
@@ -107,33 +104,33 @@ class EvidenceReviewPreparation:
                         snippet=candidate.snippet,
                     )
                 )
-                entries.append(
-                    ReviewCandidateEntry(
+                origins.append(
+                    EvidenceOptionOrigin(
                         index=index,
                         task_index=task.task_index,
-                        source=candidate,
+                        search_result=candidate,
                     )
                 )
             review_tasks.append(
                 EvidenceReviewTaskGroup(
                     task_index=task.task_index,
                     research_goal=task.research_goal,
-                    candidates=tuple(candidates),
+                    options=tuple(options),
                 )
             )
         return cls(
             task_groups=tuple(review_tasks),
-            _candidate_entries=tuple(entries),
+            _option_origins=tuple(origins),
         )
 
-    def resolve_candidate(self, candidate_index: int) -> ReviewCandidateEntry | None:
-        """Reviewerへ見せた番号だけを元候補へ解決する。"""
-        if 0 <= candidate_index < len(self._candidate_entries):
-            return self._candidate_entries[candidate_index]
+    def resolve_option_origin(self, option_index: int) -> EvidenceOptionOrigin | None:
+        """見せた番号だけを元の検索結果へ解決する。"""
+        if 0 <= option_index < len(self._option_origins):
+            return self._option_origins[option_index]
         return None
 
 
-def _internal_candidate_snippet(hit: InternalArticleSearchHit) -> str:
+def _internal_option_snippet(hit: InternalArticleSearchHit) -> str:
     content = hit.content
     if not content.key_points:
         combined = content.summary

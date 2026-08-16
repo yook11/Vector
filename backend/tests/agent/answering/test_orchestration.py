@@ -465,7 +465,7 @@ def _external_runtime_for(
         internal_offset = len(task_internal_hits)
         selections.extend(
             {
-                "candidate_index": group_offset + index,
+                "option_index": group_offset + index,
                 "claim": "internal claim",
                 "why_selected": "internal reviewer explanation",
             }
@@ -473,7 +473,7 @@ def _external_runtime_for(
         )
         selections.extend(
             {
-                "candidate_index": group_offset + internal_offset + index,
+                "option_index": group_offset + internal_offset + index,
                 "claim": evidence.claim,
                 "why_selected": evidence.why_selected,
             }

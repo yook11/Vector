@@ -87,11 +87,11 @@ def _query_response() -> object:
     )
 
 
-def _reviewer_response(*, candidate_indexes: list[int] | None = None) -> object:
-    """D4-S1: 内外統合index空間で選ぶcandidate_indexを呼び出し側が指定する。
+def _reviewer_response(*, option_indexes: list[int] | None = None) -> object:
+    """D4-S1: 内外統合index空間で選ぶoption_indexを呼び出し側が指定する。
 
-    既定の[0]は、internal候補が空(_EmptyInternalSearch)のtaskで唯一の外部候補
-    (index 0)を選ぶ後方互換値。internal候補があるtaskは呼び出し側が明示する。
+    既定の[0]は、internal候補が空(_EmptyInternalSearch)のtaskで唯一の外部の
+    選択肢(index 0)を選ぶ後方互換値。internal候補があるtaskは呼び出し側が明示する。
     """
     return function_response(
         function_name=EVIDENCE_REVIEWER_DEEPSEEK_BINDING.function_name,
@@ -99,11 +99,11 @@ def _reviewer_response(*, candidate_indexes: list[int] | None = None) -> object:
             {
                 "selections": [
                     {
-                        "candidate_index": index,
+                        "option_index": index,
                         "claim": f"{_SELECTION_CLAIM_SENTINEL}_{index}",
                         "why_selected": _SELECTION_WHY_SENTINEL,
                     }
-                    for index in (candidate_indexes or [0])
+                    for index in (option_indexes or [0])
                 ],
                 "missing": [],
             }
@@ -595,13 +595,13 @@ def _two_task_plan(*, task_queries: tuple[list[str], list[str]]) -> SearchPlan:
     )
 
 
-def _review_draft_selecting_all_offered_candidates() -> Any:
-    """S1: 統合index空間の候補(最大4件、2 task×内部2件)を全て採用するdraft。
+def _review_draft_selecting_all_offered_options() -> Any:
+    """S1: 統合index空間の選択肢(最大4件、2 task×内部2件)を全て採用するdraft。
 
-    reviewerはRun単位1回のため、この1つのdraftだけで両taskの候補が
+    reviewerはRun単位1回のため、この1つのdraftだけで両taskの選択肢が
     Run全体の通しindexで選ばれる必要がある(旧: taskごとに(0,1)を別々の
-    callで選ぶ前提だったが、Run単位1回ではそれだと2個目のtaskの候補に
-    通しindexで到達できない)。候補がそれより少ないtask構成では超過indexが
+    callで選ぶ前提だったが、Run単位1回ではそれだと2個目のtaskの選択肢に
+    通しindexで到達できない)。選択肢がそれより少ないtask構成では超過indexが
     範囲外dropとなるだけで安全に使い回せる
     (このモジュールの複数taskにまたがる内部統計テスト専用の軽量fake)。
     """
@@ -611,7 +611,7 @@ def _review_draft_selecting_all_offered_candidates() -> Any:
         {
             "selections": [
                 {
-                    "candidate_index": index,
+                    "option_index": index,
                     "claim": f"claim-{index}",
                     "why_selected": "w",
                 }
@@ -633,7 +633,7 @@ def _two_task_query_failing_runtime() -> ExternalResearchRuntime:
     return ExternalResearchRuntime(
         query_runtime=ScriptedAgentRuntime([query_failure, query_failure]),
         reviewer_runtime=ScriptedAgentRuntime(
-            [_review_draft_selecting_all_offered_candidates()]
+            [_review_draft_selecting_all_offered_options()]
         ),
         search_tool=_Tool(),
     )
@@ -649,9 +649,7 @@ async def test_evidence_run_span_reports_internal_external_counts_and_citations(
     統合index空間(内部0,1・外部2)の全候補を採用するreviewer応答を使う。
     """
     query_client = FakeDeepSeekClient([_query_response()])
-    reviewer_client = FakeDeepSeekClient(
-        [_reviewer_response(candidate_indexes=[0, 1, 2])]
-    )
+    reviewer_client = FakeDeepSeekClient([_reviewer_response(option_indexes=[0, 1, 2])])
     runner, _ = _runner(
         query_client=query_client,
         reviewer_client=reviewer_client,
@@ -727,9 +725,7 @@ async def test_evidence_run_span_marks_zero_cited_explicitly_when_uncited(
     internal_cited_count が不在ではなく明示的な0で付く。
     """
     query_client = FakeDeepSeekClient([_query_response()])
-    reviewer_client = FakeDeepSeekClient(
-        [_reviewer_response(candidate_indexes=[0, 1, 2])]
-    )
+    reviewer_client = FakeDeepSeekClient([_reviewer_response(option_indexes=[0, 1, 2])])
     runner, _ = _runner(
         query_client=query_client,
         reviewer_client=reviewer_client,

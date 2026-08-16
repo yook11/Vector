@@ -3,7 +3,7 @@
 backend/specs/evidence-review-run-scope-slice.md の Invariants / Test contract を
 `AnsweringRunner.run()` の黒箱から検証する。
 
-新しいグループ化candidate入力・Run全体の通し番号indexは、spec上の field名が
+新しいグループ化option入力・Run全体の通し番号indexは、spec上の field名が
 固定されていないため、この正本テストは以下の安定境界だけを覗く:
 - reviewer呼び出し回数と入力(`ScriptedAgentRuntime.calls`)
 - 入力の可視文字列化(`EVIDENCE_REVIEWER_AGENT.prompt.input_renderer`。
@@ -11,10 +11,10 @@ backend/specs/evidence-review-run-scope-slice.md の Invariants / Test contract 
 - reviewerの出力型(`EvidenceReviewerDraft`。仕様上変更されない応答契約)
 - `AnsweringRunner.run()` の最終出力・event(仕様上変更されないSSE/response契約)
 
-複数taskにまたがるcandidate_indexを使うテストでは、
-「research_goalごとにグループ化し、グループ内は内部候補が先・外部候補が後、
+複数taskにまたがるoption_indexを使うテストでは、
+「research_goalごとにグループ化し、グループ内は内部の選択肢が先・外部が後、
 グループはtask_index昇順で結合する」という仕様の唯一自然な解釈から
-Run全体の通し番号を入力fixtureのcandidate件数から導出する。
+Run全体の通し番号を入力fixtureの選択肢件数から導出する。
 reviewer の script は「Run 単位で 1 回」ちょうどの 1 件だけ渡す。2 回目の
 呼び出し (task 単位への退行) は script 枯渇の AssertionError で即 red になる。
 """
@@ -251,7 +251,7 @@ async def test_review_runs_once_for_a_three_task_search_plan() -> None:
         }
     )
     reviewer_runtime = ScriptedAgentRuntime(
-        [_draft([{"candidate_index": 0, "claim": "c", "why_selected": "w"}])]
+        [_draft([{"option_index": 0, "claim": "c", "why_selected": "w"}])]
     )
     runner, _answerer, _factory = _runner(
         plan=_plan(*tasks),
@@ -293,7 +293,7 @@ async def test_review_does_not_start_before_every_tasks_collection_completes() -
         _task("goal-C", ["query-c"]),
     ]
     reviewer_runtime = ScriptedAgentRuntime(
-        [_draft([{"candidate_index": 0, "claim": "c", "why_selected": "w"}])]
+        [_draft([{"option_index": 0, "claim": "c", "why_selected": "w"}])]
     )
     runner, _answerer, _factory = _runner(
         plan=_plan(*tasks),
@@ -375,8 +375,8 @@ async def test_review_still_runs_using_the_candidates_that_survive_a_failed_task
         [
             _draft(
                 [
-                    {"candidate_index": 0, "claim": "A claim", "why_selected": "w"},
-                    {"candidate_index": 1, "claim": "C claim", "why_selected": "w"},
+                    {"option_index": 0, "claim": "A claim", "why_selected": "w"},
+                    {"option_index": 1, "claim": "C claim", "why_selected": "w"},
                 ]
             )
         ]
@@ -407,7 +407,7 @@ async def test_task_with_only_internal_candidates_still_reaches_review() -> None
         }
     )
     reviewer_runtime = ScriptedAgentRuntime(
-        [_draft([{"candidate_index": 0, "claim": "claim", "why_selected": "w"}])]
+        [_draft([{"option_index": 0, "claim": "claim", "why_selected": "w"}])]
     )
     runner, answerer, _factory = _runner(
         plan=_plan(_task("internal only task", ["query-a"])),
@@ -428,7 +428,7 @@ async def test_task_with_only_internal_candidates_still_reaches_review() -> None
 async def test_task_with_only_external_candidates_still_reaches_review() -> None:
     """保証するテスト条件 7(外部のみ)。内部失敗でも精査へ進み外部根拠を返す。"""
     reviewer_runtime = ScriptedAgentRuntime(
-        [_draft([{"candidate_index": 0, "claim": "claim", "why_selected": "w"}])]
+        [_draft([{"option_index": 0, "claim": "claim", "why_selected": "w"}])]
     )
     runner, answerer, _factory = _runner(
         plan=_plan(_task("external only task", ["query-a"])),
@@ -467,7 +467,7 @@ async def test_time_filter_failure_still_activates_external_scope_for_review() -
         }
     )
     reviewer_runtime = ScriptedAgentRuntime(
-        [_draft([{"candidate_index": 0, "claim": "claim", "why_selected": "w"}])]
+        [_draft([{"option_index": 0, "claim": "claim", "why_selected": "w"}])]
     )
     runner, answerer, factory = _runner(
         plan=_plan(
@@ -655,17 +655,17 @@ async def test_selection_restores_the_right_candidate_and_task_across_groups() -
             _draft(
                 [
                     {
-                        "candidate_index": 1,
+                        "option_index": 1,
                         "claim": "A-int-2 claim",
                         "why_selected": "w",
                     },
                     {
-                        "candidate_index": 3,
+                        "option_index": 3,
                         "claim": "B-ext-1 claim",
                         "why_selected": "w",
                     },
                     {
-                        "candidate_index": 5,
+                        "option_index": 5,
                         "claim": "C-ext-1 claim",
                         "why_selected": "w",
                     },
@@ -708,8 +708,8 @@ async def test_same_url_selected_from_two_tasks_keeps_each_task_evidence() -> No
         [
             _draft(
                 [
-                    {"candidate_index": 0, "claim": "task0 view", "why_selected": "w"},
-                    {"candidate_index": 1, "claim": "task1 view", "why_selected": "w"},
+                    {"option_index": 0, "claim": "task0 view", "why_selected": "w"},
+                    {"option_index": 1, "claim": "task1 view", "why_selected": "w"},
                 ]
             )
         ]
@@ -763,9 +763,9 @@ async def test_same_internal_article_from_two_tasks_keeps_each() -> None:
         [
             _draft(
                 [
-                    {"candidate_index": 0, "claim": "first claim", "why_selected": "w"},
+                    {"option_index": 0, "claim": "first claim", "why_selected": "w"},
                     {
-                        "candidate_index": 1,
+                        "option_index": 1,
                         "claim": "second claim",
                         "why_selected": "w",
                     },
@@ -810,8 +810,8 @@ async def test_missing_flows_as_a_single_run_level_list_not_merged_per_task() ->
     )
     intended_draft = _draft(
         [
-            {"candidate_index": 0, "claim": "claim-a", "why_selected": "w"},
-            {"candidate_index": 1, "claim": "claim-b", "why_selected": "w"},
+            {"option_index": 0, "claim": "claim-a", "why_selected": "w"},
+            {"option_index": 1, "claim": "claim-b", "why_selected": "w"},
         ],
         missing=["run全体の不足X"],
     )
@@ -860,8 +860,8 @@ async def test_incomplete_task_adds_the_fixed_phrase_exactly_once() -> None:
         [
             _draft(
                 [
-                    {"candidate_index": 0, "claim": "A claim", "why_selected": "w"},
-                    {"candidate_index": 1, "claim": "B claim", "why_selected": "w"},
+                    {"option_index": 0, "claim": "A claim", "why_selected": "w"},
+                    {"option_index": 1, "claim": "B claim", "why_selected": "w"},
                 ]
             )
         ]
@@ -912,9 +912,7 @@ async def test_reviewer_failure_after_two_attempts_empties_the_whole_run() -> No
         }
     )
     failure = AgentResponseInvalidError(AgentResponseDefect.OUTPUT_SCHEMA_MISMATCH)
-    success_draft = _draft(
-        [{"candidate_index": 0, "claim": "claim", "why_selected": "w"}]
-    )
+    success_draft = _draft([{"option_index": 0, "claim": "claim", "why_selected": "w"}])
     reviewer_runtime = ScriptedAgentRuntime([failure, failure, success_draft])
     events = _Events()
     runner, answerer, _factory = _runner(
@@ -1039,8 +1037,8 @@ async def test_selected_event_fires_once_for_the_whole_run_without_task_index() 
         [
             _draft(
                 [
-                    {"candidate_index": 0, "claim": "A claim", "why_selected": "w"},
-                    {"candidate_index": 1, "claim": "B claim", "why_selected": "w"},
+                    {"option_index": 0, "claim": "A claim", "why_selected": "w"},
+                    {"option_index": 1, "claim": "B claim", "why_selected": "w"},
                 ]
             )
         ]
@@ -1082,12 +1080,12 @@ async def test_evidence_selected_event_count_is_internal_plus_external() -> None
             _draft(
                 [
                     {
-                        "candidate_index": 0,
+                        "option_index": 0,
                         "claim": "internal claim",
                         "why_selected": "why",
                     },
                     {
-                        "candidate_index": 1,
+                        "option_index": 1,
                         "claim": "external claim",
                         "why_selected": "why",
                     },

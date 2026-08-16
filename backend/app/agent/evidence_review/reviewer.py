@@ -1,4 +1,4 @@
-"""Run内の全taskの候補を1回で精査し、Run全体の根拠と不足を見極める
+"""Run内の全taskの選択肢を1回で精査し、Run全体の根拠と不足を見極める
 EvidenceReviewer。
 
 DB / Redis / HTTP client の生成は composition が所有し、Reviewer は渡された
@@ -46,7 +46,7 @@ _REVIEW_ATTEMPT_TIMEOUT_REASON = "reviewer_timeout"
 
 @dataclass(frozen=True, slots=True)
 class EvidenceReviewer:
-    """Run内の全taskの候補を1回の入力で精査する。収集と回答生成は持たない。"""
+    """Run内の全taskの選択肢を1回の入力で精査する。収集と回答生成は持たない。"""
 
     async def review(
         self,

@@ -433,11 +433,7 @@ async def test_external_pipeline_normalizes_and_caps_generated_queries() -> None
         [_query_draft(["  normalized  ", "normalized", long_query, "third", "fourth"])]
     )
     reviewer_runtime = ScriptedAgentRuntime(
-        [
-            _review_draft(
-                [{"candidate_index": 1, "claim": "claim", "why_selected": "why"}]
-            )
-        ]
+        [_review_draft([{"option_index": 1, "claim": "claim", "why_selected": "why"}])]
     )
     tool = _Tool(
         {
@@ -880,10 +876,10 @@ async def test_provider_result_cap_is_applied_before_candidate_pool(
 
     await _run(runner)
 
-    candidates = reviewer_runtime.calls[0].input.task_groups[0].candidates
+    options = reviewer_runtime.calls[0].input.task_groups[0].options
     assert (
-        len(candidates),
-        candidates[-1].title,
+        len(options),
+        options[-1].title,
         _task_reports(captured[0])[0].external_candidate_count,
     ) == (
         EXTERNAL_SEARCH_CANDIDATES_PER_QUERY,
@@ -989,12 +985,12 @@ async def test_workflow_constructs_task_ordered_external_outcome_before_answerin
                     _review_draft(
                         [
                             {
-                                "candidate_index": 0,
+                                "option_index": 0,
                                 "claim": "first claim",
                                 "why_selected": "why",
                             },
                             {
-                                "candidate_index": 1,
+                                "option_index": 1,
                                 "claim": "second claim",
                                 "why_selected": "why",
                             },
@@ -1205,11 +1201,7 @@ async def test_classified_task_failure_does_not_cancel_its_sibling() -> None:
     failed = AgentResponseInvalidError(AgentResponseDefect.RESPONSE_NOT_JSON)
     query_runtime = ScriptedAgentRuntime([failed, _query_draft(["q"])])
     reviewer_runtime = ScriptedAgentRuntime(
-        [
-            _review_draft(
-                [{"candidate_index": 0, "claim": "claim", "why_selected": "why"}]
-            )
-        ]
+        [_review_draft([{"option_index": 0, "claim": "claim", "why_selected": "why"}])]
     )
     runner, answerer, _ = _runner(
         tasks=[_task("failed"), _task("succeeds")],
@@ -1296,9 +1288,9 @@ async def test_external_scope_is_activated_fresh_per_run() -> None:
             [
                 _review_draft(
                     [
-                        {"candidate_index": 0, "claim": "first", "why_selected": "why"},
+                        {"option_index": 0, "claim": "first", "why_selected": "why"},
                         {
-                            "candidate_index": 1,
+                            "option_index": 1,
                             "claim": "second",
                             "why_selected": "why",
                         },

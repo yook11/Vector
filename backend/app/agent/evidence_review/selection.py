@@ -30,11 +30,11 @@ __all__ = [
 
 
 class EvidenceReviewerSelectionDraft(BaseModel):
-    """Reviewerがcandidate indexを参照して返すdraft 1件。"""
+    """Reviewerがoption indexを参照して返すdraft 1件。"""
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
-    candidate_index: int = Field(ge=0)
+    option_index: int = Field(ge=0)
     claim: str
     why_selected: str
 
@@ -53,7 +53,7 @@ class EvidenceReviewerSelection(BaseModel):
 
     model_config = ConfigDict(frozen=True)
 
-    candidate_index: int = Field(ge=0)
+    option_index: int = Field(ge=0)
     claim: str = Field(min_length=1, max_length=EVIDENCE_CLAIM_MAX_CHARS)
     why_selected: str = Field(
         min_length=1,
