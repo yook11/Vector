@@ -138,8 +138,8 @@ class AnswerEvidence(BaseModel):
         internal_articles: list[InternalArticleEvidence] = []
         external_sources: list[ExternalSearchEvidence] = []
         selected_indexes: set[int] = set()
-        seen_curation_ids: set[int] = set()
-        seen_urls: set[str] = set()
+        seen_internal_source_identities: set[tuple[int, int]] = set()
+        seen_external_source_identities: set[tuple[int, str]] = set()
 
         for selection in reviewer_response.selections:
             index = selection.candidate_index
@@ -151,9 +151,10 @@ class AnswerEvidence(BaseModel):
             source_ref = f"{entry.task_index}-{index}"
             if isinstance(entry.source, InternalArticleSearchHit):
                 curation_id = entry.source.article.curation_id
-                if curation_id in seen_curation_ids:
+                source_identity = (entry.task_index, curation_id)
+                if source_identity in seen_internal_source_identities:
                     continue
-                seen_curation_ids.add(curation_id)
+                seen_internal_source_identities.add(source_identity)
                 internal_articles.append(
                     InternalArticleEvidence.from_reviewed_hit(
                         entry.source,
@@ -164,9 +165,10 @@ class AnswerEvidence(BaseModel):
                 )
             else:
                 url = str(entry.source.url)
-                if url in seen_urls:
+                source_identity = (entry.task_index, url)
+                if source_identity in seen_external_source_identities:
                     continue
-                seen_urls.add(url)
+                seen_external_source_identities.add(source_identity)
                 external_sources.append(
                     ExternalSearchEvidence.from_reviewed_candidate(
                         entry.source,
@@ -200,13 +202,21 @@ class AnswerEvidence(BaseModel):
         if self.count > ANSWER_EVIDENCE_LIMIT:
             raise ValueError("answer evidence exceeds input limit")
 
-        curation_ids = [item.curation_id for item in self.internal_articles]
-        if len(curation_ids) != len(set(curation_ids)):
-            raise ValueError("internal answer evidence curation_id must be unique")
+        internal_source_identities = [
+            (item.task_index, item.curation_id) for item in self.internal_articles
+        ]
+        if len(internal_source_identities) != len(set(internal_source_identities)):
+            raise ValueError(
+                "internal answer evidence article must be unique within a task"
+            )
 
-        urls = [str(item.url) for item in self.external_sources]
-        if len(urls) != len(set(urls)):
-            raise ValueError("external answer evidence URL must be unique")
+        external_source_identities = [
+            (item.task_index, str(item.url)) for item in self.external_sources
+        ]
+        if len(external_source_identities) != len(set(external_source_identities)):
+            raise ValueError(
+                "external answer evidence URL must be unique within a task"
+            )
 
         source_refs = [item.source_ref for item in self.internal_articles] + [
             item.source_ref for item in self.external_sources

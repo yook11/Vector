@@ -755,7 +755,7 @@ async def test_evidence_run_span_marks_zero_cited_explicitly_when_uncited(
 async def test_evidence_run_span_reports_post_dedup_internal_total(
     capfire: CaptureLogfire,
 ) -> None:
-    """2taskが同じcuration_idを返しても採用数は重複排除後の件数になる。"""
+    """同じ内部検索の記事でもtaskが異なれば、採用数は候補件数のまま残る。"""
     hits_by_query = {
         "task0 query": [
             _internal_hit(assessment_id=3001, title="task0-shared", curation_id=4200),
@@ -790,11 +790,9 @@ async def test_evidence_run_span_reports_post_dedup_internal_total(
 
     await _run(runner)
 
-    distinct_curation_ids = {
-        hit.article.curation_id for hits in hits_by_query.values() for hit in hits
-    }
+    offered_internal_count = sum(len(hits) for hits in hits_by_query.values())
     attributes = one_span_named(capfire, _RUN_SPAN_NAME)["attributes"]
-    assert attributes.get("internal_evidence_count") == len(distinct_curation_ids)
+    assert attributes.get("internal_evidence_count") == offered_internal_count
     assert "internal_deduplicated_count" not in attributes
 
 
