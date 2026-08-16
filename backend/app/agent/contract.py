@@ -35,7 +35,7 @@ __all__ = [
     "EVIDENCE_REVIEWER_SELECTION_LIMIT",
     "EXTERNAL_QUERY_MAX_CHARS",
     "EXTERNAL_TASK_QUERY_LIMIT",
-    "ExternalSearchCandidatesFetchedEvent",
+    "ExternalSearchHitsFetchedEvent",
     "EvidenceReviewSelectedEvent",
     "ExternalSearchQueriesGeneratedEvent",
     "AnswerSource",
@@ -140,14 +140,14 @@ class ExternalSearchQueriesGeneratedEvent(BaseModel):
     queries: list[NonBlankText] = Field(default_factory=list)
 
 
-class ExternalSearchCandidatesFetchedEvent(BaseModel):
+class ExternalSearchHitsFetchedEvent(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
-    type: Literal["evidence_collection.external_search_candidates_fetched"] = (
-        "evidence_collection.external_search_candidates_fetched"
+    type: Literal["evidence_collection.external_search_hits_fetched"] = (
+        "evidence_collection.external_search_hits_fetched"
     )
     task_index: int = Field(ge=0)
-    candidate_count: int = Field(ge=0)
+    hit_count: int = Field(ge=0)
 
 
 class EvidenceReviewSelectedEvent(BaseModel):
@@ -172,7 +172,7 @@ AnswerProgressEvent = Annotated[
     InternalSearchStartedEvent
     | InternalSearchCompletedEvent
     | ExternalSearchQueriesGeneratedEvent
-    | ExternalSearchCandidatesFetchedEvent
+    | ExternalSearchHitsFetchedEvent
     | EvidenceReviewSelectedEvent
     | QuestionResolvedEvent,
     Field(discriminator="type"),
@@ -251,6 +251,8 @@ EXTERNAL_TASK_QUERY_LIMIT = 3
 EXTERNAL_QUERY_MAX_CHARS = 200
 EVIDENCE_CLAIM_MAX_CHARS = 300
 MISSING_ITEM_MAX_CHARS = 200
+# Reviewerへ見せるsnippetの最大長。外部hitはprovider応答時、内部hitは投影時に切る。
+OPTION_SNIPPET_MAX_CHARS = 500
 
 # Run 単位で Reviewer が返せる選択件数と、Answerer に渡せる一意な根拠件数の上限。
 EVIDENCE_REVIEWER_SELECTION_LIMIT: Final[int] = 15
@@ -280,7 +282,7 @@ class ResearchTaskRecord(BaseModel):
         min_length=1,
         max_length=EXTERNAL_TASK_QUERY_LIMIT,
     )
-    # 外部検索から採用されたclaim。空 = 有用な候補なし。
+    # 外部検索から採用されたclaim。空 = 有用な選択肢なし。
     # Run全体(Checkpoint全task合計)の上限はResearchCheckpointのvalidatorが持つ。
     adopted_claims: tuple[_AdoptedClaim, ...]
 

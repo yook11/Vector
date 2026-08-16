@@ -9,7 +9,7 @@ from app.agent.evidence_collection.news_collector import NewsCollector
 from app.agent.evidence_collection.researcher import (
     ExternalCollectionStatus,
     Researcher,
-    ResearchTaskCandidates,
+    ResearchTaskHits,
 )
 
 __all__ = [
@@ -18,6 +18,6 @@ __all__ = [
     "ExternalCollectionStatus",
     "NewsCollector",
     "Researcher",
-    "ResearchTaskCandidates",
+    "ResearchTaskHits",
     "ResearchTaskReport",
 ]

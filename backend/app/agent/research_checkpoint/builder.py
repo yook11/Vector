@@ -58,7 +58,7 @@ def build_research_checkpoint(
 ) -> ResearchCheckpoint | None:
     """外部検索を実行できたtaskだけを記録する。記録可能taskが0件ならNone。
 
-    候補ゼロでreviewerを実行しなかったRunも、Evidenceと
+    検索ヒットゼロでreviewerを実行しなかったRunも、Evidenceと
     review_missingが空の正常完了として決定的に組み立てる。
     """
     plan_task_indexes = set(range(len(plan.research_tasks)))

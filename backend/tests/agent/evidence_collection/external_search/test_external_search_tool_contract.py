@@ -18,8 +18,8 @@ from pydantic import SecretStr
 
 from app.agent.evidence_collection.external_search import TavilyExternalSearchTool
 from app.agent.evidence_collection.external_search.contract import (
-    ExternalSearchCandidate,
     ExternalSearchDateFilter,
+    ExternalSearchHit,
     ExternalSearchProviderError,
     ExternalSearchTool,
     ExternalSearchToolFailureReason,
@@ -140,7 +140,7 @@ def test_external_search_tool_port_and_tavily_adapter_are_stably_typed() -> None
     }
     assert get_type_hints(ExternalSearchTool.search) == {
         "input": ExternalSearchToolInput,
-        "return": list[ExternalSearchCandidate],
+        "return": list[ExternalSearchHit],
     }
     name_property = ExternalSearchTool.__dict__["name"]
     name_type = get_type_hints(name_property.fget)["return"]
@@ -204,9 +204,7 @@ async def test_successful_tool_call_has_one_safe_client_span_in_answer_trace(
         )
         tool = _tavily_tool(client, api_key=sentinels["secret"])
         with logfire.span(_ANSWERING_SPAN_NAME):
-            candidates = await tool.search(
-                _tool_input(query=sentinels["query"], limit=1)
-            )
+            hits = await tool.search(_tool_input(query=sentinels["query"], limit=1))
 
     span = _one_tool_span(capfire)
     span_dict = one_span_named(capfire, _TOOL_SPAN_NAME)
@@ -222,11 +220,11 @@ async def test_successful_tool_call_has_one_safe_client_span_in_answer_trace(
         capfire.exporter.exported_spans_as_dict(), ensure_ascii=False, default=str
     )
     assert len(requests) == 1
-    assert len(candidates) == 1
+    assert len(hits) == 1
     assert span.kind is SpanKind.CLIENT
-    assert domain_attr_keys(span_dict["attributes"]) == {"tool_name", "candidate_count"}
+    assert domain_attr_keys(span_dict["attributes"]) == {"tool_name", "hit_count"}
     assert span_dict["attributes"]["tool_name"] == "external_search"
-    assert span_dict["attributes"]["candidate_count"] == 1
+    assert span_dict["attributes"]["hit_count"] == 1
     assert span_dict["context"]["trace_id"] == answer_span["context"]["trace_id"]
     assert len(http_spans) == 1
     assert http_spans[0].parent is not None
@@ -263,7 +261,7 @@ async def test_classified_tool_failure_uses_closed_reason_without_exception_even
     assert span.status.status_code is StatusCode.ERROR
     assert span.status.description in (None, "")
     assert attributes["error.type"] == "tavily_search_http_status_429"
-    assert "candidate_count" not in attributes
+    assert "hit_count" not in attributes
     assert not [event for event in span.events if event.name == "exception"]
     assert all(sentinel not in _span_text(span) for sentinel in sentinels.values())
     assert all(sentinel not in trace_dump for sentinel in sentinels.values())
@@ -316,5 +314,5 @@ async def test_tool_timeout_cancels_search_without_fabricating_span_values(
     attributes = dict(span.attributes or {})
     assert client.cancelled is True
     assert attributes["tool_name"] == "external_search"
-    assert "candidate_count" not in attributes
+    assert "hit_count" not in attributes
     assert "error.type" not in attributes

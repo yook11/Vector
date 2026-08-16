@@ -18,12 +18,12 @@ from app.agent.evidence_collection import (
 )
 from app.agent.evidence_collection.external_search import (
     ExternalResearchRuntime,
-    ExternalSearchCandidate,
     ExternalSearchDateFilter,
+    ExternalSearchHit,
     ExternalSearchProviderError,
 )
 from app.agent.evidence_collection.external_search.contract import (
-    EXTERNAL_SEARCH_CANDIDATES_PER_QUERY,
+    EXTERNAL_SEARCH_HITS_PER_QUERY,
 )
 from app.agent.evidence_collection.internal_search import (
     InternalArticleSearchHit,
@@ -66,7 +66,7 @@ from tests.agent.running._harness import (
     execute_run as _run,
 )
 from tests.agent.running._harness import (
-    external_candidate as _candidate,
+    external_hit as _hit,
 )
 from tests.agent.running._harness import (
     external_research_runtime as _runtime,
@@ -202,7 +202,7 @@ class _Factory:
 class _Tool:
     def __init__(
         self,
-        results_by_query: dict[str, list[ExternalSearchCandidate]] | None = None,
+        results_by_query: dict[str, list[ExternalSearchHit]] | None = None,
         *,
         errors_by_query: dict[str, BaseException] | None = None,
         started: asyncio.Event | None = None,
@@ -219,7 +219,7 @@ class _Tool:
     def name(self) -> str:
         return "external_search"
 
-    async def search(self, input: Any) -> list[ExternalSearchCandidate]:
+    async def search(self, input: Any) -> list[ExternalSearchHit]:
         self.calls.append(input)
         try:
             if self._started is not None:
@@ -342,7 +342,7 @@ class _QueryFailureAfterSiblingStartsTool(_Tool):
         self.sibling_finished = asyncio.Event()
         self.sibling_cancelled = False
 
-    async def search(self, input: Any) -> list[ExternalSearchCandidate]:
+    async def search(self, input: Any) -> list[ExternalSearchHit]:
         self.calls.append(input)
         if input.query == "failing":
             await self.sibling_started.wait()
@@ -437,9 +437,9 @@ async def test_external_pipeline_normalizes_and_caps_generated_queries() -> None
     )
     tool = _Tool(
         {
-            "normalized": [_candidate("https://example.com/first")],
-            "x" * 200: [_candidate("https://example.com/second")],
-            "third": [_candidate("https://example.com/third")],
+            "normalized": [_hit("https://example.com/first")],
+            "x" * 200: [_hit("https://example.com/second")],
+            "third": [_hit("https://example.com/third")],
         }
     )
     runner, answerer, _ = _runner(
@@ -473,8 +473,8 @@ async def test_external_pipeline_passes_resolved_filter_to_every_tool_call() -> 
     )
     tool = _Tool(
         {
-            "first": [_candidate("https://example.com/first")],
-            "second": [_candidate("https://example.com/second")],
+            "first": [_hit("https://example.com/first")],
+            "second": [_hit("https://example.com/second")],
         }
     )
     runner, _, _ = _runner(
@@ -511,7 +511,7 @@ async def test_external_pipeline_passes_resolved_filter_to_every_tool_call() -> 
 
 @pytest.mark.asyncio
 async def test_external_pipeline_passes_explicit_none_filter_to_tool() -> None:
-    tool = _Tool({"query": [_candidate("https://example.com/no-filter")]})
+    tool = _Tool({"query": [_hit("https://example.com/no-filter")]})
     runner, _, _ = _runner(
         tasks=[_task("no publication filter")],
         runtime=_runtime(
@@ -778,8 +778,8 @@ async def test_time_filter_resolution_failure_closes_external_branch_before_acti
     assert (
         # D4-S1: reviewerがLLM runtimeを必要とするため、time filter失敗でも
         # external runtime scopeは常にactivateされる(外部query/HTTP検索だけを
-        # skipする)。ただしinternal候補も空(_EmptyInternalSearch)のため両方
-        # 候補ゼロとなりreviewer自体は呼ばれない(D4-S2: review=skipped_empty)。
+        # skipする)。ただしinternalヒットも空(_EmptyInternalSearch)のため両方
+        # ヒットゼロとなりreviewer自体は呼ばれない(D4-S2: review=skipped_empty)。
         len(factory.scopes),
         factory.scopes[0].entered,
         factory.scopes[0].exit_calls,
@@ -796,8 +796,8 @@ async def test_time_filter_resolution_failure_closes_external_branch_before_acti
                 report.time_filter_failure_reason,
                 report.generated_queries,
                 report.provider_failed_query_count,
-                report.internal_candidate_count,
-                report.external_candidate_count,
+                report.internal_hit_count,
+                report.external_hit_count,
             )
             for report in reports
         ],
@@ -853,7 +853,7 @@ async def test_time_filter_resolution_failure_closes_external_branch_before_acti
 
 
 @pytest.mark.asyncio
-async def test_provider_result_cap_is_applied_before_candidate_pool(
+async def test_provider_result_cap_is_applied_before_external_hits(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     captured = _capture_external_outcome(monkeypatch)
@@ -866,8 +866,8 @@ async def test_provider_result_cap_is_applied_before_candidate_pool(
             tool=_Tool(
                 {
                     "q": [
-                        _candidate(f"https://example.com/candidate-{index}")
-                        for index in range(EXTERNAL_SEARCH_CANDIDATES_PER_QUERY + 3)
+                        _hit(f"https://example.com/hit-{index}")
+                        for index in range(EXTERNAL_SEARCH_HITS_PER_QUERY + 3)
                     ]
                 }
             ),
@@ -880,11 +880,11 @@ async def test_provider_result_cap_is_applied_before_candidate_pool(
     assert (
         len(options),
         options[-1].title,
-        _task_reports(captured[0])[0].external_candidate_count,
+        _task_reports(captured[0])[0].external_hit_count,
     ) == (
-        EXTERNAL_SEARCH_CANDIDATES_PER_QUERY,
-        f"candidate-{EXTERNAL_SEARCH_CANDIDATES_PER_QUERY - 1}",
-        EXTERNAL_SEARCH_CANDIDATES_PER_QUERY,
+        EXTERNAL_SEARCH_HITS_PER_QUERY,
+        f"hit-{EXTERNAL_SEARCH_HITS_PER_QUERY - 1}",
+        EXTERNAL_SEARCH_HITS_PER_QUERY,
     )
 
 
@@ -925,7 +925,7 @@ async def test_partial_provider_failure_continues_but_all_failure_skips_reviewer
     )
     reviewer_runtime = ScriptedAgentRuntime([_review_draft([])])
     tool = _Tool(
-        {"good": [_candidate("https://example.com/good")]},
+        {"good": [_hit("https://example.com/good")]},
         errors_by_query={"bad": provider_error},
     )
     runner, answerer, _ = _runner(
@@ -948,7 +948,7 @@ async def test_partial_provider_failure_continues_but_all_failure_skips_reviewer
             (
                 report.external_collection,
                 report.provider_failed_query_count,
-                report.external_candidate_count,
+                report.external_hit_count,
             )
             for report in _task_reports(captured[0])
         ],
@@ -978,7 +978,7 @@ async def test_workflow_constructs_task_ordered_external_outcome_before_answerin
                 [_query_draft(["q1"]), _query_draft(["q2"])]
             ),
             # S1: reviewerはRun単位1回。統合index空間(仮定: task昇順)ではtask0の
-            # 唯一の候補が0、task1の唯一の候補が1になる。task単位で呼ぶ旧経路が
+            # 唯一の選択肢が0、task1の唯一の選択肢が1になる。task単位で呼ぶ旧経路が
             # 残っていても2件目のcallがscript枯渇crashにならないよう空draftを足す。
             reviewer_runtime=ScriptedAgentRuntime(
                 [
@@ -1001,8 +1001,8 @@ async def test_workflow_constructs_task_ordered_external_outcome_before_answerin
             ),
             tool=_Tool(
                 {
-                    "q1": [_candidate("https://example.com/shared", title="first")],
-                    "q2": [_candidate("https://example.com/shared", title="second")],
+                    "q1": [_hit("https://example.com/shared", title="first")],
+                    "q2": [_hit("https://example.com/shared", title="second")],
                 }
             ),
         ),
@@ -1023,7 +1023,7 @@ async def test_workflow_constructs_task_ordered_external_outcome_before_answerin
                 report.task_index,
                 report.external_collection,
                 report.generated_queries,
-                report.external_candidate_count,
+                report.external_hit_count,
             )
             for report in reports
         ],
@@ -1047,7 +1047,7 @@ async def test_workflow_constructs_task_ordered_external_outcome_before_answerin
 async def test_collection_events_are_per_task_causal_with_their_contract_payloads() -> (
     None
 ):
-    """収集event(queries_generated → candidates_fetched)がtaskごとに正しい
+    """収集event(queries_generated → hits_fetched)がtaskごとに正しい
 
     順序・payloadで出ることを保証する(不変条件ごとに所有テストを決める)。
     S1でreviewerはRun単位1回になり、全taskの収集完了を待ってから走るため、
@@ -1068,8 +1068,8 @@ async def test_collection_events_are_per_task_causal_with_their_contract_payload
             reviewer_runtime=reviewer_runtime,
             tool=_Tool(
                 {
-                    "q1": [_candidate("https://example.com/q1")],
-                    "q2": [_candidate("https://example.com/q2")],
+                    "q1": [_hit("https://example.com/q1")],
+                    "q2": [_hit("https://example.com/q2")],
                 }
             ),
         ),
@@ -1085,7 +1085,7 @@ async def test_collection_events_are_per_task_causal_with_their_contract_payload
         if event.type
         in {
             "evidence_collection.external_search_queries_generated",
-            "evidence_collection.external_search_candidates_fetched",
+            "evidence_collection.external_search_hits_fetched",
         }
     ]
     assert collection_events == [
@@ -1095,9 +1095,9 @@ async def test_collection_events_are_per_task_causal_with_their_contract_payload
             "queries": ["q1"],
         },
         {
-            "type": "evidence_collection.external_search_candidates_fetched",
+            "type": "evidence_collection.external_search_hits_fetched",
             "task_index": 0,
-            "candidate_count": 1,
+            "hit_count": 1,
         },
         {
             "type": "evidence_collection.external_search_queries_generated",
@@ -1105,9 +1105,9 @@ async def test_collection_events_are_per_task_causal_with_their_contract_payload
             "queries": ["q2"],
         },
         {
-            "type": "evidence_collection.external_search_candidates_fetched",
+            "type": "evidence_collection.external_search_hits_fetched",
             "task_index": 1,
-            "candidate_count": 1,
+            "hit_count": 1,
         },
     ]
 
@@ -1119,7 +1119,7 @@ async def test_external_pipeline_is_a_noop_for_events_when_reporter_is_none() ->
         runtime=_runtime(
             query_runtime=ScriptedAgentRuntime([_query_draft(["q"])]),
             reviewer_runtime=ScriptedAgentRuntime([_review_draft([])]),
-            tool=_Tool({"q": [_candidate("https://example.com/q")]}),
+            tool=_Tool({"q": [_hit("https://example.com/q")]}),
         ),
         events=None,
     )
@@ -1208,7 +1208,7 @@ async def test_classified_task_failure_does_not_cancel_its_sibling() -> None:
         runtime=_runtime(
             query_runtime=query_runtime,
             reviewer_runtime=reviewer_runtime,
-            tool=_Tool({"q": [_candidate("https://example.com/q")]}),
+            tool=_Tool({"q": [_hit("https://example.com/q")]}),
         ),
         requested_agent_count=1,
     )
@@ -1278,7 +1278,7 @@ async def test_unclassified_query_failure_joins_sibling_before_reraise() -> None
 async def test_external_scope_is_activated_fresh_per_run() -> None:
     """external runtime scopeはrunごとに新しくactivateされ、終了時に必ずexitする。
 
-    同URL外部候補が両方残ること(URL重複排除の廃止)の正本は
+    同URL外部ヒットが両方残ること(URL重複排除の廃止)の正本は
     test_evidence_review.py の same_url テストが持つ。
     """
     tasks = [_task("first"), _task("second")]
@@ -1302,8 +1302,8 @@ async def test_external_scope_is_activated_fresh_per_run() -> None:
     def _tool() -> _Tool:
         return _Tool(
             {
-                "q1": [_candidate("https://example.com/shared", title="first")],
-                "q2": [_candidate("https://example.com/shared", title="second")],
+                "q1": [_hit("https://example.com/shared", title="first")],
+                "q2": [_hit("https://example.com/shared", title="second")],
             }
         )
 

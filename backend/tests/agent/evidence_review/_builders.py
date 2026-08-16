@@ -10,7 +10,7 @@ from datetime import UTC, datetime
 
 from app.agent.evidence_collection.contract import CollectedTask, ResearchTaskReport
 from app.agent.evidence_collection.external_search.contract import (
-    ExternalSearchCandidate,
+    ExternalSearchHit,
 )
 from app.agent.evidence_collection.internal_search.contract import (
     InternalArticleContent,
@@ -28,11 +28,11 @@ __all__ = [
     "AS_OF",
     "collected_task",
     "evidence_option",
-    "external_candidate",
+    "external_hit",
     "internal_hit",
     "review_input",
     "task_group",
-    "task_with_candidates",
+    "task_with_hits",
 ]
 
 AS_OF = datetime(2026, 7, 20, 9, 30, tzinfo=UTC)
@@ -43,24 +43,24 @@ def collected_task(
     task_index: int,
     research_goal: str = "goal",
     internal_hits: list[InternalArticleSearchHit] | None = None,
-    external_candidates: list[ExternalSearchCandidate] | None = None,
+    external_hits: list[ExternalSearchHit] | None = None,
 ) -> CollectedTask:
-    hits = internal_hits or []
-    candidates = external_candidates or []
+    internal = internal_hits or []
+    external = external_hits or []
     # report は精査が読まない収集診断のため、成功形の最小値で埋める。
     return CollectedTask(
         task_index=task_index,
         research_goal=research_goal,
-        internal_hits=hits,
-        external_candidates=candidates,
+        internal_hits=internal,
+        external_hits=external,
         executed_queries=(),
         report=ResearchTaskReport(
             task_index=task_index,
             research_goal=research_goal,
             internal_collection="succeeded",
             external_collection="succeeded",
-            internal_candidate_count=len(hits),
-            external_candidate_count=len(candidates),
+            internal_hit_count=len(internal),
+            external_hit_count=len(external),
         ),
     )
 
@@ -94,10 +94,8 @@ def internal_hit(
     )
 
 
-def external_candidate(
-    url: str, *, title: str | None = None
-) -> ExternalSearchCandidate:
-    return ExternalSearchCandidate(
+def external_hit(url: str, *, title: str | None = None) -> ExternalSearchHit:
+    return ExternalSearchHit(
         url=url,
         title=title or url.rsplit("/", maxsplit=1)[-1],
         snippet="external snippet",
@@ -106,10 +104,10 @@ def external_candidate(
     )
 
 
-def task_with_candidates(
+def task_with_hits(
     *, task_index: int, internal: int = 0, external: int = 0
 ) -> CollectedTask:
-    """indexの数勘定だけを扱うテスト用。候補の中身は勘定に影響しない捨て値で埋める。"""
+    """indexの数勘定だけを扱うテスト用。ヒットの中身は勘定に影響しない捨て値で埋める。"""
     return collected_task(
         task_index=task_index,
         internal_hits=[
@@ -121,8 +119,8 @@ def task_with_candidates(
             )
             for position in range(internal)
         ],
-        external_candidates=[
-            external_candidate(f"https://example.com/task{task_index}/{position}")
+        external_hits=[
+            external_hit(f"https://example.com/task{task_index}/{position}")
             for position in range(external)
         ],
     )

@@ -15,10 +15,10 @@ from opentelemetry.trace import SpanKind, StatusCode
 from pydantic import SecretStr, ValidationError
 
 from app.agent.evidence_collection.external_search.contract import (
-    CANDIDATE_SNIPPET_MAX_CHARS,
     EXTERNAL_SEARCH_TOOL_NAME,
-    ExternalSearchCandidate,
+    OPTION_SNIPPET_MAX_CHARS,
     ExternalSearchDateFilter,
+    ExternalSearchHit,
     ExternalSearchProviderError,
     ExternalSearchToolFailureReason,
     ExternalSearchToolInput,
@@ -37,7 +37,7 @@ TAVILY_SEARCH_URL = "https://api.tavily.com/search"
 TAVILY_REQUEST_TIMEOUT_SECONDS = 10
 TAVILY_MAX_RESULTS_LIMIT = 20
 _TOOL_SPAN_NAME: Final[str] = "external_search_tool_call"
-_MISSING_CANDIDATES = object()
+_MISSING_HITS = object()
 
 
 class TavilyHttpClient(Protocol):
@@ -52,7 +52,7 @@ class TavilyHttpClient(Protocol):
 
 
 class TavilyExternalSearchTool:
-    """完成済みqueryをTavilyで実行し、検証済みcandidateへ変換する。"""
+    """完成済みqueryをTavilyで実行し、検証済みhitへ変換する。"""
 
     __slots__ = ("_api_key", "_client")
 
@@ -69,36 +69,36 @@ class TavilyExternalSearchTool:
     async def search(
         self,
         input: ExternalSearchToolInput,
-    ) -> list[ExternalSearchCandidate]:
+    ) -> list[ExternalSearchHit]:
         if input.limit <= 0:
             raise ValueError("limit must be greater than 0")
 
         classified_error: ExternalSearchProviderError | None = None
-        candidates: list[ExternalSearchCandidate] | object = _MISSING_CANDIDATES
+        hits: list[ExternalSearchHit] | object = _MISSING_HITS
         with logfire.span(
             _TOOL_SPAN_NAME,
             _span_kind=SpanKind.CLIENT,
             tool_name=self.name,
         ) as span:
             try:
-                candidates = await self._execute(input)
+                hits = await self._execute(input)
             except ExternalSearchProviderError as exc:
                 classified_error = exc
                 span.set_attribute(ERROR_TYPE, exc.reason)
                 span.set_status(StatusCode.ERROR)
             else:
-                span.set_attribute("candidate_count", len(candidates))
+                span.set_attribute("hit_count", len(hits))
 
         if classified_error is not None:
             raise classified_error
-        if candidates is _MISSING_CANDIDATES:
-            raise RuntimeError("Tavily tool completed without candidates")
-        return cast(list[ExternalSearchCandidate], candidates)
+        if hits is _MISSING_HITS:
+            raise RuntimeError("Tavily tool completed without hits")
+        return cast(list[ExternalSearchHit], hits)
 
     async def _execute(
         self,
         input: ExternalSearchToolInput,
-    ) -> list[ExternalSearchCandidate]:
+    ) -> list[ExternalSearchHit]:
         response = await self._post_search(
             query=input.query,
             limit=input.limit,
@@ -111,12 +111,12 @@ class TavilyExternalSearchTool:
                 reason=ExternalSearchToolFailureReason.INVALID_RESULTS
             )
 
-        candidates: list[ExternalSearchCandidate] = []
+        hits: list[ExternalSearchHit] = []
         for result in results:
-            candidate = _candidate_from_result(result)
-            if candidate is not None:
-                candidates.append(candidate)
-        return candidates[: input.limit]
+            hit = _hit_from_result(result)
+            if hit is not None:
+                hits.append(hit)
+        return hits[: input.limit]
 
     async def _post_search(
         self,
@@ -177,7 +177,7 @@ def _response_json(response: httpx.Response) -> dict[str, Any]:
     return data
 
 
-def _candidate_from_result(result: object) -> ExternalSearchCandidate | None:
+def _hit_from_result(result: object) -> ExternalSearchHit | None:
     if not isinstance(result, Mapping):
         return None
 
@@ -191,7 +191,7 @@ def _candidate_from_result(result: object) -> ExternalSearchCandidate | None:
 
     snippet = _clean_optional_snippet(result.get("content"))
     published_at = _parse_published_date(result.get("published_date"))
-    return ExternalSearchCandidate(
+    return ExternalSearchHit(
         url=url,
         title=title,
         snippet=snippet,
@@ -213,7 +213,7 @@ def _clean_optional_snippet(value: object) -> str | None:
     value = value.strip()
     if not value:
         return None
-    return value[:CANDIDATE_SNIPPET_MAX_CHARS]
+    return value[:OPTION_SNIPPET_MAX_CHARS]
 
 
 def _safe_url(value: object) -> SafeUrl | None:

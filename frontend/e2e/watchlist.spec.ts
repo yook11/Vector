@@ -36,11 +36,11 @@ test.describe("Watchlist add/remove flow", () => {
     const firstUnwatchedLocator = page
       .locator('button[aria-pressed="false"]')
       .first();
-    const candidateCount = await page
+    const hitCount = await page
       .locator('button[aria-pressed="false"]')
       .count();
     test.skip(
-      candidateCount === 0,
+      hitCount === 0,
       "ニュース一覧上に未 watch 記事が無いため skip (seed 依存)",
     );
     const targetButton = await firstUnwatchedLocator.elementHandle();
@@ -72,11 +72,11 @@ test.describe("Watchlist add/remove flow", () => {
     await expect(
       page.getByRole("link", { name: "Vector ニュースへ" }),
     ).toBeVisible();
-    const candidateCount = await page
+    const hitCount = await page
       .locator('button[aria-pressed="false"]')
       .count();
     test.skip(
-      candidateCount === 0,
+      hitCount === 0,
       "ニュース一覧上に未 watch 記事が無いため skip (seed 依存)",
     );
     // aria 状態で locator 集合が変わるため、同一 DOM node を追う。

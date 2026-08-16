@@ -21,7 +21,7 @@ from app.agent.evidence_collection import NewsCollector, Researcher
 from app.agent.evidence_collection.external_search import (
     ExternalQueryDraft,
     ExternalResearchRuntime,
-    ExternalSearchCandidate,
+    ExternalSearchHit,
 )
 from app.agent.evidence_collection.internal_search import (
     InternalArticleContent,
@@ -206,7 +206,7 @@ class _RetrievalFixture:
 
     internal_hitsはreviewer精査前のraw hit(FakeInternalSearchが返す値)であり、
     production側のinternal_evidence(精査後、claim付き)とは型が違う。
-    このfixtureのinternal_hits/external_searchは「reviewerが全候補を採用した
+    このfixtureのinternal_hits/external_searchは「reviewerが全選択肢を採用した
     場合に到達してほしい最終形」を表し、_external_runtime_forがそれに対応する
     reviewer draft(統合index空間で内部→外部の順に全採用)を組み立てる。
     D4-S2: run単位のcollection_failuresは廃止されたため、このfixtureも持たない
@@ -368,14 +368,14 @@ class FakeFailingReviewerRuntime:
         raise self._error
 
 
-class _ZeroCandidateExternalTool:
-    """全queryに対して常に空候補を返す(全task候補ゼロ経路の検証用)。"""
+class _ZeroHitExternalTool:
+    """全queryに対して常に空のヒットを返す(全taskヒットゼロ経路の検証用)。"""
 
     @property
     def name(self) -> str:
         return "external_search"
 
-    async def search(self, input: object) -> list[ExternalSearchCandidate]:
+    async def search(self, input: object) -> list[ExternalSearchHit]:
         del input
         return []
 
@@ -388,22 +388,20 @@ class _UnexpectedReviewerRuntime:
     ) -> EvidenceReviewerDraft:
         del agent, input, attempt_number
         raise AssertionError(
-            "reviewer must not be called when all tasks have zero candidates"
+            "reviewer must not be called when all tasks have zero hits"
         )
 
 
 class FakeExternalTool:
-    def __init__(
-        self, candidates_by_query: dict[str, list[ExternalSearchCandidate]]
-    ) -> None:
-        self._candidates_by_query = candidates_by_query
+    def __init__(self, hits_by_query: dict[str, list[ExternalSearchHit]]) -> None:
+        self._hits_by_query = hits_by_query
 
     @property
     def name(self) -> str:
         return "external_search"
 
-    async def search(self, input: object) -> list[ExternalSearchCandidate]:
-        return list(self._candidates_by_query[input.query])  # type: ignore[union-attr]
+    async def search(self, input: object) -> list[ExternalSearchHit]:
+        return list(self._hits_by_query[input.query])  # type: ignore[union-attr]
 
 
 def _external_runtime_for(
@@ -416,10 +414,10 @@ def _external_runtime_for(
 ) -> ExternalResearchRuntime:
     """S1: reviewerがRun全体の統合index空間(task_index昇順、group内は内部先・
 
-    外部後)の全候補を採用する単一draftを組む(仕様「候補の渡し方」)。
+    外部後)の全選択肢を採用する単一draftを組む(仕様「選択肢の渡し方」)。
 
     internal_hitsはtask_index 0にのみ帰属させる(このmoduleのfixtureは
-    複数taskへの内部候補配分を表現しないため、既存の単一task想定を維持する)。
+    複数taskへの内部ヒット配分を表現しないため、既存の単一task想定を維持する)。
     """
     if outcome.external_search is None:
         raise AssertionError("external outcome must be supplied for an external plan")
@@ -432,7 +430,7 @@ def _external_runtime_for(
         report.task_index: report for report in outcome.external_search.task_reports
     }
     queries_by_goal: dict[str, str] = {}
-    candidates_by_query: dict[str, list[ExternalSearchCandidate]] = {}
+    hits_by_query: dict[str, list[ExternalSearchHit]] = {}
     selections: list[dict[str, object]] = []
     missing: list[str] = []
     next_index = 0
@@ -441,8 +439,8 @@ def _external_runtime_for(
         query = f"fixture-query-{task_index}"
         task_internal_hits = task0_internal_hits if task_index == 0 else []
         task_evidence = evidence_by_task.get(task_index, [])
-        candidates = [
-            ExternalSearchCandidate(
+        hits = [
+            ExternalSearchHit(
                 url=evidence.url,
                 title=evidence.title,
                 snippet=evidence.snippet,
@@ -451,16 +449,16 @@ def _external_runtime_for(
             )
             for evidence in task_evidence
         ]
-        if not candidates:
-            candidates = [
-                ExternalSearchCandidate(
+        if not hits:
+            hits = [
+                ExternalSearchHit(
                     url=f"https://example.com/fixture-{task_index}",
                     title=f"fixture {task_index}",
                 )
             ]
         report = reports_by_task.get(task_index)
         queries_by_goal[task.research_goal] = query
-        candidates_by_query[query] = candidates
+        hits_by_query[query] = hits
         group_offset = next_index
         internal_offset = len(task_internal_hits)
         selections.extend(
@@ -479,7 +477,7 @@ def _external_runtime_for(
             }
             for index, evidence in enumerate(task_evidence)
         )
-        next_index = group_offset + internal_offset + len(candidates)
+        next_index = group_offset + internal_offset + len(hits)
         if report is not None:
             missing.extend(report.missing)
 
@@ -493,7 +491,7 @@ def _external_runtime_for(
             if reviewer_runtime is not None
             else FakeEvidenceReviewerRuntime(draft, timeline=timeline)
         ),  # type: ignore[arg-type]
-        search_tool=FakeExternalTool(candidates_by_query),  # type: ignore[arg-type]
+        search_tool=FakeExternalTool(hits_by_query),  # type: ignore[arg-type]
     )
 
 
@@ -812,8 +810,8 @@ async def test_answer_evidence_plan_orders_progress_and_port_calls() -> None:
 
 
 @pytest.mark.asyncio
-async def test_answer_evidence_plan_skips_evidence_review_for_zero_candidates() -> None:
-    """全taskの候補が内外ともゼロのRunはreviewerを呼ばずに閉じるため、
+async def test_answer_evidence_plan_skips_evidence_review_for_zero_hits() -> None:
+    """全taskのヒットが内外ともゼロのRunはreviewerを呼ばずに閉じるため、
 
     evidence_reviewは報告されず、evidence_collectionの次がansweringになる
     (answering_runner.py:345-353相当の経路)。
@@ -821,15 +819,15 @@ async def test_answer_evidence_plan_skips_evidence_review_for_zero_candidates() 
     timeline = CallTimeline()
     progress = FakeProgressReporter(timeline=timeline)
     task = _task(0)
-    zero_candidate_runtime = ExternalResearchRuntime(
+    zero_hit_runtime = ExternalResearchRuntime(
         query_runtime=FakeExternalQueryRuntime({task.research_goal: "fixture-query"}),
         reviewer_runtime=_UnexpectedReviewerRuntime(),  # type: ignore[arg-type]
-        search_tool=_ZeroCandidateExternalTool(),  # type: ignore[arg-type]
+        search_tool=_ZeroHitExternalTool(),  # type: ignore[arg-type]
     )
     orchestrator, _, _, evidence_answerer, _ = _orchestrator(
         plan=_search_plan(tasks=[task]),
         outcome=_RetrievalFixture(internal_hits=[]),
-        external_runtime_override=zero_candidate_runtime,
+        external_runtime_override=zero_hit_runtime,
         draft=_draft(
             answer=(
                 "検索で引用できる根拠は見つかりませんでした。"

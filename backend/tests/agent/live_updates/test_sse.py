@@ -15,7 +15,7 @@ import pytest
 from starlette.requests import ClientDisconnect
 
 import app.agent.live_updates.sse as sse_module
-from app.agent.contract import ExternalSearchCandidatesFetchedEvent
+from app.agent.contract import ExternalSearchHitsFetchedEvent
 from app.agent.live_updates.sse import (
     AGENT_RUN_SSE_LEASE_TTL_SECONDS,
     AGENT_RUN_SSE_PROCESS_CONNECTION_LIMIT,
@@ -128,18 +128,18 @@ async def _collect(connection: AgentRunSseConnection) -> list[bytes]:
         ),
         (
             AgentRunLiveStreamActivityEvent(
-                activity=ExternalSearchCandidatesFetchedEvent(
+                activity=ExternalSearchHitsFetchedEvent(
                     task_index=3,
-                    candidate_count=12,
+                    hit_count=12,
                 )
             ),
             "activity",
             {
                 "attemptEpoch": 2,
                 "activity": {
-                    "type": "evidence_collection.external_search_candidates_fetched",
+                    "type": "evidence_collection.external_search_hits_fetched",
                     "taskIndex": 3,
-                    "candidateCount": 12,
+                    "hitCount": 12,
                 },
             },
         ),

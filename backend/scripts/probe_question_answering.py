@@ -32,7 +32,7 @@ from app.agent.contract import (
     AnswerQuestionResult,
     AnswerSource,
     EvidenceReviewSelectedEvent,
-    ExternalSearchCandidatesFetchedEvent,
+    ExternalSearchHitsFetchedEvent,
     ExternalSearchQueriesGeneratedEvent,
 )
 from app.agent.evidence_collection import NewsCollector, Researcher
@@ -360,7 +360,7 @@ def _print_collection_progress(events: Sequence[AnswerProgressEvent]) -> None:
         for event in events
         if isinstance(
             event,
-            ExternalSearchQueriesGeneratedEvent | ExternalSearchCandidatesFetchedEvent,
+            ExternalSearchQueriesGeneratedEvent | ExternalSearchHitsFetchedEvent,
         )
     ]
     if not collection_events:
@@ -371,8 +371,8 @@ def _print_collection_progress(events: Sequence[AnswerProgressEvent]) -> None:
         match event:
             case ExternalSearchQueriesGeneratedEvent():
                 print(f"  [{event.task_index}] generated_queries={list(event.queries)}")
-            case ExternalSearchCandidatesFetchedEvent():
-                print(f"  [{event.task_index}] candidate_count={event.candidate_count}")
+            case ExternalSearchHitsFetchedEvent():
+                print(f"  [{event.task_index}] hit_count={event.hit_count}")
 
 
 def _print_review_progress(events: Sequence[AnswerProgressEvent]) -> None:

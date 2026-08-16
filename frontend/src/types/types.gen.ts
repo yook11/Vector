@@ -759,13 +759,13 @@ export type ResearchRunEvidenceReviewSelectedEvent = {
 };
 
 /**
- * ResearchRunExternalSearchCandidatesFetchedEvent
+ * ResearchRunExternalSearchHitsFetchedEvent
  */
-export type ResearchRunExternalSearchCandidatesFetchedEvent = {
+export type ResearchRunExternalSearchHitsFetchedEvent = {
     /**
      * Type
      */
-    type: 'evidence_collection.external_search_candidates_fetched';
+    type: 'evidence_collection.external_search_hits_fetched';
     /**
      * Ts
      */
@@ -775,9 +775,9 @@ export type ResearchRunExternalSearchCandidatesFetchedEvent = {
      */
     taskIndex: number;
     /**
-     * Candidatecount
+     * Hitcount
      */
-    candidateCount: number;
+    hitCount: number;
 };
 
 /**
@@ -895,7 +895,7 @@ export type ResearchRunResponse = {
     /**
      * Recentevents
      */
-    recentEvents?: Array<ResearchRunInternalSearchStartedEvent | ResearchRunInternalSearchCompletedEvent | ResearchRunExternalSearchQueriesGeneratedEvent | ResearchRunExternalSearchCandidatesFetchedEvent | ResearchRunEvidenceReviewSelectedEvent | ResearchRunQuestionResolvedEvent>;
+    recentEvents?: Array<ResearchRunInternalSearchStartedEvent | ResearchRunInternalSearchCompletedEvent | ResearchRunExternalSearchQueriesGeneratedEvent | ResearchRunExternalSearchHitsFetchedEvent | ResearchRunEvidenceReviewSelectedEvent | ResearchRunQuestionResolvedEvent>;
 };
 
 /**

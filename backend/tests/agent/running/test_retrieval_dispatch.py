@@ -23,7 +23,7 @@ from app.agent.contract import AnswerProgressStage
 from app.agent.evidence_collection import CollectedNews, NewsCollector, Researcher
 from app.agent.evidence_collection.external_search import (
     ExternalResearchRuntime,
-    ExternalSearchCandidate,
+    ExternalSearchHit,
     ExternalSearchProviderError,
 )
 from app.agent.evidence_collection.internal_search import (
@@ -78,8 +78,8 @@ def _query_draft() -> Any:
 def _review_draft_selecting(indexes: list[int]) -> Any:
     """D4-S1: 統合index空間の指定indexを採用するreviewer draft。
 
-    候補数より大きいindexは範囲外dropとなるだけで安全なため、実際の候補数を
-    問わず[0, 1]等を渡して「提示された候補を全て採用させる」用途に使える。
+    選択肢数より大きいindexは範囲外dropとなるだけで安全なため、実際の選択肢数を
+    問わず[0, 1]等を渡して「提示された選択肢を全て採用させる」用途に使える。
     """
     from app.agent.evidence_review import EvidenceReviewerDraft
 
@@ -117,8 +117,8 @@ def _review_draft_selecting_with_missing(indexes: list[int], missing: list[str])
     )
 
 
-def _candidate(url: str, *, title: str) -> ExternalSearchCandidate:
-    return ExternalSearchCandidate(url=url, title=title, snippet="snippet")
+def _external_hit(url: str, *, title: str) -> ExternalSearchHit:
+    return ExternalSearchHit(url=url, title=title, snippet="snippet")
 
 
 def _hit(
@@ -214,7 +214,7 @@ class _InternalSearch:
 class _Tool:
     def __init__(
         self,
-        results: dict[str, list[ExternalSearchCandidate]] | None = None,
+        results: dict[str, list[ExternalSearchHit]] | None = None,
         *,
         errors: dict[str, BaseException] | None = None,
         started: asyncio.Event | None = None,
@@ -235,7 +235,7 @@ class _Tool:
     def name(self) -> str:
         return "external_search"
 
-    async def search(self, input: Any) -> list[ExternalSearchCandidate]:
+    async def search(self, input: Any) -> list[ExternalSearchHit]:
         self.calls.append(input)
         try:
             if self._started is not None:
@@ -799,7 +799,7 @@ async def test_runner_preserves_internal_query_order() -> None:
 
 @pytest.mark.asyncio
 async def test_runner_preserves_internal_hit_order_into_synthesis() -> None:
-    """D4-S1: reviewerが両方の内部候補を採用する前提でindex順を検証する。"""
+    """D4-S1: reviewerが両方の内部ヒットを採用する前提でindex順を検証する。"""
     timeline: list[str] = []
     answerer = _EvidenceAnswerer(timeline=timeline)
     reviewer_runtime = ScriptedAgentRuntime([_review_draft_selecting([0, 1])])
@@ -1112,7 +1112,7 @@ async def test_search_classified_internal_failure_keeps_external_outcome(
 async def test_zero_internal_hits_remain_successful_under_search(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """D4-S2: internal候補ゼロはinternal_collection="failed"にならない
+    """D4-S2: internalヒットゼロはinternal_collection="failed"にならない
 
     (InternalSearchErrorだけがfailedを表す)。
     """
@@ -1548,7 +1548,7 @@ async def test_scope_closes_after_reviewer_failure_exhausts_attempts() -> None:
     reviewer_error = AgentResponseInvalidError(AgentResponseDefect.RESPONSE_NOT_JSON)
     reviewer_runtime = ScriptedAgentRuntime([reviewer_error, reviewer_error])
     tool = _Tool(
-        {"NVIDIA supply": [_candidate("https://example.com/ext", title="ext title")]}
+        {"NVIDIA supply": [_external_hit("https://example.com/ext", title="ext title")]}
     )
     factory = _Factory(
         [
@@ -1607,7 +1607,7 @@ async def test_internal_failure_still_reaches_reviewer_and_produces_evidence() -
     query_runtime = ScriptedAgentRuntime([_query_draft()])
     reviewer_runtime = ScriptedAgentRuntime([_review_draft_selecting([0])])
     tool = _Tool(
-        {"NVIDIA supply": [_candidate("https://example.com/ext", title="ext title")]}
+        {"NVIDIA supply": [_external_hit("https://example.com/ext", title="ext title")]}
     )
     factory = _Factory(
         [_runtime(query_runtime, reviewer_runtime=reviewer_runtime, tool=tool)],
@@ -1651,7 +1651,7 @@ async def test_external_provider_failure_keeps_internal_hits_in_final_evidence()
     """保証するテスト条件 2(runner経由)。
 
     D4-S1: 内部hitは無条件採用ではなくreviewerの精査を経て根拠になる
-    (統合index空間で外部候補が空のため、内部候補はindex 0から始まる)。
+    (統合index空間で外部ヒットが空のため、内部ヒットはindex 0から始まる)。
     """
     timeline: list[str] = []
     answerer = _EvidenceAnswerer(timeline=timeline)
@@ -1698,7 +1698,7 @@ async def test_time_filter_failure_still_collects_internal_hits_for_every_task(
     """保証するテスト条件 3(runner経由、全task)。
 
     D4-S1: reviewerのLLM runtimeを使えるようscopeは常にactivateされる
-    (外部query/HTTP検索だけがtime filter失敗でskipされる)。内部候補は
+    (外部query/HTTP検索だけがtime filter失敗でskipされる)。内部ヒットは
     reviewerの精査を経て根拠になる。
     """
     captured = _capture_external_outcome(monkeypatch)
@@ -1715,7 +1715,7 @@ async def test_time_filter_failure_still_collects_internal_hits_for_every_task(
         target_time_window=TargetTimeWindow(kind="unsupported_explicit_window"),
     )
     # S1: reviewerはRun単位1回。統合index空間(仮定: task昇順)ではtask0の唯一の
-    # 内部候補が0、task1の唯一の内部候補が1。
+    # 内部ヒットが0、task1の唯一の内部ヒットが1。
     reviewer_runtime = ScriptedAgentRuntime([_review_draft_selecting([0, 1])])
     factory = _Factory(
         [_runtime(ScriptedAgentRuntime([]), reviewer_runtime=reviewer_runtime)], []
@@ -1744,7 +1744,7 @@ async def test_time_filter_failure_still_collects_internal_hits_for_every_task(
 async def test_runner_routes_each_tasks_queries_to_only_that_tasks_search() -> None:
     """保証するテスト条件 4(runner経由)。
 
-    D4-S1: scopeは常にactivateされるが、内部・外部候補とも空
+    D4-S1: scopeは常にactivateされるが、内部・外部ヒットとも空
     (internalはhits無し、externalはtime filter失敗でskip)のためreviewerは
     起動しない。
     """
@@ -1773,8 +1773,8 @@ async def test_runner_routes_each_tasks_queries_to_only_that_tasks_search() -> N
 async def test_runner_isolates_one_tasks_total_failure_from_sibling_evidence() -> None:
     """保証するテスト条件 5(runner経由)。
 
-    D4-S1: failing taskは内部・外部とも候補ゼロでreviewer未起動のまま
-    time_filter_failedとして閉じる。succeeding taskは内部候補がreviewerの
+    D4-S1: failing taskは内部・外部ともヒットゼロでreviewer未起動のまま
+    time_filter_failedとして閉じる。succeeding taskは内部ヒットがreviewerの
     精査を経て根拠になる。
     """
     timeline: list[str] = []
@@ -1818,7 +1818,7 @@ async def test_internal_hits_are_kept_per_task_when_the_same_article_appears(
 ) -> None:
     """同じ内部検索の記事でもtaskが異なる場合は両方残る。
 
-    D4-S1: 各taskが提示する2件の内部候補をreviewerが両方採用する前提で、
+    D4-S1: 各taskが提示する2件の内部ヒットをreviewerが両方採用する前提で、
     task内の重複排除とtask間の共存を検証する。
     """
     captured = _capture_external_outcome(monkeypatch)

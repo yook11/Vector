@@ -107,7 +107,7 @@ def test_evidence_reviewer_prompt_assembly_sanitizes_research_goal() -> None:
 
 
 def test_prompt_does_not_render_the_task_group_index() -> None:
-    """S1(候補の渡し方)。task_indexはグループが持つがpromptへレンダリングしない
+    """S1(選択肢の渡し方)。task_indexはグループが持つがpromptへレンダリングしない
 
     (indexからグループは一意に決まり、モデルに返させる識別子を増やさないため)。
     """

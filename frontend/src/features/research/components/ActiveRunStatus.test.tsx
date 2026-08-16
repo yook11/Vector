@@ -53,9 +53,9 @@ describe("ActiveRunStatus", () => {
     [
       "evidence_collection",
       {
-        type: "evidence_collection.external_search_candidates_fetched",
+        type: "evidence_collection.external_search_hits_fetched",
         taskIndex: 1,
-        candidateCount: 12,
+        hitCount: 12,
       },
       "候補12件を取得",
     ],
@@ -108,9 +108,9 @@ describe("ActiveRunStatus", () => {
         status="running"
         stage="evidence_collection"
         activity={{
-          type: "evidence_collection.external_search_candidates_fetched",
+          type: "evidence_collection.external_search_hits_fetched",
           taskIndex: 0,
-          candidateCount: 8,
+          hitCount: 8,
         }}
       />,
     );
@@ -150,9 +150,9 @@ describe("ActiveRunStatus", () => {
         status="running"
         stage="answering"
         activity={{
-          type: "evidence_collection.external_search_candidates_fetched",
+          type: "evidence_collection.external_search_hits_fetched",
           taskIndex: 0,
-          candidateCount: 8,
+          hitCount: 8,
         }}
       />,
     );

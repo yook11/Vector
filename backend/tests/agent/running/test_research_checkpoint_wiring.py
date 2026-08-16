@@ -25,7 +25,7 @@ from app.agent.evidence_collection import NewsCollector, Researcher
 from app.agent.evidence_collection.external_search.contract import (
     ExternalQueryDraft,
     ExternalResearchRuntime,
-    ExternalSearchCandidate,
+    ExternalSearchHit,
     ExternalSearchProviderError,
     ExternalSearchToolFailureReason,
 )
@@ -63,8 +63,8 @@ def _query_draft(queries: list[str]) -> ExternalQueryDraft:
     return ExternalQueryDraft(queries=queries)
 
 
-def _external_candidate(url: str) -> ExternalSearchCandidate:
-    return ExternalSearchCandidate(
+def _external_hit(url: str) -> ExternalSearchHit:
+    return ExternalSearchHit(
         url=url,
         title=url.rsplit("/", maxsplit=1)[-1],
         snippet="snippet",
@@ -159,11 +159,11 @@ class _InternalTool:
 
 
 class _ExternalTool:
-    """queryごとにcandidateまたはprovider失敗を返すfake。"""
+    """queryごとにhitまたはprovider失敗を返すfake。"""
 
     def __init__(
         self,
-        results_by_query: dict[str, list[ExternalSearchCandidate]],
+        results_by_query: dict[str, list[ExternalSearchHit]],
         *,
         failing_queries: tuple[str, ...] = (),
     ) -> None:
@@ -175,7 +175,7 @@ class _ExternalTool:
     def name(self) -> str:
         return "external_search"
 
-    async def search(self, input: object) -> list[ExternalSearchCandidate]:
+    async def search(self, input: object) -> list[ExternalSearchHit]:
         self.calls.append(input)
         query = input.query  # type: ignore[attr-defined]
         if query in self._failing:
@@ -238,7 +238,7 @@ async def test_search_plan_success_populates_checkpoint_from_review_outcome() ->
     """
     goal = "NVIDIA の直近発表を調べる"
     tool = _ExternalTool(
-        results_by_query={"q-ok": [_external_candidate("https://example.com/a")]},
+        results_by_query={"q-ok": [_external_hit("https://example.com/a")]},
         failing_queries=("q-fail",),
     )
     reviewer_runtime = ScriptedAgentRuntime(
@@ -300,7 +300,7 @@ async def test_direct_answer_plan_leaves_checkpoint_none() -> None:
 async def test_evidence_review_failure_leaves_checkpoint_none() -> None:
     """記録フロー4: reviewerが2 attempt失敗した場合、checkpointを組み立てない。"""
     tool = _ExternalTool(
-        results_by_query={"q": [_external_candidate("https://example.com/a")]}
+        results_by_query={"q": [_external_hit("https://example.com/a")]}
     )
     failure = AgentResponseInvalidError(AgentResponseDefect.OUTPUT_SCHEMA_MISMATCH)
     runner = _search_runner(
@@ -318,7 +318,7 @@ async def test_evidence_review_failure_leaves_checkpoint_none() -> None:
 async def test_skipped_empty_review_records_executed_query_with_no_adopted_claims() -> (
     None
 ):
-    """記録フロー3: 内外候補ともゼロでreviewerが呼ばれない(skipped_empty)場合も、
+    """記録フロー3: 内外のヒットともゼロでreviewerが呼ばれない(skipped_empty)場合も、
 
     provider呼び出しに成功したtaskは空adopted_claims・空unresolved_after_searchで
     記録される(review失敗経路と異なりNoneにはならない)。
@@ -359,7 +359,7 @@ async def test_builder_exception_yields_none_checkpoint_and_continues_answering(
         _raise_build_failure,
     )
     tool = _ExternalTool(
-        results_by_query={"q": [_external_candidate("https://example.com/a")]}
+        results_by_query={"q": [_external_hit("https://example.com/a")]}
     )
     reviewer_runtime = ScriptedAgentRuntime(
         [_review_draft([{"option_index": 0, "claim": "claim", "why_selected": "w"}])]

@@ -22,7 +22,7 @@ from app.agent.evidence_collection import NewsCollector, Researcher
 from app.agent.evidence_collection.external_search.agent import EXTERNAL_QUERY_AGENT
 from app.agent.evidence_collection.external_search.contract import (
     ExternalResearchRuntime,
-    ExternalSearchCandidate,
+    ExternalSearchHit,
     ExternalSearchToolInput,
 )
 from app.agent.evidence_collection.external_search.deepseek_binding import (
@@ -90,8 +90,8 @@ def _query_response() -> object:
 def _reviewer_response(*, option_indexes: list[int] | None = None) -> object:
     """D4-S1: 内外統合index空間で選ぶoption_indexを呼び出し側が指定する。
 
-    既定の[0]は、internal候補が空(_EmptyInternalSearch)のtaskで唯一の外部の
-    選択肢(index 0)を選ぶ後方互換値。internal候補があるtaskは呼び出し側が明示する。
+    既定の[0]は、internalヒットが空(_EmptyInternalSearch)のtaskで唯一の外部の
+    選択肢(index 0)を選ぶ後方互換値。internalヒットがあるtaskは呼び出し側が明示する。
     """
     return function_response(
         function_name=EVIDENCE_REVIEWER_DEEPSEEK_BINDING.function_name,
@@ -178,15 +178,13 @@ class _Tool:
     def name(self) -> str:
         return "external_search"
 
-    async def search(
-        self, input: ExternalSearchToolInput
-    ) -> list[ExternalSearchCandidate]:
+    async def search(self, input: ExternalSearchToolInput) -> list[ExternalSearchHit]:
         self.inputs.append(input)
         return [
-            ExternalSearchCandidate(
+            ExternalSearchHit(
                 url="https://example.com/TRACE_URL_SENTINEL_63df",
-                title="CANDIDATE_TITLE_SENTINEL_4cab",
-                snippet="CANDIDATE_SNIPPET_SENTINEL_00f4",
+                title="HIT_TITLE_SENTINEL_4cab",
+                snippet="HIT_SNIPPET_SENTINEL_00f4",
                 source_name="Example",
             )
         ]
@@ -373,8 +371,8 @@ async def test_external_phase_spans_keep_attributes_parentage_and_no_sensitive_t
         "GOAL_SENTINEL_3cc7",
         "1998年2月",
         "TRACE_URL_SENTINEL_63df",
-        "CANDIDATE_TITLE_SENTINEL_4cab",
-        "CANDIDATE_SNIPPET_SENTINEL_00f4",
+        "HIT_TITLE_SENTINEL_4cab",
+        "HIT_SNIPPET_SENTINEL_00f4",
         raw_selector_response_sentinel,
         _QUERY_OUTPUT_SENTINEL,
         _SELECTION_CLAIM_SENTINEL,
@@ -623,9 +621,9 @@ def _review_draft_selecting_all_offered_options() -> Any:
 
 
 def _two_task_query_failing_runtime() -> ExternalResearchRuntime:
-    """外部query生成を2 task分とも失敗させ、外部候補を空に保つ(内部統計だけに絞る)。
+    """外部query生成を2 task分とも失敗させ、外部ヒットを空に保つ(内部統計だけに絞る)。
 
-    D4-S1: internal候補が非空なら候補ゼロtaskではないためreviewerが起動する。
+    D4-S1: internalヒットが非空ならヒットゼロtaskではないためreviewerが起動する。
     S1: reviewerはRun単位1回のため script は1件だけ渡す (2回目の呼び出しは
     枯渇の AssertionError で即 red になる)。
     """
@@ -646,7 +644,7 @@ async def test_evidence_run_span_reports_internal_external_counts_and_citations(
     """内部hit2件・外部evidence1件のうち内部1・外部1が引用された場合の採用数/引用数を検証する。
 
     D4-S1: internal_evidence_countはreviewerが精査採用した件数になるため、
-    統合index空間(内部0,1・外部2)の全候補を採用するreviewer応答を使う。
+    統合index空間(内部0,1・外部2)の全選択肢を採用するreviewer応答を使う。
     """
     query_client = FakeDeepSeekClient([_query_response()])
     reviewer_client = FakeDeepSeekClient([_reviewer_response(option_indexes=[0, 1, 2])])
@@ -676,7 +674,7 @@ async def test_evidence_run_span_reports_internal_external_counts_and_citations(
         "INTERNAL_HIT_TITLE_SENTINEL_bf12",
         "INTERNAL_HIT_TITLE_SENTINEL_9a04",
         "TRACE_URL_SENTINEL_63df",
-        "CANDIDATE_TITLE_SENTINEL_4cab",
+        "HIT_TITLE_SENTINEL_4cab",
     ):
         assert unsafe not in attributes_dump
 
@@ -751,7 +749,7 @@ async def test_evidence_run_span_marks_zero_cited_explicitly_when_uncited(
 async def test_evidence_run_span_reports_post_dedup_internal_total(
     capfire: CaptureLogfire,
 ) -> None:
-    """同じ内部検索の記事でもtaskが異なれば、採用数は候補件数のまま残る。"""
+    """同じ内部検索の記事でもtaskが異なれば、採用数は選択肢件数のまま残る。"""
     hits_by_query = {
         "task0 query": [
             _internal_hit(assessment_id=3001, title="task0-shared", curation_id=4200),

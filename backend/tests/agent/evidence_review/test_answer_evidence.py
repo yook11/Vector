@@ -13,7 +13,7 @@ from pydantic import ValidationError
 from app.agent.contract import ANSWER_EVIDENCE_LIMIT, EVIDENCE_REVIEW_MISSING_LIMIT
 from app.agent.evidence_collection.external_search.contract import (
     MISSING_ITEM_MAX_CHARS,
-    ExternalSearchCandidate,
+    ExternalSearchHit,
 )
 from app.agent.evidence_review.answer_evidence import (
     AnswerEvidence,
@@ -28,9 +28,8 @@ from app.shared.security.safe_url import SafeUrl
 from tests.agent.evidence_review._builders import (
     AS_OF,
     collected_task,
-    external_candidate,
+    external_hit,
     internal_hit,
-    task_with_candidates,
 )
 
 
@@ -69,49 +68,40 @@ def _external_evidence(*, url: str, source_ref: str) -> ExternalSearchEvidence:
     )
 
 
-def test_answer_evidence_and_missing_caps_are_run_scoped_values() -> None:
-    """回答用EvidenceとmissingのcapはRun単位の15/8になる。
-
-    task単位5件×3 taskの実質上限と同じ15をAnswerer入力上限に、missing上限は
-    それより絞った8にする。
-    """
-    assert (ANSWER_EVIDENCE_LIMIT, EVIDENCE_REVIEW_MISSING_LIMIT) == (15, 8)
-
-
 # --- AnswerEvidence.from_reviewer_response -------------------------------------
 
 
 def test_answer_evidence_factory_excludes_nonexistent_reviewer_selections() -> None:
-    """見せていない候補indexは回答用Evidenceへ復元しない。"""
+    """見せていないoption_indexは回答用Evidenceへ復元しない。"""
     tasks = [
-        task_with_candidates(task_index=0, internal=1),
-        task_with_candidates(task_index=1, external=2),
+        collected_task(
+            task_index=0,
+            external_hits=[
+                external_hit("https://example.com/shown-0"),
+                external_hit("https://example.com/shown-1"),
+            ],
+        )
     ]
-    # 通しindex: 0=task0内部, 1..2=task1外部。実在の上限は全task合計の3。
-    # index 2はtask0だけで数えると範囲外(候補1件)だが、Run全体では実在する。
-    result = _reviewer_response(
-        [
-            {"option_index": 2, "claim": "adopted", "why_selected": "why"},
-            {"option_index": 3, "claim": "nonexistent", "why_selected": "why"},
-        ],
-    )
-
+    # 見せた番号は0と1。2は列に無い。
     evidence = AnswerEvidence.from_reviewer_response(
         preparation=EvidenceReviewPreparation.from_tasks(tasks),
-        reviewer_response=result,
+        reviewer_response=_reviewer_response(
+            [
+                {"option_index": 1, "claim": "shown", "why_selected": "why"},
+                {"option_index": 2, "claim": "not-shown", "why_selected": "why"},
+            ]
+        ),
     )
 
-    assert (
-        isinstance(evidence, AnswerEvidence),
-        [item.claim for item in evidence.internal_articles],
-        [item.claim for item in evidence.external_sources],
-    ) == (True, [], ["adopted"])
+    assert [(item.claim, str(item.url)) for item in evidence.external_sources] == [
+        ("shown", "https://example.com/shown-1")
+    ]
 
 
 def test_answer_evidence_factory_keeps_the_first_reviewer_selection_for_an_index() -> (
     None
 ):
-    """同じ候補indexを複数回選んでも、先に選んだ1件だけを回答に渡す。"""
+    """同じoption_indexを複数回選んでも、先に選んだ1件だけを回答に渡す。"""
     tasks = [
         collected_task(
             task_index=0,
@@ -120,13 +110,13 @@ def test_answer_evidence_factory_keeps_the_first_reviewer_selection_for_an_index
                     assessment_id=1000, curation_id=1, title="internal-0", summary="s"
                 )
             ],
-            external_candidates=[
-                external_candidate("https://example.com/0"),
-                external_candidate("https://example.com/1"),
+            external_hits=[
+                external_hit("https://example.com/0"),
+                external_hit("https://example.com/1"),
             ],
         )
     ]
-    # 統合index空間: 0が内部、1-2が外部の合計3候補。index 1を重複採用する。
+    # 統合index空間: 0が内部、1-2が外部の合計3選択肢。index 1を重複採用する。
     result = _reviewer_response(
         [
             {"option_index": 1, "claim": "first-1", "why_selected": "why"},
@@ -207,9 +197,9 @@ def test_factory_keeps_first_selection_for_duplicate_url_within_task() -> None:
     tasks = [
         collected_task(
             task_index=0,
-            external_candidates=[
-                external_candidate("https://example.com/duplicate"),
-                external_candidate("https://example.com/duplicate"),
+            external_hits=[
+                external_hit("https://example.com/duplicate"),
+                external_hit("https://example.com/duplicate"),
             ],
         )
     ]
@@ -243,12 +233,12 @@ def test_factory_does_not_deduplicate_same_url_across_tasks() -> None:
         collected_task(
             task_index=0,
             research_goal="goal-A",
-            external_candidates=[external_candidate("https://example.com/shared")],
+            external_hits=[external_hit("https://example.com/shared")],
         ),
         collected_task(
             task_index=1,
             research_goal="goal-B",
-            external_candidates=[external_candidate("https://example.com/shared")],
+            external_hits=[external_hit("https://example.com/shared")],
         ),
     ]
     evidence = AnswerEvidence.from_reviewer_response(
@@ -394,9 +384,9 @@ def test_answer_evidence_factory_restores_option_origins_from_indexes() -> None:
         ),
         collected_task(
             task_index=5,
-            external_candidates=[
-                external_candidate("https://example.com/b1", title="B-ext-1"),
-                external_candidate("https://example.com/b2", title="B-ext-2"),
+            external_hits=[
+                external_hit("https://example.com/b1", title="B-ext-1"),
+                external_hit("https://example.com/b2", title="B-ext-2"),
             ],
         ),
     ]
@@ -461,7 +451,7 @@ def test_answer_evidence_factory_resolves_indexes_in_task_index_order() -> None:
 
 
 def test_answer_evidence_factory_preserves_indexes_around_an_empty_task() -> None:
-    """候補ゼロのtaskが混ざってもindexの対応がずれない。"""
+    """ヒットゼロのtaskが混ざってもindexの対応がずれない。"""
     tasks = [
         collected_task(
             task_index=0,
@@ -497,7 +487,7 @@ def test_answer_evidence_factory_preserves_indexes_around_an_empty_task() -> Non
 
 
 def test_answer_evidence_factory_maps_inputs_to_internal_evidence_fields() -> None:
-    """内部候補・選択結果・task情報から、回答用内部Evidenceの各fieldを復元する。"""
+    """内部ヒット・選択結果・task情報から、回答用内部Evidenceの各fieldを復元する。"""
     hit = internal_hit(
         assessment_id=2001,
         curation_id=42,
@@ -531,15 +521,15 @@ def test_answer_evidence_factory_maps_inputs_to_internal_evidence_fields() -> No
 
 
 def test_answer_evidence_factory_maps_inputs_to_external_evidence_fields() -> None:
-    """外部候補・選択結果・task情報から、回答用外部Evidenceの各fieldを復元する。"""
-    candidate = ExternalSearchCandidate(
+    """外部ヒット・選択結果・task情報から、回答用外部Evidenceの各fieldを復元する。"""
+    hit = ExternalSearchHit(
         url=SafeUrl("https://example.com/external-story"),
         title="external title",
         snippet="external snippet",
         source_name="Example News",
         published_at=AS_OF,
     )
-    tasks = [collected_task(task_index=1, external_candidates=[candidate])]
+    tasks = [collected_task(task_index=1, external_hits=[hit])]
     result = _reviewer_response(
         [{"option_index": 0, "claim": "見出しの主張", "why_selected": "選定理由"}],
     )

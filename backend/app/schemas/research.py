@@ -104,11 +104,11 @@ class ResearchRunExternalSearchQueriesGeneratedEvent(_CamelBase):
     queries: list[str]
 
 
-class ResearchRunExternalSearchCandidatesFetchedEvent(_CamelBase):
-    type: Literal["evidence_collection.external_search_candidates_fetched"]
+class ResearchRunExternalSearchHitsFetchedEvent(_CamelBase):
+    type: Literal["evidence_collection.external_search_hits_fetched"]
     ts: datetime
     task_index: int = Field(ge=0)
-    candidate_count: int = Field(ge=0)
+    hit_count: int = Field(ge=0)
 
 
 class ResearchRunEvidenceReviewSelectedEvent(_CamelBase):
@@ -127,7 +127,7 @@ ResearchRunEvent = Annotated[
     ResearchRunInternalSearchStartedEvent
     | ResearchRunInternalSearchCompletedEvent
     | ResearchRunExternalSearchQueriesGeneratedEvent
-    | ResearchRunExternalSearchCandidatesFetchedEvent
+    | ResearchRunExternalSearchHitsFetchedEvent
     | ResearchRunEvidenceReviewSelectedEvent
     | ResearchRunQuestionResolvedEvent,
     Field(discriminator="type"),

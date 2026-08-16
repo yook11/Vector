@@ -292,7 +292,7 @@ async def test_search_workflow_starts_both_retrieval_ports() -> None:
         "progress:evidence_collection",
     ]
     assert set(timeline[8:10]) == {"internal_search", "external_runtime"}
-    # 候補が内外ともゼロのため精査は呼ばれず、evidence_review は報告されない。
+    # ヒットが内外ともゼロのため精査は呼ばれず、evidence_review は報告されない。
     assert timeline[10:] == [
         "progress:answering",
         "evidence_answerer",

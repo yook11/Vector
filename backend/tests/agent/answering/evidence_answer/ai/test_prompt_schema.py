@@ -283,7 +283,7 @@ def test_review_missing_items_are_untrusted_and_sanitized() -> None:
 def test_review_missing_and_no_evidence_notice_coexist_independently() -> None:
     """条件6: evidence0件かつmissingが非空のRunで、両方が入力に現れる
 
-    (候補はあったが1件も採用されず、不足だけが申告された場合)。
+    (選択肢はあったが1件も採用されず、不足だけが申告された場合)。
     """
     header = _review_missing_template_header()
 

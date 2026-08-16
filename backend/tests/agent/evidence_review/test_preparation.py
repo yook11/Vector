@@ -12,7 +12,7 @@ from dataclasses import FrozenInstanceError, fields, is_dataclass
 import pytest
 
 from app.agent.evidence_collection.external_search.contract import (
-    CANDIDATE_SNIPPET_MAX_CHARS,
+    OPTION_SNIPPET_MAX_CHARS,
 )
 from app.agent.evidence_review.preparation import (
     EvidenceOption,
@@ -23,11 +23,11 @@ from app.agent.evidence_review.preparation import (
 from tests.agent.evidence_review._builders import (
     AS_OF,
     collected_task,
-    external_candidate,
+    external_hit,
     internal_hit,
     review_input,
     task_group,
-    task_with_candidates,
+    task_with_hits,
 )
 
 
@@ -126,12 +126,12 @@ def test_preparation_resolves_shown_indexes_to_their_option_origins() -> None:
         internal_hit(assessment_id=1002, curation_id=2, title="A-int-2", summary="s"),
     ]
     external = [
-        external_candidate("https://example.com/b1", title="B-ext-1"),
-        external_candidate("https://example.com/b2", title="B-ext-2"),
+        external_hit("https://example.com/b1", title="B-ext-1"),
+        external_hit("https://example.com/b2", title="B-ext-2"),
     ]
     tasks = [
         collected_task(task_index=2, internal_hits=internal),
-        collected_task(task_index=5, external_candidates=external),
+        collected_task(task_index=5, external_hits=external),
     ]
 
     preparation = EvidenceReviewPreparation.from_tasks(tasks)
@@ -142,7 +142,7 @@ def test_preparation_resolves_shown_indexes_to_their_option_origins() -> None:
         for option in group.options
     ]
     assert [
-        (origin.search_result, origin.task_index) for origin in resolved if origin
+        (origin.search_hit, origin.task_index) for origin in resolved if origin
     ] == [
         (internal[0], 2),
         (internal[1], 2),
@@ -157,8 +157,8 @@ def test_preparation_does_not_resolve_an_index_that_was_never_shown() -> None:
     負の番号もtupleの末尾参照に化けさせず構造的に弾く。
     """
     tasks = [
-        task_with_candidates(task_index=0, internal=1),
-        task_with_candidates(task_index=1, external=2),
+        task_with_hits(task_index=0, internal=1),
+        task_with_hits(task_index=1, external=2),
     ]
 
     preparation = EvidenceReviewPreparation.from_tasks(tasks)
@@ -209,9 +209,9 @@ def test_task_groups_place_internal_options_before_external_within_a_group() -> 
                     summary="summary-b",
                 ),
             ],
-            external_candidates=[
-                external_candidate("https://example.com/x", title="external-x"),
-                external_candidate("https://example.com/y", title="external-y"),
+            external_hits=[
+                external_hit("https://example.com/x", title="external-x"),
+                external_hit("https://example.com/y", title="external-y"),
             ],
         )
     ]
@@ -239,9 +239,7 @@ def test_task_groups_assign_a_run_wide_index_without_duplication_across_groups()
                     assessment_id=1001, curation_id=1, title="A-int", summary="s"
                 )
             ],
-            external_candidates=[
-                external_candidate("https://example.com/a", title="A-ext")
-            ],
+            external_hits=[external_hit("https://example.com/a", title="A-ext")],
         ),
         collected_task(
             task_index=1,
@@ -295,7 +293,7 @@ def test_task_groups_map_internal_source_name_to_none_and_truncate_snippet() -> 
     """
     from_tasks = EvidenceReviewPreparation.from_tasks
     summary = "short summary"
-    point = "p" * CANDIDATE_SNIPPET_MAX_CHARS
+    point = "p" * OPTION_SNIPPET_MAX_CHARS
     hit = internal_hit(
         assessment_id=1001,
         curation_id=1,
@@ -310,7 +308,7 @@ def test_task_groups_map_internal_source_name_to_none_and_truncate_snippet() -> 
 
     option = groups[0].options[0]
     # 連結形式(summaryの次行に"- "付きkey_point)は投影仕様として直書きする。
-    expected_snippet = f"{summary}\n- {point}"[:CANDIDATE_SNIPPET_MAX_CHARS]
+    expected_snippet = f"{summary}\n- {point}"[:OPTION_SNIPPET_MAX_CHARS]
     assert option.source_name is None
     assert option.published_at == AS_OF
     assert option.snippet == expected_snippet
