@@ -700,8 +700,8 @@ async def test_selection_restores_the_right_candidate_and_task_across_groups() -
 
 
 @pytest.mark.asyncio
-async def test_same_url_selected_from_two_tasks_keeps_the_first() -> None:
-    """同じURLを複数taskが選んでもAnswerEvidenceは先頭の1件に確定する。"""
+async def test_same_url_selected_from_two_tasks_keeps_each_task_evidence() -> None:
+    """同じURLでもtaskが異なる場合は両方のEvidenceをAnswererへ渡す。"""
     shared_url = "https://example.com/shared-story"
     tasks = [_task("goal-A", ["query-a"]), _task("goal-B", ["query-b"])]
     reviewer_runtime = ScriptedAgentRuntime(
@@ -732,20 +732,13 @@ async def test_same_url_selected_from_two_tasks_keeps_the_first() -> None:
     await _run(runner)
 
     kept_titles = [item.source.title for item in answerer.calls[0]]
-    assert kept_titles == ["task0 headline"]
-    assert sum(shared_url in str(item.source.url) for item in answerer.calls[0]) == 1
+    assert kept_titles == ["task0 headline", "task1 headline"]
+    assert sum(shared_url in str(item.source.url) for item in answerer.calls[0]) == 2
 
 
 @pytest.mark.asyncio
-async def test_merge_dedupes_same_internal_article_by_curation_id_first_win() -> None:
-    """保証するテスト条件 9(S1 C3)。同じ内部記事を複数taskが採用したとき
-    curation_id先勝ちで1件にまとまる。
-
-    source_refのtask間非衝突はf"{task_index}-{index}"という統合index空間の
-    形から構造的に保証される(正本: tests/agent/evidence_review/
-    test_preparation.pyのtest_preparation_resolves_shown_indexes_to_their_original_candidates)。
-    ここでは合流のcuration_id先勝ちdedupだけを検証する。
-    """
+async def test_same_internal_article_from_two_tasks_keeps_each() -> None:
+    """同じ内部検索の記事でもtaskが異なる場合は両方のEvidenceをAnswererへ渡す。"""
     shared_curation_id = 42
     internal_tool = _InternalTool(
         hits_by_query={
@@ -791,7 +784,7 @@ async def test_merge_dedupes_same_internal_article_by_curation_id_first_win() ->
     await _run(runner)
 
     titles = [item.source.title for item in answerer.calls[0]]
-    assert titles == ["shared article (task0)"]
+    assert titles == ["shared article (task0)", "shared article (task1)"]
 
 
 # --- D. 不足の表明 -----------------------------------------------------------

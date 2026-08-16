@@ -1031,7 +1031,7 @@ async def test_workflow_constructs_task_ordered_external_outcome_before_answerin
             )
             for report in reports
         ],
-        # AnswerEvidenceはtaskを跨いでも同じURLを先勝ちで1件に確定する。
+        # 同じURLでもtaskが異なるEvidenceはそれぞれ残す。
         [item.source_ref for item in evidence_run.answer_evidence.external_sources],
         evidence_run.review_missing,
     ) == (
@@ -1042,7 +1042,7 @@ async def test_workflow_constructs_task_ordered_external_outcome_before_answerin
             (0, "succeeded", ["q1"], 1),
             (1, "succeeded", ["q2"], 1),
         ],
-        ["0-0"],
+        ["0-0", "1-1"],
         (),
     )
 

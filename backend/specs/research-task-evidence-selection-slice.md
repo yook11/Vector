@@ -425,8 +425,9 @@ AnsweringRunner.run
 
 ### 合流
 
-- 複数taskが同じURLの外部候補を選んだとき、task_index昇順で先勝ちの重複排除が働く。
-- 複数taskが同じ内部記事を選んだとき、同じ規則で重複排除が働く。
+- 複数taskが同じURLの外部候補を選んだとき、taskが違えば両方残る。同一task内の同じURLだけ
+  選択順の先着1件にまとめる。
+- 複数taskが同じ内部検索の記事を選んだとき、同じ規則で残す。
 - 重複排除後の件数が`AnswerEvidence`とRun reportで一致する。
 - 合流後の`source_ref`採番、citation検証、`missing_aspects`の組み立てが現行と同じ結果になる。
 

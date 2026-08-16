@@ -23,10 +23,7 @@ from app.agent.evidence_review.answer_evidence import (
     InternalArticleEvidence,
 )
 from app.agent.evidence_review.preparation import EvidenceReviewPreparation
-from app.agent.evidence_review.selection import (
-    EvidenceReviewerResponse,
-    EvidenceReviewerSelection,
-)
+from app.agent.evidence_review.selection import EvidenceReviewerResponse
 from app.shared.security.safe_url import SafeUrl
 from tests.agent.evidence_review._builders import (
     AS_OF,
@@ -149,44 +146,6 @@ def test_answer_evidence_factory_keeps_the_first_reviewer_selection_for_an_index
     ) == (["internal-claim"], ["first-1"])
 
 
-def test_answer_evidence_factory_applies_the_limit_after_source_deduplication() -> None:
-    """重複sourceは枠を消費せず、Answererには先着の一意な15件を渡す。"""
-    tasks = [
-        collected_task(
-            task_index=0,
-            external_candidates=[
-                external_candidate("https://example.com/duplicate"),
-                external_candidate("https://example.com/duplicate"),
-                *[
-                    external_candidate(f"https://example.com/{index}")
-                    for index in range(2, ANSWER_EVIDENCE_LIMIT + 2)
-                ],
-            ],
-        )
-    ]
-    selections = [
-        {"candidate_index": index, "claim": f"claim-{index}", "why_selected": "why"}
-        for index in range(ANSWER_EVIDENCE_LIMIT + 2)
-    ]
-
-    unsafe_response = EvidenceReviewerResponse.model_construct(
-        selections=[
-            EvidenceReviewerSelection.model_validate(selection)
-            for selection in selections
-        ],
-        missing=[],
-    )
-    evidence = AnswerEvidence.from_reviewer_response(
-        preparation=EvidenceReviewPreparation.from_tasks(tasks),
-        reviewer_response=unsafe_response,
-    )
-
-    assert [item.claim for item in evidence.external_sources] == [
-        "claim-0",
-        *[f"claim-{index}" for index in range(2, ANSWER_EVIDENCE_LIMIT + 1)],
-    ]
-
-
 def test_answer_evidence_rejects_more_than_the_answerer_input_limit() -> None:
     """AnswerEvidence自身もAnswerer入力上限を超える集合を受け付けない。"""
     with pytest.raises(ValidationError):
@@ -200,8 +159,10 @@ def test_answer_evidence_rejects_more_than_the_answerer_input_limit() -> None:
         )
 
 
-def test_answer_evidence_rejects_duplicate_internal_source_identity() -> None:
-    """内部記事のsource identityであるcuration_idは集合内で一意に保つ。"""
+def test_answer_evidence_rejects_duplicate_internal_source_identity_within_task() -> (
+    None
+):
+    """同じtask内の内部検索の記事は集合内で一意に保つ。"""
     with pytest.raises(ValidationError):
         AnswerEvidence(
             internal_articles=[
@@ -211,8 +172,10 @@ def test_answer_evidence_rejects_duplicate_internal_source_identity() -> None:
         )
 
 
-def test_answer_evidence_rejects_duplicate_external_source_identity() -> None:
-    """外部記事のsource identityであるURLは集合内で一意に保つ。"""
+def test_answer_evidence_rejects_duplicate_external_source_identity_within_task() -> (
+    None
+):
+    """同じtask内の外部記事URLは集合内で一意に保つ。"""
     with pytest.raises(ValidationError):
         AnswerEvidence(
             external_sources=[
@@ -239,13 +202,133 @@ def test_answer_evidence_rejects_duplicate_source_ref_across_source_types() -> N
         )
 
 
-def test_answer_evidence_factory_deduplicates_source_identities_across_the_run() -> (
-    None
-):
-    """同一sourceを複数taskで選んでも、内外とも選択順で先の1件だけを残す。"""
+def test_factory_keeps_first_selection_for_duplicate_url_within_task() -> None:
+    """同じtask内でURLが重複した場合は、Reviewerが最初に選んだ1件だけを残す。"""
     tasks = [
         collected_task(
             task_index=0,
+            external_candidates=[
+                external_candidate("https://example.com/duplicate"),
+                external_candidate("https://example.com/duplicate"),
+            ],
+        )
+    ]
+    evidence = AnswerEvidence.from_reviewer_response(
+        preparation=EvidenceReviewPreparation.from_tasks(tasks),
+        reviewer_response=_reviewer_response(
+            [
+                {
+                    "candidate_index": 1,
+                    "claim": "selected-first",
+                    "why_selected": "why",
+                },
+                {
+                    "candidate_index": 0,
+                    "claim": "selected-later",
+                    "why_selected": "why",
+                },
+            ]
+        ),
+    )
+
+    assert [
+        (item.task_index, item.claim, str(item.url))
+        for item in evidence.external_sources
+    ] == [(0, "selected-first", "https://example.com/duplicate")]
+
+
+def test_factory_does_not_deduplicate_same_url_across_tasks() -> None:
+    """同じURLでもtaskが異なる場合は、重複として除外せず両方を残す。"""
+    tasks = [
+        collected_task(
+            task_index=0,
+            research_goal="goal-A",
+            external_candidates=[external_candidate("https://example.com/shared")],
+        ),
+        collected_task(
+            task_index=1,
+            research_goal="goal-B",
+            external_candidates=[external_candidate("https://example.com/shared")],
+        ),
+    ]
+    evidence = AnswerEvidence.from_reviewer_response(
+        preparation=EvidenceReviewPreparation.from_tasks(tasks),
+        reviewer_response=_reviewer_response(
+            [
+                {
+                    "candidate_index": 0,
+                    "claim": "claim-for-goal-A",
+                    "why_selected": "why",
+                },
+                {
+                    "candidate_index": 1,
+                    "claim": "claim-for-goal-B",
+                    "why_selected": "why",
+                },
+            ]
+        ),
+    )
+
+    assert {
+        (item.task_index, item.claim, str(item.url))
+        for item in evidence.external_sources
+    } == {
+        (0, "claim-for-goal-A", "https://example.com/shared"),
+        (1, "claim-for-goal-B", "https://example.com/shared"),
+    }
+
+
+def test_factory_keeps_first_selection_for_duplicate_curation_id_within_task() -> None:
+    """同じtask内で内部検索の記事が重複した場合は、Reviewerが最初に選んだ1件だけを残す。"""
+    tasks = [
+        collected_task(
+            task_index=0,
+            internal_hits=[
+                internal_hit(
+                    assessment_id=1001,
+                    curation_id=42,
+                    title="first-copy",
+                    summary="s",
+                ),
+                internal_hit(
+                    assessment_id=1002,
+                    curation_id=42,
+                    title="second-copy",
+                    summary="s",
+                ),
+            ],
+        )
+    ]
+    evidence = AnswerEvidence.from_reviewer_response(
+        preparation=EvidenceReviewPreparation.from_tasks(tasks),
+        reviewer_response=_reviewer_response(
+            [
+                {
+                    "candidate_index": 1,
+                    "claim": "selected-first",
+                    "why_selected": "why",
+                },
+                {
+                    "candidate_index": 0,
+                    "claim": "selected-later",
+                    "why_selected": "why",
+                },
+            ]
+        ),
+    )
+
+    assert [
+        (item.task_index, item.claim, item.curation_id)
+        for item in evidence.internal_articles
+    ] == [(0, "selected-first", 42)]
+
+
+def test_factory_does_not_deduplicate_same_curation_id_across_tasks() -> None:
+    """同じ内部検索の記事でもtaskが異なる場合は、重複として除外せず両方を残す。"""
+    tasks = [
+        collected_task(
+            task_index=0,
+            research_goal="goal-A",
             internal_hits=[
                 internal_hit(
                     assessment_id=1001,
@@ -254,10 +337,10 @@ def test_answer_evidence_factory_deduplicates_source_identities_across_the_run()
                     summary="s",
                 ),
             ],
-            external_candidates=[external_candidate("https://example.com/duplicate")],
         ),
         collected_task(
             task_index=1,
+            research_goal="goal-B",
             internal_hits=[
                 internal_hit(
                     assessment_id=1002,
@@ -266,7 +349,6 @@ def test_answer_evidence_factory_deduplicates_source_identities_across_the_run()
                     summary="s",
                 ),
             ],
-            external_candidates=[external_candidate("https://example.com/duplicate")],
         ),
     ]
     evidence = AnswerEvidence.from_reviewer_response(
@@ -274,42 +356,26 @@ def test_answer_evidence_factory_deduplicates_source_identities_across_the_run()
         reviewer_response=_reviewer_response(
             [
                 {
-                    "candidate_index": 3,
-                    "claim": "external-first",
-                    "why_selected": "why",
-                },
-                {
-                    "candidate_index": 2,
-                    "claim": "internal-first",
+                    "candidate_index": 0,
+                    "claim": "claim-for-goal-A",
                     "why_selected": "why",
                 },
                 {
                     "candidate_index": 1,
-                    "claim": "external-later",
-                    "why_selected": "why",
-                },
-                {
-                    "candidate_index": 0,
-                    "claim": "internal-later",
+                    "claim": "claim-for-goal-B",
                     "why_selected": "why",
                 },
             ]
         ),
     )
 
-    assert (
-        [
-            (item.claim, item.task_index, item.curation_id)
-            for item in evidence.internal_articles
-        ],
-        [
-            (item.claim, item.task_index, str(item.url))
-            for item in evidence.external_sources
-        ],
-    ) == (
-        [("internal-first", 1, 42)],
-        [("external-first", 1, "https://example.com/duplicate")],
-    )
+    assert {
+        (item.task_index, item.claim, item.curation_id)
+        for item in evidence.internal_articles
+    } == {
+        (0, "claim-for-goal-A", 42),
+        (1, "claim-for-goal-B", 42),
+    }
 
 
 def test_answer_evidence_factory_restores_original_candidates_from_indexes() -> None:

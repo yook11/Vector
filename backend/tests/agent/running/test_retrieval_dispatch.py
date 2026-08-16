@@ -1813,13 +1813,13 @@ async def test_runner_isolates_one_tasks_total_failure_from_sibling_evidence() -
 
 
 @pytest.mark.asyncio
-async def test_internal_hits_merge_by_task_index_order_with_first_win_dedup(
+async def test_internal_hits_are_kept_per_task_when_the_same_article_appears(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """保証するテスト条件 7・9。task_index昇順連結+curation_id先勝ちdedup。
+    """同じ内部検索の記事でもtaskが異なる場合は両方残る。
 
     D4-S1: 各taskが提示する2件の内部候補をreviewerが両方採用する前提で、
-    合流(task_index昇順連結+curation_id先勝ちdedup)を検証する。
+    task内の重複排除とtask間の共存を検証する。
     """
     captured = _capture_external_outcome(monkeypatch)
     shared_curation_id = 4242
@@ -1888,7 +1888,7 @@ async def test_internal_hits_merge_by_task_index_order_with_first_win_dedup(
         ],
     ) == (
         ["task1", "task0"],
-        ["task0-shared", "task0-unique", "task1-unique"],
+        ["task0-shared", "task0-unique", "task1-shared", "task1-unique"],
     )
 
 
