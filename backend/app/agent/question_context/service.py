@@ -71,7 +71,7 @@ class QuestionContextService:
         with agent_phase(phase="context_resolution", agent_name=self._agent.name):
             try:
                 async with self._runtime_scope_factory() as runtime:
-                    draft = await runtime.invoke(
+                    draft = await runtime.call(
                         self._agent,
                         QuestionContextGenerationInput(
                             question=question,

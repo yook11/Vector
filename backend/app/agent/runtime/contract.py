@@ -22,7 +22,7 @@ __all__ = [
 class AgentRuntime(Protocol):
     """Agent宣言を検証済みoutputへ変換する1 attempt境界。"""
 
-    async def invoke[InputT, OutputT](
+    async def call[InputT, OutputT](
         self,
         agent: Agent[InputT, OutputT],
         input: InputT,
@@ -50,7 +50,7 @@ class AgentTextStream(Protocol):
 class StreamingAgentRuntime(Protocol):
     """Agent宣言から1 provider streamを開始できるattempt境界。"""
 
-    def invoke_stream[InputT, OutputT](
+    def stream_text[InputT, OutputT](
         self,
         agent: Agent[InputT, OutputT],
         input: InputT,

@@ -180,7 +180,7 @@ class Researcher:
         ):
             try:
                 query_draft = await asyncio.wait_for(
-                    external.query_runtime.invoke(
+                    external.query_runtime.call(
                         EXTERNAL_QUERY_AGENT,
                         query_input,
                         attempt_number=1,

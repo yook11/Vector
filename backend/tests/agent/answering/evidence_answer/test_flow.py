@@ -147,14 +147,14 @@ class FakeGenerator:
         self.scope_exits = 0
         self.events: list[str] = []
 
-    def invoke_stream(
+    def stream_text(
         self,
         agent: object,
         input: object,
         *,
         attempt_number: int,
     ) -> AsyncIterator[str]:
-        self.events.append(f"invoke:{attempt_number}")
+        self.events.append(f"stream_text:{attempt_number}")
         self.inputs.append(input)
         self.calls.append(
             {
@@ -295,7 +295,7 @@ async def test_valid_answer_with_marker_returns_draft_without_retry(
     assert (generator.scope_enters, generator.scope_exits) == (1, 1)
     assert generator.events == [
         "scope_enter",
-        "invoke:1",
+        "stream_text:1",
         "stream_close:1",
         "scope_exit",
     ]
@@ -632,7 +632,7 @@ async def test_retry_aborts_then_resets_before_generation_two_delta() -> None:
     assert generator.calls[1]["repair_context"] is not None
     assert all(stream.closed for stream in generator.streams)
     assert (generator.scope_enters, generator.scope_exits) == (1, 1)
-    assert generator.events.index("stream_close:1") < generator.events.index("invoke:2")
+    assert generator.events.index("stream_close:1") < generator.events.index("stream_text:2")
     assert generator.events[-2:] == ["stream_close:2", "scope_exit"]
 
 

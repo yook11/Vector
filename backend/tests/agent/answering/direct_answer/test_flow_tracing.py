@@ -236,7 +236,7 @@ async def test_routine_stop_closes_phase_without_error_or_attempt(
             return False
 
     class UnusedRuntime:
-        def invoke_stream(self, *_args: object, **_kwargs: object) -> object:
+        def stream_text(self, *_args: object, **_kwargs: object) -> object:
             raise AssertionError("stream must not start")
 
     @asynccontextmanager

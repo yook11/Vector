@@ -62,7 +62,7 @@ class DeepSeekAgentRuntime:
         self._client = client
         self._binding = binding
 
-    async def invoke[InputT, OutputT](
+    async def call[InputT, OutputT](
         self,
         agent: Agent[InputT, OutputT],
         input: InputT,

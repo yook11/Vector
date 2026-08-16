@@ -323,7 +323,7 @@ class FakeExternalQueryRuntime:
     def __init__(self, queries_by_goal: dict[str, str]) -> None:
         self._queries_by_goal = queries_by_goal
 
-    async def invoke(
+    async def call(
         self, agent: object, input: object, *, attempt_number: int
     ) -> ExternalQueryDraft:
         del agent, attempt_number
@@ -341,7 +341,7 @@ class FakeEvidenceReviewerRuntime:
         self._draft = draft
         self._timeline = timeline
 
-    async def invoke(
+    async def call(
         self, agent: object, input: object, *, attempt_number: int
     ) -> EvidenceReviewerDraft:
         del agent, input, attempt_number
@@ -359,7 +359,7 @@ class FakeFailingReviewerRuntime:
         self._error = error
         self._timeline = timeline
 
-    async def invoke(
+    async def call(
         self, agent: object, input: object, *, attempt_number: int
     ) -> EvidenceReviewerDraft:
         del agent, input, attempt_number
@@ -383,7 +383,7 @@ class _ZeroCandidateExternalTool:
 class _UnexpectedReviewerRuntime:
     """精査を呼ばない経路のテストで、誤って呼ばれたら失敗させる。"""
 
-    async def invoke(
+    async def call(
         self, agent: object, input: object, *, attempt_number: int
     ) -> EvidenceReviewerDraft:
         del agent, input, attempt_number

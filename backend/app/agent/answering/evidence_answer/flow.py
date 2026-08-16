@@ -155,7 +155,7 @@ class EvidenceAnswerFlow:
             ) as live_draft:
                 await ensure_answer_generation_continues(self._continuation)
 
-                stream = runtime.invoke_stream(
+                stream = runtime.stream_text(
                     self._agent,
                     EvidenceAnswerInput(
                         request=request,

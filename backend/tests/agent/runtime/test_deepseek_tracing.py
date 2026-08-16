@@ -66,7 +66,7 @@ async def test_success_span_has_only_allowlisted_agent_attributes_and_no_text(
 
     await DeepSeekAgentRuntime(
         client=cast(AsyncOpenAI, client), binding=make_binding()
-    ).invoke(agent, object(), attempt_number=2)
+    ).call(agent, object(), attempt_number=2)
 
     span = one_provider_attempt_span(capfire)
     attributes = dict(span.attributes or {})
@@ -105,7 +105,7 @@ async def test_provider_attempt_span_records_prompt_version(
 
     await DeepSeekAgentRuntime(
         client=cast(AsyncOpenAI, client), binding=make_binding()
-    ).invoke(make_agent(), object(), attempt_number=1)
+    ).call(make_agent(), object(), attempt_number=1)
 
     attributes = dict(one_provider_attempt_span(capfire).attributes or {})
     assert attributes.get("prompt_version") == "PROMPT_VERSION_SENTINEL_v1"
@@ -127,7 +127,7 @@ async def test_invalid_response_records_usage_before_safe_classification(
     with pytest.raises(AgentResponseInvalidError):
         await DeepSeekAgentRuntime(
             client=cast(AsyncOpenAI, client), binding=make_binding()
-        ).invoke(make_agent(), object(), attempt_number=1)
+        ).call(make_agent(), object(), attempt_number=1)
 
     span = one_provider_attempt_span(capfire)
     attributes = dict(span.attributes or {})
@@ -160,7 +160,7 @@ async def test_schema_mismatch_span_does_not_record_model_output_or_exception_ev
     with pytest.raises(AgentResponseInvalidError):
         await DeepSeekAgentRuntime(
             client=cast(AsyncOpenAI, client), binding=make_binding()
-        ).invoke(make_agent(), object(), attempt_number=1)
+        ).call(make_agent(), object(), attempt_number=1)
 
     span = one_provider_attempt_span(capfire)
     assert exception_events(span) == []
@@ -178,7 +178,7 @@ async def test_classified_provider_error_records_safe_span_without_exception_eve
     with pytest.raises(AIProviderNetworkError):
         await DeepSeekAgentRuntime(
             client=cast(AsyncOpenAI, client), binding=make_binding()
-        ).invoke(make_agent(), object(), attempt_number=1)
+        ).call(make_agent(), object(), attempt_number=1)
 
     span = one_provider_attempt_span(capfire)
     attributes = dict(span.attributes or {})
@@ -202,7 +202,7 @@ async def test_unclassified_error_keeps_redacted_exception_event_without_result(
     with pytest.raises(RuntimeError) as raised:
         await DeepSeekAgentRuntime(
             client=cast(AsyncOpenAI, client), binding=make_binding()
-        ).invoke(make_agent(), object(), attempt_number=1)
+        ).call(make_agent(), object(), attempt_number=1)
 
     span = one_provider_attempt_span(capfire)
     attributes = dict(span.attributes or {})
@@ -240,7 +240,7 @@ async def test_renderer_failure_creates_no_provider_span(
     with pytest.raises(RuntimeError) as raised:
         await DeepSeekAgentRuntime(
             client=cast(AsyncOpenAI, client), binding=make_binding()
-        ).invoke(agent, object(), attempt_number=1)
+        ).call(agent, object(), attempt_number=1)
 
     assert raised.value is error
     assert provider_attempt_spans(capfire) == []

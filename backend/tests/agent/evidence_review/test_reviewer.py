@@ -65,7 +65,7 @@ async def _review(
 
 @pytest.mark.asyncio
 async def test_review_is_called_exactly_once_for_a_multi_task_run() -> None:
-    """S1 A1。複数taskがあってもreviewer_runtime.invokeは1 attemptにつき1回。"""
+    """S1 A1。複数taskがあってもreviewer_runtime.callは1 attemptにつき1回。"""
     runtime = ScriptedAgentRuntime([_ANY_REVIEWER_DRAFT])
     tasks = [
         collected_task(
@@ -394,7 +394,7 @@ class _NeverCompletingRuntime:
         self.cancelled = False
         self.attempt_numbers: list[int] = []
 
-    async def invoke(self, agent: object, input: Any, *, attempt_number: int) -> Any:
+    async def call(self, agent: object, input: Any, *, attempt_number: int) -> Any:
         del agent, input
         self.attempt_numbers.append(attempt_number)
         self.started.set()

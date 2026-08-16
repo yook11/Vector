@@ -251,7 +251,7 @@ class _ParallelQueryRuntime:
         self.active = 0
         self.peak = 0
 
-    async def invoke(self, agent: object, input: Any, *, attempt_number: int) -> Any:
+    async def call(self, agent: object, input: Any, *, attempt_number: int) -> Any:
         del agent, attempt_number
         self.active += 1
         self.peak = max(self.peak, self.active)
@@ -271,7 +271,7 @@ class _NeverCompletingRuntime:
         self.calls: list[Any] = []
         self.attempt_numbers: list[int] = []
 
-    async def invoke(self, agent: object, input: Any, *, attempt_number: int) -> Any:
+    async def call(self, agent: object, input: Any, *, attempt_number: int) -> Any:
         del agent
         self.calls.append(input)
         self.attempt_numbers.append(attempt_number)
@@ -293,7 +293,7 @@ class _AllTasksBlockingRuntime:
         self.cancelled_count = 0
         self.finished_count = 0
 
-    async def invoke(self, agent: object, input: object, *, attempt_number: int) -> Any:
+    async def call(self, agent: object, input: object, *, attempt_number: int) -> Any:
         del agent, input, attempt_number
         self.started_count += 1
         if self.started_count == self._task_count:
@@ -318,7 +318,7 @@ class _TaskFailureAfterSiblingStartsRuntime:
         self.sibling_finished = asyncio.Event()
         self.sibling_cancelled = False
 
-    async def invoke(self, agent: object, input: Any, *, attempt_number: int) -> Any:
+    async def call(self, agent: object, input: Any, *, attempt_number: int) -> Any:
         del agent, attempt_number
         if input.task.research_goal == "failing":
             await self.sibling_started.wait()

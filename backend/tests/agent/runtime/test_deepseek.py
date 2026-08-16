@@ -39,14 +39,14 @@ async def test_constructor_accepts_only_borrowed_client_and_output_binding() -> 
     )
 
 
-async def test_invoke_makes_one_forced_strict_function_call_and_returns_draft() -> None:
+async def test_call_makes_one_forced_strict_function_call_and_returns_draft() -> None:
     """一試行が厳格な function call と検証済み出力を対応付ける。"""
     client = FakeDeepSeekClient([success_response(result="validated")])
     binding = make_binding()
     runtime = DeepSeekAgentRuntime(client=client, binding=binding)
     agent = make_agent(max_output_tokens=456)
 
-    output = await runtime.invoke(agent, object(), attempt_number=1)
+    output = await runtime.call(agent, object(), attempt_number=1)
 
     kwargs = client.chat.completions.create.await_args.kwargs
     assert output == RuntimeOutput(result="validated", tags=["runtime"])
@@ -88,12 +88,12 @@ async def test_invoke_makes_one_forced_strict_function_call_and_returns_draft() 
     client.aclose.assert_not_awaited()
 
 
-async def test_invoke_validates_declared_dataclass_output() -> None:
+async def test_call_validates_declared_dataclass_output() -> None:
     """宣言された dataclass 出力も runtime 境界で検証する。"""
     client = FakeDeepSeekClient([success_response(result="dataclass")])
     runtime = DeepSeekAgentRuntime(client=client, binding=make_binding())
 
-    output = await runtime.invoke(
+    output = await runtime.call(
         replace(make_agent(), output_type=DataclassRuntimeOutput),
         object(),
         attempt_number=1,
@@ -142,7 +142,7 @@ async def test_invalid_structured_output_maps_to_three_safe_neutral_defects(
     client = FakeDeepSeekClient([response])
 
     with pytest.raises(AgentResponseInvalidError) as raised:
-        await DeepSeekAgentRuntime(client=client, binding=make_binding()).invoke(
+        await DeepSeekAgentRuntime(client=client, binding=make_binding()).call(
             make_agent(), object(), attempt_number=1
         )
 
@@ -179,7 +179,7 @@ async def test_negative_index_is_runtime_schema_mismatch() -> None:
     agent = replace(make_agent(), output_type=EvidenceReviewerDraft)
 
     with pytest.raises(AgentResponseInvalidError) as raised:
-        await DeepSeekAgentRuntime(client=client, binding=make_binding()).invoke(
+        await DeepSeekAgentRuntime(client=client, binding=make_binding()).call(
             agent, object(), attempt_number=1
         )
 
@@ -193,13 +193,13 @@ async def test_known_error_translates_and_unknown_keeps_identity() -> None:
     unknown_client = FakeDeepSeekClient([unknown])
 
     with pytest.raises(AIProviderNetworkError) as known_raised:
-        await DeepSeekAgentRuntime(client=known_client, binding=make_binding()).invoke(
+        await DeepSeekAgentRuntime(client=known_client, binding=make_binding()).call(
             make_agent(), object(), attempt_number=1
         )
     with pytest.raises(RuntimeError) as raised:
         await DeepSeekAgentRuntime(
             client=unknown_client, binding=make_binding()
-        ).invoke(make_agent(), object(), attempt_number=1)
+        ).call(make_agent(), object(), attempt_number=1)
 
     assert known_raised.value.__context__ is None
     assert known_raised.value.__cause__ is None
@@ -215,7 +215,7 @@ async def test_invalid_attempt_number_is_rejected_before_render_or_provider_call
     client = FakeDeepSeekClient([success_response()])
 
     with pytest.raises(ValueError):
-        await DeepSeekAgentRuntime(client=client, binding=make_binding()).invoke(
+        await DeepSeekAgentRuntime(client=client, binding=make_binding()).call(
             make_agent(), object(), attempt_number=attempt_number
         )
 
@@ -231,7 +231,7 @@ async def test_non_deepseek_agent_is_rejected_before_provider_call() -> None:
     )
 
     with pytest.raises(ValueError):
-        await DeepSeekAgentRuntime(client=client, binding=make_binding()).invoke(
+        await DeepSeekAgentRuntime(client=client, binding=make_binding()).call(
             agent, object(), attempt_number=1
         )
 
@@ -262,7 +262,7 @@ def _make_response(status_code: int) -> httpx.Response:
     return httpx.Response(status_code, request=request)
 
 
-async def test_invoke_http_402_emits_ai_provider_exhausted(
+async def test_call_http_402_emits_ai_provider_exhausted(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     """HTTP 402 (insufficient_balance 翻訳) は provider=deepseek で emit する。"""
@@ -273,7 +273,7 @@ async def test_invoke_http_402_emits_ai_provider_exhausted(
     runtime = DeepSeekAgentRuntime(client=client, binding=make_binding())
 
     with pytest.raises(AIProviderInsufficientBalanceError):
-        await runtime.invoke(make_agent(), object(), attempt_number=1)
+        await runtime.call(make_agent(), object(), attempt_number=1)
 
     records = metric_records(capsys.readouterr().out, _EXHAUSTED_METRIC)
     assert len(records) == 1
@@ -281,7 +281,7 @@ async def test_invoke_http_402_emits_ai_provider_exhausted(
     assert records[0]["provider"] == "deepseek"
 
 
-async def test_invoke_plain_rate_limited_sdk_error_does_not_emit(
+async def test_call_plain_rate_limited_sdk_error_does_not_emit(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     """一時的 rate limit (時間経過で回復) は枯渇ではないため emit しない。"""
@@ -290,6 +290,6 @@ async def test_invoke_plain_rate_limited_sdk_error_does_not_emit(
     runtime = DeepSeekAgentRuntime(client=client, binding=make_binding())
 
     with pytest.raises(AIProviderRateLimitedError):
-        await runtime.invoke(make_agent(), object(), attempt_number=1)
+        await runtime.call(make_agent(), object(), attempt_number=1)
 
     assert metric_records(capsys.readouterr().out, _EXHAUSTED_METRIC) == []

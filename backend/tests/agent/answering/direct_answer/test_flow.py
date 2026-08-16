@@ -104,7 +104,7 @@ class FakeDirectAnswerGenerator:
         self.activations = 0
         self.exits = 0
 
-    def invoke_stream(
+    def stream_text(
         self,
         agent: object,
         input: DirectAnswerInput,

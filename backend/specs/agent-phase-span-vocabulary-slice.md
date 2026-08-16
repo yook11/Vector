@@ -69,7 +69,7 @@ span 構成:
 - `error.type`の値はsemconvの`ERROR_TYPE`で、`AgentResponseInvalidError`は
   `exc.defect.value`、provider errorは`error.CODE`(無ければクラス名)を使う。
 - 分類済み失敗のすべてが`agent_provider_call`を通るわけではない。planningの
-  `plan_from_draft()`は`runtime.invoke()`が返った後に
+  `plan_from_draft()`は`runtime.call()`が返った後に
   `AgentResponseInvalidError(OUTPUT_SCHEMA_MISMATCH)`を上げる
   (`planning/service.py:82` → `planning/contract.py:355`)。この経路ではattempt spanが
   `result="succeeded"`で閉じており、工程spanが唯一の記録になる。

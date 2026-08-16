@@ -54,7 +54,7 @@ class FakeStreamingGenerator:
     def __init__(self, generations: Sequence[Sequence[str]]) -> None:
         self._generations = deque([list(chunks) for chunks in generations])
 
-    def invoke_stream(
+    def stream_text(
         self,
         _agent: object,
         _input: object,

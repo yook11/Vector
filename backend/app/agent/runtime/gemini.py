@@ -61,7 +61,7 @@ class GeminiAgentRuntime:
     def __init__(self, *, client: AsyncClient) -> None:
         self._client = client
 
-    async def invoke[InputT, OutputT](
+    async def call[InputT, OutputT](
         self,
         agent: Agent[InputT, OutputT],
         input: InputT,
@@ -77,7 +77,7 @@ class GeminiAgentRuntime:
         if agent.model.provider != "gemini":
             raise ValueError("GeminiAgentRuntime requires a Gemini Agent")
         if agent.response_schema is None:
-            raise ValueError("GeminiAgentRuntime.invoke requires response_schema")
+            raise ValueError("GeminiAgentRuntime.call requires response_schema")
 
         contents = agent.prompt.input_renderer(input)
         config = _build_config(agent, structured=True)
@@ -176,7 +176,7 @@ class GeminiAgentRuntime:
             raise RuntimeError("Gemini runtime completed without output")
         return cast(OutputT, output)
 
-    def invoke_stream[InputT, OutputT](
+    def stream_text[InputT, OutputT](
         self,
         agent: Agent[InputT, OutputT],
         input: InputT,

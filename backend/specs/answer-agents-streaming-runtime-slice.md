@@ -9,10 +9,9 @@
 本sliceは、`agent-declaration-runner-orchestration-slice.md`のPR7を具体化する。
 
 最後の2つのGemini役割(Direct Answer / Evidence Answer)を共通`Agent`宣言へ移し、その最初の実consumer
-として、既存`AgentRuntime`とは分けた`StreamingAgentRuntime` capabilityを追加する。既存メソッド
-`AgentRuntime.invoke`の命名と呼び出し向きは本sliceで変えず、streaming版は暫定的に
-`StreamingAgentRuntime.invoke_stream`とする。Agentをstatic declarationと動作主体のどちらとして読むか、
-および最終的なattempt API名は、migration完了後の命名整理でまとめて再訪する。
+として、既存`AgentRuntime`とは分けた`StreamingAgentRuntime` capabilityを追加する。本slice当時は
+`AgentRuntime.invoke`の命名と呼び出し向きを変えず、streaming版を暫定的に
+`StreamingAgentRuntime.invoke_stream`とした。後続で`call` / `stream_text`に改名した。
 
 flow(`DirectAnswerFlow` / `EvidenceAnswerFlow`)はphase policy ownerとして残り、attempt loop、
 continuation、delta配信、最終parse / finalize、fallbackを引き続き所有する。本sliceが動かすのは
@@ -62,15 +61,15 @@ Gemini 4役割すべてが共通runtimeとfactoryに乗り、回答Run全体のG
 
 #### Streaming runtime契約
 
-- non-streamingの`AgentRuntime.invoke`は変更しない。streamingは別capabilityである
-  `StreamingAgentRuntime.invoke_stream`として追加し、DeepSeek Runtimeやnon-streaming fakeへ
+- non-streamingの`AgentRuntime.call`は変更しない。streamingは別capabilityである
+  `StreamingAgentRuntime.stream_text`として追加し、DeepSeek Runtimeやnon-streaming fakeへ
   不要なメソッドを要求しない。Gemini Runtimeは両Protocolを満たす。
 - streaming flowへ注入するscope factoryも`StreamingAgentRuntimeScopeFactory`として分け、戻り値が
-  `invoke_stream`とclose可能なstream契約を持つことを型で保証する。
+  `stream_text`とclose可能なstream契約を持つことを型で保証する。
 
 ```python
 class AgentRuntime(Protocol):
-    async def invoke[InputT, OutputT](
+    async def call[InputT, OutputT](
         self, agent: Agent[InputT, OutputT], input: InputT, *, attempt_number: int,
     ) -> OutputT: ...
 
@@ -82,7 +81,7 @@ class AgentTextStream(Protocol):
 
 
 class StreamingAgentRuntime(Protocol):
-    def invoke_stream[InputT, OutputT](
+    def stream_text[InputT, OutputT](
         self, agent: Agent[InputT, OutputT], input: InputT, *, attempt_number: int,
     ) -> AgentTextStream: ...
 
@@ -91,23 +90,23 @@ class StreamingAgentRuntimeScopeFactory(Protocol):
     def __call__(self) -> AbstractAsyncContextManager[StreamingAgentRuntime]: ...
 ```
 
-- 契約は意図的に非対称とする: `invoke`は検証済み`OutputT`を返し、`invoke_stream`は
+- 契約は意図的に非対称とする: `call`は検証済み`OutputT`を返し、`stream_text`は
   model text fragmentの列を返す。streamingの最終validation / finalizeはworkflowデータ
   (evidence、requirement_ids)を要するためruntimeへ置けない。`StreamingAgentRuntime`は`OutputT`を
   返す契約を持たず、Flowが`agent.output_type`を最終parse / draft構築の正本として使用する。
-- `invoke_stream`はfragmentを加工せずyieldし、1 invocationにつきprovider streamを
+- `stream_text`はfragmentを加工せずyieldし、1 invocationにつきprovider streamを
   1本だけ開く。retry / fallback / delta配信 / continuation判断を行わない。
 - runtimeが吸収するprovider機構(現generatorから移設): prompt block検査、blocked finish
   reason分類、終端reason欠落の`STREAM_TRUNCATED`化、`translate_gemini_error()`、
   SDK streamの`finally` `aclose`。すべて既存`AIProviderError`系語彙で、新defectを追加しない。
 - renderer、provider誤配線検査、provider config構築、親OTel contextの捕捉は
-  `invoke_stream()`呼び出し中に同期的に完了する。ここで失敗した場合、戻り値iterator、attempt span、
+  `stream_text()`呼び出し中に同期的に完了する。ここで失敗した場合、戻り値iterator、attempt span、
   provider streamを作らない。attempt spanとprovider streamは、返したinner async generatorが
   初めて反復されたときだけ開始する。一度も反復されず`aclose()`されたstreamはprovider call / spanとも0回。
 
 #### Streaming attempt span(手動lifecycle)
 
-- `invoke_stream()`呼び出し時にphaseのOTel parent contextを捕捉するが、attempt spanはまだ開始しない。
+- `stream_text()`呼び出し時にphaseのOTel parent contextを捕捉するが、attempt spanはまだ開始しない。
   inner async generatorの初回実行時に、公開OTel API
   (`Tracer.start_span(..., context=captured_parent)` / `Span.end()`)で
   `agent_provider_call`をdetached spanとして開始する。Logfireのprivate `_start` / `_end`は使わない。
@@ -150,8 +149,8 @@ provider stream outcomeは次で固定する。
 #### Agent宣言とtyped input
 
 - `Agent.response_schema`を`Mapping[str, Any] | None`へ改める(PR1契約の小改訂)。`None`は
-  「構造化出力を要求しないtext役割」を表し、Geminiの`invoke_stream`は
-  `response_mime_type` / `response_schema`を送らない。既存のstructured `invoke`とDeepSeek function-call
+  「構造化出力を要求しないtext役割」を表し、Geminiの`stream_text`は
+  `response_mime_type` / `response_schema`を送らない。既存のstructured `call`とDeepSeek function-call
   runtimeは`response_schema=None`を未対応の誤用としてrenderer / span / provider requestより前に拒否する。
   既存4役割(schemaあり)の宣言と挙動は変えない。
 - Direct Answer Agent: stable name `direct_answer`、`response_schema=None`、
@@ -236,8 +235,8 @@ class EvidenceAnswerInput:
 
 ### Non-goals
 
-- `invoke` / `invoke_stream`の最終命名、呼び出し向きの反転(`agent.run_attempt(...)`)、
-  ModelGateway改名(migration完了後の再訪議題)。
+- 呼び出し向きの反転(`agent.run_attempt(...)`)、ModelGateway改名(migration完了後の再訪議題)。
+  `invoke` / `invoke_stream`の最終命名は後続で`call` / `stream_text`とした。
 - 回答Run全体のGemini client共有(次の専用slice)。
 - delta transport(SSE / live_updates)、`LiveAnswerDraftSession`、continuation機構の変更。
 - `result_assembly`、citation検証、status導出の変更。
@@ -248,8 +247,8 @@ class EvidenceAnswerInput:
 ### Done
 
 - 両Answer Agentが何者かを各1つの`Agent`宣言から読め、旧generator / call specの正本が消える。
-- non-streaming `AgentRuntime.invoke`を変えず、close可能なtext streamを返す
-  `StreamingAgentRuntime.invoke_stream` capabilityと専用scope factoryが実consumerから使われる。
+- non-streaming `AgentRuntime.call`を変えず、close可能なtext streamを返す
+  `StreamingAgentRuntime.stream_text` capabilityと専用scope factoryが実consumerから使われる。
 - streaming attemptが`agent_provider_call`として観測でき、分類済みerrorでexception eventが
   無く、放棄・cancellationでもspanがちょうど1回閉じる。
 - 同じprovider fragment列を与えたときのdraft、retry、fallback、delta順序、
@@ -285,10 +284,10 @@ schema正本moduleとして維持する。
 
 ## Test contract
 
-- `AgentRuntime.invoke`が変わらないことと、`StreamingAgentRuntime.invoke_stream` / `AgentTextStream` /
+- `AgentRuntime.call`が変わらないことと、`StreamingAgentRuntime.stream_text` / `AgentTextStream` /
   `StreamingAgentRuntimeScopeFactory`の契約をcontract testで固定する。DeepSeek Runtimeとnon-streaming fakeへ
-  `invoke_stream`を要求しない。
-- `invoke_stream`はfragment無加工、1 invocationにつき最大1 SDK streamとし、renderer / config失敗では
+  `stream_text`を要求しない。
+- `stream_text`はfragment無加工、1 invocationにつき最大1 SDK streamとし、renderer / config失敗では
   戻り値iterator・span・SDK streamが0件。一度も反復せずcloseしたstreamもprovider request / spanが0件。
 - provider機構の各経路(prompt block / blocked finish / 終端欠落truncation / 未分類translate)が
   既存分類で発生し、分類済みはspan終了後raiseでexception eventが無く、未分類は明示的

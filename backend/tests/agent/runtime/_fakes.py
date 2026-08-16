@@ -28,7 +28,7 @@ class ScriptedAgentRuntime:
         self._outcomes: deque[object | BaseException] = deque(outcomes)
         self.calls: list[AgentRuntimeCall] = []
 
-    async def invoke[InputT, OutputT](
+    async def call[InputT, OutputT](
         self,
         agent: Agent[InputT, OutputT],
         input: InputT,
