@@ -67,7 +67,7 @@ def _external_hit(url: str) -> ExternalSearchHit:
     return ExternalSearchHit(
         url=url,
         title=url.rsplit("/", maxsplit=1)[-1],
-        snippet="snippet",
+        content="content",
         source_name="Example",
         published_at=AS_OF,
     )

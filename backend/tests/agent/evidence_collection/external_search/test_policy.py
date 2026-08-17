@@ -26,7 +26,7 @@ def _hit(url: str, *, title: str | None = None) -> ExternalSearchHit:
     return ExternalSearchHit(
         url=url,
         title=title or url.rsplit("/", maxsplit=1)[-1],
-        snippet="snippet",
+        content="content",
         source_name="Example",
         published_at=datetime(2026, 7, 19, tzinfo=UTC),
     )

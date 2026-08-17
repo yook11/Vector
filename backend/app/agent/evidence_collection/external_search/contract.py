@@ -144,7 +144,7 @@ class ExternalSearchHit(BaseModel):
 
     url: SafeUrl
     title: str = Field(min_length=1)
-    snippet: str | None = Field(default=None, max_length=EXTERNAL_CONTENT_MAX_CHARS)
+    content: str | None = Field(default=None, max_length=EXTERNAL_CONTENT_MAX_CHARS)
     published_at: datetime | None = None
     source_name: str | None = None
 

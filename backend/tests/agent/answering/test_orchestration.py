@@ -443,7 +443,7 @@ def _external_runtime_for(
             ExternalSearchHit(
                 url=evidence.url,
                 title=evidence.title,
-                snippet=evidence.snippet,
+                content=evidence.content,
                 published_at=evidence.published_at,
                 source_name=evidence.source_name,
             )

@@ -163,7 +163,7 @@ async def test_successful_tool_call_has_one_safe_client_span_in_answer_trace(
             "https://source-name-sentinel-tool-5c8f.example/TOOL_URL_SENTINEL_903b"
         ),
         "title": "TOOL_TITLE_SENTINEL_690a",
-        "snippet": "TOOL_SNIPPET_SENTINEL_62d8",
+        "content": "TOOL_CONTENT_SENTINEL_62d8",
         "source": "source-name-sentinel-tool-5c8f.example",
         "published": "2026-07-19T12:34:56+00:00",
         "provider_response": "PROVIDER_RESPONSE_SENTINEL_TOOL_c54a",
@@ -184,7 +184,7 @@ async def test_successful_tool_call_has_one_safe_client_span_in_answer_trace(
                             {
                                 "url": sentinels["url"],
                                 "title": sentinels["title"],
-                                "content": sentinels["snippet"],
+                                "content": sentinels["content"],
                                 "published_date": sentinels["published"],
                             }
                         ],

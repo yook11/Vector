@@ -61,7 +61,7 @@ def _external_evidence(
     url: str,
     title: str,
     claim: str,
-    snippet: str | None = None,
+    content: str | None = None,
     published_at: datetime | None = None,
     source_name: str | None = None,
 ) -> ExternalSearchEvidence:
@@ -72,7 +72,7 @@ def _external_evidence(
         why_selected="selector explanation not used for synthesis text",
         url=url,
         title=title,
-        snippet=snippet,
+        content=content,
         published_at=published_at,
         source_name=source_name,
     )
@@ -191,7 +191,7 @@ def test_normalize_preserves_external_provenance_and_uses_claim_as_evidence_clai
         url="https://example.com/nvidia",
         title="NVIDIA source",
         claim="NVIDIA introduced a new accelerator.",
-        snippet="The accelerator targets AI inference.",
+        content="The accelerator targets AI inference.",
         published_at=published_at,
         source_name="Example News",
     )
@@ -226,7 +226,7 @@ def test_normalize_preserves_internal_provenance_with_public_article_id() -> Non
     assert item.source.article_id == 301
     assert item.source.title == "内部 NVIDIA 記事"
     assert item.source.published_at == published_at
-    assert not hasattr(item.source, "snippet")
+    assert not hasattr(item.source, "content")
     assert not hasattr(item.source, "evidence_claim")
     assert not hasattr(item.source, "source_name")
 
@@ -252,16 +252,16 @@ def test_normalize_builds_internal_text_from_claim_then_summary_and_key_points()
         claim="内部claimのみ。",
         summary="内部要約のみ。",
     )
-    external_with_snippet = _external_evidence(
+    external_with_content = _external_evidence(
         option_index=0,
-        url="https://example.com/with-snippet",
+        url="https://example.com/with-content",
         title="external rich",
         claim="外部主張。",
-        snippet="外部スニペット。",
+        content="外部の本文。",
     )
-    external_without_snippet = _external_evidence(
+    external_without_content = _external_evidence(
         option_index=1,
-        url="https://example.com/no-snippet",
+        url="https://example.com/no-content",
         title="external plain",
         claim="外部主張のみ。",
     )
@@ -269,14 +269,14 @@ def test_normalize_builds_internal_text_from_claim_then_summary_and_key_points()
     items = build_answer_input_evidence(
         _outcome(
             internal_evidence=[internal_with_points, internal_without_points],
-            external_evidence=[external_with_snippet, external_without_snippet],
+            external_evidence=[external_with_content, external_without_content],
         )
     )
 
     assert [item.text for item in items] == [
         "内部claim。\n内部要約。\n- 需要が増えた。\n- 供給制約が残る。",
         "内部claimのみ。\n内部要約のみ。",
-        "外部主張。\n外部スニペット。",
+        "外部主張。\n外部の本文。",
         "外部主張のみ。",
     ]
 
@@ -312,13 +312,13 @@ def test_normalize_ignores_internal_local_source_ref() -> None:
     assert item.source.source_ref == "1"
 
 
-def test_normalize_omits_empty_external_snippet_from_text() -> None:
+def test_normalize_omits_empty_external_content_from_text() -> None:
     evidence = _external_evidence(
         option_index=0,
-        url="https://example.com/empty-snippet",
+        url="https://example.com/empty-content",
         title="external",
         claim="external claim",
-        snippet="",
+        content="",
     )
 
     item = build_answer_input_evidence(

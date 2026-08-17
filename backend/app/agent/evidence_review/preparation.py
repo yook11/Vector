@@ -140,7 +140,7 @@ def _to_option(
         title=hit.title,
         source_name=hit.source_name,
         published_at=hit.published_at,
-        snippet=hit.snippet[:OPTION_SNIPPET_MAX_CHARS] if hit.snippet else None,
+        snippet=hit.content[:OPTION_SNIPPET_MAX_CHARS] if hit.content else None,
     )
 
 

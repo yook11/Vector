@@ -118,7 +118,7 @@ def _review_draft_selecting_with_missing(indexes: list[int], missing: list[str])
 
 
 def _external_hit(url: str, *, title: str) -> ExternalSearchHit:
-    return ExternalSearchHit(url=url, title=title, snippet="snippet")
+    return ExternalSearchHit(url=url, title=title, content="content")
 
 
 def _hit(

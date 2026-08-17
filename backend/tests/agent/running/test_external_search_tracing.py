@@ -184,7 +184,7 @@ class _Tool:
             ExternalSearchHit(
                 url="https://example.com/TRACE_URL_SENTINEL_63df",
                 title="HIT_TITLE_SENTINEL_4cab",
-                snippet="HIT_SNIPPET_SENTINEL_00f4",
+                content="HIT_SNIPPET_SENTINEL_00f4",
                 source_name="Example",
             )
         ]

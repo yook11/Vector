@@ -64,7 +64,7 @@ def _hit(
 
 
 def _external_hit(url: str, *, title: str | None = None) -> ExternalSearchHit:
-    return ExternalSearchHit(url=url, title=title or url, snippet="snippet")
+    return ExternalSearchHit(url=url, title=title or url, content="content")
 
 
 def _query_draft(queries: list[str]) -> ExternalQueryDraft:
