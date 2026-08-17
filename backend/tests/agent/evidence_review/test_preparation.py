@@ -446,7 +446,7 @@ def test_task_groups_truncate_external_snippet_to_the_review_budget() -> None:
         collected_task(
             task_index=0,
             external_hits=[
-                external_hit("https://example.com/long", snippet=collected_body)
+                external_hit("https://example.com/long", content=collected_body)
             ],
         )
     ]

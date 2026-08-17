@@ -78,7 +78,7 @@ def _external_evidence(*, url: str, option_index: int) -> ExternalSearchEvidence
         why_selected="why",
         url=url,
         title="external",
-        snippet="snippet",
+        content="content",
         published_at=AS_OF,
         source_name="Example",
     )
@@ -473,7 +473,7 @@ def test_answer_evidence_factory_maps_inputs_to_external_evidence_fields() -> No
     hit = ExternalSearchHit(
         url=SafeUrl("https://example.com/external-story"),
         title="external title",
-        snippet="external snippet",
+        content="external content",
         source_name="Example News",
         published_at=AS_OF,
     )
@@ -493,7 +493,7 @@ def test_answer_evidence_factory_maps_inputs_to_external_evidence_fields() -> No
     assert item.why_selected == "選定理由"
     assert str(item.url) == "https://example.com/external-story"
     assert item.title == "external title"
-    assert item.snippet == "external snippet"
+    assert item.content == "external content"
     assert item.source_name == "Example News"
     assert item.published_at == AS_OF
     assert item.task_index == 1

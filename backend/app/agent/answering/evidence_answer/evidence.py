@@ -84,6 +84,6 @@ def _internal_text(evidence: InternalArticleEvidence) -> str:
 
 
 def _external_text(evidence: ExternalSearchEvidence) -> str:
-    if not evidence.snippet:
+    if not evidence.content:
         return evidence.claim
-    return f"{evidence.claim}\n{evidence.snippet}"
+    return f"{evidence.claim}\n{evidence.content}"

@@ -2583,7 +2583,7 @@ def test_openapi_exposes_variant_specific_source_contract() -> None:
         "title",
         "publishedAt",
     }
-    assert "snippet" not in internal_schema["properties"]
+    assert "content" not in internal_schema["properties"]
     assert "sourceName" not in internal_schema["properties"]
     assert "evidenceClaim" not in internal_schema["properties"]
     assert any(
@@ -2592,4 +2592,4 @@ def test_openapi_exposes_variant_specific_source_contract() -> None:
     )
     assert "evidenceClaim" in external_schema["properties"]
     assert "evidenceClaim" in external_schema["required"]
-    assert "snippet" not in external_schema["properties"]
+    assert "content" not in external_schema["properties"]

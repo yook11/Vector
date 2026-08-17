@@ -189,12 +189,12 @@ def _hit_from_result(result: object) -> ExternalSearchHit | None:
     if url is None:
         return None
 
-    snippet = _clean_optional_snippet(result.get("content"))
+    content = _clean_optional_content(result.get("content"))
     published_at = _parse_published_date(result.get("published_date"))
     return ExternalSearchHit(
         url=url,
         title=title,
-        snippet=snippet,
+        content=content,
         published_at=published_at,
         source_name=_source_name(url.root),
     )
@@ -207,7 +207,7 @@ def _clean_required_text(value: object) -> str | None:
     return value or None
 
 
-def _clean_optional_snippet(value: object) -> str | None:
+def _clean_optional_content(value: object) -> str | None:
     if not isinstance(value, str):
         return None
     value = value.strip()

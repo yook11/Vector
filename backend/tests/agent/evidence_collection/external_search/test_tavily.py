@@ -233,7 +233,7 @@ async def test_search_maps_results_to_hits_preserving_rank() -> None:
             _result(
                 url="https://www.example.com/news",
                 title="  First title  ",
-                content="  First snippet  ",
+                content="  First content  ",
                 published_date="2026-07-04T12:30:00Z",
             ),
             _result(
@@ -257,10 +257,10 @@ async def test_search_maps_results_to_hits_preserving_rank() -> None:
         "https://investor.example.com/second",
     ]
     assert hits[0].title == "First title"
-    assert hits[0].snippet == "First snippet"
+    assert hits[0].content == "First content"
     assert hits[0].published_at == datetime(2026, 7, 4, 12, 30, tzinfo=UTC)
     assert hits[0].source_name == "example.com"
-    assert hits[1].snippet is None
+    assert hits[1].content is None
     assert hits[1].published_at == datetime(
         2026,
         7,
@@ -307,7 +307,7 @@ async def test_search_truncates_content_to_the_collection_cap() -> None:
         hits = await _search(provider, query="NVIDIA Blackwell", limit=10)
 
     assert len(hits) == 1
-    assert hits[0].snippet == "x" * EXTERNAL_CONTENT_MAX_CHARS
+    assert hits[0].content == "x" * EXTERNAL_CONTENT_MAX_CHARS
 
 
 def test_hit_rejects_over_cap_content_when_constructed_directly() -> None:
@@ -315,7 +315,7 @@ def test_hit_rejects_over_cap_content_when_constructed_directly() -> None:
         external_search_module.ExternalSearchHit(
             url="https://example.com/news",
             title="Example",
-            snippet="x" * (EXTERNAL_CONTENT_MAX_CHARS + 1),
+            content="x" * (EXTERNAL_CONTENT_MAX_CHARS + 1),
         )
 
 

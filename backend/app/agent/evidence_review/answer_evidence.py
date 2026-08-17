@@ -95,7 +95,7 @@ class ExternalSearchEvidence(BaseModel):
     )
     url: SafeUrl
     title: str = Field(min_length=1)
-    snippet: str | None = None
+    content: str | None = None
     published_at: datetime | None = None
     source_name: str | None = None
 
@@ -115,7 +115,7 @@ class ExternalSearchEvidence(BaseModel):
             why_selected=selection.why_selected,
             url=hit.url,
             title=hit.title,
-            snippet=hit.snippet,
+            content=hit.content,
             published_at=hit.published_at,
             source_name=hit.source_name,
         )
