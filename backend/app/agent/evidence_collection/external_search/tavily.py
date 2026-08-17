@@ -24,6 +24,9 @@ from app.agent.evidence_collection.external_search.contract import (
     ExternalSearchToolInput,
     ExternalSearchToolName,
 )
+from app.agent.evidence_collection.external_search.metrics import (
+    record_external_hit_dropped,
+)
 from app.shared.security.safe_url import SafeUrl
 
 __all__ = [
@@ -179,17 +182,25 @@ def _response_json(response: httpx.Response) -> dict[str, Any]:
 
 def _hit_from_result(result: object) -> ExternalSearchHit | None:
     if not isinstance(result, Mapping):
+        record_external_hit_dropped(reason="result_not_mapping")
         return None
 
     title = _clean_required_text(result.get("title"))
     if title is None:
+        record_external_hit_dropped(reason="title_missing")
         return None
 
     url = _safe_url(result.get("url"))
     if url is None:
+        record_external_hit_dropped(reason="url_unsafe")
         return None
 
     content = _clean_optional_content(result.get("content"))
+    # 本文だけ落として残しても出典として使えないため、超過はhitごと捨てる。
+    if content is not None and len(content) > EXTERNAL_CONTENT_MAX_CHARS:
+        record_external_hit_dropped(reason="content_too_long")
+        return None
+
     published_at = _parse_published_date(result.get("published_date"))
     return ExternalSearchHit(
         url=url,
@@ -211,9 +222,7 @@ def _clean_optional_content(value: object) -> str | None:
     if not isinstance(value, str):
         return None
     value = value.strip()
-    if not value:
-        return None
-    return value[:EXTERNAL_CONTENT_MAX_CHARS]
+    return value or None
 
 
 def _safe_url(value: object) -> SafeUrl | None:

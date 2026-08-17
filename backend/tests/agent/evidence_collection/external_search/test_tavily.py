@@ -5,10 +5,11 @@ from __future__ import annotations
 import json
 from collections.abc import Callable
 from datetime import UTC, date, datetime, timedelta, timezone
-from typing import Any
+from typing import Any, get_args
 
 import httpx
 import pytest
+from logfire.testing import CaptureLogfire
 from pydantic import SecretStr, ValidationError
 
 import app.agent.evidence_collection.external_search as external_search_module
@@ -18,8 +19,20 @@ from app.agent.evidence_collection.external_search import (
     TAVILY_SEARCH_URL,
     ExternalSearchProviderError,
 )
+from app.agent.evidence_collection.external_search.metrics import ExternalHitDropReason
+from tests.logfire._metric_helpers import assert_attribute_contract, collected_metrics
 
 TAVILY_TEST_KEY = "tvly-test-secret"
+_HIT_DROPPED_METRIC = "vector.agent.external_search.hit_dropped"
+
+
+def _drop_counts_by_reason(metrics: list[dict[str, Any]]) -> dict[str, int]:
+    """drop counterのreason別加算値を取り出す(期待値は持たない)。"""
+    metric = next(m for m in metrics if m["name"] == _HIT_DROPPED_METRIC)
+    return {
+        str(point["attributes"]["reason"]): int(point["value"])
+        for point in metric["data"]["data_points"]
+    }
 
 
 class _CloseTrackingTavilyClient:
@@ -292,10 +305,16 @@ async def test_search_caps_hits_to_requested_limit() -> None:
 
 
 @pytest.mark.asyncio
-async def test_search_truncates_content_to_the_collection_cap() -> None:
+async def test_search_drops_only_the_result_whose_content_exceeds_the_cap() -> None:
+    """閾値超過は切り詰めず、その1件だけをhitごと落とす。"""
     payload = {
         "results": [
-            _result(content="x" * (EXTERNAL_CONTENT_MAX_CHARS + 25)),
+            _result(
+                url="https://example.com/oversized",
+                title="Oversized",
+                content="x" * (EXTERNAL_CONTENT_MAX_CHARS + 1),
+            ),
+            _result(url="https://example.com/kept", title="Kept"),
         ]
     }
 
@@ -306,8 +325,26 @@ async def test_search_truncates_content_to_the_collection_cap() -> None:
 
         hits = await _search(provider, query="NVIDIA Blackwell", limit=10)
 
-    assert len(hits) == 1
-    assert hits[0].content == "x" * EXTERNAL_CONTENT_MAX_CHARS
+    assert [hit.title for hit in hits] == ["Kept"]
+
+
+@pytest.mark.asyncio
+async def test_search_keeps_a_full_length_provider_content_intact() -> None:
+    """providerが通常返す長さの本文が削られずに残る(収集段で切らない)。
+
+    1,500字はTavilyの通常上限(1 chunk 500字 x chunks_per_source既定3)。
+    """
+    provider_content = "x" * 1500
+    payload = {"results": [_result(content=provider_content)]}
+
+    async with httpx.AsyncClient(
+        transport=httpx.MockTransport(lambda _: _response(payload))
+    ) as client:
+        provider = _provider(client)
+
+        hits = await _search(provider, query="NVIDIA Blackwell", limit=10)
+
+    assert hits[0].content == provider_content
 
 
 def test_hit_rejects_over_cap_content_when_constructed_directly() -> None:
@@ -399,6 +436,47 @@ async def test_search_drops_only_result_with_invalid_url_or_empty_title() -> Non
         hits = await _search(provider, query="NVIDIA Blackwell", limit=10)
 
     assert [str(hit.url) for hit in hits] == ["https://example.com/valid"]
+
+
+@pytest.mark.asyncio
+async def test_search_records_a_drop_metric_for_every_intake_rejection(
+    capfire: CaptureLogfire,
+) -> None:
+    """収集段で落とした1件ごとに、理由ラベル付きでcounterが1つ増える。"""
+    payload = {
+        "results": [
+            "not-a-mapping",
+            _result(url="https://example.com/empty-title", title="  "),
+            _result(url="http://169.254.169.254/news", title="Private IP"),
+            _result(
+                url="https://example.com/oversized",
+                title="Oversized",
+                content="x" * (EXTERNAL_CONTENT_MAX_CHARS + 1),
+            ),
+            _result(url="https://example.com/valid", title="Valid"),
+        ]
+    }
+
+    async with httpx.AsyncClient(
+        transport=httpx.MockTransport(lambda _: _response(payload))
+    ) as client:
+        provider = _provider(client)
+
+        hits = await _search(provider, query="NVIDIA Blackwell", limit=10)
+
+    metrics = collected_metrics(capfire)
+    assert [hit.title for hit in hits] == ["Valid"]
+    assert_attribute_contract(
+        metrics,
+        _HIT_DROPPED_METRIC,
+        allowed={"reason": set(get_args(ExternalHitDropReason))},
+    )
+    assert _drop_counts_by_reason(metrics) == {
+        "result_not_mapping": 1,
+        "title_missing": 1,
+        "url_unsafe": 1,
+        "content_too_long": 1,
+    }
 
 
 @pytest.mark.parametrize("status_code", [401, 429, 500])
