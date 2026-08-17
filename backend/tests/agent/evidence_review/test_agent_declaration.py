@@ -153,14 +153,14 @@ def test_prompt_escapes_option_injection_and_forgery() -> None:
         index=0,
         title=f"internal title {boundary_attack}{option_forgery}",
         source_name=None,
-        snippet=f"internal summary {boundary_attack}",
+        body=f"internal summary {boundary_attack}",
     )
     external_like_option = evidence_option(
         index=1,
         title="external title",
         source_name=f"source {boundary_attack}",
         published_at=AS_OF,
-        snippet=f"snippet {boundary_attack}",
+        body=f"body {boundary_attack}",
     )
     rendered = reviewer_agent.prompt.input_renderer(
         review_input(

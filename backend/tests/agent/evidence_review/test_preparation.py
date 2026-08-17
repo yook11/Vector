@@ -15,7 +15,7 @@ from app.agent.evidence_collection.external_search.contract import (
     EXTERNAL_CONTENT_MAX_CHARS,
 )
 from app.agent.evidence_review.preparation import (
-    OPTION_SNIPPET_MAX_CHARS,
+    OPTION_BODY_MAX_CHARS,
     EvidenceOption,
     EvidenceReviewInput,
     EvidenceReviewPreparation,
@@ -44,7 +44,7 @@ def test_evidence_option_is_unified_and_excludes_source_metadata() -> None:
     """保証するテスト条件 1。内外で同一 field 構成、出所種別・URL 等を含まない。"""
     _assert_frozen_slots_dataclass(EvidenceOption)
     field_names = {field.name for field in fields(EvidenceOption)}
-    assert field_names == {"index", "title", "source_name", "published_at", "snippet"}
+    assert field_names == {"index", "title", "source_name", "published_at", "body"}
     forbidden = {
         "url",
         "assessment_id",
@@ -406,14 +406,14 @@ def test_task_groups_keep_a_task_with_no_options_as_an_empty_group() -> None:
     assert groups[2].options == ()
 
 
-def test_task_groups_map_internal_source_name_to_none_and_truncate_snippet() -> None:
-    """内部の選択肢: source_name=None、snippetはsummaryとkey_points連結をcapでtruncate。
+def test_task_groups_map_internal_source_name_to_none_and_truncate_body() -> None:
+    """内部の選択肢: source_name=None、bodyはsummaryとkey_points連結をcapでtruncate。
 
     summary単体ではcapに届かない入力で、連結の実施と連結後のtruncateを区別する。
     """
     from_tasks = EvidenceReviewPreparation.from_tasks
     summary = "short summary"
-    point = "p" * OPTION_SNIPPET_MAX_CHARS
+    point = "p" * OPTION_BODY_MAX_CHARS
     hit = internal_hit(
         assessment_id=1001,
         curation_id=1,
@@ -428,13 +428,13 @@ def test_task_groups_map_internal_source_name_to_none_and_truncate_snippet() -> 
 
     option = groups[0].options[0]
     # 連結形式(summaryの次行に"- "付きkey_point)は投影仕様として直書きする。
-    expected_snippet = f"{summary}\n- {point}"[:OPTION_SNIPPET_MAX_CHARS]
+    expected_body = f"{summary}\n- {point}"[:OPTION_BODY_MAX_CHARS]
     assert option.source_name is None
     assert option.published_at == AS_OF
-    assert option.snippet == expected_snippet
+    assert option.body == expected_body
 
 
-def test_task_groups_truncate_external_snippet_to_the_review_budget() -> None:
+def test_task_groups_truncate_external_body_to_the_review_budget() -> None:
     """外部の選択肢: 収集境界いっぱいの本文もReviewer予算まで切る。
 
     収集境界の上限とReviewerへ見せる予算は別の関心なので、投影は上流の値に
@@ -453,7 +453,7 @@ def test_task_groups_truncate_external_snippet_to_the_review_budget() -> None:
 
     groups = from_tasks(tasks).task_groups
 
-    assert groups[0].options[0].snippet == collected_body[:OPTION_SNIPPET_MAX_CHARS]
+    assert groups[0].options[0].body == collected_body[:OPTION_BODY_MAX_CHARS]
 
 
 def test_task_groups_is_empty_tuple_when_there_are_no_tasks() -> None:

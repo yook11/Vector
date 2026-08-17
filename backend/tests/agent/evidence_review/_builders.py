@@ -134,14 +134,14 @@ def evidence_option(
     title: str,
     source_name: str | None = None,
     published_at: datetime | None = None,
-    snippet: str | None = None,
+    body: str | None = None,
 ) -> EvidenceOption:
     return EvidenceOption(
         index=index,
         title=title,
         source_name=source_name,
         published_at=published_at,
-        snippet=snippet,
+        body=body,
     )
 
 

@@ -12,7 +12,7 @@ from app.agent.evidence_review.preparation import (
 )
 from app.analysis.prompt_safety import sanitize_for_untrusted_block
 
-EVIDENCE_REVIEWER_PROMPT_VERSION: Final[str] = "v4"
+EVIDENCE_REVIEWER_PROMPT_VERSION: Final[str] = "v5"
 
 EVIDENCE_REVIEWER_INSTRUCTIONS: Final[str] = """\
 検索で集まった選択肢を精査し、回答の根拠に使えるものを選んでください。
@@ -107,5 +107,5 @@ def _render_option(option: EvidenceOption) -> dict[str, object]:
         "title": sanitize_for_untrusted_block(option.title),
         "source_name": sanitize_for_untrusted_block(option.source_name or "unknown"),
         "published_at": published_at,
-        "snippet": sanitize_for_untrusted_block(option.snippet or ""),
+        "body": sanitize_for_untrusted_block(option.body or ""),
     }
