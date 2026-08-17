@@ -55,8 +55,9 @@ EXTERNAL_SEARCH_AGENT_HARD_LIMIT = 3
 EXTERNAL_SEARCH_HITS_PER_QUERY = 10
 EXTERNAL_SEARCH_HIT_POOL_LIMIT_PER_TASK = 20
 EVIDENCE_WHY_SELECTED_MAX_CHARS = 300
-# 収集した外部記事の異常値を丸めるための上限。Reviewer表示の予算とは別。
-EXTERNAL_CONTENT_MAX_CHARS = 1000
+# 収集した外部記事の異常値を拒否するための閾値。Tavilyの通常上限(500字×3chunk)の
+# 十分上に置き、provider契約の変化だけを捕まえる。Reviewer表示の予算とは別。
+EXTERNAL_CONTENT_MAX_CHARS = 4000
 
 TimeFilterFailureReason = Literal[
     "future_calendar_month",
