@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Annotated, Final, Self
+from typing import TYPE_CHECKING, Annotated, Final, Self
 
 from pydantic import BaseModel, ConfigDict, Field, StringConstraints, model_validator
 
@@ -20,11 +20,15 @@ from app.agent.evidence_collection.internal_search.contract import (
     InternalArticleSearchHit,
 )
 from app.agent.evidence_review.preparation import EvidenceReviewPreparation
-from app.agent.evidence_review.selection import (
-    EvidenceReviewerResponse,
-    EvidenceReviewerSelection,
-)
 from app.shared.security.safe_url import SafeUrl
+
+if TYPE_CHECKING:
+    # 件数上限の正本をこのモジュールが持つため、selection側が実行時にこちらを
+    # importする。逆向きは型注釈だけなので実行時依存を持たない。
+    from app.agent.evidence_review.selection import (
+        EvidenceReviewerResponse,
+        EvidenceReviewerSelection,
+    )
 
 __all__ = [
     "ANSWER_EVIDENCE_LIMIT",

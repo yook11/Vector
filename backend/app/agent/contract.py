@@ -31,7 +31,6 @@ __all__ = [
     "AnswerEventReporter",
     "EVIDENCE_CLAIM_MAX_CHARS",
     "EVIDENCE_REVIEW_MISSING_LIMIT",
-    "EVIDENCE_REVIEWER_SELECTION_LIMIT",
     "EXTERNAL_QUERY_MAX_CHARS",
     "EXTERNAL_TASK_QUERY_LIMIT",
     "ExternalSearchHitsFetchedEvent",
@@ -251,8 +250,6 @@ EXTERNAL_QUERY_MAX_CHARS = 200
 EVIDENCE_CLAIM_MAX_CHARS = 300
 MISSING_ITEM_MAX_CHARS = 200
 
-# Run 単位で Reviewer が返せる選択件数の上限。
-EVIDENCE_REVIEWER_SELECTION_LIMIT: Final[int] = 15
 # Run 単位で reviewer が報告できる missing 件数の上限。
 EVIDENCE_REVIEW_MISSING_LIMIT: Final[int] = 8
 

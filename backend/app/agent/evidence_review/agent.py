@@ -5,10 +5,8 @@ from __future__ import annotations
 from typing import Any, Final
 
 from app.agent.agent import Agent, AgentPrompt, ModelSettings, ModelTarget
-from app.agent.contract import (
-    EVIDENCE_REVIEW_MISSING_LIMIT,
-    EVIDENCE_REVIEWER_SELECTION_LIMIT,
-)
+from app.agent.contract import EVIDENCE_REVIEW_MISSING_LIMIT
+from app.agent.evidence_review.answer_evidence import ANSWER_EVIDENCE_LIMIT
 from app.agent.evidence_review.preparation import EvidenceReviewInput
 from app.agent.evidence_review.prompts import (
     EVIDENCE_REVIEWER_INSTRUCTIONS,
@@ -25,7 +23,7 @@ EVIDENCE_REVIEWER_RESPONSE_SCHEMA: Final[dict[str, Any]] = {
         "selections": {
             "type": "array",
             "description": "選択肢をindexで参照する採用リスト。",
-            "maxItems": EVIDENCE_REVIEWER_SELECTION_LIMIT,
+            "maxItems": ANSWER_EVIDENCE_LIMIT,
             "items": {
                 "type": "object",
                 "additionalProperties": False,

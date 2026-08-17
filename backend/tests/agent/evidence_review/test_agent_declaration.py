@@ -9,11 +9,9 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import Any
 
-from app.agent.contract import (
-    EVIDENCE_REVIEW_MISSING_LIMIT,
-    EVIDENCE_REVIEWER_SELECTION_LIMIT,
-)
+from app.agent.contract import EVIDENCE_REVIEW_MISSING_LIMIT
 from app.agent.evidence_review.agent import EVIDENCE_REVIEWER_AGENT
+from app.agent.evidence_review.answer_evidence import ANSWER_EVIDENCE_LIMIT
 from app.agent.evidence_review.deepseek_binding import (
     EVIDENCE_REVIEWER_DEEPSEEK_BINDING,
 )
@@ -50,7 +48,7 @@ def test_evidence_reviewer_agent_pins_model_and_output_settings() -> None:
 
 def test_evidence_reviewer_agent_pins_output_json_schema() -> None:
     """モデルが返す出力JSONのschemaを宣言で固定する。"""
-    selection_limit = EVIDENCE_REVIEWER_SELECTION_LIMIT
+    selection_limit = ANSWER_EVIDENCE_LIMIT
     missing_limit = EVIDENCE_REVIEW_MISSING_LIMIT
 
     schema = _plain_schema(EVIDENCE_REVIEWER_AGENT.response_schema)

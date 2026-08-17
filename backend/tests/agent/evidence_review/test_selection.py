@@ -9,7 +9,7 @@ from __future__ import annotations
 import pytest
 from pydantic import ValidationError
 
-from app.agent.contract import EVIDENCE_REVIEWER_SELECTION_LIMIT
+from app.agent.evidence_review.answer_evidence import ANSWER_EVIDENCE_LIMIT
 from app.agent.evidence_review.selection import (
     EvidenceReviewerDraft,
     EvidenceReviewerResponse,
@@ -42,7 +42,7 @@ def test_reviewer_response_rejects_more_than_the_selection_limit() -> None:
             claim=f"claim-{index}",
             why_selected="why",
         )
-        for index in range(EVIDENCE_REVIEWER_SELECTION_LIMIT + 1)
+        for index in range(ANSWER_EVIDENCE_LIMIT + 1)
     ]
 
     with pytest.raises(ValidationError):
