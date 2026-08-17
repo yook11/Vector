@@ -2,14 +2,17 @@
 
 from __future__ import annotations
 
-from typing import Self
+from typing import Final, Self
 
 from pydantic import BaseModel, ConfigDict, Field
 
 from app.analysis.assessment.domain.ready import ReadyForAssessment
 from app.analysis.assessment.domain.result import InScope
 
-__all__ = ["InScopeAnalyzedArticle"]
+__all__ = ["MAX_SUMMARY_LEN", "InScopeAnalyzedArticle"]
+
+# 概念として想定外の長さだけを弾く structural safety net。字数は AI へ指示しない。
+MAX_SUMMARY_LEN: Final[int] = 6000
 
 
 class InScopeAnalyzedArticle(BaseModel):
@@ -19,7 +22,7 @@ class InScopeAnalyzedArticle(BaseModel):
 
     curation_id: int = Field(gt=0)
     title: str = Field(min_length=1)
-    summary: str = Field(min_length=1)
+    summary: str = Field(min_length=1, max_length=MAX_SUMMARY_LEN)
     assessment_result: InScope
 
     @classmethod

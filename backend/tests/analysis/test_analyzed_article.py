@@ -5,7 +5,7 @@ from __future__ import annotations
 import pytest
 from pydantic import ValidationError
 
-from app.analysis.analyzed_article import InScopeAnalyzedArticle
+from app.analysis.analyzed_article import MAX_SUMMARY_LEN, InScopeAnalyzedArticle
 from app.analysis.assessment.domain.ready import ReadyForAssessment
 from app.analysis.assessment.domain.result import (
     InScope,
@@ -75,6 +75,29 @@ def test_rejects_invalid_snapshot_fields(values: dict[str, object]) -> None:
             **values,
             assessment_result=_in_scope(),
         )
+
+
+def test_rejects_summary_over_max_length() -> None:
+    """上限を超えたsummaryではsnapshotを構築できない。"""
+    with pytest.raises(ValidationError):
+        InScopeAnalyzedArticle(
+            curation_id=1,
+            title="t",
+            summary="あ" * (MAX_SUMMARY_LEN + 1),
+            assessment_result=_in_scope(),
+        )
+
+
+def test_accepts_summary_at_max_length_boundary() -> None:
+    """上限ちょうどのsummaryは構築でき、値が削られない。"""
+    article = InScopeAnalyzedArticle(
+        curation_id=1,
+        title="t",
+        summary="あ" * MAX_SUMMARY_LEN,
+        assessment_result=_in_scope(),
+    )
+
+    assert len(article.summary) == MAX_SUMMARY_LEN
 
 
 def test_rejects_out_of_scope_category_in_assessment_result() -> None:

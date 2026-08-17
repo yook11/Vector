@@ -12,6 +12,8 @@ import pytest
 from pydantic import ValidationError
 
 from app.analysis.assessment.domain.result import (
+    MAX_INVESTOR_TAKE_LEN,
+    MAX_MENTION_SURFACE_LEN,
     InScope,
     InScopeCategory,
     KeyPoint,
@@ -154,15 +156,15 @@ class TestInScopeInvestorTakeSanitize:
         with pytest.raises(ValidationError):
             InScope(
                 category=InScopeCategory.AI,
-                investor_take="a" * 2001,
+                investor_take="a" * (MAX_INVESTOR_TAKE_LEN + 1),
             )
 
     def test_accepts_max_length_boundary(self) -> None:
         m = InScope(
             category=InScopeCategory.AI,
-            investor_take="a" * 2000,
+            investor_take="a" * MAX_INVESTOR_TAKE_LEN,
         )
-        assert len(m.investor_take) == 2000
+        assert len(m.investor_take) == MAX_INVESTOR_TAKE_LEN
 
 
 class TestOutOfScopeInvestorTakeSanitize:
@@ -179,11 +181,11 @@ class TestOutOfScopeInvestorTakeSanitize:
 
     def test_rejects_over_max_length(self) -> None:
         with pytest.raises(ValidationError):
-            OutOfScope(investor_take="a" * 2001)
+            OutOfScope(investor_take="a" * (MAX_INVESTOR_TAKE_LEN + 1))
 
     def test_accepts_max_length_boundary(self) -> None:
-        m = OutOfScope(investor_take="a" * 2000)
-        assert len(m.investor_take) == 2000
+        m = OutOfScope(investor_take="a" * MAX_INVESTOR_TAKE_LEN)
+        assert len(m.investor_take) == MAX_INVESTOR_TAKE_LEN
 
 
 class TestMentionTypeValueSet:
@@ -226,11 +228,13 @@ class TestMentionSanitize:
 
     def test_rejects_over_max_length(self) -> None:
         with pytest.raises(ValidationError):
-            Mention(surface="a" * 201, type=MentionType.COMPANY)
+            Mention(
+                surface="a" * (MAX_MENTION_SURFACE_LEN + 1), type=MentionType.COMPANY
+            )
 
     def test_accepts_max_length_boundary(self) -> None:
-        m = Mention(surface="a" * 200, type=MentionType.COMPANY)
-        assert len(m.surface) == 200
+        m = Mention(surface="a" * MAX_MENTION_SURFACE_LEN, type=MentionType.COMPANY)
+        assert len(m.surface) == MAX_MENTION_SURFACE_LEN
 
     def test_rejects_unknown_mention_type(self) -> None:
         with pytest.raises(ValidationError):
