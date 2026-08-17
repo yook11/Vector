@@ -13,7 +13,7 @@ from app.agent.evidence_collection.internal_search.contract import (
 )
 
 __all__ = [
-    "OPTION_SNIPPET_MAX_CHARS",
+    "OPTION_BODY_MAX_CHARS",
     "EvidenceOption",
     "EvidenceOptionOrigin",
     "EvidenceReviewInput",
@@ -22,7 +22,7 @@ __all__ = [
 ]
 
 # Reviewerプロンプトは候補を全件並べるため、1件あたりの本文をここで抑える。
-OPTION_SNIPPET_MAX_CHARS = 500
+OPTION_BODY_MAX_CHARS = 500
 
 
 @dataclass(frozen=True, slots=True)
@@ -33,7 +33,7 @@ class EvidenceOption:
     title: str
     source_name: str | None
     published_at: datetime | None
-    snippet: str | None
+    body: str | None
 
 
 @dataclass(frozen=True, slots=True)
@@ -133,22 +133,22 @@ def _to_option(
             title=hit.content.title,
             source_name=None,
             published_at=hit.content.published_at,
-            snippet=_internal_option_snippet(hit),
+            body=_internal_option_body(hit),
         )
     return EvidenceOption(
         index=index,
         title=hit.title,
         source_name=hit.source_name,
         published_at=hit.published_at,
-        snippet=hit.content[:OPTION_SNIPPET_MAX_CHARS] if hit.content else None,
+        body=hit.content[:OPTION_BODY_MAX_CHARS] if hit.content else None,
     )
 
 
-def _internal_option_snippet(hit: InternalArticleSearchHit) -> str:
+def _internal_option_body(hit: InternalArticleSearchHit) -> str:
     content = hit.content
     if not content.key_points:
         combined = content.summary
     else:
         key_points = "\n".join(f"- {point}" for point in content.key_points)
         combined = f"{content.summary}\n{key_points}"
-    return combined[:OPTION_SNIPPET_MAX_CHARS]
+    return combined[:OPTION_BODY_MAX_CHARS]

@@ -10,7 +10,7 @@ from app.agent.evidence_review.answer_evidence import (
     InternalArticleEvidence,
 )
 from app.agent.evidence_review.preparation import (
-    OPTION_SNIPPET_MAX_CHARS,
+    OPTION_BODY_MAX_CHARS,
     EvidenceOption,
     EvidenceReviewInput,
     EvidenceReviewPreparation,
@@ -26,7 +26,7 @@ from app.agent.evidence_review.selection import (
 
 __all__ = [
     "ANSWER_EVIDENCE_LIMIT",
-    "OPTION_SNIPPET_MAX_CHARS",
+    "OPTION_BODY_MAX_CHARS",
     "AnswerEvidence",
     "EvidenceOption",
     "EvidenceRunCompleted",
