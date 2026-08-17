@@ -7,21 +7,22 @@ from dataclasses import dataclass
 from datetime import datetime
 
 from app.agent.evidence_collection.contract import CollectedTask
-from app.agent.evidence_collection.external_search.contract import (
-    OPTION_SNIPPET_MAX_CHARS,
-    ExternalSearchHit,
-)
+from app.agent.evidence_collection.external_search.contract import ExternalSearchHit
 from app.agent.evidence_collection.internal_search.contract import (
     InternalArticleSearchHit,
 )
 
 __all__ = [
+    "OPTION_SNIPPET_MAX_CHARS",
     "EvidenceOption",
     "EvidenceOptionOrigin",
     "EvidenceReviewInput",
     "EvidenceReviewPreparation",
     "EvidenceReviewTaskGroup",
 ]
+
+# Reviewerプロンプトは候補を全件並べるため、1件あたりの本文をここで抑える。
+OPTION_SNIPPET_MAX_CHARS = 500
 
 
 @dataclass(frozen=True, slots=True)
@@ -139,7 +140,7 @@ def _to_option(
         title=hit.title,
         source_name=hit.source_name,
         published_at=hit.published_at,
-        snippet=hit.snippet,
+        snippet=hit.snippet[:OPTION_SNIPPET_MAX_CHARS] if hit.snippet else None,
     )
 
 

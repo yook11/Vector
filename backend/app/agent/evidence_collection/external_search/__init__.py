@@ -3,6 +3,7 @@
 from app.agent.evidence_collection.external_search.contract import (
     EVIDENCE_CLAIM_MAX_CHARS,
     EVIDENCE_WHY_SELECTED_MAX_CHARS,
+    EXTERNAL_CONTENT_MAX_CHARS,
     EXTERNAL_QUERY_MAX_CHARS,
     EXTERNAL_SEARCH_AGENT_HARD_LIMIT,
     EXTERNAL_SEARCH_HIT_POOL_LIMIT_PER_TASK,
@@ -10,7 +11,6 @@ from app.agent.evidence_collection.external_search.contract import (
     EXTERNAL_SEARCH_TOOL_NAME,
     EXTERNAL_TASK_QUERY_LIMIT,
     MISSING_ITEM_MAX_CHARS,
-    OPTION_SNIPPET_MAX_CHARS,
     ExternalQueryDraft,
     ExternalQueryGenerationInput,
     ExternalResearchRuntime,
@@ -41,9 +41,9 @@ from app.agent.evidence_collection.external_search.time_filter import (
 )
 
 __all__ = [
-    "OPTION_SNIPPET_MAX_CHARS",
     "EVIDENCE_CLAIM_MAX_CHARS",
     "EVIDENCE_WHY_SELECTED_MAX_CHARS",
+    "EXTERNAL_CONTENT_MAX_CHARS",
     "EXTERNAL_QUERY_MAX_CHARS",
     "EXTERNAL_SEARCH_AGENT_HARD_LIMIT",
     "EXTERNAL_SEARCH_HITS_PER_QUERY",

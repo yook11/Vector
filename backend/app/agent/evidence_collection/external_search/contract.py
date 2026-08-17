@@ -21,7 +21,6 @@ from app.agent.contract import (
     EXTERNAL_QUERY_MAX_CHARS,
     EXTERNAL_TASK_QUERY_LIMIT,
     MISSING_ITEM_MAX_CHARS,
-    OPTION_SNIPPET_MAX_CHARS,
 )
 from app.agent.planning.contract import ExternalResearchTask, TargetTimeWindow
 from app.agent.runtime.contract import AgentRuntime
@@ -30,6 +29,7 @@ from app.shared.security.safe_url import SafeUrl
 __all__ = [
     "EVIDENCE_CLAIM_MAX_CHARS",
     "EVIDENCE_WHY_SELECTED_MAX_CHARS",
+    "EXTERNAL_CONTENT_MAX_CHARS",
     "EXTERNAL_QUERY_MAX_CHARS",
     "EXTERNAL_SEARCH_AGENT_HARD_LIMIT",
     "EXTERNAL_SEARCH_HITS_PER_QUERY",
@@ -48,7 +48,6 @@ __all__ = [
     "ExternalSearchToolInput",
     "ExternalSearchToolName",
     "MISSING_ITEM_MAX_CHARS",
-    "OPTION_SNIPPET_MAX_CHARS",
     "TimeFilterFailureReason",
 ]
 
@@ -56,6 +55,8 @@ EXTERNAL_SEARCH_AGENT_HARD_LIMIT = 3
 EXTERNAL_SEARCH_HITS_PER_QUERY = 10
 EXTERNAL_SEARCH_HIT_POOL_LIMIT_PER_TASK = 20
 EVIDENCE_WHY_SELECTED_MAX_CHARS = 300
+# 収集した外部記事の異常値を丸めるための上限。Reviewer表示の予算とは別。
+EXTERNAL_CONTENT_MAX_CHARS = 1000
 
 TimeFilterFailureReason = Literal[
     "future_calendar_month",
@@ -143,7 +144,7 @@ class ExternalSearchHit(BaseModel):
 
     url: SafeUrl
     title: str = Field(min_length=1)
-    snippet: str | None = Field(default=None, max_length=OPTION_SNIPPET_MAX_CHARS)
+    snippet: str | None = Field(default=None, max_length=EXTERNAL_CONTENT_MAX_CHARS)
     published_at: datetime | None = None
     source_name: str | None = None
 

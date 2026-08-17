@@ -13,7 +13,7 @@ from pydantic import SecretStr, ValidationError
 
 import app.agent.evidence_collection.external_search as external_search_module
 from app.agent.evidence_collection.external_search import (
-    OPTION_SNIPPET_MAX_CHARS,
+    EXTERNAL_CONTENT_MAX_CHARS,
     TAVILY_MAX_RESULTS_LIMIT,
     TAVILY_SEARCH_URL,
     ExternalSearchProviderError,
@@ -292,10 +292,10 @@ async def test_search_caps_hits_to_requested_limit() -> None:
 
 
 @pytest.mark.asyncio
-async def test_search_truncates_content_to_option_snippet_cap() -> None:
+async def test_search_truncates_content_to_the_collection_cap() -> None:
     payload = {
         "results": [
-            _result(content="x" * (OPTION_SNIPPET_MAX_CHARS + 25)),
+            _result(content="x" * (EXTERNAL_CONTENT_MAX_CHARS + 25)),
         ]
     }
 
@@ -307,15 +307,15 @@ async def test_search_truncates_content_to_option_snippet_cap() -> None:
         hits = await _search(provider, query="NVIDIA Blackwell", limit=10)
 
     assert len(hits) == 1
-    assert hits[0].snippet == "x" * OPTION_SNIPPET_MAX_CHARS
+    assert hits[0].snippet == "x" * EXTERNAL_CONTENT_MAX_CHARS
 
 
-def test_hit_rejects_over_cap_snippet_when_constructed_directly() -> None:
+def test_hit_rejects_over_cap_content_when_constructed_directly() -> None:
     with pytest.raises(ValidationError):
         external_search_module.ExternalSearchHit(
             url="https://example.com/news",
             title="Example",
-            snippet="x" * (OPTION_SNIPPET_MAX_CHARS + 1),
+            snippet="x" * (EXTERNAL_CONTENT_MAX_CHARS + 1),
         )
 
 

@@ -94,11 +94,13 @@ def internal_hit(
     )
 
 
-def external_hit(url: str, *, title: str | None = None) -> ExternalSearchHit:
+def external_hit(
+    url: str, *, title: str | None = None, snippet: str = "external snippet"
+) -> ExternalSearchHit:
     return ExternalSearchHit(
         url=url,
         title=title or url.rsplit("/", maxsplit=1)[-1],
-        snippet="external snippet",
+        snippet=snippet,
         source_name="Example",
         published_at=AS_OF,
     )

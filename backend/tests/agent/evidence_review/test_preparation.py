@@ -12,9 +12,10 @@ from dataclasses import FrozenInstanceError, fields, is_dataclass
 import pytest
 
 from app.agent.evidence_collection.external_search.contract import (
-    OPTION_SNIPPET_MAX_CHARS,
+    EXTERNAL_CONTENT_MAX_CHARS,
 )
 from app.agent.evidence_review.preparation import (
+    OPTION_SNIPPET_MAX_CHARS,
     EvidenceOption,
     EvidenceReviewInput,
     EvidenceReviewPreparation,
@@ -431,6 +432,28 @@ def test_task_groups_map_internal_source_name_to_none_and_truncate_snippet() -> 
     assert option.source_name is None
     assert option.published_at == AS_OF
     assert option.snippet == expected_snippet
+
+
+def test_task_groups_truncate_external_snippet_to_the_review_budget() -> None:
+    """外部の選択肢: 収集境界いっぱいの本文もReviewer予算まで切る。
+
+    収集境界の上限とReviewerへ見せる予算は別の関心なので、投影は上流の値に
+    依存せず自分の予算で切る。
+    """
+    from_tasks = EvidenceReviewPreparation.from_tasks
+    collected_body = "x" * EXTERNAL_CONTENT_MAX_CHARS
+    tasks = [
+        collected_task(
+            task_index=0,
+            external_hits=[
+                external_hit("https://example.com/long", snippet=collected_body)
+            ],
+        )
+    ]
+
+    groups = from_tasks(tasks).task_groups
+
+    assert groups[0].options[0].snippet == collected_body[:OPTION_SNIPPET_MAX_CHARS]
 
 
 def test_task_groups_is_empty_tuple_when_there_are_no_tasks() -> None:

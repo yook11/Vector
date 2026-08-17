@@ -15,8 +15,8 @@ from opentelemetry.trace import SpanKind, StatusCode
 from pydantic import SecretStr, ValidationError
 
 from app.agent.evidence_collection.external_search.contract import (
+    EXTERNAL_CONTENT_MAX_CHARS,
     EXTERNAL_SEARCH_TOOL_NAME,
-    OPTION_SNIPPET_MAX_CHARS,
     ExternalSearchDateFilter,
     ExternalSearchHit,
     ExternalSearchProviderError,
@@ -213,7 +213,7 @@ def _clean_optional_snippet(value: object) -> str | None:
     value = value.strip()
     if not value:
         return None
-    return value[:OPTION_SNIPPET_MAX_CHARS]
+    return value[:EXTERNAL_CONTENT_MAX_CHARS]
 
 
 def _safe_url(value: object) -> SafeUrl | None:
