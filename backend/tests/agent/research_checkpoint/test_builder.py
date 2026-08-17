@@ -71,8 +71,8 @@ def _outcome(
 ) -> EvidenceRunCompleted:
     return EvidenceRunCompleted(
         answer_evidence=AnswerEvidence(
-            internal_articles=tuple(internal_evidence or []),
-            external_sources=tuple(external_evidence or []),
+            internal_evidence=tuple(internal_evidence or []),
+            external_evidence=tuple(external_evidence or []),
         ),
         review_missing=tuple(missing or []),
     )

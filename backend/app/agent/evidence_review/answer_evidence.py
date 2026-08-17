@@ -126,8 +126,8 @@ class AnswerEvidence(BaseModel):
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
-    internal_articles: tuple[InternalArticleEvidence, ...] = ()
-    external_sources: tuple[ExternalSearchEvidence, ...] = ()
+    internal_evidence: tuple[InternalArticleEvidence, ...] = ()
+    external_evidence: tuple[ExternalSearchEvidence, ...] = ()
 
     @classmethod
     def from_reviewer_response(
@@ -152,8 +152,8 @@ class AnswerEvidence(BaseModel):
                 del selection_by_index[index]
                 unadopted_indexes.add(index)
 
-        internal_articles: list[InternalArticleEvidence] = []
-        external_sources: list[ExternalSearchEvidence] = []
+        internal_evidence: list[InternalArticleEvidence] = []
+        external_evidence: list[ExternalSearchEvidence] = []
         seen_internal_source_identities: set[tuple[int, int]] = set()
         seen_external_source_identities: set[tuple[int, str]] = set()
 
@@ -167,7 +167,7 @@ class AnswerEvidence(BaseModel):
                 if source_identity in seen_internal_source_identities:
                     continue
                 seen_internal_source_identities.add(source_identity)
-                internal_articles.append(
+                internal_evidence.append(
                     InternalArticleEvidence.from_reviewed_hit(
                         origin.search_hit,
                         selection=selection,
@@ -181,7 +181,7 @@ class AnswerEvidence(BaseModel):
                 if source_identity in seen_external_source_identities:
                     continue
                 seen_external_source_identities.add(source_identity)
-                external_sources.append(
+                external_evidence.append(
                     ExternalSearchEvidence.from_reviewed_hit(
                         origin.search_hit,
                         selection=selection,
@@ -190,23 +190,23 @@ class AnswerEvidence(BaseModel):
                     )
                 )
 
-            if len(internal_articles) + len(external_sources) >= ANSWER_EVIDENCE_LIMIT:
+            if len(internal_evidence) + len(external_evidence) >= ANSWER_EVIDENCE_LIMIT:
                 break
 
         return cls(
-            internal_articles=tuple(internal_articles),
-            external_sources=tuple(external_sources),
+            internal_evidence=tuple(internal_evidence),
+            external_evidence=tuple(external_evidence),
         )
 
     @property
     def count(self) -> int:
-        return len(self.internal_articles) + len(self.external_sources)
+        return len(self.internal_evidence) + len(self.external_evidence)
 
     @property
     def task_indexes(self) -> set[int]:
         return {
             item.task_index
-            for item in (*self.internal_articles, *self.external_sources)
+            for item in (*self.internal_evidence, *self.external_evidence)
         }
 
     @model_validator(mode="after")
@@ -215,7 +215,7 @@ class AnswerEvidence(BaseModel):
             raise ValueError("answer evidence exceeds input limit")
 
         internal_source_identities = [
-            (item.task_index, item.curation_id) for item in self.internal_articles
+            (item.task_index, item.curation_id) for item in self.internal_evidence
         ]
         if len(internal_source_identities) != len(set(internal_source_identities)):
             raise ValueError(
@@ -223,15 +223,15 @@ class AnswerEvidence(BaseModel):
             )
 
         external_source_identities = [
-            (item.task_index, str(item.url)) for item in self.external_sources
+            (item.task_index, str(item.url)) for item in self.external_evidence
         ]
         if len(external_source_identities) != len(set(external_source_identities)):
             raise ValueError(
                 "external answer evidence URL must be unique within a task"
             )
 
-        option_indexes = [item.option_index for item in self.internal_articles] + [
-            item.option_index for item in self.external_sources
+        option_indexes = [item.option_index for item in self.internal_evidence] + [
+            item.option_index for item in self.external_evidence
         ]
         if len(option_indexes) != len(set(option_indexes)):
             raise ValueError("answer evidence option_index must be unique")

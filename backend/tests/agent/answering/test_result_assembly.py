@@ -439,7 +439,7 @@ def test_assembly_rejects_completed_evidence_for_an_uncollected_task() -> None:
     )
     evidence_run = EvidenceRunCompleted(
         answer_evidence=AnswerEvidence(
-            internal_articles=(_reviewed_internal_evidence(task_index=1),),
+            internal_evidence=(_reviewed_internal_evidence(task_index=1),),
         ),
         review_missing=(),
     )

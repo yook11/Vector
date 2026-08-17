@@ -19,8 +19,8 @@ def _outcome(
     external_evidence: list[ExternalSearchEvidence] | None = None,
 ) -> AnswerEvidence:
     return AnswerEvidence(
-        internal_articles=tuple(internal_evidence or []),
-        external_sources=tuple(external_evidence or []),
+        internal_evidence=tuple(internal_evidence or []),
+        external_evidence=tuple(external_evidence or []),
     )
 
 
