@@ -94,13 +94,13 @@ class PgVectorArticleSearchRepository:
 
         hits: list[InternalArticleSearchHit] = []
         for row in rows:
-            hit = _hit_from_row(row)
+            hit = _hit_from_search_row(row)
             if hit is not None:
                 hits.append(hit)
         return hits
 
 
-def _hit_from_row(row: Any) -> InternalArticleSearchHit | None:
+def _hit_from_search_row(row: Any) -> InternalArticleSearchHit | None:
     try:
         article = InScopeAnalyzedArticle.from_persisted_values(
             curation_id=row.curation_id,

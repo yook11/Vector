@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
-from typing import get_args
+from types import SimpleNamespace
+from typing import Any, get_args
 
 import pytest
 from logfire.testing import CaptureLogfire
@@ -25,13 +26,14 @@ from app.agent.evidence_collection.internal_search import (
 )
 from app.agent.evidence_collection.internal_search.article_search import (
     PgVectorArticleSearchRepository,
+    _hit_from_search_row,
 )
 from app.agent.evidence_collection.internal_search.contract import InternalSearchError
 from app.agent.evidence_collection.internal_search.metrics import InternalHitDropReason
 from app.agent.evidence_collection.internal_search.query_embedding import (
     InternalQueryEmbedding,
 )
-from app.analysis.analyzed_article import InScopeAnalyzedArticle
+from app.analysis.analyzed_article import MAX_SUMMARY_LEN, InScopeAnalyzedArticle
 from app.analysis.embedding.domain.value_objects import (
     EMBEDDING_DIMENSION,
     EmbeddingVector,
@@ -63,6 +65,22 @@ def _query_embedding(first: float = 1.0, second: float = 0.0) -> InternalQueryEm
         query="AI semiconductor demand",
         vector=EmbeddingVector(root=tuple(_vector(first, second))),
     )
+
+
+def _search_row(**overrides: object) -> Any:
+    """search_by_embedding の SELECT が返す1行を模す。"""
+    values: dict[str, object] = {
+        "assessment_id": 1,
+        "curation_id": 1,
+        "translated_title": "分析タイトル",
+        "summary": "分析要約",
+        "investor_take": "投資家視点",
+        "key_points": [],
+        "category_slug": "ai",
+        "published_at": datetime(2026, 1, 1, tzinfo=UTC),
+        "distance": 0.1,
+    }
+    return SimpleNamespace(**(values | overrides))
 
 
 class _FailingSession:
@@ -474,107 +492,6 @@ class TestPgVectorArticleSearchRepository:
         assert hits[0].content.key_points == []
         assert hits[0].content.mentions == []
 
-    async def test_search_skips_rows_that_cannot_be_reconstructed_as_in_scope(
-        self,
-        db_session: AsyncSession,
-        session_factory: async_sessionmaker[AsyncSession],
-        sample_source: NewsSource,
-        sample_categories: list[Category],
-    ) -> None:
-        await _create_analysis(
-            db_session,
-            sample_source,
-            sample_categories[0],
-            url="https://example.com/malformed-key-points",
-            translated_title="壊れた行",
-            embedding=_vector(1.0),
-            key_points="not-a-list",
-        )
-        await _create_analysis(
-            db_session,
-            sample_source,
-            sample_categories[0],
-            url="https://example.com/valid-key-points",
-            translated_title="正常な行",
-            embedding=_vector(1.0, 0.1),
-            key_points=[],
-        )
-        repo = PgVectorArticleSearchRepository(session_factory)
-
-        hits = await repo.search_by_embedding(_query_embedding(), limit=5)
-
-        assert [hit.article.title for hit in hits] == ["正常な行"]
-
-    async def test_search_drops_only_the_row_whose_summary_exceeds_its_invariant(
-        self,
-        db_session: AsyncSession,
-        session_factory: async_sessionmaker[AsyncSession],
-        sample_source: NewsSource,
-        sample_categories: list[Category],
-        capfire: CaptureLogfire,
-    ) -> None:
-        """上限超過の行だけが落ち、理由がsummary由来だと分かる形で残る。"""
-        await _create_analysis(
-            db_session,
-            sample_source,
-            sample_categories[0],
-            url="https://example.com/oversized",
-            translated_title="超過行",
-            summary="あ" * 6001,
-            embedding=_vector(1.0),
-            key_points=[],
-        )
-        await _create_analysis(
-            db_session,
-            sample_source,
-            sample_categories[0],
-            url="https://example.com/within-invariant",
-            translated_title="正常な行",
-            embedding=_vector(1.0, 0.1),
-            key_points=[],
-        )
-        repo = PgVectorArticleSearchRepository(session_factory)
-
-        hits = await repo.search_by_embedding(_query_embedding(), limit=5)
-
-        metrics = collected_metrics(capfire)
-        assert [hit.article.title for hit in hits] == ["正常な行"]
-        assert_attribute_contract(
-            metrics,
-            _HIT_DROPPED_METRIC,
-            allowed={"reason": set(get_args(InternalHitDropReason))},
-        )
-        assert attributes_of(metrics, _HIT_DROPPED_METRIC) == {
-            "reason": "summary_too_long"
-        }
-
-    async def test_search_records_a_non_length_reconstruction_failure_as_row_invalid(
-        self,
-        db_session: AsyncSession,
-        session_factory: async_sessionmaker[AsyncSession],
-        sample_source: NewsSource,
-        sample_categories: list[Category],
-        capfire: CaptureLogfire,
-    ) -> None:
-        """長さ以外の不整合は row_invalid へ畳む(今回の上限と切り分けられる)。"""
-        await _create_analysis(
-            db_session,
-            sample_source,
-            sample_categories[0],
-            url="https://example.com/malformed",
-            translated_title="壊れた行",
-            embedding=_vector(1.0),
-            key_points="not-a-list",
-        )
-        repo = PgVectorArticleSearchRepository(session_factory)
-
-        hits = await repo.search_by_embedding(_query_embedding(), limit=5)
-
-        assert hits == []
-        assert attributes_of(collected_metrics(capfire), _HIT_DROPPED_METRIC) == {
-            "reason": "row_invalid"
-        }
-
     async def test_hit_does_not_expose_embedding_raw_row_or_raw_key_points(
         self,
         db_session: AsyncSession,
@@ -604,3 +521,47 @@ class TestPgVectorArticleSearchRepository:
         assert not hasattr(hit, "embedding")
         assert not hasattr(hit, "key_points")
         assert isinstance(hit.content.mentions[0], str)
+
+
+class TestHitFromSearchRow:
+    """検索が返した1行をhitへ写す規則。DBは介さず写像だけを見る。"""
+
+    def test_returns_a_hit_for_a_row_that_satisfies_the_invariants(self) -> None:
+        hit = _hit_from_search_row(_search_row())
+
+        assert hit is not None
+        assert hit.article.title == "分析タイトル"
+
+    def test_drops_a_row_that_cannot_be_constructed_as_an_in_scope_article(
+        self,
+    ) -> None:
+        """構築不能な行はhitにならない。どのfieldで失敗したかは写像の契約ではない。"""
+        assert _hit_from_search_row(_search_row(key_points="not-a-list")) is None
+
+    def test_records_a_summary_length_drop_as_summary_too_long(
+        self, capfire: CaptureLogfire
+    ) -> None:
+        assert (
+            _hit_from_search_row(_search_row(summary="あ" * (MAX_SUMMARY_LEN + 1)))
+            is None
+        )
+
+        metrics = collected_metrics(capfire)
+        assert_attribute_contract(
+            metrics,
+            _HIT_DROPPED_METRIC,
+            allowed={"reason": set(get_args(InternalHitDropReason))},
+        )
+        assert attributes_of(metrics, _HIT_DROPPED_METRIC) == {
+            "reason": "summary_too_long"
+        }
+
+    def test_records_a_non_length_failure_as_row_invalid(
+        self, capfire: CaptureLogfire
+    ) -> None:
+        """長さ以外の構築失敗はrow_invalidへ畳み、今回の上限と切り分けられる。"""
+        assert _hit_from_search_row(_search_row(key_points="not-a-list")) is None
+
+        assert attributes_of(collected_metrics(capfire), _HIT_DROPPED_METRIC) == {
+            "reason": "row_invalid"
+        }

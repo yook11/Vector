@@ -19,7 +19,8 @@ Stage 4 が産出する業務結果 (「対象範囲内 / 対象範囲外」+ ta
   (in-scope 12 値 + ``out_of_scope``)
 
 このほか key_point 構造として ``Mention`` / ``KeyPoint`` / ``MentionType`` と上限定数
-``MAX_KEY_POINT_CONTENT_LEN`` / ``MAX_KEY_POINTS_PER_ASSESSMENT`` を公開し、
+``MAX_KEY_POINT_CONTENT_LEN`` / ``MAX_KEY_POINTS_PER_ASSESSMENT`` /
+``MAX_INVESTOR_TAKE_LEN`` / ``MAX_MENTION_SURFACE_LEN`` を公開し、
 briefing / trend_discovery と cross-BC で共有する。
 
 AI 境界では引き続きフラット形式 (``{category, investor_take, key_points}``)
@@ -90,6 +91,10 @@ class MentionType(StrEnum):
     PERSON = "person"
 
 
+# 固有名の表層。概念として想定外の長さだけを弾く structural safety net。
+MAX_MENTION_SURFACE_LEN: Final[int] = 200
+
+
 class Mention(BaseModel):
     """key_point に登場した固有名 1 件 (surface + type)。
 
@@ -101,7 +106,7 @@ class Mention(BaseModel):
 
     model_config = ConfigDict(frozen=True)
 
-    surface: str = Field(min_length=1, max_length=200)
+    surface: str = Field(min_length=1, max_length=MAX_MENTION_SURFACE_LEN)
     type: MentionType
 
     @field_validator("surface", mode="before")
@@ -154,6 +159,10 @@ class KeyPoint(BaseModel):
         return v
 
 
+# InScope / OutOfScope が共有する investor_take の上限。両者の対称を構造で保つ。
+MAX_INVESTOR_TAKE_LEN: Final[int] = 2000
+
+
 class InScope(BaseModel):
     """対象範囲内 (in-scope) と判定された結果。
 
@@ -172,7 +181,7 @@ class InScope(BaseModel):
     model_config = ConfigDict(frozen=True)
 
     category: InScopeCategory
-    investor_take: str = Field(min_length=1, max_length=2000)
+    investor_take: str = Field(min_length=1, max_length=MAX_INVESTOR_TAKE_LEN)
     key_points: list[KeyPoint] = Field(
         default_factory=list, max_length=MAX_KEY_POINTS_PER_ASSESSMENT
     )
@@ -202,7 +211,7 @@ class OutOfScope(BaseModel):
 
     model_config = ConfigDict(frozen=True)
 
-    investor_take: str = Field(min_length=1, max_length=2000)
+    investor_take: str = Field(min_length=1, max_length=MAX_INVESTOR_TAKE_LEN)
     key_points: list[KeyPoint] = Field(
         default_factory=list, max_length=MAX_KEY_POINTS_PER_ASSESSMENT
     )
