@@ -169,14 +169,14 @@ async def test_selection_restores_origin_and_task_from_a_cross_task_index() -> N
     assert isinstance(result, EvidenceRunCompleted)
     assert [
         (item.title, item.task_index)
-        for item in result.answer_evidence.internal_articles
+        for item in result.answer_evidence.internal_evidence
     ] == [("A-int-2", 0)]
     assert [
         (item.title, item.task_index)
-        for item in result.answer_evidence.external_sources
+        for item in result.answer_evidence.external_evidence
     ] == [("B-ext-2", 1)]
-    assert result.answer_evidence.internal_articles[0].option_index == 1
-    assert result.answer_evidence.external_sources[0].option_index == 3
+    assert result.answer_evidence.internal_evidence[0].option_index == 1
+    assert result.answer_evidence.external_evidence[0].option_index == 3
 
 
 @pytest.mark.asyncio
@@ -236,7 +236,7 @@ async def test_review_retries_at_most_twice_with_the_same_typed_input() -> None:
     assert isinstance(result, EvidenceRunCompleted)
     assert [call.attempt_number for call in runtime.calls] == [1, 2]
     assert runtime.calls[0].input is runtime.calls[1].input
-    assert len(result.answer_evidence.internal_articles) == 1
+    assert len(result.answer_evidence.internal_evidence) == 1
 
 
 @pytest.mark.asyncio
@@ -355,7 +355,9 @@ async def test_review_retries_after_invalid_draft_and_drops_invalid_selections()
 
     assert isinstance(result, EvidenceRunCompleted)
     assert [call.attempt_number for call in runtime.calls] == [1, 2]
-    assert [item.claim for item in result.answer_evidence.external_sources] == ["first"]
+    assert [item.claim for item in result.answer_evidence.external_evidence] == [
+        "first"
+    ]
 
 
 @pytest.mark.asyncio

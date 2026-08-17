@@ -66,7 +66,7 @@ def build_research_checkpoint(
         raise ValueError("answer evidence must reference a planned task")
 
     adopted_claims_by_task: dict[int, list[str]] = {}
-    for evidence in evidence_run.answer_evidence.external_sources:
+    for evidence in evidence_run.answer_evidence.external_evidence:
         adopted_claims_by_task.setdefault(evidence.task_index, []).append(
             evidence.claim
         )

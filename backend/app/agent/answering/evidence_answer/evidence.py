@@ -30,19 +30,12 @@ def build_answer_input_evidence(
     items: list[AnswerInputEvidence] = []
     next_ref = 1
 
-    for internal_article in evidence.internal_articles:
-        items.append(
-            _normalize_internal_evidence(
-                internal_article,
-                source_ref=str(next_ref),
-            )
-        )
+    for item in evidence.internal_evidence:
+        items.append(_normalize_internal_evidence(item, source_ref=str(next_ref)))
         next_ref += 1
 
-    for external_source in evidence.external_sources:
-        items.append(
-            _normalize_external_evidence(external_source, source_ref=str(next_ref))
-        )
+    for item in evidence.external_evidence:
+        items.append(_normalize_external_evidence(item, source_ref=str(next_ref)))
         next_ref += 1
 
     return items

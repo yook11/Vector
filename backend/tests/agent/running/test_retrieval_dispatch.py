@@ -1731,7 +1731,7 @@ async def test_time_filter_failure_still_collects_internal_hits_for_every_task(
         sorted(report.external_collection for report in reports),
         # time filter失敗でも内部精査の完了結果はCompletedになる。
         isinstance(evidence_run, EvidenceRunCompleted),
-        {item.title for item in evidence_run.answer_evidence.internal_articles},
+        {item.title for item in evidence_run.answer_evidence.internal_evidence},
     ) == (
         1,
         ["time_filter_failed", "time_filter_failed"],
@@ -1884,7 +1884,7 @@ async def test_internal_hits_are_kept_per_task_when_the_same_article_appears(
             item.title
             for item in _completed_evidence_run(
                 captured[0]
-            ).answer_evidence.internal_articles
+            ).answer_evidence.internal_evidence
         ],
     ) == (
         ["task1", "task0"],
@@ -1970,6 +1970,6 @@ async def test_some_tasks_incomplete_keeps_the_phrase_to_one_line_and_keeps_sour
     evidence_run = _completed_evidence_run(captured[0])
     assert reports[0].internal_collection == "failed"
     assert reports[1].internal_collection == "succeeded"
-    assert [item.title for item in evidence_run.answer_evidence.internal_articles] == [
+    assert [item.title for item in evidence_run.answer_evidence.internal_evidence] == [
         "survivor"
     ]

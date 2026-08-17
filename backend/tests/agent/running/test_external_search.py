@@ -1028,7 +1028,7 @@ async def test_workflow_constructs_task_ordered_external_outcome_before_answerin
             for report in reports
         ],
         # 同じURLでもtaskが異なるEvidenceはそれぞれ残す。
-        [item.option_index for item in evidence_run.answer_evidence.external_sources],
+        [item.option_index for item in evidence_run.answer_evidence.external_evidence],
         evidence_run.review_missing,
     ) == (
         [task.research_goal for task in tasks],

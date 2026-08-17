@@ -10,12 +10,13 @@ from __future__ import annotations
 import pytest
 from pydantic import ValidationError
 
-from app.agent.contract import ANSWER_EVIDENCE_LIMIT, EVIDENCE_REVIEW_MISSING_LIMIT
+from app.agent.contract import EVIDENCE_REVIEW_MISSING_LIMIT
 from app.agent.evidence_collection.external_search.contract import (
     MISSING_ITEM_MAX_CHARS,
     ExternalSearchHit,
 )
 from app.agent.evidence_review.answer_evidence import (
+    ANSWER_EVIDENCE_LIMIT,
     AnswerEvidence,
     EvidenceRunCompleted,
     EvidenceRunFailed,
@@ -87,7 +88,7 @@ def _external_evidence(*, url: str, option_index: int) -> ExternalSearchEvidence
 
 
 def test_answer_evidence_factory_drops_a_selection_of_an_index_never_shown() -> None:
-    """解決できない番号の選択は、他の採用を巻き込まずに落とす。"""
+    """LLMが選択肢にないindexを返した時、エビデンスから除外する。正常なものは影響を受けない。"""
     evidence = AnswerEvidence.from_reviewer_response(
         preparation=_preparation(internal_count=1, external_count=1),
         reviewer_response=_reviewer_response(
@@ -99,10 +100,10 @@ def test_answer_evidence_factory_drops_a_selection_of_an_index_never_shown() -> 
         ),
     )
 
-    assert len(evidence.internal_articles) == 1
-    assert len(evidence.external_sources) == 1
-    assert evidence.internal_articles[0].option_index == 0
-    assert evidence.external_sources[0].option_index == 1
+    assert len(evidence.internal_evidence) == 1
+    assert len(evidence.external_evidence) == 1
+    assert evidence.internal_evidence[0].option_index == 0
+    assert evidence.external_evidence[0].option_index == 1
 
 
 def test_answer_evidence_factory_keeps_the_first_when_claims_repeat() -> None:
@@ -119,10 +120,10 @@ def test_answer_evidence_factory_keeps_the_first_when_claims_repeat() -> None:
         ),
     )
 
-    assert len(evidence.internal_articles) == 1
-    assert len(evidence.external_sources) == 1
-    assert evidence.internal_articles[0].why_selected == "internal-first"
-    assert evidence.external_sources[0].why_selected == "external-first"
+    assert len(evidence.internal_evidence) == 1
+    assert len(evidence.external_evidence) == 1
+    assert evidence.internal_evidence[0].why_selected == "internal-first"
+    assert evidence.external_evidence[0].why_selected == "external-first"
 
 
 def test_answer_evidence_factory_drops_an_index_when_its_claims_conflict() -> None:
@@ -138,31 +139,29 @@ def test_answer_evidence_factory_drops_an_index_when_its_claims_conflict() -> No
         ),
     )
 
-    assert len(evidence.internal_articles) == 0
-    assert len(evidence.external_sources) == 1
-    assert evidence.external_sources[0].claim == "other"
+    assert len(evidence.internal_evidence) == 0
+    assert len(evidence.external_evidence) == 1
+    assert evidence.external_evidence[0].claim == "other"
 
 
 def test_answer_evidence_rejects_more_than_the_answerer_input_limit() -> None:
-    """AnswerEvidence自身もAnswerer入力上限を超える集合を受け付けない。"""
+    """AnswerEvidenceは上限を1件超えた集合では構築できない。"""
+    over_limit = [
+        _external_evidence(url="https://example.com/item", option_index=0)
+        for _ in range(ANSWER_EVIDENCE_LIMIT + 1)
+    ]
+
     with pytest.raises(ValidationError):
-        AnswerEvidence(
-            external_sources=[
-                _external_evidence(
-                    url=f"https://example.com/{index}", option_index=index
-                )
-                for index in range(ANSWER_EVIDENCE_LIMIT + 1)
-            ]
-        )
+        AnswerEvidence(external_evidence=over_limit)
 
 
 def test_answer_evidence_rejects_duplicate_internal_source_identity_within_task() -> (
     None
 ):
-    """同じtask内の内部検索の記事は集合内で一意に保つ。"""
+    """AnswerEvidenceとして採用された内部記事はタスクの中で必ず一意、重複して構築できない。"""
     with pytest.raises(ValidationError):
         AnswerEvidence(
-            internal_articles=[
+            internal_evidence=[
                 _internal_article_evidence(curation_id=1, option_index=0),
                 _internal_article_evidence(curation_id=1, option_index=1),
             ]
@@ -172,10 +171,10 @@ def test_answer_evidence_rejects_duplicate_internal_source_identity_within_task(
 def test_answer_evidence_rejects_duplicate_external_source_identity_within_task() -> (
     None
 ):
-    """同じtask内の外部記事URLは集合内で一意に保つ。"""
+    """AnswerEvidenceとして採用された外部記事はタスクの中で必ず一意、重複して構築できない。"""
     with pytest.raises(ValidationError):
         AnswerEvidence(
-            external_sources=[
+            external_evidence=[
                 _external_evidence(url="https://example.com/duplicate", option_index=0),
                 _external_evidence(url="https://example.com/duplicate", option_index=1),
             ]
@@ -186,10 +185,10 @@ def test_answer_evidence_rejects_duplicate_option_index_across_source_types() ->
     """同じoption_indexを内外に同時に載せられない。"""
     with pytest.raises(ValidationError):
         AnswerEvidence(
-            internal_articles=[
+            internal_evidence=[
                 _internal_article_evidence(curation_id=1, option_index=0)
             ],
-            external_sources=[
+            external_evidence=[
                 _external_evidence(url="https://example.com/external", option_index=0)
             ],
         )
@@ -226,7 +225,7 @@ def test_factory_keeps_first_selection_for_duplicate_url_within_task() -> None:
 
     assert [
         (item.task_index, item.claim, str(item.url))
-        for item in evidence.external_sources
+        for item in evidence.external_evidence
     ] == [(0, "selected-first", "https://example.com/duplicate")]
 
 
@@ -264,7 +263,7 @@ def test_factory_does_not_deduplicate_same_url_across_tasks() -> None:
 
     assert {
         (item.task_index, item.claim, str(item.url))
-        for item in evidence.external_sources
+        for item in evidence.external_evidence
     } == {
         (0, "claim-for-goal-A", "https://example.com/shared"),
         (1, "claim-for-goal-B", "https://example.com/shared"),
@@ -312,7 +311,7 @@ def test_factory_keeps_first_selection_for_duplicate_curation_id_within_task() -
 
     assert [
         (item.task_index, item.claim, item.curation_id)
-        for item in evidence.internal_articles
+        for item in evidence.internal_evidence
     ] == [(0, "selected-first", 42)]
 
 
@@ -364,7 +363,7 @@ def test_factory_does_not_deduplicate_same_curation_id_across_tasks() -> None:
 
     assert {
         (item.task_index, item.claim, item.curation_id)
-        for item in evidence.internal_articles
+        for item in evidence.internal_evidence
     } == {
         (0, "claim-for-goal-A", 42),
         (1, "claim-for-goal-B", 42),
@@ -407,11 +406,11 @@ def test_answer_evidence_factory_restores_option_origins_from_indexes() -> None:
 
     assert [
         (item.title, item.task_index, item.option_index)
-        for item in evidence.internal_articles
+        for item in evidence.internal_evidence
     ] == [("A-int-2", 2, 1)]
     assert [
         (item.title, item.task_index, item.option_index)
-        for item in evidence.external_sources
+        for item in evidence.external_evidence
     ] == [("B-ext-2", 5, 3)]
 
 
@@ -448,7 +447,7 @@ def test_answer_evidence_factory_resolves_indexes_in_task_index_order() -> None:
         reviewer_response=result,
     )
 
-    assert [(item.title, item.task_index) for item in evidence.internal_articles] == [
+    assert [(item.title, item.task_index) for item in evidence.internal_evidence] == [
         ("A-int", 0)
     ]
 
@@ -484,8 +483,8 @@ def test_answer_evidence_factory_preserves_indexes_around_an_empty_task() -> Non
     )
 
     assert (
-        len(evidence.external_sources),
-        [(item.title, item.task_index) for item in evidence.internal_articles],
+        len(evidence.external_evidence),
+        [(item.title, item.task_index) for item in evidence.internal_evidence],
     ) == (0, [("C-int", 2)])
 
 
@@ -509,8 +508,8 @@ def test_answer_evidence_factory_maps_inputs_to_internal_evidence_fields() -> No
         reviewer_response=result,
     )
 
-    assert len(evidence.external_sources) == 0
-    item = evidence.internal_articles[0]
+    assert len(evidence.external_evidence) == 0
+    item = evidence.internal_evidence[0]
     assert item.claim == "見出しの主張"
     assert item.why_selected == "選定理由"
     assert item.assessment_id == 2001
@@ -542,8 +541,8 @@ def test_answer_evidence_factory_maps_inputs_to_external_evidence_fields() -> No
         reviewer_response=result,
     )
 
-    assert len(evidence.internal_articles) == 0
-    item = evidence.external_sources[0]
+    assert len(evidence.internal_evidence) == 0
+    item = evidence.external_evidence[0]
     assert item.claim == "見出しの主張"
     assert item.why_selected == "選定理由"
     assert str(item.url) == "https://example.com/external-story"
@@ -560,8 +559,8 @@ def test_answer_evidence_factory_maps_inputs_to_external_evidence_fields() -> No
 
 def test_completed_accepts_evidence_and_reviewer_missing() -> None:
     answer_evidence = AnswerEvidence(
-        internal_articles=(_internal_article_evidence(curation_id=1, option_index=0),),
-        external_sources=(
+        internal_evidence=(_internal_article_evidence(curation_id=1, option_index=0),),
+        external_evidence=(
             _external_evidence(url="https://example.com/evidence", option_index=1),
         ),
     )

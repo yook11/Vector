@@ -312,11 +312,11 @@ def _record_evidence_run_span_attributes(
     )
     span.set_attribute(
         "internal_evidence_count",
-        len(answer_evidence.internal_articles),
+        len(answer_evidence.internal_evidence),
     )
     span.set_attribute(
         "external_evidence_count",
-        len(answer_evidence.external_sources),
+        len(answer_evidence.external_evidence),
     )
     span.set_attribute(
         "internal_collection_failed_task_count",
