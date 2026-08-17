@@ -15,6 +15,10 @@ from app.agent.evidence_collection.internal_search.contract import (
     InternalArticleSearchHit,
     InternalSearchError,
 )
+from app.agent.evidence_collection.internal_search.metrics import (
+    InternalHitDropReason,
+    record_internal_hit_dropped,
+)
 from app.agent.evidence_collection.internal_search.query_embedding import (
     InternalQueryEmbedding,
 )
@@ -106,7 +110,8 @@ def _hit_from_row(row: Any) -> InternalArticleSearchHit | None:
             investor_take=row.investor_take,
             key_points=row.key_points,
         )
-    except ValidationError:
+    except ValidationError as exc:
+        record_internal_hit_dropped(reason=_drop_reason(exc))
         return None
 
     return InternalArticleSearchHit(
@@ -118,3 +123,11 @@ def _hit_from_row(row: Any) -> InternalArticleSearchHit | None:
         ),
         distance=float(row.distance),
     )
+
+
+def _drop_reason(exc: ValidationError) -> InternalHitDropReason:
+    """summaryの長さ超過だけを切り分け、他はrow_invalidへ畳む。"""
+    for error in exc.errors():
+        if error["type"] == "string_too_long" and error["loc"] == ("summary",):
+            return "summary_too_long"
+    return "row_invalid"

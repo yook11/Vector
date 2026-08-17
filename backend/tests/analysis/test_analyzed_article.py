@@ -77,6 +77,32 @@ def test_rejects_invalid_snapshot_fields(values: dict[str, object]) -> None:
         )
 
 
+def test_accepts_summary_at_the_cap_and_rejects_beyond_it() -> None:
+    """概念として想定外の長さのsummaryだけを弾く。
+
+    上限6000はAIへ字数指示せず置くsafety netで、実測max(2,173)の約3倍。この倍率は
+    investor_take(2000) / MAX_KEY_POINT_CONTENT_LEN(500) と揃う。titleはDB側が
+    String(500)で縛るため型では持たない。
+    """
+    cap = 6000
+
+    at_cap = InScopeAnalyzedArticle(
+        curation_id=1,
+        title="t",
+        summary="あ" * cap,
+        assessment_result=_in_scope(),
+    )
+
+    assert len(at_cap.summary) == cap
+    with pytest.raises(ValidationError):
+        InScopeAnalyzedArticle(
+            curation_id=1,
+            title="t",
+            summary="あ" * (cap + 1),
+            assessment_result=_in_scope(),
+        )
+
+
 def test_rejects_out_of_scope_category_in_assessment_result() -> None:
     with pytest.raises(ValidationError):
         InScopeAnalyzedArticle.model_validate(

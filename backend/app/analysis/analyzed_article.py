@@ -19,7 +19,8 @@ class InScopeAnalyzedArticle(BaseModel):
 
     curation_id: int = Field(gt=0)
     title: str = Field(min_length=1)
-    summary: str = Field(min_length=1)
+    # summaryだけDBがTextで無制限。字数はAIに指示せず、概念として想定外の長さを弾く。
+    summary: str = Field(min_length=1, max_length=6000)
     assessment_result: InScope
 
     @classmethod

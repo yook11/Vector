@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
+from typing import get_args
 
 import pytest
+from logfire.testing import CaptureLogfire
 from sqlalchemy import text
 from sqlalchemy.exc import (
     IntegrityError,
@@ -25,6 +27,7 @@ from app.agent.evidence_collection.internal_search.article_search import (
     PgVectorArticleSearchRepository,
 )
 from app.agent.evidence_collection.internal_search.contract import InternalSearchError
+from app.agent.evidence_collection.internal_search.metrics import InternalHitDropReason
 from app.agent.evidence_collection.internal_search.query_embedding import (
     InternalQueryEmbedding,
 )
@@ -39,6 +42,13 @@ from app.models.article_curation import ArticleCuration
 from app.models.category import Category
 from app.models.news_source import NewsSource
 from app.models.out_of_scope_article_record import OutOfScopeArticleRecord
+from tests.logfire._metric_helpers import (
+    assert_attribute_contract,
+    attributes_of,
+    collected_metrics,
+)
+
+_HIT_DROPPED_METRIC = "vector.agent.internal_retrieval.hit_dropped"
 
 
 def _vector(first: float, second: float = 0.0) -> list[float]:
@@ -494,6 +504,76 @@ class TestPgVectorArticleSearchRepository:
         hits = await repo.search_by_embedding(_query_embedding(), limit=5)
 
         assert [hit.article.title for hit in hits] == ["正常な行"]
+
+    async def test_search_drops_only_the_row_whose_summary_exceeds_its_invariant(
+        self,
+        db_session: AsyncSession,
+        session_factory: async_sessionmaker[AsyncSession],
+        sample_source: NewsSource,
+        sample_categories: list[Category],
+        capfire: CaptureLogfire,
+    ) -> None:
+        """上限超過の行だけが落ち、理由がsummary由来だと分かる形で残る。"""
+        await _create_analysis(
+            db_session,
+            sample_source,
+            sample_categories[0],
+            url="https://example.com/oversized",
+            translated_title="超過行",
+            summary="あ" * 6001,
+            embedding=_vector(1.0),
+            key_points=[],
+        )
+        await _create_analysis(
+            db_session,
+            sample_source,
+            sample_categories[0],
+            url="https://example.com/within-invariant",
+            translated_title="正常な行",
+            embedding=_vector(1.0, 0.1),
+            key_points=[],
+        )
+        repo = PgVectorArticleSearchRepository(session_factory)
+
+        hits = await repo.search_by_embedding(_query_embedding(), limit=5)
+
+        metrics = collected_metrics(capfire)
+        assert [hit.article.title for hit in hits] == ["正常な行"]
+        assert_attribute_contract(
+            metrics,
+            _HIT_DROPPED_METRIC,
+            allowed={"reason": set(get_args(InternalHitDropReason))},
+        )
+        assert attributes_of(metrics, _HIT_DROPPED_METRIC) == {
+            "reason": "summary_too_long"
+        }
+
+    async def test_search_records_a_non_length_reconstruction_failure_as_row_invalid(
+        self,
+        db_session: AsyncSession,
+        session_factory: async_sessionmaker[AsyncSession],
+        sample_source: NewsSource,
+        sample_categories: list[Category],
+        capfire: CaptureLogfire,
+    ) -> None:
+        """長さ以外の不整合は row_invalid へ畳む(今回の上限と切り分けられる)。"""
+        await _create_analysis(
+            db_session,
+            sample_source,
+            sample_categories[0],
+            url="https://example.com/malformed",
+            translated_title="壊れた行",
+            embedding=_vector(1.0),
+            key_points="not-a-list",
+        )
+        repo = PgVectorArticleSearchRepository(session_factory)
+
+        hits = await repo.search_by_embedding(_query_embedding(), limit=5)
+
+        assert hits == []
+        assert attributes_of(collected_metrics(capfire), _HIT_DROPPED_METRIC) == {
+            "reason": "row_invalid"
+        }
 
     async def test_hit_does_not_expose_embedding_raw_row_or_raw_key_points(
         self,

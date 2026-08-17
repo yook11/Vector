@@ -13,6 +13,13 @@ InternalRetrievalFailurePhase = Literal[
     "unknown",
 ]
 QueryEmbeddingCacheResult = Literal["lookup_failed", "save_failed"]
+InternalHitDropReason = Literal["summary_too_long", "row_invalid"]
+
+_internal_hit_dropped_counter = logfire.metric_counter(
+    "vector.agent.internal_retrieval.hit_dropped",
+    unit="1",
+    description="Internal search rows dropped at intake, by reason",
+)
 
 _internal_retrieval_outcome_counter = logfire.metric_counter(
     "vector.agent.internal_retrieval.outcome",
@@ -25,6 +32,12 @@ _query_embedding_cache_counter = logfire.metric_counter(
     unit="1",
     description="Best-effort query embedding cache failures",
 )
+
+
+def record_internal_hit_dropped(*, reason: InternalHitDropReason) -> None:
+    """DB行1件を落とした理由を記録する。本文・タイトルは載せない。"""
+
+    _internal_hit_dropped_counter.add(1, attributes={"reason": reason})
 
 
 def record_internal_retrieval_outcome(
