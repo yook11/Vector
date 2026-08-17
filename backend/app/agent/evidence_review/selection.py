@@ -13,13 +13,13 @@ from pydantic import BaseModel, ConfigDict, Field, StringConstraints
 
 from app.agent.contract import (
     EVIDENCE_REVIEW_MISSING_LIMIT,
-    EVIDENCE_REVIEWER_SELECTION_LIMIT,
     MISSING_ITEM_MAX_CHARS,
 )
 from app.agent.evidence_collection.external_search.contract import (
     EVIDENCE_CLAIM_MAX_CHARS,
     EVIDENCE_WHY_SELECTED_MAX_CHARS,
 )
+from app.agent.evidence_review.answer_evidence import ANSWER_EVIDENCE_LIMIT
 
 __all__ = [
     "EvidenceReviewerDraft",
@@ -68,7 +68,7 @@ class EvidenceReviewerResponse(BaseModel):
 
     selections: tuple[EvidenceReviewerSelection, ...] = Field(
         default_factory=tuple,
-        max_length=EVIDENCE_REVIEWER_SELECTION_LIMIT,
+        max_length=ANSWER_EVIDENCE_LIMIT,
     )
     missing: tuple[
         Annotated[str, StringConstraints(max_length=MISSING_ITEM_MAX_CHARS)],

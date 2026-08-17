@@ -46,8 +46,8 @@
   出典メタデータは返させず、`AnswerEvidence.from_reviewer_response()`が`candidate_index`で
   候補列を引いて再構築する。
   範囲外indexと重複indexは決定的に不採用となる。
-- reviewer response のselection上限は`EVIDENCE_REVIEWER_SELECTION_LIMIT`(15)、回答へ渡す根拠の上限は
-  `ANSWER_EVIDENCE_LIMIT`(15)である。後者は出典identityの重複排除後に適用する。
+- reviewer response のselection上限と回答へ渡す根拠の上限は`ANSWER_EVIDENCE_LIMIT`(15)である。
+  回答が使える件数が上限の根拠であり、reviewer response schemaはそれに従う。
 - 確定根拠は見せた候補の`option_index`を持つ。citation用の`source_ref`文字列は
   `build_answer_input_evidence()`が連番で振る。
 - `EVIDENCE_REVIEWER_AGENT`は`deepseek-v4-flash`、`max_output_tokens=2048`。timeout 30秒、
@@ -108,8 +108,8 @@
   件数へ適用する。
 - `missing`上限をRun単位8件とする。task単位5件×3 taskの実質上限(15件)より絞る。Run全体の不足の
   表明として、同じ論点の言い換えが並ぶことを避ける。
-- reviewer response のselection上限と回答に使用する根拠上限を別の定数で表し、工程上の出力制約と
-  回答入力の制約を混同しない。
+- reviewer response のselection上限と回答に使用する根拠上限は同じ制約であり、`ANSWER_EVIDENCE_LIMIT`を
+  正本として共有する。上限の根拠は回答が使える件数にあり、工程上の出力制約はそれに従う。
 - `claim`と`why_selected`のcap(各300字)、`missing`項目のcap(200字)は変更しない。
 - `max_output_tokens`を16,384へ引き上げる。上限まで採用したときの出力量は
   selections 15件×(300字+300字+JSON構文) + missing 8件×200字 で概算11,400字であり、
