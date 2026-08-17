@@ -29,7 +29,6 @@ __all__ = [
     "AnswerQuestionResult",
     "AnswerPlanSummary",
     "AnswerEventReporter",
-    "ANSWER_EVIDENCE_LIMIT",
     "EVIDENCE_CLAIM_MAX_CHARS",
     "EVIDENCE_REVIEW_MISSING_LIMIT",
     "EVIDENCE_REVIEWER_SELECTION_LIMIT",
@@ -254,9 +253,8 @@ MISSING_ITEM_MAX_CHARS = 200
 # Reviewerへ見せるsnippetの最大長。外部hitはprovider応答時、内部hitは投影時に切る。
 OPTION_SNIPPET_MAX_CHARS = 500
 
-# Run 単位で Reviewer が返せる選択件数と、Answerer に渡せる一意な根拠件数の上限。
+# Run 単位で Reviewer が返せる選択件数の上限。
 EVIDENCE_REVIEWER_SELECTION_LIMIT: Final[int] = 15
-ANSWER_EVIDENCE_LIMIT: Final[int] = 15
 # Run 単位で reviewer が報告できる missing 件数の上限。
 EVIDENCE_REVIEW_MISSING_LIMIT: Final[int] = 8
 
@@ -307,6 +305,9 @@ class ResearchCheckpoint(BaseModel):
     @model_validator(mode="after")
     def _validate_total_adopted_claims(self) -> Self:
         # adopted_claimsの上限はtask個別ではなくCheckpoint全task合計。
+        # 正本はAnswerEvidence側。このモジュールとの循環importを避ける。
+        from app.agent.evidence_review.answer_evidence import ANSWER_EVIDENCE_LIMIT
+
         total_adopted_claims = sum(len(task.adopted_claims) for task in self.tasks)
         if total_adopted_claims > ANSWER_EVIDENCE_LIMIT:
             raise ValueError(

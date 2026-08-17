@@ -10,12 +10,13 @@ from __future__ import annotations
 import pytest
 from pydantic import ValidationError
 
-from app.agent.contract import ANSWER_EVIDENCE_LIMIT, EVIDENCE_REVIEW_MISSING_LIMIT
+from app.agent.contract import EVIDENCE_REVIEW_MISSING_LIMIT
 from app.agent.evidence_collection.external_search.contract import (
     MISSING_ITEM_MAX_CHARS,
     ExternalSearchHit,
 )
 from app.agent.evidence_review.answer_evidence import (
+    ANSWER_EVIDENCE_LIMIT,
     AnswerEvidence,
     EvidenceRunCompleted,
     EvidenceRunFailed,
@@ -87,7 +88,7 @@ def _external_evidence(*, url: str, option_index: int) -> ExternalSearchEvidence
 
 
 def test_answer_evidence_factory_drops_a_selection_of_an_index_never_shown() -> None:
-    """解決できない番号の選択は、他の採用を巻き込まずに落とす。"""
+    """LLMが選択肢にないindexを返した時、エビデンスから除外する。正常なものは影響を受けない。"""
     evidence = AnswerEvidence.from_reviewer_response(
         preparation=_preparation(internal_count=1, external_count=1),
         reviewer_response=_reviewer_response(
@@ -144,22 +145,20 @@ def test_answer_evidence_factory_drops_an_index_when_its_claims_conflict() -> No
 
 
 def test_answer_evidence_rejects_more_than_the_answerer_input_limit() -> None:
-    """AnswerEvidence自身もAnswerer入力上限を超える集合を受け付けない。"""
+    """AnswerEvidenceは上限を1件超えた集合では構築できない。"""
+    over_limit = [
+        _external_evidence(url="https://example.com/item", option_index=0)
+        for _ in range(ANSWER_EVIDENCE_LIMIT + 1)
+    ]
+
     with pytest.raises(ValidationError):
-        AnswerEvidence(
-            external_sources=[
-                _external_evidence(
-                    url=f"https://example.com/{index}", option_index=index
-                )
-                for index in range(ANSWER_EVIDENCE_LIMIT + 1)
-            ]
-        )
+        AnswerEvidence(external_sources=over_limit)
 
 
 def test_answer_evidence_rejects_duplicate_internal_source_identity_within_task() -> (
     None
 ):
-    """同じtask内の内部検索の記事は集合内で一意に保つ。"""
+    """AnswerEvidenceとして採用された内部記事はタスクの中で必ず一意、重複して構築できない。"""
     with pytest.raises(ValidationError):
         AnswerEvidence(
             internal_articles=[
@@ -172,7 +171,7 @@ def test_answer_evidence_rejects_duplicate_internal_source_identity_within_task(
 def test_answer_evidence_rejects_duplicate_external_source_identity_within_task() -> (
     None
 ):
-    """同じtask内の外部記事URLは集合内で一意に保つ。"""
+    """AnswerEvidenceとして採用された外部記事はタスクの中で必ず一意、重複して構築できない。"""
     with pytest.raises(ValidationError):
         AnswerEvidence(
             external_sources=[

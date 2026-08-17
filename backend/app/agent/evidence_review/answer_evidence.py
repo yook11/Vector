@@ -3,12 +3,11 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Annotated, Self
+from typing import Annotated, Final, Self
 
 from pydantic import BaseModel, ConfigDict, Field, StringConstraints, model_validator
 
 from app.agent.contract import (
-    ANSWER_EVIDENCE_LIMIT,
     EVIDENCE_REVIEW_MISSING_LIMIT,
     MISSING_ITEM_MAX_CHARS,
 )
@@ -28,6 +27,7 @@ from app.agent.evidence_review.selection import (
 from app.shared.security.safe_url import SafeUrl
 
 __all__ = [
+    "ANSWER_EVIDENCE_LIMIT",
     "AnswerEvidence",
     "EvidenceRunCompleted",
     "EvidenceRunFailed",
@@ -35,6 +35,8 @@ __all__ = [
     "ExternalSearchEvidence",
     "InternalArticleEvidence",
 ]
+
+ANSWER_EVIDENCE_LIMIT: Final[int] = 15
 
 
 class InternalArticleEvidence(BaseModel):

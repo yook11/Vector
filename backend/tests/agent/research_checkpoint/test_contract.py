@@ -13,7 +13,6 @@ from pydantic import ValidationError
 
 import app.agent.contract as shared_contract
 from app.agent.contract import (
-    ANSWER_EVIDENCE_LIMIT,
     EVIDENCE_REVIEW_MISSING_LIMIT,
 )
 from app.agent.evidence_collection.external_search.contract import (
@@ -22,6 +21,7 @@ from app.agent.evidence_collection.external_search.contract import (
     EXTERNAL_TASK_QUERY_LIMIT,
     MISSING_ITEM_MAX_CHARS,
 )
+from app.agent.evidence_review.answer_evidence import ANSWER_EVIDENCE_LIMIT
 from app.agent.planning.contract import RESEARCH_GOAL_MAX_CHARS, RESEARCH_TASK_LIMIT
 from app.agent.research_checkpoint.contract import (
     ResearchCheckpoint,
@@ -42,9 +42,8 @@ def test_legacy_import_sites_re_export_the_same_shared_contract_objects() -> Non
         EXTERNAL_QUERY_MAX_CHARS is shared_contract.EXTERNAL_QUERY_MAX_CHARS,
         EVIDENCE_CLAIM_MAX_CHARS is shared_contract.EVIDENCE_CLAIM_MAX_CHARS,
         MISSING_ITEM_MAX_CHARS is shared_contract.MISSING_ITEM_MAX_CHARS,
-        ANSWER_EVIDENCE_LIMIT is shared_contract.ANSWER_EVIDENCE_LIMIT,
         EVIDENCE_REVIEW_MISSING_LIMIT is shared_contract.EVIDENCE_REVIEW_MISSING_LIMIT,
-    ) == (True,) * 10
+    ) == (True,) * 9
 
 
 def _task_record(**overrides: object) -> ResearchTaskRecord:
