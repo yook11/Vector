@@ -1,7 +1,7 @@
 """回答用Evidenceと、Evidence Runの確定結果型の契約。
 
 `AnswerEvidence.from_reviewer_response`はReviewerの選択を通しindexから復元し、
-出典の重複を排して回答へ渡せる一意なEvidence集合に確定する。確定した結果は
+回答へ渡せるEvidence集合に確定する。確定した結果は
 `EvidenceRunCompleted` / `EvidenceRunFailed` としてRunの成否を型で表す。
 """
 
@@ -88,7 +88,7 @@ def _external_evidence(*, url: str, option_index: int) -> ExternalSearchEvidence
 
 
 def test_answer_evidence_factory_drops_a_selection_of_an_index_never_shown() -> None:
-    """LLMが選択肢にないindexを返した時、エビデンスから除外する。正常なものは影響を受けない。"""
+    """LLMが選択肢にないindexを返した時、エビデンスから除外する。選択肢にあるものは影響を受けない。"""
     evidence = AnswerEvidence.from_reviewer_response(
         preparation=_preparation(internal_count=1, external_count=1),
         reviewer_response=_reviewer_response(
@@ -181,8 +181,34 @@ def test_answer_evidence_rejects_duplicate_external_source_identity_within_task(
         )
 
 
+def test_answer_evidence_rejects_duplicate_option_index_among_internal_articles() -> (
+    None
+):
+    """内部記事の中で同じoption_indexは持てない。"""
+    with pytest.raises(ValidationError):
+        AnswerEvidence(
+            internal_evidence=[
+                _internal_article_evidence(curation_id=1, option_index=0),
+                _internal_article_evidence(curation_id=2, option_index=0),
+            ]
+        )
+
+
+def test_answer_evidence_rejects_duplicate_option_index_among_external_sources() -> (
+    None
+):
+    """外部記事の中で同じoption_indexは持てない。"""
+    with pytest.raises(ValidationError):
+        AnswerEvidence(
+            external_evidence=[
+                _external_evidence(url="https://example.com/a", option_index=0),
+                _external_evidence(url="https://example.com/b", option_index=0),
+            ]
+        )
+
+
 def test_answer_evidence_rejects_duplicate_option_index_across_source_types() -> None:
-    """同じoption_indexを内外に同時に載せられない。"""
+    """内部と外部をまたいでも同じoption_indexは持てない。"""
     with pytest.raises(ValidationError):
         AnswerEvidence(
             internal_evidence=[
@@ -194,43 +220,8 @@ def test_answer_evidence_rejects_duplicate_option_index_across_source_types() ->
         )
 
 
-def test_factory_keeps_first_selection_for_duplicate_url_within_task() -> None:
-    """同じtask内でURLが重複した場合は、Reviewerが最初に選んだ1件だけを残す。"""
-    tasks = [
-        collected_task(
-            task_index=0,
-            external_hits=[
-                external_hit("https://example.com/duplicate"),
-                external_hit("https://example.com/duplicate"),
-            ],
-        )
-    ]
-    evidence = AnswerEvidence.from_reviewer_response(
-        preparation=EvidenceReviewPreparation.from_tasks(tasks),
-        reviewer_response=_reviewer_response(
-            [
-                {
-                    "option_index": 1,
-                    "claim": "selected-first",
-                    "why_selected": "why",
-                },
-                {
-                    "option_index": 0,
-                    "claim": "selected-later",
-                    "why_selected": "why",
-                },
-            ]
-        ),
-    )
-
-    assert [
-        (item.task_index, item.claim, str(item.url))
-        for item in evidence.external_evidence
-    ] == [(0, "selected-first", "https://example.com/duplicate")]
-
-
 def test_factory_does_not_deduplicate_same_url_across_tasks() -> None:
-    """同じURLでもtaskが異なる場合は、重複として除外せず両方を残す。"""
+    """taskが違えば同じURLでもそれぞれ採用する。"""
     tasks = [
         collected_task(
             task_index=0,
@@ -270,53 +261,8 @@ def test_factory_does_not_deduplicate_same_url_across_tasks() -> None:
     }
 
 
-def test_factory_keeps_first_selection_for_duplicate_curation_id_within_task() -> None:
-    """同じtask内で内部検索の記事が重複した場合は、Reviewerが最初に選んだ1件だけを残す。"""
-    tasks = [
-        collected_task(
-            task_index=0,
-            internal_hits=[
-                internal_hit(
-                    assessment_id=1001,
-                    curation_id=42,
-                    title="first-copy",
-                    summary="s",
-                ),
-                internal_hit(
-                    assessment_id=1002,
-                    curation_id=42,
-                    title="second-copy",
-                    summary="s",
-                ),
-            ],
-        )
-    ]
-    evidence = AnswerEvidence.from_reviewer_response(
-        preparation=EvidenceReviewPreparation.from_tasks(tasks),
-        reviewer_response=_reviewer_response(
-            [
-                {
-                    "option_index": 1,
-                    "claim": "selected-first",
-                    "why_selected": "why",
-                },
-                {
-                    "option_index": 0,
-                    "claim": "selected-later",
-                    "why_selected": "why",
-                },
-            ]
-        ),
-    )
-
-    assert [
-        (item.task_index, item.claim, item.curation_id)
-        for item in evidence.internal_evidence
-    ] == [(0, "selected-first", 42)]
-
-
 def test_factory_does_not_deduplicate_same_curation_id_across_tasks() -> None:
-    """同じ内部検索の記事でもtaskが異なる場合は、重複として除外せず両方を残す。"""
+    """taskが違えば同じ内部記事でもそれぞれ採用する。"""
     tasks = [
         collected_task(
             task_index=0,

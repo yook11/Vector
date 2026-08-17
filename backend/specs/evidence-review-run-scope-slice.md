@@ -101,9 +101,11 @@
 - index から候補と所属taskを引く逆引きは`EvidenceReviewPreparation`が持ち、
   `AnswerEvidence.from_reviewer_response()`が範囲外indexと重複indexを決定的に不採用とする。
   不採用件数はproduction contractへ含めない。
+- 見せる候補は同一task内で同じ内部記事・同じURLを重ねない。先に並んだhitだけを見せる。
+  同じ記事でもtaskが違えば別の枠として見せ、選ばれれば別の根拠として残す。
 - `AnswerEvidence`は回答に使用できる確定済み根拠の集合であり、内部根拠と外部根拠を一つの契約で
-  保持する。出典identityの重複排除はtask内に限る。同じ内部検索の記事・同じURLでもtaskが違えば
-  別の根拠として残す。回答上限は、その重複排除後の件数へ適用する。
+  保持する。task内の出典identityとoption_indexの一意は型の不変条件とする。回答上限はその集合の
+  件数へ適用する。
 - `missing`上限をRun単位8件とする。task単位5件×3 taskの実質上限(15件)より絞る。Run全体の不足の
   表明として、同じ論点の言い換えが並ぶことを避ける。
 - reviewer response のselection上限と回答に使用する根拠上限を別の定数で表し、工程上の出力制約と
@@ -155,9 +157,9 @@
 
 #### 合流と重複排除
 
-- `AnswerEvidence.from_reviewer_response()`は内部根拠を`curation_id`、外部根拠をURLでRun全体の
-  先勝ち重複排除に通す。同じ出典が複数の観点で選ばれても、回答へ渡す出典は1件とする。
-- 重複で不採用になった側の`claim`をevidenceへ統合せず、不採用件数もreportへ残さない。
+- `AnswerEvidence.from_reviewer_response()`は見せた番号の選択だけを復元する。範囲外indexと
+  同じindexへの矛盾したclaimはその番号を不採用とする。出典identityの畳み込みは行わない。
+- 不採用件数はreportへ残さない。
 - 合流後の`AnswerInputEvidence`への正規化、最終`source_ref`の通し番号採番、回答Agentの入力契約、
   `cited_refs`の検証は変更しない。
 
@@ -267,12 +269,11 @@ reviewer の呼び出し単位とcapの単位が食い違う。回答Agentへ渡
 
 - グループをまたいだ index から、候補と所属taskが正しく引かれる。
 - 範囲外indexと重複indexが決定的に不採用となる。
-- 同じ内部検索の記事が同一task内で複数選ばれたとき、選択順の先着1件だけが残り、後着の
-  `claim`はevidenceへ入らない。
-- 同じ内部検索の記事でもtaskが異なる場合は、両方の根拠として残る。
-- 同じURLが同一task内で複数選ばれたとき、選択順の先着1件だけが残る。
-- 同じURLでもtaskが異なる場合は、両方の根拠として残る。
-- 重複排除後の確定根拠に`ANSWER_EVIDENCE_LIMIT`が適用される。
+- 同じ内部検索の記事が同一task内に複数あっても、見せる枠は先の1件だけである。
+- 同じ内部検索の記事でもtaskが異なる場合は、両方見せ、選ばれれば両方の根拠として残る。
+- 同じURLが同一task内に複数あっても、見せる枠は先の1件だけである。
+- 同じURLでもtaskが異なる場合は、両方見せ、選ばれれば両方の根拠として残る。
+- 確定根拠に`ANSWER_EVIDENCE_LIMIT`が適用される。
 
 ### 不足の表明
 

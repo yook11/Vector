@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterator, Sequence
 from dataclasses import dataclass
 from datetime import datetime
 
@@ -68,24 +69,15 @@ class EvidenceReviewPreparation:
     _option_origins: tuple[EvidenceOptionOrigin, ...]
 
     @classmethod
-    def from_tasks(cls, tasks: list[CollectedTask]) -> EvidenceReviewPreparation:
-        """task_index順、グループ内は内部記事を先に、選択肢と元の検索結果を同時に採番する。"""
-        ordered_tasks = sorted(tasks, key=lambda task: task.task_index)
-        review_tasks: list[EvidenceReviewTaskGroup] = []
+    def from_tasks(cls, tasks: Sequence[CollectedTask]) -> EvidenceReviewPreparation:
+        """task_index順に並べ、投影と控えをRun全体の通し番号で同時に採番する。"""
+        task_groups: list[EvidenceReviewTaskGroup] = []
         origins: list[EvidenceOptionOrigin] = []
-        for task in ordered_tasks:
+        for task in sorted(tasks, key=lambda task: task.task_index):
             options: list[EvidenceOption] = []
-            for hit in task.internal_hits:
+            for hit in _hits_to_show(task):
                 index = len(origins)
-                options.append(
-                    EvidenceOption(
-                        index=index,
-                        title=hit.content.title,
-                        source_name=None,
-                        published_at=hit.content.published_at,
-                        snippet=_internal_option_snippet(hit),
-                    )
-                )
+                options.append(_to_option(index, hit))
                 origins.append(
                     EvidenceOptionOrigin(
                         index=index,
@@ -93,25 +85,7 @@ class EvidenceReviewPreparation:
                         search_hit=hit,
                     )
                 )
-            for hit in task.external_hits:
-                index = len(origins)
-                options.append(
-                    EvidenceOption(
-                        index=index,
-                        title=hit.title,
-                        source_name=hit.source_name,
-                        published_at=hit.published_at,
-                        snippet=hit.snippet,
-                    )
-                )
-                origins.append(
-                    EvidenceOptionOrigin(
-                        index=index,
-                        task_index=task.task_index,
-                        search_hit=hit,
-                    )
-                )
-            review_tasks.append(
+            task_groups.append(
                 EvidenceReviewTaskGroup(
                     task_index=task.task_index,
                     research_goal=task.research_goal,
@@ -119,7 +93,7 @@ class EvidenceReviewPreparation:
                 )
             )
         return cls(
-            task_groups=tuple(review_tasks),
+            task_groups=tuple(task_groups),
             _option_origins=tuple(origins),
         )
 
@@ -128,6 +102,45 @@ class EvidenceReviewPreparation:
         if 0 <= option_index < len(self._option_origins):
             return self._option_origins[option_index]
         return None
+
+
+def _hits_to_show(
+    task: CollectedTask,
+) -> Iterator[InternalArticleSearchHit | ExternalSearchHit]:
+    """内部記事を先に、同じtaskでは同じ記事を1枠だけ見せる。"""
+    seen_curation_ids: set[int] = set()
+    seen_urls: set[str] = set()
+    for internal in task.internal_hits:
+        if internal.article.curation_id in seen_curation_ids:
+            continue
+        seen_curation_ids.add(internal.article.curation_id)
+        yield internal
+    for external in task.external_hits:
+        url = str(external.url)
+        if url in seen_urls:
+            continue
+        seen_urls.add(url)
+        yield external
+
+
+def _to_option(
+    index: int, hit: InternalArticleSearchHit | ExternalSearchHit
+) -> EvidenceOption:
+    if isinstance(hit, InternalArticleSearchHit):
+        return EvidenceOption(
+            index=index,
+            title=hit.content.title,
+            source_name=None,
+            published_at=hit.content.published_at,
+            snippet=_internal_option_snippet(hit),
+        )
+    return EvidenceOption(
+        index=index,
+        title=hit.title,
+        source_name=hit.source_name,
+        published_at=hit.published_at,
+        snippet=hit.snippet,
+    )
 
 
 def _internal_option_snippet(hit: InternalArticleSearchHit) -> str:

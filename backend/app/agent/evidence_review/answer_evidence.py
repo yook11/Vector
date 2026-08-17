@@ -122,7 +122,7 @@ class ExternalSearchEvidence(BaseModel):
 
 
 class AnswerEvidence(BaseModel):
-    """出典を復元し、重複排除と件数制限を終えた回答用Evidence。"""
+    """見せた番号から復元し、件数制限を終えた回答用Evidence。"""
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
@@ -136,7 +136,7 @@ class AnswerEvidence(BaseModel):
         preparation: EvidenceReviewPreparation,
         reviewer_response: EvidenceReviewerResponse,
     ) -> AnswerEvidence:
-        """Reviewerの選択から出典を復元し、一意な回答用Evidenceを構築する。"""
+        """見せた番号の選択だけを復元する。同じindexのclaim衝突はその番号を不採用にする。"""
         selection_by_index: dict[int, EvidenceReviewerSelection] = {}
         unadopted_indexes: set[int] = set()
         for selection in reviewer_response.selections:
@@ -154,19 +154,11 @@ class AnswerEvidence(BaseModel):
 
         internal_evidence: list[InternalArticleEvidence] = []
         external_evidence: list[ExternalSearchEvidence] = []
-        seen_internal_source_identities: set[tuple[int, int]] = set()
-        seen_external_source_identities: set[tuple[int, str]] = set()
-
         for index, selection in selection_by_index.items():
             origin = preparation.resolve_option_origin(index)
             if origin is None:
                 continue
             if isinstance(origin.search_hit, InternalArticleSearchHit):
-                curation_id = origin.search_hit.article.curation_id
-                source_identity = (origin.task_index, curation_id)
-                if source_identity in seen_internal_source_identities:
-                    continue
-                seen_internal_source_identities.add(source_identity)
                 internal_evidence.append(
                     InternalArticleEvidence.from_reviewed_hit(
                         origin.search_hit,
@@ -176,11 +168,6 @@ class AnswerEvidence(BaseModel):
                     )
                 )
             else:
-                url = str(origin.search_hit.url)
-                source_identity = (origin.task_index, url)
-                if source_identity in seen_external_source_identities:
-                    continue
-                seen_external_source_identities.add(source_identity)
                 external_evidence.append(
                     ExternalSearchEvidence.from_reviewed_hit(
                         origin.search_hit,
@@ -189,7 +176,6 @@ class AnswerEvidence(BaseModel):
                         task_index=origin.task_index,
                     )
                 )
-
             if len(internal_evidence) + len(external_evidence) >= ANSWER_EVIDENCE_LIMIT:
                 break
 

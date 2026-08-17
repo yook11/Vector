@@ -172,6 +172,125 @@ def test_preparation_does_not_resolve_an_index_that_was_never_shown() -> None:
     ) == (None, None)
 
 
+# --- 見せた出典の一意 ---------------------------------------------------------
+
+
+def test_preparation_keeps_the_first_external_hit_when_urls_repeat_within_a_task() -> (
+    None
+):
+    """同じtaskの中ではURLは重複しない。先に並んでいたhitだけを見せる。"""
+    first = external_hit("https://example.com/duplicate", title="first")
+    second = external_hit("https://example.com/duplicate", title="second")
+    other = external_hit("https://example.com/other", title="other")
+    preparation = EvidenceReviewPreparation.from_tasks(
+        [collected_task(task_index=0, external_hits=[first, second, other])]
+    )
+
+    options = preparation.task_groups[0].options
+    first_origin = preparation.resolve_option_origin(0)
+    other_origin = preparation.resolve_option_origin(1)
+
+    assert [(option.index, option.title) for option in options] == [
+        (0, "first"),
+        (1, "other"),
+    ]
+    assert first_origin is not None
+    assert other_origin is not None
+    assert first_origin.search_hit is first
+    assert other_origin.search_hit is other
+
+
+def test_preparation_keeps_the_first_internal_hit_when_ids_repeat_within_a_task() -> (
+    None
+):
+    """同じtaskの中では内部記事の識別IDは重複しない。先に並んでいたhitだけを見せる。"""
+    first = internal_hit(assessment_id=1001, curation_id=42, title="first", summary="s")
+    second = internal_hit(
+        assessment_id=1002, curation_id=42, title="second", summary="s"
+    )
+    other = internal_hit(assessment_id=1003, curation_id=7, title="other", summary="s")
+    preparation = EvidenceReviewPreparation.from_tasks(
+        [collected_task(task_index=0, internal_hits=[first, second, other])]
+    )
+
+    options = preparation.task_groups[0].options
+    first_origin = preparation.resolve_option_origin(0)
+
+    assert [(option.index, option.title) for option in options] == [
+        (0, "first"),
+        (1, "other"),
+    ]
+    assert first_origin is not None
+    assert first_origin.search_hit is first
+
+
+def test_preparation_keeps_the_same_url_when_tasks_differ() -> None:
+    """taskが違えば同じURLでも採用する。"""
+    shared = "https://example.com/shared"
+    preparation = EvidenceReviewPreparation.from_tasks(
+        [
+            collected_task(
+                task_index=0, external_hits=[external_hit(shared, title="A")]
+            ),
+            collected_task(
+                task_index=1, external_hits=[external_hit(shared, title="B")]
+            ),
+        ]
+    )
+
+    titles = [
+        (option.index, option.title)
+        for group in preparation.task_groups
+        for option in group.options
+    ]
+    origin_a = preparation.resolve_option_origin(0)
+    origin_b = preparation.resolve_option_origin(1)
+
+    assert titles == [(0, "A"), (1, "B")]
+    assert origin_a is not None
+    assert origin_b is not None
+    assert origin_a.task_index == 0
+    assert origin_b.task_index == 1
+
+
+def test_preparation_keeps_the_same_curation_id_when_tasks_differ() -> None:
+    """taskが違えば同じ内部記事の識別IDでも採用する。"""
+    preparation = EvidenceReviewPreparation.from_tasks(
+        [
+            collected_task(
+                task_index=0,
+                internal_hits=[
+                    internal_hit(
+                        assessment_id=1001, curation_id=42, title="A", summary="s"
+                    )
+                ],
+            ),
+            collected_task(
+                task_index=1,
+                internal_hits=[
+                    internal_hit(
+                        assessment_id=1002, curation_id=42, title="B", summary="s"
+                    )
+                ],
+            ),
+        ]
+    )
+
+    titles = [
+        (option.index, option.title)
+        for group in preparation.task_groups
+        for option in group.options
+    ]
+    origin_a = preparation.resolve_option_origin(0)
+    origin_b = preparation.resolve_option_origin(1)
+
+    assert titles == [(0, "A"), (1, "B")]
+    assert origin_a is not None
+    assert origin_b is not None
+    assert origin_a.task_index == 0
+    assert origin_b.task_index == 1
+
+
 # --- build_review_task_groups -----------------------------------------------
 
 
