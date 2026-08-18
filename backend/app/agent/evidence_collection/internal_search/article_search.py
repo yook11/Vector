@@ -126,8 +126,16 @@ def _hit_from_search_row(row: Any) -> InternalArticleSearchHit | None:
 
 
 def _drop_reason(exc: ValidationError) -> InternalHitDropReason:
-    """summaryの長さ超過だけを切り分け、他はrow_invalidへ畳む。"""
+    """DBが守らない読み戻し失敗を切り、他はrow_invalidへ畳む。"""
     for error in exc.errors():
-        if error["type"] == "string_too_long" and error["loc"] == ("summary",):
+        loc = error["loc"]
+        if not loc:
+            continue
+        field = loc[0]
+        if field == "summary" and error["type"] == "string_too_long":
             return "summary_too_long"
+        if field == "investor_take" and error["type"] == "string_too_long":
+            return "investor_take_too_long"
+        if field == "key_points":
+            return "key_points_invalid"
     return "row_invalid"

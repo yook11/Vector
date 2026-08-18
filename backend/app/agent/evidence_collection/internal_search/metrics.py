@@ -13,7 +13,12 @@ InternalRetrievalFailurePhase = Literal[
     "unknown",
 ]
 QueryEmbeddingCacheResult = Literal["lookup_failed", "save_failed"]
-InternalHitDropReason = Literal["summary_too_long", "row_invalid"]
+InternalHitDropReason = Literal[
+    "summary_too_long",
+    "investor_take_too_long",
+    "key_points_invalid",
+    "row_invalid",
+]
 
 _internal_hit_dropped_counter = logfire.metric_counter(
     "vector.agent.internal_retrieval.hit_dropped",

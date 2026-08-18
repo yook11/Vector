@@ -34,6 +34,7 @@ from app.agent.evidence_collection.internal_search.query_embedding import (
     InternalQueryEmbedding,
 )
 from app.analysis.analyzed_article import MAX_SUMMARY_LEN, InScopeAnalyzedArticle
+from app.analysis.assessment.domain.result import MAX_INVESTOR_TAKE_LEN
 from app.analysis.embedding.domain.value_objects import (
     EMBEDDING_DIMENSION,
     EmbeddingVector,
@@ -67,7 +68,7 @@ def _query_embedding(first: float = 1.0, second: float = 0.0) -> InternalQueryEm
     )
 
 
-def _search_row(**overrides: object) -> Any:
+def _make_search_row(**overrides: object) -> Any:
     """search_by_embedding の SELECT が返す1行を模す。"""
     values: dict[str, object] = {
         "assessment_id": 1,
@@ -526,25 +527,25 @@ class TestPgVectorArticleSearchRepository:
 class TestHitFromSearchRow:
     """検索が返した1行をhitへ写す規則。DBは介さず写像だけを見る。"""
 
-    def test_returns_a_hit_for_a_row_that_satisfies_the_invariants(self) -> None:
-        hit = _hit_from_search_row(_search_row())
-
-        assert hit is not None
-        assert hit.article.title == "分析タイトル"
-
     def test_drops_a_row_that_cannot_be_constructed_as_an_in_scope_article(
         self,
     ) -> None:
-        """構築不能な行はhitにならない。どのfieldで失敗したかは写像の契約ではない。"""
-        assert _hit_from_search_row(_search_row(key_points="not-a-list")) is None
+        """InScopeAnalyzedArticleの条件を満たさないものは検索結果に含まれない。"""
+        row = _make_search_row(key_points="not-a-list")
+
+        hit = _hit_from_search_row(row)
+
+        assert hit is None
 
     def test_records_a_summary_length_drop_as_summary_too_long(
         self, capfire: CaptureLogfire
     ) -> None:
-        assert (
-            _hit_from_search_row(_search_row(summary="あ" * (MAX_SUMMARY_LEN + 1)))
-            is None
-        )
+        """summaryが原因のとき正しくメトリクスに記録される"""
+        row = _make_search_row(summary="あ" * (MAX_SUMMARY_LEN + 1))
+
+        hit = _hit_from_search_row(row)
+
+        assert hit is None
 
         metrics = collected_metrics(capfire)
         assert_attribute_contract(
@@ -556,12 +557,39 @@ class TestHitFromSearchRow:
             "reason": "summary_too_long"
         }
 
-    def test_records_a_non_length_failure_as_row_invalid(
+    def test_records_an_investor_take_length_drop_as_investor_take_too_long(
         self, capfire: CaptureLogfire
     ) -> None:
-        """長さ以外の構築失敗はrow_invalidへ畳み、今回の上限と切り分けられる。"""
-        assert _hit_from_search_row(_search_row(key_points="not-a-list")) is None
+        row = _make_search_row(investor_take="あ" * (MAX_INVESTOR_TAKE_LEN + 1))
 
+        hit = _hit_from_search_row(row)
+
+        assert hit is None
+        assert attributes_of(collected_metrics(capfire), _HIT_DROPPED_METRIC) == {
+            "reason": "investor_take_too_long"
+        }
+
+    def test_records_a_key_points_failure_as_key_points_invalid(
+        self, capfire: CaptureLogfire
+    ) -> None:
+        row = _make_search_row(key_points="not-a-list")
+
+        hit = _hit_from_search_row(row)
+
+        assert hit is None
+        assert attributes_of(collected_metrics(capfire), _HIT_DROPPED_METRIC) == {
+            "reason": "key_points_invalid"
+        }
+
+    def test_records_a_remaining_construction_failure_as_row_invalid(
+        self, capfire: CaptureLogfire
+    ) -> None:
+        """切り出していない構築失敗はrow_invalidへ畳む。"""
+        row = _make_search_row(category_slug="unknown")
+
+        hit = _hit_from_search_row(row)
+
+        assert hit is None
         assert attributes_of(collected_metrics(capfire), _HIT_DROPPED_METRIC) == {
             "reason": "row_invalid"
         }
