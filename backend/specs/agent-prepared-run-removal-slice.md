@@ -23,7 +23,7 @@
 ### Evidence
 
 - `PreparedAgentRun` は `backend/app/agent/runs/contracts.py` の frozen dataclass。
-- `acquire_for_execution()` が JOIN で question / seq / user_id を読み、同じ型に載せていた。
+- `start_run()` が JOIN で question / seq / user_id を読み、同じ型に載せていた。
 - worker は runner 直前に `RunIdentity` と `RunInput` へ写していた。
 - `attempt_epoch` の正本は `agent_runs.attempt_epoch`。
 
@@ -52,8 +52,8 @@
 
 ```python
 @dataclass(frozen=True, slots=True)
-class AcquireForExecutionCommandOutcome:
-    acquire_outcome: AcquireForExecutionOutcome
+class StartRunCommandOutcome:
+    start_outcome: StartRunOutcome
     attempt_epoch: int | None
     quota_release_outcome: DailyQuotaReleaseOutcome | None
 
@@ -80,7 +80,7 @@ identity = RunIdentity(
 
 ## テスト所有
 
-- `tests/agent/runs/_acquire_outcomes.py`: ACQUIRED から正の epoch を取り出す。
+- `tests/agent/runs/_start_run_outcomes.py`: STARTED から正の epoch を取り出す。
 - `tests/agent/test_agent_run_task.py`: Identity / history は runner 呼び出しで固定。
   再取得後の質問と seq は `read_user_question_for_run`。
 - queued deadline / probe / quota テストは epoch の有無だけを見る。

@@ -25,10 +25,10 @@ from app.models.agent_message import AgentMessage
 from app.models.agent_run import AgentRun
 from app.models.agent_thread import AgentThread
 from app.models.agent_user_daily_quota import AgentUserDailyQuota
-from tests.agent.runs._acquire_outcomes import (
-    acquired_attempt_epoch,
+from tests.agent.runs._start_run_outcomes import (
     assert_idempotent_skip,
     assert_queued_start_deadline_expired,
+    started_attempt_epoch,
 )
 from tests.conftest import TEST_ADMIN_ID, TEST_USER_ID
 
@@ -482,17 +482,17 @@ async def test_other_user_cannot_cancel_and_owner_releases_only_original_date(
 
 
 @pytest.mark.asyncio
-async def test_cancel_winner_refunds_before_waiting_acquire_loses(
+async def test_cancel_winner_refunds_before_waiting_start_loses(
     session_factory: async_sessionmaker[AsyncSession],
 ) -> None:
     seeded = await _seed_run(session_factory)
 
     async with (
         session_factory() as cancel_session,
-        session_factory() as acquire_session,
+        session_factory() as start_session,
         session_factory() as observer,
     ):
-        acquire_task = None
+        start_task = None
         try:
             await cancel_session.begin()
             cancel_result = await AgentRunRepository(
@@ -503,27 +503,27 @@ async def test_cancel_winner_refunds_before_waiting_acquire_loses(
                 now=_NOW,
             )
 
-            await acquire_session.begin()
-            acquire_pid = await acquire_session.scalar(text("SELECT pg_backend_pid()"))
-            assert isinstance(acquire_pid, int)
-            acquire_task = asyncio.create_task(
-                AgentRunRepository(acquire_session).acquire_for_execution(seeded.run_id)
+            await start_session.begin()
+            start_pid = await start_session.scalar(text("SELECT pg_backend_pid()"))
+            assert isinstance(start_pid, int)
+            start_task = asyncio.create_task(
+                AgentRunRepository(start_session).start_run(seeded.run_id)
             )
-            await _wait_until_blocked(observer, acquire_pid)
+            await _wait_until_blocked(observer, start_pid)
 
             await cancel_session.commit()
-            acquire_result = await asyncio.wait_for(acquire_task, timeout=5)
-            await acquire_session.commit()
+            start_result = await asyncio.wait_for(start_task, timeout=5)
+            await start_session.commit()
         finally:
-            if acquire_task is not None:
-                if not acquire_task.done():
-                    acquire_task.cancel()
-                await asyncio.gather(acquire_task, return_exceptions=True)
-            for session in (cancel_session, acquire_session, observer):
+            if start_task is not None:
+                if not start_task.done():
+                    start_task.cancel()
+                await asyncio.gather(start_task, return_exceptions=True)
+            for session in (cancel_session, start_session, observer):
                 if session.in_transaction():
                     await session.rollback()
 
-    assert_idempotent_skip(acquire_result)
+    assert_idempotent_skip(start_result)
     assert (
         await _read_counter(
             session_factory,
@@ -569,8 +569,8 @@ async def test_cancel_waiting_on_run_lock_uses_winning_status_update_for_release
 
             await _wait_until_blocked(observer, contender_pid)
 
-            attempt_epoch = acquired_attempt_epoch(
-                await AgentRunRepository(locker).acquire_for_execution(seeded.run_id)
+            attempt_epoch = started_attempt_epoch(
+                await AgentRunRepository(locker).start_run(seeded.run_id)
             )
             assert attempt_epoch == 1
             await locker.commit()
@@ -610,9 +610,9 @@ async def test_cancel_waiting_on_run_lock_uses_winning_status_update_for_release
     )
 
 
-@pytest.mark.parametrize("terminalizer", ["cancel", "expired_acquire"])
+@pytest.mark.parametrize("terminalizer", ["cancel", "expired_start"])
 @pytest.mark.asyncio
-async def test_waiting_stale_sweep_does_not_overwrite_cancel_or_expired_acquire(
+async def test_waiting_stale_sweep_does_not_overwrite_cancel_or_expired_start(
     session_factory: async_sessionmaker[AsyncSession],
     terminalizer: str,
 ) -> None:
@@ -644,9 +644,7 @@ async def test_waiting_stale_sweep_does_not_overwrite_cancel_or_expired_acquire(
                     running_attempt_epoch=None,
                 )
             else:
-                expiry_result = await AgentRunRepository(
-                    winner_session
-                ).acquire_for_execution(
+                expiry_result = await AgentRunRepository(winner_session).start_run(
                     seeded.run_id,
                     now=_NOW,
                 )

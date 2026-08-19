@@ -17,7 +17,7 @@ from app.models.agent_message import AgentMessage, AgentMessageSource
 from app.models.agent_run import AgentRun
 from app.models.agent_thread import AgentThread
 from app.models.agent_user_daily_quota import AgentUserDailyQuota
-from tests.agent.runs._acquire_outcomes import assert_idempotent_skip
+from tests.agent.runs._start_run_outcomes import assert_idempotent_skip
 from tests.conftest import TEST_USER_ID
 
 pytestmark = pytest.mark.integration
@@ -212,7 +212,7 @@ async def test_mark_policy_blocked_does_not_overwrite_a_cancelled_attempt(
 
 
 @pytest.mark.asyncio
-async def test_policy_blocked_is_excluded_from_reacquire_and_stale_sweep(
+async def test_policy_blocked_is_excluded_from_restart_and_stale_sweep(
     session_factory: async_sessionmaker[AsyncSession],
 ) -> None:
     seeded = await _seed_running_run(session_factory)
@@ -232,13 +232,13 @@ async def test_policy_blocked_is_excluded_from_reacquire_and_stale_sweep(
     async with session_factory() as session:
         async with session.begin():
             repository = AgentRunRepository(session)
-            reacquire_result = await repository.acquire_for_execution(
+            restart_result = await repository.start_run(
                 seeded.run_id,
                 now=_NOW,
             )
             swept = await repository.sweep_stale_runs(now=_NOW)
 
-    assert_idempotent_skip(reacquire_result)
+    assert_idempotent_skip(restart_result)
     assert swept.queued_terminal_count == 0
     assert swept.queued_quota_released_count == 0
     assert swept.queued_quota_not_eligible_count == 0
