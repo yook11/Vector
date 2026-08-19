@@ -19,7 +19,7 @@ from app.agent.runs.repository import AgentRunRepository
 from app.models.agent_message import AgentMessage
 from app.models.agent_run import AgentRun
 from app.models.agent_thread import AgentThread
-from tests.agent.runs._acquire_outcomes import acquired_attempt_epoch
+from tests.agent.runs._start_run_outcomes import started_attempt_epoch
 from tests.conftest import TEST_USER_ID
 from tests.logfire._metric_helpers import collected_metrics
 
@@ -448,7 +448,7 @@ async def test_actual_cancel_commit_makes_cached_probe_false_after_two_seconds(
 
 @pytest.mark.integration
 @pytest.mark.asyncio
-async def test_actual_reacquire_makes_old_epoch_probe_false_after_two_seconds(
+async def test_actual_restart_makes_old_epoch_probe_false_after_two_seconds(
     session_factory: async_sessionmaker[AsyncSession],
 ) -> None:
     async with session_factory() as setup_session:
@@ -466,10 +466,10 @@ async def test_actual_reacquire_makes_old_epoch_probe_false_after_two_seconds(
     )
     assert await probe.should_continue() is True
 
-    async with session_factory() as acquire_session:
-        async with acquire_session.begin():
-            attempt_epoch = acquired_attempt_epoch(
-                await AgentRunRepository(acquire_session).acquire_for_execution(run.id)
+    async with session_factory() as start_session:
+        async with start_session.begin():
+            attempt_epoch = started_attempt_epoch(
+                await AgentRunRepository(start_session).start_run(run.id)
             )
     assert attempt_epoch == 2
     clock.advance(2.0)

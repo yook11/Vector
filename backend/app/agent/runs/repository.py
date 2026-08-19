@@ -14,8 +14,6 @@ from app.agent.contract import AnswerQuestionResult
 from app.agent.research_checkpoint import PRIOR_RESEARCH_CHECKPOINT_LIMIT
 from app.agent.runs.citation_integrity import assess_citation_integrity
 from app.agent.runs.contracts import (
-    AcquireForExecutionCommandOutcome,
-    AcquireForExecutionOutcome,
     ActiveRunConflictError,
     CancelRunCommandOutcome,
     CancelRunOutcome,
@@ -24,6 +22,8 @@ from app.agent.runs.contracts import (
     RunTransitionLostError,
     StaleRunningRun,
     StaleRunSweepResult,
+    StartRunCommandOutcome,
+    StartRunOutcome,
     ThreadNotFoundError,
     UserQuestionMessage,
 )
@@ -199,12 +199,12 @@ class AgentRunRepository:
         )
         return (result.rowcount or 0) == 1
 
-    async def acquire_for_execution(
+    async def start_run(
         self,
         run_id: uuid_mod.UUID,
         *,
         now: datetime | None = None,
-    ) -> AcquireForExecutionCommandOutcome:
+    ) -> StartRunCommandOutcome:
         transaction_now = (
             literal(now) if now is not None else func.statement_timestamp()
         ).label("transaction_now")
@@ -220,15 +220,15 @@ class AgentRunRepository:
             )
         ).one_or_none()
         if row is None:
-            return AcquireForExecutionCommandOutcome(
-                acquire_outcome=AcquireForExecutionOutcome.IDEMPOTENT_SKIP,
+            return StartRunCommandOutcome(
+                start_outcome=StartRunOutcome.IDEMPOTENT_SKIP,
                 attempt_epoch=None,
                 quota_release_outcome=None,
             )
         run, user_id, transaction_now = row
         if run.status in _TERMINAL_STATUSES:
-            return AcquireForExecutionCommandOutcome(
-                acquire_outcome=AcquireForExecutionOutcome.IDEMPOTENT_SKIP,
+            return StartRunCommandOutcome(
+                start_outcome=StartRunOutcome.IDEMPOTENT_SKIP,
                 attempt_epoch=None,
                 quota_release_outcome=None,
             )
@@ -255,8 +255,8 @@ class AgentRunRepository:
             )
             expired_row = expired_result.one_or_none()
             if expired_row is None:
-                return AcquireForExecutionCommandOutcome(
-                    acquire_outcome=AcquireForExecutionOutcome.IDEMPOTENT_SKIP,
+                return StartRunCommandOutcome(
+                    start_outcome=StartRunOutcome.IDEMPOTENT_SKIP,
                     attempt_epoch=None,
                     quota_release_outcome=None,
                 )
@@ -266,10 +266,8 @@ class AgentRunRepository:
                 user_id=user_id,
                 usage_date=quota_usage_date,
             )
-            return AcquireForExecutionCommandOutcome(
-                acquire_outcome=(
-                    AcquireForExecutionOutcome.QUEUED_START_DEADLINE_EXPIRED
-                ),
+            return StartRunCommandOutcome(
+                start_outcome=(StartRunOutcome.QUEUED_START_DEADLINE_EXPIRED),
                 attempt_epoch=None,
                 quota_release_outcome=quota_release_outcome,
             )
@@ -292,13 +290,13 @@ class AgentRunRepository:
         )
         attempt_epoch = result.scalar_one_or_none()
         if attempt_epoch is None:
-            return AcquireForExecutionCommandOutcome(
-                acquire_outcome=AcquireForExecutionOutcome.IDEMPOTENT_SKIP,
+            return StartRunCommandOutcome(
+                start_outcome=StartRunOutcome.IDEMPOTENT_SKIP,
                 attempt_epoch=None,
                 quota_release_outcome=None,
             )
-        return AcquireForExecutionCommandOutcome(
-            acquire_outcome=AcquireForExecutionOutcome.ACQUIRED,
+        return StartRunCommandOutcome(
+            start_outcome=StartRunOutcome.STARTED,
             attempt_epoch=attempt_epoch,
             quota_release_outcome=None,
         )

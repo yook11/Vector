@@ -19,8 +19,8 @@ from structlog.testing import capture_logs
 
 import app.queue.tasks.agent_run as agent_run_tasks
 from app.agent.runs.contracts import (
-    AcquireForExecutionCommandOutcome,
-    AcquireForExecutionOutcome,
+    StartRunCommandOutcome,
+    StartRunOutcome,
 )
 from app.agent.runs.daily_quota.contracts import DailyQuotaReleaseOutcome
 from app.agent.runs.repository import (
@@ -38,7 +38,7 @@ from tests.logfire._metric_helpers import collected_metrics
 _USER_ID = uuid.UUID(TEST_USER_ID)
 _USAGE_DATE = date(2026, 7, 22)
 _DB_NOW = datetime(2026, 7, 22, 12, 0, tzinfo=UTC)
-_SENSITIVE_ACQUISITION_MARKERS = (
+_SENSITIVE_START_MARKERS = (
     str(_USER_ID),
     "SECRET_SQL_MARKER",
     "SECRET_QUESTION_MARKER",
@@ -46,7 +46,7 @@ _SENSITIVE_ACQUISITION_MARKERS = (
     "SECRET_PROVIDER_RAW_MARKER",
     "parameters:",
 )
-_SENSITIVE_ACQUISITION_ERROR = (
+_SENSITIVE_START_ERROR = (
     "asyncpg failure SECRET_SQL_MARKER: UPDATE agent_user_daily_quotas "
     f"parameters: ('{_USER_ID}', 'SECRET_QUESTION_MARKER', "
     "'SECRET_ANSWER_MARKER', 'SECRET_PROVIDER_RAW_MARKER')"
@@ -55,7 +55,7 @@ _SENSITIVE_ACQUISITION_ERROR = (
 
 class _SensitiveQuotaQueryFailure(RuntimeError):
     def __init__(self) -> None:
-        super().__init__(_SENSITIVE_ACQUISITION_ERROR)
+        super().__init__(_SENSITIVE_START_ERROR)
         self.params = {
             "user_id": str(_USER_ID),
             "question": "SECRET_QUESTION_MARKER",
@@ -149,16 +149,16 @@ def _queued_start_deadline_seconds() -> int:
     return value
 
 
-def _assert_acquire_result(
+def _assert_start_result(
     result: object,
     *,
     outcome: str,
-    acquired: bool,
+    started: bool,
     quota_release_outcome: DailyQuotaReleaseOutcome | None,
 ) -> None:
-    assert isinstance(result, AcquireForExecutionCommandOutcome)
-    assert result.acquire_outcome is getattr(AcquireForExecutionOutcome, outcome)
-    assert (result.attempt_epoch is not None) is acquired
+    assert isinstance(result, StartRunCommandOutcome)
+    assert result.start_outcome is getattr(StartRunOutcome, outcome)
+    assert (result.attempt_epoch is not None) is started
     assert result.quota_release_outcome is quota_release_outcome
 
 
@@ -166,7 +166,7 @@ def _ctx(session_factory: async_sessionmaker[AsyncSession]) -> SimpleNamespace:
     return SimpleNamespace(state=SimpleNamespace(session_factory=session_factory))
 
 
-def _assert_safe_acquisition_error(
+def _assert_safe_start_error(
     error: BaseException,
     logs: object,
 ) -> None:
@@ -183,14 +183,14 @@ def _assert_safe_acquisition_error(
     )
 
     assert error.__class__ is agent_run_tasks.AgentRunTaskBoundaryError
-    assert error.args == ("agent run acquisition failed",)
+    assert error.args == ("agent run start failed",)
     assert error.__cause__ is None
     assert error.__context__ is None
     assert error.__suppress_context__ is True
     assert not hasattr(error, "params")
     assert all(
         marker not in surface
-        for marker in _SENSITIVE_ACQUISITION_MARKERS
+        for marker in _SENSITIVE_START_MARKERS
         for surface in exposed_surfaces
     )
 
@@ -246,15 +246,15 @@ async def test_expired_queued_run_terminalizes_and_releases_original_quota_atomi
 
     async with session_factory() as session:
         async with session.begin():
-            result = await AgentRunRepository(session).acquire_for_execution(
+            result = await AgentRunRepository(session).start_run(
                 seeded.run_id,
                 now=_DB_NOW,
             )
 
-    _assert_acquire_result(
+    _assert_start_result(
         result,
         outcome="QUEUED_START_DEADLINE_EXPIRED",
-        acquired=False,
+        started=False,
         quota_release_outcome=DailyQuotaReleaseOutcome.RELEASED,
     )
     run = await _read_run(session_factory, seeded.run_id)
@@ -284,25 +284,25 @@ async def test_queued_start_deadline_keeps_exact_boundary_and_expires_immediatel
 
     async with session_factory() as session:
         async with session.begin():
-            exact_result = await AgentRunRepository(session).acquire_for_execution(
+            exact_result = await AgentRunRepository(session).start_run(
                 exact.run_id,
                 now=_DB_NOW,
             )
-            expired_result = await AgentRunRepository(session).acquire_for_execution(
+            expired_result = await AgentRunRepository(session).start_run(
                 just_after.run_id,
                 now=_DB_NOW,
             )
 
-    _assert_acquire_result(
+    _assert_start_result(
         exact_result,
-        outcome="ACQUIRED",
-        acquired=True,
+        outcome="STARTED",
+        started=True,
         quota_release_outcome=None,
     )
-    _assert_acquire_result(
+    _assert_start_result(
         expired_result,
         outcome="QUEUED_START_DEADLINE_EXPIRED",
-        acquired=False,
+        started=False,
         quota_release_outcome=DailyQuotaReleaseOutcome.RELEASED,
     )
     exact_run = await _read_run(session_factory, exact.run_id)
@@ -324,15 +324,15 @@ async def test_expired_legacy_queued_run_terminalizes_without_quota_release(
 
     async with session_factory() as session:
         async with session.begin():
-            result = await AgentRunRepository(session).acquire_for_execution(
+            result = await AgentRunRepository(session).start_run(
                 seeded.run_id,
                 now=_DB_NOW,
             )
 
-    _assert_acquire_result(
+    _assert_start_result(
         result,
         outcome="QUEUED_START_DEADLINE_EXPIRED",
-        acquired=False,
+        started=False,
         quota_release_outcome=DailyQuotaReleaseOutcome.NOT_ELIGIBLE,
     )
     run = await _read_run(session_factory, seeded.run_id)
@@ -354,15 +354,15 @@ async def test_expired_queued_run_with_missing_or_empty_counter_is_inconsistent(
 
     async with session_factory() as session:
         async with session.begin():
-            result = await AgentRunRepository(session).acquire_for_execution(
+            result = await AgentRunRepository(session).start_run(
                 seeded.run_id,
                 now=_DB_NOW,
             )
 
-    _assert_acquire_result(
+    _assert_start_result(
         result,
         outcome="QUEUED_START_DEADLINE_EXPIRED",
-        acquired=False,
+        started=False,
         quota_release_outcome=DailyQuotaReleaseOutcome.INCONSISTENT,
     )
     run = await _read_run(session_factory, seeded.run_id)
@@ -400,7 +400,7 @@ async def test_quota_query_failure_rolls_back_queued_expiry_without_a_committed_
     try:
         with pytest.raises(RuntimeError, match="queued expiry quota query failed"):
             async with session.begin():
-                await AgentRunRepository(session).acquire_for_execution(
+                await AgentRunRepository(session).start_run(
                     seeded.run_id,
                     now=_DB_NOW,
                 )
@@ -419,7 +419,7 @@ async def test_quota_query_failure_rolls_back_queued_expiry_without_a_committed_
 
 @pytest.mark.integration
 @pytest.mark.asyncio
-async def test_cancel_winner_refunds_once_and_expired_acquire_reports_idempotent_skip(
+async def test_cancel_winner_refunds_once_and_expired_start_reports_idempotent_skip(
     session_factory: async_sessionmaker[AsyncSession],
 ) -> None:
     seeded = await _seed_queued_run(
@@ -429,10 +429,10 @@ async def test_cancel_winner_refunds_once_and_expired_acquire_reports_idempotent
 
     async with (
         session_factory() as cancel_session,
-        session_factory() as acquire_session,
+        session_factory() as start_session,
         session_factory() as observer,
     ):
-        acquire_task: asyncio.Task[object] | None = None
+        start_task: asyncio.Task[object] | None = None
         try:
             await cancel_session.begin()
             cancelled = await AgentRunRepository(cancel_session).cancel_run_for_user(
@@ -441,26 +441,26 @@ async def test_cancel_winner_refunds_once_and_expired_acquire_reports_idempotent
                 now=_DB_NOW,
             )
 
-            await acquire_session.begin()
-            acquire_pid = await acquire_session.scalar(text("SELECT pg_backend_pid()"))
-            assert isinstance(acquire_pid, int)
-            acquire_task = asyncio.create_task(
-                AgentRunRepository(acquire_session).acquire_for_execution(
+            await start_session.begin()
+            start_pid = await start_session.scalar(text("SELECT pg_backend_pid()"))
+            assert isinstance(start_pid, int)
+            start_task = asyncio.create_task(
+                AgentRunRepository(start_session).start_run(
                     seeded.run_id,
                     now=_DB_NOW,
                 )
             )
-            await _wait_until_blocked(observer, acquire_pid)
+            await _wait_until_blocked(observer, start_pid)
 
             await cancel_session.commit()
-            result = await asyncio.wait_for(acquire_task, timeout=5)
-            await acquire_session.commit()
+            result = await asyncio.wait_for(start_task, timeout=5)
+            await start_session.commit()
         finally:
-            if acquire_task is not None:
-                if not acquire_task.done():
-                    acquire_task.cancel()
-                await asyncio.gather(acquire_task, return_exceptions=True)
-            for session in (cancel_session, acquire_session, observer):
+            if start_task is not None:
+                if not start_task.done():
+                    start_task.cancel()
+                await asyncio.gather(start_task, return_exceptions=True)
+            for session in (cancel_session, start_session, observer):
                 if session.in_transaction():
                     await session.rollback()
 
@@ -468,10 +468,10 @@ async def test_cancel_winner_refunds_once_and_expired_acquire_reports_idempotent
         getattr(cancelled, "quota_release_outcome", None)
         is DailyQuotaReleaseOutcome.RELEASED
     )
-    _assert_acquire_result(
+    _assert_start_result(
         result,
         outcome="IDEMPOTENT_SKIP",
-        acquired=False,
+        started=False,
         quota_release_outcome=None,
     )
     run = await _read_run(session_factory, seeded.run_id)
@@ -481,7 +481,7 @@ async def test_cancel_winner_refunds_once_and_expired_acquire_reports_idempotent
 
 @pytest.mark.integration
 @pytest.mark.asyncio
-async def test_timely_acquire_and_running_redelivery_never_release_quota(
+async def test_timely_start_and_running_redelivery_never_release_quota(
     session_factory: async_sessionmaker[AsyncSession],
 ) -> None:
     seeded = await _seed_queued_run(
@@ -491,25 +491,25 @@ async def test_timely_acquire_and_running_redelivery_never_release_quota(
 
     async with session_factory() as session:
         async with session.begin():
-            acquired = await AgentRunRepository(session).acquire_for_execution(
+            started = await AgentRunRepository(session).start_run(
                 seeded.run_id,
                 now=_DB_NOW,
             )
-            redelivered = await AgentRunRepository(session).acquire_for_execution(
+            redelivered = await AgentRunRepository(session).start_run(
                 seeded.run_id,
                 now=_DB_NOW + timedelta(seconds=1),
             )
 
-    _assert_acquire_result(
-        acquired,
-        outcome="ACQUIRED",
-        acquired=True,
+    _assert_start_result(
+        started,
+        outcome="STARTED",
+        started=True,
         quota_release_outcome=None,
     )
-    _assert_acquire_result(
+    _assert_start_result(
         redelivered,
-        outcome="ACQUIRED",
-        acquired=True,
+        outcome="STARTED",
+        started=True,
         quota_release_outcome=None,
     )
     run = await _read_run(session_factory, seeded.run_id)
@@ -651,7 +651,7 @@ async def test_queued_expiry_rollback_emits_neither_log_nor_quota_metric(
         )
         await failing_session.close()
 
-    _assert_safe_acquisition_error(exc_info.value, logs)
+    _assert_safe_start_error(exc_info.value, logs)
     assert not [
         entry
         for entry in logs

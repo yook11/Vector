@@ -36,9 +36,9 @@ from app.agent.running import (
     RunInput,
 )
 from app.agent.runs.contracts import (
-    AcquireForExecutionCommandOutcome,
-    AcquireForExecutionOutcome,
     RunTransitionLostError,
+    StartRunCommandOutcome,
+    StartRunOutcome,
     UserQuestionMessage,
 )
 from app.agent.runs.daily_quota import observability as daily_quota_observability
@@ -86,29 +86,27 @@ async def run_agent_answer(
     research_checkpoint: ResearchCheckpoint | None = None
     application_deadline_at = time.monotonic() + RESEARCH_APPLICATION_TIMEOUT_SECONDS
     application_deadline = asyncio.timeout_at(application_deadline_at)
-    application_deadline_reached_after_acquire = False
+    application_deadline_reached_after_start = False
     timeout_terminalization_error: AgentRunTaskBoundaryError | None = None
     try:
         async with application_deadline:
-            acquisition_error: AgentRunTaskBoundaryError | None = None
+            start_error: AgentRunTaskBoundaryError | None = None
             try:
-                acquire_result = await _acquire_run(session_factory, trigger)
+                start_result = await _start_run(session_factory, trigger)
             except Exception as exc:
                 logger.error(
-                    "agent_run_acquisition_failed",
+                    "agent_run_start_failed",
                     error_type=exc.__class__.__name__,
                 )
-                acquisition_error = AgentRunTaskBoundaryError(
-                    "agent run acquisition failed"
-                )
-            if acquisition_error is not None:
-                acquisition_error.__suppress_context__ = True
-                raise acquisition_error
+                start_error = AgentRunTaskBoundaryError("agent run start failed")
+            if start_error is not None:
+                start_error.__suppress_context__ = True
+                raise start_error
             if (
-                acquire_result.acquire_outcome
-                is AcquireForExecutionOutcome.QUEUED_START_DEADLINE_EXPIRED
+                start_result.start_outcome
+                is StartRunOutcome.QUEUED_START_DEADLINE_EXPIRED
             ):
-                quota_release_outcome = acquire_result.quota_release_outcome
+                quota_release_outcome = start_result.quota_release_outcome
                 if quota_release_outcome is None:
                     raise RuntimeError(
                         "queued expiry is missing its quota release outcome"
@@ -123,17 +121,14 @@ async def run_agent_answer(
                         outcome=quota_release_outcome,
                     )
                 return
-            if (
-                acquire_result.acquire_outcome
-                is AcquireForExecutionOutcome.IDEMPOTENT_SKIP
-            ):
+            if start_result.start_outcome is StartRunOutcome.IDEMPOTENT_SKIP:
                 logger.info("agent_run_idempotent_skip", run_id=str(run_id))
                 return
-            attempt_epoch = acquire_result.attempt_epoch
+            attempt_epoch = start_result.attempt_epoch
             if attempt_epoch is None:
-                raise RuntimeError("acquired run is missing its attempt epoch")
+                raise RuntimeError("started run is missing its attempt epoch")
             if time.monotonic() >= application_deadline_at:
-                application_deadline_reached_after_acquire = True
+                application_deadline_reached_after_start = True
                 raise TimeoutError
 
             question_row = None
@@ -275,7 +270,7 @@ async def run_agent_answer(
                 return
     except TimeoutError:
         if not (
-            application_deadline_reached_after_acquire or application_deadline.expired()
+            application_deadline_reached_after_start or application_deadline.expired()
         ):
             raise
         if attempt_epoch is None:
@@ -458,15 +453,13 @@ async def sweep_stale_agent_runs(ctx: Context = TaskiqDepends()) -> None:
             )
 
 
-async def _acquire_run(
+async def _start_run(
     session_factory: async_sessionmaker[AsyncSession],
     trigger: AgentRunTrigger,
-) -> AcquireForExecutionCommandOutcome:
+) -> StartRunCommandOutcome:
     async with session_factory() as session:
         async with session.begin():
-            return await AgentRunRepository(session).acquire_for_execution(
-                trigger.run_id
-            )
+            return await AgentRunRepository(session).start_run(trigger.run_id)
 
 
 def _serialize_research_checkpoint(

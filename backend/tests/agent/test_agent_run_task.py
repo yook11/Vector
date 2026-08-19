@@ -77,9 +77,9 @@ from app.models.agent_user_daily_quota import AgentUserDailyQuota
 from app.queue.messages.agent_run import AgentRunTrigger
 from app.queue.tasks.agent_run import AgentRunTaskBoundaryError
 from app.shared.security.safe_url import SafeUrl
-from tests.agent.runs._acquire_outcomes import (
-    acquired_attempt_epoch,
+from tests.agent.runs._start_run_outcomes import (
     assert_idempotent_skip,
+    started_attempt_epoch,
 )
 from tests.conftest import TEST_ADMIN_ID, TEST_USER_ID
 from tests.logfire._metric_helpers import collected_metrics
@@ -369,7 +369,7 @@ class CapturingProgressWriter:
 
 class ForbiddenConstruction:
     def __init__(self, *_args: object, **_kwargs: object) -> None:
-        raise AssertionError("acquire skip後にlive dependencyを生成してはいけません")
+        raise AssertionError("start skip後にlive dependencyを生成してはいけません")
 
 
 def _ctx(session_factory: async_sessionmaker[AsyncSession]) -> SimpleNamespace:
@@ -1269,7 +1269,7 @@ async def test_run_agent_answer_resets_live_events_and_injects_reporter(
 
 
 @pytest.mark.asyncio
-async def test_run_agent_answer_starts_stream_attempt_only_after_acquire(
+async def test_run_agent_answer_starts_stream_attempt_only_after_start(
     session_factory: async_sessionmaker[AsyncSession],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -1439,7 +1439,7 @@ async def test_idempotent_skip_does_not_create_or_start_stream_publisher(
 
     def forbidden_builder(*_args: object, **_kwargs: object) -> None:
         pytest.fail(
-            "acquire skip後にexecution dependencyをbuildしてはいけません",
+            "start skip後にexecution dependencyをbuildしてはいけません",
         )
 
     monkeypatch.setattr(
@@ -1964,12 +1964,10 @@ async def test_epoch_advance_stops_old_worker_through_actual_probe(
         async def answer(self) -> AnswerQuestionResult:
             assert self.continuation is not None
             assert await self.continuation.should_continue() is True  # type: ignore[attr-defined]
-            async with session_factory() as reacquire_session:
-                async with reacquire_session.begin():
-                    attempt_epoch = acquired_attempt_epoch(
-                        await AgentRunRepository(
-                            reacquire_session
-                        ).acquire_for_execution(run.id)
+            async with session_factory() as restart_session:
+                async with restart_session.begin():
+                    attempt_epoch = started_attempt_epoch(
+                        await AgentRunRepository(restart_session).start_run(run.id)
                     )
             assert attempt_epoch == 2
             clock.now = 2.0
@@ -2936,10 +2934,8 @@ async def test_stale_complete_run_with_checkpoint_does_not_persist_it(
 
         async with session_factory() as winner_session:
             async with winner_session.begin():
-                attempt_epoch = acquired_attempt_epoch(
-                    await AgentRunRepository(winner_session).acquire_for_execution(
-                        run.id
-                    )
+                attempt_epoch = started_attempt_epoch(
+                    await AgentRunRepository(winner_session).start_run(run.id)
                 )
                 assert attempt_epoch == 2
 
@@ -3204,10 +3200,8 @@ async def test_stale_complete_run_loses_epoch_fence_and_rolls_back_artifacts(
 
         async with session_factory() as winner_session:
             async with winner_session.begin():
-                attempt_epoch = acquired_attempt_epoch(
-                    await AgentRunRepository(winner_session).acquire_for_execution(
-                        run.id
-                    )
+                attempt_epoch = started_attempt_epoch(
+                    await AgentRunRepository(winner_session).start_run(run.id)
                 )
                 assert attempt_epoch == 2
 
@@ -3276,8 +3270,8 @@ async def test_stale_mark_failed_does_not_alter_newer_attempt(
 
     async with session_factory() as session:
         async with session.begin():
-            attempt_epoch = acquired_attempt_epoch(
-                await AgentRunRepository(session).acquire_for_execution(run.id)
+            attempt_epoch = started_attempt_epoch(
+                await AgentRunRepository(session).start_run(run.id)
             )
             transitioned = await AgentRunRepository(session).mark_failed(
                 run.id,
@@ -3297,7 +3291,7 @@ async def test_stale_mark_failed_does_not_alter_newer_attempt(
 
 
 @pytest.mark.asyncio
-async def test_acquire_for_execution_reexecutes_running_and_skips_terminal_runs(
+async def test_start_run_reexecutes_running_and_skips_terminal_runs(
     session_factory: async_sessionmaker[AsyncSession],
 ) -> None:
     now = datetime(2026, 7, 9, 12, 0, tzinfo=UTC)
@@ -3318,10 +3312,10 @@ async def test_acquire_for_execution_reexecutes_running_and_skips_terminal_runs(
     async with session_factory() as session:
         async with session.begin():
             repo = AgentRunRepository(session)
-            attempt_epoch = acquired_attempt_epoch(
-                await repo.acquire_for_execution(running.id, now=now)
+            attempt_epoch = started_attempt_epoch(
+                await repo.start_run(running.id, now=now)
             )
-            skipped = await repo.acquire_for_execution(failed.id, now=now)
+            skipped = await repo.start_run(failed.id, now=now)
 
     assert attempt_epoch == 2
     async with session_factory() as session:
@@ -3335,15 +3329,15 @@ async def test_acquire_for_execution_reexecutes_running_and_skips_terminal_runs(
     assert question.seq == 1
     assert_idempotent_skip(skipped)
     async with session_factory() as session:
-        reacquired = await session.get(AgentRun, running.id)
+        restarted = await session.get(AgentRun, running.id)
         terminal = await session.get(AgentRun, failed.id)
-        assert reacquired is not None
+        assert restarted is not None
         assert terminal is not None
         assert (
-            reacquired.status,
-            reacquired.started_at,
-            reacquired.attempt_epoch,
-            reacquired.progress_stage,
+            restarted.status,
+            restarted.started_at,
+            restarted.attempt_epoch,
+            restarted.progress_stage,
         ) == ("running", now, 2, None)
         assert terminal.status == "failed"
         assert terminal.error_code == "internal_error"
@@ -3351,7 +3345,7 @@ async def test_acquire_for_execution_reexecutes_running_and_skips_terminal_runs(
 
 
 @pytest.mark.asyncio
-async def test_acquire_for_execution_allocates_first_attempt_epoch(
+async def test_start_run_allocates_first_attempt_epoch(
     session_factory: async_sessionmaker[AsyncSession],
 ) -> None:
     async with session_factory() as setup_session:
@@ -3359,27 +3353,27 @@ async def test_acquire_for_execution_allocates_first_attempt_epoch(
 
     async with session_factory() as session:
         async with session.begin():
-            attempt_epoch = acquired_attempt_epoch(
-                await AgentRunRepository(session).acquire_for_execution(run.id)
+            attempt_epoch = started_attempt_epoch(
+                await AgentRunRepository(session).start_run(run.id)
             )
 
     async with session_factory() as session:
-        acquired = await session.get(AgentRun, run.id)
-        assert acquired is not None
+        started_run = await session.get(AgentRun, run.id)
+        assert started_run is not None
         assert attempt_epoch == 1
-        assert acquired.attempt_epoch == 1
+        assert started_run.attempt_epoch == 1
 
 
 @pytest.mark.asyncio
-async def test_acquire_for_execution_increment_rolls_back_with_transaction(
+async def test_start_run_increment_rolls_back_with_transaction(
     session_factory: async_sessionmaker[AsyncSession],
 ) -> None:
     async with session_factory() as setup_session:
         _thread, _message, run = await _create_thread_message_run(setup_session)
 
     async with session_factory() as session:
-        attempt_epoch = acquired_attempt_epoch(
-            await AgentRunRepository(session).acquire_for_execution(run.id)
+        attempt_epoch = started_attempt_epoch(
+            await AgentRunRepository(session).start_run(run.id)
         )
         assert attempt_epoch == 1
         await session.rollback()
@@ -3392,7 +3386,7 @@ async def test_acquire_for_execution_increment_rolls_back_with_transaction(
 
 
 @pytest.mark.asyncio
-async def test_concurrent_acquisitions_receive_distinct_sequence_values(
+async def test_concurrent_start_runs_receive_distinct_sequence_values(
     session_factory: async_sessionmaker[AsyncSession],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -3404,7 +3398,7 @@ async def test_concurrent_acquisitions_receive_distinct_sequence_values(
     both_selected = asyncio.Event()
     release_updates = asyncio.Event()
 
-    async def acquire() -> int:
+    async def start_once() -> int:
         nonlocal selected_count
         async with session_factory() as session:
             original_execute = session.execute
@@ -3424,41 +3418,39 @@ async def test_concurrent_acquisitions_receive_distinct_sequence_values(
 
             monkeypatch.setattr(session, "execute", execute_with_barrier)
             async with session.begin():
-                return acquired_attempt_epoch(
-                    await AgentRunRepository(session).acquire_for_execution(run.id)
+                return started_attempt_epoch(
+                    await AgentRunRepository(session).start_run(run.id)
                 )
 
-    acquire_tasks = [asyncio.create_task(acquire()), asyncio.create_task(acquire())]
+    start_tasks = [asyncio.create_task(start_once()), asyncio.create_task(start_once())]
     try:
         await asyncio.wait_for(both_selected.wait(), timeout=1)
     finally:
         release_updates.set()
-    epochs = await asyncio.gather(*acquire_tasks)
+    epochs = await asyncio.gather(*start_tasks)
 
     assert sorted(epochs) == [1, 2]
     async with session_factory() as session:
-        acquired = await session.get(AgentRun, run.id)
-        assert acquired is not None
-        assert acquired.attempt_epoch == 2
+        started_run = await session.get(AgentRun, run.id)
+        assert started_run is not None
+        assert started_run.attempt_epoch == 2
 
 
 @pytest.mark.asyncio
-async def test_acquire_for_execution_reports_idempotent_skip_for_missing_run(
+async def test_start_run_reports_idempotent_skip_for_missing_run(
     session_factory: async_sessionmaker[AsyncSession],
 ) -> None:
     missing_run_id = UUID("00000000-0000-4000-a000-000000000099")
 
     async with session_factory() as session:
         async with session.begin():
-            skip_result = await AgentRunRepository(session).acquire_for_execution(
-                missing_run_id
-            )
+            skip_result = await AgentRunRepository(session).start_run(missing_run_id)
 
     assert_idempotent_skip(skip_result)
 
 
 @pytest.mark.asyncio
-async def test_acquire_for_execution_reports_idempotent_skip_when_transition_loses_race(
+async def test_start_run_reports_idempotent_skip_when_transition_loses_race(
     session_factory: async_sessionmaker[AsyncSession],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -3483,11 +3475,11 @@ async def test_acquire_for_execution_reports_idempotent_skip_when_transition_los
     monkeypatch.setattr(contender, "execute", execute_with_pause)
     try:
 
-        async def acquire() -> object:
+        async def start_once() -> object:
             async with contender.begin():
-                return await AgentRunRepository(contender).acquire_for_execution(run.id)
+                return await AgentRunRepository(contender).start_run(run.id)
 
-        acquire_task = asyncio.create_task(acquire())
+        start_task = asyncio.create_task(start_once())
         await selected.wait()
         async with session_factory() as winner:
             async with winner.begin():
@@ -3498,7 +3490,7 @@ async def test_acquire_for_execution_reports_idempotent_skip_when_transition_los
                 )
                 assert changed is True
         resume.set()
-        skip_result = await acquire_task
+        skip_result = await start_task
     finally:
         resume.set()
         await contender.close()
@@ -4119,14 +4111,14 @@ def test_run_agent_answer_declares_fixed_application_and_taskiq_deadlines() -> N
 
 
 @pytest.mark.asyncio
-async def test_taskiq_receiver_result_and_log_expose_only_safe_acquisition_error(
+async def test_taskiq_receiver_result_and_log_expose_only_safe_start_error(
     monkeypatch: pytest.MonkeyPatch,
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    async def fail_acquire(*_args: object, **_kwargs: object) -> object:
+    async def fail_start(*_args: object, **_kwargs: object) -> object:
         raise SensitivePersistenceFailure
 
-    monkeypatch.setattr(agent_run_tasks, "_acquire_run", fail_acquire)
+    monkeypatch.setattr(agent_run_tasks, "_start_run", fail_start)
     broker = InMemoryBroker()
     broker.state.session_factory = object()
     receiver = Receiver(
@@ -4156,7 +4148,7 @@ async def test_taskiq_receiver_result_and_log_expose_only_safe_acquisition_error
     assert result.error is not None
     _assert_safe_task_boundary_error(
         result.error,
-        expected_message="agent run acquisition failed",
+        expected_message="agent run start failed",
     )
     receiver_output = f"{result!r}\n{caplog.text}"
     assert all(
@@ -4166,7 +4158,7 @@ async def test_taskiq_receiver_result_and_log_expose_only_safe_acquisition_error
 
 @pytest.mark.integration
 @pytest.mark.asyncio
-async def test_acquire_commit_failure_raises_sanitized_task_boundary_error(
+async def test_start_commit_failure_raises_sanitized_task_boundary_error(
     session_factory: async_sessionmaker[AsyncSession],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -4188,13 +4180,13 @@ async def test_acquire_commit_failure_raises_sanitized_task_boundary_error(
 
     failing_session = session_factory()
 
-    def fail_acquire_commit(_session: object) -> None:
+    def fail_start_commit(_session: object) -> None:
         raise SensitivePersistenceFailure
 
     sa_event.listen(
         failing_session.sync_session,
         "before_commit",
-        fail_acquire_commit,
+        fail_start_commit,
         once=True,
     )
 
@@ -4230,7 +4222,7 @@ async def test_acquire_commit_failure_raises_sanitized_task_boundary_error(
 
     _assert_safe_task_boundary_error(
         exc_info.value,
-        expected_message="agent run acquisition failed",
+        expected_message="agent run start failed",
     )
     _assert_sensitive_task_context_not_logged(logs)
     assert FakeLiveEventPublisher.instances == []
@@ -4253,7 +4245,7 @@ async def test_acquire_commit_failure_raises_sanitized_task_boundary_error(
 
 @pytest.mark.integration
 @pytest.mark.asyncio
-async def test_application_deadline_scope_covers_acquire_live_history_runner_and_result(
+async def test_application_deadline_scope_covers_start_live_history_runner_and_result(
     session_factory: async_sessionmaker[AsyncSession],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -4263,13 +4255,13 @@ async def test_application_deadline_scope_covers_acquire_live_history_runner_and
     clock = _ControlledMonotonicClock(now=100.0)
     scopes = _install_application_deadline_boundary(monkeypatch, clock)
     seen_steps: list[str] = []
-    original_acquire = agent_run_tasks._acquire_run
+    original_start = agent_run_tasks._start_run
     original_history = agent_run_tasks._read_history
 
-    async def acquire_within_deadline(*args: object, **kwargs: object) -> object:
+    async def start_within_deadline(*args: object, **kwargs: object) -> object:
         assert len(scopes) == 1 and scopes[0].active
-        seen_steps.append("acquire")
-        return await original_acquire(*args, **kwargs)  # type: ignore[arg-type]
+        seen_steps.append("start")
+        return await original_start(*args, **kwargs)  # type: ignore[arg-type]
 
     async def history_within_deadline(*args: object, **kwargs: object) -> object:
         assert scopes[0].active
@@ -4314,7 +4306,7 @@ async def test_application_deadline_scope_covers_acquire_live_history_runner_and
         runner.execution = agent
         return runner
 
-    monkeypatch.setattr(agent_run_tasks, "_acquire_run", acquire_within_deadline)
+    monkeypatch.setattr(agent_run_tasks, "_start_run", start_within_deadline)
     monkeypatch.setattr(agent_run_tasks, "_read_history", history_within_deadline)
     monkeypatch.setattr(agent_run_tasks, "get_redis", object)
     monkeypatch.setattr(
@@ -4332,7 +4324,7 @@ async def test_application_deadline_scope_covers_acquire_live_history_runner_and
 
     assert [scope.deadline for scope in scopes] == [100.0 + application_timeout]
     assert seen_steps == [
-        "acquire",
+        "start",
         "begin_attempt",
         "reset",
         "history",
@@ -4344,7 +4336,7 @@ async def test_application_deadline_scope_covers_acquire_live_history_runner_and
 
 @pytest.mark.integration
 @pytest.mark.asyncio
-async def test_acquire_after_application_deadline_skips_execution_and_terminalizes(
+async def test_start_after_application_deadline_skips_execution_and_terminalizes(
     session_factory: async_sessionmaker[AsyncSession],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -4353,13 +4345,13 @@ async def test_acquire_after_application_deadline_skips_execution_and_terminaliz
     application_timeout = agent_run_tasks.RESEARCH_APPLICATION_TIMEOUT_SECONDS
     clock = _ControlledMonotonicClock(now=100.0)
     scopes = _install_application_deadline_boundary(monkeypatch, clock)
-    original_acquire = agent_run_tasks._acquire_run
+    original_start = agent_run_tasks._start_run
     original_mark_failed = AgentRunRepository.mark_failed
     FakeLiveStreamPublisher.instances = []
 
-    async def acquire_then_expire(*args: object, **kwargs: object) -> object:
+    async def start_then_expire(*args: object, **kwargs: object) -> object:
         assert scopes[0].active
-        result = await original_acquire(*args, **kwargs)  # type: ignore[arg-type]
+        result = await original_start(*args, **kwargs)  # type: ignore[arg-type]
         clock.now = 100.0 + application_timeout + 1
         assert scopes[0].expired() is False
         return result
@@ -4386,9 +4378,9 @@ async def test_acquire_after_application_deadline_skips_execution_and_terminaliz
             return await super().publish(event)
 
     def forbidden_runner(*_args: object, **_kwargs: object) -> None:
-        pytest.fail("acquire後にdeadline超過したrunはrunnerを開始してはいけません")
+        pytest.fail("start後にdeadline超過したrunはrunnerを開始してはいけません")
 
-    monkeypatch.setattr(agent_run_tasks, "_acquire_run", acquire_then_expire)
+    monkeypatch.setattr(agent_run_tasks, "_start_run", start_then_expire)
     monkeypatch.setattr(AgentRunRepository, "mark_failed", cleanup_outside_deadline)
     monkeypatch.setattr(agent_run_tasks, "get_redis", object)
     FakeLiveEventPublisher.instances = []
@@ -4581,8 +4573,8 @@ async def test_timed_out_old_attempt_cannot_terminalize_newer_attempt_or_publish
         async def answer(self) -> AnswerQuestionResult:
             async with session_factory() as session:
                 async with session.begin():
-                    newer = acquired_attempt_epoch(
-                        await AgentRunRepository(session).acquire_for_execution(run.id)
+                    newer = started_attempt_epoch(
+                        await AgentRunRepository(session).start_run(run.id)
                     )
             assert newer == 2
             raise asyncio.CancelledError
@@ -4637,7 +4629,7 @@ async def test_application_timeout_cleanup_commit_failure_propagates_without_ter
         expire_on_cancel=True,
     )
     FakeLiveStreamPublisher.instances = []
-    acquire_session = session_factory()
+    start_session = session_factory()
     history_session = session_factory()
     cleanup_session = session_factory()
 
@@ -4650,7 +4642,7 @@ async def test_application_timeout_cleanup_commit_failure_propagates_without_ter
         fail_cleanup_commit,
         once=True,
     )
-    sessions = iter([acquire_session, history_session, cleanup_session])
+    sessions = iter([start_session, history_session, cleanup_session])
 
     def controlled_session_factory() -> AsyncSession:
         return next(sessions)
@@ -4680,7 +4672,7 @@ async def test_application_timeout_cleanup_commit_failure_propagates_without_ter
                 ),
             )
     finally:
-        await acquire_session.close()
+        await start_session.close()
         await history_session.close()
         await cleanup_session.close()
 

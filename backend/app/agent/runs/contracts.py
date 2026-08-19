@@ -23,41 +23,38 @@ class RunTransitionLostError(Exception):
     """Another actor moved the run before this transition could commit."""
 
 
-class AcquireForExecutionOutcome(StrEnum):
-    ACQUIRED = "acquired"
+class StartRunOutcome(StrEnum):
+    STARTED = "started"
     QUEUED_START_DEADLINE_EXPIRED = "queued_start_deadline_expired"
     IDEMPOTENT_SKIP = "idempotent_skip"
 
 
 @dataclass(frozen=True, slots=True)
-class AcquireForExecutionCommandOutcome:
-    acquire_outcome: AcquireForExecutionOutcome
+class StartRunCommandOutcome:
+    start_outcome: StartRunOutcome
     attempt_epoch: int | None
     quota_release_outcome: DailyQuotaReleaseOutcome | None
 
     def __post_init__(self) -> None:
-        if not isinstance(self.acquire_outcome, AcquireForExecutionOutcome):
-            raise ValueError("invalid acquire for execution outcome")
-        if self.acquire_outcome is AcquireForExecutionOutcome.ACQUIRED:
+        if not isinstance(self.start_outcome, StartRunOutcome):
+            raise ValueError("invalid start run outcome")
+        if self.start_outcome is StartRunOutcome.STARTED:
             if (
                 not isinstance(self.attempt_epoch, int)
                 or isinstance(self.attempt_epoch, bool)
                 or self.attempt_epoch < 1
                 or self.quota_release_outcome is not None
             ):
-                raise ValueError("acquired run requires only a positive attempt epoch")
+                raise ValueError("started run requires only a positive attempt epoch")
             return
-        if (
-            self.acquire_outcome
-            is AcquireForExecutionOutcome.QUEUED_START_DEADLINE_EXPIRED
-        ):
+        if self.start_outcome is StartRunOutcome.QUEUED_START_DEADLINE_EXPIRED:
             if self.attempt_epoch is not None or not isinstance(
                 self.quota_release_outcome, DailyQuotaReleaseOutcome
             ):
                 raise ValueError("expired queued run requires only a quota outcome")
             return
         if self.attempt_epoch is not None or self.quota_release_outcome is not None:
-            raise ValueError("idempotent skip cannot contain acquire details")
+            raise ValueError("idempotent skip cannot contain start details")
 
 
 class CancelRunOutcome(StrEnum):
