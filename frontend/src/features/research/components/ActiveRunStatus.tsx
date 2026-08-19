@@ -52,8 +52,6 @@ function evidenceActivityText(activity: ResearchLiveActivity): string | null {
       return `候補${activity.hitCount}件を取得`;
     case "evidence_review.selected":
       return `根拠${activity.evidenceCount}件を選別`;
-    case "context_resolution.question_resolved":
-      return null;
   }
 }
 
@@ -67,10 +65,7 @@ function activityText(
   if (stage === "evidence_collection" || stage === "evidence_review") {
     return evidenceActivityText(activity);
   }
-  if (stage === "answering") return null;
-  return activity.type === "context_resolution.question_resolved"
-    ? `“${activity.standaloneQuestion}”について調査中`
-    : null;
+  return null;
 }
 
 export function ActiveRunStatus({

@@ -117,19 +117,12 @@ class ResearchRunEvidenceReviewSelectedEvent(_CamelBase):
     evidence_count: int = Field(ge=0)
 
 
-class ResearchRunQuestionResolvedEvent(_CamelBase):
-    type: Literal["context_resolution.question_resolved"]
-    ts: datetime
-    standalone_question: str = Field(min_length=1, max_length=500)
-
-
 ResearchRunEvent = Annotated[
     ResearchRunInternalSearchStartedEvent
     | ResearchRunInternalSearchCompletedEvent
     | ResearchRunExternalSearchQueriesGeneratedEvent
     | ResearchRunExternalSearchHitsFetchedEvent
-    | ResearchRunEvidenceReviewSelectedEvent
-    | ResearchRunQuestionResolvedEvent,
+    | ResearchRunEvidenceReviewSelectedEvent,
     Field(discriminator="type"),
 ]
 

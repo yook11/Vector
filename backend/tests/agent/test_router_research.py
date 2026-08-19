@@ -2312,9 +2312,10 @@ class TestGetResearchRun:
             [
                 json.dumps(
                     {
-                        "type": "context_resolution.question_resolved",
+                        "type": "evidence_collection.internal_search_started",
                         "ts": "2026-07-20T01:00:00+00:00",
-                        "standalone_question": "OLD_RESOLVED_QUESTION_SENTINEL",
+                        "task_index": 0,
+                        "query_count": 1,
                     }
                 ),
                 json.dumps(

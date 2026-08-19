@@ -459,7 +459,7 @@ describe("ResearchThreadView live integration", () => {
     expect(screen.getByText("回答を生成中…")).toBeInTheDocument();
   });
 
-  it("renders a safe question.resolved activity from the real polling response", async () => {
+  it("shows the planning stage without a rewritten-question activity", async () => {
     vi.stubGlobal(
       "fetch",
       vi.fn().mockResolvedValue(
@@ -471,14 +471,7 @@ describe("ResearchThreadView live integration", () => {
             errorCode: null,
             progressStage: "planning",
             attemptEpoch: 1,
-            recentEvents: [
-              {
-                type: "context_resolution.question_resolved",
-                ts: "2026-07-13T00:00:00Z",
-                standaloneQuestion: "AI需要は伸びる？",
-              },
-              { type: "future.event", payload: "discarded" },
-            ],
+            recentEvents: [{ type: "future.event", payload: "discarded" }],
           }),
           { status: 200, headers: { "Content-Type": "application/json" } },
         ),
@@ -487,9 +480,7 @@ describe("ResearchThreadView live integration", () => {
 
     render(<ResearchThreadView thread={activeThread()} />);
 
-    expect(
-      await screen.findByText("“AI需要は伸びる？”について調査中"),
-    ).toBeInTheDocument();
+    expect(await screen.findByText("計画中")).toBeInTheDocument();
     expect(screen.queryByText("discarded")).not.toBeInTheDocument();
   });
 

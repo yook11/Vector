@@ -645,21 +645,16 @@ function latestRelevantPollingActivity(
   progressStage: ResearchLiveState["progressStage"],
   recentEvents: readonly unknown[],
 ): ResearchLiveActivity | null {
-  if (progressStage === "answering") return null;
   // 根拠の選別は精査工程で発火するため、収集と精査を同じ表示区間として扱う。
-  const isEvidenceStage =
-    progressStage === "evidence_collection" ||
-    progressStage === "evidence_review";
+  if (
+    progressStage !== "evidence_collection" &&
+    progressStage !== "evidence_review"
+  ) {
+    return null;
+  }
   for (let index = recentEvents.length - 1; index >= 0; index -= 1) {
     const activity = parseResearchLiveActivity(recentEvents[index]);
-    if (activity === null) continue;
-    if (isEvidenceStage) {
-      if (activity.type !== "context_resolution.question_resolved")
-        return activity;
-      continue;
-    }
-    if (activity.type === "context_resolution.question_resolved")
-      return activity;
+    if (activity !== null) return activity;
   }
   return null;
 }

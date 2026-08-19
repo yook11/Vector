@@ -182,12 +182,6 @@ describe("parseResearchLiveEvent", () => {
           evidenceCount: 4,
         },
       },
-      {
-        activity: {
-          type: "context_resolution.question_resolved",
-          standaloneQuestion: "NVIDIAの発表は株価へどう影響する？",
-        },
-      },
     ])("accepts $activity.type with its camelCase fields", ({ activity }) => {
       expect(parse("activity", { attemptEpoch: 1, activity })).toEqual({
         kind: "event",
@@ -220,7 +214,6 @@ describe("parseResearchLiveEvent", () => {
         type: "evidence_review.selected",
         evidenceCount: "4",
       },
-      { type: "context_resolution.question_resolved", standaloneQuestion: "" },
     ])("rejects invalid fields for $type", (activity) => {
       expect(parse("activity", { attemptEpoch: 1, activity })).toEqual({
         kind: "event-local-invalid",
@@ -269,6 +262,10 @@ describe("parseResearchLiveEvent", () => {
 
     it.each([
       { type: "question.resolved", standaloneQuestion: "旧語彙の質問" },
+      {
+        type: "context_resolution.question_resolved",
+        standaloneQuestion: "言い換え質問",
+      },
       { type: "internal_search.started", queryCount: 2 },
       { type: "internal_search.completed", hitCount: 3 },
       {

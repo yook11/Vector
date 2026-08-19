@@ -39,7 +39,6 @@ from app.agent.input_safety.contract import (
 )
 from app.agent.live_updates.reporters import AgentRunLiveActivityReporter
 from app.agent.live_updates.stream import (
-    AgentRunLiveStreamActivityEvent,
     AgentRunLiveStreamAnswerDeltaEvent,
     AgentRunLiveStreamAnswerResetEvent,
     AgentRunLiveStreamStageEvent,
@@ -49,7 +48,6 @@ from app.agent.question_context.contract import AnswerBrief
 from app.agent.research_checkpoint import ResearchCheckpoint, ResearchTaskRecord
 from app.agent.running import (
     AnsweringPhases,
-    QuestionResolvedRunHooks,
     RunIdentity,
     RunInput,
     RunResult,
@@ -176,7 +174,6 @@ class FakeAgent:
 class FakeAnsweringRunnerCall:
     input: RunInput
     identity: RunIdentity
-    hooks: object | None
 
 
 class FakeAnsweringRunner:
@@ -200,13 +197,11 @@ class FakeAnsweringRunner:
         input: RunInput,
         *,
         identity: RunIdentity,
-        hooks: object | None = None,
     ) -> RunResult:
         self.calls.append(
             FakeAnsweringRunnerCall(
                 input=input,
                 identity=identity,
-                hooks=hooks,
             )
         )
         if self.exc is not None:
@@ -215,12 +210,6 @@ class FakeAnsweringRunner:
             standalone_question=input.question
         )
         self.answer_brief = answer_brief
-        if hooks is not None:
-            await cast(Any, hooks).on_answer_brief_prepared(
-                original_question=input.question,
-                has_history=bool(input.history),
-                answer_brief=answer_brief,
-            )
         assert self.execution is not None
         final_output = await cast(Any, self.execution).answer()
         return RunResult(
@@ -1499,7 +1488,7 @@ async def test_idempotent_skip_does_not_create_or_start_stream_publisher(
 
 
 @pytest.mark.asyncio
-async def test_run_agent_answer_passes_answering_runner_and_resolved_hook(
+async def test_run_agent_answer_passes_answering_runner_identity_and_history(
     session_factory: async_sessionmaker[AsyncSession],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -1604,7 +1593,6 @@ async def test_run_agent_answer_passes_answering_runner_and_resolved_hook(
         as_of=datetime(2026, 7, 16, 9, 30, tzinfo=UTC),
     )
     assert answering_runner_call.identity.as_of.utcoffset() == timedelta(0)
-    assert isinstance(answering_runner_call.hooks, QuestionResolvedRunHooks)
     assert len(runner_execution.calls) == 1
     assert len(runner_builder_calls) == 1
     runner_kwargs = runner_builder_calls[0]
@@ -1613,21 +1601,6 @@ async def test_run_agent_answer_passes_answering_runner_and_resolved_hook(
     assert runner_kwargs["progress"] is not None
     assert runner_kwargs["delta_reporter"] is not None
     assert runner_kwargs["continuation"] is not None
-    publisher = FakeLiveEventPublisher.instances[0]
-    assert len(publisher.events) == 1
-    assert (
-        getattr(publisher.events[0], "type") == "context_resolution.question_resolved"
-    )
-    assert getattr(publisher.events[0], "standalone_question") == (
-        "NVIDIA の発表が株価へ与える影響は？"
-    )
-    stream_activities = [
-        event
-        for event in FakeLiveStreamPublisher.instances[0].published
-        if isinstance(event, AgentRunLiveStreamActivityEvent)
-    ]
-    assert len(stream_activities) == 1
-    assert stream_activities[0].activity == publisher.events[0]
     stream = FakeLiveStreamPublisher.instances[0]
     assert stream.run_id == run.id
     assert stream.attempt_epoch == 5
@@ -4327,11 +4300,10 @@ async def test_application_deadline_scope_covers_acquire_live_history_runner_and
             input: RunInput,
             *,
             identity: RunIdentity,
-            hooks: object | None = None,
         ) -> RunResult:
             assert scopes[0].active
             seen_steps.append("runner")
-            return await super().run(input, identity=identity, hooks=hooks)
+            return await super().run(input, identity=identity)
 
     agent = ScopeCheckingAgent(_direct_result())
     runner = ScopeCheckingRunner()
