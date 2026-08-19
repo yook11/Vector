@@ -21,11 +21,11 @@ from app.agent.runs.contracts import (
     CancelRunOutcome,
     CreatedAgentRun,
     OwnedAgentRunLiveContext,
-    PreparedAgentRun,
     RunTransitionLostError,
     StaleRunningRun,
     StaleRunSweepResult,
     ThreadNotFoundError,
+    UserQuestionMessage,
 )
 from app.agent.runs.daily_quota.contracts import DailyQuotaReleaseOutcome
 from app.agent.runs.daily_quota.persistence import (
@@ -212,12 +212,9 @@ class AgentRunRepository:
             await self._session.execute(
                 select(
                     AgentRun,
-                    AgentMessage.content,
-                    AgentMessage.seq,
                     AgentThread.user_id,
                     transaction_now,
                 )
-                .join(AgentMessage, AgentRun.user_message_id == AgentMessage.id)
                 .join(AgentThread, AgentRun.thread_id == AgentThread.id)
                 .where(AgentRun.id == run_id)
             )
@@ -225,14 +222,14 @@ class AgentRunRepository:
         if row is None:
             return AcquireForExecutionCommandOutcome(
                 acquire_outcome=AcquireForExecutionOutcome.IDEMPOTENT_SKIP,
-                prepared_run=None,
+                attempt_epoch=None,
                 quota_release_outcome=None,
             )
-        run, question, user_message_seq, user_id, transaction_now = row
+        run, user_id, transaction_now = row
         if run.status in _TERMINAL_STATUSES:
             return AcquireForExecutionCommandOutcome(
                 acquire_outcome=AcquireForExecutionOutcome.IDEMPOTENT_SKIP,
-                prepared_run=None,
+                attempt_epoch=None,
                 quota_release_outcome=None,
             )
 
@@ -260,7 +257,7 @@ class AgentRunRepository:
             if expired_row is None:
                 return AcquireForExecutionCommandOutcome(
                     acquire_outcome=AcquireForExecutionOutcome.IDEMPOTENT_SKIP,
-                    prepared_run=None,
+                    attempt_epoch=None,
                     quota_release_outcome=None,
                 )
             _expired_run_id, quota_usage_date = expired_row
@@ -273,7 +270,7 @@ class AgentRunRepository:
                 acquire_outcome=(
                     AcquireForExecutionOutcome.QUEUED_START_DEADLINE_EXPIRED
                 ),
-                prepared_run=None,
+                attempt_epoch=None,
                 quota_release_outcome=quota_release_outcome,
             )
 
@@ -297,21 +294,36 @@ class AgentRunRepository:
         if attempt_epoch is None:
             return AcquireForExecutionCommandOutcome(
                 acquire_outcome=AcquireForExecutionOutcome.IDEMPOTENT_SKIP,
-                prepared_run=None,
+                attempt_epoch=None,
                 quota_release_outcome=None,
             )
         return AcquireForExecutionCommandOutcome(
             acquire_outcome=AcquireForExecutionOutcome.ACQUIRED,
-            prepared_run=PreparedAgentRun(
-                run_id=run.id,
-                thread_id=run.thread_id,
-                user_id=user_id,
-                question=question,
-                user_message_seq=user_message_seq,
-                attempt_epoch=attempt_epoch,
-            ),
+            attempt_epoch=attempt_epoch,
             quota_release_outcome=None,
         )
+
+    async def read_user_question_for_run(
+        self,
+        run_id: uuid_mod.UUID,
+    ) -> tuple[uuid_mod.UUID, uuid_mod.UUID, UserQuestionMessage] | None:
+        row = (
+            await self._session.execute(
+                select(
+                    AgentThread.user_id,
+                    AgentRun.thread_id,
+                    AgentMessage.content,
+                    AgentMessage.seq,
+                )
+                .join(AgentMessage, AgentRun.user_message_id == AgentMessage.id)
+                .join(AgentThread, AgentRun.thread_id == AgentThread.id)
+                .where(AgentRun.id == run_id)
+            )
+        ).one_or_none()
+        if row is None:
+            return None
+        user_id, thread_id, content, seq = row
+        return user_id, thread_id, UserQuestionMessage(content=content, seq=seq)
 
     async def is_execution_current(
         self,

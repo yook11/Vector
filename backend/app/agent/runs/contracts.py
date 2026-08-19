@@ -32,7 +32,7 @@ class AcquireForExecutionOutcome(StrEnum):
 @dataclass(frozen=True, slots=True)
 class AcquireForExecutionCommandOutcome:
     acquire_outcome: AcquireForExecutionOutcome
-    prepared_run: PreparedAgentRun | None
+    attempt_epoch: int | None
     quota_release_outcome: DailyQuotaReleaseOutcome | None
 
     def __post_init__(self) -> None:
@@ -40,21 +40,23 @@ class AcquireForExecutionCommandOutcome:
             raise ValueError("invalid acquire for execution outcome")
         if self.acquire_outcome is AcquireForExecutionOutcome.ACQUIRED:
             if (
-                not isinstance(self.prepared_run, PreparedAgentRun)
+                not isinstance(self.attempt_epoch, int)
+                or isinstance(self.attempt_epoch, bool)
+                or self.attempt_epoch < 1
                 or self.quota_release_outcome is not None
             ):
-                raise ValueError("acquired run requires only a prepared run")
+                raise ValueError("acquired run requires only a positive attempt epoch")
             return
         if (
             self.acquire_outcome
             is AcquireForExecutionOutcome.QUEUED_START_DEADLINE_EXPIRED
         ):
-            if self.prepared_run is not None or not isinstance(
+            if self.attempt_epoch is not None or not isinstance(
                 self.quota_release_outcome, DailyQuotaReleaseOutcome
             ):
                 raise ValueError("expired queued run requires only a quota outcome")
             return
-        if self.prepared_run is not None or self.quota_release_outcome is not None:
+        if self.attempt_epoch is not None or self.quota_release_outcome is not None:
             raise ValueError("idempotent skip cannot contain acquire details")
 
 
@@ -163,13 +165,9 @@ class CreatedAgentRun:
 
 
 @dataclass(frozen=True, slots=True)
-class PreparedAgentRun:
-    run_id: UUID
-    thread_id: UUID
-    user_id: UUID
-    question: str
-    user_message_seq: int
-    attempt_epoch: int
+class UserQuestionMessage:
+    content: str
+    seq: int
 
 
 @dataclass(frozen=True, slots=True)

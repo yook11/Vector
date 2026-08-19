@@ -39,8 +39,8 @@ from app.agent.running import (
 from app.agent.runs.contracts import (
     AcquireForExecutionCommandOutcome,
     AcquireForExecutionOutcome,
-    PreparedAgentRun,
     RunTransitionLostError,
+    UserQuestionMessage,
 )
 from app.agent.runs.daily_quota import observability as daily_quota_observability
 from app.agent.runs.execution_probe import AgentRunExecutionProbe
@@ -80,7 +80,8 @@ async def run_agent_answer(
     ctx: Context = TaskiqDepends(),
 ) -> None:
     session_factory = ctx.state.session_factory
-    prepared: PreparedAgentRun | None = None
+    run_id = trigger.run_id
+    attempt_epoch: int | None = None
     stream_events: AgentRunLiveStreamPublisher | None = None
     result: AnswerQuestionResult | None = None
     research_checkpoint: ResearchCheckpoint | None = None
@@ -119,7 +120,7 @@ async def run_agent_answer(
                 )
                 with suppress(Exception):
                     daily_quota_observability.observe_release(
-                        run_id=trigger.run_id,
+                        run_id=run_id,
                         outcome=quota_release_outcome,
                     )
                 return
@@ -127,38 +128,58 @@ async def run_agent_answer(
                 acquire_result.acquire_outcome
                 is AcquireForExecutionOutcome.IDEMPOTENT_SKIP
             ):
-                logger.info("agent_run_idempotent_skip", run_id=str(trigger.run_id))
+                logger.info("agent_run_idempotent_skip", run_id=str(run_id))
                 return
-            prepared = acquire_result.prepared_run
-            if prepared is None:
-                raise RuntimeError("acquired run is missing its prepared run")
+            attempt_epoch = acquire_result.attempt_epoch
+            if attempt_epoch is None:
+                raise RuntimeError("acquired run is missing its attempt epoch")
             if time.monotonic() >= application_deadline_at:
                 application_deadline_reached_after_acquire = True
                 raise TimeoutError
 
+            question_row = None
+            try:
+                question_row = await _read_user_question(session_factory, run_id)
+            except Exception as exc:
+                logger.error(
+                    "agent_run_user_question_read_failed",
+                    run_id=str(run_id),
+                    error_type=exc.__class__.__name__,
+                )
+            if question_row is None:
+                await _mark_failed(
+                    session_factory,
+                    run_id,
+                    attempt_epoch,
+                    AgentRunErrorCode.INTERNAL_ERROR,
+                    None,
+                )
+                return
+            user_id, thread_id, question = question_row
+
             redis = get_redis()
-            events = AgentRunLiveEventPublisher(redis, prepared.run_id)
+            events = AgentRunLiveEventPublisher(redis, run_id)
             stream_events = AgentRunLiveStreamPublisher(
                 redis,
-                prepared.run_id,
-                prepared.attempt_epoch,
+                run_id,
+                attempt_epoch,
             )
             delta_reporter = AgentRunLiveAnswerDeltaReporter(
                 stream_events,
-                run_id=prepared.run_id,
-                attempt_epoch=prepared.attempt_epoch,
+                run_id=run_id,
+                attempt_epoch=attempt_epoch,
             )
             continuation = AgentRunExecutionProbe(
                 session_factory,
-                prepared.run_id,
-                prepared.attempt_epoch,
+                run_id,
+                attempt_epoch,
             )
             try:
                 await stream_events.begin_attempt()
             except Exception:
                 logger.warning(
                     "agent_run_live_stream_begin_attempt_failed",
-                    run_id=str(prepared.run_id),
+                    run_id=str(run_id),
                 )
 
             try:
@@ -167,14 +188,23 @@ async def run_agent_answer(
                 progress_reporter = AgentRunLiveStageReporter(
                     AgentRunProgressWriter(
                         session_factory,
-                        prepared.run_id,
-                        prepared.attempt_epoch,
+                        run_id,
+                        attempt_epoch,
                     ),
                     stream_events,
                 )
                 as_of = datetime.now(UTC)
-                history = await _read_history(session_factory, prepared)
-                prior_research = await _read_prior_research(session_factory, prepared)
+                history = await _read_history(
+                    session_factory,
+                    thread_id=thread_id,
+                    before_seq=question.seq,
+                )
+                prior_research = await _read_prior_research(
+                    session_factory,
+                    thread_id=thread_id,
+                    user_id=user_id,
+                    run_id=run_id,
+                )
                 answering_runner = build_answering_runner(
                     session_factory=session_factory,
                     progress=progress_reporter,
@@ -184,14 +214,14 @@ async def run_agent_answer(
                 )
                 run_result = await answering_runner.run(
                     RunInput(
-                        question=prepared.question,
+                        question=question.content,
                         history=tuple(history),
                         prior_research=prior_research,
                     ),
                     identity=RunIdentity(
-                        user_id=prepared.user_id,
-                        run_id=prepared.run_id,
-                        thread_id=prepared.thread_id,
+                        user_id=user_id,
+                        run_id=run_id,
+                        thread_id=thread_id,
                         as_of=as_of,
                     ),
                     hooks=QuestionResolvedRunHooks(events=activity_reporter),
@@ -201,15 +231,15 @@ async def run_agent_answer(
             except InputSafetyBlocked:
                 await _mark_policy_blocked(
                     session_factory,
-                    prepared.run_id,
-                    prepared.attempt_epoch,
+                    run_id,
+                    attempt_epoch,
                     stream_events,
                 )
                 return
             except AnswerGenerationStopped:
                 logger.info(
                     "agent_run_generation_stopped",
-                    run_id=str(prepared.run_id),
+                    run_id=str(run_id),
                 )
                 return
             except (
@@ -220,13 +250,13 @@ async def run_agent_answer(
             ) as exc:
                 logger.info(
                     "agent_run_generation_unavailable",
-                    run_id=str(prepared.run_id),
+                    run_id=str(run_id),
                     error_type=exc.__class__.__name__,
                 )
                 await _mark_failed(
                     session_factory,
-                    prepared.run_id,
-                    prepared.attempt_epoch,
+                    run_id,
+                    attempt_epoch,
                     AgentRunErrorCode.GENERATION_UNAVAILABLE,
                     stream_events,
                 )
@@ -234,13 +264,13 @@ async def run_agent_answer(
             except Exception as exc:
                 logger.error(
                     "agent_run_unexpected_error",
-                    run_id=str(prepared.run_id),
+                    run_id=str(run_id),
                     error_type=exc.__class__.__name__,
                 )
                 await _mark_failed(
                     session_factory,
-                    prepared.run_id,
-                    prepared.attempt_epoch,
+                    run_id,
+                    attempt_epoch,
                     AgentRunErrorCode.INTERNAL_ERROR,
                     stream_events,
                 )
@@ -250,7 +280,7 @@ async def run_agent_answer(
             application_deadline_reached_after_acquire or application_deadline.expired()
         ):
             raise
-        if prepared is None:
+        if attempt_epoch is None:
             logger.info("application_timeout_without_attempt")
             return
         if stream_events is None:
@@ -258,19 +288,19 @@ async def run_agent_answer(
                 redis = get_redis()
                 stream_events = AgentRunLiveStreamPublisher(
                     redis,
-                    prepared.run_id,
-                    prepared.attempt_epoch,
+                    run_id,
+                    attempt_epoch,
                 )
             except Exception:
                 logger.warning(
                     "agent_run_live_stream_timeout_publisher_init_failed",
-                    run_id=str(prepared.run_id),
+                    run_id=str(run_id),
                 )
         try:
             transitioned = await _mark_failed(
                 session_factory,
-                prepared.run_id,
-                prepared.attempt_epoch,
+                run_id,
+                attempt_epoch,
                 AgentRunErrorCode.GENERATION_UNAVAILABLE,
                 stream_events,
             )
@@ -300,45 +330,45 @@ async def run_agent_answer(
         timeout_terminalization_error.__suppress_context__ = True
         raise timeout_terminalization_error
 
-    if prepared is None or stream_events is None or result is None:
+    if attempt_epoch is None or stream_events is None or result is None:
         raise RuntimeError("completed run is missing its execution context")
 
     serialized_research_checkpoint = _serialize_research_checkpoint(
         research_checkpoint,
-        run_id=prepared.run_id,
+        run_id=run_id,
     )
     try:
         async with session_factory() as session:
             async with session.begin():
                 completed = await AgentRunRepository(session).complete_run(
-                    run_id=prepared.run_id,
+                    run_id=run_id,
                     result=result,
-                    expected_attempt_epoch=prepared.attempt_epoch,
+                    expected_attempt_epoch=attempt_epoch,
                     research_checkpoint=serialized_research_checkpoint,
                 )
                 if not completed:
                     logger.info(
                         "agent_run_completion_skipped",
-                        run_id=str(prepared.run_id),
+                        run_id=str(run_id),
                     )
         if completed:
             await _publish_terminal(
                 stream_events,
-                prepared.run_id,
+                run_id,
                 AgentRunLiveStreamTerminalEvent(status="completed"),
             )
     except RunTransitionLostError:
-        logger.info("agent_run_completion_lost_race", run_id=str(prepared.run_id))
+        logger.info("agent_run_completion_lost_race", run_id=str(run_id))
     except Exception as exc:
         logger.exception(
             "agent_run_completion_failed",
-            run_id=str(prepared.run_id),
+            run_id=str(run_id),
             error_type=exc.__class__.__name__,
         )
         await _mark_failed(
             session_factory,
-            prepared.run_id,
-            prepared.attempt_epoch,
+            run_id,
+            attempt_epoch,
             AgentRunErrorCode.INTERNAL_ERROR,
             stream_events,
         )
@@ -460,21 +490,34 @@ def _serialize_research_checkpoint(
         return None
 
 
+async def _read_user_question(
+    session_factory: async_sessionmaker[AsyncSession],
+    run_id: UUID,
+) -> tuple[UUID, UUID, UserQuestionMessage] | None:
+    async with session_factory() as session:
+        return await AgentRunRepository(session).read_user_question_for_run(run_id)
+
+
 async def _read_history(
     session_factory: async_sessionmaker[AsyncSession],
-    prepared: PreparedAgentRun,
+    *,
+    thread_id: UUID,
+    before_seq: int,
 ) -> list[ThreadMessageSnapshot]:
     async with session_factory() as session:
         return await AgentThreadRepository(session).read_recent_messages_before(
-            thread_id=prepared.thread_id,
-            before_seq=prepared.user_message_seq,
+            thread_id=thread_id,
+            before_seq=before_seq,
             limit=HISTORY_MESSAGE_LIMIT,
         )
 
 
 async def _read_prior_research(
     session_factory: async_sessionmaker[AsyncSession],
-    prepared: PreparedAgentRun,
+    *,
+    thread_id: UUID,
+    user_id: UUID,
+    run_id: UUID,
 ) -> tuple[ResearchCheckpoint, ...]:
     """読出し・検証のどの失敗も握って空にし、既存workflowを同値継続する。"""
     try:
@@ -482,14 +525,14 @@ async def _read_prior_research(
             raw_checkpoints = await AgentRunRepository(
                 session
             ).read_recent_research_checkpoints_for_user(
-                thread_id=prepared.thread_id,
-                user_id=prepared.user_id,
+                thread_id=thread_id,
+                user_id=user_id,
             )
         return recall_research_checkpoints(raw_checkpoints)
     except Exception as exc:
         logger.warning(
             "agent_run_prior_research_read_failed",
-            run_id=str(prepared.run_id),
+            run_id=str(run_id),
             error_type=exc.__class__.__name__,
             failure_code="prior_research_read_failed",
         )
