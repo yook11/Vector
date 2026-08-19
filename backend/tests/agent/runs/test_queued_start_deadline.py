@@ -153,12 +153,12 @@ def _assert_acquire_result(
     result: object,
     *,
     outcome: str,
-    prepared: bool,
+    acquired: bool,
     quota_release_outcome: DailyQuotaReleaseOutcome | None,
 ) -> None:
     assert isinstance(result, AcquireForExecutionCommandOutcome)
     assert result.acquire_outcome is getattr(AcquireForExecutionOutcome, outcome)
-    assert (result.prepared_run is not None) is prepared
+    assert (result.attempt_epoch is not None) is acquired
     assert result.quota_release_outcome is quota_release_outcome
 
 
@@ -254,7 +254,7 @@ async def test_expired_queued_run_terminalizes_and_releases_original_quota_atomi
     _assert_acquire_result(
         result,
         outcome="QUEUED_START_DEADLINE_EXPIRED",
-        prepared=False,
+        acquired=False,
         quota_release_outcome=DailyQuotaReleaseOutcome.RELEASED,
     )
     run = await _read_run(session_factory, seeded.run_id)
@@ -296,13 +296,13 @@ async def test_queued_start_deadline_keeps_exact_boundary_and_expires_immediatel
     _assert_acquire_result(
         exact_result,
         outcome="ACQUIRED",
-        prepared=True,
+        acquired=True,
         quota_release_outcome=None,
     )
     _assert_acquire_result(
         expired_result,
         outcome="QUEUED_START_DEADLINE_EXPIRED",
-        prepared=False,
+        acquired=False,
         quota_release_outcome=DailyQuotaReleaseOutcome.RELEASED,
     )
     exact_run = await _read_run(session_factory, exact.run_id)
@@ -332,7 +332,7 @@ async def test_expired_legacy_queued_run_terminalizes_without_quota_release(
     _assert_acquire_result(
         result,
         outcome="QUEUED_START_DEADLINE_EXPIRED",
-        prepared=False,
+        acquired=False,
         quota_release_outcome=DailyQuotaReleaseOutcome.NOT_ELIGIBLE,
     )
     run = await _read_run(session_factory, seeded.run_id)
@@ -362,7 +362,7 @@ async def test_expired_queued_run_with_missing_or_empty_counter_is_inconsistent(
     _assert_acquire_result(
         result,
         outcome="QUEUED_START_DEADLINE_EXPIRED",
-        prepared=False,
+        acquired=False,
         quota_release_outcome=DailyQuotaReleaseOutcome.INCONSISTENT,
     )
     run = await _read_run(session_factory, seeded.run_id)
@@ -471,7 +471,7 @@ async def test_cancel_winner_refunds_once_and_expired_acquire_reports_idempotent
     _assert_acquire_result(
         result,
         outcome="IDEMPOTENT_SKIP",
-        prepared=False,
+        acquired=False,
         quota_release_outcome=None,
     )
     run = await _read_run(session_factory, seeded.run_id)
@@ -503,13 +503,13 @@ async def test_timely_acquire_and_running_redelivery_never_release_quota(
     _assert_acquire_result(
         acquired,
         outcome="ACQUIRED",
-        prepared=True,
+        acquired=True,
         quota_release_outcome=None,
     )
     _assert_acquire_result(
         redelivered,
         outcome="ACQUIRED",
-        prepared=True,
+        acquired=True,
         quota_release_outcome=None,
     )
     run = await _read_run(session_factory, seeded.run_id)

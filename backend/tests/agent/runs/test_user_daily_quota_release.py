@@ -26,7 +26,7 @@ from app.models.agent_run import AgentRun
 from app.models.agent_thread import AgentThread
 from app.models.agent_user_daily_quota import AgentUserDailyQuota
 from tests.agent.runs._acquire_outcomes import (
-    acquired_prepared_run,
+    acquired_attempt_epoch,
     assert_idempotent_skip,
     assert_queued_start_deadline_expired,
 )
@@ -569,10 +569,10 @@ async def test_cancel_waiting_on_run_lock_uses_winning_status_update_for_release
 
             await _wait_until_blocked(observer, contender_pid)
 
-            prepared = acquired_prepared_run(
+            attempt_epoch = acquired_attempt_epoch(
                 await AgentRunRepository(locker).acquire_for_execution(seeded.run_id)
             )
-            assert prepared.attempt_epoch == 1
+            assert attempt_epoch == 1
             await locker.commit()
 
             cancel_result = await asyncio.wait_for(cancel_task, timeout=5)

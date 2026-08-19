@@ -80,7 +80,7 @@ from app.queue.messages.agent_run import AgentRunTrigger
 from app.queue.tasks.agent_run import AgentRunTaskBoundaryError
 from app.shared.security.safe_url import SafeUrl
 from tests.agent.runs._acquire_outcomes import (
-    acquired_prepared_run,
+    acquired_attempt_epoch,
     assert_idempotent_skip,
 )
 from tests.conftest import TEST_ADMIN_ID, TEST_USER_ID
@@ -1993,12 +1993,12 @@ async def test_epoch_advance_stops_old_worker_through_actual_probe(
             assert await self.continuation.should_continue() is True  # type: ignore[attr-defined]
             async with session_factory() as reacquire_session:
                 async with reacquire_session.begin():
-                    prepared = acquired_prepared_run(
+                    attempt_epoch = acquired_attempt_epoch(
                         await AgentRunRepository(
                             reacquire_session
                         ).acquire_for_execution(run.id)
                     )
-            assert prepared.attempt_epoch == 2
+            assert attempt_epoch == 2
             clock.now = 2.0
             assert await self.continuation.should_continue() is False  # type: ignore[attr-defined]
             raise AnswerGenerationStopped
@@ -2963,12 +2963,12 @@ async def test_stale_complete_run_with_checkpoint_does_not_persist_it(
 
         async with session_factory() as winner_session:
             async with winner_session.begin():
-                prepared = acquired_prepared_run(
+                attempt_epoch = acquired_attempt_epoch(
                     await AgentRunRepository(winner_session).acquire_for_execution(
                         run.id
                     )
                 )
-                assert prepared.attempt_epoch == 2
+                assert attempt_epoch == 2
 
         with pytest.raises(RunTransitionLostError):
             async with stale_session.begin():
@@ -3231,12 +3231,12 @@ async def test_stale_complete_run_loses_epoch_fence_and_rolls_back_artifacts(
 
         async with session_factory() as winner_session:
             async with winner_session.begin():
-                prepared = acquired_prepared_run(
+                attempt_epoch = acquired_attempt_epoch(
                     await AgentRunRepository(winner_session).acquire_for_execution(
                         run.id
                     )
                 )
-                assert prepared.attempt_epoch == 2
+                assert attempt_epoch == 2
 
         with pytest.raises(RunTransitionLostError):
             async with stale_session.begin():
@@ -3303,7 +3303,7 @@ async def test_stale_mark_failed_does_not_alter_newer_attempt(
 
     async with session_factory() as session:
         async with session.begin():
-            prepared = acquired_prepared_run(
+            attempt_epoch = acquired_attempt_epoch(
                 await AgentRunRepository(session).acquire_for_execution(run.id)
             )
             transitioned = await AgentRunRepository(session).mark_failed(
@@ -3318,7 +3318,7 @@ async def test_stale_mark_failed_does_not_alter_newer_attempt(
         assert current is not None
         assert (current.status, current.attempt_epoch, current.error_code) == (
             "running",
-            prepared.attempt_epoch,
+            attempt_epoch,
             None,
         )
 
@@ -3345,15 +3345,21 @@ async def test_acquire_for_execution_reexecutes_running_and_skips_terminal_runs(
     async with session_factory() as session:
         async with session.begin():
             repo = AgentRunRepository(session)
-            prepared = acquired_prepared_run(
+            attempt_epoch = acquired_attempt_epoch(
                 await repo.acquire_for_execution(running.id, now=now)
             )
             skipped = await repo.acquire_for_execution(failed.id, now=now)
 
-    assert prepared.run_id == running.id
-    assert prepared.question == "worker question"
-    assert prepared.user_message_seq == 1
-    assert prepared.attempt_epoch == 2
+    assert attempt_epoch == 2
+    async with session_factory() as session:
+        loaded = await AgentRunRepository(session).read_user_question_for_run(
+            running.id
+        )
+    assert loaded is not None
+    _user_id, thread_id, question = loaded
+    assert thread_id == running.thread_id
+    assert question.content == "worker question"
+    assert question.seq == 1
     assert_idempotent_skip(skipped)
     async with session_factory() as session:
         reacquired = await session.get(AgentRun, running.id)
@@ -3380,14 +3386,14 @@ async def test_acquire_for_execution_allocates_first_attempt_epoch(
 
     async with session_factory() as session:
         async with session.begin():
-            prepared = acquired_prepared_run(
+            attempt_epoch = acquired_attempt_epoch(
                 await AgentRunRepository(session).acquire_for_execution(run.id)
             )
 
     async with session_factory() as session:
         acquired = await session.get(AgentRun, run.id)
         assert acquired is not None
-        assert prepared.attempt_epoch == 1
+        assert attempt_epoch == 1
         assert acquired.attempt_epoch == 1
 
 
@@ -3399,10 +3405,10 @@ async def test_acquire_for_execution_increment_rolls_back_with_transaction(
         _thread, _message, run = await _create_thread_message_run(setup_session)
 
     async with session_factory() as session:
-        prepared = acquired_prepared_run(
+        attempt_epoch = acquired_attempt_epoch(
             await AgentRunRepository(session).acquire_for_execution(run.id)
         )
-        assert prepared.attempt_epoch == 1
+        assert attempt_epoch == 1
         await session.rollback()
 
     async with session_factory() as session:
@@ -3445,10 +3451,9 @@ async def test_concurrent_acquisitions_receive_distinct_sequence_values(
 
             monkeypatch.setattr(session, "execute", execute_with_barrier)
             async with session.begin():
-                prepared = acquired_prepared_run(
+                return acquired_attempt_epoch(
                     await AgentRunRepository(session).acquire_for_execution(run.id)
                 )
-                return prepared.attempt_epoch
 
     acquire_tasks = [asyncio.create_task(acquire()), asyncio.create_task(acquire())]
     try:
@@ -4604,10 +4609,10 @@ async def test_timed_out_old_attempt_cannot_terminalize_newer_attempt_or_publish
         async def answer(self) -> AnswerQuestionResult:
             async with session_factory() as session:
                 async with session.begin():
-                    newer = acquired_prepared_run(
+                    newer = acquired_attempt_epoch(
                         await AgentRunRepository(session).acquire_for_execution(run.id)
                     )
-            assert newer.attempt_epoch == 2
+            assert newer == 2
             raise asyncio.CancelledError
 
     _patch_worker_execution(
