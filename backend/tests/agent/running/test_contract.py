@@ -33,7 +33,6 @@ PUBLIC_CONTRACTS = {
     "AnsweringRunner",
     "AnswerBriefPreparer",
     "RunIdentity",
-    "RunHooks",
     "RunInput",
     "RunResult",
 }

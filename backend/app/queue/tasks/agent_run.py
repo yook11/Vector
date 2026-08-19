@@ -32,7 +32,6 @@ from app.agent.research_checkpoint import (
     recall_research_checkpoints,
 )
 from app.agent.running import (
-    QuestionResolvedRunHooks,
     RunIdentity,
     RunInput,
 )
@@ -224,7 +223,6 @@ async def run_agent_answer(
                         thread_id=thread_id,
                         as_of=as_of,
                     ),
-                    hooks=QuestionResolvedRunHooks(events=activity_reporter),
                 )
                 result = run_result.final_output
                 research_checkpoint = run_result.research_checkpoint

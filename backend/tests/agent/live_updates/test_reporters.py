@@ -18,7 +18,6 @@ from app.agent.contract import (
     ExternalSearchQueriesGeneratedEvent,
     InternalSearchCompletedEvent,
     InternalSearchStartedEvent,
-    QuestionResolvedEvent,
 )
 from app.agent.live_updates import reporters
 from app.agent.live_updates.stream import (
@@ -162,7 +161,6 @@ KNOWN_ACTIVITIES = [
     ),
     ExternalSearchHitsFetchedEvent(task_index=1, hit_count=4),
     EvidenceReviewSelectedEvent(evidence_count=2),
-    QuestionResolvedEvent(standalone_question="What changed?"),
 ]
 
 
@@ -256,7 +254,10 @@ async def test_activity_reporter_preserves_nested_domain_shape() -> None:
 
 @pytest.mark.asyncio
 async def test_activity_reporter_does_not_log_payload_or_exception_text() -> None:
-    activity = QuestionResolvedEvent(standalone_question=SECRET_PAYLOAD)
+    activity = ExternalSearchQueriesGeneratedEvent(
+        task_index=0,
+        queries=[SECRET_PAYLOAD],
+    )
     list_publisher = AsyncMock()
     list_publisher.event_occurred.side_effect = RuntimeError(SECRET_EXCEPTION)
     stream_publisher = AsyncMock()

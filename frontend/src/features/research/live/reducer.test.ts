@@ -24,9 +24,9 @@ type ResearchLiveStateHasActivityHistory =
     : false;
 const STATE_HAS_ACTIVITY_HISTORY: ResearchLiveStateHasActivityHistory = false;
 
-const RESOLVED_ACTIVITY: ResearchLiveActivity = {
-  type: "context_resolution.question_resolved",
-  standaloneQuestion: "旧attemptの質問",
+const PREVIOUS_ACTIVITY: ResearchLiveActivity = {
+  type: "evidence_collection.internal_search_completed",
+  hitCount: 3,
 };
 const NEW_ACTIVITY: ResearchLiveActivity = {
   type: "evidence_collection.internal_search_started",
@@ -149,7 +149,7 @@ function populatedAttemptOne() {
   let state = createInitialResearchLiveState();
   state = apply(state, marker("1-0", 1));
   state = apply(state, stage("2-0", 1, "answering"));
-  state = apply(state, activity("3-0", 1, RESOLVED_ACTIVITY));
+  state = apply(state, activity("3-0", 1, PREVIOUS_ACTIVITY));
   state = apply(state, delta("4-0", 1, 1, "古い回答"));
   return state;
 }
@@ -161,7 +161,7 @@ function populatedAttemptTwo() {
 describe("research live reducer", () => {
   it("keeps only the current activity and does not expose activity history", () => {
     let state = createInitialResearchLiveState();
-    state = apply(state, activity("1-0", 1, RESOLVED_ACTIVITY));
+    state = apply(state, activity("1-0", 1, PREVIOUS_ACTIVITY));
     state = apply(state, activity("2-0", 1, NEW_ACTIVITY));
 
     expect(STATE_HAS_ACTIVITY_HISTORY).toBe(false);
@@ -392,7 +392,7 @@ describe("research live reducer", () => {
         draftText: "",
         draftMode: "empty",
         progressStage: "answering",
-        currentActivity: RESOLVED_ACTIVITY,
+        currentActivity: PREVIOUS_ACTIVITY,
         lastProcessedEventId: streamId("5-0"),
       });
       expect(transition.state).not.toHaveProperty("activityHistory");

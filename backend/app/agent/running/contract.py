@@ -24,7 +24,6 @@ __all__ = [
     "AnsweringPhases",
     "AnsweringPhasesFactory",
     "AnswerBriefPreparer",
-    "RunHooks",
     "RunIdentity",
     "RunInput",
     "RunResult",
@@ -78,13 +77,3 @@ class AnswerBriefPreparer(Protocol):
         as_of: datetime,
         run_id: UUID,
     ) -> AnswerBrief: ...
-
-
-class RunHooks(Protocol):
-    async def on_answer_brief_prepared(
-        self,
-        *,
-        original_question: str,
-        has_history: bool,
-        answer_brief: AnswerBrief,
-    ) -> None: ...

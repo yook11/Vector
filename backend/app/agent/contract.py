@@ -45,7 +45,6 @@ __all__ = [
     "MISSING_ITEM_MAX_CHARS",
     "NonBlankText",
     "PRIOR_RESEARCH_CHECKPOINT_LIMIT",
-    "QuestionResolvedEvent",
     "PlanType",
     "RESEARCH_GOAL_MAX_CHARS",
     "RESEARCH_TASK_LIMIT",
@@ -157,22 +156,12 @@ class EvidenceReviewSelectedEvent(BaseModel):
     evidence_count: int = Field(ge=0)
 
 
-class QuestionResolvedEvent(BaseModel):
-    model_config = ConfigDict(frozen=True, extra="forbid")
-
-    type: Literal["context_resolution.question_resolved"] = (
-        "context_resolution.question_resolved"
-    )
-    standalone_question: str = Field(min_length=1, max_length=500)
-
-
 AnswerProgressEvent = Annotated[
     InternalSearchStartedEvent
     | InternalSearchCompletedEvent
     | ExternalSearchQueriesGeneratedEvent
     | ExternalSearchHitsFetchedEvent
-    | EvidenceReviewSelectedEvent
-    | QuestionResolvedEvent,
+    | EvidenceReviewSelectedEvent,
     Field(discriminator="type"),
 ]
 

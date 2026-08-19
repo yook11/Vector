@@ -627,11 +627,12 @@ describe("createResearchRunLiveController", () => {
 
     it("uses the latest valid camelCase polling activity while connecting", async () => {
       const pollRun = vi.fn<PollRun>().mockResolvedValue(
-        runResult("running", "planning", null, [
+        runResult("running", "evidence_collection", null, [
           {
-            type: "context_resolution.question_resolved",
+            type: "evidence_collection.external_search_hits_fetched",
             ts: "2026-07-13T00:00:00Z",
-            standaloneQuestion: "AI需要は伸びる？",
+            taskIndex: 0,
+            hitCount: 8,
           },
           { type: "unknown.event", answerText: "do not project" },
           {
@@ -647,55 +648,9 @@ describe("createResearchRunLiveController", () => {
       expect(
         harness.controller.getSnapshot().liveState.currentActivity,
       ).toEqual({
-        type: "context_resolution.question_resolved",
-        standaloneQuestion: "AI需要は伸びる？",
-      });
-
-      harness.unsubscribe();
-    });
-
-    it("selects question.resolved while progressStage is null", async () => {
-      const pollRun = vi.fn<PollRun>().mockResolvedValue(
-        runResult("running", null, null, [
-          {
-            type: "context_resolution.question_resolved",
-            ts: "2026-07-13T00:00:00Z",
-            standaloneQuestion: "AI需要は伸びる？",
-          },
-        ]),
-      );
-      const harness = createHarness(pollRun);
-
-      await flushPromises();
-      expect(
-        harness.controller.getSnapshot().liveState.currentActivity,
-      ).toEqual({
-        type: "context_resolution.question_resolved",
-        standaloneQuestion: "AI需要は伸びる？",
-      });
-
-      harness.unsubscribe();
-    });
-
-    it("selects question.resolved while context_resolution", async () => {
-      const pollRun = vi.fn<PollRun>().mockResolvedValue(
-        runResult("running", "context_resolution", null, [
-          {
-            type: "context_resolution.question_resolved",
-            ts: "2026-07-13T00:00:00Z",
-            standaloneQuestion: "AI需要は伸びる？",
-          },
-        ]),
-      );
-      const harness = createHarness(pollRun);
-
-      await flushPromises();
-      expect(harness.controller.getSnapshot().liveState).toMatchObject({
-        progressStage: "context_resolution",
-        currentActivity: {
-          type: "context_resolution.question_resolved",
-          standaloneQuestion: "AI需要は伸びる？",
-        },
+        type: "evidence_collection.external_search_hits_fetched",
+        taskIndex: 0,
+        hitCount: 8,
       });
 
       harness.unsubscribe();
@@ -972,9 +927,9 @@ describe("createResearchRunLiveController", () => {
           null,
           [
             {
-              type: "context_resolution.question_resolved",
+              type: "evidence_collection.internal_search_started",
               ts: "2026-07-13T00:00:00Z",
-              standaloneQuestion: "List activity must not cross attempts",
+              queryCount: 2,
             },
           ],
           2,
@@ -1031,9 +986,9 @@ describe("createResearchRunLiveController", () => {
           null,
           [
             {
-              type: "context_resolution.question_resolved",
+              type: "evidence_collection.internal_search_started",
               ts: "2026-07-13T00:00:00Z",
-              standaloneQuestion: "stale polling activity",
+              queryCount: 2,
             },
           ],
           1,

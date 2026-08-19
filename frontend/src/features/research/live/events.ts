@@ -49,10 +49,6 @@ export type ResearchLiveActivity =
   | {
       type: "evidence_review.selected";
       evidenceCount: number;
-    }
-  | {
-      type: "context_resolution.question_resolved";
-      standaloneQuestion: string;
     };
 
 interface ResearchLiveEventBase {
@@ -300,11 +296,6 @@ function parseActivity(
     case "evidence_review.selected":
       return isNonNegativeSafeInteger(value.evidenceCount)
         ? { type: value.type, evidenceCount: value.evidenceCount }
-        : null;
-    case "context_resolution.question_resolved":
-      return isNonBlankString(value.standaloneQuestion) &&
-        value.standaloneQuestion.length <= 500
-        ? { type: value.type, standaloneQuestion: value.standaloneQuestion }
         : null;
     default:
       return "unknown";

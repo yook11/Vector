@@ -56,21 +56,6 @@ class _Preparer:
         return self._context
 
 
-class _Hooks:
-    def __init__(
-        self,
-        timeline: list[str],
-        error: BaseException | None = None,
-    ) -> None:
-        self._timeline = timeline
-        self._error = error
-
-    async def on_answer_brief_prepared(self, **_kwargs: object) -> None:
-        self._timeline.append("hook")
-        if self._error is not None:
-            raise self._error
-
-
 class _Planner:
     def __init__(self, plan: QuestionPlan, timeline: list[str]) -> None:
         self._plan = plan
@@ -245,14 +230,12 @@ async def test_direct_workflow_order_and_context_identity() -> None:
     result = await runner.run(
         RunInput(question="元の質問", history=()),
         identity=run_identity(run_id=RUN_ID, as_of=AS_OF),
-        hooks=_Hooks(timeline),
     )
 
     assert timeline == [
         "progress:safety_check",
         "progress:context_resolution",
         "prepare",
-        "hook",
         "phases_factory",
         "progress:planning",
         "planner",
@@ -279,22 +262,20 @@ async def test_search_workflow_starts_both_retrieval_ports() -> None:
     result = await runner.run(
         RunInput(question="元の質問", history=()),
         identity=run_identity(run_id=RUN_ID, as_of=AS_OF),
-        hooks=_Hooks(timeline),
     )
 
-    assert timeline[:8] == [
+    assert timeline[:7] == [
         "progress:safety_check",
         "progress:context_resolution",
         "prepare",
-        "hook",
         "phases_factory",
         "progress:planning",
         "planner",
         "progress:evidence_collection",
     ]
-    assert set(timeline[8:10]) == {"internal_search", "external_runtime"}
+    assert set(timeline[7:9]) == {"internal_search", "external_runtime"}
     # ヒットが内外ともゼロのため精査は呼ばれず、evidence_review は報告されない。
-    assert timeline[10:] == [
+    assert timeline[9:] == [
         "progress:answering",
         "evidence_answerer",
     ]
@@ -305,35 +286,26 @@ async def test_search_workflow_starts_both_retrieval_ports() -> None:
     assert result.final_output.status == "insufficient"
 
 
-@pytest.mark.parametrize("failure_point", ["prepare", "hook"])
-async def test_preparation_or_hook_failure_does_not_build_phases(
-    failure_point: str,
-) -> None:
+async def test_preparation_failure_does_not_build_phases() -> None:
     timeline: list[str] = []
-    error = RuntimeError(f"{failure_point} failed")
+    error = RuntimeError("prepare failed")
     context = AnswerBrief(standalone_question="整理済みの質問")
     runner, *_ = _runner(
         plan=_direct_plan(),
         timeline=timeline,
         answer_brief=context,
-        prepare_error=error if failure_point == "prepare" else None,
+        prepare_error=error,
     )
 
     with pytest.raises(RuntimeError) as raised:
         await runner.run(
             RunInput(question="元の質問", history=()),
             identity=run_identity(run_id=RUN_ID, as_of=AS_OF),
-            hooks=_Hooks(
-                timeline,
-                error=error if failure_point == "hook" else None,
-            ),
         )
 
     assert raised.value is error
-    reported_stages = ["progress:safety_check", "progress:context_resolution"]
-    expected_timeline = (
-        [*reported_stages, "prepare"]
-        if failure_point == "prepare"
-        else [*reported_stages, "prepare", "hook"]
-    )
-    assert timeline == expected_timeline
+    assert timeline == [
+        "progress:safety_check",
+        "progress:context_resolution",
+        "prepare",
+    ]

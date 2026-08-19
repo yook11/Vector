@@ -172,7 +172,7 @@ provider attempt spanへ`agent.prompt.version`を記録し、phase spanへは複
 | Planner `FakeRuntime(trace_attempts=True)` | provider spanをfakeが再実装 | 解消。`planning/test_planner_tracing.py`で実Gemini Runtime＋Fake SDK clientへ置換済み |
 | External `TracingRuntime` | provider spanをfakeが再実装 | 解消。実DeepSeek Runtime＋Fake SDK clientへ置換済み |
 | worker内の履歴範囲・順序test | Threads repository ownerと重複 | repository testへ統合し、workerは透過的受渡しだけに狭める |
-| worker内のquestion.resolved negative tests | Fake Runnerがproduction hookを再実装 | production `running/test_hooks.py`を正本にしworker側を廃止候補 |
+| worker内のquestion.resolved negative tests | Fake Runnerがproduction hookを再実装 | 解消。`question.resolved` / `RunHooks` を削除し、hook 正本テストも廃止 |
 | worker巨大file内のRun repository/race/mapper tests | production ownerと配置が不一致 | `runs/` / `threads/`へ移設 |
 | Planner outcome metric asserts | 複数policy testが同じsink contractを再assert | parameterized owner testへ統合 |
 | provider別safe structured-output tests | 共通parser保証とadapter接続が混在 | 共通parse保証をRuntime共通testへ寄せ、provider側はmapping接続を確認 |
@@ -281,12 +281,12 @@ provider attempt spanへ`agent.prompt.version`を記録し、phase spanへは複
 | RUN-HISTORY-01 | 受け取ったprior historyを順序・内容不変のlistとしてContext Preparerへ1回渡す | CTX-01 | `AnsweringRunner` | `test_answering_runner.py` | Scripted Preparer | 維持。bounded範囲はThreads owner |
 | RUN-PREVIOUS-01 | latest assistant本文を加工せずprevious answerにし、なければ空文字列 | CTX-02 | `AnsweringRunner` | runner tests | Scripted phases | 維持 |
 | RUN-CONTEXT-01 | Identityはrun引数、prepared AnswerBriefは同一instanceで後続とresultへ渡し、previous_answerはDirectAnswererのみ | CTX-01、RUN-03/04/07、agent-run-identity-slice、agent-answer-brief-slice、agent-answering-run-context-dissolve-slice | `AnsweringRunner` | runner tests | Scripted Preparer/phases | 維持。PR5で全phaseへ拡張 |
-| RUN-HOOK-01 | prepare後hookを1回呼び、original question/has history/same contextだけを渡す | CTX-03 | Runner＋RunHooks | runner contract/hooks tests | Recording event reporter | 維持 |
-| RUN-HOOK-02 | historyがありstandalone questionがstrip比較で変化した時だけresolved eventを1回emitする | conversation context仕様 | `running/hooks.py` | `running/test_hooks.py` | Recording reporter | 維持 |
-| RUN-ORDER-01 | prepare→hook→factory→planning→branch→answer。前段 failure では後続0回 | workflow仕様 | `AnsweringRunner` | `running/test_answering_runner.py`, `running/test_answering_workflow.py` | timeline recorder | 維持 |
+| RUN-HOOK-01 | prepare後hookを1回呼び、original question/has history/same contextだけを渡す | CTX-03 | 削除 | 削除 | なし | 廃止。agent-question-resolved-removal-slice |
+| RUN-HOOK-02 | historyがありstandalone questionがstrip比較で変化した時だけresolved eventを1回emitする | conversation context仕様 | 削除 | 削除 | なし | 廃止。agent-question-resolved-removal-slice |
+| RUN-ORDER-01 | prepare→factory→planning→branch→answer。前段 failure では後続0回 | workflow仕様、agent-question-resolved-removal-slice | `AnsweringRunner` | `running/test_answering_runner.py`, `running/test_answering_workflow.py` | timeline recorder | 維持 |
 | RUN-ERROR-01 | unknown exceptionを変換/retryせずidentity伝播し、失敗後の後続 phase を起動しない | workflow仕様 | `AnsweringRunner` | `running/test_answering_runner.py`, `running/test_answering_workflow.py` | Scripted failing phase | 維持 |
 | RUN-STOP-01 | `AnswerGenerationStopped`をidentity再送出しrun spanをerrorにしない | OBS-09 | Runner span | runner span test | Scripted phase＋実span | 維持 |
-| RUN-SPAN-01 | `agent_answering_run`がprepare/hook/factory/planning/branch/answer全体を包含する | OBS-01/03 | `AnsweringRunner` run span | `running/test_answering_runner.py` | span probe collaborators | 維持 |
+| RUN-SPAN-01 | `agent_answering_run`がprepare/factory/planning/branch/answer全体を包含する | OBS-01/03、agent-question-resolved-removal-slice | `AnsweringRunner` run span | `running/test_answering_runner.py` | span probe collaborators | 維持 |
 | RUN-SPAN-02 | run span独自attributeはrun IDだけでmodel-visible textを含めない | OBS-04/05 | Runner span | runner non-leak test | 実span＋Scripted collaborators | 維持 |
 | RUN-LEGACY-01 | 旧`context=` keywordを副作用前に拒否する | boundary移行仕様 | Python signature | runner test | なし | 廃止候補 |
 | FLOW-BRANCH-01 | DirectAnswerPlan は Direct Answerer のみ、SearchPlan は固定 2 枝収集後に Evidence Answerer を起動する | workflow仕様 | `AnsweringRunner` | `answering/test_orchestration.py` | Scripted ports | 維持 |
@@ -532,10 +532,9 @@ glob単位で全62 test moduleを台帳IDへ対応づける。個別PRでは、�
 | `answering/evidence_answer/test_validation.py` | EVIDENCE-VALIDATE-01 | 維持 |
 | `answering/evidence_answer/test_flow.py` | EVIDENCE-POLICY/REVISION/STOP | PR7 seatbelt |
 | `answering/evidence_answer/ai/test_gemini.py`, `test_prompt_schema.py` | EVIDENCE-SDK/PROMPT | PR7 Runtime/Agent移行seatbelt |
-| `running/test_contract.py` | RUN-CONTRACT/HOOK | 維持、PR5 signature更新 |
+| `running/test_contract.py` | RUN-CONTRACT | 維持、PR5 signature更新 |
 | `running/test_answering_runner.py`, `running/test_answering_workflow.py` | RUN-*, FLOW-TIMELINE/FACTORY | `AnsweringRunner` workflow owner保証 |
 | `running/test_retrieval_dispatch.py` | EC-01/02, EX-RES-01, IS-08 | `AnsweringRunner` dispatch / failure / resource scope正本 |
-| `running/test_hooks.py` | RUN-HOOK-* | production hook正本維持 |
 | `threads/test_repository.py` | TH-HIST-* | 実DB owner維持、worker重複を吸収 |
 | `runs/test_execution_probe.py` | PROBE-*, RP-EXEC-01 | probe policy維持、repository queryを移設候補 |
 | `runs/test_progress.py` | PROG-* | 維持 |

@@ -58,7 +58,6 @@ from app.agent.running.contract import (
     AnswerBriefPreparer,
     AnsweringPhases,
     AnsweringPhasesFactory,
-    RunHooks,
     RunIdentity,
     RunInput,
     RunResult,
@@ -91,7 +90,6 @@ class AnsweringRunner:
         input: RunInput,
         *,
         identity: RunIdentity,
-        hooks: RunHooks | None = None,
     ) -> RunResult:
         with _answering_run_span(run_id=identity.run_id) as run_span:
             await self._report_progress("safety_check")
@@ -112,12 +110,6 @@ class AnsweringRunner:
                 run_id=identity.run_id,
             )
             previous_answer = _latest_assistant_answer(input.history)
-            if hooks is not None:
-                await hooks.on_answer_brief_prepared(
-                    original_question=input.question,
-                    has_history=bool(input.history),
-                    answer_brief=answer_brief,
-                )
             phases = self._phases_factory()
 
             await self._report_progress("planning")

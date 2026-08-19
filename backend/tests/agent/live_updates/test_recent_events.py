@@ -20,7 +20,6 @@ from app.agent.contract import (
     ExternalSearchQueriesGeneratedEvent,
     InternalSearchCompletedEvent,
     InternalSearchStartedEvent,
-    QuestionResolvedEvent,
 )
 from app.agent.live_updates.recent_events import (
     AGENT_RUN_LIVE_EVENT_LIST_LIMIT,
@@ -168,9 +167,6 @@ async def test_all_contract_event_types_round_trip_through_api_schema() -> None:
             EvidenceReviewSelectedEvent(
                 evidence_count=2,
             ),
-            QuestionResolvedEvent(
-                standalone_question="NVIDIA の発表が株価へ与える影響は？"
-            ),
         ]
 
         for event in events:
@@ -184,7 +180,6 @@ async def test_all_contract_event_types_round_trip_through_api_schema() -> None:
             "evidence_collection.external_search_queries_generated",
             "evidence_collection.external_search_hits_fetched",
             "evidence_review.selected",
-            "context_resolution.question_resolved",
         ]
         assert recent_events[0].task_index == 0
         assert recent_events[0].query_count == 2
@@ -194,9 +189,6 @@ async def test_all_contract_event_types_round_trip_through_api_schema() -> None:
         assert recent_events[3].hit_count == 8
         assert recent_events[4].evidence_count == 2
         assert "task_index" not in recent_events[4].model_dump()
-        assert recent_events[5].standalone_question == (
-            "NVIDIA の発表が株価へ与える影響は？"
-        )
     finally:
         await redis.delete(key)
         await redis.aclose()

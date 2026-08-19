@@ -67,30 +67,9 @@ describe("ActiveRunStatus", () => {
       },
       "根拠4件を選別",
     ],
-    [
-      "planning",
-      {
-        type: "context_resolution.question_resolved",
-        standaloneQuestion: "NVIDIAの発表は株価へどう影響する？",
-      },
-      "“NVIDIAの発表は株価へどう影響する？”について調査中",
-    ],
-    [
-      "context_resolution",
-      {
-        type: "context_resolution.question_resolved",
-        standaloneQuestion: "NVIDIAの発表は株価へどう影響する？",
-      },
-      "“NVIDIAの発表は株価へどう影響する？”について調査中",
-    ],
   ] satisfies ReadonlyArray<
     readonly [
-      (
-        | "planning"
-        | "context_resolution"
-        | "evidence_collection"
-        | "evidence_review"
-      ),
+      "evidence_collection" | "evidence_review",
       ResearchLiveActivity,
       string,
     ]
