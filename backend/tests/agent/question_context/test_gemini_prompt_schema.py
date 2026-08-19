@@ -7,7 +7,7 @@ from datetime import UTC, datetime
 from app.agent.question_context.agent import QUESTION_CONTEXT_AGENT
 from app.agent.question_context.ai.schema_tool import QUESTION_CONTEXT_GEMINI_SCHEMA
 from app.agent.question_context.contract import (
-    QuestionContextDraft,
+    AnswerBriefDraft,
     QuestionContextGenerationInput,
 )
 from app.agent.question_context.prompts import (
@@ -94,7 +94,7 @@ def test_instructions_describe_missing_aspects_as_prior_answer_gaps() -> None:
 
 
 def test_schema_and_agent_require_every_question_context_draft_field() -> None:
-    expected_fields = set(QuestionContextDraft.model_fields)
+    expected_fields = set(AnswerBriefDraft.model_fields)
     declared_schema = thaw_schema(QUESTION_CONTEXT_AGENT.response_schema)
 
     assert expected_fields == {
@@ -153,4 +153,4 @@ def test_representative_schema_payload_matches_python_output_contract() -> None:
         "active_goal": "半導体投資を調査する",
     }
 
-    assert QuestionContextDraft.model_validate(payload).model_dump() == payload
+    assert AnswerBriefDraft.model_validate(payload).model_dump() == payload

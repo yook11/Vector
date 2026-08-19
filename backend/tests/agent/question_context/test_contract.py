@@ -1,4 +1,4 @@
-"""Question context contract tests."""
+"""Answer brief contract tests."""
 
 from __future__ import annotations
 
@@ -9,9 +9,9 @@ from app.agent import question_context as question_context_package
 from app.agent.question_context import contract
 
 
-def test_question_context_from_draft_strips_and_caps_text_fields() -> None:
-    context = contract.question_context_from_draft(
-        contract.QuestionContextDraft(
+def test_answer_brief_from_draft_strips_and_caps_text_fields() -> None:
+    answer_brief = contract.answer_brief_from_draft(
+        contract.AnswerBriefDraft(
             standalone_question=f"  {'q' * 501}  ",
             relevant_prior_coverage=f"  {'p' * 1501}  ",
             active_goal=f"  {'g' * 1001}  ",
@@ -19,16 +19,16 @@ def test_question_context_from_draft_strips_and_caps_text_fields() -> None:
     )
 
     assert (
-        context.standalone_question,
-        context.relevant_prior_coverage,
-        context.active_goal,
+        answer_brief.standalone_question,
+        answer_brief.relevant_prior_coverage,
+        answer_brief.active_goal,
     ) == ("q" * 500, "p" * 1500, "g" * 1000)
 
 
-def test_question_context_from_draft_normalizes_answer_requirements() -> None:
+def test_answer_brief_from_draft_normalizes_answer_requirements() -> None:
     """空白除去・500字cap・重複排除・8件capがanswer_requirementsで成立する。"""
-    context = contract.question_context_from_draft(
-        contract.QuestionContextDraft(
+    answer_brief = contract.answer_brief_from_draft(
+        contract.AnswerBriefDraft(
             standalone_question="半導体企業を比較して",
             answer_requirements=[
                 "  Intel を含める  ",
@@ -47,7 +47,7 @@ def test_question_context_from_draft_normalizes_answer_requirements() -> None:
         )
     )
 
-    assert context.answer_requirements == (
+    assert answer_brief.answer_requirements == (
         "Intel を含める",
         "x" * 500,
         "AMD を含める",
@@ -72,42 +72,40 @@ def test_question_context_from_draft_normalizes_answer_requirements() -> None:
         "previous_answer_had_missing_aspects",
     ),
 )
-def test_question_context_direct_construction_rejects_unknown_fields(
+def test_answer_brief_direct_construction_rejects_unknown_fields(
     extra_field: str,
 ) -> None:
     with pytest.raises(ValidationError):
-        contract.QuestionContext(
+        contract.AnswerBrief(
             standalone_question="半導体企業を比較して",
             **{extra_field: "黙って受け入れてはいけない"},
         )
 
 
-def test_question_context_rejects_more_than_max_answer_requirements() -> None:
+def test_answer_brief_rejects_more_than_max_answer_requirements() -> None:
     with pytest.raises(ValidationError):
-        contract.QuestionContext(
+        contract.AnswerBrief(
             standalone_question="半導体企業を比較して",
             answer_requirements=tuple(f"要望{index}" for index in range(9)),
         )
 
 
-def test_question_context_direct_construction_rejects_blank_answer_requirement() -> (
-    None
-):
+def test_answer_brief_direct_construction_rejects_blank_answer_requirement() -> None:
     with pytest.raises(ValidationError):
-        contract.QuestionContext(
+        contract.AnswerBrief(
             standalone_question="半導体企業を比較して",
             answer_requirements=("",),
         )
 
 
-def test_question_context_has_exactly_four_fields_with_empty_defaults() -> None:
-    context = contract.QuestionContext(standalone_question="NVIDIA の直近発表は？")
+def test_answer_brief_has_exactly_four_fields_with_empty_defaults() -> None:
+    answer_brief = contract.AnswerBrief(standalone_question="NVIDIA の直近発表は？")
 
     assert (
-        set(contract.QuestionContext.model_fields),
-        context.answer_requirements,
-        context.relevant_prior_coverage,
-        context.active_goal,
+        set(contract.AnswerBrief.model_fields),
+        answer_brief.answer_requirements,
+        answer_brief.relevant_prior_coverage,
+        answer_brief.active_goal,
     ) == (
         {
             "standalone_question",
@@ -125,6 +123,9 @@ def test_question_context_has_exactly_four_fields_with_empty_defaults() -> None:
     "removed_symbol",
     (
         "AnswerRequirement",
+        "QuestionContext",
+        "QuestionContextDraft",
+        "question_context_from_draft",
         "QuestionContextTelemetry",
         "QuestionContextPreparationResult",
         "CONTENT_REQUIREMENT_IDS",
@@ -138,13 +139,13 @@ def test_removed_symbols_are_absent_from_contract_module(removed_symbol: str) ->
     assert not hasattr(question_context_package, removed_symbol)
 
 
-def test_question_context_rejects_blank_standalone_question_after_cleaning() -> None:
+def test_answer_brief_rejects_blank_standalone_question_after_cleaning() -> None:
     with pytest.raises(ValidationError):
-        contract.question_context_from_draft(
-            contract.QuestionContextDraft(standalone_question=" \n ")
+        contract.answer_brief_from_draft(
+            contract.AnswerBriefDraft(standalone_question=" \n ")
         )
 
 
-def test_question_context_keeps_standalone_question_max_length_as_final_guard() -> None:
+def test_answer_brief_keeps_standalone_question_max_length_as_final_guard() -> None:
     with pytest.raises(ValidationError):
-        contract.QuestionContext(standalone_question="x" * 501)
+        contract.AnswerBrief(standalone_question="x" * 501)

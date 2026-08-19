@@ -44,7 +44,7 @@ from app.agent.live_updates.stream import (
     is_stream_id_before,
 )
 from app.agent.planning.contract import TargetTimeWindow
-from app.agent.question_context.contract import QuestionContext
+from app.agent.question_context.contract import AnswerBrief
 from app.config import settings
 
 pytestmark = pytest.mark.xdist_group("redis")
@@ -80,7 +80,7 @@ def _answering_request(
     answer_requirements: tuple[str, ...] | None = None,
 ) -> AnsweringRequest:
     return AnsweringRequest(
-        context=QuestionContext(
+        answer_brief=AnswerBrief(
             standalone_question=question,
             answer_requirements=answer_requirements or (),
         ),

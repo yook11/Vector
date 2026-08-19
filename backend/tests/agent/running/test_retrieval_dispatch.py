@@ -47,16 +47,17 @@ from app.agent.planning.contract import (
     SearchPlan,
     TargetTimeWindow,
 )
-from app.agent.question_context import QuestionContext
-from app.agent.running import AnsweringPhases, AnsweringRunner, RunContext, RunInput
+from app.agent.question_context import AnswerBrief
+from app.agent.running import AnsweringPhases, AnsweringRunner, RunInput
 from app.agent.running import answering_runner as answering_runner_module
 from app.analysis.analyzed_article import InScopeAnalyzedArticle
 from app.analysis.assessment.domain.result import InScope, InScopeCategory
+from tests.agent.running._harness import run_identity
 from tests.agent.running._input_safety import AllowInputSafetyChecker
 from tests.agent.runtime._fakes import ScriptedAgentRuntime
 from tests.logfire._metric_helpers import collected_metrics
 
-RUN_CONTEXT = RunContext(
+RUN_IDENTITY = run_identity(
     run_id=UUID("019bd239-1ed4-7fbb-a336-04fe3c197652"),
     as_of=datetime(2026, 7, 20, 9, 30, tzinfo=UTC),
 )
@@ -147,8 +148,8 @@ def _hit(
 
 
 class _Preparer:
-    async def prepare(self, **_kwargs: object) -> QuestionContext:
-        return QuestionContext(standalone_question="NVIDIA の見通しは？")
+    async def prepare(self, **_kwargs: object) -> AnswerBrief:
+        return AnswerBrief(standalone_question="NVIDIA の見通しは？")
 
 
 class _Planner:
@@ -542,7 +543,7 @@ def _runner(
 async def _run(runner: AnsweringRunner) -> None:
     await runner.run(
         RunInput(question="NVIDIA の見通しは？", history=()),
-        run_context=RUN_CONTEXT,
+        identity=RUN_IDENTITY,
     )
 
 
@@ -907,7 +908,7 @@ async def test_runner_passes_search_plan_values_to_query_input() -> None:
         query_input.task,
         query_input.as_of,
         query_input.target_time_window,
-    ) == (task, RUN_CONTEXT.as_of, _TARGET_TIME_WINDOW)
+    ) == (task, RUN_IDENTITY.as_of, _TARGET_TIME_WINDOW)
 
 
 @pytest.mark.asyncio
@@ -1076,7 +1077,7 @@ async def test_search_converts_internal_search_error_to_failed_report_value(
 
     await runner.run(
         RunInput(question="NVIDIA の見通しは？", history=()),
-        run_context=RUN_CONTEXT,
+        identity=RUN_IDENTITY,
     )
 
     assert _task_reports(captured[0])[0].internal_collection == "failed"
@@ -1098,7 +1099,7 @@ async def test_search_classified_internal_failure_keeps_external_outcome(
 
     await runner.run(
         RunInput(question="NVIDIA の見通しは？", history=()),
-        run_context=RUN_CONTEXT,
+        identity=RUN_IDENTITY,
     )
 
     report = _task_reports(captured[0])[0]
@@ -1125,7 +1126,7 @@ async def test_zero_internal_hits_remain_successful_under_search(
         timeline=timeline,
     ).run(
         RunInput(question="NVIDIA の見通しは？", history=()),
-        run_context=RUN_CONTEXT,
+        identity=RUN_IDENTITY,
     )
 
     assert _task_reports(captured[0])[0].internal_collection == "succeeded"
@@ -1920,7 +1921,7 @@ async def test_all_tasks_incomplete_adds_the_fixed_incomplete_phrase_once(
 
     result = await runner.run(
         RunInput(question="NVIDIA の見通しは？", history=()),
-        run_context=RUN_CONTEXT,
+        identity=RUN_IDENTITY,
     )
 
     assert result.final_output.status == "insufficient"

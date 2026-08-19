@@ -30,7 +30,7 @@ from app.agent.planning.contract import (
     plan_from_draft,
     render_target_time_window,
 )
-from app.agent.question_context.contract import QuestionContext
+from app.agent.question_context.contract import AnswerBrief
 from app.agent.runtime.contract import (
     AgentResponseDefect,
     AgentResponseInvalidError,
@@ -485,39 +485,43 @@ def test_direct_and_search_plans_are_frozen() -> None:
         search.research_tasks = []
 
 
-def test_planning_request_is_a_frozen_context_consumer_wrapper() -> None:
+def test_planning_request_is_a_frozen_answer_brief_consumer_wrapper() -> None:
     """agent-research-checkpoint-context-slice: PlanningRequestは既存2 fieldに加え、
 
     同threadの直近checkpointを渡す`prior_research`(既定は空tuple)を持つ。
     """
     request_type = PlanningRequest
     checkpoint_type = ResearchCheckpoint
-    context = QuestionContext(standalone_question="NVIDIA の直近発表は？")
+    answer_brief = AnswerBrief(standalone_question="NVIDIA の直近発表は？")
     as_of = datetime(2026, 7, 10)
-    request = request_type(context=context, as_of=as_of)
+    request = request_type(answer_brief=answer_brief, as_of=as_of)
 
     with pytest.raises(ValidationError):
         request.as_of = datetime(2026, 7, 11)
     with pytest.raises(ValidationError):
-        request_type(context=context, as_of=as_of, telemetry=object())
+        request_type(answer_brief=answer_brief, as_of=as_of, telemetry=object())
+    with pytest.raises(ValidationError):
+        request_type(context=answer_brief, as_of=as_of)
 
     assert (
         set(request_type.model_fields),
-        request_type.model_fields["context"].annotation,
+        request_type.model_fields["answer_brief"].annotation,
         request_type.model_fields["as_of"].annotation,
         request_type.model_fields["prior_research"].annotation,
-        request.context is context,
+        request.answer_brief is answer_brief,
         request.as_of,
         request.prior_research,
-        "as_of" not in QuestionContext.model_fields,
+        "as_of" not in AnswerBrief.model_fields,
+        "context" not in request_type.model_fields,
     ) == (
-        {"context", "as_of", "prior_research"},
-        QuestionContext,
+        {"answer_brief", "as_of", "prior_research"},
+        AnswerBrief,
         datetime,
         tuple[checkpoint_type, ...],
         True,
         as_of,
         (),
+        True,
         True,
     )
 
@@ -542,7 +546,7 @@ def test_planning_request_rejects_prior_research_over_the_shared_checkpoint_limi
 ):
     """prior_researchの件数上限はPRIOR_RESEARCH_CHECKPOINT_LIMIT(共有契約)を参照する。"""
     request_type = PlanningRequest
-    context = QuestionContext(standalone_question="NVIDIA の直近発表は？")
+    context = AnswerBrief(standalone_question="NVIDIA の直近発表は？")
     as_of = datetime(2026, 7, 10)
     checkpoints_at_limit = tuple(
         _prior_research_checkpoint(hour)
@@ -553,13 +557,13 @@ def test_planning_request_rejects_prior_research_over_the_shared_checkpoint_limi
     )
 
     accepted = request_type(
-        context=context, as_of=as_of, prior_research=checkpoints_at_limit
+        answer_brief=context, as_of=as_of, prior_research=checkpoints_at_limit
     )
 
     assert accepted.prior_research == checkpoints_at_limit
     with pytest.raises(ValidationError):
         request_type(
-            context=context, as_of=as_of, prior_research=checkpoints_over_limit
+            answer_brief=context, as_of=as_of, prior_research=checkpoints_over_limit
         )
 
 

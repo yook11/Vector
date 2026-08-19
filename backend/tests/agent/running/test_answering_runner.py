@@ -15,7 +15,7 @@ from opentelemetry.trace import StatusCode
 from app.agent.answering.contract import AnsweringRequest
 from app.agent.answering.direct_answer.contract import DirectAnswerDraft
 from app.agent.answering.evidence_answer.contract import EvidenceAnswerDraft
-from app.agent.contract import AnswerGenerationStopped
+from app.agent.contract import AnswerGenerationStopped, QuestionResolvedEvent
 from app.agent.evidence_collection import NewsCollector, Researcher
 from app.agent.evidence_review import EvidenceReviewer
 from app.agent.input_safety.contract import (
@@ -32,13 +32,20 @@ from app.agent.planning.contract import (
     TargetTimeWindow,
 )
 from app.agent.question_context import (
-    QuestionContext,
+    AnswerBrief,
     QuestionContextService,
 )
 from app.agent.question_context.agent import QUESTION_CONTEXT_AGENT
-from app.agent.running import AnsweringPhases, AnsweringRunner, RunContext, RunInput
+from app.agent.running import (
+    AnsweringPhases,
+    AnsweringRunner,
+    QuestionResolvedRunHooks,
+    RunIdentity,
+    RunInput,
+)
 from app.agent.threads.contracts import ThreadMessageSnapshot
 from app.analysis.ai_provider_errors import AIProviderError
+from tests.agent.running._harness import THREAD_ID, USER_ID
 from tests.agent.running._input_safety import AllowInputSafetyChecker
 from tests.logfire._span_helpers import (
     domain_attr_keys,
@@ -67,7 +74,7 @@ class _PrepareCall:
 class _HookCall:
     original_question: str
     has_history: bool
-    question_context: QuestionContext
+    answer_brief: AnswerBrief
 
 
 @dataclass(frozen=True, slots=True)
@@ -129,7 +136,7 @@ class _FakeEventReporter:
 class _FakeContextPreparer:
     def __init__(
         self,
-        outcomes: list[QuestionContext | BaseException],
+        outcomes: list[AnswerBrief | BaseException],
         *,
         events: list[str] | None = None,
         span_probe: bool = False,
@@ -146,7 +153,7 @@ class _FakeContextPreparer:
         history: list[ThreadMessageSnapshot],
         as_of: datetime,
         run_id: UUID,
-    ) -> QuestionContext:
+    ) -> AnswerBrief:
         if self._span_probe:
             with logfire.span("answering_runner_prepare_probe"):
                 return await self._prepare(
@@ -169,7 +176,7 @@ class _FakeContextPreparer:
         history: list[ThreadMessageSnapshot],
         as_of: datetime,
         run_id: UUID,
-    ) -> QuestionContext:
+    ) -> AnswerBrief:
         self.calls.append(
             _PrepareCall(
                 question=question,
@@ -199,25 +206,25 @@ class _FakeHooks:
         self._span_probe = span_probe
         self.calls: list[_HookCall] = []
 
-    async def on_answering_context_prepared(
+    async def on_answer_brief_prepared(
         self,
         *,
         original_question: str,
         has_history: bool,
-        question_context: QuestionContext,
+        answer_brief: AnswerBrief,
     ) -> None:
         if self._span_probe:
             with logfire.span("answering_runner_hook_probe"):
                 self._record(
                     original_question=original_question,
                     has_history=has_history,
-                    question_context=question_context,
+                    answer_brief=answer_brief,
                 )
             return
         self._record(
             original_question=original_question,
             has_history=has_history,
-            question_context=question_context,
+            answer_brief=answer_brief,
         )
 
     def _record(
@@ -225,13 +232,13 @@ class _FakeHooks:
         *,
         original_question: str,
         has_history: bool,
-        question_context: QuestionContext,
+        answer_brief: AnswerBrief,
     ) -> None:
         self.calls.append(
             _HookCall(
                 original_question=original_question,
                 has_history=has_history,
-                question_context=question_context,
+                answer_brief=answer_brief,
             )
         )
         if self._events is not None:
@@ -408,8 +415,13 @@ def _allow_input_safety_result() -> InputSafetyCheckResult:
     )
 
 
-def _run_context(*, run_id: UUID = RUN_ID, as_of: datetime = AS_OF) -> RunContext:
-    return RunContext(run_id=run_id, as_of=as_of)
+def _run_identity(*, run_id: UUID = RUN_ID, as_of: datetime = AS_OF) -> RunIdentity:
+    return RunIdentity(
+        user_id=USER_ID,
+        run_id=run_id,
+        thread_id=THREAD_ID,
+        as_of=as_of,
+    )
 
 
 def _direct_factory(
@@ -447,70 +459,60 @@ def _direct_factory(
     )
 
 
-async def test_run_forwards_input_and_orders_hook_before_lazy_phases() -> None:
-    events: list[str] = []
-    question = "それが投資へ与える影響は？"
+async def test_run_emits_question_resolved_after_context_is_prepared() -> None:
+    # 続き質問の整理が終わったら、解釈後の質問をライブイベントとして出す。
+    original = "それが投資へ与える影響は？"
+    standalone = "NVIDIA の発表が投資へ与える影響は？"
     history = (
         ThreadMessageSnapshot(role="user", content="NVIDIA の発表を教えて"),
         ThreadMessageSnapshot(role="assistant", content="前回の回答"),
     )
-    context = QuestionContext(standalone_question="NVIDIA の発表が投資へ与える影響は？")
-    preparer = _FakeContextPreparer([context], events=events)
-    hooks = _FakeHooks(events=events)
-    factory, planner, direct_answerer = _direct_factory(
-        answers=["最終回答"],
-        events=events,
-    )
-    run_context = _run_context()
+    reporter = _FakeEventReporter()
+    factory, _, _ = _direct_factory(answers=["最終回答"])
 
-    result = await _runner(preparer, factory).run(
-        RunInput(question=question, history=history),
-        run_context=run_context,
-        hooks=hooks,
+    await _runner(
+        _FakeContextPreparer([AnswerBrief(standalone_question=standalone)]),
+        factory,
+    ).run(
+        RunInput(question=original, history=history),
+        identity=_run_identity(),
+        hooks=QuestionResolvedRunHooks(events=reporter),
     )
 
-    assert preparer.calls == [
-        _PrepareCall(
-            question=question,
-            history=list(history),
-            as_of=run_context.as_of,
-            run_id=run_context.run_id,
+    assert reporter.events == [
+        QuestionResolvedEvent(standalone_question=standalone),
+    ]
+
+
+async def test_run_does_not_start_answering_when_context_preparation_fails() -> None:
+    # コンテキスト整理が失敗したら、回答処理（phases構築以降）は一度も始まらない。
+    error = RuntimeError("prepare failed")
+    factory, planner, direct_answerer = _direct_factory(answers=["最終回答"])
+
+    with pytest.raises(RuntimeError) as raised:
+        await _runner(
+            _FakeContextPreparer([error]),
+            factory,
+        ).run(
+            RunInput(question="元の質問", history=()),
+            identity=_run_identity(),
         )
-    ]
-    assert hooks.calls == [
-        _HookCall(
-            original_question=question,
-            has_history=True,
-            question_context=context,
-        )
-    ]
-    assert events == [
-        "prepare",
-        "hook",
-        "phases_factory",
-        "planner",
-        "direct_answerer",
-    ]
-    assert planner.calls[0].context is context
-    assert direct_answerer.calls[0] == (
-        AnsweringRequest(context=context, as_of=AS_OF),
-        "前回の回答",
-    )
-    assert direct_answerer.calls[0][0].context is context
-    assert result.final_output.answer == "最終回答"
-    assert result.context.run_context is run_context
-    assert result.context.question_context is context
+
+    assert raised.value is error
+    assert factory.calls == 0
+    assert planner.calls == []
+    assert direct_answerer.calls == []
 
 
 async def test_direct_path_reports_no_internal_or_external_search_events() -> None:
     reporter = _FakeEventReporter()
-    context = QuestionContext(standalone_question="整理済みの質問")
+    context = AnswerBrief(standalone_question="整理済みの質問")
     preparer = _FakeContextPreparer([context])
     factory, _, _ = _direct_factory(answers=["最終回答"])
 
     await _runner(preparer, factory, events=reporter).run(
         RunInput(question="元の質問", history=()),
-        run_context=_run_context(),
+        identity=_run_identity(),
     )
 
     assert reporter.events == []
@@ -527,7 +529,7 @@ async def test_run_checks_safety_first_with_only_the_bounded_immediate_turn() ->
         ThreadMessageSnapshot(role="user", content=previous_question),
         ThreadMessageSnapshot(role="assistant", content=previous_answer),
     )
-    context = QuestionContext(standalone_question="整理済みの質問")
+    context = AnswerBrief(standalone_question="整理済みの質問")
     checker = _FakeInputSafetyChecker(
         [_allow_input_safety_result()],
         events=events,
@@ -545,7 +547,7 @@ async def test_run_checks_safety_first_with_only_the_bounded_immediate_turn() ->
         input_safety_checker=checker,
     ).run(
         RunInput(question=current_question, history=history),
-        run_context=_run_context(),
+        identity=_run_identity(),
         hooks=hooks,
     )
 
@@ -574,7 +576,7 @@ async def test_run_checks_safety_first_with_only_the_bounded_immediate_turn() ->
 
 async def test_run_passes_no_previous_turn_when_history_is_empty() -> None:
     checker = _FakeInputSafetyChecker([_allow_input_safety_result()])
-    context = QuestionContext(standalone_question="整理済みの質問")
+    context = AnswerBrief(standalone_question="整理済みの質問")
     preparer = _FakeContextPreparer([context])
     factory, _, _ = _direct_factory(answers=["最終回答"])
 
@@ -584,7 +586,7 @@ async def test_run_passes_no_previous_turn_when_history_is_empty() -> None:
         input_safety_checker=checker,
     ).run(
         RunInput(question="最初の質問", history=()),
-        run_context=_run_context(),
+        identity=_run_identity(),
     )
 
     assert checker.calls[0].previous_turn is None
@@ -595,7 +597,7 @@ async def test_run_does_not_pair_an_older_answer_across_terminal_previous_turn(
     previous_run_status: str,
 ) -> None:
     checker = _FakeInputSafetyChecker([_allow_input_safety_result()])
-    context = QuestionContext(standalone_question="整理済みの質問")
+    context = AnswerBrief(standalone_question="整理済みの質問")
     preparer = _FakeContextPreparer([context])
     factory, _, _ = _direct_factory(answers=["最終回答"])
     history = (
@@ -613,7 +615,7 @@ async def test_run_does_not_pair_an_older_answer_across_terminal_previous_turn(
         input_safety_checker=checker,
     ).run(
         RunInput(question="current question", history=history),
-        run_context=_run_context(),
+        identity=_run_identity(),
     )
 
     assert checker.calls[0].previous_turn == InputSafetyPreviousTurn(
@@ -635,7 +637,7 @@ async def test_safety_block_short_circuits_without_starting_answering_work() -> 
         events=events,
     )
     preparer = _FakeContextPreparer(
-        [QuestionContext(standalone_question="到達してはいけない")],
+        [AnswerBrief(standalone_question="到達してはいけない")],
         events=events,
     )
     hooks = _FakeHooks(events=events)
@@ -653,7 +655,7 @@ async def test_safety_block_short_circuits_without_starting_answering_work() -> 
             progress=progress,
         ).run(
             RunInput(question="current question", history=()),
-            run_context=_run_context(),
+            identity=_run_identity(),
             hooks=hooks,
         )
 
@@ -675,7 +677,7 @@ async def test_safety_checker_failure_preserves_identity_and_stops_all_later_wor
     error = AIProviderError("input safety unavailable")
     checker = _FakeInputSafetyChecker([error])
     preparer = _FakeContextPreparer(
-        [QuestionContext(standalone_question="到達してはいけない")]
+        [AnswerBrief(standalone_question="到達してはいけない")]
     )
     hooks = _FakeHooks()
     factory, planner, direct_answerer = _direct_factory(answers=["到達してはいけない"])
@@ -687,7 +689,7 @@ async def test_safety_checker_failure_preserves_identity_and_stops_all_later_wor
             input_safety_checker=checker,
         ).run(
             RunInput(question="current question", history=()),
-            run_context=_run_context(),
+            identity=_run_identity(),
             hooks=hooks,
         )
 
@@ -712,7 +714,7 @@ async def test_safety_block_closes_run_span_without_error(
         ]
     )
     preparer = _FakeContextPreparer(
-        [QuestionContext(standalone_question="到達してはいけない")]
+        [AnswerBrief(standalone_question="到達してはいけない")]
     )
     factory, _, _ = _direct_factory(answers=["到達してはいけない"])
 
@@ -723,7 +725,7 @@ async def test_safety_block_closes_run_span_without_error(
             input_safety_checker=checker,
         ).run(
             RunInput(question="current question", history=()),
-            run_context=_run_context(),
+            identity=_run_identity(),
         )
 
     span = one_span_named(capfire, "agent_answering_run")
@@ -746,14 +748,13 @@ async def test_real_context_service_uses_empty_previous_answer_without_assistant
         factory,
     ).run(
         RunInput(question="NVIDIA の直近発表は？", history=()),
-        run_context=_run_context(),
+        identity=_run_identity(),
         hooks=hooks,
     )
 
-    assert direct_answerer.calls[0][0].context is result.context.question_context
+    assert direct_answerer.calls[0][0].answer_brief is result.answer_brief
     assert direct_answerer.calls[0][1] == ""
-    assert result.context.previous_answer == ""
-    assert hooks.calls[0].question_context is result.context.question_context
+    assert hooks.calls[0].answer_brief is result.answer_brief
 
 
 @pytest.mark.parametrize("failure_point", ["prepare", "hook", "factory"])
@@ -767,7 +768,7 @@ async def test_failure_before_planning_prevents_later_work(
         [
             error
             if failure_point == "prepare"
-            else QuestionContext(standalone_question="整理済みの質問")
+            else AnswerBrief(standalone_question="整理済みの質問")
         ],
         events=events,
     )
@@ -784,7 +785,7 @@ async def test_failure_before_planning_prevents_later_work(
     with pytest.raises(RuntimeError) as raised:
         await _runner(preparer, factory).run(
             RunInput(question="元の質問", history=()),
-            run_context=_run_context(),
+            identity=_run_identity(),
             hooks=hooks,
         )
 
@@ -817,14 +818,14 @@ async def test_failure_before_planning_prevents_later_work(
     ],
 )
 async def test_phase_exception_propagates_same_instance(error: BaseException) -> None:
-    context = QuestionContext(standalone_question="整理済みの質問")
+    context = AnswerBrief(standalone_question="整理済みの質問")
     preparer = _FakeContextPreparer([context])
     factory, _, direct_answerer = _direct_factory(answers=[error])
 
     with pytest.raises(type(error)) as raised:
         await _runner(preparer, factory).run(
             RunInput(question="元の質問", history=()),
-            run_context=_run_context(),
+            identity=_run_identity(),
         )
 
     assert raised.value is error
@@ -835,15 +836,13 @@ async def test_generation_stopped_closes_run_span_without_error(
     capfire: CaptureLogfire,
 ) -> None:
     error = AnswerGenerationStopped()
-    preparer = _FakeContextPreparer(
-        [QuestionContext(standalone_question="整理済みの質問")]
-    )
+    preparer = _FakeContextPreparer([AnswerBrief(standalone_question="整理済みの質問")])
     factory, _, _ = _direct_factory(answers=[error])
 
     with pytest.raises(AnswerGenerationStopped) as raised:
         await _runner(preparer, factory).run(
             RunInput(question="元の質問", history=()),
-            run_context=_run_context(),
+            identity=_run_identity(),
         )
 
     span = one_span_named(capfire, "agent_answering_run")
@@ -853,19 +852,19 @@ async def test_generation_stopped_closes_run_span_without_error(
 
 
 async def test_same_runner_reprepares_and_builds_fresh_phases_per_run() -> None:
-    first_context = QuestionContext(standalone_question="最初の整理済み質問")
-    second_context = QuestionContext(standalone_question="次の整理済み質問")
+    first_context = AnswerBrief(standalone_question="最初の整理済み質問")
+    second_context = AnswerBrief(standalone_question="次の整理済み質問")
     preparer = _FakeContextPreparer([first_context, second_context])
     factory, _, direct_answerer = _direct_factory(answers=["最初の回答", "次の回答"])
     runner = _runner(preparer, factory)
 
     first = await runner.run(
         RunInput(question="最初の質問", history=()),
-        run_context=_run_context(),
+        identity=_run_identity(),
     )
     second = await runner.run(
         RunInput(question="次の質問", history=()),
-        run_context=_run_context(
+        identity=_run_identity(
             run_id=UUID("019bd239-1ed4-7fbb-a336-04fe3c197646"),
             as_of=datetime(2026, 7, 16, 9, 31, tzinfo=UTC),
         ),
@@ -874,18 +873,18 @@ async def test_same_runner_reprepares_and_builds_fresh_phases_per_run() -> None:
     assert [call.question for call in preparer.calls] == ["最初の質問", "次の質問"]
     assert factory.calls == 2
     assert factory.created[0] is not factory.created[1]
-    assert first.context is not second.context
-    assert first.context.question_context is first_context
-    assert second.context.question_context is second_context
-    assert direct_answerer.calls[0][0].context is first_context
-    assert direct_answerer.calls[1][0].context is second_context
+    assert first.answer_brief is not second.answer_brief
+    assert first.answer_brief is first_context
+    assert second.answer_brief is second_context
+    assert direct_answerer.calls[0][0].answer_brief is first_context
+    assert direct_answerer.calls[1][0].answer_brief is second_context
 
 
 async def test_run_span_wraps_prepare_hook_factory_and_phases_under_parent(
     capfire: CaptureLogfire,
 ) -> None:
     events: list[str] = []
-    context = QuestionContext(standalone_question="整理済みの質問")
+    context = AnswerBrief(standalone_question="整理済みの質問")
     preparer = _FakeContextPreparer(
         [context],
         events=events,
@@ -901,7 +900,7 @@ async def test_run_span_wraps_prepare_hook_factory_and_phases_under_parent(
     with logfire.span("answering_runner_parent_probe"):
         await _runner(preparer, factory).run(
             RunInput(question="元の質問", history=()),
-            run_context=_run_context(),
+            identity=_run_identity(),
             hooks=hooks,
         )
 
@@ -942,7 +941,7 @@ async def test_run_span_attributes_do_not_include_model_visible_text(
         "active_goal": "ACTIVE_GOAL_SENTINEL_72af",
         "final_answer": "FINAL_ANSWER_SENTINEL_c691",
     }
-    context = QuestionContext(
+    context = AnswerBrief(
         standalone_question=sentinels["standalone_question"],
         answer_requirements=(sentinels["answer_requirement"],),
         relevant_prior_coverage=sentinels["prior_coverage"],
@@ -960,7 +959,7 @@ async def test_run_span_attributes_do_not_include_model_visible_text(
 
     await _runner(preparer, factory).run(
         RunInput(question=sentinels["raw_question"], history=history),
-        run_context=_run_context(),
+        identity=_run_identity(),
     )
 
     attributes = one_span_named(capfire, "agent_answering_run")["attributes"]

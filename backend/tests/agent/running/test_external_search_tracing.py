@@ -45,13 +45,14 @@ from app.agent.planning.contract import (
     SearchPlan,
     TargetTimeWindow,
 )
-from app.agent.question_context import QuestionContext
-from app.agent.running import AnsweringPhases, AnsweringRunner, RunContext, RunInput
+from app.agent.question_context import AnswerBrief
+from app.agent.running import AnsweringPhases, AnsweringRunner, RunInput
 from app.agent.runtime.contract import AgentResponseDefect, AgentResponseInvalidError
 from app.agent.runtime.deepseek import DeepSeekAgentRuntime
 from app.analysis.analyzed_article import InScopeAnalyzedArticle
 from app.analysis.assessment.domain.result import InScope, InScopeCategory
 from app.logfire.redaction import install_exception_redaction
+from tests.agent.running._harness import run_identity
 from tests.agent.running._input_safety import AllowInputSafetyChecker
 from tests.agent.runtime._deepseek_helpers import FakeDeepSeekClient, function_response
 from tests.agent.runtime._fakes import ScriptedAgentRuntime
@@ -113,8 +114,8 @@ def _reviewer_response(*, option_indexes: list[int] | None = None) -> object:
 
 
 class _Preparer:
-    async def prepare(self, **_kwargs: object) -> QuestionContext:
-        return QuestionContext(standalone_question="NVIDIA の見通しは？")
+    async def prepare(self, **_kwargs: object) -> AnswerBrief:
+        return AnswerBrief(standalone_question="NVIDIA の見通しは？")
 
 
 class _Planner:
@@ -260,7 +261,7 @@ def _runner(
 async def _run(runner: AnsweringRunner) -> None:
     await runner.run(
         RunInput(question="NVIDIA の見通しは？", history=()),
-        run_context=RunContext(
+        identity=run_identity(
             run_id=UUID("019bd239-1ed4-7fbb-a336-04fe3c197652"),
             as_of=datetime(2026, 7, 19, tzinfo=UTC),
         ),

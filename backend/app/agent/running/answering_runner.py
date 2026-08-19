@@ -55,12 +55,11 @@ from app.agent.research_checkpoint import (
     build_research_checkpoint_or_none,
 )
 from app.agent.running.contract import (
+    AnswerBriefPreparer,
     AnsweringPhases,
     AnsweringPhasesFactory,
-    AnsweringRunContext,
-    QuestionContextPreparer,
-    RunContext,
     RunHooks,
+    RunIdentity,
     RunInput,
     RunResult,
 )
@@ -76,7 +75,7 @@ class AnsweringRunner:
         self,
         *,
         input_safety_checker: InputSafetyChecker,
-        context_preparer: QuestionContextPreparer,
+        context_preparer: AnswerBriefPreparer,
         phases_factory: AnsweringPhasesFactory,
         progress: AnswerProgressReporter | None = None,
         events: AnswerEventReporter | None = None,
@@ -91,49 +90,45 @@ class AnsweringRunner:
         self,
         input: RunInput,
         *,
-        run_context: RunContext,
+        identity: RunIdentity,
         hooks: RunHooks | None = None,
     ) -> RunResult:
-        with _answering_run_span(run_id=run_context.run_id) as run_span:
+        with _answering_run_span(run_id=identity.run_id) as run_span:
             await self._report_progress("safety_check")
             safety_check = await self._input_safety_checker.check(
                 question=input.question[:INPUT_SAFETY_TEXT_CHAR_CAP],
                 previous_turn=previous_turn_from_history(input.history),
-                run_id=run_context.run_id,
+                run_id=identity.run_id,
             )
             if safety_check.is_blocked:
                 assert safety_check.block_reason is not None  # noqa: S101
                 raise InputSafetyBlocked(block_reason=safety_check.block_reason)
 
             await self._report_progress("context_resolution")
-            question_context = await self._context_preparer.prepare(
+            answer_brief = await self._context_preparer.prepare(
                 question=input.question,
                 history=list(input.history),
-                as_of=run_context.as_of,
-                run_id=run_context.run_id,
+                as_of=identity.as_of,
+                run_id=identity.run_id,
             )
-            answering_context = AnsweringRunContext(
-                run_context=run_context,
-                question_context=question_context,
-                previous_answer=_latest_assistant_answer(input.history),
-            )
+            previous_answer = _latest_assistant_answer(input.history)
             if hooks is not None:
-                await hooks.on_answering_context_prepared(
+                await hooks.on_answer_brief_prepared(
                     original_question=input.question,
                     has_history=bool(input.history),
-                    question_context=answering_context.question_context,
+                    answer_brief=answer_brief,
                 )
             phases = self._phases_factory()
 
             await self._report_progress("planning")
             planning_request = PlanningRequest(
-                context=answering_context.question_context,
-                as_of=answering_context.run_context.as_of,
+                answer_brief=answer_brief,
+                as_of=identity.as_of,
                 prior_research=input.prior_research,
             )
             answering_request = AnsweringRequest(
-                context=answering_context.question_context,
-                as_of=answering_context.run_context.as_of,
+                answer_brief=answer_brief,
+                as_of=identity.as_of,
             )
             plan = await phases.planner.plan(planning_request)
             research_checkpoint: ResearchCheckpoint | None
@@ -142,7 +137,7 @@ class AnsweringRunner:
                     answer = await self._answer_directly(
                         phases=phases,
                         request=answering_request,
-                        previous_answer=answering_context.previous_answer,
+                        previous_answer=previous_answer,
                     )
                     research_checkpoint = None
                 case SearchPlan():
@@ -191,7 +186,7 @@ class AnsweringRunner:
                     assert_never(unreachable)
             return RunResult(
                 final_output=answer,
-                context=answering_context,
+                answer_brief=answer_brief,
                 research_checkpoint=research_checkpoint,
             )
 

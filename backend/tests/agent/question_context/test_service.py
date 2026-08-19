@@ -16,7 +16,7 @@ from structlog.testing import capture_logs
 
 from app.agent.question_context.agent import QUESTION_CONTEXT_AGENT
 from app.agent.question_context.contract import (
-    QuestionContextDraft,
+    AnswerBriefDraft,
     QuestionContextGenerationInput,
 )
 from app.agent.question_context.service import (
@@ -45,7 +45,7 @@ _RUN_ID = UUID("00000000-0000-4000-a000-000000000020")
 
 def _runtime_validation_error() -> ValidationError:
     try:
-        QuestionContextDraft.model_validate({"standalone_question": {}})
+        AnswerBriefDraft.model_validate({"standalone_question": {}})
     except ValidationError as error:
         return error
     raise AssertionError("invalid draft fixture must raise ValidationError")
@@ -105,7 +105,7 @@ def _as_of() -> datetime:
 
 
 def _service(
-    outcomes: list[QuestionContextDraft | BaseException],
+    outcomes: list[AnswerBriefDraft | BaseException],
 ) -> tuple[
     QuestionContextService,
     ScriptedAgentRuntime,
@@ -194,7 +194,7 @@ def test_history_for_prompt_caps_content_and_normalizes_saved_missing_aspects() 
 async def test_prepare_activates_one_scope_and_calls_agent_once() -> None:
     history = [ThreadMessageSnapshot(role="user", content="前の質問")]
     service, runtime, factory = _service(
-        [QuestionContextDraft(standalone_question="整理済みの質問")]
+        [AnswerBriefDraft(standalone_question="整理済みの質問")]
     )
 
     await service.prepare(
@@ -222,7 +222,7 @@ async def test_empty_history_preserves_deterministic_context_correction(
     question = "NVIDIA の直近発表は？"
     service, _runtime, _factory = _service(
         [
-            QuestionContextDraft(
+            AnswerBriefDraft(
                 standalone_question="書き換えた質問",
                 answer_requirements=["NVIDIA の発表内容"],
                 relevant_prior_coverage="履歴がないため採用しない",
@@ -259,7 +259,7 @@ async def test_history_success_preserves_context(
     ]
     service, _runtime, _factory = _service(
         [
-            QuestionContextDraft(
+            AnswerBriefDraft(
                 standalone_question="NVIDIA の株価への影響は？",
                 answer_requirements=["株価への影響"],
                 relevant_prior_coverage="発表内容は説明済み",
@@ -341,7 +341,7 @@ async def test_finalize_validation_failure_falls_back_without_leaking_draft(
     draft_sentinel = "MODEL_DRAFT_SENTINEL_a83c"
     service, runtime, factory = _service(
         [
-            QuestionContextDraft(
+            AnswerBriefDraft(
                 standalone_question="   ",
                 active_goal=draft_sentinel,
             )
@@ -398,7 +398,7 @@ async def test_classified_scope_enter_failure_falls_back_without_attempt(
     capfire: CaptureLogfire,
 ) -> None:
     runtime = ScriptedAgentRuntime(
-        [QuestionContextDraft(standalone_question="must not be consumed")]
+        [AnswerBriefDraft(standalone_question="must not be consumed")]
     )
     factory = RecordingRuntimeScopeFactory(
         runtime,

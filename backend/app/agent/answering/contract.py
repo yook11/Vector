@@ -6,15 +6,15 @@ from datetime import datetime
 
 from pydantic import BaseModel, ConfigDict
 
-from app.agent.question_context.contract import QuestionContext
+from app.agent.question_context.contract import AnswerBrief
 
 __all__ = ["AnsweringRequest"]
 
 
 class AnsweringRequest(BaseModel):
-    """Answererへ渡す質問コンテキストと実行時点。"""
+    """Answererへ渡す AnswerBrief と実行時点。"""
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
-    context: QuestionContext
+    answer_brief: AnswerBrief
     as_of: datetime

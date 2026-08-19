@@ -12,7 +12,7 @@ from app.agent.agent import Agent, AgentPrompt, ModelSettings, ModelTarget
 from app.agent.question_context.agent import QUESTION_CONTEXT_AGENT
 from app.agent.question_context.ai.schema_tool import QUESTION_CONTEXT_GEMINI_SCHEMA
 from app.agent.question_context.contract import (
-    QuestionContextDraft,
+    AnswerBriefDraft,
     QuestionContextGenerationInput,
 )
 from app.agent.question_context.prompts import render_question_context_input
@@ -35,7 +35,7 @@ def test_question_context_agent_declares_role_model_and_output_contract() -> Non
         temperature=0.1,
         max_output_tokens=1024,
     )
-    assert agent.output_type is QuestionContextDraft
+    assert agent.output_type is AnswerBriefDraft
     assert thaw_schema(agent.response_schema) == QUESTION_CONTEXT_GEMINI_SCHEMA
     assert not hasattr(agent, "rate_limit_policy")
     with pytest.raises(FrozenInstanceError):

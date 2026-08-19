@@ -536,7 +536,7 @@ async def test_review_input_never_carries_answer_requirements() -> None:
     """v3(Evidence Review「Evidence Review(v2 -> v3)」)。
 
     question_contextのanswer_requirementsはevidence_reviewへの配線が撤去され、
-    reviewerはresearch_goalだけで判定する。QuestionContext側に要件があっても
+    reviewerはresearch_goalだけで判定する。AnswerBrief側に要件があっても
     reviewer入力・render結果には一切現れない。
     """
     marker = "UNIQUE_REQUIREMENT_MARKER_7f2a"

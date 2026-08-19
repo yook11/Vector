@@ -277,10 +277,10 @@ provider attempt spanへ`agent.prompt.version`を記録し、phase spanへは複
 
 | ID | 保証条件 | 根拠 | 現production owner | 現test owner | 差し替え境界 | 判定 / 移行後 |
 |---|---|---|---|---|---|---|
-| RUN-CONTRACT-01 | Runのinput/context/resultはtyped immutableで、resultが同じanswering contextを保持する | Runner boundary、RUN-07 | running contract | `running/test_contract.py` | なし | 維持 |
+| RUN-CONTRACT-01 | Runのinput/identity/resultはtyped immutableで、resultが同じAnswerBriefを保持する | Runner boundary、RUN-07、agent-answering-run-context-dissolve-slice | running contract | `running/test_contract.py` | なし | 維持 |
 | RUN-HISTORY-01 | 受け取ったprior historyを順序・内容不変のlistとしてContext Preparerへ1回渡す | CTX-01 | `AnsweringRunner` | `test_answering_runner.py` | Scripted Preparer | 維持。bounded範囲はThreads owner |
 | RUN-PREVIOUS-01 | latest assistant本文を加工せずprevious answerにし、なければ空文字列 | CTX-02 | `AnsweringRunner` | runner tests | Scripted phases | 維持 |
-| RUN-CONTEXT-01 | prepared QuestionContext、RunContext、as_ofを同一identityで後続とresultへ渡し、runごとにfresh context | CTX-01、RUN-03/04/07 | `AnsweringRunner` | runner tests | Scripted Preparer/phases | 維持。PR5で全phaseへ拡張 |
+| RUN-CONTEXT-01 | Identityはrun引数、prepared AnswerBriefは同一instanceで後続とresultへ渡し、previous_answerはDirectAnswererのみ | CTX-01、RUN-03/04/07、agent-run-identity-slice、agent-answer-brief-slice、agent-answering-run-context-dissolve-slice | `AnsweringRunner` | runner tests | Scripted Preparer/phases | 維持。PR5で全phaseへ拡張 |
 | RUN-HOOK-01 | prepare後hookを1回呼び、original question/has history/same contextだけを渡す | CTX-03 | Runner＋RunHooks | runner contract/hooks tests | Recording event reporter | 維持 |
 | RUN-HOOK-02 | historyがありstandalone questionがstrip比較で変化した時だけresolved eventを1回emitする | conversation context仕様 | `running/hooks.py` | `running/test_hooks.py` | Recording reporter | 維持 |
 | RUN-ORDER-01 | prepare→hook→factory→planning→branch→answer。前段 failure では後続0回 | workflow仕様 | `AnsweringRunner` | `running/test_answering_runner.py`, `running/test_answering_workflow.py` | timeline recorder | 維持 |
@@ -291,7 +291,7 @@ provider attempt spanへ`agent.prompt.version`を記録し、phase spanへは複
 | RUN-LEGACY-01 | 旧`context=` keywordを副作用前に拒否する | boundary移行仕様 | Python signature | runner test | なし | 廃止候補 |
 | FLOW-BRANCH-01 | DirectAnswerPlan は Direct Answerer のみ、SearchPlan は固定 2 枝収集後に Evidence Answerer を起動する | workflow仕様 | `AnsweringRunner` | `answering/test_orchestration.py` | Scripted ports | 維持 |
 | FLOW-PROGRESS-01 | direct answer は planning→synthesizing、Search は planning→retrieving→synthesizing の順に progress を出す | workflow仕様 | `AnsweringRunner` | orchestration tests | Recording progress | 維持 |
-| FLOW-INPUT-01 | 同じ context/as_of を各 phase へ投影し、target time window は外部側と evidence answerer だけへ渡す | Search plan contract | `AnsweringRunner` | orchestration tests | Recording ports | 維持 |
+| FLOW-INPUT-01 | 同じ AnswerBrief/as_of を各 phase へ投影し、target time window は外部側と evidence answerer だけへ渡す | Search plan contract、agent-answer-brief-slice | `AnsweringRunner` | orchestration tests | Recording ports | 維持 |
 | FLOW-ERROR-01 | planner、Search 収集、answerer の unknown exception を変換せず伝播する | workflow仕様 | `AnsweringRunner` | `running/test_answering_workflow.py`, `answering/test_orchestration.py` | Scripted failing ports | 維持 |
 | FLOW-TIMELINE-01 | prepare→hook→factory→planning progress→planner→branch固有処理の完全 timeline を守る | workflow仕様 | `AnsweringRunner` | `running/test_answering_workflow.py` | single timeline recorder | 維持 |
 | FLOW-FACTORY-01 | phases factoryをhook後・run span内で1回、runごとにfresh起動し、構築 failure 位置を維持する | workflow仕様 | `AnsweringRunner` | `running/test_answering_runner.py`, `running/test_answering_workflow.py` | Scripted phases factory＋実span | 維持 |

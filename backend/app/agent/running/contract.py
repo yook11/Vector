@@ -16,17 +16,16 @@ from app.agent.evidence_collection.external_search import (
 )
 from app.agent.evidence_review import EvidenceReviewer
 from app.agent.planning.contract import QuestionPlanner
-from app.agent.question_context.contract import QuestionContext
+from app.agent.question_context.contract import AnswerBrief
 from app.agent.research_checkpoint import ResearchCheckpoint
 from app.agent.threads.contracts import ThreadMessageSnapshot
 
 __all__ = [
     "AnsweringPhases",
     "AnsweringPhasesFactory",
-    "AnsweringRunContext",
-    "QuestionContextPreparer",
-    "RunContext",
+    "AnswerBriefPreparer",
     "RunHooks",
+    "RunIdentity",
     "RunInput",
     "RunResult",
 ]
@@ -55,27 +54,22 @@ class RunInput:
 
 
 @dataclass(frozen=True, slots=True)
-class RunContext:
+class RunIdentity:
+    user_id: UUID
     run_id: UUID
+    thread_id: UUID
     as_of: datetime
-
-
-@dataclass(frozen=True, slots=True)
-class AnsweringRunContext:
-    run_context: RunContext
-    question_context: QuestionContext
-    previous_answer: str
 
 
 @dataclass(frozen=True, slots=True)
 class RunResult:
     final_output: AnswerQuestionResult
-    context: AnsweringRunContext
+    answer_brief: AnswerBrief
     # 外部検索を実行しなかったRun(direct_answer含む)ではNone。
     research_checkpoint: ResearchCheckpoint | None = None
 
 
-class QuestionContextPreparer(Protocol):
+class AnswerBriefPreparer(Protocol):
     async def prepare(
         self,
         *,
@@ -83,14 +77,14 @@ class QuestionContextPreparer(Protocol):
         history: list[ThreadMessageSnapshot],
         as_of: datetime,
         run_id: UUID,
-    ) -> QuestionContext: ...
+    ) -> AnswerBrief: ...
 
 
 class RunHooks(Protocol):
-    async def on_answering_context_prepared(
+    async def on_answer_brief_prepared(
         self,
         *,
         original_question: str,
         has_history: bool,
-        question_context: QuestionContext,
+        answer_brief: AnswerBrief,
     ) -> None: ...

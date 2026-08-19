@@ -11,10 +11,10 @@ from pydantic import ValidationError
 from app.agent.agent import Agent
 from app.agent.phase_span import agent_phase
 from app.agent.question_context.contract import (
-    QuestionContext,
-    QuestionContextDraft,
+    AnswerBrief,
+    AnswerBriefDraft,
     QuestionContextGenerationInput,
-    question_context_from_draft,
+    answer_brief_from_draft,
 )
 from app.agent.question_context.metrics import record_question_context_outcome
 from app.agent.runtime.contract import (
@@ -45,7 +45,7 @@ class QuestionContextService:
     def __init__(
         self,
         *,
-        agent: Agent[QuestionContextGenerationInput, QuestionContextDraft],
+        agent: Agent[QuestionContextGenerationInput, AnswerBriefDraft],
         runtime_scope_factory: AgentRuntimeScopeFactory | None,
     ) -> None:
         self._agent = agent
@@ -58,7 +58,7 @@ class QuestionContextService:
         history: list[ThreadMessageSnapshot],
         as_of: datetime,
         run_id: UUID,
-    ) -> QuestionContext:
+    ) -> AnswerBrief:
         if self._runtime_scope_factory is None:
             return _fallback_result(
                 question=question,
@@ -90,13 +90,13 @@ class QuestionContextService:
                 )
 
             try:
-                context = question_context_from_draft(draft)
+                answer_brief = answer_brief_from_draft(draft)
                 if not history:
-                    context = QuestionContext(
+                    answer_brief = AnswerBrief(
                         standalone_question=question,
-                        answer_requirements=context.answer_requirements,
+                        answer_requirements=answer_brief.answer_requirements,
                         relevant_prior_coverage="",
-                        active_goal=context.active_goal,
+                        active_goal=answer_brief.active_goal,
                     )
             except ValidationError:
                 return _fallback_result(
@@ -111,7 +111,7 @@ class QuestionContextService:
                 prompt_version=self._agent.prompt.version,
                 ai_model=self._agent.model.name,
             )
-            return context
+            return answer_brief
 
 
 def _fallback_result(
@@ -121,7 +121,7 @@ def _fallback_result(
     failure_code: str,
     prompt_version: str,
     ai_model: str,
-) -> QuestionContext:
+) -> AnswerBrief:
     logger.warning(
         "question_context_preparation_failed",
         run_id=str(run_id),
@@ -133,9 +133,7 @@ def _fallback_result(
         ai_model=ai_model,
         failure_code=failure_code,
     )
-    return question_context_from_draft(
-        QuestionContextDraft(standalone_question=question)
-    )
+    return answer_brief_from_draft(AnswerBriefDraft(standalone_question=question))
 
 
 def _failure_code(error: Exception) -> str:

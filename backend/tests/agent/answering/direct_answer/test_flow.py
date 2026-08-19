@@ -21,7 +21,7 @@ from app.agent.answering.direct_answer.contract import (
     DirectAnswerInvalidError,
 )
 from app.agent.answering.direct_answer.flow import DirectAnswerFlow
-from app.agent.question_context.contract import QuestionContext
+from app.agent.question_context.contract import AnswerBrief
 from app.analysis.ai_provider_errors import (
     AIProviderError,
     AIProviderNetworkError,
@@ -58,7 +58,7 @@ def _truncated_error() -> AIProviderOutputTruncatedError:
 
 def _request() -> AnsweringRequest:
     return AnsweringRequest(
-        context=QuestionContext(
+        answer_brief=AnswerBrief(
             standalone_question="Vector の使い方を短く教えて",
             answer_requirements=("Vector の使い方を説明する", "短く回答する"),
             relevant_prior_coverage="前回は基本操作を説明済み",
@@ -235,7 +235,7 @@ async def test_direct_answer_removes_inline_citation_markers_after_generation() 
         runtime_scope_factory=generator.activate,
     ).answer(
         request=AnsweringRequest(
-            context=QuestionContext(
+            answer_brief=AnswerBrief(
                 standalone_question="前回の結論だけ",
                 answer_requirements=("前回の結論を説明する", "結論だけを短く回答する"),
                 relevant_prior_coverage="根拠は説明済み",
@@ -247,15 +247,15 @@ async def test_direct_answer_removes_inline_citation_markers_after_generation() 
     )
 
     assert draft.answer == "結論は維持します。 詳細は省略します。"
-    assert generator.calls[0]["request"].context.answer_requirements == (
+    assert generator.calls[0]["request"].answer_brief.answer_requirements == (
         "前回の結論を説明する",
         "結論だけを短く回答する",
     )
     assert (
-        generator.calls[0]["request"].context.relevant_prior_coverage
+        generator.calls[0]["request"].answer_brief.relevant_prior_coverage
         == "根拠は説明済み"
     )
-    assert generator.calls[0]["request"].context.active_goal == "投資判断を進める"
+    assert generator.calls[0]["request"].answer_brief.active_goal == "投資判断を進める"
     assert generator.calls[0]["previous_answer"] == "根拠付き前回答 [[1]]"
 
 

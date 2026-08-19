@@ -5,7 +5,7 @@ from __future__ import annotations
 from app.agent.agent import Agent, AgentPrompt, ModelSettings, ModelTarget
 from app.agent.question_context.ai.schema_tool import QUESTION_CONTEXT_GEMINI_SCHEMA
 from app.agent.question_context.contract import (
-    QuestionContextDraft,
+    AnswerBriefDraft,
     QuestionContextGenerationInput,
 )
 from app.agent.question_context.prompts import (
@@ -22,12 +22,12 @@ QUESTION_CONTEXT_PROMPT = AgentPrompt[QuestionContextGenerationInput](
 
 QUESTION_CONTEXT_AGENT: Agent[
     QuestionContextGenerationInput,
-    QuestionContextDraft,
+    AnswerBriefDraft,
 ] = Agent(
     name="question_context",
     prompt=QUESTION_CONTEXT_PROMPT,
     model=ModelTarget(provider="gemini", name="gemini-2.5-flash-lite"),
     model_settings=ModelSettings(temperature=0.1, max_output_tokens=1024),
-    output_type=QuestionContextDraft,
+    output_type=AnswerBriefDraft,
     response_schema=QUESTION_CONTEXT_GEMINI_SCHEMA,
 )
