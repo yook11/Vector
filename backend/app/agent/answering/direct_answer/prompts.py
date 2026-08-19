@@ -87,13 +87,15 @@ def render_direct_answer_input(input: DirectAnswerInput) -> str:
     # HTMLではないLLM promptであり、外部入力は境界用sanitizerを通す。
     # nosemgrep: python.django.security.injection.raw-html-format.raw-html-format  # noqa: E501
     rendered = DIRECT_ANSWER_INPUT_TEMPLATE.format(
-        question=sanitize_for_untrusted_block(request.context.standalone_question),
+        question=sanitize_for_untrusted_block(request.answer_brief.standalone_question),
         as_of=request.as_of.isoformat(),
-        answer_requirements=_render_requirements(request.context.answer_requirements),
-        relevant_prior_coverage=sanitize_for_untrusted_block(
-            request.context.relevant_prior_coverage
+        answer_requirements=_render_requirements(
+            request.answer_brief.answer_requirements
         ),
-        active_goal=sanitize_for_untrusted_block(request.context.active_goal),
+        relevant_prior_coverage=sanitize_for_untrusted_block(
+            request.answer_brief.relevant_prior_coverage
+        ),
+        active_goal=sanitize_for_untrusted_block(request.answer_brief.active_goal),
         previous_answer=sanitize_for_untrusted_block(input.previous_answer),
     )
     if input.previous_output_truncated:

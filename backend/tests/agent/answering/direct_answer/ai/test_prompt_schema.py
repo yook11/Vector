@@ -14,7 +14,7 @@ from app.agent.answering.direct_answer.prompts import (
     _TRUNCATION_REPAIR_BLOCK,
     render_direct_answer_input,
 )
-from app.agent.question_context.contract import QuestionContext
+from app.agent.question_context.contract import AnswerBrief
 
 
 def _request(
@@ -25,7 +25,7 @@ def _request(
     active_goal: str = "目的 marker",
 ) -> AnsweringRequest:
     return AnsweringRequest(
-        context=QuestionContext(
+        answer_brief=AnswerBrief(
             standalone_question=standalone_question,
             answer_requirements=(answer_requirement_description,),
             relevant_prior_coverage=relevant_prior_coverage,

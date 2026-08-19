@@ -44,12 +44,13 @@ from app.agent.planning.contract import (
     SearchPlan,
     TargetTimeWindow,
 )
-from app.agent.question_context.contract import QuestionContext
-from app.agent.running import AnsweringPhases, AnsweringRunner, RunContext, RunInput
+from app.agent.question_context.contract import AnswerBrief
+from app.agent.running import AnsweringPhases, AnsweringRunner, RunInput
 from app.agent.runtime.contract import AgentResponseDefect, AgentResponseInvalidError
 from app.agent.threads.contracts import ThreadMessageSnapshot
 from app.analysis.analyzed_article import InScopeAnalyzedArticle
 from app.analysis.assessment.domain.result import InScope, InScopeCategory
+from tests.agent.running._harness import run_identity
 from tests.agent.running._input_safety import AllowInputSafetyChecker
 
 
@@ -67,7 +68,7 @@ def _draft(*, answer: str, cited_refs: list[str] | None = None) -> EvidenceAnswe
 
 @dataclass(frozen=True, slots=True)
 class _WorkflowInput:
-    context: QuestionContext
+    answer_brief: AnswerBrief
     as_of: datetime
     previous_answer: str = ""
 
@@ -81,7 +82,7 @@ def _input(
     previous_answer: str = "",
 ) -> _WorkflowInput:
     return _WorkflowInput(
-        context=QuestionContext(
+        answer_brief=AnswerBrief(
             standalone_question=question,
             answer_requirements=tuple(answer_requirements or ()),
             relevant_prior_coverage=relevant_prior_coverage,
@@ -583,12 +584,12 @@ class FakeProgressReporter:
 
 class _FixedContextPreparer:
     def __init__(
-        self, context: QuestionContext, *, timeline: CallTimeline | None = None
+        self, context: AnswerBrief, *, timeline: CallTimeline | None = None
     ) -> None:
         self._context = context
         self._timeline = timeline
 
-    async def prepare(self, **_kwargs: object) -> QuestionContext:
+    async def prepare(self, **_kwargs: object) -> AnswerBrief:
         if self._timeline is not None:
             self._timeline.record("context_preparer.prepare")
         return self._context
@@ -620,17 +621,17 @@ class _WorkflowHarness:
         runner = AnsweringRunner(
             input_safety_checker=AllowInputSafetyChecker(timeline=self._timeline),
             context_preparer=_FixedContextPreparer(
-                input.context, timeline=self._timeline
+                input.answer_brief, timeline=self._timeline
             ),
             phases_factory=lambda: self._phases,
             progress=self._progress,
         )
         result = await runner.run(
             RunInput(
-                question=input.context.standalone_question,
+                question=input.answer_brief.standalone_question,
                 history=history,
             ),
-            run_context=RunContext(
+            identity=run_identity(
                 run_id=UUID("019bd239-1ed4-7fbb-a336-04fe3c197651"),
                 as_of=input.as_of,
             ),
@@ -728,11 +729,13 @@ async def test_answer_direct_plan_calls_direct_answerer_only() -> None:
     assert result.plan_summary.plan_type == "direct_answer"
     assert direct_answerer.calls == [
         {
-            "request": AnsweringRequest(context=input_.context, as_of=input_.as_of),
+            "request": AnsweringRequest(
+                answer_brief=input_.answer_brief, as_of=input_.as_of
+            ),
             "previous_answer": input_.previous_answer,
         }
     ]
-    assert direct_answerer.calls[0]["request"].context is input_.context
+    assert direct_answerer.calls[0]["request"].answer_brief is input_.answer_brief
     assert internal_search.calls == []
     assert evidence_answerer.calls == []
 
@@ -1145,15 +1148,15 @@ async def test_answer_passes_pipeline_inputs_and_variant_time_window() -> None:
     await orchestrator.answer(input_)
 
     assert planner.calls == [
-        PlanningRequest(context=input_.context, as_of=input_.as_of)
+        PlanningRequest(answer_brief=input_.answer_brief, as_of=input_.as_of)
     ]
-    assert planner.calls[0].context is input_.context
+    assert planner.calls[0].answer_brief is input_.answer_brief
     assert internal_search.calls == [InternalSearchQueries(queries=("NVIDIA AI GPU",))]
     assert evidence_answerer.calls[0]["request"] == AnsweringRequest(
-        context=input_.context,
+        answer_brief=input_.answer_brief,
         as_of=input_.as_of,
     )
-    assert evidence_answerer.calls[0]["request"].context is input_.context
+    assert evidence_answerer.calls[0]["request"].answer_brief is input_.answer_brief
     assert evidence_answerer.calls[0]["target_time_window"] == TargetTimeWindow(
         kind="last_n_days", days=1
     )

@@ -19,7 +19,7 @@ from app.agent.input_safety.agent import INPUT_SAFETY_AGENT
 from app.agent.input_safety.service import InputSafetyService
 from app.agent.planning.agent import QUESTION_PLANNER_AGENT
 from app.agent.question_context.agent import QUESTION_CONTEXT_AGENT
-from app.agent.question_context.contract import QuestionContext, QuestionContextDraft
+from app.agent.question_context.contract import AnswerBrief, AnswerBriefDraft
 from app.agent.question_context.service import QuestionContextService
 from app.agent.running import AnsweringPhases, AnsweringRunner
 from app.agent.runtime.contract import (
@@ -170,7 +170,7 @@ class _FakeGeminiSdkClientFactory:
 class _FakeGeminiRuntime:
     constructed: list[_FakeGeminiRuntime] = []
     construction_error: BaseException | None = None
-    outcome: QuestionContextDraft | BaseException | None = None
+    outcome: AnswerBriefDraft | BaseException | None = None
     calls: list[tuple[object, object, int]] = []
 
     def __init__(self, *, client: _FakeGeminiAsyncClient) -> None:
@@ -185,7 +185,7 @@ class _FakeGeminiRuntime:
         input: object,
         *,
         attempt_number: int,
-    ) -> QuestionContextDraft:
+    ) -> AnswerBriefDraft:
         self.calls.append((agent, input, attempt_number))
         outcome = self.outcome
         if isinstance(outcome, BaseException):
@@ -324,7 +324,7 @@ async def test_gemini_agent_runtime_scope_creates_fresh_resources_each_time(
     ("outcome", "expected_question", "propagates"),
     [
         pytest.param(
-            QuestionContextDraft(standalone_question="prepared question"),
+            AnswerBriefDraft(standalone_question="prepared question"),
             "prepared question",
             False,
             id="success",
@@ -336,7 +336,7 @@ async def test_gemini_agent_runtime_scope_creates_fresh_resources_each_time(
             id="classified-failure",
         ),
         pytest.param(
-            QuestionContextDraft(standalone_question="   "),
+            AnswerBriefDraft(standalone_question="   "),
             "original question",
             False,
             id="finalize-failure",
@@ -357,7 +357,7 @@ async def test_gemini_agent_runtime_scope_creates_fresh_resources_each_time(
 )
 async def test_question_context_service_closes_production_gemini_scope_once(
     monkeypatch: pytest.MonkeyPatch,
-    outcome: QuestionContextDraft | BaseException,
+    outcome: AnswerBriefDraft | BaseException,
     expected_question: str | None,
     propagates: bool,
 ) -> None:
@@ -369,7 +369,7 @@ async def test_question_context_service_closes_production_gemini_scope_once(
         runtime_scope_factory=composition.activate_gemini_agent_runtime,
     )
 
-    async def prepare() -> QuestionContext:
+    async def prepare() -> AnswerBrief:
         return await service.prepare(
             question="original question",
             history=[ThreadMessageSnapshot(role="user", content="prior question")],

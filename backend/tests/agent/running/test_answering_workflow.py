@@ -29,8 +29,9 @@ from app.agent.planning.contract import (
     SearchPlan,
     TargetTimeWindow,
 )
-from app.agent.question_context import QuestionContext
-from app.agent.running import AnsweringPhases, AnsweringRunner, RunContext, RunInput
+from app.agent.question_context import AnswerBrief
+from app.agent.running import AnsweringPhases, AnsweringRunner, RunInput
+from tests.agent.running._harness import run_identity
 from tests.agent.running._input_safety import AllowInputSafetyChecker
 
 RUN_ID = UUID("019bd239-1ed4-7fbb-a336-04fe3c197650")
@@ -40,7 +41,7 @@ AS_OF = datetime(2026, 7, 19, 9, 30, tzinfo=UTC)
 class _Preparer:
     def __init__(
         self,
-        context: QuestionContext,
+        context: AnswerBrief,
         timeline: list[str],
         error: BaseException | None = None,
     ) -> None:
@@ -48,7 +49,7 @@ class _Preparer:
         self._timeline = timeline
         self._error = error
 
-    async def prepare(self, **_kwargs: object) -> QuestionContext:
+    async def prepare(self, **_kwargs: object) -> AnswerBrief:
         self._timeline.append("prepare")
         if self._error is not None:
             raise self._error
@@ -64,7 +65,7 @@ class _Hooks:
         self._timeline = timeline
         self._error = error
 
-    async def on_answering_context_prepared(self, **_kwargs: object) -> None:
+    async def on_answer_brief_prepared(self, **_kwargs: object) -> None:
         self._timeline.append("hook")
         if self._error is not None:
             raise self._error
@@ -191,7 +192,7 @@ def _runner(
     *,
     plan: QuestionPlan,
     timeline: list[str],
-    context: QuestionContext,
+    answer_brief: AnswerBrief,
     prepare_error: BaseException | None = None,
 ) -> tuple[
     AnsweringRunner,
@@ -221,7 +222,7 @@ def _runner(
     return (
         AnsweringRunner(
             input_safety_checker=AllowInputSafetyChecker(),
-            context_preparer=_Preparer(context, timeline, prepare_error),
+            context_preparer=_Preparer(answer_brief, timeline, prepare_error),
             phases_factory=phases_factory,
             progress=_Progress(timeline),
         ),
@@ -234,16 +235,16 @@ def _runner(
 
 async def test_direct_workflow_order_and_context_identity() -> None:
     timeline: list[str] = []
-    context = QuestionContext(standalone_question="整理済みの質問")
+    context = AnswerBrief(standalone_question="整理済みの質問")
     runner, planner, internal_search, direct_answerer, evidence_answerer = _runner(
         plan=_direct_plan(),
         timeline=timeline,
-        context=context,
+        answer_brief=context,
     )
 
     result = await runner.run(
         RunInput(question="元の質問", history=()),
-        run_context=RunContext(run_id=RUN_ID, as_of=AS_OF),
+        identity=run_identity(run_id=RUN_ID, as_of=AS_OF),
         hooks=_Hooks(timeline),
     )
 
@@ -258,26 +259,26 @@ async def test_direct_workflow_order_and_context_identity() -> None:
         "progress:answering",
         "direct_answerer",
     ]
-    assert planner.calls[0].context is context
-    assert direct_answerer.calls[0][0].context is context
-    assert result.context.question_context is context
+    assert planner.calls[0].answer_brief is context
+    assert direct_answerer.calls[0][0].answer_brief is context
+    assert result.answer_brief is context
     assert internal_search.calls == []
     assert evidence_answerer.calls == []
 
 
 async def test_search_workflow_starts_both_retrieval_ports() -> None:
     timeline: list[str] = []
-    context = QuestionContext(standalone_question="整理済みの質問")
+    context = AnswerBrief(standalone_question="整理済みの質問")
     plan = _search_plan()
     runner, planner, internal_search, direct_answerer, evidence_answerer = _runner(
         plan=plan,
         timeline=timeline,
-        context=context,
+        answer_brief=context,
     )
 
     result = await runner.run(
         RunInput(question="元の質問", history=()),
-        run_context=RunContext(run_id=RUN_ID, as_of=AS_OF),
+        identity=run_identity(run_id=RUN_ID, as_of=AS_OF),
         hooks=_Hooks(timeline),
     )
 
@@ -297,9 +298,9 @@ async def test_search_workflow_starts_both_retrieval_ports() -> None:
         "progress:answering",
         "evidence_answerer",
     ]
-    assert planner.calls[0].context is context
+    assert planner.calls[0].answer_brief is context
     assert internal_search.calls == [InternalSearchQueries(queries=("検索語",))]
-    assert evidence_answerer.calls[0]["request"].context is context
+    assert evidence_answerer.calls[0]["request"].answer_brief is context
     assert direct_answerer.calls == []
     assert result.final_output.status == "insufficient"
 
@@ -310,18 +311,18 @@ async def test_preparation_or_hook_failure_does_not_build_phases(
 ) -> None:
     timeline: list[str] = []
     error = RuntimeError(f"{failure_point} failed")
-    context = QuestionContext(standalone_question="整理済みの質問")
+    context = AnswerBrief(standalone_question="整理済みの質問")
     runner, *_ = _runner(
         plan=_direct_plan(),
         timeline=timeline,
-        context=context,
+        answer_brief=context,
         prepare_error=error if failure_point == "prepare" else None,
     )
 
     with pytest.raises(RuntimeError) as raised:
         await runner.run(
             RunInput(question="元の質問", history=()),
-            run_context=RunContext(run_id=RUN_ID, as_of=AS_OF),
+            identity=run_identity(run_id=RUN_ID, as_of=AS_OF),
             hooks=_Hooks(
                 timeline,
                 error=error if failure_point == "hook" else None,

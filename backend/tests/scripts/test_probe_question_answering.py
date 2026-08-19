@@ -128,7 +128,7 @@ def test_probe_uses_answering_runner_without_removed_external_pipeline_seams() -
         "PgVectorArticleSearchRepository",
         "INPUT_SAFETY_AGENT",
         "InputSafetyService",
-        "RunContext",
+        "RunIdentity",
         "RunInput",
         "async_sessionmaker",
         "build_external_research_runtime_factory",

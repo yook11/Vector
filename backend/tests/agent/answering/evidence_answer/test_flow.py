@@ -22,7 +22,7 @@ from app.agent.answering.evidence_answer.evidence import AnswerInputEvidence
 from app.agent.answering.evidence_answer.flow import EvidenceAnswerFlow
 from app.agent.contract import AnswerGenerationStopped, ExternalUrlSource
 from app.agent.planning.contract import TargetTimeWindow
-from app.agent.question_context.contract import QuestionContext
+from app.agent.question_context.contract import AnswerBrief
 from app.analysis.ai_provider_errors import (
     AIProviderError,
     AIProviderNetworkError,
@@ -53,7 +53,7 @@ def _request(
     answer_requirements: tuple[str, ...] | None = None,
 ) -> AnsweringRequest:
     return AnsweringRequest(
-        context=QuestionContext(
+        answer_brief=AnswerBrief(
             standalone_question="NVIDIA の直近発表は投資判断に重要？",
             answer_requirements=(
                 ("投資判断への影響を説明する", "根拠付きで詳しく回答する")

@@ -1,4 +1,4 @@
-"""Question context contracts and output guards."""
+"""Answer brief contracts and output guards."""
 
 from __future__ import annotations
 
@@ -43,8 +43,8 @@ RelevantPriorCoverage = Annotated[
 ActiveGoal = Annotated[str, StringConstraints(max_length=MAX_ACTIVE_GOAL_LENGTH)]
 
 
-class QuestionContext(BaseModel):
-    """Validated question context passed into the agent core."""
+class AnswerBrief(BaseModel):
+    """後段モデルへ渡す、質問の整理済みの伝え方。"""
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
@@ -57,7 +57,7 @@ class QuestionContext(BaseModel):
     active_goal: ActiveGoal = ""
 
 
-class QuestionContextDraft(BaseModel):
+class AnswerBriefDraft(BaseModel):
     """Lenient structured output at the generator adapter boundary."""
 
     model_config = ConfigDict(frozen=True)
@@ -77,10 +77,10 @@ class QuestionContextGenerationInput:
     as_of: datetime
 
 
-def question_context_from_draft(draft: QuestionContextDraft) -> QuestionContext:
-    """Normalize model text before applying the strict public context contract."""
+def answer_brief_from_draft(draft: AnswerBriefDraft) -> AnswerBrief:
+    """Normalize model text before applying the strict public brief contract."""
 
-    return QuestionContext(
+    return AnswerBrief(
         standalone_question=_clean(
             draft.standalone_question, MAX_STANDALONE_QUESTION_LENGTH
         ),

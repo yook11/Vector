@@ -59,7 +59,7 @@ def test_evidence_option_is_unified_and_excludes_source_metadata() -> None:
 
 
 def test_review_input_carries_only_task_groups_and_as_of() -> None:
-    """v3(判定基準の一本化)。QuestionContext 全体(standalone_question 等)も
+    """v3(判定基準の一本化)。AnswerBrief 全体(standalone_question 等)も
 
     content_requirementsも持たず、research_goal(task_groups経由)とas_ofだけで
     判定する入力になる。
@@ -87,7 +87,7 @@ def test_task_group_carries_task_index_research_goal_and_options_only() -> None:
     field_names = {field.name for field in fields(EvidenceReviewTaskGroup)}
     assert field_names == {"task_index", "research_goal", "options"}
 
-    # research_goal は str 直値で持ち、標準の QuestionContext field
+    # research_goal は str 直値で持ち、標準の AnswerBrief field
     # (standalone_question 等)を型として持ち込めない。
     research_goal_field = next(
         field

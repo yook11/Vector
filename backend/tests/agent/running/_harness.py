@@ -38,13 +38,15 @@ from app.agent.planning.contract import (
     SearchPlan,
     TargetTimeWindow,
 )
-from app.agent.question_context import QuestionContext
-from app.agent.running import AnsweringRunner, RunContext, RunInput
+from app.agent.question_context import AnswerBrief
+from app.agent.running import AnsweringRunner, RunIdentity, RunInput
 from app.agent.running import answering_runner as answering_runner_module
 from app.analysis.analyzed_article import InScopeAnalyzedArticle
 from app.analysis.assessment.domain.result import InScope, InScopeCategory
 
 RUN_ID = UUID("019bd239-1ed4-7fbb-a336-04fe3c197652")
+USER_ID = UUID("019bd239-1ed4-7fbb-a336-04fe3c197650")
+THREAD_ID = UUID("019bd239-1ed4-7fbb-a336-04fe3c197651")
 AS_OF = datetime(2026, 7, 20, 9, 30, tzinfo=UTC)
 DEFAULT_TARGET_TIME_WINDOW = TargetTimeWindow(kind="last_n_days", days=1)
 
@@ -120,8 +122,8 @@ class Preparer:
     def __init__(self, *, answer_requirements: tuple[str, ...] | None = None) -> None:
         self._answer_requirements = answer_requirements or ()
 
-    async def prepare(self, **_kwargs: object) -> QuestionContext:
-        return QuestionContext(
+    async def prepare(self, **_kwargs: object) -> AnswerBrief:
+        return AnswerBrief(
             standalone_question="NVIDIA の見通しは？",
             answer_requirements=self._answer_requirements,
         )
@@ -221,8 +223,23 @@ def capture_external_outcome(
     return captured
 
 
+def run_identity(
+    *,
+    user_id: UUID = USER_ID,
+    run_id: UUID = RUN_ID,
+    thread_id: UUID = THREAD_ID,
+    as_of: datetime = AS_OF,
+) -> RunIdentity:
+    return RunIdentity(
+        user_id=user_id,
+        run_id=run_id,
+        thread_id=thread_id,
+        as_of=as_of,
+    )
+
+
 async def execute_run(runner: AnsweringRunner, *, as_of: datetime = AS_OF) -> Any:
     return await runner.run(
         RunInput(question="NVIDIA の見通しは？", history=()),
-        run_context=RunContext(run_id=RUN_ID, as_of=as_of),
+        identity=run_identity(as_of=as_of),
     )

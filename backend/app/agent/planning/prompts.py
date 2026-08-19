@@ -105,10 +105,12 @@ def render_planning_input(input: PlanningAttemptInput) -> str:
     # HTMLではないLLM promptであり、外部入力は境界用sanitizerを通す。
     # nosemgrep: python.django.security.injection.raw-html-format.raw-html-format  # noqa: E501
     task_input = _PLANNER_INPUT_TEMPLATE.format(
-        question=sanitize_for_untrusted_block(request.context.standalone_question),
+        question=sanitize_for_untrusted_block(request.answer_brief.standalone_question),
         as_of=request.as_of.isoformat(),
-        answer_requirements=_render_requirements(request.context.answer_requirements),
-        active_goal=sanitize_for_untrusted_block(request.context.active_goal),
+        answer_requirements=_render_requirements(
+            request.answer_brief.answer_requirements
+        ),
+        active_goal=sanitize_for_untrusted_block(request.answer_brief.active_goal),
     )
     if request.prior_research:
         # HTMLではないLLM promptであり、外部入力は境界用sanitizerを通す。

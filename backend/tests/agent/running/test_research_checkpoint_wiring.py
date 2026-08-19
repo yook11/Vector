@@ -39,9 +39,10 @@ from app.agent.planning.contract import (
     SearchPlan,
     TargetTimeWindow,
 )
-from app.agent.question_context import QuestionContext
-from app.agent.running import AnsweringPhases, AnsweringRunner, RunContext, RunInput
+from app.agent.question_context import AnswerBrief
+from app.agent.running import AnsweringPhases, AnsweringRunner, RunInput
 from app.agent.runtime.contract import AgentResponseDefect, AgentResponseInvalidError
+from tests.agent.running._harness import run_identity
 from tests.agent.running._input_safety import AllowInputSafetyChecker
 from tests.agent.runtime._fakes import ScriptedAgentRuntime
 
@@ -82,8 +83,8 @@ def _review_draft(
 
 
 class _Preparer:
-    async def prepare(self, **_kwargs: object) -> QuestionContext:
-        return QuestionContext(standalone_question="質問")
+    async def prepare(self, **_kwargs: object) -> AnswerBrief:
+        return AnswerBrief(standalone_question="質問")
 
 
 class _Planner:
@@ -228,7 +229,7 @@ def _search_runner(
 async def _run(runner: AnsweringRunner) -> object:
     return await runner.run(
         RunInput(question="質問", history=()),
-        run_context=RunContext(run_id=RUN_ID, as_of=AS_OF),
+        identity=run_identity(run_id=RUN_ID, as_of=AS_OF),
     )
 
 

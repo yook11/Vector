@@ -45,13 +45,12 @@ from app.agent.live_updates.stream import (
     AgentRunLiveStreamStageEvent,
     AgentRunLiveStreamTerminalEvent,
 )
-from app.agent.question_context.contract import QuestionContext
+from app.agent.question_context.contract import AnswerBrief
 from app.agent.research_checkpoint import ResearchCheckpoint, ResearchTaskRecord
 from app.agent.running import (
     AnsweringPhases,
-    AnsweringRunContext,
     QuestionResolvedRunHooks,
-    RunContext,
+    RunIdentity,
     RunInput,
     RunResult,
 )
@@ -160,10 +159,10 @@ class FakeAgent:
         self.exc = exc
         self.stage = stage
         self.progress = None
-        self.calls: list[AnsweringRunContext] = []
+        self.calls: list[object] = []
 
-    async def answer(self, input_: AnsweringRunContext) -> AnswerQuestionResult:
-        self.calls.append(input_)
+    async def answer(self) -> AnswerQuestionResult:
+        self.calls.append(None)
         if self.stage is not None:
             assert self.progress is not None
             await self.progress.stage_changed(self.stage)
@@ -176,7 +175,7 @@ class FakeAgent:
 @dataclass(frozen=True, slots=True)
 class FakeAnsweringRunnerCall:
     input: RunInput
-    run_context: RunContext
+    identity: RunIdentity
     hooks: object | None
 
 
@@ -185,12 +184,12 @@ class FakeAnsweringRunner:
         self,
         *,
         exc: BaseException | None = None,
-        question_context: QuestionContext | None = None,
+        answer_brief: AnswerBrief | None = None,
         previous_answer: str = "",
         research_checkpoint: ResearchCheckpoint | None = None,
     ) -> None:
         self.exc = exc
-        self.question_context = question_context
+        self.answer_brief = answer_brief
         self.previous_answer = previous_answer
         self.research_checkpoint = research_checkpoint
         self.execution: object | None = None
@@ -200,37 +199,33 @@ class FakeAnsweringRunner:
         self,
         input: RunInput,
         *,
-        run_context: RunContext,
+        identity: RunIdentity,
         hooks: object | None = None,
     ) -> RunResult:
         self.calls.append(
             FakeAnsweringRunnerCall(
                 input=input,
-                run_context=run_context,
+                identity=identity,
                 hooks=hooks,
             )
         )
         if self.exc is not None:
             raise self.exc
-        question_context = self.question_context or QuestionContext(
+        answer_brief = self.answer_brief or AnswerBrief(
             standalone_question=input.question
         )
-        answering_context = AnsweringRunContext(
-            run_context=run_context,
-            question_context=question_context,
-            previous_answer=self.previous_answer,
-        )
+        self.answer_brief = answer_brief
         if hooks is not None:
-            await cast(Any, hooks).on_answering_context_prepared(
+            await cast(Any, hooks).on_answer_brief_prepared(
                 original_question=input.question,
                 has_history=bool(input.history),
-                question_context=question_context,
+                answer_brief=answer_brief,
             )
         assert self.execution is not None
-        final_output = await cast(Any, self.execution).answer(answering_context)
+        final_output = await cast(Any, self.execution).answer()
         return RunResult(
             final_output=final_output,
-            context=answering_context,
+            answer_brief=answer_brief,
             research_checkpoint=self.research_checkpoint,
         )
 
@@ -301,7 +296,7 @@ class DeltaReportingAgent:
         self.order = order
         self.delta_reporter: object | None = None
 
-    async def answer(self, _input: AnsweringRunContext) -> AnswerQuestionResult:
+    async def answer(self) -> AnswerQuestionResult:
         assert self.delta_reporter is not None
         for fragment in self.fragments:
             await self.delta_reporter.append(generation=1, text=fragment)  # type: ignore[attr-defined]
@@ -322,7 +317,7 @@ class RevisionReportingAgent:
         self.delta_reporter: object | None = None
         self.continuation: object | None = None
 
-    async def answer(self, _input: AnsweringRunContext) -> AnswerQuestionResult:
+    async def answer(self) -> AnswerQuestionResult:
         assert self.delta_reporter is not None
         assert self.continuation is not None
         await self.delta_reporter.reset(generation=2)  # type: ignore[attr-defined]
@@ -1146,7 +1141,7 @@ async def test_answering_runner_completes_follow_up_with_saved_history(
 
     runner_execution = FakeAgent(_direct_result(follow_up_answer))
     answering_runner = FakeAnsweringRunner(
-        question_context=QuestionContext(
+        answer_brief=AnswerBrief(
             standalone_question="量子計算市場の主要企業を比較して",
             answer_requirements=(saved_gap,),
             relevant_prior_coverage=first_answer,
@@ -1192,9 +1187,11 @@ async def test_answering_runner_completes_follow_up_with_saved_history(
     )
     assert len(runner_execution.calls) == 1
     assert (
-        runner_execution.calls[0].question_context.standalone_question,
-        runner_execution.calls[0].previous_answer,
+        answering_runner.answer_brief is not None,
+        answering_runner.answer_brief.standalone_question,
+        answering_runner.previous_answer,
     ) == (
+        True,
         "量子計算市場の主要企業を比較して",
         first_answer,
     )
@@ -1508,7 +1505,7 @@ async def test_run_agent_answer_passes_answering_runner_and_resolved_hook(
 ) -> None:
     question = "それの株価への影響は？"
     async with session_factory() as session:
-        _thread, _message, run = await _create_thread_message_run(
+        thread, _message, run = await _create_thread_message_run(
             session,
             question=question,
             history=[
@@ -1524,7 +1521,7 @@ async def test_run_agent_answer_passes_answering_runner_and_resolved_hook(
         )
     runner_execution = FakeAgent(_direct_result())
     answering_runner = FakeAnsweringRunner(
-        question_context=QuestionContext(
+        answer_brief=AnswerBrief(
             standalone_question="NVIDIA の発表が株価へ与える影響は？",
         )
     )
@@ -1600,16 +1597,15 @@ async def test_run_agent_answer_passes_answering_runner_and_resolved_hook(
         ("assistant", "前回の回答 [[2]]", ("保存済みの不足",)),
         ("user", "さらに詳しく", ()),
     ]
-    assert answering_runner_call.run_context == RunContext(
+    assert answering_runner_call.identity == RunIdentity(
+        user_id=UUID(TEST_USER_ID),
         run_id=run.id,
+        thread_id=thread.id,
         as_of=datetime(2026, 7, 16, 9, 30, tzinfo=UTC),
     )
-    assert answering_runner_call.run_context.as_of.utcoffset() == timedelta(0)
+    assert answering_runner_call.identity.as_of.utcoffset() == timedelta(0)
     assert isinstance(answering_runner_call.hooks, QuestionResolvedRunHooks)
     assert len(runner_execution.calls) == 1
-    assert runner_execution.calls[0].run_context.as_of == (
-        answering_runner_call.run_context.as_of
-    )
     assert len(runner_builder_calls) == 1
     runner_kwargs = runner_builder_calls[0]
     assert runner_kwargs["session_factory"] is session_factory
@@ -1992,7 +1988,7 @@ async def test_epoch_advance_stops_old_worker_through_actual_probe(
         def __init__(self) -> None:
             self.continuation: object | None = None
 
-        async def answer(self, _input: AnsweringRunContext) -> AnswerQuestionResult:
+        async def answer(self) -> AnswerQuestionResult:
             assert self.continuation is not None
             assert await self.continuation.should_continue() is True  # type: ignore[attr-defined]
             async with session_factory() as reacquire_session:
@@ -2641,10 +2637,10 @@ async def test_terminal_publish_failure_does_not_revert_completed_run(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    "question_context",
+    "answer_brief",
     [
-        QuestionContext(standalone_question="それの株価への影響は？"),
-        QuestionContext(
+        AnswerBrief(standalone_question="それの株価への影響は？"),
+        AnswerBrief(
             standalone_question="それの株価への影響は？",
             answer_requirements=("それの株価への影響は？",),
         ),
@@ -2652,7 +2648,7 @@ async def test_terminal_publish_failure_does_not_revert_completed_run(
     ids=("echo", "requirements-populated"),
 )
 async def test_run_agent_answer_does_not_publish_echo_or_fallback_question_context(
-    question_context: QuestionContext,
+    answer_brief: AnswerBrief,
     session_factory: async_sessionmaker[AsyncSession],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -2664,7 +2660,7 @@ async def test_run_agent_answer_does_not_publish_echo_or_fallback_question_conte
             history=[("assistant", "前回の回答")],
         )
     fake_agent = FakeAgent(_direct_result())
-    answering_runner = FakeAnsweringRunner(question_context=question_context)
+    answering_runner = FakeAnsweringRunner(answer_brief=answer_brief)
     FakeLiveEventPublisher.instances = []
     _patch_worker_execution(
         monkeypatch,
@@ -2683,7 +2679,8 @@ async def test_run_agent_answer_does_not_publish_echo_or_fallback_question_conte
     )
 
     assert len(fake_agent.calls) == 1
-    assert fake_agent.calls[0].question_context.standalone_question == question
+    assert answering_runner.answer_brief is not None
+    assert answering_runner.answer_brief.standalone_question == question
     assert answering_runner.calls[0].input.history == (
         ThreadMessageSnapshot(role="assistant", content="前回の回答"),
     )
@@ -2703,7 +2700,7 @@ async def test_initial_question_does_not_publish_resolved_event(
         )
     fake_agent = FakeAgent(_direct_result())
     answering_runner = FakeAnsweringRunner(
-        question_context=QuestionContext(standalone_question="書き換えた質問")
+        answer_brief=AnswerBrief(standalone_question="書き換えた質問")
     )
     FakeLiveEventPublisher.instances = []
     _patch_worker_execution(
@@ -4314,22 +4311,22 @@ async def test_application_deadline_scope_covers_acquire_live_history_runner_and
             return await super().begin_attempt()
 
     class ScopeCheckingAgent(FakeAgent):
-        async def answer(self, input_: AnsweringRunContext) -> AnswerQuestionResult:
+        async def answer(self) -> AnswerQuestionResult:
             assert scopes[0].active
             seen_steps.append("result")
-            return await super().answer(input_)
+            return await super().answer()
 
     class ScopeCheckingRunner(FakeAnsweringRunner):
         async def run(
             self,
             input: RunInput,
             *,
-            run_context: RunContext,
+            identity: RunIdentity,
             hooks: object | None = None,
         ) -> RunResult:
             assert scopes[0].active
             seen_steps.append("runner")
-            return await super().run(input, run_context=run_context, hooks=hooks)
+            return await super().run(input, identity=identity, hooks=hooks)
 
     agent = ScopeCheckingAgent(_direct_result())
     runner = ScopeCheckingRunner()
@@ -4604,7 +4601,7 @@ async def test_timed_out_old_attempt_cannot_terminalize_newer_attempt_or_publish
     FakeLiveStreamPublisher.instances = []
 
     class EpochAdvancingThenCancelledAgent:
-        async def answer(self, _input: AnsweringRunContext) -> AnswerQuestionResult:
+        async def answer(self) -> AnswerQuestionResult:
             async with session_factory() as session:
                 async with session.begin():
                     newer = acquired_prepared_run(

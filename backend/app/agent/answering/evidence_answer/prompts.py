@@ -116,15 +116,17 @@ def render_evidence_answer_input(input: EvidenceAnswerInput) -> str:
     # HTMLではないLLM promptであり、外部入力は境界用sanitizerを通す。
     # nosemgrep: python.django.security.injection.raw-html-format.raw-html-format  # noqa: E501
     rendered = EVIDENCE_ANSWER_INPUT_TEMPLATE.format(
-        question=sanitize_for_untrusted_block(request.context.standalone_question),
+        question=sanitize_for_untrusted_block(request.answer_brief.standalone_question),
         evidence=_render_evidence(input.evidence),
         as_of=request.as_of.isoformat(),
         target_time_window=sanitize_for_untrusted_block(target_time_window),
-        answer_requirements=_render_requirements(request.context.answer_requirements),
-        relevant_prior_coverage=sanitize_for_untrusted_block(
-            request.context.relevant_prior_coverage
+        answer_requirements=_render_requirements(
+            request.answer_brief.answer_requirements
         ),
-        active_goal=sanitize_for_untrusted_block(request.context.active_goal),
+        relevant_prior_coverage=sanitize_for_untrusted_block(
+            request.answer_brief.relevant_prior_coverage
+        ),
+        active_goal=sanitize_for_untrusted_block(request.answer_brief.active_goal),
     )
     if input.review_missing:
         rendered += _REVIEW_MISSING_TEMPLATE.format(

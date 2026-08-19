@@ -57,7 +57,7 @@ from app.agent.planning.contract import (
 )
 from app.agent.question_context.agent import QUESTION_CONTEXT_AGENT
 from app.agent.question_context.service import QuestionContextService
-from app.agent.running import AnsweringPhases, AnsweringRunner, RunContext, RunInput
+from app.agent.running import AnsweringPhases, AnsweringRunner, RunIdentity, RunInput
 from app.config import settings
 from app.db import engine
 
@@ -109,7 +109,7 @@ class _UnreachableDirectAnswerer:
     ) -> DirectAnswerDraft:
         raise AssertionError(
             "direct answerer must not be called: "
-            f"{request.context.standalone_question!r}"
+            f"{request.answer_brief.standalone_question!r}"
         )
 
 
@@ -128,7 +128,7 @@ class _UnreachableEvidenceAnswerer:
     ) -> EvidenceAnswerDraft:
         raise AssertionError(
             "evidence answerer must not be called: "
-            f"{request.context.standalone_question!r}, {evidence!r}"
+            f"{request.answer_brief.standalone_question!r}, {evidence!r}"
         )
 
 
@@ -250,7 +250,7 @@ async def _probe_search(
     result = (
         await runner.run(
             RunInput(question=question, history=()),
-            run_context=RunContext(run_id=uuid4(), as_of=as_of),
+            identity=_probe_identity(as_of=as_of),
         )
     ).final_output
 
@@ -295,7 +295,7 @@ async def _probe_direct(*, question: str) -> None:
     result = (
         await runner.run(
             RunInput(question=question, history=()),
-            run_context=RunContext(run_id=uuid4(), as_of=as_of),
+            identity=_probe_identity(as_of=as_of),
         )
     ).final_output
 
@@ -304,6 +304,15 @@ async def _probe_direct(*, question: str) -> None:
     print("  plan_type=direct_answer")
     print()
     _print_answer_result(result)
+
+
+def _probe_identity(*, as_of: datetime) -> RunIdentity:
+    return RunIdentity(
+        user_id=uuid4(),
+        run_id=uuid4(),
+        thread_id=uuid4(),
+        as_of=as_of,
+    )
 
 
 def _require_secret(name: str, value: str) -> None:

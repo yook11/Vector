@@ -10,21 +10,21 @@ from datetime import UTC, datetime
 
 from app.agent.planning.contract import PlanningAttemptInput, PlanningRequest
 from app.agent.planning.prompts import PLANNER_INSTRUCTIONS, render_planning_input
-from app.agent.question_context.contract import QuestionContext
+from app.agent.question_context.contract import AnswerBrief
 from app.agent.research_checkpoint import ResearchCheckpoint, ResearchTaskRecord
 
 _AS_OF = datetime(2026, 8, 3, 9, 0, tzinfo=UTC)
 
 
-def _context() -> QuestionContext:
-    return QuestionContext(standalone_question="NVIDIAの直近の発表は？")
+def _context() -> AnswerBrief:
+    return AnswerBrief(standalone_question="NVIDIAの直近の発表は？")
 
 
 def _request(
     prior_research: tuple[ResearchCheckpoint, ...] = (),
 ) -> PlanningRequest:
     return PlanningRequest(
-        context=_context(),
+        answer_brief=_context(),
         as_of=_AS_OF,
         prior_research=prior_research,
     )
@@ -59,7 +59,7 @@ def _checkpoint(
 def test_omitted_and_explicit_empty_prior_research_render_identically() -> None:
     """checkpoint 0件はv6と同値(sectionが出ない)出力になる。"""
     omitted = PlanningAttemptInput(
-        request=PlanningRequest(context=_context(), as_of=_AS_OF)
+        request=PlanningRequest(answer_brief=_context(), as_of=_AS_OF)
     )
     explicit_empty = PlanningAttemptInput(request=_request(prior_research=()))
 

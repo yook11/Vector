@@ -23,7 +23,7 @@ from app.agent.contract import (
     PlanType,
     ResearchCheckpoint,
 )
-from app.agent.question_context.contract import QuestionContext
+from app.agent.question_context.contract import AnswerBrief
 from app.agent.runtime.contract import AgentResponseDefect, AgentResponseInvalidError
 
 __all__ = [
@@ -161,11 +161,11 @@ def render_target_time_window(target_time_window: TargetTimeWindow) -> str:
 
 
 class PlanningRequest(BaseModel):
-    """Plannerへ渡す質問コンテキストと実行時点。"""
+    """Plannerへ渡す AnswerBrief と実行時点。"""
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
-    context: QuestionContext
+    answer_brief: AnswerBrief
     as_of: datetime
     # 同threadの直近checkpoint(新しい順)。読出し・検証失敗時は空。
     prior_research: tuple[ResearchCheckpoint, ...] = Field(

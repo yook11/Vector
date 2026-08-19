@@ -33,7 +33,7 @@ from app.agent.research_checkpoint import (
 )
 from app.agent.running import (
     QuestionResolvedRunHooks,
-    RunContext,
+    RunIdentity,
     RunInput,
 )
 from app.agent.runs.contracts import (
@@ -188,8 +188,10 @@ async def run_agent_answer(
                         history=tuple(history),
                         prior_research=prior_research,
                     ),
-                    run_context=RunContext(
+                    identity=RunIdentity(
+                        user_id=prepared.user_id,
                         run_id=prepared.run_id,
+                        thread_id=prepared.thread_id,
                         as_of=as_of,
                     ),
                     hooks=QuestionResolvedRunHooks(events=activity_reporter),

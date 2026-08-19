@@ -18,22 +18,21 @@ from app.agent.evidence_collection import NewsCollector
 from app.agent.evidence_collection.external_search import ExternalResearchRuntimeFactory
 from app.agent.evidence_review import EvidenceReviewer
 from app.agent.planning.contract import QuestionPlanner
-from app.agent.question_context import QuestionContext
+from app.agent.question_context import AnswerBrief
 from app.agent.research_checkpoint import ResearchCheckpoint, ResearchTaskRecord
 from app.agent.running import (
     AnsweringPhases,
-    AnsweringRunContext,
-    RunContext,
+    RunIdentity,
     RunInput,
     RunResult,
 )
 from app.agent.threads.contracts import ThreadMessageSnapshot
+from tests.agent.running._harness import THREAD_ID, USER_ID
 
 PUBLIC_CONTRACTS = {
     "AnsweringRunner",
-    "AnsweringRunContext",
-    "QuestionContextPreparer",
-    "RunContext",
+    "AnswerBriefPreparer",
+    "RunIdentity",
     "RunHooks",
     "RunInput",
     "RunResult",
@@ -57,14 +56,6 @@ def _is_frozen_and_slotted(instance: object) -> bool:
     )
 
 
-def _run_context() -> object:
-    run_context_type = RunContext
-    return run_context_type(
-        run_id=UUID("019bd239-1ed4-7fbb-a336-04fe3c197645"),
-        as_of=datetime(2026, 7, 16, 9, 30, tzinfo=UTC),
-    )
-
-
 def test_running_package_exports_public_contracts() -> None:
     running = running_module
 
@@ -73,7 +64,9 @@ def test_running_package_exports_public_contracts() -> None:
         all(getattr(running, name, None) is not None for name in PUBLIC_CONTRACTS),
         "Runner" not in running.__all__,
         not hasattr(running, "Runner"),
+        not hasattr(running, "AnsweringRunContext"),
     ) == (
+        True,
         True,
         True,
         True,
@@ -133,90 +126,52 @@ def test_run_input_is_frozen_slotted_question_and_tuple_history() -> None:
     )
 
 
-def test_run_context_is_frozen_slotted_run_identity_and_time() -> None:
-    run_context_type = RunContext
+def test_run_identity_is_frozen_slotted_ids_and_time() -> None:
+    identity_type = RunIdentity
     run_id = UUID("019bd239-1ed4-7fbb-a336-04fe3c197645")
     as_of = datetime(2026, 7, 16, 9, 30, tzinfo=UTC)
-    run_context = run_context_type(run_id=run_id, as_of=as_of)
+    identity = identity_type(
+        user_id=USER_ID,
+        run_id=run_id,
+        thread_id=THREAD_ID,
+        as_of=as_of,
+    )
 
     with pytest.raises(FrozenInstanceError):
-        run_context.as_of = datetime(2026, 7, 16, 9, 31, tzinfo=UTC)
+        identity.as_of = datetime(2026, 7, 16, 9, 31, tzinfo=UTC)
 
     assert (
-        _field_contract(run_context_type),
-        _is_frozen_and_slotted(run_context),
-        run_context.run_id,
-        run_context.as_of,
+        _field_contract(identity_type),
+        _is_frozen_and_slotted(identity),
+        not hasattr(identity, "attempt_epoch"),
+        identity.user_id,
+        identity.run_id,
+        identity.thread_id,
+        identity.as_of,
     ) == (
-        (("run_id", UUID), ("as_of", datetime)),
+        (
+            ("user_id", UUID),
+            ("run_id", UUID),
+            ("thread_id", UUID),
+            ("as_of", datetime),
+        ),
         True,
+        True,
+        USER_ID,
         run_id,
+        THREAD_ID,
         as_of,
     )
 
 
-def test_answering_context_requires_prepared_question_context() -> None:
-    answering_context_type = AnsweringRunContext
-    run_context = _run_context()
-    question_context = QuestionContext(standalone_question="NVIDIA の直近発表は？")
-    answering_context = answering_context_type(
-        run_context=run_context,
-        question_context=question_context,
-        previous_answer="前回の回答本文",
-    )
-
-    with pytest.raises(TypeError):
-        answering_context_type(
-            run_context=run_context,
-            previous_answer="前回の回答本文",
-        )
-    with pytest.raises(TypeError):
-        answering_context_type(
-            run=run_context,
-            question_context=question_context,
-            previous_answer="前回の回答本文",
-        )
-    with pytest.raises(FrozenInstanceError):
-        answering_context.previous_answer = "変更後の回答本文"
-
-    assert (
-        _field_contract(answering_context_type),
-        _is_frozen_and_slotted(answering_context),
-        answering_context.run_context is run_context,
-        not hasattr(answering_context, "run"),
-        answering_context.question_context is question_context,
-        answering_context.previous_answer,
-    ) == (
-        (
-            ("run_context", RunContext),
-            ("question_context", QuestionContext),
-            ("previous_answer", str),
-        ),
-        True,
-        True,
-        True,
-        True,
-        "前回の回答本文",
-    )
-
-
-def test_run_result_is_frozen_slotted_output_and_answering_context() -> None:
-    """agent-research-checkpoint-context-slice: RunResultは既存2 fieldに加え、
-    外部検索を実行しなかったRunではNoneのままの`research_checkpoint`
-    (default None)を持つ。フィールド完全一致を固定するcontract testのため、
-    新契約は3 fieldの完全一致で表す。
-    """
-    answering_context_type = AnsweringRunContext
+def test_run_result_is_frozen_slotted_output_and_answer_brief() -> None:
+    """RunResultはfinal_output、同じAnswerBrief、optionalなresearch_checkpointを持つ。"""
     run_result_type = RunResult
-    answering_context = answering_context_type(
-        run_context=_run_context(),
-        question_context=QuestionContext(standalone_question="NVIDIA の直近発表は？"),
-        previous_answer="",
-    )
+    answer_brief = AnswerBrief(standalone_question="NVIDIA の直近発表は？")
     final_output = AnswerQuestionResult.model_construct()
     run_result = run_result_type(
         final_output=final_output,
-        context=answering_context,
+        answer_brief=answer_brief,
     )
     checkpoint = ResearchCheckpoint(
         as_of=datetime(2026, 7, 16, 9, 30, tzinfo=UTC),
@@ -231,30 +186,41 @@ def test_run_result_is_frozen_slotted_output_and_answering_context() -> None:
     )
     run_result_with_checkpoint = run_result_type(
         final_output=final_output,
-        context=answering_context,
+        answer_brief=answer_brief,
         research_checkpoint=checkpoint,
     )
 
     with pytest.raises(FrozenInstanceError):
-        run_result.context = answering_context
+        run_result.answer_brief = answer_brief
+    with pytest.raises(TypeError):
+        run_result_type(
+            final_output=final_output,
+            context=answer_brief,
+        )
 
     assert (
         _field_contract(run_result_type),
         _is_frozen_and_slotted(run_result),
         run_result.final_output is final_output,
-        run_result.context is answering_context,
+        run_result.answer_brief is answer_brief,
         run_result.research_checkpoint,
         run_result_with_checkpoint.research_checkpoint is checkpoint,
+        not hasattr(run_result, "context"),
+        not hasattr(run_result, "previous_answer"),
+        not hasattr(run_result, "identity"),
     ) == (
         (
             ("final_output", AnswerQuestionResult),
-            ("context", answering_context_type),
+            ("answer_brief", AnswerBrief),
             ("research_checkpoint", ResearchCheckpoint | None),
         ),
         True,
         True,
         True,
         None,
+        True,
+        True,
+        True,
         True,
     )
 

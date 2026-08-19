@@ -27,7 +27,7 @@ from app.agent.evidence_collection.external_search.contract import (
     MISSING_ITEM_MAX_CHARS,
 )
 from app.agent.planning.contract import TargetTimeWindow
-from app.agent.question_context.contract import QuestionContext
+from app.agent.question_context.contract import AnswerBrief
 
 _REMOVED_OUTPUT_FIELDS = (
     "sufficiency",
@@ -45,7 +45,7 @@ def _request(
     active_goal: str = "投資判断を進める",
 ) -> AnsweringRequest:
     return AnsweringRequest(
-        context=QuestionContext(
+        answer_brief=AnswerBrief(
             standalone_question=standalone_question,
             answer_requirements=(answer_requirement_description,),
             relevant_prior_coverage=relevant_prior_coverage,

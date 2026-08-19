@@ -18,7 +18,7 @@ from app.agent.answering.evidence_answer.contract import (
 from app.agent.answering.evidence_answer.evidence import AnswerInputEvidence
 from app.agent.contract import ExternalUrlSource
 from app.agent.planning.contract import TargetTimeWindow
-from app.agent.question_context.contract import QuestionContext
+from app.agent.question_context.contract import AnswerBrief
 from app.agent.runtime.gemini import GeminiAgentRuntime
 from tests.agent.runtime._helpers import FakeGeminiClient
 
@@ -54,7 +54,7 @@ class _SdkStream:
 
 def _request(*, question: str = "QUESTION_CONTENTS_SENTINEL") -> AnsweringRequest:
     return AnsweringRequest(
-        context=QuestionContext(
+        answer_brief=AnswerBrief(
             standalone_question=question,
             answer_requirements=(
                 "CONTENT_REQUIREMENT_SENTINEL",

@@ -31,7 +31,7 @@ from app.agent.planning.prompts import (
     PLANNER_PROMPT_VERSION,
     render_planning_input,
 )
-from app.agent.question_context.contract import QuestionContext
+from app.agent.question_context.contract import AnswerBrief
 
 
 def _request(
@@ -42,7 +42,7 @@ def _request(
     active_goal: str = "goal marker",
 ) -> PlanningRequest:
     return PlanningRequest(
-        context=QuestionContext(
+        answer_brief=AnswerBrief(
             standalone_question=question,
             answer_requirements=(answer_requirement_description,),
             relevant_prior_coverage=relevant_prior_coverage,
