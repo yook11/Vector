@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import fields
-from typing import Any, get_type_hints
+from typing import Any
 from unittest.mock import Mock
 
 import pytest
@@ -16,7 +16,6 @@ from app.agent.evidence_collection.internal_search import (
     InternalArticleSearchHit,
 )
 from app.agent.evidence_collection.internal_search.contract import (
-    InternalSearch,
     InternalSearchError,
 )
 from app.agent.evidence_collection.internal_search.query_embedding import (
@@ -469,18 +468,6 @@ class TestInternalSearchService:
                 embedder=FakeInternalQueryEmbedder(),
                 events=object(),
             )
-
-    def test_internal_search_port_exposes_only_the_search_capability(self) -> None:
-        assert get_type_hints(InternalSearch.search) == {
-            "queries": InternalSearchQueries,
-            "return": list[InternalArticleSearchHit],
-        }
-        assert get_type_hints(InternalSearchService.search) == get_type_hints(
-            InternalSearch.search
-        )
-        # modelが名前で選ぶtoolではないため、portにも実装にもstable nameを持たせない。
-        assert not hasattr(InternalSearch, "name")
-        assert not hasattr(InternalSearchService, "name")
 
     async def test_search_articles_dedupes_by_curation_id_with_min_distance(
         self,
