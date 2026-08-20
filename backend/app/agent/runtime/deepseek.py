@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from dataclasses import dataclass
 from typing import Any, Final, cast
 
@@ -20,6 +21,14 @@ from opentelemetry.trace import SpanKind, StatusCode
 
 from app.agent.agent import Agent
 from app.agent.error_type import span_error_type
+from app.agent.recording.llm import (
+    LlmCallRecorder,
+    close_llm_call,
+    logfire_llm_call_recorder,
+    outcome_from_span_result,
+    usage_from_deepseek_usage,
+)
+from app.agent.recording.types import LlmCallResult, PhaseStatus, Usage
 from app.agent.runtime._structured_output import (
     parse_json_object,
     thaw_schema,
@@ -51,16 +60,20 @@ class DeepSeekOutputBinding:
 class DeepSeekAgentRuntime:
     """借りたDeepSeek clientで1 provider attemptだけを実行する。"""
 
-    __slots__ = ("_binding", "_client")
+    __slots__ = ("_binding", "_client", "_llm_calls")
 
     def __init__(
         self,
         *,
         client: AsyncOpenAI,
         binding: DeepSeekOutputBinding,
+        llm_calls: LlmCallRecorder | None = None,
     ) -> None:
         self._client = client
         self._binding = binding
+        self._llm_calls = (
+            llm_calls if llm_calls is not None else logfire_llm_call_recorder
+        )
 
     async def call[InputT, OutputT](
         self,
@@ -83,6 +96,15 @@ class DeepSeekAgentRuntime:
         request = _build_request(agent, input, binding=self._binding)
         classified_error: Exception | None = None
         output: OutputT | object = _MISSING_OUTPUT
+        status = PhaseStatus.FAILED
+        result: LlmCallResult | None = None
+        usage: Usage | None = None
+        llm_call = self._llm_calls.start(
+            agent_name=agent.name,
+            provider=agent.model.provider,
+            model=agent.model.name,
+            attempt_number=attempt_number,
+        )
 
         span_attributes = {
             "agent_name": agent.name,
@@ -92,49 +114,65 @@ class DeepSeekAgentRuntime:
             GEN_AI_PROVIDER_NAME: "deepseek",
             GEN_AI_REQUEST_MODEL: agent.model.name,
         }
-        with logfire.span(
-            _SPAN_NAME,
-            _span_kind=SpanKind.CLIENT,
-            **span_attributes,
-        ) as span:
-            try:
-                response = await self._client.chat.completions.create(**request)
-            except Exception as exc:
-                translated_error = translate_deepseek_error(exc)
-                if translated_error is exc:
-                    raise
-                classified_error = translated_error
-                _record_classified_error(
-                    span,
-                    result="provider_error",
-                    error_type=span_error_type(translated_error),
-                )
-                record_ai_provider_exhausted(
-                    translated_error, provider=agent.model.provider
-                )
-            else:
-                _record_usage(span, getattr(response, "usage", None))
+        try:
+            with logfire.span(
+                _SPAN_NAME,
+                _span_kind=SpanKind.CLIENT,
+                **span_attributes,
+            ) as span:
                 try:
-                    output = _parse_output(
-                        agent,
-                        response,
-                        binding=self._binding,
-                    )
-                except AgentResponseInvalidError as exc:
-                    classified_error = exc
+                    response = await self._client.chat.completions.create(**request)
+                except Exception as exc:
+                    translated_error = translate_deepseek_error(exc)
+                    if translated_error is exc:
+                        raise
+                    classified_error = translated_error
                     _record_classified_error(
                         span,
-                        result="invalid_response",
-                        error_type=span_error_type(exc),
+                        result="provider_error",
+                        error_type=span_error_type(translated_error),
                     )
+                    record_ai_provider_exhausted(
+                        translated_error, provider=agent.model.provider
+                    )
+                    status, result = outcome_from_span_result("provider_error")
                 else:
-                    span.set_attribute("result", "succeeded")
+                    usage = _record_usage(span, getattr(response, "usage", None))
+                    try:
+                        output = _parse_output(
+                            agent,
+                            response,
+                            binding=self._binding,
+                        )
+                    except AgentResponseInvalidError as exc:
+                        classified_error = exc
+                        _record_classified_error(
+                            span,
+                            result="invalid_response",
+                            error_type=span_error_type(exc),
+                        )
+                        status, result = outcome_from_span_result("invalid_response")
+                    else:
+                        span.set_attribute("result", "succeeded")
+                        status, result = outcome_from_span_result("succeeded")
 
-        if classified_error is not None:
-            raise classified_error
-        if output is _MISSING_OUTPUT:
-            raise RuntimeError("DeepSeek runtime completed without output")
-        return cast(OutputT, output)
+            if classified_error is not None:
+                raise classified_error
+            if output is _MISSING_OUTPUT:
+                raise RuntimeError("DeepSeek runtime completed without output")
+            return cast(OutputT, output)
+        except (asyncio.CancelledError, GeneratorExit):
+            status = PhaseStatus.STOPPED
+            result = None
+            raise
+        finally:
+            close_llm_call(
+                self._llm_calls,
+                llm_call,
+                status=status,
+                result=result,
+                usage=usage,
+            )
 
 
 def _build_request[InputT, OutputT](
@@ -207,37 +245,25 @@ def _missing_declared_output() -> AgentResponseInvalidError:
     )
 
 
-def _record_usage(span: Any, usage: object | None) -> None:
-    if usage is None:
-        return
-    _record_token_count(
-        span,
-        GEN_AI_USAGE_INPUT_TOKENS,
-        getattr(usage, "prompt_tokens", None),
-    )
-    _record_token_count(
-        span,
-        GEN_AI_USAGE_OUTPUT_TOKENS,
-        getattr(usage, "completion_tokens", None),
-    )
-
-    prompt_details = getattr(usage, "prompt_tokens_details", None)
-    _record_token_count(
-        span,
-        GEN_AI_USAGE_CACHE_READ_INPUT_TOKENS,
-        getattr(prompt_details, "cached_tokens", None),
-    )
-    completion_details = getattr(usage, "completion_tokens_details", None)
-    _record_token_count(
-        span,
-        _GEN_AI_REASONING_OUTPUT_TOKENS,
-        getattr(completion_details, "reasoning_tokens", None),
-    )
-
-
-def _record_token_count(span: Any, attribute_name: str, value: object) -> None:
-    if isinstance(value, int) and not isinstance(value, bool):
-        span.set_attribute(attribute_name, value)
+def _record_usage(span: Any, usage: object | None) -> Usage | None:
+    extracted = usage_from_deepseek_usage(usage)
+    if extracted is None:
+        return None
+    if extracted.input_tokens is not None:
+        span.set_attribute(GEN_AI_USAGE_INPUT_TOKENS, extracted.input_tokens)
+    if extracted.output_tokens is not None:
+        span.set_attribute(GEN_AI_USAGE_OUTPUT_TOKENS, extracted.output_tokens)
+    if extracted.cache_read_input_tokens is not None:
+        span.set_attribute(
+            GEN_AI_USAGE_CACHE_READ_INPUT_TOKENS,
+            extracted.cache_read_input_tokens,
+        )
+    if extracted.reasoning_output_tokens is not None:
+        span.set_attribute(
+            _GEN_AI_REASONING_OUTPUT_TOKENS,
+            extracted.reasoning_output_tokens,
+        )
+    return extracted
 
 
 def _record_classified_error(

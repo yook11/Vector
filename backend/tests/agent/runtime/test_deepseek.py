@@ -33,7 +33,11 @@ from tests.cloudwatch.records import metric_records
 
 async def test_constructor_accepts_only_borrowed_client_and_output_binding() -> None:
     """runtime が借用 client と出力 binding だけを受け取る境界を守る。"""
-    assert list(signature(DeepSeekAgentRuntime).parameters) == ["client", "binding"]
+    assert list(signature(DeepSeekAgentRuntime).parameters) == [
+        "client",
+        "binding",
+        "llm_calls",
+    ]
     DeepSeekAgentRuntime(
         client=FakeDeepSeekClient([success_response()]), binding=make_binding()
     )
@@ -197,9 +201,9 @@ async def test_known_error_translates_and_unknown_keeps_identity() -> None:
             make_agent(), object(), attempt_number=1
         )
     with pytest.raises(RuntimeError) as raised:
-        await DeepSeekAgentRuntime(
-            client=unknown_client, binding=make_binding()
-        ).call(make_agent(), object(), attempt_number=1)
+        await DeepSeekAgentRuntime(client=unknown_client, binding=make_binding()).call(
+            make_agent(), object(), attempt_number=1
+        )
 
     assert known_raised.value.__context__ is None
     assert known_raised.value.__cause__ is None

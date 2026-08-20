@@ -24,6 +24,14 @@ from opentelemetry.trace import SpanKind, StatusCode
 
 from app.agent.agent import Agent
 from app.agent.error_type import span_error_type
+from app.agent.recording.llm import (
+    LlmCallRecorder,
+    close_llm_call,
+    logfire_llm_call_recorder,
+    outcome_from_span_result,
+    usage_from_gemini_metadata,
+)
+from app.agent.recording.types import LlmCallResult, PhaseStatus, Usage
 from app.agent.runtime._structured_output import (
     parse_json_object,
     thaw_schema,
@@ -56,10 +64,18 @@ _TRACER = trace.get_tracer(__name__)
 class GeminiAgentRuntime:
     """借りたGemini async clientで1 provider attemptだけを実行する。"""
 
-    __slots__ = ("_client",)
+    __slots__ = ("_client", "_llm_calls")
 
-    def __init__(self, *, client: AsyncClient) -> None:
+    def __init__(
+        self,
+        *,
+        client: AsyncClient,
+        llm_calls: LlmCallRecorder | None = None,
+    ) -> None:
         self._client = client
+        self._llm_calls = (
+            llm_calls if llm_calls is not None else logfire_llm_call_recorder
+        )
 
     async def call[InputT, OutputT](
         self,
@@ -83,6 +99,15 @@ class GeminiAgentRuntime:
         config = _build_config(agent, structured=True)
         classified_error: Exception | None = None
         output: OutputT | object = _MISSING_OUTPUT
+        status = PhaseStatus.FAILED
+        result: LlmCallResult | None = None
+        usage: Usage | None = None
+        llm_call = self._llm_calls.start(
+            agent_name=agent.name,
+            provider=agent.model.provider,
+            model=agent.model.name,
+            attempt_number=attempt_number,
+        )
 
         span_attributes = {
             "agent_name": agent.name,
@@ -92,89 +117,112 @@ class GeminiAgentRuntime:
             GEN_AI_PROVIDER_NAME: "gcp.gemini",
             GEN_AI_REQUEST_MODEL: agent.model.name,
         }
-        with logfire.span(
-            _SPAN_NAME,
-            _span_kind=SpanKind.CLIENT,
-            **span_attributes,
-        ) as span:
-            try:
-                response = await self._client.models.generate_content(
-                    model=agent.model.name,
-                    contents=contents,
-                    config=config,
-                )
-            except Exception as exc:
-                translated_error = translate_gemini_error(exc)
-                if translated_error is exc:
-                    raise
-                classified_error = translated_error
-                _record_classified_error(
-                    span,
-                    result="provider_error",
-                    error_type=span_error_type(translated_error),
-                )
-                record_ai_provider_exhausted(
-                    translated_error, provider=agent.model.provider
-                )
-            else:
-                _record_usage(span, getattr(response, "usage_metadata", None))
-                finish_reason: str | None = None
-                if _has_prompt_block(response):
-                    classified_error = AIProviderInputRejectedError(
-                        reason=GeminiContentRejectionReason.INPUT_BLOCKED,
-                        rejection_kind=AIProviderContentRejectionKind.SAFETY,
+        try:
+            with logfire.span(
+                _SPAN_NAME,
+                _span_kind=SpanKind.CLIENT,
+                **span_attributes,
+            ) as span:
+                try:
+                    response = await self._client.models.generate_content(
+                        model=agent.model.name,
+                        contents=contents,
+                        config=config,
                     )
-                    _record_classified_error(
-                        span,
-                        result="blocked",
-                        error_type=span_error_type(classified_error),
-                    )
-                else:
-                    finish_reason = _finish_reason_name(response)
-                if (
-                    classified_error is None
-                    and finish_reason in OUTPUT_BLOCKED_FINISH_REASONS
-                ):
-                    classified_error = AIProviderOutputBlockedError(
-                        reason=output_blocked_reason(finish_reason),
-                        rejection_kind=(
-                            AIProviderContentRejectionKind.SAFETY
-                            if finish_reason == "SAFETY"
-                            else AIProviderContentRejectionKind.OTHER
-                        ),
-                    )
-                    _record_classified_error(
-                        span,
-                        result="blocked",
-                        error_type=span_error_type(classified_error),
-                    )
-                elif classified_error is None and finish_reason == "MAX_TOKENS":
-                    classified_error = AIProviderOutputTruncatedError(
-                        reason=GeminiStateReason.OUTPUT_TOKEN_LIMIT_REACHED
-                    )
+                except Exception as exc:
+                    translated_error = translate_gemini_error(exc)
+                    if translated_error is exc:
+                        raise
+                    classified_error = translated_error
                     _record_classified_error(
                         span,
                         result="provider_error",
-                        error_type=span_error_type(classified_error),
+                        error_type=span_error_type(translated_error),
                     )
-                elif classified_error is None:
-                    try:
-                        output = _parse_output(agent, response)
-                    except AgentResponseInvalidError as exc:
-                        classified_error = exc
+                    record_ai_provider_exhausted(
+                        translated_error, provider=agent.model.provider
+                    )
+                    status, result = outcome_from_span_result("provider_error")
+                else:
+                    usage = _record_usage(
+                        span, getattr(response, "usage_metadata", None)
+                    )
+                    finish_reason: str | None = None
+                    if _has_prompt_block(response):
+                        classified_error = AIProviderInputRejectedError(
+                            reason=GeminiContentRejectionReason.INPUT_BLOCKED,
+                            rejection_kind=AIProviderContentRejectionKind.SAFETY,
+                        )
                         _record_classified_error(
                             span,
-                            result="invalid_response",
-                            error_type=span_error_type(exc),
+                            result="blocked",
+                            error_type=span_error_type(classified_error),
                         )
+                        status, result = outcome_from_span_result("blocked")
                     else:
-                        span.set_attribute("result", "succeeded")
+                        finish_reason = _finish_reason_name(response)
+                    if (
+                        classified_error is None
+                        and finish_reason in OUTPUT_BLOCKED_FINISH_REASONS
+                    ):
+                        classified_error = AIProviderOutputBlockedError(
+                            reason=output_blocked_reason(finish_reason),
+                            rejection_kind=(
+                                AIProviderContentRejectionKind.SAFETY
+                                if finish_reason == "SAFETY"
+                                else AIProviderContentRejectionKind.OTHER
+                            ),
+                        )
+                        _record_classified_error(
+                            span,
+                            result="blocked",
+                            error_type=span_error_type(classified_error),
+                        )
+                        status, result = outcome_from_span_result("blocked")
+                    elif classified_error is None and finish_reason == "MAX_TOKENS":
+                        classified_error = AIProviderOutputTruncatedError(
+                            reason=GeminiStateReason.OUTPUT_TOKEN_LIMIT_REACHED
+                        )
+                        _record_classified_error(
+                            span,
+                            result="provider_error",
+                            error_type=span_error_type(classified_error),
+                        )
+                        status, result = outcome_from_span_result("provider_error")
+                    elif classified_error is None:
+                        try:
+                            output = _parse_output(agent, response)
+                        except AgentResponseInvalidError as exc:
+                            classified_error = exc
+                            _record_classified_error(
+                                span,
+                                result="invalid_response",
+                                error_type=span_error_type(exc),
+                            )
+                            status, result = outcome_from_span_result(
+                                "invalid_response"
+                            )
+                        else:
+                            span.set_attribute("result", "succeeded")
+                            status, result = outcome_from_span_result("succeeded")
 
-        if classified_error is not None:
-            raise classified_error
-        if output is _MISSING_OUTPUT:
-            raise RuntimeError("Gemini runtime completed without output")
-        return cast(OutputT, output)
+            if classified_error is not None:
+                raise classified_error
+            if output is _MISSING_OUTPUT:
+                raise RuntimeError("Gemini runtime completed without output")
+            return cast(OutputT, output)
+        except (asyncio.CancelledError, GeneratorExit):
+            status = PhaseStatus.STOPPED
+            result = None
+            raise
+        finally:
+            close_llm_call(
+                self._llm_calls,
+                llm_call,
+                status=status,
+                result=result,
+                usage=usage,
+            )
 
     def stream_text[InputT, OutputT](
         self,
@@ -232,12 +280,21 @@ class GeminiAgentRuntime:
                 GEN_AI_REQUEST_MODEL: agent.model.name,
             },
         )
+        llm_call = self._llm_calls.start(
+            agent_name=agent.name,
+            provider=agent.model.provider,
+            model=agent.model.name,
+            attempt_number=attempt_number,
+        )
         sdk_stream: AsyncIterator[object] | None = None
         classified_error: Exception | None = None
         translated_cause: Exception | None = None
         unknown_error: Exception | None = None
         terminal_reason_seen = False
         normal_eof = False
+        status = PhaseStatus.STOPPED
+        result: LlmCallResult | None = None
+        usage: Usage | None = None
         try:
             try:
                 sdk_stream = await self._client.models.generate_content_stream(
@@ -246,7 +303,11 @@ class GeminiAgentRuntime:
                     config=config,
                 )
                 async for chunk in sdk_stream:
-                    _record_usage(span, getattr(chunk, "usage_metadata", None))
+                    chunk_usage = _record_usage(
+                        span, getattr(chunk, "usage_metadata", None)
+                    )
+                    if chunk_usage is not None:
+                        usage = chunk_usage
                     if _has_prompt_block(chunk):
                         classified_error = AIProviderInputRejectedError(
                             reason=GeminiContentRejectionReason.INPUT_BLOCKED,
@@ -309,25 +370,36 @@ class GeminiAgentRuntime:
 
             if normal_eof:
                 span.set_attribute("result", "succeeded")
+                status, result = outcome_from_span_result("succeeded")
             elif classified_error is not None:
-                result = (
+                span_result = (
                     "blocked"
                     if isinstance(classified_error, AIProviderOutputBlockedError)
                     else "provider_error"
                 )
                 _record_classified_error(
                     span,
-                    result=result,
+                    result=span_result,
                     error_type=span_error_type(classified_error),
                 )
                 record_ai_provider_exhausted(
                     classified_error, provider=agent.model.provider
                 )
+                status, result = outcome_from_span_result(span_result)
             elif unknown_error is not None:
                 span.record_exception(unknown_error)
                 span.set_status(StatusCode.ERROR, str(unknown_error))
+                status = PhaseStatus.FAILED
+                result = None
         finally:
             span.end()
+            close_llm_call(
+                self._llm_calls,
+                llm_call,
+                status=status,
+                result=result,
+                usage=usage,
+            )
 
         if classified_error is not None:
             if translated_cause is not None:
@@ -422,22 +494,25 @@ def _parse_output[InputT, OutputT](
     return validate_output(agent, parse_json_object(text))
 
 
-def _record_usage(span: Any, usage: object | None) -> None:
-    if usage is None:
-        return
-    fields = (
-        ("prompt_token_count", GEN_AI_USAGE_INPUT_TOKENS),
-        ("candidates_token_count", GEN_AI_USAGE_OUTPUT_TOKENS),
-        (
-            "cached_content_token_count",
+def _record_usage(span: Any, usage: object | None) -> Usage | None:
+    extracted = usage_from_gemini_metadata(usage)
+    if extracted is None:
+        return None
+    if extracted.input_tokens is not None:
+        span.set_attribute(GEN_AI_USAGE_INPUT_TOKENS, extracted.input_tokens)
+    if extracted.output_tokens is not None:
+        span.set_attribute(GEN_AI_USAGE_OUTPUT_TOKENS, extracted.output_tokens)
+    if extracted.cache_read_input_tokens is not None:
+        span.set_attribute(
             GEN_AI_USAGE_CACHE_READ_INPUT_TOKENS,
-        ),
-        ("thoughts_token_count", _GEN_AI_REASONING_OUTPUT_TOKENS),
-    )
-    for source_name, attribute_name in fields:
-        value = getattr(usage, source_name, None)
-        if value is not None:
-            span.set_attribute(attribute_name, value)
+            extracted.cache_read_input_tokens,
+        )
+    if extracted.reasoning_output_tokens is not None:
+        span.set_attribute(
+            _GEN_AI_REASONING_OUTPUT_TOKENS,
+            extracted.reasoning_output_tokens,
+        )
+    return extracted
 
 
 def _record_classified_error(

@@ -46,13 +46,11 @@ async def test_constructor_accepts_only_borrowed_async_client() -> None:
     """runtime が借用した非同期 client だけを受け取る境界を守る。"""
     client = FakeGeminiClient([success_response()])
 
-    assert list(signature(GeminiAgentRuntime).parameters) == ["client"]
+    assert list(signature(GeminiAgentRuntime).parameters) == ["client", "llm_calls"]
     GeminiAgentRuntime(client=client)
 
 
-async def test_call_uses_provider_once_and_returns_validated_output_directly() -> (
-    None
-):
+async def test_call_uses_provider_once_and_returns_validated_output_directly() -> None:
     """一試行が一度だけ provider を呼び検証済み出力を返す。"""
     client = FakeGeminiClient([success_response(result="validated")])
     runtime = GeminiAgentRuntime(client=client)
@@ -108,9 +106,7 @@ async def test_request_separates_instructions_contents_and_thaws_schema() -> Non
     assert isinstance(response_schema["properties"]["tags"]["items"], dict)
 
 
-async def test_same_runtime_does_not_carry_agent_or_input_state_between_calls() -> (
-    None
-):
+async def test_same_runtime_does_not_carry_agent_or_input_state_between_calls() -> None:
     """同一 runtime の連続呼出しで agent と入力の状態を持ち越さない。"""
     client = FakeGeminiClient(
         [
