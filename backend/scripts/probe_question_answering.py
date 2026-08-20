@@ -39,11 +39,11 @@ from app.agent.evidence_collection import NewsCollector, Researcher
 from app.agent.evidence_collection.internal_search.ai.gemini import (
     GeminiQueryEmbedder,
 )
-from app.agent.evidence_collection.internal_search.article_search import (
+from app.agent.evidence_collection.internal_search.article_repository import (
     PgVectorArticleSearchRepository,
 )
-from app.agent.evidence_collection.internal_search.tool import (
-    PgVectorInternalSearchTool,
+from app.agent.evidence_collection.internal_search.service import (
+    InternalSearchService,
 )
 from app.agent.evidence_review import EvidenceReviewer
 from app.agent.input_safety.agent import INPUT_SAFETY_AGENT
@@ -68,12 +68,8 @@ MAX_EXTERNAL_RESEARCH_TASKS = 3
 
 
 class _UnreachableInternalSearch:
-    @property
-    def name(self) -> str:
-        return "internal_search"
-
-    async def search(self, input: object) -> list[object]:
-        raise AssertionError(f"internal search must not be called: {input!r}")
+    async def search(self, queries: object) -> list[object]:
+        raise AssertionError(f"internal search must not be called: {queries!r}")
 
 
 class _FixedSearchPlanner:
@@ -218,7 +214,7 @@ async def _probe_search(
     )
     events = _RecordingAnswerEvents()
     session_factory = async_sessionmaker(engine, expire_on_commit=False)
-    internal_search = PgVectorInternalSearchTool(
+    internal_search = InternalSearchService(
         embedder=GeminiQueryEmbedder(),
         article_search_repository=PgVectorArticleSearchRepository(session_factory),
     )

@@ -8,11 +8,8 @@ from typing import Protocol
 import structlog
 
 from app.agent.evidence_collection.internal_search.contract import (
-    INTERNAL_SEARCH_TOOL_NAME,
     InternalArticleSearchHit,
     InternalSearchError,
-    InternalSearchToolInput,
-    InternalSearchToolName,
 )
 from app.agent.evidence_collection.internal_search.metrics import (
     record_internal_retrieval_outcome,
@@ -26,7 +23,7 @@ from app.agent.evidence_collection.internal_search.query_embedding import (
 from app.analysis.ai_provider_errors import AIProviderError
 from app.analysis.embedding.domain.value_objects import EmbeddingVector
 
-__all__ = ["PgVectorInternalSearchTool"]
+__all__ = ["InternalSearchService"]
 
 logger = structlog.get_logger(__name__)
 
@@ -53,22 +50,18 @@ class InternalQueryEmbeddingCache(Protocol):
 
 
 @dataclass(frozen=True, slots=True)
-class PgVectorInternalSearchTool:
-    """Internal Search Tool contract (`InternalSearchTool`) の実装。"""
+class InternalSearchService:
+    """Internal search port (`InternalSearch`) の実装。"""
 
     embedder: InternalQueryEmbedder
     article_search_repository: ArticleVectorSearchRepository | None = None
     query_embedding_cache: InternalQueryEmbeddingCache | None = None
 
-    @property
-    def name(self) -> InternalSearchToolName:
-        return INTERNAL_SEARCH_TOOL_NAME
-
     async def search(
         self,
-        input: InternalSearchToolInput,
+        queries: InternalSearchQueries,
     ) -> list[InternalArticleSearchHit]:
-        return await self._search_articles(input.queries)
+        return await self._search_articles(queries)
 
     async def embed_queries(
         self,

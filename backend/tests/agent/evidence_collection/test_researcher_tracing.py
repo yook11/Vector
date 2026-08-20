@@ -54,7 +54,7 @@ def _hit(*, assessment_id: int, title: str) -> InternalArticleSearchHit:
     )
 
 
-class _InternalTool:
+class _FakeInternalSearch:
     def __init__(
         self,
         *,
@@ -64,11 +64,7 @@ class _InternalTool:
         self._hits = hits or []
         self._error = error
 
-    @property
-    def name(self) -> str:
-        return "internal_search"
-
-    async def search(self, input: object) -> list[InternalArticleSearchHit]:
+    async def search(self, queries: object) -> list[InternalArticleSearchHit]:
         if self._error is not None:
             raise self._error
         return list(self._hits)
@@ -87,7 +83,7 @@ async def test_internal_search_success_creates_span_scoped_to_task_without_agent
     capfire: CaptureLogfire,
 ) -> None:
     researcher = Researcher(
-        internal_search=_InternalTool(hits=[_hit(assessment_id=1001, title="a")])
+        internal_search=_FakeInternalSearch(hits=[_hit(assessment_id=1001, title="a")])
     )
 
     await researcher.collect(
@@ -118,7 +114,9 @@ async def test_internal_search_failure_marks_span_error_while_researcher_degrade
     呼び出し側には例外が伝わらない。
     """
     researcher = Researcher(
-        internal_search=_InternalTool(error=InternalSearchError(phase="article_search"))
+        internal_search=_FakeInternalSearch(
+            error=InternalSearchError(phase="article_search")
+        )
     )
 
     collected = await researcher.collect(
@@ -142,7 +140,7 @@ async def test_internal_search_failure_marks_span_error_while_researcher_degrade
 async def test_parallel_tasks_get_own_internal_search_span_with_distinct_task_index(
     capfire: CaptureLogfire,
 ) -> None:
-    researcher = Researcher(internal_search=_InternalTool(hits=[]))
+    researcher = Researcher(internal_search=_FakeInternalSearch(hits=[]))
 
     await asyncio.gather(
         researcher.collect(

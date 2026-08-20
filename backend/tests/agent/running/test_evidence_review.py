@@ -132,7 +132,7 @@ class _Factory:
         return scope
 
 
-class _InternalTool:
+class _FakeInternalSearch:
     """queryをkeyにhits/error/待ち合わせを切り替えるfake。task間を独立制御する。"""
 
     def __init__(
@@ -149,13 +149,9 @@ class _InternalTool:
         self._started_by_query = started_by_query or {}
         self.calls: list[Any] = []
 
-    @property
-    def name(self) -> str:
-        return "internal_search"
-
-    async def search(self, input: Any) -> list[InternalArticleSearchHit]:
-        self.calls.append(input)
-        query = input.queries.queries[0]
+    async def search(self, queries: Any) -> list[InternalArticleSearchHit]:
+        self.calls.append(queries)
+        query = queries.queries[0]
         started = self._started_by_query.get(query)
         if started is not None:
             started.set()
@@ -173,7 +169,7 @@ def _runner(
     query_runtime: object,
     reviewer_runtime: object,
     external_tool: object,
-    internal_tool: object,
+    internal_search: object,
     events: object | None = None,
     answer_requirements: tuple[str, ...] | None = None,
     answerer: _EvidenceAnswerer | None = None,
@@ -188,7 +184,7 @@ def _runner(
     phases = AnsweringPhases(
         planner=_Planner(plan),
         collector=NewsCollector(
-            researcher=Researcher(internal_search=internal_tool, events=events),  # type: ignore[arg-type]
+            researcher=Researcher(internal_search=internal_search, events=events),  # type: ignore[arg-type]
         ),
         reviewer=EvidenceReviewer(),
         external_runtime_factory=factory,
@@ -237,7 +233,7 @@ async def test_review_runs_once_for_a_three_task_search_plan() -> None:
         _task("goal-B", ["query-b"]),
         _task("goal-C", ["query-c"]),
     ]
-    internal_tool = _InternalTool(
+    internal_search = _FakeInternalSearch(
         hits_by_query={
             "query-a": [
                 _internal_hit(assessment_id=1001, curation_id=1, title="hit-a")
@@ -258,7 +254,7 @@ async def test_review_runs_once_for_a_three_task_search_plan() -> None:
         query_runtime=ScriptedAgentRuntime([_query_draft([]) for _ in tasks]),
         reviewer_runtime=reviewer_runtime,
         external_tool=_ExternalTool(),
-        internal_tool=internal_tool,
+        internal_search=internal_search,
     )
 
     await _run(runner)
@@ -272,7 +268,7 @@ async def test_review_does_not_start_before_every_tasks_collection_completes() -
     """S1 A2。最も遅いtaskの収集完了が精査開始の条件になる。"""
     gate_a = asyncio.Event()
     started_a = asyncio.Event()
-    internal_tool = _InternalTool(
+    internal_search = _FakeInternalSearch(
         hits_by_query={
             "query-a": [
                 _internal_hit(assessment_id=1001, curation_id=1, title="hit-a")
@@ -300,7 +296,7 @@ async def test_review_does_not_start_before_every_tasks_collection_completes() -
         query_runtime=ScriptedAgentRuntime([_query_draft([]) for _ in tasks]),
         reviewer_runtime=reviewer_runtime,
         external_tool=_ExternalTool(),
-        internal_tool=internal_tool,
+        internal_search=internal_search,
     )
 
     running = asyncio.create_task(_run(runner))
@@ -333,7 +329,7 @@ async def test_review_is_skipped_when_every_task_has_no_hits() -> None:
         query_runtime=ScriptedAgentRuntime([_query_draft([]) for _ in tasks]),
         reviewer_runtime=reviewer_runtime,
         external_tool=_ExternalTool(),
-        internal_tool=_InternalTool(),
+        internal_search=_FakeInternalSearch(),
         events=events,
     )
 
@@ -356,7 +352,7 @@ async def test_review_still_runs_using_the_hits_that_survive_a_failed_task() -> 
         _task("goal-B", ["query-b"]),
         _task("goal-C", ["query-c"]),
     ]
-    internal_tool = _InternalTool(
+    internal_search = _FakeInternalSearch(
         hits_by_query={
             "query-a": [
                 _internal_hit(assessment_id=1001, curation_id=1, title="A-hit")
@@ -384,7 +380,7 @@ async def test_review_still_runs_using_the_hits_that_survive_a_failed_task() -> 
         query_runtime=ScriptedAgentRuntime([_query_draft([]) for _ in tasks]),
         reviewer_runtime=reviewer_runtime,
         external_tool=_ExternalTool(),
-        internal_tool=internal_tool,
+        internal_search=internal_search,
     )
 
     await _run(runner)
@@ -397,7 +393,7 @@ async def test_review_still_runs_using_the_hits_that_survive_a_failed_task() -> 
 @pytest.mark.asyncio
 async def test_task_with_only_internal_hits_still_reaches_review() -> None:
     """保証するテスト条件 7(内部のみ)。外部全滅でも精査へ進み内部根拠を返す。"""
-    internal_tool = _InternalTool(
+    internal_search = _FakeInternalSearch(
         hits_by_query={
             "query-a": [
                 _internal_hit(assessment_id=1001, curation_id=1, title="internal only")
@@ -412,7 +408,7 @@ async def test_task_with_only_internal_hits_still_reaches_review() -> None:
         query_runtime=ScriptedAgentRuntime([_query_draft([])]),
         reviewer_runtime=reviewer_runtime,
         external_tool=_ExternalTool(),
-        internal_tool=internal_tool,
+        internal_search=internal_search,
     )
 
     result = await _run(runner)
@@ -433,7 +429,7 @@ async def test_task_with_only_external_hits_still_reaches_review() -> None:
         query_runtime=ScriptedAgentRuntime([_query_draft(["q"])]),
         reviewer_runtime=reviewer_runtime,
         external_tool=_ExternalTool({"q": [_external_hit("https://example.com/only")]}),
-        internal_tool=_InternalTool(
+        internal_search=_FakeInternalSearch(
             errors_by_query={"query-a": InternalSearchError(phase="article_search")}
         ),
     )
@@ -453,7 +449,7 @@ async def test_time_filter_failure_still_activates_external_scope_for_review() -
     """保証するテスト条件 11。time filter失敗でもreviewerのLLM runtimeが使えるよう
     external runtime scopeがactivateされる(direct pathの非activateは不変)。
     """
-    internal_tool = _InternalTool(
+    internal_search = _FakeInternalSearch(
         hits_by_query={
             "query-a": [
                 _internal_hit(assessment_id=1001, curation_id=1, title="internal hit")
@@ -471,7 +467,7 @@ async def test_time_filter_failure_still_activates_external_scope_for_review() -
         query_runtime=ScriptedAgentRuntime([]),
         reviewer_runtime=reviewer_runtime,
         external_tool=_ExternalTool(),
-        internal_tool=internal_tool,
+        internal_search=internal_search,
     )
 
     await _run(runner)
@@ -498,7 +494,7 @@ async def test_single_review_call_input_includes_every_tasks_research_goal() -> 
         _task("goal-beta-unique", ["query-b"]),
         _task("goal-gamma-unique", ["query-c"]),
     ]
-    internal_tool = _InternalTool(
+    internal_search = _FakeInternalSearch(
         hits_by_query={
             "query-a": [
                 _internal_hit(assessment_id=1001, curation_id=1, title="hit-a")
@@ -517,7 +513,7 @@ async def test_single_review_call_input_includes_every_tasks_research_goal() -> 
         query_runtime=ScriptedAgentRuntime([_query_draft([]) for _ in tasks]),
         reviewer_runtime=reviewer_runtime,
         external_tool=_ExternalTool(),
-        internal_tool=internal_tool,
+        internal_search=internal_search,
     )
 
     await _run(runner)
@@ -545,7 +541,7 @@ async def test_review_input_never_carries_answer_requirements() -> None:
         _task("goal-B", ["query-b"]),
         _task("goal-C", ["query-c"]),
     ]
-    internal_tool = _InternalTool(
+    internal_search = _FakeInternalSearch(
         hits_by_query={
             "query-a": [
                 _internal_hit(assessment_id=1001, curation_id=1, title="hit-a")
@@ -564,7 +560,7 @@ async def test_review_input_never_carries_answer_requirements() -> None:
         query_runtime=ScriptedAgentRuntime([_query_draft([]) for _ in tasks]),
         reviewer_runtime=reviewer_runtime,
         external_tool=_ExternalTool(),
-        internal_tool=internal_tool,
+        internal_search=internal_search,
         answer_requirements=(marker,),
     )
 
@@ -601,7 +597,7 @@ async def test_review_input_excludes_external_urls_across_every_task() -> None:
                 "qb": [_external_hit(secret_url_b, title="task-b headline")],
             }
         ),
-        internal_tool=_InternalTool(),
+        internal_search=_FakeInternalSearch(),
     )
 
     await _run(runner)
@@ -631,7 +627,7 @@ async def test_selection_restores_the_right_hit_and_task_across_groups() -> None
         _task("goal-B", ["query-b"]),
         _task("goal-C", ["query-c"]),
     ]
-    internal_tool = _InternalTool(
+    internal_search = _FakeInternalSearch(
         hits_by_query={
             "query-a": [
                 _internal_hit(assessment_id=1001, curation_id=1, title="A-int-1"),
@@ -682,7 +678,7 @@ async def test_selection_restores_the_right_hit_and_task_across_groups() -> None
                 "qc": [_external_hit("https://example.com/c-ext-1", title="C-ext-1")],
             }
         ),
-        internal_tool=internal_tool,
+        internal_search=internal_search,
     )
 
     await _run(runner)
@@ -718,7 +714,7 @@ async def test_same_url_selected_from_two_tasks_keeps_each_task_evidence() -> No
                 "qb": [_external_hit(shared_url, title="task1 headline")],
             }
         ),
-        internal_tool=_InternalTool(),
+        internal_search=_FakeInternalSearch(),
     )
 
     await _run(runner)
@@ -732,7 +728,7 @@ async def test_same_url_selected_from_two_tasks_keeps_each_task_evidence() -> No
 async def test_same_internal_article_from_two_tasks_keeps_each() -> None:
     """同じ内部検索の記事でもtaskが異なる場合は両方のEvidenceをAnswererへ渡す。"""
     shared_curation_id = 42
-    internal_tool = _InternalTool(
+    internal_search = _FakeInternalSearch(
         hits_by_query={
             "query-a": [
                 _internal_hit(
@@ -770,7 +766,7 @@ async def test_same_internal_article_from_two_tasks_keeps_each() -> None:
         query_runtime=ScriptedAgentRuntime([_query_draft([]), _query_draft([])]),
         reviewer_runtime=reviewer_runtime,
         external_tool=_ExternalTool(),
-        internal_tool=internal_tool,
+        internal_search=internal_search,
     )
 
     await _run(runner)
@@ -790,7 +786,7 @@ async def test_missing_flows_as_a_single_run_level_list_not_merged_per_task() ->
     文言は混入しない。
     """
     tasks = [_task("goal-A", ["query-a"]), _task("goal-B", ["query-b"])]
-    internal_tool = _InternalTool(
+    internal_search = _FakeInternalSearch(
         hits_by_query={
             "query-a": [
                 _internal_hit(assessment_id=1001, curation_id=1, title="hit-a")
@@ -814,7 +810,7 @@ async def test_missing_flows_as_a_single_run_level_list_not_merged_per_task() ->
         query_runtime=ScriptedAgentRuntime([_query_draft([]) for _ in tasks]),
         reviewer_runtime=reviewer_runtime,
         external_tool=_ExternalTool(),
-        internal_tool=internal_tool,
+        internal_search=internal_search,
     )
 
     result = await _run(runner)
@@ -836,7 +832,7 @@ async def test_incomplete_task_adds_the_fixed_phrase_exactly_once() -> None:
         _task("goal-B", ["query-b"]),
         _task("goal-C", ["query-c"]),
     ]
-    internal_tool = _InternalTool(
+    internal_search = _FakeInternalSearch(
         hits_by_query={
             "query-a": [
                 _internal_hit(assessment_id=1001, curation_id=1, title="A-hit")
@@ -863,7 +859,7 @@ async def test_incomplete_task_adds_the_fixed_phrase_exactly_once() -> None:
         query_runtime=ScriptedAgentRuntime([_query_draft([]) for _ in tasks]),
         reviewer_runtime=reviewer_runtime,
         external_tool=_ExternalTool(),
-        internal_tool=internal_tool,
+        internal_search=internal_search,
     )
 
     result = await _run(runner)
@@ -893,7 +889,7 @@ async def test_reviewer_failure_after_two_attempts_empties_the_whole_run() -> No
     # per-task実装でも自分のattempt列を持てずscript枯渇crashになり、
     # 「構造の差で落ちる」という意図から外れてしまう。
     tasks = [_task("goal-A", ["query-a"]), _task("goal-B", ["query-b"])]
-    internal_tool = _InternalTool(
+    internal_search = _FakeInternalSearch(
         hits_by_query={
             "query-a": [
                 _internal_hit(assessment_id=1001, curation_id=1, title="hit-a")
@@ -912,7 +908,7 @@ async def test_reviewer_failure_after_two_attempts_empties_the_whole_run() -> No
         query_runtime=ScriptedAgentRuntime([_query_draft([]) for _ in tasks]),
         reviewer_runtime=reviewer_runtime,
         external_tool=_ExternalTool(),
-        internal_tool=internal_tool,
+        internal_search=internal_search,
         events=events,
     )
 
@@ -947,7 +943,7 @@ async def test_reviewer_failure_after_two_attempts_becomes_failed_evidence_run(
         query_runtime=ScriptedAgentRuntime([_query_draft(["q"])]),
         reviewer_runtime=reviewer_runtime,
         external_tool=_ExternalTool({"q": [_external_hit("https://example.com/q")]}),
-        internal_tool=_InternalTool(),
+        internal_search=_FakeInternalSearch(),
     )
 
     await _run(runner)
@@ -975,7 +971,7 @@ async def test_failed_evidence_run_keeps_failure_reason_out_of_answerer_and_in_s
         query_runtime=ScriptedAgentRuntime([_query_draft(["q"])]),
         reviewer_runtime=ScriptedAgentRuntime([failure, failure]),
         external_tool=_ExternalTool({"q": [_external_hit("https://example.com/q")]}),
-        internal_tool=_InternalTool(),
+        internal_search=_FakeInternalSearch(),
         answerer=answerer,
     )
 
@@ -1003,7 +999,7 @@ async def test_selected_event_fires_once_for_the_whole_run_without_task_index() 
     payloadはtask_indexを持たない。task単位で数え直す旧実装は
     「2本発火する」「task_indexが残る」のいずれかで必ず落ちる。
     """
-    internal_tool = _InternalTool(
+    internal_search = _FakeInternalSearch(
         hits_by_query={
             "query-a": [
                 _internal_hit(assessment_id=1001, curation_id=1, title="A-hit")
@@ -1036,7 +1032,7 @@ async def test_selected_event_fires_once_for_the_whole_run_without_task_index() 
         query_runtime=ScriptedAgentRuntime([_query_draft([]) for _ in tasks]),
         reviewer_runtime=reviewer_runtime,
         external_tool=_ExternalTool(),
-        internal_tool=internal_tool,
+        internal_search=internal_search,
         events=events,
     )
 
@@ -1054,7 +1050,7 @@ async def test_selected_event_fires_once_for_the_whole_run_without_task_index() 
 async def test_evidence_selected_event_count_is_internal_plus_external() -> None:
     """selected.evidence_countは内部採用数と外部採用数の合算になる。"""
     events = _Events()
-    internal_tool = _InternalTool(
+    internal_search = _FakeInternalSearch(
         hits_by_query={
             "query-a": [
                 _internal_hit(
@@ -1086,7 +1082,7 @@ async def test_evidence_selected_event_count_is_internal_plus_external() -> None
         query_runtime=ScriptedAgentRuntime([_query_draft(["q1"])]),
         reviewer_runtime=reviewer_runtime,
         external_tool=_ExternalTool({"q1": [_external_hit("https://example.com/q1")]}),
-        internal_tool=internal_tool,
+        internal_search=internal_search,
         events=events,
     )
 
@@ -1120,7 +1116,7 @@ async def test_review_spans_and_events_do_not_expose_untrusted_text(
     secret_snippet = "SECRET_SNIPPET_MARKER_91ac"
     secret_goal = "SECRET_GOAL_TEXT_44bd"
     tasks = [_task(secret_goal, ["query-a"]), _task("goal-B", ["query-b"])]
-    internal_tool = _InternalTool(
+    internal_search = _FakeInternalSearch(
         hits_by_query={
             "query-a": [
                 _internal_hit(
@@ -1142,7 +1138,7 @@ async def test_review_spans_and_events_do_not_expose_untrusted_text(
         query_runtime=ScriptedAgentRuntime([_query_draft([]) for _ in tasks]),
         reviewer_runtime=reviewer_runtime,
         external_tool=_ExternalTool(),
-        internal_tool=internal_tool,
+        internal_search=internal_search,
         events=events,
     )
 

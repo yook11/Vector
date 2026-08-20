@@ -87,19 +87,19 @@ def _build_answering_phases(
         GEMINI_QUERY_EMBEDDING_SPEC,
         embedder_identity_of,
     )
-    from app.agent.evidence_collection.internal_search.article_search import (
+    from app.agent.evidence_collection.internal_search.article_repository import (
         PgVectorArticleSearchRepository,
     )
     from app.agent.evidence_collection.internal_search.query_embedding_cache import (
         TransactionalQueryEmbeddingCache,
     )
-    from app.agent.evidence_collection.internal_search.tool import (
-        PgVectorInternalSearchTool,
+    from app.agent.evidence_collection.internal_search.service import (
+        InternalSearchService,
     )
     from app.agent.planning.service import QuestionPlanningService
 
     external_runtime_factory = build_external_research_runtime_factory()
-    internal_search = PgVectorInternalSearchTool(
+    internal_search = InternalSearchService(
         embedder=GeminiQueryEmbedder(),
         article_search_repository=PgVectorArticleSearchRepository(session_factory),
         query_embedding_cache=TransactionalQueryEmbeddingCache(

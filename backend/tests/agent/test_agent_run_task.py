@@ -475,10 +475,10 @@ def test_composition_injects_same_live_controls_into_both_answer_flows(
     from app.agent.answering.direct_answer.agent import DIRECT_ANSWER_AGENT
     from app.agent.answering.evidence_answer.agent import EVIDENCE_ANSWER_AGENT
     from app.agent.evidence_collection.internal_search import (
-        article_search as article_search_module,
+        article_repository as article_repository_module,
     )
     from app.agent.evidence_collection.internal_search import (
-        tool as internal_search_module,
+        service as internal_search_module,
     )
 
     captured: dict[str, dict[str, object]] = {}
@@ -507,13 +507,13 @@ def test_composition_injects_same_live_controls_into_both_answer_flows(
     monkeypatch.setattr(evidence_flow_module, "EvidenceAnswerFlow", capture_evidence)
     monkeypatch.setattr(embedder_module, "GeminiQueryEmbedder", lambda: object())
     monkeypatch.setattr(
-        article_search_module,
+        article_repository_module,
         "PgVectorArticleSearchRepository",
         lambda *_args: object(),
     )
     monkeypatch.setattr(
         internal_search_module,
-        "PgVectorInternalSearchTool",
+        "InternalSearchService",
         lambda **_kwargs: internal_search,
     )
     monkeypatch.setattr(
