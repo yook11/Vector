@@ -137,12 +137,8 @@ class _Planner:
 
 
 class _EmptyInternalSearch:
-    @property
-    def name(self) -> str:
-        return "internal_search"
-
-    async def search(self, input: object) -> list[object]:
-        del input
+    async def search(self, queries: object) -> list[object]:
+        del queries
         return []
 
 
@@ -469,12 +465,8 @@ def _internal_hit(
 class _TwoInternalHitsSearch:
     """span 採用数テスト用に、curation_id の異なる internal hit を2件返す。"""
 
-    @property
-    def name(self) -> str:
-        return "internal_search"
-
-    async def search(self, input: object) -> list[InternalArticleSearchHit]:
-        del input
+    async def search(self, queries: object) -> list[InternalArticleSearchHit]:
+        del queries
         return [
             _internal_hit(assessment_id=2001, title="INTERNAL_HIT_TITLE_SENTINEL_bf12"),
             _internal_hit(assessment_id=2002, title="INTERNAL_HIT_TITLE_SENTINEL_9a04"),
@@ -546,12 +538,8 @@ class _PerQueryInternalHitsSearch:
     ) -> None:
         self._hits_by_query = hits_by_query
 
-    @property
-    def name(self) -> str:
-        return "internal_search"
-
-    async def search(self, input: Any) -> list[InternalArticleSearchHit]:
-        query = input.queries.queries[0]
+    async def search(self, queries: Any) -> list[InternalArticleSearchHit]:
+        query = queries.queries[0]
         return list(self._hits_by_query[query])
 
 
@@ -562,12 +550,8 @@ class _PerQueryFailableInternalSearch:
         self._failing_queries = failing_queries
         self._next_assessment_id = 5001
 
-    @property
-    def name(self) -> str:
-        return "internal_search"
-
-    async def search(self, input: Any) -> list[InternalArticleSearchHit]:
-        query = input.queries.queries[0]
+    async def search(self, queries: Any) -> list[InternalArticleSearchHit]:
+        query = queries.queries[0]
         if query in self._failing_queries:
             raise InternalSearchError(phase="article_search")
         hit = _internal_hit(assessment_id=self._next_assessment_id, title=query)

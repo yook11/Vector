@@ -125,12 +125,8 @@ class _Planner:
 
 
 class _EmptyInternalSearch:
-    @property
-    def name(self) -> str:
-        return "internal_search"
-
-    async def search(self, input: object) -> list[object]:
-        del input
+    async def search(self, queries: object) -> list[object]:
+        del queries
         return []
 
 
@@ -146,12 +142,8 @@ def _internal_hit(*, assessment_id: int, title: str) -> InternalArticleSearchHit
 class _OneInternalHitSearch:
     """internal+externalの合算件数を確かめるため、内部hitを1件返す。"""
 
-    @property
-    def name(self) -> str:
-        return "internal_search"
-
-    async def search(self, input: object) -> list[InternalArticleSearchHit]:
-        del input
+    async def search(self, queries: object) -> list[InternalArticleSearchHit]:
+        del queries
         return [_internal_hit(assessment_id=2001, title="internal hit")]
 
 

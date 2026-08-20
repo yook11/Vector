@@ -149,13 +149,9 @@ class _UnreachableRuntimeFactory:
         raise AssertionError("external runtime must not activate")
 
 
-class _InternalTool:
-    @property
-    def name(self) -> str:
-        return "internal_search"
-
-    async def search(self, input: object) -> list[object]:
-        del input
+class _FakeInternalSearch:
+    async def search(self, queries: object) -> list[object]:
+        del queries
         return []
 
 
@@ -205,7 +201,7 @@ def _search_runner(
     phases = AnsweringPhases(
         planner=_Planner(plan),
         collector=NewsCollector(
-            researcher=Researcher(internal_search=_InternalTool()),
+            researcher=Researcher(internal_search=_FakeInternalSearch()),
             requested_agent_count=1,
         ),
         reviewer=EvidenceReviewer(),
@@ -281,7 +277,9 @@ async def test_direct_answer_plan_leaves_checkpoint_none() -> None:
     """記録フロー6: 外部検索を実行しないdirect_answer Runはcheckpointを持たない。"""
     phases = AnsweringPhases(
         planner=_Planner(DirectAnswerPlan()),
-        collector=NewsCollector(researcher=Researcher(internal_search=_InternalTool())),
+        collector=NewsCollector(
+            researcher=Researcher(internal_search=_FakeInternalSearch())
+        ),
         reviewer=EvidenceReviewer(),
         external_runtime_factory=_UnreachableRuntimeFactory(),
         direct_answerer=_DirectAnswerer(),

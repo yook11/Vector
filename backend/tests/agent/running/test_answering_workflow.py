@@ -73,13 +73,9 @@ class _InternalSearch:
         self._timeline = timeline
         self.calls: list[InternalSearchQueries] = []
 
-    @property
-    def name(self) -> str:
-        return "internal_search"
-
-    async def search(self, input: object) -> list[object]:
+    async def search(self, queries: InternalSearchQueries) -> list[object]:
         self._timeline.append("internal_search")
-        self.calls.append(input.queries)  # type: ignore[attr-defined]
+        self.calls.append(queries)
         return []
 
 

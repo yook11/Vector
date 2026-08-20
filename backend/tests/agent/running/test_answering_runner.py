@@ -215,12 +215,8 @@ class _FakePlanner:
 
 
 class _UnreachableInternalSearch:
-    @property
-    def name(self) -> str:
-        return "internal_search"
-
-    async def search(self, input: object) -> list[object]:
-        raise AssertionError(f"internal search must not be called: {input!r}")
+    async def search(self, queries: object) -> list[object]:
+        raise AssertionError(f"internal search must not be called: {queries!r}")
 
 
 class _UnreachableExternalRuntimeFactory:

@@ -1,10 +1,9 @@
-"""Internal search boundary型・error と Tool 契約。"""
+"""Internal search の境界型・error と port 契約。"""
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 from datetime import datetime
-from typing import Final, Literal, Protocol
+from typing import Literal, Protocol
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -14,14 +13,11 @@ from app.agent.evidence_collection.internal_search.query_embedding import (
 from app.analysis.analyzed_article import InScopeAnalyzedArticle
 
 __all__ = [
-    "INTERNAL_SEARCH_TOOL_NAME",
     "InternalArticleContent",
     "InternalArticleSearchHit",
+    "InternalSearch",
     "InternalSearchError",
     "InternalSearchFailurePhase",
-    "InternalSearchTool",
-    "InternalSearchToolInput",
-    "InternalSearchToolName",
 ]
 
 type InternalSearchFailurePhase = Literal["query_embedding", "article_search"]
@@ -85,22 +81,8 @@ class InternalArticleSearchHit(BaseModel):
     distance: float = Field(ge=0)
 
 
-InternalSearchToolName = Literal["internal_search"]
-INTERNAL_SEARCH_TOOL_NAME: Final[InternalSearchToolName] = "internal_search"
-
-
-@dataclass(frozen=True, slots=True)
-class InternalSearchToolInput:
-    """Internal Search Toolへ渡す正規化済みquery群。"""
-
-    queries: InternalSearchQueries
-
-
-class InternalSearchTool(Protocol):
-    @property
-    def name(self) -> InternalSearchToolName: ...
-
+class InternalSearch(Protocol):
     async def search(
         self,
-        input: InternalSearchToolInput,
+        queries: InternalSearchQueries,
     ) -> list[InternalArticleSearchHit]: ...

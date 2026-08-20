@@ -1,7 +1,7 @@
 """1つの ResearchTask に対して内部・外部の検索ヒットを集める Researcher。
 
 DB / Redis / HTTP client の生成は composition が所有し、Researcher は
-渡された Tool と Runtime だけを使う(責任境界: Researcher は infrastructure
+渡された検索能力と Runtime だけを使う(責任境界: Researcher は infrastructure
 の構築を知らない)。
 """
 
@@ -41,9 +41,8 @@ from app.agent.evidence_collection.external_search.policy import (
 )
 from app.agent.evidence_collection.internal_search.contract import (
     InternalArticleSearchHit,
+    InternalSearch,
     InternalSearchError,
-    InternalSearchTool,
-    InternalSearchToolInput,
 )
 from app.agent.evidence_collection.internal_search.query_embedding import (
     InternalSearchQueries,
@@ -81,7 +80,7 @@ class ResearchTaskHits:
 class Researcher:
     """1つのResearchTaskについて内部・外部の検索ヒットを集める。精査と回答生成は持たない。"""
 
-    internal_search: InternalSearchTool
+    internal_search: InternalSearch
     events: AnswerEventReporter | None = None
 
     async def collect(
@@ -139,9 +138,7 @@ class Researcher:
         try:
             # 失敗はspanを貫通させてtraceに残し、外側で縮退へ変える。
             with agent_phase(phase="evidence_collection", task_index=task_index):
-                hits = await self.internal_search.search(
-                    InternalSearchToolInput(queries=queries)
-                )
+                hits = await self.internal_search.search(queries)
         except InternalSearchError:
             return [], True
         await self._report_event(

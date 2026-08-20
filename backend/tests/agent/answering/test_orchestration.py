@@ -288,14 +288,10 @@ class FakeInternalSearch:
         self._timeline = timeline
         self.calls: list[InternalSearchQueries] = []
 
-    @property
-    def name(self) -> str:
-        return "internal_search"
-
-    async def search(self, input: Any) -> list[InternalArticleSearchHit]:
+    async def search(self, queries: Any) -> list[InternalArticleSearchHit]:
         if self._timeline is not None:
             self._timeline.record("internal_search.search_articles")
-        self.calls.append(input.queries)
+        self.calls.append(queries)
         if isinstance(self._outcome, Exception):
             raise self._outcome
         return self._outcome.internal_hits

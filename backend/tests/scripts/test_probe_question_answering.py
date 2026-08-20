@@ -124,7 +124,7 @@ def test_probe_uses_answering_runner_without_removed_external_pipeline_seams() -
         "SearchPlan",
         "TargetTimeWindow",
         "GeminiQueryEmbedder",
-        "PgVectorInternalSearchTool",
+        "InternalSearchService",
         "PgVectorArticleSearchRepository",
         "INPUT_SAFETY_AGENT",
         "InputSafetyService",
@@ -297,7 +297,7 @@ def test_search_probe_passes_actual_internal_and_external_dependencies_to_phases
 ):
     search = _function(_probe_tree(), "_probe_search")
     session_factory_calls = _calls(search, "async_sessionmaker")
-    internal_tool_calls = _calls(search, "PgVectorInternalSearchTool")
+    internal_search_calls = _calls(search, "InternalSearchService")
     phase = _phase_call(search)
 
     assert "_UnreachableInternalSearch" not in _loaded_names(search)
@@ -309,17 +309,17 @@ def test_search_probe_passes_actual_internal_and_external_dependencies_to_phases
             + [keyword.value for keyword in session_factory_calls[0].keywords]
         )
     )
-    assert len(internal_tool_calls) == 1
+    assert len(internal_search_calls) == 1
 
-    internal_tool = internal_tool_calls[0]
-    embedder = _keyword_value(internal_tool, "embedder")
-    repository = _keyword_value(internal_tool, "article_search_repository")
+    internal_search_call = internal_search_calls[0]
+    embedder = _keyword_value(internal_search_call, "embedder")
+    repository = _keyword_value(internal_search_call, "article_search_repository")
     assert isinstance(embedder, ast.Call)
     assert _call_name(embedder) == "GeminiQueryEmbedder"
     assert isinstance(repository, ast.Call)
     assert _call_name(repository) == "PgVectorArticleSearchRepository"
-    # Internal Search ToolはSSEのprogress reporterを知らない (段2契約)。
-    assert "events" not in {keyword.arg for keyword in internal_tool.keywords}
+    # internal searchはSSEのprogress reporterを知らない (段2契約)。
+    assert "events" not in {keyword.arg for keyword in internal_search_call.keywords}
 
     session_factory_targets = {
         target.id
@@ -337,7 +337,8 @@ def test_search_probe_passes_actual_internal_and_external_dependencies_to_phases
     service_targets = {
         target.id
         for assignment in ast.walk(search)
-        if isinstance(assignment, ast.Assign) and assignment.value is internal_tool
+        if isinstance(assignment, ast.Assign)
+        and assignment.value is internal_search_call
         for target in assignment.targets
         if isinstance(target, ast.Name)
     }
@@ -415,7 +416,7 @@ def test_direct_probe_keeps_dependencies_unreachable_and_uses_plan_summary() -> 
 
     assert "DirectAnswerPlan" in names
     assert "InternalSearchService" not in names
-    assert "PgVectorInternalSearchTool" not in names
+    assert "InternalSearchService" not in names
     assert "build_external_research_runtime_factory" not in names
     assert "build_external_search_service" not in names
     assert "DEEPSEEK_API_KEY" not in text

@@ -24,7 +24,7 @@ from app.agent.evidence_collection.internal_search import (
     InternalArticleContent,
     InternalArticleSearchHit,
 )
-from app.agent.evidence_collection.internal_search.article_search import (
+from app.agent.evidence_collection.internal_search.article_repository import (
     PgVectorArticleSearchRepository,
     _hit_from_search_row,
 )

@@ -187,12 +187,8 @@ class _InternalSearch:
         self.completed = False
         self.cancelled_error: asyncio.CancelledError | None = None
 
-    @property
-    def name(self) -> str:
-        return "internal_search"
-
-    async def search(self, input: Any) -> list[InternalArticleSearchHit]:
-        self.calls.append(input.queries)
+    async def search(self, queries: Any) -> list[InternalArticleSearchHit]:
+        self.calls.append(queries)
         self.started.set()
         try:
             if self._release is not None:
@@ -1148,12 +1144,8 @@ async def test_internal_search_events_are_emitted_per_task_with_task_index() -> 
     )
 
     class _PerCallInternalSearch:
-        @property
-        def name(self) -> str:
-            return "internal_search"
-
-        async def search(self, input: Any) -> list[InternalArticleSearchHit]:
-            del input
+        async def search(self, queries: Any) -> list[InternalArticleSearchHit]:
+            del queries
             return next(hits_by_call)
 
     # S1: reviewerはRun単位1回。統合index空間(仮定: task昇順)ではtask0の2件が
@@ -1587,13 +1579,9 @@ class _KeyedFailingInternalSearch:
         self._hits_by_query = hits_by_query or {}
         self.calls: list[InternalSearchQueries] = []
 
-    @property
-    def name(self) -> str:
-        return "internal_search"
-
-    async def search(self, input: Any) -> list[InternalArticleSearchHit]:
-        self.calls.append(input.queries)
-        query = input.queries.queries[0]
+    async def search(self, queries: Any) -> list[InternalArticleSearchHit]:
+        self.calls.append(queries)
+        query = queries.queries[0]
         if query in self._failing_queries:
             raise InternalSearchError(phase="article_search")
         return list(self._hits_by_query.get(query, []))
@@ -1827,12 +1815,8 @@ async def test_internal_hits_are_kept_per_task_when_the_same_article_appears(
     completion_order: list[str] = []
 
     class _RaceControlledInternalSearch:
-        @property
-        def name(self) -> str:
-            return "internal_search"
-
-        async def search(self, input: Any) -> list[InternalArticleSearchHit]:
-            query = input.queries.queries[0]
+        async def search(self, queries: Any) -> list[InternalArticleSearchHit]:
+            query = queries.queries[0]
             if query == "task0 query":
                 await asyncio.sleep(0.05)
                 completion_order.append("task0")

@@ -405,10 +405,10 @@ def test_build_answering_phases_wires_planner_to_shared_gemini_runtime_scope(
     from app.agent.answering.evidence_answer import flow as evidence_flow
     from app.agent.answering.evidence_answer.agent import EVIDENCE_ANSWER_AGENT
     from app.agent.evidence_collection.internal_search import (
-        article_search,
+        article_repository,
     )
     from app.agent.evidence_collection.internal_search import (
-        tool as internal_tool,
+        service as internal_search_service,
     )
     from app.agent.evidence_collection.internal_search.ai import (
         gemini as embedding_gemini,
@@ -452,13 +452,13 @@ def test_build_answering_phases_wires_planner_to_shared_gemini_runtime_scope(
     monkeypatch.setattr(evidence_flow, "EvidenceAnswerFlow", _EvidenceSpy)
     for module, name in (
         (embedding_gemini, "GeminiQueryEmbedder"),
-        (article_search, "PgVectorArticleSearchRepository"),
+        (article_repository, "PgVectorArticleSearchRepository"),
     ):
         monkeypatch.setattr(module, name, _KeywordObject)
     internal_search_calls: list[dict[str, object]] = []
     monkeypatch.setattr(
-        internal_tool,
-        "PgVectorInternalSearchTool",
+        internal_search_service,
+        "InternalSearchService",
         lambda **kwargs: internal_search_calls.append(kwargs) or internal_search,
     )
 
@@ -468,7 +468,7 @@ def test_build_answering_phases_wires_planner_to_shared_gemini_runtime_scope(
     )
 
     assert isinstance(phases, AnsweringPhases)
-    # Researcherがinternal_search Toolを包み、events(段2でserviceに渡さないと
+    # Researcherがinternal searchを包み、events(段2でserviceに渡さないと
     # した進捗reporter)はここで初めてResearcherへ渡る。
     assert phases.collector.researcher.internal_search is internal_search
     assert phases.collector.researcher.events is events
@@ -506,10 +506,10 @@ def test_build_answering_phases_wires_query_embedding_cache_to_embedder_identity
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     from app.agent.evidence_collection.internal_search import (
-        article_search,
+        article_repository,
     )
     from app.agent.evidence_collection.internal_search import (
-        tool as internal_tool,
+        service as internal_search_service,
     )
     from app.agent.evidence_collection.internal_search.ai import (
         gemini as embedding_gemini,
@@ -534,12 +534,12 @@ def test_build_answering_phases_wires_query_embedding_cache_to_embedder_identity
     )
     for module, name in (
         (embedding_gemini, "GeminiQueryEmbedder"),
-        (article_search, "PgVectorArticleSearchRepository"),
+        (article_repository, "PgVectorArticleSearchRepository"),
     ):
         monkeypatch.setattr(module, name, _KeywordObject)
     monkeypatch.setattr(
-        internal_tool,
-        "PgVectorInternalSearchTool",
+        internal_search_service,
+        "InternalSearchService",
         lambda **kwargs: internal_search_calls.append(kwargs) or object(),
     )
 
