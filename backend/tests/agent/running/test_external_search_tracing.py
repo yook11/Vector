@@ -23,7 +23,7 @@ from app.agent.evidence_collection.external_search.agent import EXTERNAL_QUERY_A
 from app.agent.evidence_collection.external_search.contract import (
     ExternalResearchRuntime,
     ExternalSearchHit,
-    ExternalSearchToolInput,
+    ExternalSearchRequest,
 )
 from app.agent.evidence_collection.external_search.deepseek_binding import (
     EXTERNAL_QUERY_DEEPSEEK_BINDING,
@@ -167,16 +167,12 @@ class _EvidenceAnswerer:
         )
 
 
-class _Tool:
+class _FakeExternalSearchGateway:
     def __init__(self) -> None:
-        self.inputs: list[ExternalSearchToolInput] = []
+        self.inputs: list[ExternalSearchRequest] = []
 
-    @property
-    def name(self) -> str:
-        return "external_search"
-
-    async def search(self, input: ExternalSearchToolInput) -> list[ExternalSearchHit]:
-        self.inputs.append(input)
+    async def search(self, request: ExternalSearchRequest) -> list[ExternalSearchHit]:
+        self.inputs.append(request)
         return [
             ExternalSearchHit(
                 url="https://example.com/TRACE_URL_SENTINEL_63df",
@@ -216,11 +212,11 @@ def _runner(
     *,
     query_client: FakeDeepSeekClient,
     reviewer_client: FakeDeepSeekClient,
-    search_tool: _Tool | None = None,
+    search_gateway: _FakeExternalSearchGateway | None = None,
     internal_search: object | None = None,
     evidence_answerer: object | None = None,
-) -> tuple[AnsweringRunner, _Tool]:
-    tool = search_tool or _Tool()
+) -> tuple[AnsweringRunner, _FakeExternalSearchGateway]:
+    tool = search_gateway or _FakeExternalSearchGateway()
     runtime = ExternalResearchRuntime(
         query_runtime=DeepSeekAgentRuntime(
             client=cast(AsyncOpenAI, query_client),
@@ -230,7 +226,7 @@ def _runner(
             client=cast(AsyncOpenAI, reviewer_client),
             binding=EVIDENCE_REVIEWER_DEEPSEEK_BINDING,
         ),
-        search_tool=tool,
+        search_gateway=tool,
     )
     phases = AnsweringPhases(
         planner=_Planner(),
@@ -618,7 +614,7 @@ def _two_task_query_failing_runtime() -> ExternalResearchRuntime:
         reviewer_runtime=ScriptedAgentRuntime(
             [_review_draft_selecting_all_offered_options()]
         ),
-        search_tool=_Tool(),
+        search_gateway=_FakeExternalSearchGateway(),
     )
 
 

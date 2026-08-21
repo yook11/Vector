@@ -12,7 +12,7 @@ from contextlib import AbstractAsyncContextManager
 from dataclasses import dataclass
 from datetime import date, datetime
 from enum import StrEnum
-from typing import Final, Literal, Protocol
+from typing import Literal, Protocol
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
@@ -34,7 +34,6 @@ __all__ = [
     "EXTERNAL_SEARCH_AGENT_HARD_LIMIT",
     "EXTERNAL_SEARCH_HITS_PER_QUERY",
     "EXTERNAL_SEARCH_HIT_POOL_LIMIT_PER_TASK",
-    "EXTERNAL_SEARCH_TOOL_NAME",
     "EXTERNAL_TASK_QUERY_LIMIT",
     "ExternalQueryDraft",
     "ExternalQueryGenerationInput",
@@ -43,10 +42,9 @@ __all__ = [
     "ExternalSearchProviderError",
     "ExternalResearchRuntime",
     "ExternalResearchRuntimeFactory",
-    "ExternalSearchTool",
-    "ExternalSearchToolFailureReason",
-    "ExternalSearchToolInput",
-    "ExternalSearchToolName",
+    "ExternalSearchFailureReason",
+    "ExternalSearchGateway",
+    "ExternalSearchRequest",
     "MISSING_ITEM_MAX_CHARS",
     "TimeFilterFailureReason",
 ]
@@ -67,34 +65,30 @@ TimeFilterFailureReason = Literal[
 ]
 
 
-ExternalSearchToolName = Literal["external_search"]
-EXTERNAL_SEARCH_TOOL_NAME: Final[ExternalSearchToolName] = "external_search"
+class ExternalSearchFailureReason(StrEnum):
+    """External search gatewayが公開できるprovider failureの分類。"""
 
-
-class ExternalSearchToolFailureReason(StrEnum):
-    """External Search Toolが公開できるprovider failureの分類。"""
-
-    HTTP_ERROR = "tavily_search_http_error"
-    HTTP_STATUS = "tavily_search_http_status"
-    INVALID_JSON = "tavily_search_invalid_json"
-    INVALID_RESULTS = "tavily_search_invalid_results"
+    HTTP_ERROR = "external_search_http_error"
+    HTTP_STATUS = "external_search_http_status"
+    INVALID_JSON = "external_search_invalid_json"
+    INVALID_RESULTS = "external_search_invalid_results"
     # egress proxy 段で失敗した (provider 障害ではない)。AWS では allowlist の設定ミスが
     # ここに来る。実際の status と拒否された宛先は proxy の access log 側にある。
-    PROXY_ERROR = "tavily_search_proxy_error"
+    PROXY_ERROR = "external_search_proxy_error"
 
 
 class ExternalSearchProviderError(Exception):
-    """External Search Toolが安全なreasonだけを公開する分類済みerror。"""
+    """External search gatewayが安全なreasonだけを公開する分類済みerror。"""
 
     __slots__ = ("reason",)
 
     def __init__(
         self,
         *,
-        reason: ExternalSearchToolFailureReason | str,
+        reason: ExternalSearchFailureReason | str,
         status_code: int | None = None,
     ) -> None:
-        if isinstance(reason, ExternalSearchToolFailureReason):
+        if isinstance(reason, ExternalSearchFailureReason):
             reason_kind = reason
         elif isinstance(reason, str):
             if status_code is not None:
@@ -103,10 +97,10 @@ class ExternalSearchProviderError(Exception):
             # HTTP_STATUS だけが status 付きで、それ以外は静的という契約から導く。
             static_reasons = {
                 member.value
-                for member in ExternalSearchToolFailureReason
-                if member is not ExternalSearchToolFailureReason.HTTP_STATUS
+                for member in ExternalSearchFailureReason
+                if member is not ExternalSearchFailureReason.HTTP_STATUS
             }
-            status_prefix = f"{ExternalSearchToolFailureReason.HTTP_STATUS.value}_"
+            status_prefix = f"{ExternalSearchFailureReason.HTTP_STATUS.value}_"
             status_suffix = reason.removeprefix(status_prefix)
             if reason in static_reasons or (
                 reason.startswith(status_prefix)
@@ -122,7 +116,7 @@ class ExternalSearchProviderError(Exception):
         else:
             raise TypeError("reason must be a failure reason or safe reason code")
 
-        if reason_kind is ExternalSearchToolFailureReason.HTTP_STATUS:
+        if reason_kind is ExternalSearchFailureReason.HTTP_STATUS:
             if (
                 not isinstance(status_code, int)
                 or isinstance(status_code, bool)
@@ -168,8 +162,8 @@ class ExternalSearchDateFilter(BaseModel):
 
 
 @dataclass(frozen=True, slots=True)
-class ExternalSearchToolInput:
-    """External Search Toolへ渡す完成済みqueryと取得上限。"""
+class ExternalSearchRequest:
+    """External search gatewayへ渡す完成済みqueryと取得上限。"""
 
     query: str
     limit: int
@@ -200,23 +194,20 @@ class ExternalQueryDraft(BaseModel):
         return value
 
 
-class ExternalSearchTool(Protocol):
-    @property
-    def name(self) -> ExternalSearchToolName: ...
-
+class ExternalSearchGateway(Protocol):
     async def search(
         self,
-        input: ExternalSearchToolInput,
+        request: ExternalSearchRequest,
     ) -> list[ExternalSearchHit]: ...
 
 
 @dataclass(frozen=True, slots=True)
 class ExternalResearchRuntime:
-    """external branchがscope内だけ借りるrole別RuntimeとToolの束。"""
+    """external branchがscope内だけ借りるrole別Runtimeとgatewayの束。"""
 
     query_runtime: AgentRuntime
     reviewer_runtime: AgentRuntime
-    search_tool: ExternalSearchTool
+    search_gateway: ExternalSearchGateway
 
 
 class ExternalResearchRuntimeFactory(Protocol):

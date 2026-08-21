@@ -112,7 +112,7 @@ class _EmptyExternalRuntimeFactory:
         yield ExternalResearchRuntime(
             query_runtime=_EmptyExternalQueryRuntime(),  # type: ignore[arg-type]
             reviewer_runtime=object(),  # type: ignore[arg-type]
-            search_tool=object(),  # type: ignore[arg-type]
+            search_gateway=object(),  # type: ignore[arg-type]
         )
 
 

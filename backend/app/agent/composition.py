@@ -188,7 +188,7 @@ class _ExternalResearchRuntimeFactory:
             EXTERNAL_QUERY_DEEPSEEK_BINDING,
         )
         from app.agent.evidence_collection.external_search.tavily import (
-            TavilyExternalSearchTool,
+            TavilyExternalSearchGateway,
         )
         from app.agent.evidence_review.deepseek_binding import (
             EVIDENCE_REVIEWER_DEEPSEEK_BINDING,
@@ -213,14 +213,14 @@ class _ExternalResearchRuntimeFactory:
                 binding=EVIDENCE_REVIEWER_DEEPSEEK_BINDING,
             )
             async with make_safe_async_client() as tavily_client:
-                search_tool = TavilyExternalSearchTool(
+                search_gateway = TavilyExternalSearchGateway(
                     api_key=self._tavily_api_key,
                     client=tavily_client,
                 )
                 yield ExternalResearchRuntime(
                     query_runtime=query_runtime,
                     reviewer_runtime=reviewer_runtime,
-                    search_tool=search_tool,
+                    search_gateway=search_gateway,
                 )
 
 

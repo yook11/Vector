@@ -25,9 +25,9 @@ from app.agent.evidence_collection import NewsCollector, Researcher
 from app.agent.evidence_collection.external_search.contract import (
     ExternalQueryDraft,
     ExternalResearchRuntime,
+    ExternalSearchFailureReason,
     ExternalSearchHit,
     ExternalSearchProviderError,
-    ExternalSearchToolFailureReason,
 )
 from app.agent.evidence_review import EvidenceReviewer
 from app.agent.evidence_review.selection import EvidenceReviewerDraft
@@ -155,7 +155,7 @@ class _FakeInternalSearch:
         return []
 
 
-class _ExternalTool:
+class _FakeExternalSearchGateway:
     """queryごとにhitまたはprovider失敗を返すfake。"""
 
     def __init__(
@@ -168,16 +168,12 @@ class _ExternalTool:
         self._failing = set(failing_queries)
         self.calls: list[object] = []
 
-    @property
-    def name(self) -> str:
-        return "external_search"
-
-    async def search(self, input: object) -> list[ExternalSearchHit]:
-        self.calls.append(input)
-        query = input.query  # type: ignore[attr-defined]
+    async def search(self, request: object) -> list[ExternalSearchHit]:
+        self.calls.append(request)
+        query = request.query  # type: ignore[attr-defined]
         if query in self._failing:
             raise ExternalSearchProviderError(
-                reason=ExternalSearchToolFailureReason.HTTP_ERROR
+                reason=ExternalSearchFailureReason.HTTP_ERROR
             )
         return list(self._results.get(query, []))
 
@@ -196,7 +192,7 @@ def _search_runner(
     plan: SearchPlan,
     query_runtime: ScriptedAgentRuntime,
     reviewer_runtime: ScriptedAgentRuntime,
-    tool: _ExternalTool,
+    gateway: _FakeExternalSearchGateway,
 ) -> AnsweringRunner:
     phases = AnsweringPhases(
         planner=_Planner(plan),
@@ -209,7 +205,7 @@ def _search_runner(
             ExternalResearchRuntime(
                 query_runtime=query_runtime,  # type: ignore[arg-type]
                 reviewer_runtime=reviewer_runtime,  # type: ignore[arg-type]
-                search_tool=tool,  # type: ignore[arg-type]
+                search_gateway=gateway,  # type: ignore[arg-type]
             )
         ),
         direct_answerer=_UnreachableDirectAnswerer(),
@@ -234,7 +230,7 @@ async def test_search_plan_success_populates_checkpoint_from_review_outcome() ->
     queryだけの実行query・外部採用claim・Reviewer missingがcheckpointへ運ばれる。
     """
     goal = "NVIDIA の直近発表を調べる"
-    tool = _ExternalTool(
+    gateway = _FakeExternalSearchGateway(
         results_by_query={"q-ok": [_external_hit("https://example.com/a")]},
         failing_queries=("q-fail",),
     )
@@ -256,7 +252,7 @@ async def test_search_plan_success_populates_checkpoint_from_review_outcome() ->
         plan=_plan(research_goal=goal),
         query_runtime=ScriptedAgentRuntime([_query_draft(["q-ok", "q-fail"])]),
         reviewer_runtime=reviewer_runtime,
-        tool=tool,
+        gateway=gateway,
     )
 
     result = await _run(runner)
@@ -298,7 +294,7 @@ async def test_direct_answer_plan_leaves_checkpoint_none() -> None:
 
 async def test_evidence_review_failure_leaves_checkpoint_none() -> None:
     """記録フロー4: reviewerが2 attempt失敗した場合、checkpointを組み立てない。"""
-    tool = _ExternalTool(
+    gateway = _FakeExternalSearchGateway(
         results_by_query={"q": [_external_hit("https://example.com/a")]}
     )
     failure = AgentResponseInvalidError(AgentResponseDefect.OUTPUT_SCHEMA_MISMATCH)
@@ -306,7 +302,7 @@ async def test_evidence_review_failure_leaves_checkpoint_none() -> None:
         plan=_plan(research_goal="調査目標"),
         query_runtime=ScriptedAgentRuntime([_query_draft(["q"])]),
         reviewer_runtime=ScriptedAgentRuntime([failure, failure]),
-        tool=tool,
+        gateway=gateway,
     )
 
     result = await _run(runner)
@@ -322,13 +318,13 @@ async def test_skipped_empty_review_records_executed_query_with_no_adopted_claim
     provider呼び出しに成功したtaskは空adopted_claims・空unresolved_after_searchで
     記録される(review失敗経路と異なりNoneにはならない)。
     """
-    tool = _ExternalTool(results_by_query={})
+    gateway = _FakeExternalSearchGateway(results_by_query={})
     reviewer_runtime = ScriptedAgentRuntime([])
     runner = _search_runner(
         plan=_plan(research_goal="調査目標"),
         query_runtime=ScriptedAgentRuntime([_query_draft(["q"])]),
         reviewer_runtime=reviewer_runtime,
-        tool=tool,
+        gateway=gateway,
     )
 
     result = await _run(runner)
@@ -357,7 +353,7 @@ async def test_builder_exception_yields_none_checkpoint_and_continues_answering(
         "app.agent.research_checkpoint.builder.build_research_checkpoint",
         _raise_build_failure,
     )
-    tool = _ExternalTool(
+    gateway = _FakeExternalSearchGateway(
         results_by_query={"q": [_external_hit("https://example.com/a")]}
     )
     reviewer_runtime = ScriptedAgentRuntime(
@@ -367,7 +363,7 @@ async def test_builder_exception_yields_none_checkpoint_and_continues_answering(
         plan=_plan(research_goal="調査目標"),
         query_runtime=ScriptedAgentRuntime([_query_draft(["q"])]),
         reviewer_runtime=reviewer_runtime,
-        tool=tool,
+        gateway=gateway,
     )
 
     result = await _run(runner)

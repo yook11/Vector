@@ -140,22 +140,22 @@ class _RuntimeSpyFactory:
         return _RuntimeSpy(client=client, binding=binding)
 
 
-class _ToolSpy:
+class _GatewaySpy:
     def __init__(self, *, api_key: SecretStr, client: object) -> None:
         self.api_key = api_key
         self.client = client
 
 
-class _ToolSpyFactory:
+class _GatewaySpyFactory:
     def __init__(self, *, construction_error: BaseException | None = None) -> None:
         self._construction_error = construction_error
         self.calls: list[dict[str, object]] = []
 
-    def __call__(self, **kwargs: object) -> _ToolSpy:
+    def __call__(self, **kwargs: object) -> _GatewaySpy:
         self.calls.append(kwargs)
         if self._construction_error is not None:
             raise self._construction_error
-        return _ToolSpy(**kwargs)  # type: ignore[arg-type]
+        return _GatewaySpy(**kwargs)  # type: ignore[arg-type]
 
 
 def _install_factory_dependencies(
@@ -164,12 +164,12 @@ def _install_factory_dependencies(
     deepseek: _TrackedDeepSeekClientFactory | None = None,
     tavily: _TrackedTavilyClientFactory | None = None,
     runtime: _RuntimeSpyFactory | None = None,
-    tool: _ToolSpyFactory | None = None,
+    gateway: _GatewaySpyFactory | None = None,
 ) -> tuple[
     _TrackedDeepSeekClientFactory,
     _TrackedTavilyClientFactory,
     _RuntimeSpyFactory,
-    _ToolSpyFactory,
+    _GatewaySpyFactory,
 ]:
     import openai
 
@@ -179,11 +179,11 @@ def _install_factory_dependencies(
     deepseek = deepseek or _TrackedDeepSeekClientFactory()
     tavily = tavily or _TrackedTavilyClientFactory()
     runtime = runtime or _RuntimeSpyFactory()
-    tool = tool or _ToolSpyFactory()
+    gateway = gateway or _GatewaySpyFactory()
     monkeypatch.setattr(openai, "AsyncOpenAI", deepseek)
     monkeypatch.setattr(composition, "make_safe_async_client", tavily)
     monkeypatch.setattr(deepseek_module, "DeepSeekAgentRuntime", runtime)
-    monkeypatch.setattr(tavily_module, "TavilyExternalSearchTool", tool)
+    monkeypatch.setattr(tavily_module, "TavilyExternalSearchGateway", gateway)
     monkeypatch.setattr(
         composition.settings,
         "deepseek_api_key",
@@ -194,7 +194,7 @@ def _install_factory_dependencies(
         "tavily_api_key",
         SecretStr("tavily-api-key-sentinel"),
     )
-    return deepseek, tavily, runtime, tool
+    return deepseek, tavily, runtime, gateway
 
 
 def test_external_research_runtime_contract_declares_only_borrowed_resources() -> None:
@@ -208,7 +208,7 @@ def test_external_research_runtime_contract_declares_only_borrowed_resources() -
         ExternalResearchRuntime.__dataclass_params__.frozen,
         tuple(field.name for field in fields(ExternalResearchRuntime)),
         callable(getattr(ExternalResearchRuntimeFactory, "activate", None)),
-    ) == (True, True, ("query_runtime", "reviewer_runtime", "search_tool"), True)
+    ) == (True, True, ("query_runtime", "reviewer_runtime", "search_gateway"), True)
 
 
 @pytest.mark.asyncio
@@ -224,11 +224,11 @@ async def test_runtime_factory_is_lazy_shares_deepseek_and_closes_each_client_on
     )
 
     evidence_reviewer_binding = EVIDENCE_REVIEWER_DEEPSEEK_BINDING
-    deepseek, tavily, runtime, tool = _install_factory_dependencies(monkeypatch)
+    deepseek, tavily, runtime, gateway = _install_factory_dependencies(monkeypatch)
     factory = build_external_research_runtime_factory()
     scope = factory.activate()
 
-    assert (deepseek.clients, tavily.clients, runtime.calls, tool.calls) == (
+    assert (deepseek.clients, tavily.clients, runtime.calls, gateway.calls) == (
         [],
         [],
         [],
@@ -244,7 +244,7 @@ async def test_runtime_factory_is_lazy_shares_deepseek_and_closes_each_client_on
             external.reviewer_runtime.client is deepseek.clients[0],
             external.query_runtime.binding is EXTERNAL_QUERY_DEEPSEEK_BINDING,
             external.reviewer_runtime.binding is evidence_reviewer_binding,
-            external.search_tool.client is tavily.clients[0],
+            external.search_gateway.client is tavily.clients[0],
         ) == (
             1,
             1,
@@ -302,7 +302,7 @@ async def test_runtime_factory_closes_acquired_clients_for_every_scope_exit(
         pytest.param("query-runtime", 1, 0, id="query-runtime"),
         pytest.param("reviewer-runtime", 1, 0, id="reviewer-runtime"),
         pytest.param("tavily-entry", 1, 0, id="tavily-entry"),
-        pytest.param("tool", 1, 1, id="tool"),
+        pytest.param("gateway", 1, 1, id="gateway"),
     ],
 )
 async def test_runtime_factory_closes_only_acquired_clients_when_construction_fails(
@@ -319,12 +319,14 @@ async def test_runtime_factory_closes_only_acquired_clients_when_construction_fa
         if stage == "tavily-entry"
         else None
     )
-    tool_error = RuntimeError("tool construction failed") if stage == "tool" else None
+    gateway_error = (
+        RuntimeError("gateway construction failed") if stage == "gateway" else None
+    )
     deepseek, tavily, _runtime, _tool = _install_factory_dependencies(
         monkeypatch,
         tavily=tavily,
         runtime=runtime,
-        tool=_ToolSpyFactory(construction_error=tool_error),
+        gateway=_GatewaySpyFactory(construction_error=gateway_error),
     )
     factory = build_external_research_runtime_factory()
 
@@ -398,7 +400,7 @@ async def test_runtime_factory_creates_fresh_clients_for_each_activation(
 
     assert (
         first.query_runtime.client is not second.query_runtime.client,
-        first.search_tool.client is not second.search_tool.client,
+        first.search_gateway.client is not second.search_gateway.client,
         [client.close_count for client in deepseek.clients],
         [client.close_count for client in tavily.clients],
     ) == (True, True, [1, 1], [1, 1])

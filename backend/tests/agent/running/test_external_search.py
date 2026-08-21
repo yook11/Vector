@@ -191,7 +191,7 @@ class _Factory:
         return scope
 
 
-class _Tool:
+class _FakeExternalSearchGateway:
     def __init__(
         self,
         results_by_query: dict[str, list[ExternalSearchHit]] | None = None,
@@ -207,20 +207,16 @@ class _Tool:
         self.calls: list[Any] = []
         self.cancelled = False
 
-    @property
-    def name(self) -> str:
-        return "external_search"
-
-    async def search(self, input: Any) -> list[ExternalSearchHit]:
-        self.calls.append(input)
+    async def search(self, request: Any) -> list[ExternalSearchHit]:
+        self.calls.append(request)
         try:
             if self._started is not None:
                 self._started.set()
             if self._release is not None:
                 await self._release.wait()
-            if input.query in self._errors_by_query:
-                raise self._errors_by_query[input.query]
-            return list(self._results_by_query.get(input.query, []))
+            if request.query in self._errors_by_query:
+                raise self._errors_by_query[request.query]
+            return list(self._results_by_query.get(request.query, []))
         except asyncio.CancelledError:
             self.cancelled = True
             raise
@@ -326,7 +322,7 @@ class _TaskFailureAfterSiblingStartsRuntime:
             self.sibling_finished.set()
 
 
-class _QueryFailureAfterSiblingStartsTool(_Tool):
+class _QueryFailureAfterSiblingStartsGateway(_FakeExternalSearchGateway):
     def __init__(self, *, error: BaseException) -> None:
         super().__init__()
         self._error = error
@@ -334,9 +330,9 @@ class _QueryFailureAfterSiblingStartsTool(_Tool):
         self.sibling_finished = asyncio.Event()
         self.sibling_cancelled = False
 
-    async def search(self, input: Any) -> list[ExternalSearchHit]:
-        self.calls.append(input)
-        if input.query == "failing":
+    async def search(self, request: Any) -> list[ExternalSearchHit]:
+        self.calls.append(request)
+        if request.query == "failing":
             await self.sibling_started.wait()
             raise self._error
         self.sibling_started.set()
@@ -427,7 +423,7 @@ async def test_external_pipeline_normalizes_and_caps_generated_queries() -> None
     reviewer_runtime = ScriptedAgentRuntime(
         [_review_draft([{"option_index": 1, "claim": "claim", "why_selected": "why"}])]
     )
-    tool = _Tool(
+    gateway = _FakeExternalSearchGateway(
         {
             "normalized": [_hit("https://example.com/first")],
             "x" * 200: [_hit("https://example.com/second")],
@@ -439,18 +435,18 @@ async def test_external_pipeline_normalizes_and_caps_generated_queries() -> None
         runtime=_runtime(
             query_runtime=query_runtime,
             reviewer_runtime=reviewer_runtime,
-            tool=tool,
+            gateway=gateway,
         ),
     )
 
     result = await _run(runner)
 
-    assert [call.query for call in tool.calls] == [
+    assert [call.query for call in gateway.calls] == [
         "normalized",
         "x" * 200,
         "third",
     ]
-    assert all(call.limit == 10 for call in tool.calls)
+    assert all(call.limit == 10 for call in gateway.calls)
     assert (
         [(item.source.title, item.source.evidence_claim) for item in answerer.calls[0]],
         result.final_output.status,
@@ -463,7 +459,7 @@ async def test_external_pipeline_passes_resolved_filter_to_every_tool_call() -> 
     query_runtime = ScriptedAgentRuntime(
         [_query_draft(["first"]), _query_draft(["second"])]
     )
-    tool = _Tool(
+    gateway = _FakeExternalSearchGateway(
         {
             "first": [_hit("https://example.com/first")],
             "second": [_hit("https://example.com/second")],
@@ -476,7 +472,7 @@ async def test_external_pipeline_passes_resolved_filter_to_every_tool_call() -> 
             reviewer_runtime=ScriptedAgentRuntime(
                 [_review_draft([]), _review_draft([])]
             ),
-            tool=tool,
+            gateway=gateway,
         ),
         target_time_window=target_time_window,
     )
@@ -484,7 +480,7 @@ async def test_external_pipeline_passes_resolved_filter_to_every_tool_call() -> 
     await _run(runner)
 
     assert (
-        [call.date_filter for call in tool.calls],
+        [call.date_filter for call in gateway.calls],
         [call.input.target_time_window for call in query_runtime.calls],
     ) == (
         [
@@ -503,20 +499,22 @@ async def test_external_pipeline_passes_resolved_filter_to_every_tool_call() -> 
 
 @pytest.mark.asyncio
 async def test_external_pipeline_passes_explicit_none_filter_to_tool() -> None:
-    tool = _Tool({"query": [_hit("https://example.com/no-filter")]})
+    gateway = _FakeExternalSearchGateway(
+        {"query": [_hit("https://example.com/no-filter")]}
+    )
     runner, _, _ = _runner(
         tasks=[_task("no publication filter")],
         runtime=_runtime(
             query_runtime=ScriptedAgentRuntime([_query_draft(["query"])]),
             reviewer_runtime=ScriptedAgentRuntime([_review_draft([])]),
-            tool=tool,
+            gateway=gateway,
         ),
         target_time_window=None,
     )
 
     await _run(runner)
 
-    assert [call.date_filter for call in tool.calls] == [None]
+    assert [call.date_filter for call in gateway.calls] == [None]
 
 
 @pytest.mark.asyncio
@@ -558,7 +556,7 @@ async def test_external_runner_resolves_target_time_window_once_per_branch(
         spy,
     )
     tasks = [_task("first period task"), _task("second period task")]
-    tool = _Tool()
+    gateway = _FakeExternalSearchGateway()
     runner, _, _ = _runner(
         tasks=tasks,
         runtime=_runtime(
@@ -569,7 +567,7 @@ async def test_external_runner_resolves_target_time_window_once_per_branch(
                 ]
             ),
             reviewer_runtime=ScriptedAgentRuntime([]),
-            tool=tool,
+            gateway=gateway,
         ),
         target_time_window=target_time_window,
     )
@@ -579,7 +577,7 @@ async def test_external_runner_resolves_target_time_window_once_per_branch(
     assert (
         resolver_calls,
         len(tasks),
-        len(tool.calls),
+        len(gateway.calls),
     ) == (
         [(target_time_window, AS_OF)],
         2,
@@ -613,13 +611,13 @@ async def test_naive_as_of_propagates_before_external_activity_or_observability(
     events = _Events()
     query_runtime = ScriptedAgentRuntime([])
     reviewer_runtime = ScriptedAgentRuntime([])
-    tool = _Tool()
+    gateway = _FakeExternalSearchGateway()
     runner, answerer, factory = _runner(
         tasks=[_task("naive as_of は分類しない")],
         runtime=_runtime(
             query_runtime=query_runtime,
             reviewer_runtime=reviewer_runtime,
-            tool=tool,
+            gateway=gateway,
         ),
         events=events,
     )
@@ -633,7 +631,7 @@ async def test_naive_as_of_propagates_before_external_activity_or_observability(
         factory.scopes,
         query_runtime.calls,
         reviewer_runtime.calls,
-        tool.calls,
+        gateway.calls,
         _external_search_events(events.events),
         answerer.calls,
         captured,
@@ -674,13 +672,13 @@ async def test_external_branch_records_one_nonfailed_time_filter_resolution_metr
     target_time_window: TargetTimeWindow | None,
     expected_result: str,
 ) -> None:
-    tool = _Tool()
+    gateway = _FakeExternalSearchGateway()
     runner, _, factory = _runner(
         tasks=[_task("期間計測")],
         runtime=_runtime(
             query_runtime=ScriptedAgentRuntime([_query_draft(["metric query"])]),
             reviewer_runtime=ScriptedAgentRuntime([]),
-            tool=tool,
+            gateway=gateway,
         ),
         target_time_window=target_time_window,
     )
@@ -748,14 +746,14 @@ async def test_time_filter_resolution_failure_closes_external_branch_before_acti
     events = _Events()
     query_runtime = ScriptedAgentRuntime([])
     reviewer_runtime = ScriptedAgentRuntime([])
-    tool = _Tool()
+    gateway = _FakeExternalSearchGateway()
     tasks = [_task("first closed task"), _task("second closed task")]
     runner, answerer, factory = _runner(
         tasks=tasks,
         runtime=_runtime(
             query_runtime=query_runtime,
             reviewer_runtime=reviewer_runtime,
-            tool=tool,
+            gateway=gateway,
         ),
         events=events,
         target_time_window=target_time_window,
@@ -777,7 +775,7 @@ async def test_time_filter_resolution_failure_closes_external_branch_before_acti
         factory.scopes[0].exit_calls,
         query_runtime.calls,
         reviewer_runtime.calls,
-        tool.calls,
+        gateway.calls,
         _external_search_events(events.events),
         answerer.calls,
         [
@@ -855,7 +853,7 @@ async def test_provider_result_cap_is_applied_before_external_hits(
         runtime=_runtime(
             query_runtime=ScriptedAgentRuntime([_query_draft(["q"])]),
             reviewer_runtime=reviewer_runtime,
-            tool=_Tool(
+            gateway=_FakeExternalSearchGateway(
                 {
                     "q": [
                         _hit(f"https://example.com/hit-{index}")
@@ -886,20 +884,20 @@ async def test_classified_query_failure_never_starts_tool_or_reviewer() -> None:
         [AgentResponseInvalidError(AgentResponseDefect.RESPONSE_NOT_JSON)]
     )
     reviewer_runtime = ScriptedAgentRuntime([])
-    tool = _Tool()
+    gateway = _FakeExternalSearchGateway()
     runner, answerer, factory = _runner(
         tasks=[_task("invalid query")],
         runtime=_runtime(
             query_runtime=query_runtime,
             reviewer_runtime=reviewer_runtime,
-            tool=tool,
+            gateway=gateway,
         ),
     )
 
     await _run(runner)
 
     assert (
-        tool.calls,
+        gateway.calls,
         reviewer_runtime.calls,
         answerer.calls,
         factory.scopes[0].exit_calls,
@@ -911,12 +909,12 @@ async def test_partial_provider_failure_continues_but_all_failure_skips_reviewer
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     captured = _capture_external_outcome(monkeypatch)
-    provider_error = ExternalSearchProviderError(reason="tavily_search_http_error")
+    provider_error = ExternalSearchProviderError(reason="external_search_http_error")
     query_runtime = ScriptedAgentRuntime(
         [_query_draft(["good", "bad"]), _query_draft(["bad"])]
     )
     reviewer_runtime = ScriptedAgentRuntime([_review_draft([])])
-    tool = _Tool(
+    gateway = _FakeExternalSearchGateway(
         {"good": [_hit("https://example.com/good")]},
         errors_by_query={"bad": provider_error},
     )
@@ -925,7 +923,7 @@ async def test_partial_provider_failure_continues_but_all_failure_skips_reviewer
         runtime=_runtime(
             query_runtime=query_runtime,
             reviewer_runtime=reviewer_runtime,
-            tool=tool,
+            gateway=gateway,
         ),
         requested_agent_count=1,
     )
@@ -933,7 +931,7 @@ async def test_partial_provider_failure_continues_but_all_failure_skips_reviewer
     await _run(runner)
 
     assert (
-        [call.query for call in tool.calls],
+        [call.query for call in gateway.calls],
         len(reviewer_runtime.calls),
         answerer.calls,
         [
@@ -991,7 +989,7 @@ async def test_workflow_constructs_task_ordered_external_outcome_before_answerin
                     _review_draft([]),
                 ]
             ),
-            tool=_Tool(
+            gateway=_FakeExternalSearchGateway(
                 {
                     "q1": [_hit("https://example.com/shared", title="first")],
                     "q2": [_hit("https://example.com/shared", title="second")],
@@ -1058,7 +1056,7 @@ async def test_collection_events_are_per_task_causal_with_their_contract_payload
         runtime=_runtime(
             query_runtime=query_runtime,
             reviewer_runtime=reviewer_runtime,
-            tool=_Tool(
+            gateway=_FakeExternalSearchGateway(
                 {
                     "q1": [_hit("https://example.com/q1")],
                     "q2": [_hit("https://example.com/q2")],
@@ -1111,7 +1109,7 @@ async def test_external_pipeline_is_a_noop_for_events_when_reporter_is_none() ->
         runtime=_runtime(
             query_runtime=ScriptedAgentRuntime([_query_draft(["q"])]),
             reviewer_runtime=ScriptedAgentRuntime([_review_draft([])]),
-            tool=_Tool({"q": [_hit("https://example.com/q")]}),
+            gateway=_FakeExternalSearchGateway({"q": [_hit("https://example.com/q")]}),
         ),
         events=None,
     )
@@ -1130,7 +1128,7 @@ async def test_requested_count_limits_only_external_task_parallelism() -> None:
         runtime=_runtime(
             query_runtime=query_runtime,
             reviewer_runtime=ScriptedAgentRuntime([]),
-            tool=_Tool(),
+            gateway=_FakeExternalSearchGateway(),
         ),
         requested_agent_count=2,
     )
@@ -1159,7 +1157,7 @@ async def test_outer_cancellation_cancels_and_joins_all_started_external_tasks()
         runtime=_runtime(
             query_runtime=query_runtime,
             reviewer_runtime=ScriptedAgentRuntime([]),
-            tool=_Tool(),
+            gateway=_FakeExternalSearchGateway(),
         ),
         requested_agent_count=len(tasks),
         timeline=timeline,
@@ -1200,7 +1198,7 @@ async def test_classified_task_failure_does_not_cancel_its_sibling() -> None:
         runtime=_runtime(
             query_runtime=query_runtime,
             reviewer_runtime=reviewer_runtime,
-            tool=_Tool({"q": [_hit("https://example.com/q")]}),
+            gateway=_FakeExternalSearchGateway({"q": [_hit("https://example.com/q")]}),
         ),
         requested_agent_count=1,
     )
@@ -1224,7 +1222,7 @@ async def test_unclassified_task_failure_joins_sibling_before_scope_close() -> N
         runtime=_runtime(
             query_runtime=query_runtime,
             reviewer_runtime=ScriptedAgentRuntime([]),
-            tool=_Tool(),
+            gateway=_FakeExternalSearchGateway(),
         ),
         requested_agent_count=2,
         timeline=timeline,
@@ -1245,13 +1243,13 @@ async def test_unclassified_task_failure_joins_sibling_before_scope_close() -> N
 @pytest.mark.asyncio
 async def test_unclassified_query_failure_joins_sibling_before_reraise() -> None:
     error = RuntimeError("UNCLASSIFIED_QUERY_ERROR")
-    tool = _QueryFailureAfterSiblingStartsTool(error=error)
+    gateway = _QueryFailureAfterSiblingStartsGateway(error=error)
     runner, _, factory = _runner(
         tasks=[_task("query siblings")],
         runtime=_runtime(
             query_runtime=ScriptedAgentRuntime([_query_draft(["failing", "blocking"])]),
             reviewer_runtime=ScriptedAgentRuntime([]),
-            tool=tool,
+            gateway=gateway,
         ),
     )
 
@@ -1260,8 +1258,8 @@ async def test_unclassified_query_failure_joins_sibling_before_reraise() -> None
 
     assert (
         raised.value is error,
-        tool.sibling_cancelled,
-        tool.sibling_finished.is_set(),
+        gateway.sibling_cancelled,
+        gateway.sibling_finished.is_set(),
         factory.scopes[0].exited,
     ) == (True, True, True, True)
 
@@ -1291,8 +1289,8 @@ async def test_external_scope_is_activated_fresh_per_run() -> None:
             ]
         )
 
-    def _tool() -> _Tool:
-        return _Tool(
+    def _gateway() -> _FakeExternalSearchGateway:
+        return _FakeExternalSearchGateway(
             {
                 "q1": [_hit("https://example.com/shared", title="first")],
                 "q2": [_hit("https://example.com/shared", title="second")],
@@ -1304,14 +1302,14 @@ async def test_external_scope_is_activated_fresh_per_run() -> None:
             [_query_draft(["q1"]), _query_draft(["q2"])]
         ),
         reviewer_runtime=_reviewer_runtime(),
-        tool=_tool(),
+        gateway=_gateway(),
     )
     second_runtime = _runtime(
         query_runtime=ScriptedAgentRuntime(
             [_query_draft(["q1"]), _query_draft(["q2"])]
         ),
         reviewer_runtime=_reviewer_runtime(),
-        tool=_tool(),
+        gateway=_gateway(),
     )
     answerer = _EvidenceAnswerer()
     factory = _Factory([first_runtime, second_runtime])
@@ -1353,7 +1351,7 @@ async def test_query_timeout_is_classified_without_reviewer() -> None:
                 [AIProviderNetworkError(reason=DeepSeekStateReason.TIMEOUT)]
             ),
             reviewer_runtime=reviewer_runtime,
-            tool=_Tool(),
+            gateway=_FakeExternalSearchGateway(),
         ),
     )
 
@@ -1374,7 +1372,7 @@ async def test_query_timeout_backstop_cancels_the_runtime_and_reports_failure(
         runtime=_runtime(
             query_runtime=query_runtime,
             reviewer_runtime=ScriptedAgentRuntime([]),
-            tool=_Tool(),
+            gateway=_FakeExternalSearchGateway(),
         ),
     )
 
@@ -1397,14 +1395,14 @@ async def test_provider_timeout_backstop_cancels_tool_and_skips_reviewer(
     observed_timeouts = _record_and_shorten_pipeline_timeouts(monkeypatch)
     captured = _capture_external_outcome(monkeypatch)
     started = asyncio.Event()
-    tool = _Tool(started=started, release=asyncio.Event())
+    gateway = _FakeExternalSearchGateway(started=started, release=asyncio.Event())
     reviewer_runtime = ScriptedAgentRuntime([])
     runner, _, _ = _runner(
         tasks=[_task("provider timeout")],
         runtime=_runtime(
             query_runtime=ScriptedAgentRuntime([_query_draft(["q"])]),
             reviewer_runtime=reviewer_runtime,
-            tool=tool,
+            gateway=gateway,
         ),
     )
 
@@ -1413,7 +1411,7 @@ async def test_provider_timeout_backstop_cancels_tool_and_skips_reviewer(
     report = _task_reports(captured[0])[0]
     assert (
         started.is_set(),
-        tool.cancelled,
+        gateway.cancelled,
         reviewer_runtime.calls,
         report.external_collection,
         isinstance(captured[0].evidence_run, EvidenceRunCompleted),

@@ -1,9 +1,9 @@
-"""External Search ToolとしてTavily Search APIを呼ぶadapter。"""
+"""External search gatewayとしてTavily Search APIを呼ぶadapter。"""
 
 from __future__ import annotations
 
 from collections.abc import Mapping
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 from email.utils import parsedate_to_datetime
 from typing import Any, Final, Protocol, cast
 from urllib.parse import urlparse
@@ -16,30 +16,26 @@ from pydantic import SecretStr, ValidationError
 
 from app.agent.evidence_collection.external_search.contract import (
     EXTERNAL_CONTENT_MAX_CHARS,
-    EXTERNAL_SEARCH_TOOL_NAME,
-    ExternalSearchDateFilter,
+    ExternalSearchFailureReason,
     ExternalSearchHit,
     ExternalSearchProviderError,
-    ExternalSearchToolFailureReason,
-    ExternalSearchToolInput,
-    ExternalSearchToolName,
+    ExternalSearchRequest,
 )
 from app.agent.evidence_collection.external_search.metrics import (
     record_external_hit_dropped,
 )
+from app.agent.evidence_collection.external_search.tavily_spec import (
+    TAVILY_NEWS_SEARCH_SPEC,
+    TavilySearchCallSpec,
+    build_search_body,
+)
 from app.shared.security.safe_url import SafeUrl
 
 __all__ = [
-    "TAVILY_MAX_RESULTS_LIMIT",
-    "TAVILY_REQUEST_TIMEOUT_SECONDS",
-    "TAVILY_SEARCH_URL",
-    "TavilyExternalSearchTool",
+    "TavilyExternalSearchGateway",
 ]
 
-TAVILY_SEARCH_URL = "https://api.tavily.com/search"
-TAVILY_REQUEST_TIMEOUT_SECONDS = 10
-TAVILY_MAX_RESULTS_LIMIT = 20
-_TOOL_SPAN_NAME: Final[str] = "external_search_tool_call"
+_SPAN_NAME: Final[str] = "external_search_call"
 _MISSING_HITS = object()
 
 
@@ -54,8 +50,10 @@ class TavilyHttpClient(Protocol):
     ) -> httpx.Response: ...
 
 
-class TavilyExternalSearchTool:
+class TavilyExternalSearchGateway:
     """完成済みqueryをTavilyで実行し、検証済みhitへ変換する。"""
+
+    SPEC: Final[TavilySearchCallSpec] = TAVILY_NEWS_SEARCH_SPEC
 
     __slots__ = ("_api_key", "_client")
 
@@ -65,26 +63,21 @@ class TavilyExternalSearchTool:
         self._api_key = api_key
         self._client = client
 
-    @property
-    def name(self) -> ExternalSearchToolName:
-        return EXTERNAL_SEARCH_TOOL_NAME
-
     async def search(
         self,
-        input: ExternalSearchToolInput,
+        request: ExternalSearchRequest,
     ) -> list[ExternalSearchHit]:
-        if input.limit <= 0:
+        if request.limit <= 0:
             raise ValueError("limit must be greater than 0")
 
         classified_error: ExternalSearchProviderError | None = None
         hits: list[ExternalSearchHit] | object = _MISSING_HITS
         with logfire.span(
-            _TOOL_SPAN_NAME,
+            _SPAN_NAME,
             _span_kind=SpanKind.CLIENT,
-            tool_name=self.name,
         ) as span:
             try:
-                hits = await self._execute(input)
+                hits = await self._execute(request)
             except ExternalSearchProviderError as exc:
                 classified_error = exc
                 span.set_attribute(ERROR_TYPE, exc.reason)
@@ -95,23 +88,19 @@ class TavilyExternalSearchTool:
         if classified_error is not None:
             raise classified_error
         if hits is _MISSING_HITS:
-            raise RuntimeError("Tavily tool completed without hits")
+            raise RuntimeError("Tavily search completed without hits")
         return cast(list[ExternalSearchHit], hits)
 
     async def _execute(
         self,
-        input: ExternalSearchToolInput,
+        request: ExternalSearchRequest,
     ) -> list[ExternalSearchHit]:
-        response = await self._post_search(
-            query=input.query,
-            limit=input.limit,
-            date_filter=input.date_filter,
-        )
+        response = await self._post_search(request)
         data = _response_json(response)
         results = data.get("results")
         if not isinstance(results, list):
             raise ExternalSearchProviderError(
-                reason=ExternalSearchToolFailureReason.INVALID_RESULTS
+                reason=ExternalSearchFailureReason.INVALID_RESULTS
             )
 
         hits: list[ExternalSearchHit] = []
@@ -119,50 +108,38 @@ class TavilyExternalSearchTool:
             hit = _hit_from_result(result)
             if hit is not None:
                 hits.append(hit)
-        return hits[: input.limit]
+        return hits[: request.limit]
 
-    async def _post_search(
-        self,
-        *,
-        query: str,
-        limit: int,
-        date_filter: ExternalSearchDateFilter | None,
-    ) -> httpx.Response:
-        body: dict[str, object] = {
-            "query": query,
-            "topic": "news",
-            "search_depth": "basic",
-            "max_results": min(limit, TAVILY_MAX_RESULTS_LIMIT),
-            "include_answer": False,
-            "include_raw_content": False,
-        }
-        if date_filter is not None:
-            provider_start_date = date_filter.start_date - timedelta(days=1)
-            body["start_date"] = provider_start_date.isoformat()
-            body["end_date"] = date_filter.end_date.isoformat()
+    async def _post_search(self, request: ExternalSearchRequest) -> httpx.Response:
+        body = build_search_body(
+            self.SPEC,
+            query=request.query,
+            limit=request.limit,
+            date_filter=request.date_filter,
+        )
         # ProxyError は RequestError の subclass なので先に判定する。まとめて受けると
         # egress の設定ミスが provider 障害として記録され、切り分けが逆を向く。
-        transport_failure: ExternalSearchToolFailureReason | None = None
+        transport_failure: ExternalSearchFailureReason | None = None
         try:
             response = await self._client.post(
-                TAVILY_SEARCH_URL,
+                self.SPEC.search_url,
                 headers={
                     "Authorization": (f"Bearer {self._api_key.get_secret_value()}")
                 },
                 json=body,
-                timeout=TAVILY_REQUEST_TIMEOUT_SECONDS,
+                timeout=self.SPEC.request_timeout_seconds,
             )
         except httpx.ProxyError:
-            transport_failure = ExternalSearchToolFailureReason.PROXY_ERROR
+            transport_failure = ExternalSearchFailureReason.PROXY_ERROR
         except httpx.RequestError:
-            transport_failure = ExternalSearchToolFailureReason.HTTP_ERROR
+            transport_failure = ExternalSearchFailureReason.HTTP_ERROR
 
         if transport_failure is not None:
             raise ExternalSearchProviderError(reason=transport_failure)
 
         if not 200 <= response.status_code < 300:
             raise ExternalSearchProviderError(
-                reason=ExternalSearchToolFailureReason.HTTP_STATUS,
+                reason=ExternalSearchFailureReason.HTTP_STATUS,
                 status_code=response.status_code,
             )
         return response
@@ -175,7 +152,7 @@ def _response_json(response: httpx.Response) -> dict[str, Any]:
         data = None
     if not isinstance(data, dict):
         raise ExternalSearchProviderError(
-            reason=ExternalSearchToolFailureReason.INVALID_JSON
+            reason=ExternalSearchFailureReason.INVALID_JSON
         )
     return data
 

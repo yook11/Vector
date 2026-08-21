@@ -1,12 +1,10 @@
-"""External Search Tool の公開契約とTavily adapter境界のテスト。"""
+"""External search gateway の公開契約とTavily adapter境界のテスト。"""
 
 from __future__ import annotations
 
 import asyncio
 import json
 from collections.abc import Sequence
-from dataclasses import fields, is_dataclass
-from typing import Literal, get_args, get_origin, get_type_hints
 
 import httpx
 import logfire
@@ -16,25 +14,24 @@ from opentelemetry.sdk.trace import ReadableSpan
 from opentelemetry.trace import SpanKind, StatusCode
 from pydantic import SecretStr
 
-from app.agent.evidence_collection.external_search import TavilyExternalSearchTool
+from app.agent.evidence_collection.external_search import (
+    TavilyExternalSearchGateway,
+)
 from app.agent.evidence_collection.external_search.contract import (
-    ExternalSearchDateFilter,
-    ExternalSearchHit,
+    ExternalSearchFailureReason,
     ExternalSearchProviderError,
-    ExternalSearchTool,
-    ExternalSearchToolFailureReason,
-    ExternalSearchToolInput,
+    ExternalSearchRequest,
 )
 from tests.logfire._span_helpers import domain_attr_keys, one_span_named
 
-_TOOL_SPAN_NAME = "external_search_tool_call"
+_SPAN_NAME = "external_search_call"
 _ANSWERING_SPAN_NAME = "agent_answering_run"
 
 
-def _tool_input(
+def _search_request(
     *, query: str, limit: int, date_filter: object | None = None
-) -> ExternalSearchToolInput:
-    return ExternalSearchToolInput(
+) -> ExternalSearchRequest:
+    return ExternalSearchRequest(
         query=query,
         limit=limit,
         date_filter=date_filter,
@@ -91,29 +88,27 @@ class StaticAsyncByteStream(httpx.AsyncByteStream):
         yield self._content
 
 
-def _tavily_tool(
+def _tavily_gateway(
     client: object, *, api_key: str = "TOOL_SECRET_SENTINEL_d5e1"
-) -> TavilyExternalSearchTool:
-    return TavilyExternalSearchTool(
+) -> TavilyExternalSearchGateway:
+    return TavilyExternalSearchGateway(
         api_key=SecretStr(api_key),
         client=client,
     )
 
 
-def _tool_spans(capfire: CaptureLogfire) -> list[ReadableSpan]:
+def _gateway_spans(capfire: CaptureLogfire) -> list[ReadableSpan]:
     return [
         span
         for span in capfire.exporter.exported_spans
-        if span.name == _TOOL_SPAN_NAME
+        if span.name == _SPAN_NAME
         and (span.attributes or {}).get("logfire.span_type") == "span"
     ]
 
 
-def _one_tool_span(capfire: CaptureLogfire) -> ReadableSpan:
-    spans = _tool_spans(capfire)
-    assert len(spans) == 1, (
-        f"expected exactly one {_TOOL_SPAN_NAME} span, got {len(spans)}"
-    )
+def _one_gateway_span(capfire: CaptureLogfire) -> ReadableSpan:
+    spans = _gateway_spans(capfire)
+    assert len(spans) == 1, f"expected exactly one {_SPAN_NAME} span, got {len(spans)}"
     return spans[0]
 
 
@@ -126,34 +121,8 @@ def _span_text(span: ReadableSpan) -> str:
     return " ".join(values)
 
 
-def test_external_search_tool_port_and_tavily_adapter_are_stably_typed() -> None:
-    assert is_dataclass(ExternalSearchToolInput)
-    assert [field.name for field in fields(ExternalSearchToolInput)] == [
-        "query",
-        "limit",
-        "date_filter",
-    ]
-    assert get_type_hints(ExternalSearchToolInput) == {
-        "query": str,
-        "limit": int,
-        "date_filter": ExternalSearchDateFilter | None,
-    }
-    assert get_type_hints(ExternalSearchTool.search) == {
-        "input": ExternalSearchToolInput,
-        "return": list[ExternalSearchHit],
-    }
-    name_property = ExternalSearchTool.__dict__["name"]
-    name_type = get_type_hints(name_property.fget)["return"]
-    assert get_origin(name_type) is Literal
-    assert get_args(name_type) == ("external_search",)
-    tool = TavilyExternalSearchTool(api_key=SecretStr("test-key"), client=object())
-    assert tool.name == "external_search"
-    assert hasattr(tool, "search")
-    assert not hasattr(tool, "invoke")
-
-
 @pytest.mark.asyncio
-async def test_successful_tool_call_has_one_safe_client_span_in_answer_trace(
+async def test_successful_call_has_one_safe_client_span_in_answer_trace(
     capfire: CaptureLogfire,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -202,12 +171,14 @@ async def test_successful_tool_call_has_one_safe_client_span_in_answer_trace(
             capture_request_body=False,
             capture_response_body=False,
         )
-        tool = _tavily_tool(client, api_key=sentinels["secret"])
+        gateway = _tavily_gateway(client, api_key=sentinels["secret"])
         with logfire.span(_ANSWERING_SPAN_NAME):
-            hits = await tool.search(_tool_input(query=sentinels["query"], limit=1))
+            hits = await gateway.search(
+                _search_request(query=sentinels["query"], limit=1)
+            )
 
-    span = _one_tool_span(capfire)
-    span_dict = one_span_named(capfire, _TOOL_SPAN_NAME)
+    span = _one_gateway_span(capfire)
+    span_dict = one_span_named(capfire, _SPAN_NAME)
     answer_span = one_span_named(capfire, _ANSWERING_SPAN_NAME)
     http_spans = [
         exported_span
@@ -222,8 +193,7 @@ async def test_successful_tool_call_has_one_safe_client_span_in_answer_trace(
     assert len(requests) == 1
     assert len(hits) == 1
     assert span.kind is SpanKind.CLIENT
-    assert domain_attr_keys(span_dict["attributes"]) == {"tool_name", "hit_count"}
-    assert span_dict["attributes"]["tool_name"] == "external_search"
+    assert domain_attr_keys(span_dict["attributes"]) == {"hit_count"}
     assert span_dict["attributes"]["hit_count"] == 1
     assert span_dict["context"]["trace_id"] == answer_span["context"]["trace_id"]
     assert len(http_spans) == 1
@@ -234,7 +204,7 @@ async def test_successful_tool_call_has_one_safe_client_span_in_answer_trace(
 
 
 @pytest.mark.asyncio
-async def test_classified_tool_failure_uses_closed_reason_without_exception_event(
+async def test_classified_failure_uses_closed_reason_without_exception_event(
     capfire: CaptureLogfire,
 ) -> None:
     sentinels = {
@@ -242,7 +212,7 @@ async def test_classified_tool_failure_uses_closed_reason_without_exception_even
         "response": "RESPONSE_BODY_SENTINEL_TOOL_96b2",
         "secret": "TOOL_SECRET_SENTINEL_FAILURE_3ec0",
     }
-    tool = _tavily_tool(
+    gateway = _tavily_gateway(
         FakeTavilyHttpClient(
             [httpx.Response(429, json={"error": sentinels["response"]})]
         ),
@@ -250,24 +220,24 @@ async def test_classified_tool_failure_uses_closed_reason_without_exception_even
     )
 
     with pytest.raises(ExternalSearchProviderError) as raised:
-        await tool.search(_tool_input(query=sentinels["query"], limit=1))
+        await gateway.search(_search_request(query=sentinels["query"], limit=1))
 
-    span = _one_tool_span(capfire)
+    span = _one_gateway_span(capfire)
     attributes = dict(span.attributes or {})
     trace_dump = json.dumps(
         capfire.exporter.exported_spans_as_dict(), ensure_ascii=False, default=str
     )
-    assert raised.value.reason == "tavily_search_http_status_429"
+    assert raised.value.reason == "external_search_http_status_429"
     assert span.status.status_code is StatusCode.ERROR
     assert span.status.description in (None, "")
-    assert attributes["error.type"] == "tavily_search_http_status_429"
+    assert attributes["error.type"] == "external_search_http_status_429"
     assert "hit_count" not in attributes
     assert not [event for event in span.events if event.name == "exception"]
     assert all(sentinel not in _span_text(span) for sentinel in sentinels.values())
     assert all(sentinel not in trace_dump for sentinel in sentinels.values())
 
 
-def test_classified_tool_error_accepts_every_static_reason_code() -> None:
+def test_classified_error_accepts_every_static_reason_code() -> None:
     """status を伴わない全 reason が str 経路でも通ること。
 
     受理集合を手書きで並べると enum に member を足したときに黙って落ちる。
@@ -275,8 +245,8 @@ def test_classified_tool_error_accepts_every_static_reason_code() -> None:
     """
     static_members = [
         member
-        for member in ExternalSearchToolFailureReason
-        if member is not ExternalSearchToolFailureReason.HTTP_STATUS
+        for member in ExternalSearchFailureReason
+        if member is not ExternalSearchFailureReason.HTTP_STATUS
     ]
     assert static_members  # 列挙が空なら以下の assert が空虚になる
 
@@ -284,25 +254,27 @@ def test_classified_tool_error_accepts_every_static_reason_code() -> None:
         assert ExternalSearchProviderError(reason=member.value).reason == member.value
 
 
-def test_classified_tool_error_rejects_arbitrary_reason_values() -> None:
+def test_classified_error_rejects_arbitrary_reason_values() -> None:
     error_type = ExternalSearchProviderError
-    error = error_type(reason="tavily_search_http_error")
+    error = error_type(reason="external_search_http_error")
 
-    assert error.reason == "tavily_search_http_error"
+    assert error.reason == "external_search_http_error"
     with pytest.raises((TypeError, ValueError)):
         error_type(reason="ARBITRARY_REASON_SENTINEL_TOOL_1d2e")
     with pytest.raises((TypeError, ValueError)):
-        error_type(reason="tavily_search_http_status_４２９")
+        error_type(reason="external_search_http_status_４２９")
 
 
 @pytest.mark.asyncio
-async def test_tool_timeout_cancels_search_without_fabricating_span_values(
+async def test_timeout_cancels_search_without_fabricating_span_values(
     capfire: CaptureLogfire,
 ) -> None:
     client = BlockingTavilyHttpClient()
-    tool = _tavily_tool(client)
+    gateway = _tavily_gateway(client)
     invocation = asyncio.create_task(
-        tool.search(_tool_input(query="TOOL_QUERY_SENTINEL_CANCEL_651e", limit=1))
+        gateway.search(
+            _search_request(query="TOOL_QUERY_SENTINEL_CANCEL_651e", limit=1)
+        )
     )
     await client.started.wait()
     invocation.cancel()
@@ -310,9 +282,9 @@ async def test_tool_timeout_cancels_search_without_fabricating_span_values(
     with pytest.raises(asyncio.CancelledError):
         await invocation
 
-    span = _one_tool_span(capfire)
+    span = _one_gateway_span(capfire)
     attributes = dict(span.attributes or {})
     assert client.cancelled is True
-    assert attributes["tool_name"] == "external_search"
+    assert domain_attr_keys(attributes) == set()
     assert "hit_count" not in attributes
     assert "error.type" not in attributes
