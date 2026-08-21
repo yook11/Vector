@@ -15,8 +15,7 @@ from pydantic import SecretStr, ValidationError
 import app.agent.evidence_collection.external_search as external_search_module
 from app.agent.evidence_collection.external_search import (
     EXTERNAL_CONTENT_MAX_CHARS,
-    TAVILY_MAX_RESULTS_LIMIT,
-    TAVILY_SEARCH_URL,
+    TAVILY_NEWS_SEARCH_SPEC,
     ExternalSearchProviderError,
 )
 from app.agent.evidence_collection.external_search.metrics import ExternalHitDropReason
@@ -47,14 +46,14 @@ class _CloseTrackingTavilyClient:
 
 
 def _provider(client: httpx.AsyncClient) -> Any:
-    return external_search_module.TavilyExternalSearchTool(
+    return external_search_module.TavilyExternalSearchGateway(
         api_key=SecretStr(TAVILY_TEST_KEY),
         client=client,
     )
 
 
 def _input(*, query: str, limit: int, date_filter: Any | None = None) -> Any:
-    return external_search_module.ExternalSearchToolInput(
+    return external_search_module.ExternalSearchRequest(
         query=query,
         limit=limit,
         date_filter=date_filter,
@@ -108,10 +107,9 @@ async def test_search_posts_fixed_news_request_with_bearer_header() -> None:
 
         await _search(provider, query="NVIDIA Blackwell", limit=3)
 
-    assert provider.name == "external_search"
     assert len(requests) == 1
     request = requests[0]
-    assert str(request.url) == TAVILY_SEARCH_URL
+    assert str(request.url) == TAVILY_NEWS_SEARCH_SPEC.search_url
     assert request.headers["Authorization"] == f"Bearer {TAVILY_TEST_KEY}"
     body = json.loads(request.content)
     assert body == {
@@ -185,7 +183,7 @@ async def test_search_maps_half_open_filter_to_conservative_tavily_dates(
 @pytest.mark.asyncio
 async def test_tool_does_not_close_the_borrowed_tavily_client() -> None:
     client = _CloseTrackingTavilyClient()
-    provider = external_search_module.TavilyExternalSearchTool(
+    provider = external_search_module.TavilyExternalSearchGateway(
         api_key=SecretStr(TAVILY_TEST_KEY),
         client=client,
     )
@@ -209,7 +207,7 @@ async def test_search_clamps_requested_max_results_to_tavily_limit() -> None:
         await _search(provider, query="NVIDIA Blackwell", limit=30)
 
     body = json.loads(requests[0].content)
-    assert body["max_results"] == TAVILY_MAX_RESULTS_LIMIT
+    assert body["max_results"] == TAVILY_NEWS_SEARCH_SPEC.max_results_limit
 
 
 @pytest.mark.asyncio
@@ -234,7 +232,7 @@ async def test_search_rejects_non_positive_limit_without_http_call() -> None:
 
 def test_provider_rejects_empty_api_key() -> None:
     with pytest.raises(ValueError, match="TAVILY_API_KEY"):
-        external_search_module.TavilyExternalSearchTool(
+        external_search_module.TavilyExternalSearchGateway(
             api_key=SecretStr(""), client=object()
         )
 
@@ -500,7 +498,7 @@ async def test_search_wraps_non_2xx_without_leaking_response_body_or_key(
     assert str(status_code) in message
     assert TAVILY_TEST_KEY not in message
     assert "body mentions" not in message
-    assert exc_info.value.reason == f"tavily_search_http_status_{status_code}"
+    assert exc_info.value.reason == f"external_search_http_status_{status_code}"
 
 
 @pytest.mark.parametrize(
@@ -524,7 +522,7 @@ async def test_search_wraps_httpx_transport_errors(
             await _search(provider, query="NVIDIA Blackwell", limit=10)
 
     assert TAVILY_TEST_KEY not in str(exc_info.value)
-    assert exc_info.value.reason == "tavily_search_http_error"
+    assert exc_info.value.reason == "external_search_http_error"
     assert exc_info.value.__cause__ is None
     assert exc_info.value.__context__ is None
 
@@ -551,7 +549,7 @@ async def test_search_separates_egress_proxy_failures_from_provider_failures() -
         with pytest.raises(ExternalSearchProviderError) as exc_info:
             await _search(provider, query="NVIDIA Blackwell", limit=10)
 
-    assert exc_info.value.reason == "tavily_search_proxy_error"
+    assert exc_info.value.reason == "external_search_proxy_error"
     assert TAVILY_TEST_KEY not in str(exc_info.value)
 
 
@@ -567,7 +565,7 @@ async def test_search_wraps_json_decode_error() -> None:
         ) as exc_info:
             await _search(provider, query="NVIDIA Blackwell", limit=10)
 
-    assert exc_info.value.reason == "tavily_search_invalid_json"
+    assert exc_info.value.reason == "external_search_invalid_json"
     assert exc_info.value.__cause__ is None
     assert exc_info.value.__context__ is None
 
@@ -585,7 +583,7 @@ async def test_search_wraps_missing_or_non_list_results(payload: object) -> None
         ) as exc_info:
             await _search(provider, query="NVIDIA Blackwell", limit=10)
 
-    assert exc_info.value.reason == "tavily_search_invalid_results"
+    assert exc_info.value.reason == "external_search_invalid_results"
 
 
 @pytest.mark.asyncio

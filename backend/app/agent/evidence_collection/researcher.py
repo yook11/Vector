@@ -28,10 +28,10 @@ from app.agent.evidence_collection.external_search.contract import (
     ExternalQueryGenerationInput,
     ExternalResearchRuntime,
     ExternalSearchDateFilter,
+    ExternalSearchGateway,
     ExternalSearchHit,
     ExternalSearchProviderError,
-    ExternalSearchTool,
-    ExternalSearchToolInput,
+    ExternalSearchRequest,
 )
 from app.agent.evidence_collection.external_search.policy import (
     PROVIDER_SEARCH_TIMEOUT_SECONDS,
@@ -203,7 +203,7 @@ class Researcher:
             *[
                 self._search_external_query(
                     query,
-                    search_tool=external.search_tool,
+                    search_gateway=external.search_gateway,
                     date_filter=date_filter,
                 )
                 for query in queries
@@ -239,13 +239,13 @@ class Researcher:
         self,
         query: str,
         *,
-        search_tool: ExternalSearchTool,
+        search_gateway: ExternalSearchGateway,
         date_filter: ExternalSearchDateFilter | None,
     ) -> tuple[list[ExternalSearchHit], bool]:
         try:
             hits = await asyncio.wait_for(
-                search_tool.search(
-                    ExternalSearchToolInput(
+                search_gateway.search(
+                    ExternalSearchRequest(
                         query=query,
                         limit=EXTERNAL_SEARCH_HITS_PER_QUERY,
                         date_filter=date_filter,

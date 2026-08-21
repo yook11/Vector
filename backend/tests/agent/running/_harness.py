@@ -109,12 +109,12 @@ def external_research_runtime(
     *,
     query_runtime: object,
     reviewer_runtime: object,
-    tool: object,
+    gateway: object,
 ) -> ExternalResearchRuntime:
     return ExternalResearchRuntime(
         query_runtime=query_runtime,  # type: ignore[arg-type]
         reviewer_runtime=reviewer_runtime,  # type: ignore[arg-type]
-        search_tool=tool,  # type: ignore[arg-type]
+        search_gateway=gateway,  # type: ignore[arg-type]
     )
 
 
@@ -179,20 +179,16 @@ class Events:
         self.events.append(event)
 
 
-class ExternalSearchTool:
+class FakeExternalSearchGateway:
     def __init__(
         self, results_by_query: dict[str, list[ExternalSearchHit]] | None = None
     ) -> None:
         self._results = results_by_query or {}
         self.calls: list[Any] = []
 
-    @property
-    def name(self) -> str:
-        return "external_search"
-
-    async def search(self, input: Any) -> list[ExternalSearchHit]:
-        self.calls.append(input)
-        return list(self._results.get(input.query, []))
+    async def search(self, request: Any) -> list[ExternalSearchHit]:
+        self.calls.append(request)
+        return list(self._results.get(request.query, []))
 
 
 @dataclass(frozen=True, slots=True)

@@ -12,9 +12,8 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from app.agent.evidence_collection.external_search import (
-    TAVILY_MAX_RESULTS_LIMIT,
-    TAVILY_REQUEST_TIMEOUT_SECONDS,
-    TAVILY_SEARCH_URL,
+    TAVILY_NEWS_SEARCH_SPEC,
+    build_search_body,
 )
 from app.config import settings
 from app.shared.security.safe_http import make_safe_async_client
@@ -38,20 +37,18 @@ async def _probe(query: str, max_results: int) -> None:
     if not api_key:
         raise SystemExit("TAVILY_API_KEY is not configured")
 
-    body = {
-        "query": query,
-        "topic": "news",
-        "search_depth": "basic",
-        "max_results": min(max_results, TAVILY_MAX_RESULTS_LIMIT),
-        "include_answer": False,
-        "include_raw_content": False,
-    }
+    body = build_search_body(
+        TAVILY_NEWS_SEARCH_SPEC,
+        query=query,
+        limit=max_results,
+        date_filter=None,
+    )
     async with make_safe_async_client() as client:
         response = await client.post(
-            TAVILY_SEARCH_URL,
+            TAVILY_NEWS_SEARCH_SPEC.search_url,
             headers={"Authorization": f"Bearer {api_key}"},
             json=body,
-            timeout=TAVILY_REQUEST_TIMEOUT_SECONDS,
+            timeout=TAVILY_NEWS_SEARCH_SPEC.request_timeout_seconds,
         )
 
     if not 200 <= response.status_code < 300:

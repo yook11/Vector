@@ -89,7 +89,7 @@ class _FakeInternalSearch:
         return list(self._hits)
 
 
-class _ExternalTool:
+class _FakeExternalSearchGateway:
     def __init__(
         self,
         results_by_query: dict[str, list[ExternalSearchHit]] | None = None,
@@ -100,15 +100,11 @@ class _ExternalTool:
         self._errors = errors_by_query or {}
         self.calls: list[Any] = []
 
-    @property
-    def name(self) -> str:
-        return "external_search"
-
-    async def search(self, input: Any) -> list[ExternalSearchHit]:
-        self.calls.append(input)
-        if input.query in self._errors:
-            raise self._errors[input.query]
-        return list(self._results.get(input.query, []))
+    async def search(self, request: Any) -> list[ExternalSearchHit]:
+        self.calls.append(request)
+        if request.query in self._errors:
+            raise self._errors[request.query]
+        return list(self._results.get(request.query, []))
 
 
 class _Events:
@@ -138,12 +134,12 @@ def _external_events(events: list[Any]) -> list[Any]:
 def _external_runtime(
     query_runtime: object,
     *,
-    tool: _ExternalTool | None = None,
+    gateway: _FakeExternalSearchGateway | None = None,
 ) -> ExternalResearchRuntime:
     return ExternalResearchRuntime(
         query_runtime=query_runtime,  # type: ignore[arg-type]
         reviewer_runtime=ScriptedAgentRuntime([]),  # type: ignore[arg-type]
-        search_tool=(tool or _ExternalTool()),  # type: ignore[arg-type]
+        search_gateway=(gateway or _FakeExternalSearchGateway()),  # type: ignore[arg-type]
     )
 
 
@@ -169,7 +165,9 @@ async def _collect(
 async def test_internal_failure_still_collects_external_hits() -> None:
     """保証するテスト条件 1。internal_failed=Trueかつcompleted eventが立たない。"""
     events = _Events()
-    tool = _ExternalTool({"nvidia supply": [_external_hit("https://example.com/a")]})
+    gateway = _FakeExternalSearchGateway(
+        {"nvidia supply": [_external_hit("https://example.com/a")]}
+    )
     query_runtime = ScriptedAgentRuntime([_query_draft(["nvidia supply"])])
     researcher = Researcher(
         internal_search=_FakeInternalSearch(
@@ -181,7 +179,7 @@ async def test_internal_failure_still_collects_external_hits() -> None:
     collected = await _collect(
         researcher,
         task=_task("goal", "internal query"),
-        external=_external_runtime(query_runtime, tool=tool),
+        external=_external_runtime(query_runtime, gateway=gateway),
     )
 
     assert (
@@ -203,9 +201,9 @@ async def test_internal_failure_still_collects_external_hits() -> None:
 async def test_external_provider_failure_keeps_internal_hits() -> None:
     """保証するテスト条件 2。"""
     hits = [_hit(assessment_id=1001, title="kept")]
-    tool = _ExternalTool(
+    gateway = _FakeExternalSearchGateway(
         errors_by_query={
-            "q": ExternalSearchProviderError(reason="tavily_search_http_error")
+            "q": ExternalSearchProviderError(reason="external_search_http_error")
         }
     )
     query_runtime = ScriptedAgentRuntime([_query_draft(["q"])])
@@ -214,7 +212,7 @@ async def test_external_provider_failure_keeps_internal_hits() -> None:
     collected = await _collect(
         researcher,
         task=_task("goal", "internal query"),
-        external=_external_runtime(query_runtime, tool=tool),
+        external=_external_runtime(query_runtime, gateway=gateway),
     )
 
     assert (
@@ -246,13 +244,13 @@ async def test_external_none_skips_external_collection_entirely() -> None:
 @pytest.mark.asyncio
 async def test_internal_search_receives_only_that_tasks_own_queries() -> None:
     """保証するテスト条件 4。"""
-    tool = _FakeInternalSearch()
-    researcher = Researcher(internal_search=tool)
+    internal_search = _FakeInternalSearch()
+    researcher = Researcher(internal_search=internal_search)
 
     await _collect(researcher, task_index=0, task=_task("first", "q1", "q2"))
     await _collect(researcher, task_index=1, task=_task("second", "q3"))
 
-    assert tool.calls == [
+    assert internal_search.calls == [
         InternalSearchQueries(queries=("q1", "q2")),
         InternalSearchQueries(queries=("q3",)),
     ]
@@ -269,18 +267,14 @@ async def test_independent_collect_calls_do_not_leak_failure_between_tasks() -> 
                 raise InternalSearchError(phase="article_search")
             return [_hit(assessment_id=1001, title="sibling-hit")]
 
-    class _KeyedExternalTool:
-        @property
-        def name(self) -> str:
-            return "external_search"
-
-        async def search(self, input: Any) -> list[ExternalSearchHit]:
-            if input.query == "bad":
-                raise ExternalSearchProviderError(reason="tavily_search_http_error")
+    class _KeyedExternalSearchGateway:
+        async def search(self, request: Any) -> list[ExternalSearchHit]:
+            if request.query == "bad":
+                raise ExternalSearchProviderError(reason="external_search_http_error")
             return [_external_hit("https://example.com/good", title="good")]
 
     internal_search = _KeyedInternalSearch()
-    external_tool = _KeyedExternalTool()
+    external_gateway = _KeyedExternalSearchGateway()
     researcher = Researcher(internal_search=internal_search)
 
     failing_result, sibling_result = await asyncio.gather(
@@ -289,7 +283,7 @@ async def test_independent_collect_calls_do_not_leak_failure_between_tasks() -> 
             task_index=0,
             task=_task("failing", "bad"),
             external=_external_runtime(
-                ScriptedAgentRuntime([_query_draft(["bad"])]), tool=external_tool
+                ScriptedAgentRuntime([_query_draft(["bad"])]), gateway=external_gateway
             ),
         ),
         _collect(
@@ -297,7 +291,7 @@ async def test_independent_collect_calls_do_not_leak_failure_between_tasks() -> 
             task_index=1,
             task=_task("succeeding", "good"),
             external=_external_runtime(
-                ScriptedAgentRuntime([_query_draft(["good"])]), tool=external_tool
+                ScriptedAgentRuntime([_query_draft(["good"])]), gateway=external_gateway
             ),
         ),
     )
@@ -382,7 +376,7 @@ async def test_internal_failure_reports_started_only_with_task_index() -> None:
 async def test_external_events_fire_in_order_with_task_index_and_payload() -> None:
     """保証するテスト条件 12。"""
     events = _Events()
-    tool = _ExternalTool(
+    gateway = _FakeExternalSearchGateway(
         {
             "good query": [
                 _external_hit("https://example.com/x", title="x"),
@@ -399,7 +393,7 @@ async def test_external_events_fire_in_order_with_task_index_and_payload() -> No
         researcher,
         task_index=1,
         task=_task("goal", "internal query"),
-        external=_external_runtime(query_runtime, tool=tool),
+        external=_external_runtime(query_runtime, gateway=gateway),
     )
 
     external_events = [event.model_dump() for event in _external_events(events.events)]
@@ -424,7 +418,7 @@ async def test_executed_queries_holds_generated_queries_in_order_on_success() ->
     provider呼び出しが全件成功する場合、executed_queriesは生成queryの全件を
     生成順のまま保持する。
     """
-    tool = _ExternalTool(
+    gateway = _FakeExternalSearchGateway(
         {
             "first query": [_external_hit("https://example.com/1")],
             "second query": [_external_hit("https://example.com/2")],
@@ -438,7 +432,7 @@ async def test_executed_queries_holds_generated_queries_in_order_on_success() ->
     collected = await _collect(
         researcher,
         task=_task("goal", "internal query"),
-        external=_external_runtime(query_runtime, tool=tool),
+        external=_external_runtime(query_runtime, gateway=gateway),
     )
 
     assert collected.executed_queries == ("first query", "second query")
@@ -451,13 +445,13 @@ async def test_executed_queries_drops_only_the_failed_query_preserving_order() -
     3件中2件目のprovider呼び出しだけが失敗した場合、失敗したqueryだけが
     除かれ、残りの順序は生成順のまま変わらない。
     """
-    tool = _ExternalTool(
+    gateway = _FakeExternalSearchGateway(
         {
             "q1": [_external_hit("https://example.com/1")],
             "q3": [_external_hit("https://example.com/3")],
         },
         errors_by_query={
-            "q2": ExternalSearchProviderError(reason="tavily_search_http_error")
+            "q2": ExternalSearchProviderError(reason="external_search_http_error")
         },
     )
     query_runtime = ScriptedAgentRuntime([_query_draft(["q1", "q2", "q3"])])
@@ -466,7 +460,7 @@ async def test_executed_queries_drops_only_the_failed_query_preserving_order() -
     collected = await _collect(
         researcher,
         task=_task("goal", "internal query"),
-        external=_external_runtime(query_runtime, tool=tool),
+        external=_external_runtime(query_runtime, gateway=gateway),
     )
 
     assert collected.generated_queries == ["q1", "q2", "q3"]
@@ -480,10 +474,10 @@ async def test_executed_queries_is_empty_when_every_provider_call_fails() -> Non
 
     記録できるqueryが0件になるため、executed_queriesは空tupleになる。
     """
-    tool = _ExternalTool(
+    gateway = _FakeExternalSearchGateway(
         errors_by_query={
-            "q1": ExternalSearchProviderError(reason="tavily_search_http_error"),
-            "q2": ExternalSearchProviderError(reason="tavily_search_http_error"),
+            "q1": ExternalSearchProviderError(reason="external_search_http_error"),
+            "q2": ExternalSearchProviderError(reason="external_search_http_error"),
         }
     )
     query_runtime = ScriptedAgentRuntime([_query_draft(["q1", "q2"])])
@@ -492,7 +486,7 @@ async def test_executed_queries_is_empty_when_every_provider_call_fails() -> Non
     collected = await _collect(
         researcher,
         task=_task("goal", "internal query"),
-        external=_external_runtime(query_runtime, tool=tool),
+        external=_external_runtime(query_runtime, gateway=gateway),
     )
 
     assert collected.external_status == "provider_failed"

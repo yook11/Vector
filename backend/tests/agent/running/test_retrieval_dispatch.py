@@ -208,7 +208,7 @@ class _InternalSearch:
             self.finished.set()
 
 
-class _Tool:
+class _FakeExternalSearchGateway:
     def __init__(
         self,
         results: dict[str, list[ExternalSearchHit]] | None = None,
@@ -228,21 +228,17 @@ class _Tool:
         self.cancelled_error: asyncio.CancelledError | None = None
         self.finished = asyncio.Event()
 
-    @property
-    def name(self) -> str:
-        return "external_search"
-
-    async def search(self, input: Any) -> list[ExternalSearchHit]:
-        self.calls.append(input)
+    async def search(self, request: Any) -> list[ExternalSearchHit]:
+        self.calls.append(request)
         try:
             if self._started is not None:
                 self._started.set()
             if self._release is not None:
                 await self._release.wait()
-            if input.query in self._errors:
-                raise self._errors[input.query]
+            if request.query in self._errors:
+                raise self._errors[request.query]
             self.completed = True
-            return list(self._results.get(input.query, []))
+            return list(self._results.get(request.query, []))
         except asyncio.CancelledError as exc:
             self.cancelled_error = exc
             raise
@@ -495,12 +491,12 @@ def _runtime(
     query_runtime: object,
     *,
     reviewer_runtime: object | None = None,
-    tool: _Tool | None = None,
+    gateway: _FakeExternalSearchGateway | None = None,
 ) -> ExternalResearchRuntime:
     return ExternalResearchRuntime(
         query_runtime=query_runtime,  # type: ignore[arg-type]
         reviewer_runtime=(reviewer_runtime or ScriptedAgentRuntime([])),  # type: ignore[arg-type]
-        search_tool=(tool or _Tool()),  # type: ignore[arg-type]
+        search_gateway=(gateway or _FakeExternalSearchGateway()),  # type: ignore[arg-type]
     )
 
 
@@ -649,9 +645,9 @@ async def test_scope_stays_open_until_pending_internal_branch_settles() -> None:
     timeline: list[str] = []
     release_internal = asyncio.Event()
     internal = _InternalSearch(release=release_internal, timeline=timeline)
-    tool = _Tool({"NVIDIA supply": []}, timeline=timeline)
+    gateway = _FakeExternalSearchGateway({"NVIDIA supply": []}, timeline=timeline)
     factory = _Factory(
-        [_runtime(ScriptedAgentRuntime([_query_draft()]), tool=tool)],
+        [_runtime(ScriptedAgentRuntime([_query_draft()]), gateway=gateway)],
         timeline,
     )
     runner = _runner(
@@ -664,7 +660,7 @@ async def test_scope_stays_open_until_pending_internal_branch_settles() -> None:
 
     try:
         await asyncio.wait_for(internal.started.wait(), timeout=0.5)
-        await asyncio.wait_for(tool.finished.wait(), timeout=0.5)
+        await asyncio.wait_for(gateway.finished.wait(), timeout=0.5)
         assert (internal.finished.is_set(), factory.scopes[0].exited.is_set()) == (
             False,
             False,
@@ -1540,7 +1536,7 @@ async def test_scope_closes_after_reviewer_failure_exhausts_attempts() -> None:
     timeline: list[str] = []
     reviewer_error = AgentResponseInvalidError(AgentResponseDefect.RESPONSE_NOT_JSON)
     reviewer_runtime = ScriptedAgentRuntime([reviewer_error, reviewer_error])
-    tool = _Tool(
+    gateway = _FakeExternalSearchGateway(
         {"NVIDIA supply": [_external_hit("https://example.com/ext", title="ext title")]}
     )
     factory = _Factory(
@@ -1548,7 +1544,7 @@ async def test_scope_closes_after_reviewer_failure_exhausts_attempts() -> None:
             _runtime(
                 ScriptedAgentRuntime([_query_draft()]),
                 reviewer_runtime=reviewer_runtime,
-                tool=tool,
+                gateway=gateway,
             )
         ],
         timeline,
@@ -1595,11 +1591,11 @@ async def test_internal_failure_still_reaches_reviewer_and_produces_evidence() -
     answerer = _EvidenceAnswerer(timeline=timeline)
     query_runtime = ScriptedAgentRuntime([_query_draft()])
     reviewer_runtime = ScriptedAgentRuntime([_review_draft_selecting([0])])
-    tool = _Tool(
+    gateway = _FakeExternalSearchGateway(
         {"NVIDIA supply": [_external_hit("https://example.com/ext", title="ext title")]}
     )
     factory = _Factory(
-        [_runtime(query_runtime, reviewer_runtime=reviewer_runtime, tool=tool)],
+        [_runtime(query_runtime, reviewer_runtime=reviewer_runtime, gateway=gateway)],
         timeline,
     )
     phases = AnsweringPhases(
@@ -1646,13 +1642,13 @@ async def test_external_provider_failure_keeps_internal_hits_in_final_evidence()
     answerer = _EvidenceAnswerer(timeline=timeline)
     query_runtime = ScriptedAgentRuntime([_query_draft()])
     reviewer_runtime = ScriptedAgentRuntime([_review_draft_selecting([0])])
-    tool = _Tool(
+    gateway = _FakeExternalSearchGateway(
         errors={
-            "NVIDIA": ExternalSearchProviderError(reason="tavily_search_http_error")
+            "NVIDIA": ExternalSearchProviderError(reason="external_search_http_error")
         }
     )
     factory = _Factory(
-        [_runtime(query_runtime, reviewer_runtime=reviewer_runtime, tool=tool)],
+        [_runtime(query_runtime, reviewer_runtime=reviewer_runtime, gateway=gateway)],
         timeline,
     )
     phases = AnsweringPhases(

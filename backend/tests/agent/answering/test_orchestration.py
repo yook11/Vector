@@ -368,12 +368,8 @@ class FakeFailingReviewerRuntime:
 class _ZeroHitExternalTool:
     """全queryに対して常に空のヒットを返す(全taskヒットゼロ経路の検証用)。"""
 
-    @property
-    def name(self) -> str:
-        return "external_search"
-
-    async def search(self, input: object) -> list[ExternalSearchHit]:
-        del input
+    async def search(self, request: object) -> list[ExternalSearchHit]:
+        del request
         return []
 
 
@@ -393,12 +389,8 @@ class FakeExternalTool:
     def __init__(self, hits_by_query: dict[str, list[ExternalSearchHit]]) -> None:
         self._hits_by_query = hits_by_query
 
-    @property
-    def name(self) -> str:
-        return "external_search"
-
-    async def search(self, input: object) -> list[ExternalSearchHit]:
-        return list(self._hits_by_query[input.query])  # type: ignore[union-attr]
+    async def search(self, request: object) -> list[ExternalSearchHit]:
+        return list(self._hits_by_query[request.query])  # type: ignore[union-attr]
 
 
 def _external_runtime_for(
@@ -488,7 +480,7 @@ def _external_runtime_for(
             if reviewer_runtime is not None
             else FakeEvidenceReviewerRuntime(draft, timeline=timeline)
         ),  # type: ignore[arg-type]
-        search_tool=FakeExternalTool(hits_by_query),  # type: ignore[arg-type]
+        search_gateway=FakeExternalTool(hits_by_query),  # type: ignore[arg-type]
     )
 
 
@@ -821,7 +813,7 @@ async def test_answer_evidence_plan_skips_evidence_review_for_zero_hits() -> Non
     zero_hit_runtime = ExternalResearchRuntime(
         query_runtime=FakeExternalQueryRuntime({task.research_goal: "fixture-query"}),
         reviewer_runtime=_UnexpectedReviewerRuntime(),  # type: ignore[arg-type]
-        search_tool=_ZeroHitExternalTool(),  # type: ignore[arg-type]
+        search_gateway=_ZeroHitExternalTool(),  # type: ignore[arg-type]
     )
     orchestrator, _, _, evidence_answerer, _ = _orchestrator(
         plan=_search_plan(tasks=[task]),

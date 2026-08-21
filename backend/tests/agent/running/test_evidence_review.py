@@ -58,7 +58,7 @@ from tests.agent.running._harness import (
     EvidenceAnswerer as _EvidenceAnswerer,
 )
 from tests.agent.running._harness import (
-    ExternalSearchTool as _ExternalTool,
+    FakeExternalSearchGateway as _FakeExternalSearchGateway,
 )
 from tests.agent.running._harness import (
     Planner as _Planner,
@@ -168,7 +168,7 @@ def _runner(
     plan: SearchPlan,
     query_runtime: object,
     reviewer_runtime: object,
-    external_tool: object,
+    external_gateway: object,
     internal_search: object,
     events: object | None = None,
     answer_requirements: tuple[str, ...] | None = None,
@@ -178,7 +178,7 @@ def _runner(
     runtime = ExternalResearchRuntime(
         query_runtime=query_runtime,  # type: ignore[arg-type]
         reviewer_runtime=reviewer_runtime,  # type: ignore[arg-type]
-        search_tool=external_tool,  # type: ignore[arg-type]
+        search_gateway=external_gateway,  # type: ignore[arg-type]
     )
     factory = _Factory(runtime)
     phases = AnsweringPhases(
@@ -253,7 +253,7 @@ async def test_review_runs_once_for_a_three_task_search_plan() -> None:
         plan=_plan(*tasks),
         query_runtime=ScriptedAgentRuntime([_query_draft([]) for _ in tasks]),
         reviewer_runtime=reviewer_runtime,
-        external_tool=_ExternalTool(),
+        external_gateway=_FakeExternalSearchGateway(),
         internal_search=internal_search,
     )
 
@@ -295,7 +295,7 @@ async def test_review_does_not_start_before_every_tasks_collection_completes() -
         plan=_plan(*tasks),
         query_runtime=ScriptedAgentRuntime([_query_draft([]) for _ in tasks]),
         reviewer_runtime=reviewer_runtime,
-        external_tool=_ExternalTool(),
+        external_gateway=_FakeExternalSearchGateway(),
         internal_search=internal_search,
     )
 
@@ -328,7 +328,7 @@ async def test_review_is_skipped_when_every_task_has_no_hits() -> None:
         plan=_plan(*tasks),
         query_runtime=ScriptedAgentRuntime([_query_draft([]) for _ in tasks]),
         reviewer_runtime=reviewer_runtime,
-        external_tool=_ExternalTool(),
+        external_gateway=_FakeExternalSearchGateway(),
         internal_search=_FakeInternalSearch(),
         events=events,
     )
@@ -379,7 +379,7 @@ async def test_review_still_runs_using_the_hits_that_survive_a_failed_task() -> 
         plan=_plan(*tasks),
         query_runtime=ScriptedAgentRuntime([_query_draft([]) for _ in tasks]),
         reviewer_runtime=reviewer_runtime,
-        external_tool=_ExternalTool(),
+        external_gateway=_FakeExternalSearchGateway(),
         internal_search=internal_search,
     )
 
@@ -407,7 +407,7 @@ async def test_task_with_only_internal_hits_still_reaches_review() -> None:
         plan=_plan(_task("internal only task", ["query-a"])),
         query_runtime=ScriptedAgentRuntime([_query_draft([])]),
         reviewer_runtime=reviewer_runtime,
-        external_tool=_ExternalTool(),
+        external_gateway=_FakeExternalSearchGateway(),
         internal_search=internal_search,
     )
 
@@ -428,7 +428,9 @@ async def test_task_with_only_external_hits_still_reaches_review() -> None:
         plan=_plan(_task("external only task", ["query-a"])),
         query_runtime=ScriptedAgentRuntime([_query_draft(["q"])]),
         reviewer_runtime=reviewer_runtime,
-        external_tool=_ExternalTool({"q": [_external_hit("https://example.com/only")]}),
+        external_gateway=_FakeExternalSearchGateway(
+            {"q": [_external_hit("https://example.com/only")]}
+        ),
         internal_search=_FakeInternalSearch(
             errors_by_query={"query-a": InternalSearchError(phase="article_search")}
         ),
@@ -466,7 +468,7 @@ async def test_time_filter_failure_still_activates_external_scope_for_review() -
         ),
         query_runtime=ScriptedAgentRuntime([]),
         reviewer_runtime=reviewer_runtime,
-        external_tool=_ExternalTool(),
+        external_gateway=_FakeExternalSearchGateway(),
         internal_search=internal_search,
     )
 
@@ -512,7 +514,7 @@ async def test_single_review_call_input_includes_every_tasks_research_goal() -> 
         plan=_plan(*tasks),
         query_runtime=ScriptedAgentRuntime([_query_draft([]) for _ in tasks]),
         reviewer_runtime=reviewer_runtime,
-        external_tool=_ExternalTool(),
+        external_gateway=_FakeExternalSearchGateway(),
         internal_search=internal_search,
     )
 
@@ -559,7 +561,7 @@ async def test_review_input_never_carries_answer_requirements() -> None:
         plan=_plan(*tasks),
         query_runtime=ScriptedAgentRuntime([_query_draft([]) for _ in tasks]),
         reviewer_runtime=reviewer_runtime,
-        external_tool=_ExternalTool(),
+        external_gateway=_FakeExternalSearchGateway(),
         internal_search=internal_search,
         answer_requirements=(marker,),
     )
@@ -591,7 +593,7 @@ async def test_review_input_excludes_external_urls_across_every_task() -> None:
             [_query_draft(["qa"]), _query_draft(["qb"])]
         ),
         reviewer_runtime=reviewer_runtime,
-        external_tool=_ExternalTool(
+        external_gateway=_FakeExternalSearchGateway(
             {
                 "qa": [_external_hit(secret_url_a, title="task-a headline")],
                 "qb": [_external_hit(secret_url_b, title="task-b headline")],
@@ -669,7 +671,7 @@ async def test_selection_restores_the_right_hit_and_task_across_groups() -> None
             [_query_draft([]), _query_draft(["qb"]), _query_draft(["qc"])]
         ),
         reviewer_runtime=reviewer_runtime,
-        external_tool=_ExternalTool(
+        external_gateway=_FakeExternalSearchGateway(
             {
                 "qb": [
                     _external_hit("https://example.com/b-ext-1", title="B-ext-1"),
@@ -708,7 +710,7 @@ async def test_same_url_selected_from_two_tasks_keeps_each_task_evidence() -> No
             [_query_draft(["qa"]), _query_draft(["qb"])]
         ),
         reviewer_runtime=reviewer_runtime,
-        external_tool=_ExternalTool(
+        external_gateway=_FakeExternalSearchGateway(
             {
                 "qa": [_external_hit(shared_url, title="task0 headline")],
                 "qb": [_external_hit(shared_url, title="task1 headline")],
@@ -765,7 +767,7 @@ async def test_same_internal_article_from_two_tasks_keeps_each() -> None:
         plan=_plan(_task("first task", ["query-a"]), _task("second task", ["query-b"])),
         query_runtime=ScriptedAgentRuntime([_query_draft([]), _query_draft([])]),
         reviewer_runtime=reviewer_runtime,
-        external_tool=_ExternalTool(),
+        external_gateway=_FakeExternalSearchGateway(),
         internal_search=internal_search,
     )
 
@@ -809,7 +811,7 @@ async def test_missing_flows_as_a_single_run_level_list_not_merged_per_task() ->
         plan=_plan(*tasks),
         query_runtime=ScriptedAgentRuntime([_query_draft([]) for _ in tasks]),
         reviewer_runtime=reviewer_runtime,
-        external_tool=_ExternalTool(),
+        external_gateway=_FakeExternalSearchGateway(),
         internal_search=internal_search,
     )
 
@@ -858,7 +860,7 @@ async def test_incomplete_task_adds_the_fixed_phrase_exactly_once() -> None:
         plan=_plan(*tasks),
         query_runtime=ScriptedAgentRuntime([_query_draft([]) for _ in tasks]),
         reviewer_runtime=reviewer_runtime,
-        external_tool=_ExternalTool(),
+        external_gateway=_FakeExternalSearchGateway(),
         internal_search=internal_search,
     )
 
@@ -907,7 +909,7 @@ async def test_reviewer_failure_after_two_attempts_empties_the_whole_run() -> No
         plan=_plan(*tasks),
         query_runtime=ScriptedAgentRuntime([_query_draft([]) for _ in tasks]),
         reviewer_runtime=reviewer_runtime,
-        external_tool=_ExternalTool(),
+        external_gateway=_FakeExternalSearchGateway(),
         internal_search=internal_search,
         events=events,
     )
@@ -942,7 +944,9 @@ async def test_reviewer_failure_after_two_attempts_becomes_failed_evidence_run(
         plan=_plan(_task("reviewer failure", ["query-a"])),
         query_runtime=ScriptedAgentRuntime([_query_draft(["q"])]),
         reviewer_runtime=reviewer_runtime,
-        external_tool=_ExternalTool({"q": [_external_hit("https://example.com/q")]}),
+        external_gateway=_FakeExternalSearchGateway(
+            {"q": [_external_hit("https://example.com/q")]}
+        ),
         internal_search=_FakeInternalSearch(),
     )
 
@@ -970,7 +974,9 @@ async def test_failed_evidence_run_keeps_failure_reason_out_of_answerer_and_in_s
         plan=_plan(_task("reviewer failure", ["query-a"])),
         query_runtime=ScriptedAgentRuntime([_query_draft(["q"])]),
         reviewer_runtime=ScriptedAgentRuntime([failure, failure]),
-        external_tool=_ExternalTool({"q": [_external_hit("https://example.com/q")]}),
+        external_gateway=_FakeExternalSearchGateway(
+            {"q": [_external_hit("https://example.com/q")]}
+        ),
         internal_search=_FakeInternalSearch(),
         answerer=answerer,
     )
@@ -1031,7 +1037,7 @@ async def test_selected_event_fires_once_for_the_whole_run_without_task_index() 
         plan=_plan(*tasks),
         query_runtime=ScriptedAgentRuntime([_query_draft([]) for _ in tasks]),
         reviewer_runtime=reviewer_runtime,
-        external_tool=_ExternalTool(),
+        external_gateway=_FakeExternalSearchGateway(),
         internal_search=internal_search,
         events=events,
     )
@@ -1081,7 +1087,9 @@ async def test_evidence_selected_event_count_is_internal_plus_external() -> None
         plan=_plan(_task("combined evidence", ["query-a"])),
         query_runtime=ScriptedAgentRuntime([_query_draft(["q1"])]),
         reviewer_runtime=reviewer_runtime,
-        external_tool=_ExternalTool({"q1": [_external_hit("https://example.com/q1")]}),
+        external_gateway=_FakeExternalSearchGateway(
+            {"q1": [_external_hit("https://example.com/q1")]}
+        ),
         internal_search=internal_search,
         events=events,
     )
@@ -1137,7 +1145,7 @@ async def test_review_spans_and_events_do_not_expose_untrusted_text(
         plan=_plan(*tasks),
         query_runtime=ScriptedAgentRuntime([_query_draft([]) for _ in tasks]),
         reviewer_runtime=reviewer_runtime,
-        external_tool=_ExternalTool(),
+        external_gateway=_FakeExternalSearchGateway(),
         internal_search=internal_search,
         events=events,
     )
