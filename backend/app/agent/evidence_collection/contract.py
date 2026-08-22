@@ -12,7 +12,6 @@ from app.agent.evidence_collection.external_search.contract import (
     EXTERNAL_QUERY_MAX_CHARS,
     EXTERNAL_TASK_QUERY_LIMIT,
     ExternalSearchHit,
-    TimeFilterFailureReason,
 )
 from app.agent.evidence_collection.internal_search.contract import (
     InternalArticleSearchHit,
@@ -33,7 +32,6 @@ TaskExternalCollectionStatus = Literal[
     "succeeded",
     "query_generation_failed",
     "provider_failed",
-    "time_filter_failed",
 ]
 
 
@@ -52,7 +50,6 @@ class ResearchTaskReport(BaseModel):
     ]
     internal_collection: TaskInternalCollectionStatus
     external_collection: TaskExternalCollectionStatus
-    time_filter_failure_reason: TimeFilterFailureReason | None = None
     generated_queries: list[str] = Field(default_factory=list)
     provider_failed_query_count: int = Field(default=0, ge=0)
     internal_hit_count: int = Field(default=0, ge=0)
@@ -60,20 +57,6 @@ class ResearchTaskReport(BaseModel):
 
     @model_validator(mode="after")
     def _validate_report(self) -> Self:
-        if self.external_collection == "time_filter_failed":
-            if self.time_filter_failure_reason is None:
-                raise ValueError("time_filter_failed requires a failure reason")
-            if (
-                self.generated_queries
-                or self.provider_failed_query_count != 0
-                or self.external_hit_count != 0
-            ):
-                raise ValueError(
-                    "time_filter_failed must keep external diagnostics closed"
-                )
-        elif self.time_filter_failure_reason is not None:
-            raise ValueError("time filter failure reason requires time_filter_failed")
-
         if self.external_collection == "query_generation_failed" and (
             self.generated_queries
             or self.provider_failed_query_count != 0

@@ -453,9 +453,7 @@ async def test_task_with_only_external_hits_still_reaches_review() -> None:
 async def test_time_filter_failure_skips_external_search_scope_but_still_reviews() -> (
     None
 ):
-    """保証するテスト条件 11。time filter失敗Runは外部検索の資源を開かない。
-    reviewerは自分のruntime scopeを持つため、精査はそのまま実行できる。
-    """
+    """期間解決に失敗しても外部検索scopeは開き、内部ヒットは精査される。"""
     internal_search = _FakeInternalSearch(
         hits_by_query={
             "query-a": [
@@ -471,7 +469,7 @@ async def test_time_filter_failure_skips_external_search_scope_but_still_reviews
             _task("closed by time filter", ["query-a"]),
             target_time_window=TargetTimeWindow(kind="unsupported_explicit_window"),
         ),
-        query_runtime=ScriptedAgentRuntime([]),
+        query_runtime=ScriptedAgentRuntime([_query_draft([])]),
         reviewer_runtime=reviewer_runtime,
         external_gateway=_FakeExternalSearchGateway(),
         internal_search=internal_search,
@@ -479,7 +477,7 @@ async def test_time_filter_failure_skips_external_search_scope_but_still_reviews
 
     await _run(runner)
 
-    assert factory.scopes == []
+    assert len(factory.scopes) == 1
     assert len(reviewer_runtime.calls) == 1
     assert [item.source.title for item in answerer.calls[0]] == ["internal hit"]
 

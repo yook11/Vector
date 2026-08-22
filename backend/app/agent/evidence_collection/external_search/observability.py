@@ -47,10 +47,9 @@ def observe_time_filter_resolution(
     *,
     result: TimeFilterResolutionResult,
     reason: TimeFilterResolutionReason,
-    task_count: int,
 ) -> None:
     """metricとwarningを互いに独立したbest-effort sinkへ送る。"""
-    _validate_observation(result=result, reason=reason, task_count=task_count)
+    _validate_observation(result=result, reason=reason)
     with suppress(Exception):
         record_time_filter_resolution(result=result, reason=reason)
     if result == "failed":
@@ -58,7 +57,6 @@ def observe_time_filter_resolution(
             logger.warning(
                 "external_search_time_filter_failed",
                 reason=reason,
-                task_count=task_count,
             )
 
 
@@ -66,7 +64,6 @@ def _validate_observation(
     *,
     result: TimeFilterResolutionResult,
     reason: TimeFilterResolutionReason,
-    task_count: int,
 ) -> None:
     if result not in ("not_requested", "resolved", "failed"):
         raise ValueError("unsupported time filter resolution result")
@@ -75,5 +72,3 @@ def _validate_observation(
             raise ValueError("failed resolution requires a failure reason")
     elif reason != "none":
         raise ValueError("nonfailed resolution requires reason none")
-    if isinstance(task_count, bool) or task_count <= 0:
-        raise ValueError("task_count must be a positive integer")

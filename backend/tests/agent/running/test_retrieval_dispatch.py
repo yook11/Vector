@@ -54,6 +54,7 @@ from app.agent.planning.contract import (
 from app.agent.question_context import AnswerBrief
 from app.agent.running import AnsweringPhases, AnsweringRunner, RunInput
 from app.agent.running import answering_runner as answering_runner_module
+from app.agent.runtime.contract import AgentResponseDefect, AgentResponseInvalidError
 from app.analysis.analyzed_article import InScopeAnalyzedArticle
 from app.analysis.assessment.domain.result import InScope, InScopeCategory
 from tests.agent.running._harness import ExternalScopes, fixed_scope, run_identity
@@ -1686,12 +1687,7 @@ async def test_external_provider_failure_keeps_internal_hits_in_final_evidence()
 async def test_time_filter_failure_still_collects_internal_hits_for_every_task(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """保証するテスト条件 3(runner経由、全task)。
-
-    D4-S1: reviewerのLLM runtimeを使えるようscopeは常にactivateされる
-    (外部query/HTTP検索だけがtime filter失敗でskipされる)。内部ヒットは
-    reviewerの精査を経て根拠になる。
-    """
+    """期間解決に失敗しても外部検索scopeは開き、内部ヒットは精査される。"""
     captured = _capture_external_outcome(monkeypatch)
     internal = _KeyedFailingInternalSearch(
         failing_queries=set(),
@@ -1708,8 +1704,17 @@ async def test_time_filter_failure_still_collects_internal_hits_for_every_task(
     # S1: reviewerはRun単位1回。統合index空間(仮定: task昇順)ではtask0の唯一の
     # 内部ヒットが0、task1の唯一の内部ヒットが1。
     reviewer_runtime = ScriptedAgentRuntime([_review_draft_selecting([0, 1])])
+    query_failure = AgentResponseInvalidError(
+        AgentResponseDefect.OUTPUT_SCHEMA_MISMATCH
+    )
     factory = _Factory(
-        [_runtime(ScriptedAgentRuntime([]), reviewer_runtime=reviewer_runtime)], []
+        [
+            _runtime(
+                ScriptedAgentRuntime([query_failure, query_failure]),
+                reviewer_runtime=reviewer_runtime,
+            )
+        ],
+        [],
     )
     runner = _runner(plan=plan, internal=internal, factory=factory, timeline=[])
 
@@ -1718,15 +1723,13 @@ async def test_time_filter_failure_still_collects_internal_hits_for_every_task(
     reports = _task_reports(captured[0])
     evidence_run = _completed_evidence_run(captured[0])
     assert (
-        # 期間解決に失敗したRunは外部検索の資源scopeを開かない。
         factory.activate_calls,
         sorted(report.external_collection for report in reports),
-        # time filter失敗でも内部精査の完了結果はCompletedになる。
         isinstance(evidence_run, EvidenceRunCompleted),
         {item.title for item in evidence_run.answer_evidence.internal_evidence},
     ) == (
-        0,
-        ["time_filter_failed", "time_filter_failed"],
+        1,
+        ["query_generation_failed", "query_generation_failed"],
         True,
         {"task0-hit", "task1-hit"},
     )
@@ -1736,9 +1739,7 @@ async def test_time_filter_failure_still_collects_internal_hits_for_every_task(
 async def test_runner_routes_each_tasks_queries_to_only_that_tasks_search() -> None:
     """保証するテスト条件 4(runner経由)。
 
-    D4-S1: scopeは常にactivateされるが、内部・外部ヒットとも空
-    (internalはhits無し、externalはtime filter失敗でskip)のためreviewerは
-    起動しない。
+    内部queryはtaskごとに届き、期間失敗でも外部scopeは開く。
     """
     internal = _InternalSearch()
     plan = _plan_with_tasks(
@@ -1746,10 +1747,16 @@ async def test_runner_routes_each_tasks_queries_to_only_that_tasks_search() -> N
         ("goal1", ["q-c"]),
         target_time_window=TargetTimeWindow(kind="unsupported_explicit_window"),
     )
+    query_failure = AgentResponseInvalidError(
+        AgentResponseDefect.OUTPUT_SCHEMA_MISMATCH
+    )
     runner = _runner(
         plan=plan,
         internal=internal,
-        factory=_Factory([_runtime(ScriptedAgentRuntime([]))], []),
+        factory=_Factory(
+            [_runtime(ScriptedAgentRuntime([query_failure, query_failure]))],
+            [],
+        ),
         timeline=[],
     )
 
@@ -1766,7 +1773,7 @@ async def test_runner_isolates_one_tasks_total_failure_from_sibling_evidence() -
     """保証するテスト条件 5(runner経由)。
 
     D4-S1: failing taskは内部・外部ともヒットゼロでreviewer未起動のまま
-    time_filter_failedとして閉じる。succeeding taskは内部ヒットがreviewerの
+    query生成失敗として閉じる。succeeding taskは内部ヒットがreviewerの
     精査を経て根拠になる。
     """
     timeline: list[str] = []
@@ -1783,8 +1790,17 @@ async def test_runner_isolates_one_tasks_total_failure_from_sibling_evidence() -
         target_time_window=TargetTimeWindow(kind="unsupported_explicit_window"),
     )
     reviewer_runtime = ScriptedAgentRuntime([_review_draft_selecting([0])])
+    query_failure = AgentResponseInvalidError(
+        AgentResponseDefect.OUTPUT_SCHEMA_MISMATCH
+    )
     factory = _Factory(
-        [_runtime(ScriptedAgentRuntime([]), reviewer_runtime=reviewer_runtime)], []
+        [
+            _runtime(
+                ScriptedAgentRuntime([query_failure, query_failure]),
+                reviewer_runtime=reviewer_runtime,
+            )
+        ],
+        [],
     )
     phases = AnsweringPhases(
         planner=_Planner(plan),
@@ -1858,11 +1874,20 @@ async def test_internal_hits_are_kept_per_task_when_the_same_article_appears(
     reviewer_runtime = ScriptedAgentRuntime(
         [_review_draft_selecting([0, 1, 2, 3]), _review_draft_selecting([])]
     )
+    query_failure = AgentResponseInvalidError(
+        AgentResponseDefect.OUTPUT_SCHEMA_MISMATCH
+    )
     runner = _runner(
         plan=plan,
         internal=_RaceControlledInternalSearch(),
         factory=_Factory(
-            [_runtime(ScriptedAgentRuntime([]), reviewer_runtime=reviewer_runtime)], []
+            [
+                _runtime(
+                    ScriptedAgentRuntime([query_failure, query_failure]),
+                    reviewer_runtime=reviewer_runtime,
+                )
+            ],
+            [],
         ),
         timeline=[],
     )
@@ -1905,7 +1930,23 @@ async def test_all_tasks_incomplete_adds_the_fixed_incomplete_phrase_once(
     runner = _runner(
         plan=plan,
         internal=internal,
-        factory=_Factory([_runtime(ScriptedAgentRuntime([]))], []),
+        factory=_Factory(
+            [
+                _runtime(
+                    ScriptedAgentRuntime(
+                        [
+                            AgentResponseInvalidError(
+                                AgentResponseDefect.OUTPUT_SCHEMA_MISMATCH
+                            ),
+                            AgentResponseInvalidError(
+                                AgentResponseDefect.OUTPUT_SCHEMA_MISMATCH
+                            ),
+                        ]
+                    )
+                )
+            ],
+            [],
+        ),
         timeline=[],
     )
 
@@ -1946,11 +1987,20 @@ async def test_some_tasks_incomplete_keeps_the_phrase_to_one_line_and_keeps_sour
         target_time_window=TargetTimeWindow(kind="unsupported_explicit_window"),
     )
     reviewer_runtime = ScriptedAgentRuntime([_review_draft_selecting([0])])
+    query_failure = AgentResponseInvalidError(
+        AgentResponseDefect.OUTPUT_SCHEMA_MISMATCH
+    )
     runner = _runner(
         plan=plan,
         internal=internal,
         factory=_Factory(
-            [_runtime(ScriptedAgentRuntime([]), reviewer_runtime=reviewer_runtime)], []
+            [
+                _runtime(
+                    ScriptedAgentRuntime([query_failure, query_failure]),
+                    reviewer_runtime=reviewer_runtime,
+                )
+            ],
+            [],
         ),
         timeline=[],
     )

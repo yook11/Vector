@@ -203,27 +203,22 @@ class ExternalSearchGateway(Protocol):
 
 @dataclass(frozen=True, slots=True)
 class ExternalSearchExecution:
-    """1 task分のquery群を実行した結果。hitsはquery横断で合流済みのpool。"""
+    """1 goal分の外部収集結果。hitsはquery横断で合流済みのpool。"""
 
+    generated_queries: tuple[str, ...]
     hits: list[ExternalSearchHit]
     provider_failed_query_count: int
     executed_queries: tuple[str, ...]
 
 
 class ExternalSearch(Protocol):
-    async def generate_queries(
+    async def search(
         self,
         *,
         research_goal: str,
         as_of: datetime,
         target_time_window: TargetTimeWindow | None,
-    ) -> list[str]: ...
-
-    async def search_queries(
-        self,
-        queries: list[str],
-        *,
-        date_filter: ExternalSearchDateFilter | None,
+        task_index: int,
     ) -> ExternalSearchExecution: ...
 
 

@@ -25,24 +25,16 @@ def _metric_points(metrics: list[dict[str, Any]]) -> list[tuple[int, dict[str, A
 
 
 @pytest.mark.parametrize(
-    ("result", "reason", "task_count", "expected_warning"),
+    ("result", "reason", "expected_warning"),
     [
-        pytest.param(
-            "not_requested",
-            "none",
-            1,
-            [],
-            id="not-requested",
-        ),
-        pytest.param("resolved", "none", 1, [], id="resolved"),
+        pytest.param("not_requested", "none", [], id="not-requested"),
+        pytest.param("resolved", "none", [], id="resolved"),
         pytest.param(
             "failed",
             "future_date_range",
-            2,
             [
                 {
                     "reason": "future_date_range",
-                    "task_count": 2,
                     "event": "external_search_time_filter_failed",
                     "log_level": "warning",
                 }
@@ -55,14 +47,12 @@ def test_time_filter_resolution_observation_records_one_closed_metric_and_warnin
     capfire: CaptureLogfire,
     result: str,
     reason: str,
-    task_count: int,
     expected_warning: list[dict[str, object]],
 ) -> None:
     with capture_logs() as logs:
         observability.observe_time_filter_resolution(
             result=result,
             reason=reason,
-            task_count=task_count,
         )
     metrics = collected_metrics(capfire)
     warnings = [
@@ -96,7 +86,6 @@ def test_time_filter_resolution_observation_rejects_inconsistent_closed_pairs(
         observability.observe_time_filter_resolution(
             result=result,
             reason=reason,
-            task_count=1,
         )
 
 
@@ -128,7 +117,6 @@ def test_time_filter_resolution_observation_isolates_metric_and_warning_sink_fai
     observability.observe_time_filter_resolution(
         result="failed",
         reason="future_calendar_month",
-        task_count=2,
     )
 
     assert attempts == ["metric", "warning"]

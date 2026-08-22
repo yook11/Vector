@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import asyncio
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 
 from app.agent.concurrency import gather_cancel_on_error
@@ -18,17 +18,33 @@ from app.agent.evidence_collection.external_search.contract import (
     ExternalSearchProviderError,
     ExternalSearchRequest,
 )
+from app.agent.evidence_collection.external_search.observability import (
+    observe_time_filter_resolution,
+)
 from app.agent.evidence_collection.external_search.policy import (
     PROVIDER_SEARCH_TIMEOUT_SECONDS,
     QUERY_GENERATE_TIMEOUT_SECONDS,
     build_hit_pool,
     clean_generated_queries,
 )
+from app.agent.evidence_collection.external_search.time_filter import (
+    ExternalSearchDateFilterResolutionError,
+    resolve_external_search_date_filter,
+)
+from app.agent.phase_span import agent_phase
 from app.agent.planning.contract import ExternalResearchTask, TargetTimeWindow
 from app.agent.runtime.contract import AgentResponseInvalidError, AgentRuntime
 from app.analysis.ai_provider_errors import AIProviderError
 
 __all__ = ["ExternalSearchService"]
+
+
+@dataclass
+class _PublicationFilterMemo:
+    """1 scopeで期間解決を1回にするためのメモ。"""
+
+    resolved: bool = False
+    date_filter: ExternalSearchDateFilter | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -37,8 +53,68 @@ class ExternalSearchService:
 
     query_runtime: AgentRuntime
     search_gateway: ExternalSearchGateway
+    _filter_memo: _PublicationFilterMemo = field(default_factory=_PublicationFilterMemo)
+    _resolve_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
 
-    async def generate_queries(
+    async def search(
+        self,
+        *,
+        research_goal: str,
+        as_of: datetime,
+        target_time_window: TargetTimeWindow | None,
+        task_index: int,
+    ) -> ExternalSearchExecution:
+        date_filter = await self._publication_filter(
+            target_time_window=target_time_window,
+            as_of=as_of,
+        )
+        with agent_phase(
+            phase="evidence_collection",
+            agent_name=EXTERNAL_QUERY_AGENT.name,
+            task_index=task_index,
+        ):
+            queries = await self._generate_queries(
+                research_goal=research_goal,
+                as_of=as_of,
+                target_time_window=target_time_window,
+            )
+        if not queries:
+            return ExternalSearchExecution(
+                generated_queries=(),
+                hits=[],
+                provider_failed_query_count=0,
+                executed_queries=(),
+            )
+        return await self._search_queries(queries, date_filter=date_filter)
+
+    async def _publication_filter(
+        self,
+        *,
+        target_time_window: TargetTimeWindow | None,
+        as_of: datetime,
+    ) -> ExternalSearchDateFilter | None:
+        async with self._resolve_lock:
+            if self._filter_memo.resolved:
+                return self._filter_memo.date_filter
+            try:
+                date_filter = resolve_external_search_date_filter(
+                    target_time_window,
+                    as_of=as_of,
+                )
+            except ExternalSearchDateFilterResolutionError as exc:
+                observe_time_filter_resolution(result="failed", reason=exc.reason)
+                self._filter_memo.date_filter = None
+                self._filter_memo.resolved = True
+                return None
+            observe_time_filter_resolution(
+                result="not_requested" if date_filter is None else "resolved",
+                reason="none",
+            )
+            self._filter_memo.date_filter = date_filter
+            self._filter_memo.resolved = True
+            return date_filter
+
+    async def _generate_queries(
         self,
         *,
         research_goal: str,
@@ -64,7 +140,7 @@ class ExternalSearchService:
             return []
         return clean_generated_queries(draft.queries)
 
-    async def search_queries(
+    async def _search_queries(
         self,
         queries: list[str],
         *,
@@ -87,6 +163,7 @@ class ExternalSearchService:
             executed_queries.append(query)
 
         return ExternalSearchExecution(
+            generated_queries=tuple(queries),
             hits=build_hit_pool(hits_by_query),
             provider_failed_query_count=provider_failed_query_count,
             executed_queries=tuple(executed_queries),

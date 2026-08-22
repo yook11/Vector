@@ -16,19 +16,22 @@ from opentelemetry.semconv.attributes.error_attributes import ERROR_TYPE
 from opentelemetry.trace import StatusCode
 
 from app.agent.evidence_collection import EvidenceCollectionService
+from app.agent.evidence_collection.external_search.contract import (
+    ExternalSearchExecution,
+)
 from app.agent.evidence_collection.internal_search.contract import (
     InternalArticleContent,
     InternalArticleSearchHit,
     InternalSearchError,
 )
-from app.agent.planning.contract import ResearchTask, SearchPlan, TargetTimeWindow
+from app.agent.planning.contract import ResearchTask, SearchPlan
 from app.analysis.analyzed_article import InScopeAnalyzedArticle
 from app.analysis.assessment.domain.result import InScope, InScopeCategory
+from tests.agent.running._harness import fixed_scope
 from tests.logfire._span_helpers import domain_attr_keys, exception_event, spans_named
 
 _PHASE_SPAN_NAME = "agent_phase"
 _AS_OF = datetime(2026, 7, 20, 9, 30, tzinfo=UTC)
-_FUTURE_WINDOW = TargetTimeWindow(kind="calendar_month", year=2027, month=1)
 
 
 def _task(goal: str, *queries: str) -> ResearchTask:
@@ -36,7 +39,7 @@ def _task(goal: str, *queries: str) -> ResearchTask:
 
 
 def _plan(*tasks: ResearchTask) -> SearchPlan:
-    return SearchPlan(research_tasks=list(tasks), target_time_window=_FUTURE_WINDOW)
+    return SearchPlan(research_tasks=list(tasks))
 
 
 def _hit(*, assessment_id: int, title: str) -> InternalArticleSearchHit:
@@ -74,15 +77,28 @@ class _FakeInternalSearch:
         return list(self._hits)
 
 
-class _UnreachableExternalSearchScope:
-    def __call__(self) -> object:
-        raise AssertionError("external search scope must not open")
+class _IdleExternalSearch:
+    async def search(
+        self,
+        *,
+        research_goal: str,
+        as_of: object,
+        target_time_window: object,
+        task_index: int,
+    ) -> ExternalSearchExecution:
+        del research_goal, as_of, target_time_window, task_index
+        return ExternalSearchExecution(
+            generated_queries=(),
+            hits=[],
+            provider_failed_query_count=0,
+            executed_queries=(),
+        )
 
 
 def _service(*, internal_search: object) -> EvidenceCollectionService:
     return EvidenceCollectionService(
         internal_search=internal_search,  # type: ignore[arg-type]
-        external_search_scope_factory=_UnreachableExternalSearchScope(),  # type: ignore[arg-type]
+        external_search_scope_factory=fixed_scope(_IdleExternalSearch()),
     )
 
 

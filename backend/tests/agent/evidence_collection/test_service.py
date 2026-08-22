@@ -6,12 +6,15 @@ from datetime import UTC, datetime
 from typing import Any
 
 import pytest
+from logfire.testing import CaptureLogfire
+from structlog.testing import capture_logs
 
 from app.agent.evidence_collection import EvidenceCollectionService
 from app.agent.evidence_collection.external_search import ExternalSearchService
 from app.agent.evidence_collection.external_search.contract import (
     ExternalQueryDraft,
     ExternalSearch,
+    ExternalSearchExecution,
     ExternalSearchHit,
     ExternalSearchProviderError,
 )
@@ -29,6 +32,7 @@ from app.analysis.analyzed_article import InScopeAnalyzedArticle
 from app.analysis.assessment.domain.result import InScope, InScopeCategory
 from tests.agent.running._harness import fixed_scope
 from tests.agent.runtime._fakes import ScriptedAgentRuntime
+from tests.logfire._metric_helpers import collected_metrics
 
 _AS_OF = datetime(2026, 7, 20, 9, 30, tzinfo=UTC)
 _FUTURE_WINDOW = TargetTimeWindow(kind="calendar_month", year=2027, month=1)
@@ -41,10 +45,13 @@ def _task(goal: str, *queries: str) -> ResearchTask:
     )
 
 
-def _plan(*tasks: ResearchTask, time_filter_failed: bool = False) -> SearchPlan:
+def _plan(
+    *tasks: ResearchTask,
+    target_time_window: TargetTimeWindow | None = None,
+) -> SearchPlan:
     return SearchPlan(
         research_tasks=list(tasks),
-        target_time_window=_FUTURE_WINDOW if time_filter_failed else None,
+        target_time_window=target_time_window,
     )
 
 
@@ -116,17 +123,30 @@ class _FakeExternalSearchGateway:
         return list(self._results.get(request.query, []))
 
 
+class _IdleExternalSearch:
+    async def search(
+        self,
+        *,
+        research_goal: str,
+        as_of: object,
+        target_time_window: object,
+        task_index: int,
+    ) -> ExternalSearchExecution:
+        del research_goal, as_of, target_time_window, task_index
+        return ExternalSearchExecution(
+            generated_queries=(),
+            hits=[],
+            provider_failed_query_count=0,
+            executed_queries=(),
+        )
+
+
 class _Events:
     def __init__(self) -> None:
         self.events: list[Any] = []
 
     async def event_occurred(self, event: Any) -> None:
         self.events.append(event)
-
-
-class _UnreachableExternalSearchScope:
-    def __call__(self) -> object:
-        raise AssertionError("external search scope must not open")
 
 
 def _internal_events(events: list[Any]) -> list[Any]:
@@ -142,6 +162,25 @@ def _external_events(events: list[Any]) -> list[Any]:
         event
         for event in events
         if event.type.startswith("evidence_collection.external_search_")
+    ]
+
+
+def _time_filter_metric_points(
+    metrics: list[dict[str, Any]],
+) -> list[tuple[int, dict[str, Any]]]:
+    metric = next(
+        (
+            item
+            for item in metrics
+            if item["name"] == "external_search_time_filter_resolution_total"
+        ),
+        None,
+    )
+    if metric is None:
+        return []
+    return [
+        (int(point["value"]), point.get("attributes", {}))
+        for point in metric["data"]["data_points"]
     ]
 
 
@@ -163,13 +202,12 @@ def _service(
     events: _Events | None = None,
     requested_agent_count: int | None = None,
 ) -> EvidenceCollectionService:
-    factory = (
-        _UnreachableExternalSearchScope() if external is None else fixed_scope(external)
-    )
     return EvidenceCollectionService(
         internal_search=internal_search,
         events=events,
-        external_search_scope_factory=factory,  # type: ignore[arg-type]
+        external_search_scope_factory=fixed_scope(
+            external if external is not None else _IdleExternalSearch()
+        ),
         requested_agent_count=requested_agent_count,
     )
 
@@ -177,10 +215,10 @@ def _service(
 async def _collect_tasks(
     service: EvidenceCollectionService,
     *tasks: ResearchTask,
-    time_filter_failed: bool = False,
+    target_time_window: TargetTimeWindow | None = None,
 ) -> list[Any]:
     collected = await service.collect(
-        plan=_plan(*tasks, time_filter_failed=time_filter_failed),
+        plan=_plan(*tasks, target_time_window=target_time_window),
         as_of=_AS_OF,
     )
     return collected.tasks
@@ -246,32 +284,109 @@ async def test_external_provider_failure_keeps_internal_hits() -> None:
 
 
 @pytest.mark.asyncio
-async def test_time_filter_failure_skips_external_collection_entirely() -> None:
-    """保証するテスト条件 3。期間失敗のRunは外部を開かず内部だけ集める。"""
+async def test_time_filter_failure_still_searches_without_date_filter(
+    capfire: CaptureLogfire,
+) -> None:
+    """期間解決に失敗しても外部検索は行い、Tavilyへはdate_filterを渡さない。"""
     hits = [_hit(assessment_id=1001, title="only-internal")]
-    service = _service(internal_search=_FakeInternalSearch(hits=hits))
-
-    [collected] = await _collect_tasks(
-        service,
-        _task("goal", "internal query"),
-        time_filter_failed=True,
+    gateway = _FakeExternalSearchGateway(
+        {"nvidia supply": [_external_hit("https://example.com/a")]}
     )
+    query_runtime = ScriptedAgentRuntime([_query_draft(["nvidia supply"])])
+    service = _service(
+        internal_search=_FakeInternalSearch(hits=hits),
+        external=_external_search(query_runtime, gateway=gateway),
+    )
+
+    with capture_logs() as logs:
+        [collected] = await _collect_tasks(
+            service,
+            _task("goal", "internal query"),
+            target_time_window=_FUTURE_WINDOW,
+        )
+    metrics = collected_metrics(capfire)
 
     assert (
         [hit.content.title for hit in collected.internal_hits],
         collected.report.external_collection,
-        collected.external_hits,
-        collected.report.generated_queries,
-        collected.report.provider_failed_query_count,
-        collected.report.time_filter_failure_reason,
+        [str(hit.url) for hit in collected.external_hits],
+        [call.date_filter for call in gateway.calls],
+        [call.input.target_time_window for call in query_runtime.calls],
+        _time_filter_metric_points(metrics),
+        [
+            entry.get("reason")
+            for entry in logs
+            if entry.get("event") == "external_search_time_filter_failed"
+        ],
     ) == (
         ["only-internal"],
-        "time_filter_failed",
-        [],
-        [],
-        0,
-        "future_calendar_month",
+        "succeeded",
+        ["https://example.com/a"],
+        [None],
+        [_FUTURE_WINDOW],
+        [(1, {"result": "failed", "reason": "future_calendar_month"})],
+        ["future_calendar_month"],
     )
+
+
+@pytest.mark.asyncio
+async def test_time_filter_failure_records_one_metric_for_multiple_goals(
+    capfire: CaptureLogfire,
+) -> None:
+    gateway = _FakeExternalSearchGateway(
+        {
+            "q1": [_external_hit("https://example.com/1")],
+            "q2": [_external_hit("https://example.com/2")],
+        }
+    )
+    query_runtime = ScriptedAgentRuntime([_query_draft(["q1"]), _query_draft(["q2"])])
+    service = _service(
+        internal_search=_FakeInternalSearch(),
+        external=_external_search(query_runtime, gateway=gateway),
+        requested_agent_count=1,
+    )
+
+    collected = await _collect_tasks(
+        service,
+        _task("first", "q1"),
+        _task("second", "q2"),
+        target_time_window=_FUTURE_WINDOW,
+    )
+    metrics = collected_metrics(capfire)
+
+    assert (
+        [task.report.external_collection for task in collected],
+        [call.date_filter for call in gateway.calls],
+        _time_filter_metric_points(metrics),
+    ) == (
+        ["succeeded", "succeeded"],
+        [None, None],
+        [(1, {"result": "failed", "reason": "future_calendar_month"})],
+    )
+
+
+@pytest.mark.asyncio
+async def test_empty_queries_skip_gateway_even_when_time_filter_fails() -> None:
+    gateway = _FakeExternalSearchGateway()
+    query_runtime = ScriptedAgentRuntime(
+        [AgentResponseInvalidError(AgentResponseDefect.OUTPUT_SCHEMA_MISMATCH)]
+    )
+    service = _service(
+        internal_search=_FakeInternalSearch(),
+        external=_external_search(query_runtime, gateway=gateway),
+    )
+
+    [collected] = await _collect_tasks(
+        service,
+        _task("goal", "internal query"),
+        target_time_window=_FUTURE_WINDOW,
+    )
+
+    assert (
+        collected.report.external_collection,
+        collected.executed_queries,
+        gateway.calls,
+    ) == ("query_generation_failed", (), [])
 
 
 @pytest.mark.asyncio
@@ -287,7 +402,6 @@ async def test_internal_search_receives_only_that_tasks_own_queries() -> None:
         service,
         _task("first", "q1", "q2"),
         _task("second", "q3"),
-        time_filter_failed=True,
     )
 
     assert internal_search.calls == [
@@ -361,7 +475,6 @@ async def test_internal_events_carry_task_index_and_input_derived_counts() -> No
         service,
         _task("first", "q1", "q2"),
         _task("second", "q3"),
-        time_filter_failed=True,
     )
 
     internal_events = [event.model_dump() for event in _internal_events(events.events)]
@@ -403,7 +516,6 @@ async def test_internal_failure_reports_started_only_with_task_index() -> None:
     await _collect_tasks(
         service,
         _task("third", "q"),
-        time_filter_failed=True,
     )
 
     internal_events = [event.model_dump() for event in _internal_events(events.events)]
@@ -550,19 +662,4 @@ async def test_executed_queries_is_empty_when_query_generation_fails() -> None:
     [collected] = await _collect_tasks(service, _task("goal", "internal query"))
 
     assert collected.report.external_collection == "query_generation_failed"
-    assert collected.executed_queries == ()
-
-
-@pytest.mark.asyncio
-async def test_executed_queries_is_empty_when_time_filter_fails() -> None:
-    """期間失敗で外部検索しないtaskではexecuted_queriesが空tupleになる。"""
-    service = _service(internal_search=_FakeInternalSearch())
-
-    [collected] = await _collect_tasks(
-        service,
-        _task("goal", "internal query"),
-        time_filter_failed=True,
-    )
-
-    assert collected.report.external_collection == "time_filter_failed"
     assert collected.executed_queries == ()

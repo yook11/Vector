@@ -13,14 +13,14 @@ from logfire.testing import CaptureLogfire
 from structlog.testing import capture_logs
 
 from app.agent.evidence_collection import EvidenceCollectionService
-from app.agent.evidence_collection import (
-    service as collection_service_module,
-)
 from app.agent.evidence_collection.external_search import (
     ExternalSearch,
     ExternalSearchDateFilter,
     ExternalSearchHit,
     ExternalSearchProviderError,
+)
+from app.agent.evidence_collection.external_search import (
+    service as external_search_service_module,
 )
 from app.agent.evidence_collection.external_search.contract import (
     EXTERNAL_SEARCH_HITS_PER_QUERY,
@@ -531,7 +531,7 @@ async def test_external_pipeline_passes_explicit_none_filter_to_tool() -> None:
         ),
         pytest.param(
             TargetTimeWindow(kind="unsupported_explicit_window"),
-            0,
+            4,
             id="resolution-failed",
         ),
     ],
@@ -541,7 +541,9 @@ async def test_external_runner_resolves_target_time_window_once_per_branch(
     target_time_window: TargetTimeWindow | None,
     expected_tool_call_count: int,
 ) -> None:
-    original_resolver = collection_service_module.resolve_external_search_date_filter
+    original_resolver = (
+        external_search_service_module.resolve_external_search_date_filter
+    )
     resolver_calls: list[tuple[TargetTimeWindow | None, datetime]] = []
 
     def spy(
@@ -553,7 +555,7 @@ async def test_external_runner_resolves_target_time_window_once_per_branch(
         return original_resolver(target, as_of=as_of)
 
     monkeypatch.setattr(
-        collection_service_module,
+        external_search_service_module,
         "resolve_external_search_date_filter",
         spy,
     )
@@ -592,7 +594,9 @@ async def test_naive_as_of_propagates_before_external_activity_or_observability(
     capfire: CaptureLogfire,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    original_resolver = collection_service_module.resolve_external_search_date_filter
+    original_resolver = (
+        external_search_service_module.resolve_external_search_date_filter
+    )
     resolver_calls: list[tuple[TargetTimeWindow | None, datetime]] = []
     naive_as_of = datetime(2026, 7, 20, 9, 30)
 
@@ -605,7 +609,7 @@ async def test_naive_as_of_propagates_before_external_activity_or_observability(
         return original_resolver(target, as_of=as_of)
 
     monkeypatch.setattr(
-        collection_service_module,
+        external_search_service_module,
         "resolve_external_search_date_filter",
         spy,
     )
@@ -630,7 +634,7 @@ async def test_naive_as_of_propagates_before_external_activity_or_observability(
 
     assert (
         resolver_calls,
-        factory.scopes,
+        len(factory.scopes),
         query_runtime.calls,
         reviewer_runtime.calls,
         gateway.calls,
@@ -645,7 +649,7 @@ async def test_naive_as_of_propagates_before_external_activity_or_observability(
         ],
     ) == (
         [(_DEFAULT_TARGET_TIME_WINDOW, naive_as_of)],
-        [],
+        1,
         [],
         [],
         [],
@@ -738,7 +742,7 @@ async def test_external_branch_records_one_nonfailed_time_filter_resolution_metr
         ),
     ],
 )
-async def test_time_filter_resolution_failure_closes_external_branch_before_activity(
+async def test_time_filter_resolution_failure_still_searches_without_date_filter(
     capfire: CaptureLogfire,
     monkeypatch: pytest.MonkeyPatch,
     target_time_window: TargetTimeWindow,
@@ -746,11 +750,18 @@ async def test_time_filter_resolution_failure_closes_external_branch_before_acti
 ) -> None:
     captured = _capture_external_outcome(monkeypatch)
     events = _Events()
-    query_runtime = ScriptedAgentRuntime([])
-    reviewer_runtime = ScriptedAgentRuntime([])
-    gateway = _FakeExternalSearchGateway()
+    query_runtime = ScriptedAgentRuntime(
+        [_query_draft(["first-q"]), _query_draft(["second-q"])]
+    )
+    reviewer_runtime = ScriptedAgentRuntime([_review_draft([])])
+    gateway = _FakeExternalSearchGateway(
+        {
+            "first-q": [_hit("https://example.com/first")],
+            "second-q": [_hit("https://example.com/second")],
+        }
+    )
     tasks = [_task("first closed task"), _task("second closed task")]
-    runner, answerer, factory = _runner(
+    runner, _answerer, factory = _runner(
         tasks=tasks,
         runtime=_runtime(
             query_runtime=query_runtime,
@@ -759,38 +770,27 @@ async def test_time_filter_resolution_failure_closes_external_branch_before_acti
         ),
         events=events,
         target_time_window=target_time_window,
+        requested_agent_count=1,
     )
 
     with capture_logs() as logs:
         await _run(runner)
     metrics = collected_metrics(capfire)
     reports = _task_reports(captured[0])
-    evidence_run = _completed_evidence_run(captured[0])
 
     assert (
-        # 期間解決に失敗したRunは外部収集を一切行わないため、外部検索の資源scope
-        # 自体を開かない。reviewerは自前のruntime scopeを持つため影響を受けない
-        # (ここではinternalヒットも空でreviewer自体が呼ばれない)。
-        factory.scopes,
-        query_runtime.calls,
-        reviewer_runtime.calls,
-        gateway.calls,
-        _external_search_events(events.events),
-        answerer.calls,
+        len(factory.scopes),
+        [call.input.target_time_window for call in query_runtime.calls],
+        [call.date_filter for call in gateway.calls],
         [
             (
                 report.task_index,
-                report.internal_collection,
                 report.external_collection,
-                report.time_filter_failure_reason,
                 report.generated_queries,
-                report.provider_failed_query_count,
-                report.internal_hit_count,
                 report.external_hit_count,
             )
             for report in reports
         ],
-        (evidence_run.answer_evidence.count, evidence_run.review_missing),
         _time_filter_metric_points(metrics),
         [
             entry
@@ -798,40 +798,17 @@ async def test_time_filter_resolution_failure_closes_external_branch_before_acti
             if entry.get("event") == "external_search_time_filter_failed"
         ],
     ) == (
-        [],
-        [],
-        [],
-        [],
-        [],
-        [[]],
+        1,
+        [target_time_window, target_time_window],
+        [None, None],
         [
-            (
-                0,
-                "succeeded",
-                "time_filter_failed",
-                expected_reason,
-                [],
-                0,
-                0,
-                0,
-            ),
-            (
-                1,
-                "succeeded",
-                "time_filter_failed",
-                expected_reason,
-                [],
-                0,
-                0,
-                0,
-            ),
+            (0, "succeeded", ["first-q"], 1),
+            (1, "succeeded", ["second-q"], 1),
         ],
-        (0, ()),
         [(1, {"result": "failed", "reason": expected_reason})],
         [
             {
                 "reason": expected_reason,
-                "task_count": 2,
                 "event": "external_search_time_filter_failed",
                 "log_level": "warning",
             }
