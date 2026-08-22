@@ -184,6 +184,8 @@ def test_report_has_no_review_related_or_legacy_fields() -> None:
     ):
         package = import_module(package_name)
         assert not hasattr(package, "ResearchTaskStatus")
+        assert not hasattr(package, "EXTERNAL_SEARCH_AGENT_HARD_LIMIT")
+        assert not hasattr(package, "resolve_external_search_agent_count")
 
 
 # --- CollectedNews (収集Run) -------------------------------------------------
@@ -192,11 +194,11 @@ def test_report_has_no_review_related_or_legacy_fields() -> None:
 def test_collected_news_accepts_contiguous_matching_task_indexes() -> None:
     collected_news = CollectedNews(
         tasks=[_collected_task(task_index=0), _collected_task(task_index=1)],
-        requested_agent_count=1,
-        effective_agent_count=1,
     )
 
     assert [task.task_index for task in collected_news.tasks] == [0, 1]
+    assert not hasattr(collected_news, "requested_agent_count")
+    assert not hasattr(collected_news, "effective_agent_count")
 
 
 @pytest.mark.parametrize(
@@ -213,8 +215,6 @@ def test_collected_news_rejects_non_contiguous_or_duplicate_task_indexes(
     with pytest.raises(ValueError):
         CollectedNews(
             tasks=[_collected_task(task_index=index) for index in task_indexes],
-            requested_agent_count=1,
-            effective_agent_count=1,
         )
 
 
@@ -222,6 +222,4 @@ def test_collected_news_rejects_task_and_report_index_mismatch() -> None:
     with pytest.raises(ValueError):
         CollectedNews(
             tasks=[_collected_task(task_index=0, report_task_index=1)],
-            requested_agent_count=1,
-            effective_agent_count=1,
         )

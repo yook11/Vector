@@ -115,8 +115,6 @@ def _collected_news(*, task_reports: list[ResearchTaskReport]) -> CollectedNews:
             )
             for report in task_reports
         ],
-        requested_agent_count=None,
-        effective_agent_count=0,
     )
 
 

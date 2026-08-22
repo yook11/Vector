@@ -31,7 +31,7 @@ from app.agent.runtime.contract import AgentResponseDefect, AgentResponseInvalid
 from app.analysis.analyzed_article import InScopeAnalyzedArticle
 from app.analysis.assessment.domain.result import InScope, InScopeCategory
 from tests.agent.running._harness import fixed_scope
-from tests.agent.runtime._fakes import ScriptedAgentRuntime
+from tests.agent.runtime._fakes import GoalKeyedAgentRuntime, ScriptedAgentRuntime
 from tests.logfire._metric_helpers import collected_metrics
 
 _AS_OF = datetime(2026, 7, 20, 9, 30, tzinfo=UTC)
@@ -200,7 +200,6 @@ def _service(
     internal_search: Any,
     external: ExternalSearch | None = None,
     events: _Events | None = None,
-    requested_agent_count: int | None = None,
 ) -> EvidenceCollectionService:
     return EvidenceCollectionService(
         internal_search=internal_search,
@@ -208,7 +207,6 @@ def _service(
         external_search_scope_factory=fixed_scope(
             external if external is not None else _IdleExternalSearch()
         ),
-        requested_agent_count=requested_agent_count,
     )
 
 
@@ -339,11 +337,12 @@ async def test_time_filter_failure_records_one_metric_for_multiple_goals(
             "q2": [_external_hit("https://example.com/2")],
         }
     )
-    query_runtime = ScriptedAgentRuntime([_query_draft(["q1"]), _query_draft(["q2"])])
+    query_runtime = GoalKeyedAgentRuntime(
+        {"first": _query_draft(["q1"]), "second": _query_draft(["q2"])}
+    )
     service = _service(
         internal_search=_FakeInternalSearch(),
         external=_external_search(query_runtime, gateway=gateway),
-        requested_agent_count=1,
     )
 
     collected = await _collect_tasks(
@@ -395,7 +394,6 @@ async def test_internal_search_receives_only_that_tasks_own_queries() -> None:
     internal_search = _FakeInternalSearch()
     service = _service(
         internal_search=internal_search,
-        requested_agent_count=1,
     )
 
     await _collect_tasks(
@@ -404,10 +402,10 @@ async def test_internal_search_receives_only_that_tasks_own_queries() -> None:
         _task("second", "q3"),
     )
 
-    assert internal_search.calls == [
-        InternalSearchQueries(queries=("q1", "q2")),
-        InternalSearchQueries(queries=("q3",)),
-    ]
+    assert {call.queries for call in internal_search.calls} == {
+        ("q1", "q2"),
+        ("q3",),
+    }
 
 
 @pytest.mark.asyncio
@@ -430,10 +428,14 @@ async def test_independent_collect_calls_do_not_leak_failure_between_tasks() -> 
     service = _service(
         internal_search=_KeyedInternalSearch(),
         external=_external_search(
-            ScriptedAgentRuntime([_query_draft(["bad"]), _query_draft(["good"])]),
+            GoalKeyedAgentRuntime(
+                {
+                    "failing": _query_draft(["bad"]),
+                    "succeeding": _query_draft(["good"]),
+                }
+            ),
             gateway=_KeyedExternalSearchGateway(),
         ),
-        requested_agent_count=1,
     )
 
     failing_result, sibling_result = await _collect_tasks(
@@ -454,21 +456,19 @@ async def test_independent_collect_calls_do_not_leak_failure_between_tasks() -> 
 async def test_internal_events_carry_task_index_and_input_derived_counts() -> None:
     """保証するテスト条件 10。"""
     events = _Events()
-    hits_by_call = iter(
-        [
-            [_hit(assessment_id=1001, title="a"), _hit(assessment_id=1002, title="b")],
-            [_hit(assessment_id=1003, title="c")],
-        ]
-    )
 
-    class _PerCallInternalSearch:
+    class _KeyedInternalSearch:
         async def search(self, queries: Any) -> list[InternalArticleSearchHit]:
-            return next(hits_by_call)
+            if queries.queries == ("q1", "q2"):
+                return [
+                    _hit(assessment_id=1001, title="a"),
+                    _hit(assessment_id=1002, title="b"),
+                ]
+            return [_hit(assessment_id=1003, title="c")]
 
     service = _service(
-        internal_search=_PerCallInternalSearch(),
+        internal_search=_KeyedInternalSearch(),
         events=events,
-        requested_agent_count=1,
     )
 
     await _collect_tasks(
@@ -477,29 +477,35 @@ async def test_internal_events_carry_task_index_and_input_derived_counts() -> No
         _task("second", "q3"),
     )
 
-    internal_events = [event.model_dump() for event in _internal_events(events.events)]
-    assert internal_events == [
-        {
-            "type": "evidence_collection.internal_search_started",
-            "task_index": 0,
-            "query_count": 2,
-        },
-        {
-            "type": "evidence_collection.internal_search_completed",
-            "task_index": 0,
-            "hit_count": 2,
-        },
-        {
-            "type": "evidence_collection.internal_search_started",
-            "task_index": 1,
-            "query_count": 1,
-        },
-        {
-            "type": "evidence_collection.internal_search_completed",
-            "task_index": 1,
-            "hit_count": 1,
-        },
-    ]
+    by_task: dict[int, list[dict[str, Any]]] = {}
+    for event in _internal_events(events.events):
+        by_task.setdefault(event.task_index, []).append(event.model_dump())
+    assert by_task == {
+        0: [
+            {
+                "type": "evidence_collection.internal_search_started",
+                "task_index": 0,
+                "query_count": 2,
+            },
+            {
+                "type": "evidence_collection.internal_search_completed",
+                "task_index": 0,
+                "hit_count": 2,
+            },
+        ],
+        1: [
+            {
+                "type": "evidence_collection.internal_search_started",
+                "task_index": 1,
+                "query_count": 1,
+            },
+            {
+                "type": "evidence_collection.internal_search_completed",
+                "task_index": 1,
+                "hit_count": 1,
+            },
+        ],
+    }
 
 
 @pytest.mark.asyncio

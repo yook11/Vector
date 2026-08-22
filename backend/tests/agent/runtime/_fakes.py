@@ -9,7 +9,7 @@ from typing import Any, cast
 
 from app.agent.agent import Agent
 
-__all__ = ["AgentRuntimeCall", "ScriptedAgentRuntime"]
+__all__ = ["AgentRuntimeCall", "GoalKeyedAgentRuntime", "ScriptedAgentRuntime"]
 
 
 @dataclass(frozen=True, slots=True)
@@ -60,3 +60,36 @@ class ScriptedAgentRuntime:
             raise AssertionError(
                 f"ScriptedAgentRuntime has {remaining} unconsumed outcome(s)"
             )
+
+
+class GoalKeyedAgentRuntime:
+    """research_goal で outcome を返す。同時 fan-out でも対応が入れ替わらない。"""
+
+    def __init__(self, outcomes_by_goal: dict[str, object | BaseException]) -> None:
+        self._outcomes_by_goal = outcomes_by_goal
+        self.calls: list[AgentRuntimeCall] = []
+
+    async def call[InputT, OutputT](
+        self,
+        agent: Agent[InputT, OutputT],
+        input: InputT,
+        *,
+        attempt_number: int,
+    ) -> OutputT:
+        self.calls.append(
+            AgentRuntimeCall(
+                agent=agent,
+                input=input,
+                attempt_number=attempt_number,
+            )
+        )
+        goal = cast(Any, input).task.research_goal
+        try:
+            outcome = self._outcomes_by_goal[goal]
+        except KeyError as exc:
+            raise AssertionError(
+                f"GoalKeyedAgentRuntime has no outcome for research_goal={goal!r}"
+            ) from exc
+        if isinstance(outcome, BaseException):
+            raise outcome
+        return cast(OutputT, outcome)

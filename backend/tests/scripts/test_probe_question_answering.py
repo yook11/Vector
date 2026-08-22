@@ -275,7 +275,7 @@ def test_probe_forwards_time_window_through_dispatch_and_search_plan() -> None:
         assert forwarded.id in parameter_names
 
 
-def test_search_probe_injects_requested_count_and_events_into_runner() -> None:
+def test_search_probe_injects_events_into_runner() -> None:
     search = _function(_probe_tree(), "_probe_search")
     runner_calls = _calls(search, "AnsweringRunner")
 
@@ -286,7 +286,7 @@ def test_search_probe_injects_requested_count_and_events_into_runner() -> None:
         "phases_factory",
         "events",
     }
-    assert "requested_agent_count" in _loaded_names(search)
+    assert "requested_agent_count" not in _loaded_names(search)
     assert "events" in _loaded_names(search)
 
 

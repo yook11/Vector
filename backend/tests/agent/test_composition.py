@@ -573,6 +573,5 @@ def test_build_answering_runner_captures_phase_dependencies_without_building_the
             "events": events,
             "delta_reporter": delta_reporter,
             "continuation": continuation,
-            "requested_external_agent_count": None,
         }
     ]

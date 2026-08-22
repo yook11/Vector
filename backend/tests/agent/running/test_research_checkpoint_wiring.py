@@ -194,7 +194,6 @@ def _search_runner(
                     search_gateway=gateway,  # type: ignore[arg-type]
                 )
             ),
-            requested_agent_count=1,
         ),
         reviewer=EvidenceReviewer(runtime_scope_factory=fixed_scope(reviewer_runtime)),
         direct_answerer=_UnreachableDirectAnswerer(),

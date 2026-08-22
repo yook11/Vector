@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from collections import Counter
 from collections.abc import AsyncIterator, Sequence
 from contextlib import AbstractAsyncContextManager, asynccontextmanager
 from datetime import UTC, date, datetime
@@ -83,7 +84,7 @@ from tests.agent.running._harness import (
     review_draft as _review_draft,
 )
 from tests.agent.running._input_safety import AllowInputSafetyChecker
-from tests.agent.runtime._fakes import ScriptedAgentRuntime
+from tests.agent.runtime._fakes import GoalKeyedAgentRuntime, ScriptedAgentRuntime
 from tests.logfire._metric_helpers import collected_metrics
 
 _TIME_FILTER_METRIC = "external_search_time_filter_resolution_total"
@@ -234,9 +235,10 @@ def _external_search_events(events: list[Any]) -> list[Any]:
 
 
 class _ParallelQueryRuntime:
-    def __init__(self, *, release: asyncio.Event) -> None:
+    def __init__(self, *, release: asyncio.Event, expected_peak: int) -> None:
         self._release = release
-        self.two_started = asyncio.Event()
+        self._expected_peak = expected_peak
+        self.peak_reached = asyncio.Event()
         self.active = 0
         self.peak = 0
 
@@ -244,8 +246,8 @@ class _ParallelQueryRuntime:
         del agent, attempt_number
         self.active += 1
         self.peak = max(self.peak, self.active)
-        if self.active >= 2:
-            self.two_started.set()
+        if self.active >= self._expected_peak:
+            self.peak_reached.set()
         try:
             await self._release.wait()
             return _query_draft([input.task.research_goal])
@@ -351,7 +353,6 @@ def _runner(
     tasks: list[ExternalResearchTask],
     runtime: ExternalScopes,
     events: _Events | None = None,
-    requested_agent_count: int | None = None,
     timeline: list[str] | None = None,
     target_time_window: TargetTimeWindow | None = _DEFAULT_TARGET_TIME_WINDOW,
 ) -> tuple[AnsweringRunner, _EvidenceAnswerer, _Factory]:
@@ -365,7 +366,6 @@ def _runner(
             internal_search=_EmptyInternalSearch(),
             events=events,
             external_search_scope_factory=factory,
-            requested_agent_count=requested_agent_count,
         ),
         direct_answerer=_UnreachableDirectAnswerer(),
         evidence_answerer=answerer,
@@ -458,8 +458,11 @@ async def test_external_pipeline_normalizes_and_caps_generated_queries() -> None
 @pytest.mark.asyncio
 async def test_external_pipeline_passes_resolved_filter_to_every_tool_call() -> None:
     target_time_window = TargetTimeWindow(kind="last_n_days", days=7)
-    query_runtime = ScriptedAgentRuntime(
-        [_query_draft(["first"]), _query_draft(["second"])]
+    query_runtime = GoalKeyedAgentRuntime(
+        {
+            "first task": _query_draft(["first"]),
+            "second task": _query_draft(["second"]),
+        }
     )
     gateway = _FakeExternalSearchGateway(
         {
@@ -564,11 +567,11 @@ async def test_external_runner_resolves_target_time_window_once_per_branch(
     runner, _, _ = _runner(
         tasks=tasks,
         runtime=_runtime(
-            query_runtime=ScriptedAgentRuntime(
-                [
-                    _query_draft(["first-1", "first-2"]),
-                    _query_draft(["second-1", "second-2"]),
-                ]
+            query_runtime=GoalKeyedAgentRuntime(
+                {
+                    "first period task": _query_draft(["first-1", "first-2"]),
+                    "second period task": _query_draft(["second-1", "second-2"]),
+                }
             ),
             reviewer_runtime=ScriptedAgentRuntime([]),
             gateway=gateway,
@@ -750,8 +753,11 @@ async def test_time_filter_resolution_failure_still_searches_without_date_filter
 ) -> None:
     captured = _capture_external_outcome(monkeypatch)
     events = _Events()
-    query_runtime = ScriptedAgentRuntime(
-        [_query_draft(["first-q"]), _query_draft(["second-q"])]
+    query_runtime = GoalKeyedAgentRuntime(
+        {
+            "first closed task": _query_draft(["first-q"]),
+            "second closed task": _query_draft(["second-q"]),
+        }
     )
     reviewer_runtime = ScriptedAgentRuntime([_review_draft([])])
     gateway = _FakeExternalSearchGateway(
@@ -770,7 +776,6 @@ async def test_time_filter_resolution_failure_still_searches_without_date_filter
         ),
         events=events,
         target_time_window=target_time_window,
-        requested_agent_count=1,
     )
 
     with capture_logs() as logs:
@@ -884,8 +889,11 @@ async def test_partial_provider_failure_continues_but_all_failure_skips_reviewer
 ) -> None:
     captured = _capture_external_outcome(monkeypatch)
     provider_error = ExternalSearchProviderError(reason="external_search_http_error")
-    query_runtime = ScriptedAgentRuntime(
-        [_query_draft(["good", "bad"]), _query_draft(["bad"])]
+    query_runtime = GoalKeyedAgentRuntime(
+        {
+            "partial failure": _query_draft(["good", "bad"]),
+            "complete failure": _query_draft(["bad"]),
+        }
     )
     reviewer_runtime = ScriptedAgentRuntime([_review_draft([])])
     gateway = _FakeExternalSearchGateway(
@@ -899,13 +907,12 @@ async def test_partial_provider_failure_continues_but_all_failure_skips_reviewer
             reviewer_runtime=reviewer_runtime,
             gateway=gateway,
         ),
-        requested_agent_count=1,
     )
 
     await _run(runner)
 
     assert (
-        [call.query for call in gateway.calls],
+        Counter(call.query for call in gateway.calls),
         len(reviewer_runtime.calls),
         answerer.calls,
         [
@@ -918,7 +925,7 @@ async def test_partial_provider_failure_continues_but_all_failure_skips_reviewer
         ],
         isinstance(captured[0].evidence_run, EvidenceRunCompleted),
     ) == (
-        ["good", "bad", "bad"],
+        Counter(["good", "bad", "bad"]),
         1,
         [[]],
         [
@@ -938,8 +945,11 @@ async def test_workflow_constructs_task_ordered_external_outcome_before_answerin
     runner, _, _ = _runner(
         tasks=tasks,
         runtime=_runtime(
-            query_runtime=ScriptedAgentRuntime(
-                [_query_draft(["q1"]), _query_draft(["q2"])]
+            query_runtime=GoalKeyedAgentRuntime(
+                {
+                    "first": _query_draft(["q1"]),
+                    "second": _query_draft(["q2"]),
+                }
             ),
             # S1: reviewerはRun単位1回。統合index空間(仮定: task昇順)ではtask0の
             # 唯一の選択肢が0、task1の唯一の選択肢が1になる。task単位で呼ぶ旧経路が
@@ -970,7 +980,6 @@ async def test_workflow_constructs_task_ordered_external_outcome_before_answerin
                 }
             ),
         ),
-        requested_agent_count=4,
     )
 
     await _run(runner)
@@ -980,8 +989,6 @@ async def test_workflow_constructs_task_ordered_external_outcome_before_answerin
     evidence_run = _completed_evidence_run(outcome)
     assert (
         [report.research_goal for report in reports],
-        outcome.collected_news.requested_agent_count,
-        outcome.collected_news.effective_agent_count,
         [
             (
                 report.task_index,
@@ -996,8 +1003,6 @@ async def test_workflow_constructs_task_ordered_external_outcome_before_answerin
         evidence_run.review_missing,
     ) == (
         [task.research_goal for task in tasks],
-        4,
-        2,
         [
             (0, "succeeded", ["q1"], 1),
             (1, "succeeded", ["q2"], 1),
@@ -1023,7 +1028,12 @@ async def test_collection_events_are_per_task_causal_with_their_contract_payload
     正本のため、ここでは重複して主張しない。
     """
     events = _Events()
-    query_runtime = ScriptedAgentRuntime([_query_draft(["q1"]), _query_draft(["q2"])])
+    query_runtime = GoalKeyedAgentRuntime(
+        {
+            "first": _query_draft(["q1"]),
+            "second": _query_draft(["q2"]),
+        }
+    )
     reviewer_runtime = ScriptedAgentRuntime([_review_draft([])])
     runner, _, _ = _runner(
         tasks=[_task("first"), _task("second")],
@@ -1038,42 +1048,44 @@ async def test_collection_events_are_per_task_causal_with_their_contract_payload
             ),
         ),
         events=events,
-        requested_agent_count=1,
     )
 
     await _run(runner)
 
-    collection_events = [
-        event.model_dump()
-        for event in _external_search_events(events.events)
-        if event.type
-        in {
+    by_task: dict[int, list[dict[str, Any]]] = {}
+    for event in _external_search_events(events.events):
+        if event.type not in {
             "evidence_collection.external_search_queries_generated",
             "evidence_collection.external_search_hits_fetched",
-        }
-    ]
-    assert collection_events == [
-        {
-            "type": "evidence_collection.external_search_queries_generated",
-            "task_index": 0,
-            "queries": ["q1"],
-        },
-        {
-            "type": "evidence_collection.external_search_hits_fetched",
-            "task_index": 0,
-            "hit_count": 1,
-        },
-        {
-            "type": "evidence_collection.external_search_queries_generated",
-            "task_index": 1,
-            "queries": ["q2"],
-        },
-        {
-            "type": "evidence_collection.external_search_hits_fetched",
-            "task_index": 1,
-            "hit_count": 1,
-        },
-    ]
+        }:
+            continue
+        by_task.setdefault(event.task_index, []).append(event.model_dump())
+    assert by_task == {
+        0: [
+            {
+                "type": "evidence_collection.external_search_queries_generated",
+                "task_index": 0,
+                "queries": ["q1"],
+            },
+            {
+                "type": "evidence_collection.external_search_hits_fetched",
+                "task_index": 0,
+                "hit_count": 1,
+            },
+        ],
+        1: [
+            {
+                "type": "evidence_collection.external_search_queries_generated",
+                "task_index": 1,
+                "queries": ["q2"],
+            },
+            {
+                "type": "evidence_collection.external_search_hits_fetched",
+                "task_index": 1,
+                "hit_count": 1,
+            },
+        ],
+    }
 
 
 @pytest.mark.asyncio
@@ -1094,9 +1106,9 @@ async def test_external_pipeline_is_a_noop_for_events_when_reporter_is_none() ->
 
 
 @pytest.mark.asyncio
-async def test_requested_count_limits_only_external_task_parallelism() -> None:
+async def test_all_research_goals_run_concurrently() -> None:
     release = asyncio.Event()
-    query_runtime = _ParallelQueryRuntime(release=release)
+    query_runtime = _ParallelQueryRuntime(release=release, expected_peak=3)
     runner, _, _ = _runner(
         tasks=[_task("first"), _task("second"), _task("third")],
         runtime=_runtime(
@@ -1104,13 +1116,12 @@ async def test_requested_count_limits_only_external_task_parallelism() -> None:
             reviewer_runtime=ScriptedAgentRuntime([]),
             gateway=_FakeExternalSearchGateway(),
         ),
-        requested_agent_count=2,
     )
     running = asyncio.create_task(_run(runner))
 
     try:
-        await asyncio.wait_for(query_runtime.two_started.wait(), timeout=0.5)
-        assert query_runtime.peak == 2
+        await asyncio.wait_for(query_runtime.peak_reached.wait(), timeout=0.5)
+        assert query_runtime.peak == 3
     finally:
         release.set()
         await asyncio.wait_for(running, timeout=0.5)
@@ -1133,7 +1144,6 @@ async def test_outer_cancellation_cancels_and_joins_all_started_external_tasks()
             reviewer_runtime=ScriptedAgentRuntime([]),
             gateway=_FakeExternalSearchGateway(),
         ),
-        requested_agent_count=len(tasks),
         timeline=timeline,
     )
     running = asyncio.create_task(_run(runner))
@@ -1162,8 +1172,12 @@ async def test_outer_cancellation_cancels_and_joins_all_started_external_tasks()
 
 @pytest.mark.asyncio
 async def test_classified_task_failure_does_not_cancel_its_sibling() -> None:
-    failed = AgentResponseInvalidError(AgentResponseDefect.RESPONSE_NOT_JSON)
-    query_runtime = ScriptedAgentRuntime([failed, _query_draft(["q"])])
+    query_runtime = GoalKeyedAgentRuntime(
+        {
+            "failed": AgentResponseInvalidError(AgentResponseDefect.RESPONSE_NOT_JSON),
+            "succeeds": _query_draft(["q"]),
+        }
+    )
     reviewer_runtime = ScriptedAgentRuntime(
         [_review_draft([{"option_index": 0, "claim": "claim", "why_selected": "why"}])]
     )
@@ -1174,7 +1188,6 @@ async def test_classified_task_failure_does_not_cancel_its_sibling() -> None:
             reviewer_runtime=reviewer_runtime,
             gateway=_FakeExternalSearchGateway({"q": [_hit("https://example.com/q")]}),
         ),
-        requested_agent_count=1,
     )
 
     await _run(runner)
@@ -1198,7 +1211,6 @@ async def test_unclassified_task_failure_joins_sibling_before_scope_close() -> N
             reviewer_runtime=ScriptedAgentRuntime([]),
             gateway=_FakeExternalSearchGateway(),
         ),
-        requested_agent_count=2,
         timeline=timeline,
     )
 
@@ -1272,15 +1284,21 @@ async def test_external_scope_is_activated_fresh_per_run() -> None:
         )
 
     first_runtime = _runtime(
-        query_runtime=ScriptedAgentRuntime(
-            [_query_draft(["q1"]), _query_draft(["q2"])]
+        query_runtime=GoalKeyedAgentRuntime(
+            {
+                "first": _query_draft(["q1"]),
+                "second": _query_draft(["q2"]),
+            }
         ),
         reviewer_runtime=_reviewer_runtime(),
         gateway=_gateway(),
     )
     second_runtime = _runtime(
-        query_runtime=ScriptedAgentRuntime(
-            [_query_draft(["q1"]), _query_draft(["q2"])]
+        query_runtime=GoalKeyedAgentRuntime(
+            {
+                "first": _query_draft(["q1"]),
+                "second": _query_draft(["q2"]),
+            }
         ),
         reviewer_runtime=_reviewer_runtime(),
         gateway=_gateway(),
@@ -1301,7 +1319,6 @@ async def test_external_scope_is_activated_fresh_per_run() -> None:
         collector=EvidenceCollectionService(
             internal_search=_EmptyInternalSearch(),
             external_search_scope_factory=factory,
-            requested_agent_count=1,
         ),
         direct_answerer=_UnreachableDirectAnswerer(),
         evidence_answerer=answerer,

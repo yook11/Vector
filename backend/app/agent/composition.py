@@ -71,7 +71,6 @@ def _build_answering_phases(
     events: AnswerEventReporter | None = None,
     delta_reporter: AnswerDeltaReporter | None = None,
     continuation: AnswerGenerationContinuation | None = None,
-    requested_external_agent_count: int | None = None,
 ) -> AnsweringPhases:
     ensure_external_search_configured()
 
@@ -112,7 +111,6 @@ def _build_answering_phases(
             internal_search=internal_search,
             events=events,
             external_search_scope_factory=activate_external_search,
-            requested_agent_count=requested_external_agent_count,
         ),
         reviewer=EvidenceReviewer(
             runtime_scope_factory=activate_evidence_reviewer_runtime,
@@ -139,7 +137,6 @@ def build_answering_runner(
     events: AnswerEventReporter | None = None,
     delta_reporter: AnswerDeltaReporter | None = None,
     continuation: AnswerGenerationContinuation | None = None,
-    requested_external_agent_count: int | None = None,
 ) -> AnsweringRunner:
     question_context_runtime_factory = (
         activate_gemini_agent_runtime
@@ -160,7 +157,6 @@ def build_answering_runner(
             events=events,
             delta_reporter=delta_reporter,
             continuation=continuation,
-            requested_external_agent_count=requested_external_agent_count,
         ),
         progress=progress,
         events=events,

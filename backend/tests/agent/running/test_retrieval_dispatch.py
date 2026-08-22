@@ -59,7 +59,7 @@ from app.analysis.analyzed_article import InScopeAnalyzedArticle
 from app.analysis.assessment.domain.result import InScope, InScopeCategory
 from tests.agent.running._harness import ExternalScopes, fixed_scope, run_identity
 from tests.agent.running._input_safety import AllowInputSafetyChecker
-from tests.agent.runtime._fakes import ScriptedAgentRuntime
+from tests.agent.runtime._fakes import GoalKeyedAgentRuntime, ScriptedAgentRuntime
 from tests.logfire._metric_helpers import collected_metrics
 
 RUN_IDENTITY = run_identity(
@@ -522,7 +522,6 @@ def _runner(
     planner_error: BaseException | None = None,
     progress: _Progress | None = None,
     events: object | None = None,
-    requested_agent_count: int | None = None,
 ) -> AnsweringRunner:
     phases = AnsweringPhases(
         planner=_Planner(plan, error=planner_error),
@@ -530,7 +529,6 @@ def _runner(
             internal_search=internal,
             events=events,
             external_search_scope_factory=factory,
-            requested_agent_count=requested_agent_count,
         ),
         direct_answerer=_UnreachableDirectAnswerer(),
         evidence_answerer=_EvidenceAnswerer(error=answer_error, timeline=timeline),
@@ -1140,20 +1138,15 @@ async def test_internal_search_events_are_emitted_per_task_with_task_index() -> 
     """保証するテスト条件 10。"""
     timeline: list[str] = []
     events = _Events()
-    hits_by_call = iter(
-        [
-            [
-                _hit(assessment_id=1001, title="first"),
-                _hit(assessment_id=1002, title="second"),
-            ],
-            [_hit(assessment_id=1003, title="third")],
-        ]
-    )
 
-    class _PerCallInternalSearch:
+    class _KeyedInternalSearch:
         async def search(self, queries: Any) -> list[InternalArticleSearchHit]:
-            del queries
-            return next(hits_by_call)
+            if queries.queries == ("NVIDIA", "OpenAI"):
+                return [
+                    _hit(assessment_id=1001, title="first"),
+                    _hit(assessment_id=1002, title="second"),
+                ]
+            return [_hit(assessment_id=1003, title="third")]
 
     # S1: reviewerはRun単位1回。統合index空間(仮定: task昇順)ではtask0の2件が
     # 0,1、task1の1件が2になる。task単位で呼ぶ旧経路が残っていても2件目の
@@ -1167,11 +1160,16 @@ async def test_internal_search_events_are_emitted_per_task_with_task_index() -> 
             _task("second task"),
             article_search_queries=["NVIDIA", "OpenAI"],
         ),
-        internal=_PerCallInternalSearch(),
+        internal=_KeyedInternalSearch(),
         factory=_Factory(
             [
                 _runtime(
-                    ScriptedAgentRuntime([_query_draft(), _query_draft()]),
+                    GoalKeyedAgentRuntime(
+                        {
+                            "first task": _query_draft(),
+                            "second task": _query_draft(),
+                        }
+                    ),
                     reviewer_runtime=reviewer_runtime,
                 )
             ],
@@ -1179,36 +1177,39 @@ async def test_internal_search_events_are_emitted_per_task_with_task_index() -> 
         ),
         timeline=timeline,
         events=events,
-        requested_agent_count=1,
     )
 
     await _run(runner)
 
-    internal_events = [
-        event.model_dump() for event in _internal_search_events(events.events)
-    ]
-    assert internal_events == [
-        {
-            "type": "evidence_collection.internal_search_started",
-            "task_index": 0,
-            "query_count": 2,
-        },
-        {
-            "type": "evidence_collection.internal_search_completed",
-            "task_index": 0,
-            "hit_count": 2,
-        },
-        {
-            "type": "evidence_collection.internal_search_started",
-            "task_index": 1,
-            "query_count": 1,
-        },
-        {
-            "type": "evidence_collection.internal_search_completed",
-            "task_index": 1,
-            "hit_count": 1,
-        },
-    ]
+    by_task: dict[int, list[dict[str, Any]]] = {}
+    for event in _internal_search_events(events.events):
+        by_task.setdefault(event.task_index, []).append(event.model_dump())
+    assert by_task == {
+        0: [
+            {
+                "type": "evidence_collection.internal_search_started",
+                "task_index": 0,
+                "query_count": 2,
+            },
+            {
+                "type": "evidence_collection.internal_search_completed",
+                "task_index": 0,
+                "hit_count": 2,
+            },
+        ],
+        1: [
+            {
+                "type": "evidence_collection.internal_search_started",
+                "task_index": 1,
+                "query_count": 1,
+            },
+            {
+                "type": "evidence_collection.internal_search_completed",
+                "task_index": 1,
+                "hit_count": 1,
+            },
+        ],
+    }
 
 
 @pytest.mark.asyncio

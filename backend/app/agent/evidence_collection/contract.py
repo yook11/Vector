@@ -102,8 +102,6 @@ class CollectedNews:
     """全task並列収集の結果。Run単位1回の精査(evidence review)の入力になる。"""
 
     tasks: list[CollectedTask]
-    requested_agent_count: int | None
-    effective_agent_count: int
 
     def __post_init__(self) -> None:
         task_indexes = {task.task_index for task in self.tasks}

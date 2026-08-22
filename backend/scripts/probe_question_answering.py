@@ -154,12 +154,6 @@ def _build_parser() -> argparse.ArgumentParser:
         ),
     )
     parser.add_argument(
-        "--agents",
-        type=int,
-        default=1,
-        help="Requested external search agent count. Defaults to 1.",
-    )
-    parser.add_argument(
         "--time-window",
         type=_parse_target_time_window,
         default=None,
@@ -187,7 +181,6 @@ async def _probe(
     mode: str,
     question: str,
     goals: Sequence[str],
-    requested_agent_count: int,
     target_time_window: TargetTimeWindow | None,
 ) -> None:
     if mode == "direct":
@@ -196,7 +189,6 @@ async def _probe(
     await _probe_search(
         question=question,
         goals=goals,
-        requested_agent_count=requested_agent_count,
         target_time_window=target_time_window,
     )
 
@@ -205,7 +197,6 @@ async def _probe_search(
     *,
     question: str,
     goals: Sequence[str],
-    requested_agent_count: int,
     target_time_window: TargetTimeWindow | None,
 ) -> None:
     _require_secret("TAVILY_API_KEY", settings.tavily_api_key.get_secret_value())
@@ -239,7 +230,6 @@ async def _probe_search(
                 internal_search=internal_search,
                 events=events,
                 external_search_scope_factory=activate_external_search,
-                requested_agent_count=requested_agent_count,
             ),
             reviewer=EvidenceReviewer(
                 runtime_scope_factory=activate_evidence_reviewer_runtime,
@@ -263,7 +253,6 @@ async def _probe_search(
         as_of=as_of,
         plan=plan,
         plan_type=result.plan_summary.plan_type,
-        requested_agent_count=requested_agent_count,
         events=events.events,
     )
     print()
@@ -355,14 +344,12 @@ def _print_plan_summary(
     as_of: datetime,
     plan: SearchPlan,
     plan_type: str,
-    requested_agent_count: int,
     events: Sequence[AnswerProgressEvent],
 ) -> None:
     print("plan:")
     print(f"  as_of={as_of.isoformat()}")
     print(f"  plan_type={plan_type}")
     print(f"  target_time_window={plan.target_time_window or ''}")
-    print(f"  requested_agent_count={requested_agent_count}")
     print(f"  planned_task_count={len(plan.research_tasks)}")
     print()
     _print_collection_progress(events)
@@ -451,7 +438,6 @@ def main(argv: Sequence[str] | None = None) -> None:
             mode=args.mode,
             question=question,
             goals=args.goals,
-            requested_agent_count=args.agents,
             target_time_window=args.time_window,
         )
     )

@@ -28,9 +28,6 @@ from app.agent.evidence_collection.external_search.contract import (
     ExternalSearchHit,
     ExternalSearchScopeFactory,
 )
-from app.agent.evidence_collection.external_search.policy import (
-    resolve_external_search_agent_count,
-)
 from app.agent.evidence_collection.internal_search.contract import (
     InternalArticleSearchHit,
     InternalSearch,
@@ -56,7 +53,6 @@ class EvidenceCollectionService:
     internal_search: InternalSearch
     external_search_scope_factory: ExternalSearchScopeFactory
     events: AnswerEventReporter | None = None
-    requested_agent_count: int | None = None
 
     async def collect(
         self,
@@ -65,32 +61,22 @@ class EvidenceCollectionService:
         as_of: datetime,
     ) -> CollectedNews:
         tasks = plan.research_tasks
-        effective_agent_count = resolve_external_search_agent_count(
-            task_count=len(tasks),
-            requested_agent_count=self.requested_agent_count,
-        )
-        semaphore = asyncio.Semaphore(max(1, effective_agent_count))
 
         async with self.external_search_scope_factory() as external_search:
 
             async def run_task(task_index: int, task: ResearchTask) -> CollectedTask:
-                async with semaphore:
-                    return await self._collect_for_goal(
-                        task_index=task_index,
-                        task=task,
-                        external_search=external_search,
-                        target_time_window=plan.target_time_window,
-                        as_of=as_of,
-                    )
+                return await self._collect_for_goal(
+                    task_index=task_index,
+                    task=task,
+                    external_search=external_search,
+                    target_time_window=plan.target_time_window,
+                    as_of=as_of,
+                )
 
             collected_tasks = await gather_cancel_on_error(
                 *[run_task(task_index, task) for task_index, task in enumerate(tasks)]
             )
-        return CollectedNews(
-            tasks=collected_tasks,
-            requested_agent_count=self.requested_agent_count,
-            effective_agent_count=effective_agent_count,
-        )
+        return CollectedNews(tasks=collected_tasks)
 
     async def _collect_for_goal(
         self,
