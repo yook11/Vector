@@ -28,9 +28,6 @@ from app.agent.contract import (
     EvidenceReviewSelectedEvent,
 )
 from app.agent.evidence_collection import CollectedNews
-from app.agent.evidence_collection.external_search import (
-    EXTERNAL_SEARCH_AGENT_HARD_LIMIT,
-)
 from app.agent.evidence_review import (
     AnswerEvidence,
     EvidenceRunCompleted,
@@ -298,19 +295,7 @@ def _record_evidence_run_span_attributes(
             if task.report.internal_collection == "failed"
         ),
     )
-    if collected_news.requested_agent_count is not None:
-        span.set_attribute(
-            "requested_external_agent_count",
-            collected_news.requested_agent_count,
-        )
-    span.set_attribute(
-        "effective_external_agent_count",
-        collected_news.effective_agent_count,
-    )
-    span.set_attribute(
-        "external_agent_hard_limit",
-        EXTERNAL_SEARCH_AGENT_HARD_LIMIT,
-    )
+    span.set_attribute("research_task_count", len(collected_news.tasks))
     if isinstance(evidence_run, EvidenceRunFailed):
         span.set_attribute("review_failure_reason", evidence_run.failure_reason)
 

@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from app.agent.evidence_collection.external_search.contract import (
     EXTERNAL_QUERY_MAX_CHARS,
-    EXTERNAL_SEARCH_AGENT_HARD_LIMIT,
     EXTERNAL_SEARCH_HIT_POOL_LIMIT_PER_TASK,
     EXTERNAL_TASK_QUERY_LIMIT,
     ExternalSearchHit,
@@ -15,7 +14,6 @@ __all__ = [
     "QUERY_GENERATE_TIMEOUT_SECONDS",
     "build_hit_pool",
     "clean_generated_queries",
-    "resolve_external_search_agent_count",
 ]
 
 QUERY_GENERATE_TIMEOUT_SECONDS = 30
@@ -60,18 +58,3 @@ def build_hit_pool(
             if len(pool) >= EXTERNAL_SEARCH_HIT_POOL_LIMIT_PER_TASK:
                 return pool
     return pool
-
-
-def resolve_external_search_agent_count(
-    *,
-    task_count: int,
-    requested_agent_count: int | None = None,
-) -> int:
-    """設定値を hard limit 3 と task 数で丸めた実効 agent 数にする。"""
-
-    if task_count <= 0:
-        return 0
-
-    requested = task_count if requested_agent_count is None else requested_agent_count
-    safe_requested = max(1, requested)
-    return min(task_count, safe_requested, EXTERNAL_SEARCH_AGENT_HARD_LIMIT)

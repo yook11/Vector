@@ -5,7 +5,6 @@ from app.agent.evidence_collection.external_search.contract import (
     EVIDENCE_WHY_SELECTED_MAX_CHARS,
     EXTERNAL_CONTENT_MAX_CHARS,
     EXTERNAL_QUERY_MAX_CHARS,
-    EXTERNAL_SEARCH_AGENT_HARD_LIMIT,
     EXTERNAL_SEARCH_HIT_POOL_LIMIT_PER_TASK,
     EXTERNAL_SEARCH_HITS_PER_QUERY,
     EXTERNAL_TASK_QUERY_LIMIT,
@@ -26,7 +25,6 @@ from app.agent.evidence_collection.external_search.contract import (
 from app.agent.evidence_collection.external_search.policy import (
     PROVIDER_SEARCH_TIMEOUT_SECONDS,
     QUERY_GENERATE_TIMEOUT_SECONDS,
-    resolve_external_search_agent_count,
 )
 from app.agent.evidence_collection.external_search.service import (
     ExternalSearchService,
@@ -49,7 +47,6 @@ __all__ = [
     "EVIDENCE_WHY_SELECTED_MAX_CHARS",
     "EXTERNAL_CONTENT_MAX_CHARS",
     "EXTERNAL_QUERY_MAX_CHARS",
-    "EXTERNAL_SEARCH_AGENT_HARD_LIMIT",
     "EXTERNAL_SEARCH_HITS_PER_QUERY",
     "EXTERNAL_SEARCH_HIT_POOL_LIMIT_PER_TASK",
     "EXTERNAL_TASK_QUERY_LIMIT",
@@ -75,5 +72,4 @@ __all__ = [
     "ExternalSearchDateFilterResolutionError",
     "build_search_body",
     "resolve_external_search_date_filter",
-    "resolve_external_search_agent_count",
 ]

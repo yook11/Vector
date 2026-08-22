@@ -21,7 +21,6 @@ def _report(**overrides: object) -> ResearchTaskReport:
         "research_goal": "NVIDIA の供給を確認する",
         "internal_collection": "succeeded",
         "external_collection": "succeeded",
-        "time_filter_failure_reason": None,
         "generated_queries": [],
         "provider_failed_query_count": 0,
         "internal_hit_count": 0,
@@ -29,15 +28,6 @@ def _report(**overrides: object) -> ResearchTaskReport:
     }
     values.update(overrides)
     return ResearchTaskReport(**values)
-
-
-def _time_filter_failed_report(**overrides: object) -> ResearchTaskReport:
-    values: dict[str, object] = {
-        "external_collection": "time_filter_failed",
-        "time_filter_failure_reason": "future_calendar_month",
-    }
-    values.update(overrides)
-    return _report(**values)
 
 
 def _query_generation_failed_report(**overrides: object) -> ResearchTaskReport:
@@ -92,50 +82,6 @@ def test_report_accepts_the_documented_collection_shape() -> None:
         report.internal_hit_count,
         report.external_hit_count,
     ) == ("succeeded", "succeeded", 2, 3)
-
-
-@pytest.mark.parametrize(
-    "changes",
-    [
-        pytest.param({"generated_queries": ["raw query"]}, id="generated-query"),
-        pytest.param({"provider_failed_query_count": 1}, id="provider-failure"),
-        pytest.param({"external_hit_count": 1}, id="external-hit"),
-        pytest.param({"time_filter_failure_reason": None}, id="missing-reason"),
-    ],
-)
-def test_time_filter_failed_rejects_non_closed_external_diagnostics(
-    changes: dict[str, object],
-) -> None:
-    """保証するテスト条件 1。time_filter_failed は外部系診断だけ閉じる。"""
-    with pytest.raises(ValidationError):
-        _time_filter_failed_report(**changes)
-
-
-def test_time_filter_failed_allows_internal_diagnostics_to_vary() -> None:
-    """保証するテスト条件 1・6。time_filter_failed でも内部系は自由。"""
-    report = _time_filter_failed_report(
-        internal_collection="succeeded",
-        internal_hit_count=2,
-    )
-
-    assert (report.external_collection, report.internal_hit_count) == (
-        "time_filter_failed",
-        2,
-    )
-
-
-@pytest.mark.parametrize(
-    "external_collection",
-    ["succeeded", "query_generation_failed", "provider_failed"],
-)
-def test_non_time_filter_report_rejects_time_filter_failure_reason(
-    external_collection: str,
-) -> None:
-    with pytest.raises(ValidationError):
-        _report(
-            external_collection=external_collection,
-            time_filter_failure_reason="future_date_range",
-        )
 
 
 @pytest.mark.parametrize(
@@ -228,6 +174,7 @@ def test_report_has_no_review_related_or_legacy_fields() -> None:
         "status",
         "selector_failure_reason",
         "hit_count",
+        "time_filter_failure_reason",
     ):
         assert not hasattr(report, legacy_field)
     for package_name in (
@@ -237,6 +184,8 @@ def test_report_has_no_review_related_or_legacy_fields() -> None:
     ):
         package = import_module(package_name)
         assert not hasattr(package, "ResearchTaskStatus")
+        assert not hasattr(package, "EXTERNAL_SEARCH_AGENT_HARD_LIMIT")
+        assert not hasattr(package, "resolve_external_search_agent_count")
 
 
 # --- CollectedNews (収集Run) -------------------------------------------------
@@ -245,11 +194,11 @@ def test_report_has_no_review_related_or_legacy_fields() -> None:
 def test_collected_news_accepts_contiguous_matching_task_indexes() -> None:
     collected_news = CollectedNews(
         tasks=[_collected_task(task_index=0), _collected_task(task_index=1)],
-        requested_agent_count=1,
-        effective_agent_count=1,
     )
 
     assert [task.task_index for task in collected_news.tasks] == [0, 1]
+    assert not hasattr(collected_news, "requested_agent_count")
+    assert not hasattr(collected_news, "effective_agent_count")
 
 
 @pytest.mark.parametrize(
@@ -266,8 +215,6 @@ def test_collected_news_rejects_non_contiguous_or_duplicate_task_indexes(
     with pytest.raises(ValueError):
         CollectedNews(
             tasks=[_collected_task(task_index=index) for index in task_indexes],
-            requested_agent_count=1,
-            effective_agent_count=1,
         )
 
 
@@ -275,6 +222,4 @@ def test_collected_news_rejects_task_and_report_index_mismatch() -> None:
     with pytest.raises(ValueError):
         CollectedNews(
             tasks=[_collected_task(task_index=0, report_task_index=1)],
-            requested_agent_count=1,
-            effective_agent_count=1,
         )

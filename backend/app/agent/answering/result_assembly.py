@@ -28,9 +28,6 @@ __all__ = ["assemble_evidence_result"]
 
 _RETRIEVAL_EMPTY_MISSING = "回答に使える根拠を取得できませんでした"
 _INCOMPLETE_TASK_MISSING = "完了できなかった調査があります"
-_EXTERNAL_TASK_STATUS_MISSING = {
-    "time_filter_failed": "指定された公開期間を外部検索へ適用できませんでした",
-}
 _UNAVAILABLE_ANSWER = (
     "回答を生成できませんでした。根拠の不足または応答形式の不備により、"
     "参考回答を安全に構築できませんでした。"
@@ -152,7 +149,6 @@ def _missing_aspects(
         evidence_run=evidence_run,
     ):
         values.append(_INCOMPLETE_TASK_MISSING)
-    values.extend(_external_task_status_missing(collected_news))
     if isinstance(evidence_run, EvidenceRunCompleted):
         values.extend(evidence_run.review_missing)
     values.extend(unavailable_missing)
@@ -170,23 +166,6 @@ def _has_incomplete_task(
         task.report.internal_hit_count == 0 and task.report.external_hit_count == 0
         for task in collected_news.tasks
     )
-
-
-def _external_task_status_missing(collected_news: CollectedNews) -> list[str]:
-    """収集の失敗表明(time filter文言)だけをtask単位で連結する。
-
-    Run全体の不足(missing)はreviewerがRun単位で1本返すため、
-    ここでtask別に連結しない(仕様「何ができていないかの表明」)。
-    """
-    missing: list[str] = []
-    for report in sorted(
-        (task.report for task in collected_news.tasks),
-        key=lambda report: report.task_index,
-    ):
-        status_missing = _EXTERNAL_TASK_STATUS_MISSING.get(report.external_collection)
-        if status_missing is not None:
-            missing.append(status_missing)
-    return missing
 
 
 def _deduplicate(values: list[str]) -> list[str]:

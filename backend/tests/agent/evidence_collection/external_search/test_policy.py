@@ -18,7 +18,6 @@ from app.agent.evidence_collection.external_search.policy import (
     QUERY_GENERATE_TIMEOUT_SECONDS,
     build_hit_pool,
     clean_generated_queries,
-    resolve_external_search_agent_count,
 )
 
 
@@ -37,7 +36,6 @@ def test_policy_exports_the_public_domain_functions_and_timeout_constants() -> N
         {
             "clean_generated_queries",
             "build_hit_pool",
-            "resolve_external_search_agent_count",
         }
         <= set(dir(policy_module)),
         QUERY_GENERATE_TIMEOUT_SECONDS,
@@ -89,21 +87,3 @@ def test_build_hit_pool_round_robins_urls_and_stops_at_twenty() -> None:
         "left-3",
     ]
     assert len(pool) == 20
-
-
-def test_external_agent_count_is_bounded_by_task_count_and_hard_limit() -> None:
-    assert [
-        resolve_external_search_agent_count(
-            task_count=task_count, requested_agent_count=requested
-        )
-        for task_count, requested in [
-            (0, None),
-            (1, None),
-            (2, None),
-            (4, None),
-            (4, 4),
-            (1, 3),
-            (2, 0),
-            (2, -1),
-        ]
-    ] == [0, 1, 2, 3, 3, 1, 1, 1]

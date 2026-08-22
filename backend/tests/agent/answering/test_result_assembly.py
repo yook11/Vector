@@ -2,7 +2,7 @@
 
 `EvidenceAnswerDraft`はanswerとcited_refsだけを持つようになり、
 `assemble_evidence_result()`からcontext引数(requirement参照が唯一の用途)が
-消える。missing_aspectsは機構(retrieval empty / incomplete task / time filter /
+消える。missing_aspectsは機構(retrieval empty / incomplete task /
 review_missing)と生成不能の1行だけで組み立てられ、要望由来の文言は無くなる。
 """
 
@@ -43,7 +43,6 @@ from app.agent.planning.contract import (
     TargetTimeWindow,
 )
 
-_TIME_FILTER_MISSING = "指定された公開期間を外部検索へ適用できませんでした"
 _INCOMPLETE_TASK_MISSING = "完了できなかった調査があります"
 
 
@@ -76,7 +75,6 @@ def _report(
     research_goal: str,
     internal_collection: str = "succeeded",
     external_collection: str = "succeeded",
-    time_filter_failure_reason: str | None = None,
     generated_queries: list[str] | None = None,
     provider_failed_query_count: int = 0,
     internal_hit_count: int = 0,
@@ -87,7 +85,6 @@ def _report(
         research_goal=research_goal,
         internal_collection=internal_collection,
         external_collection=external_collection,
-        time_filter_failure_reason=time_filter_failure_reason,
         generated_queries=generated_queries or [],
         provider_failed_query_count=provider_failed_query_count,
         internal_hit_count=internal_hit_count,
@@ -95,16 +92,13 @@ def _report(
     )
 
 
-def _time_filter_failed_report(
-    *, task_index: int, research_goal: str, reason: str
-) -> Any:
-    """内部ヒットも無いtime filter失敗task(Run全体としてはskipped_empty相当)。"""
+def _zero_hit_report(*, task_index: int, research_goal: str) -> Any:
+    """内部も外部もヒットが無いtask(incomplete条件)。"""
     return _report(
         task_index=task_index,
         research_goal=research_goal,
         internal_collection="succeeded",
-        external_collection="time_filter_failed",
-        time_filter_failure_reason=reason,
+        external_collection="succeeded",
     )
 
 
@@ -121,8 +115,6 @@ def _collected_news(*, task_reports: list[ResearchTaskReport]) -> CollectedNews:
             )
             for report in task_reports
         ],
-        requested_agent_count=None,
-        effective_agent_count=0,
     )
 
 
@@ -280,27 +272,17 @@ def test_task_completes_via_internal_evidence_despite_external_provider_failure(
     assert not hasattr(result.plan_summary, "collection_failures")
 
 
-def test_all_tasks_time_filter_failed_add_incomplete_and_time_filter_missing_once() -> (
-    None
-):
-    """複数taskが未完了でも固定文言は1行に畳まれる
-
-    (両taskとも内部ヒットゼロのためRun全体はskipped_empty相当)。
-    """
+def test_all_tasks_zero_hits_add_incomplete_missing_once() -> None:
+    """複数taskが未完了でも固定文言は1行に畳まれる。"""
     tasks = [
         _task("Tavily 2027-08 の公開期間を確認する"),
         _task("provider 原典の公開期間を確認する"),
     ]
     outcome = _outcome(
         task_reports=[
-            _time_filter_failed_report(
+            _zero_hit_report(
                 task_index=index,
                 research_goal=task.research_goal,
-                reason=(
-                    "future_calendar_month"
-                    if index == 0
-                    else "unsupported_explicit_window"
-                ),
             )
             for index, task in enumerate(tasks)
         ],
@@ -320,20 +302,18 @@ def test_all_tasks_time_filter_failed_add_incomplete_and_time_filter_missing_onc
     assert result.missing_aspects.count(_INCOMPLETE_TASK_MISSING) == 1
     assert _without_incomplete_phrase(result.missing_aspects) == [
         "回答に使える根拠を取得できませんでした",
-        _TIME_FILTER_MISSING,
         _UNAVAILABLE_MISSING,
     ]
 
 
-def test_time_filter_failure_task_incomplete_with_separate_evidence() -> None:
+def test_zero_hit_task_incomplete_with_separate_evidence() -> None:
     tasks = [_task("直近の外部発表を確認する")]
     evidence = [_internal_evidence()]
     outcome = _outcome(
         task_reports=[
-            _time_filter_failed_report(
+            _zero_hit_report(
                 task_index=0,
                 research_goal=tasks[0].research_goal,
-                reason="future_calendar_month",
             )
         ],
     )
@@ -353,17 +333,16 @@ def test_time_filter_failure_task_incomplete_with_separate_evidence() -> None:
 
     assert result.status == "insufficient"
     assert result.missing_aspects.count(_INCOMPLETE_TASK_MISSING) == 1
-    assert _without_incomplete_phrase(result.missing_aspects) == [_TIME_FILTER_MISSING]
+    assert _without_incomplete_phrase(result.missing_aspects) == []
 
 
-def test_empty_evidence_time_filter_failure_adds_incomplete_and_retrieval() -> None:
+def test_empty_evidence_zero_hits_adds_incomplete_and_retrieval() -> None:
     tasks = [_task("直近の外部発表を確認する")]
     outcome = _outcome(
         task_reports=[
-            _time_filter_failed_report(
+            _zero_hit_report(
                 task_index=0,
                 research_goal=tasks[0].research_goal,
-                reason="future_calendar_month",
             )
         ],
     )
@@ -382,7 +361,6 @@ def test_empty_evidence_time_filter_failure_adds_incomplete_and_retrieval() -> N
     assert result.missing_aspects.count(_INCOMPLETE_TASK_MISSING) == 1
     assert _without_incomplete_phrase(result.missing_aspects) == [
         "回答に使える根拠を取得できませんでした",
-        _TIME_FILTER_MISSING,
         _UNAVAILABLE_MISSING,
     ]
 
@@ -470,8 +448,7 @@ def test_internal_collection_failure_never_adds_a_route_name_phrase() -> None:
                 task_index=0,
                 research_goal=tasks[0].research_goal,
                 internal_collection="failed",
-                external_collection="time_filter_failed",
-                time_filter_failure_reason="future_calendar_month",
+                external_collection="query_generation_failed",
             )
         ],
     )
@@ -492,10 +469,10 @@ def test_internal_collection_failure_never_adds_a_route_name_phrase() -> None:
     assert result.missing_aspects.count(_INCOMPLETE_TASK_MISSING) == 1
 
 
-def test_time_filter_failed_task_with_internal_evidence_stays_complete() -> None:
-    """time filter文言は独立に出るが、内部ヒットが残っていれば
+def test_internal_hits_without_external_hits_can_answer() -> None:
+    """外部ヒットが無くても内部ヒットがあればincompleteにならず、
 
-    (internal_hit_count>0)incomplete条件に当たらず固定文言は出ない。
+    期間失敗 missing も出ない。
     """
     tasks = [_task("直近の外部発表を確認する")]
     evidence = [_internal_evidence()]
@@ -505,8 +482,7 @@ def test_time_filter_failed_task_with_internal_evidence_stays_complete() -> None
                 task_index=0,
                 research_goal=tasks[0].research_goal,
                 internal_collection="succeeded",
-                external_collection="time_filter_failed",
-                time_filter_failure_reason="future_calendar_month",
+                external_collection="succeeded",
                 internal_hit_count=1,
             )
         ],
@@ -525,9 +501,8 @@ def test_time_filter_failed_task_with_internal_evidence_stays_complete() -> None
         ),
     )
 
-    assert result.status == "insufficient"
-    assert _INCOMPLETE_TASK_MISSING not in result.missing_aspects
-    assert result.missing_aspects == [_TIME_FILTER_MISSING]
+    assert result.status == "answered"
+    assert result.missing_aspects == []
 
 
 def test_report_missing_deduplicates_against_review_missing() -> None:
@@ -607,7 +582,7 @@ def test_unavailable_outcome_with_evidence_builds_insufficient_result() -> None:
 
 
 def test_unavailable_missing_coexists_with_mechanism_missing_in_order() -> None:
-    """機構由来のmissing_aspects(evidence空/incomplete task/time filter/
+    """機構由来のmissing_aspects(evidence空/incomplete task/
 
     review_missing)と生成不能の1行が併存し、現行どおりの順序で並ぶ。
     """
@@ -615,10 +590,9 @@ def test_unavailable_missing_coexists_with_mechanism_missing_in_order() -> None:
     tasks = [_task("直近の外部発表を確認する")]
     outcome = _outcome(
         task_reports=[
-            _time_filter_failed_report(
+            _zero_hit_report(
                 task_index=0,
                 research_goal=tasks[0].research_goal,
-                reason="future_calendar_month",
             )
         ],
         review_missing=["reviewerが申告した不足"],
@@ -638,7 +612,6 @@ def test_unavailable_missing_coexists_with_mechanism_missing_in_order() -> None:
     assert result.missing_aspects.count(_INCOMPLETE_TASK_MISSING) == 1
     assert _without_incomplete_phrase(result.missing_aspects) == [
         "回答に使える根拠を取得できませんでした",
-        _TIME_FILTER_MISSING,
         "reviewerが申告した不足",
         unavailable_missing,
     ]
