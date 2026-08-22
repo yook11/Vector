@@ -36,10 +36,7 @@ from app.agent.contract import (
     ExternalSearchHitsFetchedEvent,
     ExternalSearchQueriesGeneratedEvent,
 )
-from app.agent.evidence_collection import (
-    EvidenceCollectionService,
-    ResearchTaskCollector,
-)
+from app.agent.evidence_collection import EvidenceCollectionService
 from app.agent.evidence_collection.internal_search.ai.gemini import (
     GeminiQueryEmbedder,
 )
@@ -239,9 +236,8 @@ async def _probe_search(
         phases_factory=lambda: AnsweringPhases(
             planner=_FixedSearchPlanner(plan),
             collector=EvidenceCollectionService(
-                task_collector=ResearchTaskCollector(
-                    internal_search=internal_search, events=events
-                ),
+                internal_search=internal_search,
+                events=events,
                 external_search_scope_factory=activate_external_search,
                 requested_agent_count=requested_agent_count,
             ),
@@ -290,9 +286,7 @@ async def _probe_direct(*, question: str) -> None:
         phases_factory=lambda: AnsweringPhases(
             planner=_FixedDirectPlanner(DirectAnswerPlan()),
             collector=EvidenceCollectionService(
-                task_collector=ResearchTaskCollector(
-                    internal_search=_UnreachableInternalSearch()
-                ),
+                internal_search=_UnreachableInternalSearch(),
                 external_search_scope_factory=_UnreachableExternalSearchScope(),
             ),
             reviewer=EvidenceReviewer(

@@ -135,7 +135,6 @@ def test_probe_uses_answering_runner_without_removed_external_pipeline_seams() -
         "activate_evidence_reviewer_runtime",
         "engine",
         "EvidenceCollectionService",
-        "ResearchTaskCollector",
     } <= imported
     assert removed.isdisjoint(imported)
     assert removed.isdisjoint(loaded)
@@ -353,15 +352,12 @@ def test_search_probe_passes_actual_internal_and_external_dependencies_to_phases
     phase_collector = _keyword_value(phase, "collector")
     assert isinstance(phase_collector, ast.Call)
     assert _call_name(phase_collector) == "EvidenceCollectionService"
-    phase_researcher = _keyword_value(phase_collector, "task_collector")
-    assert isinstance(phase_researcher, ast.Call)
-    assert _call_name(phase_researcher) == "ResearchTaskCollector"
-    researcher_internal_search = _keyword_value(phase_researcher, "internal_search")
-    assert isinstance(researcher_internal_search, ast.Name)
-    assert researcher_internal_search.id in service_targets
-    researcher_events = _keyword_value(phase_researcher, "events")
-    assert isinstance(researcher_events, ast.Name)
-    assert researcher_events.id in events_targets
+    collector_internal_search = _keyword_value(phase_collector, "internal_search")
+    assert isinstance(collector_internal_search, ast.Name)
+    assert collector_internal_search.id in service_targets
+    collector_events = _keyword_value(phase_collector, "events")
+    assert isinstance(collector_events, ast.Name)
+    assert collector_events.id in events_targets
     external_search_scope = _keyword_value(
         phase_collector, "external_search_scope_factory"
     )
@@ -432,13 +428,10 @@ def test_direct_probe_keeps_dependencies_unreachable_and_uses_plan_summary() -> 
     collector = _keyword_value(phase, "collector")
     assert isinstance(collector, ast.Call)
     assert _call_name(collector) == "EvidenceCollectionService"
-    task_collector = _keyword_value(collector, "task_collector")
+    internal_search = _keyword_value(collector, "internal_search")
     external_search_scope = _keyword_value(collector, "external_search_scope_factory")
     evidence_answerer = _keyword_value(phase, "evidence_answerer")
     direct_answerer = _keyword_value(phase, "direct_answerer")
-    assert isinstance(task_collector, ast.Call)
-    assert _call_name(task_collector) == "ResearchTaskCollector"
-    internal_search = _keyword_value(task_collector, "internal_search")
     assert isinstance(internal_search, ast.Call)
     assert _call_name(internal_search) == "_UnreachableInternalSearch"
     assert isinstance(external_search_scope, ast.Call)

@@ -28,9 +28,6 @@ __all__ = [
     "TaskInternalCollectionStatus",
 ]
 
-# 同名の app.agent.evidence_collection.task_collector.ExternalCollectionStatus は
-# ResearchTaskCollector単体の到達状況(3値)を表す別概念であり、ここは task report の
-# 最終的な4値診断のため名前を分けて衝突を避ける。
 TaskInternalCollectionStatus = Literal["succeeded", "failed"]
 TaskExternalCollectionStatus = Literal[
     "succeeded",
@@ -107,7 +104,7 @@ class ResearchTaskReport(BaseModel):
 
 @dataclass(frozen=True, slots=True)
 class CollectedTask:
-    """1 taskのResearcher収集結果と収集onlyのreport。精査はRun単位で別途行う。"""
+    """1 taskの収集結果と収集onlyのreport。精査はRun単位で別途行う。"""
 
     task_index: int
     research_goal: str

@@ -20,10 +20,7 @@ from app.agent.contract import (
     AnswerGenerationContinuation,
     AnswerProgressReporter,
 )
-from app.agent.evidence_collection import (
-    EvidenceCollectionService,
-    ResearchTaskCollector,
-)
+from app.agent.evidence_collection import EvidenceCollectionService
 from app.agent.evidence_collection.external_search.contract import ExternalSearch
 from app.agent.evidence_review import EvidenceReviewer
 from app.agent.input_safety.agent import INPUT_SAFETY_AGENT
@@ -112,9 +109,8 @@ def _build_answering_phases(
             runtime_scope_factory=activate_gemini_agent_runtime,
         ),
         collector=EvidenceCollectionService(
-            task_collector=ResearchTaskCollector(
-                internal_search=internal_search, events=events
-            ),
+            internal_search=internal_search,
+            events=events,
             external_search_scope_factory=activate_external_search,
             requested_agent_count=requested_external_agent_count,
         ),

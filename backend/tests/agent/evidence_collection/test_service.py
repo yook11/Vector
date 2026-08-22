@@ -1,14 +1,13 @@
-"""ResearchTaskCollector(1 task分の内部/外部収集)の単体契約テスト。"""
+"""EvidenceCollectionService.collect の1 goal分の収集契約テスト。"""
 
 from __future__ import annotations
 
-import asyncio
 from datetime import UTC, datetime
 from typing import Any
 
 import pytest
 
-from app.agent.evidence_collection import ResearchTaskCollector
+from app.agent.evidence_collection import EvidenceCollectionService
 from app.agent.evidence_collection.external_search import ExternalSearchService
 from app.agent.evidence_collection.external_search.contract import (
     ExternalQueryDraft,
@@ -24,19 +23,28 @@ from app.agent.evidence_collection.internal_search.contract import (
 from app.agent.evidence_collection.internal_search.query_embedding import (
     InternalSearchQueries,
 )
-from app.agent.planning.contract import ResearchTask
+from app.agent.planning.contract import ResearchTask, SearchPlan, TargetTimeWindow
 from app.agent.runtime.contract import AgentResponseDefect, AgentResponseInvalidError
 from app.analysis.analyzed_article import InScopeAnalyzedArticle
 from app.analysis.assessment.domain.result import InScope, InScopeCategory
+from tests.agent.running._harness import fixed_scope
 from tests.agent.runtime._fakes import ScriptedAgentRuntime
 
 _AS_OF = datetime(2026, 7, 20, 9, 30, tzinfo=UTC)
+_FUTURE_WINDOW = TargetTimeWindow(kind="calendar_month", year=2027, month=1)
 
 
 def _task(goal: str, *queries: str) -> ResearchTask:
     return ResearchTask(
         research_goal=goal,
         article_search_queries=list(queries) or ["query"],
+    )
+
+
+def _plan(*tasks: ResearchTask, time_filter_failed: bool = False) -> SearchPlan:
+    return SearchPlan(
+        research_tasks=list(tasks),
+        target_time_window=_FUTURE_WINDOW if time_filter_failed else None,
     )
 
 
@@ -116,6 +124,11 @@ class _Events:
         self.events.append(event)
 
 
+class _UnreachableExternalSearchScope:
+    def __call__(self) -> object:
+        raise AssertionError("external search scope must not open")
+
+
 def _internal_events(events: list[Any]) -> list[Any]:
     return [
         event
@@ -143,22 +156,34 @@ def _external_search(
     )
 
 
-async def _collect(
-    task_collector: Any,
+def _service(
     *,
-    task_index: int = 0,
-    task: ResearchTask | None = None,
+    internal_search: Any,
     external: ExternalSearch | None = None,
-    date_filter: object | None = None,
-    as_of: datetime = _AS_OF,
-) -> Any:
-    return await task_collector.collect(
-        task_index=task_index,
-        task=task or _task("task goal"),
-        external_search=external,
-        date_filter=date_filter,
-        as_of=as_of,
+    events: _Events | None = None,
+    requested_agent_count: int | None = None,
+) -> EvidenceCollectionService:
+    factory = (
+        _UnreachableExternalSearchScope() if external is None else fixed_scope(external)
     )
+    return EvidenceCollectionService(
+        internal_search=internal_search,
+        events=events,
+        external_search_scope_factory=factory,  # type: ignore[arg-type]
+        requested_agent_count=requested_agent_count,
+    )
+
+
+async def _collect_tasks(
+    service: EvidenceCollectionService,
+    *tasks: ResearchTask,
+    time_filter_failed: bool = False,
+) -> list[Any]:
+    collected = await service.collect(
+        plan=_plan(*tasks, time_filter_failed=time_filter_failed),
+        as_of=_AS_OF,
+    )
+    return collected.tasks
 
 
 @pytest.mark.asyncio
@@ -169,28 +194,25 @@ async def test_internal_failure_still_collects_external_hits() -> None:
         {"nvidia supply": [_external_hit("https://example.com/a")]}
     )
     query_runtime = ScriptedAgentRuntime([_query_draft(["nvidia supply"])])
-    task_collector = ResearchTaskCollector(
+    service = _service(
         internal_search=_FakeInternalSearch(
             error=InternalSearchError(phase="article_search")
         ),
+        external=_external_search(query_runtime, gateway=gateway),
         events=events,
     )
 
-    collected = await _collect(
-        task_collector,
-        task=_task("goal", "internal query"),
-        external=_external_search(query_runtime, gateway=gateway),
-    )
+    [collected] = await _collect_tasks(service, _task("goal", "internal query"))
 
     assert (
         collected.internal_hits,
-        collected.internal_failed,
-        collected.external_status,
+        collected.report.internal_collection,
+        collected.report.external_collection,
         [str(hit.url) for hit in collected.external_hits],
         [event.type for event in _internal_events(events.events)],
     ) == (
         [],
-        True,
+        "failed",
         "succeeded",
         ["https://example.com/a"],
         ["evidence_collection.internal_search_started"],
@@ -207,52 +229,66 @@ async def test_external_provider_failure_keeps_internal_hits() -> None:
         }
     )
     query_runtime = ScriptedAgentRuntime([_query_draft(["q"])])
-    task_collector = ResearchTaskCollector(
-        internal_search=_FakeInternalSearch(hits=hits)
-    )
-
-    collected = await _collect(
-        task_collector,
-        task=_task("goal", "internal query"),
+    service = _service(
+        internal_search=_FakeInternalSearch(hits=hits),
         external=_external_search(query_runtime, gateway=gateway),
     )
 
+    [collected] = await _collect_tasks(service, _task("goal", "internal query"))
+
     assert (
         [hit.content.title for hit in collected.internal_hits],
-        collected.internal_failed,
-        collected.external_status,
+        collected.report.internal_collection,
+        collected.report.external_collection,
         collected.external_hits,
-        collected.provider_failed_query_count,
-    ) == (["kept"], False, "provider_failed", [], 1)
+        collected.report.provider_failed_query_count,
+    ) == (["kept"], "succeeded", "provider_failed", [], 1)
 
 
 @pytest.mark.asyncio
-async def test_external_none_skips_external_collection_entirely() -> None:
-    """保証するテスト条件 3(ResearchTaskCollector単体分)。"""
+async def test_time_filter_failure_skips_external_collection_entirely() -> None:
+    """保証するテスト条件 3。期間失敗のRunは外部を開かず内部だけ集める。"""
     hits = [_hit(assessment_id=1001, title="only-internal")]
-    task_collector = ResearchTaskCollector(
-        internal_search=_FakeInternalSearch(hits=hits)
-    )
+    service = _service(internal_search=_FakeInternalSearch(hits=hits))
 
-    collected = await _collect(task_collector, task=_task("goal", "internal query"))
+    [collected] = await _collect_tasks(
+        service,
+        _task("goal", "internal query"),
+        time_filter_failed=True,
+    )
 
     assert (
         [hit.content.title for hit in collected.internal_hits],
-        collected.external_status,
+        collected.report.external_collection,
         collected.external_hits,
-        collected.generated_queries,
-        collected.provider_failed_query_count,
-    ) == (["only-internal"], None, [], [], 0)
+        collected.report.generated_queries,
+        collected.report.provider_failed_query_count,
+        collected.report.time_filter_failure_reason,
+    ) == (
+        ["only-internal"],
+        "time_filter_failed",
+        [],
+        [],
+        0,
+        "future_calendar_month",
+    )
 
 
 @pytest.mark.asyncio
 async def test_internal_search_receives_only_that_tasks_own_queries() -> None:
     """保証するテスト条件 4。"""
     internal_search = _FakeInternalSearch()
-    task_collector = ResearchTaskCollector(internal_search=internal_search)
+    service = _service(
+        internal_search=internal_search,
+        requested_agent_count=1,
+    )
 
-    await _collect(task_collector, task_index=0, task=_task("first", "q1", "q2"))
-    await _collect(task_collector, task_index=1, task=_task("second", "q3"))
+    await _collect_tasks(
+        service,
+        _task("first", "q1", "q2"),
+        _task("second", "q3"),
+        time_filter_failed=True,
+    )
 
     assert internal_search.calls == [
         InternalSearchQueries(queries=("q1", "q2")),
@@ -277,35 +313,27 @@ async def test_independent_collect_calls_do_not_leak_failure_between_tasks() -> 
                 raise ExternalSearchProviderError(reason="external_search_http_error")
             return [_external_hit("https://example.com/good", title="good")]
 
-    internal_search = _KeyedInternalSearch()
-    external_gateway = _KeyedExternalSearchGateway()
-    task_collector = ResearchTaskCollector(internal_search=internal_search)
+    service = _service(
+        internal_search=_KeyedInternalSearch(),
+        external=_external_search(
+            ScriptedAgentRuntime([_query_draft(["bad"]), _query_draft(["good"])]),
+            gateway=_KeyedExternalSearchGateway(),
+        ),
+        requested_agent_count=1,
+    )
 
-    failing_result, sibling_result = await asyncio.gather(
-        _collect(
-            task_collector,
-            task_index=0,
-            task=_task("failing", "bad"),
-            external=_external_search(
-                ScriptedAgentRuntime([_query_draft(["bad"])]), gateway=external_gateway
-            ),
-        ),
-        _collect(
-            task_collector,
-            task_index=1,
-            task=_task("succeeding", "good"),
-            external=_external_search(
-                ScriptedAgentRuntime([_query_draft(["good"])]), gateway=external_gateway
-            ),
-        ),
+    failing_result, sibling_result = await _collect_tasks(
+        service,
+        _task("failing", "bad"),
+        _task("succeeding", "good"),
     )
 
     assert (
-        failing_result.internal_failed,
-        failing_result.external_status,
+        failing_result.report.internal_collection,
+        failing_result.report.external_collection,
         [hit.content.title for hit in sibling_result.internal_hits],
         [hit.title for hit in sibling_result.external_hits],
-    ) == (True, "provider_failed", ["sibling-hit"], ["good"])
+    ) == ("failed", "provider_failed", ["sibling-hit"], ["good"])
 
 
 @pytest.mark.asyncio
@@ -323,12 +351,18 @@ async def test_internal_events_carry_task_index_and_input_derived_counts() -> No
         async def search(self, queries: Any) -> list[InternalArticleSearchHit]:
             return next(hits_by_call)
 
-    task_collector = ResearchTaskCollector(
-        internal_search=_PerCallInternalSearch(), events=events
+    service = _service(
+        internal_search=_PerCallInternalSearch(),
+        events=events,
+        requested_agent_count=1,
     )
 
-    await _collect(task_collector, task_index=0, task=_task("first", "q1", "q2"))
-    await _collect(task_collector, task_index=1, task=_task("second", "q3"))
+    await _collect_tasks(
+        service,
+        _task("first", "q1", "q2"),
+        _task("second", "q3"),
+        time_filter_failed=True,
+    )
 
     internal_events = [event.model_dump() for event in _internal_events(events.events)]
     assert internal_events == [
@@ -359,20 +393,24 @@ async def test_internal_events_carry_task_index_and_input_derived_counts() -> No
 async def test_internal_failure_reports_started_only_with_task_index() -> None:
     """保証するテスト条件 11。"""
     events = _Events()
-    task_collector = ResearchTaskCollector(
+    service = _service(
         internal_search=_FakeInternalSearch(
             error=InternalSearchError(phase="query_embedding")
         ),
         events=events,
     )
 
-    await _collect(task_collector, task_index=2, task=_task("third", "q"))
+    await _collect_tasks(
+        service,
+        _task("third", "q"),
+        time_filter_failed=True,
+    )
 
     internal_events = [event.model_dump() for event in _internal_events(events.events)]
     assert internal_events == [
         {
             "type": "evidence_collection.internal_search_started",
-            "task_index": 2,
+            "task_index": 0,
             "query_count": 1,
         }
     ]
@@ -393,27 +431,24 @@ async def test_external_events_fire_in_order_with_task_index_and_payload() -> No
     query_runtime = ScriptedAgentRuntime(
         [_query_draft(["  good query  ", "good query"])]
     )
-    task_collector = ResearchTaskCollector(
-        internal_search=_FakeInternalSearch(), events=events
+    service = _service(
+        internal_search=_FakeInternalSearch(),
+        external=_external_search(query_runtime, gateway=gateway),
+        events=events,
     )
 
-    await _collect(
-        task_collector,
-        task_index=1,
-        task=_task("goal", "internal query"),
-        external=_external_search(query_runtime, gateway=gateway),
-    )
+    await _collect_tasks(service, _task("goal", "internal query"))
 
     external_events = [event.model_dump() for event in _external_events(events.events)]
     assert external_events == [
         {
             "type": "evidence_collection.external_search_queries_generated",
-            "task_index": 1,
+            "task_index": 0,
             "queries": ["good query"],
         },
         {
             "type": "evidence_collection.external_search_hits_fetched",
-            "task_index": 1,
+            "task_index": 0,
             "hit_count": 2,
         },
     ]
@@ -435,13 +470,12 @@ async def test_executed_queries_holds_generated_queries_in_order_on_success() ->
     query_runtime = ScriptedAgentRuntime(
         [_query_draft(["first query", "second query"])]
     )
-    task_collector = ResearchTaskCollector(internal_search=_FakeInternalSearch())
-
-    collected = await _collect(
-        task_collector,
-        task=_task("goal", "internal query"),
+    service = _service(
+        internal_search=_FakeInternalSearch(),
         external=_external_search(query_runtime, gateway=gateway),
     )
+
+    [collected] = await _collect_tasks(service, _task("goal", "internal query"))
 
     assert collected.executed_queries == ("first query", "second query")
 
@@ -463,22 +497,21 @@ async def test_executed_queries_drops_only_the_failed_query_preserving_order() -
         },
     )
     query_runtime = ScriptedAgentRuntime([_query_draft(["q1", "q2", "q3"])])
-    task_collector = ResearchTaskCollector(internal_search=_FakeInternalSearch())
-
-    collected = await _collect(
-        task_collector,
-        task=_task("goal", "internal query"),
+    service = _service(
+        internal_search=_FakeInternalSearch(),
         external=_external_search(query_runtime, gateway=gateway),
     )
 
-    assert collected.generated_queries == ["q1", "q2", "q3"]
+    [collected] = await _collect_tasks(service, _task("goal", "internal query"))
+
+    assert collected.report.generated_queries == ["q1", "q2", "q3"]
     assert collected.executed_queries == ("q1", "q3")
-    assert collected.external_status == "succeeded"
+    assert collected.report.external_collection == "succeeded"
 
 
 @pytest.mark.asyncio
 async def test_executed_queries_is_empty_when_every_provider_call_fails() -> None:
-    """全queryのprovider呼び出しが失敗する(external_status=provider_failed)と
+    """全queryのprovider呼び出しが失敗する(external_collection=provider_failed)と
 
     記録できるqueryが0件になるため、executed_queriesは空tupleになる。
     """
@@ -489,45 +522,47 @@ async def test_executed_queries_is_empty_when_every_provider_call_fails() -> Non
         }
     )
     query_runtime = ScriptedAgentRuntime([_query_draft(["q1", "q2"])])
-    task_collector = ResearchTaskCollector(internal_search=_FakeInternalSearch())
-
-    collected = await _collect(
-        task_collector,
-        task=_task("goal", "internal query"),
+    service = _service(
+        internal_search=_FakeInternalSearch(),
         external=_external_search(query_runtime, gateway=gateway),
     )
 
-    assert collected.external_status == "provider_failed"
+    [collected] = await _collect_tasks(service, _task("goal", "internal query"))
+
+    assert collected.report.external_collection == "provider_failed"
     assert collected.executed_queries == ()
 
 
 @pytest.mark.asyncio
 async def test_executed_queries_is_empty_when_query_generation_fails() -> None:
-    """query生成自体が失敗するとexternal_status=query_generation_failedになり、
+    """query生成自体が失敗するとexternal_collection=query_generation_failedになり、
 
     provider呼び出しが一度も起きないためexecuted_queriesは空tupleになる。
     """
     query_runtime = ScriptedAgentRuntime(
         [AgentResponseInvalidError(AgentResponseDefect.OUTPUT_SCHEMA_MISMATCH)]
     )
-    task_collector = ResearchTaskCollector(internal_search=_FakeInternalSearch())
-
-    collected = await _collect(
-        task_collector,
-        task=_task("goal", "internal query"),
+    service = _service(
+        internal_search=_FakeInternalSearch(),
         external=_external_search(query_runtime),
     )
 
-    assert collected.external_status == "query_generation_failed"
+    [collected] = await _collect_tasks(service, _task("goal", "internal query"))
+
+    assert collected.report.external_collection == "query_generation_failed"
     assert collected.executed_queries == ()
 
 
 @pytest.mark.asyncio
-async def test_executed_queries_is_empty_when_external_runtime_is_none() -> None:
-    """外部検索を実行しないtask(external=None)ではexecuted_queriesが空tupleになる。"""
-    task_collector = ResearchTaskCollector(internal_search=_FakeInternalSearch())
+async def test_executed_queries_is_empty_when_time_filter_fails() -> None:
+    """期間失敗で外部検索しないtaskではexecuted_queriesが空tupleになる。"""
+    service = _service(internal_search=_FakeInternalSearch())
 
-    collected = await _collect(task_collector, task=_task("goal", "internal query"))
+    [collected] = await _collect_tasks(
+        service,
+        _task("goal", "internal query"),
+        time_filter_failed=True,
+    )
 
-    assert collected.external_status is None
+    assert collected.report.external_collection == "time_filter_failed"
     assert collected.executed_queries == ()

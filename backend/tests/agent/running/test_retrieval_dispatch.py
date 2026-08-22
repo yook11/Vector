@@ -23,7 +23,6 @@ from app.agent.contract import AnswerProgressStage
 from app.agent.evidence_collection import (
     CollectedNews,
     EvidenceCollectionService,
-    ResearchTaskCollector,
 )
 from app.agent.evidence_collection.external_search import (
     ExternalSearch,
@@ -527,9 +526,8 @@ def _runner(
     phases = AnsweringPhases(
         planner=_Planner(plan, error=planner_error),
         collector=EvidenceCollectionService(
-            task_collector=ResearchTaskCollector(
-                internal_search=internal, events=events
-            ),
+            internal_search=internal,
+            events=events,
             external_search_scope_factory=factory,
             requested_agent_count=requested_agent_count,
         ),
@@ -822,13 +820,11 @@ async def test_runner_preserves_internal_hit_order_into_synthesis() -> None:
     phases = AnsweringPhases(
         planner=_Planner(_search_plan(article_search_queries=["NVIDIA"])),
         collector=EvidenceCollectionService(
-            task_collector=ResearchTaskCollector(
-                internal_search=_InternalSearch(
-                    hits=[
-                        _hit(assessment_id=1001, title="first"),
-                        _hit(assessment_id=1002, title="second"),
-                    ]
-                )
+            internal_search=_InternalSearch(
+                hits=[
+                    _hit(assessment_id=1001, title="first"),
+                    _hit(assessment_id=1002, title="second"),
+                ]
             ),
             external_search_scope_factory=factory,
         ),
@@ -873,10 +869,8 @@ async def test_runner_forwards_review_missing_to_the_evidence_answerer() -> None
     phases = AnsweringPhases(
         planner=_Planner(_search_plan(article_search_queries=["NVIDIA"])),
         collector=EvidenceCollectionService(
-            task_collector=ResearchTaskCollector(
-                internal_search=_InternalSearch(
-                    hits=[_hit(assessment_id=1001, title="first")]
-                )
+            internal_search=_InternalSearch(
+                hits=[_hit(assessment_id=1001, title="first")]
             ),
             external_search_scope_factory=factory,
         ),
@@ -1617,12 +1611,10 @@ async def test_internal_failure_still_reaches_reviewer_and_produces_evidence() -
     phases = AnsweringPhases(
         planner=_Planner(_plan_with_tasks(("goal0", ["NVIDIA"]))),
         collector=EvidenceCollectionService(
-            task_collector=ResearchTaskCollector(
-                internal_search=_InternalSearch(
-                    error=InternalSearchError(phase="article_search")
-                ),
-                events=events,
+            internal_search=_InternalSearch(
+                error=InternalSearchError(phase="article_search")
             ),
+            events=events,
             external_search_scope_factory=factory,
         ),
         direct_answerer=_UnreachableDirectAnswerer(),
@@ -1670,10 +1662,8 @@ async def test_external_provider_failure_keeps_internal_hits_in_final_evidence()
     phases = AnsweringPhases(
         planner=_Planner(_plan_with_tasks(("goal0", ["NVIDIA"]))),
         collector=EvidenceCollectionService(
-            task_collector=ResearchTaskCollector(
-                internal_search=_InternalSearch(
-                    hits=[_hit(assessment_id=1001, title="kept-hit")]
-                )
+            internal_search=_InternalSearch(
+                hits=[_hit(assessment_id=1001, title="kept-hit")]
             ),
             external_search_scope_factory=factory,
         ),
@@ -1799,7 +1789,7 @@ async def test_runner_isolates_one_tasks_total_failure_from_sibling_evidence() -
     phases = AnsweringPhases(
         planner=_Planner(plan),
         collector=EvidenceCollectionService(
-            task_collector=ResearchTaskCollector(internal_search=internal),
+            internal_search=internal,
             external_search_scope_factory=factory,
         ),
         direct_answerer=_UnreachableDirectAnswerer(),

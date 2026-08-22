@@ -18,10 +18,7 @@ from opentelemetry.trace import StatusCode
 from app.agent.answering.contract import AnsweringRequest
 from app.agent.answering.direct_answer.contract import DirectAnswerDraft
 from app.agent.answering.evidence_answer.contract import EvidenceAnswerDraft
-from app.agent.evidence_collection import (
-    EvidenceCollectionService,
-    ResearchTaskCollector,
-)
+from app.agent.evidence_collection import EvidenceCollectionService
 from app.agent.evidence_collection.external_search import ExternalSearchService
 from app.agent.evidence_collection.external_search.agent import EXTERNAL_QUERY_AGENT
 from app.agent.evidence_collection.external_search.contract import (
@@ -242,9 +239,7 @@ def _runner(
     phases = AnsweringPhases(
         planner=_Planner(),
         collector=EvidenceCollectionService(
-            task_collector=ResearchTaskCollector(
-                internal_search=internal_search or _EmptyInternalSearch()
-            ),
+            internal_search=internal_search or _EmptyInternalSearch(),
             external_search_scope_factory=factory,
         ),
         direct_answerer=_UnreachableDirectAnswerer(),
@@ -405,7 +400,7 @@ async def test_unclassified_query_error_is_redacted_and_only_error_phase(
     phases = spans_named(capfire, _PHASE_SPAN_NAME)
     providers = spans_named(capfire, _PROVIDER_SPAN_NAME)
     # 内部検索は外部クエリ生成と並行実行され、外部クエリの未分類エラーとは無関係に
-    # 成功で完走する(ResearchTaskCollector._gather_two_branchesが両枝をsettleさせてから
+    # 成功で完走する(_gather_two_branchesが両枝をsettleさせてから
     # 例外を再送出するため)。「エラーになるphaseはひとつだけ」の意図を保つため、
     # phaseをexception eventの有無で分けて検証する。
     error_phases = [phase for phase in phases if exception_event(phase) is not None]
@@ -681,9 +676,7 @@ async def test_direct_path_run_span_has_no_evidence_count_attributes(
     phases = AnsweringPhases(
         planner=_DirectPlanner(),
         collector=EvidenceCollectionService(
-            task_collector=ResearchTaskCollector(
-                internal_search=_EmptyInternalSearch()
-            ),
+            internal_search=_EmptyInternalSearch(),
             external_search_scope_factory=_UnreachableExternalScope(),
         ),
         direct_answerer=_DirectAnswerer(),
@@ -764,9 +757,7 @@ async def test_evidence_run_span_reports_post_dedup_internal_total(
             _two_task_plan(task_queries=(["task0 query"], ["task1 query"]))
         ),
         collector=EvidenceCollectionService(
-            task_collector=ResearchTaskCollector(
-                internal_search=_PerQueryInternalHitsSearch(hits_by_query),
-            ),
+            internal_search=_PerQueryInternalHitsSearch(hits_by_query),
             external_search_scope_factory=factory,
         ),
         direct_answerer=_UnreachableDirectAnswerer(),
@@ -811,10 +802,8 @@ async def test_evidence_run_span_reports_internal_collection_failed_task_count(
             )
         ),
         collector=EvidenceCollectionService(
-            task_collector=ResearchTaskCollector(
-                internal_search=_PerQueryFailableInternalSearch(
-                    failing_queries=failing_queries
-                )
+            internal_search=_PerQueryFailableInternalSearch(
+                failing_queries=failing_queries
             ),
             external_search_scope_factory=factory,
         ),

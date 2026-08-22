@@ -1,6 +1,7 @@
 """既存工程の成果物からResearchCheckpointを決定的に組み立てるbuilder。
 
-LLM呼び出しを追加しない。上流(plan正規化・ResearchTaskCollector・Evidence Reviewer)で
+LLM呼び出しを追加しない。上流(plan正規化・EvidenceCollectionService・
+Evidence Reviewer)で
 正規化済みの値をそのまま詰め替え、切り詰め・再正規化は行わない。上限違反は
 `ResearchCheckpoint`のPydantic validationが拒否する。
 """

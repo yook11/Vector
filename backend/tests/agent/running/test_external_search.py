@@ -12,10 +12,7 @@ import pytest
 from logfire.testing import CaptureLogfire
 from structlog.testing import capture_logs
 
-from app.agent.evidence_collection import (
-    EvidenceCollectionService,
-    ResearchTaskCollector,
-)
+from app.agent.evidence_collection import EvidenceCollectionService
 from app.agent.evidence_collection import (
     service as collection_service_module,
 )
@@ -365,9 +362,8 @@ def _runner(
             _plan(tasks, target_time_window=target_time_window),
         ),
         collector=EvidenceCollectionService(
-            task_collector=ResearchTaskCollector(
-                internal_search=_EmptyInternalSearch(), events=events
-            ),
+            internal_search=_EmptyInternalSearch(),
+            events=events,
             external_search_scope_factory=factory,
             requested_agent_count=requested_agent_count,
         ),
@@ -1326,9 +1322,7 @@ async def test_external_scope_is_activated_fresh_per_run() -> None:
     phases = AnsweringPhases(
         planner=_Planner(_plan(tasks)),
         collector=EvidenceCollectionService(
-            task_collector=ResearchTaskCollector(
-                internal_search=_EmptyInternalSearch()
-            ),
+            internal_search=_EmptyInternalSearch(),
             external_search_scope_factory=factory,
             requested_agent_count=1,
         ),
