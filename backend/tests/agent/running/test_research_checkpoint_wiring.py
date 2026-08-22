@@ -20,10 +20,7 @@ from app.agent.answering.evidence_answer.contract import (
     EvidenceAnswerDraft,
     EvidenceAnswerOutcome,
 )
-from app.agent.evidence_collection import (
-    EvidenceCollectionService,
-    ResearchTaskCollector,
-)
+from app.agent.evidence_collection import EvidenceCollectionService
 from app.agent.evidence_collection.external_search import ExternalSearchService
 from app.agent.evidence_collection.external_search.contract import (
     ExternalQueryDraft,
@@ -190,7 +187,7 @@ def _search_runner(
     phases = AnsweringPhases(
         planner=_Planner(plan),
         collector=EvidenceCollectionService(
-            task_collector=ResearchTaskCollector(internal_search=_FakeInternalSearch()),
+            internal_search=_FakeInternalSearch(),
             external_search_scope_factory=fixed_scope(
                 ExternalSearchService(
                     query_runtime=query_runtime,  # type: ignore[arg-type]
@@ -266,7 +263,7 @@ async def test_direct_answer_plan_leaves_checkpoint_none() -> None:
     phases = AnsweringPhases(
         planner=_Planner(DirectAnswerPlan()),
         collector=EvidenceCollectionService(
-            task_collector=ResearchTaskCollector(internal_search=_FakeInternalSearch()),
+            internal_search=_FakeInternalSearch(),
             external_search_scope_factory=_UnreachableScope(),
         ),
         reviewer=EvidenceReviewer(runtime_scope_factory=_UnreachableScope()),

@@ -14,10 +14,7 @@ from app.agent.answering.evidence_answer.contract import (
     EvidenceAnswerOutcome,
     EvidenceAnswerUnavailable,
 )
-from app.agent.evidence_collection import (
-    EvidenceCollectionService,
-    ResearchTaskCollector,
-)
+from app.agent.evidence_collection import EvidenceCollectionService
 from app.agent.evidence_collection.external_search import ExternalSearchService
 from app.agent.evidence_collection.external_search.contract import ExternalQueryDraft
 from app.agent.evidence_collection.internal_search.query_embedding import (
@@ -194,7 +191,7 @@ def _runner(
         return AnsweringPhases(
             planner=planner,
             collector=EvidenceCollectionService(
-                task_collector=ResearchTaskCollector(internal_search=internal_search),
+                internal_search=internal_search,
                 external_search_scope_factory=_EmptyExternalSearchScope(timeline),
             ),
             direct_answerer=direct_answerer,

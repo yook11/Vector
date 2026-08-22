@@ -17,10 +17,7 @@ from app.agent.answering.evidence_answer.contract import (
     EvidenceAnswerDraftInvalidError,
 )
 from app.agent.contract import AnswerQuestionResult, ExternalUrlSource
-from app.agent.evidence_collection import (
-    EvidenceCollectionService,
-    ResearchTaskCollector,
-)
+from app.agent.evidence_collection import EvidenceCollectionService
 from app.agent.evidence_collection.external_search import (
     ExternalQueryDraft,
     ExternalSearchHit,
@@ -687,7 +684,7 @@ def _orchestrator(
     phases = AnsweringPhases(
         planner=planner,
         collector=EvidenceCollectionService(
-            task_collector=ResearchTaskCollector(internal_search=internal_search),
+            internal_search=internal_search,
             external_search_scope_factory=external_scopes.external_search_scope,
         ),
         direct_answerer=direct_answerer,

@@ -31,10 +31,7 @@ from logfire.testing import CaptureLogfire
 
 from app.agent.answering.contract import AnsweringRequest
 from app.agent.answering.evidence_answer.contract import EvidenceAnswerOutcome
-from app.agent.evidence_collection import (
-    EvidenceCollectionService,
-    ResearchTaskCollector,
-)
+from app.agent.evidence_collection import EvidenceCollectionService
 from app.agent.evidence_collection.external_search import ExternalSearchService
 from app.agent.evidence_collection.external_search.contract import ExternalSearch
 from app.agent.evidence_collection.internal_search.contract import (
@@ -189,9 +186,8 @@ def _runner(
     phases = AnsweringPhases(
         planner=_Planner(plan),
         collector=EvidenceCollectionService(
-            task_collector=ResearchTaskCollector(
-                internal_search=internal_search, events=events
-            ),  # type: ignore[arg-type]
+            internal_search=internal_search,  # type: ignore[arg-type]
+            events=events,
             external_search_scope_factory=factory,
         ),
         reviewer=EvidenceReviewer(runtime_scope_factory=fixed_scope(reviewer_runtime)),

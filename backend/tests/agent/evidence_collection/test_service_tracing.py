@@ -1,38 +1,42 @@
-"""ResearchTaskCollectorの内部検索span契約。
+"""EvidenceCollectionServiceの内部検索span契約。
 
 正本仕様: ``specs/agent-phase-span-vocabulary-slice.md`` の
 「工程とspanの対応」#4 (evidence_collection、内部検索)、Test contract
 「新設したspan」。内部検索はAgentでなく機構が実行するため``agent_name``を
-持たない。dedup / event等の振る舞い契約の正本は``test_researcher.py``であり、
+持たない。dedup / event等の振る舞い契約の正本は``test_service.py``であり、
 ここはspan生成契約だけを持つ。
 """
 
 from __future__ import annotations
 
-import asyncio
 from datetime import UTC, datetime
 
 from logfire.testing import CaptureLogfire
 from opentelemetry.semconv.attributes.error_attributes import ERROR_TYPE
 from opentelemetry.trace import StatusCode
 
-from app.agent.evidence_collection import ResearchTaskCollector
+from app.agent.evidence_collection import EvidenceCollectionService
 from app.agent.evidence_collection.internal_search.contract import (
     InternalArticleContent,
     InternalArticleSearchHit,
     InternalSearchError,
 )
-from app.agent.planning.contract import ResearchTask
+from app.agent.planning.contract import ResearchTask, SearchPlan, TargetTimeWindow
 from app.analysis.analyzed_article import InScopeAnalyzedArticle
 from app.analysis.assessment.domain.result import InScope, InScopeCategory
 from tests.logfire._span_helpers import domain_attr_keys, exception_event, spans_named
 
 _PHASE_SPAN_NAME = "agent_phase"
 _AS_OF = datetime(2026, 7, 20, 9, 30, tzinfo=UTC)
+_FUTURE_WINDOW = TargetTimeWindow(kind="calendar_month", year=2027, month=1)
 
 
-def _task(*queries: str) -> ResearchTask:
-    return ResearchTask(research_goal="goal", article_search_queries=list(queries))
+def _task(goal: str, *queries: str) -> ResearchTask:
+    return ResearchTask(research_goal=goal, article_search_queries=list(queries))
+
+
+def _plan(*tasks: ResearchTask) -> SearchPlan:
+    return SearchPlan(research_tasks=list(tasks), target_time_window=_FUTURE_WINDOW)
 
 
 def _hit(*, assessment_id: int, title: str) -> InternalArticleSearchHit:
@@ -70,6 +74,18 @@ class _FakeInternalSearch:
         return list(self._hits)
 
 
+class _UnreachableExternalSearchScope:
+    def __call__(self) -> object:
+        raise AssertionError("external search scope must not open")
+
+
+def _service(*, internal_search: object) -> EvidenceCollectionService:
+    return EvidenceCollectionService(
+        internal_search=internal_search,  # type: ignore[arg-type]
+        external_search_scope_factory=_UnreachableExternalSearchScope(),  # type: ignore[arg-type]
+    )
+
+
 def _raw_phase_spans(capfire: CaptureLogfire) -> list:
     return [
         span
@@ -82,18 +98,13 @@ def _raw_phase_spans(capfire: CaptureLogfire) -> list:
 async def test_internal_search_success_creates_span_scoped_to_task_without_agent_name(
     capfire: CaptureLogfire,
 ) -> None:
-    task_collector = ResearchTaskCollector(
+    service = _service(
         internal_search=_FakeInternalSearch(hits=[_hit(assessment_id=1001, title="a")])
     )
 
-    await task_collector.collect(
-        task_index=3,
-        task=_task("q"),
-        external_search=None,
-        date_filter=None,
-        as_of=_AS_OF,
-    )
+    collected = await service.collect(plan=_plan(_task("goal", "q")), as_of=_AS_OF)
 
+    assert collected.tasks[0].report.internal_collection == "succeeded"
     spans = spans_named(capfire, _PHASE_SPAN_NAME)
     assert len(spans) == 1
     span = spans[0]
@@ -101,33 +112,30 @@ async def test_internal_search_success_creates_span_scoped_to_task_without_agent
     # (仕様Invariants「agent_nameはAgentが実行するspanにだけ付ける」)。
     assert domain_attr_keys(span["attributes"]) == {"phase", "task_index"}
     assert span["attributes"]["phase"] == "evidence_collection"
-    assert span["attributes"]["task_index"] == 3
+    assert span["attributes"]["task_index"] == 0
     assert exception_event(span) is None
 
 
-async def test_internal_search_failure_marks_span_error_while_researcher_degrades(
+async def test_internal_search_failure_marks_span_error_while_collection_degrades(
     capfire: CaptureLogfire,
 ) -> None:
     """InternalSearchErrorはspanを未分類例外として貫通させたのち、
 
-    researcherがspanの外で握ってdegrade(``return [], True``)へ変える。
+    collectがspanの外で握ってdegradeへ変える。
     呼び出し側には例外が伝わらない。
     """
-    task_collector = ResearchTaskCollector(
+    service = _service(
         internal_search=_FakeInternalSearch(
             error=InternalSearchError(phase="article_search")
         )
     )
 
-    collected = await task_collector.collect(
-        task_index=0,
-        task=_task("q"),
-        external_search=None,
-        date_filter=None,
-        as_of=_AS_OF,
-    )
+    collected = await service.collect(plan=_plan(_task("goal", "q")), as_of=_AS_OF)
 
-    assert (collected.internal_hits, collected.internal_failed) == ([], True)
+    assert (
+        collected.tasks[0].internal_hits,
+        collected.tasks[0].report.internal_collection,
+    ) == ([], "failed")
     raw_spans = _raw_phase_spans(capfire)
     assert len(raw_spans) == 1
     assert raw_spans[0].status.status_code is StatusCode.ERROR
@@ -140,24 +148,13 @@ async def test_internal_search_failure_marks_span_error_while_researcher_degrade
 async def test_parallel_tasks_get_own_internal_search_span_with_distinct_task_index(
     capfire: CaptureLogfire,
 ) -> None:
-    task_collector = ResearchTaskCollector(internal_search=_FakeInternalSearch(hits=[]))
+    service = _service(internal_search=_FakeInternalSearch(hits=[]))
 
-    await asyncio.gather(
-        task_collector.collect(
-            task_index=0,
-            task=_task("q0"),
-            external_search=None,
-            date_filter=None,
-            as_of=_AS_OF,
-        ),
-        task_collector.collect(
-            task_index=1,
-            task=_task("q1"),
-            external_search=None,
-            date_filter=None,
-            as_of=_AS_OF,
-        ),
+    collected = await service.collect(
+        plan=_plan(_task("goal-0", "q0"), _task("goal-1", "q1")),
+        as_of=_AS_OF,
     )
 
+    assert [task.task_index for task in collected.tasks] == [0, 1]
     spans = spans_named(capfire, _PHASE_SPAN_NAME)
     assert sorted(span["attributes"]["task_index"] for span in spans) == [0, 1]
