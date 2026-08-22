@@ -20,7 +20,10 @@ from app.agent.answering.evidence_answer.contract import (
     EvidenceAnswerDraft,
     EvidenceAnswerOutcome,
 )
-from app.agent.evidence_collection import NewsCollector, Researcher
+from app.agent.evidence_collection import (
+    EvidenceCollectionService,
+    ResearchTaskCollector,
+)
 from app.agent.evidence_collection.external_search import ExternalSearchService
 from app.agent.evidence_collection.external_search.contract import (
     ExternalQueryDraft,
@@ -186,8 +189,8 @@ def _search_runner(
 ) -> AnsweringRunner:
     phases = AnsweringPhases(
         planner=_Planner(plan),
-        collector=NewsCollector(
-            researcher=Researcher(internal_search=_FakeInternalSearch()),
+        collector=EvidenceCollectionService(
+            task_collector=ResearchTaskCollector(internal_search=_FakeInternalSearch()),
             external_search_scope_factory=fixed_scope(
                 ExternalSearchService(
                     query_runtime=query_runtime,  # type: ignore[arg-type]
@@ -262,8 +265,8 @@ async def test_direct_answer_plan_leaves_checkpoint_none() -> None:
     """記録フロー6: 外部検索を実行しないdirect_answer Runはcheckpointを持たない。"""
     phases = AnsweringPhases(
         planner=_Planner(DirectAnswerPlan()),
-        collector=NewsCollector(
-            researcher=Researcher(internal_search=_FakeInternalSearch()),
+        collector=EvidenceCollectionService(
+            task_collector=ResearchTaskCollector(internal_search=_FakeInternalSearch()),
             external_search_scope_factory=_UnreachableScope(),
         ),
         reviewer=EvidenceReviewer(runtime_scope_factory=_UnreachableScope()),

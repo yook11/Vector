@@ -12,9 +12,12 @@ import pytest
 from logfire.testing import CaptureLogfire
 from structlog.testing import capture_logs
 
-from app.agent.evidence_collection import NewsCollector, Researcher
 from app.agent.evidence_collection import (
-    news_collector as news_collector_module,
+    EvidenceCollectionService,
+    ResearchTaskCollector,
+)
+from app.agent.evidence_collection import (
+    service as collection_service_module,
 )
 from app.agent.evidence_collection.external_search import (
     ExternalSearch,
@@ -361,8 +364,8 @@ def _runner(
         planner=_Planner(
             _plan(tasks, target_time_window=target_time_window),
         ),
-        collector=NewsCollector(
-            researcher=Researcher(
+        collector=EvidenceCollectionService(
+            task_collector=ResearchTaskCollector(
                 internal_search=_EmptyInternalSearch(), events=events
             ),
             external_search_scope_factory=factory,
@@ -542,7 +545,7 @@ async def test_external_runner_resolves_target_time_window_once_per_branch(
     target_time_window: TargetTimeWindow | None,
     expected_tool_call_count: int,
 ) -> None:
-    original_resolver = news_collector_module.resolve_external_search_date_filter
+    original_resolver = collection_service_module.resolve_external_search_date_filter
     resolver_calls: list[tuple[TargetTimeWindow | None, datetime]] = []
 
     def spy(
@@ -554,7 +557,7 @@ async def test_external_runner_resolves_target_time_window_once_per_branch(
         return original_resolver(target, as_of=as_of)
 
     monkeypatch.setattr(
-        news_collector_module,
+        collection_service_module,
         "resolve_external_search_date_filter",
         spy,
     )
@@ -593,7 +596,7 @@ async def test_naive_as_of_propagates_before_external_activity_or_observability(
     capfire: CaptureLogfire,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    original_resolver = news_collector_module.resolve_external_search_date_filter
+    original_resolver = collection_service_module.resolve_external_search_date_filter
     resolver_calls: list[tuple[TargetTimeWindow | None, datetime]] = []
     naive_as_of = datetime(2026, 7, 20, 9, 30)
 
@@ -606,7 +609,7 @@ async def test_naive_as_of_propagates_before_external_activity_or_observability(
         return original_resolver(target, as_of=as_of)
 
     monkeypatch.setattr(
-        news_collector_module,
+        collection_service_module,
         "resolve_external_search_date_filter",
         spy,
     )
@@ -1322,8 +1325,10 @@ async def test_external_scope_is_activated_fresh_per_run() -> None:
 
     phases = AnsweringPhases(
         planner=_Planner(_plan(tasks)),
-        collector=NewsCollector(
-            researcher=Researcher(internal_search=_EmptyInternalSearch()),
+        collector=EvidenceCollectionService(
+            task_collector=ResearchTaskCollector(
+                internal_search=_EmptyInternalSearch()
+            ),
             external_search_scope_factory=factory,
             requested_agent_count=1,
         ),

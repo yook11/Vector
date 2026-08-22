@@ -16,7 +16,10 @@ from app.agent.answering.contract import AnsweringRequest
 from app.agent.answering.direct_answer.contract import DirectAnswerDraft
 from app.agent.answering.evidence_answer.contract import EvidenceAnswerDraft
 from app.agent.contract import AnswerGenerationStopped
-from app.agent.evidence_collection import NewsCollector, Researcher
+from app.agent.evidence_collection import (
+    EvidenceCollectionService,
+    ResearchTaskCollector,
+)
 from app.agent.evidence_review import EvidenceReviewer
 from app.agent.input_safety.contract import (
     InputSafetyBlocked,
@@ -309,8 +312,10 @@ class _PhasesFactory:
             raise self._error
         phases = AnsweringPhases(
             planner=self._planner,
-            collector=NewsCollector(
-                researcher=Researcher(internal_search=_UnreachableInternalSearch()),
+            collector=EvidenceCollectionService(
+                task_collector=ResearchTaskCollector(
+                    internal_search=_UnreachableInternalSearch()
+                ),
                 external_search_scope_factory=_UnreachableExternalSearchScope(),
             ),
             direct_answerer=self._direct_answerer,

@@ -31,17 +31,20 @@ from app.agent.evidence_collection.external_search.time_filter import (
     ExternalSearchDateFilterResolutionError,
     resolve_external_search_date_filter,
 )
-from app.agent.evidence_collection.researcher import Researcher, ResearchTaskHits
+from app.agent.evidence_collection.task_collector import (
+    ResearchTaskCollector,
+    ResearchTaskHits,
+)
 from app.agent.planning.contract import ResearchTask, SearchPlan
 
-__all__ = ["NewsCollector"]
+__all__ = ["EvidenceCollectionService"]
 
 
 @dataclass(frozen=True, slots=True)
-class NewsCollector:
+class EvidenceCollectionService:
     """Run単位でニュースを収集する。精査と回答生成は持たない。"""
 
-    researcher: Researcher
+    task_collector: ResearchTaskCollector
     external_search_scope_factory: ExternalSearchScopeFactory
     requested_agent_count: int | None = None
 
@@ -130,7 +133,7 @@ class NewsCollector:
         plan: SearchPlan,
         as_of: datetime,
     ) -> CollectedTask:
-        collected = await self.researcher.collect(
+        collected = await self.task_collector.collect(
             task_index=task_index,
             task=task,
             external_search=external_search,
@@ -177,7 +180,7 @@ def _external_collection_fields(
     if time_filter_failure is not None:
         return "time_filter_failed", [], 0
     external_status = collected.external_status
-    # time filter失敗以外の経路ではscopeが常に有効で、Researcherは必ずstatusを返す。
+    # 外部scopeが有効な経路ではtask collectorが必ずstatusを返す。
     assert external_status is not None  # noqa: S101
     return (
         external_status,

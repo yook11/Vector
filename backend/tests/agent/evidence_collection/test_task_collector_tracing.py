@@ -1,4 +1,4 @@
-"""Researcherの内部検索span契約。
+"""ResearchTaskCollectorの内部検索span契約。
 
 正本仕様: ``specs/agent-phase-span-vocabulary-slice.md`` の
 「工程とspanの対応」#4 (evidence_collection、内部検索)、Test contract
@@ -16,7 +16,7 @@ from logfire.testing import CaptureLogfire
 from opentelemetry.semconv.attributes.error_attributes import ERROR_TYPE
 from opentelemetry.trace import StatusCode
 
-from app.agent.evidence_collection import Researcher
+from app.agent.evidence_collection import ResearchTaskCollector
 from app.agent.evidence_collection.internal_search.contract import (
     InternalArticleContent,
     InternalArticleSearchHit,
@@ -82,11 +82,11 @@ def _raw_phase_spans(capfire: CaptureLogfire) -> list:
 async def test_internal_search_success_creates_span_scoped_to_task_without_agent_name(
     capfire: CaptureLogfire,
 ) -> None:
-    researcher = Researcher(
+    task_collector = ResearchTaskCollector(
         internal_search=_FakeInternalSearch(hits=[_hit(assessment_id=1001, title="a")])
     )
 
-    await researcher.collect(
+    await task_collector.collect(
         task_index=3,
         task=_task("q"),
         external_search=None,
@@ -113,13 +113,13 @@ async def test_internal_search_failure_marks_span_error_while_researcher_degrade
     researcherがspanの外で握ってdegrade(``return [], True``)へ変える。
     呼び出し側には例外が伝わらない。
     """
-    researcher = Researcher(
+    task_collector = ResearchTaskCollector(
         internal_search=_FakeInternalSearch(
             error=InternalSearchError(phase="article_search")
         )
     )
 
-    collected = await researcher.collect(
+    collected = await task_collector.collect(
         task_index=0,
         task=_task("q"),
         external_search=None,
@@ -140,17 +140,17 @@ async def test_internal_search_failure_marks_span_error_while_researcher_degrade
 async def test_parallel_tasks_get_own_internal_search_span_with_distinct_task_index(
     capfire: CaptureLogfire,
 ) -> None:
-    researcher = Researcher(internal_search=_FakeInternalSearch(hits=[]))
+    task_collector = ResearchTaskCollector(internal_search=_FakeInternalSearch(hits=[]))
 
     await asyncio.gather(
-        researcher.collect(
+        task_collector.collect(
             task_index=0,
             task=_task("q0"),
             external_search=None,
             date_filter=None,
             as_of=_AS_OF,
         ),
-        researcher.collect(
+        task_collector.collect(
             task_index=1,
             task=_task("q1"),
             external_search=None,

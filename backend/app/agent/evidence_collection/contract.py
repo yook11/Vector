@@ -28,8 +28,8 @@ __all__ = [
     "TaskInternalCollectionStatus",
 ]
 
-# 同名の app.agent.evidence_collection.researcher.ExternalCollectionStatus は
-# Researcher単体の到達状況(3値)を表す別概念であり、ここは task report の
+# 同名の app.agent.evidence_collection.task_collector.ExternalCollectionStatus は
+# ResearchTaskCollector単体の到達状況(3値)を表す別概念であり、ここは task report の
 # 最終的な4値診断のため名前を分けて衝突を避ける。
 TaskInternalCollectionStatus = Literal["succeeded", "failed"]
 TaskExternalCollectionStatus = Literal[

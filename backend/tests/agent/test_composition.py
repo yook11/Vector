@@ -462,10 +462,10 @@ def test_build_answering_phases_wires_planner_to_shared_gemini_runtime_scope(
     )
 
     assert isinstance(phases, AnsweringPhases)
-    # Researcherがinternal searchを包み、events(段2でserviceに渡さないと
+    # task collectorがinternal searchを包み、events(段2でserviceに渡さないと
     # した進捗reporter)はここで初めてResearcherへ渡る。
-    assert phases.collector.researcher.internal_search is internal_search
-    assert phases.collector.researcher.events is events
+    assert phases.collector.task_collector.internal_search is internal_search
+    assert phases.collector.task_collector.events is events
     assert set(internal_search_calls[0]) == {
         "embedder",
         "article_search_repository",

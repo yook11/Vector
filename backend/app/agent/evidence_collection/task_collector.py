@@ -1,7 +1,7 @@
-"""1つの ResearchTask に対して内部・外部の検索ヒットを集める Researcher。
+"""1つの ResearchTask に対して内部・外部の検索ヒットを集める ResearchTaskCollector。
 
-DB / Redis / HTTP client の生成は composition が所有し、Researcher は
-渡された検索能力と Runtime だけを使う(責任境界: Researcher は infrastructure
+DB / Redis / HTTP client の生成は composition が所有し、ResearchTaskCollector は
+渡された検索能力と Runtime だけを使う(責任境界: ResearchTaskCollector は infrastructure
 の構築を知らない)。
 """
 
@@ -38,7 +38,7 @@ from app.agent.evidence_collection.internal_search.query_embedding import (
 from app.agent.phase_span import agent_phase
 from app.agent.planning.contract import ResearchTask, TargetTimeWindow
 
-__all__ = ["ExternalCollectionStatus", "Researcher", "ResearchTaskHits"]
+__all__ = ["ExternalCollectionStatus", "ResearchTaskCollector", "ResearchTaskHits"]
 
 ExternalCollectionStatus = Literal[
     "succeeded", "query_generation_failed", "provider_failed"
@@ -59,7 +59,7 @@ class ResearchTaskHits:
 
 
 @dataclass(frozen=True, slots=True)
-class Researcher:
+class ResearchTaskCollector:
     """1つのResearchTaskについて内部・外部の検索ヒットを集める。精査と回答生成は持たない。"""
 
     internal_search: InternalSearch
