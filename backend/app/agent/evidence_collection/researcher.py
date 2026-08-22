@@ -13,7 +13,6 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Literal
 
-from app.agent.concurrency import gather_cancel_on_error
 from app.agent.contract import (
     AnswerEventReporter,
     AnswerProgressEvent,
@@ -24,20 +23,9 @@ from app.agent.contract import (
 )
 from app.agent.evidence_collection.external_search.agent import EXTERNAL_QUERY_AGENT
 from app.agent.evidence_collection.external_search.contract import (
-    EXTERNAL_SEARCH_HITS_PER_QUERY,
-    ExternalQueryGenerationInput,
     ExternalResearchRuntime,
     ExternalSearchDateFilter,
-    ExternalSearchGateway,
     ExternalSearchHit,
-    ExternalSearchProviderError,
-    ExternalSearchRequest,
-)
-from app.agent.evidence_collection.external_search.policy import (
-    PROVIDER_SEARCH_TIMEOUT_SECONDS,
-    QUERY_GENERATE_TIMEOUT_SECONDS,
-    build_hit_pool,
-    clean_generated_queries,
 )
 from app.agent.evidence_collection.internal_search.contract import (
     InternalArticleSearchHit,
@@ -48,13 +36,7 @@ from app.agent.evidence_collection.internal_search.query_embedding import (
     InternalSearchQueries,
 )
 from app.agent.phase_span import agent_phase
-from app.agent.planning.contract import (
-    ExternalResearchTask,
-    ResearchTask,
-    TargetTimeWindow,
-)
-from app.agent.runtime.contract import AgentResponseInvalidError
-from app.analysis.ai_provider_errors import AIProviderError
+from app.agent.planning.contract import ResearchTask, TargetTimeWindow
 
 __all__ = ["ExternalCollectionStatus", "Researcher", "ResearchTaskHits"]
 
@@ -165,97 +147,43 @@ class Researcher:
         if external is None:
             return [], 0, [], None, ()
 
-        query_input = ExternalQueryGenerationInput(
-            task=ExternalResearchTask(research_goal=task.research_goal),
-            as_of=as_of,
-            target_time_window=target_time_window,
-        )
         with agent_phase(
             phase="evidence_collection",
             agent_name=EXTERNAL_QUERY_AGENT.name,
             task_index=task_index,
         ):
-            try:
-                query_draft = await asyncio.wait_for(
-                    external.query_runtime.call(
-                        EXTERNAL_QUERY_AGENT,
-                        query_input,
-                        attempt_number=1,
-                    ),
-                    timeout=QUERY_GENERATE_TIMEOUT_SECONDS,
-                )
-            except (AgentResponseInvalidError, AIProviderError, TimeoutError):
-                return [], 0, [], "query_generation_failed", ()
-
-        queries = clean_generated_queries(query_draft.queries)
+            queries = await external.external_search.generate_queries(
+                research_goal=task.research_goal,
+                as_of=as_of,
+                target_time_window=target_time_window,
+            )
         if not queries:
             return [], 0, [], "query_generation_failed", ()
         await self._report_event(
             ExternalSearchQueriesGeneratedEvent(task_index=task_index, queries=queries)
         )
 
-        hits_by_query: list[list[ExternalSearchHit]] = []
-        executed_queries: list[str] = []
-        provider_failed_query_count = 0
-        # gather_cancel_on_errorはasyncio.gatherに委譲しており、結果順は
-        # 完了順でなく渡したawaitablesの順(=queriesの順)と一致する。
-        provider_results = await gather_cancel_on_error(
-            *[
-                self._search_external_query(
-                    query,
-                    search_gateway=external.search_gateway,
-                    date_filter=date_filter,
-                )
-                for query in queries
-            ]
+        execution = await external.external_search.search_queries(
+            queries,
+            date_filter=date_filter,
         )
-        for query, (hits, failed) in zip(queries, provider_results, strict=True):
-            if failed:
-                provider_failed_query_count += 1
-                hits_by_query.append([])
-                continue
-            hits_by_query.append(hits)
-            executed_queries.append(query)
+        failed_query_count = execution.provider_failed_query_count
+        if failed_query_count == len(queries):
+            return queries, failed_query_count, [], "provider_failed", ()
 
-        if provider_failed_query_count == len(queries):
-            return queries, provider_failed_query_count, [], "provider_failed", ()
-
-        pool = build_hit_pool(hits_by_query)
         await self._report_event(
             ExternalSearchHitsFetchedEvent(
                 task_index=task_index,
-                hit_count=len(pool),
+                hit_count=len(execution.hits),
             )
         )
         return (
             queries,
-            provider_failed_query_count,
-            pool,
+            failed_query_count,
+            execution.hits,
             "succeeded",
-            tuple(executed_queries),
+            execution.executed_queries,
         )
-
-    async def _search_external_query(
-        self,
-        query: str,
-        *,
-        search_gateway: ExternalSearchGateway,
-        date_filter: ExternalSearchDateFilter | None,
-    ) -> tuple[list[ExternalSearchHit], bool]:
-        try:
-            hits = await asyncio.wait_for(
-                search_gateway.search(
-                    ExternalSearchRequest(
-                        query=query,
-                        limit=EXTERNAL_SEARCH_HITS_PER_QUERY,
-                        date_filter=date_filter,
-                    )
-                ),
-                timeout=PROVIDER_SEARCH_TIMEOUT_SECONDS,
-            )
-        except (ExternalSearchProviderError, TimeoutError):
-            return [], True
-        return hits[:EXTERNAL_SEARCH_HITS_PER_QUERY], False
 
     async def _report_event(self, event: AnswerProgressEvent) -> None:
         if self.events is None:

@@ -208,7 +208,7 @@ def test_external_research_runtime_contract_declares_only_borrowed_resources() -
         ExternalResearchRuntime.__dataclass_params__.frozen,
         tuple(field.name for field in fields(ExternalResearchRuntime)),
         callable(getattr(ExternalResearchRuntimeFactory, "activate", None)),
-    ) == (True, True, ("query_runtime", "reviewer_runtime", "search_gateway"), True)
+    ) == (True, True, ("external_search", "reviewer_runtime"), True)
 
 
 @pytest.mark.asyncio
@@ -240,11 +240,12 @@ async def test_runtime_factory_is_lazy_shares_deepseek_and_closes_each_client_on
             len(deepseek.clients),
             len(tavily.clients),
             deepseek.clients[0].kwargs,
-            external.query_runtime.client is deepseek.clients[0],
+            external.external_search.query_runtime.client is deepseek.clients[0],
             external.reviewer_runtime.client is deepseek.clients[0],
-            external.query_runtime.binding is EXTERNAL_QUERY_DEEPSEEK_BINDING,
+            external.external_search.query_runtime.binding
+            is EXTERNAL_QUERY_DEEPSEEK_BINDING,
             external.reviewer_runtime.binding is evidence_reviewer_binding,
-            external.search_gateway.client is tavily.clients[0],
+            external.external_search.search_gateway.client is tavily.clients[0],
         ) == (
             1,
             1,
@@ -399,8 +400,10 @@ async def test_runtime_factory_creates_fresh_clients_for_each_activation(
         pass
 
     assert (
-        first.query_runtime.client is not second.query_runtime.client,
-        first.search_gateway.client is not second.search_gateway.client,
+        first.external_search.query_runtime.client
+        is not second.external_search.query_runtime.client,
+        first.external_search.search_gateway.client
+        is not second.external_search.search_gateway.client,
         [client.close_count for client in deepseek.clients],
         [client.close_count for client in tavily.clients],
     ) == (True, True, [1, 1], [1, 1])

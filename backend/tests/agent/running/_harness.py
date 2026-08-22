@@ -22,6 +22,7 @@ from app.agent.answering.evidence_answer.contract import (
     EvidenceAnswerUnavailable,
 )
 from app.agent.evidence_collection import CollectedNews
+from app.agent.evidence_collection.external_search import ExternalSearchService
 from app.agent.evidence_collection.external_search.contract import (
     ExternalQueryDraft,
     ExternalResearchRuntime,
@@ -112,9 +113,11 @@ def external_research_runtime(
     gateway: object,
 ) -> ExternalResearchRuntime:
     return ExternalResearchRuntime(
-        query_runtime=query_runtime,  # type: ignore[arg-type]
+        external_search=ExternalSearchService(
+            query_runtime=query_runtime,  # type: ignore[arg-type]
+            search_gateway=gateway,  # type: ignore[arg-type]
+        ),
         reviewer_runtime=reviewer_runtime,  # type: ignore[arg-type]
-        search_gateway=gateway,  # type: ignore[arg-type]
     )
 
 

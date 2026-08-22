@@ -32,6 +32,7 @@ from logfire.testing import CaptureLogfire
 from app.agent.answering.contract import AnsweringRequest
 from app.agent.answering.evidence_answer.contract import EvidenceAnswerOutcome
 from app.agent.evidence_collection import NewsCollector, Researcher
+from app.agent.evidence_collection.external_search import ExternalSearchService
 from app.agent.evidence_collection.external_search.contract import (
     ExternalResearchRuntime,
 )
@@ -176,9 +177,11 @@ def _runner(
 ) -> tuple[AnsweringRunner, _EvidenceAnswerer, _Factory]:
     answerer = answerer or _EvidenceAnswerer()
     runtime = ExternalResearchRuntime(
-        query_runtime=query_runtime,  # type: ignore[arg-type]
+        external_search=ExternalSearchService(
+            query_runtime=query_runtime,  # type: ignore[arg-type]
+            search_gateway=external_gateway,  # type: ignore[arg-type]
+        ),
         reviewer_runtime=reviewer_runtime,  # type: ignore[arg-type]
-        search_gateway=external_gateway,  # type: ignore[arg-type]
     )
     factory = _Factory(runtime)
     phases = AnsweringPhases(
