@@ -20,9 +20,13 @@ from app.agent.answering.evidence_answer.contract import (
     EvidenceAnswerUnavailable,
 )
 from app.agent.contract import AnswerProgressStage
-from app.agent.evidence_collection import CollectedNews, NewsCollector, Researcher
+from app.agent.evidence_collection import (
+    CollectedNews,
+    EvidenceCollectionService,
+    ResearchTaskCollector,
+)
 from app.agent.evidence_collection.external_search import (
-    ExternalResearchRuntime,
+    ExternalSearch,
     ExternalSearchHit,
     ExternalSearchProviderError,
     ExternalSearchService,
@@ -53,7 +57,7 @@ from app.agent.running import AnsweringPhases, AnsweringRunner, RunInput
 from app.agent.running import answering_runner as answering_runner_module
 from app.analysis.analyzed_article import InScopeAnalyzedArticle
 from app.analysis.assessment.domain.result import InScope, InScopeCategory
-from tests.agent.running._harness import run_identity
+from tests.agent.running._harness import ExternalScopes, fixed_scope, run_identity
 from tests.agent.running._input_safety import AllowInputSafetyChecker
 from tests.agent.runtime._fakes import ScriptedAgentRuntime
 from tests.logfire._metric_helpers import collected_metrics
@@ -336,16 +340,16 @@ class _TaskFailureAfterSiblingStartsRuntime:
             self.sibling_finished.set()
 
 
-class _Scope(AbstractAsyncContextManager[ExternalResearchRuntime]):
+class _Scope(AbstractAsyncContextManager[ExternalSearch]):
     def __init__(
         self,
-        runtime: ExternalResearchRuntime,
+        external_search: ExternalSearch,
         timeline: list[str],
         *,
         exit_error: BaseException | None = None,
         exit_reached: asyncio.Event | None = None,
     ) -> None:
-        self._runtime = runtime
+        self._external_search = external_search
         self._timeline = timeline
         self._exit_error = exit_error
         self._exit_reached = exit_reached
@@ -354,9 +358,9 @@ class _Scope(AbstractAsyncContextManager[ExternalResearchRuntime]):
         self.close_succeeded = False
         self.body_exception: BaseException | None = None
 
-    async def __aenter__(self) -> ExternalResearchRuntime:
+    async def __aenter__(self) -> ExternalSearch:
         self._timeline.append("scope.enter")
-        return self._runtime
+        return self._external_search
 
     async def __aexit__(
         self,
@@ -380,7 +384,7 @@ class _Scope(AbstractAsyncContextManager[ExternalResearchRuntime]):
 class _Factory:
     def __init__(
         self,
-        runtimes: list[ExternalResearchRuntime],
+        scopes: list[ExternalScopes],
         timeline: list[str],
         *,
         activation_error: BaseException | None = None,
@@ -388,7 +392,8 @@ class _Factory:
         exit_error: BaseException | None = None,
         exit_reached: asyncio.Event | None = None,
     ) -> None:
-        self._runtimes = runtimes
+        self._searches = [scope.external_search for scope in scopes]
+        self._reviewer_runtime = scopes[0].reviewer_runtime
         self._timeline = timeline
         self.scopes: list[_Scope] = []
         self.activated = asyncio.Event()
@@ -398,14 +403,18 @@ class _Factory:
         self._exit_reached = exit_reached
         self.activate_calls = 0
 
-    def activate(self) -> _Scope:
+    def reviewer_scope(self) -> AbstractAsyncContextManager[object]:
+        """reviewerは外部検索とは別のscopeを開くため、fakeも別口で貸す。"""
+        return fixed_scope(self._reviewer_runtime)()
+
+    def __call__(self) -> _Scope:
         self.activate_calls += 1
         if self._activation_reached is not None:
             self._activation_reached.set()
         if self._activation_error is not None:
             raise self._activation_error
         scope = _Scope(
-            self._runtimes.pop(0),
+            self._searches.pop(0),
             self._timeline,
             exit_error=self._exit_error,
             exit_reached=self._exit_reached,
@@ -493,13 +502,13 @@ def _runtime(
     *,
     reviewer_runtime: object | None = None,
     gateway: _FakeExternalSearchGateway | None = None,
-) -> ExternalResearchRuntime:
-    return ExternalResearchRuntime(
+) -> ExternalScopes:
+    return ExternalScopes(
         external_search=ExternalSearchService(
             query_runtime=query_runtime,  # type: ignore[arg-type]
             search_gateway=(gateway or _FakeExternalSearchGateway()),  # type: ignore[arg-type]
         ),
-        reviewer_runtime=(reviewer_runtime or ScriptedAgentRuntime([])),  # type: ignore[arg-type]
+        reviewer_runtime=(reviewer_runtime or ScriptedAgentRuntime([])),
     )
 
 
@@ -517,14 +526,16 @@ def _runner(
 ) -> AnsweringRunner:
     phases = AnsweringPhases(
         planner=_Planner(plan, error=planner_error),
-        collector=NewsCollector(
-            researcher=Researcher(internal_search=internal, events=events),
+        collector=EvidenceCollectionService(
+            task_collector=ResearchTaskCollector(
+                internal_search=internal, events=events
+            ),
+            external_search_scope_factory=factory,
             requested_agent_count=requested_agent_count,
         ),
-        external_runtime_factory=factory,
         direct_answerer=_UnreachableDirectAnswerer(),
         evidence_answerer=_EvidenceAnswerer(error=answer_error, timeline=timeline),
-        reviewer=EvidenceReviewer(),
+        reviewer=EvidenceReviewer(runtime_scope_factory=factory.reviewer_scope),
     )
     return AnsweringRunner(
         input_safety_checker=AllowInputSafetyChecker(),
@@ -799,30 +810,31 @@ async def test_runner_preserves_internal_hit_order_into_synthesis() -> None:
     timeline: list[str] = []
     answerer = _EvidenceAnswerer(timeline=timeline)
     reviewer_runtime = ScriptedAgentRuntime([_review_draft_selecting([0, 1])])
+    factory = _Factory(
+        [
+            _runtime(
+                ScriptedAgentRuntime([_query_draft()]),
+                reviewer_runtime=reviewer_runtime,
+            )
+        ],
+        timeline,
+    )
     phases = AnsweringPhases(
         planner=_Planner(_search_plan(article_search_queries=["NVIDIA"])),
-        collector=NewsCollector(
-            researcher=Researcher(
+        collector=EvidenceCollectionService(
+            task_collector=ResearchTaskCollector(
                 internal_search=_InternalSearch(
                     hits=[
                         _hit(assessment_id=1001, title="first"),
                         _hit(assessment_id=1002, title="second"),
                     ]
                 )
-            )
-        ),
-        external_runtime_factory=_Factory(
-            [
-                _runtime(
-                    ScriptedAgentRuntime([_query_draft()]),
-                    reviewer_runtime=reviewer_runtime,
-                )
-            ],
-            timeline,
+            ),
+            external_search_scope_factory=factory,
         ),
         direct_answerer=_UnreachableDirectAnswerer(),
         evidence_answerer=answerer,
-        reviewer=EvidenceReviewer(),
+        reviewer=EvidenceReviewer(runtime_scope_factory=factory.reviewer_scope),
     )
     runner = AnsweringRunner(
         input_safety_checker=AllowInputSafetyChecker(),
@@ -849,27 +861,28 @@ async def test_runner_forwards_review_missing_to_the_evidence_answerer() -> None
     reviewer_runtime = ScriptedAgentRuntime(
         [_review_draft_selecting_with_missing([0], ["観点Aを確認できませんでした"])]
     )
+    factory = _Factory(
+        [
+            _runtime(
+                ScriptedAgentRuntime([_query_draft()]),
+                reviewer_runtime=reviewer_runtime,
+            )
+        ],
+        timeline,
+    )
     phases = AnsweringPhases(
         planner=_Planner(_search_plan(article_search_queries=["NVIDIA"])),
-        collector=NewsCollector(
-            researcher=Researcher(
+        collector=EvidenceCollectionService(
+            task_collector=ResearchTaskCollector(
                 internal_search=_InternalSearch(
                     hits=[_hit(assessment_id=1001, title="first")]
                 )
-            )
-        ),
-        external_runtime_factory=_Factory(
-            [
-                _runtime(
-                    ScriptedAgentRuntime([_query_draft()]),
-                    reviewer_runtime=reviewer_runtime,
-                )
-            ],
-            timeline,
+            ),
+            external_search_scope_factory=factory,
         ),
         direct_answerer=_UnreachableDirectAnswerer(),
         evidence_answerer=answerer,
-        reviewer=EvidenceReviewer(),
+        reviewer=EvidenceReviewer(runtime_scope_factory=factory.reviewer_scope),
     )
     runner = AnsweringRunner(
         input_safety_checker=AllowInputSafetyChecker(),
@@ -1603,18 +1616,18 @@ async def test_internal_failure_still_reaches_reviewer_and_produces_evidence() -
     )
     phases = AnsweringPhases(
         planner=_Planner(_plan_with_tasks(("goal0", ["NVIDIA"]))),
-        collector=NewsCollector(
-            researcher=Researcher(
+        collector=EvidenceCollectionService(
+            task_collector=ResearchTaskCollector(
                 internal_search=_InternalSearch(
                     error=InternalSearchError(phase="article_search")
                 ),
                 events=events,
-            )
+            ),
+            external_search_scope_factory=factory,
         ),
-        external_runtime_factory=factory,
         direct_answerer=_UnreachableDirectAnswerer(),
         evidence_answerer=answerer,
-        reviewer=EvidenceReviewer(),
+        reviewer=EvidenceReviewer(runtime_scope_factory=factory.reviewer_scope),
     )
     runner = AnsweringRunner(
         input_safety_checker=AllowInputSafetyChecker(),
@@ -1656,17 +1669,17 @@ async def test_external_provider_failure_keeps_internal_hits_in_final_evidence()
     )
     phases = AnsweringPhases(
         planner=_Planner(_plan_with_tasks(("goal0", ["NVIDIA"]))),
-        collector=NewsCollector(
-            researcher=Researcher(
+        collector=EvidenceCollectionService(
+            task_collector=ResearchTaskCollector(
                 internal_search=_InternalSearch(
                     hits=[_hit(assessment_id=1001, title="kept-hit")]
                 )
-            )
+            ),
+            external_search_scope_factory=factory,
         ),
-        external_runtime_factory=factory,
         direct_answerer=_UnreachableDirectAnswerer(),
         evidence_answerer=answerer,
-        reviewer=EvidenceReviewer(),
+        reviewer=EvidenceReviewer(runtime_scope_factory=factory.reviewer_scope),
     )
     runner = AnsweringRunner(
         input_safety_checker=AllowInputSafetyChecker(),
@@ -1715,13 +1728,14 @@ async def test_time_filter_failure_still_collects_internal_hits_for_every_task(
     reports = _task_reports(captured[0])
     evidence_run = _completed_evidence_run(captured[0])
     assert (
+        # 期間解決に失敗したRunは外部検索の資源scopeを開かない。
         factory.activate_calls,
         sorted(report.external_collection for report in reports),
         # time filter失敗でも内部精査の完了結果はCompletedになる。
         isinstance(evidence_run, EvidenceRunCompleted),
         {item.title for item in evidence_run.answer_evidence.internal_evidence},
     ) == (
-        1,
+        0,
         ["time_filter_failed", "time_filter_failed"],
         True,
         {"task0-hit", "task1-hit"},
@@ -1779,15 +1793,18 @@ async def test_runner_isolates_one_tasks_total_failure_from_sibling_evidence() -
         target_time_window=TargetTimeWindow(kind="unsupported_explicit_window"),
     )
     reviewer_runtime = ScriptedAgentRuntime([_review_draft_selecting([0])])
+    factory = _Factory(
+        [_runtime(ScriptedAgentRuntime([]), reviewer_runtime=reviewer_runtime)], []
+    )
     phases = AnsweringPhases(
         planner=_Planner(plan),
-        collector=NewsCollector(researcher=Researcher(internal_search=internal)),
-        external_runtime_factory=_Factory(
-            [_runtime(ScriptedAgentRuntime([]), reviewer_runtime=reviewer_runtime)], []
+        collector=EvidenceCollectionService(
+            task_collector=ResearchTaskCollector(internal_search=internal),
+            external_search_scope_factory=factory,
         ),
         direct_answerer=_UnreachableDirectAnswerer(),
         evidence_answerer=answerer,
-        reviewer=EvidenceReviewer(),
+        reviewer=EvidenceReviewer(runtime_scope_factory=factory.reviewer_scope),
     )
     runner = AnsweringRunner(
         input_safety_checker=AllowInputSafetyChecker(),

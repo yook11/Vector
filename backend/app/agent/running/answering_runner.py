@@ -30,7 +30,6 @@ from app.agent.contract import (
 from app.agent.evidence_collection import CollectedNews
 from app.agent.evidence_collection.external_search import (
     EXTERNAL_SEARCH_AGENT_HARD_LIMIT,
-    ExternalResearchRuntime,
 )
 from app.agent.evidence_review import (
     AnswerEvidence,
@@ -134,32 +133,20 @@ class AnsweringRunner:
                     research_checkpoint = None
                 case SearchPlan():
                     await self._report_progress("evidence_collection")
-                    date_filter, time_filter_failure = (
-                        phases.collector.resolve_time_filter(
-                            plan=plan,
-                            as_of=answering_request.as_of,
-                        )
+                    collected_news = await phases.collector.collect(
+                        plan=plan,
+                        as_of=answering_request.as_of,
                     )
-                    # reviewerもLLM runtimeを使うため、scopeは収集と精査の両方を包む。
-                    async with phases.external_runtime_factory.activate() as external:
-                        collected_news = await phases.collector.collect(
-                            plan=plan,
-                            external=external,
-                            date_filter=date_filter,
-                            time_filter_failure=time_filter_failure,
-                            as_of=answering_request.as_of,
-                        )
-                        evidence_run = await self._review_evidence(
-                            phases=phases,
-                            collected_news=collected_news,
-                            external=external,
-                            as_of=answering_request.as_of,
-                        )
-                        _record_evidence_run_span_attributes(
-                            run_span,
-                            collected_news=collected_news,
-                            evidence_run=evidence_run,
-                        )
+                    evidence_run = await self._review_evidence(
+                        phases=phases,
+                        collected_news=collected_news,
+                        as_of=answering_request.as_of,
+                    )
+                    _record_evidence_run_span_attributes(
+                        run_span,
+                        collected_news=collected_news,
+                        evidence_run=evidence_run,
+                    )
                     research_checkpoint = build_research_checkpoint_or_none(
                         plan=plan,
                         collected_news=collected_news,
@@ -207,7 +194,6 @@ class AnsweringRunner:
         *,
         phases: AnsweringPhases,
         collected_news: CollectedNews,
-        external: ExternalResearchRuntime,
         as_of: datetime,
     ) -> EvidenceRunResult:
         """ヒットゼロのRunは精査を開始せず、stageもselected eventにも反映されない。"""
@@ -221,7 +207,6 @@ class AnsweringRunner:
         evidence_run = await phases.reviewer.review(
             tasks=collected_news.tasks,
             as_of=as_of,
-            reviewer_runtime=external.reviewer_runtime,
         )
         if isinstance(evidence_run, EvidenceRunCompleted):
             await self._report_selected_evidence(evidence_run=evidence_run)

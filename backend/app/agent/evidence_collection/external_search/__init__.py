@@ -12,8 +12,6 @@ from app.agent.evidence_collection.external_search.contract import (
     MISSING_ITEM_MAX_CHARS,
     ExternalQueryDraft,
     ExternalQueryGenerationInput,
-    ExternalResearchRuntime,
-    ExternalResearchRuntimeFactory,
     ExternalSearch,
     ExternalSearchDateFilter,
     ExternalSearchExecution,
@@ -22,6 +20,7 @@ from app.agent.evidence_collection.external_search.contract import (
     ExternalSearchHit,
     ExternalSearchProviderError,
     ExternalSearchRequest,
+    ExternalSearchScopeFactory,
     TimeFilterFailureReason,
 )
 from app.agent.evidence_collection.external_search.policy import (
@@ -64,9 +63,8 @@ __all__ = [
     "ExternalSearchGateway",
     "ExternalSearchProviderError",
     "ExternalSearchRequest",
+    "ExternalSearchScopeFactory",
     "ExternalSearchService",
-    "ExternalResearchRuntime",
-    "ExternalResearchRuntimeFactory",
     "MISSING_ITEM_MAX_CHARS",
     "PROVIDER_SEARCH_TIMEOUT_SECONDS",
     "QUERY_GENERATE_TIMEOUT_SECONDS",

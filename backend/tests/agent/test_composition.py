@@ -418,7 +418,6 @@ def test_build_answering_phases_wires_planner_to_shared_gemini_runtime_scope(
     planner_calls: list[dict[str, object]] = []
     direct_calls: list[dict[str, object]] = []
     evidence_calls: list[dict[str, object]] = []
-    external_runtime_factory = object()
     internal_search = object()
     events = object()
 
@@ -442,11 +441,6 @@ def test_build_answering_phases_wires_planner_to_shared_gemini_runtime_scope(
         "ensure_external_search_configured",
         lambda: None,
     )
-    monkeypatch.setattr(
-        composition,
-        "build_external_research_runtime_factory",
-        lambda: external_runtime_factory,
-    )
     monkeypatch.setattr(planning_service, "QuestionPlanningService", _PlannerSpy)
     monkeypatch.setattr(direct_flow, "DirectAnswerFlow", _DirectSpy)
     monkeypatch.setattr(evidence_flow, "EvidenceAnswerFlow", _EvidenceSpy)
@@ -468,11 +462,10 @@ def test_build_answering_phases_wires_planner_to_shared_gemini_runtime_scope(
     )
 
     assert isinstance(phases, AnsweringPhases)
-    # Researcherがinternal searchを包み、events(段2でserviceに渡さないと
+    # task collectorがinternal searchを包み、events(段2でserviceに渡さないと
     # した進捗reporter)はここで初めてResearcherへ渡る。
-    assert phases.collector.researcher.internal_search is internal_search
-    assert phases.collector.researcher.events is events
-    assert phases.external_runtime_factory is external_runtime_factory
+    assert phases.collector.task_collector.internal_search is internal_search
+    assert phases.collector.task_collector.events is events
     assert set(internal_search_calls[0]) == {
         "embedder",
         "article_search_repository",
@@ -526,11 +519,6 @@ def test_build_answering_phases_wires_query_embedding_cache_to_embedder_identity
         composition,
         "ensure_external_search_configured",
         lambda: None,
-    )
-    monkeypatch.setattr(
-        composition,
-        "build_external_research_runtime_factory",
-        lambda: object(),
     )
     for module, name in (
         (embedding_gemini, "GeminiQueryEmbedder"),

@@ -1,15 +1,17 @@
-"""External research runtime factory の境界契約。"""
+"""External search / evidence reviewer の資源scopeの境界契約。"""
 
 from __future__ import annotations
 
 import asyncio
-from dataclasses import fields, is_dataclass
 
 import pytest
 from pydantic import SecretStr
 
 from app.agent import composition
-from app.agent.composition import build_external_research_runtime_factory
+from app.agent.composition import (
+    activate_evidence_reviewer_runtime,
+    activate_external_search,
+)
 from app.agent.evidence_review.deepseek_binding import (
     EVIDENCE_REVIEWER_DEEPSEEK_BINDING,
 )
@@ -197,22 +199,8 @@ def _install_factory_dependencies(
     return deepseek, tavily, runtime, gateway
 
 
-def test_external_research_runtime_contract_declares_only_borrowed_resources() -> None:
-    from app.agent.evidence_collection.external_search.contract import (
-        ExternalResearchRuntime,
-        ExternalResearchRuntimeFactory,
-    )
-
-    assert (
-        is_dataclass(ExternalResearchRuntime),
-        ExternalResearchRuntime.__dataclass_params__.frozen,
-        tuple(field.name for field in fields(ExternalResearchRuntime)),
-        callable(getattr(ExternalResearchRuntimeFactory, "activate", None)),
-    ) == (True, True, ("external_search", "reviewer_runtime"), True)
-
-
 @pytest.mark.asyncio
-async def test_runtime_factory_is_lazy_shares_deepseek_and_closes_each_client_once(
+async def test_external_search_scope_is_lazy_and_closes_each_client_once(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     from app.agent.evidence_collection.external_search.deepseek_binding import (
@@ -223,10 +211,8 @@ async def test_runtime_factory_is_lazy_shares_deepseek_and_closes_each_client_on
         DEEPSEEK_CLIENT_TIMEOUT_SECONDS,
     )
 
-    evidence_reviewer_binding = EVIDENCE_REVIEWER_DEEPSEEK_BINDING
     deepseek, tavily, runtime, gateway = _install_factory_dependencies(monkeypatch)
-    factory = build_external_research_runtime_factory()
-    scope = factory.activate()
+    scope = activate_external_search()
 
     assert (deepseek.clients, tavily.clients, runtime.calls, gateway.calls) == (
         [],
@@ -235,17 +221,14 @@ async def test_runtime_factory_is_lazy_shares_deepseek_and_closes_each_client_on
         [],
     )
 
-    async with scope as external:
+    async with scope as external_search:
         assert (
             len(deepseek.clients),
             len(tavily.clients),
             deepseek.clients[0].kwargs,
-            external.external_search.query_runtime.client is deepseek.clients[0],
-            external.reviewer_runtime.client is deepseek.clients[0],
-            external.external_search.query_runtime.binding
-            is EXTERNAL_QUERY_DEEPSEEK_BINDING,
-            external.reviewer_runtime.binding is evidence_reviewer_binding,
-            external.external_search.search_gateway.client is tavily.clients[0],
+            external_search.query_runtime.client is deepseek.clients[0],
+            external_search.query_runtime.binding is EXTERNAL_QUERY_DEEPSEEK_BINDING,
+            external_search.search_gateway.client is tavily.clients[0],
         ) == (
             1,
             1,
@@ -257,11 +240,46 @@ async def test_runtime_factory_is_lazy_shares_deepseek_and_closes_each_client_on
             True,
             True,
             True,
+        )
+
+    assert (deepseek.clients[0].close_count, tavily.clients[0].close_count) == (1, 1)
+
+
+@pytest.mark.asyncio
+async def test_evidence_reviewer_scope_is_lazy_and_closes_its_client_once(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """reviewerは外部検索と資源を共有せず、自分のDeepSeek clientだけを開閉する。"""
+    from app.agent.runtime.deepseek import (
+        DEEPSEEK_BASE_URL,
+        DEEPSEEK_CLIENT_TIMEOUT_SECONDS,
+    )
+
+    deepseek, tavily, runtime, _gateway = _install_factory_dependencies(monkeypatch)
+    scope = activate_evidence_reviewer_runtime()
+
+    assert (deepseek.clients, runtime.calls) == ([], [])
+
+    async with scope as reviewer_runtime:
+        assert (
+            len(deepseek.clients),
+            tavily.clients,
+            deepseek.clients[0].kwargs,
+            reviewer_runtime.client is deepseek.clients[0],
+            reviewer_runtime.binding is EVIDENCE_REVIEWER_DEEPSEEK_BINDING,
+        ) == (
+            1,
+            [],
+            {
+                "api_key": "deepseek-api-key-sentinel",
+                "base_url": DEEPSEEK_BASE_URL,
+                "timeout": DEEPSEEK_CLIENT_TIMEOUT_SECONDS,
+            },
             True,
             True,
         )
 
-    assert (deepseek.clients[0].close_count, tavily.clients[0].close_count) == (1, 1)
+    assert deepseek.clients[0].close_count == 1
 
 
 @pytest.mark.asyncio
@@ -277,19 +295,18 @@ async def test_runtime_factory_is_lazy_shares_deepseek_and_closes_each_client_on
         pytest.param(asyncio.CancelledError(), id="cancellation"),
     ],
 )
-async def test_runtime_factory_closes_acquired_clients_for_every_scope_exit(
+async def test_external_search_scope_closes_acquired_clients_for_every_exit(
     monkeypatch: pytest.MonkeyPatch,
     body_error: BaseException | None,
 ) -> None:
-    deepseek, tavily, _runtime, _tool = _install_factory_dependencies(monkeypatch)
-    factory = build_external_research_runtime_factory()
+    deepseek, tavily, _runtime, _gateway = _install_factory_dependencies(monkeypatch)
 
     if body_error is None:
-        async with factory.activate():
+        async with activate_external_search():
             pass
     else:
         with pytest.raises(type(body_error)) as raised:
-            async with factory.activate():
+            async with activate_external_search():
                 raise body_error
         assert raised.value is body_error
 
@@ -301,19 +318,18 @@ async def test_runtime_factory_closes_acquired_clients_for_every_scope_exit(
     ("stage", "expected_deepseek_closes", "expected_tavily_closes"),
     [
         pytest.param("query-runtime", 1, 0, id="query-runtime"),
-        pytest.param("reviewer-runtime", 1, 0, id="reviewer-runtime"),
         pytest.param("tavily-entry", 1, 0, id="tavily-entry"),
         pytest.param("gateway", 1, 1, id="gateway"),
     ],
 )
-async def test_runtime_factory_closes_only_acquired_clients_when_construction_fails(
+async def test_external_search_scope_closes_only_acquired_clients_on_failure(
     monkeypatch: pytest.MonkeyPatch,
     stage: str,
     expected_deepseek_closes: int,
     expected_tavily_closes: int,
 ) -> None:
     runtime = _RuntimeSpyFactory(
-        fail_on_construction={"query-runtime": 1, "reviewer-runtime": 2}.get(stage)
+        fail_on_construction=1 if stage == "query-runtime" else None
     )
     tavily = _TrackedTavilyClientFactory(
         entry_error=RuntimeError("tavily entry failed")
@@ -323,16 +339,15 @@ async def test_runtime_factory_closes_only_acquired_clients_when_construction_fa
     gateway_error = (
         RuntimeError("gateway construction failed") if stage == "gateway" else None
     )
-    deepseek, tavily, _runtime, _tool = _install_factory_dependencies(
+    deepseek, tavily, _runtime, _gateway = _install_factory_dependencies(
         monkeypatch,
         tavily=tavily,
         runtime=runtime,
         gateway=_GatewaySpyFactory(construction_error=gateway_error),
     )
-    factory = build_external_research_runtime_factory()
 
     with pytest.raises(RuntimeError):
-        async with factory.activate():
+        async with activate_external_search():
             raise AssertionError("scope body must not run")
 
     assert (
@@ -342,19 +357,18 @@ async def test_runtime_factory_closes_only_acquired_clients_when_construction_fa
 
 
 @pytest.mark.asyncio
-async def test_runtime_factory_attempts_deepseek_close_when_tavily_close_fails(
+async def test_external_search_scope_attempts_deepseek_close_when_tavily_close_fails(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     close_error = RuntimeError("tavily close failure")
     tavily = _TrackedTavilyClientFactory(close_error=close_error)
-    deepseek, tavily, _runtime, _tool = _install_factory_dependencies(
+    deepseek, tavily, _runtime, _gateway = _install_factory_dependencies(
         monkeypatch,
         tavily=tavily,
     )
-    factory = build_external_research_runtime_factory()
 
     with pytest.raises(RuntimeError) as raised:
-        async with factory.activate():
+        async with activate_external_search():
             pass
 
     assert (
@@ -365,20 +379,19 @@ async def test_runtime_factory_attempts_deepseek_close_when_tavily_close_fails(
 
 
 @pytest.mark.asyncio
-async def test_runtime_factory_allows_close_failure_to_replace_body_error(
+async def test_external_search_scope_allows_close_failure_to_replace_body_error(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     body_error = RuntimeError("body failure")
     close_error = RuntimeError("tavily close failure")
     tavily = _TrackedTavilyClientFactory(close_error=close_error)
-    _deepseek, _tavily, _runtime, _tool = _install_factory_dependencies(
+    _deepseek, _tavily, _runtime, _gateway = _install_factory_dependencies(
         monkeypatch,
         tavily=tavily,
     )
-    factory = build_external_research_runtime_factory()
 
     with pytest.raises(RuntimeError) as raised:
-        async with factory.activate():
+        async with activate_external_search():
             raise body_error
 
     assert (raised.value is close_error, raised.value.__context__ is body_error) == (
@@ -388,22 +401,19 @@ async def test_runtime_factory_allows_close_failure_to_replace_body_error(
 
 
 @pytest.mark.asyncio
-async def test_runtime_factory_creates_fresh_clients_for_each_activation(
+async def test_external_search_scope_creates_fresh_clients_for_each_activation(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    deepseek, tavily, _runtime, _tool = _install_factory_dependencies(monkeypatch)
-    factory = build_external_research_runtime_factory()
+    deepseek, tavily, _runtime, _gateway = _install_factory_dependencies(monkeypatch)
 
-    async with factory.activate() as first:
+    async with activate_external_search() as first:
         pass
-    async with factory.activate() as second:
+    async with activate_external_search() as second:
         pass
 
     assert (
-        first.external_search.query_runtime.client
-        is not second.external_search.query_runtime.client,
-        first.external_search.search_gateway.client
-        is not second.external_search.search_gateway.client,
+        first.query_runtime.client is not second.query_runtime.client,
+        first.search_gateway.client is not second.search_gateway.client,
         [client.close_count for client in deepseek.clients],
         [client.close_count for client in tavily.clients],
     ) == (True, True, [1, 1], [1, 1])

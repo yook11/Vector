@@ -3,8 +3,8 @@
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Sequence
-from contextlib import AbstractAsyncContextManager
+from collections.abc import AsyncIterator, Sequence
+from contextlib import AbstractAsyncContextManager, asynccontextmanager
 from datetime import UTC, date, datetime
 from typing import Any
 
@@ -12,12 +12,15 @@ import pytest
 from logfire.testing import CaptureLogfire
 from structlog.testing import capture_logs
 
-from app.agent.evidence_collection import NewsCollector, Researcher
 from app.agent.evidence_collection import (
-    news_collector as news_collector_module,
+    EvidenceCollectionService,
+    ResearchTaskCollector,
+)
+from app.agent.evidence_collection import (
+    service as collection_service_module,
 )
 from app.agent.evidence_collection.external_search import (
-    ExternalResearchRuntime,
+    ExternalSearch,
     ExternalSearchDateFilter,
     ExternalSearchHit,
     ExternalSearchProviderError,
@@ -42,6 +45,8 @@ from app.analysis.ai_provider_errors import AIProviderNetworkError
 from app.analysis.deepseek_error_translator import DeepSeekStateReason
 from tests.agent.running._harness import (
     AS_OF,
+    ExternalScopes,
+    fixed_scope,
     internal_hit,
 )
 from tests.agent.running._harness import (
@@ -147,18 +152,18 @@ class _OneInternalHitSearch:
         return [_internal_hit(assessment_id=2001, title="internal hit")]
 
 
-class _Scope(AbstractAsyncContextManager[ExternalResearchRuntime]):
-    def __init__(self, runtime: ExternalResearchRuntime, timeline: list[str]) -> None:
-        self._runtime = runtime
+class _Scope(AbstractAsyncContextManager[ExternalSearch]):
+    def __init__(self, external_search: ExternalSearch, timeline: list[str]) -> None:
+        self._external_search = external_search
         self._timeline = timeline
         self.entered = False
         self.exited = False
         self.exit_calls = 0
 
-    async def __aenter__(self) -> ExternalResearchRuntime:
+    async def __aenter__(self) -> ExternalSearch:
         self.entered = True
         self._timeline.append("scope.enter")
-        return self._runtime
+        return self._external_search
 
     async def __aexit__(
         self,
@@ -176,17 +181,16 @@ class _Scope(AbstractAsyncContextManager[ExternalResearchRuntime]):
 class _Factory:
     def __init__(
         self,
-        runtimes: Sequence[ExternalResearchRuntime],
+        searches: Sequence[ExternalSearch],
         *,
         timeline: list[str] | None = None,
     ) -> None:
-        self._runtimes = list(runtimes)
+        self._searches = list(searches)
         self.timeline = timeline if timeline is not None else []
         self.scopes: list[_Scope] = []
 
-    def activate(self) -> _Scope:
-        runtime = self._runtimes.pop(0)
-        scope = _Scope(runtime, self.timeline)
+    def __call__(self) -> _Scope:
+        scope = _Scope(self._searches.pop(0), self.timeline)
         self.scopes.append(scope)
         return scope
 
@@ -348,28 +352,30 @@ class _QueryFailureAfterSiblingStartsGateway(_FakeExternalSearchGateway):
 def _runner(
     *,
     tasks: list[ExternalResearchTask],
-    runtime: ExternalResearchRuntime,
+    runtime: ExternalScopes,
     events: _Events | None = None,
     requested_agent_count: int | None = None,
     timeline: list[str] | None = None,
     target_time_window: TargetTimeWindow | None = _DEFAULT_TARGET_TIME_WINDOW,
 ) -> tuple[AnsweringRunner, _EvidenceAnswerer, _Factory]:
     answerer = _EvidenceAnswerer()
-    factory = _Factory([runtime], timeline=timeline)
+    factory = _Factory([runtime.external_search], timeline=timeline)
     phases = AnsweringPhases(
         planner=_Planner(
             _plan(tasks, target_time_window=target_time_window),
         ),
-        collector=NewsCollector(
-            researcher=Researcher(
+        collector=EvidenceCollectionService(
+            task_collector=ResearchTaskCollector(
                 internal_search=_EmptyInternalSearch(), events=events
             ),
+            external_search_scope_factory=factory,
             requested_agent_count=requested_agent_count,
         ),
-        external_runtime_factory=factory,
         direct_answerer=_UnreachableDirectAnswerer(),
         evidence_answerer=answerer,
-        reviewer=EvidenceReviewer(),
+        reviewer=EvidenceReviewer(
+            runtime_scope_factory=fixed_scope(runtime.reviewer_runtime),
+        ),
     )
     return (
         AnsweringRunner(
@@ -539,7 +545,7 @@ async def test_external_runner_resolves_target_time_window_once_per_branch(
     target_time_window: TargetTimeWindow | None,
     expected_tool_call_count: int,
 ) -> None:
-    original_resolver = news_collector_module.resolve_external_search_date_filter
+    original_resolver = collection_service_module.resolve_external_search_date_filter
     resolver_calls: list[tuple[TargetTimeWindow | None, datetime]] = []
 
     def spy(
@@ -551,7 +557,7 @@ async def test_external_runner_resolves_target_time_window_once_per_branch(
         return original_resolver(target, as_of=as_of)
 
     monkeypatch.setattr(
-        news_collector_module,
+        collection_service_module,
         "resolve_external_search_date_filter",
         spy,
     )
@@ -590,7 +596,7 @@ async def test_naive_as_of_propagates_before_external_activity_or_observability(
     capfire: CaptureLogfire,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    original_resolver = news_collector_module.resolve_external_search_date_filter
+    original_resolver = collection_service_module.resolve_external_search_date_filter
     resolver_calls: list[tuple[TargetTimeWindow | None, datetime]] = []
     naive_as_of = datetime(2026, 7, 20, 9, 30)
 
@@ -603,7 +609,7 @@ async def test_naive_as_of_propagates_before_external_activity_or_observability(
         return original_resolver(target, as_of=as_of)
 
     monkeypatch.setattr(
-        news_collector_module,
+        collection_service_module,
         "resolve_external_search_date_filter",
         spy,
     )
@@ -766,13 +772,10 @@ async def test_time_filter_resolution_failure_closes_external_branch_before_acti
     evidence_run = _completed_evidence_run(captured[0])
 
     assert (
-        # D4-S1: reviewerがLLM runtimeを必要とするため、time filter失敗でも
-        # external runtime scopeは常にactivateされる(外部query/HTTP検索だけを
-        # skipする)。ただしinternalヒットも空(_EmptyInternalSearch)のため両方
-        # ヒットゼロとなりreviewer自体は呼ばれない(D4-S2: review=skipped_empty)。
-        len(factory.scopes),
-        factory.scopes[0].entered,
-        factory.scopes[0].exit_calls,
+        # 期間解決に失敗したRunは外部収集を一切行わないため、外部検索の資源scope
+        # 自体を開かない。reviewerは自前のruntime scopeを持つため影響を受けない
+        # (ここではinternalヒットも空でreviewer自体が呼ばれない)。
+        factory.scopes,
         query_runtime.calls,
         reviewer_runtime.calls,
         gateway.calls,
@@ -799,9 +802,7 @@ async def test_time_filter_resolution_failure_closes_external_branch_before_acti
             if entry.get("event") == "external_search_time_filter_failed"
         ],
     ) == (
-        1,
-        True,
-        1,
+        [],
         [],
         [],
         [],
@@ -1312,17 +1313,28 @@ async def test_external_scope_is_activated_fresh_per_run() -> None:
         gateway=_gateway(),
     )
     answerer = _EvidenceAnswerer()
-    factory = _Factory([first_runtime, second_runtime])
+    factory = _Factory([first_runtime.external_search, second_runtime.external_search])
+    reviewer_runtimes = [
+        first_runtime.reviewer_runtime,
+        second_runtime.reviewer_runtime,
+    ]
+
+    @asynccontextmanager
+    async def _reviewer_scope() -> AsyncIterator[object]:
+        yield reviewer_runtimes.pop(0)
+
     phases = AnsweringPhases(
         planner=_Planner(_plan(tasks)),
-        collector=NewsCollector(
-            researcher=Researcher(internal_search=_EmptyInternalSearch()),
+        collector=EvidenceCollectionService(
+            task_collector=ResearchTaskCollector(
+                internal_search=_EmptyInternalSearch()
+            ),
+            external_search_scope_factory=factory,
             requested_agent_count=1,
         ),
-        external_runtime_factory=factory,
         direct_answerer=_UnreachableDirectAnswerer(),
         evidence_answerer=answerer,
-        reviewer=EvidenceReviewer(),
+        reviewer=EvidenceReviewer(runtime_scope_factory=_reviewer_scope),
     )
     runner = AnsweringRunner(
         input_safety_checker=AllowInputSafetyChecker(),

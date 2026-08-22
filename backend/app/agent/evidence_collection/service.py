@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from contextlib import AsyncExitStack
 from dataclasses import dataclass
 from datetime import datetime
 
@@ -15,8 +16,9 @@ from app.agent.evidence_collection.contract import (
     TaskInternalCollectionStatus,
 )
 from app.agent.evidence_collection.external_search.contract import (
-    ExternalResearchRuntime,
+    ExternalSearch,
     ExternalSearchDateFilter,
+    ExternalSearchScopeFactory,
     TimeFilterFailureReason,
 )
 from app.agent.evidence_collection.external_search.observability import (
@@ -29,26 +31,29 @@ from app.agent.evidence_collection.external_search.time_filter import (
     ExternalSearchDateFilterResolutionError,
     resolve_external_search_date_filter,
 )
-from app.agent.evidence_collection.researcher import Researcher, ResearchTaskHits
+from app.agent.evidence_collection.task_collector import (
+    ResearchTaskCollector,
+    ResearchTaskHits,
+)
 from app.agent.planning.contract import ResearchTask, SearchPlan
 
-__all__ = ["NewsCollector"]
+__all__ = ["EvidenceCollectionService"]
 
 
 @dataclass(frozen=True, slots=True)
-class NewsCollector:
+class EvidenceCollectionService:
     """Run単位でニュースを収集する。精査と回答生成は持たない。"""
 
-    researcher: Researcher
+    task_collector: ResearchTaskCollector
+    external_search_scope_factory: ExternalSearchScopeFactory
     requested_agent_count: int | None = None
 
-    def resolve_time_filter(
+    def _resolve_time_filter(
         self,
         *,
         plan: SearchPlan,
         as_of: datetime,
     ) -> tuple[ExternalSearchDateFilter | None, TimeFilterFailureReason | None]:
-        """契約違反(naive as_of)を外部runtime起動前に伝播させるため収集前に呼ぶ。"""
         tasks = plan.research_tasks
         try:
             date_filter = resolve_external_search_date_filter(
@@ -73,11 +78,12 @@ class NewsCollector:
         self,
         *,
         plan: SearchPlan,
-        external: ExternalResearchRuntime,
-        date_filter: ExternalSearchDateFilter | None,
-        time_filter_failure: TimeFilterFailureReason | None,
         as_of: datetime,
     ) -> CollectedNews:
+        date_filter, time_filter_failure = self._resolve_time_filter(
+            plan=plan,
+            as_of=as_of,
+        )
         tasks = plan.research_tasks
         effective_agent_count = resolve_external_search_agent_count(
             task_count=len(tasks),
@@ -85,21 +91,31 @@ class NewsCollector:
         )
         semaphore = asyncio.Semaphore(max(1, effective_agent_count))
 
-        async def run_task(task_index: int, task: ResearchTask) -> CollectedTask:
-            async with semaphore:
-                return await self._collect_task(
-                    task_index=task_index,
-                    task=task,
-                    external=external,
-                    date_filter=date_filter,
-                    time_filter_failure=time_filter_failure,
-                    plan=plan,
-                    as_of=as_of,
+        async with AsyncExitStack() as scope:
+            # 期間解決に失敗したRunは全taskで外部収集を行わないため資源を開かない。
+            external_search: ExternalSearch | None = (
+                None
+                if time_filter_failure is not None
+                else await scope.enter_async_context(
+                    self.external_search_scope_factory()
                 )
+            )
 
-        collected_tasks = await gather_cancel_on_error(
-            *[run_task(task_index, task) for task_index, task in enumerate(tasks)]
-        )
+            async def run_task(task_index: int, task: ResearchTask) -> CollectedTask:
+                async with semaphore:
+                    return await self._collect_task(
+                        task_index=task_index,
+                        task=task,
+                        external_search=external_search,
+                        date_filter=date_filter,
+                        time_filter_failure=time_filter_failure,
+                        plan=plan,
+                        as_of=as_of,
+                    )
+
+            collected_tasks = await gather_cancel_on_error(
+                *[run_task(task_index, task) for task_index, task in enumerate(tasks)]
+            )
         return CollectedNews(
             tasks=collected_tasks,
             requested_agent_count=self.requested_agent_count,
@@ -111,18 +127,17 @@ class NewsCollector:
         *,
         task_index: int,
         task: ResearchTask,
-        external: ExternalResearchRuntime,
+        external_search: ExternalSearch | None,
         date_filter: ExternalSearchDateFilter | None,
         time_filter_failure: TimeFilterFailureReason | None,
         plan: SearchPlan,
         as_of: datetime,
     ) -> CollectedTask:
-        # time filter失敗taskは外部収集自体を行わない(scopeは開いたまま)。
-        collected = await self.researcher.collect(
+        collected = await self.task_collector.collect(
             task_index=task_index,
             task=task,
-            external=None if time_filter_failure is not None else external,
-            date_filter=None if time_filter_failure is not None else date_filter,
+            external_search=external_search,
+            date_filter=date_filter,
             target_time_window=plan.target_time_window,
             as_of=as_of,
         )
@@ -165,7 +180,7 @@ def _external_collection_fields(
     if time_filter_failure is not None:
         return "time_filter_failed", [], 0
     external_status = collected.external_status
-    # time filter失敗以外の経路ではscopeが常に有効で、Researcherは必ずstatusを返す。
+    # 外部scopeが有効な経路ではtask collectorが必ずstatusを返す。
     assert external_status is not None  # noqa: S101
     return (
         external_status,

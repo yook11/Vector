@@ -1,7 +1,7 @@
-"""1つの ResearchTask に対して内部・外部の検索ヒットを集める Researcher。
+"""1つの ResearchTask に対して内部・外部の検索ヒットを集める ResearchTaskCollector。
 
-DB / Redis / HTTP client の生成は composition が所有し、Researcher は
-渡された検索能力と Runtime だけを使う(責任境界: Researcher は infrastructure
+DB / Redis / HTTP client の生成は composition が所有し、ResearchTaskCollector は
+渡された検索能力と Runtime だけを使う(責任境界: ResearchTaskCollector は infrastructure
 の構築を知らない)。
 """
 
@@ -23,7 +23,7 @@ from app.agent.contract import (
 )
 from app.agent.evidence_collection.external_search.agent import EXTERNAL_QUERY_AGENT
 from app.agent.evidence_collection.external_search.contract import (
-    ExternalResearchRuntime,
+    ExternalSearch,
     ExternalSearchDateFilter,
     ExternalSearchHit,
 )
@@ -38,7 +38,7 @@ from app.agent.evidence_collection.internal_search.query_embedding import (
 from app.agent.phase_span import agent_phase
 from app.agent.planning.contract import ResearchTask, TargetTimeWindow
 
-__all__ = ["ExternalCollectionStatus", "Researcher", "ResearchTaskHits"]
+__all__ = ["ExternalCollectionStatus", "ResearchTaskCollector", "ResearchTaskHits"]
 
 ExternalCollectionStatus = Literal[
     "succeeded", "query_generation_failed", "provider_failed"
@@ -59,7 +59,7 @@ class ResearchTaskHits:
 
 
 @dataclass(frozen=True, slots=True)
-class Researcher:
+class ResearchTaskCollector:
     """1つのResearchTaskについて内部・外部の検索ヒットを集める。精査と回答生成は持たない。"""
 
     internal_search: InternalSearch
@@ -70,7 +70,7 @@ class Researcher:
         *,
         task_index: int,
         task: ResearchTask,
-        external: ExternalResearchRuntime | None,
+        external_search: ExternalSearch | None,
         date_filter: ExternalSearchDateFilter | None,
         as_of: datetime,
         target_time_window: TargetTimeWindow | None = None,
@@ -80,7 +80,7 @@ class Researcher:
             self._collect_external(
                 task_index=task_index,
                 task=task,
-                external=external,
+                external_search=external_search,
                 date_filter=date_filter,
                 target_time_window=target_time_window,
                 as_of=as_of,
@@ -133,7 +133,7 @@ class Researcher:
         *,
         task_index: int,
         task: ResearchTask,
-        external: ExternalResearchRuntime | None,
+        external_search: ExternalSearch | None,
         date_filter: ExternalSearchDateFilter | None,
         target_time_window: TargetTimeWindow | None,
         as_of: datetime,
@@ -144,7 +144,7 @@ class Researcher:
         ExternalCollectionStatus | None,
         tuple[str, ...],
     ]:
-        if external is None:
+        if external_search is None:
             return [], 0, [], None, ()
 
         with agent_phase(
@@ -152,7 +152,7 @@ class Researcher:
             agent_name=EXTERNAL_QUERY_AGENT.name,
             task_index=task_index,
         ):
-            queries = await external.external_search.generate_queries(
+            queries = await external_search.generate_queries(
                 research_goal=task.research_goal,
                 as_of=as_of,
                 target_time_window=target_time_window,
@@ -163,7 +163,7 @@ class Researcher:
             ExternalSearchQueriesGeneratedEvent(task_index=task_index, queries=queries)
         )
 
-        execution = await external.external_search.search_queries(
+        execution = await external_search.search_queries(
             queries,
             date_filter=date_filter,
         )

@@ -1,4 +1,4 @@
-"""Researcher と AnsweringRunner が共有する汎用 async 配管。"""
+"""収集工程の fan-out が共有する汎用 async 配管。"""
 
 from __future__ import annotations
 
