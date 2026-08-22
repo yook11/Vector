@@ -19,6 +19,7 @@ from app.agent.answering.contract import AnsweringRequest
 from app.agent.answering.direct_answer.contract import DirectAnswerDraft
 from app.agent.answering.evidence_answer.contract import EvidenceAnswerDraft
 from app.agent.evidence_collection import NewsCollector, Researcher
+from app.agent.evidence_collection.external_search import ExternalSearchService
 from app.agent.evidence_collection.external_search.agent import EXTERNAL_QUERY_AGENT
 from app.agent.evidence_collection.external_search.contract import (
     ExternalResearchRuntime,
@@ -218,15 +219,17 @@ def _runner(
 ) -> tuple[AnsweringRunner, _FakeExternalSearchGateway]:
     tool = search_gateway or _FakeExternalSearchGateway()
     runtime = ExternalResearchRuntime(
-        query_runtime=DeepSeekAgentRuntime(
-            client=cast(AsyncOpenAI, query_client),
-            binding=EXTERNAL_QUERY_DEEPSEEK_BINDING,
+        external_search=ExternalSearchService(
+            query_runtime=DeepSeekAgentRuntime(
+                client=cast(AsyncOpenAI, query_client),
+                binding=EXTERNAL_QUERY_DEEPSEEK_BINDING,
+            ),
+            search_gateway=tool,
         ),
         reviewer_runtime=DeepSeekAgentRuntime(
             client=cast(AsyncOpenAI, reviewer_client),
             binding=EVIDENCE_REVIEWER_DEEPSEEK_BINDING,
         ),
-        search_gateway=tool,
     )
     phases = AnsweringPhases(
         planner=_Planner(),
@@ -610,11 +613,13 @@ def _two_task_query_failing_runtime() -> ExternalResearchRuntime:
     """
     query_failure = AgentResponseInvalidError(AgentResponseDefect.RESPONSE_NOT_JSON)
     return ExternalResearchRuntime(
-        query_runtime=ScriptedAgentRuntime([query_failure, query_failure]),
+        external_search=ExternalSearchService(
+            query_runtime=ScriptedAgentRuntime([query_failure, query_failure]),
+            search_gateway=_FakeExternalSearchGateway(),
+        ),
         reviewer_runtime=ScriptedAgentRuntime(
             [_review_draft_selecting_all_offered_options()]
         ),
-        search_gateway=_FakeExternalSearchGateway(),
     )
 
 

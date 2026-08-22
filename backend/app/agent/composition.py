@@ -187,6 +187,9 @@ class _ExternalResearchRuntimeFactory:
         from app.agent.evidence_collection.external_search.deepseek_binding import (
             EXTERNAL_QUERY_DEEPSEEK_BINDING,
         )
+        from app.agent.evidence_collection.external_search.service import (
+            ExternalSearchService,
+        )
         from app.agent.evidence_collection.external_search.tavily import (
             TavilyExternalSearchGateway,
         )
@@ -218,9 +221,11 @@ class _ExternalResearchRuntimeFactory:
                     client=tavily_client,
                 )
                 yield ExternalResearchRuntime(
-                    query_runtime=query_runtime,
+                    external_search=ExternalSearchService(
+                        query_runtime=query_runtime,
+                        search_gateway=search_gateway,
+                    ),
                     reviewer_runtime=reviewer_runtime,
-                    search_gateway=search_gateway,
                 )
 
 

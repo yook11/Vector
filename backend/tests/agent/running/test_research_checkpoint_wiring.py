@@ -22,6 +22,7 @@ from app.agent.answering.evidence_answer.contract import (
     EvidenceAnswerOutcome,
 )
 from app.agent.evidence_collection import NewsCollector, Researcher
+from app.agent.evidence_collection.external_search import ExternalSearchService
 from app.agent.evidence_collection.external_search.contract import (
     ExternalQueryDraft,
     ExternalResearchRuntime,
@@ -203,9 +204,11 @@ def _search_runner(
         reviewer=EvidenceReviewer(),
         external_runtime_factory=_RuntimeFactory(
             ExternalResearchRuntime(
-                query_runtime=query_runtime,  # type: ignore[arg-type]
+                external_search=ExternalSearchService(
+                    query_runtime=query_runtime,  # type: ignore[arg-type]
+                    search_gateway=gateway,  # type: ignore[arg-type]
+                ),
                 reviewer_runtime=reviewer_runtime,  # type: ignore[arg-type]
-                search_gateway=gateway,  # type: ignore[arg-type]
             )
         ),
         direct_answerer=_UnreachableDirectAnswerer(),

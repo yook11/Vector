@@ -9,6 +9,7 @@ from typing import Any
 import pytest
 
 from app.agent.evidence_collection import Researcher
+from app.agent.evidence_collection.external_search import ExternalSearchService
 from app.agent.evidence_collection.external_search.contract import (
     ExternalQueryDraft,
     ExternalResearchRuntime,
@@ -137,9 +138,11 @@ def _external_runtime(
     gateway: _FakeExternalSearchGateway | None = None,
 ) -> ExternalResearchRuntime:
     return ExternalResearchRuntime(
-        query_runtime=query_runtime,  # type: ignore[arg-type]
+        external_search=ExternalSearchService(
+            query_runtime=query_runtime,  # type: ignore[arg-type]
+            search_gateway=(gateway or _FakeExternalSearchGateway()),  # type: ignore[arg-type]
+        ),
         reviewer_runtime=ScriptedAgentRuntime([]),  # type: ignore[arg-type]
-        search_gateway=(gateway or _FakeExternalSearchGateway()),  # type: ignore[arg-type]
     )
 
 

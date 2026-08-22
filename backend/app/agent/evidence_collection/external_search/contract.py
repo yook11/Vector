@@ -42,6 +42,8 @@ __all__ = [
     "ExternalSearchProviderError",
     "ExternalResearchRuntime",
     "ExternalResearchRuntimeFactory",
+    "ExternalSearch",
+    "ExternalSearchExecution",
     "ExternalSearchFailureReason",
     "ExternalSearchGateway",
     "ExternalSearchRequest",
@@ -202,12 +204,37 @@ class ExternalSearchGateway(Protocol):
 
 
 @dataclass(frozen=True, slots=True)
-class ExternalResearchRuntime:
-    """external branchがscope内だけ借りるrole別Runtimeとgatewayの束。"""
+class ExternalSearchExecution:
+    """1 task分のquery群を実行した結果。hitsはquery横断で合流済みのpool。"""
 
-    query_runtime: AgentRuntime
+    hits: list[ExternalSearchHit]
+    provider_failed_query_count: int
+    executed_queries: tuple[str, ...]
+
+
+class ExternalSearch(Protocol):
+    async def generate_queries(
+        self,
+        *,
+        research_goal: str,
+        as_of: datetime,
+        target_time_window: TargetTimeWindow | None,
+    ) -> list[str]: ...
+
+    async def search_queries(
+        self,
+        queries: list[str],
+        *,
+        date_filter: ExternalSearchDateFilter | None,
+    ) -> ExternalSearchExecution: ...
+
+
+@dataclass(frozen=True, slots=True)
+class ExternalResearchRuntime:
+    """external branchがscope内だけ借りるserviceとreviewer runtimeの束。"""
+
+    external_search: ExternalSearch
     reviewer_runtime: AgentRuntime
-    search_gateway: ExternalSearchGateway
 
 
 class ExternalResearchRuntimeFactory(Protocol):

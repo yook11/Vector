@@ -14,7 +14,9 @@ from app.agent.evidence_collection.external_search.contract import (
     ExternalQueryGenerationInput,
     ExternalResearchRuntime,
     ExternalResearchRuntimeFactory,
+    ExternalSearch,
     ExternalSearchDateFilter,
+    ExternalSearchExecution,
     ExternalSearchFailureReason,
     ExternalSearchGateway,
     ExternalSearchHit,
@@ -26,6 +28,9 @@ from app.agent.evidence_collection.external_search.policy import (
     PROVIDER_SEARCH_TIMEOUT_SECONDS,
     QUERY_GENERATE_TIMEOUT_SECONDS,
     resolve_external_search_agent_count,
+)
+from app.agent.evidence_collection.external_search.service import (
+    ExternalSearchService,
 )
 from app.agent.evidence_collection.external_search.tavily import (
     TavilyExternalSearchGateway,
@@ -52,11 +57,14 @@ __all__ = [
     "ExternalQueryDraft",
     "ExternalQueryGenerationInput",
     "ExternalSearchHit",
+    "ExternalSearch",
     "ExternalSearchDateFilter",
+    "ExternalSearchExecution",
     "ExternalSearchFailureReason",
     "ExternalSearchGateway",
     "ExternalSearchProviderError",
     "ExternalSearchRequest",
+    "ExternalSearchService",
     "ExternalResearchRuntime",
     "ExternalResearchRuntimeFactory",
     "MISSING_ITEM_MAX_CHARS",

@@ -15,7 +15,10 @@ from app.agent.answering.evidence_answer.contract import (
     EvidenceAnswerUnavailable,
 )
 from app.agent.evidence_collection import NewsCollector, Researcher
-from app.agent.evidence_collection.external_search import ExternalResearchRuntime
+from app.agent.evidence_collection.external_search import (
+    ExternalResearchRuntime,
+    ExternalSearchService,
+)
 from app.agent.evidence_collection.external_search.contract import ExternalQueryDraft
 from app.agent.evidence_collection.internal_search.query_embedding import (
     InternalSearchQueries,
@@ -110,9 +113,11 @@ class _EmptyExternalRuntimeFactory:
     async def activate(self):
         self._timeline.append("external_runtime")
         yield ExternalResearchRuntime(
-            query_runtime=_EmptyExternalQueryRuntime(),  # type: ignore[arg-type]
+            external_search=ExternalSearchService(
+                query_runtime=_EmptyExternalQueryRuntime(),  # type: ignore[arg-type]
+                search_gateway=object(),  # type: ignore[arg-type]
+            ),
             reviewer_runtime=object(),  # type: ignore[arg-type]
-            search_gateway=object(),  # type: ignore[arg-type]
         )
 
 

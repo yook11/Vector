@@ -22,6 +22,7 @@ from app.agent.evidence_collection.external_search import (
     ExternalQueryDraft,
     ExternalResearchRuntime,
     ExternalSearchHit,
+    ExternalSearchService,
 )
 from app.agent.evidence_collection.internal_search import (
     InternalArticleContent,
@@ -474,13 +475,15 @@ def _external_runtime_for(
         {"selections": selections, "missing": missing}
     )
     return ExternalResearchRuntime(
-        query_runtime=FakeExternalQueryRuntime(queries_by_goal),  # type: ignore[arg-type]
+        external_search=ExternalSearchService(
+            query_runtime=FakeExternalQueryRuntime(queries_by_goal),  # type: ignore[arg-type]
+            search_gateway=FakeExternalTool(hits_by_query),  # type: ignore[arg-type]
+        ),
         reviewer_runtime=(
             reviewer_runtime
             if reviewer_runtime is not None
             else FakeEvidenceReviewerRuntime(draft, timeline=timeline)
         ),  # type: ignore[arg-type]
-        search_gateway=FakeExternalTool(hits_by_query),  # type: ignore[arg-type]
     )
 
 
@@ -811,9 +814,13 @@ async def test_answer_evidence_plan_skips_evidence_review_for_zero_hits() -> Non
     progress = FakeProgressReporter(timeline=timeline)
     task = _task(0)
     zero_hit_runtime = ExternalResearchRuntime(
-        query_runtime=FakeExternalQueryRuntime({task.research_goal: "fixture-query"}),
+        external_search=ExternalSearchService(
+            query_runtime=FakeExternalQueryRuntime(  # type: ignore[arg-type]
+                {task.research_goal: "fixture-query"}
+            ),
+            search_gateway=_ZeroHitExternalTool(),  # type: ignore[arg-type]
+        ),
         reviewer_runtime=_UnexpectedReviewerRuntime(),  # type: ignore[arg-type]
-        search_gateway=_ZeroHitExternalTool(),  # type: ignore[arg-type]
     )
     orchestrator, _, _, evidence_answerer, _ = _orchestrator(
         plan=_search_plan(tasks=[task]),
