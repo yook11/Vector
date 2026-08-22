@@ -89,7 +89,7 @@ async def test_internal_search_success_creates_span_scoped_to_task_without_agent
     await researcher.collect(
         task_index=3,
         task=_task("q"),
-        external=None,
+        external_search=None,
         date_filter=None,
         as_of=_AS_OF,
     )
@@ -122,7 +122,7 @@ async def test_internal_search_failure_marks_span_error_while_researcher_degrade
     collected = await researcher.collect(
         task_index=0,
         task=_task("q"),
-        external=None,
+        external_search=None,
         date_filter=None,
         as_of=_AS_OF,
     )
@@ -146,14 +146,14 @@ async def test_parallel_tasks_get_own_internal_search_span_with_distinct_task_in
         researcher.collect(
             task_index=0,
             task=_task("q0"),
-            external=None,
+            external_search=None,
             date_filter=None,
             as_of=_AS_OF,
         ),
         researcher.collect(
             task_index=1,
             task=_task("q1"),
-            external=None,
+            external_search=None,
             date_filter=None,
             as_of=_AS_OF,
         ),

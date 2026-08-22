@@ -20,7 +20,6 @@ from app.agent.contract import AnswerQuestionResult, ExternalUrlSource
 from app.agent.evidence_collection import NewsCollector, Researcher
 from app.agent.evidence_collection.external_search import (
     ExternalQueryDraft,
-    ExternalResearchRuntime,
     ExternalSearchHit,
     ExternalSearchService,
 )
@@ -51,7 +50,7 @@ from app.agent.runtime.contract import AgentResponseDefect, AgentResponseInvalid
 from app.agent.threads.contracts import ThreadMessageSnapshot
 from app.analysis.analyzed_article import InScopeAnalyzedArticle
 from app.analysis.assessment.domain.result import InScope, InScopeCategory
-from tests.agent.running._harness import run_identity
+from tests.agent.running._harness import ExternalScopes, run_identity
 from tests.agent.running._input_safety import AllowInputSafetyChecker
 
 
@@ -298,23 +297,29 @@ class FakeInternalSearch:
         return self._outcome.internal_hits
 
 
-class FakeExternalRuntimeFactory:
+class FakeExternalScopes:
     def __init__(
         self,
-        runtime: ExternalResearchRuntime | None = None,
+        scopes: ExternalScopes | None = None,
         *,
         timeline: CallTimeline | None = None,
     ) -> None:
-        self._runtime = runtime
+        self._scopes = scopes
         self._timeline = timeline
 
     @asynccontextmanager
-    async def activate(self):
+    async def external_search_scope(self):
         if self._timeline is not None:
-            self._timeline.record("external_runtime.activate")
-        if self._runtime is None:
-            raise AssertionError("external runtime must not activate for this plan")
-        yield self._runtime
+            self._timeline.record("external_search.activate")
+        if self._scopes is None:
+            raise AssertionError("external search must not activate for this plan")
+        yield self._scopes.external_search
+
+    @asynccontextmanager
+    async def reviewer_scope(self):
+        if self._scopes is None:
+            raise AssertionError("reviewer runtime must not activate for this plan")
+        yield self._scopes.reviewer_runtime
 
 
 class FakeExternalQueryRuntime:
@@ -401,7 +406,7 @@ def _external_runtime_for(
     internal_hits: list[InternalArticleSearchHit] | None = None,
     timeline: CallTimeline | None = None,
     reviewer_runtime: object | None = None,
-) -> ExternalResearchRuntime:
+) -> ExternalScopes:
     """S1: reviewerがRun全体の統合index空間(task_index昇順、group内は内部先・
 
     外部後)の全選択肢を採用する単一draftを組む(仕様「選択肢の渡し方」)。
@@ -474,7 +479,7 @@ def _external_runtime_for(
     draft = EvidenceReviewerDraft.model_validate(
         {"selections": selections, "missing": missing}
     )
-    return ExternalResearchRuntime(
+    return ExternalScopes(
         external_search=ExternalSearchService(
             query_runtime=FakeExternalQueryRuntime(queries_by_goal),  # type: ignore[arg-type]
             search_gateway=FakeExternalTool(hits_by_query),  # type: ignore[arg-type]
@@ -483,7 +488,7 @@ def _external_runtime_for(
             reviewer_runtime
             if reviewer_runtime is not None
             else FakeEvidenceReviewerRuntime(draft, timeline=timeline)
-        ),  # type: ignore[arg-type]
+        ),
     )
 
 
@@ -646,7 +651,7 @@ def _orchestrator(
     progress: FakeProgressReporter | None = None,
     timeline: CallTimeline | None = None,
     reviewer_runtime: object | None = None,
-    external_runtime_override: ExternalResearchRuntime | None = None,
+    external_runtime_override: ExternalScopes | None = None,
 ) -> tuple[
     _WorkflowHarness,
     FakePlanner,
@@ -660,7 +665,7 @@ def _orchestrator(
         timeline=timeline,
     )
     if external_runtime_override is not None:
-        external_runtime: ExternalResearchRuntime | None = external_runtime_override
+        external_runtime: ExternalScopes | None = external_runtime_override
     else:
         external_runtime = (
             _external_runtime_for(
@@ -675,16 +680,18 @@ def _orchestrator(
         )
     evidence_answerer = FakeEvidenceAnswerer(draft, timeline=timeline)
     direct_answerer = FakeDirectAnswerer(direct_draft, timeline=timeline)
+    external_scopes = FakeExternalScopes(external_runtime, timeline=timeline)
     phases = AnsweringPhases(
         planner=planner,
-        collector=NewsCollector(researcher=Researcher(internal_search=internal_search)),
-        external_runtime_factory=FakeExternalRuntimeFactory(
-            external_runtime,
-            timeline=timeline,
+        collector=NewsCollector(
+            researcher=Researcher(internal_search=internal_search),
+            external_search_scope_factory=external_scopes.external_search_scope,
         ),
         direct_answerer=direct_answerer,
         evidence_answerer=evidence_answerer,
-        reviewer=EvidenceReviewer(),
+        reviewer=EvidenceReviewer(
+            runtime_scope_factory=external_scopes.reviewer_scope,
+        ),
     )
     workflow = _WorkflowHarness(
         phases=phases,
@@ -793,7 +800,7 @@ async def test_answer_evidence_plan_orders_progress_and_port_calls() -> None:
     assert timeline.events[6] == "progress:evidence_collection"
     assert set(timeline.events[7:9]) == {
         "internal_search.search_articles",
-        "external_runtime.activate",
+        "external_search.activate",
     }
     assert timeline.events[9:] == [
         "progress:evidence_review",
@@ -813,14 +820,14 @@ async def test_answer_evidence_plan_skips_evidence_review_for_zero_hits() -> Non
     timeline = CallTimeline()
     progress = FakeProgressReporter(timeline=timeline)
     task = _task(0)
-    zero_hit_runtime = ExternalResearchRuntime(
+    zero_hit_runtime = ExternalScopes(
         external_search=ExternalSearchService(
             query_runtime=FakeExternalQueryRuntime(  # type: ignore[arg-type]
                 {task.research_goal: "fixture-query"}
             ),
             search_gateway=_ZeroHitExternalTool(),  # type: ignore[arg-type]
         ),
-        reviewer_runtime=_UnexpectedReviewerRuntime(),  # type: ignore[arg-type]
+        reviewer_runtime=_UnexpectedReviewerRuntime(),
     )
     orchestrator, _, _, evidence_answerer, _ = _orchestrator(
         plan=_search_plan(tasks=[task]),
@@ -852,7 +859,7 @@ async def test_answer_evidence_plan_skips_evidence_review_for_zero_hits() -> Non
     assert timeline.events[6] == "progress:evidence_collection"
     assert set(timeline.events[7:9]) == {
         "internal_search.search_articles",
-        "external_runtime.activate",
+        "external_search.activate",
     }
     assert timeline.events[9:] == [
         "progress:answering",
@@ -902,7 +909,7 @@ async def test_answer_evidence_plan_reports_evidence_review_when_review_fails() 
     assert timeline.events[6] == "progress:evidence_collection"
     assert set(timeline.events[7:9]) == {
         "internal_search.search_articles",
-        "external_runtime.activate",
+        "external_search.activate",
     }
     assert timeline.events[9:] == [
         "progress:evidence_review",
@@ -1253,7 +1260,7 @@ async def test_answer_step_failure_stops_before_later_progress_or_ports(
         event: timeline.events.index(event)
         for event in (
             "internal_search.search_articles",
-            "external_runtime.activate",
+            "external_search.activate",
         )
     }
     assert all(

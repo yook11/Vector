@@ -23,7 +23,6 @@ from app.agent.contract import (
     MISSING_ITEM_MAX_CHARS,
 )
 from app.agent.planning.contract import ExternalResearchTask, TargetTimeWindow
-from app.agent.runtime.contract import AgentRuntime
 from app.shared.security.safe_url import SafeUrl
 
 __all__ = [
@@ -40,13 +39,12 @@ __all__ = [
     "ExternalSearchHit",
     "ExternalSearchDateFilter",
     "ExternalSearchProviderError",
-    "ExternalResearchRuntime",
-    "ExternalResearchRuntimeFactory",
     "ExternalSearch",
     "ExternalSearchExecution",
     "ExternalSearchFailureReason",
     "ExternalSearchGateway",
     "ExternalSearchRequest",
+    "ExternalSearchScopeFactory",
     "MISSING_ITEM_MAX_CHARS",
     "TimeFilterFailureReason",
 ]
@@ -229,17 +227,7 @@ class ExternalSearch(Protocol):
     ) -> ExternalSearchExecution: ...
 
 
-@dataclass(frozen=True, slots=True)
-class ExternalResearchRuntime:
-    """external branchがscope内だけ借りるserviceとreviewer runtimeの束。"""
+class ExternalSearchScopeFactory(Protocol):
+    """external searchの資源scopeをserviceとして貸し出すcomposition port。"""
 
-    external_search: ExternalSearch
-    reviewer_runtime: AgentRuntime
-
-
-class ExternalResearchRuntimeFactory(Protocol):
-    """external branch単位で資源束を貸し出すcomposition port。"""
-
-    def activate(
-        self,
-    ) -> AbstractAsyncContextManager[ExternalResearchRuntime]: ...
+    def __call__(self) -> AbstractAsyncContextManager[ExternalSearch]: ...

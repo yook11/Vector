@@ -12,7 +12,7 @@ from app.agent.evidence_collection import Researcher
 from app.agent.evidence_collection.external_search import ExternalSearchService
 from app.agent.evidence_collection.external_search.contract import (
     ExternalQueryDraft,
-    ExternalResearchRuntime,
+    ExternalSearch,
     ExternalSearchHit,
     ExternalSearchProviderError,
 )
@@ -132,17 +132,14 @@ def _external_events(events: list[Any]) -> list[Any]:
     ]
 
 
-def _external_runtime(
+def _external_search(
     query_runtime: object,
     *,
     gateway: _FakeExternalSearchGateway | None = None,
-) -> ExternalResearchRuntime:
-    return ExternalResearchRuntime(
-        external_search=ExternalSearchService(
-            query_runtime=query_runtime,  # type: ignore[arg-type]
-            search_gateway=(gateway or _FakeExternalSearchGateway()),  # type: ignore[arg-type]
-        ),
-        reviewer_runtime=ScriptedAgentRuntime([]),  # type: ignore[arg-type]
+) -> ExternalSearch:
+    return ExternalSearchService(
+        query_runtime=query_runtime,  # type: ignore[arg-type]
+        search_gateway=(gateway or _FakeExternalSearchGateway()),  # type: ignore[arg-type]
     )
 
 
@@ -151,14 +148,14 @@ async def _collect(
     *,
     task_index: int = 0,
     task: ResearchTask | None = None,
-    external: ExternalResearchRuntime | None = None,
+    external: ExternalSearch | None = None,
     date_filter: object | None = None,
     as_of: datetime = _AS_OF,
 ) -> Any:
     return await researcher.collect(
         task_index=task_index,
         task=task or _task("task goal"),
-        external=external,
+        external_search=external,
         date_filter=date_filter,
         as_of=as_of,
     )
@@ -182,7 +179,7 @@ async def test_internal_failure_still_collects_external_hits() -> None:
     collected = await _collect(
         researcher,
         task=_task("goal", "internal query"),
-        external=_external_runtime(query_runtime, gateway=gateway),
+        external=_external_search(query_runtime, gateway=gateway),
     )
 
     assert (
@@ -215,7 +212,7 @@ async def test_external_provider_failure_keeps_internal_hits() -> None:
     collected = await _collect(
         researcher,
         task=_task("goal", "internal query"),
-        external=_external_runtime(query_runtime, gateway=gateway),
+        external=_external_search(query_runtime, gateway=gateway),
     )
 
     assert (
@@ -285,7 +282,7 @@ async def test_independent_collect_calls_do_not_leak_failure_between_tasks() -> 
             researcher,
             task_index=0,
             task=_task("failing", "bad"),
-            external=_external_runtime(
+            external=_external_search(
                 ScriptedAgentRuntime([_query_draft(["bad"])]), gateway=external_gateway
             ),
         ),
@@ -293,7 +290,7 @@ async def test_independent_collect_calls_do_not_leak_failure_between_tasks() -> 
             researcher,
             task_index=1,
             task=_task("succeeding", "good"),
-            external=_external_runtime(
+            external=_external_search(
                 ScriptedAgentRuntime([_query_draft(["good"])]), gateway=external_gateway
             ),
         ),
@@ -396,7 +393,7 @@ async def test_external_events_fire_in_order_with_task_index_and_payload() -> No
         researcher,
         task_index=1,
         task=_task("goal", "internal query"),
-        external=_external_runtime(query_runtime, gateway=gateway),
+        external=_external_search(query_runtime, gateway=gateway),
     )
 
     external_events = [event.model_dump() for event in _external_events(events.events)]
@@ -435,7 +432,7 @@ async def test_executed_queries_holds_generated_queries_in_order_on_success() ->
     collected = await _collect(
         researcher,
         task=_task("goal", "internal query"),
-        external=_external_runtime(query_runtime, gateway=gateway),
+        external=_external_search(query_runtime, gateway=gateway),
     )
 
     assert collected.executed_queries == ("first query", "second query")
@@ -463,7 +460,7 @@ async def test_executed_queries_drops_only_the_failed_query_preserving_order() -
     collected = await _collect(
         researcher,
         task=_task("goal", "internal query"),
-        external=_external_runtime(query_runtime, gateway=gateway),
+        external=_external_search(query_runtime, gateway=gateway),
     )
 
     assert collected.generated_queries == ["q1", "q2", "q3"]
@@ -489,7 +486,7 @@ async def test_executed_queries_is_empty_when_every_provider_call_fails() -> Non
     collected = await _collect(
         researcher,
         task=_task("goal", "internal query"),
-        external=_external_runtime(query_runtime, gateway=gateway),
+        external=_external_search(query_runtime, gateway=gateway),
     )
 
     assert collected.external_status == "provider_failed"
@@ -510,7 +507,7 @@ async def test_executed_queries_is_empty_when_query_generation_fails() -> None:
     collected = await _collect(
         researcher,
         task=_task("goal", "internal query"),
-        external=_external_runtime(query_runtime),
+        external=_external_search(query_runtime),
     )
 
     assert collected.external_status == "query_generation_failed"

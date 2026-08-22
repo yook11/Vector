@@ -33,9 +33,7 @@ from app.agent.answering.contract import AnsweringRequest
 from app.agent.answering.evidence_answer.contract import EvidenceAnswerOutcome
 from app.agent.evidence_collection import NewsCollector, Researcher
 from app.agent.evidence_collection.external_search import ExternalSearchService
-from app.agent.evidence_collection.external_search.contract import (
-    ExternalResearchRuntime,
-)
+from app.agent.evidence_collection.external_search.contract import ExternalSearch
 from app.agent.evidence_collection.internal_search.contract import (
     InternalArticleSearchHit,
     InternalSearchError,
@@ -80,6 +78,9 @@ from tests.agent.running._harness import (
     external_hit as _external_hit,
 )
 from tests.agent.running._harness import (
+    fixed_scope,
+)
+from tests.agent.running._harness import (
     internal_hit as _internal_hit,
 )
 from tests.agent.running._harness import (
@@ -106,15 +107,15 @@ def _plan(
     return SearchPlan(research_tasks=list(tasks), target_time_window=target_time_window)
 
 
-class _Scope(AbstractAsyncContextManager[ExternalResearchRuntime]):
-    def __init__(self, runtime: ExternalResearchRuntime) -> None:
-        self._runtime = runtime
+class _Scope(AbstractAsyncContextManager[ExternalSearch]):
+    def __init__(self, external_search: ExternalSearch) -> None:
+        self._external_search = external_search
         self.entered = False
         self.exit_calls = 0
 
-    async def __aenter__(self) -> ExternalResearchRuntime:
+    async def __aenter__(self) -> ExternalSearch:
         self.entered = True
-        return self._runtime
+        return self._external_search
 
     async def __aexit__(self, exc_type: object, exc: object, tb: object) -> bool:
         del exc_type, exc, tb
@@ -123,12 +124,12 @@ class _Scope(AbstractAsyncContextManager[ExternalResearchRuntime]):
 
 
 class _Factory:
-    def __init__(self, runtime: ExternalResearchRuntime) -> None:
-        self._runtime = runtime
+    def __init__(self, external_search: ExternalSearch) -> None:
+        self._external_search = external_search
         self.scopes: list[_Scope] = []
 
-    def activate(self) -> _Scope:
-        scope = _Scope(self._runtime)
+    def __call__(self) -> _Scope:
+        scope = _Scope(self._external_search)
         self.scopes.append(scope)
         return scope
 
@@ -176,21 +177,19 @@ def _runner(
     answerer: _EvidenceAnswerer | None = None,
 ) -> tuple[AnsweringRunner, _EvidenceAnswerer, _Factory]:
     answerer = answerer or _EvidenceAnswerer()
-    runtime = ExternalResearchRuntime(
-        external_search=ExternalSearchService(
+    factory = _Factory(
+        ExternalSearchService(
             query_runtime=query_runtime,  # type: ignore[arg-type]
             search_gateway=external_gateway,  # type: ignore[arg-type]
-        ),
-        reviewer_runtime=reviewer_runtime,  # type: ignore[arg-type]
+        )
     )
-    factory = _Factory(runtime)
     phases = AnsweringPhases(
         planner=_Planner(plan),
         collector=NewsCollector(
             researcher=Researcher(internal_search=internal_search, events=events),  # type: ignore[arg-type]
+            external_search_scope_factory=factory,
         ),
-        reviewer=EvidenceReviewer(),
-        external_runtime_factory=factory,
+        reviewer=EvidenceReviewer(runtime_scope_factory=fixed_scope(reviewer_runtime)),
         direct_answerer=_UnreachableDirectAnswerer(),
         evidence_answerer=answerer,
     )
@@ -450,9 +449,11 @@ async def test_task_with_only_external_hits_still_reaches_review() -> None:
 
 
 @pytest.mark.asyncio
-async def test_time_filter_failure_still_activates_external_scope_for_review() -> None:
-    """保証するテスト条件 11。time filter失敗でもreviewerのLLM runtimeが使えるよう
-    external runtime scopeがactivateされる(direct pathの非activateは不変)。
+async def test_time_filter_failure_skips_external_search_scope_but_still_reviews() -> (
+    None
+):
+    """保証するテスト条件 11。time filter失敗Runは外部検索の資源を開かない。
+    reviewerは自分のruntime scopeを持つため、精査はそのまま実行できる。
     """
     internal_search = _FakeInternalSearch(
         hits_by_query={
@@ -477,9 +478,7 @@ async def test_time_filter_failure_still_activates_external_scope_for_review() -
 
     await _run(runner)
 
-    assert len(factory.scopes) == 1
-    assert factory.scopes[0].entered is True
-    assert factory.scopes[0].exit_calls == 1
+    assert factory.scopes == []
     assert len(reviewer_runtime.calls) == 1
     assert [item.source.title for item in answerer.calls[0]] == ["internal hit"]
 

@@ -7,6 +7,8 @@ AnsweringRunnerを組んで実行するという同一契約のfake協力者と�
 
 from __future__ import annotations
 
+from collections.abc import AsyncIterator, Callable
+from contextlib import AbstractAsyncContextManager, asynccontextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
@@ -25,7 +27,7 @@ from app.agent.evidence_collection import CollectedNews
 from app.agent.evidence_collection.external_search import ExternalSearchService
 from app.agent.evidence_collection.external_search.contract import (
     ExternalQueryDraft,
-    ExternalResearchRuntime,
+    ExternalSearch,
     ExternalSearchHit,
 )
 from app.agent.evidence_collection.internal_search.contract import (
@@ -106,18 +108,36 @@ def internal_hit(
     )
 
 
+def fixed_scope[T](value: T) -> Callable[[], AbstractAsyncContextManager[T]]:
+    """同じ値を貸し続けるscope factory。資源のlifecycle検証は各テスト側で行う。"""
+
+    @asynccontextmanager
+    async def scope() -> AsyncIterator[T]:
+        yield value
+
+    return scope
+
+
+@dataclass(frozen=True, slots=True)
+class ExternalScopes:
+    """1 Run分の外部資源。collectorとreviewerがそれぞれ別に借りる。"""
+
+    external_search: ExternalSearch
+    reviewer_runtime: object
+
+
 def external_research_runtime(
     *,
     query_runtime: object,
     reviewer_runtime: object,
     gateway: object,
-) -> ExternalResearchRuntime:
-    return ExternalResearchRuntime(
+) -> ExternalScopes:
+    return ExternalScopes(
         external_search=ExternalSearchService(
             query_runtime=query_runtime,  # type: ignore[arg-type]
             search_gateway=gateway,  # type: ignore[arg-type]
         ),
-        reviewer_runtime=reviewer_runtime,  # type: ignore[arg-type]
+        reviewer_runtime=reviewer_runtime,
     )
 
 

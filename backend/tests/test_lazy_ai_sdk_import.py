@@ -127,15 +127,14 @@ def test_gemini_agent_runtime_scope_construction_keeps_provider_imports_lazy() -
     assert result.stdout.strip() == ""
 
 
-def test_external_runtime_factory_scope_construction_keeps_imports_lazy() -> None:
+def test_external_search_scope_construction_keeps_imports_lazy() -> None:
     """External factoryはscopeへ入るまでOpenAI SDKと具象Runtimeをloadしない。"""
     code = textwrap.dedent(
         """
         import sys
-        from app.agent.composition import build_external_research_runtime_factory
+        from app.agent.composition import activate_external_search
 
-        factory = build_external_research_runtime_factory()
-        factory.activate()
+        activate_external_search()
         forbidden = sorted(
             module
             for module in sys.modules

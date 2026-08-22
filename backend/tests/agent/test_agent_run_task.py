@@ -482,7 +482,6 @@ def test_composition_injects_same_live_controls_into_both_answer_flows(
     )
 
     captured: dict[str, dict[str, object]] = {}
-    external_runtime_factory = object()
     internal_search = object()
 
     def capture_direct(**kwargs: object) -> object:
@@ -497,11 +496,6 @@ def test_composition_injects_same_live_controls_into_both_answer_flows(
         composition,
         "ensure_external_search_configured",
         lambda: None,
-    )
-    monkeypatch.setattr(
-        composition,
-        "build_external_research_runtime_factory",
-        lambda: external_runtime_factory,
     )
     monkeypatch.setattr(direct_flow_module, "DirectAnswerFlow", capture_direct)
     monkeypatch.setattr(evidence_flow_module, "EvidenceAnswerFlow", capture_evidence)
@@ -546,7 +540,6 @@ def test_composition_injects_same_live_controls_into_both_answer_flows(
     )
     assert isinstance(phases, AnsweringPhases)
     assert phases.collector.researcher.internal_search is internal_search
-    assert phases.external_runtime_factory is external_runtime_factory
     assert phases.direct_answerer is not None
     assert phases.evidence_answerer is not None
 

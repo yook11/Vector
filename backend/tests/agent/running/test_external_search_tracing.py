@@ -22,7 +22,7 @@ from app.agent.evidence_collection import NewsCollector, Researcher
 from app.agent.evidence_collection.external_search import ExternalSearchService
 from app.agent.evidence_collection.external_search.agent import EXTERNAL_QUERY_AGENT
 from app.agent.evidence_collection.external_search.contract import (
-    ExternalResearchRuntime,
+    ExternalSearch,
     ExternalSearchHit,
     ExternalSearchRequest,
 )
@@ -53,7 +53,7 @@ from app.agent.runtime.deepseek import DeepSeekAgentRuntime
 from app.analysis.analyzed_article import InScopeAnalyzedArticle
 from app.analysis.assessment.domain.result import InScope, InScopeCategory
 from app.logfire.redaction import install_exception_redaction
-from tests.agent.running._harness import run_identity
+from tests.agent.running._harness import ExternalScopes, fixed_scope, run_identity
 from tests.agent.running._input_safety import AllowInputSafetyChecker
 from tests.agent.runtime._deepseek_helpers import FakeDeepSeekClient, function_response
 from tests.agent.runtime._fakes import ScriptedAgentRuntime
@@ -184,12 +184,12 @@ class _FakeExternalSearchGateway:
         ]
 
 
-class _Scope(AbstractAsyncContextManager[ExternalResearchRuntime]):
-    def __init__(self, runtime: ExternalResearchRuntime) -> None:
-        self._runtime = runtime
+class _Scope(AbstractAsyncContextManager[ExternalSearch]):
+    def __init__(self, external_search: ExternalSearch) -> None:
+        self._external_search = external_search
 
-    async def __aenter__(self) -> ExternalResearchRuntime:
-        return self._runtime
+    async def __aenter__(self) -> ExternalSearch:
+        return self._external_search
 
     async def __aexit__(
         self,
@@ -202,11 +202,14 @@ class _Scope(AbstractAsyncContextManager[ExternalResearchRuntime]):
 
 
 class _Factory:
-    def __init__(self, runtime: ExternalResearchRuntime) -> None:
-        self._runtime = runtime
+    def __init__(self, scopes: ExternalScopes) -> None:
+        self._scopes = scopes
 
-    def activate(self) -> _Scope:
-        return _Scope(self._runtime)
+    def reviewer_scope(self) -> AbstractAsyncContextManager[object]:
+        return fixed_scope(self._scopes.reviewer_runtime)()
+
+    def __call__(self) -> _Scope:
+        return _Scope(self._scopes.external_search)
 
 
 def _runner(
@@ -218,30 +221,32 @@ def _runner(
     evidence_answerer: object | None = None,
 ) -> tuple[AnsweringRunner, _FakeExternalSearchGateway]:
     tool = search_gateway or _FakeExternalSearchGateway()
-    runtime = ExternalResearchRuntime(
-        external_search=ExternalSearchService(
-            query_runtime=DeepSeekAgentRuntime(
-                client=cast(AsyncOpenAI, query_client),
-                binding=EXTERNAL_QUERY_DEEPSEEK_BINDING,
+    factory = _Factory(
+        ExternalScopes(
+            external_search=ExternalSearchService(
+                query_runtime=DeepSeekAgentRuntime(
+                    client=cast(AsyncOpenAI, query_client),
+                    binding=EXTERNAL_QUERY_DEEPSEEK_BINDING,
+                ),
+                search_gateway=tool,
             ),
-            search_gateway=tool,
-        ),
-        reviewer_runtime=DeepSeekAgentRuntime(
-            client=cast(AsyncOpenAI, reviewer_client),
-            binding=EVIDENCE_REVIEWER_DEEPSEEK_BINDING,
-        ),
+            reviewer_runtime=DeepSeekAgentRuntime(
+                client=cast(AsyncOpenAI, reviewer_client),
+                binding=EVIDENCE_REVIEWER_DEEPSEEK_BINDING,
+            ),
+        )
     )
     phases = AnsweringPhases(
         planner=_Planner(),
         collector=NewsCollector(
             researcher=Researcher(
                 internal_search=internal_search or _EmptyInternalSearch()
-            )
+            ),
+            external_search_scope_factory=factory,
         ),
-        external_runtime_factory=_Factory(runtime),
         direct_answerer=_UnreachableDirectAnswerer(),
         evidence_answerer=evidence_answerer or _EvidenceAnswerer(),
-        reviewer=EvidenceReviewer(),
+        reviewer=EvidenceReviewer(runtime_scope_factory=factory.reviewer_scope),
     )
     return (
         AnsweringRunner(
@@ -524,9 +529,9 @@ class _UnreachableEvidenceAnswerer:
         )
 
 
-class _UnreachableExternalFactory:
-    def activate(self) -> AbstractAsyncContextManager[ExternalResearchRuntime]:
-        raise AssertionError("external runtime scope must not activate on direct path")
+class _UnreachableExternalScope:
+    def __call__(self) -> AbstractAsyncContextManager[object]:
+        raise AssertionError("external scope must not activate on direct path")
 
 
 class _PerQueryInternalHitsSearch:
@@ -604,7 +609,7 @@ def _review_draft_selecting_all_offered_options() -> Any:
     )
 
 
-def _two_task_query_failing_runtime() -> ExternalResearchRuntime:
+def _two_task_query_failing_runtime() -> ExternalScopes:
     """外部query生成を2 task分とも失敗させ、外部ヒットを空に保つ(内部統計だけに絞る)。
 
     D4-S1: internalヒットが非空ならヒットゼロtaskではないためreviewerが起動する。
@@ -612,7 +617,7 @@ def _two_task_query_failing_runtime() -> ExternalResearchRuntime:
     枯渇の AssertionError で即 red になる)。
     """
     query_failure = AgentResponseInvalidError(AgentResponseDefect.RESPONSE_NOT_JSON)
-    return ExternalResearchRuntime(
+    return ExternalScopes(
         external_search=ExternalSearchService(
             query_runtime=ScriptedAgentRuntime([query_failure, query_failure]),
             search_gateway=_FakeExternalSearchGateway(),
@@ -673,12 +678,12 @@ async def test_direct_path_run_span_has_no_evidence_count_attributes(
     phases = AnsweringPhases(
         planner=_DirectPlanner(),
         collector=NewsCollector(
-            researcher=Researcher(internal_search=_EmptyInternalSearch())
+            researcher=Researcher(internal_search=_EmptyInternalSearch()),
+            external_search_scope_factory=_UnreachableExternalScope(),
         ),
-        external_runtime_factory=_UnreachableExternalFactory(),
         direct_answerer=_DirectAnswerer(),
         evidence_answerer=_UnreachableEvidenceAnswerer(),
-        reviewer=EvidenceReviewer(),
+        reviewer=EvidenceReviewer(runtime_scope_factory=_UnreachableExternalScope()),
     )
     runner = AnsweringRunner(
         input_safety_checker=AllowInputSafetyChecker(),
@@ -748,19 +753,20 @@ async def test_evidence_run_span_reports_post_dedup_internal_total(
             _internal_hit(assessment_id=3004, title="task1-unique", curation_id=4202),
         ],
     }
+    factory = _Factory(_two_task_query_failing_runtime())
     phases = AnsweringPhases(
         planner=_TwoTaskPlanner(
             _two_task_plan(task_queries=(["task0 query"], ["task1 query"]))
         ),
         collector=NewsCollector(
             researcher=Researcher(
-                internal_search=_PerQueryInternalHitsSearch(hits_by_query)
-            )
+                internal_search=_PerQueryInternalHitsSearch(hits_by_query),
+            ),
+            external_search_scope_factory=factory,
         ),
-        external_runtime_factory=_Factory(_two_task_query_failing_runtime()),
         direct_answerer=_UnreachableDirectAnswerer(),
         evidence_answerer=_EvidenceAnswerer(),
-        reviewer=EvidenceReviewer(),
+        reviewer=EvidenceReviewer(runtime_scope_factory=factory.reviewer_scope),
     )
     runner = AnsweringRunner(
         input_safety_checker=AllowInputSafetyChecker(),
@@ -792,6 +798,7 @@ async def test_evidence_run_span_reports_internal_collection_failed_task_count(
     全task成功時は0になる。
     """
     task_queries = ("task0 query", "task1 query")
+    factory = _Factory(_two_task_query_failing_runtime())
     phases = AnsweringPhases(
         planner=_TwoTaskPlanner(
             _two_task_plan(
@@ -803,12 +810,12 @@ async def test_evidence_run_span_reports_internal_collection_failed_task_count(
                 internal_search=_PerQueryFailableInternalSearch(
                     failing_queries=failing_queries
                 )
-            )
+            ),
+            external_search_scope_factory=factory,
         ),
-        external_runtime_factory=_Factory(_two_task_query_failing_runtime()),
         direct_answerer=_UnreachableDirectAnswerer(),
         evidence_answerer=_EvidenceAnswerer(),
-        reviewer=EvidenceReviewer(),
+        reviewer=EvidenceReviewer(runtime_scope_factory=factory.reviewer_scope),
     )
     runner = AnsweringRunner(
         input_safety_checker=AllowInputSafetyChecker(),

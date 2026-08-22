@@ -15,10 +15,7 @@ from app.agent.answering.evidence_answer.contract import (
     EvidenceAnswerUnavailable,
 )
 from app.agent.evidence_collection import NewsCollector, Researcher
-from app.agent.evidence_collection.external_search import (
-    ExternalResearchRuntime,
-    ExternalSearchService,
-)
+from app.agent.evidence_collection.external_search import ExternalSearchService
 from app.agent.evidence_collection.external_search.contract import ExternalQueryDraft
 from app.agent.evidence_collection.internal_search.query_embedding import (
     InternalSearchQueries,
@@ -34,7 +31,7 @@ from app.agent.planning.contract import (
 )
 from app.agent.question_context import AnswerBrief
 from app.agent.running import AnsweringPhases, AnsweringRunner, RunInput
-from tests.agent.running._harness import run_identity
+from tests.agent.running._harness import fixed_scope, run_identity
 from tests.agent.running._input_safety import AllowInputSafetyChecker
 
 RUN_ID = UUID("019bd239-1ed4-7fbb-a336-04fe3c197650")
@@ -105,19 +102,16 @@ class _EmptyExternalQueryRuntime:
         return ExternalQueryDraft(queries=[])
 
 
-class _EmptyExternalRuntimeFactory:
+class _EmptyExternalSearchScope:
     def __init__(self, timeline: list[str]) -> None:
         self._timeline = timeline
 
     @asynccontextmanager
-    async def activate(self):
-        self._timeline.append("external_runtime")
-        yield ExternalResearchRuntime(
-            external_search=ExternalSearchService(
-                query_runtime=_EmptyExternalQueryRuntime(),  # type: ignore[arg-type]
-                search_gateway=object(),  # type: ignore[arg-type]
-            ),
-            reviewer_runtime=object(),  # type: ignore[arg-type]
+    async def __call__(self):
+        self._timeline.append("external_search_scope")
+        yield ExternalSearchService(
+            query_runtime=_EmptyExternalQueryRuntime(),  # type: ignore[arg-type]
+            search_gateway=object(),  # type: ignore[arg-type]
         )
 
 
@@ -197,12 +191,12 @@ def _runner(
         return AnsweringPhases(
             planner=planner,
             collector=NewsCollector(
-                researcher=Researcher(internal_search=internal_search)
+                researcher=Researcher(internal_search=internal_search),
+                external_search_scope_factory=_EmptyExternalSearchScope(timeline),
             ),
-            external_runtime_factory=_EmptyExternalRuntimeFactory(timeline),
             direct_answerer=direct_answerer,
             evidence_answerer=evidence_answerer,
-            reviewer=EvidenceReviewer(),
+            reviewer=EvidenceReviewer(runtime_scope_factory=fixed_scope(object())),
         )
 
     return (
@@ -274,7 +268,7 @@ async def test_search_workflow_starts_both_retrieval_ports() -> None:
         "planner",
         "progress:evidence_collection",
     ]
-    assert set(timeline[7:9]) == {"internal_search", "external_runtime"}
+    assert set(timeline[7:9]) == {"internal_search", "external_search_scope"}
     # ヒットが内外ともゼロのため精査は呼ばれず、evidence_review は報告されない。
     assert timeline[9:] == [
         "progress:answering",

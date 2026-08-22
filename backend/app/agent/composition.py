@@ -10,7 +10,6 @@ from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from typing import TYPE_CHECKING
 
-from pydantic import SecretStr
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.agent.answering.direct_answer.agent import DIRECT_ANSWER_AGENT
@@ -22,10 +21,7 @@ from app.agent.contract import (
     AnswerProgressReporter,
 )
 from app.agent.evidence_collection import NewsCollector, Researcher
-from app.agent.evidence_collection.external_search.contract import (
-    ExternalResearchRuntime,
-    ExternalResearchRuntimeFactory,
-)
+from app.agent.evidence_collection.external_search.contract import ExternalSearch
 from app.agent.evidence_review import EvidenceReviewer
 from app.agent.input_safety.agent import INPUT_SAFETY_AGENT
 from app.agent.input_safety.service import InputSafetyService
@@ -33,6 +29,7 @@ from app.agent.planning.agent import QUESTION_PLANNER_AGENT
 from app.agent.question_context.agent import QUESTION_CONTEXT_AGENT
 from app.agent.question_context.service import QuestionContextService
 from app.agent.running import AnsweringPhases, AnsweringRunner
+from app.agent.runtime.contract import AgentRuntime
 from app.analysis.ai_provider_errors import (
     AIProviderConfigurationError,
 )
@@ -98,7 +95,6 @@ def _build_answering_phases(
     )
     from app.agent.planning.service import QuestionPlanningService
 
-    external_runtime_factory = build_external_research_runtime_factory()
     internal_search = InternalSearchService(
         embedder=GeminiQueryEmbedder(),
         article_search_repository=PgVectorArticleSearchRepository(session_factory),
@@ -114,10 +110,12 @@ def _build_answering_phases(
         ),
         collector=NewsCollector(
             researcher=Researcher(internal_search=internal_search, events=events),
+            external_search_scope_factory=activate_external_search,
             requested_agent_count=requested_external_agent_count,
         ),
-        reviewer=EvidenceReviewer(),
-        external_runtime_factory=external_runtime_factory,
+        reviewer=EvidenceReviewer(
+            runtime_scope_factory=activate_evidence_reviewer_runtime,
+        ),
         direct_answerer=DirectAnswerFlow(
             agent=DIRECT_ANSWER_AGENT,
             runtime_scope_factory=activate_gemini_agent_runtime,
@@ -168,69 +166,63 @@ def build_answering_runner(
     )
 
 
-class _ExternalResearchRuntimeFactory:
-    __slots__ = ("_deepseek_api_key", "_tavily_api_key")
+@asynccontextmanager
+async def activate_external_search() -> AsyncIterator[ExternalSearch]:
+    from openai import AsyncOpenAI
 
-    def __init__(
-        self,
-        *,
-        deepseek_api_key: SecretStr,
-        tavily_api_key: SecretStr,
-    ) -> None:
-        self._deepseek_api_key = deepseek_api_key
-        self._tavily_api_key = tavily_api_key
-
-    @asynccontextmanager
-    async def activate(self) -> AsyncIterator[ExternalResearchRuntime]:
-        from openai import AsyncOpenAI
-
-        from app.agent.evidence_collection.external_search.deepseek_binding import (
-            EXTERNAL_QUERY_DEEPSEEK_BINDING,
-        )
-        from app.agent.evidence_collection.external_search.service import (
-            ExternalSearchService,
-        )
-        from app.agent.evidence_collection.external_search.tavily import (
-            TavilyExternalSearchGateway,
-        )
-        from app.agent.evidence_review.deepseek_binding import (
-            EVIDENCE_REVIEWER_DEEPSEEK_BINDING,
-        )
-        from app.agent.runtime.deepseek import (
-            DEEPSEEK_BASE_URL,
-            DEEPSEEK_CLIENT_TIMEOUT_SECONDS,
-            DeepSeekAgentRuntime,
-        )
-
-        async with AsyncOpenAI(
-            api_key=self._deepseek_api_key.get_secret_value(),
-            base_url=DEEPSEEK_BASE_URL,
-            timeout=DEEPSEEK_CLIENT_TIMEOUT_SECONDS,
-        ) as deepseek_client:
-            query_runtime = DeepSeekAgentRuntime(
-                client=deepseek_client,
-                binding=EXTERNAL_QUERY_DEEPSEEK_BINDING,
-            )
-            reviewer_runtime = DeepSeekAgentRuntime(
-                client=deepseek_client,
-                binding=EVIDENCE_REVIEWER_DEEPSEEK_BINDING,
-            )
-            async with make_safe_async_client() as tavily_client:
-                search_gateway = TavilyExternalSearchGateway(
-                    api_key=self._tavily_api_key,
-                    client=tavily_client,
-                )
-                yield ExternalResearchRuntime(
-                    external_search=ExternalSearchService(
-                        query_runtime=query_runtime,
-                        search_gateway=search_gateway,
-                    ),
-                    reviewer_runtime=reviewer_runtime,
-                )
-
-
-def build_external_research_runtime_factory() -> ExternalResearchRuntimeFactory:
-    return _ExternalResearchRuntimeFactory(
-        deepseek_api_key=settings.deepseek_api_key,
-        tavily_api_key=settings.tavily_api_key,
+    from app.agent.evidence_collection.external_search.deepseek_binding import (
+        EXTERNAL_QUERY_DEEPSEEK_BINDING,
     )
+    from app.agent.evidence_collection.external_search.service import (
+        ExternalSearchService,
+    )
+    from app.agent.evidence_collection.external_search.tavily import (
+        TavilyExternalSearchGateway,
+    )
+    from app.agent.runtime.deepseek import (
+        DEEPSEEK_BASE_URL,
+        DEEPSEEK_CLIENT_TIMEOUT_SECONDS,
+        DeepSeekAgentRuntime,
+    )
+
+    async with AsyncOpenAI(
+        api_key=settings.deepseek_api_key.get_secret_value(),
+        base_url=DEEPSEEK_BASE_URL,
+        timeout=DEEPSEEK_CLIENT_TIMEOUT_SECONDS,
+    ) as deepseek_client:
+        query_runtime = DeepSeekAgentRuntime(
+            client=deepseek_client,
+            binding=EXTERNAL_QUERY_DEEPSEEK_BINDING,
+        )
+        async with make_safe_async_client() as tavily_client:
+            yield ExternalSearchService(
+                query_runtime=query_runtime,
+                search_gateway=TavilyExternalSearchGateway(
+                    api_key=settings.tavily_api_key,
+                    client=tavily_client,
+                ),
+            )
+
+
+@asynccontextmanager
+async def activate_evidence_reviewer_runtime() -> AsyncIterator[AgentRuntime]:
+    from openai import AsyncOpenAI
+
+    from app.agent.evidence_review.deepseek_binding import (
+        EVIDENCE_REVIEWER_DEEPSEEK_BINDING,
+    )
+    from app.agent.runtime.deepseek import (
+        DEEPSEEK_BASE_URL,
+        DEEPSEEK_CLIENT_TIMEOUT_SECONDS,
+        DeepSeekAgentRuntime,
+    )
+
+    async with AsyncOpenAI(
+        api_key=settings.deepseek_api_key.get_secret_value(),
+        base_url=DEEPSEEK_BASE_URL,
+        timeout=DEEPSEEK_CLIENT_TIMEOUT_SECONDS,
+    ) as deepseek_client:
+        yield DeepSeekAgentRuntime(
+            client=deepseek_client,
+            binding=EVIDENCE_REVIEWER_DEEPSEEK_BINDING,
+        )

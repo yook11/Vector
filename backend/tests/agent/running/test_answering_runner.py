@@ -219,9 +219,9 @@ class _UnreachableInternalSearch:
         raise AssertionError(f"internal search must not be called: {queries!r}")
 
 
-class _UnreachableExternalRuntimeFactory:
-    def activate(self) -> object:
-        raise AssertionError("external runtime must not activate")
+class _UnreachableExternalSearchScope:
+    def __call__(self) -> object:
+        raise AssertionError("external scope must not activate")
 
 
 class _UnreachableEvidenceAnswerer:
@@ -310,12 +310,14 @@ class _PhasesFactory:
         phases = AnsweringPhases(
             planner=self._planner,
             collector=NewsCollector(
-                researcher=Researcher(internal_search=_UnreachableInternalSearch())
+                researcher=Researcher(internal_search=_UnreachableInternalSearch()),
+                external_search_scope_factory=_UnreachableExternalSearchScope(),
             ),
-            external_runtime_factory=_UnreachableExternalRuntimeFactory(),
             direct_answerer=self._direct_answerer,
             evidence_answerer=_UnreachableEvidenceAnswerer(),
-            reviewer=EvidenceReviewer(),
+            reviewer=EvidenceReviewer(
+                runtime_scope_factory=_UnreachableExternalSearchScope(),
+            ),
         )
         self.created.append(phases)
         return phases

@@ -14,8 +14,7 @@ import app.agent.running as running_module
 from app.agent.answering.direct_answer.contract import DirectAnswerer
 from app.agent.answering.evidence_answer.contract import EvidenceAnswerer
 from app.agent.contract import AnswerQuestionResult
-from app.agent.evidence_collection import NewsCollector
-from app.agent.evidence_collection.external_search import ExternalResearchRuntimeFactory
+from app.agent.evidence_collection import EvidenceCollector
 from app.agent.evidence_review import EvidenceReviewer
 from app.agent.planning.contract import QuestionPlanner
 from app.agent.question_context import AnswerBrief
@@ -243,8 +242,7 @@ def test_answering_phases_owns_collector_without_internal_search_port() -> None:
     ) == (
         (
             ("planner", QuestionPlanner),
-            ("collector", NewsCollector),
-            ("external_runtime_factory", ExternalResearchRuntimeFactory),
+            ("collector", EvidenceCollector),
             ("direct_answerer", DirectAnswerer),
             ("evidence_answerer", EvidenceAnswerer),
             ("reviewer", EvidenceReviewer),
@@ -252,10 +250,9 @@ def test_answering_phases_owns_collector_without_internal_search_port() -> None:
         (
             "planner",
             "collector",
-            "external_runtime_factory",
             "direct_answerer",
             "evidence_answerer",
             "reviewer",
         ),
-        (True, True, True, True, True, True),
+        (True, True, True, True, True),
     )

@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Annotated, Literal, Self
+from datetime import datetime
+from typing import Annotated, Literal, Protocol, Self
 
 from pydantic import BaseModel, ConfigDict, Field, StringConstraints, model_validator
 
@@ -16,10 +17,12 @@ from app.agent.evidence_collection.external_search.contract import (
 from app.agent.evidence_collection.internal_search.contract import (
     InternalArticleSearchHit,
 )
+from app.agent.planning.contract import SearchPlan
 
 __all__ = [
     "CollectedNews",
     "CollectedTask",
+    "EvidenceCollector",
     "ResearchTaskReport",
     "TaskExternalCollectionStatus",
     "TaskInternalCollectionStatus",
@@ -136,3 +139,14 @@ class CollectedNews:
     @property
     def executed_queries_by_task(self) -> dict[int, tuple[str, ...]]:
         return {task.task_index: task.executed_queries for task in self.tasks}
+
+
+class EvidenceCollector(Protocol):
+    """Run単位の収集を外へ公開する契約。資源のscopeは実装が閉じる。"""
+
+    async def collect(
+        self,
+        *,
+        plan: SearchPlan,
+        as_of: datetime,
+    ) -> CollectedNews: ...

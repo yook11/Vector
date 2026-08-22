@@ -9,7 +9,6 @@ review skip/builder例外でNoneのまま回答が継続することだけを検
 
 from __future__ import annotations
 
-from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 from uuid import UUID
 
@@ -25,7 +24,6 @@ from app.agent.evidence_collection import NewsCollector, Researcher
 from app.agent.evidence_collection.external_search import ExternalSearchService
 from app.agent.evidence_collection.external_search.contract import (
     ExternalQueryDraft,
-    ExternalResearchRuntime,
     ExternalSearchFailureReason,
     ExternalSearchHit,
     ExternalSearchProviderError,
@@ -43,7 +41,7 @@ from app.agent.planning.contract import (
 from app.agent.question_context import AnswerBrief
 from app.agent.running import AnsweringPhases, AnsweringRunner, RunInput
 from app.agent.runtime.contract import AgentResponseDefect, AgentResponseInvalidError
-from tests.agent.running._harness import run_identity
+from tests.agent.running._harness import fixed_scope, run_identity
 from tests.agent.running._input_safety import AllowInputSafetyChecker
 from tests.agent.runtime._fakes import ScriptedAgentRuntime
 
@@ -145,9 +143,9 @@ class _EvidenceAnswerer:
         )
 
 
-class _UnreachableRuntimeFactory:
-    def activate(self) -> object:
-        raise AssertionError("external runtime must not activate")
+class _UnreachableScope:
+    def __call__(self) -> object:
+        raise AssertionError("external scope must not activate")
 
 
 class _FakeInternalSearch:
@@ -179,15 +177,6 @@ class _FakeExternalSearchGateway:
         return list(self._results.get(query, []))
 
 
-class _RuntimeFactory:
-    def __init__(self, runtime: ExternalResearchRuntime) -> None:
-        self._runtime = runtime
-
-    @asynccontextmanager
-    async def activate(self):
-        yield self._runtime
-
-
 def _search_runner(
     *,
     plan: SearchPlan,
@@ -199,18 +188,15 @@ def _search_runner(
         planner=_Planner(plan),
         collector=NewsCollector(
             researcher=Researcher(internal_search=_FakeInternalSearch()),
-            requested_agent_count=1,
-        ),
-        reviewer=EvidenceReviewer(),
-        external_runtime_factory=_RuntimeFactory(
-            ExternalResearchRuntime(
-                external_search=ExternalSearchService(
+            external_search_scope_factory=fixed_scope(
+                ExternalSearchService(
                     query_runtime=query_runtime,  # type: ignore[arg-type]
                     search_gateway=gateway,  # type: ignore[arg-type]
-                ),
-                reviewer_runtime=reviewer_runtime,  # type: ignore[arg-type]
-            )
+                )
+            ),
+            requested_agent_count=1,
         ),
+        reviewer=EvidenceReviewer(runtime_scope_factory=fixed_scope(reviewer_runtime)),
         direct_answerer=_UnreachableDirectAnswerer(),
         evidence_answerer=_EvidenceAnswerer(),
     )
@@ -277,10 +263,10 @@ async def test_direct_answer_plan_leaves_checkpoint_none() -> None:
     phases = AnsweringPhases(
         planner=_Planner(DirectAnswerPlan()),
         collector=NewsCollector(
-            researcher=Researcher(internal_search=_FakeInternalSearch())
+            researcher=Researcher(internal_search=_FakeInternalSearch()),
+            external_search_scope_factory=_UnreachableScope(),
         ),
-        reviewer=EvidenceReviewer(),
-        external_runtime_factory=_UnreachableRuntimeFactory(),
+        reviewer=EvidenceReviewer(runtime_scope_factory=_UnreachableScope()),
         direct_answerer=_DirectAnswerer(),
         evidence_answerer=_UnreachableEvidenceAnswerer(),
     )

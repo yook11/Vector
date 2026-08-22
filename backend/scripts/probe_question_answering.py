@@ -24,8 +24,9 @@ from app.agent.answering.evidence_answer.contract import EvidenceAnswerDraft
 from app.agent.answering.evidence_answer.evidence import AnswerInputEvidence
 from app.agent.answering.evidence_answer.flow import EvidenceAnswerFlow
 from app.agent.composition import (
+    activate_evidence_reviewer_runtime,
+    activate_external_search,
     activate_gemini_agent_runtime,
-    build_external_research_runtime_factory,
 )
 from app.agent.contract import (
     AnswerProgressEvent,
@@ -109,9 +110,14 @@ class _UnreachableDirectAnswerer:
         )
 
 
-class _UnreachableExternalRuntimeFactory:
-    def activate(self) -> object:
-        raise AssertionError("external runtime must not activate")
+class _UnreachableExternalSearchScope:
+    def __call__(self) -> object:
+        raise AssertionError("external search scope must not activate")
+
+
+class _UnreachableEvidenceReviewerScope:
+    def __call__(self) -> object:
+        raise AssertionError("evidence reviewer runtime must not activate")
 
 
 class _UnreachableEvidenceAnswerer:
@@ -231,10 +237,12 @@ async def _probe_search(
             planner=_FixedSearchPlanner(plan),
             collector=NewsCollector(
                 researcher=Researcher(internal_search=internal_search, events=events),
+                external_search_scope_factory=activate_external_search,
                 requested_agent_count=requested_agent_count,
             ),
-            reviewer=EvidenceReviewer(),
-            external_runtime_factory=build_external_research_runtime_factory(),
+            reviewer=EvidenceReviewer(
+                runtime_scope_factory=activate_evidence_reviewer_runtime,
+            ),
             evidence_answerer=EvidenceAnswerFlow(
                 agent=EVIDENCE_ANSWER_AGENT,
                 runtime_scope_factory=activate_gemini_agent_runtime,
@@ -278,9 +286,11 @@ async def _probe_direct(*, question: str) -> None:
             planner=_FixedDirectPlanner(DirectAnswerPlan()),
             collector=NewsCollector(
                 researcher=Researcher(internal_search=_UnreachableInternalSearch()),
+                external_search_scope_factory=_UnreachableExternalSearchScope(),
             ),
-            reviewer=EvidenceReviewer(),
-            external_runtime_factory=_UnreachableExternalRuntimeFactory(),
+            reviewer=EvidenceReviewer(
+                runtime_scope_factory=_UnreachableEvidenceReviewerScope(),
+            ),
             evidence_answerer=_UnreachableEvidenceAnswerer(),
             direct_answerer=DirectAnswerFlow(
                 agent=DIRECT_ANSWER_AGENT,
