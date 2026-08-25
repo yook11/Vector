@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from dataclasses import dataclass
 from typing import Protocol
 
@@ -12,13 +13,16 @@ from app.agent.evidence_collection.internal_search.contract import (
     InternalSearchError,
 )
 from app.agent.evidence_collection.internal_search.metrics import (
-    record_internal_retrieval_outcome,
     record_query_embedding_cache_outcome,
 )
 from app.agent.evidence_collection.internal_search.query_embedding import (
     InternalQueryEmbedder,
     InternalQueryEmbedding,
     InternalSearchQueries,
+)
+from app.agent.recording.internal_search import (
+    InternalSearchRecorder,
+    logfire_internal_search_recorder,
 )
 from app.analysis.ai_provider_errors import AIProviderError
 from app.analysis.embedding.domain.value_objects import EmbeddingVector
@@ -56,12 +60,40 @@ class InternalSearchService:
     embedder: InternalQueryEmbedder
     article_search_repository: ArticleVectorSearchRepository | None = None
     query_embedding_cache: InternalQueryEmbeddingCache | None = None
+    recorder: InternalSearchRecorder = logfire_internal_search_recorder
 
     async def search(
         self,
         queries: InternalSearchQueries,
     ) -> list[InternalArticleSearchHit]:
-        return await self._search_articles(queries)
+        call = await self.recorder.start()
+        query_count = len(queries.queries)
+        try:
+            hits = await self._search_articles(queries)
+            await self.recorder.end(
+                call,
+                outcome="succeeded" if hits else "empty",
+                query_count=query_count,
+            )
+            return hits
+        except InternalSearchError as exc:
+            await self.recorder.end(
+                call,
+                outcome="failed",
+                query_count=query_count,
+                failure_phase=exc.phase,
+            )
+            raise
+        except (asyncio.CancelledError, GeneratorExit):
+            await self.recorder.end(
+                call,
+                query_count=query_count,
+                stopped=True,
+            )
+            raise
+        except Exception:
+            await self.recorder.end(call, query_count=query_count)
+            raise
 
     async def embed_queries(
         self,
@@ -127,27 +159,13 @@ class InternalSearchService:
                 best_by_curation_id.values(),
                 key=lambda hit: hit.distance,
             )[:limit]
-        except Exception as exc:
-            failure_phase = (
-                exc.phase if isinstance(exc, InternalSearchError) else "unknown"
-            )
-            record_internal_retrieval_outcome(
-                result="failed",
+        except InternalSearchError as exc:
+            logger.warning(
+                "internal_search_failed",
+                failure_phase=exc.phase,
                 query_count=len(queries.queries),
-                failure_phase=failure_phase,
             )
-            if isinstance(exc, InternalSearchError):
-                logger.warning(
-                    "internal_search_failed",
-                    failure_phase=exc.phase,
-                    query_count=len(queries.queries),
-                )
             raise
-
-        record_internal_retrieval_outcome(
-            result="succeeded" if hits else "empty",
-            query_count=len(queries.queries),
-        )
         return hits
 
     async def _fetch_cached_query_vectors(

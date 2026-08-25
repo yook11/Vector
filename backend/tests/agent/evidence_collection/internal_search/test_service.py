@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 from dataclasses import fields
 from typing import Any
@@ -32,6 +33,7 @@ from app.analysis.embedding.domain.value_objects import (
     EMBEDDING_DIMENSION,
     EmbeddingVector,
 )
+from tests.agent.recording._fakes import RecordingInternalSearchRecorder
 from tests.logfire._metric_helpers import collected_metrics, sum_counter_for_result
 
 _METRIC = "vector.agent.internal_retrieval.outcome"
@@ -390,27 +392,29 @@ class TestInternalSearchService:
             }
         ]
 
-    async def test_search_articles_unclassified_failure_records_unknown_and_propagates(
+    async def test_search_articles_unclassified_failure_skips_outcome_counter(
         self,
         capfire: CaptureLogfire,
     ) -> None:
+        recorder = RecordingInternalSearchRecorder()
         service = InternalSearchService(
             embedder=FakeInternalQueryEmbedder(),
             article_search_repository=FakeArticleVectorSearchRepository(
                 {}, error=RuntimeError("repository bug")
             ),
+            recorder=recorder,
         )
 
         with pytest.raises(RuntimeError, match="repository bug"):
             await service.search(_queries("SECRET raw user question"))
 
-        assert _metric_attributes(collected_metrics(capfire), _METRIC) == [
-            {
-                "result": "failed",
-                "query_count": 1,
-                "failure_phase": "unknown",
-            }
-        ]
+        assert _metric_attributes(collected_metrics(capfire), _METRIC) == []
+        assert len(recorder.starts) == 1
+        recorded = recorder.ends[0]
+        assert recorded.outcome is None
+        assert recorded.failure_phase is None
+        assert recorded.stopped is False
+        assert recorded.query_count == 1
 
     async def test_search_returns_hits_through_port_without_event_reporter(
         self,
@@ -497,3 +501,78 @@ class TestInternalSearchService:
             (2, "別記事"),
         ]
         assert [hit.distance for hit in hits] == [0.1, 0.2]
+
+    async def test_search_records_completed_succeeded_for_hits(self) -> None:
+        recorder = RecordingInternalSearchRecorder()
+        service = InternalSearchService(
+            embedder=FakeInternalQueryEmbedder(),
+            article_search_repository=FakeArticleVectorSearchRepository(
+                {
+                    "NVIDIA": [
+                        _article_hit(curation_id=1, title="NVIDIA記事", distance=0.1)
+                    ],
+                }
+            ),
+            recorder=recorder,
+        )
+
+        hits = await service.search(_queries("NVIDIA"))
+
+        assert [hit.article.title for hit in hits] == ["NVIDIA記事"]
+        assert len(recorder.starts) == 1
+        recorded = recorder.ends[0]
+        assert recorded.call is recorder.starts[0]
+        assert recorded.outcome == "succeeded"
+        assert recorded.query_count == 1
+        assert recorded.failure_phase is None
+        assert recorded.stopped is False
+
+    async def test_search_records_completed_empty_for_zero_hits(self) -> None:
+        recorder = RecordingInternalSearchRecorder()
+        service = InternalSearchService(
+            embedder=FakeInternalQueryEmbedder(),
+            article_search_repository=FakeArticleVectorSearchRepository({}),
+            recorder=recorder,
+        )
+
+        hits = await service.search(_queries("NVIDIA"))
+
+        assert hits == []
+        recorded = recorder.ends[0]
+        assert recorded.outcome == "empty"
+        assert recorded.failure_phase is None
+        assert recorded.stopped is False
+
+    async def test_search_records_failed_with_phase_for_known_error(self) -> None:
+        recorder = RecordingInternalSearchRecorder()
+        service = InternalSearchService(
+            embedder=FakeInternalQueryEmbedder(),
+            article_search_repository=FakeArticleVectorSearchRepository(
+                {}, error=InternalSearchError(phase="article_search")
+            ),
+            recorder=recorder,
+        )
+
+        with pytest.raises(InternalSearchError):
+            await service.search(_queries("NVIDIA"))
+
+        recorded = recorder.ends[0]
+        assert recorded.outcome == "failed"
+        assert recorded.failure_phase == "article_search"
+        assert recorded.stopped is False
+
+    async def test_search_records_stopped_on_cancel(self) -> None:
+        recorder = RecordingInternalSearchRecorder()
+        service = InternalSearchService(
+            embedder=FakeInternalQueryEmbedder(error=asyncio.CancelledError()),
+            article_search_repository=FakeArticleVectorSearchRepository({}),
+            recorder=recorder,
+        )
+
+        with pytest.raises(asyncio.CancelledError):
+            await service.search(_queries("NVIDIA"))
+
+        recorded = recorder.ends[0]
+        assert recorded.outcome is None
+        assert recorded.failure_phase is None
+        assert recorded.stopped is True

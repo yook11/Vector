@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 from dataclasses import dataclass, field
 from datetime import datetime
+from typing import TYPE_CHECKING
 
 from app.agent.concurrency import gather_cancel_on_error
 from app.agent.evidence_collection.external_search.agent import EXTERNAL_QUERY_AGENT
@@ -33,8 +34,15 @@ from app.agent.evidence_collection.external_search.time_filter import (
 )
 from app.agent.phase_span import agent_phase
 from app.agent.planning.contract import ExternalResearchTask, TargetTimeWindow
+from app.agent.recording.external_search import (
+    ExternalSearchRecorder,
+    logfire_external_search_recorder,
+)
 from app.agent.runtime.contract import AgentResponseInvalidError, AgentRuntime
 from app.analysis.ai_provider_errors import AIProviderError
+
+if TYPE_CHECKING:
+    from app.agent.evidence_collection.contract import TaskExternalCollectionStatus
 
 __all__ = ["ExternalSearchService"]
 
@@ -55,6 +63,7 @@ class ExternalSearchService:
     search_gateway: ExternalSearchGateway
     _filter_memo: _PublicationFilterMemo = field(default_factory=_PublicationFilterMemo)
     _resolve_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
+    recorder: ExternalSearchRecorder = logfire_external_search_recorder
 
     async def search(
         self,
@@ -64,28 +73,42 @@ class ExternalSearchService:
         target_time_window: TargetTimeWindow | None,
         task_index: int,
     ) -> ExternalSearchExecution:
-        date_filter = await self._publication_filter(
-            target_time_window=target_time_window,
-            as_of=as_of,
-        )
-        with agent_phase(
-            phase="evidence_collection",
-            agent_name=EXTERNAL_QUERY_AGENT.name,
-            task_index=task_index,
-        ):
-            queries = await self._generate_queries(
-                research_goal=research_goal,
-                as_of=as_of,
+        call = await self.recorder.start()
+        try:
+            date_filter = await self._publication_filter(
                 target_time_window=target_time_window,
+                as_of=as_of,
             )
-        if not queries:
-            return ExternalSearchExecution(
-                generated_queries=(),
-                hits=[],
-                provider_failed_query_count=0,
-                executed_queries=(),
+            with agent_phase(
+                phase="evidence_collection",
+                agent_name=EXTERNAL_QUERY_AGENT.name,
+                task_index=task_index,
+            ):
+                queries = await self._generate_queries(
+                    research_goal=research_goal,
+                    as_of=as_of,
+                    target_time_window=target_time_window,
+                )
+            if not queries:
+                execution = ExternalSearchExecution(
+                    generated_queries=(),
+                    hits=[],
+                    provider_failed_query_count=0,
+                    executed_queries=(),
+                )
+            else:
+                execution = await self._search_queries(queries, date_filter=date_filter)
+            await self.recorder.end(
+                call,
+                outcome=_outcome_from_execution(execution),
             )
-        return await self._search_queries(queries, date_filter=date_filter)
+            return execution
+        except (asyncio.CancelledError, GeneratorExit):
+            await self.recorder.end(call, stopped=True)
+            raise
+        except Exception:
+            await self.recorder.end(call)
+            raise
 
     async def _publication_filter(
         self,
@@ -189,3 +212,13 @@ class ExternalSearchService:
         except (ExternalSearchProviderError, TimeoutError):
             return [], True
         return hits[:EXTERNAL_SEARCH_HITS_PER_QUERY], False
+
+
+def _outcome_from_execution(
+    execution: ExternalSearchExecution,
+) -> TaskExternalCollectionStatus:
+    if not execution.generated_queries:
+        return "query_generation_failed"
+    if execution.provider_failed_query_count == len(execution.generated_queries):
+        return "provider_failed"
+    return "succeeded"

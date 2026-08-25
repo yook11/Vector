@@ -6,7 +6,9 @@ from typing import Literal
 
 import logfire
 
-InternalRetrievalResult = Literal["succeeded", "empty", "failed"]
+from app.agent.evidence_collection.internal_search.contract import InternalSearchOutcome
+
+InternalRetrievalResult = InternalSearchOutcome
 InternalRetrievalFailurePhase = Literal[
     "query_embedding",
     "article_search",
