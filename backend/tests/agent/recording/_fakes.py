@@ -1,13 +1,31 @@
-"""LlmCallRecorder の記録を蓄積する test double。"""
+"""Recorder の記録を蓄積する test double。"""
 
 from __future__ import annotations
 
 from dataclasses import dataclass, field
 from time import perf_counter
 
-from app.agent.recording.types import LlmCall, LlmCallResult, PhaseStatus, Usage
+from app.agent.evidence_collection.contract import TaskExternalCollectionStatus
+from app.agent.evidence_collection.internal_search.contract import (
+    InternalSearchFailurePhase,
+    InternalSearchOutcome,
+)
+from app.agent.recording.types import (
+    LlmCall,
+    LlmCallResult,
+    PhaseCall,
+    PhaseStatus,
+    Usage,
+)
 
-__all__ = ["RecordingLlmCallRecorder"]
+__all__ = [
+    "RecordedExternalSearchEnd",
+    "RecordedInternalSearchEnd",
+    "RecordedLlmCallEnd",
+    "RecordingExternalSearchRecorder",
+    "RecordingInternalSearchRecorder",
+    "RecordingLlmCallRecorder",
+]
 
 
 @dataclass(frozen=True, slots=True)
@@ -55,5 +73,77 @@ class RecordingLlmCallRecorder:
                 status=status,
                 result=result,
                 usage=usage,
+            )
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class RecordedInternalSearchEnd:
+    call: PhaseCall
+    outcome: InternalSearchOutcome | None
+    query_count: int
+    failure_phase: InternalSearchFailurePhase | None
+    stopped: bool
+
+
+@dataclass(slots=True)
+class RecordingInternalSearchRecorder:
+    starts: list[PhaseCall] = field(default_factory=list)
+    ends: list[RecordedInternalSearchEnd] = field(default_factory=list)
+
+    async def start(self) -> PhaseCall:
+        call = PhaseCall(started_at=perf_counter())
+        self.starts.append(call)
+        return call
+
+    async def end(
+        self,
+        call: PhaseCall,
+        *,
+        query_count: int,
+        outcome: InternalSearchOutcome | None = None,
+        failure_phase: InternalSearchFailurePhase | None = None,
+        stopped: bool = False,
+    ) -> None:
+        self.ends.append(
+            RecordedInternalSearchEnd(
+                call=call,
+                outcome=outcome,
+                query_count=query_count,
+                failure_phase=failure_phase,
+                stopped=stopped,
+            )
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class RecordedExternalSearchEnd:
+    call: PhaseCall
+    outcome: TaskExternalCollectionStatus | None
+    stopped: bool
+
+
+@dataclass(slots=True)
+class RecordingExternalSearchRecorder:
+    starts: list[PhaseCall] = field(default_factory=list)
+    ends: list[RecordedExternalSearchEnd] = field(default_factory=list)
+
+    async def start(self) -> PhaseCall:
+        call = PhaseCall(started_at=perf_counter())
+        self.starts.append(call)
+        return call
+
+    async def end(
+        self,
+        call: PhaseCall,
+        *,
+        outcome: TaskExternalCollectionStatus | None = None,
+        stopped: bool = False,
+    ) -> None:
+        self.ends.append(
+            RecordedExternalSearchEnd(
+                call=call,
+                outcome=outcome,
+                stopped=stopped,
             )
         )

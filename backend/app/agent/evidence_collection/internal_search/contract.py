@@ -18,9 +18,11 @@ __all__ = [
     "InternalSearch",
     "InternalSearchError",
     "InternalSearchFailurePhase",
+    "InternalSearchOutcome",
 ]
 
 type InternalSearchFailurePhase = Literal["query_embedding", "article_search"]
+type InternalSearchOutcome = Literal["succeeded", "empty", "failed"]
 
 
 class InternalSearchError(Exception):
