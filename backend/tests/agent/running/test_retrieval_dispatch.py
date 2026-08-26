@@ -58,7 +58,6 @@ from app.agent.runtime.contract import AgentResponseDefect, AgentResponseInvalid
 from app.analysis.analyzed_article import InScopeAnalyzedArticle
 from app.analysis.assessment.domain.result import InScope, InScopeCategory
 from tests.agent.running._harness import ExternalScopes, fixed_scope, run_identity
-from tests.agent.running._input_safety import AllowInputSafetyChecker
 from tests.agent.runtime._fakes import GoalKeyedAgentRuntime, ScriptedAgentRuntime
 from tests.logfire._metric_helpers import collected_metrics
 
@@ -535,7 +534,6 @@ def _runner(
         reviewer=EvidenceReviewer(runtime_scope_factory=factory.reviewer_scope),
     )
     return AnsweringRunner(
-        input_safety_checker=AllowInputSafetyChecker(),
         context_preparer=_Preparer(),
         phases_factory=lambda: phases,
         progress=progress,
@@ -832,7 +830,6 @@ async def test_runner_preserves_internal_hit_order_into_synthesis() -> None:
         reviewer=EvidenceReviewer(runtime_scope_factory=factory.reviewer_scope),
     )
     runner = AnsweringRunner(
-        input_safety_checker=AllowInputSafetyChecker(),
         context_preparer=_Preparer(),
         phases_factory=lambda: phases,
         events=None,
@@ -878,7 +875,6 @@ async def test_runner_forwards_review_missing_to_the_evidence_answerer() -> None
         reviewer=EvidenceReviewer(runtime_scope_factory=factory.reviewer_scope),
     )
     runner = AnsweringRunner(
-        input_safety_checker=AllowInputSafetyChecker(),
         context_preparer=_Preparer(),
         phases_factory=lambda: phases,
         events=None,
@@ -1624,7 +1620,6 @@ async def test_internal_failure_still_reaches_reviewer_and_produces_evidence() -
         reviewer=EvidenceReviewer(runtime_scope_factory=factory.reviewer_scope),
     )
     runner = AnsweringRunner(
-        input_safety_checker=AllowInputSafetyChecker(),
         context_preparer=_Preparer(),
         phases_factory=lambda: phases,
         events=events,
@@ -1674,7 +1669,6 @@ async def test_external_provider_failure_keeps_internal_hits_in_final_evidence()
         reviewer=EvidenceReviewer(runtime_scope_factory=factory.reviewer_scope),
     )
     runner = AnsweringRunner(
-        input_safety_checker=AllowInputSafetyChecker(),
         context_preparer=_Preparer(),
         phases_factory=lambda: phases,
     )
@@ -1814,7 +1808,6 @@ async def test_runner_isolates_one_tasks_total_failure_from_sibling_evidence() -
         reviewer=EvidenceReviewer(runtime_scope_factory=factory.reviewer_scope),
     )
     runner = AnsweringRunner(
-        input_safety_checker=AllowInputSafetyChecker(),
         context_preparer=_Preparer(),
         phases_factory=lambda: phases,
     )

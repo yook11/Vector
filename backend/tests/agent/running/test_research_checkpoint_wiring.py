@@ -42,7 +42,6 @@ from app.agent.question_context import AnswerBrief
 from app.agent.running import AnsweringPhases, AnsweringRunner, RunInput
 from app.agent.runtime.contract import AgentResponseDefect, AgentResponseInvalidError
 from tests.agent.running._harness import fixed_scope, run_identity
-from tests.agent.running._input_safety import AllowInputSafetyChecker
 from tests.agent.runtime._fakes import ScriptedAgentRuntime
 
 RUN_ID = UUID("019bd239-1ed4-7fbb-a336-04fe3c197660")
@@ -200,7 +199,6 @@ def _search_runner(
         evidence_answerer=_EvidenceAnswerer(),
     )
     return AnsweringRunner(
-        input_safety_checker=AllowInputSafetyChecker(),
         context_preparer=_Preparer(),
         phases_factory=lambda: phases,
     )
@@ -270,7 +268,6 @@ async def test_direct_answer_plan_leaves_checkpoint_none() -> None:
         evidence_answerer=_UnreachableEvidenceAnswerer(),
     )
     runner = AnsweringRunner(
-        input_safety_checker=AllowInputSafetyChecker(),
         context_preparer=_Preparer(),
         phases_factory=lambda: phases,
     )

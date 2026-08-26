@@ -126,8 +126,6 @@ def test_probe_uses_answering_runner_without_removed_external_pipeline_seams() -
         "GeminiQueryEmbedder",
         "InternalSearchService",
         "PgVectorArticleSearchRepository",
-        "INPUT_SAFETY_AGENT",
-        "InputSafetyService",
         "RunIdentity",
         "RunInput",
         "async_sessionmaker",
@@ -281,7 +279,6 @@ def test_search_probe_injects_events_into_runner() -> None:
 
     assert len(runner_calls) == 1
     assert {keyword.arg for keyword in runner_calls[0].keywords} == {
-        "input_safety_checker",
         "context_preparer",
         "phases_factory",
         "events",
@@ -368,25 +365,6 @@ def test_search_probe_passes_actual_internal_and_external_dependencies_to_phases
     reviewer_scope = _keyword_value(reviewer, "runtime_scope_factory")
     assert isinstance(reviewer_scope, ast.Name)
     assert reviewer_scope.id == "activate_evidence_reviewer_runtime"
-
-
-def test_both_probe_paths_construct_runner_with_input_safety_service() -> None:
-    tree = _probe_tree()
-
-    for function_name in ("_probe_direct", "_probe_search"):
-        runner_calls = _calls(_function(tree, function_name), "AnsweringRunner")
-
-        assert len(runner_calls) == 1
-        input_safety = _keyword_value(runner_calls[0], "input_safety_checker")
-        assert isinstance(input_safety, ast.Call)
-        assert _call_name(input_safety) == "InputSafetyService"
-        assert {keyword.arg for keyword in input_safety.keywords} == {
-            "agent",
-            "runtime_scope_factory",
-        }
-        agent = _keyword_value(input_safety, "agent")
-        assert isinstance(agent, ast.Name)
-        assert agent.id == "INPUT_SAFETY_AGENT"
 
 
 def test_search_probe_summary_uses_final_result_plan_summary_and_events_only() -> None:

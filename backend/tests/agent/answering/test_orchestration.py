@@ -51,7 +51,6 @@ from app.agent.threads.contracts import ThreadMessageSnapshot
 from app.analysis.analyzed_article import InScopeAnalyzedArticle
 from app.analysis.assessment.domain.result import InScope, InScopeCategory
 from tests.agent.running._harness import ExternalScopes, run_identity
-from tests.agent.running._input_safety import AllowInputSafetyChecker
 
 
 def _as_of() -> datetime:
@@ -615,7 +614,6 @@ class _WorkflowHarness:
             else ()
         )
         runner = AnsweringRunner(
-            input_safety_checker=AllowInputSafetyChecker(timeline=self._timeline),
             context_preparer=_FixedContextPreparer(
                 input.answer_brief, timeline=self._timeline
             ),
@@ -740,7 +738,7 @@ async def test_answer_direct_plan_calls_direct_answerer_only() -> None:
 
 @pytest.mark.asyncio
 async def test_answer_direct_plan_orders_progress_and_port_calls() -> None:
-    """direct answer経路はsafety_check→context_resolution→planning→
+    """direct answer経路はcontext_resolution→planning→
 
     answeringの順に報告され、evidence_collectionとevidence_reviewは報告されない。
     """
@@ -756,8 +754,6 @@ async def test_answer_direct_plan_orders_progress_and_port_calls() -> None:
     await orchestrator.answer(_input("こんにちは"))
 
     assert timeline.events == [
-        "progress:safety_check",
-        "input_safety_checker.check",
         "progress:context_resolution",
         "context_preparer.prepare",
         "progress:planning",
@@ -769,10 +765,10 @@ async def test_answer_direct_plan_orders_progress_and_port_calls() -> None:
 
 @pytest.mark.asyncio
 async def test_answer_evidence_plan_orders_progress_and_port_calls() -> None:
-    """evidence経路はsafety_check→context_resolution→planning→
+    """evidence経路はcontext_resolution→planning→
 
     evidence_collection→evidence_review→answeringの順に報告され、各報告は
-    対応するport呼び出し(check/prepare/plan/collect/review/answer)の直前になる。
+    対応するport呼び出し(prepare/plan/collect/review/answer)の直前になる。
     """
     timeline = CallTimeline()
     progress = FakeProgressReporter(timeline=timeline)
@@ -789,20 +785,18 @@ async def test_answer_evidence_plan_orders_progress_and_port_calls() -> None:
 
     await orchestrator.answer(_input())
 
-    assert timeline.events[:6] == [
-        "progress:safety_check",
-        "input_safety_checker.check",
+    assert timeline.events[:4] == [
         "progress:context_resolution",
         "context_preparer.prepare",
         "progress:planning",
         "planner.plan",
     ]
-    assert timeline.events[6] == "progress:evidence_collection"
-    assert set(timeline.events[7:9]) == {
+    assert timeline.events[4] == "progress:evidence_collection"
+    assert set(timeline.events[5:7]) == {
         "internal_search.search_articles",
         "external_search.activate",
     }
-    assert timeline.events[9:] == [
+    assert timeline.events[7:] == [
         "progress:evidence_review",
         "reviewer.review",
         "progress:answering",
@@ -848,20 +842,18 @@ async def test_answer_evidence_plan_skips_evidence_review_for_zero_hits() -> Non
 
     assert result.status == "insufficient"
     assert "progress:evidence_review" not in timeline.events
-    assert timeline.events[:6] == [
-        "progress:safety_check",
-        "input_safety_checker.check",
+    assert timeline.events[:4] == [
         "progress:context_resolution",
         "context_preparer.prepare",
         "progress:planning",
         "planner.plan",
     ]
-    assert timeline.events[6] == "progress:evidence_collection"
-    assert set(timeline.events[7:9]) == {
+    assert timeline.events[4] == "progress:evidence_collection"
+    assert set(timeline.events[5:7]) == {
         "internal_search.search_articles",
         "external_search.activate",
     }
-    assert timeline.events[9:] == [
+    assert timeline.events[7:] == [
         "progress:answering",
         "evidence_answerer.answer",
     ]
@@ -898,20 +890,18 @@ async def test_answer_evidence_plan_reports_evidence_review_when_review_fails() 
     result = await orchestrator.answer(_input())
 
     assert result.status == "insufficient"
-    assert timeline.events[:6] == [
-        "progress:safety_check",
-        "input_safety_checker.check",
+    assert timeline.events[:4] == [
         "progress:context_resolution",
         "context_preparer.prepare",
         "progress:planning",
         "planner.plan",
     ]
-    assert timeline.events[6] == "progress:evidence_collection"
-    assert set(timeline.events[7:9]) == {
+    assert timeline.events[4] == "progress:evidence_collection"
+    assert set(timeline.events[5:7]) == {
         "internal_search.search_articles",
         "external_search.activate",
     }
-    assert timeline.events[9:] == [
+    assert timeline.events[7:] == [
         "progress:evidence_review",
         "reviewer.review",
         "reviewer.review",
@@ -1203,8 +1193,6 @@ async def test_answer_passes_none_time_window_for_search_plan() -> None:
             AssertionError("evidence_answerer must not be called"),
             "planner failed",
             [
-                "progress:safety_check",
-                "input_safety_checker.check",
                 "progress:context_resolution",
                 "context_preparer.prepare",
                 "progress:planning",
@@ -1291,8 +1279,6 @@ async def test_answer_direct_failure_stops_before_later_progress_or_ports() -> N
         await orchestrator.answer(_input("こんにちは"))
 
     assert timeline.events == [
-        "progress:safety_check",
-        "input_safety_checker.check",
         "progress:context_resolution",
         "context_preparer.prepare",
         "progress:planning",

@@ -89,7 +89,6 @@ from tests.agent.running._harness import (
 from tests.agent.running._harness import (
     review_draft as _draft,
 )
-from tests.agent.running._input_safety import AllowInputSafetyChecker
 from tests.agent.runtime._fakes import ScriptedAgentRuntime
 from tests.logfire._span_helpers import one_span_named
 
@@ -195,7 +194,6 @@ def _runner(
         evidence_answerer=answerer,
     )
     runner = AnsweringRunner(
-        input_safety_checker=AllowInputSafetyChecker(),
         context_preparer=_Preparer(answer_requirements=answer_requirements),
         phases_factory=lambda: phases,
         events=events,  # type: ignore[arg-type]

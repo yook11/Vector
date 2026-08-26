@@ -18,13 +18,6 @@ from app.agent.answering.evidence_answer.contract import EvidenceAnswerDraft
 from app.agent.contract import AnswerGenerationStopped
 from app.agent.evidence_collection import EvidenceCollectionService
 from app.agent.evidence_review import EvidenceReviewer
-from app.agent.input_safety.contract import (
-    InputSafetyBlocked,
-    InputSafetyBlockReason,
-    InputSafetyCheckResult,
-    InputSafetyPreviousTurn,
-    InputSafetyResult,
-)
 from app.agent.planning.contract import (
     DirectAnswerPlan,
     PlanningRequest,
@@ -43,9 +36,7 @@ from app.agent.running import (
     RunInput,
 )
 from app.agent.threads.contracts import ThreadMessageSnapshot
-from app.analysis.ai_provider_errors import AIProviderError
 from tests.agent.running._harness import THREAD_ID, USER_ID
-from tests.agent.running._input_safety import AllowInputSafetyChecker
 from tests.logfire._span_helpers import (
     domain_attr_keys,
     exception_event,
@@ -67,46 +58,6 @@ class _PrepareCall:
     history: list[ThreadMessageSnapshot]
     as_of: datetime
     run_id: UUID
-
-
-@dataclass(frozen=True, slots=True)
-class _InputSafetyCheckCall:
-    question: str
-    previous_turn: InputSafetyPreviousTurn | None
-    run_id: UUID
-
-
-class _FakeInputSafetyChecker:
-    def __init__(
-        self,
-        outcomes: list[InputSafetyCheckResult | BaseException],
-        *,
-        events: list[str] | None = None,
-    ) -> None:
-        self._outcomes = outcomes
-        self._events = events
-        self.calls: list[_InputSafetyCheckCall] = []
-
-    async def check(
-        self,
-        *,
-        question: str,
-        previous_turn: InputSafetyPreviousTurn | None,
-        run_id: UUID,
-    ) -> InputSafetyCheckResult:
-        self.calls.append(
-            _InputSafetyCheckCall(
-                question=question,
-                previous_turn=previous_turn,
-                run_id=run_id,
-            )
-        )
-        if self._events is not None:
-            self._events.append("input_safety")
-        outcome = self._outcomes[len(self.calls) - 1]
-        if isinstance(outcome, BaseException):
-            raise outcome
-        return outcome
 
 
 class _FakeProgressReporter:
@@ -327,27 +278,14 @@ def _runner(
     preparer: object,
     phases_factory: object,
     *,
-    input_safety_checker: object | None = None,
     progress: object | None = None,
     events: object | None = None,
 ) -> AnsweringRunner:
     return AnsweringRunner(
-        input_safety_checker=(
-            input_safety_checker
-            if input_safety_checker is not None
-            else AllowInputSafetyChecker()
-        ),
         context_preparer=preparer,  # type: ignore[arg-type]
         phases_factory=phases_factory,  # type: ignore[arg-type]
         progress=progress,  # type: ignore[arg-type]
         events=events,  # type: ignore[arg-type]
-    )
-
-
-def _allow_input_safety_result() -> InputSafetyCheckResult:
-    return InputSafetyCheckResult(
-        input_safety_result=InputSafetyResult.ALLOW,
-        block_reason=None,
     )
 
 
@@ -427,213 +365,6 @@ async def test_direct_path_reports_no_internal_or_external_search_events() -> No
     )
 
     assert reporter.events == []
-
-
-async def test_run_checks_safety_first_with_only_the_bounded_immediate_turn() -> None:
-    events: list[str] = []
-    current_question = "C" * 1001
-    previous_question = "U" * 1001
-    previous_answer = "A" * 1001
-    history = (
-        ThreadMessageSnapshot(role="user", content="older user question"),
-        ThreadMessageSnapshot(role="assistant", content="older answer"),
-        ThreadMessageSnapshot(role="user", content=previous_question),
-        ThreadMessageSnapshot(role="assistant", content=previous_answer),
-    )
-    context = AnswerBrief(standalone_question="整理済みの質問")
-    checker = _FakeInputSafetyChecker(
-        [_allow_input_safety_result()],
-        events=events,
-    )
-    preparer = _FakeContextPreparer([context], events=events)
-    factory, planner, direct_answerer = _direct_factory(
-        answers=["最終回答"],
-        events=events,
-    )
-
-    result = await _runner(
-        preparer,
-        factory,
-        input_safety_checker=checker,
-    ).run(
-        RunInput(question=current_question, history=history),
-        identity=_run_identity(),
-    )
-
-    assert checker.calls == [
-        _InputSafetyCheckCall(
-            question=current_question[:1000],
-            previous_turn=InputSafetyPreviousTurn(
-                user_question=previous_question[:1000],
-                assistant_answer=previous_answer[:1000],
-            ),
-            run_id=RUN_ID,
-        )
-    ]
-    assert events == [
-        "input_safety",
-        "prepare",
-        "phases_factory",
-        "planner",
-        "direct_answerer",
-    ]
-    assert len(preparer.calls) == len(planner.calls) == 1
-    assert len(direct_answerer.calls) == 1
-    assert result.final_output.answer == "最終回答"
-
-
-async def test_run_passes_no_previous_turn_when_history_is_empty() -> None:
-    checker = _FakeInputSafetyChecker([_allow_input_safety_result()])
-    context = AnswerBrief(standalone_question="整理済みの質問")
-    preparer = _FakeContextPreparer([context])
-    factory, _, _ = _direct_factory(answers=["最終回答"])
-
-    await _runner(
-        preparer,
-        factory,
-        input_safety_checker=checker,
-    ).run(
-        RunInput(question="最初の質問", history=()),
-        identity=_run_identity(),
-    )
-
-    assert checker.calls[0].previous_turn is None
-
-
-@pytest.mark.parametrize("previous_run_status", ["failed", "policy_blocked"])
-async def test_run_does_not_pair_an_older_answer_across_terminal_previous_turn(
-    previous_run_status: str,
-) -> None:
-    checker = _FakeInputSafetyChecker([_allow_input_safety_result()])
-    context = AnswerBrief(standalone_question="整理済みの質問")
-    preparer = _FakeContextPreparer([context])
-    factory, _, _ = _direct_factory(answers=["最終回答"])
-    history = (
-        ThreadMessageSnapshot(role="user", content="older user question"),
-        ThreadMessageSnapshot(role="assistant", content="older assistant answer"),
-        ThreadMessageSnapshot(
-            role="user",
-            content=f"latest {previous_run_status} user question",
-        ),
-    )
-
-    await _runner(
-        preparer,
-        factory,
-        input_safety_checker=checker,
-    ).run(
-        RunInput(question="current question", history=history),
-        identity=_run_identity(),
-    )
-
-    assert checker.calls[0].previous_turn == InputSafetyPreviousTurn(
-        user_question=f"latest {previous_run_status} user question",
-        assistant_answer=None,
-    )
-
-
-async def test_safety_block_short_circuits_without_starting_answering_work() -> None:
-    events: list[str] = []
-    reason = InputSafetyBlockReason.SELF_HARM_INSTRUCTIONS
-    checker = _FakeInputSafetyChecker(
-        [
-            InputSafetyCheckResult(
-                input_safety_result=InputSafetyResult.BLOCK,
-                block_reason=reason,
-            )
-        ],
-        events=events,
-    )
-    preparer = _FakeContextPreparer(
-        [AnswerBrief(standalone_question="到達してはいけない")],
-        events=events,
-    )
-    progress = _FakeProgressReporter()
-    factory, planner, direct_answerer = _direct_factory(
-        answers=["到達してはいけない"],
-        events=events,
-    )
-
-    with pytest.raises(InputSafetyBlocked) as raised:
-        await _runner(
-            preparer,
-            factory,
-            input_safety_checker=checker,
-            progress=progress,
-        ).run(
-            RunInput(question="current question", history=()),
-            identity=_run_identity(),
-        )
-
-    assert raised.value.block_reason is reason
-    assert len(checker.calls) == 1
-    assert preparer.calls == []
-    assert factory.calls == 0
-    assert planner.calls == []
-    assert direct_answerer.calls == []
-    # 検証工程には入っているため safety_check だけが報告され、後続工程は報告されない。
-    assert progress.calls == ["safety_check"]
-    assert events == ["input_safety"]
-
-
-async def test_safety_checker_failure_preserves_identity_and_stops_all_later_work() -> (
-    None
-):
-    error = AIProviderError("input safety unavailable")
-    checker = _FakeInputSafetyChecker([error])
-    preparer = _FakeContextPreparer(
-        [AnswerBrief(standalone_question="到達してはいけない")]
-    )
-    factory, planner, direct_answerer = _direct_factory(answers=["到達してはいけない"])
-
-    with pytest.raises(AIProviderError) as raised:
-        await _runner(
-            preparer,
-            factory,
-            input_safety_checker=checker,
-        ).run(
-            RunInput(question="current question", history=()),
-            identity=_run_identity(),
-        )
-
-    assert raised.value is error
-    assert preparer.calls == []
-    assert factory.calls == 0
-    assert planner.calls == []
-    assert direct_answerer.calls == []
-
-
-async def test_safety_block_closes_run_span_without_error(
-    capfire: CaptureLogfire,
-) -> None:
-    reason = InputSafetyBlockReason.CREDENTIAL_OR_PRIVACY_ABUSE
-    checker = _FakeInputSafetyChecker(
-        [
-            InputSafetyCheckResult(
-                input_safety_result=InputSafetyResult.BLOCK,
-                block_reason=reason,
-            )
-        ]
-    )
-    preparer = _FakeContextPreparer(
-        [AnswerBrief(standalone_question="到達してはいけない")]
-    )
-    factory, _, _ = _direct_factory(answers=["到達してはいけない"])
-
-    with pytest.raises(InputSafetyBlocked) as raised:
-        await _runner(
-            preparer,
-            factory,
-            input_safety_checker=checker,
-        ).run(
-            RunInput(question="current question", history=()),
-            identity=_run_identity(),
-        )
-
-    span = one_span_named(capfire, "agent_answering_run")
-    assert raised.value.block_reason is reason
-    assert exception_event(span) is None
-    assert span["attributes"].get("logfire.level_num", 0) < 17
 
 
 async def test_real_context_service_uses_empty_previous_answer_without_assistant() -> (

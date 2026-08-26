@@ -54,7 +54,6 @@ from app.analysis.analyzed_article import InScopeAnalyzedArticle
 from app.analysis.assessment.domain.result import InScope, InScopeCategory
 from app.logfire.redaction import install_exception_redaction
 from tests.agent.running._harness import ExternalScopes, fixed_scope, run_identity
-from tests.agent.running._input_safety import AllowInputSafetyChecker
 from tests.agent.runtime._deepseek_helpers import FakeDeepSeekClient, function_response
 from tests.agent.runtime._fakes import ScriptedAgentRuntime
 from tests.logfire._span_helpers import (
@@ -248,7 +247,6 @@ def _runner(
     )
     return (
         AnsweringRunner(
-            input_safety_checker=AllowInputSafetyChecker(),
             context_preparer=_Preparer(),
             phases_factory=lambda: phases,
         ),
@@ -684,7 +682,6 @@ async def test_direct_path_run_span_has_no_evidence_count_attributes(
         reviewer=EvidenceReviewer(runtime_scope_factory=_UnreachableExternalScope()),
     )
     runner = AnsweringRunner(
-        input_safety_checker=AllowInputSafetyChecker(),
         context_preparer=_Preparer(),
         phases_factory=lambda: phases,
     )
@@ -765,7 +762,6 @@ async def test_evidence_run_span_reports_post_dedup_internal_total(
         reviewer=EvidenceReviewer(runtime_scope_factory=factory.reviewer_scope),
     )
     runner = AnsweringRunner(
-        input_safety_checker=AllowInputSafetyChecker(),
         context_preparer=_Preparer(),
         phases_factory=lambda: phases,
     )
@@ -812,7 +808,6 @@ async def test_evidence_run_span_reports_internal_collection_failed_task_count(
         reviewer=EvidenceReviewer(runtime_scope_factory=factory.reviewer_scope),
     )
     runner = AnsweringRunner(
-        input_safety_checker=AllowInputSafetyChecker(),
         context_preparer=_Preparer(),
         phases_factory=lambda: phases,
     )

@@ -34,12 +34,6 @@ from app.agent.evidence_review import (
     EvidenceRunFailed,
     EvidenceRunResult,
 )
-from app.agent.input_safety.contract import (
-    INPUT_SAFETY_TEXT_CHAR_CAP,
-    InputSafetyBlocked,
-    InputSafetyChecker,
-)
-from app.agent.input_safety.history import previous_turn_from_history
 from app.agent.planning.contract import (
     DirectAnswerPlan,
     PlanningRequest,
@@ -69,13 +63,11 @@ class AnsweringRunner:
     def __init__(
         self,
         *,
-        input_safety_checker: InputSafetyChecker,
         context_preparer: AnswerBriefPreparer,
         phases_factory: AnsweringPhasesFactory,
         progress: AnswerProgressReporter | None = None,
         events: AnswerEventReporter | None = None,
     ) -> None:
-        self._input_safety_checker = input_safety_checker
         self._context_preparer = context_preparer
         self._phases_factory = phases_factory
         self._progress = progress
@@ -88,16 +80,6 @@ class AnsweringRunner:
         identity: RunIdentity,
     ) -> RunResult:
         with _answering_run_span(run_id=identity.run_id) as run_span:
-            await self._report_progress("safety_check")
-            safety_check = await self._input_safety_checker.check(
-                question=input.question[:INPUT_SAFETY_TEXT_CHAR_CAP],
-                previous_turn=previous_turn_from_history(input.history),
-                run_id=identity.run_id,
-            )
-            if safety_check.is_blocked:
-                assert safety_check.block_reason is not None  # noqa: S101
-                raise InputSafetyBlocked(block_reason=safety_check.block_reason)
-
             await self._report_progress("context_resolution")
             answer_brief = await self._context_preparer.prepare(
                 question=input.question,
@@ -319,11 +301,11 @@ def _record_citation_span_attributes(
 @contextmanager
 def _answering_run_span(*, run_id: UUID) -> Iterator[LogfireSpan]:
     """正常な停止制御を error にせず、同じ例外を span 終了後に再送出する。"""
-    stopped: AnswerGenerationStopped | InputSafetyBlocked | None = None
+    stopped: AnswerGenerationStopped | None = None
     with logfire.span(_SPAN_NAME, run_id=str(run_id)) as span:
         try:
             yield span
-        except (AnswerGenerationStopped, InputSafetyBlocked) as exc:
+        except AnswerGenerationStopped as exc:
             stopped = exc
     if stopped is not None:
         raise stopped
