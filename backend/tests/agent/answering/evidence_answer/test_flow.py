@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 from collections.abc import AsyncIterator, Sequence
 from contextlib import asynccontextmanager
@@ -29,6 +30,7 @@ from app.analysis.ai_provider_errors import (
     AIProviderOutputTruncatedError,
 )
 from app.analysis.gemini_error_translator import GeminiStateReason
+from tests.agent.recording._fakes import RecordingEvidenceAnswerRecorder
 from tests.logfire._metric_helpers import (
     collected_metrics,
     counter_attribute_key_sets,
@@ -98,7 +100,7 @@ def _operation_names(reporter: RecordingDeltaReporter) -> list[tuple[str, int]]:
     return [(name, generation) for name, generation, _ in reporter.operations]
 
 
-StreamOutcome = str | Sequence[str] | Exception
+StreamOutcome = str | Sequence[str] | BaseException
 
 
 class FakeEvidenceAnswerStream:
@@ -109,8 +111,8 @@ class FakeEvidenceAnswerStream:
         attempt_number: int,
         events: list[str],
     ) -> None:
-        if isinstance(outcome, Exception):
-            self._items: list[str | Exception] = [outcome]
+        if isinstance(outcome, BaseException):
+            self._items: list[str | BaseException] = [outcome]
         elif isinstance(outcome, str):
             self._items = [outcome]
         else:
@@ -127,7 +129,7 @@ class FakeEvidenceAnswerStream:
         if not self._items:
             raise StopAsyncIteration
         item = self._items.pop(0)
-        if isinstance(item, Exception):
+        if isinstance(item, BaseException):
             raise item
         return item
 
@@ -246,6 +248,7 @@ async def _answer(
     delta_reporter: RecordingDeltaReporter | None = None,
     continuation: SequenceContinuation | None = None,
     request: AnsweringRequest | None = None,
+    recorder: RecordingEvidenceAnswerRecorder | None = None,
 ) -> EvidenceAnswerOutcome:
     flow_kwargs: dict[str, Any] = {
         "agent": EVIDENCE_ANSWER_AGENT,
@@ -255,6 +258,8 @@ async def _answer(
         flow_kwargs["delta_reporter"] = delta_reporter
     if continuation is not None:
         flow_kwargs["continuation"] = continuation
+    if recorder is not None:
+        flow_kwargs["recorder"] = recorder
     return await EvidenceAnswerFlow(**flow_kwargs).answer(
         request=_request() if request is None else request,
         evidence=[_evidence()] if evidence is None else evidence,
@@ -273,6 +278,26 @@ def _metric_attributes(
     return [
         data_point.get("attributes", {}) for data_point in metric["data"]["data_points"]
     ]
+
+
+def _assert_recorded(
+    recorder: RecordingEvidenceAnswerRecorder,
+    *,
+    outcome: str | None,
+    stopped: bool = False,
+    retry_used: bool = False,
+    fallback_used: bool = False,
+    failure_code: str | None = None,
+) -> None:
+    assert len(recorder.starts) == 1
+    assert len(recorder.ends) == 1
+    recorded = recorder.ends[0]
+    assert recorded.call is recorder.starts[0]
+    assert recorded.outcome == outcome
+    assert recorded.stopped is stopped
+    assert recorded.retry_used is retry_used
+    assert recorded.fallback_used is fallback_used
+    assert recorded.failure_code == failure_code
 
 
 @pytest.mark.asyncio
@@ -903,3 +928,93 @@ async def test_truncation_mid_stream_aborts_live_draft_and_resets_generation_two
     operations = _operation_names(reporter)
     assert operations.index(("abort", 1)) < operations.index(("reset", 2))
     assert all(stream.closed for stream in generator.streams)
+
+
+@pytest.mark.asyncio
+async def test_successful_answer_records_synthesized_outcome() -> None:
+    """完成 draft は recorder へ synthesized を1回渡す。"""
+
+    recorder = RecordingEvidenceAnswerRecorder()
+    generator = FakeGenerator(["根拠から確認できます。[[1]]"])
+
+    await _answer(generator, recorder=recorder)
+
+    _assert_recorded(recorder, outcome="synthesized")
+
+
+@pytest.mark.asyncio
+async def test_classified_failure_records_fallback_outcome() -> None:
+    """分類済み失敗は recorder へ fallback を1回渡す。"""
+
+    recorder = RecordingEvidenceAnswerRecorder()
+    generator = FakeGenerator([AIProviderNetworkError()])
+
+    outcome = await _answer(generator, recorder=recorder)
+
+    assert isinstance(outcome, EvidenceAnswerUnavailable)
+    _assert_recorded(
+        recorder,
+        outcome="fallback",
+        fallback_used=True,
+        failure_code="ai_error_network",
+    )
+
+
+@pytest.mark.asyncio
+async def test_generation_stop_records_stopped_without_outcome() -> None:
+    """AnswerGenerationStopped は stopped とし、既存結論を渡さない。"""
+
+    recorder = RecordingEvidenceAnswerRecorder()
+    generator = FakeGenerator(["根拠から確認できます。[[1]]"])
+
+    with pytest.raises(AnswerGenerationStopped):
+        await _answer(
+            generator,
+            continuation=SequenceContinuation([False]),
+            recorder=recorder,
+        )
+
+    _assert_recorded(recorder, outcome=None, stopped=True)
+
+
+@pytest.mark.asyncio
+async def test_stop_after_provider_error_records_stopped_without_fallback() -> None:
+    """fallback 前の stop は既存結論を渡さない。"""
+
+    recorder = RecordingEvidenceAnswerRecorder()
+    generator = FakeGenerator([AIProviderNetworkError()])
+
+    with pytest.raises(AnswerGenerationStopped):
+        await _answer(
+            generator,
+            continuation=SequenceContinuation([True, False]),
+            recorder=recorder,
+        )
+
+    _assert_recorded(recorder, outcome=None, stopped=True)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "error",
+    [
+        pytest.param(RuntimeError("bug in generator"), id="unknown"),
+        pytest.param(asyncio.CancelledError(), id="cancellation"),
+    ],
+)
+async def test_unclassified_failure_and_cancellation_record_without_outcome(
+    error: BaseException,
+) -> None:
+    """未分類と cancel は既存結論を渡さず、cancel だけ stopped にする。"""
+
+    recorder = RecordingEvidenceAnswerRecorder()
+    generator = FakeGenerator([error])
+
+    with pytest.raises(type(error)):
+        await _answer(generator, recorder=recorder)
+
+    _assert_recorded(
+        recorder,
+        outcome=None,
+        stopped=isinstance(error, asyncio.CancelledError),
+    )

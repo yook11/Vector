@@ -5,6 +5,11 @@ from app.agent.recording.direct_answer import (
     LogfireDirectAnswerRecorder,
     logfire_direct_answer_recorder,
 )
+from app.agent.recording.evidence_answer import (
+    EvidenceAnswerRecorder,
+    LogfireEvidenceAnswerRecorder,
+    logfire_evidence_answer_recorder,
+)
 from app.agent.recording.external_search import (
     ExternalSearchRecorder,
     LogfireExternalSearchRecorder,
@@ -42,12 +47,14 @@ from app.agent.recording.types import (
 
 __all__ = [
     "DirectAnswerRecorder",
+    "EvidenceAnswerRecorder",
     "ExternalSearchRecorder",
     "InternalSearchRecorder",
     "LlmCall",
     "LlmCallRecorder",
     "LlmCallResult",
     "LogfireDirectAnswerRecorder",
+    "LogfireEvidenceAnswerRecorder",
     "LogfireExternalSearchRecorder",
     "LogfireInternalSearchRecorder",
     "LogfireLlmCallRecorder",
@@ -60,6 +67,7 @@ __all__ = [
     "ToolCall",
     "Usage",
     "logfire_direct_answer_recorder",
+    "logfire_evidence_answer_recorder",
     "logfire_external_search_recorder",
     "logfire_internal_search_recorder",
     "logfire_llm_call_recorder",
