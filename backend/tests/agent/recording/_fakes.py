@@ -6,6 +6,7 @@ from dataclasses import dataclass, field
 from time import perf_counter
 from typing import Literal
 
+from app.agent.answering.metrics import DirectAnswerOutcomeResult
 from app.agent.contract import PlanType
 from app.agent.evidence_collection.contract import TaskExternalCollectionStatus
 from app.agent.evidence_collection.internal_search.contract import (
@@ -17,11 +18,13 @@ from app.agent.question_context.metrics import QuestionContextOutcome
 from app.agent.recording.types import LlmCall, LlmCallResult, PhaseCall, Usage
 
 __all__ = [
+    "RecordedDirectAnswerEnd",
     "RecordedExternalSearchEnd",
     "RecordedInternalSearchEnd",
     "RecordedLlmCallEnd",
     "RecordedPlanningEnd",
     "RecordedQuestionContextEnd",
+    "RecordingDirectAnswerRecorder",
     "RecordingExternalSearchRecorder",
     "RecordingInternalSearchRecorder",
     "RecordingLlmCallRecorder",
@@ -229,6 +232,45 @@ class RecordingQuestionContextRecorder:
                 outcome=outcome,
                 prompt_version=prompt_version,
                 ai_model=ai_model,
+                failure_code=failure_code,
+                stopped=stopped,
+            )
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class RecordedDirectAnswerEnd:
+    call: PhaseCall
+    outcome: DirectAnswerOutcomeResult | None
+    retry_used: bool
+    failure_code: str | None
+    stopped: bool
+
+
+@dataclass(slots=True)
+class RecordingDirectAnswerRecorder:
+    starts: list[PhaseCall] = field(default_factory=list)
+    ends: list[RecordedDirectAnswerEnd] = field(default_factory=list)
+
+    async def start(self) -> PhaseCall:
+        call = PhaseCall(started_at=perf_counter())
+        self.starts.append(call)
+        return call
+
+    async def end(
+        self,
+        call: PhaseCall,
+        *,
+        outcome: DirectAnswerOutcomeResult | None = None,
+        retry_used: bool = False,
+        failure_code: str | None = None,
+        stopped: bool = False,
+    ) -> None:
+        self.ends.append(
+            RecordedDirectAnswerEnd(
+                call=call,
+                outcome=outcome,
+                retry_used=retry_used,
                 failure_code=failure_code,
                 stopped=stopped,
             )

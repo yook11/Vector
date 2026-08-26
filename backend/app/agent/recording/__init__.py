@@ -1,5 +1,10 @@
 """Agent 実行の記録語彙。"""
 
+from app.agent.recording.direct_answer import (
+    DirectAnswerRecorder,
+    LogfireDirectAnswerRecorder,
+    logfire_direct_answer_recorder,
+)
 from app.agent.recording.external_search import (
     ExternalSearchRecorder,
     LogfireExternalSearchRecorder,
@@ -36,11 +41,13 @@ from app.agent.recording.types import (
 )
 
 __all__ = [
+    "DirectAnswerRecorder",
     "ExternalSearchRecorder",
     "InternalSearchRecorder",
     "LlmCall",
     "LlmCallRecorder",
     "LlmCallResult",
+    "LogfireDirectAnswerRecorder",
     "LogfireExternalSearchRecorder",
     "LogfireInternalSearchRecorder",
     "LogfireLlmCallRecorder",
@@ -52,6 +59,7 @@ __all__ = [
     "QuestionContextRecorder",
     "ToolCall",
     "Usage",
+    "logfire_direct_answer_recorder",
     "logfire_external_search_recorder",
     "logfire_internal_search_recorder",
     "logfire_llm_call_recorder",
