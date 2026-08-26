@@ -16,6 +16,11 @@ from app.agent.recording.llm import (
     logfire_llm_call_recorder,
     outcome_from_span_result,
 )
+from app.agent.recording.planning import (
+    LogfirePlanningRecorder,
+    PlanningRecorder,
+    logfire_planning_recorder,
+)
 from app.agent.recording.types import (
     LlmCall,
     LlmCallResult,
@@ -34,12 +39,15 @@ __all__ = [
     "LogfireExternalSearchRecorder",
     "LogfireInternalSearchRecorder",
     "LogfireLlmCallRecorder",
+    "LogfirePlanningRecorder",
     "PhaseCall",
     "PhaseStatus",
+    "PlanningRecorder",
     "ToolCall",
     "Usage",
     "logfire_external_search_recorder",
     "logfire_internal_search_recorder",
     "logfire_llm_call_recorder",
+    "logfire_planning_recorder",
     "outcome_from_span_result",
 ]
