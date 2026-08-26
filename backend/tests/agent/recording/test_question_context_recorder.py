@@ -1,16 +1,18 @@
-"""LogfirePlanningRecorder の契約。"""
+"""LogfireQuestionContextRecorder の契約。"""
 
 from __future__ import annotations
 
 import pytest
 from logfire.testing import CaptureLogfire
 
-from app.agent.recording.planning import LogfirePlanningRecorder
+from app.agent.recording.question_context import LogfireQuestionContextRecorder
 from app.agent.recording.types import PhaseCall
 from tests.logfire._metric_helpers import attributes_of, collected_metrics
 
-_OUTCOME_METRIC = "vector.agent.planner.outcome"
-_DURATION_METRIC = "vector.agent.planner.duration"
+_OUTCOME_METRIC = "vector.agent.question_context.outcome"
+_DURATION_METRIC = "vector.agent.question_context.duration"
+_PROMPT_VERSION = "question-context-v1"
+_AI_MODEL = "gemini-test-model"
 
 
 async def test_logfire_recorder_emits_duration_and_existing_outcome(
@@ -18,44 +20,43 @@ async def test_logfire_recorder_emits_duration_and_existing_outcome(
 ) -> None:
     """完了時は duration と既存 outcome カウンターを1回ずつ残す。"""
 
-    recorder = LogfirePlanningRecorder()
+    recorder = LogfireQuestionContextRecorder()
     call = await recorder.start()
     await recorder.end(
         call,
-        outcome="planned",
-        retry_used=True,
-        plan_type="search",
+        outcome="prepared",
+        prompt_version=_PROMPT_VERSION,
+        ai_model=_AI_MODEL,
     )
 
     metrics = collected_metrics(capfire)
     assert attributes_of(metrics, _DURATION_METRIC) == {
         "status": "completed",
-        "outcome": "planned",
+        "outcome": "prepared",
     }
     duration = next(item for item in metrics if item["name"] == _DURATION_METRIC)
     assert duration["data"]["data_points"][0]["count"] == 1
     assert duration["data"]["data_points"][0]["sum"] >= 0
     assert attributes_of(metrics, _OUTCOME_METRIC) == {
-        "result": "planned",
-        "retry_used": True,
-        "plan_type": "search",
-        "failure_code": "none",
+        "result": "prepared",
+        "prompt_version": _PROMPT_VERSION,
+        "ai_model": _AI_MODEL,
     }
 
 
 async def test_failed_records_existing_outcome_labels(
     capfire: CaptureLogfire,
 ) -> None:
-    """分類済み失敗は既存カウンターへ plan_type と failure_code を載せる。"""
+    """分類済み失敗は既存カウンターへ failure_code を載せる。"""
 
-    recorder = LogfirePlanningRecorder()
+    recorder = LogfireQuestionContextRecorder()
     call = await recorder.start()
     await recorder.end(
         call,
         outcome="failed",
-        retry_used=False,
-        plan_type="not_created",
-        failure_code="ai_error_network",
+        prompt_version=_PROMPT_VERSION,
+        ai_model=_AI_MODEL,
+        failure_code="generator_unavailable",
     )
 
     metrics = collected_metrics(capfire)
@@ -65,9 +66,9 @@ async def test_failed_records_existing_outcome_labels(
     }
     assert attributes_of(metrics, _OUTCOME_METRIC) == {
         "result": "failed",
-        "retry_used": False,
-        "plan_type": "not_created",
-        "failure_code": "ai_error_network",
+        "prompt_version": _PROMPT_VERSION,
+        "ai_model": _AI_MODEL,
+        "failure_code": "generator_unavailable",
     }
 
 
@@ -76,7 +77,7 @@ async def test_stopped_does_not_emit_existing_outcome_counter(
 ) -> None:
     """途中停止では既存カウンターを打たない。"""
 
-    recorder = LogfirePlanningRecorder()
+    recorder = LogfireQuestionContextRecorder()
     call = await recorder.start()
     await recorder.end(call, stopped=True)
 
@@ -93,7 +94,7 @@ async def test_end_without_outcome_records_failed_status(
 ) -> None:
     """未分類の終わりは status=failed とし、既存カウンターは打たない。"""
 
-    recorder = LogfirePlanningRecorder()
+    recorder = LogfireQuestionContextRecorder()
     call = await recorder.start()
     await recorder.end(call)
 
@@ -101,6 +102,23 @@ async def test_end_without_outcome_records_failed_status(
     assert attributes_of(metrics, _DURATION_METRIC) == {
         "status": "failed",
         "outcome": "none",
+    }
+    assert all(item["name"] != _OUTCOME_METRIC for item in metrics)
+
+
+async def test_missing_process_labels_skip_existing_outcome_counter(
+    capfire: CaptureLogfire,
+) -> None:
+    """prompt_version / ai_model が無いときは既存カウンターを打たない。"""
+
+    recorder = LogfireQuestionContextRecorder()
+    call = await recorder.start()
+    await recorder.end(call, outcome="prepared")
+
+    metrics = collected_metrics(capfire)
+    assert attributes_of(metrics, _DURATION_METRIC) == {
+        "status": "completed",
+        "outcome": "prepared",
     }
     assert all(item["name"] != _OUTCOME_METRIC for item in metrics)
 
@@ -113,8 +131,8 @@ async def test_start_returns_phase_call_when_clock_fails(
     def _boom() -> float:
         raise RuntimeError("clock failed")
 
-    monkeypatch.setattr("app.agent.recording.planning.perf_counter", _boom)
-    call = await LogfirePlanningRecorder().start()
+    monkeypatch.setattr("app.agent.recording.question_context.perf_counter", _boom)
+    call = await LogfireQuestionContextRecorder().start()
     assert isinstance(call, PhaseCall)
 
 
@@ -127,13 +145,14 @@ async def test_end_does_not_propagate_metric_errors(
         raise RuntimeError("metric failed")
 
     monkeypatch.setattr(
-        "app.agent.recording.planning._duration_histogram.record",
+        "app.agent.recording.question_context._duration_histogram.record",
         _boom,
     )
-    recorder = LogfirePlanningRecorder()
+    recorder = LogfireQuestionContextRecorder()
     call = await recorder.start()
     await recorder.end(
         call,
-        outcome="planned",
-        plan_type="direct_answer",
+        outcome="prepared",
+        prompt_version=_PROMPT_VERSION,
+        ai_model=_AI_MODEL,
     )

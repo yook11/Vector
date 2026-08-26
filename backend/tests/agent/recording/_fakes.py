@@ -13,6 +13,7 @@ from app.agent.evidence_collection.internal_search.contract import (
     InternalSearchOutcome,
 )
 from app.agent.planning.metrics import PlannerOutcomeResult
+from app.agent.question_context.metrics import QuestionContextOutcome
 from app.agent.recording.types import LlmCall, LlmCallResult, PhaseCall, Usage
 
 __all__ = [
@@ -20,10 +21,12 @@ __all__ = [
     "RecordedInternalSearchEnd",
     "RecordedLlmCallEnd",
     "RecordedPlanningEnd",
+    "RecordedQuestionContextEnd",
     "RecordingExternalSearchRecorder",
     "RecordingInternalSearchRecorder",
     "RecordingLlmCallRecorder",
     "RecordingPlanningRecorder",
+    "RecordingQuestionContextRecorder",
 ]
 
 
@@ -184,6 +187,48 @@ class RecordingPlanningRecorder:
                 outcome=outcome,
                 retry_used=retry_used,
                 plan_type=plan_type,
+                failure_code=failure_code,
+                stopped=stopped,
+            )
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class RecordedQuestionContextEnd:
+    call: PhaseCall
+    outcome: QuestionContextOutcome | None
+    prompt_version: str | None
+    ai_model: str | None
+    failure_code: str | None
+    stopped: bool
+
+
+@dataclass(slots=True)
+class RecordingQuestionContextRecorder:
+    starts: list[PhaseCall] = field(default_factory=list)
+    ends: list[RecordedQuestionContextEnd] = field(default_factory=list)
+
+    async def start(self) -> PhaseCall:
+        call = PhaseCall(started_at=perf_counter())
+        self.starts.append(call)
+        return call
+
+    async def end(
+        self,
+        call: PhaseCall,
+        *,
+        outcome: QuestionContextOutcome | None = None,
+        prompt_version: str | None = None,
+        ai_model: str | None = None,
+        failure_code: str | None = None,
+        stopped: bool = False,
+    ) -> None:
+        self.ends.append(
+            RecordedQuestionContextEnd(
+                call=call,
+                outcome=outcome,
+                prompt_version=prompt_version,
+                ai_model=ai_model,
                 failure_code=failure_code,
                 stopped=stopped,
             )

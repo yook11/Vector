@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from datetime import datetime
 from uuid import UUID
 
@@ -16,7 +17,11 @@ from app.agent.question_context.contract import (
     QuestionContextGenerationInput,
     answer_brief_from_draft,
 )
-from app.agent.question_context.metrics import record_question_context_outcome
+from app.agent.question_context.metrics import QuestionContextOutcome
+from app.agent.recording.question_context import (
+    QuestionContextRecorder,
+    logfire_question_context_recorder,
+)
 from app.agent.runtime.contract import (
     AgentResponseInvalidError,
     AgentRuntimeScopeFactory,
@@ -47,9 +52,11 @@ class QuestionContextService:
         *,
         agent: Agent[QuestionContextGenerationInput, AnswerBriefDraft],
         runtime_scope_factory: AgentRuntimeScopeFactory | None,
+        recorder: QuestionContextRecorder = logfire_question_context_recorder,
     ) -> None:
         self._agent = agent
         self._runtime_scope_factory = runtime_scope_factory
+        self._recorder = recorder
 
     async def prepare(
         self,
@@ -59,59 +66,74 @@ class QuestionContextService:
         as_of: datetime,
         run_id: UUID,
     ) -> AnswerBrief:
-        if self._runtime_scope_factory is None:
-            return _fallback_result(
-                question=question,
-                run_id=run_id,
-                failure_code=_GENERATOR_UNAVAILABLE,
-                prompt_version=self._agent.prompt.version,
-                ai_model=self._agent.model.name,
-            )
-
-        with agent_phase(phase="context_resolution", agent_name=self._agent.name):
-            try:
-                async with self._runtime_scope_factory() as runtime:
-                    draft = await runtime.call(
-                        self._agent,
-                        QuestionContextGenerationInput(
-                            question=question,
-                            history=tuple(_history_for_prompt(history)),
-                            as_of=as_of,
-                        ),
-                        attempt_number=1,
-                    )
-            except _RUNTIME_FAILURES as exc:
+        outcome: QuestionContextOutcome | None = None
+        failure_code: str | None = None
+        stopped = False
+        call = await self._recorder.start()
+        try:
+            if self._runtime_scope_factory is None:
+                outcome = "failed"
+                failure_code = _GENERATOR_UNAVAILABLE
                 return _fallback_result(
                     question=question,
                     run_id=run_id,
-                    failure_code=_failure_code(exc),
-                    prompt_version=self._agent.prompt.version,
-                    ai_model=self._agent.model.name,
+                    failure_code=_GENERATOR_UNAVAILABLE,
                 )
 
-            try:
-                answer_brief = answer_brief_from_draft(draft)
-                if not history:
-                    answer_brief = AnswerBrief(
-                        standalone_question=question,
-                        answer_requirements=answer_brief.answer_requirements,
-                        relevant_prior_coverage="",
-                        active_goal=answer_brief.active_goal,
+            with agent_phase(phase="context_resolution", agent_name=self._agent.name):
+                try:
+                    async with self._runtime_scope_factory() as runtime:
+                        draft = await runtime.call(
+                            self._agent,
+                            QuestionContextGenerationInput(
+                                question=question,
+                                history=tuple(_history_for_prompt(history)),
+                                as_of=as_of,
+                            ),
+                            attempt_number=1,
+                        )
+                except _RUNTIME_FAILURES as exc:
+                    outcome = "failed"
+                    failure_code = _failure_code(exc)
+                    return _fallback_result(
+                        question=question,
+                        run_id=run_id,
+                        failure_code=failure_code,
                     )
-            except ValidationError:
-                return _fallback_result(
-                    question=question,
-                    run_id=run_id,
-                    failure_code=_CONTEXT_FINALIZE_INVALID,
-                    prompt_version=self._agent.prompt.version,
-                    ai_model=self._agent.model.name,
-                )
-            record_question_context_outcome(
-                result="prepared",
+
+                try:
+                    answer_brief = answer_brief_from_draft(draft)
+                    if not history:
+                        answer_brief = AnswerBrief(
+                            standalone_question=question,
+                            answer_requirements=answer_brief.answer_requirements,
+                            relevant_prior_coverage="",
+                            active_goal=answer_brief.active_goal,
+                        )
+                except ValidationError:
+                    outcome = "failed"
+                    failure_code = _CONTEXT_FINALIZE_INVALID
+                    return _fallback_result(
+                        question=question,
+                        run_id=run_id,
+                        failure_code=_CONTEXT_FINALIZE_INVALID,
+                    )
+                outcome = "prepared"
+                return answer_brief
+        except (asyncio.CancelledError, GeneratorExit):
+            stopped = True
+            outcome = None
+            failure_code = None
+            raise
+        finally:
+            await self._recorder.end(
+                call,
+                outcome=outcome,
                 prompt_version=self._agent.prompt.version,
                 ai_model=self._agent.model.name,
+                failure_code=failure_code,
+                stopped=stopped,
             )
-            return answer_brief
 
 
 def _fallback_result(
@@ -119,19 +141,11 @@ def _fallback_result(
     question: str,
     run_id: UUID,
     failure_code: str,
-    prompt_version: str,
-    ai_model: str,
 ) -> AnswerBrief:
     logger.warning(
         "question_context_preparation_failed",
         run_id=str(run_id),
         failure_type=failure_code,
-    )
-    record_question_context_outcome(
-        result="failed",
-        prompt_version=prompt_version,
-        ai_model=ai_model,
-        failure_code=failure_code,
     )
     return answer_brief_from_draft(AnswerBriefDraft(standalone_question=question))
 

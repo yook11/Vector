@@ -35,6 +35,7 @@ from app.analysis.ai_provider_errors import (
     AIProviderOutputBlockedError,
 )
 from app.analysis.gemini_error_translator import GeminiContentRejectionReason
+from tests.agent.recording._fakes import RecordingQuestionContextRecorder
 from tests.agent.runtime._fakes import ScriptedAgentRuntime
 from tests.logfire._metric_helpers import collected_metrics
 from tests.logfire._span_helpers import spans_named
@@ -106,6 +107,8 @@ def _as_of() -> datetime:
 
 def _service(
     outcomes: list[AnswerBriefDraft | BaseException],
+    *,
+    recorder: RecordingQuestionContextRecorder | None = None,
 ) -> tuple[
     QuestionContextService,
     ScriptedAgentRuntime,
@@ -113,14 +116,36 @@ def _service(
 ]:
     runtime = ScriptedAgentRuntime(outcomes)
     factory = RecordingRuntimeScopeFactory(runtime)
-    return (
-        QuestionContextService(
+    if recorder is None:
+        service = QuestionContextService(
             agent=QUESTION_CONTEXT_AGENT,
             runtime_scope_factory=factory,
-        ),
-        runtime,
-        factory,
-    )
+        )
+    else:
+        service = QuestionContextService(
+            agent=QUESTION_CONTEXT_AGENT,
+            runtime_scope_factory=factory,
+            recorder=recorder,
+        )
+    return (service, runtime, factory)
+
+
+def _assert_recorded(
+    recorder: RecordingQuestionContextRecorder,
+    *,
+    outcome: str | None,
+    stopped: bool = False,
+    failure_code: str | None = None,
+) -> None:
+    assert len(recorder.starts) == 1
+    assert len(recorder.ends) == 1
+    recorded = recorder.ends[0]
+    assert recorded.call is recorder.starts[0]
+    assert recorded.outcome == outcome
+    assert recorded.stopped is stopped
+    assert recorded.failure_code == failure_code
+    assert recorded.prompt_version == QUESTION_CONTEXT_AGENT.prompt.version
+    assert recorded.ai_model == QUESTION_CONTEXT_AGENT.model.name
 
 
 def _question_context_outcomes(capfire: CaptureLogfire) -> list[dict[str, Any]]:
@@ -460,3 +485,125 @@ async def test_unknown_error_and_cancellation_propagate_by_identity(
     assert len(factory.exits) == 1
     assert factory.exits[0][1] is error
     assert _question_context_outcomes(capfire) == []
+
+
+async def test_successful_prepare_records_prepared_outcome() -> None:
+    """完成 brief は recorder へ prepared を1回渡す。"""
+
+    recorder = RecordingQuestionContextRecorder()
+    service, _runtime, _factory = _service(
+        [AnswerBriefDraft(standalone_question="整理済みの質問")],
+        recorder=recorder,
+    )
+
+    await service.prepare(
+        question="それについて教えて",
+        history=[],
+        as_of=_as_of(),
+        run_id=_RUN_ID,
+    )
+
+    _assert_recorded(recorder, outcome="prepared")
+
+
+async def test_classified_failure_records_failed_outcome() -> None:
+    """分類済み失敗は recorder へ failed を1回渡す。"""
+
+    recorder = RecordingQuestionContextRecorder()
+    service, _runtime, _factory = _service(
+        [AIProviderNetworkError()],
+        recorder=recorder,
+    )
+
+    result = await service.prepare(
+        question="NVIDIA の直近発表は？",
+        history=[],
+        as_of=_as_of(),
+        run_id=_RUN_ID,
+    )
+
+    assert result.standalone_question == "NVIDIA の直近発表は？"
+    _assert_recorded(
+        recorder,
+        outcome="failed",
+        failure_code="ai_error_network",
+    )
+
+
+async def test_finalize_validation_records_failed_outcome() -> None:
+    """finalize 失敗は recorder へ failed を1回渡す。"""
+
+    recorder = RecordingQuestionContextRecorder()
+    service, _runtime, _factory = _service(
+        [AnswerBriefDraft(standalone_question="   ")],
+        recorder=recorder,
+    )
+
+    result = await service.prepare(
+        question="安全なfallback質問",
+        history=[ThreadMessageSnapshot(role="user", content="履歴")],
+        as_of=_as_of(),
+        run_id=_RUN_ID,
+    )
+
+    assert result.standalone_question == "安全なfallback質問"
+    _assert_recorded(
+        recorder,
+        outcome="failed",
+        failure_code="context_finalize_invalid",
+    )
+
+
+async def test_unavailable_runtime_records_failed_outcome() -> None:
+    """factory なしは recorder へ failed / generator_unavailable を渡す。"""
+
+    recorder = RecordingQuestionContextRecorder()
+    service = QuestionContextService(
+        agent=QUESTION_CONTEXT_AGENT,
+        runtime_scope_factory=None,
+        recorder=recorder,
+    )
+
+    result = await service.prepare(
+        question="NVIDIA の直近発表は？",
+        history=[],
+        as_of=_as_of(),
+        run_id=_RUN_ID,
+    )
+
+    assert result.standalone_question == "NVIDIA の直近発表は？"
+    _assert_recorded(
+        recorder,
+        outcome="failed",
+        failure_code="generator_unavailable",
+    )
+
+
+@pytest.mark.parametrize(
+    "error",
+    [
+        pytest.param(RuntimeError("unexpected context failure"), id="unknown"),
+        pytest.param(asyncio.CancelledError(), id="cancellation"),
+    ],
+)
+async def test_unclassified_failure_and_cancellation_record_without_outcome(
+    error: BaseException,
+) -> None:
+    """未分類と cancel は既存結論を渡さず、cancel だけ stopped にする。"""
+
+    recorder = RecordingQuestionContextRecorder()
+    service, _runtime, _factory = _service([error], recorder=recorder)
+
+    with pytest.raises(type(error)):
+        await service.prepare(
+            question="NVIDIA の直近発表は？",
+            history=[],
+            as_of=_as_of(),
+            run_id=_RUN_ID,
+        )
+
+    _assert_recorded(
+        recorder,
+        outcome=None,
+        stopped=isinstance(error, asyncio.CancelledError),
+    )
