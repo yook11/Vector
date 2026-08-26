@@ -31,6 +31,7 @@ from tests.agent.evidence_review._builders import (
     external_hit,
     internal_hit,
 )
+from tests.agent.recording._fakes import RecordingEvidenceReviewRecorder
 from tests.agent.running._harness import fixed_scope
 from tests.agent.runtime._fakes import ScriptedAgentRuntime
 
@@ -55,11 +56,47 @@ async def _review(
     tasks: list[Any],
     as_of: datetime = AS_OF,
     reviewer_runtime: Any,
+    recorder: RecordingEvidenceReviewRecorder | None = None,
 ) -> EvidenceRunResult:
-    reviewer = EvidenceReviewer(runtime_scope_factory=fixed_scope(reviewer_runtime))
+    reviewer_kwargs: dict[str, Any] = {
+        "runtime_scope_factory": fixed_scope(reviewer_runtime),
+    }
+    if recorder is not None:
+        reviewer_kwargs["recorder"] = recorder
+    reviewer = EvidenceReviewer(**reviewer_kwargs)
     return await reviewer.review(
         tasks=tasks,
         as_of=as_of,
+    )
+
+
+def _assert_recorded(
+    recorder: RecordingEvidenceReviewRecorder,
+    *,
+    outcome: str | None,
+    stopped: bool = False,
+    retry_used: bool = False,
+) -> None:
+    assert len(recorder.starts) == 1
+    assert len(recorder.ends) == 1
+    recorded = recorder.ends[0]
+    assert recorded.call is recorder.starts[0]
+    assert recorded.outcome == outcome
+    assert recorded.stopped is stopped
+    assert recorded.retry_used is retry_used
+
+
+def _internal_task() -> Any:
+    return collected_task(
+        task_index=0,
+        internal_hits=[
+            internal_hit(
+                assessment_id=1001,
+                curation_id=1,
+                title="internal title",
+                summary="s",
+            )
+        ],
     )
 
 
@@ -457,3 +494,95 @@ async def test_review_timeout_backstop_cancels_the_runtime_and_retries_twice(
     assert runtime.attempt_numbers == [1, 2]
     assert result.failure_reason == "reviewer_timeout"
     assert observed_timeouts.count(30) == 2
+
+
+@pytest.mark.asyncio
+async def test_successful_review_records_completed_outcome() -> None:
+    """完成結果は recorder へ completed を1回渡す。"""
+
+    recorder = RecordingEvidenceReviewRecorder()
+    runtime = ScriptedAgentRuntime([_ANY_REVIEWER_DRAFT])
+
+    result = await _review(
+        tasks=[_internal_task()],
+        reviewer_runtime=runtime,
+        recorder=recorder,
+    )
+
+    assert isinstance(result, EvidenceRunCompleted)
+    _assert_recorded(recorder, outcome="completed")
+
+
+@pytest.mark.asyncio
+async def test_classified_failure_records_failed_outcome() -> None:
+    """分類済み失敗は recorder へ failed を1回渡す。"""
+
+    recorder = RecordingEvidenceReviewRecorder()
+    runtime = ScriptedAgentRuntime(
+        [
+            AIProviderNetworkError(),
+            AIProviderNetworkError(),
+        ]
+    )
+
+    result = await _review(
+        tasks=[_internal_task()],
+        reviewer_runtime=runtime,
+        recorder=recorder,
+    )
+
+    assert isinstance(result, EvidenceRunFailed)
+    _assert_recorded(recorder, outcome="failed", retry_used=True)
+
+
+@pytest.mark.asyncio
+async def test_retry_success_records_completed_with_retry_used() -> None:
+    """retry 成功は recorder へ completed と retry_used を渡す。"""
+
+    recorder = RecordingEvidenceReviewRecorder()
+    runtime = ScriptedAgentRuntime(
+        [
+            AgentResponseInvalidError(AgentResponseDefect.OUTPUT_SCHEMA_MISMATCH),
+            _ANY_REVIEWER_DRAFT,
+        ]
+    )
+
+    result = await _review(
+        tasks=[_internal_task()],
+        reviewer_runtime=runtime,
+        recorder=recorder,
+    )
+
+    assert isinstance(result, EvidenceRunCompleted)
+    _assert_recorded(recorder, outcome="completed", retry_used=True)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "error",
+    [
+        pytest.param(RuntimeError("unclassified reviewer error"), id="unknown"),
+        pytest.param(asyncio.CancelledError(), id="cancellation"),
+        pytest.param(AIProviderError(), id="unclassified-provider"),
+    ],
+)
+async def test_unclassified_failure_and_cancellation_record_without_outcome(
+    error: BaseException,
+) -> None:
+    """未分類と cancel は結論を渡さず、cancel だけ stopped にする。"""
+
+    recorder = RecordingEvidenceReviewRecorder()
+    runtime = ScriptedAgentRuntime([error])
+
+    with pytest.raises(type(error)):
+        await _review(
+            tasks=[_internal_task()],
+            reviewer_runtime=runtime,
+            recorder=recorder,
+        )
+
+    _assert_recorded(
+        recorder,
+        outcome=None,
+        stopped=isinstance(error, asyncio.CancelledError),
+    )

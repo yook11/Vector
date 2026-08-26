@@ -16,6 +16,7 @@ from app.agent.evidence_collection.internal_search.contract import (
     InternalSearchFailurePhase,
     InternalSearchOutcome,
 )
+from app.agent.evidence_review.metrics import EvidenceReviewOutcome
 from app.agent.planning.metrics import PlannerOutcomeResult
 from app.agent.question_context.metrics import QuestionContextOutcome
 from app.agent.recording.types import LlmCall, LlmCallResult, PhaseCall, Usage
@@ -23,6 +24,7 @@ from app.agent.recording.types import LlmCall, LlmCallResult, PhaseCall, Usage
 __all__ = [
     "RecordedDirectAnswerEnd",
     "RecordedEvidenceAnswerEnd",
+    "RecordedEvidenceReviewEnd",
     "RecordedExternalSearchEnd",
     "RecordedInternalSearchEnd",
     "RecordedLlmCallEnd",
@@ -30,6 +32,7 @@ __all__ = [
     "RecordedQuestionContextEnd",
     "RecordingDirectAnswerRecorder",
     "RecordingEvidenceAnswerRecorder",
+    "RecordingEvidenceReviewRecorder",
     "RecordingExternalSearchRecorder",
     "RecordingInternalSearchRecorder",
     "RecordingLlmCallRecorder",
@@ -319,6 +322,42 @@ class RecordingEvidenceAnswerRecorder:
                 retry_used=retry_used,
                 fallback_used=fallback_used,
                 failure_code=failure_code,
+                stopped=stopped,
+            )
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class RecordedEvidenceReviewEnd:
+    call: PhaseCall
+    outcome: EvidenceReviewOutcome | None
+    retry_used: bool
+    stopped: bool
+
+
+@dataclass(slots=True)
+class RecordingEvidenceReviewRecorder:
+    starts: list[PhaseCall] = field(default_factory=list)
+    ends: list[RecordedEvidenceReviewEnd] = field(default_factory=list)
+
+    async def start(self) -> PhaseCall:
+        call = PhaseCall(started_at=perf_counter())
+        self.starts.append(call)
+        return call
+
+    async def end(
+        self,
+        call: PhaseCall,
+        *,
+        outcome: EvidenceReviewOutcome | None = None,
+        retry_used: bool = False,
+        stopped: bool = False,
+    ) -> None:
+        self.ends.append(
+            RecordedEvidenceReviewEnd(
+                call=call,
+                outcome=outcome,
+                retry_used=retry_used,
                 stopped=stopped,
             )
         )

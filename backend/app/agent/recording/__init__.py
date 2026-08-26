@@ -10,6 +10,11 @@ from app.agent.recording.evidence_answer import (
     LogfireEvidenceAnswerRecorder,
     logfire_evidence_answer_recorder,
 )
+from app.agent.recording.evidence_review import (
+    EvidenceReviewRecorder,
+    LogfireEvidenceReviewRecorder,
+    logfire_evidence_review_recorder,
+)
 from app.agent.recording.external_search import (
     ExternalSearchRecorder,
     LogfireExternalSearchRecorder,
@@ -48,6 +53,7 @@ from app.agent.recording.types import (
 __all__ = [
     "DirectAnswerRecorder",
     "EvidenceAnswerRecorder",
+    "EvidenceReviewRecorder",
     "ExternalSearchRecorder",
     "InternalSearchRecorder",
     "LlmCall",
@@ -55,6 +61,7 @@ __all__ = [
     "LlmCallResult",
     "LogfireDirectAnswerRecorder",
     "LogfireEvidenceAnswerRecorder",
+    "LogfireEvidenceReviewRecorder",
     "LogfireExternalSearchRecorder",
     "LogfireInternalSearchRecorder",
     "LogfireLlmCallRecorder",
@@ -68,6 +75,7 @@ __all__ = [
     "Usage",
     "logfire_direct_answer_recorder",
     "logfire_evidence_answer_recorder",
+    "logfire_evidence_review_recorder",
     "logfire_external_search_recorder",
     "logfire_internal_search_recorder",
     "logfire_llm_call_recorder",
