@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import AsyncIterator, Sequence
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
@@ -28,6 +29,7 @@ from app.analysis.ai_provider_errors import (
     AIProviderOutputTruncatedError,
 )
 from app.analysis.gemini_error_translator import GeminiStateReason
+from tests.agent.recording._fakes import RecordingDirectAnswerRecorder
 from tests.logfire._metric_helpers import collected_metrics
 
 _DIRECT_ANSWER_OUTCOME_METRIC = "vector.agent.direct_answer.outcome"
@@ -68,13 +70,13 @@ def _request() -> AnsweringRequest:
     )
 
 
-StreamOutcome = str | Sequence[str] | Exception
+StreamOutcome = str | Sequence[str] | BaseException
 
 
 class FakeDirectAnswerStream:
     def __init__(self, outcome: StreamOutcome) -> None:
-        if isinstance(outcome, Exception):
-            self._items: list[str | Exception] = [outcome]
+        if isinstance(outcome, BaseException):
+            self._items: list[str | BaseException] = [outcome]
         elif isinstance(outcome, str):
             self._items = [outcome]
         else:
@@ -88,7 +90,7 @@ class FakeDirectAnswerStream:
         if not self._items:
             raise StopAsyncIteration
         item = self._items.pop(0)
-        if isinstance(item, Exception):
+        if isinstance(item, BaseException):
             raise item
         return item
 
@@ -186,16 +188,45 @@ async def _answer(
     *,
     delta_reporter: RecordingDeltaReporter | None = None,
     continuation: SequenceContinuation | None = None,
+    recorder: RecordingDirectAnswerRecorder | None = None,
 ) -> DirectAnswerDraft:
-    return await DirectAnswerFlow(
-        agent=DIRECT_ANSWER_AGENT,
-        runtime_scope_factory=generator.activate,
-        delta_reporter=delta_reporter,
-        continuation=continuation,
-    ).answer(
+    if recorder is None:
+        flow = DirectAnswerFlow(
+            agent=DIRECT_ANSWER_AGENT,
+            runtime_scope_factory=generator.activate,
+            delta_reporter=delta_reporter,
+            continuation=continuation,
+        )
+    else:
+        flow = DirectAnswerFlow(
+            agent=DIRECT_ANSWER_AGENT,
+            runtime_scope_factory=generator.activate,
+            delta_reporter=delta_reporter,
+            continuation=continuation,
+            recorder=recorder,
+        )
+    return await flow.answer(
         request=_request(),
         previous_answer="",
     )
+
+
+def _assert_recorded(
+    recorder: RecordingDirectAnswerRecorder,
+    *,
+    outcome: str | None,
+    stopped: bool = False,
+    retry_used: bool = False,
+    failure_code: str | None = None,
+) -> None:
+    assert len(recorder.starts) == 1
+    assert len(recorder.ends) == 1
+    recorded = recorder.ends[0]
+    assert recorded.call is recorder.starts[0]
+    assert recorded.outcome == outcome
+    assert recorded.stopped is stopped
+    assert recorded.retry_used is retry_used
+    assert recorded.failure_code == failure_code
 
 
 @pytest.mark.asyncio
@@ -619,3 +650,82 @@ async def test_continuation_false_at_normal_stream_end_aborts_before_finish(
     assert generator.streams[0].closed is True
     metrics = collected_metrics(capfire)
     assert _metric_attributes(metrics, _DIRECT_ANSWER_OUTCOME_METRIC) == []
+
+
+async def test_successful_answer_records_answered_outcome() -> None:
+    """完成 draft は recorder へ answered を1回渡す。"""
+
+    recorder = RecordingDirectAnswerRecorder()
+    generator = FakeDirectAnswerGenerator(["検索なしで回答できます。"])
+
+    await _answer(generator, recorder=recorder)
+
+    _assert_recorded(recorder, outcome="answered")
+
+
+async def test_classified_failure_records_failed_outcome() -> None:
+    """分類済み失敗は recorder へ failed を1回渡す。"""
+
+    recorder = RecordingDirectAnswerRecorder()
+    generator = FakeDirectAnswerGenerator([AIProviderNetworkError()])
+
+    with pytest.raises(AIProviderNetworkError):
+        await _answer(generator, recorder=recorder)
+
+    _assert_recorded(
+        recorder,
+        outcome="failed",
+        failure_code="ai_error_network",
+    )
+
+
+async def test_retry_then_success_records_retry_used() -> None:
+    """1回 retry した成功は retry_used=True で answered を渡す。"""
+
+    recorder = RecordingDirectAnswerRecorder()
+    generator = FakeDirectAnswerGenerator([" \n\t", "再試行後の回答です。"])
+
+    await _answer(generator, recorder=recorder)
+
+    _assert_recorded(recorder, outcome="answered", retry_used=True)
+
+
+async def test_generation_stop_records_stopped_without_outcome() -> None:
+    """AnswerGenerationStopped は stopped とし、既存結論を渡さない。"""
+
+    recorder = RecordingDirectAnswerRecorder()
+    generator = FakeDirectAnswerGenerator(["呼ばれない"])
+
+    with pytest.raises(AnswerGenerationStopped):
+        await _answer(
+            generator,
+            continuation=SequenceContinuation([False]),
+            recorder=recorder,
+        )
+
+    _assert_recorded(recorder, outcome=None, stopped=True)
+
+
+@pytest.mark.parametrize(
+    "error",
+    [
+        pytest.param(RuntimeError("boom"), id="unknown"),
+        pytest.param(asyncio.CancelledError(), id="cancellation"),
+    ],
+)
+async def test_unclassified_failure_and_cancellation_record_without_outcome(
+    error: BaseException,
+) -> None:
+    """未分類と cancel は既存結論を渡さず、cancel だけ stopped にする。"""
+
+    recorder = RecordingDirectAnswerRecorder()
+    generator = FakeDirectAnswerGenerator([error])
+
+    with pytest.raises(type(error)):
+        await _answer(generator, recorder=recorder)
+
+    _assert_recorded(
+        recorder,
+        outcome=None,
+        stopped=isinstance(error, asyncio.CancelledError),
+    )
