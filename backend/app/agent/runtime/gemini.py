@@ -26,12 +26,11 @@ from app.agent.agent import Agent
 from app.agent.error_type import span_error_type
 from app.agent.recording.llm import (
     LlmCallRecorder,
-    close_llm_call,
     logfire_llm_call_recorder,
     outcome_from_span_result,
     usage_from_gemini_metadata,
 )
-from app.agent.recording.types import LlmCallResult, PhaseStatus, Usage
+from app.agent.recording.types import LlmCallResult, Usage
 from app.agent.runtime._structured_output import (
     parse_json_object,
     thaw_schema,
@@ -70,12 +69,10 @@ class GeminiAgentRuntime:
         self,
         *,
         client: AsyncClient,
-        llm_calls: LlmCallRecorder | None = None,
+        llm_calls: LlmCallRecorder = logfire_llm_call_recorder,
     ) -> None:
         self._client = client
-        self._llm_calls = (
-            llm_calls if llm_calls is not None else logfire_llm_call_recorder
-        )
+        self._llm_calls = llm_calls
 
     async def call[InputT, OutputT](
         self,
@@ -99,9 +96,9 @@ class GeminiAgentRuntime:
         config = _build_config(agent, structured=True)
         classified_error: Exception | None = None
         output: OutputT | object = _MISSING_OUTPUT
-        status = PhaseStatus.FAILED
         result: LlmCallResult | None = None
         usage: Usage | None = None
+        stopped = False
         llm_call = self._llm_calls.start(
             agent_name=agent.name,
             provider=agent.model.provider,
@@ -142,7 +139,7 @@ class GeminiAgentRuntime:
                     record_ai_provider_exhausted(
                         translated_error, provider=agent.model.provider
                     )
-                    status, result = outcome_from_span_result("provider_error")
+                    result = outcome_from_span_result("provider_error")
                 else:
                     usage = _record_usage(
                         span, getattr(response, "usage_metadata", None)
@@ -158,7 +155,7 @@ class GeminiAgentRuntime:
                             result="blocked",
                             error_type=span_error_type(classified_error),
                         )
-                        status, result = outcome_from_span_result("blocked")
+                        result = outcome_from_span_result("blocked")
                     else:
                         finish_reason = _finish_reason_name(response)
                     if (
@@ -178,7 +175,7 @@ class GeminiAgentRuntime:
                             result="blocked",
                             error_type=span_error_type(classified_error),
                         )
-                        status, result = outcome_from_span_result("blocked")
+                        result = outcome_from_span_result("blocked")
                     elif classified_error is None and finish_reason == "MAX_TOKENS":
                         classified_error = AIProviderOutputTruncatedError(
                             reason=GeminiStateReason.OUTPUT_TOKEN_LIMIT_REACHED
@@ -188,7 +185,7 @@ class GeminiAgentRuntime:
                             result="provider_error",
                             error_type=span_error_type(classified_error),
                         )
-                        status, result = outcome_from_span_result("provider_error")
+                        result = outcome_from_span_result("provider_error")
                     elif classified_error is None:
                         try:
                             output = _parse_output(agent, response)
@@ -199,12 +196,10 @@ class GeminiAgentRuntime:
                                 result="invalid_response",
                                 error_type=span_error_type(exc),
                             )
-                            status, result = outcome_from_span_result(
-                                "invalid_response"
-                            )
+                            result = outcome_from_span_result("invalid_response")
                         else:
                             span.set_attribute("result", "succeeded")
-                            status, result = outcome_from_span_result("succeeded")
+                            result = outcome_from_span_result("succeeded")
 
             if classified_error is not None:
                 raise classified_error
@@ -212,16 +207,15 @@ class GeminiAgentRuntime:
                 raise RuntimeError("Gemini runtime completed without output")
             return cast(OutputT, output)
         except (asyncio.CancelledError, GeneratorExit):
-            status = PhaseStatus.STOPPED
+            stopped = True
             result = None
             raise
         finally:
-            close_llm_call(
-                self._llm_calls,
+            self._llm_calls.end(
                 llm_call,
-                status=status,
                 result=result,
                 usage=usage,
+                stopped=stopped,
             )
 
     def stream_text[InputT, OutputT](
@@ -292,9 +286,9 @@ class GeminiAgentRuntime:
         unknown_error: Exception | None = None
         terminal_reason_seen = False
         normal_eof = False
-        status = PhaseStatus.STOPPED
         result: LlmCallResult | None = None
         usage: Usage | None = None
+        stopped = True
         try:
             try:
                 sdk_stream = await self._client.models.generate_content_stream(
@@ -370,7 +364,8 @@ class GeminiAgentRuntime:
 
             if normal_eof:
                 span.set_attribute("result", "succeeded")
-                status, result = outcome_from_span_result("succeeded")
+                stopped = False
+                result = outcome_from_span_result("succeeded")
             elif classified_error is not None:
                 span_result = (
                     "blocked"
@@ -385,20 +380,20 @@ class GeminiAgentRuntime:
                 record_ai_provider_exhausted(
                     classified_error, provider=agent.model.provider
                 )
-                status, result = outcome_from_span_result(span_result)
+                stopped = False
+                result = outcome_from_span_result(span_result)
             elif unknown_error is not None:
                 span.record_exception(unknown_error)
                 span.set_status(StatusCode.ERROR, str(unknown_error))
-                status = PhaseStatus.FAILED
+                stopped = False
                 result = None
         finally:
             span.end()
-            close_llm_call(
-                self._llm_calls,
+            self._llm_calls.end(
                 llm_call,
-                status=status,
                 result=result,
                 usage=usage,
+                stopped=stopped,
             )
 
         if classified_error is not None:

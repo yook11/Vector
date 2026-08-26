@@ -7,7 +7,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from app.agent.recording.types import LlmCallResult, PhaseStatus, Usage
+from app.agent.recording.types import LlmCallResult, Usage
 from app.agent.runtime.contract import AgentResponseInvalidError
 from app.agent.runtime.deepseek import DeepSeekAgentRuntime
 from app.analysis.ai_provider_errors import AIProviderNetworkError
@@ -58,7 +58,6 @@ async def test_successful_call_records_completed_succeeded_usage() -> None:
     assert recorder.ends == [
         RecordedLlmCallEnd(
             call=started,
-            status=PhaseStatus.COMPLETED,
             result=LlmCallResult.SUCCEEDED,
             usage=Usage(
                 input_tokens=4,
@@ -66,6 +65,7 @@ async def test_successful_call_records_completed_succeeded_usage() -> None:
                 cache_read_input_tokens=1,
                 reasoning_output_tokens=2,
             ),
+            stopped=False,
         )
     ]
 
@@ -80,8 +80,8 @@ async def test_invalid_response_records_failed_invalid_response() -> None:
         await runtime.call(make_agent(), object(), attempt_number=1)
 
     recorded = recorder.ends[0]
-    assert recorded.status is PhaseStatus.FAILED
     assert recorded.result is LlmCallResult.INVALID_RESPONSE
+    assert recorded.stopped is False
 
 
 async def test_translated_provider_error_records_failed_provider_error() -> None:
@@ -94,8 +94,8 @@ async def test_translated_provider_error_records_failed_provider_error() -> None
         await runtime.call(make_agent(), object(), attempt_number=1)
 
     recorded = recorder.ends[0]
-    assert recorded.status is PhaseStatus.FAILED
     assert recorded.result is LlmCallResult.PROVIDER_ERROR
+    assert recorded.stopped is False
 
 
 async def test_unclassified_exception_records_failed_without_result() -> None:
@@ -110,8 +110,8 @@ async def test_unclassified_exception_records_failed_without_result() -> None:
 
     assert exc_info.value is error
     recorded = recorder.ends[0]
-    assert recorded.status is PhaseStatus.FAILED
     assert recorded.result is None
+    assert recorded.stopped is False
     assert len(recorder.ends) == 1
 
 

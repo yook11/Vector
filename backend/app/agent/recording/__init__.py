@@ -13,7 +13,6 @@ from app.agent.recording.internal_search import (
 from app.agent.recording.llm import (
     LlmCallRecorder,
     LogfireLlmCallRecorder,
-    close_llm_call,
     logfire_llm_call_recorder,
     outcome_from_span_result,
 )
@@ -39,7 +38,6 @@ __all__ = [
     "PhaseStatus",
     "ToolCall",
     "Usage",
-    "close_llm_call",
     "logfire_external_search_recorder",
     "logfire_internal_search_recorder",
     "logfire_llm_call_recorder",
