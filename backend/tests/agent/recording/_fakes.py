@@ -6,7 +6,10 @@ from dataclasses import dataclass, field
 from time import perf_counter
 from typing import Literal
 
-from app.agent.answering.metrics import DirectAnswerOutcomeResult
+from app.agent.answering.metrics import (
+    AnswerSynthesisOutcomeResult,
+    DirectAnswerOutcomeResult,
+)
 from app.agent.contract import PlanType
 from app.agent.evidence_collection.contract import TaskExternalCollectionStatus
 from app.agent.evidence_collection.internal_search.contract import (
@@ -19,12 +22,14 @@ from app.agent.recording.types import LlmCall, LlmCallResult, PhaseCall, Usage
 
 __all__ = [
     "RecordedDirectAnswerEnd",
+    "RecordedEvidenceAnswerEnd",
     "RecordedExternalSearchEnd",
     "RecordedInternalSearchEnd",
     "RecordedLlmCallEnd",
     "RecordedPlanningEnd",
     "RecordedQuestionContextEnd",
     "RecordingDirectAnswerRecorder",
+    "RecordingEvidenceAnswerRecorder",
     "RecordingExternalSearchRecorder",
     "RecordingInternalSearchRecorder",
     "RecordingLlmCallRecorder",
@@ -271,6 +276,48 @@ class RecordingDirectAnswerRecorder:
                 call=call,
                 outcome=outcome,
                 retry_used=retry_used,
+                failure_code=failure_code,
+                stopped=stopped,
+            )
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class RecordedEvidenceAnswerEnd:
+    call: PhaseCall
+    outcome: AnswerSynthesisOutcomeResult | None
+    retry_used: bool
+    fallback_used: bool
+    failure_code: str | None
+    stopped: bool
+
+
+@dataclass(slots=True)
+class RecordingEvidenceAnswerRecorder:
+    starts: list[PhaseCall] = field(default_factory=list)
+    ends: list[RecordedEvidenceAnswerEnd] = field(default_factory=list)
+
+    async def start(self) -> PhaseCall:
+        call = PhaseCall(started_at=perf_counter())
+        self.starts.append(call)
+        return call
+
+    async def end(
+        self,
+        call: PhaseCall,
+        *,
+        outcome: AnswerSynthesisOutcomeResult | None = None,
+        retry_used: bool = False,
+        fallback_used: bool = False,
+        failure_code: str | None = None,
+        stopped: bool = False,
+    ) -> None:
+        self.ends.append(
+            RecordedEvidenceAnswerEnd(
+                call=call,
+                outcome=outcome,
+                retry_used=retry_used,
+                fallback_used=fallback_used,
                 failure_code=failure_code,
                 stopped=stopped,
             )
