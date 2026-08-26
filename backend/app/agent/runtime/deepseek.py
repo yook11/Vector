@@ -23,12 +23,11 @@ from app.agent.agent import Agent
 from app.agent.error_type import span_error_type
 from app.agent.recording.llm import (
     LlmCallRecorder,
-    close_llm_call,
     logfire_llm_call_recorder,
     outcome_from_span_result,
     usage_from_deepseek_usage,
 )
-from app.agent.recording.types import LlmCallResult, PhaseStatus, Usage
+from app.agent.recording.types import LlmCallResult, Usage
 from app.agent.runtime._structured_output import (
     parse_json_object,
     thaw_schema,
@@ -67,13 +66,11 @@ class DeepSeekAgentRuntime:
         *,
         client: AsyncOpenAI,
         binding: DeepSeekOutputBinding,
-        llm_calls: LlmCallRecorder | None = None,
+        llm_calls: LlmCallRecorder = logfire_llm_call_recorder,
     ) -> None:
         self._client = client
         self._binding = binding
-        self._llm_calls = (
-            llm_calls if llm_calls is not None else logfire_llm_call_recorder
-        )
+        self._llm_calls = llm_calls
 
     async def call[InputT, OutputT](
         self,
@@ -96,9 +93,9 @@ class DeepSeekAgentRuntime:
         request = _build_request(agent, input, binding=self._binding)
         classified_error: Exception | None = None
         output: OutputT | object = _MISSING_OUTPUT
-        status = PhaseStatus.FAILED
         result: LlmCallResult | None = None
         usage: Usage | None = None
+        stopped = False
         llm_call = self._llm_calls.start(
             agent_name=agent.name,
             provider=agent.model.provider,
@@ -135,7 +132,7 @@ class DeepSeekAgentRuntime:
                     record_ai_provider_exhausted(
                         translated_error, provider=agent.model.provider
                     )
-                    status, result = outcome_from_span_result("provider_error")
+                    result = outcome_from_span_result("provider_error")
                 else:
                     usage = _record_usage(span, getattr(response, "usage", None))
                     try:
@@ -151,10 +148,10 @@ class DeepSeekAgentRuntime:
                             result="invalid_response",
                             error_type=span_error_type(exc),
                         )
-                        status, result = outcome_from_span_result("invalid_response")
+                        result = outcome_from_span_result("invalid_response")
                     else:
                         span.set_attribute("result", "succeeded")
-                        status, result = outcome_from_span_result("succeeded")
+                        result = outcome_from_span_result("succeeded")
 
             if classified_error is not None:
                 raise classified_error
@@ -162,16 +159,15 @@ class DeepSeekAgentRuntime:
                 raise RuntimeError("DeepSeek runtime completed without output")
             return cast(OutputT, output)
         except (asyncio.CancelledError, GeneratorExit):
-            status = PhaseStatus.STOPPED
+            stopped = True
             result = None
             raise
         finally:
-            close_llm_call(
-                self._llm_calls,
+            self._llm_calls.end(
                 llm_call,
-                status=status,
                 result=result,
                 usage=usage,
+                stopped=stopped,
             )
 
 

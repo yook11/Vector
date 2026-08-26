@@ -8,7 +8,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from app.agent.recording.types import LlmCallResult, PhaseStatus, Usage
+from app.agent.recording.types import LlmCallResult, Usage
 from app.agent.runtime.contract import AgentResponseInvalidError
 from app.agent.runtime.gemini import GeminiAgentRuntime
 from app.analysis.ai_provider_errors import (
@@ -64,8 +64,8 @@ async def test_successful_call_records_completed_succeeded_usage() -> None:
     assert recorded.call.provider == "gemini"
     assert recorded.call.model == agent.model.name
     assert recorded.call.attempt_number == 1
-    assert recorded.status is PhaseStatus.COMPLETED
     assert recorded.result is LlmCallResult.SUCCEEDED
+    assert recorded.stopped is False
     assert recorded.usage == Usage(
         input_tokens=11,
         output_tokens=7,
@@ -87,8 +87,8 @@ async def test_blocked_call_records_failed_blocked() -> None:
         await runtime.call(make_agent(), "typed input", attempt_number=1)
 
     recorded = recorder.ends[0]
-    assert recorded.status is PhaseStatus.FAILED
     assert recorded.result is LlmCallResult.BLOCKED
+    assert recorded.stopped is False
     assert recorded.usage == Usage(
         input_tokens=11,
         output_tokens=7,
@@ -107,8 +107,8 @@ async def test_invalid_response_records_failed_invalid_response() -> None:
         await runtime.call(make_agent(), "typed input", attempt_number=1)
 
     recorded = recorder.ends[0]
-    assert recorded.status is PhaseStatus.FAILED
     assert recorded.result is LlmCallResult.INVALID_RESPONSE
+    assert recorded.stopped is False
 
 
 async def test_translated_provider_error_records_failed_provider_error() -> None:
@@ -121,8 +121,8 @@ async def test_translated_provider_error_records_failed_provider_error() -> None
         await runtime.call(make_agent(), "typed input", attempt_number=1)
 
     recorded = recorder.ends[0]
-    assert recorded.status is PhaseStatus.FAILED
     assert recorded.result is LlmCallResult.PROVIDER_ERROR
+    assert recorded.stopped is False
     assert recorded.usage is None
 
 
@@ -138,8 +138,8 @@ async def test_unclassified_exception_records_failed_without_result() -> None:
 
     assert exc_info.value is error
     recorded = recorder.ends[0]
-    assert recorded.status is PhaseStatus.FAILED
     assert recorded.result is None
+    assert recorded.stopped is False
 
 
 async def test_cancelled_call_records_stopped() -> None:
@@ -152,8 +152,8 @@ async def test_cancelled_call_records_stopped() -> None:
         await runtime.call(make_agent(), "typed input", attempt_number=1)
 
     recorded = recorder.ends[0]
-    assert recorded.status is PhaseStatus.STOPPED
     assert recorded.result is None
+    assert recorded.stopped is True
     assert len(recorder.starts) == 1
     assert len(recorder.ends) == 1
 

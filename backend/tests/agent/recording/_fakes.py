@@ -10,13 +10,7 @@ from app.agent.evidence_collection.internal_search.contract import (
     InternalSearchFailurePhase,
     InternalSearchOutcome,
 )
-from app.agent.recording.types import (
-    LlmCall,
-    LlmCallResult,
-    PhaseCall,
-    PhaseStatus,
-    Usage,
-)
+from app.agent.recording.types import LlmCall, LlmCallResult, PhaseCall, Usage
 
 __all__ = [
     "RecordedExternalSearchEnd",
@@ -31,9 +25,9 @@ __all__ = [
 @dataclass(frozen=True, slots=True)
 class RecordedLlmCallEnd:
     call: LlmCall
-    status: PhaseStatus
     result: LlmCallResult | None
     usage: Usage | None
+    stopped: bool
 
 
 @dataclass(slots=True)
@@ -63,16 +57,16 @@ class RecordingLlmCallRecorder:
         self,
         call: LlmCall,
         *,
-        status: PhaseStatus,
-        result: LlmCallResult | None,
-        usage: Usage | None,
+        result: LlmCallResult | None = None,
+        usage: Usage | None = None,
+        stopped: bool = False,
     ) -> None:
         self.ends.append(
             RecordedLlmCallEnd(
                 call=call,
-                status=status,
                 result=result,
                 usage=usage,
+                stopped=stopped,
             )
         )
 

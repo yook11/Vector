@@ -8,7 +8,7 @@ from typing import cast
 import pytest
 from google.genai.client import AsyncClient
 
-from app.agent.recording.types import LlmCallResult, PhaseStatus, Usage
+from app.agent.recording.types import LlmCallResult, Usage
 from app.agent.runtime.gemini import GeminiAgentRuntime
 from tests.agent.recording._fakes import RecordingLlmCallRecorder
 from tests.agent.runtime._helpers import FakeGeminiClient, make_agent
@@ -59,8 +59,8 @@ async def test_normal_stream_eof_records_completed_succeeded() -> None:
     assert fragments == ["fragment"]
     assert len(recorder.starts) == 1
     recorded = recorder.ends[0]
-    assert recorded.status is PhaseStatus.COMPLETED
     assert recorded.result is LlmCallResult.SUCCEEDED
+    assert recorded.stopped is False
     assert recorded.usage == Usage(
         input_tokens=11,
         output_tokens=7,
@@ -90,8 +90,8 @@ async def test_consumer_aclose_records_stopped_and_keeps_usage() -> None:
     assert len(recorder.starts) == 1
     assert len(recorder.ends) == 1
     recorded = recorder.ends[0]
-    assert recorded.status is PhaseStatus.STOPPED
     assert recorded.result is None
+    assert recorded.stopped is True
     assert recorded.usage == Usage(
         input_tokens=11,
         output_tokens=7,
@@ -118,7 +118,7 @@ async def test_cancellation_records_stopped_without_result() -> None:
         await stream.__anext__()
 
     recorded = recorder.ends[0]
-    assert recorded.status is PhaseStatus.STOPPED
     assert recorded.result is None
+    assert recorded.stopped is True
     assert recorded.usage is None
     assert len(recorder.ends) == 1

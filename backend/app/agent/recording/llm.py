@@ -12,7 +12,6 @@ from app.agent.recording.types import LlmCall, LlmCallResult, PhaseStatus, Usage
 __all__ = [
     "LlmCallRecorder",
     "LogfireLlmCallRecorder",
-    "close_llm_call",
     "logfire_llm_call_recorder",
     "outcome_from_span_result",
     "usage_from_deepseek_usage",
@@ -42,6 +41,8 @@ _tokens_counter = logfire.metric_counter(
 
 
 class LlmCallRecorder(Protocol):
+    """start は必ず LlmCall を返し、記録の例外は本処理へ出さない。"""
+
     def start(
         self,
         *,
@@ -55,21 +56,30 @@ class LlmCallRecorder(Protocol):
         self,
         call: LlmCall,
         *,
-        status: PhaseStatus,
-        result: LlmCallResult | None,
-        usage: Usage | None,
+        result: LlmCallResult | None = None,
+        usage: Usage | None = None,
+        stopped: bool = False,
     ) -> None: ...
 
 
-def outcome_from_span_result(
-    span_result: str,
-) -> tuple[PhaseStatus, LlmCallResult]:
-    """span の result 文字列を status と LLM 結論へ写像する。"""
+def outcome_from_span_result(span_result: str) -> LlmCallResult:
+    """span の result 文字列を LLM 結論へ写す。"""
 
-    result = LlmCallResult(span_result)
+    return LlmCallResult(span_result)
+
+
+def _status_from_result(
+    *,
+    stopped: bool,
+    result: LlmCallResult | None,
+) -> PhaseStatus:
+    """attempt の終わり方を記録の status に写す。"""
+
+    if stopped:
+        return PhaseStatus.STOPPED
     if result is LlmCallResult.SUCCEEDED:
-        return PhaseStatus.COMPLETED, result
-    return PhaseStatus.FAILED, result
+        return PhaseStatus.COMPLETED
+    return PhaseStatus.FAILED
 
 
 def usage_from_gemini_metadata(usage: object | None) -> Usage | None:
@@ -100,22 +110,6 @@ def usage_from_deepseek_usage(usage: object | None) -> Usage | None:
     )
 
 
-def close_llm_call(
-    recorder: LlmCallRecorder,
-    call: LlmCall,
-    *,
-    status: PhaseStatus,
-    result: LlmCallResult | None,
-    usage: Usage | None,
-) -> None:
-    """recorder.end の失敗で本処理を落とさない。"""
-
-    try:
-        recorder.end(call, status=status, result=result, usage=usage)
-    except Exception:
-        return
-
-
 class LogfireLlmCallRecorder:
     def start(
         self,
@@ -125,23 +119,33 @@ class LogfireLlmCallRecorder:
         model: str,
         attempt_number: int,
     ) -> LlmCall:
-        return LlmCall(
-            agent_name=agent_name,
-            provider=provider,
-            model=model,
-            attempt_number=attempt_number,
-            started_at=perf_counter(),
-        )
+        try:
+            return LlmCall(
+                agent_name=agent_name,
+                provider=provider,
+                model=model,
+                attempt_number=attempt_number,
+                started_at=perf_counter(),
+            )
+        except Exception:
+            return LlmCall(
+                agent_name=agent_name,
+                provider=provider,
+                model=model,
+                attempt_number=attempt_number,
+                started_at=0.0,
+            )
 
     def end(
         self,
         call: LlmCall,
         *,
-        status: PhaseStatus,
-        result: LlmCallResult | None,
-        usage: Usage | None,
+        result: LlmCallResult | None = None,
+        usage: Usage | None = None,
+        stopped: bool = False,
     ) -> None:
         try:
+            status = _status_from_result(stopped=stopped, result=result)
             attributes = {
                 "agent_name": call.agent_name,
                 "provider": call.provider,
