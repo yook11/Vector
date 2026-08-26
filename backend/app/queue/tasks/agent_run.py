@@ -15,7 +15,6 @@ from taskiq import Context, TaskiqDepends
 from app.agent.answering.direct_answer.contract import DirectAnswerInvalidError
 from app.agent.composition import build_answering_runner
 from app.agent.contract import AnswerGenerationStopped, AnswerQuestionResult
-from app.agent.input_safety.contract import InputSafetyBlocked
 from app.agent.live_updates.answer_delta import AgentRunLiveAnswerDeltaReporter
 from app.agent.live_updates.recent_events import AgentRunLiveEventPublisher
 from app.agent.live_updates.reporters import (
@@ -221,14 +220,6 @@ async def run_agent_answer(
                 )
                 result = run_result.final_output
                 research_checkpoint = run_result.research_checkpoint
-            except InputSafetyBlocked:
-                await _mark_policy_blocked(
-                    session_factory,
-                    run_id,
-                    attempt_epoch,
-                    stream_events,
-                )
-                return
             except AnswerGenerationStopped:
                 logger.info(
                     "agent_run_generation_stopped",
@@ -555,28 +546,6 @@ async def _mark_failed(
                 errorCode=error_code,
             ),
         )
-    return True
-
-
-async def _mark_policy_blocked(
-    session_factory: async_sessionmaker[AsyncSession],
-    run_id: UUID,
-    expected_attempt_epoch: int,
-    stream_events: AgentRunLiveStreamPublisher,
-) -> bool:
-    async with session_factory() as session:
-        async with session.begin():
-            transitioned = await AgentRunRepository(session).mark_policy_blocked(
-                run_id,
-                expected_attempt_epoch=expected_attempt_epoch,
-            )
-    if not transitioned:
-        return False
-    await _publish_terminal(
-        stream_events,
-        run_id,
-        AgentRunLiveStreamTerminalEvent(status="policy_blocked"),
-    )
     return True
 
 

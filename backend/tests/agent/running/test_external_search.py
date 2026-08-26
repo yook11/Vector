@@ -83,7 +83,6 @@ from tests.agent.running._harness import (
 from tests.agent.running._harness import (
     review_draft as _review_draft,
 )
-from tests.agent.running._input_safety import AllowInputSafetyChecker
 from tests.agent.runtime._fakes import GoalKeyedAgentRuntime, ScriptedAgentRuntime
 from tests.logfire._metric_helpers import collected_metrics
 
@@ -375,7 +374,6 @@ def _runner(
     )
     return (
         AnsweringRunner(
-            input_safety_checker=AllowInputSafetyChecker(),
             context_preparer=_Preparer(),
             phases_factory=lambda: phases,
             events=events,
@@ -1325,7 +1323,6 @@ async def test_external_scope_is_activated_fresh_per_run() -> None:
         reviewer=EvidenceReviewer(runtime_scope_factory=_reviewer_scope),
     )
     runner = AnsweringRunner(
-        input_safety_checker=AllowInputSafetyChecker(),
         context_preparer=_Preparer(),
         phases_factory=lambda: phases,
     )

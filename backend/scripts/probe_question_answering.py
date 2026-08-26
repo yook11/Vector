@@ -47,8 +47,6 @@ from app.agent.evidence_collection.internal_search.service import (
     InternalSearchService,
 )
 from app.agent.evidence_review import EvidenceReviewer
-from app.agent.input_safety.agent import INPUT_SAFETY_AGENT
-from app.agent.input_safety.service import InputSafetyService
 from app.agent.planning.contract import (
     DirectAnswerPlan,
     PlanningRequest,
@@ -216,10 +214,6 @@ async def _probe_search(
         article_search_repository=PgVectorArticleSearchRepository(session_factory),
     )
     runner = AnsweringRunner(
-        input_safety_checker=InputSafetyService(
-            agent=INPUT_SAFETY_AGENT,
-            runtime_scope_factory=activate_gemini_agent_runtime,
-        ),
         context_preparer=QuestionContextService(
             agent=QUESTION_CONTEXT_AGENT,
             runtime_scope_factory=None,
@@ -264,10 +258,6 @@ async def _probe_direct(*, question: str) -> None:
 
     as_of = datetime.now(UTC)
     runner = AnsweringRunner(
-        input_safety_checker=InputSafetyService(
-            agent=INPUT_SAFETY_AGENT,
-            runtime_scope_factory=activate_gemini_agent_runtime,
-        ),
         context_preparer=QuestionContextService(
             agent=QUESTION_CONTEXT_AGENT,
             runtime_scope_factory=None,

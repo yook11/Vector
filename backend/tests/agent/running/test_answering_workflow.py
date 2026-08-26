@@ -32,7 +32,6 @@ from app.agent.planning.contract import (
 from app.agent.question_context import AnswerBrief
 from app.agent.running import AnsweringPhases, AnsweringRunner, RunInput
 from tests.agent.running._harness import fixed_scope, run_identity
-from tests.agent.running._input_safety import AllowInputSafetyChecker
 
 RUN_ID = UUID("019bd239-1ed4-7fbb-a336-04fe3c197650")
 AS_OF = datetime(2026, 7, 19, 9, 30, tzinfo=UTC)
@@ -201,7 +200,6 @@ def _runner(
 
     return (
         AnsweringRunner(
-            input_safety_checker=AllowInputSafetyChecker(),
             context_preparer=_Preparer(answer_brief, timeline, prepare_error),
             phases_factory=phases_factory,
             progress=_Progress(timeline),
@@ -228,7 +226,6 @@ async def test_direct_workflow_order_and_context_identity() -> None:
     )
 
     assert timeline == [
-        "progress:safety_check",
         "progress:context_resolution",
         "prepare",
         "phases_factory",
@@ -259,8 +256,7 @@ async def test_search_workflow_starts_both_retrieval_ports() -> None:
         identity=run_identity(run_id=RUN_ID, as_of=AS_OF),
     )
 
-    assert timeline[:7] == [
-        "progress:safety_check",
+    assert timeline[:6] == [
         "progress:context_resolution",
         "prepare",
         "phases_factory",
@@ -268,9 +264,9 @@ async def test_search_workflow_starts_both_retrieval_ports() -> None:
         "planner",
         "progress:evidence_collection",
     ]
-    assert set(timeline[7:9]) == {"internal_search", "external_search_scope"}
+    assert set(timeline[6:8]) == {"internal_search", "external_search_scope"}
     # ヒットが内外ともゼロのため精査は呼ばれず、evidence_review は報告されない。
-    assert timeline[9:] == [
+    assert timeline[8:] == [
         "progress:answering",
         "evidence_answerer",
     ]
@@ -300,7 +296,6 @@ async def test_preparation_failure_does_not_build_phases() -> None:
 
     assert raised.value is error
     assert timeline == [
-        "progress:safety_check",
         "progress:context_resolution",
         "prepare",
     ]
