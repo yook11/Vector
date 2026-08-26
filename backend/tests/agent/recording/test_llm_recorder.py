@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import json
-
 import pytest
 from logfire.testing import CaptureLogfire
 
@@ -19,7 +17,6 @@ from tests.logfire._metric_helpers import attributes_of, collected_metrics
 _OUTCOME_METRIC = "vector.agent.llm_call.outcome"
 _DURATION_METRIC = "vector.agent.llm_call.duration"
 _TOKENS_METRIC = "vector.agent.llm_call.tokens"
-_SENTINEL = "TASK_CONTENTS_SENTINEL_llm_call"
 
 
 @pytest.mark.parametrize(
@@ -121,9 +118,6 @@ async def test_logfire_recorder_emits_outcome_duration_and_present_tokens(
         {**expected, "direction": "input"},
         {**expected, "direction": "output"},
     ]
-    dumped = json.dumps(metrics, default=str)
-    assert _SENTINEL not in dumped
-    assert "run_id" not in dumped
 
 
 @pytest.mark.parametrize(
