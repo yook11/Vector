@@ -4,21 +4,26 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from time import perf_counter
+from typing import Literal
 
+from app.agent.contract import PlanType
 from app.agent.evidence_collection.contract import TaskExternalCollectionStatus
 from app.agent.evidence_collection.internal_search.contract import (
     InternalSearchFailurePhase,
     InternalSearchOutcome,
 )
+from app.agent.planning.metrics import PlannerOutcomeResult
 from app.agent.recording.types import LlmCall, LlmCallResult, PhaseCall, Usage
 
 __all__ = [
     "RecordedExternalSearchEnd",
     "RecordedInternalSearchEnd",
     "RecordedLlmCallEnd",
+    "RecordedPlanningEnd",
     "RecordingExternalSearchRecorder",
     "RecordingInternalSearchRecorder",
     "RecordingLlmCallRecorder",
+    "RecordingPlanningRecorder",
 ]
 
 
@@ -138,6 +143,48 @@ class RecordingExternalSearchRecorder:
             RecordedExternalSearchEnd(
                 call=call,
                 outcome=outcome,
+                stopped=stopped,
+            )
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class RecordedPlanningEnd:
+    call: PhaseCall
+    outcome: PlannerOutcomeResult | None
+    retry_used: bool
+    plan_type: PlanType | Literal["not_created"] | None
+    failure_code: str | None
+    stopped: bool
+
+
+@dataclass(slots=True)
+class RecordingPlanningRecorder:
+    starts: list[PhaseCall] = field(default_factory=list)
+    ends: list[RecordedPlanningEnd] = field(default_factory=list)
+
+    async def start(self) -> PhaseCall:
+        call = PhaseCall(started_at=perf_counter())
+        self.starts.append(call)
+        return call
+
+    async def end(
+        self,
+        call: PhaseCall,
+        *,
+        outcome: PlannerOutcomeResult | None = None,
+        retry_used: bool = False,
+        plan_type: PlanType | Literal["not_created"] | None = None,
+        failure_code: str | None = None,
+        stopped: bool = False,
+    ) -> None:
+        self.ends.append(
+            RecordedPlanningEnd(
+                call=call,
+                outcome=outcome,
+                retry_used=retry_used,
+                plan_type=plan_type,
+                failure_code=failure_code,
                 stopped=stopped,
             )
         )

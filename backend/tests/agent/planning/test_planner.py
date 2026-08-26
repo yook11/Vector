@@ -29,6 +29,7 @@ from app.analysis.ai_provider_errors import (
     AIProviderOutputBlockedError,
 )
 from app.analysis.gemini_error_translator import GeminiContentRejectionReason
+from tests.agent.recording._fakes import RecordingPlanningRecorder
 from tests.agent.runtime._fakes import ScriptedAgentRuntime
 from tests.logfire._metric_helpers import collected_metrics, sum_counter_for_result
 
@@ -135,18 +136,24 @@ def _service(
     runtime: ScriptedAgentRuntime,
     *,
     exit_observer: Callable[[], None] | None = None,
+    recorder: RecordingPlanningRecorder | None = None,
 ) -> tuple[QuestionPlanningService, RecordingPlannerRuntimeScopeFactory]:
     factory = RecordingPlannerRuntimeScopeFactory(
         [runtime],
         exit_observer=exit_observer,
     )
-    return (
-        QuestionPlanningService(
+    if recorder is None:
+        service = QuestionPlanningService(
             agent=QUESTION_PLANNER_AGENT,
             runtime_scope_factory=factory,
-        ),
-        factory,
-    )
+        )
+    else:
+        service = QuestionPlanningService(
+            agent=QUESTION_PLANNER_AGENT,
+            runtime_scope_factory=factory,
+            recorder=recorder,
+        )
+    return (service, factory)
 
 
 def _metric_attributes(
@@ -161,6 +168,26 @@ def _metric_attributes(
     return [
         data_point.get("attributes", {}) for data_point in metric["data"]["data_points"]
     ]
+
+
+def _assert_recorded(
+    recorder: RecordingPlanningRecorder,
+    *,
+    outcome: str | None,
+    stopped: bool = False,
+    retry_used: bool = False,
+    plan_type: str | None = None,
+    failure_code: str | None = None,
+) -> None:
+    assert len(recorder.starts) == 1
+    assert len(recorder.ends) == 1
+    recorded = recorder.ends[0]
+    assert recorded.call is recorder.starts[0]
+    assert recorded.outcome == outcome
+    assert recorded.stopped is stopped
+    assert recorded.retry_used is retry_used
+    assert recorded.plan_type == plan_type
+    assert recorded.failure_code == failure_code
 
 
 @pytest.mark.parametrize(
@@ -224,6 +251,23 @@ async def test_planner_returns_each_completed_two_plan_variant_after_scope_exit(
     ]
 
 
+async def test_successful_plan_records_planned_outcome() -> None:
+    """完成 plan は recorder へ planned を1回渡す。"""
+
+    runtime = ScriptedAgentRuntime([_draft(plan_type="direct_answer")])
+    recorder = RecordingPlanningRecorder()
+    service, _factory = _service(runtime, recorder=recorder)
+
+    plan = await service.plan(_input())
+
+    assert plan.plan_type == "direct_answer"
+    _assert_recorded(
+        recorder,
+        outcome="planned",
+        plan_type="direct_answer",
+    )
+
+
 async def test_semantic_response_defect_retries_once_without_leaking_question() -> None:
     question_sentinel = "RAW_QUESTION_MUST_NOT_REACH_REPAIR_OR_METRIC_8ab4"
     invalid = _draft(
@@ -276,6 +320,27 @@ async def test_two_response_defects_propagate_second_error_and_record_not_create
     ]
 
 
+async def test_terminal_response_defect_records_failed_outcome() -> None:
+    """分類済み終端は recorder へ failed を1回渡す。"""
+
+    first_error = _response_invalid(AgentResponseDefect.RESPONSE_NOT_OBJECT)
+    terminal_error = _response_invalid(AgentResponseDefect.OUTPUT_SCHEMA_MISMATCH)
+    runtime = ScriptedAgentRuntime([first_error, terminal_error])
+    recorder = RecordingPlanningRecorder()
+    service, _factory = _service(runtime, recorder=recorder)
+
+    with pytest.raises(AgentResponseInvalidError):
+        await service.plan(_input())
+
+    _assert_recorded(
+        recorder,
+        outcome="failed",
+        retry_used=True,
+        plan_type="not_created",
+        failure_code=AgentResponseDefect.OUTPUT_SCHEMA_MISMATCH.value,
+    )
+
+
 async def test_classified_provider_failure_does_not_retry_and_records_not_created(
     capfire: CaptureLogfire,
 ) -> None:
@@ -299,12 +364,32 @@ async def test_classified_provider_failure_does_not_retry_and_records_not_create
     ]
 
 
+async def test_classified_provider_failure_records_failed_outcome() -> None:
+    """分類済み provider 失敗は recorder へ failed を渡す。"""
+
+    error = AIProviderNetworkError()
+    runtime = ScriptedAgentRuntime([error])
+    recorder = RecordingPlanningRecorder()
+    service, _factory = _service(runtime, recorder=recorder)
+
+    with pytest.raises(AIProviderNetworkError):
+        await service.plan(_input())
+
+    _assert_recorded(
+        recorder,
+        outcome="failed",
+        plan_type="not_created",
+        failure_code="ai_error_network",
+    )
+
+
 async def test_bare_provider_error_propagates_as_unclassified_without_outcome_metric(
     capfire: CaptureLogfire,
 ) -> None:
     error = AIProviderError()
     runtime = ScriptedAgentRuntime([error])
-    service, factory = _service(runtime)
+    recorder = RecordingPlanningRecorder()
+    service, factory = _service(runtime, recorder=recorder)
 
     with pytest.raises(AIProviderError) as raised:
         await service.plan(_input())
@@ -320,6 +405,7 @@ async def test_bare_provider_error_propagates_as_unclassified_without_outcome_me
     assert factory.exits[0][2] is error
     assert _metric_attributes(collected_metrics(capfire)) == []
     assert phase.status.status_code is StatusCode.ERROR
+    _assert_recorded(recorder, outcome=None)
 
 
 @pytest.mark.parametrize(
@@ -334,13 +420,19 @@ async def test_unclassified_failure_and_cancellation_propagate_without_metric(
     capfire: CaptureLogfire,
 ) -> None:
     runtime = ScriptedAgentRuntime([error])
-    service, _factory = _service(runtime)
+    recorder = RecordingPlanningRecorder()
+    service, _factory = _service(runtime, recorder=recorder)
 
     with pytest.raises(type(error)) as raised:
         await service.plan(_input())
 
     assert raised.value is error
     assert _metric_attributes(collected_metrics(capfire)) == []
+    _assert_recorded(
+        recorder,
+        outcome=None,
+        stopped=isinstance(error, asyncio.CancelledError),
+    )
 
 
 @pytest.mark.parametrize("failure_point", ["enter", "exit"])
@@ -362,9 +454,11 @@ async def test_scope_failure_propagates_without_plan_or_metric(
         enter_error=error if failure_point == "enter" else None,
         exit_error=error if failure_point == "exit" else None,
     )
+    recorder = RecordingPlanningRecorder()
     service = QuestionPlanningService(
         agent=QUESTION_PLANNER_AGENT,
         runtime_scope_factory=factory,
+        recorder=recorder,
     )
 
     with pytest.raises(RuntimeError) as raised:
@@ -373,6 +467,7 @@ async def test_scope_failure_propagates_without_plan_or_metric(
     assert raised.value is error
     assert len(runtime.calls) == (0 if failure_point == "enter" else 1)
     assert _metric_attributes(collected_metrics(capfire)) == []
+    _assert_recorded(recorder, outcome=None)
 
 
 async def test_search_plan_preserves_typed_time_window_through_service() -> None:
@@ -438,9 +533,11 @@ async def test_close_error_replaces_terminal_response_defect_without_metric(
         [runtime],
         exit_error=close_error,
     )
+    recorder = RecordingPlanningRecorder()
     service = QuestionPlanningService(
         agent=QUESTION_PLANNER_AGENT,
         runtime_scope_factory=factory,
+        recorder=recorder,
     )
 
     with pytest.raises(AIProviderNetworkError) as raised:
@@ -456,6 +553,7 @@ async def test_close_error_replaces_terminal_response_defect_without_metric(
         factory.exits[0][3] is not None,
     ) == (True, True, True, True)
     assert _metric_attributes(collected_metrics(capfire)) == []
+    _assert_recorded(recorder, outcome=None, retry_used=True)
 
 
 @pytest.mark.parametrize(
@@ -528,7 +626,8 @@ async def test_unknown_error_and_cancellation_propagate_by_identity(
 ) -> None:
     question_sentinel = "PLANNER_QUESTION_MUST_NOT_ENTER_METRICS_58d2"
     runtime = ScriptedAgentRuntime([error])
-    service, factory = _service(runtime)
+    recorder = RecordingPlanningRecorder()
+    service, factory = _service(runtime, recorder=recorder)
 
     with pytest.raises(type(error)) as raised:
         await service.plan(_input(question_sentinel))
@@ -543,6 +642,11 @@ async def test_unknown_error_and_cancellation_propagate_by_identity(
     assert question_sentinel not in metric_dump
     if exception_message is not None:
         assert exception_message not in metric_dump
+    _assert_recorded(
+        recorder,
+        outcome=None,
+        stopped=isinstance(error, asyncio.CancelledError),
+    )
 
 
 @pytest.mark.parametrize(
@@ -585,9 +689,11 @@ async def test_all_runtime_scope_failures_propagate_without_plan_or_metric(
         enter_error=error if failure_point == "enter" else None,
         exit_error=error if failure_point == "exit" else None,
     )
+    recorder = RecordingPlanningRecorder()
     service = QuestionPlanningService(
         agent=QUESTION_PLANNER_AGENT,
         runtime_scope_factory=factory,
+        recorder=recorder,
     )
 
     with pytest.raises(type(error)) as raised:
@@ -596,6 +702,7 @@ async def test_all_runtime_scope_failures_propagate_without_plan_or_metric(
     assert raised.value is error
     assert len(runtime.calls) == runtime_call_count
     assert _metric_attributes(collected_metrics(capfire)) == []
+    _assert_recorded(recorder, outcome=None)
 
 
 async def test_two_plan_calls_activate_fresh_runtime_scopes() -> None:
@@ -666,6 +773,35 @@ async def test_retry_success_metric_records_after_scope_exit_without_repair_deta
     ]
     assert "REPAIR_HINT_MUST_NOT_ENTER_METRICS_4d7f" not in json.dumps(
         metrics, default=str, ensure_ascii=False
+    )
+
+
+async def test_retry_success_records_planned_with_retry_used() -> None:
+    """retry 成功は recorder へ planned と retry_used を渡す。"""
+
+    invalid = _response_invalid(AgentResponseDefect.RESPONSE_NOT_JSON)
+    runtime = ScriptedAgentRuntime(
+        [
+            invalid,
+            _draft(
+                plan_type="search",
+                research_tasks=[
+                    _task_draft("NVIDIA の根拠を確認する", ["NVIDIA AI GPU"])
+                ],
+            ),
+        ]
+    )
+    recorder = RecordingPlanningRecorder()
+    service, _factory = _service(runtime, recorder=recorder)
+
+    plan = await service.plan(_input())
+
+    assert plan.plan_type == "search"
+    _assert_recorded(
+        recorder,
+        outcome="planned",
+        retry_used=True,
+        plan_type="search",
     )
 
 
