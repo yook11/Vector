@@ -9,11 +9,10 @@ from uuid import UUID
 
 from app.agent.answering.direct_answer.contract import DirectAnswerer
 from app.agent.answering.evidence_answer.contract import EvidenceAnswerer
-from app.agent.contract import AnswerQuestionResult
+from app.agent.contract import AnswerQuestionResult, ResearchHandoff
 from app.agent.evidence_collection import EvidenceCollector
 from app.agent.evidence_review import EvidenceReviewer
 from app.agent.planning.contract import QuestionPlanner
-from app.agent.research_checkpoint import ResearchCheckpoint
 from app.agent.threads.contracts import ThreadMessageSnapshot
 
 __all__ = [
@@ -42,8 +41,8 @@ class AnsweringPhasesFactory(Protocol):
 class RunInput:
     question: str
     history: tuple[ThreadMessageSnapshot, ...]
-    # 同threadの直近checkpoint(新しい順)。読出し・検証失敗時は空。
-    prior_research: tuple[ResearchCheckpoint, ...] = ()
+    # 同threadの調査の申し送り。読出し・検証失敗時はNone。
+    research_handoff: ResearchHandoff | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -57,5 +56,6 @@ class RunIdentity:
 @dataclass(frozen=True, slots=True)
 class RunResult:
     final_output: AnswerQuestionResult
-    # 外部検索を実行しなかったRun(direct_answer含む)ではNone。
-    research_checkpoint: ResearchCheckpoint | None = None
+    # 記録を追加できなかったRun(direct_answer含む)ではNone。書き込み側はNoneを
+    # 「触らない」と解釈し、threadの既存handoffをそのまま残す。
+    research_handoff: ResearchHandoff | None = None

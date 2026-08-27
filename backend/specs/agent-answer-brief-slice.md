@@ -1,8 +1,11 @@
 # Agent AnswerBrief slice 仕様
 
-更新日: 2026-08-19
+更新日: 2026-08-27
 
-実装状況: Implemented
+実装状況: Superseded
+
+`AnswerBrief` と question_context 工程は撤去された。現在の正本は
+`specs/agent/research-handoff.md`。以下は撤去前の記録として残す。
 
 ## 位置付け
 

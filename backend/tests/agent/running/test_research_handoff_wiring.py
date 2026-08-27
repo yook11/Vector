@@ -1,7 +1,7 @@
-"""RunResult.research_checkpoint への runner 配線契約(agent-research-checkpoint
+"""RunResult.research_handoff への runner 配線契約。
 -context-slice の「記録フロー」5番)。
 
-build_research_checkpoint()自体の詰め替え規則はtests/agent/research_checkpoint/
+build_research_run_record()自体の詰め替え規則はtests/agent/research_handoff/
 test_builder.pyが正本。ここではAnsweringRunner.run()を通した黒箱として、
 SearchPlan成功時にRunResultへ運ばれること、direct_answer/review失敗/
 review skip/builder例外でNoneのまま回答が継続することだけを検証する。
@@ -204,9 +204,9 @@ async def _run(runner: AnsweringRunner) -> object:
     )
 
 
-async def test_search_plan_success_populates_checkpoint_from_review_outcome() -> None:
+async def test_search_plan_success_populates_handoff_from_review_outcome() -> None:
     """記録フロー2・5: evidence review成功時、planのresearch_goal・provider成功
-    queryだけの実行query・外部採用claim・Reviewer missingがcheckpointへ運ばれる。
+    queryだけの実行query・外部採用claim・Reviewer missingがhandoffへ運ばれる。
     """
     goal = "NVIDIA の直近発表を調べる"
     gateway = _FakeExternalSearchGateway(
@@ -236,20 +236,23 @@ async def test_search_plan_success_populates_checkpoint_from_review_outcome() ->
 
     result = await _run(runner)
 
-    checkpoint = result.research_checkpoint  # type: ignore[attr-defined]
-    assert checkpoint is not None
-    assert checkpoint.as_of == AS_OF
-    assert len(checkpoint.tasks) == 1
-    task = checkpoint.tasks[0]
+    handoff = result.research_handoff  # type: ignore[attr-defined]
+    assert handoff is not None
+    assert len(handoff.runs) == 1
+    record = handoff.runs[0]
+    assert handoff.updated_at == AS_OF
+    assert record.as_of == AS_OF
+    assert len(record.tasks) == 1
+    task = record.tasks[0]
     assert task.research_goal == goal
     # provider失敗したq-failは記録されず、成功したq-okだけが残る。
     assert task.executed_queries == ("q-ok",)
     assert task.adopted_claims == ("採用された事実",)
-    assert checkpoint.unresolved_after_search == ("未確認事項",)
+    assert record.unresolved_after_search == ("未確認事項",)
 
 
-async def test_direct_answer_plan_leaves_checkpoint_none() -> None:
-    """記録フロー6: 外部検索を実行しないdirect_answer Runはcheckpointを持たない。"""
+async def test_direct_answer_plan_leaves_handoff_none() -> None:
+    """外部検索を実行しないdirect_answer Runはhandoffを触らない。"""
     phases = AnsweringPhases(
         planner=_Planner(DirectAnswerPlan()),
         collector=EvidenceCollectionService(
@@ -266,11 +269,11 @@ async def test_direct_answer_plan_leaves_checkpoint_none() -> None:
 
     result = await _run(runner)
 
-    assert result.research_checkpoint is None  # type: ignore[attr-defined]
+    assert result.research_handoff is None  # type: ignore[attr-defined]
 
 
-async def test_evidence_review_failure_leaves_checkpoint_none() -> None:
-    """記録フロー4: reviewerが2 attempt失敗した場合、checkpointを組み立てない。"""
+async def test_evidence_review_failure_leaves_handoff_none() -> None:
+    """reviewerが2 attempt失敗した場合、記録を組み立てない。"""
     gateway = _FakeExternalSearchGateway(
         results_by_query={"q": [_external_hit("https://example.com/a")]}
     )
@@ -284,7 +287,7 @@ async def test_evidence_review_failure_leaves_checkpoint_none() -> None:
 
     result = await _run(runner)
 
-    assert result.research_checkpoint is None  # type: ignore[attr-defined]
+    assert result.research_handoff is None  # type: ignore[attr-defined]
 
 
 async def test_skipped_empty_review_records_executed_query_with_no_adopted_claims() -> (
@@ -306,28 +309,29 @@ async def test_skipped_empty_review_records_executed_query_with_no_adopted_claim
 
     result = await _run(runner)
 
-    checkpoint = result.research_checkpoint  # type: ignore[attr-defined]
-    assert checkpoint is not None
-    assert len(checkpoint.tasks) == 1
+    handoff = result.research_handoff  # type: ignore[attr-defined]
+    assert handoff is not None
+    record = handoff.runs[0]
+    assert len(record.tasks) == 1
     assert (
-        checkpoint.tasks[0].research_goal,
-        checkpoint.tasks[0].executed_queries,
-        checkpoint.tasks[0].adopted_claims,
-        checkpoint.unresolved_after_search,
+        record.tasks[0].research_goal,
+        record.tasks[0].executed_queries,
+        record.tasks[0].adopted_claims,
+        record.unresolved_after_search,
     ) == ("調査目標", ("q",), (), ())
     assert reviewer_runtime.calls == []
 
 
-async def test_builder_exception_yields_none_checkpoint_and_continues_answering(
+async def test_builder_exception_yields_none_handoff_and_continues_answering(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """記録フロー4: 組み立て失敗はcomplete_run呼び出し前に閉じ、回答は継続する。"""
 
     def _raise_build_failure(**_kwargs: object) -> None:
-        raise RuntimeError("checkpoint build boom")
+        raise RuntimeError("run record build boom")
 
     monkeypatch.setattr(
-        "app.agent.research_checkpoint.builder.build_research_checkpoint",
+        "app.agent.research_handoff.builder.build_research_run_record",
         _raise_build_failure,
     )
     gateway = _FakeExternalSearchGateway(
@@ -345,5 +349,5 @@ async def test_builder_exception_yields_none_checkpoint_and_continues_answering(
 
     result = await _run(runner)
 
-    assert result.research_checkpoint is None  # type: ignore[attr-defined]
+    assert result.research_handoff is None  # type: ignore[attr-defined]
     assert result.final_output.status == "answered"  # type: ignore[attr-defined]

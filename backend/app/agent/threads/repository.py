@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import uuid as uuid_mod
+from typing import Any
 
 from sqlalchemy import delete, exists, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -109,6 +110,22 @@ class AgentThreadRepository:
             total=total,
             pagination=pagination,
         )
+
+    async def read_research_handoff_for_user(
+        self,
+        *,
+        thread_id: uuid_mod.UUID,
+        user_id: uuid_mod.UUID,
+    ) -> dict[str, Any] | None:
+        """threadが積み上げた生のhandoff JSONBを返す(所有権はuser_idで強制)。"""
+        return (
+            await self._session.execute(
+                select(AgentThread.research_handoff).where(
+                    AgentThread.id == thread_id,
+                    AgentThread.user_id == user_id,
+                )
+            )
+        ).scalar_one_or_none()
 
     async def read_thread_detail_for_user(
         self,

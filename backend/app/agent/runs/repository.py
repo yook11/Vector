@@ -11,7 +11,6 @@ from sqlalchemy import Integer, column, func, literal, select, update, values
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.agent.contract import AnswerQuestionResult
-from app.agent.research_checkpoint import PRIOR_RESEARCH_CHECKPOINT_LIMIT
 from app.agent.runs.citation_integrity import assess_citation_integrity
 from app.agent.runs.contracts import (
     ActiveRunConflictError,
@@ -349,7 +348,7 @@ class AgentRunRepository:
         run_id: uuid_mod.UUID,
         result: AnswerQuestionResult,
         expected_attempt_epoch: int,
-        research_checkpoint: dict[str, Any] | None = None,
+        research_handoff: dict[str, Any] | None = None,
         now: datetime | None = None,
     ) -> bool:
         now = now or datetime.now(UTC)
@@ -393,13 +392,15 @@ class AgentRunRepository:
                 status=AgentRunStatus.COMPLETED.value,
                 assistant_message_id=assistant_message.id,
                 completed_at=now,
-                research_checkpoint=research_checkpoint,
             )
             .execution_options(synchronize_session=False)
         )
         if (update_result.rowcount or 0) != 1:
             raise RunTransitionLostError()
         thread.updated_at = now
+        # Noneは「記録を追加しなかったRun」であり、既存handoffを消さない。
+        if research_handoff is not None:
+            thread.research_handoff = research_handoff
         return True
 
     async def read_run_for_user(
@@ -421,36 +422,6 @@ class AgentRunRepository:
         if run is None:
             return None
         return build_research_run_response(run=run)
-
-    async def read_recent_research_checkpoints_for_user(
-        self,
-        *,
-        thread_id: uuid_mod.UUID,
-        user_id: uuid_mod.UUID,
-        limit: int = PRIOR_RESEARCH_CHECKPOINT_LIMIT,
-    ) -> list[dict[str, Any]]:
-        """同thread・同userのcompleted checkpointを新しい順に読む
-        (所有権はthread joinで強制)。
-        """
-        rows = (
-            (
-                await self._session.execute(
-                    select(AgentRun.research_checkpoint)
-                    .join(AgentThread, AgentRun.thread_id == AgentThread.id)
-                    .where(
-                        AgentRun.thread_id == thread_id,
-                        AgentThread.user_id == user_id,
-                        AgentRun.status == AgentRunStatus.COMPLETED.value,
-                        AgentRun.research_checkpoint.is_not(None),
-                    )
-                    .order_by(AgentRun.completed_at.desc())
-                    .limit(limit)
-                )
-            )
-            .scalars()
-            .all()
-        )
-        return list(rows)
 
     async def read_live_context_for_user(
         self,

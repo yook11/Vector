@@ -1,4 +1,4 @@
-"""ResearchCheckpoint / ResearchTaskRecord の永続契約テスト。
+"""ResearchRunRecord / ResearchTaskRecord の永続契約テスト。
 
 上限はすべて仕様正本(RESEARCH_GOAL_MAX_CHARS 等)を import して境界値を
 生成する。値をテストへ複製しないことで、正本の変更にテストが追随する。
@@ -23,18 +23,18 @@ from app.agent.evidence_collection.external_search.contract import (
 )
 from app.agent.evidence_review.answer_evidence import ANSWER_EVIDENCE_LIMIT
 from app.agent.planning.contract import RESEARCH_GOAL_MAX_CHARS, RESEARCH_TASK_LIMIT
-from app.agent.research_checkpoint.contract import (
-    ResearchCheckpoint,
+from app.agent.research_handoff import (
+    ResearchRunRecord,
     ResearchTaskRecord,
 )
 
 _AS_OF = datetime(2026, 8, 3, 9, 0, tzinfo=UTC)
 
 
-def test_legacy_import_sites_re_export_the_same_shared_contract_objects() -> None:
-    """各工程contractのre-exportは複製ではなく、app.agent.contractと同一objectである。"""
+def test_package_re_exports_the_same_shared_contract_objects() -> None:
+    """package rootのre-exportは複製ではなく、app.agent.contractと同一objectである。"""
     assert (
-        ResearchCheckpoint is shared_contract.ResearchCheckpoint,
+        ResearchRunRecord is shared_contract.ResearchRunRecord,
         ResearchTaskRecord is shared_contract.ResearchTaskRecord,
         RESEARCH_GOAL_MAX_CHARS is shared_contract.RESEARCH_GOAL_MAX_CHARS,
         RESEARCH_TASK_LIMIT is shared_contract.RESEARCH_TASK_LIMIT,
@@ -56,14 +56,14 @@ def _task_record(**overrides: object) -> ResearchTaskRecord:
     return ResearchTaskRecord(**values)
 
 
-def _checkpoint(**overrides: object) -> ResearchCheckpoint:
+def _checkpoint(**overrides: object) -> ResearchRunRecord:
     values: dict[str, object] = {
         "as_of": _AS_OF,
         "tasks": (_task_record(),),
         "unresolved_after_search": ("在庫水準は未確認",),
     }
     values.update(overrides)
-    return ResearchCheckpoint(**values)
+    return ResearchRunRecord(**values)
 
 
 def test_checkpoint_round_trips_through_json_dump_and_validate() -> None:
@@ -75,7 +75,7 @@ def test_checkpoint_round_trips_through_json_dump_and_validate() -> None:
         unresolved_after_search=("missing-1", "missing-2"),
     )
 
-    restored = ResearchCheckpoint.model_validate(checkpoint.model_dump(mode="json"))
+    restored = ResearchRunRecord.model_validate(checkpoint.model_dump(mode="json"))
 
     assert restored == checkpoint
     dumped = checkpoint.model_dump(mode="json")
@@ -97,7 +97,7 @@ def test_checkpoint_rejects_unknown_field() -> None:
     payload["unexpected_field"] = "x"
 
     with pytest.raises(ValidationError):
-        ResearchCheckpoint.model_validate(payload)
+        ResearchRunRecord.model_validate(payload)
 
 
 def test_task_record_rejects_unknown_field() -> None:

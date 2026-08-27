@@ -1,8 +1,11 @@
 # Agent Research Checkpoint Context slice 仕様
 
-更新日: 2026-08-03
+更新日: 2026-08-27
 
-実装状況: Implemented
+実装状況: Superseded
+
+`ResearchCheckpoint` は `ResearchHandoff` へ置き換えられた。現在の正本は
+`specs/agent/research-handoff.md`。以下は置き換え前の記録として残す。
 
 ## 位置付け
 

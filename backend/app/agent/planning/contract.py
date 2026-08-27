@@ -17,12 +17,11 @@ from pydantic import (
 
 from app.agent.contract import (
     MAX_ARTICLE_SEARCH_QUERIES,
-    PRIOR_RESEARCH_CHECKPOINT_LIMIT,
     RESEARCH_GOAL_MAX_CHARS,
     RESEARCH_TASK_LIMIT,
     NonBlankText,
     PlanType,
-    ResearchCheckpoint,
+    ResearchHandoff,
 )
 from app.agent.runtime.contract import AgentResponseDefect, AgentResponseInvalidError
 from app.agent.threads.contracts import ThreadMessageSnapshot
@@ -170,11 +169,8 @@ class PlanningRequest(BaseModel):
     # 現在の質問より前のthreadメッセージ(古い順)。
     history: tuple[ThreadMessageSnapshot, ...] = ()
     as_of: datetime
-    # 同threadの直近checkpoint(新しい順)。読出し・検証失敗時は空。
-    prior_research: tuple[ResearchCheckpoint, ...] = Field(
-        default=(),
-        max_length=PRIOR_RESEARCH_CHECKPOINT_LIMIT,
-    )
+    # 同threadの調査の申し送り。読出し・検証失敗時はNone。
+    research_handoff: ResearchHandoff | None = None
 
 
 @dataclass(frozen=True, slots=True)
