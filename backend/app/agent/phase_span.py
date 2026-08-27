@@ -57,10 +57,11 @@ def agent_phase(
         except _PHASE_STOPS as stop:
             deferred = stop
         except Exception as failure:
-            # PlanningError は planning パッケージ経由だと循環 import になる。
+            # 工程errorは各パッケージ経由だと循環 importになる。
+            from app.agent.answering.direct_answer.failure import DirectAnswerError
             from app.agent.planning.failure import PlanningError
 
-            if isinstance(failure, PlanningError):
+            if isinstance(failure, PlanningError | DirectAnswerError):
                 error_type = failure.code
             elif isinstance(failure, _CLASSIFIED_FAILURES):
                 error_type = span_error_type(failure)

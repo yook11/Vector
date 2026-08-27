@@ -1,7 +1,11 @@
 """Agent 実行の記録語彙。"""
 
 from app.agent.recording.direct_answer import (
+    DirectAnswerFailed,
+    DirectAnswerOutcome,
     DirectAnswerRecorder,
+    DirectAnswerRecording,
+    DirectAnswerSucceeded,
     LogfireDirectAnswerRecorder,
     logfire_direct_answer_recorder,
 )
@@ -50,7 +54,11 @@ from app.agent.recording.types import (
 )
 
 __all__ = [
+    "DirectAnswerFailed",
+    "DirectAnswerOutcome",
     "DirectAnswerRecorder",
+    "DirectAnswerRecording",
+    "DirectAnswerSucceeded",
     "EvidenceAnswerRecorder",
     "EvidenceReviewRecorder",
     "ExternalSearchRecorder",

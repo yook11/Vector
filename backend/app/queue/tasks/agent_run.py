@@ -12,7 +12,7 @@ import structlog
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from taskiq import Context, TaskiqDepends
 
-from app.agent.answering.direct_answer.contract import DirectAnswerInvalidError
+from app.agent.answering.direct_answer.failure import DirectAnswerError
 from app.agent.composition import build_answering_runner
 from app.agent.contract import AnswerGenerationStopped, AnswerQuestionResult
 from app.agent.live_updates.answer_delta import AgentRunLiveAnswerDeltaReporter
@@ -231,7 +231,7 @@ async def run_agent_answer(
                 AIProviderConfigurationError,
                 AIProviderError,
                 AgentResponseInvalidError,
-                DirectAnswerInvalidError,
+                DirectAnswerError,
                 PlanningError,
             ) as exc:
                 logger.info(

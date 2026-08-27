@@ -51,7 +51,7 @@ class DirectAnswerInput:
 class DirectAnswerer(Protocol):
     """検索なしで自然に回答する工程。
 
-    provider・validation失敗またはroutine stop signalを伝播する。
+    分類済み工程失敗のDirectAnswerErrorまたはroutine stop signalを伝播する。
     """
 
     async def answer(

@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
-
 from app.agent.agent import Agent
 from app.agent.answering.contract import AnsweringRequest
 from app.agent.answering.direct_answer.contract import (
@@ -11,6 +9,7 @@ from app.agent.answering.direct_answer.contract import (
     DirectAnswerInput,
     DirectAnswerInvalidError,
 )
+from app.agent.answering.direct_answer.failure import DirectAnswerError
 from app.agent.answering.failure import (
     RequestRetryDisposition,
     classify_direct_answer_failure,
@@ -21,16 +20,15 @@ from app.agent.answering.live_delivery import (
     ensure_answer_generation_continues,
 )
 from app.agent.answering.live_draft import LiveAnswerDraftSession
-from app.agent.answering.metrics import DirectAnswerOutcomeResult
 from app.agent.citation_markers import strip_citation_markers
 from app.agent.contract import (
     AnswerDeltaReporter,
     AnswerGenerationContinuation,
-    AnswerGenerationStopped,
 )
-from app.agent.phase_span import agent_phase
 from app.agent.recording.direct_answer import (
+    DirectAnswerFailed,
     DirectAnswerRecorder,
+    DirectAnswerSucceeded,
     logfire_direct_answer_recorder,
 )
 from app.agent.runtime.contract import (
@@ -45,14 +43,14 @@ from app.analysis.ai_provider_errors import (
 
 __all__ = ["DirectAnswerFlow"]
 
-_DIRECT_ANSWER_FAILURES = (AIProviderError, DirectAnswerInvalidError)
+_DIRECT_ANSWER_SOURCE_ERRORS = (AIProviderError, DirectAnswerInvalidError)
 _MAX_ATTEMPTS = 2
 
 
 class DirectAnswerFlow:
     """Create validated direct answer drafts.
 
-    Propagates provider, validation, or routine generation-stop signals.
+    Propagates classified DirectAnswerError or routine generation-stop signals.
     """
 
     def __init__(
@@ -80,68 +78,54 @@ class DirectAnswerFlow:
 
         repair_context: str | None = None
         previous_output_truncated = False
-        terminal_error: AIProviderError | DirectAnswerInvalidError | None = None
-        terminal_failure_code: str | None = None
-        retry_used = False
-        outcome: DirectAnswerOutcomeResult | None = None
-        failure_code: str | None = None
-        stopped = False
-        call = await self._recorder.start()
+        completed_draft: DirectAnswerDraft | None = None
+        attempt_count = 0
 
-        try:
-            with agent_phase(phase="answering", agent_name=self._agent.name):
-                try:
-                    async with self._runtime_scope_factory() as runtime:
-                        for attempt_number in range(1, _MAX_ATTEMPTS + 1):
-                            try:
-                                draft = await self._generate_draft(
-                                    runtime=runtime,
-                                    request=request,
-                                    previous_answer=previous_answer,
-                                    repair_context=repair_context,
-                                    previous_output_truncated=previous_output_truncated,
-                                    attempt_number=attempt_number,
+        async with self._recorder.record(agent_name=self._agent.name) as recording:
+            try:
+                async with self._runtime_scope_factory() as runtime:
+                    for attempt_number in range(1, _MAX_ATTEMPTS + 1):
+                        attempt_count = attempt_number
+                        try:
+                            completed_draft = await self._generate_draft(
+                                runtime=runtime,
+                                request=request,
+                                previous_answer=previous_answer,
+                                repair_context=repair_context,
+                                previous_output_truncated=previous_output_truncated,
+                                attempt_number=attempt_number,
+                            )
+                        except _DIRECT_ANSWER_SOURCE_ERRORS as cause:
+                            failure = classify_direct_answer_failure(cause)
+                            retriable = (
+                                failure.request_retry_disposition
+                                is RequestRetryDisposition.RETRY_IN_REQUEST
+                                and attempt_number < _MAX_ATTEMPTS
+                            )
+                            if retriable:
+                                repair_context = str(cause)
+                                previous_output_truncated = isinstance(
+                                    cause, AIProviderOutputTruncatedError
                                 )
-                            except _DIRECT_ANSWER_FAILURES as exc:
-                                failure = classify_direct_answer_failure(exc)
-                                retriable = (
-                                    failure.request_retry_disposition
-                                    is RequestRetryDisposition.RETRY_IN_REQUEST
-                                    and attempt_number < _MAX_ATTEMPTS
-                                )
-                                if retriable:
-                                    repair_context = str(exc)
-                                    previous_output_truncated = isinstance(
-                                        exc, AIProviderOutputTruncatedError
-                                    )
-                                    retry_used = True
-                                    continue
-                                terminal_error = exc
-                                terminal_failure_code = failure.code
-                                raise
-                            retry_used = attempt_number > 1
-                            outcome = "answered"
-                            return draft
-                except _DIRECT_ANSWER_FAILURES as exc:
-                    if exc is terminal_error:
-                        outcome = "failed"
-                        failure_code = terminal_failure_code
-                    raise
+                                continue
+                            raise DirectAnswerError(code=failure.code) from cause
+                        break
+            except DirectAnswerError as error:
+                recording.set_outcome(
+                    DirectAnswerFailed(
+                        failure_code=error.code,
+                        attempt_count=attempt_count,
+                    )
+                )
+                raise
 
-                raise AssertionError("unreachable: answer loop must return or raise")
-        except (asyncio.CancelledError, GeneratorExit, AnswerGenerationStopped):
-            stopped = True
-            outcome = None
-            failure_code = None
-            raise
-        finally:
-            await self._recorder.end(
-                call,
-                outcome=outcome,
-                retry_used=retry_used,
-                failure_code=failure_code,
-                stopped=stopped,
-            )
+            if completed_draft is not None:
+                recording.set_outcome(
+                    DirectAnswerSucceeded(attempt_count=attempt_count)
+                )
+                return completed_draft
+
+            raise AssertionError("unreachable: answer loop must return or raise")
 
     async def _generate_draft(
         self,

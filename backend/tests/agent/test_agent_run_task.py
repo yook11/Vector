@@ -23,9 +23,7 @@ from taskiq.receiver import Receiver
 
 import app.agent.composition as composition
 import app.queue.tasks.agent_run as agent_run_tasks
-from app.agent.answering.direct_answer.contract import (
-    DirectAnswerInvalidError,
-)
+from app.agent.answering.direct_answer.failure import DirectAnswerError
 from app.agent.contract import (
     AnswerGenerationStopped,
     AnswerPlanSummary,
@@ -2637,20 +2635,26 @@ async def test_stale_complete_run_with_a_handoff_does_not_persist_it(
         assert persisted_thread.research_handoff is None
 
 
+def _direct_answer_error_with_private_cause() -> DirectAnswerError:
+    error = DirectAnswerError(code="direct_answer_blank_response")
+    error.__cause__ = AIProviderError("SHOULD_NOT_LEAK")
+    return error
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     "generation_error",
     [
         AIProviderConfigurationError(),
         AIProviderError("SHOULD_NOT_LEAK"),
-        DirectAnswerInvalidError(),
+        _direct_answer_error_with_private_cause(),
         AgentResponseInvalidError(AgentResponseDefect.OUTPUT_SCHEMA_MISMATCH),
         PlanningError(code="ai_error_network"),
     ],
     ids=(
         "configuration",
         "provider",
-        "direct-draft",
+        "direct-answer",
         "invalid-agent-output",
         "planning",
     ),
@@ -2665,10 +2669,11 @@ async def test_run_agent_answer_generation_error_marks_failed_without_leaking_me
     fake_agent = FakeAgent(exc=generation_error)
     _patch_worker_execution(monkeypatch, lambda **_kwargs: fake_agent)
 
-    await agent_run_tasks.run_agent_answer(
-        trigger=AgentRunTrigger(run_id=run.id),
-        ctx=_ctx(session_factory),
-    )
+    with capture_logs() as logs:
+        await agent_run_tasks.run_agent_answer(
+            trigger=AgentRunTrigger(run_id=run.id),
+            ctx=_ctx(session_factory),
+        )
 
     async with session_factory() as session:
         failed = await session.get(AgentRun, run.id)
@@ -2687,6 +2692,7 @@ async def test_run_agent_answer_generation_error_marks_failed_without_leaking_me
             .all()
         )
         assert [m.role for m in messages] == ["user"]
+    assert "SHOULD_NOT_LEAK" not in repr(logs)
 
 
 @pytest.mark.asyncio

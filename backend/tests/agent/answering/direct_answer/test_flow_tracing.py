@@ -17,6 +17,7 @@ from app.agent.answering.contract import AnsweringRequest
 from app.agent.answering.direct_answer import flow as direct_answer_flow_module
 from app.agent.answering.direct_answer.agent import DIRECT_ANSWER_AGENT
 from app.agent.answering.direct_answer.contract import DirectAnswerInput
+from app.agent.answering.direct_answer.failure import DirectAnswerError
 from app.agent.answering.direct_answer.flow import DirectAnswerFlow
 from app.agent.contract import AnswerGenerationContinuation, AnswerGenerationStopped
 from app.agent.runtime.contract import StreamingAgentRuntime
@@ -223,6 +224,50 @@ async def test_retry_provider_request_adds_only_rendered_repair_context() -> Non
         for request in requests
     )
     assert (first_stream.close_calls, second_stream.close_calls) == (1, 1)
+
+
+async def test_terminal_failure_closes_phase_with_code_without_exception_event(
+    capfire: CaptureLogfire,
+) -> None:
+    first_stream = _SdkStream(" ")
+    second_stream = _SdkStream("\n")
+    client = FakeGeminiClient([], streams=[first_stream, second_stream])
+
+    @asynccontextmanager
+    async def runtime_scope() -> AsyncIterator[StreamingAgentRuntime]:
+        yield GeminiAgentRuntime(client=cast(AsyncClient, client))
+
+    with pytest.raises(DirectAnswerError) as exc_info:
+        await DirectAnswerFlow(
+            agent=DIRECT_ANSWER_AGENT,
+            runtime_scope_factory=runtime_scope,
+        ).answer(request=_request())
+
+    spans = capfire.exporter.exported_spans
+    phase = next(
+        span
+        for span in spans
+        if span.name == "agent_phase"
+        and (span.attributes or {}).get("logfire.span_type") == "span"
+    )
+    attempts = [
+        span
+        for span in spans
+        if span.name == "agent_provider_call"
+        and (span.attributes or {}).get("logfire.span_type") == "span"
+    ]
+
+    assert exc_info.value.code == "direct_answer_blank_response"
+    assert phase.status.status_code is StatusCode.ERROR
+    assert (phase.attributes or {})["error.type"] == exc_info.value.code
+    assert exception_events(phase) == []
+    assert len(attempts) == 2
+    assert all(
+        attempt.parent is not None and attempt.parent.span_id == phase.context.span_id
+        for attempt in attempts
+    )
+    assert all(attempt.status.status_code is StatusCode.UNSET for attempt in attempts)
+    assert all(exception_events(attempt) == [] for attempt in attempts)
 
 
 async def test_routine_stop_closes_phase_without_error_or_attempt(

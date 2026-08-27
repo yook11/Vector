@@ -1,19 +1,30 @@
-"""直接回答工程 answer() 1回の start/end 記録。"""
+"""直接回答工程 answer() 1回の記録。"""
 
 from __future__ import annotations
 
+import asyncio
+from collections.abc import AsyncIterator
+from contextlib import (
+    AbstractAsyncContextManager,
+    AbstractContextManager,
+    asynccontextmanager,
+)
+from dataclasses import dataclass
 from time import perf_counter
-from typing import TYPE_CHECKING, Protocol
+from typing import Protocol
 
 import logfire
 
-from app.agent.recording.types import PhaseCall, PhaseStatus
-
-if TYPE_CHECKING:
-    from app.agent.answering.metrics import DirectAnswerOutcomeResult
+from app.agent.contract import AnswerGenerationStopped
+from app.agent.phase_span import agent_phase
+from app.agent.recording.types import PhaseStatus
 
 __all__ = [
+    "DirectAnswerFailed",
+    "DirectAnswerOutcome",
     "DirectAnswerRecorder",
+    "DirectAnswerRecording",
+    "DirectAnswerSucceeded",
     "LogfireDirectAnswerRecorder",
     "logfire_direct_answer_recorder",
 ]
@@ -28,75 +39,217 @@ _duration_histogram = logfire.metric_histogram(
 )
 
 
+@dataclass(frozen=True, slots=True)
+class DirectAnswerSucceeded:
+    """完成した直接回答工程の結論。"""
+
+    attempt_count: int
+
+    def __post_init__(self) -> None:
+        if self.attempt_count < 1:
+            raise ValueError("attempt_count must be positive")
+
+
+@dataclass(frozen=True, slots=True)
+class DirectAnswerFailed:
+    """分類済み失敗で終了した直接回答工程の結論。"""
+
+    failure_code: str
+    attempt_count: int
+
+    def __post_init__(self) -> None:
+        if not self.failure_code:
+            raise ValueError("failure_code must not be empty")
+        if self.attempt_count < 1:
+            raise ValueError("attempt_count must be positive")
+
+
+type DirectAnswerOutcome = DirectAnswerSucceeded | DirectAnswerFailed
+
+
+class DirectAnswerRecording(Protocol):
+    """answer() 1回に結論を関連付ける記録ハンドル。"""
+
+    def set_outcome(self, outcome: DirectAnswerOutcome) -> None: ...
+
+
 class DirectAnswerRecorder(Protocol):
-    """start は必ず PhaseCall を返し、記録の例外は本処理へ出さない。"""
+    """answer() 1回のspan・duration・分類済みoutcomeを完結させる。"""
 
-    async def start(self) -> PhaseCall: ...
-
-    async def end(
+    def record(
         self,
-        call: PhaseCall,
         *,
-        outcome: DirectAnswerOutcomeResult | None = None,
-        retry_used: bool = False,
-        failure_code: str | None = None,
-        stopped: bool = False,
-    ) -> None: ...
+        agent_name: str,
+    ) -> AbstractAsyncContextManager[DirectAnswerRecording]: ...
 
 
-def _status_from_result(
-    *,
-    stopped: bool,
-    outcome: DirectAnswerOutcomeResult | None,
-) -> PhaseStatus:
-    """工程の終わり方を記録の status に写す。"""
+@dataclass(slots=True)
+class _DirectAnswerRecording:
+    outcome: DirectAnswerOutcome | None = None
 
-    if stopped:
-        return PhaseStatus.STOPPED
-    if outcome == "answered":
-        return PhaseStatus.COMPLETED
-    return PhaseStatus.FAILED
+    def set_outcome(self, outcome: DirectAnswerOutcome) -> None:
+        self.outcome = outcome
+
+
+@dataclass(frozen=True, slots=True)
+class _DirectAnswerExit:
+    status: PhaseStatus
+    outcome: DirectAnswerOutcome | None
+    error: BaseException | None
+
+    @classmethod
+    def resolve(
+        cls,
+        *,
+        outcome: DirectAnswerOutcome | None,
+        error: BaseException | None,
+    ) -> _DirectAnswerExit:
+        if isinstance(
+            error,
+            asyncio.CancelledError | GeneratorExit | AnswerGenerationStopped,
+        ):
+            return cls(
+                status=PhaseStatus.STOPPED,
+                outcome=None,
+                error=error,
+            )
+        if isinstance(outcome, DirectAnswerSucceeded) and error is None:
+            return cls(
+                status=PhaseStatus.COMPLETED,
+                outcome=outcome,
+                error=None,
+            )
+        if isinstance(outcome, DirectAnswerFailed):
+            return cls(
+                status=PhaseStatus.FAILED,
+                outcome=outcome,
+                error=error,
+            )
+        return cls(
+            status=PhaseStatus.FAILED,
+            outcome=None,
+            error=error,
+        )
 
 
 class LogfireDirectAnswerRecorder:
-    async def start(self) -> PhaseCall:
-        try:
-            return PhaseCall(started_at=perf_counter())
-        except Exception:
-            return PhaseCall(started_at=0.0)
-
-    async def end(
+    def record(
         self,
-        call: PhaseCall,
         *,
-        outcome: DirectAnswerOutcomeResult | None = None,
-        retry_used: bool = False,
-        failure_code: str | None = None,
-        stopped: bool = False,
-    ) -> None:
-        try:
-            status = _status_from_result(stopped=stopped, outcome=outcome)
-            attributes = {
-                "status": status.value,
-                "outcome": (
-                    _MISSING_OUTCOME if stopped or outcome is None else outcome
-                ),
-            }
-            _duration_histogram.record(
-                perf_counter() - call.started_at,
-                attributes=attributes,
-            )
-            if stopped or outcome is None:
-                return
-            from app.agent.answering.metrics import record_direct_answer_outcome
+        agent_name: str,
+    ) -> AbstractAsyncContextManager[DirectAnswerRecording]:
+        return self._record(agent_name=agent_name)
 
-            record_direct_answer_outcome(
-                result=outcome,
-                retry_used=retry_used,
-                failure_code=failure_code,
+    @asynccontextmanager
+    async def _record(
+        self,
+        *,
+        agent_name: str,
+    ) -> AsyncIterator[DirectAnswerRecording]:
+        recording = _DirectAnswerRecording()
+        started_at = _started_at()
+        span = _try_open_direct_answer_span(agent_name=agent_name)
+        error: BaseException | None = None
+        try:
+            yield recording
+        except BaseException as exc:
+            error = exc
+            raise
+        finally:
+            direct_answer_exit = _DirectAnswerExit.resolve(
+                outcome=recording.outcome,
+                error=error,
             )
-        except Exception:
+            _try_close_direct_answer_span(span, error=direct_answer_exit.error)
+            _record_duration(
+                started_at=started_at,
+                direct_answer_exit=direct_answer_exit,
+            )
+            _record_outcome(direct_answer_exit)
+
+
+def _try_open_direct_answer_span(
+    *,
+    agent_name: str,
+) -> AbstractContextManager[None] | None:
+    try:
+        span = agent_phase(phase="answering", agent_name=agent_name)
+        span.__enter__()
+        return span
+    except Exception:
+        return None
+
+
+def _try_close_direct_answer_span(
+    span: AbstractContextManager[None] | None,
+    *,
+    error: BaseException | None,
+) -> None:
+    if span is None:
+        return
+    try:
+        if error is None:
+            span.__exit__(None, None, None)
             return
+        span.__exit__(type(error), error, error.__traceback__)
+    except BaseException:
+        return
+
+
+def _started_at() -> float | None:
+    try:
+        return perf_counter()
+    except Exception:
+        return None
+
+
+def _record_duration(
+    *,
+    started_at: float | None,
+    direct_answer_exit: _DirectAnswerExit,
+) -> None:
+    if started_at is None:
+        return
+    try:
+        _duration_histogram.record(
+            perf_counter() - started_at,
+            attributes={
+                "status": direct_answer_exit.status.value,
+                "outcome": _outcome_label(direct_answer_exit.outcome),
+            },
+        )
+    except Exception:
+        return
+
+
+def _record_outcome(direct_answer_exit: _DirectAnswerExit) -> None:
+    outcome = direct_answer_exit.outcome
+    if outcome is None:
+        return
+    try:
+        from app.agent.answering.metrics import record_direct_answer_outcome
+
+        if isinstance(outcome, DirectAnswerSucceeded):
+            record_direct_answer_outcome(
+                result="succeeded",
+                attempt_count=outcome.attempt_count,
+            )
+            return
+        record_direct_answer_outcome(
+            result="failed",
+            attempt_count=outcome.attempt_count,
+            failure_code=outcome.failure_code,
+        )
+    except Exception:
+        return
+
+
+def _outcome_label(outcome: DirectAnswerOutcome | None) -> str:
+    if isinstance(outcome, DirectAnswerSucceeded):
+        return "succeeded"
+    if isinstance(outcome, DirectAnswerFailed):
+        return "failed"
+    return _MISSING_OUTCOME
 
 
 logfire_direct_answer_recorder = LogfireDirectAnswerRecorder()

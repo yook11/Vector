@@ -7,7 +7,7 @@ from typing import Literal
 import logfire
 
 AnswerSynthesisOutcomeResult = Literal["synthesized", "fallback", "failed"]
-DirectAnswerOutcomeResult = Literal["answered", "failed"]
+DirectAnswerOutcomeResult = Literal["succeeded", "failed"]
 
 _answer_synthesis_outcome_counter = logfire.metric_counter(
     "vector.agent.answer_synthesis.outcome",
@@ -47,7 +47,7 @@ def record_answer_synthesis_outcome(
 def record_direct_answer_outcome(
     *,
     result: DirectAnswerOutcomeResult,
-    retry_used: bool,
+    attempt_count: int,
     failure_code: str | None = None,
 ) -> None:
     """Record one final direct answer outcome with low-cardinality labels.
@@ -59,7 +59,7 @@ def record_direct_answer_outcome(
         1,
         attributes={
             "result": result,
-            "retry_used": retry_used,
+            "attempt_count": attempt_count,
             "failure_code": failure_code if failure_code is not None else "none",
         },
     )

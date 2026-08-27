@@ -8,6 +8,7 @@ from app.agent.answering.direct_answer.contract import (
     DirectAnswerInput,
     DirectAnswerInvalidError,
 )
+from app.agent.answering.direct_answer.failure import DirectAnswerError
 from app.agent.answering.direct_answer.flow import DirectAnswerFlow
 from app.agent.answering.evidence_answer.contract import (
     EvidenceAnswerDraft,
@@ -28,6 +29,7 @@ __all__ = [
     "AnswerGenerationStopped",
     "AnswerInputEvidence",
     "DirectAnswerDraft",
+    "DirectAnswerError",
     "DirectAnswerer",
     "DirectAnswerInput",
     "DirectAnswerInvalidError",
