@@ -2,23 +2,23 @@
 
 from __future__ import annotations
 
+from collections.abc import AsyncIterator
+from contextlib import AbstractAsyncContextManager, asynccontextmanager
 from dataclasses import dataclass, field
 from time import perf_counter
-from typing import Literal
 
 from app.agent.answering.metrics import (
     AnswerSynthesisOutcomeResult,
     DirectAnswerOutcomeResult,
 )
-from app.agent.contract import PlanType
 from app.agent.evidence_collection.contract import TaskExternalCollectionStatus
 from app.agent.evidence_collection.internal_search.contract import (
     InternalSearchFailurePhase,
     InternalSearchOutcome,
 )
 from app.agent.evidence_review.metrics import EvidenceReviewOutcome
-from app.agent.planning.metrics import PlannerOutcomeResult
 from app.agent.question_context.metrics import QuestionContextOutcome
+from app.agent.recording.planning import PlanningOutcome
 from app.agent.recording.types import LlmCall, LlmCallResult, PhaseCall, Usage
 
 __all__ = [
@@ -28,7 +28,7 @@ __all__ = [
     "RecordedExternalSearchEnd",
     "RecordedInternalSearchEnd",
     "RecordedLlmCallEnd",
-    "RecordedPlanningEnd",
+    "RecordedPlanning",
     "RecordedQuestionContextEnd",
     "RecordingDirectAnswerRecorder",
     "RecordingEvidenceAnswerRecorder",
@@ -162,46 +162,36 @@ class RecordingExternalSearchRecorder:
         )
 
 
-@dataclass(frozen=True, slots=True)
-class RecordedPlanningEnd:
-    call: PhaseCall
-    outcome: PlannerOutcomeResult | None
-    retry_used: bool
-    plan_type: PlanType | Literal["not_created"] | None
-    failure_code: str | None
-    stopped: bool
+@dataclass(slots=True)
+class RecordedPlanning:
+    agent_name: str
+    outcomes: list[PlanningOutcome] = field(default_factory=list)
+    error: BaseException | None = None
+
+    def set_outcome(self, outcome: PlanningOutcome) -> None:
+        self.outcomes.append(outcome)
 
 
 @dataclass(slots=True)
 class RecordingPlanningRecorder:
-    starts: list[PhaseCall] = field(default_factory=list)
-    ends: list[RecordedPlanningEnd] = field(default_factory=list)
+    records: list[RecordedPlanning] = field(default_factory=list)
 
-    async def start(self) -> PhaseCall:
-        call = PhaseCall(started_at=perf_counter())
-        self.starts.append(call)
-        return call
-
-    async def end(
+    def record(
         self,
-        call: PhaseCall,
         *,
-        outcome: PlannerOutcomeResult | None = None,
-        retry_used: bool = False,
-        plan_type: PlanType | Literal["not_created"] | None = None,
-        failure_code: str | None = None,
-        stopped: bool = False,
-    ) -> None:
-        self.ends.append(
-            RecordedPlanningEnd(
-                call=call,
-                outcome=outcome,
-                retry_used=retry_used,
-                plan_type=plan_type,
-                failure_code=failure_code,
-                stopped=stopped,
-            )
-        )
+        agent_name: str,
+    ) -> AbstractAsyncContextManager[RecordedPlanning]:
+        return self._record(agent_name=agent_name)
+
+    @asynccontextmanager
+    async def _record(self, *, agent_name: str) -> AsyncIterator[RecordedPlanning]:
+        recording = RecordedPlanning(agent_name=agent_name)
+        self.records.append(recording)
+        try:
+            yield recording
+        except BaseException as error:
+            recording.error = error
+            raise
 
 
 @dataclass(frozen=True, slots=True)

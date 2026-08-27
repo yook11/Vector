@@ -33,7 +33,11 @@ from app.agent.recording.llm import (
 )
 from app.agent.recording.planning import (
     LogfirePlanningRecorder,
+    PlanningFailed,
+    PlanningOutcome,
     PlanningRecorder,
+    PlanningRecording,
+    PlanningSucceeded,
     logfire_planning_recorder,
 )
 from app.agent.recording.question_context import (
@@ -69,7 +73,11 @@ __all__ = [
     "LogfireQuestionContextRecorder",
     "PhaseCall",
     "PhaseStatus",
+    "PlanningFailed",
+    "PlanningOutcome",
     "PlanningRecorder",
+    "PlanningRecording",
+    "PlanningSucceeded",
     "QuestionContextRecorder",
     "ToolCall",
     "Usage",

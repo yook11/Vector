@@ -8,7 +8,7 @@ import logfire
 
 from app.agent.contract import PlanType
 
-PlannerOutcomeResult = Literal["planned", "failed"]
+PlannerOutcomeResult = Literal["succeeded", "failed"]
 
 _planner_outcome_counter = logfire.metric_counter(
     "vector.agent.planner.outcome",
@@ -20,7 +20,7 @@ _planner_outcome_counter = logfire.metric_counter(
 def record_question_planner_outcome(
     *,
     result: PlannerOutcomeResult,
-    retry_used: bool,
+    attempt_count: int,
     plan_type: PlanType | Literal["not_created"],
     failure_code: str | None = None,
 ) -> None:
@@ -33,7 +33,7 @@ def record_question_planner_outcome(
         1,
         attributes={
             "result": result,
-            "retry_used": retry_used,
+            "attempt_count": attempt_count,
             "plan_type": plan_type,
             "failure_code": failure_code if failure_code is not None else "none",
         },
