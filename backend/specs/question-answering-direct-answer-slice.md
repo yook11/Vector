@@ -58,16 +58,16 @@ direct は「根拠なし回答」ではなく**「検索不要回答」**であ
    JSON 不正 / schema 違反 / 引用不実在の失敗クラスが構造的に消える。
    lenient 中間型 (`RawAnswerDraft` 相当) も置かない (補完可能欠陥が
    存在しないため二層構造が不要)。
-3. **失敗は typed error 伝播 (fallback draft を作らない)**。direct の失敗は
+3. **失敗は工程固有の typed error で伝播 (fallback draft を作らない)**。direct の失敗は
    「根拠不足」ではなく「回答生成そのものの失敗」であり、insufficient への
-   変換は失敗の偽装になる。`QuestionAnsweringService.answer()` は catch せず
-   素通しし、API 層 (次スライス) がエラー応答に落とす。
+   変換は失敗の偽装になる。terminal failureは`DirectAnswerError`へ正規化し、
+   worker境界が`generation_unavailable`へ落とす。
 4. **retry は blank 応答のみ 1 回**。
    - blank → previous_error 付き in-request retry 1 回 → 再 blank なら
-     `DirectAnswerInvalidError` (direct.py 所有の typed error) を raise。
+     `DirectAnswerError`をraiseし、attempt由来の`DirectAnswerInvalidError`は
+     `__cause__`へ保持する。
    - `AIProviderError` → B-1 分類 (`DO_NOT_RETRY_IN_REQUEST`) に従い
-     retry せず即伝播。**包まず素通し** (既に分類済みの typed error であり、
-     direct 用に包み直しても情報が増えない)。
+     retryせず`DirectAnswerError`へ変換し、元例外は`__cause__`へ保持する。
    - 想定外例外 → 分類・記録せずそのまま伝播 (`except Exception` を
      書かない)。
 5. **エラー分類は「工程 × failure family」の 2 軸**。分類属性
@@ -75,8 +75,8 @@ direct は「根拠なし回答」ではなく**「検索不要回答」**であ
    failure family で決まり、経路名を混ぜない。工程の識別は direct 専用の
    audit kind / metric counter が担う (同じ情報を分類属性に二重に
    持たせない)。一方、**例外型は工程所有であり、型名が産地を表すのは
-   分類とは別の話**: `DirectAnswerInvalidError` は「direct 工程の blank
-   契約違反」を表す型であって、分類属性に経路を焼くものではない。
+   分類とは別の話**: `DirectAnswerInvalidError` はattemptのblank契約違反、
+   `DirectAnswerError`は工程として確定した失敗を表す。
    failure_kind / `RequestRetryDisposition` の語彙は B-1 と共有するが、
    型の統合・共通基底は作らない (evidence 側は fallback で吸収し伝播しない
    ため、産地の違う型を束ねると存在しない共通契約を示唆する)。
@@ -87,8 +87,8 @@ direct は「根拠なし回答」ではなく**「検索不要回答」**であ
    misrouting はプロンプトで防御しない (audit / eval で観測する合意)。
 7. **伝播面は direct 工程側の docstring に明記**。`DirectAnswerer` port /
    `DirectAnswerService` の docstring に「失敗時は
-   `AIProviderError | DirectAnswerInvalidError` が伝播する」と記す。
-   `contract.py` には書かない: `QuestionAnsweringAgent.answer()` は全経路を
+   `DirectAnswerError | AnswerGenerationStopped` が伝播する」と記す。
+   globalな`QuestionAnsweringAgent` contractには書かない: answer全体は全経路を
    含む global contract であり、direct の 2 型だけを書くと「answer 全体の
    例外 surface はこれだけ」と誤読される (想定外例外は全経路から伝播しうる)。
    answer() 全体の例外 surface の文書化は、catch 面を設計する API 層
@@ -104,7 +104,8 @@ direct は「根拠なし回答」ではなく**「検索不要回答」**であ
 
 ```text
 backend/app/agent/answering/direct.py (追加)
-  DirectAnswerInvalidError                   # blank 全滅を表す typed error
+  DirectAnswerInvalidError                   # blank attemptを表す typed error
+  DirectAnswerError                          # 分類済みterminal failure
   DirectAnswerGenerator (Protocol)           # LLM adapter boundary
     async def generate(
         *, question: str, as_of: datetime,
@@ -127,7 +128,7 @@ backend/app/agent/answering/audit.py (追加)
   # failure_kind / RequestRetryDisposition の語彙は synthesis と共有
 backend/app/agent/answering/metrics.py (追加)
   # vector.agent.direct_answer.outcome counter
-  # 次元: result ("answered" | "failed"), retry_used
+  # 次元: result ("succeeded" | "failed"), attempt_count, failure_code
 ```
 
 - プロンプトは direct 専用。evidence 接地・引用・断りの指示を混ぜない。
@@ -140,21 +141,19 @@ backend/app/agent/answering/metrics.py (追加)
 
 - direct 経路の成功は必ず answered。失敗を成功系 status
   (answered / insufficient) に変換しない。fallback draft を作らない。
-- retry / raise の対象は**明示列挙した失敗のみ**: blank 応答
-  (retry 1 回 → `DirectAnswerInvalidError`) / `AIProviderError`
-  (即伝播)。**想定外例外は握りつぶさず伝播する**。`except Exception` を
+- retry / 正規化の対象は**明示列挙した失敗のみ**: blank 応答
+  (`DirectAnswerInvalidError`) / `AIProviderError`。terminal時だけ
+  `DirectAnswerError`へ変換する。**想定外例外は握りつぶさず伝播する**。`except Exception` を
   書かない。
-- **分類済み失敗 (`AIProviderError` / blank 全滅の
-  `DirectAnswerInvalidError`) で raise する経路では**、attempt failure /
+- **分類済み失敗 (`DirectAnswerError`) で raise する経路では**、attempt failure /
   final failed event / metric を記録してから伝播する (沈黙で死なない)。
   想定外例外はこの記録の対象外 (捕まえない・記録しない・そのまま伝播)。
   audit recorder 自体の失敗は best-effort (B-1 同様、記録失敗で工程を
   止めない)。
 - 分類属性 (failure_kind / disposition) に経路名を混ぜない。
-  `AIProviderError` は包まず素通し、`DirectAnswerInvalidError` は
-  direct.py 所有。共通基底を作らない。
-- `DirectAnswerer` port signature は変更しない。`contract.py` は
-  変更しない。
+  provider / validation由来の例外は`DirectAnswerError.__cause__`へ保持し、
+  `DirectAnswerInvalidError`はattempt内のretry判断にだけ使う。共通基底を作らない。
+- `DirectAnswerer` port signature は変更せず、公開例外契約だけを更新する。
 - プロンプトは direct 専用。misrouting をプロンプトで防御しない。
 - 秘密情報は settings 経由。プロンプトに質問・as_of 以外の内部情報を
   入れない。
@@ -193,14 +192,14 @@ fake generator で `DirectAnswerService` を検証する。
 1. 正常: text が返る → `DirectAnswerDraft` になり answered final event +
    metric が記録される (retry なし)。
 2. blank (空文字・空白のみ) → previous_error 付きで 2 回目が呼ばれ、
-   2 回目が valid なら採用される (retry_used が記録される)。
+   2 回目が valid なら採用される (metric の `attempt_count=2`)。
 3. 2 回目も blank → `DirectAnswerInvalidError` が raise され、attempt
    failure 2 件 + failed final event + metric が記録済みである。
 4. `AIProviderError` → retry されず即伝播し、attempt failure + failed
    final event が記録済みである。
 5. 想定外例外 (分類外の Exception) → retry・記録なしでそのまま伝播する。
 6. audit recorder が例外を投げても工程は失敗しない (best-effort)。
-7. metrics: answered / failed が次元付きで記録される (capfire)。
+7. metrics: succeeded / failed と attempt_count が記録される (capfire)。
 
 adapter (Gemini) はプロンプト render (question / as_of / previous_error
 埋め込み) と応答処理 (text 素通し / blocked finish_reason →
@@ -229,7 +228,7 @@ validate 済み `AnswerQuestionResult` が返ること。回答の内容には�
 
 - `DirectAnswerService` + Gemini direct adapter が存在し、fake generator の
   unit テストが green。
-- 失敗時に typed error (`AIProviderError | DirectAnswerInvalidError`) が
+- 失敗時に工程固有のtyped error (`DirectAnswerError`) が
   伝播し、raise 前に audit / metric が焼かれている。
 - direct 工程側 (`DirectAnswerer` / `DirectAnswerService`) の docstring に
   raisable surface が明記されている。

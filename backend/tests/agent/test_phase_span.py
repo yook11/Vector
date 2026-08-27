@@ -17,6 +17,7 @@ from opentelemetry.sdk.trace import ReadableSpan
 from opentelemetry.semconv.attributes.error_attributes import ERROR_TYPE
 from opentelemetry.trace import StatusCode
 
+from app.agent.answering.direct_answer.failure import DirectAnswerError
 from app.agent.contract import AnswerGenerationStopped
 from app.agent.phase_span import agent_phase
 from app.agent.planning.failure import PlanningError
@@ -207,6 +208,24 @@ def test_planning_error_marks_span_error_with_code_and_reraises_same_instance(
 
     with pytest.raises(PlanningError) as raised:
         with agent_phase(phase="planning", agent_name="question_planner"):
+            raise error
+
+    assert raised.value is error
+    span = one_span_named(capfire, _PHASE_SPAN_NAME)
+    raw = _one_raw_phase_span(capfire)
+    assert raw.status.status_code is StatusCode.ERROR
+    assert raw.status.description in (None, "")
+    assert exception_event(span) is None
+    assert span["attributes"][ERROR_TYPE] == error.code
+
+
+def test_direct_answer_error_marks_span_error_with_code_and_reraises_same_instance(
+    capfire: CaptureLogfire,
+) -> None:
+    error = DirectAnswerError(code="direct_answer_blank_response")
+
+    with pytest.raises(DirectAnswerError) as raised:
+        with agent_phase(phase="answering", agent_name="direct_answer"):
             raise error
 
     assert raised.value is error
