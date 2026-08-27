@@ -1,4 +1,4 @@
-"""ResearchRunRecord / ResearchTaskRecord の永続契約テスト。
+"""ResearchHandoff の永続契約テスト。
 
 上限はすべて仕様正本(RESEARCH_GOAL_MAX_CHARS 等)を import して境界値を
 生成する。値をテストへ複製しないことで、正本の変更にテストが追随する。
@@ -11,89 +11,98 @@ from datetime import UTC, datetime
 import pytest
 from pydantic import ValidationError
 
-import app.agent.contract as shared_contract
-from app.agent.contract import (
-    EVIDENCE_REVIEW_MISSING_LIMIT,
-)
+from app.agent.contract import ORGANIZED_TEXT_MAX_CHARS
 from app.agent.evidence_collection.external_search.contract import (
-    EVIDENCE_CLAIM_MAX_CHARS,
     EXTERNAL_QUERY_MAX_CHARS,
     EXTERNAL_TASK_QUERY_LIMIT,
-    MISSING_ITEM_MAX_CHARS,
 )
-from app.agent.evidence_review.answer_evidence import ANSWER_EVIDENCE_LIMIT
 from app.agent.planning.contract import RESEARCH_GOAL_MAX_CHARS, RESEARCH_TASK_LIMIT
 from app.agent.research_handoff import (
+    ResearchHandoff,
     ResearchRunRecord,
     ResearchTaskRecord,
 )
 
 _AS_OF = datetime(2026, 8, 3, 9, 0, tzinfo=UTC)
 
-
-def test_package_re_exports_the_same_shared_contract_objects() -> None:
-    """package rootのre-exportは複製ではなく、app.agent.contractと同一objectである。"""
-    assert (
-        ResearchRunRecord is shared_contract.ResearchRunRecord,
-        ResearchTaskRecord is shared_contract.ResearchTaskRecord,
-        RESEARCH_GOAL_MAX_CHARS is shared_contract.RESEARCH_GOAL_MAX_CHARS,
-        RESEARCH_TASK_LIMIT is shared_contract.RESEARCH_TASK_LIMIT,
-        EXTERNAL_TASK_QUERY_LIMIT is shared_contract.EXTERNAL_TASK_QUERY_LIMIT,
-        EXTERNAL_QUERY_MAX_CHARS is shared_contract.EXTERNAL_QUERY_MAX_CHARS,
-        EVIDENCE_CLAIM_MAX_CHARS is shared_contract.EVIDENCE_CLAIM_MAX_CHARS,
-        MISSING_ITEM_MAX_CHARS is shared_contract.MISSING_ITEM_MAX_CHARS,
-        EVIDENCE_REVIEW_MISSING_LIMIT is shared_contract.EVIDENCE_REVIEW_MISSING_LIMIT,
-    ) == (True,) * 9
+_ORGANIZED_FIELDS = (
+    "collected_overview",
+    "unresolved_points",
+    "next_search_guidance",
+)
 
 
 def _task_record(**overrides: object) -> ResearchTaskRecord:
     values: dict[str, object] = {
         "research_goal": "NVIDIA の供給動向を確認する",
         "executed_queries": ("NVIDIA 供給網 2026",),
-        "adopted_claims": ("claim",),
     }
     values.update(overrides)
     return ResearchTaskRecord(**values)
 
 
-def _checkpoint(**overrides: object) -> ResearchRunRecord:
-    values: dict[str, object] = {
-        "as_of": _AS_OF,
-        "tasks": (_task_record(),),
-        "unresolved_after_search": ("在庫水準は未確認",),
-    }
+def _run_record(**overrides: object) -> ResearchRunRecord:
+    values: dict[str, object] = {"as_of": _AS_OF, "tasks": (_task_record(),)}
     values.update(overrides)
     return ResearchRunRecord(**values)
 
 
-def test_checkpoint_round_trips_through_json_dump_and_validate() -> None:
-    checkpoint = _checkpoint(
-        tasks=(
-            _task_record(research_goal="goal-A", executed_queries=("q-a",)),
-            _task_record(research_goal="goal-B", executed_queries=("q-b", "q-c")),
+def _handoff(**overrides: object) -> ResearchHandoff:
+    values: dict[str, object] = {"updated_at": _AS_OF, "runs": (_run_record(),)}
+    values.update(overrides)
+    return ResearchHandoff(**values)
+
+
+def test_handoff_round_trips_through_json_dump_and_validate() -> None:
+    """保存して読み戻したhandoffは、書いたときと同じものとして復元される。"""
+    handoff = _handoff(
+        runs=(
+            _run_record(
+                tasks=(
+                    _task_record(research_goal="goal-A", executed_queries=("q-a",)),
+                    _task_record(
+                        research_goal="goal-B", executed_queries=("q-b", "q-c")
+                    ),
+                ),
+            ),
         ),
-        unresolved_after_search=("missing-1", "missing-2"),
+        collected_overview="供給網の記事が3件集まった",
+        unresolved_points="在庫水準は確認できていない",
+        next_search_guidance="決算資料を直接あたるとよい",
     )
 
-    restored = ResearchRunRecord.model_validate(checkpoint.model_dump(mode="json"))
+    restored = ResearchHandoff.model_validate(handoff.model_dump(mode="json"))
 
-    assert restored == checkpoint
-    dumped = checkpoint.model_dump(mode="json")
-    assert set(dumped) == {
-        "schema_version",
-        "as_of",
-        "tasks",
-        "unresolved_after_search",
-    }
-    assert set(dumped["tasks"][0]) == {
-        "research_goal",
-        "executed_queries",
-        "adopted_claims",
-    }
+    assert restored == handoff
 
 
-def test_checkpoint_rejects_unknown_field() -> None:
-    payload = _checkpoint().model_dump(mode="json")
+def test_handoff_rejects_a_run_list_that_is_empty() -> None:
+    """台帳を1件も持たないhandoffは書かれない(触らないことでNoneと区別する)。"""
+    with pytest.raises(ValidationError):
+        _handoff(runs=())
+
+
+def test_handoff_rejects_unknown_field() -> None:
+    payload = _handoff().model_dump(mode="json")
+    payload["unexpected_field"] = "x"
+
+    with pytest.raises(ValidationError):
+        ResearchHandoff.model_validate(payload)
+
+
+def test_handoff_rejects_naive_updated_at() -> None:
+    with pytest.raises(ValidationError):
+        _handoff(updated_at=datetime(2026, 8, 3, 9, 0))
+
+
+def test_run_record_rejects_naive_as_of() -> None:
+    """調査時点が曖昧だと、鮮度の再確認かどうかを後段が判断できない。"""
+    with pytest.raises(ValidationError):
+        _run_record(as_of=datetime(2026, 8, 3, 9, 0))
+
+
+def test_run_record_rejects_unknown_field() -> None:
+    payload = _run_record().model_dump(mode="json")
     payload["unexpected_field"] = "x"
 
     with pytest.raises(ValidationError):
@@ -108,22 +117,11 @@ def test_task_record_rejects_unknown_field() -> None:
         ResearchTaskRecord.model_validate(payload)
 
 
-def test_checkpoint_rejects_naive_as_of() -> None:
-    with pytest.raises(ValidationError):
-        _checkpoint(as_of=datetime(2026, 8, 3, 9, 0))
-
-
-def test_checkpoint_accepts_timezone_aware_as_of() -> None:
-    checkpoint = _checkpoint(as_of=_AS_OF)
-
-    assert checkpoint.as_of == _AS_OF
-
-
-def test_checkpoint_is_frozen() -> None:
-    checkpoint = _checkpoint()
+def test_handoff_is_frozen() -> None:
+    handoff = _handoff()
 
     with pytest.raises(ValidationError):
-        checkpoint.as_of = datetime(2026, 8, 4, 9, 0, tzinfo=UTC)
+        handoff.collected_overview = "changed"
 
 
 def test_task_record_is_frozen() -> None:
@@ -134,21 +132,20 @@ def test_task_record_is_frozen() -> None:
 
 
 def test_task_record_rejects_empty_executed_queries() -> None:
+    """queryを1本も叩けなかったtaskは台帳に残さない。"""
     with pytest.raises(ValidationError):
         _task_record(executed_queries=())
 
 
-def test_checkpoint_rejects_empty_tasks() -> None:
+def test_run_record_rejects_empty_tasks() -> None:
     with pytest.raises(ValidationError):
-        _checkpoint(tasks=())
+        _run_record(tasks=())
 
 
 def test_research_goal_accepts_exactly_the_max_char_limit() -> None:
     goal = "あ" * RESEARCH_GOAL_MAX_CHARS
 
-    task_record = _task_record(research_goal=goal)
-
-    assert task_record.research_goal == goal
+    assert _task_record(research_goal=goal).research_goal == goal
 
 
 def test_research_goal_rejects_one_char_over_the_max_limit() -> None:
@@ -156,15 +153,13 @@ def test_research_goal_rejects_one_char_over_the_max_limit() -> None:
         _task_record(research_goal="あ" * (RESEARCH_GOAL_MAX_CHARS + 1))
 
 
-def test_executed_queries_accepts_exactly_the_task_query_limit() -> None:
+def test_executed_queries_accept_exactly_the_task_query_limit() -> None:
     queries = tuple(f"query-{i}" for i in range(EXTERNAL_TASK_QUERY_LIMIT))
 
-    task_record = _task_record(executed_queries=queries)
-
-    assert task_record.executed_queries == queries
+    assert _task_record(executed_queries=queries).executed_queries == queries
 
 
-def test_executed_queries_rejects_one_more_than_the_task_query_limit() -> None:
+def test_executed_queries_reject_one_more_than_the_task_query_limit() -> None:
     queries = tuple(f"query-{i}" for i in range(EXTERNAL_TASK_QUERY_LIMIT + 1))
 
     with pytest.raises(ValidationError):
@@ -174,9 +169,7 @@ def test_executed_queries_rejects_one_more_than_the_task_query_limit() -> None:
 def test_executed_query_accepts_exactly_the_max_char_limit() -> None:
     query = "q" * EXTERNAL_QUERY_MAX_CHARS
 
-    task_record = _task_record(executed_queries=(query,))
-
-    assert task_record.executed_queries == (query,)
+    assert _task_record(executed_queries=(query,)).executed_queries == (query,)
 
 
 def test_executed_query_rejects_one_char_over_the_max_limit() -> None:
@@ -184,73 +177,12 @@ def test_executed_query_rejects_one_char_over_the_max_limit() -> None:
         _task_record(executed_queries=("q" * (EXTERNAL_QUERY_MAX_CHARS + 1),))
 
 
-def test_checkpoint_accepts_adopted_claims_total_at_exactly_the_limit() -> None:
-    """adopted_claimsの上限はtask個別ではなくCheckpoint全task合計で境界になる。"""
-    first_task_claim_count = ANSWER_EVIDENCE_LIMIT // 2
-    second_task_claim_count = ANSWER_EVIDENCE_LIMIT - first_task_claim_count
-    tasks = (
-        _task_record(
-            research_goal="goal-a",
-            adopted_claims=tuple(f"claim-a-{i}" for i in range(first_task_claim_count)),
-        ),
-        _task_record(
-            research_goal="goal-b",
-            adopted_claims=tuple(
-                f"claim-b-{i}" for i in range(second_task_claim_count)
-            ),
-        ),
-    )
-
-    checkpoint = _checkpoint(tasks=tasks)
-
-    assert (
-        sum(len(task.adopted_claims) for task in checkpoint.tasks)
-        == ANSWER_EVIDENCE_LIMIT
-    )
-
-
-def test_checkpoint_rejects_adopted_claims_total_across_tasks_over_the_limit() -> None:
-    """1 taskだけでは上限内でも、複数taskへ分散した合計が超過すれば拒否される。"""
-    first_task_claim_count = ANSWER_EVIDENCE_LIMIT // 2
-    second_task_claim_count = ANSWER_EVIDENCE_LIMIT - first_task_claim_count + 1
-    tasks = (
-        _task_record(
-            research_goal="goal-a",
-            adopted_claims=tuple(f"claim-a-{i}" for i in range(first_task_claim_count)),
-        ),
-        _task_record(
-            research_goal="goal-b",
-            adopted_claims=tuple(
-                f"claim-b-{i}" for i in range(second_task_claim_count)
-            ),
-        ),
-    )
-
-    with pytest.raises(ValidationError):
-        _checkpoint(tasks=tasks)
-
-
-def test_adopted_claim_accepts_exactly_the_max_char_limit() -> None:
-    claim = "c" * EVIDENCE_CLAIM_MAX_CHARS
-
-    task_record = _task_record(adopted_claims=(claim,))
-
-    assert task_record.adopted_claims == (claim,)
-
-
-def test_adopted_claim_rejects_one_char_over_the_max_limit() -> None:
-    with pytest.raises(ValidationError):
-        _task_record(adopted_claims=("c" * (EVIDENCE_CLAIM_MAX_CHARS + 1),))
-
-
 def test_tasks_accept_exactly_the_research_task_limit() -> None:
     tasks = tuple(
         _task_record(research_goal=f"goal-{i}") for i in range(RESEARCH_TASK_LIMIT)
     )
 
-    checkpoint = _checkpoint(tasks=tasks)
-
-    assert checkpoint.tasks == tasks
+    assert _run_record(tasks=tasks).tasks == tasks
 
 
 def test_tasks_reject_one_more_than_the_research_task_limit() -> None:
@@ -259,32 +191,18 @@ def test_tasks_reject_one_more_than_the_research_task_limit() -> None:
     )
 
     with pytest.raises(ValidationError):
-        _checkpoint(tasks=tasks)
+        _run_record(tasks=tasks)
 
 
-def test_unresolved_after_search_accepts_exactly_the_missing_limit() -> None:
-    items = tuple(f"missing-{i}" for i in range(EVIDENCE_REVIEW_MISSING_LIMIT))
+@pytest.mark.parametrize("field", _ORGANIZED_FIELDS)
+def test_organized_text_accepts_exactly_the_max_char_limit(field: str) -> None:
+    text = "整" * ORGANIZED_TEXT_MAX_CHARS
 
-    checkpoint = _checkpoint(unresolved_after_search=items)
-
-    assert checkpoint.unresolved_after_search == items
+    assert getattr(_handoff(**{field: text}), field) == text
 
 
-def test_unresolved_after_search_rejects_one_more_than_the_missing_limit() -> None:
-    items = tuple(f"missing-{i}" for i in range(EVIDENCE_REVIEW_MISSING_LIMIT + 1))
-
+@pytest.mark.parametrize("field", _ORGANIZED_FIELDS)
+def test_organized_text_rejects_one_char_over_the_max_limit(field: str) -> None:
+    """thread全体を1本へ畳んだ結果であり、Run数によらず一定に保つ。"""
     with pytest.raises(ValidationError):
-        _checkpoint(unresolved_after_search=items)
-
-
-def test_unresolved_item_accepts_exactly_the_max_char_limit() -> None:
-    item = "m" * MISSING_ITEM_MAX_CHARS
-
-    checkpoint = _checkpoint(unresolved_after_search=(item,))
-
-    assert checkpoint.unresolved_after_search == (item,)
-
-
-def test_unresolved_item_rejects_one_char_over_the_max_limit() -> None:
-    with pytest.raises(ValidationError):
-        _checkpoint(unresolved_after_search=("m" * (MISSING_ITEM_MAX_CHARS + 1),))
+        _handoff(**{field: "整" * (ORGANIZED_TEXT_MAX_CHARS + 1)})

@@ -15,11 +15,17 @@ __all__ = ["render_planning_instruction"]
 
 _RESEARCH_HANDOFF_TEMPLATE: Final[str] = """
 # Research Handoff
-同じthreadでこれまでに実行した調査の記録(古い順)。
+同じthreadでこれまでに行った調査の申し送り。
 
 <untrusted_prior_research>
+## 実行した調査(古い順)
 {records}
-</untrusted_prior_research>
+{organized}</untrusted_prior_research>
+"""
+
+_ORGANIZED_SECTION_TEMPLATE: Final[str] = """
+## {label}
+{body}
 """
 
 
@@ -29,7 +35,27 @@ def render_planning_instruction(handoff: ResearchHandoff | None) -> str:
         return ""
     # HTMLではないLLM promptであり、外部入力は境界用sanitizerを通す。
     # nosemgrep: python.django.security.injection.raw-html-format.raw-html-format  # noqa: E501
-    return _RESEARCH_HANDOFF_TEMPLATE.format(records=_render_runs(handoff.runs))
+    return _RESEARCH_HANDOFF_TEMPLATE.format(
+        records=_render_runs(handoff.runs),
+        organized=_render_organized(handoff),
+    )
+
+
+def _render_organized(handoff: ResearchHandoff) -> str:
+    """書かれていない整理は節ごと出さない。"""
+    sections = (
+        ("集まったもの", handoff.collected_overview),
+        ("確認できていないこと", handoff.unresolved_points),
+        ("次の調査への申し送り", handoff.next_search_guidance),
+    )
+    return "".join(
+        _ORGANIZED_SECTION_TEMPLATE.format(
+            label=label,
+            body=sanitize_for_untrusted_block(body),
+        )
+        for label, body in sections
+        if body
+    )
 
 
 def _render_runs(runs: tuple[ResearchRunRecord, ...]) -> str:
@@ -46,19 +72,5 @@ def _render_run(record: ResearchRunRecord) -> str:
         lines.extend(
             f"- {sanitize_for_untrusted_block(query)}"
             for query in task.executed_queries
-        )
-        lines.append("得られたこと:")
-        if task.adopted_claims:
-            lines.extend(
-                f"- {sanitize_for_untrusted_block(claim)}"
-                for claim in task.adopted_claims
-            )
-        else:
-            lines.append("- 有用な候補は得られなかった")
-    if record.unresolved_after_search:
-        lines.append("未確認のまま残ったこと:")
-        lines.extend(
-            f"- {sanitize_for_untrusted_block(item)}"
-            for item in record.unresolved_after_search
         )
     return "\n".join(lines)

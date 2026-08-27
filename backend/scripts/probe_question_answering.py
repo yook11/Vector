@@ -35,6 +35,7 @@ from app.agent.contract import (
     EvidenceReviewSelectedEvent,
     ExternalSearchHitsFetchedEvent,
     ExternalSearchQueriesGeneratedEvent,
+    ResearchHandoff,
 )
 from app.agent.evidence_collection import EvidenceCollectionService
 from app.agent.evidence_collection.internal_search.ai.gemini import (
@@ -54,6 +55,9 @@ from app.agent.planning.contract import (
     SearchPlan,
     TargetTimeWindow,
 )
+from app.agent.research_handoff.agent import RESEARCH_HANDOFF_AGENT
+from app.agent.research_handoff.contract import HandoffMaterial
+from app.agent.research_handoff.service import ResearchHandoffService
 from app.agent.running import AnsweringPhases, AnsweringRunner, RunIdentity, RunInput
 from app.config import settings
 from app.db import engine
@@ -113,6 +117,16 @@ class _UnreachableExternalSearchScope:
 class _UnreachableEvidenceReviewerScope:
     def __call__(self) -> object:
         raise AssertionError("evidence reviewer runtime must not activate")
+
+
+class _UnreachableOrganizer:
+    async def organize(
+        self,
+        *,
+        handoff: ResearchHandoff,  # noqa: ARG002
+        material: HandoffMaterial,
+    ) -> ResearchHandoff:
+        raise AssertionError(f"organizer must not be called: {material.question!r}")
 
 
 class _UnreachableEvidenceAnswerer:
@@ -225,6 +239,10 @@ async def _probe_search(
                 runtime_scope_factory=activate_gemini_agent_runtime,
             ),
             direct_answerer=_UnreachableDirectAnswerer(),
+            organizer=ResearchHandoffService(
+                agent=RESEARCH_HANDOFF_AGENT,
+                runtime_scope_factory=activate_gemini_agent_runtime,
+            ),
         ),
         events=events,
     )
@@ -264,6 +282,7 @@ async def _probe_direct(*, question: str) -> None:
                 agent=DIRECT_ANSWER_AGENT,
                 runtime_scope_factory=activate_gemini_agent_runtime,
             ),
+            organizer=_UnreachableOrganizer(),
         ),
     )
     result = (

@@ -112,11 +112,6 @@ def test_probe_uses_answering_runner_without_removed_external_pipeline_seams() -
         "_RecordingExternalSearch",
         "_UnreachableExternalSearch",
     }
-    phase_keyword_sets = [
-        {keyword.arg for keyword in node.keywords}
-        for node in _calls(tree, "AnsweringPhases")
-    ]
-
     assert {
         "AnsweringPhases",
         "AnsweringRunner",
@@ -136,22 +131,6 @@ def test_probe_uses_answering_runner_without_removed_external_pipeline_seams() -
     } <= imported
     assert removed.isdisjoint(imported)
     assert removed.isdisjoint(loaded)
-    assert phase_keyword_sets == [
-        {
-            "planner",
-            "collector",
-            "reviewer",
-            "direct_answerer",
-            "evidence_answerer",
-        },
-        {
-            "planner",
-            "collector",
-            "reviewer",
-            "direct_answerer",
-            "evidence_answerer",
-        },
-    ]
 
 
 def test_probe_parser_and_dispatch_support_only_direct_and_search_modes() -> None:

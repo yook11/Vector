@@ -56,7 +56,12 @@ from app.agent.running import answering_runner as answering_runner_module
 from app.agent.runtime.contract import AgentResponseDefect, AgentResponseInvalidError
 from app.analysis.analyzed_article import InScopeAnalyzedArticle
 from app.analysis.assessment.domain.result import InScope, InScopeCategory
-from tests.agent.running._harness import ExternalScopes, fixed_scope, run_identity
+from tests.agent.running._harness import (
+    ExternalScopes,
+    PassThroughOrganizer,
+    fixed_scope,
+    run_identity,
+)
 from tests.agent.runtime._fakes import GoalKeyedAgentRuntime, ScriptedAgentRuntime
 from tests.logfire._metric_helpers import collected_metrics
 
@@ -526,6 +531,7 @@ def _runner(
         direct_answerer=_UnreachableDirectAnswerer(),
         evidence_answerer=_EvidenceAnswerer(error=answer_error, timeline=timeline),
         reviewer=EvidenceReviewer(runtime_scope_factory=factory.reviewer_scope),
+        organizer=PassThroughOrganizer(),
     )
     return AnsweringRunner(
         phases_factory=lambda: phases,
@@ -821,6 +827,7 @@ async def test_runner_preserves_internal_hit_order_into_synthesis() -> None:
         direct_answerer=_UnreachableDirectAnswerer(),
         evidence_answerer=answerer,
         reviewer=EvidenceReviewer(runtime_scope_factory=factory.reviewer_scope),
+        organizer=PassThroughOrganizer(),
     )
     runner = AnsweringRunner(
         phases_factory=lambda: phases,
@@ -865,6 +872,7 @@ async def test_runner_forwards_review_missing_to_the_evidence_answerer() -> None
         direct_answerer=_UnreachableDirectAnswerer(),
         evidence_answerer=answerer,
         reviewer=EvidenceReviewer(runtime_scope_factory=factory.reviewer_scope),
+        organizer=PassThroughOrganizer(),
     )
     runner = AnsweringRunner(
         phases_factory=lambda: phases,
@@ -1609,6 +1617,7 @@ async def test_internal_failure_still_reaches_reviewer_and_produces_evidence() -
         direct_answerer=_UnreachableDirectAnswerer(),
         evidence_answerer=answerer,
         reviewer=EvidenceReviewer(runtime_scope_factory=factory.reviewer_scope),
+        organizer=PassThroughOrganizer(),
     )
     runner = AnsweringRunner(
         phases_factory=lambda: phases,
@@ -1657,6 +1666,7 @@ async def test_external_provider_failure_keeps_internal_hits_in_final_evidence()
         direct_answerer=_UnreachableDirectAnswerer(),
         evidence_answerer=answerer,
         reviewer=EvidenceReviewer(runtime_scope_factory=factory.reviewer_scope),
+        organizer=PassThroughOrganizer(),
     )
     runner = AnsweringRunner(
         phases_factory=lambda: phases,
@@ -1795,6 +1805,7 @@ async def test_runner_isolates_one_tasks_total_failure_from_sibling_evidence() -
         direct_answerer=_UnreachableDirectAnswerer(),
         evidence_answerer=answerer,
         reviewer=EvidenceReviewer(runtime_scope_factory=factory.reviewer_scope),
+        organizer=PassThroughOrganizer(),
     )
     runner = AnsweringRunner(
         phases_factory=lambda: phases,

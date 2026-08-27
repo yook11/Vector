@@ -30,7 +30,11 @@ from app.agent.running import (
     RunInput,
 )
 from app.agent.threads.contracts import ThreadMessageSnapshot
-from tests.agent.running._harness import THREAD_ID, USER_ID
+from tests.agent.running._harness import (
+    THREAD_ID,
+    USER_ID,
+    PassThroughOrganizer,
+)
 from tests.logfire._span_helpers import (
     domain_attr_keys,
     exception_event,
@@ -195,6 +199,7 @@ class _PhasesFactory:
             reviewer=EvidenceReviewer(
                 runtime_scope_factory=_UnreachableExternalSearchScope(),
             ),
+            organizer=PassThroughOrganizer(),
         )
         self.created.append(phases)
         return phases

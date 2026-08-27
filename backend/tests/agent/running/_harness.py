@@ -41,6 +41,7 @@ from app.agent.planning.contract import (
     SearchPlan,
     TargetTimeWindow,
 )
+from app.agent.research_handoff import HandoffMaterial, ResearchHandoff
 from app.agent.running import AnsweringRunner, RunIdentity, RunInput
 from app.agent.running import answering_runner as answering_runner_module
 from app.analysis.analyzed_article import InScopeAnalyzedArticle
@@ -156,6 +157,22 @@ class UnreachableDirectAnswerer:
         raise AssertionError(
             f"direct answer must not run: {request!r} {previous_answer!r}"
         )
+
+
+class PassThroughOrganizer:
+    """整理をせずhandoffをそのまま返す。台帳の配線だけを見るテスト用。"""
+
+    def __init__(self) -> None:
+        self.materials: list[HandoffMaterial] = []
+
+    async def organize(
+        self,
+        *,
+        handoff: ResearchHandoff,
+        material: HandoffMaterial,
+    ) -> ResearchHandoff:
+        self.materials.append(material)
+        return handoff
 
 
 class EvidenceAnswerer:

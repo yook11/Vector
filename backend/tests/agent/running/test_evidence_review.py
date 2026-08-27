@@ -60,6 +60,10 @@ from tests.agent.running._harness import (
     FakeExternalSearchGateway as _FakeExternalSearchGateway,
 )
 from tests.agent.running._harness import (
+    PassThroughOrganizer,
+    fixed_scope,
+)
+from tests.agent.running._harness import (
     Planner as _Planner,
 )
 from tests.agent.running._harness import (
@@ -73,9 +77,6 @@ from tests.agent.running._harness import (
 )
 from tests.agent.running._harness import (
     external_hit as _external_hit,
-)
-from tests.agent.running._harness import (
-    fixed_scope,
 )
 from tests.agent.running._harness import (
     internal_hit as _internal_hit,
@@ -189,6 +190,7 @@ def _runner(
         reviewer=EvidenceReviewer(runtime_scope_factory=fixed_scope(reviewer_runtime)),
         direct_answerer=_UnreachableDirectAnswerer(),
         evidence_answerer=answerer,
+        organizer=PassThroughOrganizer(),
     )
     runner = AnsweringRunner(
         phases_factory=lambda: phases,

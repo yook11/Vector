@@ -37,10 +37,8 @@ def _handoff_json(research_goal: str) -> dict[str, Any]:
                     ResearchTaskRecord(
                         research_goal=research_goal,
                         executed_queries=("q",),
-                        adopted_claims=(),
                     ),
                 ),
-                unresolved_after_search=(),
             ),
         ),
     ).model_dump(mode="json")

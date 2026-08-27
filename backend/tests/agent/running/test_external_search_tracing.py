@@ -52,7 +52,12 @@ from app.agent.runtime.deepseek import DeepSeekAgentRuntime
 from app.analysis.analyzed_article import InScopeAnalyzedArticle
 from app.analysis.assessment.domain.result import InScope, InScopeCategory
 from app.logfire.redaction import install_exception_redaction
-from tests.agent.running._harness import ExternalScopes, fixed_scope, run_identity
+from tests.agent.running._harness import (
+    ExternalScopes,
+    PassThroughOrganizer,
+    fixed_scope,
+    run_identity,
+)
 from tests.agent.runtime._deepseek_helpers import FakeDeepSeekClient, function_response
 from tests.agent.runtime._fakes import ScriptedAgentRuntime
 from tests.logfire._span_helpers import (
@@ -238,6 +243,7 @@ def _runner(
         direct_answerer=_UnreachableDirectAnswerer(),
         evidence_answerer=evidence_answerer or _EvidenceAnswerer(),
         reviewer=EvidenceReviewer(runtime_scope_factory=factory.reviewer_scope),
+        organizer=PassThroughOrganizer(),
     )
     return (
         AnsweringRunner(
@@ -673,6 +679,7 @@ async def test_direct_path_run_span_has_no_evidence_count_attributes(
         direct_answerer=_DirectAnswerer(),
         evidence_answerer=_UnreachableEvidenceAnswerer(),
         reviewer=EvidenceReviewer(runtime_scope_factory=_UnreachableExternalScope()),
+        organizer=PassThroughOrganizer(),
     )
     runner = AnsweringRunner(
         phases_factory=lambda: phases,
@@ -752,6 +759,7 @@ async def test_evidence_run_span_reports_post_dedup_internal_total(
         direct_answerer=_UnreachableDirectAnswerer(),
         evidence_answerer=_EvidenceAnswerer(),
         reviewer=EvidenceReviewer(runtime_scope_factory=factory.reviewer_scope),
+        organizer=PassThroughOrganizer(),
     )
     runner = AnsweringRunner(
         phases_factory=lambda: phases,
@@ -797,6 +805,7 @@ async def test_evidence_run_span_reports_internal_collection_failed_task_count(
         direct_answerer=_UnreachableDirectAnswerer(),
         evidence_answerer=_EvidenceAnswerer(),
         reviewer=EvidenceReviewer(runtime_scope_factory=factory.reviewer_scope),
+        organizer=PassThroughOrganizer(),
     )
     runner = AnsweringRunner(
         phases_factory=lambda: phases,

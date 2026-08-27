@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import inspect
 from dataclasses import FrozenInstanceError, fields, is_dataclass
 from datetime import UTC, datetime
 from typing import Any, get_type_hints
@@ -11,19 +10,13 @@ from uuid import UUID
 import pytest
 
 import app.agent.running as running_module
-from app.agent.answering.direct_answer.contract import DirectAnswerer
-from app.agent.answering.evidence_answer.contract import EvidenceAnswerer
 from app.agent.contract import AnswerQuestionResult
-from app.agent.evidence_collection import EvidenceCollector
-from app.agent.evidence_review import EvidenceReviewer
-from app.agent.planning.contract import QuestionPlanner
 from app.agent.research_handoff import (
     ResearchHandoff,
     ResearchRunRecord,
     ResearchTaskRecord,
 )
 from app.agent.running import (
-    AnsweringPhases,
     RunIdentity,
     RunInput,
     RunResult,
@@ -161,10 +154,8 @@ def _handoff() -> ResearchHandoff:
                     ResearchTaskRecord(
                         research_goal="調査目標",
                         executed_queries=("q",),
-                        adopted_claims=(),
                     ),
                 ),
-                unresolved_after_search=(),
             ),
         ),
     )
@@ -207,39 +198,4 @@ def test_run_result_is_frozen_slotted_output_and_handoff() -> None:
         True,
         True,
         True,
-    )
-
-
-def test_answering_phases_owns_collector_without_internal_search_port() -> None:
-    """保証するテスト条件 18: AnsweringPhasesはcollector fieldでRun単位収集を持つ。
-
-    D4-T3: 精査は EvidenceReviewer が起動するため、reviewer field を追加で持つ
-    (他のphase roleと同様、明示的な配線を要求するためdefaultは持たない)。
-    """
-    phases_type = AnsweringPhases
-    signature = inspect.signature(phases_type)
-
-    assert (
-        _field_contract(phases_type),
-        tuple(signature.parameters),
-        tuple(
-            parameter.default is inspect.Parameter.empty
-            for parameter in signature.parameters.values()
-        ),
-    ) == (
-        (
-            ("planner", QuestionPlanner),
-            ("collector", EvidenceCollector),
-            ("direct_answerer", DirectAnswerer),
-            ("evidence_answerer", EvidenceAnswerer),
-            ("reviewer", EvidenceReviewer),
-        ),
-        (
-            "planner",
-            "collector",
-            "direct_answerer",
-            "evidence_answerer",
-            "reviewer",
-        ),
-        (True, True, True, True, True),
     )

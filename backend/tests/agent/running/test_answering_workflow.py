@@ -28,7 +28,11 @@ from app.agent.planning.contract import (
     TargetTimeWindow,
 )
 from app.agent.running import AnsweringPhases, AnsweringRunner, RunInput
-from tests.agent.running._harness import fixed_scope, run_identity
+from tests.agent.running._harness import (
+    PassThroughOrganizer,
+    fixed_scope,
+    run_identity,
+)
 
 RUN_ID = UUID("019bd239-1ed4-7fbb-a336-04fe3c197650")
 AS_OF = datetime(2026, 7, 19, 9, 30, tzinfo=UTC)
@@ -173,6 +177,7 @@ def _runner(
             direct_answerer=direct_answerer,
             evidence_answerer=evidence_answerer,
             reviewer=EvidenceReviewer(runtime_scope_factory=fixed_scope(object())),
+            organizer=PassThroughOrganizer(),
         )
 
     return (

@@ -24,6 +24,7 @@ from app.agent.evidence_collection import EvidenceCollectionService
 from app.agent.evidence_collection.external_search.contract import ExternalSearch
 from app.agent.evidence_review import EvidenceReviewer
 from app.agent.planning.agent import QUESTION_PLANNER_AGENT
+from app.agent.research_handoff.agent import RESEARCH_HANDOFF_AGENT
 from app.agent.running import AnsweringPhases, AnsweringRunner
 from app.agent.runtime.contract import AgentRuntime
 from app.analysis.ai_provider_errors import (
@@ -89,6 +90,7 @@ def _build_answering_phases(
         InternalSearchService,
     )
     from app.agent.planning.service import QuestionPlanningService
+    from app.agent.research_handoff.service import ResearchHandoffService
 
     internal_search = InternalSearchService(
         embedder=GeminiQueryEmbedder(),
@@ -122,6 +124,10 @@ def _build_answering_phases(
             runtime_scope_factory=activate_gemini_agent_runtime,
             delta_reporter=delta_reporter,
             continuation=continuation,
+        ),
+        organizer=ResearchHandoffService(
+            agent=RESEARCH_HANDOFF_AGENT,
+            runtime_scope_factory=activate_gemini_agent_runtime,
         ),
     )
 

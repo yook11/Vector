@@ -49,7 +49,11 @@ from app.agent.runtime.contract import AgentResponseDefect, AgentResponseInvalid
 from app.agent.threads.contracts import ThreadMessageSnapshot
 from app.analysis.analyzed_article import InScopeAnalyzedArticle
 from app.analysis.assessment.domain.result import InScope, InScopeCategory
-from tests.agent.running._harness import ExternalScopes, run_identity
+from tests.agent.running._harness import (
+    ExternalScopes,
+    PassThroughOrganizer,
+    run_identity,
+)
 
 
 def _as_of() -> datetime:
@@ -665,6 +669,7 @@ def _orchestrator(
         reviewer=EvidenceReviewer(
             runtime_scope_factory=external_scopes.reviewer_scope,
         ),
+        organizer=PassThroughOrganizer(),
     )
     workflow = _WorkflowHarness(
         phases=phases,

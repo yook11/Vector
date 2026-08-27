@@ -13,6 +13,7 @@ from app.agent.contract import AnswerQuestionResult, ResearchHandoff
 from app.agent.evidence_collection import EvidenceCollector
 from app.agent.evidence_review import EvidenceReviewer
 from app.agent.planning.contract import QuestionPlanner
+from app.agent.research_handoff.contract import ResearchHandoffOrganizer
 from app.agent.threads.contracts import ThreadMessageSnapshot
 
 __all__ = [
@@ -31,6 +32,7 @@ class AnsweringPhases:
     direct_answerer: DirectAnswerer
     evidence_answerer: EvidenceAnswerer
     reviewer: EvidenceReviewer
+    organizer: ResearchHandoffOrganizer
 
 
 class AnsweringPhasesFactory(Protocol):
