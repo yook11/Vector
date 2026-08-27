@@ -1,21 +1,31 @@
-"""計画工程 plan() 1回の start/end 記録。"""
+"""計画工程 plan() 1回の記録。"""
 
 from __future__ import annotations
 
+import asyncio
+from collections.abc import AsyncIterator
+from contextlib import (
+    AbstractAsyncContextManager,
+    AbstractContextManager,
+    asynccontextmanager,
+)
+from dataclasses import dataclass
 from time import perf_counter
-from typing import TYPE_CHECKING, Literal, Protocol
+from typing import Protocol
 
 import logfire
 
 from app.agent.contract import PlanType
-from app.agent.recording.types import PhaseCall, PhaseStatus
-
-if TYPE_CHECKING:
-    from app.agent.planning.metrics import PlannerOutcomeResult
+from app.agent.phase_span import agent_phase
+from app.agent.recording.types import PhaseStatus
 
 __all__ = [
     "LogfirePlanningRecorder",
+    "PlanningFailed",
+    "PlanningOutcome",
     "PlanningRecorder",
+    "PlanningRecording",
+    "PlanningSucceeded",
     "logfire_planning_recorder",
 ]
 
@@ -29,78 +39,210 @@ _duration_histogram = logfire.metric_histogram(
 )
 
 
+@dataclass(frozen=True, slots=True)
+class PlanningSucceeded:
+    """完成した計画工程の結論。"""
+
+    plan_type: PlanType
+    attempt_count: int
+
+    def __post_init__(self) -> None:
+        if self.attempt_count < 1:
+            raise ValueError("attempt_count must be positive")
+
+
+@dataclass(frozen=True, slots=True)
+class PlanningFailed:
+    """分類済み失敗で終了した計画工程の結論。"""
+
+    failure_code: str
+    attempt_count: int
+
+    def __post_init__(self) -> None:
+        if not self.failure_code:
+            raise ValueError("failure_code must not be empty")
+        if self.attempt_count < 1:
+            raise ValueError("attempt_count must be positive")
+
+
+type PlanningOutcome = PlanningSucceeded | PlanningFailed
+
+
+class PlanningRecording(Protocol):
+    """plan() 1回に結論を関連付ける記録ハンドル。"""
+
+    def set_outcome(self, outcome: PlanningOutcome) -> None: ...
+
+
 class PlanningRecorder(Protocol):
-    """start は必ず PhaseCall を返し、記録の例外は本処理へ出さない。"""
+    """plan() 1回のspan・duration・分類済みoutcomeを完結させる。"""
 
-    async def start(self) -> PhaseCall: ...
-
-    async def end(
+    def record(
         self,
-        call: PhaseCall,
         *,
-        outcome: PlannerOutcomeResult | None = None,
-        retry_used: bool = False,
-        plan_type: PlanType | Literal["not_created"] | None = None,
-        failure_code: str | None = None,
-        stopped: bool = False,
-    ) -> None: ...
+        agent_name: str,
+    ) -> AbstractAsyncContextManager[PlanningRecording]: ...
 
 
-def _status_from_result(
-    *,
-    stopped: bool,
-    outcome: PlannerOutcomeResult | None,
-) -> PhaseStatus:
-    """工程の終わり方を記録の status に写す。"""
+@dataclass(slots=True)
+class _PlanningRecording:
+    outcome: PlanningOutcome | None = None
 
-    if stopped:
-        return PhaseStatus.STOPPED
-    if outcome == "planned":
-        return PhaseStatus.COMPLETED
-    return PhaseStatus.FAILED
+    def set_outcome(self, outcome: PlanningOutcome) -> None:
+        self.outcome = outcome
+
+
+@dataclass(frozen=True, slots=True)
+class _PlanningExit:
+    status: PhaseStatus
+    outcome: PlanningOutcome | None
+    error: BaseException | None
+
+    @classmethod
+    def resolve(
+        cls,
+        *,
+        outcome: PlanningOutcome | None,
+        error: BaseException | None,
+    ) -> _PlanningExit:
+        if isinstance(error, asyncio.CancelledError | GeneratorExit):
+            return cls(
+                status=PhaseStatus.STOPPED,
+                outcome=None,
+                error=error,
+            )
+        if isinstance(outcome, PlanningSucceeded) and error is None:
+            return cls(
+                status=PhaseStatus.COMPLETED,
+                outcome=outcome,
+                error=None,
+            )
+        if isinstance(outcome, PlanningFailed):
+            return cls(
+                status=PhaseStatus.FAILED,
+                outcome=outcome,
+                error=error,
+            )
+        return cls(
+            status=PhaseStatus.FAILED,
+            outcome=None,
+            error=error,
+        )
 
 
 class LogfirePlanningRecorder:
-    async def start(self) -> PhaseCall:
-        try:
-            return PhaseCall(started_at=perf_counter())
-        except Exception:
-            return PhaseCall(started_at=0.0)
-
-    async def end(
+    def record(
         self,
-        call: PhaseCall,
         *,
-        outcome: PlannerOutcomeResult | None = None,
-        retry_used: bool = False,
-        plan_type: PlanType | Literal["not_created"] | None = None,
-        failure_code: str | None = None,
-        stopped: bool = False,
-    ) -> None:
-        try:
-            status = _status_from_result(stopped=stopped, outcome=outcome)
-            attributes = {
-                "status": status.value,
-                "outcome": (
-                    _MISSING_OUTCOME if stopped or outcome is None else outcome
-                ),
-            }
-            _duration_histogram.record(
-                perf_counter() - call.started_at,
-                attributes=attributes,
-            )
-            if stopped or outcome is None or plan_type is None:
-                return
-            from app.agent.planning.metrics import record_question_planner_outcome
+        agent_name: str,
+    ) -> AbstractAsyncContextManager[PlanningRecording]:
+        return self._record(agent_name=agent_name)
 
-            record_question_planner_outcome(
-                result=outcome,
-                retry_used=retry_used,
-                plan_type=plan_type,
-                failure_code=failure_code,
+    @asynccontextmanager
+    async def _record(self, *, agent_name: str) -> AsyncIterator[PlanningRecording]:
+        recording = _PlanningRecording()
+        started_at = _started_at()
+        span = _try_open_planning_span(agent_name=agent_name)
+        error: BaseException | None = None
+        try:
+            yield recording
+        except BaseException as exc:
+            error = exc
+            raise
+        finally:
+            planning_exit = _PlanningExit.resolve(
+                outcome=recording.outcome,
+                error=error,
             )
-        except Exception:
+            _try_close_planning_span(span, error=planning_exit.error)
+            _record_duration(started_at=started_at, planning_exit=planning_exit)
+            _record_outcome(planning_exit)
+
+
+def _try_open_planning_span(
+    *,
+    agent_name: str,
+) -> AbstractContextManager[None] | None:
+    try:
+        span = agent_phase(phase="planning", agent_name=agent_name)
+        span.__enter__()
+        return span
+    except Exception:
+        return None
+
+
+def _try_close_planning_span(
+    span: AbstractContextManager[None] | None,
+    *,
+    error: BaseException | None,
+) -> None:
+    if span is None:
+        return
+    try:
+        if error is None:
+            span.__exit__(None, None, None)
             return
+        span.__exit__(type(error), error, error.__traceback__)
+    except BaseException:
+        return
+
+
+def _started_at() -> float | None:
+    try:
+        return perf_counter()
+    except Exception:
+        return None
+
+
+def _record_duration(
+    *,
+    started_at: float | None,
+    planning_exit: _PlanningExit,
+) -> None:
+    if started_at is None:
+        return
+    try:
+        _duration_histogram.record(
+            perf_counter() - started_at,
+            attributes={
+                "status": planning_exit.status.value,
+                "outcome": _outcome_label(planning_exit.outcome),
+            },
+        )
+    except Exception:
+        return
+
+
+def _record_outcome(planning_exit: _PlanningExit) -> None:
+    outcome = planning_exit.outcome
+    if outcome is None:
+        return
+    try:
+        from app.agent.planning.metrics import record_question_planner_outcome
+
+        if isinstance(outcome, PlanningSucceeded):
+            record_question_planner_outcome(
+                result="succeeded",
+                attempt_count=outcome.attempt_count,
+                plan_type=outcome.plan_type,
+            )
+            return
+        record_question_planner_outcome(
+            result="failed",
+            attempt_count=outcome.attempt_count,
+            plan_type="not_created",
+            failure_code=outcome.failure_code,
+        )
+    except Exception:
+        return
+
+
+def _outcome_label(outcome: PlanningOutcome | None) -> str:
+    if isinstance(outcome, PlanningSucceeded):
+        return "succeeded"
+    if isinstance(outcome, PlanningFailed):
+        return "failed"
+    return _MISSING_OUTCOME
 
 
 logfire_planning_recorder = LogfirePlanningRecorder()

@@ -381,17 +381,22 @@ External Query Agentへ直接渡す、external-only検索を起動する、質�
 
 `vector.agent.planner.outcome`は維持し、次へ更新する。
 
-- `result`: `planned | failed`。`fallback`を削除する。
-- `retry_used`: attempt 2を開始したかを表す。
+- `result`: `succeeded | failed`。完成planの有無ではなく工程の成否を表す。
+- `attempt_count`: Planner内で実際に開始したattempt数を表す。
 - `plan_type`: 成功時は`direct_answer | search`、完成planがない失敗時は`not_created`。
   `not_created`はmetric専用sentinelであり、`PlanType`へ追加する第3のplanではない。
 - `failure_code`: 分類済み失敗code。成功時は`none`。
 
-成功またはPlanner境界で分類済みの最終失敗ごとにexactly once記録する。`planned` / `failed`の
-どちらもRuntime scopeの退出処理が別の例外を出さず完了した後に記録する。`planned`はplanを呼び出し元へ
+成功またはPlanner境界で分類済みの最終失敗ごとにexactly once記録する。`succeeded` / `failed`の
+どちらもRuntime scopeの退出処理が別の例外を出さず完了した後に記録する。`succeeded`はplanを呼び出し元へ
 返せる場合、`failed`は分類済みattempt失敗を呼び出し元へ伝播する場合に限る。scopeの開始・終了失敗、
 未分類例外、`CancelledError`ではoutcome metricを記録せず、既存phase spanのerror / cancellation
 意味論を維持する。attributeへquestion、query、goal、期間内容、raw response、例外messageを記録しない。
+
+`vector.agent.planner.duration`は全`plan()`を記録し、`status`を`completed | failed | stopped`、
+`outcome`を`succeeded | failed | none`とする。`attempt_count`はoutcome metricだけに載せ、
+duration histogramの属性には追加しない。Planning Recorderが既存`agent_phase` spanと両metricを所有し、
+記録障害を本処理へ伝播させない。
 
 ## Answering Runner Contract
 
@@ -533,7 +538,7 @@ production codeの変更でFastAPI schema、SQLAlchemy model、Alembic migration
    - unknown exceptionとcancellationをfallbackへ変換しない。
    - Runtime scopeの開始・終了失敗ではoutcome metric、後続phase、完成plan返却が0回である。
    - Planner失敗時に`safe_fallback_plan`、internal search、external activation、answer agentが0回である。
-   - metricの`planned` / `failed`、`retry_used`、`plan_type`、安全なfailure codeをscope退出後に
+   - metricの`succeeded` / `failed`、`attempt_count`、`plan_type`、安全なfailure codeをscope退出後に
      exactly once保証する。
 5. Answering Runner
    - Direct pathはretrieval 0回、Search pathは内部・外部を各1回実行する。

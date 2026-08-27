@@ -22,6 +22,11 @@ from app.agent.planning.contract import (
 )
 from app.agent.planning.service import QuestionPlanningService
 from app.agent.question_context.contract import AnswerBrief
+from app.agent.recording.planning import (
+    PlanningFailed,
+    PlanningOutcome,
+    PlanningSucceeded,
+)
 from app.agent.runtime.contract import AgentResponseDefect, AgentResponseInvalidError
 from app.analysis.ai_provider_errors import (
     AIProviderError,
@@ -173,21 +178,12 @@ def _metric_attributes(
 def _assert_recorded(
     recorder: RecordingPlanningRecorder,
     *,
-    outcome: str | None,
-    stopped: bool = False,
-    retry_used: bool = False,
-    plan_type: str | None = None,
-    failure_code: str | None = None,
+    outcome: PlanningOutcome | None,
 ) -> None:
-    assert len(recorder.starts) == 1
-    assert len(recorder.ends) == 1
-    recorded = recorder.ends[0]
-    assert recorded.call is recorder.starts[0]
-    assert recorded.outcome == outcome
-    assert recorded.stopped is stopped
-    assert recorded.retry_used is retry_used
-    assert recorded.plan_type == plan_type
-    assert recorded.failure_code == failure_code
+    assert len(recorder.records) == 1
+    recorded = recorder.records[0]
+    assert recorded.agent_name == QUESTION_PLANNER_AGENT.name
+    assert recorded.outcomes == ([] if outcome is None else [outcome])
 
 
 @pytest.mark.parametrize(
@@ -243,16 +239,16 @@ async def test_planner_returns_each_completed_two_plan_variant_after_scope_exit(
     assert metrics_at_scope_exit == []
     assert _metric_attributes(collected_metrics(capfire)) == [
         {
-            "result": "planned",
-            "retry_used": False,
+            "result": "succeeded",
+            "attempt_count": 1,
             "plan_type": expected_plan_type,
             "failure_code": "none",
         }
     ]
 
 
-async def test_successful_plan_records_planned_outcome() -> None:
-    """完成 plan は recorder へ planned を1回渡す。"""
+async def test_successful_plan_records_succeeded_outcome() -> None:
+    """完成 plan は recorder へ成功結論を1回渡す。"""
 
     runtime = ScriptedAgentRuntime([_draft(plan_type="direct_answer")])
     recorder = RecordingPlanningRecorder()
@@ -263,8 +259,7 @@ async def test_successful_plan_records_planned_outcome() -> None:
     assert plan.plan_type == "direct_answer"
     _assert_recorded(
         recorder,
-        outcome="planned",
-        plan_type="direct_answer",
+        outcome=PlanningSucceeded(plan_type="direct_answer", attempt_count=1),
     )
 
 
@@ -313,7 +308,7 @@ async def test_two_response_defects_propagate_second_error_and_record_not_create
     assert _metric_attributes(metrics) == [
         {
             "result": "failed",
-            "retry_used": True,
+            "attempt_count": 2,
             "plan_type": "not_created",
             "failure_code": AgentResponseDefect.OUTPUT_SCHEMA_MISMATCH.value,
         }
@@ -334,10 +329,10 @@ async def test_terminal_response_defect_records_failed_outcome() -> None:
 
     _assert_recorded(
         recorder,
-        outcome="failed",
-        retry_used=True,
-        plan_type="not_created",
-        failure_code=AgentResponseDefect.OUTPUT_SCHEMA_MISMATCH.value,
+        outcome=PlanningFailed(
+            failure_code=AgentResponseDefect.OUTPUT_SCHEMA_MISMATCH.value,
+            attempt_count=2,
+        ),
     )
 
 
@@ -357,7 +352,7 @@ async def test_classified_provider_failure_does_not_retry_and_records_not_create
     assert _metric_attributes(collected_metrics(capfire)) == [
         {
             "result": "failed",
-            "retry_used": False,
+            "attempt_count": 1,
             "plan_type": "not_created",
             "failure_code": "ai_error_network",
         }
@@ -377,9 +372,10 @@ async def test_classified_provider_failure_records_failed_outcome() -> None:
 
     _assert_recorded(
         recorder,
-        outcome="failed",
-        plan_type="not_created",
-        failure_code="ai_error_network",
+        outcome=PlanningFailed(
+            failure_code="ai_error_network",
+            attempt_count=1,
+        ),
     )
 
 
@@ -388,8 +384,7 @@ async def test_bare_provider_error_propagates_as_unclassified_without_outcome_me
 ) -> None:
     error = AIProviderError()
     runtime = ScriptedAgentRuntime([error])
-    recorder = RecordingPlanningRecorder()
-    service, factory = _service(runtime, recorder=recorder)
+    service, factory = _service(runtime)
 
     with pytest.raises(AIProviderError) as raised:
         await service.plan(_input())
@@ -405,7 +400,6 @@ async def test_bare_provider_error_propagates_as_unclassified_without_outcome_me
     assert factory.exits[0][2] is error
     assert _metric_attributes(collected_metrics(capfire)) == []
     assert phase.status.status_code is StatusCode.ERROR
-    _assert_recorded(recorder, outcome=None)
 
 
 @pytest.mark.parametrize(
@@ -428,11 +422,7 @@ async def test_unclassified_failure_and_cancellation_propagate_without_metric(
 
     assert raised.value is error
     assert _metric_attributes(collected_metrics(capfire)) == []
-    _assert_recorded(
-        recorder,
-        outcome=None,
-        stopped=isinstance(error, asyncio.CancelledError),
-    )
+    _assert_recorded(recorder, outcome=None)
 
 
 @pytest.mark.parametrize("failure_point", ["enter", "exit"])
@@ -553,7 +543,7 @@ async def test_close_error_replaces_terminal_response_defect_without_metric(
         factory.exits[0][3] is not None,
     ) == (True, True, True, True)
     assert _metric_attributes(collected_metrics(capfire)) == []
-    _assert_recorded(recorder, outcome=None, retry_used=True)
+    _assert_recorded(recorder, outcome=None)
 
 
 @pytest.mark.parametrize(
@@ -598,7 +588,7 @@ async def test_classified_non_response_error_propagates_without_retry(
     assert _metric_attributes(metrics) == [
         {
             "result": "failed",
-            "retry_used": False,
+            "attempt_count": 1,
             "plan_type": "not_created",
             "failure_code": expected_failure_code,
         }
@@ -642,11 +632,7 @@ async def test_unknown_error_and_cancellation_propagate_by_identity(
     assert question_sentinel not in metric_dump
     if exception_message is not None:
         assert exception_message not in metric_dump
-    _assert_recorded(
-        recorder,
-        outcome=None,
-        stopped=isinstance(error, asyncio.CancelledError),
-    )
+    _assert_recorded(recorder, outcome=None)
 
 
 @pytest.mark.parametrize(
@@ -762,11 +748,11 @@ async def test_retry_success_metric_records_after_scope_exit_without_repair_deta
     assert plan.plan_type == "search"
     assert metrics_at_scope_exit == []
     metrics = collected_metrics(capfire)
-    assert sum_counter_for_result(metrics, _PLANNER_OUTCOME_METRIC, "planned") == 1
+    assert sum_counter_for_result(metrics, _PLANNER_OUTCOME_METRIC, "succeeded") == 1
     assert _metric_attributes(metrics) == [
         {
-            "result": "planned",
-            "retry_used": True,
+            "result": "succeeded",
+            "attempt_count": 2,
             "plan_type": "search",
             "failure_code": "none",
         }
@@ -776,8 +762,8 @@ async def test_retry_success_metric_records_after_scope_exit_without_repair_deta
     )
 
 
-async def test_retry_success_records_planned_with_retry_used() -> None:
-    """retry 成功は recorder へ planned と retry_used を渡す。"""
+async def test_retry_success_records_attempt_count() -> None:
+    """retry 成功は recorder へ実際の試行回数を渡す。"""
 
     invalid = _response_invalid(AgentResponseDefect.RESPONSE_NOT_JSON)
     runtime = ScriptedAgentRuntime(
@@ -799,18 +785,16 @@ async def test_retry_success_records_planned_with_retry_used() -> None:
     assert plan.plan_type == "search"
     _assert_recorded(
         recorder,
-        outcome="planned",
-        retry_used=True,
-        plan_type="search",
+        outcome=PlanningSucceeded(plan_type="search", attempt_count=2),
     )
 
 
 @pytest.mark.parametrize(
-    ("outcomes", "retry_used", "plan_type"),
+    ("outcomes", "attempt_count", "plan_type"),
     [
         pytest.param(
             lambda: [_draft(plan_type="direct_answer")],
-            False,
+            1,
             "direct_answer",
             id="direct",
         ),
@@ -824,7 +808,7 @@ async def test_retry_success_records_planned_with_retry_used() -> None:
                     ],
                 ),
             ],
-            True,
+            2,
             "search",
             id="retry-search",
         ),
@@ -832,7 +816,7 @@ async def test_retry_success_records_planned_with_retry_used() -> None:
 )
 async def test_outcome_metric_records_once_without_model_visible_text(
     outcomes: Callable[[], list[Any]],
-    retry_used: bool,
+    attempt_count: int,
     plan_type: str,
     capfire: CaptureLogfire,
 ) -> None:
@@ -842,11 +826,11 @@ async def test_outcome_metric_records_once_without_model_visible_text(
     await service.plan(_input("MODEL_VISIBLE_QUESTION_SENTINEL_86ba"))
 
     metrics = collected_metrics(capfire)
-    assert sum_counter_for_result(metrics, _PLANNER_OUTCOME_METRIC, "planned") == 1
+    assert sum_counter_for_result(metrics, _PLANNER_OUTCOME_METRIC, "succeeded") == 1
     assert _metric_attributes(metrics) == [
         {
-            "result": "planned",
-            "retry_used": retry_used,
+            "result": "succeeded",
+            "attempt_count": attempt_count,
             "plan_type": plan_type,
             "failure_code": "none",
         }

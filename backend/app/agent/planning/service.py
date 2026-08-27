@@ -2,12 +2,7 @@
 
 from __future__ import annotations
 
-import asyncio
-from typing import Literal
-
 from app.agent.agent import Agent
-from app.agent.contract import PlanType
-from app.agent.phase_span import agent_phase
 from app.agent.planning.contract import (
     PlanningAttemptInput,
     PlanningRequest,
@@ -19,9 +14,10 @@ from app.agent.planning.failure import (
     RequestRetryDisposition,
     classify_planner_failure,
 )
-from app.agent.planning.metrics import PlannerOutcomeResult
 from app.agent.recording.planning import (
+    PlanningFailed,
     PlanningRecorder,
+    PlanningSucceeded,
     logfire_planning_recorder,
 )
 from app.agent.runtime.contract import (
@@ -66,70 +62,53 @@ class QuestionPlanningService:
             | AgentResponseInvalidError
             | None
         ) = None
-        terminal_failure_code: str | None = None
-        retry_used = False
-        outcome: PlannerOutcomeResult | None = None
-        plan_type: PlanType | Literal["not_created"] | None = None
-        failure_code: str | None = None
-        stopped = False
-        call = await self._recorder.start()
+        terminal_outcome: PlanningFailed | None = None
+        attempt_count = 0
 
-        try:
-            with agent_phase(phase="planning", agent_name=self._agent.name):
-                try:
-                    async with self._runtime_scope_factory() as runtime:
-                        for attempt_number in range(1, _MAX_ATTEMPTS + 1):
-                            try:
-                                draft = await runtime.call(
-                                    self._agent,
-                                    PlanningAttemptInput(
-                                        request=request,
-                                        repair_context=repair_context,
-                                    ),
-                                    attempt_number=attempt_number,
-                                )
-                                completed_plan = plan_from_draft(draft)
-                            except _PLANNER_CLASSIFIED_ERRORS as exc:
-                                failure = classify_planner_failure(exc)
-                                retriable = (
-                                    failure.request_retry_disposition
-                                    is RequestRetryDisposition.RETRY_IN_REQUEST
-                                    and attempt_number < _MAX_ATTEMPTS
-                                )
-                                if retriable:
-                                    repair_context = str(exc)
-                                    retry_used = True
-                                    continue
-                                terminal_error = exc
-                                terminal_failure_code = failure.code
-                                raise
-                            retry_used = attempt_number > 1
-                            break
-                except _PLANNER_CLASSIFIED_ERRORS as exc:
-                    if exc is terminal_error:
-                        outcome = "failed"
-                        plan_type = "not_created"
-                        failure_code = terminal_failure_code
-                    raise
+        async with self._recorder.record(agent_name=self._agent.name) as recording:
+            try:
+                async with self._runtime_scope_factory() as runtime:
+                    for attempt_number in range(1, _MAX_ATTEMPTS + 1):
+                        attempt_count = attempt_number
+                        try:
+                            draft = await runtime.call(
+                                self._agent,
+                                PlanningAttemptInput(
+                                    request=request,
+                                    repair_context=repair_context,
+                                ),
+                                attempt_number=attempt_number,
+                            )
+                            completed_plan = plan_from_draft(draft)
+                        except _PLANNER_CLASSIFIED_ERRORS as exc:
+                            failure = classify_planner_failure(exc)
+                            retriable = (
+                                failure.request_retry_disposition
+                                is RequestRetryDisposition.RETRY_IN_REQUEST
+                                and attempt_number < _MAX_ATTEMPTS
+                            )
+                            if retriable:
+                                repair_context = str(exc)
+                                continue
+                            terminal_error = exc
+                            terminal_outcome = PlanningFailed(
+                                failure_code=failure.code,
+                                attempt_count=attempt_count,
+                            )
+                            raise
+                        break
+            except _PLANNER_CLASSIFIED_ERRORS as exc:
+                if exc is terminal_error and terminal_outcome is not None:
+                    recording.set_outcome(terminal_outcome)
+                raise
 
-                if completed_plan is not None:
-                    outcome = "planned"
-                    plan_type = completed_plan.plan_type
-                    return completed_plan
+            if completed_plan is not None:
+                recording.set_outcome(
+                    PlanningSucceeded(
+                        plan_type=completed_plan.plan_type,
+                        attempt_count=attempt_count,
+                    )
+                )
+                return completed_plan
 
-                raise AssertionError("unreachable: planning loop must return or raise")
-        except (asyncio.CancelledError, GeneratorExit):
-            stopped = True
-            outcome = None
-            plan_type = None
-            failure_code = None
-            raise
-        finally:
-            await self._recorder.end(
-                call,
-                outcome=outcome,
-                retry_used=retry_used,
-                plan_type=plan_type,
-                failure_code=failure_code,
-                stopped=stopped,
-            )
+            raise AssertionError("unreachable: planning loop must return or raise")
