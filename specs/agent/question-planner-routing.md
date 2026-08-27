@@ -53,8 +53,8 @@ conversation context は計画の文脈であり、事実根拠ではない。pr
 1. valid な completed plan ができれば返す。
 2. JSON 不正、object 以外、schema 不一致、または plan の意味的不整合だけを response defect として
    repair input を渡し 2 回目を試す。
-3. 2 回目の response defect、分類済み provider failure、unknown failure、cancellation は plan を作らず伝播し、
-   回答 run を停止する。
+3. 2 回目の response defect と分類済み provider failure は `PlanningError` として伝播し、unknown
+   failure と cancellation は変換せず伝播する。いずれも plan を作らず回答 run を停止する。
 
 質問文で query や goal を補完せず、fallback plan も作らない。最終失敗後は内部検索、外部リサーチ、
 回答生成を開始しない。

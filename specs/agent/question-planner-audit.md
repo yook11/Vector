@@ -11,7 +11,8 @@ wire schema 不一致、completed plan の意味的不整合である。最大 a
 安全な分類情報だけを含む。
 
 分類済み provider failure、runtime scope failure、unknown failure、cancellation は retry しない。
-最終 response defect を含むすべての終端 failure は例外を伝播し、plan、検索、回答生成を開始しない。
+response defect と分類済み provider failure の終端は `PlanningError` として伝播し、それ以外の終端
+failure は変換せず伝播する。いずれも plan、検索、回答生成を開始しない。
 
 ## Runtime Span
 
@@ -21,7 +22,7 @@ provider exception 本文は記録しない。
 
 ## Outcome Metric
 
-`vector.agent.planner.outcome` は completed planを返す場合、または分類済みの最終failureを伝播する場合に
+`vector.agent.planner.outcome` は completed planを返す場合、または `PlanningError` を伝播する場合に
 1回だけ記録する。runtime scopeの開始・終了失敗、unknown failure、cancellationでは記録しない。
 
 | Attribute | Values |
