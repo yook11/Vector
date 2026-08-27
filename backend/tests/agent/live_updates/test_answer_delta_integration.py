@@ -15,11 +15,11 @@ import redis.asyncio as aioredis
 from app.agent.answering.contract import AnsweringRequest
 from app.agent.answering.direct_answer.agent import DIRECT_ANSWER_AGENT
 from app.agent.answering.direct_answer.contract import DirectAnswerDraft
-from app.agent.answering.direct_answer.flow import DirectAnswerFlow
+from app.agent.answering.direct_answer.service import DirectAnswerService
 from app.agent.answering.evidence_answer.agent import EVIDENCE_ANSWER_AGENT
 from app.agent.answering.evidence_answer.contract import EvidenceAnswerDraft
 from app.agent.answering.evidence_answer.evidence import AnswerInputEvidence
-from app.agent.answering.evidence_answer.flow import EvidenceAnswerFlow
+from app.agent.answering.evidence_answer.service import EvidenceAnswerService
 from app.agent.contract import (
     ExternalSearchHitsFetchedEvent,
     ExternalUrlSource,
@@ -114,7 +114,7 @@ async def _answer(
     generator: FakeStreamingGenerator,
     reporter: AgentRunLiveAnswerDeltaReporter,
 ) -> DirectAnswerDraft:
-    return await DirectAnswerFlow(
+    return await DirectAnswerService(
         agent=DIRECT_ANSWER_AGENT,
         runtime_scope_factory=generator.activate,
         delta_reporter=reporter,
@@ -129,7 +129,7 @@ async def _evidence_answer(
     *,
     request: AnsweringRequest | None = None,
 ) -> EvidenceAnswerDraft:
-    return await EvidenceAnswerFlow(
+    return await EvidenceAnswerService(
         agent=EVIDENCE_ANSWER_AGENT,
         runtime_scope_factory=generator.activate,
         delta_reporter=reporter,

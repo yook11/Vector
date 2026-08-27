@@ -18,11 +18,11 @@ from sqlalchemy.ext.asyncio import async_sessionmaker
 from app.agent.answering.contract import AnsweringRequest
 from app.agent.answering.direct_answer.agent import DIRECT_ANSWER_AGENT
 from app.agent.answering.direct_answer.contract import DirectAnswerDraft
-from app.agent.answering.direct_answer.flow import DirectAnswerFlow
+from app.agent.answering.direct_answer.service import DirectAnswerService
 from app.agent.answering.evidence_answer.agent import EVIDENCE_ANSWER_AGENT
 from app.agent.answering.evidence_answer.contract import EvidenceAnswerDraft
 from app.agent.answering.evidence_answer.evidence import AnswerInputEvidence
-from app.agent.answering.evidence_answer.flow import EvidenceAnswerFlow
+from app.agent.answering.evidence_answer.service import EvidenceAnswerService
 from app.agent.composition import (
     activate_evidence_reviewer_runtime,
     activate_external_search,
@@ -220,7 +220,7 @@ async def _probe_search(
             reviewer=EvidenceReviewer(
                 runtime_scope_factory=activate_evidence_reviewer_runtime,
             ),
-            evidence_answerer=EvidenceAnswerFlow(
+            evidence_answerer=EvidenceAnswerService(
                 agent=EVIDENCE_ANSWER_AGENT,
                 runtime_scope_factory=activate_gemini_agent_runtime,
             ),
@@ -260,7 +260,7 @@ async def _probe_direct(*, question: str) -> None:
                 runtime_scope_factory=_UnreachableEvidenceReviewerScope(),
             ),
             evidence_answerer=_UnreachableEvidenceAnswerer(),
-            direct_answerer=DirectAnswerFlow(
+            direct_answerer=DirectAnswerService(
                 agent=DIRECT_ANSWER_AGENT,
                 runtime_scope_factory=activate_gemini_agent_runtime,
             ),

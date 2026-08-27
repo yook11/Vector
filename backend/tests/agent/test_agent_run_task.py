@@ -454,11 +454,11 @@ def _external_result() -> AnswerQuestionResult:
     )
 
 
-def test_composition_injects_same_live_controls_into_both_answer_flows(
+def test_composition_injects_same_live_controls_into_both_answer_services(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    import app.agent.answering.direct_answer.flow as direct_flow_module
-    import app.agent.answering.evidence_answer.flow as evidence_flow_module
+    import app.agent.answering.direct_answer.service as direct_service_module
+    import app.agent.answering.evidence_answer.service as evidence_service_module
     import app.agent.evidence_collection.internal_search.ai.gemini as embedder_module
     import app.agent.planning.service as planning_service_module
     from app.agent.answering.direct_answer.agent import DIRECT_ANSWER_AGENT
@@ -486,8 +486,10 @@ def test_composition_injects_same_live_controls_into_both_answer_flows(
         "ensure_external_search_configured",
         lambda: None,
     )
-    monkeypatch.setattr(direct_flow_module, "DirectAnswerFlow", capture_direct)
-    monkeypatch.setattr(evidence_flow_module, "EvidenceAnswerFlow", capture_evidence)
+    monkeypatch.setattr(direct_service_module, "DirectAnswerService", capture_direct)
+    monkeypatch.setattr(
+        evidence_service_module, "EvidenceAnswerService", capture_evidence
+    )
     monkeypatch.setattr(embedder_module, "GeminiQueryEmbedder", lambda: object())
     monkeypatch.setattr(
         article_repository_module,

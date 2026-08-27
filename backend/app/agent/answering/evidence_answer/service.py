@@ -1,4 +1,4 @@
-"""Validated evidence-grounded answer flow."""
+"""Validated evidence-grounded answer service."""
 
 from __future__ import annotations
 
@@ -52,7 +52,7 @@ from app.analysis.ai_provider_errors import (
     AIProviderOutputTruncatedError,
 )
 
-__all__ = ["EvidenceAnswerFlow"]
+__all__ = ["EvidenceAnswerService"]
 
 _MAX_ATTEMPTS = 2
 # ValidationError(pydantic)は、plain text化後のfinalize_evidence_answer_draft()が
@@ -66,7 +66,7 @@ _EVIDENCE_ANSWER_CLASSIFIED_ERRORS = (
 )
 
 
-class EvidenceAnswerFlow:
+class EvidenceAnswerService:
     """Create strict evidence answer drafts from plain text LLM output."""
 
     def __init__(

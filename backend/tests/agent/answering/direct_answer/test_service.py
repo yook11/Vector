@@ -1,4 +1,4 @@
-"""Direct answer flow tests."""
+"""Direct answer service tests."""
 
 from __future__ import annotations
 
@@ -23,7 +23,7 @@ from app.agent.answering.direct_answer.contract import (
     DirectAnswerInvalidError,
 )
 from app.agent.answering.direct_answer.failure import DirectAnswerError
-from app.agent.answering.direct_answer.flow import DirectAnswerFlow
+from app.agent.answering.direct_answer.service import DirectAnswerService
 from app.agent.recording.direct_answer import (
     DirectAnswerFailed,
     DirectAnswerOutcome,
@@ -190,21 +190,21 @@ def test_answer_generation_stopped_is_shared_identity_compatible_reexport() -> N
     )
 
 
-def _flow(
+def _service(
     runtime: ScriptedStreamingRuntime,
     *,
     delta_reporter: RecordingDeltaReporter | None = None,
     continuation: SequenceContinuation | None = None,
     recorder: RecordingDirectAnswerRecorder | None = None,
-) -> DirectAnswerFlow:
+) -> DirectAnswerService:
     if recorder is None:
-        return DirectAnswerFlow(
+        return DirectAnswerService(
             agent=DIRECT_ANSWER_AGENT,
             runtime_scope_factory=_runtime_scope(runtime),
             delta_reporter=delta_reporter,
             continuation=continuation,
         )
-    return DirectAnswerFlow(
+    return DirectAnswerService(
         agent=DIRECT_ANSWER_AGENT,
         runtime_scope_factory=_runtime_scope(runtime),
         delta_reporter=delta_reporter,
@@ -229,12 +229,12 @@ def _assert_recorded(
 @pytest.mark.asyncio
 async def test_valid_text_returns_direct_draft_without_retry() -> None:
     runtime = ScriptedStreamingRuntime(["検索なしで回答できます。"])
-    flow = DirectAnswerFlow(
+    service = DirectAnswerService(
         agent=DIRECT_ANSWER_AGENT,
         runtime_scope_factory=_runtime_scope(runtime),
     )
 
-    draft = await flow.answer(request=_request(), previous_answer="")
+    draft = await service.answer(request=_request(), previous_answer="")
 
     assert draft == DirectAnswerDraft(answer="検索なしで回答できます。")
     assert len(runtime.calls) == 1
@@ -246,7 +246,7 @@ async def test_direct_answer_removes_inline_citation_markers_after_generation() 
         ["結論は維持します。[[1]] 詳細は省略します。[[2]]"]
     )
 
-    draft = await DirectAnswerFlow(
+    draft = await DirectAnswerService(
         agent=DIRECT_ANSWER_AGENT,
         runtime_scope_factory=_runtime_scope(runtime),
     ).answer(
@@ -281,7 +281,7 @@ async def test_direct_answer_removes_group_form_citation_markers_after_generatio
         ["結論は維持します。[[1], [2]] 詳細は省略します。"]
     )
 
-    draft = await _flow(runtime).answer(request=_request())
+    draft = await _service(runtime).answer(request=_request())
 
     assert draft.answer == "結論は維持します。 詳細は省略します。"
 
@@ -294,7 +294,7 @@ async def test_group_form_marker_only_generation_retries_then_raises_invalid() -
     reporter = RecordingDeltaReporter()
 
     with pytest.raises(DirectAnswerError) as exc_info:
-        await _flow(runtime, delta_reporter=reporter).answer(request=_request())
+        await _service(runtime, delta_reporter=reporter).answer(request=_request())
 
     assert isinstance(exc_info.value.__cause__, DirectAnswerInvalidError)
     assert len(runtime.calls) == 2
@@ -318,7 +318,7 @@ async def test_blank_then_valid_retries_once_with_repair_context(
         finally:
             exits += 1
 
-    draft = await DirectAnswerFlow(
+    draft = await DirectAnswerService(
         agent=DIRECT_ANSWER_AGENT,
         runtime_scope_factory=counting_scope,
     ).answer(request=_request(), previous_answer="")
@@ -350,7 +350,7 @@ async def test_blank_twice_raises_invalid_after_observation(
     reporter = RecordingDeltaReporter()
 
     with pytest.raises(DirectAnswerError) as exc_info:
-        await _flow(runtime, delta_reporter=reporter).answer(request=_request())
+        await _service(runtime, delta_reporter=reporter).answer(request=_request())
 
     assert exc_info.value.code == "direct_answer_blank_response"
     assert isinstance(exc_info.value.__cause__, DirectAnswerInvalidError)
@@ -379,7 +379,7 @@ async def test_ai_provider_error_becomes_direct_answer_error_without_retry(
     reporter = RecordingDeltaReporter()
 
     with pytest.raises(DirectAnswerError) as exc_info:
-        await _flow(runtime, delta_reporter=reporter).answer(request=_request())
+        await _service(runtime, delta_reporter=reporter).answer(request=_request())
 
     assert exc_info.value.code == "ai_error_network"
     assert exc_info.value.__cause__ is provider_exc
@@ -409,7 +409,7 @@ async def test_second_truncation_raises_classified_truncation_error_after_retry(
     reporter = RecordingDeltaReporter()
 
     with pytest.raises(DirectAnswerError) as exc_info:
-        await _flow(runtime, delta_reporter=reporter).answer(request=_request())
+        await _service(runtime, delta_reporter=reporter).answer(request=_request())
 
     assert exc_info.value.code == "ai_error_output_truncated"
     assert exc_info.value.__cause__ is terminal_error
@@ -432,7 +432,7 @@ async def test_truncated_first_attempt_retries_with_truncation_flag() -> None:
     """
     runtime = ScriptedStreamingRuntime([_truncated_error(), "再試行後の回答です。"])
 
-    draft = await _flow(runtime).answer(request=_request())
+    draft = await _service(runtime).answer(request=_request())
 
     assert len(runtime.calls) == 2
     assert runtime.calls[0].input.previous_output_truncated is False
@@ -448,7 +448,7 @@ async def test_blank_retry_does_not_carry_truncation_flag() -> None:
     """
     runtime = ScriptedStreamingRuntime([" \n\t", "再試行後の回答です。"])
 
-    draft = await _flow(runtime).answer(request=_request())
+    draft = await _service(runtime).answer(request=_request())
 
     assert len(runtime.calls) == 2
     assert runtime.calls[0].input.previous_output_truncated is False
@@ -465,7 +465,7 @@ async def test_unexpected_exception_propagates_without_outcome(
     reporter = RecordingDeltaReporter()
 
     with pytest.raises(RuntimeError) as exc_info:
-        await _flow(runtime, delta_reporter=reporter).answer(request=_request())
+        await _service(runtime, delta_reporter=reporter).answer(request=_request())
 
     assert exc_info.value is unexpected
     assert len(runtime.calls) == 1
@@ -488,7 +488,7 @@ async def test_runtime_scope_activation_failure_precedes_attempt_and_observation
         yield  # pragma: no cover
 
     with pytest.raises(RuntimeError) as exc_info:
-        await DirectAnswerFlow(
+        await DirectAnswerService(
             agent=DIRECT_ANSWER_AGENT,
             runtime_scope_factory=broken_scope,
             delta_reporter=reporter,
@@ -524,7 +524,7 @@ async def test_runtime_scope_exit_failure_discards_completed_outcome(
         raise error
 
     with pytest.raises(RuntimeError) as exc_info:
-        await DirectAnswerFlow(
+        await DirectAnswerService(
             agent=DIRECT_ANSWER_AGENT,
             runtime_scope_factory=broken_scope,
         ).answer(request=_request())
@@ -556,7 +556,7 @@ async def test_runtime_scope_exit_failure_replaces_terminal_failure_without_outc
             raise close_error
 
     with pytest.raises(RuntimeError) as exc_info:
-        await DirectAnswerFlow(
+        await DirectAnswerService(
             agent=DIRECT_ANSWER_AGENT,
             runtime_scope_factory=broken_scope,
         ).answer(request=_request())
@@ -582,7 +582,7 @@ async def test_incremental_fragments_reconstruct_existing_final_answer() -> None
     )
     reporter = RecordingDeltaReporter()
 
-    draft = await _flow(runtime, delta_reporter=reporter).answer(request=_request())
+    draft = await _service(runtime, delta_reporter=reporter).answer(request=_request())
 
     assert draft == DirectAnswerDraft(answer="回答 の続きです。")
     assert "".join(text for _, text in reporter.appended) == draft.answer
@@ -601,7 +601,7 @@ async def test_marker_only_blank_generation_retries_without_visible_reset() -> N
     )
     reporter = RecordingDeltaReporter()
 
-    draft = await _flow(runtime, delta_reporter=reporter).answer(request=_request())
+    draft = await _service(runtime, delta_reporter=reporter).answer(request=_request())
 
     assert draft == DirectAnswerDraft(answer="再試行 回答")
     generation_two_text = "".join(
@@ -623,7 +623,7 @@ async def test_reporter_failure_does_not_change_success(
     runtime = ScriptedStreamingRuntime([["回答", "です。"]])
     reporter = RecordingDeltaReporter(fail_on=frozenset({failing_method}))
 
-    draft = await _flow(runtime, delta_reporter=reporter).answer(request=_request())
+    draft = await _service(runtime, delta_reporter=reporter).answer(request=_request())
 
     assert draft == DirectAnswerDraft(answer="回答です。")
 
@@ -635,7 +635,7 @@ async def test_reporter_abort_failure_does_not_mask_provider_error() -> None:
     reporter = RecordingDeltaReporter(fail_on=frozenset({"abort"}))
 
     with pytest.raises(DirectAnswerError) as exc_info:
-        await _flow(runtime, delta_reporter=reporter).answer(request=_request())
+        await _service(runtime, delta_reporter=reporter).answer(request=_request())
 
     assert exc_info.value.__cause__ is provider_exc
     assert reporter.aborted == [1]
@@ -649,7 +649,7 @@ async def test_continuation_false_before_provider_start_is_routine_stop() -> Non
     reporter = RecordingDeltaReporter()
 
     with pytest.raises(AnswerGenerationStopped):
-        await _flow(
+        await _service(
             runtime,
             delta_reporter=reporter,
             continuation=SequenceContinuation([False]),
@@ -671,7 +671,7 @@ async def test_continuation_false_mid_stream_aborts_iterator_and_pending_report(
     continuation = SequenceContinuation([True, True, False])
 
     with pytest.raises(AnswerGenerationStopped):
-        await _flow(
+        await _service(
             runtime,
             delta_reporter=reporter,
             continuation=continuation,
@@ -693,7 +693,7 @@ async def test_continuation_false_at_normal_stream_end_aborts_before_finish(
     continuation = SequenceContinuation([True, True, False])
 
     with pytest.raises(AnswerGenerationStopped):
-        await _flow(
+        await _service(
             runtime,
             delta_reporter=reporter,
             continuation=continuation,
@@ -714,7 +714,7 @@ async def test_successful_answer_records_succeeded_outcome() -> None:
     recorder = RecordingDirectAnswerRecorder()
     runtime = ScriptedStreamingRuntime(["検索なしで回答できます。"])
 
-    await _flow(runtime, recorder=recorder).answer(request=_request())
+    await _service(runtime, recorder=recorder).answer(request=_request())
 
     _assert_recorded(recorder, outcome=DirectAnswerSucceeded(attempt_count=1))
 
@@ -727,7 +727,7 @@ async def test_classified_failure_records_failed_outcome() -> None:
     runtime = ScriptedStreamingRuntime([error])
 
     with pytest.raises(DirectAnswerError) as exc_info:
-        await _flow(runtime, recorder=recorder).answer(request=_request())
+        await _service(runtime, recorder=recorder).answer(request=_request())
 
     assert exc_info.value.code == "ai_error_network"
     assert exc_info.value.__cause__ is error
@@ -747,7 +747,7 @@ async def test_retry_then_success_records_attempt_count() -> None:
     recorder = RecordingDirectAnswerRecorder()
     runtime = ScriptedStreamingRuntime([" \n\t", "再試行後の回答です。"])
 
-    await _flow(runtime, recorder=recorder).answer(request=_request())
+    await _service(runtime, recorder=recorder).answer(request=_request())
 
     _assert_recorded(recorder, outcome=DirectAnswerSucceeded(attempt_count=2))
 
@@ -759,7 +759,7 @@ async def test_retry_then_classified_failure_records_attempt_count() -> None:
     runtime = ScriptedStreamingRuntime(["", " "])
 
     with pytest.raises(DirectAnswerError) as exc_info:
-        await _flow(runtime, recorder=recorder).answer(request=_request())
+        await _service(runtime, recorder=recorder).answer(request=_request())
 
     assert exc_info.value.code == "direct_answer_blank_response"
     assert isinstance(exc_info.value.__cause__, DirectAnswerInvalidError)
@@ -780,7 +780,7 @@ async def test_generation_stop_records_stopped_without_outcome() -> None:
     runtime = ScriptedStreamingRuntime(["呼ばれない"])
 
     with pytest.raises(AnswerGenerationStopped) as exc_info:
-        await _flow(
+        await _service(
             runtime,
             continuation=SequenceContinuation([False]),
             recorder=recorder,
@@ -806,7 +806,7 @@ async def test_unclassified_failure_and_stops_record_without_outcome(
     runtime = ScriptedStreamingRuntime([error])
 
     with pytest.raises(type(error)) as exc_info:
-        await _flow(runtime, recorder=recorder).answer(request=_request())
+        await _service(runtime, recorder=recorder).answer(request=_request())
 
     assert exc_info.value is error
     _assert_recorded(recorder, outcome=None, error=error)

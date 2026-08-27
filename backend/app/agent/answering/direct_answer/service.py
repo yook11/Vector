@@ -1,4 +1,4 @@
-"""Validated direct answer flow."""
+"""Validated direct answer service."""
 
 from __future__ import annotations
 
@@ -41,13 +41,13 @@ from app.analysis.ai_provider_errors import (
     AIProviderOutputTruncatedError,
 )
 
-__all__ = ["DirectAnswerFlow"]
+__all__ = ["DirectAnswerService"]
 
 _DIRECT_ANSWER_SOURCE_ERRORS = (AIProviderError, DirectAnswerInvalidError)
 _MAX_ATTEMPTS = 2
 
 
-class DirectAnswerFlow:
+class DirectAnswerService:
     """Create validated direct answer drafts.
 
     Propagates classified DirectAnswerError or routine generation-stop signals.
