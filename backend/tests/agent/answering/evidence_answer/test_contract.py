@@ -13,7 +13,7 @@ from app.agent.answering.evidence_answer.contract import (
     EvidenceAnswerer,
     EvidenceAnswerInput,
 )
-from app.agent.answering.evidence_answer.flow import EvidenceAnswerFlow
+from app.agent.answering.evidence_answer.service import EvidenceAnswerService
 from app.agent.planning.contract import TargetTimeWindow
 
 
@@ -30,9 +30,9 @@ def test_evidence_answer_boundaries_accept_request_without_previous_answer() -> 
     """
     assert (
         tuple(inspect.signature(EvidenceAnswerer.answer).parameters),
-        tuple(inspect.signature(EvidenceAnswerFlow.answer).parameters),
+        tuple(inspect.signature(EvidenceAnswerService.answer).parameters),
         _first_input_annotation(EvidenceAnswerer.answer),
-        _first_input_annotation(EvidenceAnswerFlow.answer),
+        _first_input_annotation(EvidenceAnswerService.answer),
     ) == (
         ("self", "request", "evidence", "target_time_window", "review_missing"),
         ("self", "request", "evidence", "target_time_window", "review_missing"),
@@ -44,18 +44,18 @@ def test_evidence_answer_boundaries_accept_request_without_previous_answer() -> 
 def test_review_missing_is_a_required_keyword_argument_on_answer() -> None:
     """コーディネーター判断(S5追補): review_missingはEvidenceAnswerer.answer()/
 
-    EvidenceAnswerFlow.answer()の必須キーワード引数にする(デフォルトは
+    EvidenceAnswerService.answer()の必須キーワード引数にする(デフォルトは
     EvidenceAnswerInput.review_missing側にだけ残す)。渡し忘れがInputの
     既定()で黙って握りつぶされないよう、呼び出し側に必ず判断を迫る
     (責任境界表: review.missingの受け渡しはAnsweringRunnerの単独責務)。
     """
     protocol_params = inspect.signature(EvidenceAnswerer.answer).parameters
-    flow_params = inspect.signature(EvidenceAnswerFlow.answer).parameters
+    service_params = inspect.signature(EvidenceAnswerService.answer).parameters
 
     assert "review_missing" in protocol_params
-    assert "review_missing" in flow_params
+    assert "review_missing" in service_params
     assert protocol_params["review_missing"].default is inspect.Parameter.empty
-    assert flow_params["review_missing"].default is inspect.Parameter.empty
+    assert service_params["review_missing"].default is inspect.Parameter.empty
 
 
 def test_evidence_answer_input_is_frozen_and_keeps_attempt_state_together() -> None:

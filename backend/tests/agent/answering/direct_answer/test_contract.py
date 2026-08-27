@@ -13,7 +13,7 @@ from app.agent.answering.direct_answer.contract import (
     DirectAnswerer,
     DirectAnswerInput,
 )
-from app.agent.answering.direct_answer.flow import DirectAnswerFlow
+from app.agent.answering.direct_answer.service import DirectAnswerService
 
 
 def _first_input_annotation(method: object) -> object | None:
@@ -24,9 +24,9 @@ def _first_input_annotation(method: object) -> object | None:
 def test_direct_answer_boundaries_use_typed_attempt_input() -> None:
     assert (
         tuple(inspect.signature(DirectAnswerer.answer).parameters),
-        tuple(inspect.signature(DirectAnswerFlow.answer).parameters),
+        tuple(inspect.signature(DirectAnswerService.answer).parameters),
         _first_input_annotation(DirectAnswerer.answer),
-        _first_input_annotation(DirectAnswerFlow.answer),
+        _first_input_annotation(DirectAnswerService.answer),
     ) == (
         ("self", "request", "previous_answer"),
         ("self", "request", "previous_answer"),

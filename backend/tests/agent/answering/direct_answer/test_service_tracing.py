@@ -14,11 +14,11 @@ from logfire.testing import CaptureLogfire
 from opentelemetry.trace import StatusCode
 
 from app.agent.answering.contract import AnsweringRequest
-from app.agent.answering.direct_answer import flow as direct_answer_flow_module
+from app.agent.answering.direct_answer import service as direct_answer_service_module
 from app.agent.answering.direct_answer.agent import DIRECT_ANSWER_AGENT
 from app.agent.answering.direct_answer.contract import DirectAnswerInput
 from app.agent.answering.direct_answer.failure import DirectAnswerError
-from app.agent.answering.direct_answer.flow import DirectAnswerFlow
+from app.agent.answering.direct_answer.service import DirectAnswerService
 from app.agent.contract import AnswerGenerationContinuation, AnswerGenerationStopped
 from app.agent.runtime.contract import StreamingAgentRuntime
 from app.agent.runtime.gemini import GeminiAgentRuntime
@@ -78,7 +78,7 @@ async def test_phase_owns_detached_streaming_attempt_without_model_text(
     async def runtime_scope() -> AsyncIterator[StreamingAgentRuntime]:
         yield GeminiAgentRuntime(client=cast(AsyncClient, client))
 
-    draft = await DirectAnswerFlow(
+    draft = await DirectAnswerService(
         agent=DIRECT_ANSWER_AGENT,
         runtime_scope_factory=runtime_scope,
     ).answer(request=_request())
@@ -154,7 +154,7 @@ async def test_unclassified_stream_error_is_redacted_in_phase_and_attempt(
         yield GeminiAgentRuntime(client=cast(AsyncClient, client))
 
     with pytest.raises(RuntimeError) as exc_info:
-        await DirectAnswerFlow(
+        await DirectAnswerService(
             agent=DIRECT_ANSWER_AGENT,
             runtime_scope_factory=runtime_scope,
         ).answer(request=_request())
@@ -204,7 +204,7 @@ async def test_retry_provider_request_adds_only_rendered_repair_context() -> Non
     async def runtime_scope() -> AsyncIterator[StreamingAgentRuntime]:
         yield GeminiAgentRuntime(client=cast(AsyncClient, client))
 
-    draft = await DirectAnswerFlow(
+    draft = await DirectAnswerService(
         agent=DIRECT_ANSWER_AGENT,
         runtime_scope_factory=runtime_scope,
     ).answer(request=_request())
@@ -238,7 +238,7 @@ async def test_terminal_failure_closes_phase_with_code_without_exception_event(
         yield GeminiAgentRuntime(client=cast(AsyncClient, client))
 
     with pytest.raises(DirectAnswerError) as exc_info:
-        await DirectAnswerFlow(
+        await DirectAnswerService(
             agent=DIRECT_ANSWER_AGENT,
             runtime_scope_factory=runtime_scope,
         ).answer(request=_request())
@@ -285,13 +285,13 @@ async def test_routine_stop_closes_phase_without_error_or_attempt(
     async def runtime_scope() -> AsyncIterator[StreamingAgentRuntime]:
         yield cast(StreamingAgentRuntime, UnusedRuntime())
 
-    flow = DirectAnswerFlow(
+    service = DirectAnswerService(
         agent=DIRECT_ANSWER_AGENT,
         runtime_scope_factory=runtime_scope,
         continuation=StopImmediately(),
     )
     try:
-        await flow.answer(request=_request())
+        await service.answer(request=_request())
     except AnswerGenerationStopped as error:
         stopped = error
     else:
@@ -332,7 +332,7 @@ async def test_mid_stream_stop_abandons_real_attempt_without_error(
             raise stopped
 
     monkeypatch.setattr(
-        direct_answer_flow_module,
+        direct_answer_service_module,
         "ensure_answer_generation_continues",
         stop_after_stream_starts,
     )
@@ -341,13 +341,13 @@ async def test_mid_stream_stop_abandons_real_attempt_without_error(
     async def runtime_scope() -> AsyncIterator[StreamingAgentRuntime]:
         yield GeminiAgentRuntime(client=cast(AsyncClient, client))
 
-    flow = DirectAnswerFlow(
+    service = DirectAnswerService(
         agent=DIRECT_ANSWER_AGENT,
         runtime_scope_factory=runtime_scope,
         continuation=cast(AnswerGenerationContinuation, object()),
     )
     with pytest.raises(AnswerGenerationStopped) as exc_info:
-        await flow.answer(request=_request())
+        await service.answer(request=_request())
 
     spans = capfire.exporter.exported_spans
     phase = next(

@@ -9,7 +9,7 @@ from app.agent.answering.direct_answer.contract import (
     DirectAnswerInvalidError,
 )
 from app.agent.answering.direct_answer.failure import DirectAnswerError
-from app.agent.answering.direct_answer.flow import DirectAnswerFlow
+from app.agent.answering.direct_answer.service import DirectAnswerService
 from app.agent.answering.evidence_answer.contract import (
     EvidenceAnswerDraft,
     EvidenceAnswerDraftInvalidError,
@@ -22,7 +22,7 @@ from app.agent.answering.evidence_answer.evidence import (
     AnswerInputEvidence,
     build_answer_input_evidence,
 )
-from app.agent.answering.evidence_answer.flow import EvidenceAnswerFlow
+from app.agent.answering.evidence_answer.service import EvidenceAnswerService
 
 __all__ = [
     "AnsweringRequest",
@@ -33,12 +33,12 @@ __all__ = [
     "DirectAnswerer",
     "DirectAnswerInput",
     "DirectAnswerInvalidError",
-    "DirectAnswerFlow",
+    "DirectAnswerService",
     "EvidenceAnswerDraft",
     "EvidenceAnswerInput",
     "EvidenceAnswerDraftInvalidError",
     "EvidenceAnswerer",
-    "EvidenceAnswerFlow",
+    "EvidenceAnswerService",
     "EvidenceAnswerOutcome",
     "EvidenceAnswerUnavailable",
     "build_answer_input_evidence",

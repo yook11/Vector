@@ -416,7 +416,7 @@ def test_direct_probe_keeps_dependencies_unreachable_and_uses_plan_summary() -> 
     assert isinstance(evidence_answerer, ast.Call)
     assert _call_name(evidence_answerer) == "_UnreachableEvidenceAnswerer"
     assert isinstance(direct_answerer, ast.Call)
-    assert _call_name(direct_answerer) == "DirectAnswerFlow"
+    assert _call_name(direct_answerer) == "DirectAnswerService"
     direct_agent = _keyword_value(direct_answerer, "agent")
     direct_runtime_scope_factory = _keyword_value(
         direct_answerer,

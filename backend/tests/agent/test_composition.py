@@ -254,9 +254,9 @@ class _KeywordObject:
 def test_build_answering_phases_wires_planner_to_shared_gemini_runtime_scope(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from app.agent.answering.direct_answer import flow as direct_flow
+    from app.agent.answering.direct_answer import service as direct_service
     from app.agent.answering.direct_answer.agent import DIRECT_ANSWER_AGENT
-    from app.agent.answering.evidence_answer import flow as evidence_flow
+    from app.agent.answering.evidence_answer import service as evidence_service
     from app.agent.answering.evidence_answer.agent import EVIDENCE_ANSWER_AGENT
     from app.agent.evidence_collection.internal_search import (
         article_repository,
@@ -296,8 +296,8 @@ def test_build_answering_phases_wires_planner_to_shared_gemini_runtime_scope(
         lambda: None,
     )
     monkeypatch.setattr(planning_service, "QuestionPlanningService", _PlannerSpy)
-    monkeypatch.setattr(direct_flow, "DirectAnswerFlow", _DirectSpy)
-    monkeypatch.setattr(evidence_flow, "EvidenceAnswerFlow", _EvidenceSpy)
+    monkeypatch.setattr(direct_service, "DirectAnswerService", _DirectSpy)
+    monkeypatch.setattr(evidence_service, "EvidenceAnswerService", _EvidenceSpy)
     for module, name in (
         (embedding_gemini, "GeminiQueryEmbedder"),
         (article_repository, "PgVectorArticleSearchRepository"),

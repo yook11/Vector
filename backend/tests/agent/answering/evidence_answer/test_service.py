@@ -1,4 +1,4 @@
-"""Evidence answer flow tests(S4: response_schema=Noneのplain text契約)。"""
+"""Evidence answer service tests(S4: response_schema=Noneのplain text契約)。"""
 
 from __future__ import annotations
 
@@ -20,7 +20,7 @@ from app.agent.answering.evidence_answer.contract import (
     EvidenceAnswerUnavailable,
 )
 from app.agent.answering.evidence_answer.evidence import AnswerInputEvidence
-from app.agent.answering.evidence_answer.flow import EvidenceAnswerFlow
+from app.agent.answering.evidence_answer.service import EvidenceAnswerService
 from app.agent.contract import AnswerGenerationStopped, ExternalUrlSource
 from app.agent.planning.contract import TargetTimeWindow
 from app.agent.threads.contracts import ThreadMessageSnapshot
@@ -247,17 +247,17 @@ async def _answer(
     request: AnsweringRequest | None = None,
     recorder: RecordingEvidenceAnswerRecorder | None = None,
 ) -> EvidenceAnswerOutcome:
-    flow_kwargs: dict[str, Any] = {
+    service_kwargs: dict[str, Any] = {
         "agent": EVIDENCE_ANSWER_AGENT,
         "runtime_scope_factory": generator.activate,
     }
     if delta_reporter is not None:
-        flow_kwargs["delta_reporter"] = delta_reporter
+        service_kwargs["delta_reporter"] = delta_reporter
     if continuation is not None:
-        flow_kwargs["continuation"] = continuation
+        service_kwargs["continuation"] = continuation
     if recorder is not None:
-        flow_kwargs["recorder"] = recorder
-    return await EvidenceAnswerFlow(**flow_kwargs).answer(
+        service_kwargs["recorder"] = recorder
+    return await EvidenceAnswerService(**service_kwargs).answer(
         request=_request() if request is None else request,
         evidence=[_evidence()] if evidence is None else evidence,
         target_time_window=TargetTimeWindow(kind="today"),
@@ -561,14 +561,14 @@ async def test_runtime_scope_activation_failure_is_not_attempt_fallback(
         raise failure
         yield object()
 
-    flow = EvidenceAnswerFlow(
+    service = EvidenceAnswerService(
         agent=EVIDENCE_ANSWER_AGENT,
         runtime_scope_factory=failing_scope,
         delta_reporter=reporter,
     )
 
     with pytest.raises(RuntimeError) as exc_info:
-        await flow.answer(
+        await service.answer(
             request=_request(),
             evidence=[_evidence()],
             target_time_window=TargetTimeWindow(kind="today"),
@@ -654,7 +654,9 @@ async def test_retry_aborts_then_resets_before_generation_two_delta() -> None:
     assert generator.calls[1]["repair_context"] is not None
     assert all(stream.closed for stream in generator.streams)
     assert (generator.scope_enters, generator.scope_exits) == (1, 1)
-    assert generator.events.index("stream_close:1") < generator.events.index("stream_text:2")
+    assert generator.events.index("stream_close:1") < generator.events.index(
+        "stream_text:2"
+    )
     assert generator.events[-2:] == ["stream_close:2", "scope_exit"]
 
 

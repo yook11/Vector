@@ -70,8 +70,8 @@ def _build_answering_phases(
 ) -> AnsweringPhases:
     ensure_external_search_configured()
 
-    from app.agent.answering.direct_answer.flow import DirectAnswerFlow
-    from app.agent.answering.evidence_answer.flow import EvidenceAnswerFlow
+    from app.agent.answering.direct_answer.service import DirectAnswerService
+    from app.agent.answering.evidence_answer.service import EvidenceAnswerService
     from app.agent.evidence_collection.internal_search.ai.gemini import (
         GeminiQueryEmbedder,
     )
@@ -111,13 +111,13 @@ def _build_answering_phases(
         reviewer=EvidenceReviewer(
             runtime_scope_factory=activate_evidence_reviewer_runtime,
         ),
-        direct_answerer=DirectAnswerFlow(
+        direct_answerer=DirectAnswerService(
             agent=DIRECT_ANSWER_AGENT,
             runtime_scope_factory=activate_gemini_agent_runtime,
             delta_reporter=delta_reporter,
             continuation=continuation,
         ),
-        evidence_answerer=EvidenceAnswerFlow(
+        evidence_answerer=EvidenceAnswerService(
             agent=EVIDENCE_ANSWER_AGENT,
             runtime_scope_factory=activate_gemini_agent_runtime,
             delta_reporter=delta_reporter,
