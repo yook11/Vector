@@ -17,7 +17,11 @@ from app.agent.contract import AnswerQuestionResult
 from app.agent.evidence_collection import EvidenceCollector
 from app.agent.evidence_review import EvidenceReviewer
 from app.agent.planning.contract import QuestionPlanner
-from app.agent.research_checkpoint import ResearchCheckpoint, ResearchTaskRecord
+from app.agent.research_handoff import (
+    ResearchHandoff,
+    ResearchRunRecord,
+    ResearchTaskRecord,
+)
 from app.agent.running import (
     AnsweringPhases,
     RunIdentity,
@@ -70,32 +74,19 @@ def test_running_package_exports_public_contracts() -> None:
     )
 
 
-def test_run_input_is_frozen_slotted_question_and_tuple_history() -> None:
-    """agent-research-checkpoint-context-slice: RunInputは既存2 fieldに加え、
-
-    同threadの直近checkpointを渡す`prior_research`(既定は空tuple)を持つ。
-    """
+def test_run_input_is_frozen_slotted_question_history_and_handoff() -> None:
+    """RunInputは質問・履歴に加え、同threadの調査の申し送りを持つ。"""
     run_input_type = RunInput
     history = (
         ThreadMessageSnapshot(role="user", content="前の質問"),
         ThreadMessageSnapshot(role="assistant", content="前の回答"),
     )
-    checkpoint = ResearchCheckpoint(
-        as_of=datetime(2026, 7, 16, 9, 30, tzinfo=UTC),
-        tasks=(
-            ResearchTaskRecord(
-                research_goal="調査目標",
-                executed_queries=("q",),
-                adopted_claims=(),
-            ),
-        ),
-        unresolved_after_search=(),
-    )
+    handoff = _handoff()
     run_input = run_input_type(question="続けて説明して", history=history)
-    run_input_with_prior_research = run_input_type(
+    run_input_with_handoff = run_input_type(
         question="続けて説明して",
         history=history,
-        prior_research=(checkpoint,),
+        research_handoff=handoff,
     )
 
     with pytest.raises(FrozenInstanceError):
@@ -106,19 +97,19 @@ def test_run_input_is_frozen_slotted_question_and_tuple_history() -> None:
         _is_frozen_and_slotted(run_input),
         run_input.question,
         run_input.history,
-        run_input.prior_research,
-        run_input_with_prior_research.prior_research,
+        run_input.research_handoff,
+        run_input_with_handoff.research_handoff,
     ) == (
         (
             ("question", str),
             ("history", tuple[ThreadMessageSnapshot, ...]),
-            ("prior_research", tuple[ResearchCheckpoint, ...]),
+            ("research_handoff", ResearchHandoff | None),
         ),
         True,
         "続けて説明して",
         history,
-        (),
-        (checkpoint,),
+        None,
+        handoff,
     )
 
 
@@ -160,45 +151,54 @@ def test_run_identity_is_frozen_slotted_ids_and_time() -> None:
     )
 
 
-def test_run_result_is_frozen_slotted_output_and_checkpoint() -> None:
-    """RunResultはfinal_outputとoptionalなresearch_checkpointだけを持つ。"""
+def _handoff() -> ResearchHandoff:
+    return ResearchHandoff(
+        updated_at=datetime(2026, 7, 16, 9, 30, tzinfo=UTC),
+        runs=(
+            ResearchRunRecord(
+                as_of=datetime(2026, 7, 16, 9, 30, tzinfo=UTC),
+                tasks=(
+                    ResearchTaskRecord(
+                        research_goal="調査目標",
+                        executed_queries=("q",),
+                        adopted_claims=(),
+                    ),
+                ),
+                unresolved_after_search=(),
+            ),
+        ),
+    )
+
+
+def test_run_result_is_frozen_slotted_output_and_handoff() -> None:
+    """RunResultはfinal_outputとoptionalなresearch_handoffだけを持つ。"""
     run_result_type = RunResult
     final_output = AnswerQuestionResult.model_construct()
     run_result = run_result_type(final_output=final_output)
-    checkpoint = ResearchCheckpoint(
-        as_of=datetime(2026, 7, 16, 9, 30, tzinfo=UTC),
-        tasks=(
-            ResearchTaskRecord(
-                research_goal="調査目標",
-                executed_queries=("q",),
-                adopted_claims=(),
-            ),
-        ),
-        unresolved_after_search=(),
-    )
-    run_result_with_checkpoint = run_result_type(
+    handoff = _handoff()
+    run_result_with_handoff = run_result_type(
         final_output=final_output,
-        research_checkpoint=checkpoint,
+        research_handoff=handoff,
     )
 
     with pytest.raises(FrozenInstanceError):
         run_result.final_output = final_output
     with pytest.raises(TypeError):
-        run_result_type(final_output=final_output, answer_brief=object())
+        run_result_type(final_output=final_output, research_checkpoint=object())
 
     assert (
         _field_contract(run_result_type),
         _is_frozen_and_slotted(run_result),
         run_result.final_output is final_output,
-        run_result.research_checkpoint,
-        run_result_with_checkpoint.research_checkpoint is checkpoint,
-        not hasattr(run_result, "answer_brief"),
+        run_result.research_handoff,
+        run_result_with_handoff.research_handoff is handoff,
+        not hasattr(run_result, "research_checkpoint"),
         not hasattr(run_result, "previous_answer"),
         not hasattr(run_result, "identity"),
     ) == (
         (
             ("final_output", AnswerQuestionResult),
-            ("research_checkpoint", ResearchCheckpoint | None),
+            ("research_handoff", ResearchHandoff | None),
         ),
         True,
         True,

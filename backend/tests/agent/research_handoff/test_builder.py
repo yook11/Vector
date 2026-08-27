@@ -1,4 +1,4 @@
-"""build_research_checkpoint() の決定的な詰め替え契約テスト。
+"""build_research_run_record() の決定的な詰め替え契約テスト。
 
 LLM呼び出しを追加しない決定的builderであるため、期待値は入力(plan/
 executed_queries_by_task/evidence_run)から導出し、production関数を
@@ -19,7 +19,7 @@ from app.agent.evidence_review.answer_evidence import (
     InternalArticleEvidence,
 )
 from app.agent.planning.contract import ResearchTask, SearchPlan
-from app.agent.research_checkpoint.builder import build_research_checkpoint
+from app.agent.research_handoff.builder import build_research_run_record
 
 _AS_OF = datetime(2026, 8, 3, 9, 0, tzinfo=UTC)
 
@@ -85,7 +85,7 @@ def _build(
     evidence_run: EvidenceRunCompleted,
     as_of: datetime = _AS_OF,
 ) -> Any:
-    return build_research_checkpoint(
+    return build_research_run_record(
         plan=plan,
         executed_queries_by_task=executed_queries_by_task,
         evidence_run=evidence_run,

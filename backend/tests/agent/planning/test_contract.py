@@ -4,14 +4,14 @@ from __future__ import annotations
 
 import importlib
 import inspect
-from datetime import UTC, date, datetime
+from datetime import date, datetime
 from typing import Any, get_args
 
 import pytest
 from pydantic import ValidationError
 
 import app.agent.planning.contract as planning_contract_module
-from app.agent.contract import PRIOR_RESEARCH_CHECKPOINT_LIMIT, ResearchTaskRecord
+from app.agent.contract import ResearchHandoff
 from app.agent.planning.contract import (
     MAX_ARTICLE_SEARCH_QUERIES,
     RESEARCH_GOAL_MAX_CHARS,
@@ -22,7 +22,6 @@ from app.agent.planning.contract import (
     PlanType,
     QuestionPlan,
     QuestionPlanDraft,
-    ResearchCheckpoint,
     ResearchTask,
     ResearchTaskDraft,
     SearchPlan,
@@ -486,9 +485,8 @@ def test_direct_and_search_plans_are_frozen() -> None:
 
 
 def test_planning_request_is_a_frozen_question_and_history_wrapper() -> None:
-    """PlanningRequestは生の質問と履歴、実行時点、直近checkpointだけを持つ。"""
+    """PlanningRequestは生の質問と履歴、実行時点、調査の申し送りだけを持つ。"""
     request_type = PlanningRequest
-    checkpoint_type = ResearchCheckpoint
     question = "NVIDIA の直近発表は？"
     history = (ThreadMessageSnapshot(role="user", content="前の質問"),)
     as_of = datetime(2026, 7, 10)
@@ -504,63 +502,22 @@ def test_planning_request_is_a_frozen_question_and_history_wrapper() -> None:
     assert (
         set(request_type.model_fields),
         request_type.model_fields["as_of"].annotation,
-        request_type.model_fields["prior_research"].annotation,
+        request_type.model_fields["research_handoff"].annotation,
         request.question,
         request.history,
         request.as_of,
-        request.prior_research,
-        "answer_brief" not in request_type.model_fields,
+        request.research_handoff,
+        "prior_research" not in request_type.model_fields,
     ) == (
-        {"question", "history", "as_of", "prior_research"},
+        {"question", "history", "as_of", "research_handoff"},
         datetime,
-        tuple[checkpoint_type, ...],
+        ResearchHandoff | None,
         question,
         history,
         as_of,
-        (),
+        None,
         True,
     )
-
-
-def _prior_research_checkpoint(hour: int) -> Any:
-    checkpoint_type = ResearchCheckpoint
-    return checkpoint_type(
-        as_of=datetime(2026, 7, 1, hour, tzinfo=UTC),
-        tasks=(
-            ResearchTaskRecord(
-                research_goal="調査目標",
-                executed_queries=("q",),
-                adopted_claims=(),
-            ),
-        ),
-        unresolved_after_search=(),
-    )
-
-
-def test_planning_request_rejects_prior_research_over_the_shared_checkpoint_limit() -> (
-    None
-):
-    """prior_researchの件数上限はPRIOR_RESEARCH_CHECKPOINT_LIMIT(共有契約)を参照する。"""
-    request_type = PlanningRequest
-    question = "NVIDIA の直近発表は？"
-    as_of = datetime(2026, 7, 10)
-    checkpoints_at_limit = tuple(
-        _prior_research_checkpoint(hour)
-        for hour in range(PRIOR_RESEARCH_CHECKPOINT_LIMIT)
-    )
-    checkpoints_over_limit = checkpoints_at_limit + (
-        _prior_research_checkpoint(PRIOR_RESEARCH_CHECKPOINT_LIMIT),
-    )
-
-    accepted = request_type(
-        question=question, as_of=as_of, prior_research=checkpoints_at_limit
-    )
-
-    assert accepted.prior_research == checkpoints_at_limit
-    with pytest.raises(ValidationError):
-        request_type(
-            question=question, as_of=as_of, prior_research=checkpoints_over_limit
-        )
 
 
 def test_legacy_planner_draft_boundaries_are_not_exported() -> None:

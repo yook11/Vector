@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import uuid as uuid_mod
 from datetime import datetime
+from typing import Any
 
 from sqlalchemy import (
     CheckConstraint,
@@ -18,6 +19,7 @@ from sqlalchemy import (
     func,
     text,
 )
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.dialects.postgresql import UUID as PgUUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -57,4 +59,9 @@ class AgentThread(Base):
     # 最終活動時刻 (app 管理・onupdate なし)。初期値のみ server_default (設計判断 3)。
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
+    )
+    # thread が積み上げた調査の申し送り (ResearchHandoff)。調査を行った Run が
+    # 完了するたびに上書きする。まだ調査していない thread では NULL のまま。
+    research_handoff: Mapped[dict[str, Any] | None] = mapped_column(
+        JSONB(none_as_null=True), nullable=True
     )

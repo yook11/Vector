@@ -40,9 +40,10 @@ from app.agent.planning.contract import (
     SearchPlan,
     TargetTimeWindow,
 )
-from app.agent.research_checkpoint import (
-    ResearchCheckpoint,
-    build_research_checkpoint_or_none,
+from app.agent.research_handoff import (
+    ResearchHandoff,
+    append_run_record,
+    build_research_run_record_or_none,
 )
 from app.agent.running.contract import (
     AnsweringPhases,
@@ -85,7 +86,7 @@ class AnsweringRunner:
                 question=input.question,
                 history=input.history,
                 as_of=identity.as_of,
-                prior_research=input.prior_research,
+                research_handoff=input.research_handoff,
             )
             answering_request = AnsweringRequest(
                 question=input.question,
@@ -93,7 +94,7 @@ class AnsweringRunner:
                 as_of=identity.as_of,
             )
             plan = await phases.planner.plan(planning_request)
-            research_checkpoint: ResearchCheckpoint | None
+            research_handoff: ResearchHandoff | None
             match plan:
                 case DirectAnswerPlan():
                     answer = await self._answer_directly(
@@ -101,7 +102,7 @@ class AnsweringRunner:
                         request=answering_request,
                         previous_answer=previous_answer,
                     )
-                    research_checkpoint = None
+                    research_handoff = None
                 case SearchPlan():
                     await self._report_progress("evidence_collection")
                     collected_news = await phases.collector.collect(
@@ -118,11 +119,19 @@ class AnsweringRunner:
                         collected_news=collected_news,
                         evidence_run=evidence_run,
                     )
-                    research_checkpoint = build_research_checkpoint_or_none(
+                    run_record = build_research_run_record_or_none(
                         plan=plan,
                         collected_news=collected_news,
                         evidence_run=evidence_run,
                         as_of=answering_request.as_of,
+                    )
+                    research_handoff = (
+                        append_run_record(
+                            previous=input.research_handoff,
+                            record=run_record,
+                        )
+                        if run_record is not None
+                        else None
                     )
                     answer = await self._answer_from_evidence(
                         phases=phases,
@@ -136,7 +145,7 @@ class AnsweringRunner:
                     assert_never(unreachable)
             return RunResult(
                 final_output=answer,
-                research_checkpoint=research_checkpoint,
+                research_handoff=research_handoff,
             )
 
     async def _answer_directly(

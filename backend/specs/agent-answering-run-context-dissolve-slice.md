@@ -24,7 +24,7 @@
 
 - 袋は `running/contract.py` の frozen dataclass。中身は3 field。
 - `AnsweringRunner.run()` が準備後に袋を組み、局所では袋経由で読んでいる。
-- worker は `RunResult.final_output` と `research_checkpoint` だけを読む。
+- worker は `RunResult.final_output` と `research_handoff` だけを読む。
 - `previous_answer` の消費者は DirectAnswerer だけ。
 
 ### Invariants
@@ -56,7 +56,7 @@
 class RunResult:
     final_output: AnswerQuestionResult
     answer_brief: AnswerBrief
-    research_checkpoint: ResearchCheckpoint | None = None
+    research_handoff: ResearchHandoff | None = None
 ```
 
 `identity` は `AnsweringRunner.run(..., identity=)` の引数。

@@ -270,7 +270,7 @@ provider attempt spanへ`agent.prompt.version`を記録し、phase spanへは複
 
 | ID | 保証条件 | 根拠 | 現production owner | 現test owner | 差し替え境界 | 判定 / 移行後 |
 |---|---|---|---|---|---|---|
-| RUN-CONTRACT-01 | Runのinput/identity/resultはtyped immutableで、resultはfinal outputとcheckpointだけを持つ | Runner boundary、RUN-07 | running contract | `running/test_contract.py` | なし | 維持 |
+| RUN-CONTRACT-01 | Runのinput/identity/resultはtyped immutableで、resultはfinal outputとresearch handoffだけを持つ | Runner boundary、RUN-07 | running contract | `running/test_contract.py` | なし | 維持 |
 | RUN-HISTORY-01 | 受け取ったprior historyを順序・内容不変のままplannerとanswererへ渡す | CTX-01 | `AnsweringRunner` | `running/test_answering_workflow.py` | Scripted phases | 維持。cap/normalizeはThreads owner |
 | RUN-PREVIOUS-01 | latest assistant本文を加工せずprevious answerにし、なければ空文字列 | CTX-02 | `AnsweringRunner` | runner tests | Scripted phases | 維持 |
 | RUN-CONTEXT-01 | Identityはrun引数、生の質問と履歴を各phaseへ渡し、previous_answerはDirectAnswererのみ | CTX-01、RUN-03/04/07、agent-run-identity-slice | `AnsweringRunner` | runner tests | Scripted phases | 維持 |

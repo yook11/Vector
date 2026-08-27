@@ -23,47 +23,68 @@ Run 冒頭の `question_context` 工程を畳み、代わりに Run 末尾で確
 thread 単位で 1 本持つ。質問は言い換えず、生の質問と直近履歴をそのまま planner へ渡す。
 LLM 呼び出し回数は変えず、回答までの経路から 1 ホップ外すことを狙う。
 
-## ResearchHandoff の内訳(案)
+## ResearchHandoff の内訳
 
-記録層と判断層を分け、層ごとに生成手段と失敗時の挙動を変えることを想定する。
+記録層と判断層を分け、層ごとに生成手段と失敗時の挙動を変える。
 
 | 層 | フィールド | 中身 | 生成 |
 |---|---|---|---|
 | 判断 | `standing_inquiry` | このスレッドで継続して追っている問い | LLM が毎回書き直す |
-| 記録 | `researched_tasks` | 実行した調査 task の記録 | 既存成果物からコピー |
-| 記録 | `unresolved` | reviewer が埋まらなかったと判定した観点 | 既存成果物からコピー |
+| 記録 | `runs` | Run ごとの調査記録 | 既存成果物からコピー |
 | 判断 | `next_directives` | 次のリサーチで取るべき方針 | LLM が毎回書き直す |
 
 ```python
-class ResearchHandoff(BaseModel):
-    model_config = ConfigDict(frozen=True, extra="forbid")
-
+class ResearchRunRecord(BaseModel):   # 1 Run 分の記録
     schema_version: Literal[1] = 1
     as_of: AwareDatetime
-    standing_inquiry: StandingInquiry = ""
-    researched_tasks: tuple[ResearchTaskRecord, ...]
-    unresolved: tuple[UnresolvedItem, ...]
-    next_directives: tuple[Directive, ...]
+    tasks: tuple[ResearchTaskRecord, ...]                # min 1, max RESEARCH_TASK_LIMIT
+    unresolved_after_search: tuple[_UnresolvedItem, ...]
+
+
+class ResearchHandoff(BaseModel):
+    schema_version: Literal[1] = 1
+    updated_at: AwareDatetime
+    standing_inquiry: str = ""
+    runs: tuple[ResearchRunRecord, ...]                  # 古い順、min 1、上限なし
+    next_directives: tuple[str, ...] = ()
 ```
 
-記録層の要素型には既存の `ResearchTaskRecord`(`research_goal` / `executed_queries` /
-`adopted_claims`)をそのまま使う案とする。claim と query の紐付けは収集・精査のどこにも
+記録層は Run 単位のまとまりを保つ。平坦に積むと調査時点を記録ごとに持てず、
+「実行済み query は鮮度の再確認が目的の場合を除き繰り返さない」という planner の
+規則が判断できなくなる。未確認がどの調査で残ったかも失われる。上限が無く積み上げ
+続けるほど、この区別は重要になる。
+
+要素型には既存の `ResearchTaskRecord`(`research_goal` / `executed_queries` /
+`adopted_claims`)をそのまま使う。claim と query の紐付けは収集・精査のどこにも
 残っていないため、query 軸の記録は現行の成果物からは復元できない。
 「検索したが得られなかった」は `adopted_claims` が空という既存の意味づけで表す。
-
-`researched_tasks` は task 軸、`unresolved` は観点軸として境界を置き、同じ事実を
-両方に載せないことを想定する。
 
 ユーザーの要望のうち、調査の向きに関わるもの(次はこの観点も見てほしい 等)は
 `next_directives` に畳む。回答の書き方に関わる要望は今回扱わない。
 
-### 上限(案)
+### 上限
 
-記録層は追記のため必ず上限に当たる。取捨選択を LLM に委ねると事実判断になるため、
-新しい順に落とす決定的な規則にしたい。
+積み上げた合計には上限を置かない。コンテキスト管理が概念として固まっていないため、
+どこで切るべきかを今は決められない。記録層は search Run ごとに単純追記する。
 
-具体値は今は置かない。planner prompt の実サイズを見てから実装時に決める。
-記録層の要素内の上限は `ResearchTaskRecord` の既存正本に従う。
+残る上限は 2 つで、いずれも既存の正本に従う。
+
+- 要素ごとの文字数: `research_goal` 200 字、query 200 字、claim 300 字、unresolved 200 字
+- 1 Run 分の記録: task 3 件、claim 合計 15 件(`ResearchRunRecord` の validator)
+
+トレードオフとして、thread が長いほど planner prompt が伸びる。2026-08-27 の実測
+(handoff 無しの planner input は 114 字):
+
+| 積み上げ | 現実的 | 最悪 |
+|---|---|---|
+| 1 Run 分 | 2,169 | 6,318 |
+| 3 Run 分 | 6,069 | 18,516 |
+| 5 Run 分 | 9,969 | 30,714 |
+| 10 Run 分 | 19,719 | 61,209 |
+| 20 Run 分 | 39,299 | 122,319 |
+
+3 Run 分は checkpoint 3 件を並べていた置き換え前と同値で、そこから先が上限を
+外したぶんの増分になる。
 
 ## 生成タイミング(案)
 
@@ -102,8 +123,8 @@ DB schema の変更を伴うため、着手前に別途合意が要る。
 
 `agent_runs.research_checkpoint` の drop は別 PR に分ける。
 
-1. `agent_threads.research_handoff` を追加し、書き込みと読み出しを切り替える。旧列は
-   書かれも読まれもしないまま残す。
+1. 完了。`agent_threads.research_handoff` を追加し、書き込みと読み出しを切り替えた。
+   旧列は書かれも読まれもしないまま残っている。
 2. 新経路が安定してから、別 PR で旧列を drop する。
 
 drop は取り消せないため、切り戻しが migration なしで済む状態を先に確保する。
@@ -148,12 +169,15 @@ def render_planning_instruction(handoff: ResearchHandoff | None) -> str:
    直近履歴を直接受け取る。履歴の cap / normalize は `app/agent/threads/history.py` が持ち、
    描き方は各工程が持つ。prompt version は planner v8 / direct answer v5 / evidence answer v9。
    `prior_research`(checkpoint)は現状のまま。stage 語彙の縮小はステップ 5 へ分けた。
-2. `ResearchHandoff` の記録層で checkpoint を置き換える。型・積み替え規則・
-   `agent_threads.research_handoff` 追加・書き込み・planner 投影・prompt version 更新まで含む。
-   旧列は書かなくなるが残す。上限値もここで決める。
+2. 完了。`ResearchHandoff` の記録層で checkpoint を置き換えた。型は
+   `app/agent/contract.py`、builder / recall / 投影は `app/agent/research_handoff/`。
+   `agent_threads.research_handoff` を migration `z16_thread_research_handoff`(expand)で
+   追加し、`complete_run()` が thread 行の `FOR UPDATE` 下で上書きする。
+   planner prompt version は v9、節名は `# Research Handoff`。
+   旧 package は削除済み、旧列は書かれなくなったが残る。
 3. 判断層(`standing_inquiry` / `next_directives`)を追加。並行起動と、`complete_run()` と
    同一トランザクションでの確定、失敗時の据え置き。
-4. 旧列 drop と `research_checkpoint` package 削除。
+4. 旧列 `agent_runs.research_checkpoint` の drop。package はステップ 2 で削除済み。
 5. `AnswerProgressStage` / `AgentPhase` / `AgentRunProgressStage` / API schema / CHECK 制約から
    `context_resolution` と、#191 以降到達不能な `safety_check` をまとめて落とす。
    alembic migration(CHECK 縮小と既存行の NULL 化)、frontend の stage 語彙、`/gen-types` を伴う。
@@ -175,7 +199,7 @@ LLM が指示語を解決できたかは prompt 側の責務であり、テス�
 
 ## 未決事項
 
-- 記録層の上限値。新しい順に落とすという規則だけ置き、具体値は実装時に決める。
+- 積み上げた記録層をどこで切るか。コンテキスト管理の概念が固まってから決める。
 
 ## Done の目安
 

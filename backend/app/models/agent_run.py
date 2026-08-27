@@ -125,8 +125,8 @@ class AgentRun(Base):
     completed_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
-    # completedになったRunが実行した外部検索の決定的な記録(ResearchCheckpoint)。
-    # 外部検索を実行しなかったRunや記録失敗ではNULLのまま。
+    # 旧: Run単位の調査記録。正本はagent_threads.research_handoffへ移り、
+    # この列はもう読み書きされない(別PRでdropする)。
     research_checkpoint: Mapped[dict[str, Any] | None] = mapped_column(
         JSONB(none_as_null=True), nullable=True
     )

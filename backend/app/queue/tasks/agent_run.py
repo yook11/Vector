@@ -25,9 +25,9 @@ from app.agent.live_updates.stream import (
     AgentRunLiveStreamPublisher,
     AgentRunLiveStreamTerminalEvent,
 )
-from app.agent.research_checkpoint import (
-    ResearchCheckpoint,
-    recall_research_checkpoints,
+from app.agent.research_handoff import (
+    ResearchHandoff,
+    recall_research_handoff,
 )
 from app.agent.running import (
     RunIdentity,
@@ -82,7 +82,7 @@ async def run_agent_answer(
     attempt_epoch: int | None = None
     stream_events: AgentRunLiveStreamPublisher | None = None
     result: AnswerQuestionResult | None = None
-    research_checkpoint: ResearchCheckpoint | None = None
+    research_handoff: ResearchHandoff | None = None
     application_deadline_at = time.monotonic() + RESEARCH_APPLICATION_TIMEOUT_SECONDS
     application_deadline = asyncio.timeout_at(application_deadline_at)
     application_deadline_reached_after_start = False
@@ -192,7 +192,7 @@ async def run_agent_answer(
                     thread_id=thread_id,
                     before_seq=question.seq,
                 )
-                prior_research = await _read_prior_research(
+                research_handoff = await _read_research_handoff(
                     session_factory,
                     thread_id=thread_id,
                     user_id=user_id,
@@ -209,7 +209,7 @@ async def run_agent_answer(
                     RunInput(
                         question=question.content,
                         history=tuple(history),
-                        prior_research=prior_research,
+                        research_handoff=research_handoff,
                     ),
                     identity=RunIdentity(
                         user_id=user_id,
@@ -219,7 +219,7 @@ async def run_agent_answer(
                     ),
                 )
                 result = run_result.final_output
-                research_checkpoint = run_result.research_checkpoint
+                research_handoff = run_result.research_handoff
             except AnswerGenerationStopped:
                 logger.info(
                     "agent_run_generation_stopped",
@@ -317,8 +317,8 @@ async def run_agent_answer(
     if attempt_epoch is None or stream_events is None or result is None:
         raise RuntimeError("completed run is missing its execution context")
 
-    serialized_research_checkpoint = _serialize_research_checkpoint(
-        research_checkpoint,
+    serialized_research_handoff = _serialize_research_handoff(
+        research_handoff,
         run_id=run_id,
     )
     try:
@@ -328,7 +328,7 @@ async def run_agent_answer(
                     run_id=run_id,
                     result=result,
                     expected_attempt_epoch=attempt_epoch,
-                    research_checkpoint=serialized_research_checkpoint,
+                    research_handoff=serialized_research_handoff,
                 )
                 if not completed:
                     logger.info(
@@ -453,19 +453,19 @@ async def _start_run(
             return await AgentRunRepository(session).start_run(trigger.run_id)
 
 
-def _serialize_research_checkpoint(
-    research_checkpoint: ResearchCheckpoint | None,
+def _serialize_research_handoff(
+    research_handoff: ResearchHandoff | None,
     *,
     run_id: UUID,
 ) -> dict[str, object] | None:
-    """checkpointに起因しうる失敗をcomplete_run呼び出し前に完結させる。"""
-    if research_checkpoint is None:
+    """handoffに起因しうる失敗をcomplete_run呼び出し前に完結させる。"""
+    if research_handoff is None:
         return None
     try:
-        return research_checkpoint.model_dump(mode="json")
+        return research_handoff.model_dump(mode="json")
     except Exception:
         logger.warning(
-            "agent_run_research_checkpoint_serialization_failed",
+            "agent_run_research_handoff_serialization_failed",
             run_id=str(run_id),
             failure_code="serialization_failed",
         )
@@ -495,31 +495,31 @@ async def _read_history(
     return normalize_run_history(history)
 
 
-async def _read_prior_research(
+async def _read_research_handoff(
     session_factory: async_sessionmaker[AsyncSession],
     *,
     thread_id: UUID,
     user_id: UUID,
     run_id: UUID,
-) -> tuple[ResearchCheckpoint, ...]:
-    """読出し・検証のどの失敗も握って空にし、既存workflowを同値継続する。"""
+) -> ResearchHandoff | None:
+    """読出し・検証のどの失敗も握ってNoneにし、handoff無しのRunとして継続する。"""
     try:
         async with session_factory() as session:
-            raw_checkpoints = await AgentRunRepository(
+            raw_handoff = await AgentThreadRepository(
                 session
-            ).read_recent_research_checkpoints_for_user(
+            ).read_research_handoff_for_user(
                 thread_id=thread_id,
                 user_id=user_id,
             )
-        return recall_research_checkpoints(raw_checkpoints)
+        return recall_research_handoff(raw_handoff)
     except Exception as exc:
         logger.warning(
-            "agent_run_prior_research_read_failed",
+            "agent_run_research_handoff_read_failed",
             run_id=str(run_id),
             error_type=exc.__class__.__name__,
-            failure_code="prior_research_read_failed",
+            failure_code="research_handoff_read_failed",
         )
-        return ()
+        return None
 
 
 async def _mark_failed(
