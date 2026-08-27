@@ -46,7 +46,6 @@ from app.agent.planning.contract import (
     SearchPlan,
     TargetTimeWindow,
 )
-from app.agent.question_context import AnswerBrief
 from app.agent.running import AnsweringPhases, AnsweringRunner, RunInput
 from app.agent.runtime.contract import AgentResponseDefect, AgentResponseInvalidError
 from app.agent.runtime.deepseek import DeepSeekAgentRuntime
@@ -111,11 +110,6 @@ def _reviewer_response(*, option_indexes: list[int] | None = None) -> object:
         ),
         usage=_usage(),
     )
-
-
-class _Preparer:
-    async def prepare(self, **_kwargs: object) -> AnswerBrief:
-        return AnswerBrief(standalone_question="NVIDIA の見通しは？")
 
 
 class _Planner:
@@ -247,7 +241,6 @@ def _runner(
     )
     return (
         AnsweringRunner(
-            context_preparer=_Preparer(),
             phases_factory=lambda: phases,
         ),
         tool,
@@ -682,7 +675,6 @@ async def test_direct_path_run_span_has_no_evidence_count_attributes(
         reviewer=EvidenceReviewer(runtime_scope_factory=_UnreachableExternalScope()),
     )
     runner = AnsweringRunner(
-        context_preparer=_Preparer(),
         phases_factory=lambda: phases,
     )
 
@@ -762,7 +754,6 @@ async def test_evidence_run_span_reports_post_dedup_internal_total(
         reviewer=EvidenceReviewer(runtime_scope_factory=factory.reviewer_scope),
     )
     runner = AnsweringRunner(
-        context_preparer=_Preparer(),
         phases_factory=lambda: phases,
     )
 
@@ -808,7 +799,6 @@ async def test_evidence_run_span_reports_internal_collection_failed_task_count(
         reviewer=EvidenceReviewer(runtime_scope_factory=factory.reviewer_scope),
     )
     runner = AnsweringRunner(
-        context_preparer=_Preparer(),
         phases_factory=lambda: phases,
     )
 

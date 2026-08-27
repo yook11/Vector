@@ -21,7 +21,6 @@ from app.agent.planning.contract import (
     TargetTimeWindow,
 )
 from app.agent.planning.service import QuestionPlanningService
-from app.agent.question_context.contract import AnswerBrief
 from app.agent.recording.planning import (
     PlanningFailed,
     PlanningOutcome,
@@ -43,7 +42,7 @@ _PLANNER_OUTCOME_METRIC = "vector.agent.planner.outcome"
 
 def _input(question: str = "今日のNVIDIAの発表は？") -> PlanningRequest:
     return PlanningRequest(
-        answer_brief=AnswerBrief(standalone_question=question),
+        question=question,
         as_of=datetime(2026, 7, 20, tzinfo=UTC),
     )
 
@@ -228,7 +227,7 @@ async def test_planner_returns_each_completed_two_plan_variant_after_scope_exit(
     assert (
         call.agent is QUESTION_PLANNER_AGENT,
         call.attempt_number,
-        call.input.request.answer_brief.standalone_question,
+        call.input.request.question,
         call.input.repair_context,
     ) == (True, 1, "今日のNVIDIAの発表は？", None)
     assert (factory.created, factory.entered, len(factory.exits)) == (

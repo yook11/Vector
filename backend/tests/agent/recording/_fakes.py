@@ -17,7 +17,6 @@ from app.agent.evidence_collection.internal_search.contract import (
     InternalSearchOutcome,
 )
 from app.agent.evidence_review.metrics import EvidenceReviewOutcome
-from app.agent.question_context.metrics import QuestionContextOutcome
 from app.agent.recording.planning import PlanningOutcome
 from app.agent.recording.types import LlmCall, LlmCallResult, PhaseCall, Usage
 
@@ -29,7 +28,6 @@ __all__ = [
     "RecordedInternalSearchEnd",
     "RecordedLlmCallEnd",
     "RecordedPlanning",
-    "RecordedQuestionContextEnd",
     "RecordingDirectAnswerRecorder",
     "RecordingEvidenceAnswerRecorder",
     "RecordingEvidenceReviewRecorder",
@@ -37,7 +35,6 @@ __all__ = [
     "RecordingInternalSearchRecorder",
     "RecordingLlmCallRecorder",
     "RecordingPlanningRecorder",
-    "RecordingQuestionContextRecorder",
 ]
 
 
@@ -192,48 +189,6 @@ class RecordingPlanningRecorder:
         except BaseException as error:
             recording.error = error
             raise
-
-
-@dataclass(frozen=True, slots=True)
-class RecordedQuestionContextEnd:
-    call: PhaseCall
-    outcome: QuestionContextOutcome | None
-    prompt_version: str | None
-    ai_model: str | None
-    failure_code: str | None
-    stopped: bool
-
-
-@dataclass(slots=True)
-class RecordingQuestionContextRecorder:
-    starts: list[PhaseCall] = field(default_factory=list)
-    ends: list[RecordedQuestionContextEnd] = field(default_factory=list)
-
-    async def start(self) -> PhaseCall:
-        call = PhaseCall(started_at=perf_counter())
-        self.starts.append(call)
-        return call
-
-    async def end(
-        self,
-        call: PhaseCall,
-        *,
-        outcome: QuestionContextOutcome | None = None,
-        prompt_version: str | None = None,
-        ai_model: str | None = None,
-        failure_code: str | None = None,
-        stopped: bool = False,
-    ) -> None:
-        self.ends.append(
-            RecordedQuestionContextEnd(
-                call=call,
-                outcome=outcome,
-                prompt_version=prompt_version,
-                ai_model=ai_model,
-                failure_code=failure_code,
-                stopped=stopped,
-            )
-        )
 
 
 @dataclass(frozen=True, slots=True)

@@ -279,7 +279,6 @@ def test_search_probe_injects_events_into_runner() -> None:
 
     assert len(runner_calls) == 1
     assert {keyword.arg for keyword in runner_calls[0].keywords} == {
-        "context_preparer",
         "phases_factory",
         "events",
     }

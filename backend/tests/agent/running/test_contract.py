@@ -17,7 +17,6 @@ from app.agent.contract import AnswerQuestionResult
 from app.agent.evidence_collection import EvidenceCollector
 from app.agent.evidence_review import EvidenceReviewer
 from app.agent.planning.contract import QuestionPlanner
-from app.agent.question_context import AnswerBrief
 from app.agent.research_checkpoint import ResearchCheckpoint, ResearchTaskRecord
 from app.agent.running import (
     AnsweringPhases,
@@ -30,7 +29,6 @@ from tests.agent.running._harness import THREAD_ID, USER_ID
 
 PUBLIC_CONTRACTS = {
     "AnsweringRunner",
-    "AnswerBriefPreparer",
     "RunIdentity",
     "RunInput",
     "RunResult",
@@ -162,15 +160,11 @@ def test_run_identity_is_frozen_slotted_ids_and_time() -> None:
     )
 
 
-def test_run_result_is_frozen_slotted_output_and_answer_brief() -> None:
-    """RunResultはfinal_output、同じAnswerBrief、optionalなresearch_checkpointを持つ。"""
+def test_run_result_is_frozen_slotted_output_and_checkpoint() -> None:
+    """RunResultはfinal_outputとoptionalなresearch_checkpointだけを持つ。"""
     run_result_type = RunResult
-    answer_brief = AnswerBrief(standalone_question="NVIDIA の直近発表は？")
     final_output = AnswerQuestionResult.model_construct()
-    run_result = run_result_type(
-        final_output=final_output,
-        answer_brief=answer_brief,
-    )
+    run_result = run_result_type(final_output=final_output)
     checkpoint = ResearchCheckpoint(
         as_of=datetime(2026, 7, 16, 9, 30, tzinfo=UTC),
         tasks=(
@@ -184,35 +178,28 @@ def test_run_result_is_frozen_slotted_output_and_answer_brief() -> None:
     )
     run_result_with_checkpoint = run_result_type(
         final_output=final_output,
-        answer_brief=answer_brief,
         research_checkpoint=checkpoint,
     )
 
     with pytest.raises(FrozenInstanceError):
-        run_result.answer_brief = answer_brief
+        run_result.final_output = final_output
     with pytest.raises(TypeError):
-        run_result_type(
-            final_output=final_output,
-            context=answer_brief,
-        )
+        run_result_type(final_output=final_output, answer_brief=object())
 
     assert (
         _field_contract(run_result_type),
         _is_frozen_and_slotted(run_result),
         run_result.final_output is final_output,
-        run_result.answer_brief is answer_brief,
         run_result.research_checkpoint,
         run_result_with_checkpoint.research_checkpoint is checkpoint,
-        not hasattr(run_result, "context"),
+        not hasattr(run_result, "answer_brief"),
         not hasattr(run_result, "previous_answer"),
         not hasattr(run_result, "identity"),
     ) == (
         (
             ("final_output", AnswerQuestionResult),
-            ("answer_brief", AnswerBrief),
             ("research_checkpoint", ResearchCheckpoint | None),
         ),
-        True,
         True,
         True,
         None,

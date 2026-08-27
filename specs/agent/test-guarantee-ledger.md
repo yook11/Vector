@@ -113,7 +113,6 @@ target module名は責任を示す案であり、実装PRで最終確定する�
 | RT-DS | DeepSeek one-attempt・provider span | `DeepSeekAgentRuntime` / `test_deepseek*.py` | Runtime owner不変、client lifecycleだけPR4でfactoryへ | Fake DeepSeek SDK client |
 | RT-F | FIFO runtime test double | Planner、External Runner、Tool contract testのplain file-local fake | `runtime/_fakes.py::ScriptedAgentRuntime` / `runtime/test_scripted.py` | fake自身。span/scope/concurrencyを含めない |
 | PL | Planner宣言・policy・metric・phase | `planning/agent.py`, `service.py` / `planning/test_*.py` | policy owner不変。provider child testだけ実Runtimeへ置換 | Scripted runtime、tracingはFake SDK client |
-| QC | Question Context契約・準備policy | `question_context/` / `question_context/test_*.py` | PR6でgeneratorをAgent宣言/Runtimeへ移す。Service policyは残す | Scripted generator、移行後Scripted runtime |
 | EC | Search 固定2枝 dispatch | `AnsweringRunner` / `running/test_retrieval_dispatch.py` | owner不変 | Recording/Scripted retrieval ports |
 | EX | Query→Tool→Selector pipeline | `AnsweringRunner`, `external_search/policy.py` / `running/test_external_pipeline.py`, `running/test_external_pipeline_tracing.py`, `external_search/test_policy.py` | PR9で移設済み。owner不変 | Scripted runtime、Fake Tool。tracingはFake SDK client |
 | EX-T | Tavily request・normalization・Tool span | `TavilyExternalSearchTool` / `test_tavily.py`, tool contract test | span/transport owner不変。client lifecycleはPR4 factoryへ | Mock HTTP transport |
@@ -151,7 +150,6 @@ target module名は責任を示す案であり、実装PRで最終確定する�
 | OBS-PHASE-PL-01 | question, repair, draft | Planner phase＋provider child / success・retry・unknown | phase/agent、attempt側のsafe attrs | input/outputとphaseへのusage・prompt version複写 | `planning/test_planner_tracing.py` / 維持 |
 | OBS-PHASE-EX-01 | goal, generated query, candidate, selection | Query/Selector phase＋provider child / success・retry・unknown | phase/agent/task index、safe attempt attrs | query/source/model outputとphaseへのusage・prompt version複写 | `running/test_external_pipeline_tracing.py` / PR9で移設済み |
 | OBS-METRIC-PL-01 | question, repair hint | Planner outcome metric / planned・failed | result/retry/plan type/fixed failure code | model-visible text | `planning/test_planner.py` / metric assertを1つへ統合 |
-| OBS-METRIC-QC-01 | question, history, missing text | Question Context metric・warning / known fallback | fixed result/failure fields | 入力本文・例外本文 | `question_context/test_service.py` / 維持 |
 | OBS-METRIC-IS-01 | internal query | Internal Search metric・warning / success・empty・classified failure | result/phase/count | query本文 | `internal_search/test_service.py` / success logはgap候補 |
 | OBS-WK-LOG-01 | generation error, unexpected error | worker log / classified・unknown | run ID/error type | exception・question・answer本文 | worker logging test / unknownは維持、classifiedはassert不足のgap |
 | OBS-REDIS-LOG-01 | event/delta payload, Redis error | List/Stream/delta publisher log / timeout・exception・breaker open | run/epoch/generation/fixed reason | payload・Redis例外本文 | `live_updates/test_recent_events.py`, `test_stream.py`, `test_answer_delta.py` / 維持 |
@@ -224,15 +222,10 @@ provider attempt spanへ`agent.prompt.version`を記録し、phase spanへは複
 
 ## Question Context
 
-| ID | 保証条件 | 根拠 | 現production owner | 現test owner | 差し替え境界 | 判定 / 移行後 |
-|---|---|---|---|---|---|---|
-| QC-01 | draftをclean/capし、requirement種別・ID・重複・未知fieldを検証する | context仕様/schema | Question Context contract | `question_context/test_contract.py` | なし | 維持 |
-| QC-02 | prompt前にhistory本文capとassistant missingのnormalize/dedupe/global capを行い、message対応を保つ | context仕様 | `QuestionContextService` | `question_context/test_service.py` | なし | 維持。message範囲はThreads owner |
-| QC-03 | 初回/履歴ありのgenerator呼出しとcontext/telemetry/latest missing flagを決定する | context仕様 | Service | `question_context/test_service.py` | Scripted Context Generator | 維持。PR6でgeneratorだけRuntimeへ移す |
-| QC-04 | known generator failure/未構成はsafe fallback、unknownは伝播する | context仕様 | Service | `question_context/test_service.py` | Scripted Context Generator | 維持 |
-| QC-05 | question/history/missingをsanitizeしたuntrusted blockへ入れ、非retrieval責任と必須schemaを固定する | context prompt/schema | prompt renderer/schema | `test_gemini_prompt_schema.py` | なし | PR6でAgentPromptへ移設 |
-| QC-06 | Gemini request、blocked/error translation、JSON/object/draft validation | current adapterとcontext仕様 | Gemini Context Generator | 専用testなし | Fake Gemini client | gap。PR6 Runtime移行時に保証 |
-| QC-07 | outcome metric/warningへquestion/history/missing/answer本文を含めない | context仕様 | Service/metrics | fallback tests | Scripted generator | 維持、sentinel source拡張候補 |
+工程を撤去したため、QC-01〜QC-07 は保証対象から外れた
+(specs/agent/research-handoff.md step 1)。履歴の cap / normalize は
+`app/agent/threads/history.py` が持ち、prompt への描き方は planner と
+2つの answerer が各自持つ。
 
 ## Evidence Collection
 
@@ -277,23 +270,23 @@ provider attempt spanへ`agent.prompt.version`を記録し、phase spanへは複
 
 | ID | 保証条件 | 根拠 | 現production owner | 現test owner | 差し替え境界 | 判定 / 移行後 |
 |---|---|---|---|---|---|---|
-| RUN-CONTRACT-01 | Runのinput/identity/resultはtyped immutableで、resultが同じAnswerBriefを保持する | Runner boundary、RUN-07、agent-answering-run-context-dissolve-slice | running contract | `running/test_contract.py` | なし | 維持 |
-| RUN-HISTORY-01 | 受け取ったprior historyを順序・内容不変のlistとしてContext Preparerへ1回渡す | CTX-01 | `AnsweringRunner` | `test_answering_runner.py` | Scripted Preparer | 維持。bounded範囲はThreads owner |
+| RUN-CONTRACT-01 | Runのinput/identity/resultはtyped immutableで、resultはfinal outputとcheckpointだけを持つ | Runner boundary、RUN-07 | running contract | `running/test_contract.py` | なし | 維持 |
+| RUN-HISTORY-01 | 受け取ったprior historyを順序・内容不変のままplannerとanswererへ渡す | CTX-01 | `AnsweringRunner` | `running/test_answering_workflow.py` | Scripted phases | 維持。cap/normalizeはThreads owner |
 | RUN-PREVIOUS-01 | latest assistant本文を加工せずprevious answerにし、なければ空文字列 | CTX-02 | `AnsweringRunner` | runner tests | Scripted phases | 維持 |
-| RUN-CONTEXT-01 | Identityはrun引数、prepared AnswerBriefは同一instanceで後続とresultへ渡し、previous_answerはDirectAnswererのみ | CTX-01、RUN-03/04/07、agent-run-identity-slice、agent-answer-brief-slice、agent-answering-run-context-dissolve-slice | `AnsweringRunner` | runner tests | Scripted Preparer/phases | 維持。PR5で全phaseへ拡張 |
+| RUN-CONTEXT-01 | Identityはrun引数、生の質問と履歴を各phaseへ渡し、previous_answerはDirectAnswererのみ | CTX-01、RUN-03/04/07、agent-run-identity-slice | `AnsweringRunner` | runner tests | Scripted phases | 維持 |
 | RUN-HOOK-01 | prepare後hookを1回呼び、original question/has history/same contextだけを渡す | CTX-03 | 削除 | 削除 | なし | 廃止。agent-question-resolved-removal-slice |
 | RUN-HOOK-02 | historyがありstandalone questionがstrip比較で変化した時だけresolved eventを1回emitする | conversation context仕様 | 削除 | 削除 | なし | 廃止。agent-question-resolved-removal-slice |
-| RUN-ORDER-01 | prepare→factory→planning→branch→answer。前段 failure では後続0回 | workflow仕様、agent-question-resolved-removal-slice | `AnsweringRunner` | `running/test_answering_runner.py`, `running/test_answering_workflow.py` | timeline recorder | 維持 |
+| RUN-ORDER-01 | factory→planning→branch→answer。前段 failure では後続0回 | workflow仕様 | `AnsweringRunner` | `running/test_answering_runner.py`, `running/test_answering_workflow.py` | timeline recorder | 維持 |
 | RUN-ERROR-01 | unknown exceptionを変換/retryせずidentity伝播し、失敗後の後続 phase を起動しない | workflow仕様 | `AnsweringRunner` | `running/test_answering_runner.py`, `running/test_answering_workflow.py` | Scripted failing phase | 維持 |
 | RUN-STOP-01 | `AnswerGenerationStopped`をidentity再送出しrun spanをerrorにしない | OBS-09 | Runner span | runner span test | Scripted phase＋実span | 維持 |
-| RUN-SPAN-01 | `agent_answering_run`がprepare/factory/planning/branch/answer全体を包含する | OBS-01/03、agent-question-resolved-removal-slice | `AnsweringRunner` run span | `running/test_answering_runner.py` | span probe collaborators | 維持 |
+| RUN-SPAN-01 | `agent_answering_run`がfactory/planning/branch/answer全体を包含する | OBS-01/03 | `AnsweringRunner` run span | `running/test_answering_runner.py` | span probe collaborators | 維持 |
 | RUN-SPAN-02 | run span独自attributeはrun IDだけでmodel-visible textを含めない | OBS-04/05 | Runner span | runner non-leak test | 実span＋Scripted collaborators | 維持 |
 | RUN-LEGACY-01 | 旧`context=` keywordを副作用前に拒否する | boundary移行仕様 | Python signature | runner test | なし | 廃止候補 |
 | FLOW-BRANCH-01 | DirectAnswerPlan は Direct Answerer のみ、SearchPlan は固定 2 枝収集後に Evidence Answerer を起動する | workflow仕様 | `AnsweringRunner` | `answering/test_orchestration.py` | Scripted ports | 維持 |
 | FLOW-PROGRESS-01 | direct answer は planning→synthesizing、Search は planning→retrieving→synthesizing の順に progress を出す | workflow仕様 | `AnsweringRunner` | orchestration tests | Recording progress | 維持 |
-| FLOW-INPUT-01 | 同じ AnswerBrief/as_of を各 phase へ投影し、target time window は外部側と evidence answerer だけへ渡す | Search plan contract、agent-answer-brief-slice | `AnsweringRunner` | orchestration tests | Recording ports | 維持 |
+| FLOW-INPUT-01 | 同じ question/history/as_of を各 phase へ投影し、target time window は外部側と evidence answerer だけへ渡す | Search plan contract | `AnsweringRunner` | orchestration tests | Recording ports | 維持 |
 | FLOW-ERROR-01 | planner、Search 収集、answerer の unknown exception を変換せず伝播する | workflow仕様 | `AnsweringRunner` | `running/test_answering_workflow.py`, `answering/test_orchestration.py` | Scripted failing ports | 維持 |
-| FLOW-TIMELINE-01 | prepare→hook→factory→planning progress→planner→branch固有処理の完全 timeline を守る | workflow仕様 | `AnsweringRunner` | `running/test_answering_workflow.py` | single timeline recorder | 維持 |
+| FLOW-TIMELINE-01 | factory→planning progress→planner→branch固有処理の完全 timeline を守る | workflow仕様 | `AnsweringRunner` | `running/test_answering_workflow.py` | single timeline recorder | 維持 |
 | FLOW-FACTORY-01 | phases factoryをhook後・run span内で1回、runごとにfresh起動し、構築 failure 位置を維持する | workflow仕様 | `AnsweringRunner` | `running/test_answering_runner.py`, `running/test_answering_workflow.py` | Scripted phases factory＋実span | 維持 |
 
 ## Result Assembly
@@ -421,8 +414,6 @@ worker testはproduction repositoryとtest DBを使い、Recording Runnerと外�
 
 | ID | 保証条件 | 現test owner | 判定 / 移行後 |
 |---|---|---|---|
-| CP-QC-01 | built Context GeneratorをRunnerへ配線する | `test_composition.py` | 維持・PR6で書換 |
-| CP-QC-02 | generator構築のknown config/provider errorはsafe fallback、unknownは伝播 | `test_composition.py` | 維持 |
 | CP-PLAN-01 | Planner scopeはlazyでSDK defaultsを使う | `test_composition.py` | 維持 |
 | CP-PLAN-02 | normal/abnormal/runtime construction failureでclientを1回closeする | `test_composition.py` | 維持 |
 | CP-PLAN-03 | scopeごとにfresh client/runtimeを作る | `test_composition.py` | 維持 |
@@ -500,9 +491,6 @@ glob単位で全62 test moduleを台帳IDへ対応づける。個別PRでは、�
 | `planning/test_planner_agent_declaration.py` | PL-03/04 | 共通Agent保証とrole固有保証を分離 |
 | `planning/test_planner.py`, `test_planner_tracing.py` | PL-05/06/08/09 | policyはscripted Runtime、親子spanは実Runtime＋Fake SDK client |
 | `planning/test_planner_failure.py` | PL-07 | 維持 |
-| `question_context/test_contract.py` | QC-01 | 維持 |
-| `question_context/test_service.py` | QC-02/03/04/07 | Service policy維持、fake改名候補 |
-| `question_context/test_gemini_prompt_schema.py` | QC-05 | PR6 Agent移行のseatbelt。QC-06は専用testなしのgap |
 | `evidence_collection/test_evidence_collection.py` | EC-03 | DTO validator正本を維持 |
 | `evidence_collection/external_search/test_agent_declaration.py` | EX-01/02 | 維持 |
 | `running/test_external_pipeline.py` | EX-03〜07/09/12 | PR9最終ownerのseatbelt。plain Runtime fakeだけ共有 |
@@ -541,7 +529,7 @@ glob単位で全62 test moduleを台帳IDへ対応づける。個別PRでは、�
 | `runs/test_citation_integrity.py` | CITE-01 | 維持 |
 | `test_contract.py` | CT-* | result contract移設、AnswerQuestionInputはPR5置換 |
 | `test_agent_run_task.py` | WK-*, RP-*, TH-HIST, RP-MAP, TH-PROJ | worker4責任＋repository/projectionへ分解 |
-| `test_composition.py` | CP-* | PR4/5 replacementとstable Planner/QC wiringを分離 |
+| `test_composition.py` | CP-* | PR4/5 replacementとstable Planner wiringを分離 |
 | `test_router_research.py` | API-* | responses/threads/runs/OpenAPIへ分割 |
 | `live_updates/test_answer_delta.py` | LIVE-DELTA-* | 維持 |
 | `live_updates/test_answer_delta_integration.py` | PUBLIC-DELTA-* | behavior integration維持、重複度はPR7で判断 |

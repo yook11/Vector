@@ -6,8 +6,6 @@ from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 from uuid import UUID
 
-import pytest
-
 from app.agent.answering.contract import AnsweringRequest
 from app.agent.answering.direct_answer.contract import DirectAnswerDraft
 from app.agent.answering.evidence_answer.contract import (
@@ -29,30 +27,11 @@ from app.agent.planning.contract import (
     SearchPlan,
     TargetTimeWindow,
 )
-from app.agent.question_context import AnswerBrief
 from app.agent.running import AnsweringPhases, AnsweringRunner, RunInput
 from tests.agent.running._harness import fixed_scope, run_identity
 
 RUN_ID = UUID("019bd239-1ed4-7fbb-a336-04fe3c197650")
 AS_OF = datetime(2026, 7, 19, 9, 30, tzinfo=UTC)
-
-
-class _Preparer:
-    def __init__(
-        self,
-        context: AnswerBrief,
-        timeline: list[str],
-        error: BaseException | None = None,
-    ) -> None:
-        self._context = context
-        self._timeline = timeline
-        self._error = error
-
-    async def prepare(self, **_kwargs: object) -> AnswerBrief:
-        self._timeline.append("prepare")
-        if self._error is not None:
-            raise self._error
-        return self._context
 
 
 class _Planner:
@@ -171,8 +150,6 @@ def _runner(
     *,
     plan: QuestionPlan,
     timeline: list[str],
-    answer_brief: AnswerBrief,
-    prepare_error: BaseException | None = None,
 ) -> tuple[
     AnsweringRunner,
     _Planner,
@@ -200,7 +177,6 @@ def _runner(
 
     return (
         AnsweringRunner(
-            context_preparer=_Preparer(answer_brief, timeline, prepare_error),
             phases_factory=phases_factory,
             progress=_Progress(timeline),
         ),
@@ -211,44 +187,37 @@ def _runner(
     )
 
 
-async def test_direct_workflow_order_and_context_identity() -> None:
+async def test_direct_workflow_order_and_question_passthrough() -> None:
     timeline: list[str] = []
-    context = AnswerBrief(standalone_question="整理済みの質問")
     runner, planner, internal_search, direct_answerer, evidence_answerer = _runner(
         plan=_direct_plan(),
         timeline=timeline,
-        answer_brief=context,
     )
 
-    result = await runner.run(
+    await runner.run(
         RunInput(question="元の質問", history=()),
         identity=run_identity(run_id=RUN_ID, as_of=AS_OF),
     )
 
     assert timeline == [
-        "progress:context_resolution",
-        "prepare",
         "phases_factory",
         "progress:planning",
         "planner",
         "progress:answering",
         "direct_answerer",
     ]
-    assert planner.calls[0].answer_brief is context
-    assert direct_answerer.calls[0][0].answer_brief is context
-    assert result.answer_brief is context
+    assert planner.calls[0].question == "元の質問"
+    assert direct_answerer.calls[0][0].question == "元の質問"
     assert internal_search.calls == []
     assert evidence_answerer.calls == []
 
 
 async def test_search_workflow_starts_both_retrieval_ports() -> None:
     timeline: list[str] = []
-    context = AnswerBrief(standalone_question="整理済みの質問")
     plan = _search_plan()
     runner, planner, internal_search, direct_answerer, evidence_answerer = _runner(
         plan=plan,
         timeline=timeline,
-        answer_brief=context,
     )
 
     result = await runner.run(
@@ -256,46 +225,20 @@ async def test_search_workflow_starts_both_retrieval_ports() -> None:
         identity=run_identity(run_id=RUN_ID, as_of=AS_OF),
     )
 
-    assert timeline[:6] == [
-        "progress:context_resolution",
-        "prepare",
+    assert timeline[:4] == [
         "phases_factory",
         "progress:planning",
         "planner",
         "progress:evidence_collection",
     ]
-    assert set(timeline[6:8]) == {"internal_search", "external_search_scope"}
+    assert set(timeline[4:6]) == {"internal_search", "external_search_scope"}
     # ヒットが内外ともゼロのため精査は呼ばれず、evidence_review は報告されない。
-    assert timeline[8:] == [
+    assert timeline[6:] == [
         "progress:answering",
         "evidence_answerer",
     ]
-    assert planner.calls[0].answer_brief is context
+    assert planner.calls[0].question == "元の質問"
     assert internal_search.calls == [InternalSearchQueries(queries=("検索語",))]
-    assert evidence_answerer.calls[0]["request"].answer_brief is context
+    assert evidence_answerer.calls[0]["request"].question == "元の質問"
     assert direct_answerer.calls == []
     assert result.final_output.status == "insufficient"
-
-
-async def test_preparation_failure_does_not_build_phases() -> None:
-    timeline: list[str] = []
-    error = RuntimeError("prepare failed")
-    context = AnswerBrief(standalone_question="整理済みの質問")
-    runner, *_ = _runner(
-        plan=_direct_plan(),
-        timeline=timeline,
-        answer_brief=context,
-        prepare_error=error,
-    )
-
-    with pytest.raises(RuntimeError) as raised:
-        await runner.run(
-            RunInput(question="元の質問", history=()),
-            identity=run_identity(run_id=RUN_ID, as_of=AS_OF),
-        )
-
-    assert raised.value is error
-    assert timeline == [
-        "progress:context_resolution",
-        "prepare",
-    ]

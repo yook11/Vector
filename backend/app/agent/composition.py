@@ -24,8 +24,6 @@ from app.agent.evidence_collection import EvidenceCollectionService
 from app.agent.evidence_collection.external_search.contract import ExternalSearch
 from app.agent.evidence_review import EvidenceReviewer
 from app.agent.planning.agent import QUESTION_PLANNER_AGENT
-from app.agent.question_context.agent import QUESTION_CONTEXT_AGENT
-from app.agent.question_context.service import QuestionContextService
 from app.agent.running import AnsweringPhases, AnsweringRunner
 from app.agent.runtime.contract import AgentRuntime
 from app.analysis.ai_provider_errors import (
@@ -136,16 +134,7 @@ def build_answering_runner(
     delta_reporter: AnswerDeltaReporter | None = None,
     continuation: AnswerGenerationContinuation | None = None,
 ) -> AnsweringRunner:
-    question_context_runtime_factory = (
-        activate_gemini_agent_runtime
-        if settings.gemini_api_key.get_secret_value()
-        else None
-    )
     return AnsweringRunner(
-        context_preparer=QuestionContextService(
-            agent=QUESTION_CONTEXT_AGENT,
-            runtime_scope_factory=question_context_runtime_factory,
-        ),
         phases_factory=lambda: _build_answering_phases(
             session_factory=session_factory,
             events=events,

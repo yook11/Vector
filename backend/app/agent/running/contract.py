@@ -13,14 +13,12 @@ from app.agent.contract import AnswerQuestionResult
 from app.agent.evidence_collection import EvidenceCollector
 from app.agent.evidence_review import EvidenceReviewer
 from app.agent.planning.contract import QuestionPlanner
-from app.agent.question_context.contract import AnswerBrief
 from app.agent.research_checkpoint import ResearchCheckpoint
 from app.agent.threads.contracts import ThreadMessageSnapshot
 
 __all__ = [
     "AnsweringPhases",
     "AnsweringPhasesFactory",
-    "AnswerBriefPreparer",
     "RunIdentity",
     "RunInput",
     "RunResult",
@@ -59,17 +57,5 @@ class RunIdentity:
 @dataclass(frozen=True, slots=True)
 class RunResult:
     final_output: AnswerQuestionResult
-    answer_brief: AnswerBrief
     # 外部検索を実行しなかったRun(direct_answer含む)ではNone。
     research_checkpoint: ResearchCheckpoint | None = None
-
-
-class AnswerBriefPreparer(Protocol):
-    async def prepare(
-        self,
-        *,
-        question: str,
-        history: list[ThreadMessageSnapshot],
-        as_of: datetime,
-        run_id: UUID,
-    ) -> AnswerBrief: ...
