@@ -228,8 +228,10 @@ def render_planning_instruction(handoff: ResearchHandoff | None) -> str:
 3. 完了。整理(`collected_overview` / `unresolved_points` / `next_search_guidance`)を
    `ResearchHandoffOrganizer` が書き直すようにし、台帳から `adopted_claims` と
    `unresolved_after_search`、claim 合計の validator、`ResearchRunRecord.schema_version` を
-   落とした。工程は `app/agent/research_handoff/` の `agent.py` / `contract.py` /
-   `prompts.py` / `service.py` / `ai/schema_tool.py` / `metrics.py`、記録は
+   落とした。`app/agent/research_handoff/` は概念ごとに分け、`handoff_input.py`
+   (上流の成果物から整理へ見せる分だけを投影する `ResearchHandoffInput.from_run()`)、
+   `organized.py`(LLM の draft と整理 3 本への正規化)、`ledger.py`(台帳の組み立て)、
+   `service.py`(工程と Protocol)を置く。記録は
    `app/agent/recording/research_handoff.py`。answering と並行起動し、Run 末尾で
    `HANDOFF_ORGANIZE_TIMEOUT_SECONDS` を上限に待ち合わせる。
    planner prompt version は v10。列の増減がないため migration は伴わない。

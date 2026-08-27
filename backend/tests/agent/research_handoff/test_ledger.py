@@ -1,6 +1,6 @@
-"""build_research_run_record() の決定的な詰め替え契約テスト。
+"""台帳(build_research_run_record / append_run_record)の契約テスト。
 
-LLM呼び出しを追加しない決定的builderであるため、期待値は入力(plan/
+LLM呼び出しを追加しない決定的な組み立てであるため、期待値は入力(plan/
 executed_queries_by_task)から導出し、production関数を呼んで作らない。
 """
 
@@ -10,7 +10,11 @@ from datetime import UTC, datetime
 
 from app.agent.contract import ResearchRunRecord
 from app.agent.planning.contract import ResearchTask, SearchPlan
-from app.agent.research_handoff.builder import build_research_run_record
+from app.agent.research_handoff import ResearchHandoff, ResearchTaskRecord
+from app.agent.research_handoff.ledger import (
+    append_run_record,
+    build_research_run_record,
+)
 
 _AS_OF = datetime(2026, 8, 3, 9, 0, tzinfo=UTC)
 
@@ -90,3 +94,65 @@ def test_as_of_is_carried_through_unchanged() -> None:
 
     assert record is not None
     assert record.as_of == as_of
+
+
+def _dated_record(day: int, *, research_goal: str) -> ResearchRunRecord:
+    return ResearchRunRecord(
+        as_of=datetime(2026, 8, day, tzinfo=UTC),
+        tasks=(
+            ResearchTaskRecord(research_goal=research_goal, executed_queries=("q",)),
+        ),
+    )
+
+
+def test_first_record_starts_a_handoff_with_nothing_organized_yet() -> None:
+    """最初のRunでは整理する対象が無く、整理3本は空のまま台帳だけが立つ。"""
+    record = _dated_record(1, research_goal="goal-1")
+
+    handoff = append_run_record(previous=None, record=record)
+
+    assert (handoff.runs, handoff.updated_at) == ((record,), record.as_of)
+    assert (
+        handoff.collected_overview,
+        handoff.unresolved_points,
+        handoff.next_search_guidance,
+    ) == ("", "", "")
+
+
+def test_later_records_are_appended_in_execution_order_without_dropping() -> None:
+    """上限が無いため、古い記録は Run を重ねても落ちない。"""
+    records = [_dated_record(day, research_goal=f"goal-{day}") for day in (1, 2, 3, 4)]
+
+    handoff: ResearchHandoff | None = None
+    for record in records:
+        handoff = append_run_record(previous=handoff, record=record)
+
+    assert handoff is not None
+    assert list(handoff.runs) == records
+    assert handoff.updated_at == records[-1].as_of
+
+
+def test_appending_carries_the_previous_organized_text_forward() -> None:
+    """台帳を積む時点では整理を書き直さない。整理工程が失敗しても前回値が残る。"""
+    previous = ResearchHandoff(
+        updated_at=datetime(2026, 8, 1, tzinfo=UTC),
+        runs=(_dated_record(1, research_goal="goal-1"),),
+        collected_overview="Blackwell の供給記事が集まっている",
+        unresolved_points="在庫水準は確認できていない",
+        next_search_guidance="一次情報を優先する",
+    )
+
+    handoff = append_run_record(
+        previous=previous,
+        record=_dated_record(2, research_goal="goal-2"),
+    )
+
+    assert (
+        handoff.collected_overview,
+        handoff.unresolved_points,
+        handoff.next_search_guidance,
+    ) == (
+        previous.collected_overview,
+        previous.unresolved_points,
+        previous.next_search_guidance,
+    )

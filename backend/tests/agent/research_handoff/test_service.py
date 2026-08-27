@@ -14,12 +14,12 @@ import pytest
 
 from app.agent.contract import ORGANIZED_TEXT_MAX_CHARS
 from app.agent.research_handoff import (
-    HandoffMaterial,
-    HandoffTaskMaterial,
     ResearchHandoff,
     ResearchHandoffDraft,
+    ResearchHandoffInput,
     ResearchRunRecord,
     ResearchTaskRecord,
+    SearchedTask,
 )
 from app.agent.research_handoff.agent import RESEARCH_HANDOFF_AGENT
 from app.agent.research_handoff.service import ResearchHandoffService
@@ -44,12 +44,13 @@ def _handoff(**organized: str) -> ResearchHandoff:
     )
 
 
-def _material() -> HandoffMaterial:
-    return HandoffMaterial(
+def _input(handoff: ResearchHandoff) -> ResearchHandoffInput:
+    return ResearchHandoffInput(
+        handoff=handoff,
         question="NVIDIAの供給は？",
         as_of=_AS_OF,
         tasks=(
-            HandoffTaskMaterial(
+            SearchedTask(
                 research_goal="goal",
                 executed_queries=("q",),
                 external_collection="succeeded",
@@ -103,7 +104,7 @@ async def test_organize_replaces_the_three_texts_and_keeps_the_ledger() -> None:
         )
     )
 
-    organized = await service.organize(handoff=handoff, material=_material())
+    organized = await service.organize(_input(handoff))
 
     assert (
         organized.collected_overview,
@@ -120,7 +121,7 @@ async def test_organize_clamps_a_draft_that_overshoots_the_limit() -> None:
         ResearchHandoffDraft(collected_overview="長" * (ORGANIZED_TEXT_MAX_CHARS + 50))
     )
 
-    organized = await service.organize(handoff=_handoff(), material=_material())
+    organized = await service.organize(_input(_handoff()))
 
     assert len(organized.collected_overview) == ORGANIZED_TEXT_MAX_CHARS
 
@@ -143,7 +144,7 @@ async def test_organize_keeps_the_previous_texts_when_generation_fails(
     )
     service, _ = _service(failure)
 
-    organized = await service.organize(handoff=handoff, material=_material())
+    organized = await service.organize(_input(handoff))
 
     assert organized == handoff
 
@@ -154,6 +155,6 @@ async def test_organize_calls_the_provider_once_without_retrying() -> None:
         AgentResponseInvalidError(AgentResponseDefect.OUTPUT_SCHEMA_MISMATCH)
     )
 
-    await service.organize(handoff=_handoff(), material=_material())
+    await service.organize(_input(_handoff()))
 
     assert len(runtime.calls) == 1

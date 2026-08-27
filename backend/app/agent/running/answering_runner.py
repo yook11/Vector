@@ -43,8 +43,8 @@ from app.agent.planning.contract import (
 )
 from app.agent.research_handoff import (
     ResearchHandoff,
+    ResearchHandoffInput,
     append_run_record,
-    build_handoff_material,
     build_research_run_record_or_none,
 )
 from app.agent.running.contract import (
@@ -182,13 +182,13 @@ class AnsweringRunner:
 
         organizing = asyncio.ensure_future(
             phases.organizer.organize(
-                handoff=recorded_handoff,
-                material=build_handoff_material(
+                ResearchHandoffInput.from_run(
+                    handoff=recorded_handoff,
                     question=request.question,
                     collected_news=collected_news,
                     evidence_run=evidence_run,
                     as_of=request.as_of,
-                ),
+                )
             )
         )
         try:

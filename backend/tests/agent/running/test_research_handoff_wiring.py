@@ -39,7 +39,7 @@ from app.agent.planning.contract import (
     SearchPlan,
     TargetTimeWindow,
 )
-from app.agent.research_handoff import HandoffMaterial, ResearchHandoff
+from app.agent.research_handoff import ResearchHandoff, ResearchHandoffInput
 from app.agent.running import AnsweringPhases, AnsweringRunner, RunInput
 from app.agent.running import answering_runner as answering_runner_module
 from app.agent.runtime.contract import AgentResponseDefect, AgentResponseInvalidError
@@ -333,7 +333,7 @@ async def test_builder_exception_yields_none_handoff_and_continues_answering(
         raise RuntimeError("run record build boom")
 
     monkeypatch.setattr(
-        "app.agent.research_handoff.builder.build_research_run_record",
+        "app.agent.research_handoff.ledger.build_research_run_record",
         _raise_build_failure,
     )
     gateway = _FakeExternalSearchGateway(
@@ -369,18 +369,13 @@ class _Organizer:
 
     def __init__(self, *, outcome: Exception | str = "整理済み") -> None:
         self._outcome = outcome
-        self.calls: list[HandoffMaterial] = []
+        self.calls: list[ResearchHandoffInput] = []
 
-    async def organize(
-        self,
-        *,
-        handoff: ResearchHandoff,
-        material: HandoffMaterial,
-    ) -> ResearchHandoff:
-        self.calls.append(material)
+    async def organize(self, input: ResearchHandoffInput) -> ResearchHandoff:
+        self.calls.append(input)
         if isinstance(self._outcome, Exception):
             raise self._outcome
-        return handoff.model_copy(update={"collected_overview": self._outcome})
+        return input.handoff.model_copy(update={"collected_overview": self._outcome})
 
 
 class _NeverFinishingOrganizer:
@@ -389,13 +384,8 @@ class _NeverFinishingOrganizer:
     def __init__(self) -> None:
         self.cancelled = asyncio.Event()
 
-    async def organize(
-        self,
-        *,
-        handoff: ResearchHandoff,
-        material: HandoffMaterial,
-    ) -> ResearchHandoff:
-        del handoff, material
+    async def organize(self, input: ResearchHandoffInput) -> ResearchHandoff:
+        del input
         try:
             await asyncio.Event().wait()
         except asyncio.CancelledError:
@@ -435,10 +425,10 @@ async def test_organizer_sees_what_was_searched_and_what_was_collected() -> None
     await _run(_searching_runner(organizer))
 
     assert len(organizer.calls) == 1
-    material = organizer.calls[0]
-    assert material.question == "質問"
-    assert [task.executed_queries for task in material.tasks] == [("q",)]
-    assert [task.hit_headlines for task in material.tasks] == [("a",)]
+    organizer_input = organizer.calls[0]
+    assert organizer_input.question == "質問"
+    assert [task.executed_queries for task in organizer_input.tasks] == [("q",)]
+    assert [task.hit_headlines for task in organizer_input.tasks] == [("a",)]
 
 
 async def test_a_failing_organizer_still_lets_the_run_complete_with_the_ledger() -> (

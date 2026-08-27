@@ -56,7 +56,7 @@ from app.agent.planning.contract import (
     TargetTimeWindow,
 )
 from app.agent.research_handoff.agent import RESEARCH_HANDOFF_AGENT
-from app.agent.research_handoff.contract import HandoffMaterial
+from app.agent.research_handoff.handoff_input import ResearchHandoffInput
 from app.agent.research_handoff.service import ResearchHandoffService
 from app.agent.running import AnsweringPhases, AnsweringRunner, RunIdentity, RunInput
 from app.config import settings
@@ -120,13 +120,8 @@ class _UnreachableEvidenceReviewerScope:
 
 
 class _UnreachableOrganizer:
-    async def organize(
-        self,
-        *,
-        handoff: ResearchHandoff,  # noqa: ARG002
-        material: HandoffMaterial,
-    ) -> ResearchHandoff:
-        raise AssertionError(f"organizer must not be called: {material.question!r}")
+    async def organize(self, input: ResearchHandoffInput) -> ResearchHandoff:
+        raise AssertionError(f"organizer must not be called: {input.question!r}")
 
 
 class _UnreachableEvidenceAnswerer:

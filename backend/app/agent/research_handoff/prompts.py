@@ -5,10 +5,7 @@ from __future__ import annotations
 from typing import Final
 
 from app.agent.contract import ResearchHandoff
-from app.agent.research_handoff.contract import (
-    HandoffOrganizerInput,
-    HandoffTaskMaterial,
-)
+from app.agent.research_handoff.handoff_input import ResearchHandoffInput, SearchedTask
 from app.analysis.prompt_safety import sanitize_for_untrusted_block
 
 __all__ = [
@@ -70,18 +67,16 @@ _EMPTY_PREVIOUS: Final[str] = "まだ何も整理されていない(このthread
 _NONE_MARKER: Final[str] = "- なし"
 
 
-def render_organizer_input(input: HandoffOrganizerInput) -> str:
+def render_organizer_input(input: ResearchHandoffInput) -> str:
     """整理工程へ渡すtask dataへ変換する。"""
-    handoff = input.handoff
-    material = input.material
     # HTMLではないLLM promptであり、外部入力は境界用sanitizerを通す。
     # nosemgrep: python.django.security.injection.raw-html-format.raw-html-format  # noqa: E501
     return _INPUT_TEMPLATE.format(
-        as_of=material.as_of.isoformat(),
-        previous=_render_previous(handoff),
-        question=sanitize_for_untrusted_block(material.question),
-        tasks="\n".join(_render_task(task) for task in material.tasks),
-        review_missing=_render_items(material.review_missing),
+        as_of=input.as_of.isoformat(),
+        previous=_render_previous(input.handoff),
+        question=sanitize_for_untrusted_block(input.question),
+        tasks="\n".join(_render_task(task) for task in input.tasks),
+        review_missing=_render_items(input.review_missing),
     )
 
 
@@ -99,7 +94,7 @@ def _render_previous(handoff: ResearchHandoff) -> str:
     return "\n\n".join(written) if written else _EMPTY_PREVIOUS
 
 
-def _render_task(task: HandoffTaskMaterial) -> str:
+def _render_task(task: SearchedTask) -> str:
     lines = [
         f"research_goal: {sanitize_for_untrusted_block(task.research_goal)}",
         f"外部収集の結末: {task.external_collection}",
