@@ -25,6 +25,7 @@ from app.agent.live_updates.stream import (
     AgentRunLiveStreamPublisher,
     AgentRunLiveStreamTerminalEvent,
 )
+from app.agent.planning.failure import PlanningError
 from app.agent.research_handoff import (
     ResearchHandoff,
     recall_research_handoff,
@@ -231,6 +232,7 @@ async def run_agent_answer(
                 AIProviderError,
                 AgentResponseInvalidError,
                 DirectAnswerInvalidError,
+                PlanningError,
             ) as exc:
                 logger.info(
                     "agent_run_generation_unavailable",

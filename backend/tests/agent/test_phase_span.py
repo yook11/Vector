@@ -19,6 +19,7 @@ from opentelemetry.trace import StatusCode
 
 from app.agent.contract import AnswerGenerationStopped
 from app.agent.phase_span import agent_phase
+from app.agent.planning.failure import PlanningError
 from app.agent.runtime.contract import AgentResponseDefect, AgentResponseInvalidError
 from app.analysis.ai_provider_errors import AIProviderNetworkError
 from tests.logfire._span_helpers import (
@@ -197,6 +198,24 @@ def test_agent_response_invalid_error_marks_span_error_with_defect_error_type(
     assert raw.status.description in (None, "")
     assert exception_event(span) is None
     assert span["attributes"][ERROR_TYPE] == error.defect.value
+
+
+def test_planning_error_marks_span_error_with_code_and_reraises_same_instance(
+    capfire: CaptureLogfire,
+) -> None:
+    error = PlanningError(code="ai_error_network")
+
+    with pytest.raises(PlanningError) as raised:
+        with agent_phase(phase="planning", agent_name="question_planner"):
+            raise error
+
+    assert raised.value is error
+    span = one_span_named(capfire, _PHASE_SPAN_NAME)
+    raw = _one_raw_phase_span(capfire)
+    assert raw.status.status_code is StatusCode.ERROR
+    assert raw.status.description in (None, "")
+    assert exception_event(span) is None
+    assert span["attributes"][ERROR_TYPE] == error.code
 
 
 def test_unclassified_exception_passes_through_to_logfire_auto_record(

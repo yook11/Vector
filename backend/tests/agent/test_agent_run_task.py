@@ -40,6 +40,7 @@ from app.agent.live_updates.stream import (
     AgentRunLiveStreamStageEvent,
     AgentRunLiveStreamTerminalEvent,
 )
+from app.agent.planning.failure import PlanningError
 from app.agent.research_handoff import (
     ResearchHandoff,
     ResearchRunRecord,
@@ -2644,8 +2645,15 @@ async def test_stale_complete_run_with_a_handoff_does_not_persist_it(
         AIProviderError("SHOULD_NOT_LEAK"),
         DirectAnswerInvalidError(),
         AgentResponseInvalidError(AgentResponseDefect.OUTPUT_SCHEMA_MISMATCH),
+        PlanningError(code="ai_error_network"),
     ],
-    ids=("configuration", "provider", "direct-draft", "invalid-agent-output"),
+    ids=(
+        "configuration",
+        "provider",
+        "direct-draft",
+        "invalid-agent-output",
+        "planning",
+    ),
 )
 async def test_run_agent_answer_generation_error_marks_failed_without_leaking_message(
     session_factory: async_sessionmaker[AsyncSession],

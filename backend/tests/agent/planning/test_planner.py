@@ -20,6 +20,7 @@ from app.agent.planning.contract import (
     ResearchTaskDraft,
     TargetTimeWindow,
 )
+from app.agent.planning.failure import PlanningError
 from app.agent.planning.service import QuestionPlanningService
 from app.agent.recording.planning import (
     PlanningFailed,
@@ -296,12 +297,13 @@ async def test_two_response_defects_propagate_second_error_and_record_not_create
     runtime = ScriptedAgentRuntime([first_error, terminal_error])
     service, factory = _service(runtime)
 
-    with pytest.raises(AgentResponseInvalidError) as raised:
+    with pytest.raises(PlanningError) as raised:
         await service.plan(_input())
 
-    assert raised.value is terminal_error
+    assert raised.value.__cause__ is terminal_error
+    assert raised.value.code == AgentResponseDefect.OUTPUT_SCHEMA_MISMATCH.value
     assert [call.attempt_number for call in runtime.calls] == [1, 2]
-    assert factory.exits[0][2] is terminal_error
+    assert factory.exits[0][2] is raised.value
     metrics = collected_metrics(capfire)
     assert sum_counter_for_result(metrics, _PLANNER_OUTCOME_METRIC, "failed") == 1
     assert _metric_attributes(metrics) == [
@@ -323,7 +325,7 @@ async def test_terminal_response_defect_records_failed_outcome() -> None:
     recorder = RecordingPlanningRecorder()
     service, _factory = _service(runtime, recorder=recorder)
 
-    with pytest.raises(AgentResponseInvalidError):
+    with pytest.raises(PlanningError):
         await service.plan(_input())
 
     _assert_recorded(
@@ -342,12 +344,13 @@ async def test_classified_provider_failure_does_not_retry_and_records_not_create
     runtime = ScriptedAgentRuntime([error])
     service, factory = _service(runtime)
 
-    with pytest.raises(AIProviderNetworkError) as raised:
+    with pytest.raises(PlanningError) as raised:
         await service.plan(_input())
 
-    assert raised.value is error
+    assert raised.value.__cause__ is error
+    assert raised.value.code == "ai_error_network"
     assert [call.attempt_number for call in runtime.calls] == [1]
-    assert factory.exits[0][2] is error
+    assert factory.exits[0][2] is raised.value
     assert _metric_attributes(collected_metrics(capfire)) == [
         {
             "result": "failed",
@@ -366,7 +369,7 @@ async def test_classified_provider_failure_records_failed_outcome() -> None:
     recorder = RecordingPlanningRecorder()
     service, _factory = _service(runtime, recorder=recorder)
 
-    with pytest.raises(AIProviderNetworkError):
+    with pytest.raises(PlanningError):
         await service.plan(_input())
 
     _assert_recorded(
@@ -533,12 +536,14 @@ async def test_close_error_replaces_terminal_response_defect_without_metric(
         await service.plan(_input())
 
     assert raised.value is close_error
-    assert close_error.__context__ is terminal_error
+    planning_error = close_error.__context__
+    assert isinstance(planning_error, PlanningError)
+    assert planning_error.__cause__ is terminal_error
     assert [call.attempt_number for call in runtime.calls] == [1, 2]
     assert (
         factory.exits[0][0] is runtime,
-        factory.exits[0][1] is type(terminal_error),
-        factory.exits[0][2] is terminal_error,
+        factory.exits[0][1] is PlanningError,
+        factory.exits[0][2] is planning_error,
         factory.exits[0][3] is not None,
     ) == (True, True, True, True)
     assert _metric_attributes(collected_metrics(capfire)) == []
@@ -575,12 +580,13 @@ async def test_classified_non_response_error_propagates_without_retry(
         ),
     )
 
-    with pytest.raises(type(error)) as raised:
+    with pytest.raises(PlanningError) as raised:
         await service.plan(_input(question_sentinel))
 
-    assert raised.value is error
+    assert raised.value.__cause__ is error
+    assert raised.value.code == expected_failure_code
     assert [call.attempt_number for call in runtime.calls] == [1]
-    assert len(factory.exits) == 1
+    assert factory.exits[0][2] is raised.value
     assert metrics_at_scope_exit == []
     metrics = collected_metrics(capfire)
     assert sum_counter_for_result(metrics, _PLANNER_OUTCOME_METRIC, "failed") == 1

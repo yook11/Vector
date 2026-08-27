@@ -10,10 +10,7 @@ from app.agent.planning.contract import (
     QuestionPlanDraft,
     plan_from_draft,
 )
-from app.agent.planning.failure import (
-    RequestRetryDisposition,
-    classify_planner_failure,
-)
+from app.agent.planning.failure import PlanningError, planning_error_from
 from app.agent.recording.planning import (
     PlanningFailed,
     PlanningRecorder,
@@ -29,7 +26,7 @@ from app.analysis.ai_provider_errors import (
     AIProviderStateError,
 )
 
-_PLANNER_CLASSIFIED_ERRORS = (
+_PLANNING_SOURCE_ERRORS = (
     AIProviderStateError,
     AIProviderContentError,
     AgentResponseInvalidError,
@@ -56,13 +53,6 @@ class QuestionPlanningService:
 
         repair_context: str | None = None
         completed_plan: QuestionPlan | None = None
-        terminal_error: (
-            AIProviderStateError
-            | AIProviderContentError
-            | AgentResponseInvalidError
-            | None
-        ) = None
-        terminal_outcome: PlanningFailed | None = None
         attempt_count = 0
 
         async with self._recorder.record(agent_name=self._agent.name) as recording:
@@ -80,26 +70,22 @@ class QuestionPlanningService:
                                 attempt_number=attempt_number,
                             )
                             completed_plan = plan_from_draft(draft)
-                        except _PLANNER_CLASSIFIED_ERRORS as exc:
-                            failure = classify_planner_failure(exc)
-                            retriable = (
-                                failure.request_retry_disposition
-                                is RequestRetryDisposition.RETRY_IN_REQUEST
+                        except _PLANNING_SOURCE_ERRORS as cause:
+                            if (
+                                isinstance(cause, AgentResponseInvalidError)
                                 and attempt_number < _MAX_ATTEMPTS
-                            )
-                            if retriable:
-                                repair_context = str(exc)
+                            ):
+                                repair_context = str(cause)
                                 continue
-                            terminal_error = exc
-                            terminal_outcome = PlanningFailed(
-                                failure_code=failure.code,
-                                attempt_count=attempt_count,
-                            )
-                            raise
+                            raise planning_error_from(cause) from cause
                         break
-            except _PLANNER_CLASSIFIED_ERRORS as exc:
-                if exc is terminal_error and terminal_outcome is not None:
-                    recording.set_outcome(terminal_outcome)
+            except PlanningError as error:
+                recording.set_outcome(
+                    PlanningFailed(
+                        failure_code=error.code,
+                        attempt_count=attempt_count,
+                    )
+                )
                 raise
 
             if completed_plan is not None:

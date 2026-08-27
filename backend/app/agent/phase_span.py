@@ -56,8 +56,17 @@ def agent_phase(
             yield
         except _PHASE_STOPS as stop:
             deferred = stop
-        except _CLASSIFIED_FAILURES as failure:
-            span.set_attribute(ERROR_TYPE, span_error_type(failure))
+        except Exception as failure:
+            # PlanningError は planning パッケージ経由だと循環 import になる。
+            from app.agent.planning.failure import PlanningError
+
+            if isinstance(failure, PlanningError):
+                error_type = failure.code
+            elif isinstance(failure, _CLASSIFIED_FAILURES):
+                error_type = span_error_type(failure)
+            else:
+                raise
+            span.set_attribute(ERROR_TYPE, error_type)
             span.set_status(StatusCode.ERROR)
             deferred = failure
     if deferred is not None:

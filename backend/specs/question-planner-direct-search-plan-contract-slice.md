@@ -355,9 +355,9 @@ prompt revision対象であるため、`EXTERNAL_QUERY_PROMPT_VERSION`と
 1. attempt 1がvalidな完成済みplanを作れれば返す。
 2. invalid JSON、object以外、schema不一致、または正規化後のquery / goal不足など、安全に分類した
    response defectだけは`previous_error`を渡してattempt 2を実行する。
-3. attempt 2でもresponse defectなら、その分類済み例外を伝播してrunを停止する。
-4. provider state / content errorなど、現在`DO_NOT_RETRY_IN_REQUEST`である失敗はattempt内retryせず、
-   その分類済み例外を伝播してrunを停止する。
+3. attempt 2でもresponse defectなら、`PlanningError`へ変換して伝播しrunを停止する。
+4. provider state / content errorなど、request内ではretryしない失敗はattempt内retryせず、
+   `PlanningError`へ変換して伝播しrunを停止する。
 5. Runtime scopeの開始・終了失敗、未分類例外、`CancelledError`もfallbackへ変換せず伝播する。
 
 semantic validation defectをrepairへ載せる実装方法は固定しないが、raw model output、Pydantic input、
@@ -370,8 +370,9 @@ External Query Agentへ直接渡す、external-only検索を起動する、質�
 
 ### Workerへの伝播
 
-- `AIProviderError`または`AgentResponseInvalidError`として分類できる最終失敗は、既存worker境界で
-  `generation_unavailable`へ写像し、runをfailed terminalへ遷移させる。
+- Planner境界で分類した最終失敗は`PlanningError`として伝播する。元の provider / response 例外は
+  `__cause__`に残す。workerは`PlanningError`を既存の`generation_unavailable`へ写像し、runをfailed
+  terminalへ遷移させる。
 - 未分類例外は既存どおり`internal_error`へ写像する。
 - `CancelledError`はfailure resultやfallback planへ変換しない。
 - Planner失敗後は`retrieving` / `synthesizing`へ進まず、assistant messageとsourceを保存しない。
@@ -389,7 +390,7 @@ External Query Agentへ直接渡す、external-only検索を起動する、質�
 
 成功またはPlanner境界で分類済みの最終失敗ごとにexactly once記録する。`succeeded` / `failed`の
 どちらもRuntime scopeの退出処理が別の例外を出さず完了した後に記録する。`succeeded`はplanを呼び出し元へ
-返せる場合、`failed`は分類済みattempt失敗を呼び出し元へ伝播する場合に限る。scopeの開始・終了失敗、
+返せる場合、`failed`は`PlanningError`を呼び出し元へ伝播する場合に限る。scopeの開始・終了失敗、
 未分類例外、`CancelledError`ではoutcome metricを記録せず、既存phase spanのerror / cancellation
 意味論を維持する。attributeへquestion、query、goal、期間内容、raw response、例外messageを記録しない。
 
@@ -554,7 +555,8 @@ production codeの変更でFastAPI schema、SQLAlchemy model、Alembic migration
    - external全taskの期間失敗について、internal evidence有無の両ケースが旧mixed semanticsになる。
    - external-only特例が残っていない。
 7. Worker / Public Boundary
-   - Plannerの分類済み最終失敗が`generation_unavailable`、unknownが`internal_error`になる。
+   - Plannerの分類済み最終失敗は`PlanningError`として伝播し、workerが`generation_unavailable`へ写す。
+     unknownは`internal_error`になる。
    - Planner失敗後にassistant message / sourceが永続化されない。
    - 既存HTTP schema、stream event shape、frontend generated typeに差分がない。
 
