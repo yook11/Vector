@@ -51,7 +51,6 @@ from app.agent.planning.contract import (
     SearchPlan,
     TargetTimeWindow,
 )
-from app.agent.question_context import AnswerBrief
 from app.agent.running import AnsweringPhases, AnsweringRunner, RunInput
 from app.agent.running import answering_runner as answering_runner_module
 from app.agent.runtime.contract import AgentResponseDefect, AgentResponseInvalidError
@@ -149,11 +148,6 @@ def _hit(
         content=InternalArticleContent.from_article(article, published_at=None),
         distance=distance,
     )
-
-
-class _Preparer:
-    async def prepare(self, **_kwargs: object) -> AnswerBrief:
-        return AnswerBrief(standalone_question="NVIDIA の見通しは？")
 
 
 class _Planner:
@@ -534,7 +528,6 @@ def _runner(
         reviewer=EvidenceReviewer(runtime_scope_factory=factory.reviewer_scope),
     )
     return AnsweringRunner(
-        context_preparer=_Preparer(),
         phases_factory=lambda: phases,
         progress=progress,
         events=events,  # type: ignore[arg-type]
@@ -830,7 +823,6 @@ async def test_runner_preserves_internal_hit_order_into_synthesis() -> None:
         reviewer=EvidenceReviewer(runtime_scope_factory=factory.reviewer_scope),
     )
     runner = AnsweringRunner(
-        context_preparer=_Preparer(),
         phases_factory=lambda: phases,
         events=None,
     )
@@ -875,7 +867,6 @@ async def test_runner_forwards_review_missing_to_the_evidence_answerer() -> None
         reviewer=EvidenceReviewer(runtime_scope_factory=factory.reviewer_scope),
     )
     runner = AnsweringRunner(
-        context_preparer=_Preparer(),
         phases_factory=lambda: phases,
         events=None,
     )
@@ -1620,7 +1611,6 @@ async def test_internal_failure_still_reaches_reviewer_and_produces_evidence() -
         reviewer=EvidenceReviewer(runtime_scope_factory=factory.reviewer_scope),
     )
     runner = AnsweringRunner(
-        context_preparer=_Preparer(),
         phases_factory=lambda: phases,
         events=events,
     )
@@ -1669,7 +1659,6 @@ async def test_external_provider_failure_keeps_internal_hits_in_final_evidence()
         reviewer=EvidenceReviewer(runtime_scope_factory=factory.reviewer_scope),
     )
     runner = AnsweringRunner(
-        context_preparer=_Preparer(),
         phases_factory=lambda: phases,
     )
 
@@ -1808,7 +1797,6 @@ async def test_runner_isolates_one_tasks_total_failure_from_sibling_evidence() -
         reviewer=EvidenceReviewer(runtime_scope_factory=factory.reviewer_scope),
     )
     runner = AnsweringRunner(
-        context_preparer=_Preparer(),
         phases_factory=lambda: phases,
     )
 

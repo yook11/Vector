@@ -1,4 +1,4 @@
-"""Prior Research Context (planner v7) の renderer / instructions 契約。
+"""Prior Research Context (planner v8) の renderer / instructions 契約。
 
 agent-research-checkpoint-context-slice: 直近checkpointをPlannerへ渡す新規section
 の render 規則(仕様「Planner prompt contract」節)を検証する。
@@ -10,21 +10,16 @@ from datetime import UTC, datetime
 
 from app.agent.planning.contract import PlanningAttemptInput, PlanningRequest
 from app.agent.planning.prompts import PLANNER_INSTRUCTIONS, render_planning_input
-from app.agent.question_context.contract import AnswerBrief
 from app.agent.research_checkpoint import ResearchCheckpoint, ResearchTaskRecord
 
 _AS_OF = datetime(2026, 8, 3, 9, 0, tzinfo=UTC)
-
-
-def _context() -> AnswerBrief:
-    return AnswerBrief(standalone_question="NVIDIAの直近の発表は？")
 
 
 def _request(
     prior_research: tuple[ResearchCheckpoint, ...] = (),
 ) -> PlanningRequest:
     return PlanningRequest(
-        answer_brief=_context(),
+        question="NVIDIAの直近の発表は？",
         as_of=_AS_OF,
         prior_research=prior_research,
     )
@@ -59,7 +54,7 @@ def _checkpoint(
 def test_omitted_and_explicit_empty_prior_research_render_identically() -> None:
     """checkpoint 0件はv6と同値(sectionが出ない)出力になる。"""
     omitted = PlanningAttemptInput(
-        request=PlanningRequest(answer_brief=_context(), as_of=_AS_OF)
+        request=PlanningRequest(question="NVIDIAの直近の発表は？", as_of=_AS_OF)
     )
     explicit_empty = PlanningAttemptInput(request=_request(prior_research=()))
 
@@ -71,7 +66,7 @@ def test_omitted_and_explicit_empty_prior_research_render_identically() -> None:
     assert "<untrusted_prior_research>" not in rendered_omitted
 
 
-def test_prior_research_section_appears_between_conversation_and_repair() -> None:
+def test_prior_research_section_appears_between_history_and_repair() -> None:
     checkpoint = _checkpoint()
     attempt = PlanningAttemptInput(
         request=_request(prior_research=(checkpoint,)),
@@ -80,10 +75,10 @@ def test_prior_research_section_appears_between_conversation_and_repair() -> Non
 
     rendered = render_planning_input(attempt)
 
-    conversation_index = rendered.index("# Conversation Context")
+    history_index = rendered.index("# Prior Thread Messages")
     prior_research_index = rendered.index("# Prior Research Context")
     repair_index = rendered.index("# Repair Context")
-    assert conversation_index < prior_research_index < repair_index
+    assert history_index < prior_research_index < repair_index
 
 
 def test_prior_research_records_keep_the_passed_order_without_resorting() -> None:

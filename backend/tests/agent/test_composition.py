@@ -3,9 +3,7 @@
 from __future__ import annotations
 
 import asyncio
-from datetime import UTC, datetime
 from types import TracebackType
-from uuid import UUID
 
 import pytest
 from pydantic import SecretStr
@@ -13,68 +11,16 @@ from pydantic import SecretStr
 from app.agent import composition
 from app.agent.composition import (
     activate_gemini_agent_runtime,
-    build_answering_runner,
 )
 from app.agent.planning.agent import QUESTION_PLANNER_AGENT
-from app.agent.question_context.agent import QUESTION_CONTEXT_AGENT
-from app.agent.question_context.contract import AnswerBrief, AnswerBriefDraft
-from app.agent.question_context.service import QuestionContextService
-from app.agent.running import AnsweringPhases, AnsweringRunner
+from app.agent.running import AnsweringPhases
 from app.agent.runtime.contract import (
     AgentResponseDefect,
     AgentResponseInvalidError,
 )
-from app.agent.threads.contracts import ThreadMessageSnapshot
 from app.analysis.ai_provider_errors import (
     AIProviderError,
 )
-
-
-def test_build_answering_runner_wires_context_agent_to_deferred_runtime(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    activation_calls: list[None] = []
-
-    def activate_runtime() -> None:
-        activation_calls.append(None)
-        raise AssertionError("runner construction must not activate the runtime")
-
-    monkeypatch.setattr(
-        composition.settings,
-        "gemini_api_key",
-        SecretStr("question-context-gemini-key-sentinel"),
-    )
-    monkeypatch.setattr(
-        composition,
-        "activate_gemini_agent_runtime",
-        activate_runtime,
-    )
-
-    runner = build_answering_runner(session_factory=object())
-    context_preparer = runner._context_preparer
-
-    assert isinstance(runner, AnsweringRunner)
-    assert isinstance(context_preparer, QuestionContextService)
-    assert context_preparer._agent is QUESTION_CONTEXT_AGENT
-    assert context_preparer._runtime_scope_factory is activate_runtime
-    assert activation_calls == []
-
-
-def test_build_answering_runner_disables_context_runtime_when_gemini_is_unconfigured(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setattr(
-        composition.settings,
-        "gemini_api_key",
-        SecretStr(""),
-    )
-
-    runner = build_answering_runner(session_factory=object())
-    context_preparer = runner._context_preparer
-
-    assert isinstance(context_preparer, QuestionContextService)
-    assert context_preparer._agent is QUESTION_CONTEXT_AGENT
-    assert context_preparer._runtime_scope_factory is None
 
 
 @pytest.mark.parametrize(
@@ -149,7 +95,7 @@ class _FakeGeminiSdkClientFactory:
 class _FakeGeminiRuntime:
     constructed: list[_FakeGeminiRuntime] = []
     construction_error: BaseException | None = None
-    outcome: AnswerBriefDraft | BaseException | None = None
+    outcome: object | BaseException | None = None
     calls: list[tuple[object, object, int]] = []
 
     def __init__(self, *, client: _FakeGeminiAsyncClient) -> None:
@@ -164,7 +110,7 @@ class _FakeGeminiRuntime:
         input: object,
         *,
         attempt_number: int,
-    ) -> AnswerBriefDraft:
+    ) -> object:
         self.calls.append((agent, input, attempt_number))
         outcome = self.outcome
         if isinstance(outcome, BaseException):
@@ -297,77 +243,6 @@ async def test_gemini_agent_runtime_scope_creates_fresh_resources_each_time(
         "gemini 2 enter",
         "gemini 2 exit",
     ]
-
-
-@pytest.mark.parametrize(
-    ("outcome", "expected_question", "propagates"),
-    [
-        pytest.param(
-            AnswerBriefDraft(standalone_question="prepared question"),
-            "prepared question",
-            False,
-            id="success",
-        ),
-        pytest.param(
-            AgentResponseInvalidError(AgentResponseDefect.RESPONSE_NOT_JSON),
-            "original question",
-            False,
-            id="classified-failure",
-        ),
-        pytest.param(
-            AnswerBriefDraft(standalone_question="   "),
-            "original question",
-            False,
-            id="finalize-failure",
-        ),
-        pytest.param(
-            RuntimeError("unexpected runtime failure"),
-            None,
-            True,
-            id="unknown-failure",
-        ),
-        pytest.param(
-            asyncio.CancelledError(),
-            None,
-            True,
-            id="cancellation",
-        ),
-    ],
-)
-async def test_question_context_service_closes_production_gemini_scope_once(
-    monkeypatch: pytest.MonkeyPatch,
-    outcome: AnswerBriefDraft | BaseException,
-    expected_question: str | None,
-    propagates: bool,
-) -> None:
-    lifecycle: list[str] = []
-    _install_gemini_runtime_fakes(monkeypatch, lifecycle=lifecycle)
-    _FakeGeminiRuntime.outcome = outcome
-    service = QuestionContextService(
-        agent=QUESTION_CONTEXT_AGENT,
-        runtime_scope_factory=composition.activate_gemini_agent_runtime,
-    )
-
-    async def prepare() -> AnswerBrief:
-        return await service.prepare(
-            question="original question",
-            history=[ThreadMessageSnapshot(role="user", content="prior question")],
-            as_of=datetime(2026, 7, 19, tzinfo=UTC),
-            run_id=UUID("00000000-0000-4000-a000-000000000020"),
-        )
-
-    if propagates:
-        with pytest.raises(type(outcome)) as raised:
-            await prepare()
-        assert raised.value is outcome
-    else:
-        result = await prepare()
-        assert result.standalone_question == expected_question
-
-    assert len(_FakeGeminiRuntime.calls) == 1
-    assert _FakeGeminiRuntime.calls[0][0] is QUESTION_CONTEXT_AGENT
-    assert _FakeGeminiRuntime.calls[0][2] == 1
-    assert lifecycle == ["gemini 1 create", "gemini 1 enter", "gemini 1 exit"]
 
 
 class _KeywordObject:

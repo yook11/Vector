@@ -18,8 +18,8 @@ from app.agent.answering.evidence_answer.contract import (
 from app.agent.answering.evidence_answer.evidence import AnswerInputEvidence
 from app.agent.contract import ExternalUrlSource
 from app.agent.planning.contract import TargetTimeWindow
-from app.agent.question_context.contract import AnswerBrief
 from app.agent.runtime.gemini import GeminiAgentRuntime
+from app.agent.threads.contracts import ThreadMessageSnapshot
 from tests.agent.runtime._helpers import FakeGeminiClient
 
 
@@ -54,14 +54,9 @@ class _SdkStream:
 
 def _request(*, question: str = "QUESTION_CONTENTS_SENTINEL") -> AnsweringRequest:
     return AnsweringRequest(
-        answer_brief=AnswerBrief(
-            standalone_question=question,
-            answer_requirements=(
-                "CONTENT_REQUIREMENT_SENTINEL",
-                "RESPONSE_REQUIREMENT_SENTINEL",
-            ),
-            relevant_prior_coverage="PRIOR_COVERAGE_SENTINEL",
-            active_goal="ACTIVE_GOAL_SENTINEL",
+        question=question,
+        history=(
+            ThreadMessageSnapshot(role="assistant", content="PRIOR_COVERAGE_SENTINEL"),
         ),
         as_of=datetime(2026, 7, 7, tzinfo=UTC),
     )
@@ -100,7 +95,7 @@ def test_agent_declares_plain_text_role_with_wider_output_budget() -> None:
         "gemini-3.1-flash-lite",
         0.2,
         8192,
-        "v8",
+        "v9",
         EvidenceAnswerDraft,
         None,
     )
@@ -122,10 +117,7 @@ def test_fixed_instructions_and_rendered_input_are_separated() -> None:
     assert fixed not in rendered
     for sentinel in (
         "QUESTION_CONTENTS_SENTINEL",
-        "CONTENT_REQUIREMENT_SENTINEL",
-        "RESPONSE_REQUIREMENT_SENTINEL",
         "PRIOR_COVERAGE_SENTINEL",
-        "ACTIVE_GOAL_SENTINEL",
         "EVIDENCE_TITLE_SENTINEL",
         "EVIDENCE_CLAIM_SENTINEL",
         "EVIDENCE_TEXT_SENTINEL",

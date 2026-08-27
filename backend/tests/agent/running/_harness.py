@@ -41,7 +41,6 @@ from app.agent.planning.contract import (
     SearchPlan,
     TargetTimeWindow,
 )
-from app.agent.question_context import AnswerBrief
 from app.agent.running import AnsweringRunner, RunIdentity, RunInput
 from app.agent.running import answering_runner as answering_runner_module
 from app.analysis.analyzed_article import InScopeAnalyzedArticle
@@ -139,17 +138,6 @@ def external_research_runtime(
         ),
         reviewer_runtime=reviewer_runtime,
     )
-
-
-class Preparer:
-    def __init__(self, *, answer_requirements: tuple[str, ...] | None = None) -> None:
-        self._answer_requirements = answer_requirements or ()
-
-    async def prepare(self, **_kwargs: object) -> AnswerBrief:
-        return AnswerBrief(
-            standalone_question="NVIDIA の見通しは？",
-            answer_requirements=self._answer_requirements,
-        )
 
 
 class Planner:

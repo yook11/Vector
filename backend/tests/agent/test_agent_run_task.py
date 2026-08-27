@@ -40,7 +40,6 @@ from app.agent.live_updates.stream import (
     AgentRunLiveStreamStageEvent,
     AgentRunLiveStreamTerminalEvent,
 )
-from app.agent.question_context.contract import AnswerBrief
 from app.agent.research_checkpoint import ResearchCheckpoint, ResearchTaskRecord
 from app.agent.running import (
     AnsweringPhases,
@@ -177,13 +176,9 @@ class FakeAnsweringRunner:
         self,
         *,
         exc: BaseException | None = None,
-        answer_brief: AnswerBrief | None = None,
-        previous_answer: str = "",
         research_checkpoint: ResearchCheckpoint | None = None,
     ) -> None:
         self.exc = exc
-        self.answer_brief = answer_brief
-        self.previous_answer = previous_answer
         self.research_checkpoint = research_checkpoint
         self.execution: object | None = None
         self.calls: list[FakeAnsweringRunnerCall] = []
@@ -202,15 +197,10 @@ class FakeAnsweringRunner:
         )
         if self.exc is not None:
             raise self.exc
-        answer_brief = self.answer_brief or AnswerBrief(
-            standalone_question=input.question
-        )
-        self.answer_brief = answer_brief
         assert self.execution is not None
         final_output = await cast(Any, self.execution).answer()
         return RunResult(
             final_output=final_output,
-            answer_brief=answer_brief,
             research_checkpoint=self.research_checkpoint,
         )
 
@@ -1118,14 +1108,7 @@ async def test_answering_runner_completes_follow_up_with_saved_history(
     follow_up_run_id = follow_up_run.id
 
     runner_execution = FakeAgent(_direct_result(follow_up_answer))
-    answering_runner = FakeAnsweringRunner(
-        answer_brief=AnswerBrief(
-            standalone_question="量子計算市場の主要企業を比較して",
-            answer_requirements=(saved_gap,),
-            relevant_prior_coverage=first_answer,
-        ),
-        previous_answer=first_answer,
-    )
+    answering_runner = FakeAnsweringRunner()
     _patch_worker_execution(
         monkeypatch,
         lambda **_kwargs: runner_execution,
@@ -1164,15 +1147,7 @@ async def test_answering_runner_completes_follow_up_with_saved_history(
         ),
     )
     assert len(runner_execution.calls) == 1
-    assert (
-        answering_runner.answer_brief is not None,
-        answering_runner.answer_brief.standalone_question,
-        answering_runner.previous_answer,
-    ) == (
-        True,
-        "量子計算市場の主要企業を比較して",
-        first_answer,
-    )
+    assert answering_runner.calls[0].input.question == follow_up_question
 
 
 @pytest.mark.asyncio
@@ -1498,11 +1473,7 @@ async def test_run_agent_answer_passes_answering_runner_identity_and_history(
             attempt_epoch=4,
         )
     runner_execution = FakeAgent(_direct_result())
-    answering_runner = FakeAnsweringRunner(
-        answer_brief=AnswerBrief(
-            standalone_question="NVIDIA の発表が株価へ与える影響は？",
-        )
-    )
+    answering_runner = FakeAnsweringRunner()
     runner_builder_calls: list[dict[str, object]] = []
 
     def build_runner_execution(**kwargs: object) -> FakeAgent:
@@ -2455,58 +2426,6 @@ async def test_terminal_publish_failure_does_not_revert_completed_run(
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize(
-    "answer_brief",
-    [
-        AnswerBrief(standalone_question="それの株価への影響は？"),
-        AnswerBrief(
-            standalone_question="それの株価への影響は？",
-            answer_requirements=("それの株価への影響は？",),
-        ),
-    ],
-    ids=("echo", "requirements-populated"),
-)
-async def test_run_agent_answer_does_not_publish_echo_or_fallback_question_context(
-    answer_brief: AnswerBrief,
-    session_factory: async_sessionmaker[AsyncSession],
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    question = "それの株価への影響は？"
-    async with session_factory() as session:
-        _thread, _message, run = await _create_thread_message_run(
-            session,
-            question=question,
-            history=[("assistant", "前回の回答")],
-        )
-    fake_agent = FakeAgent(_direct_result())
-    answering_runner = FakeAnsweringRunner(answer_brief=answer_brief)
-    FakeLiveEventPublisher.instances = []
-    _patch_worker_execution(
-        monkeypatch,
-        lambda **_kwargs: fake_agent,
-        answering_runner=answering_runner,
-    )
-    monkeypatch.setattr(
-        agent_run_tasks,
-        "AgentRunLiveEventPublisher",
-        FakeLiveEventPublisher,
-    )
-
-    await agent_run_tasks.run_agent_answer(
-        trigger=AgentRunTrigger(run_id=run.id),
-        ctx=_ctx(session_factory),
-    )
-
-    assert len(fake_agent.calls) == 1
-    assert answering_runner.answer_brief is not None
-    assert answering_runner.answer_brief.standalone_question == question
-    assert answering_runner.calls[0].input.history == (
-        ThreadMessageSnapshot(role="assistant", content="前回の回答"),
-    )
-    assert FakeLiveEventPublisher.instances[0].events == []
-
-
-@pytest.mark.asyncio
 async def test_initial_question_does_not_publish_resolved_event(
     session_factory: async_sessionmaker[AsyncSession],
     monkeypatch: pytest.MonkeyPatch,
@@ -2518,9 +2437,7 @@ async def test_initial_question_does_not_publish_resolved_event(
             question=question,
         )
     fake_agent = FakeAgent(_direct_result())
-    answering_runner = FakeAnsweringRunner(
-        answer_brief=AnswerBrief(standalone_question="書き換えた質問")
-    )
+    answering_runner = FakeAnsweringRunner()
     FakeLiveEventPublisher.instances = []
     _patch_worker_execution(
         monkeypatch,

@@ -19,7 +19,6 @@ from app.agent.answering.direct_answer.agent import DIRECT_ANSWER_AGENT
 from app.agent.answering.direct_answer.contract import DirectAnswerInput
 from app.agent.answering.direct_answer.flow import DirectAnswerFlow
 from app.agent.contract import AnswerGenerationContinuation, AnswerGenerationStopped
-from app.agent.question_context.contract import AnswerBrief
 from app.agent.runtime.contract import StreamingAgentRuntime
 from app.agent.runtime.gemini import GeminiAgentRuntime
 from app.logfire.redaction import install_exception_redaction
@@ -63,9 +62,7 @@ class _SdkStream:
 
 def _request() -> AnsweringRequest:
     return AnsweringRequest(
-        answer_brief=AnswerBrief(
-            standalone_question="MODEL_QUESTION_SENTINEL",
-        ),
+        question="MODEL_QUESTION_SENTINEL",
         as_of=datetime(2026, 7, 19, tzinfo=UTC),
     )
 

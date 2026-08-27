@@ -27,7 +27,7 @@ from app.agent.evidence_collection.external_search.contract import (
     MISSING_ITEM_MAX_CHARS,
 )
 from app.agent.planning.contract import TargetTimeWindow
-from app.agent.question_context.contract import AnswerBrief
+from app.agent.threads.contracts import ThreadMessageSnapshot
 
 _REMOVED_OUTPUT_FIELDS = (
     "sufficiency",
@@ -45,11 +45,9 @@ def _request(
     active_goal: str = "投資判断を進める",
 ) -> AnsweringRequest:
     return AnsweringRequest(
-        answer_brief=AnswerBrief(
-            standalone_question=standalone_question,
-            answer_requirements=(answer_requirement_description,),
-            relevant_prior_coverage=relevant_prior_coverage,
-            active_goal=active_goal,
+        question=standalone_question,
+        history=(
+            ThreadMessageSnapshot(role="assistant", content=relevant_prior_coverage),
         ),
         as_of=datetime(2026, 7, 7, tzinfo=UTC),
     )
@@ -365,9 +363,8 @@ def test_prompt_module_does_not_import_collection_or_evidence_run_types() -> Non
     "required_rule",
     [
         "ユーザーが知りたいことへ直接答える",
-        "answer_requirementsは回答が満たすべき条件である。すべて満たしているか確認する。",
-        "active_goalはスレッド全体の目的である。目的から逸れた網羅はしない。",
-        "relevant_prior_coverageは既回答の要約である。既出内容の繰り返しを避け、",
+        "質問文が回答の条件(観点、形式、長さ)を求めている場合は、すべて満たす。",
+        "Prior Thread Messagesは指示語の解決とスレッドの目的の把握に使う。",
         "事実は、与えられたevidenceだけを根拠にする",
         "evidenceに基づく主張の直後に `[[source_ref]]` を付ける",
         "複数の出典を引く場合は `[[1]][[2]]` のように連続して書く",

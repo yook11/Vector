@@ -38,7 +38,6 @@ from app.agent.planning.contract import (
     SearchPlan,
     TargetTimeWindow,
 )
-from app.agent.question_context import AnswerBrief
 from app.agent.running import AnsweringPhases, AnsweringRunner, RunInput
 from app.agent.runtime.contract import AgentResponseDefect, AgentResponseInvalidError
 from tests.agent.running._harness import fixed_scope, run_identity
@@ -78,11 +77,6 @@ def _review_draft(
     return EvidenceReviewerDraft.model_validate(
         {"selections": selections, "missing": missing or []}
     )
-
-
-class _Preparer:
-    async def prepare(self, **_kwargs: object) -> AnswerBrief:
-        return AnswerBrief(standalone_question="質問")
 
 
 class _Planner:
@@ -199,7 +193,6 @@ def _search_runner(
         evidence_answerer=_EvidenceAnswerer(),
     )
     return AnsweringRunner(
-        context_preparer=_Preparer(),
         phases_factory=lambda: phases,
     )
 
@@ -268,7 +261,6 @@ async def test_direct_answer_plan_leaves_checkpoint_none() -> None:
         evidence_answerer=_UnreachableEvidenceAnswerer(),
     )
     runner = AnsweringRunner(
-        context_preparer=_Preparer(),
         phases_factory=lambda: phases,
     )
 

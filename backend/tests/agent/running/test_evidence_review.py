@@ -63,9 +63,6 @@ from tests.agent.running._harness import (
     Planner as _Planner,
 )
 from tests.agent.running._harness import (
-    Preparer as _Preparer,
-)
-from tests.agent.running._harness import (
     UnreachableDirectAnswerer as _UnreachableDirectAnswerer,
 )
 from tests.agent.running._harness import (
@@ -194,7 +191,6 @@ def _runner(
         evidence_answerer=answerer,
     )
     runner = AnsweringRunner(
-        context_preparer=_Preparer(answer_requirements=answer_requirements),
         phases_factory=lambda: phases,
         events=events,  # type: ignore[arg-type]
     )
@@ -532,8 +528,8 @@ async def test_single_review_call_input_includes_every_tasks_research_goal() -> 
 async def test_review_input_never_carries_answer_requirements() -> None:
     """v3(Evidence Review「Evidence Review(v2 -> v3)」)。
 
-    question_contextのanswer_requirementsはevidence_reviewへの配線が撤去され、
-    reviewerはresearch_goalだけで判定する。AnswerBrief側に要件があっても
+    回答が満たすべき条件はevidence_reviewへ配線されず、reviewerは
+    research_goalだけで判定する。要件めいた文字列は
     reviewer入力・render結果には一切現れない。
     """
     marker = "UNIQUE_REQUIREMENT_MARKER_7f2a"

@@ -6,9 +6,10 @@ from typing import Final
 
 from app.agent.contract import ResearchCheckpoint
 from app.agent.planning.contract import PlanningAttemptInput
+from app.agent.threads.contracts import ThreadMessageSnapshot
 from app.analysis.prompt_safety import sanitize_for_untrusted_block
 
-PLANNER_PROMPT_VERSION: Final[str] = "v7"
+PLANNER_PROMPT_VERSION: Final[str] = "v8"
 
 PLANNER_INSTRUCTIONS: Final[str] = """\
 ユーザーの質問に答えるために必要な情報取得計画を作成してください。
@@ -27,8 +28,8 @@ PLANNER_INSTRUCTIONS: Final[str] = """\
 direct_answerの場合、research_tasksは空、target_time_windowはnullにして終了する。
 
 # searchの計画 (research_tasks)
-answer_requirementsは回答が満たすべき条件である。これを満たすための調査をtaskに分解する。
-active_goalはスレッド全体の目的であり、調査の向きを決める参考にする。事実根拠ではない。
+質問が答えとして求めている条件を読み取り、それを満たすための調査をtaskに分解する。
+Prior Thread Messagesは指示語の解決とスレッドの目的の把握に使う。事実根拠ではない。
 
 - 1 taskは1つの調査目的。research_goalとarticle_search_queriesの書き方は
   response schemaのdescriptionに従う。
@@ -68,13 +69,8 @@ as_of: {as_of}
 question: {question}
 </untrusted_input>
 
-# Conversation Context
-answer_requirements:
-{answer_requirements}
-
-<untrusted_input>
-active_goal: {active_goal}
-</untrusted_input>
+# Prior Thread Messages
+{history}
 """
 
 _PRIOR_RESEARCH_INPUT_TEMPLATE: Final[str] = """
@@ -105,12 +101,9 @@ def render_planning_input(input: PlanningAttemptInput) -> str:
     # HTMLではないLLM promptであり、外部入力は境界用sanitizerを通す。
     # nosemgrep: python.django.security.injection.raw-html-format.raw-html-format  # noqa: E501
     task_input = _PLANNER_INPUT_TEMPLATE.format(
-        question=sanitize_for_untrusted_block(request.answer_brief.standalone_question),
+        question=sanitize_for_untrusted_block(request.question),
         as_of=request.as_of.isoformat(),
-        answer_requirements=_render_requirements(
-            request.answer_brief.answer_requirements
-        ),
-        active_goal=sanitize_for_untrusted_block(request.answer_brief.active_goal),
+        history=_render_history(request.history),
     )
     if request.prior_research:
         # HTMLではないLLM promptであり、外部入力は境界用sanitizerを通す。
@@ -162,14 +155,22 @@ def _render_prior_research_record(record: ResearchCheckpoint) -> str:
     return "\n".join(lines)
 
 
-def _render_requirements(requirements: tuple[str, ...]) -> str:
-    return "\n".join(
-        "\n".join(
-            [
-                "<untrusted_input>",
-                sanitize_for_untrusted_block(requirement),
-                "</untrusted_input>",
-            ]
+def _render_history(history: tuple[ThreadMessageSnapshot, ...]) -> str:
+    return "\n\n".join(_render_message(message) for message in history)
+
+
+def _render_message(message: ThreadMessageSnapshot) -> str:
+    lines = [
+        f"role: {message.role}",
+        "<untrusted_input>",
+        "content:",
+        sanitize_for_untrusted_block(message.content),
+    ]
+    if message.role == "assistant":
+        lines.append("missing_aspects:")
+        lines.extend(
+            f"- {sanitize_for_untrusted_block(missing_aspect)}"
+            for missing_aspect in message.missing_aspects
         )
-        for requirement in requirements
-    )
+    lines.append("</untrusted_input>")
+    return "\n".join(lines)

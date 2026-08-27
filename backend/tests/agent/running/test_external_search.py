@@ -57,9 +57,6 @@ from tests.agent.running._harness import (
     EvidenceAnswerer as _EvidenceAnswerer,
 )
 from tests.agent.running._harness import (
-    Preparer as _Preparer,
-)
-from tests.agent.running._harness import (
     UnreachableDirectAnswerer as _UnreachableDirectAnswerer,
 )
 from tests.agent.running._harness import (
@@ -374,7 +371,6 @@ def _runner(
     )
     return (
         AnsweringRunner(
-            context_preparer=_Preparer(),
             phases_factory=lambda: phases,
             events=events,
         ),
@@ -1323,7 +1319,6 @@ async def test_external_scope_is_activated_fresh_per_run() -> None:
         reviewer=EvidenceReviewer(runtime_scope_factory=_reviewer_scope),
     )
     runner = AnsweringRunner(
-        context_preparer=_Preparer(),
         phases_factory=lambda: phases,
     )
 

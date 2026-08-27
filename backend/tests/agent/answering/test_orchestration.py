@@ -44,7 +44,6 @@ from app.agent.planning.contract import (
     SearchPlan,
     TargetTimeWindow,
 )
-from app.agent.question_context.contract import AnswerBrief
 from app.agent.running import AnsweringPhases, AnsweringRunner, RunInput
 from app.agent.runtime.contract import AgentResponseDefect, AgentResponseInvalidError
 from app.agent.threads.contracts import ThreadMessageSnapshot
@@ -67,7 +66,7 @@ def _draft(*, answer: str, cited_refs: list[str] | None = None) -> EvidenceAnswe
 
 @dataclass(frozen=True, slots=True)
 class _WorkflowInput:
-    answer_brief: AnswerBrief
+    question: str
     as_of: datetime
     previous_answer: str = ""
 
@@ -75,18 +74,10 @@ class _WorkflowInput:
 def _input(
     question: str = "NVIDIA の直近発表は投資判断に重要？",
     *,
-    answer_requirements: list[str] | None = None,
-    relevant_prior_coverage: str = "",
-    active_goal: str = "",
     previous_answer: str = "",
 ) -> _WorkflowInput:
     return _WorkflowInput(
-        answer_brief=AnswerBrief(
-            standalone_question=question,
-            answer_requirements=tuple(answer_requirements or ()),
-            relevant_prior_coverage=relevant_prior_coverage,
-            active_goal=active_goal,
-        ),
+        question=question,
         as_of=_as_of(),
         previous_answer=previous_answer,
     )
@@ -577,19 +568,6 @@ class FakeProgressReporter:
         self.stages.append(stage)
 
 
-class _FixedContextPreparer:
-    def __init__(
-        self, context: AnswerBrief, *, timeline: CallTimeline | None = None
-    ) -> None:
-        self._context = context
-        self._timeline = timeline
-
-    async def prepare(self, **_kwargs: object) -> AnswerBrief:
-        if self._timeline is not None:
-            self._timeline.record("context_preparer.prepare")
-        return self._context
-
-
 class _WorkflowHarness:
     def __init__(
         self,
@@ -614,15 +592,12 @@ class _WorkflowHarness:
             else ()
         )
         runner = AnsweringRunner(
-            context_preparer=_FixedContextPreparer(
-                input.answer_brief, timeline=self._timeline
-            ),
             phases_factory=lambda: self._phases,
             progress=self._progress,
         )
         result = await runner.run(
             RunInput(
-                question=input.answer_brief.standalone_question,
+                question=input.question,
                 history=history,
             ),
             identity=run_identity(
@@ -703,9 +678,6 @@ def _orchestrator(
 async def test_answer_direct_plan_calls_direct_answerer_only() -> None:
     input_ = _input(
         "前回の結論だけ",
-        answer_requirements=["結論を説明する", "結論だけを短く"],
-        relevant_prior_coverage="前回は根拠を説明済み",
-        active_goal="投資判断を調査中",
         previous_answer="根拠付き前回答 [[1]]",
     )
     direct_draft = DirectAnswerDraft(answer="こんにちは。何を確認しますか？")
@@ -726,19 +698,25 @@ async def test_answer_direct_plan_calls_direct_answerer_only() -> None:
     assert direct_answerer.calls == [
         {
             "request": AnsweringRequest(
-                answer_brief=input_.answer_brief, as_of=input_.as_of
+                question=input_.question,
+                history=(
+                    ThreadMessageSnapshot(
+                        role="assistant",
+                        content=input_.previous_answer,
+                    ),
+                ),
+                as_of=input_.as_of,
             ),
             "previous_answer": input_.previous_answer,
         }
     ]
-    assert direct_answerer.calls[0]["request"].answer_brief is input_.answer_brief
     assert internal_search.calls == []
     assert evidence_answerer.calls == []
 
 
 @pytest.mark.asyncio
 async def test_answer_direct_plan_orders_progress_and_port_calls() -> None:
-    """direct answer経路はcontext_resolution→planning→
+    """direct answer経路はplanning→
 
     answeringの順に報告され、evidence_collectionとevidence_reviewは報告されない。
     """
@@ -754,8 +732,6 @@ async def test_answer_direct_plan_orders_progress_and_port_calls() -> None:
     await orchestrator.answer(_input("こんにちは"))
 
     assert timeline.events == [
-        "progress:context_resolution",
-        "context_preparer.prepare",
         "progress:planning",
         "planner.plan",
         "progress:answering",
@@ -765,7 +741,7 @@ async def test_answer_direct_plan_orders_progress_and_port_calls() -> None:
 
 @pytest.mark.asyncio
 async def test_answer_evidence_plan_orders_progress_and_port_calls() -> None:
-    """evidence経路はcontext_resolution→planning→
+    """evidence経路はplanning→
 
     evidence_collection→evidence_review→answeringの順に報告され、各報告は
     対応するport呼び出し(prepare/plan/collect/review/answer)の直前になる。
@@ -785,18 +761,16 @@ async def test_answer_evidence_plan_orders_progress_and_port_calls() -> None:
 
     await orchestrator.answer(_input())
 
-    assert timeline.events[:4] == [
-        "progress:context_resolution",
-        "context_preparer.prepare",
+    assert timeline.events[:2] == [
         "progress:planning",
         "planner.plan",
     ]
-    assert timeline.events[4] == "progress:evidence_collection"
-    assert set(timeline.events[5:7]) == {
+    assert timeline.events[2] == "progress:evidence_collection"
+    assert set(timeline.events[3:5]) == {
         "internal_search.search_articles",
         "external_search.activate",
     }
-    assert timeline.events[7:] == [
+    assert timeline.events[5:] == [
         "progress:evidence_review",
         "reviewer.review",
         "progress:answering",
@@ -842,18 +816,16 @@ async def test_answer_evidence_plan_skips_evidence_review_for_zero_hits() -> Non
 
     assert result.status == "insufficient"
     assert "progress:evidence_review" not in timeline.events
-    assert timeline.events[:4] == [
-        "progress:context_resolution",
-        "context_preparer.prepare",
+    assert timeline.events[:2] == [
         "progress:planning",
         "planner.plan",
     ]
-    assert timeline.events[4] == "progress:evidence_collection"
-    assert set(timeline.events[5:7]) == {
+    assert timeline.events[2] == "progress:evidence_collection"
+    assert set(timeline.events[3:5]) == {
         "internal_search.search_articles",
         "external_search.activate",
     }
-    assert timeline.events[7:] == [
+    assert timeline.events[5:] == [
         "progress:answering",
         "evidence_answerer.answer",
     ]
@@ -890,18 +862,16 @@ async def test_answer_evidence_plan_reports_evidence_review_when_review_fails() 
     result = await orchestrator.answer(_input())
 
     assert result.status == "insufficient"
-    assert timeline.events[:4] == [
-        "progress:context_resolution",
-        "context_preparer.prepare",
+    assert timeline.events[:2] == [
         "progress:planning",
         "planner.plan",
     ]
-    assert timeline.events[4] == "progress:evidence_collection"
-    assert set(timeline.events[5:7]) == {
+    assert timeline.events[2] == "progress:evidence_collection"
+    assert set(timeline.events[3:5]) == {
         "internal_search.search_articles",
         "external_search.activate",
     }
-    assert timeline.events[7:] == [
+    assert timeline.events[5:] == [
         "progress:evidence_review",
         "reviewer.review",
         "reviewer.review",
@@ -928,38 +898,6 @@ async def test_answer_internal_sources_and_status_from_citations() -> None:
     assert [source.source_ref for source in result.sources] == ["1", "2"]
     assert [source.title for source in result.sources] == ["internal 1", "internal 2"]
     assert result.missing_aspects == []
-
-
-@pytest.mark.asyncio
-async def test_unfulfilled_requirement_wording_no_longer_appears() -> None:
-    """条件15: 要望由来の文言(回答要望を満たせませんでした: ...)が現れない。
-
-    unfulfilled_requirement_ids自体が撤去されたため、request contextに
-    answer_requirementsがあってもmissing_aspectsへ反映されず、
-    statusはcitationの成否だけで決まる(answeredのまま)。
-    """
-    answer = "確認できた範囲を回答します。[[1]]"
-    orchestrator, _, _, _, _ = _orchestrator(
-        plan=_search_plan(),
-        outcome=_internal_outcome(1),
-        draft=_draft(answer=answer, cited_refs=["1"]),
-    )
-
-    result = await orchestrator.answer(
-        _input(
-            answer_requirements=["投資判断への影響を説明する", "初心者向けに説明する"],
-        )
-    )
-
-    assert (
-        result.status,
-        result.answer,
-        [source.source_ref for source in result.sources],
-        result.missing_aspects,
-    ) == ("answered", answer, ["1"], [])
-    assert not any(
-        "回答要望を満たせませんでした" in item for item in result.missing_aspects
-    )
 
 
 @pytest.mark.asyncio
@@ -1119,11 +1057,7 @@ async def test_answer_deduplicates_repeated_citation_refs_in_source_order() -> N
 
 @pytest.mark.asyncio
 async def test_answer_passes_pipeline_inputs_and_variant_time_window() -> None:
-    input_ = _input(
-        answer_requirements=["発表後の差分を説明する", "詳しく説明する"],
-        relevant_prior_coverage="発表内容は既出",
-        active_goal="投資判断を調査中",
-    )
+    input_ = _input()
     orchestrator, planner, internal_search, evidence_answerer, _ = _orchestrator(
         plan=_search_plan(
             # _both_evidence_outcome()はtask_index=0のみを表現するため1 taskに揃える。
@@ -1140,15 +1074,13 @@ async def test_answer_passes_pipeline_inputs_and_variant_time_window() -> None:
     await orchestrator.answer(input_)
 
     assert planner.calls == [
-        PlanningRequest(answer_brief=input_.answer_brief, as_of=input_.as_of)
+        PlanningRequest(question=input_.question, as_of=input_.as_of)
     ]
-    assert planner.calls[0].answer_brief is input_.answer_brief
     assert internal_search.calls == [InternalSearchQueries(queries=("NVIDIA AI GPU",))]
     assert evidence_answerer.calls[0]["request"] == AnsweringRequest(
-        answer_brief=input_.answer_brief,
+        question=input_.question,
         as_of=input_.as_of,
     )
-    assert evidence_answerer.calls[0]["request"].answer_brief is input_.answer_brief
     assert evidence_answerer.calls[0]["target_time_window"] == TargetTimeWindow(
         kind="last_n_days", days=1
     )
@@ -1193,8 +1125,6 @@ async def test_answer_passes_none_time_window_for_search_plan() -> None:
             AssertionError("evidence_answerer must not be called"),
             "planner failed",
             [
-                "progress:context_resolution",
-                "context_preparer.prepare",
                 "progress:planning",
                 "planner.plan",
             ],
@@ -1279,8 +1209,6 @@ async def test_answer_direct_failure_stops_before_later_progress_or_ports() -> N
         await orchestrator.answer(_input("こんにちは"))
 
     assert timeline.events == [
-        "progress:context_resolution",
-        "context_preparer.prepare",
         "progress:planning",
         "planner.plan",
         "progress:answering",

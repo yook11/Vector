@@ -20,7 +20,6 @@ from opentelemetry.trace import StatusCode
 from app.agent.planning.agent import QUESTION_PLANNER_AGENT
 from app.agent.planning.contract import PlanningRequest
 from app.agent.planning.service import QuestionPlanningService
-from app.agent.question_context.contract import AnswerBrief
 from app.agent.runtime.contract import AgentRuntime
 from app.agent.runtime.gemini import GeminiAgentRuntime
 from app.logfire.redaction import install_exception_redaction
@@ -38,7 +37,7 @@ _PROVIDER_SPAN_NAME = "agent_provider_call"
 
 def _input(question: str = "今日のNVIDIAの発表は？") -> PlanningRequest:
     return PlanningRequest(
-        answer_brief=AnswerBrief(standalone_question=question),
+        question=question,
         as_of=datetime(2026, 6, 29, tzinfo=UTC),
     )
 

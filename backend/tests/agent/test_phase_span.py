@@ -35,8 +35,7 @@ def _one_raw_phase_span(capfire: CaptureLogfire) -> ReadableSpan:
     """OTel生spanから``agent_phase``のpending span重複を除いた1件を返す。
 
     ``exported_spans_as_dict()``はstatusを保持しないため、status検証だけは
-    生spanを使う (``test_planner_tracing.py`` / ``question_context/test_tracing.py``
-    と同じ手法)。
+    生spanを使う (``test_planner_tracing.py`` と同じ手法)。
     """
     raw_spans = [
         span

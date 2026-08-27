@@ -25,7 +25,6 @@ from app.agent.live_updates.stream import (
     AgentRunLiveStreamPublisher,
     AgentRunLiveStreamTerminalEvent,
 )
-from app.agent.question_context.service import HISTORY_MESSAGE_LIMIT
 from app.agent.research_checkpoint import (
     ResearchCheckpoint,
     recall_research_checkpoints,
@@ -47,6 +46,7 @@ from app.agent.runs.repository import AgentRunRepository
 from app.agent.runs.types import AgentRunErrorCode
 from app.agent.runtime.contract import AgentResponseInvalidError
 from app.agent.threads.contracts import ThreadMessageSnapshot
+from app.agent.threads.history import HISTORY_MESSAGE_LIMIT, normalize_run_history
 from app.agent.threads.repository import AgentThreadRepository
 from app.analysis.ai_provider_errors import (
     AIProviderConfigurationError,
@@ -487,11 +487,12 @@ async def _read_history(
     before_seq: int,
 ) -> list[ThreadMessageSnapshot]:
     async with session_factory() as session:
-        return await AgentThreadRepository(session).read_recent_messages_before(
+        history = await AgentThreadRepository(session).read_recent_messages_before(
             thread_id=thread_id,
             before_seq=before_seq,
             limit=HISTORY_MESSAGE_LIMIT,
         )
+    return normalize_run_history(history)
 
 
 async def _read_prior_research(

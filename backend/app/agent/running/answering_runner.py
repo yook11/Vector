@@ -45,7 +45,6 @@ from app.agent.research_checkpoint import (
     build_research_checkpoint_or_none,
 )
 from app.agent.running.contract import (
-    AnswerBriefPreparer,
     AnsweringPhases,
     AnsweringPhasesFactory,
     RunIdentity,
@@ -63,12 +62,10 @@ class AnsweringRunner:
     def __init__(
         self,
         *,
-        context_preparer: AnswerBriefPreparer,
         phases_factory: AnsweringPhasesFactory,
         progress: AnswerProgressReporter | None = None,
         events: AnswerEventReporter | None = None,
     ) -> None:
-        self._context_preparer = context_preparer
         self._phases_factory = phases_factory
         self._progress = progress
         self._events = events
@@ -80,24 +77,19 @@ class AnsweringRunner:
         identity: RunIdentity,
     ) -> RunResult:
         with _answering_run_span(run_id=identity.run_id) as run_span:
-            await self._report_progress("context_resolution")
-            answer_brief = await self._context_preparer.prepare(
-                question=input.question,
-                history=list(input.history),
-                as_of=identity.as_of,
-                run_id=identity.run_id,
-            )
             previous_answer = _latest_assistant_answer(input.history)
             phases = self._phases_factory()
 
             await self._report_progress("planning")
             planning_request = PlanningRequest(
-                answer_brief=answer_brief,
+                question=input.question,
+                history=input.history,
                 as_of=identity.as_of,
                 prior_research=input.prior_research,
             )
             answering_request = AnsweringRequest(
-                answer_brief=answer_brief,
+                question=input.question,
+                history=input.history,
                 as_of=identity.as_of,
             )
             plan = await phases.planner.plan(planning_request)
@@ -144,7 +136,6 @@ class AnsweringRunner:
                     assert_never(unreachable)
             return RunResult(
                 final_output=answer,
-                answer_brief=answer_brief,
                 research_checkpoint=research_checkpoint,
             )
 

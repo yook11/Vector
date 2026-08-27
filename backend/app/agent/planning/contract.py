@@ -20,11 +20,12 @@ from app.agent.contract import (
     PRIOR_RESEARCH_CHECKPOINT_LIMIT,
     RESEARCH_GOAL_MAX_CHARS,
     RESEARCH_TASK_LIMIT,
+    NonBlankText,
     PlanType,
     ResearchCheckpoint,
 )
-from app.agent.question_context.contract import AnswerBrief
 from app.agent.runtime.contract import AgentResponseDefect, AgentResponseInvalidError
+from app.agent.threads.contracts import ThreadMessageSnapshot
 
 __all__ = [
     "ExternalResearchTask",
@@ -161,11 +162,13 @@ def render_target_time_window(target_time_window: TargetTimeWindow) -> str:
 
 
 class PlanningRequest(BaseModel):
-    """Plannerへ渡す AnswerBrief と実行時点。"""
+    """Plannerへ渡す質問と会話履歴、実行時点。"""
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
-    answer_brief: AnswerBrief
+    question: NonBlankText
+    # 現在の質問より前のthreadメッセージ(古い順)。
+    history: tuple[ThreadMessageSnapshot, ...] = ()
     as_of: datetime
     # 同threadの直近checkpoint(新しい順)。読出し・検証失敗時は空。
     prior_research: tuple[ResearchCheckpoint, ...] = Field(

@@ -54,8 +54,6 @@ from app.agent.planning.contract import (
     SearchPlan,
     TargetTimeWindow,
 )
-from app.agent.question_context.agent import QUESTION_CONTEXT_AGENT
-from app.agent.question_context.service import QuestionContextService
 from app.agent.running import AnsweringPhases, AnsweringRunner, RunIdentity, RunInput
 from app.config import settings
 from app.db import engine
@@ -103,8 +101,7 @@ class _UnreachableDirectAnswerer:
         previous_answer: str = "",  # noqa: ARG002
     ) -> DirectAnswerDraft:
         raise AssertionError(
-            "direct answerer must not be called: "
-            f"{request.answer_brief.standalone_question!r}"
+            f"direct answerer must not be called: {request.question!r}"
         )
 
 
@@ -127,8 +124,7 @@ class _UnreachableEvidenceAnswerer:
         target_time_window: TargetTimeWindow | None,  # noqa: ARG002
     ) -> EvidenceAnswerDraft:
         raise AssertionError(
-            "evidence answerer must not be called: "
-            f"{request.answer_brief.standalone_question!r}, {evidence!r}"
+            f"evidence answerer must not be called: {request.question!r}, {evidence!r}"
         )
 
 
@@ -214,10 +210,6 @@ async def _probe_search(
         article_search_repository=PgVectorArticleSearchRepository(session_factory),
     )
     runner = AnsweringRunner(
-        context_preparer=QuestionContextService(
-            agent=QUESTION_CONTEXT_AGENT,
-            runtime_scope_factory=None,
-        ),
         phases_factory=lambda: AnsweringPhases(
             planner=_FixedSearchPlanner(plan),
             collector=EvidenceCollectionService(
@@ -258,10 +250,6 @@ async def _probe_direct(*, question: str) -> None:
 
     as_of = datetime.now(UTC)
     runner = AnsweringRunner(
-        context_preparer=QuestionContextService(
-            agent=QUESTION_CONTEXT_AGENT,
-            runtime_scope_factory=None,
-        ),
         phases_factory=lambda: AnsweringPhases(
             planner=_FixedDirectPlanner(DirectAnswerPlan()),
             collector=EvidenceCollectionService(

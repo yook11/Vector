@@ -2,7 +2,6 @@
 
 from app.agent.running.answering_runner import AnsweringRunner
 from app.agent.running.contract import (
-    AnswerBriefPreparer,
     AnsweringPhases,
     AnsweringPhasesFactory,
     RunIdentity,
@@ -14,7 +13,6 @@ __all__ = [
     "AnsweringRunner",
     "AnsweringPhases",
     "AnsweringPhasesFactory",
-    "AnswerBriefPreparer",
     "RunIdentity",
     "RunInput",
     "RunResult",
