@@ -199,7 +199,7 @@ async def test_unclassified_stream_error_is_redacted_in_phase_and_attempt(
         assert "MODEL_QUESTION_SENTINEL" not in observed
 
 
-async def test_retry_provider_request_adds_only_rendered_repair_context() -> None:
+async def test_retry_provider_request_does_not_add_repair_context() -> None:
     first_stream = _SdkStream(" \n")
     second_stream = _SdkStream("再試行後の回答")
     client = FakeGeminiClient([], streams=[first_stream, second_stream])
@@ -219,9 +219,8 @@ async def test_retry_provider_request_adds_only_rendered_repair_context() -> Non
 
     assert draft.answer == "再試行後の回答"
     assert len(requests) == 2
-    assert "# Repair Context" not in first_contents
-    assert "# Repair Context" in retry_contents
-    assert "direct_answer_blank_response" in retry_contents
+    assert first_contents == retry_contents
+    assert "# Repair Context" not in retry_contents
     assert all(
         request.kwargs["config"].system_instruction
         == DIRECT_ANSWER_AGENT.prompt.instructions

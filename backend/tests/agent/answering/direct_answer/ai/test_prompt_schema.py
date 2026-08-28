@@ -33,13 +33,11 @@ def _render(
     *,
     request: AnsweringRequest,
     previous_answer: str = "",
-    repair_context: str | None = None,
 ) -> str:
     return render_direct_answer_input(
         DirectAnswerInput(
             request=request,
             previous_answer=previous_answer,
-            repair_context=repair_context,
         )
     )
 
@@ -53,15 +51,10 @@ def _untrusted_spans(rendered: str) -> list[tuple[int, int]]:
     ]
 
 
-def _render_with_truncation_state(
-    *,
-    repair_context: str | None,
-    previous_output_truncated: bool,
-) -> str:
+def _render_with_truncation_state(*, previous_output_truncated: bool) -> str:
     input = DirectAnswerInput(
         request=_request(),
         previous_answer="",
-        repair_context=repair_context,
         previous_output_truncated=previous_output_truncated,
     )
     return render_direct_answer_input(input)
@@ -100,40 +93,13 @@ def test_prompt_does_not_include_evidence_or_citation_contract() -> None:
     assert "引用できる根拠" not in prompt
 
 
-def test_prompt_includes_repair_context_when_repair_context_exists() -> None:
-    """条件7: 空回答が原因のretryでは、現行どおり空回答用の文言が現れ、
-
-    打ち切り用の文言が現れない。
-    """
+def test_truncated_retry_shows_truncation_wording() -> None:
+    """打ち切りが原因のretryでは、打ち切り用の文言が現れる。"""
     truncation_block = _TRUNCATION_REPAIR_BLOCK
 
-    prompt = _render(
-        request=_request(),
-        previous_answer="",
-        repair_context="direct_answer_blank_response",
-    )
-
-    assert "前回の direct 回答は空でした" in prompt
-    assert "direct_answer_blank_response" in prompt
-    assert truncation_block not in prompt
-
-
-def test_truncated_retry_shows_truncation_wording_not_blank_response_wording() -> None:
-    """条件6: 打ち切りが原因のretryでは、打ち切り用の文言が現れ、空回答用の
-
-    文言が現れない。repair_contextが同時に立っていても(実際のflowは常に
-    repair_context=str(exc)を持つ)、previous_output_truncated=Trueが
-    空回答用の文言を抑止することを確認する。
-    """
-    truncation_block = _TRUNCATION_REPAIR_BLOCK
-
-    prompt = _render_with_truncation_state(
-        repair_context="ai_error_output_truncated",
-        previous_output_truncated=True,
-    )
+    prompt = _render_with_truncation_state(previous_output_truncated=True)
 
     assert truncation_block in prompt
-    assert "前回の direct 回答は空でした" not in prompt
 
 
 def test_truncation_notice_is_trusted_and_outside_untrusted_blocks() -> None:
@@ -143,10 +109,7 @@ def test_truncation_notice_is_trusted_and_outside_untrusted_blocks() -> None:
     """
     truncation_block = _TRUNCATION_REPAIR_BLOCK
 
-    prompt = _render_with_truncation_state(
-        repair_context="ai_error_output_truncated",
-        previous_output_truncated=True,
-    )
+    prompt = _render_with_truncation_state(previous_output_truncated=True)
 
     block_start = prompt.index(truncation_block)
     block_end = block_start + len(truncation_block)
@@ -156,17 +119,11 @@ def test_truncation_notice_is_trusted_and_outside_untrusted_blocks() -> None:
     )
 
 
-def test_first_attempt_shows_neither_repair_wording() -> None:
-    """条件9: 初回attemptではどちらのrepair文言も現れない。"""
-    truncation_block = _TRUNCATION_REPAIR_BLOCK
+def test_first_attempt_does_not_show_truncation_wording() -> None:
+    """初回attemptでは打ち切り用の文言が現れない。"""
+    prompt = _render_with_truncation_state(previous_output_truncated=False)
 
-    prompt = _render_with_truncation_state(
-        repair_context=None,
-        previous_output_truncated=False,
-    )
-
-    assert "前回の direct 回答は空でした" not in prompt
-    assert truncation_block not in prompt
+    assert _TRUNCATION_REPAIR_BLOCK not in prompt
 
 
 def test_prompt_uses_all_context_fields_without_treating_them_as_facts() -> None:

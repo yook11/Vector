@@ -83,11 +83,9 @@ class EvidenceAnswerService:
     async def answer(self, input: EvidenceAnswerInput) -> EvidenceAnswerOutcome:
         """接地したdraftを返す。試行を使い切った場合は生成不能を返す。
 
-        再試行可能な失敗は、直前の失敗内容を修復コンテキストに添えてagentを再実行する。
+        再試行可能な失敗は同じ入力でもう一度生成する。打ち切りだけは短く書く指示を足す。
         分類対象外の失敗は呼び出し元へ伝播する。
         """
-
-        attempt_input = input
 
         async with self._recorder.record(agent_name=self._agent.name) as recording:
             async with self._runtime_scope_factory() as runtime:
@@ -95,7 +93,7 @@ class EvidenceAnswerService:
                     try:
                         draft = await self._generate_strict_draft(
                             runtime=runtime,
-                            input=attempt_input,
+                            input=input,
                             attempt_number=attempt_number,
                         )
                     except _EVIDENCE_ANSWER_CLASSIFIED_ERRORS as exc:
@@ -118,13 +116,8 @@ class EvidenceAnswerService:
                             )
                             return unavailable
                         await self._start_revision(generation=attempt_number + 1)
-                        attempt_input = replace(
-                            input,
-                            repair_context=str(exc),
-                            previous_output_truncated=isinstance(
-                                exc, AIProviderOutputTruncatedError
-                            ),
-                        )
+                        if isinstance(exc, AIProviderOutputTruncatedError):
+                            input = replace(input, previous_output_truncated=True)
                         continue
                     recording.set_outcome(
                         EvidenceAnswerSucceeded(attempt_count=attempt_number)

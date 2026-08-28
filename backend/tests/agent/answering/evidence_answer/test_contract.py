@@ -50,7 +50,6 @@ def test_evidence_answer_input_is_frozen_and_keeps_attempt_state_together() -> N
         "evidence",
         "target_time_window",
         "review_missing",
-        "repair_context",
         "previous_output_truncated",
     ]
     type_hints = get_type_hints(EvidenceAnswerInput)
@@ -62,7 +61,6 @@ def test_evidence_answer_input_is_frozen_and_keeps_attempt_state_together() -> N
         target_time_window=None,
         review_missing=(),
     )
-    assert input.repair_context is None
     assert input.previous_output_truncated is False
     with pytest.raises(FrozenInstanceError):
         input.target_time_window = TargetTimeWindow(kind="today")  # type: ignore[misc]

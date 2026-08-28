@@ -95,7 +95,7 @@ def test_agent_declares_plain_text_role_with_wider_output_budget() -> None:
         "gemini-3.1-flash-lite",
         0.2,
         8192,
-        "v9",
+        "v10",
         EvidenceAnswerDraft,
         None,
     )
@@ -109,7 +109,6 @@ def test_fixed_instructions_and_rendered_input_are_separated() -> None:
         evidence=(_evidence(),),
         target_time_window=TargetTimeWindow(kind="last_n_days", days=7),
         review_missing=(),
-        repair_context="PREVIOUS_ERROR_SENTINEL",
     )
 
     rendered = agent.prompt.input_renderer(input)
@@ -122,7 +121,6 @@ def test_fixed_instructions_and_rendered_input_are_separated() -> None:
         "EVIDENCE_TITLE_SENTINEL",
         "EVIDENCE_CLAIM_SENTINEL",
         "EVIDENCE_TEXT_SENTINEL",
-        "PREVIOUS_ERROR_SENTINEL",
     ):
         assert sentinel in rendered
         assert sentinel not in agent.prompt.instructions
@@ -140,7 +138,6 @@ async def test_runtime_request_keeps_fixed_and_dynamic_text_separate() -> None:
         evidence=(_evidence(),),
         target_time_window=TargetTimeWindow(kind="last_n_days", days=7),
         review_missing=(),
-        repair_context="PREVIOUS_ERROR_SENTINEL",
     )
     stream = GeminiAgentRuntime(client=cast(AsyncClient, client)).stream_text(
         EVIDENCE_ANSWER_AGENT,

@@ -1070,7 +1070,6 @@ async def test_answer_passes_pipeline_inputs_and_variant_time_window() -> None:
         kind="last_n_days", days=1
     )
     assert evidence_answerer.calls[0].review_missing == ()
-    assert evidence_answerer.calls[0].repair_context is None
 
 
 @pytest.mark.asyncio

@@ -315,7 +315,7 @@ async def test_group_form_marker_only_generation_retries_then_raises_invalid() -
 
 
 @pytest.mark.asyncio
-async def test_blank_then_valid_retries_once_with_repair_context(
+async def test_blank_then_valid_retries_once_with_same_input(
     capfire: CaptureLogfire,
 ) -> None:
     runtime = ScriptedStreamingRuntime([" \n\t", "再試行後の回答です。"])
@@ -337,11 +337,8 @@ async def test_blank_then_valid_retries_once_with_repair_context(
     ).answer(_input())
 
     assert draft.answer == "再試行後の回答です。"
-    assert [call.input.repair_context for call in runtime.calls] == [
-        None,
-        "direct_answer_blank_response",
-    ]
     assert [call.attempt_number for call in runtime.calls] == [1, 2]
+    assert runtime.calls[0].input is runtime.calls[1].input
     assert all(call.agent is DIRECT_ANSWER_AGENT for call in runtime.calls)
     assert enters == 1
     assert exits == 1
@@ -464,6 +461,7 @@ async def test_blank_retry_does_not_carry_truncation_flag() -> None:
     draft = await _service(runtime).answer(_input())
 
     assert len(runtime.calls) == 2
+    assert runtime.calls[0].input is runtime.calls[1].input
     assert runtime.calls[0].input.previous_output_truncated is False
     assert runtime.calls[1].input.previous_output_truncated is False
     assert draft.answer == "再試行後の回答です。"

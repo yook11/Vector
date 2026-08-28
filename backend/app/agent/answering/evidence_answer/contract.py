@@ -30,8 +30,6 @@ class EvidenceAnswerInput:
     evidence: tuple[AnswerInputEvidence, ...]
     target_time_window: TargetTimeWindow | None
     review_missing: tuple[str, ...]
-    # 前attemptが失敗した場合のみ、どこで何が失敗したかが入る(初回attemptはNone)。
-    repair_context: str | None = None
     previous_output_truncated: bool = False
 
 

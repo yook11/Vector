@@ -170,7 +170,6 @@ class FakeGenerator:
                 "request": input.request,
                 "evidence": input.evidence,
                 "target_time_window": input.target_time_window,
-                "repair_context": input.repair_context,
                 "attempt_number": attempt_number,
             }
         )
@@ -313,7 +312,6 @@ async def test_valid_answer_with_marker_returns_draft_without_retry(
         answer="根拠から確認できます。[[1]]",
         cited_refs=["1"],
     )
-    assert generator.calls[0]["repair_context"] is None
     assert generator.calls[0]["agent"] is EVIDENCE_ANSWER_AGENT
     assert generator.calls[0]["evidence"] == (_evidence(),)
     assert generator.calls[0]["attempt_number"] == 1
@@ -398,7 +396,7 @@ async def test_unknown_citation_ref_retries_then_falls_back_to_unavailable(
     outcome = await _answer(generator)
 
     assert len(generator.calls) == 2
-    assert "[[9]]" in generator.calls[1]["repair_context"]
+    assert generator.inputs[0] is generator.inputs[1]
     assert isinstance(outcome, EvidenceAnswerUnavailable)
     assert outcome.failure_code == "answer_synthesis_draft_invalid"
     metrics = collected_metrics(capfire)
@@ -457,8 +455,8 @@ async def test_empty_evidence_with_marker_falls_back_to_unavailable() -> None:
     outcome = await _answer(generator, evidence=[])
 
     assert len(generator.calls) == 2
+    assert generator.inputs[0] is generator.inputs[1]
     assert isinstance(outcome, EvidenceAnswerUnavailable)
-    assert "[[1]]" in generator.calls[1]["repair_context"]
 
 
 @pytest.mark.asyncio
@@ -522,7 +520,7 @@ async def test_provider_error_falls_back_without_retry(
 
 
 @pytest.mark.asyncio
-async def test_blank_response_retries_once_with_repair_context(
+async def test_blank_response_retries_once_with_same_input(
     capfire: CaptureLogfire,
 ) -> None:
     generator = FakeGenerator([" \n\t", "修正後は根拠を引用しています。[[1]]"])
@@ -533,8 +531,8 @@ async def test_blank_response_retries_once_with_repair_context(
         answer="修正後は根拠を引用しています。[[1]]",
         cited_refs=["1"],
     )
-    assert [call["repair_context"] for call in generator.calls][0] is None
-    assert generator.calls[1]["repair_context"] is not None
+    assert len(generator.calls) == 2
+    assert generator.inputs[0] is generator.inputs[1]
     metrics = collected_metrics(capfire)
     assert _metric_attributes(metrics, _EVIDENCE_ANSWER_OUTCOME_METRIC) == [
         {
@@ -722,7 +720,7 @@ async def test_retry_aborts_then_resets_before_generation_two_delta() -> None:
     assert operations.index(("abort", 1)) < operations.index(("reset", 2))
     first_generation_two_append = operations.index(("append", 2))
     assert operations.index(("reset", 2)) < first_generation_two_append
-    assert generator.calls[1]["repair_context"] is not None
+    assert generator.inputs[0] is generator.inputs[1]
     assert all(stream.closed for stream in generator.streams)
     assert (generator.scope_enters, generator.scope_exits) == (1, 1)
     assert generator.events.index("stream_close:1") < generator.events.index(
@@ -944,6 +942,7 @@ async def test_non_truncation_retry_does_not_carry_truncation_notice() -> None:
     draft = await _answer(generator)
 
     assert len(generator.calls) == 2
+    assert generator.inputs[0] is generator.inputs[1]
     assert generator.inputs[1].previous_output_truncated is False
     assert draft == _expected_draft(
         answer="根拠から確認できます。[[1]]",
