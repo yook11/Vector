@@ -21,8 +21,8 @@ from app.agent.contract import (
     RESEARCH_TASK_LIMIT,
     NonBlankText,
     PlanType,
-    ResearchHandoff,
 )
+from app.agent.research_handoff.handoff import ResearchHandoff
 from app.agent.runtime.contract import AgentResponseDefect, AgentResponseInvalidError
 from app.agent.threads.contracts import ThreadMessageSnapshot
 

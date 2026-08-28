@@ -27,10 +27,8 @@ def _valid_raw(*, research_goal: str) -> dict[str, object]:
                     ResearchTaskRecord(
                         research_goal=research_goal,
                         executed_queries=("q",),
-                        adopted_claims=(),
                     ),
                 ),
-                unresolved_after_search=(),
             ),
         ),
     ).model_dump(mode="json")
@@ -57,3 +55,32 @@ def test_recall_returns_none_without_raising_when_the_stored_handoff_is_invalid(
     invalid_logs = spans_named(capfire, "research_handoff_recall_invalid_skipped")
     assert len(invalid_logs) == 1
     assert invalid_logs[0]["attributes"]["failure_code"] == "invalid_handoff_skipped"
+
+
+def test_recall_discards_a_handoff_written_before_the_organized_fields(
+    capfire: CaptureLogfire,
+) -> None:
+    """旧schemaで書かれたhandoffは無かったものとして扱い、次のsearch Runで建て直す。"""
+    stored_before_migration = {
+        "schema_version": 1,
+        "updated_at": _AS_OF.isoformat(),
+        "standing_inquiry": "",
+        "next_directives": [],
+        "runs": [
+            {
+                "schema_version": 1,
+                "as_of": _AS_OF.isoformat(),
+                "tasks": [
+                    {
+                        "research_goal": "goal",
+                        "executed_queries": ["q"],
+                        "adopted_claims": ["claim"],
+                    }
+                ],
+                "unresolved_after_search": ["missing"],
+            }
+        ],
+    }
+
+    assert recall_research_handoff(stored_before_migration) is None
+    assert len(spans_named(capfire, "research_handoff_recall_invalid_skipped")) == 1

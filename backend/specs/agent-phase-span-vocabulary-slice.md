@@ -105,8 +105,10 @@ span 構成:
 
 #### phaseはそのspanがどの工程に属するかを表す
 
-- 値はstage語彙と同じ6値(`safety_check` / `context_resolution` / `planning` /
-  `evidence_collection` / `evidence_review` / `answering`)とする。
+- 値の集合は進捗stage語彙(`AnswerProgressStage`)を含む。逆は成り立たず、工程として
+  観測はするが進捗としては見せないものを持ってよい(`research_handoff` は回答確定前の
+  後処理であり、回答ストリームの完了後に走るため進捗に出すものがない)。
+- 進捗stage語彙はDBのCHECK制約とAPI schemaへ繋がるため、見せない工程をそちらへ足さない。
 - 工程の区間そのものを表すspanではない。1つの工程から複数のspanが出てよい(taskごと、
   経路ごと)。工程全体を包む親spanは作らない。
 - direct answerとevidence answerは同じ`phase`になる。経路の区別は`agent_name`が担う。

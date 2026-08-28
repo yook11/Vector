@@ -736,7 +736,7 @@ async def test_run_agent_answer_completes_run_and_persists_assistant_message(
 
 
 def _handoff() -> ResearchHandoff:
-    """1 Run分の記録だけを積んだ handoff。判断層はこの工程では常に空。"""
+    """1 Run分の台帳と、整理を書き終えた handoff。"""
     as_of = datetime(2026, 8, 3, 9, 0, tzinfo=UTC)
     return ResearchHandoff(
         updated_at=as_of,
@@ -747,12 +747,13 @@ def _handoff() -> ResearchHandoff:
                     ResearchTaskRecord(
                         research_goal="調査目標",
                         executed_queries=("q-a",),
-                        adopted_claims=("claim-a",),
                     ),
                 ),
-                unresolved_after_search=("missing-a",),
             ),
         ),
+        collected_overview="供給網の記事が集まった",
+        unresolved_points="在庫水準は確認できていない",
+        next_search_guidance="決算資料をあたる",
     )
 
 
@@ -868,22 +869,20 @@ async def test_run_agent_answer_forwards_the_serialized_handoff_to_complete_run(
     expected_handoff_json = {
         "schema_version": 1,
         "updated_at": "2026-08-03T09:00:00Z",
-        "standing_inquiry": "",
         "runs": [
             {
-                "schema_version": 1,
                 "as_of": "2026-08-03T09:00:00Z",
                 "tasks": [
                     {
                         "research_goal": "調査目標",
                         "executed_queries": ["q-a"],
-                        "adopted_claims": ["claim-a"],
                     }
                 ],
-                "unresolved_after_search": ["missing-a"],
             }
         ],
-        "next_directives": [],
+        "collected_overview": "供給網の記事が集まった",
+        "unresolved_points": "在庫水準は確認できていない",
+        "next_search_guidance": "決算資料をあたる",
     }
     answering_runner = _patch_worker_execution(
         monkeypatch,

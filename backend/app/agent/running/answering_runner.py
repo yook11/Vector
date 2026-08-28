@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Iterator
 from contextlib import contextmanager
 from datetime import datetime
@@ -40,11 +41,8 @@ from app.agent.planning.contract import (
     SearchPlan,
     TargetTimeWindow,
 )
-from app.agent.research_handoff import (
-    ResearchHandoff,
-    append_run_record,
-    build_research_run_record_or_none,
-)
+from app.agent.research_handoff.handoff import ResearchHandoff
+from app.agent.research_handoff.handoff_input import ResearchHandoffInput
 from app.agent.running.contract import (
     AnsweringPhases,
     AnsweringPhasesFactory,
@@ -57,6 +55,8 @@ from app.agent.threads.contracts import ThreadMessageSnapshot
 __all__ = ["AnsweringRunner"]
 
 _SPAN_NAME = "agent_answering_run"
+# 回答はストリームし終えているため、整理をこれ以上待たずRunを閉じる。
+HANDOFF_ORGANIZE_TIMEOUT_SECONDS = 20.0
 
 
 class AnsweringRunner:
@@ -119,27 +119,21 @@ class AnsweringRunner:
                         collected_news=collected_news,
                         evidence_run=evidence_run,
                     )
-                    run_record = build_research_run_record_or_none(
-                        plan=plan,
+                    handoff_input = ResearchHandoffInput.from_run(
+                        previous=input.research_handoff,
+                        question=answering_request.question,
                         collected_news=collected_news,
                         evidence_run=evidence_run,
                         as_of=answering_request.as_of,
                     )
-                    research_handoff = (
-                        append_run_record(
-                            previous=input.research_handoff,
-                            record=run_record,
-                        )
-                        if run_record is not None
-                        else None
-                    )
-                    answer = await self._answer_from_evidence(
+                    answer, research_handoff = await self._answer_while_organizing(
                         phases=phases,
                         request=answering_request,
                         plan=plan,
                         collected_news=collected_news,
                         evidence_run=evidence_run,
                         run_span=run_span,
+                        handoff_input=handoff_input,
                     )
                 case _ as unreachable:
                     assert_never(unreachable)
@@ -147,6 +141,60 @@ class AnsweringRunner:
                 final_output=answer,
                 research_handoff=research_handoff,
             )
+
+    async def _answer_while_organizing(
+        self,
+        *,
+        phases: AnsweringPhases,
+        request: AnsweringRequest,
+        plan: SearchPlan,
+        collected_news: CollectedNews,
+        evidence_run: EvidenceRunResult,
+        run_span: LogfireSpan,
+        handoff_input: ResearchHandoffInput | None,
+    ) -> tuple[AnswerQuestionResult, ResearchHandoff | None]:
+        """回答のストリーミングと並行して、次のリサーチで必要な情報を整理する
+
+        整理が間に合わない・失敗した場合は台帳だけを残す。停止と例外では
+        並行taskをcancelして合流してから、元の例外をそのまま送出する。
+        """
+        if handoff_input is None:
+            answer = await self._answer_from_evidence(
+                phases=phases,
+                request=request,
+                plan=plan,
+                collected_news=collected_news,
+                evidence_run=evidence_run,
+                run_span=run_span,
+            )
+            return answer, None
+
+        organizing = asyncio.ensure_future(phases.organizer.organize(handoff_input))
+        try:
+            answer = await self._answer_from_evidence(
+                phases=phases,
+                request=request,
+                plan=plan,
+                collected_news=collected_news,
+                evidence_run=evidence_run,
+                run_span=run_span,
+            )
+        except BaseException:
+            # 停止・cancel・回答失敗。整理を畳んで合流してから元の例外を送出する。
+            await _cancel_and_join(organizing)
+            raise
+
+        try:
+            research_handoff = await asyncio.wait_for(
+                organizing,
+                HANDOFF_ORGANIZE_TIMEOUT_SECONDS,
+            )
+        except Exception:
+            # 回答は確定済み。整理を諦めて台帳だけ残す(CancelledErrorは貫通する)。
+            research_handoff = handoff_input.handoff
+        finally:
+            await _cancel_and_join(organizing)
+        return answer, research_handoff
 
     async def _answer_directly(
         self,
@@ -247,6 +295,14 @@ class AnsweringRunner:
         if self._progress is None:
             return
         await self._progress.stage_changed(stage)
+
+
+async def _cancel_and_join(task: asyncio.Future[ResearchHandoff]) -> None:
+    """未了なら畳み、完了を待ってから戻る。task内の例外はここで捨てる。"""
+    if task.done():
+        return
+    task.cancel()
+    await asyncio.gather(task, return_exceptions=True)
 
 
 def _record_evidence_run_span_attributes(

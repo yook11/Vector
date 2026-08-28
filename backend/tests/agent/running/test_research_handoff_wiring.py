@@ -1,14 +1,14 @@
 """RunResult.research_handoff への runner 配線契約。
--context-slice の「記録フロー」5番)。
 
-build_research_run_record()自体の詰め替え規則はtests/agent/research_handoff/
-test_builder.pyが正本。ここではAnsweringRunner.run()を通した黒箱として、
-SearchPlan成功時にRunResultへ運ばれること、direct_answer/review失敗/
-review skip/builder例外でNoneのまま回答が継続することだけを検証する。
+台帳の詰め替え規則はtests/agent/research_handoff/test_builder.py、整理の
+書き直し規則は同test_service.pyが正本。ここではAnsweringRunner.run()を通した
+黒箱として、台帳と整理がRunResultへ運ばれること、申し送りを触らない経路で
+Noneのまま回答が継続すること、整理が間に合わなくても台帳が残ることを検証する。
 """
 
 from __future__ import annotations
 
+import asyncio
 from datetime import UTC, datetime
 from uuid import UUID
 
@@ -20,6 +20,7 @@ from app.agent.answering.evidence_answer.contract import (
     EvidenceAnswerDraft,
     EvidenceAnswerOutcome,
 )
+from app.agent.contract import AnswerGenerationStopped
 from app.agent.evidence_collection import EvidenceCollectionService
 from app.agent.evidence_collection.external_search import ExternalSearchService
 from app.agent.evidence_collection.external_search.contract import (
@@ -38,9 +39,15 @@ from app.agent.planning.contract import (
     SearchPlan,
     TargetTimeWindow,
 )
+from app.agent.research_handoff import ResearchHandoff, ResearchHandoffInput
 from app.agent.running import AnsweringPhases, AnsweringRunner, RunInput
+from app.agent.running import answering_runner as answering_runner_module
 from app.agent.runtime.contract import AgentResponseDefect, AgentResponseInvalidError
-from tests.agent.running._harness import fixed_scope, run_identity
+from tests.agent.running._harness import (
+    PassThroughOrganizer,
+    fixed_scope,
+    run_identity,
+)
 from tests.agent.runtime._fakes import ScriptedAgentRuntime
 
 RUN_ID = UUID("019bd239-1ed4-7fbb-a336-04fe3c197660")
@@ -176,6 +183,8 @@ def _search_runner(
     query_runtime: ScriptedAgentRuntime,
     reviewer_runtime: ScriptedAgentRuntime,
     gateway: _FakeExternalSearchGateway,
+    organizer: object | None = None,
+    evidence_answerer: object | None = None,
 ) -> AnsweringRunner:
     phases = AnsweringPhases(
         planner=_Planner(plan),
@@ -190,7 +199,8 @@ def _search_runner(
         ),
         reviewer=EvidenceReviewer(runtime_scope_factory=fixed_scope(reviewer_runtime)),
         direct_answerer=_UnreachableDirectAnswerer(),
-        evidence_answerer=_EvidenceAnswerer(),
+        evidence_answerer=evidence_answerer or _EvidenceAnswerer(),  # type: ignore[arg-type]
+        organizer=organizer or PassThroughOrganizer(),  # type: ignore[arg-type]
     )
     return AnsweringRunner(
         phases_factory=lambda: phases,
@@ -204,10 +214,8 @@ async def _run(runner: AnsweringRunner) -> object:
     )
 
 
-async def test_search_plan_success_populates_handoff_from_review_outcome() -> None:
-    """記録フロー2・5: evidence review成功時、planのresearch_goal・provider成功
-    queryだけの実行query・外部採用claim・Reviewer missingがhandoffへ運ばれる。
-    """
+async def test_search_plan_records_goal_and_queries_that_reached_a_provider() -> None:
+    """台帳にはplanのresearch_goalと、provider呼び出しに成功したqueryだけが載る。"""
     goal = "NVIDIA の直近発表を調べる"
     gateway = _FakeExternalSearchGateway(
         results_by_query={"q-ok": [_external_hit("https://example.com/a")]},
@@ -247,8 +255,6 @@ async def test_search_plan_success_populates_handoff_from_review_outcome() -> No
     assert task.research_goal == goal
     # provider失敗したq-failは記録されず、成功したq-okだけが残る。
     assert task.executed_queries == ("q-ok",)
-    assert task.adopted_claims == ("採用された事実",)
-    assert record.unresolved_after_search == ("未確認事項",)
 
 
 async def test_direct_answer_plan_leaves_handoff_none() -> None:
@@ -262,6 +268,7 @@ async def test_direct_answer_plan_leaves_handoff_none() -> None:
         reviewer=EvidenceReviewer(runtime_scope_factory=_UnreachableScope()),
         direct_answerer=_DirectAnswerer(),
         evidence_answerer=_UnreachableEvidenceAnswerer(),
+        organizer=PassThroughOrganizer(),
     )
     runner = AnsweringRunner(
         phases_factory=lambda: phases,
@@ -290,13 +297,10 @@ async def test_evidence_review_failure_leaves_handoff_none() -> None:
     assert result.research_handoff is None  # type: ignore[attr-defined]
 
 
-async def test_skipped_empty_review_records_executed_query_with_no_adopted_claims() -> (
-    None
-):
-    """記録フロー3: 内外のヒットともゼロでreviewerが呼ばれない(skipped_empty)場合も、
+async def test_a_run_that_found_nothing_still_records_the_query_it_executed() -> None:
+    """内外のヒットがゼロでreviewerを呼ばない場合も、叩いたqueryは台帳に残る。
 
-    provider呼び出しに成功したtaskは空adopted_claims・空unresolved_after_searchで
-    記録される(review失敗経路と異なりNoneにはならない)。
+    次のRunが同じqueryを繰り返さないために要る。review失敗経路と違いNoneにならない。
     """
     gateway = _FakeExternalSearchGateway(results_by_query={})
     reviewer_runtime = ScriptedAgentRuntime([])
@@ -316,9 +320,7 @@ async def test_skipped_empty_review_records_executed_query_with_no_adopted_claim
     assert (
         record.tasks[0].research_goal,
         record.tasks[0].executed_queries,
-        record.tasks[0].adopted_claims,
-        record.unresolved_after_search,
-    ) == ("調査目標", ("q",), (), ())
+    ) == ("調査目標", ("q",))
     assert reviewer_runtime.calls == []
 
 
@@ -331,7 +333,7 @@ async def test_builder_exception_yields_none_handoff_and_continues_answering(
         raise RuntimeError("run record build boom")
 
     monkeypatch.setattr(
-        "app.agent.research_handoff.builder.build_research_run_record",
+        "app.agent.research_handoff.handoff_input._build_research_run_record",
         _raise_build_failure,
     )
     gateway = _FakeExternalSearchGateway(
@@ -351,3 +353,132 @@ async def test_builder_exception_yields_none_handoff_and_continues_answering(
 
     assert result.research_handoff is None  # type: ignore[attr-defined]
     assert result.final_output.status == "answered"  # type: ignore[attr-defined]
+
+
+class _StoppingEvidenceAnswerer:
+    """streamingの途中で停止する回答工程。並行taskへ一度制御を渡してから止まる。"""
+
+    async def answer(self, **kwargs: object) -> EvidenceAnswerOutcome:
+        del kwargs
+        await asyncio.sleep(0)
+        raise AnswerGenerationStopped()
+
+
+class _Organizer:
+    """整理3本を書き込む、または指定の例外を送出するorganizer。"""
+
+    def __init__(self, *, outcome: Exception | str = "整理済み") -> None:
+        self._outcome = outcome
+        self.calls: list[ResearchHandoffInput] = []
+
+    async def organize(self, input: ResearchHandoffInput) -> ResearchHandoff:
+        self.calls.append(input)
+        if isinstance(self._outcome, Exception):
+            raise self._outcome
+        return input.handoff.model_copy(update={"collected_overview": self._outcome})
+
+
+class _NeverFinishingOrganizer:
+    """待ち合わせが打ち切られるまで終わらないorganizer。"""
+
+    def __init__(self) -> None:
+        self.cancelled = asyncio.Event()
+
+    async def organize(self, input: ResearchHandoffInput) -> ResearchHandoff:
+        del input
+        try:
+            await asyncio.Event().wait()
+        except asyncio.CancelledError:
+            self.cancelled.set()
+            raise
+        raise AssertionError("unreachable")
+
+
+def _searching_runner(organizer: object) -> AnsweringRunner:
+    return _search_runner(
+        plan=_plan(research_goal="調査目標"),
+        query_runtime=ScriptedAgentRuntime([_query_draft(["q"])]),
+        reviewer_runtime=ScriptedAgentRuntime([_review_draft([])]),
+        gateway=_FakeExternalSearchGateway(
+            results_by_query={"q": [_external_hit("https://example.com/a")]}
+        ),
+        organizer=organizer,
+    )
+
+
+async def test_organized_text_reaches_the_run_result_with_the_ledger() -> None:
+    """整理は台帳と同じhandoffに乗って1トランザクションで確定できる形で返る。"""
+    organizer = _Organizer()
+
+    result = await _run(_searching_runner(organizer))
+
+    handoff = result.research_handoff  # type: ignore[attr-defined]
+    assert handoff is not None
+    assert handoff.collected_overview == "整理済み"
+    assert len(handoff.runs) == 1
+
+
+async def test_organizer_sees_what_was_searched_and_what_was_collected() -> None:
+    """整理の素材には、叩いたqueryと集まった記事の見出しが渡る。"""
+    organizer = _Organizer()
+
+    await _run(_searching_runner(organizer))
+
+    assert len(organizer.calls) == 1
+    organizer_input = organizer.calls[0]
+    assert organizer_input.question == "質問"
+    assert [task.executed_queries for task in organizer_input.tasks] == [("q",)]
+    assert [task.hit_headlines for task in organizer_input.tasks] == [("a",)]
+
+
+async def test_a_failing_organizer_still_lets_the_run_complete_with_the_ledger() -> (
+    None
+):
+    """回答は確定済みなので、整理が壊れてもRunを失敗させず台帳だけ残す。"""
+    result = await _run(_searching_runner(_Organizer(outcome=RuntimeError("boom"))))
+
+    handoff = result.research_handoff  # type: ignore[attr-defined]
+    assert handoff is not None
+    assert handoff.collected_overview == ""
+    assert len(handoff.runs) == 1
+
+
+async def test_an_organizer_that_never_finishes_is_cut_off_and_the_ledger_survives(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """待ち合わせを打ち切っても台帳は残り、並行taskはcancelされて合流する。"""
+    monkeypatch.setattr(
+        answering_runner_module, "HANDOFF_ORGANIZE_TIMEOUT_SECONDS", 0.01
+    )
+    organizer = _NeverFinishingOrganizer()
+
+    result = await _run(_searching_runner(organizer))
+
+    handoff = result.research_handoff  # type: ignore[attr-defined]
+    assert handoff is not None
+    assert handoff.collected_overview == ""
+    assert len(handoff.runs) == 1
+    assert organizer.cancelled.is_set()
+
+
+async def test_stopping_the_answer_cancels_the_organizer_and_writes_nothing() -> None:
+    """停止したRunはRunResultを返さないため、申し送りは書かれない。
+
+    並行taskはRunを抜ける前にcancelして合流し、Runの外へ残さない。
+    """
+    organizer = _NeverFinishingOrganizer()
+    runner = _search_runner(
+        plan=_plan(research_goal="調査目標"),
+        query_runtime=ScriptedAgentRuntime([_query_draft(["q"])]),
+        reviewer_runtime=ScriptedAgentRuntime([_review_draft([])]),
+        gateway=_FakeExternalSearchGateway(
+            results_by_query={"q": [_external_hit("https://example.com/a")]}
+        ),
+        organizer=organizer,
+        evidence_answerer=_StoppingEvidenceAnswerer(),
+    )
+
+    with pytest.raises(AnswerGenerationStopped):
+        await _run(runner)
+
+    assert organizer.cancelled.is_set()

@@ -11,7 +11,6 @@ import pytest
 from pydantic import ValidationError
 
 import app.agent.planning.contract as planning_contract_module
-from app.agent.contract import ResearchHandoff
 from app.agent.planning.contract import (
     MAX_ARTICLE_SEARCH_QUERIES,
     RESEARCH_GOAL_MAX_CHARS,
@@ -29,6 +28,7 @@ from app.agent.planning.contract import (
     plan_from_draft,
     render_target_time_window,
 )
+from app.agent.research_handoff.handoff import ResearchHandoff
 from app.agent.runtime.contract import (
     AgentResponseDefect,
     AgentResponseInvalidError,

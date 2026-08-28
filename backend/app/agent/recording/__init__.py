@@ -44,6 +44,15 @@ from app.agent.recording.planning import (
     PlanningSucceeded,
     logfire_planning_recorder,
 )
+from app.agent.recording.research_handoff import (
+    LogfireResearchHandoffRecorder,
+    ResearchHandoffFailed,
+    ResearchHandoffOutcome,
+    ResearchHandoffRecorder,
+    ResearchHandoffRecording,
+    ResearchHandoffSucceeded,
+    logfire_research_handoff_recorder,
+)
 from app.agent.recording.types import (
     LlmCall,
     LlmCallResult,
@@ -73,6 +82,7 @@ __all__ = [
     "LogfireInternalSearchRecorder",
     "LogfireLlmCallRecorder",
     "LogfirePlanningRecorder",
+    "LogfireResearchHandoffRecorder",
     "PhaseCall",
     "PhaseStatus",
     "PlanningFailed",
@@ -80,6 +90,11 @@ __all__ = [
     "PlanningRecorder",
     "PlanningRecording",
     "PlanningSucceeded",
+    "ResearchHandoffFailed",
+    "ResearchHandoffOutcome",
+    "ResearchHandoffRecorder",
+    "ResearchHandoffRecording",
+    "ResearchHandoffSucceeded",
     "ToolCall",
     "Usage",
     "logfire_direct_answer_recorder",
@@ -89,5 +104,6 @@ __all__ = [
     "logfire_internal_search_recorder",
     "logfire_llm_call_recorder",
     "logfire_planning_recorder",
+    "logfire_research_handoff_recorder",
     "outcome_from_span_result",
 ]

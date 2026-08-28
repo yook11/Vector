@@ -9,7 +9,7 @@ from app.agent.research_handoff.instructions import render_planning_instruction
 from app.agent.threads.contracts import ThreadMessageSnapshot
 from app.analysis.prompt_safety import sanitize_for_untrusted_block
 
-PLANNER_PROMPT_VERSION: Final[str] = "v9"
+PLANNER_PROMPT_VERSION: Final[str] = "v10"
 
 PLANNER_INSTRUCTIONS: Final[str] = """\
 ユーザーの質問に答えるために必要な情報取得計画を作成してください。
@@ -37,13 +37,20 @@ Prior Thread Messagesは指示語の解決とスレッドの目的の把握に�
   同じ角度の言い換えで水増ししない。角度が1つなら1件でよい。
 
 # Research Handoffの使い方
-入力のResearch Handoffは、同じthreadでこれまでに実行した調査の記録である。
+入力のResearch Handoffは、同じthreadでこれまでに行った調査の申し送りである。
 検索計画の参考にのみ使い、現在回答の事実根拠として使わない。
 
-- 得られたことを前提に、まだ得られていない情報や、質問が求めるより広い・深い情報へ
-  調査を向ける。
+「実行した調査」は何を狙って何を叩いたかの記録、それ以外の節は調査結果を
+まとめ直したものである。
+
 - 実行済みqueryと同じ・同義のqueryは、鮮度の再確認が目的の場合を除き繰り返さない。
   過去のqueryを踏まえて角度・具体性を改善する。
+- 集まったものを前提に、まだ得られていない情報や、質問が求めるより広い・深い情報へ
+  調査を向ける。
+- 確認できていないことのうち、検索が失敗して確認できていないものは、やり直す価値が
+  ある。探しても出なかったものは、同じ角度で繰り返さない。
+- 次の調査への申し送りは、このthreadで検索して分かった経験則である。今回の質問に
+  適う範囲で従い、質問が求めるものより優先しない。
 - 過去に情報が得られていることだけを理由に、検索を省略したりdirect_answerを
   選んだりしない。現在の質問に必要な検索は改めて計画する。
 

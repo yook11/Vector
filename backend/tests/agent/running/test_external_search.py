@@ -44,6 +44,7 @@ from app.analysis.deepseek_error_translator import DeepSeekStateReason
 from tests.agent.running._harness import (
     AS_OF,
     ExternalScopes,
+    PassThroughOrganizer,
     fixed_scope,
     internal_hit,
 )
@@ -368,6 +369,7 @@ def _runner(
         reviewer=EvidenceReviewer(
             runtime_scope_factory=fixed_scope(runtime.reviewer_runtime),
         ),
+        organizer=PassThroughOrganizer(),
     )
     return (
         AnsweringRunner(
@@ -1317,6 +1319,7 @@ async def test_external_scope_is_activated_fresh_per_run() -> None:
         direct_answerer=_UnreachableDirectAnswerer(),
         evidence_answerer=answerer,
         reviewer=EvidenceReviewer(runtime_scope_factory=_reviewer_scope),
+        organizer=PassThroughOrganizer(),
     )
     runner = AnsweringRunner(
         phases_factory=lambda: phases,

@@ -11,7 +11,7 @@ from typing import Any, Final
 
 import logfire
 
-from app.agent.contract import ResearchHandoff
+from app.agent.research_handoff.handoff import ResearchHandoff
 
 __all__ = ["recall_research_handoff"]
 

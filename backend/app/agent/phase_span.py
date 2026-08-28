@@ -17,6 +17,7 @@ from app.analysis.ai_provider_errors import AIProviderError
 
 __all__ = ["AgentPhase", "agent_phase"]
 
+# 進捗stage語彙(AnswerProgressStage)を含み、ユーザーへ見せない工程も持つ。
 AgentPhase = Literal[
     "safety_check",
     "context_resolution",
@@ -24,6 +25,7 @@ AgentPhase = Literal[
     "evidence_collection",
     "evidence_review",
     "answering",
+    "research_handoff",
 ]
 
 _PHASE_SPAN_NAME = "agent_phase"

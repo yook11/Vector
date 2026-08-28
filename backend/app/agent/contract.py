@@ -9,7 +9,6 @@ from datetime import datetime
 from typing import Annotated, Final, Literal, Protocol, Self
 
 from pydantic import (
-    AwareDatetime,
     BaseModel,
     ConfigDict,
     Field,
@@ -47,9 +46,6 @@ __all__ = [
     "PlanType",
     "RESEARCH_GOAL_MAX_CHARS",
     "RESEARCH_TASK_LIMIT",
-    "ResearchHandoff",
-    "ResearchRunRecord",
-    "ResearchTaskRecord",
 ]
 
 PlanType = Literal["direct_answer", "search"]
@@ -225,9 +221,7 @@ class AnswerEventReporter(Protocol):
     async def event_occurred(self, event: AnswerProgressEvent) -> None: ...
 
 
-# 工程を跨いで共有される予算・上限の正本。ResearchHandoffがplanner input
-# projectionとしてこのleafへ集約されたため、参照される側の定数も合わせてここへ
-# 集約する。
+# 工程を跨いで共有される予算・上限の正本。
 RESEARCH_TASK_LIMIT = 3
 MAX_ARTICLE_SEARCH_QUERIES = 3
 RESEARCH_GOAL_MAX_CHARS: Final[int] = 200
@@ -241,74 +235,3 @@ MISSING_ITEM_MAX_CHARS = 200
 
 # Run 単位で reviewer が報告できる missing 件数の上限。
 EVIDENCE_REVIEW_MISSING_LIMIT: Final[int] = 8
-
-_ExecutedQuery = Annotated[
-    str,
-    StringConstraints(min_length=1, max_length=EXTERNAL_QUERY_MAX_CHARS),
-]
-_AdoptedClaim = Annotated[str, StringConstraints(max_length=EVIDENCE_CLAIM_MAX_CHARS)]
-_UnresolvedItem = Annotated[str, StringConstraints(max_length=MISSING_ITEM_MAX_CHARS)]
-
-
-class ResearchTaskRecord(BaseModel):
-    """1 research taskの調査記録。executed_queriesが空になるtaskは記録しない。"""
-
-    model_config = ConfigDict(frozen=True, extra="forbid")
-
-    research_goal: str = Field(min_length=1, max_length=RESEARCH_GOAL_MAX_CHARS)
-    # provider呼び出しに成功した外部queryのみ。min 1件を型で強制する。
-    executed_queries: tuple[_ExecutedQuery, ...] = Field(
-        min_length=1,
-        max_length=EXTERNAL_TASK_QUERY_LIMIT,
-    )
-    # 外部検索から採用されたclaim。空 = 有用な選択肢なし。
-    # 1 Runの全task合計の上限はResearchRunRecordのvalidatorが持つ。
-    adopted_claims: tuple[_AdoptedClaim, ...]
-
-
-class ResearchRunRecord(BaseModel):
-    """1 Runが実行した外部検索の決定的な記録。"""
-
-    model_config = ConfigDict(frozen=True, extra="forbid")
-
-    schema_version: Literal[1] = 1
-    as_of: AwareDatetime
-    # min 1件。0件になるRunは記録しない(builderがNoneを返す)。
-    tasks: tuple[ResearchTaskRecord, ...] = Field(
-        min_length=1,
-        max_length=RESEARCH_TASK_LIMIT,
-    )
-    # Evidence Reviewerのmissingのverbatim copy。Run全体で1本。
-    unresolved_after_search: tuple[_UnresolvedItem, ...] = Field(
-        max_length=EVIDENCE_REVIEW_MISSING_LIMIT,
-    )
-
-    @model_validator(mode="after")
-    def _validate_total_adopted_claims(self) -> Self:
-        # adopted_claimsの上限はtask個別ではなく1 Runの全task合計。
-        # 正本はAnswerEvidence側。このモジュールとの循環importを避ける。
-        from app.agent.evidence_review.answer_evidence import ANSWER_EVIDENCE_LIMIT
-
-        total_adopted_claims = sum(len(task.adopted_claims) for task in self.tasks)
-        if total_adopted_claims > ANSWER_EVIDENCE_LIMIT:
-            raise ValueError(
-                "adopted claims across tasks exceed the answer evidence limit"
-            )
-        return self
-
-
-class ResearchHandoff(BaseModel):
-    """threadが積み上げた、次のRunへの調査の申し送り。
-
-    記録層(runs)には上限を置かない。判断層(standing_inquiry / next_directives)は
-    まだ生成されず、常に空で書かれる。
-    """
-
-    model_config = ConfigDict(frozen=True, extra="forbid")
-
-    schema_version: Literal[1] = 1
-    updated_at: AwareDatetime
-    standing_inquiry: str = ""
-    # 古い順。1件目はhandoffを最初に書いたRun。
-    runs: tuple[ResearchRunRecord, ...] = Field(min_length=1)
-    next_directives: tuple[str, ...] = ()
